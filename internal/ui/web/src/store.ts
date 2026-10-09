@@ -9,6 +9,7 @@ import { pendingSends } from "./optimistic.mjs";
 import { useSyncExternalStore } from "react";
 import { api, errorText, type Api, type T } from "./api";
 import type { Host, HostEvent, OpenContext } from "./host";
+import { messageTarget } from "./model";
 import { mainPreferences, personRoots } from "./person-topics.mjs";
 
 export type Conn = "loading" | "live" | "lost" | "updating" | "gone";
@@ -197,7 +198,7 @@ export class Store {
   }
 
   async openChat(o: Open) {
-    if (o?.kind !== "dm") return this.open(o);
+    if (o?.kind !== "dm" || o.focus) return this.open(o);
     const dm = this.state.overview?.dms?.find(d => d.id === o.id);
     const main = dm && this.personMain(dm);
     if (!main) return this.open(o);
@@ -244,7 +245,7 @@ export class Store {
     if (v) v = { ...v, messages: this.sends.merge<T.DMMessage | T.Message>(o.id, v.messages || []) } as View;
     // A request arrow chooses its actual topic, including Main flow. Keep
     // unsent text, staged files and reply intact; only the displayed topic changes.
-    const target = o.kind === "dm" && o.focus && o.focusSeq !== this.topicFocusSeq && v ? (v as T.DMThread).messages?.find(m => m.id === o.focus) : undefined;
+    const target = o.kind === "dm" && o.focus && o.focusSeq !== this.topicFocusSeq && v ? messageTarget((v as T.DMThread).messages || [], o.focus) : undefined;
     if (target) this.topicFocusSeq = o.focusSeq || 0;
     const draft = this.draft(o.id);
     const drafts = target ? { drafts: { ...this.state.drafts, [o.id]: { ...draft, topic: target.topic || "", newTopic: false } } } : {};
@@ -282,7 +283,11 @@ export class Store {
     this.set({ views });
   }
 
-  showTab(tab: Tab, section = "") { this.set({ tab, section }); }
+  showTab(tab: Tab, section = "") {
+    const hidden = this.state.tab === "settings";
+    this.set({ tab, section });
+    if (hidden && tab !== "settings") this.markOpenRead();
+  }
   openInvite(conv: string, selected?: string[], preset?: { who: string; label?: string }) { this.set({ invite: { conv, selected, ...preset } }); }
   closeInvite() { this.set({ invite: null }); }
   setPanel(panel: boolean) { this.set({ panel }); }
@@ -301,7 +306,7 @@ export class Store {
     for (const d of dms) {
       try {
         const v = await this.api.dm(d.id);
-        if ((v.messages || []).some((m) => m.id === id && (!context?.dir || m.dir === context.dir))) { await this.open({ kind: "dm", id: d.id, focus: id }); return; }
+        if (messageTarget((v.messages || []).filter(m => !context?.dir || m.dir === context.dir), id)) { await this.open({ kind: "dm", id: d.id, focus: id }); return; }
       } catch { /* the next one */ }
     }
     if (!context?.conv) { // a later message of a device conversation
@@ -337,7 +342,7 @@ export class Store {
   // only remembered.
   private async loadOpen(o: Open = this.state.open) {
     if (!o) return;
-    const wanted = () => this.state.open === o || this.state.pending === o;
+    const wanted = () => this.alive && (this.state.open === o || this.state.pending === o);
     try {
       // Being opened: a prefetch already under way for it is that load.
       const ahead = this.state.pending === o ? this.fetching.get(o.id) : undefined;
@@ -348,8 +353,7 @@ export class Store {
       const newHost = o.kind === "dm" && ((v as T.DMThread).agents || []).some((a) => !(this.state.dm?.agents || []).some((b) => b.host.address === a.host.address));
       this.set({ ...(first ? { open: o, pending: null } : {}), ...this.viewPatch(o, v, this.state.open?.id === o.id) });
       if (newHost) void this.loadAgentNames();
-      const unread = (v.messages || []).filter((m) => m.unread).map((m) => m.id);
-      if (unread.length) this.api.markRead(unread).catch(() => {});
+      this.markOpenRead();
       if (o.kind === "dm") this.api.typing({ conv: o.id }).then((t) => { if (this.state.open === o) this.set({ typing: t }); }).catch(() => {});
     } catch (e) {
       if (!wanted()) return;
@@ -357,6 +361,28 @@ export class Store {
       if (this.state.pending === o) this.set({ open: o, pending: null, dm: null, thread: null, typing: null });
       this.toast(errorText(e), "error");
     }
+  }
+
+  // Reading one topic does not read the other topics returned by the same
+  // conversation endpoint. Match Conversation's visible-message selection.
+  private reading = new Set<string>();
+  private markOpenRead() {
+    const o = this.state.open;
+    if (!this.alive || !o || this.state.tab === "settings" || o.kind === "dm" && o.focus && o.focusSeq !== this.topicFocusSeq) return;
+    const v = this.state.views[o.id];
+    if (!v) return;
+    const draft = this.state.drafts[o.id];
+    const messages = o.kind === "dm"
+      ? ((v as T.DMThread).messages || []).filter(m => draft?.newTopic ? !m.topic : (m.topic || "") === (draft?.topic || ""))
+      : v.messages;
+    const ids = (messages || []).filter(m => m.unread && !this.reading.has(m.id)).map(m => m.id);
+    if (!ids.length) return;
+    ids.forEach(id => this.reading.add(id));
+    void this.api.markRead(ids).then(() => {
+      // Fetch the committed read state, including topic and chat counts.
+      // A failed acknowledgement leaves the unread state intact for retry.
+      if (this.alive) void this.refetch();
+    }).catch(() => {}).finally(() => ids.forEach(id => this.reading.delete(id)));
   }
 
   // loadAgentNames reads the agent catalogs once per change: this
@@ -399,12 +425,17 @@ export class Store {
 
   draft(conv: string): Draft { return this.state.drafts[conv] || { text: "" }; }
 
-  setDraft(conv: string, d: Draft) {
+  setDraft(conv: string, d: Draft, topicSelected = false) {
+    const prior = this.state.drafts[conv];
     const drafts = { ...this.state.drafts };
     if (!d.text && !d.replyTo && !d.agent && !d.newTopic && !d.topic && !(d.files && d.files.length)) delete drafts[conv];
     else drafts[conv] = d;
     this.set({ drafts });
     this.saveDrafts(drafts);
+    if (this.state.open?.id === conv && (topicSelected || (prior?.topic || "") !== (d.topic || "") || !!prior?.newTopic !== !!d.newTopic)) {
+      this.topicFocusSeq = this.state.open.focusSeq || 0;
+      this.markOpenRead();
+    }
   }
 
   hasUnsent(): boolean {

@@ -3,12 +3,21 @@
 // what the server's records prove, and actions come from its can[] lists.
 import type { T } from "./api";
 
+// Exact logical references survive a different local copy becoming canonical.
+export function messageTarget<M extends { id: string; lid?: string }>(messages: M[], id?: string): M | undefined {
+  if (!id) return;
+  const exact = messages.find(m => m.id === id);
+  if (exact) return exact;
+  const logical = messages.filter(m => m.lid === id);
+  return logical.length === 1 ? logical[0] : undefined;
+}
+
 // ---- people and agents ---------------------------------------------------
 
 /** One chat in the list: a person (DM), a group, or an agent's own device thread. */
 export interface ChatItem {
   key: string;                 // "dm:<id>" | "thread:<id>"
-  open: { kind: "dm"; id: string } | { kind: "thread"; id: string; peer?: string };
+  open: { kind: "dm"; id: string; focus?: string } | { kind: "thread"; id: string; peer?: string };
   kind: "person" | "group" | "agent";
   title: string;
   subtitle?: string;           // e.g. "Vitalii's agent · ZenBook"
@@ -163,7 +172,7 @@ export function chatList(o: T.Overview | null, agentNames: Record<string, string
     const group = d.kind === "group";
     items.push({
       key,
-      open: { kind: "dm", id: d.id },
+      open: { kind: "dm", id: d.id, ...(d.last_id ? { focus: d.last_id } : {}) },
       kind: group ? "group" : "person",
       title: group ? d.title || "Group" : personName(d.peer),
       subtitle: group ? (d.members || []).map((m) => m.label).filter(Boolean).join(", ") : undefined,

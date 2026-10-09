@@ -7157,7 +7157,7 @@ export class Engine {
       const last = msgs.length ? this.lastEvent(msgs.at(-1), [peer, ...originals], pinned) : undefined;
       dms.push({ id: c.id, peer: this.personView(peer), ...(member ? {} : { members: originals.map(p => this.personView(p)) }), role: member ? "member" : participations.some(p => p.role === "human" && p.host?.address === this.address && p.host.fingerprint === this.fp) ? "human_guest" : "visitor", created: iso(c.created * 1000), mine: c.creator === this.address, count: msgs.length,
         title: msgs[0] ? line(msgs[0]) : "", last: msgs.length ? line(msgs[msgs.length - 1]) : "",
-        ...(msgs.length ? {last_id:msgs.at(-1).lid||msgs.at(-1).id} : {}),
+        ...(msgs.length ? {last_id:previewMessageID(msgs,msgs.at(-1))} : {}),
         last_at: iso(msgs.length ? msgs[msgs.length - 1].at : c.created * 1000),
         unread: msgs.filter((m) => m.fp && !m.own && !m.read).length, held: msgs.filter((m) => this.heldOpen(m, msgs)).length,
         waiting: msgs.filter((m) => m.state === "waiting").length,
@@ -7173,7 +7173,7 @@ export class Engine {
       if(this.erasedConv(conv)&&!visible.some(m=>!m.sub))continue; // deleted here, and no later turn
       const latestView = view.messages.at(-1);
       const latestText = !latestView ? "" : latestView.deleted ? "Message deleted" : firstLine(latestView.edited ? latestView.text || "" : latestView.event || latestView.body);
-      dms.push({id:conv,kind:"group",title:packet.state.title,peer:{label:packet.state.title,address:"",state:""},members:view.members,role:view.role,frozen:view.frozen,created:iso(packet.root.created*1000),mine:packet.root.creator.address===this.address,count:visible.length,last:latestText,...(latestView?{last_id:latestView.lid||latestView.id}:{}),last_at:iso(visible.length?visible.at(-1).at:packet.root.created*1000),unread:visible.filter(m=>m.fp&&!m.own&&!m.read).length,held:0,waiting:visible.filter(m=>m.state==="waiting"||m.state==="queued").length,
+      dms.push({id:conv,kind:"group",title:packet.state.title,peer:{label:packet.state.title,address:"",state:""},members:view.members,role:view.role,frozen:view.frozen,created:iso(packet.root.created*1000),mine:packet.root.creator.address===this.address,count:visible.length,last:latestText,...(latestView?{last_id:previewMessageID(view.messages,latestView)}:{}),last_at:iso(visible.length?visible.at(-1).at:packet.root.created*1000),unread:visible.filter(m=>m.fp&&!m.own&&!m.read).length,held:0,waiting:visible.filter(m=>m.state==="waiting"||m.state==="queued").length,
         guests:parts.filter(p=>p.state==="active").length,decide:0,...(last?{last_event:last}:{})});
     }
     // decide: a conversation's requests this person decides here (live.go
@@ -9340,4 +9340,9 @@ export class Engine {
     }
     throw new Error("Unknown request.");
   }
+}
+
+// Private preview navigation carries a logical reference only when unambiguous.
+export function previewMessageID(messages, last) {
+  return last.lid && !messages.some(m => m.id !== last.id && (m.lid === last.lid || m.id === last.lid)) ? last.lid : last.id;
 }

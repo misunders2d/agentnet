@@ -7,7 +7,7 @@ export function topicControls(root, {api, choose, chooseRoot, fresh, changed, an
  const zoom=root.querySelector('#zoom');if(zoom)zoom.before(bar);else root.querySelector('.conv-head').after(bar);
  const node=(tag,text,props={})=>{const n=doc.createElement(tag);if(text)n.textContent=text;Object.assign(n,props);return n;};
  const button=(text,fn)=>node('button',text,{type:'button',onclick:fn});
- let scope={},topics=[],current='',all=null,timer=null,seq=0,dead=false,person=null,views={},personStamp='',personSeq=0,personReady=false;
+ let scope={},topics=[],current='',all=null,timer=null,seq=0,dead=false,person=null,views={},personStamp='',personSeq=0,personReady=false,refreshList=null;
  const request=async(what,ids,counts)=>{
   if(!person)return api('/api/topic/'+what,{...scope,id:'',ids,counts});
   const selected=personTopicEntries(person.roots,views,person.main).filter(t=>ids.includes(t.key)&&t.native),groups=new Map();
@@ -15,7 +15,7 @@ export function topicControls(root, {api, choose, chooseRoot, fresh, changed, an
   const results=await Promise.all([...groups].map(([conv,g])=>api('/api/topic/'+what,{conv,id:'',...g})));
   return {note:results.map(r=>r.note).filter(Boolean).join(' ')};
  };
- function close(){if(timer)clearTimeout(timer);timer=null;all?.remove();all=null;seq++;}
+ function close(){if(timer)clearTimeout(timer);timer=null;all?.remove();all=null;refreshList=null;seq++;}
  async function list() {
   close();const version=seq;
   all=node('section','',{className:'topics-list'});all.setAttribute('role','dialog');all.setAttribute('aria-modal','true');all.setAttribute('aria-label','All topics');
@@ -43,17 +43,19 @@ export function topicControls(root, {api, choose, chooseRoot, fresh, changed, an
     timer=setTimeout(async()=>{timer=null;busy=true;status.textContent='Applying…';actions.replaceChildren();try{const r=await request(what,ids,covered);if(dead||all!==popup)return;selected.clear();announce(r.note);await changed();status.textContent=r.note;confirming=false;await load();}catch(e){if(all===popup){status.textContent=e.message;confirming=false;}}finally{busy=false;if(all===popup)render();}},TOPIC_UI.undoDelay);
    }));
   };
-  const load=async(more=false)=>{status.textContent='Loading…';try{const q=new URLSearchParams({...scope,state:filter,q:search.value,limit:String(TOPIC_UI.pageSize),...(more?{before:next}:{})});const p=flat?await flatPage(filter,search.value):await api('/api/topics?'+q);if(dead||seq!==version||all!==popup)return;items=more?[...items,...p.topics]:p.topics;next=p.next||'';status.textContent='';render();}catch(e){if(all===popup)status.textContent=e.message;}};
+  let loading=0;
+  const load=async(more=false)=>{const ask=++loading;status.textContent='Loading…';try{const q=new URLSearchParams({...scope,state:filter,q:search.value,limit:String(TOPIC_UI.pageSize),...(more?{before:next}:{})});const p=flat?await flatPage(filter,search.value):await api('/api/topics?'+q);if(dead||seq!==version||all!==popup||ask!==loading)return;items=more?[...items,...p.topics]:p.topics;next=p.next||'';status.textContent='';render();}catch(e){if(all===popup&&ask===loading)status.textContent=e.message;}};
+  refreshList=()=>{if(!busy&&!confirming)void load();};
   search.oninput=()=>void load();popup.addEventListener('keydown',e=>{if(e.key==='Escape'){e.preventDefault();finish();}if(e.key==='Tab'){const focus=[...popup.querySelectorAll('button,input')].filter(n=>!n.disabled),i=focus.indexOf(root.getRootNode().activeElement);if(e.shiftKey&&i===0){e.preventDefault();focus.at(-1)?.focus();}else if(!e.shiftKey&&i===focus.length-1){e.preventDefault();focus[0]?.focus();}}});
   popup.cleanup=()=>{for(const n of siblings)n.inert=false;bar.inert=false;};
   popup.querySelector('button').focus();await load();
  }
  const oldClose=close;close=()=>{all?.cleanup?.();oldClose();};
  async function flatPage(state,q) {
-  const captured=person;
+  const captured=person,version=personSeq;
   if(!captured)return {topics:[],next:''};
   const loaded=await Promise.all(captured.roots.map(async r=>[r.id,r.id===scope.conv&&captured.view?captured.view:await api('/api/dm?id='+encodeURIComponent(r.id))]));
-  if(!person||person.main!==captured.main)return {topics:[],next:''};
+  if(!person||person.main!==captured.main||version!==personSeq)return {topics:[],next:''};
   views=Object.fromEntries(loaded);personReady=true;paint();
   const query=q.trim().toLowerCase();
   return {topics:personTopicEntries(captured.roots,views,captured.main).filter(t=>t.state===state&&(t.title+' '+t.last).toLowerCase().includes(query)).map(t=>({...t,id:t.key})),next:''};
@@ -76,7 +78,7 @@ export function topicControls(root, {api, choose, chooseRoot, fresh, changed, an
  }
  function update(nextScope,nextTopics,id,nextPerson=null) {
   if(JSON.stringify(scope)!==JSON.stringify(nextScope))close();scope=nextScope;topics=nextTopics||[];current=id||'';person=nextPerson;
-  if(person){views[scope.conv]=person.view;const stamp=JSON.stringify([person.main,person.roots.map(r=>[r.id,r.count,r.last_at])]);if(stamp!==personStamp){personStamp=stamp;personReady=false;personSeq++;}}else{personStamp='';personSeq++;personReady=false;views={};}
+  if(person){views[scope.conv]=person.view;const stamp=JSON.stringify([person.main,person.roots.map(r=>[r.id,r.count,r.last_at,r.unread])]);if(stamp!==personStamp){personStamp=stamp;personReady=false;personSeq++;refreshList?.();}}else{personStamp='';personSeq++;personReady=false;views={};}
   paint();
  }
  return {update,show(visible){bar.hidden=!visible;},stop(){dead=true;close();bar.remove();}};

@@ -101,7 +101,7 @@ export function AllTopics({ open, onOpenChange, peer,conv, agent, current, flat 
       setItems((had) => [...had, ...(p.topics || []).map(topicOf).filter((t) => !had.some((h) => h.id === t.id))]); setNext(p.next || ""); setMatched(p.matched);
     }, (e) => { if (ask === asked.current) setFailed(errorText(e)); }).finally(() => { if (ask === asked.current) setLoading(false); });
   };
-  const go = (t: Topic) => { onOpenChange(false); if(flat)flat.choose(t.id);else if(conv)store.setDraft(conv,{...store.draft(conv),topic:t.id,newTopic:false,replyTo:undefined});else void store.open({ kind: "thread", id: t.id, peer: t.peer }); };
+  const go = (t: Topic) => { onOpenChange(false); if(flat)flat.choose(t.id);else if(conv)store.setDraft(conv,{...store.draft(conv),topic:t.id,newTopic:false,replyTo:undefined},true);else void store.open({ kind: "thread", id: t.id, peer: t.peer }); };
   const f = filters.find((x) => x.id === filter)!;
 
   return (

@@ -159,7 +159,7 @@ export function TopicBar({ thread,dm }: { thread?: T.Thread;dm?:T.DMThread }) {
 
   return (
     <nav ref={nav} aria-label={"Topics with " + agent} className="flex shrink-0 items-center gap-2 overflow-hidden border-b border-hairline bg-canvas px-3 py-1.5 lg:px-5">
-      {dm && <button type="button" aria-pressed={!draft?.topic&&!fresh} className={chip+"shrink-0 "+(!draft?.topic&&!fresh?"bg-ink text-canvas":"bg-surface stroke")} onClick={()=>store.setDraft(dm.id,{...store.draft(dm.id),topic:undefined,newTopic:false,replyTo:undefined})}>{wide?"Main flow":"Main"}</button>}
+      {dm && <button type="button" aria-pressed={!draft?.topic&&!fresh} className={chip+"shrink-0 "+(!draft?.topic&&!fresh?"bg-ink text-canvas":"bg-surface stroke")} onClick={()=>store.setDraft(dm.id,{...store.draft(dm.id),topic:undefined,newTopic:false,replyTo:undefined},true)}>{wide?"Main flow":"Main"}</button>}
       {pick.map((t) => {
         const current = !!open && t.id === open.id && !fresh;
         const lit = going ? t.id === going : current;

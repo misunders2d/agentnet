@@ -21,21 +21,27 @@ const views={
  [ids.guest]:{id:ids.guest,created:'2024-01-01T00:00:00Z',role:'human_guest',messages:[msg('guest-turn','Separate guest audience')],topics:[],guests:[]}
 };
 for(const view of Object.values(views))Object.assign(view,{peer,kind:'dm',mine:true,role:view.role||'member',members:[me,peer],agents:[],frozen:''});
+if (${process.env.AGENTNET_TOPIC_UNREAD==='1'}) for(const id of [ids.main,ids.other])for(const m of views[id].messages)if(m.dir==='in')m.unread=true;
 if (${process.env.AGENTNET_ADDRESSING==='1'}) {
  const pi='5'.repeat(32),codex='6'.repeat(32);
  views[ids.main].agents=[{pid:pi,agent_id:'7'.repeat(32),state:'active',host:me,inviter:me,invited_by:me,shared:[],host_here:true,member:true,can_ask:false},{pid:codex,agent_id:'8'.repeat(32),state:'active',host:me,inviter:me,invited_by:me,shared:[],host_here:true,member:true,can_ask:false}];
  views[ids.main].messages.push(msg('agent-ask','Are you the reviewer?',{kind:'question',from:me.address,origin:'agent:room',verified_agent:true,agent_author_pid:pi,agent_id:'7'.repeat(32),pid:codex,target:{address:me.address,agent_id:'8'.repeat(32)},state:'delivered',delivery:'delivered',exec:{state:'not_run',host:me.address},job_detail:'not run: originating local run stopped',state_text:'Not run: originating local run stopped'}),msg('approved-task','Review the fictional plan.',{dir:'out',from:me.address,kind:'task',origin:'ui',pid:pi,target:{address:me.address,agent_id:'7'.repeat(32)},proposal:{proposal_id:'fictional-proposal',confirmed_by:me.address,asker:me.address,proposal:'Review the fictional plan.'}}));
 }
-const summary=v=>({id:v.id,created:v.created,peer,kind:v.kind,role:v.role,count:v.messages.length,title:v.messages[0]?.deleted?'Message deleted':v.messages[0]?.body||'',last:v.messages.at(-1)?.deleted?'Message deleted':v.messages.at(-1)?.body||'',last_at:v.id===ids.other?'2026-10-07T12:00:00Z':at,unread:0,held:0,waiting:0,guests:v.guests.length});
+const summary=v=>({id:v.id,...(${process.env.AGENTNET_PREVIEW_ROUTE==='1'}&&v.messages.length?{last_id:v.messages.at(-1).lid||v.messages.at(-1).id}:{}),created:v.created,peer,kind:v.kind,role:v.role,count:v.messages.length,title:v.messages[0]?.deleted?'Message deleted':v.messages[0]?.body||'',last:v.messages.at(-1)?.deleted?'Message deleted':v.messages.at(-1)?.body||'',last_at:v.id===ids.other?'2026-10-07T12:00:00Z':at,unread:0,held:0,waiting:0,guests:v.guests.length});
 const overview={version:'fictional',seq:1,topic_list:true,me:{address:me.address,fingerprint:'own'},person:me,persons:true,agents:true,files:false,controls:false,role:'person',people:[peer],review:[],links:[],reminders:[],threads:[],dms:[ids.main,ids.other,ids.deleted,ids.empty,ids.guest].map(id=>summary(views[id])),directory:{current:true,members:[{address:me.address,presence:'connected'},{address:peer.address,presence:'connected'}]},quarantine:[],needs_you:[],held:[],agent_devices:[]};
+function unreadCounts(){for(const v of Object.values(views)){for(const t of v.topics)t.unread=v.messages.filter(m=>m.unread&&m.topic===t.id).length;const s=overview.dms.find(s=>s.id===v.id);if(s)s.unread=v.messages.filter(m=>m.unread).length;}}
+if (${process.env.AGENTNET_TOPIC_UNREAD==='1'})unreadCounts();
+if (${process.env.AGENTNET_PREVIEW_ROUTE==='1'}) overview.dms.sort((a,b)=>b.last_at.localeCompare(a.last_at));
 overview.remind=${process.env.AGENTNET_OWN_REMIND==='1'};overview.reminders=JSON.parse(localStorage.getItem('fictional-reminders')||'[]');
 if(localStorage.getItem('fictional-late'))overview.dms.push(summary(views[ids.late]));
 let changed,open,release;
 const requests=[];window.fixture={ids,views,overview,requests,native,delay:'',release:()=>release?.(),open:(...args)=>open(...args),addLate:()=>{localStorage.setItem('fictional-late','1');if(!overview.dms.some(d=>d.id===ids.late))overview.dms.push(summary(views[ids.late]));changed?.({type:'change',seq:++overview.seq});},tick:()=>changed?.({type:'change',seq:++overview.seq})};
+fixture.unreadCounts=unreadCounts;
 const host={version:1,platform:'daemon',workspace:{id:'r4-fictional',name:'Fictional workspace',address:me.address,realm:'fictional'},workspaces:null,skins:[],skin:{id:skin},skinURL:'/assets/skins/'+skin+'/',listen(fn){changed=fn;return()=>{};},onOpen(fn){open=fn;},onSkinsChange(){return()=>{};},selectSkin(){},file(){throw Error('No fixture files');},stage(){throw Error('No fixture files');},api:async(p,body)=>{
  requests.push({path:p,body:body||null});const url=new URL(p,location.origin);
  if(url.pathname==='/api/remind'){const m=views[ids.main].messages.find(m=>m.id===body.id);if(!m)throw Error('Exact stored message required');const r={message:m.id,conv:ids.main,from:m.from,title:m.body,due:new Date(body.due*1000).toISOString(),overdue:false};overview.reminders=overview.reminders.filter(x=>x.message!==m.id).concat(r);localStorage.setItem('fictional-reminders',JSON.stringify(overview.reminders));changed?.({type:'change',seq:++overview.seq});return{note:'Fictional reminder stored.'};}
  if(url.pathname==='/api/overview')return structuredClone(overview);
+ if(${process.env.AGENTNET_TOPIC_UNREAD==='1'}&&url.pathname==='/api/act'&&body.do==='read'){if(fixture.failRead)throw Error('Fictional read acknowledgement unavailable');for(const v of Object.values(views))for(const m of v.messages)if(body.ids.includes(m.id))m.unread=false;unreadCounts();changed?.({type:'change',seq:++overview.seq});return{note:'Read.'};}
  if(url.pathname==='/api/dm'){const id=url.searchParams.get('id');if(id===fixture.delay){fixture.delay='';await new Promise(resolve=>release=resolve);}if(!views[id])throw Error('Unknown fictional root');return structuredClone(views[id]);}
  if(url.pathname==='/api/dm/send'){const view=views[body.conv];const m=msg(body.id,body.body,{dir:'out',from:me.address,topic:body.topic||'',reply_to:body.reply_to,at:new Date().toISOString()});view.messages.push(m);overview.dms=overview.dms.map(d=>d.id===view.id?summary(view):d);changed?.({type:'change',seq:++overview.seq});return{id:m.id,lid:m.id,state:'delivered'};}
  if(url.pathname==='/api/topics'){const rows=(views[url.searchParams.get('conv')]?.topics||[]).filter(t=>!url.searchParams.get('state')||t.state===url.searchParams.get('state'));return{topics:structuredClone(rows),matched:rows.length};}
@@ -77,7 +83,119 @@ const server=http.createServer((req,res)=>{
    if(skin==='comic')await page.getByRole('list',{name:'Chats',exact:true}).getByRole('button',{name:/Casey/}).first().click();
    else if(skin==='classic')await page.locator('.contact-item').getByRole('button',{name:/Casey/}).first().click();
    else await page.locator('.zoom-content').getByRole('button',{name:/Casey/}).first().click();
+   if(process.env.AGENTNET_PREVIEW_ROUTE==='1'){
+    const exact=(id,text)=>skin==='comic'?page.locator('[data-mid="'+id+'"]'):skin==='classic'?page.locator('#m-'+id):page.locator('.zoom-message').filter({hasText:text});
+    await exact('other-native','Archived detail').waitFor();
+    if(process.env.AGENTNET_TOPIC_UNREAD==='1'){
+     await page.waitForFunction(()=>fixture.requests.some(r=>r.path==='/api/act'&&r.body?.ids?.includes('other-native')));
+     assert.deepEqual(await page.evaluate(()=>[...new Set(fixture.requests.filter(r=>r.path==='/api/act'&&r.body?.do==='read').flatMap(r=>r.body.ids))]),['other-native'],'preview reads only its selected topic; unseen Main/other topics stay unread');
+    }
+    assert.equal(await page.getByRole('navigation',{name:'Topics',exact:true}).getByRole('button',{name:'Main',exact:true}).getAttribute('aria-pressed'),'false','preview opens its archived topic, not Main');
+    await shot('preview-target');
+    await page.getByRole('navigation',{name:'Topics',exact:true}).getByRole('button',{name:'Main',exact:true}).click();
+    await shown('Main planning').waitFor();
+    await edit('Draft survives exact preview navigation');
+    await page.evaluate(()=>{const m=fixture.views[fixture.ids.main].messages.find(m=>m.id==='main-native');m.id='canonical-native';m.lid='main-native';fixture.open('main-native','message',{conv:fixture.ids.main});});
+    await exact('canonical-native','Invoice message').waitFor();
+    if(skin==='zoom')await page.keyboard.press('Escape');
+    assert.equal(await field().inputValue(),'Draft survives exact preview navigation','exact focus keeps unsent text');
+    // A missing target does not invent a topic or trigger an action. When
+    // its history later arrives, the existing change feed resolves it.
+    await page.evaluate(()=>fixture.open('delayed-native','message',{conv:fixture.ids.main}));
+    await page.waitForTimeout(150);
+    await page.evaluate(()=>{fixture.views[fixture.ids.main].messages.push({id:'delayed-native',lid:'delayed-native',topic:fixture.native,dir:'in',from:'casey/desktop',kind:'message',body:'History arrived later',at:'2026-10-06T12:00:00Z',state:'stored',actions:[]});fixture.tick();});
+    await exact('delayed-native','History arrived later').waitFor();
+    if(skin==='zoom')await page.keyboard.press('Escape');
+    await page.getByRole('navigation',{name:'Topics',exact:true}).getByRole('button',{name:'Main',exact:true}).click();
+    await shown('Main planning').waitFor();
+    await page.evaluate(()=>fixture.open('cancelled-native','message',{conv:fixture.ids.main}));
+    await page.waitForTimeout(150);
+    await page.getByRole('navigation',{name:'Topics',exact:true}).getByRole('button',{name:'Main',exact:true}).click();
+    await page.evaluate(()=>{fixture.views[fixture.ids.main].messages.push({id:'cancelled-native',lid:'cancelled-native',topic:fixture.native,dir:'in',from:'casey/desktop',kind:'message',body:'Cancelled pending focus',at:'2026-10-06T12:00:00Z',state:'stored',actions:[]});fixture.tick();});
+    await page.waitForTimeout(180);await shown('Main planning').waitFor();
+    assert.equal(await page.getByRole('navigation',{name:'Topics',exact:true}).getByRole('button',{name:'Main',exact:true}).getAttribute('aria-pressed'),'true','explicit same-Main navigation cancels pending exact target');
+    await page.evaluate(()=>{fixture.delay=fixture.ids.main;fixture.open('main-native','message',{conv:fixture.ids.main});});
+    await page.waitForFunction(()=>fixture.delay==='');
+    await page.evaluate(()=>fixture.open('main-turn','message',{conv:fixture.ids.main}));
+    await exact('main-turn','Main planning').waitFor();
+    await page.evaluate(()=>fixture.release());await page.waitForTimeout(150);
+    await exact('main-turn','Main planning').waitFor();
+    if(skin==='zoom')await page.keyboard.press('Escape');
+    await page.evaluate(()=>{fixture.delay=fixture.ids.other;fixture.open('other-native','message',{conv:fixture.ids.other});});
+    await page.waitForFunction(()=>fixture.delay==='');
+    await page.evaluate(()=>fixture.open('main-turn','message',{conv:fixture.ids.main}));
+    await exact('main-turn','Main planning').waitFor();
+    await page.evaluate(()=>fixture.release());await page.waitForTimeout(180);
+    await exact('main-turn','Main planning').waitFor();
+    if(skin==='zoom'){
+     await page.evaluate(()=>fixture.open('left-native','message',{conv:fixture.ids.main}));
+     await page.waitForTimeout(150);await page.keyboard.press('Escape');
+     await page.locator('.zoom-content').getByRole('button',{name:/Casey/}).first().waitFor();
+     await page.evaluate(()=>{fixture.views[fixture.ids.main].messages.push({id:'left-native',lid:'left-native',topic:fixture.native,dir:'in',from:'casey/desktop',kind:'message',body:'History after leaving chat',at:'2026-10-06T12:00:00Z',state:'stored',actions:[]});fixture.tick();});
+     await page.waitForTimeout(180);
+     await page.locator('.zoom-content').getByRole('button',{name:/Casey/}).first().waitFor();
+     assert.equal(await page.locator('.zoom-message').count(),0,'late history does not reopen a chat left with Escape');
+    }
+    assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.body&&['/api/dm/send','/api/operator/decide','/api/topic/done'].includes(r.path)).length),0,'preview navigation executes no message or permission action');
+    await shot('preview-stale-load');assert.deepEqual(errors,[]);console.log('preview route '+skin+' '+width+' PASS: exact latest/archived/Main/copy alias/delayed/repeated/stale-load/draft');await context.close();continue;
+   }
    try { await shown(process.env.AGENTNET_ADDRESSING==='1'?'Review the fictional plan.':'Main planning').waitFor(); } catch(e) { await shot('failed');console.error(errors);console.error((await page.evaluate(()=>document.querySelector('#skin').shadowRoot.textContent)).slice(-5000));throw e; }
+   if(process.env.AGENTNET_TOPIC_UNREAD==='1'){
+    const reads=()=>page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/act'&&r.body?.do==='read').flatMap(r=>r.body.ids));
+    const readFlag=(conv,id)=>page.evaluate(([conv,id])=>fixture.views[fixture.ids[conv]].messages.find(m=>m.id===id).unread,[conv,id]);
+    const closeList=()=>list().getByRole('button',{name:/^(Close|Close all topics|Back to the conversation)$/}).click();
+    const row=title=>skin==='comic'?list().getByRole('button',{name:new RegExp('^'+title)}):list().locator('.topic-row').filter({has:page.getByRole('button',{name:new RegExp('^'+title)})});
+    const rowRead=async(title,unread)=>{await row(title).waitFor();await page.waitForFunction(({skin,title,unread})=>{const shadow=document.querySelector('#skin').shadowRoot;const dialog=shadow.querySelector('[role=dialog]');if(!dialog)return false;const button=[...dialog.querySelectorAll('button')].find(b=>(b.getAttribute('aria-label')||b.textContent).startsWith(title));const text=skin==='comic'?button?.getAttribute('aria-label'):button?.closest('.topic-row')?.textContent;return !!text&&text.includes('unread')===unread;},{skin,title,unread});};
+    await page.waitForFunction(()=>fixture.requests.some(r=>r.path==='/api/act'&&r.body?.do==='read'));
+    assert.deepEqual(await reads(),['main-turn'],'opening Main reads only displayed messages');
+    assert.equal(await readFlag('main','main-native'),true,'unseen topic remains unread');
+    assert.equal(await readFlag('other','other-turn'),true,'unopened root remains unread');
+    await all().click();await rowRead('Invoice review',true);
+    await rowRead('Other historical flow',true);
+    const beforeSibling=await page.evaluate(()=>fixture.requests.filter(r=>r.path.includes('/api/dm?id='+fixture.ids.other)).length);
+    await page.evaluate(()=>{fixture.views[fixture.ids.other].messages.find(m=>m.id==='other-turn').unread=false;fixture.unreadCounts();fixture.tick();});
+    await page.waitForFunction(before=>fixture.requests.filter(r=>r.path.includes('/api/dm?id='+fixture.ids.other)).length>before,beforeSibling);
+    await rowRead('Other historical flow',false);
+    await list().getByRole('button',{name:/Invoice review/}).click();await shown('Invoice message').waitFor();
+    await page.waitForFunction(()=>!fixture.views[fixture.ids.main].messages.find(m=>m.id==='main-native').unread);
+    await all().click();await rowRead('Invoice review',false);await closeList();
+    const attempts=(await reads()).length;
+    await page.evaluate(()=>{fixture.failRead=true;fixture.views[fixture.ids.main].messages.find(m=>m.id==='main-native').unread=true;fixture.unreadCounts();fixture.tick();});
+    await page.waitForFunction(before=>fixture.requests.filter(r=>r.path==='/api/act'&&r.body?.do==='read').flatMap(r=>r.body.ids).length>before,attempts);
+    assert.equal(await readFlag('main','main-native'),true,'failed acknowledgement preserves unread');
+    await all().click();await rowRead('Invoice review',true);await closeList();
+    await page.evaluate(()=>{fixture.failRead=false;fixture.tick();});
+    await page.waitForFunction(()=>!fixture.views[fixture.ids.main].messages.find(m=>m.id==='main-native').unread);
+    // A message arriving in Main while its sibling is selected is unseen.
+    await page.evaluate(()=>{fixture.views[fixture.ids.main].messages.find(m=>m.id==='main-turn').unread=true;fixture.unreadCounts();fixture.tick();});
+    await all().click();await rowRead('Invoice review',false);await closeList();
+    assert.equal(await readFlag('main','main-turn'),true,'hidden Main remains unread');
+    await page.getByRole('navigation',{name:'Topics',exact:true}).getByRole('button',{name:'Main',exact:true}).click();await shown('Main planning').waitFor();
+    await page.waitForFunction(()=>!fixture.views[fixture.ids.main].messages.find(m=>m.id==='main-turn').unread);
+    // A delayed response from a view already left must not acknowledge it.
+    await page.evaluate(()=>{fixture.views[fixture.ids.other].messages.find(m=>m.id==='other-turn').unread=true;fixture.unreadCounts();fixture.delay=fixture.ids.other;fixture.open(fixture.ids.other,'conversation');});
+    await page.waitForFunction(()=>fixture.delay==='');
+    await page.evaluate(()=>fixture.open(fixture.ids.main,'conversation'));await shown('Main planning').waitFor();
+    await page.evaluate(()=>fixture.release());await page.waitForTimeout(180);
+    assert.equal(await readFlag('other','other-turn'),true,'stale view response remains unread');
+    // Group topic chips change the displayed draft topic without reopening the DM.
+    await page.evaluate(()=>{const v=fixture.views[fixture.ids.main];v.kind='group';v.title='Fictional group';v.messages.find(m=>m.id==='main-native').unread=true;Object.assign(fixture.overview.dms.find(d=>d.id===v.id),{kind:'group',title:v.title});fixture.unreadCounts();fixture.tick();});
+    const groupNav=page.getByRole('navigation',{name:skin==='comic'?/^Topics with /:'Topics',exact:skin!=='comic'});
+    await groupNav.getByRole('button',{name:/^All/}).waitFor();
+    assert.equal(await readFlag('main','main-native'),true,'group sibling stays unread before selection');
+    await groupNav.getByRole('button',{name:/^All/}).click();await list().getByRole('button',{name:/Invoice review/}).click();
+    await shown('Invoice message').waitFor();await page.waitForFunction(()=>!fixture.views[fixture.ids.main].messages.find(m=>m.id==='main-native').unread);
+    await groupNav.getByRole('button',{name:/^Main(?: flow)?$/,exact:true}).click();await shown('Main planning').waitFor();
+    await page.evaluate(()=>{fixture.views[fixture.ids.main].messages.find(m=>m.id==='main-turn').unread=true;fixture.unreadCounts();fixture.open('missing-group-target','message',{conv:fixture.ids.main});});
+    await page.waitForTimeout(120);
+    assert.equal(await readFlag('main','main-turn'),true,'absent exact target does not read fallback Main');
+    await groupNav.getByRole('button',{name:/^Main(?: flow)?$/,exact:true}).click();
+    await page.waitForFunction(()=>!fixture.views[fixture.ids.main].messages.find(m=>m.id==='main-turn').unread);
+    await page.evaluate(()=>{fixture.views[fixture.ids.main].messages.push({id:'missing-group-target',lid:'missing-group-target',topic:fixture.native,dir:'in',from:'casey/desktop',kind:'message',body:'Arrived after manual Main choice',at:'2026-10-06T12:00:00Z',state:'stored',unread:true,actions:[]});fixture.unreadCounts();fixture.tick();});
+    await page.waitForTimeout(120);await shown('Main planning').waitFor();
+    assert.equal(await readFlag('main','missing-group-target'),true,'explicit same Main cancels stale focus and leaves later sibling unseen');
+    await shot('read-only-visible-topic');assert.deepEqual(errors,[]);console.log('topic unread '+skin+' '+width+' PASS: visible-only, sibling read refresh, selection, failed retry, late hidden arrival, stale view');await context.close();continue;
+   }
    if(process.env.AGENTNET_OWN_REMIND==='1'){
     const own=skin==='comic'?page.locator('[data-mid="waiting-turn"]'):skin==='classic'?page.locator('#m-waiting-turn'):shown('Waiting recipient proof');
     if(skin==='comic'){

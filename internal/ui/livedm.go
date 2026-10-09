@@ -186,12 +186,26 @@ func (l *Live) dmOverview(o *Overview) error {
 			if c.Kind == protocol.ConvKindGroup {
 				s.Title = c.Title
 			}
-			s.LastAt = time.Unix(last.At, 0)
+			s.LastID, s.LastAt = previewMessageID(shown, last), time.Unix(last.At, 0)
 		}
 		o.DMs = append(o.DMs, s)
 	}
 	sort.SliceStable(o.DMs, func(i, j int) bool { return o.DMs[i].LastAt.After(o.DMs[j].LastAt) })
 	return nil
+}
+
+// Prefer the stable logical reference only when it identifies this exact row.
+// Different authors may deliberately use the same logical ID.
+func previewMessageID(shown []client.ConvMessage, last client.ConvMessage) string {
+	if last.LID != "" {
+		for _, other := range shown {
+			if other.ID != last.ID && (other.LID == last.LID || other.ID == last.LID) {
+				return last.ID
+			}
+		}
+		return last.LID
+	}
+	return last.ID
 }
 
 // shownRows are a conversation's messages as its timeline shows them: a

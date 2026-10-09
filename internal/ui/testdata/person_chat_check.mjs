@@ -19,3 +19,22 @@ assert.deepEqual(chat.conversations.map(c=>c.id),[empty.id,recent.id,old.id],'al
 assert.equal(overview.dms[0],empty,'projection does not reorder or merge source data');
 assert.equal(rows.filter(r=>r.title==='Vitalii').length,3,'same label never establishes identity or guest-room membership');
 console.log('One person chat: separate conversations, combined unread, exact identity and audience boundaries PASS');
+
+// Preview focus uses the same displayed row, with exact IDs preferred over
+// logical aliases. A malicious same-LID author cannot redirect navigation.
+const { messageTarget } = await import('../web/src/model.ts');
+const { previewMessageID } = await import('../static/engine.mjs');
+const latest={id:'actual-copy',lid:'stable-original'};
+assert.equal(previewMessageID([latest],latest),'stable-original');
+assert.equal(messageTarget([latest],'stable-original'),latest);
+const ambiguous={id:'other-copy',lid:'stable-original'};
+assert.equal(previewMessageID([ambiguous,latest],latest),'actual-copy');
+assert.equal(messageTarget([ambiguous,latest],'stable-original'),undefined);
+const exact={id:'stable-original',lid:'elsewhere'};
+assert.equal(previewMessageID([exact,latest],latest),'actual-copy');
+assert.equal(messageTarget([latest,exact],'stable-original'),exact);
+assert.equal(previewMessageID([{id:'legacy'}],{id:'legacy'}),'legacy');
+const target=chatList({...overview,dms:[{...recent,last_id:'stable-original'}]},{}).find(r=>r.key==='person:verified-person');
+assert.equal(target.open.focus,'stable-original');
+assert.equal(target.open.id,recent.id);
+console.log('Preview references PASS: exact populated root, stable alias, legacy fallback, duplicate-author LID refusal, physical-ID priority');

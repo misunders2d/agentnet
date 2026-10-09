@@ -27,7 +27,7 @@ export function PersonTopics({ dm, main, onMain }: { dm: T.DMThread; main: strin
   const cached=store.get().views;
   const available:Record<string,T.DMThread>={};
   for(const r of roots){const view=r.id===dm.id?dm:views[r.id]||cached[r.id] as T.DMThread|undefined;if(view)available[r.id]=view;}
-  const stamp=(r:T.DMSummary)=>JSON.stringify([r.count,r.last_at]);
+  const stamp=(r:T.DMSummary)=>JSON.stringify([r.count,r.last_at,r.unread]);
   const currentRoot=roots.find(r=>r.id===dm.id);if(currentRoot)stamps.current[dm.id]=stamp(currentRoot);
   setViews(available);
   const missing=roots.filter(r=>r.id!==dm.id&&(!available[r.id]||stamps.current[r.id]!==stamp(r)));

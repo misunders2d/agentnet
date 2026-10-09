@@ -376,8 +376,9 @@ type DMSummary struct {
 	Created time.Time         `json:"created"` // the creator's claim
 	Mine    bool              `json:"mine"`    // started on this installation
 	Count   int               `json:"count"`
-	Title   string            `json:"title"` // first line of the first message
-	Last    string            `json:"last"`  // first line of the latest message
+	Title   string            `json:"title"`             // first line of the first message
+	LastID  string            `json:"last_id,omitempty"` // logical ID of Last, legacy row ID fallback; absent when empty
+	Last    string            `json:"last"`              // first line of the latest message
 	LastAt  time.Time         `json:"last_at"`
 	Unread  int               `json:"unread"`
 	Held    int               `json:"held"`    // their questions or tasks held for the person; nothing runs them

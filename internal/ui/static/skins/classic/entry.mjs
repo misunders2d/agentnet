@@ -88,8 +88,9 @@ function flatTopicScope(t) {
  return main?{roots,main,view:t}:null;
 }
 async function choosePersonTopic(conv,topic) {
+ state.messageOpening=null;
  topicSelections[conv]=topic||'';topicFresh[conv]=false;
- if(conv===state.dm){setDMReply(null);renderDMBody(false);}else await openDM(conv);
+ if(conv===state.dm){setDMReply(null);renderDMBody(false);markDMRead();}else await openDM(conv);
 }
 function openPersonMain(p,dms) {
  const main=choosePersonMain(dms,p.person);
@@ -151,7 +152,7 @@ function el(tag, attrs, ...kids) {
 
 // Every operation keeps the host it started with.
 async function api(path, body, host = currentHost) { return host.api(path, body); }
-const topicUI=topicControls(root,{api,chooseRoot:choosePersonTopic,announce:text=>announce(text),choose:id=>{if(state.dm){topicSelections[state.dm]=id;topicFresh[state.dm]=false;setDMReply(null);renderDMBody(false);}else if(id!==state.thread)void openThread(id);},fresh:()=>{const id=state.dm||state.thread;topicFresh[id]=true;if(state.dm){topicSelections[id]='';renderDMBody(false);}announce('New topic: your next message starts a separate flow.');$('body').focus();},changed:async()=>{await loadOverview();state.dm?await loadDM(false):await loadThread(false);}});
+const topicUI=topicControls(root,{api,chooseRoot:choosePersonTopic,announce:text=>announce(text),choose:id=>{state.messageOpening=null;if(state.dm){topicSelections[state.dm]=id;topicFresh[state.dm]=false;setDMReply(null);renderDMBody(false);markDMRead();}else if(id!==state.thread)void openThread(id);},fresh:()=>{state.messageOpening=null;const id=state.dm||state.thread;topicFresh[id]=true;if(state.dm){topicSelections[id]='';renderDMBody(false);markDMRead();}announce('New topic: your next message starts a separate flow.');$('body').focus();},changed:async()=>{await loadOverview();state.dm?await loadDM(false):await loadThread(false);}});
 cleanups.push(()=>topicUI.stop());
 
 // A time is an RFC 3339 string, or unix seconds (a host's report and its
@@ -699,6 +700,7 @@ function reportSeen() {
 // showList shows the conversation list, in every lens (a summary alert,
 // or one whose conversation is not here).
 function showList(why) {
+  state.messageOpening = null;
   closeMentions();
   clearTyping();
   root.classList.remove("show-conv");
@@ -1479,7 +1481,7 @@ function personRow(p, dms) {
   const held = dms.reduce((n, d) => n + d.held, 0);
   const last = dms[0];
   const head = el("button", { type: "button", class: "conv-item contact", "aria-current": String(current),
-    onclick: () => {if(!openPersonMain(p,dms))openHub({kind:"person",key});} },
+    onclick: () => {if(last?.last_id)void openMessage({id:last.last_id,conv:last.id});else if(!openPersonMain(p,dms))openHub({kind:"person",key});} },
     avatar(p.label || p.address),
     el("span", { class: "conv-main" },
       el("span", { class: "conv-top" }, el("span", { class: "conv-name person-name" }, p.label),
@@ -1510,7 +1512,7 @@ function dmRow(d, open) {
     d.count > 1 && el("span", { class: "thread-count", title: plural(d.count, "message", "messages") }, String(d.count)),
     dmFlags(d),
     el("span", { class: "conv-time", title: "Started " + new Date(d.created).toLocaleString() + (d.mine ? " by you" : " by them") }, when(d.last_at)));
-  b.addEventListener("click", () => open(d.id, b));
+  b.addEventListener("click", () => d.last_id ? void openMessage({id:d.last_id,conv:d.id}) : open(d.id, b));
   return el("li", {}, b);
 }
 
@@ -1968,6 +1970,7 @@ function newDMDialog(p) {
 // ---- a DM ---------------------------------------------------------------------------
 
 function beginDM(id) {
+  if (state.messageOpening?.conv !== id) state.messageOpening = null;
   const changed = state.dm !== id;
   if (changed) {
     clearTyping();
@@ -2068,7 +2071,7 @@ async function openDM(id) {
 }
 
 async function loadDM(scrollToEnd) {
-  const id = state.dm, gen = state.gen;
+  const id = state.dm, gen = state.gen, focusOpening = state.messageOpening;
   if (!id) return;
   let t;
   try {
@@ -2077,13 +2080,14 @@ async function loadDM(scrollToEnd) {
     announce(e.message);
     return;
   }
-  if (state.dm !== id || gen !== state.gen) return; // another conversation or workspace was opened meanwhile
+  if (!alive || state.dm !== id || gen !== state.gen || (focusOpening && state.messageOpening !== focusOpening)) return; // another conversation or workspace was opened meanwhile
   // A participation record is shown as the sentence it stands for, in every view.
   t.messages = t.messages.map((m) => (m.excerpt_pid ? Object.assign({}, m, { actions: [], can: [] })
     : m.event ? Object.assign({}, m, { body: m.event }) : m));
   t.agents = t.agents || [];
   t.guests = t.guests || [];
   state.dmData = t;
+  const arrivedFocus = resumeMessageFocus(t);
   fill($("conv-name"), humanGroup(t) ? t.title : t.peer.label);
   $("conv-topic").textContent = humanGroup(t) ? dmVisitor(t) ? "Invited agent context · visitor to this group" : dmHumanGuest(t) ? "Human guest in this group · no membership rights" : "Group conversation · " + groupMemberCount(t) : dmVisitor(t) ? "Invited agent context · you are not a member of this DM"
     : dmHumanGuest(t) ? "Temporary human participation · same private conversation" : "DM with a person · started " + when(t.created) + (t.mine ? " by you" : " by them");
@@ -2116,9 +2120,23 @@ async function loadDM(scrollToEnd) {
   state.draftKey = key;
   syncComposer();
   if (scrollToEnd) { commitConversation(); $("timeline").scrollTop = $("timeline").scrollHeight; }
-  const unread = t.messages.filter((m) => m.unread).map((m) => m.id);
-  if (unread.length) api("/api/act", { do: "read", ids: unread }).catch(() => {});
+  if (arrivedFocus) flash(arrivedFocus);
+  markDMRead();
   await refreshTyping();
+}
+
+// Only the topic displayed by this skin is read; other fetched topics stay unread.
+const readingDM = new Set();
+function markDMRead() {
+  const t = state.dmData, id = state.dm, gen = state.gen, host = currentHost;
+  if (!alive || !t || t.id !== id || state.messageOpening?.conv === id || !$("timeline").getClientRects().length) return;
+  const ids = t.messages.filter(m => m.unread && (m.topic || "") === (topicSelections[id] || "") && !readingDM.has(gen + ":" + m.id)).map(m => m.id);
+  if (!ids.length) return;
+  const keys = ids.map(id => gen + ":" + id);
+  keys.forEach(key => readingDM.add(key));
+  void api("/api/act", { do: "read", ids }, host).then(() => {
+    if (alive && host === currentHost && gen === state.gen && state.dm === id) void refetch(false);
+  }).catch(() => {}).finally(() => keys.forEach(key => readingDM.delete(key)));
 }
 
 // Classic renders the open DM as a chat.
@@ -3182,6 +3200,7 @@ function renderQuarantine(items) {
 // nothing can be sent until the new one has loaded. It reports whether the
 // conversation changed.
 function beginThread(id) {
+  state.messageOpening = null;
   closeMentions();
   const changed = !!state.dm || !state.data || !state.data.messages.some((m) => m.id === id);
   if (changed) {
@@ -3632,23 +3651,60 @@ function operatorDialog(it, x, action) {
 // openMessage lands on one exact message (a notification's click, #msg=ID
 // with an optional conv and dir): its conversation opens and it is flashed.
 // Nothing is sent, accepted or read for the person by landing.
+// Resolve the exact displayed row before choosing its topic. A delayed load
+// cannot pull the person back after another navigation or workspace switch.
+function messageTarget(messages, ref) {
+  const rows = messages.filter(m => !ref.dir || m.dir === ref.dir);
+  const exact = rows.find(m => m.id === ref.id);
+  if (exact) return exact;
+  const logical = rows.filter(m => m.lid === ref.id);
+  return logical.length === 1 ? logical[0] : undefined;
+}
+// Existing push-driven loads resume a missing exact target. No timer or fetch
+// loop is added; explicit topic or conversation navigation cancels this intent.
+function resumeMessageFocus(t) {
+  const pending = state.messageOpening;
+  if (!pending?.waiting || pending.conv !== t.id) return "";
+  const message = messageTarget(t.messages, pending.ref);
+  if (!message) return "";
+  state.messageOpening = null;
+  topicSelections[t.id] = message.topic || "";
+  topicFresh[t.id] = false;
+  return message.id;
+}
+async function openDMMessage(conv, ref) {
+  const pending = {conv, ref, waiting:false}; state.messageOpening = pending;
+  try {
+    const opening = openDM(conv), gen = state.gen, host = currentHost;
+    const selected = topicSelections[conv];
+    await opening;
+    if (!alive || state.messageOpening !== pending || host !== currentHost || gen !== state.gen || state.dm !== conv || topicSelections[conv] !== selected) return;
+    const message = messageTarget(state.dmData?.messages || [], ref);
+    if (!message) { pending.waiting = true; announce("That message is not on this device yet. It will open when its history arrives."); return; }
+    topicSelections[conv] = message.topic || "";
+    topicFresh[conv] = false;
+    renderDMBody(false);
+    flash(message.id);
+    if (state.messageOpening === pending) { state.messageOpening = null; void markDMRead(); }
+  } finally {
+    if (state.messageOpening === pending && !pending.waiting) state.messageOpening = null;
+  }
+}
 async function openMessage(ref) {
   if (!ref || !ref.id) return;
-  if (ref.conv && (state.overview.dms || []).some((d) => d.id === ref.conv)) {
-    await openDM(ref.conv);
-    flash(ref.id);
-    return;
-  }
+  if (ref.conv && (state.overview.dms || []).some(d => d.id === ref.conv)) return openDMMessage(ref.conv, ref);
   if (!ref.conv) {
-    try { await openThread(ref.id, ref.id); if (state.data && state.data.messages.some((m) => m.id === ref.id)) return; } catch (e) { /* not a device thread here */ }
+    try { await openThread(ref.id, ref.id); if (state.data && state.data.messages.some(m => m.id === ref.id)) return; } catch (e) { /* not a device thread here */ }
   }
-  for (const d of state.overview.dms || []) { // a DM's message: found by looking, never guessed
+  const gen = state.gen, host = currentHost;
+  for (const d of state.overview.dms || []) {
     try {
       const v = await api("/api/dm?id=" + encodeURIComponent(d.id));
-      if (v.messages.some((m) => m.id === ref.id && (!ref.dir || m.dir === ref.dir))) { await openDM(d.id); flash(ref.id); return; }
+      if (!alive || gen !== state.gen || host !== currentHost) return;
+      if (messageTarget(v.messages, ref)) return openDMMessage(d.id, ref);
     } catch (e) { /* next */ }
   }
-  showList("That message is not on this device.");
+  if (alive && gen === state.gen && host === currentHost) showList("That message is not on this device.");
 }
 
 function renderMsg(m, byId, prev, t) {
@@ -5275,7 +5331,10 @@ function start() {
       o.threads.find((t) => !t.notice_only);
     const dm = (o.dms || [])[0];
     const wide = !state.thread && !state.dm && window.matchMedia("(min-width: 761px)").matches;
-    if (wide && dm && (!first || new Date(dm.last_at) > new Date(first.last_at))) await openDM(dm.id);
+    if (wide && dm && (!first || new Date(dm.last_at) > new Date(first.last_at))) {
+      if (dm.last_id) await openDMMessage(dm.id, {id:dm.last_id, conv:dm.id});
+      else await openDM(dm.id);
+    }
     else if (wide && first) await openThread(first.id);
   }).catch(() => { if (alive) $("lost").hidden = false; });
   listen();

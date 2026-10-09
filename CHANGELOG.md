@@ -4,7 +4,25 @@ Notable changes to AgentNet, newest first. Dates use `YYYY-MM-DD`.
 This record starts with v0.8.1; earlier releases remain on the
 [releases page](https://github.com/misunders2d/agentnet/releases).
 
-## Unreleased
+## [0.8.11] — 2026-10-09
+
+### Fixed
+
+- Exclude copies sent from another own device from desktop topic unread badges, matching the chat timeline while retaining genuinely unread incoming messages.
+- Offer Mark as handled for ordinary person-to-person requests held in OKs on phones and all skins. Keep the message in its chat and send no reply or agent work. A failed report dismissal no longer shows a success message.
+- Reconcile history across verified own human devices, including missing transfers, late arrivals and interrupted catch-up. Recent messages arrive first, with older pages continuing in the background; a chat awaiting proof no longer blocks other chats.
+- Retain verified historical agent messages after the agent's host leaves and rejoins a group. Original signed membership evidence travels only as inert encrypted history; current membership, identity and execution checks stay enforced.
+- Make context-pending Held back notices archiveable without deleting the retained message or stopping automatic recovery. A changed safety reason brings the notice back.
+- Show pending outgoing group invitations on the sender's other verified human devices. Status updates survive offline delivery and reordering; a copy cannot accept an invitation or repeat an action.
+- Reconnect the phone's push stream after device linking so approval can finish and history can arrive.
+- Synchronize private topic names and resets across verified own human devices, including offline changes and names saved before updating. Renaming a topic does not change anyone else's private label.
+- Open chat previews at their exact message and topic, including attachments and linked-device copies. Delayed history keeps the target until the person chooses another destination.
+- Mark only the displayed topic's messages as read and refresh topic badges after local or linked-device reads. Opening Main leaves unseen topics unread.
+
+### Improved
+
+- Put frequently used emoji first in reaction pickers and sort human reaction chips by count, keeping stable ties and separate agent marks. The bounded preference is local to this browser and counts successful additions only. Legacy phone pickers retain visible touch targets for every choice.
+- Keep history progress unfinished while older or deferred messages remain, and distinguish queued history from confirmed delivery.
 
 ## [0.8.10] — 2026-10-08
 

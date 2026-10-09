@@ -7,7 +7,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, 
 import { IconArrowDown, IconMessageCircle } from "@tabler/icons-react";
 import { useApp } from "../context";
 import { useStore } from "../store";
-import { agentName, dayLabel, sameDay, timeOf } from "../model";
+import { agentName, dayLabel, messageTarget, sameDay, timeOf } from "../model";
 import { AgentAvatar, PersonAvatar } from "../ui/Avatar";
 import { groupedSends } from "../optimistic.mjs";
 import { MessageView } from "./Message";
@@ -38,6 +38,7 @@ export function Timeline({ ctx, messages, focus, focusSeq, selected, onSelect, e
   const [firstUnread] = useState(() => messages.find((m) => m.unread && m.dir === "in")?.id);
 
   const items = useMemo(() => build(messages, ctx, firstUnread), [messages, ctx, firstUnread]);
+  const focused = messageTarget(messages, focus)?.id;
 
   // Open at the bottom or at the focused message; afterwards follow new
   // messages only while at the bottom (or when they are your own).
@@ -46,7 +47,7 @@ export function Timeline({ ctx, messages, focus, focusSeq, selected, onSelect, e
     if (!el) return;
     if (!seen.current) {
       seen.current = new Set(messages.map((m) => m.id));
-      if (focus && flash(el, focus, false)) return;
+      if (focused && flash(el, focused, false)) return;
       el.scrollTop = el.scrollHeight;
       return;
     }
@@ -57,7 +58,6 @@ export function Timeline({ ctx, messages, focus, focusSeq, selected, onSelect, e
     else setFresh((n) => n + added.filter((m) => !ev(m)).length);
   }, [messages]);
 
-  const focused = focus && messages.some(m => m.id === focus) ? focus : undefined;
   useEffect(() => { if (focused && seen.current && box.current) flash(box.current, focused, true); }, [focused, focusSeq]);
 
   // Pictures, reactions and the typing line change the height, and a

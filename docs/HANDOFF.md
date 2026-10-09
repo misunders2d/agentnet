@@ -6,6 +6,119 @@ section at release; keep detailed verification and remaining work here.
 
 ## Current release — v0.8.10, October 8, 2026 (UTC)
 
+### Active next release — v0.8.11
+
+The owner requires the remaining mobile history and Held back failures in this
+release, together with the integrated unread and reaction fixes. All verified
+own human devices represent one person: histories and read state must converge,
+including offline and reordered arrivals. Recent history should become useful
+first, with older pages continuing in the background. Reuse the existing signed,
+encrypted delivery, durable outbox, exact logical identities and push upkeep.
+Telegram's [descending history pages](https://core.telegram.org/method/messages.getHistory)
+and [saved update/gap recovery](https://core.telegram.org/api/updates) are behavior
+references, not a change to AgentNet's trust or storage model.
+
+Integrated changes: incoming-only native topic unread projection; ordinary
+held-person-turn resolution parity and truthful dismissal failures; frequent
+reaction choices and stable human-count chip ordering. Proof-pending notices
+use the existing Archive action while retaining ciphertext and automatic recovery;
+a changed safety reason resurfaces. Long raw-link compaction already shipped in
+v0.8.9; existing rendered and parser regressions remain valid.
+
+Outgoing invitations have an inert encrypted own-human status mirror, separate
+from executable local intents, with monotonic versions, exact current-human/key
+checks and explicit `own2` compatibility. Native focused race passed 8.695 s;
+17 browser checks passed in Node and real IndexedDB. Independent review found a
+post-capability-lookup authority race; its before failure and after regression
+close that gap. Mirrored pending invitations render in all three skins at both
+widths; the integrated fixture passed 7.425 s.
+
+Native and browser catch-up now discover missing jobs, send recent pages first,
+resume older pages and independently consume late accepted arrivals. Durable
+exact-copy ledgers and bounded deferred references preserve retries without a
+polling loop. Missing context in one chat does not block another chat. Original
+snapshot cursors remain intact. Native focused race passed 104.473 s; browser
+vectors passed 661 checks each in Node and real IndexedDB before the final
+historical-witness merge. A real linked-browser journey also reproduced a stream
+cancellation hang in v0.8.10; the existing reconnect path now resumes it.
+
+Historical agent traffic whose host left and rejoined uses a retained original
+signed membership witness. It is carried only as encrypted inert history, never
+installed as current membership, grants or runnable work. Original signed
+commits/rosters, exact admissions, present own-human authority, pins and file
+hashes remain mandatory. Missing original ciphertext remains deferred. Focused
+native race passed 54.003 s and browser race 15.156 s; independent merged-source
+review found no remaining authority issue. A verified witness can satisfy its
+exact predecessor dependency without synthesizing an inbox or live event row.
+
+An offline private-copy preflight caught source projection loss of topic/human
+metadata and folded edits. Own sync now reuses a complete immutable source reader;
+selected excerpts retain their existing signed hashes. Original attachment
+recovery has matching own-human/admission/pin gates; its focused race passed
+16.599 s. Missing reply ancestry does not block a separately verified reply;
+exact control references and signed event dependencies still wait.
+
+The same preflight exposed an unused task key belonging to a removed phone.
+Historical validation now uses its exact original signed author roster/admission,
+without restoring any current device membership or execution right. The natural
+regression failed before (3.118 s), passed after (4.899 s), and the combined
+native focused race passed 82.244 s. Browser counterpart passed 710 signed Node
+checks and 710 real IndexedDB checks (60.635 s); independent review found no
+live-authority expansion. All three final interface builds/integrity checks pass;
+progress stays unfinished for deferred work and distinguishes queued history
+from delivered history.
+
+Historical lifecycle records transported through a since-removed own human phone
+now reuse the verified original human roster and exact counted signed dismissal.
+Captured-consent mismatches retry only inert history against its original witness;
+live admission remains unchanged. The two natural native regressions failed
+before and passed under race in 36.299 s; vet passed. Browser verification passed
+731 signed checks in Node (21.457 s) and actual IndexedDB (43.061 s). Independent
+source review found no live authority expansion.
+
+The final fresh offline private-copy preflight passes in 6.333 s: the original
+blocked message carries its verified witness and bounded catch-up completes
+without deferred records. This proves producer preparation, not phone delivery.
+All HTTP attempts were intercepted and refused before network access; no live
+data or process was changed. Both private database/key copies and the temporary
+diagnostic test have been removed. Detailed aggregate evidence remains local.
+
+The owner's newly reported topic-name divergence was a separate local-only
+preference path in both native and browser clients. Own-human title/reset sync
+now uses exact topic scope, durable causal revisions and the existing encrypted
+own-device transport. Migration preserves saved titles; explicit edits outrank
+old migration seeds. Concurrent edits converge deterministically, resets survive
+reordering, and absent history can receive an inert preference. Private topic
+labels remain private to the person. Native focused race passed 15.833 s,
+protocol/envelope race and affected vet passed; browser 41 checks passed in Node
+and real IndexedDB, plus 21 native/browser wire cases. Independent review closed
+a migration ordering edge and found no remaining authority issue. Comic title
+wording and existing desktop/phone rename/reset checks passed 37.461 s.
+
+Before freezing the candidate, the owner reported preview routing and selected
+topic unread inconsistencies on MEL-494/MEL-545. Chat summaries now carry the
+exact preview reference, selecting a stable logical ID only when unambiguous.
+All skins resolve the actual topic before acknowledging its visible messages;
+delayed history retains that target until explicit navigation supersedes it.
+Topic lists refresh on read changes, failed acknowledgements remain retryable,
+and unseen sibling topics stay unread. Both failures reproduced before the fix.
+All six skin/width preview cases and all six unread cases pass, including cold
+startup, delayed history, stale navigation, logical-ID collisions and read-only
+remote changes. Native API/alias checks passed 0.547 s; independent source review,
+all three canonical builds and bundle integrity checks passed.
+
+MEL-580's Waiting report has no verified false-pending
+reproduction: exact request/reply correlation remains authoritative; unrelated
+later answers cannot close another request. No live state was changed. ThinkPad
+separately owns MEL-502 collective tags and latency investigation; avoid duplicate
+writers. This integrated candidate is ready for the full/native release suite.
+Retain the valid focused and rendered evidence; repeat affected checks only if
+qualification exposes a new failure or a subsequent source change requires it.
+No v0.8.11 tag, publication or relay rollout has occurred. Clients update through
+their own controls; actual phone convergence remains a separate physical check.
+
+### Published v0.8.10
+
 [Download v0.8.10](https://github.com/misunders2d/agentnet/releases/tag/v0.8.10).
 Published at **21:54:58 UTC** from
 `7afac5bda699a33f60db38dfb188b1a6d83ef66d`. Existing relay upgraded at

@@ -276,6 +276,7 @@ export interface DMSummary {
   mine: boolean;
   count: number;
   title: string;
+  last_id?: string;
   last: string;
   last_at: string;
   unread: number;
