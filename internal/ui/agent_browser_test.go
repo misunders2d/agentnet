@@ -25,7 +25,7 @@ func startAgentWireNode(t *testing.T) *wireNode {
 		t.Skip("node is not installed")
 	}
 	cmd := exec.Command(node, "testdata/agent_wire_check.mjs")
-	w := &wireNode{t: t, stderr: &bytes.Buffer{}}
+	w := &wireNode{t: t, stderr: &nodeOutput{}}
 	cmd.Stderr = w.stderr
 	w.in, err = cmd.StdinPipe()
 	if err != nil {

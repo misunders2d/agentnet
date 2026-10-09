@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -421,9 +422,20 @@ func TestBrowserWireV2MatchesGo(t *testing.T) {
 		if v := w.call(map[string]any{"op": "parseCaps", "json": marshal(t, mk(bobID, bob.Address, session, many)), "key": b64(bob.SignKey)}); v["error"] != nil {
 			t.Fatalf("the device refuses a 17-name record: %v", v["error"])
 		}
-		w.refuses("advertising 17 names", w.call(map[string]any{"op": "caps", "session": session, "names": many}), "at most 16")
-		if v := w.ok(map[string]any{"op": "caps", "session": session, "names": many[1:]}); v["json"] == nil {
-			t.Fatal("the device cannot advertise 16 names")
+		headroom := make([]string, protocol.MaxCaps)
+		for i := range headroom {
+			headroom[i] = fmt.Sprintf("c%02d", i)
+		}
+		full := marshal(t, mk(bobID, bob.Address, session, headroom))
+		if _, err := protocol.ParseCapsRecord([]byte(full)); err != nil {
+			t.Fatalf("Go refuses the reader capability limit: %v", err)
+		}
+		w.ok(map[string]any{"op": "parseCaps", "json": full, "key": b64(bob.SignKey)})
+		w.refuses("advertising beyond the device limit", w.call(map[string]any{"op": "caps", "session": session, "names": headroom[:protocol.MaxAdvertisedCaps+1]}), fmt.Sprintf("at most %d", protocol.MaxAdvertisedCaps))
+		advertised := w.ok(map[string]any{"op": "caps", "session": session, "names": headroom[:protocol.MaxAdvertisedCaps]})
+		atLimit, err := protocol.ParseCapsRecord([]byte(advertised["json"].(string)))
+		if err != nil || atLimit.Verify(pub.SignKey) != nil || !slices.Equal(atLimit.Caps, headroom[:protocol.MaxAdvertisedCaps]) {
+			t.Fatalf("signed advertisement differs at the device limit: %v", err)
 		}
 		for what, caps := range map[string][]string{"rm1": {protocol.CapEnv2, protocol.CapRoom}, "17 names": many, "hgp1 only": {protocol.CapHumanParticipation}} {
 			p := protocol.Profile{Sessions: []string{s1}, Caps: []json.RawMessage{raw(mk(bobID, bob.Address, s1, caps))}}

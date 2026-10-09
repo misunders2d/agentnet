@@ -167,6 +167,11 @@ func TestCLIFileJourney(t *testing.T) {
 		json.Unmarshal([]byte(c.run("--home", "bob", "inbox", "--json")), &msgs)
 		return len(msgs) == 1 && msgs[0].ID == id
 	})
+	// Storage and its asynchronous relay receipt are separate facts. Keep
+	// the recipient running until the sender can observe that receipt.
+	waitFor(t, "relay to confirm bob's stored message", func() bool {
+		return c.run("--home", "alice", "status", id) == id+" delivered relay"
+	})
 	stopBob()
 	os.Mkdir(filepath.Join(c.dir, "out"), 0o700)
 	saved := c.run("--home", "bob", "download", "--dir", "out", id)

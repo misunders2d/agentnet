@@ -12,7 +12,9 @@ func TestGroupParticipationEventLabelsPreserveVisitorScope(t *testing.T) {
 	e := protocol.ParticipationEvent{V: 1, Conv: strings.Repeat("1", 64), PID: strings.Repeat("2", 32), Type: protocol.EventAccept, Prev: strings.Repeat("3", 64), TS: 1790000000, Author: protocol.EventAuthor{Person: strings.Repeat("4", 32), Roster: strings.Repeat("5", 64), Address: "dana/desk", Fingerprint: "01234567-89abcdef-01234567-89abcdef"}}
 	e.Sign(key)
 	p := dmPeople{group: true}
-	if got := eventText(marshal(t, e), p); got != "An outside agent's owner accepted: this outside agent now receives every new message and file in this group until removed." {
+	// Acceptance alone cannot promise whole-chat access: the signed invitation
+	// may limit this PID to one topic, and is not present in this projection.
+	if got := eventText(marshal(t, e), p); got != "An outside agent's owner accepted: this outside agent participates with the scope of its invitation." {
 		t.Fatal(got)
 	}
 	// The unchanged DM projection remains separate from group participation.

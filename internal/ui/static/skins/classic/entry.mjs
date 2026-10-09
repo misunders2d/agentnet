@@ -2728,7 +2728,7 @@ function mentionKey(e) {
 function agentCard(a, t) {
   const rejoined = ["dismissed", "declined"].includes(a.state) && a.host.fingerprint &&
     (t.agents || []).find(b => b.pid !== a.pid && b.host.address === a.host.address &&
-      b.host.fingerprint === a.host.fingerprint && (b.agent_id || "") === (a.agent_id || "") &&
+      b.host.fingerprint === a.host.fingerprint && b.topic === a.topic && (b.agent_id || "") === (a.agent_id || "") &&
       ["active", "invited"].includes(b.state));
   const shown = a.shared.length + a.missing;
   const facts = ["invited by " + (a.inviters?.length ? a.inviters : [a.inviter]).map(p => isMe(p) ? "you" : p.label).join(" and "),
@@ -2742,7 +2742,7 @@ function agentCard(a, t) {
     el("p", { class: "agent-state" }, a.state_text),
     rejoined && el("p", { class: "hint" }, rejoined.state === "active" ? "Already in this chat" : "Rejoin pending"),
     el("p", { class: "hint" }, facts.join(" · ")),
-    a.external && a.member && el("p", { class: "hint" }, "Runs outside this group on " + a.host.label + "’s computer; that computer receives every new message and file here until the agent is removed."),
+    a.external && a.member && a.topic == null && el("p", { class: "hint" }, "Runs outside this group on " + a.host.label + "’s computer; that computer receives every new message and file here until the agent is removed."),
     a.external && !a.member && el("p", { class: "hint" }, "External host · " + a.host.address + ". It is not a room member; it receives only selected context and requests addressed to this agent."),
     a.note && el("p", { class: "agent-note" }, "Note: " + a.note),
     (a.can_decide || a.can_ask || a.can_dismiss) && el("div", { class: "agent-actions" },
@@ -3573,7 +3573,7 @@ function approvalBody(m, recipient = null) {
   const matches = messages.filter(x => x.id === m.proposal.proposal_id || x.lid === m.proposal.proposal_id);
   const original = matches.length === 1 && !matches[0].deleted ? matches[0] : null;
   return el("div", {class:"body compact-approval"}, recipient,
-    el("p", {"data-proposal-provenance":""}, (m.dir === "out" ? "You approved this task" : "Approved this task") + " · suggested by " + (target ? agentName(target) : "the agent")),
+    el("p", {"data-proposal-provenance":""}, (m.proposal.edited ? (m.dir === "out" ? "You edited and sent this task" : "Edited and sent this task") : (m.dir === "out" ? "You approved this task" : "Approved this task")) + " · suggested by " + (target ? agentName(target) : "the agent")),
     original && el("button", {type:"button",class:"text-btn",onclick:()=>flash(original.id)}, "View proposal"),
     el("details", {"data-approved-task-text":""}, el("summary", {}, "Approved task text"),
       el("p", {}, mentionNodes(m.body, state.dm ? state.dmData : null)),
@@ -3631,7 +3631,7 @@ function proposalCard(p) {
   return el("details", { class: "tech" }, el("summary", {}, "How this task was chosen"),
     el("p", { style: "white-space:pre-wrap;overflow-wrap:anywhere" }, name(p.asker) + " asked: " + p.question),
     el("p", { style: "white-space:pre-wrap;overflow-wrap:anywhere" }, "Your agent suggested: " + p.proposal),
-    el("p", {}, name(p.confirmed_by) + " chose Do it. This uses only their usual task approval."));
+    el("p", {}, name(p.confirmed_by) + (p.edited ? " edited and sent this task." : " chose Do it.") + " This uses only their usual task approval."));
 }
 
 function reportItems(it) {

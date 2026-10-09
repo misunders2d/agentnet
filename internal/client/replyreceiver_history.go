@@ -9,6 +9,12 @@ import (
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
+// Private setup has no visible reply choice or human-scoped turn. Use the
+// protocol constants here so queue ordering and history agree on its type.
+const privateReceiverSetupOutbox = `conv IS NULL AND reply_receiver IS NULL AND
+	(coalesce(required_cap,'')='` + protocol.CapReplyReceiver + `' OR
+	coalesce(required_cap,'')='` + protocol.CapHumanParticipation + `' AND human IS NULL)`
+
 // Direction is part of source identity. Never join an inbound same-ID row to
 // an unrelated outbound commitment, or turn forwarded metadata into setup.
 func receiverStoredRoute(q dbq, dir, id string) (*envelope.ReceiverRoute, error) {

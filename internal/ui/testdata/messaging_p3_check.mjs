@@ -85,12 +85,21 @@ for(const skin of ["classic","zoom","comic"]) {
 }
 console.log("PASS delivery and receipt checks");
 
-// Snapshot completion proves local queueing, never receipt by the other device.
+// Producer completion and actual carrier receipts remain separate facts.
 for(const skin of ["classic","zoom","comic"]) {
  const source=await readFile(new URL(skin==="comic"?"../web/src/features/Settings.profile.tsx":"../skins/"+skin+"/src/entry.mjs",import.meta.url),"utf8");
  const raw=source.match(skin==="comic"?/function copyWords[\s\S]*?\n}/:/function historyLine[\s\S]*?\n}/)[0];
  const words=runInNewContext("("+(skin==="comic"?stripTypeScriptTypes(raw):raw)+")",{state:{overview:{device:{}}}});
- assert.equal(words({state:"done",name:"phone",done:4,total:4}),"History queued · keep AgentNet running here",skin+" queued is not delivered");
- assert(words({state:"running",name:"phone",done:0,total:0}).startsWith("Getting your chats…"),skin+" unknown deferred progress stays unfinished");
+ const done={state:"done",name:"phone",done:4,total:4};
+ for(const [patch,want] of [
+  [{},"History prepared here · delivery confirmation unavailable"],
+  [{delivery_known:true},"No message history waiting to send from this device"],
+  [{delivery_known:true,delivered:7},"7 history copies delivered · nothing waiting to send here"],
+  [{delivery_known:true,queued:2},"2 waiting to send"],
+  [{delivery_known:true,custody:3},"3 on the server, waiting for the device"],
+  [{delivery_known:true,blocked:1},"1 history copies need attention"],
+  [{deferred:2},"2 history items waiting for context"],
+ ]) assert.equal(words({...done,...patch}),want,skin+" producer and receipt evidence stay distinct");
+ assert.equal(words({state:"running",name:"phone",done:0,total:0}),"Preparing history on this device",skin+" unknown producer progress is not phone delivery");
  assert(/stopped/.test(words({state:"ended",name:"phone",done:4,total:4})),skin+" ended stays stopped");
 }

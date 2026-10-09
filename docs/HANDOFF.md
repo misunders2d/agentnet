@@ -28,6 +28,21 @@ relay checks for v0.8.13 are complete. Active work now follows
 `ea2ad0cf`, including the final ThinkPad MEL-586/587/588 inbox-output,
 app-close crash and quarantine-notice findings. No v0.8.14 release yet.
 
+The combined source is pushed at `2be8e1eef4bbeed080ae772b1c4fc9e70480e291`;
+[integrated qualification](https://github.com/misunders2d/agentnet/actions/runs/37968753848)
+started at17:47:31 UTC. ThinkPad's `bfac23e5` is integrated as `dd8a7f66`, with
+subsequent receipt-race, authorship and performance corrections. Focused vet,
+race, browser and rendered checks pass. Unnecessary Codex executable hashing
+without pending inputs is a confirmed live CPU contributor on Zenbook's old
+client; the same path exists in v0.8.13. Actual post-fix ThinkPad CPU and physical
+phone convergence remain unverified. The owner clarified MEL-590 concerns
+installation, with the app already installed, and explicitly said it must not
+delay this release. Official Mac/Tauri guidance and the build's lack of Developer
+ID signing/notarization are recorded as a possible cause, not a confirmed fix.
+Preserve running clients and complete remaining source/package gates before
+publication. The first integrated run exposed history/routing bugs and fixture
+failures; bounded corrections are underway, with no deadline increases.
+
 ### v0.8.13 scope and qualification
 
 Branch `release/v0.8.13`, starting at `7e0ea2ef`, contains the performance-first

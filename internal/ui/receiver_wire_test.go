@@ -2,7 +2,6 @@ package ui
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -23,7 +22,7 @@ func startReceiverWireNode(t *testing.T) *wireNode {
 		t.Skip("node unavailable")
 	}
 	cmd := exec.Command(node, "testdata/receiver_wire_check.mjs")
-	w := &wireNode{t: t, stderr: &bytes.Buffer{}}
+	w := &wireNode{t: t, stderr: &nodeOutput{}}
 	cmd.Stderr = w.stderr
 	w.in, e = cmd.StdinPipe()
 	if e != nil {

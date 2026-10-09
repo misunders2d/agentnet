@@ -14,6 +14,14 @@ const overview={version:'fixture',seq:1,me:{address:me.address,fingerprint:me.fi
 const boot=`
 const seed=${JSON.stringify({overview,thread})};window.fixture={...seed,requests:[]};
 const variant=new URL(location.href).searchParams.get('case');
+if(variant?.startsWith('topic-')){
+ const scopes={'topic-other':['warehouse','other','active'],'topic-main-broad':['',null,'active'],'topic-same':['warehouse','warehouse','active'],'topic-main-pending':['','','invited']};
+ const [oldTopic,topic,state]=scopes[variant],base=fixture.thread.agents[2];
+ const current={...base,pid:'current-scope',state,state_text:topic==null?base.state_text:'Participates only in '+(topic?'this topic':'Main flow')+'. Its owner decides what runs. Earlier shared copies remain.'};
+ if(topic!=null)current.topic=topic;
+ fixture.thread.agents=[{...base,pid:'old-scope',topic:oldTopic,state:'dismissed',state_text:'No longer participates in this topic.',can_ask:false,can_dismiss:false},current];
+ fixture.thread.messages=[];seed.thread=fixture.thread;
+}
 if(variant?.startsWith('dm-')){fixture.thread.kind='dm';fixture.thread.peer=fixture.overview.people[0];fixture.thread.members=[];fixture.thread.agents=[{...fixture.thread.agents[0],member:false,state:variant==='dm-conflict'?'conflict':'active',state_text:variant==='dm-conflict'?'Its signed records disagree.':'Active in this DM; its owner decides what runs.'}];fixture.thread.messages=[];seed.thread=fixture.thread;}
 if(variant==='pending-records'){
  fixture.thread.agents=[{pid:'held-only',state:'pending',state_text:'Its invitation is not here yet: nothing counts until it is. Some of its records do not count here yet.',host:{},inviter:{},member:true,shared:[],missing:0,can_ask:false,can_decide:false,can_dismiss:false},{...fixture.thread.agents[1],pid:'real-invite',state:'invited',can_ask:false,can_decide:false,can_dismiss:true}];
@@ -38,6 +46,32 @@ window.openGroup=()=>open(seed.thread.id,'conversation');window.ready=true;
 `;
 const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://127.0.0.1');if(u.pathname==='/'){res.setHeader('Content-Type','text/html');res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0}#skin{height:100dvh}</style><div id="skin"></div><script type="module" src="/boot.mjs"></script>');return;}if(u.pathname==='/boot.mjs'){res.setHeader('Content-Type','text/javascript');res.end(boot);return;}if(u.pathname.startsWith('/assets/')){const file=path.resolve(root,'.'+u.pathname.slice(7));if(file.startsWith(root+path.sep)&&fs.existsSync(file)&&fs.statSync(file).isFile()){res.setHeader('Content-Type',file.endsWith('.mjs')?'text/javascript':file.endsWith('.css')?'text/css':file.endsWith('.json')?'application/json':file.endsWith('.woff2')?'font/woff2':'application/octet-stream');res.end(fs.readFileSync(file));return;}}res.statusCode=404;res.end('fixture route missing');});
 (async()=>{let browser;const errors=[],shots=[];try{await new Promise(r=>server.listen(0,'127.0.0.1',r));const origin='http://127.0.0.1:'+server.address().port;browser=await chromium.launch({headless:true,executablePath:process.env.AGENTNET_CHROMIUM||'/usr/bin/chromium'});
+if(process.env.AGENTNET_P6_TOPIC_SCOPE_ONLY==='1'){
+ for(const skin of ['classic','zoom'])for(const width of [1280,390])for(const variant of ['topic-other','topic-main-broad','topic-same','topic-main-pending']){
+  const context=await browser.newContext({viewport:{width,height:900}});await context.route('**/*',r=>new URL(r.request().url()).origin===origin?r.continue():r.abort());
+  const page=await context.newPage();page.on('pageerror',e=>errors.push(e.stack));page.setDefaultTimeout(10000);
+  await page.goto(origin+'/?skin='+skin+'&case='+variant);await page.waitForFunction(()=>window.ready);await page.evaluate(()=>openGroup());
+  let current;
+  if(skin==='zoom'){
+   const panel=page.getByRole('group',{name:'Agents in this group',exact:true});await panel.locator(':scope > summary').click();current=panel.locator('.agent-card');
+  }else{await page.locator('#agents .assistant-participant').click();current=page.locator('dialog[open] .agent-card');}
+  await current.waitFor();
+  const text=await current.innerText();
+  if(variant==='topic-main-broad')assert.match(text,/receives every new message and file/,'broad invitation keeps its actual disclosure');
+  else {assert.match(text,/Participates only in (this topic|Main flow)/);assert(!text.includes('every new message and file'),'scoped card must not append whole-chat access');}
+  if(skin==='classic'){await page.keyboard.press('Escape');await page.locator('#conversation-details').click();}
+  else await page.evaluate(()=>document.querySelector('#skin').shadowRoot.querySelector('#conversation-details').click()); // render the existing legacy details handler; Zoom's canvas hides its old toolbar
+  const old=page.locator('dialog[open] .agent-card.dismissed');await old.waitFor();
+  const oldText=await old.innerText(),expected=variant==='topic-same'?'Already in this chat':variant==='topic-main-pending'?'Rejoin pending':'';
+  assert.equal(oldText.includes('Already in this chat'),expected==='Already in this chat','rejoin must match the exact topic including Main');
+  assert.equal(oldText.includes('Rejoin pending'),expected==='Rejoin pending','broad and Main scopes stay distinct');
+  assert(!oldText.includes('every new message and file'),'ended scoped invitation does not acquire broad access');
+  assert.equal((await page.evaluate(()=>fixture.requests.filter(r=>r.body&&/agent\/(invite|decide|dismiss)/.test(r.path)))).length,0,'viewing cards sends no participation action');
+  await old.evaluate(async n=>{await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));await Promise.all(n.closest('dialog').getAnimations().filter(a=>a.effect.getComputedTiming().iterations!==Infinity).map(a=>a.finished.catch(()=>{})));});
+  const shot=path.join(evidence,skin+'-'+variant+'-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);await context.close();
+ }
+ assert.deepEqual(errors,[]);console.log(JSON.stringify({ok:true,checks:'legacy topic/Main/broad disclosures and exact rejoin identity; no actions; desktop/phone',shots}));return;
+}
 if(process.env.AGENTNET_PENDING_RECORDS_ONLY==='1'){
  for(const width of [1280,390]){
   const context=await browser.newContext({viewport:{width,height:900}});await context.route('**/*',r=>new URL(r.request().url()).origin===origin?r.continue():r.abort());

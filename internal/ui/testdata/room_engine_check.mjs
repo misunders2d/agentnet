@@ -127,6 +127,11 @@ let view=e.agentView({...viewInfo,member:false,audience:'conversation',until:sec
 assert.equal(view.member,true);assert(!view.state_text.includes('Stays until explicitly removed'));
 view=e.agentView({...viewInfo,member:true,external:true},[],null,people,'member');
 assert(view.state_text.includes('receives every new message and file'));
+for(const topic of ['',id('e')]){
+ const scoped=e.agentView({...viewInfo,member:true,external:true,topic},[],null,people,'member');
+ assert(scoped.state_text.includes(topic?'only in this topic':'only in Main flow'));
+ assert(!scoped.state_text.includes('every new message and file'),'topic-only member cannot promise whole-chat access');
+}
 view=e.agentView({...viewInfo,member:true,host:{...alice,address:e.address,label:'Alice'}},[],null,people,'member');
 assert(view.state_text.includes('browser'));assert(!view.state_text.includes('Stays until explicitly removed'));
 view=e.agentView({...viewInfo,member:true,held:1},[],null,people,'member');
@@ -145,6 +150,7 @@ route.dmMembers=async()=>{const m=new Map([[alice.person,alice]]);m.group={state
 await assert.rejects(()=>route.inviteAgent({conv,host:'outside/desk',agent_id:id('f')}),/administrator/);
 const outsideAccept=await accept(inv);
 const disclosure=e.eventText(wire.eventJSON(outsideAccept),null,[people[0]]);
-assert(disclosure.includes('receives every new message and file'));
+assert(disclosure.includes('participates with the scope of its invitation'));
+assert(!disclosure.includes('every new message and file'),'acceptance alone cannot infer the invitation’s scope');
 assert(!disclosure.includes(outsideAccept.author.address),'outside event has no raw host address');
 console.log('PASS P6 fixes engine: all-PID consent, reader epochs, share visibility, legacy/warning/disclosure parity, ordinary captured sends and outside admin gate');

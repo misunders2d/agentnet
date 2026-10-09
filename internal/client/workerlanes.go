@@ -58,7 +58,20 @@ func (a *Agent) executorAvailable(q dbq, stamp *ExecutorStamp, parent string) (b
 
 func (a *Agent) availableResolver(r *Responder, parent string) func(dbq, string) (*ExecutorStamp, error) {
 	return func(q dbq, id string) (*ExecutorStamp, error) {
-		stamp, err := a.ResolveExecutorIn(q, id, r)
+		current := r
+		if id == "" {
+			// The scheduler's earlier read is only a candidate hint. Resolve
+			// the default from the same transaction that claims this job.
+			var err error
+			current, err = responderIn(q)
+			if err != nil {
+				return nil, err
+			}
+			if current == nil {
+				return nil, errExecutorBusy // manual handling leaves it unclaimed
+			}
+		}
+		stamp, err := a.ResolveExecutorIn(q, id, current)
 		if err != nil {
 			return nil, err
 		}

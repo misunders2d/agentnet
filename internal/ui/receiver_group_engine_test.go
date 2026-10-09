@@ -4,7 +4,6 @@ package ui
 
 import (
 	"bufio"
-	"bytes"
 	"os/exec"
 	"testing"
 )
@@ -17,7 +16,7 @@ func TestBrowserGroupReceiverPreparedEngine(t *testing.T) {
 		t.Skip("node unavailable")
 	}
 	cmd := exec.Command(node, "testdata/receiver_group_engine_check.mjs")
-	w := &wireNode{t: t, stderr: &bytes.Buffer{}}
+	w := &wireNode{t: t, stderr: &nodeOutput{}}
 	cmd.Stderr = w.stderr
 	w.in, err = cmd.StdinPipe()
 	if err != nil {

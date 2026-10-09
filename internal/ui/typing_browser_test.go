@@ -2,7 +2,6 @@ package ui
 
 import (
 	"bufio"
-	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
@@ -24,7 +23,7 @@ func startTypingWireNode(t *testing.T) *wireNode {
 		t.Skip("node is not installed")
 	}
 	cmd := exec.Command(node, "testdata/typing_wire_check.mjs")
-	w := &wireNode{t: t, stderr: &bytes.Buffer{}}
+	w := &wireNode{t: t, stderr: &nodeOutput{}}
 	cmd.Stderr = w.stderr
 	w.in, err = cmd.StdinPipe()
 	if err != nil {

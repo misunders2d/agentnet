@@ -17,6 +17,7 @@ async function fixture() {
  assert.deepEqual(e.continuationOf(m,e.fp,exec),{id:m.lid,key:e.fp,host:'owner/desk',attempt:3});
  assert.equal(e.continuationOf({...m,kind:'message'},e.fp,exec),null,'ordinary quoted messages stay inert');
  assert.equal(e.continuationOf(m,e.fp,{...exec,state:'answered'}),null);
+ assert.equal(e.continuationOf(m,e.fp,{...exec,attempt:0}),null,'an older or unknown attempt cannot offer a continuation');
  e.me.human_keys=[];assert.equal(e.continuationOf(m,e.fp,exec),null,'agent host source has no continuation authority');e.stop();
 }
 {

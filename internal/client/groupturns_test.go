@@ -281,7 +281,6 @@ func TestGroupTurnsT3FilesResumeAcrossSenderRestart(t *testing.T) {
 	stops[w.alice]()
 	path, data := writeFile(t, t.TempDir(), "group-file.bin", 6<<20)
 	injectFaults(w.alice).addAfter("PUT", "/v1/blobs/", 1, 1, false)
-	bobFaults.addAfter("GET", "/v1/blobs/", 1, 1, false)
 	res, err := w.alice.SendConv(tctx(t), p.State.Conv, ConvOutgoing{Files: []OutgoingFile{{Path: path, Name: "group-file.bin"}}})
 	if err != nil {
 		t.Fatal(err)
@@ -304,7 +303,28 @@ func TestGroupTurnsT3FilesResumeAcrossSenderRestart(t *testing.T) {
 	for _, a := range []*Agent{w.bob, carol} {
 		eventually(t, "ordinary file turn received once", func() bool { return len(groupTurns(t, a, p.State.Conv)) == 1 })
 		row := groupTurns(t, a, p.State.Conv)[0]
-		paths, e := a.Download(tctx(t), row.ID, t.TempDir(), false)
+		out := t.TempDir()
+		if a == w.bob {
+			// As in receive(), isolate the explicit fetch from background
+			// prefetch so either one cannot consume the other's injected fault.
+			stops[a]()
+			if e := os.RemoveAll(filepath.Join(a.home, "downloads")); e != nil {
+				t.Fatal(e)
+			}
+			bobFaults.addAfter("GET", "/v1/blobs/", 1, 1, false)
+			if _, e := a.Download(tctx(t), row.ID, out, false); !errors.Is(e, errInjected) {
+				t.Fatalf("interrupted download: %v", e)
+			}
+			assertOnlyFiles(t, out) // no partial plaintext is exposed
+			if len(row.Attachments) != 1 {
+				t.Fatalf("expected one original attachment, got %d", len(row.Attachments))
+			}
+			part, e := os.Stat(a.downloadPath(row.Attachments[0].BlobID) + ".part")
+			if e != nil || part.Size() != downloadRange {
+				t.Fatalf("resumable partial ciphertext: %v %v", part, e)
+			}
+		}
+		paths, e := a.Download(tctx(t), row.ID, out, false)
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -313,6 +333,7 @@ func TestGroupTurnsT3FilesResumeAcrossSenderRestart(t *testing.T) {
 			t.Fatalf("download differs %v", e)
 		}
 	}
+	runAgent(t, w.bob)
 	text, err := reopened.SendConv(tctx(t), p.State.Conv, ConvOutgoing{Body: "text and file", Files: []OutgoingFile{{Path: path, Name: "group-file.bin"}}})
 	if err != nil || len(text.Copies) != 2 {
 		t.Fatalf("text+file %v", err)

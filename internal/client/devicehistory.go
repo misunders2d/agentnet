@@ -74,7 +74,10 @@ func (a *Agent) deviceHistorySource(q dbq, storage, id string) (deviceHistoryRow
 		err = q.QueryRow(`SELECT sender,coalesce(verified_by,claimed_fp,''),ts,kind,body,coalesce(reply_to,''),coalesce(status,''),coalesce(sub,''),coalesce(origin,''),coalesce(target,''),coalesce(ref_id,''),coalesce(ref_fp,''),CASE WHEN kind IN ('question','task') THEN '' ELSE coalesce(agent_id,'') END,coalesce(received_ms,received_at*1000) FROM inbox WHERE id=? AND conv IS NULL AND local=0 AND (receiver_route IS NULL OR json_extract(receiver_route,'$.op')='request')`, id).Scan(&in.From, &key, &in.TS, &in.Kind, &in.Body, &in.ReplyTo, &in.Status, &in.Sub, &in.Origin, &target, &refID, &refFP, &in.AgentID, &at)
 		r.to, r.toKey = a.Address, a.Self().Fingerprint()
 	} else if storage == "out" {
-		err = q.QueryRow(`SELECT recipient,coalesce(recipient_fp,''),json_extract(envelope,'$.ts'),json_extract(envelope,'$.kind'),body,coalesce(reply_to,''),coalesce(status,''),coalesce(sub,''),coalesce(origin,''),coalesce(target,''),coalesce(ref_id,''),coalesce(ref_fp,''),coalesce(agent_id,''),coalesce(created_ms,created_at*1000) FROM outbox WHERE id=? AND conv IS NULL`, id).Scan(&recipient, &r.toKey, &in.TS, &in.Kind, &in.Body, &in.ReplyTo, &in.Status, &in.Sub, &in.Origin, &target, &refID, &refFP, &in.AgentID, &at)
+		// Catalog, delegation and ready records are private receiver setup.
+		// As in the outbox FIFO, their capability plus absent reply choice
+		// distinguishes them from the visible original using that receiver.
+		err = q.QueryRow(`SELECT recipient,coalesce(recipient_fp,''),json_extract(envelope,'$.ts'),json_extract(envelope,'$.kind'),body,coalesce(reply_to,''),coalesce(status,''),coalesce(sub,''),coalesce(origin,''),coalesce(target,''),coalesce(ref_id,''),coalesce(ref_fp,''),coalesce(agent_id,''),coalesce(created_ms,created_at*1000) FROM outbox WHERE id=? AND conv IS NULL AND NOT (`+privateReceiverSetupOutbox+`)`, id).Scan(&recipient, &r.toKey, &in.TS, &in.Kind, &in.Body, &in.ReplyTo, &in.Status, &in.Sub, &in.Origin, &target, &refID, &refFP, &in.AgentID, &at)
 		in.From, key, r.to = a.Address, a.Self().Fingerprint(), recipient
 	} else {
 		return r, errors.New("device history: invalid source")

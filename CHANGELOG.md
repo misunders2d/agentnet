@@ -9,7 +9,7 @@ This record starts with v0.8.1; earlier releases remain on the
 ### Fixed
 
 - Keep incompatible invitation-sync copies from blocking ordinary questions, files and replies behind them.
-- Synchronize older direct-agent conversations across verified personal devices, preserving the original sender, recipient, request, replies and files. Restored messages remain history and never rerun a task; these new copies wait for compatible clients.
+- Synchronize older direct-agent conversations across verified personal devices, preserving the original sender, recipient, request, replies and file references. Downloading files still requires a linked source that retains them. Restored messages remain history and never rerun a task; these new copies wait for compatible clients.
 - Retain admission receipts for restored history and repair missing receipts from earlier browser versions. Reuse held copies while their evidence is pending, and distinguish queued, stored, admitted and blocked transfers in sync progress.
 - Stop unchanged conversation records, invitations, read markers and topic names from generating repeated encrypted copies when a receiving device holds them. New facts and revisions still synchronize normally.
 - Avoid repeatedly hashing and probing Codex when no reply input is waiting. Actual inputs retain the same native identity, binding and receipt checks.
@@ -20,7 +20,7 @@ This record starts with v0.8.1; earlier releases remain on the
 - Keep inherited own-person permissions visible after an individual device grant is removed. Show the actual computer for remote default agents.
 - Let a verified own human device explicitly mark an exact remote needs-human request as handled. The host checks the request and attempt, and its confirmation updates the state without rerunning work. Attachment-only requests retain useful context in reports.
 
-- Keep incoming messages and heartbeat acknowledgements moving while delivery receipts are delayed. Pending invitation synchronization no longer blocks ordinary queued turns.
+- Keep incoming messages and heartbeat acknowledgements moving while delivery receipts are delayed.
 - Keep older direct-delivery completions or relay responses from erasing a newer pending delivery receipt, including after restart.
 - Use recipient delivery for the chat-list waiting count, matching message ticks; a lagging extra device no longer leaves a delivered conversation marked as unsent.
 - Preserve agent authorship in selected conversation history after reinviting an agent. Clarify that admitted action requests use native tools and permissions even when classified as questions.
@@ -29,8 +29,8 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ### Added
 
-- Choose ongoing access to only the selected topic when bringing a person or agent into a chat. The signed scope applies to history, files, future messages and agent context; existing whole-chat invitations stay separate. Topic-only sharing requires compatible participants and uses Yourself for replies when a selected agent or live-session receiver would escape that scope.
-- Change a suggested task before sending it to the same agent. Original and revised confirmations share a durable choice across personal devices, so simultaneous approvals and retries cannot create two runs. Revised text keeps its provenance and uses the agent owner's normal task permissions.
+- In Comic, choose ongoing access to only the selected topic when bringing a person or agent into a chat. The signed scope applies to history, files, future messages and agent context; it does not narrow existing whole-chat access. Topic-only sharing requires compatible participants. Choose Yourself for replies; a selected agent or live-session receiver is refused before sending, preserving the draft.
+- In Comic, change a suggested task before sending it to the same agent. Original and revised confirmations share a durable choice across personal devices, so simultaneous approvals and retries cannot create two runs. Revised text keeps its provenance and uses the agent owner's normal task permissions.
 
 ## [0.8.13] — 2026-10-09
 

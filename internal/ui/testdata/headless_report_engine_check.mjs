@@ -8,10 +8,12 @@ const engine=new Engine({store,base:'https://synthetic.invalid',fetch});engine.l
 const report={id:reportID,v:1,from:'bot/host',to:'human/browser',kind:'message',status:'review_notice',body:'6 request(s) wait for a person on bot/host',at:1,attachments:[],read:true};
 const collision={id:reportID,v:1,to:'other/host',kind:'task',body:'outbox must stay unchanged',state:'queued'};
 await store.write([{s:'inbox',k:reportID,v:report},{s:'outbox',k:reportID,v:collision},{s:'outbox',k:outID,v:{...report,id:outID}},{s:'inbox',k:taskID,v:{...report,id:taskID,kind:'task',status:''}}]);
+const storedReport=await store.get('inbox',reportID);
+assert.ok(Number.isSafeInteger(storedReport.device_arrival)&&storedReport.device_arrival>0,'storage indexes the original arrival');
 const write=store.write;store.write=async ops=>{await write(ops);writes++};
 assert.equal(engine.reportItems(await store.all('inbox')).length,1);
 await engine.api('/api/act',{do:'resolve',id:reportID});
-assert.deepEqual(await store.get('inbox',reportID),{...report,resolved:true});assert.deepEqual(await store.get('outbox',reportID),collision);
+assert.deepEqual(await store.get('inbox',reportID),{...storedReport,resolved:true},'dismissal changes only resolved, preserving arrival and all source fields');assert.deepEqual(await store.get('outbox',reportID),collision);
 assert.equal(changes,1);assert.equal(writes,1);assert.equal(network,0);assert.equal(engine.reportItems(await store.all('inbox')).length,0);
 await engine.api('/api/act',{do:'resolve',id:reportID});assert.equal(writes,1);assert.equal(changes,1,'already dismissed is idempotent');
 const reload=new Engine({store,base:engine.base,fetch});await reload.load();assert.equal(reload.reportItems(await store.all('inbox')).length,0,'resolved flag survives fresh Engine reload');
@@ -19,11 +21,13 @@ for(const id of [outID,taskID,'f'.repeat(32),'invalid'])await assert.rejects(()=
 const malformed=[{v:2,conv:'a'.repeat(64)},{control:true},{sub:'status'},{conv:'a'.repeat(64)},{kind:'question'},{status:''},{reply_to:'4'.repeat(32)},{attachments:[{name:'secret.txt'}]},{attachments:{}},{id:'9'.repeat(32)}];
 for(let i=0;i<malformed.length;i++){
  const id=(100+i).toString(16).padStart(32,'0'),m={...report,id,...malformed[i]};await write([{s:'inbox',k:id,v:m}]);
- await assert.rejects(()=>engine.api('/api/act',{do:'resolve',id}));assert.deepEqual(await store.get('inbox',id),m);
+ const stored=await store.get('inbox',id);
+ await assert.rejects(()=>engine.api('/api/act',{do:'resolve',id}));assert.deepEqual(await store.get('inbox',id),stored);
 }
 for(const action of ['accept','approve','unapprove','resolve-task'])await assert.rejects(()=>engine.api('/api/act',{do:action,id:taskID}),/Nothing runs/);
 assert.equal(network,0);assert.equal(writes,1);assert.equal(changes,1);
 // Failed durable commit neither alters source object nor emits UI change.
 const failID='a'.repeat(32),m={...report,id:failID};await write([{s:'inbox',k:failID,v:m}]);
-store.write=async()=>{throw Error('disk write failed')};await assert.rejects(()=>engine.api('/api/act',{do:'resolve',id:failID}),/disk write failed/);assert.deepEqual(await store.get('inbox',failID),m);assert.equal(changes,1);
+const storedFailure=await store.get('inbox',failID);
+store.write=async()=>{throw Error('disk write failed')};await assert.rejects(()=>engine.api('/api/act',{do:'resolve',id:failID}),/disk write failed/);assert.deepEqual(await store.get('inbox',failID),storedFailure);assert.equal(changes,1);
 console.log('PASS local report dismissal: reload/idempotence/collision/shape/task refusal/durable failure/no network');

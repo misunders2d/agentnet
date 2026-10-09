@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -20,11 +21,12 @@ import (
 
 // Needs-you in the browser (ROOM_V1 §4.5, §8): a browser runs no agent, so
 // what waits for its person on another device of theirs is shown
-// read-only, naming that device (decide_on), with no actions: an
+// naming that device (decide_on): an
 // invitation for the laptop's agent until the laptop decides it, and the
 // browser's own request that the laptop's agent left for a person (as the
-// laptop reported it) until it is resolved there. A question for the
-// person is held apart; an invitation for someone else's agent is not
+// laptop reported it) until it is resolved there. A verified own human
+// may explicitly continue the exact attempt; merely viewing it is inert.
+// A question for the person is held apart; an invitation for someone else's agent is not
 // listed; deciding in the browser is refused. The agent is a stand-in
 // binary named like a supported harness (no model is called).
 func TestBrowserEngineNeedsYouReadOnly(t *testing.T) {
@@ -162,26 +164,39 @@ func TestBrowserEngineNeedsYouReadOnly(t *testing.T) {
 	}
 
 	// The tablet asks the laptop's agent, which leaves it for Alice: shown
-	// here read-only as the laptop reports it, until resolved there.
+	// here as the laptop reports it, until explicitly resolved there.
 	w.until("the laptop's agent active in the browser", func() bool { a := agent(inv.PID); return a != nil && a["can_ask"] == true })
 	asked := w.api("/api/dm/agent/ask", map[string]any{"pid": inv.PID, "body": "deploy now?"})["id"].(string)
-	w.until("the laptop's full private needs-human text", func() bool { it := item(client.ReviewNeedsHuman); return it != nil && it["why"] == agentText })
+	privateText := "Request: deploy now?\n\nAgent response:\n" + agentText
+	w.until("the laptop's full private needs-human text", func() bool { it := item(client.ReviewNeedsHuman); return it != nil && it["why"] == privateText })
 	it = item(client.ReviewNeedsHuman)
+	phoneKey := w.api("/api/overview", nil)["me"].(map[string]any)["fingerprint"].(string)
+	nativeTurn := goMessage(laptop, conv, "deploy now?")
+	before, err := laptop.ContinuationFor(nativeTurn.ID, "", nil)
+	if err != nil || before == nil || before.Attempt != 1 || before.Host != "" || before.Key != phoneKey {
+		t.Fatalf("host's waiting attempt: %+v %v", before, err)
+	}
+	wantContinuation := map[string]any{"id": nativeTurn.LID, "key": phoneKey, "host": laptop.Address, "attempt": float64(before.Attempt)}
+	decisionActions, _ := it["actions"].([]any)
 	if it["conv"] != conv || it["pid"] != inv.PID || it["id"] != asked || it["kind"] != envelope.KindQuestion || it["excerpt"] != "deploy now?" ||
-		it["decide_on"] != laptop.Address || it["actions"] != nil || it["why"] != agentText {
+		it["decide_on"] != laptop.Address || !slices.Equal(decisionActions, []any{DoContinue}) || !reflect.DeepEqual(it["continuation"], wantContinuation) || it["why"] != privateText {
 		t.Fatalf("needs-human in the browser: %v", it)
 	}
 	phoneTurn := dmMessage(w, conv, "deploy now?")
-	// P23 message views expose action lists; an ordinary needs-human
-	// request has an empty list and still cannot be decided on the phone.
+	// The action remains bound to the host's exact request/key/attempt;
+	// displaying it does not run or accept anything on either device.
 	turnActions, hasActions := phoneTurn["actions"].([]any)
-	if phoneTurn == nil || phoneTurn["job_detail"] != agentText || !hasActions || len(turnActions) != 0 {
+	if phoneTurn == nil || phoneTurn["job_detail"] != privateText || !hasActions || !slices.Equal(turnActions, []any{DoContinue}) || !reflect.DeepEqual(phoneTurn["continuation"], wantContinuation) {
 		t.Fatalf("phone lost full agent turn or gained actions: %v", phoneTurn)
 	}
 	w.refuses("accepting in the browser", w.call(map[string]any{"op": "api", "path": "/api/act", "body": map[string]any{"do": "accept", "id": asked}}), "Nothing runs in this browser")
 	m := goMessage(laptop, conv, "deploy now?")
 	if m.State != "needs_human" {
 		t.Fatalf("on the laptop: %+v", m)
+	}
+	after, err := laptop.ContinuationFor(nativeTurn.ID, "", nil)
+	if err != nil || !reflect.DeepEqual(before, after) {
+		t.Fatalf("viewing or refused accept changed the host attempt: before %+v, after %+v, %v", before, after, err)
 	}
 	if err := laptop.Resolve(m.ID); err != nil {
 		t.Fatal(err)

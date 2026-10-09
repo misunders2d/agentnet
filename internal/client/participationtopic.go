@@ -210,6 +210,11 @@ func topicCopy(q dbq, conv, pid, sub, body, human string) (bool, error) {
 	}
 
 	if sub == envelope.SubHistory {
+		// Ordinary legacy history intentionally keeps no local plaintext body.
+		// Scoped participation copies retain their typed proof for this check.
+		if body == "" {
+			return false, nil
+		}
 		var item HistoryItem
 		if err := json.Unmarshal([]byte(body), &item); err != nil {
 			return false, err

@@ -26,7 +26,7 @@ func startExternalWireNode(t *testing.T) *wireNode {
 		t.Skip("node unavailable")
 	}
 	cmd := exec.Command(node, "testdata/external_agent_wire_check.mjs")
-	w := &wireNode{t: t, stderr: &bytes.Buffer{}}
+	w := &wireNode{t: t, stderr: &nodeOutput{}}
 	cmd.Stderr = w.stderr
 	w.in, err = cmd.StdinPipe()
 	if err != nil {

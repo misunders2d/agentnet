@@ -239,6 +239,18 @@ func TestDeviceHistoryContextAcrossCurrentHumanDevices(t *testing.T) {
 	if err != nil || !strings.Contains(strings.Join(lines, "\n"), "earlier own question") {
 		t.Fatalf("context: %v %v", lines, err)
 	}
+	if !strings.Contains(strings.Join(lines, "\n"), `another person, "Person of admin/alice", on Alice (admin/alice)`) {
+		t.Fatalf("current verified human label lost: %v", lines)
+	}
+	// Imported history stays inert even if an old local projection has a
+	// leftover state: never present that as execution by this installation.
+	if _, err = a.store.db.Exec(`UPDATE inbox SET replica=1,state=? WHERE id=?`, stateAnswered, request.ID); err != nil {
+		t.Fatal(err)
+	}
+	lines, err = a.deviceThreadContext(job{From: phone.Address, Key: phone.Self().Fingerprint(), ReplyTo: request.ID}, 8, phone.Address)
+	if err != nil || len(lines) != 1 || strings.Contains(lines[0], "local state:") || !strings.Contains(lines[0], "no execution authority") {
+		t.Fatalf("copied history claimed local execution: %v %v", lines, err)
+	}
 	lines, err = a.deviceThreadContext(job{From: w.bob.Address, Key: w.bob.Self().Fingerprint(), ReplyTo: request.ID}, 8, w.bob.Address)
 	if err != nil || len(lines) != 0 {
 		t.Fatalf("foreign context crossed person: %v %v", lines, err)

@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -62,13 +63,32 @@ func TestVendoredAgeMatchesRecipe(t *testing.T) {
 	}
 }
 
+// nodeOutput protects diagnostics read while exec still drains stderr. Keep
+// bytes.Buffer private so io.Copy cannot bypass the synchronized Write method.
+type nodeOutput struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *nodeOutput) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *nodeOutput) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // wireNode is static/wire.mjs running in node with a device's real keys
 // (testdata/wire_check.mjs): one JSON request and answer per line.
 type wireNode struct {
 	t      *testing.T
 	in     io.WriteCloser
 	out    *bufio.Scanner
-	stderr *bytes.Buffer
+	stderr *nodeOutput
 }
 
 func startWireNode(t *testing.T) *wireNode {
@@ -77,7 +97,7 @@ func startWireNode(t *testing.T) *wireNode {
 		t.Skip("node is not installed")
 	}
 	cmd := exec.Command(node, "testdata/wire_check.mjs")
-	w := &wireNode{t: t, stderr: &bytes.Buffer{}}
+	w := &wireNode{t: t, stderr: &nodeOutput{}}
 	cmd.Stderr = w.stderr
 	if w.in, err = cmd.StdinPipe(); err != nil {
 		t.Fatal(err)

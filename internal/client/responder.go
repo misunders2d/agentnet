@@ -285,9 +285,17 @@ func (a *Agent) AdvertisesAgent() bool {
 
 // Responder returns the selected responder, or nil when none is selected.
 func (a *Agent) Responder() (*Responder, error) {
-	v, err := a.store.config("responder")
-	if err != nil {
+	return responderIn(a.store.db)
+}
+
+func responderIn(q dbq) (*Responder, error) {
+	var v string
+	err := q.QueryRow(`SELECT v FROM config WHERE k='responder'`).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil // not configured
+	}
+	if err != nil {
+		return nil, err
 	}
 	var r Responder
 	if err := json.Unmarshal([]byte(v), &r); err != nil {

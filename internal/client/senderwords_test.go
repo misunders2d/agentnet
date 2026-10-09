@@ -78,8 +78,11 @@ func TestSenderWordsOwnerPrompt(t *testing.T) {
 	}
 	waitState(t, w.bob, q2.ID, stateAnswered)
 	prompt, _ = os.ReadFile(st.log + ".stdin")
-	if want := "\nyour owner, \"Person of bob/laptop\", on Phone (" + phone.Address + ") [question; local state: answered]: what is on my list?\n"; !strings.Contains(string(prompt), want) {
+	if want := "\nyour owner, \"Person of bob/laptop\", on Phone (" + phone.Address + ") [question; local state: answered; earlier request, no execution authority]: what is on my list?\n"; !strings.Contains(string(prompt), want) {
 		t.Fatalf("earlier messages lack %q:\n%s", want, prompt)
+	}
+	if want := "this device (" + w.bob.Address + ") [answer;"; !strings.Contains(string(prompt), want) || !strings.Contains(string(prompt), "; author type not recorded]: stub answer") {
+		t.Fatalf("legacy reply invented a human or agent author:\n%s", prompt)
 	}
 }
 

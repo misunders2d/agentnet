@@ -24,7 +24,9 @@ assert.equal(threadAuthor(answer,o,{},host,[{...request,state:'manual'},answer])
 const remote = {...o.person,address:'owner/bezos',fingerprint:'owner-key',label:'Sergey'};
 const roomThread = {kind:'group',messages:[],members:[o.person],agents:[{pid:'remote',host:remote,inviter:o.person,state:'active',member:true,host_here:false},{pid:'local',host:o.person,inviter:o.person,state:'active',member:true,host_here:true}]};
 assert.equal(agentName(undefined,{},remote,o.person),'Your agent on Bezos','default remote agent keeps its exact host visible');
-assert.equal(agentName(agent,{[agent]:'Codex'},remote,o.person),'Codex','known agent name stays its actual name');
+assert.equal(agentName(agent,{[agent]:'Codex'},remote,o.person),'Your Codex','named agent retains its executor and verified owner');
+assert.equal(agentName(agent,{[agent]:'Codex'},{...remote,person:'another-owner',label:'Dana'},o.person),'Dana’s Codex','another person’s same-named executor stays distinguishable');
+assert.equal(agentName(agent,{[agent]:'Codex'},undefined,o.person),'Codex','missing host cannot invent an owner');
 assert.equal(participants(roomThread,o,{}).find(p=>p.pid==='remote').name,'Your agent on Bezos','mention/header identity agrees');
 const roomSource=stripTypeScriptTypes((await readFile(new URL('../web/src/features/RoomPanel.model.ts',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'')).replace(/^export /gm,'');
 const room=runInNewContext(roomSource+'\nroom',{...model,eventKind:()=>null});

@@ -93,6 +93,75 @@ func TestContinueRequestDirectWorker(t *testing.T) {
 	}
 }
 
+// The scheduler can read the default before the owner changes it and answers
+// a clarification. The authority claim must use the setting committed then,
+// while a stamp already claimed remains immutable.
+func TestContinueRequestUsesDefaultAtClaim(t *testing.T) {
+	for _, manual := range []bool{false, true} {
+		name := "changed"
+		if manual {
+			name = "manual"
+		}
+		t.Run(name, func(t *testing.T) {
+			st := installStub(t, "answer")
+			w := newWorld(t, "")
+			fakeNotify(w.bob)
+			setResponder(t, w.bob, "stubhuman", st.dir, time.Minute)
+			if err := w.bob.Approve(w.alice.Address); err != nil {
+				t.Fatal(err)
+			}
+			request := sealTo(t, w.alice, w.bob, envelope.Inner{Kind: envelope.KindQuestion, Body: "original bound work"})
+			if err := w.bob.verifyAndStore(tctx(t), request); err != nil {
+				t.Fatal(err)
+			}
+			if !w.bob.runNext(tctx(t), nil) {
+				t.Fatal("first attempt was not claimed")
+			}
+			if state, _ := w.bob.store.jobState(request.ID); state != stateNeedHuman {
+				t.Fatal("first attempt did not need clarification", state)
+			}
+			old, err := w.bob.Responder()
+			if err != nil || old == nil {
+				t.Fatal(err)
+			}
+			resolve := w.bob.availableResolver(old, "")
+			if err = w.bob.ContinueRequest(request.ID, protocol.NewID(), 1, "use release budget"); err != nil {
+				t.Fatal(err)
+			}
+			if manual {
+				if err = w.bob.SetResponder(nil); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				setResponder(t, w.bob, "stub", st.dir, time.Minute)
+			}
+			w.bob.workerLanes.Lock()
+			j, claimed, err := w.bob.store.claimJob(old.Harness, resolve)
+			w.bob.workerLanes.Unlock()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if manual {
+				state, err := w.bob.store.jobState(request.ID)
+				if claimed || err != nil || state != stateAccepted {
+					t.Fatalf("manual choice did not leave continuation pending: claimed=%v state=%s err=%v", claimed, state, err)
+				}
+			} else {
+				if !claimed || j.Executor == nil || j.Executor.Responder.Harness != "stub" {
+					t.Fatalf("continued request retained stale executor: claimed=%v executor=%+v", claimed, j.Executor)
+				}
+				setResponder(t, w.bob, "stubhuman", st.dir, time.Minute)
+				if j.Executor.Responder.Harness != "stub" {
+					t.Fatal("post-claim choice changed immutable executor")
+				}
+			}
+			if st.count() != 1 {
+				t.Fatal("claim test ran work again", st.count())
+			}
+		})
+	}
+}
+
 func TestContinueRequestGroupExactContext(t *testing.T) {
 	st := installStub(t, "answer")
 	w, _, packet, stops := groupTurnsFixture(t)

@@ -2,17 +2,33 @@
 
 The owner restarted Codex and resumed release work. Current implementation,
 triage and verification evidence live in [V0_8_14.md](plans/V0_8_14.md).
-The candidate remains uncommitted and unpublished while focused fixes are
-integrated; full qualification follows the stable combined candidate.
+The combined source is pushed on `release/v0.8.14` at
+`2be8e1eef4bbeed080ae772b1c4fc9e70480e291`. Its
+[integrated qualification](https://github.com/misunders2d/agentnet/actions/runs/37968753848)
+started at17:47:31 UTC; publication and relay deployment have not started.
 
 Implemented areas include direct-agent history across personal devices, durable
 history receipts and progress, grouped/archiveable Held back notices, bounded
 CLI inbox output, visible inherited permissions, exact remote request resolution,
 topic-only invitations and editable proposals. Focused native/browser and rendered
-checks are underway. MEL-589 shared-context authorship and MEL-590 Mac launch are
-awaiting ThinkPad's tested handoff; Mac launch remains a release blocker. The
+checks pass. ThinkPad's MEL-589 shared-context authorship and other prepared
+fixes are integrated. Repeated native executable hashing without pending input
+and four own-sync quarantine retry loops are corrected with focused regressions.
+Actual post-fix ThinkPad CPU and phone convergence remain unverified. The owner
+clarified MEL-590 is an installation issue and explicitly removed it as a release
+blocker; the app is already installed. No exact cause or fix is claimed. The
 reported ThinkPad shutdown abort has not been reproduced by the isolated Linux
 package probe and is not claimed fixed.
+
+After publication, update source computers and receiving clients through their
+existing app/CLI controls, then reload linked browsers after the relay rollout.
+New direct-agent history and remote resolution require compatible own devices;
+edited or sibling-device proposal confirmations also require an updated agent
+host. Topic-only invitations require compatible original-member devices and the
+invited host, so an older participant device can leave that option unavailable.
+The new topic-scope and proposal-edit controls are in Comic. Existing whole-chat
+access remains unchanged; a new topic invitation does not narrow it. File
+references synchronize, but downloads need a linked source retaining the bytes.
 
 Previous [v0.8.13](https://github.com/misunders2d/agentnet/releases/tag/v0.8.13)
 was published15:23:08UTC on October9; the existing relay passed its upgrade

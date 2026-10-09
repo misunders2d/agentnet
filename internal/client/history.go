@@ -223,7 +223,11 @@ func insertCopies(tx *sql.Tx, copies []outCopy) error {
 			if err != nil {
 				return err
 			}
-			if _, assistant := historyAssistant(c.in.Body, c.in.Conv); item.ReceiverRoute != nil || assistant || room { // delivery reads the item's own requirement
+			scoped, err := topicCopy(tx, c.in.Conv, c.in.PID, c.in.Sub, c.in.Body, "")
+			if err != nil {
+				return err
+			}
+			if _, assistant := historyAssistant(c.in.Body, c.in.Conv); item.ReceiverRoute != nil || assistant || room || scoped { // delivery reads the item's own requirement
 				body = c.in.Body
 			}
 		}

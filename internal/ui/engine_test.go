@@ -32,6 +32,28 @@ import (
 // engineNode is static/engine.mjs running in node (testdata/engine_check.mjs).
 type engineNode struct{ wireNode }
 
+// Timeout diagnostics may read stderr before exec's copying goroutine stops.
+func TestEngineNodeStderrConcurrentSnapshot(t *testing.T) {
+	w := &engineNode{wireNode{stderr: &nodeOutput{}}}
+	start, done := make(chan struct{}), make(chan struct{})
+	const line = "synthetic node diagnostic\n"
+	go func() {
+		defer close(done)
+		<-start
+		for range 1000 {
+			_, _ = w.stderr.Write([]byte(line))
+		}
+	}()
+	close(start)
+	for range 1000 {
+		_ = fmt.Sprintf("node stderr: %s", w.stderr)
+	}
+	<-done
+	if got := w.stderr.String(); got != strings.Repeat(line, 1000) {
+		t.Fatal("concurrent snapshots lost diagnostic output")
+	}
+}
+
 func startEngineNode(t *testing.T, hubDir string) *engineNode {
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -39,7 +61,7 @@ func startEngineNode(t *testing.T, hubDir string) *engineNode {
 	}
 	cmd := exec.Command(node, "testdata/engine_check.mjs")
 	cmd.Env = append(os.Environ(), "NODE_EXTRA_CA_CERTS="+filepath.Join(hubDir, "tls.crt")) // the Hub's own certificate, pinned
-	w := &engineNode{wireNode{t: t, stderr: &bytes.Buffer{}}}
+	w := &engineNode{wireNode{t: t, stderr: &nodeOutput{}}}
 	cmd.Stderr = w.stderr
 	if w.in, err = cmd.StdinPipe(); err != nil {
 		t.Fatal(err)

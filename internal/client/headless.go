@@ -338,13 +338,13 @@ func (a *Agent) tellStatus(ctx context.Context, id string) bool {
 	mu, _ := a.statusLocks.LoadOrStore(id, &sync.Mutex{})
 	mu.(*sync.Mutex).Lock()
 	defer mu.(*sync.Mutex).Unlock()
-	var due int64
+	var due, attempt int64
 	var sender, key, kind, state string
 	var conv, lid sql.NullString
 	var local, replica, selected bool
-	err := a.store.db.QueryRow(`SELECT status_due, sender, coalesce(verified_by, ''), kind, state, conv, lid, local, replica,
+	err := a.store.db.QueryRow(`SELECT status_due, sender, coalesce(verified_by, ''), kind, state, conv, lid, local, replica, attempts,
 		EXISTS (SELECT 1 FROM reply_receiver_inputs WHERE inbox_id = inbox.id) FROM inbox WHERE id = ?`, id).
-		Scan(&due, &sender, &key, &kind, &state, &conv, &lid, &local, &replica, &selected)
+		Scan(&due, &sender, &key, &kind, &state, &conv, &lid, &local, &replica, &attempt, &selected)
 	if err != nil || due == 0 {
 		return true
 	}
@@ -376,7 +376,7 @@ func (a *Agent) tellStatus(ctx context.Context, id string) bool {
 		a.Logf("status of %s: %v", id, err)
 		return true
 	}
-	body, _ := json.Marshal(envelope.Status{State: public, N: n, At: time.Now().Unix(), Detail: detail})
+	body, _ := json.Marshal(envelope.Status{State: public, N: n, At: time.Now().Unix(), Detail: detail, Attempt: attempt})
 	sctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	res, err := a.sendControlAs(sctx, ref, envelope.SubStatus, string(body), protocol.CapHeadless)

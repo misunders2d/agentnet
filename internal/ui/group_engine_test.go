@@ -434,7 +434,7 @@ func testBrowserGroupCarrierEngine(t *testing.T, op string) {
 		t.Skip("node missing")
 	}
 	cmd := exec.Command(node, "testdata/group_engine_check.mjs")
-	w := &wireNode{t: t, stderr: &bytes.Buffer{}}
+	w := &wireNode{t: t, stderr: &nodeOutput{}}
 	cmd.Stderr = w.stderr
 	w.in, err = cmd.StdinPipe()
 	if err != nil {

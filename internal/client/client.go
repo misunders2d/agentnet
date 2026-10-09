@@ -899,7 +899,7 @@ func (a *Agent) flushOutbox(ctx context.Context, filesOnly bool) error {
 	// Readable turns share a FIFO. Controls, history, context carriers and
 	// private receiver operations pass their existing gates independently.
 	const turn = `ref_id IS NULL AND coalesce(sub,'') NOT IN ` + recordSubs + ` AND coalesce(sub,'') NOT IN ('history','device-history','device-file','file')
-		AND NOT (conv IS NULL AND reply_receiver IS NULL AND (coalesce(required_cap,'')='rcv1' OR coalesce(required_cap,'')='hpm1' AND human IS NULL))`
+		AND NOT (` + privateReceiverSetupOutbox + `)`
 	for _, env := range envs {
 		if ctx.Err() != nil {
 			return ctx.Err()

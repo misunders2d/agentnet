@@ -31,7 +31,7 @@ func TestP6FixOutsideAcceptanceDisclosureUsesPlainName(t *testing.T) {
 	}
 	for _, known := range []map[string]PersonView{nil, {owner.Person: owner}} {
 		text := eventText(string(raw), dmPeople{group: true, known: known})
-		if strings.Contains(text, owner.Address) || !strings.Contains(text, "receives every new message and file") {
+		if strings.Contains(text, owner.Address) || !strings.Contains(text, "participates with the scope of its invitation") || strings.Contains(text, "every new message and file") {
 			t.Fatalf("outside disclosure: %q", text)
 		}
 		if known != nil && !strings.Contains(text, owner.Label) {

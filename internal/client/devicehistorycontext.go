@@ -81,9 +81,24 @@ func (a *Agent) deviceThreadContext(j job, limit int, label string) ([]string, e
 		who := h.From
 		if h.From == a.Address {
 			who = "this device"
+		} else if p.has(h.From, h.FromKey) {
+			who = a.personSender(p, h.From, h.FromKey).Name()
 		}
 		who = contextSpeaker(ConvMessage{From: h.From, Key: h.FromKey, Kind: h.Kind, Origin: h.Origin, AgentID: h.AgentID}, map[string]string{h.From + "|" + h.FromKey: who}, nil)
 		detail := h.Kind
+		// Only this installation's original row supplies local execution or
+		// delivery state. A history replica never imports another host's state.
+		query := `SELECT state FROM outbox WHERE id=?`
+		if chosen.storage == "in" {
+			query = `SELECT state FROM inbox WHERE id=? AND replica=0`
+		}
+		var localState string
+		if err = a.store.db.QueryRow(query, h.ID).Scan(&localState); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+		if localState != "" {
+			detail += "; local state: " + localState
+		}
 		if h.Status != "" {
 			detail += "; outcome: " + h.Status
 		}
