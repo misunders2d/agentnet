@@ -606,7 +606,7 @@ func (a *Agent) agentPrompt(j job, r *Responder, lookupText string, contexts ...
 		}
 		fmt.Fprintf(&b, "%s gives you the task below. Work in the current directory under your normal rules. When finished, reply with a short plain-text report of what you did.\n", capFirst(asker))
 	} else {
-		fmt.Fprintf(&b, "%s asks you the question below. Answer in plain text, concisely. Use the conversation shared with you and your owner's native skills, tools and permissions unchanged. AgentNet adds no tool exclusions, sandbox or approval overrides. Do not bypass a native refusal.\n", capFirst(asker))
+		fmt.Fprintf(&b, "%s asks you the question below. Answer in plain text, concisely. Use the conversation shared with you and your native skills, tools and permissions unchanged. AgentNet adds no tool exclusions, sandbox or approval overrides. Do not bypass a native refusal.\n", capFirst(asker))
 		fmt.Fprintf(&b, "If you need information from %s to answer, reply with your question for them. They can answer it in this conversation.\n", asker)
 		b.WriteString(lookupText)
 	}

@@ -68,13 +68,17 @@ func TestQuestionLookupClaudeExactRules(t *testing.T) {
 	if codex := w.alice.questionSetup(j, "codex"); codex.args != nil || !strings.Contains(codex.text, strconv.Quote(exe)) || !strings.Contains(codex.text, "`inbox --peek`") {
 		t.Fatalf("codex %+v", codex)
 	}
-	// A path that cannot be an exact rule, or no program, gives nothing.
+	// Space-containing executable paths remain quoted; unavailable programs fail.
 	spaced := filepath.Join(t.TempDir(), "a b")
 	os.MkdirAll(spaced, 0o700)
 	odd := filepath.Join(spaced, "agentnet")
 	os.WriteFile(odd, []byte("#!/bin/sh\n"), 0o700)
 	bindProgram(t, odd)
-	if got := w.alice.questionSetup(j, "claude"); got.args != nil || !strings.Contains(got.text, strconv.Quote(odd)) {
+	resolvedOdd, err := filepath.EvalSymlinks(odd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := w.alice.questionSetup(j, "claude"); got.args != nil || !strings.Contains(got.text, strconv.Quote(resolvedOdd)) {
 		t.Fatalf("quoted path unavailable %+v", got)
 	}
 	bindProgram(t, filepath.Join(t.TempDir(), "missing"))

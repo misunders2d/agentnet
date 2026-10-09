@@ -336,7 +336,12 @@ func TestAnswerFromOutputFile(t *testing.T) {
 	if ans.Body != "file answer" {
 		t.Fatalf("answer %q", ans.Body)
 	}
-	if left, _ := filepath.Glob(filepath.Join(w.bobHome, outFilePrefix+"*")); len(left) != 0 {
+	eventually(t, "answer worker cleanup joined", w.bob.executorsIdle)
+	left, err := filepath.Glob(filepath.Join(w.bobHome, outFilePrefix+"*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 0 {
 		t.Fatalf("answer files left: %v", left)
 	}
 }

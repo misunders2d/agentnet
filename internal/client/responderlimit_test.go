@@ -120,9 +120,9 @@ func TestOMPSetupRejectsMissingNativeContract(t *testing.T) {
 	h.bin = filepath.Join(t.TempDir(), "omp")
 	Harnesses["omp"] = h
 	t.Cleanup(func() { Harnesses["omp"] = old })
-	os.WriteFile(h.bin, []byte("#!/bin/sh\necho '--print --no-session --extension'\n"), 0700)
+	os.WriteFile(h.bin, []byte("#!/bin/sh\necho '--print --no-session'\n"), 0700)
 	r := Responder{Harness: "omp", Dir: t.TempDir()}
-	if err := w.bob.SetResponder(&r); err == nil || !strings.Contains(err.Error(), "--config") {
+	if err := w.bob.SetResponder(&r); err == nil || !strings.Contains(err.Error(), "--extension") {
 		t.Fatalf("unsupported default accepted: %v", err)
 	}
 	if got, _ := w.bob.Responder(); got != nil {

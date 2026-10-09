@@ -178,21 +178,39 @@ func TestPageReviewHeldTurns(t *testing.T) {
 	}
 }
 
-// A human guest's invitation names this device as its host, but no agent
-// runs for it: it is the guest's own decision in the conversation, never a
-// needs-you item.
-func TestPageReviewLeavesOutHumanGuestInvite(t *testing.T) {
-	w, carol, conv, _, _ := humanWorld(t)
+// A human invitation waits in OKs for guest consent, without creating agent work.
+func TestPageReviewListsHumanGuestInviteWithoutExecution(t *testing.T) {
+	w, carol, conv, _, stub := humanWorld(t)
 	p, err := w.alice.InviteHuman(tctx(t), conv, carol.Address, nil, "join us")
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the guest invitation at carol", func() bool { return stateAt(t, carol, p.PID).State == PartInvited })
-	if info := stateAt(t, carol, p.PID); !info.HostHere || info.Role != protocol.RoleHuman {
+	eventually(t, "the guest invitation at carol", func() bool {
+		info := stateAt(t, carol, p.PID)
+		return info.State == PartInvited && info.Held == 0
+	})
+	if info := stateAt(t, carol, p.PID); !info.HostHere || info.Role != protocol.RoleHuman || info.HumanActive() {
 		t.Fatalf("setup: %+v", info)
 	}
-	if r, err := carol.PageReview(); err != nil || len(r.Conv) != 0 {
-		t.Fatalf("a human guest invitation is listed: %+v %v", r.Conv, err)
+	page, err := carol.PageReview()
+	if err != nil || len(page.Conv) != 1 {
+		t.Fatalf("guest review: %+v %v", page.Conv, err)
+	}
+	r := page.Conv[0]
+	if r.Reason != ReviewInvite || r.Role != protocol.RoleHuman || r.Conv != conv || r.PID != p.PID || r.From != w.alice.Address || r.Body != "join us" || r.ID != "" || r.Kind != "" || r.State != "" || r.Target != nil {
+		t.Fatalf("guest invitation misclassified: %+v", r)
+	}
+	if stateAt(t, carol, p.PID).State != PartInvited || stub.runs() != 0 || inboxCount(t, carol, `pid = ? AND kind IN ('question','task')`, p.PID) != 0 {
+		t.Fatal("listing guest invitation changed consent or created agent work")
+	}
+	if _, err := carol.DeclineParticipation(tctx(t), p.PID); err != nil {
+		t.Fatal(err)
+	}
+	if r, ok := needsYou(t, carol, p.PID, ""); ok {
+		t.Fatalf("declined invitation remains: %+v", r)
+	}
+	if info := stateAt(t, carol, p.PID); info.State != PartDeclined || info.Role != protocol.RoleHuman || stub.runs() != 0 {
+		t.Fatalf("guest decision changed execution or role: %+v", info)
 	}
 }
 

@@ -240,6 +240,9 @@ func TestContinueRequestOwnPhoneDecision(t *testing.T) {
 
 func TestContinueRequestCodexSavedBackgroundStaysFresh(t *testing.T) {
 	st := sessionStub(t)
+	h := Harnesses["xstyle"]
+	h.question = append([]string(nil), Harnesses["codex"].question...)
+	Harnesses["xstyle"] = h
 	w := newWorld(t, "")
 	script, e := os.ReadFile(Harnesses["xstyle"].bin)
 	if e != nil {

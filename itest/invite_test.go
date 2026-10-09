@@ -146,8 +146,8 @@ func TestResponderChoiceAtSetup(t *testing.T) {
 		t.Fatalf("show before choosing: %s", out)
 	}
 	list := c.run("--home", "alice", "responder", "list")
-	for _, want := range []string{"codex   found at " + filepath.Join(bin, "codex") + "; questions use your own setup, read-only",
-		"tasks and a skill-backed question tested live", "manual  no automatic responder", "it was not run", "cannot be the responder"} {
+	for _, want := range []string{"codex   found at " + filepath.Join(bin, "codex") + "; questions use your native tools and permissions unchanged",
+		"not tested live", "manual  no automatic responder", "it was not run", "cannot be the responder"} {
 		if !strings.Contains(list, want) {
 			t.Fatalf("list lacks %q:\n%s", want, list)
 		}
@@ -161,7 +161,7 @@ func TestResponderChoiceAtSetup(t *testing.T) {
 	}
 	work := filepath.Join(c.dir, "work")
 	os.MkdirAll(work, 0o700)
-	if out := c.run("--home", "alice", "responder", "set", "--harness", "codex", "--dir", work); !strings.Contains(out, "note: codex questions use your Codex config, skills and MCP servers; shell commands run in a read-only sandbox") {
+	if out := c.run("--home", "alice", "responder", "set", "--harness", "codex", "--dir", work); !strings.Contains(out, "note: Questions and accepted tasks use your native settings, skills, plugins, tools and permissions unchanged") {
 		t.Fatalf("set: %s", out)
 	}
 	if out := c.run("--home", "alice", "responder", "show"); !strings.Contains(out, "harness codex") {
