@@ -215,9 +215,12 @@ func (a *Agent) historyDependencies(it historySourceRow, prepared HistoryItem) (
 		if err != nil {
 			return nil, err
 		}
-		if len(rows) == 0 {
+		if len(rows) == 0 && it.in.Ref != nil {
 			return nil, ErrGroupContextPending
 		}
+		// Reply ancestry is ordering, not admission. The independently verified
+		// copy can arrive without an older parent absent from this device, as in
+		// browser catch-up. Exact control refs and signed event proofs still wait.
 		deps = append(deps, rows...)
 	}
 	return deps, nil

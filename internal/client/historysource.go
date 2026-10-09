@@ -225,9 +225,19 @@ func (a *Agent) checkHistoryCopies(q dbq, copies []outCopy) error {
 // Read only this immutable source and its exact attachment/authority metadata.
 // The same reads run inside the queue transaction before publishing a copy.
 func (a *Agent) historySourceItem(q dbq, it historySourceRow) (HistoryItem, error) {
-	table := "attachments"
+	table, messages := "attachments", "inbox"
 	if it.dir == "out" {
-		table = "sent_attachments"
+		table, messages = "sent_attachments", "outbox"
+	}
+	var topicEvent string
+	if err := q.QueryRow("SELECT coalesce(quote,''),coalesce(topic,''),coalesce(topic_event,''),topic_done FROM "+messages+" WHERE id=?", it.in.ID).Scan(&it.in.Quote, &it.in.Topic, &topicEvent, &it.in.TopicDone); err != nil {
+		return HistoryItem{}, err
+	}
+	it.in.TopicEvent = nil
+	if topicEvent != "" {
+		if err := json.Unmarshal([]byte(topicEvent), &it.in.TopicEvent); err != nil {
+			return HistoryItem{}, err
+		}
 	}
 	rows, err := q.Query("SELECT name,size,sha256 FROM "+table+" WHERE message_id=? ORDER BY rowid", it.in.ID)
 	if err != nil {

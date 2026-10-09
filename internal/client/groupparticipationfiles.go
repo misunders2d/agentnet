@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
@@ -48,36 +47,11 @@ func (a *Agent) groupParticipationFileSources(q dbq, conv, lid, author string, l
 	}
 	for i := range sources {
 		s := &sources[i]
-		s.item.ReceiverRoute, err = receiverStoredRoute(q, s.dir, s.item.ID)
-		if err != nil {
-			return nil, err
-		}
-		s.item.Human, err = storedHuman(q, s.dir, s.item.ID)
-		if err != nil {
-			return nil, err
-		}
 		if retractedRef(q, conv, s.item.LID, s.item.FromKey) {
 			return nil, ErrGroupHistoryUnavailable
 		}
-		table, column := "attachments", "message_id"
-		if s.dir == "out" {
-			table = "sent_attachments"
-		}
-		files, e := q.Query("SELECT name,size,sha256 FROM "+table+" WHERE "+column+"=? ORDER BY rowid", s.item.ID)
-		if e != nil {
-			return nil, e
-		}
-		for files.Next() {
-			var f envelope.Attachment
-			if e = files.Scan(&f.Name, &f.Size, &f.SHA256); e != nil {
-				break
-			}
-			s.item.Attachments = append(s.item.Attachments, f)
-		}
-		if e == nil {
-			e = files.Err()
-		}
-		files.Close()
+		var e error
+		s.item, e = a.historySourceItem(q, historySourceRow{dir: s.dir, key: s.item.FromKey, in: s.item.inner(conv), pos: historyPos{Ms: s.item.At}})
 		if e != nil {
 			return nil, e
 		}

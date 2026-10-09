@@ -275,29 +275,7 @@ func (a *Agent) groupParticipationSourceAdmission(q dbq, packet GroupContext, it
 	if fileTable == "sent_attachments" {
 		dir = "out"
 	}
-	stored.ReceiverRoute, err = receiverStoredRoute(q, dir, item.ID)
-	if err != nil {
-		return "", err
-	}
-	stored.Human, err = storedHuman(q, dir, item.ID)
-	if err != nil {
-		return "", err
-	}
-	rows, err := q.Query("SELECT name,size,sha256 FROM "+fileTable+" WHERE message_id=? ORDER BY rowid", item.ID)
-	if err != nil {
-		return "", err
-	}
-	for rows.Next() {
-		var f envelope.Attachment
-		if err = rows.Scan(&f.Name, &f.Size, &f.SHA256); err != nil {
-			break
-		}
-		stored.Attachments = append(stored.Attachments, f)
-	}
-	if err == nil {
-		err = rows.Err()
-	}
-	rows.Close()
+	stored, err = a.historySourceItem(q, historySourceRow{dir: dir, key: stored.FromKey, in: stored.inner(packet.State.Conv), pos: historyPos{Ms: stored.At}})
 	if err != nil {
 		return "", err
 	}
