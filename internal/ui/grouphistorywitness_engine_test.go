@@ -4,6 +4,8 @@ package ui
 
 import (
 	"bytes"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"slices"
 	"strings"
@@ -82,5 +84,9 @@ func groupHistoryWitnessVectors(t *testing.T, root protocol.ConvRoot, first prot
 		p.Memberships = append(p.Memberships, ev)
 	}
 	h.GroupHistory = &p
-	return map[string]any{"states": states, "records": records, "history": marshal(t, h)}
+	key, err := x509.MarshalPKCS8PrivateKey(bob.Sign)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return map[string]any{"states": states, "records": records, "history": marshal(t, h), "bob_private": base64.StdEncoding.EncodeToString(key)}
 }

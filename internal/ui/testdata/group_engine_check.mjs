@@ -658,6 +658,84 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
     let stale=false;try{await past.e.groupParticipationHistoryCheck(conv,original,{address:linkedAddress,fingerprint:await wire.fingerprint(linkedPub)},[]);}catch{stale=true;}check(stale,'removed own reader cannot use historical witness');
    }finally{await past.close();}
   }
+  // The addressed assistant remains current while a captured sibling's
+  // old consent needs its original signed group state after readmission.
+  {
+   const source=await world(),hv=v.historical_witness,bobKeys={sign:await crypto.subtle.importKey('pkcs8',bytes(hv.bob_private),{name:'Ed25519'},false,['sign'])};
+   try{
+    source.extraChains.set(roster.person,[roster,linkedRoster].map(r=>JSON.parse(wire.rosterJSON(r))));source.e.me=linkedPerson;await source.st.write([{s:'kv',k:'person',v:linkedPerson}]);await source.e.pinDevices(linkedPerson);await source.receive(c.proof);await source.receive(c.context);
+    const bobRoster=await wire.parseRoster(v.challenge.rosters[1]),bobFP=await wire.fingerprint(bobPub),admission=await wire.groupAdmissionHash(wire.groupMember(states[0],bobRoster.person).admission),author={person:bobRoster.person,roster:await wire.rosterHash(bobRoster),address:bobPub.address,fingerprint:bobFP,group_admission:admission};
+    const invite=await wire.signEvent(bobKeys,{conv,pid:wire.newID(),type:'invite',ts:1700000100,author,host:{person:bobRoster.person,address:bobPub.address,fingerprint:bobFP,agent_id:wire.newID()},audience:'room',group:{seq:0,hash:await wire.groupStateHash(states[0]),host_role:'member',host_admission:admission}}),scope=await wire.signEvent(bobKeys,await wire.scopeOf(invite,invite.ts)),accept=await wire.signEvent(bobKeys,{conv,pid:invite.pid,type:'accept',ts:invite.ts,author,prev:await wire.eventHash(invite)});
+    for(const e of [invite,scope,accept])await source.receive({envelope:await wire.seal({v:2,id:wire.newID(),lid:wire.newID(),from:bobPub.address,to:address,ts:e.ts,kind:'message',conv,root:wire.rootJSON(root),pid:e.pid,sub:'event',body:wire.eventJSON(e)},bobKeys,pub)});
+    for(const name of ['p6-0-invite','p6-0-scope','p6-0-accept'])await source.receive(pv[name]);
+    const sibling=wire.parseEvent(pv['p6-0-scope'].inner.body),siblingAccept=wire.parseEvent(pv['p6-0-accept'].inner.body),human={audience:[{pid:invite.pid,invite:await wire.eventHash(invite),decision:await wire.eventHash(accept)},{pid:sibling.pid,invite:sibling.prev,decision:await wire.eventHash(siblingAccept)}],proof:[scope,accept,sibling,siblingAccept]};
+    const inner={v:2,id:wire.newID(),lid:wire.newID(),from:bobPub.address,to:address,ts:1700000101,kind:'question',conv,root:wire.rootJSON(root),pid:invite.pid,target:{address:bobPub.address,fingerprint:bobFP,agent_id:invite.host.agent_id,group_admission:admission},human,body:'Captured two assistants before sibling readmission'};
+    await source.receive({envelope:await wire.seal(inner,bobKeys,pub)});const saved=await source.st.get('inbox',inner.id);check(!!saved,'captured two-assistant request is legitimately accepted before epoch change');
+    const hr=hv.records.map(wire.parseGroupCommit),hs=hv.states.map(wire.parseGroupState);await source.receive(await source.make(wire.SubGroupProof,JSON.parse(wire.groupJournalJSON({records:hr,more:false})),3,hr[3].hash));await source.receive(await source.make(wire.SubGroupContext,JSON.parse(wire.groupContextJSON({root,state:hs[3]})),3,hr[3].hash));
+    const item=source.e.itemOf(saved,false),device=linkedPerson.devices.find(d=>d.address===linkedAddress);let pending='';try{await source.e.groupParticipationHistoryCheck(conv,item,device,[]);}catch(e){pending=e.reason+':'+e.message;}
+    check(pending==='proof_pending:Captured human consent differs from local proof.','captured sibling epoch mismatch already exposes exact pending recovery signal');
+    source.e.groupSupport=async()=>{};source.e.sendGroupCopy=async()=>'';const copy=await source.e.historyCopy(device,await source.e.groupRecord(conv),item),restored=wire.parseHistory(copy.body);
+    check(restored.id===item.id&&restored.group_history?.state.seq===0&&wire.humanJSON(restored.human)===wire.humanJSON(item.human),'existing automatic source fallback restores exact captured consent without a new exception');
+    const bad=wire.parseHistory(copy.body);bad.human.audience.find(s=>s.pid===sibling.pid).decision='f'.repeat(64);let refused=false;try{await source.e.groupParticipationHistoryCheck(conv,bad,device,[]);}catch{refused=true;}check(refused,'witnessed captured consent mismatch remains refused');
+   }finally{await source.close();}
+  }
+  // A current human forwarded an exact signed end before its own key was
+  // removed. Later own devices keep that transport attribution, inertly.
+  {
+   const source=await world(),oldKeys=await wire.newKeys(),oldAddress='browser/retired',oldPub=await wire.publicEntry(oldKeys,oldAddress),oldFP=await wire.fingerprint(oldPub);
+   try{
+    const joined=await wire.nextRoster(keys,address,linkedRoster,[...linkedRoster.devices,oldPub],await wire.joinConsent(oldKeys,oldAddress,roster.person,2,await wire.rosterHash(linkedRoster)),roster.label,[...await wire.rosterHumans(linkedRoster),oldFP]);
+    const left=await wire.nextRoster(keys,address,joined,linkedRoster.devices,null,roster.label,await wire.rosterHumans(linkedRoster));await wire.verifyNext(joined,linkedRoster);await wire.verifyNext(left,joined);
+    const joinedPerson=await source.e.personRecord([roster,linkedRoster,joined],'self',null),leftPerson=await source.e.personRecord([roster,linkedRoster,joined,left],'self',null);
+    source.extraChains.set(roster.person,[roster,linkedRoster,joined].map(r=>JSON.parse(wire.rosterJSON(r))));source.e.me=joinedPerson;await source.st.write([{s:'kv',k:'person',v:joinedPerson}]);await source.e.pinDevices(joinedPerson);
+    await source.receive(c.proof);await source.receive(c.context);await source.receive(pv['member-invite']);await source.receive(pv['member-accept']);
+    const invite=wire.parseEvent(pv['member-invite'].inner.body),accepted=wire.parseEvent(pv['member-accept'].inner.body),end=await wire.signEvent(aliceKeys,{conv,pid:invite.pid,type:'dismiss',prev:await wire.eventHash(accepted),ts:1700000210,author:invite.author});
+    const inner={v:2,id:wire.newID(),lid:wire.newID(),from:oldAddress,to:address,ts:end.ts,kind:'message',conv,root:wire.rootJSON(root),pid:end.pid,sub:'event',body:wire.eventJSON(end)};
+    await source.receive({envelope:await wire.seal(inner,oldKeys,pub)});const original=await source.st.get('inbox',inner.id);
+    check(!!original&&original.fp===oldFP&&original.state==='','current own human originally forwards exact counted signed dismissal');
+    source.extraChains.set(roster.person,[roster,linkedRoster,joined,left].map(r=>JSON.parse(wire.rosterJSON(r))));source.e.me=leftPerson;await source.st.write([{s:'kv',k:'person',v:leftPerson}]);
+    source.e.groupSupport=async()=>{};source.e.sendGroupCopy=async()=>'';
+    const device=leftPerson.devices.find(d=>d.address===linkedAddress),copy=await source.e.historyCopy(device,await source.e.groupRecord(conv),source.e.itemOf(original,false)),item=wire.parseHistory(copy.body);
+    check(item.from===oldAddress&&item.from_key===oldFP&&item.id===inner.id&&item.lid===inner.lid&&!!item.group_history,'automatic witness preserves retired own-human end transport and original identity');
+    const savedGroup=await source.st.get('kv','group/'+conv),uncached=structuredClone(savedGroup);delete uncached.rosters[await wire.rosterHash(joined)];await source.st.write([{s:'kv',k:'group/'+conv,v:uncached}]);
+    const fetch=source.e.fetch;source.e.fetch=async()=>{throw Error('fixture offline');};let pending=false;
+    try{await source.e.groupParticipationHistoryCheck(conv,item,device,[]);}catch(e){pending=e.reason==='proof_pending';}finally{source.e.fetch=fetch;}
+    check(pending,'missing historical human roster remains pending offline');
+    await source.e.groupParticipationHistoryCheck(conv,item,device,[]);
+    check((await source.st.get('kv','person')).hash===leftPerson.hash&&JSON.stringify(await source.st.get('kv','group/'+conv))===JSON.stringify(uncached),'existing signed chain fills historical proof without advancing current person or group');
+    await source.st.write([{s:'kv',k:'group/'+conv,v:savedGroup}]);
+    const oldPin=await source.st.get('pins',oldAddress);
+    for(const mode of ['pending-transport-pin','changed-transport-pin','unknown-transport','non-end','wrong-parent','bad-signature','uncounted-end','conflicting-consent','wrong-own-admission']){
+     const bad=wire.parseHistory(copy.body);let event=end;
+     if(mode==='pending-transport-pin')await source.st.write([{s:'pins',k:oldAddress,v:{...oldPin,pending:{fingerprint:'changed'}}}]);
+     if(mode==='changed-transport-pin')await source.st.write([{s:'pins',k:oldAddress,v:{...oldPin,fingerprint:await wire.fingerprint(alicePub)}}]);
+     if(mode==='unknown-transport'){bad.from=alicePub.address;bad.from_key=oldFP;}
+     if(mode==='non-end')event=accepted;
+     if(mode==='wrong-parent')event=await wire.signEvent(aliceKeys,{...end,prev:'f'.repeat(64)});
+     if(mode==='bad-signature'){event=wire.parseEvent(wire.eventJSON(end));event.sig[0]^=1;}
+     if(mode==='uncounted-end'){const other=await wire.signEvent(aliceKeys,{...end,ts:end.ts+1});event=await wire.eventHash(other)>await wire.eventHash(end)?other:end;bad.group_history.memberships.push(event===end?other:end);}
+     if(mode==='conflicting-consent')bad.group_history.memberships.push(await wire.signEvent(aliceKeys,{...accepted,type:'decline'}));
+     if(mode==='wrong-own-admission')bad.group_admission='f'.repeat(64);
+     bad.body=wire.eventJSON(event);bad.group_history.memberships=bad.group_history.memberships.filter(e=>e.type!=='dismiss'||mode==='uncounted-end');if(!bad.group_history.memberships.some(e=>wire.eventJSON(e)===bad.body))bad.group_history.memberships.push(event);
+     let refused=false;try{await source.e.groupParticipationHistoryCheck(conv,bad,device,[]);}catch{refused=true;}check(refused,'retired own transport refuses '+mode);
+     await source.st.write([{s:'pins',k:oldAddress,v:oldPin}]);
+    }
+    const agentJoined=await wire.nextRoster(keys,address,linkedRoster,[...linkedRoster.devices,oldPub],joined.join,roster.label,await wire.rosterHumans(linkedRoster)),agentLeft=await wire.nextRoster(keys,address,agentJoined,linkedRoster.devices,null);
+    await wire.verifyNext(agentJoined,linkedRoster);await wire.verifyNext(agentLeft,agentJoined);
+    const agentChain=[roster,linkedRoster,agentJoined,agentLeft],agentPerson=await source.e.personRecord(agentChain,'self',null);
+    source.extraChains.set(roster.person,agentChain.map(r=>JSON.parse(wire.rosterJSON(r))));source.e.me=agentPerson;await source.st.write([{s:'kv',k:'person',v:agentPerson}]);
+    let agentDenied=false;try{await source.e.groupParticipationHistoryCheck(conv,item,device,[]);}catch{agentDenied=true;}check(agentDenied,'historically enrolled agent-host transport never gains human history provenance');
+    source.extraChains.set(roster.person,[roster,linkedRoster,joined,left].map(r=>JSON.parse(wire.rosterJSON(r))));source.e.me=leftPerson;await source.st.write([{s:'kv',k:'person',v:leftPerson}]);
+    const reader=await world();try{
+     reader.extraChains.set(roster.person,[roster,linkedRoster,joined,left].map(r=>JSON.parse(wire.rosterJSON(r))));reader.e.me=leftPerson;await reader.st.write([{s:'kv',k:'person',v:leftPerson}]);await reader.e.pinDevices(leftPerson);await reader.receive(c.proof);await reader.receive(c.context);
+     check(!await reader.st.get('pins',oldAddress),'fresh reader has no prior transport pin');
+     const carrier=await historyEnvelope(copy.body);await reader.receive({envelope:carrier});await reader.receive({envelope:await historyEnvelope(copy.body)});await reader.reload();
+     const kept=await reader.st.get('inbox',inner.id),events=await reader.e.convEvents(conv),members=await reader.e.dmMembers(await reader.e.groupRecord(conv),events);
+     check(kept?.history&&kept.state===''&&kept.read&&kept.from===oldAddress&&kept.fp===oldFP&&(await reader.st.all('inbox')).filter(r=>r.lid===inner.lid).length===1,'fresh own reader stores retired transport original once and inert across restart');
+     check(!members.epochs.has(oldFP)&&!events.some(e=>e.e.pid===end.pid)&&!(await reader.st.all('outbox')).some(r=>r.kind==='question'||r.kind==='task'),'retired transport imports no live device, participation or executable work');
+    }finally{await reader.close();}
+   }finally{await source.close();}
+  }
   for(const role of ['member','visitor']) {
    for(const suffix of ['invite','accept','question','status','answer','assistant-reaction']) {
     const body=pv['history-'+role+'-'+suffix];check(wire.historyJSON(wire.parseHistory(body))===body,'native '+role+' '+suffix+' linked history exact bytes');

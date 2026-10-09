@@ -4045,6 +4045,25 @@ export class Engine {
     return this.groupHistoryWitness(c,{...h,group_history:p},checks);
   }
 
+  async groupHistoryOwnTransport(c,h,packet,checks) {
+    const own=await this.groupRead(checks,"kv","person"),pin=await this.groupRead(checks,"pins",h.from),member=wire.groupMember(packet.state,own?.person);
+    if(!own||own.state!=="self"||!member||await wire.groupAdmissionHash(member.admission)!==h.group_admission||!own.known.some(d=>d.address===h.from&&d.fingerprint===h.from_key)||pin&&(pin.pending||pin.fingerprint!==h.from_key))return false;
+    const human=async r=>r.person===own.person&&own.hashes.includes(await wire.rosterHash(r))&&await wire.rosterHas(r,h.from,h.from_key)&&await wire.rosterHuman(r,h.from_key);
+    const group=await this.groupRead(checks,"kv","group/"+c.id);
+    for(const [hash,raw] of Object.entries(group?.rosters||{}))if(own.hashes.includes(hash)){
+      const r=await wire.parseRoster(raw);if(await wire.rosterHash(r)!==hash)throw new Hold("invalid","Historical own roster hash differs.");
+      if(await human(r))return true;
+    }
+    // Old stores retain device tuples without historical human flags. Read
+    // the existing signed chain, anchored to the pinned head, without advancing it.
+    let steps;
+    try{steps=await this.chain(own.person,-1);if(!steps.length)throw Error("missing roster");await wire.verifyFirst(steps[0]);for(let i=1;i<steps.length;i++)await wire.verifyNext(steps[i],steps[i-1]);}
+    catch{throw new Hold("proof_pending","Historical own-human roster proof is unavailable.");}
+    if(!steps[own.seq]||await wire.rosterHash(steps[own.seq])!==own.hash)throw new Hold("invalid","Historical own roster conflicts with pinned head.");
+    for(const r of steps)if(await human(r))return true;
+    return false;
+  }
+
   async groupParticipationHistoryCheck(conv,h,forwarder,checks=[]) {
     const c=await this.groupRecord(conv),{packet}=await this.groupTurnEvidence(conv,checks);
     let members=await this.dmMembers(c,null,checks);const own=members.get(this.me.person);
@@ -4079,12 +4098,16 @@ export class Engine {
     }
     if(!wire.validID(h.pid)||h.ref||!["","event","excerpt"].includes(h.sub))throw new Hold("invalid","Historical group participation scope malformed.");
     const historyPacket=h.group_history ? await this.groupHistoryWitness(c,h,checks) : null;
-    const events=historyPacket ? (await Promise.all(historyPacket.memberships.map(async e=>({e,hash:await wire.eventHash(e)})))).filter(r=>r.e.pid===h.pid) : await this.convEvents(conv,checks,h.pid);let candidate=null;
+    const events=historyPacket ? (await Promise.all(historyPacket.memberships.map(async e=>({e,hash:await wire.eventHash(e)})))).filter(r=>r.e.pid===h.pid) : await this.convEvents(conv,checks,h.pid);let candidate=null,retiredEnd=false;
     if(historyPacket){members=await this.dmMembers(c,events,checks,historyPacket);if(members.epochs.get(this.fp)!==h.group_admission)throw new Hold("invalid","Historical own admission differs.");}
     if(h.sub==="event") {
       candidate=await this.eventRecord(h.body);const e=candidate.e,author=e.author,p=[...members.values(),...members.hosts.values()].find(p=>p.devices.some(d=>d.address===author.address&&d.fingerprint===author.fingerprint));
       const forwarded=author.address!==h.from||author.fingerprint!==h.from_key;
-      if(forwarded&&(e.type!=="dismiss"||![...members.values()].some(p=>p.devices.some(d=>d.address===h.from&&d.fingerprint===h.from_key))))throw new Hold("invalid","Only current members forward historical participation ends.");
+      if(forwarded&&(e.type!=="dismiss"||![...members.values()].some(p=>p.devices.some(d=>d.address===h.from&&d.fingerprint===h.from_key)))){
+        if(e.type!=="dismiss"||!await this.groupHistoryOwnTransport(c,h,historyPacket||packet,checks))throw new Hold("invalid","Only current members forward historical participation ends.");
+        if(!historyPacket)throw Object.assign(new Hold("invalid","Retired own transport needs original historical proof."),{historicalEpoch:true});
+        retiredEnd=true;
+      }
       if(h.kind!=="message"||e.conv!==conv||e.pid!==h.pid||p?.person!==author.person||!p?.hashes.includes(author.roster))throw new Hold("invalid","Historical group event original author admission differs.");
       if(author.group_admission&&author.group_admission!==members.epochs.get(author.fingerprint))throw Object.assign(new Hold("invalid","Historical event original epoch changed."),{historicalEpoch:true});
       const pin=await this.groupRead(checks,"pins",author.address);if(!pin||pin.pending||pin.fingerprint!==author.fingerprint)throw new Hold("invalid","Historical event exact source key changed.");
@@ -4095,6 +4118,7 @@ export class Engine {
     const current=await this.dmMembers(c,events,checks,historyPacket),info=this.resolveAgent(h.pid,events,current);
     if(historyPacket)current.historyEvents=await Promise.all(historyPacket.memberships.map(async e=>({e,hash:await wire.eventHash(e)})));
     if(!info.invite)throw new Hold("proof_pending","Historical PID original invitation is missing.");
+    if(retiredEnd&&(info.state!=="dismissed"||info.held||info.conflict||info.dismissal!==candidate.hash))throw new Hold("invalid","Historical own transport does not carry the exact counted end.");
     if(h.human) {
       const evidence=await this.groupHumanEvidence(c,h.human,checks,historyPacket);
       this.humanTurnAuthorization({...h,conv},evidence,info,h.from,h.from_key,this.address,this.fp,true);
@@ -4102,7 +4126,7 @@ export class Engine {
     // Retained own-member history is inert; only its lifecycle gate differs
     // from live delivery. Exact targets, author keys and requests still bind it.
     const retained=(h.sub==="excerpt"||!h.sub&&(["question","task","answer","result"].includes(h.kind)||progressOutput(h)))&&this.retainedAssistant(info,events);
-    this.externalRole({...h,conv,replica:h.sub==="excerpt"},retained?{...info,state:"active"}:info,current,h.from,h.from_key);
+    if(!retiredEnd)this.externalRole({...h,conv,replica:h.sub==="excerpt"},retained?{...info,state:"active"}:info,current,h.from,h.from_key);
     await this.checkExternalReply({...h,conv},info,current,checks,true);
     return info;
   }
