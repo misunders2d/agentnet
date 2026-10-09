@@ -6,6 +6,13 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+### Fixed
+
+- Keep fresh browser messages and heartbeat processing moving while older messages wait for missing identity, membership or file evidence. Retain the exact encrypted input for the existing bounded recovery path, recheck current authority before committing, and acknowledge only admitted or explicitly held messages.
+- Open saved chats before restoring additional workspaces. Bound and cancel workspace identity and connection-policy checks without changing realm, consent or origin checks.
+- Read only display-related records when building the browser's chat overview, model reports and notification senders, avoiding repeated copies of unrelated encrypted recovery data.
+- Keep an acknowledged outbox copy from reverting to queued when an older compatibility check finishes late. In Comic, use the exact verified answer consistently for request status and its reply link, and remove the contradictory Sending clock without inventing delivery receipts for other copies.
+
 ## [0.8.15] — 2026-10-09
 
 ### Fixed

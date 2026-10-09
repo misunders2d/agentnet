@@ -19,7 +19,7 @@ export async function consent(challenge) {
  const a = await wire.signGroupAdmission(keys,{conv:await wire.rootID(root),realm:root.realm,person:roster.person,roster:await wire.rosterHash(roster),seq:0,prev:'',history:null,by:await wire.fingerprint(pub)});
  return wire.groupAdmissionJSON(a);
 }
-export async function checks(v, realIDB=false, requireWarmRecovery=false, controlHistoryOnly=false, backgroundOnly=false,receiverOnly=false,receiptRepairOnly=false,topicOnly=false,statusReorderOnly=false) {
+export async function checks(v, realIDB=false, requireWarmRecovery=false, controlHistoryOnly=false, backgroundOnly=false,receiverOnly=false,receiptRepairOnly=false,topicOnly=false,statusReorderOnly=false,receivePriorityOnly=false) {
  if(receiptRepairOnly)return carrierReceiptRepair(realIDB);
  const labels=[], check=(ok,label)=>{assert(ok,label);labels.push(label);};
  const root=wire.parseGroupRoot(v.challenge.root), conv=await wire.rootID(root), states=v.states.map(wire.parseGroupState), records=v.commits.map(wire.parseGroupCommit), c=v.carriers;
@@ -72,6 +72,35 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false, contro
  const quiet=async(w)=>{for(const s of ['inbox','outbox','convs','lids'])check((await w.st.all(s)).length===0,'quiet '+s);check((await w.e.overview()).threads.length===0,'no visible threads');for(const x of await w.st.all('held'))check(!('body'in x)&&!('plaintext'in x),'held has ciphertext only');for(const x of await w.st.all('files'))check(x.ct instanceof Uint8Array&&!('body'in x),'files ciphertext only');};
  if(receiverOnly){const profile=await receiverProfile({world,check,realIDB,c,root,conv,keys,address,roster,pub});return {ok:true,storage:profile.storage,checks:labels.length,labels,profile};}
  if(topicOnly){await participationTopics({world,check,c,root,conv,keys,address,pub,alicePub,aliceKeys,v});return {ok:true,storage:realIDB?"real IndexedDB":"memory unit only",checks:labels.length,labels};}
+ if(receivePriorityOnly) {
+  const w=await world();let release,run,timer;const gate=new Promise(r=>release=r);try {
+   const pv=v.participations;
+   await w.receive(c.proof);await w.receive(c.context);
+   for(const i of [0,1])for(const type of ['invite','scope','accept'])await w.receive(pv['p6-'+i+'-'+type]);
+   await w.receive(pv['p6-root']);await w.receive(pv['p6-ask']);
+   const old=await w.make(wire.SubGroupContext,JSON.parse(wire.groupContextJSON({root,state:states[0],withdrawals:[]})),0,await wire.groupStateHash(states[0]));
+   const oldID=wire.parseEnvelope(old.envelope).id,answer=pv['p6-answer'],fetch=w.e.fetch;let entered,acks=0;
+   const started=new Promise(r=>entered=r);
+   w.e.fetch=async(url,o)=>{
+    const path=new URL(url).pathname;
+    if(path==='/v1/stream')return new Response(new ReadableStream({start(x){x.enqueue(new TextEncoder().encode('event: message\ndata: '+old.envelope+'\n\nevent: message\ndata: '+answer.envelope+'\n\nevent: ping\ndata: {"conn":"named-priority"}\n\n'));x.close();}}));
+    if(path==='/v1/stream/ack'){acks++;return new Response('{}');}
+    if(path==='/v1/blobs/'+old.blob+'/data'){entered();await gate;}
+    return fetch(url,o);
+   };
+   w.e.onConnect=async()=>{};w.e.running=true;run=w.e.streamOnce();
+   await Promise.race([started,new Promise((_,reject)=>timer=setTimeout(()=>reject(Error('old encrypted group proof never fetched')),2000))]);clearTimeout(timer);
+   for(let i=0;i<100&&(!await w.st.get('inbox',answer.inner.id)||acks!==1);i++)await new Promise(r=>setTimeout(r,5));
+   const thread=await w.e.groupThread(conv),ask=thread.messages.find(m=>m.lid===pv['p6-ask'].inner.lid);
+   check(thread.messages.some(m=>m.body==='P6 verified agent answer'&&m.verified_agent&&m.reply_to===ask?.id),'fresh named signed answer is visible and correlated before old proof download');
+   check(acks===1,'same-chunk heartbeat advances before old proof download');
+   check((await w.st.get('kv','receive-pending/'+oldID))?.envelope===old.envelope&&!await w.st.get('receipts',oldID),'old proof has exact durable ciphertext and no early receipt');
+   release();await run;if(w.e.receiveRetryRun)await w.e.receiveRetryRun;
+   check(!await w.st.get('kv','receive-pending/'+oldID)&&!!await w.st.get('kv','group-carrier/'+oldID),'normal background proof admission removes pending ciphertext atomically');
+   check((await w.st.get('receipts',oldID))?.state==='delivered'||w.receipts.some(batch=>batch.receipts?.some(r=>r.id===oldID&&r.state==='delivered')),'old proof receipt follows full verified admission');
+   return {ok:true,storage:realIDB?'real IndexedDB':'memory unit only',checks:labels.length,labels};
+  }finally{clearTimeout(timer);release();if(run)await run;await w.e.close();await w.close();}
+ }
  if(statusReorderOnly) {
   const w=await world();try {
    const pv=v.participations,status=pv['p6-status'],ask=pv['p6-ask'];
@@ -1435,4 +1464,4 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false, contro
   return {ok:true,storage:realIDB?'real IndexedDB':'memory unit only',checks:labels.length,labels};
  }catch(e){if(w)await w.close().catch(()=>{});throw e;}
 }
-if(globalThis.process?.versions?.node){const {createInterface}=await import('node:readline');for await(const line of createInterface({input:process.stdin})){let out;try{const r=JSON.parse(line);out=r.op==='setup'?await setup():r.op==='consent'?{consent:await consent(r.challenge)}:await checks(r.vectors,false,r.op==='warm-regression',r.op==='control-history',r.op==='background-regression',r.op==='receiver-regression',r.op==='receipt-repair',r.op==='topic-participation',r.op==='status-reorder');}catch(e){out={error:e.stack};}process.stdout.write(JSON.stringify(out)+'\n');}}
+if(globalThis.process?.versions?.node){const {createInterface}=await import('node:readline');for await(const line of createInterface({input:process.stdin})){let out;try{const r=JSON.parse(line);out=r.op==='setup'?await setup():r.op==='consent'?{consent:await consent(r.challenge)}:await checks(r.vectors,false,r.op==='warm-regression',r.op==='control-history',r.op==='background-regression',r.op==='receiver-regression',r.op==='receipt-repair',r.op==='topic-participation',r.op==='status-reorder',r.op==='receive-priority');}catch(e){out={error:e.stack};}process.stdout.write(JSON.stringify(out)+'\n');}}

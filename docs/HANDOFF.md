@@ -46,7 +46,8 @@ as executed. Real IndexedDB and signed multi-device journeys passed; physical
 phone catch-up, post-update CPU and interactive platform installation remain
 unverified. Installers remain unsigned.
 
-**Active next phase: mobile responsiveness and sync, before more features.**
+**Active next phase: v0.8.16 mobile responsiveness and sync, before more features.**
+Follow [V0_8_16.md](plans/V0_8_16.md) for reproduced blockers, ownership and gates.
 Update source computers and receiving clients through the existing app/CLI
 controls, then reload linked phones; keep a source online for history/files.
 No reset or relinking is needed. Measure first useful message, fresh reply and

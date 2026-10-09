@@ -192,7 +192,7 @@ function Activity({ ctx, messages }: { ctx: Ctx; messages: AnyMsg[] }) {
 
   const busy = new Map<string, { name: string; seed: string; since?: number; what: string }>();
   for (const m of messages) {
-    if (!working(m, messages) || (m.actions || []).includes("cancel")) continue; // its approval card shows it, with Stop
+    if (!working(m, messages, ctx) || (m.actions || []).includes("cancel")) continue; // its approval card shows it, with Stop
     const what = (isThreadMsg(m) ? m.detail : m.job_detail) || "";
     if (isThreadMsg(m)) {
       // In a device thread the agent works on what you sent it; what it was sent works on your side.

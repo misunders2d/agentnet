@@ -11,14 +11,14 @@ export function deviceHistory(e,Hold){
  const proofs=new Map(),sweeps=new Map();
  const read=(checks,s,k)=>e.groupRead(checks,s,k);
  async function authority(w,env,pin,checks){try{return await e.readSyncAuthority(w,env.from,pin.fingerprint,e.address,e.fp,checks);}catch(x){fail(x.message);}}
- async function human(own,address,fp){
+ async function human(own,address,fp,admission=null){
   if(!fp||!own.known?.some(d=>d.address===address&&d.fingerprint===fp))return false;
   if(own.devices.some(d=>d.address===address&&d.fingerprint===fp)&&own.human_keys?.includes(fp))return true;
   if(own.steps.some(s=>s.devices.includes(address+"|"+fp)&&s.human_keys?.includes(fp)))return true;
   if(own.steps.every(s=>Array.isArray(s.human_keys)))return false;
   let steps=proofs.get(own.hash);
   if(!steps){
-   try{steps=await e.chain(own.person,-1);if(!steps.length)throw Error();await wire.verifyFirst(steps[0]);for(let i=1;i<steps.length;i++)await wire.verifyNext(steps[i],steps[i-1]);}
+   try{steps=await e.chain(own.person,-1,admission);if(!steps.length)throw Error();await wire.verifyFirst(steps[0]);for(let i=1;i<steps.length;i++)await wire.verifyNext(steps[i],steps[i-1]);}
    catch{fail("original own-human roster proof unavailable.","proof_pending");}
    if(!steps[own.seq]||await wire.rosterHash(steps[own.seq])!==own.hash)fail("original roster conflicts with pinned head.");
    proofs.set(own.hash,steps.slice(0,own.seq+1));
@@ -48,8 +48,8 @@ export function deviceHistory(e,Hold){
    const r=await source(row,here);if(result&&result.hash!==r.hash)fail("ambiguous original ID.");result=r;
   }return result;
  }
- async function project(r,own,checks,ops=[]){
-  const h=r.item,fromOwn=await human(own,h.from,h.from_key),toOwn=await human(own,r.recipient,r.recipient_key);
+ async function project(r,own,checks,ops=[],admission=null){
+  const h=r.item,fromOwn=await human(own,h.from,h.from_key,admission),toOwn=await human(own,r.recipient,r.recipient_key,admission);
   if(!fromOwn&&!toOwn)fail("neither endpoint belongs to this human.");
   let peer=fromOwn?r.recipient:h.from,direction=fromOwn?"out":"in";
   const ref=h.ref?.id||h.reply_to,parent=ref?await original(ref,checks,ops):null;
@@ -74,9 +74,9 @@ export function deviceHistory(e,Hold){
   const envelope=await wire.seal({v:2,id,from:e.address,to:dev.address,ts:Math.floor(at/1000),kind:"message",sub,replica:true,body,attachments},e.keys,await wire.parsePublic(JSON.parse(dev.json)));
   return {id,to:dev.address,recipient_fp:dev.fingerprint,required_cap:wire.CapOwnSyncV3,sub,body,envelope,at,state:"queued",aside:true,...(files.length?{attachments,files:files.map(f=>({...f,uploaded:false}))}:{})};
  }
- async function admit(n,env,pin){
+ async function admit(n,env,pin,admission=null){
   const w=wire.parseDeviceHistory(n.body),checks=[],ops=[];
-  await e.refreshPerson(e.me);const own=await authority(w,env,pin,checks);
+  await e.refreshPerson(e.me,admission?{...admission,roster:w.roster}:null);const own=await authority(w,env,pin,checks);
   const item=await validate(w.item,w.recipient),r={item,recipient:w.recipient,recipient_key:w.recipient_key||"",hash:await wire.deviceHistoryHash(item,w.recipient)};
   // A previously admitted, locally erased original keeps its immutable hash.
   // A fresh carrier may be acknowledged without restoring text or needing an
@@ -93,9 +93,9 @@ export function deviceHistory(e,Hold){
    // Preserve both known and unknown identity before deriving any binding.
    r.recipient_key=old.recipient_key;
   }
-  const meta=await project(r,own,checks);
+  const meta=await project(r,own,checks,[],admission);
   if(old){ops.push({s:old.here?"outbox":"inbox",k:item.id,v:{...old.row,device_history:meta}});ops.checks=checks;return ops;}
-  const fromOwn=await human(own,item.from,item.from_key),row={...item,v:item.sub?3:1,lid:"",id:item.id,fp:item.from_key,history:true,synced_from:env.from,device_history:meta,replica:true,own:fromOwn,read:meta.direction==="out",state:"",at:Math.min(item.at||e.now(),e.now()),attachments:item.attachments.map(a=>({...a,availability:"requestable"})),...(item.sub?{control:true,aside:true}:{})};
+  const fromOwn=await human(own,item.from,item.from_key,admission),row={...item,v:item.sub?3:1,lid:"",id:item.id,fp:item.from_key,history:true,synced_from:env.from,device_history:meta,replica:true,own:fromOwn,read:meta.direction==="out",state:"",at:Math.min(item.at||e.now(),e.now()),attachments:item.attachments.map(a=>({...a,availability:"requestable"})),...(item.sub?{control:true,aside:true}:{})};
   ops.push({s:"inbox",k:row.id,v:row});ops.checks=checks;ops.directHistory=true;return ops;
  }
  async function step(dev){
@@ -150,10 +150,10 @@ export function deviceHistory(e,Hold){
   const rec=await carrier(dev,wire.SubDeviceFile,JSON.stringify(w)),next=structuredClone(current);next.attachments[index]={...a,availability:"requested"};
   await e.store.write([{s:"outbox",k:rec.id,v:rec},{s:"inbox",k:row.id,v:next},{s:"kv",k:pk,v:w}],checks);e.changed();if(e.connected)await e.post(rec);return{note:"Requested from your linked device; it must be online."};
  }
- async function admitFile(n,env,pin){
+ async function admitFile(n,env,pin,admission=null){
   const w=wire.parseDeviceHistory(n.body,true),checks=[],ops=[];let m;try{m=wire.parseGroupFileMsg(JSON.stringify(w.item));}catch(x){fail(x.message);}
   if(m.type==="request"&&(m.available||n.attachments.length)||m.type==="offer"&&!!m.available!==(n.attachments.length===1))fail("malformed file carrier.");
-  await e.refreshPerson(e.me);await authority(w,env,pin,checks);const r=await fileSource(m,checks);
+  await e.refreshPerson(e.me,admission?{...admission,roster:w.roster}:null);await authority(w,env,pin,checks);const r=await fileSource(m,checks);
   if(m.type==="request"){const key="serve/"+env.id;if(!await read(checks,"kv",key))ops.push({s:"kv",k:key,v:{serve:true,direct:true,id:env.id,device:env.from,key:pin.fingerprint,message:m,state:"pending",at:e.now()}});}
   else {const pk=prefix+"file/"+m.lid+"/"+m.sha256,asked=await read(checks,"kv",pk);
    if(r.here)fail("file offer does not name a received history copy.");const row=structuredClone(r.row),a=row.attachments[m.index];

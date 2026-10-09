@@ -1,4 +1,6 @@
-# AgentNet — mobile responsiveness and sync after v0.8.15
+# AgentNet v0.8.16 — mobile responsiveness and sync
+
+Active checklist: [V0_8_16.md](plans/V0_8_16.md).
 
 [v0.8.15](https://github.com/misunders2d/agentnet/releases/tag/v0.8.15) was
 published October 9 at **23:21:55 UTC** from

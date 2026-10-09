@@ -22,9 +22,12 @@ const thread={id:conv,kind:'group',title:'orchard_dispatch',peer:{label:'orchard
  {id:'context',lid:'context',from:brin.address,dir:'in',kind:'message',body:'Selected warehouse context',at,group_ref:{lid:'context',author:brin.fingerprint,hash:'a'.repeat(64)},attachments:[{name:'manifest.txt',size:12,id:'file-1'}]},
  {id:'private',lid:'private',from:me.address,dir:'out',kind:'message',body:'Unselected earlier history',at,group_ref:{lid:'private',author:me.fingerprint,hash:'b'.repeat(64)}}]};
 const overview={version:'fixture',seq:1,me:{address:me.address,fingerprint:me.fingerprint,responder:'fixture'},person:me,persons:true,agents:true,groups:true,files:{max_file:1048576,max_message:2097152,max_count:8},controls:true,role:'person',people:[outside,cora],review:[],links:[],reminders:[],threads:[],dms:[{id:conv,kind:'group',title:thread.title,peer:thread.peer,count:2,unread:0}],directory:{current:true,members:[me,brin,outside,cora].map(p=>({address:p.address,label:p.label,fingerprint:p.fingerprint,presence:'connected'}))},quarantine:[],group_invitations:[{id:'invite-1',conv,direction:'out',status:'pending',title:thread.title,inviter:me.person,target:cora.person,history:[],can_cancel:true,can_refresh:true}]};
+const completion=process.env.AGENTNET_COMPLETION_PROJECTION?JSON.parse(fs.readFileSync(process.env.AGENTNET_COMPLETION_PROJECTION,'utf8')):null;
+if(completion){Object.assign(overview,completion.overview);Object.assign(thread,completion.thread);}
 const boot=`
 const seed=${JSON.stringify({overview,thread})};window.fixture={...seed,requests:[]};
 const variant=new URL(location.href).searchParams.get('case')||'admin';
+if(variant==='completion')fixture.overview.group_invitations=[];
 if(variant==='member')fixture.thread.members[0].admin=false;
 if(variant==='topic-invite'){
  fixture.overview.group_invitations=[];fixture.thread.guests=[{pid:'broad-human',host:fixture.overview.people.find(p=>p.label==='Cora'),inviter:fixture.overview.person,state:'active',invited:'2026-10-05T10:00:00Z',shared:[],can_end:true}];
@@ -346,7 +349,51 @@ const server=http.createServer((req,res)=>{if(req.url==='/native-result'&&req.me
   }
   browser=await chromium.launch({headless:true,executablePath:process.env.AGENTNET_CHROMIUM||undefined});
   for(const skin of (process.env.AGENTNET_TEST_SKINS||'classic,zoom').split(','))for(const width of (process.env.AGENTNET_GUEST_INLINE==='1'?[1024,1279,390]:[1280,390])){
-   const openCase=async variant=>{const context=await browser.newContext({viewport:{width,height:900},reducedMotion:'reduce'});await context.route('**/*',r=>new URL(r.request().url()).origin===origin?r.continue():r.abort());const page=await context.newPage();page.setDefaultTimeout(8000);page.on('pageerror',e=>errors.push(skin+': '+e.stack));await page.goto(origin+'/?skin='+skin+'&case='+variant);try{await page.waitForFunction(()=>window.ready);}catch(e){console.error(JSON.stringify({skin,width,variant,errors,text:await page.locator('body').innerText()}));throw e;}if(variant==='direct-files'||variant==='device-oks'||variant.startsWith('delivery-')||variant.startsWith('decline-invite-'))return {page,context};await page.evaluate(()=>openGroup());try{await page.getByText(variant==='oks'?'Main flow conversation':'Selected warehouse context',{exact:skin!=='comic'}).first().waitFor();}catch(e){console.error(JSON.stringify({errors,text:await page.locator('#skin').evaluate(e=>e.shadowRoot.innerText||e.shadowRoot.textContent)}));throw e;}return {page,context};};
+   const openCase=async variant=>{const context=await browser.newContext({viewport:{width,height:900},reducedMotion:'reduce'});await context.route('**/*',r=>new URL(r.request().url()).origin===origin?r.continue():r.abort());const page=await context.newPage();page.setDefaultTimeout(8000);page.on('pageerror',e=>errors.push(skin+': '+e.stack));await page.goto(origin+'/?skin='+skin+'&case='+variant);try{await page.waitForFunction(()=>window.ready);}catch(e){console.error(JSON.stringify({skin,width,variant,errors,text:await page.locator('body').innerText()}));throw e;}if(variant==='completion'||variant==='direct-files'||variant==='device-oks'||variant.startsWith('delivery-')||variant.startsWith('decline-invite-'))return {page,context};await page.evaluate(()=>openGroup());try{await page.getByText(variant==='oks'?'Main flow conversation':'Selected warehouse context',{exact:skin!=='comic'}).first().waitFor();}catch(e){console.error(JSON.stringify({errors,text:await page.locator('#skin').evaluate(e=>e.shadowRoot.innerText||e.shadowRoot.textContent)}));throw e;}return {page,context};};
+if(completion){
+ for(const mode of ['grouped','single','unverified','excerpt','quote','wrong-target','unrelated']){
+  const {page,context}=await openCase('completion');
+  try{
+   await page.evaluate(({mode,first,second,answer})=>{
+    if(mode!=='grouped')for(const m of fixture.thread.messages)delete m.send_group;
+    const exact=fixture.thread.messages.find(m=>m.id===answer),other=fixture.thread.messages.find(m=>m.id===second);
+    if(!['grouped','single'].includes(mode)){
+     const changed={...exact,id:'ineligible-completion',reply_to:other.id,pid:other.pid,from:other.target.address};
+     if(mode==='unverified')changed.verified_agent=false;
+     if(mode==='excerpt')Object.assign(changed,{excerpt_pid:other.pid,history:true});
+     if(mode==='quote')Object.assign(changed,{kind:'message',quote:other.id,reply_to:''});
+     if(mode==='wrong-target')changed.from=exact.from;
+     if(mode==='unrelated')changed.reply_to='unrelated-exact-reference';
+     fixture.thread.messages.push(changed);
+    }
+    openGroup();
+   },{mode,first:completion.first,second:completion.second,answer:completion.answer});
+   const first=page.locator('[data-mid="'+completion.first+'"]'),second=page.locator('[data-mid="'+completion.second+'"]');
+   await first.waitFor();await second.waitFor();await settle(page);
+   assert.match(await first.innerText(),/Answered/,'verified exact answer completes only its request');
+   assert.match(await second.innerText(),/Sending/,'different target/inert/quoted/unrelated reply cannot complete second request');
+   assert.equal(await first.getByText('Sending',{exact:true}).count(),0,'answered request has no contradictory sending tick');
+   assert.equal(await second.getByText('Answered',{exact:true}).count(),0,'other exact target is still unanswered');
+   if(mode==='single'){
+    assert.match(await first.innerText(),/Grouped exact-agent question/,'original request body unchanged');
+    if(width===390){const actions=first.getByRole('button',{name:'Message actions',exact:true});await actions.focus();await actions.press('Enter');}
+    else{await first.hover();await first.getByRole('button',{name:'More actions',exact:true}).click();}
+    await page.getByRole(width===390?'button':'menuitem',{name:'Details',exact:true}).click();
+    const details=page.getByRole('dialog',{name:'Message details',exact:true});await details.waitFor();
+    assert.equal(await details.getByText('Waiting to send from here',{exact:true}).count(),3,'three secondary transport copies remain queued');
+    await details.getByText('Technical details',{exact:true}).click();
+    assert.match(await details.innerText(),/Stored state\s+queued/,'no fabricated delivery/receipt state');await settle(page);
+    const detailShot=path.join(evidence,'comic-request-completion-details-'+width+'.png');await page.screenshot({path:detailShot});shots.push(detailShot);
+    await page.keyboard.press('Escape');await details.waitFor({state:'hidden'});await settle(page);
+   }
+   await page.locator('#skin').evaluate(e=>e.shadowRoot.activeElement?.blur());await page.mouse.move(0,0);await settle(page);
+   const shot=path.join(evidence,'comic-request-completion-'+mode+'-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
+   assert.deepEqual(await page.evaluate(()=>fixture.thread.messages.filter(m=>m.kind==='question').map(m=>({body:m.body,delivery:m.delivery,copies:m.copies.map(c=>c.state)}))),completion.thread.messages.filter(m=>m.kind==='question').map(m=>({body:m.body,delivery:m.delivery,copies:m.copies.map(c=>c.state)})),'rendering preserves request body and all copy states');
+   assert.equal(await page.evaluate(()=>fixture.requests.some(r=>['/api/dm/send','/api/dm/agent/ask','/api/act'].includes(r.path))),false,'viewing completion never sends/reruns work');
+  }finally{await context.close();}
+ }
+ continue;
+}
 if(process.env.AGENTNET_GUEST_INLINE==='1'){
  const {page,context}=await openCase('guest-inline');
  try{
@@ -1142,6 +1189,6 @@ if(process.env.AGENTNET_DELIVERY_STOP_REGRESSION==='1'){
    const {page,context}=await openCase('admin');await page.getByRole('button',{name:'Retract invitation…',exact:true}).filter({visible:true}).first().click();await page.evaluate(()=>disableInvite());await page.waitForTimeout(40);await page.locator('#dialog-ok').click();await page.getByText('This invitation can no longer be changed here. Refresh the conversation and review it again.',{exact:true}).waitFor();assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/groups/cancel').length),0,'Stale capability blocks action');await context.close();
   }
   if(process.env.AGENTNET_RENDERED_RETAIN){const keep=path.resolve(process.env.AGENTNET_RENDERED_RETAIN);assert(keep.startsWith('/tmp/'),'retained synthetic evidence must stay in /tmp');fs.mkdirSync(keep,{recursive:true,mode:0o700});for(const shot of shots)fs.copyFileSync(shot,path.join(keep,path.basename(shot)));}
-  assert.deepEqual(errors,[]);console.log(JSON.stringify({ok:true,checks:process.env.AGENTNET_FOLLOWUP_REGRESSION==='1'?'Comic follow-up: exact original/target, no send on close, retained text/files, same-ID uncertain retry, unused staging cleanup, deleted-source refusal; desktop1280/mobile390':process.env.AGENTNET_REACTION_REGRESSION==='1'?'All skins: first-use/persisted frequency, success/failure/removal, human-count ordering and separate agent chips, desktop/mobile':process.env.AGENTNET_PHONE_REJOIN_REGRESSION==='1'?'Comic phone: active/pending rejoin, stale click/navigation, genuine return, exact key/agent/host identity and fresh-read error':process.env.AGENTNET_DIRECT_REVIEW_REGRESSION==='1'?'Direct review[]: held/running/stopping/complete; decision badge/list vs Working; exact request/Stop; desktop/mobile':process.env.AGENTNET_OKS_REGRESSION==='1'?'Comic: working excluded from OK count, exact topic/repeat focus, unsent draft/files preserved, full reason, future approve separate from held accept, exact Stop':process.env.AGENTNET_NOTIFY_REGRESSION==='1'?'Comic: one person grant across duplicate roots and separate conversation mute':(process.env.AGENTNET_TEST_SKINS||'Classic+Zoom source')+': guest/member distinction, exact targets, retract/refresh, rights, desktop/mobile',shots}));
+  assert.deepEqual(errors,[]);console.log(JSON.stringify({ok:true,checks:completion?'Comic signed exact completion, queued secondary copies/details unchanged; inert/different-target/quote/unrelated negatives desktop1280/mobile390':process.env.AGENTNET_FOLLOWUP_REGRESSION==='1'?'Comic follow-up: exact original/target, no send on close, retained text/files, same-ID uncertain retry, unused staging cleanup, deleted-source refusal; desktop1280/mobile390':process.env.AGENTNET_REACTION_REGRESSION==='1'?'All skins: first-use/persisted frequency, success/failure/removal, human-count ordering and separate agent chips, desktop/mobile':process.env.AGENTNET_PHONE_REJOIN_REGRESSION==='1'?'Comic phone: active/pending rejoin, stale click/navigation, genuine return, exact key/agent/host identity and fresh-read error':process.env.AGENTNET_DIRECT_REVIEW_REGRESSION==='1'?'Direct review[]: held/running/stopping/complete; decision badge/list vs Working; exact request/Stop; desktop/mobile':process.env.AGENTNET_OKS_REGRESSION==='1'?'Comic: working excluded from OK count, exact topic/repeat focus, unsent draft/files preserved, full reason, future approve separate from held accept, exact Stop':process.env.AGENTNET_NOTIFY_REGRESSION==='1'?'Comic: one person grant across duplicate roots and separate conversation mute':(process.env.AGENTNET_TEST_SKINS||'Classic+Zoom source')+': guest/member distinction, exact targets, retract/refresh, rights, desktop/mobile',shots}));
  }finally{await browser?.close();server.close();}
 })().catch(e=>{console.error(e.stack);process.exitCode=1;});

@@ -1,0 +1,130 @@
+import assert from 'node:assert/strict';
+import {Engine,memoryStore} from '../static/engine.mjs';
+import * as wire from '../static/wire.mjs';
+const wait=ms=>new Promise(r=>setTimeout(r,ms));
+async function ident(address,label){const keys=await wire.newKeys(),pub=await wire.publicEntry(keys,address),fp=await wire.fingerprint(pub),roster=await wire.newRoster(keys,address,label);return {address,keys,pub,fp,roster,hash:await wire.rosterHash(roster)};}
+const phone=await ident('alice/phone','Alice'),old=await ident('old/host','Old'),fresh=await ident('current/host','Current');
+const pin=p=>({address:p.address,json:wire.marshalPublic(p.pub),fingerprint:p.fp,pending:null});
+let checks=0;
+for(const phase of ['profile','profile-backlog','blob','blob-shared']){
+ let release,enter;const entered=new Promise(r=>enter=r),gate=new Promise(r=>release=r);
+ const st=memoryStore();let first,blob='',realm='',requests=[];
+ const creator={person:old.roster.person,roster:old.hash,address:old.address,fingerprint:old.fp};
+ const members=[{person:old.roster.person,roster:old.hash},{person:phone.roster.person,roster:phone.hash}].sort((a,b)=>a.person.localeCompare(b.person));
+ if(phase.startsWith('profile')){
+  const root=await wire.newRoot(old.keys,creator,{person:phone.roster.person,roster:phone.hash}),conv=await wire.rootID(root);
+  first=await wire.seal({v:2,id:wire.newID(),from:old.address,to:phone.address,ts:1,kind:'message',body:'old retained turn',conv,root:wire.rootJSON(root),lid:wire.newID()},old.keys,phone.pub);
+ }else{
+  realm=wire.newID();const root=await wire.signGroupRoot(old.keys,{v:3,kind:'group',creator,members,nonce:wire.newID(),created:1,realm,title:'Signed isolated group',admins:[old.roster.person]}),conv=await wire.rootID(root);
+  const groupMembers=[];for(const p of [old,phone])groupMembers.push({person:p.roster.person,roster:p.hash,admin:p===old,admission:await wire.signGroupAdmission(p.keys,{conv,realm,person:p.roster.person,roster:p.hash,seq:0,prev:'',history:null,by:p.fp})});
+  groupMembers.sort((a,b)=>a.person.localeCompare(b.person));
+  const state=await wire.signGroupState(old.keys,{v:1,conv,realm,seq:0,prev:'',title:root.title,actor:old.roster.person,actor_roster:old.hash,by:old.fp,members:groupMembers}),body=wire.groupContextJSON({root,state,withdrawals:[]});
+  const file=await wire.encryptFile(new TextEncoder().encode(body),'group-context.json',phone.pub);blob=file.attachment.blob.id;
+  first=await wire.seal({v:2,id:wire.newID(),from:old.address,to:phone.address,ts:1,kind:'message',conv,root:wire.rootJSON(root),lid:wire.newID(),sub:wire.SubGroupContext,body:wire.groupCarrierJSON({v:1,seq:0,hash:await wire.groupStateHash(state),to_key:phone.fp}),attachments:[file.attachment]},old.keys,phone.pub);
+ }
+ const second=await wire.seal({id:wire.newID(),from:fresh.address,to:phone.address,ts:2,kind:'answer',body:'fresh useful reply'},fresh.keys,phone.pub),firstID=wire.parseEnvelope(first).id,secondID=wire.parseEnvelope(second).id;
+ const oldFrames=[first];
+ if(phase==='profile-backlog')for(let i=1;i<32;i++){const n=await wire.open(first,phone.keys,phone.address,old.pub);oldFrames.push(await wire.seal({...n,id:wire.newID(),lid:wire.newID()},old.keys,phone.pub));}
+ let active=0,peak=0,acks=0;
+ const e=new Engine({store:st,base:'https://isolated.invalid',fetch:async url=>{
+  const path=new URL(url).pathname;requests.push(path);
+  if(path==='/v1/stream')return new Response(new ReadableStream({start(c){c.enqueue(new TextEncoder().encode(`event: message\ndata: ${oldFrames.join('\n\nevent: message\ndata: ')}\n\nevent: message\ndata: ${second}\n\nevent: ping\ndata: {"conn":"isolated"}\n\n`));c.close();}}));
+  if(path==='/v1/stream/ack'){acks++;return new Response('{}');}
+  if(path==='/v1/agents/'+old.address+'/profile'||path==='/v1/blobs/'+blob+'/data'){active++;peak=Math.max(peak,active);enter();await gate;active--;return new Response('{"error":"isolated unavailable"}',{status:503});}
+  throw Error('Unexpected isolated route '+path);
+ }});
+ Object.assign(e,phone,{running:true,realm});e.onConnect=async()=>{};e.flushReceipts=async()=>{};
+ e.me=await e.personRecord([phone.roster],'self',null);
+ await st.write([{s:'pins',k:old.address,v:pin(old)},{s:'pins',k:fresh.address,v:pin(fresh)},{s:'kv',k:'identity',v:{keys:phone.keys,address:phone.address,fingerprint:phone.fp}},{s:'kv',k:'person',v:e.me}]);
+ let background;
+ if(phase==='blob-shared'){const n=await wire.open(first,phone.keys,phone.address,old.pub);background=e.cipherOf(n.attachments[0],true).catch(()=>{});await entered;}
+ const run=e.streamOnce();let timer;
+ try{await Promise.race([entered,new Promise((_,rej)=>timer=setTimeout(()=>rej(Error('No expected stall reached')),2000))]);clearTimeout(timer);
+  for(let i=0;i<100&&(!(await st.get('inbox',secondID))||acks!==1);i++)await wait(5);
+  const before={freshStored:!!await st.get('inbox',secondID),oldPendingDurable:!!await st.get('kv','receive-pending/'+firstID),oldReceipt:!!await st.get('receipts',firstID),requests};
+  assert.equal(before.freshStored,true,'fresh cached-key answer precedes '+phase+' remote evidence');
+  assert.equal(before.oldPendingDurable,true,'exact carrier durable before '+phase+' remote evidence');
+  assert.equal(before.oldReceipt,false,'no receipt before '+phase+' admission');
+  assert.equal(acks,1,'same-chunk heartbeat acknowledgment progresses before '+phase+' evidence');
+  assert.equal(peak,1,'existing recovery keeps only one remote carrier active');
+  await e.dispatch('message',first);
+  const original=await wire.open(first,phone.keys,phone.address,old.pub),changed={...original,body:phase.startsWith('profile')?'other plaintext':wire.groupCarrierJSON({v:1,seq:0,hash:'f'.repeat(64),to_key:phone.fp})};
+  const collision=await wire.seal(changed,old.keys,phone.pub);await assert.rejects(()=>e.dispatch('message',collision),/identity differs/);
+  if(phase==='profile-backlog')assert.equal((await st.prefix('kv','receive-pending/')).length,32,'large old backlog stays durable without admission tasks');
+  checks+=7;
+  release();await run;if(e.receiveRetryRun)await e.receiveRetryRun;await background;
+  const after={freshStored:!!await st.get('inbox',secondID),oldPendingDurable:!!await st.get('kv','receive-pending/'+firstID),oldReceipt:!!await st.get('receipts',firstID)};
+  assert.equal(after.freshStored,true);assert.equal(after.oldReceipt,false);checks+=2;
+ }finally{clearTimeout(timer);release();await run;await e.close();}
+}
+// Durable authority changes must defeat old in-memory identity and proof,
+// including a pending carrier retried with full network admission.
+for(const retry of [false,true])for(const mutation of ['identity-missing','identity-changed','own-missing','own-removed','own-frozen','sender-changed','identity-at-commit','own-at-commit','sender-at-commit','person-frozen-at-commit','person-removed-at-commit']){
+ const st=memoryStore(),e=new Engine({store:st,base:'https://isolated.invalid',fetch:async()=>{throw Error('Unexpected authority-test network');}});
+ Object.assign(e,phone);e.flushReceipts=async()=>{};
+ const own=await e.personRecord([phone.roster],'self',null),peer=await e.personRecord([fresh.roster],'pinned',null);e.me=own;
+ const identity={keys:phone.keys,address:phone.address,fingerprint:phone.fp},root=await wire.newRoot(fresh.keys,{person:fresh.roster.person,roster:fresh.hash,address:fresh.address,fingerprint:fresh.fp},{person:phone.roster.person,roster:phone.hash});
+ const raw=await wire.seal({v:2,id:wire.newID(),from:fresh.address,to:phone.address,ts:3,kind:'message',body:'requires current own proof',conv:await wire.rootID(root),root:wire.rootJSON(root),lid:wire.newID()},fresh.keys,phone.pub),id=wire.parseEnvelope(raw).id;
+ await st.write([{s:'kv',k:'identity',v:identity},{s:'kv',k:'person',v:own},{s:'persons',k:peer.person,v:peer},{s:'pins',k:fresh.address,v:pin(fresh)}]);
+ const changed=mutation.startsWith('person')?{s:'persons',k:peer.person,v:mutation==='person-frozen-at-commit'?{...peer,state:'conflict'}:{...peer,devices:[]}}:mutation.startsWith('identity')?{s:'kv',k:'identity',v:mutation==='identity-missing'?undefined:{...identity,fingerprint:old.fp}}:mutation.startsWith('own')?{s:'kv',k:'person',v:mutation==='own-removed'?{...own,devices:[]}:mutation==='own-frozen'?{...own,state:'conflict'}:undefined}:{s:'pins',k:fresh.address,v:{...pin(fresh),pending:{fingerprint:old.fp,json:wire.marshalPublic(old.pub)}}};
+ if(mutation.endsWith('at-commit')){
+  const write=st.write;let once=true;st.write=async(ops,snapshots)=>{if(once&&ops.some(o=>o.s==='inbox')){once=false;await write([changed]);}return write(ops,snapshots);};
+ }else await st.write([changed]);
+ if(retry){await st.write([{s:'kv',k:'receive-pending/'+id,v:{id,address:e.address,fingerprint:e.fp,envelope:raw,at:e.now()}}]);await e.retryPendingReceives();}else await e.dispatch('message',raw);
+ assert.equal(await st.get('inbox',id),undefined,mutation+' cannot admit through stale memory, retry='+retry);
+ assert.notEqual((await st.get('receipts',id))?.state,'delivered',mutation+' cannot claim delivery, retry='+retry);checks+=2;
+ await e.close();
+}
+// A stale fan roster may prepare encrypted history for a newly linked own
+// device, but its current pin must still match at the atomic admission commit.
+for(const retry of [false,true])for(const mutation of ['none','pending','replaced']){
+ const st=memoryStore(),e=new Engine({store:st,base:'https://isolated.invalid',fetch:async()=>{throw Error('Unexpected forwarding network');}});Object.assign(e,phone);e.flushReceipts=async()=>{};
+ const join=await wire.joinConsent(old.keys,old.address,phone.roster.person,1,phone.hash),next=await wire.nextRoster(phone.keys,phone.address,phone.roster,[phone.pub,old.pub],join,phone.roster.label,[phone.fp,old.fp]);await wire.verifyNext(next,phone.roster);
+ const own=await e.personRecord([phone.roster,next],'self',null),peer=await e.personRecord([fresh.roster],'pinned',null);e.me=own;
+ const root=await wire.newRoot(fresh.keys,{person:fresh.roster.person,roster:fresh.hash,address:fresh.address,fingerprint:fresh.fp},{person:phone.roster.person,roster:phone.hash}),conv=await wire.rootID(root);
+ const raw=await wire.seal({v:2,id:wire.newID(),from:fresh.address,to:phone.address,ts:5,kind:'message',body:'exact stale-fan original',conv,root:wire.rootJSON(root),lid:wire.newID(),fan:[{person:phone.roster.person,roster:phone.hash}]},fresh.keys,phone.pub),id=wire.parseEnvelope(raw).id;
+ await st.write([{s:'kv',k:'identity',v:{keys:phone.keys,address:phone.address,fingerprint:phone.fp}},{s:'kv',k:'person',v:own},{s:'persons',k:peer.person,v:peer},{s:'pins',k:fresh.address,v:pin(fresh)},{s:'pins',k:old.address,v:pin(old)},{s:'convs',k:conv,v:{id:conv,root:wire.rootJSON(root),peer:peer.person,creator:fresh.address,created:root.created}}]);
+ if(mutation!=='none'){
+  const write=st.write;let once=true;st.write=async(ops,snapshots)=>{if(once&&ops.some(o=>o.s==='outbox')){once=false;await write([{s:'pins',k:old.address,v:mutation==='pending'?{...pin(old),pending:{fingerprint:fresh.fp,json:wire.marshalPublic(fresh.pub)}}:{...pin(old),fingerprint:fresh.fp,json:wire.marshalPublic(fresh.pub)}}]);}return write(ops,snapshots);};
+ }
+ if(retry){await st.write([{s:'kv',k:'receive-pending/'+id,v:{id,address:e.address,fingerprint:e.fp,envelope:raw,at:e.now()}}]);await e.retryPendingReceives();}else await e.dispatch('message',raw);
+ assert.equal((await st.all('outbox')).length,mutation==='none'?1:0,'forwarding pin '+mutation+' rechecked, retry='+retry);
+ assert.equal(!!await st.get('inbox',id),true,'valid original survives unrelated forwarding pin change, retry='+retry);assert.equal((await st.get('receipts',id))?.state,'delivered');checks+=3;
+ if(mutation!=='none'){
+  if(e.historyRun)await e.historyRun;
+  const dev=own.devices.find(d=>d.address===old.address),job={device:old.address,fingerprint:old.fp,state:'running',pos:null,done:0,total:1,own_human:e.fp};
+  await st.write([{s:'kv',k:'history',v:{[old.address]:job}}]);
+  await e.historyCatchupStep(dev,job);assert.equal((await st.all('outbox')).length,0,'normal history recovery refuses changed sibling pin');assert.deepEqual((await e.historyBook())[old.address],job,'blocked recovery does not advance its source cursor');
+  await st.write([{s:'pins',k:old.address,v:pin(old)}]);
+  await e.historyCatchupStep(dev,job);
+  const copies=(await st.all('outbox')).filter(r=>r.sub==='history'&&r.to===old.address);assert.equal(copies.length,1,'existing history step resumes exact retained original after matching trust is restored');
+  const h=wire.parseHistory(copies[0].body);assert.equal(h.id,id);assert.equal(h.from_key,fresh.fp);assert.equal(h.body,'exact stale-fan original');checks+=6;
+ }
+ await e.close();
+}
+for(const retry of [false,true])for(const removed of [false,true]){
+ const st=memoryStore(),e=new Engine({store:st,base:'https://isolated.invalid',fetch:async()=>{throw Error('Unexpected control network');}});Object.assign(e,phone);e.flushReceipts=async()=>{};
+ const own=await e.personRecord([phone.roster],'self',null),peer=await e.personRecord([fresh.roster],'pinned',null);e.me=own;
+ const root=await wire.newRoot(fresh.keys,{person:fresh.roster.person,roster:fresh.hash,address:fresh.address,fingerprint:fresh.fp},{person:phone.roster.person,roster:phone.hash}),conv=await wire.rootID(root),originalLID=wire.newID();
+ await st.write([{s:'kv',k:'identity',v:{keys:phone.keys,address:phone.address,fingerprint:phone.fp}},{s:'kv',k:'person',v:removed?{...own,devices:[]}:own},{s:'persons',k:peer.person,v:peer},{s:'pins',k:fresh.address,v:pin(fresh)},{s:'convs',k:conv,v:{id:conv,root:wire.rootJSON(root),peer:peer.person,creator:fresh.address,created:root.created}}]);
+ const raw=await wire.seal({v:3,id:wire.newID(),from:fresh.address,to:phone.address,ts:6,kind:'message',body:JSON.stringify({rev:1,text:'exact signed revision'}),conv,lid:wire.newID(),sub:wire.SubRevision,ref:{id:originalLID,fingerprint:fresh.fp}},fresh.keys,phone.pub),id=wire.parseEnvelope(raw).id;
+ if(retry){await st.write([{s:'kv',k:'receive-pending/'+id,v:{id,address:e.address,fingerprint:e.fp,envelope:raw,at:e.now()}}]);await e.retryPendingReceives();}else await e.dispatch('message',raw);
+ assert.equal(!!await st.get('inbox',id),!removed,'V3 conversation exact current recipient, retry='+retry);
+ assert.equal((await st.get('receipts',id))?.state,removed?'quarantined':'delivered');checks+=2;await e.close();
+}
+{
+ const st=memoryStore(),e=new Engine({store:st,base:'https://isolated.invalid',fetch:async()=>new Response('{"error":"unavailable"}',{status:503})});Object.assign(e,phone);
+ await st.write([{s:'pins',k:fresh.address,v:pin(fresh)}]);const admission={localOnly:false,checks:[],state:{deferred:false}};
+ assert.equal((await e.sendKey(fresh.address,admission)).fingerprint,fresh.fp,'full recovery retains existing offline key fallback');
+ await st.write([{s:'pins',k:fresh.address,v:{...pin(fresh),pending:{fingerprint:old.fp,json:wire.marshalPublic(old.pub)}}}]);
+ await assert.rejects(()=>st.write([{s:'outbox',k:wire.newID(),v:{}}],admission.checks),/storage changed during verification/);assert.equal((await st.all('outbox')).length,0);checks+=3;await e.close();
+}
+// A genuinely enrolled device without a person still reads ordinary V1
+// direct replies, as it did before receiver network isolation.
+{
+ const st=memoryStore(),e=new Engine({store:st,base:'https://isolated.invalid',fetch:async()=>{throw Error('Unexpected legacy network');}});Object.assign(e,phone);e.flushReceipts=async()=>{};
+ await st.write([{s:'kv',k:'identity',v:{keys:phone.keys,address:phone.address,fingerprint:phone.fp}},{s:'pins',k:fresh.address,v:pin(fresh)}]);
+ const raw=await wire.seal({id:wire.newID(),from:fresh.address,to:phone.address,ts:4,kind:'answer',body:'legacy direct reply'},fresh.keys,phone.pub),id=wire.parseEnvelope(raw).id;
+ await e.dispatch('message',raw);assert.equal((await st.get('inbox',id))?.body,'legacy direct reply');assert.equal((await st.get('receipts',id))?.state,'delivered');checks+=2;await e.close();
+}
+console.log(JSON.stringify({ok:true,checks,storage:'memory unit only'}));

@@ -22,7 +22,7 @@ async function engine(store,lookup=async address=>json({public:JSON.parse(wire.m
   if(path.startsWith('/v1/agents/'))return lookup(path.slice(11));
   throw Error('Unexpected request '+path);
  }});
- Object.assign(e,phone);e.fixtureStoreName=name;e.flushReceipts=async()=>{};engines.push(e);return e;
+ Object.assign(e,phone);await store.write([{s:'kv',k:'identity',v:{keys:phone.keys,address:phone.address,fingerprint:phone.fp}}]);e.fixtureStoreName=name;e.flushReceipts=async()=>{};engines.push(e);return e;
 }
 const unavailable=()=>json({error:'temporarily unavailable'},503);
 // Actual push framing: unknown sender discovery may remain stalled while a

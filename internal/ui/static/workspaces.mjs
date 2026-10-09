@@ -161,12 +161,31 @@ export function workspaceEndpoint(endpoint,{testLoopback=false}={}) {
 
 // One realm-continuity gate shared by legacy and additional engines. Offline
 // mounts are local; first outbound operation and every stream reconnect checks.
-export function workspaceRealmFetch(fetcher,base,record,save,blocked){
+// Only finite identity/policy probes use this bound; push streams stay open.
+export async function workspaceProbe(fetcher,input,options={},read=response=>response,{timeout=30_000}={}) {
+ const controller=new AbortController(),parent=options.signal;
+ let rejectAbort;
+ const aborted=new Promise((_,reject)=>rejectAbort=reject);
+ const abort=reason=>{controller.abort(reason);rejectAbort(reason);};
+ const parentAbort=()=>abort(parent.reason||new DOMException("Aborted","AbortError"));
+ if(parent?.aborted)parentAbort();else parent?.addEventListener("abort",parentAbort,{once:true});
+ const timer=setTimeout(()=>abort(new Error("Workspace check timed out")),timeout);
+ const request=Promise.resolve().then(async()=>{
+  if(controller.signal.aborted)throw controller.signal.reason;
+  const response=await fetcher(input,{...options,signal:controller.signal});
+  if(controller.signal.aborted)throw controller.signal.reason;
+  return read(response,controller.signal);
+ });
+ try{return await Promise.race([request,aborted]);}
+ finally{clearTimeout(timer);parent?.removeEventListener("abort",parentAbort);}
+}
+export function workspaceRealmFetch(fetcher,base,record,save,blocked,probeOptions){
  let realmChecked=false, realmFailure=null, checking=null;
     const optionsFor=o=>({...o,credentials:"omit",redirect:"error",mode:"cors"});
-    const checkVersion=async response=>{
+    const checkVersion=async(response,signal)=>{
      if(!response.ok)throw new Error("Workspace identity check unavailable");
      const info=await response.clone().json();
+     if(signal.aborted)throw signal.reason;
      if(info.realm_id){
       if(!HANDLE.test(info.realm_id))realmFailure=new Error("Invalid workspace realm");
       else if(record.realm&&record.realm!==info.realm_id)realmFailure=new Error("Workspace realm changed; verify with owner");
@@ -175,16 +194,31 @@ export function workspaceRealmFetch(fetcher,base,record,save,blocked){
      }else if(record.realm){realmFailure=new Error("Workspace realm missing; verify with owner");blocked(realmFailure);throw realmFailure;}
      realmChecked=true;
  };
+ const awaitRealm=async signal=>{
+  if(signal?.aborted)throw signal.reason||new DOMException("Aborted","AbortError");
+  if(!checking){
+   const check={controller:new AbortController(),waiters:0};checking=check;
+   check.promise=workspaceProbe(fetcher,base+"/v1/version",optionsFor({method:"GET",cache:"no-store",signal:check.controller.signal}),checkVersion,probeOptions)
+    .finally(()=>{if(checking===check)checking=null;});
+  }
+  const check=checking;check.waiters++;
+  let onAbort;
+  const aborted=new Promise((_,reject)=>{onAbort=()=>reject(signal.reason||new DOMException("Aborted","AbortError"));signal?.addEventListener("abort",onAbort,{once:true});});
+  try{await Promise.race([check.promise,aborted]);}
+  finally{
+   signal?.removeEventListener("abort",onAbort);
+   if(--check.waiters===0&&checking===check){checking=null;check.controller.abort();}
+  }
+ };
  return async(input,options={})=>{
      const u=new URL(input);if(u.origin!==base||!u.pathname.startsWith("/v1/"))throw new Error("Unapproved workspace request");
      if(realmFailure)throw realmFailure;
      if(u.pathname!=="/v1/version"&&(!realmChecked||u.pathname==="/v1/stream")){
-      if(!checking)checking=(async()=>{const v=await fetcher(base+"/v1/version",optionsFor({method:"GET",cache:"no-store"}));await checkVersion(v);})().finally(()=>checking=null);
-      await checking;
+      await awaitRealm(options.signal);
      }
-     const response=await fetcher(input,optionsFor(options));
-     if(u.pathname==="/v1/version"&&response.ok)await checkVersion(response);
-     return response;
+     if(options.signal?.aborted)throw options.signal.reason||new DOMException("Aborted","AbortError");
+     if(u.pathname==="/v1/version")return workspaceProbe(fetcher,input,optionsFor(options),async(response,signal)=>{if(response.ok)await checkVersion(response,signal);return response;},probeOptions);
+     return fetcher(input,optionsFor(options));
  };
 
 }

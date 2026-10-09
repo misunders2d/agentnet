@@ -73,15 +73,17 @@ const consented = () => { try { const l = JSON.parse(localStorage.getItem(origin
 const consent = (base) => { const l = consented(); if (!l.includes(base)) { l.push(base); localStorage.setItem(originsKey, JSON.stringify(l)); } };
 // pageConnects lists what this page's own policy lets it connect to (the
 // relay's admin sets it: agentnet hub serve --browser-origin), or null when
-// it cannot be read here. The browser enforces it either way.
+// the response has no policy header. An unavailable probe defers secondary
+// startup; the browser also enforces the document's actual policy.
 async function pageConnects() {
   try {
-    const r = await fetch(location.pathname, { method: "HEAD", cache: "no-store" });
+    const r = await ws.workspaceProbe(fetch, location.pathname, { method: "HEAD", cache: "no-store" });
+    if (!r.ok) throw new Error("Connection policy unavailable");
     const csp = r.headers.get("content-security-policy");
     if (!csp) return null;
     const m = /(?:^|;)\s*connect-src([^;]*)/.exec(csp);
     return m ? m[1].trim().split(/\s+/) : [];
-  } catch (e) { return null; }
+  } catch (e) { throw new Error("This page's connection policy could not be checked: " + e.message); }
 }
 // allowOrigin: a workspace's server is reached only if the person joined
 // it by invitation here and this page may connect to it. Never from traffic.
@@ -99,13 +101,21 @@ async function workspaces(engine) {
     memberships = new ws.BrowserMemberships({ shell, Engine, openIDB, locks: navigator.locks, storage: localStorage, fetch: (u, o) => fetch(u, o),
       decodeInvite, newID, allowOrigin, pushFor: (id) => { const a = ws.workspacePush(id); pushAdapters.set(id, a); return a; } });
     memberships.adoptDefault(engine, { name: "" }); // the device enrolled here, as it is: its store, lock and stream stay; no label of its own (the workspace's name shows)
-  } catch (e) { problems.push("Joined workspaces could not be read here: " + e.message); memberships = null; }
-  if (!shell.members.has("default")) shell.register({ id: "default", handle: newID(), name: "", endpoint: location.origin, address: engine.address, realm: "", state: "enrolled" }, engine);
-  if (memberships) {
-    for (const r of memberships.records) { // each on its own: one that cannot start now (its server unreachable) keeps the others going
-      if (r.state !== "enrolled" || shell.members.has(r.id)) continue;
-      try { await memberships.start(r); } catch (e) { problems.push((r.name || new URL(r.endpoint).host) + ": " + e.message); }
-    }
+  } catch (e) {
+    problems.push("Joined workspaces could not be read here: " + e.message); memberships = null;
+    // A broken secondary entry need not hide the default's local history.
+    // Recover only its exact saved binding and realm; never start unguarded.
+    const records = JSON.parse(localStorage.getItem("agentnet.workspaces.v1") || "[]");
+    if (!Array.isArray(records)) throw e;
+    const defaults = records.filter(r => r?.id === "default");
+    if (defaults.length > 1) throw e;
+    const record = defaults[0] || { id: "default", handle: newID(), name: "", endpoint: location.origin, address: engine.address, realm: "", state: "enrolled" };
+    if (ws.workspaceEndpoint(record.endpoint) !== location.origin || !/^[a-f0-9]{32}$/.test(record.handle || "") || record.state !== "enrolled" || record.realm && !/^[a-f0-9]{32}$/.test(record.realm) || record.address && record.address !== engine.address) throw e;
+    if (!defaults.length) records.unshift(record);
+    engine.fetch = ws.workspaceRealmFetch(engine.fetch.bind(engine), location.origin, record, () => localStorage.setItem("agentnet.workspaces.v1", JSON.stringify(records)), error => {
+      engine.stop(); const entry = shell.members.get("default"); if (entry) entry.blockedError = error;
+    });
+    if (!shell.members.has("default")) shell.register(record, engine);
   }
   window.agentnetWorkspaces = {
     shell,
@@ -128,7 +138,25 @@ async function workspaces(engine) {
       localStorage.setItem(originsKey, JSON.stringify(consented().filter((o) => still.includes(o))));
     },
   };
-  return problems;
+  return { problems, async restore() {
+    if (!memberships) return;
+    // Restore independently, after the default view mounts. A stalled server
+    // does not hold the local view or another membership's startup.
+    const records = memberships.records.filter(r => r.state === "enrolled" && !shell.members.has(r.id));
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(2, records.length) }, async () => {
+      while (next < records.length) {
+        const r = records[next++];
+        try { await memberships.start(r); engine.changed(); }
+        catch (e) {
+          let label = r.name;
+          if (!label) { try { label = new URL(r.endpoint).host; } catch (_) { label = "Workspace"; } }
+          problems.push(label + ": " + e.message);
+        }
+        if (pendingWorkspaceOpen?.id === r.id) openWorkspaceRoute();
+      }
+    }));
+  } };
 }
 // openWorkspaceRoute opens what a workspace notification's click in a new
 // window named, once that workspace is registered here; an unknown one
@@ -136,9 +164,9 @@ async function workspaces(engine) {
 function openWorkspaceRoute() {
   const p = pendingWorkspaceOpen;
   if (!p || !shell) return;
-  pendingWorkspaceOpen = null;
   const e = p.id && shell.members.get(p.id);
   if (!e || !e.connected) return;
+  pendingWorkspaceOpen = null;
   shell.openFromRegistration(p.id, p.chan, (chan) => openNotified(chan));
 }
 
@@ -306,13 +334,16 @@ async function start(engine, joinedNow) {
   if (!engine.storage && navigator.storage && navigator.storage.persisted) {
     try { engine.storage = { persisted: await navigator.storage.persisted() }; } catch (e) { engine.storage = { persisted: null }; }
   }
+  // The shell first: adopting this device installs the realm guard on its
+  // transport, and the first stream must not outrun it.
+  let configuration;
+  try { configuration = await workspaces(engine); }
+  catch (error) { show("AgentNet", "AgentNet could not start here: " + error.message); return; }
+  const { problems, restore } = configuration;
   panel.hidden = true;
   document.getElementById("skin").hidden = false;
   // loader.js binds the host's Drive provider to this engine's (driveService).
   window.agentnetEngine = { api: (path, body) => engine.api(path, body), listen: (fn) => engine.listen(fn), driveService: () => engine.driveService() };
-  // The shell first: adopting this device installs the realm guard on its
-  // transport, and the first stream must not outrun it.
-  const problems = await workspaces(engine);
   engine.start();
   window.addEventListener("online", () => engine.online());
   window.addEventListener("offline", () => engine.offline());
@@ -336,14 +367,18 @@ async function start(engine, joinedNow) {
   }
   if (pendingOpen !== null && window.agentnetOpen) { window.agentnetOpen(pendingOpen); pendingOpen = null; }
   openWorkspaceRoute();
+  const showProblems = () => {
+    if (!problems.length) return;
+    const note = el("p", { class: "workspace-problems", role: "status" }, "Not connected now: " + problems.join(" · "));
+    document.body.prepend(note);
+  };
+  // Restore without selecting a workspace or remounting its view. Registration
+  // notifies the existing engine listeners; operations keep their own binding.
+  void restore().then(showProblems, error => { problems.push("Joined workspaces: " + error.message); showProblems(); });
   // On a computer the app is the way to use AgentNet (MEL-536); a phone that
   // just joined is offered its home screen.
   const note = joinedNow ? installOffer({ el }) : await appBanner({ el });
   if (note) document.getElementById("skin").before(note);
-  if (problems.length) { // said once, on the page: a workspace that could not start here is not silently gone
-    const note = el("p", { class: "workspace-problems", role: "status" }, "Not connected now: " + problems.join(" · "));
-    document.body.prepend(note);
-  }
 }
 
 main().catch((e) => show("AgentNet", "AgentNet could not start here: " + e.message));

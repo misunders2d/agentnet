@@ -141,15 +141,30 @@ const localJob: Record<string, string> = {
 };
 const word = (s?: string) => jobWord(s) || (s ? localJob[s] || "" : "");
 
-/** answered: the reply that closes this request, if one is in the conversation. */
-function answerTo(m: AnyMsg, all: AnyMsg[]) {
-  return all.find((x) => isReply(x) && !!x.reply_to && (x.reply_to === m.id || (!isThreadMsg(m) && x.reply_to === m.lid)));
+/** A stored reply from this request's exact executor. A quotation is inert. */
+export function answerTo(m: AnyMsg, all: AnyMsg[], ctx?: Pick<Ctx, "overview">) {
+  if (!isRequest(m) || m._local || excerpt(m)) return undefined;
+  return all.find((x) => {
+    if (!isReply(x) || x._local || excerpt(x) || !x.reply_to) return false;
+    const logical = !isThreadMsg(m) && !!m.lid && x.reply_to === m.lid;
+    if (x.reply_to !== m.id && !logical) return false;
+    if (logical && all.some(other => other !== m && !isThreadMsg(other) && other.lid === m.lid && other.id !== m.id)) return false;
+    if (isThreadMsg(m)) {
+      if (!isThreadMsg(x)) return false;
+      const host = m.target?.address || m.to;
+      const from = x.from || (x.dir === "out" ? ctx?.overview?.me.address : "");
+      return !!host && from === host && (m.target?.agent_id || "") === (x.agent_id || "") &&
+        (!x.history || !m.target?.fingerprint || x.from_key === m.target.fingerprint);
+    }
+    return !isThreadMsg(x) && !!m.pid && !!m.target?.address && x.verified_agent && x.pid === m.pid &&
+      x.from === m.target.address && (x.agent_id || "") === (m.target.agent_id || "");
+  });
 }
 
 /** requestState: how far a question or task got, only as its executor or the
  *  conversation proves it: an answer here, the executor's word, the local job. */
-export function requestState(m: AnyMsg, all: AnyMsg[]): { text: string; tone: "ok" | "work" | "wait" | "bad" | "muted" } {
-  const answer = answerTo(m, all);
+export function requestState(m: AnyMsg, all: AnyMsg[], ctx?: Pick<Ctx, "overview">): { text: string; tone: "ok" | "work" | "wait" | "bad" | "muted" } {
+  const answer = answerTo(m, all, ctx);
   // A proposal (MEL-521) answers with a task the agent may not run itself:
   // nothing was done. Confirmation comes from the host's actions[] list.
   if (answer && "status" in answer && answer.status === "proposal") return { text: "Suggested a task · not run", tone: "wait" };
@@ -179,8 +194,8 @@ function tone(state: string): "ok" | "work" | "wait" | "bad" | "muted" {
 }
 
 /** working: a request its executor says is running now (and not answered yet). */
-export function working(m: AnyMsg, all: AnyMsg[]) {
-  if (!isRequest(m) || answerTo(m, all)) return false;
+export function working(m: AnyMsg, all: AnyMsg[], ctx?: Pick<Ctx, "overview">) {
+  if (!isRequest(m) || answerTo(m, all, ctx)) return false;
   if (m.exec?.state === "running") return !m.exec.stale;
   return m.state === "running" || (m.actions || []).includes("cancel");
 }

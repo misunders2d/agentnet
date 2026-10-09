@@ -22,7 +22,7 @@ import { MessageFiles } from "./Message.files";
 import { EmojiDialog, Reactions } from "./Message.reactions";
 import { ActionSheet, DeleteMessage, DetailsSheet, EditBox, Toolbar, inside, useTouchGestures, type Acts, type Can } from "./Message.actions";
 import {
-  agentLabel, agentOf, eventKind, ev, excerpt, guestOf, isReply, isRequest, isThreadMsg, joinedBefore, lower, problem, requestLabel, requestState, shownText, whoWrote,
+  agentLabel, agentOf, answerTo, eventKind, ev, excerpt, guestOf, isReply, isRequest, isThreadMsg, joinedBefore, lower, problem, requestLabel, requestState, shownText, whoWrote,
   type AnyMsg, type Ctx, type Who,
 } from "./Message.model";
 import { RemindSheet, ReminderLine } from "./Reminders";
@@ -97,7 +97,8 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
   const mention = mentionFor(ctx);
 
   const text = useMemo(() => grouped ? shownText(m) : askChip(shownText(m), m, ctx), [m, ctx, grouped]);
-  const time = <Meta m={m} who={who} shared={grouped} />;
+  const answer = answerTo(m, all, ctx);
+  const time = <Meta m={m} who={who} shared={grouped} answered={!!answer} />;
   const parent = referenceParent(all,m.quote);
   const quote=!!m.quote;
   const request=referenceParent(all,m.reply_to);
@@ -172,7 +173,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
             {m._failed && <button type="button" className="ml-2 min-h-11 underline" onClick={m._retry}>Retry</button>}
           </p>}
           <Reactions m={m} ctx={ctx} can={can.react} wide={wide} />
-          {!m._local && <Under m={m} ctx={ctx} all={all} who={who} status={!!status} onDetails={acts.details} onJump={onJump} />}
+          {!m._local && <Under m={m} ctx={ctx} all={all} who={who} status={!!status} answer={answer} onDetails={acts.details} onJump={onJump} />}
           {compact && live && !selecting && <button type="button" className="min-h-11 px-1 text-[13px] underline"
             aria-label={"Actions for " + requestLabel(m, ctx)} onClick={() => setSheet(true)}>Actions</button>}
           {reminder && !selecting && <ReminderLine r={reminder} m={remindable} />}
@@ -220,14 +221,14 @@ function NameLine({ m, who }: { m: AnyMsg; who: Who }) {
 }
 
 /** Meta: the time (and for your messages a delivery tick) at the end of the text. */
-function Meta({ m, who, shared }: { m: AnyMsg; who: Who; shared?: boolean }) {
+function Meta({ m, who, shared, answered }: { m: AnyMsg; who: Who; shared?: boolean; answered?: boolean }) {
   const s = ("delivery" in m ? m.delivery : undefined) ?? m.state ?? "";
   const tick = shared || !who.mine || who.agent || excerpt(m) ? null
     : m.delivery_uncertain ? <IconAlertTriangle size={15} className="text-approval-ink" />
       : s === "delivered" ? <IconChecks size={15} className="text-ok-ink" />
       : s === "custody" ? <IconCheck size={15} />
         : problem(s) && s !== "waiting" ? <IconAlertTriangle size={15} className="text-danger" />
-          : s === "queued" || s === "waiting" ? <IconClock size={14} />
+          : (s === "queued" || s === "waiting") && !answered ? <IconClock size={14} />
             : null;
   return (
     <span className="float-right ml-2.5 mt-[0.5em] inline-flex items-center gap-1 text-[12px] leading-none text-muted tnum">
@@ -254,14 +255,13 @@ function ReplyQuote({ parent, ctx, onJump }: { parent?: AnyMsg; ctx: Ctx; onJump
 
 // Under a bubble: what a request asked and how far it got, or (for your
 // latest message, or one with a problem) its delivery in words.
-function Under({ m, ctx, all, who, status, onDetails, onJump }: { m: AnyMsg; ctx: Ctx; all: AnyMsg[]; who: Who; status: boolean; onDetails: () => void; onJump?: (id: string) => void }) {
+function Under({ m, ctx, all, who, status, answer, onDetails, onJump }: { m: AnyMsg; ctx: Ctx; all: AnyMsg[]; who: Who; status: boolean; answer?: AnyMsg; onDetails: () => void; onJump?: (id: string) => void }) {
   const target = !isThreadMsg(m) ? agentOf(ctx, m.pid) : undefined;
   const duplicateName = target && (ctx.dm?.agents || []).some(a => a.pid !== target.pid && agentLabel(a, ctx) === agentLabel(target, ctx));
   const label = requestLabel(m, ctx) + (duplicateName ? " · " + deviceWords(target.host.address, ctx.overview) + " · " + (target.agent_id || target.pid).slice(0, 8) : "");
   const detail = isThreadMsg(m) ? m.detail : m.job_detail || m.detail;
   if (label) {
-    const answer = all.find(r => isReply(r) && (r.reply_to === m.id || (!isThreadMsg(m) && !!m.lid && r.reply_to === m.lid && referenceParent(all, r.reply_to) === m)));
-    const st = requestState(m, all);
+    const st = requestState(m, all, ctx);
     const tone = st.tone === "ok" ? "text-ok-ink" : st.tone === "work" ? "text-agent-ink" : st.tone === "wait" ? "text-approval-ink" : st.tone === "bad" ? "text-danger" : "text-muted";
     return (
       <div className={"mt-1 flex max-w-full flex-col px-1 text-[13px] " + (who.mine ? "items-end text-right" : "items-start")}>
