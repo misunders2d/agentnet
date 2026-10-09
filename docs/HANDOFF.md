@@ -4,7 +4,7 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
-## Release candidate — v0.8.12, October 9, 2026
+## Qualified release candidate — v0.8.12, October 9, 2026
 
 The owner authorized implementation, integration, qualification, publication and
 upgrade of the existing relay. Branch `release/v0.8.12` integrates ThinkPad's
@@ -31,9 +31,34 @@ clear the derived pending list without execution-state mutations.
 
 Focused native, browser, authority/race, desktop/narrow rendered checks and
 repository-wide vet pass; detailed evidence is in the checklist. Root inspected
-the affected screenshots and reviewed the merged source. The costly integrated
-qualification and final packaging gates are next. This is not a published
-release yet. Live clients, grants, requests and desktop sessions are unchanged.
+the affected screenshots and reviewed the merged source.
+
+The full integrated run at `ea1b51e1962fb1ecf6a93ad5fa6c96026275f5e9`
+([37923678631](https://github.com/misunders2d/agentnet/actions/runs/37923678631))
+completed with three test-fixture failures: Classic and Zoom standalone checks
+omitted the new shared tag helper's source path, and an existing own-device
+removal test issued a second independent removal before its device had received
+the first verified roster change. The latter correctly hit the stale-roster
+refusal; it reproduced in 6 of 20 focused race runs. The test now waits for that
+exact roster, preserving the refusal and pending-task demotion assertions, and
+passes all 20 repetitions (51.066s). Production code did not change.
+
+Corrections at `bfa6f896fd54fc93a9aded3945d57fc0b4c30973` passed the affected
+native tests on Linux, macOS and Windows, with repository-wide vet, in
+[37926269863](https://github.com/misunders2d/agentnet/actions/runs/37926269863).
+All unaffected results from the full run remain valid: native packages and real
+process journeys, all other client race tests, other package race tests, desktop
+builds/native shell tests and the container journey. The corrected standalone
+packages pass race locally (2.559s/2.604s); the actual Chromium IndexedDB gate,
+skipped after the original fixture failure, also passes under race (1.829s).
+No timeout was raised and no full suite was repeated. The release-record commit
+changes documentation only from this corrected candidate. Final tag-stamped
+packaging and downloaded-asset checks remain required before publication.
+
+This is not a published release yet. Live clients, grants, requests and desktop
+sessions are unchanged. A fresh read-only runtime check found the inspected
+source laptop still running v0.8.10; a phone refresh does not update its history
+producer. Physical phone convergence remains unverified.
 
 ## Current release — v0.8.11, October 9, 2026 (UTC)
 
