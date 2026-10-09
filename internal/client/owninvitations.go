@@ -283,5 +283,14 @@ func (a *Agent) mayDeliverInvitationSync(env envelope.Envelope) (bool, bool, err
 		}
 		return true, false, err
 	}
+	// Profile I/O may race a removal or a pending-key transition.
+	err = invitationAuthority(a.store.db, r, env.From, a.Self().Fingerprint(), env.To, fp)
+	key, pending, found, e = a.store.peer(env.To)
+	if e != nil {
+		return true, false, e
+	}
+	if err != nil || !found || pending != nil || key.Fingerprint() != fp {
+		return true, false, a.store.setOutboxState(env.ID, stateNotDelivered, "invitation view owner or device authority changed", "")
+	}
 	return true, true, nil
 }

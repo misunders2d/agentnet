@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
+	"net/http"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -158,11 +160,23 @@ func testOwnInvitationUpdates(t *testing.T, w *world, phone *Agent, inv GroupInv
 	if handled, allowed, err := again.mayDeliverInvitationSync(latest); err != nil || !handled || !allowed {
 		t.Fatalf("upgraded reader stays held %v %v %v", handled, allowed, err)
 	}
-	if _, err = again.store.db.Exec(`UPDATE peers SET pending=public WHERE address=?`, phone.Address); err != nil {
-		t.Fatal(err)
-	}
+	transport := again.hub.http.Transport
+	changed := false
+	again.hub.http.Transport = workspaceRealmTransport(func(req *http.Request) (*http.Response, error) {
+		response, e := transport.RoundTrip(req)
+		if e == nil && strings.HasSuffix(req.URL.Path, "/profile") && !changed {
+			changed = true
+			_, e = again.store.db.Exec(`UPDATE peers SET pending=public WHERE address=?`, phone.Address)
+		}
+		return response, e
+	})
+	defer func() { again.hub.http.Transport = transport }()
+
 	if _, allowed, err := again.mayDeliverInvitationSync(latest); err != nil || allowed {
-		t.Fatal("pending key allowed", err)
+		t.Fatal("key changed during capability lookup was allowed", err)
+	}
+	if !changed {
+		t.Fatal("capability race hook did not run")
 	}
 	if _, err = phone.store.db.Exec(`UPDATE persons SET state=? WHERE state=?`, personConflict, personSelf); err != nil {
 		t.Fatal(err)

@@ -1390,7 +1390,7 @@ export class Engine {
     for(;;) {
       const checks=[],ops=[],own=await this.groupRead(checks,"kv","person");
       if(!own || own.state!=="self" || !(own.human_keys||[]).includes(this.fp) || !own.devices.some(d=>d.address===this.address&&d.fingerprint===this.fp))return;
-      const local=(await this.store.all("kv")).filter(v=>v?.type==="group-invitation"&&v.direction==="out"&&v.inviter===this.address&&v.fp===this.fp&&v.owner===own.person),views=[];
+      const local=(await this.store.prefix("kv","group-invitation/out/")).filter(v=>v?.type==="group-invitation"&&v.direction==="out"&&v.inviter===this.address&&v.fp===this.fp&&v.owner===own.person),views=[];
       for(const saved of local) {
         const row=await this.groupRead(checks,"kv","group-invitation/out/"+saved.id);if(!row)continue;
         const k=this.invitationViewKey(this.fp,row.id),old=await this.groupRead(checks,"kv",k);
@@ -3210,8 +3210,8 @@ export class Engine {
   }
 
   async groupInvitations() {
-    const all=await this.store.all("kv"),rows=all.filter(v=>v?.type==="group-invitation");
-    for(const view of all.filter(v=>v?.type==="own-invitation"&&v.fp!==this.fp)) {
+    const [intents,views]=await Promise.all([this.store.prefix("kv","group-invitation/"),this.store.prefix("kv","own-invitation/")]),rows=intents.filter(v=>v?.type==="group-invitation");
+    for(const view of views.filter(v=>v?.type==="own-invitation"&&v.fp!==this.fp)) {
       try {await this.readSyncAuthority(view.record,view.from,view.fp,this.address,this.fp);}catch{continue;}
       const r=view.record;rows.push({id:r.id,direction:"out",status:r.status,proposal:r.proposal,inviter:view.from,fp:view.fp,owner:r.person});
     }
