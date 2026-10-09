@@ -113,5 +113,23 @@ func (a *Agent) discoveredHistoryDelivery(env envelope.Envelope) error {
 	if guarded == 0 {
 		return nil
 	}
-	return a.discoveredHistoryCheck(a.store.db, env.To)
+	err := a.discoveredHistoryCheck(a.store.db, env.To)
+	if errors.Is(err, errHistoryRecoveryAuthority) {
+		// Keep temporary trust/key conflicts queued, but retain the ordinary
+		// terminal outcome for a recipient removed from our current person.
+		res, e := a.store.db.Exec(`UPDATE outbox SET state=?,error=? WHERE id=? AND state=?
+			AND EXISTS (SELECT 1 FROM persons WHERE state=?)
+			AND NOT EXISTS (SELECT 1 FROM person_devices d JOIN persons p ON p.person=d.person WHERE p.state=? AND d.address=?)`,
+			stateNotDelivered, "that device is no longer a device of this person", env.ID, stateQueued, personSelf, personSelf, env.To)
+		if e != nil {
+			return e
+		}
+		if n, e := res.RowsAffected(); e != nil {
+			return e
+		} else if n > 0 {
+			a.store.changed()
+			a.releaseSpool(env)
+		}
+	}
+	return err
 }

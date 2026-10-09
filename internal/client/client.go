@@ -850,8 +850,15 @@ func (a *Agent) handedOver(env envelope.Envelope, state, path string) (SendResul
 	return SendResult{ID: env.ID, State: state, Path: path}, nil
 }
 
-// FlushOutbox retries every queued message once.
+// FlushOutbox retries queued messages, yielding after history progress when
+// an admitted file request needs its next upkeep turn.
 func (a *Agent) FlushOutbox(ctx context.Context) error {
+	return a.flushOutbox(ctx, false)
+}
+
+// filesOnly gives one requested file a turn before bulk conversation upkeep.
+// It uses the same durable outbox, serialization and final delivery checks.
+func (a *Agent) flushOutbox(ctx context.Context, filesOnly bool) error {
 	a.flushOnce.Do(func() { a.flushLock = make(chan struct{}, 1) })
 	select {
 	case a.flushLock <- struct{}{}:
@@ -862,7 +869,7 @@ func (a *Agent) FlushOutbox(ctx context.Context) error {
 	if _, err := a.holdEndedOutputs(""); err != nil {
 		return err
 	}
-	envs, err := a.store.queued()
+	envs, err := a.store.queued(filesOnly)
 	if err != nil {
 		return err
 	}
@@ -875,9 +882,9 @@ func (a *Agent) FlushOutbox(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		var conv string
+		var conv, sub string
 		var ordered bool
-		if err := a.store.db.QueryRow(`SELECT coalesce(conv, ''), `+turn+` FROM outbox WHERE id=?`, env.ID).Scan(&conv, &ordered); err != nil {
+		if err := a.store.db.QueryRow(`SELECT coalesce(conv, ''), coalesce(sub,''), `+turn+` FROM outbox WHERE id=?`, env.ID).Scan(&conv, &sub, &ordered); err != nil {
 			return err
 		}
 		key := conv + "\x00" + env.To
@@ -907,6 +914,13 @@ func (a *Agent) FlushOutbox(ctx context.Context) error {
 		}
 		if res.State == stateQueued || retryable(err) {
 			blocked[key] = true
+		}
+		// An admitted file request may arrive while this batch is sending.
+		// Give the existing upkeep worker a turn after one history carrier;
+		// history still advances even while further files are requested.
+		if sub == envelope.SubHistory && res.State != "" && res.State != stateQueued && !retryable(err) && a.convWork.bits.Load()&convServe != 0 {
+			a.kickNow()
+			return nil
 		}
 	}
 	return nil

@@ -114,8 +114,12 @@ func groupControlEpochFence(q dbq, packet GroupContext, from, fromFP, to, toFP s
 	if err != nil {
 		return "", err
 	}
+	return groupControlAdmissionFence(sender, recipient), nil
+}
+
+func groupControlAdmissionFence(sender, recipient protocol.GroupAdmission) string {
 	hash := sha256.Sum256([]byte("agentnet-group-control-epochs-v1\n" + sender.Hash() + "\x00" + recipient.Hash()))
-	return hex.EncodeToString(hash[:]), nil
+	return hex.EncodeToString(hash[:])
 }
 
 func (a *Agent) requireGroupControlCapability(ctx context.Context, key identity.Public) error {

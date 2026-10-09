@@ -114,6 +114,35 @@ func TestHistoryCopyNotHandedToRemovedDevice(t *testing.T) {
 		t.Fatal(err)
 	}
 	tx.Commit()
+	// Exercise the automatic-discovery fence as well as the legacy gate.
+	guard, _ := json.Marshal(historyRecoveryDevices{Sender: w.alice.Self(), Reader: phone.Self()})
+	if err := w.alice.store.setConfig(map[string]string{discoveredHistory + phone.Address: string(guard)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.alice.store.pin(phone.Self()); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"pending-key", "frozen-person"} {
+		if mode == "pending-key" {
+			_, err = w.alice.store.db.Exec(`UPDATE peers SET pending=public WHERE address=?`, phone.Address)
+		} else {
+			_, err = w.alice.store.db.Exec(`UPDATE persons SET state=? WHERE state=?`, personConflict, personSelf)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ok, err := w.alice.mayDeliver(hist.env); ok || err != nil || outboxState(t, w.alice, hist.env.ID) != stateQueued {
+			t.Fatalf("%s history must wait without delivery: %v %v", mode, ok, err)
+		}
+		if mode == "pending-key" {
+			_, err = w.alice.store.db.Exec(`UPDATE peers SET pending=NULL WHERE address=?`, phone.Address)
+		} else {
+			_, err = w.alice.store.db.Exec(`UPDATE persons SET state=? WHERE person=?`, personSelf, me.info.Person)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := w.alice.RemoveDevice(tctx(t), phone.Address); err != nil {
 		t.Fatal(err)
 	}

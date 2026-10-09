@@ -108,7 +108,7 @@ func TestLiveNeedsYou(t *testing.T) {
 	}
 
 	// Bob's question for Alice herself: held for her, listed apart, with
-	// nothing to decide (it is answered in the DM).
+	// only explicit local handling; answering remains in the DM.
 	q, err := bob.SendConv(ctx, conv, client.ConvOutgoing{Kind: envelope.KindQuestion, Body: "lunch at noon?"})
 	if err != nil {
 		t.Fatal(err)
@@ -116,7 +116,7 @@ func TestLiveNeedsYou(t *testing.T) {
 	eventually("the question held for alice", func() bool { return len(overview().Held) == 1 })
 	o := overview()
 	if h := o.Held[0]; h.Reason != client.ReviewHeldTurn || h.Conv != conv || h.ID != q.ID || h.Peer != bob.Address || h.Kind != envelope.KindQuestion ||
-		h.Excerpt != "lunch at noon?" || len(h.Actions) != 0 || h.DecideOn != "" || !strings.Contains(h.Why, "nothing runs it") {
+		h.Excerpt != "lunch at noon?" || strings.Join(h.Actions, ",") != DoResolve || h.DecideOn != "" || !strings.Contains(h.Why, "nothing runs it") {
 		t.Fatalf("the held question: %+v", h)
 	}
 	if len(o.NeedsYou) != 0 || len(o.Review) != 0 {

@@ -442,6 +442,10 @@ func testBrowserGroupCarrierEngine(t *testing.T, op string) {
 }
 
 func TestBrowserGroupCarrierRealIndexedDB(t *testing.T) {
+	testBrowserGroupCarrierIndexedDB(t, false)
+}
+
+func testBrowserGroupCarrierIndexedDB(t *testing.T, controlOnly bool) {
 	chrome := os.Getenv("AGENTNET_CHROME")
 	if chrome == "" {
 		t.Skip("AGENTNET_CHROME not set")
@@ -453,10 +457,14 @@ func TestBrowserGroupCarrierRealIndexedDB(t *testing.T) {
 		switch r.URL.Path {
 		case "/":
 			w.Header().Set("Content-Type", "text/html")
-			io.WriteString(w, `<script type="module">import {setup,consent,checks} from '/testdata/group_engine_check.mjs';let out;try {const post=async(path,body)=>{const r=await fetch(path,{method:'POST',body:JSON.stringify(body)});return r.json()};const challenge=await post('/setup',await setup());const v=await post('/consent',{consent:await consent(challenge)});out=await checks(v,true);}catch(e){out={error:e.stack}}await fetch('/result',{method:'POST',body:JSON.stringify(out)});</script>`)
-		case "/testdata/group_engine_check.mjs":
+			mode := "false"
+			if controlOnly {
+				mode = "true"
+			}
+			io.WriteString(w, `<script type="module">import {setup,consent,checks} from '/testdata/group_engine_check.mjs';let out;try {const post=async(path,body)=>{const r=await fetch(path,{method:'POST',body:JSON.stringify(body)});return r.json()};const challenge=await post('/setup',await setup());const v=await post('/consent',{consent:await consent(challenge)});out=await checks(v,true,false,`+mode+`);}catch(e){out={error:e.stack}}await fetch('/result',{method:'POST',body:JSON.stringify(out)});</script>`)
+		case "/testdata/group_engine_check.mjs", "/testdata/group_control_history_check.mjs":
 			w.Header().Set("Content-Type", "text/javascript")
-			http.ServeFile(w, r, "testdata/group_engine_check.mjs")
+			http.ServeFile(w, r, strings.TrimPrefix(r.URL.Path, "/"))
 		case "/setup":
 			var setup map[string]any
 			if json.NewDecoder(r.Body).Decode(&setup) != nil {

@@ -109,13 +109,16 @@ func TestBrowserEngineNeedsYouReadOnly(t *testing.T) {
 		return nil
 	}
 
-	// Bob's question for Alice herself: held apart, nothing to decide.
+	// Bob's question for Alice herself: held apart, with only inert local
+	// handling. It gives no authority to decide the laptop's agent work.
 	if _, err := bob.SendConv(ctx, conv, client.ConvOutgoing{Kind: envelope.KindQuestion, Body: "lunch at noon?"}); err != nil {
 		t.Fatal(err)
 	}
 	w.until("the held question", func() bool { return len(list("held")) == 1 })
-	if h := list("held")[0].(map[string]any); h["reason"] != client.ReviewHeldTurn || h["conv"] != conv || h["peer"] != bob.Address ||
-		h["excerpt"] != "lunch at noon?" || h["actions"] != nil || h["decide_on"] != nil || len(list("needs_you")) != 0 {
+	h := list("held")[0].(map[string]any)
+	heldActions, _ := h["actions"].([]any)
+	if h["reason"] != client.ReviewHeldTurn || h["conv"] != conv || h["peer"] != bob.Address ||
+		h["excerpt"] != "lunch at noon?" || !slices.Equal(heldActions, []any{DoResolve}) || h["decide_on"] != nil || len(list("needs_you")) != 0 {
 		t.Fatalf("the held question: %v (needs-you %v)", h, list("needs_you"))
 	}
 

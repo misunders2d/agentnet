@@ -312,6 +312,11 @@ func TestAssistantReactionGroupLinkedHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	conv := packet.State.Conv
+	// An old reader can receive ordinary history sent before a following
+	// participation existed. Later captured room messages require rm1 too.
+	if _, err = producer.SendConv(tctx(t), conv, ConvOutgoing{Body: "plain before participation"}); err != nil {
+		t.Fatal(err)
+	}
 	p, err := producer.InviteNamedAgent(tctx(t), conv, host.Address, record.ID, nil, nil, "")
 	if err != nil {
 		t.Fatal(err)
@@ -359,7 +364,6 @@ func TestAssistantReactionGroupLinkedHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = plain
 	phone, await, _ := linkPhone(t, producer, "phone")
 	request := pendingLink(t, producer)
 	if err = producer.DecideLink(tctx(t), request.ID, true); err != nil {
@@ -387,7 +391,7 @@ func TestAssistantReactionGroupLinkedHistory(t *testing.T) {
 	}
 	eventually(t, "linked group history converges", func() bool {
 		for _, m := range groupTurns(t, phone, conv) {
-			if m.Body == "plain after reaction" {
+			if m.Body == "plain before participation" {
 				return true
 			}
 		}
@@ -402,12 +406,25 @@ func TestAssistantReactionGroupLinkedHistory(t *testing.T) {
 	if len(reactorsOn(groupTurns(t, phone, conv), q.LID, "👀")) != 0 {
 		t.Fatal("assistant reaction reached a reader without agr1")
 	}
+	for _, m := range groupTurns(t, phone, conv) {
+		if m.LID == plain.LID {
+			t.Fatal("captured room history reached a reader without rm1")
+		}
+	}
 	producer = reopen(t, producer, stops[producer])
 	stillWaiting(t, producer, phone.Address, protocol.CapGroup)
 	addCapSuccessor(t, phone, protocol.CapAgentReaction)
 	// rm1 implies agr1, so the older reader also lacked rm1. Its upgrade
 	// restores both, allowing the captured request proof to arrive first.
 	addCapSuccessor(t, phone, protocol.CapRoom)
+	eventually(t, "captured plain history released after rm1 upgrade", func() bool {
+		for _, m := range groupTurns(t, phone, conv) {
+			if m.LID == plain.LID {
+				return true
+			}
+		}
+		return false
+	})
 	eventually(t, "linked captured request recovered before its reaction", func() bool {
 		var n int
 		phone.store.db.QueryRow(`SELECT count(*) FROM inbox WHERE lid=? AND coalesce(human,'')!='' AND coalesce(group_admission,'')!=''`, q.LID).Scan(&n)

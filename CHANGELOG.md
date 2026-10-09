@@ -12,6 +12,8 @@ This record starts with v0.8.1; earlier releases remain on the
 - Offer Mark as handled for ordinary person-to-person requests held in OKs on phones and all skins. Keep the message in its chat and send no reply or agent work. A failed report dismissal no longer shows a success message.
 - Reconcile history across verified own human devices, including missing transfers, late arrivals and interrupted catch-up. Recent messages arrive first, with older pages continuing in the background; a chat awaiting proof no longer blocks other chats.
 - Retain verified historical agent messages after the agent's host leaves and rejoins a group. Original signed membership evidence travels only as inert encrypted history; current membership, identity and execution checks stay enforced.
+- Preserve original message edits during linked-device catch-up, including own edits whose original readers have withdrawn. Historical controls retain exact signature, author, target and admission checks.
+- Give requested files a bounded turn during bulk history catch-up, while both file delivery and remaining history continue through their existing permission checks.
 - Make context-pending Held back notices archiveable without deleting the retained message or stopping automatic recovery. A changed safety reason brings the notice back.
 - Show pending outgoing group invitations on the sender's other verified human devices. Status updates survive offline delivery and reordering; a copy cannot accept an invitation or repeat an action.
 - Reconnect the phone's push stream after device linking so approval can finish and history can arrive.

@@ -3,7 +3,6 @@
 // real peer, browser or network. stdin: {vectors, body} from
 // convclear_browser_test.go (judged by envelope.ValidateControl).
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { Engine, memoryStore } from '../static/engine.mjs';
 import * as wire from '../static/wire.mjs';
 let checks = 0, sequence = 1;
@@ -90,7 +89,24 @@ for (const { name, inner } of vectors) {
   try { await wire.checkVersion2(n); shapes[name] = true; } catch (e) { shapes[name] = false; }
 }
 check(wire.clearJSON(wire.parseControl(wire.SubClear, body)) === body, 'browser encodes exactly the Go clear payload');
-check(/newCaps\([^\n]*CapConvClear/.test(readFileSync(new URL('../static/engine.mjs', import.meta.url), 'utf8')), 'the browser publishes clr1 in its caps');
+// Judge the real signed advertisement through the same capability negotiation
+// used by delivery. rm1 includes clr1 without spending another advertised slot.
+{
+  const puts = [], keys = await wire.newKeys(), address = 'caps/browser', pub = await wire.publicEntry(keys, address);
+  const e = new Engine({ store: memoryStore(), base: 'https://synthetic.invalid', fetch: async (url, o = {}) => {
+    const path = new URL(url).pathname;
+    if (path === '/v1/version') return json({ features: ['caps', 'signals1'], realm_id: 'test-realm' });
+    if (path === '/v1/caps' && o.method === 'PUT') { puts.push(o.body); return json(null, 204); }
+    throw Error('offline');
+  } });
+  e.keys = keys; e.address = address; e.session = id();
+  await e.onConnect();
+  check(puts.length === 1, 'normal connection publishes one capability record');
+  const rec = wire.parseCaps(puts[0]); await wire.verifyCaps(rec, pub.sign_key);
+  check(rec.caps.length <= wire.MaxAdvertisedCaps, 'published capabilities fit the advertisement bound');
+  check(await wire.profileSupports({ sessions: [rec.session], caps: [JSON.parse(puts[0])] }, address, pub.sign_key, wire.CapConvClear), 'signed browser profile supports clr1');
+  e.stop();
+}
 
 const w = await world(), { alice: a, bob: b } = w;
 const phone = await w.sibling(a, 'alice/phone');

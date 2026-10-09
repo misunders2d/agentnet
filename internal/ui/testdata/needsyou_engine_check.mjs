@@ -68,13 +68,16 @@ console.log("PASS needs-you claimed invitation times: arrival, plausible claim, 
 const heldRecord = {...heldTurn, v:2, conv, read:true};
 const otherHeld = {...heldRecord,id:"7".repeat(32),lid:"8".repeat(32)};
 await e.store.write([{s:"inbox",k:heldRecord.id,v:heldRecord},{s:"inbox",k:otherHeld.id,v:otherHeld}]);
+// Storage assigns local history indexes on insertion. Resolve may change only
+// state: compare against the stored snapshot, including that bookkeeping.
+const heldBefore=await e.store.get("inbox",heldRecord.id),otherBefore=await e.store.get("inbox",otherHeld.id);
 const projected=[],heldProjected=[];
 e.needsYouOf(conv,[],[heldRecord],[],projected,heldProjected);
 assert.deepEqual(heldProjected[0].actions,["resolve"],"read human turn still offers explicit local handling");
 const resolved=await e.apiRequest("/api/act",{do:"resolve",id:heldRecord.id});
 assert.match(resolved.note,/this device/);
-assert.deepEqual(await e.store.get("inbox",heldRecord.id),{...heldRecord,state:"resolved"},"preserves original message bytes");
-assert.deepEqual(await e.store.get("inbox",otherHeld.id),otherHeld,"another held turn stays waiting");
+assert.deepEqual(await e.store.get("inbox",heldRecord.id),{...heldBefore,state:"resolved"},"preserves original message bytes and stored history indexes");
+assert.deepEqual(await e.store.get("inbox",otherHeld.id),otherBefore,"another held turn stays waiting");
 const reloaded=new Engine({store:e.store,base:"https://synthetic.invalid",fetch:async()=>{throw Error("resolve attempted network");}});
 const afterReload=[],heldAfterReload=[];
 reloaded.needsYouOf(conv,[],await e.store.all("inbox"),[],afterReload,heldAfterReload);
@@ -84,8 +87,9 @@ assert.deepEqual(await e.store.all("receipts"),[],"resolve changes no transport 
 for(const [i,extra] of [{state:"awaiting"},{state:"needs_human"},{state:"running"},{state:"held"},{kind:"message"},{own:true},{sub:"event"},{control:true},{v:1},{conv:""},{target:{address:"admin/laptop",agent_id:"builder"}}].entries()) {
  const rejected={...heldRecord,id:(i+20).toString(16).padStart(32,"0"),...extra};
  await e.store.write([{s:"inbox",k:rejected.id,v:rejected}]);
+ const before=await e.store.get("inbox",rejected.id);
  await assert.rejects(()=>e.apiRequest("/api/act",{do:"resolve",id:rejected.id}));
- assert.deepEqual(await e.store.get("inbox",rejected.id),rejected,"refused item unchanged");
+ assert.deepEqual(await e.store.get("inbox",rejected.id),before,"refused item unchanged");
 }
 for(const reason of ["invalid","proof_pending","key_changed","identity_conflict","conflicting_duplicate"]) {
  const q={id:"e".repeat(32),reason,envelope:"SYNTHETIC_RETAINED_BYTES"};

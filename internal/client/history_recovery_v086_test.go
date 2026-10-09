@@ -2,10 +2,12 @@ package client
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
 func TestGroupHistoryLinkOutgoingControlAfterReaderLeaves(t *testing.T) {
@@ -65,7 +67,10 @@ func TestGroupHistoryLinkOutgoingControlAfterReaderLeaves(t *testing.T) {
 			if result := <-await; result.err != nil {
 				t.Fatal(result.err)
 			}
-			if _, err = a.historyPageFor(phone.Self(), historyPos{}); err != nil {
+			// Current own-human snapshots use the catch-up ledger. Starting one
+			// through the legacy pager would intentionally trigger a one-time
+			// accepted-row migration at the first upgraded restart.
+			if _, err = a.historyCatchupPage(tctx(t), phone.Self()); err != nil {
 				t.Fatalf("departed original reader blocked linked history: %v", err)
 			}
 			var revisionCopies, deletedCopies int
@@ -110,10 +115,10 @@ func TestGroupHistoryLinkOutgoingControlAfterReaderLeaves(t *testing.T) {
 			if deletedCopies != 0 {
 				t.Fatal("deleted original exported")
 			}
-			if allReadersLeave && revisionCopies != 0 || !allReadersLeave && revisionCopies != 1 {
+			if revisionCopies != 1 {
 				t.Fatalf("original control recovery count %d", revisionCopies)
 			}
-			if !allReadersLeave {
+			{
 				item := revision
 				var originalRaw, recipient string
 				if err = a.store.db.QueryRow(`SELECT envelope,recipient FROM outbox WHERE id=?`, item.ID).Scan(&originalRaw, &recipient); err != nil {
@@ -123,8 +128,8 @@ func TestGroupHistoryLinkOutgoingControlAfterReaderLeaves(t *testing.T) {
 				if err = json.Unmarshal([]byte(originalRaw), &original); err != nil {
 					t.Fatal(err)
 				}
-				if recipient != carol.Address || original.TS != item.TS || original.VerifySig(a.Self().SignKey) != nil {
-					t.Fatal("fallback did not retain exact still-authorized original signed copy")
+				if !allReadersLeave && recipient != carol.Address || original.TS != item.TS || original.VerifySig(a.Self().SignKey) != nil {
+					t.Fatal("fallback did not retain the preferred exact original signed copy")
 				}
 				item.TS++
 				current, err := a.GroupContext(packet.State.Conv)
@@ -133,6 +138,36 @@ func TestGroupHistoryLinkOutgoingControlAfterReaderLeaves(t *testing.T) {
 				}
 				if _, err = a.groupControlSourceAdmission(a.store.db, current, item, nil); err == nil || err.Error() != "group: historical control differs from original outbox" {
 					t.Fatalf("tampered alternate source admitted: %v", err)
+				}
+				for _, change := range []struct{ column, value string }{
+					{"recipient_fp", a.Self().Fingerprint()},
+					{"group_admission", strings.Repeat("0", 64)},
+				} {
+					tx, err := a.store.db.Begin()
+					if err != nil {
+						t.Fatal(err)
+					}
+					result, err := tx.Exec(`UPDATE outbox SET `+change.column+`=? WHERE id=?`, change.value, revision.ID)
+					if err != nil {
+						tx.Rollback()
+						t.Fatal(err)
+					}
+					if n, err := result.RowsAffected(); err != nil || n != 1 {
+						tx.Rollback()
+						t.Fatalf("negative fixture changed %d rows: %v", n, err)
+					}
+					_, checkErr := a.groupControlSourceAdmission(tx, current, revision, nil)
+					if err = tx.Rollback(); err != nil {
+						t.Fatal(err)
+					}
+					if !errors.Is(checkErr, errGroupControlHistoryEpoch) {
+						t.Fatalf("changed original %s admitted: %v", change.column, checkErr)
+					}
+				}
+				foreign := revision
+				foreign.From, foreign.FromKey = w.bob.Address, w.bob.Self().Fingerprint()
+				if _, err = a.groupControlSourceAdmission(a.store.db, current, foreign, nil); err == nil {
+					t.Fatal("departed foreign control gained own-original fallback")
 				}
 			}
 			reopened, err := Open(a.home)
@@ -153,9 +188,11 @@ func TestGroupHistoryLinkOutgoingControlAfterReaderLeaves(t *testing.T) {
 			}
 			runAgent(t, phone)
 			runAgent(t, reopened)
-			for conv, expected := range map[string]string{packet.State.Conv: "out:revised", dm: "out:another chat"} {
-				eventually(t, "linked history admitted after restart", func() bool { return strings.Join(convBodies(t, phone, conv), "|") == expected })
-			}
+			eventually(t, "linked history retains original plus visible revision after restart", func() bool {
+				rows := groupTurns(t, phone, packet.State.Conv)
+				return len(rows) == 1 && rows[0].Dir == "out" && rows[0].Body == "original" && rows[0].Edited && rows[0].Shown(rows[0].Body) == "revised"
+			})
+			eventually(t, "other chat admitted after restart", func() bool { return strings.Join(convBodies(t, phone, dm), "|") == "out:another chat" })
 			if err = groupTurnCheck(a.store.db, packet, w.bob.Address, w.bob.Self().Fingerprint()); err == nil {
 				t.Fatal("history recovery restored departed reader admission")
 			}
@@ -164,5 +201,56 @@ func TestGroupHistoryLinkOutgoingControlAfterReaderLeaves(t *testing.T) {
 				t.Fatalf("history started work: %d %v", jobs, err)
 			}
 		})
+	}
+}
+
+func TestGroupHistoryOwnControlAdmissionRejoinRefuses(t *testing.T) {
+	w, carol, packet, stops := groupTurnsFixture(t)
+	a := w.bob
+	sent, err := a.SendConv(tctx(t), packet.State.Conv, ConvOutgoing{Body: "own original"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := a.RefOf(packet.State.Conv, sent.ID, "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision, err := a.Revise(tctx(t), ref, "own revision")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := a.historySourceRows(a.store.db, "id=?", "id", 1, revision.ID)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("original control source: %d %v", len(rows), err)
+	}
+	item, err := a.historySourceItem(a.store.db, rows[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = a.groupControlSourceAdmission(a.store.db, packet, item, nil); err != nil {
+		t.Fatalf("original admitted control: %v", err)
+	}
+	own, ok, err := a.store.selfPerson(a.Address)
+	if err != nil || !ok {
+		t.Fatalf("own person: %v", err)
+	}
+	removed, err := w.alice.RemoveGroupMember(tctx(t), packet.State.Conv, own.info.Person)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := groupInteractionRejoin(t, w.alice, a, removed)
+	groupGovernanceAwait(t, current, a, carol)
+	stops[a]()
+	if _, err = a.groupControlSourceAdmission(a.store.db, current, item, nil); !errors.Is(err, errGroupControlHistoryEpoch) {
+		t.Fatalf("own same-key rejoin revived old control admission: %v", err)
+	}
+	// An unbound admission cannot be used even with a matching invented fence.
+	admission, err := groupMemberAdmission(a.store.db, current, a.Address, a.Self().Fingerprint())
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.State.Title = "unsigned changed context"
+	if err = groupControlHistoricalRecipient(a.store.db, current, admission, a.Address, a.Self().Fingerprint(), groupControlAdmissionFence(admission, protocol.GroupAdmission{})); !errors.Is(err, errGroupControlHistoryEpoch) {
+		t.Fatalf("unsigned historical context accepted: %v", err)
 	}
 }

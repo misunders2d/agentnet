@@ -32,6 +32,10 @@ func sameControlItem(a, b HistoryItem) bool {
 }
 
 func (a *Agent) groupControlSourceAdmission(q dbq, packet GroupContext, item HistoryItem, proof *groupControlIngressProof) (string, error) {
+	return a.groupControlSourceAdmissionFor(q, packet, item, proof, false)
+}
+
+func (a *Agent) groupControlSourceAdmissionFor(q dbq, packet GroupContext, item HistoryItem, proof *groupControlIngressProof, currentRecipientOnly bool) (string, error) {
 	if !groupControlSub(item.Sub) || item.Ref == nil || item.TS <= 0 || !protocol.ValidID(item.ID) || !protocol.ValidID(item.LID) || !protocol.ValidFingerprint(item.FromKey) {
 		return "", errors.New("group: malformed historical control identity")
 	}
@@ -97,6 +101,11 @@ func (a *Agent) groupControlSourceAdmission(q dbq, packet GroupContext, item His
 			return "", errors.New("group: historical control differs from original outbox")
 		}
 		current, e := groupControlEpochFence(q, packet, a.Address, a.Self().Fingerprint(), env.To, toFP)
+		if !currentRecipientOnly && (e == nil && current != fence || errors.Is(e, errGroupRecipientWithdrawn) || errors.Is(e, errGroupRecipientNotCurrent)) {
+			if e = groupControlHistoricalRecipient(q, packet, own, env.To, toFP, fence); e == nil {
+				return own.Hash(), nil
+			}
+		}
 		if e != nil {
 			if errors.Is(e, errGroupRecipientWithdrawn) || errors.Is(e, errGroupRecipientNotCurrent) {
 				return "", errGroupControlHistoryEpoch
@@ -123,11 +132,40 @@ func (a *Agent) groupControlSourceAdmission(q dbq, packet GroupContext, item His
 	return stamp, nil
 }
 
+// A departed reader's signed admission can identify an original local control;
+// it never grants that reader delivery rights. The current author's admission
+// must still reproduce the exact original fence. Only the already verified
+// signed context and an exact pinned roster key supply recipient provenance.
+// A later state that drops the original admission remains unavailable here;
+// this fallback does not search old states or authorize a new delivery.
+func groupControlHistoricalRecipient(q dbq, packet GroupContext, own protocol.GroupAdmission, address, fp, fence string) error {
+	record, err := groupProofRecord(q, packet.State.Conv, packet.Root.Creator.Fingerprint, packet.State.Seq)
+	if err != nil {
+		return err
+	}
+	if !record.Matches(packet.State) {
+		return errGroupControlHistoryEpoch
+	}
+	for _, member := range packet.State.Members {
+		person, ok, err := personByIDIn(q, member.Person)
+		if err != nil {
+			return err
+		}
+		if !ok || person.info.State != personSelf && person.info.State != personPinned || !person.has(address, fp) {
+			continue
+		}
+		if groupControlAdmissionFence(own, member.Admission) == fence {
+			return nil
+		}
+	}
+	return errGroupControlHistoryEpoch
+}
+
 // The first encrypted copy of a logical control may have gone to a reader
-// who has since left. Reuse another exact original signed copy rather than
-// letting that obsolete recipient block every linked-device snapshot.
+// who has since left. Prefer another exact original signed copy with a current
+// recipient, then try the original's retained signed admission for own sync.
 func (a *Agent) groupControlHistorySource(q dbq, packet GroupContext, item HistoryItem) (HistoryItem, error) {
-	if _, err := a.groupControlSourceAdmission(q, packet, item, nil); !errors.Is(err, errGroupControlHistoryEpoch) {
+	if _, err := a.groupControlSourceAdmissionFor(q, packet, item, nil, true); !errors.Is(err, errGroupControlHistoryEpoch) {
 		return item, err
 	}
 	if item.From != a.Address || item.FromKey != a.Self().Fingerprint() {
@@ -153,14 +191,17 @@ func (a *Agent) groupControlHistorySource(q dbq, packet GroupContext, item Histo
 		return HistoryItem{}, err
 	}
 	for _, candidate := range candidates {
-		if _, err = a.groupControlSourceAdmission(q, packet, candidate, nil); err == nil {
+		if _, err = a.groupControlSourceAdmissionFor(q, packet, candidate, nil, true); err == nil {
 			return candidate, nil
 		}
 		if !errors.Is(err, errGroupControlHistoryEpoch) {
 			return HistoryItem{}, err
 		}
 	}
-	return HistoryItem{}, errGroupControlHistoryEpoch
+	if _, err = a.groupControlSourceAdmission(q, packet, item, nil); err != nil {
+		return HistoryItem{}, err
+	}
+	return item, nil
 }
 
 func (a *Agent) groupControlHistoryCheck(q dbq, root protocol.ConvRoot, forwarder identity.Public, item HistoryItem) error {

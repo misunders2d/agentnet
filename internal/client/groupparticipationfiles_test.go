@@ -275,7 +275,19 @@ func TestGroupParticipationFilesLateLinkedRequestAndNamedOutput(t *testing.T) {
 		t.Fatal(e)
 	}
 	next = groupInteractionRejoin(t, w.alice, w.bob, next)
+	// The host's new admission cannot revive this PID, but our own current
+	// human devices may recover its inert files using the original witness.
+	source, e := w.alice.groupFileAuthorizedSource(w.alice.store.db, next, phone.Address, phone.Self().Fingerprint(), positive)
+	if e != nil || source.item.GroupHistory == nil || source.item.PID != parts[0].PID {
+		t.Fatalf("own historical PID file lost original witness: %+v %v", source.item.GroupHistory, e)
+	}
+	if e = w.alice.groupFileAuthorized(w.alice.store.db, next, w.bob.Address, w.bob.Self().Fingerprint(), positive); e == nil {
+		t.Fatal("rejoined host gained own historical PID file authority")
+	}
+	if e = w.alice.RemoveDevice(tctx(t), phone.Address); e != nil {
+		t.Fatal(e)
+	}
 	if e = w.alice.groupFileAuthorized(w.alice.store.db, next, phone.Address, phone.Self().Fingerprint(), positive); e == nil {
-		t.Fatal("rejoined host revived old PID file transfer")
+		t.Fatal("removed own reader retained historical PID file authority")
 	}
 }

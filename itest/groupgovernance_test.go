@@ -222,28 +222,28 @@ func TestCLIGroupGovernanceOfflineLeave(t *testing.T) {
 	})
 	data := c.writeRandom("after-leave.bin", 16001)
 	c.run("--home", "bob", "dm", "send", "--file", "after-leave.bin", conv, "ordinary file after explicit departure")
-	waitFor(t, "remaining member receives future file", func() bool {
-		return strings.Contains(dmShow(c, "phone", conv), "ordinary file after explicit departure")
-	})
-	a, e := client.Open(filepath.Join(c.dir, "phone"))
-	if e != nil {
-		t.Fatal(e)
-	}
-	rows, e := a.ConversationMessages(conv)
-	if e != nil {
-		a.Close()
-		t.Fatal(e)
-	}
 	var message string
-	for _, row := range rows {
-		if row.Body == "ordinary file after explicit departure" {
-			message = row.ID
+	waitFor(t, "remaining member receives direct future file", func() bool {
+		a, e := client.Open(filepath.Join(c.dir, "phone"))
+		if e != nil {
+			return false
 		}
-	}
-	a.Close()
-	if message == "" {
-		t.Fatal("missing remaining-member file")
-	}
+		defer a.Close()
+		rows, e := a.ConversationMessages(conv)
+		if e != nil {
+			return false
+		}
+		for _, row := range rows {
+			// Own-device catch-up may reach the phone before Bob's direct
+			// copy. That history row is replaced when direct delivery arrives;
+			// this journey checks direct future delivery and its attached bytes.
+			if row.Body == "ordinary file after explicit departure" && !row.History && row.Key != "" && len(row.Attachments) == 1 {
+				message = row.ID
+				return true
+			}
+		}
+		return false
+	})
 	os.MkdirAll(filepath.Join(c.dir, "phone-download"), 0700)
 	saved := c.run("--home", "phone", "download", "--dir", "phone-download", message)
 	got, e := os.ReadFile(filepath.Join(c.dir, saved))

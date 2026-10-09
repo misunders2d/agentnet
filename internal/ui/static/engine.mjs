@@ -70,7 +70,8 @@ const retractionWrite = (ops) => ops.some((o) => (o.s === "inbox" || o.s === "ou
 
 // Sparse source indexes exclude carriers, local harness records and erased
 // controls. Arrival is storage order, independent of an old copy's display time.
-const historySource = r => r?.conv && r.lid && Number.isFinite(r.at) && !r.local && !r.aside && !["history","file","clear","root-sync","group-proof","group-context","group-invite","group-consent","group-withdrawal"].includes(r.sub);
+const historyControl = r => r?.v===3 && r.control && !r.pid && !r.agent_id && [wire.SubReaction,wire.SubRevision,wire.SubRetraction].includes(r.sub) && wire.validID(r.ref?.id) && wire.validFingerprint(r.ref?.fingerprint);
+const historySource = r => r?.conv && r.lid && Number.isFinite(r.at) && !r.local && (!r.control || !!r.body) && (!r.aside || historyControl(r)) && !["history","file","clear","root-sync","group-proof","group-context","group-invite","group-consent","group-withdrawal"].includes(r.sub);
 const historyOrder = (a,b) => { for(let i=0;i<a.length;i++)if(a[i]!==b[i])return a[i]<b[i]?-1:1;return 0; };
 const historyIndexed = (row,arrival) => {
   const value=structuredClone(row);delete value.history_pos;
@@ -3270,7 +3271,7 @@ export class Engine {
       card.missing=[...grants.values()].filter(ref=>!messages.some(m=>!m.sub&&m.lid===ref.lid&&(m.fp===ref.fingerprint&&!m.replica || !m.fp&&!m.history&&this.fp===ref.fingerprint || card.pids.includes(m.excerpt_pid)&&m.claimed_key===ref.fingerprint&&m.history))).length;
     }
     return {id:conv,kind:"group",title:packet.state.title,peer:{label:packet.state.title,address:"",state:""},role,members,frozen,created:iso(packet.root.created*1000),mine:packet.root.creator.address===this.address,agents:[...agentCards.values()],guests:infos.filter(i=>i.role==="human").map(i=>this.guestView(i,role==="member")),audience_pending:infos.some(i=>i.role==="human"&&i.state==="active"&&i.held),messages:await Promise.all(messages.map(async m=>{
-      const here=!m.fp&&!m.history,out=here||!!m.own,event=m.sub==="event"?this.eventText(m.body,null,members):"",fp=m.fp||this.fp,ev=event?this.eventFields(m.body,members):null;
+      const here=!m.fp&&!m.history,out=here||!!m.own,event=m.sub==="event"?this.eventText(m.body,null,members):"",fp=m.fp||m.claimed_key||this.fp,ev=event?this.eventFields(m.body,members):null;
       const targetPerson=await this.personOfFp(fp),rel=ctls.filter(x=>x.ref?.id===m.lid&&x.ref.fingerprint===fp&&x.sub!==wire.SubStatus&&x.sub!==wire.SubDecision);
       const view=event||m.excerpt_pid?{can:[],reactions:[]}:this.controlsOn(rel,targetPerson,x=>x.person||"",personLabel,p=>p===this.me.person,undefined,pid=>infos.find(i=>i.pid===pid)?.host?.label||"");
       view.can=view.deleted||event||m.excerpt_pid||frozen||role!=="member"?[]:["react",...(targetPerson===this.me.person?["edit","delete"]:[])];
@@ -4986,6 +4987,11 @@ export class Engine {
       if(!source||source.conv!==c.id)throw Error("Original group history source is unavailable.");
       const original=this.itemOf(source,!!source.to);
       if(wire.historyJSON({...original,group_admission:undefined,group_history:undefined,send_group:undefined})!==wire.historyJSON({...item,group_admission:undefined,group_history:undefined,send_group:undefined}))throw Error("Group history differs from its exact source row.");
+      if(source.to&&item.ref) {
+        const env=wire.parseEnvelope(source.envelope);
+        if(env.v!==3||env.id!==item.id||env.from!==this.address||env.to!==source.to||env.ts!==item.ts||env.kind!==item.kind||item.from!==this.address||item.from_key!==this.fp)throw Error("Historical group control differs from its signed original.");
+        await wire.verifyEnvelope(env,(await wire.publicEntry(this.keys,this.address)).sign_key);
+      }
       item={...item,send_group:original.send_group,group_admission:source.to?stamp:source.group_admission};
       if(item.group_admission!==stamp)throw Error("Historical group source admission changed.");
       if(item.pid||item.ref)item=await this.groupParticipationHistorySource(c,item,checks);
@@ -6021,7 +6027,7 @@ export class Engine {
     const rows=await this.authorityRows({conv,lid:ref.id},checks);
     const targets=rows.filter(r=>!r.control&&!r.aside);
     if(!targets.length)throw new Hold("proof_pending","Group control original has not arrived.");
-    if(targets.some(r=>r.lid!==ref.id||(r.fp||this.fp)!==ref.fingerprint||r.excerpt_pid))throw new Hold("invalid","Group control original differs from exact logical ID and author.");
+    if(targets.some(r=>r.lid!==ref.id||(r.fp||r.claimed_key||this.fp)!==ref.fingerprint||r.excerpt_pid))throw new Hold("invalid","Group control original differs from exact logical ID and author.");
     return targets;
   }
 

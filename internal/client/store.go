@@ -571,10 +571,16 @@ func (s *store) coolRoute(endpoint string, until time.Time) error {
 	return err
 }
 
-func (s *store) queued() ([]envelope.Envelope, error) {
+func (s *store) queued(filesOnly ...bool) ([]envelope.Envelope, error) {
 	// A conversation message to a frozen (conflicting) person is not sent.
+	filter, limit := "", ""
+	if len(filesOnly) > 0 && filesOnly[0] {
+		filter, limit = " AND sub='file'", " LIMIT 1"
+	}
+	// File requests/offers do not belong to the readable-turn FIFO. Give
+	// interactive retrieval priority over the accumulated history backlog.
 	rows, err := s.db.Query(`SELECT envelope FROM outbox WHERE state = ? AND (conv IS NULL OR recipient NOT IN
-		(SELECT d.address FROM person_devices d JOIN persons p ON p.person = d.person WHERE p.state = ?)) ORDER BY created_at, rowid`, stateQueued, personConflict)
+		(SELECT d.address FROM person_devices d JOIN persons p ON p.person = d.person WHERE p.state = ?))`+filter+` ORDER BY CASE WHEN sub='file' THEN 0 ELSE 1 END, created_at, rowid`+limit, stateQueued, personConflict)
 	if err != nil {
 		return nil, err
 	}

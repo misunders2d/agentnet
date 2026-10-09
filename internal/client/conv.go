@@ -87,6 +87,15 @@ func (a *Agent) convSync(ctx context.Context) {
 	if work&convPersons != 0 { // before retrying held messages: a conflict must hold them
 		a.checkPersons(ctx, a.MemberView().Members)
 	}
+	if err := a.flushOutbox(ctx, true); err != nil {
+		a.Logf("file outbox: %v", err)
+	}
+	// A requested file gets its bounded turn before bulk proof/history work.
+	// Its existing serve-time refresh and current-authority checks still run.
+	if work&convServe != 0 && a.serveFiles(ctx) {
+		a.convWork.due(convServe) // one file per sync
+		a.kickNow()
+	}
 	if work&(convRetry|convRetryMore) != 0 {
 		a.recoverHumanExcerpts(ctx)
 		a.discloseHumanAudience(ctx)
@@ -137,10 +146,6 @@ func (a *Agent) convSync(ctx context.Context) {
 			a.convWork.due(convHistory) // one page per sync; the next follows at once
 			a.kickNow()
 		}
-	}
-	if work&convServe != 0 && a.serveFiles(ctx) {
-		a.convWork.due(convServe) // one file per sync
-		a.kickNow()
 	}
 	if work&convFetch != 0 && a.prefetchFiles(ctx) {
 		a.convWork.due(convFetch) // one file per sync

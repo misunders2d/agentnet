@@ -117,6 +117,26 @@ qualification exposes a new failure or a subsequent source change requires it.
 No v0.8.11 tag, publication or relay rollout has occurred. Clients update through
 their own controls; actual phone convergence remains a separate physical check.
 
+The first full integrated qualification at `634691e7`
+([run 37914687984](https://github.com/misunders2d/agentnet/actions/runs/37914687984))
+completed with failures. Desktop builds/restart checks, the container journey,
+three client race shards and all unaffected package tests passed. Corrections
+are batched before requalification: updated fixtures for intentional OKs actions,
+capability inheritance and immutable history; terminal status for removed history
+recipients; exact signed own-edit recovery after original readers withdraw;
+browser control indexing and original-author projection; and bounded file work
+during bulk catch-up. The Windows governance journey now waits for the direct
+incoming file it intends to verify, since a preceding history copy may be replaced.
+No timeout was raised. Preserve passing unaffected evidence and qualify all
+affected paths on the final corrected candidate before tagging.
+
+Next-release scope from the owner, explicitly excluded from this release:
+MEL-525 own-human task grants using the existing permission machinery;
+MEL-502 collective tags, prepared on `feat/mel-502-collective-tags` at
+`4fc197192c46bdb9d34ca4f76df099f2dda23104`; and MEL-526's future Comic-only
+bundling with optional Classic/Zoom moved to `agentnet-skins`. Shared topic
+names across all participants remain a recommendation, not approved scope.
+
 ### Published v0.8.10
 
 [Download v0.8.10](https://github.com/misunders2d/agentnet/releases/tag/v0.8.10).

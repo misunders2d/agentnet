@@ -2,6 +2,7 @@
 // signed-request fetch only; Chrome mode uses real IndexedDB, Node memory is unit-only.
 import * as wire from '../static/wire.mjs';
 import { Engine, memoryStore, openIDB } from '../static/engine.mjs';
+import { checkControlHistory } from './group_control_history_check.mjs';
 let keys, address = 'browser/desk', roster, pub;
 const decode = new TextDecoder();
 const assert = (ok, label) => { if (!ok) throw Error(label); };
@@ -15,7 +16,7 @@ export async function consent(challenge) {
  const a = await wire.signGroupAdmission(keys,{conv:await wire.rootID(root),realm:root.realm,person:roster.person,roster:await wire.rosterHash(roster),seq:0,prev:'',history:null,by:await wire.fingerprint(pub)});
  return wire.groupAdmissionJSON(a);
 }
-export async function checks(v, realIDB=false, requireWarmRecovery=false) {
+export async function checks(v, realIDB=false, requireWarmRecovery=false, controlHistoryOnly=false) {
  const labels=[], check=(ok,label)=>{assert(ok,label);labels.push(label);};
  const root=wire.parseGroupRoot(v.challenge.root), conv=await wire.rootID(root), states=v.states.map(wire.parseGroupState), records=v.commits.map(wire.parseGroupCommit), c=v.carriers;
  const invitation=await wire.validateGroupInvitation(wire.parseGroupInvitation(v.invitation_json));
@@ -64,6 +65,8 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
  const quiet=async(w)=>{for(const s of ['inbox','outbox','convs','lids'])check((await w.st.all(s)).length===0,'quiet '+s);check((await w.e.overview()).threads.length===0,'no visible threads');for(const x of await w.st.all('held'))check(!('body'in x)&&!('plaintext'in x),'held has ciphertext only');for(const x of await w.st.all('files'))check(x.ct instanceof Uint8Array&&!('body'in x),'files ciphertext only');};
  let w;
  try{
+  await checkControlHistory({world,check,realIDB,c,root,conv,keys,address,roster,pub,alicePub});
+  if(controlHistoryOnly)return {ok:true,storage:realIDB?'real IndexedDB':'memory unit only',checks:labels.length,labels};
   // A set check must notice records that did not exist during verification,
   // not just changes to already-read keys. A second real IDB connection is
   // the competing admission; no synthetic lock or store replacement.
@@ -1336,4 +1339,4 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
   return {ok:true,storage:realIDB?'real IndexedDB':'memory unit only',checks:labels.length,labels};
  }catch(e){if(w)await w.close().catch(()=>{});throw e;}
 }
-if(globalThis.process?.versions?.node){const {createInterface}=await import('node:readline');for await(const line of createInterface({input:process.stdin})){let out;try{const r=JSON.parse(line);out=r.op==='setup'?await setup():r.op==='consent'?{consent:await consent(r.challenge)}:await checks(r.vectors,false,r.op==='warm-regression');}catch(e){out={error:e.stack};}process.stdout.write(JSON.stringify(out)+'\n');}}
+if(globalThis.process?.versions?.node){const {createInterface}=await import('node:readline');for await(const line of createInterface({input:process.stdin})){let out;try{const r=JSON.parse(line);out=r.op==='setup'?await setup():r.op==='consent'?{consent:await consent(r.challenge)}:await checks(r.vectors,false,r.op==='warm-regression',r.op==='control-history');}catch(e){out={error:e.stack};}process.stdout.write(JSON.stringify(out)+'\n');}}

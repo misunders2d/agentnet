@@ -235,7 +235,10 @@ func TestGroupHistoryLinkEmptyAndDoneRecovery(t *testing.T) {
 	if _, err = reopened.store.db.Exec(`DELETE FROM outbox WHERE recipient=? AND conv=? AND sub IN ('group-proof','group-context')`, phone.Address, packet.State.Conv); err != nil {
 		t.Fatal(err)
 	}
-	reopened.historyStep(tctx(t))
+	// A completed sweep retries only when new evidence/reconnect wakes it.
+	// Raw SQL bypasses that normal event, so exercise the existing wake here.
+	reopened.convWork.due(convRetry)
+	reopened.convSync(tctx(t))
 	if groupHistoryCarrierCount(t, reopened, phone.Address, packet.State.Conv) != n {
 		t.Fatal("done snapshot failed to reconcile missing context")
 	}
@@ -248,7 +251,8 @@ func TestGroupHistoryLinkEmptyAndDoneRecovery(t *testing.T) {
 	if _, err = reopened.store.db.Exec(`UPDATE outbox SET state='expired' WHERE recipient=? AND conv=? AND sub='group-context'`, phone.Address, packet.State.Conv); err != nil {
 		t.Fatal(err)
 	}
-	reopened.historyStep(tctx(t))
+	reopened.convWork.due(convRetry)
+	reopened.convSync(tctx(t))
 	want := 2 * n
 	if groupHistoryCarrierCount(t, reopened, phone.Address, packet.State.Conv) != want {
 		t.Fatal("expired batch suppressed recovery")
