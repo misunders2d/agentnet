@@ -601,6 +601,16 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
     past.e.groupSupport=async()=>{};past.e.sendGroupCopy=async()=>'';
     const dev=linkedPerson.devices.find(d=>d.address===linkedAddress),again=await past.e.historyCopy(dev,await past.e.groupRecord(conv),past.e.itemOf(await past.st.get('inbox',original.id),false));
     check(wire.groupContextJSON(wire.parseHistory(again.body).group_history)===wire.groupContextJSON(original.group_history),'new device forwards exact retained witness');
+    // The scheduler must also forward an accepted event whose predecessor
+    // exists only inside its verified witness, without making a live event.
+    const accept=wire.parseHistory(pv['history-member-accept']);accept.group_history=fileItem.group_history;
+    await past.receive({envelope:await historyEnvelope(wire.historyJSON(accept))});
+    check(!!(await past.st.get('inbox',accept.id))?.group_history&&!(await past.e.convEvents(conv)).some(r=>r.e.pid===accept.pid),'witness-only predecessor stays outside the live event ledger');
+    await past.e.runHistory();
+    const copies=(await past.st.all('outbox')).filter(r=>r.to===dev.address&&r.sub==='history').map(r=>wire.parseHistory(r.body));
+    check(copies.filter(h=>h.id===accept.id&&h.lid===accept.lid&&h.from_key===accept.from_key).length===1&&copies.some(h=>h.id===original.id),'normal catch-up queues witnessed event and old request with exact original identities');
+    check(!(await past.st.prefix('kv','history-deferred/'+dev.fingerprint+'/')).some(r=>[accept.id,original.id].includes(r.id)),'verified witness-only dependencies leave no unresolved source reference');
+
     const ownPin=await past.st.get('pins',linkedAddress);await past.st.write([{s:'pins',k:linkedAddress,v:{...ownPin,pending:{fingerprint:"changed-key"}}}]);
     let pendingIn=false,pendingOut=false;try{await past.e.groupParticipationHistoryCheck(conv,original,dev,[]);}catch{pendingIn=true;}try{await past.e.historyCopy(dev,await past.e.groupRecord(conv),past.e.itemOf(stored,false));}catch{pendingOut=true;}
     check(pendingIn&&pendingOut,'historical witness refuses pending own forwarder and reader pins');await past.st.write([{s:'pins',k:linkedAddress,v:ownPin}]);
@@ -1020,6 +1030,27 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
   check(offered.attachment.name==='exact-selected.bin'&&wire.hex(await wire.decryptFile(offered.ct,offered.attachment,keys))===wire.hex(fileBytes),'sent group selected file uses exact self-kept bytes and requested filename');
   await w.st.write([{s:'inbox',k:ownRow.id,v:{...ownRow,to:undefined,conv:'e'.repeat(64)}}]);await w.e.serveGroupFile({conv,device:address,fp:w.e.fp,message:fileMessage});check(wire.hex(await wire.decryptFile(offered.ct,offered.attachment,keys))===wire.hex(fileBytes),'same-ID foreign inbox cannot retarget exact own outbox direction');let collision=false;try{await w.e.groupFileSource(conv,{...fileMessage,author:await wire.fingerprint(alicePub)});}catch(_){collision=true;}check(collision,'same-ID different direction author cannot retarget exact sent group file');
   await w.st.write([{s:'inbox',k:ownRow.id,v:undefined}]);const wrongKept=await wire.encryptFile(new Uint8Array([9,9,9,9]),'wrong.bin',pub);await w.st.write([{s:'files',k:'kept/'+fileMessage.sha256,v:{attachment:wrongKept.attachment,ct:wrongKept.ct}}]);let wrongBytes=false;try{await w.e.serveGroupFile({conv,device:address,fp:w.e.fp,message:fileMessage});}catch(_){wrongBytes=true;}check(wrongBytes,'kept group file must match exact requested size and digest');await w.close();
+  // Own original files are bound to the signed original, even after the
+  // timeline presents a later revision of its caption.
+  w=await world();await w.receive(c.proof);await w.receive(c.context);
+  {
+   const bytes=new Uint8Array([3,1,4,1,5]),file=await wire.encryptFile(bytes,'original.bin',pub),author=await wire.fingerprint(alicePub);
+   w.blobs.set(file.attachment.blob.id,file.ct);
+   const original={v:2,id:wire.newID(),lid:wire.newID(),from:alicePub.address,to:address,ts:1700000000,kind:'message',conv,root:wire.rootJSON(root),body:'original caption',origin:'ui',attachments:[file.attachment]};
+   await w.receive({envelope:await wire.seal(original,aliceKeys,pub)});
+   const edited={v:3,id:wire.newID(),lid:wire.newID(),from:alicePub.address,to:address,ts:1700000001,kind:'message',conv,sub:wire.SubRevision,ref:{id:original.lid,fingerprint:author},body:JSON.stringify({rev:1,text:'edited caption'})};
+   await w.receive({envelope:await wire.seal(edited,aliceKeys,pub)});
+   check((await w.e.groupThread(conv)).messages.find(m=>m.id===original.id)?.text==='edited caption','signed ordinary file revision is visible before original-file recovery');
+   const row=await w.st.get('inbox',original.id),evidence=await w.e.groupTurnEvidence(conv),message={v:1,type:'request',lid:row.lid,author,hash:await wire.groupHistoryContentHash(conv,row),index:0,name:file.attachment.name,size:bytes.length,sha256:file.attachment.sha256,group_admission:row.group_admission};
+   await w.e.groupFileAuthorized(evidence.packet,evidence.members,address,w.e.fp,message);
+   let offered;w.e.offerGroupFile=async(job,files)=>{offered=files[0];};await w.e.serveGroupFile({conv,device:address,fp:w.e.fp,message});
+   check(offered&&wire.hex(await wire.decryptFile(offered.ct,offered.attachment,keys))===wire.hex(bytes),'current own exact admission serves immutable original file after signed caption revision');
+   for(const change of [{hash:'f'.repeat(64)},{group_admission:''},{name:'other.bin'}]) {
+    let refused=false;try{await w.e.groupFileAuthorized(evidence.packet,evidence.members,address,w.e.fp,{...message,...change});}catch{refused=true;}check(refused,'original file still refuses changed '+Object.keys(change)[0]);
+   }
+   let foreign=false;try{await w.e.groupFileAuthorized(evidence.packet,evidence.members,alicePub.address,author,{...message,group_admission:await wire.groupAdmissionHash(wire.groupMember(evidence.packet.state,v.challenge.rosters[0].person).admission)});}catch{foreign=true;}check(foreign,'foreign current member gains no original file without selected history grant');
+  }
+  await w.close();
   for(const declineMode of ['fresh','stale','roster','missing-key','frozen','removed']) {
    const declineWorld=await world();
    try {
