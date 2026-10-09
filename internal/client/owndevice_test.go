@@ -116,6 +116,20 @@ func TestOwnDeviceTaskWaitsAgainWhenNoLongerOwn(t *testing.T) {
 	}
 
 	left := ownPendingTask(t, w.alice, laptop, "update the notes")
+	// The next independent removal must be based on the verified roster
+	// containing the first one. Delivering a task does not wait for that
+	// roster push; proposing from the older head correctly loses the CAS.
+	current, ok, err := w.alice.Person()
+	if err != nil || !ok {
+		t.Fatalf("person after desk removal: %v %v", ok, err)
+	}
+	eventually(t, "laptop pins the exact desk removal", func() bool {
+		p, ok, err := laptop.Person()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ok && p.Person == current.Person && p.Seq == current.Seq && p.Roster == current.Roster
+	})
 	if err := laptop.RemoveDevice(tctx(t), w.alice.Address); err != nil { // the person removes this device
 		t.Fatal(err)
 	}
