@@ -6,6 +6,8 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+## [0.8.13] — 2026-10-09
+
 ### Fixed
 
 - Speed up chat history and ordinary sends by indexing repeated delivery copies, reusing loaded messages, and returning topic changes after durable local enqueue. Reopen stays disabled until the refreshed state arrives.

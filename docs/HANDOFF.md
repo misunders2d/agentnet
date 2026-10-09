@@ -4,7 +4,7 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
-## Preparing v0.8.13 — October 9, 2026 (UTC)
+## v0.8.13 — qualified for packaging, October 9, 2026 (UTC)
 
 Branch `release/v0.8.13`, starting at `7e0ea2ef`, contains the performance-first
 bug fixes tracked in [the release checklist](plans/V0_8_13.md). It is not yet
@@ -23,11 +23,31 @@ long-timeline typing, reciprocal exact agent questions, one visible multi-target
 send, compact stopped cards, terminal Pending projection, old Main topic controls,
 human guest invitations in Comic OKs and safe Markdown attachment previews.
 Focused tests and comparative synthetic measurements are recorded in the
-checklist. Final combined qualification and publication remain pending.
+checklist. Combined source qualification is complete: the full run at `7269ac32`
+([37946430562](https://github.com/misunders2d/agentnet/actions/runs/37946430562))
+and focused correction run at `706df9cf`
+([37948969712](https://github.com/misunders2d/agentnet/actions/runs/37948969712))
+cover native Linux/macOS/Windows, all client and other-package race tests,
+real IndexedDB, all desktop builds/shell checks, Linux AppImage replacement and
+restart, and the container journey. The first full run was not clean: obsolete
+fixtures, macOS path normalization, a cleanup-observation race and unlinked-owner
+prompt wording required the bounded corrections documented in the checklist.
+All affected cases pass on all three systems, with local focused race and vet;
+unchanged passing evidence is retained. No full suite or timeout was increased.
+Final tag-stamped packaging, downloaded assets and publication remain pending.
 
 No installed clients, live client databases, grants or desktop sessions were
 changed. Physical phone convergence remains unverified. Deployment scope is
 the existing relay only, after release qualification.
+
+**Owner restart boundary:** after publishing v0.8.13 and verifying the relay,
+save this handoff and pause for the owner's update/restart. Do not start v0.8.14
+until explicitly resumed. Its immediate issues and today's bug scope are recorded
+in [the checklist](plans/V0_8_13.md#owner-restart-boundary-and-v0814-scope), including
+all own-device direct chats (MEL-569), the separate invitation-sync queue blocker,
+physical catch-up/quarantine, exact unresolved needs-human topics, own-agent
+consent, bounded inbox output and remote-agent labels. Topic-only ongoing access
+and editable proposals remain next-release features. No old task is replayed.
 
 ## Current published release — v0.8.12, October 9, 2026 (UTC)
 

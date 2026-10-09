@@ -1,4 +1,4 @@
-# AgentNet v0.8.13 — in preparation
+# AgentNet v0.8.13 — source qualified; packaging next
 
 The current performance-first candidate and exact remaining gates are in
 [V0_8_13.md](plans/V0_8_13.md); publication evidence belongs in
@@ -6,7 +6,8 @@ The current performance-first candidate and exact remaining gates are in
 
 The owner confirmed native agent permissions unchanged. Topic-only continuing
 access and editing proposals before confirmation are explicitly deferred to
-the following release. Historical notes below retain their original scope.
+the following release. After publication and relay verification, pause for the owner’s requested restart.
+Begin v0.8.14 only after resumption. Historical notes below retain their original scope.
 
 ---
 
