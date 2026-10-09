@@ -222,7 +222,7 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 			if !write("event: members\ndata: %s\n\n", data) {
 				return
 			}
-			if dir, err := h.teamDirectory(); err == nil { // the same generation moves both
+			if dir, err := h.teamDirectoryVersion(r.URL.Query().Get("teams") == "2"); err == nil { // the same generation moves both
 				data, _ := json.Marshal(dir)
 				if !write("event: teams\ndata: %s\n\n", data) {
 					return

@@ -29,8 +29,15 @@ var errTeamStale = errors.New("team changed meanwhile; fetch its current chain a
 var errTeamRefused = errors.New("team operation refused")
 
 func (h *Hub) teamDirectory() (protocol.TeamDirectory, error) {
+	return h.teamDirectoryVersion(false)
+}
+
+func (h *Hub) teamDirectoryVersion(tags bool) (protocol.TeamDirectory, error) {
 	out := protocol.TeamDirectory{RealmID: h.RealmID(), Teams: []protocol.TeamRef{}}
-	rows, err := h.store.db.Query(`SELECT team,seq,hash FROM teams WHERE realm_id = ? ORDER BY team LIMIT ?`, h.RealmID(), protocol.MaxTeams+1)
+	if tags {
+		out.Version = 2
+	}
+	rows, err := h.store.db.Query(`SELECT team,seq,hash FROM teams WHERE realm_id = ? AND (? OR coalesce(json_extract(state,'$.version'),1) = 1) ORDER BY team LIMIT ?`, h.RealmID(), tags, protocol.MaxTeams+1)
 	if err != nil {
 		return out, err
 	}
@@ -53,7 +60,7 @@ func (h *Hub) handleTeams(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.authenticate(w, r); !ok {
 		return
 	}
-	d, err := h.teamDirectory()
+	d, err := h.teamDirectoryVersion(r.URL.Query().Get("version") == "2")
 	if err != nil {
 		writeError(w, 500, "", "team directory unavailable")
 		return

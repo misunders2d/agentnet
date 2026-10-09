@@ -25,7 +25,7 @@ trap 'rm -rf "$work"' EXIT
 cp -R "$here/package.json" "$here/package-lock.json" "$here/tsconfig.json" "$here/src" "$here/package.mjs" "$work/"
 cp "$here/../static/pictures.mjs" "$here/../static/pictures.d.mts" "$work/src/"
 cp "$here/../static/optimistic.mjs" "$here/../static/optimistic.d.mts" "$work/src/"
-cp "$here/../skins/shared/person-topics.mjs" "$work/src/"
+cp "$here/../skins/shared/person-topics.mjs" "$here/../skins/shared/collective-mentions.mjs" "$work/src/"
 # Bundle the existing presentation-only Drive widgets; transports always
 # come from Comic's captured host. No dependency on page globals/assets.
 cp "$here/../skins/classic/src/drivespace.mjs" "$work/src/drive-space.mjs"

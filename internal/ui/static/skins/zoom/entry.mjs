@@ -1,3 +1,4 @@
+import {collectiveOptions} from './collective-mentions.mjs';
 import { rawLinkParts } from "./link-text.mjs";
 function niceGoogleDevice(address) { const name = String(address || "").split("/").pop() || "device"; return name.charAt(0).toUpperCase() + name.slice(1); }
 import { avatarPicture, openPictureEditor, pastePictures } from "./pictures.mjs";
@@ -1357,6 +1358,7 @@ async function loadTeams() {
     const [v, permissions] = await Promise.all([api("/api/teams", undefined, host), api("/api/workspace", undefined, host).catch(() => null)]);
     if (gen !== state.gen) return;
     state.teams = v; state.teamAdmin = !!permissions?.can_rename;
+    if (mentionView) showMentions();
   } catch (e) {
     if (gen !== state.gen) return;
     state.teams = { status: /404/.test(e.message) ? "unsupported" : "unavailable", current: false, reason: e.message, teams: (state.teams && state.teams.teams) || [] };
@@ -1374,7 +1376,7 @@ function teamsSection() {
   const v = state.teams;
   const o = state.overview;
   const head = el("li", { class: "result-head teams-head" }, "People lists",
-    v && v.status !== "unsupported" && o.person && el("button", { type: "button", class: "text-btn", onclick: () => teamDialog(null) }, "New people list…"));
+    v && v.status !== "unsupported" && o.person && el("button", { type: "button", class: "text-btn", onclick: () => teamDialog(null) }, "New people or agent list…"));
   if (!v) return [head, el("li", { class: "hint empty-list" }, "Reading people lists…")]; // loaded when People is chosen and on each change; rendering never fetches
   const q = state.query.trim().toLowerCase();
   const teams = (v.teams || []).filter((t) => !q || (t.name || "").toLowerCase().includes(q)).sort((a, b) => (a.archived !== b.archived ? (a.archived ? 1 : -1) : (a.name || "").localeCompare(b.name || "")));
@@ -1392,7 +1394,7 @@ function teamRow(t) {
       el("span", { class: "conv-main" },
         el("span", { class: "conv-top" }, el("span", { class: "conv-name person-name" }, t.name), el("span", { class: "kind-tag" }, "Team")),
         el("span", { class: "conv-bottom" },
-          el("span", { class: "conv-last" }, plural((t.members || []).length, "member", "members") + (t.managers && t.managers.length ? " · " + plural(t.managers.length, "manager", "managers") : "")),
+          el("span", { class: "conv-last" }, plural((t.members || []).length, "person", "people")+" · "+plural((t.agents||[]).length,"agent","agents") + (t.managers && t.managers.length ? " · " + plural(t.managers.length, "manager", "managers") : "")),
           t.conflict && el("span", { class: "conv-flag danger" }, "Frozen"),
           t.archived && el("span", { class: "conv-flag calm" }, "Archived"),
           t.manager && el("span", { class: "conv-flag calm" }, "You manage"),
@@ -1417,11 +1419,27 @@ function teamDialog(t) {
   const name = el("input", { id: "team-name", type: "text", maxlength: "64", value: t ? t.name : "", placeholder: "e.g. Data platform", autocomplete: "off" });
   dialog({ title: t ? "Rename " + t.name : "New people list", ok: t ? "Rename" : "Create", focus: name,
     body: [el("label", { for: "team-name", class: "field-label" }, "Name"), name,
-      el("p", { class: "hint" }, t ? "Managers rename a people list; members see the new name once the server has it." : "You become its first member and manager. Others on your server can join it themselves; a people list is not a chat and grants no chat access.")],
-    run: async () => { const n = name.value.trim(); if (!n) throw new Error("Give the people list a name."); await new Promise((res, rej) => teamAct(t ? { team: t.id, op: "rename", name: n } : { op: "create", name: n }, (e) => (e ? rej(e) : res()))); } });
+      el("p", { class: "hint" }, t ? "Managers rename a people list; members see the new name once the server has it." : state.teams?.tags ? "Choose the people and agents after creating it. You manage the list; everyone can use its @tag in a chat." : "This server supports people lists. Update it to create mixed people and agent tags.")],
+    run: async () => { const n = name.value.trim(); if (!n) throw new Error("Give the people list a name."); await new Promise((res, rej) => teamAct(t ? { team: t.id, op: "rename", name: n } : { op: "create", v: state.teams?.tags?2:1, name: n }, (e) => (e ? rej(e) : res()))); } });
+}
+function teamTargetDialog(t, agent) {
+  const host=currentHost,gen=state.gen,o=state.overview;
+  const people=[...(o.person?[o.person]:[]),...(o.people||[])].filter(p=>p.person&&['self','pinned'].includes(p.state));
+  const person=el('select',{'aria-label':'Person'},el('option',{value:''},'Choose a person'),people.filter(p=>!t.members.includes(p.person)).map(p=>el('option',{value:p.person},p.label)));
+  const hosts=[...new Map(people.flatMap(p=>devicesOf(p).map(d=>[d.address,{address:d.address,name:p.label+' · '+(d.name||d.address)}]))).values()];
+  const device=el('select',{'aria-label':'Agent device'},el('option',{value:''},'This device'),hosts.filter(h=>h.address!==o.me.address).map(h=>el('option',{value:h.address},h.name)));
+  const choice=el('select',{'aria-label':'Agent'}),status=el('p',{class:'hint'});let records=[],request=0;
+  const load=async()=>{const n=++request;records=[];fill(choice,el('option',{value:''},'Reading agents…'));try{const v=await api('/api/agents'+(device.value?'?host='+encodeURIComponent(device.value):''),undefined,host);if(n!==request||gen!==state.gen)return;records=(v.agents||[]).filter(a=>a.enabled).map(a=>a.record).filter(a=>!(t.agents||[]).some(x=>x.id===a.id&&x.host===a.host&&x.host_key===a.host_key));fill(choice,el('option',{value:''},'Choose an agent'),records.map(a=>el('option',{value:a.id},a.label)));status.textContent='';}catch(e){if(n===request)status.textContent=e.message;}};
+  device.addEventListener('change',()=>void load());
+  dialog({title:agent?'Add an agent to @'+t.name:'Add a person to @'+t.name,ok:'Add',body:[el('p',{},'Everyone can use this tag. Adding someone here does not invite them to chats.'),...(agent?[device,choice,status]:[person])],run:async()=>{
+    if(gen!==state.gen)throw new Error('Workspace changed. Open the list again.');
+    let c={team:t.id,op:'add',target:person.value};
+    if(agent){const a=records.find(a=>a.id===choice.value);if(!a)throw new Error('Choose an agent.');c={team:t.id,op:'agent-add',agent:{id:a.id,host:a.host,host_key:a.host_key}};}else if(!person.value)throw new Error('Choose a person.');
+    await new Promise((resolve,reject)=>teamAct(c,e=>e?reject(e):resolve()));
+  }});if(agent)void load();
 }
 function teamPersonDialog(t, op, who) {
-  const words = { remove: ["Remove " + who.label + " from " + t.name + "?", "Remove", "They can join again themselves; nothing else changes for them."],
+  const words = { remove: ["Remove " + who.label + " from " + t.name + "?", "Remove", t.version===2 ? "Removes this tag target. Their chat membership and permissions stay the same." : "They can join again themselves; nothing else changes for them."],
     "manager-add": ["Make " + who.label + " a manager of " + t.name + "?", "Make manager", "Managers rename, delete and manage members."],
     "manager-remove": ["Take the manager role from " + who.label + "?", "Take role", "The last manager cannot be removed: the server refuses that, so hand the role over first."] };
   const [title, ok, hint] = words[op];
@@ -1437,24 +1455,27 @@ function teamHub(t) {
     : !v.current ? "Shown as last verified here" + (v.at ? " (" + when(v.at) + ")" : "") + "; the server could not be read now, so it may have changed."
       : "";
   const row = (m) => el("li", { class: "team-member" }, avatar(m.label), el("span", { class: "team-member-name" }, m.label), m.manager && el("span", { class: "kind-tag" }, "Manager"),
-    canManage && !m.you && el("span", { class: "team-member-acts" },
+    canManage && (t.version===2 || !m.you) && el("span", { class: "team-member-acts" },
       el("button", { type: "button", class: "text-btn", onclick: () => teamPersonDialog(t, m.manager ? "manager-remove" : "manager-add", m) }, m.manager ? "Take manager role" : "Make manager"),
       el("button", { type: "button", class: "text-btn", onclick: () => teamPersonDialog(t, "remove", m) }, "Remove")));
   return [
     note && el("p", { class: "hint" }, note),
+    t.version===2 && el("p",{class:"hint"},"Everyone can use @"+t.name+". Only selected people and agents already in the chat are addressed. Managed by "+(t.managers||[]).map(personLabelOf).join(", ")+"."),
     el("ul", { class: "team-members", "aria-label": "Members" }, members.map(row)),
-    !members.length && el("p", { class: "hint empty-list" }, "No members."),
+    (t.agents||[]).map(a=>el("div",{class:"team-member"},el("span",{},(catalogRecords(a.host).find(r=>r.id===a.id&&r.host===a.host&&r.host_key===a.host_key)?.label||"Agent · name unavailable")+" · "+a.host),canManage&&el("button",{type:"button",class:"text-btn",onclick:()=>teamAct({team:t.id,op:"agent-remove",agent:a})},"Remove agent"))),
+    !members.length && !(t.agents||[]).length && el("p", { class: "hint empty-list" }, "No people or agents selected."),
     el("div", { class: "detail-actions" },
-      o.person && !t.archived && !t.conflict && (t.member
+      t.version!==2 && o.person && !t.archived && !t.conflict && (t.member
         ? el("button", { type: "button", class: "chip", onclick: () => teamAct({ team: t.id, op: "leave" }) }, "Leave")
         : el("button", { type: "button", class: "chip", onclick: () => teamAct({ team: t.id, op: "join" }) }, "Join")),
+      t.version===2 && canManage && [el("button",{type:"button",class:"chip",onclick:()=>teamTargetDialog(t,false)},"Add person…"),el("button",{type:"button",class:"chip",onclick:()=>teamTargetDialog(t,true)},"Add agent…")],
       canManage && el("button", { type: "button", class: "chip", onclick: () => teamDialog(t) }, "Rename…"),
       (t.manager || state.teamAdmin) && !t.conflict && el("button", { type: "button", class: "chip", onclick: () => dialog({
         title: "Delete this people list?", ok: "Delete list", body: [el("p", {}, "Only the list is deleted. Chats, messages and group membership stay as they are.")],
         run: async () => new Promise((resolve, reject) => teamAct({ team: t.id, op: "delete" }, e => e ? reject(e) : resolve()))
       }) }, "Delete list"),
       !t.archived && !t.conflict && members.length > 0 && el("button", { type: "button", class: "chip", onclick: () => teamSelection([t]) }, "Select for a conversation…")),
-    t.member && t.manager && (t.managers || []).length === 1 && el("p", { class: "hint" }, "You are the only manager: the server refuses your leaving or losing the role until another manager exists."),
+    t.version!==2 && t.member && t.manager && (t.managers || []).length === 1 && el("p", { class: "hint" }, "You are the only manager: the server refuses your leaving or losing the role until another manager exists."),
   ];
 }
 // Capture the current workspace before expanding teams into a new-group draft.
@@ -1530,7 +1551,7 @@ function hubOf(h) {
 
 // openHub shows a person's or device's conversations, leaving the open
 // one (its draft stays with it).
-function openHub(h) { if (h.kind === 'person') void Zoom.go(1, {person: h.key, peer: null}); else if (h.kind === 'device') void Zoom.go(1, {peer: h.key, person: null}); }
+function openHub(h) { if (h.kind === 'team') void Zoom.go(1, {team:h.key,person:null,peer:null,dm:null}); else if (h.kind === 'person') void Zoom.go(1, {person: h.key, peer: null}); else if (h.kind === 'device') void Zoom.go(1, {peer: h.key, person: null}); }
 
 // showPane shows a person's or device's conversations ("hub") or the open
 // conversation ("conv") in the main pane.
@@ -2482,7 +2503,7 @@ function mentionPeople(t) {
     if ((me && p.person === me) || !p.person || !mentionName(p.label)) continue;
     seen.set("person:" + p.person, { kind: "person", name: mentionName(p.label), ref: { kind: "person", id: p.person }, role: humanGroup(t) ? (p.admin ? "Group admin" : "Group member") : "In this conversation", more: "account " + account(p.address), title: niceGoogleDevice(p.address) || "" });
   }
-  for (const g of t.guests || []) if (g.state === "active" && !g.host_here && mentionName(g.host?.label)) seen.set("guest:" + g.pid, { kind: "person", name: mentionName(g.host.label), ref: { kind: "guest", id: g.pid }, role: "Guest", more: (g.inviter?.label ? "invited by " + g.inviter.label + " · " : "") + "account " + account(g.host.address), title: g.host.address + " · participation " + g.pid });
+  for (const g of t.guests || []) if (g.state === "active" && !g.host_here && mentionName(g.host?.label)) seen.set("guest:" + g.pid, { kind: "person", name: mentionName(g.host.label), ref: { kind: "guest", id: g.pid }, person: g.host.person, role: "Guest", more: (g.inviter?.label ? "invited by " + g.inviter.label + " · " : "") + "account " + account(g.host.address), title: g.host.address + " · participation " + g.pid });
   const people = [...seen.values()], named = {};
   for (const p of people) named[p.name] = (named[p.name] || 0) + 1;
   for (const p of people) if (named[p.name] > 1) p.role += " · " + p.more; // the same name twice: say which, readably
@@ -2504,6 +2525,7 @@ function mentionInvites(t, query) {
 }
 function mentionRow(it, i) {
   const [label, sub] = it.kind === "assistant" ? ["@" + it.name, whoseAgent(it.a) ? whoseAgent(it.a) + " assistant" : "Assistant"]
+    : it.kind === "collective" ? ["@" + it.name, it.sub]
     : it.kind === "person" ? ["@" + it.name, it.role]
     : it.kind === "invite-person" ? ["Invite " + it.name + "…", "Not in this conversation · joins only if they accept"]
     : it.kind === "invite-people" ? ["Bring in human…", "Guest participation · choose what earlier context they see"]
@@ -2517,10 +2539,13 @@ function showMentions(force = false) {
   const before = input.value.slice(0, input.selectionStart ?? input.value.length);
   const match = before.match(/(?:^|\s)@([^@\s]*)$/);
   if (!t || !state.dm || state.sending || (!force && !match)) { closeMentions(); return; }
+  if (!mentionView) void loadTeams();
   const query = force ? "" : match[1].toLowerCase();
-  const agents = dmHumanGuest(t) && !guestAuthor(t) ? [] : (t.agents || []).filter(a => a.can_ask && agentName(a).toLowerCase().includes(query)); // an accepted guest addresses only active assistants
-  const people = mentionPeople(t).filter(p => p.name.toLowerCase().includes(query));
-  const items = [...agents.map(a => ({ kind: "assistant", a, name: agentName(a) })), ...people], invites = mentionInvites(t, query);
+  const agents = dmHumanGuest(t) && !guestAuthor(t) ? [] : (t.agents || []).filter(a => a.can_ask);
+  const people = mentionPeople(t);
+  const exact=[...agents.map(a=>({kind:'agent',id:a.pid,agentID:a.agent_id,host:a.host.address,hostKey:a.host.fingerprint,name:agentName(a),original:{kind:'assistant',a,name:agentName(a)}})),...people.map(p=>({kind:p.ref.kind,id:p.ref.id,person:p.person,name:p.name,original:p}))];
+  const collective=collectiveOptions(exact,state.teams).map(c=>({...c,targets:c.targets.map(p=>p.original)}));
+  const items = [...collective,...exact.map(p=>p.original)].filter(p=>p.name.toLowerCase().includes(query)), invites=mentionInvites(t,query);
   const gen = state.gen, conv = t.id;
   mentionView = { items: [...items, ...invites], index: 0, gen, conv, start: match ? before.lastIndexOf("@") : null, end: input.selectionStart ?? input.value.length };
   const box = mentionBox(); box.hidden = false; box.setAttribute("aria-label", "People and assistants");
@@ -2532,6 +2557,18 @@ function showMentions(force = false) {
 function pickMention(i) {
   const v = mentionView, it = v?.items[i], t = state.dmData;
   if (!it || v.gen !== state.gen || v.conv !== state.dm || !t || it.kind === "assistant" && !agentOf(it.a.pid)?.can_ask) { closeMentions(); return; }
+  if (it.kind === "collective") {
+    trackMentions();
+    const targets=it.targets.filter(p=>!state.mentions.some(m=>m.ref.kind===(p.kind==='assistant'?'agent':p.ref.kind)&&m.ref.id===(p.kind==='assistant'?p.a.pid:p.ref.id)));
+    if (targets.some(p=>p.kind==='assistant'&&!agentOf(p.a.pid)?.can_ask)) {closeMentions();announce('The participants changed. Choose the tag again.');return;}
+    const input=mentionInput(), at=v.start??v.end,token=targets.length?targets.map(p=>'@'+p.name).join(' ')+' ':'';
+    trackMentions();input.value=input.value.slice(0,at)+token+input.value.slice(v.end);$("body").value=input.value;trackMentions();
+    let start=at;
+    for(const p of targets){state.mentions.push({start,name:p.name,ref:p.kind==='assistant'?{kind:'agent',id:p.a.pid}:p.ref,role:p.role});start+=p.name.length+2;}
+    const agent=targets.find(p=>p.kind==='assistant');if(agent)setDMAgent(agentOf(agent.a.pid));
+    input.setSelectionRange?.(at+token.length,at+token.length);grow();keepDraft();closeMentions();renderAgentTarget();input.focus();
+    announce(targets.length?'@'+it.name+' expanded to '+targets.length+' recipients. Review their names before sending.':'Everyone from @'+it.name+' is already selected.');return;
+  }
   if (it.kind.startsWith("invite")) { // the existing consent dialog decides; nothing is granted here
     closeMentions();
     if (it.kind === "invite-assistant") inviteDialog(t); else inviteHumanDialog(t, it.address || "");
@@ -4508,7 +4545,7 @@ async function refetch(first) {
       const gen = state.gen;
       const o = await loadOverview();
       if (gen !== state.gen) break; // the workspace changed: its own switch loads the next view
-      if (state.contactView === "people" || (state.hub && state.hub.kind === "team")) await loadTeams(); // the change stream said something changed; teams are read again, never polled
+      if (mentionView || state.contactView === "people" || (state.hub && state.hub.kind === "team")) await loadTeams(); // the change stream said something changed; teams are read again, never polled
       if (state.thread) await loadThread(false);
       else if (state.dm) await loadDM(false);
       Zoom.refresh();
@@ -5195,6 +5232,7 @@ function focusZoomLayer(layer) {
 }
 
 const Zoom = {
+  team: null,
   generation: 0, navigating: null, dirty: false, finish: null, revealEnd: false, level: 0, peer: null, person: null, dm: null, msg: null, origins: [], query: "",
 
   // Two kinds of path: a person (by their record) and their DMs, or a
@@ -5202,6 +5240,7 @@ const Zoom = {
   personOf() { return ((state.overview && state.overview.people) || []).find((p) => personKey(p) === this.person); },
 
   names() {
+    if(this.team && this.level===1)return ['Everyone',state.teams?.teams?.find(t=>t.id===this.team)?.name||'List','Conversation','Message'];
     if (this.level === 0) {
       return ["Everyone", state.overview && state.overview.persons ? "Person or contact" : "Contact", "Conversation", "Message"];
     }
@@ -5269,7 +5308,10 @@ const Zoom = {
     })));
   },
 
-  content(views) { return this.query.trim() ? this.results() : views[this.level](); },
+  content(views) {
+    if(this.team && this.level===1){const t=state.teams?.teams?.find(t=>t.id===this.team);return el('section',{class:'zoom-person'},el('h2',{},t?.name||'List'),...(t?teamHub(t):[el('p',{class:'hint'},'This list is no longer available.')]));}
+    return this.query.trim() ? this.results() : views[this.level]();
+  },
 
   layer() {
     const views = this.person ? [() => this.everyone(), () => this.personLevel(), () => this.dmLevel(), () => this.dmMessage()]
@@ -5305,7 +5347,7 @@ const Zoom = {
     if (inward && from) this.origins[this.level] = from.getBoundingClientRect();
     const origin = from ? from.getBoundingClientRect() : inward ? null : this.origins[level];
     const { thread, dm, ...rest } = patch;
-    Object.assign(this, rest, { level });
+    Object.assign(this, {team:null}, rest, { level });
     if (thread) {
       const changed = beginThread(thread); // the same switch as the other views: drafts stay put
       this.person = null;
@@ -5403,7 +5445,8 @@ const Zoom = {
           avatar(c.peer, "sm"), el("span", { class: "thread-title" }, who(c.peer)), counts(c))))),
       !entries.length && el("p", { class: "hint" }, state.contactView === "unread" ? "No unread conversations." : "No activity yet. People lists everyone."),
       moreContacts(entries.length), state.contactView === "people" && zoomDirectory(o.threads),
-      el("ul", {class:"thread-list"}, groupsSection((id,from)=>this.go(2,{dm:id},from))));
+      el("ul", {class:"thread-list"}, groupsSection((id,from)=>this.go(2,{dm:id},from))),
+      state.contactView==='people' && el('ul',{class:'thread-list'},teamsSection()));
   },
 
   // Level 1 for a person: their separate DMs (the same rows the sidebar

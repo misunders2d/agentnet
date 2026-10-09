@@ -5015,7 +5015,7 @@ export class Engine {
     this.resetTyping(false, false);
     this.featureList = null;
     this.session = wire.newID();
-    const path = "/v1/stream?ad=" + (await wire.sessionAd(this.keys, this.address, this.session)) + "&receipts=" + ((await this.store.get("kv","receipt-cursor")) || 0);
+    const path = "/v1/stream?ad=" + (await wire.sessionAd(this.keys, this.address, this.session)) + "&receipts=" + ((await this.store.get("kv","receipt-cursor")) || 0) + "&teams=2";
     const ctrl = new AbortController();
     this.abort = ctrl;
     const headers = { ...(await wire.signRequest(this.keys, this.address, "GET", path, "")), Accept: "text/event-stream" };

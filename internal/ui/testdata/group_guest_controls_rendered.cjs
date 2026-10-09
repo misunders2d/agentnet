@@ -6,7 +6,7 @@ const settle=async page=>{await page.evaluate(()=>new Promise(r=>requestAnimatio
 const root=path.resolve(__dirname,'../static'),evidence=process.env.AGENTNET_SCREENSHOTS;
 assert(evidence,'private screenshot directory required');fs.mkdirSync(evidence,{recursive:true,mode:0o700});
 const conv='c'.repeat(64),at='2026-10-05T10:00:00Z';
-const person=(name,address,key)=>({person:name.toLowerCase().padEnd(32,'a'),label:name,address,fingerprint:key,state:'pinned',devices:[{address,fingerprint:key}]});
+const person=(name,address,key)=>({person:({Aster:'a',Brin:'b',Cora:'c',Dune:'d'}[name]).repeat(32),label:name,address,fingerprint:key,state:'pinned',devices:[{address,fingerprint:key}]});
 const outside=person('Dune','dune/office','dune-key');
 const me=person('Aster','aster/laptop','aster-key'),brin=person('Brin','brin/desktop','brin-key');me.state='self';
 const cora=person('Cora','cora/windows','cora-key');
@@ -101,7 +101,7 @@ if(variant.startsWith('delivery-')){
 }
 if(variant==='other-device')Object.assign(fixture.overview.group_invitations[0],{can_cancel:false,can_refresh:false});
 if(variant==='legacy-flags'){delete fixture.overview.group_invitations[0].can_cancel;delete fixture.overview.group_invitations[0].can_refresh;}
-if(variant==='multi-agent'){
+if(variant==='multi-agent'||variant==='team-tags'){
 fixture.thread.guests=[];fixture.overview.group_invitations=[];fixture.stages=[];fixture.failedOnce=false;
 fixture.thread.agents=['agent-a','agent-b'].map((pid,i)=>({pid,host:fixture.thread.members[1],agent_id:String(i+1).repeat(32),state:'active',state_text:'Active',host_here:false,shared:[],can_ask:true,inviter:fixture.overview.person,invited:'2026-10-05T10:00:00Z',tasks_from:[]}));
 }
@@ -129,8 +129,10 @@ if(variant==='heldback'){
  {id:'proof-waiting',peer:'brin/desktop',code:'proof_pending',reason:'proof_pending',can_archive:false,at:'2026-10-05T10:03:00Z'}];
  fixture.retainedHeld=structuredClone(fixture.overview.quarantine);
 }
-let open,changed;
-const host={version:1,platform:'daemon',workspace:{id:'default',name:'P6 fixture',endpoint:location.origin,address:seed.overview.me.address,realm:'',state:'enrolled'},workspaces:null,skins:[],onSkinsChange(){return()=>{};},onOpen(fn){open=fn;},listen(fn){changed=fn;return()=>{};},stage:async f=>{if(variant==='multi-agent'){const id='multi-stage-'+(fixture.stages.length+1);fixture.stages.push({id,name:f.name,size:f.size});return {id};}if(variant==='oks'){fixture.staged={name:f.name,size:f.size};return {id:'staged-1'};}throw Error('fixture accepts no files');},file:async()=>{throw Error('fixture contains no files');},api:async(p,body)=>{
+if(variant==='team-tags'){fixture.teams=[];fixture.overview.people=[...fixture.overview.people,fixture.thread.members[1]];}
+let open;
+const changeListeners=new Set(),changed=event=>{for(const fn of [...changeListeners])fn(event);};
+const host={version:1,platform:'daemon',workspace:{id:'default',name:'P6 fixture',endpoint:location.origin,address:seed.overview.me.address,realm:'',state:'enrolled'},workspaces:null,skins:[],onSkinsChange(){return()=>{};},onOpen(fn){open=fn;},listen(fn){changeListeners.add(fn);return()=>changeListeners.delete(fn);},stage:async f=>{if(variant==='multi-agent'){const id='multi-stage-'+(fixture.stages.length+1);fixture.stages.push({id,name:f.name,size:f.size});return {id};}if(variant==='oks'){fixture.staged={name:f.name,size:f.size};return {id:'staged-1'};}throw Error('fixture accepts no files');},file:async()=>{throw Error('fixture contains no files');},api:async(p,body)=>{
 fixture.requests.push({path:p,body});if(variant.startsWith('continuation-')&&['/api/act','/api/operator/decide'].includes(p)){
  const c=fixture.thread.messages.find(m=>m.id==='needs-answer-exact').continuation;
  if(!c||body.id!==c.id||body.key!==c.key||body.attempt!==c.attempt||!body.send_id)throw Error('Unexpected continuation identity');
@@ -163,11 +165,19 @@ if(variant==='heldback'&&p==='/api/act'){
  fixture.overview.quarantine=fixture.overview.quarantine.filter(q=>q.id!==body.id);
  return {note:'Notice archived on this device. Its envelope remains blocked.'};
 }if(variant==='multi-agent'&&p==='/api/dm/agent/ask'){if(body.pid==='agent-b'&&!fixture.failedOnce){fixture.failedOnce=true;throw Error('Synthetic exact participation failure');}return {id:body.id,lid:body.id,state:'custody',state_text:'Stored for delivery'};}if(p.startsWith('/api/overview'))return structuredClone(fixture.overview);if(p.startsWith('/api/dm?'))return structuredClone(fixture.thread);
+if(variant==='team-tags'&&p==='/api/teams')return {status:'available',current:true,tags:true,teams:structuredClone(fixture.teams)};
+if(variant==='team-tags'&&p==='/api/team'){
+ if(body.op==='create'){const t={id:'f'.repeat(32),version:body.v,name:body.name,members:[],agents:[],managers:[fixture.overview.person.person],manager:true,member:false,listed:true,conflict:false,archived:false};fixture.teams.push(t);return structuredClone(t);}
+ const t=fixture.teams.find(t=>t.id===body.team);if(!t)throw Error('Unknown tag');
+ if(body.op==='add')t.members.push(body.target);else if(body.op==='agent-add')t.agents.push(body.agent);else if(body.op==='agent-remove')t.agents=t.agents.filter(a=>a.id!==body.agent.id);else if(body.op==='rename')t.name=body.name;else throw Error('Unexpected tag change');
+ return structuredClone(t);
+}
+if(p==='/api/teams')return {status:'available',current:true,tags:true,teams:variant==='multi-agent'?[{id:'f'.repeat(32),name:'Reviewers',version:2,members:[fixture.thread.members[1].person],agents:fixture.thread.agents.map(a=>({id:a.agent_id,host:a.host.address,host_key:a.host.fingerprint})),listed:true,conflict:false,archived:false,managers:[fixture.overview.person.person]}]:[]};
 if(p==='/api/get-app')return {version:'v0.8.5',detected:'linux',platforms:[{id:'linux',label:'Linux',url:'https://downloads.example/AgentNet.AppImage'},{id:'windows',label:'Windows',url:'https://downloads.example/AgentNet.exe'}]};
 if(p==='/api/device/link')return {url:'https://workspace.example/#agentnet-link-v2:fixture',app_url:'agentnet://open#agentnet-link-v2:fixture',expires:'2026-10-08T23:59:00Z'};
 if((variant==='device-oks'||variant.startsWith('delivery-'))&&p.startsWith('/api/thread?'))return structuredClone(new URL(p,location.origin).searchParams.get('id')==='8'.repeat(32)?fixture.otherDeviceThread:fixture.deviceThread);
 if(variant==='device-oks'&&p==='/api/act'){if(body.do==='cancel')setDeviceState('cancel_requested');return {note:'Fixture action recorded'};}
-if(p.startsWith('/api/agents'))return {host:body?.host||new URL(p,location.origin).searchParams.get('host')||seed.overview.me.address,local:!p.includes('host='),agents:fixture.thread.agents.filter(a=>a.agent_id&&a.host.address===(new URL(p,location.origin).searchParams.get('host')||seed.overview.me.address)).map(a=>({record:{id:a.agent_id,label:a.host.address===seed.overview.me.address?'Prospect':'Analyst',host:a.host.address},enabled:true})),sessions:[]};
+if(p.startsWith('/api/agents'))return {host:body?.host||new URL(p,location.origin).searchParams.get('host')||seed.overview.me.address,local:!p.includes('host='),agents:fixture.thread.agents.filter(a=>a.agent_id&&a.host.address===(new URL(p,location.origin).searchParams.get('host')||seed.overview.me.address)).map(a=>({record:{id:a.agent_id,label:a.host.address===seed.overview.me.address?'Prospect':'Analyst',host:a.host.address,host_key:a.host.fingerprint},enabled:true})),sessions:[]};
 if(p==='/api/dm/agent/invite'){fixture.thread.agents[0].shared=body.share;changed?.({type:'change',seq:++fixture.overview.seq});return structuredClone(fixture.thread.agents[0]);}
 if(p==='/api/notify/allow'){fixture.overview.notify.allowed=body.allowed?['brin/desktop','brin/phone']:[];return {};}
 if(p==='/api/notify/mute'){fixture.overview.notify.mutes=body.muted?[...fixture.overview.notify.mutes,body.conv]:fixture.overview.notify.mutes.filter(id=>id!==body.conv);return {};}
@@ -346,6 +356,46 @@ if(process.env.AGENTNET_DECLINE_INVITATION_REGRESSION==='1'){
  }
  continue;
 }
+if(process.env.AGENTNET_TEAM_EDIT_REGRESSION==='1'){
+ const {page,context}=await openCase('team-tags');
+ try{
+  if(skin==='comic'){
+   if(width===390)await page.getByRole('button',{name:'Back to chats',exact:true}).click();
+   await page.getByRole('navigation',{name:'Main',exact:true}).getByRole('button',{name:width===1280?'Settings':'You',exact:true}).click();
+   await page.getByRole('button',{name:'People lists',exact:true}).click();
+   await page.getByLabel('New list name',{exact:true}).fill('Warehouse');
+   await page.getByRole('button',{name:'Create list',exact:true}).click();
+   await page.getByRole('dialog').getByText(/Everyone can use @Warehouse/).waitFor();
+   await page.getByRole('combobox',{name:/^Person/}).selectOption(brin.person);
+   await page.getByRole('button',{name:'Add person',exact:true}).click();
+   await page.getByRole('list',{name:'Members',exact:true}).getByText('Brin',{exact:true}).waitFor();
+   await page.getByRole('combobox',{name:/^Agent’s device/}).selectOption(brin.address);
+   await page.getByRole('combobox',{name:'Agent',exact:true}).selectOption('1'.repeat(32));
+   await page.getByRole('button',{name:'Add agent',exact:true}).click();
+  }else{
+   if(width===390){if(skin==='zoom')await page.getByRole('navigation',{name:'Zoom level',exact:true}).getByRole('button',{name:'Everyone',exact:true}).click();else await page.getByRole('button',{name:'Back to conversations',exact:true}).click();}
+   await page.getByRole('button',{name:'People',exact:true}).click();
+   await page.getByRole('button',{name:'New people or agent list…',exact:true}).click();
+   await page.locator('#team-name').fill('Warehouse');await page.locator('#dialog-ok').click();
+   await page.locator('.team-item button').filter({hasText:'Warehouse'}).click();
+   await page.getByRole('button',{name:'Add person…',exact:true}).click();
+   await page.getByRole('dialog').getByLabel('Person',{exact:true}).selectOption(brin.person);await page.locator('#dialog-ok').click();
+   await page.getByRole('button',{name:'Add agent…',exact:true}).click();
+   await page.getByRole('dialog').getByLabel('Agent device',{exact:true}).selectOption(brin.address);
+   await page.getByRole('dialog').getByLabel('Agent',{exact:true}).selectOption('1'.repeat(32));await page.locator('#dialog-ok').click();
+  }
+  await page.waitForFunction(()=>fixture.teams[0]?.agents.length===1);
+  const t=await page.evaluate(()=>fixture.teams[0]);assert.equal(t.version,2);assert.deepEqual(t.members,[brin.person]);assert.deepEqual(t.agents,[{id:'1'.repeat(32),host:brin.address,host_key:brin.fingerprint}]);
+  assert.equal(await page.getByRole('button',{name:/^Join( list)?$/}).count(),0,'Explicit tag targets do not expose self-join');
+  await page.getByRole('button',{name:'Remove agent',exact:true}).waitFor();await settle(page);
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false,'Tag editor fits viewport');
+  const shot=path.join(evidence,skin+'-team-edit-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
+  await page.getByRole('button',{name:'Remove agent',exact:true}).click();await page.waitForFunction(()=>fixture.teams[0].agents.length===0);
+  assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>['/api/dm/agent/ask','/api/dm/agent/invite','/api/groups/invite','/api/dm/send'].includes(r.path)).length),0,'Editing a tag never invites or dispatches');
+ }catch(e){const shot=path.join(evidence,skin+'-team-edit-failure-'+width+'.png');await page.screenshot({path:shot});console.error(JSON.stringify({skin,width,shot,errors,text:await page.locator('#skin').evaluate(e=>e.shadowRoot.innerText||e.shadowRoot.textContent)}));throw e;}
+ finally{await context.close();}
+ continue;
+}
 if(process.env.AGENTNET_MULTI_AGENT_REGRESSION==='1'){
  const {page,context}=await openCase('multi-agent');
  try{
@@ -359,9 +409,19 @@ if(process.env.AGENTNET_MULTI_AGENT_REGRESSION==='1'){
    assert.equal(await options.count(),2,'both same-label agents must be offered');
    await options.nth(index).click();
   };
-  await pick(0);await pick(1);
+  if(process.env.AGENTNET_COLLECTIVE_TAGS==='1'){
+   for(const name of ['everyone','Reviewers']){
+    await field.press('End');await field.pressSequentially('@'+name);
+    const option=skin==='comic'?page.getByRole('option').filter({hasText:name}):page.locator('.mention-row').filter({hasText:name});
+    await option.waitFor({state:'visible'});if(name==='everyone'){const shot=path.join(evidence,skin+'-tag-picker-'+width+'.png');await settle(page);await page.screenshot({path:shot});shots.push(shot);}await option.click();
+   }
+   assert.match(await field.inputValue(),/@Brin/,'mixed tag includes exact human attention');
+   assert.equal((await field.inputValue()).match(/@Brin/g).length,1,'overlapping tags do not repeat a person mention');
+   assert.equal((await field.inputValue()).match(/@Analyst/g).length,2,'overlapping tags retain two distinct agents exactly once');
+  }else{await pick(0);await pick(1);}
+
   // Edit the first mention away, preserving the second, then select it again.
-  await field.press('Home');for(let i=0;i<'@Analyst '.length;i++)await field.press('Delete');
+  const firstAgent=(await field.inputValue()).indexOf('@Analyst');await field.press('Home');for(let i=0;i<firstAgent;i++)await field.press('ArrowRight');for(let i=0;i<'@Analyst '.length;i++)await field.press('Delete');
   await pick(0);await field.pressSequentially('Compare warehouse inventory');
   const file=skin==='comic'?page.locator('form[aria-label="Write a message"] input[type=file]'):skin==='zoom'?page.locator('#write-files'):page.locator('#file-input');
   await file.setInputFiles({name:'inventory.txt',mimeType:'text/plain',buffer:Buffer.from('synthetic inventory')});
