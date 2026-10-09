@@ -449,6 +449,7 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
    const fourth=four.devices.find(d=>d.address===fourthAddress),fourthCopies=()=>w.st.all('outbox').then(rows=>rows.filter(r=>r.to===fourthAddress&&r.sub==='history').sort((a,b)=>(a.send_order??a.at)-(b.send_order??b.at)));
    await w.e.historyStep(fourth,(await w.e.historyBook())[fourthAddress]);
    const firstPage=(await fourthCopies()).map(r=>wire.parseHistory(r.body));
+   const filling=(await w.e.overview()).history.find(j=>j.device===fourthAddress);check(filling.state==='running'&&filling.done===0&&filling.total===0,'recent-first backfill does not reuse a completed conversation count');
    check(firstPage.length===51&&firstPage[0].lid===pageItems[0].lid&&firstPage.slice(1).every((h,i)=>h.body==='newest-page-'+(56-i)),'first bounded group history page is newest first with its exact old reply dependency queued before display');
    const during={...delayed,id:wire.newID(),lid:wire.newID(),at:at-86400000,body:'late arrival while older backfill runs'};await accept(during);
    await w.e.historyStep(fourth,(await w.e.historyBook())[fourthAddress]);
@@ -460,6 +461,7 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
    // A missing group context must retain its source ref while a healthy DM
    // continues in the same page. Restored proof wakes the existing deferral.
    const blocked={...delayed,id:wire.newID(),lid:wire.newID(),at:at-86400001,body:'wait for exact context'};await accept(blocked);
+   check((await w.e.overview()).history.find(j=>j.device===fourthAddress).state==='running','accepted late history keeps progress unfinished until its arrival tail is queued');
    const alice=await w.st.get('persons',v.challenge.rosters[0].person),dmRoot=await wire.newRoot(keys,{person:four.person,roster:four.hash,address,fingerprint:w.e.fp},{person:alice.person,roster:alice.hash}),dm=await wire.rootID(dmRoot);
    const dmInner={v:2,id:wire.newID(),lid:wire.newID(),from:alicePub.address,to:address,ts:1700000000,kind:'message',conv:dm,root:wire.rootJSON(dmRoot),body:'healthy other chat while group proof waits',origin:'ui'};
    const dmEnvelope=await wire.seal(dmInner,aliceKeys,pub),dmOps=await w.e.admitInner(dmEnvelope,wire.parseEnvelope(dmEnvelope));await w.st.write(dmOps,dmOps.checks);
@@ -468,10 +470,15 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
    check(!more&&(await fourthCopies()).some(r=>wire.parseHistory(r.body).lid===dmInner.lid)&&!(await fourthCopies()).some(r=>wire.parseHistory(r.body).lid===blocked.lid),'missing exact group context defers one source without blocking healthy chat or busylooping');
    const deferred=await w.st.prefix('kv','history-deferred/'+fourthFP+'/');
    check(deferred.some(r=>r.id===blocked.id)&&JSON.stringify((await w.e.historyBook())[fourthAddress].pos)===oldPos,'unavailable accepted source stays durable while legacy completed cursor is preserved');
+   const pendingProgress=(await w.e.overview()).history.find(j=>j.device===fourthAddress);
+   check(pendingProgress.state==='running'&&pendingProgress.done===0&&pendingProgress.total===0,'persisted deferred history never claims all chats queued');
+   const durableBook=JSON.stringify(await w.e.historyBook());await w.reload();w.e.groupSupport=async()=>{};
+   check((await w.e.overview()).history.find(j=>j.device===fourthAddress).state==='running'&&JSON.stringify(await w.e.historyBook())===durableBook,'unfinished history projection survives restart without changing stored cursors or jobs');
    const heldCount=(await fourthCopies()).length;await w.e.historyStep(fourth,(await w.e.historyBook())[fourthAddress]);
    check((await fourthCopies()).length===heldCount,'unchanged proof does not repeat a deferred attempt during internal drain');
    await w.st.write([{s:'kv',k:'group/'+conv,v:group}]);await w.e.runHistory();
    check((await fourthCopies()).filter(r=>wire.parseHistory(r.body).lid===blocked.lid).length===1&&!(await w.st.prefix('kv','history-deferred/'+fourthFP+'/')).some(r=>r.id===blocked.id),'existing proof wake recovers retained source exactly once after context restoration');
+   check((await w.e.overview()).history.find(j=>j.device===fourthAddress).state==='done','history projection finishes only after deferred source is actually queued');
    // A v1 completed job had neither acceptance watermark nor copy metadata.
    // Upgrade reconciles accepted rows once, retaining its exact old cursor.
    const missed={...delayed,id:wire.newID(),lid:wire.newID(),at:at-86400002,body:'accepted before upgrade after legacy snapshot completed'};await accept(missed);

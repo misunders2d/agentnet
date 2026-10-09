@@ -84,3 +84,13 @@ for(const skin of ["classic","zoom","comic"]) {
  for(const member of [false,true])assert.match(draft(member),/https:\/\/github.com\/misunders2d\/agentnet\/releases/,skin+" always includes update link");
 }
 console.log("PASS delivery and receipt checks");
+
+// Snapshot completion proves local queueing, never receipt by the other device.
+for(const skin of ["classic","zoom","comic"]) {
+ const source=await readFile(new URL(skin==="comic"?"../web/src/features/Settings.profile.tsx":"../skins/"+skin+"/src/entry.mjs",import.meta.url),"utf8");
+ const raw=source.match(skin==="comic"?/function copyWords[\s\S]*?\n}/:/function historyLine[\s\S]*?\n}/)[0];
+ const words=runInNewContext("("+(skin==="comic"?stripTypeScriptTypes(raw):raw)+")",{state:{overview:{device:{}}}});
+ assert.equal(words({state:"done",name:"phone",done:4,total:4}),"History queued · keep AgentNet running here",skin+" queued is not delivered");
+ assert(words({state:"running",name:"phone",done:0,total:0}).startsWith("Getting your chats…"),skin+" unknown deferred progress stays unfinished");
+ assert(/stopped/.test(words({state:"ended",name:"phone",done:4,total:4})),skin+" ended stays stopped");
+}

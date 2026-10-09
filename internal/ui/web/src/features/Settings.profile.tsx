@@ -225,7 +225,7 @@ export function DevicesSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingE
 }
 
 function copyWords(h: T.HistoryCopy): string {
-  if (h.state === "done") return "Has your chats";
+  if (h.state === "done") return "History queued · keep AgentNet running here";
   if (h.state === "ended") return "Copying your chats stopped: it’s no longer your device";
   if (!h.total) return "Getting your chats…";
   return "Copying your chats · " + h.done + " of " + h.total + " · while AgentNet runs here";

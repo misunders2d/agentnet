@@ -690,9 +690,7 @@ export class Engine {
     const reader = r.body.getReader(), chunks = [];
     let size = 0;
     try {
-      // A linked event ends the approval stream between reads. Some readers
-      // do not reject a later read after cancellation; reconnect immediately.
-      while (!ctrl.signal.aborted) {
+      for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
         size += value.length;
@@ -7063,7 +7061,17 @@ export class Engine {
     const held = (await this.store.all("held")).filter(h => !h.notice_archived);
     const now = Math.floor(this.now() / 1000);
     const link = this.link && !["linked", ""].includes(this.link.state) ? { state: this.link.state === "pending" && now >= this.link.expires ? "expired" : this.link.state, detail: this.link.detail || "" } : undefined;
-    const history = Object.values(await this.historyBook()).map((j) => ({ device: j.device, name: j.device.split("/")[1], done: j.done, total: j.total, state: j.state }));
+    const arrival=await this.store.get("kv","history-arrival")||0;
+    const history = await Promise.all(Object.values(await this.historyBook()).map(async j => {
+      let {done,total,state}=j;
+      if(j.catchup && ["running","done"].includes(state)) {
+        const prefix="history-deferred/"+j.fingerprint+"/";
+        if(j.catchup.stage!=="tail" || j.catchup.tail<arrival || (await this.store.after("kv",prefix,1)).some(ref=>ref?.key?.startsWith(prefix))) {
+          state="running";done=total=0; // unknown remaining work; never project the legacy completed count
+        }
+      }
+      return {device:j.device,name:j.device.split("/")[1],done,total,state};
+    }));
     const asks = (await this.linkRequests()).filter((r) => r.state === "pending")
       .map((r) => ({ id: r.id, address: r.address, name: r.address.split("/")[1], fingerprint: r.fingerprint, requested_at: iso(r.requested_at * 1000), expires: iso(r.expires * 1000), state: r.state }));
     return {
