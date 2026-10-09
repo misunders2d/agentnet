@@ -279,6 +279,11 @@ func Open(home string) (*Agent, error) {
 		st.db.Close()
 		return nil, err
 	}
+	if err := a.recoverInvalidStatuses(); err != nil {
+		a.hub.release()
+		st.db.Close()
+		return nil, err
+	}
 	a.hub.workspaceCheck = a.WorkspaceRequestGuard()
 	a.typing.groupMembers = a.GroupMembers // verified effective group membership (groups.go); never the frozen root
 	return a, nil

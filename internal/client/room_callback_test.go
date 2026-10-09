@@ -231,13 +231,20 @@ printf '%s' "$AGENTNET_ROOM_REQUEST" > "$CALLBACK_DIR/c0"
 			}{w.bob, replyLID(w.alice, readID("c0")), firstPID, w.alice.Self().Fingerprint()})
 		}
 		for _, edge := range edges {
-			var reply ConvMessage
 			eventually(t, "verified reply to "+edge.id, func() bool {
-				var n int
-				reply, n = convMsg(t, edge.host, conv, func(m ConvMessage) bool { return m.Kind == envelope.KindAnswer && m.ReplyTo == edge.id })
-				return n == 1
+				var stored bool
+				// Avoid repeatedly decorating the whole room while its harnesses
+				// unwind through the same serialized database connection.
+				err := edge.host.store.db.QueryRow(`SELECT EXISTS(
+					SELECT 1 FROM inbox WHERE conv=? AND kind='answer' AND reply_to=?
+					UNION ALL SELECT 1 FROM outbox WHERE conv=? AND kind='answer' AND reply_to=?)`, conv, edge.id, conv, edge.id).Scan(&stored)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return stored
 			})
-			if !reply.VerifiedAgent || reply.PID != edge.pid || reply.Key != edge.key || !strings.Contains(reply.Body, "CALLBACK_COMPLETE") {
+			reply, n := convMsg(t, edge.host, conv, func(m ConvMessage) bool { return m.Kind == envelope.KindAnswer && m.ReplyTo == edge.id })
+			if n != 1 || !reply.VerifiedAgent || reply.PID != edge.pid || reply.Key != edge.key || !strings.Contains(reply.Body, "CALLBACK_COMPLETE") {
 				t.Fatalf("wrong correlated reply: %+v", reply)
 			}
 		}

@@ -66,8 +66,14 @@ destination guests, exact selected encrypted files, stale audience/source review
 and same-operation retry. The first combined qualification found stale fixtures
 and a real cancellation race. The corrective batch and retained passing evidence
 are recorded at the top of the release checklist; it is not published yet. A
-measured worker-query planning regression is under focused correction before the
-next qualification.
+measured worker-query planning regression is corrected and reviewed. The final
+named callback race passes with unchanged bounds; earlier deadline failures,
+including on pre-feature source, remain recorded. A further signed regression
+found that a completion status arriving before its request could be permanently
+rejected. Native and browser fixes pass focused checks, including retained native
+invalid records and browser proof-pending records. Exact executor pins are
+rechecked through delayed recovery and atomic admission. The final focused race
+check passes 29.082 s and vet is clean; the next combined qualification is ready.
 
 **October 9 evening correction:** MEL-588 rejected-history flood and MEL-580
 answered requests remaining pending are mandatory v0.8.15 fixes. The active

@@ -429,6 +429,10 @@ func (a *Agent) endJob(id, state, detail string) error {
 // sender's device. A status answering a decision (Decision set) is kept
 // when this device sent that decision to the sender.
 func (a *Agent) statusAllowed(in envelope.Inner, from, senderFP string) (bool, string) {
+	return a.statusAllowedIn(a.store.db, in, from, senderFP)
+}
+
+func (a *Agent) statusAllowedIn(q dbq, in envelope.Inner, from, senderFP string) (bool, string) {
 	var st envelope.Status
 	if json.Unmarshal([]byte(in.Body), &st) != nil {
 		return false, "malformed status"
@@ -442,7 +446,7 @@ func (a *Agent) statusAllowed(in envelope.Inner, from, senderFP string) (bool, s
 			return false, "a conversation request takes no remote decision"
 		}
 		var body string
-		err := a.store.db.QueryRow(`SELECT body FROM outbox WHERE id = ? AND recipient = ? AND sub = ? AND conv IS NULL AND ref_id = ? AND ref_fp = ?`,
+		err := q.QueryRow(`SELECT body FROM outbox WHERE id = ? AND recipient = ? AND sub = ? AND conv IS NULL AND ref_id = ? AND ref_fp = ?`,
 			st.Decision, from, envelope.SubDecision, in.Ref.ID, in.Ref.Fingerprint).Scan(&body)
 		if err != nil {
 			return false, "it answers a decision this device did not send there about that request"
@@ -454,7 +458,7 @@ func (a *Agent) statusAllowed(in envelope.Inner, from, senderFP string) (bool, s
 		return true, ""
 	}
 	if in.Conv == "" {
-		a.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE id = ? AND recipient = ? AND conv IS NULL AND ref_id IS NULL AND ? = ?
+		q.QueryRow(`SELECT count(*) FROM outbox WHERE id = ? AND recipient = ? AND conv IS NULL AND ref_id IS NULL AND ? = ?
 			AND coalesce(kind, json_extract(envelope, '$.kind')) IN (?, ?)`,
 			in.Ref.ID, from, in.Ref.Fingerprint, a.Self().Fingerprint(), envelope.KindQuestion, envelope.KindTask).Scan(&n)
 		if n == 0 {
@@ -464,7 +468,7 @@ func (a *Agent) statusAllowed(in envelope.Inner, from, senderFP string) (bool, s
 	}
 	// A conversation request: that logical id, from that requester key, of
 	// a request kind, whose one target is the sender's device.
-	a.store.db.QueryRow(`SELECT (SELECT count(*) FROM inbox WHERE conv = ? AND lid = ? AND json_extract(target, '$.address') = ? AND json_extract(target, '$.fingerprint') = ? AND coalesce(verified_by, claimed_fp, '') = ? AND kind IN (?, ?))
+	q.QueryRow(`SELECT (SELECT count(*) FROM inbox WHERE conv = ? AND lid = ? AND json_extract(target, '$.address') = ? AND json_extract(target, '$.fingerprint') = ? AND coalesce(verified_by, claimed_fp, '') = ? AND kind IN (?, ?))
 		+ (SELECT count(*) FROM outbox WHERE conv = ? AND lid = ? AND json_extract(target, '$.address') = ? AND json_extract(target, '$.fingerprint') = ? AND ? = ? AND kind IN (?, ?))`,
 		in.Conv, in.Ref.ID, from, senderFP, in.Ref.Fingerprint, envelope.KindQuestion, envelope.KindTask,
 		in.Conv, in.Ref.ID, from, senderFP, in.Ref.Fingerprint, a.Self().Fingerprint(), envelope.KindQuestion, envelope.KindTask).Scan(&n)

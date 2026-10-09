@@ -102,6 +102,12 @@ func (a *Agent) admitGroupParticipationStatus(ctx context.Context, env envelope.
 	}
 	ref := ControlRef{Conv: in.Conv, ID: in.Ref.ID, Fingerprint: in.Ref.Fingerprint}
 	check := func(q dbq) error {
+		if e := statusSenderCheck(q, sender); e != nil {
+			return e
+		}
+		if e := statusRecoveryCheck(q, env.From, env.ID); e != nil {
+			return e
+		}
 		if _, e := a.groupStatusScope(q, ref, sender.Address, sender.Fingerprint()); e != nil {
 			return e
 		}
@@ -112,6 +118,9 @@ func (a *Agent) admitGroupParticipationStatus(ctx context.Context, env envelope.
 		return groupTurnCheck(q, current, a.Address, a.Self().Fingerprint())
 	}
 	if err = check(a.store.db); err != nil {
+		if errors.Is(err, errStatusRecoveryAuthority) {
+			return hold(reasonKeyChanged, err.Error())
+		}
 		if errors.Is(err, ErrGroupContextPending) {
 			return hold(reasonProof, err.Error())
 		}

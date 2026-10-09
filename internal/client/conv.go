@@ -1157,12 +1157,18 @@ func (a *Agent) retryProof(ctx context.Context) (more bool) {
 		if err := historyRecoveryCheck(a.store.db, env.From, env.ID); err != nil {
 			continue
 		}
+		if err := statusRecoveryCheck(a.store.db, env.From, env.ID); err != nil {
+			continue
+		}
 		sender, _, found, err := a.store.peer(env.From)
 		if err != nil || !found {
 			continue
 		}
 		in, err := envelope.Open(env, a.id, a.Address, sender)
 		if err != nil || (in.V != envelope.Version2 && in.V != envelope.Version3) {
+			continue
+		}
+		if in.Sub == envelope.SubStatus && in.Conv != "" && statusSenderCheck(a.store.db, sender) != nil {
 			continue
 		}
 		admit := a.admitConv

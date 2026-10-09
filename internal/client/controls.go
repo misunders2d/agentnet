@@ -840,13 +840,36 @@ func (a *Agent) admitControl(ctx context.Context, env envelope.Envelope, in enve
 		return a.admitClear(ctx, env, in, sender, fromQuarantine, hold)
 	}
 	if in.Conv != "" {
-		if root, _, found, e := a.store.conversation(in.Conv); e != nil {
+		root, _, found, e := a.store.conversation(in.Conv)
+		if e != nil {
 			return e
-		} else if found && root.Kind == protocol.ConvKindGroup && in.Sub == envelope.SubStatus {
-			if ok, why := a.statusAllowed(in, env.From, sender.Fingerprint()); !ok {
-				return hold(reasonInvalid, why)
+		}
+		if in.Sub == envelope.SubStatus {
+			if e := statusSenderCheck(a.store.db, sender); e != nil {
+				if errors.Is(e, errStatusRecoveryAuthority) {
+					return hold(reasonKeyChanged, e.Error())
+				}
+				return e
 			}
-			return a.admitGroupParticipationStatus(ctx, env, in, sender, fromQuarantine, hold)
+			if e := statusRecoveryCheck(a.store.db, env.From, env.ID); e != nil {
+				return e
+			}
+			if !found {
+				return hold(reasonProof, "the conversation is not here (yet)")
+			}
+			// A status can precede the original fan at another reader. Keep
+			// its exact ciphertext; known foreign originals stay invalid.
+			if e := a.groupControlTarget(a.store.db, in); errors.Is(e, ErrGroupContextPending) {
+				return hold(reasonProof, e.Error())
+			} else if e != nil {
+				return hold(reasonInvalid, e.Error())
+			}
+			if root.Kind == protocol.ConvKindGroup {
+				if ok, why := a.statusAllowed(in, env.From, sender.Fingerprint()); !ok {
+					return hold(reasonInvalid, why)
+				}
+				return a.admitGroupParticipationStatus(ctx, env, in, sender, fromQuarantine, hold)
+			}
 		} else if found && root.Kind == protocol.ConvKindGroup && !groupControlSub(in.Sub) {
 			return hold(reasonInvalid, "group: this control requires its own addressed authority")
 		}
@@ -1005,6 +1028,14 @@ func (a *Agent) admitControl(ctx context.Context, env envelope.Envelope, in enve
 		forward = a.forwardStaleWithControlProof(me, in, sender.Fingerprint(), raw, &groupControlIngressProof{in: in, key: sender.Fingerprint(), admission: groupAdmission}, groupAdmission)
 	}
 	also := func(tx *sql.Tx) error {
+		if in.Sub == envelope.SubStatus {
+			if e := statusSenderCheck(tx, sender); e != nil {
+				return e
+			}
+			if e := statusRecoveryCheck(tx, env.From, env.ID); e != nil {
+				return e
+			}
+		}
 		if group != nil {
 			if e := checkGroup(tx); e != nil {
 				return e

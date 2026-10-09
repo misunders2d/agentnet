@@ -56,6 +56,7 @@ for (const room of [false,true]) {
  const st=memoryStore(),conv='a'.repeat(64),topic='b'.repeat(32),fp='11111111-22222222-33333333-44444444',hostFP='aaaaaaaa-bbbbbbbb-cccccccc-dddddddd';
  const fresh=()=>{const e=new Engine({store:st,base:'https://synthetic.invalid',fetch:async()=>{throw Error('unexpected network')},now:()=>10000});e.address='own/phone';e.fp=fp;return e;};
  let e=fresh(),seq=10;
+ await st.write([{s:'pins',k:'peer/desk',v:{address:'peer/desk',fingerprint:hostFP,pending:null}}]);
  const ids=['1'.repeat(32),'2'.repeat(32),'3'.repeat(32)];
  await st.write(ids.map((id,i)=>({s:'outbox',k:id,v:{id,lid:id,conv,to:'peer/desk',state:'delivered',kind:'task',body:'retained request',topic,ts:i+1,at:(i+1)*1000,target:{address:'peer/desk',fingerprint:hostFP}}})));
  const status=async(id,state,n,key=fp,host='peer/desk')=>{

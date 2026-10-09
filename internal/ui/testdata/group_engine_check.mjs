@@ -19,7 +19,7 @@ export async function consent(challenge) {
  const a = await wire.signGroupAdmission(keys,{conv:await wire.rootID(root),realm:root.realm,person:roster.person,roster:await wire.rosterHash(roster),seq:0,prev:'',history:null,by:await wire.fingerprint(pub)});
  return wire.groupAdmissionJSON(a);
 }
-export async function checks(v, realIDB=false, requireWarmRecovery=false, controlHistoryOnly=false, backgroundOnly=false,receiverOnly=false,receiptRepairOnly=false,topicOnly=false) {
+export async function checks(v, realIDB=false, requireWarmRecovery=false, controlHistoryOnly=false, backgroundOnly=false,receiverOnly=false,receiptRepairOnly=false,topicOnly=false,statusReorderOnly=false) {
  if(receiptRepairOnly)return carrierReceiptRepair(realIDB);
  const labels=[], check=(ok,label)=>{assert(ok,label);labels.push(label);};
  const root=wire.parseGroupRoot(v.challenge.root), conv=await wire.rootID(root), states=v.states.map(wire.parseGroupState), records=v.commits.map(wire.parseGroupCommit), c=v.carriers;
@@ -72,6 +72,29 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false, contro
  const quiet=async(w)=>{for(const s of ['inbox','outbox','convs','lids'])check((await w.st.all(s)).length===0,'quiet '+s);check((await w.e.overview()).threads.length===0,'no visible threads');for(const x of await w.st.all('held'))check(!('body'in x)&&!('plaintext'in x),'held has ciphertext only');for(const x of await w.st.all('files'))check(x.ct instanceof Uint8Array&&!('body'in x),'files ciphertext only');};
  if(receiverOnly){const profile=await receiverProfile({world,check,realIDB,c,root,conv,keys,address,roster,pub});return {ok:true,storage:profile.storage,checks:labels.length,labels,profile};}
  if(topicOnly){await participationTopics({world,check,c,root,conv,keys,address,pub,alicePub,aliceKeys,v});return {ok:true,storage:realIDB?"real IndexedDB":"memory unit only",checks:labels.length,labels};}
+ if(statusReorderOnly) {
+  const w=await world();try {
+   const pv=v.participations,status=pv['p6-status'],ask=pv['p6-ask'];
+   await w.receive(c.proof);await w.receive(c.context);
+   for(const i of [0,1])for(const type of ['invite','scope','accept'])await w.receive(pv['p6-'+i+'-'+type]);
+   await w.receive(pv['p6-root']);
+   await w.e.onMessage(status.envelope);if(w.e.retrying)await w.e.retrying;
+   check((await w.st.get('held',status.inner.id))?.reason==='proof_pending','signed group status before exact original waits for proof');
+   check(!await w.st.get('inbox',status.inner.id)&&(await w.st.get('receipts',status.inner.id))?.state==='quarantined','missing original does not authorize status or delivered receipt');
+   check((await w.st.get('held',status.inner.id)).envelope===status.envelope,'proof hold retains exact signed ciphertext');
+   await w.e.onMessage(status.envelope);check((await w.st.all('held')).filter(r=>r.id===status.inner.id).length===1,'duplicate preserves one pending group status identity');
+   await w.reload();check((await w.st.get('held',status.inner.id))?.reason==='proof_pending','pending group status survives storage reload');
+   await w.e.onMessage(ask.envelope);if(w.e.retrying)await w.e.retrying;
+   check(!await w.st.get('held',status.inner.id)&&(await w.st.get('inbox',status.inner.id))?.sub===wire.SubStatus,'original admission automatically recovers same status without manual retry');
+   check((await w.st.get('receipts',status.inner.id))?.state==='delivered','delivered status receipt follows proven admission');
+   check((await w.e.groupThread(conv)).messages.find(m=>m.lid===ask.inner.lid)?.exec?.state==='awaiting','recovered status retains exact logical request binding');
+   await w.e.onMessage(status.envelope);check((await w.st.all('inbox')).filter(r=>r.id===status.inner.id).length===1,'recovered group status replay does not duplicate');
+   const wrong={...status.inner,id:wire.newID(),lid:wire.newID(),from:alicePub.address,to:address};
+   await w.e.onMessage(await wire.seal(wrong,aliceKeys,pub));if(w.e.retrying)await w.e.retrying;
+   check((await w.st.get('held',wrong.id))?.reason==='invalid'&&!await w.st.get('inbox',wrong.id),'known wrong group status host remains invalid');
+   return {ok:true,storage:realIDB?'real IndexedDB':'memory unit only',checks:labels.length,labels};
+  }finally{await w.close();}
+ }
  let w;
  try{
   // Background disclosure coalesces a burst, including a failed active pass.
@@ -1412,4 +1435,4 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false, contro
   return {ok:true,storage:realIDB?'real IndexedDB':'memory unit only',checks:labels.length,labels};
  }catch(e){if(w)await w.close().catch(()=>{});throw e;}
 }
-if(globalThis.process?.versions?.node){const {createInterface}=await import('node:readline');for await(const line of createInterface({input:process.stdin})){let out;try{const r=JSON.parse(line);out=r.op==='setup'?await setup():r.op==='consent'?{consent:await consent(r.challenge)}:await checks(r.vectors,false,r.op==='warm-regression',r.op==='control-history',r.op==='background-regression',r.op==='receiver-regression',r.op==='receipt-repair',r.op==='topic-participation');}catch(e){out={error:e.stack};}process.stdout.write(JSON.stringify(out)+'\n');}}
+if(globalThis.process?.versions?.node){const {createInterface}=await import('node:readline');for await(const line of createInterface({input:process.stdin})){let out;try{const r=JSON.parse(line);out=r.op==='setup'?await setup():r.op==='consent'?{consent:await consent(r.challenge)}:await checks(r.vectors,false,r.op==='warm-regression',r.op==='control-history',r.op==='background-regression',r.op==='receiver-regression',r.op==='receipt-repair',r.op==='topic-participation',r.op==='status-reorder');}catch(e){out={error:e.stack};}process.stdout.write(JSON.stringify(out)+'\n');}}

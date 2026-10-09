@@ -5141,6 +5141,7 @@ export class Engine {
       if (ops.groupCarrier) this.retryHeld().catch(() => {});
       if (ops.groupCarrier) this.retryPendingReceives().catch(() => {});
       if (ops.directHistory) this.retryHeld().catch(() => {});
+      if (ops.some(o => o.s === "inbox" && o.v?.conv && !o.v.control && !o.v.sub && ["question", "task"].includes(o.v.kind))) this.retryHeld().catch(() => {});
       if (ops.groupCarrier) this.recoverGroupIntents().catch(() => {});
       if (this.connected && ops.some(o => o.s === "convs" || o.s === "kv" && o.k.startsWith("group/") && o.v?.context || o.s === "inbox" && o.v?.sub === "event")) {
         this.notifyState().then(st => st.enabled ? this.syncNotify() : undefined).catch(() => {});
@@ -6831,13 +6832,28 @@ export class Engine {
         const r = await this.store.get("outbox", ref.id);
         if (r && r.v === 1 && !r.control && !r.aside && (r.kind === "question" || r.kind === "task") && r.to === env.from && ref.fingerprint === this.fp) target = r;
       } else {
-        const rows = (await this.store.all("outbox")).filter((r) => r.conv === n.conv && !r.control && !r.aside && r.lid === ref.id && (r.kind === "question" || r.kind === "task"));
-        const mine = rows.find((r) => r.target && r.target.address === env.from && r.target.fingerprint === pin.fingerprint);
-        if (mine && ref.fingerprint === this.fp) target = mine;
+        const rows = (await this.authorityRows({ conv: n.conv, lid: ref.id }, checks)).filter(r => !r.control && !r.aside && (r.to ? this.fp : r.fp || r.claimed_key) === ref.fingerprint);
+        if (!rows.length) throw new Hold("proof_pending", "the exact original request is not here (yet)");
+        if (rows.some(r => r.sub || r.excerpt_pid || !["question", "task"].includes(r.kind) || r.target?.address !== env.from || r.target.fingerprint !== pin.fingerprint)) throw new Hold("invalid", "the status does not match the exact original request's executor");
+        const currentPin = await this.groupRead(checks, "pins", env.from);
+        if (!currentPin || currentPin.pending || currentPin.fingerprint !== pin.fingerprint) throw new Hold("key_changed", "the status executor's key changed");
+        target = rows[0];
+        if (rows.some(r => !r.to)) {
+          const conv = await this.groupRead(checks, "convs", n.conv);
+          if (!conv) throw new Hold("proof_pending", "the request's conversation is not here (yet)");
+          const members = await this.dmMembers(conv, null, checks);
+          const own = await this.groupRead(checks, "kv", "person");
+          if (own?.state !== "self" || !own.human_keys?.includes(this.fp) || !own.devices.some(d => d.address === this.address && d.fingerprint === this.fp) || !members.has(own.person)) throw new Hold("invalid", "the status reader is not a current own-human member");
+          const executor = [...members.values()].find(p => p.devices.some(d => d.address === env.from && d.fingerprint === pin.fingerprint));
+          const current = executor && await this.groupRead(checks, executor.person === own.person ? "kv" : "persons", executor.person === own.person ? "person" : executor.person);
+          const root = wire.parseRoot(conv.root);
+          if (!own.hashes.includes(wire.rootMember(root, own.person)) || !current || !["self", "pinned"].includes(current.state) || !current.hashes.includes(wire.rootMember(root, current.person)) || !current.devices.some(d => d.address === env.from && d.fingerprint === pin.fingerprint)) throw new Hold("invalid", "the status executor is not a current pinned member");
+        }
       }
       if (!target) throw new Hold("proof_pending", "no request of this device that " + env.from + " executes is here (yet)");
       Object.assign(rec, n.conv ? { conv: n.conv, lid: n.lid, replica: !!n.replica } : {});
-      return [{ s: "inbox", k: env.id, v: rec }];
+      const ops = [{ s: "inbox", k: env.id, v: rec }];
+      ops.checks = checks; return ops;
     }
     if (!n.conv && wire.assistantReaction(n)) return this.admitDeviceAssistantReaction(n, env, pin, rec);
     if (!n.conv) {
