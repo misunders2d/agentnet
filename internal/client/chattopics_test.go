@@ -171,7 +171,24 @@ func TestChatTopicHistoryAndOwnDeviceErasure(t *testing.T) {
 		t.Fatalf("seed topics: %v %v", topics, err)
 	}
 	id := topics[0].ID
-	if _, err = w.alice.ChangeChatTopic(ctx, conv, id, "done", "", 1); err != nil {
+	// Match the two stale own-device badges: 19 and 4 stored incoming
+	// copies, all displayed as this person's outgoing turns.
+	for i := 1; i < 19; i++ {
+		if _, err = w.alice.SendConv(ctx, conv, ConvOutgoing{Body: "Another own turn", Topic: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	other, err := w.alice.SendConv(ctx, conv, ConvOutgoing{Body: "Other topic", Topic: "new"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherTopic := convMsgByID(t, w.alice, conv, other.ID).Topic
+	for i := 1; i < 4; i++ {
+		if _, err = w.alice.SendConv(ctx, conv, ConvOutgoing{Body: "Other own turn", Topic: otherTopic}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err = w.alice.ChangeChatTopic(ctx, conv, id, "done", "", 19); err != nil {
 		t.Fatal(err)
 	}
 	original, err := w.alice.ConversationMessages(conv)
@@ -186,7 +203,17 @@ func TestChatTopicHistoryAndOwnDeviceErasure(t *testing.T) {
 	phone := linked(t, w.alice)
 	eventually(t, "closed topic on linked device", func() bool {
 		ts, e := phone.ChatTopics(conv)
-		return e == nil && len(ts) == 1 && ts[0].ID == id && ts[0].Count == 1 && ts[0].State == TopicDone
+		if e != nil || len(ts) != 2 {
+			return false
+		}
+		counts := map[string]int{}
+		for _, topic := range ts {
+			if topic.ID == id && topic.State != TopicDone {
+				return false
+			}
+			counts[topic.ID] = topic.Count
+		}
+		return counts[id] == 19 && counts[otherTopic] == 4
 	})
 	retained, err := phone.ConversationMessages(conv)
 	if err != nil {
@@ -200,6 +227,9 @@ func TestChatTopicHistoryAndOwnDeviceErasure(t *testing.T) {
 		for _, got := range retained {
 			if got.LID == want.LID {
 				found = true
+				if got.Dir != "out" || got.Via != w.alice.Address {
+					t.Fatalf("own-device history is not outgoing: %+v", got)
+				}
 				if got.Sent != want.Sent || got.Topic != want.Topic || !reflect.DeepEqual(got.TopicEvent, want.TopicEvent) {
 					t.Fatalf("retained topic differs: got %+v want %+v", got, want)
 				}
@@ -209,17 +239,85 @@ func TestChatTopicHistoryAndOwnDeviceErasure(t *testing.T) {
 			t.Fatalf("missing retained turn %s", want.LID)
 		}
 	}
+	assertUnread := func(want map[string]int) {
+		t.Helper()
+		ts, e := phone.ChatTopics(conv)
+		if e != nil {
+			t.Fatal(e)
+		}
+		got := map[string]int{}
+		for _, topic := range ts {
+			got[topic.ID] = topic.Unread
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("linked topic unread: got %v, want %v", got, want)
+		}
+	}
+	assertUnread(map[string]int{id: 0, otherTopic: 0})
+	// Genuine incoming turns remain unread. An exact read on one device
+	// clears only that turn on the linked reader, not the newer unseen one.
+	for _, body := range []string{"Read this foreign turn", "New unseen foreign turn"} {
+		if _, err = w.bob.SendConv(ctx, conv, ConvOutgoing{Body: body, Topic: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	eventually(t, "foreign turns reach both own devices", func() bool {
+		_, a := convMsg(t, w.alice, conv, func(m ConvMessage) bool { return m.From == w.bob.Address && m.Topic == id })
+		_, p := convMsg(t, phone, conv, func(m ConvMessage) bool { return m.From == w.bob.Address && m.Topic == id })
+		return a == 2 && p == 2
+	})
+	assertUnread(map[string]int{id: 2, otherTopic: 0})
+	readID, _ := readState(t, w.alice, conv, "Read this foreign turn")
+	if err = w.alice.MarkRead([]string{readID}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "exact topic read reaches linked device", func() bool {
+		_, read := readState(t, phone, conv, "Read this foreign turn")
+		return read
+	})
+	if _, read := readState(t, phone, conv, "New unseen foreign turn"); read {
+		t.Fatal("new unseen foreign turn marked read")
+	}
+	assertUnread(map[string]int{id: 1, otherTopic: 0})
 	if _, err = w.alice.ChangeChatTopic(ctx, conv, id, "delete", "", 0); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "erased on own linked device", func() bool {
 		msgs, e := phone.ConversationMessages(conv)
-		return e == nil && len(msgs) == 1 && msgs[0].LID == main.LID
+		return e == nil && len(msgs) == 5 && msgs[0].LID == main.LID
 	})
 	eventually(t, "other person retains topic", func() bool {
 		_, n := convMsg(t, w.bob, conv, func(m ConvMessage) bool { return m.LID == seed.LID })
 		return n == 1
 	})
+}
+
+func TestChatTopicOwnAgentAnswerUnread(t *testing.T) {
+	stub := installAgentStub(t)
+	w, conv, _ := dmFiles(t)
+	setResponder(t, w.alice, "agentstub", stub.dir, time.Minute)
+	p, err := w.alice.InviteAgent(tctx(t), conv, w.alice.Address, nil, nil, "")
+	if err != nil || !p.Claimable() {
+		t.Fatalf("own agent: %+v %v", p, err)
+	}
+	q, err := w.alice.AskAgentInTopic(tctx(t), p.PID, envelope.KindQuestion, "Own agent topic", "new", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	answer := replyAt(t, w.alice, conv, q.ID)
+	phone := linked(t, w.alice)
+	eventually(t, "own agent answer reaches linked device", func() bool {
+		m, n := convMsg(t, phone, conv, func(m ConvMessage) bool { return m.LID == answer.LID })
+		return n == 1 && m.VerifiedAgent
+	})
+	m, _ := convMsg(t, phone, conv, func(m ConvMessage) bool { return m.LID == answer.LID })
+	if m.Kind != envelope.KindAnswer || m.Dir != "out" || m.Via != w.alice.Address {
+		t.Fatalf("own agent answer direction: %+v", m)
+	}
+	topics, err := phone.ChatTopics(conv)
+	if err != nil || len(topics) != 1 || topics[0].Count != 2 || topics[0].Unread != 0 {
+		t.Fatalf("own agent topic unread: %+v %v", topics, err)
+	}
 }
 
 // Topic metadata participates in logical-copy and selected-history commitments.

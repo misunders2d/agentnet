@@ -106,7 +106,9 @@ func (a *Agent) ChatTopics(conv string) ([]ThreadSummary, error) {
 	assigned := ChatTopicAssignments(msgs)
 	for i := range ts {
 		for _, m := range msgs {
-			if assigned[m.LID] == ts[i].ID && m.TopicEvent == nil && ids[m.ID] {
+			// Own-device copies are stored in inbox but shown as outgoing,
+			// so they cannot be unread in the timeline or its topic badge.
+			if m.Dir == "in" && assigned[m.LID] == ts[i].ID && m.TopicEvent == nil && ids[m.ID] {
 				ts[i].Unread++
 			}
 		}
