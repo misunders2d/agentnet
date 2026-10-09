@@ -160,12 +160,38 @@ The release-record commit changes documentation only; application source remains
 identical to that qualified revision. Final packaging passed its native shell
 and Linux AppImage replacement/restart gates before publication and relay rollout.
 
-Next-release scope from the owner, explicitly excluded from this release:
-MEL-525 own-human task grants using the existing permission machinery;
-MEL-502 collective tags, prepared on `feat/mel-502-collective-tags` at
-`4fc197192c46bdb9d34ca4f76df099f2dda23104`; and MEL-526's future Comic-only
-bundling with optional Classic/Zoom moved to `agentnet-skins`. Shared topic
-names across all participants remain a recommendation, not approved scope.
+### Follow-up release scope — v0.8.12
+
+The October 9 post-release Herdr handoff and direct Linear reads confirm these
+outstanding requirements. They are scope, not implementation or shipment claims:
+
+- [MEL-580](https://linear.app/mellanni/issue/MEL-580): the owner still sees the
+  agent topic marked WAITING after v0.8.11. This issue was explicitly unresolved
+  in v0.8.11; `topicOpen`/`deriveTopic` pending calculations were unchanged.
+  Identify the exact contributing requests and their reply/status aliases.
+  If stale, repair the source transition and recovery of existing affected state;
+  if genuinely pending, expose the exact request with the appropriate existing
+  action. Verify pre-upgrade history, multiple requests, restart and native/browser
+  parity. An unrelated later answer must not resolve another request, and diagnosis
+  must not silently rerun, cancel or close work.
+- [MEL-551](https://linear.app/mellanni/issue/MEL-551): make an available update
+  prominent, with its target version as the heading and the existing Update
+  AgentNet action adjacent. Hide or subordinate old update-success text when a
+  newer version exists. Reuse discovery and installation, preserve explicit-click
+  installation and truthful current/checking/error/in-progress states, and verify
+  Comic desktop and narrow layouts. No updater lifecycle redesign or polling.
+- [MEL-525](https://linear.app/mellanni/issue/MEL-525): own-human task grants are
+  required immediately after v0.8.11. Reuse the existing verified-person grants,
+  native permission boundaries and revocations; no live grant changes during work.
+- [MEL-502](https://linear.app/mellanni/issue/MEL-502): collective tags are prepared
+  on `feat/mel-502-collective-tags` at
+  `4fc197192c46bdb9d34ca4f76df099f2dda23104`; integrate and qualify the existing
+  work rather than duplicating it.
+
+MEL-526's Comic-only bundling, with optional Classic/Zoom moved to
+`agentnet-skins`, remains future work rather than a new gate for the published
+release. Shared topic names across all participants remain a recommendation,
+not approved scope.
 
 ### Published v0.8.10
 
