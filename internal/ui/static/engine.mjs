@@ -3988,6 +3988,7 @@ export class Engine {
     h=await this.groupHistoryScope(c,h,checks);
     const p=h.group_history,g=await this.groupRead(checks,"kv","group/"+c.id);
     if(!p||!h.pid||wire.rootJSON(p.root)!==c.root||p.proof?.length||!p.memberships?.length||p.memberships.length>8*(wire.MaxHumanAudience+1))throw new Hold("invalid","Malformed historical group witness.");
+    this.historyTaskEpochs?.delete(p);
     wire.parseGroupContext(wire.groupContextJSON(p));
     const records=(g?.records||[]).map(wire.parseGroupCommit),authority=records[p.state.seq];
     if(!authority)throw new Hold("proof_pending","Original historical authority is missing.");
@@ -4000,22 +4001,33 @@ export class Engine {
     const resolve=(person,hash)=>rosters.get(hash)?.person===person?rosters.get(hash):null;
     for(const w of p.withdrawals||[])await wire.verifyGroupWithdrawal(w,p.state,resolve);
     await wire.verifyGroupCurrent(p.state,p.root,authority,resolve,seq=>records[seq],p.withdrawals||[]);
-    const pids=new Set([h.pid,...(h.human?.audience||[]).map(s=>s.pid)]);let bound=false;
+    const pids=new Set([h.pid,...(h.human?.audience||[]).map(s=>s.pid)]),taskEpochs=new Map();let bound=false;
     for(const e of p.memberships){
       if(e.conv!==c.id||!pids.has(e.pid)||e.type==="share")throw new Hold("invalid","Historical witness is outside the captured participation.");
       const person=await this.groupRead(checks,e.author.person===this.me.person?"kv":"persons",e.author.person===this.me.person?"person":e.author.person),pin=await this.groupRead(checks,"pins",e.author.address);
       if(!person||!["self","pinned"].includes(person.state)||!person.hashes.includes(e.author.roster)||!person.devices.some(d=>d.address===e.author.address&&d.fingerprint===e.author.fingerprint)||!pin||pin.pending||pin.fingerprint!==e.author.fingerprint)throw new Hold("invalid","Historical event exact author or roster differs.");
-      if(!person.steps?.some(step=>step.hash===e.author.roster&&step.devices.includes(e.author.address+"|"+e.author.fingerprint)))throw new Hold("invalid","Historical event lacks original signing roster.");
+      const step=person.steps?.find(step=>step.hash===e.author.roster&&step.devices.includes(e.author.address+"|"+e.author.fingerprint));
+      if(!step)throw new Hold("invalid","Historical event lacks original signing roster.");
       await wire.verifyEvent(e,(await this.pubOf(pin)).sign_key);
-      if(["invite","scope"].includes(e.type)){const member=wire.groupMember(p.state,e.author.person);if(!member||await wire.groupAdmissionHash(member.admission)!==e.author.group_admission)throw new Hold("invalid","Historical inviter admission differs.");}
+      if(["invite","scope"].includes(e.type)){
+        const member=wire.groupMember(p.state,e.author.person);if(!member||await wire.groupAdmissionHash(member.admission)!==e.author.group_admission)throw new Hold("invalid","Historical inviter admission differs.");
+        // A removed unused task device can still be named by this exact
+        // signed roster. It gains no current device, author or host rights.
+        for(const [i,fp] of (e.task_keys||[]).entries())if(!person.devices.some(d=>d.fingerprint===fp)&&step.devices.some(d=>d.endsWith("|"+fp))&&e.group?.task_admissions?.[i]===e.author.group_admission){
+          if(taskEpochs.has(fp)&&taskEpochs.get(fp)!==e.author.group_admission)throw new Hold("invalid","Historical task admission conflicts.");
+          taskEpochs.set(fp,e.author.group_admission);
+        }
+      }
       if(e.pid===h.pid&&["invite","scope"].includes(e.type)&&e.group?.seq===p.state.seq&&e.group.hash===await wire.groupStateHash(p.state))bound=true;
     }
-    const evidence=await Promise.all(p.memberships.map(async e=>({e,hash:await wire.eventHash(e)}))),members=await this.dmMembers(c,evidence,checks,p);
+    const evidence=await Promise.all(p.memberships.map(async e=>({e,hash:await wire.eventHash(e)}))),members=await this.dmMembers(c,evidence,checks,p,taskEpochs),taskEpoch=fp=>members.epochs.get(fp)||taskEpochs.get(fp);
     for(const {e} of evidence)if(["invite","scope"].includes(e.type)){
       const scope=e.group,record=scope&&records[scope.seq],host=members.get(e.host?.person),author=wire.groupMember(p.state,e.author.person);
-      if(!scope||!record||record.hash!==scope.hash||scope.seq>p.state.seq||members.epochs.get(e.author.fingerprint)!==e.author.group_admission||(scope.host_role==="member"?!host||members.epochs.get(e.host.fingerprint)!==scope.host_admission:scope.host_role!=="visitor"||host||scope.host_admission)|| (e.task_keys||[]).length!==(scope.task_admissions||[]).length||(e.task_keys||[]).some((fp,i)=>!members.epochs.get(fp)||members.epochs.get(fp)!==scope.task_admissions[i])||scope.host_role==="visitor"&&e.role!=="human"&&(!author?.admin||!record.admins.includes(e.author.person)))throw new Hold("invalid","Historical invite epochs differ from signed original state.");
+      if(!scope||!record||record.hash!==scope.hash||scope.seq>p.state.seq||members.epochs.get(e.author.fingerprint)!==e.author.group_admission||(scope.host_role==="member"?!host||members.epochs.get(e.host.fingerprint)!==scope.host_admission:scope.host_role!=="visitor"||host||scope.host_admission)|| (e.task_keys||[]).length!==(scope.task_admissions||[]).length||(e.task_keys||[]).some((fp,i)=>!taskEpoch(fp)||taskEpoch(fp)!==scope.task_admissions[i])||scope.host_role==="visitor"&&e.role!=="human"&&(!author?.admin||!record.admins.includes(e.author.person)))throw new Hold("invalid","Historical invite epochs differ from signed original state.");
     }
     if(!bound)throw new Hold("invalid","Historical state is not bound to this participation.");
+    // Only this verified in-memory packet can supply task-only fallback.
+    (this.historyTaskEpochs ||= new WeakMap()).set(p,taskEpochs);
     return p;
   }
 
@@ -8164,12 +8176,12 @@ export class Engine {
     return out;
   }
 
-  async dmMembers(c, events = null, checks = [], currentPacket=null) {
+  async dmMembers(c, events = null, checks = [], currentPacket=null, historyTaskEpochs=null) {
     const group = c.kind === "group" || JSON.parse(c.root).kind === "group";
     const packet = group ? currentPacket || await this.groupCurrentState(c.id, checks) : null;
     const root = group ? packet.root : wire.parseRoot(c.root);
     const out = new Map();
-    if (group) { out.group=packet;out.epochs=new Map();out.groupInvites=new Set();out.roomEvents=new Set();out.roomAuthors=new Map(); }
+    if (group) { out.group=packet;out.epochs=new Map();out.groupInvites=new Set();out.roomEvents=new Set();out.roomAuthors=new Map();out.historyTaskEpochs=historyTaskEpochs||this.historyTaskEpochs?.get(currentPacket); }
     for (const member of group ? await wire.effectiveGroupMembers(packet.state,packet.withdrawals) : root.members) {
       const p = group ? await this.groupRead(checks, member.person === this.me?.person ? "kv" : "persons", member.person === this.me?.person ? "person" : member.person) : member.person === this.me?.person ? this.me : await this.store.get("persons", member.person);
       if (p && p.state !== "conflict" && p.hashes.includes(group ? member.roster : wire.rootMember(root, p.person))) {
@@ -8197,7 +8209,7 @@ export class Engine {
         if(e.type!=="invite"&&e.type!=="scope"&&e.type!=="share" || !scope || !record || record.hash!==scope.hash || scope.seq>packet.state.seq || !out.roomEvents.has(hash) && (!author || out.epochs.get(e.author.fingerprint)!==e.author.group_admission))continue; // a room scope carries its invite's binding
         const host=out.get(e.host.person), isMember=!!host;
         if(scope.host_role==="member" ? !isMember || out.epochs.get(e.host.fingerprint)!==scope.host_admission : scope.host_role!=="visitor" || isMember || scope.host_admission)continue;
-        if(!out.roomEvents.has(hash) && (e.task_keys || []).some((fp,i)=>!out.epochs.get(fp)||out.epochs.get(fp)!==scope.task_admissions?.[i]))continue;
+        if(!out.roomEvents.has(hash) && (e.task_keys || []).some((fp,i)=>{const epoch=out.epochs.get(fp)||out.historyTaskEpochs?.get(fp);return !epoch||epoch!==scope.task_admissions?.[i];}))continue;
         if(scope.host_role==="visitor" && e.role!=="human" && ["invite","scope"].includes(e.type) && (!wire.groupMember(packet.state,e.author.person)?.admin || !record.admins.includes(e.author.person)))continue;
         out.groupInvites.add(hash);
       }
@@ -8265,7 +8277,7 @@ export class Engine {
     const at = (p, address, fp) => (p && p.devices.some((d) => d.address === address && d.fingerprint === fp) ? { ...p, address, fingerprint: fp } : null);
     const author = (a) => { const p = m.get(a.person); return p && p.hashes.includes(a.roster) && (m.group ? m.epochs.get(a.fingerprint)===a.group_admission : !a.group_admission) ? at(p, a.address, a.fingerprint) : null; };
     const host = (h) => (h ? at(m.get(h.person) || m.hosts?.get(h.person), h.address, h.fingerprint) : null);
-    const memberKey = (fp) => [...m.values()].some((p) => p.devices.some((d) => d.fingerprint === fp));
+    const memberKey = (fp) => [...m.values()].some((p) => p.devices.some((d) => d.fingerprint === fp)) || !!m.historyTaskEpochs?.has(fp);
     const priorAuthor=x=>m.roomEvents?.has(x.hash)?at(m.roomAuthors?.get(x.e.author.person),x.e.author.address,x.e.author.fingerprint):null;
     const invites = new Map(), decisions = [], dismisses = [], scopes = [], shares = [];
     for (const x of evs.filter((y) => y.e.pid === pid)) {

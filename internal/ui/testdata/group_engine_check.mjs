@@ -611,6 +611,42 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
     check(copies.filter(h=>h.id===accept.id&&h.lid===accept.lid&&h.from_key===accept.from_key).length===1&&copies.some(h=>h.id===original.id),'normal catch-up queues witnessed event and old request with exact original identities');
     check(!(await past.st.prefix('kv','history-deferred/'+dev.fingerprint+'/')).some(r=>[accept.id,original.id].includes(r.id)),'verified witness-only dependencies leave no unresolved source reference');
 
+    // An unused task key may have left its person's roster since this
+    // signed invite. Only its exact original author roster proves it.
+    const aliceRoster=await wire.parseRoster(v.challenge.rosters[0]),retiredKeys=await wire.newKeys(),retiredPub=await wire.publicEntry(retiredKeys,'alice/retired'),retiredFP=await wire.fingerprint(retiredPub);
+    const signAliceRoster=async r=>{const unsigned=JSON.parse(wire.rosterJSON(r));delete unsigned.sig;delete unsigned.join;r.sig=new Uint8Array(await crypto.subtle.sign('Ed25519',aliceKeys.sign,new TextEncoder().encode('agentnet-person-v2\n'+JSON.stringify(unsigned))));return r;};
+    const added=await signAliceRoster({...aliceRoster,seq:1,prev:await wire.rosterHash(aliceRoster),devices:[...aliceRoster.devices,retiredPub],by:await wire.fingerprint(alicePub),sig:null,join:await wire.joinConsent(retiredKeys,retiredPub.address,aliceRoster.person,1,await wire.rosterHash(aliceRoster))});
+    const retiredRoster=await signAliceRoster({...added,seq:2,prev:await wire.rosterHash(added),devices:aliceRoster.devices,sig:null,join:null});
+    await wire.verifyNext(added,aliceRoster);await wire.verifyNext(retiredRoster,added);
+    const aliceChain=[aliceRoster,added,retiredRoster],currentAlice=await past.e.personRecord(aliceChain,'pinned',await past.st.get('persons',aliceRoster.person));
+    past.extraChains.set(aliceRoster.person,aliceChain.map(r=>JSON.parse(wire.rosterJSON(r))));await past.st.write([{s:'persons',k:aliceRoster.person,v:currentAlice}]);await past.e.pinDevices(currentAlice);
+    const oldInvite=original.group_history.memberships.find(e=>e.type==='invite'),taskInvite=await wire.signEvent(aliceKeys,{...oldInvite,pid:wire.newID(),author:{...oldInvite.author,roster:await wire.rosterHash(added)},task_keys:[retiredFP],group:{...oldInvite.group,task_admissions:[oldInvite.author.group_admission]}});
+    const taskHistory={...wire.parseHistory(pv['history-member-invite']),id:wire.newID(),lid:wire.newID(),pid:taskInvite.pid,body:wire.eventJSON(taskInvite),group_history:{...original.group_history,memberships:[taskInvite]}};
+    const taskEnvelope=await historyEnvelope(wire.historyJSON(taskHistory));await past.receive({envelope:taskEnvelope});
+    check(!!(await past.st.get('inbox',taskHistory.id))?.history&&!await past.st.get('held',wire.parseEnvelope(taskEnvelope).id),'verified historical author roster admits removed unused task device');
+    const taskEvents=[{e:taskInvite,hash:await wire.eventHash(taskInvite)}],taskPacket=await past.e.groupHistoryWitness(await past.e.groupRecord(conv),taskHistory),taskMembers=await past.e.dmMembers(await past.e.groupRecord(conv),taskEvents,[],taskPacket);
+    check(past.e.resolveAgent(taskInvite.pid,taskEvents,taskMembers).invite===taskEvents[0].hash&&!taskMembers.epochs.has(retiredFP)&&![...taskMembers.values()].some(p=>p.devices.some(d=>d.fingerprint===retiredFP)),'historical task proof resolves invite without restoring current device or epoch');
+    const ordinaryMembers=await past.e.dmMembers(await past.e.groupRecord(conv),taskEvents,[],wire.parseGroupContext(wire.groupContextJSON(taskHistory.group_history)));
+    check(!past.e.resolveAgent(taskInvite.pid,taskEvents,ordinaryMembers).invite&&!(await past.e.convEvents(conv)).some(r=>r.e.pid===taskInvite.pid),'unverified context and live ledger gain no historical task authority');
+    for(const mode of ['wrong-task-admission','unknown-author-roster','key-absent-from-exact-roster','unknown-task-key']){
+     const fields={...taskInvite,author:{...taskInvite.author},group:{...taskInvite.group}};
+     if(mode==='wrong-task-admission')fields.group.task_admissions=['e'.repeat(64)];
+     if(mode==='unknown-author-roster')fields.author.roster='f'.repeat(64);
+     if(mode==='key-absent-from-exact-roster')fields.author.roster=await wire.rosterHash(aliceRoster);
+     if(mode==='unknown-task-key')fields.task_keys=[await wire.fingerprint(await wire.publicEntry(await wire.newKeys(),'alice/unknown'))];
+     const event=await wire.signEvent(aliceKeys,fields),bad={...taskHistory,body:wire.eventJSON(event),group_history:{...taskHistory.group_history,memberships:[event]}};
+     let refused=false;try{await past.e.groupParticipationHistoryCheck(conv,bad,dev,[]);}catch{refused=true;}check(refused,'removed task witness refuses '+mode);
+    }
+    const reassigned=await wire.nextRoster(keys,address,linkedRoster,[...linkedRoster.devices,retiredPub],await wire.joinConsent(retiredKeys,retiredPub.address,roster.person,2,await wire.rosterHash(linkedRoster)));
+    await wire.verifyNext(reassigned,linkedRoster);const reassignedPerson=await past.e.personRecord([roster,linkedRoster,reassigned],'self',linkedPerson);
+    past.e.me=reassignedPerson;await past.st.write([{s:'kv',k:'person',v:reassignedPerson}]);
+    let epochConflict=false;try{await past.e.groupParticipationHistoryCheck(conv,taskHistory,dev,[]);}catch{epochConflict=true;}
+    check(epochConflict,'current task device in another admission is never repaired by historical fallback');
+    past.e.me=linkedPerson;await past.st.write([{s:'kv',k:'person',v:linkedPerson}]);
+    await past.reload();past.e.groupSupport=async()=>{};past.e.sendGroupCopy=async()=>'';
+    const taskStored=await past.st.get('inbox',taskHistory.id),taskCopy=await past.e.historyCopy(dev,await past.e.groupRecord(conv),past.e.itemOf(taskStored,false));
+    check(wire.parseHistory(taskCopy.body).id===taskHistory.id&&taskStored.state===''&&JSON.stringify(await past.st.get('kv','group/'+conv))===before,'removed task witness revalidates after restart and forwards inert original without live group changes');
+
     const ownPin=await past.st.get('pins',linkedAddress);await past.st.write([{s:'pins',k:linkedAddress,v:{...ownPin,pending:{fingerprint:"changed-key"}}}]);
     let pendingIn=false,pendingOut=false;try{await past.e.groupParticipationHistoryCheck(conv,original,dev,[]);}catch{pendingIn=true;}try{await past.e.historyCopy(dev,await past.e.groupRecord(conv),past.e.itemOf(stored,false));}catch{pendingOut=true;}
     check(pendingIn&&pendingOut,'historical witness refuses pending own forwarder and reader pins');await past.st.write([{s:'pins',k:linkedAddress,v:ownPin}]);
