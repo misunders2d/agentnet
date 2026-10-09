@@ -548,11 +548,11 @@ export function deviceKind(address?: string): DeviceKind | undefined {
   return undefined;
 }
 
-/** agentName is what an agent is called everywhere: its own name when its
- *  owner gave it one. An unnamed own agent on another device also names
- *  that device, so multiple own agents remain distinguishable. */
+/** Name agents with their owner even in compact mentions. Unnamed own agents
+ *  on other devices also retain the host name. */
 export function agentName(agentId: string | undefined, names: Record<string, string>, host: T.PersonView | null | undefined, me: T.PersonView | null | undefined): string {
-  if (agentId && names[agentId]) return names[agentId];
+  const name = agentId && names[agentId];
+  if (name) return (host ? owner(host, me) + " " : "") + name;
   const remoteOwn = host?.person && host.person === me?.person && host.address && host.address !== me.address;
   return owner(host, me) + " agent" + (remoteOwn ? " on " + niceDevice(host.address) : "");
 }

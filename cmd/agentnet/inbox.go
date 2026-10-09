@@ -165,7 +165,10 @@ func inboxNoticeText(n client.InboxNotice, section string, full bool) string {
 		case "conflicting_duplicate":
 			detail = "conflicting duplicate"
 		default:
-			detail = "did not verify; refused"
+			detail = "it could not be accepted; the recorded checks failed, so it stays held"
+			if n.Detail == "participation_binding_mismatch" {
+				detail = "an internal participation record does not match its sending device or conversation; it stays held"
+			}
 		}
 	}
 	if !full {

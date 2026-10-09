@@ -24,6 +24,8 @@ func heldDiagnosticCode(why string) string {
 		return "context_unavailable"
 	case "a malformed history item", "group: malformed/nonordinary historical item", "group: history file is not a manifest":
 		return "history_malformed"
+	case "participation: the event is not the sending device's own, for this conversation":
+		return "participation_binding_mismatch"
 	case ErrGroupInvitationStale.Error(), errGroupInvitationOutdated.Error(), "group: target already has effective membership":
 		return "group_invitation_outdated"
 	case "group: decision conflicts with recorded local intent", "group: consent has no recorded local invitation", "group: consent is not the exact local invitation and current person":

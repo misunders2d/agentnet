@@ -161,4 +161,27 @@ const shown = (view, body) => view.messages.find((m) => m.body === body);
   e.stop();
 }
 
+// A delivered message and its chat-list clock use the same person-level
+// status; retained device copies remain visible in the message details.
+{
+  const f = await fixture(), {e, store} = f;
+  const first = id(), extra = id(), lid = id();
+  const base = sent(f,{id:first,lid,body:"delivered with a lagging device",to:f.peerAddress,person:f.peer.person});
+  await store.write([
+    {s:"outbox",k:first,v:base},
+    {s:"outbox",k:extra,v:{...base,id:extra,to:"peer/legacy",state:"waiting"}},
+  ]);
+  const waiting = async () => (await e.overview()).dms.find(d=>d.id===f.conv).waiting;
+  check(await waiting()===0,"delivered to recipient despite extra device waiting");
+  check(shown(await e.dm(f.conv),base.body).copies.some(c=>c.state==="waiting"),"lagging copy retained in details");
+  await store.write([{s:"outbox",k:first,v:{...base,state:"waiting"}}]);
+  check(await waiting()===1,"recipient without any delivered copy still counted");
+  await store.write([
+    {s:"outbox",k:first,v:base},
+    {s:"outbox",k:extra,v:{...base,id:extra,to:"self/phone",person:e.me.person,own:true,state:"waiting"}},
+  ]);
+  check(await waiting()===0,"own linked-device sync does not restore waiting clock");
+  e.stop();
+}
+
 console.log("PASS messenger fields engine checks: " + checks);

@@ -48,3 +48,24 @@ func TestReviewListsWhatElseWaits(t *testing.T) {
 		t.Fatalf("inbox --review lists a message only waiting for proof:\n%s", out)
 	}
 }
+
+func TestReviewInvalidRecordDoesNotClaimSignatureFailure(t *testing.T) {
+	a, home := diagnosticAgent(t)
+	db, err := sql.Open("sqlite", filepath.Join(home, "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`INSERT INTO quarantine(id,sender,reason,envelope,received_at,detail_code) VALUES
+ ('66666666666666666666666666666666','peer/device','invalid','{}',1,'participation_binding_mismatch'),
+ ('77777777777777777777777777777777','peer/device','invalid','{}',2,'')`); err != nil {
+		t.Fatal(err)
+	}
+	out, err := diagnosticOutput(t, func() error { return runInbox(a, []string{"--review"}) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "internal participation record does not match") || !strings.Contains(out, "recorded checks failed") || strings.Contains(out, "tampered") || strings.Contains(out, "signature") {
+		t.Fatalf("misleading review: %s", out)
+	}
+}

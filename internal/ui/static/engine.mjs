@@ -300,6 +300,8 @@ export const heldDiagnosticCode = why => {
   "a malformed history item": "history_malformed",
   "Group history contains nonordinary input.": "history_malformed",
   "Group history file is not an exact manifest.": "history_malformed",
+  "event is not this sending device's own": "participation_binding_mismatch",
+  "event is not its sending device's own": "participation_binding_mismatch",
   "This invitation is out of date; join the newer invitation or ask the inviter to refresh it.": "group_invitation_outdated",
   "Latest group head differs from this proposal; inviter must refresh the invitation. Join the fresh proposal.": "group_invitation_outdated",
   "Invited person changed; obtain fresh consent.": "group_invitation_outdated",
@@ -324,6 +326,7 @@ export const heldNoticeText = (code, reason) => {
     history_malformed: ["This history copy does not have a valid message or file manifest.", "The original retained copy stays blocked. Archiving does not import or run it."],
     context_unavailable: ["This message needs conversation, membership or person proof that is not available here yet.", "Checks continue when connected; the message appears only when verified. Archiving only hides this notice."],
     admission_failed: ["The message failed this device's conversation or sender checks.", "The precise check has no diagnostic code yet. The retained message stays blocked; archiving does not accept, resend or run it."],
+    participation_binding_mismatch: ["An internal invitation or membership record does not match its sending device or conversation.", "AgentNet could not synchronize this record. It stays blocked and grants no access."],
     group_invitation_outdated: ["This invitation no longer matches the current group.", "If you still need to join, use the newer invitation or ask the inviter for a fresh one. You can archive this old notice."],
     group_consent_mismatch: ["This response does not match the invitation and decision recorded on this device.", "Check the group's current invitation. If you still need to join, ask its administrator for a fresh invitation."],
     group_withdrawal_mismatch: ["This departure record could not be verified against the current group and device identity.", "Check the group's current membership with its administrator. This record has not changed anyone's access."],
@@ -7368,7 +7371,7 @@ export class Engine {
         ...(msgs.length ? {last_id:previewMessageID(msgs,msgs.at(-1))} : {}),
         last_at: iso(msgs.length ? msgs[msgs.length - 1].at : c.created * 1000),
         unread: msgs.filter((m) => m.fp && !m.own && !m.read).length, held: msgs.filter((m) => this.heldOpen(m, msgs)).length,
-        waiting: msgs.filter((m) => m.state === "waiting").length,
+        waiting: msgs.filter((m) => !!m.to && (m.delivery || m.state) === "waiting").length,
         guests: participations.filter((p) => p.state === "active").length, decide: 0, // who is present to help; decisions counted below
         ...(last ? { last_event: last } : {}) });
     }
@@ -7381,7 +7384,7 @@ export class Engine {
       if(this.erasedConv(conv)&&!visible.some(m=>!m.sub))continue; // deleted here, and no later turn
       const latestView = view.messages.at(-1);
       const latestText = !latestView ? "" : latestView.deleted ? "Message deleted" : firstLine(latestView.edited ? latestView.text || "" : latestView.event || latestView.body);
-      dms.push({id:conv,kind:"group",title:packet.state.title,peer:{label:packet.state.title,address:"",state:""},members:view.members,role:view.role,frozen:view.frozen,created:iso(packet.root.created*1000),mine:packet.root.creator.address===this.address,count:visible.length,last:latestText,...(latestView?{last_id:previewMessageID(view.messages,latestView)}:{}),last_at:iso(visible.length?visible.at(-1).at:packet.root.created*1000),unread:visible.filter(m=>m.fp&&!m.own&&!m.read).length,held:0,waiting:visible.filter(m=>m.state==="waiting"||m.state==="queued").length,
+      dms.push({id:conv,kind:"group",title:packet.state.title,peer:{label:packet.state.title,address:"",state:""},members:view.members,role:view.role,frozen:view.frozen,created:iso(packet.root.created*1000),mine:packet.root.creator.address===this.address,count:visible.length,last:latestText,...(latestView?{last_id:previewMessageID(view.messages,latestView)}:{}),last_at:iso(visible.length?visible.at(-1).at:packet.root.created*1000),unread:visible.filter(m=>m.fp&&!m.own&&!m.read).length,held:0,waiting:visible.filter(m=>!!m.to&&["waiting","queued"].includes(m.delivery||m.state)).length,
         guests:parts.filter(p=>p.state==="active").length,decide:0,...(last?{last_event:last}:{})});
     }
     // decide: a conversation's requests this person decides here (live.go

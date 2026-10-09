@@ -138,7 +138,7 @@ func TestLiveRefreshAsksAboutEveryHeldCopy(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { bob.Close() })
-	runDaemon(t, alice)
+	stopAlice := runDaemon(t, alice)
 	runDaemon(t, bob)
 	if _, err = alice.CreatePerson(ctx, "Alice"); err != nil {
 		t.Fatal(err)
@@ -243,5 +243,43 @@ func TestLiveRefreshAsksAboutEveryHeldCopy(t *testing.T) {
 	msgs, err := alice.ConversationMessages(conv)
 	if err != nil || len(msgs) != 1 || msgs[0].State != protocol.StateDelivered {
 		t.Fatalf("message state after refresh = %+v, %v", msgs, err)
+	}
+
+	// A lagging extra device must not leave the chat-list clock behind
+	// after the message tick reports delivery to the other person.
+	stopAlice()
+	for _, tc := range []struct {
+		name, peerState, extraPerson string
+		want                         int
+	}{
+		{"own phone", "delivered", "", 0},
+		{"recipient extra device", "delivered", "recipient", 0},
+		{"recipient still waiting", "waiting", "recipient", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := db.Exec("UPDATE outbox SET state=? WHERE conv=? AND recipient=?", tc.peerState, conv, bob.Address); err != nil {
+				t.Fatal(err)
+			}
+			to := phone.Address
+			if tc.extraPerson != "" {
+				to = "bob/legacy-device"
+			}
+			if _, err := db.Exec("UPDATE outbox SET state='waiting',recipient=?,recipient_person=(SELECT recipient_person FROM outbox WHERE conv=? AND recipient=? LIMIT 1) WHERE conv=? AND recipient IN (?,?)", to, conv, bob.Address, conv, phone.Address, "bob/legacy-device"); err != nil {
+				t.Fatal(err)
+			}
+			o, err := l.Overview()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, s := range o.DMs {
+				if s.ID == conv {
+					if s.Waiting != tc.want {
+						t.Fatalf("chat waiting = %d, want %d", s.Waiting, tc.want)
+					}
+					return
+				}
+			}
+			t.Fatal("chat summary missing")
+		})
 	}
 }

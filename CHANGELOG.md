@@ -19,6 +19,12 @@ This record starts with v0.8.1; earlier releases remain on the
 - Keep inherited own-person permissions visible after an individual device grant is removed. Show the actual computer for remote default agents.
 - Let a verified own human device explicitly mark an exact remote needs-human request as handled. The host checks the request and attempt, and its confirmation updates the state without rerunning work. Attachment-only requests retain useful context in reports.
 
+- Keep incoming messages and heartbeat acknowledgements moving while delivery receipts are delayed. Pending invitation synchronization no longer blocks ordinary queued turns.
+- Use recipient delivery for the chat-list waiting count, matching message ticks; a lagging extra device no longer leaves a delivered conversation marked as unsent.
+- Preserve agent authorship in selected conversation history after reinviting an agent. Clarify that admitted action requests use native tools and permissions even when classified as questions.
+- Include the owner in named agent labels so same-named agents can be distinguished in mentions and participant cards.
+- Record participation device/conversation mismatches as synchronization diagnostics, without implying that a failed check proves signature tampering.
+
 ### Added
 
 - Choose ongoing access to only the selected topic when bringing a person or agent into a chat. The signed scope applies to history, files, future messages and agent context; existing whole-chat invitations stay separate. Topic-only sharing requires compatible participants and uses Yourself for replies when a selected agent or live-session receiver would escape that scope.

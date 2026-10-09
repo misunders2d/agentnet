@@ -122,7 +122,7 @@ func TestQueuedSendReturnsBeforePostAndOrdersTwoTurns(t *testing.T) {
 // starving a readable turn to the same recipient in the same conversation.
 func TestQueuedSendAuxiliaryCopiesDoNotStarveTurns(t *testing.T) {
 	t.Parallel()
-	for _, sub := range []string{envelope.SubHistory, envelope.SubClear} {
+	for _, sub := range []string{envelope.SubHistory, envelope.SubClear, envelope.SubInvitationSync} {
 		t.Run(sub, func(t *testing.T) {
 			w, conv := queuedDMWorld(t)
 			id := protocol.NewID()
