@@ -13,6 +13,10 @@ on:
         description: "Optional Go test -run expression for focused native qualification"
         type: string
         default: ''
+      test_count:
+        description: "Repeat a focused native selection while investigating an intermittent failure"
+        type: string
+        default: '1'
       race_shards:
         description: 'Run only these race shards (JSON array, e.g. ["client-0","client-6"]); empty uses the full workflow'
         type: string
@@ -53,9 +57,10 @@ jobs:
         env:
           AGENTNET_TEST_PACKAGES: ${{ inputs.test_packages || './...' }}
           AGENTNET_TEST_RUN: ${{ inputs.test_run || '.' }}
+          AGENTNET_TEST_COUNT: ${{ inputs.test_count || '1' }}
         run: |
           read -r -a packages <<< "$AGENTNET_TEST_PACKAGES"
-          go test -count=1 -timeout 1800s -run "$AGENTNET_TEST_RUN" "${packages[@]}"
+          go test -count="$AGENTNET_TEST_COUNT" -timeout 1800s -run "$AGENTNET_TEST_RUN" "${packages[@]}"
   # The race suite on Linux, split over parallel runners: internal/client's
   # tests in twelve bounded shards, every other package in one. Focused
   # dispatch retains passing evidence when only some shards need a rerun.
