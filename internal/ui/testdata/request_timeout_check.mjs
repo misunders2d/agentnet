@@ -115,15 +115,16 @@ assert.equal((await store.get('outbox',sent.id)).state,'custody');
 assert.deepEqual(posts,[original.envelope],'reconnect sends original encrypted envelope once');
 await e.flushOutbox();assert.equal(posts.length,1);releaseStream();await bounded(resumed);e.stop();
 // Linked dispatch aborts the approval-only stream after verifying the roster.
-// A fetch reader may not reject an abort between reads: do not read it again.
+// A fetch reader may neither reject nor finish a read after an abort (nor
+// support cancel): the stream still ends at once, and is not read again.
 {
- let reads=0;
- const linked=new Engine({store:memoryStore(),base:'https://isolated.invalid',fetch:async()=>({ok:true,headers:new Headers(),body:{getReader:()=>({read:async()=>++reads===1?{value:new TextEncoder().encode('event: linked\ndata: {}\n\n'),done:false}:{done:true}})}})});
+ let reads=0,afterAbort=0,aborted=false;
+ const linked=new Engine({store:memoryStore(),base:'https://isolated.invalid',fetch:async(url,o)=>{o.signal.addEventListener('abort',()=>{aborted=true;});return {ok:true,headers:new Headers(),body:{getReader:()=>({read:async()=>{if(aborted)afterAbort++;return ++reads===1?{value:new TextEncoder().encode('event: linked\ndata: {}\n\n'),done:false}:new Promise(()=>{});}})}};}});
  linked.keys=await wire.newKeys();linked.address='alice/phone';linked.link={state:'pending'};
  linked.finishLink=async()=>linked.setLink('linked');
  await bounded(linked.streamOnce());
  assert.equal(linked.link.state,'linked');assert.equal(linked.connected,false);
- assert.equal(reads,1,'verified linked transition must not read its aborted approval stream again');
+ assert.ok(aborted&&afterAbort===0&&reads<=2,'verified linked transition ends its approval stream without reading it again ('+reads+' reads)');
  linked.stop();
 }
 assert(deadlines>=8,'bounded all exercised requests');

@@ -134,16 +134,18 @@ for(const mode of ['disk-failure','stop','close']){
  e.stop();
 }
 // Admission and pending removal are one transaction. A failed local write
-// leaves retryable ciphertext and no receipt; the next wake stores it once.
+// leaves retryable ciphertext and no receipt (its failure kept aside, the
+// pass going on); the next wake stores it once.
 {
  const e=await engine(undefined,unavailable),raw=await envelope(old),id=wire.parseEnvelope(raw).id;
  await e.dispatch('message',raw);if(e.receiveRetryRun)await e.receiveRetryRun;await e.store.write([{s:'pins',k:old.address,v:pin(old)}]);
  const write=e.store.write;let fail=true;
  e.store.write=async(ops,checks)=>{if(fail&&ops.some(o=>o.s==='inbox')){fail=false;throw Error('fixture disk failure');}return write(ops,checks);};
- await assert.rejects(()=>e.retryPendingReceives(),/fixture disk failure/);
- assert.ok(await e.store.get('kv',prefix+id));assert.equal(await e.store.get('receipts',id),undefined);
  await e.retryPendingReceives();
- assert.equal(await e.store.get('kv',prefix+id),undefined);assert.equal((await e.store.all('inbox')).length,1);
+ assert.ok(await e.store.get('kv',prefix+id));assert.equal(await e.store.get('receipts',id),undefined);
+ assert.equal((await e.store.get('kv','receive-error/'+id)).attempts,1);
+ await e.retryPendingReceives();
+ assert.equal(await e.store.get('kv',prefix+id),undefined);assert.equal(await e.store.get('kv','receive-error/'+id),undefined);assert.equal((await e.store.all('inbox')).length,1);
  e.stop();
 }
 // Single-flight work is keyed by exact encrypted bytes, not merely by a

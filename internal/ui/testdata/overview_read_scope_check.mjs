@@ -19,9 +19,15 @@ check(reports.length===1&&notices.length===1,'Positive projection fixtures missi
 // evidence of admission. It must stay untouched by these local projections.
 const opaque='x'.repeat(65536),rows=Array.from({length:384},(_,i)=>({s:'kv',k:'receive-pending/'+i.toString(16).padStart(32,'0'),v:{id:i,envelope:opaque}}));
 await store.write(rows);
-const all=store.all;store.all=async s=>{if(s==='kv')throw Error('Overview loaded unrelated encrypted recovery data');return all(s);};
+const all=store.all,get=store.get,prefix=store.prefix,recovery=k=>String(k).startsWith('receive-pending/');
+store.all=async s=>{if(s==='kv')throw Error('Overview loaded unrelated encrypted recovery data');return all(s);};
+store.get=async(s,k)=>{if(s==='kv'&&recovery(k))throw Error('Overview read retained ciphertext');return get(s,k);};
+store.prefix=async(s,p)=>{if(s==='kv'&&recovery(p))throw Error('Overview read retained ciphertext');return prefix(s,p);};
 const started=performance.now(),after=await e.overview(),elapsed=performance.now()-started;
-check(JSON.stringify(after)===JSON.stringify(before),'Scoped overview changed visible state');
+// Kept-back envelopes are counted by key for the receive status, never read.
+const {receive_status:kept,...shown}=after;
+check(JSON.stringify(shown)===JSON.stringify(before)&&kept?.waiting===384&&kept.failed===0,'Scoped overview changed visible state');
+store.get=get;store.prefix=prefix;
 check(JSON.stringify(await e.modelReports())===JSON.stringify(reports),'Model reports disappeared');
 check(JSON.stringify(await e.deviceAdminReview())===JSON.stringify(notices),'Device notices disappeared');
 check(JSON.stringify(await e.notifyView())===JSON.stringify(notification),'Notification recipients changed');

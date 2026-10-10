@@ -95,7 +95,7 @@ export function deviceHistory(e,Hold){
   }
   const meta=await project(r,own,checks,[],admission);
   if(old){ops.push({s:old.here?"outbox":"inbox",k:item.id,v:{...old.row,device_history:meta}});ops.checks=checks;return ops;}
-  const fromOwn=await human(own,item.from,item.from_key,admission),row={...item,v:item.sub?3:1,lid:"",id:item.id,fp:item.from_key,history:true,synced_from:env.from,device_history:meta,replica:true,own:fromOwn,read:meta.direction==="out",state:"",at:Math.min(item.at||e.now(),e.now()),attachments:item.attachments.map(a=>({...a,availability:"requestable"})),...(item.sub?{control:true,aside:true}:{})};
+  const fromOwn=await human(own,item.from,item.from_key,admission),row={...item,v:item.sub?3:1,lid:"",id:item.id,fp:item.from_key,history:true,synced_from:env.from,synced_key:pin.fingerprint,device_history:meta,replica:true,own:fromOwn,read:meta.direction==="out",state:"",at:Math.min(item.at||e.now(),e.now()),attachments:item.attachments.map(a=>({...a,availability:"requestable"})),...(item.sub?{control:true,aside:true}:{})};
   ops.push({s:"inbox",k:row.id,v:row});ops.checks=checks;ops.directHistory=true;return ops;
  }
  async function step(dev){
@@ -121,7 +121,8 @@ export function deviceHistory(e,Hold){
     // Its exact direct recipient gets the original itself (native parity): copy
     // only one this device's send state says it missed; in transit stays pending.
     if(r.recipient===dev.address&&r.recipient_key===dev.fingerprint&&!(ref.here&&["expired","not_delivered","failed"].includes(current.state))){if(!ref.here||["delivered","quarantined"].includes(current.state)){done.add(k);return;}fail("original still in transit to its recipient.","proof_pending");}
-    if(r.item.from!==dev.address||r.item.from_key!==dev.fingerprint){const body=JSON.stringify({v:1,person:own.person,roster:own.hash,recipient:r.recipient,...(r.recipient_key?{recipient_key:r.recipient_key}:{}),item:JSON.parse(wire.historyJSON(r.item))}),copy=await carrier(dev,wire.SubDeviceHistory,body);ops.push({s:"outbox",k:copy.id,v:copy},{s:"kv",k:ledger,v:{hash:r.hash,carrier:copy.id}});count++;}
+    // Neither its author nor the exact device that forwarded it here gets a copy back.
+    if((r.item.from!==dev.address||r.item.from_key!==dev.fingerprint)&&!(current.history&&current.synced_from===dev.address&&current.synced_key===dev.fingerprint)){const body=JSON.stringify({v:1,person:own.person,roster:own.hash,recipient:r.recipient,...(r.recipient_key?{recipient_key:r.recipient_key}:{}),item:JSON.parse(wire.historyJSON(r.item))}),copy=await carrier(dev,wire.SubDeviceHistory,body);ops.push({s:"outbox",k:copy.id,v:copy},{s:"kv",k:ledger,v:{hash:r.hash,carrier:copy.id}});count++;}
     done.add(k);
    }finally{visiting.delete(k);}
   };

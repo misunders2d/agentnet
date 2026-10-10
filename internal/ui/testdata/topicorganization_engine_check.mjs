@@ -128,4 +128,13 @@ const reversed=(await rows(a)).reverse();
 same(Object.fromEntries(chatTopicRedirects(reversed)),Object.fromEntries(chatTopicRedirects(await rows(a))),'redirects converge regardless of arrival order');
 same(Object.fromEntries(chatTopicAssignments(reversed)),Object.fromEntries(chatTopicAssignments(await rows(a))),'assignments converge regardless of arrival order');
 await refuses(()=>a.previewTopicOrganization({conv,ids:Array.from({length:201},()=>wire.newID()),topic:to}),/200/);
+// A received organization by no current human device of a full member is
+// held invalid, as the core holds it: never an unexpected failure that
+// would end the stream and block everything behind it.
+{
+ const sent=(await a.store.all('outbox')).find(r=>r.lid===moved.lid&&r.to===b.address),env=wire.parseEnvelope(sent.envelope),n=await wire.open(sent.envelope,b.keys,b.address,a.pub);
+ const real=b.topicOrganizationAuthor;b.topicOrganizationAuthor=async()=>{throw Error('Only a current human device of a full member may organize topics.');};
+ let held;try{await b.admitConv(n,env,await b.pinned(a.address),{...n,at:1790000000000,fp:a.fp,read:false});}catch(e){held=e;}finally{b.topicOrganizationAuthor=real;}
+ check(held?.reason==='invalid'&&/organize topics/.test(held.message),'received unauthorized organization is an invalid hold');
+}
 console.log(JSON.stringify({checks}));
