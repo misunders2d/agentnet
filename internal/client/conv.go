@@ -58,10 +58,19 @@ type convWork struct {
 	mu              sync.Mutex
 	pos             heldPos // where the look at held messages continues
 	historyDeferred map[string]historyDeferredScan
+	retried         atomic.Int64 // unix time the last full look at held messages began
 }
 
 func (w *convWork) due(b uint32) { w.bits.Or(b) }
 func (w *convWork) take() uint32 { return w.bits.Swap(0) }
+
+// heldRecheckAfter bounds how long held messages wait for a look when only
+// presence changes: evidence this device cannot see as an event still counts.
+const heldRecheckAfter = time.Hour
+
+func (w *convWork) retryStale() bool {
+	return time.Since(time.Unix(w.retried.Load(), 0)) >= heldRecheckAfter
+}
 
 // convSync does the conversation upkeep that is due. It makes no request
 // when nothing is due, so the regular ping costs nothing extra.
@@ -101,6 +110,7 @@ func (a *Agent) convSync(ctx context.Context) {
 		a.discloseHumanAudience(ctx)
 		a.discloseRoomDismissals(ctx, feats)
 		if work&convRetry != 0 {
+			a.convWork.retried.Store(time.Now().Unix())
 			a.convWork.mu.Lock()
 			a.convWork.pos = heldPos{}
 			a.convWork.historyDeferred = nil
@@ -1168,6 +1178,13 @@ func (a *Agent) retryProof(ctx context.Context) (more bool) {
 		if err != nil || (in.V != envelope.Version2 && in.V != envelope.Version3) {
 			continue
 		}
+		// One check per re-sent record: a copy of a row still held waits for it.
+		key := heldCopyKey(env, in, sender)
+		if key != "" {
+			if of, err := a.store.settleHeld(env.ID, env.From, key); err != nil || of != "" {
+				continue
+			}
+		}
 		if in.Sub == envelope.SubStatus && in.Conv != "" && statusSenderCheck(a.store.db, sender) != nil {
 			continue
 		}
@@ -1178,6 +1195,13 @@ func (a *Agent) retryProof(ctx context.Context) (more bool) {
 		if err := admit(ctx, env, in, sender, true); err != nil && retryable(err) {
 			a.convWork.due(convRetry) // the Hub is out of reach: look again from the start next time
 			return false
+		} else if key != "" && a.store.heldCopiesFreed(env.ID) {
+			// Its record left the quarantine: its copies are checked next (a
+			// duplicate of what is stored is acknowledged), not on other evidence.
+			a.convWork.due(convRetry)
+			if a.kick != nil {
+				a.kick()
+			}
 		}
 	}
 	return more
@@ -1188,8 +1212,11 @@ func (a *Agent) retryProof(ctx context.Context) (more bool) {
 // already, and is released when admitted.
 func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelope.Inner, sender identity.Public, fromQuarantine bool) error {
 	hold := func(reason, why string) error {
-		a.Logf("conversation message %s from %s held (%s): %s", env.ID, env.From, reason, why)
-		return a.store.holdAsDiagnostic(env, reason, why)
+		of, changed, err := a.store.holdCopy(env, heldCopyKey(env, in, sender), reason, why)
+		if err == nil {
+			a.logHold("conversation message", env, reason, why, of, changed)
+		}
+		return err
 	}
 	// personErr holds the message for a person problem; a failure to ask
 	// the Hub is returned instead, so the message is delivered again.

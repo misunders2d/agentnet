@@ -215,6 +215,17 @@ func (a *Agent) deviceHistoryPage(dev identity.Public) (bool, error) {
 			done[key] = true
 			return nil
 		}
+		// Its exact direct recipient gets the original itself. Copy only an
+		// original that device missed; one still in transit waits pending.
+		if r.to == dev.Address && r.toKey == dev.Fingerprint() {
+			if e = deviceHistoryRecipientMissed(tx, ref.storage, r); e != nil {
+				if errors.Is(e, errDeviceHistoryRecipientHas) {
+					done[key] = true
+					return nil
+				}
+				return e
+			}
+		}
 		raw, e := json.Marshal(r.item)
 		if e != nil {
 			return e
@@ -273,6 +284,35 @@ func (a *Agent) deviceHistoryPage(dev identity.Public) (bool, error) {
 	a.convWork.historyDeferred["direct/"+dev.Fingerprint()] = sweep
 	a.convWork.mu.Unlock()
 	return older != 0 || tail < ceiling || !sweep.done, nil
+}
+
+var errDeviceHistoryRecipientHas = errors.New("device history: the direct recipient holds the original")
+
+// deviceHistoryRecipientMissed decides a copy to the original's own direct
+// recipient. Only this device's own send state says what that device got:
+// delivered or quarantined means it stored the original; expired, not
+// delivered or failed means it missed it and gets the copy. Anything else is
+// still in transit and stays pending, so the outcome decides on a later sweep
+// instead of queueing the same item twice behind the original. An original
+// imported from another own device is that sender's to cover.
+func deviceHistoryRecipientMissed(q dbq, storage string, r deviceHistoryRow) error {
+	if storage != "out" {
+		return errDeviceHistoryRecipientHas
+	}
+	var state string
+	err := q.QueryRow(`SELECT state FROM outbox WHERE id=? AND recipient=? AND recipient_fp=?`, r.id, r.to, r.toKey).Scan(&state)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil // no exact send record here: keep the copy
+	}
+	switch {
+	case err != nil:
+		return err
+	case state == protocol.StateDelivered || state == protocol.StateQuarantined:
+		return errDeviceHistoryRecipientHas
+	case state == protocol.StateExpired || state == stateNotDelivered || state == stateFailed:
+		return nil
+	}
+	return errors.Join(errDeviceHistoryBlocked, errors.New("device history: original still in transit to its recipient"))
 }
 
 // Status/agent identity is inherited only from the exact accepted request.

@@ -115,6 +115,7 @@ func (a *Agent) onMembers(data []byte) {
 		a.typingMembershipChanged()
 		return
 	}
+	prev := a.members.view
 	a.members.view = MemberView{Listed: MembersListed, Members: m, At: time.Now(), Current: true}
 	a.members.mu.Unlock()
 	a.keepMemberFacts(m) // before the bump below, so a page reads them
@@ -134,11 +135,41 @@ func (a *Agent) onMembers(data []byte) {
 	a.Logf("hub members: %d listed, %d connected%s", len(m.Members), connected, more)
 	a.typingMembershipChanged()
 	// Presence, persons or capabilities may have changed: look again at
-	// held conversation messages on the stream's worker.
-	a.convWork.due(convPersons | convRetry | convRelease)
+	// held conversation messages on the stream's worker. Presence alone is no
+	// proof for them: a flapping device re-checked every held row each time.
+	// Waiting messages still look again (a reconnected device may now read
+	// them), and an hour after the last full look any list looks again too.
+	work := convPersons | convRelease
+	if !prev.Current || !sameMemberFacts(prev.Members, m) || a.convWork.retryStale() {
+		work |= convRetry
+	}
+	a.convWork.due(work)
 	if a.kick != nil {
 		a.kick()
 	}
+}
+
+// sameMemberFacts reports whether two lists say the same beyond presence:
+// the same enrolled devices, person roster steps and agent hints.
+func sameMemberFacts(a, b protocol.Members) bool {
+	if a.Truncated != b.Truncated || len(a.Members) != len(b.Members) {
+		return false
+	}
+	fact := func(m protocol.Member) string {
+		m.Presence = ""
+		raw, _ := json.Marshal(m)
+		return string(raw)
+	}
+	facts := make(map[string]string, len(a.Members))
+	for _, m := range a.Members {
+		facts[m.Address] = fact(m)
+	}
+	for _, m := range b.Members {
+		if f, ok := facts[m.Address]; !ok || f != fact(m) {
+			return false
+		}
+	}
+	return true
 }
 
 // keepMemberFacts keeps what the member list says that this device shows

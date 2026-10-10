@@ -202,6 +202,20 @@ const restarted=new Engine({store:a.store,base:a.base,fetch});Object.assign(rest
  await assert.rejects(()=>phone.queueRequestFollowup({ref,id:wire.newID(),body:'Late change'}),/key changed/);checks++;
  check((await owner.store.get('outbox',oid)).body===original.body,'correction never edits or reruns the original request');
 }
+// An original's exact direct recipient gets the original itself: it gets a
+// copy only when this device's send state says it missed the original.
+{
+ const direct=async state=>{const did=wire.newID(),m={id:did,from:a.address,to:p.address,ts:5,kind:'question',body:'to the phone itself, '+state};await a.store.write([{s:'outbox',k:did,v:{...m,v:1,at:5000,fp:p.fp,recipient_fp:p.fp,envelope:await wire.seal(m,a.keys,p.pub),state}}]);return did;};
+ const copied=async did=>(await copies(a)).filter(r=>r.to===p.address&&JSON.parse(r.body).item.id===did).length;
+ const pendingDirect=async did=>!!await a.store.get('kv','device-history/pending/'+p.fp+'/out/'+did);
+ const transit=await direct('custody'),stored=await direct('delivered'),expired=await direct('expired');
+ await drain(a,p);
+ check(await copied(transit)===0&&await pendingDirect(transit),'original in transit to its own recipient stays pending, not copied');
+ check(await copied(stored)===0&&!await pendingDirect(stored),'delivered original is not copied to its own recipient');
+ check(await copied(expired)===1,'expired original is copied to the recipient that missed it');
+ await a.store.write([{s:'outbox',k:transit,v:{...await a.store.get('outbox',transit),state:'not_delivered'}}]);a.historyWake=(a.historyWake||0)+1;await drain(a,p);
+ check(await copied(transit)===1&&!await pendingDirect(transit),'a later miss is copied from the pending sweep');
+}
 // Original endpoint identity also governs local deletion of imported outgoing rows.
 await p.deleteThread(b.address,id);
 check(!(await p.v1Threads()).some(g=>g.some(m=>m.id===id||m.id===answer)), 'local deletion removes imported request and replies');

@@ -1030,6 +1030,10 @@ type QuarantineItem struct {
 	Code       string    `json:"code"`
 	Reason     string    `json:"reason"` // plain text
 	At         time.Time `json:"at"`
+	// Copies: later envelopes of this same record from the same sender,
+	// held with it rather than listed (client.Quarantined); LastAt the newest.
+	Copies int        `json:"copies,omitempty"`
+	LastAt *time.Time `json:"last_at,omitempty"`
 }
 
 // Why a received message is held back (QuarantineItem.Code). The browser
