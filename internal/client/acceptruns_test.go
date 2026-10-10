@@ -34,7 +34,9 @@ func TestAcceptRefusesWhenNothingRuns(t *testing.T) {
 			t.Fatalf("%s: the task left review", how)
 		}
 	}
-	if err := w.bob.Accept(task.ID); !errors.Is(err, ErrNothingRuns) || !strings.Contains(err.Error(), "no responder is chosen here") {
+	// The refusal names exactly where the default agent is set.
+	if err := w.bob.Accept(task.ID); !errors.Is(err, ErrNothingRuns) || !strings.Contains(err.Error(), "no responder is chosen here") ||
+		!strings.Contains(err.Error(), "set one (AgentNet → Agents → Default agent, or agentnet responder set --harness NAME --dir <folder>)") {
 		t.Fatalf("accept with no responder: %v", err)
 	}
 	stays("accept with no responder")
@@ -45,7 +47,7 @@ func TestAcceptRefusesWhenNothingRuns(t *testing.T) {
 	if err := w.bob.SetResponder(nil); err != nil { // answering by hand, chosen
 		t.Fatal(err)
 	}
-	if err := w.bob.Accept(task.ID); !errors.Is(err, ErrNothingRuns) || !strings.Contains(err.Error(), "answer by hand") {
+	if err := w.bob.Accept(task.ID); !errors.Is(err, ErrNothingRuns) || !strings.Contains(err.Error(), "answer by hand") || !strings.Contains(err.Error(), "Agents → Default agent") {
 		t.Fatalf("accept when answering by hand: %v", err)
 	}
 	stays("accept when answering by hand")

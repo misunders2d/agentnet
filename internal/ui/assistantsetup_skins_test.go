@@ -5,8 +5,27 @@ import (
 	"os/exec"
 	"regexp"
 	"sort"
+	"strings"
 	"testing"
 )
+
+// TestComicDefaultAgentSetupRendered drives Comic's "Choose your agents"
+// with two named agents for Codex (the owner's Zenbook): the default agent
+// shows first and changes right there and on the Agents card, the older
+// Codex agent is preselected and explained, review needs no choice, and
+// applying leaves the other agent untouched. Opt-in: it needs Comic built
+// from these sources and an installed Playwright.
+func TestComicDefaultAgentSetupRendered(t *testing.T) {
+	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
+		t.Skip("opt-in: set AGENTNET_PLAYWRIGHT to an installed playwright-core")
+	}
+	cmd := exec.CommandContext(t.Context(), "node", "testdata/assistant_setup_default_rendered.cjs")
+	cmd.Env = append(os.Environ(), "AGENTNET_SCREENSHOTS="+t.TempDir())
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), `"ok":true`) {
+		t.Fatalf("%v\n%s", err, out)
+	}
+}
 
 func runNodeCheck(t *testing.T, script string) {
 	t.Helper()
@@ -72,7 +91,7 @@ func TestComicAssistantSetupStatesWorded(t *testing.T) {
 		}
 	}
 	typed := regexp.MustCompile(`<input[^>]*value=\{[^}]*\bdir\b`)
-	for _, f := range []string{"web/src/features/AssistantSetup.tsx", "web/src/features/AssistantSetup.folders.tsx", "web/src/features/Settings.assistant.tsx"} {
+	for _, f := range []string{"web/src/features/AssistantSetup.tsx", "web/src/features/AssistantSetup.folders.tsx", "web/src/features/Settings.assistant.tsx", "web/src/features/DefaultAgent.tsx"} {
 		src, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)

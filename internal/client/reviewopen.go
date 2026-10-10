@@ -206,7 +206,7 @@ type ReviewOpening struct {
 	Argv   []string
 	Dir    string
 	Prompt string
-	Why    string // why no coding agent is opened, when Argv is nil
+	Why    string // when Argv is nil: why no coding agent is opened, and the fix, in whole sentences
 }
 
 // ReviewOpening prepares the review of target (an inbox item id, or "" for
@@ -223,17 +223,24 @@ func (a *Agent) ReviewOpening(target, self string) (ReviewOpening, error) {
 	case err != nil:
 		return o, err
 	case r == nil:
-		o.Why = "no coding agent is chosen for AgentNet (agentnet responder list)"
+		// Named agents run only when a request names them; the review
+		// opens the default agent, so name exactly where it is set.
+		fix := DefaultAgentFix(a.suggestedHarness())
+		if chosen, _ := a.ResponderChosen(); chosen {
+			o.Why = "You chose to answer questions yourself on this computer, so questions wait for you. To have an agent answer, set a default agent: " + fix + "."
+		} else {
+			o.Why = "This computer has no default agent, so questions wait for you. Set one: " + fix + "."
+		}
 		return o, nil
 	}
 	h, ok := Harnesses[r.Harness]
 	if !ok {
-		o.Why = r.Harness + " is not a supported coding agent"
+		o.Why = "The default agent's program, " + r.Harness + ", is not supported here. Choose another: " + DefaultAgentFix(a.suggestedHarness()) + "."
 		return o, nil
 	}
 	bin, err := exec.LookPath(h.bin)
 	if err != nil {
-		o.Why = h.bin + " is not on PATH"
+		o.Why = "The default agent runs " + h.bin + ", which is not on PATH here. Install it, or choose another: " + DefaultAgentFix(a.suggestedHarness()) + "."
 		return o, nil
 	}
 	o.Argv = []string{bin, prompt}
