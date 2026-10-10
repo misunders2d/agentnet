@@ -310,70 +310,101 @@ func (r *appRunner) appAPI(w http.ResponseWriter, req *http.Request) bool {
 			http.Error(w, "Invalid update request.", 400)
 			return true
 		}
-		if _, _, err := appUpdateAsset(runtime.GOOS, r.exe); err != nil {
-			http.Error(w, err.Error(), http.StatusConflict)
-			return true
-		}
-		if _, err := appUpdateSourceSum(r.exe, ""); err != nil {
-			http.Error(w, err.Error(), http.StatusConflict)
-			return true
-		}
-		if !r.updating.CompareAndSwap(false, true) {
-			http.Error(w, "An update is already being prepared.", 409)
-			return true
-		}
-		resume, err := r.pauseForAppUpdate(req.Context())
+		out, err := r.updateApp(req.Context(), choice.Version)
 		if err != nil {
-			r.updating.Store(false)
-			http.Error(w, err.Error(), 409)
+			status := http.StatusInternalServerError
+			if refused := (*appUpdateRefusal)(nil); errors.As(err, &refused) {
+				status = refused.status
+			}
+			http.Error(w, err.Error(), status)
 			return true
 		}
-		keepPaused := false
-		defer func() {
-			if !keepPaused {
-				resume()
-				r.updating.Store(false)
-			}
-		}()
-		if choice.Version == "" {
-			choice.Version, err = latestRelease(req.Context())
-			if err != nil {
-				http.Error(w, err.Error(), 400)
-				return true
-			}
-		}
-		if choice.Version == protocol.Version {
-			if err = r.repairCurrentAppCommand(choice.Version); err != nil {
-				http.Error(w, err.Error(), 409)
-				return true
-			}
-			state, message := "complete", "App and command are up to date: "+choice.Version
-			if result, e := readAppUpdateResult(r.home); e == nil && result.State != "complete" {
-				state = result.State
-				message, _ = appUpdateResultText(r.home)
-			}
-			reply(map[string]string{"state": state, "version": choice.Version, "message": message})
-			return true
-		}
-		helper, plan, err := r.stageAppUpdateTo(req.Context(), choice.Version)
-		if err != nil {
-			r.updating.Store(false)
-			http.Error(w, err.Error(), 400)
-			return true
-		}
-		if err = r.handoffAppUpdate(req.Context(), helper, plan); err != nil {
-			http.Error(w, err.Error(), http.StatusServiceUnavailable)
-			return true
-		}
-		keepPaused = true
-		reply(map[string]string{"state": "restarting", "message": "Restarting AgentNet with the update…"})
-		if flusher, ok := w.(http.Flusher); ok {
+		reply(out)
+		if flusher, ok := w.(http.Flusher); ok && out["state"] == "restarting" {
 			flusher.Flush()
 		}
 	default:
 		http.NotFound(w, req)
 	}
 	return true
+}
+
+// appUpdateRefusal is why the app did not update, with its HTTP status.
+type appUpdateRefusal struct {
+	status int
+	err    error
+}
+
+func (e *appUpdateRefusal) Error() string { return e.err.Error() }
+func (e *appUpdateRefusal) Unwrap() error { return e.err }
+
+// updateApp updates the whole app to version ("" : the latest release),
+// for Settings > About, agentnet update and the daemon's automatic update.
+// It answers what the page is told; on "restarting" the shell has taken
+// the update over and stops this program.
+func (r *appRunner) updateApp(ctx context.Context, version string) (map[string]string, error) {
+	refuse := func(status int, err error) (map[string]string, error) {
+		return nil, &appUpdateRefusal{status, err}
+	}
+	if _, _, err := appUpdateAsset(runtime.GOOS, r.exe); err != nil {
+		return refuse(http.StatusConflict, err)
+	}
+	if _, err := appUpdateSourceSum(r.exe, ""); err != nil {
+		return refuse(http.StatusConflict, err)
+	}
+	if !r.updating.CompareAndSwap(false, true) {
+		return refuse(http.StatusConflict, errors.New("An update is already being prepared."))
+	}
+	resume, err := r.pauseForAppUpdate(ctx)
+	if err != nil {
+		r.updating.Store(false)
+		return refuse(http.StatusConflict, err)
+	}
+	keepPaused := false
+	defer func() {
+		if !keepPaused {
+			resume()
+			r.updating.Store(false)
+		}
+	}()
+	if version == "" {
+		version, err = latestRelease(ctx)
+		if err != nil {
+			return refuse(http.StatusBadRequest, err)
+		}
+	}
+	if version == protocol.Version {
+		if err = r.repairCurrentAppCommand(version); err != nil {
+			return refuse(http.StatusConflict, err)
+		}
+		state, message := "complete", "App and command are up to date: "+version
+		if result, e := readAppUpdateResult(r.home); e == nil && result.State != "complete" {
+			state = result.State
+			message, _ = appUpdateResultText(r.home)
+		}
+		return map[string]string{"state": state, "version": version, "message": message}, nil
+	}
+	helper, plan, err := r.stageAppUpdateTo(ctx, version)
+	if err != nil {
+		r.updating.Store(false)
+		return refuse(http.StatusBadRequest, err)
+	}
+	if err = r.handoffAppUpdate(ctx, helper, plan); err != nil {
+		return refuse(http.StatusServiceUnavailable, err)
+	}
+	keepPaused = true
+	return map[string]string{"state": "restarting", "message": "Restarting AgentNet with the update…"}, nil
+}
+
+// autoUpdate is the app's daemon's automatic update
+// (client.RunOptions.AutoUpdate): the same whole-app update as Settings >
+// About, for the release the Hub named.
+func (r *appRunner) autoUpdate(ctx context.Context, version string) (string, error) {
+	out, err := r.updateApp(ctx, version)
+	if err != nil {
+		return "", err
+	}
+	return out["message"], nil
 }
 
 // Shell holds stdin open until its old program has stopped. No production

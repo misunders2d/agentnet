@@ -71,6 +71,9 @@ func (l *Live) overview(listArchived bool) (Overview, error) {
 	o.Workspace = &WorkspaceView{Name: l.a.WorkspaceName(), Server: l.a.RelayHost()}
 	words := l.a.PeerWords() // people never see addresses in sentences
 	o.Release = recommended(l.a.Release())
+	if u, ok := l.a.UpdateRequired(); ok {
+		o.UpdateRequired = &UpdateRequiredView{Latest: u.Latest, URL: u.URL, Auto: l.a.AutoUpdateWords()}
+	}
 	o.Directory = directoryOf(l.a.MemberView(), l.a.Address)
 	if n, err := l.notifyView(); err == nil {
 		o.Notify = n

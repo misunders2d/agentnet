@@ -499,6 +499,7 @@ func (r *appRunner) runOptions(a *client.Agent, answer func(error)) client.RunOp
 	opts.CanSwitch = func() (bool, string) {
 		return false, "AgentNet is updated as a whole with the AgentNet app"
 	}
+	opts.AutoUpdate = r.autoUpdate // the whole app, as Settings > About updates it
 	opts.OpenPage = r.openPage(client.DefaultWorkspace)
 	opts.Owned = func() (func(), error) {
 		_, handler, stop, err := startWorkspaceUI(a, r.home, r.addr, r.token, filepath.Join(r.home, "skins"), r.openPage)

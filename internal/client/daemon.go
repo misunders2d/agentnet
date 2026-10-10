@@ -64,6 +64,13 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 	a.update.Lock()
 	a.update.pending, a.update.switching, a.update.ready = nil, nil, false
 	a.update.Unlock()
+	// The Hub's refusal of this build holds this daemon's requests here
+	// (updaterequired.go); a start is a trigger for the automatic update.
+	a.auto.install = opts.AutoUpdate
+	a.autoUpdateDue()
+	a.hub.gate.setHold(true)
+	defer a.hub.gate.setHold(false)
+	defer a.auto.runs.Wait() // after the stop below: an attempt ends with this run
 	ctx, stopRun := context.WithCancel(ctx)
 	defer stopRun()
 	a.stopRun = stopRun
@@ -175,7 +182,7 @@ func (a *Agent) streamOnce(ctx context.Context) (healthy bool, err error) {
 		return false, err
 	}
 	defer resp.Body.Close()
-	if err := checkStatus(resp); err != nil {
+	if err := a.hub.check(resp); err != nil {
 		return false, err
 	}
 	a.Logf("connected to hub as %s", a.Address)
@@ -293,6 +300,9 @@ func (b *streamBody) Read(p []byte) (int, error) {
 // on connect and on each Hub ping, so retries ride on existing traffic
 // instead of a poll loop.
 func (a *Agent) sync(ctx context.Context) {
+	if a.hub.gate.holding() {
+		return // the Hub refuses this build: what waits is sent once it serves this device (updaterequired.go)
+	}
 	// Durable receipts get a turn before bulk history and proof recovery.
 	if err := a.flushReceipts(ctx); err != nil {
 		a.Logf("receipts: %v", err)
@@ -309,6 +319,10 @@ func (a *Agent) sync(ctx context.Context) {
 }
 
 func (a *Agent) dispatch(ctx context.Context, event, data string) error {
+	switch event {
+	case "members", "message", "receipt":
+		a.updateServed(event) // sent only to a device the Hub serves (updaterequired.go)
+	}
 	switch event {
 	case "device_admin":
 		return a.onDeviceAdminNotice([]byte(data))
@@ -336,8 +350,13 @@ func (a *Agent) dispatch(ctx context.Context, event, data string) error {
 		if err := a.saveRelease([]byte(data)); err != nil {
 			a.Logf("release announcement ignored: %v", err)
 		} else {
+			a.autoUpdateDue() // a newer release is installed (autoupdate.go)
 			a.wakeWorker()
 		}
+	case "update_required":
+		// The Hub serves this device again only once it runs a newer
+		// AgentNet; it holds this stream with pings only (updaterequired.go).
+		a.onUpdateRequiredEvent([]byte(data))
 	case "members":
 		a.onMembers([]byte(data)) // the Hub's member list (members.go)
 	case "signal":

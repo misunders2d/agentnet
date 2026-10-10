@@ -4,7 +4,7 @@
 // A device that has not joined gets "Get AgentNet" (landing.mjs): the app
 // on a computer, this page on a phone's home screen, which joins only when
 // the person taps Join, under an automatic device name.
-import { Engine, openIDB, probeStore, sameOrigin } from "./engine.mjs";
+import { Engine, openIDB, probeStore, sameOrigin, updateReloadDue } from "./engine.mjs";
 import { addManifest, appBanner, installOffer, landing } from "./landing.mjs";
 import { decodeInvite, decodeOffer, newID, support, validName } from "./wire.mjs";
 import * as ws from "./workspaces.mjs";
@@ -286,9 +286,31 @@ async function run(link) {
       el("p", { class: "hint" }, "(" + e.message + ")"));
     return;
   }
-  const engine = new Engine({ store, base: location.origin, push });
+  // The build this page was served as: the server's stamp when it gives
+  // one, else its first version answer (engine.mjs, "this page outdated").
+  const stamp = document.querySelector('meta[name="agentnet-version"]');
+  const engine = new Engine({ store, base: location.origin, push, pageBuild: (stamp && stamp.content) || "" });
+  engine.onOutdated = () => reloadOutdated(engine);
   if (await engine.load()) start(engine);
   else showLanding(engine, link);
+}
+
+// reloadOutdated: this page's code is older than its server requires or
+// serves. Reloading gets the server's current files. Unsent text is kept in
+// this browser's storage as it is typed, so the reload never waits for it,
+// only (bounded, engine.close) for sends under way to be stored. A server
+// that serves this very build cannot help, and a tab reloads once per build
+// and target: the page's banner says so instead.
+let reloading = false;
+async function reloadOutdated(engine) {
+  if (reloading) return;
+  let tab = null;
+  try { tab = sessionStorage; } catch (e) { /* blocked: no reload (no loop guard) */ }
+  const same = engine.version && engine.version === engine.pageBuild;
+  if (same || !updateReloadDue(tab, engine.pageBuild, engine.outdated?.latest)) { engine.reloadDeclined(); return; }
+  reloading = true;
+  try { await engine.close(); } catch (e) { /* reload anyway */ }
+  location.reload();
 }
 
 // showLanding is "Get AgentNet" for a browser that has not joined

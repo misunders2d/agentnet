@@ -268,7 +268,9 @@ export class HubError extends Error {
     this.code = code;
   }
 }
-const retryable = (e) => e instanceof HubError && (e.status === 0 || e.status >= 500 || e.status === 429);
+// A server that requires a newer AgentNet (426 update_required) takes the
+// same request from the updated page: it waits, never fails.
+const retryable = (e) => e instanceof HubError && (e.status === 0 || e.status >= 500 || e.status === 429 || e.status === 426);
 class ReceiveDeferred extends HubError {
   constructor() { super(0, "receive_deferred", "Received ciphertext waits for verified network evidence."); }
 }
@@ -618,11 +620,52 @@ export function sameOrigin(hub, base) {
   if (b.protocol !== "https:" && !(b.protocol === "http:" && loopback(b.hostname))) throw new Error("A device joins only over https.");
 }
 
+// ---- this page outdated ------------------------------------------------------------------------
+//
+// Owner policy "latest only" (v0.8.17): a page whose code is older than its
+// server requires (426 update_required, or the stream's update_required
+// event) or serves (its /v1/version names another build than the one this
+// page was served as) is outdated. The page then reloads to get the
+// server's current files (device.mjs); drafts are kept in this browser's
+// storage as they are typed, so the reload never waits for them. While the
+// server refuses this build, the engine sends it nothing but its stream,
+// the stream's ping acknowledgements and the version probe: nothing loops.
+
+const releaseTag = /^v\d{1,6}\.\d{1,6}\.\d{1,6}$/;
+
+// updateAllowed is what a refused page still asks its server.
+const updateAllowed = (method, path) => {
+  const p = String(path).split("?")[0];
+  return method === "GET" && (p === "/v1/stream" || p === "/v1/version") || method === "POST" && p === "/v1/stream/ack";
+};
+
+// updateReloadDue says whether reloading this tab may help: not when it
+// already reloaded from build `from` for `to` and was served `from` again
+// (the server has nothing newer yet). storage is the tab's sessionStorage;
+// without one that works, nothing would stop a reload loop, so no reload.
+export function updateReloadDue(storage, from, to) {
+  const key = "agentnet.update-reload.v1", mark = JSON.stringify({ from: String(from || ""), to: String(to || "") });
+  try {
+    if (storage.getItem(key) === mark) return false;
+    storage.setItem(key, mark);
+    return storage.getItem(key) === mark;
+  } catch (e) {
+    return false;
+  }
+}
+
 // ---- the engine -------------------------------------------------------------------------------
 
 export class Engine {
-  constructor({ store, base, fetch: f, now, push } = {}) {
+  constructor({ store, base, fetch: f, now, push, pageBuild } = {}) {
     this.store = store;
+    // pageBuild is the build this page was served as ("": its server's
+    // first answer), given only to the engine of the page's own server.
+    // outdated says why this page's code is too old, once it is; the page
+    // reloads then (onOutdated, device.mjs).
+    this.pageBuild = typeof pageBuild === "string" ? pageBuild : null;
+    this.outdated = null; // { latest, url, refused, stale, reloadDeclined }
+    this.onOutdated = null;
     // push is the page's Web Push adapter (device.mjs): supported(),
     // subscribe(key), current(). Tests pass their own.
     this.push = push || null;
@@ -736,6 +779,7 @@ export class Engine {
 
   async request(method, path, body, headers, signal, admission = null) {
     receiveNetwork(admission);
+    if (this.outdated?.refused && !updateAllowed(method, path)) throw new HubError(426, "update_required", this.outdatedText());
     // A stalled request must not hold onConnect (and therefore reconnect)
     // forever. Bound headers and body below the stream's heartbeat watchdog.
     const ctrl = new AbortController(), parents = [...new Set([signal, this.sendAbort.signal].filter(Boolean))];
@@ -752,6 +796,10 @@ export class Engine {
       else {
         let j = {};
         try { j = await r.json(); } catch (e) { if (ctrl.signal.aborted) throw e; }
+        if (r.status === 426 && (j.error === "update_required" || j.code === "update_required")) {
+          this.outdate({ latest: j.latest, url: j.url, refused: true });
+          throw new HubError(426, "update_required", this.outdatedText());
+        }
         const err = new HubError(r.status, j.code || "", j.error || r.statusText || "server error");
         if (err.code === "revoked") await this.setRevoked();
         throw err;
@@ -775,6 +823,7 @@ export class Engine {
 
   async getBytes(path, bound, admission = null) {
     receiveNetwork(admission);
+    if (this.outdated?.refused) throw new HubError(426, "update_required", this.outdatedText());
     const headers = await wire.signRequest(this.keys, this.address, "GET", path, "");
     // History/context carriers use this inside stream admission. A suspended
     // browser transfer needs the same bounded transport as ordinary requests,
@@ -844,9 +893,45 @@ export class Engine {
     if (this.featureList) return this.featureList;
     const v = await this.call("GET", "/v1/version", undefined, { signed: false }, admission);
     this.version = v.version || "";
+    if (this.pageBuild === "") this.pageBuild = this.version;
+    else if (this.pageBuild && this.version && this.version !== this.pageBuild) this.outdate({ latest: this.version, stale: true });
     this.featureList = v.features || [];
     this.realm = typeof v.realm_id === "string" ? v.realm_id : ""; // the workspace's realm as this authenticated relay states it (pinned per membership by the shell)
     return this.featureList;
+  }
+
+  // outdate notes why this page is outdated: refused (its server's
+  // update_required, naming the release to run) or stale (its server serves
+  // another build, latest). The page is told once per change.
+  outdate({ latest, url, refused = false, stale = false }) {
+    const o = this.outdated || { latest: "", url: "", refused: false, stale: false, reloadDeclined: false };
+    const next = { ...o, refused: o.refused || refused, stale: o.stale || stale };
+    if (typeof latest === "string" && (releaseTag.test(latest) || stale && latest.length <= 64)) next.latest = latest;
+    if (typeof url === "string" && /^https:\/\/[^\s@]{1,500}$/.test(url)) next.url = url;
+    if (this.outdated && ["latest", "url", "refused", "stale"].every((k) => o[k] === next[k])) return;
+    this.outdated = next;
+    this.changed();
+    if (this.onOutdated) { try { this.onOutdated(next); } catch (e) { /* the page's own problem */ } }
+  }
+
+  // updateServed: the server sent what it sends only to a device it
+  // serves; a refusal no longer holds (a stale build still does).
+  updateServed() {
+    if (!this.outdated?.refused) return;
+    this.outdated = this.outdated.stale ? { ...this.outdated, refused: false } : null;
+    this.changed();
+  }
+
+  // reloadDeclined: reloading did not bring a newer page (device.mjs).
+  reloadDeclined() {
+    if (!this.outdated || this.outdated.reloadDeclined) return;
+    this.outdated = { ...this.outdated, reloadDeclined: true };
+    this.changed();
+  }
+
+  outdatedText() {
+    const v = this.outdated?.latest;
+    return v && releaseTag.test(v) ? "Update AgentNet to " + v + " to continue." : "Update AgentNet to continue.";
   }
 
   async setRevoked() {
@@ -6333,6 +6418,13 @@ export class Engine {
       }
       return;
     }
+    if (event === "members" || event === "message" || event === "receipt") this.updateServed();
+    if (event === "update_required") { // served again only once it runs a newer AgentNet: pings only until then
+      let u = {};
+      try { u = JSON.parse(data) || {}; } catch (e) { /* taken as one without a version */ }
+      this.outdate({ latest: u.latest, url: u.url, refused: true });
+      return;
+    }
     if (event === "device_admin") {
       await this.onDeviceAdminNotice(data);
     } else if (event === "receipt") {
@@ -7964,6 +8056,8 @@ export class Engine {
       .map((r) => ({ id: r.id, address: r.address, name: r.address.split("/")[1], fingerprint: r.fingerprint, requested_at: iso(r.requested_at * 1000), expires: iso(r.expires * 1000), state: r.state }));
     return {
       demo: false, seq: this.seq, version: this.version, release: "",
+      update_required: this.outdated?.refused ? { latest: this.outdated.latest, url: this.outdated.url || undefined,
+        auto: this.outdated.reloadDeclined ? "Your server does not offer it to this page yet: ask its admin to update the server." : "" } : undefined,
       me: { address: this.address, fingerprint: this.fp, responder: "", responder_dir: "", browser: true, agent: false }, // a browser runs no agent
       workspace: { name: this.workspaceName, server: this.relayHost() }, agent_devices: [...this.agentDevices], model_reports: await this.modelReports(),
       device: { online: this.connected, revoked: this.revoked, persisted: this.storage ? this.storage.persisted : null },

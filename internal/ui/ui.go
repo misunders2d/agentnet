@@ -121,6 +121,20 @@ type Overview struct {
 	AgentDevices []string `json:"agent_devices"`
 	// ModelReports are private, read-only reports from verified own-human hosts.
 	ModelReports []client.PrivateModelReport `json:"model_reports,omitempty"`
+
+	// UpdateRequired is set while the Hub serves this device again only
+	// once it runs a newer AgentNet: the page shows it as a prominent
+	// "Update AgentNet to <latest> to continue" banner.
+	UpdateRequired *UpdateRequiredView `json:"update_required,omitempty"`
+}
+
+// UpdateRequiredView is the Hub's refusal of this device's version: what
+// to run, the release page the Hub named (shown, never downloaded) and, in
+// a sentence, what this device's automatic update does about it.
+type UpdateRequiredView struct {
+	Latest string `json:"latest"`
+	URL    string `json:"url,omitempty"`
+	Auto   string `json:"auto,omitempty"`
 }
 
 // WorkspaceView is the workspace's own name ("" when its admin set none)

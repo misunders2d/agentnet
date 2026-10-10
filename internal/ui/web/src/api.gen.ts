@@ -763,6 +763,7 @@ export interface Overview {
   workspace?: WorkspaceView;
   agent_devices: string[] | null;
   model_reports?: PrivateModelReport[];
+  update_required?: UpdateRequiredView;
 }
 
 export interface OwnDevicePermission {
@@ -862,6 +863,8 @@ export interface QuarantineItem {
   code: string;
   reason: string;
   at: string;
+  copies?: number;
+  last_at?: string;
 }
 
 export interface QuestionApproval {
@@ -1240,6 +1243,12 @@ export interface TypingView {
   supported: boolean;
   current: boolean;
   entries: TypingEntry[] | null;
+}
+
+export interface UpdateRequiredView {
+  latest: string;
+  url?: string;
+  auto?: string;
 }
 
 export interface WorkspaceBinding {

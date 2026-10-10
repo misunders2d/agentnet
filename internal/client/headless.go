@@ -416,7 +416,7 @@ func (a *Agent) tellStatus(ctx context.Context, id string) bool {
 func unreachableNow(err error) bool {
 	var he *HubError
 	if errors.As(err, &he) {
-		return he.Status >= 500
+		return he.Status >= 500 || he.Code == codeUpdateRequired // told by the updated program
 	}
 	var ne net.Error
 	return errors.As(err, &ne) || errors.Is(err, context.DeadlineExceeded)
