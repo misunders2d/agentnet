@@ -56,6 +56,17 @@ program, `agentnet`, that is both the laptop client and the Hub.
 - **Fail closed:** TLS is never skipped (pinned certificate or system CAs),
   changed peer keys block until trusted, revoked agents are refused, secrets
   and plaintext never go to logs.
+- **Latest version only; outdated devices never impede others** (owner
+  rule, v0.8.17). A relay running a release serves only that release: after
+  its grace period an older device is suspended (HTTP 426 update_required;
+  it may still ack, finish admitted answers/results and their read-only
+  lookups and uploads) and is told to update; messages for it wait in custody.
+  Only the relay's own release sets the threshold — an admin recommendation
+  never suspends anyone. Senders never wait for a suspended device and never
+  drop its copies. Every client updates itself (desktop app, headless/server
+  daemon, browser reload) from the fixed release origin with checksums, only
+  when no job runs. The version header is unsigned: availability only, never
+  authority.
 - **Keep it lean:** standard library first; current direct dependencies are
   age, modernc SQLite, x/sys and the official A2A SDK. Add one only when a
   requirement needs it. No MCP server, no extra services.

@@ -6,6 +6,31 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+## [0.8.17] — 2026-10-10
+
+### Changed
+
+- **Latest version only.** A relay running a release now serves only devices on that release. After a grace period for updating (30 minutes by default; `hub serve --update-grace` or `AGENTNET_UPDATE_GRACE`, `0` for none), an outdated device is suspended: the relay refuses its new work with an "Update AgentNet to vX to continue" answer and its stream carries only the update notice. It may still acknowledge, look up the records an answer needs, and finish uploading answers and results (with their files) already admitted. Messages for it wait in the relay and arrive once it updates; nothing is lost. Only the relay's own release sets the threshold, so a mistyped recommendation cannot lock anyone out. Development relays keep the policy off. The update recommendation now follows the relay's release automatically.
+- **Nobody waits for an outdated device.** Senders skip suspended devices and record why per device ("…'s laptop is suspended until it updates AgentNet"). In the browser and phone app, one device that lacks a capability, never connected, or was revoked no longer stops a whole group message, group change or guest conversation. Delivery headlines ignore your own copies and suspended devices.
+- **Automatic updates.** The desktop app, the background program on servers and headless agent hosts, and browser pages update themselves to the release the relay names: downloaded only from the official release page, checked against its checksums, tried against this computer's data first, and switched in only when no agent job is running. Browser pages reload to the new version without losing drafts. Turn it off with `agentnet update --auto off`. Devices on v0.8.16 or older cannot update themselves and must be updated once by hand; a new real-binary release check proves such a device is suspended without slowing anyone else and catches up after its update.
+- Topic **Done, Reopen and Archive** now follow you across your own linked devices, like topic names.
+
+### Fixed
+
+- The phone app no longer shows an empty chat list for 20+ seconds while it waits on the relay's notification support; saved chats appear from local storage first. Changes arriving during the first load are no longer lost, and a slow or unavailable skin catalog or font sheet no longer keeps the app on "Opening AgentNet…".
+- Receiving on phones and browsers keeps moving: one message that fails unexpectedly is set aside instead of stopping everything behind it, heartbeats are answered immediately, the app reconnects when it comes back to the foreground, and each message now costs work proportional to its conversation instead of all stored history (synthetic desktop measurement: a reply behind 100 sync copies with 5,000 stored messages went from 79 s to about 8 s). History copies are no longer echoed back to the device that sent them.
+- Desktop and server programs keep receiving when one message fails admission for a reason other than missing proof; it is held instead of blocking the stream. Held messages are rechecked fairly instead of restarting from the first page on every wake, and presence-only changes no longer trigger full rechecks.
+- The relay keeps a busy device's stream open while it acknowledges messages, sends heartbeats during long backlogs, and no longer re-sends an unchanged member list.
+- Your own devices no longer receive duplicate history copies of messages they already got directly, and byte-identical copies re-sent by older devices fold into one held record instead of hundreds of notices.
+- Held-back notices name the exact cause and who can act ("Your device Bezos re-sent 4 records 866 times · update AgentNet on Bezos"), count records separately from copies, and stop calling your own verified devices "unverified sender". Every copy stays inspectable.
+- Requests show "Waiting" only when the executing computer reports active work; otherwise "No result recorded". Executors now report the recorded final state of retained requests after updating, and report requests queued for a busy agent. OKs no longer say "Decide on…" for work that was only last seen running.
+- An invitation that lists a device you later removed from your account no longer holds that conversation's agent history forever; the removed device gets no task authority. Edits and deletions of messages written by a removed device of the same person are accepted.
+- Deletions and other copies that waited for an older device are released once it updates; history copies waiting on a capability are no longer stuck.
+- Own-device sync messages (read marks, invitation sync, topic names and marks), history file requests and conversation deletions are now acknowledged once stored, so they no longer stay at the relay and get pushed again on every reconnect. Re-delivered copies are acknowledged again without being applied twice.
+- Sends that v0.8.16 and older marked failed because the relay asked for an update are queued again, unchanged, once that device updates.
+- The relay announces a device's session start and end again, so copies waiting for an updated device are released promptly.
+- Agent setup shows your default agent and lets you change it in place, explains two agents that run the same program instead of forcing a choice, and a computer with no default agent says exactly how to set one.
+
 ## [0.8.16] — 2026-10-10
 
 ### Fixed

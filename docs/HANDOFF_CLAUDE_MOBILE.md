@@ -1,5 +1,14 @@
 # Claude handoff: mobile failures after v0.8.16
 
+> **Status (October 10, v0.8.17):** taken over by Claude and resolved in
+> [v0.8.17](plans/V0_8_17.md): the read-view checkpoint was fixed (three
+> temporal-dead-zone references) and verified by a base-vs-candidate parity
+> harness; the startup, receive, held-notice and pending-state root causes
+> below are diagnosed and repaired there. The owner then decided on
+> latest-only versions with automatic updates, and native mobile apps after
+> this release. Physical-phone confirmation is still outstanding.
+
+
 October 10, 2026. **The owner stopped Codex implementation and assigned the work
 to Claude. All three GPT-6.1-sol helpers have stopped. No release or deployment
 is in progress. The checkpoint below is unfinished, not a release candidate.**
