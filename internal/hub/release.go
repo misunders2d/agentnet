@@ -12,8 +12,9 @@ import (
 // The Hub operator may recommend one client version. It is kept in the
 // database, pushed on every stream when a stream connects and whenever it
 // changes, and never pushed again when set to the same value. A release
-// relay pushes its latest release instead when the operator's is older or
-// none (update.go): the recommendation can no longer go stale.
+// relay pushes its own release instead when the operator's is older or
+// none (update.go): the recommendation can no longer go stale. A newer one
+// the operator names is a notice only: it suspends nobody.
 
 func (s *store) release() (protocol.Release, error) {
 	var r protocol.Release
@@ -45,7 +46,7 @@ func (h *Hub) loadRelease() error {
 }
 
 // currentRelease returns the recommendation clients are told
-// (pushedRelease: the latest release on a release relay) and its
+// (pushedRelease: on a release relay, never older than its own) and its
 // generation, which changes only when that recommendation does.
 func (h *Hub) currentRelease() (protocol.Release, int64) {
 	h.releaseMu.Lock()
@@ -81,18 +82,11 @@ func (h *Hub) handleRelease(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	h.releaseMu.Unlock()
-	var moved bool
-	if err == nil {
-		moved, err = h.serveLatest()
-	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "", "could not store the release")
 		return
 	}
-	if moved {
-		h.membersChanged() // who is suspended may change; wakes every stream too
-	}
-	if pushed {
+	if pushed { // a notice: who is suspended depends on the relay's own release only (update.go)
 		h.streams.notifyAll()
 	}
 	if changed {

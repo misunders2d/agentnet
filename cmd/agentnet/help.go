@@ -950,15 +950,17 @@ DIR/bootstrap-invite.txt (read it with agentnet hub bootstrap-invite).
   --upload-ttl D    remove unfinished uploads after D idle
   --push-hosts H,.. push services to send notifications to, besides Apple,
                     Google, Mozilla and Microsoft (env AGENTNET_PUSH_HOSTS)
-  --update-grace D  how long a device on an AgentNet older than the latest
+  --update-grace D  how long a device on an AgentNet older than the Hub's
                     release keeps working; 0: none (env AGENTNET_UPDATE_GRACE)
 
-Latest only: a Hub that runs a release (vX.Y.Z) recommends the latest
-release, its own or a newer one an admin set, to every device. A device on
-an older version is suspended once the grace period has passed since the
-Hub first asked for a newer release: its requests are refused with "update
-AgentNet to vX.Y.Z", and what others send it waits on the Hub until it
-connects again, updated. A development build of the Hub suspends nobody.
+Latest only: a Hub that runs a release (vX.Y.Z) recommends that release to
+every device, or a newer one an admin set (a notice only). A device older
+than the Hub's own release is suspended once the grace period has passed
+since the Hub first ran a newer release than the device's: it may finish
+what it was asked before (receipts, answers, results), its other requests
+are refused with "update AgentNet to vX.Y.Z", and what others send it waits
+on the Hub until it connects again, updated. An admin's recommendation
+suspends nobody, and a development build of the Hub suspends nobody.
 
 Default TLS: the Hub makes its own certificate and pins it in invites.
 For browsers, use HTTPS with a certificate they trust, normally through a

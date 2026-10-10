@@ -55,14 +55,14 @@ func sendAs(t *testing.T, h *Hub, version string, from, to member) string {
 	return env.ID
 }
 
-// backdate moves the times this Hub first asked for each release back by d,
-// as if it had asked that much earlier, and plans the grace ends again.
+// backdate moves the times this relay first ran each release back by d, as
+// if it had run it that much earlier, and plans the grace ends again.
 func backdate(t *testing.T, h *Hub, d time.Duration) {
 	t.Helper()
 	if _, err := h.store.db.Exec(`UPDATE releases_served SET since_ms = since_ms - ?`, d.Milliseconds()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.serveLatest(); err != nil {
+	if err := h.serveRelease(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -160,9 +160,8 @@ func TestDevelopmentRelaySuspendsNobody(t *testing.T) {
 
 // The stream of a suspended device says release and update_required, then
 // carries pings only, which it may acknowledge; a message to it stays in
-// custody, its own receipt is refused, and once it connects updated the
-// message is delivered. The member list shows each device's reported
-// version and whether it is suspended.
+// custody until it connects updated, then it is delivered. The member list
+// shows each device's reported version and whether it is suspended.
 func TestSuspendedStreamKeepsCustody(t *testing.T) {
 	const hb = 100 * time.Millisecond
 	h := releaseHub(t, filepath.Join(t.TempDir(), "hub"), "v1.2.0", -1, hb)
@@ -196,9 +195,6 @@ func TestSuspendedStreamKeepsCustody(t *testing.T) {
 	}
 	if s := state(); s != protocol.StateCustody {
 		t.Fatalf("message to the suspended device: %s", s)
-	}
-	if c, _ := bob.callAs(t, h, "v1.1.0", "POST", "/v1/messages/"+id+"/ack", protocol.AckRequest{State: protocol.StateDelivered}); c != http.StatusUpgradeRequired {
-		t.Fatalf("receipt from the suspended device: %d", c)
 	}
 	ms := listMembersAs(t, h, alice, "v1.2.0")
 	if b, a := memberOf(t, ms, bob.addr), memberOf(t, ms, alice.addr); b.Version != "v1.1.0" || !b.Suspended || b.Presence != protocol.PresenceConnected || a.Version != "" || a.Suspended {
@@ -284,12 +280,13 @@ func TestGraceEndSuspendsOpenStream(t *testing.T) {
 	}
 }
 
-// The recommendation pushed is always the latest release: the relay's own
-// over none or an older admin recommendation (which pushes nothing new),
-// the admin's when it names a newer release. A newer latest gives devices
-// on the relay's release a grace period of its own but none again to those
-// suspended already, and the time a release was first asked for survives a
-// restart, also on an upgraded relay.
+// The recommendation pushed is never older than the relay's own release:
+// its own over none or an older admin recommendation (which pushes nothing
+// new), the admin's when it names a newer release, as a notice that
+// changes nobody's suspension. A relay upgraded to a newer release gives
+// devices on the release before a grace period of its own but none again to
+// those suspended already, and the time a release was first run survives a
+// restart.
 func TestPushedReleaseIsLatest(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "hub")
 	h := releaseHub(t, dir, "v1.2.0", time.Hour, 0)
@@ -297,7 +294,7 @@ func TestPushedReleaseIsLatest(t *testing.T) {
 	own := protocol.Release{Version: "v1.2.0", URL: protocol.ReleaseURL("v1.2.0")}
 	set := func(r protocol.Release) {
 		t.Helper()
-		if c, b := admin.callAs(t, h, "v1.3.0", "POST", "/v1/admin/release", protocol.ReleaseRequest{Release: r, Clear: r.Version == ""}); c != http.StatusOK {
+		if c, b := admin.callAs(t, h, "v1.2.0", "POST", "/v1/admin/release", protocol.ReleaseRequest{Release: r, Clear: r.Version == ""}); c != http.StatusOK {
 			t.Fatalf("set %+v: %d %s", r, c, b)
 		}
 	}
@@ -309,7 +306,7 @@ func TestPushedReleaseIsLatest(t *testing.T) {
 	if r, g := h.currentRelease(); r != own || g != gen {
 		t.Fatalf("stale recommendation: %+v (generation %d, was %d)", r, g, gen)
 	}
-	backdate(t, h, 2*time.Hour) // v1.2.0 asked for two hours ago
+	backdate(t, h, 2*time.Hour) // v1.2.0 run since two hours ago
 	if _, required := h.updateRequired("v1.1.0"); !required {
 		t.Fatal("v1.1.0 is not suspended two hours on")
 	}
@@ -318,11 +315,12 @@ func TestPushedReleaseIsLatest(t *testing.T) {
 	if r, g := h.currentRelease(); r != newer || g == gen {
 		t.Fatalf("newer recommendation: %+v (generation %d)", r, g)
 	}
-	if latest, required := h.updateRequired("v1.2.0"); latest != "v1.3.0" || required {
-		t.Fatalf("v1.2.0 just after v1.3.0 was asked for: %q %v", latest, required)
+	backdate(t, h, 2*time.Hour)
+	if latest, required := h.updateRequired("v1.2.0"); latest != "" || required {
+		t.Fatalf("v1.2.0 on a v1.2.0 relay that recommends v1.3.0: %q %v", latest, required)
 	}
-	if _, required := h.updateRequired("v1.1.0"); !required {
-		t.Fatal("a newer recommendation gave a suspended device another grace period")
+	if latest, required := h.updateRequired("v1.1.0"); latest != "v1.2.0" || !required {
+		t.Fatalf("v1.1.0 on a v1.2.0 relay that recommends v1.3.0: %q %v", latest, required)
 	}
 	set(protocol.Release{})
 	if r, _ := h.currentRelease(); r != own {
@@ -348,5 +346,127 @@ func TestPushedReleaseIsLatest(t *testing.T) {
 	}
 	if _, required := h.updateRequired("v1.4.0"); required {
 		t.Fatal("the relay's own release is outdated")
+	}
+}
+
+// An admin's recommendation newer than the relay's own release is a notice
+// only: it is pushed as the recommendation, but however long ago it was set
+// it suspends nobody (a typo or a tag not yet published must lock nobody
+// out), a suspended device is asked for the relay's own release, never the
+// admin's, and the admin can take the recommendation back.
+func TestAdminRecommendationNeverSuspends(t *testing.T) {
+	h := releaseHub(t, filepath.Join(t.TempDir(), "hub"), "v1.2.0", 30*time.Minute, 100*time.Millisecond)
+	defer h.Close()
+	admin, bob := enrollAdmin(t, h, "boss"), enroll(t, h, "bob")
+	typo := protocol.Release{Version: "v9.9.9", URL: "https://example.test/typo"}
+	if c, b := admin.callAs(t, h, "v1.2.0", "POST", "/v1/admin/release", protocol.ReleaseRequest{Release: typo}); c != http.StatusOK {
+		t.Fatalf("set: %d %s", c, b)
+	}
+	if r, _ := h.currentRelease(); r != typo {
+		t.Fatalf("announced: %+v", r)
+	}
+	backdate(t, h, 31*time.Minute)
+	if c, b := bob.callAs(t, h, "v1.2.0", "GET", "/v1/agents", nil); c != http.StatusOK {
+		t.Fatalf("the relay's own release after the grace period: %d %s", c, b)
+	}
+	if c, b := bob.callAs(t, h, "v1.1.0", "GET", "/v1/agents", nil); c != http.StatusUpgradeRequired || strings.TrimSpace(string(b)) != updateRequiredV120 {
+		t.Fatalf("an older release after the grace period: %d %s", c, b)
+	}
+	events := pushStream(t, h, bob, "v1.1.0")
+	if e := <-events; e.name != "update_required" || e.data != `{"latest":"v1.2.0","url":"https://github.com/misunders2d/agentnet/releases/tag/v1.2.0"}` {
+		t.Fatalf("suspended stream: %+v", e)
+	}
+	if c, b := admin.callAs(t, h, "v1.2.0", "POST", "/v1/admin/release", protocol.ReleaseRequest{Clear: true}); c != http.StatusOK {
+		t.Fatalf("clear: %d %s", c, b)
+	}
+	if r, _ := h.currentRelease(); r != (protocol.Release{Version: "v1.2.0", URL: protocol.ReleaseURL("v1.2.0")}) {
+		t.Fatalf("after clear: %+v", r)
+	}
+	if e := nextEvent(t, h, bob, "v1.1.0", events); e.name != "release" || !strings.Contains(e.data, `"version":"v1.2.0"`) {
+		t.Fatalf("suspended stream after clear: %+v", e)
+	}
+}
+
+// Only a release the relay itself ran starts a grace period: one an admin
+// recommended and took back long before the relay runs it still gives the
+// devices on the release before it the whole grace period once it does.
+func TestRelayReleaseGraceIgnoresRecommendations(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "hub")
+	h := releaseHub(t, dir, "v1.2.0", 30*time.Minute, 0)
+	admin := enrollAdmin(t, h, "boss")
+	for _, req := range []protocol.ReleaseRequest{{Release: protocol.Release{Version: "v1.3.0", URL: "https://example.test/new"}}, {Clear: true}} {
+		if c, b := admin.callAs(t, h, "v1.2.0", "POST", "/v1/admin/release", req); c != http.StatusOK {
+			t.Fatalf("%+v: %d %s", req, c, b)
+		}
+	}
+	backdate(t, h, 48*time.Hour)
+	h.Close()
+	h = releaseHub(t, dir, "v1.3.0", 30*time.Minute, 0) // upgraded two days later
+	defer h.Close()
+	if latest, required := h.updateRequired("v1.2.0"); latest != "v1.3.0" || required {
+		t.Fatalf("v1.2.0 just after the relay's upgrade: %q %v", latest, required)
+	}
+	if _, required := h.updateRequired("v1.1.0"); !required {
+		t.Fatal("v1.1.0, outdated for two days, got another grace period")
+	}
+}
+
+// sealKind seals a message of kind from one member to another.
+func sealKind(t *testing.T, from, to member, kind string) envelope.Envelope {
+	t.Helper()
+	r, _ := to.id.Public(to.addr).Recipient()
+	env, err := envelope.Seal(envelope.Inner{ID: protocol.NewID(), From: from.addr, To: to.addr, TS: time.Now().Unix(), Kind: kind, Body: "x", ReplyTo: protocol.NewID()}, from.id.Sign, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return env
+}
+
+// A suspended device may still finish what was admitted before it was
+// suspended, as programs before v0.8.17 do it: acknowledge what it has
+// received, look up the asker first (directory entry, sessions, profile)
+// and post its answers and results, which wait in custody. Nothing new
+// starts: any other message (a question, a task, a message) is refused with
+// 426 and not stored, and so is a typing signal.
+func TestSuspendedDeviceDrainsAdmittedWork(t *testing.T) {
+	h := releaseHub(t, filepath.Join(t.TempDir(), "hub"), "v1.2.0", -1, 0)
+	defer h.Close()
+	alice, bob := enroll(t, h, "alice"), enroll(t, h, "bob")
+	const old = "v1.1.0"
+	received := sendAs(t, h, "v1.2.0", bob, alice)
+	if c, b := alice.callAs(t, h, old, "POST", "/v1/messages/"+received+"/ack", protocol.AckRequest{State: protocol.StateDelivered}); c != http.StatusOK {
+		t.Errorf("receipt from the suspended device: %d %s", c, b)
+	}
+	if _, _, s, err := h.store.messageState(received, bob.addr); err != nil || s != protocol.StateDelivered {
+		t.Errorf("acknowledged message: %s %v", s, err)
+	}
+	for _, path := range []string{"/v1/agents/bob/x", "/v1/agents/bob/x/sessions", "/v1/agents/bob/x/profile"} {
+		if c, b := alice.callAs(t, h, old, "GET", path, nil); c != http.StatusOK {
+			t.Errorf("lookup %s while suspended: %d %s", path, c, b)
+		}
+	}
+	for _, kind := range []string{envelope.KindAnswer, envelope.KindResult, envelope.KindMessage, envelope.KindQuestion, envelope.KindTask} {
+		drains := kind == envelope.KindAnswer || kind == envelope.KindResult
+		env := sealKind(t, alice, bob, kind)
+		c, b := alice.callAs(t, h, old, "POST", "/v1/messages", env)
+		_, _, state, err := h.store.messageState(env.ID, alice.addr)
+		switch {
+		case drains && (c != http.StatusAccepted || err != nil || state != protocol.StateCustody):
+			t.Errorf("%s from the suspended device: %d %s, stored %q %v", kind, c, b, state, err)
+		case !drains && (c != http.StatusUpgradeRequired || strings.TrimSpace(string(b)) != updateRequiredV120 || err == nil):
+			t.Errorf("%s from the suspended device: %d %s, stored %q", kind, c, b, state)
+		}
+	}
+	signal := func(version string) int {
+		raw, _ := json.Marshal(hubSignal(t, alice, bob))
+		r := signed(t, alice.id, alice.addr, http.MethodPost, "/v1/signal", raw)
+		r.Header.Set(protocol.VersionHeader, version)
+		return serve(h, r).Code
+	}
+	if c := signal(old); c != http.StatusUpgradeRequired {
+		t.Errorf("typing signal from the suspended device: %d", c)
+	}
+	if c := signal("v1.2.0"); c != http.StatusAccepted {
+		t.Errorf("typing signal once updated: %d", c)
 	}
 }

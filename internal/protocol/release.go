@@ -44,8 +44,8 @@ func (r Release) Validate() error {
 func (r Release) Key() string { return r.Version + " " + r.URL }
 
 // FeatureUpdate says the Hub reads VersionHeader, its CORS check allows it,
-// and, when the Hub runs a release, it asks clients older than its latest
-// release to update (GET /v1/version). A browser page sends that header to
+// and, when the Hub runs a release, it asks clients older than that release
+// to update (GET /v1/version). A browser page sends that header to
 // another origin's relay only when the relay says this: an older relay's
 // CORS check refuses headers it does not know.
 const FeatureUpdate = "update1"
@@ -54,7 +54,8 @@ const FeatureUpdate = "update1"
 // because the client must be updated first (UpdateRequiredError).
 const CodeUpdateRequired = "update_required"
 
-// UpdateRequired names the release a client must run to use this Hub again.
+// UpdateRequired names the release a client must run to use this Hub again:
+// the relay's own release, never an admin's recommendation.
 // It is the data of the "update_required" push event, which follows the
 // "release" event on the stream of a suspended device; that stream then
 // carries pings only, so what is addressed to the device stays in the Hub's
@@ -64,9 +65,11 @@ type UpdateRequired struct {
 	URL    string `json:"url"` // ReleaseURL(Latest)
 }
 
-// UpdateRequiredError is the HTTP 426 answer to every request of a
-// suspended device except its stream, its ping acknowledgements and GET
-// /v1/release. Error is CodeUpdateRequired; Message is for people.
+// UpdateRequiredError is the HTTP 426 answer to a request of a suspended
+// device, except those that let work admitted before drain (its stream,
+// its ping and message acknowledgements, GET /v1/release, read-only member
+// lookups, and posting an answer or a result). Error is CodeUpdateRequired;
+// Message is for people.
 type UpdateRequiredError struct {
 	Error string `json:"error"`
 	UpdateRequired

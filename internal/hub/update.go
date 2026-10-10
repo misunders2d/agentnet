@@ -7,19 +7,23 @@ import (
 	"strings"
 	"time"
 
+	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
 // Latest only (owner policy, v0.8.17): a relay that runs a release asks
-// every device to run the latest release, the newer of its own version and
-// the admin's recommendation. Each request says which version its client
-// runs (protocol.VersionHeader, unsigned; none from older programs). A
-// device whose version is older is still served for a grace period after
-// this Hub first asked for a newer release; then it is suspended until it
-// updates: every request but its stream gets HTTP 426, and its stream gets
-// the release and update_required events, then pings only. What is
-// addressed to it stays in custody meanwhile. Suspension is availability,
-// never authority, and a development relay (no vX.Y.Z tag) suspends nobody.
+// every device to run at least that release, its own. Each request says
+// which version its client runs (protocol.VersionHeader, unsigned; none
+// from older programs). A device whose version is older is still served
+// for a grace period after this relay first ran a release newer than it;
+// then it is suspended until it updates: it may only finish what was
+// admitted before (whileSuspended), its other requests get HTTP 426, and
+// its stream gets the release and update_required events, then pings only.
+// What is addressed to it stays in custody meanwhile. Suspension is
+// availability, never authority. Only the relay's own release suspends: an
+// admin's recommendation of a newer one is pushed as a notice, never
+// enforced (a typo or a tag not yet published must lock nobody out), and a
+// development relay (no vX.Y.Z tag) suspends nobody.
 
 const updateSchema = `
 ALTER TABLE agents ADD COLUMN client_version TEXT;
@@ -28,66 +32,81 @@ CREATE TABLE releases_served(version TEXT PRIMARY KEY, since_ms INTEGER NOT NULL
 
 // updateState is what the policy decides by, replaced as a whole.
 type updateState struct {
-	latest string          // "" on a development relay: nobody is asked to update
-	served []servedRelease // each release this Hub asked for, oldest first
+	release string          // the relay's own release; "" on a development relay: nobody is asked to update
+	served  []servedRelease // each release this relay ran, oldest first
 }
 
 type servedRelease struct {
 	version string
-	since   time.Time // when this Hub first asked for it
+	since   time.Time // when this relay first ran it
 }
 
-// whileSuspended are the requests a suspended device may still make: its
-// stream, which says what to update to, the ping acknowledgements that
-// keep it open, and the recommendation.
-var whileSuspended = map[string]bool{"GET /v1/stream": true, "POST /v1/stream/ack": true, "GET /v1/release": true}
+// whileSuspended are the requests a suspended device may still make, so
+// that what was admitted before drains and nothing new starts: its stream,
+// which says what to update to, the ping acknowledgements that keep it
+// open, the recommendation, receipts of what it received, and the
+// read-only lookups of a member that its sends make first (programs before
+// v0.8.17 look up the asker before they answer). Posting a message is
+// decided by its kind once its signature is verified (handlePostMessage):
+// an answer or a result may still go.
+var whileSuspended = map[string]bool{
+	"GET /v1/stream": true, "POST /v1/stream/ack": true, "GET /v1/release": true,
+	"POST /v1/messages/{id}/ack":     true,
+	"GET /v1/agents/{label}/{agent}": true, "GET /v1/agents/{label}/{agent}/sessions": true, "GET /v1/agents/{label}/{agent}/profile": true,
+}
 
-// latestRelease is the release a relay of version build asks clients to
-// run: its own, or the admin's recommendation when that is a newer release.
-// A development relay asks for none.
-func latestRelease(build string, admin protocol.Release) string {
+// drainsWork reports whether a suspended device may still post a message
+// of outer kind: an answer or a result finishes what was admitted before.
+func drainsWork(kind string) bool { return kind == envelope.KindAnswer || kind == envelope.KindResult }
+
+// refuseOutdated answers HTTP 426 update_required to a request whose client
+// must update first, and reports whether it did.
+func (h *Hub) refuseOutdated(w http.ResponseWriter, r *http.Request) bool {
+	latest, required := h.updateRequired(r.Header.Get(protocol.VersionHeader))
+	if required {
+		writeJSON(w, http.StatusUpgradeRequired, protocol.NewUpdateRequired(latest))
+	}
+	return required
+}
+
+// relayRelease is the release a relay of version build asks every device
+// to run: its own, or none for a development build.
+func relayRelease(build string) string {
 	if !protocol.IsRelease(build) {
 		return ""
-	}
-	if protocol.Newer(admin.Version, build) {
-		return admin.Version
 	}
 	return build
 }
 
 // pushedRelease is the recommendation clients are told: on a release relay
-// always the latest release, with the admin's URL and note when the admin
-// named that release and its project page otherwise; on a development
-// relay the admin's recommendation as it is.
+// the newer of its own release and the admin's recommendation, with the
+// admin's URL and note when the admin named it and the project page
+// otherwise; on a development relay the admin's recommendation as it is.
+// A newer recommendation is a notice only: it suspends nobody.
 func (h *Hub) pushedRelease(admin protocol.Release) protocol.Release {
-	latest := latestRelease(h.cfg.Version, admin)
-	if latest == "" || latest == admin.Version {
+	own := relayRelease(h.cfg.Version)
+	if own == "" || admin.Version == own || protocol.Newer(admin.Version, own) {
 		return admin
 	}
-	return protocol.Release{Version: latest, URL: protocol.ReleaseURL(latest)}
+	return protocol.Release{Version: own, URL: protocol.ReleaseURL(own)}
 }
 
-// serveLatest records the latest release as asked for (the first time
+// serveRelease records the relay's own release as run (the first time
 // only) and plans the member list's next change at a grace period's end.
-// It reports whether the latest release changed.
-func (h *Hub) serveLatest() (bool, error) {
+func (h *Hub) serveRelease() error {
 	h.updateMu.Lock()
 	defer h.updateMu.Unlock()
-	old := h.update.Load()
-	next := &updateState{latest: latestRelease(h.cfg.Version, *h.release.Load())}
-	if old != nil {
-		next.served = old.served
-	}
-	if next.latest != "" {
-		served, err := h.store.releasesServed(next.latest, time.Now())
+	next := &updateState{release: relayRelease(h.cfg.Version)}
+	if next.release != "" {
+		served, err := h.store.releasesServed(next.release, time.Now())
 		if err != nil {
-			return false, err
+			return err
 		}
 		next.served = served
 	}
 	h.update.Store(next)
 	h.planGraceEnd(next)
-	return old != nil && old.latest != next.latest, nil
+	return nil
 }
 
 // planGraceEnd wakes the member list when the next grace period ends:
@@ -98,7 +117,7 @@ func (h *Hub) planGraceEnd(st *updateState) {
 		h.graceEnd.Stop()
 		h.graceEnd = nil
 	}
-	if st.latest == "" {
+	if st.release == "" {
 		return
 	}
 	now, next := time.Now(), time.Time{}
@@ -121,20 +140,20 @@ func (h *Hub) planGraceEnd(st *updateState) {
 }
 
 // updateRequired reports whether a client of version v must update before
-// it may use this Hub, and to which release: its version is not current
-// and the grace period has passed since this Hub first asked for a release
-// newer than it.
+// it may use this Hub, and to which release, the relay's own: its version
+// is not current and the grace period has passed since this relay first
+// ran a release newer than it.
 func (h *Hub) updateRequired(v string) (string, bool) {
 	st := h.update.Load()
-	if st == nil || st.latest == "" || protocol.Current(v, st.latest) {
+	if st == nil || st.release == "" || protocol.Current(v, st.release) {
 		return "", false
 	}
 	for _, s := range st.served {
 		if !protocol.Current(v, s.version) {
-			return st.latest, !time.Now().Before(s.since.Add(h.cfg.UpdateGrace))
+			return st.release, !time.Now().Before(s.since.Add(h.cfg.UpdateGrace))
 		}
 	}
-	return st.latest, false
+	return st.release, false
 }
 
 // reportedVersion is the version a request says its client runs, as the
@@ -158,25 +177,29 @@ func (h *Hub) noteVersion(address, version string) error {
 }
 
 // holdSuspended keeps the stream of a device that must update first: the
-// release and update_required events, again whenever the latest release
-// moves, and otherwise pings only, so nothing addressed to it leaves
-// custody. It ends once the device need not update any more (the admin's
-// recommendation was taken back), so it connects again as usual.
+// release event, again whenever the recommendation changes, the
+// update_required event, and otherwise pings only, so nothing addressed to
+// it leaves custody. It ends with the Hub.
 func (h *Hub) holdSuspended(ctx context.Context, sub *subscriber, version string, ping *time.Ticker, lease time.Duration, write func(string, ...any) bool) {
-	told := ""
+	sentRelease, told := int64(-1), false
 	for {
 		latest, required := h.updateRequired(version)
 		if !required {
 			return
 		}
-		if latest != told {
-			rel, _ := h.currentRelease()
+		if rel, gen := h.currentRelease(); gen != sentRelease {
 			data, _ := json.Marshal(rel)
-			upd, _ := json.Marshal(protocol.UpdateRequired{Latest: latest, URL: protocol.ReleaseURL(latest)})
-			if !write("event: release\ndata: %s\n\n", data) || !write("event: update_required\ndata: %s\n\n", upd) {
+			if !write("event: release\ndata: %s\n\n", data) {
 				return
 			}
-			told = latest
+			sentRelease = gen
+		}
+		if !told {
+			upd, _ := json.Marshal(protocol.UpdateRequired{Latest: latest, URL: protocol.ReleaseURL(latest)})
+			if !write("event: update_required\ndata: %s\n\n", upd) {
+				return
+			}
+			told = true
 		}
 		select {
 		case <-sub.wake:
@@ -195,8 +218,8 @@ func (h *Hub) holdSuspended(ctx context.Context, sub *subscriber, version string
 	}
 }
 
-// releasesServed records version as asked for now, unless it was before,
-// and lists every release asked for, oldest first.
+// releasesServed records version as run now, unless it was before, and
+// lists every release run, oldest first.
 func (s *store) releasesServed(version string, now time.Time) ([]servedRelease, error) {
 	if _, err := s.db.Exec(`INSERT OR IGNORE INTO releases_served(version, since_ms) VALUES(?, ?)`, version, now.UnixMilli()); err != nil {
 		return nil, err

@@ -208,7 +208,7 @@ func hubServe(ctx context.Context, fs *flag.FlagSet, data *string, args []string
 	quota := fs.String("quota", env("QUOTA", "1GiB"), "total attachment storage")
 	uploadTTL := fs.Duration("upload-ttl", mustDuration(env("UPLOAD_TTL", "24h")), "idle time before an unfinished upload is removed")
 	pushHosts := fs.String("push-hosts", env("PUSH_HOSTS", ""), "comma-separated push services to send Web Push to, besides Apple, Google, Mozilla and Microsoft (env AGENTNET_PUSH_HOSTS)")
-	updateGrace := fs.String("update-grace", env("UPDATE_GRACE", "30m"), "how long a device on an AgentNet older than the latest release keeps working before it must update; 0: at once (env AGENTNET_UPDATE_GRACE)")
+	updateGrace := fs.String("update-grace", env("UPDATE_GRACE", "30m"), "how long a device on an AgentNet older than the Hub's release keeps working before it must update; 0: at once (env AGENTNET_UPDATE_GRACE)")
 	var browserOrigins repeatedBrowserOrigins
 	fs.Var(&browserOrigins, "browser-origin", "explicit HTTPS browser workspace origin (repeatable; no wildcard)")
 	if err := fs.Parse(args); err != nil {

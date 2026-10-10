@@ -512,7 +512,7 @@ From v0.8.17 an upgraded relay recommends its own release to every client
 by itself and, after the grace period, suspends devices still on an older
 version (see "Latest only" below). Recommending a newer client release than
 the relay runs is a separate admin action, run from an enrolled admin
-device:
+device. It is a notice only: it suspends nobody.
 
 ```bash
 agentnet admin release show
@@ -614,21 +614,25 @@ app controls/package, standalone CLI updater, or separate relay deployment.
 The note is shown to people, not to models.
 
 **Latest only (v0.8.17).** A Hub that runs a release (`vX.Y.Z`) recommends
-the latest release by itself: its own version, or the admin's when that
-names a newer release, so the recommendation never goes stale. Every client
-says which version it runs on each request (the unsigned `Agentnet-Version`
-header; a browser device sends the version of the relay that served its
-page). The member list shows each device's version as its connection last
-reported it, and whether it is suspended. A device older than the latest
-release keeps working for the grace period (`--update-grace`, env
-`AGENTNET_UPDATE_GRACE`, default 30 minutes, `0` for none) after this Hub
-first asked for a newer release; then it is suspended until it updates:
-its requests get HTTP 426 `update_required` with the release to install,
-and its connection gets the `release` and `update_required` events and then
-pings only. Messages to it wait on the Hub (custody) and are delivered once
-it connects again, updated. Suspension is about availability only: the
-version a client reports grants nothing. A Hub running a development build
-suspends nobody.
+its own release by itself, so the recommendation never goes stale, or the
+admin's when that names a newer release. Every client says which version it
+runs on each request (the unsigned `Agentnet-Version` header; a browser
+device sends the version of the relay that served its page). The member
+list shows each device's version as its connection last reported it, and
+whether it is suspended. A device older than the Hub's own release keeps
+working for the grace period (`--update-grace`, env `AGENTNET_UPDATE_GRACE`,
+default 30 minutes, `0` for none) after this Hub first ran a release newer
+than the device's; then it is suspended until it updates. It may still
+finish what it was asked before: acknowledge what it received, look up the
+asker, and send answers and task results. Its other requests get HTTP 426
+`update_required` naming the Hub's release, and its connection gets the
+`release` and `update_required` events and then pings only. Messages to it
+wait on the Hub (custody) and are delivered once it connects again,
+updated. Only the Hub's own release suspends: a newer release an admin
+recommends is announced to everyone but enforced on nobody, so a mistyped
+or unpublished version locks nobody out and the admin can still change it.
+Suspension is about availability only: the version a client reports grants
+nothing. A Hub running a development build suspends nobody.
 
 ## Agent skill
 

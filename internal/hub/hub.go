@@ -46,12 +46,12 @@ type Config struct {
 	SessionGrace time.Duration // how long a disconnected session may reconnect before it ends (default 30s)
 
 	// Version is this relay's own program version (default
-	// protocol.Version): a release (vX.Y.Z) asks every device for the
-	// latest release, and its browser engine reports it. UpdateGrace is how
-	// long a device on an AgentNet older than the latest release may still
-	// use a release relay after it first asked for a newer one; then the
-	// device is suspended until it updates (update.go). Default 30 minutes;
-	// negative: no grace.
+	// protocol.Version): a release (vX.Y.Z) asks every device to run at
+	// least that release, and its browser engine reports it. UpdateGrace is
+	// how long a device on an AgentNet older than the relay's release may
+	// still use it after the relay first ran a release newer than the
+	// device's; then the device is suspended until it updates (update.go).
+	// Default 30 minutes; negative: no grace.
 	Version     string
 	UpdateGrace time.Duration
 
@@ -234,7 +234,7 @@ func Open(cfg Config) (*Hub, error) {
 	}
 	h.notifier = newNotifier(h)
 	h.notifier.send = webPusher(h.push, cfg.PublicURL, newPushClient())
-	if _, err := h.serveLatest(); err != nil { // after the notifier: a grace period's end wakes the member list
+	if err := h.serveRelease(); err != nil { // after the notifier: a grace period's end wakes the member list
 		h.Close()
 		return nil, err
 	}

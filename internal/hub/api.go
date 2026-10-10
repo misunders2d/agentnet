@@ -162,8 +162,9 @@ func (h *Hub) authenticateBody(w http.ResponseWriter, r *http.Request) (string, 
 		writeError(w, http.StatusUnauthorized, "", "replayed request")
 		return "", nil, false
 	}
-	if latest, required := h.updateRequired(r.Header.Get(protocol.VersionHeader)); required && !whileSuspended[r.Pattern] {
-		writeJSON(w, http.StatusUpgradeRequired, protocol.NewUpdateRequired(latest)) // update.go
+	// A suspended device may make only some requests (update.go); posting
+	// a message is decided by its kind (handlePostMessage).
+	if !whileSuspended[r.Pattern] && r.Pattern != "POST /v1/messages" && h.refuseOutdated(w, r) {
 		return "", nil, false
 	}
 	return sr.Agent, sr.Body, true
@@ -266,6 +267,9 @@ func (h *Hub) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := env.VerifySig(sender.Public.SignKey); err != nil {
 		writeError(w, http.StatusBadRequest, "", err.Error())
+		return
+	}
+	if !drainsWork(env.Kind) && h.refuseOutdated(w, r) { // a suspended device only finishes admitted work (update.go)
 		return
 	}
 	recipient, err := h.store.agent(env.To)
