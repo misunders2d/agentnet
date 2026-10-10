@@ -138,6 +138,37 @@ func topicExecutionClosed(state string) bool {
 	return false // interrupted and needs_human still require an explicit decision
 }
 
+// topicWorkIn are the states of a request this device's agent runs that
+// have work under way here: queued for the worker, waiting until it may
+// run, running or stopping. A person's decision here is Review instead.
+var topicWorkIn = map[string]bool{statePending: true, stateAccepted: true, stateAgentWaiting: true, stateRunning: true, stateCancelReq: true}
+
+// topicExecWaits are the executor's states saying a request waits or runs
+// there: queued, running, steered into a run, or held for its person
+// (awaiting an OK, needs_human, interrupted).
+var topicExecWaits = map[string]bool{"queued": true, "running": true, "steered": true, "awaiting": true, "needs_human": true, "interrupted": true}
+
+// topicWaiting splits the pending rows of a conversation topic: waiting
+// when one has evidence of work under way (a job here, or its executor's
+// current word, not stale), and unconfirmed counting the requests run
+// elsewhere with no current word: none, or only old news (ExecView.Stale).
+// Neither decides, closes or hides anything; engine.mjs topicWaiting is the
+// same function.
+func topicWaiting(g []threadRow, pending []int) (waiting bool, unconfirmed int) {
+	for _, i := range pending {
+		switch r := g[i]; {
+		case r.in || r.localJob:
+			waiting = waiting || topicWorkIn[r.state]
+		case r.kind != envelope.KindQuestion && r.kind != envelope.KindTask:
+		case topicExecWaits[r.execState] && !r.execStale:
+			waiting = true
+		default:
+			unconfirmed++
+		}
+	}
+	return waiting, unconfirmed
+}
+
 // pendingTopicRows names the exact rows that keep a topic open. It is derived
 // from retained history on every read, just like Pending; no decision is stored.
 func pendingTopicRows(g []threadRow) []int {

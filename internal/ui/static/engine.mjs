@@ -487,6 +487,10 @@ export const TOPICS = Object.freeze({
   pageMax: 200,                // the most a page may ask for (TopicPageMax)
   titleMax: 120,               // characters in a name the person gives a topic (TopicTitleMax)
 });
+// A host reports "running" once, at the claim: past this age (seconds) even
+// a connected host's word is old news (client ExecRunningMaxAge, pinned by
+// internal/ui topics_browser_test.go).
+export const EXEC_RUNNING_MAX_AGE = 3600;
 const topicOpenIn = new Set(["held", "awaiting", "needs_human", "pending", "accepted", "running", "cancel_requested", "part_waiting"]);
 const topicUndelivered = new Set(["failed", "expired", "quarantined"]);
 const topicExecutionClosed = new Set(["done", "answered", "failed", "timeout", "cancelled", "stopped", "declined", "resolved", "not_run", "proposal"]);
@@ -498,6 +502,23 @@ const topicOpen = (r, replied) => r.notice ? r.state === "needs_human"
 const pendingTopicRows = g => {
   const replied = new Set(g.filter(r => r.in && r.reply_to && r.status !== "progress").map(r => r.reply_to));
   return g.flatMap((r,i) => topicOpen(r,replied.has(r.id)) ? [i] : []);
+};
+// topicWaiting splits a conversation topic's pending rows (client topicWaiting):
+// waiting when one has work under way here or its executor's current word
+// (not stale) says it waits or runs there; unconfirmed counts the requests
+// run elsewhere with no current word. Neither decides or hides anything.
+const topicWorkIn = new Set(["pending", "accepted", "part_waiting", "running", "cancel_requested"]);
+const topicExecWaits = new Set(["queued", "running", "steered", "awaiting", "needs_human", "interrupted"]);
+const topicWaiting = (g, pending) => {
+  let waiting = false, unconfirmed = 0;
+  for (const i of pending) {
+    const r = g[i];
+    if (r.in || r.localJob) waiting ||= topicWorkIn.has(r.state);
+    else if (!topicRequest(r.kind)) continue;
+    else if (topicExecWaits.has(r.execState) && !r.execStale) waiting = true;
+    else unconfirmed++;
+  }
+  return { waiting, unconfirmed };
 };
 // deriveTopic is a topic's state from its messages (thread order, oldest
 // first; facts {id, reply_to, at (seconds), in, kind, state, status,
@@ -548,14 +569,16 @@ function summarizeChatTopicView(conv,msgs,locals,now,main) {
  for(const m of msgs){if(m.sub)continue;if(m.topic_event){if(!main)events.set(m.topic,[...(events.get(m.topic)||[]),m]);continue;}const id=assigned.get(m.lid)||"";if(main?!id:!!id)groups.set(id,[...(groups.get(id)||[]),m]);}
  for(const [id,g] of groups){sortChatTurns(g);const first=g[0],last=g.at(-1),local=locals.get(conv+"/"+id)||{};let shared={},by="";
   const aliases=new Map();for(const m of g){if(m.id)aliases.set(m.id,m.lid);for(const c of m.copies||[])if(c.id)aliases.set(c.id,m.lid);}
-  const facts=g.map(m=>{const job=m.job||"",state=job||m.state||"";return {id:m.lid,reply_to:aliases.get(m.reply_to)||m.reply_to||"",at:chatSent(m),kind:m.kind,status:m.status||"",topic_done:!!m.topic_done,in:!!job&&!m.to||["answer","result"].includes(m.kind),state,localJob:!!job,execState:m.exec?.state||""};});
+  const facts=g.map(m=>{const job=m.job||"",state=job||m.state||"";return {id:m.lid,reply_to:aliases.get(m.reply_to)||m.reply_to||"",at:chatSent(m),kind:m.kind,status:m.status||"",topic_done:!!m.topic_done,in:!!job&&!m.to||["answer","result"].includes(m.kind),state,localJob:!!job,execState:m.exec?.state||"",execStale:!!m.exec?.stale};});
   for(const m of sortChatEvents(events.get(id)||[])){if(!["done","open"].includes(m.topic_event.action))continue;const seen=new Set(m.topic_event.seen||[]);if(g.every(r=>seen.has(r.lid))){shared={mark:m.topic_event.action,mark_at:chatSent(m),mark_count:g.length};by=m.from||"";}else{shared={};by="";}}
   const l=main?local:local.mark==="archived"&&local.mark_count>=g.length+(events.get(id)||[]).length&&local.mark_at>=(shared.mark_at||0)?local:shared,v=deriveTopic(facts,l,now);
   const activity=Math.max(chatSent(last),...(events.get(id)||[]).map(chatSent));
   v.quiet_since=Math.max(v.quiet_since,activity);
   if(v.state==="archived"&&l.mark!=="archived"&&now-v.quiet_since<TOPICS.archiveAfter)v.state=v.done_by?"done":"active";
-  const t={id,conv,peer:"",title:firstLine(first.body),last:firstLine(last.body),last_at:iso(activity*1000),count:g.length,state:v.state,pending:v.pending,quiet_since:iso(v.quiet_since*1000),review:g.filter(m=>["held","needs_human"].includes(m.job)).length,unread:0,running:g.filter(m=>m.job==="running").length,waiting:v.pending,key_changed:false,notices:0,notice_only:false};
-  if(v.pending)t.pending_ids=pendingTopicRows(facts).map(i=>g[i].id);
+  const t={id,conv,peer:"",title:firstLine(first.body),last:firstLine(last.body),last_at:iso(activity*1000),count:g.length,state:v.state,pending:v.pending,quiet_since:iso(v.quiet_since*1000),review:g.filter(m=>["held","needs_human"].includes(m.job)).length,unread:0,running:g.filter(m=>m.job==="running").length,waiting:false,key_changed:false,notices:0,notice_only:false};
+  const pending=pendingTopicRows(facts),work=topicWaiting(facts,pending); // Pending alone is no evidence anything waits
+  t.waiting=work.waiting;if(work.unconfirmed)t.unconfirmed=work.unconfirmed;
+  if(v.pending)t.pending_ids=pending.map(i=>g[i].id);
   if(v.done_by)t.done_by=v.done_by;if(shared.mark==="done"&&v.done_by==="you"){t.done_by="person";t.concluded_by=by;}
   const conclusion=g.find(m=>m.lid===v.conclusion);if(conclusion){t.conclusion=firstLine(conclusion.body);t.concluded_by=conclusion.from||"";}
   if(local.title)Object.assign(t,{auto_title:t.title,title:local.title,renamed:true});out.push(t);
@@ -566,7 +589,7 @@ function summarizeChatTopicView(conv,msgs,locals,now,main) {
    previous||=summarizeChatTopics(conv,msgs.filter(m=>!wire.topicOrganization(m.topic_event)),locals,now);
    const existing=out.find(t=>t.id===source);
    if(existing){existing.redirect=destination;const old=previous.find(t=>t.id===source);if(old)Object.assign(existing,{title:old.title,auto_title:old.auto_title,renamed:old.renamed});continue;}
-   const old=previous.find(t=>t.id===source);if(old)out.push({...old,redirect:destination,state:"done",count:0,review:0,running:0,unread:0,pending:false,waiting:false,pending_ids:[]});
+   const old=previous.find(t=>t.id===source);if(old){const{unconfirmed,...rest}=old;void unconfirmed;out.push({...rest,redirect:destination,state:"done",count:0,review:0,running:0,unread:0,pending:false,waiting:false,pending_ids:[]});}
   }
  }
  return out.sort(byNewest);
@@ -7255,7 +7278,9 @@ export class Engine {
   // execOn resolves a request's host-asserted state from status controls
   // by its executor: the highest counter wins (tie: later id). A terminal
   // answer or result in the thread supersedes any status. stale: the host
-  // is not connected as the relay's current member list has it.
+  // is not connected as the relay's current member list has it (presence
+  // "connected", as the relay says it), or a running state is older than
+  // EXEC_RUNNING_MAX_AGE (client ExecView.settle).
   execOn(statuses, host, answered) {
     if (answered || !statuses.length) return null;
     let best = null;
@@ -7268,7 +7293,7 @@ export class Engine {
     }
     if (!best) return null;
     const m = this.members.current ? this.members.list.find((x) => x.address === host) : null;
-    const stale = !m || m.presence !== "online";
+    const stale = !m || m.presence !== "connected" || best.state === "running" && Math.floor(this.now() / 1000) - best.at > EXEC_RUNNING_MAX_AGE;
     return { state: best.state, at: iso(best.at * 1000), detail: best.detail, host, stale, attempt: best.attempt || 0, ...(best.refused ? { refused: best.refused } : {}) };
   }
 

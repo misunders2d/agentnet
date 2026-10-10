@@ -55,9 +55,9 @@ type ReplyWait struct {
 }
 
 // waitStops are the host statuses after which no answer comes soon: a task
-// waiting for its OK (or a question not approved), a person's decision, or
-// a request the host will not run.
-var waitStops = map[string]bool{"awaiting": true, "needs_human": true, "not_run": true}
+// waiting for its OK (or a question not approved), a person's decision, a
+// request the host will not run, or one whose reply the host held back.
+var waitStops = map[string]bool{"awaiting": true, "needs_human": true, "not_run": true, "stopped": true}
 
 // AwaitReply waits up to wait for the answer to request id, sent from here
 // (a device message, or a conversation request by its first copy's id).

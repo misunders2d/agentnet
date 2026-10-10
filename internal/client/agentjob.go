@@ -872,6 +872,7 @@ func (a *Agent) holdEndedOutputs(only string) (int, error) {
 	selfFP := a.id.Public(a.Address).Fingerprint()
 	views := map[string]*partView{}
 	held := 0
+	var requests []string // answered here, so told as answered: now told the reply was held back
 	for _, o := range outs {
 		v, why := verdictStop, "its request is not held here"
 		if o.req.ID != "" {
@@ -886,9 +887,13 @@ func (a *Agent) holdEndedOutputs(only string) (int, error) {
 			stateNotDelivered, "not sent: "+why, o.id, stateQueued, stateConvWaiting); err != nil {
 			return 0, err
 		}
-		if _, err := tx.Exec(`UPDATE inbox SET state = ?, detail = ? WHERE id = ? AND result_id = ? AND state = ?`,
-			stateNotDelivered, "its reply was not sent: "+why, o.req.ID, o.id, stateAnswered); err != nil {
+		res, err := tx.Exec(`UPDATE inbox SET state = ?, detail = ? WHERE id = ? AND result_id = ? AND state = ?`,
+			stateNotDelivered, "its reply was not sent: "+why, o.req.ID, o.id, stateAnswered)
+		if err != nil {
 			return 0, err
+		}
+		if n, _ := res.RowsAffected(); n == 1 {
+			requests = append(requests, o.req.ID)
 		}
 		held++
 	}
@@ -896,7 +901,13 @@ func (a *Agent) holdEndedOutputs(only string) (int, error) {
 		return 0, nil
 	}
 	a.Logf("%d agent output(s) held back: their participation no longer lets them go out", held)
-	return held, a.store.done(tx.Commit())
+	if err := a.store.done(tx.Commit()); err != nil {
+		return held, err
+	}
+	for _, id := range requests {
+		a.noteStatus(id)
+	}
+	return held, nil
 }
 
 // mayDeliver decides, from what is stored now, just before each attempt to

@@ -6,16 +6,17 @@
 // stdin: {vectors, constants} from topics_browser_test.go.
 import assert from 'node:assert/strict';
 import * as wire from '../static/wire.mjs';
-import { Engine, memoryStore, deriveTopic, TOPICS, chatTopicAssignments, summarizeChatTopics } from '../static/engine.mjs';
+import { Engine, memoryStore, deriveTopic, TOPICS, EXEC_RUNNING_MAX_AGE, chatTopicAssignments, summarizeChatTopics } from '../static/engine.mjs';
 
 let checks = 0;
 const check = (v, why) => { assert.ok(v, why); checks++; };
 const same = (a, b, why) => { assert.deepEqual(a, b, why); checks++; };
 const refuses = async (fn, re, why) => { await assert.rejects(fn, re, why); checks++; };
-const { vectors, constants } = JSON.parse(await new Promise((resolve) => { let s = ''; process.stdin.on('data', (d) => s += d).on('end', () => resolve(s)); }));
+const { vectors, constants, execRunningMaxAge } = JSON.parse(await new Promise((resolve) => { let s = ''; process.stdin.on('data', (d) => s += d).on('end', () => resolve(s)); }));
 
 // 1. The tunables are the Go client's.
 same({ ...TOPICS }, constants, 'engine TOPICS equal the Go client constants');
+same(EXEC_RUNNING_MAX_AGE, execRunningMaxAge, 'a running status goes stale at the Go client ExecRunningMaxAge');
 check(vectors.archive_after === TOPICS.archiveAfter, 'the vectors assume the same archive time');
 
 // 2. The shared derivation vectors.
@@ -31,7 +32,8 @@ for(const c of vectors.chat_cases){
  const msgs=c.messages.map(m=>({...m,ts:m.sent,to:m.dir==='out'?'bob/desk':undefined,at:m.sent*1000}));
  same(Object.fromEntries(chatTopicAssignments(msgs)),c.assigned,c.name+' assignment');
  const locals=new Map(Object.entries(c.local).map(([id,l])=>['chat/'+id,l]));
- const got=summarizeChatTopics('chat',msgs,locals,vectors.now).map((t,i)=>({ID:t.id,State:t.state,Count:t.count,DoneBy:t.done_by||'',Pending:t.pending,...(c.want[i]?.PendingIDs?{PendingIDs:t.pending_ids||[]}:{})}));
+ const got=summarizeChatTopics('chat',msgs,locals,vectors.now).map((t,i)=>({ID:t.id,State:t.state,Count:t.count,DoneBy:t.done_by||'',Pending:t.pending,...(c.want[i]?.PendingIDs?{PendingIDs:t.pending_ids||[]}:{}),
+  ...(c.want[i]&&'Waiting' in c.want[i]?{Waiting:t.waiting}:{}),...(c.want[i]&&'Unconfirmed' in c.want[i]?{Unconfirmed:t.unconfirmed||0}:{})}));
  same(got,c.want,c.name+' shared derivation');
 }
 
@@ -75,6 +77,13 @@ for (const room of [false,true]) {
  await st.write(await status(ids[1],'cancelled',3));await st.write(await status(ids[2],'interrupted',4));
  await pending([ids[2]]);
  e=fresh();await e.loadErased();await pending([ids[2]]);
+ // Pending is no evidence of work: only the executor's current word is.
+ const work=async(want,why)=>{const t=(await e.chatTopics(conv))[0];same([t.waiting,t.unconfirmed||0],want,why);};
+ await work([false,1],'an executor word not known to be current leaves the request unconfirmed, not Waiting');
+ e.members={listed:'listed',current:true,at:1,list:[{address:'peer/desk',presence:'connected'}],truncated:false};
+ await work([true,0],'the connected executor (relay presence "connected") says it waits for its person there');
+ e.members={...e.members,list:[{address:'peer/desk',presence:'offline'}]};
+ await work([false,1],'an offline executor\'s word is old news');
  await st.write(await status(ids[2],'needs_human',5));await pending([ids[2]]);
  await st.write(await status(ids[2],'stopped',6));await pending([]);
  const unverified={...await st.get('outbox',ids[0]),id:'9'.repeat(32),lid:'9'.repeat(32),exec:{state:'answered'}};

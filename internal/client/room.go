@@ -449,7 +449,7 @@ func (a *Agent) RoomReply(cause, request string) (*ConvMessage, error) {
 			continue
 		}
 		switch m.Exec.State {
-		case stateDeclined, stateCancelled, stateFailed, "interrupted", stateNotRun, "needs_human":
+		case stateDeclined, stateCancelled, stateFailed, "interrupted", stateNotRun, "needs_human", "stopped": // stopped: its reply was held back there
 			return nil, fmt.Errorf("request %s from agent participation %s: %s: %s", req.id, req.pid, m.Exec.State, m.Exec.Detail)
 		}
 	}
@@ -475,9 +475,9 @@ func (a *Agent) roomReplyMessages(conv, request string) ([]ConvMessage, error) {
  SELECT 1 FROM inbox WHERE conv=? AND reply_to=? AND kind IN ('answer','result')
  UNION ALL SELECT 1 FROM outbox WHERE conv=? AND reply_to=? AND kind IN ('answer','result')
  UNION ALL SELECT 1 FROM inbox WHERE conv=? AND ref_id=? AND sub='status'
-  AND CASE WHEN json_valid(body) THEN json_extract(body,'$.state') END IN ('declined','cancelled','failed','interrupted','not_run','needs_human')
+  AND CASE WHEN json_valid(body) THEN json_extract(body,'$.state') END IN ('declined','cancelled','failed','interrupted','not_run','needs_human','stopped')
  UNION ALL SELECT 1 FROM outbox WHERE conv=? AND ref_id=? AND sub='status'
-  AND CASE WHEN json_valid(body) THEN json_extract(body,'$.state') END IN ('declined','cancelled','failed','interrupted','not_run','needs_human')
+  AND CASE WHEN json_valid(body) THEN json_extract(body,'$.state') END IN ('declined','cancelled','failed','interrupted','not_run','needs_human','stopped')
 )`, conv, request, conv, request, conv, request, conv, request).Scan(&candidate)
 	if err != nil || !candidate {
 		return nil, err

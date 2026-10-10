@@ -1172,6 +1172,7 @@ export interface ThreadSummary {
   concluded_by?: string;
   pending: boolean;
   pending_ids?: string[];
+  unconfirmed?: number;
   renamed?: boolean;
   auto_title?: string;
   quiet_since: string;

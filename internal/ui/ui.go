@@ -864,13 +864,16 @@ type ThreadSummary struct {
 	// Pending says something in it is still open (it is never archived
 	// then); Renamed says Title is the person's own name for it here, and
 	// AutoTitle is then the automatic one (its first line). A name and
-	// Mark done / Reopen are kept on this device only.
+	// Mark done / Reopen are kept on this device only. Unconfirmed counts
+	// the pending requests with no current word from their executor
+	// (client.ThreadSummary.Unconfirmed).
 	State       string   `json:"state"`
 	DoneBy      string   `json:"done_by,omitempty"`
 	Conclusion  string   `json:"conclusion,omitempty"`
 	ConcludedBy string   `json:"concluded_by,omitempty"`
 	Pending     bool     `json:"pending"`
 	PendingIDs  []string `json:"pending_ids,omitempty"` // exact message IDs; opening them decides nothing
+	Unconfirmed int      `json:"unconfirmed,omitempty"`
 	Renamed     bool     `json:"renamed,omitempty"`
 	AutoTitle   string   `json:"auto_title,omitempty"`
 	// QuietSince is when it went quiet (its last message, or a later Mark

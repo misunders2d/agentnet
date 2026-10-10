@@ -216,11 +216,17 @@ func ParseReport(body string) (Report, bool) {
 // ---- status: the host's word on a request ----
 
 // statusDetail maps an inbox state to what may be told about it: a state
-// name and a bounded category; never the responder's own text.
+// name and a bounded category; never the responder's own text. Every name
+// is one envelope.statusStates already lists: readers before a name was
+// added refuse the whole status (and a history carrier holding it) as
+// malformed, so a recorded state is told by the nearest true existing name
+// and its detail rather than by a new one.
 func statusOf(state string) (public, detail string, ok bool) {
 	switch state {
 	case statePending, stateAccepted:
 		return "queued", "queued for the agent here", true
+	case stateAgentWaiting: // admitted, not claimed: the worker decides when it may run (agentjob.go)
+		return "queued", "waiting here until it may run", true
 	case stateAwaiting:
 		return "awaiting", BlockerAcceptance, true
 	case stateHeld:
@@ -241,8 +247,10 @@ func statusOf(state string) (public, detail string, ok bool) {
 		return "interrupted", "the daemon stopped while it ran", true
 	case stateCancelled, stateCancelReq:
 		return "cancelled", "stopped here", true
-	case stateNotRun, stateNotDelivered:
+	case stateNotRun:
 		return "not_run", "not run here", true
+	case stateNotDelivered: // it did run: its output was held back here and no reply follows
+		return "stopped", "the agent ran here; its reply was not sent", true
 	case stateDeclined:
 		return "declined", "", true
 	}
@@ -361,14 +369,16 @@ func (a *Agent) tellStatus(ctx context.Context, id string) bool {
 		}
 	}
 	public, detail, ok := statusOf(state)
-	if public == "queued" {
+	if state == statePending || state == stateAccepted { // the worker's queue; a waiting request is not in it yet
 		if busy, err := a.store.busyDetail(id); err == nil && busy != "" {
 			detail = busy
 		}
 	}
 	// A local addressed conversation job has remote sibling copies too.
 	// Device-thread local data, replicas and selected inputs still tell nobody.
-	if !ok || selected || conv.Valid && state == stateAnswered && !ownTarget || local && (!conv.Valid || !ownTarget || key != a.Self().Fingerprint()) || replica || key == "" || (kind != envelope.KindQuestion && kind != envelope.KindTask) {
+	// Only a conversation request's target device speaks for it (statusAllowed):
+	// a copy held here for another device's agent is never told from here.
+	if !ok || selected || conv.Valid && !ownTarget || local && (!conv.Valid || key != a.Self().Fingerprint()) || replica || key == "" || (kind != envelope.KindQuestion && kind != envelope.KindTask) {
 		told()
 		return true
 	}

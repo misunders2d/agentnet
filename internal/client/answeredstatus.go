@@ -17,3 +17,24 @@ WHERE state='answered' AND replica=0 AND verified_by IS NOT NULL
   AND coalesce(o.sub,'')='' AND o.ref_id IS NULL
   AND json_extract(o.envelope,'$.from')=json_extract(inbox.target,'$.address'));
 `
+
+// Before v0.8.15 a local conversation job told nobody any state, and the
+// step above re-tells only answered ones: siblings still list a failed,
+// declined or held request as open with nothing recorded. Queue one signed
+// status of each retained conversation job's current recorded state, only
+// where that state is terminal or waits for a decision here. A queued,
+// accepted, waiting or running state may be old news after a stop, so it is
+// never re-told without a fresh transition; cancel_requested is such a run.
+// Only jobs addressed to this device: a copy held here for another device's
+// agent (a not_run proposal duplicate, say) is that device's to speak for.
+// tellStatus still decides, at send time, whether and to whom a state is
+// told. This changes no execution state and runs nothing.
+const retainedConversationStatusSchema = `
+UPDATE inbox SET status_due=status_due+1
+WHERE state IN ('failed','cancelled','declined','resolved','not_run','not_delivered','needs_human','interrupted','awaiting','held')
+ AND replica=0 AND verified_by IS NOT NULL AND conv IS NOT NULL AND lid IS NOT NULL
+ AND kind IN ('question','task') AND pid IS NOT NULL
+ AND json_extract(target,'$.address')=(SELECT v FROM config WHERE k='address')
+ AND (local=0 OR verified_by=json_extract(target,'$.fingerprint'))
+ AND NOT EXISTS(SELECT 1 FROM reply_receiver_inputs r WHERE r.inbox_id=inbox.id);
+`

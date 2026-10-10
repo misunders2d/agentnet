@@ -172,11 +172,11 @@ func summarizeChatTopicView(conv string, msgs []ConvMessage, locals map[string]t
 			if state == "" {
 				state = m.State
 			}
-			execState := ""
+			execState, execStale := "", false
 			if m.Exec != nil {
-				execState = m.Exec.State
+				execState, execStale = m.Exec.State, m.Exec.Stale
 			}
-			facts[i] = threadRow{link: link{id: m.LID, replyTo: m.ReplyTo, at: m.Sent}, kind: m.Kind, status: m.status, topicDone: m.TopicDone, in: incoming || m.Kind == envelope.KindAnswer || m.Kind == envelope.KindResult, state: state, localJob: m.Job != "", execState: execState}
+			facts[i] = threadRow{link: link{id: m.LID, replyTo: m.ReplyTo, at: m.Sent}, kind: m.Kind, status: m.status, topicDone: m.TopicDone, in: incoming || m.Kind == envelope.KindAnswer || m.Kind == envelope.KindResult, state: state, localJob: m.Job != "", execState: execState, execStale: execStale}
 		}
 		local := locals[id]
 		shared := topicLocal{}
@@ -231,11 +231,15 @@ func summarizeChatTopicView(conv string, msgs []ConvMessage, locals map[string]t
 		}
 
 		t := ThreadSummary{ID: id, Conv: conv, Title: firstLine(first.Body), Last: firstLine(last.Body), LastAt: time.Unix(activity, 0), Count: len(g), State: v.State, DoneBy: v.DoneBy, Pending: v.Pending, QuietSince: time.Unix(v.QuietSince, 0)}
-		for _, i := range pendingTopicRows(facts) {
+		pending := pendingTopicRows(facts)
+		for _, i := range pending {
 			// The logical id matches replies; the stored copy id opens the
 			// exact request and its existing local actions.
 			t.PendingIDs = append(t.PendingIDs, g[i].ID)
 		}
+		// Pending alone is no evidence anything waits: a request with no
+		// reply and no current word from its executor is unconfirmed.
+		t.Waiting, t.Unconfirmed = topicWaiting(facts, pending)
 		if shared.Mark == "done" && v.DoneBy == DoneByYou {
 			t.DoneBy = "person"
 			t.ConcludedBy = by
@@ -252,7 +256,6 @@ func summarizeChatTopicView(conv string, msgs []ConvMessage, locals map[string]t
 				t.Review++
 			}
 		}
-		t.Waiting = v.Pending
 		if local.Title != "" {
 			t.AutoTitle, t.Title, t.Renamed = t.Title, local.Title, true
 		}
@@ -288,7 +291,7 @@ func summarizeChatTopicView(conv string, msgs []ConvMessage, locals map[string]t
 				if old.ID == source {
 					old.Redirect, old.State, old.Count = destination, TopicDone, 0
 					old.Review, old.Running, old.Unread = 0, 0, 0
-					old.Pending, old.Waiting, old.PendingIDs = false, false, nil
+					old.Pending, old.Waiting, old.PendingIDs, old.Unconfirmed = false, false, nil, 0
 					out = append(out, old)
 					break
 				}

@@ -32,7 +32,7 @@ type ThreadSummary struct {
 	Review   int       `json:"review"`  // received items waiting for a decision here
 	Unread   int       `json:"unread"`  // received messages not yet read (review notices not counted)
 	Running  int       `json:"running"` // received items the worker is on
-	Waiting  bool      `json:"waiting"` // a question or task sent here has no reply yet
+	Waiting  bool      `json:"waiting"` // a question or task sent here has no reply yet (a conversation topic: its executor's current word says it waits or runs)
 	// Notices counts open review notices: reports from another machine that
 	// requests wait for a person there. They are not decisions here.
 	Notices    int  `json:"notices"`
@@ -49,6 +49,7 @@ type ThreadSummary struct {
 	ConcludedBy string   `json:"concluded_by,omitempty"`
 	Pending     bool     `json:"pending"`
 	PendingIDs  []string `json:"pending_ids,omitempty"` // exact visible requests/notices keeping Pending true
+	Unconfirmed int      `json:"unconfirmed,omitempty"` // pending requests with no current word from their executor (topicWaiting): nothing guessed
 	Renamed     bool     `json:"renamed,omitempty"`
 	AutoTitle   string   `json:"auto_title,omitempty"`
 	// QuietSince is when it went quiet: its last message, or a later Mark
@@ -68,6 +69,7 @@ type threadRow struct {
 	link
 	localJob  bool   // local execution state without changing reply direction
 	execState string // exact target's admitted execution report
+	execStale bool   // that report may be old news (ExecView.Stale)
 	in        bool
 	kind      string
 	state     string
