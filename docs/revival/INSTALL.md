@@ -648,7 +648,8 @@ the files an answer or result carries, and send answers and task results.
 With automatic update on, it installs the Hub's own release then (not a
 newer recommendation, which follows once it is served again); sends that a
 program before v0.8.17 marked failed only because of this refusal are
-queued again when the updated daemon starts. Its other requests get HTTP 426
+queued again when the updated daemon starts (a browser page: when the
+updated page loads). Its other requests get HTTP 426
 `update_required` naming the Hub's release, and its connection gets the
 `release` and `update_required` events and then pings only. Messages to it
 wait on the Hub (custody) and are delivered once it connects again,
