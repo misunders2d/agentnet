@@ -817,6 +817,30 @@ func (a *Agent) KnownPersons() ([]PersonInfo, error) {
 	return out, nil
 }
 
+// chainKeyIn reports whether fp is the key of a device in any pinned step
+// of person's chain, at whatever address (a removed device's included). It
+// reads q only: authorization runs inside transactions holding the store's
+// one connection, where a read of the store itself would wait forever. A
+// chain it cannot read lists nothing (no evidence, never authority).
+func chainKeyIn(q dbq, person, fp string) bool {
+	rows, err := q.Query(`SELECT record FROM person_chain WHERE person = ? ORDER BY seq DESC`, person)
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var raw string
+		var r protocol.PersonRoster
+		if rows.Scan(&raw) != nil || json.Unmarshal([]byte(raw), &r) != nil {
+			continue
+		}
+		if _, ok := r.Device(fp); ok {
+			return true
+		}
+	}
+	return false
+}
+
 // deviceKey returns the key of person's device address with fingerprint
 // fp from any pinned step of its chain (a removed device's key stays
 // verifiable).

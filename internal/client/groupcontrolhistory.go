@@ -262,7 +262,7 @@ func (a *Agent) groupControlHistoryCheck(q dbq, root protocol.ConvRoot, forwarde
 	if author == "" {
 		return errors.New("group: historical control author absent")
 	}
-	if reason, why := a.controlAuthorized(m, original, author); reason != "" {
+	if reason, why := controlAuthorized(q, m, original, author); reason != "" {
 		if reason == reasonProof {
 			return ErrGroupContextPending
 		}

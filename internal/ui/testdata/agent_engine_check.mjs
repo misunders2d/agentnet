@@ -473,4 +473,41 @@ for (const state of ["agent-host","removed","frozen"]) {
  await f.caps([wire.CapEnv2,wire.CapPerson,wire.CapAgentIdentity,wire.CapOwnSyncV3]);await e.post({...task,state:"queued"});
  check((await f.store.get("outbox",task.id)).state==="custody"&&f.posts.filter(raw=>wire.parseEnvelope(raw).id===task.id).length===1,"host upgrade resumes exact queued choice once");e.stop();
 }
+// A DM invitation named an own device as a task key, and that device was
+// removed from the inviter's roster afterwards (client
+// TestDMInviteNamingRemovedOwnTaskKey; t5-held). The signed invitation
+// still counts, so the participation's answers are admitted, but the
+// removed key has no task authority. A key the inviter's signed roster
+// step did not list still holds the invitation.
+{
+ const f=await fixture(),{e}=f,ts=Math.floor(now/1000);
+ const oldKeys=await wire.newKeys(),oldPub=await wire.publicEntry(oldKeys,"self/old-phone"),oldFP=await wire.fingerprint(oldPub);
+ const withOld=await wire.nextRoster(e.keys,e.address,f.selfRoster,[f.selfPub,oldPub],await wire.joinConsent(oldKeys,"self/old-phone",e.me.person,1,e.me.hash),f.selfRoster.label,[e.fp,oldFP]);
+ await wire.verifyNext(withOld,f.selfRoster);
+ const withoutOld=await wire.nextRoster(e.keys,e.address,withOld,[f.selfPub],null);await wire.verifyNext(withoutOld,withOld);
+ e.me=await e.personRecord([f.selfRoster,withOld,withoutOld],"self",e.me);await f.store.write([{s:"kv",k:"person",v:e.me}]);
+ check(!e.me.devices.some(d=>d.fingerprint===oldFP)&&e.me.known.some(d=>d.fingerprint===oldFP),"fixture: the old phone was removed, its key stays known");
+ const host={person:f.peer.person,address:f.peerAddress,fingerprint:f.peer.fingerprint};
+ const invite=async(step,keys)=>{
+  const pid=id(),inv=await wire.signEvent(e.keys,{conv:f.conv,pid,type:"invite",ts,author:{...e.author(),roster:await wire.rosterHash(step)},host,audience:"conversation",task_keys:keys});
+  await e.sendConv(f.c,{kind:"message",body:wire.eventJSON(inv),sub:"event",pid});
+  const accept=await wire.signEvent(f.peerKeys,{conv:f.conv,pid,type:"accept",prev:await wire.eventHash(inv),ts,author:{...host,roster:f.peer.hash}});
+  await f.receive(await f.fromPeer({v:2,kind:"message",conv:f.conv,lid:id(),root:f.c.root,sub:"event",pid,body:wire.eventJSON(accept)}));
+  return pid;
+ };
+ const resolved=async pid=>e.resolveAgent(pid,await e.convEvents(f.conv),await e.dmMembers(f.c));
+ const output=async pid=>f.receive(await f.fromPeer({v:2,conv:f.conv,lid:id(),root:f.c.root,pid,reply_to:id(),origin:"agent:stub",emotion:"plain"}));
+ const pid=await invite(withOld,[e.fp,oldFP]),p=await resolved(pid);
+ check(p.state==="active"&&p.held===0&&JSON.stringify(p.taskKeys)===JSON.stringify([e.fp]),"an invitation naming a since-removed own device counts; the removed key asks nothing: "+JSON.stringify({state:p.state,held:p.held,keys:p.taskKeys}));
+ const answer=await output(pid);
+ check(!!(await f.store.get("inbox",answer))&&!(await f.store.get("held",answer)),"the participation's answer is admitted, not held for an invitation");
+ const unknown=(await wire.fingerprint(await wire.publicEntry(await wire.newKeys(),"self/never")));
+ for(const [name,step,keys] of [["a key in no roster",withOld,[e.fp,unknown]],["a device added after the signed step",f.selfRoster,[oldFP]],["a removed device the signed step no longer lists",withoutOld,[oldFP]]]){
+  const held=await invite(step,keys),q=await resolved(held);
+  check(q.state==="pending"&&!q.invite&&q.held>0,name+": the invitation does not count: "+JSON.stringify({state:q.state,held:q.held}));
+  const turn=await output(held);
+  check((await f.store.get("held",turn))?.reason==="proof_pending"&&!(await f.store.get("inbox",turn)),name+": its answer waits");
+ }
+ e.stop();
+}
 console.log("named-agent engine checks passed: " + checks);

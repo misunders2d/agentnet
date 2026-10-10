@@ -23,8 +23,10 @@ import (
 // pinned now. An event counts only if its author is the device of a member
 // person pinned (or this installation's own) with the roster the root names
 // and not frozen; an invite also needs its host to be such a device and its
-// task keys to be member keys. Anything else is held: it has no effect until
-// the evidence is there, and then counts without being delivered again.
+// task keys to be member keys, or in a DM own devices its author's signed
+// roster step listed and removed since (those count for no task). Anything
+// else is held: it has no effect until the evidence is there, and then
+// counts without being delivered again.
 
 // ErrNoParticipation means no event of that participation is held here.
 var ErrNoParticipation = errors.New("no such agent participation here")
@@ -86,6 +88,7 @@ type dmMembers struct {
 	shareGrants       map[string][]protocol.GrantRef
 	roomAuthors       map[string]personRow
 	chains            map[string]map[string]bool
+	departedTaskKeys  map[string]map[string]bool // DM invite hash -> task keys its author's signed step listed, removed since (loadDepartedTaskKeys)
 }
 
 func (a *Agent) dmMembers(conv string) (dmMembers, error) { return membersIn(a.store.db, conv) }
@@ -181,6 +184,59 @@ func (m dmMembers) memberKey(fp string) bool {
 	return m.historyTaskEpochs[fp] != ""
 }
 
+// loadDepartedTaskKeys finds, for each DM invite whose author counts here,
+// the task keys that are no current member's but were devices of the
+// author's person in the very roster step the invite was signed under (a
+// verified step of the pinned chain): own devices removed since. resolve
+// lets such an invite count without them, so its participation's history
+// stays readable while the removed key has no task authority. A key that
+// step does not list (another person's, one never the author's, one added
+// later or not pinned here yet) still holds the invite. Groups bind task
+// keys to admissions instead (verifyInviteEpoch, room events).
+func (m *dmMembers) loadDepartedTaskKeys(q dbq, events []protocol.ParticipationEvent) error {
+	m.departedTaskKeys = map[string]map[string]bool{}
+	if m.group != nil {
+		return nil
+	}
+	steps := map[string]*protocol.PersonRoster{}
+	for _, ev := range events {
+		if ev.Type != protocol.EventInvite {
+			continue
+		}
+		if _, ok := m.author(ev.Author); !ok {
+			continue
+		}
+		for _, fp := range ev.TaskKeys {
+			if m.memberKey(fp) {
+				continue
+			}
+			step, read := steps[ev.Author.Person+"/"+ev.Author.Roster]
+			if !read {
+				var raw string
+				switch err := q.QueryRow(`SELECT record FROM person_chain WHERE person=? AND hash=?`, ev.Author.Person, ev.Author.Roster).Scan(&raw); {
+				case err == nil:
+					if r, e := protocol.ParsePersonRoster([]byte(raw)); e == nil && r.Person == ev.Author.Person && r.Hash() == ev.Author.Roster {
+						step = &r
+					}
+				case !errors.Is(err, sql.ErrNoRows):
+					return err
+				}
+				steps[ev.Author.Person+"/"+ev.Author.Roster] = step
+			}
+			if step == nil {
+				continue
+			}
+			if _, listed := step.Device(fp); listed {
+				if m.departedTaskKeys[ev.Hash()] == nil {
+					m.departedTaskKeys[ev.Hash()] = map[string]bool{}
+				}
+				m.departedTaskKeys[ev.Hash()][fp] = true
+			}
+		}
+	}
+	return nil
+}
+
 // resolve computes a participation from its events and the DM's members,
 // independently of the order the events arrived in:
 //
@@ -239,7 +295,7 @@ func resolve(conv, pid string, events []protocol.ParticipationEvent, m dmMembers
 		case protocol.EventInvite:
 			keysOK := true
 			for _, fp := range ev.TaskKeys {
-				keysOK = keysOK && m.memberKey(fp)
+				keysOK = keysOK && (m.memberKey(fp) || m.departedTaskKeys[ev.Hash()][fp])
 			}
 			if _, ok := m.host(ev.Host); !ok || !keysOK && !m.roomEvents[ev.Hash()] || !m.inviteEpoch(ev) {
 				hold(ev)
@@ -321,6 +377,9 @@ func resolve(conv, pid string, events []protocol.ParticipationEvent, m dmMembers
 					info.TaskKeys = append(info.TaskKeys, key)
 				}
 			}
+		} else if departed := m.departedTaskKeys[info.Invite]; len(departed) > 0 {
+			// The signed invite still counts; a device removed since asks nothing.
+			info.TaskKeys = slices.DeleteFunc(slices.Clone(inv.TaskKeys), func(fp string) bool { return departed[fp] })
 		} // durable room consent never revives a standing task grant after re-admission
 		info.Audience, info.Until, info.Topic = inv.Audience, inv.Until, inv.Topic
 		info.State = PartInvited
@@ -869,6 +928,9 @@ func (a *Agent) selfConsent(ctx context.Context, pid string) (bool, error) {
 	}
 	if inv.Type == "" || !m.inviteEpoch(inv) {
 		return false, nil // the invite itself, never a scope standing for it
+	}
+	if !slices.Equal(info.TaskKeys, inv.TaskKeys) {
+		return false, nil // it names a device removed since (loadDepartedTaskKeys): no own device's word any more; the person decides
 	}
 	if since, err := a.store.invitedSinceSelfConsent(info.Invite); err != nil || !since {
 		return false, err // stored before D3 here: made when nothing ran before the click

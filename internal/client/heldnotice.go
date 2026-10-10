@@ -42,6 +42,8 @@ func heldDiagnosticCode(why string) string {
 		return "history_reader_not_member"
 	case "human: captured consent differs from local proof":
 		return "captured_consent_mismatch"
+	case controlOtherPerson:
+		return "control_target_person_mismatch"
 	default:
 		return ""
 	}

@@ -1293,6 +1293,33 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false, contro
    let foreign=false;try{await w.e.groupFileAuthorized(evidence.packet,evidence.members,alicePub.address,author,{...message,group_admission:await wire.groupAdmissionHash(wire.groupMember(evidence.packet.state,v.challenge.rosters[0].person).admission)});}catch{foreign=true;}check(foreign,'foreign current member gains no original file without selected history grant');
   }
   await w.close();
+  // A device removed from its person's roster stays that person's for what
+  // it sent (client personOfKeyIn, TestControlOfRemovedDeviceMessage;
+  // t5-held): the person edits it from a current device; another member's
+  // edit of it is refused with the specific code.
+  w=await world();await w.receive(c.proof);await w.receive(c.context);
+  {
+   const account=address.split('/')[0],humans=await wire.rosterHumans(roster);
+   const laptopKeys=await wire.newKeys(),laptopAddress=account+'/laptop',laptopPub=await wire.publicEntry(laptopKeys,laptopAddress),laptopFP=await wire.fingerprint(laptopPub);
+   const oldKeys=await wire.newKeys(),oldAddress=account+'/old-phone',oldPub=await wire.publicEntry(oldKeys,oldAddress),oldFP=await wire.fingerprint(oldPub);
+   const r1=await wire.nextRoster(keys,address,roster,[...roster.devices,laptopPub],await wire.joinConsent(laptopKeys,laptopAddress,roster.person,1,await wire.rosterHash(roster)),roster.label,[...humans,laptopFP]);
+   const r2=await wire.nextRoster(keys,address,r1,[...r1.devices,oldPub],await wire.joinConsent(oldKeys,oldAddress,roster.person,2,await wire.rosterHash(r1)),roster.label,[...humans,laptopFP,oldFP]);
+   const r3=await wire.nextRoster(keys,address,r2,[...roster.devices,laptopPub],null);
+   for(const [r,prev] of [[r1,roster],[r2,r1],[r3,r2]])await wire.verifyNext(r,prev);
+   const chain=[roster,r1,r2,r3],person=await w.e.personRecord(chain,'self',w.e.me);
+   w.extraChains.set(roster.person,chain.map(r=>JSON.parse(wire.rosterJSON(r))));w.e.me=person;await w.st.write([{s:'kv',k:'person',v:person}]);await w.e.pinDevices(person);
+   const L=wire.newID(),T=wire.newID();
+   await w.st.write([{s:'inbox',k:T,v:{id:T,v:2,conv,lid:L,from:oldAddress,fp:oldFP,kind:'message',body:'typed on the old phone',at:1700000000000,read:true,own:true,replica:true}}]);
+   const own={v:3,id:wire.newID(),lid:wire.newID(),from:laptopAddress,to:address,ts:1700000001,kind:'message',conv,sub:wire.SubRevision,replica:true,ref:{id:L,fingerprint:oldFP},body:JSON.stringify({rev:1,text:'fixed on the laptop'})};
+   await w.receive({envelope:await wire.seal(own,laptopKeys,pub)});
+   const ownHeld=await w.st.get('held',own.id);
+   check(!ownHeld&&!!await w.st.get('inbox',own.id),'own edit of a removed own device group message admitted: '+JSON.stringify(ownHeld&&{reason:ownHeld.reason,code:ownHeld.detail_code}));
+   const foreign={v:3,id:wire.newID(),lid:wire.newID(),from:alicePub.address,to:address,ts:1700000002,kind:'message',conv,sub:wire.SubRevision,ref:{id:L,fingerprint:oldFP},body:JSON.stringify({rev:2,text:'hijack'})};
+   await w.receive({envelope:await wire.seal(foreign,aliceKeys,pub)});
+   const held=await w.st.get('held',foreign.id);
+   check(held?.reason==='invalid'&&held.detail_code==='control_target_person_mismatch'&&!await w.st.get('inbox',foreign.id),'another member edit of a removed own device group message refused with its code: '+JSON.stringify(held&&{reason:held.reason,code:held.detail_code}));
+  }
+  await w.close();
   for(const declineMode of ['fresh','stale','roster','missing-key','frozen','removed']) {
    const declineWorld=await world();
    try {
