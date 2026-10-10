@@ -97,6 +97,55 @@ func TestStreamSkipsUnchangedMemberList(t *testing.T) {
 	after("nothing changed since")
 }
 
+// A device's session that starts or ends while the device stays connected
+// leaves its member list entry the same, but what it supports changes
+// (every live session's capabilities count): an updated program's session
+// outlives the older one, whose end lets what waited for the update go.
+// Every stream sends the list again then, so senders look again.
+func TestSessionStartAndEndSendMembersAgain(t *testing.T) {
+	h, err := Open(Config{DataDir: filepath.Join(t.TempDir(), "hub"), PublicURL: "https://127.0.0.1:1", Logf: t.Logf, Heartbeat: 300 * time.Millisecond, SessionGrace: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { h.Close() })
+	alice, bob := enroll(t, h, "alice"), enroll(t, h, "bob")
+	events := pushStream(t, h, bob)
+	next := func() pushEvent {
+		t.Helper()
+		return nextEvent(t, h, bob, "", events)
+	}
+	after := func(what string, expect ...string) {
+		t.Helper()
+		id := sendMessage(t, h, alice, bob)
+		for _, name := range expect {
+			if e := next(); e.name != name {
+				t.Fatalf("%s: %s %s, want %s", what, e.name, e.data, name)
+			}
+		}
+		if e := next(); e.name != "message" || envelopeID(t, e.data) != id {
+			t.Fatalf("%s: %s %s, want the message", what, e.name, e.data)
+		}
+	}
+	for e := next(); e.name != "groups"; e = next() { // the lists sent on connect
+	}
+	old, updated := testAd(alice), testAd(alice)
+	h.presence.connect(alice.addr, old)
+	if e := next(); e.name != "members" || memberOfData(t, e.data, alice.addr).Presence != protocol.PresenceConnected {
+		t.Fatalf("presence change: %s %s", e.name, e.data)
+	}
+	after("connected")
+	h.presence.connect(alice.addr, updated) // the updated program, while the old one still runs
+	after("a second session started", "members", "teams")
+	h.presence.disconnect(alice.addr, old.Session)
+	after("the old session disconnected, within its grace") // still connected: nothing changed
+	endGrace(t, h, alice.addr, old.Session)
+	after("the old session ended", "members", "teams")
+	if ids := h.presence.sessionIDs(alice.addr); len(ids) != 1 || ids[0] != updated.Session {
+		t.Fatalf("live sessions %v", ids)
+	}
+	after("nothing changed since")
+}
+
 // nextEvent is the next event of m's stream other than a ping, which it
 // acknowledges as m's client of version would.
 func nextEvent(t *testing.T, h *Hub, m member, version string, events <-chan pushEvent) pushEvent {

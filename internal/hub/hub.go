@@ -199,7 +199,12 @@ func Open(cfg Config) (*Hub, error) {
 			h.streams.notify(sender)
 		}
 		h.waiters.notifyAll() // some waited-for messages may have expired
-	}, onChange: func(string) { h.membersChanged() }}
+	}, onChange: func(string) { h.membersChanged() },
+		// A session started or ended while the device's state stayed: its
+		// member list entry reads the same, but what it supports may have
+		// changed (an updated program's session ended its older one), so
+		// every stream sends the list again and senders waiting look again.
+		onSessions: func(string) { h.lookAgain() }}
 	err = h.loadRealm()
 	if err == nil {
 		audiences := append([]string(nil), cfg.GoogleClientIDs...)

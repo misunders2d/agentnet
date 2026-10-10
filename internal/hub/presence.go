@@ -20,7 +20,13 @@ type presence struct {
 	sessions map[string]map[string]*session // agent -> session id
 	onEnd    func(agent, session string)
 	onChange func(agent string) // the agent's state (see state) changed; called without the lock
-	closed   bool
+	// onSessions, if set, is told that the agent's live sessions changed
+	// (one started or ended) while its state did not: its member list entry
+	// reads the same, but what the device supports may have changed (every
+	// live session's capabilities count, profile.go). Called without the
+	// lock. A change of state goes to onChange as before.
+	onSessions func(agent string)
+	closed     bool
 }
 
 type session struct {
@@ -31,8 +37,8 @@ type session struct {
 
 func (p *presence) connect(agent string, ad protocol.SessionAd) {
 	p.mu.Lock()
-	before := p.stateLocked(agent)
-	defer func() { p.changedAfterUnlock(agent, before) }()
+	before, started := p.stateLocked(agent), false
+	defer func() { p.changedAfterUnlock(agent, before, started) }()
 	if p.sessions == nil {
 		p.sessions = map[string]map[string]*session{}
 	}
@@ -43,6 +49,7 @@ func (p *presence) connect(agent string, ad protocol.SessionAd) {
 	if s == nil {
 		s = &session{}
 		p.sessions[agent][ad.Session] = s
+		started = true
 	}
 	if s.timer != nil {
 		s.timer.Stop()
@@ -57,7 +64,7 @@ func (p *presence) connect(agent string, ad protocol.SessionAd) {
 func (p *presence) disconnect(agent, id string) {
 	p.mu.Lock()
 	before := p.stateLocked(agent)
-	defer func() { p.changedAfterUnlock(agent, before) }()
+	defer func() { p.changedAfterUnlock(agent, before, false) }()
 	s := p.sessions[agent][id]
 	if s == nil {
 		return
@@ -77,11 +84,20 @@ func (p *presence) end(agent, id string, s *session) {
 	// A session's end changes what the device supports as a whole (every
 	// live session's capabilities count, profile.go) even while another
 	// session keeps it connected: those waiting on it must look again.
-	defer func() { p.mu.Unlock(); p.notify(agent) }()
+	before := p.stateLocked(agent)
 	delete(p.sessions[agent], id)
 	if len(p.sessions[agent]) == 0 {
 		delete(p.sessions, agent)
 	}
+	after := p.stateLocked(agent)
+	defer func() {
+		p.mu.Unlock()
+		if after == before && p.onSessions != nil {
+			p.onSessions(agent)
+		} else {
+			p.notify(agent)
+		}
+	}()
 	p.onEnd(agent, id) // under the lock, so close() waits for it
 }
 
@@ -129,12 +145,15 @@ func (p *presence) stateLocked(agent string) string {
 }
 
 // changedAfterUnlock releases the lock and reports a change of agent's state
-// since before.
-func (p *presence) changedAfterUnlock(agent, before string) {
+// since before, or else that a session started.
+func (p *presence) changedAfterUnlock(agent, before string, started bool) {
 	after := p.stateLocked(agent)
 	p.mu.Unlock()
-	if after != before {
+	switch {
+	case after != before:
 		p.notify(agent)
+	case started && p.onSessions != nil:
+		p.onSessions(agent)
 	}
 }
 
