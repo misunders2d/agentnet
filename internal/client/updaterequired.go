@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
@@ -27,12 +28,15 @@ import (
 // refused), so the person and their coding agents are told "Update AgentNet
 // to vX to continue" (doctor, inbox, the hook line, the page), and the
 // daemon's automatic update is asked to install vX. The daemon then sends
-// the Hub nothing but its stream, that stream's ping acknowledgements and
-// the version probe: its retry pass does not run, so nothing loops, and
-// what waits stays queued for the updated program. The record ends when
-// another version runs here, or when the Hub serves this device again: its
-// stream brings members, a message or a receipt (sent only to a device it
-// serves), or it answers a request it would refuse.
+// the Hub only what it still takes from a refused device (updateAllowed):
+// its stream, that stream's ping acknowledgements and the version probe,
+// and what lets admitted work drain (receipts, answers and results, and the
+// lookups they make first). Its retry pass sends only those, so nothing
+// loops, and everything else stays queued for the updated program. The
+// record ends when another version runs here, or when the Hub serves this
+// device again: its stream brings members, a message or a receipt, which
+// it sends only to a device it serves. An answered request proves nothing:
+// the Hub answers a refused device some requests too.
 
 // codeUpdateRequired is the Hub's refusal of this build.
 const codeUpdateRequired = "update_required"
@@ -94,47 +98,61 @@ type updateGate struct {
 	known   bool            // the Hub answered this process (else refusal is as recorded)
 	hold    bool            // refuse here what the Hub would refuse (the daemon)
 	refused func(*HubError) // told of each refusal the Hub gives, outside the lock
-	served  func()          // told when a request it would refuse succeeds after all
 }
 
-// updateAllowed is what a refused device still asks the Hub: its push
-// stream (which says when it is served again), that stream's ping
-// acknowledgements and the version probe.
-func updateAllowed(method, path string) bool {
+// drainsWork reports whether a refused device may still post a message of
+// outer kind: an answer or a result finishes what was admitted before.
+func drainsWork(kind string) bool { return kind == envelope.KindAnswer || kind == envelope.KindResult }
+
+// updateAllowed is what the Hub still takes from a device it refuses (its
+// suspended allowlist, contract REVISION 2.2): the push stream, which says
+// when it is served again, that stream's ping acknowledgements, the version
+// probe and the recommendation; and what lets admitted work drain: receipts
+// of what was received, the read-only lookups of a member a send makes
+// first, and posts of answers and results (by the posted message's outer
+// kind). body is the request's.
+func updateAllowed(method, path string, body []byte) bool {
 	p, _, _ := strings.Cut(path, "?")
-	switch method + " " + p {
-	case "GET /v1/stream", "POST /v1/stream/ack", "GET /v1/version":
+	seg := strings.Split(strings.TrimPrefix(p, "/v1/"), "/")
+	switch {
+	case method == http.MethodGet && (p == "/v1/stream" || p == "/v1/version" || p == "/v1/release"),
+		method == http.MethodPost && p == "/v1/stream/ack":
 		return true
+	case method == http.MethodPost && p == "/v1/messages":
+		var env struct {
+			Kind string `json:"kind"`
+		}
+		return json.Unmarshal(body, &env) == nil && drainsWork(env.Kind)
+	case method == http.MethodPost && len(seg) == 3 && seg[0] == "messages" && seg[1] != "" && seg[2] == "ack":
+		return true
+	case method == http.MethodGet && seg[0] == "agents" && (len(seg) == 3 || len(seg) == 4 && (seg[3] == "sessions" || seg[3] == "profile")):
+		return seg[1] != "" && seg[2] != ""
 	}
 	return false
 }
 
 // before returns the refusal a held request gets without asking the Hub.
-func (g *updateGate) before(method, path string) error {
+func (g *updateGate) before(method, path string, body []byte) error {
 	if g == nil {
 		return nil
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if !g.hold || g.refusal == nil || updateAllowed(method, path) {
+	if !g.hold || g.refusal == nil || updateAllowed(method, path, body) {
 		return nil
 	}
 	e := *g.refusal
 	return &e
 }
 
-// after notes the Hub's answer to req: an update_required refusal stands
-// from now; a request it refuses to a refused device, answered, ends one.
-func (g *updateGate) after(req *http.Request, err error) {
+// after notes the Hub's answer: an update_required refusal stands from now.
+// Nothing else ends one here: the Hub answers a refused device some
+// requests (updateAllowed), so only its stream says it serves this device
+// again (updateServed).
+func (g *updateGate) after(err error) {
 	var he *HubError
-	switch {
-	case g == nil:
-	case errors.As(err, &he) && he.Code == codeUpdateRequired:
+	if g != nil && errors.As(err, &he) && he.Code == codeUpdateRequired {
 		g.set(he)
-	case err == nil && req != nil && !updateAllowed(req.Method, req.URL.Path):
-		if g.clear() && g.served != nil {
-			g.served()
-		}
 	}
 }
 
@@ -232,15 +250,6 @@ func (a *Agent) noteUpdateRequired(*HubError) {
 		}
 		a.Logf("your Hub serves this device again only once it runs a newer AgentNet: %s (this is %s); messages to it wait on the Hub", u.Message(), protocol.Version)
 		a.changes.bump()
-	}()
-}
-
-// noteServed: a request the Hub refuses to a refused device succeeded.
-func (a *Agent) noteServed() {
-	a.required.writes.Add(1)
-	go func() {
-		defer a.required.writes.Done()
-		a.endUpdateRequired(false)
 	}()
 }
 

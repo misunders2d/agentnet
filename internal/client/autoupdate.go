@@ -29,25 +29,44 @@ import (
 // owner-only file in the home: nothing received changes it). A development
 // build never updates itself. One attempt runs at a time, and only while no
 // job runs. Each trigger (a release or update_required event, a refusal, a
-// daemon start) allows one attempt: a failure is recorded and tried again
-// at the next trigger, never on a timer. A release that failed is not tried
-// again within autoUpdateRetry, so a connection that keeps reconnecting
-// cannot turn its events into a download loop.
+// daemon start) allows one attempt, never a timer. Every attempt is
+// recorded in the home before it starts (auto-update.json: from, to, when,
+// what came of it, how many in a row), and the next program reads it: the
+// same release is not tried again from the same version until
+// autoUpdateWait has passed, whatever the attempt's outcome, so neither a
+// connection that keeps reconnecting nor an app that its update helper
+// starts again after a failed install (a start is a trigger) turns into a
+// download or restart loop. Each further attempt doubles the wait.
 
 const (
 	autoUpdateFile       = "auto-update"      // "off": no automatic updates (owner-only)
 	autoUpdateRecordFile = "auto-update.json" // what the last attempt did
 )
 
-// autoUpdateRetry is how soon a failed release may be tried again in one
-// run of the daemon. A variable so tests can shorten it.
-var autoUpdateRetry = 30 * time.Minute
+// autoUpdateRetry is how soon after an attempt the same release may be
+// tried again from the same version; autoUpdateRetryMax bounds it as it
+// doubles. Variables so tests can shorten them.
+var (
+	autoUpdateRetry    = 30 * time.Minute
+	autoUpdateRetryMax = 24 * time.Hour
+)
+
+// autoUpdateWait is how long after the tries-th attempt in a row of one
+// release another may start: autoUpdateRetry, doubled for each attempt
+// after the first, at most autoUpdateRetryMax.
+func autoUpdateWait(tries int) time.Duration {
+	d := autoUpdateRetry
+	for i := 1; i < tries && d < autoUpdateRetryMax; i++ {
+		d *= 2
+	}
+	return min(d, autoUpdateRetryMax)
+}
 
 // Automatic update states.
 const (
 	AutoUpdating     = "updating"  // an attempt runs
-	AutoUpdated      = "installed" // installed; the switch to it is requested
-	AutoUpdateFailed = "failed"    // tried again at the next trigger
+	AutoUpdated      = "installed" // installed, or handed to the app; the switch to it is requested
+	AutoUpdateFailed = "failed"    // tried again at a later trigger
 )
 
 // AutoUpdateRecord is what the daemon's last automatic update did.
@@ -57,6 +76,7 @@ type AutoUpdateRecord struct {
 	State  string    `json:"state"`
 	Detail string    `json:"detail,omitempty"`
 	At     time.Time `json:"at"`
+	Tries  int       `json:"tries,omitempty"` // attempts in a row of To from From
 }
 
 // autoUpdate is a daemon's automatic update (RunOptions.AutoUpdate).
@@ -64,9 +84,8 @@ type autoUpdate struct {
 	install func(ctx context.Context, release string) (string, error)
 	due     atomic.Bool // a trigger came: the worker looks once
 	mu      sync.Mutex
-	running bool                 // one attempt at a time
-	failed  map[string]time.Time // releases that failed in this run, and when
-	runs    sync.WaitGroup       // Run waits for an attempt before it returns
+	running bool           // one attempt at a time in this program; the record is the rest
+	runs    sync.WaitGroup // Run waits for an attempt before it returns
 }
 
 // AutoUpdateOn reports whether this home updates itself (on unless the
@@ -113,12 +132,32 @@ func ReadAutoUpdate(home string) (AutoUpdateRecord, bool, error) {
 	return r, true, json.Unmarshal(b, &r)
 }
 
-func (a *Agent) recordAutoUpdate(r AutoUpdateRecord) {
+func writeAutoUpdate(home string, r AutoUpdateRecord) error {
 	b, _ := json.Marshal(r)
-	if err := secfile.Write(filepath.Join(a.home, autoUpdateRecordFile), b); err != nil {
+	return secfile.Write(filepath.Join(home, autoUpdateRecordFile), b)
+}
+
+func (a *Agent) recordAutoUpdate(r AutoUpdateRecord) error {
+	err := writeAutoUpdate(a.home, r)
+	if err != nil {
 		a.Logf("automatic update: cannot record what it did: %v", err)
 	}
 	a.changes.bump()
+	return err
+}
+
+// NoteAutoUpdateFailed records that the automatic update to release from
+// this version failed after it was handed over: the AgentNet app's update
+// helper could not install it and started this version again. The record
+// then says so, and the wait before the next attempt runs from now. A
+// record of another attempt is left as it is.
+func NoteAutoUpdateFailed(home, release, detail string) error {
+	r, ok, err := ReadAutoUpdate(home)
+	if err != nil || !ok || r.To != release || r.From != protocol.Version || r.State == AutoUpdateFailed {
+		return err
+	}
+	r.State, r.Detail, r.At = AutoUpdateFailed, detail, time.Now()
+	return writeAutoUpdate(home, r)
 }
 
 // autoUpdateDue is a trigger: the worker looks once.
@@ -157,33 +196,47 @@ func (a *Agent) maybeAutoUpdate(ctx context.Context) {
 		return
 	}
 	a.auto.mu.Lock()
-	if a.auto.running || time.Since(a.auto.failed[target]) < autoUpdateRetry {
-		a.auto.mu.Unlock()
+	defer a.auto.mu.Unlock()
+	if a.auto.running {
+		return
+	}
+	// The last attempt, by whichever program made it: the same release
+	// from this version waits its turn, whatever came of it (still under
+	// way, handed over yet this version runs again, or failed). An
+	// unreadable record is not taken as none.
+	from, tries := protocol.Version, 1
+	prev, found, err := ReadAutoUpdate(a.home)
+	if err != nil {
+		a.Logf("automatic update to agentnet %s not started: its record is unreadable: %v", target, err)
+		return
+	}
+	if found && prev.From == from && prev.To == target {
+		if wait := autoUpdateWait(prev.Tries); time.Since(prev.At) < wait {
+			return
+		}
+		tries = prev.Tries + 1
+	}
+	// Recorded before it starts: a program that stops meanwhile leaves the
+	// record, and the next one waits.
+	if a.recordAutoUpdate(AutoUpdateRecord{To: target, From: from, State: AutoUpdating, At: time.Now(), Tries: tries}) != nil {
 		return
 	}
 	a.auto.running = true
 	a.auto.runs.Add(1)
-	a.auto.mu.Unlock()
-	from := protocol.Version
-	a.recordAutoUpdate(AutoUpdateRecord{To: target, From: from, State: AutoUpdating, At: time.Now()})
 	a.Logf("automatic update to agentnet %s: starting", target)
 	go func() {
 		defer a.auto.runs.Done()
 		detail, err := a.auto.install(ctx, target)
-		rec := AutoUpdateRecord{To: target, From: from, State: AutoUpdated, Detail: detail, At: time.Now()}
-		a.auto.mu.Lock()
-		a.auto.running = false
+		rec := AutoUpdateRecord{To: target, From: from, State: AutoUpdated, Detail: detail, At: time.Now(), Tries: tries}
 		if err != nil {
 			rec.State, rec.Detail = AutoUpdateFailed, err.Error()
-			if a.auto.failed == nil {
-				a.auto.failed = map[string]time.Time{}
-			}
-			a.auto.failed[target] = time.Now()
 		}
-		a.auto.mu.Unlock()
 		a.recordAutoUpdate(rec)
+		a.auto.mu.Lock()
+		a.auto.running = false
+		a.auto.mu.Unlock()
 		if err != nil {
-			a.Logf("automatic update to agentnet %s failed (tried again at the next release event, refusal or daemon start): %v", target, err)
+			a.Logf("automatic update to agentnet %s failed (tried again at a release event, refusal or daemon start after %s; agentnet update tries now): %v", target, autoUpdateWait(tries), err)
 			return
 		}
 		a.Logf("automatic update to agentnet %s: %s", target, detail)
@@ -212,7 +265,7 @@ func (a *Agent) autoUpdateWords() string {
 		case AutoUpdated:
 			words = "Automatic update installed " + r.To + "; AgentNet switches to it once no job runs."
 		case AutoUpdateFailed:
-			words = "Automatic update to " + r.To + " failed (" + r.Detail + "); it is tried again when the Hub next names the release or the daemon restarts."
+			words = "Automatic update to " + r.To + " failed (" + strings.TrimSuffix(r.Detail, ".") + "); it is tried again when the Hub names the release or the daemon starts after " + r.At.Add(autoUpdateWait(r.Tries)).Local().Format("15:04 Jan 2") + ". To update now: agentnet update (or Update in the AgentNet app)."
 		}
 	}
 	return words

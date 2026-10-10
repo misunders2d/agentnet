@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/misunders2d/agentnet/internal/client"
 	"github.com/misunders2d/agentnet/internal/lockfile"
 	"github.com/misunders2d/agentnet/internal/protocol"
 	"github.com/misunders2d/agentnet/internal/secfile"
@@ -531,6 +532,18 @@ func (r *appRunner) confirmAppUpdate() {
 	}
 	if err := reconcileAppUpdateResult(r.home, protocol.Version, r.currentCommandStatus()); err != nil && r.logf != nil {
 		r.logf("could not record app update verification: %v", err)
+	}
+	// The helper could not install the release and started this version
+	// again: an automatic update handed over to it failed (the daemon's
+	// record says so, and its wait before trying again runs from now).
+	if result, err := readAppUpdateResult(r.home); err == nil && result.State == "failed" && result.Version != "" {
+		detail := result.Problem
+		if detail == "" {
+			detail = "the app's update helper could not install it"
+		}
+		if err := client.NoteAutoUpdateFailed(r.home, result.Version, detail); err != nil && r.logf != nil {
+			r.logf("could not record the failed automatic update: %v", err)
+		}
 	}
 }
 

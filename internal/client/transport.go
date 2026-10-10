@@ -123,7 +123,7 @@ func (c *hubConn) release() {
 // request builds a request with a raw body, signed unless the connection
 // has no agent yet.
 func (c *hubConn) request(ctx context.Context, method, path string, body []byte) (*http.Request, error) {
-	if err := c.gate.before(method, path); err != nil {
+	if err := c.gate.before(method, path, body); err != nil {
 		return nil, err
 	}
 	if c.workspaceCheck != nil {
@@ -203,10 +203,10 @@ func (c *hubConn) getRange(ctx context.Context, path string, from, to int64, w i
 	return err
 }
 
-// check is checkStatus, telling the gate whether the Hub serves this build.
+// check is checkStatus, telling the gate of the Hub's update_required refusals.
 func (c *hubConn) check(resp *http.Response) error {
 	err := checkStatus(resp)
-	c.gate.after(resp.Request, err)
+	c.gate.after(err)
 	return err
 }
 

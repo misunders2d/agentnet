@@ -287,7 +287,7 @@ func Open(home string) (*Agent, error) {
 		return nil, err
 	}
 	a.hub.workspaceCheck = a.WorkspaceRequestGuard()
-	a.hub.gate = &updateGate{refused: a.noteUpdateRequired, served: a.noteServed} // the Hub's refusal of this build (updaterequired.go)
+	a.hub.gate = &updateGate{refused: a.noteUpdateRequired} // the Hub's refusal of this build (updaterequired.go)
 	if u, ok := st.updateRequired(); ok {
 		a.hub.gate.refusal = updateRequiredError(u.Latest, u.URL)
 	}
@@ -967,6 +967,10 @@ func (a *Agent) flushOutbox(ctx context.Context, filesOnly bool) error {
 			key = "aux\x00" + env.ID
 		}
 		if blocked[key] {
+			continue
+		}
+		if a.hub.gate.holding() && !drainsWork(env.Kind) {
+			blocked[key] = true // the Hub refuses this build: it waits for the updated program (updaterequired.go)
 			continue
 		}
 		var route *protocol.SessionAd

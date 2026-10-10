@@ -13,8 +13,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/misunders2d/agentnet/internal/client"
+	"github.com/misunders2d/agentnet/internal/protocol"
 	"github.com/misunders2d/agentnet/internal/secfile"
 )
 
@@ -209,5 +211,43 @@ func TestUpdateAutoSwitch(t *testing.T) {
 		if err := runUpdate(context.Background(), home, args); err == nil {
 			t.Fatalf("%v accepted", args)
 		}
+	}
+}
+
+// The app that its update helper starts again after a failed install tells
+// the daemon's automatic update so: the record of the handed-over attempt
+// says failed, in the helper's words, and the wait before the same release
+// is tried again runs from now. A failure of another release, or a record
+// of another attempt, changes nothing.
+func TestAppStartRecordsFailedAutoUpdate(t *testing.T) {
+	home := t.TempDir()
+	handedOver := client.AutoUpdateRecord{To: "v9.9.9", From: protocol.Version, State: client.AutoUpdated, Detail: "Restarting AgentNet with the update…", At: time.Now().Add(-time.Hour), Tries: 2}
+	write := func(r client.AutoUpdateRecord) {
+		t.Helper()
+		b, _ := json.Marshal(r)
+		if err := secfile.Write(filepath.Join(home, "auto-update.json"), b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(handedOver)
+	if err := writeAppUpdateResult(home, "v9.9.8", "failed", "Update failed; the previous app remains at its verified path: no space left on device"); err != nil {
+		t.Fatal(err)
+	}
+	(&appRunner{home: home}).confirmAppUpdate()
+	if got, _, _ := client.ReadAutoUpdate(home); got.State != client.AutoUpdated {
+		t.Fatalf("another release's failure changed the record: %+v", got)
+	}
+	if err := writeAppUpdateResult(home, "v9.9.9", "failed", "Update failed; the previous app remains at its verified path: permission denied"); err != nil {
+		t.Fatal(err)
+	}
+	(&appRunner{home: home}).confirmAppUpdate()
+	got, ok, err := client.ReadAutoUpdate(home)
+	if err != nil || !ok || got.State != client.AutoUpdateFailed || !strings.Contains(got.Detail, "permission denied") || time.Since(got.At) > time.Minute || got.Tries != 2 || got.To != "v9.9.9" {
+		t.Fatalf("record after a failed install: %+v %v %v", got, ok, err)
+	}
+	failedAt := got.At
+	(&appRunner{home: home}).confirmAppUpdate() // the next start: already recorded
+	if again, _, _ := client.ReadAutoUpdate(home); !again.At.Equal(failedAt) {
+		t.Fatalf("each start moves the wait on: %v then %v", failedAt, again.At)
 	}
 }

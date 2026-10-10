@@ -1159,19 +1159,24 @@ installs that release by itself, exactly as below: the app as a whole where
 one manages this home (a closed app updates when it next runs), otherwise
 this program's file and then the daemon's switch once no job runs. The Hub
 names only the version; nothing is downloaded from it. One attempt runs at a
-time, only while no job runs; a failure is kept (--status) and tried again
-when the Hub next names the release or the daemon restarts, never on a
-timer. A development build never updates itself. --auto off turns this
-home's automatic updates off (an owner-only file in the home, auto-update;
-nothing received changes it), --auto on back on.
+time, only while no job runs. Each attempt is kept in the home (--status), so
+the next program knows it: the same release is tried again only at a later
+release event, refusal or daemon start, 30 minutes after the last attempt at
+the earliest, twice as long after each further one (at most a day), never on
+a timer; agentnet update tries at once. A development build never updates
+itself. --auto off turns this home's automatic updates off (an owner-only
+file in the home, auto-update; nothing received changes it), --auto on back
+on.
 
 While your Hub requires a newer version (it answers update_required), this
-device is suspended: messages from it stay queued, messages to it wait on
-the Hub, and the daemon asks the Hub for nothing but its stream until it
-runs that version. doctor, inbox, status, --status, the line coding agents
-are shown and the page say "Update AgentNet to vX.Y.Z to continue". A
-browser page reloads to get its server's current version, keeping unsent
-text.
+device is suspended: new messages from it stay queued, messages to it wait on
+the Hub, and the daemon sends the Hub only its stream and what finishes work
+admitted before (receipts, answers and results) until it runs that version.
+doctor, inbox, status, --status, the line coding agents are shown and the
+page say "Update AgentNet to vX.Y.Z to continue". A browser page reloads to
+get its server's current version once nothing unsent would be lost: a typed
+draft or attached file keeps it until you send it (it waits in the browser)
+or clear it.
 
 When a desktop app is registered for this data home, update the app and its
 terminal command together through the same updater as Settings > About. An

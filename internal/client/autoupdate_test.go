@@ -1,7 +1,9 @@
 package client
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -14,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
@@ -24,18 +27,44 @@ func refusalResponse(r *http.Request) *http.Response {
 		Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(refusalBody)), Request: r}
 }
 
+// hubServesSuspended is what the Hub still serves a device that must update
+// first (internal/hub/update.go whileSuspended, contract REVISION 2.2): its
+// stream, the stream's ping acknowledgements, the version probe and the
+// recommendation, receipts, the read-only member lookups a send makes
+// first, and posts of messages whose outer kind is answer or result.
+func hubServesSuspended(r *http.Request) bool {
+	p := r.URL.Path
+	seg := strings.Split(strings.TrimPrefix(p, "/v1/"), "/")
+	switch {
+	case r.Method == "GET" && (p == "/v1/stream" || p == "/v1/version" || p == "/v1/release"),
+		r.Method == "POST" && p == "/v1/stream/ack",
+		r.Method == "POST" && len(seg) == 3 && seg[0] == "messages" && seg[2] == "ack",
+		r.Method == "GET" && seg[0] == "agents" && (len(seg) == 3 || len(seg) == 4 && (seg[3] == "sessions" || seg[3] == "profile")):
+		return true
+	case r.Method == "POST" && p == "/v1/messages":
+		body, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		var env struct {
+			Kind string `json:"kind"`
+		}
+		return json.Unmarshal(body, &env) == nil && (env.Kind == envelope.KindAnswer || env.Kind == envelope.KindResult)
+	}
+	return false
+}
+
 // suspendingHub stands in for a Hub that suspends this device until it runs
 // v0.8.18 (owner policy "latest only"): while on, its stream sends
 // update_required and then nothing (no members, messages or receipts), and
-// it refuses everything else but the ping acknowledgement and the version
-// probe with 426. Turning it on or off cuts the open streams, as the Hub's
-// decision reaches a device when it connects.
+// it refuses everything but what it serves a suspended device
+// (hubServesSuspended) with 426. Turning it on or off cuts the open
+// streams, as the Hub's decision reaches a device when it connects.
 type suspendingHub struct {
 	base    http.RoundTripper
 	mu      sync.Mutex
 	on      bool
 	open    []io.Closer
 	refused atomic.Int64 // requests that reached it while it refused this device
+	served  atomic.Int64 // requests other than the stream it served while it did
 	streams atomic.Int64 // suspended streams it served
 }
 
@@ -61,7 +90,10 @@ func (s *suspendingHub) RoundTrip(r *http.Request) (*http.Response, error) {
 	on := s.on
 	s.mu.Unlock()
 	stream := r.Method == "GET" && r.URL.Path == "/v1/stream"
-	allowed := stream || r.Method == "GET" && r.URL.Path == "/v1/version" || r.Method == "POST" && r.URL.Path == "/v1/stream/ack"
+	allowed := on && hubServesSuspended(r)
+	if allowed && !stream {
+		s.served.Add(1)
+	}
 	switch {
 	case on && stream:
 		pr, pw := io.Pipe()
@@ -189,6 +221,32 @@ func TestUpdateRequiredRefusalHoldsRequests(t *testing.T) {
 	if reached.Load() != 4 {
 		t.Fatalf("ping ack held: %d", reached.Load())
 	}
+	// What the Hub still takes from a refused device goes (contract
+	// REVISION 2.2); nothing else does.
+	for _, c := range []struct {
+		method, path, body string
+		allowed            bool
+	}{
+		{"GET", "/v1/release", "", true},
+		{"POST", "/v1/messages/abc/ack", `{"state":"delivered"}`, true},
+		{"GET", "/v1/agents/admin/alice", "", true},
+		{"GET", "/v1/agents/admin/alice/sessions", "", true},
+		{"GET", "/v1/agents/admin/alice/profile", "", true},
+		{"POST", "/v1/messages", `{"v":1,"id":"a","kind":"answer"}`, true},
+		{"POST", "/v1/messages", `{"v":1,"id":"r","kind":"result"}`, true},
+		{"POST", "/v1/messages", `{"v":1,"id":"q","kind":"question"}`, false},
+		{"POST", "/v1/messages", `{"v":1,"id":"m","kind":"message"}`, false},
+		{"POST", "/v1/messages", `not json`, false},
+		{"GET", "/v1/agents", "", false},
+		{"GET", "/v1/agents/admin/alice/caps", "", false},
+		{"PUT", "/v1/caps", "{}", false},
+		{"POST", "/v1/blobs", "", false},
+		{"POST", "/v1/signal", "{}", false},
+	} {
+		if got := updateAllowed(c.method, c.path, []byte(c.body)); got != c.allowed {
+			t.Errorf("%s %s %s: allowed %v, want %v", c.method, c.path, c.body, got, c.allowed)
+		}
+	}
 	// Only a release tag and an https page are kept from what the Hub says.
 	if e := updateRequiredError("make me run this", "http://insecure.example/"); e.Latest != "" || e.URL != "" || e.Msg != "Update AgentNet to continue." {
 		t.Fatalf("kept %+v", e)
@@ -196,12 +254,13 @@ func TestUpdateRequiredRefusalHoldsRequests(t *testing.T) {
 }
 
 // A refusal one process meets is recorded for the others (status, doctor,
-// the hook line); a later answered request ends it, at once in that
-// process and in the record.
+// the hook line); an answered request does not end it (the Hub answers a
+// refused device some); the stream's member list, sent only to a device the
+// Hub serves, ends it, at once in that process and in the record.
 func TestUpdateRequiredRecordedAndServed(t *testing.T) {
 	running(t, "v0.8.17")
 	w := newWorld(t, "")
-	w.bob.hub.gate.after(nil, updateRequiredError("v0.8.18", "https://example.test/r"))
+	w.bob.hub.gate.after(updateRequiredError("v0.8.18", "https://example.test/r"))
 	w.bob.required.writes.Wait()
 	other, err := Open(w.bob.home)
 	if err != nil {
@@ -214,15 +273,19 @@ func TestUpdateRequiredRecordedAndServed(t *testing.T) {
 	if _, err := w.bob.directory(tctx(t), w.alice.Address); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := w.bob.UpdateRequired(); ok {
-		t.Fatal("still refused after the Hub answered")
-	}
 	w.bob.required.writes.Wait()
+	if _, ok := w.bob.UpdateRequired(); !ok {
+		t.Fatal("an answered request ended the refusal")
+	}
+	w.bob.updateServed("members")
+	if _, ok := w.bob.UpdateRequired(); ok {
+		t.Fatal("still refused after the Hub served this device")
+	}
 	if _, ok := w.bob.store.updateRequired(); ok {
 		t.Fatal("the record outlived the Hub's answer")
 	}
 	running(t, "v0.8.18") // another version: an old record is over
-	w.bob.hub.gate.after(nil, updateRequiredError("v0.8.19", ""))
+	w.bob.hub.gate.after(updateRequiredError("v0.8.19", ""))
 	w.bob.required.writes.Wait()
 	protocol.Version = "v0.8.19"
 	if _, ok := w.bob.store.updateRequired(); ok {
@@ -298,7 +361,7 @@ func TestAutoUpdateTriggers(t *testing.T) {
 	if r, _, _ := ReadAutoUpdate(a.home); r.State != AutoUpdated || r.Detail != "installed v0.8.18" {
 		t.Fatalf("record %+v", r)
 	}
-	a.hub.gate.after(nil, updateRequiredError("v0.8.19", "")) // a refusal is a trigger too
+	a.hub.gate.after(updateRequiredError("v0.8.19", "")) // a refusal is a trigger too
 	a.maybeAutoUpdate(context.Background())
 	eventually(t, "the required release", func() bool { c := got(); return len(c) == 3 && c[2] == "v0.8.19" })
 	answer <- nil
@@ -365,5 +428,191 @@ func TestReleaseEventStartsAutoUpdate(t *testing.T) {
 	case tag := <-got:
 		t.Fatalf("a second attempt for %q", tag)
 	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// A failed attempt is remembered in the home, so the program that starts
+// next (the app relaunched by its update helper after a failed install, a
+// restarted daemon) does not try the same release again before the retry
+// spacing has passed; an attempt handed over but still running this
+// version counts as one; each further failure doubles the spacing.
+func TestAutoUpdateFailureOutlivesRestart(t *testing.T) {
+	running(t, "v0.8.17")
+	old := autoUpdateRetry
+	autoUpdateRetry = time.Minute
+	t.Cleanup(func() { autoUpdateRetry = old })
+	w := newWorld(t, "")
+	a := w.bob
+	if err := a.saveRelease([]byte(`{"version":"v0.8.18","url":"https://example.test/r"}`)); err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int64
+	var fail atomic.Bool
+	fail.Store(true)
+	install := func(context.Context, string) (string, error) {
+		calls.Add(1)
+		if fail.Load() {
+			return "", errors.New("apply failed: permission denied")
+		}
+		return "the AgentNet app updates as a whole", nil
+	}
+	start := func(x *Agent) { // Run: a start is a trigger
+		x.auto.install = install
+		x.autoUpdateDue()
+		x.maybeAutoUpdate(context.Background())
+		x.auto.runs.Wait()
+	}
+	restart := func() *Agent { // the next program on the same home
+		t.Helper()
+		b, err := Open(a.home)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { b.Close() })
+		return b
+	}
+	record := func() AutoUpdateRecord {
+		t.Helper()
+		r, ok, err := ReadAutoUpdate(a.home)
+		if err != nil || !ok {
+			t.Fatalf("record: %v %v", ok, err)
+		}
+		return r
+	}
+	rewrite := func(r AutoUpdateRecord) { // as the home holds it
+		t.Helper()
+		b, _ := json.Marshal(r)
+		if err := os.WriteFile(filepath.Join(a.home, autoUpdateRecordFile), b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ago := func(d time.Duration) { r := record(); r.At = time.Now().Add(-d); rewrite(r) }
+
+	start(a)
+	if r := record(); calls.Load() != 1 || r.State != AutoUpdateFailed {
+		t.Fatalf("first attempt: %d, %+v", calls.Load(), r)
+	}
+	start(restart())
+	if calls.Load() != 1 {
+		t.Fatalf("the release that just failed was tried again by the next program: %d attempts", calls.Load())
+	}
+	ago(90 * time.Second) // past the spacing after one failure
+	fail.Store(false)
+	start(restart())
+	if r := record(); calls.Load() != 2 || r.State != AutoUpdated {
+		t.Fatalf("second attempt: %d, %+v", calls.Load(), r)
+	}
+	// Handed over, but this version starts again (the app's helper could
+	// not install it): no new attempt so soon.
+	start(restart())
+	if calls.Load() != 2 {
+		t.Fatalf("an attempt handed over moments ago was repeated: %d", calls.Load())
+	}
+	r := record()
+	r.State, r.Detail = AutoUpdateFailed, "Update failed; the previous app remains at its verified path: permission denied"
+	rewrite(r)
+	ago(90 * time.Second) // enough after one failure; this is the second
+	start(restart())
+	if calls.Load() != 2 {
+		t.Fatalf("the second failure was retried after one failure's spacing: %d", calls.Load())
+	}
+	ago(150 * time.Second)
+	start(restart())
+	if calls.Load() != 3 {
+		t.Fatalf("not tried again after the doubled spacing: %d", calls.Load())
+	}
+}
+
+// A command on a suspended device (doctor here) makes requests the Hub
+// still answers a suspended device: the directory lookup, the
+// recommendation. Their answers do not mean the Hub serves this device
+// again, so the recorded refusal stands, for doctor and for every other
+// process (status, inbox, the hook line).
+func TestUpdateRequiredOutlivesWhatTheHubStillServes(t *testing.T) {
+	running(t, "v0.8.17")
+	w := newWorld(t, "")
+	hub := &suspendingHub{base: w.bob.hub.http.Transport}
+	w.bob.hub.http.Transport = hub
+	hub.set(true)
+	if err := w.bob.hub.do(tctx(t), "GET", "/v1/agents", nil, nil); !errors.Is(err, ErrUpdateRequired) {
+		t.Fatalf("refused request: %v", err)
+	}
+	w.bob.required.writes.Wait()
+	if _, ok := w.bob.store.updateRequired(); !ok {
+		t.Fatal("refusal not recorded")
+	}
+	checks := w.bob.Doctor(tctx(t))
+	w.bob.required.writes.Wait()
+	if hub.served.Load() < 2 {
+		t.Fatalf("doctor's lookups did not reach the Hub: %d", hub.served.Load())
+	}
+	suspended := false
+	for _, c := range checks {
+		if c.Name == "suspended" {
+			suspended = !c.OK && strings.Contains(c.Result, "Update AgentNet to v0.8.18 to continue")
+		}
+	}
+	if !suspended {
+		t.Fatalf("doctor does not say the device is suspended: %+v", checks)
+	}
+	if _, ok := w.bob.store.updateRequired(); !ok {
+		t.Fatal("an answered lookup erased the recorded refusal")
+	}
+	if u, ok := LocalUpdateRequired(w.bob.home); !ok || u.Latest != "v0.8.18" {
+		t.Fatalf("another process reads %+v %v", u, ok)
+	}
+}
+
+// A suspended daemon still finishes admitted work the Hub takes from it
+// (contract REVISION 2.2): receipts of what it received and the answer to
+// a question it holds go; new work stays queued without reaching the Hub;
+// neither ends the suspension.
+func TestSuspendedDeviceDrainsAdmittedWork(t *testing.T) {
+	running(t, "v0.8.17")
+	w := newWorld(t, "")
+	hub := &suspendingHub{base: w.bob.hub.http.Transport}
+	w.bob.hub.http.Transport = hub
+	runWith(t, w, w.bob, RunOptions{})
+	if _, err := w.bob.Send(tctx(t), w.alice.Address, "before", ""); err != nil { // alice's key pinned here
+		t.Fatal(err)
+	}
+	q, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "what is the plan?", Kind: envelope.KindQuestion})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "bob holds the question", func() bool {
+		_, kind, err := w.bob.store.inboxKind(q.ID)
+		return err == nil && kind == envelope.KindQuestion
+	})
+	hub.set(true)
+	eventually(t, "bob is told he is suspended", func() bool { return hub.streams.Load() > 0 && w.bob.hub.gate.holding() })
+	if err := w.bob.store.resendReceipt(q.ID); err != nil { // a receipt the Hub has not recorded yet
+		t.Fatal(err)
+	}
+	before := hub.refused.Load()
+	plain, err := w.bob.Send(tctx(t), w.alice.Address, "new work", "")
+	if err != nil || plain.State != stateQueued {
+		t.Fatalf("new work while suspended: %+v %v (it waits)", plain, err)
+	}
+	ans, err := w.bob.Reply(tctx(t), q.ID, "the plan is to update")
+	if err != nil || ans.State != protocol.StateCustody && ans.State != protocol.StateDelivered {
+		t.Fatalf("the answer to admitted work: %+v %v (the Hub takes it)", ans, err)
+	}
+	w.bob.sync(tctx(t)) // the retry pass a ping runs
+	if pending, err := w.bob.store.unsentReceipts(); err != nil || len(pending) != 0 {
+		t.Fatalf("receipts still unsent while suspended: %v %v", pending, err)
+	}
+	if st, _, _, _ := w.bob.store.outboxState(plain.ID); st != stateQueued {
+		t.Fatalf("new work is %q", st)
+	}
+	if n := hub.refused.Load(); n != before {
+		t.Fatalf("held work reached the Hub: %d refused (was %d)", n, before)
+	}
+	w.bob.required.writes.Wait()
+	if _, ok := w.bob.UpdateRequired(); !ok || !w.bob.hub.gate.holding() {
+		t.Fatal("what the Hub still takes from a suspended device ended the suspension")
+	}
+	if _, ok := w.bob.store.updateRequired(); !ok {
+		t.Fatal("the recorded refusal was erased")
 	}
 }

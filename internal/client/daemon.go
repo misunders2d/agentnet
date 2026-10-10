@@ -301,7 +301,16 @@ func (b *streamBody) Read(p []byte) (int, error) {
 // instead of a poll loop.
 func (a *Agent) sync(ctx context.Context) {
 	if a.hub.gate.holding() {
-		return // the Hub refuses this build: what waits is sent once it serves this device (updaterequired.go)
+		// The Hub refuses this build (updaterequired.go): it still takes
+		// receipts and the answers and results of admitted work; the rest
+		// waits for the program it serves.
+		if err := a.flushReceipts(ctx); err != nil {
+			a.Logf("receipts: %v", err)
+		}
+		if err := a.FlushOutbox(ctx); err != nil {
+			a.Logf("outbox: %v", err)
+		}
+		return
 	}
 	// Durable receipts get a turn before bulk history and proof recovery.
 	if err := a.flushReceipts(ctx); err != nil {
