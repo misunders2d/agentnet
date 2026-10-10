@@ -18,6 +18,8 @@ This record starts with v0.8.1; earlier releases remain on the
   ciphertext when upgraded to background delivery.
 - Browser background work queries pending copies through storage indexes,
   avoiding repeated loads of the whole sent-message archive.
+- Idle background wakes avoid preparing archive-export and permission queries
+  when there is no eligible work; real requests retain the complete checks.
 - History progress distinguishes records stored on the destination from those
   waiting at the relay; storage is not presented as completed import.
 

@@ -90,6 +90,15 @@ func (a *Agent) archiveStep(ctx context.Context) (more bool, err error) {
 		return false, ctx.Err()
 	}
 	defer func() { <-a.archiveLock }()
+	// Most existing daemon wakes have no archive export work. Use the
+	// pending-state index before preparing the recipient/copy join queries.
+	var pending bool
+	if err = a.store.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM outbox WHERE state IN (?,?) LIMIT 1)`, archiveStaged, archiveUploading).Scan(&pending); err != nil {
+		return false, err
+	}
+	if !pending {
+		return false, nil
+	}
 	packErr := a.archivePack(ctx)
 	var raw, recipientFP string
 	err = a.store.db.QueryRow(`SELECT envelope,recipient_fp FROM outbox o WHERE sub=? AND state=? AND NOT EXISTS(SELECT 1 FROM history_archive_export_errors x WHERE x.recipient=o.recipient AND x.recipient_fp=o.recipient_fp) ORDER BY rowid LIMIT 1`, envelope.SubHistoryArchive, archiveUploading).Scan(&raw, &recipientFP)

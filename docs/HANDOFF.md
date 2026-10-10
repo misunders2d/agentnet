@@ -28,9 +28,13 @@ passes. Native UI passes on Linux, macOS and Windows; Windows client H–Z passe
 Final native client qualification exposed five asynchronous test-premise
 failures, now corrected without changing production code or raising deadlines.
 A separate guest-control invitation timeout reproduced under the race detector;
-its cumulative operation budget is under investigation before publication. Retain passing evidence and rerun these exact cases on the
+profiling found idle SQL preparation competing with the invitation. Two indexed
+necessary-condition probes now avoid empty archive export and direct-job claim
+queries. They preserve the claim transaction, complete permission predicate and
+independent import wakes. The unchanged guest-control race passes; focused
+native requalification is next. Retain passing evidence and rerun these exact cases on the
 native platforms. Windows A–G finished with the same group-context fixture failure and the guest
-control timeout; that remaining case is under investigation.
+control timeout; the targeted rerun includes both.
 No release, live queue cleanup or installed-client change has happened.
 
 The Android preview stays on `feat/native-android` in its separate worktree.
@@ -40,7 +44,8 @@ passes core race, 28 Android unit tests, lint, both ABI/16KiB packaging checks,
 and in-place x86_64 emulator upgrade preserving 203 exact messages, queued
 sends, file, draft and identity. Native camera opening/cancellation and denial
 fallback pass. Optical QR decoding, arm64 execution and actual owner-phone
-receive lifecycle/timings remain unverified. Artifact/evidence are in the plan.
+receive lifecycle/timings remain unverified. Artifact/evidence are in the plan. Rebuild the preview with the final idle-work
+corrections before handover; the checkpoint APK is not the final distribution.
 
 ## Current published release — v0.8.17, October 10, 2026 (UTC)
 

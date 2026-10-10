@@ -1190,6 +1190,15 @@ func (s *store) claimJob(responder string, resolve ...func(dbq, string) (*Execut
 		return job{}, false, err
 	}
 	defer tx.Rollback()
+	// Idle wakes need no approval/grant query unless a non-replica direct
+	// candidate exists. Keep this probe and the exact claim in one snapshot.
+	var candidate bool
+	if err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM inbox WHERE conv IS NULL AND replica=0 AND state IN (?,?) LIMIT 1)`, stateAccepted, statePending).Scan(&candidate); err != nil {
+		return job{}, false, err
+	}
+	if !candidate {
+		return job{}, false, tx.Commit()
+	}
 	changed := false
 	var afterID string
 	var afterAt int64
