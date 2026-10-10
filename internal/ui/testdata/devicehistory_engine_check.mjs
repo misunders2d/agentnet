@@ -63,6 +63,7 @@ check((await p.store.get('inbox',answer)).read,'signed read marker before direct
 let thread=await p.thread(id);check(thread.peer===b.address&&thread.messages.length===2&&thread.messages[0].id===id&&thread.messages[0].dir==='out'&&thread.messages[0].from===a.address&&thread.messages[1].dir==='in','original target and request direction survive linked import');
 check(thread.messages.every(m=>m.history&&m.synced_from===a.address&&!m.state)&&thread.messages[0].can.length===0,'copied requests retain provenance without executable state or sender-key edit authority');
 for(const r of first)await receiveHistory(r.envelope,p);check((await p.thread(id)).messages.length===2,'duplicate encrypted history is one logical message');
+await drain(p,a);check(!(await copies(p)).some(r=>r.to===a.address&&first.some(f=>JSON.parse(f.body).item.id===JSON.parse(r.body).item.id)),'history the exact desk forwarded is not echoed back to it');
 const before=(await copies(a)).length;await drain(a,p);check((await copies(a)).length===before,'same wake retains exact ciphertext ledger');
 const late=wire.newID(),lateEnv=await wire.seal({id:late,from:b.address,to:a.address,ts:1,kind:'answer',body:'late older original',reply_to:id},b.keys,a.pub);await receiveHistory(lateEnv,a);await drain(a,p);
 const lateCopy=(await copies(a)).find(r=>JSON.parse(r.body).item.id===late);check(!!lateCopy,'late older arrival after completed snapshot is queued');await receiveHistory(lateCopy.envelope,p);check((await p.thread(id)).messages.length===3,'late history joins original direct thread');

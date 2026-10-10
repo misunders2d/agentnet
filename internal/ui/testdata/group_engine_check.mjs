@@ -728,8 +728,13 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false, contro
     await past.receive({envelope:await historyEnvelope(wire.historyJSON(accept))});
     check(!!(await past.st.get('inbox',accept.id))?.group_history&&!(await past.e.convEvents(conv)).some(r=>r.e.pid===accept.pid),'witness-only predecessor stays outside the live event ledger');
     await past.e.runHistory();
+    // Everything here was forwarded by the linked device itself: catch-up
+    // sends it none of it back. A copy for any other own device keeps the
+    // exact original identities and witness-only predecessor.
     const copies=(await past.st.all('outbox')).filter(r=>r.to===dev.address&&r.sub==='history').map(r=>wire.parseHistory(r.body));
-    check(copies.filter(h=>h.id===accept.id&&h.lid===accept.lid&&h.from_key===accept.from_key).length===1&&copies.some(h=>h.id===original.id),'normal catch-up queues witnessed event and old request with exact original identities');
+    check(!copies.some(h=>[accept.id,original.id].includes(h.id)),'normal catch-up does not echo witnessed history to the exact device that forwarded it');
+    const acceptCopy=wire.parseHistory((await past.e.historyCopy(dev,await past.e.groupRecord(conv),past.e.itemOf(await past.st.get('inbox',accept.id),false))).body);
+    check(acceptCopy.id===accept.id&&acceptCopy.lid===accept.lid&&acceptCopy.from_key===accept.from_key&&wire.groupContextJSON(acceptCopy.group_history)===wire.groupContextJSON(fileItem.group_history),'witnessed event copy keeps exact original identities and witness-only predecessor');
     check(!(await past.st.prefix('kv','history-deferred/'+dev.fingerprint+'/')).some(r=>[accept.id,original.id].includes(r.id)),'verified witness-only dependencies leave no unresolved source reference');
 
     // An unused task key may have left its person's roster since this

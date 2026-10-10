@@ -347,6 +347,11 @@ async function start(engine, joinedNow) {
   engine.start();
   window.addEventListener("online", () => engine.online());
   window.addEventListener("offline", () => engine.offline());
+  // A phone suspends this page in the background; shown again, every
+  // workspace's stream that is down or silent reconnects now (Engine.resume).
+  const resume = () => { for (const e of new Set([engine, ...[...(shell?.members.values() || [])].map((m) => m.engine)])) e?.resume?.(); };
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") resume(); });
+  window.addEventListener("pageshow", (e) => { if (e.persisted) resume(); }); // restored from the back-forward cache
   if (navigator.serviceWorker) {
     navigator.serviceWorker.addEventListener("message", (e) => {
       if (!e.data) return;

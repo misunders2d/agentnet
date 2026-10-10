@@ -13,7 +13,8 @@ const values=new Map([['agentnet.workspaces.v1',JSON.stringify(records)],['agent
 const localStorage={getItem:k=>values.get(k),setItem:(k,v)=>values.set(k,v)};
 const element=()=>({hidden:false,replaceChildren(){},append(){},prepend(){},before(){},setAttribute(){},addEventListener(){}});
 const skin=element(),body=element();
-const document={body,getElementById:()=>skin,createElement:()=>element(),createTextNode:t=>(texts.push(t),t),head:{append(s){loaded=true;s.onload();}}};
+const listeners=[],on=target=>(type,fn)=>listeners.push({target,type,fn}),fire=(target,type,event={})=>{for(const l of listeners)if(l.target===target&&l.type===type)l.fn(event);};
+const document={body,visibilityState:'visible',addEventListener:on('document'),getElementById:()=>skin,createElement:()=>element(),createTextNode:t=>(texts.push(t),t),head:{append(s){loaded=true;s.onload();}}};
 const fetch=async(url,options)=>{
  fetchCalls++;
  if(url==='/device'){headStarted();await headGate;return new Response('',{headers:{'content-security-policy':"connect-src 'self' "+other}});}
@@ -25,8 +26,9 @@ class Engine {
  constructor(options){Object.assign(this,options);this.address='me/phone';}
  async load(){return true;}
  start(){this.running=true;registered=true;}stop(){}async close(){}api(){return Promise.resolve({cached:'chat'});}listen(){return()=>{};}driveService(){}
+ resume(){this.resumes=(this.resumes||0)+1;}
 }
-const window={addEventListener(){},agentnetOpen:chan=>opened.push(chan)};
+const window={addEventListener:on('window'),agentnetOpen:chan=>opened.push(chan)};
 const context={ws,Engine,openIDB:async()=>({close(){}}),decodeInvite:()=>{},newID:()=> '3'.repeat(32),validName:()=>true,
  localStorage,fetch,document,window,navigator:{locks:{request:async(n,o,fn)=>fn({})}},location:{origin:home,pathname:'/device'},
  appBanner:async()=>null,installOffer:()=>null,URL,AbortController,DOMException,setTimeout,clearTimeout,console};
@@ -44,6 +46,14 @@ assert.equal((await window.agentnetEngine.api('/api/overview')).cached,'chat');
 releaseHEAD();for(let i=0;i<50&&!registered;i++)await pause(5);
 assert(registered,'cached secondary restores after CSP');assert.equal(changes,1,'one existing engine notification refreshes membership view');
 assert.equal(window.agentnetWorkspaces.shell.active,'default','restoration does not select or remount');
+// Shown again (visible, or restored from the back-forward cache), every
+// workspace's engine resumes its stream; hiding or a fresh load does not.
+{
+ const secondary=window.agentnetWorkspaces.shell.members.get(id).engine,count=()=>[engine.resumes||0,secondary.resumes||0];
+ document.visibilityState='hidden';fire('document','visibilitychange');fire('window','pageshow',{persisted:false});assert.deepEqual(count(),[0,0]);
+ document.visibilityState='visible';fire('document','visibilitychange');assert.deepEqual(count(),[1,1],'visible again resumes every workspace');
+ fire('window','pageshow',{persisted:true});assert.deepEqual(count(),[2,2],'back-forward cache restore resumes');
+}
 await window.agentnetWorkspaces.disconnect(id);
 // A malformed unrelated membership does not disable the pinned default.
 values.set('agentnet.workspaces.v1',JSON.stringify([records[0],{id:'broken-secondary'}]));

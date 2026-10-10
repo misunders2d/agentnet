@@ -65,6 +65,18 @@ const linkTTL = 9 * 60;
 // last, instead of after every message.
 const receiptWidth = 8;
 const burstFirst = 1000, burstMost = 8000, burstQuiet = 250;
+// A received envelope whose admission fails unexpectedly (neither a hold
+// nor an unreachable server) is set aside under receive-error/ beside its
+// exact ciphertext: no receipt, the stream goes on, and the existing
+// recovery wakes retry it at most receiveErrorTries times per page load.
+const receiveErrorTries = 3;
+// Events read ahead of the one being admitted, so a heartbeat behind a
+// long catch-up is still read and answered (the relay closes a stream
+// whose pings stay unanswered for two heartbeats).
+const readAhead = 8 << 20;
+// The page shown again resumes a stream that is down or has missed a
+// heartbeat at once, at most once per resumeGap (no reconnect storms).
+const resumeSilence = HEARTBEAT + 15_000, resumeGap = 10_000;
 // retractionWrite: a write that may change which retractions inbox and
 // outbox hold (a retraction row put, or any row removed). A row's kind
 // never changes under its key, so no other write can.
@@ -95,7 +107,7 @@ const historyIndexed = (row,arrival) => {
 export async function openIDB(name = "agentnet") {
   let onBlocked, refused = false;
   const blocked = new Promise((_, rej) => { onBlocked = () => { refused = true; rej(new Error("storage is blocked by another tab")); }; });
-  const opening = openDB(name, 5, { // 5: continuous direct-thread source journal
+  const opening = openDB(name, 6, { // 5: continuous direct-thread source journal; 6: rows by conversation
     async upgrade(d,oldVersion,newVersion,tx) {
       for (const s of stores) if (!d.objectStoreNames.contains(s)) d.createObjectStore(s);
       if(oldVersion<4) {
@@ -108,6 +120,10 @@ export async function openIDB(name = "agentnet") {
         await tx.objectStore("kv").put(arrival,"history-arrival");
       }
       if(oldVersion<5){let arrival=0;for(const s of ["inbox","outbox"]){const store=tx.objectStore(s);store.createIndex("device_arrival","device_arrival");for(let c=await store.openCursor();c;c=await c.continue())if(directHistoryRow(c.value))await c.update({...c.value,device_arrival:++arrival});}await tx.objectStore("kv").put(arrival,"device-history-arrival");}
+      // Authority reads and their write-time checks name one conversation:
+      // the index makes each cost the rows of that conversation, not of the
+      // whole store. IndexedDB fills it from the existing rows here.
+      if(oldVersion<6)for(const s of ["inbox","outbox"])tx.objectStore(s).createIndex("conv","conv");
     },
     blocked: onBlocked,
   });
@@ -125,6 +141,8 @@ export async function openIDB(name = "agentnet") {
     keysAfter: (s,k,n) => db.getAllKeys(s,k === "" ? null : IDBKeyRange.lowerBound(k,true),n),
     // prefix returns the values whose keys start with p, in key order.
     prefix: (s, p) => db.getAll(s, IDBKeyRange.bound(p, p + "\uffff")),
+    // byConv returns the inbox or outbox rows of one conversation, in key order.
+    byConv: (s, conv) => db.getAllFromIndex(s, "conv", conv),
     async directRows({after=0,ceiling=Number.MAX_SAFE_INTEGER,reverse=false,limit=historyPage}={}){
       if(after>=ceiling)return [];const rows=[],tx=db.transaction(["inbox","outbox"]),range=IDBKeyRange.bound(after,ceiling,true,false);
       for(const s of ["inbox","outbox"]) {let n=0;for(let c=await tx.objectStore(s).index("device_arrival").openCursor(range,reverse?"prev":"next");c&&n++<limit;c=await c.continue())rows.push({row:c.value,here:s==="outbox"});}
@@ -145,11 +163,14 @@ export async function openIDB(name = "agentnet") {
       try {
         for (const c of checks) {
           if (c.scope) {
-            const rows = [];
-            for (let cursor = await tx.objectStore(c.s).openCursor(); cursor; cursor = await cursor.continue()) {
-              if (scopeRow(cursor.value, c.scope)) rows.push({ k: cursor.primaryKey, v: authorityValue(c.s, cursor.value) });
-            }
-            if (JSON.stringify(rows) !== JSON.stringify(c.rows)) throw new StoreConflict();
+            // A conversation scope matches only rows of that conversation:
+            // its index range holds exactly those, in the same key order.
+            // Two bulk reads in this transaction (keys, then values, in that
+            // one order) instead of a request per row.
+            const store = tx.objectStore(c.s), conv = typeof c.scope.conv === "string", source = conv ? store.index("conv") : store, range = conv ? IDBKeyRange.only(c.scope.conv) : undefined;
+            const [keys, values] = await Promise.all([source.getAllKeys(range), source.getAll(range)]), rows = [];
+            values.forEach((v, i) => { if (scopeRow(v, c.scope)) rows.push(authorityJSON(c.s, keys[i], v)); });
+            if ("[" + rows.join(",") + "]" !== JSON.stringify(c.rows)) throw new StoreConflict();
             continue;
           }
           const actual = await tx.objectStore(c.s).get(c.k);
@@ -195,6 +216,7 @@ export function memoryStore() {
     after: async (s, k, n) => [...data[s].keys()].filter((x) => x > k).sort().slice(0, n).map((x) => structuredClone(data[s].get(x))),
     keysAfter: async (s,k,n) => [...data[s].keys()].filter(x=>x>k).sort().slice(0,n),
     prefix: async (s, p) => [...data[s].keys()].filter((x) => x.startsWith(p)).sort().map((x) => structuredClone(data[s].get(x))),
+    byConv: async (s, conv) => [...data[s].keys()].filter((x) => data[s].get(x).conv === conv).sort().map((x) => structuredClone(data[s].get(x))),
     directRows:async({after=0,ceiling=Number.MAX_SAFE_INTEGER,reverse=false,limit=historyPage}={})=>[...[...data.inbox.values()].map(row=>({row,here:false})),...[...data.outbox.values()].map(row=>({row,here:true}))].filter(x=>x.row.device_arrival>after&&x.row.device_arrival<=ceiling).sort((a,b)=>(a.row.device_arrival-b.row.device_arrival)*(reverse?-1:1)).slice(0,limit).map(x=>structuredClone(x)),
     historyRows: async(s,{after=null,conv="",reverse=false,arrival=false,ceiling=Number.MAX_SAFE_INTEGER,limit=historyPage}={})=>[...data[s].values()].filter(r=>r.history_pos&&(!conv||r.conv===conv)&&(arrival?r.history_arrival>(after||0)&&r.history_arrival<=ceiling:!after||historyOrder(r.history_pos,after)>0)).sort((a,b)=>(arrival?a.history_arrival-b.history_arrival:historyOrder(a.history_pos,b.history_pos))*(reverse?-1:1)).slice(0,limit).map(r=>structuredClone(r)),
     async write(ops, checks = []) {
@@ -237,12 +259,16 @@ const roomAgentScope = (e) => !e.role && e.audience === "room";
 // A shared human record copy (forwarded) is a carrier: its record already
 // counts from the row it came from, so it is never authority or a room turn.
 // Delivery progress never changes the signed authority of an outbox row.
-const authorityValue = (store, row) => {
-  if (store !== "outbox") return structuredClone(row);
+const authorityFields = (store, row) => {
+  if (store !== "outbox") return row;
   const {state, detail, delivery, path, ...authority} = row;
   if (authority.files) authority.files = authority.files.map(({uploaded, ct, ...file}) => file);
-  return structuredClone(authority);
+  return authority;
 };
+const authorityValue = (store, row) => structuredClone(authorityFields(store, row));
+// authorityJSON is one captured {k, v} entry as JSON. The write-time check
+// only reads its rows, so it compares them without copying each one first.
+const authorityJSON = (store, k, row) => JSON.stringify({ k, v: authorityFields(store, row) });
 const scopeRow = (row, scope) => !row.forwarded && ["conv", "pid", "sub", "lid"].every((k) => scope[k] === undefined || row[k] === scope[k]) && (!scope.organization || !!row.topic_event || scope.ids.includes(row.id) || scope.ids.includes(row.lid) || [wire.SubRevision,wire.SubRetraction].includes(row.sub) && scope.ids.includes(row.ref?.id));
 
 const put = (st, s, k, v) => st.write([{ s, k, v }]);
@@ -283,6 +309,9 @@ class Hold extends Error {
     this.reason = reason;
   }
 }
+// failureName names an unexpected admission failure by its kind only: an
+// error's message may quote decrypted text, which never leaves admission.
+const failureName = e => e instanceof HubError ? "HubError " + e.status : /^[A-Za-z]{1,40}$/.test(e?.name || "") ? e.name : "Error";
 
 // ---- words the page shows --------------------------------------------------------------------
 
@@ -624,6 +653,7 @@ export class Engine {
     this.downloads = new Set();
     this.receiving = new Map();
     this.receiveGeneration = 0;
+    this.receiveFailures = new Map(); // envelope id -> unexpected admission failures this page load (receiveErrorTries)
     this.typing = { connected: false, supported: false, generation: 0, seen: new Map(), replay: new Map(), sent: new Map(), timer: null, visible: "[]", abort: new AbortController() };
     this.notKept = new Map(); // received file blob id -> why its ciphertext is not kept here (gone, full, large)
     this.fetching = new Map(); // "ct/" + blob id -> the one fetch of it under way
@@ -1865,6 +1895,7 @@ export class Engine {
     const queue=async(row,here=false)=>{
       const s=here?"outbox":"inbox",m=await this.groupRead(checks,s,row.id);
       if(!m||!historySource(m)||this.erasedRow(m))return;
+      if(m.history&&m.synced_from===dev.address&&m.synced_key===dev.fingerprint)return true; // that exact device forwarded it here: it holds it
       let item=this.itemOf(m,here);
       const sourceTuple=m.conv+"/"+item.from_key+"/"+item.lid;
       try { item=await this.dmLifecycleHistorySource(convs.get(m.conv),item,checks); }
@@ -3533,6 +3564,14 @@ export class Engine {
     return people;
   }
 
+  // A received organization is held invalid when its author is no current
+  // human device of a full member, as the core holds it at every admission
+  // (client topicOrganizationAuthor callers); waits and races keep theirs.
+  async receivedOrganizationAuthor(c,address,fp,checks) {
+    try { return await this.topicOrganizationAuthor(c,address,fp,checks); }
+    catch (e) { if (e instanceof Hold || e instanceof StoreConflict || retryable(e)) throw e; throw new Hold("invalid", e.message); }
+  }
+
   async requireTopicOrganizationSupport(address,pin) {
     if(!pin||pin.pending)throw Error("Topic organization recipient key changed.");
     const [ok,why]=await this.ctlSupport(address,pin,wire.CapTopicOrganization);
@@ -4237,7 +4276,7 @@ export class Engine {
       if(!sender)sender=await this.personOf(env.from,pin, admission);
     }
     if(!sender)throw new Hold("invalid","Sender is not a current group device.");
-    if(wire.topicOrganization(n.topic_event))await this.topicOrganizationAuthor(await this.groupRecord(n.conv),env.from,pin.fingerprint,checks);
+    if(wire.topicOrganization(n.topic_event))await this.receivedOrganizationAuthor(await this.groupRecord(n.conv),env.from,pin.fingerprint,checks);
     const own=sender.person===this.me.person;
     if(n.replica!==own)throw new Hold("invalid","Group replica differs from sender's own person.");
     for(const fan of n.fan || []) {
@@ -4649,7 +4688,7 @@ export class Engine {
     const key=h.from_key+"/"+h.lid,hash=h.ref?await this.groupControlHash(n.conv,h):await wire.groupHistoryContentHash(n.conv,h),seen=await this.groupRead(checks,"lids",key);
     if(seen&&(seen.conv!==n.conv||seen.hash!==hash))throw new Hold("conflicting_duplicate","Historical group PID logical content differs.");
     const ops=[{s:"kv",k:"group-carrier/"+env.id,v:true}];
-    if(!seen)ops.push({s:"inbox",k:h.id,v:{...h,v:2,conv:n.conv,fp:h.from_key,claimed_key:h.from_key,person:await this.personOfFp(h.from_key),history:true,synced_from:env.from,read:true,replica:true,state:"",own:this.me.devices.some(d=>d.fingerprint===h.from_key),...(h.ref?{v:3,control:true}:{}),attachments:h.attachments.map(a=>({...a,availability:"requestable"}))}},{s:"lids",k:key,v:{id:h.id,conv:n.conv,hash,history:true}});
+    if(!seen)ops.push({s:"inbox",k:h.id,v:{...h,v:2,conv:n.conv,fp:h.from_key,claimed_key:h.from_key,person:await this.personOfFp(h.from_key),history:true,synced_from:env.from,synced_key:pin.fingerprint,read:true,replica:true,state:"",own:this.me.devices.some(d=>d.fingerprint===h.from_key),...(h.ref?{v:3,control:true}:{}),attachments:h.attachments.map(a=>({...a,availability:"requestable"}))}},{s:"lids",k:key,v:{id:h.id,conv:n.conv,hash,history:true}});
     ops.checks=checks;ops.groupCarrier=true;return ops;
   }
 
@@ -4662,7 +4701,7 @@ export class Engine {
     if(h.pid||h.ref)return this.admitGroupParticipationHistory(n,env,pin,h,checks,packet,members, admission);
     if(h.kind!=="message"||h.sub||h.target||h.pid||h.agent_id||h.status||h.ref||h.origin&&h.origin!=="ui"||h.ts<=0||h.reply_to&&!wire.validID(h.reply_to))throw new Hold("invalid","Group history contains nonordinary input.");
     wire.checkTopic({...h,v:wire.Version2});
-    if(wire.topicOrganization(h.topic_event))await this.topicOrganizationAuthor(await this.groupRecord(n.conv),h.from,h.from_key,checks);
+    if(wire.topicOrganization(h.topic_event))await this.receivedOrganizationAuthor(await this.groupRecord(n.conv),h.from,h.from_key,checks);
     if(h.attachments.length>8 || (JSON.parse(n.body).attachments||[]).some(a=>!a.name || !Number.isSafeInteger(a.size) || a.size<0 || a.size>(100<<20) || !wire.validHash(a.sha256) || a.blob?.id || a.blob?.size || a.blob?.sha256))throw new Hold("invalid","Group history file is not an exact manifest.");
     const ref={lid:h.lid,author:h.from_key,hash:await wire.groupHistoryContentHash(n.conv,h)}, self=wire.groupMember(packet.state,this.me.person);
     const selected=wire.groupAllowsHistory(self.admission,ref);
@@ -4672,7 +4711,7 @@ export class Engine {
     const key=h.from_key+"/"+h.lid,seen=await this.groupRead(checks,"lids",key);
     if(seen && (seen.conv!==n.conv || seen.hash!==ref.hash))throw new Hold("conflicting_duplicate","Group history conflicts with an existing logical turn.");
     const ops=[{s:"kv",k:"group-carrier/"+env.id,v:true}];
-    if(!seen)ops.push({s:"inbox",k:h.id,v:{...h,group_admission:selected?undefined:h.group_admission,v:wire.Version2,id:h.id,conv:n.conv,fp:"",claimed_key:h.from_key,history:true,synced_from:env.from,read:true,replica:true,state:"",attachments:h.attachments.map(a=>({...a,availability:"requestable"}))}},{s:"lids",k:key,v:{id:h.id,conv:n.conv,hash:ref.hash,history:true}});
+    if(!seen)ops.push({s:"inbox",k:h.id,v:{...h,group_admission:selected?undefined:h.group_admission,v:wire.Version2,id:h.id,conv:n.conv,fp:"",claimed_key:h.from_key,history:true,synced_from:env.from,synced_key:pin.fingerprint,read:true,replica:true,state:"",attachments:h.attachments.map(a=>({...a,availability:"requestable"}))}},{s:"lids",k:key,v:{id:h.id,conv:n.conv,hash:ref.hash,history:true}});
     ops.checks=checks;ops.groupCarrier=true;return ops;
   }
 
@@ -5059,9 +5098,23 @@ export class Engine {
       try {
         await this.onMessage(data, !mayDefer ? null : {localOnly:!retry,checks:[],state:{deferred:false}});
       } catch (e) {
-        if (!retryable(e) || !mayDefer) throw e;
-        if (!pending) await this.store.write([{s:"kv",k:key,v:{id:env.id,address:this.address,fingerprint:this.fp,envelope:data,at:this.now()}}], [{s:"kv",k:key,v:pending}]);
-        if (!retry) wake = true;
+        if (!mayDefer) throw e;
+        const record = {id:env.id,address:this.address,fingerprint:this.fp,envelope:data,at:this.now()};
+        if (retryable(e)) {
+          if (!pending) await this.store.write([{s:"kv",k:key,v:record}], [{s:"kv",k:key,v:pending}]);
+          if (!retry) wake = true;
+          return;
+        }
+        // Not a hold and not the network: a failure here must not end the
+        // stream, or the relay resends this envelope first on every
+        // connection and nothing behind it is ever stored. It is kept as
+        // received, unacknowledged and unshown, and retried by the existing
+        // recovery wakes; the overview counts it (receiveStatus).
+        const errKey = "receive-error/" + env.id, failed = await this.store.get("kv", errKey);
+        this.receiveFailures.set(env.id, (this.receiveFailures.get(env.id) || 0) + 1);
+        await this.store.write([...(pending ? [] : [{s:"kv",k:key,v:record}]), {s:"kv",k:errKey,v:{id:env.id,error:failureName(e),attempts:(failed?.attempts||0)+1,at:this.now()}}],
+          [{s:"kv",k:key,v:pending},{s:"kv",k:errKey,v:failed}]);
+        this.changed(true);
       }
     })().finally(() => {
       this.receiving.delete(env.id);
@@ -5084,8 +5137,21 @@ export class Engine {
         checks.push({s:"inbox",k:env.id,v:previous});
         if(!previous)original.v.at=row.at;
       }
-      checks.push({s:"kv",k:key,v:row});ops.push({s:"kv",k:key,v:undefined});
+      checks.push({s:"kv",k:key,v:row});ops.push({s:"kv",k:key,v:undefined},{s:"kv",k:"receive-error/"+env.id,v:undefined});
     }
+  }
+
+  // receiveStatus counts what this device keeps back from the stream: exact
+  // envelopes waiting for a lookup, and those whose admission failed here
+  // (receive-error/), with the latest failure's kind. Keys and the small
+  // failure records only; nothing is shown or acknowledged by counting.
+  async receiveStatus() {
+    const keys = async p => (await this.store.keysAfter("kv", p, 1001)).filter(k => k.startsWith(p));
+    const pending = await keys("receive-pending/");
+    if (!pending.length) return undefined;
+    const failed = await keys("receive-error/"), latest = (await Promise.all(failed.slice(0, 64).map(k => this.store.get("kv", k)))).filter(Boolean).sort((a, b) => b.at - a.at)[0];
+    return { waiting: Math.max(0, pending.length - failed.length), failed: failed.length, ...(pending.length > 1000 ? {more: true} : {}),
+      ...(latest ? {error: latest.error, attempts: latest.attempts, at: iso(latest.at)} : {}) };
   }
 
   retryPendingReceives() {
@@ -5108,7 +5174,10 @@ export class Engine {
             if (this.closing || this.revoked || generation!==this.receiveGeneration) return;
             const row=await this.store.get("kv",key);
             if (!row?.envelope || key!==prefix+row.id || row.address!==this.address || row.fingerprint!==this.fp) continue;
-            await this.receiveStreamMessage(row.envelope,true);
+            if ((this.receiveFailures.get(row.id)||0) >= receiveErrorTries) continue; // tried enough on this page load; it stays aside
+            // One carrier's failure is its own: it stays aside, and the pass
+            // (and its saved cursor) goes on to the next.
+            try { await this.receiveStreamMessage(row.envelope,true); } catch (e) { /* kept as it was */ }
             if (!await this.store.get("kv",key)) progress=true;
           }
           if (this.closing || this.revoked || generation!==this.receiveGeneration) return;
@@ -5399,7 +5468,7 @@ export class Engine {
     if (n.sub === wire.SubDriveSpace) await this.checkDriveSpace(n, sp, root); // the space record follows the one kept here, under its owner (sp: the sender's person, verified above)
     if (n.sub === "history") {
       if (!own) throw new Hold("invalid", "history comes only from another device of your person");
-      return this.admitHistory(n, env, root, ops, admission);
+      return this.admitHistory(n, env, root, ops, admission, pin);
     }
     if (n.sub === "file") {
       if (!own) throw new Hold("invalid", "file requests come only from another device of your person");
@@ -5429,7 +5498,7 @@ export class Engine {
     const hash = wire.hex(await wire.sha256(new TextEncoder().encode(JSON.stringify(content))));
     const key = pin.fingerprint + "/" + n.lid;
     const organizationChecks=[];
-    if(wire.topicOrganization(n.topic_event))await this.topicOrganizationAuthor(conv,env.from,pin.fingerprint,organizationChecks);
+    if(wire.topicOrganization(n.topic_event))await this.receivedOrganizationAuthor(conv,env.from,pin.fingerprint,organizationChecks);
     const seen = await this.store.get("lids", key);
     if (seen && seen.history) {
       ops.push({ s: "inbox", k: seen.id, v: undefined }); // a copy received directly replaces the history copy
@@ -5664,9 +5733,12 @@ export class Engine {
       }
       try { out.push(await this.historyCopy(d, { id: n.conv, root: c.root }, item, [], admission)); }
       catch (e) {
-        // An unrelated sibling's changed key cannot quarantine this valid
-        // original. Its durable source remains available to own-history sync.
-        if (!admission || !(e instanceof Hold) || e.reason !== "key_changed") throw e;
+        // A sibling's copy that cannot be made now (a changed key, or any
+        // check of the copy itself) cannot hold or quarantine this valid
+        // original, as in the core (client forwardStale): its durable source
+        // remains available to own-history sync. Storage races and network
+        // waits keep their meaning for the original's admission.
+        if (e instanceof StoreConflict || retryable(e)) throw e;
       }
     }
     return out;
@@ -5678,7 +5750,7 @@ export class Engine {
   // that was or is theirs). It never runs, alerts or is held; a copy of
   // the same message received directly replaces it, and one received
   // before it stays.
-  async admitHistory(n, env, root, ops, admission = null) {
+  async admitHistory(n, env, root, ops, admission = null, pin = null) {
     const checks = ops.checks || [];
     let item;
     try {
@@ -5761,7 +5833,7 @@ export class Engine {
       await this.checkExternalReply({ ...item, conv: n.conv }, externalInfo, historyMembers);
     }
     if (!assistant) await this.checkConversationAgent({ ...item, conv: n.conv }, item.from, item.from_key, { id: n.conv, root: n.root, peer: root.members.find((m) => m.person !== this.me.person)?.person }, true);
-    if(wire.topicOrganization(item.topic_event))await this.topicOrganizationAuthor(hc,item.from,item.from_key,checks);
+    if(wire.topicOrganization(item.topic_event))await this.receivedOrganizationAuthor(hc,item.from,item.from_key,checks);
     const key = item.from_key + "/" + item.lid;
     if (item.from_key === this.fp || (await this.store.get("lids", key))) return ops; // sent here, or known: received directly, or as history before
     const mine = owner === this.me;
@@ -5770,7 +5842,7 @@ export class Engine {
       if (!item.ref) throw new Hold("invalid", "a control without its reference");
       try { wire.parseControl(item.sub, item.body); } catch (e) { throw new Hold("invalid", e.message); }
       const ctl = { id: item.id, v: 3, control: true, from: item.from, fp: item.from_key, kind: "message", sub: item.sub, body: item.body, ref: item.ref,
-        at: item.at || item.ts * 1000, read: true, conv: n.conv, lid: item.lid, replica: true, own: mine && !assistant, person: assistant ? "" : owner.person, history: true, synced_from: env.from,
+        at: item.at || item.ts * 1000, read: true, conv: n.conv, lid: item.lid, replica: true, own: mine && !assistant, person: assistant ? "" : owner.person, history: true, synced_from: env.from, ...(pin ? { synced_key: pin.fingerprint } : {}),
         ...(assistant ? { pid: item.pid, ...(item.agent_id ? { agent_id: item.agent_id } : {}), ...(item.human ? { human: item.human } : {}) } : {}) };
       if (item.sub === wire.SubRevision && (await this.refTombstoned(n.conv, item.ref))) ctl.body = ""; // a revision after the deletion keeps no text
       const extra = [];
@@ -5785,7 +5857,7 @@ export class Engine {
     }
     const rec = { id: item.id, from: item.from, kind: item.kind, body: item.body, quote:item.quote||"",topic:item.topic||"",topic_event:item.topic_event||null,topic_done:!!item.topic_done,reply_to: item.reply_to,ts:item.ts, at: item.at || item.ts * 1000, fp: item.from_key,
       read: true, v: 2, conv: n.conv, lid: item.lid, sub: item.sub, pid: item.pid, origin: item.origin, emotion: item.emotion, replica: true,
-      target: item.target, ...(item.agent_id ? { agent_id: item.agent_id } : {}), ...(item.receiver_route ? { receiver_route: item.receiver_route } : {}), ...(item.human ? { human: item.human } : {}), own: mine, history: true, synced_from: env.from, state: "",
+      target: item.target, ...(item.agent_id ? { agent_id: item.agent_id } : {}), ...(item.receiver_route ? { receiver_route: item.receiver_route } : {}), ...(item.human ? { human: item.human } : {}), own: mine, history: true, synced_from: env.from, ...(pin ? { synced_key: pin.fingerprint } : {}), state: "",
       attachments: item.attachments.length ? item.attachments.map((a) => ({ blob: null, name: a.name, size: a.size, sha256: a.sha256 })) : undefined };
     if (rec.kind === "message" && rec.body && (await this.tombstoned(rec))) rec.body = ""; // its author's retraction is already here
     const result=[...ops, { s: "inbox", k: item.id, v: rec }, { s: "lids", k: key, v: { id: item.id, hash: "", history: true } }];
@@ -6164,6 +6236,26 @@ export class Engine {
   // once, over the open connection or a new one.
   online() {
     if (this.connected) this.flushOutbox().catch(() => {});
+    this.resume(true);
+  }
+
+  // resume: the page is shown again (visible, restored from the
+  // back-forward cache) or the network is back. A phone suspends a page in
+  // the background without closing its connection, so a stream that is down
+  // or has missed a heartbeat (the relay pings an idle stream every one) is
+  // replaced now, from the first backoff step, instead of after its watchdog
+  // or a long backoff. Only these events call it (no timer), and a page
+  // shown again resumes at most once per resumeGap.
+  resume(online = false) {
+    if (!this.running || this.revoked || this.closing) return;
+    const now = Date.now();
+    if (this.connected && now - this.streamHeard <= resumeSilence) return;
+    if (!online && now - (this.resumedAt || 0) < resumeGap) return;
+    this.resumedAt = now;
+    this.resumed = true;
+    // A connection attempt older than the gap was left hanging while the
+    // page slept; a younger one is let finish (a failure retries at once).
+    if (this.connected || this.connecting && now - this.connecting > resumeGap) this.abort?.abort();
     else this.kick();
   }
 
@@ -6183,11 +6275,13 @@ export class Engine {
         healthy = await this.streamOnce();
       } catch (e) { /* reconnect below */ }
       if (!this.running || this.revoked) break;
-      if (healthy) backoff = 1000;
-      const wait = backoff / 2 + Math.random() * (backoff / 2);
+      if (healthy || this.resumed) backoff = 1000;
+      const wait = this.resumed ? 0 : backoff / 2 + Math.random() * (backoff / 2);
+      this.resumed = false;
       await new Promise((r) => { const t = setTimeout(r, wait); this.wake = () => { clearTimeout(t); r(); }; });
       this.wake = null;
-      backoff = Math.min(backoff * 2, MAX_BACKOFF);
+      if (this.resumed) { this.resumed = false; backoff = 1000; } // resumed while waiting: the first step again
+      else backoff = Math.min(backoff * 2, MAX_BACKOFF);
     }
   }
 
@@ -6200,11 +6294,12 @@ export class Engine {
     this.abort = ctrl;
     const headers = { ...(await wire.signRequest(this.keys, this.address, "GET", path, "")), Accept: "text/event-stream" };
     let r;
+    this.connecting = Date.now();
     try {
       r = await this.fetch(this.base + path, { headers, signal: ctrl.signal, cache: "no-store" });
     } catch (e) {
       return false;
-    }
+    } finally { this.connecting = 0; }
     if (!r.ok) {
       let j = {};
       try { j = await r.json(); } catch (e) { /* none */ }
@@ -6227,38 +6322,78 @@ export class Engine {
     // nothing, which says nothing about the server.
     this.members = { ...this.members, listed: this.waitingLink ? "unknown" : r.headers.get("Agentnet-Members") === "1" ? "listed" : "not_listed", current: false };
     this.changed();
+    this.streamHeard = Date.now();
     let watchdog = setTimeout(() => ctrl.abort(), 3 * HEARTBEAT);
     const work = this.waitingLink ? Promise.resolve() : this.onConnect(); // a device waiting for approval only holds its stream
     const reader = r.body.getReader();
     const decoder = new TextDecoder();
     // Framing by eventsource-parser (the SSE grammar: LF/CR/CRLF, optional
     // space after the colon, multi-line data, comments, id/retry ignored).
-    // This engine keeps the order: every event of a chunk is dispatched
-    // (awaited) before the next chunk is fed, so the queue holds at most one
-    // chunk's events; an incomplete frame at EOF is never dispatched. The
-    // parser's buffer limit bounds an unterminated fragment (a line that
-    // never ends), not a complete frame: a frame's own size is checked
-    // where it is admitted (the envelope and record limits in wire.mjs).
+    // This engine keeps the order: events are dispatched (awaited) one at a
+    // time, in stream order; an incomplete frame at EOF is never dispatched.
+    // The reader runs ahead of them by at most readAhead bytes, so a
+    // heartbeat queued behind a long catch-up is still read: it is answered
+    // as it is parsed while this page is making progress (the event being
+    // dispatched started within a heartbeat), and otherwise in order, so a
+    // page stuck on one event still loses its stream. A ping proves only
+    // that the connection is alive (hub stream.go); receipts alone say what
+    // is stored. The parser's buffer limit bounds an unterminated fragment
+    // (a line that never ends), not a complete frame: a frame's own size is
+    // checked where it is admitted (the envelope and record limits in wire.mjs).
     const queue = [];
-    const parser = createParser({ onEvent: (m) => queue.push(m), onError: (err) => { if (err.type === "max-buffer-size-exceeded") queue.push({ overflow: true }); }, maxBufferSize: 8 << 20 });
-    let healthy = true;
-    try {
-      // A linked event ends the approval stream between reads. Some readers
-      // do not reject a later read after cancellation; reconnect immediately.
-      while (!ctrl.signal.aborted) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        clearTimeout(watchdog);
-        watchdog = setTimeout(() => ctrl.abort(), 3 * HEARTBEAT);
-        parser.feed(decoder.decode(value, { stream: true }));
-        while (queue.length && !ctrl.signal.aborted && !this.closing) {
-          const m = queue.shift();
-          if (m.overflow) throw new Error("the stream sent a line too long to hold");
-          if (m.event) await this.dispatch(m.event, m.data); // an event without a name is not one of the relay's
+    let queued = 0, ended = false, busySince = 0, wakeConsumer = null, wakeReader = null;
+    const parser = createParser({ onEvent: (m) => {
+      if (m.event === "ping" && (!busySince || Date.now() - busySince < HEARTBEAT)) { this.ackPing(m.data); m.acked = true; }
+      queue.push(m); queued += m.data.length; wakeConsumer?.();
+    }, onError: (err) => { if (err.type === "max-buffer-size-exceeded") { queue.push({ overflow: true, data: "" }); wakeConsumer?.(); } }, maxBufferSize: 8 << 20 });
+    // An ended connection also ends a pending read, even of a reader that
+    // neither rejects nor finishes it after cancellation, and wakes both
+    // halves; no read starts after it.
+    let endRead;
+    const readEnded = new Promise((r) => { endRead = () => r({ done: true }); });
+    ctrl.signal.addEventListener("abort", () => { endRead(); try { reader.cancel().catch(() => {}); } catch (e) { /* not cancellable */ } wakeReader?.(); wakeConsumer?.(); }, { once: true });
+    const read = async () => {
+      try {
+        while (!ctrl.signal.aborted) {
+          if (queued > readAhead) {
+            clearTimeout(watchdog); // the page is behind, not the relay
+            await new Promise((r) => { wakeReader = r; });
+            wakeReader = null;
+            watchdog = setTimeout(() => ctrl.abort(), 3 * HEARTBEAT);
+            continue;
+          }
+          const { value, done } = await Promise.race([reader.read(), readEnded]);
+          if (done || ctrl.signal.aborted) break;
+          this.streamHeard = Date.now();
+          clearTimeout(watchdog);
+          watchdog = setTimeout(() => ctrl.abort(), 3 * HEARTBEAT);
+          parser.feed(decoder.decode(value, { stream: true }));
         }
+      } finally { ended = true; wakeConsumer?.(); }
+    };
+    const consume = async () => {
+      while (!ctrl.signal.aborted && !this.closing) {
+        if (!queue.length) {
+          if (ended) return;
+          await new Promise((r) => { wakeConsumer = r; });
+          wakeConsumer = null;
+          continue;
+        }
+        const m = queue.shift();
+        queued -= m.data.length;
+        if (queued <= readAhead) wakeReader?.();
+        if (m.overflow) throw new Error("the stream sent a line too long to hold");
+        if (!m.event) continue; // an event without a name is not one of the relay's
+        busySince = Date.now();
+        try { await this.dispatch(m.event, m.data, m.acked); } finally { busySince = 0; }
       }
-    } catch (e) {
-      healthy = !(e instanceof HubError); // a message that could not be processed yet ends the connection
+    };
+    let failure = null;
+    const fail = (e) => { failure ??= e; ctrl.abort(); };
+    try {
+      // Either half ending the connection (a failure, the watchdog, a linked
+      // approval, going offline) ends the other.
+      await Promise.all([read().catch(fail), consume().catch(fail)]);
     } finally {
       clearTimeout(watchdog);
       this.connected = false;
@@ -6269,7 +6404,15 @@ export class Engine {
       ctrl.abort();
       await work.catch(() => {});
     }
-    return healthy;
+    return !(failure instanceof HubError); // a message that could not be processed yet ends the connection
+  }
+
+  // ackPing proves this connection alive (hub handleStreamAck): one signed
+  // request per relay heartbeat, the only periodic request.
+  ackPing(data) {
+    let p = null;
+    try { p = JSON.parse(data); } catch (e) { /* none */ }
+    if (typeof p?.conn === "string" && p.conn) this.call("POST", "/v1/stream/ack", { conn: p.conn }).catch(() => {});
   }
 
   async onConnect() {
@@ -6298,16 +6441,13 @@ export class Engine {
     } catch (e) { /* tried again on the next ping */ }
   }
 
-  async dispatch(event, data) {
+  // dispatch handles one stream event; acked: its ping was answered as read.
+  async dispatch(event, data, acked = false) {
     if (this.waitingLink) {
       if (event === "linked") {
         await this.finishLink();
         this.abort.abort(); // reconnect as a member
-      } else if (event === "ping") {
-        let p = {};
-        try { p = JSON.parse(data); } catch (e) { /* none */ }
-        if (p.conn) this.call("POST", "/v1/stream/ack", { conn: p.conn }).catch(() => {});
-      }
+      } else if (event === "ping" && !acked) this.ackPing(data);
       return;
     }
     if (event === "device_admin") {
@@ -6362,9 +6502,7 @@ export class Engine {
       // encrypted invitations now, through the normal pin/support checks.
       this.flushOutbox().catch(() => {});
     } else if (event === "ping") {
-      let p = {};
-      try { p = JSON.parse(data); } catch (e) { /* none */ }
-      if (p.conn) this.call("POST", "/v1/stream/ack", { conn: p.conn }).catch(() => {});
+      if (!acked) this.ackPing(data);
       this.flushOutbox().catch(() => {});
       this.flushReceipts().catch(() => {});
       this.retryPendingReceives().catch(() => {});
@@ -7941,7 +8079,7 @@ export class Engine {
       demo: false, seq: this.seq, version: this.version, release: "",
       me: { address: this.address, fingerprint: this.fp, responder: "", responder_dir: "", browser: true, agent: false }, // a browser runs no agent
       workspace: { name: this.workspaceName, server: this.relayHost() }, agent_devices: [...this.agentDevices], model_reports: await this.modelReports(),
-      device: { online: this.connected, revoked: this.revoked, persisted: this.storage ? this.storage.persisted : null },
+      device: { online: this.connected, revoked: this.revoked, persisted: this.storage ? this.storage.persisted : null }, receive_status: await this.receiveStatus(),
       threads, topics, topic_list: true, review: [...this.reportItems(inbox, outbox, words), ...await this.deviceAdminReview()], needs_you: needsYou, held: heldTurns, quarantine: held.map(h => ({ ...quarantineItem(h), reason: holdText(h.reason, words(h.from)) })),
       directory: { status: this.members.listed, current: this.members.current, at: this.members.at ? iso(this.members.at) : undefined,
         truncated: this.members.truncated, members: this.members.list.filter((m) => m.address !== this.address)
@@ -9162,7 +9300,7 @@ export class Engine {
   async authorityRows(scope, checks, view = null) {
     const rows = [];
     for (const s of ["inbox", "outbox"]) {
-      const matching = (view?(scope.conv!==undefined?view.byConv[s].get(scope.conv)||[]:view[s]):await this.store.all(s)).filter((r) => scopeRow(r, scope));
+      const matching = (view?(scope.conv!==undefined?view.byConv[s].get(scope.conv)||[]:view[s]):typeof scope.conv==="string"?await this.store.byConv(s,scope.conv):await this.store.all(s)).filter((r) => scopeRow(r, scope));
       if (checks) checks.push({ s, scope, rows: matching.map((v) => ({ k: v.id, v: authorityValue(s, v) })).sort((a, b) => a.k < b.k ? -1 : a.k > b.k ? 1 : 0) });
       rows.push(...matching);
     }
