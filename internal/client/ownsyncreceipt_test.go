@@ -137,8 +137,11 @@ func redeliver(t *testing.T, to *Agent, acks *ackLog, env envelope.Envelope, und
 	if err := to.accept(tctx(t), env); err != nil {
 		t.Fatal(err)
 	}
-	if n := count(t, to, applied); n != 0 {
-		t.Fatalf("a re-delivered carrier was applied again: %d rows in %s", n, applied)
+	// Once its receipt is flushed the record of it may be gone, so a carrier
+	// pushed again can be applied again; that must be idempotent (never a
+	// second row) and, above all, receipted again so custody drains.
+	if n := count(t, to, applied); n > 1 {
+		t.Fatalf("a re-delivered carrier duplicated its state: %d rows in %s", n, applied)
 	}
 	eventually(t, "the re-delivered carrier receipted again", func() bool {
 		got := acks.of(env.ID)
