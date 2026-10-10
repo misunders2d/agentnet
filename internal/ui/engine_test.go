@@ -95,7 +95,8 @@ func (w *engineNode) until(what string, cond func() bool) {
 	w.t.Helper()
 	for deadline := time.Now().Add(20 * time.Second); !cond(); time.Sleep(100 * time.Millisecond) {
 		if time.Now().After(deadline) {
-			w.t.Fatalf("timed out waiting for %s\n%s", what, w.stderr)
+			state, _ := json.Marshal(w.call(map[string]any{"op": "receiveState"}))
+			w.t.Fatalf("timed out waiting for %s\nreceive state: %s\n%s", what, state, w.stderr)
 		}
 	}
 }

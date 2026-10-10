@@ -39,10 +39,21 @@ let store = counted(raw);
 let engine = null;
 let offline = false, dropPosts = false, receiptReads = 0;
 const realFetch = globalThis.fetch.bind(globalThis);
+const activeFetches=new Map(),recentFetches=[];
 // A network that can be switched off, as a phone on a train, or that
 // loses only the messages posted.
-const fetchNet = (url, opts) => (offline || (dropPosts && opts && opts.method === "POST" && url.endsWith("/v1/messages"))
-  ? Promise.reject(new TypeError("fetch failed")) : realFetch(url, opts));
+const fetchNet = async (url, opts) => {
+  const path=(opts?.method||"GET")+" "+new URL(url).pathname.replace(/[0-9a-f]{32,}/g,":id");
+  activeFetches.set(path,(activeFetches.get(path)||0)+1);
+  let status="network_error";
+  try {
+    if(offline||(dropPosts&&opts?.method==="POST"&&url.endsWith("/v1/messages")))throw new TypeError("fetch failed");
+    const response=await realFetch(url,opts);status=response.status;return response;
+  } finally {
+    const n=activeFetches.get(path)-1;if(n)activeFetches.set(path,n);else activeFetches.delete(path);
+    recentFetches.push({path,status});if(recentFetches.length>16)recentFetches.shift();
+  }
+};
 // notifyCalls stands in for the relay's notification API (NOTIFY.md §3)
 // until the Hub has it: the relay then lists notify1, and every call to it
 // is recorded with its signature headers present.
@@ -205,6 +216,17 @@ async function handle(req) {
   }
   case "status":
     return { connected: engine.connected, revoked: engine.revoked, members: engine.members.current, link: engine.link ? engine.link.state : "" };
+  case "receiveState": { // Bounded timeout evidence; no keys, plaintext or encrypted carriers.
+    const rows=async s=>(await raw.all(s)).map(r=>({id:r.id,lid:r.lid,conv:r.conv,kind:r.kind,sub:r.sub,ts:r.ts,at:r.at,state:r.state,reason:r.reason,detail_code:r.detail_code})).sort((a,b)=>(a.at||0)-(b.at||0));
+    const pending=await raw.prefix("kv","receive-pending/"),identity=await raw.get("kv","identity"),own=await raw.get("kv","person");
+    const inbox=await rows("inbox"),held=await rows("held"),receipts=await rows("receipts");
+    return {connected:engine.connected,running:engine.running,closing:engine.closing,revoked:engine.revoked,generation:engine.receiveGeneration,
+      retryActive:!!engine.receiveRetryRun,retryAgain:!!engine.receiveRetryAgain,receiving:[...engine.receiving.keys()].slice(0,32),cursor:await raw.get("kv","receive-retry-cursor"),
+      identityCurrent:identity?.address===engine.address&&identity?.fingerprint===engine.fp,ownState:own?.state,ownRecipient:!!own?.devices.some(d=>d.address===engine.address&&d.fingerprint===engine.fp),
+      pendingCount:pending.length,pending:pending.slice(0,32).map(r=>({id:r.id,at:r.at,currentRecipient:r.address===engine.address&&r.fingerprint===engine.fp})),
+      inboxCount:inbox.length,inbox:inbox.slice(0,32),heldCount:held.length,held:held.slice(0,32),receiptCount:receipts.length,receipts:receipts.slice(0,32),
+      pushed:stats.pushed,requests:stats.req,activeFetches:Object.fromEntries(activeFetches),recentFetches};
+  }
   case "api":
     return { v: await engine.api(req.path, req.body) };
   case "offline":
