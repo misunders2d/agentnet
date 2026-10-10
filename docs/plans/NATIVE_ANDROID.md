@@ -121,6 +121,36 @@ inside isolated test emulators; never replace a person's real database.
   the desktop worker, native responder sockets, or interrupted-job recovery.
   It does not relax receive admission or grants.
 
+## Local phone preview — October 10, 2026
+
+The owner requested a local APK while Google finishes developer verification.
+Debug builds now use `io.github.misunders2d.agentnet.preview` and display
+`AgentNet Native Preview`, separate from the eventual Play package/signing key.
+This is a development-signed APK. The Play app will enroll separately; this
+preview does not overwrite its private storage or the existing browser phone.
+
+The APK is copied to `~/Downloads/AgentNet-native-preview-0.1.0.apk` (about
+61 MiB), SHA-256
+`43b8703dc685c517dab62a38fa4b913403804d5a77461bf3190255fbc2d62745`.
+Gradle assembly/lint, APK signature verification and 16 KB ZIP alignment pass.
+Compiled manifest confirms the preview ID, Android 8+ minimum, ARM64/x86_64
+libraries and the existing full activity class. The core and Kotlin behavior
+are unchanged from the emulator-tested checkpoint above. No real phone was
+installed, linked or approved by Codex.
+
+1. Copy that APK to the phone and install it with the phone's package installer.
+2. On the registered desktop, open **Settings/You → Your devices → Add a device**
+   and use **Copy link** (or **Copy code**).
+3. Open **AgentNet Native Preview** on the phone. Paste the complete link into
+   **Device link code**, leave/use the device name `android-native`, and tap
+   **Link this phone**. Paste into the app, not the phone browser.
+4. On the desktop's **Your devices**, approve that pending phone with
+   **Yes, it's mine**. Keep the source desktop online during initial history copy.
+
+The existing `DecodeLinkOffer` accepts the whole copied desktop URL and bare
+codes. `TestLinkVectors` passed; no parallel enrollment format was added.
+Each installation gets its own key and joins the same verified human roster.
+
 ## Honest limits / next work
 
 This is a development preview, not a replacement offered to existing users.
@@ -138,10 +168,9 @@ history pages should reuse existing store queries before large-history claims.
 The shared Go core still requires Claude's final v0.8.17 fixes to be integrated
 and verified before any release; changing the UI does not cure a core sync bug.
 
-## Battery stop rule
+## Battery monitoring — stopped by owner
 
-Sergey explicitly requires stopping development below 40% battery. The parent
-monitor samples BAT0 every 30 seconds, records state in
-`/tmp/agentnet-dev-battery-status.json`, and creates
-`/tmp/agentnet-dev-battery-pause` at that threshold. Root checkpoints work,
-drains owned helpers, and pauses development without terminating user sessions.
+Sergey initially requested a development pause below 40% battery. He later
+returned and explicitly requested stopping monitoring. The owned watcher was
+stopped on October 10; `/tmp/agentnet-dev-battery-status.json` records
+`monitoring: false`. Do not restart it unless he asks.

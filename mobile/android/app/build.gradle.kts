@@ -13,13 +13,20 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0-native-preview"
+        resValue("string", "app_name", "AgentNet")
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    buildTypes { release { isMinifyEnabled = false } }
+    buildTypes {
+        debug {
+            applicationIdSuffix = ".preview"
+            resValue("string", "app_name", "AgentNet Native Preview")
+        }
+        release { isMinifyEnabled = false }
+    }
 }
 val coreAar = layout.projectDirectory.file("libs/agentnet-core.aar")
 val verifyCoreAar by tasks.registering {
