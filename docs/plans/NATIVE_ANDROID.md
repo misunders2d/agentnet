@@ -17,11 +17,11 @@ GPT-6.1-sol. Claude's main checkout/release remains separate.
 
 | ID | Target outcome | Acceptance check | Owner | State | Evidence |
 | --- | --- | --- | --- | --- | --- |
-| P1 | Exact Comic design and existing mobile features | Render actual bundled screens; Chats, agents, OKs, settings, topic navigation, composer and message actions | root | agreed | Two helper audits recommend reusing existing UI host |
-| P2 | Native local data and safe host lifecycle | Offline first render, one push stream, restart preserves identity/drafts, token/origin tests, no phone harness execution | core / root | agreed | Implementation pending |
-| P3 | Android file and navigation integration | Document picker, encrypted attachment stage/download and save, Back, keyboard, external links | build / root | agreed | Implementation pending |
-| P4 | Human-device controls and notifications | Remote proposal decisions, human-only local capabilities, notification preferences and exact destination | core / root | agreed | Implementation pending |
-| P5 | Replacement quality and truthful performance | Rendered narrow screens, restart/offline send, update retains preview data; measured startup/send; no regressions hidden | root / helpers | agreed | No replacement claim yet |
+| P1 | Exact Comic design and existing mobile features | Render actual bundled screens; Chats, agents, OKs, settings, topic navigation, composer and message actions | root | rendered verified | Actual shared Comic checks at 320/390px pass; installed API35 APK renders the exact bundled asset bytes and saved native thread. |
+| P2 | Native local data and safe host lifecycle | Offline first render, one push stream, restart preserves identity/drafts, token/origin tests, no phone harness execution | core / root | focused verified | Merged mobile/core package2.589s; authenticated mobile host and hidden-read regression pass. Stable origin, SQLite, human-only transport and explicit ended-enrollment preservation tests. |
+| P3 | Android file and navigation integration | Document picker, encrypted attachment stage/download and save, Back, keyboard, external links | build / root | native partially verified | Actual SAF file selection/upload, clipboard, keyboard-first system Back and rotation passed. Save regression fixed; final APK save qualification follows. |
+| P4 | Human-device controls and notifications | Remote proposal decisions, human-only local capabilities, notification preferences and exact destination | core / root | focused verified | Existing controls retained; HumanOnly guards, exact workspace routing and native permission/connection settings tested at model/rendered boundaries. Real notification click and remote decisions remain phone gates. |
+| P5 | Replacement quality and truthful performance | Rendered narrow screens, restart/offline send, update retains preview data; measured startup/send; no regressions hidden | root / helpers | emulator verified / phone pending | In-place update kept the database and old draft; new draft and two exact queued sends survived force-stop/restart. Real-phone parity/performance not yet claimed. |
 
 No change to native harness permissions, transport receipts, encryption, admission,
 existing user data or relay is authorized by this presentation correction.
@@ -33,11 +33,12 @@ Root Codex edits this checklist. GPT-6.1-sol helpers implement/review the Go
 bridge and build plumbing. Claude was informed through Herdr; no waiting or
 release dependency was introduced.
 
-The first slice links a separate human device, opens saved chats offline, shows
+The original engine prototype (superseded presentation) linked a separate human device, opens saved chats offline, shows
 updates from the existing push stream, and sends text through the existing
-durable outbox. Native Kotlin views display data from an embedded Go client,
-bound using official gomobile. There is no WebView, loopback HTTP server, second
-sync protocol, or new cryptography. Existing signature, roster, audience, key,
+durable outbox. At that checkpoint native Kotlin views displayed data from an embedded Go client,
+bound using official gomobile. That original checkpoint had no WebView or loopback HTTP server. The shared
+Comic replacement above now has both; neither introduces a second sync protocol
+or new cryptography. Existing signature, roster, audience, key,
 receipt and task-grant checks stay in the Go core.
 
 | ID | Target outcome | Acceptance check | Owner | State | Evidence |
@@ -48,6 +49,29 @@ receipt and task-grant checks stay in the Go core.
 | A4 | Retries retain the original request and authority | persist exact send ID/body/kind/target before sending; restart retry tests | root / core reviewer | emulator / model verified | actual offline send survives process restart once; 8 Kotlin cases cover immutable retries, exact-ID acknowledgement, crash-after-admission reconciliation, mismatched targets and duplicate text |
 | A5 | Native projection preserves canonical state | edits/deletes, verified authorship, receipt labels and read markers | core helper / root | verified at model boundary | 11 Kotlin projection cases; Go narrow read action tests pass |
 | A6 | App respects foreground/background lifecycle | no polling; explicit background connection with stop action; private storage excluded from backups | root / core reviewer | implemented | manifest/source review; native runtime still pending |
+
+## Shared Comic integration evidence — October 10
+
+Checkpoint `ff1a3878` replaces the Kotlin screens. Merge `1a03a1aa` includes
+Claude's current `release/v0.8.17` source through `1d055408`; it does not modify
+Claude's checkout or publish that release. Android uses the exact bundled Comic
+package, embedded authenticated loopback host and the native Go database/client.
+The browser engine is not booted.
+
+Focused evidence: shared rendered navigation8s; mobile/core2.589s; mobile
+visibility and host-token/origin checks pass; Android bridge export/origin tests,
+legacy exact-draft binding tests,5send-journal tests and10admission-proof tests
+pass. The old preview's drafts remain in private preferences until exact import
+acknowledgement. Android journals frozen send requests before clearing drafts;
+recovery is explicit and checks stored original messages before retrying.
+Attachment stage IDs expire across process restart, as in the current native UI;
+unprovable saved sends remain visible rather than falsely acknowledged. No
+physical-phone timing, relay enrollment or encrypted real-device file transfer
+is claimed by these synthetic checks.
+
+Preview core stamp uses `v0.8.17+android.g<commit>.preview`, identifying the source
+baseline without claiming a published release. Android cannot install CLI binaries;
+its current upgrade path is installing a newer APK over the existing preview.
 
 ## Build
 
@@ -66,6 +90,14 @@ mobile/android/scripts/build-core.sh --bootstrap
 cd mobile/android
 ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
 ```
+
+For a local preview update, preserve the signing key used by the earlier APK.
+Set `AGENTNET_PREVIEW_KEYSTORE` (or Gradle property `agentnetPreviewKeystore`)
+to that existing debug keystore before packaging. The local preview uses
+`/tmp/agentnet-android-tools/android-user/debug.keystore`; never commit this key.
+An automatic Gradle debug key from another home cannot update the prior APK.
+Run the Comic asset build to completion **before** `build-core.sh`; regenerating
+the asset directory while Go collects embed paths can omit `skin.json`.
 
 The bootstrap option permits downloads of pinned Go tooling and dependencies.
 Subsequent core builds use the populated cache offline. Generated AAR, APK,
@@ -96,7 +128,7 @@ The `agentnet_sqlite_cgo` tag lets the existing store/migration/snapshot tests
 exercise that driver on the host. Those tests and the mobile core pass with
 both drivers. Android runtime checks remain separate from that host evidence.
 
-## Development verification — 2026-10-10
+## Original engine prototype verification — superseded presentation
 
 - `:app:testDebugUnitTest`: 19 tests, no failures or skips. APK assembly and
   lint pass; lint retains two preview warnings (default device-name localization
@@ -147,7 +179,7 @@ inside isolated test emulators; never replace a person's real database.
   the desktop worker, native responder sockets, or interrupted-job recovery.
   It does not relax receive admission or grants.
 
-## Local phone preview — October 10, 2026
+## Original local phone preview — superseded presentation
 
 The owner requested a local APK while Google finishes developer verification.
 Debug builds now use `io.github.misunders2d.agentnet.preview` and display
@@ -184,15 +216,19 @@ No installed app, relay, live identity, grant, database or desktop session was
 changed. The browser phone remains enrolled separately; no browser key import
 or account reset is required by this branch.
 
-Remaining product work includes enrollment and foreground/background testing
-on an actual Android device; first-message, reconnect, backlog, send and battery
-measurements; message notifications; attachments; topic navigation; new chats;
-invitations/OKs; recovery UI for expired/refused enrollment; release
-signing/distribution and update delivery. Reading a
-native timeline currently uses the existing full Go UI projection; bounded
-history pages should reuse existing store queries before large-history claims.
-The shared Go core still requires Claude's final v0.8.17 fixes to be integrated
-and verified before any release; changing the UI does not cure a core sync bug.
+The shared Comic UI now supplies attachments, topic navigation, new chats,
+invitations/OKs and settings. Android supplies the native picker, private storage,
+notification bridge and optional background connection. This preserves the
+current presentation and features rather than substituting a reduced chat UI.
+
+Remaining qualification includes real enrollment, encrypted peer file delivery,
+foreground/background notification clicks and physical-phone first-message,
+reconnect, backlog, sending and battery measurements. Release signing and Play
+updates remain separate. Desktop-local harness execution and CLI updating are
+not phone capabilities. Reading a native timeline still uses the existing full
+Go UI projection; large-history performance requires measurement. The merged
+v0.8.17 source is recorded above; presentation changes alone do not cure every
+core sync problem.
 
 ## Battery monitoring — stopped by owner
 

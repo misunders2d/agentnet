@@ -2,6 +2,9 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
+// Published preview updates must use their original local key; never commit it.
+val previewKeystore = providers.gradleProperty("agentnetPreviewKeystore")
+    .orElse(providers.environmentVariable("AGENTNET_PREVIEW_KEYSTORE"))
 android {
     namespace = "io.github.misunders2d.agentnet"
     compileSdk = 35
@@ -21,6 +24,16 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
+    signingConfigs.getByName("debug") {
+        if (previewKeystore.isPresent) {
+            storeFile = file(previewKeystore.get()).also {
+                check(it.isFile) { "The existing preview signing key is missing." }
+            }
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
     buildTypes {
         debug {
             applicationIdSuffix = ".preview"

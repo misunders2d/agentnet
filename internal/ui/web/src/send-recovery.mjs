@@ -10,6 +10,8 @@ const fields = {
 const empty = value => value === undefined || value === "";
 const text = value => value ?? "";
 const noFiles = value => value === undefined || Array.isArray(value) && value.length === 0;
+// Go strings.TrimSpace uses Unicode White_Space (JS trim also removes BOM).
+const trimBody = value => value.replace(/^[\u0009-\u000d\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+|[\u0009-\u000d\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+$/g, "");
 
 function valid(entry) {
   const r = entry?.request, allowed = fields[entry?.endpoint];
@@ -27,6 +29,7 @@ function human(message, me, dm) {
     (dm ? message.send_group_author : message.from_key) === me.fingerprint &&
     empty(message.agent_id) && empty(message.agent_author_pid) &&
     !message.verified_agent && !message.history && !message.synced_from &&
+    empty(message.claimed_key) && empty(message.excerpt_pid) &&
     empty(message.event) && !message.topic_event &&
     noFiles(message.files) && noFiles(message.attachments);
 }
@@ -51,12 +54,15 @@ function dmMatches(entry, thread, me) {
   const kind = ask ? r.kind || "question" : "message";
   if (ask && !["question", "task"].includes(kind)) return false;
   if (r.topic === "new") return false; // the core allocated an ID absent from the intent
+  // With a parent, the displayed topic can be inherited rather than explicitly
+  // signed. That projection cannot prove an explicit topic in the saved intent.
+  if (!empty(r.topic) && !empty(r.reply_to)) return false;
   const reply = reference(messages, r.reply_to), quote = reference(messages, r.quote);
   if (reply === undefined || quote === undefined) return false;
   const agents = ask ? (thread.agents || []).filter(a => a.pid === r.pid || a.pids?.includes(r.pid)) : [];
   if (ask && (typeof r.pid !== "string" || !r.pid || agents.length !== 1)) return false;
   const matches = messages.filter(m => (m.lid || m.id) === entry.id && human(m, me, true) &&
-    m.kind === kind && m.body === r.body.trim() && text(m.topic) === text(r.topic) &&
+    m.kind === kind && m.body === trimBody(r.body) && text(m.topic) === text(r.topic) &&
     text(m.reply_to) === reply && text(m.quote) === quote &&
     text(m.pid) === text(r.pid) && text(m.send_group) === text(r.send_group) &&
     (ask ? m.target && m.target.address === agents[0].host?.address &&
@@ -68,7 +74,7 @@ function dmMatches(entry, thread, me) {
 function threadMatches(entry, thread, me) {
   const r = entry.request, messages = thread.messages;
   if (!Array.isArray(messages)) return false;
-  let to = r.to, kind = r.kind || "message", reply = text(r.reply_to), body = r.body.trim();
+  let to = r.to, kind = r.kind || "message", reply = text(r.reply_to), body = trimBody(r.body);
   if (entry.endpoint === "/api/act") {
     const parents = messages.filter(m => m.id === r.id && m.dir === "in");
     if (parents.length !== 1) return false;

@@ -18,6 +18,13 @@ const fs = require('node:fs');
       await page.locator('section[aria-label="Chats"]').waitFor();
       assert.equal(await page.evaluate(()=>window.agentnet.platform),'android');
       assert.equal(await page.evaluate(()=>typeof window.agentnetEngine),'undefined');
+      // Android saves the shared UI's decrypted object URL through SAF. Exercise
+      // the real response CSP: a mocked fetch misses WebView's policy rejection.
+      assert.equal(await page.evaluate(async()=>{
+        const url=URL.createObjectURL(new Blob(['Android download policy check']));
+        try {return await (await fetch(url)).text();}
+        finally {URL.revokeObjectURL(url);}
+      }),'Android download policy check');
       const shots=process.env.AGENTNET_SCREENSHOTS;
       const snap=async name=>{if(shots){fs.mkdirSync(shots,{recursive:true});await page.screenshot({path:`${shots}/android-comic-${width}-${name}.png`});}};
       const fits=async label=>{
@@ -70,7 +77,10 @@ const fs = require('node:fs');
       await page.getByRole('button',{name:/Notifications/}).first().waitFor();
       await back();
       await page.locator('section[aria-label="Chats"]').waitFor();
-      await nav.getByRole('button',{name:'OKs',exact:true}).click();
+      // Badge text is part of the tab's accessible name (for example, "OKs 3").
+      const oks=nav.getByRole('button',{name:/^OKs(?:\s|$)/});
+      console.log(`${width}px OKs control: ${await oks.ariaSnapshot()}`);
+      await oks.click();
       await snap('oks');
       await fits('dark OKs'); await back();
       await page.locator('section[aria-label="Chats"]').waitFor();
