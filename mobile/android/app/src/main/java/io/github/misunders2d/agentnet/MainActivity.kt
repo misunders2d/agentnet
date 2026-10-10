@@ -29,6 +29,8 @@ import androidx.webkit.JavaScriptReplyProxy
 import androidx.webkit.WebMessageCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
+import com.journeyapps.barcodescanner.ScanOptions
+import com.journeyapps.barcodescanner.ScanIntentResult
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.io.File
@@ -43,6 +45,7 @@ class MainActivity : Activity() {
     private var resumed = false
     private var destroyed = false
     private var backPending = false
+    private var scanReply: ((String?, String?) -> Unit)? = null
     private val files = Executors.newSingleThreadExecutor()
     private lateinit var exports: ExportTransfer
     private var chosenFiles: ValueCallback<Array<Uri>>? = null
@@ -78,6 +81,7 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         destroyed = true; host.remove(observer)
         chosenFiles?.onReceiveValue(null); chosenFiles = null
+        scanReply = null
         files.execute { exports.close() }; files.shutdown()
         web?.apply { stopLoading(); webChromeClient = null; removeAllViews(); destroy() }; web = null
         super.onDestroy()
@@ -212,6 +216,26 @@ class MainActivity : Activity() {
         }
         try {
             when (request.optString("type")) {
+                "qr:scan" -> {
+                    require(resumed && scanReply == null)
+                    if (!packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)) {
+                        reply(error = "This device has no camera. Paste the invitation link instead.")
+                        return
+                    }
+                    scanReply = { text, error ->
+                        reply(JSONObject().apply { if (text == null) put("canceled", true) else put("text", text) }, error)
+                    }
+                    try {
+                        val scan = ScanOptions().setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                            .setPrompt("Scan an AgentNet invitation or device link")
+                            .setBeepEnabled(false).setBarcodeImageEnabled(false).setOrientationLocked(false)
+                            .createScanIntent(this)
+                        startActivityForResult(scan, SCAN_QR)
+                    } catch (_: Exception) {
+                        val callback = scanReply; scanReply = null
+                        callback?.invoke(null, "The camera scanner could not open. Paste the invitation link instead.")
+                    }
+                }
                 "drafts:legacy" -> files.execute {
                     val drafts = org.json.JSONArray()
                     LegacyDrafts.recover(getSharedPreferences("drafts", MODE_PRIVATE).all).forEach { (key, value) ->
@@ -286,6 +310,20 @@ class MainActivity : Activity() {
     @Deprecated("Platform result callback supports minSdk26")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == SCAN_QR) {
+            val callback = scanReply; scanReply = null
+            if (resultCode != RESULT_OK) {
+                val denied = data?.getBooleanExtra("MISSING_CAMERA_PERMISSION", false) == true
+                callback?.invoke(null, if (denied) "Camera permission was declined. Paste the invitation link instead." else null)
+            } else {
+                try {
+                    val text = ScanIntentResult.parseActivityResult(resultCode, data)?.contents
+                        ?: throw IllegalArgumentException()
+                    callback?.invoke(WebPolicy.scanText(text), null)
+                } catch (_: Exception) { callback?.invoke(null, "This QR code could not be read. Paste the complete invitation link instead.") }
+            }
+            return
+        }
         if (requestCode == PICK_FILES) {
             val uris = if (resultCode == RESULT_OK) data?.clipData?.let { c -> (0 until c.itemCount.coerceAtMost(100)).map { c.getItemAt(it).uri }.toTypedArray() } ?: data?.data?.let { arrayOf(it) } else null
             chosenFiles?.onReceiveValue(uris?.filter { it.scheme == "content" }?.toTypedArray()); chosenFiles = null
@@ -309,5 +347,5 @@ class MainActivity : Activity() {
         super.onRequestPermissionsResult(requestCode, permissions, results)
         if (requestCode == NOTIFICATIONS) { val callback = permissionReply; permissionReply = null; callback?.invoke(permitted()) }
     }
-    companion object { private const val PICK_FILES = 10; private const val SAVE_FILE = 11; private const val NOTIFICATIONS = 12 }
+    companion object { private const val PICK_FILES = 10; private const val SAVE_FILE = 11; private const val NOTIFICATIONS = 12; private const val SCAN_QR = 13 }
 }

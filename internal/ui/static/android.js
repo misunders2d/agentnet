@@ -30,6 +30,7 @@
     copyText: text => request('clipboard:write', {text}),
     legacyDrafts: () => request('drafts:legacy'),
     acknowledgeLegacyDraft: (key, value) => request('drafts:ack', {key, value}),
+    scanQR: () => request('qr:scan'),
   });
   window.__agentnetOnBack = fn => {
     back = fn;

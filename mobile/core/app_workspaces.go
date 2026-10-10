@@ -32,7 +32,7 @@ func (a *App) phone(id string, s *Session) *phoneProvider {
 	}
 	s.mu.Unlock()
 	s.live.SetApp(true)
-	return &phoneProvider{Live: s.live, available: a.notificationsAvailable, address: s.a.Address}
+	return &phoneProvider{Live: s.live, available: a.notificationsAvailable, address: s.a.Address, session: s}
 }
 func (a *App) messenger(defaultSession *Session) (handler http.Handler, failure error) {
 	defer func() {

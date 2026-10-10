@@ -11,6 +11,7 @@ type phoneProvider struct {
 	*ui.Live
 	available func() bool
 	address   string
+	session   *Session
 }
 
 func phoneUnsupported() error {
@@ -37,6 +38,7 @@ func (p *phoneProvider) AssistantSetup(context.Context, ui.AssistantSetupRequest
 }
 func (p *phoneProvider) Overview() (ui.Overview, error) {
 	v, e := p.Live.Overview()
+	p.linkDiagnostics(&v)
 	v.ReplyReceivers = false
 	if v.Notify != nil {
 		ok := p.available != nil && p.available()
@@ -67,6 +69,7 @@ func (p *phoneProvider) NotifyEnable() (string, error) {
 
 func (p *phoneProvider) TopicOverview() (ui.Overview, error) {
 	v, e := p.Live.TopicOverview()
+	p.linkDiagnostics(&v)
 	if v.Notify != nil {
 		ok := p.available != nil && p.available()
 		v.Notify.Available = ok
@@ -79,4 +82,25 @@ func (p *phoneProvider) AskAgent(d ui.AgentAsk) (ui.Sent, error) {
 		return ui.Sent{}, phoneUnsupported()
 	}
 	return p.Live.AskAgent(d)
+}
+
+// Terminal transport errors must not leave a phone claiming it is waiting
+// on an active stream. This adds diagnostics only, never changes link state.
+func (p *phoneProvider) linkDiagnostics(v *ui.Overview) {
+	if p.session == nil {
+		return
+	}
+	p.session.mu.Lock()
+	failure := p.session.lastError
+	p.session.mu.Unlock()
+	v.TransportError = failure
+	if v.Link == nil || v.Link.State != "pending" {
+		return
+	}
+	if failure != "" {
+		if v.Link.Detail != "" {
+			v.Link.Detail += " "
+		}
+		v.Link.Detail += "The connection stopped: " + failure
+	}
 }

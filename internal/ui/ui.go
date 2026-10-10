@@ -126,6 +126,9 @@ type Overview struct {
 	// once it runs a newer AgentNet: the page shows it as a prominent
 	// "Update AgentNet to <latest> to continue" banner.
 	UpdateRequired *UpdateRequiredView `json:"update_required,omitempty"`
+	// TransportError is a terminal native mobile receive-loop failure. A
+	// healthy local page does not establish a healthy relay connection.
+	TransportError string `json:"transport_error,omitempty"`
 }
 
 // UpdateRequiredView is the Hub's refusal of this device's version: what
@@ -311,8 +314,10 @@ type LinkRequest struct {
 // LinkState is this device's own request to join its person: pending,
 // refused, expired, stale or failed (linked is shown as the person).
 type LinkState struct {
-	State  string `json:"state"`
-	Detail string `json:"detail,omitempty"`
+	State    string     `json:"state"`
+	Detail   string     `json:"detail,omitempty"`
+	Approver string     `json:"approver,omitempty"` // device that created a copied link; absent for Google linking
+	Expires  *time.Time `json:"expires,omitempty"`
 }
 
 // HistoryCopy is the copying of this person's chats to a new device.

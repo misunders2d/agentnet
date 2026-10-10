@@ -5,6 +5,15 @@ import org.junit.Test
 
 class WebPolicyTest {
     private val policy = WebPolicy("http://127.0.0.1:41327")
+    @Test fun scannerTextIsBoundedWithoutOpeningOrReinterpretingIt() {
+        val untrusted = "https://example.com/#agentnet-link-v2:untrusted"
+        assertEquals(untrusted, WebPolicy.scanText(untrusted))
+        assertEquals("x".repeat(16 * 1024), WebPolicy.scanText("x".repeat(16 * 1024)))
+        for (text in listOf("", "   ", "x".repeat(16 * 1024 + 1), "€".repeat(6000))) {
+            try { WebPolicy.scanText(text); fail("Oversized or empty QR text was accepted") }
+            catch (_: IllegalArgumentException) { }
+        }
+    }
     @Test fun exactAssignedOriginOnly() {
         assertTrue(policy.internal("http://127.0.0.1:41327/api/overview"))
         for (url in listOf("http://127.0.0.1:41328/", "https://127.0.0.1:41327/", "http://localhost:41327/", "http://127.0.0.1.evil:41327/", "http://user@127.0.0.1:41327/", "file:///private/keys", "content://private/keys", "javascript:alert(1)", "blob:http://127.0.0.1:41327/id")) assertFalse(url, policy.internal(url))

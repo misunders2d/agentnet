@@ -23,6 +23,13 @@ assert.equal((await first).enabled,false,'out-of-order replies keep exact call i
 const failed=window.__agentnetAndroid.setConnection(true);
 bridge.onmessage({data:JSON.stringify({id:sent.at(-1).id,ok:false,error:'permission denied'})});
 await assert.rejects(failed,/permission denied/);
+const scan=window.__agentnetAndroid.scanQR();
+assert.equal(sent.at(-1).type,'qr:scan');
+bridge.onmessage({data:JSON.stringify({id:sent.at(-1).id,ok:true,text:'agentnet-link-v2:test'})});
+assert.equal((await scan).text,'agentnet-link-v2:test','scan returns text without opening or enrolling');
+const canceledScan=window.__agentnetAndroid.scanQR();
+bridge.onmessage({data:JSON.stringify({id:sent.at(-1).id,ok:true,canceled:true})});
+assert.equal((await canceledScan).canceled,true);
 assert.equal(window.agentnetNativeBack(),false);
 const remove=window.__agentnetOnBack(()=>true);
 assert.equal(window.agentnetNativeBack(),true);remove();assert.equal(window.agentnetNativeBack(),false);

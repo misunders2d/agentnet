@@ -655,6 +655,8 @@ export interface LinkRequest {
 export interface LinkState {
   state: string;
   detail?: string;
+  approver?: string;
+  expires?: string;
 }
 
 export interface LocalStorage {
@@ -767,6 +769,7 @@ export interface Overview {
   agent_devices: string[] | null;
   model_reports?: PrivateModelReport[];
   update_required?: UpdateRequiredView;
+  transport_error?: string;
 }
 
 export interface OwnDevicePermission {

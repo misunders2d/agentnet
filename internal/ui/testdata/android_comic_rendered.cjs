@@ -86,6 +86,27 @@ const fs = require('node:fs');
       await page.locator('section[aria-label="Chats"]').waitFor();
       await snap('dark-chats'); await fits('dark chats');
       assert.equal(await page.evaluate(()=>window.agentnetNativeBack()),false);
+
+      // The native page stays available when its relay loop has stopped.
+      // Project that failure honestly, and name the exact copied-link source.
+      await context.route('**/api/overview*', async route => {
+        const response = await route.fetch();
+        const value = await response.json();
+        value.person = null;
+        value.role = 'person';
+        value.link = {state:'pending', approver:'owner/linux-laptop', expires:'2026-10-10T23:59:00Z'};
+        value.transport_error = 'Synthetic receiving connection failure';
+        await route.fulfill({response,json:value});
+      });
+      await page.reload();
+      await page.getByText('The receiving connection stopped. Your saved chats are still here.',{exact:true}).waitFor();
+      await nav.getByRole('button',{name:'You',exact:true}).click();
+      await page.getByRole('button',{name:/Waiting for your other device/}).click();
+      await page.getByText('Waiting for approval on Linux laptop.',{exact:true}).waitFor();
+      await page.getByText(/You → Your devices and approve this device/).waitFor();
+      await page.getByText(/Approval window ends at/).waitFor();
+      await fits('link source and transport failure');
+      await snap('link-source');
       assert.deepEqual(errors,[]);
       await context.close();
     }

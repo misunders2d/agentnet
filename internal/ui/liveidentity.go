@@ -30,6 +30,15 @@ func (l *Live) identityOverview(o *Overview) error {
 	case "", "linked", "approved":
 	default:
 		o.Link = &LinkState{State: st.State, Detail: st.Detail}
+		if st.State == client.LinkPending {
+			if !st.Google {
+				o.Link.Approver = st.Approver
+			}
+			if st.Expires > 0 {
+				expires := time.Unix(st.Expires, 0)
+				o.Link.Expires = &expires
+			}
+		}
 	}
 	jobs, err := l.a.HistoryProgress()
 	if err != nil {

@@ -49,12 +49,15 @@ export function ProfileSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingE
   if (p) return <><PageHead title="Profile" titleRef={titleRef} lead="How you appear to people in your chats." /><Rename person={p} /></>;
 
   const own = o.role !== "service" && o.link && ownLinkText[o.link.state];
+  const approver = o.link?.state === "pending" && o.link.approver;
   return (
     <>
       <PageHead title="Set up your person" titleRef={titleRef} lead="A person is you, the human others chat with. A service or bot, like a server, doesn’t need one." />
       {own ? (
         <Card className="p-4">
-          <p className="font-semibold">{own}</p>
+          <p className="font-semibold">{approver ? `Waiting for approval on ${niceDevice(approver)}.` : own}</p>
+          {approver && <Hint className="mt-2">On that device, open AgentNet → You → Your devices and approve this device. Keep AgentNet open and up to date there.</Hint>}
+          {o.link?.state === "pending" && o.link.expires && <Hint className="mt-2">Approval window ends at {timeOf(o.link.expires)}.</Hint>}
           {o.link?.detail && <Hint className="mt-1">{o.link.detail}</Hint>}
         </Card>
       ) : !o.persons ? (

@@ -117,6 +117,26 @@ identity, grant, installed desktop, relay, human message or phone data was chang
 
 ## Build
 
+### Next preview work in progress — October 10
+
+The next preview adds an offline QR scanner using JourneyApps ZXing 4.3.0,
+requested only by a Scan gesture, with optional camera hardware/runtime
+permission. Scanned content enters the existing link inspection and explicit
+Join flow; it never opens a URL or approves membership automatically. The
+pending-link screen names the exact approving device and shows link expiry.
+Terminal native receive-loop failures now invalidate the shared Comic view
+and expose the failure instead of leaving a seemingly healthy local page.
+
+Focused evidence: real temporary TLS link/approval/receive/restart and terminal
+failure race checks pass (13.353s); shared Comic pending-link and failure
+rendering passes at 390/320px (8.125s); Android host/QR JavaScript tests pass.
+Gradle compilation, all 28 unit tests and lint pass; mobile/core vet passes.
+No physical-phone stream-failure cause has been established. Android camera
+scanning and the next packaged APK still need native qualification. Integrate
+the verified v0.8.18 shared-core sync repair before handing over that APK.
+
+### Build instructions
+
 Requirements: JDK 17, Android SDK 35/build-tools 35.0.0, NDK 28.2.13676358,
 Go 1.26.8. Gradle 8.11.1 and its SHA-256 are pinned in the wrapper; AGP 8.9.2
 and Kotlin 2.1.20 are pinned. The separate `mobile/tools` module pins x/mobile;

@@ -179,6 +179,8 @@ func (s *Session) Start() error {
 		}
 	}
 	if err := humanHome(s.a); err != nil {
+		s.lastError = err.Error()
+		s.a.NoteChange()
 		return err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -192,6 +194,7 @@ func (s *Session) Start() error {
 		}
 		s.mu.Unlock()
 		close(done)
+		s.a.NoteChange() // invalidate the served Comic page as well as native listeners
 		s.signal()
 	}()
 	s.signal()

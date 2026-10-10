@@ -42,8 +42,24 @@ export function codeFrom(text) {
   return s.startsWith(invitePrefix) || s.startsWith(linkPrefix) || s.startsWith("google-signin=") ? s : "";
 }
 
+export function canScanInvitation(state) {
+  return state === "none" || state === "incomplete";
+}
+
+// Scanning yields untrusted text only; the existing inspect and explicit Join remain the authority.
+export async function scanInvitation(scanner) {
+  const result = await scanner();
+  if (result?.canceled === true) return "";
+  if (typeof result?.text !== "string" || result.text.length > 16 * 1024 || new TextEncoder().encode(result.text).length > 16 * 1024)
+    throw new Error("This QR code is not an AgentNet invitation. Paste the complete invitation link instead.");
+  const code = codeFrom(result.text);
+  if (!code) throw new Error("This QR code is not an AgentNet invitation. Paste the complete invitation link instead.");
+  return code;
+}
+
 let panel, state = { state: "none", device: "", device_words: "" };
 let held = ""; // an invitation that arrived while the computer's membership had ended
+let setupBusy = false;
 
 // endedWords is what an ended membership says: a title and why.
 export const endedWords = {
@@ -63,8 +79,22 @@ function welcome(problem) {
   const error = el("p", { class: "error", role: "alert", id: "setup-error" }, problem || "");
   const go = el("button", { type: "submit", class: "btn primary join-go" }, "Continue");
   const form = el("form", { class: "join-form", novalidate: true }, el("label", { for: "setup-code" }, "Your invitation"), box, error, go);
+  const nativeScan = window.__agentnetPlatform === "android" && typeof window.__agentnetAndroid?.scanQR === "function" && canScanInvitation(state.state);
+  const scan = nativeScan && el("button", { type: "button", class: "btn primary join-go" }, "Scan QR code");
+  if (scan) scan.addEventListener("click", async () => {
+    if (scan.disabled || setupBusy || !canScanInvitation(state.state)) return;
+    scan.disabled = true;
+    try {
+      const code = await scanInvitation(() => window.__agentnetAndroid.scanQR());
+      if (!code || setupBusy || !box.isConnected || !canScanInvitation(state.state)) return;
+      box.value = code; error.textContent = "";
+      await inspect(code);
+    } catch (failure) { if (box.isConnected) error.textContent = failure.message || "The camera scanner could not open. Paste the invitation link instead."; }
+    finally { scan.disabled = false; }
+  });
   form.addEventListener("submit", (ev) => {
     ev.preventDefault();
+    if (setupBusy) return;
     const code = codeFrom(box.value);
     if (!code) { error.textContent = "That is not an AgentNet invitation. Copy the whole link you were sent, or ask for a new one."; return; }
     inspect(code);
@@ -73,7 +103,7 @@ function welcome(problem) {
     el("p", { class: "join-intro" }, "Chat with people and their agents."),
     state.state === "incomplete" && el("p", { class: "join-recovery" }, "Joining did not finish last time. Sign in with the same Google account to finish it, or reuse your invitation below."),
     "Open your workspace’s Get AgentNet link, or enter its address below.",
-    googleForm(), el("details", {}, el("summary", {}, "Use an invitation or device link"), form));
+    scan, googleForm(), el("details", { open: nativeScan }, el("summary", {}, "Use an invitation or device link"), form));
   panel.querySelector("#google-hub").focus();
 }
 
@@ -82,19 +112,19 @@ function googleForm(hub = "") {
   const error = el("p", { class: "error", role: "alert" });
   const button = el("button", { type: "submit", class: "btn primary join-go" }, "Sign in with Google");
   const cancel = el("button", { type: "button", class: "btn", hidden: true }, "Cancel sign-in");
-  cancel.addEventListener("click", async () => { try { await call("/api/setup/google/cancel", {}); } catch (e) { error.textContent = e.message; } });
+  cancel.addEventListener("click", async () => { try { await call("/api/setup/google/cancel", {}); setupBusy = false; } catch (e) { error.textContent = e.message; } });
   const form = el("form", { class: "join-form" }, el("label", { for: "google-hub" }, "Workspace address"), address,
     el("p", { class: "hint" }, "Use your invited Google email. Another device of yours must approve each later device."), error, button, cancel);
   form.addEventListener("submit", async ev => {
-    ev.preventDefault(); if (button.disabled) return; button.disabled = true; error.textContent = "";
+    ev.preventDefault(); if (button.disabled || setupBusy) return; button.disabled = true; setupBusy = true; error.textContent = "";
     try {
       await call("/api/setup/google", { hub: address.value.trim() });
       cancel.hidden = false;
       error.textContent = "Continue in your browser. Return here after Google sign-in.";
       const events = new EventSource("/api/setup/google/events");
-      events.onmessage = event => { events.close(); cancel.hidden = true; const result = JSON.parse(event.data); if (result.state === "joined") location.replace("/"); else { error.textContent = result.problem; button.disabled = false; } };
+      events.onmessage = event => { events.close(); cancel.hidden = true; const result = JSON.parse(event.data); if (result.state === "joined") location.replace("/"); else { setupBusy = false; error.textContent = result.problem; button.disabled = false; } };
       events.onerror = () => { events.close(); location.replace("/"); };
-    } catch (e) { error.textContent = e.message; button.disabled = false; cancel.hidden = true;
+    } catch (e) { setupBusy = false; error.textContent = e.message; button.disabled = false; cancel.hidden = true;
       if (e.message.includes("not set up")) { const details = panel.querySelector("details"); if (details) { details.open = true; panel.querySelector("#setup-code")?.focus(); } else welcome(e.message); }
     }
   });
@@ -129,6 +159,7 @@ function ended() {
 }
 
 async function inspect(code) {
+  if (setupBusy) return;
   if (code.startsWith("google-signin=")) { const hub = code.slice("google-signin=".length); welcome(""); panel.querySelector("#google-hub").value = hub; return; }
   let inv;
   try { inv = await call("/api/setup/inspect", { code }); } catch (e) { welcome(e.message); return; }
@@ -151,17 +182,17 @@ function inviteCard(code, inv) {
     error, go);
   form.addEventListener("submit", async (ev) => {
     ev.preventDefault();
-    if (go.disabled) return;
+    if (go.disabled || setupBusy) return;
     const chosen = name.value.trim();
     if (!chosen) { error.textContent = "Write the name people will see."; return; }
-    go.disabled = true; error.textContent = "";
+    go.disabled = true; setupBusy = true; error.textContent = "";
     go.textContent = "Joining…";
     try {
       await call("/api/setup/join", { code, name: chosen });
       location.replace("/"); // the messenger now serves this address
     } catch (e) {
       error.textContent = e.message;
-      go.disabled = false; go.textContent = "Join";
+      setupBusy = false; go.disabled = false; go.textContent = "Join";
     }
   });
   show(inv.from ? inv.from + " invited you" : "You're invited",
@@ -178,15 +209,15 @@ function linkCard(code, inv) {
   const go = el("button", { type: "button", class: "btn primary join-go" }, "Add this computer");
   const until = inv.expires ? new Date(inv.expires) : null;
   go.addEventListener("click", async () => {
-    if (go.disabled) return;
-    go.disabled = true; error.textContent = "";
+    if (go.disabled || setupBusy) return;
+    go.disabled = true; setupBusy = true; error.textContent = "";
     go.textContent = "Adding…";
     try {
       await call("/api/setup/join", { code, name: "" });
       location.replace("/"); // waits there for the approval on your other device
     } catch (e) {
       error.textContent = e.message;
-      go.disabled = false; go.textContent = "Add this computer";
+      setupBusy = false; go.disabled = false; go.textContent = "Add this computer";
     }
   });
   show("Add this computer to you",

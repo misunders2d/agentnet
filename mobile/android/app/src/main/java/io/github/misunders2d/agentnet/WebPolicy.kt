@@ -16,6 +16,11 @@ class WebPolicy(val origin: String) {
     }.getOrDefault(false)
     fun bridge(source: String, mainFrame: Boolean) = mainFrame && internal(source) && runCatching { URI(source).rawPath.isNullOrEmpty() || URI(source).rawPath == "/" }.getOrDefault(false)
     companion object {
+        /** Scanner output is untrusted text, never a URL to open or enrollment authority. */
+        fun scanText(text: String): String {
+            require(text.isNotBlank() && text.length <= 16 * 1024 && text.toByteArray(Charsets.UTF_8).size <= 16 * 1024)
+            return text
+        }
         /** Bind a validated content-free destination to its exact membership. */
         fun notificationDestination(workspace: String, fragment: String): String? = runCatching {
             require(workspace == "default" || workspace.matches(Regex("[0-9a-f]{32}")))

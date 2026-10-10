@@ -12,6 +12,7 @@ export function ConnectionBanner() {
   const conn = useStore(store, (s) => s.conn);
   const newVersion = useStore(store, (s) => s.newVersion);
   const required = useStore(store, (s) => s.overview?.update_required);
+  const transportError = useStore(store, (s) => s.overview?.transport_error);
   const app = useStore(store, (s) => !!s.overview?.app);
   const unsent = useStore(store, unsentIn);
   // A browser page whose server now serves a newer AgentNet reloads to get
@@ -20,6 +21,13 @@ export function ConnectionBanner() {
   const browser = store.host.platform === "browser";
   useEffect(() => { if (browser && newVersion && !unsent) location.reload(); }, [browser, newVersion, unsent]);
   if (required) return <UpdateRequired required={required} app={app} reload={browser && !!newVersion} unsent={unsent} />;
+  if (transportError) return (
+    <div role="alert" className="border-b-[1.5px] border-outline bg-danger-bg px-4 py-3 text-danger">
+      <p className="text-sm font-semibold">The receiving connection stopped. Your saved chats are still here.</p>
+      <p className="mt-1 text-sm break-words">{transportError}</p>
+      <p className="mt-1 text-sm">Close and reopen AgentNet to retry the connection.</p>
+    </div>
+  );
   if (newVersion) return (
     <div role="status" className="flex flex-wrap items-center gap-3 border-b-[1.5px] border-outline bg-act px-4 py-2 text-act-ink">
       <span className="flex-1 text-sm font-semibold">AgentNet was updated to {newVersion}.{browser && unsent && " Send or clear your drafts here: the page then reloads with it."}</span>
