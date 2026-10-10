@@ -345,7 +345,7 @@ func (a *Agent) admitHistory(ctx context.Context, env envelope.Envelope, in enve
 		for _, m := range root.Members {
 			if pass == 1 {
 				if _, err := a.refreshPerson(ctx, m.Person, false); err != nil && !errors.Is(err, errPersonConflict) {
-					return err
+					return holdForPerson(err, hold)
 				}
 			}
 			if k, ok := a.store.deviceKey(m.Person, item.From, item.FromKey); ok {
@@ -408,7 +408,7 @@ func (a *Agent) admitHistory(ctx context.Context, env envelope.Envelope, in enve
 	}
 	orig := item.inner(in.Conv)
 	if err := envelope.CheckTopic(orig); err != nil {
-		return err
+		return hold(reasonInvalid, err.Error()) // as the group path does: never end the stream
 	}
 	if envelope.TopicOrganization(orig.TopicEvent) {
 		if err := topicOrganizationAuthor(a.store.db, in.Conv, item.From, item.FromKey); err != nil {
@@ -972,7 +972,7 @@ func (a *Agent) historyPage(ctx context.Context, dev identity.Public, pos histor
 	}
 	prepared = kept
 	if len(copies)+len(carriers) > 0 {
-		notifyDaemon(a.home)
+		a.notifyOwnWork()
 	}
 	return state == "running", nil
 }

@@ -135,13 +135,14 @@ func (a *Agent) onMembers(data []byte) {
 	a.Logf("hub members: %d listed, %d connected%s", len(m.Members), connected, more)
 	a.typingMembershipChanged()
 	// Presence, persons or capabilities may have changed: look again at
-	// held conversation messages on the stream's worker. Presence alone is no
-	// proof for them: a flapping device re-checked every held row each time.
-	// Waiting messages still look again (a reconnected device may now read
+	// held conversation messages on the stream's worker. Presence, a program
+	// version or a suspension alone is no proof for them (a flapping device
+	// re-checked every held row each time) nor any person step: waiting
+	// messages still look again (a reconnected or updated device may now read
 	// them), and an hour after the last full look any list looks again too.
-	work := convPersons | convRelease
+	work := convRelease
 	if !prev.Current || !sameMemberFacts(prev.Members, m) || a.convWork.retryStale() {
-		work |= convRetry
+		work |= convPersons | convRetry
 	}
 	a.convWork.due(work)
 	if a.kick != nil {
@@ -149,23 +150,32 @@ func (a *Agent) onMembers(data []byte) {
 	}
 }
 
-// sameMemberFacts reports whether two lists say the same beyond presence:
-// the same enrolled devices, person roster steps and agent hints.
+// sameMemberFacts reports whether two lists say the same authority facts:
+// the same enrolled devices (address, joined), person roster steps (id, seq,
+// hash) and agent hints, and both complete or not. Everything else a list
+// says (presence, a reported version, a suspension) is availability only.
 func sameMemberFacts(a, b protocol.Members) bool {
 	if a.Truncated != b.Truncated || len(a.Members) != len(b.Members) {
 		return false
 	}
-	fact := func(m protocol.Member) string {
-		m.Presence = ""
-		raw, _ := json.Marshal(m)
-		return string(raw)
+	type fact struct {
+		joined int64
+		person protocol.PersonRef
+		agent  bool
 	}
-	facts := make(map[string]string, len(a.Members))
+	of := func(m protocol.Member) fact {
+		f := fact{joined: m.Joined, agent: m.Agent}
+		if m.Person != nil {
+			f.person = *m.Person
+		}
+		return f
+	}
+	facts := make(map[string]fact, len(a.Members))
 	for _, m := range a.Members {
-		facts[m.Address] = fact(m)
+		facts[m.Address] = of(m)
 	}
 	for _, m := range b.Members {
-		if f, ok := facts[m.Address]; !ok || f != fact(m) {
+		if f, ok := facts[m.Address]; !ok || f != of(m) {
 			return false
 		}
 	}

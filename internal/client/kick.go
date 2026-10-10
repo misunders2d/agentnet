@@ -53,9 +53,47 @@ func homeSockPath(home, name, suffix string) string {
 }
 
 // notifyDaemon wakes a running daemon's worker, if there is one.
-func notifyDaemon(home string) {
-	if c, err := net.DialTimeout("unix", sockPath(home), time.Second); err == nil {
-		c.Close()
+func notifyDaemon(home string) { dialDaemon(home) }
+
+func dialDaemon(home string) bool {
+	c, err := net.DialTimeout("unix", sockPath(home), time.Second)
+	if err != nil {
+		return false
+	}
+	c.Close()
+	return true
+}
+
+// notifyOwnWork wakes this home's daemon for work this program queued in
+// the course of its own receiving, syncing or running: a job ready, history
+// copies, a receiver record, statuses due. Sent by the daemon to itself it
+// is a self-wake: it brings no new evidence for held messages (code that
+// records evidence marks it itself, convWork), so it starts no other look
+// at them. From any other process it is the ordinary wake.
+func (a *Agent) notifyOwnWork() {
+	if !a.kicksLive.Load() {
+		notifyDaemon(a.home)
+		return
+	}
+	a.selfKicks.Add(1)
+	if !dialDaemon(a.home) {
+		a.selfKicks.Add(-1)
+	}
+}
+
+// ownKick reports whether a wake the socket served is one this daemon sent
+// itself (notifyOwnWork), counting it as served. Wakes carry no data, so
+// one from another process that comes in between may be counted instead;
+// the wakes together still mark the same work.
+func (a *Agent) ownKick() bool {
+	for {
+		n := a.selfKicks.Load()
+		if n <= 0 {
+			return false
+		}
+		if a.selfKicks.CompareAndSwap(n, n-1) {
+			return true
+		}
 	}
 }
 

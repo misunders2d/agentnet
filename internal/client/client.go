@@ -65,6 +65,9 @@ type Agent struct {
 	adQuery        string                     // this run's signed session ad, for the push stream
 	kick           func()                     // wakes the current stream's retry worker
 	kickMu         sync.Mutex                 // guards kick for kickNow
+	kicksLive      atomic.Bool                // this Agent's daemon serves the local wake-up socket (startWorker)
+	selfKicks      atomic.Int64               // wakes in flight that this daemon sent itself (notifyOwnWork)
+	receiveFails   receiveFailures            // transient admission failures per pushed envelope (daemon.go)
 	prefetchFailed map[string]bool            // conversation files that could not be kept this run (historyfiles.go; the stream worker only)
 	wakeWorker     func()                     // sends a coalesced local wake; stable for this Agent handle
 	workerLanes    executionLanes             // local selected executors, through run cleanup
@@ -255,7 +258,7 @@ func Open(home string) (*Agent, error) {
 	}, notify: desktopNotify,
 		changes: newChangeFeed(), alertWake: make(chan struct{}, 1), statusWake: make(chan struct{}, 1)}
 	st.onChange = a.changes.bump
-	st.onJobReady = func() { a.wakeWorker(); notifyDaemon(a.home) }
+	st.onJobReady = func() { a.wakeWorker(); a.notifyOwnWork() }
 	var hubURL, cert string
 	if a.Address, err = st.config("address"); err == nil {
 		if hubURL, err = st.config("hub"); err == nil {

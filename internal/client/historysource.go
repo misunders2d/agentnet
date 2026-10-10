@@ -69,6 +69,21 @@ func (a *Agent) historySourceRows(q dbq, filter, order string, limit int, args .
 	return items, rows.Err()
 }
 
+// historyVia names the own device a received row came from as history or
+// device history ("" for an original received here, or one sent here). An
+// address is never enrolled twice, so that device holds the row itself.
+func historyVia(q dbq, it historySourceRow) (string, error) {
+	if it.dir != "in" {
+		return "", nil
+	}
+	var via string
+	err := q.QueryRow(`SELECT coalesce(via,'') FROM inbox WHERE id=?`, it.in.ID).Scan(&via)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return via, err
+}
+
 func (a *Agent) prepareHistorySource(dev identity.Public, it historySourceRow) (*outCopy, error) {
 	_, raw, _, err := a.store.conversation(it.conv)
 	if err != nil {

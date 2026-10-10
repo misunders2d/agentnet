@@ -228,7 +228,7 @@ func (a *Agent) processReceiverCatalog(in envelope.Inner, fp string) error {
 		return nil
 	}
 	if err == nil {
-		notifyDaemon(a.home)
+		a.notifyOwnWork()
 	}
 	return err
 }

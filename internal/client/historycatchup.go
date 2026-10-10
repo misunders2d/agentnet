@@ -427,6 +427,12 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 			done[id] = true
 			return nil
 		}
+		if via, e := historyVia(a.store.db, it); e != nil {
+			return e
+		} else if via == dev.Address {
+			done[id] = true // it came here from that device, which holds it
+			return nil
+		}
 		if visiting[id] {
 			return ErrGroupContextPending
 		}

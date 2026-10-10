@@ -2,6 +2,9 @@ package sqlitedb
 
 import (
 	"bytes"
+	"database/sql"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -351,5 +354,39 @@ func TestSnapshotReadOnlyValidationRejectsWrongVersion(t *testing.T) {
 	after, err := os.ReadFile(path + ".v1.bak")
 	if err != nil || !bytes.Equal(before, after) {
 		t.Fatalf("wrong-version backup changed %v", err)
+	}
+}
+
+// Busy tells another process's lock (worth trying again) from any other
+// database error.
+func TestBusyOnlyForLocks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "t.db")
+	db, err := Open(path, v1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	other, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(0)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	tx, err := db.Begin() // immediate: holds the write lock
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec(`INSERT INTO a(x) VALUES(1)`); err != nil {
+		t.Fatal(err)
+	}
+	_, err = other.Exec(`INSERT INTO a(x) VALUES(2)`)
+	if err == nil || !Busy(err) || !Busy(fmt.Errorf("wrapped: %w", err)) {
+		t.Fatalf("a locked database is not busy: %v", err)
+	}
+	if _, err = other.Exec(`INSERT INTO missing(x) VALUES(1)`); err == nil || Busy(err) {
+		t.Fatalf("a missing table is busy: %v", err)
+	}
+	if Busy(errors.New("database is locked")) || Busy(nil) {
+		t.Fatal("text alone is busy")
 	}
 }

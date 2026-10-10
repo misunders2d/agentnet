@@ -10,10 +10,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/protocol"
+	"github.com/misunders2d/agentnet/internal/sqlitedb"
 )
 
 // ErrRevoked means this agent has been revoked by a Hub admin.
@@ -46,7 +49,9 @@ func (e *HubError) Is(target error) bool {
 // errPermanent marks local failures that retrying cannot fix.
 var errPermanent = errors.New("cannot be retried")
 
-// retryable reports whether a failed call may succeed later unchanged.
+// retryable reports whether a failed call may succeed later unchanged. Send
+// paths use it: a local failure keeps the copy queued for the next try.
+// Receiving decides with transient instead.
 func retryable(err error) bool {
 	if errors.Is(err, errPermanent) {
 		return false
@@ -56,6 +61,37 @@ func retryable(err error) bool {
 		return he.Status >= 500
 	}
 	return err != nil
+}
+
+// transient reports whether err is a typed failure that receiving the same
+// message again may get past: the Hub or the network out of reach or busy
+// (no answer, 5xx, 429), the Hub refusing this build until it is updated
+// (refusedUntilUpdate), a cancelled or timed-out request, or a database
+// another process held. Anything else (a 4xx answer, a failed check, a
+// record this program cannot read) fails the same way every time, so it
+// must never leave a message unacknowledged at the head of the push stream.
+func transient(err error) bool {
+	if err == nil || errors.Is(err, errPermanent) {
+		return false
+	}
+	var he *HubError
+	if errors.As(err, &he) {
+		return he.Status >= 500 || he.Status == http.StatusTooManyRequests || refusedUntilUpdate(err)
+	}
+	var ne net.Error
+	var ue *url.Error
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.As(err, &ne) || errors.As(err, &ue) || sqlitedb.Busy(err)
+}
+
+// refusedUntilUpdate reports whether the Hub refused the request because
+// this build must be updated first (HTTP 426 update_required). It is no
+// failure of the message being received: the Hub keeps it in custody and
+// delivers it again after the update, so it is never held or acknowledged.
+func refusedUntilUpdate(err error) bool {
+	var he *HubError
+	return errors.As(err, &he) && he.Status == http.StatusUpgradeRequired
 }
 
 // requestTimeout bounds every ordinary Hub request and the wait for the push
