@@ -5081,22 +5081,40 @@ export class Engine {
 
   retryPendingReceives() {
     if (this.closing || this.revoked) return Promise.resolve();
+    this.receiveRetryAgain = true;
     if (this.receiveRetryRun) return this.receiveRetryRun;
+    const generation=this.receiveGeneration;
     this.receiveRetryRun = (async () => {
-      const generation=this.receiveGeneration, prefix="receive-pending/", cursorKey="receive-retry-cursor", saved=await this.store.get("kv",cursorKey);
-      const after=typeof saved==="string"&&saved.startsWith(prefix)?saved:prefix;
-      const keys=(await this.store.keysAfter("kv",after,16)).filter(k=>k.startsWith(prefix));
-      // One bounded page per existing push/connect wake, with a durable cursor
-      // so a persistently unavailable first carrier cannot starve later ones.
-      for (const key of keys) {
-        if (this.closing || this.revoked || generation!==this.receiveGeneration) return;
-        const row=await this.store.get("kv",key);
-        if (!row?.envelope || key!==prefix+row.id || row.address!==this.address || row.fingerprint!==this.fp) continue;
-        await this.receiveStreamMessage(row.envelope,true);
-      }
-      if (this.closing || this.revoked || generation!==this.receiveGeneration) return;
-      await put(this.store,"kv",cursorKey,keys.length===16?keys.at(-1):undefined);
-    })().finally(()=>{this.receiveRetryRun=null;});
+      const prefix="receive-pending/", cursorKey="receive-retry-cursor";
+      do {
+        this.receiveRetryAgain = false;
+        let progress, full, after, more, sweepProgress=false, wrapped=false;
+        do {
+          const saved=await this.store.get("kv",cursorKey);after=typeof saved==="string"&&saved.startsWith(prefix)?saved:prefix;
+          const keys=(await this.store.keysAfter("kv",after,16)).filter(k=>k.startsWith(prefix));
+          progress=false;full=keys.length===16;
+          // Responsive admission drains bounded pages. An unavailable page
+          // stops at its cursor; an actual wake during this pass is retained.
+          for (const key of keys) {
+            if (this.closing || this.revoked || generation!==this.receiveGeneration) return;
+            const row=await this.store.get("kv",key);
+            if (!row?.envelope || key!==prefix+row.id || row.address!==this.address || row.fingerprint!==this.fp) continue;
+            await this.receiveStreamMessage(row.envelope,true);
+            if (!await this.store.get("kv",key)) progress=true;
+          }
+          if (this.closing || this.revoked || generation!==this.receiveGeneration) return;
+          await put(this.store,"kv",cursorKey,full?keys.at(-1):undefined);
+          sweepProgress ||= progress;
+          more=full&&progress;
+          // A saved end cursor or progress through the tail revisits the head
+          // once. A page with no removals still stops after that wrap.
+          if(!full&&after!==prefix&&!wrapped&&(sweepProgress||keys.length===0)){more=true;wrapped=true;}
+        } while(more);
+      } while(this.receiveRetryAgain && !this.closing && !this.revoked && generation===this.receiveGeneration);
+    })().finally(()=>{
+      this.receiveRetryRun=null;
+      if(this.receiveRetryAgain&&!this.closing&&!this.revoked&&generation===this.receiveGeneration)this.retryPendingReceives().catch(()=>{});
+    });
     return this.receiveRetryRun;
   }
 

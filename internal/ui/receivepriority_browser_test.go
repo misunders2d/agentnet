@@ -16,3 +16,7 @@ func TestBrowserReceivePriorityBeforeKnownProof(t *testing.T) {
 	}
 	t.Log(string(out))
 }
+
+func TestBrowserReceivePriorityRealIndexedDB(t *testing.T) {
+	testOwnDeviceModuleIndexedDB(t, "receive_priority_check.mjs", "receivePriorityResult")
+}

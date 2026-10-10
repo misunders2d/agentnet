@@ -1,14 +1,22 @@
-import assert from 'node:assert/strict';
-import {Engine,memoryStore} from '../static/engine.mjs';
+const assert=typeof window==='undefined'?(await import('node:assert/strict')).default:{
+ equal:(a,b,m)=>{if(a!==b)throw Error(m||'Values differ');},
+ notEqual:(a,b,m)=>{if(a===b)throw Error(m||'Values unexpectedly match');},
+ deepEqual:(a,b,m)=>{if(JSON.stringify(a)!==JSON.stringify(b))throw Error(m||'Structures differ');},
+ ok:(x,m)=>{if(!x)throw Error(m||'Expected truthy');},
+ rejects:async(fn,re)=>{try{await fn();}catch(e){if(re.test(e.message))return;throw e;}throw Error('Expected rejection '+re);}
+};
+import {Engine,memoryStore,openIDB} from '../static/engine.mjs';
 import * as wire from '../static/wire.mjs';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
+const stores=[];
+async function fixtureStore(){const name='receive-priority-'+wire.newID(),store=typeof window==='undefined'?memoryStore():await openIDB(name);stores.push({store,name});return store;}
 async function ident(address,label){const keys=await wire.newKeys(),pub=await wire.publicEntry(keys,address),fp=await wire.fingerprint(pub),roster=await wire.newRoster(keys,address,label);return {address,keys,pub,fp,roster,hash:await wire.rosterHash(roster)};}
 const phone=await ident('alice/phone','Alice'),old=await ident('old/host','Old'),fresh=await ident('current/host','Current');
 const pin=p=>({address:p.address,json:wire.marshalPublic(p.pub),fingerprint:p.fp,pending:null});
 let checks=0;
 for(const phase of ['profile','profile-backlog','blob','blob-shared']){
  let release,enter;const entered=new Promise(r=>enter=r),gate=new Promise(r=>release=r);
- const st=memoryStore();let first,blob='',realm='',requests=[];
+ const st=await fixtureStore();let first,blob='',realm='',requests=[];
  const creator={person:old.roster.person,roster:old.hash,address:old.address,fingerprint:old.fp};
  const members=[{person:old.roster.person,roster:old.hash},{person:phone.roster.person,roster:phone.hash}].sort((a,b)=>a.person.localeCompare(b.person));
  if(phase.startsWith('profile')){
@@ -60,7 +68,7 @@ for(const phase of ['profile','profile-backlog','blob','blob-shared']){
 // Durable authority changes must defeat old in-memory identity and proof,
 // including a pending carrier retried with full network admission.
 for(const retry of [false,true])for(const mutation of ['identity-missing','identity-changed','own-missing','own-removed','own-frozen','sender-changed','identity-at-commit','own-at-commit','sender-at-commit','person-frozen-at-commit','person-removed-at-commit']){
- const st=memoryStore(),e=new Engine({store:st,base:'https://isolated.invalid',fetch:async()=>{throw Error('Unexpected authority-test network');}});
+ const st=await fixtureStore(),e=new Engine({store:st,base:'https://isolated.invalid',fetch:async()=>{throw Error('Unexpected authority-test network');}});
  Object.assign(e,phone);e.flushReceipts=async()=>{};
  const own=await e.personRecord([phone.roster],'self',null),peer=await e.personRecord([fresh.roster],'pinned',null);e.me=own;
  const identity={keys:phone.keys,address:phone.address,fingerprint:phone.fp},root=await wire.newRoot(fresh.keys,{person:fresh.roster.person,roster:fresh.hash,address:fresh.address,fingerprint:fresh.fp},{person:phone.roster.person,roster:phone.hash});
@@ -78,7 +86,7 @@ for(const retry of [false,true])for(const mutation of ['identity-missing','ident
 // A stale fan roster may prepare encrypted history for a newly linked own
 // device, but its current pin must still match at the atomic admission commit.
 for(const retry of [false,true])for(const mutation of ['none','pending','replaced']){
- const st=memoryStore(),e=new Engine({store:st,base:'https://isolated.invalid',fetch:async()=>{throw Error('Unexpected forwarding network');}});Object.assign(e,phone);e.flushReceipts=async()=>{};
+ const st=await fixtureStore(),e=new Engine({store:st,base:'https://isolated.invalid',fetch:async()=>{throw Error('Unexpected forwarding network');}});Object.assign(e,phone);e.flushReceipts=async()=>{};
  const join=await wire.joinConsent(old.keys,old.address,phone.roster.person,1,phone.hash),next=await wire.nextRoster(phone.keys,phone.address,phone.roster,[phone.pub,old.pub],join,phone.roster.label,[phone.fp,old.fp]);await wire.verifyNext(next,phone.roster);
  const own=await e.personRecord([phone.roster,next],'self',null),peer=await e.personRecord([fresh.roster],'pinned',null);e.me=own;
  const root=await wire.newRoot(fresh.keys,{person:fresh.roster.person,roster:fresh.hash,address:fresh.address,fingerprint:fresh.fp},{person:phone.roster.person,roster:phone.hash}),conv=await wire.rootID(root);
@@ -103,7 +111,7 @@ for(const retry of [false,true])for(const mutation of ['none','pending','replace
  await e.close();
 }
 for(const retry of [false,true])for(const removed of [false,true]){
- const st=memoryStore(),e=new Engine({store:st,base:'https://isolated.invalid',fetch:async()=>{throw Error('Unexpected control network');}});Object.assign(e,phone);e.flushReceipts=async()=>{};
+ const st=await fixtureStore(),e=new Engine({store:st,base:'https://isolated.invalid',fetch:async()=>{throw Error('Unexpected control network');}});Object.assign(e,phone);e.flushReceipts=async()=>{};
  const own=await e.personRecord([phone.roster],'self',null),peer=await e.personRecord([fresh.roster],'pinned',null);e.me=own;
  const root=await wire.newRoot(fresh.keys,{person:fresh.roster.person,roster:fresh.hash,address:fresh.address,fingerprint:fresh.fp},{person:phone.roster.person,roster:phone.hash}),conv=await wire.rootID(root),originalLID=wire.newID();
  await st.write([{s:'kv',k:'identity',v:{keys:phone.keys,address:phone.address,fingerprint:phone.fp}},{s:'kv',k:'person',v:removed?{...own,devices:[]}:own},{s:'persons',k:peer.person,v:peer},{s:'pins',k:fresh.address,v:pin(fresh)},{s:'convs',k:conv,v:{id:conv,root:wire.rootJSON(root),peer:peer.person,creator:fresh.address,created:root.created}}]);
@@ -113,7 +121,7 @@ for(const retry of [false,true])for(const removed of [false,true]){
  assert.equal((await st.get('receipts',id))?.state,removed?'quarantined':'delivered');checks+=2;await e.close();
 }
 {
- const st=memoryStore(),e=new Engine({store:st,base:'https://isolated.invalid',fetch:async()=>new Response('{"error":"unavailable"}',{status:503})});Object.assign(e,phone);
+ const st=await fixtureStore(),e=new Engine({store:st,base:'https://isolated.invalid',fetch:async()=>new Response('{"error":"unavailable"}',{status:503})});Object.assign(e,phone);
  await st.write([{s:'pins',k:fresh.address,v:pin(fresh)}]);const admission={localOnly:false,checks:[],state:{deferred:false}};
  assert.equal((await e.sendKey(fresh.address,admission)).fingerprint,fresh.fp,'full recovery retains existing offline key fallback');
  await st.write([{s:'pins',k:fresh.address,v:{...pin(fresh),pending:{fingerprint:old.fp,json:wire.marshalPublic(old.pub)}}}]);
@@ -122,9 +130,41 @@ for(const retry of [false,true])for(const removed of [false,true]){
 // A genuinely enrolled device without a person still reads ordinary V1
 // direct replies, as it did before receiver network isolation.
 {
- const st=memoryStore(),e=new Engine({store:st,base:'https://isolated.invalid',fetch:async()=>{throw Error('Unexpected legacy network');}});Object.assign(e,phone);e.flushReceipts=async()=>{};
+ const st=await fixtureStore(),e=new Engine({store:st,base:'https://isolated.invalid',fetch:async()=>{throw Error('Unexpected legacy network');}});Object.assign(e,phone);e.flushReceipts=async()=>{};
  await st.write([{s:'kv',k:'identity',v:{keys:phone.keys,address:phone.address,fingerprint:phone.fp}},{s:'pins',k:fresh.address,v:pin(fresh)}]);
  const raw=await wire.seal({id:wire.newID(),from:fresh.address,to:phone.address,ts:4,kind:'answer',body:'legacy direct reply'},fresh.keys,phone.pub),id=wire.parseEnvelope(raw).id;
  await e.dispatch('message',raw);assert.equal((await st.get('inbox',id))?.body,'legacy direct reply');assert.equal((await st.get('receipts',id))?.state,'delivered');checks+=2;await e.close();
 }
-console.log(JSON.stringify({ok:true,checks,storage:'memory unit only'}));
+// A second encrypted arrival while discovery is active retains its wake.
+// Responsive admission drains page-sized batches without waiting for a ping;
+// unavailable evidence stops at the cursor instead of running a hot loop.
+for(const total of [2,32,102])for(const unavailable of [false,true]){
+ const st=await fixtureStore();let release,entered,requests=0,available=!unavailable;
+ const gate=new Promise(r=>release=r),started=new Promise(r=>entered=r);
+ const fetch=async url=>{const p=new URL(url).pathname;requests++;
+  if(p==='/v1/agents/'+old.address+'/profile'){entered();await gate;return available?new Response(JSON.stringify({person:JSON.parse(wire.rosterJSON(old.roster))})):new Response('{"error":"unavailable"}',{status:503});}
+  if(p==='/v1/persons/'+old.roster.person+'/chain')return new Response(JSON.stringify({records:[JSON.parse(wire.rosterJSON(old.roster))],more:false}));
+  throw Error('Unexpected coalesced receive route '+p);
+ };
+ let e=new Engine({store:st,base:'https://isolated.invalid',fetch});Object.assign(e,phone);e.flushReceipts=async()=>{};e.me=await e.personRecord([phone.roster],'self',null);
+ await st.write([{s:'kv',k:'identity',v:{keys:phone.keys,address:phone.address,fingerprint:phone.fp}},{s:'kv',k:'person',v:e.me},{s:'pins',k:old.address,v:pin(old)}]);
+ const root=await wire.newRoot(old.keys,{person:old.roster.person,roster:old.hash,address:old.address,fingerprint:old.fp},{person:phone.roster.person,roster:phone.hash}),conv=await wire.rootID(root);
+ const raws=[];for(let i=1;i<=total;i++)raws.push(await wire.seal({v:2,id:i.toString(16).padStart(32,'0'),from:old.address,to:phone.address,ts:7,kind:'message',body:'coalesced retained '+i,conv,root:wire.rootJSON(root),lid:wire.newID()},old.keys,phone.pub));
+ try{
+  await e.dispatch('message',raws[0]);await started;
+  for(const raw of raws.slice(1))await e.dispatch('message',raw);
+  release();await e.receiveRetryRun;
+  if(available){assert.equal((await st.all('inbox')).length,total,'all responsive signed deferred carriers recover without heartbeat');assert.equal((await st.prefix('kv','receive-pending/')).length,0);}
+  else{
+   assert.equal((await st.all('inbox')).length,0);assert.equal((await st.prefix('kv','receive-pending/')).length,total);assert.equal((await st.all('receipts')).length,0);
+   assert.ok(requests<=17,'coalesced unavailable recovery remains one bounded page plus first active lookup');const before=requests;await wait(30);assert.equal(requests,before,'unavailable recovery never polls');
+   await e.close();available=true;e=new Engine({store:st,base:'https://isolated.invalid',fetch});await e.load();e.flushReceipts=async()=>{};
+   await e.retryPendingReceives();assert.equal((await st.all('inbox')).length,total,'restart keeps cursor and completes responsive pages');
+  }
+  checks+=unavailable?6:2;
+ }finally{release();await e.close();}
+}
+const result={ok:true,checks,storage:typeof window==='undefined'?'memory unit only':'IndexedDB'};
+for(const {store,name} of stores){store.close();if(typeof window!=='undefined')await new Promise((resolve,reject)=>{const r=indexedDB.deleteDatabase(name);r.onsuccess=resolve;r.onerror=()=>reject(r.error);});}
+if(typeof window!=='undefined')window.receivePriorityResult=result;
+console.log(JSON.stringify(result));

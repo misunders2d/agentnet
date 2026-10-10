@@ -171,7 +171,7 @@ for(const mode of ['disk-failure','stop','close']){
  assert.equal((await e.store.all('inbox')).length,0,'first pass is bounded to 16');
  await e.retryPendingReceives();
  assert.equal((await e.store.all('inbox')).length,1,'next page progresses past persistent failures');
- assert.equal(await e.store.get('kv','receive-retry-cursor'),undefined);
+ assert.equal(await e.store.get('kv','receive-retry-cursor'),'receive-pending/'+(16).toString(16).padStart(32,'0'),'progress wraps once then stops at unavailable page');
  assert.equal((await e.store.get('kv','zzz-unrelated')).id,'unrelated');
  e.stop();
 }
