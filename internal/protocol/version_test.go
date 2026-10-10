@@ -28,3 +28,34 @@ func TestNewer(t *testing.T) {
 		}
 	}
 }
+
+// A client is current for a release when it runs that release or a newer
+// one, or a development build made from one; nothing else is, and there is
+// no current client for a latest that is not a release.
+func TestCurrent(t *testing.T) {
+	for _, tt := range []struct {
+		running, latest string
+		want            bool
+	}{
+		{"v0.8.17", "v0.8.17", true},
+		{"v0.8.18", "v0.8.17", true},
+		{"v0.9.0", "v0.8.17", true},
+		{"v0.8.17-3-gabcdef1", "v0.8.17", true},
+		{"v0.8.17+0760ccc", "v0.8.17", true},
+		{"v0.8.17-dirty", "v0.8.17", true},
+		{"v0.8.16", "v0.8.17", false},
+		{"v0.8.16-3-gabcdef1-dirty", "v0.8.17", false},
+		{"", "v0.8.17", false},
+		{"dev", "v0.8.17", false},
+		{"v0.8.17-rc1", "v0.8.17", false},
+		{"v0.8.17", "dev", false},
+		{"v0.8.17", "", false},
+	} {
+		if got := Current(tt.running, tt.latest); got != tt.want {
+			t.Errorf("Current(%q, %q) = %v, want %v", tt.running, tt.latest, got, tt.want)
+		}
+	}
+	if !IsRelease("v0.8.17") || IsRelease("v0.8.17-3-gabcdef1") || IsRelease("dev") {
+		t.Error("IsRelease")
+	}
+}

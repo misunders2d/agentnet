@@ -415,7 +415,7 @@ func (h *Hub) handleGoogleAccessChange(w http.ResponseWriter, r *http.Request) {
 	for _, address := range addresses {
 		h.streams.disconnect(address)
 	}
-	h.membersChanged()
+	h.lookAgain() // an admin role may have changed, which the list does not show
 	w.WriteHeader(204)
 }
 

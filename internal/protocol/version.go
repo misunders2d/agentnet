@@ -28,3 +28,26 @@ func Newer(candidate, running string) bool {
 	}
 	return false
 }
+
+// IsRelease reports whether v is a published release tag (vX.Y.Z), not a
+// development build.
+func IsRelease(v string) bool { return recommendedVersion.MatchString(v) }
+
+// Current reports whether a client running version running needs no update
+// to release latest: it is a release not older than latest, or a
+// development build stamped from one. Anything else (an unknown format, no
+// version at all) is not current.
+func Current(running, latest string) bool {
+	return IsRelease(latest) && runningVersion.MatchString(running) && !Newer(latest, running)
+}
+
+// VersionHeader carries the program version (Version) of the client making
+// a Hub request; a browser device sends the version of the relay that
+// served its engine. It is not signed: the Hub shows it and asks outdated
+// devices to update (UpdateRequired). It never grants anything.
+const VersionHeader = "Agentnet-Version"
+
+// ReleaseURL is the project's page of release version.
+func ReleaseURL(version string) string {
+	return "https://github.com/misunders2d/agentnet/releases/tag/" + version
+}

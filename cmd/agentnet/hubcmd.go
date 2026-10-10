@@ -208,6 +208,7 @@ func hubServe(ctx context.Context, fs *flag.FlagSet, data *string, args []string
 	quota := fs.String("quota", env("QUOTA", "1GiB"), "total attachment storage")
 	uploadTTL := fs.Duration("upload-ttl", mustDuration(env("UPLOAD_TTL", "24h")), "idle time before an unfinished upload is removed")
 	pushHosts := fs.String("push-hosts", env("PUSH_HOSTS", ""), "comma-separated push services to send Web Push to, besides Apple, Google, Mozilla and Microsoft (env AGENTNET_PUSH_HOSTS)")
+	updateGrace := fs.String("update-grace", env("UPDATE_GRACE", "30m"), "how long a device on an AgentNet older than the latest release keeps working before it must update; 0: at once (env AGENTNET_UPDATE_GRACE)")
 	var browserOrigins repeatedBrowserOrigins
 	fs.Var(&browserOrigins, "browser-origin", "explicit HTTPS browser workspace origin (repeatable; no wildcard)")
 	if err := fs.Parse(args); err != nil {
@@ -230,6 +231,13 @@ func hubServe(ctx context.Context, fs *flag.FlagSet, data *string, args []string
 	if *uploadTTL < time.Minute {
 		return errors.New("--upload-ttl must be at least 1m")
 	}
+	grace, err := time.ParseDuration(*updateGrace)
+	if err != nil || grace < 0 {
+		return fmt.Errorf("--update-grace: %q is not a duration such as 30m, or 0", *updateGrace)
+	}
+	if grace == 0 {
+		grace = -1 // hub.Config: zero means the default
+	}
 	if *public == "" {
 		if *platformTLS {
 			return errors.New("--platform-tls needs --public-url (the platform's https address)")
@@ -247,7 +255,7 @@ func hubServe(ctx context.Context, fs *flag.FlagSet, data *string, args []string
 	}
 	h, err := hub.Open(hub.Config{DataDir: *data, PublicURL: *public, AdminLabel: *adminLabel, PlatformTLS: *platformTLS, Web: *web,
 		GoogleWebClientID: *googleWeb, GoogleDesktopClientID: *googleDesktop, GoogleDesktopClientSecret: env("GOOGLE_DESKTOP_CLIENT_SECRET", ""),
-		MaxFileSize: maxBytes, StorageQuota: quotaBytes, UploadTTL: *uploadTTL, PushHosts: extra, BrowserOrigins: []string(browserOrigins)})
+		MaxFileSize: maxBytes, StorageQuota: quotaBytes, UploadTTL: *uploadTTL, UpdateGrace: grace, PushHosts: extra, BrowserOrigins: []string(browserOrigins)})
 	if err != nil {
 		return err
 	}

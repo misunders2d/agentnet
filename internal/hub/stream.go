@@ -2,6 +2,7 @@ package hub
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -183,7 +184,14 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	sub := h.streams.add(caller, cancel)
 	defer h.streams.remove(caller, sub)
-	if !a.Pending { // a pending device is no member: no session, no presence
+	// What this device runs, as its stream says (update.go). A pending
+	// device is no member: no version, session or presence.
+	version := reportedVersion(r)
+	if !a.Pending {
+		if err := h.noteVersion(caller, version); err != nil {
+			writeError(w, http.StatusInternalServerError, "", "storage error")
+			return
+		}
 		if err := h.store.setLastSession(caller, ad.Session); err != nil {
 			writeError(w, http.StatusInternalServerError, "", "storage error")
 			return
@@ -251,10 +259,16 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 	var lastSeq, adminNoticeCursor int64
 	sentRelease := int64(-1) // the release is sent on connect and when it changes
 	sentMembers := int64(-1) // so is the member list
-	sentLinks := int64(-1)   // and the devices waiting for this one's approval
+	sentAgain := int64(-1)   // as of this look-again generation
+	var sentMembersSum, sentTeamsSum [sha256.Size]byte
+	sentLinks := int64(-1) // and the devices waiting for this one's approval
 	linked := map[string]bool{}
 	sentGroupHeads := "" // the caller's group journal heads, sent when they change (groups.go)
 	for {
+		if _, required := h.updateRequired(version); required { // on connect, or its grace ended meanwhile
+			h.holdSuspended(ctx, sub, version, ping, lease, write)
+			return
+		}
 		if rel, gen := h.currentRelease(); gen != sentRelease {
 			data, _ := json.Marshal(rel)
 			if !write("event: release\ndata: %s\n\n", data) {
@@ -263,23 +277,33 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 			sentRelease = gen
 		}
 		// The generation is read before the list is built: a change made
-		// meanwhile moves it on, so the next pass sends the list again.
+		// meanwhile moves it on, so the next pass sends the list again. A
+		// list or directory the same as the last one sent here is not sent
+		// again, unless something receivers look again for on each list
+		// changed meanwhile (lookAgain: capabilities, a catalog, a role).
 		if gen := h.membersGen.Load(); gen != sentMembers {
+			again := h.againGen.Load()
 			m, err := h.members()
 			if err != nil {
 				return
 			}
 			data, _ := json.Marshal(m)
-			if !write("event: members\ndata: %s\n\n", data) {
-				return
+			if sum := sha256.Sum256(data); sum != sentMembersSum || again != sentAgain {
+				if !write("event: members\ndata: %s\n\n", data) {
+					return
+				}
+				sentMembersSum = sum
 			}
 			if dir, err := h.teamDirectoryVersion(r.URL.Query().Get("teams") == "2"); err == nil { // the same generation moves both
 				data, _ := json.Marshal(dir)
-				if !write("event: teams\ndata: %s\n\n", data) {
-					return
+				if sum := sha256.Sum256(data); sum != sentTeamsSum || again != sentAgain {
+					if !write("event: teams\ndata: %s\n\n", data) {
+						return
+					}
+					sentTeamsSum = sum
 				}
 			}
-			sentMembers = gen
+			sentMembers, sentAgain = gen, again
 		}
 		if heads, err := h.store.groupHeads(caller); err != nil {
 			return

@@ -77,7 +77,7 @@ func (h *Hub) routes() http.Handler {
 	mux.HandleFunc("DELETE /v1/notify/subscription", h.handlePushUnsubscribe)
 	mux.HandleFunc("POST /v1/notify/seen", h.handleNotifySeen)
 	if h.cfg.Web {
-		relay := http.Handler(static.Relay(filepath.Join(h.cfg.DataDir, "skins")))
+		relay := http.Handler(static.RelayBuild(h.cfg.Version, filepath.Join(h.cfg.DataDir, "skins")))
 		if wrapped, err := static.WithConnectOrigins(relay, h.cfg.BrowserOrigins); err == nil { // validated in Open
 			relay = wrapped
 		}
@@ -160,6 +160,10 @@ func (h *Hub) authenticateBody(w http.ResponseWriter, r *http.Request) (string, 
 	}
 	if !fresh {
 		writeError(w, http.StatusUnauthorized, "", "replayed request")
+		return "", nil, false
+	}
+	if latest, required := h.updateRequired(r.Header.Get(protocol.VersionHeader)); required && !whileSuspended[r.Pattern] {
+		writeJSON(w, http.StatusUpgradeRequired, protocol.NewUpdateRequired(latest)) // update.go
 		return "", nil, false
 	}
 	return sr.Agent, sr.Body, true

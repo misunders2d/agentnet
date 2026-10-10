@@ -40,11 +40,14 @@ func (h *Hub) handlePutCaps(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "", err.Error())
 		return
 	}
-	if err := h.store.putCaps(caller, rec.Session, rec.TS, body); err != nil {
+	stored, err := h.store.putCaps(caller, rec.Session, rec.TS, body)
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, "", "storage error")
 		return
 	}
-	h.membersChanged() // senders waiting for this device look again
+	if stored { // the same record again, or an older one, changes nothing
+		h.lookAgain() // senders waiting for this device look again
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -90,4 +93,4 @@ func (h *Hub) handleProfile(w http.ResponseWriter, r *http.Request) {
 }
 
 // features lists what this Hub supports (GET /v1/version).
-var features = []string{protocol.FeatureCaps, protocol.FeatureEnv2, protocol.FeatureEnv3, protocol.FeatureMembers, protocol.FeaturePerson, protocol.FeatureNotify, protocol.FeatureTeams, protocol.FeatureTeamTags, protocol.FeatureSignals}
+var features = []string{protocol.FeatureCaps, protocol.FeatureEnv2, protocol.FeatureEnv3, protocol.FeatureMembers, protocol.FeaturePerson, protocol.FeatureNotify, protocol.FeatureTeams, protocol.FeatureTeamTags, protocol.FeatureSignals, protocol.FeatureUpdate}

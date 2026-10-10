@@ -33,6 +33,11 @@ export const inviteDays = [1, 7, 30];
 // inviteMessage is ui.InviteMessage: what an admin sends with a link.
 export const inviteMessage = (from, link) => (from ? from + " invited you" : "You're invited") + " to AgentNet. Open this link to get the app and join: " + link;
 const MAX_BACKOFF = 60_000;
+// BUILD is the AgentNet version this engine belongs to: the relay that
+// serves it writes its own version in (static.RelayBuild); a copy from
+// anywhere else says none. Signed relay requests carry it (Agentnet-Version:
+// unsigned, never authority), so the relay can ask outdated code to update.
+export const BUILD = "";
 // files keeps file ciphertext: received files ("ct/" + blob id) and a copy
 // of each file sent here, encrypted to this device ("kept/" + its SHA-256),
 // so another device of your person can ask for them.
@@ -730,8 +735,20 @@ export class Engine {
     const text = body === undefined ? "" : typeof body === "string" ? body : JSON.stringify(body);
     const headers = {};
     if (text) headers["Content-Type"] = "application/json";
-    if (signed) Object.assign(headers, await wire.signRequest(this.keys, this.address, method, path, text));
+    if (signed) Object.assign(headers, await this.relayHeaders(method, path, text));
     return this.request(method, path, text || undefined, headers, signal, admission);
+  }
+
+  // relayHeaders are a signed relay request's headers: its signature as
+  // this device (wire.signRequest) and this engine's BUILD. A relay of
+  // another origin gets BUILD only once it says it reads it ("update1"):
+  // an older relay's CORS check refuses a header it does not know.
+  async relayHeaders(method, path, body) {
+    const headers = await wire.signRequest(this.keys, this.address, method, path, body);
+    let own = true;
+    try { own = !globalThis.location || new URL(this.base).origin === globalThis.location.origin; } catch (e) { own = false; }
+    if (BUILD && (own || (await this.features().catch(() => [])).includes("update1"))) headers["Agentnet-Version"] = BUILD;
+    return headers;
   }
 
   async request(method, path, body, headers, signal, admission = null) {
@@ -769,13 +786,13 @@ export class Engine {
   // callBytes is call with a raw body (an upload chunk); getBytes fetches
   // raw bytes (a file's ciphertext).
   async callBytes(method, path, bytes) {
-    const headers = { "Content-Type": "application/octet-stream", ...(await wire.signRequest(this.keys, this.address, method, path, bytes)) };
+    const headers = { "Content-Type": "application/octet-stream", ...(await this.relayHeaders(method, path, bytes)) };
     return this.request(method, path, bytes, headers);
   }
 
   async getBytes(path, bound, admission = null) {
     receiveNetwork(admission);
-    const headers = await wire.signRequest(this.keys, this.address, "GET", path, "");
+    const headers = await this.relayHeaders("GET", path, "");
     // History/context carriers use this inside stream admission. A suspended
     // browser transfer needs the same bounded transport as ordinary requests,
     // including its body; otherwise reconnect waits forever for admission.
@@ -6221,7 +6238,7 @@ export class Engine {
     const path = "/v1/stream?ad=" + (await wire.sessionAd(this.keys, this.address, this.session)) + "&receipts=" + ((await this.store.get("kv","receipt-cursor")) || 0) + "&teams=2";
     const ctrl = new AbortController();
     this.abort = ctrl;
-    const headers = { ...(await wire.signRequest(this.keys, this.address, "GET", path, "")), Accept: "text/event-stream" };
+    const headers = { ...(await this.relayHeaders("GET", path, "")), Accept: "text/event-stream" };
     let r;
     try {
       r = await this.fetch(this.base + path, { headers, signal: ctrl.signal, cache: "no-store" });

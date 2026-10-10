@@ -49,7 +49,7 @@ func (h *Hub) handleAgentCatalogPut(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "", "agent catalog unavailable")
 		return
 	}
-	h.membersChanged() // push directory refresh, no polling or job
+	h.lookAgain() // push directory refresh, no polling or job
 	w.WriteHeader(http.StatusNoContent)
 }
 func (h *Hub) handleAgentCatalogGet(w http.ResponseWriter, r *http.Request) {

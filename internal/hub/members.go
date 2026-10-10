@@ -21,6 +21,16 @@ func (h *Hub) membersChanged() {
 	h.notifier.wake() // role notices may have queued opted-in Web Push alerts
 }
 
+// lookAgain is membersChanged for a change the member list may not show (a
+// device's new capabilities, an agent catalog, a role): every stream sends
+// the list even when it reads the same as the last one, since receivers
+// look again on each list. Otherwise a stream skips a list unchanged since
+// it last sent one (stream.go).
+func (h *Hub) lookAgain() {
+	h.againGen.Add(1)
+	h.membersChanged()
+}
+
 // members builds the current member list.
 func (h *Hub) members() (protocol.Members, error) {
 	rows, truncated, err := h.store.members(protocol.MaxMembers)
@@ -29,7 +39,12 @@ func (h *Hub) members() (protocol.Members, error) {
 	}
 	out := protocol.Members{Members: make([]protocol.Member, 0, len(rows)), Truncated: truncated, Workspace: h.currentWorkspaceName()}
 	for _, r := range rows {
-		out.Members = append(out.Members, protocol.Member{Address: r.address, Presence: h.presence.state(r.address), Joined: r.joined, Person: r.person, Agent: r.agent})
+		m := protocol.Member{Address: r.address, Presence: h.presence.state(r.address), Joined: r.joined, Person: r.person, Agent: r.agent}
+		if r.version != nil { // reported by its stream; none yet: not known, so not suspended (update.go)
+			m.Version = *r.version
+			_, m.Suspended = h.updateRequired(m.Version)
+		}
+		out.Members = append(out.Members, m)
 	}
 	return out, nil
 }

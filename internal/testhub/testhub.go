@@ -42,6 +42,12 @@ func StartConfig(t *testing.T, cfg hub.Config, addr string) *Proc {
 	if cfg.Logf == nil {
 		cfg.Logf = t.Logf
 	}
+	if cfg.Version == "" {
+		// A relay in the test's own process is a development build, whatever
+		// version the test's clients say they run (protocol.Version): it
+		// recommends nothing by itself and suspends nobody.
+		cfg.Version = "dev"
+	}
 	h, err := hub.Open(cfg)
 	if err != nil {
 		ln.Close()
