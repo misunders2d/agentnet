@@ -216,6 +216,21 @@ const restarted=new Engine({store:a.store,base:a.base,fetch});Object.assign(rest
  await a.store.write([{s:'outbox',k:transit,v:{...await a.store.get('outbox',transit),state:'not_delivered'}}]);a.historyWake=(a.historyWake||0)+1;await drain(a,p);
  check(await copied(transit)===1&&!await pendingDirect(transit),'a later miss is copied from the pending sweep');
 }
+// A copy never goes back to the own device that forwarded it here, also when
+// neither its sender nor its recipient is that device (it came there from a
+// third own device): FLOOD-6, native parity.
+{
+ const desk=await person('via/desk'),phone=await sibling(desk,'via/phone'),tablet=await sibling(desk,'via/tablet'),host=await person('via-host/desk');
+ const steps=await Promise.all(chains.get(desk.me.person).map(r=>wire.parseRoster(r)));phone.me=await phone.personRecord(steps,'self',phone.me);await phone.store.write([{s:'kv',k:'person',v:phone.me}]);await phone.pinDevices(phone.me);
+ for(const e of [desk,phone,tablet])await e.store.write([{s:'persons',k:host.me.person,v:{...host.me,state:'pinned'}},{s:'pins',k:host.address,v:{address:host.address,json:wire.marshalPublic(host.pub),fingerprint:host.fp,pending:null}}]);
+ const qid=wire.newID(),question={id:qid,from:tablet.address,to:host.address,ts:6,kind:'question',body:'asked on the tablet',attachments:[]};
+ await tablet.store.write([{s:'outbox',k:qid,v:{...question,v:1,at:6000,fp:host.fp,envelope:await wire.seal(question,tablet.keys,host.pub),state:'delivered'}}]);
+ await receiveHistory(await wire.seal({id:wire.newID(),from:host.address,to:tablet.address,ts:7,kind:'answer',body:'answered to the tablet',reply_to:qid,attachments:[]},host.keys,tablet.pub),tablet);
+ const forward=async(from,to)=>{await drain(from,to);const sent=(await copies(from)).filter(r=>r.to===to.address);for(const r of sent)await receiveHistory(r.envelope,to);return sent.length;};
+ check(await forward(tablet,desk)===2&&await forward(desk,phone)===2,'tablet history reaches the phone through the desk');
+ await drain(phone,desk);
+ check((await copies(phone)).filter(r=>r.to===desk.address).length===0,'the phone sends no copy back to the desk that forwarded it');
+}
 // Original endpoint identity also governs local deletion of imported outgoing rows.
 await p.deleteThread(b.address,id);
 check(!(await p.v1Threads()).some(g=>g.some(m=>m.id===id||m.id===answer)), 'local deletion removes imported request and replies');

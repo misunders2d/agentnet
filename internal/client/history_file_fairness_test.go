@@ -65,6 +65,12 @@ func TestHistoryFlushYieldsToRequestedFile(t *testing.T) {
 	if len(history) < 3 {
 		t.Fatalf("history backlog: %d", len(history))
 	}
+	// A turn only the phone received gives its bulk upkeep a copy to make
+	// for alice: what came from alice is never copied back to her.
+	only := craft(t, w.bob, phone, envelope.Inner{Kind: envelope.KindMessage, Body: "only on the phone", Conv: conv, Root: root, LID: protocol.NewID(), Origin: envelope.OriginUI})
+	if err = phone.verifyAndStore(tctx(t), only); err != nil {
+		t.Fatal(err)
+	}
 	msgs, err := phone.ConversationMessages(conv)
 	if err != nil {
 		t.Fatal(err)

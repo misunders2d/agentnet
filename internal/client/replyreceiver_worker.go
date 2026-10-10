@@ -579,7 +579,7 @@ func (a *Agent) reconcileClosedReplyReceiverJobs() error {
 	}
 	if err = tx.Commit(); err == nil && changed {
 		a.store.changed()
-		notifyDaemon(a.home)
+		a.notifyOwnWork()
 	}
 	return err
 }

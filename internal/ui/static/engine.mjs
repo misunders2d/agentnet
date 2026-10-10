@@ -52,6 +52,16 @@ const deletionNote = (thisOnly, devices, kept) => (thisOnly ? "Deleted. This thr
   + (kept > 0 ? " " + kept + " item(s) still in progress keep running and are removed when they finish." : "");
 // heldPage bounds the held messages read in one step (the Go client's proofPage).
 const heldPage = 50;
+// heldRecheckAfter: a member list looks at held messages again at the
+// latest this long after the last full look (the Go client's), ms.
+const heldRecheckAfter = 60 * 60 * 1000;
+// memberFacts is what a member list says that can decide held messages
+// (client sameMemberFacts): each device's address, enrollment, person
+// roster step and agent hint, and whether the list is complete. Presence,
+// a reported version or a suspension is availability only.
+const memberFacts = (m) => JSON.stringify([!!m?.truncated, (Array.isArray(m?.members) ? m.members : [])
+  .map((x) => [String(x?.address ?? ""), x?.joined ?? 0, x?.person?.id ?? "", x?.person?.seq ?? 0, x?.person?.hash ?? "", !!x?.agent])
+  .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))]);
 // historyPage bounds the messages one step of copying your chats to a new
 // device queues (the Go client's historyPage).
 const historyPage = 50;
@@ -5712,7 +5722,11 @@ export class Engine {
     const hc = { id: n.conv, root: n.root, peer: root.members.find((m) => m.person !== this.me.person)?.person };
     const historyEvents = await this.convEvents(n.conv,checks);
     if (item.sub === "event") {
-      const r = await this.eventRecord(item.body);
+      // A participation event this page cannot parse is held as invalid, as
+      // the live path holds it: a parse error must never end the stream.
+      let r;
+      try { r = await this.eventRecord(item.body); }
+      catch (e) { if (e instanceof Hold || e instanceof StoreConflict || retryable(e)) throw e; throw new Hold("invalid", "participation: " + e.message); }
       if (r.e.host && !wire.rootMember(root, r.e.host.person)) {
         const pin = await this.sendKey(r.e.host.address, admission);
         if (pin.fingerprint !== r.e.host.fingerprint || (await this.personOf(r.e.host.address, pin, admission)).person !== r.e.host.person) throw new Hold("invalid", "history invitation host differs from pinned proof");
@@ -5820,8 +5834,9 @@ export class Engine {
   // a bounded page at a time, in key order, and continues to the end, so
   // messages that stay unproven never keep later ones from being looked
   // at. Evidence that comes during a pass adds a pass from the beginning
-  // once this one ends; an unreachable server ends it (the next connection
-  // looks again).
+  // once this one ends. A row that fails is noted and the pass goes on; an
+  // unreachable server ends it, and the next look continues from that row
+  // (client heldLook): never back at the first row on every wake.
   retryHeld() {
     this.retryAgain = true;
     if (!this.retrying) this.retrying = this.retryPasses();
@@ -5830,15 +5845,22 @@ export class Engine {
 
   async retryPasses() {
     try {
-      this.retryAgain = false;
+      let pos = this.heldCursor || ""; // where an unreachable server ended the last look
+      this.heldCursor = "";
+      if (!pos) {
+        this.retryAgain = false; // a look from the first row: evidence so far is covered
+        this.heldRetriedAt = this.now();
+      }
       const own = await this.store.get("kv", "person");
       const ownHuman=own?.state === "self" && own.human_keys?.includes(this.fp) && own.devices.some(d => d.address === this.address && d.fingerprint === this.fp);
       const recoverHistory=this.heldHistoryRecovery&&ownHuman,recoverLifecycle=this.heldLifecycleHistoryRecovery&&ownHuman;
       const recovered = new Set(); // each invalid row at most once, even when admitted proof adds a pass
-      let pos = "";
       for (;;) {
         const page = await this.store.after("held", pos, heldPage);
+        let at = pos;
         for (const h of page) {
+          const before = at;
+          at = h.id;
           // Missing context keeps the recovery guard through later ordinary proof retries.
           const historyRecovery = h.reason === "proof_pending" && h.history_recovery || (recoverHistory||recoverLifecycle) && h.reason === "invalid" && !recovered.has(h.id) && (recoverHistory ? recoverLifecycle ? "all" : true : "dm");
           if (h.reason !== "proof_pending" && !historyRecovery) continue;
@@ -5848,11 +5870,15 @@ export class Engine {
             try { env = wire.parseEnvelope(h.envelope); } catch (e) { if (historyRecovery) continue; throw e; }
             await this.admit(h.envelope, env, true, historyRecovery);
           } catch (e) {
-            return;
+            if (retryable(e)) { this.heldCursor = before; return; }
+            this.noteHeldFailure(h.id, e); // stays held, in place; later rows are still looked at
           }
         }
-        if (page.length === heldPage) pos = page[page.length - 1].id;
-        else if (this.retryAgain) [this.retryAgain, pos] = [false, ""];
+        if (page.length === heldPage) pos = at;
+        else if (this.retryAgain) {
+          [this.retryAgain, pos] = [false, ""];
+          this.heldRetriedAt = this.now();
+        }
         else {
           if (recoverHistory||recoverLifecycle) {
             try {
@@ -5868,6 +5894,14 @@ export class Engine {
       this.retrying = null;
       this.discloseHumanAudience(); // group ends also follow fresh membership evidence
     }
+  }
+
+  // noteHeldFailure keeps, for this page's life and bounded, why a held
+  // row could not be looked at again (not a hold: an error this page hit).
+  noteHeldFailure(id, e) {
+    if (!this.heldFailures || this.heldFailures.size >= 256) this.heldFailures = new Map();
+    const n = (this.heldFailures.get(id)?.n || 0) + 1;
+    this.heldFailures.set(id, { n, error: String(e?.message || e) });
   }
 
   // flushReceipts sends every stored receipt the server has not taken yet,
@@ -6365,6 +6399,11 @@ export class Engine {
     } else if (event === "members") {
       let m;
       try { m = JSON.parse(data); } catch (e) { this.members = { ...this.members, current: false }; await this.refreshTyping(false); this.changed(); return; }
+      // Presence, a reported version or a suspension alone is no proof for
+      // held messages (client onMembers): only changed authority facts, a
+      // new connection's first list or an hour since the last full look do.
+      const facts = memberFacts(m), evidence = !this.members.current || facts !== this.memberFactsSeen || this.now() - (this.heldRetriedAt || 0) >= heldRecheckAfter;
+      this.memberFactsSeen = facts;
       this.members = { listed: "listed", current: true, at: this.now(), list: Array.isArray(m.members) ? m.members : [], truncated: !!m.truncated };
       await this.keepMemberFacts(m);
       // A member's person reference that is ahead of the step pinned here is
@@ -6379,8 +6418,10 @@ export class Engine {
       this.fillListed().catch(() => {});
       await this.refreshTyping(false);
       this.changed();
-      this.retryHeld().catch(() => {});
-      this.retryPendingReceives().catch(() => {});
+      if (evidence) {
+        this.retryHeld().catch(() => {});
+        this.retryPendingReceives().catch(() => {});
+      }
       // Updated signed capabilities arrive with members: retry existing
       // encrypted invitations now, through the normal pin/support checks.
       this.flushOutbox().catch(() => {});

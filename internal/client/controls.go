@@ -978,7 +978,7 @@ func (a *Agent) admitControl(ctx context.Context, env envelope.Envelope, in enve
 		}
 		for _, member := range packet.State.Members {
 			if _, e = a.refreshPerson(ctx, member.Person, false); e != nil {
-				return e
+				return holdForMember(e, member.Person == sp.info.Person, hold)
 			}
 		}
 		group = &packet

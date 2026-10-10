@@ -215,6 +215,13 @@ func (a *Agent) deviceHistoryPage(dev identity.Public) (bool, error) {
 			done[key] = true
 			return nil
 		}
+		// Nor does the device that forwarded it here: it holds it already.
+		if via, e := historyVia(tx, historySourceRow{dir: ref.storage, in: envelope.Inner{ID: r.id}}); e != nil {
+			return e
+		} else if via == dev.Address {
+			done[key] = true
+			return nil
+		}
 		// Its exact direct recipient gets the original itself. Copy only an
 		// original that device missed; one still in transit waits pending.
 		if r.to == dev.Address && r.toKey == dev.Fingerprint() {

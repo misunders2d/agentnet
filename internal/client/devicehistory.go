@@ -230,7 +230,7 @@ func (a *Agent) admitDeviceHistory(ctx context.Context, env envelope.Envelope, i
 		return hold(reasonInvalid, err.Error())
 	}
 	if err = a.refreshRecipientPerson(ctx, env.From, map[string]error{}); err != nil {
-		return err
+		return holdForPerson(err, hold)
 	}
 	tx, err := a.store.db.Begin()
 	if err != nil {

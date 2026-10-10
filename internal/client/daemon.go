@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/cenkalti/backoff/v7"
@@ -398,11 +399,77 @@ func (a *Agent) storeReceived(ctx context.Context, env envelope.Envelope) error 
 		return err
 	}
 	if seen {
-		err = a.store.resendReceipt(env.ID)
-	} else {
-		err = a.verifyAndStore(ctx, env)
+		return a.store.resendReceipt(env.ID)
 	}
-	return err
+	if err = a.verifyAndStore(ctx, env); err != nil {
+		return a.admissionFailed(ctx, env, err)
+	}
+	a.receiveFails.clear(env.ID)
+	return nil
+}
+
+// receiveAttempts bounds how often one conversation message may fail with a
+// transient error before it is set aside instead of ending the push stream.
+const receiveAttempts = 5
+
+// receiveFailures counts consecutive transient admission failures per
+// envelope in this process (bounded; a new run starts the count again).
+type receiveFailures struct {
+	mu sync.Mutex
+	n  map[string]int
+}
+
+func (f *receiveFailures) note(id string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.n == nil || len(f.n) >= 256 {
+		f.n = map[string]int{}
+	}
+	f.n[id]++
+	return f.n[id]
+}
+
+func (f *receiveFailures) clear(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.n, id)
+}
+
+// admissionFailed decides what a failed admission does to the push stream.
+// An error ends it only when receiving the same message again may succeed
+// (transient): the Hub then pushes the message again, unacknowledged. Any
+// other error, and a conversation message that failed transiently
+// receiveAttempts times in a row, is held in the quarantine with a
+// quarantined receipt instead: a conversation message for pending proof,
+// looked at again with new evidence (retryProof), any other as invalid. A
+// message that can never be admitted must not stay first in the queue: the
+// device would receive nothing from anyone after it.
+func (a *Agent) admissionFailed(ctx context.Context, env envelope.Envelope, err error) error {
+	if ctx.Err() != nil {
+		return err // stopping: not this message's failure
+	}
+	if seen, e := a.store.seen(env.ID); e != nil || seen {
+		return e // its disposition is stored (a hold, or a commit before the error); its receipt follows
+	}
+	conv := false
+	if sender, _, found, e := a.store.peer(env.From); e == nil && found {
+		in, e := envelope.Open(env, a.id, a.Address, sender)
+		conv = e == nil && (in.V == envelope.Version2 || in.V == envelope.Version3)
+	}
+	if transient(err) && (!conv || a.receiveFails.note(env.ID) < receiveAttempts) {
+		return err
+	}
+	a.receiveFails.clear(env.ID)
+	reason := reasonInvalid
+	if conv {
+		reason = reasonProof
+	}
+	a.Logf("message %s from %s held (%s): admission failed: %v", env.ID, env.From, reason, err)
+	if e := a.holdDiagnostic(env, reason, "admission failed"); e != nil {
+		return errors.Join(err, e)
+	}
+	a.kickNow() // its quarantined receipt
+	return nil
 }
 
 // flushReceipts sends every stored disposition the Hub has not acknowledged.
@@ -566,12 +633,18 @@ func (a *Agent) startWorker(ctx context.Context) (func(), error) {
 	// it read the recipient's profile before storing them, and the members
 	// push that announced newer support may have come in between, spent on
 	// a release pass that found nothing waiting yet; nothing else would
-	// look at them again (convRelease).
+	// look at them again (convRelease). A wake this daemon sent itself for
+	// its own work (notifyOwnWork) brings no new evidence for held messages.
+	a.selfKicks.Store(0)
 	stopKicks, err := listenKicks(a.home, func() {
 		a.wakeWorker()
 		a.wakeStatus() // a status another process noted (noteStatus)
 		a.changes.bump()
-		a.convWork.due(convHistory | convServe | convFetch | convRetry | convRelease) // convRetry: a local participation record shares its public scope with guests now
+		work := convHistory | convServe | convFetch | convRelease
+		if !a.ownKick() {
+			work |= convRetry // a local participation record shares its public scope with guests now
+		}
+		a.convWork.due(work)
 		// A responder or named agent was set or removed: say so.
 		if a.agentHintStale() {
 			a.convWork.due(convPublish)
@@ -582,6 +655,8 @@ func (a *Agent) startWorker(ctx context.Context) (func(), error) {
 		// Still works: new messages and Hub pings wake the worker.
 		a.Logf("local wake-up socket unavailable (%v); accept/cancel apply at the next Hub ping", err)
 		stopKicks = func() {}
+	} else {
+		a.kicksLive.Store(true)
 	}
 	// A command waiting for an answer here is woken by each local change
 	// (answerwait.go): it never polls.
@@ -597,6 +672,7 @@ func (a *Agent) startWorker(ctx context.Context) (func(), error) {
 	return func() {
 		cancel()
 		<-done
+		a.kicksLive.Store(false)
 		stopKicks()
 		stopChanges()
 		notify.Close()

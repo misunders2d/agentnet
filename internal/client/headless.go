@@ -290,7 +290,7 @@ func (a *Agent) noteStatus(id string) {
 // starts).
 func (a *Agent) wakeStatus() {
 	if !a.statusLive.Load() {
-		notifyDaemon(a.home)
+		a.notifyOwnWork()
 		return
 	}
 	select {

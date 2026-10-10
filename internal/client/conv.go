@@ -41,7 +41,7 @@ var ErrNotPublished = errors.New("not yet published on the Hub (the daemon publi
 // Upkeep that an event made due, done on the next sync (never on a timer).
 const (
 	convPublish   uint32 = 1 << iota // publish this run's capabilities and the person, if not yet
-	convRetry                        // new evidence: look again at every message held for proof, from the start
+	convRetry                        // new evidence: look again at every message held for proof (heldLook)
 	convRetryMore                    // continue that look from where the last page ended
 	convRelease                      // look again at waiting conversation messages
 	convPersons                      // compare published person records with the pinned ones
@@ -56,13 +56,67 @@ const proofPage = 50
 type convWork struct {
 	bits            atomic.Uint32
 	mu              sync.Mutex
-	pos             heldPos // where the look at held messages continues
+	look            heldLook // the look at held messages under way (mu)
+	lookLoaded      bool     // look was read from the store (mu)
 	historyDeferred map[string]historyDeferredScan
 	retried         atomic.Int64 // unix time the last full look at held messages began
 }
 
 func (w *convWork) due(b uint32) { w.bits.Or(b) }
 func (w *convWork) take() uint32 { return w.bits.Swap(0) }
+
+// heldLook is the look at messages held for proof: one page per sync, in
+// the quarantine's order, from where the last page ended. New evidence never
+// moves it back to the first row (rows past the first pages would never be
+// looked at while evidence keeps coming); it adds another full look from the
+// start once this one reaches the end (Again). It is kept in the store, so a
+// restart continues it.
+type heldLook struct {
+	At    int64  `json:"at,omitempty"`
+	ID    string `json:"id,omitempty"`
+	Again bool   `json:"again,omitempty"`
+}
+
+func (l heldLook) pos() heldPos { return heldPos{at: l.At, id: l.ID} }
+
+const heldLookKey = "held_look"
+
+// heldLookNow returns the look under way (the zero look starts at the first
+// row). The caller holds a.convWork.mu.
+func (a *Agent) heldLookNow() heldLook {
+	w := &a.convWork
+	if !w.lookLoaded {
+		w.lookLoaded = true
+		if raw, err := a.store.config(heldLookKey); err == nil {
+			_ = json.Unmarshal([]byte(raw), &w.look) // unreadable: start again from the first row
+		}
+	}
+	return w.look
+}
+
+// setHeldLook keeps l as the look under way. The caller holds a.convWork.mu.
+func (a *Agent) setHeldLook(l heldLook) {
+	if l == a.convWork.look {
+		return
+	}
+	a.convWork.look = l
+	raw, _ := json.Marshal(l)
+	if err := a.store.setConfig(map[string]string{heldLookKey: string(raw)}); err != nil {
+		a.Logf("keeping the place of the look at held messages: %v", err)
+	}
+}
+
+// heldEvidence notes new evidence for held messages: a look under way is
+// followed by another full one; with none under way the next starts at the
+// first row anyway.
+func (a *Agent) heldEvidence() {
+	a.convWork.mu.Lock()
+	defer a.convWork.mu.Unlock()
+	if l := a.heldLookNow(); l.pos() != (heldPos{}) {
+		l.Again = true
+		a.setHeldLook(l)
+	}
+}
 
 // heldRecheckAfter bounds how long held messages wait for a look when only
 // presence changes: evidence this device cannot see as an event still counts.
@@ -111,8 +165,8 @@ func (a *Agent) convSync(ctx context.Context) {
 		a.discloseRoomDismissals(ctx, feats)
 		if work&convRetry != 0 {
 			a.convWork.retried.Store(time.Now().Unix())
+			a.heldEvidence()
 			a.convWork.mu.Lock()
-			a.convWork.pos = heldPos{}
 			a.convWork.historyDeferred = nil
 			work |= convHistory
 			a.convWork.mu.Unlock()
@@ -1135,34 +1189,46 @@ func (a *Agent) releaseConv(ctx context.Context, feats []string) {
 }
 
 // retryProof looks again at one page of messages held for conversation
-// proof, continuing from where the previous page ended, and reports whether
-// more follow. Messages still without proof stay held, in place.
+// proof, continuing the look under way (heldLook), and reports whether more
+// follow. Messages still without proof stay held, in place.
 func (a *Agent) retryProof(ctx context.Context) (more bool) {
 	if err := a.recoverInvalidLifecycleHistory(); err != nil {
 		a.Logf("recovering held lifecycle history: %v", err)
-		a.convWork.due(convRetry)
+		a.convWork.due(convRetryMore)
 		return false
 	}
 	if err := a.recoverInvalidGroupHistory(); err != nil {
 		a.Logf("recovering held group history: %v", err)
-		a.convWork.due(convRetry)
+		a.convWork.due(convRetryMore)
 		return false
 	}
 	a.convWork.mu.Lock()
-	pos := a.convWork.pos
+	look := a.heldLookNow()
 	a.convWork.mu.Unlock()
-	envs, next, err := a.store.heldAfter(reasonProof, pos, proofPage)
+	envs, next, err := a.store.heldAfter(reasonProof, look.pos(), proofPage)
 	if err != nil {
 		a.Logf("held conversation messages: %v", err)
 		return false
 	}
+	again := false // this page is looked at again: the look keeps its place
+	defer func() {
+		if again {
+			return
+		}
+		a.convWork.mu.Lock()
+		defer a.convWork.mu.Unlock()
+		l := a.heldLookNow() // with any evidence noted meanwhile
+		switch {
+		case more:
+			l.At, l.ID = next.at, next.id
+		case l.Again:
+			l, more = heldLook{}, true // evidence came during this look: another from the first row
+		default:
+			l = heldLook{} // the end: the next look starts from the first row
+		}
+		a.setHeldLook(l)
+	}()
 	more = len(envs) == proofPage
-	if !more {
-		next = heldPos{} // the end: the next look starts from the beginning
-	}
-	a.convWork.mu.Lock()
-	a.convWork.pos = next
-	a.convWork.mu.Unlock()
 	for _, env := range envs {
 		if err := historyRecoveryCheck(a.store.db, env.From, env.ID); err != nil {
 			continue
@@ -1192,8 +1258,11 @@ func (a *Agent) retryProof(ctx context.Context) (more bool) {
 		if in.V == envelope.Version3 {
 			admit = a.admitControl
 		}
-		if err := admit(ctx, env, in, sender, true); err != nil && retryable(err) {
-			a.convWork.due(convRetry) // the Hub is out of reach: look again from the start next time
+		if err := admit(ctx, env, in, sender, true); err != nil && transient(err) {
+			// The Hub is out of reach: this page is looked at again on the
+			// next sync. Any other failure keeps only this row held, in place.
+			again = true
+			a.convWork.due(convRetryMore)
 			return false
 		} else if key != "" && a.store.heldCopiesFreed(env.ID) {
 			// Its record left the quarantine: its copies are checked next (a
@@ -1207,6 +1276,31 @@ func (a *Agent) retryProof(ctx context.Context) (more bool) {
 	return more
 }
 
+// holdForPerson holds a message for a person problem: a frozen person as a
+// conflict; a person record missing, unverifiable or refused by the Hub (a
+// 4xx answer) as pending proof. A failure to ask the Hub is returned
+// instead, so the message is delivered again.
+func holdForPerson(err error, hold func(string, string) error) error {
+	var he *HubError
+	switch {
+	case errors.Is(err, errPersonConflict):
+		return hold(reasonConflict, err.Error())
+	case errors.Is(err, ErrNoPerson), errors.Is(err, errPersonRecord), errors.As(err, &he) && !retryable(err):
+		return hold(reasonProof, err.Error())
+	}
+	return err
+}
+
+// holdForMember is holdForPerson for a group member's person record that a
+// group message's admission refreshed: another member's frozen record is no
+// conflict of this sender's, so the message waits for proof instead.
+func holdForMember(err error, sender bool, hold func(string, string) error) error {
+	if !sender && errors.Is(err, errPersonConflict) {
+		return hold(reasonProof, "group: a member's person record is frozen here")
+	}
+	return holdForPerson(err, hold)
+}
+
 // admitConv admits a verified version 2 message, or holds it (quarantine)
 // with the reason it cannot be admitted yet. fromQuarantine: env is held
 // already, and is released when admitted.
@@ -1218,18 +1312,7 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 		}
 		return err
 	}
-	// personErr holds the message for a person problem; a failure to ask
-	// the Hub is returned instead, so the message is delivered again.
-	personErr := func(err error) error {
-		var he *HubError
-		switch {
-		case errors.Is(err, errPersonConflict):
-			return hold(reasonConflict, err.Error())
-		case errors.Is(err, ErrNoPerson), errors.Is(err, errPersonRecord), errors.As(err, &he) && !retryable(err):
-			return hold(reasonProof, err.Error())
-		}
-		return err
-	}
+	personErr := func(err error) error { return holdForPerson(err, hold) }
 	if in.Sub == envelope.SubModelSync {
 		return a.admitModelSync(ctx, env, in, sender, fromQuarantine, hold)
 	}

@@ -402,7 +402,7 @@ func (a *Agent) admitGroupTurn(ctx context.Context, env envelope.Envelope, in en
 	}
 	for _, p := range packet.State.Members {
 		if _, err = a.refreshPerson(ctx, p.Person, false); err != nil {
-			return err
+			return holdForMember(err, p.Person == sp.info.Person, hold)
 		}
 	}
 	me, _, err = a.store.selfPerson(a.Address)
@@ -657,7 +657,7 @@ func (a *Agent) admitGroupOwnCopy(ctx context.Context, env envelope.Envelope, in
 	}
 	for _, member := range packet.State.Members {
 		if _, err = a.refreshPerson(ctx, member.Person, false); err != nil {
-			return err
+			return holdForMember(err, member.Person == sp.info.Person, hold)
 		}
 	}
 	check := func(q dbq) error {
