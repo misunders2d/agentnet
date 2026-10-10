@@ -122,14 +122,6 @@ func (a *Agent) heldEvidence() {
 	}
 }
 
-// heldRecheckAfter bounds how long held messages wait for a look when only
-// presence changes: evidence this device cannot see as an event still counts.
-const heldRecheckAfter = time.Hour
-
-func (w *convWork) retryStale() bool {
-	return time.Since(time.Unix(w.retried.Load(), 0)) >= heldRecheckAfter
-}
-
 // convSync does the conversation upkeep that is due. It makes no request
 // when nothing is due, so the regular ping costs nothing extra.
 func (a *Agent) convSync(ctx context.Context) {

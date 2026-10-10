@@ -57,16 +57,6 @@ const deletionNote = (thisOnly, devices, kept) => (thisOnly ? "Deleted. This thr
   + (kept > 0 ? " " + kept + " item(s) still in progress keep running and are removed when they finish." : "");
 // heldPage bounds the held messages read in one step (the Go client's proofPage).
 const heldPage = 50;
-// heldRecheckAfter: a member list looks at held messages again at the
-// latest this long after the last full look (the Go client's), ms.
-const heldRecheckAfter = 60 * 60 * 1000;
-// memberFacts is what a member list says that can decide held messages
-// (client sameMemberFacts): each device's address, enrollment, person
-// roster step and agent hint, and whether the list is complete. Presence,
-// a reported version or a suspension is availability only.
-const memberFacts = (m) => JSON.stringify([!!m?.truncated, (Array.isArray(m?.members) ? m.members : [])
-  .map((x) => [String(x?.address ?? ""), x?.joined ?? 0, x?.person?.id ?? "", x?.person?.seq ?? 0, x?.person?.hash ?? "", !!x?.agent])
-  .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))]);
 // historyPage bounds the messages one step of copying your chats to a new
 // device queues (the Go client's historyPage).
 const historyPage = 50;
@@ -6931,11 +6921,10 @@ export class Engine {
     } else if (event === "members") {
       let m;
       try { m = JSON.parse(data); } catch (e) { this.members = { ...this.members, current: false }; await this.refreshTyping(false); this.changed(); return; }
-      // Presence, a reported version or a suspension alone is no proof for
-      // held messages (client onMembers): only changed authority facts, a
-      // new connection's first list or an hour since the last full look do.
-      const facts = memberFacts(m), evidence = !this.members.current || facts !== this.memberFactsSeen || this.now() - (this.heldRetriedAt || 0) >= heldRecheckAfter;
-      this.memberFactsSeen = facts;
+      // Every list looks at held messages again (client onMembers): their
+      // evidence also arrives through local admissions that announce
+      // nothing, and the Hub no longer re-sends an unchanged list.
+      const evidence = true;
       this.members = { listed: "listed", current: true, at: this.now(), list: Array.isArray(m.members) ? m.members : [], truncated: !!m.truncated };
       await this.keepMemberFacts(m);
       // A member's person reference that is ahead of the step pinned here is

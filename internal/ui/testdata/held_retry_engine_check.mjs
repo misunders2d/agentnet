@@ -58,8 +58,8 @@ const engine=(fetch=unavailable)=>new Engine({store:memoryStore(),base:'https://
  check(seen.includes(ids[119])&&seen.filter(id=>id===ids[0]).length===1,'the pass reaches the end and then looks once from the first row');
 }
 
-// FLOOD-1: presence, a reported version or a suspension alone starts no
-// retry pass; a changed authority fact does.
+// Every member list looks at held messages again (client onMembers): their
+// evidence also arrives through local admissions that announce nothing.
 {
  const me=await ident('members/phone','Owner'),e=engine();Object.assign(e,{keys:me.keys,address:me.address,pub:me.pub,fp:me.fp});
  let held=0,pending=0,flushed=0;
@@ -67,15 +67,9 @@ const engine=(fetch=unavailable)=>new Engine({store:memoryStore(),base:'https://
  const person=seq=>({id:'a'.repeat(32),seq,hash:'b'.repeat(64)});
  const push=list=>e.dispatch('members',JSON.stringify({members:list}));
  await push([{address:'vitalii/desk',presence:'connected',joined:5,person:person(2)}]);
- check(held===1&&pending===1,'the first list looks at held messages');
- e.heldRetriedAt=e.now(); // as that look records
  await push([{address:'vitalii/desk',presence:'offline',joined:5,version:'v0.8.17',suspended:true,person:person(2)}]);
- check(held===1&&pending===1&&flushed===2,'availability alone started a retry pass ('+held+') or kept waiting copies waiting');
  await push([{address:'vitalii/desk',presence:'offline',joined:5,person:person(3)}]);
- check(held===2&&pending===2,'a new person roster step looks again');
- e.heldRetriedAt=e.now()-2*60*60*1000;
- await push([{address:'vitalii/desk',presence:'connected',joined:5,person:person(3)}]);
- check(held===3,'an hour after the last full look any list looks again');
+ check(held===3&&pending===3&&flushed===3,'every list looks at held messages and releases waiting copies ('+held+','+pending+','+flushed+')');
 }
 assert.deepEqual(failed,[],failed.length+' of '+checks+' checks failed');
 console.log('held retry engine checks',checks);

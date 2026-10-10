@@ -134,7 +134,9 @@ func (h *Hub) planGraceEnd(st *updateState) {
 	if next.IsZero() {
 		return
 	}
-	h.graceEnd = time.AfterFunc(time.Until(next), func() {
+	// A little after the end: a timer may fire before the wall clock reads it
+	// (coarse clocks), which would find nobody suspended yet.
+	h.graceEnd = time.AfterFunc(time.Until(next)+50*time.Millisecond, func() {
 		h.membersChanged() // also wakes every stream: one in grace is suspended now
 		h.updateMu.Lock()
 		defer h.updateMu.Unlock()

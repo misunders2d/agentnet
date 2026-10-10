@@ -390,32 +390,6 @@ func TestDaemonSelfWakeStartsNoHeldLook(t *testing.T) {
 	eventually(t, "another process's wake", func() bool { return a.convWork.bits.Load()&convRetry != 0 })
 }
 
-// FLOOD-1: a member list that differs only in what is availability (here
-// presence, and the version and suspension a newer Hub reports) releases
-// waiting copies but neither compares persons nor looks at held messages.
-func TestMemberAvailabilityOnlyChangesNoAuthorityWork(t *testing.T) {
-	w := newWorld(t, "")
-	a := w.bob
-	push := func(list string) uint32 {
-		t.Helper()
-		a.convWork.take()
-		a.onMembers([]byte(list))
-		return a.convWork.take()
-	}
-	person := `"person":{"id":"` + strings.Repeat("a", 32) + `","seq":2,"hash":"` + strings.Repeat("b", 64) + `"}`
-	if push(`{"members":[{"address":"vitalii/desk","presence":"connected","joined":5,`+person+`}]}`)&(convPersons|convRetry) != convPersons|convRetry {
-		t.Fatal("first list did no authority work")
-	}
-	a.convWork.retried.Store(time.Now().Unix())
-	work := push(`{"members":[{"address":"vitalii/desk","presence":"offline","joined":5,"version":"v0.8.17","suspended":true,` + person + `}]}`)
-	if work&(convPersons|convRetry) != 0 || work&convRelease == 0 {
-		t.Fatalf("availability-only change: %b", work)
-	}
-	if push(`{"members":[{"address":"vitalii/desk","presence":"offline","joined":5,"agent":true,`+person+`}]}`)&(convPersons|convRetry) != convPersons|convRetry {
-		t.Fatal("a new agent hint did no authority work")
-	}
-}
-
 // FLOOD-6: a conversation history copy never goes back to the own device
 // it came from: that device holds the message (it forwarded it here).
 func TestHistoryCatchupSkipsRowsFromTheTargetDevice(t *testing.T) {
