@@ -115,6 +115,35 @@ const settle = () => new Promise((r) => setTimeout(r, 20));
   e.stop();
 }
 
+// 1c. A page before v0.8.17 took the server's 426 update_required on a send
+// as final: the copy failed with "update_required" as its detail. This
+// build's startup queues exactly those again (the same sealed envelope;
+// the server refused them before custody), unless the person cancelled one
+// or its file is no longer kept here; anything failed otherwise stays.
+{
+  const store = memoryStore(), keys = await wire.newKeys(), address = "self/phone";
+  const fingerprint = await wire.fingerprint(await wire.publicEntry(keys, address));
+  const row = (n, more) => ({ id: String(n).repeat(32), to: "admin/alice", kind: "message", state: "failed", detail: "update_required", at: 1, envelope: JSON.stringify({ v: 1, id: String(n).repeat(32), kind: "message" }), ...more });
+  const file = (more) => [{ attachment: { name: "f", blob: { id: blob, size: 1, sha256: "c".repeat(64) } }, uploaded: false, ...more }];
+  const rows = {
+    refused: row(1),
+    withFile: row(2, { files: file({ ct: new Uint8Array([1]) }) }),
+    uploaded: row(3, { files: file({ uploaded: true, ct: null }) }),
+    other: row(4, { detail: "that device was removed from the server" }),
+    cancelled: row(5, { delivery_cancelled: true }),
+    fileGone: row(6, { files: file({ ct: null }) }),
+  };
+  await store.write([{ s: "kv", k: "identity", v: { keys, address, fingerprint } }, ...Object.values(rows).map((r) => ({ s: "outbox", k: r.id, v: r }))]);
+  const e = new Engine({ store, base: "https://relay.example", fetch: async () => { throw new Error("no network at startup"); } });
+  assert.equal(await e.load(), true);
+  const state = async (r) => { const x = await store.get("outbox", r.id); return [x.state, x.detail, x.envelope]; };
+  for (const k of ["refused", "withFile", "uploaded"]) assert.deepEqual(await state(rows[k]), ["queued", "", rows[k].envelope], k);
+  for (const k of ["other", "cancelled", "fileGone"]) assert.deepEqual(await state(rows[k]), ["failed", rows[k].detail, rows[k].envelope], k);
+  await e.load(); // idempotent
+  assert.deepEqual(await state(rows.other), ["failed", rows.other.detail, rows.other.envelope]);
+  e.stop();
+}
+
 // 2. The stream's update_required event refuses without any request but
 // the version probe, which finds the server serving a newer build: the
 // overview names it, so the skin reloads the page (as for any new version).

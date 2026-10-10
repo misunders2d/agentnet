@@ -332,6 +332,87 @@ func (a *Agent) updateServed(event string) {
 	a.kickNow()
 }
 
+// oldUpdateRefusals are the errors programs before v0.8.17 recorded on a
+// send the Hub refused with 426 update_required, which they took as final
+// (the row failed): the refusal itself, and the same met by a file's
+// upload. This program records neither: to it a refusal waits.
+var oldUpdateRefusals = []string{"hub: update_required (426)", "attachment upload: hub: update_required (426)"}
+
+// requeueOldUpdateRefusals puts back in the queue what an earlier program
+// failed only because the Hub required a newer AgentNet: rows failed with
+// exactly those errors, none other, none the person stopped, and only
+// while every file of it is still spooled here (else it stays failed:
+// nothing incomplete goes). The Hub refused them before custody, so this
+// sends the same sealed envelope again and runs nothing again; each file
+// is offered to the Hub again, resumably (an upload it took then may have
+// been reclaimed since). A startup pass: idempotent.
+func (a *Agent) requeueOldUpdateRefusals() (int, error) {
+	rows, err := a.store.db.Query(`SELECT id, envelope FROM outbox WHERE state = ? AND send_stopped = 0 AND error IN (?, ?)`, stateFailed, oldUpdateRefusals[0], oldUpdateRefusals[1])
+	if err != nil {
+		return 0, err
+	}
+	type refused struct {
+		id    string
+		blobs []envelope.Blob
+	}
+	var found []refused
+	for rows.Next() {
+		var id, raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		var env envelope.Envelope
+		if err := json.Unmarshal([]byte(raw), &env); err != nil {
+			continue // unreadable: left as it is
+		}
+		found = append(found, refused{id, env.Blobs})
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, r := range found {
+		kept := true
+		for _, b := range r.blobs {
+			var owned int
+			if err := a.store.db.QueryRow(`SELECT count(*) FROM uploads WHERE blob_id = ? AND message_id = ?`, b.ID, r.id).Scan(&owned); err != nil {
+				return n, err
+			}
+			if _, err := os.Stat(a.spoolPath(b.ID)); owned == 0 || err != nil {
+				kept = false
+				break
+			}
+		}
+		if !kept {
+			continue
+		}
+		tx, err := a.store.db.Begin()
+		if err != nil {
+			return n, err
+		}
+		res, err := tx.Exec(`UPDATE outbox SET state = ?, error = NULL WHERE id = ? AND state = ? AND send_stopped = 0 AND error IN (?, ?)`, stateQueued, r.id, stateFailed, oldUpdateRefusals[0], oldUpdateRefusals[1])
+		if err == nil {
+			_, err = tx.Exec(`UPDATE uploads SET state = ? WHERE message_id = ?`, protocol.BlobUploading, r.id)
+		}
+		if err != nil {
+			tx.Rollback()
+			return n, err
+		}
+		if err := a.store.done(tx.Commit()); err != nil {
+			return n, err
+		}
+		if c, _ := res.RowsAffected(); c > 0 {
+			n++
+		}
+	}
+	if n > 0 {
+		a.changes.bump()
+	}
+	return n, nil
+}
+
 // UpdateRequired returns the Hub's standing refusal of this build, if any:
 // as the Hub last answered this process, else as recorded.
 func (a *Agent) UpdateRequired() (UpdateRequired, bool) {

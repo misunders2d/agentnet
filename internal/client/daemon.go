@@ -61,6 +61,11 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 	if err := a.CleanOpened(); err != nil { // this process alone writes there; nothing is open yet
 		a.Logf("plaintext left by an earlier run: %v", err)
 	}
+	if n, err := a.requeueOldUpdateRefusals(); err != nil { // updaterequired.go
+		a.Logf("sends an earlier program failed for an update: %v", err)
+	} else if n > 0 {
+		a.Logf("%d sends an earlier program failed only because the Hub required a newer AgentNet are queued again", n)
+	}
 	a.exe, a.canSwitch, a.prepare = opts.Executable, opts.CanSwitch, opts.PrepareSwitch
 	a.update.Lock()
 	a.update.pending, a.update.switching, a.update.ready = nil, nil, false

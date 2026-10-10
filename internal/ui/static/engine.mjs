@@ -851,12 +851,24 @@ export class Engine {
     if(id&&!this.revoked)await this.repairCarrierReceiptsPage();
     this.heldHistoryRecovery = !!id && this.me?.state === "self" && !(await this.store.get("kv", "held-group-history-recovery-v1"));
     this.heldLifecycleHistoryRecovery = !!id && this.me?.state === "self" && !(await this.store.get("kv", "held-dm-lifecycle-recovery-v1"));
+    const outbox = id ? await this.store.all("outbox") : [];
     // Older DM control copies cached their recipient as the author.
     // These locally signed rows belong to this person; retain their wire bytes.
     if (id && this.me) {
-      const rows = (await this.store.all("outbox")).filter(r => r.control && r.conv && r.to && r.fp === this.fp && r.person !== this.me.person);
+      const rows = outbox.filter(r => r.control && r.conv && r.to && r.fp === this.fp && r.person !== this.me.person);
       if (rows.length) try {
         await this.store.write(rows.map(r => ({s:"outbox",k:r.id,v:{...r,person:this.me.person}})), rows.map(r => ({s:"outbox",k:r.id,v:r})));
+      } catch (e) { if (e instanceof StoreConflict) return this.load(); throw e; }
+    }
+    // Pages before v0.8.17 took the server's 426 update_required on a send
+    // as final: the copy failed with the server's code as its detail. The
+    // server refused it before custody, so this build sends the same sealed
+    // envelope again (nothing runs again); a person's cancellation stays,
+    // and so does a copy whose files are no longer kept here.
+    if (id) {
+      const refused = outbox.filter(r => r.state === "failed" && r.detail === "update_required" && !r.delivery_cancelled && !r.receiver_redacted && (r.files || []).every(f => f.uploaded || f.ct));
+      if (refused.length) try {
+        await this.store.write(refused.map(r => ({s:"outbox",k:r.id,v:{...r,state:"queued",detail:""}})), refused.map(r => ({s:"outbox",k:r.id,v:r})));
       } catch (e) { if (e instanceof StoreConflict) return this.load(); throw e; }
     }
     this.link = (await this.store.get("kv", "link")) || null; // this device's own request to join a person, if it joined with a link
