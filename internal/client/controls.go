@@ -1565,10 +1565,14 @@ func (a *Agent) controlAuthorized(m dmMembers, in envelope.Inner, author string)
 	case owner == "":
 		return reasonProof, "the target's sender key is no member's (yet)"
 	case owner != author:
-		return reasonInvalid, "only the person who sent a message edits or deletes it"
+		return reasonInvalid, controlOtherPerson // final: the key's person is known and is another
 	}
 	return "", ""
 }
+
+// controlOtherPerson is why an edit or deletion of another person's message
+// is refused (held diagnostic control_target_person_mismatch).
+const controlOtherPerson = "only the person who sent a message edits or deletes it"
 
 // applyRetraction does what an authorized, stored retraction does here.
 func (a *Agent) applyRetraction(in envelope.Inner) {
@@ -1584,24 +1588,22 @@ func (a *Agent) applyRetraction(in envelope.Inner) {
 }
 
 // personOfKeyIn is the member person a device key belongs to, current or
-// past, or "".
+// past, or "". A device removed from the roster (t5-held: an old phone,
+// whose address no current device has) stays its person's in every
+// verified step of that person's pinned chain: a key joins a chain only
+// with its own consent and keeps its address there. Unknown keys belong
+// to no one (yet).
 func (a *Agent) personOfKeyIn(m dmMembers, fp string) string {
 	for id, p := range m.persons {
-		for _, d := range p.roster.Devices {
-			if d.Fingerprint() == fp {
-				return id
-			}
+		if _, ok := p.roster.Device(fp); ok {
+			return id
 		}
 	}
-	for id, p := range m.persons {
-		for _, d := range p.roster.Devices {
-			if _, ok := a.store.deviceKey(id, d.Address, fp); ok {
-				return id
-			}
+	for id := range m.persons {
+		if a.store.chainKey(id, fp) {
+			return id
 		}
 	}
-	// A device removed from the roster: search each chain by its known
-	// addresses is above; unknown keys belong to no one.
 	return ""
 }
 

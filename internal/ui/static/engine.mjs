@@ -324,6 +324,9 @@ export const heldDiagnosticCode = why => {
   "group withdrawal conflicts with promoted admin": "group_authority_conflict",
   "Group logical lifecycle conflict.": "group_conflicting_copy",
   "Human history remains with original members' own linked devices.": "history_reader_not_member",
+  "only the sender's person edits or deletes a message": "control_target_person_mismatch",
+  "Only the current sender person edits or retracts a group message.": "control_target_person_mismatch",
+  "Historical group control differs from exact author person.": "control_target_person_mismatch",
 }; return Object.hasOwn(codes,why) ? codes[why] : ""; };
 const heldFailureCode = (reason,why) => heldDiagnosticCode(why) || (why && reason === "proof_pending" ? "context_unavailable" : why && reason === "invalid" ? "admission_failed" : "");
 export const heldNoticeText = (code, reason) => {
@@ -344,6 +347,7 @@ export const heldNoticeText = (code, reason) => {
     group_conflicting_copy: ["This copy conflicts with an existing logical group record.", "Ask the sender to check the original record and its status. Do not automatically resend requests."],
     history_reader_not_member: ["This history copy is not addressed to an original member's current linked device.", "Check the verified membership and device roster. A history copy cannot grant membership."],
     captured_consent_mismatch: ["The captured audience does not match the consent proof stored here.", "Check the participation's invitation and acceptance. This notice cannot grant consent."],
+    control_target_person_mismatch: ["This edit or deletion is for a message another person sent.", "Only the person who sent a message edits or deletes it. It stays blocked and changed nothing; archiving only hides this notice."],
   };
   const [detail,recovery] = (Object.hasOwn(words,code) ? words[code] : null) || (reason === "invalid" ? ["The original detailed reason was not recorded or is unavailable.", "The retained message stays blocked. You can archive this notice locally; this does not accept, resend, or run it."] : reason === "proof_pending" ? ["", "You can archive this notice. Checks continue when connected; the message appears when verified."] : ["", ""]);
   return {detail,recovery};
@@ -4600,8 +4604,8 @@ export class Engine {
       const sender=[...members.values()].find(p=>p.devices.some(d=>d.address===h.from&&d.fingerprint===h.from_key));
       if(!sender)throw new Hold("invalid","Historical group control author is not current.");
       await this.groupControlFence(members,h.from_key,this.fp);await this.groupControlTarget(conv,h.ref,checks);
-      const targetAuthor=[...members.values()].find(p=>p.devices.some(d=>d.fingerprint===h.ref.fingerprint));
-      if(h.sub!==wire.SubReaction&&targetAuthor?.person!==sender.person)throw new Hold("invalid","Historical group control differs from exact author person.");
+      const targetAuthor=[...members.values()].find(p=>(p.known||p.devices).some(d=>d.fingerprint===h.ref.fingerprint)); // a device removed since stays its person's (client personOfKeyIn)
+      if(h.sub!==wire.SubReaction&&targetAuthor?.person!==sender.person)throw new Hold("invalid",targetAuthor?"Historical group control differs from exact author person.":"Historical group control target key is no member's.");
       return null;
     }
     if(!wire.validID(h.pid)||h.ref||!["","event","excerpt"].includes(h.sub))throw new Hold("invalid","Historical group participation scope malformed.");
@@ -6753,8 +6757,8 @@ export class Engine {
       if(![wire.SubReaction,wire.SubRevision,wire.SubRetraction].includes(n.sub)||!sender)throw new Hold("invalid","Group ordinary controls require a current member.");
       if(!!n.replica!==!!own)throw new Hold("invalid","Group control replica differs from own sender.");
       await this.groupControlFence(members,pin.fingerprint,this.fp);
-      const targets=await this.groupControlTarget(n.conv,n.ref,checks),author=[...members.values()].find(p=>p.devices.some(d=>d.fingerprint===n.ref.fingerprint));
-      if(n.sub!==wire.SubReaction&&author?.person!==sender.person)throw new Hold("invalid","Only the current sender person edits or retracts a group message.");
+      const targets=await this.groupControlTarget(n.conv,n.ref,checks),author=[...members.values()].find(p=>(p.known||p.devices).some(d=>d.fingerprint===n.ref.fingerprint)); // a device removed since stays its person's (client personOfKeyIn)
+      if(n.sub!==wire.SubReaction&&author?.person!==sender.person)throw new Hold("invalid",author?"Only the current sender person edits or retracts a group message.":"Group control target key is no member's.");
       if(n.sub===wire.SubRevision&&await this.refTombstoned(n.conv,n.ref))rec.body="";
       rec.targetRow=targets[0];
     }
@@ -6983,7 +6987,10 @@ export class Engine {
     const own = this.me.devices.some((d) => d.address === env.from && d.fingerprint === pin.fingerprint);
     const sp = own ? this.me : await this.personOf(env.from, pin, admission);
     if (!wire.rootMember(root, sp.person)) throw new Hold("invalid", "the sender is not a member of this conversation");
-    if (n.sub !== wire.SubReaction && sp.person !== (await this.personOfFp(ref.fingerprint))) throw new Hold("invalid", "only the sender's person edits or deletes a message");
+    if (n.sub !== wire.SubReaction) {
+      const owner = await this.personOfFp(ref.fingerprint); // current or past (known) devices, as client personOfKeyIn
+      if (sp.person !== owner) throw new Hold("invalid", owner ? "only the sender's person edits or deletes a message" : "the target's sender key is no known person's");
+    }
     const key = pin.fingerprint + "/" + n.lid;
     if (await this.store.get("lids", key)) return []; // a copy already here
     Object.assign(rec, { conv: n.conv, lid: n.lid, replica: !!n.replica, own, person: sp.person, fan: n.fan || null });
@@ -9202,6 +9209,11 @@ export class Engine {
     const author = (a) => { const p = m.get(a.person); return p && p.hashes.includes(a.roster) && (m.group ? m.epochs.get(a.fingerprint)===a.group_admission : !a.group_admission) ? at(p, a.address, a.fingerprint) : null; };
     const host = (h) => (h ? at(m.get(h.person) || m.hosts?.get(h.person), h.address, h.fingerprint) : null);
     const memberKey = (fp) => [...m.values()].some((p) => p.devices.some((d) => d.fingerprint === fp)) || !!m.historyTaskEpochs?.has(fp);
+    // A DM invite's task key that is no member's now but a device of the
+    // very roster step its author signed it under: an own device removed
+    // since (participation.go loadDepartedTaskKeys). The invite still
+    // counts; that key asks nothing. Any other unknown key holds it.
+    const departed = (x, fp) => !m.group && !memberKey(fp) && !!m.get(x.e.author.person)?.steps?.find((s) => s.hash === x.e.author.roster)?.devices.some((d) => d.endsWith("|" + fp));
     const priorAuthor=x=>m.roomEvents?.has(x.hash)?at(m.roomAuthors?.get(x.e.author.person),x.e.author.address,x.e.author.fingerprint):null;
     const invites = new Map(), decisions = [], dismisses = [], scopes = [], shares = [];
     for (const x of evs.filter((y) => y.e.pid === pid)) {
@@ -9210,7 +9222,7 @@ export class Engine {
       const humanLeaveAuthor = x.e.type === "dismiss" && !x.e.author.group_admission && p?.hashes.includes(x.e.author.roster) && at(p, x.e.author.address, x.e.author.fingerprint) && evs.some(y => y.e.pid === pid && ["invite", "scope"].includes(y.e.type) && (y.e.role === "human" || y.e.audience === "room" && y.e.group?.host_role === "visitor") && author(y.e.author) && host(y.e.host) && y.e.host.person === x.e.author.person && y.e.host.address === x.e.author.address && y.e.host.fingerprint === x.e.author.fingerprint);
       if (!author(x.e.author) && !priorAuthor(x) && !decisionAuthor && !humanLeaveAuthor) { info.held++; continue; }
       if (x.e.type === "invite") {
-        if (!host(x.e.host) || !(x.e.task_keys || []).every(memberKey) && !m.roomEvents?.has(x.hash) || (m.group ? !m.groupInvites.has(x.hash) : !!x.e.group)) { info.held++; continue; }
+        if (!host(x.e.host) || !(x.e.task_keys || []).every((fp) => memberKey(fp) || departed(x, fp)) && !m.roomEvents?.has(x.hash) || (m.group ? !m.groupInvites.has(x.hash) : !!x.e.group)) { info.held++; continue; }
         invites.set(x.hash, x);
       } else if (x.e.type === "scope") { if (!m.group || m.groupInvites.has(x.hash)) scopes.push(x); } // an invite's public projection, by its own author; in a group, a room scope whose binding verifies
       else if (x.e.type === "share") shares.push(x);
@@ -9235,7 +9247,7 @@ export class Engine {
     if (invites.size === 1) {
       [[info.invite, inv]] = [...invites];
       if (!info.scope) for (const s of scopes) if (wire.projectsHash(s.e, inv.e, info.invite) && (!info.scope || s.hash < info.scope)) info.scope = s.hash;
-      Object.assign(info, { role: inv.e.role || "", ...(inv.e.topic!=null?{topic:inv.e.topic}:{}), host: host(inv.e.host), inviter: author(inv.e.author)||priorAuthor(inv), grant: [...(inv.e.grant || [])], taskKeys: m.group && m.roomEvents?.has(inv.hash) ? (inv.e.task_keys||[]).filter((fp,i)=>m.epochs.get(fp)===inv.e.group.task_admissions?.[i]) : inv.e.task_keys || [], audience: inv.e.audience || "", until: inv.e.until || 0,
+      Object.assign(info, { role: inv.e.role || "", ...(inv.e.topic!=null?{topic:inv.e.topic}:{}), host: host(inv.e.host), inviter: author(inv.e.author)||priorAuthor(inv), grant: [...(inv.e.grant || [])], taskKeys: m.group && m.roomEvents?.has(inv.hash) ? (inv.e.task_keys||[]).filter((fp,i)=>m.epochs.get(fp)===inv.e.group.task_admissions?.[i]) : (inv.e.task_keys || []).filter((fp) => !departed(inv, fp)), audience: inv.e.audience || "", until: inv.e.until || 0,
         external: m.group ? inv.e.group.host_role === "visitor" : !m.has(inv.e.host.person),
         ...(m.group ? {group:inv.e.group} : {}),
         ...(inv.e.host.agent_id ? { agent_id: inv.e.host.agent_id } : {}), note: inv.e.note, invited: inv.e.ts, state: "invited" });

@@ -3,7 +3,7 @@
 // equal a sent one), retraction keeping bytes another live message still
 // shows, resolution order, and an older peer refused by name. Run with
 // node; nothing is joined or sent.
-import { Engine, memoryStore } from "../static/engine.mjs";
+import { Engine, memoryStore, heldDiagnosticCode } from "../static/engine.mjs";
 import * as wire from "../static/wire.mjs";
 
 let failed = 0;
@@ -670,6 +670,42 @@ async function makeWorld() {
     const v = e.controlsOn(rows, "P", (x) => x.person || "", () => "", () => false);
     check(v.edited && v.text === "from the phone" && !(v.reactions || []).length, "equal counters resolve on the logical id, whatever the copy ids " + ids.map((x) => x[0]).join("") + ": " + JSON.stringify(v));
   }
+}
+
+// A device removed from its person's roster (client
+// TestControlOfRemovedDeviceMessage; t5-held): its person still edits and
+// deletes what it sent, from a current device; another person's edit of
+// it is refused with the specific code; a key no one is known to have had
+// is refused without claiming another person sent it.
+{
+  const { keysA, keysB, pubA, pubB, fpP, fpB, A, convId, pinB } = await makeWorld();
+  const oldKeys = await wire.newKeys(), oldPub = await wire.publicEntry(oldKeys, "bob/old-phone"), fpOld = await wire.fingerprint(oldPub);
+  const rB0 = await wire.parseRoster(A.bob.json);
+  const rB1 = await wire.nextRoster(keysB, "bob/desk", rB0, [pubB, oldPub], await wire.joinConsent(oldKeys, "bob/old-phone", rB0.person, 1, await wire.rosterHash(rB0)), rB0.label, [fpB, fpOld]);
+  const rB2 = await wire.nextRoster(keysB, "bob/desk", rB1, [pubB], null);
+  await wire.verifyNext(rB1, rB0); await wire.verifyNext(rB2, rB1);
+  const bob = { ...(await A.e.personRecord([rB0, rB1, rB2], "pinned", A.bob)), state: "pinned" };
+  // Alice removes her phone too: its key stays hers.
+  const rA1 = await wire.parseRoster(A.e.me.json), rA2 = await wire.nextRoster(keysA, "alice/laptop", rA1, [pubA], null);
+  await wire.verifyNext(rA2, rA1);
+  A.e.me = { ...(await A.e.personRecord([rA2], "self", A.e.me)), state: "self" };
+  await A.store.write([{ s: "persons", k: bob.person, v: bob }, { s: "kv", k: "person", v: A.e.me }]);
+  check(!bob.devices.some((d) => d.fingerprint === fpOld) && bob.known.some((d) => d.fingerprint === fpOld) && !A.e.me.devices.some((d) => d.fingerprint === fpP), "fixture: both removed devices stay known to their persons");
+  const T = "6".repeat(32), L = "5".repeat(32);
+  await A.store.write([{ s: "inbox", k: T, v: { id: T, v: 2, conv: convId, lid: L, from: "bob/old-phone", fp: fpOld, kind: "message", body: "typed on the old phone", at: 1, read: true } }]);
+  let seq = 0;
+  const control = (sub, body, fp, ref = L) => ({ v: 3, conv: convId, lid: "f" + (++seq).toString().padStart(31, "0"), replica: false, kind: "message", sub, body, ref: { id: ref, fingerprint: fp } });
+  const env = () => ({ id: "d" + seq.toString().padStart(31, "0"), from: "bob/desk", to: "alice/laptop", ts: 1700000000, attn: false, chan: "" });
+  const tryAdmit = async (n) => { try { return await A.e.admitControl(n, env(), pinB); } catch (err) { return err; } };
+  const edit = await tryAdmit(control(wire.SubRevision, JSON.stringify({ rev: 1, text: "fixed on the desk" }), fpOld));
+  check(Array.isArray(edit) && edit.some((o) => o.s === "inbox" && o.v.sub === wire.SubRevision), "an edit of the removed own device's message is admitted: " + (edit.reason || "") + " " + (edit.message || ""));
+  await A.store.write(edit);
+  const shown = (await A.e.dm(convId)).messages.find((m) => m.id === T);
+  check(shown?.edited && shown.text === "fixed on the desk", "the edit shows on the removed device's message: " + JSON.stringify(shown && { edited: shown.edited, text: shown.text }));
+  const other = await tryAdmit(control(wire.SubRevision, JSON.stringify({ rev: 1, text: "hijack" }), fpP, "4".repeat(32)));
+  check(other.reason === "invalid" && heldDiagnosticCode(other.message) === "control_target_person_mismatch", "an edit of another person's removed device's message is refused with its code: " + other.reason + " " + other.message);
+  const unknown = await tryAdmit(control(wire.SubRetraction, "{}", "00000000-11111111-22222222-33333333", "3".repeat(32)));
+  check(unknown.reason === "invalid" && heldDiagnosticCode(unknown.message) !== "control_target_person_mismatch", "an unknown key is not called another person's: " + unknown.reason + " " + unknown.message);
 }
 
 if (failed) process.exit(1);

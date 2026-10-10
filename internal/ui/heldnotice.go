@@ -34,6 +34,8 @@ func heldNoticeText(code, reason string) (string, string) {
 		return "This history copy is not addressed to an original member's current linked device.", "Check the verified membership and device roster. A history copy cannot grant membership."
 	case "captured_consent_mismatch":
 		return "The captured audience does not match the consent proof stored here.", "Check the participation's invitation and acceptance. This notice cannot grant consent."
+	case "control_target_person_mismatch":
+		return "This edit or deletion is for a message another person sent.", "Only the person who sent a message edits or deletes it. It stays blocked and changed nothing; archiving only hides this notice."
 	default:
 		if reason == "proof_pending" {
 			return "", "You can archive this notice. Checks continue when connected; the message appears when verified."

@@ -141,7 +141,7 @@ func (m *dmMembers) loadHosts(q dbq, events []protocol.ParticipationEvent) error
 		}
 		m.chains[h.Person] = chain
 	}
-	return nil
+	return m.loadDepartedTaskKeys(q, events)
 }
 
 func externalDM(root protocol.ConvRoot) bool {
