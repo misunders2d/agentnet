@@ -24,6 +24,28 @@
   const page = document.getElementById("skin");
   const browser = window.agentnetEngine;
 
+  // ---- what the page waits for, and how long
+  //
+  // A stalled connection or proxy can hold one request without failing it.
+  // The page never waits on such a request forever for something it can
+  // open without: the list of skins (CATALOG_WAIT, from its request; Comic
+  // then opens from its own fixed path) and a skin's fonts (DOCUMENT_WAIT;
+  // the skin then shows in fallback fonts). Neither request is cancelled:
+  // what arrives late is still used.
+  const CATALOG_WAIT = 1500, DOCUMENT_WAIT = 1500, LATE = Symbol("late");
+  const within = (promise, ms) => {
+    let timer;
+    return Promise.race([promise, new Promise((resolve) => { timer = setTimeout(resolve, ms, LATE); })]).finally(() => clearTimeout(timer));
+  };
+  const fetchJSON = (path, what) => fetch(path).then(async (r) => {
+    if (!r.ok) throw new Error("Could not load " + what);
+    return r.json();
+  });
+  // The catalog is asked for at once, alongside the host's own modules.
+  const catalogAsked = Date.now();
+  const catalog = fetchJSON("/assets/skins/index.json", "the list of skins").then((list) => list.filter((s) => s && s.api === 1));
+  catalog.catch(() => { /* seen where it is used */ });
+
   // ---- the page is what a phone's keyboard leaves visible
   //
   // Android shrinks the layout viewport with the keyboard (index.html:
@@ -282,11 +304,21 @@
     document.adoptedStyleSheets = [...document.adoptedStyleSheets, kept];
   };
 
-  let selected = null, surface = page, homeName = "Comic";
+  let selected = null, surface = page, homeName = "Comic", fallback = false;
   try {
-    const r = await fetch("/assets/skins/index.json");
-    if (!r.ok) throw new Error("Could not load the list of skins");
-    offered = (await r.json()).filter((s) => s && s.api === 1);
+    const listed = await within(catalog, Math.max(0, catalogAsked + CATALOG_WAIT - Date.now())).catch(() => LATE);
+    if (listed !== LATE) offered = listed;
+    else {
+      // No list of skins (in time): Comic, the built-in default, from its
+      // fixed path, trusted by the host's list as always. The person's saved
+      // choice is kept for the next load; the list fills in when it comes.
+      fallback = true;
+      const own = await within(fetchJSON("/assets/skins/" + HOME + "/skin.json", "the list of skins"), CATALOG_WAIT);
+      if (own === LATE) throw new Error("Could not load the list of skins");
+      if (!own || own.api !== 1 || own.id !== HOME) throw new Error("This program has no Comic skin");
+      offered = [own];
+      catalog.then((list) => { offered = list; return refreshSkins(); }).catch(() => { /* Comic only, until the next load */ });
+    }
     await refreshSkins();
     // A choice saved before Comic was a package ("default", "classic")
     // opens Comic and is rewritten once; ?skin=default names Comic too.
@@ -330,7 +362,14 @@
     });
     if (selected.local) await localSkins.activate();
     const base = selected.local ? "/local-skins/" + selected.digest + "/" : "/assets/skins/" + selected.id + "/";
-    if (selected.document) await adoptDocument(base + selected.document, base);
+    if (selected.document) {
+      // A failure seen before the skin mounts stops it, as always; the rules
+      // arriving after DOCUMENT_WAIT are adopted then, and a late failure
+      // leaves the fallback fonts.
+      const rules = adoptDocument(base + selected.document, base);
+      rules.catch(() => { /* seen by within, or the fallback fonts stay */ });
+      await within(rules, DOCUMENT_WAIT);
+    }
     page.replaceChildren();
     surface = page.attachShadow({ mode: "open" });
     // The host's base sheet (core.css, lowest layer), then the package's own.
@@ -424,7 +463,7 @@
     };
     window.addEventListener("hashchange", route);
     route();
-    try { localStorage.setItem("agentnet.skin", selected.id); localStorage.setItem("agentnet.skin.package", selected.id); } catch (_) {}
+    if (!fallback) try { localStorage.setItem("agentnet.skin", selected.id); localStorage.setItem("agentnet.skin.package", selected.id); } catch (_) {}
   } catch (e) {
     const box = text("div", "");
     box.className = "skin-root";

@@ -19,6 +19,10 @@ func TestBrowserNotificationViewUsesCachedSupport(t *testing.T) {
 	t.Logf("%s", out)
 }
 
+// A browser device shows its saved chats within bounds with the relay held or
+// refused; with the skin catalog or Comic's document rules (fonts) held, both
+// adopted when they arrive later; and with an arrival told while Comic's
+// first overview still loads, which Comic then shows.
 func TestDeviceCachedStartupRendered(t *testing.T) {
 	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
 		t.Skip("opt-in: set AGENTNET_PLAYWRIGHT to an installed playwright-core")
@@ -27,9 +31,13 @@ func TestDeviceCachedStartupRendered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := exec.Command(node, "testdata/device_startup_rendered.cjs").CombinedOutput()
-	if err != nil || !strings.Contains(string(out), "cached device Comic real IndexedDB startup PASS") {
-		t.Fatalf("%v\n%s", err, out)
+	for _, mode := range []string{"held", "offline", "catalog-held", "document-held", "change-during-overview"} {
+		t.Run(mode, func(t *testing.T) {
+			out, err := exec.Command(node, "testdata/device_startup_rendered.cjs", mode).CombinedOutput()
+			if err != nil || !strings.Contains(string(out), "cached device Comic real IndexedDB startup PASS ["+mode+"]") {
+				t.Fatalf("%v\n%s", err, out)
+			}
+			t.Logf("%s", out)
+		})
 	}
-	t.Logf("%s", out)
 }
