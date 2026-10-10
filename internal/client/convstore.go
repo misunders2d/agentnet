@@ -461,11 +461,8 @@ func (s *store) holdAs(env envelope.Envelope, reason string) error {
 }
 
 func (s *store) holdAsDiagnostic(env envelope.Envelope, reason, why string) error {
-	raw, _ := json.Marshal(env)
-	_, err := s.db.Exec(`INSERT INTO quarantine(id, sender, reason, envelope, received_at, detail_code) VALUES(?, ?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET reason = excluded.reason, detail_code = excluded.detail_code,
-		notice_archived = CASE WHEN excluded.reason IN ('invalid','proof_pending') AND quarantine.reason=excluded.reason AND quarantine.detail_code=excluded.detail_code THEN quarantine.notice_archived ELSE 0 END`, env.ID, env.From, reason, string(raw), time.Now().Unix(), heldFailureCode(reason, why))
-	return s.done(err)
+	_, _, err := s.holdCopy(env, "", reason, why)
+	return err
 }
 
 // heldPos is a position in the quarantine's (received_at, id) order.
@@ -477,9 +474,10 @@ type heldPos struct {
 // heldAfter returns up to limit envelopes held for reason after pos, in
 // (received_at, id) order, and the position of the last one returned. The
 // order is stable: re-holding a message changes its reason, not its place.
+// A copy of a record still held is checked with that row (heldcopy.go).
 func (s *store) heldAfter(reason string, pos heldPos, limit int) ([]envelope.Envelope, heldPos, error) {
-	rows, err := s.db.Query(`SELECT envelope, received_at, id FROM quarantine
-		WHERE reason = ? AND (received_at > ? OR (received_at = ? AND id > ?)) ORDER BY received_at, id LIMIT ?`,
+	rows, err := s.db.Query(`SELECT envelope, received_at, id FROM quarantine q
+		WHERE reason = ? AND (received_at > ? OR (received_at = ? AND id > ?)) AND `+heldOwnRow+` ORDER BY received_at, id LIMIT ?`,
 		reason, pos.at, pos.at, pos.id, limit)
 	if err != nil {
 		return nil, pos, err

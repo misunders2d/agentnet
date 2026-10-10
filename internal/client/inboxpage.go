@@ -204,8 +204,11 @@ func (a *Agent) InspectInboxNotices(section string, o InboxPageOptions) (InboxNo
 			query = `SELECT offer AS id,address AS sender,'' AS conv,'' AS pid,'' AS kind,requested_at AS at,public AS detail FROM device_links WHERE state=? AND expires>?`
 			args = []any{LinkPending, time.Now().Unix()}
 		case "held":
-			query = `SELECT id,sender,'' AS conv,'' AS pid,reason AS kind,received_at AS at,detail_code AS detail FROM quarantine WHERE notice_archived=0 AND reason<>?`
+			query = `SELECT id,sender,'' AS conv,'' AS pid,reason AS kind,received_at AS at,detail_code AS detail FROM quarantine q WHERE notice_archived=0 AND reason<>?`
 			args = []any{reasonProof}
+			if o.ID == "" { // a re-sent copy is one notice with its record; its exact id still finds it
+				query += ` AND ` + heldOwnRow
+			}
 		default:
 			return page, errors.New("inbox: section must be requests, invites, groups, links, held or joined")
 		}

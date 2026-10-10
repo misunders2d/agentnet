@@ -118,6 +118,9 @@ export function deviceHistory(e,Hold){
     const meta=await project(r,own,checks,ops);if(JSON.stringify(current.device_history)!==JSON.stringify(meta))ops.push({s,k:id,v:{...current,device_history:meta}});
     const ledger=prefix+"copy/"+dev.fingerprint+"/"+r.item.from_key+"/"+id,previous=await read(checks,"kv",ledger);
     if(previous){if(previous.hash!==r.hash)fail("copy ledger conflicts with original.","conflicting_copy");const copy=await read(checks,"outbox",previous.carrier);if(copy&&!["expired","not_delivered"].includes(copy.state)){done.add(k);return;}}
+    // Its exact direct recipient gets the original itself (native parity): copy
+    // only one this device's send state says it missed; in transit stays pending.
+    if(r.recipient===dev.address&&r.recipient_key===dev.fingerprint&&!(ref.here&&["expired","not_delivered","failed"].includes(current.state))){if(!ref.here||["delivered","quarantined"].includes(current.state)){done.add(k);return;}fail("original still in transit to its recipient.","proof_pending");}
     if(r.item.from!==dev.address||r.item.from_key!==dev.fingerprint){const body=JSON.stringify({v:1,person:own.person,roster:own.hash,recipient:r.recipient,...(r.recipient_key?{recipient_key:r.recipient_key}:{}),item:JSON.parse(wire.historyJSON(r.item))}),copy=await carrier(dev,wire.SubDeviceHistory,body);ops.push({s:"outbox",k:copy.id,v:copy},{s:"kv",k:ledger,v:{hash:r.hash,carrier:copy.id}});count++;}
     done.add(k);
    }finally{visiting.delete(k);}
