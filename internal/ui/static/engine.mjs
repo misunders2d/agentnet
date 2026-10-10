@@ -3327,9 +3327,9 @@ export class Engine {
   // v1Threads are the device conversations: each peer device's messages,
   // received and sent, joined by replies as the core does (peerThreads),
   // each oldest first.
-  async v1Threads() {
-    const msgs = [...(await this.store.all("inbox")).filter((m) => m.v === 1 && !m.aside && !this.erasedRow(m)).map((m) => ({ ...m, dir:m.device_history?.direction||"in", peer:m.device_history?.peer||m.from,author_fp:m.fp,stored_in:true })),
-      ...(await this.store.all("outbox")).filter((r) => r.v === 1 && !r.aside && !this.erasedRow(r)).map((r) => ({ ...r, dir:r.device_history?.direction||"out", peer:r.device_history?.peer||r.to,author_fp:this.fp }))]; // a deleted thread's messages are not shown
+  async v1Threads(view = null) {
+    const msgs = [...(view?.inbox||await this.store.all("inbox")).filter((m) => m.v === 1 && !m.aside && !this.erasedRow(m)).map((m) => ({ ...m, dir:m.device_history?.direction||"in", peer:m.device_history?.peer||m.from,author_fp:m.fp,stored_in:true })),
+      ...(view?.outbox||await this.store.all("outbox")).filter((r) => r.v === 1 && !r.aside && !this.erasedRow(r)).map((r) => ({ ...r, dir:r.device_history?.direction||"out", peer:r.device_history?.peer||r.to,author_fp:this.fp }))]; // a deleted thread's messages are not shown
     const byID = new Map(msgs.map((m) => [m.id, m]));
     const parent = new Map(msgs.map((m) => [m.id, m.id]));
     const find = (x) => { while (parent.get(x) !== x) { parent.set(x, parent.get(parent.get(x))); x = parent.get(x); } return x; };
@@ -3344,9 +3344,9 @@ export class Engine {
 
   // threadSummaries summarizes every device thread, archived topics
   // included, as topics (client peerTopics, topicText), newest first.
-  async threadSummaries() {
+  async threadSummaries(view = null) {
     const out = [], now = Math.floor(this.now() / 1000), locals = await this.topicLocals(), pins = new Map();
-    for (const g of await this.v1Threads()) {
+    for (const g of await this.v1Threads(view)) {
       const peer = g[0].peer;
       if (!pins.has(peer)) pins.set(peer, await this.store.get("pins", peer)); // one read per peer, not per topic
       out.push(this.topicSummary(g, locals, now, pins.get(peer)));
@@ -3404,8 +3404,8 @@ export class Engine {
   // counts (client TopicOverview): archived topics only counted unless
   // listArchived (GET /api/overview without topics=1: a page that knows
   // nothing of topics still reaches every thread).
-  async topicOverview(listArchived) {
-    const all = await this.threadSummaries(), threads = [], counts = new Map();
+  async topicOverview(listArchived, view = null) {
+    const all = await this.threadSummaries(view), threads = [], counts = new Map();
     for (const t of all) {
       if (listArchived || t.state !== "archived" || t.notice_only) threads.push(t);
       if (t.notice_only) continue;
@@ -3653,18 +3653,19 @@ export class Engine {
     return { id:conv, kind:"group", root:g.root, created:p.root.created, creator:p.root.creator.address };
   }
 
-  async groupThread(conv) {
+  async groupThread(conv, read = null) {
+    read ||= await this.readView();
     const g=await this.store.get("kv","group/"+conv), packet=wire.parseGroupContext(g.context);
     let frozen="",members=[],infos=[],role="";
-    try{const current=await this.groupCurrentState(conv);members=await this.groupPeople(current);infos=await this.participationsOf({id:conv,kind:"group",root:g.root});
+    try{const current=await this.groupCurrentState(conv);members=await this.groupPeople(current);infos=await this.participationsOf({id:conv,kind:"group",root:g.root},read);
       if(members.some(p=>p.person===this.me.person))role="member";
       else if(infos.some(i=>i.external&&i.host?.address===this.address&&i.host.fingerprint===this.fp&&["invited","active","dismissed"].includes(i.state)&&!i.held))role=infos.some(i=>i.role==="human"&&i.host?.address===this.address&&i.host.fingerprint===this.fp)?"human_guest":"visitor";
       else throw Error("Group current admission or visitor invitation is unavailable.");
     }catch(e){frozen=e.message;members=await this.groupPeople(packet).catch(()=>[]);}
-    const inbox=await this.store.all("inbox"),outbox=await this.store.all("outbox"),ctls=[...inbox,...outbox].filter(r=>r.control&&r.conv===conv);
+    const inbox=read.inbox,outbox=read.outbox,ctls=[...inbox,...outbox].filter(r=>r.control&&r.conv===conv);
     const privateReports = await this.ownNeedsYouReports(inbox, outbox);
     const visitorPIDs=new Set(infos.filter(i=>i.external&&i.host?.address===this.address&&i.host.fingerprint===this.fp).map(i=>i.pid));
-    const messages=(await this.convMessages(conv,inbox,outbox)).filter(m=>role==="member"||visitorPIDs.has(m.pid||m.excerpt_pid)||m.human?.audience.some(s=>visitorPIDs.has(s.pid))),shownReply=linkReplies(messages,this.fp);
+    const messages=(await this.convMessages(conv,inbox,outbox,read)).filter(m=>role==="member"||visitorPIDs.has(m.pid||m.excerpt_pid)||m.human?.audience.some(s=>visitorPIDs.has(s.pid))),shownReply=linkReplies(messages,this.fp);
     const personLabel=pid=>pid===this.me.person?"You":members.find(p=>p.person===pid)?.label||"Someone";
     const agentCards=new Map();
     for(const i of infos) {
@@ -3688,12 +3689,12 @@ export class Engine {
     }
     return {id:conv,kind:"group",title:packet.state.title,peer:{label:packet.state.title,address:"",state:""},role,members,frozen,created:iso(packet.root.created*1000),mine:packet.root.creator.address===this.address,agents:[...agentCards.values()],guests:infos.filter(i=>i.role==="human").map(i=>this.guestView(i,role==="member")),audience_pending:infos.some(i=>i.role==="human"&&i.state==="active"&&i.held),messages:await Promise.all(messages.map(async m=>{
       const here=!m.fp&&!m.history,out=here||!!m.own,event=m.sub==="event"?this.eventText(m.body,null,members):"",fp=m.fp||m.claimed_key||this.fp,ev=event?this.eventFields(m.body,members):null;
-      const targetPerson=await this.personOfFp(fp),rel=ctls.filter(x=>x.ref?.id===m.lid&&x.ref.fingerprint===fp&&x.sub!==wire.SubStatus&&x.sub!==wire.SubDecision);
+      const targetPerson=await this.personOfFp(fp,read),rel=ctls.filter(x=>x.ref?.id===m.lid&&x.ref.fingerprint===fp&&x.sub!==wire.SubStatus&&x.sub!==wire.SubDecision);
       const view=event||m.excerpt_pid?{can:[],reactions:[]}:this.controlsOn(rel,targetPerson,x=>x.person||"",personLabel,p=>p===this.me.person,undefined,pid=>infos.find(i=>i.pid===pid)?.host?.label||"");
       view.can=view.deleted||event||m.excerpt_pid||frozen||role!=="member"?[]:["react",...(targetPerson===this.me.person?["edit","delete"]:[])];
       const answered=messages.some(r=>r.pid===m.pid&&(r.reply_to===m.lid||shownReply(r.reply_to)===m.id)&&["answer","result"].includes(r.kind));
       const exec=m.target&&["question","task"].includes(m.kind)?this.execOn(ctls.filter(x=>x.sub===wire.SubStatus&&x.ref?.id===m.lid&&x.ref.fingerprint===fp&&x.from===m.target.address),m.target.address,answered):null;
-      return {id:m.id,lid:m.lid,dir:out?"out":"in",from:here?this.address:m.from,kind:m.kind,status:m.status||"",actions:await this.proposalActions(m),proposal:await this.proposalProvenance(m),body:event?"":m.body,event,...(ev&&ev.type?{event_type:ev.type,event_by:ev.by}:{}),pid:m.pid||"",...(m.human?.author_pid?{agent_author_pid:m.human.author_pid}:{}),...(m.target?{target:m.target,to:m.target.address}:{}),...(m.agent_id?{agent_id:m.agent_id}:{}),...(m.excerpt_pid?{excerpt_pid:m.excerpt_pid}:{}),reply_to:shownReply(m.reply_to),quote:shownReply(m.quote),sent_at:sentAt(m),delivery:m.delivery||"",at:iso(m.at),send_group:m.send_group_conflict?"":m.send_group||"",send_group_author:here?this.fp:m.fp||m.claimed_key||"",origin:m.origin||"",verified_agent:verifiedAgent(m,infos.find(i=>i.pid===(m.human&&wire.agentAuthor(m.human)?m.human.author_pid:m.pid)),here?this.address:m.from,fp),job_detail:this.needsYouText(m,privateReports),state:m.state||"",...this.cancellationView(m),state_text:event?"":here?this.outStateText(m,"the group"):"",detail:m.detail||"",unread:!out&&!m.read,replica:!!m.replica,synced_from:m.history?m.synced_from:"",claimed_key:m.claimed_key||"",via:m.own&&!m.history?m.from:"",copies:here?await this.shownCopies(m.copies):undefined,group_ref:!frozen&&role==="member"&&m.kind==="message"&&!m.sub&&!m.pid&&!m.excerpt_pid?{lid:m.lid,author:m.claimed_key||m.fp||this.fp,hash:await wire.groupHistoryContentHash(conv,m)}:undefined,...view,...(exec?{exec,...(this.continuationOf(m,fp,exec)?{continuation:this.continuationOf(m,fp,exec),actions:["continue"]}:{})}:{}),attachments:await Promise.all((m.attachments||[]).map(async(a,i)=>({index:i,name:wire.safeName(a.name),size:a.size,...(here?await this.sentState(a):this.fileState(a))}))) };
+      return {id:m.id,lid:m.lid,dir:out?"out":"in",from:here?this.address:m.from,kind:m.kind,status:m.status||"",actions:await this.proposalActions(m),proposal:await this.proposalProvenance(m,read),body:event?"":m.body,event,...(ev&&ev.type?{event_type:ev.type,event_by:ev.by}:{}),pid:m.pid||"",...(m.human?.author_pid?{agent_author_pid:m.human.author_pid}:{}),...(m.target?{target:m.target,to:m.target.address}:{}),...(m.agent_id?{agent_id:m.agent_id}:{}),...(m.excerpt_pid?{excerpt_pid:m.excerpt_pid}:{}),reply_to:shownReply(m.reply_to),quote:shownReply(m.quote),sent_at:sentAt(m),delivery:m.delivery||"",at:iso(m.at),send_group:m.send_group_conflict?"":m.send_group||"",send_group_author:here?this.fp:m.fp||m.claimed_key||"",origin:m.origin||"",verified_agent:verifiedAgent(m,infos.find(i=>i.pid===(m.human&&wire.agentAuthor(m.human)?m.human.author_pid:m.pid)),here?this.address:m.from,fp),job_detail:this.needsYouText(m,privateReports),state:m.state||"",...this.cancellationView(m),state_text:event?"":here?this.outStateText(m,"the group"):"",detail:m.detail||"",unread:!out&&!m.read,replica:!!m.replica,synced_from:m.history?m.synced_from:"",claimed_key:m.claimed_key||"",via:m.own&&!m.history?m.from:"",copies:here?await this.shownCopies(m.copies):undefined,group_ref:!frozen&&role==="member"&&m.kind==="message"&&!m.sub&&!m.pid&&!m.excerpt_pid?{lid:m.lid,author:m.claimed_key||m.fp||this.fp,hash:await wire.groupHistoryContentHash(conv,m)}:undefined,...view,...(exec?{exec,...(this.continuationOf(m,fp,exec)?{continuation:this.continuationOf(m,fp,exec),actions:["continue"]}:{})}:{}),attachments:await Promise.all((m.attachments||[]).map(async(a,i)=>({index:i,name:wire.safeName(a.name),size:a.size,...(here?await this.sentState(a):this.fileState(a))}))) };
     }))};
   }
 
@@ -6454,8 +6455,8 @@ export class Engine {
   // a pinned person record names, with the
   // key's first group when that name is also this person's or another
   // pinned person's, and the device in words otherwise; never the address.
-  async peerWordsFn() {
-    const pinned = (await this.store.all("persons")).filter((p) => p && p.state === "pinned");
+  async peerWordsFn(view = null) {
+    const pinned = (view?.persons||await this.store.all("persons")).filter((p) => p && p.state === "pinned");
     const count = new Map(), key = (l) => String(l || "").toLowerCase();
     for (const p of [...(this.me ? [this.me] : []), ...pinned]) count.set(key(p.label), (count.get(key(p.label)) || 0) + 1);
     return (address) => {
@@ -6501,9 +6502,10 @@ export class Engine {
   // (those from your other devices are yours, sent from there), and each
   // message sent here once, with its copies, its state the least advanced
   // copy's.
-  async convMessages(convId, inbox, outbox) {
-    const people=[this.me,...await this.store.all("persons")].filter(Boolean);
+  async convMessages(convId, inbox, outbox, view = null) {
+    const people=[this.me,...(view?.persons||await this.store.all("persons"))].filter(Boolean);
     const personOf = address => people.find(p=>p.devices?.some(d=>d.address===address))?.person || "";
+    if(view){inbox=view.byConv.inbox.get(convId)||[];outbox=view.byConv.outbox.get(convId)||[];}
     const groups = new Map();
     for (const r of outbox) {
       if (r.conv !== convId || r.aside || r.forwarded || r.sub === "excerpt" || r.sub === wire.SubDriveSpace || this.erasedRow(r)) continue; // sent excerpts and shared human records are carriers, not extra room turns; a deleted turn is not shown
@@ -7272,7 +7274,8 @@ export class Engine {
 
   // personOfFp is the person a device key belongs to, as pinned here: yours
   // (any device of your person) or one kept in persons; "" when unknown.
-  async personOfFp(fp) {
+  async personOfFp(fp, view = null) {
+    if(view)return view.fpPersons.get(fp)||"";
     if (this.me && (fp === this.fp || (this.me.known || this.me.devices || []).some((d) => d.fingerprint === fp))) return this.me.person;
     for (const p of await this.store.all("persons")) if ((p.known || p.devices || []).some((d) => d.fingerprint === fp)) return p.person;
     return "";
@@ -7826,8 +7829,19 @@ export class Engine {
 
   // ---- what the page reads (the daemon page API's shapes)
 
+  // One presentation operation shares its saved rows. Actions and admission
+  // never use this view: their current reads and transaction checks stay intact.
+  async readView() {
+    const [inbox,outbox,persons,convs,groups]=await Promise.all([this.store.all("inbox"),this.store.all("outbox"),this.store.all("persons"),this.store.all("convs"),this.store.prefix("kv","group/")]);
+    const byConv={inbox:new Map(),outbox:new Map()},fpPersons=new Map();
+    for(const [name,rows] of [["inbox",inbox],["outbox",outbox]])for(const row of rows){const selected=byConv[name].get(row.conv)||[];selected.push(row);byConv[name].set(row.conv,selected);}
+    for(const person of [this.me,...persons].filter(Boolean))for(const device of person.known||person.devices||[])if(!fpPersons.has(device.fingerprint))fpPersons.set(device.fingerprint,person.person);
+    if(this.me)fpPersons.set(this.fp,this.me.person);
+    return {inbox,outbox,persons,convs,groups,byConv,fpPersons,parts:new Map()};
+  }
+
   async overview(listArchived = true) {
-    const persons = await this.store.all("persons");
+    const view=await this.readView(), persons=view.persons;
     const people = persons.map((p) => this.personView(p));
     const listedSeen = new Set();
     for (const m of this.members.list) {
@@ -7837,18 +7851,18 @@ export class Engine {
       people.push({ label: l.label, ...(l.picture ? { picture: l.picture, picture_url: this.pictureURL(l.picture) } : {}), address: l.devices[0].address, state: "listed",
         devices: l.devices.map((d) => ({ address: d.address, name: d.address.split("/")[1], fingerprint: d.fingerprint })) });
     }
-    const inbox = await this.store.all("inbox");
-    const outbox = await this.store.all("outbox");
+    const inbox = view.inbox;
+    const outbox = view.outbox;
     const pinned = persons.filter((p) => p.state === "pinned"); // names for a record's author (liveagent.go dmPeople.known)
-    const words = await this.peerWordsFn(); // sentences name a person and device, never the address
+    const words = await this.peerWordsFn(view); // sentences name a person and device, never the address
     const dms = [], links = new Map(); // person → the agents their device runs in DMs here
     const privateReports = await this.ownNeedsYouReports(inbox, outbox);
     const needsYou = [], heldTurns = []; // what waits for this person (client.PageReview), by conversation
-    for (const c of await this.store.all("convs")) {
+    for (const c of view.convs) {
       const peer = persons.find((p) => p.person === c.peer);
-      let msgs = (await this.convMessages(c.id, inbox, outbox));
-      const participations = await this.participationsOf(c), member = !!wire.rootMember(wire.parseRoot(c.root), this.me?.person);
-      const originals = member ? [] : [...(await this.dmMembers(c)).values()];
+      let msgs = (await this.convMessages(c.id, inbox, outbox, view));
+      const participations = await this.participationsOf(c, view), member = !!wire.rootMember(wire.parseRoot(c.root), this.me?.person);
+      const originals = member ? [] : [...(await this.dmMembers(c, null, [], null, null, view)).values()];
       if (!member) msgs = msgs.filter(m => m.sub !== "event" || participations.some(p => p.pid === m.pid && (p.role !== "human" || p.host?.address === this.address && p.host.fingerprint === this.fp || p.decision && ["active", "dismissed"].includes(p.state))));
       msgs = await this.oneRowPerRecord(msgs, new Map(participations.filter(p => p.role === "human").map(p => [p.pid, p])));
       this.needsYouOf(c.id, participations, msgs, inbox.filter((r) => r.control && r.conv === c.id), needsYou, heldTurns, words, privateReports);
@@ -7862,7 +7876,7 @@ export class Engine {
         links.set(info.host.person, ls);
       }
       // Use the same resolved revisions/retractions as the open conversation.
-      const presented = new Map((await this.dm(c.id)).messages.map(m => [m.id, m]));
+      const presented = new Map((await this.dm(c.id, view)).messages.map(m => [m.id, m]));
       const line = (m) => (presented.get(m.id)?.deleted ? "Message deleted" : presented.get(m.id)?.edited ? firstLine(presented.get(m.id).text || "") : m.sub === "event" ? this.eventText(m.body, peer, null, participations.find(p => p.pid === m.pid && p.role === "human") || false, { originals, member })
         : !m.body && (m.attachments || []).length ? "📎 " + m.attachments.map((a) => wire.safeName(a.name)).join(", ") // files only: their names
           : firstLine(m.body));
@@ -7877,10 +7891,10 @@ export class Engine {
         ...(last ? { last_event: last } : {}) });
     }
     dms.sort((a, b) => b.last_at.localeCompare(a.last_at));
-    for(const g of (await this.store.prefix("kv","group/")).filter(v=>v?.root&&v?.context&&Array.isArray(v.records))) {
-      const packet=wire.parseGroupContext(g.context), conv=packet.state.conv, msgs=(await this.convMessages(conv,inbox,outbox));
-      const view=await this.groupThread(conv), shown=new Set(view.messages.map(m=>m.id)),visible=msgs.filter(m=>shown.has(m.id));
-      const parts=await this.participationsOf({id:conv,kind:"group",root:g.root}).catch(()=>[]),last=visible.length?this.lastEvent(visible.at(-1),view.members):undefined;
+    for(const g of (view.groups).filter(v=>v?.root&&v?.context&&Array.isArray(v.records))) {
+      const packet=wire.parseGroupContext(g.context), conv=packet.state.conv, msgs=(await this.convMessages(conv,inbox,outbox,view));
+      const view=await this.groupThread(conv,view), shown=new Set(view.messages.map(m=>m.id)),visible=msgs.filter(m=>shown.has(m.id));
+      const parts=await this.participationsOf({id:conv,kind:"group",root:g.root},view).catch(()=>[]),last=visible.length?this.lastEvent(visible.at(-1),view.members):undefined;
       this.needsYouOf(conv,parts,visible,inbox.filter(r=>r.control&&r.conv===conv),needsYou,heldTurns,words,privateReports);
       if(this.erasedConv(conv)&&!visible.some(m=>!m.sub))continue; // deleted here, and no later turn
       const latestView = view.messages.at(-1);
@@ -7892,7 +7906,7 @@ export class Engine {
     // countDecisions); a browser runs no agent, so its items carry none.
     for (const d of dms) d.decide = needsYou.filter((x) => x.conv === d.id && x.id && (x.actions || []).length).length;
     for (const p of people) if (links.has(p.person)) p.agents = links.get(p.person);
-    const { threads, topics } = await this.topicOverview(listArchived); // ?topics=1: archived topics counted, not listed
+    const { threads, topics } = await this.topicOverview(listArchived,view); // ?topics=1: archived topics counted, not listed
     const held = (await this.store.all("held")).filter(h => !h.notice_archived);
     const now = Math.floor(this.now() / 1000);
     const link = this.link && !["linked", ""].includes(this.link.state) ? { state: this.link.state === "pending" && now >= this.link.expires ? "expired" : this.link.state, detail: this.link.detail || "" } : undefined;
@@ -7928,7 +7942,7 @@ export class Engine {
       me: { address: this.address, fingerprint: this.fp, responder: "", responder_dir: "", browser: true, agent: false }, // a browser runs no agent
       workspace: { name: this.workspaceName, server: this.relayHost() }, agent_devices: [...this.agentDevices], model_reports: await this.modelReports(),
       device: { online: this.connected, revoked: this.revoked, persisted: this.storage ? this.storage.persisted : null },
-      threads, topics, topic_list: true, review: [...this.reportItems(await this.store.all("inbox"), await this.store.all("outbox"), words), ...await this.deviceAdminReview()], needs_you: needsYou, held: heldTurns, quarantine: held.map(h => ({ ...quarantineItem(h), reason: holdText(h.reason, words(h.from)) })),
+      threads, topics, topic_list: true, review: [...this.reportItems(inbox, outbox, words), ...await this.deviceAdminReview()], needs_you: needsYou, held: heldTurns, quarantine: held.map(h => ({ ...quarantineItem(h), reason: holdText(h.reason, words(h.from)) })),
       directory: { status: this.members.listed, current: this.members.current, at: this.members.at ? iso(this.members.at) : undefined,
         truncated: this.members.truncated, members: this.members.list.filter((m) => m.address !== this.address)
           .map((m) => ({ address: m.address, presence: this.members.current ? m.presence : "", joined: iso((m.joined || 0) * 1000) })) },
@@ -7942,19 +7956,20 @@ export class Engine {
     };
   }
 
-  async dm(id) {
-    if(await this.groupRecord(id))return this.groupThread(id);
-    const c = await this.store.get("convs", id);
+  async dm(id, view = null) {
+    view ||= await this.readView();
+    if(await this.groupRecord(id))return this.groupThread(id,view);
+    const c = view.convs.find(c=>c.id===id);
     if (!c) throw new Error("No conversation with that id.");
-    const peer = await this.store.get("persons", c.peer);
-    const inbox = await this.store.all("inbox"), outbox = await this.store.all("outbox");
+    const peer = view.persons.find(p=>p.person===c.peer);
+    const inbox = view.inbox, outbox = view.outbox;
     const privateReports = await this.ownNeedsYouReports(inbox, outbox);
-    let msgs = (await this.convMessages(id, inbox, outbox));
+    let msgs = (await this.convMessages(id, inbox, outbox, view));
     const ctls = [...inbox.filter((r) => r.control && r.conv === id), ...outbox.filter((r) => r.control && r.conv === id).map((r) => ({ ...r, dir: "out" }))];
     const myLabel = this.me && this.me.label ? this.me.label : "You";
     const personLabel = (pid) => (pid === (this.me && this.me.person) ? myLabel : peer && pid === peer.person ? peer.label : "someone");
     const controlsOf = (m, here) => {
-      const targetFp = here ? this.fp : m.fp, mineAuthor = async () => (await this.personOfFp(targetFp)) === (this.me && this.me.person);
+      const targetFp = here ? this.fp : m.fp, mineAuthor = async () => (await this.personOfFp(targetFp, view)) === (this.me && this.me.person);
       return { targetFp, mine: mineAuthor };
     };
     const execView = (m, here) => {
@@ -7964,10 +7979,10 @@ export class Engine {
       const continuation=this.continuationOf(m,here?this.fp:m.fp,e);
       return e ? { exec: e, ...(continuation?{continuation,actions:["continue"]}:{}) } : {};
     };
-    const hostLabels = new Map(rel0(ctls) ? (await this.participationsOf(c)).map((p) => [p.pid, p.host?.label || ""]) : []); // client: the participation host's label
+    const hostLabels = new Map(rel0(ctls) ? (await this.participationsOf(c, view)).map((p) => [p.pid, p.host?.label || ""]) : []); // client: the participation host's label
     const ctlView = async (m, here) => {
       const { targetFp, mine } = controlsOf(m, here);
-      const targetPerson = await this.personOfFp(targetFp);
+      const targetPerson = await this.personOfFp(targetFp, view);
       const rel = ctls.filter((x) => x.ref && x.ref.id === m.lid && x.ref.fingerprint === targetFp && x.sub !== wire.SubStatus && x.sub !== wire.SubDecision);
       const view = this.controlsOn(rel, targetPerson, (x) => x.person || "", personLabel, (p) => p === (this.me && this.me.person), undefined, (pid) => hostLabels.get(pid));
       view.can = view.deleted || !wire.rootMember(wire.parseRoot(c.root), this.me?.person) ? [] : ["react", ...((await mine()) ? ["edit", "delete"] : [])];
@@ -7976,27 +7991,27 @@ export class Engine {
     const member = !!wire.rootMember(wire.parseRoot(c.root), this.me?.person);
     // A guest sees its own participation, and others only once accepted: a
     // shared invitation alone stays inert proof (livehuman.go guestViews).
-    const guests = (await this.participationsOf(c)).filter(p => p.role === "human" && (member || p.host?.address === this.address && p.host.fingerprint === this.fp || p.decision && ["active", "dismissed"].includes(p.state))).map(p => this.guestView(p, member));
-    const assistants = new Set((await this.agentsOf(c)).filter(p => p.decision).map(p => p.pid)); // an assistant a guest learned from its public scope and acceptance
+    const guests = (await this.participationsOf(c, view)).filter(p => p.role === "human" && (member || p.host?.address === this.address && p.host.fingerprint === this.fp || p.decision && ["active", "dismissed"].includes(p.state))).map(p => this.guestView(p, member));
+    const assistants = new Set((await this.agentsOf(c, view)).filter(p => p.decision).map(p => p.pid)); // an assistant a guest learned from its public scope and acceptance
     if (!member && guests.some(g => g.host_here)) msgs = msgs.filter(m => m.sub !== "event" || guests.some(g => g.pid === m.pid) || assistants.has(m.pid)); // shared records of an unaccepted participation stay out of a guest's timeline
     const guestActive = !member && guests.some(g => g.host_here && g.state === "active" && !g.held);
-    const words = await this.peerWordsFn(); // sentences name a person and device, never the address
+    const words = await this.peerWordsFn(view); // sentences name a person and device, never the address
     // A guest or visitor sees both verified original people (client.Conversations Members).
-    const originals = member ? [] : [...(await this.dmMembers(c)).values()];
-    const parts = new Map((await this.participationsOf(c)).map(p => [p.pid, p]));
+    const originals = member ? [] : [...(await this.dmMembers(c, null, [], null, null, view)).values()];
+    const parts = new Map((await this.participationsOf(c, view)).map(p => [p.pid, p]));
     const humans = new Map([...parts].filter(([, p]) => p.role === "human"));
     msgs = await this.oneRowPerRecord(msgs, humans);
     const shownReply = linkReplies(msgs, this.fp);
-    const pinned = (await this.store.all("persons")).filter((p) => p.state === "pinned"); // names for a record's author (liveagent.go dmPeople.known)
+    const pinned = (view.persons).filter((p) => p.state === "pinned"); // names for a record's author (liveagent.go dmPeople.known)
     return { id, peer: this.personView(peer), ...(member ? {} : { members: originals.map(p => this.personView(p)) }), role: member ? "member" : guests.some(p => p.host_here) ? "human_guest" : "visitor", guests, audience_pending: guests.some(p => p.audience_pending), created: iso(c.created * 1000), mine: c.creator === this.address,
       frozen: peer && peer.state === "conflict" ? peer.address + " published a different person record than the one kept here, so this conversation is frozen: nothing more is sent in it." : "",
-      agents: (await this.agentsOf(c)).map((info) => { const view = this.agentView(info, msgs, peer); if (!member) { view.can_ask = guestActive && view.can_ask; view.can_dismiss = false; if (view.can_ask) view.state_text = "In this conversation, on " + info.host.address + ". Ask it with @mention; its owner's permissions decide whether it runs."; } return view; }), // an accepted guest addresses active assistants under their owners' permissions
+      agents: (await this.agentsOf(c, view)).map((info) => { const view = this.agentView(info, msgs, peer); if (!member) { view.can_ask = guestActive && view.can_ask; view.can_dismiss = false; if (view.can_ask) view.state_text = "In this conversation, on " + info.host.address + ". Ask it with @mention; its owner's permissions decide whether it runs."; } return view; }), // an accepted guest addresses active assistants under their owners' permissions
       messages: await Promise.all(msgs.map(async (m) => {
         const here = !m.fp && !m.excerpt_pid, out = here || !!m.own; // claimed excerpts have no verified original author key
         const state = m.state === "conv_held" && !this.heldOpen(m, msgs) ? "manual" : m.state; // answered here (client.turnClosesHeld)
         const event = m.sub === "event" ? this.eventText(m.body, peer, null, humans.get(m.pid) || false, { originals, member }) : "";
         const ev = event ? this.eventFields(m.body, [peer, ...originals], pinned) : null;
-        return { id: m.id, lid: m.lid, dir: out ? "out" : "in", from: here ? this.address : m.from, kind: m.kind, status: m.status || "", actions: await this.proposalActions(m), proposal:await this.proposalProvenance(m), body: event ? "" : m.body, reply_to: shownReply(m.reply_to),quote:shownReply(m.quote),sent_at:sentAt(m),delivery:m.delivery||"",
+        return { id: m.id, lid: m.lid, dir: out ? "out" : "in", from: here ? this.address : m.from, kind: m.kind, status: m.status || "", actions: await this.proposalActions(m), proposal:await this.proposalProvenance(m, view), body: event ? "" : m.body, reply_to: shownReply(m.reply_to),quote:shownReply(m.quote),sent_at:sentAt(m),delivery:m.delivery||"",
           ...(ev && ev.type ? { event_type: ev.type, event_by: ev.by } : {}),
           ...(m.agent_id ? { agent_id: m.agent_id } : {}), ...(m.target ? { target: m.target } : {}),
           send_group:m.send_group_conflict?"":m.send_group||"", send_group_author:here?this.fp:m.fp||m.claimed_key||"", origin: m.origin || "", verified_agent: verifiedAgent(m, parts.get(m.human&&wire.agentAuthor(m.human)?m.human.author_pid:m.pid), here ? this.address : m.from, here ? this.fp : m.fp),
@@ -9084,7 +9099,7 @@ export class Engine {
     return out;
   }
 
-  async dmMembers(c, events = null, checks = [], currentPacket=null, historyTaskEpochs=null) {
+  async dmMembers(c, events = null, checks = [], currentPacket=null, historyTaskEpochs=null, view=null) {
     const group = c.kind === "group" || JSON.parse(c.root).kind === "group";
     const packet = group ? currentPacket || await this.groupCurrentState(c.id, checks) : null;
     const root = group ? packet.root : wire.parseRoot(c.root);
@@ -9097,7 +9112,7 @@ export class Engine {
         if (group) { const epoch=await wire.groupAdmissionHash(member.admission);for(const d of p.devices)out.epochs.set(d.fingerprint,epoch); }
       }
     }
-    events ||= await this.convEvents(c.id, checks);
+    events ||= await this.convEvents(c.id, checks, undefined, view);
     out.hosts = new Map();
     for (const { e } of events) {
       const h = ["invite", "scope", "share"].includes(e.type) && e.host; // a scope names its invite's host
@@ -9132,7 +9147,7 @@ export class Engine {
         const member=wire.groupMember(packet.state,e.author.person);
         if(!visible && member && await wire.groupAdmissionHash(member.admission)===e.author.group_admission) {
           const h=member.admission.history?.find(h=>h.lid===ref.lid&&h.author===ref.fingerprint);
-          if(h)for(const row of await this.authorityRows({conv:c.id},checks))if(row.lid===ref.lid && (row.fp||this.fp)===ref.fingerprint && await wire.groupHistoryContentHash(c.id,row)===h.hash)visible=true;
+          if(h)for(const row of await this.authorityRows({conv:c.id},checks,view))if(row.lid===ref.lid && (row.fp||this.fp)===ref.fingerprint && await wire.groupHistoryContentHash(c.id,row)===h.hash)visible=true;
         }
         if(visible)allowed.push(ref);
       }
@@ -9144,20 +9159,20 @@ export class Engine {
   // convEvents are the participation records of conv held here, received
   // and sent, oldest first: a set by record hash, as the core keeps them
   // (the same signed record in another message is one record).
-  async authorityRows(scope, checks) {
+  async authorityRows(scope, checks, view = null) {
     const rows = [];
     for (const s of ["inbox", "outbox"]) {
-      const matching = (await this.store.all(s)).filter((r) => scopeRow(r, scope));
+      const matching = (view?(scope.conv!==undefined?view.byConv[s].get(scope.conv)||[]:view[s]):await this.store.all(s)).filter((r) => scopeRow(r, scope));
       if (checks) checks.push({ s, scope, rows: matching.map((v) => ({ k: v.id, v: authorityValue(s, v) })).sort((a, b) => a.k < b.k ? -1 : a.k > b.k ? 1 : 0) });
       rows.push(...matching);
     }
     return rows;
   }
 
-  async convEvents(conv, checks, pid) {
+  async convEvents(conv, checks, pid, view = null) {
     // Admitted HumanTurn proof is the same signed ledger metadata, not a
     // new membership table. Guard the whole captured set, including absence.
-    const rows = (await this.authorityRows({ conv }, checks)).sort((a, b) => a.at - b.at);
+    const rows = (await this.authorityRows({ conv }, checks, view)).sort((a, b) => a.at - b.at);
     const out = [], seen = new Set();
     for(const raw of await this.groupRead(checks||[],"kv","room-memberships/"+conv)||[]) { const e=wire.parseEvent(raw), hash=await wire.eventHash(e);if((!pid||e.pid===pid)&&!seen.has(hash)){seen.add(hash);out.push({e,hash});} }
     for (const m of rows) {
@@ -9260,12 +9275,17 @@ export class Engine {
   }
 
   // agentsOf resolves every participation of conv c.
-  async participationsOf(c) {
-    const m = await this.dmMembers(c), evs = await this.convEvents(c.id);
-    const waiting=(await this.store.all("outbox")).filter(r=>r.conv===c.id&&r.state==="waiting"&&r.required_cap===wire.CapHumanParticipation&&r.detail?.startsWith("peer_update: ")),persons=[this.me,...await this.store.all("persons")].filter(Boolean);
-    return [...new Set(evs.map((x) => x.e.pid))].map(pid=>{const p=this.resolveAgent(pid,evs,m);p.needs_update=[...new Set(waiting.filter(r=>r.pid===pid).map(r=>persons.find(p=>p.devices.some(d=>d.address===r.to))?.label||"Someone"))];return p;});
+  async participationsOf(c, view = null) {
+    if(view?.parts.has(c.id))return view.parts.get(c.id);
+    const resolve=async()=>{
+      const evs=view?await this.convEvents(c.id,undefined,undefined,view):null;
+      const m=await this.dmMembers(c,evs,[],null,null,view),events=evs||await this.convEvents(c.id);
+      const waiting=(view?.outbox||await this.store.all("outbox")).filter(r=>r.conv===c.id&&r.state==="waiting"&&r.required_cap===wire.CapHumanParticipation&&r.detail?.startsWith("peer_update: ")),persons=[this.me,...(view?.persons||await this.store.all("persons"))].filter(Boolean);
+      return [...new Set(events.map((x) => x.e.pid))].map(pid=>{const p=this.resolveAgent(pid,events,m);p.needs_update=[...new Set(waiting.filter(r=>r.pid===pid).map(r=>persons.find(p=>p.devices.some(d=>d.address===r.to))?.label||"Someone"))];return p;});
+    };
+    const resolved=resolve();if(view)view.parts.set(c.id,resolved);return resolved;
   }
-  async agentsOf(c) { return (await this.participationsOf(c)).filter(p => p.role !== "human"); }
+  async agentsOf(c, view = null) { return (await this.participationsOf(c,view)).filter(p => p.role !== "human"); }
 
   // heldOpen: whether turn m, held for the person (conv_held: nothing runs
   // it), still waits for them. The person's own turn in the same
@@ -9556,13 +9576,13 @@ export class Engine {
 
   // Presentation only: original suggestion, final task, and confirming human.
   // This never turns an imported row or a displayed label into permission.
-  async proposalProvenance(m) {
+  async proposalProvenance(m, view = null) {
     if(m.kind!=="task"||!m.reply_to||m.control)return undefined;
-    const rows=await this.store.all("inbox"),p=rows.find(r=>r.kind==="answer"&&r.status===wire.StatusProposal&&(r.conv||"")===(m.conv||"")&&(r.lid||r.id)===m.reply_to);
+    const rows=view?.inbox||await this.store.all("inbox"),p=rows.find(r=>r.kind==="answer"&&r.status===wire.StatusProposal&&(r.conv||"")===(m.conv||"")&&(r.lid||r.id)===m.reply_to);
     if(!p)return undefined;
-    const local=await this.store.get("outbox",m.id);
+    const local=view?view.outbox.find(r=>r.id===m.id):await this.store.get("outbox",m.id);
     if(local?.proposal_choice?.author!==p.fp||local.proposal_choice.id!==p.id){if(!await this.sharedProposalTask(m,p))return undefined;}
-    const q=(await this.store.all("outbox")).find(r=>r.id===p.reply_to||p.conv&&r.conv===p.conv&&r.lid===p.reply_to)||rows.find(r=>r.id===p.reply_to||r.conv===p.conv&&r.lid===p.reply_to);
+    const q=(view?.outbox||await this.store.all("outbox")).find(r=>r.id===p.reply_to||p.conv&&r.conv===p.conv&&r.lid===p.reply_to)||rows.find(r=>r.id===p.reply_to||r.conv===p.conv&&r.lid===p.reply_to);
     if(!q||q.kind!=="question")return undefined;
     return {question_id:q.id,question:q.body,asker:q.from||this.address,proposal_id:p.id,proposal:p.body,confirmed_by:local?this.address:m.from,task:m.body,edited:m.body!==p.body};
   }
@@ -9648,7 +9668,10 @@ export class Engine {
   // notifyInfo is what the relay offers (null when it sends no Web Push).
   async notifyInfo() {
     if (!(await this.features()).includes("notify1")) return null;
-    if (!this.notifyOffer) this.notifyOffer = await this.call("GET", "/v1/notify", undefined, { signed: false });
+    if (!this.notifyOffer) {
+      this.notifyOffer = await this.call("GET", "/v1/notify", undefined, { signed: false });
+      this.changed(); // existing connection recovery checked support; refresh its cached presentation
+    }
     return this.notifyOffer.push_key ? this.notifyOffer : null;
   }
 
@@ -9796,11 +9819,14 @@ export class Engine {
   // notifyView is what the page shows about notifications.
   async notifyView() {
     const st = await this.notifyState();
-    let info = null;
-    try { info = await this.notifyInfo(); } catch (e) { /* unknown now */ }
+    // Chat reads must not await notification capability or realm probes.
+    // Actions and connection recovery still verify support through notifyInfo.
+    const unsupported = this.featureList && !this.featureList.includes("notify1");
+    const info = !unsupported && this.notifyOffer?.push_key ? this.notifyOffer : null;
+    const checked = unsupported || !!this.notifyOffer;
     const supported = !!(this.push && this.push.supported());
     return { available: !!info && supported, enabled: st.enabled, pending: st.synced < st.rev,
-      reason: !info ? "Your server does not send notifications." : !supported ? "This browser cannot show notifications for AgentNet here." : "",
+      reason: !info ? checked ? "Your server does not send notifications." : "Notification support has not been checked yet." : !supported ? "This browser cannot show notifications for AgentNet here." : "",
       mutes: await this.effectiveNotifyMutes(st), allowed: (await this.notifySenders(st)).map((s) => s.address) };
   }
 

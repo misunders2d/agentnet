@@ -4,6 +4,17 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
+## Active handoff to Claude — October 10, 2026
+
+The owner reports v0.8.16 still leaves the phone on a blank Chats skeleton for
+20+ seconds, omits replies, and retains large held-notice/pending-request lists.
+He stopped Codex implementation and assigned the continuation to Claude.
+Read [HANDOFF_CLAUDE_MOBILE.md](HANDOFF_CLAUDE_MOBILE.md) first: it records two
+reproduced startup bottlenecks, the explicitly unfinished local checkpoint,
+a known runtime bug in that checkpoint, failed/passing test evidence, private
+diagnostic locations and repository cleanup. No new release is qualified.
+All helpers are stopped; preserve this state until Claude takes over.
+
 ## Current published release — v0.8.16, October 10, 2026 (UTC)
 
 [Download v0.8.16](https://github.com/misunders2d/agentnet/releases/tag/v0.8.16).
