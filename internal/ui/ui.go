@@ -330,6 +330,7 @@ type HistoryCopy struct {
 	DeliveryKnown bool   `json:"delivery_known"`
 	Queued        int    `json:"queued"`
 	Custody       int    `json:"custody"`
+	Retained      int    `json:"retained,omitempty"`
 	Delivered     int    `json:"delivered"`
 	Blocked       int    `json:"blocked"`
 	Deferred      int    `json:"deferred"`

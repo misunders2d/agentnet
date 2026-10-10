@@ -18,6 +18,13 @@ func (s *store) applyReceipt(r protocol.ReceiptEvent) error {
 	if err != nil {
 		return err
 	}
+	if r.State == protocol.StateDelivered {
+		// The descriptor ACK proves durable chunk retention, not completion
+		// of its child imports. Retire these rows from pending window scans.
+		if _, err = tx.Exec(`UPDATE outbox SET state=? WHERE state=? AND id IN (SELECT child FROM history_archive_entries WHERE manifest=?) AND EXISTS(SELECT 1 FROM outbox WHERE id=? AND sub='history-archive' AND state='delivered')`, archiveAccepted, archiveStaged, r.ID, r.ID); err != nil {
+			return err
+		}
+	}
 	_, err = tx.Exec(`INSERT INTO config(k,v) VALUES('receipt_cursor',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, strconv.FormatInt(r.Seq, 10))
 	if err != nil {
 		return err

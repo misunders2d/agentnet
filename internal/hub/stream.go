@@ -3,6 +3,7 @@ package hub
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -256,7 +257,8 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 	signals := h.signals.subscribe(caller, sub)
 	defer h.signals.unsubscribe(caller, sub)
-	var lastSeq, adminNoticeCursor int64
+	var liveSeq, adminNoticeCursor int64
+	syncInFlight := ""
 	sentRelease := int64(-1) // the release is sent on connect and when it changes
 	sentMembers := int64(-1) // so is the member list
 	sentAgain := int64(-1)   // as of this look-again generation
@@ -361,7 +363,7 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 		}
-		msgs, err := h.store.pendingFor(caller, ad.Session, lastSeq)
+		msgs, err := h.store.pendingForLane(caller, ad.Session, protocol.MessageLaneLive, liveSeq, 100)
 		if err != nil {
 			return
 		}
@@ -369,13 +371,45 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 			if !write("event: message\ndata: %s\n\n", m.Envelope) {
 				return
 			}
-			lastSeq = m.Seq
+			liveSeq = m.Seq
 			if !between() {
 				return
 			}
 		}
-		if len(msgs) == 100 {
-			continue // more backlog
+		if len(msgs) != 0 {
+			continue // recheck live arrivals before giving sync a delivery turn
+		}
+		if syncInFlight != "" {
+			_, _, state, err := h.store.messageState(syncInFlight, caller)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return
+			}
+			if err != nil || state != protocol.StateCustody {
+				syncInFlight = ""
+			}
+		}
+		if syncInFlight == "" {
+			// Single-flight sync needs no sequence cursor: its terminal ack
+			// removes it from custody. An older live row may be demoted while
+			// connected, so a cursor would silently skip that newly sync row.
+			msgs, err := h.store.pendingForLane(caller, ad.Session, protocol.MessageLaneSync, 0, 1)
+			if err != nil {
+				return
+			}
+			if len(msgs) != 0 {
+				m := msgs[0]
+				if !write("event: message\ndata: %s\n\n", m.Envelope) {
+					return
+				}
+				syncInFlight = m.ID
+				if !between() {
+					return
+				}
+				// At most one sync frame can be waiting in TCP/client admission.
+				// Its ordinary terminal receipt wakes this stream to resume. A
+				// later live turn bypasses it; an already-written frame cannot.
+				continue
+			}
 		}
 		select {
 		case signal := <-signals:

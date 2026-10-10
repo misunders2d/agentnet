@@ -44,5 +44,19 @@ await phone.receiverOutboxProgress({...row,state:'custody'},true);
 assert.equal((await get('outbox',id)).state,'custody');
 assert.equal((await get('outbox',id)).body,'','custody metadata cannot restore redacted plaintext');
 assert.ok((await get('outbox',id)).receiver_redacted);
+// Existing relay custody is demoted with byte-identical signed ciphertext;
+// ordinary turns are untouched and a concurrent delivered receipt wins.
+const legacyID=wire.newID(),legacyBody=JSON.stringify({v:1,person:wire.newID(),roster:'a'.repeat(64),recipient:host.address,recipient_key:host.fp,item:JSON.parse(wire.historyJSON({id:request.id,lid:request.id,from:phone.address,from_key:phone.fp,kind:'question',body:request.body,ts:1,at:1000,attachments:[]}))});
+const legacyEnvelope=await wire.seal({v:2,id:legacyID,from:phone.address,to:host.address,ts:1,kind:'message',sub:wire.SubDeviceHistory,replica:true,body:legacyBody},phone.keys,host.pub);
+await phone.store.write([{s:'outbox',k:legacyID,v:{id:legacyID,to:host.address,recipient_fp:host.fp,sub:wire.SubDeviceHistory,body:legacyBody,envelope:legacyEnvelope,at:1000,state:'custody'}}]);
+const ordinary=await phone.store.get('outbox',id),demotions=[];
+phone.fetch=async(url,opts)=>{
+ const u=new URL(url);assert.equal(u.pathname,'/v1/messages');assert.equal(u.searchParams.get('lane'),'sync');assert.equal(opts.body,legacyEnvelope);await wire.verifyEnvelope(wire.parseEnvelope(opts.body),phone.pub.sign_key);demotions.push(opts.body);
+ await phone.dispatch('receipt',JSON.stringify({id:legacyID,state:'delivered',seq:10}));return new Response(JSON.stringify({state:'custody'}));
+};
+await phone.migrateSyncCustody();if(phone.syncOutboxPass)await phone.syncOutboxPass;
+assert.equal(demotions.length,1);assert.equal((await phone.store.get('outbox',legacyID)).state,'delivered','late delivered receipt never regresses during demotion');
+assert.deepEqual(await phone.store.get('outbox',id),ordinary,'ordinary custody ciphertext/state remain unchanged');
+await phone.migrateSyncCustody();assert.equal(demotions.length,1,'durable completed migration does not reannounce again');
 phone.connected=false;await phone.close();await host.close();
 console.log('Signed stale custody progress and authoritative receipt ordering PASS');

@@ -6,6 +6,21 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+### Changed
+
+- Linked-device catch-up transfers recent history in bounded encrypted chunks
+  through the existing file service. Older pages import in the background;
+  every source contributes the history it holds, with the existing signature,
+  membership, deduplication and deletion checks. Interrupted transfers resume.
+- Live messages, replies and fresh own-device copies have independent delivery
+  from cold history. History upload and import do not hold the live sender or
+  receiving stream. Existing queued history retains its original IDs and
+  ciphertext when upgraded to background delivery.
+- Browser background work queries pending copies through storage indexes,
+  avoiding repeated loads of the whole sent-message archive.
+- History progress distinguishes records stored on the destination from those
+  waiting at the relay; storage is not presented as completed import.
+
 - Develop an isolated Android preview with the shared Comic interface, embedded Go client and private SQLite storage. Native qualification is tracked separately from the desktop release.
 
 ## [0.8.17] — 2026-10-10

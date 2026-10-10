@@ -324,7 +324,7 @@ CREATE TABLE reported(
   PRIMARY KEY(item, recipient));
 `, TeamSchema, GroupClientSchema, GroupProofSchema, agentIdentitySchema, agentCapabilitySchema, groupTurnRecipientSchema, replyReceiverSchema, GroupLifecycleSchema, replySessionSchema, GroupHistorySchema, receiverRouteSchema, humanScopeSchema, convClearSchema, statusDueSchema, runGroupSchema, topicStateSchema, messagingSchema, deliveryPersonSchema, personGrantSchema, operatorPersonsSchema, deviceAdminNoticeSchema, roomSchema, roomReaderSchema, chatTopicSchema, groupInvitationCancellationSchema, readSyncSchema, chatAlertDefaultsSchema, queuedRetractionSchema, heldNoticeSchema, sendGroupSchema, continuationSchema, ownInvitationSchema, historyCatchupSchema, groupHistoryWitnessSchema, topicSyncSchema, `
 CREATE INDEX outbox_conv_lid ON outbox(conv, lid);
-`, historyReceiptSchema, deviceHistorySchema, proposalChoiceSchema, receiptGenerationSchema, requestFollowupSchema, answeredConversationStatusSchema, modelReportSchema, heldCopySchema, retainedConversationStatusSchema, heldLogicalSchema, waitingConversationStatusSchema, topicMarkSyncSchema, skippedCopySchema}
+`, historyReceiptSchema, deviceHistorySchema, proposalChoiceSchema, receiptGenerationSchema, requestFollowupSchema, answeredConversationStatusSchema, modelReportSchema, heldCopySchema, retainedConversationStatusSchema, heldLogicalSchema, waitingConversationStatusSchema, topicMarkSyncSchema, skippedCopySchema, historyArchiveSchema}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
 const (
@@ -577,15 +577,27 @@ func (s *store) coolRoute(endpoint string, until time.Time) error {
 }
 
 func (s *store) queued(filesOnly ...bool) ([]envelope.Envelope, error) {
+	return s.queuedWhere(len(filesOnly) > 0 && filesOnly[0], "")
+}
+
+func (s *store) queuedLane(filesOnly, syncOnly bool) ([]envelope.Envelope, error) {
+	filter := " AND (coalesce(sub,'') NOT IN " + syncSubs + " OR replication_live=1)"
+	if syncOnly {
+		filter = " AND sub IN " + syncSubs + " AND replication_live=0"
+	}
+	return s.queuedWhere(filesOnly, filter)
+}
+
+func (s *store) queuedWhere(filesOnly bool, laneFilter string) ([]envelope.Envelope, error) {
 	// A conversation message to a frozen (conflicting) person is not sent.
 	filter, limit := "", ""
-	if len(filesOnly) > 0 && filesOnly[0] {
+	if filesOnly {
 		filter, limit = " AND sub IN ('file','device-file')", " LIMIT 1"
 	}
 	// File requests/offers do not belong to the readable-turn FIFO. Give
 	// interactive retrieval priority over the accumulated history backlog.
 	rows, err := s.db.Query(`SELECT envelope FROM outbox WHERE state = ? AND (conv IS NULL OR recipient NOT IN
-		(SELECT d.address FROM person_devices d JOIN persons p ON p.person = d.person WHERE p.state = ?))`+filter+` ORDER BY CASE WHEN sub IN ('file','device-file') THEN 0 ELSE 1 END, created_at, rowid`+limit, stateQueued, personConflict)
+		(SELECT d.address FROM person_devices d JOIN persons p ON p.person = d.person WHERE p.state = ?))`+laneFilter+filter+` ORDER BY CASE WHEN sub IN ('file','device-file') THEN 0 ELSE 1 END, created_at, rowid`+limit, stateQueued, personConflict)
 	if err != nil {
 		return nil, err
 	}
@@ -923,7 +935,7 @@ type receipt struct {
 
 // unsentReceipts lists dispositions not yet acknowledged to the Hub.
 func (s *store) unsentReceipts() ([]receipt, error) {
-	rows, err := s.db.Query(`SELECT id, ?, 'inbox', receipt_gen FROM inbox WHERE acked = 0 UNION ALL SELECT id, ?, 'quarantine', receipt_gen FROM quarantine WHERE acked = 0 UNION ALL SELECT id, ?, 'history_receipts', receipt_gen FROM history_receipts WHERE acked = 0`,
+	rows, err := s.db.Query(`SELECT id, ?, 'inbox', receipt_gen FROM inbox WHERE acked = 0 AND id NOT IN (SELECT id FROM history_archive_children) UNION ALL SELECT id, ?, 'quarantine', receipt_gen FROM quarantine WHERE acked = 0 AND id NOT IN (SELECT id FROM history_archive_children) UNION ALL SELECT id, ?, 'history_receipts', receipt_gen FROM history_receipts WHERE acked = 0 AND id NOT IN (SELECT id FROM history_archive_children)`,
 		protocol.StateDelivered, protocol.StateQuarantined, protocol.StateDelivered)
 	if err != nil {
 		return nil, err
@@ -1014,7 +1026,7 @@ type FileInfo struct {
 // recordSubs are the received records between devices that are never a
 // message: group proofs, contexts, invitations, consents and withdrawals,
 // and Drive space records (a conversation's view leaves them out too).
-const recordSubs = `('model-sync', 'device-history', 'device-file', 'topic-sync', 'topic-state-sync', 'invitation-sync', 'read-sync', 'root-sync', 'drive-space', 'group-proof', 'group-context', 'group-invite', 'group-consent', 'group-withdrawal')`
+const recordSubs = `('model-sync', 'device-history', 'device-file', 'topic-sync', 'topic-state-sync', 'invitation-sync', 'read-sync', 'root-sync', 'history-archive', 'drive-space', 'group-proof', 'group-context', 'group-invite', 'group-consent', 'group-withdrawal')`
 
 // inbox lists received messages; a local request to this device's own
 // agent (agentjob.go) is not one, nor is a record between devices.

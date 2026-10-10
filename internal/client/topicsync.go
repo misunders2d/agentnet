@@ -132,6 +132,11 @@ func (a *Agent) syncTopicTitles() (bool, error) {
 		if dev.Address == a.Address || !me.roster.Human(dev.Fingerprint()) {
 			continue
 		}
+		if full, e := syncWindowFull(tx, dev); e != nil {
+			return false, e
+		} else if full {
+			continue
+		}
 		r := protocol.TopicSync{V: 1, Person: me.info.Person, Roster: me.info.Roster}
 		if topicSyncAuthority(tx, r, a.Address, fp, dev.Address, dev.Fingerprint()) != nil {
 			continue

@@ -245,6 +245,7 @@ const (
 	SubExcerpt         = "excerpt"          // shared history; never a request
 	SubHistory         = "history"          // a message or event of the conversation, forwarded by a device of the recipient's own person; never a request
 	SubDeviceHistory   = "device-history"   // inert original device-thread turn, current own-human devices only
+	SubHistoryArchive  = "history-archive"  // bounded encrypted history attachment, current own-human devices only
 	SubDeviceFile      = "device-file"      // exact original device-thread file, current own-human devices only
 	SubInvitationSync  = "invitation-sync"  // inert outgoing invitation view for own-human devices
 	SubModelSync       = "model-sync"       // private agent-reported model snapshots
@@ -730,9 +731,16 @@ func checkVersion2(in Inner) error {
 		}
 		return nil
 	}
-	if in.Sub == SubReadSync || in.Sub == SubInvitationSync || in.Sub == SubModelSync || in.Sub == SubTopicSync || in.Sub == SubTopicStateSync || in.Sub == SubDeviceHistory || in.Sub == SubDeviceFile {
-		if in.Conv != "" || in.LID != "" || len(in.Root) != 0 || in.Kind != KindMessage || !in.Replica || in.Target != nil || in.PID != "" || (len(in.Attachments) != 0 && in.Sub != SubDeviceFile) || len(in.Attachments) > 1 || in.ReplyTo != "" || in.Origin != "" || in.Emotion != "" || in.Status != "" || in.Fan != nil || in.Human != nil || in.ReceiverRoute != nil || in.AgentID != "" || in.Topic != "" || in.TopicEvent != nil || in.TopicDone || in.Quote != "" || in.Session != "" || in.Fallback {
+	if in.Sub == SubReadSync || in.Sub == SubInvitationSync || in.Sub == SubModelSync || in.Sub == SubTopicSync || in.Sub == SubTopicStateSync || in.Sub == SubDeviceHistory || in.Sub == SubDeviceFile || in.Sub == SubHistoryArchive {
+		if in.Conv != "" || in.LID != "" || len(in.Root) != 0 || in.Kind != KindMessage || !in.Replica || in.Target != nil || in.PID != "" || (len(in.Attachments) != 0 && in.Sub != SubDeviceFile && in.Sub != SubHistoryArchive) || len(in.Attachments) > 1 || in.ReplyTo != "" || in.Origin != "" || in.Emotion != "" || in.Status != "" || in.Fan != nil || in.Human != nil || in.ReceiverRoute != nil || in.AgentID != "" || in.Topic != "" || in.TopicEvent != nil || in.TopicDone || in.Quote != "" || in.Session != "" || in.Fallback {
 			return errors.New("read sync: quiet rootless reference carrier required")
+		}
+		if in.Sub == SubHistoryArchive {
+			if in.SendGroup != "" || len(in.Attachments) != 1 || in.Attachments[0].Size < 1 || in.Attachments[0].Size > protocol.MaxHistoryArchivePlaintext {
+				return errors.New("history archive carries exactly one bounded attachment and no message grouping")
+			}
+			_, err := protocol.ParseHistoryArchive([]byte(in.Body))
+			return err
 		}
 		if in.Sub == SubDeviceFile {
 			if in.SendGroup != "" {
@@ -919,7 +927,7 @@ func SealAttention(in Inner, sender ed25519.PrivateKey, recipient age.Recipient,
 }
 
 func sealEnvelope(in Inner, sender ed25519.PrivateKey, recipient age.Recipient, channel string) (Envelope, error) {
-	if (in.Sub == SubRootSync || in.Sub == SubReadSync || in.Sub == SubInvitationSync || in.Sub == SubModelSync || in.Sub == SubTopicSync || in.Sub == SubTopicStateSync || in.Sub == SubDeviceHistory || in.Sub == SubDeviceFile) && channel != "" {
+	if (in.Sub == SubRootSync || in.Sub == SubReadSync || in.Sub == SubInvitationSync || in.Sub == SubModelSync || in.Sub == SubTopicSync || in.Sub == SubTopicStateSync || in.Sub == SubDeviceHistory || in.Sub == SubDeviceFile || in.Sub == SubHistoryArchive) && channel != "" {
 		return Envelope{}, errors.New("root sync carries no attention")
 	}
 	if !validKind(in.Kind) {
@@ -1034,7 +1042,7 @@ func Open(e Envelope, self *identity.Identity, selfAddress string, sender identi
 	if err := checkVersion2(in); err != nil {
 		return in, err
 	}
-	if (in.Sub == SubRootSync || in.Sub == SubReadSync || in.Sub == SubInvitationSync || in.Sub == SubModelSync || in.Sub == SubTopicSync || in.Sub == SubTopicStateSync || in.Sub == SubDeviceHistory || in.Sub == SubDeviceFile) && e.Attn {
+	if (in.Sub == SubRootSync || in.Sub == SubReadSync || in.Sub == SubInvitationSync || in.Sub == SubModelSync || in.Sub == SubTopicSync || in.Sub == SubTopicStateSync || in.Sub == SubDeviceHistory || in.Sub == SubDeviceFile || in.Sub == SubHistoryArchive) && e.Attn {
 		return in, errors.New("root sync carries no attention")
 	}
 	if len(in.Attachments) != len(e.Blobs) {

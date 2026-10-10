@@ -3,6 +3,7 @@ package client
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -78,7 +79,10 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 	defer a.hub.gate.setHold(false)
 	defer a.auto.runs.Wait() // after the stop below: an attempt ends with this run
 	ctx, stopRun := context.WithCancel(ctx)
-	defer stopRun()
+	defer func() {
+		stopRun()
+		a.joinArchiveRun()
+	}()
 	a.stopRun = stopRun
 	if !opts.HumanOnly {
 		stopWorker, err := a.startWorker(ctx)
@@ -246,6 +250,8 @@ func (a *Agent) streamOnce(ctx context.Context) (healthy bool, err error) {
 	defer func() { cancel(); <-workerDone }()
 	a.kickMu.Lock()
 	a.kick = func() {
+		a.postOutboxBackground() // ACKs/live turns progress while bulk upkeep is blocked
+		a.postArchiveBackground(ctx)
 		select {
 		case kick <- struct{}{}:
 		default: // a retry pass is already pending
@@ -344,9 +350,10 @@ func (a *Agent) sync(ctx context.Context) {
 	if err := a.flushReceipts(ctx); err != nil {
 		a.Logf("receipts: %v", err)
 	}
-	a.convSync(ctx)  // only what an event made due: no request otherwise
-	a.syncTeams(ctx) // team references queued by the stream, verified and pinned (teams.go)
-	a.groupSync(ctx) // group journal: pending publications first, then heads the stream said changed (convgroup.go)
+	a.postOutboxBackground() // live sends do not await bulk proof/history work or its transport
+	a.convSync(ctx)          // only what an event made due: no request otherwise
+	a.syncTeams(ctx)         // team references queued by the stream, verified and pinned (teams.go)
+	a.groupSync(ctx)         // group journal: pending publications first, then heads the stream said changed (convgroup.go)
 	if err := a.FlushOutbox(ctx); err != nil {
 		a.Logf("outbox: %v", err)
 	}
@@ -369,7 +376,23 @@ func (a *Agent) dispatch(ctx context.Context, event, data string) error {
 			a.Logf("invalid receipt event ignored")
 			return nil
 		}
-		return a.store.applyReceipt(receipt)
+		var resumes bool
+		if err := a.store.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM outbox WHERE id=? AND sub IN `+syncSubs+` AND state IN ('queued','custody'))`, receipt.ID).Scan(&resumes); err != nil {
+			return err
+		}
+		if err := a.store.applyReceipt(receipt); err != nil {
+			return err
+		}
+		if receipt.State == protocol.StateDelivered {
+			if err := a.releaseAcceptedArchiveSpool(receipt.ID); err != nil {
+				return err
+			}
+		}
+		if resumes {
+			a.convWork.due(convHistory)
+			a.kickNow()
+		}
+		return nil
 	case "message":
 		var env envelope.Envelope
 		if err := json.Unmarshal([]byte(data), &env); err != nil {
@@ -454,6 +477,38 @@ func (a *Agent) storeReceived(ctx context.Context, env envelope.Envelope) error 
 		return err
 	}
 	if seen {
+		var imported int
+		if err = a.store.db.QueryRow(`SELECT count(*) FROM history_archive_children WHERE id=?`, env.ID).Scan(&imported); err != nil {
+			return err
+		}
+		if imported != 0 {
+			// An imported child has no relay custody until it actually arrives
+			// on this transport. Validate that arrival before enabling its ACK.
+			source, pending, found, e := a.store.peer(env.From)
+			if e != nil {
+				return e
+			}
+			if !found || pending != nil {
+				return errors.New("archived duplicate source is not trusted")
+			}
+			var storedHash string
+			if e = a.store.db.QueryRow(`SELECT wire_sha256 FROM history_archive_children WHERE id=?`, env.ID).Scan(&storedHash); e != nil {
+				return e
+			}
+			raw, e := json.Marshal(env)
+			if e != nil {
+				return e
+			}
+			if fmt.Sprintf("%x", sha256.Sum256(raw)) != storedHash {
+				return errors.New("archived duplicate ciphertext differs from retained child")
+			}
+			if _, e = envelope.Open(env, a.id, a.Address, source); e != nil {
+				return e
+			}
+			if _, e = a.store.db.Exec(`DELETE FROM history_archive_children WHERE id=?`, env.ID); e != nil {
+				return e
+			}
+		}
 		return a.store.resendReceipt(env.ID)
 	}
 	if err = a.verifyAndStore(ctx, env); err != nil {
@@ -534,6 +589,13 @@ func (a *Agent) admissionFailed(ctx context.Context, env envelope.Envelope, err 
 
 // flushReceipts sends every stored disposition the Hub has not acknowledged.
 func (a *Agent) flushReceipts(ctx context.Context) error {
+	a.receiptOnce.Do(func() { a.receiptLock = make(chan struct{}, 1) })
+	select {
+	case a.receiptLock <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-a.receiptLock }()
 	pending, err := a.store.unsentReceipts()
 	if err != nil {
 		return err

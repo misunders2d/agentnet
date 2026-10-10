@@ -30,6 +30,7 @@ export const CapTopicOrganization = "org1";
 export const CapTopicParticipation = "tps1"; // explicit ongoing topic scope, never implied by rm1
 export const CapRoom = "rm1"; // protocol.CapRoom: reads room participation (ROOM_V1 §2); implies RoomImplies
 export const CapOwnSyncV2 = "own2", SubInvitationSync = "invitation-sync";
+export const CapHistoryArchive="ha1",SubHistoryArchive="history-archive";
 export const CapOwnSyncV3 = "own3", CapDeviceHistory = CapOwnSyncV3, SubDeviceHistory = "device-history", SubDeviceFile="device-file";
 export const SubTopicSync = "topic-sync";
 export const CapTopicStateSync = "tss1", SubTopicStateSync = "topic-state-sync"; // private topic marks between current own-human devices; NOT implied by rm1
@@ -703,6 +704,10 @@ async function checkV2(n) {
     if (n.target && (!n.target.agent_id || !["question", "task"].includes(n.kind) || n.target.address !== n.to || !validFingerprint(n.target.fingerprint))) throw new Error("a device message target must name an agent on its exact recipient");
     return;
   }
+  if(n.sub===SubHistoryArchive){
+    if(n.conv||n.lid||n.root||n.kind!=="message"||!n.replica||n.attachments.length!==1||n.target||n.pid||n.reply_to||n.origin||n.emotion||n.status||n.fan||n.human||n.receiver_route||n.agent_id||n.topic||n.topic_event||n.topic_done||n.quote||n.send_group||n.session||n.fallback)throw Error("history archive: quiet rootless replica required");
+    parseHistoryArchive(n.body);if(!n.attachments[0].blob||n.attachments[0].size>HistoryArchiveMaxBytes||n.attachments[0].blob.size>HistoryArchiveMaxBytes+(64<<10))throw Error("history archive exceeds bound");return;
+  }
   if(n.sub===SubModelSync || n.sub===SubReadSync || n.sub===SubInvitationSync || n.sub===SubTopicSync || n.sub===SubTopicStateSync || n.sub===SubDeviceHistory || n.sub===SubDeviceFile) {
     if(n.conv || n.lid || n.root || n.kind!=="message" || !n.replica || n.target || n.pid || (n.attachments.length && n.sub!==SubDeviceFile) || n.attachments.length>1 || n.reply_to || n.origin || n.emotion || n.status || n.fan || n.human || n.receiver_route || n.agent_id || n.topic || n.topic_event || n.topic_done || n.quote)throw Error("read sync: quiet rootless reference carrier required");
     if(n.sub===SubModelSync){if(n.send_group||n.session||n.fallback)throw Error("model sync: quiet carrier required");parseModelSync(n.body);return;}
@@ -796,7 +801,7 @@ export async function seal(m, keys, recipient) {
   // A turn that asks for the recipient's attention names its channel
   // (envelope.SealAttention); only version 2 carries it.
   const chan = m.chan || "";
-  if ((inner.sub === SubRootSync || inner.sub === SubModelSync || inner.sub === SubReadSync || inner.sub === SubInvitationSync || inner.sub === SubTopicSync || inner.sub === SubTopicStateSync || inner.sub === SubDeviceHistory || inner.sub === SubDeviceFile) && chan) throw new Error("root sync carries no attention");
+  if ((inner.sub === SubHistoryArchive || inner.sub === SubRootSync || inner.sub === SubModelSync || inner.sub === SubReadSync || inner.sub === SubInvitationSync || inner.sub === SubTopicSync || inner.sub === SubTopicStateSync || inner.sub === SubDeviceHistory || inner.sub === SubDeviceFile) && chan) throw new Error("root sync carries no attention");
   if (chan && (v !== Version2 || !validChannel(chan))) throw new Error("attention needs a version 2 message and a notification channel");
   const env = { v, id: m.id, from: m.from, to: m.to, ts: m.ts, kind: m.kind, ct,
     blobs: attachments.map((a) => a.blob), session: inner.session, fallback: inner.fallback, attn: !!chan, chan };
@@ -883,7 +888,7 @@ export async function open(json, keys, selfAddress, sender) {
     throw new Error("encrypted header does not match signed envelope");
   }
   await checkV2(n);
-  if ((n.sub === SubRootSync || n.sub === SubModelSync || n.sub === SubReadSync || n.sub === SubInvitationSync || n.sub === SubTopicSync || n.sub === SubTopicStateSync || n.sub === SubDeviceHistory || n.sub === SubDeviceFile) && e.attn) throw new Error("root sync carries no attention");
+  if ((n.sub === SubHistoryArchive || n.sub === SubRootSync || n.sub === SubModelSync || n.sub === SubReadSync || n.sub === SubInvitationSync || n.sub === SubTopicSync || n.sub === SubTopicStateSync || n.sub === SubDeviceHistory || n.sub === SubDeviceFile) && e.attn) throw new Error("root sync carries no attention");
   if (n.attachments.length !== e.blobs.length) throw new Error("encrypted manifest does not match signed attachments");
   n.attachments.forEach((a, i) => {
     const b = e.blobs[i];
@@ -983,7 +988,7 @@ export const MaxGroupHistory = 64, MaxGroupState = 256 << 10, MaxGroupCiphertext
 const groupRootDomain = "agentnet-conv-root-v3\n";
 export const convRootVersionLimit = (v) => v === GroupRootVersion ? MaxGroupRoot : MaxConvRoot;
 const convRootSizeLimit = (json) => { try { return convRootVersionLimit(JSON.parse(json).v); } catch (_) { return MaxConvRoot; } };
-export const MaxCaps = 32, MaxAdvertisedCaps = 22; // older readers already parse up to 32 names
+export const MaxCaps = 32, MaxAdvertisedCaps = 23; // older readers already parse up to 32 names
 export const MaxCapsRecord = 1024;
 export const CapEnv2 = "env2";
 export const CapPerson = "person2"; // reads person roster chains, roots v2, fan-out and history
@@ -2281,4 +2286,10 @@ export function parseInvitationSync(json) {
 export async function validateInvitationSync(r) {
  parseInvitationSync(invitationSyncJSON(r));await validateGroupInvitation(r.proposal);
  if(await groupInvitationID(r.proposal)!==r.id)throw Error("invitation sync: proposal differs");return r;
+}
+
+export const HistoryArchiveMaxBytes=4<<20,HistoryArchiveMaxEntries=50;
+export function parseHistoryArchive(json){
+ const r=strictRecord(json,4096,"history archive",{v:"int",person:"string",roster:"string",count:"int",format:"string"});
+ if(r.v!==1||!validID(r.person)||!validHash(r.roster)||r.count<1||r.count>HistoryArchiveMaxEntries||r.format!=="agentnet-history-v1")throw Error("invalid history archive manifest");return r;
 }

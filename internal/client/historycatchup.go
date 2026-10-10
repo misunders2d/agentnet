@@ -146,7 +146,7 @@ func historyCopyPresent(q dbq, dev identity.Public, c outCopy) (bool, error) {
 	}
 	// Quarantined means the receiver retained this exact ciphertext. Its
 	// normal proof recovery owns reconsideration; a new ID only floods it.
-	return state == stateQueued || state == "waiting" || state == "custody" || state == "delivered" || state == "quarantined", nil
+	return state == stateQueued || state == "waiting" || state == "custody" || state == "delivered" || state == "quarantined" || state == archiveStaged || state == archiveAccepted, nil
 }
 
 func (a *Agent) historyDependencies(it historySourceRow, prepared HistoryItem) ([]historySourceRow, error) {
@@ -235,16 +235,24 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 	if err = historyCatchupAuthority(a.store.db, a.Self(), dev); err != nil {
 		return false, err
 	}
+	archive := a.archivesFor(ctx, dev)
 	release, err := lockfile.Wait(a.spoolLockPath())
 	if err != nil {
 		return false, err
 	}
 	defer release()
+	full, e := syncWindowFull(a.store.db, dev)
+	if e != nil {
+		return false, e
+	}
 	p, err := a.historyCatchupState(dev)
 	if err != nil {
 		return false, err
 	}
-	repairMore, repairSeeded, err := a.repairLifecycleHistory(dev)
+	var repairMore, repairSeeded bool
+	if !full {
+		repairMore, repairSeeded, err = a.repairLifecycleHistory(dev)
+	}
 	if err != nil {
 		return false, err
 	}
@@ -260,11 +268,11 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 		sweep, knownWake = historyDeferredScan{}, false
 	}
 
-	if !knownWake {
+	if !knownWake && !full {
 		// Failed/expired copies remain eligible on the next existing wake.
 		// This schedules exact source refs only; their authority is checked
 		// again before any replacement ciphertext is committed.
-		if _, e := a.store.db.Exec(`INSERT OR IGNORE INTO history_deferred(recipient_fp,dir,id) SELECT h.recipient_fp,h.source_dir,h.source_id FROM history_copies h LEFT JOIN outbox o ON o.id=h.carrier WHERE h.recipient_fp=? AND coalesce(o.state,'') NOT IN ('queued','waiting','custody','delivered','quarantined')`, dev.Fingerprint()); e != nil {
+		if _, e := a.store.db.Exec(`INSERT OR IGNORE INTO history_deferred(recipient_fp,dir,id) SELECT h.recipient_fp,h.source_dir,h.source_id FROM history_copies h LEFT JOIN outbox o ON o.id=h.carrier WHERE h.recipient_fp=? AND coalesce(o.state,'') NOT IN ('queued','waiting','custody','delivered','quarantined','archive_staged','archive_accepted')`, dev.Fingerprint()); e != nil {
 			return false, e
 		}
 		p.context = ""
@@ -272,7 +280,7 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 	}
 	var items []historySourceRow
 	var contextConvs []string
-	if !p.contextDone {
+	if !p.contextDone && !full {
 		rows, e := a.store.db.Query(`SELECT conv FROM (SELECT conv FROM group_context UNION SELECT conv FROM group_proof_roots) WHERE conv>? ORDER BY conv LIMIT ?`, p.context, historyPage)
 		if e != nil {
 			return false, e
@@ -311,7 +319,7 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 	}
 	// Visit one bounded newest page per conversation using its existing
 	// timestamp index, never repeatedly rank the whole message corpus.
-	if p.phase == "recent" {
+	if p.phase == "recent" && !full {
 		for conversations := 0; conversations < historyPage; conversations++ {
 			latest, e := a.historySourceRows(a.store.db, "conv>? AND arrival<=? AND outseq<=?", "conv,ms DESC,id DESC", 1, p.pos.Conv, p.inbox, p.outbox)
 			if e != nil {
@@ -342,7 +350,7 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 			}
 		}
 	}
-	if p.phase == "older" {
+	if p.phase == "older" && !full {
 		page, e := a.historySourceRows(a.store.db, "arrival<=? AND outseq<=? AND (conv,ms,id)>(?,?,?)", "conv,ms,id", historyPage, p.inbox, p.outbox, p.pos.Conv, p.pos.Ms, p.pos.ID)
 		if e != nil {
 			return false, e
@@ -357,7 +365,7 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 			p.phase = "done"
 		}
 	}
-	if !sweep.done {
+	if !sweep.done && !full {
 		rows, e := a.store.db.Query(`SELECT dir,id FROM history_deferred WHERE recipient_fp=? AND (dir,id)>(?,?) ORDER BY dir,id LIMIT ?`, dev.Fingerprint(), sweep.dir, sweep.id, historyPage)
 		if e != nil {
 			return false, e
@@ -520,15 +528,23 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 		done[id] = true
 		return nil
 	}
+	liveConvs := map[string]bool{}
 	for _, it := range items {
+		start := len(copies)
 		if e := queue(it); e != nil {
 			if errors.Is(e, errHistoryCatchupConflict) {
 				return false, e
 			}
 			deferred = append(deferred, it)
 		}
+		if it.dir == "in" && it.arrival > p.inbox {
+			liveConvs[it.conv] = true
+			for i := start; i < len(copies); i++ {
+				copies[i].live = true
+			}
+		}
 	}
-	if len(copies) == 0 && len(prepared) == 0 && len(deferred) == 0 && len(deferredContexts) == 0 && before == p && sweep.done {
+	if len(copies) == 0 && len(prepared) == 0 && len(deferred) == 0 && len(deferredContexts) == 0 && before == p && (sweep.done || full) {
 		a.convWork.mu.Lock()
 		a.convWork.historyDeferred[dev.Fingerprint()] = sweep
 		a.convWork.mu.Unlock()
@@ -618,6 +634,21 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 			// its verified original-author copy. Retained ciphertext stays put.
 			if _, e = tx.Exec(`DELETE FROM history_copies WHERE recipient_fp=? AND conv=? AND author=? AND lid=? AND source_dir=? AND source_id=?`, dev.Fingerprint(), c.in.Conv, source.key, item.LID, source.dir, source.in.ID); e != nil {
 				return false, e
+			}
+		}
+	}
+	for i := range carriers {
+		carriers[i].live = liveConvs[carriers[i].in.Conv]
+	}
+	if archive {
+		for i := range carriers {
+			if !carriers[i].live {
+				carriers[i].state = archiveStaged
+			}
+		}
+		for i := range freshCopies {
+			if !freshCopies[i].live {
+				freshCopies[i].state = archiveStaged
 			}
 		}
 	}

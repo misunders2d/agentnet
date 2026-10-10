@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -251,6 +252,16 @@ func (h *Hub) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "", "invalid message query")
+		return
+	}
+	lane, err := protocol.ParseMessageLane(query)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "", err.Error())
+		return
+	}
 	var env envelope.Envelope
 	if err := decodeStrict(body, &env); err != nil {
 		writeError(w, http.StatusBadRequest, "", "malformed envelope")
@@ -287,7 +298,7 @@ func (h *Hub) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	// Store a canonical re-encoding so identical retries compare equal.
 	canonical, _ := json.Marshal(env)
-	state, err := h.store.putMessage(env, canonical, sender.Public.Fingerprint(), time.Now())
+	state, err := h.store.putMessage(env, canonical, sender.Public.Fingerprint(), time.Now(), lane)
 	if errors.Is(err, errIDConflict) || errors.Is(err, errBlobNotReady) {
 		writeError(w, http.StatusConflict, "", err.Error())
 		return
@@ -339,6 +350,7 @@ func (h *Hub) handleAck(w http.ResponseWriter, r *http.Request) {
 	h.streams.received(caller) // its stream is alive, even while its pings wait behind messages
 	if changed {
 		h.streams.notify(sender)
+		h.streams.notify(caller) // an acknowledged sync frame frees its stream's bounded slot
 	}
 	h.waiters.notify(r.PathValue("id"))
 	writeJSON(w, http.StatusOK, protocol.Receipt{ID: r.PathValue("id"), State: state})

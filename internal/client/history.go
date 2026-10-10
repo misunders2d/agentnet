@@ -237,6 +237,11 @@ func insertCopies(tx *sql.Tx, copies []outCopy) error {
 			c.env.ID, c.env.To, body, string(data), c.state, now.Unix(), c.in.Conv, c.in.LID, c.in.Kind, now.UnixMilli(), c.in.Sub, copyRequirement(c), c.recipientFP, c.groupAdmission); err != nil {
 			return err
 		}
+		if c.live {
+			if _, err := tx.Exec(`UPDATE outbox SET replication_live=1 WHERE id=?`, c.env.ID); err != nil {
+				return err
+			}
+		}
 		var h HistoryItem
 		if c.in.Sub == envelope.SubHistory {
 			_ = json.Unmarshal([]byte(c.in.Body), &h)
@@ -698,7 +703,7 @@ type groupHistoryBatch struct {
 }
 
 func (a *Agent) groupHistoryBatchPresent(q dbq, dev identity.Public, packet GroupContext, payloads []groupDeliveryPayload) (bool, error) {
-	rows, err := q.Query(`SELECT sub,body,envelope FROM outbox WHERE conv=? AND recipient=? AND recipient_fp=? AND required_cap=? AND coalesce(pid,'')='' AND sub IN ('group-proof','group-context') AND state IN ('queued','waiting','custody','delivered','quarantined')`, packet.State.Conv, dev.Address, dev.Fingerprint(), protocol.CapGroup)
+	rows, err := q.Query(`SELECT sub,body,envelope FROM outbox WHERE conv=? AND recipient=? AND recipient_fp=? AND required_cap=? AND coalesce(pid,'')='' AND sub IN ('group-proof','group-context') AND state IN ('queued','waiting','custody','delivered','quarantined','archive_staged','archive_accepted')`, packet.State.Conv, dev.Address, dev.Fingerprint(), protocol.CapGroup)
 	if err != nil {
 		return false, err
 	}
@@ -868,6 +873,7 @@ func (a *Agent) historyPageFor(dev identity.Public, pos historyPos) (more bool, 
 }
 
 func (a *Agent) historyPage(ctx context.Context, dev identity.Public, pos historyPos, contextOnly bool) (more bool, err error) {
+	archive := a.archivesFor(ctx, dev)
 	if err := a.discoveredHistoryCheck(a.store.db, dev.Address); err != nil {
 		return false, err
 	}
@@ -876,6 +882,9 @@ func (a *Agent) historyPage(ctx context.Context, dev identity.Public, pos histor
 		return false, err
 	}
 	defer release()
+	if full, e := syncWindowFull(a.store.db, dev); e != nil || full {
+		return false, e // the next receipt/source/member wake resumes this exact cursor
+	}
 	batches, err := a.prepareGroupHistoryCarriers(ctx, dev)
 	if err != nil {
 		return false, err
@@ -940,6 +949,10 @@ func (a *Agent) historyPage(ctx context.Context, dev identity.Public, pos histor
 	}
 	if err := a.checkHistoryCopies(tx, copies); err != nil {
 		return false, err
+	}
+	if archive {
+		stageArchiveCopies(carriers)
+		stageArchiveCopies(copies)
 	}
 	if err := insertCopies(tx, append(carriers, copies...)); err != nil {
 		return false, err
@@ -1014,6 +1027,7 @@ type HistoryJob struct {
 	DeliveryKnown bool   `json:"delivery_known"`
 	Queued        int    `json:"queued"`
 	Custody       int    `json:"custody"`
+	Retained      int    `json:"retained"` // archive ciphertext stored on the destination; import is not proven
 	Delivered     int    `json:"delivered"`
 	Blocked       int    `json:"blocked"`
 	Deferred      int    `json:"deferred"`
@@ -1083,10 +1097,12 @@ func (a *Agent) HistoryProgress() ([]HistoryJob, error) {
 				return nil, err
 			}
 			switch state {
-			case "queued", "waiting":
+			case "queued", "waiting", archiveStaged:
 				out[i].Queued += count
 			case "custody":
 				out[i].Custody += count
+			case archiveAccepted:
+				out[i].Retained += count
 			case "delivered":
 				out[i].Delivered += count
 			default:

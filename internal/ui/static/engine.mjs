@@ -15,6 +15,8 @@
 import * as wire from "./wire.mjs";
 import { contributionPreview, contributionApply, contributionRecheck } from "./historycontribution.mjs";
 import {deviceHistory,directHistoryRow} from "./devicehistory.mjs";
+import { backgroundCopy, historyWindow } from "./historywindow.mjs";
+import { historyArchive } from "./historyarchive.mjs";
 import { Decrypter, Encrypter } from "./vendor/age.mjs";
 import { openDB } from "./vendor/idb.mjs"; // idb: promises over IndexedDB (webvendor, pinned)
 import { createParser } from "./vendor/sse.mjs"; // eventsource-parser: the framing of the signed event stream (webvendor, pinned)
@@ -112,7 +114,7 @@ const historyIndexed = (row,arrival) => {
 export async function openIDB(name = "agentnet") {
   let onBlocked, refused = false;
   const blocked = new Promise((_, rej) => { onBlocked = () => { refused = true; rej(new Error("storage is blocked by another tab")); }; });
-  const opening = openDB(name, 6, { // 5: continuous direct-thread source journal; 6: rows by conversation
+  const opening = openDB(name, 7, { // 5: continuous direct-thread source journal; 6: rows by conversation; 7: pending outbox state indexes
     async upgrade(d,oldVersion,newVersion,tx) {
       for (const s of stores) if (!d.objectStoreNames.contains(s)) d.createObjectStore(s);
       if(oldVersion<4) {
@@ -129,6 +131,7 @@ export async function openIDB(name = "agentnet") {
       // the index makes each cost the rows of that conversation, not of the
       // whole store. IndexedDB fills it from the existing rows here.
       if(oldVersion<6)for(const s of ["inbox","outbox"])tx.objectStore(s).createIndex("conv","conv");
+      if(oldVersion<7){const outbox=tx.objectStore("outbox");outbox.createIndex("sub","sub");outbox.createIndex("state","state");outbox.createIndex("recipient_state",["to","state"]);outbox.createIndex("lane_demote","lane_demote");}
     },
     blocked: onBlocked,
   });
@@ -146,6 +149,13 @@ export async function openIDB(name = "agentnet") {
     keysAfter: (s,k,n) => db.getAllKeys(s,k === "" ? null : IDBKeyRange.lowerBound(k,true),n),
     // prefix returns the values whose keys start with p, in key order.
     prefix: (s, p) => db.getAll(s, IDBKeyRange.bound(p, p + "\uffff")),
+    async outboxStates(states,to="") {
+      const tx=db.transaction("outbox"),rows=[];
+      for(const state of states)rows.push(...await tx.store.index(to?"recipient_state":"state").getAll(to?[to,state]:state));
+      await tx.done;return rows;
+    },
+    outboxSub:sub=>db.getAllFromIndex("outbox","sub",sub),
+    demotionRows:()=>db.getAllFromIndex("outbox","lane_demote","sync"),
     // byConv returns the inbox or outbox rows of one conversation, in key order.
     byConv: (s, conv) => db.getAllFromIndex(s, "conv", conv),
     async directRows({after=0,ceiling=Number.MAX_SAFE_INTEGER,reverse=false,limit=historyPage}={}){
@@ -221,6 +231,9 @@ export function memoryStore() {
     after: async (s, k, n) => [...data[s].keys()].filter((x) => x > k).sort().slice(0, n).map((x) => structuredClone(data[s].get(x))),
     keysAfter: async (s,k,n) => [...data[s].keys()].filter(x=>x>k).sort().slice(0,n),
     prefix: async (s, p) => [...data[s].keys()].filter((x) => x.startsWith(p)).sort().map((x) => structuredClone(data[s].get(x))),
+    outboxStates:async(states,to="")=>[...data.outbox.values()].filter(r=>states.includes(r.state)&&(!to||r.to===to)).map(r=>structuredClone(r)),
+    outboxSub:async sub=>[...data.outbox.values()].filter(r=>r.sub===sub).map(r=>structuredClone(r)),
+    demotionRows:async()=>[...data.outbox.values()].filter(r=>r.lane_demote==="sync").map(r=>structuredClone(r)),
     byConv: async (s, conv) => [...data[s].keys()].filter((x) => data[s].get(x).conv === conv).sort().map((x) => structuredClone(data[s].get(x))),
     directRows:async({after=0,ceiling=Number.MAX_SAFE_INTEGER,reverse=false,limit=historyPage}={})=>[...[...data.inbox.values()].map(row=>({row,here:false})),...[...data.outbox.values()].map(row=>({row,here:true}))].filter(x=>x.row.device_arrival>after&&x.row.device_arrival<=ceiling).sort((a,b)=>(a.row.device_arrival-b.row.device_arrival)*(reverse?-1:1)).slice(0,limit).map(x=>structuredClone(x)),
     historyRows: async(s,{after=null,conv="",reverse=false,arrival=false,ceiling=Number.MAX_SAFE_INTEGER,limit=historyPage}={})=>[...data[s].values()].filter(r=>r.history_pos&&(!conv||r.conv===conv)&&(arrival?r.history_arrival>(after||0)&&r.history_arrival<=ceiling:!after||historyOrder(r.history_pos,after)>0)).sort((a,b)=>(arrival?a.history_arrival-b.history_arrival:historyOrder(a.history_pos,b.history_pos))*(reverse?-1:1)).slice(0,limit).map(r=>structuredClone(r)),
@@ -1634,6 +1647,8 @@ export class Engine {
 
   directHistory() { return this.directHistoryModule ||= deviceHistory(this,Hold); }
 
+  archives() { return this.archiveHelper ||= historyArchive(this,Hold,StoreConflict); }
+
   async historyBook() {
     return (await this.store.get("kv", "history")) || {};
   }
@@ -1733,7 +1748,8 @@ export class Engine {
     if(!this.readSyncRun)this.readSyncRun=(async()=>{do{this.readSyncAgain=false;await this.syncReadPages();}while(this.readSyncAgain);})().finally(()=>{this.readSyncRun=null;});
     return this.readSyncRun;
   }
-  async syncReadPages() {
+  async syncReadPages() { return this.withHistoryProduction(()=>this.syncReadPagesUnpaced()); }
+  async syncReadPagesUnpaced() {
     for(;;) {
       const own=await this.store.get("kv","person");
       if(!own || own.state!=="self" || !own.devices.some(d=>d.address===this.address&&d.fingerprint===this.fp) || !(own.human_keys||[]).includes(this.fp))return;
@@ -1748,11 +1764,12 @@ export class Engine {
         }
         recovery.push({s:"kv",k:recoveryKey,v:{done:true}});await this.store.write(recovery,recoveryChecks);
       }
-      const marks=(await this.store.all("kv")).filter(m=>m?.owner===own.person&&m.ref),saved=await this.store.all("outbox"),ops=[],checks=[];let more=false;
+      const marks=(await this.store.all("kv")).filter(m=>m?.owner===own.person&&m.ref),saved=await this.store.outboxSub(wire.SubReadSync),ops=[],checks=[];let more=false;
       // A single O(mark count + outbox references) pass, never one scan per mark.
       // Quarantine retains the same ciphertext for recovery, not another batch.
       const present=new Set();for(const o of saved)if(o.sub===wire.SubReadSync&&o.read_owner===own.person&&["queued","waiting","custody","delivered","quarantined"].includes(o.state))for(const key of o.read_refs||[])present.add(o.recipient_fp+"|"+key);
       for(const dev of own.devices) {
+        if(!await historyWindow(this.store,dev))continue;
         if(dev.address===this.address || !(own.human_keys||[]).includes(dev.fingerprint))continue;
         const refs=marks.filter(m=>!present.has(dev.fingerprint+"|"+this.readMarkKey(own.person,m.ref))).slice(0,64).map(m=>m.ref);if(!refs.length)continue;
         const body=JSON.stringify({v:1,person:own.person,roster:own.hash,refs}),r=wire.parseReadSync(body);
@@ -1853,7 +1870,8 @@ export class Engine {
     if(!this.topicSyncRun)this.topicSyncRun=(async()=>{do{this.topicSyncAgain=false;try{await this.syncTopicPages();}catch(e){if(e instanceof StoreConflict)this.topicSyncAgain=true;else throw e;}}while(this.topicSyncAgain);})().finally(()=>{this.topicSyncRun=null;});
     return this.topicSyncRun;
   }
-  async syncTopicPages() {
+  async syncTopicPages() { return this.withHistoryProduction(()=>this.syncTopicPagesUnpaced()); }
+  async syncTopicPagesUnpaced() {
     const recoveryChecks=[],own=await this.groupRead(recoveryChecks,"kv","person");
     if(!own||own.state!=="self"||!own.human_keys?.includes(this.fp)||!own.devices.some(d=>d.address===this.address&&d.fingerprint===this.fp))return;
     const recovered="topic-title-recovered/"+own.person;
@@ -1872,6 +1890,7 @@ export class Engine {
       const checks=[],current=await this.groupRead(checks,"kv","person"),ops=[];
       if(!current||current.person!==own.person||current.state!=="self"||!current.human_keys?.includes(this.fp)||!current.devices.some(d=>d.address===this.address&&d.fingerprint===this.fp))return;
       for(const dev of current.devices){
+        if(!await historyWindow(this.store,dev))continue;
         if(dev.address===this.address||!current.human_keys.includes(dev.fingerprint))continue;
         const titles=[];
         for(const saved of page){
@@ -1946,7 +1965,8 @@ export class Engine {
     if(!this.topicMarkSyncRun)this.topicMarkSyncRun=(async()=>{do{this.topicMarkSyncAgain=false;try{await this.syncTopicMarkPages();}catch(e){if(e instanceof StoreConflict)this.topicMarkSyncAgain=true;else throw e;}}while(this.topicMarkSyncAgain);})().finally(()=>{this.topicMarkSyncRun=null;});
     return this.topicMarkSyncRun;
   }
-  async syncTopicMarkPages() {
+  async syncTopicMarkPages() { return this.withHistoryProduction(()=>this.syncTopicMarkPagesUnpaced()); }
+  async syncTopicMarkPagesUnpaced() {
     const seedChecks=[],own=await this.groupRead(seedChecks,"kv","person");
     if(!this.ownTopicWriter(own))return;
     const seed=await this.topicMarkSeedOps(own,seedChecks);if(seed.ops.length)await this.store.write(seed.ops,seedChecks);
@@ -1956,6 +1976,7 @@ export class Engine {
       const checks=[],current=await this.groupRead(checks,"kv","person"),ops=[];
       if(!this.ownTopicWriter(current)||current.person!==own.person)return;
       for(const dev of current.devices){
+        if(!await historyWindow(this.store,dev))continue;
         if(dev.address===this.address||!current.human_keys.includes(dev.fingerprint))continue;
         // A device that cannot read marks yet keeps one waiting carrier; later
         // marks stay unsealed here, so nothing piles up for an older program.
@@ -2012,7 +2033,8 @@ export class Engine {
     })().finally(()=>{this.invitationSyncRun=null;});
     return this.invitationSyncRun;
   }
-  async syncInvitationPages() {
+  async syncInvitationPages() { return this.withHistoryProduction(()=>this.syncInvitationPagesUnpaced()); }
+  async syncInvitationPagesUnpaced() {
     for(;;) {
       const checks=[],ops=[],own=await this.groupRead(checks,"kv","person");
       if(!own || own.state!=="self" || !(own.human_keys||[]).includes(this.fp) || !own.devices.some(d=>d.address===this.address&&d.fingerprint===this.fp))return;
@@ -2026,9 +2048,10 @@ export class Engine {
         if(!old||r.revision!==old.record.revision)ops.push({s:"kv",k,v:{type:"own-invitation",from:this.address,fp:this.fp,record:r}});
         views.push(r);
       }
-      const saved=await this.store.all("outbox"),present=new Set(saved.filter(o=>o.sub===wire.SubInvitationSync&&["queued","waiting","custody","delivered","quarantined"].includes(o.state)).map(o=>o.recipient_fp+"/"+o.invitation_id+"/"+o.invitation_revision));
+      const saved=await this.store.outboxSub(wire.SubInvitationSync),present=new Set(saved.filter(o=>o.sub===wire.SubInvitationSync&&["queued","waiting","custody","delivered","quarantined"].includes(o.state)).map(o=>o.recipient_fp+"/"+o.invitation_id+"/"+o.invitation_revision));
       let count=0;
       outer:for(const dev of own.devices) {
+        if(!await historyWindow(this.store,dev))continue;
         if(dev.address===this.address||!(own.human_keys||[]).includes(dev.fingerprint))continue;
         for(const r of views) {
           if(present.has(dev.fingerprint+"/"+r.id+"/"+r.revision))continue;
@@ -2075,7 +2098,8 @@ export class Engine {
     return this.rootSyncRun;
   }
 
-  async syncRootPages() {
+  async syncRootPages() { return this.withHistoryProduction(()=>this.syncRootPagesUnpaced()); }
+  async syncRootPagesUnpaced() {
     for(;;) {
       const own=await this.store.get("kv","person");
       if(!own || own.state!=="self" || !own.devices.some(d=>d.address===this.address&&d.fingerprint===this.fp) || !(own.human_keys||[]).includes(this.fp))return;
@@ -2084,10 +2108,11 @@ export class Engine {
         if(c.kind==="group" || this.erasedConv(c.id))continue;
         const root=wire.parseRoot(c.root);if(!wire.rootMember(root,own.person))continue;
         for(const dev of own.devices) {
+        if(!await historyWindow(this.store,dev))continue;
           if(dev.address===this.address || !(own.human_keys||[]).includes(dev.fingerprint))continue;
           try { await this.rootSyncAuthority(root,this.address,this.fp,dev.address,dev.fingerprint,checks); } catch(e) { continue; }
           const saved=await this.authorityRows({conv:c.id,sub:wire.SubRootSync},checks);
-          if(saved.some(r=>r.to===dev.address&&r.recipient_fp===dev.fingerprint&&r.required_cap===wire.CapRootSync&&["queued","waiting","custody","delivered","quarantined"].includes(r.state)))continue;
+          if(saved.some(r=>r.to===dev.address&&r.recipient_fp===dev.fingerprint&&r.required_cap===wire.CapRootSync&&["queued","waiting","custody","delivered","quarantined","archive_staged","archive_accepted"].includes(r.state)))continue;
           const id=wire.newID(),lid=wire.newID(),body='{"v":1}',at=this.now();
           const envelope=await wire.seal({v:wire.Version2,id,from:this.address,to:dev.address,ts:Math.floor(at/1000),kind:"message",conv:c.id,lid,root:c.root,sub:wire.SubRootSync,replica:true,body},this.keys,await wire.parsePublic(JSON.parse(dev.json)));
           ops.push({s:"outbox",k:id,v:{id,lid,conv:c.id,to:dev.address,recipient_fp:dev.fingerprint,required_cap:wire.CapRootSync,sub:wire.SubRootSync,body,envelope,at,state:"queued",aside:true}});
@@ -2096,7 +2121,9 @@ export class Engine {
         if(ops.length===historyPage)break;
       }
       if(!ops.length)return;
-      await this.store.write(ops,checks);this.changed();
+      const ownCopies=ops.filter(o=>o.s==="outbox").map(o=>o.v);
+      let prepared=[];for(const dev of own.devices){const copies=ownCopies.filter(r=>r.to===dev.address&&r.recipient_fp===dev.fingerprint);if(copies.length)prepared.push(...await this.archives().prepare(copies,[],checks,dev));}
+      await this.store.write(prepared,checks);this.archives().wake().catch(()=>{});this.changed();
       if(this.connected)this.queueOutbox();
       if(ops.length<historyPage)return;
     }
@@ -2194,7 +2221,16 @@ export class Engine {
   // v2 retains the old snapshot cursor. A separate recent/older pass repairs
   // accepted pre-upgrade gaps once, while a storage-arrival tail keeps moving
   // during backfill. Exact original tuples, never timestamps, deduplicate it.
-  async historyCatchupStep(dev,j) {
+  // Serialize durable sync production only. Network delivery, live sends and
+  // receipt acknowledgements never acquire this lane.
+  withHistoryProduction(work) {
+    const run=(this.historyProduction||Promise.resolve()).catch(()=>{}).then(work);
+    this.historyProduction=run;return run;
+  }
+
+  async historyCatchupStep(dev,j) { return this.withHistoryProduction(()=>this.historyCatchupPage(dev,j)); }
+  async historyCatchupPage(dev,j) {
+    const available=await historyWindow(this.store,dev);
     const checks=[],book=structuredClone(await this.groupRead(checks,"kv","history"));
     if(!book?.[dev.address] || JSON.stringify(book[dev.address])!==JSON.stringify(j))return false;
     if(j.own_human&&j.own_human!==this.fp || j.catchup?.source&&j.catchup.source!==this.fp || !await this.ownHistoryAuthority(dev,checks))return false;
@@ -2216,11 +2252,13 @@ export class Engine {
     const ops=[],copies=[],visiting=new Set(),attempted=new Map(),contexts=new Set();
     const pending=async(ref,why)=>{const k=prefix+ref.tuple;await this.groupRead(checks,"kv",k);ops.push({s:"kv",k,v:{...ref,key:k,why}});};
     const clear=async tuple=>{const k=prefix+tuple;if(await this.groupRead(checks,"kv",k))ops.push({s:"kv",k});};
-    const context=async c=>{
+    const context=async(c,fresh=false)=>{
       if(c.kind!=="group"||contexts.has(c.id))return;
-      const carriers=await this.groupHistoryCarriers(c,dev,checks);copies.push(...carriers);contexts.add(c.id);
+      const carriers=await this.groupHistoryCarriers(c,dev,checks);
+      if(fresh)for(const carrier of carriers)carrier.fresh_live=true;
+      copies.push(...carriers);contexts.add(c.id);
     };
-    const queue=async(row,here=false)=>{
+    const queue=async(row,here=false,fresh=false)=>{
       const s=here?"outbox":"inbox",m=await this.groupRead(checks,s,row.id);
       if(!m||!historySource(m)||this.erasedRow(m))return;
       if(m.history&&m.synced_from===dev.address&&m.synced_key===dev.fingerprint)return true; // that exact device forwarded it here: it holds it
@@ -2239,14 +2277,14 @@ export class Engine {
       if(visiting.has(tuple))throw new Hold("proof_pending","Historical dependency is cyclic.");
       if(attempted.has(tuple))return attempted.get(tuple);
       attempted.set(tuple,false);visiting.add(tuple);
-      const ref={tuple,conv:m.conv,id:m.id,dir:s};
+      const ref={tuple,conv:m.conv,id:m.id,dir:s,...(fresh?{fresh_live:true}:{})};
       try {
         const hash=item.ref?await this.groupControlHash(m.conv,item):await wire.groupHistoryContentHash(m.conv,item),key=copyPrefix+tuple;
         const saved=await this.groupRead(checks,"kv",key);
         if(saved&&saved.hash!==hash)throw new Hold("conflicting_duplicate","Historical original conflicts with its queued copy.");
         if(saved?.copy) {
           const sent=await this.groupRead(checks,"outbox",saved.copy);
-          if(sent?.to===dev.address&&sent.recipient_fp===dev.fingerprint&&sent.sub==="history"&&["queued","waiting","custody","delivered","quarantined"].includes(sent.state)) {
+          if(sent?.to===dev.address&&sent.recipient_fp===dev.fingerprint&&sent.sub==="history"&&["queued","waiting","custody","delivered","quarantined","archive_staged","archive_accepted"].includes(sent.state)) {
             const h=wire.parseHistory(sent.body),actual=h.ref?await this.groupControlHash(m.conv,h):await wire.groupHistoryContentHash(m.conv,h);
             if(h.from_key!==item.from_key||h.lid!==item.lid||actual!==hash)throw new Hold("conflicting_duplicate","Historical copy ledger differs from its durable envelope.");
             await clearSource();attempted.set(tuple,true);return true;
@@ -2254,7 +2292,7 @@ export class Engine {
         }
         if(copies.length>=historyPage*3)throw new Hold("proof_pending","Historical dependencies continue in bounded backfill.");
         const c=convs.get(m.conv);if(!c)throw new Hold("proof_pending","Historical conversation root unavailable.");
-        await context(c);
+        await context(c,fresh);
         const dependencies=[];
         if(item.pid&&item.sub!=="event") {
           const events=(await this.authorityRows({conv:m.conv,pid:item.pid,sub:"event"},checks)).filter(historySource);
@@ -2266,8 +2304,8 @@ export class Engine {
           for(const table of ["inbox","outbox"]) {const r=await this.groupRead(checks,table,target);if(r&&r.conv===m.conv&&historySource(r))dependencies.push(r);}
           if(!dependencies.some(r=>r.id===target))dependencies.push(...(await this.authorityRows({conv:m.conv,lid:target},checks)).filter(historySource));
         }
-        for(const d of dependencies)if(!await queue(d,!!d.to))throw new Hold("proof_pending","Historical dependency remains unavailable.");
-        const rec=await this.historyCopy(dev,c,item,checks);rec.recipient_fp=dev.fingerprint;
+        for(const d of dependencies)if(!await queue(d,!!d.to,fresh))throw new Hold("proof_pending","Historical dependency remains unavailable.");
+        const rec=await this.historyCopy(dev,c,item,checks);rec.recipient_fp=dev.fingerprint;if(fresh)rec.fresh_live=true;
         copies.push(rec);ops.push({s:"kv",k:key,v:{hash,copy:rec.id}});await clearSource();attempted.set(tuple,true);return true;
       } catch(e) {
         if(e instanceof StoreConflict)throw e;
@@ -2278,7 +2316,7 @@ export class Engine {
     // including completed jobs. Normal source verification decides each ref;
     // unchanged held ciphertext and the snapshot/tail cursors remain intact.
     const repair=p.lifecycleRepair||={after:copyPrefix,done:false};
-    if(!repair.done) {
+    if(available&&!repair.done) {
       const keys=(await this.store.keysAfter("kv",repair.after,historyPage)).filter(k=>k.startsWith(copyPrefix));
       for(const key of keys) {
         repair.after=key;
@@ -2296,7 +2334,7 @@ export class Engine {
     // A bounded fresh-arrival page takes precedence on every step, even while
     // another conversation's older pages or unresolved proof are pending.
     const tail=await this.store.historyRows("inbox",{arrival:true,after:p.tail,ceiling});
-    for(const row of tail)await queue(row);
+    for(const row of tail)await queue(row,false,true);
     if(tail.length)p.tail=tail.at(-1).history_arrival;
     if(tail.length<historyPage)p.tail=ceiling;
     const sourcePage=async options=>{
@@ -2306,11 +2344,11 @@ export class Engine {
     // The existing carrier repair also covers quiet groups and completed jobs.
     // Advance once per group per external wake, including unavailable groups.
     const groups=[...convs.values()].filter(c=>c.kind==="group"&&c.id>sweep.contextAfter).sort((a,b)=>a.id.localeCompare(b.id));
-    if(groups.length) {
+    if(available&&groups.length) {
       const c=groups[0];sweep.contextAfter=c.id;
       try{await context(c);await clear("context/"+c.id);}catch(e){if(e instanceof StoreConflict)throw e;await pending({tuple:"context/"+c.id,conv:c.id},"proof_pending");}
     }
-    if(p.stage==="recent") {
+    if(available&&p.stage==="recent") {
       const id=[...convs.keys()].sort().find(id=>id>p.recent);
       if(id) {
         const c=convs.get(id);
@@ -2318,7 +2356,7 @@ export class Engine {
         for(const {m,here} of await sourcePage({conv:id,reverse:true}))await queue(m,here);
         p.recent=id;
       } else p.stage="older";
-    } else if(p.stage==="older") {
+    } else if(available&&p.stage==="older") {
       const page=await sourcePage({after:p.older});
       for(const {m,here} of page)if(here?m.at<=p.started:m.history_arrival<=p.ceiling)await queue(m,here);
       if(page.length)p.older=page.at(-1).m.history_pos;
@@ -2329,11 +2367,12 @@ export class Engine {
       const refs=(await this.store.after("kv",sweep.after,historyPage)).filter(r=>r?.key?.startsWith(prefix));
       for(const ref of refs) {
         sweep.after=ref.key;
+        if(!available&&!ref.fresh_live)continue;
         if(ref.tuple.startsWith("context/")) {try{const c=convs.get(ref.conv);if(c){await context(c);await clear(ref.tuple);}}catch(e){if(e instanceof StoreConflict)throw e;}}
         else {
           let row=await this.groupRead(checks,ref.dir,ref.id);
           if(!row&&ref.dir==="inbox") {const lid=ref.tuple.split("/").slice(-2).join("/"),seen=await this.groupRead(checks,"lids",lid);if(seen)row=await this.groupRead(checks,"inbox",seen.id);}
-          if(row)await queue(row,ref.dir==="outbox");
+          if(row)await queue(row,ref.dir==="outbox",!!ref.fresh_live);
         }
       }
       pendingMore=refs.length===historyPage;if(!pendingMore)sweep.done=true;
@@ -2346,10 +2385,11 @@ export class Engine {
     book[dev.address]=next;
     if(JSON.stringify(next)!==JSON.stringify(j))ops.push({s:"kv",k:"history",v:book});
     if(ops.length||copies.length) {
-      await this.store.write([...copies.map(c=>({s:"outbox",k:c.id,v:c})),...ops],checks);
+      await this.store.write(await this.archives().prepare(copies,ops,checks,dev),checks);
+      this.archives().wake().catch(()=>{});
       this.changed();if(this.connected)this.queueOutbox();
     }
-    return p.stage!=="tail"||tail.length===historyPage||pendingMore||groups.length>1||!repair.done;
+    return tail.length===historyPage||available&&(p.stage!=="tail"||pendingMore||groups.length>1||!repair.done);
   }
 
   // Reuse original signed group journals and existing encrypted carriers.
@@ -2366,7 +2406,7 @@ export class Engine {
     payloads.push({sub:wire.SubGroupContext,descriptor:{v:1,seq:packet.state.seq,hash:await wire.groupStateHash(packet.state)},body:wire.groupContextJSON({...packet,memberships:await this.roomMemberships(c,events,members)})});
     const saved=await this.authorityRows({conv:c.id},checks),seen=new Set(),pub=await wire.publicEntry(this.keys,this.address);
     for(const row of saved) {
-      if(row.to!==dev.address||row.recipient_fp!==dev.fingerprint||row.required_cap!==wire.CapGroup||row.pid||!["queued","waiting","custody","delivered","quarantined"].includes(row.state))continue;
+      if(row.to!==dev.address||row.recipient_fp!==dev.fingerprint||row.required_cap!==wire.CapGroup||row.pid||!["queued","waiting","custody","delivered","quarantined","archive_staged","archive_accepted"].includes(row.state))continue;
       try {
         const descriptor=wire.parseGroupCarrier(row.body),env=wire.parseEnvelope(row.envelope);
         if(descriptor.to_key!==dev.fingerprint||env.v!==wire.Version2||env.from!==this.address||env.to!==dev.address||env.kind!=="message"||env.blobs.length!==1)continue;
@@ -2376,7 +2416,7 @@ export class Engine {
     }
     if(seen.size===payloads.length)return [];
     const copies=[];
-    for(const p of payloads)copies.push(await this.groupCarrierCopy(packet.root,p.sub,p.descriptor,p.body,dev));
+    for(const [index,p] of payloads.entries())if(!seen.has(index))copies.push(await this.groupCarrierCopy(packet.root,p.sub,p.descriptor,p.body,dev));
     return copies;
   }
 
@@ -3072,6 +3112,7 @@ export class Engine {
   async postStored(rec) {
     if (rec.state === "receiver_waiting") return;
     try {
+      if(rec.sub===wire.SubHistoryArchive)await this.archives().gate(rec);
       await this.discoveredHistoryDelivery(rec);
       await this.receiverDeliveryGate(rec);
       await this.proposalDeliveryGate(rec);
@@ -3170,14 +3211,14 @@ export class Engine {
       if(rec.sub===wire.SubReadSync)await this.readSyncGate(rec);
       await this.proposalDeliveryGate(rec);
       if (!await this.startHandover(rec)) return;
-      const r = await this.call("POST", "/v1/messages", rec.envelope);
+      const r = await this.call("POST", "/v1/messages"+(backgroundCopy(rec)?"?lane=sync":""), rec.envelope);
       rec.state = (r && r.state) || "custody";
       rec.detail = "";
       // The relay has everything: the ciphertext kept here is not needed.
       if (rec.files) rec.files = rec.files.map((f) => ({ ...f, ct: null }));
     } catch (e) {
       if (e.code === "receiver_redacted") return; // keep the newer exact-scope retention transaction
-      if (e.code === "followup_unsupported" || e.code === "proposal_unsupported" || e.code === "receiver_unsupported" || e.code === "topic_organization_unsupported" || e.code === "model_sync_unsupported" || e.code === "read_sync_unsupported" || e.code === "invitation_sync_unsupported" || e.code === "topic_sync_unsupported" || e.code === "control_unsupported" || rec.conv && ["group_invitation_unsupported", "root_sync_unsupported", "agent_identity_unsupported", "human_unsupported", "group_unsupported", "clear_unsupported", "room_unsupported"].includes(e.code)) {
+      if (e.code === "history_archive_unsupported" || e.code === "followup_unsupported" || e.code === "proposal_unsupported" || e.code === "receiver_unsupported" || e.code === "topic_organization_unsupported" || e.code === "model_sync_unsupported" || e.code === "read_sync_unsupported" || e.code === "invitation_sync_unsupported" || e.code === "topic_sync_unsupported" || e.code === "control_unsupported" || rec.conv && ["group_invitation_unsupported", "root_sync_unsupported", "agent_identity_unsupported", "human_unsupported", "group_unsupported", "clear_unsupported", "room_unsupported"].includes(e.code)) {
         rec.state = "waiting"; rec.detail = "peer_update: " + e.message;
       } else if(e.code==="device_history_authority") {
         rec.state="not_delivered";rec.detail=e.message;
@@ -3292,27 +3333,67 @@ export class Engine {
     return id || wire.newID();
   }
 
+  // Older relay custody used the live route. Reannounce only inert sync
+  // ciphertext under the same ID; authoritative receipts never regress.
+  async migrateSyncCustody() {
+    if(await this.store.get("kv","sync-custody-lane-v1"))return;
+    const rows=(await this.store.outboxStates(["custody"])).filter(backgroundCopy);
+    for(let offset=0;offset<rows.length;offset+=historyPage){
+      const ops=[],checks=[];
+      for(const row of rows.slice(offset,offset+historyPage)){
+        const current=await this.groupRead(checks,"outbox",row.id);
+        if(current?.state==="custody"&&backgroundCopy(current))ops.push({s:"outbox",k:row.id,v:{...current,lane_demote:"sync"}});
+      }
+      try{if(ops.length)await this.store.write(ops,checks);}catch(e){if(e instanceof StoreConflict)return this.migrateSyncCustody();throw e;}
+      await new Promise(resolve=>setTimeout(resolve,0));
+    }
+    await put(this.store,"kv","sync-custody-lane-v1",true);
+    this.flushOutboxLane(true).catch(()=>{});
+  }
+
+  async demoteSyncCustody(row) {
+    try{
+      await this.call("POST","/v1/messages?lane=sync",row.envelope);
+      const current=await this.store.get("outbox",row.id);
+      if(current?.lane_demote&&current.envelope===row.envelope){
+        const next={...current};delete next.lane_demote;
+        await this.store.write([{s:"outbox",k:row.id,v:next}],[{s:"outbox",k:row.id,v:current}]);
+      }
+    }catch{ /* retained for the next existing connection/queue wake */ }
+  }
+
   queueOutbox() { if (!this.closing) this.flushOutbox().catch(() => {}); }
 
   async flushOutbox() {
-    if (this.outboxPass) { this.outboxAgain = true; return this.outboxPass; }
-    const run = (async () => {
-      do { this.outboxAgain = false; await this.flushOutboxOnce(); } while (this.outboxAgain && this.connected);
-    })();
-    this.outboxPass = run;
-    try { return await run; } finally { this.outboxPass = null; if (this.outboxAgain && this.connected && !this.closing) this.queueOutbox(); }
+    return Promise.all([this.flushOutboxLane(false),this.flushOutboxLane(true)]);
   }
 
-  async flushOutboxOnce() {
+  async flushOutboxLane(sync) {
+    const pass=sync?'syncOutboxPass':'outboxPass',again=sync?'syncOutboxAgain':'outboxAgain';
+    if(this[pass]){this[again]=true;return this[pass];}
+    const run=(async()=>{do{this[again]=false;await this.flushOutboxOnce(sync);}while(this[again]&&this.connected&&!this.closing);})();
+    this[pass]=run;
+    try{return await run;}finally{this[pass]=null;if(this[again]&&this.connected&&!this.closing)this.flushOutboxLane(sync).catch(()=>{});}
+  }
+
+  async flushOutboxOnce(sync=null) {
+    if(sync===null)return Promise.all([this.flushOutboxOnce(false),this.flushOutboxOnce(true)]);
     const blocked = new Set();
-    const rows = (await this.store.all("outbox")).sort((a,b) => (a.send_order ?? a.at) - (b.send_order ?? b.at));
-    for (const rec of rows) {
+    const attempted=new Set();
+    for (;;) {
+      // Reselect from durable state after every delivery turn: an interactive
+      // insertion during a background POST must not wait for a stale batch.
+      const candidates=await this.store.outboxStates(["queued","waiting","receiver_waiting"]);
+      if(sync)candidates.push(...await this.store.demotionRows());
+      const rows=candidates.filter(r=>!attempted.has(r.id)&&backgroundCopy(r)===sync).sort((a,b)=>Number(backgroundCopy(a))-Number(backgroundCopy(b))||(a.send_order ?? a.at)-(b.send_order ?? b.at)||a.id.localeCompare(b.id));
+      const rec=rows[0];if(!rec)return;attempted.add(rec.id);
       if (!this.connected || this.closing) return;
       // FIFO is for readable turns. Auxiliary copies must pass their own
       // gates without blocking turns or unrelated history/deletion copies.
       const key = (rec.aside || rec.control || ["history",wire.SubModelSync].includes(rec.sub) ? "aux\0" + rec.id : "turn\0" + (rec.conv || "")) + "\0" + rec.to;
       if (blocked.has(key)) continue;
       if (rec.state === "receiver_waiting") { blocked.add(key); continue; }
+      if(sync&&rec.state==="custody"&&rec.lane_demote){await this.demoteSyncCustody(rec);continue;}
       if (rec.state !== "queued" && rec.state !== "waiting") continue;
       // The relay serves a suspended device nothing until it updates: its
       // waiting copies are not re-checked on every ping (no profile reads);
@@ -5589,6 +5670,7 @@ export class Engine {
       let head = {};
       try { head = JSON.parse(data); } catch (err) { /* nothing to name */ }
       if (typeof head.id === "string" && wire.validID(head.id)) {
+        if(await this.store.get("kv","archive-child/"+head.id))return;
         const previous = await this.store.get("held", head.id);
         await this.store.write([{ s: "held", k: head.id, v: previous || { id: head.id, from: String(head.from || ""), reason: "invalid", detail_code:"envelope_malformed", envelope: data, at: this.now() } },
           { s: "receipts", k: head.id, v: { id: head.id, state: "quarantined" } }]);
@@ -5596,11 +5678,22 @@ export class Engine {
       }
       return;
     }
+    // Imported children have no relay receipt until an actual relay delivery.
+    // A known ID alone must never acknowledge unverified incoming ciphertext.
+    const archiveChild=await this.store.get("kv","archive-child/"+env.id),archiveChecks=[];
+    if(archiveChild){
+      try{
+        const pin=await this.store.get("pins",env.from);
+        if(env.from!==archiveChild.from||env.to!==this.address||!pin||pin.pending||pin.fingerprint!==archiveChild.from_key)return;
+        await wire.open(data,this.keys,this.address,await this.pubOf(pin));
+        archiveChecks.push({s:"kv",k:"archive-child/"+env.id,v:archiveChild},{s:"pins",k:env.from,v:pin});
+      }catch{return;}
+    }
     const admittedCarrier = async () => (await this.store.get("kv", "group-carrier/" + env.id)) || (await this.store.get("kv", "sync-carrier/" + env.id));
-    if ((await this.store.get("inbox", env.id)) || (await this.store.get("held", env.id)) || (await this.store.get("receipts", env.id)) || (await admittedCarrier())) {
+    if (archiveChild || (await this.store.get("inbox", env.id)) || (await this.store.get("held", env.id)) || (await this.store.get("receipts", env.id)) || (await admittedCarrier())) {
       // Seen before: its receipt is sent again, nothing is stored twice.
-      const state = (await this.store.get("inbox", env.id)) || (await admittedCarrier()) ? "delivered" : "quarantined";
-      const receipt=await this.store.get("receipts",env.id),ops=[{s:"receipts",k:env.id,v:receipt||{id:env.id,state}}],checks=[{s:"receipts",k:env.id,v:receipt}];
+      const state = archiveChild ? (await this.store.get("held",env.id)) ? "quarantined" : "delivered" : (await this.store.get("inbox", env.id)) || (await admittedCarrier()) ? "delivered" : "quarantined";
+      const receipt=await this.store.get("receipts",env.id),ops=[{s:"receipts",k:env.id,v:receipt||{id:env.id,state}}],checks=[{s:"receipts",k:env.id,v:receipt},...archiveChecks];
       await this.removeReceivePending(data,env,ops,checks);
       await this.store.write(ops,checks);
     } else {
@@ -5642,6 +5735,7 @@ export class Engine {
     logical ||= previous?.logical || "";
     const ops=[{ s: "held", k: env.id, v: { id: env.id, from: env.from, reason, envelope: data, at: previous?.at || this.now(), detail_code, notice_archived:canArchiveHeld(reason) && previous?.reason===reason && (reason==="proof_pending" || (previous?.detail_code||"")===detail_code) && !!previous?.notice_archived, ...(logical ? {logical} : {}) } },
       { s: "receipts", k: env.id, v: { id: env.id, state: "quarantined" } }],checks=[];
+    if(await this.store.get("kv","archive-child/"+env.id))ops.splice(1,1);
     await this.removeReceivePending(data,env,ops,checks);
     await this.store.write(ops,checks);
     this.changed(true);
@@ -5668,7 +5762,7 @@ export class Engine {
       // The relay accepts quarantined -> delivered only after normal admission
       // has stored the message. Persist that upgrade with removal of the hold.
       if (fromHeld) ops.push({ s: "held", k: env.id, v: undefined });
-      ops.push({ s: "receipts", k: env.id, v: { id: env.id, state: "delivered" } });
+      if(!ops.archivePending&&!await this.store.get("kv","archive-child/"+env.id))ops.push({ s: "receipts", k: env.id, v: { id: env.id, state: "delivered" } });
       // An own-device sync record stores no inbox row. Like a group carrier it
       // keeps that it was admitted past its receipt's flush: a relay's
       // re-delivery is receipted again, never applied again (client
@@ -5679,6 +5773,7 @@ export class Engine {
       if (fromHeld) this.flushReceipts().catch(() => {});
       if (ops.some((o) => o.s === "erased")) await this.loadErased();
       this.changed(true);
+      if(ops.archive)this.archives().wake().catch(()=>{});
       if (ops.some(o => o.s === "inbox" && o.v?.sub === "event")) { this.recoverHumanExcerpts().catch(() => {}); this.discloseHumanAudience(); this.retryHeld().catch(() => {}); }
       if (ops.groupCarrier) this.retryHeld().catch(() => {});
       if (ops.groupCarrier) this.retryPendingReceives().catch(() => {});
@@ -5742,6 +5837,26 @@ export class Engine {
     return checks;
   }
 
+  async importArchiveChild(data,env,job,checks=[]) {
+    let ops;
+    try { ops=await this.admitInner(data,env); }
+    catch(e) {
+      if(!(e instanceof Hold))throw e;
+      ops=[{s:"held",k:env.id,v:{id:env.id,from:env.from,reason:e.reason,envelope:data,at:this.now(),detail_code:heldFailureCode(e.reason,e.message),archive:true,...(e.logical?{logical:e.logical}:{})}}];
+    }
+    if(this.erased.size)this.eraseArrivals(ops);
+    const verify=ops.checks||[];verify.push(...checks);
+    await this.applyReadArrivals(ops,verify);
+    if(ops.syncCarrier)ops.push({s:"kv",k:"sync-carrier/"+env.id,v:true});
+    const key="history-archive/in/"+job.id,current=await this.groupRead(verify,"kv",key);
+    if(!current||current.index!==job.index)return;
+    ops.push({s:"kv",k:"archive-child/"+env.id,v:{archive:job.id,from:job.from,from_key:job.from_key}},{s:"kv",k:key,v:{...current,index:job.index+1,state:job.index+1===job.manifest.count?"done":"importing",error:""}});
+    if(job.index+1===job.manifest.count)ops.push({s:"files",k:"archive/"+job.id,v:undefined});
+    await this.store.write(ops,verify);
+    if(ops.some(o=>o.s==="erased"))await this.loadErased();
+    if(ops.groupCarrier||ops.directHistory)this.retryHeld().catch(()=>{});
+  }
+
   async admitInner(data, env, admission = null) {
     if (env.to !== this.address) throw new Hold("invalid", "addressed to another device");
     if (admission) {
@@ -5792,6 +5907,7 @@ export class Engine {
     if (admission && (n.v === wire.Version2 || n.v === wire.Version3 && n.conv) && this.me && (this.me.state !== "self" || !this.me.devices.some(d => d.address === this.address && d.fingerprint === this.fp))) throw new Hold("invalid", "conversation recipient is not a current own device");
     if (n.receiver_route && n.receiver_route.op !== "request") return this.admitReceiverSetup(n, env, pin);
     if (n.v === wire.Version3) return this.admitControl(n, env, pin, admission);
+    if(n.sub===wire.SubHistoryArchive)return this.archives().admit(n,env,pin);
     if(n.sub===wire.SubDeviceHistory)return this.directHistory().admit(n,env,pin,admission);
     if(n.sub===wire.SubDeviceFile)return this.directHistory().admitFile(n,env,pin,admission);
     if(n.sub===wire.SubTopicSync)return this.admitTopicSync(n,env,pin, admission);
@@ -6376,7 +6492,7 @@ export class Engine {
       const id=k.slice(prefix.length);if(!wire.validID(id))continue;
       const marker=await this.store.get("kv",k),held=await this.store.get("held",id);
       checks.push({s:"kv",k,v:marker},{s:"held",k:id,v:held});
-      if(marker===true&&!held)ops.push({s:"receipts",k:id,v:{id,state:"delivered"}});
+      if(marker===true&&!held&&!await this.store.get("kv","archive-child/"+id))ops.push({s:"receipts",k:id,v:{id,state:"delivered"}});
     }
     const done=keys.length<heldPage||page.length!==keys.length;
     ops.push({s:"kv",k:key,v:{after:page.at(-1)||after,done}});
@@ -6854,7 +6970,7 @@ export class Engine {
       if (teams) teams.connected(f.includes("teams1"));
       // This device reads conversations and the attention hint (it never
       // alerts from the stream: its service worker shows the relay's pushes).
-      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapEnv2, "notify1", wire.CapPerson, wire.CapControl, wire.CapHeadless, wire.CapDrive, wire.CapAgentIdentity, wire.CapGroupHumanParticipation, wire.CapGroup, wire.CapSendGroup, wire.CapRootSync, wire.CapGroupInvitationControl, wire.CapReadSync, wire.CapOwnSyncV2, wire.CapOwnSyncV3, wire.CapTopicParticipation, wire.CapRoom, wire.CapRequestFollowup, wire.CapTopicOrganization, wire.CapModelSync, wire.CapTopicStateSync, ...(f.includes("signals1") ? [wire.CapTyping] : [])]))); // rcv1 already implied by rm1; explicit own3/topic/follow-up scopes fit the 22-cap advertisement bound
+      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapEnv2, "notify1", wire.CapPerson, wire.CapControl, wire.CapHeadless, wire.CapDrive, wire.CapAgentIdentity, wire.CapGroupHumanParticipation, wire.CapGroup, wire.CapSendGroup, wire.CapRootSync, wire.CapGroupInvitationControl, wire.CapReadSync, wire.CapOwnSyncV2, wire.CapOwnSyncV3, wire.CapHistoryArchive, wire.CapTopicParticipation, wire.CapRoom, wire.CapRequestFollowup, wire.CapTopicOrganization, wire.CapModelSync, wire.CapTopicStateSync, ...(f.includes("signals1") ? [wire.CapTyping] : [])]))); // rcv1 already implied by rm1; explicit own3/topic/follow-up scopes fit the 23-cap advertisement bound
       await this.publishPerson().catch(() => {});
       // These existing, coalesced recovery jobs can wait for old proofs or
       // network replies. They must not delay the current user's durable send.
@@ -6862,7 +6978,9 @@ export class Engine {
       this.retryHeld().catch(() => {});
       this.recoverGroupIntents().catch(() => {});
       this.retryPendingReceives().catch(() => {});
-      await this.flushOutbox();
+      this.archives().wake().catch(()=>{});
+      this.migrateSyncCustody().catch(()=>{});
+      this.flushOutbox().catch(()=>{});
       await this.retryApproved();
       await this.syncRoots();await this.syncReadMarks();await this.syncTopicTitles();await this.syncInvitations();
       await this.discloseHumanAudience(); // after a restart or reconnect: accepted guests learn each other
@@ -6898,6 +7016,10 @@ export class Engine {
       const cancelledUnknown = row?.delivery_cancelled && row.handover_started!==false && !["delivered","expired","quarantined"].includes(row.state);
       const ops=[{s:"kv",k:"receipt-cursor",v:r.seq}];if(row&&(["queued","custody"].includes(row.state)||cancelledUnknown||row.state==="quarantined"&&r.state==="delivered"))ops.push({s:"outbox",k:r.id,v:{...row,state:r.state,detail:""}});
       try { await this.store.write(ops,[{s:"outbox",k:r.id,v:row},{s:"kv",k:"receipt-cursor",v:cursor}]); } catch(e) { if(e instanceof StoreConflict)return this.dispatch(event,data);throw e; }this.changed(true);
+      if(row?.sub===wire.SubHistoryArchive&&ops.length>1){this.archiveReceiptRun=this.archives().receipt({...row,state:r.state});this.archiveReceiptRun.catch(()=>{});}
+      if(row&&backgroundCopy(row)&&ops.length>1){
+        this.runHistory().catch(()=>{});this.syncRoots().catch(()=>{});this.syncReadMarks().catch(()=>{});this.syncTopicTitles().catch(()=>{});this.syncInvitations().catch(()=>{});
+      }
     } else if (event === "message") {
       await this.receiveStreamMessage(data);
     } else if (event === "signal") {
@@ -8525,18 +8647,19 @@ export class Engine {
           state="running";done=total=0; // unknown remaining work; never project the legacy completed count
         }
       }
-      const counts={queued:0,custody:0,delivered:0,blocked:0};
+      const counts={queued:0,custody:0,retained:0,delivered:0,blocked:0};
+      const copyBucket=state=>["queued","waiting","archive_staged"].includes(state)?"queued":state==="archive_accepted"?"retained":state==="custody"?"custody":state==="delivered"?"delivered":"blocked";
       const copies=await this.store.prefix("kv","history-copy/"+j.fingerprint+"/");
       for(const copy of copies) {
         const row=historyOutbox.get(copy?.copy);
         const current=row?.to===j.device&&row.recipient_fp===j.fingerprint&&row.sub==="history"?row.state:"";
-        counts[["queued","waiting"].includes(current)?"queued":current==="custody"?"custody":current==="delivered"?"delivered":"blocked"]++;
+        counts[copyBucket(current)]++;
       }
       let deferred=(await this.store.prefix("kv","history-deferred/"+j.fingerprint+"/")).length;
       const direct=await this.store.get("kv","device-history/job/"+j.fingerprint);
       if(direct){const pending=(await this.store.prefix("kv","device-history/pending/"+j.fingerprint+"/")).length;deferred+=pending;
         if(state!=="ended"&&(direct.older||direct.tail<(await this.store.get("kv","device-history-arrival")||0)||pending)){state="running";done=total=0;}
-        for(const copy of await this.store.prefix("kv","device-history/copy/"+j.fingerprint+"/")){const row=historyOutbox.get(copy.carrier),current=row?.to===j.device&&row.recipient_fp===j.fingerprint&&row.sub===wire.SubDeviceHistory?row.state:"";counts[["queued","waiting"].includes(current)?"queued":current==="custody"?"custody":current==="delivered"?"delivered":"blocked"]++;}
+        for(const copy of await this.store.prefix("kv","device-history/copy/"+j.fingerprint+"/")){const row=historyOutbox.get(copy.carrier),current=row?.to===j.device&&row.recipient_fp===j.fingerprint&&row.sub===wire.SubDeviceHistory?row.state:"";counts[copyBucket(current)]++;}
       }
       return {device:j.device,name:j.device.split("/")[1],done,total,state,delivery_known:!!j.catchup||!!direct,...counts,deferred};
     }));

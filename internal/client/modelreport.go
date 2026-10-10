@@ -231,6 +231,11 @@ func (a *Agent) syncModelReports() (bool, error) {
 		if dev.Address == a.Address || !me.roster.Human(dev.Fingerprint()) {
 			continue
 		}
+		if full, e := syncWindowFull(tx, dev); e != nil {
+			return false, e
+		} else if full {
+			continue
+		}
 		r := protocol.ModelSync{V: 1, Person: me.info.Person, Roster: me.info.Roster}
 		if modelSyncAuthority(tx, r, a.Address, fp, dev.Address, dev.Fingerprint()) != nil {
 			continue
