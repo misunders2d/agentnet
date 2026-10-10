@@ -104,6 +104,40 @@ func HarnessNames() []string {
 	return out
 }
 
+// DefaultAgentFix names where the default agent (the default responder)
+// is set: the Default agent card under Agents in the app, or the CLI.
+// harness fills the command's --harness; "" leaves the NAME placeholder.
+func DefaultAgentFix(harness string) string {
+	if harness == "" {
+		harness = "NAME"
+	}
+	return "AgentNet → Agents → Default agent, or agentnet responder set --harness " + harness + " --dir <folder>"
+}
+
+// suggestedHarness is the program a default agent here would most likely
+// run, for DefaultAgentFix: of the supported programs found on PATH, the
+// one this computer's named agents run, else the first; "" when none is
+// found. It only reads.
+func (a *Agent) suggestedHarness() string {
+	found, first := map[string]bool{}, ""
+	for _, h := range ListHarnesses() {
+		if h.Path != "" {
+			found[h.Name] = true
+			if first == "" {
+				first = h.Name
+			}
+		}
+	}
+	if entries, err := a.LocalAgents(); err == nil {
+		for _, e := range entries {
+			if e.Responder != nil && found[e.Responder.Harness] {
+				return e.Responder.Harness
+			}
+		}
+	}
+	return first
+}
+
 // SetResponder selects the default responder, or chooses manual handling
 // (no automatic responder) with nil. Either way the choice is recorded, so
 // setup does not ask again. The change applies to the next job; a running

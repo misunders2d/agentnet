@@ -3,7 +3,7 @@
 // Run by TestComicAssistantSetupModel.
 import assert from 'node:assert/strict';
 import {
-  agentStatus, agentsFor, applySetup, browserDevice, canHaveAgent, firstPick, folderEntries, folderName, folderWayOut, notReady, parentFolder, pickFor, readSetup, savedLine, selectable, startChosen, STATE_SENTENCE, STATE_WORDS, watchSetupFocus,
+  agentStatus, agentsFor, applySetup, browserDevice, canHaveAgent, defaultAgentState, firstPick, firstPicks, folderEntries, folderName, folderWayOut, notReady, othersKept, parentFolder, pickFor, preferredAgent, readSetup, sameToolNote, savedLine, selectable, startChosen, STATE_SENTENCE, STATE_WORDS, watchSetupFocus,
 } from '../web/src/features/AssistantSetup.model.ts';
 
 const tool = (id, over = {}) => ({ id, label: { claude: 'Claude', codex: 'Codex', pi: 'Pi', omp: 'OMP' }[id], detected: true, configured: false, registered: false, supported: true, state: 'detected', note: 'server note', ...over });
@@ -38,40 +38,94 @@ assert.equal(browserDevice('browser', null), true);
 assert.equal(browserDevice('daemon', { device: {} }), true);
 assert.equal(browserDevice('daemon', { me: {} }), false);
 
-// The agent a tool gets: its only agent, a new one named after the tool, or
-// "choose" when there are several. Turned-off agents and other tools' do not count.
+// The agent a tool gets: its only agent, a new one named after the tool, or,
+// of several, one chosen for the person (never a forced choice). Turned-off
+// agents and other tools' do not count.
 {
   const c = catalogOf([agent('a1', 'Stocky', 'claude', '/w/stock'), agent('a2', 'Old', 'claude', '/w/old', false), agent('a3', 'Coder', 'codex', '/w/c1'), agent('a4', 'Coder 2', 'codex', '/w/c2')]);
   assert.deepEqual(agentsFor(c, 'claude').map((a) => a.record.id), ['a1']);
-  assert.deepEqual(firstPick(tool('claude'), c), { id: 'a1', label: 'Stocky', dir: '/w/stock', mustChoose: false });
-  assert.deepEqual(firstPick(tool('pi'), c), { id: '', label: 'Pi', dir: '', mustChoose: false });
-  assert.deepEqual(firstPick(tool('codex'), c), { id: '', label: 'Codex', dir: '', mustChoose: true });
+  assert.deepEqual(firstPick(tool('claude'), c), { id: 'a1', label: 'Stocky', dir: '/w/stock' });
+  assert.deepEqual(firstPick(tool('pi'), c), { id: '', label: 'Pi', dir: '' });
+  assert.deepEqual(firstPick(tool('codex'), c), { id: 'a3', label: 'Coder', dir: '/w/c1' });
   assert.equal(canHaveAgent(c, 'claude'), true);
   assert.equal(canHaveAgent(c, 'omp'), false);
   assert.equal(canHaveAgent(catalogOf([], ['codex']), 'claude'), false);
-  const picks = new Map([['pi', { id: '', label: 'Helper', dir: '/w/h', mustChoose: false }]]);
+  const picks = new Map([['pi', { id: '', label: 'Helper', dir: '/w/h' }]]);
   assert.equal(pickFor(picks, tool('pi'), c).label, 'Helper');
 }
 
+// Several agents run one tool (the owner's Zenbook: "Codex" and, made an hour
+// later in the same folder, "Zenbook"; the default agent is Codex elsewhere).
+// One is preselected deterministically, said in plain words, and saving
+// changes nothing about the other.
+{
+  const aged = (ts, ...a) => { const x = agent(...a); x.record.ts = ts; return x; };
+  const codex = aged(1000, '52e7fc64', 'Codex', 'codex', '/home/s/projects');
+  const zenbook = aged(4600, '09a818fd', 'Zenbook', 'codex', '/home/s/projects');
+  const claude = aged(1000, 'c1', 'Claude', 'claude', '/home/s/projects');
+  const def = { chosen: true, manual: false, harness: 'codex', dir: '/home/s/elsewhere' };
+  // Listed newest first: the oldest is still used.
+  const c = catalogOf([zenbook, claude, codex]);
+  for (const d of [def, null, undefined, { chosen: false, manual: false }, { chosen: true, manual: true, dir: '' }]) {
+    assert.deepEqual(firstPick(tool('codex'), c, d), { id: '52e7fc64', label: 'Codex', dir: '/home/s/projects' }, JSON.stringify(d));
+  }
+  assert.equal(sameToolNote(tool('codex'), c, firstPick(tool('codex'), c, def)),
+    'Two agents run Codex on this computer: “Codex” and “Zenbook”. Using “Codex”; “Zenbook” stays available with its history. You can switch below.');
+  assert.equal(sameToolNote(tool('codex'), c, { id: '09a818fd', label: 'Zenbook', dir: '/home/s/projects' }),
+    'Two agents run Codex on this computer: “Codex” and “Zenbook”. Using “Zenbook”; “Codex” stays available with its history. You can switch below.');
+  assert.equal(sameToolNote(tool('claude'), c, firstPick(tool('claude'), c, def)), '', 'one agent: nothing to explain');
+  assert.deepEqual(othersKept(tool('codex'), c, firstPick(tool('codex'), c, def)), ['Zenbook']);
+  // No choice is demanded: review is possible at once.
+  assert.equal(notReady([tool('codex')], c, new Map(), def), '');
+  // The default agent's folder wins over age (a trailing separator is the same folder).
+  const moved = catalogOf([aged(1000, 'old', 'Old', 'codex', '/w/a'), aged(2000, 'new', 'New', 'codex', '/w/b/')]);
+  assert.equal(preferredAgent(agentsFor(moved, 'codex'), { chosen: true, manual: false, harness: 'codex', dir: '/w/b' }).record.id, 'new');
+  assert.equal(preferredAgent(agentsFor(moved, 'codex'), { chosen: true, manual: true, dir: '/w/b' }).record.id, 'old', 'manual has no folder');
+  assert.equal(preferredAgent(agentsFor(moved, 'codex'), { chosen: true, manual: false, harness: 'codex', dir: '' }).record.id, 'old');
+  // Equal times: the catalog's own (creation) order decides.
+  assert.equal(firstPick(tool('codex'), catalogOf([agent('x', 'X', 'codex', '/x'), agent('y', 'Y', 'codex', '/y')])).id, 'x');
+  // Three or more: counted, all named, the others kept.
+  const three = catalogOf([codex, zenbook, aged(9000, 't', 'Third', 'codex', '/t')]);
+  assert.equal(sameToolNote(tool('codex'), three, firstPick(tool('codex'), three)),
+    'Three agents run Codex on this computer: “Codex”, “Zenbook” and “Third”. Using “Codex”; the others stay available with their history. You can switch below.');
+  // The pick is fixed when the list is read: only tools with several agents.
+  const fixed = firstPicks({ local: true, harnesses: [tool('codex'), tool('claude'), tool('pi')] }, c, def);
+  assert.deepEqual([...fixed.keys()], ['codex']);
+  assert.equal(fixed.get('codex').id, '52e7fc64');
+  // Ready names every ready agent of the tool, in plain grammar.
+  assert.match(agentStatus(tool('codex'), c).sentence, /^Zenbook and Codex are set up/);
+}
+
 // Review needs a name and a folder (chosen, never typed) for every tool that
-// gets an agent, and a decision when several agents run the same tool.
+// gets an agent.
 {
   const c = catalogOf([agent('a3', 'Coder', 'codex', '/w/c1'), agent('a4', 'Coder 2', 'codex', '/w/c2')]);
   assert.match(notReady([], c, new Map()), /at least one/);
   assert.match(notReady([tool('claude')], c, new Map()), /folder the agent for Claude/);
-  assert.match(notReady([tool('claude')], c, new Map([['claude', { id: '', label: '  ', dir: '/w', mustChoose: false }]])), /name/);
-  assert.match(notReady([tool('codex')], c, new Map()), /Choose which agent Codex uses/);
-  assert.equal(notReady([tool('codex')], c, new Map([['codex', { id: 'a4', label: 'Coder 2', dir: '/w/c2', mustChoose: false }]])), '');
+  assert.match(notReady([tool('claude')], c, new Map([['claude', { id: '', label: '  ', dir: '/w' }]])), /name/);
+  assert.equal(notReady([tool('codex')], c, new Map()), '');
+  assert.equal(notReady([tool('codex')], c, new Map([['codex', { id: 'a4', label: 'Coder 2', dir: '/w/c2' }]])), '');
   // OMP is connected for its sessions only: no agent, so no folder is asked for.
   assert.equal(notReady([tool('omp')], c, new Map()), '');
 }
 
+// The default agent at the top of the list, in a few words.
+{
+  const name = (h) => ({ codex: 'Codex' })[h] || h;
+  assert.deepEqual(defaultAgentState(null, name), { word: 'Not set', tone: 'act', line: 'None yet, so questions and tasks wait for you.' });
+  assert.deepEqual(defaultAgentState({ chosen: false, manual: false, ready: false, harnesses: null }, name).word, 'Not set');
+  assert.deepEqual(defaultAgentState({ chosen: true, manual: true, ready: false, harnesses: null }, name), { word: 'You answer', tone: 'muted', line: 'None: you chose to answer questions and tasks yourself.' });
+  assert.deepEqual(defaultAgentState({ chosen: true, manual: false, harness: 'codex', dir: '/w', ready: true, harnesses: null }, name), { word: 'Ready', tone: 'ok', line: 'Codex' });
+  assert.deepEqual(defaultAgentState({ chosen: true, manual: false, harness: 'codex', dir: '/gone', ready: false, harnesses: null }, name), { word: 'Can’t start', tone: 'danger', line: 'Codex' });
+}
+
 // A fake host: records every call in order.
-function host({ catalog, applyFails = false, saveFails = false, publish = true, local = true, readyAfter = true }) {
+function host({ catalog, applyFails = false, saveFails = false, publish = true, local = true, readyAfter = true, responder }) {
   const calls = [];
   let agents = catalog.agents.slice(), n = 0;
   return {
     calls,
+    ...(responder ? { responder: async () => { calls.push(['responder']); if (responder instanceof Error) throw responder; return responder; } } : {}),
     setup: async (r) => {
       calls.push(['setup', r]);
       if (applyFails) throw new Error('Setup changed since your review.');
@@ -96,13 +150,13 @@ const changes = (h) => h.calls.filter((c) => c[0] === 'change').map((c) => c[1])
 // id), then a new agent with the trimmed name and chosen folder, then one share.
 {
   const h = host({ catalog: catalogOf([]) });
-  const picks = new Map([['claude', { id: '', label: '  Stocky ', dir: ' /w/stock ', mustChoose: false }]]);
+  const picks = new Map([['claude', { id: '', label: '  Stocky ', dir: ' /w/stock ' }]]);
   const r = await applySetup(h, [tool('claude'), tool('omp')], 'rev-1', catalogOf([]), picks);
   assert.deepEqual(h.calls[0], ['setup', { action: 'apply', harnesses: ['claude', 'omp'], review_id: 'rev-1' }]);
   assert.deepEqual(changes(h), [{ action: 'create', label: 'Stocky', harness: 'claude', dir: '/w/stock' }, { action: 'publish' }]);
   assert.deepEqual(r.agents, [{ label: 'Stocky', ready: true, problem: '' }]);
   assert.equal(r.shared, true);
-  assert.deepEqual(r.picks.get('claude'), { id: 'new1', label: 'Stocky', dir: '/w/stock', mustChoose: false });
+  assert.deepEqual(r.picks.get('claude'), { id: 'new1', label: 'Stocky', dir: '/w/stock' });
   assert.equal(r.view.note, 'saved');
 }
 
@@ -111,7 +165,7 @@ const changes = (h) => h.calls.filter((c) => c[0] === 'change').map((c) => c[1])
 {
   const c = catalogOf([agent('a1', 'Stocky', 'claude', '/w/stock')]);
   const h = host({ catalog: c });
-  const r = await applySetup(h, [tool('claude')], 'rev', catalogOf([]), new Map([['claude', { id: '', label: 'Stocky', dir: '/w/stock', mustChoose: false }]]));
+  const r = await applySetup(h, [tool('claude')], 'rev', catalogOf([]), new Map([['claude', { id: '', label: 'Stocky', dir: '/w/stock' }]]));
   assert.deepEqual(changes(h), [{ action: 'publish' }]);
   assert.deepEqual(r.agents.map((a) => a.label), ['Stocky']);
 }
@@ -120,7 +174,7 @@ const changes = (h) => h.calls.filter((c) => c[0] === 'change').map((c) => c[1])
 // its folder there), read after the save, never assumed from the save.
 {
   const h = host({ catalog: catalogOf([]), readyAfter: false });
-  const r = await applySetup(h, [tool('claude')], 'rev', catalogOf([]), new Map([['claude', { id: '', label: 'Stocky', dir: '/w/gone', mustChoose: false }]]));
+  const r = await applySetup(h, [tool('claude')], 'rev', catalogOf([]), new Map([['claude', { id: '', label: 'Stocky', dir: '/w/gone' }]]));
   assert.deepEqual(r.agents, [{ label: 'Stocky', ready: false, problem: 'The responder directory /w/gone does not exist.' }]);
   assert.doesNotMatch(savedLine(r.agents[0]), /ready/);
   assert.match(savedLine(r.agents[0]), /Stocky is saved, but it can’t start/);
@@ -142,11 +196,49 @@ const changes = (h) => h.calls.filter((c) => c[0] === 'change').map((c) => c[1])
   assert.deepEqual(h2.calls.map((c) => c[0]), ['setup', 'agents']);
 }
 
+// The default agent is read with the list (locally), and one that can't be
+// read is said without stopping the setup. A browser-like installation reads
+// nothing more.
+{
+  const def = { chosen: true, manual: false, harness: 'codex', dir: '/w', ready: true, harnesses: null };
+  const h = host({ catalog: catalogOf([]), responder: def });
+  const r = await readSetup(h);
+  assert.deepEqual(r.responder, def);
+  assert.deepEqual(h.calls.map((c) => c[0]), ['setup', 'agents', 'responder']);
+  const bad = await readSetup(host({ catalog: catalogOf([]), responder: new Error('Responder unavailable.') }));
+  assert.equal(bad.responder, null);
+  assert.equal(bad.responderError, 'Responder unavailable.');
+  assert.ok(bad.catalog);
+  const far = host({ catalog: catalogOf([]), responder: def, local: false });
+  await readSetup(far);
+  assert.deepEqual(far.calls.map((c) => c[0]), ['setup']);
+}
+
+// Saving with two agents for one tool: the preselected one is kept as it is,
+// the other is never updated, turned off or otherwise touched.
+{
+  const c = catalogOf([agent('52e7fc64', 'Codex', 'codex', '/p'), agent('09a818fd', 'Zenbook', 'codex', '/p')]);
+  const def = { chosen: true, manual: false, harness: 'codex', dir: '/elsewhere' };
+  const h = host({ catalog: c });
+  const r = await applySetup(h, [tool('codex')], 'rev', c, firstPicks({ harnesses: [tool('codex')] }, c, def), def);
+  assert.deepEqual(changes(h), [{ action: 'publish' }]);
+  assert.deepEqual(r.agents.map((a) => a.label), ['Codex']);
+  // Switched to Zenbook and moved: only Zenbook is updated.
+  const h2 = host({ catalog: c });
+  await applySetup(h2, [tool('codex')], 'rev', c, new Map([['codex', { id: '09a818fd', label: 'Zenbook', dir: '/q' }]]), def);
+  assert.deepEqual(changes(h2), [{ action: 'update', id: '09a818fd', harness: 'codex', dir: '/q' }, { action: 'publish' }]);
+  // With no pick stored, the same preselection applies (the default's folder decides).
+  const h3 = host({ catalog: c });
+  const r3 = await applySetup(h3, [tool('codex')], 'rev', c, new Map(), def);
+  assert.deepEqual(r3.picks.get('codex'), { id: '52e7fc64', label: 'Codex', dir: '/p' });
+  assert.ok(!changes(h3).some((x) => x.action === 'disable' || x.id === '09a818fd'));
+}
+
 // Keeping an agent but choosing another folder updates it; its signed name is never sent.
 {
   const c = catalogOf([agent('a1', 'Stocky', 'claude', '/w/old')]);
   const h = host({ catalog: c });
-  await applySetup(h, [tool('claude')], 'rev', c, new Map([['claude', { id: 'a1', label: 'Stocky', dir: '/w/new', mustChoose: false }]]));
+  await applySetup(h, [tool('claude')], 'rev', c, new Map([['claude', { id: 'a1', label: 'Stocky', dir: '/w/new' }]]));
   assert.deepEqual(changes(h), [{ action: 'update', id: 'a1', harness: 'claude', dir: '/w/new' }, { action: 'publish' }]);
 }
 
@@ -154,21 +246,21 @@ const changes = (h) => h.calls.filter((c) => c[0] === 'change').map((c) => c[1])
 // read stops the run: nothing is created in its place.
 for (const now of [[agent('a1', 'Stocky', 'claude', '/w', false)], [], [agent('a1', 'Stocky', 'codex', '/w')]]) {
   const h = host({ catalog: catalogOf(now) });
-  await assert.rejects(applySetup(h, [tool('claude')], 'rev', catalogOf([agent('a1', 'Stocky', 'claude', '/w')]), new Map([['claude', { id: 'a1', label: 'Stocky', dir: '/w', mustChoose: false }]])), /changed or was turned off/);
+  await assert.rejects(applySetup(h, [tool('claude')], 'rev', catalogOf([agent('a1', 'Stocky', 'claude', '/w')]), new Map([['claude', { id: 'a1', label: 'Stocky', dir: '/w' }]])), /changed or was turned off/);
   assert.deepEqual(changes(h), []);
 }
 
 // A refused apply (the change is no longer the reviewed one) touches no agent.
 {
   const h = host({ catalog: catalogOf([]), applyFails: true });
-  await assert.rejects(applySetup(h, [tool('claude')], 'stale', catalogOf([]), new Map([['claude', { id: '', label: 'S', dir: '/w', mustChoose: false }]])), /changed since your review/);
+  await assert.rejects(applySetup(h, [tool('claude')], 'stale', catalogOf([]), new Map([['claude', { id: '', label: 'S', dir: '/w' }]])), /changed since your review/);
   assert.deepEqual(h.calls.map((c) => c[0]), ['setup']);
 }
 
 // A save that is not confirmed is not reported as saved.
 {
   const h = host({ catalog: catalogOf([]), saveFails: true });
-  await assert.rejects(applySetup(h, [tool('claude')], 'rev', catalogOf([]), new Map([['claude', { id: '', label: 'S', dir: '/w', mustChoose: false }]])), /wasn’t confirmed/);
+  await assert.rejects(applySetup(h, [tool('claude')], 'rev', catalogOf([]), new Map([['claude', { id: '', label: 'S', dir: '/w' }]])), /wasn’t confirmed/);
   assert.ok(!changes(h).some((c) => c.action === 'publish'));
 }
 
@@ -184,7 +276,7 @@ for (const now of [[agent('a1', 'Stocky', 'claude', '/w', false)], [], [agent('a
 // Saved here but not shared is said, not hidden.
 {
   const h = host({ catalog: catalogOf([]), publish: false });
-  const r = await applySetup(h, [tool('pi')], 'rev', catalogOf([]), new Map([['pi', { id: '', label: 'Pi', dir: '/w', mustChoose: false }]]));
+  const r = await applySetup(h, [tool('pi')], 'rev', catalogOf([]), new Map([['pi', { id: '', label: 'Pi', dir: '/w' }]]));
   assert.equal(r.shared, false);
 }
 
@@ -250,7 +342,7 @@ console.log('unified agent readiness PASS: hooks cannot downgrade named agents; 
  assert.equal(selectable(h,c),true);
  assert.equal(agentStatus(h,c).word,'Ready');
  const calls=host({catalog:c});
- await applySetup(calls,[h],'',c,new Map([['claude',{id:'a1',label:'Casey',dir:'/w/new',mustChoose:false}]]));
+ await applySetup(calls,[h],'',c,new Map([['claude',{id:'a1',label:'Casey',dir:'/w/new'}]]));
  assert(calls.calls.filter(([kind])=>kind==='setup').every(([,body])=>body===undefined),'unsupported hooks never reviewed or applied');
  assert(calls.calls.some(([kind,body])=>kind==='change'&&body.action==='update'&&body.id==='a1'&&body.dir==='/w/new'));
  assert.equal(selectable(h,catalogOf([])),true,'installed registry permits new agent setup');

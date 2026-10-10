@@ -182,7 +182,7 @@ func TestReviewOpening(t *testing.T) {
 	w.bob.store.addInbox(notice, "")
 
 	o, err := w.bob.ReviewOpening(q.ID, self)
-	if err != nil || o.Argv != nil || !strings.Contains(o.Why, "no coding agent") {
+	if err != nil || o.Argv != nil || !strings.Contains(o.Why, "This computer has no default agent") {
 		t.Fatalf("manual: %+v %v", o, err)
 	}
 	setResponder(t, w.bob, "stub", st.dir, time.Minute)
@@ -214,6 +214,68 @@ func TestReviewOpening(t *testing.T) {
 	}
 	if _, err := w.bob.ReviewOpening("not-an-id", self); err == nil {
 		t.Fatal("invalid id accepted")
+	}
+}
+
+// Without a default agent, the terminal a notification opens says so and
+// names exactly where it is set: the app's Default agent card, or the
+// command with a program installed here (a named agent's, else the first
+// found; NAME when none is). Answering by hand, chosen, is said as such.
+func TestReviewOpeningNamesDefaultAgentFix(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell stand-ins for installed programs")
+	}
+	w := newWorld(t, "")
+	q := envelope.Inner{ID: "0123456789abcdef0123456789abcdef", From: w.alice.Address, To: w.bob.Address, TS: 1, Kind: envelope.KindQuestion, Body: "status?"}
+	if err := w.bob.store.addInbox(q, ""); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	t.Setenv("PATH", bin)
+	why := func() string {
+		t.Helper()
+		o, err := w.bob.ReviewOpening(q.ID, "/opt/agentnet")
+		if err != nil || o.Argv != nil {
+			t.Fatalf("opening: %+v %v", o, err)
+		}
+		return o.Why
+	}
+	const app = "AgentNet → Agents → Default agent"
+	if got, want := why(), "This computer has no default agent, so questions wait for you. Set one: "+app+", or agentnet responder set --harness NAME --dir <folder>."; got != want {
+		t.Fatalf("nothing installed:\n got %q\nwant %q", got, want)
+	}
+	for _, name := range []string{"claude", "codex"} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := why(); !strings.HasSuffix(got, "Set one: "+app+", or agentnet responder set --harness claude --dir <folder>.") {
+		t.Fatalf("first installed: %q", got)
+	}
+	if _, err := w.bob.CreateLocalAgent("Codex", Responder{Harness: "codex", Dir: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	if got := why(); !strings.HasSuffix(got, ", or agentnet responder set --harness codex --dir <folder>.") {
+		t.Fatalf("the named agent's program: %q", got)
+	}
+	// The doctor's line names the same fix.
+	found := false
+	for _, c := range w.bob.Doctor(tctx(t)) {
+		if c.Name == "responder" {
+			found = true
+			if !strings.Contains(c.Result, "no default agent") || !strings.Contains(c.Result, "set one: "+app+", or agentnet responder set --harness codex --dir <folder>") {
+				t.Fatalf("doctor: %q", c.Result)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("doctor has no responder line")
+	}
+	if err := w.bob.SetResponder(nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := why(); !strings.HasPrefix(got, "You chose to answer questions yourself on this computer, so questions wait for you.") || !strings.Contains(got, app) {
+		t.Fatalf("answering by hand: %q", got)
 	}
 }
 

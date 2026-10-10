@@ -537,7 +537,7 @@ func runOpen(a *client.Agent, args []string) error {
 		cmd.Dir, cmd.Stdin, cmd.Stdout, cmd.Stderr = o.Dir, os.Stdin, os.Stdout, os.Stderr
 		return cmd.Run()
 	}
-	fmt.Printf("No coding agent opened: %s. Showing it here.\n\n", o.Why)
+	fmt.Printf("No coding agent opened. %s\nShowing it here.\n\n", o.Why)
 	if target != "" {
 		err = runConversation(a, []string{target})
 	} else {

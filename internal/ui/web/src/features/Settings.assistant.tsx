@@ -2,25 +2,20 @@
 // and runs accepted tasks), and who may use it. Choosing a program grants
 // nobody anything: approvals stay where they are, and the person's own
 // tool permissions stay the authority.
-import { Radio } from "@base-ui/react/radio";
-import { RadioGroup } from "@base-ui/react/radio-group";
-import { IconBolt, IconCheck, IconLock, IconMessageQuestion } from "@tabler/icons-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { IconBolt, IconLock, IconMessageQuestion } from "@tabler/icons-react";
+import { type ReactNode } from "react";
 import type { T } from "../api";
 import { useApp } from "../context";
 import { useStore } from "../store";
 import { AgentAvatar, PersonAvatar } from "../ui/Avatar";
-import { Button } from "../ui/Button";
 import { Card, Command, Details, Fact, Failed, GroupLabel, Hint, PageHead, Skeleton, useLoad } from "./Settings.parts";
 import { Permissions, useGrants } from "./AgentsView.grants";
 import { AppControls } from "./AppControls";
 import { AssistantSetup } from "./AssistantSetup";
-import { FolderField } from "./AssistantSetup.folders";
 import { browserDevice as isBrowser } from "./AssistantSetup.model";
+import { DefaultAgentChoice, harnessName, MANUAL } from "./DefaultAgent";
 
-const MANUAL = "manual";
-
-export const harnessName = (h: string) => ({ claude: "Claude", codex: "Codex", pi: "Pi" } as Record<string, string>)[h] || (h ? h.charAt(0).toUpperCase() + h.slice(1) : "");
+export { harnessName };
 
 // What a question may use, per program, in plain words. The server's exact
 // wording stays under Details.
@@ -40,63 +35,17 @@ export function AssistantSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadin
   const setup = <div className="space-y-4"><AssistantSetup /></div>;
   if (browser) return <>{head}{setup}<AppControls command /></>;
   const defaults = r.error && !r.data ? <Failed text={r.error} retry={r.reload} /> : r.data ? <AssistantForm view={r.data} saved={r.reload} /> : <Skeleton lines={4} />;
-  return <>{head}{setup}<div className="mt-6 space-y-4"><Details label="Default answers and permissions">{defaults}</Details><AppControls command /></div></>;
+  return <>{head}{setup}<div className="mt-6 space-y-4"><Details label="Default agent">{defaults}</Details><AppControls command /></div></>;
 
 }
 
 function AssistantForm({ view, saved }: { view: T.ResponderView; saved: () => void }) {
   const store = useApp();
   const me = useStore(store, (s) => s.overview?.person);
-  const current = !view.chosen ? "" : view.manual ? MANUAL : view.harness || "";
-  const [choice, setChoice] = useState(current);
-  const [dir, setDir] = useState(view.dir || "");
-  const [busy, setBusy] = useState(false);
-  useEffect(() => { setChoice(current); setDir(view.dir || ""); }, [current, view.dir]);
-  const harnesses = view.harnesses || [];
-  const dirty = choice !== current || (choice !== MANUAL && dir.trim() !== (view.dir || ""));
-  const canSave = dirty && !!choice && (choice === MANUAL || !!dir.trim());
-
-  const save = async () => {
-    setBusy(true);
-    const change: T.ResponderChange = choice === MANUAL ? { manual: true, harness: "", dir: "" } : { manual: false, harness: choice, dir: dir.trim() };
-    const r = await store.run((a) => a.setResponder(change));
-    setBusy(false);
-    if (r) { store.toast(choice === MANUAL ? "Questions and tasks now wait for you." : harnessName(choice) + " answers for you from now on.", "ok"); saved(); }
-  };
-
   return (
     <div className="space-y-6">
       <Status view={view} me={me} />
-
-      <section aria-labelledby="assistant-choose">
-        <GroupLabel id="assistant-choose">Answers for you</GroupLabel>
-        <RadioGroup value={choice} onValueChange={(v) => setChoice(String(v))} aria-labelledby="assistant-choose" className="grid gap-2.5 @md:grid-cols-2">
-          <Choice value={MANUAL} selected={choice === MANUAL} avatar={<PersonAvatar name={me?.label || "Me"} seed={me?.person || "me"} size={40} />} title="No agent" sub="I’ll answer myself" />
-          {harnesses.map((h) => (
-            <Choice key={h.name} value={h.name} selected={choice === h.name} disabled={!h.found}
-              avatar={<AgentAvatar seed={h.name} size={40} mood={choice === h.name ? "done" : "neutral"} device="laptop" />}
-              title={harnessName(h.name)} sub={h.found ? "Installed here" : "Not installed on this computer"} />
-          ))}
-        </RadioGroup>
-        {!harnesses.some((h) => h.found) && <Hint className="mt-2 px-1">No supported program was found where AgentNet looks for it on this computer.</Hint>}
-      </section>
-
-      {choice && choice !== MANUAL && (
-        <section className="fade-in">
-          <FolderField label="Works in" value={dir} onChange={setDir} hint="Requests from other people start in this folder. Your own sessions stay as they are. Tasks usually change files here, within your normal permissions." />
-        </section>
-      )}
-
-      <Limits harness={choice !== MANUAL ? choice : ""} view={view} />
-
-      {dirty && (
-        // Stays in view while the change is unsaved, wherever the page is scrolled.
-        <div role="region" aria-label="Unsaved change" className="fade-in sticky bottom-3 z-10 flex items-center gap-2 rounded-2xl stroke bg-surface p-2 pl-4 shadow-pop">
-          <p className="min-w-0 flex-1 text-[15px] font-semibold">{!canSave && choice !== MANUAL ? "Choose the folder it works in" : choice === MANUAL ? "Answer yourself?" : "Use " + harnessName(choice) + "?"}</p>
-          <Button variant="ghost" onClick={() => { setChoice(current); setDir(view.dir || ""); }}>Undo</Button>
-          <Button variant="act" disabled={!canSave || busy} onClick={save}>{busy ? "Saving…" : "Save"}</Button>
-        </div>
-      )}
+      <DefaultAgentChoice view={view} saved={saved} extra={(choice) => <Limits harness={choice !== MANUAL ? choice : ""} view={view} />} />
     </div>
   );
 }
@@ -121,21 +70,6 @@ function Status({ view, me }: { view: T.ResponderView; me?: T.PersonView }) {
       </div>
       {view.problem && <Details className="mt-1"><p>{view.problem}</p></Details>}
     </Card>
-  );
-}
-
-function Choice({ value, selected, disabled, avatar, title, sub }: { value: string; selected: boolean; disabled?: boolean; avatar: ReactNode; title: string; sub: string }) {
-  return (
-    <label className={"press flex min-h-[72px] items-center gap-3 rounded-2xl stroke p-3 " + (disabled ? "cursor-not-allowed bg-sunken opacity-60" : selected ? "cursor-pointer bg-agent-fill text-ink shadow-pop-sm" : "cursor-pointer bg-surface hover:bg-sunken")}>
-      {avatar}
-      <span className="min-w-0 flex-1">
-        <span className="block font-semibold">{title}</span>
-        <span className={"block text-[13px] " + (selected ? "text-ink/80" : "text-muted")}>{sub}</span>
-      </span>
-      <Radio.Root value={value} disabled={disabled} className={"grid size-7 shrink-0 place-items-center rounded-full stroke " + (selected ? "bg-[#1B1530] text-act" : "bg-surface")}>
-        <Radio.Indicator><IconCheck size={16} stroke={3} aria-hidden="true" /></Radio.Indicator>
-      </Radio.Root>
-    </label>
   );
 }
 
