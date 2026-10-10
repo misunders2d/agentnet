@@ -262,6 +262,40 @@ func (d *mixedDevice) outbox(t *testing.T) []outboxRow {
 	return out
 }
 
+// archiveImported requires both the descriptor's real storage receipt and
+// completed import on its exact reader. Retention alone is not delivery of
+// every child, and a held child must still fail this convergence gate.
+func (d *mixedDevice) archiveImported(t *testing.T, r outboxRow, devices []*mixedDevice) bool {
+	t.Helper()
+	if r.state != "archive_accepted" {
+		return false
+	}
+	db := d.db(t)
+	defer db.Close()
+	var manifest string
+	err := db.QueryRow(`SELECT m.id FROM history_archive_entries e JOIN outbox m ON m.id=e.manifest WHERE e.child=? AND m.recipient=? AND m.sub='history-archive' AND m.state='delivered'`, r.id, r.recipient).Scan(&manifest)
+	if err == sql.ErrNoRows {
+		return false
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, reader := range devices {
+		if reader.address != r.recipient {
+			continue
+		}
+		rdb := reader.db(t)
+		defer rdb.Close()
+		var complete bool
+		err = rdb.QueryRow(`SELECT EXISTS(SELECT 1 FROM history_archive_jobs WHERE id=? AND retained=1 AND done=1 AND error='') AND NOT EXISTS(SELECT 1 FROM quarantine WHERE id=?)`, manifest, r.id).Scan(&complete)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return complete
+	}
+	return false
+}
+
 // held counts what the device holds back (its quarantine).
 func (d *mixedDevice) held(t *testing.T) int {
 	t.Helper()
@@ -814,7 +848,8 @@ func TestMixedVersion(t *testing.T) {
 	}
 	// No copy failed or waits, except copies to the suspended devices, which
 	// wait in custody. Every other copy, own-device record carriers
-	// included (MIXED-1), was receipted delivered.
+	// included (MIXED-1), was receipted delivered or imported from a receipted
+	// archive. Check the reader too; archive_accepted only proves retention.
 	isSuspended := map[string]bool{}
 	for _, d := range suspended {
 		isSuspended[d.address] = true
@@ -823,6 +858,9 @@ func TestMixedVersion(t *testing.T) {
 		rows := d.outbox(t)
 		t.Logf("J1: %s outbox %s", d.address, summarize(rows))
 		for _, r := range rows {
+			if d.archiveImported(t, r, devices) {
+				continue
+			}
 			if r.state != "delivered" && (!isSuspended[r.recipient] || r.state == "failed") {
 				t.Errorf("J1: %s's copy %s (%q) to %s is %s (%s)", d.address, r.id, r.sub, r.recipient, r.state, r.err)
 			}

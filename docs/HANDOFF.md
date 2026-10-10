@@ -15,8 +15,10 @@ Codex owns `fix/v0.8.18-send-starvation`. The implementation contract and
 remaining qualification are in [V0_8_18.md](plans/V0_8_18.md). Linked-device
 bootstrap is moving to bounded encrypted archives through the existing blob
 API; independent live delivery and existing admission remain required.
-Checkpoint `987e81ad` contains preliminary sender isolation/pacing, not a
-qualified archive implementation. Claude independently reviews the contract
+Archive candidate `6ecd3849` includes the preliminary sender checkpoint
+`987e81ad`; focused checks pass, but combined CI and final review are pending.
+The non-skipped mixed-version journey passes after checking archive import
+completion explicitly rather than expecting individual child receipts. Claude independently reviews the contract
 and final changes; three GPT-6.1-sol helpers own Go client, browser, and
 protocol/envelope changes respectively. No release, live queue cleanup or
 installed-client change has happened for this work.
