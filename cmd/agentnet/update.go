@@ -117,14 +117,26 @@ func runUpdate(ctx context.Context, home string, args []string) error {
 	fs := flag.NewFlagSet("update", flag.ContinueOnError)
 	check := fs.Bool("check", false, "only show what would be installed")
 	status := fs.Bool("status", false, "show the last app update or daemon switch")
+	auto := fs.String("auto", "", "turn this home's automatic updates on or off")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *auto != "" {
+		if *auto != "on" && *auto != "off" || *check || *status || fs.NArg() > 0 {
+			return errors.New("usage: update --auto on|off")
+		}
+		if err := client.SetAutoUpdate(home, *auto == "on"); err != nil {
+			return err
+		}
+		fmt.Printf("automatic updates for %s: %s\n", home, *auto)
+		return nil
 	}
 	app, err := usesAppUpdater(home)
 	if err != nil {
 		return err
 	}
 	if *status {
+		autoUpdateStatus(home)
 		if app {
 			return appUpdateStatus(home)
 		}
@@ -206,31 +218,8 @@ func runUpdate(ctx context.Context, home string, args []string) error {
 	if *check {
 		return nil
 	}
-	if _, err := os.Stat("/.dockerenv"); err == nil {
-		return errors.New("this runs inside a container (/.dockerenv): update the container image instead of the file in it")
-	}
-	// One update of this file at a time, whichever home started it.
-	release, err := lockfile.Acquire(updateLockPath(exe))
+	protoLine, err := installOver(ctx, home, exe, current, target, isRelease && olderRelease(cur, tv))
 	if err != nil {
-		return fmt.Errorf("another update of %s is running (or its directory is not writable): %w", exe, err)
-	}
-	defer release()
-	// Decisions above used this program's own version. Another update may
-	// have replaced the file before the lock was taken, so check, under the
-	// lock, that the file still is this version before replacing it.
-	if now, err := fileVersion(ctx, exe); err != nil || now != versionLine(current) {
-		return fmt.Errorf("%s changed since this update started (it reports %q; this is agentnet %s); nothing was changed: run agentnet update again", exe, now, current)
-	}
-	staged, protoLine, err := stageRelease(ctx, filepath.Dir(exe), target)
-	if err != nil {
-		return err
-	}
-	if err := checkSchema(ctx, home, staged, target, isRelease && olderRelease(cur, tv)); err != nil {
-		os.Remove(staged)
-		return err
-	}
-	if err := replaceExecutable(exe, staged); err != nil {
-		os.Remove(staged)
 		return err
 	}
 	fmt.Printf("updated %s: %s -> %s; the previous file is kept as %s\n", exe, current, protoLine, exe+".old")
@@ -240,6 +229,97 @@ func runUpdate(ctx context.Context, home string, args []string) error {
 	asked := switchDaemon(home, exe, current, target)
 	reportRunning(home, exe, asked)
 	return nil
+}
+
+// installOver puts release target in place of exe, the file this program
+// (version current) runs from, and returns the new file's version line. One
+// update of the file runs at a time, only while the file still is this
+// version, and only with a download that matches the release's checksum,
+// reports target and can open home's database; otherwise nothing changes.
+func installOver(ctx context.Context, home, exe, current, target string, releaseForward bool) (string, error) {
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return "", errors.New("this runs inside a container (/.dockerenv): update the container image instead of the file in it")
+	}
+	// One update of this file at a time, whichever home started it.
+	release, err := lockfile.Acquire(updateLockPath(exe))
+	if err != nil {
+		return "", fmt.Errorf("another update of %s is running (or its directory is not writable): %w", exe, err)
+	}
+	defer release()
+	// Decisions before this used this program's own version. Another update
+	// may have replaced the file before the lock was taken, so check, under
+	// the lock, that the file still is this version before replacing it.
+	if now, err := fileVersion(ctx, exe); err != nil || now != versionLine(current) {
+		return "", fmt.Errorf("%s changed since this update started (it reports %q; this is agentnet %s); nothing was changed: run agentnet update again", exe, now, current)
+	}
+	staged, protoLine, err := stageRelease(ctx, filepath.Dir(exe), target)
+	if err != nil {
+		return "", err
+	}
+	if err := checkSchema(ctx, home, staged, target, releaseForward); err != nil {
+		os.Remove(staged)
+		return "", err
+	}
+	if err := replaceExecutable(exe, staged); err != nil {
+		os.Remove(staged)
+		return "", err
+	}
+	return protoLine, nil
+}
+
+// daemonAutoUpdate is the daemon's automatic update of home
+// (client.RunOptions.AutoUpdate): the release the Hub named is installed
+// the way agentnet update installs it here, from the fixed release origin
+// only. A home the AgentNet app manages asks the app for its whole-app
+// update (never opening it: a closed app updates when it next runs).
+// Otherwise exe, the file the daemon runs, is replaced and the daemon asked
+// to switch to it once no job runs (client/restart.go).
+func daemonAutoUpdate(home, exe string) func(context.Context, string) (string, error) {
+	return func(ctx context.Context, tag string) (string, error) {
+		app, err := usesAppUpdater(home)
+		if err != nil {
+			return "", err
+		}
+		if app {
+			if err := requestAppUpdateOnce(ctx, home, false, tag); err != nil {
+				if errors.Is(err, errAppUpdateNotReady) {
+					return "", errors.New("the AgentNet app for this home is not open: it updates the whole app when it runs")
+				}
+				return "", err
+			}
+			return "the AgentNet app updates as a whole", nil
+		}
+		return autoInstall(ctx, home, exe, tag)
+	}
+}
+
+// autoInstall installs release target over exe for this release build
+// and asks home's daemon to switch to it.
+func autoInstall(ctx context.Context, home, exe, target string) (string, error) {
+	current := protocol.Version
+	cur, ok := parseRelease(current)
+	if !ok {
+		return "", fmt.Errorf("this development build (%s) never updates itself", current)
+	}
+	if tv, ok := parseRelease(target); !ok || !olderRelease(cur, tv) {
+		return "", fmt.Errorf("%q is not a release newer than %s", target, current)
+	}
+	if exe == "" {
+		return "", errors.New("the daemon's program file is not known")
+	}
+	// A file already holding target (installed, the switch not done) only
+	// needs the switch.
+	line, err := fileVersion(ctx, exe)
+	if err != nil || line != versionLine(target) {
+		if line, err = installOver(ctx, home, exe, current, target, true); err != nil {
+			return "", err
+		}
+	}
+	r := client.UpdateRequest{ID: protocol.NewID(), Exe: exe, From: current, To: target, At: time.Now()}
+	if err := client.RequestUpdateSwitch(home, r); err != nil {
+		return "", fmt.Errorf("installed %s over %s, but could not ask the daemon to switch: %w", line, exe, err)
+	}
+	return fmt.Sprintf("installed %s over %s (the previous file is kept as %s); the daemon switches to it once no job runs", line, exe, exe+".old"), nil
 }
 
 // A standalone official CLI may predate installation of the desktop app.
@@ -307,6 +387,29 @@ func updateStatus(home string) error {
 		fmt.Println("now: a daemon is running; which version is not checked here")
 	}
 	return nil
+}
+
+// autoUpdateStatus says whether this home updates itself, what its last
+// automatic update did, and whether the Hub refuses this build.
+func autoUpdateStatus(home string) {
+	switch on, err := client.AutoUpdateOn(home); {
+	case err != nil:
+		fmt.Printf("automatic updates: not on (%v)\n", err)
+	case on:
+		fmt.Println("automatic updates: on (agentnet update --auto off turns them off)")
+	default:
+		fmt.Println("automatic updates: off (agentnet update --auto on turns them on)")
+	}
+	if r, ok, err := client.ReadAutoUpdate(home); err == nil && ok {
+		line := fmt.Sprintf("last automatic update: at %s, %s -> %s: %s", r.At.Format(time.RFC3339), r.From, r.To, r.State)
+		if r.Detail != "" {
+			line += ": " + r.Detail
+		}
+		fmt.Println(line)
+	}
+	if u, ok := client.LocalUpdateRequired(home); ok {
+		fmt.Printf("your Hub refuses this device until it updates: %s\n", u.Message())
+	}
 }
 
 func releaseName(v [3]int) string { return fmt.Sprintf("v%d.%d.%d", v[0], v[1], v[2]) }

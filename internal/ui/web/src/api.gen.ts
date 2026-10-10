@@ -763,6 +763,7 @@ export interface Overview {
   workspace?: WorkspaceView;
   agent_devices: string[] | null;
   model_reports?: PrivateModelReport[];
+  update_required?: UpdateRequiredView;
 }
 
 export interface OwnDevicePermission {
@@ -1246,6 +1247,12 @@ export interface TypingView {
   supported: boolean;
   current: boolean;
   entries: TypingEntry[] | null;
+}
+
+export interface UpdateRequiredView {
+  latest: string;
+  url?: string;
+  auto?: string;
 }
 
 export interface WorkspaceBinding {

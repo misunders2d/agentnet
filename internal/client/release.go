@@ -84,23 +84,28 @@ func (a *Agent) notifyRelease() {
 }
 
 // releaseNudge is the hook line for a session not yet told about the
-// current recommendation. The operator's note is left out: it is for
-// people, not instructions for a model.
+// current recommendation or, while the Hub refuses this build, that it
+// must be updated (updaterequired.go). The operator's note is left out: it
+// is for people, not instructions for a model.
 func (a *Agent) releaseNudge(ev HookEvent) (line, key string, err error) {
-	r, ok := a.store.updateRecommended()
-	if !ok {
-		return "", "", nil
+	if line, key = a.updateRequiredNudge(); line == "" {
+		r, ok := a.store.updateRecommended()
+		if !ok {
+			return "", "", nil
+		}
+		line = fmt.Sprintf("AgentNet: your Hub's operator recommends AgentNet %s; this is %s. How to update: `agentnet help update`; operator's page: %s. "+
+			"Ask the person before updating unless they have already authorized it.", r.Version, protocol.Version, r.URL)
+		key = r.Key()
 	}
 	var seen sql.NullString
 	err = a.store.db.QueryRow(`SELECT release_seen FROM attention WHERE harness = ? AND session = ?`, ev.Harness, ev.Session).Scan(&seen)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return "", "", err
 	}
-	if seen.String == r.Key() {
+	if seen.String == key {
 		return "", "", nil
 	}
-	return fmt.Sprintf("AgentNet: your Hub's operator recommends AgentNet %s; this is %s. How to update: `agentnet help update`; operator's page: %s. "+
-		"Ask the person before updating unless they have already authorized it.", r.Version, protocol.Version, r.URL), r.Key(), nil
+	return line, key, nil
 }
 
 func (s *store) setReleaseSeen(harness, session, key string) error {

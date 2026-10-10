@@ -27,6 +27,10 @@ type HubError struct {
 	Status int
 	Code   string
 	Msg    string
+	// Latest and URL are an update_required refusal's (HTTP 426): the
+	// release this device must run before the Hub serves it again, and the
+	// release page the Hub names (shown to people, never downloaded).
+	Latest, URL string
 }
 
 func (e *HubError) Error() string { return fmt.Sprintf("hub: %s (%d)", e.Msg, e.Status) }
@@ -42,6 +46,8 @@ func (e *HubError) Is(target error) bool {
 		return e.Code == protocol.CodeLinkRefused
 	case ErrLinkExpired:
 		return e.Code == protocol.CodeLinkExpired
+	case ErrUpdateRequired:
+		return e.Code == codeUpdateRequired
 	}
 	return false
 }
@@ -58,7 +64,9 @@ func retryable(err error) bool {
 	}
 	var he *HubError
 	if errors.As(err, &he) {
-		return he.Status >= 500
+		// A Hub that requires a newer AgentNet takes the same request from
+		// the updated program: it waits, never fails (updaterequired.go).
+		return he.Status >= 500 || he.Code == codeUpdateRequired
 	}
 	return err != nil
 }
@@ -112,6 +120,9 @@ type hubConn struct {
 	// workspaceCheck, when set, gates every request except the version
 	// probe on the pinned workspace identity (workspaces_realmguard.go).
 	workspaceCheck func(context.Context, string) error
+	// gate, when set, learns of the Hub's update_required refusals and,
+	// in the daemon, refuses here what the Hub would (updaterequired.go).
+	gate *updateGate
 }
 
 func newHubConn(base, certPEM, agent string, key ed25519.PrivateKey) (*hubConn, error) {
@@ -149,6 +160,9 @@ func (c *hubConn) release() {
 // has no agent yet. Every request says which program version makes it
 // (unsigned): a Hub asks an outdated one to update.
 func (c *hubConn) request(ctx context.Context, method, path string, body []byte) (*http.Request, error) {
+	if err := c.gate.before(method, path, body); err != nil {
+		return nil, err
+	}
 	if c.workspaceCheck != nil {
 		if err := c.workspaceCheck(ctx, path); err != nil {
 			return nil, err
@@ -191,7 +205,7 @@ func (c *hubConn) doBytes(ctx context.Context, method, path string, body []byte,
 		return err
 	}
 	defer resp.Body.Close()
-	if err := checkStatus(resp); err != nil {
+	if err := c.check(resp); err != nil {
 		return err
 	}
 	if out == nil {
@@ -214,7 +228,7 @@ func (c *hubConn) getRange(ctx context.Context, path string, from, to int64, w i
 		return err
 	}
 	defer resp.Body.Close()
-	if err := checkStatus(resp); err != nil {
+	if err := c.check(resp); err != nil {
 		return err
 	}
 	if resp.StatusCode != http.StatusPartialContent {
@@ -227,12 +241,27 @@ func (c *hubConn) getRange(ctx context.Context, path string, from, to int64, w i
 	return err
 }
 
+// check is checkStatus, telling the gate of the Hub's update_required refusals.
+func (c *hubConn) check(resp *http.Response) error {
+	err := checkStatus(resp)
+	c.gate.after(err)
+	return err
+}
+
 func checkStatus(resp *http.Response) error {
 	if resp.StatusCode/100 == 2 {
 		return nil
 	}
-	var e protocol.Error
+	var e struct { // protocol.Error, and what an update_required refusal adds
+		Code   string `json:"code"`
+		Error  string `json:"error"`
+		Latest string `json:"latest"`
+		URL    string `json:"url"`
+	}
 	json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&e)
+	if resp.StatusCode == http.StatusUpgradeRequired && (e.Error == codeUpdateRequired || e.Code == codeUpdateRequired) {
+		return updateRequiredError(e.Latest, e.URL)
+	}
 	if e.Error == "" {
 		e.Error = resp.Status
 	}

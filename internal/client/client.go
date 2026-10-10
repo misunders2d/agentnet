@@ -105,6 +105,8 @@ type Agent struct {
 		switching *UpdateRequest // the daemon is stopping for it
 		ready     bool           // started: requests are settled and looked at
 	}
+	auto     autoUpdate     // the daemon's automatic update (autoupdate.go)
+	required requiredRecord // the Hub's refusal of this build, as recorded (updaterequired.go)
 }
 
 func paths(home string) (identityPath, dbPath string) {
@@ -288,6 +290,10 @@ func Open(home string) (*Agent, error) {
 		return nil, err
 	}
 	a.hub.workspaceCheck = a.WorkspaceRequestGuard()
+	a.hub.gate = &updateGate{refused: a.noteUpdateRequired} // the Hub's refusal of this build (updaterequired.go)
+	if u, ok := st.updateRequired(); ok {
+		a.hub.gate.refusal = updateRequiredError(u.Latest, u.URL)
+	}
 	a.typing.groupMembers = a.GroupMembers // verified effective group membership (groups.go); never the frozen root
 	return a, nil
 }
@@ -297,6 +303,7 @@ func (a *Agent) Close() error {
 	a.stopBackgroundPosts()
 	a.typingDisconnected()
 	a.hub.release()
+	a.required.writes.Wait() // a refusal met is recorded before the database closes
 	return a.store.db.Close()
 }
 
@@ -963,6 +970,10 @@ func (a *Agent) flushOutbox(ctx context.Context, filesOnly bool) error {
 			key = "aux\x00" + env.ID
 		}
 		if blocked[key] {
+			continue
+		}
+		if a.hub.gate.holding() && !drainsWork(env.Kind) {
+			blocked[key] = true // the Hub refuses this build: it waits for the updated program (updaterequired.go)
 			continue
 		}
 		var route *protocol.SessionAd

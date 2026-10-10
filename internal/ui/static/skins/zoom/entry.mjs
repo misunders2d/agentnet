@@ -4528,10 +4528,11 @@ async function reconnect() {
 }
 
 // Reload persistence keeps only part of a draft. Keep every unsent draft
-// in memory until the person sends or clears it, including other workspaces.
+// in memory until the person sends or clears it, including other workspaces,
+// and every send until it is stored (its draft is cleared as it begins).
 function hasUnsentDrafts() {
   const pending = (d) => d && (d.text || d.answering || d.reply || d.agent || d.agent_id || d.reply_receiver || d.reply_receiver_host || d.typedFor || (d.files && d.files.length));
-  if ($("body").value || state.answering || state.dmReply || state.dmAgent || state.deviceAgentID || state.replyReceiver || state.replyReceiverHost || state.typedFor || state.files.length ||
+  if (sends.unsent() || $("body").value || state.answering || state.dmReply || state.dmAgent || state.deviceAgentID || state.replyReceiver || state.replyReceiverHost || state.typedFor || state.files.length ||
     Object.values(state.drafts).some(pending) || (state.dialogRestore && $("dialog").open)) return true;
   const w = wsAPI();
   if (w) {

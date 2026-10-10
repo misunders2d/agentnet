@@ -227,10 +227,12 @@ func run(args []string) error {
 	case "conversation":
 		return runConversation(a, rest)
 	case "inbox":
+		updateRequiredNotice(a, os.Stderr)
 		return runInbox(a, rest)
 	case "download":
 		return runDownload(ctx, a, rest)
 	case "status":
+		updateRequiredNotice(a, os.Stderr)
 		return runStatus(ctx, a, rest, os.Stdout)
 	case "daemon":
 		fs := flag.NewFlagSet("daemon", flag.ContinueOnError)
@@ -250,6 +252,7 @@ func run(args []string) error {
 			}
 		}
 		opts.CanSwitch, opts.PrepareSwitch = switchHooks(*home, opts.Executable)
+		opts.AutoUpdate = daemonAutoUpdate(*home, opts.Executable)
 		if *uiAddr != "" {
 			opts.Owned = func() (func(), error) {
 				stop, err := startDaemonUI(a, *home, *uiAddr, log.Printf)
@@ -316,6 +319,14 @@ func run(args []string) error {
 		return runAdmin(ctx, a, rest)
 	}
 	return fmt.Errorf("unknown command %q (see agentnet --help)", cmd)
+}
+
+// updateRequiredNotice heads inbox and status (on stderr, so their output
+// stays parseable) while the Hub refuses this build until it updates.
+func updateRequiredNotice(a *client.Agent, w io.Writer) {
+	if u, ok := a.UpdateRequired(); ok {
+		fmt.Fprintf(w, "AgentNet: %s See agentnet help update.\n", a.ExplainUpdateRequired(u))
+	}
 }
 
 func defaultHome() string {

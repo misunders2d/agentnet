@@ -166,6 +166,12 @@ func (a *Agent) Doctor(ctx context.Context) []Check {
 	default:
 		add("update", true, "the Hub recommends %s; this is %s: see agentnet help update and %s", r.Version, protocol.Version, r.URL)
 	}
+	// After the requests above: a refusal one of them met is recorded.
+	if u, ok := a.UpdateRequired(); ok {
+		add("suspended", false, "%s See agentnet help update.", a.ExplainUpdateRequired(u))
+	} else {
+		add("auto-update", true, "%s", a.autoUpdateWords())
+	}
 	switch r, err := a.Responder(); {
 	case err != nil:
 		add("responder", false, "%v", err)

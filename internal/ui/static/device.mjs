@@ -4,6 +4,7 @@
 // A device that has not joined gets "Get AgentNet" (landing.mjs): the app
 // on a computer, this page on a phone's home screen, which joins only when
 // the person taps Join, under an automatic device name.
+import * as engineModule from "./engine.mjs";
 import { Engine, openIDB, probeStore, sameOrigin } from "./engine.mjs";
 import { addManifest, appBanner, installOffer, landing } from "./landing.mjs";
 import { decodeInvite, decodeOffer, newID, support, validName } from "./wire.mjs";
@@ -286,7 +287,11 @@ async function run(link) {
       el("p", { class: "hint" }, "(" + e.message + ")"));
     return;
   }
-  const engine = new Engine({ store, base: location.origin, push });
+  // The build this page was served as: the one its server wrote into the
+  // engine (BUILD) when it does, else its first version answer. Once the
+  // server serves another, the skin reloads the page as for any new
+  // version, never over unsent drafts (engine.mjs, "this page outdated").
+  const engine = new Engine({ store, base: location.origin, push, pageBuild: engineModule.BUILD || "" });
   if (await engine.load()) start(engine);
   else showLanding(engine, link);
 }

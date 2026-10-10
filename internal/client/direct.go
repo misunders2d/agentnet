@@ -59,6 +59,11 @@ type RunOptions struct {
 	// and of the terminal review: in the app, a click never opens a
 	// browser tab or a terminal.
 	OpenPage func(fragment string) []string
+	// AutoUpdate, if set, installs release (vX.Y.Z), newer than this
+	// build, the way this installation updates, and says what it did. The
+	// daemon calls it after a release the Hub names (autoupdate.go); nil
+	// never updates.
+	AutoUpdate func(ctx context.Context, release string) (string, error)
 }
 
 // Direct delivery limits. Variables so tests can shorten them.
