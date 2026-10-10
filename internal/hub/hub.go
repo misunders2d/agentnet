@@ -45,6 +45,16 @@ type Config struct {
 	Heartbeat    time.Duration // ping interval on idle push streams (default protocol.HeartbeatInterval)
 	SessionGrace time.Duration // how long a disconnected session may reconnect before it ends (default 30s)
 
+	// Version is this relay's own program version (default
+	// protocol.Version): a release (vX.Y.Z) asks every device to run at
+	// least that release, and its browser engine reports it. UpdateGrace is
+	// how long a device on an AgentNet older than the relay's release may
+	// still use it after the relay first ran a release newer than the
+	// device's; then the device is suspended until it updates (update.go).
+	// Default 30 minutes; negative: no grace.
+	Version     string
+	UpdateGrace time.Duration
+
 	// PlatformTLS serves plain HTTP for a platform (Railway, a load balancer)
 	// that terminates HTTPS for PublicURL with a publicly trusted
 	// certificate. Invites then carry no certificate pin and clients verify
@@ -89,8 +99,14 @@ type Hub struct {
 	release    atomic.Pointer[protocol.Release]
 	releaseMu  sync.Mutex
 	releaseGen int64
+	// update is the latest-only policy this relay decides by, replaced
+	// under updateMu with graceEnd (update.go).
+	update     atomic.Pointer[updateState]
+	updateMu   sync.Mutex
+	graceEnd   *time.Timer
 	presence   presence
 	membersGen atomic.Int64  // changes with the member list (see members.go)
+	againGen   atomic.Int64  // changes with what receivers look again for on a member list (members.go)
 	linksGen   atomic.Int64  // changes when a device joins to be linked (persons.go)
 	push       pushKeys      // VAPID key pair (push.go)
 	notifier   *notifier     // sends due notification alerts (notify.go)
@@ -133,6 +149,14 @@ func Open(cfg Config) (*Hub, error) {
 	}
 	if cfg.SessionGrace <= 0 {
 		cfg.SessionGrace = 30 * time.Second
+	}
+	if cfg.Version == "" {
+		cfg.Version = protocol.Version
+	}
+	if cfg.UpdateGrace == 0 {
+		cfg.UpdateGrace = 30 * time.Minute
+	} else if cfg.UpdateGrace < 0 {
+		cfg.UpdateGrace = 0
 	}
 	if !protocol.ValidName(cfg.AdminLabel) {
 		return nil, fmt.Errorf("invalid admin label %q", cfg.AdminLabel)
@@ -210,6 +234,10 @@ func Open(cfg Config) (*Hub, error) {
 	}
 	h.notifier = newNotifier(h)
 	h.notifier.send = webPusher(h.push, cfg.PublicURL, newPushClient())
+	if err := h.serveRelease(); err != nil { // after the notifier: a grace period's end wakes the member list
+		h.Close()
+		return nil, err
+	}
 	return h, nil
 }
 
@@ -347,6 +375,12 @@ func (l *lateConns) state(c net.Conn, s http.ConnState) {
 // Close releases the database. Call after Serve returns.
 func (h *Hub) Close() error {
 	h.presence.close()
+	h.updateMu.Lock()
+	h.update.Store(&updateState{}) // a grace end firing now plans no other
+	if h.graceEnd != nil {
+		h.graceEnd.Stop()
+	}
+	h.updateMu.Unlock()
 	err := h.store.db.Close()
 	h.unlock()
 	return err

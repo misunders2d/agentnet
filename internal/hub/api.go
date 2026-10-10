@@ -77,7 +77,7 @@ func (h *Hub) routes() http.Handler {
 	mux.HandleFunc("DELETE /v1/notify/subscription", h.handlePushUnsubscribe)
 	mux.HandleFunc("POST /v1/notify/seen", h.handleNotifySeen)
 	if h.cfg.Web {
-		relay := http.Handler(static.Relay(filepath.Join(h.cfg.DataDir, "skins")))
+		relay := http.Handler(static.RelayBuild(h.cfg.Version, filepath.Join(h.cfg.DataDir, "skins")))
 		if wrapped, err := static.WithConnectOrigins(relay, h.cfg.BrowserOrigins); err == nil { // validated in Open
 			relay = wrapped
 		}
@@ -160,6 +160,11 @@ func (h *Hub) authenticateBody(w http.ResponseWriter, r *http.Request) (string, 
 	}
 	if !fresh {
 		writeError(w, http.StatusUnauthorized, "", "replayed request")
+		return "", nil, false
+	}
+	// A suspended device may make only some requests (update.go); posting
+	// a message is decided by its kind (handlePostMessage).
+	if !whileSuspended[r.Pattern] && r.Pattern != "POST /v1/messages" && h.refuseOutdated(w, r) {
 		return "", nil, false
 	}
 	return sr.Agent, sr.Body, true
@@ -262,6 +267,9 @@ func (h *Hub) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := env.VerifySig(sender.Public.SignKey); err != nil {
 		writeError(w, http.StatusBadRequest, "", err.Error())
+		return
+	}
+	if !drainsWork(env.Kind) && h.refuseOutdated(w, r) { // a suspended device only finishes admitted work (update.go)
 		return
 	}
 	recipient, err := h.store.agent(env.To)

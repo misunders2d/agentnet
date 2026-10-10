@@ -45,3 +45,18 @@ func TestHubServePushHostsChecked(t *testing.T) {
 		}
 	}
 }
+
+// --update-grace (AGENTNET_UPDATE_GRACE) takes a duration, 0 included, and
+// is refused before the Hub is opened otherwise.
+func TestHubServeUpdateGraceChecked(t *testing.T) {
+	for _, bad := range []string{"-1m", "soon", "30"} {
+		err := runHub(context.Background(), []string{"serve", "--data", t.TempDir(), "--update-grace", bad})
+		if err == nil || !strings.Contains(err.Error(), "--update-grace") {
+			t.Errorf("%q: %v", bad, err)
+		}
+	}
+	t.Setenv("AGENTNET_UPDATE_GRACE", "later")
+	if err := runHub(context.Background(), []string{"serve", "--data", t.TempDir()}); err == nil || !strings.Contains(err.Error(), "--update-grace") {
+		t.Errorf("from the environment: %v", err)
+	}
+}

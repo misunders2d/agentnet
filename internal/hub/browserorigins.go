@@ -26,7 +26,8 @@ func WithBrowserOrigins(next http.Handler, ownOrigin string, origins []string) (
 	}
 	ownOrigin = own.Scheme + "://" + own.Host
 	methods := map[string]bool{"GET": true, "POST": true, "PUT": true, "DELETE": true}
-	headers := map[string]bool{"content-type": true, "range": true, "accept": true, "x-agentnet-agent": true, "x-agentnet-time": true, "x-agentnet-nonce": true, "x-agentnet-sig": true}
+	headers := map[string]bool{"content-type": true, "range": true, "accept": true, "x-agentnet-agent": true, "x-agentnet-time": true, "x-agentnet-nonce": true, "x-agentnet-sig": true,
+		strings.ToLower(protocol.VersionHeader): true}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, "/v1/") {
 			next.ServeHTTP(w, r)
@@ -58,7 +59,7 @@ func WithBrowserOrigins(next http.Handler, ownOrigin string, origins []string) (
 				}
 			}
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Range, Accept, X-Agentnet-Agent, X-Agentnet-Time, X-Agentnet-Nonce, X-Agentnet-Sig")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Range, Accept, X-Agentnet-Agent, X-Agentnet-Time, X-Agentnet-Nonce, X-Agentnet-Sig, "+protocol.VersionHeader)
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}

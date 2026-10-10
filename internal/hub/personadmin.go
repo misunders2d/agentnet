@@ -202,7 +202,7 @@ func (h *Hub) handleDeviceAdmin(w http.ResponseWriter, r *http.Request) {
 	} else {
 		h.cfg.Logf("%s may no longer change company settings, by %s", req.Address, caller)
 	}
-	h.membersChanged() // push the role change to the person's connected devices
+	h.lookAgain() // push the role change to the person's connected devices
 	w.WriteHeader(http.StatusNoContent)
 }
 

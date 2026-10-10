@@ -86,12 +86,16 @@ type pushEvent struct{ name, data string }
 
 // pushStream opens m's stream and hands over its events one at a time, until
 // it ends (the channel closes). It returns once the stream is registered.
-func pushStream(t *testing.T, h *Hub, m member) <-chan pushEvent {
+// A version given is the program version the stream reports.
+func pushStream(t *testing.T, h *Hub, m member, version ...string) <-chan pushEvent {
 	t.Helper()
 	pr, pw := io.Pipe()
 	ad := protocol.SessionAd{Address: m.addr, Session: protocol.NewID()}
 	protocol.SignAd(&ad, m.id.Sign)
 	req := signed(t, m.id, m.addr, "GET", "/v1/stream?ad="+ad.Encode(), nil)
+	for _, v := range version {
+		req.Header.Set(protocol.VersionHeader, v)
+	}
 	served := make(chan struct{})
 	go func() {
 		defer close(served)

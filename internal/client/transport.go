@@ -110,7 +110,8 @@ func (c *hubConn) release() {
 }
 
 // request builds a request with a raw body, signed unless the connection
-// has no agent yet.
+// has no agent yet. Every request says which program version makes it
+// (unsigned): a Hub asks an outdated one to update.
 func (c *hubConn) request(ctx context.Context, method, path string, body []byte) (*http.Request, error) {
 	if c.workspaceCheck != nil {
 		if err := c.workspaceCheck(ctx, path); err != nil {
@@ -121,6 +122,7 @@ func (c *hubConn) request(ctx context.Context, method, path string, body []byte)
 	if err != nil {
 		return nil, err
 	}
+	req.Header.Set(protocol.VersionHeader, protocol.Version)
 	if c.agent != "" {
 		protocol.SignRequest(req, c.agent, c.key, body)
 	}

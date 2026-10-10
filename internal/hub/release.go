@@ -11,7 +11,10 @@ import (
 
 // The Hub operator may recommend one client version. It is kept in the
 // database, pushed on every stream when a stream connects and whenever it
-// changes, and never pushed again when set to the same value.
+// changes, and never pushed again when set to the same value. A release
+// relay pushes its own release instead when the operator's is older or
+// none (update.go): the recommendation can no longer go stale. A newer one
+// the operator names is a notice only: it suspends nobody.
 
 func (s *store) release() (protocol.Release, error) {
 	var r protocol.Release
@@ -42,12 +45,13 @@ func (h *Hub) loadRelease() error {
 	return err
 }
 
-// currentRelease returns the recommendation and its generation, which
-// changes only when the recommendation does.
+// currentRelease returns the recommendation clients are told
+// (pushedRelease: on a release relay, never older than its own) and its
+// generation, which changes only when that recommendation does.
 func (h *Hub) currentRelease() (protocol.Release, int64) {
 	h.releaseMu.Lock()
 	defer h.releaseMu.Unlock()
-	return *h.release.Load(), h.releaseGen
+	return h.pushedRelease(*h.release.Load()), h.releaseGen
 }
 
 func (h *Hub) handleRelease(w http.ResponseWriter, r *http.Request) {
@@ -68,19 +72,24 @@ func (h *Hub) handleRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.releaseMu.Lock()
-	changed := *h.release.Load() != next
+	prev := *h.release.Load()
+	changed, pushed := prev != next, h.pushedRelease(prev) != h.pushedRelease(next)
 	err := h.store.setRelease(next, caller) // saved before any stream is woken
 	if err == nil && changed {
 		h.release.Store(&next)
-		h.releaseGen++
+		if pushed {
+			h.releaseGen++
+		}
 	}
 	h.releaseMu.Unlock()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "", "could not store the release")
 		return
 	}
-	if changed {
+	if pushed { // a notice: who is suspended depends on the relay's own release only (update.go)
 		h.streams.notifyAll()
+	}
+	if changed {
 		h.cfg.Logf("client release recommendation set to %q by %s", next.Version, caller)
 	}
 	writeJSON(w, http.StatusOK, next)

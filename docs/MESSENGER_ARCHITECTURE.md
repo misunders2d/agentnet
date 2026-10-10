@@ -478,6 +478,17 @@ push endpoints. It holds no plaintext and no private keys.
     preventing loss. This is **not live-tested on Railway.**
   - **Browsers** send the signed `X-Agentnet-*` headers (`protocol.go:236`) via
     `fetch()` streaming, because `EventSource` cannot set headers.
+  - **Client version (v0.8.17, latest only):** every request also carries the
+    unsigned `Agentnet-Version` header (a browser engine: the version of the
+    relay that served it, written into `engine.mjs` as `BUILD`). A release
+    relay suspends a device older than its own release after the grace
+    period (`internal/hub/update.go`): HTTP 426 `update_required` on its
+    requests, except its stream, ping and message acknowledgements,
+    `GET /v1/release`, read-only member lookups and posts of `answer` or
+    `result` messages (admitted work drains, nothing new starts); and on its
+    stream the `release` event, then `update_required` (`{"latest","url"}`,
+    the relay's release), then pings only. Its messages stay in custody. An
+    admin's newer recommendation is pushed as `release` but suspends nobody.
 - **Web Push:** gated. See §12.3.
 
 ## 6. Hosted access: trust, storage, discovery (honest tradeoff)

@@ -206,8 +206,8 @@ func (h *Hub) handlePutTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !same {
-		h.membersChanged()
-	} // reuse directory push generation, never a job notification
+		h.lookAgain()
+	} // reuse directory push generation (both lists, as before), never a job notification
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -324,6 +324,6 @@ func (h *Hub) handleDeleteTeam(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "", "people list deletion failed")
 		return
 	}
-	h.membersChanged()
+	h.lookAgain()
 	w.WriteHeader(http.StatusNoContent)
 }

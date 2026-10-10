@@ -929,12 +929,13 @@ Environment variables (how the container image is configured):
   hub serve only:    AGENTNET_LISTEN or PORT (--listen), AGENTNET_PUBLIC_URL,
                      AGENTNET_ADMIN_LABEL, AGENTNET_PLATFORM_TLS=1, AGENTNET_WEB=1,
                      AGENTNET_MAX_FILE, AGENTNET_QUOTA, AGENTNET_UPLOAD_TTL,
-                     AGENTNET_PUSH_HOSTS
+                     AGENTNET_PUSH_HOSTS, AGENTNET_UPDATE_GRACE
 Other flags (--out, --from, cleanup ages) have no variable.`,
 
 	"hub serve": `Usage: agentnet hub serve --data DIR [--listen ADDR] [--public-url URL]
                          [--platform-tls] [--web] [--max-file 100MiB] [--quota 1GiB]
                          [--upload-ttl 24h] [--admin-label admin] [--push-hosts H,...]
+                         [--update-grace 30m]
 
 Serve a Hub. On first start it writes a one-time admin invite to
 DIR/bootstrap-invite.txt (read it with agentnet hub bootstrap-invite).
@@ -949,6 +950,17 @@ DIR/bootstrap-invite.txt (read it with agentnet hub bootstrap-invite).
   --upload-ttl D    remove unfinished uploads after D idle
   --push-hosts H,.. push services to send notifications to, besides Apple,
                     Google, Mozilla and Microsoft (env AGENTNET_PUSH_HOSTS)
+  --update-grace D  how long a device on an AgentNet older than the Hub's
+                    release keeps working; 0: none (env AGENTNET_UPDATE_GRACE)
+
+Latest only: a Hub that runs a release (vX.Y.Z) recommends that release to
+every device, or a newer one an admin set (a notice only). A device older
+than the Hub's own release is suspended once the grace period has passed
+since the Hub first ran a newer release than the device's: it may finish
+what it was asked before (receipts, answers, results), its other requests
+are refused with "update AgentNet to vX.Y.Z", and what others send it waits
+on the Hub until it connects again, updated. An admin's recommendation
+suspends nobody, and a development build of the Hub suspends nobody.
 
 Default TLS: the Hub makes its own certificate and pins it in invites.
 For browsers, use HTTPS with a certificate they trust, normally through a
@@ -1283,7 +1295,7 @@ var valueFlags = map[string]bool{
 	"file": true, "dir": true, "agent": true, "listen": true, "advertise": true, "peer": true,
 	"harness": true, "context": true, "timeout": true, "ttl": true, "data": true, "out": true,
 	"from": true, "public-url": true, "admin-label": true, "max-file": true, "quota": true,
-	"upload-ttl": true, "delivered-older-than": true, "unattached-older-than": true, "wait": true,
+	"upload-ttl": true, "update-grace": true, "delivered-older-than": true, "unattached-older-than": true, "wait": true,
 	"follow-up": true, "offset": true, "limit": true, "reply-to": true, "answer-wait": true,
 }
 

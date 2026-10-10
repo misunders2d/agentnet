@@ -496,6 +496,13 @@ type Member struct {
 	// agent. A hint for display and offers only: it grants nothing and no
 	// send decision may use it.
 	Agent bool `json:"agent,omitempty"`
+	// Version is the AgentNet version the device's push stream last
+	// reported (VersionHeader, unsigned): for display only. Suspended says
+	// the Hub refuses that version until the device updates
+	// (UpdateRequired): its copies wait in custody, so senders need not
+	// wait for it. Availability only: neither grants or withdraws anything.
+	Version   string `json:"version,omitempty"`
+	Suspended bool   `json:"suspended,omitempty"`
 }
 
 // PersonRef names one step of a person's roster chain.

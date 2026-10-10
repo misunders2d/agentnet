@@ -128,3 +128,22 @@ func TestBrowserOriginsExposesStreamCapabilitiesWithoutOpeningAuthority(t *testi
 		t.Fatalf("auth handler calls=%d", calls)
 	}
 }
+
+// A browser workspace of an approved origin may send the client version
+// (protocol.VersionHeader) with its signed requests: the preflight allows
+// it and says so.
+func TestBrowserOriginsAllowVersionHeader(t *testing.T) {
+	handler, err := WithBrowserOrigins(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }), "https://relay.example", []string{"https://shell.example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("OPTIONS", "https://relay.example/v1/stream", nil)
+	req.Header.Set("Origin", "https://shell.example")
+	req.Header.Set("Access-Control-Request-Method", "GET")
+	req.Header.Set("Access-Control-Request-Headers", "accept,agentnet-version,x-agentnet-agent,x-agentnet-nonce,x-agentnet-sig,x-agentnet-time")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent || !strings.Contains(rec.Header().Get("Access-Control-Allow-Headers"), protocol.VersionHeader) {
+		t.Fatalf("preflight with the version: %d, allowed %q", rec.Code, rec.Header().Get("Access-Control-Allow-Headers"))
+	}
+}

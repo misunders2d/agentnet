@@ -8,10 +8,12 @@ import (
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
+	"encoding/json"
 	"image"
 	"image/color"
 	"image/png"
 	"io/fs"
+	"maps"
 	"math"
 	"net/http"
 	"strings"
@@ -258,13 +260,30 @@ const relayCSP = "default-src 'none'; script-src 'self'; style-src 'self'; font-
 // headers that keep the page to its own origin's code and out of frames and
 // other windows. They do not protect against the relay itself: whoever runs
 // it can serve other code (MESSENGER_ARCHITECTURE §6).
-func Relay(skinsDirectory ...string) http.Handler {
+func Relay(skinsDirectory ...string) http.Handler { return RelayBuild("", skinsDirectory...) }
+
+// buildStamp is the line of engine.mjs a relay writes its version into.
+const buildStamp = `export const BUILD = "";`
+
+// RelayBuild is Relay for a relay running AgentNet version build: the
+// engine it serves says build on its requests (engine.mjs BUILD), so the
+// relay knows which code a browser device runs. "" leaves it unsaid.
+func RelayBuild(build string, skinsDirectory ...string) http.Handler {
 	dir := ""
 	if len(skinsDirectory) > 0 {
 		dir = skinsDirectory[0]
 	}
 	skins := Skins(dir)
-	content, etags := relayContent(), map[string]string{}
+	content, etags := maps.Clone(relayContent()), map[string]string{}
+	if build != "" {
+		engine := content["/assets/engine.mjs"]
+		quoted, _ := json.Marshal(build)
+		stamped := strings.Replace(engine[0], buildStamp, `export const BUILD = `+string(quoted)+`;`, 1)
+		if stamped == engine[0] {
+			panic("static: engine.mjs has no build stamp to write") // a build error
+		}
+		content["/assets/engine.mjs"] = [2]string{stamped, engine[1]}
+	}
 	for p, c := range content {
 		sum := sha256.Sum256([]byte(c[0]))
 		etags[p] = `"` + hex.EncodeToString(sum[:16]) + `"`

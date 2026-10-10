@@ -144,7 +144,7 @@ CREATE TABLE realm(
   CHECK ((initialized = 0 AND realm_id IS NULL) OR
          (initialized = 1 AND realm_id IS NOT NULL)));
 INSERT INTO realm(id, initialized) VALUES(1, 0);
-`, TeamSchema, driveStorageSchema, GroupHubSchema, agentCatalogSchema, receiptSchema, workspaceSchema, deviceAdminSchema, inviteHintsSchema, googleSchema, deviceAdminNoticeSchema}
+`, TeamSchema, driveStorageSchema, GroupHubSchema, agentCatalogSchema, receiptSchema, workspaceSchema, deviceAdminSchema, inviteHintsSchema, googleSchema, deviceAdminNoticeSchema, updateSchema}
 
 // addressTakenError refuses a join for an enrolled (or revoked) address
 // and names a free one to offer the person. The invite stays unused; the
@@ -274,6 +274,7 @@ type enrolledMember struct {
 	joined  int64               // unix seconds
 	person  *protocol.PersonRef // the newest roster step of its person, if any
 	agent   bool                // its newest caps record lists protocol.CapAgent (a hint)
+	version *string             // the version its stream last reported ("": none), if any did
 }
 
 // members lists up to limit unrevoked agents, most recently enrolled first,
@@ -283,7 +284,7 @@ func (s *store) members(limit int) ([]enrolledMember, bool, error) {
 	// not its last session's: a stream sets last_session on connect, before
 	// that session publishes, and the hint must not flicker on reconnect.
 	rows, err := s.db.Query(`SELECT a.address, a.created_at, p.person, p.seq, p.hash,
-		(SELECT c.record FROM caps c WHERE c.address = a.address ORDER BY c.ts DESC, c.session LIMIT 1)
+		(SELECT c.record FROM caps c WHERE c.address = a.address ORDER BY c.ts DESC, c.session LIMIT 1), a.client_version
 		FROM agents a LEFT JOIN persons p ON p.person = a.person_id
 		WHERE a.revoked_at IS NULL AND a.pending_person IS NULL ORDER BY a.created_at DESC, a.rowid DESC LIMIT ?`, limit+1)
 	if err != nil {
@@ -293,10 +294,13 @@ func (s *store) members(limit int) ([]enrolledMember, bool, error) {
 	var out []enrolledMember
 	for rows.Next() {
 		var m enrolledMember
-		var person, hash, caps sql.NullString
+		var person, hash, caps, version sql.NullString
 		var seq sql.NullInt64
-		if err := rows.Scan(&m.address, &m.joined, &person, &seq, &hash, &caps); err != nil {
+		if err := rows.Scan(&m.address, &m.joined, &person, &seq, &hash, &caps, &version); err != nil {
 			return nil, false, err
+		}
+		if version.Valid {
+			m.version = &version.String
 		}
 		if caps.Valid {
 			rec, err := protocol.ParseCapsRecord([]byte(caps.String))
@@ -326,26 +330,32 @@ func (s *store) setLastSession(address, session string) error {
 // maxCapsSessions bounds the capability records kept per device.
 const maxCapsSessions = 8
 
-// putCaps stores a session's capability record unless a newer one is
-// stored for that session, and keeps only the newest records per device.
-func (s *store) putCaps(address, session string, ts int64, record []byte) error {
+// putCaps stores a session's capability record unless the same or a newer
+// one is stored for that session, keeps only the newest records per
+// device, and reports whether it stored the record.
+func (s *store) putCaps(address, session string, ts int64, record []byte) (bool, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`INSERT INTO caps(address, session, record, ts) VALUES(?, ?, ?, ?)
+	res, err := tx.Exec(`INSERT INTO caps(address, session, record, ts) VALUES(?, ?, ?, ?)
 		ON CONFLICT(address, session) DO UPDATE SET record = excluded.record, ts = excluded.ts WHERE excluded.ts > caps.ts`,
-		address, session, string(record), ts); err != nil {
-		return err
+		address, session, string(record), ts)
+	if err != nil {
+		return false, err
+	}
+	stored, err := res.RowsAffected()
+	if err != nil {
+		return false, err
 	}
 	if _, err := tx.Exec(`DELETE FROM caps WHERE address = ? AND session NOT IN
 		(SELECT session FROM caps WHERE address = ? ORDER BY ts DESC, session LIMIT ?)
 		AND session IS NOT (SELECT last_session FROM agents WHERE address = ?)`,
 		address, address, maxCapsSessions, address); err != nil {
-		return err
+		return false, err
 	}
-	return tx.Commit()
+	return stored > 0, tx.Commit()
 }
 
 // profileRows returns address's published person roster, last connected

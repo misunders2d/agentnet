@@ -33,6 +33,9 @@ func (h *Hub) handleSignal(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, "", "signal sender is not admitted")
 		return
 	}
+	if h.refuseOutdated(w, r) { // a suspended device starts nothing (update.go)
+		return
+	}
 	v, err := protocol.ParseSignal(sr.Body)
 	if err != nil || v.From != sr.Agent || v.Verify(sender.Public.SignKey, time.Now()) != nil {
 		writeError(w, 400, "", "invalid live signal")
