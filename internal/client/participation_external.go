@@ -1278,6 +1278,9 @@ func (a *Agent) admitExternalParticipation(ctx context.Context, env envelope.Env
 		}
 		a.kickNow()
 		a.wakeWorker()
+		if statusDue(state, in.Kind) != 0 {
+			a.wakeStatus() // its requester hears it waits here (stored with it)
+		}
 		if ev != nil {
 			a.trySelfConsent(ctx, in.PID) // an invite of this person's own agent, hosted here (a group's)
 		}
