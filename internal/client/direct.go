@@ -25,6 +25,10 @@ import (
 
 // RunOptions configure the daemon.
 type RunOptions struct {
+	// HumanOnly runs transport without local harness execution or worker cleanup.
+	// Intended for separately enrolled human-only mobile devices.
+	HumanOnly bool
+
 	// Listen is the address to accept direct deliveries on (e.g. ":7443").
 	// Empty disables direct delivery; everything then goes through the Hub.
 	Listen string

@@ -6,6 +6,10 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+- Start an isolated native Android development preview using the existing Go
+  client and native Kotlin views. It is not packaged in the desktop release;
+  phone runtime qualification and remaining messenger screens are still pending.
+
 ## [0.8.16] — 2026-10-10
 
 ### Fixed

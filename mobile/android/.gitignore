@@ -1,0 +1,8 @@
+/.gradle/
+/.kotlin/
+/.tools/
+/local.properties
+/app/build/
+/build/
+/app/libs/*.aar
+/app/libs/*.jar

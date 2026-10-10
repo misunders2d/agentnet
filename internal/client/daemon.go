@@ -68,11 +68,13 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 	ctx, stopRun := context.WithCancel(ctx)
 	defer stopRun()
 	a.stopRun = stopRun
-	stopWorker, err := a.startWorker(ctx)
-	if err != nil {
-		return a.startFailed(err)
+	if !opts.HumanOnly {
+		stopWorker, err := a.startWorker(ctx)
+		if err != nil {
+			return a.startFailed(err)
+		}
+		defer stopWorker()
 	}
-	defer stopWorker()
 	a.openConv, a.openPage = opts.OpenConv, opts.OpenPage
 	alertCtx, stopAlerts := context.WithCancel(ctx)
 	alertsDone := make(chan struct{})

@@ -9,9 +9,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"modernc.org/sqlite"
-	sqlite3 "modernc.org/sqlite/lib"
-
 	"github.com/misunders2d/agentnet/internal/lockfile"
 	"github.com/misunders2d/agentnet/internal/secfile"
 )
@@ -49,18 +46,6 @@ func Open(path string, steps []string) (*sql.DB, error) {
 		return nil, err
 	}
 	return db, nil
-}
-
-// Busy reports whether err is SQLite's busy or locked answer: another
-// process held the database longer than the busy timeout. The same work may
-// succeed when tried again; any other database error says nothing of that.
-func Busy(err error) bool {
-	var e *sqlite.Error
-	if !errors.As(err, &e) {
-		return false
-	}
-	code := e.Code() & 0xff // extended codes keep the primary code in the low byte
-	return code == sqlite3.SQLITE_BUSY || code == sqlite3.SQLITE_LOCKED
 }
 
 // ErrNewerSchema means a newer program wrote the database: this one refuses
