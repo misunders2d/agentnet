@@ -7841,7 +7841,7 @@ export class Engine {
   }
 
   async overview(listArchived = true) {
-    const view=await this.readView(), persons=view.persons;
+    const read=await this.readView(), persons=read.persons;
     const people = persons.map((p) => this.personView(p));
     const listedSeen = new Set();
     for (const m of this.members.list) {
@@ -7851,18 +7851,18 @@ export class Engine {
       people.push({ label: l.label, ...(l.picture ? { picture: l.picture, picture_url: this.pictureURL(l.picture) } : {}), address: l.devices[0].address, state: "listed",
         devices: l.devices.map((d) => ({ address: d.address, name: d.address.split("/")[1], fingerprint: d.fingerprint })) });
     }
-    const inbox = view.inbox;
-    const outbox = view.outbox;
+    const inbox = read.inbox;
+    const outbox = read.outbox;
     const pinned = persons.filter((p) => p.state === "pinned"); // names for a record's author (liveagent.go dmPeople.known)
-    const words = await this.peerWordsFn(view); // sentences name a person and device, never the address
+    const words = await this.peerWordsFn(read); // sentences name a person and device, never the address
     const dms = [], links = new Map(); // person → the agents their device runs in DMs here
     const privateReports = await this.ownNeedsYouReports(inbox, outbox);
     const needsYou = [], heldTurns = []; // what waits for this person (client.PageReview), by conversation
-    for (const c of view.convs) {
+    for (const c of read.convs) {
       const peer = persons.find((p) => p.person === c.peer);
-      let msgs = (await this.convMessages(c.id, inbox, outbox, view));
-      const participations = await this.participationsOf(c, view), member = !!wire.rootMember(wire.parseRoot(c.root), this.me?.person);
-      const originals = member ? [] : [...(await this.dmMembers(c, null, [], null, null, view)).values()];
+      let msgs = (await this.convMessages(c.id, inbox, outbox, read));
+      const participations = await this.participationsOf(c, read), member = !!wire.rootMember(wire.parseRoot(c.root), this.me?.person);
+      const originals = member ? [] : [...(await this.dmMembers(c, null, [], null, null, read)).values()];
       if (!member) msgs = msgs.filter(m => m.sub !== "event" || participations.some(p => p.pid === m.pid && (p.role !== "human" || p.host?.address === this.address && p.host.fingerprint === this.fp || p.decision && ["active", "dismissed"].includes(p.state))));
       msgs = await this.oneRowPerRecord(msgs, new Map(participations.filter(p => p.role === "human").map(p => [p.pid, p])));
       this.needsYouOf(c.id, participations, msgs, inbox.filter((r) => r.control && r.conv === c.id), needsYou, heldTurns, words, privateReports);
@@ -7876,7 +7876,7 @@ export class Engine {
         links.set(info.host.person, ls);
       }
       // Use the same resolved revisions/retractions as the open conversation.
-      const presented = new Map((await this.dm(c.id, view)).messages.map(m => [m.id, m]));
+      const presented = new Map((await this.dm(c.id, read)).messages.map(m => [m.id, m]));
       const line = (m) => (presented.get(m.id)?.deleted ? "Message deleted" : presented.get(m.id)?.edited ? firstLine(presented.get(m.id).text || "") : m.sub === "event" ? this.eventText(m.body, peer, null, participations.find(p => p.pid === m.pid && p.role === "human") || false, { originals, member })
         : !m.body && (m.attachments || []).length ? "📎 " + m.attachments.map((a) => wire.safeName(a.name)).join(", ") // files only: their names
           : firstLine(m.body));
@@ -7891,10 +7891,10 @@ export class Engine {
         ...(last ? { last_event: last } : {}) });
     }
     dms.sort((a, b) => b.last_at.localeCompare(a.last_at));
-    for(const g of (view.groups).filter(v=>v?.root&&v?.context&&Array.isArray(v.records))) {
-      const packet=wire.parseGroupContext(g.context), conv=packet.state.conv, msgs=(await this.convMessages(conv,inbox,outbox,view));
-      const view=await this.groupThread(conv,view), shown=new Set(view.messages.map(m=>m.id)),visible=msgs.filter(m=>shown.has(m.id));
-      const parts=await this.participationsOf({id:conv,kind:"group",root:g.root},view).catch(()=>[]),last=visible.length?this.lastEvent(visible.at(-1),view.members):undefined;
+    for(const g of (read.groups).filter(v=>v?.root&&v?.context&&Array.isArray(v.records))) {
+      const packet=wire.parseGroupContext(g.context), conv=packet.state.conv, msgs=(await this.convMessages(conv,inbox,outbox,read));
+      const view=await this.groupThread(conv,read), shown=new Set(view.messages.map(m=>m.id)),visible=msgs.filter(m=>shown.has(m.id));
+      const parts=await this.participationsOf({id:conv,kind:"group",root:g.root},read).catch(()=>[]),last=visible.length?this.lastEvent(visible.at(-1),view.members):undefined;
       this.needsYouOf(conv,parts,visible,inbox.filter(r=>r.control&&r.conv===conv),needsYou,heldTurns,words,privateReports);
       if(this.erasedConv(conv)&&!visible.some(m=>!m.sub))continue; // deleted here, and no later turn
       const latestView = view.messages.at(-1);
@@ -7906,7 +7906,7 @@ export class Engine {
     // countDecisions); a browser runs no agent, so its items carry none.
     for (const d of dms) d.decide = needsYou.filter((x) => x.conv === d.id && x.id && (x.actions || []).length).length;
     for (const p of people) if (links.has(p.person)) p.agents = links.get(p.person);
-    const { threads, topics } = await this.topicOverview(listArchived,view); // ?topics=1: archived topics counted, not listed
+    const { threads, topics } = await this.topicOverview(listArchived,read); // ?topics=1: archived topics counted, not listed
     const held = (await this.store.all("held")).filter(h => !h.notice_archived);
     const now = Math.floor(this.now() / 1000);
     const link = this.link && !["linked", ""].includes(this.link.state) ? { state: this.link.state === "pending" && now >= this.link.expires ? "expired" : this.link.state, detail: this.link.detail || "" } : undefined;
@@ -7956,20 +7956,20 @@ export class Engine {
     };
   }
 
-  async dm(id, view = null) {
-    view ||= await this.readView();
-    if(await this.groupRecord(id))return this.groupThread(id,view);
-    const c = view.convs.find(c=>c.id===id);
+  async dm(id, read = null) {
+    read ||= await this.readView();
+    if(await this.groupRecord(id))return this.groupThread(id,read);
+    const c = read.convs.find(c=>c.id===id);
     if (!c) throw new Error("No conversation with that id.");
-    const peer = view.persons.find(p=>p.person===c.peer);
-    const inbox = view.inbox, outbox = view.outbox;
+    const peer = read.persons.find(p=>p.person===c.peer);
+    const inbox = read.inbox, outbox = read.outbox;
     const privateReports = await this.ownNeedsYouReports(inbox, outbox);
-    let msgs = (await this.convMessages(id, inbox, outbox, view));
+    let msgs = (await this.convMessages(id, inbox, outbox, read));
     const ctls = [...inbox.filter((r) => r.control && r.conv === id), ...outbox.filter((r) => r.control && r.conv === id).map((r) => ({ ...r, dir: "out" }))];
     const myLabel = this.me && this.me.label ? this.me.label : "You";
     const personLabel = (pid) => (pid === (this.me && this.me.person) ? myLabel : peer && pid === peer.person ? peer.label : "someone");
     const controlsOf = (m, here) => {
-      const targetFp = here ? this.fp : m.fp, mineAuthor = async () => (await this.personOfFp(targetFp, view)) === (this.me && this.me.person);
+      const targetFp = here ? this.fp : m.fp, mineAuthor = async () => (await this.personOfFp(targetFp, read)) === (this.me && this.me.person);
       return { targetFp, mine: mineAuthor };
     };
     const execView = (m, here) => {
@@ -7979,10 +7979,10 @@ export class Engine {
       const continuation=this.continuationOf(m,here?this.fp:m.fp,e);
       return e ? { exec: e, ...(continuation?{continuation,actions:["continue"]}:{}) } : {};
     };
-    const hostLabels = new Map(rel0(ctls) ? (await this.participationsOf(c, view)).map((p) => [p.pid, p.host?.label || ""]) : []); // client: the participation host's label
+    const hostLabels = new Map(rel0(ctls) ? (await this.participationsOf(c, read)).map((p) => [p.pid, p.host?.label || ""]) : []); // client: the participation host's label
     const ctlView = async (m, here) => {
       const { targetFp, mine } = controlsOf(m, here);
-      const targetPerson = await this.personOfFp(targetFp, view);
+      const targetPerson = await this.personOfFp(targetFp, read);
       const rel = ctls.filter((x) => x.ref && x.ref.id === m.lid && x.ref.fingerprint === targetFp && x.sub !== wire.SubStatus && x.sub !== wire.SubDecision);
       const view = this.controlsOn(rel, targetPerson, (x) => x.person || "", personLabel, (p) => p === (this.me && this.me.person), undefined, (pid) => hostLabels.get(pid));
       view.can = view.deleted || !wire.rootMember(wire.parseRoot(c.root), this.me?.person) ? [] : ["react", ...((await mine()) ? ["edit", "delete"] : [])];
@@ -7991,27 +7991,27 @@ export class Engine {
     const member = !!wire.rootMember(wire.parseRoot(c.root), this.me?.person);
     // A guest sees its own participation, and others only once accepted: a
     // shared invitation alone stays inert proof (livehuman.go guestViews).
-    const guests = (await this.participationsOf(c, view)).filter(p => p.role === "human" && (member || p.host?.address === this.address && p.host.fingerprint === this.fp || p.decision && ["active", "dismissed"].includes(p.state))).map(p => this.guestView(p, member));
-    const assistants = new Set((await this.agentsOf(c, view)).filter(p => p.decision).map(p => p.pid)); // an assistant a guest learned from its public scope and acceptance
+    const guests = (await this.participationsOf(c, read)).filter(p => p.role === "human" && (member || p.host?.address === this.address && p.host.fingerprint === this.fp || p.decision && ["active", "dismissed"].includes(p.state))).map(p => this.guestView(p, member));
+    const assistants = new Set((await this.agentsOf(c, read)).filter(p => p.decision).map(p => p.pid)); // an assistant a guest learned from its public scope and acceptance
     if (!member && guests.some(g => g.host_here)) msgs = msgs.filter(m => m.sub !== "event" || guests.some(g => g.pid === m.pid) || assistants.has(m.pid)); // shared records of an unaccepted participation stay out of a guest's timeline
     const guestActive = !member && guests.some(g => g.host_here && g.state === "active" && !g.held);
-    const words = await this.peerWordsFn(view); // sentences name a person and device, never the address
+    const words = await this.peerWordsFn(read); // sentences name a person and device, never the address
     // A guest or visitor sees both verified original people (client.Conversations Members).
-    const originals = member ? [] : [...(await this.dmMembers(c, null, [], null, null, view)).values()];
-    const parts = new Map((await this.participationsOf(c, view)).map(p => [p.pid, p]));
+    const originals = member ? [] : [...(await this.dmMembers(c, null, [], null, null, read)).values()];
+    const parts = new Map((await this.participationsOf(c, read)).map(p => [p.pid, p]));
     const humans = new Map([...parts].filter(([, p]) => p.role === "human"));
     msgs = await this.oneRowPerRecord(msgs, humans);
     const shownReply = linkReplies(msgs, this.fp);
-    const pinned = (view.persons).filter((p) => p.state === "pinned"); // names for a record's author (liveagent.go dmPeople.known)
+    const pinned = (read.persons).filter((p) => p.state === "pinned"); // names for a record's author (liveagent.go dmPeople.known)
     return { id, peer: this.personView(peer), ...(member ? {} : { members: originals.map(p => this.personView(p)) }), role: member ? "member" : guests.some(p => p.host_here) ? "human_guest" : "visitor", guests, audience_pending: guests.some(p => p.audience_pending), created: iso(c.created * 1000), mine: c.creator === this.address,
       frozen: peer && peer.state === "conflict" ? peer.address + " published a different person record than the one kept here, so this conversation is frozen: nothing more is sent in it." : "",
-      agents: (await this.agentsOf(c, view)).map((info) => { const view = this.agentView(info, msgs, peer); if (!member) { view.can_ask = guestActive && view.can_ask; view.can_dismiss = false; if (view.can_ask) view.state_text = "In this conversation, on " + info.host.address + ". Ask it with @mention; its owner's permissions decide whether it runs."; } return view; }), // an accepted guest addresses active assistants under their owners' permissions
+      agents: (await this.agentsOf(c, read)).map((info) => { const view = this.agentView(info, msgs, peer); if (!member) { view.can_ask = guestActive && view.can_ask; view.can_dismiss = false; if (view.can_ask) view.state_text = "In this conversation, on " + info.host.address + ". Ask it with @mention; its owner's permissions decide whether it runs."; } return view; }), // an accepted guest addresses active assistants under their owners' permissions
       messages: await Promise.all(msgs.map(async (m) => {
         const here = !m.fp && !m.excerpt_pid, out = here || !!m.own; // claimed excerpts have no verified original author key
         const state = m.state === "conv_held" && !this.heldOpen(m, msgs) ? "manual" : m.state; // answered here (client.turnClosesHeld)
         const event = m.sub === "event" ? this.eventText(m.body, peer, null, humans.get(m.pid) || false, { originals, member }) : "";
         const ev = event ? this.eventFields(m.body, [peer, ...originals], pinned) : null;
-        return { id: m.id, lid: m.lid, dir: out ? "out" : "in", from: here ? this.address : m.from, kind: m.kind, status: m.status || "", actions: await this.proposalActions(m), proposal:await this.proposalProvenance(m, view), body: event ? "" : m.body, reply_to: shownReply(m.reply_to),quote:shownReply(m.quote),sent_at:sentAt(m),delivery:m.delivery||"",
+        return { id: m.id, lid: m.lid, dir: out ? "out" : "in", from: here ? this.address : m.from, kind: m.kind, status: m.status || "", actions: await this.proposalActions(m), proposal:await this.proposalProvenance(m, read), body: event ? "" : m.body, reply_to: shownReply(m.reply_to),quote:shownReply(m.quote),sent_at:sentAt(m),delivery:m.delivery||"",
           ...(ev && ev.type ? { event_type: ev.type, event_by: ev.by } : {}),
           ...(m.agent_id ? { agent_id: m.agent_id } : {}), ...(m.target ? { target: m.target } : {}),
           send_group:m.send_group_conflict?"":m.send_group||"", send_group_author:here?this.fp:m.fp||m.claimed_key||"", origin: m.origin || "", verified_agent: verifiedAgent(m, parts.get(m.human&&wire.agentAuthor(m.human)?m.human.author_pid:m.pid), here ? this.address : m.from, here ? this.fp : m.fp),
