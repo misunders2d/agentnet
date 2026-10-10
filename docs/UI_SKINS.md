@@ -55,10 +55,13 @@ The UI host (`internal/ui/static/loader.js`) does the same for every skin:
 
 1. reads the catalog (`/assets/skins/index.json`: the built-in packages first,
    then installed ones) and the packages stored in this browser. When the
-   catalog fails or has not answered within 1.5 seconds of its request,
-   Comic opens from its fixed built-in path (`/assets/skins/comic/skin.json`),
-   trusted by the host's list as always; a saved choice is kept for the next
-   load, and the catalog fills `host.skins` if it arrives later;
+   catalog fails or has not answered within 1.5 seconds of its request, the
+   host also asks for Comic's manifest from its fixed built-in path
+   (`/assets/skins/comic/skin.json`) and opens with whichever of the two
+   answers first; lateness alone never fails the page. Comic opened from its
+   own manifest is trusted by the host's list as always; a saved choice is
+   then kept for the next load, and the catalog fills `host.skins` if it
+   arrives later;
 2. picks the skin: `?skin=<id>`, else the one chosen before in this browser,
    else Comic. A saved `default` or `classic` (the names before skins were
    packages) opens Comic and is rewritten once; choices made through the package loader

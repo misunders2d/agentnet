@@ -7,11 +7,13 @@
 // as with a stalled or unreachable relay. Static assets are served at once,
 // except in the modes that hold one asset the loader can open without (the
 // skin catalog, Comic's document rules) until the saved chat has shown, and
-// then release it. One mode tells an arrival while Comic's first overview is
-// still loading. Asset round trips are not modelled here.
+// then release it, and the mode that answers the catalog and Comic's own
+// manifest late (a slow link, not a stalled one). One mode tells an arrival
+// while Comic's first overview is still loading. Other asset round trips are
+// not modelled here.
 //
-// Modes (argv; all by default): held, offline, catalog-held, document-held,
-// change-during-overview.
+// Modes (argv; all by default): held, offline, catalog-held, catalog-slow,
+// document-held, change-during-overview.
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),assert=require('node:assert/strict');
 const {chromium,devices}=require(process.env.AGENTNET_PLAYWRIGHT);
 const phone={...devices['Pixel 7'],viewport:{width:390,height:844}}; // a phone's browser: landing.mjs takes its phone paths (no desktop app banner)
@@ -25,6 +27,9 @@ const modes={
  // The catalog never answers until released; the person's saved choice names
  // an installed skin the late catalog lists. Comic opens from its fixed path.
  'catalog-held':{relay:'held',hold:'/assets/skins/index.json',saved:'later'},
+ // The catalog and Comic's own manifest each answer 1.8 s after their request:
+ // past the loader's wait for the catalog, which still opens the page.
+ 'catalog-slow':{relay:'held',slow:{'/assets/skins/index.json':1800,'/assets/skins/comic/skin.json':1800}},
  // Comic's document rules (fonts) never answer until released.
  'document-held':{relay:'held',hold:'/assets/skins/comic/document.css'},
  // An arrival saved and told (changed) while the first overview is slow.
@@ -83,6 +88,7 @@ const newestInView=([id,body])=>{
     }
     seen.assets.push(url.pathname);
     if (url.pathname === spec.hold && !seen.released) { seen.holding.push(url.pathname); holding.push(route); return; } // suspended until released below
+    if (spec.slow?.[url.pathname]) await new Promise(resolve => setTimeout(resolve, spec.slow[url.pathname])); // answered late
     try {
      const response = await route.fetch({url:local + url.pathname + url.search});
      await route.fulfill({response});
@@ -128,6 +134,14 @@ const newestInView=([id,body])=>{
     const first = stage.filter(s => s.name === 'overview').slice(0, 2), arrivedAt = await page.evaluate(() => window.arrivedAt);
     assert.ok(arrivedAt && first[0]?.event === 'start' && first[1]?.event === 'end' && first[0].at < arrivedAt && arrivedAt < first[1].at, 'arrival during the first overview: ' + JSON.stringify({arrivedAt, first}));
     late.arrivedAt = Math.round(arrivedAt);
+   }
+   if (spec.slow) {
+    // The loader's wait for the catalog passed (Comic's manifest was asked
+    // for), and the late catalog, which answered first, opened the page:
+    // Comic is saved as the person's choice, as on any load with the list.
+    assert.ok(relay.assets.includes('/assets/skins/comic/skin.json'), 'Comic asked for from its fixed path: ' + JSON.stringify(relay.assets));
+    await page.waitForFunction(() => localStorage.getItem('agentnet.skin') === 'comic', undefined, {timeout:5000}).catch(() => { throw new Error('not opened from the late catalog'); });
+    late.slow = spec.slow;
    }
    if (spec.hold) {
     // The held asset was asked for, and still unanswered while the chat showed.
