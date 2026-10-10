@@ -793,6 +793,10 @@ func TestAgentOutputRecheckedAtEachHandOver(t *testing.T) {
 			}
 			eventually(t, "bob to hold both", func() bool { return inboxCount(t, w.bob, `pid = ? AND state = ?`, pid, stateAgentWaiting) == 2 })
 			stopBob()
+			// Run owns the receive stream; the independent sender can still
+			// drain queued work after it stops. Join that sender before this
+			// test takes sole control of each output hand-over.
+			w.bob.stopBackgroundPosts()
 			injectFaults(w.bob).add("POST", "/v1/messages", 3, false)
 			for _, id := range ids {
 				w.bob.finishAgent(tctx(t), claimAt(t, w.bob, id), &Responder{Harness: "agentstub"}, envelope.StatusDone, "reply\nemotion: calm")
