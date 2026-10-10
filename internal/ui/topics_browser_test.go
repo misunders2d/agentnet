@@ -28,7 +28,8 @@ func TestBrowserTopicsMatchGo(t *testing.T) {
 		t.Fatal(err)
 	}
 	input, _ := json.Marshal(map[string]any{
-		"vectors": json.RawMessage(vectors),
+		"vectors":           json.RawMessage(vectors),
+		"execRunningMaxAge": int64(client.ExecRunningMaxAge / time.Second),
 		"constants": map[string]any{
 			"archiveAfter": int64(client.TopicArchiveAfter / time.Second),
 			"pageDefault":  client.TopicPageDefault,

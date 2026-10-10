@@ -17,8 +17,14 @@ const topics=Array.from({length:4},(_,i)=>({id:String(i+1).repeat(32),...(kind==
 const message=(i)=>({id:topics[i].id,lid:topics[i].id,from:peer.address,dir:'in',body:'Topic '+(i+1)+' message',kind:'message',at,state:'stored',actions:[],...(kind==='agent'?{to:me.address,author:{label:'Vitalii',about:'Fixture author'}}:{topic:topics[i].id})});
 const main={id:'a'.repeat(32),lid:'a'.repeat(32),from:peer.address,dir:'in',body:'Quick main flow message',kind:'message',at,state:'stored',actions:[]};
 let thread=kind==='agent'?{id:topics[0].id,peer:peer.address,key:{pinned:'peer-key'},approved:false,task_grant:'',topic:topics[0],messages:[message(0)]}:{id:conv,kind:kind==='group'?'group':'dm',title:kind==='group'?'Team launch':'',peer:kind==='group'?{label:'Team launch',address:'',state:''}:peer,role:'member',members:[{...me,admin:true},peer],frozen:'',agents:[],guests:[],topics,messages:[main,...topics.map((_,i)=>message(i))]};
-if(pendingMode){topics[0].pending=topics[0].waiting=true;topics[0].pending_ids=[topics[0].id,'b'.repeat(32)];thread.messages=[...(kind==='agent'?[]:[main]),{...message(0),kind:'task',body:'Earlier unresolved task',target:{address:peer.address,fingerprint:peer.fingerprint}},{...message(0),id:'b'.repeat(32),lid:'b'.repeat(32),kind:'question',body:'Second pending question',exec:{state:'needs_human',host:peer.address,attempt:1,stale:true},target:{address:peer.address,fingerprint:peer.fingerprint}},{...message(0),id:'d'.repeat(32),lid:'d'.repeat(32),kind:'answer',body:'Unrelated final answer'}];}
+// Pending: requests this person sent to the peer's agent. Neither has a current
+// executor word (one none, one stale), so the topic is unconfirmed, not Waiting;
+// the DM copy still waits for the peer's program, which the relay lists offline.
+const asked=m=>({...m,dir:'out',from:me.address,...(kind==='agent'?{to:peer.address}:{})});
+const update={to:peer.address,state:'waiting',detail:'peer_update: named agent capability unavailable: '+peer.address+' cannot synchronize direct-agent history or resolve own requests yet; update all its active AgentNet sessions'};
+if(pendingMode){topics[0].pending=true;topics[0].waiting=false;topics[0].unconfirmed=2;topics[0].pending_ids=[topics[0].id,'b'.repeat(32)];thread.messages=[...(kind==='agent'?[]:[main]),asked({...message(0),kind:'task',body:'Earlier unresolved task',target:{address:peer.address,fingerprint:peer.fingerprint},...(kind==='agent'?{}:{copies:[update]})}),asked({...message(0),id:'b'.repeat(32),lid:'b'.repeat(32),kind:'question',body:'Second pending question',exec:{state:'needs_human',host:peer.address,attempt:1,stale:true},target:{address:peer.address,fingerprint:peer.fingerprint}}),{...message(0),id:'d'.repeat(32),lid:'d'.repeat(32),kind:'answer',body:'Unrelated final answer'}];}
 const overview={version:'fixture',topic_list:true,seq:1,me:{address:me.address,fingerprint:me.fingerprint},person:me,persons:true,agents:true,files:false,controls:false,role:'person',people:[peer],review:[],links:[],reminders:[],threads:kind==='agent'?topics:[],topics:kind==='agent'?[{peer:peer.address,total:4,archived:0,archived_unread:0,latest:topics[0]}]:[],dms:kind==='agent'?[]:[{id:conv,kind:thread.kind,title:thread.title,peer:thread.peer,count:5,unread:0}],directory:{current:true,members:[{address:me.address,presence:'connected'},{address:peer.address,presence:'connected'}]},quarantine:[]};
+if(pendingMode)overview.directory.members[1].presence='offline';
 let destination;
 if(importMode){
  main.kind='task';main.attachments=[{index:0,name:'terms.md',size:19,openable:true},{index:1,name:'unavailable.md',size:11,openable:false}];
@@ -178,14 +184,19 @@ const server = http.createServer((req, res) => {
             await all().click();await page.getByRole('dialog',{name:'All topics',exact:true}).getByRole('button',{name:/^Topic 1(?:\b)/}).click();
           }
           const current=()=>page.locator('[data-topic="'+ '1'.repeat(32)+'"][aria-current="true"]');
+          const label=String(await current().getAttribute('aria-label'));
+          assert(label.includes('No result')&&!label.includes('Waiting'),tag+': pending with no current executor word is not shown as Waiting: '+label);
           await current().click();
           await page.getByRole('menuitem',{name:'Show pending requests (2)',exact:true}).click();
           const pending=page.getByRole('dialog',{name:'Pending requests',exact:true});
           await pending.waitFor();
           assert.equal(await pending.getByRole('button',{name:/Open pending/}).count(),2,tag+': every exact pending item listed');
           assert.equal(await pending.getByText('Unrelated final answer',{exact:true}).count(),0,tag+': unrelated reply is not a pending request');
-          assert.match(await pending.innerText(),/No completion recorded here/,tag+': unknown is not invented running or done');
-          assert.match(await pending.innerText(),/last known/,tag+': reported stale status remains explicit');
+          const text=await pending.innerText();
+          assert.match(text,/No result recorded · on Vitalii’s \S+/,tag+': unknown is not invented running or done, and names its executor: '+text);
+          assert.match(text,/last known/,tag+': reported stale status remains explicit');
+          assert.match(text,kind==='agent'?/No result recorded · on [^\n]* · not connected now/:/No result recorded · on [^\n]* · needs an AgentNet update/,tag+': what is known of the executor: '+text);
+          assert.match(text,/last known · on [^\n]* · not connected now/,tag+': the relay lists the executor offline');
           assert(!String(await pending.innerText()).includes('vitalii/desktop'),tag+': friendly host replaces raw address footer');
           await shot('pending-list');
           await pending.getByRole('button',{name:/Open pending question 2 Second pending question/}).click();

@@ -424,6 +424,14 @@ func TestAgentDismissal(t *testing.T) {
 	if err := w.bob.store.db.QueryRow(`SELECT id, state FROM outbox WHERE reply_to = ?`, queued.LID).Scan(&out, &outState); err != nil || outState != stateQueued {
 		t.Fatalf("the output is %q (%v), want queued under logical request %s", outState, err, queued.LID)
 	}
+	due := func() (n int) {
+		t.Helper()
+		if err := w.bob.store.db.QueryRow(`SELECT status_due FROM inbox WHERE id = ?`, queued.ID).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	answeredDue := due() // its answered state, noted when the reply was stored
 	if _, err := w.bob.DismissParticipation(tctx(t), pid4); err != nil {
 		t.Fatal(err)
 	}
@@ -436,6 +444,19 @@ func TestAgentDismissal(t *testing.T) {
 		t.Fatalf("queued output after dismissal: %s %q, job %s", outState, errText, jobState(t, w.bob, queued.ID))
 	}
 	noReply(t, w.alice, conv, queued.ID)
+	// Its requester may have been told answered: holding the reply back is
+	// told too, truthfully (it ran; no reply follows), never as not run.
+	if n := due(); n != answeredDue+1 {
+		t.Fatalf("held-back reply not noted for its requester: status_due %d after %d", n, answeredDue)
+	}
+	if !w.bob.tellStatus(tctx(t), queued.ID) {
+		t.Fatal("held-back state not told")
+	}
+	var stopped int
+	if err := w.bob.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE sub = 'status' AND ref_id = ? AND json_extract(body, '$.state') = 'stopped'
+		AND json_extract(body, '$.detail') LIKE '%ran%'`, queued.LID).Scan(&stopped); err != nil || stopped == 0 {
+		t.Fatalf("held-back state told %d times (%v)", stopped, err)
+	}
 }
 
 // claimAt claims request id at a as its worker would (a has no responder,

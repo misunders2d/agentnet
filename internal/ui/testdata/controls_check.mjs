@@ -3,7 +3,7 @@
 // equal a sent one), retraction keeping bytes another live message still
 // shows, resolution order, and an older peer refused by name. Run with
 // node; nothing is joined or sent.
-import { Engine, memoryStore } from "../static/engine.mjs";
+import { Engine, memoryStore, EXEC_RUNNING_MAX_AGE } from "../static/engine.mjs";
 import * as wire from "../static/wire.mjs";
 
 let failed = 0;
@@ -329,7 +329,10 @@ async function makeWorld() {
     { s: "outbox", k: Q, v: { id: Q, v: 1, to: "peer/desk", kind: "question", body: "what time?", at: 1, state: "delivered" } },
     { s: "outbox", k: OTHER, v: { id: OTHER, v: 1, to: "third/box", kind: "task", body: "run it", at: 2, state: "delivered" } },
   ]);
-  e.members = { listed: "listed", current: true, at: 1, list: [{ address: "peer/desk", presence: "online" }], truncated: false };
+  // The relay says "connected" (protocol.PresenceConnected); the clock is the
+  // statuses' own, so a running word is current until EXEC_RUNNING_MAX_AGE.
+  e.members = { listed: "listed", current: true, at: 1, list: [{ address: "peer/desk", presence: "connected" }], truncated: false };
+  e.now = () => 1700000200_000;
   const pin = { fingerprint: PEER }, env = (id, from = "peer/desk") => ({ id, from, to: "me/phone" });
   const st = (state, n, at, id, fp = SELF, attempt = 4) => ({ v: 3, conv: "", lid: "", replica: false, kind: "message", sub: wire.SubStatus, body: JSON.stringify({ state, n, at, attempt, detail: state === "needs_human" ? "awaiting approval of a shell command" : "" }), ref: { id, fingerprint: fp } });
   let held = "";
@@ -342,6 +345,10 @@ async function makeWorld() {
   await store.write(await e.admitControl(st("queued", 1, 1700000000, Q), env("s3".padEnd(32, "0")), pin)); // arrives late
   let m = (await e.thread(Q)).messages.find((x) => x.id === Q);
   check(m.exec && m.exec.state === "running" && m.exec.attempt === 4 && m.exec.host === "peer/desk" && m.exec.stale === false, "the highest counter wins independently of the signed attempt; the executor is named; online host = not stale: " + JSON.stringify(m.exec));
+  e.now = () => (1700000100 + EXEC_RUNNING_MAX_AGE + 1) * 1000;
+  m = (await e.thread(Q)).messages.find((x) => x.id === Q);
+  check(m.exec.stale === true, "a running word older than the bound is old news even from a connected host (client ExecView.settle)");
+  e.now = () => 1700000200_000;
   e.members = { ...e.members, list: [{ address: "peer/desk", presence: "offline" }] };
   m = (await e.thread(Q)).messages.find((x) => x.id === Q);
   check(m.exec.stale === true, "a disconnected host makes the last word stale");

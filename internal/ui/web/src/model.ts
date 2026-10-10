@@ -92,7 +92,8 @@ export interface Topic {
   lastAt: string;
   unread: number;
   needsYou: number;            // decisions waiting for you in it
-  waiting: boolean;            // a request in it waits for the agent, or the agent is working
+  waiting: boolean;            // a request in it waits for the agent, or the agent is working, as its executor says now
+  unconfirmed?: number;        // pending requests with no current word from their executor: no result recorded
   pending: boolean;            // anything in it is still open: never archived
   pendingIDs?: string[];       // exact requests/notices keeping it open; navigation only
   state: TopicState;
@@ -106,7 +107,7 @@ export interface Topic {
 export const topicOf = (t: T.ThreadSummary): Topic => ({
 	redirect: t.redirect,
   id: t.id, conv:t.conv,peer: t.peer, title: t.title, autoTitle: t.auto_title, renamed: !!t.renamed, last: t.last, lastAt: t.last_at, unread: t.unread,
-  needsYou: t.review, waiting: t.waiting || t.running > 0, pending: t.pending, pendingIDs: t.pending_ids,
+  needsYou: t.review, waiting: t.waiting || t.running > 0, unconfirmed: t.unconfirmed || 0, pending: t.pending, pendingIDs: t.pending_ids,
   state: t.state === "done" || t.state === "archived" ? t.state : "active",
   doneBy: t.done_by === "agent" || t.done_by === "you" || t.done_by === "person" ? t.done_by : undefined, conclusion: t.conclusion, concludedBy: t.concluded_by,
   count: t.count, quietSince: t.quiet_since || t.last_at,
@@ -117,12 +118,15 @@ export const newestFirst = <X extends { lastAt: string; id: string }>(a: X, b: X
   Date.parse(b.lastAt) - Date.parse(a.lastAt) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
 
 /** topicMark is a topic's state in one word, or null for an ordinary active
- *  one: what needs you comes first, then archived, done and waiting. */
-export function topicMark(t: Topic): null | { key: "needs" | "archived" | "done" | "waiting"; word: string } {
+ *  one: what needs you comes first, then archived, done, waiting (its
+ *  executor says so now) and no result (a request with no current word from
+ *  its executor: nothing is guessed, it stays pending). */
+export function topicMark(t: Topic): null | { key: "needs" | "archived" | "done" | "waiting" | "unconfirmed"; word: string } {
   if (t.needsYou > 0) return { key: "needs", word: "Needs you" };
   if (t.state === "archived") return { key: "archived", word: "Archived" };
   if (t.state === "done") return { key: "done", word: "Done" };
   if (t.waiting) return { key: "waiting", word: "Waiting" };
+  if ((t.unconfirmed || 0) > 0) return { key: "unconfirmed", word: "No result" };
   return null;
 }
 

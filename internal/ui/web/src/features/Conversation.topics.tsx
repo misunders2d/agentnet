@@ -8,7 +8,7 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Menu } from "@base-ui/react/menu";
 import {
-  IconAlertCircle, IconArchive, IconChevronDown, IconCircleCheck, IconClock, IconListSearch, IconPencil, IconPlus, IconRotateClockwise,
+  IconAlertCircle, IconArchive, IconChevronDown, IconCircleCheck, IconClock, IconClockQuestion, IconListSearch, IconPencil, IconPlus, IconRotateClockwise,
 } from "@tabler/icons-react";
 import type { T } from "../api";
 import { useAgentNames, useApp, useWide } from "../context";
@@ -20,7 +20,8 @@ import { Tag } from "../ui/Tag";
 import { focusedIn, usePortal } from "../owned";
 import { AllTopics } from "./Conversation.alltopics";
 import { OrganizeMessages } from "./Conversation.organize";
-import { deviceWords, requestState, shownText, threadAgentName, type Ctx } from "./Message.model";
+import { deviceWords, isThreadMsg, requestState, shownText, threadAgentName, type AnyMsg, type Ctx } from "./Message.model";
+import { online } from "./RoomPanel.model";
 
 /** barTopics picks the bar's chips: what needs you, then unread, then the
  *  open topic, then the most recent active ones; the open topic always gets
@@ -72,8 +73,8 @@ export function steadyBar(prev: string[], topics: Topic[], open: Topic | null, l
   return slots.map((id) => by.get(id)!);
 }
 
-const markIcon = { needs: IconAlertCircle, archived: IconArchive, done: IconCircleCheck, waiting: IconClock } as const;
-const markTone = { needs: "act", archived: "muted", done: "ok", waiting: "agent" } as const;
+const markIcon = { needs: IconAlertCircle, archived: IconArchive, done: IconCircleCheck, waiting: IconClock, unconfirmed: IconClockQuestion } as const;
+const markTone = { needs: "act", archived: "muted", done: "ok", waiting: "agent", unconfirmed: "muted" } as const;
 
 /** TopicMark shows a topic's state in words (compact: an icon, with the words for screen readers and on hover). */
 export function TopicMark({ t, compact, onInk }: { t: Topic; compact?: boolean; onInk?: boolean }) {
@@ -253,6 +254,24 @@ export function TopicMenu({ topic, trigger, onAll }: { topic: Topic; trigger: Re
   );
 }
 
+/** pendingLine: one pending request as recorded here — its job here, its
+ *  executor's word, or no result recorded — and what is known of the device
+ *  that runs it now. It never guesses an outcome from other messages. */
+function pendingLine(m: AnyMsg, all: AnyMsg[], o: T.Overview | null): string {
+  const here = isThreadMsg(m) ? m.dir === "in" : m.dir === "in" && !!m.to && m.to === o?.me.address;
+  const host = m.target?.address || m.exec?.host || "";
+  const words = [m.exec || here ? requestState(m, all).text : "No result recorded"];
+  if (host) words.push("on " + deviceWords(host, o));
+  if (host && !here) {
+    // A copy this device holds for that device, waiting on its older program;
+    // else the relay's current word on it.
+    const update = (d?: string) => !!d && d.startsWith("peer_update: ") && d.includes(host + " ");
+    if ((!isThreadMsg(m) && (m.copies || []).some(c => c.to === host && c.state === "waiting" && update(c.detail))) || update(m.detail)) words.push("needs an AgentNet update");
+    else if (online(o, host) === false) words.push("not connected now");
+  }
+  return words.join(" · ");
+}
+
 /** Navigation to the exact contributing requests, with their existing actions. */
 function PendingTopic({ open, onOpenChange, topic }: { open: boolean; onOpenChange: (open: boolean) => void; topic: Topic }) {
   const store = useApp();
@@ -261,6 +280,7 @@ function PendingTopic({ open, onOpenChange, topic }: { open: boolean; onOpenChan
   return <Sheet open={open} onOpenChange={onOpenChange} title="Pending requests"
     description="These items keep this topic open. Open one to see its current status and available actions.">
     <div className="grid gap-2">
+      {(topic.unconfirmed || 0) > 0 && <p className="text-[14px] text-text-2">“No result recorded”: no answer and no current status has reached this device from the device that runs the request. Nothing is guessed or run again.</p>}
       {(topic.pendingIDs || []).map((id, i) => {
         const m = view?.messages?.find(m => m.id === id);
         return <Button key={id} variant="ghost" className="h-auto min-h-12 justify-start whitespace-normal text-left" onClick={() => {
@@ -269,7 +289,7 @@ function PendingTopic({ open, onOpenChange, topic }: { open: boolean; onOpenChan
         }}>
           <span><span className="block text-[12px] text-text-2">Open pending {m?.kind === "task" ? "task" : m?.kind === "question" ? "question" : "item"} {i + 1}</span>
             <span>{m ? firstLine(shownText(m)) || "Message without text" : "Open request"}</span>
-            {m && <span className="block pt-1 text-[12px] text-text-2">{m.exec || m.state === "running" || m.state === "needs_human" ? requestState(m,view?.messages || []).text : "No completion recorded here"}{(m.target?.address || m.exec?.host) ? " · on " + deviceWords(m.target?.address || m.exec?.host || "",overview) : ""}</span>}
+            {m && <span className="block pt-1 text-[12px] text-text-2">{pendingLine(m, view?.messages || [], overview)}</span>}
           </span>
         </Button>;
       })}

@@ -27,6 +27,8 @@ func TestChatTopicVectors(t *testing.T) {
 				Count             int
 				Pending           bool
 				PendingIDs        []string
+				Waiting           *bool // given: Waiting needs evidence of work, not Pending alone
+				Unconfirmed       *int
 			}
 		} `json:"chat_cases"`
 	}
@@ -61,6 +63,12 @@ func TestChatTopicVectors(t *testing.T) {
 				}
 				if w.PendingIDs != nil && !reflect.DeepEqual(append([]string{}, g.PendingIDs...), w.PendingIDs) {
 					t.Fatalf("pending IDs got %v want %v", g.PendingIDs, w.PendingIDs)
+				}
+				if w.Waiting != nil && g.Waiting != *w.Waiting {
+					t.Fatalf("waiting %v want %v", g.Waiting, *w.Waiting)
+				}
+				if w.Unconfirmed != nil && g.Unconfirmed != *w.Unconfirmed {
+					t.Fatalf("unconfirmed %d want %d", g.Unconfirmed, *w.Unconfirmed)
 				}
 			}
 		})

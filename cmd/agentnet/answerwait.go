@@ -89,7 +89,7 @@ func printAnswer(w io.Writer, m *client.AwaitedAnswer) {
 // statusLine is one host status in words, printed once as it comes.
 func statusLine(v client.ExecView) string {
 	switch v.State {
-	case "awaiting", "needs_human", "not_run":
+	case "awaiting", "needs_human", "not_run", "stopped":
 		return "" // stopLine says it once
 	case "queued":
 		return v.Host + ": queued for its agent"
@@ -112,6 +112,8 @@ func stopLine(v client.ExecView, show string) string {
 		return fmt.Sprintf("waits for an OK on %s: it runs once someone there allows it; the result then arrives: %s", v.Host, show)
 	case v.State == "needs_human":
 		return fmt.Sprintf("%s's agent says a person there must decide; the answer comes when they do: %s", v.Host, show)
+	case v.State == "stopped":
+		return fmt.Sprintf("%s sends no answer (%s): %s", v.Host, v.Detail, show)
 	}
 	return fmt.Sprintf("%s will not run it (%s): %s", v.Host, v.Detail, show)
 }
