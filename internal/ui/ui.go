@@ -863,8 +863,9 @@ type ThreadSummary struct {
 	// the agent's final reply and ConcludedBy the device that sent it;
 	// Pending says something in it is still open (it is never archived
 	// then); Renamed says Title is the person's own name for it here, and
-	// AutoTitle is then the automatic one (its first line). A name and
-	// Mark done / Reopen are kept on this device only. Unconfirmed counts
+	// AutoTitle is then the automatic one (its first line). A name, Mark
+	// done / Reopen and Archive follow the person's own human devices, never
+	// other people. Unconfirmed counts
 	// the pending requests with no current word from their executor
 	// (client.ThreadSummary.Unconfirmed).
 	State       string   `json:"state"`

@@ -26,7 +26,7 @@ export function topicControls(root, {api, choose, chooseRoot, fresh, changed, an
   popup.append(node('h2','All topics'),button('Close',finish));
   const search=node('input','',{type:'search',placeholder:'Search topics'});search.setAttribute('aria-label','Search topics');popup.append(search);
   const filters=node('div','',{className:'topics-actions'}),rows=node('div','',{className:'topics-rows'}),actions=node('div','',{className:'topics-actions'}),status=node('p','',{className:'hint'});status.setAttribute('role','status');
-  popup.append(filters,actions,status,rows,node('p',scope.conv?'Done and Reopen are shared. Delete for me leaves others’ copies.':'Done and Archive stay on this device. Delete for me leaves others’ copies.',{className:'hint'}));
+  popup.append(filters,actions,status,rows,node('p',scope.conv?'Done and Reopen are shared. Names and Archive sync across your linked devices. Delete for me leaves others’ copies.':'Names, Done and Archive sync across your linked devices. Delete for me leaves others’ copies.',{className:'hint'}));
   root.append(popup);for(const n of siblings)n.inert=true;bar.inert=true;
   const flat=!!person;let filter='active',selected=new Set(),counts=new Map(),items=[],next='',busy=false,confirming=false;
   const render=()=>{

@@ -37,10 +37,12 @@ marked it done; any participant may reopen it. Creation and shared actions
 reset the quiet interval. An agent asked in a topic replies in it, and only
 its explicit `topic: done` trailer closes it.
 
-Names and manual archive stay local. A new shared action or topic message
-ends a local archive. Delete for me erases only that topic for this person's
-devices through the existing erasure mechanism; other people keep copies.
-Device-chat deletion and Done/Reopen remain local to this device.
+Names and manual Archive are the person's own: they follow the person's
+linked human devices and never reach other people (see "Where the person's
+changes live"). A new shared action or topic message ends an archive. Delete
+for me erases only that topic for this person's devices through the existing
+erasure mechanism; other people keep copies. Device-chat deletion stays on
+this device.
 
 ## Lifecycle: active → done → archived
 
@@ -80,13 +82,42 @@ line of its first message). Search finds both names.
 
 ## Where the person's changes live
 
-For agent device chats, a name, Mark done and Reopen are stored **locally on this device**, like
-read marks (`topic_state` in the client's SQLite, `kv` `topic/…` rows in the
-browser device's IndexedDB). There is no cross-device sync in this release:
-another device of the same person shows the automatic title and the derived
-state. Derived states (done by the agent, archived) are the same on every
-device that holds the same messages, because they come from the messages.
-Deleting a topic (this device only) also forgets what was set on it.
+What the person sets on a topic is theirs, not one device's (owner,
+2026-10-10: "why are names synced, but statuses aren't? what's the idea
+behind having same topic with different statuses?"): a name, and in agent
+device chats Mark done, Reopen and Archive; in people chats Archive, for
+topics and the Main flow. Each device keeps them where states are derived
+from (`topic_state` in the client's SQLite, `kv` `topic/…` rows in the
+browser device's IndexedDB), and they follow the person's current human
+devices as quiet, encrypted own-device carriers:
+
+- Names: `topic-sync` (`own2`), latest revision then writer.
+- Marks: `topic-state-sync`, read only by devices that advertise `tss1`
+  (`internal/client/topicstatesync.go`, `syncTopicMarks` in engine.mjs).
+  Each mark is `{scope, topic, mark, count, at, writer}`, with `mark` one of
+  `done`, `open` (Reopen), `archived` or empty (cleared, as when the Main
+  flow is deleted). The newest `at`, the writer's time inside the signed
+  carrier, wins; then writer fingerprint, mark and count break ties, so
+  every device converges whatever the arrival order, and replays change
+  nothing. A choice made on a device is placed after every mark it knows for
+  that topic, so it replaces the one it was made over even on a slower
+  clock. `count` keeps its meaning everywhere: a message the mark did not
+  cover keeps the topic active on every device.
+- Marks set before this release are recorded once, at their own time, so
+  devices converge on the latest of them.
+- A device whose program lacks `tss1` gets nothing and blocks nothing: the
+  carrier already sealed for it waits (`peer_update`), and once one waits,
+  later marks stay unsealed until it updates, then follow.
+- Only current own human devices send or accept them (pinned, unchanged
+  keys; agent hosts excluded); another person's carrier is held as invalid.
+  Marks never become messages, receipts, shared topic events or permissions:
+  Done and Reopen in people chats stay the shared signed `topic_event`
+  messages above.
+
+Derived states (done by the agent, archived when quiet) are the same on
+every device that holds the same messages, because they come from the
+messages. Deleting a device-chat topic (this device only) also forgets what
+was set on it here.
 
 ## The bar and All topics
 

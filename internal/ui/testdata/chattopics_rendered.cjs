@@ -243,6 +243,9 @@ const server = http.createServer((req, res) => {
         }
         await all().click();
         let dialog = page.getByRole('dialog', { name: 'All topics', exact: true });
+        // Owner (v0.8.17): names and Archive (and in agent chats Done) follow the person's linked devices.
+        await dialog.getByRole('checkbox', { name: 'Select Topic 1', exact: true }).waitFor();
+        assert.match(await dialog.innerText(), kind === 'agent' ? /Names, Done and Archive sync across your linked devices\./ : /Names and Archive sync across your linked devices\./, tag + ': All topics says which changes follow linked devices');
         await dialog.getByRole('checkbox', { name: 'Select Topic 1', exact: true }).check();
         await dialog.getByRole('checkbox', { name: 'Select Topic 2', exact: true }).check();
         await dialog.getByRole('button', { name: 'Mark done', exact: true }).click();

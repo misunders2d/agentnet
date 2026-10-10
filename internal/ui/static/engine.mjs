@@ -1468,7 +1468,7 @@ export class Engine {
   }
 
   readRef(m) {
-    if(!m || m.local || m.control || m.ref || m.aside || [wire.SubModelSync,wire.SubTopicSync,wire.SubInvitationSync,wire.SubReadSync,wire.SubRootSync,wire.SubDriveSpace,wire.SubGroupProof,wire.SubGroupContext,wire.SubGroupInvite,wire.SubGroupConsent,wire.SubGroupWithdrawal].includes(m.sub))return null;
+    if(!m || m.local || m.control || m.ref || m.aside || [wire.SubModelSync,wire.SubTopicSync,wire.SubTopicStateSync,wire.SubInvitationSync,wire.SubReadSync,wire.SubRootSync,wire.SubDriveSpace,wire.SubGroupProof,wire.SubGroupContext,wire.SubGroupInvite,wire.SubGroupConsent,wire.SubGroupWithdrawal].includes(m.sub))return null;
     const ref={conv:m.conv||"",fingerprint:m.fp||m.claimed_key||"",lid:m.lid||m.id};
     if(!wire.validFingerprint(ref.fingerprint) || !wire.validID(ref.lid))return null;
     return ref;
@@ -1604,6 +1604,7 @@ export class Engine {
     return [{s:"kv",k,v:{...fact,key:k,person:own.person}}];
   }
   syncTopicTitles() {
+    this.syncTopicMarks().catch(()=>{}); // marks follow every wake names do (connect, own roster, admission)
     this.topicSyncAgain=true;
     if(!this.topicSyncRun)this.topicSyncRun=(async()=>{do{this.topicSyncAgain=false;try{await this.syncTopicPages();}catch(e){if(e instanceof StoreConflict)this.topicSyncAgain=true;else throw e;}}while(this.topicSyncAgain);})().finally(()=>{this.topicSyncRun=null;});
     return this.topicSyncRun;
@@ -1666,6 +1667,96 @@ export class Engine {
       }
       const ck=this.topicTitleCopyKey(r.person,pin.fingerprint,t),copy=await this.groupRead(checks,"kv",ck);
       if(this.topicTitleOrder(t,copy)>=0)ops.push({s:"kv",k:ck,v:{...t,seen:true}});
+    }
+    ops.checks=checks;ops.topicSync=true;return ops;
+  }
+  // Private marks (Mark done, Reopen, Archive) follow own human devices as
+  // names do (client topicstatesync.go): the newest signed time wins, then
+  // writer, mark and count (wire.topicMarkNewer). Display preferences only.
+  topicMarkKey(person,t) { return "topic-mark/"+person+"/"+t.scope+"/"+t.topic; }
+  topicMarkCopyKey(person,fp,t) { return "topic-mark-copy/"+person+"/"+fp+"/"+t.scope+"/"+t.topic; }
+  ownTopicWriter(own) { return !!own&&own.state==="self"&&!!own.human_keys?.includes(this.fp)&&own.devices.some(d=>d.address===this.address&&d.fingerprint===this.fp); }
+  // topicMarkOps: the time and fact of a mark chosen here (client setTopicMark):
+  // now, but past every mark known for the topic.
+  async topicMarkOps(scope,topic,mark,count,checks=[]) {
+    const now=Math.floor(this.now()/1000),own=await this.groupRead(checks,"kv","person");
+    if(!this.ownTopicWriter(own))return {at:now,ops:[]};
+    const k=this.topicMarkKey(own.person,{scope,topic}),old=await this.groupRead(checks,"kv",k),fact={scope,topic,mark,count:mark?count:0,at:Math.max(now,(old?.at||0)+1),writer:this.fp};
+    return {at:fact.at,ops:wire.validTopicMark(fact)?[{s:"kv",k,v:{...fact,key:k,person:own.person}}]:[]};
+  }
+  // topicMarkSeedOps: once per person, the marks set here before marks synced,
+  // at the time each was set (client seedTopicMarks).
+  async topicMarkSeedOps(own,checks) {
+    const marker="topic-mark-seeded/"+own.person,ops=[],facts=new Map();
+    if(await this.groupRead(checks,"kv",marker))return {ops,facts};
+    for(const row of await this.store.prefix("kv","topic/")){
+      if(row?.type!=="topic-state"||!row.mark)continue;
+      const fact={scope:row.peer,topic:row.topic,mark:row.mark,count:row.mark_count,at:row.mark_at,writer:this.fp},k=this.topicMarkKey(own.person,fact);
+      if(!wire.validTopicMark(fact)||await this.groupRead(checks,"kv",k))continue; // a malformed old row stays here only
+      facts.set(k,fact);ops.push({s:"kv",k,v:{...fact,key:k,person:own.person}});
+    }
+    ops.push({s:"kv",k:marker,v:{done:true}});return {ops,facts};
+  }
+  syncTopicMarks() {
+    this.topicMarkSyncAgain=true;
+    if(!this.topicMarkSyncRun)this.topicMarkSyncRun=(async()=>{do{this.topicMarkSyncAgain=false;try{await this.syncTopicMarkPages();}catch(e){if(e instanceof StoreConflict)this.topicMarkSyncAgain=true;else throw e;}}while(this.topicMarkSyncAgain);})().finally(()=>{this.topicMarkSyncRun=null;});
+    return this.topicMarkSyncRun;
+  }
+  async syncTopicMarkPages() {
+    const seedChecks=[],own=await this.groupRead(seedChecks,"kv","person");
+    if(!this.ownTopicWriter(own))return;
+    const seed=await this.topicMarkSeedOps(own,seedChecks);if(seed.ops.length)await this.store.write(seed.ops,seedChecks);
+    const prefix="topic-mark/"+own.person+"/";let after=prefix;
+    for(;;){
+      const page=(await this.store.after("kv",after,64)).filter(r=>r?.key?.startsWith(prefix));if(!page.length)return;after=page.at(-1).key;
+      const checks=[],current=await this.groupRead(checks,"kv","person"),ops=[];
+      if(!this.ownTopicWriter(current)||current.person!==own.person)return;
+      for(const dev of current.devices){
+        if(dev.address===this.address||!current.human_keys.includes(dev.fingerprint))continue;
+        // A device that cannot read marks yet keeps one waiting carrier; later
+        // marks stay unsealed here, so nothing piles up for an older program.
+        const pointer="topic-mark-carrier/"+current.person+"/"+dev.fingerprint,last=await this.groupRead(checks,"kv",pointer);
+        if(last?.id&&(await this.groupRead(checks,"outbox",last.id))?.state==="waiting")continue;
+        const marks=[];
+        for(const saved of page){
+          const fact=await this.groupRead(checks,"kv",saved.key);if(!fact)continue;
+          const ck=this.topicMarkCopyKey(current.person,dev.fingerprint,fact),copy=await this.groupRead(checks,"kv",ck),row=copy?.id&&await this.groupRead(checks,"outbox",copy.id);
+          if(copy&&!wire.topicMarkNewer(fact,copy)&&!wire.topicMarkNewer(copy,fact)&&(copy.seen||row&&["queued","waiting","custody","delivered","quarantined"].includes(row.state)))continue;
+          const {scope,topic,mark,count,at,writer}=fact;marks.push({scope,topic,mark,count,at,writer});
+        }
+        if(!marks.length)continue;
+        const body=JSON.stringify({v:1,person:current.person,roster:current.hash,marks}),r=wire.parseTopicStateSync(body);
+        try{await this.readSyncAuthority(r,this.address,this.fp,dev.address,dev.fingerprint,checks);}catch{continue;}
+        const id=wire.newID(),at=this.now(),envelope=await wire.seal({v:wire.Version2,id,from:this.address,to:dev.address,ts:Math.floor(at/1000),kind:"message",sub:wire.SubTopicStateSync,replica:true,body},this.keys,await wire.parsePublic(JSON.parse(dev.json)));
+        ops.push({s:"outbox",k:id,v:{id,to:dev.address,recipient_fp:dev.fingerprint,required_cap:wire.CapTopicStateSync,sub:wire.SubTopicStateSync,body,envelope,at,state:"queued",aside:true}},{s:"kv",k:pointer,v:{id}});
+        for(const t of marks)ops.push({s:"kv",k:this.topicMarkCopyKey(current.person,dev.fingerprint,t),v:{...t,id}});
+      }
+      if(ops.length){await this.store.write(ops,checks);this.changed();if(this.connected)this.queueOutbox();}
+      if(page.length<64)return;
+    }
+  }
+  async topicStateSyncGate(rec) {
+    await this.refreshPerson(this.me);const r=wire.parseTopicStateSync(rec.body);
+    await this.readSyncAuthority(r,this.address,this.fp,rec.to,rec.recipient_fp);
+    const pin=await this.store.get("pins",rec.to),features=await this.features(),profile=await this.profile(rec.to);
+    if(!features.includes("env2")||!features.includes("caps")||!await wire.profileSupports(profile,rec.to,(await this.pubOf(pin)).sign_key,wire.CapTopicStateSync))throw Object.assign(Error("This device needs to update AgentNet to synchronize topic Done, Reopen and Archive marks."),{code:"topic_sync_unsupported"});
+    await this.readSyncAuthority(r,this.address,this.fp,rec.to,rec.recipient_fp);return {why:"",pin};
+  }
+  async admitTopicStateSync(n,env,pin, admission = null) {
+    const r=wire.parseTopicStateSync(n.body),checks=[],ops=[];
+    if(!this.me||this.me.person!==r.person)throw new Hold("invalid","Topic marks belong to another person.");
+    await this.refreshPerson(this.me, admission ? {...admission,roster:r.roster} : null);try{await this.readSyncAuthority(r,env.from,pin.fingerprint,this.address,this.fp,checks);}catch(e){throw new Hold("invalid",e.message);}
+    // This device's own earlier marks compete at their own time.
+    const own=await this.groupRead(checks,"kv","person"),seed=this.ownTopicWriter(own)?await this.topicMarkSeedOps(own,checks):{ops:[],facts:new Map()};ops.push(...seed.ops);
+    for(const t of r.marks){
+      const k=this.topicMarkKey(r.person,t),old=seed.facts.get(k)||await this.groupRead(checks,"kv",k);
+      if(wire.topicMarkNewer(t,old)){
+        const lk="topic/"+t.scope+"/"+t.topic,local=await this.groupRead(checks,"kv",lk);
+        ops.push({s:"kv",k,v:{...t,key:k,person:r.person}},{s:"kv",k:lk,v:{...local,type:"topic-state",peer:t.scope,topic:t.topic,mark:t.mark,mark_at:t.mark?t.at:0,mark_count:t.count}});
+      }
+      // The sender has this mark: it needs no copy of it back.
+      const ck=this.topicMarkCopyKey(r.person,pin.fingerprint,t),copy=await this.groupRead(checks,"kv",ck);
+      if(wire.topicMarkNewer(t,copy))ops.push({s:"kv",k:ck,v:{...t,seen:true}});
     }
     ops.checks=checks;ops.topicSync=true;return ops;
   }
@@ -2744,6 +2835,7 @@ export class Engine {
       }
       await this.directHistory().gate(rec);
       if(rec.sub===wire.SubTopicSync)await this.topicSyncGate(rec);
+      if(rec.sub===wire.SubTopicStateSync)await this.topicStateSyncGate(rec);
       if(rec.sub===wire.SubInvitationSync)await this.invitationSyncGate(rec);
       if(rec.sub===wire.SubModelSync)await this.modelSyncGate(rec);
       if(rec.sub===wire.SubReadSync)await this.readSyncGate(rec);
@@ -2819,6 +2911,7 @@ export class Engine {
       await this.receiverDeliveryGate(rec);
       await this.directHistory().gate(rec);
       if(rec.sub===wire.SubTopicSync)await this.topicSyncGate(rec);
+      if(rec.sub===wire.SubTopicStateSync)await this.topicStateSyncGate(rec);
       if(rec.sub===wire.SubInvitationSync)await this.invitationSyncGate(rec);
       if(rec.sub===wire.SubModelSync)await this.modelSyncGate(rec);
       if(rec.sub===wire.SubReadSync)await this.readSyncGate(rec);
@@ -2908,6 +3001,7 @@ export class Engine {
     catch (e) { return { why: e.message, code: e.code }; }
     if([wire.SubDeviceHistory,wire.SubDeviceFile].includes(rec?.sub))return this.directHistory().gate(rec);
     if(rec?.sub===wire.SubTopicSync)return this.topicSyncGate(rec);
+    if(rec?.sub===wire.SubTopicStateSync)return this.topicStateSyncGate(rec);
     if(rec?.sub===wire.SubInvitationSync)return this.invitationSyncGate(rec);
     if(rec?.sub===wire.SubModelSync)return this.modelSyncGate(rec);
     if(rec?.sub===wire.SubReadSync)return this.readSyncGate(rec);
@@ -3409,7 +3503,7 @@ export class Engine {
 
   // ---- topics: what the person set here, and the All topics list -------------------------------
   // Kept in this device's IndexedDB (kv "topic/<peer>/<id>", type
-  // "topic-state"). Private title facts follow own human devices; marks stay local.
+  // "topic-state"). Private title facts and marks follow own human devices.
 
   async topicLocals() {
     const out = new Map();
@@ -3479,7 +3573,7 @@ export class Engine {
     const checks=[],oldKey="topic/"+peer+"/"+(was?.id||id),prior=await this.groupRead(checks,"kv",oldKey);
     if(was&&was.id!==id)await this.groupRead(checks,"kv","topic/"+peer+"/"+id);
     const l = { ...prior, type: "topic-state", peer, topic: id, updated_at: Math.floor(this.now() / 1000) };
-    let note;
+    let note, marked = { ops: [] };
     if (what === "rename") {
       const title = wire.topicTitle(body.title);
       if ([...title].length > TOPICS.titleMax) throw new Error("A topic's name is at most " + TOPICS.titleMax + " characters.");
@@ -3488,14 +3582,15 @@ export class Engine {
     } else {
       // count: how many messages the page showed; a mark never covers one the person has not seen (client mark).
       const seen = body.count > 0 && body.count < g.length ? body.count : g.length;
-      Object.assign(l, { mark: what === "done" ? "done" : what==="archive" ? "archived" : "open", mark_at: Math.floor(this.now() / 1000), mark_count: seen });
-      note = what === "done" ? (seen === g.length ? "Marked done on this device. A new message makes it active again." : topicNewer) : "Reopened on this device.";
+      Object.assign(l, { mark: what === "done" ? "done" : what==="archive" ? "archived" : "open", mark_count: seen });
+      marked = await this.topicMarkOps(peer, id, l.mark, seen, checks); l.mark_at = marked.at; // it follows own human devices (client setTopic)
+      note = what === "done" ? (seen === g.length ? "Marked done. It syncs across your linked devices; a new message makes it active again." : topicNewer) : what === "archive" ? "Archived. It syncs across your linked devices. Nothing deleted." : "Reopened. It syncs across your linked devices.";
     }
-    const ops = [{ s: "kv", k: "topic/" + peer + "/" + id, v: l }];
+    const ops = [{ s: "kv", k: "topic/" + peer + "/" + id, v: l }, ...marked.ops];
     if(what==="rename")ops.push(...await this.topicTitleOps(peer,id,l.title||"",checks));
     if (was && was.id !== id) ops.push({ s: "kv", k: "topic/" + peer + "/" + was.id, v: undefined });
     await this.store.write(ops,checks);
-    this.changed();if(what==="rename")this.syncTopicTitles().catch(()=>{});
+    this.changed();if(what==="rename")this.syncTopicTitles().catch(()=>{});else this.syncTopicMarks().catch(()=>{});
     return { note };
   }
 
@@ -3632,14 +3727,16 @@ export class Engine {
       for(const r of [...inbox,...outbox])if(r.conv===conv&&this.erasable(r)&&!this.erasedRow(r)){const n=this.rowName(r),key=erasedKey(conv,n.key,n.lid);if(n.key&&n.lid&&allowed.has(key))names.set(key,n);}
       for(const [k,n]of names){ops.push({s:"erased",k,v:{conv,key:n.key,lid:n.lid,deletion,shared:false}});this.erased.add(k);}
       if(prior)ops.push({s:"kv",k:key,v:{...prior,mark:"",mark_at:0,mark_count:0}});
-      try{ops.push(...this.eraseOps(conv,inbox,outbox));await this.store.write(ops,checks);}finally{await this.loadErased();}this.changed();await this.shareErased();return {note:"Deleted for you and your devices. Other people keep their copies."};
+      if(prior?.mark)ops.push(...(await this.topicMarkOps(scope,MAIN_TOPIC_KEY,"",0,checks)).ops); // the erasure reaches own devices; so does the cleared mark
+      try{ops.push(...this.eraseOps(conv,inbox,outbox));await this.store.write(ops,checks);}finally{await this.loadErased();}this.changed();if(prior?.mark)this.syncTopicMarks().catch(()=>{});await this.shareErased();return {note:"Deleted for you and your devices. Other people keep their copies."};
     }
     const scope=await mainTopicScope(conv),key="topic/"+scope+"/"+MAIN_TOPIC_KEY,checks=[],l={...(await this.groupRead(checks,"kv",key)||{}),type:"topic-state",peer:scope,topic:MAIN_TOPIC_KEY};
+    let marked={ops:[]};
     if(what==="rename"){l.title=wire.topicTitle(body.title);if([...l.title].length>TOPICS.titleMax)throw Error("Topic name too long.");}
-    else Object.assign(l,{mark:what==="reopen"?"open":"archived",mark_at:Math.floor(this.now()/1000),mark_count:count>0?Math.min(count,main.length):main.length});
-    const ops=[{s:"kv",k:key,v:l}];if(what==="rename")ops.push(...await this.topicTitleOps(scope,MAIN_TOPIC_KEY,l.title,checks));
-    await this.store.write(ops,checks);this.changed();if(what==="rename")this.syncTopicTitles().catch(()=>{});
-    return {note:what==="rename"?(l.title?"Main flow renamed across your linked devices.":"Main flow named after its first message again."):count>0&&count<main.length?"Newer Main flow messages remain active.":what==="reopen"?"Reopened on this device.":"Archived on this device. Nothing deleted."};
+    else{Object.assign(l,{mark:what==="reopen"?"open":"archived",mark_count:count>0?Math.min(count,main.length):main.length});marked=await this.topicMarkOps(scope,MAIN_TOPIC_KEY,l.mark,l.mark_count,checks);l.mark_at=marked.at;}
+    const ops=[{s:"kv",k:key,v:l},...marked.ops];if(what==="rename")ops.push(...await this.topicTitleOps(scope,MAIN_TOPIC_KEY,l.title,checks));
+    await this.store.write(ops,checks);this.changed();if(what==="rename")this.syncTopicTitles().catch(()=>{});else this.syncTopicMarks().catch(()=>{});
+    return {note:what==="rename"?(l.title?"Main flow renamed across your linked devices.":"Main flow named after its first message again."):count>0&&count<main.length?"Newer Main flow messages remain active.":what==="reopen"?"Reopened. It syncs across your linked devices.":"Archived. It syncs across your linked devices. Nothing deleted."};
   }
 
   async changeChatTopic(what,body) {
@@ -3661,10 +3758,11 @@ export class Engine {
       try{ops.push(...this.eraseOps(conv,inbox,outbox));await this.store.write(ops);}finally{await this.loadErased();}this.changed();await this.shareErased();return {note:"Deleted for you and your devices. Other people keep their copies."};
     }
     const key="topic/"+conv+"/"+id,checks=[],l={...(await this.groupRead(checks,"kv",key)||{}),type:"topic-state",peer:conv,topic:id};
-    if(what==="rename"){const title=wire.topicTitle(body.title);if([...title].length>TOPICS.titleMax)throw Error("Topic name too long.");l.title=title;}else Object.assign(l,{mark:"archived",mark_at:Math.floor(this.now()/1000),mark_count:t.count+msgs.filter(m=>m.topic===id&&m.topic_event).length});
-    const ops=[{s:"kv",k:key,v:l}];if(what==="rename")ops.push(...await this.topicTitleOps(conv,id,l.title,checks));
-    await this.store.write(ops,checks);this.changed();if(what==="rename")this.syncTopicTitles().catch(()=>{});
-    return {note:what==="rename"?(l.title?"Topic renamed. The name syncs across your linked devices.":"Topic named after its first message again."):"Archived on this device. Nothing deleted."};
+    let marked={ops:[]};
+    if(what==="rename"){const title=wire.topicTitle(body.title);if([...title].length>TOPICS.titleMax)throw Error("Topic name too long.");l.title=title;}else{Object.assign(l,{mark:"archived",mark_count:t.count+msgs.filter(m=>m.topic===id&&m.topic_event).length});marked=await this.topicMarkOps(conv,id,l.mark,l.mark_count,checks);l.mark_at=marked.at;}
+    const ops=[{s:"kv",k:key,v:l},...marked.ops];if(what==="rename")ops.push(...await this.topicTitleOps(conv,id,l.title,checks));
+    await this.store.write(ops,checks);this.changed();if(what==="rename")this.syncTopicTitles().catch(()=>{});else this.syncTopicMarks().catch(()=>{});
+    return {note:what==="rename"?(l.title?"Topic renamed. The name syncs across your linked devices.":"Topic named after its first message again."):"Archived. It syncs across your linked devices. Nothing deleted."};
   }
 
   // ---- quiet group proof/current-context carriers (grp1 remains off) ---------------------------
@@ -5342,6 +5440,7 @@ export class Engine {
     if(n.sub===wire.SubDeviceHistory)return this.directHistory().admit(n,env,pin,admission);
     if(n.sub===wire.SubDeviceFile)return this.directHistory().admitFile(n,env,pin,admission);
     if(n.sub===wire.SubTopicSync)return this.admitTopicSync(n,env,pin, admission);
+    if(n.sub===wire.SubTopicStateSync)return this.admitTopicStateSync(n,env,pin, admission);
     if(n.sub===wire.SubInvitationSync)return this.admitInvitationSync(n,env,pin, admission);
     if(n.sub===wire.SubModelSync)return this.admitModelSync(n,env,pin, admission);
     if(n.sub===wire.SubReadSync)return this.admitReadSync(n,env,pin, admission);
@@ -6302,7 +6401,7 @@ export class Engine {
       if (teams) teams.connected(f.includes("teams1"));
       // This device reads conversations and the attention hint (it never
       // alerts from the stream: its service worker shows the relay's pushes).
-      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapEnv2, "notify1", wire.CapPerson, wire.CapControl, wire.CapHeadless, wire.CapDrive, wire.CapAgentIdentity, wire.CapGroupHumanParticipation, wire.CapGroup, wire.CapSendGroup, wire.CapRootSync, wire.CapGroupInvitationControl, wire.CapReadSync, wire.CapOwnSyncV2, wire.CapOwnSyncV3, wire.CapTopicParticipation, wire.CapRoom, wire.CapRequestFollowup, wire.CapTopicOrganization, wire.CapModelSync, ...(f.includes("signals1") ? [wire.CapTyping] : [])]))); // rcv1 already implied by rm1; explicit own3/topic/follow-up scopes fit the 21-cap advertisement bound
+      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapEnv2, "notify1", wire.CapPerson, wire.CapControl, wire.CapHeadless, wire.CapDrive, wire.CapAgentIdentity, wire.CapGroupHumanParticipation, wire.CapGroup, wire.CapSendGroup, wire.CapRootSync, wire.CapGroupInvitationControl, wire.CapReadSync, wire.CapOwnSyncV2, wire.CapOwnSyncV3, wire.CapTopicParticipation, wire.CapRoom, wire.CapRequestFollowup, wire.CapTopicOrganization, wire.CapModelSync, wire.CapTopicStateSync, ...(f.includes("signals1") ? [wire.CapTyping] : [])]))); // rcv1 already implied by rm1; explicit own3/topic/follow-up scopes fit the 22-cap advertisement bound
       await this.publishPerson().catch(() => {});
       // These existing, coalesced recovery jobs can wait for old proofs or
       // network replies. They must not delay the current user's durable send.

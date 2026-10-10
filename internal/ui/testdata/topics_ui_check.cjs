@@ -171,6 +171,9 @@ async function slowly(browser, w, h, scheme, name) {
       await p.keyboard.press('Enter');
       const all = p.getByRole('dialog', { name: 'All topics' });
       await all.getByRole('list', { name: 'Active topics' }).waitFor();
+      // Owner (v0.8.17): a topic's Done and Archive are the person's, on every linked device.
+      assert.match(await all.innerText(), /Names, Done and Archive sync across your linked devices\./, name + ': All topics says marks follow linked devices');
+      assert.doesNotMatch(await all.innerText(), /stays? on this device/, name + ': All topics no longer says marks stay on this device');
       await p.waitForFunction(() => document.getElementById('skin').shadowRoot.activeElement?.getAttribute('type') === 'search');
       await fits('all topics');
       assert.ok(await all.getByRole('button', { name: /^Active/ }).getAttribute('aria-pressed') === 'true', name + ': Active is the first filter');
