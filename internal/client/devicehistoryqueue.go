@@ -63,6 +63,9 @@ func (a *Agent) deviceHistoryPage(dev identity.Public) (bool, error) {
 	if err = historyRecoveryCurrent(tx, a.Self(), dev); err != nil {
 		return false, err
 	}
+	if full, e := syncWindowFull(tx, dev); e != nil || full {
+		return false, e
+	}
 	own, ok, err := scanPersonIn(tx, "state = ?", personSelf)
 	if err != nil || !ok {
 		return false, err

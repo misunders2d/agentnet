@@ -577,15 +577,27 @@ func (s *store) coolRoute(endpoint string, until time.Time) error {
 }
 
 func (s *store) queued(filesOnly ...bool) ([]envelope.Envelope, error) {
+	return s.queuedWhere(len(filesOnly) > 0 && filesOnly[0], "")
+}
+
+func (s *store) queuedLane(filesOnly, syncOnly bool) ([]envelope.Envelope, error) {
+	filter := " AND coalesce(sub,'') NOT IN " + syncSubs
+	if syncOnly {
+		filter = " AND sub IN " + syncSubs
+	}
+	return s.queuedWhere(filesOnly, filter)
+}
+
+func (s *store) queuedWhere(filesOnly bool, laneFilter string) ([]envelope.Envelope, error) {
 	// A conversation message to a frozen (conflicting) person is not sent.
 	filter, limit := "", ""
-	if len(filesOnly) > 0 && filesOnly[0] {
+	if filesOnly {
 		filter, limit = " AND sub IN ('file','device-file')", " LIMIT 1"
 	}
 	// File requests/offers do not belong to the readable-turn FIFO. Give
 	// interactive retrieval priority over the accumulated history backlog.
 	rows, err := s.db.Query(`SELECT envelope FROM outbox WHERE state = ? AND (conv IS NULL OR recipient NOT IN
-		(SELECT d.address FROM person_devices d JOIN persons p ON p.person = d.person WHERE p.state = ?))`+filter+` ORDER BY CASE WHEN sub IN ('file','device-file') THEN 0 ELSE 1 END, created_at, rowid`+limit, stateQueued, personConflict)
+		(SELECT d.address FROM person_devices d JOIN persons p ON p.person = d.person WHERE p.state = ?))`+laneFilter+filter+` ORDER BY CASE WHEN sub IN ('file','device-file') THEN 0 ELSE 1 END, created_at, rowid`+limit, stateQueued, personConflict)
 	if err != nil {
 		return nil, err
 	}

@@ -876,6 +876,9 @@ func (a *Agent) historyPage(ctx context.Context, dev identity.Public, pos histor
 		return false, err
 	}
 	defer release()
+	if full, e := syncWindowFull(a.store.db, dev); e != nil || full {
+		return false, e // the next receipt/source/member wake resumes this exact cursor
+	}
 	batches, err := a.prepareGroupHistoryCarriers(ctx, dev)
 	if err != nil {
 		return false, err

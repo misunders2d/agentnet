@@ -15,6 +15,7 @@
 import * as wire from "./wire.mjs";
 import { contributionPreview, contributionApply, contributionRecheck } from "./historycontribution.mjs";
 import {deviceHistory,directHistoryRow} from "./devicehistory.mjs";
+import { backgroundCopy, historyWindow } from "./historywindow.mjs";
 import { Decrypter, Encrypter } from "./vendor/age.mjs";
 import { openDB } from "./vendor/idb.mjs"; // idb: promises over IndexedDB (webvendor, pinned)
 import { createParser } from "./vendor/sse.mjs"; // eventsource-parser: the framing of the signed event stream (webvendor, pinned)
@@ -1733,7 +1734,8 @@ export class Engine {
     if(!this.readSyncRun)this.readSyncRun=(async()=>{do{this.readSyncAgain=false;await this.syncReadPages();}while(this.readSyncAgain);})().finally(()=>{this.readSyncRun=null;});
     return this.readSyncRun;
   }
-  async syncReadPages() {
+  async syncReadPages() { return this.withHistoryProduction(()=>this.syncReadPagesUnpaced()); }
+  async syncReadPagesUnpaced() {
     for(;;) {
       const own=await this.store.get("kv","person");
       if(!own || own.state!=="self" || !own.devices.some(d=>d.address===this.address&&d.fingerprint===this.fp) || !(own.human_keys||[]).includes(this.fp))return;
@@ -1753,6 +1755,7 @@ export class Engine {
       // Quarantine retains the same ciphertext for recovery, not another batch.
       const present=new Set();for(const o of saved)if(o.sub===wire.SubReadSync&&o.read_owner===own.person&&["queued","waiting","custody","delivered","quarantined"].includes(o.state))for(const key of o.read_refs||[])present.add(o.recipient_fp+"|"+key);
       for(const dev of own.devices) {
+        if(!await historyWindow(this.store,dev))continue;
         if(dev.address===this.address || !(own.human_keys||[]).includes(dev.fingerprint))continue;
         const refs=marks.filter(m=>!present.has(dev.fingerprint+"|"+this.readMarkKey(own.person,m.ref))).slice(0,64).map(m=>m.ref);if(!refs.length)continue;
         const body=JSON.stringify({v:1,person:own.person,roster:own.hash,refs}),r=wire.parseReadSync(body);
@@ -1853,7 +1856,8 @@ export class Engine {
     if(!this.topicSyncRun)this.topicSyncRun=(async()=>{do{this.topicSyncAgain=false;try{await this.syncTopicPages();}catch(e){if(e instanceof StoreConflict)this.topicSyncAgain=true;else throw e;}}while(this.topicSyncAgain);})().finally(()=>{this.topicSyncRun=null;});
     return this.topicSyncRun;
   }
-  async syncTopicPages() {
+  async syncTopicPages() { return this.withHistoryProduction(()=>this.syncTopicPagesUnpaced()); }
+  async syncTopicPagesUnpaced() {
     const recoveryChecks=[],own=await this.groupRead(recoveryChecks,"kv","person");
     if(!own||own.state!=="self"||!own.human_keys?.includes(this.fp)||!own.devices.some(d=>d.address===this.address&&d.fingerprint===this.fp))return;
     const recovered="topic-title-recovered/"+own.person;
@@ -1872,6 +1876,7 @@ export class Engine {
       const checks=[],current=await this.groupRead(checks,"kv","person"),ops=[];
       if(!current||current.person!==own.person||current.state!=="self"||!current.human_keys?.includes(this.fp)||!current.devices.some(d=>d.address===this.address&&d.fingerprint===this.fp))return;
       for(const dev of current.devices){
+        if(!await historyWindow(this.store,dev))continue;
         if(dev.address===this.address||!current.human_keys.includes(dev.fingerprint))continue;
         const titles=[];
         for(const saved of page){
@@ -1946,7 +1951,8 @@ export class Engine {
     if(!this.topicMarkSyncRun)this.topicMarkSyncRun=(async()=>{do{this.topicMarkSyncAgain=false;try{await this.syncTopicMarkPages();}catch(e){if(e instanceof StoreConflict)this.topicMarkSyncAgain=true;else throw e;}}while(this.topicMarkSyncAgain);})().finally(()=>{this.topicMarkSyncRun=null;});
     return this.topicMarkSyncRun;
   }
-  async syncTopicMarkPages() {
+  async syncTopicMarkPages() { return this.withHistoryProduction(()=>this.syncTopicMarkPagesUnpaced()); }
+  async syncTopicMarkPagesUnpaced() {
     const seedChecks=[],own=await this.groupRead(seedChecks,"kv","person");
     if(!this.ownTopicWriter(own))return;
     const seed=await this.topicMarkSeedOps(own,seedChecks);if(seed.ops.length)await this.store.write(seed.ops,seedChecks);
@@ -1956,6 +1962,7 @@ export class Engine {
       const checks=[],current=await this.groupRead(checks,"kv","person"),ops=[];
       if(!this.ownTopicWriter(current)||current.person!==own.person)return;
       for(const dev of current.devices){
+        if(!await historyWindow(this.store,dev))continue;
         if(dev.address===this.address||!current.human_keys.includes(dev.fingerprint))continue;
         // A device that cannot read marks yet keeps one waiting carrier; later
         // marks stay unsealed here, so nothing piles up for an older program.
@@ -2012,7 +2019,8 @@ export class Engine {
     })().finally(()=>{this.invitationSyncRun=null;});
     return this.invitationSyncRun;
   }
-  async syncInvitationPages() {
+  async syncInvitationPages() { return this.withHistoryProduction(()=>this.syncInvitationPagesUnpaced()); }
+  async syncInvitationPagesUnpaced() {
     for(;;) {
       const checks=[],ops=[],own=await this.groupRead(checks,"kv","person");
       if(!own || own.state!=="self" || !(own.human_keys||[]).includes(this.fp) || !own.devices.some(d=>d.address===this.address&&d.fingerprint===this.fp))return;
@@ -2029,6 +2037,7 @@ export class Engine {
       const saved=await this.store.all("outbox"),present=new Set(saved.filter(o=>o.sub===wire.SubInvitationSync&&["queued","waiting","custody","delivered","quarantined"].includes(o.state)).map(o=>o.recipient_fp+"/"+o.invitation_id+"/"+o.invitation_revision));
       let count=0;
       outer:for(const dev of own.devices) {
+        if(!await historyWindow(this.store,dev))continue;
         if(dev.address===this.address||!(own.human_keys||[]).includes(dev.fingerprint))continue;
         for(const r of views) {
           if(present.has(dev.fingerprint+"/"+r.id+"/"+r.revision))continue;
@@ -2075,7 +2084,8 @@ export class Engine {
     return this.rootSyncRun;
   }
 
-  async syncRootPages() {
+  async syncRootPages() { return this.withHistoryProduction(()=>this.syncRootPagesUnpaced()); }
+  async syncRootPagesUnpaced() {
     for(;;) {
       const own=await this.store.get("kv","person");
       if(!own || own.state!=="self" || !own.devices.some(d=>d.address===this.address&&d.fingerprint===this.fp) || !(own.human_keys||[]).includes(this.fp))return;
@@ -2084,6 +2094,7 @@ export class Engine {
         if(c.kind==="group" || this.erasedConv(c.id))continue;
         const root=wire.parseRoot(c.root);if(!wire.rootMember(root,own.person))continue;
         for(const dev of own.devices) {
+        if(!await historyWindow(this.store,dev))continue;
           if(dev.address===this.address || !(own.human_keys||[]).includes(dev.fingerprint))continue;
           try { await this.rootSyncAuthority(root,this.address,this.fp,dev.address,dev.fingerprint,checks); } catch(e) { continue; }
           const saved=await this.authorityRows({conv:c.id,sub:wire.SubRootSync},checks);
@@ -2194,7 +2205,17 @@ export class Engine {
   // v2 retains the old snapshot cursor. A separate recent/older pass repairs
   // accepted pre-upgrade gaps once, while a storage-arrival tail keeps moving
   // during backfill. Exact original tuples, never timestamps, deduplicate it.
-  async historyCatchupStep(dev,j) {
+  // Serialize durable sync production only. Network delivery, live sends and
+  // receipt acknowledgements never acquire this lane.
+  withHistoryProduction(work) {
+    const run=(this.historyProduction||Promise.resolve()).catch(()=>{}).then(work);
+    this.historyProduction=run;return run;
+  }
+
+  async historyCatchupStep(dev,j) { return this.withHistoryProduction(()=>this.historyCatchupPage(dev,j)); }
+  async historyCatchupPage(dev,j) {
+    const available=await historyWindow(this.store,dev);
+    if(!available)return false;
     const checks=[],book=structuredClone(await this.groupRead(checks,"kv","history"));
     if(!book?.[dev.address] || JSON.stringify(book[dev.address])!==JSON.stringify(j))return false;
     if(j.own_human&&j.own_human!==this.fp || j.catchup?.source&&j.catchup.source!==this.fp || !await this.ownHistoryAuthority(dev,checks))return false;
@@ -2218,7 +2239,8 @@ export class Engine {
     const clear=async tuple=>{const k=prefix+tuple;if(await this.groupRead(checks,"kv",k))ops.push({s:"kv",k});};
     const context=async c=>{
       if(c.kind!=="group"||contexts.has(c.id))return;
-      const carriers=await this.groupHistoryCarriers(c,dev,checks);copies.push(...carriers);contexts.add(c.id);
+      const carriers=await this.groupHistoryCarriers(c,dev,checks);
+      copies.push(...carriers);contexts.add(c.id);
     };
     const queue=async(row,here=false)=>{
       const s=here?"outbox":"inbox",m=await this.groupRead(checks,s,row.id);
@@ -3170,7 +3192,7 @@ export class Engine {
       if(rec.sub===wire.SubReadSync)await this.readSyncGate(rec);
       await this.proposalDeliveryGate(rec);
       if (!await this.startHandover(rec)) return;
-      const r = await this.call("POST", "/v1/messages", rec.envelope);
+      const r = await this.call("POST", "/v1/messages"+(backgroundCopy(rec)?"?lane=sync":""), rec.envelope);
       rec.state = (r && r.state) || "custody";
       rec.detail = "";
       // The relay has everything: the ciphertext kept here is not needed.
@@ -3295,18 +3317,26 @@ export class Engine {
   queueOutbox() { if (!this.closing) this.flushOutbox().catch(() => {}); }
 
   async flushOutbox() {
-    if (this.outboxPass) { this.outboxAgain = true; return this.outboxPass; }
-    const run = (async () => {
-      do { this.outboxAgain = false; await this.flushOutboxOnce(); } while (this.outboxAgain && this.connected);
-    })();
-    this.outboxPass = run;
-    try { return await run; } finally { this.outboxPass = null; if (this.outboxAgain && this.connected && !this.closing) this.queueOutbox(); }
+    return Promise.all([this.flushOutboxLane(false),this.flushOutboxLane(true)]);
   }
 
-  async flushOutboxOnce() {
+  async flushOutboxLane(sync) {
+    const pass=sync?'syncOutboxPass':'outboxPass',again=sync?'syncOutboxAgain':'outboxAgain';
+    if(this[pass]){this[again]=true;return this[pass];}
+    const run=(async()=>{do{this[again]=false;await this.flushOutboxOnce(sync);}while(this[again]&&this.connected&&!this.closing);})();
+    this[pass]=run;
+    try{return await run;}finally{this[pass]=null;if(this[again]&&this.connected&&!this.closing)this.flushOutboxLane(sync).catch(()=>{});}
+  }
+
+  async flushOutboxOnce(sync=null) {
+    if(sync===null)return Promise.all([this.flushOutboxOnce(false),this.flushOutboxOnce(true)]);
     const blocked = new Set();
-    const rows = (await this.store.all("outbox")).sort((a,b) => (a.send_order ?? a.at) - (b.send_order ?? b.at));
-    for (const rec of rows) {
+    const attempted=new Set();
+    for (;;) {
+      // Reselect from durable state after every delivery turn: an interactive
+      // insertion during a background POST must not wait for a stale batch.
+      const rows=(await this.store.all("outbox")).filter(r=>!attempted.has(r.id)&&backgroundCopy(r)===sync).sort((a,b)=>Number(backgroundCopy(a))-Number(backgroundCopy(b))||(a.send_order ?? a.at)-(b.send_order ?? b.at)||a.id.localeCompare(b.id));
+      const rec=rows[0];if(!rec)return;attempted.add(rec.id);
       if (!this.connected || this.closing) return;
       // FIFO is for readable turns. Auxiliary copies must pass their own
       // gates without blocking turns or unrelated history/deletion copies.
@@ -6898,6 +6928,9 @@ export class Engine {
       const cancelledUnknown = row?.delivery_cancelled && row.handover_started!==false && !["delivered","expired","quarantined"].includes(row.state);
       const ops=[{s:"kv",k:"receipt-cursor",v:r.seq}];if(row&&(["queued","custody"].includes(row.state)||cancelledUnknown||row.state==="quarantined"&&r.state==="delivered"))ops.push({s:"outbox",k:r.id,v:{...row,state:r.state,detail:""}});
       try { await this.store.write(ops,[{s:"outbox",k:r.id,v:row},{s:"kv",k:"receipt-cursor",v:cursor}]); } catch(e) { if(e instanceof StoreConflict)return this.dispatch(event,data);throw e; }this.changed(true);
+      if(row&&backgroundCopy(row)&&ops.length>1){
+        this.runHistory().catch(()=>{});this.syncRoots().catch(()=>{});this.syncReadMarks().catch(()=>{});this.syncTopicTitles().catch(()=>{});this.syncInvitations().catch(()=>{});
+      }
     } else if (event === "message") {
       await this.receiveStreamMessage(data);
     } else if (event === "signal") {

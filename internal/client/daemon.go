@@ -224,6 +224,7 @@ func (a *Agent) streamOnce(ctx context.Context) (healthy bool, err error) {
 	defer func() { cancel(); <-workerDone }()
 	a.kickMu.Lock()
 	a.kick = func() {
+		a.postOutboxBackground() // ACKs/live turns progress while bulk upkeep is blocked
 		select {
 		case kick <- struct{}{}:
 		default: // a retry pass is already pending
@@ -322,9 +323,10 @@ func (a *Agent) sync(ctx context.Context) {
 	if err := a.flushReceipts(ctx); err != nil {
 		a.Logf("receipts: %v", err)
 	}
-	a.convSync(ctx)  // only what an event made due: no request otherwise
-	a.syncTeams(ctx) // team references queued by the stream, verified and pinned (teams.go)
-	a.groupSync(ctx) // group journal: pending publications first, then heads the stream said changed (convgroup.go)
+	a.postOutboxBackground() // live sends do not await bulk proof/history work or its transport
+	a.convSync(ctx)          // only what an event made due: no request otherwise
+	a.syncTeams(ctx)         // team references queued by the stream, verified and pinned (teams.go)
+	a.groupSync(ctx)         // group journal: pending publications first, then heads the stream said changed (convgroup.go)
 	if err := a.FlushOutbox(ctx); err != nil {
 		a.Logf("outbox: %v", err)
 	}
@@ -347,7 +349,18 @@ func (a *Agent) dispatch(ctx context.Context, event, data string) error {
 			a.Logf("invalid receipt event ignored")
 			return nil
 		}
-		return a.store.applyReceipt(receipt)
+		var resumes bool
+		if err := a.store.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM outbox WHERE id=? AND sub IN `+syncSubs+` AND state IN ('queued','custody'))`, receipt.ID).Scan(&resumes); err != nil {
+			return err
+		}
+		if err := a.store.applyReceipt(receipt); err != nil {
+			return err
+		}
+		if resumes {
+			a.convWork.due(convHistory)
+			a.kickNow()
+		}
+		return nil
 	case "message":
 		var env envelope.Envelope
 		if err := json.Unmarshal([]byte(data), &env); err != nil {
@@ -512,6 +525,13 @@ func (a *Agent) admissionFailed(ctx context.Context, env envelope.Envelope, err 
 
 // flushReceipts sends every stored disposition the Hub has not acknowledged.
 func (a *Agent) flushReceipts(ctx context.Context) error {
+	a.receiptOnce.Do(func() { a.receiptLock = make(chan struct{}, 1) })
+	select {
+	case a.receiptLock <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-a.receiptLock }()
 	pending, err := a.store.unsentReceipts()
 	if err != nil {
 		return err

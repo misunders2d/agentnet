@@ -232,6 +232,49 @@ const restarted=new Engine({store:a.store,base:a.base,fetch});Object.assign(rest
  await drain(phone,desk);
  check((await copies(phone)).filter(r=>r.to===desk.address).length===0,'the phone sends no copy back to the desk that forwarded it');
 }
+// A disconnected own device gets a bounded durable window. Receipt-driven
+// refill must eventually copy every cursor-covered original without duplicates.
+{
+ const desk=await person('paced/desk'),phone=await sibling(desk,'paced/phone'),peer=await person('paced-peer/desk');
+ await desk.store.write([{s:'persons',k:peer.me.person,v:{...peer.me,state:'pinned'}},{s:'pins',k:peer.address,v:{address:peer.address,json:wire.marshalPublic(peer.pub),fingerprint:peer.fp,pending:null}}]);
+ const originals=[];
+ for(let i=0;i<500;i++){
+  const id=wire.newID(),m={id,from:desk.address,to:peer.address,ts:i+1,kind:'message',body:'durable backlog '+i,attachments:[]};originals.push(id);
+  await desk.store.write([{s:'outbox',k:id,v:{...m,v:1,at:(i+1)*1000,fp:peer.fp,envelope:await wire.seal(m,desk.keys,peer.pub),state:'delivered'}}]);
+ }
+ const dev=phone.me.devices.find(d=>d.address===phone.address),active=async()=>(await copies(desk)).filter(r=>r.to===phone.address&&['queued','waiting','custody'].includes(r.state));
+ await desk.directHistory().step(dev);
+ check((await active()).length===50,'offline direct catchup is bounded to one exact-recipient window');
+ check(!await desk.directHistory().step(dev),'full window sleeps instead of producing another page');
+ const batch=await active();await desk.store.write(batch.map(r=>({s:'outbox',k:r.id,v:{...r,state:'custody'}})));
+ check(!await desk.directHistory().step(dev),'custody still occupies offline recipient capacity');
+ // Let dispatch own the real history wake. Other source producers are empty;
+ // no polling/manual cursor resets are used during terminal receipt refills.
+ desk.me=await desk.store.get('kv','person');let seq=0;
+ for(let rounds=0;rounds<20;rounds++){
+  const pending=await active();if(!pending.length)break;
+  for(const row of pending)await desk.dispatch('receipt',JSON.stringify({id:row.id,state:'delivered',seq:++seq}));
+  if(desk.historyRun)await desk.historyRun;
+  check((await active()).length<=50,'receipt refill retains exact-recipient window');
+ }
+ const all=(await copies(desk)).filter(r=>r.to===phone.address),ids=all.map(r=>JSON.parse(r.body).item.id);
+ check(ids.length===500&&new Set(ids).size===500&&originals.every(id=>ids.includes(id)),'receipt resume completely catches up all 500 durable originals once');
+ check((await active()).length===0,'completed catchup has no outstanding carrier');
+ // Freeze an actual sync HTTP POST while a late interactive insertion gets
+ // its own live sender. The relay fixture still verifies sealed envelopes.
+ await desk.store.write(all.map(r=>({s:'outbox',k:r.id,v:{...r,state:'queued'}})));
+ let started,release;const entered=new Promise(r=>started=r),stalled=new Promise(r=>release=r),lanePosts=[];let firstSync=true;
+ desk.fetch=async(url,opts)=>{const u=new URL(url);if(u.pathname==='/v1/messages'){const env=wire.parseEnvelope(opts.body);await wire.verifyEnvelope(env,pubs.get(env.from).sign_key);lanePosts.push({id:env.id,lane:u.searchParams.get('lane')});if(firstSync&&u.searchParams.get('lane')==='sync'){firstSync=false;started();await stalled;}return json({state:'custody'});}return fetch(url,opts);};
+ desk.connected=true;const flushing=desk.flushOutbox();await entered;
+ const fresh=wire.newID(),msg={id:fresh,from:desk.address,to:peer.address,ts:501,kind:'message',body:'late live request',attachments:[]};
+ await desk.store.write([{s:'outbox',k:fresh,v:{...msg,v:1,at:501000,fp:peer.fp,envelope:await wire.seal(msg,desk.keys,peer.pub),state:'queued'}}]);
+ await desk.flushOutboxLane(false);
+ check(lanePosts.some(r=>r.id===fresh&&r.lane===null),'late live actual POST completes while first sync POST is stalled');
+ check(lanePosts.filter(r=>r.lane==='sync').length===1,'stalled sync loop never blocks live nor launches an unbounded parallel batch');
+ release();await flushing;desk.connected=false;
+ check((await desk.store.get('outbox',fresh)).state==='custody','interactive send preserves truthful custody');
+
+}
 // Original endpoint identity also governs local deletion of imported outgoing rows.
 await p.deleteThread(b.address,id);
 check(!(await p.v1Threads()).some(g=>g.some(m=>m.id===id||m.id===answer)), 'local deletion removes imported request and replies');

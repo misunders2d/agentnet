@@ -188,6 +188,11 @@ func (a *Agent) syncTopicMarks() (bool, error) {
 		if dev.Address == a.Address || !me.roster.Human(dev.Fingerprint()) {
 			continue
 		}
+		if full, e := syncWindowFull(tx, dev); e != nil {
+			return false, e
+		} else if full {
+			continue
+		}
 		r := protocol.TopicStateSync{V: 1, Person: me.info.Person, Roster: me.info.Roster}
 		if topicSyncAuthority(tx, protocol.TopicSync{Person: r.Person, Roster: r.Roster}, a.Address, fp, dev.Address, dev.Fingerprint()) != nil {
 			continue

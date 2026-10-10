@@ -1,6 +1,7 @@
 // Inert personal device-thread history. Uses the engine's verified own-person
 // authority, transactional store, durable outbox and existing history wakes.
 import * as wire from "./wire.mjs";
+import { historyWindow } from "./historywindow.mjs";
 
 export const directHistoryRow=r=>!!r&&!r.conv&&!r.local&&Number.isFinite(r.at)&&[1,3].includes(r.v)&&(!r.aside||r.control)&&["",wire.SubStatus,wire.SubReaction,wire.SubRevision,wire.SubRetraction].includes(r.sub||"")&&(!r.receiver_route||r.receiver_route.op==="request");
 const prefix="device-history/",page=50;
@@ -98,7 +99,9 @@ export function deviceHistory(e,Hold){
   const fromOwn=await human(own,item.from,item.from_key,admission),row={...item,v:item.sub?3:1,lid:"",id:item.id,fp:item.from_key,history:true,synced_from:env.from,synced_key:pin.fingerprint,device_history:meta,replica:true,own:fromOwn,read:meta.direction==="out",state:"",at:Math.min(item.at||e.now(),e.now()),attachments:item.attachments.map(a=>({...a,availability:"requestable"})),...(item.sub?{control:true,aside:true}:{})};
   ops.push({s:"inbox",k:row.id,v:row});ops.checks=checks;ops.directHistory=true;return ops;
  }
- async function step(dev){
+ function step(dev){return e.withHistoryProduction(()=>stepPage(dev));}
+ async function stepPage(dev){
+  const available=await historyWindow(e.store,dev);if(!available)return false;
   const checks=[],ops=[],own=await read(checks,"kv","person");if(!await e.ownHistoryAuthority(dev,checks))return false;
   const key=prefix+"job/"+dev.fingerprint,saved=await read(checks,"kv",key),ceiling=await read(checks,"kv","device-history-arrival")||0;
   const job=structuredClone(saved||{older:ceiling+1,tail:ceiling});

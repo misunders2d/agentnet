@@ -152,6 +152,11 @@ func (a *Agent) syncRoots() (bool, error) {
 			if dev.Address == a.Address || !me.roster.Human(dev.Fingerprint()) {
 				continue
 			}
+			if full, e := syncWindowFull(a.store.db, dev, copies); e != nil {
+				return false, e
+			} else if full {
+				continue
+			}
 			if err := rootSyncAuthority(a.store.db, root, a.Address, a.Self().Fingerprint(), dev.Address, dev.Fingerprint()); err != nil {
 				continue
 			}

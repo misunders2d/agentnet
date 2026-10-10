@@ -46,7 +46,10 @@ type Agent struct {
 
 	deliveryLocks  sync.Map // envelope id -> cancellation-aware lock, shared by immediate sends and retry passes
 	flushOnce      sync.Once
-	flushLock      chan struct{} // one ordered outbox pass at a time
+	flushLock      chan struct{} // readable turns serialize independently of replication
+	syncFlushLock  chan struct{} // one background replication pass at a time
+	receiptOnce    sync.Once
+	receiptLock    chan struct{} // dispositions never wait for history upkeep
 	routeHints     sync.Map      // optional verified first-attempt direct route; never queue storage
 	posting        backgroundPosts
 	humanMu        sync.RWMutex  // local human end commits serialize with ordinary copy/file delivery
@@ -753,7 +756,11 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 			state, _, _, _ := a.store.outboxState(env.ID)
 			return SendResult{ID: env.ID, State: state}, e
 		}
-		err = a.hub.do(ctx, "POST", "/v1/messages", env, &r)
+		path := "/v1/messages"
+		if isSyncSub(sub) {
+			path += "?" + protocol.MessageLaneQuery + "=" + protocol.MessageLaneSync
+		}
+		err = a.hub.do(ctx, "POST", path, env, &r)
 	}
 	switch {
 	case err == nil:
@@ -784,23 +791,37 @@ func (a *Agent) handedOver(env envelope.Envelope, state, path string) (SendResul
 // FlushOutbox retries queued messages, yielding after history progress when
 // an admitted file request needs its next upkeep turn.
 func (a *Agent) FlushOutbox(ctx context.Context) error {
-	return a.flushOutbox(ctx, false)
+	if err := a.flushOutbox(ctx, false); err != nil {
+		return err
+	}
+	return a.flushLane(ctx, false, true)
 }
 
 // filesOnly gives one requested file a turn before bulk conversation upkeep.
 // It uses the same durable outbox, serialization and final delivery checks.
 func (a *Agent) flushOutbox(ctx context.Context, filesOnly bool) error {
-	a.flushOnce.Do(func() { a.flushLock = make(chan struct{}, 1) })
+	return a.flushLane(ctx, filesOnly, false)
+}
+
+func (a *Agent) flushLane(ctx context.Context, filesOnly, syncOnly bool) error {
+	a.flushOnce.Do(func() {
+		a.flushLock = make(chan struct{}, 1)
+		a.syncFlushLock = make(chan struct{}, 1)
+	})
+	lock := a.flushLock
+	if syncOnly {
+		lock = a.syncFlushLock
+	}
 	select {
-	case a.flushLock <- struct{}{}:
+	case lock <- struct{}{}:
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	defer func() { <-a.flushLock }()
+	defer func() { <-lock }()
 	if _, err := a.holdEndedOutputs(""); err != nil {
 		return err
 	}
-	envs, err := a.store.queued(filesOnly)
+	envs, err := a.store.queuedLane(filesOnly, syncOnly)
 	if err != nil {
 		return err
 	}
@@ -849,6 +870,13 @@ func (a *Agent) flushOutbox(ctx context.Context, filesOnly bool) error {
 		}
 		if res.State == stateQueued || retryable(err) {
 			blocked[key] = true
+		}
+		// A late readable turn gets the next live delivery turn; its independent
+		// sender also runs while this carrier's network request is still held.
+		if syncOnly {
+			if err := a.flushOutbox(ctx, false); err != nil {
+				return err
+			}
 		}
 		// An admitted file request may arrive while this batch is sending.
 		// Give the existing upkeep worker a turn after one history carrier;

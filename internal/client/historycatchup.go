@@ -240,6 +240,9 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 		return false, err
 	}
 	defer release()
+	if full, e := syncWindowFull(a.store.db, dev); e != nil || full {
+		return false, e // the next receipt/source/member wake resumes this exact cursor
+	}
 	p, err := a.historyCatchupState(dev)
 	if err != nil {
 		return false, err

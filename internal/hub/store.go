@@ -144,7 +144,12 @@ CREATE TABLE realm(
   CHECK ((initialized = 0 AND realm_id IS NULL) OR
          (initialized = 1 AND realm_id IS NOT NULL)));
 INSERT INTO realm(id, initialized) VALUES(1, 0);
-`, TeamSchema, driveStorageSchema, GroupHubSchema, agentCatalogSchema, receiptSchema, workspaceSchema, deviceAdminSchema, inviteHintsSchema, googleSchema, deviceAdminNoticeSchema, updateSchema}
+`, TeamSchema, driveStorageSchema, GroupHubSchema, agentCatalogSchema, receiptSchema, workspaceSchema, deviceAdminSchema, inviteHintsSchema, googleSchema, deviceAdminNoticeSchema, updateSchema, messageLaneSchema}
+
+const messageLaneSchema = `
+ALTER TABLE messages ADD COLUMN lane TEXT NOT NULL DEFAULT 'live' CHECK (lane IN ('live','sync'));
+CREATE INDEX messages_pending_lane ON messages(recipient,state,lane,seq);
+`
 
 // addressTakenError refuses a join for an enrolled (or revoked) address
 // and names a free one to offer the person. The invite stays unused; the
@@ -531,7 +536,7 @@ func (s *store) useNonce(agent, nonce string, now time.Time) (bool, error) {
 // complete uploads by the sender for the same recipient with the signed size
 // and digest. A retry with identical bytes returns the existing state; reuse
 // of the id for other content is a conflict.
-func (s *store) putMessage(env envelope.Envelope, canonical []byte, senderFP string, now time.Time) (string, error) {
+func (s *store) putMessage(env envelope.Envelope, canonical []byte, senderFP string, now time.Time, lane ...string) (string, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return "", err
@@ -560,8 +565,18 @@ func (s *store) putMessage(env envelope.Envelope, canonical []byte, senderFP str
 			return "", fmt.Errorf("%w: %s", errBlobNotReady, b.ID)
 		}
 	}
-	if _, err := tx.Exec(`INSERT INTO messages(id, sender, recipient, envelope, state, created_at, session, fallback) VALUES(?, ?, ?, ?, ?, ?, nullif(?, ''), ?)`,
-		env.ID, env.From, env.To, canonical, protocol.StateCustody, now.Unix(), env.Session, env.Fallback); err != nil {
+	// Legacy direct callers also build pre-migration fixtures. Omit the new
+	// column for those callers; the migrated store defaults their copies live.
+	insert := `INSERT INTO messages(id, sender, recipient, envelope, state, created_at, session, fallback) VALUES(?, ?, ?, ?, ?, ?, nullif(?, ''), ?)`
+	args := []any{env.ID, env.From, env.To, canonical, protocol.StateCustody, now.Unix(), env.Session, env.Fallback}
+	if len(lane) != 0 {
+		if len(lane) != 1 || lane[0] != protocol.MessageLaneLive && lane[0] != protocol.MessageLaneSync {
+			return "", errors.New("invalid message lane")
+		}
+		insert = `INSERT INTO messages(id, sender, recipient, envelope, state, created_at, session, fallback, lane) VALUES(?, ?, ?, ?, ?, ?, nullif(?, ''), ?, ?)`
+		args = append(args, lane[0])
+	}
+	if _, err := tx.Exec(insert, args...); err != nil {
 		return "", err
 	}
 	if env.Attn { // stored with the message, or not at all (notify.go)
@@ -574,7 +589,29 @@ func (s *store) putMessage(env envelope.Envelope, canonical []byte, senderFP str
 
 type pending struct {
 	Seq      int64
+	ID       string
 	Envelope []byte
+}
+
+// Each lane has an independent connection cursor. A live sequence may pass
+// an older sync sequence without retiring that sync message.
+func (s *store) pendingForLane(recipient, session, lane string, afterSeq int64, limit int) ([]pending, error) {
+	rows, err := s.db.Query(`SELECT seq,id,envelope FROM messages
+		WHERE recipient=? AND state=? AND lane=? AND seq>? AND (session IS NULL OR session=? OR fallback=1)
+		ORDER BY seq LIMIT ?`, recipient, protocol.StateCustody, lane, afterSeq, session, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []pending
+	for rows.Next() {
+		var p pending
+		if err := rows.Scan(&p.Seq, &p.ID, &p.Envelope); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
 }
 
 // pendingFor lists undelivered messages for one connection of recipient:

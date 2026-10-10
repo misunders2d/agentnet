@@ -61,8 +61,14 @@ func (a *Agent) postOutboxBackground() {
 	go func() {
 		defer cancel()
 		for {
-			if err := a.FlushOutbox(ctx); err != nil && ctx.Err() == nil {
+			if err := a.flushReceipts(ctx); err != nil && ctx.Err() == nil {
+				a.Logf("receipts: %v", err)
+			}
+			if err := a.flushOutbox(ctx, false); err != nil && ctx.Err() == nil {
 				a.Logf("outbox: %v", err)
+			}
+			if err := a.flushReceipts(ctx); err != nil && ctx.Err() == nil {
+				a.Logf("receipts: %v", err)
 			}
 			a.NoteChange()
 			p.Lock()

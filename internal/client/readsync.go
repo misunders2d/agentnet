@@ -102,6 +102,11 @@ func (a *Agent) syncReadMarks() (bool, error) {
 		if dev.Address == a.Address || !me.roster.Human(dev.Fingerprint()) {
 			continue
 		}
+		if full, e := syncWindowFull(a.store.db, dev); e != nil {
+			return false, e
+		} else if full {
+			continue
+		}
 		key, pending, found, e := a.store.peer(dev.Address)
 		if e != nil {
 			return false, e
