@@ -494,6 +494,14 @@ func waitUntil(t *testing.T, what string, timeout time.Duration, cond func() boo
 // specific): the relay keeps them in custody after they were received.
 var ownRecordSubs = map[string]bool{"read-sync": true, "invitation-sync": true, "topic-sync": true, "topic-state-sync": true}
 
+// firstKeepsRefused is the first release that knows the relay's refusal of
+// an outdated version (426 update_required): it keeps a refused send queued,
+// delivers it after the update and its doctor says it is suspended. Older
+// releases mark that send failed. The gate checks the older release against
+// what its version can do, so it keeps passing once this release is the one
+// below HEAD.
+const firstKeepsRefused = "v0.8.17"
+
 // TestMixedVersion is the release gate for "older apps must not impede
 // others", with real programs in separate processes: a relay running this
 // source as the next release (so its latest-only policy is on), devices on
@@ -510,8 +518,9 @@ var ownRecordSubs = map[string]bool{"read-sync": true, "invitation-sync": true, 
 //     no failed or waiting copies; copies to suspended devices wait in the
 //     relay's custody (J1).
 //   - Updating by hand (the daemon restarted on this release) delivers the
-//     backlog; a send this source kept while refused goes then, and a send
-//     the older release marked failed stays failed, nowhere delivered (J2).
+//     backlog; a send kept while refused (this source, and releases from
+//     firstKeepsRefused on) goes then, and a send a release before that
+//     marked failed stays failed, nowhere delivered (J2).
 func TestMixedVersion(t *testing.T) {
 	below := releaseBelowHead()
 	oldTag := os.Getenv("AGENTNET_MIXED_TAG")
@@ -525,6 +534,7 @@ func TestMixedVersion(t *testing.T) {
 		t.Skip("no published release tag below HEAD in this repository (a shallow clone?): git fetch --tags to run the mixed-version gate")
 	}
 	release := nextRelease(t, below)
+	keepsRefused := !protocol.Newer(firstKeepsRefused, oldTag)
 	start := time.Now()
 	dir := t.TempDir()
 	head := &cli{t: t, bin: buildStampedCLI(t, dir, release), dir: dir}
@@ -533,8 +543,8 @@ func TestMixedVersion(t *testing.T) {
 	if v := old.run("version"); !strings.HasPrefix(v, "agentnet "+oldTag+" ") {
 		t.Fatalf("the %s build reports %q", oldTag, v)
 	}
-	t.Logf("relay and current devices: this source as %s; older devices: release %s (built from its tag) and this source stamped %s; builds took %s",
-		release, oldTag, oldTag, time.Since(start).Round(time.Second))
+	t.Logf("relay and current devices: this source as %s; older devices: release %s (built from its tag; keeps a refused send: %v) and this source stamped %s; builds took %s",
+		release, oldTag, keepsRefused, oldTag, time.Since(start).Round(time.Second))
 	t.Cleanup(func() { // registered first, so it runs after the processes stop
 		if t.Failed() {
 			logs, _ := filepath.Glob(filepath.Join(dir, "*.log"))
@@ -747,27 +757,39 @@ func TestMixedVersion(t *testing.T) {
 		}
 	}
 
-	// The outdated devices are told to update. The older release does not
-	// know the refusal: its doctor shows the relay's recommendation and a
-	// send is marked failed. This source keeps the message for later.
+	// The outdated devices are told to update. A release that knows the
+	// refusal (keepsRefused) keeps a refused send queued for after the
+	// update and its doctor says it is suspended; an older one (v0.8.16 and
+	// before) marks the send failed and its doctor shows the relay's
+	// recommendation. The expectation follows the version, not the output:
+	// a known release that fell back to failing would be caught.
+	updateTo := "Update AgentNet to " + release + " to continue."
+	keptRefused := func(who string, d *mixedDevice, out string, err error) {
+		t.Helper()
+		if f := strings.Fields(out); err != nil || len(f) < 2 || f[1] != "queued" || !strings.Contains(out, updateTo) {
+			t.Errorf("J1: %s's refused send was not kept with the update line: %v %s", who, err, out)
+		}
+		if doc, _ := d.try("doctor"); !strings.Contains(doc, "suspended  "+updateTo) {
+			t.Errorf("J1: %s's doctor:\n%s", who, doc)
+		}
+	}
 	carolSend, err := carol.try("dm", "send", ac, "carol while suspended")
 	t.Logf("J1: %s (%s) dm send while suspended (err %v): %s", carol.address, oldTag, err, carolSend)
-	carolID := strings.Fields(carolSend)[0]
-	if !strings.Contains(carolSend, "failed") || !strings.Contains(carolSend, "426") {
-		t.Errorf("J1: the %s send while suspended: %s", oldTag, carolSend)
-	}
-	if doc, _ := carol.try("doctor"); !strings.Contains(doc, "recommends "+release) {
-		t.Errorf("J1: %s's doctor does not name %s:\n%s", carol.address, release, doc)
+	carolID := strings.Fields(carolSend + " -")[0]
+	if keepsRefused {
+		keptRefused(carol.address+" ("+oldTag+")", carol, carolSend, err)
+	} else {
+		if !strings.Contains(carolSend, "failed") || !strings.Contains(carolSend, "426") {
+			t.Errorf("J1: the %s send while suspended: %s", oldTag, carolSend)
+		}
+		if doc, _ := carol.try("doctor"); !strings.Contains(doc, "recommends "+release) {
+			t.Errorf("J1: %s's doctor does not name %s:\n%s", carol.address, release, doc)
+		}
 	}
 	daveSend, err := dave.try("dm", "send", ad, "dave while suspended")
 	t.Logf("J1: %s (this source as %s) dm send while suspended (err %v): %s", dave.address, oldTag, err, daveSend)
-	updateTo := "Update AgentNet to " + release + " to continue."
-	if f := strings.Fields(daveSend); err != nil || len(f) < 2 || f[1] != "queued" || !strings.Contains(daveSend, updateTo) {
-		t.Errorf("J1: a refused send of this source: %v %s", err, daveSend)
-	}
-	if doc, _ := dave.try("doctor"); !strings.Contains(doc, "suspended  "+updateTo) {
-		t.Errorf("J1: %s's doctor:\n%s", dave.address, doc)
-	}
+	daveID := strings.Fields(daveSend + " -")[0]
+	keptRefused(dave.address+" (this source)", dave, daveSend, err)
 
 	// J1: the others are not impeded, and nothing loops.
 	during, worst := exchange("while others are suspended")
@@ -839,6 +861,10 @@ func TestMixedVersion(t *testing.T) {
 			carol.shows(g, "bob to the group while others are suspended")
 	})
 	t.Logf("J2: carol received her backlog %s after her update", took.Round(time.Millisecond))
+	if keepsRefused {
+		took = waitUntil(t, "carol's kept send after her update", 30*time.Second, func() bool { return alice.shows(ac, "carol while suspended") })
+		t.Logf("J2: carol's send kept while refused (%s) was delivered %s after her update", oldTag, took.Round(time.Millisecond))
+	}
 	dave.daemon(head)
 	took = waitUntil(t, "dave's kept send and his backlog after his update", 30*time.Second, func() bool {
 		return alice.shows(ad, "dave while suspended") && dave.shows(ad, "backlog for dave")
@@ -864,18 +890,51 @@ func TestMixedVersion(t *testing.T) {
 		}
 		waitUntil(t, "the relay's custody for "+d.address+" drained", 15*time.Second, func() bool { return len(w.custody(d.address)) == 0 })
 	}
-	// What the older release marked failed stays failed and was delivered
-	// nowhere: nothing resends it behind the person's back.
-	for _, r := range carol.outbox(t) {
-		if r.id == carolID || r.lid == carolID {
+	// A send kept while refused went once updated and no copy of it is
+	// failed. What a release before keepsRefused marked failed stays
+	// failed and was delivered nowhere: nothing resends it behind the
+	// person's back.
+	sendCopies := func(d *mixedDevice, id string) []outboxRow {
+		var out []outboxRow
+		for _, r := range d.outbox(t) {
+			if r.id == id || r.lid == id {
+				out = append(out, r)
+			}
+		}
+		return out
+	}
+	kept := map[*mixedDevice]string{dave: daveID}
+	if keepsRefused {
+		kept[carol] = carolID
+	} else {
+		copies := sendCopies(carol, carolID)
+		if len(copies) == 0 {
+			t.Errorf("J2: carol's outbox has no copy of her refused send %s", carolID)
+		}
+		for _, r := range copies {
 			t.Logf("J2: carol's send the older release marked failed: copy to %s is %s (%s)", r.recipient, r.state, r.err)
 			if r.state != "failed" {
 				t.Errorf("J2: carol's refused send is %s after her update", r.state)
 			}
 		}
+		if alice.shows(ac, "carol while suspended") {
+			t.Error("J2: the send the older release reported failed was delivered")
+		}
 	}
-	if alice.shows(ac, "carol while suspended") {
-		t.Error("J2: the send the older release reported failed was delivered")
+	for d, id := range kept {
+		var copies []outboxRow
+		waitUntil(t, d.address+"'s kept send receipted", 15*time.Second, func() bool {
+			copies = sendCopies(d, id)
+			for _, r := range copies {
+				if r.state != protocol.StateDelivered {
+					return false
+				}
+			}
+			return len(copies) > 0
+		})
+		for _, r := range copies {
+			t.Logf("J2: %s's send kept while refused: copy to %s is %s", d.address, r.recipient, r.state)
+		}
 	}
 	// Own-device record carriers stay in custody after their device got
 	// them (MIXED-1); nothing else may.
