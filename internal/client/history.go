@@ -213,7 +213,7 @@ func insertCopies(tx *sql.Tx, copies []outCopy) error {
 	for _, c := range copies {
 		data, _ := json.Marshal(c.env)
 		body := ""
-		if c.required == protocol.CapModelSync || c.required == protocol.CapGroup || c.required == protocol.CapReadSync || c.required == protocol.CapOwnSyncV2 || c.required == protocol.CapOwnSyncV3 {
+		if c.required == protocol.CapModelSync || c.required == protocol.CapGroup || c.required == protocol.CapReadSync || c.required == protocol.CapOwnSyncV2 || c.required == protocol.CapOwnSyncV3 || c.required == protocol.CapTopicStateSync {
 			body = c.in.Body
 		} else if c.in.Sub == envelope.SubHistory {
 			var item HistoryItem
@@ -659,11 +659,15 @@ func (a *Agent) historyStep(ctx context.Context) (more bool) {
 	if err != nil || !ok {
 		return false
 	}
+	checked := map[string]bool{}
 	for _, j := range jobs {
 		dev, ok := me.device(j.device)
 		if !ok || dev.Fingerprint() != j.fp {
 			a.store.db.Exec(`UPDATE history_jobs SET state = 'ended', updated_at = ? WHERE device = ?`, time.Now().Unix(), j.device)
 			continue // no longer a device of this person
+		}
+		if !a.ownSyncReader(ctx, dev, "", checked) {
+			continue // suspended until it updates: its job keeps its place
 		}
 		var m bool
 		var active int

@@ -25,11 +25,19 @@ func (a *Agent) syncDeviceHistory() (bool, error) {
 		return false, err
 	}
 	more := false
+	checked := map[string]bool{}
 	for _, dev := range own.roster.Devices {
 		if dev.Address == a.Address {
 			continue
 		}
 		if err = historyRecoveryCurrent(a.store.db, a.Self(), dev); err != nil {
+			continue
+		}
+		// Nothing is sealed for a device that cannot read it now: its job
+		// keeps its cursor until it can (ownSyncReader).
+		if due, e := a.store.deviceHistoryDue(dev); e != nil {
+			return more, e
+		} else if due && !a.ownSyncReader(context.Background(), dev, protocol.CapDeviceHistory, checked) {
 			continue
 		}
 		m, e := a.deviceHistoryPage(dev)

@@ -115,7 +115,6 @@ func (a *Agent) onMembers(data []byte) {
 		a.typingMembershipChanged()
 		return
 	}
-	prev := a.members.view
 	a.members.view = MemberView{Listed: MembersListed, Members: m, At: time.Now(), Current: true}
 	a.members.mu.Unlock()
 	a.keepMemberFacts(m) // before the bump below, so a page reads them
@@ -135,51 +134,19 @@ func (a *Agent) onMembers(data []byte) {
 	a.Logf("hub members: %d listed, %d connected%s", len(m.Members), connected, more)
 	a.typingMembershipChanged()
 	// Presence, persons or capabilities may have changed: look again at
-	// held conversation messages on the stream's worker. Presence, a program
-	// version or a suspension alone is no proof for them (a flapping device
-	// re-checked every held row each time) nor any person step: waiting
-	// messages still look again (a reconnected or updated device may now read
-	// them), and an hour after the last full look any list looks again too.
-	work := convRelease
-	if !prev.Current || !sameMemberFacts(prev.Members, m) || a.convWork.retryStale() {
-		work |= convPersons | convRetry
+	// held conversation messages on the stream's worker. Every list does:
+	// evidence for a held message also arrives through local admissions
+	// that announce nothing (a root or roster sync after linking), and the
+	// Hub no longer re-sends an unchanged list, so this stays bounded; the
+	// look itself resumes from its cursor (heldLook).
+	work := convRelease | convPersons | convRetry
+	if a.convWork.readerWait.Swap(false) {
+		work |= convHistory // own-device history held back for a device's program
 	}
 	a.convWork.due(work)
 	if a.kick != nil {
 		a.kick()
 	}
-}
-
-// sameMemberFacts reports whether two lists say the same authority facts:
-// the same enrolled devices (address, joined), person roster steps (id, seq,
-// hash) and agent hints, and both complete or not. Everything else a list
-// says (presence, a reported version, a suspension) is availability only.
-func sameMemberFacts(a, b protocol.Members) bool {
-	if a.Truncated != b.Truncated || len(a.Members) != len(b.Members) {
-		return false
-	}
-	type fact struct {
-		joined int64
-		person protocol.PersonRef
-		agent  bool
-	}
-	of := func(m protocol.Member) fact {
-		f := fact{joined: m.Joined, agent: m.Agent}
-		if m.Person != nil {
-			f.person = *m.Person
-		}
-		return f
-	}
-	facts := make(map[string]fact, len(a.Members))
-	for _, m := range a.Members {
-		facts[m.Address] = of(m)
-	}
-	for _, m := range b.Members {
-		if f, ok := facts[m.Address]; !ok || f != of(m) {
-			return false
-		}
-	}
-	return true
 }
 
 // keepMemberFacts keeps what the member list says that this device shows
@@ -214,6 +181,45 @@ func (a *Agent) keepMemberFacts(m protocol.Members) {
 			a.Logf("keeping the agent devices: %v", err)
 		}
 	}
+	suspended := []string{}
+	for _, e := range m.Members {
+		if e.Suspended && e.Address != a.Address {
+			suspended = append(suspended, e.Address)
+		}
+	}
+	slices.Sort(suspended)
+	raw, _ = json.Marshal(suspended)
+	if old, _ := a.store.config("suspended_devices"); string(raw) != old && (old != "" || len(suspended) > 0) {
+		if err := a.store.setConfig(map[string]string{"suspended_devices": string(raw)}); err != nil {
+			a.Logf("keeping the suspended devices: %v", err)
+		}
+	}
+}
+
+// SuspendedDevices are the other devices the relay, as last listed,
+// serves nothing until they update AgentNet. Availability only, never
+// authority: nobody waits for them, and their copies never hold anyone
+// else's (a copy each can read goes to the relay's custody; one it cannot
+// waits here, unchecked until the relay lists it current again).
+func (a *Agent) SuspendedDevices() map[string]bool {
+	return a.store.suspendedDevices()
+}
+
+func (s *store) suspendedDevices() map[string]bool {
+	var list []string
+	if v, err := s.config("suspended_devices"); err == nil && v != "" {
+		json.Unmarshal([]byte(v), &list)
+	}
+	out := make(map[string]bool, len(list))
+	for _, address := range list {
+		out[address] = true
+	}
+	return out
+}
+
+// SuspendedText is how a suspended device is named to its senders.
+func SuspendedText(who string) string {
+	return who + " is suspended until it updates AgentNet"
 }
 
 // WorkspaceName is the name the Hub's admin gave this workspace, as last

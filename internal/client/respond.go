@@ -262,10 +262,12 @@ func (a *Agent) NothingRuns(agentID string) string {
 		if r != nil {
 			return ""
 		}
+		// Named exactly where the default agent is set (no PATH lookups:
+		// this runs for every listed request).
 		if chosen, _ := a.ResponderChosen(); chosen {
-			return "you chose to answer by hand here, so no responder runs anything: answer it yourself (agentnet reply ID TEXT), or choose a responder (agentnet responder set)"
+			return "you chose to answer by hand here, so no responder runs anything: answer it yourself (agentnet reply ID TEXT), or set a default agent (" + DefaultAgentFix("") + ")"
 		}
-		return "no responder is chosen here: choose one (agentnet responder set), or answer it yourself (agentnet reply ID TEXT)"
+		return "no responder is chosen here (this computer has no default agent): set one (" + DefaultAgentFix("") + "), or answer it yourself (agentnet reply ID TEXT)"
 	}
 	if _, err := a.ResolveExecutorIn(a.store.db, agentID, r); err != nil {
 		return "the agent it names (" + agentID + ") is not available here: " + err.Error()

@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -401,21 +402,13 @@ func (a *Agent) ChangeChatTopic(ctx context.Context, conv, id, what, title strin
 		}
 		err = a.setTopicTitle(conv, id, title)
 	case "archive":
-		local, err := a.store.topicLocals(conv)
-		if err != nil {
-			return false, err
-		}
-		l := local[id]
-		l.Mark, l.MarkAt, l.MarkCount = "archived", storeNow().Unix(), t.Count
+		count := t.Count
 		for _, m := range msgs {
 			if m.Topic == id && m.TopicEvent != nil {
-				l.MarkCount++
+				count++
 			}
 		}
-		_, err = a.store.db.Exec(`INSERT INTO topic_state(peer,topic,title,mark,mark_at,mark_count,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(peer,topic) DO UPDATE SET mark=excluded.mark,mark_at=excluded.mark_at,mark_count=excluded.mark_count,updated_at=excluded.updated_at`, conv, id, l.Title, l.Mark, l.MarkAt, l.MarkCount, storeNow().Unix())
-		if err == nil {
-			a.NoteChange()
-		}
+		err = a.changeTopicMark(conv, id, protocol.TopicMarkArchived, count)
 	case "delete":
 		err = a.deleteChatTopic(ctx, conv, id, msgs)
 	default:
@@ -451,9 +444,15 @@ func (a *Agent) deleteChatTopic(ctx context.Context, conv, id string, msgs []Con
 			return err
 		}
 	}
-	if id == "" {
-		if _, err = tx.Exec(`UPDATE topic_state SET mark='',mark_at=0,mark_count=0 WHERE peer=? AND topic=?`, mainTopicScope(conv), mainTopicKey); err != nil {
+	cleared := ""
+	if id == "" { // the erasure reaches own devices; so does the cleared Main flow mark
+		if err = tx.QueryRow(`SELECT coalesce(mark,'') FROM topic_state WHERE peer=? AND topic=?`, mainTopicScope(conv), mainTopicKey).Scan(&cleared); err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
+		}
+		if cleared != "" {
+			if _, err = a.setTopicMark(tx, mainTopicScope(conv), mainTopicKey, protocol.TopicMarkNone, 0); err != nil {
+				return err
+			}
 		}
 	}
 	if err = eraseCoveredIn(tx, conv, self); err != nil {
@@ -461,6 +460,9 @@ func (a *Agent) deleteChatTopic(ctx context.Context, conv, id string, msgs []Con
 	}
 	if err = a.store.done(tx.Commit()); err != nil {
 		return err
+	}
+	if cleared != "" {
+		a.topicTitlesChanged()
 	}
 	a.dropErasedFiles(conv)
 	_, err = a.shareErased(ctx)
@@ -668,14 +670,10 @@ func (a *Agent) ChangeChatMainTopic(ctx context.Context, conv, what, title strin
 	if seen > 0 && seen < count {
 		count = seen
 	}
-	mark := "archived"
+	mark := protocol.TopicMarkArchived
 	if what == "reopen" {
 		mark = topicMarkOpen
 	}
-	now := storeNow().Unix()
-	_, err = a.store.db.Exec(`INSERT INTO topic_state(peer,topic,mark,mark_at,mark_count,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(peer,topic) DO UPDATE SET mark=excluded.mark,mark_at=excluded.mark_at,mark_count=excluded.mark_count,updated_at=excluded.updated_at`, scope, mainTopicKey, mark, now, count, now)
-	if err == nil {
-		a.NoteChange()
-	}
+	err = a.changeTopicMark(scope, mainTopicKey, mark, count)
 	return count == len(main), err
 }

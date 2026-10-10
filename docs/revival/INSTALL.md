@@ -512,14 +512,20 @@ From v0.8.17 an upgraded relay recommends its own release to every client
 by itself and, after the grace period, suspends devices still on an older
 version (see "Latest only" below). Recommending a newer client release than
 the relay runs is a separate admin action, run from an enrolled admin
-device. It is a notice only: it suspends nobody.
+device. It suspends nobody, but member devices install it (below).
 
 ```bash
 agentnet admin release show
 agentnet admin release set --url https://github.com/misunders2d/agentnet/releases/tag/v0.8.17 v0.8.17
 ```
 
-That names the release only. It installs nothing on the relay or clients.
+That names the release only: it installs nothing on the relay. Member
+daemons (and AgentNet apps) whose release build is older and whose
+automatic update is on, the default, install it by themselves once no job
+runs, from the project's GitHub release only, checked against that
+release's SHA256SUMS; a person turns this off for their home with `agentnet
+update --auto off`. Name only a release published for every platform your
+members run.
 
 ### Standalone command-line program
 
@@ -601,17 +607,29 @@ ADDRESS` to take it back. Do not grant it to a computer that runs agents.
 **Recommending a client version.** A Hub admin runs `agentnet admin release
 set --url https://… [--note TEXT] VERSION` (or `show`, `clear`). Running
 daemons get it on their open connection at once, others when they next
-connect; nothing polls. Each member whose build differs gets one
-content-free desktop notice per recommendation, each Claude Code or Codex
-session with AgentNet hooks one line (version, the admin's URL, `agentnet
-help update`, and to ask the person unless already authorized), and
-`agentnet version` (on stderr) and `agentnet doctor` show it. Versions are
-compared only for being equal, never ordered. Re-setting the same version
-and URL announces nothing new. It is advice only: receiving a
-recommendation downloads and installs nothing. The person, or an agent with
-their authorization, uses the update path matching the installation: desktop
-app controls/package, standalone CLI updater, or separate relay deployment.
-The note is shown to people, not to models.
+connect; nothing polls. A recommendation counts for a member only when it
+names a release newer than the release build they run (never an older one,
+never for a development build). Each such member gets one content-free
+desktop notice per recommendation, each Claude Code or Codex session with
+AgentNet hooks one line (version, the admin's URL, `agentnet help update`,
+and whether automatic update installs it), and `agentnet version` (on
+stderr) and `agentnet doctor` show it. Re-setting the same version and URL
+announces nothing new.
+
+**A recommendation is installed.** Each member daemon with automatic update
+on (the default) installs a recommended release newer than its release
+build by itself, once no job runs: a standalone daemon replaces its program
+file and then switches to it; a home an AgentNet app manages updates the
+whole app. The Hub names only the version: the file comes only from the
+project's fixed GitHub release origin, checked against that release's
+SHA256SUMS, so a tag with no published file for a platform fails there and
+is tried again only at a later release event, refusal or daemon start. A
+person opts their home out with `agentnet update --auto off` (`agentnet help
+update`, "Automatic updates"). With it off, the person, or an agent with
+their authorization, uses the update path matching the installation:
+desktop app controls/package, standalone CLI updater, or separate relay
+deployment. A recommendation never suspends anyone. The note is shown to
+people, not to models.
 
 **Latest only (v0.8.17).** A Hub that runs a release (`vX.Y.Z`) recommends
 its own release by itself, so the recommendation never goes stale, or the
@@ -623,8 +641,15 @@ whether it is suspended. A device older than the Hub's own release keeps
 working for the grace period (`--update-grace`, env `AGENTNET_UPDATE_GRACE`,
 default 30 minutes, `0` for none) after this Hub first ran a release newer
 than the device's; then it is suspended until it updates. It may still
-finish what it was asked before: acknowledge what it received, look up the
-asker, and send answers and task results. Its other requests get HTTP 426
+finish what it was asked before: acknowledge what it received, make the
+read-only lookups an answer needs first (the asker's directory entry,
+sessions and profile, and the conversation members' person chains), upload
+the files an answer or result carries, and send answers and task results.
+With automatic update on, it installs the Hub's own release then (not a
+newer recommendation, which follows once it is served again); sends that a
+program before v0.8.17 marked failed only because of this refusal are
+queued again when the updated daemon starts (a browser page: when the
+updated page loads). Its other requests get HTTP 426
 `update_required` naming the Hub's release, and its connection gets the
 `release` and `update_required` events and then pings only. Messages to it
 wait on the Hub (custody) and are delivered once it connects again,

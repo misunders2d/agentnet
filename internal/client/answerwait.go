@@ -47,11 +47,14 @@ type AwaitedAnswer struct {
 }
 
 // ReplyWait is how a wait ended: with the answer, with a host status that
-// means no answer comes soon (Stopped), or at the deadline (TimedOut).
+// means no answer comes soon (Stopped), with the host suspended by the
+// relay until it updates AgentNet (Suspended: its address; the request
+// waits for it there), or at the deadline (TimedOut).
 type ReplyWait struct {
-	Answer   *AwaitedAnswer
-	Stopped  *ExecView
-	TimedOut bool
+	Answer    *AwaitedAnswer
+	Stopped   *ExecView
+	Suspended string
+	TimedOut  bool
 }
 
 // waitStops are the host statuses after which no answer comes soon: a task
@@ -66,8 +69,8 @@ var waitStops = map[string]bool{"awaiting": true, "needs_human": true, "not_run"
 // at the store, then blocks on a wake, the deadline or ctx, so no change is
 // missed and nothing polls. ErrDaemonNotRunning when no daemon listens.
 func (a *Agent) AwaitReply(ctx context.Context, id string, wait time.Duration, onStatus func(ExecView)) (ReplyWait, error) {
-	var to, conv, lid string
-	err := a.store.db.QueryRow(`SELECT recipient, coalesce(conv, ''), coalesce(lid, '') FROM outbox WHERE id = ? AND ref_id IS NULL AND coalesce(sub, '') = ''`, id).Scan(&to, &conv, &lid)
+	var to, conv, lid, host string
+	err := a.store.db.QueryRow(`SELECT recipient, coalesce(conv, ''), coalesce(lid, ''), coalesce(json_extract(target, '$.address'), '') FROM outbox WHERE id = ? AND ref_id IS NULL AND coalesce(sub, '') = ''`, id).Scan(&to, &conv, &lid, &host)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ReplyWait{}, ErrNoMessage
 	}
@@ -108,6 +111,15 @@ func (a *Agent) AwaitReply(ctx context.Context, id string, wait time.Duration, o
 			return ReplyWait{Answer: answer}, true, err
 		}
 		if status == nil {
+			// Nobody waits for a device the relay serves nothing until it
+			// updates: the request waits for it there, and its answer still
+			// lands where it always does.
+			if conv == "" {
+				host = targetAddress(to)
+			}
+			if host != "" && a.store.suspendedDevices()[host] {
+				return ReplyWait{Suspended: host}, true, nil
+			}
 			return ReplyWait{}, false, nil
 		}
 		if key := status.State + "\x00" + status.Detail; !told[key] {

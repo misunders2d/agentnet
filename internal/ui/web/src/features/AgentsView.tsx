@@ -19,6 +19,7 @@ import { AgentSheet, type AgentSetup } from "./AgentsView.forms";
 import { AgentChatButton, OwnAgentChats } from "./AgentChat";
 import { AgentModelReport } from "./AgentModelReport";
 import { AssistantSetup } from "./AssistantSetup";
+import { DefaultAgentChoice } from "./DefaultAgent";
 import { latestThreads, Permissions, useGrants, warmGrants } from "./AgentsView.grants";
 import { eventKind } from "./Message.model";
 
@@ -57,7 +58,9 @@ function useAgentData(o: T.Overview | null) {
     store.api.agents().then((v) => alive && setCatalog({ v }), (e) => alive && setCatalog({ error: errorText(e) }));
     return () => { alive = false; };
   }, [seq, browser]);
-  return { browser, responder, catalog };
+  // After the default agent is changed here: its own view, read again.
+  const rereadResponder = () => { store.api.responder().then((v) => setResponder({ v }), (e) => setResponder({ error: errorText(e) })); };
+  return { browser, responder, catalog, rereadResponder };
 }
 
 export function AgentsView() {
@@ -74,7 +77,7 @@ export function AgentsView() {
       </header>
 
       <Section title="Your agents">
-        {data.browser ? <BrowserNote /> : <MyAgent o={o} r={data.responder} />}
+        {data.browser ? <BrowserNote /> : <MyAgent o={o} r={data.responder} onSaved={data.rereadResponder} />}
         {!data.browser && <NamedAgents o={o} catalog={data.catalog} />}
         <OwnAgentChats overview={o} includeLocal={false} />
       </Section>
@@ -99,9 +102,10 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 
 // ---- this computer's agent ----------------------------------------------------
 
-function MyAgent({ o, r }: { o: T.Overview; r: Load<T.ResponderView> }) {
+function MyAgent({ o, r, onSaved }: { o: T.Overview; r: Load<T.ResponderView>; onSaved: () => void }) {
   const store = useApp();
   const v = r.v;
+  const [editing, setEditing] = useState(false);
   const harness = v?.harness || o.me.responder;
   const state: "ready" | "problem" | "manual" | "unset" | "loading" = !v ? (r.error ? "problem" : "loading")
     : !v.chosen ? "unset" : v.manual ? "manual" : v.ready ? "ready" : "problem";
@@ -142,10 +146,20 @@ function MyAgent({ o, r }: { o: T.Overview; r: Load<T.ResponderView> }) {
       )}
       <div className="mt-3 flex flex-wrap gap-2">
         <AgentChatButton target={{host:o.me.address,label:"Your agent",local:true,unavailable:state === "ready" ? undefined : "Choose a ready program in Settings first"}} />
-        <Button variant={state === "unset" || state === "problem" ? "act" : "outline"} size="sm" icon={<IconSettings size={18} />} onClick={() => store.showTab("settings", "assistant")}>
-          {state === "unset" ? "Set it up in Settings" : "Change in Settings"}
-        </Button>
+        {v ? !editing && (
+          // Changed right here: the same setting as Settings → Your agent.
+          <Button variant={state === "unset" || state === "problem" ? "act" : "outline"} size="sm" icon={<IconSettings size={18} />} onClick={() => setEditing(true)}>
+            {state === "unset" ? "Choose a default agent" : "Change default agent"}
+          </Button>
+        ) : (
+          <Button variant="outline" size="sm" icon={<IconSettings size={18} />} onClick={() => store.showTab("settings", "assistant")}>Open in Settings</Button>
+        )}
       </div>
+      {v && editing && (
+        <div className="mt-3 border-t border-hairline pt-3">
+          <DefaultAgentChoice view={v} inline saved={() => { setEditing(false); onSaved(); }} onCancel={() => setEditing(false)} />
+        </div>
+      )}
     </article>
   );
 }

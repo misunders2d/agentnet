@@ -18,15 +18,21 @@ func deliveryRank(state string) int {
 }
 
 // deliveryOf takes each other person's best copy, then the worst person.
-// Own devices count only when there are no copies to another person.
+// Own devices count only when there are no copies to another person, and a
+// device the relay suspended until it updates AgentNet only when no counted
+// device is current: one outdated device never makes a message read as
+// undelivered to everyone (its own copy still says where it is).
 func deliveryOf(copies []ConvCopy) string {
-	others := false
+	others, current := false, false
 	for _, c := range copies {
 		others = others || !c.Own
 	}
+	for _, c := range copies {
+		current = current || !(others && c.Own) && !c.Suspended
+	}
 	people := map[string]string{}
 	for _, c := range copies {
-		if others && c.Own {
+		if others && c.Own || current && c.Suspended {
 			continue
 		}
 		key := c.Person

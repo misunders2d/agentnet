@@ -87,5 +87,5 @@ await caps(p);await a.post({...rec,state:'queued'});check((await a.store.get('ou
 check((await a.store.get('outbox',rec.id)).envelope===raw,'capability retry preserves exact signature and ciphertext');
 if(typeof window!=='undefined'){p.store.close();p.store=await openIDB(p.fixtureStoreName);}
 const restarted=new Engine({store:p.store,base:p.base,fetch});Object.assign(restarted,{keys:p.keys,address:p.address,pub:p.pub,fp:p.fp,me:p.me,connected:false});check((await restarted.modelReports()).find(r=>!r.agent_id&&r.host_key===a.fp).model==='new model','private model snapshot survives restart');
-check(wire.MaxAdvertisedCaps===21,'mdl1 and org1 fit native advertisement bound');
+check(wire.MaxAdvertisedCaps===22,'mdl1, org1 and tss1 fit native advertisement bound');
 const result={ok:true,checks};if(typeof window!=='undefined')window.modelSyncResult=result;console.log(JSON.stringify(result));

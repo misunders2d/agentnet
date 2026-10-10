@@ -25,11 +25,13 @@ func releaseHub(t *testing.T, dir, build string, grace, heartbeat time.Duration)
 }
 
 // callAs is m.call from a client that reports version ("": none, as
-// programs before v0.8.17).
+// programs before v0.8.17); a []byte body is sent as it is.
 func (m member) callAs(t *testing.T, h *Hub, version, method, path string, in any) (int, []byte) {
 	t.Helper()
 	var body []byte
-	if in != nil {
+	if b, ok := in.([]byte); ok {
+		body = b
+	} else if in != nil {
 		body, _ = json.Marshal(in)
 	}
 	r := signed(t, m.id, m.addr, method, path, body)
@@ -424,10 +426,12 @@ func sealKind(t *testing.T, from, to member, kind string) envelope.Envelope {
 
 // A suspended device may still finish what was admitted before it was
 // suspended, as programs before v0.8.17 do it: acknowledge what it has
-// received, look up the asker first (directory entry, sessions, profile)
-// and post its answers and results, which wait in custody. Nothing new
-// starts: any other message (a question, a task, a message) is refused with
-// 426 and not stored, and so is a typing signal.
+// received, look up the asker first (directory entry, sessions, profile,
+// and the person's chain a conversation reply refreshes), upload the files
+// a result carries, and post its answers and results, which wait in
+// custody. Nothing new starts: any other message (a question, a task, a
+// message) is refused with 426 and not stored, and so is a typing signal;
+// nor does it download a file.
 func TestSuspendedDeviceDrainsAdmittedWork(t *testing.T) {
 	h := releaseHub(t, filepath.Join(t.TempDir(), "hub"), "v1.2.0", -1, 0)
 	defer h.Close()
@@ -440,10 +444,53 @@ func TestSuspendedDeviceDrainsAdmittedWork(t *testing.T) {
 	if _, _, s, err := h.store.messageState(received, bob.addr); err != nil || s != protocol.StateDelivered {
 		t.Errorf("acknowledged message: %s %v", s, err)
 	}
-	for _, path := range []string{"/v1/agents/bob/x", "/v1/agents/bob/x/sessions", "/v1/agents/bob/x/profile"} {
+	roster := firstRoster(bob, "Bob")
+	if c, b := bob.callAs(t, h, "v1.2.0", "PUT", "/v1/person", roster); c != http.StatusNoContent {
+		t.Fatalf("publish bob's person: %d %s", c, b)
+	}
+	for _, path := range []string{"/v1/agents/bob/x", "/v1/agents/bob/x/sessions", "/v1/agents/bob/x/profile", "/v1/persons/" + roster.Person + "/chain?after=-1"} {
 		if c, b := alice.callAs(t, h, old, "GET", path, nil); c != http.StatusOK {
 			t.Errorf("lookup %s while suspended: %d %s", path, c, b)
 		}
+	}
+	// A result's file: reserve, the upload's state, the chunk, complete,
+	// then the result that refers to it.
+	data := []byte("result file ciphertext")
+	blob := protocol.NewID()
+	for _, step := range []struct {
+		method, path string
+		in           any
+	}{
+		{"POST", "/v1/blobs", protocol.BlobReserve{ID: blob, Recipient: bob.addr, Size: int64(len(data)), SHA256: digest(data)}},
+		{"GET", "/v1/blobs/" + blob, nil},
+		{"PUT", "/v1/blobs/" + blob + "?offset=0", data},
+		{"POST", "/v1/blobs/" + blob + "/complete", nil},
+	} {
+		if c, b := alice.callAs(t, h, old, step.method, step.path, step.in); c != http.StatusOK {
+			t.Fatalf("upload %s %s while suspended: %d %s", step.method, step.path, c, b)
+		}
+	}
+	r, _ := bob.id.Public(bob.addr).Recipient()
+	withFile, err := envelope.Seal(envelope.Inner{ID: protocol.NewID(), From: alice.addr, To: bob.addr, TS: time.Now().Unix(), Kind: envelope.KindResult, Body: "done", ReplyTo: protocol.NewID(),
+		Attachments: []envelope.Attachment{{Blob: envelope.Blob{ID: blob, Size: int64(len(data)), SHA256: digest(data)}, Name: "out.txt", SHA256: digest(nil)}}}, alice.id.Sign, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c, b := alice.callAs(t, h, old, "POST", "/v1/messages", withFile); c != http.StatusAccepted {
+		t.Errorf("a result with a file from the suspended device: %d %s", c, b)
+	}
+	if c, b := bob.callAs(t, h, "v1.2.0", "GET", "/v1/blobs/"+blob+"/data", nil); c != http.StatusOK || string(b) != string(data) {
+		t.Errorf("the recipient's download of the drained result's file: %d %q", c, b)
+	}
+	// A download is not draining work: refused.
+	forAlice := protocol.NewID()
+	bob.callAs(t, h, "v1.2.0", "POST", "/v1/blobs", protocol.BlobReserve{ID: forAlice, Recipient: alice.addr, Size: int64(len(data)), SHA256: digest(data)})
+	bob.callAs(t, h, "v1.2.0", "PUT", "/v1/blobs/"+forAlice+"?offset=0", data)
+	if c, b := bob.callAs(t, h, "v1.2.0", "POST", "/v1/blobs/"+forAlice+"/complete", nil); c != http.StatusOK {
+		t.Fatalf("complete for alice: %d %s", c, b)
+	}
+	if c, b := alice.callAs(t, h, old, "GET", "/v1/blobs/"+forAlice+"/data", nil); c != http.StatusUpgradeRequired {
+		t.Errorf("a download by the suspended device: %d %s", c, b)
 	}
 	for _, kind := range []string{envelope.KindAnswer, envelope.KindResult, envelope.KindMessage, envelope.KindQuestion, envelope.KindTask} {
 		drains := kind == envelope.KindAnswer || kind == envelope.KindResult

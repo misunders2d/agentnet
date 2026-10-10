@@ -92,6 +92,9 @@ func (a *Agent) admitDriveControl(ctx context.Context, env envelope.Envelope, in
 		}
 		return insertCopies(tx, forward)
 	})
+	if e == nil && res == admitConflict { // stored nowhere: held, so it has a receipt (MIXED-1)
+		return a.store.holdAs(env, reasonDuplicate)
+	}
 	if e == nil && res == admitted {
 		a.NoteChange()
 		if len(forward) > 0 {

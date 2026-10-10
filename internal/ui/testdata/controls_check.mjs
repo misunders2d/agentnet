@@ -712,7 +712,9 @@ async function makeWorld() {
   const other = await tryAdmit(control(wire.SubRevision, JSON.stringify({ rev: 1, text: "hijack" }), fpP, "4".repeat(32)));
   check(other.reason === "invalid" && heldDiagnosticCode(other.message) === "control_target_person_mismatch", "an edit of another person's removed device's message is refused with its code: " + other.reason + " " + other.message);
   const unknown = await tryAdmit(control(wire.SubRetraction, "{}", "00000000-11111111-22222222-33333333", "3".repeat(32)));
-  check(unknown.reason === "invalid" && heldDiagnosticCode(unknown.message) !== "control_target_person_mismatch", "an unknown key is not called another person's: " + unknown.reason + " " + unknown.message);
+  // As client controlAuthorized: a key no member's (yet) waits for the roster
+  // step that adds it, with its own code; it is never called another person's.
+  check(unknown.reason === "proof_pending" && heldDiagnosticCode(unknown.message) === "control_target_unknown_key", "an unknown key waits, with its code: " + unknown.reason + " " + unknown.message);
 }
 
 if (failed) process.exit(1);

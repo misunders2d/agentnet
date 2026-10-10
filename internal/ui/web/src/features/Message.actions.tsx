@@ -304,6 +304,7 @@ export function DetailsSheet({ open, onOpenChange, m, ctx, who }: { open: boolea
                   <span className="min-w-0 flex-1">
                     <span className="block font-semibold">{capital(c.own?"your "+deviceName(c.to):(c.person||"Someone")+"’s "+deviceName(c.to))}</span>
                     <span className="block text-[13px] text-text-2">{c.delivery_uncertain ? "Delivery unconfirmed" : copyText(c.state)}</span>
+                    {c.suspended && c.state !== "delivered" && <span className="block text-[13px] text-approval-ink" data-suspended>{capital(c.own ? "your " + deviceName(c.to) : (c.person || "Someone") + "’s " + deviceName(c.to))} is suspended until it updates AgentNet</span>}
                     {c.detail && <span className="block text-[13px] text-muted [overflow-wrap:anywhere]">{c.detail}</span>}
                   </span>
                 </li>

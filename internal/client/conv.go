@@ -60,6 +60,10 @@ type convWork struct {
 	lookLoaded      bool     // look was read from the store (mu)
 	historyDeferred map[string]historyDeferredScan
 	retried         atomic.Int64 // unix time the last full look at held messages began
+	// readerWait: own-device history produced nothing for a device that
+	// cannot read it now (or is suspended); the next member list, which
+	// says when that device reconnects or updates, looks again.
+	readerWait atomic.Bool
 }
 
 func (w *convWork) due(b uint32) { w.bits.Or(b) }
@@ -116,14 +120,6 @@ func (a *Agent) heldEvidence() {
 		l.Again = true
 		a.setHeldLook(l)
 	}
-}
-
-// heldRecheckAfter bounds how long held messages wait for a look when only
-// presence changes: evidence this device cannot see as an event still counts.
-const heldRecheckAfter = time.Hour
-
-func (w *convWork) retryStale() bool {
-	return time.Since(time.Unix(w.retried.Load(), 0)) >= heldRecheckAfter
 }
 
 // convSync does the conversation upkeep that is due. It makes no request
@@ -205,6 +201,11 @@ func (a *Agent) convSync(ctx context.Context) {
 			a.Logf("copying topic titles: %v", titleErr)
 			a.convWork.due(convHistory)
 		}
+		marks, markErr := a.syncTopicMarks()
+		if markErr != nil {
+			a.Logf("copying topic marks: %v", markErr)
+			a.convWork.due(convHistory)
+		}
 		models, modelErr := a.syncModelReports()
 		if modelErr != nil {
 			a.Logf("copying model reports: %v", modelErr)
@@ -215,7 +216,7 @@ func (a *Agent) convSync(ctx context.Context) {
 		if directErr != nil {
 			a.Logf("copying direct history: %v", directErr)
 		}
-		if roots || reads || invites || titles || models || more || direct {
+		if roots || reads || invites || titles || marks || models || more || direct {
 			a.convWork.due(convHistory) // one page per sync; the next follows at once
 			a.kickNow()
 		}
@@ -241,7 +242,7 @@ func (a *Agent) relayFeatures(ctx context.Context) ([]string, error) {
 // hint (advertisedCaps) it is at most protocol.MaxAdvertisedCaps long;
 // rm1 (protocol.CapRoom) says this program enforces every room reader rule
 // (ROOM_V1 §2.1), so what rm1 implies (rcv1 among them) is not listed.
-var ownCaps = []string{protocol.CapContinuation, protocol.CapRootSync, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapRequestFollowup, protocol.CapGroupInvitationControl, protocol.CapHeadless, protocol.CapGroupHumanParticipation, protocol.CapModelSync, protocol.CapNotify, protocol.CapTopicOrganization, protocol.CapOwnSyncV2, protocol.CapOwnSyncV3, protocol.CapPerson, protocol.CapReadSync, protocol.CapRoom, protocol.CapSendGroup, protocol.CapTopicParticipation, protocol.CapTyping} // apx1 and aid1 are already implied by rm1; preserve the 21-cap advertisement bound including agent1
+var ownCaps = []string{protocol.CapContinuation, protocol.CapRootSync, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapRequestFollowup, protocol.CapGroupInvitationControl, protocol.CapHeadless, protocol.CapGroupHumanParticipation, protocol.CapModelSync, protocol.CapNotify, protocol.CapTopicOrganization, protocol.CapOwnSyncV2, protocol.CapOwnSyncV3, protocol.CapPerson, protocol.CapReadSync, protocol.CapRoom, protocol.CapSendGroup, protocol.CapTopicParticipation, protocol.CapTopicStateSync, protocol.CapTyping} // apx1 and aid1 are already implied by rm1; preserve the 22-cap advertisement bound including agent1
 
 // capsPublisher is the one publisher of this run's capability records:
 // the daemon's and link.go's waiting session share the session id, and the
@@ -531,12 +532,20 @@ type ConvCopy struct {
 	DeliveryUncertain bool   `json:"delivery_uncertain,omitempty"`
 	Person            string `json:"person,omitempty"`
 	Own               bool   `json:"own,omitempty"` // in a conversation's view: to another device of this person
+	// Suspended: the relay, as last listed, serves this device nothing until
+	// it updates AgentNet. Its copy never decides the message's delivery.
+	Suspended bool `json:"suspended,omitempty"`
+	// NotSent: nothing was sealed for this device, as its key cannot be
+	// used here (Detail says why; State is not_delivered). It is no copy:
+	// nothing is sent or retried, and ID is only this record's.
+	NotSent bool `json:"not_sent,omitempty"`
 }
 
 // SentCopies lists the copies this device sent of the conversation message
 // with logical id lid, as stored (none: no such message sent here).
 func (a *Agent) SentCopies(lid string) ([]ConvCopy, error) {
 	own := a.ownDevices() // before the rows: the store has one connection
+	suspended := a.store.suspendedDevices()
 	rows, err := a.store.db.Query(`SELECT id, recipient, state, coalesce(error, ''),send_stopped,send_stopped=1 AND state='not_delivered' AND coalesce(handover_started,1)=1 FROM outbox WHERE lid = ? AND conv IS NOT NULL ORDER BY rowid`, lid)
 	if err != nil {
 		return nil, err
@@ -548,10 +557,22 @@ func (a *Agent) SentCopies(lid string) ([]ConvCopy, error) {
 		if err := rows.Scan(&c.ID, &c.To, &c.State, &c.Detail, &c.SendStopped, &c.DeliveryUncertain); err != nil {
 			return nil, err
 		}
+		c.Own, c.Suspended = own[c.To], suspended[c.To]
+		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	skipped, err := a.store.skippedCopies("", lid)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range skipped[lid] {
 		c.Own = own[c.To]
 		out = append(out, c)
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // outCopy is one device's copy being stored.
@@ -1064,79 +1085,44 @@ func (a *Agent) releaseConv(ctx context.Context, feats []string) {
 	}
 	checked := map[string]bool{}
 	refreshed := map[string]error{} // each recipient's person, read fresh once per pass
+	suspended := a.store.suspendedDevices()
 	for id, w := range waiting {
 		to := w.to
-		progress := w.status == envelope.StatusProgress
-		item, assistant := historyAssistant(w.body, w.conv) // as delivery decides it: agr1 besides the copy's own requirement
-		// rm1 besides the copy's own requirement, for a room shape (ROOM_V1 §2.5)
-		room, err := roomCopy(a.store.db, w.conv, w.sub, w.body, w.humanRaw)
+		if suspended[to] {
+			// The relay serves that device nothing until it updates: no
+			// profile is read for it on every push. The list naming it
+			// current again releases what it can read then.
+			continue
+		}
+		// What deliver will need of the reader: the one list both decide by
+		// (copyneeds.go), so nothing released is parked again at handover.
+		n, err := copyNeedsOf(a.store.db, id, w.v)
 		if err != nil {
 			a.Logf("conversation message %s: %v", id, err)
 			continue
 		}
-		topicScoped, err := topicCopy(a.store.db, w.conv, w.pid, w.sub, w.body, w.humanRaw)
-		if err != nil {
-			continue
-		}
-		proposalCap, err := proposalCopyNeedsCapability(a.store.db, id)
-		if err != nil {
-			continue
-		}
-		cacheKey := to + "\x00" + w.sub + "\x00" + w.required + "\x00" + w.status + "\x00" + w.agentID + "\x00" + w.conv + "\x00" + w.pid + "\x00" + item.PID + "\x00" + item.AgentID
-		if proposalCap {
-			cacheKey += "\x00proposal-choice"
-		}
-		if w.sub == envelope.SubHistory {
-			var h HistoryItem
-			if json.Unmarshal([]byte(w.body), &h) == nil && h.GroupHistory != nil {
-				cacheKey += "\x00own2"
-			}
-		}
-		if w.human {
-			cacheKey += "\x00human"
-		}
-		if topicScoped {
-			cacheKey += "\x00topic"
-		}
-		if room {
-			cacheKey += "\x00room"
-		}
+		cacheKey := n.cacheKey(to)
 		ok, seen := checked[cacheKey]
 		if !seen {
 			key, _, found, err := a.store.peer(to)
 			switch {
 			case err != nil || !found:
-			case proposalCap && w.conv == "":
-				ok = a.requireParticipationCaps(ctx, key, protocol.CapOwnSyncV3) == nil && (w.required == "" || a.requireParticipationCaps(ctx, key, w.required) == nil)
-			case w.required == protocol.CapModelSync || w.required == protocol.CapReadSync || w.required == protocol.CapOwnSyncV2 || w.required == protocol.CapOwnSyncV3:
-				ok = a.requireParticipationCaps(ctx, key, w.required) == nil
-			case w.required == protocol.CapAgentReaction && w.conv == "":
-				// A device thread's assistant reaction: no person gate either.
-				ok = a.requireParticipationCaps(ctx, key, w.required) == nil && a.assistantReactionCaps(ctx, key, "", "", w.agentID) == nil
-			case w.required == protocol.CapProgress:
-				// Version 1 progress: delivery has no person gate, only the
-				// signed capability that marks it as an update (and a named
-				// executor's identity capability).
-				ok = a.requireParticipationCaps(ctx, key, w.required) == nil &&
-					(w.agentID == "" || a.requireParticipationCaps(ctx, key, protocol.CapAgentIdentity) == nil)
+			// Own-device records and a device thread's copies (its assistant
+			// reactions, version 1 progress, deletions) have no person gate:
+			// only what the reader's signed capabilities read.
+			case w.conv == "",
+				w.required == protocol.CapModelSync || w.required == protocol.CapReadSync || w.required == protocol.CapOwnSyncV2 || w.required == protocol.CapOwnSyncV3 || w.required == protocol.CapTopicStateSync,
+				w.required == protocol.CapProgress:
+				ok = a.readerCheck(ctx, to, key, n) == nil
 			default:
 				ok, _, _ = a.convSupport(ctx, to, key, feats)
 				if ok && w.sub == envelope.SubDriveSpace {
 					ok, _ = a.capSupport(ctx, to, key, feats, protocol.CapDriveSpace)
 				}
-				if ok && w.required != "" {
-					ok = a.requireParticipationCaps(ctx, key, w.required) == nil
+				if ok {
+					ok = a.readerCheck(ctx, to, key, n) == nil
 				}
-				if ok && progress {
-					ok = a.requireParticipationCaps(ctx, key, protocol.CapProgress) == nil
-				}
-				if ok && w.required == protocol.CapAgentReaction {
-					ok = a.assistantReactionCaps(ctx, key, w.conv, w.pid, w.agentID) == nil
-				}
-				if ok && w.required == protocol.CapAgentReaction && w.human { // to a captured audience: as a human-audience turn
-					ok = a.requireParticipationCaps(ctx, key, protocol.CapHumanParticipation) == nil
-				}
-				if ok && room && (w.human || w.pid != "") {
+				if ok && n.room && (w.human || w.pid != "") { // a guest's group copy, as groupGuestDeliveryGate hands it over
 					if members, e := a.dmMembers(w.conv); e == nil && members.group != nil {
 						guest := w.human
 						if !guest {
@@ -1149,16 +1135,6 @@ func (a *Agent) releaseConv(ctx context.Context, feats []string) {
 						}
 					}
 				}
-				if ok && topicScoped {
-					ok = a.requireParticipationCaps(ctx, key, protocol.CapTopicParticipation) == nil
-				}
-				if ok && room && w.required != protocol.CapRoom {
-					ok = a.requireParticipationCaps(ctx, key, protocol.CapRoom) == nil
-				}
-				if ok && w.sub == envelope.SubHistory && assistant {
-					ok = (w.required == protocol.CapAgentReaction || a.requireParticipationCaps(ctx, key, protocol.CapAgentReaction) == nil) &&
-						a.assistantReactionCaps(ctx, key, w.conv, item.PID, item.AgentID) == nil
-				}
 				// Support alone is not enough: the roster pinned when the copy
 				// was made may list a device its person removed since (the Hub
 				// revokes only linked devices, so an invite-joined one still
@@ -1169,14 +1145,6 @@ func (a *Agent) releaseConv(ctx context.Context, feats []string) {
 					ok = a.refreshRecipientPerson(ctx, to, refreshed) == nil
 				}
 				ok = ok && a.personSendable(to, "")
-			}
-			if ok && w.sub == envelope.SubHistory {
-				var h HistoryItem
-				if json.Unmarshal([]byte(w.body), &h) != nil {
-					ok = false
-				} else if h.GroupHistory != nil {
-					ok = a.requireParticipationCaps(ctx, key, protocol.CapOwnSyncV2) == nil
-				}
 			}
 			checked[cacheKey] = ok
 		}
@@ -1316,11 +1284,14 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 	if in.Sub == envelope.SubTopicSync {
 		return a.admitTopicSync(ctx, env, in, sender, fromQuarantine, hold)
 	}
+	if in.Sub == envelope.SubTopicStateSync {
+		return a.admitTopicStateSync(ctx, env, in, sender, fromQuarantine, hold)
+	}
 	if in.Sub == envelope.SubDeviceHistory {
 		return a.admitDeviceHistory(ctx, env, in, sender, fromQuarantine, hold)
 	}
 	if in.Sub == envelope.SubDeviceFile {
-		return a.admitDeviceFile(ctx, env, in, sender, hold)
+		return a.admitDeviceFile(ctx, env, in, sender, fromQuarantine, hold)
 	}
 	if in.Sub == envelope.SubInvitationSync {
 		return a.admitInvitationSync(ctx, env, in, sender, fromQuarantine, hold)
@@ -1436,7 +1407,7 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 	case envelope.SubHistory:
 		return a.admitHistory(ctx, env, in, root, hold, fromQuarantine)
 	case envelope.SubFile:
-		return a.admitFile(env, in, hold)
+		return a.admitFile(env, in, fromQuarantine, hold)
 	case envelope.SubDriveSpace: // the conversation's Drive space record (drivespace_wire.go): applied under the sender's person, stored quietly
 		return a.admitDriveControl(ctx, env, in, sender, fromQuarantine)
 	}

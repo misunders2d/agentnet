@@ -26,8 +26,9 @@ import (
 // is active again unless the new message itself makes it done. Archiving
 // hides a topic from the overview only: nothing is ever deleted by it.
 //
-// Private names sync between the person's current human devices. Legacy
-// Mark done/Reopen remain local; they never grant permission to run work.
+// Private names (topicsync.go) and marks (Mark done, Reopen, Archive:
+// topicstatesync.go) sync between the person's current human devices; they
+// never grant permission to run work.
 // The derived states are the same on every device that holds the same
 // messages. The browser device (engine.mjs) derives exactly the same.
 
@@ -700,8 +701,15 @@ func (a *Agent) setTopic(peer, id string, change func(l *topicLocal, count int),
 			return err
 		}
 	}
+	if !rename { // a mark follows the person's other human devices (topicstatesync.go)
+		if l.MarkAt, err = a.setTopicMark(tx, peer, id, l.Mark, l.MarkCount); err != nil {
+			return err
+		}
+	}
+	// A rename keeps a mark that arrived meanwhile, as a mark keeps a name.
 	if _, err := tx.Exec(`INSERT INTO topic_state(peer, topic, title, mark, mark_at, mark_count, updated_at) VALUES(?, ?, nullif(?, ''), nullif(?, ''), nullif(?, 0), nullif(?, 0), ?)
-		ON CONFLICT(peer, topic) DO UPDATE SET title = CASE WHEN ? THEN excluded.title ELSE topic_state.title END, mark = excluded.mark, mark_at = excluded.mark_at, mark_count = excluded.mark_count, updated_at = excluded.updated_at`,
+		ON CONFLICT(peer, topic) DO UPDATE SET title = CASE WHEN ?8 THEN excluded.title ELSE topic_state.title END, mark = CASE WHEN ?8 THEN topic_state.mark ELSE excluded.mark END,
+		mark_at = CASE WHEN ?8 THEN topic_state.mark_at ELSE excluded.mark_at END, mark_count = CASE WHEN ?8 THEN topic_state.mark_count ELSE excluded.mark_count END, updated_at = excluded.updated_at`,
 		peer, id, l.Title, l.Mark, l.MarkAt, l.MarkCount, storeNow().Unix(), rename); err != nil {
 		return err
 	}

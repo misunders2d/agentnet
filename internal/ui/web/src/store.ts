@@ -59,6 +59,7 @@ export interface State {
   conn: Conn;
   version: string;           // the program serving this page when it loaded
   newVersion: string;        // a newer program now serves it (reload to use)
+  unsent: boolean;           // a send begun here is not yet stored, or failed with its Retry (sends.unsent)
   drafts: Record<string, Draft>;
   toasts: Toast[];
   loadError: string;
@@ -72,6 +73,11 @@ export interface State {
 export const topicChangeKey = (c: Pick<T.TopicChange, "conv" | "peer" | "id" | "root">) => JSON.stringify([c.conv || "", c.peer || "", c.root ? "root" : c.id || ""]);
 
 const draftsKey = (ws: string) => "agentnet.messenger.drafts." + ws;
+
+// unsentIn: what a reload would lose: a draft's text or files, or a send
+// not yet stored.
+export const unsentIn = (s: Pick<State, "drafts" | "unsent">) => s.unsent || Object.values(s.drafts).some((d) => d.text || (d.files && d.files.length));
+
 const recovery = { update: [500, 1000, 2000, 4000, 8000, 15000, 30000], missed: [1000, 3000, 8000] };
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -109,11 +115,13 @@ export class Store {
     this.api = api(host);
     this.sends = pendingSends(host, () => {
       const o = this.state?.open;
-      if (o) this.set(this.viewPatch(o, this.state.views[o.id] ?? null, true));
+      // A send clears its draft as it begins: until it is stored, a reload
+      // waits for it (hasUnsent).
+      this.set({ ...(o ? this.viewPatch(o, this.state.views[o.id] ?? null, true) : {}), unsent: this.sends.unsent() });
     });
     this.state = {
       tab: "chats", overview: null, open: null, pending: null, views: {}, dm: null, thread: null, typing: null, invitations: [],
-      conn: "loading", version: "", newVersion: "", drafts: this.loadDrafts(), toasts: [], loadError: "", invite: null, topicBusy: {}, panel: false, section: "", agentNames: {},
+      conn: "loading", version: "", newVersion: "", unsent: false, drafts: this.loadDrafts(), toasts: [], loadError: "", invite: null, topicBusy: {}, panel: false, section: "", agentNames: {},
     };
   }
 
@@ -514,9 +522,7 @@ export class Store {
     }
   }
 
-  hasUnsent(): boolean {
-    return Object.values(this.state.drafts).some((d) => d.text || (d.files && d.files.length));
-  }
+  hasUnsent(): boolean { return unsentIn(this.state); }
 
   // ---- feedback
   toast(text: string, tone?: Toast["tone"]) {

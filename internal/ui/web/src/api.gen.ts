@@ -194,6 +194,7 @@ export interface ConvItem {
   unread?: boolean;
   actions?: string[];
   decide_on?: string;
+  stale?: boolean;
 }
 
 export interface CopyView {
@@ -204,6 +205,7 @@ export interface CopyView {
   detail?: string;
   send_stopped?: boolean;
   delivery_uncertain?: boolean;
+  suspended?: boolean;
 }
 
 export interface DMDraft {
@@ -495,6 +497,7 @@ export interface GroupInvitationView {
   history: GroupHistoryRef[] | null;
   can_cancel?: boolean;
   can_refresh?: boolean;
+  error?: string;
 }
 
 export interface GroupInviteDraft {
@@ -763,6 +766,7 @@ export interface Overview {
   workspace?: WorkspaceView;
   agent_devices: string[] | null;
   model_reports?: PrivateModelReport[];
+  update_required?: UpdateRequiredView;
 }
 
 export interface OwnDevicePermission {
@@ -1246,6 +1250,12 @@ export interface TypingView {
   supported: boolean;
   current: boolean;
   entries: TypingEntry[] | null;
+}
+
+export interface UpdateRequiredView {
+  latest: string;
+  url?: string;
+  auto?: string;
 }
 
 export interface WorkspaceBinding {

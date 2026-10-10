@@ -32,6 +32,7 @@ export const CapRoom = "rm1"; // protocol.CapRoom: reads room participation (ROO
 export const CapOwnSyncV2 = "own2", SubInvitationSync = "invitation-sync";
 export const CapOwnSyncV3 = "own3", CapDeviceHistory = CapOwnSyncV3, SubDeviceHistory = "device-history", SubDeviceFile="device-file";
 export const SubTopicSync = "topic-sync";
+export const CapTopicStateSync = "tss1", SubTopicStateSync = "topic-state-sync"; // private topic marks between current own-human devices; NOT implied by rm1
 export const CapReadSync = "rd1", SubReadSync = "read-sync";
 export const CapModelSync = "mdl1", SubModelSync = "model-sync";
 export const CapRootSync = "crs1", SubRootSync = "root-sync"; // explicit quiet DM-root copies, current own-human devices; NOT implied by rm1
@@ -702,10 +703,11 @@ async function checkV2(n) {
     if (n.target && (!n.target.agent_id || !["question", "task"].includes(n.kind) || n.target.address !== n.to || !validFingerprint(n.target.fingerprint))) throw new Error("a device message target must name an agent on its exact recipient");
     return;
   }
-  if(n.sub===SubModelSync || n.sub===SubReadSync || n.sub===SubInvitationSync || n.sub===SubTopicSync || n.sub===SubDeviceHistory || n.sub===SubDeviceFile) {
+  if(n.sub===SubModelSync || n.sub===SubReadSync || n.sub===SubInvitationSync || n.sub===SubTopicSync || n.sub===SubTopicStateSync || n.sub===SubDeviceHistory || n.sub===SubDeviceFile) {
     if(n.conv || n.lid || n.root || n.kind!=="message" || !n.replica || n.target || n.pid || (n.attachments.length && n.sub!==SubDeviceFile) || n.attachments.length>1 || n.reply_to || n.origin || n.emotion || n.status || n.fan || n.human || n.receiver_route || n.agent_id || n.topic || n.topic_event || n.topic_done || n.quote)throw Error("read sync: quiet rootless reference carrier required");
     if(n.sub===SubModelSync){if(n.send_group||n.session||n.fallback)throw Error("model sync: quiet carrier required");parseModelSync(n.body);return;}
     if(n.sub===SubDeviceHistory||n.sub===SubDeviceFile){if(n.send_group||n.session||n.fallback)throw Error("device history: quiet carrier required");parseDeviceHistory(n.body,n.sub===SubDeviceFile);return;}
+    if(n.sub===SubTopicStateSync){if(n.send_group||n.session||n.fallback)throw Error("topic state sync: quiet rootless mark carrier required");parseTopicStateSync(n.body);return;}
     if(n.sub===SubTopicSync){if(n.session||n.fallback)throw Error("topic sync: quiet rootless title carrier required");parseTopicSync(n.body);}else if(n.sub===SubInvitationSync)await validateInvitationSync(parseInvitationSync(n.body));else parseReadSync(n.body);return;
   }
   if (!validHash(n.conv) || !validID(n.lid)) throw new Error("invalid conversation or logical id");
@@ -794,7 +796,7 @@ export async function seal(m, keys, recipient) {
   // A turn that asks for the recipient's attention names its channel
   // (envelope.SealAttention); only version 2 carries it.
   const chan = m.chan || "";
-  if ((inner.sub === SubRootSync || inner.sub === SubModelSync || inner.sub === SubReadSync || inner.sub === SubInvitationSync || inner.sub === SubTopicSync || inner.sub === SubDeviceHistory || inner.sub === SubDeviceFile) && chan) throw new Error("root sync carries no attention");
+  if ((inner.sub === SubRootSync || inner.sub === SubModelSync || inner.sub === SubReadSync || inner.sub === SubInvitationSync || inner.sub === SubTopicSync || inner.sub === SubTopicStateSync || inner.sub === SubDeviceHistory || inner.sub === SubDeviceFile) && chan) throw new Error("root sync carries no attention");
   if (chan && (v !== Version2 || !validChannel(chan))) throw new Error("attention needs a version 2 message and a notification channel");
   const env = { v, id: m.id, from: m.from, to: m.to, ts: m.ts, kind: m.kind, ct,
     blobs: attachments.map((a) => a.blob), session: inner.session, fallback: inner.fallback, attn: !!chan, chan };
@@ -881,7 +883,7 @@ export async function open(json, keys, selfAddress, sender) {
     throw new Error("encrypted header does not match signed envelope");
   }
   await checkV2(n);
-  if ((n.sub === SubRootSync || n.sub === SubModelSync || n.sub === SubReadSync || n.sub === SubInvitationSync || n.sub === SubTopicSync || n.sub === SubDeviceHistory || n.sub === SubDeviceFile) && e.attn) throw new Error("root sync carries no attention");
+  if ((n.sub === SubRootSync || n.sub === SubModelSync || n.sub === SubReadSync || n.sub === SubInvitationSync || n.sub === SubTopicSync || n.sub === SubTopicStateSync || n.sub === SubDeviceHistory || n.sub === SubDeviceFile) && e.attn) throw new Error("root sync carries no attention");
   if (n.attachments.length !== e.blobs.length) throw new Error("encrypted manifest does not match signed attachments");
   n.attachments.forEach((a, i) => {
     const b = e.blobs[i];
@@ -981,7 +983,7 @@ export const MaxGroupHistory = 64, MaxGroupState = 256 << 10, MaxGroupCiphertext
 const groupRootDomain = "agentnet-conv-root-v3\n";
 export const convRootVersionLimit = (v) => v === GroupRootVersion ? MaxGroupRoot : MaxConvRoot;
 const convRootSizeLimit = (json) => { try { return convRootVersionLimit(JSON.parse(json).v); } catch (_) { return MaxConvRoot; } };
-export const MaxCaps = 32, MaxAdvertisedCaps = 21; // older readers already parse up to 32 names
+export const MaxCaps = 32, MaxAdvertisedCaps = 22; // older readers already parse up to 32 names
 export const MaxCapsRecord = 1024;
 export const CapEnv2 = "env2";
 export const CapPerson = "person2"; // reads person roster chains, roots v2, fan-out and history
@@ -1051,6 +1053,20 @@ export function parseTopicSync(json) {
   const x=strict(title,"topic title",{scope:"string",topic:"string",title:"string",rev:"number",writer:"string"});
   const key=x.scope+"|"+x.topic;
   if(!validHash(x.scope)&&!validAddress(x.scope)||!validID(x.topic)||!validFingerprint(x.writer)||!Number.isSafeInteger(x.rev)||x.rev<1||typeof x.title!=="string"||[...x.title].length>120||x.title!==topicTitle(x.title)||seen.has(key))throw Error("topic sync: invalid or duplicate title");
+  seen.add(key);return x;
+ });return r;
+}
+// protocol.TopicMark/ParseTopicStateSync: every field present; none clears a mark.
+export const TopicMarks = ["", "done", "open", "archived"];
+export const validTopicMark = m => (validHash(m.scope)||validAddress(m.scope))&&validID(m.topic)&&validFingerprint(m.writer)&&Number.isSafeInteger(m.at)&&m.at>=1&&TopicMarks.includes(m.mark)&&Number.isSafeInteger(m.count)&&(m.mark===""?m.count===0:m.count>=1);
+export const topicMarkNewer = (a, b) => !b || (a.at !== b.at ? a.at > b.at : a.writer !== b.writer ? a.writer > b.writer : a.mark !== b.mark ? a.mark > b.mark : a.count > b.count);
+export function parseTopicStateSync(json) {
+ const r=strictRecord(json,65536,"topic state sync",{v:"number",person:"string",roster:"string",marks:"array"});
+ if(r.v!==1||!validID(r.person)||!validHash(r.roster)||!r.marks?.length||r.marks.length>64)throw Error("topic state sync: invalid owner or marks");
+ const fields={scope:"string",topic:"string",mark:"string",count:"int",at:"int",writer:"string"},seen=new Set();r.marks=r.marks.map(mark=>{
+  if(!mark||typeof mark!=="object"||Object.keys(fields).some(k=>mark[k]==null))throw Error("topic state sync: incomplete mark");
+  const x=strict(mark,"topic mark",fields),key=x.scope+"|"+x.topic;
+  if(!validTopicMark(x)||seen.has(key))throw Error("topic state sync: invalid or duplicate mark");
   seen.add(key);return x;
  });return r;
 }

@@ -10,7 +10,7 @@ import {
 } from "@tabler/icons-react";
 import type { T } from "../api";
 import { useApp, useWide } from "../context";
-import { deliveryWord, firstLine, owner, personName, plain, reminderOf, timeOf } from "../model";
+import { deliveryWord, deviceName, firstLine, owner, personName, plain, reminderOf, timeOf } from "../model";
 import { AgentAvatar, PersonAvatar } from "../ui/Avatar";
 import { Tag } from "../ui/Tag";
 import { ApprovalCard } from "./Approvals";
@@ -282,10 +282,13 @@ function Under({ m, ctx, all, who, status, answer, onDetails, onJump }: { m: Any
   const word = deliveryWord(s);
   if (!word) return null;
   const bad = problem(s);
+  // A device the relay suspended until it updates: named, never the headline.
+  const paused = isThreadMsg(m) ? [] : (m.copies || []).filter((c) => c.suspended && !c.own && c.state !== "delivered");
+  const pausedText = !paused.length ? "" : " · " + (paused.length > 1 ? paused.length + " devices are" : (paused[0].person || "Someone") + "’s " + deviceName(paused[0].to) + " is") + " suspended until " + (paused.length > 1 ? "they update" : "it updates") + " AgentNet";
   return (
     <button type="button" onClick={onDetails}
       className={"relative mt-1 px-1 text-[12px] font-semibold before:absolute before:inset-x-0 before:top-1/2 before:h-11 before:-translate-y-1/2 before:content-[''] " + (bad ? "text-danger" : "text-muted")}>
-      {word}{bad && m.state_text ? " · " + m.state_text : ""}
+      {word}{bad && m.state_text ? " · " + m.state_text : ""}{pausedText}
     </button>
   );
 }

@@ -171,6 +171,9 @@ async function slowly(browser, w, h, scheme, name) {
       await p.keyboard.press('Enter');
       const all = p.getByRole('dialog', { name: 'All topics' });
       await all.getByRole('list', { name: 'Active topics' }).waitFor();
+      // Owner (v0.8.17): a topic's Done and Archive are the person's, on every linked device.
+      assert.match(await all.innerText(), /Names, Done and Archive sync across your linked devices\./, name + ': All topics says marks follow linked devices');
+      assert.doesNotMatch(await all.innerText(), /stays? on this device/, name + ': All topics no longer says marks stay on this device');
       await p.waitForFunction(() => document.getElementById('skin').shadowRoot.activeElement?.getAttribute('type') === 'search');
       await fits('all topics');
       assert.ok(await all.getByRole('button', { name: /^Active/ }).getAttribute('aria-pressed') === 'true', name + ': Active is the first filter');
@@ -213,6 +216,10 @@ async function slowly(browser, w, h, scheme, name) {
       await bar.locator('[aria-current="true"]').click();
       await p.getByRole('menuitem', { name: 'Mark done' }).click();
       await p.waitForFunction(() => /marked it done/.test(document.getElementById('skin').shadowRoot.querySelector('section[aria-label="Topic state"]')?.textContent || ''));
+      // Owner (v0.8.17): the mark may come from another of the person's devices.
+      const marked = await p.locator('section[aria-label="Topic state"]').innerText();
+      assert.match(marked, /You marked it done\./, name + ': the end of a topic says the person marked it done');
+      assert.doesNotMatch(marked, /on this device/, name + ': a synced Done is not called this device\'s');
       await bar.locator('[aria-current="true"]').click();
       await p.getByRole('menuitem', { name: 'Rename…' }).click();
       await p.getByText('The name syncs across your linked devices. Other people keep their own names.', { exact: true }).waitFor();

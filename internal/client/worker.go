@@ -96,6 +96,7 @@ func (a *Agent) worker(ctx context.Context, wake <-chan struct{}) {
 		// anything (a task for this device's agent that needs the person).
 		a.reviewAttention(ctx)
 		a.notifyRelease()
+		a.maybeAutoUpdate(ctx) // after a trigger, once no job runs (autoupdate.go)
 		if r := a.updatePending(); r != nil && a.executorsIdle() && a.UpdateSwitching() == nil {
 			a.switchForUpdate(ctx, *r) // no job runs now: its result is stored
 		}

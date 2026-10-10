@@ -431,7 +431,7 @@ func (a *Agent) tellStatus(ctx context.Context, id string) bool {
 func unreachableNow(err error) bool {
 	var he *HubError
 	if errors.As(err, &he) {
-		return he.Status >= 500
+		return he.Status >= 500 || he.Code == codeUpdateRequired // told by the updated program
 	}
 	var ne net.Error
 	return errors.As(err, &ne) || errors.Is(err, context.DeadlineExceeded)
@@ -978,7 +978,9 @@ func (a *Agent) hostConnected(address string) bool {
 	}
 	for _, m := range v.Members.Members {
 		if m.Address == address {
-			return m.Presence == protocol.PresenceConnected
+			// A suspended host can report nothing new until it updates: its
+			// last word is old news, as an offline host's is.
+			return m.Presence == protocol.PresenceConnected && !m.Suspended
 		}
 	}
 	return false

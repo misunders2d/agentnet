@@ -44,15 +44,20 @@ type servedRelease struct {
 // whileSuspended are the requests a suspended device may still make, so
 // that what was admitted before drains and nothing new starts: its stream,
 // which says what to update to, the ping acknowledgements that keep it
-// open, the recommendation, receipts of what it received, and the
-// read-only lookups of a member that its sends make first (programs before
-// v0.8.17 look up the asker before they answer). Posting a message is
-// decided by its kind once its signature is verified (handlePostMessage):
-// an answer or a result may still go.
+// open, the recommendation, receipts of what it received, the read-only
+// lookups an answer or a result makes before it is stored (the recipient's
+// directory entry, sessions and profile, and a person's chain: a
+// conversation reply refreshes each member's person first, in v0.8.16 as
+// now), and the upload of its files (reserve, chunks, the upload's state,
+// complete; never a download). A file alone starts nothing: posting the
+// message that refers to it is decided by its kind once its signature is
+// verified (handlePostMessage): an answer or a result may still go.
 var whileSuspended = map[string]bool{
 	"GET /v1/stream": true, "POST /v1/stream/ack": true, "GET /v1/release": true,
 	"POST /v1/messages/{id}/ack":     true,
 	"GET /v1/agents/{label}/{agent}": true, "GET /v1/agents/{label}/{agent}/sessions": true, "GET /v1/agents/{label}/{agent}/profile": true,
+	"GET /v1/persons/{id}/chain": true,
+	"POST /v1/blobs":             true, "GET /v1/blobs/{id}": true, "PUT /v1/blobs/{id}": true, "POST /v1/blobs/{id}/complete": true,
 }
 
 // drainsWork reports whether a suspended device may still post a message
@@ -129,7 +134,9 @@ func (h *Hub) planGraceEnd(st *updateState) {
 	if next.IsZero() {
 		return
 	}
-	h.graceEnd = time.AfterFunc(time.Until(next), func() {
+	// A little after the end: a timer may fire before the wall clock reads it
+	// (coarse clocks), which would find nobody suspended yet.
+	h.graceEnd = time.AfterFunc(time.Until(next)+50*time.Millisecond, func() {
 		h.membersChanged() // also wakes every stream: one in grace is suspended now
 		h.updateMu.Lock()
 		defer h.updateMu.Unlock()

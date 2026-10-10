@@ -6,7 +6,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
@@ -173,34 +172,22 @@ func TestHeldResentRecordSettlesIntoOneNotice(t *testing.T) {
 	}
 }
 
-// Presence alone carries no proof for held messages; any other change of
-// the member list (a device, a person roster step) still looks again.
-func TestMemberPresenceAloneDoesNotRecheckHeld(t *testing.T) {
+// Every member list looks at held messages again: their evidence also
+// arrives through local admissions that announce nothing (a root or roster
+// sync after a device is linked), which a presence-only list used to cover
+// in v0.8.16 and must still (CI: a linked phone's deletion stayed held).
+func TestEveryMemberListRechecksHeld(t *testing.T) {
 	w := newWorld(t, "")
 	a := w.bob
-	push := func(list string) uint32 {
-		t.Helper()
+	for _, list := range []string{
+		`{"members":[{"address":"vitalii/desk","presence":"connected","joined":5}]}`,
+		`{"members":[{"address":"vitalii/desk","presence":"offline","joined":5}]}`,
+		`{"members":[{"address":"vitalii/desk","presence":"offline","joined":5,"version":"v0.8.17","suspended":true}]}`,
+	} {
 		a.convWork.take()
 		a.onMembers([]byte(list))
-		return a.convWork.take()
-	}
-	const one = `{"members":[{"address":"vitalii/desk","presence":"connected","joined":5}]}`
-	if push(one)&convRetry == 0 {
-		t.Fatal("first list did not look at held messages")
-	}
-	a.convWork.retried.Store(time.Now().Unix()) // as convSync records that look
-	if work := push(`{"members":[{"address":"vitalii/desk","presence":"offline","joined":5}]}`); work&convRetry != 0 || work&convRelease == 0 {
-		t.Fatalf("presence-only change: %b", work)
-	}
-	ref := `{"members":[{"address":"vitalii/desk","presence":"offline","joined":5,"person":{"id":"` + strings.Repeat("a", 32) + `","seq":2,"hash":"` + strings.Repeat("b", 64) + `"}}]}`
-	if push(ref)&convRetry == 0 {
-		t.Fatal("a new person roster step did not look again")
-	}
-	if push(`{"members":[{"address":"vitalii/desk","presence":"offline","joined":5},{"address":"vitalii/phone","presence":"connected","joined":6}]}`)&convRetry == 0 {
-		t.Fatal("a new device did not look again")
-	}
-	a.convWork.retried.Store(1) // the last full look was long ago
-	if push(`{"members":[{"address":"vitalii/desk","presence":"connected","joined":5},{"address":"vitalii/phone","presence":"connected","joined":6}]}`)&convRetry == 0 {
-		t.Fatal("a stale look did not ride the next list")
+		if work := a.convWork.take(); work&(convRetry|convPersons|convRelease) != convRetry|convPersons|convRelease {
+			t.Fatalf("list %s: work %b", list, work)
+		}
 	}
 }

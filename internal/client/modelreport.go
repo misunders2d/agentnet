@@ -329,7 +329,7 @@ func (a *Agent) admitModelSync(ctx context.Context, env envelope.Envelope, in en
 			return e
 		}
 	}
-	if _, e = tx.Exec(`INSERT INTO history_receipts(id) VALUES(?) ON CONFLICT(id) DO UPDATE SET acked=0`, env.ID); e != nil {
+	if e = receiptCarrier(tx, env.ID); e != nil {
 		return e
 	}
 	return a.store.done(tx.Commit())

@@ -121,6 +121,20 @@ type Overview struct {
 	AgentDevices []string `json:"agent_devices"`
 	// ModelReports are private, read-only reports from verified own-human hosts.
 	ModelReports []client.PrivateModelReport `json:"model_reports,omitempty"`
+
+	// UpdateRequired is set while the Hub serves this device again only
+	// once it runs a newer AgentNet: the page shows it as a prominent
+	// "Update AgentNet to <latest> to continue" banner.
+	UpdateRequired *UpdateRequiredView `json:"update_required,omitempty"`
+}
+
+// UpdateRequiredView is the Hub's refusal of this device's version: what
+// to run, the release page the Hub named (shown, never downloaded) and, in
+// a sentence, what this device's automatic update does about it.
+type UpdateRequiredView struct {
+	Latest string `json:"latest"`
+	URL    string `json:"url,omitempty"`
+	Auto   string `json:"auto,omitempty"`
 }
 
 // WorkspaceView is the workspace's own name ("" when its admin set none)
@@ -541,6 +555,9 @@ type CopyView struct {
 	Detail            string `json:"detail,omitempty"`
 	SendStopped       bool   `json:"send_stopped,omitempty"`
 	DeliveryUncertain bool   `json:"delivery_uncertain,omitempty"`
+	// Suspended: the relay serves that device nothing until it updates
+	// AgentNet; its copy never decides the message's delivery.
+	Suspended bool `json:"suspended,omitempty"`
 }
 
 // FileView is one file of a message as the page lists it: its name made
@@ -863,8 +880,9 @@ type ThreadSummary struct {
 	// the agent's final reply and ConcludedBy the device that sent it;
 	// Pending says something in it is still open (it is never archived
 	// then); Renamed says Title is the person's own name for it here, and
-	// AutoTitle is then the automatic one (its first line). A name and
-	// Mark done / Reopen are kept on this device only. Unconfirmed counts
+	// AutoTitle is then the automatic one (its first line). A name, Mark
+	// done / Reopen and Archive follow the person's own human devices, never
+	// other people. Unconfirmed counts
 	// the pending requests with no current word from their executor
 	// (client.ThreadSummary.Unconfirmed).
 	State       string   `json:"state"`
@@ -985,6 +1003,12 @@ type ConvItem struct {
 	Unread       bool                       `json:"unread,omitempty"`
 	Actions      []string                   `json:"actions,omitempty"`
 	DecideOn     string                     `json:"decide_on,omitempty"`
+	// Stale: the executor on DecideOn has no current word on it (not
+	// connected now, suspended until it updates, or a run older than
+	// client.ExecRunningMaxAge): no result reported, and nothing to decide
+	// from here. Why says what is known of that device. Only a page that
+	// lists another device's requests (the browser device) sets it.
+	Stale bool `json:"stale,omitempty"`
 }
 
 // OperatorDecisions is implemented by the daemon provider: deciding a
@@ -1278,6 +1302,8 @@ func StateText(dir, kind, state, peer string) string {
 			return "Not delivered: that session ended first"
 		case "failed":
 			return "Not sent"
+		case "not_delivered": // nothing was sealed for it, or it was kept here
+			return "Not sent to " + peer
 		case "quarantined":
 			return peer + " could not verify it"
 		}

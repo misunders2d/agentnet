@@ -324,7 +324,7 @@ CREATE TABLE reported(
   PRIMARY KEY(item, recipient));
 `, TeamSchema, GroupClientSchema, GroupProofSchema, agentIdentitySchema, agentCapabilitySchema, groupTurnRecipientSchema, replyReceiverSchema, GroupLifecycleSchema, replySessionSchema, GroupHistorySchema, receiverRouteSchema, humanScopeSchema, convClearSchema, statusDueSchema, runGroupSchema, topicStateSchema, messagingSchema, deliveryPersonSchema, personGrantSchema, operatorPersonsSchema, deviceAdminNoticeSchema, roomSchema, roomReaderSchema, chatTopicSchema, groupInvitationCancellationSchema, readSyncSchema, chatAlertDefaultsSchema, queuedRetractionSchema, heldNoticeSchema, sendGroupSchema, continuationSchema, ownInvitationSchema, historyCatchupSchema, groupHistoryWitnessSchema, topicSyncSchema, `
 CREATE INDEX outbox_conv_lid ON outbox(conv, lid);
-`, historyReceiptSchema, deviceHistorySchema, proposalChoiceSchema, receiptGenerationSchema, requestFollowupSchema, answeredConversationStatusSchema, modelReportSchema, heldCopySchema, retainedConversationStatusSchema, heldLogicalSchema, waitingConversationStatusSchema}
+`, historyReceiptSchema, deviceHistorySchema, proposalChoiceSchema, receiptGenerationSchema, requestFollowupSchema, answeredConversationStatusSchema, modelReportSchema, heldCopySchema, retainedConversationStatusSchema, heldLogicalSchema, waitingConversationStatusSchema, topicMarkSyncSchema, skippedCopySchema}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
 const (
@@ -1014,7 +1014,7 @@ type FileInfo struct {
 // recordSubs are the received records between devices that are never a
 // message: group proofs, contexts, invitations, consents and withdrawals,
 // and Drive space records (a conversation's view leaves them out too).
-const recordSubs = `('model-sync', 'device-history', 'device-file', 'topic-sync', 'invitation-sync', 'read-sync', 'root-sync', 'drive-space', 'group-proof', 'group-context', 'group-invite', 'group-consent', 'group-withdrawal')`
+const recordSubs = `('model-sync', 'device-history', 'device-file', 'topic-sync', 'topic-state-sync', 'invitation-sync', 'read-sync', 'root-sync', 'drive-space', 'group-proof', 'group-context', 'group-invite', 'group-consent', 'group-withdrawal')`
 
 // inbox lists received messages; a local request to this device's own
 // agent (agentjob.go) is not one, nor is a record between devices.

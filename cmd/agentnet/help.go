@@ -894,9 +894,14 @@ get it at once, others when they next connect. Each person gets one
 content-free desktop notice per recommendation and each Claude Code or Codex
 session one line (version, your https URL, agentnet help update); the note is
 shown to people only, never to models. Setting the same version and URL
-again announces nothing new. It is a recommendation: receiving it downloads
-and installs nothing (members update with agentnet update when they choose).
-Versions are compared only for equality.
+again announces nothing new. It counts for a member only when it is newer
+than the release build they run (never an older one, never for a
+development build). Such a member's daemon installs the recommended
+release by itself unless its person turned that off (agentnet help update,
+"Automatic updates"); the version is all the Hub gives: the file comes only
+from the project's release origin, checked against that release's
+SHA256SUMS, so name only a release published for every platform your
+members run. A recommendation never suspends anyone.
 
 workspace set names the workspace for every member (e.g. Mellanni): their
 devices show it at once, or when they next connect, with no reinstall or
@@ -1160,6 +1165,38 @@ Do not silently retry failed questions or accepted tasks.`,
 
 	"update": `Usage: agentnet update [--check] [vX.Y.Z]
        agentnet update --status
+       agentnet update --auto on|off
+
+Automatic updates (on unless turned off): when this home's daemon learns of
+a release newer than the release build it runs (your Hub's recommendation,
+or the version your Hub requires before it serves this device again), it
+installs that release by itself, exactly as below: the app as a whole where
+one manages this home (a closed app updates when it next runs), otherwise
+this program's file and then the daemon's switch once no job runs. The Hub
+names only the version; nothing is downloaded from it. One attempt runs at a
+time, only while no job runs. Each attempt is kept in the home (--status), so
+the next program knows it: the same release is tried again only at a later
+release event, refusal or daemon start, 30 minutes after the last attempt at
+the earliest, twice as long after each further one (at most a day), never on
+a timer; agentnet update tries at once. While your Hub requires a newer
+version, the release it requires (its own) is the one installed, before any
+newer recommendation, which follows once the Hub serves this device again.
+A development build never updates itself. --auto off turns this home's
+automatic updates off (an owner-only file in the home, auto-update; nothing
+received changes it), --auto on back on.
+
+While your Hub requires a newer version (it answers update_required), this
+device is suspended: new messages from it stay queued, messages to it wait on
+the Hub, and the daemon sends the Hub only its stream and what finishes work
+admitted before (receipts, and answers and results with the lookups and file
+uploads they need) until it runs that version. Sends an earlier version
+marked failed only because of this refusal are queued again when the updated
+daemon starts.
+doctor, inbox, status, --status, the line coding agents are shown and the
+page say "Update AgentNet to vX.Y.Z to continue". A browser page reloads to
+get its server's current version once nothing unsent would be lost: a typed
+draft or attached file keeps it until you send it (it waits in the browser)
+or clear it.
 
 When a desktop app is registered for this data home, update the app and its
 terminal command together through the same updater as Settings > About. An
@@ -1185,7 +1222,9 @@ Hub's operator recommends is advice, never a download location. The trust is
 the release's HTTPS and checksum; there is no separate signature.
 
   --check    show the current and target versions and the file; change nothing
-  --status   say whether this home's daemon switched after the last update
+  --status   say whether this home's daemon switched after the last update,
+             and what automatic updates are set to and last did
+  --auto     on or off: this home's automatic updates
 
 - Same version, or a build ahead of the latest stable release: no update
   needed. Explicitly requested older versions are refused: databases only
@@ -1227,8 +1266,10 @@ the release's HTTPS and checksum; there is no separate signature.
   database's *.vN.bak copy back.
 
 If your Hub's operator recommends a version, agentnet version (on stderr)
-and agentnet doctor show it with the operator's link. Ask your person before
-updating unless they have already authorized it.
+and agentnet doctor show it with the operator's link. With automatic update
+on (the default) the daemon installs it by itself, as above; ask your person
+before updating by hand unless they have already authorized it. The
+daemon's automatic update is their setting (--auto).
 
 Building from source instead: stop the daemon, then
   cd agentnet && git pull

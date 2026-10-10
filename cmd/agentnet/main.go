@@ -227,10 +227,12 @@ func run(args []string) error {
 	case "conversation":
 		return runConversation(a, rest)
 	case "inbox":
+		updateRequiredNotice(a, os.Stderr)
 		return runInbox(a, rest)
 	case "download":
 		return runDownload(ctx, a, rest)
 	case "status":
+		updateRequiredNotice(a, os.Stderr)
 		return runStatus(ctx, a, rest, os.Stdout)
 	case "daemon":
 		fs := flag.NewFlagSet("daemon", flag.ContinueOnError)
@@ -250,6 +252,7 @@ func run(args []string) error {
 			}
 		}
 		opts.CanSwitch, opts.PrepareSwitch = switchHooks(*home, opts.Executable)
+		opts.AutoUpdate = daemonAutoUpdate(*home, opts.Executable)
 		if *uiAddr != "" {
 			opts.Owned = func() (func(), error) {
 				stop, err := startDaemonUI(a, *home, *uiAddr, log.Printf)
@@ -316,6 +319,14 @@ func run(args []string) error {
 		return runAdmin(ctx, a, rest)
 	}
 	return fmt.Errorf("unknown command %q (see agentnet --help)", cmd)
+}
+
+// updateRequiredNotice heads inbox and status (on stderr, so their output
+// stays parseable) while the Hub refuses this build until it updates.
+func updateRequiredNotice(a *client.Agent, w io.Writer) {
+	if u, ok := a.UpdateRequired(); ok {
+		fmt.Fprintf(w, "AgentNet: %s See agentnet help update.\n", a.ExplainUpdateRequired(u))
+	}
 }
 
 func defaultHome() string {
@@ -425,16 +436,28 @@ const defaultWait = 5 * time.Second
 // field) and what it means on stderr, for the agent reading it.
 func printResult(r client.SendResult, wait time.Duration) {
 	fmt.Printf("%s %s %s\n", r.ID, r.State, r.Path)
-	switch {
-	case r.Detail != "":
-		fmt.Fprintf(os.Stderr, "queued for retry by the daemon: %s\n", r.Detail)
-	case r.State == protocol.StateDelivered:
-		fmt.Fprintln(os.Stderr, "delivered: stored in the recipient's inbox (not necessarily read or answered yet)")
-	case r.State == protocol.StateCustody && wait > 0:
-		fmt.Fprintf(os.Stderr, "held by the Hub; delivery to the recipient not confirmed yet. Check: agentnet status --wait 30s %s\n", r.ID)
-	case r.State == protocol.StateQuarantined:
-		fmt.Fprintln(os.Stderr, "the recipient received it but could not verify it (e.g. your key changed for them)")
+	if note := resultNote(r, wait); note != "" {
+		fmt.Fprintln(os.Stderr, note)
 	}
+}
+
+// resultNote is what printResult says of r on stderr, by what is proven:
+// a detail on a copy the Hub holds (its recipient is suspended) is not a
+// local retry.
+func resultNote(r client.SendResult, wait time.Duration) string {
+	switch {
+	case r.Detail != "" && r.State == protocol.StateCustody:
+		return "held by the Hub: " + r.Detail
+	case r.Detail != "":
+		return "queued for retry by the daemon: " + r.Detail
+	case r.State == protocol.StateDelivered:
+		return "delivered: stored in the recipient's inbox (not necessarily read or answered yet)"
+	case r.State == protocol.StateCustody && wait > 0:
+		return "held by the Hub; delivery to the recipient not confirmed yet. Check: agentnet status --wait 30s " + r.ID
+	case r.State == protocol.StateQuarantined:
+		return "the recipient received it but could not verify it (e.g. your key changed for them)"
+	}
+	return ""
 }
 
 // runStatus shows what is known about a message sent from here: one copy
@@ -462,7 +485,15 @@ func runStatus(ctx context.Context, a *client.Agent, args []string, stdout io.Wr
 		if len(copies) > 1 || c.ID != fs.Arg(0) {
 			to = " to " + c.To
 		}
-		r, err := a.Status(ctx, c.ID, max(time.Until(deadline), 0))
+		if c.NotSent { // nothing was sealed for it: no Hub record to ask about
+			fmt.Fprintf(stdout, "%s %s%s (local record; %s)\n", c.ID, c.State, to, c.Detail)
+			continue
+		}
+		wait := max(time.Until(deadline), 0)
+		if c.Suspended {
+			wait = 0 // nobody waits for a device the relay serves nothing until it updates
+		}
+		r, err := a.Status(ctx, c.ID, wait)
 		var local *client.LocalStatus
 		if errors.As(err, &local) { // this device's own record, marked as such
 			why := "Hub not reachable"
@@ -478,7 +509,11 @@ func runStatus(ctx context.Context, a *client.Agent, args []string, stdout io.Wr
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(stdout, "%s %s %s%s\n", r.ID, r.State, r.Path, to)
+		note := ""
+		if c.Suspended {
+			note = " (" + client.SuspendedText(c.To) + ")"
+		}
+		fmt.Fprintf(stdout, "%s %s %s%s%s\n", r.ID, r.State, r.Path, to, note)
 	}
 	return nil
 }
@@ -537,7 +572,7 @@ func runOpen(a *client.Agent, args []string) error {
 		cmd.Dir, cmd.Stdin, cmd.Stdout, cmd.Stderr = o.Dir, os.Stdin, os.Stdout, os.Stderr
 		return cmd.Run()
 	}
-	fmt.Printf("No coding agent opened: %s. Showing it here.\n\n", o.Why)
+	fmt.Printf("No coding agent opened. %s\nShowing it here.\n\n", o.Why)
 	if target != "" {
 		err = runConversation(a, []string{target})
 	} else {

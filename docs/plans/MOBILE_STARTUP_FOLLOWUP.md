@@ -1,5 +1,7 @@
 # Mobile startup recurrence after v0.8.16
 
+**Superseded:** completed in [V0_8_17.md](V0_8_17.md).
+
 **Stopped for owner-requested Claude handoff.** Authoritative continuation:
 [HANDOFF_CLAUDE_MOBILE.md](../HANDOFF_CLAUDE_MOBILE.md). Source changes are partial
 and unverified, with a known runtime shadowing bug. No Codex implementation,

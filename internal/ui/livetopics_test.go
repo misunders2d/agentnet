@@ -102,7 +102,7 @@ func TestLiveTopicRoutes(t *testing.T) {
 	if r := do(t, ts, "POST", "/api/topic/done", `{"peer":"`+alice.Address+`","id":"`+ids[0]+`","sudo":true}`, post(ts)); r.StatusCode != http.StatusBadRequest {
 		t.Fatalf("an unknown field: %d", r.StatusCode)
 	}
-	if code, body := change("done", TopicChange{Peer: alice.Address, ID: ids[0]}, post(ts)); code != 200 || !strings.Contains(body, "on this device") {
+	if code, body := change("done", TopicChange{Peer: alice.Address, ID: ids[0]}, post(ts)); code != 200 || !strings.Contains(body, "syncs across your linked devices") {
 		t.Fatalf("mark done: %d %s", code, body)
 	}
 	if code, body := change("rename", TopicChange{Peer: alice.Address, ID: ids[1], Title: "Dock question"}, post(ts)); code != 200 || !strings.Contains(body, "syncs across your linked devices") {

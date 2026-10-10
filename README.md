@@ -369,8 +369,11 @@ changes. Check both the app's About version and the command actually resolved
 on PATH. If the app attaches to an older manually managed daemon, follow the
 [existing-installation instructions](docs/revival/INSTALL.md#existing-installs-and-recovery).
 
-A server recommendation is an admin notice. It does not install software,
-and the app's update button checks GitHub independently of that notice.
+A server recommendation is installed: daemons and the app with automatic
+update on (the default) install a recommended release newer than their own
+by themselves once no job runs, from the GitHub release only, checked
+against its SHA256SUMS; `agentnet update --auto off` turns that off for a
+home. The app's update button checks GitHub independently of that notice.
 The v0.8.0 About page incorrectly directs desktop users to `agentnet update`;
 use a desktop package instead. If its **What's new** link does nothing, open
 [the release page](https://github.com/misunders2d/agentnet/releases/tag/v0.8.16) directly.

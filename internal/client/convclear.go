@@ -361,8 +361,11 @@ func (a *Agent) admitClear(ctx context.Context, env envelope.Envelope, in envelo
 	}
 	defer tx.Rollback()
 	now := time.Now()
+	// The row is this carrier's own (its envelope ID): its delivered receipt
+	// is due (acked 0), or the relay keeps it in custody and pushes it again
+	// on every connection (MIXED-1).
 	res, err := tx.Exec(`INSERT OR IGNORE INTO inbox(id, sender, ts, kind, body, received_at, state, verified_by, conv, lid, sub, replica, received_ms, ref_id, ref_fp, read_at, acked)
-		VALUES(?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, 1, ?, ?, ?, ?, 1)`,
+		VALUES(?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, 1, ?, ?, ?, ?, 0)`,
 		in.ID, in.From, in.TS, in.Kind, in.Body, now.Unix(), sender.Fingerprint(), in.Conv, in.LID, in.Sub, now.UnixMilli(), in.Ref.ID, in.Ref.Fingerprint, now.Unix())
 	if err != nil {
 		return err

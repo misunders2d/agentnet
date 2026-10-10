@@ -6,9 +6,13 @@
 // and applies only that reviewed change. Settings → Your agent shows it;
 // Agents' Connect an agent wizard embeds it (start, onDone).
 //
-// Setting this up approves nobody, shares no history, gives no permission
-// to send tasks and leaves the default agent as it is. A browser installs
-// nothing: there it only says where this is done.
+// Setting this up approves nobody, shares no history and gives no
+// permission to send tasks. The default agent (used when a request names no
+// agent) shows at the top of the list with its own Change, the same setting
+// as Settings → Your agent; applying the setup leaves it as it is. When
+// several agents run one tool, one is used and said so; the others are
+// never turned off or merged here. A browser installs nothing: there it only
+// says where this is done.
 import { IconPlugConnected } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { errorText, type T } from "../api";
@@ -17,12 +21,13 @@ import { useStore } from "../store";
 import { Button } from "../ui/Button";
 import { Tag } from "../ui/Tag";
 import {
-  agentStatus, agentsFor, applySetup, browserDevice, canHaveAgent, NAME_MAX, pickFor, pickOf, readSetup, selectable, startChosen, STATE_SENTENCE, STATE_WORDS, tools, notReady, nativeSelectable, watchSetupFocus,
+  agentStatus, agentsFor, applySetup, browserDevice, canHaveAgent, firstPicks, NAME_MAX, othersKept, pickFor, pickOf, readSetup, sameToolNote, selectable, startChosen, STATE_SENTENCE, STATE_WORDS, tools, notReady, nativeSelectable, watchSetupFocus,
   type AgentPick, type SavedAgent, type SetupCalls, type Stage,
 } from "./AssistantSetup.model";
 import { FolderField } from "./AssistantSetup.folders";
 import { Card, Details, Fact, Hint, input } from "./Settings.parts";
 import { BrowserAppSetup } from "./BrowserAppSetup";
+import { DefaultAgentPanel, harnessName } from "./DefaultAgent";
 
 const CARD_TITLE = "Set up your agents";
 const them = (n: number) => (n === 1 ? "it" : "them");
@@ -41,10 +46,11 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
   const store = useApp();
   const o = useStore(store, (s) => s.overview);
   const browser = browserDevice(store.host.platform, o);
-  const calls: SetupCalls = useMemo(() => ({ setup: store.api.assistantSetup, agents: () => store.api.agents(), changeAgents: store.api.changeAgents }), [store]);
+  const calls: SetupCalls = useMemo(() => ({ setup: store.api.assistantSetup, agents: () => store.api.agents(), changeAgents: store.api.changeAgents, responder: store.api.responder }), [store]);
   const [stage, setStage] = useState<Stage>("home");
   const [view, setView] = useState<T.AssistantSetupView | null>(null);
   const [catalog, setCatalog] = useState<T.AgentCatalogView | null>(null);
+  const [responder, setResponder] = useState<{ v: T.ResponderView | null; error?: string }>({ v: null });
   const [chosen, setChosen] = useState<Set<string>>(new Set());
   const [picks, setPicks] = useState<Map<string, AgentPick>>(new Map());
   const [review, setReview] = useState<T.AssistantSetupView | null>(null);
@@ -66,7 +72,7 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
       if (!ready() || statusRead.current) return;
       statusRead.current = true;
       const generation = statusGeneration.current;
-      void readSetup(calls).then(({ view: v, catalog: c }) => { if (ready() && generation === statusGeneration.current) { setView(v); setCatalog(c); } }).catch((e) => {
+      void readSetup(calls).then(({ view: v, catalog: c, responder: r, responderError }) => { if (ready() && generation === statusGeneration.current) { setView(v); setCatalog(c); if (r !== undefined) setResponder({ v: r, error: responderError }); } }).catch((e) => {
         if (ready() && generation === statusGeneration.current) setError("Setup status could not be refreshed: " + errorText(e) + " Check again.");
       }).finally(() => { statusRead.current = false; });
     });
@@ -81,19 +87,27 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
     statusGeneration.current++;
     setBusy("read"); setError("");
     try {
-      const { view: v, catalog: c } = await readSetup(calls);
+      const { view: v, catalog: c, responder: r, responderError } = await readSetup(calls);
       if (!alive.current) return;
       setView(v); setBusy("");
       if (!v.local) return;   // this installation sets nothing up: its note is shown instead
-      setCatalog(c); setPicks(new Map()); setChosen(startChosen(v, c)); setReview(null); setDone(null);
+      setCatalog(c); setResponder({ v: r || null, error: responderError });
+      // Several agents for one tool: one is used (said so), never a forced choice.
+      setPicks(firstPicks(v, c, r)); setChosen(startChosen(v, c)); setReview(null); setDone(null);
       setStage("choose");
     } catch (e) { fail(e); }
   };
   useEffect(() => { if (start && !browser) void read(); }, []);
 
+  // After a change of the default agent: read it again (the server's own view).
+  const rereadDefault = () => {
+    store.api.responder().then((v) => { if (alive.current) setResponder({ v }); }, (e) => { if (alive.current) setResponder((r) => ({ ...r, error: errorText(e) })); });
+  };
+
   const list = tools(view);
   const picked = list.filter((h) => chosen.has(h.id));
-  const missing = notReady(picked, catalog, picks);
+  const def = responder.v;
+  const missing = notReady(picked, catalog, picks, def);
 
   const toReview = async () => {
     if (busy) return;
@@ -114,7 +128,7 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
     statusGeneration.current++;
     setBusy("apply"); setError("");
     try {
-      const r = await applySetup(calls, picked, review.review_id || "", catalog, picks);
+      const r = await applySetup(calls, picked, review.review_id || "", catalog, picks, def);
       if (!alive.current) return;
       setView(r.view); setCatalog(r.catalog); setPicks(r.picks); setDone({ agents: r.agents, shared: r.shared });
       setReview(null); setBusy(""); setStage("saved");
@@ -168,11 +182,12 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
 
         {stage === "home" && <>
           <p className="text-[15px] text-text-2">Set up a Claude Code, Codex, Pi or OMP agent for chats, questions and approved tasks. It uses your own settings, skills, plugins and sign-in.</p>
-          {o?.me.responder && <p className="text-[15px] text-text-2">Choose {({ claude: "Claude Code", codex: "Codex", pi: "Pi" } as Record<string, string>)[o.me.responder] || o.me.responder} below to set up the program that answers for you.</p>}
+          {o && <p className="text-[15px] text-text-2">{o.me.responder ? "Your default agent, used when a request names no agent, is " + harnessName(o.me.responder) + "." : "This computer has no default agent, so questions wait for you."} The next step shows it, and you can change it there.</p>}
           <Button variant="act" disabled={!!busy} onClick={read}>{busy === "read" ? "Looking…" : "Find them"}</Button>
         </>}
 
         {stage === "choose" && <>
+          <DefaultAgentPanel view={responder.v} error={responder.error} disabled={!!busy} onSaved={rereadDefault} />
           <p className="text-[15px] text-text-2">Their own settings, skills, plugins and sign-in stay as they are. Ready checks the installed program and folder; it does not test sign-in.</p>
           <ChooseAll catalog={catalog} list={list} chosen={chosen} disabled={!!busy} onChange={setChosen} />
           <ul className="space-y-2.5">
@@ -187,7 +202,7 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
                   </span>
                 </label>
                 <div className="px-3 pb-1"><NativeDetails h={h}/></div>
-                {chosen.has(h.id) && <AgentChoice h={h} catalog={catalog} pick={pickFor(picks, h, catalog)} disabled={!!busy} onPick={(p) => setPick(h.id, p)} />}
+                {chosen.has(h.id) && <AgentChoice h={h} catalog={catalog} pick={pickFor(picks, h, catalog, def)} disabled={!!busy} onPick={(p) => setPick(h.id, p)} />}
               </li>
             ))}
           </ul>
@@ -205,7 +220,7 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
               <li key={h.id} className="space-y-1 rounded-2xl stroke bg-surface p-3">
                 <p className="font-semibold">{h.label}</p>
 
-                <AgentLine h={h} catalog={catalog} pick={pickFor(picks, h, catalog)} />
+                <AgentLine h={h} catalog={catalog} pick={pickFor(picks, h, catalog, def)} />
                 <NativeDetails h={h}/>
 
               </li>
@@ -278,20 +293,25 @@ function AgentChoice({ h, catalog, pick, disabled, onPick }: {
   }
   const mine = agentsFor(catalog, h.id);
   const name = "setup-agent-" + h.id;
+  const note = sameToolNote(h, catalog, pick);
   return (
     <div className="space-y-3 border-t border-hairline p-3">
       {mine.length === 1 && pick.id === mine[0].record.id ? <p className="text-[14px] font-semibold">Agent: {mine[0].record.label}</p> : mine.length > 0 ? (
         <fieldset>
           <legend className="text-[14px] font-bold">Agent</legend>
+          {note && <p className="mt-1 text-[14px] text-text-2">{note}</p>}
           <div className="mt-1.5 flex flex-col gap-2">
             {mine.map((a) => (
               <label key={a.record.id} className="flex min-h-12 cursor-pointer items-center gap-3 rounded-2xl stroke bg-surface px-3.5 has-[:checked]:bg-agent">
                 <input type="radio" name={name} checked={pick.id === a.record.id} disabled={disabled} onChange={() => onPick(pickOf(a))} className="size-5 accent-[var(--an-agent-ink)]" />
-                <span className="min-w-0 flex-1 font-semibold [overflow-wrap:anywhere]">{a.record.label}</span>
+                <span className="min-w-0 flex-1">
+                  <span className="block font-semibold [overflow-wrap:anywhere]">{a.record.label}</span>
+                  <span className="block font-mono text-[12px] text-text-2 [overflow-wrap:anywhere]">{a.responder?.dir}</span>
+                </span>
               </label>
             ))}
           </div>
-          {pick.mustChoose && <Hint className="mt-1.5 px-1">You have several agents that run {h.label}. Choose the one to keep using.</Hint>}
+          <Hint className="mt-1.5 px-1">Nothing is turned off here. To turn one off, use its switch in Agents.</Hint>
         </fieldset>
       ) : (
         <div>
@@ -300,7 +320,7 @@ function AgentChoice({ h, catalog, pick, disabled, onPick }: {
             onChange={(e) => onPick({ ...pick, label: e.target.value })} />
         </div>
       )}
-      <FolderField label={"Where " + (pick.label.trim() || h.label) + " works"} value={pick.dir} disabled={disabled || pick.mustChoose}
+      <FolderField label={"Where " + (pick.label.trim() || h.label) + " works"} value={pick.dir} disabled={disabled}
         onChange={(dir) => onPick({ ...pick, dir })}
         hint={pick.id ? "It keeps its name; only its folder changes if you choose another." : "Others can pick it in a conversation. It works there with your own setup and permissions."} />
     </div>
@@ -310,10 +330,12 @@ function AgentChoice({ h, catalog, pick, disabled, onPick }: {
 /** AgentLine: what the review will do with the tool's agent, in words. */
 function AgentLine({ h, catalog, pick }: { h: T.AssistantSetupHarness; catalog: T.AgentCatalogView | null; pick: AgentPick }) {
   if (!canHaveAgent(catalog, h.id)) return <p className="text-[14px] text-text-2">An AgentNet agent cannot run with this tool here yet.</p>;
+  const others = othersKept(h, catalog, pick);
   return (
     <>
       <p className="text-[14px]"><span className="font-semibold">{pick.id ? "Keeps its agent: " : "New agent: "}</span>{pick.label.trim()}</p>
       <p className="text-[14px]"><span className="font-semibold">Works in: </span><span className="font-mono text-[13px] [overflow-wrap:anywhere]">{pick.dir}</span></p>
+      {others.length > 0 && <p className="text-[14px]"><span className="font-semibold">Stays as it is: </span>{others.join(", ")}</p>}
     </>
   );
 }

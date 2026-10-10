@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { IconDeviceDesktop, IconDeviceLaptop, IconDeviceMobile } from "@tabler/icons-react";
 import type { Api, T } from "../api";
 import { useAgentNames, useApp } from "../context";
-import { agentName, deviceKind, firstLine, isWorkingItem } from "../model";
+import { agentName, deviceKind, firstLine, isRunningElsewhere, isWorkingItem } from "../model";
 import { AgentAvatar, PersonAvatar } from "../ui/Avatar";
 import { Button } from "../ui/Button";
 import { Tag } from "../ui/Tag";
@@ -66,8 +66,11 @@ function RequestRow({ c, o }: Props) {
   const [sheet, setSheet] = useState<"" | "decline" | "close" | "stop">("");
   const acts = c.decide_on ? [] : c.actions || [];
   const can = (a: string) => acts.includes(a);
-  const human = c.reason === Reason.needsHuman;
-  const retry = human || c.reason === Reason.interrupted;
+  // A stale host word reports no result and asks nothing; running is work.
+  const stale = !!c.stale;
+  const running = isRunningElsewhere(c);
+  const human = c.reason === Reason.needsHuman && !stale;
+  const retry = human || c.reason === Reason.interrupted && !stale;
   const working = isWorkingItem(c);
   const title = convTitle(c, o);
   const targetID = c.target?.agent_id;
@@ -77,7 +80,10 @@ function RequestRow({ c, o }: Props) {
   const who = senderOf(c, o);
   const kind = c.kind === "task" ? "task" : "question";
   const said = human && c.why ? whyWords(c.why, c.peer, o) : "";
-  const actions = c.decide_on ? (working ? <p className="mt-1 text-[14px] text-text-2">Working on {deviceWords(c.decide_on, o)}.</p> : c.continuation?.host ? <ResolveOwnRequest request={c.continuation} disabled={!!busy} /> : <DecideOn address={c.decide_on} o={o} />) : acts.length ? <>
+  const actions = c.decide_on ? (working ? <p className="mt-1 text-[14px] text-text-2">Working on {deviceWords(c.decide_on, o)}.</p>
+    : stale ? <p className="mt-1 text-[14px] text-text-2 [overflow-wrap:anywhere]" data-unreported>{c.why || "No result reported"}</p>
+    : running ? <p className="mt-1 text-[14px] text-text-2">Running on {deviceWords(c.decide_on, o)}.</p>
+    : c.continuation?.host ? <ResolveOwnRequest request={c.continuation} disabled={!!busy} /> : <DecideOn address={c.decide_on} o={o} />) : acts.length ? <>
     {can("cancel") && <Button variant="danger" size="sm" disabled={!!busy} onClick={() => setSheet("stop")}>Stop</Button>}
     {can("accept") && <Button variant={retry ? "outline" : "act"} size="sm" disabled={!!busy}
       onClick={() => run("accept", (api) => api.act({ do: "accept", id: c.id }), retry ? "Running it again." : "Allowed once.")}>
@@ -91,7 +97,7 @@ function RequestRow({ c, o }: Props) {
       <OpenCard onOpen={() => go("dm", c.conv, c.id)} current={isOpen(c.conv, c.id)} label={title + ". Open it in the chat."}
         face={human ? <AgentAvatar seed={c.pid || c.peer} size={40} /> : <SenderFace c={c} o={o} />} actions={actions}
         detail={said ? <details><summary className="cursor-pointer font-semibold">Read the agent’s whole message</summary><p className="pt-2 whitespace-pre-wrap [overflow-wrap:anywhere]">{said}</p></details> : undefined}>
-        <Body tag={working ? <Tag tone="agent">Working</Tag> : human ? <Tag tone={c.decide_on ? "muted" : "act"}>Needs you</Tag> : kindTag(c.kind)} at={c.at} title={title} quote={firstLine(c.excerpt, 160)}
+        <Body tag={working || running ? <Tag tone="agent">Working</Tag> : stale ? <Tag tone="muted">No result</Tag> : human ? <Tag tone={c.decide_on ? "muted" : "act"}>Needs you</Tag> : kindTag(c.kind)} at={c.at} title={title} quote={firstLine(c.excerpt, 160)}
           meta={capital(inChat(c.conv, o)) + (working ? " · Already running" : retry || c.decide_on ? "" : c.kind === "task" ? " · Runs only if you allow it" : " · Answered only if you allow it")}>
           {targetLabel && <p className="pt-1 text-[14px] font-semibold text-agent-ink" data-request-target>{targetLabel}</p>}
           {said && <p className="pt-1 line-clamp-2 text-[14px] text-text-2 [overflow-wrap:anywhere]"><b className="font-bold text-agent-ink">Your agent says:</b> {said}</p>}

@@ -53,7 +53,7 @@ export function pendingSends(host, changed = () => {}) {
     ready: id => ledger.get(id)?.ready || Promise.resolve(),
     finish(id, result) {
       const x = ledger.get(id); if (!x) return;
-      x.saved();
+      x.saved(); x.done = true;
       x.m.id = result?.id || id;
       x.m.lid = result?.lid || x.m.lid;
       x.m.state = result?.state || 'queued'; x.m.delivery = x.m.state;
@@ -67,6 +67,9 @@ export function pendingSends(host, changed = () => {}) {
       x.m._failed = true; notify(); return true;
     },
     remove(id) { ledger.get(id)?.saved(); ledger.delete(id); notify(); },
+    // unsent: a send begun here and not yet stored, or failed and kept with
+    // its Retry. Its draft was cleared as it began: a reload would lose it.
+    unsent: () => [...ledger.values()].some(x => !x.done),
     dispose() { if (shared.changed === changed) shared.changed = null; },
     merge(key, messages = []) {
       const actual = messages.filter(m => !m._local);

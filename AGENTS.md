@@ -56,6 +56,17 @@ program, `agentnet`, that is both the laptop client and the Hub.
 - **Fail closed:** TLS is never skipped (pinned certificate or system CAs),
   changed peer keys block until trusted, revoked agents are refused, secrets
   and plaintext never go to logs.
+- **Latest version only; outdated devices never impede others** (owner
+  rule, v0.8.17). A relay running a release serves only that release: after
+  its grace period an older device is suspended (HTTP 426 update_required;
+  it may still ack, finish admitted answers/results and their read-only
+  lookups and uploads) and is told to update; messages for it wait in custody.
+  Only the relay's own release sets the threshold — an admin recommendation
+  never suspends anyone. Senders never wait for a suspended device and never
+  drop its copies. Every client updates itself (desktop app, headless/server
+  daemon, browser reload) from the fixed release origin with checksums, only
+  when no job runs. The version header is unsigned: availability only, never
+  authority.
 - **Keep it lean:** standard library first; current direct dependencies are
   age, modernc SQLite, x/sys and the official A2A SDK. Add one only when a
   requirement needs it. No MCP server, no extra services.
@@ -99,6 +110,20 @@ program, `agentnet`, that is both the laptop client and the Hub.
   Platform-specific and opt-in skips must not be reported as executed tests.
   Add a focused regression for every bug. Tests that need a real model or
   infrastructure are opt-in (`AGENTNET_LIVE=claude`, `scripts/hub-container-test.sh`).
+- **Mixed-version gate, required before every release** ("older apps must not
+  impede others"): `TestMixedVersion` (itest/mixedversion_test.go) runs real
+  programs: a relay built from this source as the next release (latest-only
+  policy on), devices on this source, and devices on the newest published
+  release tag below HEAD (v0.8.16 for v0.8.17), built from that tag. It checks
+  that suspension of outdated devices leaves the others' DMs and groups
+  undisturbed and nothing loops, and that an update by hand delivers the
+  backlog. Run it locally with `git fetch --tags` then
+  `go test ./itest -run TestMixedVersion -v -count=1` (about a minute; the tag
+  build is cached in the user cache directory, `AGENTNET_COMPAT_CACHE`
+  overrides; `AGENTNET_MIXED_TAG=vX.Y.Z` tries another published release).
+  Without the tag it skips, and a skip is not a pass. CI's Linux native job
+  checks out full history with tags and sets `AGENTNET_REQUIRE_COMPAT=1`, which
+  makes a missing tag a failure.
 - Claims must match evidence: cross-compiling is not running on that OS;
   a local container test is not a platform deployment.
 - Schema changes are new SQL steps appended in the owning store; never edit

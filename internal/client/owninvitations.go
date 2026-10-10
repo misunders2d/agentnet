@@ -212,6 +212,9 @@ func (a *Agent) admitInvitationSync(ctx context.Context, env envelope.Envelope, 
 			return err
 		}
 	}
+	if err = receiptCarrier(tx, env.ID); err != nil {
+		return err
+	}
 	return a.store.done(tx.Commit())
 }
 

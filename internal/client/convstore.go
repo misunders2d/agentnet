@@ -210,8 +210,8 @@ func (s *store) addConvInbox(in envelope.Inner, verifiedBy, state string, fromQu
 	case !errors.Is(err, sql.ErrNoRows):
 		return "", err
 	}
-	var stored, storedPID string
-	err = tx.QueryRow(`SELECT coalesce(content_hash, ''), coalesce(pid, '') FROM inbox WHERE verified_by = ? AND lid = ?`, verifiedBy, in.LID).Scan(&stored, &storedPID)
+	var storedID, stored, storedPID string
+	err = tx.QueryRow(`SELECT id, coalesce(content_hash, ''), coalesce(pid, '') FROM inbox WHERE verified_by = ? AND lid = ?`, verifiedBy, in.LID).Scan(&storedID, &stored, &storedPID)
 	if err == nil && stored != hash && in.PID != "" && storedPID == in.PID && stored == legacyContentHash(in) {
 		// Stored before the participation id was hashed: the same message.
 		if _, err := tx.Exec(`UPDATE inbox SET content_hash = ? WHERE verified_by = ? AND lid = ?`, hash, verifiedBy, in.LID); err != nil {
@@ -226,6 +226,14 @@ func (s *store) addConvInbox(in envelope.Inner, verifiedBy, state string, fromQu
 		}
 		if fromQuarantine {
 			if _, err := tx.Exec(`DELETE FROM quarantine WHERE id = ?`, in.ID); err != nil {
+				return "", err
+			}
+		}
+		// The same logical message under another envelope ID (a re-sent fan
+		// copy) stores nothing new, but its own receipt: else the relay keeps
+		// it in custody and pushes it again on every connection (MIXED-1).
+		if storedID != in.ID {
+			if err := receiptCarrier(tx, in.ID); err != nil {
 				return "", err
 			}
 		}
@@ -665,12 +673,13 @@ type waitingCopy struct {
 	to, sub, required, status, agentID, conv, pid, body string
 	human                                               bool   // carries a captured audience (hgp1 besides its requirement)
 	humanRaw                                            string // that audience, as stored (rm1 besides it for a room's: roomCopy)
+	v                                                   int    // its envelope's version
 }
 
 // convWaiting returns the ids and recipients of waiting conversation
 // messages.
 func (s *store) convWaiting() (map[string]waitingCopy, error) {
-	rows, err := s.db.Query(`SELECT id, recipient, coalesce(sub, ''), coalesce(required_cap, ''), coalesce(status, ''), coalesce(agent_id, ''), coalesce(conv, ''), coalesce(pid, ''), coalesce(body, ''), coalesce(human, '') FROM outbox WHERE state = ?`, stateConvWaiting)
+	rows, err := s.db.Query(`SELECT id, recipient, coalesce(sub, ''), coalesce(required_cap, ''), coalesce(status, ''), coalesce(agent_id, ''), coalesce(conv, ''), coalesce(pid, ''), coalesce(body, ''), coalesce(human, ''), coalesce(json_extract(envelope, '$.v'), 0) FROM outbox WHERE state = ?`, stateConvWaiting)
 	if err != nil {
 		return nil, err
 	}
@@ -679,7 +688,7 @@ func (s *store) convWaiting() (map[string]waitingCopy, error) {
 	for rows.Next() {
 		var id string
 		var w waitingCopy
-		if err := rows.Scan(&id, &w.to, &w.sub, &w.required, &w.status, &w.agentID, &w.conv, &w.pid, &w.body, &w.humanRaw); err != nil {
+		if err := rows.Scan(&id, &w.to, &w.sub, &w.required, &w.status, &w.agentID, &w.conv, &w.pid, &w.body, &w.humanRaw, &w.v); err != nil {
 			return nil, err
 		}
 		w.human = w.humanRaw != ""
@@ -775,6 +784,7 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool) ([]
 	if err != nil {
 		return nil, err
 	}
+	suspended := s.suspendedDevices()
 	// A received request's agent_id is its local executor stamp. The
 	// request remains its human sender's turn; only replies name an author.
 	rows, err := s.db.Query(`
@@ -821,7 +831,7 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool) ([]
 			if person == "" {
 				person = persons[to]
 			}
-			c := ConvCopy{ID: m.ID, To: to, State: m.State, Detail: m.Detail, Own: own[to], Person: person, SendStopped: m.SendStopped, DeliveryUncertain: m.DeliveryUncertain}
+			c := ConvCopy{ID: m.ID, To: to, State: m.State, Detail: m.Detail, Own: own[to], Person: person, SendStopped: m.SendStopped, DeliveryUncertain: m.DeliveryUncertain, Suspended: suspended[to]}
 			if i, ok := sent[m.LID]; ok {
 				out[i].SendStopped = out[i].SendStopped || m.SendStopped
 				out[i].DeliveryUncertain = out[i].DeliveryUncertain || m.DeliveryUncertain
@@ -859,6 +869,26 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool) ([]
 		return nil, err
 	}
 	rows.Close()
+	// The devices a message sent here was not sealed for at all: listed
+	// with it, and the first of another person's names its state.
+	skipped, err := s.skippedCopies(conv, "")
+	if err != nil {
+		return nil, err
+	}
+	for lid, cs := range skipped {
+		i, ok := sent[lid]
+		if !ok {
+			continue // not shown (deleted)
+		}
+		for _, c := range cs {
+			c.Own = own[c.To]
+			if c.Person == "" {
+				c.Person = persons[c.To]
+			}
+			out[i].Copies = append(out[i].Copies, c)
+		}
+		out[i].State, out[i].Detail = notSentFirst(out[i].State, out[i].Detail, out[i].Copies)
+	}
 	files, err := s.convFiles(conv)
 	if err != nil {
 		return nil, err

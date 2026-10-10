@@ -30,8 +30,10 @@ func TestCLIOpenReview(t *testing.T) {
 		return false
 	})
 
+	// Without a default agent it says so and names exactly where to set one.
 	out := c.run("--home", "bob", "open", task)
-	if !strings.Contains(out, "No coding agent opened") || !strings.Contains(out, "please tidy") {
+	if !strings.Contains(out, "No coding agent opened. This computer has no default agent, so questions wait for you. Set one: AgentNet → Agents → Default agent, or agentnet responder set --harness ") ||
+		!strings.Contains(out, " --dir <folder>.\nShowing it here.") || !strings.Contains(out, "please tidy") {
 		t.Fatalf("open without a coding agent:\n%s", out)
 	}
 
