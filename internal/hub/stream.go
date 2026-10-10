@@ -18,15 +18,17 @@ import (
 // streams tracks live push connections per agent so new messages wake them
 // and revocation closes them.
 type streams struct {
-	mu   sync.Mutex
-	subs map[string]map[*subscriber]struct{}
+	mu    sync.Mutex
+	subs  map[string]map[*subscriber]struct{}
+	added uint64 // connections so far: orders one agent's connections
 }
 
 type subscriber struct {
 	id      string // connection id, echoed back in ping acknowledgements
+	n       uint64 // order of connection: the agent's newest has the highest
 	wake    chan struct{}
 	cancel  context.CancelFunc
-	lastAck atomic.Int64 // unix nanoseconds of the last acknowledged ping
+	lastAck atomic.Int64 // unix nanoseconds of the last sign of life (ack, received)
 }
 
 func (s *streams) add(agent string, cancel context.CancelFunc) *subscriber {
@@ -34,6 +36,8 @@ func (s *streams) add(agent string, cancel context.CancelFunc) *subscriber {
 	sub.lastAck.Store(time.Now().UnixNano())
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.added++
+	sub.n = s.added
 	if s.subs == nil {
 		s.subs = map[string]map[*subscriber]struct{}{}
 	}
@@ -79,6 +83,28 @@ func (s *streams) ack(agent, id string) bool {
 	return false
 }
 
+// received records that agent acknowledged a message pushed to it. A device
+// storing a backlog answers a ping only after every message ahead of it
+// (both clients handle the stream in order), yet acknowledges each message
+// once stored: a sign of life as good as a ping's. It counts for the agent's
+// newest connection only. A device reads one stream at a time (the browser
+// holds its tab lock, the daemon its process lock) and connects again only
+// after giving up the last, so an older connection still listed here is one
+// it abandoned, perhaps half-open, and the lease must still close it.
+func (s *streams) received(agent string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var newest *subscriber
+	for sub := range s.subs[agent] {
+		if newest == nil || sub.n > newest.n {
+			newest = sub
+		}
+	}
+	if newest != nil {
+		newest.lastAck.Store(time.Now().UnixNano())
+	}
+}
+
 // notifyAll wakes every stream, e.g. to push a changed release.
 func (s *streams) notifyAll() {
 	s.mu.Lock()
@@ -113,7 +139,9 @@ var streamWriteTimeout = 15 * time.Second
 // with a signed acknowledgement (one small request per ping interval). A
 // connection with no acknowledgement for two ping intervals is closed, so a
 // silently vanished laptop's session ends within about three ping intervals
-// plus the session grace period.
+// plus the session grace period. A message acknowledgement from the device
+// counts too (streams.received): a busy device answers pings late. Pings
+// keep their interval while a backlog is pushed (between frames).
 func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 	caller, ok := h.authenticate(w, r)
 	if !ok {
@@ -195,6 +223,29 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 		h.holdPending(ctx, caller, sub, ping, lease, write)
 		return
 	}
+	// pinged closes a connection that showed no sign of life for the lease,
+	// or asks for one with this connection's ping.
+	pinged := func() bool {
+		if time.Since(time.Unix(0, sub.lastAck.Load())) > lease {
+			h.cfg.Logf("closing silent stream of %s#%s", caller, ad.Session)
+			return false
+		}
+		return write("event: ping\ndata: {\"conn\":%q}\n\n", sub.id)
+	}
+	// between runs after each frame of a backlog. A long push (a large queue
+	// to a peer that reads slowly, so each write waits for it) never reaches
+	// the wait below: without this it would send no ping, and the first tick
+	// after it would find the lease expired without having asked. A due ping
+	// goes between two whole frames, so nothing is reordered; clients handle
+	// it in stream order like any other.
+	between := func() bool {
+		select {
+		case <-ping.C:
+			return pinged()
+		default:
+			return true
+		}
+	}
 	signals := h.signals.subscribe(caller, sub)
 	defer h.signals.unsubscribe(caller, sub)
 	var lastSeq, adminNoticeCursor int64
@@ -260,6 +311,9 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			adminNoticeCursor = n.Seq
+			if !between() {
+				return
+			}
 		}
 		if len(notices) == 100 {
 			continue
@@ -275,6 +329,9 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				receiptCursor = receipt.Seq
+				if !between() {
+					return
+				}
 			}
 			if len(receipts) == protocol.ReceiptBatch {
 				continue
@@ -289,6 +346,9 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			lastSeq = m.Seq
+			if !between() {
+				return
+			}
 		}
 		if len(msgs) == 100 {
 			continue // more backlog
@@ -304,11 +364,7 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 			}
 		case <-sub.wake:
 		case <-ping.C:
-			if time.Since(time.Unix(0, sub.lastAck.Load())) > lease {
-				h.cfg.Logf("closing silent stream of %s#%s", caller, ad.Session)
-				return
-			}
-			if !write("event: ping\ndata: {\"conn\":%q}\n\n", sub.id) {
+			if !pinged() {
 				return
 			}
 		case <-ctx.Done():
