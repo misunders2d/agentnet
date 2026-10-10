@@ -919,6 +919,26 @@ func (a *Agent) holdEndedOutputs(only string) (int, error) {
 // looked at.
 func (a *Agent) mayDeliver(env envelope.Envelope) (bool, error) {
 	if env.V == envelope.Version2 {
+		var sub, fp, state string
+		if err := a.store.db.QueryRow(`SELECT coalesce(sub,''),coalesce(recipient_fp,''),state FROM outbox WHERE id=?`, env.ID).Scan(&sub, &fp, &state); err != nil {
+			return false, err
+		}
+		if sub == envelope.SubHistoryArchive {
+			person, exists, err := a.store.selfPerson(a.Address)
+			if err != nil || !exists {
+				return false, err
+			}
+			dev, exists := person.device(env.To)
+			if !exists || dev.Fingerprint() != fp || state != stateQueued {
+				return false, nil
+			}
+			if err = historyRecoveryCurrent(a.store.db, a.Self(), dev); err != nil {
+				return false, err
+			}
+			return true, nil
+		}
+	}
+	if env.V == envelope.Version2 {
 		if err := a.discoveredHistoryDelivery(env); err != nil {
 			if errors.Is(err, errHistoryRecoveryAuthority) {
 				return false, nil

@@ -10,7 +10,7 @@ export async function checkControlHistory({world,check,realIDB,c,root,conv,keys,
   const original={v:2,id:wire.newID(),lid:wire.newID(),from:address,to:alicePub.address,ts:1700000000,kind:'message',conv,root:wire.rootJSON(root),body:'original immutable text',fan:[{person:roster.person,roster:await wire.rosterHash(roster)}]};
   const row={...original,fp:source.e.fp,at:1700000000000,state:'delivered',envelope:await wire.seal(original,keys,alicePub),group_admission:stamp,recipient_fp:await wire.fingerprint(alicePub),required_cap:wire.CapGroup};
   await source.st.write([{s:'outbox',k:row.id,v:row}]);
-  source.e.groupSupport=async()=>{};source.e.ctlSupport=async()=>[true,''];source.e.post=async()=>{};
+  source.e.groupSupport=async()=>{};source.e.ctlSupport=async(_address,_pin,cap)=>[cap!==wire.CapHistoryArchive,''];source.e.post=async()=>{};
   await source.e.messageControl('edit',{conv,id:row.id,dir:'out',text:'final edited text'});
   await source.e.messageControl('react',{conv,id:row.id,dir:'out',emoji:'👍'});
   const removed={...original,id:wire.newID(),lid:wire.newID(),body:'deleted text must never export'};
@@ -55,6 +55,52 @@ export async function checkControlHistory({world,check,realIDB,c,root,conv,keys,
    check(refused,'outgoing original control refuses altered '+mode);
    if(mode==='signature')await source.st.write([{s:'outbox',k:storedRevision.id,v:storedRevision}]);
   }
+  // The same signed structural prerequisites must also survive actual archive
+  // staging, age blob upload/download and normal admission on a fresh phone.
+  const archiveTarget=await world();
+  try {
+   archiveTarget.extraChains.set(roster.person,chain.map(r=>JSON.parse(wire.rosterJSON(r))));
+   Object.assign(archiveTarget.e,{keys:phoneKeys,address:phoneAddress,fp:phoneFP,me:person});
+   await archiveTarget.st.write([{s:'kv',k:'person',v:person},{s:'kv',k:'identity',v:{keys:phoneKeys,address:phoneAddress,fingerprint:phoneFP}}]);
+   await archiveTarget.e.pinDevices(person);
+   const priorFetch=source.e.fetch,priorQueue=source.e.queueOutbox,uploads=new Map();
+   source.e.fetch=async(url,options)=>{
+    const path=new URL(url).pathname;
+    if(path==='/v1/blobs'&&options.method==='POST'){
+     const blob=JSON.parse(options.body);uploads.set(blob.id,{...blob,received:0,state:'uploading',parts:[]});
+     return new Response(JSON.stringify(uploads.get(blob.id)));
+    }
+    const id=path.split('/')[3],upload=uploads.get(id);
+    if(upload&&options.method==='PUT'){
+     upload.parts.push(new Uint8Array(options.body));upload.received+=options.body.byteLength;
+     return new Response(JSON.stringify(upload));
+    }
+    if(upload&&path.endsWith('/complete')){
+     const ct=new Uint8Array(upload.size);let offset=0;for(const part of upload.parts){ct.set(part,offset);offset+=part.length;}
+     archiveTarget.blobs.set(id,ct);upload.state='stored';return new Response(JSON.stringify(upload));
+    }
+    return priorFetch(url,options);
+   };
+   source.e.queueOutbox=()=>{};source.e.ctlSupport=async()=>[true,''];
+   try {
+    await source.st.write(await source.e.archives().prepare(copies,[],[],dev));
+    source.e.connected=true;await source.e.archives().wake();source.e.connected=false;
+    const descriptors=await source.st.outboxSub(wire.SubHistoryArchive);
+    check(descriptors.length>0&&descriptors.every(r=>r.files[0].uploaded&&!r.files[0].ct),'group archive source uploads encrypted chunks before descriptors');
+    check(copies.some(r=>[wire.SubGroupProof,wire.SubGroupContext].includes(r.sub)&&r.files?.length),'group archive contains actual signed proof/context blob prerequisites');
+    for(const descriptor of descriptors){await archiveTarget.receive({envelope:descriptor.envelope});archiveTarget.e.connected=true;await archiveTarget.e.archives().wake();archiveTarget.e.connected=false;}
+    const jobs=await archiveTarget.st.prefix('kv','history-archive/in/');
+    check(jobs.length===descriptors.length&&jobs.every(j=>j.state==='done'),'group structural archive finishes normal child admissions');
+    check(!(await archiveTarget.st.all('held')).length,'group archive proof/context and history leave no held children');
+    check((await archiveTarget.e.groupThread(conv)).messages.find(m=>m.lid===original.lid)?.text==='final edited text','archive fresh phone renders exact final group revision');
+    check(!(await archiveTarget.st.all('receipts')).some(r=>copies.some(child=>child.id===r.id))&&!archiveTarget.receipts.some(r=>copies.some(child=>child.id===r.id)),'archived structural children never fabricate relay receipts');
+    source.e.connected=false;
+    for(const descriptor of descriptors)await source.e.archives().receipt({...descriptor,state:'delivered'});
+    const accepted=await Promise.all(copies.map(row=>source.st.get('outbox',row.id)));
+    check(accepted.filter(row=>row.files?.length).every(row=>row.state==='archive_accepted'&&row.files.every(file=>file.ct===null&&file.attachment.blob.id)),'retained group archive releases duplicate structural transfer ciphertext while keeping signed metadata');
+
+   } finally {source.e.connected=false;source.e.fetch=priorFetch;source.e.queueOutbox=priorQueue;}
+  } finally {await archiveTarget.close();}
   for(const r of copies){for(const f of r.files||[])target.blobs.set(f.attachment.blob.id,f.ct);await target.receive({envelope:r.envelope});}
   await target.e.groupParticipationHistoryCheck(conv,history.find(h=>h.sub===wire.SubRevision),{address,fingerprint:source.e.fp});
   check(!(await target.st.all('held')).length,'all valid linked history admitted: '+JSON.stringify((await target.st.all('held')).map(r=>({reason:r.reason,detail:r.detail}))));

@@ -44,47 +44,51 @@ type Agent struct {
 	Address string
 	Logf    func(format string, args ...any)
 
-	deliveryLocks  sync.Map // envelope id -> cancellation-aware lock, shared by immediate sends and retry passes
-	flushOnce      sync.Once
-	flushLock      chan struct{} // readable turns serialize independently of replication
-	syncFlushLock  chan struct{} // one background replication pass at a time
-	receiptOnce    sync.Once
-	receiptLock    chan struct{} // dispositions never wait for history upkeep
-	routeHints     sync.Map      // optional verified first-attempt direct route; never queue storage
-	posting        backgroundPosts
-	humanMu        sync.RWMutex  // local human end commits serialize with ordinary copy/file delivery
-	statusLocks    sync.Map      // request id → *sync.Mutex: one status of a request at a time (headless.go)
-	statusWake     chan struct{} // wakes this process's status sender (statusLoop)
-	statusLive     atomic.Bool   // statusLoop runs in this process
-	home           string
-	id             *identity.Identity
-	store          *store
-	teams          teamRuntime   // the relay's team directory as last seen (teams.go)
-	typing         typingRuntime // live typing signals, memory only (typing.go)
-	groupWork      groupWork     // group journal upkeep due on the next sync (convgroup.go)
-	hub            *hubConn
-	heartbeat      time.Duration
-	adQuery        string                     // this run's signed session ad, for the push stream
-	kick           func()                     // wakes the current stream's retry worker
-	kickMu         sync.Mutex                 // guards kick for kickNow
-	kicksLive      atomic.Bool                // this Agent's daemon serves the local wake-up socket (startWorker)
-	selfKicks      atomic.Int64               // wakes in flight that this daemon sent itself (notifyOwnWork)
-	receiveFails   receiveFailures            // transient admission failures per pushed envelope (daemon.go)
-	prefetchFailed map[string]bool            // conversation files that could not be kept this run (historyfiles.go; the stream worker only)
-	wakeWorker     func()                     // sends a coalesced local wake; stable for this Agent handle
-	workerLanes    executionLanes             // local selected executors, through run cleanup
-	appUpdateMu    sync.RWMutex               // holds job claim/run against whole-app replacement
-	workerWakeFeed *changeFeed                // broadcast kicks/pings to every active run
-	workerWake     chan struct{}              // pending local job wake survives worker startup
-	changes        *changeFeed                // local state changed (changes.go)
-	listed         listedCache                // rosters the Hub lists for persons not pinned here (persons.go)
-	members        memberState                // the Hub's member list from the push stream (members.go)
-	session        string                     // this run's session id (Run); "" outside Run
-	convWork       convWork                   // conversation upkeep due on the next sync (conv.go)
-	capsPub        capsPublisher              // this run's capability records (conv.go)
-	agentSweep     agentSweep                 // the worker's look at requests to its agent (agentjob.go)
-	alertWake      chan struct{}              // wakes the desktop alert loop (alerts.go)
-	openConv       func(conv string) []string // RunOptions.OpenConv
+	deliveryLocks    sync.Map // envelope id -> cancellation-aware lock, shared by immediate sends and retry passes
+	flushOnce        sync.Once
+	flushLock        chan struct{} // readable turns serialize independently of replication
+	syncFlushLock    chan struct{} // one background replication pass at a time
+	archiveOnce      sync.Once
+	archiveLock      chan struct{}
+	archivePosting   backgroundPosts
+	archiveImporting backgroundPosts
+	receiptOnce      sync.Once
+	receiptLock      chan struct{} // dispositions never wait for history upkeep
+	routeHints       sync.Map      // optional verified first-attempt direct route; never queue storage
+	posting          backgroundPosts
+	humanMu          sync.RWMutex  // local human end commits serialize with ordinary copy/file delivery
+	statusLocks      sync.Map      // request id → *sync.Mutex: one status of a request at a time (headless.go)
+	statusWake       chan struct{} // wakes this process's status sender (statusLoop)
+	statusLive       atomic.Bool   // statusLoop runs in this process
+	home             string
+	id               *identity.Identity
+	store            *store
+	teams            teamRuntime   // the relay's team directory as last seen (teams.go)
+	typing           typingRuntime // live typing signals, memory only (typing.go)
+	groupWork        groupWork     // group journal upkeep due on the next sync (convgroup.go)
+	hub              *hubConn
+	heartbeat        time.Duration
+	adQuery          string                     // this run's signed session ad, for the push stream
+	kick             func()                     // wakes the current stream's retry worker
+	kickMu           sync.Mutex                 // guards kick for kickNow
+	kicksLive        atomic.Bool                // this Agent's daemon serves the local wake-up socket (startWorker)
+	selfKicks        atomic.Int64               // wakes in flight that this daemon sent itself (notifyOwnWork)
+	receiveFails     receiveFailures            // transient admission failures per pushed envelope (daemon.go)
+	prefetchFailed   map[string]bool            // conversation files that could not be kept this run (historyfiles.go; the stream worker only)
+	wakeWorker       func()                     // sends a coalesced local wake; stable for this Agent handle
+	workerLanes      executionLanes             // local selected executors, through run cleanup
+	appUpdateMu      sync.RWMutex               // holds job claim/run against whole-app replacement
+	workerWakeFeed   *changeFeed                // broadcast kicks/pings to every active run
+	workerWake       chan struct{}              // pending local job wake survives worker startup
+	changes          *changeFeed                // local state changed (changes.go)
+	listed           listedCache                // rosters the Hub lists for persons not pinned here (persons.go)
+	members          memberState                // the Hub's member list from the push stream (members.go)
+	session          string                     // this run's session id (Run); "" outside Run
+	convWork         convWork                   // conversation upkeep due on the next sync (conv.go)
+	capsPub          capsPublisher              // this run's capability records (conv.go)
+	agentSweep       agentSweep                 // the worker's look at requests to its agent (agentjob.go)
+	alertWake        chan struct{}              // wakes the desktop alert loop (alerts.go)
+	openConv         func(conv string) []string // RunOptions.OpenConv
 
 	openPage func(fragment string) []string // RunOptions.OpenPage (the AgentNet app's window)
 
@@ -302,6 +306,7 @@ func Open(home string) (*Agent, error) {
 
 // Close releases local storage and the agent's unused Hub connections.
 func (a *Agent) Close() error {
+	a.stopArchivePosts()
 	a.stopBackgroundPosts()
 	a.typingDisconnected()
 	a.hub.release()
@@ -663,7 +668,8 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 		return SendResult{ID: env.ID, State: state}, err
 	}
 	var storedHuman, storedRequired, storedSub string
-	if err := a.store.db.QueryRow(`SELECT coalesce(human,''),coalesce(required_cap,''),coalesce(sub,'') FROM outbox WHERE id=?`, env.ID).Scan(&storedHuman, &storedRequired, &storedSub); err != nil {
+	var replicationLive bool
+	if err := a.store.db.QueryRow(`SELECT coalesce(human,''),coalesce(required_cap,''),coalesce(sub,''),replication_live FROM outbox WHERE id=?`, env.ID).Scan(&storedHuman, &storedRequired, &storedSub, &replicationLive); err != nil {
 		return SendResult{}, err
 	}
 	if storedHuman != "" || storedRequired == protocol.CapHumanParticipation && storedSub == envelope.SubExcerpt {
@@ -697,7 +703,7 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 			}
 			// Waiting copies release when the recipient's signed capabilities
 			// change; progress is never sent unmarked to an older session.
-			if (n.proposal || conv != "" || required == protocol.CapModelSync || required == protocol.CapOwnSyncV2 || required == protocol.CapOwnSyncV3 || required == protocol.CapReadSync || required == protocol.CapTopicStateSync || required == protocol.CapProgress || required == protocol.CapAgentReaction) && errors.Is(err, errAgentIdentityUnsupported) {
+			if (n.proposal || conv != "" || required == protocol.CapHistoryArchive || required == protocol.CapModelSync || required == protocol.CapOwnSyncV2 || required == protocol.CapOwnSyncV3 || required == protocol.CapReadSync || required == protocol.CapTopicStateSync || required == protocol.CapProgress || required == protocol.CapAgentReaction) && errors.Is(err, errAgentIdentityUnsupported) {
 				return SendResult{ID: env.ID, State: stateConvWaiting, Detail: WaitPeerUpdate + err.Error()}, a.store.setOutboxState(env.ID, stateConvWaiting, WaitPeerUpdate+err.Error(), "")
 			}
 			if retryable(err) {
@@ -757,7 +763,7 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 			return SendResult{ID: env.ID, State: state}, e
 		}
 		path := "/v1/messages"
-		if isSyncSub(sub) {
+		if isSyncSub(sub) && !replicationLive {
 			path += "?" + protocol.MessageLaneQuery + "=" + protocol.MessageLaneSync
 		}
 		err = a.hub.do(ctx, "POST", path, env, &r)

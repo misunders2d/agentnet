@@ -51,7 +51,7 @@ func (a *Agent) Cleanup(saved bool) (CleanupResult, error) {
 	// A frozen request awaiting receiver setup, and a conversation message
 	// waiting until its recipient can read it, still own their exact
 	// ciphertext: it is uploaded once they are released, never spooled again.
-	rows, err := a.store.db.Query(`SELECT u.blob_id FROM uploads u JOIN outbox o ON o.id = u.message_id WHERE o.state IN (?, ?, ?)`, stateQueued, stateReceiverWaiting, stateConvWaiting)
+	rows, err := a.store.db.Query(`SELECT u.blob_id FROM uploads u JOIN outbox o ON o.id = u.message_id WHERE o.state IN (?, ?, ?, ?, ?)`, stateQueued, stateReceiverWaiting, stateConvWaiting, archiveStaged, archiveUploading)
 	if err != nil {
 		return res, err
 	}
@@ -73,7 +73,7 @@ func (a *Agent) Cleanup(saved bool) (CleanupResult, error) {
 		}
 		res.SpoolFiles++
 	}
-	if _, err := a.store.db.Exec(`DELETE FROM uploads WHERE message_id IN (SELECT id FROM outbox WHERE state NOT IN (?, ?, ?))`, stateQueued, stateReceiverWaiting, stateConvWaiting); err != nil {
+	if _, err := a.store.db.Exec(`DELETE FROM uploads WHERE message_id IN (SELECT id FROM outbox WHERE state NOT IN (?, ?, ?, ?, ?))`, stateQueued, stateReceiverWaiting, stateConvWaiting, archiveStaged, archiveUploading); err != nil {
 		return res, err
 	}
 

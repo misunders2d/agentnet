@@ -137,6 +137,20 @@ func copyRequirement(c outCopy) string {
 }
 
 func (a *Agent) requireParticipationCaps(ctx context.Context, key identity.Public, required string) error {
+	if required == protocol.CapHistoryArchive {
+		label, device, err := protocol.SplitAddress(key.Address)
+		if err != nil {
+			return err
+		}
+		var profile protocol.Profile
+		if err = a.hub.do(ctx, "GET", "/v1/agents/"+label+"/"+device+"/profile", nil, &profile); err != nil {
+			return err
+		}
+		if !profile.Supports(key.Address, key.SignKey, required) {
+			return &NeedsUpdateError{Address: key.Address, Cap: required}
+		}
+		return nil
+	}
 	if required != protocol.CapModelSync && required != protocol.CapTopicStateSync && required != protocol.CapTopicOrganization && required != protocol.CapRequestFollowup && required != protocol.CapTopicParticipation && required != protocol.CapOwnSyncV3 && required != protocol.CapOwnSyncV2 && required != protocol.CapContinuation && required != protocol.CapSendGroup && required != protocol.CapReadSync && required != protocol.CapGroupInvitationControl && required != protocol.CapGroupHumanParticipation && required != protocol.CapRootSync && required != protocol.CapHumanParticipation && required != protocol.CapAgentIdentity && required != protocol.CapExternalParticipation && required != protocol.CapGroup && required != protocol.CapHeadless && required != protocol.CapReplyReceiver && required != protocol.CapProgress && required != protocol.CapAgentReaction && required != protocol.CapConvClear && required != protocol.CapRoom {
 		return errors.New("unknown queued capability requirement")
 	}
@@ -317,6 +331,8 @@ type NeedsUpdateError struct{ Address, Cap string }
 func (e *NeedsUpdateError) Error() string {
 	message := "cannot read named agents yet; update all its active AgentNet sessions"
 	switch e.Cap {
+	case protocol.CapHistoryArchive:
+		message = "cannot read encrypted history archives yet; update all its active AgentNet sessions"
 	case protocol.CapRequestFollowup:
 		message = "cannot safely queue bound request follow-ups yet; update all its active AgentNet sessions"
 	case protocol.CapModelSync:

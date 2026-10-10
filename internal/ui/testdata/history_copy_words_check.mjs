@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 
 const sources=[['../web/src/features/Settings.profile.tsx','copyWords'],['../skins/classic/src/entry.mjs','historyLine'],['../skins/zoom/src/entry.mjs','historyLine']];
-const base={state:'done',done:0,total:0,delivery_known:true,queued:0,custody:0,delivered:0,blocked:0,deferred:0};
+const base={state:'done',done:0,total:0,delivery_known:true,queued:0,custody:0,retained:0,delivered:0,blocked:0,deferred:0};
 let checks=0;
 for(const [path,name] of sources) {
  const source=readFileSync(new URL(path,import.meta.url),'utf8');
@@ -13,5 +13,8 @@ for(const [path,name] of sources) {
   const value=words({...base,...delta});
   assert.match(value,want,path);assert.doesNotMatch(value,/Getting your chats|History queued|all chats synced/i,path);checks++;
  }
+ const retained=words({...base,retained:50});
+ assert.match(retained,/50 history records stored on the device/);
+ assert.doesNotMatch(retained,/waiting|attention|delivered|synced/i);checks++;
 }
 console.log('history source/receipt wording checks passed: '+checks);

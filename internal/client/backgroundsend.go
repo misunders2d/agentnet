@@ -39,6 +39,7 @@ type backgroundPosts struct {
 	sync.Mutex
 	done          chan struct{}
 	cancel        context.CancelFunc
+	archiveParent context.Context // latest stream wake, for canceled-stream handoff
 	again, closed bool
 }
 

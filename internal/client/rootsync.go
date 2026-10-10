@@ -81,7 +81,7 @@ func (a *Agent) rootSyncCopy(root protocol.ConvRoot, raw []byte, dev identity.Pu
 }
 
 func (a *Agent) rootSyncPresent(q dbq, conv string, dev identity.Public) (bool, error) {
-	rows, err := q.Query(`SELECT envelope FROM outbox WHERE conv=? AND recipient=? AND recipient_fp=? AND sub=? AND required_cap=? AND state IN ('queued','waiting','custody','delivered','quarantined')`, conv, dev.Address, dev.Fingerprint(), envelope.SubRootSync, protocol.CapRootSync)
+	rows, err := q.Query(`SELECT envelope FROM outbox WHERE conv=? AND recipient=? AND recipient_fp=? AND sub=? AND required_cap=? AND state IN ('queued','waiting','custody','delivered','quarantined','archive_staged','archive_accepted')`, conv, dev.Address, dev.Fingerprint(), envelope.SubRootSync, protocol.CapRootSync)
 	if err != nil {
 		return false, err
 	}

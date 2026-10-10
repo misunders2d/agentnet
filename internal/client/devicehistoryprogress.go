@@ -36,10 +36,12 @@ func (a *Agent) deviceHistoryProgress(j *HistoryJob, fp string) error {
 			return err
 		}
 		switch state {
-		case "queued", "waiting":
+		case "queued", "waiting", archiveStaged:
 			j.Queued += n
 		case "custody":
 			j.Custody += n
+		case archiveAccepted:
+			j.Retained += n
 		case "delivered":
 			j.Delivered += n
 		default:

@@ -537,6 +537,9 @@ func (s *store) useNonce(agent, nonce string, now time.Time) (bool, error) {
 // and digest. A retry with identical bytes returns the existing state; reuse
 // of the id for other content is a conflict.
 func (s *store) putMessage(env envelope.Envelope, canonical []byte, senderFP string, now time.Time, lane ...string) (string, error) {
+	if len(lane) != 0 && (len(lane) != 1 || lane[0] != protocol.MessageLaneLive && lane[0] != protocol.MessageLaneSync) {
+		return "", errors.New("invalid message lane")
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return "", err
@@ -548,6 +551,16 @@ func (s *store) putMessage(env envelope.Envelope, canonical []byte, senderFP str
 	if err == nil {
 		if string(existing) != string(canonical) {
 			return "", errIDConflict
+		}
+		// A signed, byte-identical retry can demote the sender's legacy
+		// custody copy. It cannot promote sync, change bytes or receipts,
+		// reattach blobs, or alter a copy already acknowledged.
+		if len(lane) == 1 && lane[0] == protocol.MessageLaneSync && state == protocol.StateCustody {
+			if _, err := tx.Exec(`UPDATE messages SET lane=? WHERE id=? AND sender=? AND recipient=? AND state=? AND lane=?`,
+				protocol.MessageLaneSync, env.ID, env.From, env.To, protocol.StateCustody, protocol.MessageLaneLive); err != nil {
+				return "", err
+			}
+			return state, tx.Commit()
 		}
 		return state, nil
 	}
@@ -570,9 +583,6 @@ func (s *store) putMessage(env envelope.Envelope, canonical []byte, senderFP str
 	insert := `INSERT INTO messages(id, sender, recipient, envelope, state, created_at, session, fallback) VALUES(?, ?, ?, ?, ?, ?, nullif(?, ''), ?)`
 	args := []any{env.ID, env.From, env.To, canonical, protocol.StateCustody, now.Unix(), env.Session, env.Fallback}
 	if len(lane) != 0 {
-		if len(lane) != 1 || lane[0] != protocol.MessageLaneLive && lane[0] != protocol.MessageLaneSync {
-			return "", errors.New("invalid message lane")
-		}
 		insert = `INSERT INTO messages(id, sender, recipient, envelope, state, created_at, session, fallback, lane) VALUES(?, ?, ?, ?, ?, ?, nullif(?, ''), ?, ?)`
 		args = append(args, lane[0])
 	}

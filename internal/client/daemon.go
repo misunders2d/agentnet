@@ -3,6 +3,7 @@ package client
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -78,7 +79,10 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 	defer a.hub.gate.setHold(false)
 	defer a.auto.runs.Wait() // after the stop below: an attempt ends with this run
 	ctx, stopRun := context.WithCancel(ctx)
-	defer stopRun()
+	defer func() {
+		stopRun()
+		a.joinArchiveRun()
+	}()
 	a.stopRun = stopRun
 	stopWorker, err := a.startWorker(ctx)
 	if err != nil {
@@ -225,6 +229,7 @@ func (a *Agent) streamOnce(ctx context.Context) (healthy bool, err error) {
 	a.kickMu.Lock()
 	a.kick = func() {
 		a.postOutboxBackground() // ACKs/live turns progress while bulk upkeep is blocked
+		a.postArchiveBackground(ctx)
 		select {
 		case kick <- struct{}{}:
 		default: // a retry pass is already pending
@@ -356,6 +361,11 @@ func (a *Agent) dispatch(ctx context.Context, event, data string) error {
 		if err := a.store.applyReceipt(receipt); err != nil {
 			return err
 		}
+		if receipt.State == protocol.StateDelivered {
+			if err := a.releaseAcceptedArchiveSpool(receipt.ID); err != nil {
+				return err
+			}
+		}
 		if resumes {
 			a.convWork.due(convHistory)
 			a.kickNow()
@@ -445,6 +455,38 @@ func (a *Agent) storeReceived(ctx context.Context, env envelope.Envelope) error 
 		return err
 	}
 	if seen {
+		var imported int
+		if err = a.store.db.QueryRow(`SELECT count(*) FROM history_archive_children WHERE id=?`, env.ID).Scan(&imported); err != nil {
+			return err
+		}
+		if imported != 0 {
+			// An imported child has no relay custody until it actually arrives
+			// on this transport. Validate that arrival before enabling its ACK.
+			source, pending, found, e := a.store.peer(env.From)
+			if e != nil {
+				return e
+			}
+			if !found || pending != nil {
+				return errors.New("archived duplicate source is not trusted")
+			}
+			var storedHash string
+			if e = a.store.db.QueryRow(`SELECT wire_sha256 FROM history_archive_children WHERE id=?`, env.ID).Scan(&storedHash); e != nil {
+				return e
+			}
+			raw, e := json.Marshal(env)
+			if e != nil {
+				return e
+			}
+			if fmt.Sprintf("%x", sha256.Sum256(raw)) != storedHash {
+				return errors.New("archived duplicate ciphertext differs from retained child")
+			}
+			if _, e = envelope.Open(env, a.id, a.Address, source); e != nil {
+				return e
+			}
+			if _, e = a.store.db.Exec(`DELETE FROM history_archive_children WHERE id=?`, env.ID); e != nil {
+				return e
+			}
+		}
 		return a.store.resendReceipt(env.ID)
 	}
 	if err = a.verifyAndStore(ctx, env); err != nil {

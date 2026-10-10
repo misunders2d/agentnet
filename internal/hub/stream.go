@@ -257,7 +257,7 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 	signals := h.signals.subscribe(caller, sub)
 	defer h.signals.unsubscribe(caller, sub)
-	var liveSeq, syncSeq, adminNoticeCursor int64
+	var liveSeq, adminNoticeCursor int64
 	syncInFlight := ""
 	sentRelease := int64(-1) // the release is sent on connect and when it changes
 	sentMembers := int64(-1) // so is the member list
@@ -389,7 +389,10 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if syncInFlight == "" {
-			msgs, err := h.store.pendingForLane(caller, ad.Session, protocol.MessageLaneSync, syncSeq, 1)
+			// Single-flight sync needs no sequence cursor: its terminal ack
+			// removes it from custody. An older live row may be demoted while
+			// connected, so a cursor would silently skip that newly sync row.
+			msgs, err := h.store.pendingForLane(caller, ad.Session, protocol.MessageLaneSync, 0, 1)
 			if err != nil {
 				return
 			}
@@ -398,7 +401,7 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 				if !write("event: message\ndata: %s\n\n", m.Envelope) {
 					return
 				}
-				syncSeq, syncInFlight = m.Seq, m.ID
+				syncInFlight = m.ID
 				if !between() {
 					return
 				}

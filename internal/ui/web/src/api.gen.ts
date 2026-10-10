@@ -591,6 +591,7 @@ export interface HistoryCopy {
   delivery_known: boolean;
   queued: number;
   custody: number;
+  retained?: number;
   delivered: number;
   blocked: number;
   deferred: number;

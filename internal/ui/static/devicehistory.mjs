@@ -101,23 +101,23 @@ export function deviceHistory(e,Hold){
  }
  function step(dev){return e.withHistoryProduction(()=>stepPage(dev));}
  async function stepPage(dev){
-  const available=await historyWindow(e.store,dev);if(!available)return false;
+  const available=await historyWindow(e.store,dev);
   const checks=[],ops=[],own=await read(checks,"kv","person");if(!await e.ownHistoryAuthority(dev,checks))return false;
   const key=prefix+"job/"+dev.fingerprint,saved=await read(checks,"kv",key),ceiling=await read(checks,"kv","device-history-arrival")||0;
   const job=structuredClone(saved||{older:ceiling+1,tail:ceiling});
-  const incoming=await e.store.directRows({after:job.tail,ceiling,limit:page}),older=job.older?await e.store.directRows({ceiling:job.older-1,reverse:true,limit:page}):[];
-  job.tail=incoming.at(-1)?.row.device_arrival||ceiling;if(older.length)job.older=older.at(-1).row.device_arrival;if(older.length<page)job.older=0;
+  const incoming=await e.store.directRows({after:job.tail,ceiling,limit:page}),older=available&&job.older?await e.store.directRows({ceiling:job.older-1,reverse:true,limit:page}):[];
+  job.tail=incoming.at(-1)?.row.device_arrival||ceiling;if(older.length)job.older=older.at(-1).row.device_arrival;if(available&&older.length<page)job.older=0;
   const sweepKey=dev.fingerprint+"/"+e.historyWake;let sweep=sweeps.get(sweepKey)||{after:"",done:false};if(incoming.length)sweep={after:"",done:false};
   const pendingPrefix=prefix+"pending/"+dev.fingerprint+"/",pending=[];
   if(!sweep.done){const keys=await e.store.keysAfter("kv",sweep.after||pendingPrefix,page);for(const k of keys){if(!k.startsWith(pendingPrefix)){sweep.done=true;break;}sweep.after=k;const p=await read(checks,"kv",k);if(p)pending.push(p);}if(keys.length<page)sweep.done=true;}
-  const refs=[...incoming,...older,...pending],done=new Set(),visiting=new Set();let count=0;
+  const refs=[...incoming.map(ref=>({...ref,fresh_live:true})),...older,...pending.filter(ref=>available||ref.fresh_live)],done=new Set(),visiting=new Set();let count=0;
   const queue=async ref=>{
    const s=ref.here?"outbox":"inbox",id=ref.row?.id||ref.id,k=s+"/"+id;if(done.has(k))return;
    if(visiting.has(k)||visiting.size>=64||count>=4*page)fail("dependency page remains.","proof_pending");visiting.add(k);
    try{
     const current=await read(checks,s,id);if(!directHistoryRow(current)||e.erasedRow(current)){done.add(k);return;}
     const r=await source(current,ref.here),parent=r.item.ref?.id||r.item.reply_to;
-    if(parent&&parent!==id){const p=await original(parent,checks,ops);if(p)await queue({row:p.row,here:p.here});}
+    if(parent&&parent!==id){const p=await original(parent,checks,ops);if(p)await queue({row:p.row,here:p.here,fresh_live:ref.fresh_live});}
     const meta=await project(r,own,checks,ops);if(JSON.stringify(current.device_history)!==JSON.stringify(meta))ops.push({s,k:id,v:{...current,device_history:meta}});
     const ledger=prefix+"copy/"+dev.fingerprint+"/"+r.item.from_key+"/"+id,previous=await read(checks,"kv",ledger);
     if(previous){if(previous.hash!==r.hash)fail("copy ledger conflicts with original.","conflicting_copy");const copy=await read(checks,"outbox",previous.carrier);if(copy&&!["expired","not_delivered"].includes(copy.state)){done.add(k);return;}}
@@ -127,14 +127,16 @@ export function deviceHistory(e,Hold){
     // only one this device's send state says it missed; in transit stays pending.
     if(r.recipient===dev.address&&r.recipient_key===dev.fingerprint&&!(ref.here&&["expired","not_delivered","failed"].includes(current.state))){if(!ref.here||["delivered","quarantined"].includes(current.state)){done.add(k);return;}fail("original still in transit to its recipient.","proof_pending");}
     // Neither its author nor the exact device that forwarded it here gets a copy back.
-    if((r.item.from!==dev.address||r.item.from_key!==dev.fingerprint)&&!(current.history&&current.synced_from===dev.address&&current.synced_key===dev.fingerprint)){const body=JSON.stringify({v:1,person:own.person,roster:own.hash,recipient:r.recipient,...(r.recipient_key?{recipient_key:r.recipient_key}:{}),item:JSON.parse(wire.historyJSON(r.item))}),copy=await carrier(dev,wire.SubDeviceHistory,body);ops.push({s:"outbox",k:copy.id,v:copy},{s:"kv",k:ledger,v:{hash:r.hash,carrier:copy.id}});count++;}
+    if((r.item.from!==dev.address||r.item.from_key!==dev.fingerprint)&&!(current.history&&current.synced_from===dev.address&&current.synced_key===dev.fingerprint)){const body=JSON.stringify({v:1,person:own.person,roster:own.hash,recipient:r.recipient,...(r.recipient_key?{recipient_key:r.recipient_key}:{}),item:JSON.parse(wire.historyJSON(r.item))}),copy=await carrier(dev,wire.SubDeviceHistory,body);if(ref.fresh_live)copy.fresh_live=true;ops.push({s:"outbox",k:copy.id,v:copy},{s:"kv",k:ledger,v:{hash:r.hash,carrier:copy.id}});count++;}
     done.add(k);
    }finally{visiting.delete(k);}
   };
-  for(const ref of refs){const id=ref.row?.id||ref.id,pk=pendingPrefix+(ref.here?"out/":"in/")+id;try{await queue(ref);ops.push({s:"kv",k:pk,v:undefined});}catch(x){if(!(x instanceof Hold)||x.reason==="conflicting_copy")throw x;ops.push({s:"kv",k:pk,v:{id,here:ref.here}});}}
+  for(const ref of refs){const id=ref.row?.id||ref.id,pk=pendingPrefix+(ref.here?"out/":"in/")+id;try{await queue(ref);ops.push({s:"kv",k:pk,v:undefined});}catch(x){if(!(x instanceof Hold)||x.reason==="conflicting_copy")throw x;ops.push({s:"kv",k:pk,v:{id,here:ref.here,...(ref.fresh_live?{fresh_live:true}:{})}});}}
   if(!await e.ownHistoryAuthority(dev,checks))return false;
-  ops.push({s:"kv",k:key,v:job});await e.store.write(ops,checks);for(const k of sweeps.keys())if(k.startsWith(dev.fingerprint+"/"))sweeps.delete(k);sweeps.set(sweepKey,sweep);
-  if(count&&e.connected)e.flushOutbox().catch(()=>{});return !!job.older||job.tail<ceiling||!sweep.done;
+  ops.push({s:"kv",k:key,v:job});const copies=ops.filter(o=>o.s==="outbox"&&o.v?.sub===wire.SubDeviceHistory&&o.v.state==="queued").map(o=>o.v);
+  let order=Math.max(job.order||0,e.now());for(const copy of copies)copy.send_order=++order;job.order=order;
+  const rest=ops.filter(o=>!copies.some(c=>o.s==="outbox"&&o.k===c.id));await e.store.write(await e.archives().prepare(copies,rest,checks,dev),checks);if(copies.length)e.archives().wake().catch(()=>{});for(const k of sweeps.keys())if(k.startsWith(dev.fingerprint+"/"))sweeps.delete(k);sweeps.set(sweepKey,sweep);
+  if(count&&e.connected)e.flushOutbox().catch(()=>{});return job.tail<ceiling||!!available&&(!!job.older||!sweep.done);
  }
  async function gate(rec){
   if(![wire.SubDeviceHistory,wire.SubDeviceFile].includes(rec.sub))return;

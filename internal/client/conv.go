@@ -242,7 +242,7 @@ func (a *Agent) relayFeatures(ctx context.Context) ([]string, error) {
 // hint (advertisedCaps) it is at most protocol.MaxAdvertisedCaps long;
 // rm1 (protocol.CapRoom) says this program enforces every room reader rule
 // (ROOM_V1 §2.1), so what rm1 implies (rcv1 among them) is not listed.
-var ownCaps = []string{protocol.CapContinuation, protocol.CapRootSync, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapRequestFollowup, protocol.CapGroupInvitationControl, protocol.CapHeadless, protocol.CapGroupHumanParticipation, protocol.CapModelSync, protocol.CapNotify, protocol.CapTopicOrganization, protocol.CapOwnSyncV2, protocol.CapOwnSyncV3, protocol.CapPerson, protocol.CapReadSync, protocol.CapRoom, protocol.CapSendGroup, protocol.CapTopicParticipation, protocol.CapTopicStateSync, protocol.CapTyping} // apx1 and aid1 are already implied by rm1; preserve the 22-cap advertisement bound including agent1
+var ownCaps = []string{protocol.CapContinuation, protocol.CapRootSync, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapRequestFollowup, protocol.CapGroupInvitationControl, protocol.CapHistoryArchive, protocol.CapHeadless, protocol.CapGroupHumanParticipation, protocol.CapModelSync, protocol.CapNotify, protocol.CapTopicOrganization, protocol.CapOwnSyncV2, protocol.CapOwnSyncV3, protocol.CapPerson, protocol.CapReadSync, protocol.CapRoom, protocol.CapSendGroup, protocol.CapTopicParticipation, protocol.CapTopicStateSync, protocol.CapTyping} // apx1 and aid1 are already implied by rm1; 23 includes agent1
 
 // capsPublisher is the one publisher of this run's capability records:
 // the daemon's and link.go's waiting session share the session id, and the
@@ -261,8 +261,8 @@ func (a *Agent) advertisedCaps() (caps []string, agent bool) {
 	caps = slices.Clone(ownCaps)
 	if agent = a.AdvertisesAgent(); agent {
 		caps = append(caps, protocol.CapAgent)
-		slices.Sort(caps)
 	}
+	slices.Sort(caps)
 	return caps, agent
 }
 
@@ -580,6 +580,7 @@ type outCopy struct {
 	env            envelope.Envelope
 	in             envelope.Inner
 	state          string
+	live           bool // fresh post-snapshot mirror, never cold bootstrap
 	why            string
 	required       string
 	recipientFP    string // exact sealed ordinary group recipient; never inferred on retry
@@ -1278,6 +1279,9 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 		return a.holdOpened("conversation message", env, in, sender, reason, why)
 	}
 	personErr := func(err error) error { return holdForPerson(err, hold) }
+	if in.Sub == envelope.SubHistoryArchive {
+		return a.admitHistoryArchive(ctx, env, in, sender, hold)
+	}
 	if in.Sub == envelope.SubModelSync {
 		return a.admitModelSync(ctx, env, in, sender, fromQuarantine, hold)
 	}

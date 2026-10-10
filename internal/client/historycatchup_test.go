@@ -112,7 +112,31 @@ func TestHistoryCatchupRecentTailRestart(t *testing.T) {
 	if len(items) <= historyPage || items[historyPage].Body != "old timestamp arrives during backfill" {
 		t.Fatal("old timestamp waited behind older backfill")
 	}
+	var receiptSeq int64
 	for rounds := 0; ; rounds++ {
+		// Production remains bounded until this reader retains the first page.
+		// Admit the signed carriers before supplying their proven receipts.
+		queued, err := a.store.queued()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, env := range queued {
+			if env.To != phone.Address {
+				continue
+			}
+			if err = phone.verifyAndStore(tctx(t), env); err != nil {
+				t.Fatal(err)
+			}
+			state, err := phone.store.disposition(env.ID)
+			if err != nil || state != protocol.StateDelivered {
+				t.Fatalf("phone did not admit history: %s %v", state, err)
+			}
+			receiptSeq++
+			raw, _ := json.Marshal(protocol.ReceiptEvent{Seq: receiptSeq, ID: env.ID, State: state})
+			if err = a.dispatch(tctx(t), "receipt", string(raw)); err != nil {
+				t.Fatal(err)
+			}
+		}
 		more, err := a.historyCatchupPage(tctx(t), phone.Self())
 		if err != nil {
 			t.Fatal(err)

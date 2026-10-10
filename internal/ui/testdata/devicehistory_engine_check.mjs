@@ -3,7 +3,7 @@ import {Engine,memoryStore,openIDB} from '../static/engine.mjs';
 import * as wire from '../static/wire.mjs';
 let checks=0;const check=(x,m)=>{assert.ok(x,m);checks++;};
 const blobs=new Map();
-const pubs=new Map(),chains=new Map(),profiles=new Map(),posts=[],engines=[];
+const pubs=new Map(),chains=new Map(),profiles=new Map(),posts=[],acks=[],engines=[];
 const json=(v,status=200)=>new Response(v==null?null:JSON.stringify(v),{status});
 const fetch=async(url,o={})=>{
  const u=new URL(url),p=u.pathname;
@@ -15,7 +15,7 @@ const fetch=async(url,o={})=>{
  if(/^\/v1\/agents\/[^/]+\/[^/]+$/.test(p))return json({public:JSON.parse(wire.marshalPublic(pubs.get(p.slice(11))))});
  if(p==='/v1/messages'){const e=wire.parseEnvelope(o.body);await wire.verifyEnvelope(e,pubs.get(e.from).sign_key);posts.push(o.body);return json({state:'custody'});}
  if(p.endsWith('/wait'))return json({state:'custody'});
- if(p.endsWith('/ack'))return json(null,204);
+ if(p.endsWith('/ack')){acks.push({id:p.split('/')[3],body:JSON.parse(o.body)});return json(null,204);}
  throw Error('Unexpected synthetic route '+p);
 };
 async function caps(e,names=[wire.CapEnv2,wire.CapPerson,wire.CapRootSync,wire.CapReadSync,wire.CapRoom,wire.CapOwnSyncV2,wire.CapOwnSyncV3,wire.CapControl]){
@@ -104,7 +104,7 @@ const editCopy=(await copies(a)).find(r=>r.to===p.address&&JSON.parse(r.body).it
 check(!!editCopy,'new direct edit wakes continuous own-history without reconnect');
 await receiveHistory(editCopy.envelope,p);check((await p.thread(fileID)).messages[0].text==='edited direct file label','direct edit folds onto original author tuple on sibling');
 
-if(typeof window!=='undefined'){await Promise.all(engines.flatMap(e=>[e.historyRun,e.readSyncRun,e.rootSyncRun,e.topicSyncRun,e.invitationSyncRun].filter(Boolean)));a.store.close();a.store=await openIDB(a.fixtureStoreName);}
+if(typeof window!=='undefined'){await Promise.all(engines.flatMap(e=>[e.historyRun,e.readSyncRun,e.rootSyncRun,e.topicSyncRun,e.invitationSyncRun,e.archiveRun,e.historyProduction,e.syncOutboxPass].filter(Boolean)));a.store.close();a.store=await openIDB(a.fixtureStoreName);}
 const restarted=new Engine({store:a.store,base:a.base,fetch});Object.assign(restarted,{keys:a.keys,address:a.address,pub:a.pub,fp:a.fp,me:a.me,connected:false});const count=(await copies(a)).length;await drain(restarted,p);check((await copies(a)).length===count,'restart resumes durable source cursor and copy ledger');
 // E: authenticated own-device history is usable context for a fresh explicit
 // proposal confirmation, without turning any imported row into execution.
@@ -275,6 +275,118 @@ const restarted=new Engine({store:a.store,base:a.base,fetch});Object.assign(rest
  check((await desk.store.get('outbox',fresh)).state==='custody','interactive send preserves truthful custody');
 
 }
+// Archive-capable browsers both contribute and import inert direct history.
+// Bulk upload is deliberately stalled while a fresh live POST succeeds.
+{
+ const desk=await person('archive/desk'),phone=await sibling(desk,'archive/phone'),peer=await person('archive-peer/desk');
+ await caps(phone,[wire.CapEnv2,wire.CapPerson,wire.CapRootSync,wire.CapReadSync,wire.CapRoom,wire.CapOwnSyncV2,wire.CapOwnSyncV3,wire.CapControl,wire.CapHistoryArchive]);
+ await caps(desk,[wire.CapEnv2,wire.CapPerson,wire.CapRootSync,wire.CapReadSync,wire.CapRoom,wire.CapOwnSyncV2,wire.CapOwnSyncV3,wire.CapControl,wire.CapHistoryArchive]);
+ await desk.store.write([{s:'persons',k:peer.me.person,v:{...peer.me,state:'pinned'}},{s:'pins',k:peer.address,v:{address:peer.address,json:wire.marshalPublic(peer.pub),fingerprint:peer.fp,pending:null}}]);
+ await phone.store.write([{s:'persons',k:peer.me.person,v:{...peer.me,state:'pinned'}},{s:'pins',k:peer.address,v:{address:peer.address,json:wire.marshalPublic(peer.pub),fingerprint:peer.fp,pending:null}}]);
+ const unique=wire.newID(),fromPhone={id:unique,from:phone.address,to:peer.address,ts:102,kind:'message',body:'unique phone history',attachments:[]};
+ await phone.store.write([{s:'outbox',k:unique,v:{...fromPhone,v:1,at:102000,fp:peer.fp,envelope:await wire.seal(fromPhone,phone.keys,peer.pub),state:'delivered'}}]);
+ const originals=[];
+ for(let i=0;i<100;i++){const id=wire.newID(),m={id,from:desk.address,to:peer.address,ts:i+1,kind:'message',body:'archived '+i,attachments:[]};originals.push(id);await desk.store.write([{s:'outbox',k:id,v:{...m,v:1,at:(i+1)*1000,fp:peer.fp,envelope:await wire.seal(m,desk.keys,peer.pub),state:'delivered'}}]);}
+ let entered,release;const started=new Promise(r=>entered=r),stalled=new Promise(r=>release=r);let once=true;
+ desk.fetch=async(url,o)=>{if(once&&o.method==='PUT'&&new URL(url).pathname.startsWith('/v1/blobs/')){once=false;entered();await stalled;}return fetch(url,o);};
+ await desk.reconcileHistory();desk.connected=true;await desk.directHistory().step(phone.me.devices.find(d=>d.address===phone.address));await Promise.race([started,desk.archiveRun.then(()=>{throw Error('Archive upload did not start');})]);
+ const staged=(await copies(desk)).filter(r=>r.state==='archive_staged').sort((a,b)=>(a.send_order??a.at)-(b.send_order??b.at)||a.id.localeCompare(b.id));check(staged.length===50,'archive bootstrap atomically stages one bounded page instead of individual POSTs');
+ check(JSON.parse(staged[0].body).item.id===originals.at(-1),'browser archive bootstrap selects newest originals first');
+ const stagedOverview=(await desk.overview()).history?.find(row=>row.device===phone.address);check(stagedOverview?.queued===50&&!stagedOverview.retained&&!stagedOverview.blocked,'overview reports staged archive children as queued');
+ const fresh=wire.newID(),m={id:fresh,from:desk.address,to:peer.address,ts:101,kind:'message',body:'live during archive upload'};
+ const live={...m,v:1,at:101000,fp:peer.fp,envelope:await wire.seal(m,desk.keys,peer.pub),state:'queued'};await desk.store.write([{s:'outbox',k:fresh,v:live}]);await desk.post(live);
+ check((await desk.store.get('outbox',fresh)).state==='custody','blocked archive upload cannot block fresh live POST');
+ await desk.directHistory().step(phone.me.devices.find(d=>d.address===phone.address));
+ const freshMirror=(await copies(desk)).find(r=>JSON.parse(r.body).item.id===fresh);
+ check(freshMirror?.fresh_live&&!freshMirror.archive_chunk,'full cold window still produces a live own-device mirror');
+ await desk.flushOutboxLane(false);check((await desk.store.get('outbox',freshMirror.id)).state==='custody','same-phone fresh mirror posts while its archive upload is blocked');
+ await receive(freshMirror.envelope,phone);check((await phone.store.get('inbox',fresh))?.body===m.body,'same-phone fresh mirror is admitted before blocked cold archive upload finishes');
+ // The same browser can receive an archive while its outgoing upload stalls.
+ phone.connected=true;await phone.directHistory().step(desk.me.devices.find(d=>d.address===desk.address));await phone.archives().wake();if(phone.archiveRun)await phone.archiveRun;if(phone.syncOutboxPass)await phone.syncOutboxPass;
+ const reverse=(await phone.store.outboxSub(wire.SubHistoryArchive))[0];check(!!reverse,'a browser owning unique history also contributes an archive');
+ await receive(reverse.envelope,desk);if(desk.archiveImportRun)await desk.archiveImportRun;
+ check((await desk.store.get('inbox',unique))?.body===fromPhone.body,'incoming archive imports while same-browser archive upload is still blocked');
+ phone.connected=false;
+
+
+ check(!posts.some(raw=>staged.some(r=>r.id===wire.parseEnvelope(raw).id)),'staged child envelopes never become bootstrap relay POSTs');
+ desk.connected=false;release();if(desk.archiveRun)await desk.archiveRun;if(desk.syncOutboxPass)await desk.syncOutboxPass;
+ const descriptors=async()=>(await desk.store.all('outbox')).filter(r=>r.sub===wire.SubHistoryArchive);
+ const firstArchive=(await descriptors())[0];check(firstArchive&&firstArchive.files[0].uploaded&&!firstArchive.files[0].ct,'archive descriptor is enqueued only after upload is complete');
+ await caps(phone);await desk.post(firstArchive);
+ check((await desk.store.get('outbox',firstArchive.id)).state==='waiting','published archive waits quietly when ha1 disappears');
+ const retrySource=new Engine({store:desk.store,base:desk.base,fetch});Object.assign(retrySource,{keys:desk.keys,address:desk.address,pub:desk.pub,fp:desk.fp,me:desk.me});
+ await caps(phone,[wire.CapEnv2,wire.CapPerson,wire.CapRootSync,wire.CapReadSync,wire.CapRoom,wire.CapOwnSyncV2,wire.CapOwnSyncV3,wire.CapControl,wire.CapHistoryArchive]);
+ retrySource.connected=true;await retrySource.flushOutboxOnce();retrySource.connected=false;
+ const retryDescriptor=await desk.store.get('outbox',firstArchive.id);desk.connected=true;
+ check(retryDescriptor.state==='custody'&&retryDescriptor.envelope===firstArchive.envelope&&retryDescriptor.id===firstArchive.id,'ha1 return after restart resumes exact published archive signature and ID');
+
+ phone.connected=false;await receive(firstArchive.envelope,phone);
+ check(!(await phone.store.all('receipts')).some(r=>r.id===firstArchive.id),'saving descriptor alone does not claim delivery');
+ const sourcePin=await phone.store.get('pins',desk.address),ownRoster=await phone.store.get('kv','person');
+ await phone.store.write([{s:'pins',k:desk.address,v:{...sourcePin,pending:{fingerprint:peer.fp}}}]);phone.connected=true;await phone.archives().wake();phone.connected=false;
+ check(!(await phone.store.get('kv','history-archive/in/'+firstArchive.id)).retained,'changed source key blocks archive retention and admission');
+ await phone.store.write([{s:'pins',k:desk.address,v:sourcePin},{s:'kv',k:'person',v:{...ownRoster,devices:ownRoster.devices.filter(d=>d.address!==desk.address)}}]);phone.connected=true;await phone.archives().wake();phone.connected=false;
+ check(!(await phone.store.get('kv','history-archive/in/'+firstArchive.id)).retained,'removed own source blocks archive retention and admission');
+ await phone.store.write([{s:'kv',k:'person',v:ownRoster}]);
+
+ const archiveBlob=blobs.get(firstArchive.attachments[0].blob.id),goodCipher=archiveBlob.bytes;archiveBlob.bytes=goodCipher.slice();archiveBlob.bytes[0]^=1;
+ phone.connected=true;await phone.archives().wake();phone.connected=false;
+ check(!(await phone.store.get('kv','history-archive/in/'+firstArchive.id)).retained&&!(await phone.store.all('receipts')).some(r=>r.id===firstArchive.id),'corrupt archive ciphertext is neither retained nor acknowledged');
+ archiveBlob.bytes=goodCipher;
+
+ // Pause after one admitted record, then resume with a fresh Engine instance.
+ const originalImport=phone.importArchiveChild.bind(phone);let imports=0;
+ phone.importArchiveChild=async(...args)=>{await originalImport(...args);if(++imports===1)phone.closing=true;};phone.connected=true;await phone.archives().wake();
+ check((await phone.store.get('kv','history-archive/in/'+firstArchive.id)).index===1,'archive import persists bounded progress before interruption');
+ check((await phone.store.get('files','archive/'+firstArchive.id)).ct.length>0,'descriptor is retained durably before acknowledgement');
+ check((await phone.store.get('kv','history-archive/in/'+firstArchive.id)).retained,'retained archive may acknowledge independently of unfinished import');
+ const resumed=new Engine({store:phone.store,base:'https://synthetic.invalid',fetch});Object.assign(resumed,{keys:phone.keys,address:phone.address,pub:phone.pub,fp:phone.fp,me:phone.me});await resumed.archives().wake();phone.closing=false;phone.connected=false;
+ check((await phone.store.get('kv','history-archive/in/'+firstArchive.id)).state==='done','fresh Engine resumes interrupted import from durable ciphertext without cursor loss');
+ check(!await phone.store.get('files','archive/'+firstArchive.id),'completed import releases duplicate archive ciphertext');
+ await receive(firstArchive.envelope,phone);check((await phone.store.get('kv','history-archive/in/'+firstArchive.id)).state==='done','descriptor duplicate after cleanup never downloads or reimports history');
+ const childIDs=new Set(staged.map(r=>r.id));check(!(await phone.store.all('receipts')).some(r=>childIDs.has(r.id)),'embedded children never fabricate relay receipts');
+ check((await phone.store.all('inbox')).filter(r=>r.device_history&&originals.includes(r.id)).length===50,'archive child admission preserves exact inert originals');
+ const relayChild=staged[0],tampered=JSON.parse(relayChild.envelope);tampered.ct=wire.b64(new Uint8Array([1,2,3]));
+ phone.connected=true;await phone.onMessage(JSON.stringify(tampered));await phone.flushReceipts();
+ check(!acks.some(a=>a.id===relayChild.id)&&!await phone.store.get('receipts',relayChild.id),'tampered same-ID relay delivery of imported child creates no acknowledgement');
+ await wire.open(relayChild.envelope,phone.keys,phone.address,desk.pub);
+ await phone.onMessage(relayChild.envelope);await phone.flushReceipts();
+ check(acks.filter(a=>a.id===relayChild.id).length===1&&acks.find(a=>a.id===relayChild.id).body.state==='delivered','valid actual relay delivery of imported child is acknowledged once');
+ await phone.onMessage(JSON.stringify(tampered));await phone.onMessage(JSON.stringify({...tampered,unknown:true}));await phone.flushReceipts();phone.connected=false;
+ check(acks.filter(a=>a.id===relayChild.id).length===1&&!await phone.store.get('held',relayChild.id),'tampered duplicate after valid child delivery neither acknowledges nor replaces admission');
+
+ const receiptWrite=desk.store.write.bind(desk.store);let receiptRace=true;
+ desk.store.write=async(ops,checks)=>{
+  if(receiptRace&&ops.some(o=>o.s==='outbox'&&o.v?.state==='archive_accepted')){
+   receiptRace=false;const current=await desk.store.get('outbox',relayChild.id);
+   await receiptWrite([{s:'outbox',k:current.id,v:{...current,detail:'concurrent child retry metadata'}}]);
+  }
+  return receiptWrite(ops,checks);
+ };
+ await desk.dispatch('receipt',JSON.stringify({id:firstArchive.id,state:'delivered',seq:1}));if(desk.archiveReceiptRun)await desk.archiveReceiptRun;if(desk.historyRun)await desk.historyRun;if(desk.archiveRun)await desk.archiveRun;if(desk.syncOutboxPass)await desk.syncOutboxPass;
+ desk.store.write=receiptWrite;check((await desk.store.get('outbox',relayChild.id)).detail==='concurrent child retry metadata','archive receipt CAS preserves concurrent exact child state and mapping');
+ const acceptedOverview=(await desk.overview()).history?.find(row=>row.device===phone.address);check(acceptedOverview?.retained===50&&!acceptedOverview.blocked&&!acceptedOverview.delivered,'overview reports accepted archive children as retained, without delivery or import claims');
+ check((await Promise.all(staged.map(r=>desk.store.get('outbox',r.id)))).every(r=>!['queued','custody','delivered'].includes(r.state)),'archive staging never pretends individual transport delivery');
+ const secondArchive=(await descriptors()).find(r=>r.id!==firstArchive.id);check(!!secondArchive,'descriptor receipt resumes the next bounded bootstrap chunk');
+ phone.connected=true;await receive(secondArchive.envelope,phone);if(phone.archiveRun)await phone.archiveRun;phone.connected=false;
+ check((await Promise.all(originals.map(id=>phone.store.get('inbox',id)))).every(Boolean),'archive receipt-driven catchup imports all 100 exact originals');
+ await desk.dispatch('receipt',JSON.stringify({id:secondArchive.id,state:'delivered',seq:2}));if(desk.archiveReceiptRun)await desk.archiveReceiptRun;if(desk.historyRun)await desk.historyRun;if(desk.archiveRun)await desk.archiveRun;
+ const before=(await copies(desk)).length;desk.historyWake=(desk.historyWake||0)+1;await desk.directHistory().step(phone.me.devices.find(d=>d.address===phone.address));await desk.syncRoots();await desk.syncReadMarks();await desk.syncTopicTitles();await desk.syncInvitations();check((await copies(desk)).length===before,'archive accepted mappings suppress copies across all producer/recovery wakes');
+
+ desk.connected=false;
+}
+// Pending state queries must not materialize ten thousand completed rows.
+{
+ const e=await device('indexed-pending/desk'),fp=e.fp,target={address:'indexed-pending/phone',fingerprint:fp};
+ for(let offset=0;offset<10000;offset+=50)await e.store.write(Array.from({length:50},()=>{const id=wire.newID();return{s:'outbox',k:id,v:{id,to:target.address,recipient_fp:fp,sub:wire.SubHistoryArchive,state:'delivered',at:1,body:'completed archive descriptor',envelope:'completed ciphertext fixture '+'.'.repeat(4096)}};}));
+ const all=e.store.all.bind(e.store);e.store.all=async table=>{if(table==='outbox')throw Error('Pending scheduler scanned completed history.');return all(table);};
+ const {historyWindow}=await import('../static/historywindow.mjs');
+ check(await historyWindow(e.store,target)===50,'10k completed rows neither consume history capacity nor require all-outbox materialization');
+ e.connected=true;await e.flushOutbox();await e.archives().wake();e.connected=false;
+ check((await e.store.outboxStates(['queued','waiting','archive_staged'])).length===0,'10k completed archives create no new queue pressure');
+ e.store.all=all;
+}
 // Original endpoint identity also governs local deletion of imported outgoing rows.
 await p.deleteThread(b.address,id);
 check(!(await p.v1Threads()).some(g=>g.some(m=>m.id===id||m.id===answer)), 'local deletion removes imported request and replies');
@@ -282,5 +394,5 @@ check((await p.store.get('inbox',id)).body==='', 'deleted imported outgoing text
 await receiveHistory(await seal(a,JSON.parse(first.find(r=>JSON.parse(r.body).item.id===id).body)),p);
 check((await p.store.get('inbox',id)).body===''&&!(await p.v1Threads()).some(g=>g.some(m=>m.id===id)), 'new encrypted duplicate cannot resurrect erased history');
 console.log('direct history browser checks',checks);
-if(typeof window!=='undefined'){for(const e of engines){await Promise.all([e.topicSyncRun,e.historyRun,e.readSyncRun,e.rootSyncRun,e.invitationSyncRun].filter(Boolean));e.store.close();await new Promise((resolve,reject)=>{const r=indexedDB.deleteDatabase(e.fixtureStoreName);r.onsuccess=resolve;r.onerror=()=>reject(r.error);});}window.deviceHistoryResult={ok:true,checks,storage:'IndexedDB'};}
+if(typeof window!=='undefined'){for(const e of engines){await Promise.all([e.topicSyncRun,e.historyRun,e.readSyncRun,e.rootSyncRun,e.invitationSyncRun,e.archiveRun,e.historyProduction,e.syncOutboxPass].filter(Boolean));e.store.close();await new Promise((resolve,reject)=>{const r=indexedDB.deleteDatabase(e.fixtureStoreName);r.onsuccess=resolve;r.onerror=()=>reject(r.error);});}window.deviceHistoryResult={ok:true,checks,storage:'IndexedDB'};}
 

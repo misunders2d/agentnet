@@ -232,6 +232,7 @@ function copyWords(h: T.HistoryCopy): string {
   if (h.blocked) parts.push(h.blocked + " history copies need attention");
   if (h.queued) parts.push(h.queued + " waiting to send");
   if (h.custody) parts.push(h.custody + " on the server, waiting for the device");
+  if (h.retained) parts.push(h.retained + " history records stored on the device");
   if (parts.length) return parts.join(" · ");
   if (!h.delivery_known) return "History prepared here · delivery confirmation unavailable";
   return h.delivered ? h.delivered + " history copies delivered · nothing waiting to send here" : "No message history waiting to send from this device";

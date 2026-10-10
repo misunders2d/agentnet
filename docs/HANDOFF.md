@@ -9,6 +9,22 @@ section at release; keep detailed verification and remaining work here.
 The October 10 mobile handoff ([HANDOFF_CLAUDE_MOBILE.md](HANDOFF_CLAUDE_MOBILE.md))
 was taken over by Claude and shipped as v0.8.17 below.
 
+## Active v0.8.18 work — not released
+
+Codex owns `fix/v0.8.18-send-starvation`. The implementation contract and
+remaining qualification are in [V0_8_18.md](plans/V0_8_18.md). Linked-device
+bootstrap is moving to bounded encrypted archives through the existing blob
+API; independent live delivery and existing admission remain required.
+Checkpoint `987e81ad` contains preliminary sender isolation/pacing, not a
+qualified archive implementation. Claude independently reviews the contract
+and final changes; three GPT-6.1-sol helpers own Go client, browser, and
+protocol/envelope changes respectively. No release, live queue cleanup or
+installed-client change has happened for this work.
+
+The Android preview stays on `feat/native-android` in its separate worktree.
+Its next APK must integrate the verified shared-core repair before handover.
+Actual owner-phone receive lifecycle and timings remain unverified.
+
 ## Current published release — v0.8.17, October 10, 2026 (UTC)
 
 [Download v0.8.17](https://github.com/misunders2d/agentnet/releases/tag/v0.8.17).

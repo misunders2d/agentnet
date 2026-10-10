@@ -50,6 +50,7 @@ func (a *Agent) syncDeviceHistory() (bool, error) {
 }
 
 func (a *Agent) deviceHistoryPage(dev identity.Public) (bool, error) {
+	archive := a.archivesFor(context.Background(), dev)
 	release, err := lockfile.Wait(a.spoolLockPath())
 	if err != nil {
 		return false, err
@@ -63,7 +64,8 @@ func (a *Agent) deviceHistoryPage(dev identity.Public) (bool, error) {
 	if err = historyRecoveryCurrent(tx, a.Self(), dev); err != nil {
 		return false, err
 	}
-	if full, e := syncWindowFull(tx, dev); e != nil || full {
+	full, e := syncWindowFull(tx, dev)
+	if e != nil {
 		return false, e
 	}
 	own, ok, err := scanPersonIn(tx, "state = ?", personSelf)
@@ -103,9 +105,12 @@ func (a *Agent) deviceHistoryPage(dev identity.Public) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	old, err := read("seq<? ORDER BY seq DESC LIMIT ?", older, historyPage)
-	if err != nil {
-		return false, err
+	var old []deviceHistoryRef
+	if !full {
+		old, err = read("seq<? ORDER BY seq DESC LIMIT ?", older, historyPage)
+		if err != nil {
+			return false, err
+		}
 	}
 	if len(newer) > 0 {
 		tail = newer[len(newer)-1].seq
@@ -115,7 +120,7 @@ func (a *Agent) deviceHistoryPage(dev identity.Public) (bool, error) {
 	if len(old) > 0 {
 		older = old[len(old)-1].seq
 	}
-	if len(old) < historyPage {
+	if len(old) < historyPage && !full {
 		older = 0
 	}
 	refs := append(newer, old...)
@@ -130,7 +135,7 @@ func (a *Agent) deviceHistoryPage(dev identity.Public) (bool, error) {
 	if len(newer) > 0 {
 		sweep = historyDeferredScan{}
 	}
-	if !sweep.done {
+	if !sweep.done && !full {
 		rows, e := tx.Query(`SELECT storage,id FROM device_history_pending WHERE recipient_fp=? AND (storage,id)>(?,?) ORDER BY storage,id LIMIT ?`, dev.Fingerprint(), sweep.dir, sweep.id, historyPage)
 		if e != nil {
 			return false, e
@@ -274,7 +279,8 @@ func (a *Agent) deviceHistoryPage(dev identity.Public) (bool, error) {
 		done[key] = true
 		return nil
 	}
-	for _, ref := range refs {
+	for refIndex, ref := range refs {
+		start := len(copies)
 		if e := queue(ref); e != nil {
 			if !errors.Is(e, errDeviceHistoryBlocked) && !errors.Is(e, ErrGroupContextPending) {
 				return false, e
@@ -285,9 +291,21 @@ func (a *Agent) deviceHistoryPage(dev identity.Public) (bool, error) {
 		} else if _, err = tx.Exec(`DELETE FROM device_history_pending WHERE recipient_fp=? AND storage=? AND id=?`, dev.Fingerprint(), ref.storage, ref.id); err != nil {
 			return false, err
 		}
+		if refIndex < len(newer) {
+			for i := start; i < len(copies); i++ {
+				copies[i].live = true
+			}
+		}
 	}
 	if err = historyRecoveryCurrent(tx, a.Self(), dev); err != nil {
 		return false, err
+	}
+	if archive {
+		for i := range copies {
+			if !copies[i].live {
+				copies[i].state = archiveStaged
+			}
+		}
 	}
 	if err = insertCopies(tx, copies); err != nil {
 		return false, err
@@ -301,7 +319,7 @@ func (a *Agent) deviceHistoryPage(dev identity.Public) (bool, error) {
 	a.convWork.mu.Lock()
 	a.convWork.historyDeferred["direct/"+dev.Fingerprint()] = sweep
 	a.convWork.mu.Unlock()
-	return older != 0 || tail < ceiling || !sweep.done, nil
+	return tail < ceiling || !full && (older != 0 || !sweep.done), nil
 }
 
 var errDeviceHistoryRecipientHas = errors.New("device history: the direct recipient holds the original")

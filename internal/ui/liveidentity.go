@@ -36,7 +36,7 @@ func (l *Live) identityOverview(o *Overview) error {
 		return err
 	}
 	for _, j := range jobs {
-		o.History = append(o.History, HistoryCopy{Device: j.Device, Name: j.Name, Done: j.ConvsDone, Total: j.ConvsTotal, State: j.State, DeliveryKnown: j.DeliveryKnown, Queued: j.Queued, Custody: j.Custody, Delivered: j.Delivered, Blocked: j.Blocked, Deferred: j.Deferred})
+		o.History = append(o.History, HistoryCopy{Device: j.Device, Name: j.Name, Done: j.ConvsDone, Total: j.ConvsTotal, State: j.State, DeliveryKnown: j.DeliveryKnown, Queued: j.Queued, Custody: j.Custody, Retained: j.Retained, Delivered: j.Delivered, Blocked: j.Blocked, Deferred: j.Deferred})
 	}
 	reqs, err := l.a.PendingLinks()
 	if err != nil {
