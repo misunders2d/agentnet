@@ -54,13 +54,22 @@ a skin without changing their relay or other clients.
 The UI host (`internal/ui/static/loader.js`) does the same for every skin:
 
 1. reads the catalog (`/assets/skins/index.json`: the built-in packages first,
-   then installed ones) and the packages stored in this browser;
+   then installed ones) and the packages stored in this browser. When the
+   catalog fails or has not answered within 1.5 seconds of its request, the
+   host also asks for Comic's manifest from its fixed built-in path
+   (`/assets/skins/comic/skin.json`) and opens with whichever of the two
+   answers first; lateness alone never fails the page. Comic opened from its
+   own manifest is trusted by the host's list as always; a saved choice is
+   then kept for the next load, and the catalog fills `host.skins` if it
+   arrives later;
 2. picks the skin: `?skin=<id>`, else the one chosen before in this browser,
    else Comic. A saved `default` or `classic` (the names before skins were
    packages) opens Comic and is rewritten once; choices made through the package loader
    are marked separately so selecting new Classic survives reload. `?skin=default` names Comic;
 3. asks for trust unless the skin is built in;
-4. adopts the package's [document rules](#document-rules-fonts) at document level;
+4. adopts the package's [document rules](#document-rules-fonts) at document
+   level, waiting for them at most a moment (rules that arrive later are
+   adopted then);
 5. gives the skin a root in a shadow tree of the page's `#skin` element, links
    the host's base sheet and then the package's stylesheet inside it;
 6. imports the entry and calls `mount(root, host)`; on a workspace switch (or
@@ -190,8 +199,10 @@ Browsers ignore `@font-face` and `@property` inside a shadow tree. A package
 that needs them declares a `document` stylesheet: the host reads it, keeps
 **only** its `@font-face` and `@property` rules, resolves every `url()`
 against the file and drops a rule whose URL leaves the package, and adopts
-the result at document level before mounting. Anything else in that file is
-ignored. Comic declares its Onest and Rubik faces and Tailwind's registered
+the result at document level before mounting. A stalled request holds the
+mount for at most 1.5 seconds: the skin then shows in fallback fonts and the
+rules are adopted when they arrive (a failure seen before mounting still stops
+the skin). Anything else in that file is ignored. Comic declares its Onest and Rubik faces and Tailwind's registered
 properties this way.
 
 ### The root and its styles

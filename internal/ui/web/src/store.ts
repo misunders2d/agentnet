@@ -115,9 +115,15 @@ export class Store {
   }
 
   // ---- lifecycle
+  // start listens before the first load: a change told while that load
+  // runs (an arrival, the relay connection coming up) causes one more load
+  // right after it, as during any load (refetch), instead of staying unseen
+  // until the next change. A large history makes that first load long.
+  // A handle that cannot listen (stale, blocked) cannot load either: the
+  // first load then says why.
   async start() {
-    await this.reload(true).catch((e) => this.set({ loadError: errorText(e), conn: "lost" }));
-    this.listen();
+    try { this.listen(); } catch { /* the first load fails and shows it */ }
+    await this.load(true);
   }
 
   stop() {
@@ -141,11 +147,20 @@ export class Store {
 
   // refetch loads what is shown once per burst of changes: changes that
   // arrive while it loads cause one more load, not one each.
-  refetch(): Promise<void> {
+  refetch(): Promise<void> { return this.load(false); }
+
+  // load is that one load under way. The first one (start) also says why it
+  // failed; a later failure waits for the next change, or the person.
+  private load(first: boolean): Promise<void> {
     this.again = true;
     if (!this.refresh) this.refresh = (async () => {
       try {
-        do { this.again = false; await this.reload(false); } while (this.again && this.alive);
+        do {
+          this.again = false;
+          try { await this.reload(first); }
+          catch (e) { if (!first) throw e; this.set({ loadError: errorText(e), conn: "lost" }); }
+          first = false;
+        } while (this.again && this.alive);
       } catch { /* the next change, or the person, tries again */ }
       finally { this.refresh = null; }
     })();
