@@ -223,3 +223,148 @@ func TestSelfConsentRefusesRemovedTaskKey(t *testing.T) {
 		t.Fatalf("the own invitation without the removed key: %v %v", ok, err)
 	}
 }
+
+// within fails the test unless f returns in time: a read of the store
+// made inside a transaction that holds its one connection never returns.
+func within(t *testing.T, what string, f func() error) error {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- f() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(30 * time.Second):
+		t.Fatalf("%s never returned: a store read waits on its own transaction", what)
+		return nil
+	}
+}
+
+// A group edit or deletion is decided again inside the transaction that
+// stores or queues it: checkGroup live, and groupControlHistoryCheck for a
+// new device's catch-up and its own-replica history (forwarded copies use
+// the same guard). For a message an own device signed before its removal,
+// the target key's person comes from the removed step of the chain, read
+// in that transaction: the store's one connection is the transaction's,
+// so a read of the store there never returns. The same person's controls
+// are admitted live and reach a newly linked own device in its catch-up;
+// another member's edit is a final, specific refusal.
+func TestGroupControlOfRemovedDeviceMessage(t *testing.T) {
+	w, carol, packet, stops := groupTurnsFixture(t)
+	conv := packet.State.Conv
+	with, _, phone := ownPhoneAddedRemoved(t, w.alice, w.alice, w.bob, carol)
+	edited, deleted := protocol.NewID(), protocol.NewID()
+	for _, a := range []*Agent{w.alice, w.bob, carol} { // as each received the phone's turns
+		admission, err := groupMemberAdmission(a.store.db, packet, a.Address, a.Self().Fingerprint())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, lid := range []string{edited, deleted} {
+			if _, err := a.store.db.Exec(`INSERT INTO inbox(id,lid,sender,ts,kind,body,received_at,received_ms,verified_by,conv,group_admission) VALUES(?,?,?,1,'message','typed on the old phone',1,1000,?,?,?)`, lid, lid, phone.Address, phone.Fingerprint(), conv, admission.Hash()); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	// Alice edits and deletes them from her desk. Each control reaches bob
+	// only when the test hands it to him, and his new phone (linked after
+	// they were sent) only from him.
+	stops[w.bob]()
+	stops[carol]()
+	editRef := ControlRef{Conv: conv, ID: edited, Fingerprint: phone.Fingerprint()}
+	deleteRef := ControlRef{Conv: conv, ID: deleted, Fingerprint: phone.Fingerprint()}
+	if _, err := w.alice.Revise(tctx(t), editRef, "fixed on the desk"); err != nil {
+		t.Fatalf("alice may not edit her removed phone's message: %v", err)
+	}
+	if _, err := w.alice.Retract(tctx(t), deleteRef, ""); err != nil {
+		t.Fatalf("alice may not delete her removed phone's message: %v", err)
+	}
+	// What a control's sender sealed for bob, taken as bob's daemon would.
+	take := func(from *Agent, sub string) envelope.Envelope {
+		t.Helper()
+		var raw []byte
+		if err := from.store.db.QueryRow(`SELECT envelope FROM outbox WHERE recipient=? AND sub=? ORDER BY rowid DESC LIMIT 1`, w.bob.Address, sub).Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+		var env envelope.Envelope
+		if err := json.Unmarshal(raw, &env); err != nil {
+			t.Fatal(err)
+		}
+		if err := within(t, "bob's admission of a "+sub, func() error { return w.bob.accept(tctx(t), env) }); err != nil {
+			t.Fatal(err)
+		}
+		return env
+	}
+	held := func(id string) (reason, code string) {
+		w.bob.store.db.QueryRow(`SELECT reason, detail_code FROM quarantine WHERE id = ?`, id).Scan(&reason, &code)
+		return reason, code
+	}
+	for _, c := range []struct {
+		sub string
+		ref ControlRef
+	}{{envelope.SubRevision, editRef}, {envelope.SubRetraction, deleteRef}} {
+		env := take(w.alice, c.sub)
+		got, err := w.bob.controlsOf(c.ref)
+		if reason, code := held(env.ID); reason != "" || err != nil || c.sub == envelope.SubRevision && got.Text != "fixed on the desk" || c.sub == envelope.SubRetraction && !got.Deleted {
+			t.Fatalf("%s of the removed own device's message: held %q %q, shown %+v %v", c.sub, reason, code, got, err)
+		}
+	}
+	// Another member's edit of it: the key's person is known and is not
+	// carol's, so it is refused for good instead of waiting for proof.
+	if _, err := carol.sendControl(tctx(t), editRef, envelope.SubRevision, `{"rev":9,"text":"hijack"}`); err != nil {
+		t.Fatal(err)
+	}
+	forged := take(carol, envelope.SubRevision)
+	if reason, code := held(forged.ID); reason != reasonInvalid || code != "control_target_person_mismatch" {
+		t.Fatalf("another member's edit of the removed device's message: %q %q", reason, code)
+	}
+	if got, _ := w.bob.controlsOf(editRef); got.Text != "fixed on the desk" {
+		t.Fatalf("the refused edit is shown: %+v", got)
+	}
+
+	// Bob links a new phone (his daemon takes the request).
+	stop := runAgent(t, w.bob)
+	newPhone, await, _ := linkPhone(t, w.bob, "new-phone")
+	request := pendingLink(t, w.bob)
+	stop()
+	if err := w.bob.DecideLink(tctx(t), request.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if result := <-await; result.err != nil {
+		t.Fatal(result.err)
+	}
+
+	// The new phone's catch-up: bob checks the stored edit again inside the
+	// transaction that queues it (checkHistoryCopies).
+	if err := within(t, "bob's catch-up page", func() error { _, e := w.bob.historyCatchupPage(tctx(t), newPhone.Self()); return e }); err != nil {
+		t.Fatalf("catch-up holding the removed device's edited message: %v", err)
+	}
+	// The phone holds alice's chain as bob does, the removed step included,
+	// and stores what bob sent as own-replica history, checking each edit
+	// inside that transaction too.
+	var chain [][]byte
+	rows, err := w.bob.store.db.Query(`SELECT record FROM person_chain WHERE person=? ORDER BY seq`, with.Person)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var raw string
+		if err = rows.Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+		chain = append(chain, []byte(raw))
+	}
+	rows.Close()
+	if _, err = newPhone.store.pinChain(with.Person, chain, newPhone.Self(), false); err != nil {
+		t.Fatal(err)
+	}
+	runAgent(t, newPhone)
+	publishGroupFixtureCaps(t, newPhone, true)
+	if err = w.bob.FlushOutbox(tctx(t)); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the new phone shows alice's edit of her removed phone's message", func() bool {
+		var replica int
+		got, err := newPhone.controlsOf(editRef)
+		return err == nil && got.Text == "fixed on the desk" &&
+			newPhone.store.db.QueryRow(`SELECT replica FROM inbox WHERE ref_id=? AND sub=?`, edited, envelope.SubRevision).Scan(&replica) == nil && replica == 1
+	})
+}

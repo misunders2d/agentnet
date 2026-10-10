@@ -280,7 +280,7 @@ func (a *Agent) mayAuthor(ref ControlRef) error {
 	if err != nil {
 		return err
 	}
-	if !ok || a.personOfKeyIn(m, ref.Fingerprint) != me.info.Person {
+	if !ok || personOfKeyIn(a.store.db, m, ref.Fingerprint) != me.info.Person {
 		return errors.New("only the sender's person edits or deletes a message")
 	}
 	return nil
@@ -960,7 +960,7 @@ func (a *Agent) admitControl(ctx context.Context, env envelope.Envelope, in enve
 		if e != nil {
 			return e
 		}
-		if reason, why := a.controlAuthorized(m, in, sp.info.Person); reason != "" {
+		if reason, why := controlAuthorized(q, m, in, sp.info.Person); reason != "" {
 			if reason == reasonProof {
 				return ErrGroupContextPending
 			}
@@ -1007,7 +1007,7 @@ func (a *Agent) admitControl(ctx context.Context, env envelope.Envelope, in enve
 	if err != nil {
 		return err
 	}
-	if reason, why := a.controlAuthorized(m, in, sp.info.Person); reason != "" {
+	if reason, why := controlAuthorized(a.store.db, m, in, sp.info.Person); reason != "" {
 		return hold(reason, why)
 	}
 	me, ok, err := a.store.selfPerson(a.Address)
@@ -1556,12 +1556,13 @@ func (a *Agent) decorateLegacy(peer string, msgs []ConversationMessage) error {
 // sender key to belong to the same person. A status is no edit: it speaks
 // for the request only from the device that request is for, which every
 // caller checks (statusAllowed; history.go for one carried as history).
-// why says what is missing.
-func (a *Agent) controlAuthorized(m dmMembers, in envelope.Inner, author string) (reason, why string) {
+// why says what is missing. q is what m was read from: the store, or the
+// transaction about to store the control (personOfKeyIn).
+func controlAuthorized(q dbq, m dmMembers, in envelope.Inner, author string) (reason, why string) {
 	if in.Sub == envelope.SubReaction || in.Sub == envelope.SubStatus {
 		return "", ""
 	}
-	switch owner := a.personOfKeyIn(m, in.Ref.Fingerprint); {
+	switch owner := personOfKeyIn(q, m, in.Ref.Fingerprint); {
 	case owner == "":
 		return reasonProof, "the target's sender key is no member's (yet)"
 	case owner != author:
@@ -1592,15 +1593,17 @@ func (a *Agent) applyRetraction(in envelope.Inner) {
 // whose address no current device has) stays its person's in every
 // verified step of that person's pinned chain: a key joins a chain only
 // with its own consent and keeps its address there. Unknown keys belong
-// to no one (yet).
-func (a *Agent) personOfKeyIn(m dmMembers, fp string) string {
+// to no one (yet). Past steps are read from q, never the store: inside a
+// transaction (a group control's checkGroup, history guards) the store's
+// one connection is that transaction's.
+func personOfKeyIn(q dbq, m dmMembers, fp string) string {
 	for id, p := range m.persons {
 		if _, ok := p.roster.Device(fp); ok {
 			return id
 		}
 	}
 	for id := range m.persons {
-		if a.store.chainKey(id, fp) {
+		if chainKeyIn(q, id, fp) {
 			return id
 		}
 	}
@@ -1649,7 +1652,7 @@ func (a *Agent) convAuthority(conv string, m dmMembers, me personRow) (auth auth
 		if p, ok := personOf[fp]; ok {
 			return p
 		}
-		p := a.personOfKeyIn(m, fp)
+		p := personOfKeyIn(a.store.db, m, fp)
 		personOf[fp] = p
 		return p
 	}

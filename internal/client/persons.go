@@ -817,10 +817,13 @@ func (a *Agent) KnownPersons() ([]PersonInfo, error) {
 	return out, nil
 }
 
-// chainKey reports whether fp is the key of a device in any pinned step of
-// person's chain, at whatever address (a removed device's included).
-func (s *store) chainKey(person, fp string) bool {
-	rows, err := s.db.Query(`SELECT record FROM person_chain WHERE person = ? ORDER BY seq DESC`, person)
+// chainKeyIn reports whether fp is the key of a device in any pinned step
+// of person's chain, at whatever address (a removed device's included). It
+// reads q only: authorization runs inside transactions holding the store's
+// one connection, where a read of the store itself would wait forever. A
+// chain it cannot read lists nothing (no evidence, never authority).
+func chainKeyIn(q dbq, person, fp string) bool {
+	rows, err := q.Query(`SELECT record FROM person_chain WHERE person = ? ORDER BY seq DESC`, person)
 	if err != nil {
 		return false
 	}

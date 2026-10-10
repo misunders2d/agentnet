@@ -444,7 +444,7 @@ func (a *Agent) admitHistory(ctx context.Context, env envelope.Envelope, in enve
 		if err != nil {
 			return err
 		}
-		if reason, why := a.controlAuthorized(m, orig, owner); reason != "" {
+		if reason, why := controlAuthorized(a.store.db, m, orig, owner); reason != "" {
 			return hold(reason, why)
 		}
 		if orig.Sub == envelope.SubStatus { // only the device the request is for speaks for it, as directly
