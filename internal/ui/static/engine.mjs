@@ -748,19 +748,30 @@ export function sameOrigin(hub, base) {
 
 const releaseTag = /^v\d{1,6}\.\d{1,6}\.\d{1,6}$/;
 
+// drainsWork says whether a refused device may still post a message of
+// outer kind: an answer or a result finishes what was admitted before.
+const drainsWork = (kind) => kind === "answer" || kind === "result";
+
 // updateAllowed is what the server still takes from a device it refuses
 // (internal/client updateAllowed, the Hub's suspended allowlist): the
 // stream, its ping acknowledgements, the version probe and the
-// recommendation; receipts, the read-only lookups of a member a send makes
-// first, and posts of answers and results (the posted message's outer
-// kind), so admitted work drains. body is the request's.
+// recommendation; receipts, the read-only lookups an answer or a result
+// makes first (a member's directory entry, sessions and profile, a
+// person's chain), the upload of its files (reserve, chunks, the upload's
+// state, complete; never a download), and posts of answers and results
+// (the posted message's outer kind), so admitted work drains. body is the
+// request's.
 const updateAllowed = (method, path, body) => {
   const p = String(path).split("?")[0], seg = p.replace(/^\/v1\//, "").split("/");
   if (method === "GET" && (p === "/v1/stream" || p === "/v1/version" || p === "/v1/release") || method === "POST" && p === "/v1/stream/ack") return true;
   if (method === "POST" && p === "/v1/messages") {
-    try { const kind = JSON.parse(typeof body === "string" ? body : "").kind; return kind === "answer" || kind === "result"; } catch (e) { return false; }
+    try { return drainsWork(JSON.parse(typeof body === "string" ? body : "").kind); } catch (e) { return false; }
   }
   if (method === "POST" && seg.length === 3 && seg[0] === "messages" && seg[1] && seg[2] === "ack") return true;
+  if (method === "GET" && seg.length === 3 && seg[0] === "persons" && seg[1] && seg[2] === "chain") return true;
+  if (method === "POST" && p === "/v1/blobs") return true;
+  if (seg[0] === "blobs" && seg.length === 2 && seg[1]) return method === "GET" || method === "PUT";
+  if (method === "POST" && seg.length === 3 && seg[0] === "blobs" && seg[1] && seg[2] === "complete") return true;
   return method === "GET" && seg[0] === "agents" && !!seg[1] && !!seg[2] && (seg.length === 3 || seg.length === 4 && (seg[3] === "sessions" || seg[3] === "profile"));
 };
 
@@ -3117,7 +3128,10 @@ export class Engine {
         await this.requireAgentIdentity(rec.to, pin, rec.required_cap);
       }
       // The files first, each resumable; the message names them only once
-      // the relay holds them.
+      // the relay holds them. While the server refuses this build, the files
+      // of a message it would refuse wait with it (only an answer's or a
+      // result's go, as internal/client beforePost): none is sent in vain.
+      if (this.outdated?.refused && (rec.files || []).some((f) => !f.uploaded) && !updateAllowed("POST", "/v1/messages", rec.envelope)) throw new HubError(426, "update_required", this.outdatedText());
       for (const f of rec.files || []) {
         if (f.uploaded) continue;
         await this.uploadBlob(rec.to, f.attachment.blob, f.ct);

@@ -16,13 +16,16 @@ import * as wire from "../static/wire.mjs";
 
 const refusal = JSON.stringify({ error: "update_required", latest: "v0.8.18", url: "https://github.com/misunders2d/agentnet/releases/tag/v0.8.18", message: "Update AgentNet to v0.8.18 to continue." });
 const tabStorage = () => { const mem = new Map(); return { getItem: (k) => mem.has(k) ? mem.get(k) : null, setItem: (k, v) => mem.set(k, String(v)) }; };
-const served = new Set(["GET /v1/version", "GET /v1/release", "POST /v1/stream/ack", "POST /v1/messages/m1/ack", "GET /v1/agents/admin/alice", "GET /v1/agents/admin/alice/sessions", "GET /v1/agents/admin/alice/profile"]);
+const blob = "b".repeat(32);
+const served = new Set(["GET /v1/version", "GET /v1/release", "POST /v1/stream/ack", "POST /v1/messages/m1/ack", "GET /v1/agents/admin/alice", "GET /v1/agents/admin/alice/sessions", "GET /v1/agents/admin/alice/profile",
+  "GET /v1/persons/p1/chain", "POST /v1/blobs", "GET /v1/blobs/" + blob, "PUT /v1/blobs/" + blob, "POST /v1/blobs/" + blob + "/complete"]);
 const engine = async (pageBuild, version = () => "v0.8.17", tab = tabStorage()) => {
   const calls = [];
   const fetch = async (url, opts) => {
     const p = new URL(url).pathname, m = (opts && opts.method) || "GET";
     calls.push(m + " " + p);
     if (p === "/v1/version") return new Response(JSON.stringify({ version: version(), protocol: 1, features: [] }));
+    if (m === "POST" && p === "/v1/blobs") return new Response(JSON.stringify({ id: blob, state: "stored", received: 1, size: 1 }));
     if (served.has(m + " " + p)) return new Response("{}");
     if (m === "POST" && p === "/v1/messages" && ["answer", "result"].includes(JSON.parse(opts.body).kind)) return new Response(JSON.stringify({ state: "custody" }));
     return new Response(refusal, { status: 426, headers: { "Content-Type": "application/json" } });
@@ -63,9 +66,19 @@ const settle = () => new Promise((r) => setTimeout(r, 20));
   await e.call("GET", "/v1/agents/admin/alice");
   await e.call("GET", "/v1/agents/admin/alice/sessions");
   await e.call("GET", "/v1/agents/admin/alice/profile");
+  await e.call("GET", "/v1/persons/p1/chain?after=-1"); // a conversation reply refreshes each member's person first
+  await e.call("POST", "/v1/blobs", { id: blob, recipient: "admin/alice", size: 1, sha256: "c".repeat(64) }); // a result's file
+  await e.call("GET", "/v1/blobs/" + blob);
+  await e.callBytes("PUT", "/v1/blobs/" + blob + "?offset=0", new Uint8Array([1]));
+  await e.call("POST", "/v1/blobs/" + blob + "/complete");
   assert.deepEqual(await e.call("POST", "/v1/messages", { id: "a", kind: "answer" }), { state: "custody" });
   assert.deepEqual(await e.call("POST", "/v1/messages", { id: "r", kind: "result" }), { state: "custody" });
-  assert.equal(calls.length - before, 9, "all of them reached the server: " + calls.slice(before).join(", "));
+  assert.equal(calls.length - before, 14, "all of them reached the server: " + calls.slice(before).join(", "));
+  // Not a download, nor any other person or file route.
+  for (const [m, p] of [["GET", "/v1/blobs/" + blob + "/data"], ["GET", "/v1/persons/p1"], ["PUT", "/v1/person"], ["DELETE", "/v1/blobs/" + blob]]) {
+    await assert.rejects(e.call(m, p), (err) => err.status === 426, m + " " + p);
+  }
+  assert.equal(calls.length - before, 14, "refused here: " + calls.slice(before).join(", "));
   assert.equal(changes(), told, "the same refusal is not told again");
   assert.ok(e.outdated.refused, "what the server still takes does not end the refusal");
   // The server serves this very build: reloading cannot help; the banner says so.
@@ -76,6 +89,29 @@ const settle = () => new Promise((r) => setTimeout(r, 20));
   await e.dispatch("members", JSON.stringify({ members: [{ address: "self/phone", presence: "connected", joined: 1 }], truncated: false }));
   assert.equal(e.outdated, null);
   assert.equal((await e.overview()).update_required, undefined);
+  e.stop();
+}
+
+// 1b. While refused, a queued message's files wait with it: nothing is
+// uploaded for what the server would refuse, however often it is retried;
+// an answer's files go, then the answer (admitted work drains).
+{
+  const { e, calls } = await engine("v0.8.17");
+  await e.features();
+  await assert.rejects(e.call("PUT", "/v1/caps", {}), (err) => err.status === 426);
+  const queued = (id, kind) => ({ id, to: "admin/alice", kind, state: "queued", at: Date.now(), envelope: JSON.stringify({ v: 1, id, from: "self/phone", to: "admin/alice", kind }),
+    files: [{ uploaded: false, attachment: { name: "plan.txt", blob: { id: blob, size: 1, sha256: "c".repeat(64) } }, ct: new Uint8Array([1]) }] });
+  const message = queued("1".repeat(32), "message"), answer = queued("2".repeat(32), "answer");
+  for (const r of [message, answer]) await e.store.write([{ s: "outbox", k: r.id, v: r }]);
+  calls.length = 0;
+  for (let i = 0; i < 3; i++) await e.post(message);
+  assert.deepEqual(calls, [], "a held message's file reached the server: " + calls.join(", "));
+  const held = await e.store.get("outbox", message.id);
+  assert.deepEqual([held.state, held.files[0].uploaded], ["queued", false]);
+  assert.match(held.detail, /Update AgentNet to v0\.8\.18/);
+  await e.post(answer);
+  assert.deepEqual(calls, ["POST /v1/blobs", "POST /v1/messages"], "the answer's file, then the answer");
+  assert.equal((await e.store.get("outbox", answer.id)).state, "custody");
   e.stop();
 }
 

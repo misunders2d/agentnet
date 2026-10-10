@@ -30,13 +30,14 @@ import (
 // daemon's automatic update is asked to install vX. The daemon then sends
 // the Hub only what it still takes from a refused device (updateAllowed):
 // its stream, that stream's ping acknowledgements and the version probe,
-// and what lets admitted work drain (receipts, answers and results, and the
-// lookups they make first). Its retry pass sends only those, so nothing
-// loops, and everything else stays queued for the updated program. The
-// record ends when another version runs here, or when the Hub serves this
-// device again: its stream brings members, a message or a receipt, which
-// it sends only to a device it serves. An answered request proves nothing:
-// the Hub answers a refused device some requests too.
+// and what lets admitted work drain (receipts, answers and results, the
+// lookups they make first and the upload of their files). Its retry pass
+// sends only those, so nothing loops, and everything else stays queued for
+// the updated program. The record ends when another version runs here, or
+// when the Hub serves this device again: its stream brings members, a
+// message or a receipt, which it sends only to a device it serves. An
+// answered request proves nothing: the Hub answers a refused device some
+// requests too.
 
 // codeUpdateRequired is the Hub's refusal of this build.
 const codeUpdateRequired = "update_required"
@@ -108,9 +109,12 @@ func drainsWork(kind string) bool { return kind == envelope.KindAnswer || kind =
 // suspended allowlist, contract REVISION 2.2): the push stream, which says
 // when it is served again, that stream's ping acknowledgements, the version
 // probe and the recommendation; and what lets admitted work drain: receipts
-// of what was received, the read-only lookups of a member a send makes
-// first, and posts of answers and results (by the posted message's outer
-// kind). body is the request's.
+// of what was received, the read-only lookups an answer or a result makes
+// before it is stored (a member's directory entry, sessions and profile,
+// and a person's chain: a conversation reply refreshes each member's person
+// first), the upload of its files (reserve, chunks, the upload's state,
+// complete; never a download), and posts of answers and results (by the
+// posted message's outer kind). body is the request's.
 func updateAllowed(method, path string, body []byte) bool {
 	p, _, _ := strings.Cut(path, "?")
 	seg := strings.Split(strings.TrimPrefix(p, "/v1/"), "/")
@@ -127,6 +131,14 @@ func updateAllowed(method, path string, body []byte) bool {
 		return true
 	case method == http.MethodGet && seg[0] == "agents" && (len(seg) == 3 || len(seg) == 4 && (seg[3] == "sessions" || seg[3] == "profile")):
 		return seg[1] != "" && seg[2] != ""
+	case method == http.MethodGet && len(seg) == 3 && seg[0] == "persons" && seg[2] == "chain":
+		return seg[1] != ""
+	case method == http.MethodPost && p == "/v1/blobs":
+		return true
+	case seg[0] == "blobs" && len(seg) == 2 && seg[1] != "":
+		return method == http.MethodGet || method == http.MethodPut
+	case method == http.MethodPost && len(seg) == 3 && seg[0] == "blobs" && seg[1] != "" && seg[2] == "complete":
+		return true
 	}
 	return false
 }
@@ -139,6 +151,22 @@ func (g *updateGate) before(method, path string, body []byte) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if !g.hold || g.refusal == nil || updateAllowed(method, path, body) {
+		return nil
+	}
+	e := *g.refusal
+	return &e
+}
+
+// beforePost returns the refusal a held message of outer kind gets here,
+// before anything of it is sent: the files of a message the Hub would
+// refuse wait with it, so no retry pass uploads them again and again.
+func (g *updateGate) beforePost(kind string) error {
+	if g == nil || drainsWork(kind) {
+		return nil
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !g.hold || g.refusal == nil {
 		return nil
 	}
 	e := *g.refusal
