@@ -555,6 +555,9 @@ type CopyView struct {
 	Detail            string `json:"detail,omitempty"`
 	SendStopped       bool   `json:"send_stopped,omitempty"`
 	DeliveryUncertain bool   `json:"delivery_uncertain,omitempty"`
+	// Suspended: the relay serves that device nothing until it updates
+	// AgentNet; its copy never decides the message's delivery.
+	Suspended bool `json:"suspended,omitempty"`
 }
 
 // FileView is one file of a message as the page lists it: its name made
@@ -1000,6 +1003,12 @@ type ConvItem struct {
 	Unread       bool                       `json:"unread,omitempty"`
 	Actions      []string                   `json:"actions,omitempty"`
 	DecideOn     string                     `json:"decide_on,omitempty"`
+	// Stale: the executor on DecideOn has no current word on it (not
+	// connected now, suspended until it updates, or a run older than
+	// client.ExecRunningMaxAge): no result reported, and nothing to decide
+	// from here. Why says what is known of that device. Only a page that
+	// lists another device's requests (the browser device) sets it.
+	Stale bool `json:"stale,omitempty"`
 }
 
 // OperatorDecisions is implemented by the daemon provider: deciding a
@@ -1293,6 +1302,8 @@ func StateText(dir, kind, state, peer string) string {
 			return "Not delivered: that session ended first"
 		case "failed":
 			return "Not sent"
+		case "not_delivered": // nothing was sealed for it, or it was kept here
+			return "Not sent to " + peer
 		case "quarantined":
 			return peer + " could not verify it"
 		}

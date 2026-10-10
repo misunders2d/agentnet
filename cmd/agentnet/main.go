@@ -473,7 +473,15 @@ func runStatus(ctx context.Context, a *client.Agent, args []string, stdout io.Wr
 		if len(copies) > 1 || c.ID != fs.Arg(0) {
 			to = " to " + c.To
 		}
-		r, err := a.Status(ctx, c.ID, max(time.Until(deadline), 0))
+		if c.NotSent { // nothing was sealed for it: no Hub record to ask about
+			fmt.Fprintf(stdout, "%s %s%s (local record; %s)\n", c.ID, c.State, to, c.Detail)
+			continue
+		}
+		wait := max(time.Until(deadline), 0)
+		if c.Suspended {
+			wait = 0 // nobody waits for a device the relay serves nothing until it updates
+		}
+		r, err := a.Status(ctx, c.ID, wait)
 		var local *client.LocalStatus
 		if errors.As(err, &local) { // this device's own record, marked as such
 			why := "Hub not reachable"
@@ -489,7 +497,11 @@ func runStatus(ctx context.Context, a *client.Agent, args []string, stdout io.Wr
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(stdout, "%s %s %s%s\n", r.ID, r.State, r.Path, to)
+		note := ""
+		if c.Suspended {
+			note = " (" + client.SuspendedText(c.To) + ")"
+		}
+		fmt.Fprintf(stdout, "%s %s %s%s%s\n", r.ID, r.State, r.Path, to, note)
 	}
 	return nil
 }

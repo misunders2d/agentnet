@@ -87,6 +87,9 @@ type GroupInvitationView struct {
 	History    []protocol.GroupHistoryRef `json:"history"`
 	CanCancel  bool                       `json:"can_cancel,omitempty"`
 	CanRefresh bool                       `json:"can_refresh,omitempty"`
+	// Error: why an accepted invitation is not published here yet, as its
+	// last retry said (the browser device keeps it; it is retried).
+	Error string `json:"error,omitempty"`
 }
 
 type GroupInviteDraft struct {

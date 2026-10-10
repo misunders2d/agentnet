@@ -324,7 +324,7 @@ CREATE TABLE reported(
   PRIMARY KEY(item, recipient));
 `, TeamSchema, GroupClientSchema, GroupProofSchema, agentIdentitySchema, agentCapabilitySchema, groupTurnRecipientSchema, replyReceiverSchema, GroupLifecycleSchema, replySessionSchema, GroupHistorySchema, receiverRouteSchema, humanScopeSchema, convClearSchema, statusDueSchema, runGroupSchema, topicStateSchema, messagingSchema, deliveryPersonSchema, personGrantSchema, operatorPersonsSchema, deviceAdminNoticeSchema, roomSchema, roomReaderSchema, chatTopicSchema, groupInvitationCancellationSchema, readSyncSchema, chatAlertDefaultsSchema, queuedRetractionSchema, heldNoticeSchema, sendGroupSchema, continuationSchema, ownInvitationSchema, historyCatchupSchema, groupHistoryWitnessSchema, topicSyncSchema, `
 CREATE INDEX outbox_conv_lid ON outbox(conv, lid);
-`, historyReceiptSchema, deviceHistorySchema, proposalChoiceSchema, receiptGenerationSchema, requestFollowupSchema, answeredConversationStatusSchema, modelReportSchema, heldCopySchema, retainedConversationStatusSchema, heldLogicalSchema, waitingConversationStatusSchema, topicMarkSyncSchema}
+`, historyReceiptSchema, deviceHistorySchema, proposalChoiceSchema, receiptGenerationSchema, requestFollowupSchema, answeredConversationStatusSchema, modelReportSchema, heldCopySchema, retainedConversationStatusSchema, heldLogicalSchema, waitingConversationStatusSchema, topicMarkSyncSchema, skippedCopySchema}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
 const (

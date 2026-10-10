@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
@@ -60,5 +61,22 @@ func TestStatusOfLogicalIDReportsEachCopy(t *testing.T) {
 	out, err = diagnosticOutput(t, func() error { return run([]string{"--home", home, "status", sent.ID}) })
 	if want := sent.ID + " delivered relay\n"; err != nil || out != want {
 		t.Fatalf("status of the copy: %q %v, want %q", out, err, want)
+	}
+
+	// A device the message was not sealed for at all (its key could not be
+	// used: a group turn records it so) is reported from the local record:
+	// there is nothing at the Hub to ask about it.
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(home, "agent.db")+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	const skippedID, why = "00000000000000000000000000000001", "not sent: its key is not the one its person's roster names"
+	if _, err = db.Exec(`INSERT INTO skipped_copies(id, conv, lid, recipient, person, detail, created_ms) VALUES(?, ?, ?, 'carol/desk', '', ?, 1)`, skippedID, conv, sent.LID, why); err != nil {
+		t.Fatal(err)
+	}
+	out, err = diagnosticOutput(t, func() error { return run([]string{"--home", home, "status", sent.LID}) })
+	if want := sent.ID + " delivered relay to " + bob.Address + "\n" + skippedID + " not_delivered to carol/desk (local record; " + why + ")\n"; err != nil || out != want {
+		t.Fatalf("status with a device not sent to: %q %v, want %q", out, err, want)
 	}
 }

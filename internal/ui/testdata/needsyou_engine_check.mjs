@@ -36,15 +36,40 @@ for (const [claim, shown] of [[9e12, ""], [1e12, ""], [253402300799, ""], [-5, "
 const active = { ...info(1759500000), state: "active" };
 const req = { id: "2".repeat(32), lid: "3".repeat(32), pid, kind: "task", body: "rotate the key", at: received,
   target: { address: "admin/laptop", fingerprint: "a".repeat(8) } };
-const status = (state) => ({ sub: "status", from: "admin/laptop", lid: "4".repeat(32), ref: { id: req.lid, fingerprint: e.fp },
-  body: JSON.stringify({ state, n: 1, at: 1759500000 }) });
+const status = (state, at = now / 1000 - 60) => ({ sub: "status", from: "admin/laptop", lid: "4".repeat(32), ref: { id: req.lid, fingerprint: e.fp },
+  body: JSON.stringify({ state, n: 1, at }) });
+const laptopWords = (a) => a === "admin/laptop" ? "Alice · Laptop" : a; // the page passes its device words
+const listedNow = (presence, suspended = []) => { e.members = { listed: "listed", current: true, at: now, list: [{ address: "admin/laptop", presence, joined: 1 }], truncated: false }; e.suspendedDevices = suspended; };
+const requestNeeds = (statuses, extra = {}) => { const needs = [], held = []; e.needsYouOf(conv, [active], [{ ...req, ...extra }], statuses, needs, held, laptopWords); return needs; };
+listedNow("connected");
 for (const [state, reason] of [["awaiting", "agent_awaiting"], ["needs_human", "agent_needs_human"], ["interrupted", "agent_interrupted"], ["running", "agent_running"]]) {
-  const needs = [], held = [];
-  e.needsYouOf(conv, [active], [req], [status(state)], needs, held, (a) => a === "admin/laptop" ? "Alice · Laptop" : a); // the page passes its device words
+  const needs = requestNeeds([status(state)]);
   assert.deepEqual(needs.map((n) => n.reason), reason ? [reason] : [], "a request the laptop reports " + state);
   if (reason) assert.equal(needs[0].decide_on, "admin/laptop", "decided on the laptop");
+  assert.equal(needs[0].stale, undefined, "a current word of a connected laptop");
   if (state === "running") assert.match(needs[0].why, /^Running on Alice · Laptop\./);
+  if (state === "awaiting") assert.match(needs[0].why, /^Decide on Alice · Laptop\./, "a current decision waits on the laptop");
 }
+// Only a current word is a decision: a stale one (the laptop not connected
+// now, suspended until it updates, a copy waiting for its update, or a run
+// older than an hour) reports no result and asks nothing, whatever it said.
+const stale = (needs, words) => {
+  assert.equal(needs.length, 1);
+  assert.equal(needs[0].stale, true, "marked as no current word");
+  assert.equal(needs[0].why, "No result reported · " + words);
+  assert.doesNotMatch(needs[0].why, /Decide on|Running on/, "never a pending decision or live work");
+  assert.equal(needs[0].decide_on, "admin/laptop", "still listed apart, never decided here");
+  assert.equal(needs[0].actions, undefined, "nothing to do here");
+};
+listedNow("offline");
+for (const state of ["awaiting", "needs_human", "running"]) stale(requestNeeds([status(state)]), "Alice · Laptop is not connected now");
+listedNow("connected", ["admin/laptop"]);
+stale(requestNeeds([status("awaiting")]), "Alice · Laptop is suspended until it updates AgentNet");
+listedNow("reconnecting");
+stale(requestNeeds([status("running")], { copies: [{ to: "admin/laptop", state: "waiting", detail: "peer_update: admin/laptop cannot read human participation yet" }] }), "Alice · Laptop needs an AgentNet update");
+listedNow("connected");
+stale(requestNeeds([status("running", now / 1000 - 7200)]), "Alice · Laptop has not reported on it for over an hour");
+e.members = { listed: "unknown", current: false, at: 0, list: [], truncated: false }; e.suspendedDevices = [];
 // A turn held for the person (conv_held: nothing runs it) is answered by
 // the person's own later turn in that conversation, as
 // client.turnClosesHeld closes it: one sent from this browser (no key of
@@ -61,7 +86,7 @@ assert.deepEqual(heldIds([{ ...heldTurn, at: received + 400 }, turn(7, { own: tr
 assert.deepEqual(heldIds([heldTurn, turn(7, { own: true, fp: "a".repeat(8), origin: "agent:claude", kind: "answer" })]), [heldTurn.id], "an agent's output answers nothing");
 assert.deepEqual(heldIds([heldTurn, turn(7, { kind: "question", target: { address: "admin/laptop", fingerprint: "a".repeat(8) } })]), [heldTurn.id], "a request to an agent answers nothing");
 assert.deepEqual(heldIds([turn(7, { at: received - 1000 }), heldTurn]), [heldTurn.id], "an earlier turn answers nothing");
-console.log("PASS needs-you claimed invitation times: arrival, plausible claim, or now; agent view leaves implausible claims out; requests listed as their host reports them, interrupted included; held turns answered by the person's later turn");
+console.log("PASS needs-you claimed invitation times: arrival, plausible claim, or now; agent view leaves implausible claims out; requests listed as their host currently reports them, interrupted included, and a stale word as no result reported, never a decision; held turns answered by the person's later turn");
 
 // Explicitly handling an ordinary human question is local and inert, matching
 // native Agent.Resolve. Reading alone never resolves it; no remote job is touched.

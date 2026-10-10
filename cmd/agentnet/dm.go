@@ -434,6 +434,9 @@ func printConvMessages(stdout io.Writer, msgs []client.ConvMessage) {
 		if len(m.Copies) > 0 {
 			for _, c := range m.Copies {
 				state += "; " + c.To + ": " + c.State
+				if c.Suspended {
+					state += " (suspended until it updates AgentNet)"
+				}
 			}
 		}
 		if m.Detail != "" {

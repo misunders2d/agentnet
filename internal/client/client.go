@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -620,6 +619,10 @@ func (a *Agent) SendMessage(ctx context.Context, m Outgoing) (SendResult, error)
 	if err != nil || m.Wait <= 0 || res.Path != protocol.PathRelay || res.State != protocol.StateCustody {
 		return res, err // direct delivery already has the recipient's receipt
 	}
+	if a.store.suspendedDevices()[env.To] {
+		res.Detail = SuspendedText(env.To) // in the relay's custody until then: nobody waits for it
+		return res, nil
+	}
 	if r, werr := a.waitReceipt(ctx, env.ID, m.Wait); werr == nil && r.State != "" {
 		res.State = r.State
 		if r.State != protocol.StateCustody {
@@ -656,185 +659,42 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 		state, _, _, _ := a.store.outboxState(env.ID)
 		return SendResult{ID: env.ID, State: state}, err
 	}
-	var required, conv, sub, body, pid, humanRaw, rowStatus, agentID, capturedFP string
-	if err := a.store.db.QueryRow(`SELECT coalesce(required_cap, ''), coalesce(conv, ''),coalesce(sub,''),body,coalesce(pid,''),coalesce(human,''),coalesce(status,''),coalesce(agent_id,''),coalesce(recipient_fp,'') FROM outbox WHERE id=?`, env.ID).Scan(&required, &conv, &sub, &body, &pid, &humanRaw, &rowStatus, &agentID, &capturedFP); err != nil {
+	var storedHuman, storedRequired, storedSub string
+	if err := a.store.db.QueryRow(`SELECT coalesce(human,''),coalesce(required_cap,''),coalesce(sub,'') FROM outbox WHERE id=?`, env.ID).Scan(&storedHuman, &storedRequired, &storedSub); err != nil {
 		return SendResult{}, err
 	}
-	progress := rowStatus == envelope.StatusProgress
-	if progress && required == "" {
-		required = protocol.CapProgress
-	}
-	if humanRaw != "" || required == protocol.CapHumanParticipation && sub == envelope.SubExcerpt {
+	if storedHuman != "" || storedRequired == protocol.CapHumanParticipation && storedSub == envelope.SubExcerpt {
 		a.humanMu.RLock()
 		defer a.humanMu.RUnlock()
 	}
-	receiverCap, err := receiverCopyNeedsCapability(a.store.db, env.ID, sub, body)
+	n, err := copyNeedsOf(a.store.db, env.ID, env.V)
 	if err != nil {
 		return SendResult{}, err
 	}
-	if required == "" && receiverCap {
-		required = protocol.CapReplyReceiver
-	}
-	room, err := roomCopy(a.store.db, conv, sub, body, humanRaw)
-	if err != nil {
-		return SendResult{}, err
-	}
-	if required == "" && room {
-		required = protocol.CapRoom
-	}
-	topicScoped, err := topicCopy(a.store.db, conv, pid, sub, body, humanRaw)
-	if err != nil {
-		return SendResult{}, err
-	}
-	if required == "" && topicScoped {
-		required = protocol.CapTopicParticipation
-	}
-	organizationCap, err := topicOrganizationCopy(a.store.db, env.ID, sub, body)
-	if err != nil {
-		return SendResult{}, err
-	}
-	if required == "" && organizationCap {
-		required = protocol.CapTopicOrganization
-	}
-	if organizationCap && sub == "" {
+	required, conv, sub, capturedFP := n.required, n.conv, n.sub, n.capturedFP
+	if n.organizationCap && sub == "" {
 		if err := topicOrganizationAuthor(a.store.db, conv, a.Address, a.Self().Fingerprint()); err != nil {
 			return SendResult{ID: env.ID, State: stateConvWaiting, Detail: err.Error()}, a.store.setOutboxState(env.ID, stateConvWaiting, err.Error(), "")
 		}
 	}
-	followupCap, err := requestFollowupCopy(a.store.db, env.ID, sub, body)
-	if err != nil {
-		return SendResult{}, err
-	}
-	if required == "" && followupCap {
-		required = protocol.CapRequestFollowup
-	}
-	proposalCap, err := proposalCopyNeedsCapability(a.store.db, env.ID)
-	if err != nil {
-		return SendResult{}, err
-	}
-	if required == "" && proposalCap {
-		required = protocol.CapOwnSyncV3
-	}
 	if required != "" {
 		key, err := a.sendKey(ctx, env.To)
-		if err == nil && (followupCap || proposalCap || required == protocol.CapAgentReaction || required == protocol.CapControl || required == protocol.CapContinuation || required == protocol.CapOwnSyncV3) && capturedFP != "" && key.Fingerprint() != capturedFP {
+		if err == nil && (n.followup || n.proposal || required == protocol.CapAgentReaction || required == protocol.CapControl || required == protocol.CapContinuation || required == protocol.CapOwnSyncV3) && capturedFP != "" && key.Fingerprint() != capturedFP {
 			// Sealed for the reader key captured at enqueue: never for its replacement.
 			a.store.setOutboxState(env.ID, stateNotDelivered, "not sent: the reader's key changed", "")
 			return SendResult{ID: env.ID, State: stateNotDelivered}, nil
 		}
 		if err == nil {
-			if required == protocol.CapControl {
-				var features []string
-				features, err = a.relayFeatures(ctx)
-				if err == nil {
-					if ok, why := a.capSupport(ctx, env.To, key, features, required); !ok {
-						return SendResult{ID: env.ID, State: stateConvWaiting, Detail: why}, a.store.setOutboxState(env.ID, stateConvWaiting, why, "")
-					}
-				}
-			} else {
-				err = a.requireParticipationCaps(ctx, key, required)
-			}
-			// Captured human controls retain their participation requirement,
-			// and also need the reader's control capability before handover.
-			if err == nil && env.V == envelope.Version3 && groupControlSub(sub) && required != protocol.CapControl && required != protocol.CapGroup {
-				var features []string
-				features, err = a.relayFeatures(ctx)
-				if err == nil {
-					if ok, why := a.capSupport(ctx, env.To, key, features, protocol.CapControl); !ok {
-						return SendResult{ID: env.ID, State: stateConvWaiting, Detail: why}, a.store.setOutboxState(env.ID, stateConvWaiting, why, "")
-					}
-				}
-			}
-
-			if err == nil && organizationCap && required != protocol.CapTopicOrganization {
-				err = a.requireParticipationCaps(ctx, key, protocol.CapTopicOrganization)
-			}
-			if err == nil && followupCap && required != protocol.CapRequestFollowup {
-				err = a.requireParticipationCaps(ctx, key, protocol.CapRequestFollowup)
-			}
-			if err == nil && proposalCap && required != protocol.CapOwnSyncV3 {
-				err = a.requireParticipationCaps(ctx, key, protocol.CapOwnSyncV3)
-			}
-			if err == nil && receiverCap && required != protocol.CapReplyReceiver {
-				err = a.requireParticipationCaps(ctx, key, protocol.CapReplyReceiver)
-			}
-			// Progress needs prg1 and, besides, whatever its author's
-			// identity or participation already needs: never one without the other.
-			if err == nil && progress && required != protocol.CapProgress {
-				err = a.requireParticipationCaps(ctx, key, protocol.CapProgress)
-			}
-			if err == nil && progress && required == protocol.CapProgress && agentID != "" {
-				err = a.requireParticipationCaps(ctx, key, protocol.CapAgentIdentity)
-			}
-			if err == nil && required == protocol.CapAgentReaction { // and what the assistant's own reply needs there
-				err = a.assistantReactionCaps(ctx, key, conv, pid, agentID)
-			}
-			if err == nil && required == protocol.CapAgentReaction && humanRaw != "" { // to a captured audience: as a human-audience turn
-				err = a.requireParticipationCaps(ctx, key, protocol.CapHumanParticipation)
-			}
-			// A room shape needs rm1 besides its primary requirement (ROOM_V1 §2.5).
-			var groupedWire bool
-			if e := a.store.db.QueryRow(`SELECT wire_send_group FROM outbox WHERE id=?`, env.ID).Scan(&groupedWire); e != nil {
-				return SendResult{}, e
-			}
-			if err == nil && groupedWire {
-				err = a.requireParticipationCaps(ctx, key, protocol.CapSendGroup)
-			}
-			if err == nil && topicScoped {
-				err = a.requireParticipationCaps(ctx, key, protocol.CapTopicParticipation)
-			}
-			if err == nil && room && required != protocol.CapRoom {
-				err = a.requireParticipationCaps(ctx, key, protocol.CapRoom)
-			}
-			control := env.V == envelope.Version3 && groupControlSub(sub)
-			status := sub == envelope.SubStatus
-			var historical HistoryItem
-			if sub == envelope.SubHistory {
-				var item HistoryItem
-				if json.Unmarshal([]byte(body), &item) == nil {
-					control = groupControlSub(item.Sub)
-					status = item.Sub == envelope.SubStatus
-					historical = item
-					pid = item.PID
-				}
-			}
-			if err == nil && historical.GroupHistory != nil {
-				err = a.requireParticipationCaps(ctx, key, protocol.CapOwnSyncV2)
-			}
-			if err == nil && required == protocol.CapGroup && control {
-				err = a.requireGroupControlCapability(ctx, key)
-			}
-			if err == nil && required == protocol.CapGroup && status {
-				err = a.requireParticipationCaps(ctx, key, protocol.CapHeadless)
-			}
-			if err == nil && required == protocol.CapGroup && historical.PID != "" {
-				err = a.requireParticipationCaps(ctx, key, protocol.CapAgentIdentity)
-			}
-			if err == nil && required == protocol.CapGroup && pid != "" {
-				cap := protocol.CapAgentIdentity
-				if sub == envelope.SubGroupProof || sub == envelope.SubGroupContext {
-					cap = protocol.CapExternalParticipation
-				} else if p, e := a.participation(conv, pid); e == nil && p.External && (p.Host.Address == env.To || historical.PID != "") {
-					cap = protocol.CapExternalParticipation
-				}
-				err = a.requireParticipationCaps(ctx, key, cap)
-			}
-			// An assistant's reaction as history needs agr1 and what that
-			// assistant's own output needs there, besides the copy's own
-			// participation or group requirement: never to an older reader.
-			if item, assistant := historyAssistant(body, conv); err == nil && sub == envelope.SubHistory && assistant {
-				if required != protocol.CapAgentReaction {
-					err = a.requireParticipationCaps(ctx, key, protocol.CapAgentReaction)
-				}
-				if err == nil {
-					err = a.assistantReactionCaps(ctx, key, conv, item.PID, item.AgentID)
-				}
-			}
+			err = a.readerCheck(ctx, env.To, key, n) // the same list releaseConv releases a waiting copy by
 		}
 		if err != nil {
+			var wait *copyWait
+			if errors.As(err, &wait) {
+				return SendResult{ID: env.ID, State: stateConvWaiting, Detail: wait.why}, a.store.setOutboxState(env.ID, stateConvWaiting, wait.why, "")
+			}
 			// Waiting copies release when the recipient's signed capabilities
 			// change; progress is never sent unmarked to an older session.
-			if (proposalCap || conv != "" || required == protocol.CapModelSync || required == protocol.CapOwnSyncV2 || required == protocol.CapOwnSyncV3 || required == protocol.CapReadSync || required == protocol.CapTopicStateSync || required == protocol.CapProgress || required == protocol.CapAgentReaction) && errors.Is(err, errAgentIdentityUnsupported) {
+			if (n.proposal || conv != "" || required == protocol.CapModelSync || required == protocol.CapOwnSyncV2 || required == protocol.CapOwnSyncV3 || required == protocol.CapReadSync || required == protocol.CapTopicStateSync || required == protocol.CapProgress || required == protocol.CapAgentReaction) && errors.Is(err, errAgentIdentityUnsupported) {
 				return SendResult{ID: env.ID, State: stateConvWaiting, Detail: WaitPeerUpdate + err.Error()}, a.store.setOutboxState(env.ID, stateConvWaiting, WaitPeerUpdate+err.Error(), "")
 			}
 			if retryable(err) {

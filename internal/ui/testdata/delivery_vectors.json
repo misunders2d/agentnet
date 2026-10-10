@@ -213,5 +213,24 @@
       }
     ],
     "want": "delivered"
+  },
+  {
+    "name": "a member not sent to is never delivered",
+    "copies": [
+      {
+        "state": "delivered",
+        "person": "bob",
+        "own": false,
+        "to": "bob/laptop"
+      },
+      {
+        "state": "not_delivered",
+        "person": "carol",
+        "own": false,
+        "to": "carol/desk",
+        "not_sent": true
+      }
+    ],
+    "want": "not_delivered"
   }
 ]

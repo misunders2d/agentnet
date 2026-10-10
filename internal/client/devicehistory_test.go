@@ -27,6 +27,11 @@ func TestDeviceHistoryLinkedLegacyConversation(t *testing.T) {
 			t.Fatalf("original source %s: %v", source.storage, err)
 		}
 	}
+	// The phone's program has run once and said it reads direct history:
+	// nothing is sealed for a device before it does (ownSyncReader).
+	stopPhone := runAgent(t, phone)
+	waitNamedAgentCaps(t, phone)
+	stopPhone()
 	for range 8 {
 		w.alice.convWork.due(convHistory)
 		w.alice.convSync(tctx(t))
