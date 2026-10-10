@@ -452,6 +452,9 @@ func (a *Agent) admitHumanTurn(ctx context.Context, env envelope.Envelope, in en
 		}
 		a.kickNow()
 		a.wakeWorker() // an exactly correlated selected receiver may own this output
+		if statusDue(state, in.Kind) != 0 {
+			a.wakeStatus() // its requester hears it waits here (stored with it)
+		}
 	}
 	return nil
 }

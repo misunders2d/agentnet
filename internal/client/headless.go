@@ -265,6 +265,21 @@ ALTER TABLE inbox ADD COLUMN status_due INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX inbox_status_due ON inbox(status_due) WHERE status_due > 0;
 `
 
+// statusDue is the status mark a request is stored with: one for a
+// question or task admitted waiting for this device's agent. Its requester
+// and their other devices hear that it waits here (statusOf) when it
+// arrives, as a device message's requester does (daemon.go), not first
+// when the worker claims it: a request waiting behind a busy agent, for a
+// responder or for its invitation to allow it would read as unconfirmed
+// elsewhere. Kept with the row, so a stop right after admission still
+// tells it; tellStatus tells whatever state is recorded by then.
+func statusDue(state, kind string) int {
+	if state == stateAgentWaiting && (kind == envelope.KindQuestion || kind == envelope.KindTask) {
+		return 1
+	}
+	return 0
+}
+
 // noteStatus marks that the requester (and, in a conversation, its
 // members) must be told where request id stands now. The mark is stored
 // with the request, so it outlives this process (a CLI accept or resolve,

@@ -1425,6 +1425,7 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 	}
 	if res == admitted {
 		a.convWork.due(convHistory)
+		a.retryHeldFor(in)
 		a.kickNow()
 		if in.Sub == envelope.SubEvent {
 			a.convWork.due(convRetry)
@@ -1432,6 +1433,9 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 			a.trySelfConsent(ctx, in.PID) // an invite of this person's own agent, hosted here
 		}
 		a.wakeWorker() // a request, or an event that may let one run or stop
+		if statusDue(state, in.Kind) != 0 {
+			a.wakeStatus() // its requester hears it waits here (stored with it)
+		}
 		a.wakeAlerts()
 		if len(forward) > 0 {
 			a.kickNow() // the stream's worker sends them now, not at the next ping
@@ -1442,6 +1446,24 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 		}
 	}
 	return nil
+}
+
+// retryHeldFor looks again at messages held for proof when request in has
+// come, as the browser engine does: its executor tells the request's state
+// to every member device (directly, or as history through another), and a
+// status that came first is held (controls.go) until its request is here.
+// Nothing else would look again before other evidence came (a members
+// push), and until then the request would read as having no word from its
+// executor. Nothing held: nothing to look at.
+func (a *Agent) retryHeldFor(in envelope.Inner) {
+	if in.Sub != "" || in.Kind != envelope.KindQuestion && in.Kind != envelope.KindTask {
+		return
+	}
+	if held, err := a.store.heldForProof(); err != nil {
+		a.Logf("held messages: %v", err)
+	} else if held {
+		a.convWork.due(convRetry)
+	}
 }
 
 // boundIn reports whether hash, the roster step a root binds person to, is

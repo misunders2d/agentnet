@@ -44,8 +44,9 @@ func TestStatusOfTellsRecordedStatesTruthfully(t *testing.T) {
 
 // A store last written by v0.8.16 (every step through modelReportSchema)
 // gains exactly one status to tell for each retained conversation job of
-// this device whose recorded state is terminal or awaits a decision here.
-// Nothing else is queued, no state changes and a restart repeats nothing.
+// this device whose recorded state is terminal, awaits a decision here, or
+// waits here to run (no shipped version told that one). Nothing else is
+// queued, no state changes and a restart repeats nothing.
 func TestRetainedConversationStatusUpgrade(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "agent.db")
 	shipped := slices.Index(schema, modelReportSchema) + 1
@@ -69,11 +70,12 @@ func TestRetainedConversationStatusUpgrade(t *testing.T) {
 		return row{state: state, kind: envelope.KindTask, conv: "chat", pid: "participant", verified: otherFP, target: self, want: want}
 	}
 	rows := map[string]row{}
-	for _, s := range []string{"failed", "cancelled", "declined", "resolved", "not_run", "not_delivered", "needs_human", "interrupted", "awaiting", "held"} {
+	for _, s := range []string{"failed", "cancelled", "declined", "resolved", "not_run", "not_delivered", "needs_human", "interrupted", "awaiting", "held", "part_waiting"} {
 		rows["told "+s] = ok(s, 1)
 	}
-	// Possibly old news after a stop, or told already (answered), or never told.
-	for _, s := range []string{"pending", "accepted", "part_waiting", "running", "cancel_requested", "steered", "answered", "conv_held", "manual"} {
+	// Possibly old news after a stop, or told already (queued once accepted;
+	// answered), or never told.
+	for _, s := range []string{"pending", "accepted", "running", "cancel_requested", "steered", "answered", "conv_held", "manual"} {
 		rows["kept "+s] = ok(s, 0)
 	}
 	change := func(name string, f func(*row)) {
@@ -130,6 +132,118 @@ func TestRetainedConversationStatusUpgrade(t *testing.T) {
 	check() // the appended step is recorded: a restart queues nothing again
 }
 
+// A connected host holds two requests for its agent that may not run yet (no
+// responder chosen there, as when its agent is busy): one asked by the other
+// member, one by the host's own person. The host tells each as queued from
+// its admission, so the requester and a linked sibling read the topic as
+// Waiting, not unconfirmed. Nothing runs, and a restart tells nothing again.
+func TestConversationRequestWaitingHereIsTold(t *testing.T) {
+	w, conv, lids, stopBob := agentWorld(t)
+	phone := linkedVia(t, w.bob, "phone", func(ctx context.Context, id string) error { return w.bob.DecideLink(ctx, id, true) })
+	pid := participate(t, w, conv, lids[:1], nil)
+	eventually(t, "sibling participation", func() bool { return stateAt(t, phone, pid).Claimable() })
+	remote, err := w.alice.AskAgent(tctx(t), pid, envelope.KindQuestion, "queued at bob for alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	own, err := w.bob.AskAgent(tctx(t), pid, envelope.KindQuestion, "queued at bob for bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var held []string // the host's own job rows
+	eventually(t, "the host holds both", func() bool {
+		held = held[:0]
+		for _, lid := range []string{remote.LID, own.LID} {
+			m, n := convMsg(t, w.bob, conv, func(m ConvMessage) bool { return m.LID == lid })
+			if n != 1 || m.Job != stateAgentWaiting {
+				return false
+			}
+			held = append(held, m.ID)
+		}
+		return true
+	})
+	queued := func(a *Agent) bool {
+		for _, lid := range []string{remote.LID, own.LID} {
+			m, n := convMsg(t, a, conv, func(m ConvMessage) bool { return m.LID == lid })
+			if n != 1 || m.Exec == nil || m.Exec.State != "queued" || m.Exec.Detail != "waiting here until it may run" || m.Exec.Stale {
+				return false
+			}
+		}
+		return true
+	}
+	for _, a := range []*Agent{w.alice, phone} {
+		eventually(t, "the host's queued word at "+a.Address, func() bool { return queued(a) })
+		msgs, err := a.ConversationMessages(conv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		view := summarizeChatTopicView(conv, msgs, nil, time.Now().Unix(), true)
+		if len(view) != 1 || len(view[0].PendingIDs) != 2 || !view[0].Waiting || view[0].Unconfirmed != 0 {
+			t.Fatalf("%s: requests queued on a connected host are not Waiting: %+v", a.Address, view)
+		}
+	}
+	told := func() (n int) {
+		t.Helper()
+		if err := w.bob.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE sub=? AND ref_id IN (?,?)`, envelope.SubStatus, remote.LID, own.LID).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	before := told()
+	stopBob()
+	runAgent(t, w.bob)
+	eventually(t, "the restarted host connected", func() bool { return w.bob.FlushOutbox(tctx(t)) == nil })
+	time.Sleep(300 * time.Millisecond)
+	if n := told(); n != before {
+		t.Fatalf("a restart told the waiting requests again: %d status copies, had %d", n, before)
+	}
+	for _, id := range held {
+		var state string
+		var attempts, due int
+		if err := w.bob.store.db.QueryRow(`SELECT state,attempts,status_due FROM inbox WHERE id=?`, id).Scan(&state, &attempts, &due); err != nil {
+			t.Fatal(err)
+		}
+		if state != stateAgentWaiting || attempts != 0 || due != 0 {
+			t.Fatalf("telling changed or ran %s: %s attempts %d due %d", id, state, attempts, due)
+		}
+	}
+}
+
+// Every remote path admitting a request for this device's agent (a member's
+// turn, a human guest's, an outside participation's) stores it through
+// addConvInbox, which keeps the status mark with the row in the same
+// transaction: one for a question or task waiting here, none for history,
+// a request held for the person or a message, and none again for a copy
+// already stored.
+func TestAdmissionStoresWaitingStatusMark(t *testing.T) {
+	w, conv, _, stopBob := agentWorld(t)
+	pid := participate(t, w, conv, nil, nil)
+	stopBob() // nothing tells or claims meanwhile
+	aliceFP := w.alice.Self().Fingerprint()
+	for _, c := range []struct {
+		kind, state string
+		want        int
+	}{
+		{envelope.KindQuestion, stateAgentWaiting, 1},
+		{envelope.KindTask, stateAgentWaiting, 1},
+		{envelope.KindMessage, stateAgentWaiting, 0},
+		{envelope.KindQuestion, "", 0}, // another device's agent's: history here
+		{envelope.KindTask, stateConvHeld, 0},
+	} {
+		in := agentRequest(t, w, conv, pid, c.kind)
+		for i, want := range []string{admitted, admittedAgain} {
+			res, err := w.bob.store.addConvInbox(in, aliceFP, c.state, false, nil)
+			if err != nil || res != want {
+				t.Fatalf("%s %q admission %d: %s %v", c.kind, c.state, i, res, err)
+			}
+			var due int
+			if err := w.bob.store.db.QueryRow(`SELECT status_due FROM inbox WHERE id=?`, in.ID).Scan(&due); err != nil || due != c.want {
+				t.Fatalf("%s %q admission %d: status due %d (%v), want %d", c.kind, c.state, i, due, err, c.want)
+			}
+		}
+	}
+}
+
 // An old host recorded a conversation job's failure and told nobody (before
 // v0.8.15 local jobs never told a state). Its sibling lists the request as
 // pending with no result recorded, not as Waiting. The upgrade step tells the
@@ -138,7 +252,6 @@ func TestRetainedConversationStatusUpgrade(t *testing.T) {
 func TestDMAgentRetainedStateRecovery(t *testing.T) {
 	w, conv, lids, stop := agentWorld(t)
 	phone := linkedVia(t, w.bob, "phone", func(ctx context.Context, id string) error { return w.bob.DecideLink(ctx, id, true) })
-	runAgent(t, phone)
 	pid := participate(t, w, conv, lids[:1], nil)
 	eventually(t, "sibling participation", func() bool { return stateAt(t, phone, pid).Claimable() })
 	stop() // an old host: no responder runs
@@ -176,7 +289,7 @@ func TestDMAgentRetainedStateRecovery(t *testing.T) {
 	if _, e := w.bob.store.db.Exec(`UPDATE inbox SET state=?,detail='the agent run failed',attempts=1,status_due=0 WHERE id=?`, stateJobFailed, failed.ID); e != nil {
 		t.Fatal(e)
 	}
-	if _, e := w.bob.store.db.Exec(`UPDATE inbox SET status_due=0 WHERE id=?`, waiting.ID); e != nil {
+	if _, e := w.bob.store.db.Exec(`UPDATE inbox SET status_due=0 WHERE id=?`, waiting.ID); e != nil { // an old host noted nothing at admission
 		t.Fatal(e)
 	}
 	main := func() ThreadSummary {
@@ -227,8 +340,14 @@ func TestDMAgentRetainedStateRecovery(t *testing.T) {
 	if jobState(t, w.bob, waiting.ID) != stateAgentWaiting {
 		t.Fatal("the waiting job ran or changed")
 	}
-	// Told now, a waiting job is queued work there, never silently cleared.
-	w.bob.noteStatus(waiting.ID)
+	// The next upgrade step tells the waiting job as queued work there, never
+	// silently cleared; the recorded failure is not told again.
+	if _, e := w.bob.store.db.Exec(waitingConversationStatusSchema); e != nil {
+		t.Fatal(e)
+	}
+	if due(waiting.ID) != 1 || due(failed.ID) != 0 {
+		t.Fatalf("waiting job due %d, recorded failure due %d", due(waiting.ID), due(failed.ID))
+	}
 	if !w.bob.tellStatus(tctx(t), waiting.ID) {
 		t.Fatal("waiting state was not told")
 	}

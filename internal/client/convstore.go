@@ -236,6 +236,10 @@ func (s *store) addConvInbox(in envelope.Inner, verifiedBy, state string, fromQu
 		return "", err
 	}
 	now := time.Now()
+	// A request for this device's agent is told where it stands from its
+	// admission (statusDue), not only once it is claimed: until then its
+	// requester and their other devices had no word that it waits here.
+	due := statusDue(state, in.Kind)
 	duplicate := ""
 	if proposal, prior, err := claimProposalChoice(tx, in, verifiedBy); err != nil {
 		return "", err
@@ -248,10 +252,10 @@ func (s *store) addConvInbox(in envelope.Inner, verifiedBy, state string, fromQu
 	in = tombstoned(tx, in, verifiedBy) // deleted already (whatever order things arrive in): no text stored
 	refID, refFP := refCols(in.Ref)
 	res, err := tx.Exec(`INSERT OR IGNORE INTO inbox(id, sender, ts, kind, body, reply_to, received_at, session, status, state, verified_by,
-		conv, lid, sub, replica, origin, emotion, target, content_hash, received_ms, pid, ref_id, ref_fp, agent_id, receiver_route)
-		VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), ?, ?, nullif(?, ''), ?, ?, nullif(?, ''),nullif(?,''))`,
+		conv, lid, sub, replica, origin, emotion, target, content_hash, received_ms, pid, ref_id, ref_fp, agent_id, receiver_route, status_due)
+		VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), ?, ?, nullif(?, ''), ?, ?, nullif(?, ''),nullif(?,''), ?)`,
 		in.ID, in.From, in.TS, in.Kind, in.Body, in.ReplyTo, now.Unix(), in.Session, in.Status, state, verifiedBy,
-		in.Conv, in.LID, in.Sub, in.Replica, in.Origin, in.Emotion, targetJSON(in.Target), hash, now.UnixMilli(), in.PID, refID, refFP, in.AgentID, receiverRouteJSON(in.ReceiverRoute))
+		in.Conv, in.LID, in.Sub, in.Replica, in.Origin, in.Emotion, targetJSON(in.Target), hash, now.UnixMilli(), in.PID, refID, refFP, in.AgentID, receiverRouteJSON(in.ReceiverRoute), due)
 	if err != nil {
 		return "", err
 	}
@@ -500,6 +504,14 @@ func (s *store) heldAfter(reason string, pos heldPos, limit int) ([]envelope.Env
 	return out, pos, rows.Err()
 }
 
+// heldForProof reports whether anything is held here for proof: a status
+// told before the request it names came, say.
+func (s *store) heldForProof() (bool, error) {
+	var held bool
+	err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM quarantine WHERE reason=?)`, reasonProof).Scan(&held)
+	return held, err
+}
+
 // addConvOutbox records a sealed conversation message as queued (to send)
 // or waiting (kept until the recipient can read it), with why, in one
 // transaction with claim (if any), which decides that it may be stored.
@@ -592,11 +604,13 @@ func (s *store) addConvOutbox(copies []outCopy, local envelope.Inner, claim func
 			in = copies[0].in
 		}
 		// Read and acknowledged: it was never received, only asked here.
+		// Told as waiting here from the start (statusDue); onJobReady's
+		// notifyDaemon wakes the daemon's status sender too.
 		if _, err := tx.Exec(`INSERT INTO inbox(id, sender, ts, kind, body, reply_to, received_at, state, verified_by,
-			conv, lid, origin, target, content_hash, received_ms, pid, local, acked, read_at)
-			VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, ?, ?, ?, ?, nullif(?, ''), nullif(?, ''), ?, ?, ?, 1, 1, ?)`,
+			conv, lid, origin, target, content_hash, received_ms, pid, local, acked, read_at, status_due)
+			VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, ?, ?, ?, ?, nullif(?, ''), nullif(?, ''), ?, ?, ?, 1, 1, ?, ?)`,
 			first, in.From, in.TS, in.Kind, in.Body, in.ReplyTo, now.Unix(), stateAgentWaiting, jobKey,
-			in.Conv, in.LID, in.Origin, targetJSON(in.Target), contentHash(in), now.UnixMilli(), in.PID, now.Unix()); err != nil {
+			in.Conv, in.LID, in.Origin, targetJSON(in.Target), contentHash(in), now.UnixMilli(), in.PID, now.Unix(), statusDue(stateAgentWaiting, in.Kind)); err != nil {
 			return err
 		}
 	}

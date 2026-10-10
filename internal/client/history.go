@@ -580,6 +580,7 @@ func (a *Agent) admitHistory(ctx context.Context, env envelope.Envelope, in enve
 	}
 	if err == nil && res == admitted {
 		a.convWork.due(convHistory)
+		a.retryHeldFor(orig) // its executor's status may have come first
 		a.kickNow()
 		a.applyRetraction(orig) // a deletion reaching this device as history removes the text and cache here too
 	}
