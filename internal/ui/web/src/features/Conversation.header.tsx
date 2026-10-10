@@ -116,7 +116,7 @@ export function Header({ ctx, wide, helpers: hs, canInvite }: { ctx: Ctx; wide: 
   const latest = overview?.remind ? latestReceived((t ? t.messages : th?.messages) || []) : null;
   const latestReminder = latest ? reminderOf(overview, latest.id) : undefined;
   // Standing permissions for a device's agent: kept on a computer only.
-  const grants = !!th && store.host.platform !== "browser";
+  const grants = !!th && store.host.platform === "daemon";
 
   const me = overview?.person;
   let title = "", sub = "", online: boolean | null = null, avatar = null;

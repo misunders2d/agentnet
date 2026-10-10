@@ -54,7 +54,7 @@ export async function ownAgentChatTargets(api: Api, o: T.Overview, includeLocal:
 export async function checkAgentChatTarget(api: Api, target: AgentChatTarget, platform: string) {
   const fresh = await api.overview();
   if (target.local) {
-    if (platform === "browser" || target.host !== fresh.me.address) throw Error("This computer's agent is unavailable in this workspace.");
+    if (platform !== "daemon" || target.host !== fresh.me.address) throw Error("This computer's agent is unavailable in this workspace.");
   } else {
     const addresses = new Set((fresh.person?.devices || []).map(d => d.address));
     if (fresh.person?.address) addresses.add(fresh.person.address);
@@ -116,7 +116,7 @@ export function OwnAgentChats({overview:o, includeLocal = true, query = "", onSt
   const store = useApp(), [data, setData] = useState<{targets:AgentChatTarget[]; problems:string[]} | null>(null);
   useEffect(() => {
     let alive = true;
-    ownAgentChatTargets(store.api, o, includeLocal && store.host.platform !== "browser").then(v => {if (alive) setData(v);});
+    ownAgentChatTargets(store.api, o, includeLocal && store.host.platform === "daemon").then(v => {if (alive) setData(v);});
     return () => {alive = false;};
   }, [store, o.seq, includeLocal]);
   if (!data) return <p className="text-[13px] text-muted">Reading your agents…</p>;

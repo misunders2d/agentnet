@@ -275,9 +275,17 @@ func (a *Agent) showDueAlerts(now time.Time) (time.Time, error) {
 		if len(show) == 1 {
 			conv = show[0]
 		}
-		argv, onClick := a.convClick(conv)
-		if err := a.notify("AgentNet", "New activity", argv, onClick); err != nil {
-			a.Logf("alert not shown (%v)", err)
+		if a.nativeNotify != nil {
+			fragment := ""
+			if protocol.ValidHash(conv) {
+				fragment = "conv=" + conv
+			}
+			a.nativeNotify(fragment)
+		} else {
+			argv, onClick := a.convClick(conv)
+			if err := a.notify("AgentNet", "New activity", argv, onClick); err != nil {
+				a.Logf("alert not shown (%v)", err)
+			}
 		}
 	}
 	if !next.Valid {

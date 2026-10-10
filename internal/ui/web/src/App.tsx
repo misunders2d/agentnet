@@ -17,6 +17,7 @@ import { Settings, SettingsPane } from "./features/Settings";
 import { WorkspaceCoin } from "./features/WorkspaceSwitcher";
 import { Toasts, ConnectionBanner } from "./features/Status";
 import { PersonAvatar } from "./ui/Avatar";
+import { NativeRecovery } from "./features/NativeRecovery";
 
 const tabs: { id: Tab; label: string; icon: typeof IconMessageCircle }[] = [
   { id: "chats", label: "Chats", icon: IconMessageCircle },
@@ -115,6 +116,7 @@ function PhoneTabs({ tab, oks, overview, store, main, scroll }: { tab: Tab; oks:
   return (
       <>
         <ConnectionBanner />
+        <NativeRecovery />
         <Swap id={tab} className="min-h-0 flex-1 overflow-clip" side="h-full" {...pages} ms={MOTION.page} label="tab">
           <div ref={box} className="h-full overflow-y-auto" onScroll={(e) => { if (tab === "chats") scroll.current = e.currentTarget.scrollTop; }}>{main}</div>
         </Swap>
@@ -169,6 +171,7 @@ function Desktop({ tab, oks, overview, store, main }: { tab: Tab; oks: number; o
       <main className="flex min-h-0 min-w-0">
         <div className="flex min-w-0 flex-1 flex-col">
           <ConnectionBanner />
+          <NativeRecovery />
           <Swap id={pane} className="flex min-h-0 flex-1 flex-col" side="flex min-h-0 flex-1 flex-col" enter="an-pane-in" leave="an-pane-out" ms={MOTION.pane} label="pane">
             {settings ? <SettingsPane /> : open ? <Conversation o={open} /> : <NothingOpen />}
           </Swap>

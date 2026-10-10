@@ -18,7 +18,7 @@ export const NAME_MAX = 64;
 /** A browser device (the phone app, or a browser on a computer) runs and
  *  installs nothing; the computer that runs the tools does this setup. */
 export const browserDevice = (platform: string, o: T.Overview | null | undefined) =>
-  platform === "browser" || !!(o as { device?: unknown } | null | undefined)?.device;
+  platform !== "daemon" || !!(o as { device?: unknown } | null | undefined)?.device;
 
 /** The named agent a tool gets: an existing one (id set) or a new one, and
  *  the folder it works in. mustChoose: there are several, and the person

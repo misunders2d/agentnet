@@ -80,7 +80,7 @@ function AssignmentForm({ m, ctx, onDone, onSending }: {m: AnyMsg; ctx: Ctx; onD
   useEffect(() => {
     alive.current = true;
     const overview = ctx.overview;
-    if (overview) ownAgentChatTargets(store.api, overview, store.host.platform !== "browser").then(result => {
+    if (overview) ownAgentChatTargets(store.api, overview, store.host.platform === "daemon").then(result => {
       if (alive.current) { setTargets(result.targets); setProblems(result.problems); }
     });
     return () => { alive.current = false; };

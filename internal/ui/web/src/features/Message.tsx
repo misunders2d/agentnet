@@ -28,6 +28,7 @@ import {
 import { RemindSheet, ReminderLine } from "./Reminders";
 import { WhatTheySaw } from "./RoomPanel.cards";
 import { room } from "./RoomPanel.model";
+import { copyText } from "./Settings.parts";
 
 export interface MessageProps {
   m: AnyMsg;
@@ -84,7 +85,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
     topic:live&&ctx.dm&&ctx.canReply&&!isThreadMsg(m)&&!m.topic&&!m.topic_event?()=>{void store.run(a=>a.changeTopic("create",{conv:ctx.dm!.id,peer:"",id:m.lid||m.id})).then(r=>{if(r)store.setDraft(ctx.conv,{...store.draft(ctx.conv),topic:m.lid||m.id,newTopic:false});});}:undefined,
     reply: () => store.setDraft(ctx.conv, { ...store.draft(ctx.conv), replyTo: m.id }),
     copy: () => {
-      navigator.clipboard?.writeText(plain(shownText(m))).then(() => store.toast("Copied", "ok"), () => store.toast("Couldn’t copy here", "error"));
+      void copyText(plain(shownText(m))).then(ok => store.toast(ok ? "Copied" : "Couldn’t copy here", ok ? "ok" : "error"));
     },
     edit: () => setEditing(true),
     del: () => setConfirm(true),

@@ -63,7 +63,7 @@ function readGrants(store: Store, o: T.Overview): Promise<Grant[]> {
 /** warmGrants reads the grants once ahead of the first screen that shows them. */
 export function warmGrants(store: Store) {
   const o = store.get().overview;
-  if (store.host.platform === "browser" || !o || lastGrants.has(store)) return;
+  if (store.host.platform !== "daemon" || !o || lastGrants.has(store)) return;
   void readGrants(store, o).then((g) => { if (!lastGrants.has(store)) lastGrants.set(store, g); }).catch(() => {});
 }
 
@@ -72,7 +72,7 @@ export function useGrants(): Grant[] | null {
   const store = useApp();
   const o = useStore(store, (s) => s.overview);
   const [grants, setGrants] = useState<Grant[] | null>(() => lastGrants.get(store) ?? null);
-  const browser = store.host.platform === "browser";
+  const browser = store.host.platform !== "daemon";
   useEffect(() => {
     if (browser || !o) return;
     let alive = true;
@@ -87,7 +87,7 @@ export function Permissions({ grants }: { grants: Grant[] | null }) {
   const o = useStore(store, (s) => s.overview);
   // Each change says what it means first (the device thread's menu asks the same way).
   const [change, setChange] = useState<{ what: GrantChange; g: Grant } | null>(null);
-  if (store.host.platform === "browser") return <p className="px-1 text-[14px] text-muted">Set automatic task permissions in AgentNet on the computer that receives and runs the tasks.</p>;
+  if (store.host.platform !== "daemon") return <p className="px-1 text-[14px] text-muted">Set automatic task permissions in AgentNet on the computer that receives and runs the tasks.</p>;
   if (!grants) return <p className="px-1 text-[14px] text-muted" aria-busy="true">Checking…</p>;
   const own = grants.find((g) => g.person && g.person === o?.person?.person);
   const answers = grants.filter((g) => g.approved && g !== own);

@@ -1,5 +1,31 @@
 # Native Android development
 
+## Owner correction — current app is the minimum, October 10
+
+The owner rejected the preview's primitive presentation and reduced feature set.
+The target is the same Comic interface and at least the existing mobile app's
+functionality, with native local storage/sync and Android platform integration.
+The old A1–A6 evidence below establishes an engine prototype, not product parity.
+Do not hand over another APK as a replacement until the parity journeys pass.
+
+Implementation reuses the bundled Comic UI in Android WebView and the embedded
+Go UI host/SQLite/client. No hosted website or browser crypto/storage engine is
+used. This replaces the hand-written Kotlin chat UI. Root owns this checklist,
+Comic host adaptation and integration; android_core owns mobile Go host;
+android_build owns Android shell and platform integration. Both helpers are
+GPT-6.1-sol. Claude's main checkout/release remains separate.
+
+| ID | Target outcome | Acceptance check | Owner | State | Evidence |
+| --- | --- | --- | --- | --- | --- |
+| P1 | Exact Comic design and existing mobile features | Render actual bundled screens; Chats, agents, OKs, settings, topic navigation, composer and message actions | root | agreed | Two helper audits recommend reusing existing UI host |
+| P2 | Native local data and safe host lifecycle | Offline first render, one push stream, restart preserves identity/drafts, token/origin tests, no phone harness execution | core / root | agreed | Implementation pending |
+| P3 | Android file and navigation integration | Document picker, encrypted attachment stage/download and save, Back, keyboard, external links | build / root | agreed | Implementation pending |
+| P4 | Human-device controls and notifications | Remote proposal decisions, human-only local capabilities, notification preferences and exact destination | core / root | agreed | Implementation pending |
+| P5 | Replacement quality and truthful performance | Rendered narrow screens, restart/offline send, update retains preview data; measured startup/send; no regressions hidden | root / helpers | agreed | No replacement claim yet |
+
+No change to native harness permissions, transport receipts, encryption, admission,
+existing user data or relay is authorized by this presentation correction.
+
 Sergey assigned Codex to start a native Android app in a separate worktree while
 Claude owns v0.8.17. This branch is `feat/native-android`, initially based on
 `67d33c2900120536f342636a14b516e88b889e25`. It is not part of that release.

@@ -91,6 +91,18 @@ export class Store {
   private topicFocusSeq = 0;
   private alive = true;
   private chooseMain: ReturnType<typeof mainPreferences>;
+  private hiddenChange = false;
+  private mobileHidden = () => this.host.platform === "android" &&
+    (document.visibilityState === "hidden" || (window as Window & { __agentnetNativeVisible?: boolean }).__agentnetNativeVisible === false);
+  private mobileVisible = () => {
+    if (!this.alive || this.mobileHidden() || !document.hasFocus()) return;
+    // A load admitted before Android paused may already have finished. Retry
+    // its unread acknowledgement even when no push arrived while hidden.
+    if (!this.hiddenChange) { this.markOpenRead(); return; }
+    this.hiddenChange = false;
+    if (this.state.conn === "lost" || this.state.conn === "updating") void this.recover(recovery.missed);
+    else void this.refetch();
+  };
 
   constructor(readonly host: Host) {
     this.chooseMain = mainPreferences(host.workspace.id, () => localStorage);
@@ -122,12 +134,22 @@ export class Store {
   // A handle that cannot listen (stale, blocked) cannot load either: the
   // first load then says why.
   async start() {
+    if (this.host.platform === "android") {
+      document.addEventListener("visibilitychange", this.mobileVisible);
+      document.addEventListener("agentnet-native-visibility", this.mobileVisible);
+      window.addEventListener("focus", this.mobileVisible);
+    }
     try { this.listen(); } catch { /* the first load fails and shows it */ }
     await this.load(true);
   }
 
   stop() {
     this.alive = false;
+    if (this.host.platform === "android") {
+      document.removeEventListener("visibilitychange", this.mobileVisible);
+      document.removeEventListener("agentnet-native-visibility", this.mobileVisible);
+      window.removeEventListener("focus", this.mobileVisible);
+    }
     this.sends.dispose();
     this.stopListen?.();
     this.stopListen = null;
@@ -139,6 +161,13 @@ export class Store {
     this.stopListen?.();
     this.stopListen = this.host.listen((e: HostEvent) => {
       if (!this.alive) return;
+      // The native connection may keep syncing with the screen off. Render one
+      // authoritative snapshot on return, not a UI refresh for every carrier.
+      if (this.mobileHidden()) {
+        this.hiddenChange = true;
+        if (e.type !== "change") this.set({ conn: e.type === "restart" ? "updating" : "lost" });
+        return;
+      }
       if (e.type === "change") void this.refetch();
       else if (e.type === "restart") { this.set({ conn: "updating" }); void this.recover(recovery.update); }
       else { this.set({ conn: "lost" }); void this.recover(recovery.missed); }
@@ -415,6 +444,7 @@ export class Store {
   private markOpenRead() {
     const o = this.state.open;
     if (!this.alive || !o || this.state.tab === "settings" || o.kind === "dm" && o.focus && o.focusSeq !== this.topicFocusSeq) return;
+    if (this.host.platform === "android" && (this.mobileHidden() || !document.hasFocus())) return;
     const v = this.state.views[o.id];
     if (!v) return;
     const draft = this.state.drafts[o.id];

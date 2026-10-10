@@ -201,7 +201,7 @@ export function WorkspacesSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadi
   if (!ws) return (
     <>{head}
       <NameForEveryone />
-      <Card className="flex items-center gap-3 p-4"><Coin ws={store.host.workspace} label={labelOf()} /><div><p className="font-semibold">{labelOf()}</p><Hint>The only workspace on this {store.host.platform === "browser" ? "browser" : "computer"}.</Hint></div></Card>
+      <Card className="flex items-center gap-3 p-4"><Coin ws={store.host.workspace} label={labelOf()} /><div><p className="font-semibold">{labelOf()}</p><Hint>The only workspace on this {store.host.platform === "browser" ? "browser" : store.host.platform === "android" ? "phone" : "computer"}.</Hint></div></Card>
     </>
   );
   const list = ws.list(), active = ws.active();
@@ -242,7 +242,7 @@ export function WorkspacesSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadi
       </ul>
       {gone.list.length > 0 && <>
         <div className="mt-6"><GroupLabel>Not connected</GroupLabel></div>
-        <Hint className="-mt-1 mb-3">You left these on this {store.host.platform === "browser" ? "browser" : "computer"}. Their keys and chats are still here; reconnecting brings them back as the same device.</Hint>
+        <Hint className="-mt-1 mb-3">You left these on this {store.host.platform === "browser" ? "browser" : store.host.platform === "android" ? "phone" : "computer"}. Their keys and chats are still here; reconnecting brings them back as the same device.</Hint>
         <ul className="space-y-3">
           {gone.list.map((w) => (
             <li key={w.id} data-ws={done === w.id ? undefined : w.id}>
@@ -281,7 +281,7 @@ export function AboutSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingEle
   const o = useStore(store, (s) => s.overview);
   const labelOf = useWorkspaceLabel();
   const [paths, setPaths] = useState<T.HarnessView[] | null>(null);
-  const loadPaths = () => { if (!paths && store.host.platform !== "browser") store.api.responder().then((r) => setPaths(r.harnesses || []), () => setPaths([])); };
+  const loadPaths = () => { if (!paths && store.host.platform === "daemon") store.api.responder().then((r) => setPaths(r.harnesses || []), () => setPaths([])); };
   return (
     <>
       <PageHead title="About" titleRef={titleRef} />
@@ -309,7 +309,7 @@ export function AboutSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingEle
               <Fact name="Key">{o.me.fingerprint}</Fact>
               {o.person?.person && <Fact name="Person ID">{o.person.person}</Fact>}
               <Fact name="Workspace">{labelOf() + " · " + store.host.workspace.endpoint}</Fact>
-              <Fact name="Runs as">{store.host.platform === "browser" ? "This browser" : "AgentNet on this computer"}</Fact>
+              <Fact name="Runs as">{store.host.platform === "browser" ? "This browser" : store.host.platform === "android" ? "AgentNet on Android" : "AgentNet on this computer"}</Fact>
               {o.me.responder && <Fact name="Agent">{harnessName(o.me.responder) + " in " + o.me.responder_dir}</Fact>}
               {(paths || []).filter((h) => h.path).map((h) => <Fact key={h.name} name={harnessName(h.name)}>{h.path}</Fact>)}
             </Details>

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -84,12 +85,21 @@ type SetupProvider interface {
 
 // NewSetup is the first-run page for p on host, authenticated by token.
 func NewSetup(p SetupProvider, host, token string) http.Handler {
-	s := &Server{host: host, token: token, restarting: make(chan struct{})}
+	return newSetup(p, host, token, false)
+}
+
+// NewMobileSetup uses the same first-run flows and authentication inside Android.
+func NewMobileSetup(p SetupProvider, host, token string) http.Handler {
+	return newSetup(p, host, token, true)
+}
+
+func newSetup(p SetupProvider, host, token string, mobile bool) http.Handler {
+	s := &Server{host: host, token: token, restarting: make(chan struct{}), mobile: mobile}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) { s.serveHTML(w, r, static.SetupPage()) })
 	mux.HandleFunc("GET /assets/{name}", func(w http.ResponseWriter, r *http.Request) {
 		switch r.PathValue("name") {
-		case "core.css", "landing.css", "setup.mjs", "icon-192.png", "icon-512.png":
+		case "core.css", "landing.css", "setup.mjs", "android.js", "icon-192.png", "icon-512.png":
 			s.asset(w, r)
 		default:
 			http.NotFound(w, r)
@@ -185,5 +195,8 @@ func (s *Server) serveHTML(w http.ResponseWriter, r *http.Request, data []byte) 
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache") // an updated daemon serves a new page at the same address
+	if s.mobile {
+		data = bytes.Replace(data, []byte("</head>"), []byte("<script src=\"/assets/android.js\"></script></head>"), 1)
+	}
 	w.Write(data)
 }

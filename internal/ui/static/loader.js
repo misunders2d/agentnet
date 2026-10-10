@@ -143,6 +143,7 @@
   const go = (id, hash) => { const u = new URL(location.href); u.searchParams.set("skin", id); if (hash !== undefined) u.hash = hash; location.assign(u); };
   const common = {
     version: 1,
+    ...(window.__agentnetPlatform === "android" ? { platform: "android", android: window.__agentnetAndroid, onBack: window.__agentnetOnBack } : {}),
     ...(typeof window.__agentnetNativeClipboardImage === "function" ? { clipboardImage: () => window.__agentnetNativeClipboardImage() } : {}),
     // Computer-wide app actions stay on this loopback origin; switching a
     // workspace never sends an updater request to a remote membership.
@@ -446,9 +447,10 @@
       notice("");
       if (invitation()) return;
       const review = hash === "#review" || hash.startsWith("#review&"), msg = hash.startsWith("#msg="), conv = hash.startsWith("#conv=");
-      if (!review && !msg && !conv) return;
+      const chats = /^#workspace=[^&]+$/.test(hash);
+      if (!review && !msg && !conv && !chats) return;
       const q = new URLSearchParams(hash.slice(1)), wid = q.get("workspace");
-      let target = "", kind = "review", context;
+      let target = "", kind = chats ? "channel" : "review", context;
       if (conv) {
         target = q.get("conv") || ""; kind = "conversation";
         if (!/^[0-9a-f]{64}$/.test(target)) { clear(); return; }

@@ -19,7 +19,7 @@ export function AppControls({ command = false }: { command?: boolean }) {
   useEffect(() => {
     checkGeneration.current++;
     setChecked(null); setChecking(false); setCheckError("");
-    if (host.platform === "browser") return;
+    if (host.platform !== "daemon") return;
     let alive = true;
     host.appStatus?.().then((v) => { if (alive) setStatus(v); }, (e) => {
       if (!alive) return;
@@ -29,7 +29,7 @@ export function AppControls({ command = false }: { command?: boolean }) {
     return () => { alive = false; checkGeneration.current++; };
   }, [host, command]);
   const check = async () => {
-    if (checking || busy || !host.appCheckUpdate || host.platform === "browser") return;
+    if (checking || busy || !host.appCheckUpdate || host.platform !== "daemon") return;
     const generation = ++checkGeneration.current;
     const current = () => generation === checkGeneration.current && store.isActive();
     setChecking(true); setChecked(null); setCheckError("");
@@ -46,7 +46,7 @@ export function AppControls({ command = false }: { command?: boolean }) {
     } catch (e) { if (store.isActive()) setError(errorText(e)); }
     finally { if (store.isActive()) setBusy(false); }
   };
-  if (host.platform === "browser") return null;
+  if (host.platform !== "daemon") return null;
   if (!status) {
     if (unavailable) return <Card className="space-y-2 p-4">
       <h3 className="font-bold">{command ? "AgentNet command for your tools" : "Update this computer"}</h3>

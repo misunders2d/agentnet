@@ -62,7 +62,18 @@ export interface Host {
   /** Native shell fallback, read only in response to paste; absent in browsers. */
   clipboardImage?(): Promise<File | null>;
   version: number;
-  platform: "daemon" | "browser";
+  platform: "daemon" | "browser" | "android";
+  /** Android OS actions only, scoped to the trusted local main frame. */
+  android?: {
+    connection(): Promise<{ enabled: boolean }>;
+    setConnection(enabled: boolean): Promise<{ enabled: boolean }>;
+    requestNotifications(): Promise<{ granted: boolean }>;
+    notificationStatus(): Promise<{ granted: boolean }>;
+    copyText(text: string): Promise<unknown>;
+    legacyDrafts(): Promise<{ drafts: { key: string; value: string }[] }>;
+    acknowledgeLegacyDraft(key: string, value: string): Promise<{ removed: boolean }>;
+  };
+  onBack?(fn: () => boolean): () => void;
   api<T = unknown>(path: string, body?: unknown): Promise<T>;
   listen(fn: (e: HostEvent) => void): () => void;
   file(id: string, index: number, dir?: string): Promise<{ bytes: Uint8Array }>;

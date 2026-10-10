@@ -26,6 +26,7 @@ type Session struct {
 	a           *client.Agent
 	live        *ui.Live
 	listener    Listener
+	notify      func(string)
 	cancel      context.CancelFunc
 	done        chan struct{}
 	closed      bool
@@ -104,7 +105,16 @@ func newSession(a *client.Agent) (*Session, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Session{a: a, live: ui.NewLive(a), eventCancel: cancel, wake: make(chan struct{}, 1)}
-	s.run = func(ctx context.Context) error { return a.Run(ctx, client.RunOptions{HumanOnly: true}) }
+	s.run = func(ctx context.Context) error {
+		return a.Run(ctx, client.RunOptions{HumanOnly: true, Notify: func(fragment string) {
+			s.mu.Lock()
+			fn := s.notify
+			s.mu.Unlock()
+			if fn != nil {
+				fn(fragment)
+			}
+		}})
+	}
 	go s.events(ctx)
 	return s, nil
 }

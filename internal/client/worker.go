@@ -835,7 +835,11 @@ func (a *Agent) notifyReview() {
 	if len(remote.Counts) == 0 && total == 1 && len(ids) == 1 {
 		target = ids[0]
 	}
-	argv, onClick := a.reviewClick(target)
+	var argv []string
+	var onClick func()
+	if a.nativeNotify == nil {
+		argv, onClick = a.reviewClick(target)
+	}
 	body := "1 request needs your decision. Click to review it."
 	if total != 1 {
 		body = fmt.Sprintf("%d requests need your decision. Click to review them.", total)
@@ -856,7 +860,9 @@ func (a *Agent) notifyReview() {
 	if onClick == nil {
 		body = strings.SplitAfter(body, ". ")[0] + "Ask your coding agent to review pending AgentNet requests."
 	}
-	if err := a.notify("AgentNet", body, argv, onClick); err != nil {
+	if a.nativeNotify != nil {
+		a.nativeNotify(a.nativeReviewFragment(target))
+	} else if err := a.notify("AgentNet", body, argv, onClick); err != nil {
 		a.Logf("desktop notification not shown (%v); see `agentnet inbox --review`", err)
 		return
 	}

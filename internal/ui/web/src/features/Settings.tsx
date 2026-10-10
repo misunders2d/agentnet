@@ -98,7 +98,7 @@ export function Settings() {
     return (
       <div className="an-tab-in min-h-full">
         <div className="sticky top-0 z-10 border-b-[1.5px] border-outline bg-canvas px-2 py-1.5 lg:border-b">
-          <button type="button" onClick={() => { back.current = open; setOpen(null); }} className="inline-flex min-h-11 items-center gap-0.5 rounded-full pl-1 pr-3 font-semibold hover:bg-sunken">
+          <button data-settings-back type="button" onClick={() => { back.current = open; setOpen(null); }} className="inline-flex min-h-11 items-center gap-0.5 rounded-full pl-1 pr-3 font-semibold hover:bg-sunken">
             <IconChevronLeft size={22} aria-hidden="true" />{wide ? "Settings" : "You"}
           </button>
         </div>

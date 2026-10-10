@@ -34,7 +34,15 @@ type Server struct {
 	restarting chan struct{} // closed when the daemon stops to switch programs
 	skins      http.Handler
 	once       sync.Once
+	mobile     bool // owned Android shell; same API and authentication, no browser engine
 }
+
+// SetMobile selects the Android host bootstrap before constructing a handler.
+// It changes presentation only; the caller must supply a human-device provider.
+func (s *Server) SetMobile() { s.mobile = true }
+
+// Guard protects host-specific routes with the same checks as the UI API.
+func (s *Server) Guard(handler http.Handler) http.Handler { return s.guard(handler) }
 
 // New returns a server that accepts only requests addressed to host (the
 // listener's address) and authenticated by token: once as ?t= on the page,
@@ -227,6 +235,7 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	types := map[string]string{"core.css": "text/css; charset=utf-8", "loader.js": "text/javascript; charset=utf-8",
+		"android.js":    "text/javascript; charset=utf-8",
 		"skin-base.css": "text/css; charset=utf-8", "skinbar.mjs": "text/javascript; charset=utf-8", "skinbar.css": "text/css; charset=utf-8", "skin-choice.mjs": "text/javascript; charset=utf-8",
 		"setup.mjs":            "text/javascript; charset=utf-8", // the AgentNet app's first-run page (setup.go)
 		"landing.css":          "text/css; charset=utf-8",

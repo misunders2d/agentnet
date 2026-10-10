@@ -290,3 +290,11 @@ func quoteArg(s string) string {
 	}
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
+
+// nativeReviewFragment shares the exact app routing without a desktop command.
+func (a *Agent) nativeReviewFragment(target string) string {
+	if protocol.ValidID(target) && !a.isReceivedReviewNotice(target) {
+		return "msg=" + target + "&dir=in"
+	}
+	return "review"
+}

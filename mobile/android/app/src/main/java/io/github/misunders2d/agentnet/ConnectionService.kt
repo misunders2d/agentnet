@@ -12,7 +12,7 @@ import android.os.IBinder
 
 /** User-started messaging continuity; never a polling worker or boot-started service. */
 class ConnectionService : Service() {
-    private val repo get() = (application as AgentNetApp).repository
+    private val repo get() = (application as AgentNetApp).host
     override fun onCreate() {
         super.onCreate()
         getSystemService(NotificationManager::class.java).createNotificationChannel(

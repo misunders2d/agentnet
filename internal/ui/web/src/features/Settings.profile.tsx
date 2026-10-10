@@ -66,7 +66,7 @@ export function ProfileSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingE
       ) : (
         <Card className="p-4"><p>This computer has no person yet.</p></Card>
       )}
-      {o.persons && o.role === "unset" && o.link?.state !== "pending" && store.host.platform !== "browser" && <ServiceRole />}
+      {o.persons && o.role === "unset" && o.link?.state !== "pending" && store.host.platform === "daemon" && <ServiceRole />}
     </>
   );
 }

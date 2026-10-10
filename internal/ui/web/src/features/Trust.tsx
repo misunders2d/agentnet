@@ -74,7 +74,7 @@ function Code({ label, value, muted }: { label: string; value: string; muted?: b
 export function TrustNotice({ thread }: { thread: T.Thread }) {
   const store = useApp();
   const [open, setOpen] = useState<boolean | null>(null);
-  const browser = store.host.platform === "browser";
+  const browser = store.host.platform !== "daemon";
   return (
     <div className="flex items-start gap-3 border-t-[1.5px] border-outline bg-surface px-4 pt-3 pb-[max(12px,env(safe-area-inset-bottom))] lg:border-t lg:px-6 lg:py-4">
       <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-act text-act-ink stroke"><IconShieldExclamation size={20} aria-hidden="true" /></span>

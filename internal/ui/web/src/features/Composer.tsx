@@ -1,3 +1,4 @@
+import { saveBatch, acknowledge, recordFailure, type JournalEntry } from "../send-journal.mjs";
 import { sendID } from "../optimistic.mjs";
 import { pastePictures } from "../pictures.mjs";
 // The message composer: one row of "+", the text and send. Typing @ offers
@@ -62,6 +63,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   visible.current = conv;
   const caretNext = useRef<number | null>(null);
   const emojiAfterMenu = useRef(false);
+  const androidPreparing = useRef(new Set<string>());
   const answering = useRef(new Set<string>());                        // requests this person chose to answer by hand
 
   const [busy, setBusy] = useState<Record<string, string>>({});      // conv → progress words while sending
@@ -133,7 +135,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   const filesAllowed = !!lim && !closed && target.kind !== "answer" && (!visitor || (target.kind === "agent" && target.canAsk));
   const limit = !files.length ? "" : filesAllowed ? overLimit(files, lim)
     : target.kind === "answer" ? "Files can’t go with an answer. Remove them to send." : "Files can’t be sent here. Remove them to send.";
-  const sending = false; // each captured send progresses independently; a new draft stays usable
+  const sending = store.host.platform === "android" && !!busy[conv]; // Android exposes pre-admission progress without a queued receipt
   const gone = target.kind === "agent" && !target.canAsk;
   const needsAgent = visitor && target.kind !== "agent";
   const ready = !closed && !sending && !gone && !needsAgent && !handled && !limit && (!!text.trim() || (files.length > 0 && target.kind !== "answer"));
@@ -271,6 +273,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
 
   // ---- sending
   async function send(retry?: { id: string; c: string; d: Draft; to: Target; here?: T.DMThread; device?: T.Thread; fanout?: boolean; group?: string }) {
+    if (store.host.platform === "android") { if (!retry) await sendAndroid(); return; }
     if (!retry && (!ready || (!dm && !thread))) return;
     if (!retry && dm) {
       const captured = latest(), decoded = decode(captured.text);
@@ -368,6 +371,105 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     } finally {
       setBusy(({ [c]: _, ...rest }) => rest);
     }
+  }
+
+  // Android freezes the complete native request journal before clearing any
+  // draft. Recovery retries these payloads explicitly; it never recreates IDs.
+  async function sendAndroid() {
+    if (!ready || (!dm && !thread) || androidPreparing.current.has(conv)) return;
+    const c = conv, captured = latest(), here = dm, device = thread;
+    const host = store.host, workspace = host.workspace.id;
+    const decoded = decode(captured.text), body = encode(decoded.text, decoded.spans, true).trim();
+    const pids = here ? agentTargets(decoded.text, decoded.spans, captured.agent) : [];
+    const topic = here && captured.newTopic ? sendID() : captured.topic;
+    const group = pids.length > 1 ? sendID() : undefined;
+    const destinations: Target[] = pids.length > 1 ? pids.map(pid => {
+      const a = here!.agents?.find(x => x.pid === pid);
+      const person = participants(here!, overview, names).find(x => x.pid === pid);
+      return {kind:"agent",pid,name:person?.name || "Unavailable agent",seed:person?.seed || pid,
+        canAsk:!!a?.can_ask && scopeMatches(a, captured.newTopic ? "__new__" : captured.topic || ""),why:a?.state_text};
+    }) : [target];
+    if (destinations.every(to => to.kind === "none")) return;
+    const sent = captured.files || [];
+    const plans: {entry: JournalEntry; to: Target}[] = [];
+    androidPreparing.current.add(c);
+    setBusy(b=>({...b,[c]:"Preparing send…"}));
+    try {
+      for (const [index, to] of destinations.entries()) {
+        const id = sendID(), fileIDs: string[] = [];
+        for (const f of sent) {
+          setBusy(b => ({...b,[c]:"Preparing files…"}));
+          const staged = index === 0 && typeof f.staged === "string" ? f.staged : await store.api.stage(f.file);
+          if (typeof staged !== "string") throw new Error("The native file stage is unavailable.");
+          if (index === 0) {f.staged=staged;keepStaged(c,f.key,staged);}
+          fileIDs.push(staged);
+        }
+        const files = fileIDs.length ? fileIDs : undefined;
+        const reply = captured.replyTo && messageOf(captured.replyTo, words, here, device) ? captured.replyTo : undefined;
+        let endpoint: JournalEntry["endpoint"], request: Record<string,unknown>;
+        if (to.kind === "answer") {endpoint="/api/act";request={do:"reply",id:to.id,send_id:id,body};}
+        else if (to.kind === "agent") {endpoint="/api/dm/agent/ask";request={id,send_group:group,pid:to.pid,kind:"question",body,topic,files};}
+        else if (device) {const last=(device.messages || []).at(-1);endpoint="/api/send";request={id,to:device.peer,
+          agent_id:to.kind === "device" && to.ask ? threadAgentID(device) : undefined,
+          kind:to.kind === "device" && !to.ask ? "message" : "question",body,
+          reply_to:captured.newTopic ? undefined : last?.id,quote:reply,files};}
+        else {endpoint="/api/dm/send";request={id,conv:c,topic,body,reply_to:reply,quote:reply,files,
+          ...(here && guestAuthor(here, topic || "") ? {pid:guestAuthor(here, topic || "")!.pid} : {})};}
+        // JSON removes optional undefined fields and captures no File objects.
+        plans.push({to,entry:{id,conversation:c,endpoint,request:JSON.parse(JSON.stringify(request)),createdAt:new Date().toISOString()}});
+      }
+      saveBatch(localStorage,workspace,plans.map(p=>p.entry));
+    } catch(e) {
+      setNotice({conv:c,text:"Send was not submitted. Your draft is kept: "+errorText(e)});
+      setBusy(({[c]:_,...rest})=>rest);androidPreparing.current.delete(c);return;
+    }
+    if (store.isActive()) {
+      clearSent(c,captured,sent);
+      if (captured.newTopic) store.setDraft(c,{...store.draft(c),newTopic:false,...(here?{topic}:{})});
+    }
+    setBusy(b=>({...b,[c]:"Submitting…"}));setNotice(null);typing.stop();
+    const preview = (entry: JournalEntry, to: Target) => {
+      store.sends.begin(c,{id:entry.id,...(here?{lid:entry.id,origin:"ui",send_group:group,
+        send_group_author:overview?.me.fingerprint,pid:to.kind === "agent" ? to.pid : ""}:{author:{label:"You",about:""},to:device?.peer}),
+        _topic:!!captured.newTopic,topic,dir:"out",from:overview?.me.address || "",
+        kind:to.kind === "answer" ? "answer" : to.kind === "agent" || (to.kind === "device" && to.ask) ? "question" : "message",
+        body,at:entry.createdAt,reply_to:captured.replyTo,quote:captured.replyTo,
+        attachments:sent.map(f=>({name:f.name,size:f.size,openable:false})),files:sent.map(f=>({name:f.name,size:f.size,openable:false}))},
+        undefined);
+    };
+    const submit = async (entry: JournalEntry): Promise<void> => {
+      let result: T.Sent & {note?:string};
+      try {
+        // Busy and the per-conversation preparation guard serialize this
+        // composer's gestures. There is no ledger row before admission.
+        result = await host.api<T.Sent & {note?:string}>(entry.endpoint,entry.request);
+      } catch(e) {
+        const why=errorText(e);
+        try {recordFailure(localStorage,workspace,entry.id,why);} catch(_) { /* original exact request stays retained */ }
+        store.toast("Send needs attention. Its exact request is kept for explicit retry: "+why,"error");
+        return;
+      }
+      // The successful native result proves admission. Presentation/storage
+      // failures after this point must never relabel the request as failed.
+      try {acknowledge(localStorage,workspace,entry.id);} catch(e) {
+        store.toast("Saved by AgentNet, but the recovery record could not be cleared: "+errorText(e),"error");
+      }
+      try {
+        preview(entry,plans.find(p=>p.entry.id===entry.id)!.to);
+        if (entry.endpoint === "/api/act") {store.sends.finish(entry.id,undefined);announce(result.note || "Answer saved.");}
+        else {store.sends.finish(entry.id,result);
+          if (device && captured.newTopic && store.isActive()) void store.open({kind:"thread",id:result.id}).catch(e=>store.toast("Saved by AgentNet; could not open the conversation: "+errorText(e),"error"));
+        }
+        void store.refetch();
+      } catch(e) {
+        store.toast("Saved by AgentNet; could not update the view: "+errorText(e),"error");
+      }
+    };
+    await Promise.all(plans.map(p=>submit(p.entry)));
+    // Each request retains its original stage IDs even after failure. A missing
+    // stage is a visible retry refusal, never a newly staged replacement intent.
+    for (const f of sent) f.staged=undefined;
+    forgetStaged(c,sent);releaseFiles(sent);androidPreparing.current.delete(c);setBusy(({[c]:_,...rest})=>rest);
   }
 
   function keepStaged(c: string, key: string, id: string) {

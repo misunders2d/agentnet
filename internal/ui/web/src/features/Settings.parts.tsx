@@ -83,7 +83,12 @@ export function Fact({ name, children }: { name: string; children: ReactNode }) 
 
 /** copyText puts text on the clipboard; false when the browser refuses. */
 export async function copyText(text: string): Promise<boolean> {
-  try { await navigator.clipboard.writeText(text); return true; } catch { return false; }
+  try {
+    const native = (window as Window & { __agentnetAndroid?: { copyText(text: string): Promise<unknown> } }).__agentnetAndroid;
+    if (native) await native.copyText(text);
+    else await navigator.clipboard.writeText(text);
+    return true;
+  } catch { return false; }
 }
 
 /** Command: a terminal command with a Copy button (in Details only). */

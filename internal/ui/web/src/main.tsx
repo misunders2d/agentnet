@@ -14,7 +14,7 @@ import { applySavedTheme } from "./features/Settings";
 import { clearPictures } from "./features/Message.files";
 
 let live = 0; // mounted roots
-const mounted = new WeakMap<Element, { root: Root; store: Store; stopTheme: () => void; parts: HTMLElement[] }>();
+const mounted = new WeakMap<Element, { root: Root; store: Store; stopTheme: () => void; parts: HTMLElement[]; stopBack: (() => void) | undefined }>();
 
 export async function mount(root: HTMLElement, host: Host): Promise<void> {
   root.classList.add("an-root");
@@ -34,11 +34,38 @@ export async function mount(root: HTMLElement, host: Host): Promise<void> {
     else if (kind === "message" && target) void store.openMessage(target, context);
     else if (kind === "review") store.showTab("oks");
     else if (target) void store.openChannel(target); // a browser notification's channel
-    else store.showTab("chats"); // news in more than one conversation
-  }, ["conversation", "message", "review"]);
+    else { store.close(); store.showTab("chats"); } // news in more than one conversation
+  }, ["channel", "conversation", "message", "review"]);
+  const stopBack = host.onBack?.(() => {
+    // Let the composer consume Escape for its inline picker, even when no
+    // candidates remain. Otherwise continue through the visible navigation.
+    const focused = (root.getRootNode() as ShadowRoot).activeElement;
+    if (focused?.matches('textarea[aria-autocomplete="list"]')) {
+      const handled = !focused.dispatchEvent(new KeyboardEvent("keydown", {key:"Escape",code:"Escape",bubbles:true,composed:true,cancelable:true}));
+      if (handled) return true;
+    }
+    // Dismiss the top sheet/menu through its existing Escape handling first.
+    const popups = [...root.querySelectorAll<HTMLElement>('[role="dialog"],[role="alertdialog"],[role="menu"],[role="listbox"]')]
+      .filter(el => el.getClientRects().length && !el.closest('[inert]'));
+    const popup = popups.at(-1);
+    if (popup) {
+      (focused && (popup.contains(focused) || focused.getAttribute("aria-controls") === popup.id) ? focused : popup).dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true, composed: true, cancelable: true }));
+      return true;
+    }
+    const state = store.get();
+    if (state.invite) { store.closeInvite(); return true; }
+    if (state.panel) { store.setPanel(false); return true; }
+    if (state.open || state.pending) { store.close(); return true; }
+    // Settings owns its nested section; use its existing visible Back button.
+    const up = app.querySelector<HTMLButtonElement>('button[data-settings-back]');
+    if (up) { up.click(); return true; }
+    if (state.tab !== "chats") { store.showTab("chats"); return true; }
+    return false;
+  });
   live++;
   const r = createRoot(app);
-  mounted.set(root, { root: r, store, stopTheme, parts: [app, portals] });
+  mounted.set(root, { root: r, store, stopTheme, parts: [app, portals], stopBack });
   r.render(
     <CSPProvider disableStyleElements>
       <OwnedContext.Provider value={{ root, app, portals }}>
@@ -55,6 +82,7 @@ export async function unmount(root: HTMLElement): Promise<void> {
   const m = mounted.get(root);
   if (!m) return;
   mounted.delete(root);
+  m.stopBack?.();
   m.store.stop();
   m.root.unmount();
   m.stopTheme();

@@ -101,7 +101,7 @@ function HeldGroup({ rows, o, busy, onArchive }: { rows: T.QuarantineItem[]; o: 
 
 function HeldRow({ q, o }: { q: T.QuarantineItem; o: T.Overview }) {
   const store = useApp();
-  const browser = store.host.platform === "browser";
+  const browser = store.host.platform !== "daemon";
   const [thread, setThread] = useState<T.Thread | null>(null);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);

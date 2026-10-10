@@ -76,6 +76,26 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 		defer stopWorker()
 	}
 	a.openConv, a.openPage = opts.OpenConv, opts.OpenPage
+	a.nativeNotify = opts.Notify
+	if opts.HumanOnly && opts.Notify != nil {
+		// Observe the existing review projection without starting any executor.
+		a.notifyTried = nil
+		reviewCtx, stopReview := context.WithCancel(ctx)
+		reviewDone := make(chan struct{})
+		go func() {
+			defer close(reviewDone)
+			for {
+				_, next := a.Changed()
+				a.notifyReview()
+				select {
+				case <-reviewCtx.Done():
+					return
+				case <-next:
+				}
+			}
+		}()
+		defer func() { stopReview(); <-reviewDone }()
+	}
 	alertCtx, stopAlerts := context.WithCancel(ctx)
 	alertsDone := make(chan struct{})
 	go func() { defer close(alertsDone); a.alertLoop(alertCtx, a.alertWake) }()

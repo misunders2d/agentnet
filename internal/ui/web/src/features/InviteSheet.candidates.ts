@@ -122,7 +122,7 @@ export function pool(t: T.DMThread, o: T.Overview, cat: Catalogs, names: Record<
       host: a.record.host, agentId: a.record.id, mine: true,
       unavailable: a.responder && !a.responder.ready ? "Not set up on this computer yet." : undefined,
     });
-    if (platform !== "browser") add({ // a browser runs no agent: nothing of its own to bring in
+    if (platform === "daemon") add({ // a browser runs no agent: nothing of its own to bring in
       key: "a:" + o.me.address + "#", kind: "agent", name: agentName(undefined, names, self, self), seed: o.me.address,
       subtitle: agentWhere(self, o.me.address, self), online: true, device: deviceKind(o.me.address), host: o.me.address, mine: true,
       unavailable: o.me.responder ? undefined : "Not set up on this computer yet.",

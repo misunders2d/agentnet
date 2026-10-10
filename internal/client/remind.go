@@ -243,16 +243,28 @@ func (a *Agent) remindDue(now time.Time) (time.Time, error) {
 		body := "A reminder is due"
 		var argv []string
 		var onClick func()
-		switch {
-		case len(dues) > 1:
-			body = fmt.Sprintf("%d reminders are due", len(dues))
-			argv, onClick = a.convClick("") // no one target: the local page
-		case dues[0].conv != "":
-			argv, onClick = a.convClick(dues[0].conv) // the DM, on the local page
-		default:
-			argv, onClick = a.reviewClick(dues[0].message) // the message's whole thread
+		if a.nativeNotify == nil {
+			switch {
+			case len(dues) > 1:
+				body = fmt.Sprintf("%d reminders are due", len(dues))
+				argv, onClick = a.convClick("") // no one target: the local page
+			case dues[0].conv != "":
+				argv, onClick = a.convClick(dues[0].conv) // the DM, on the local page
+			default:
+				argv, onClick = a.reviewClick(dues[0].message) // the message's whole thread
+			}
 		}
-		if err := a.notify("AgentNet", body, argv, onClick); err != nil {
+		if a.nativeNotify != nil {
+			fragment := ""
+			if len(dues) == 1 {
+				if protocol.ValidHash(dues[0].conv) {
+					fragment = "conv=" + dues[0].conv
+				} else {
+					fragment = a.nativeReviewFragment(dues[0].message)
+				}
+			}
+			a.nativeNotify(fragment)
+		} else if err := a.notify("AgentNet", body, argv, onClick); err != nil {
 			a.Logf("reminder notification not shown (%v); see agentnet remind list", err)
 		}
 	}

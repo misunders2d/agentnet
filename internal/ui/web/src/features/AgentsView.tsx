@@ -32,7 +32,7 @@ const lastData = new WeakMap<object, { responder: Load<T.ResponderView>; catalog
  *  its first visit draws complete (nothing moves in after it). */
 export function warmAgentData(store: Store) {
   warmGrants(store);
-  if (store.host.platform === "browser" || lastData.has(store)) return;
+  if (store.host.platform !== "daemon" || lastData.has(store)) return;
   Promise.allSettled([store.api.responder(), store.api.agents()]).then(([r, c]) => {
     if (lastData.has(store)) return; // the tab answered first
     lastData.set(store, {
@@ -44,7 +44,7 @@ export function warmAgentData(store: Store) {
 
 function useAgentData(o: T.Overview | null) {
   const store = useApp();
-  const browser = store.host.platform === "browser";
+  const browser = store.host.platform !== "daemon";
   const last = lastData.get(store);
   const [responder, setResponder] = useState<Load<T.ResponderView>>(last?.responder ?? {});
   const [catalog, setCatalog] = useState<Load<T.AgentCatalogView>>(last?.catalog ?? {});

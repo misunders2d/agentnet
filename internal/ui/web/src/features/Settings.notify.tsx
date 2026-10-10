@@ -17,11 +17,11 @@ export function notifySummary(n: T.NotifyView | undefined): string {
 export function NotificationsSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingElement> }) {
   const store = useApp();
   const o = useStore(store, (s) => s.overview);
-  const head = <PageHead title="Notifications" titleRef={titleRef} lead={<>When someone writes, or an agent you brought in answers, this {store.host.platform === "browser" ? "device" : "computer"} shows “AgentNet: New activity”. Never what was written.</>} />;
+  const head = <PageHead title="Notifications" titleRef={titleRef} lead={<>When someone writes, or an agent you brought in answers, this {store.host.platform !== "daemon" ? "device" : "computer"} shows “AgentNet: New activity”. Never what was written.</>} />;
   if (!o) return <>{head}<Skeleton /></>;
   const n = o.notify;
-  if (!n) return <>{head}<Card className="p-4"><p>Notifications aren’t available in this AgentNet.</p></Card><Typing /></>;
-  return <>{head}<NotifyBody n={n} /><Typing /></>;
+  if (!n) return <>{head}<Card className="p-4"><p>Notifications aren’t available in this AgentNet.</p></Card><AndroidConnection /><Typing /></>;
+  return <>{head}<NotifyBody n={n} /><AndroidConnection /><Typing /></>;
 }
 
 // Typing (MEL-528): whether this device tells people when you're typing,
@@ -86,6 +86,14 @@ function NotifyBody({ n }: { n: T.NotifyView }) {
   // needs one. A computer's own alerts ask nothing.
   const turn = async (on: boolean) => {
     setBusy(true);
+    if (on && store.host.android) {
+      try {
+        if (!(await store.host.android.requestNotifications()).granted) {
+          store.toast("Allow notifications in Android settings to receive alerts.", "error");
+          setBusy(false); return;
+        }
+      } catch { store.toast("Android could not enable notifications. Try again.", "error"); setBusy(false); return; }
+    }
     if (on && !n.native) {
       const p = typeof Notification === "undefined" ? "denied" : await Notification.requestPermission();
       if (p !== "granted") { store.toast("The browser didn’t allow notifications. Everything else works without them.", "error"); setBusy(false); return; }
@@ -101,8 +109,8 @@ function NotifyBody({ n }: { n: T.NotifyView }) {
       <Card className="p-4">
         <div className="flex items-center gap-3">
           <div className="min-w-0 flex-1">
-            <p className="font-semibold">{n.native ? "Alerts on this computer" : "Notifications on this device"}</p>
-            <Hint>{n.native ? "Shown while AgentNet runs here, even with this page closed." : "Your browser shows them, even with this page closed."}</Hint>
+            <p className="font-semibold">{n.native && !store.host.android ? "Alerts on this computer" : "Notifications on this device"}</p>
+            <Hint>{store.host.android ? "Android shows alerts while AgentNet is connected." : n.native ? "Shown while AgentNet runs here, even with this page closed." : "Your browser shows them, even with this page closed."}</Hint>
           </div>
           <Toggle label="Notifications" checked={n.enabled} disabled={busy || (blocked && !n.enabled)} onChange={turn} />
         </div>
@@ -112,4 +120,31 @@ function NotifyBody({ n }: { n: T.NotifyView }) {
       <Hint className="px-1">Chats notify you unless muted. Use Mute in the chat’s menu to keep it quiet.</Hint>
     </div>
   );
+}
+
+/** Android connection lifetime is explicit; the notification carries a Stop action. */
+function AndroidConnection() {
+  const store = useApp(), android = store.host.android;
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false), [error, setError] = useState("");
+  useEffect(() => {
+    if (!android) return;
+    let alive = true;
+    android.connection().then(v => { if (alive) setEnabled(v.enabled); }, () => { if (alive) setError("Could not read Android connection settings."); });
+    return () => { alive = false; };
+  }, [android]);
+  if (!android) return null;
+  const turn = async (on: boolean) => {
+    setBusy(true); setError("");
+    try { setEnabled((await android.setConnection(on)).enabled); }
+    catch (e) { setError(e instanceof Error ? e.message : "Could not change the background connection."); }
+    finally { setBusy(false); }
+  };
+  return <section className="mt-6"><GroupLabel>Connection</GroupLabel><Card className="p-4">
+    <div className="flex items-center gap-3"><div className="min-w-0 flex-1">
+      <p className="font-semibold">Stay connected in the background</p>
+      <Hint>Keep receiving while you use other apps. Android shows a connection notification with a Stop button.</Hint>
+    </div><Toggle label="Background connection" checked={!!enabled} disabled={busy || enabled === null} onChange={turn} /></div>
+    {error && <p role="alert" className="mt-2 text-danger">{error}</p>}
+  </Card></section>;
 }
