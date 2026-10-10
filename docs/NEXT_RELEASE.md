@@ -1,36 +1,27 @@
-# AgentNet v0.8.16 — mobile responsiveness and sync
+# AgentNet v0.8.16 — published; physical mobile verification next
 
-Active checklist: [V0_8_16.md](plans/V0_8_16.md).
+[v0.8.16](https://github.com/misunders2d/agentnet/releases/tag/v0.8.16) published
+October 10 at **00:37:52 UTC**, tag
+`45e38feea7b7e7ae9454247b2fdda28b362ceea6`, qualified application source
+`14d214dd384dc453de0113ee122de6aa22cce592`. All five packaging jobs, native shell
+checks, actual Linux AppImage replacement/restart and final asset checks passed.
+The existing relay was verified at **00:39:14 UTC** with unchanged realm, volume
+and neighboring service. Server and laptop verified all five exact browser
+assets. Clients and live grants were not changed by Codex.
 
-Source `14d214dd384dc453de0113ee122de6aa22cce592` is qualified. Browser receive
-recovery retains active wakes, drains responsive pages and preserves original
-arrival times; saved chats mount independently of other workspace waits. Overview
-reads avoid unrelated recovery data, and exact verified answers no longer retain
-a contradictory Sending clock. Final installers, asset verification, publication
-and the existing relay rollout remain. Physical phone timing remains unverified.
+[The release checklist](plans/V0_8_16.md) records the complete composed evidence,
+including both full UI race partitions, focused corrections, ten native
+repetitions per platform, actual IndexedDB and rendered Comic checks. It retains
+initial failures and their diagnosed fixes. Historical native/core tests remain
+valid for unchanged source; opt-in/platform skips are not claimed executed.
 
-[v0.8.15](https://github.com/misunders2d/agentnet/releases/tag/v0.8.15) was
-published October 9 at **23:21:55 UTC** from
-`7b26d30ca320d25b791c13a2aa40839c2562d909`. All five final packaging jobs and
-asset checks passed. The existing Contabo relay was verified at **23:22:23 UTC**
-with unchanged realm/data/neighbor and the exact new browser engine. No installed
-client or live grant was changed. Detailed composed qualification and honest
-limits are in [V0_8_15.md](plans/V0_8_15.md).
-
-The owner's next priority is dedicated mobile responsiveness and sync before
-more features: measure first useful messages, fresh replies, and convergence of
-Sending/delivery/answer state. Start from the released source. Investigate the
-remaining known-key proof/file waits and delivery projections using focused
-signed/IndexedDB reproductions, then qualify the integrated candidate. Physical
-phone catch-up and post-update resource use are still unverified. Preserve live
-sessions, native permissions, identity and history; no reset, relink or replay.
-
-The release repairs attached-app restart readiness, blocked browser receive
-queues, rejected signed participation history, cross-device answer correlation,
-out-of-order statuses and affected saved records. All six assigned features
-shipped. Source computers and receiving clients should use their existing app/CLI
-update controls, then linked phones reload. Keep a source online for retained
-history and files.
+The owner's physical phone remains the next verification target: first useful
+messages after reopening, prompt fresh replies during history recovery, original
+send-state convergence, and resource use. Update computers through their app/CLI
+controls, then reload linked phones. Keep a source online for older history and
+files. Preserve identities/history, native permissions and live sessions; no
+reset, relink, resend or task replay. Keep MEL-546/558 open until real phone
+results establish the outcome. No new feature batch is assigned here.
 
 ## Previous release — v0.8.14, October 9, 2026 (UTC)
 

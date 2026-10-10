@@ -4,20 +4,45 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
-## v0.8.16 source qualified — final packaging pending
+## Current published release — v0.8.16, October 10, 2026 (UTC)
 
-Application source `14d214dd384dc453de0113ee122de6aa22cce592` passed composed
-qualification: both complete UI race partitions, affected native browser checks
-on Linux/macOS/Windows, actual Chrome IndexedDB and rendered Comic checks, plus
-retained unchanged v0.8.15 client/Hub and platform evidence. The final native
-correction repeats Journey, signed receive-priority and device-history checks
-ten times per platform; Linux 54.110 s, Windows 55.267 s, macOS 43.891 s.
-Earlier failures were diagnosed and corrected, not hidden by longer waits.
-See [V0_8_16.md](plans/V0_8_16.md) for exact source, CI, review and limitations.
-Final tag-stamped packaging, asset verification, publication and relay rollout
-remain. No v0.8.16 published release or physical-phone convergence is claimed yet.
+[Download v0.8.16](https://github.com/misunders2d/agentnet/releases/tag/v0.8.16).
+Published at **00:37:52 UTC** from
+`45e38feea7b7e7ae9454247b2fdda28b362ceea6`, a documentation-only record above
+qualified application source `14d214dd384dc453de0113ee122de6aa22cce592`.
+All five final [packaging jobs](https://github.com/misunders2d/agentnet/actions/runs/38009283074)
+passed, including native shell checks and real Linux AppImage replacement/restart.
+All 12 asset digests and 11 manifest entries matched before and after publication.
+Standalone and bundled Linux commands report the exact clean tag; GitHub latest
+is v0.8.16.
 
-## Current published release — v0.8.15, October 9, 2026 (UTC)
+Browser receive recovery no longer waits on unrelated proof/file lookups in the
+foreground, retains wakes arriving during recovery, drains responsive pages and
+preserves an original message's first receive time. Saved chats mount before
+additional workspaces reconnect. Overview reads avoid unrelated ciphertext, and
+exact verified answers no longer retain a contradictory Sending clock. Encryption,
+current authority, historical timestamps and independent delivery receipts remain
+intact. No old work reruns. The exact architectural diagnosis, failed-before
+checks, independent GPT-6.1-sol reviews and composed native/race/browser evidence
+are in [V0_8_16.md](plans/V0_8_16.md).
+
+The existing Contabo relay is on `agentnet-revived:v0.8.16-45e38fee`, started at
+**00:38:22.866 UTC**, finally verified at **00:39:14 UTC**. Verified stopped-state
+backup: `/opt/agentnet-revived/backups/pre-v0.8.16-4PzbVrGb`. Normal HTTPS from
+server and laptop confirms the original realm, exact released engine/bootstrap/
+history/workspace/Comic assets and no-cache headers. The original data volume and
+neighboring service are unchanged; zero OOM events or restarts. Only the existing
+relay was deployed; no installed client, live grant or desktop session changed.
+
+**Next verification:** update computers through their app/CLI controls, then
+reload linked phones. Keep a source online for retained history/files; no reset,
+relink or resend is required. Actual owner-phone first-message/reply timing,
+catch-up, send-state convergence and CPU remain unverified. Keep MEL-546/558 open
+until this is measured; do not treat successful automated checks as physical-phone
+confirmation. Interactive Windows/macOS installation remains unverified, and
+installers remain unsigned. No additional feature batch is assigned here.
+
+## Previous release — v0.8.15, October 9, 2026 (UTC)
 
 [Download v0.8.15](https://github.com/misunders2d/agentnet/releases/tag/v0.8.15).
 Published at **23:21:55 UTC** from
@@ -59,7 +84,7 @@ as executed. Real IndexedDB and signed multi-device journeys passed; physical
 phone catch-up, post-update CPU and interactive platform installation remain
 unverified. Installers remain unsigned.
 
-**Active next phase: v0.8.16 mobile responsiveness and sync, before more features.**
+**Historical next phase: v0.8.16 mobile responsiveness and sync, now published above.**
 Follow [V0_8_16.md](plans/V0_8_16.md) for reproduced blockers, ownership and gates.
 Update source computers and receiving clients through the existing app/CLI
 controls, then reload linked phones; keep a source online for history/files.
