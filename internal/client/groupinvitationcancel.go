@@ -181,13 +181,16 @@ func (a *Agent) admitGroupInvitationCancellation(env envelope.Envelope, in envel
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	_, err = a.store.addConvInbox(in, sender.Fingerprint(), "", fromQuarantine, func(tx *sql.Tx) error {
+	res, err := a.store.addConvInbox(in, sender.Fingerprint(), "", fromQuarantine, func(tx *sql.Tx) error {
 		if _, e := tx.Exec(`INSERT INTO group_invitation_cancellations(id,conv,peer_person,peer_address,peer_fp,seq,hash) VALUES(?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`, c.Invitation, root.ID(), person.roster.Person, env.From, sender.Fingerprint(), desc.Seq, desc.Hash); e != nil {
 			return e
 		}
 		_, e := tx.Exec(`UPDATE group_invitations SET state='cancelled' WHERE id=? AND direction='in' AND peer_person=? AND peer_address=? AND peer_fp=? AND state IN ('pending','accepted','stale')`, c.Invitation, person.roster.Person, env.From, sender.Fingerprint())
 		return e
 	})
+	if err == nil && res == admitConflict { // stored nowhere: held, so it has a receipt (MIXED-1)
+		return hold(reasonDuplicate, "group: logical cancellation conflict")
+	}
 	return err
 }
 

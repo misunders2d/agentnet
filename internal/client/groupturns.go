@@ -414,7 +414,7 @@ func (a *Agent) admitGroupTurn(ctx context.Context, env envelope.Envelope, in en
 		return a.admitGroupHistory(ctx, env, in, root, sender, fromQuarantine, hold)
 	}
 	if in.Sub == envelope.SubFile {
-		return a.admitGroupFile(ctx, env, in, root, sender, hold)
+		return a.admitGroupFile(ctx, env, in, root, sender, fromQuarantine, hold)
 	}
 	if !ordinaryGroupTurn(in) && !roomGroupTurn(in) {
 		return hold(reasonInvalid, "group: this operation is not an ordinary human turn")
@@ -703,7 +703,7 @@ func (a *Agent) admitGroupOwnCopy(ctx context.Context, env envelope.Envelope, in
 		return hold(reasonInvalid, err.Error())
 	}
 	if in.Sub == envelope.SubFile {
-		return a.admitFile(env, in, hold, check)
+		return a.admitFile(env, in, fromQuarantine, hold, check)
 	}
 	var item HistoryItem
 	if err = decodeGroupCarrierJSON([]byte(in.Body), &item); err != nil || item.V != 1 || !protocol.ValidID(item.ID) || !protocol.ValidID(item.LID) || !protocol.ValidFingerprint(item.FromKey) {

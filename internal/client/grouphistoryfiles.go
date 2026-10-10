@@ -257,7 +257,18 @@ func (a *Agent) requestGroupHistoryFile(ctx context.Context, msgID string, index
 	return nil
 }
 
-func (a *Agent) admitGroupFile(ctx context.Context, env envelope.Envelope, in envelope.Inner, root protocol.ConvRoot, sender identity.Public, hold func(string, string) error) error {
+// admitGroupFile takes a group history file request or offer from an own
+// linked device. Each, a stale offer included, is receipted in the step that
+// admits it: it stores no inbox row (MIXED-1).
+func (a *Agent) admitGroupFile(ctx context.Context, env envelope.Envelope, in envelope.Inner, root protocol.ConvRoot, sender identity.Public, held bool, hold func(string, string) error) error {
+	admitted := func(tx *sql.Tx) error {
+		if held {
+			if _, err := tx.Exec(`DELETE FROM quarantine WHERE id=?`, env.ID); err != nil {
+				return err
+			}
+		}
+		return receiptCarrier(tx, env.ID)
+	}
 	var m fileMsg
 	if !in.Replica || decodeStrict([]byte(in.Body), &m) != nil || !groupFileMessageValid(m) {
 		return hold(reasonInvalid, "group: file carrier lacks exact selected manifest")
@@ -316,6 +327,9 @@ func (a *Agent) admitGroupFile(ctx context.Context, env envelope.Envelope, in en
 		if _, err = tx.Exec(`INSERT OR IGNORE INTO file_serves(id,device,conv,lid,sha256,state,updated_at,group_descriptor)VALUES(?,?,?,?,?,'pending',?,?)`, env.ID, env.From, in.Conv, m.LID, m.SHA256, time.Now().Unix(), descriptor); err != nil {
 			return err
 		}
+		if err = admitted(tx); err != nil {
+			return err
+		}
 		if err = a.store.done(tx.Commit()); err != nil {
 			return err
 		}
@@ -338,8 +352,11 @@ func (a *Agent) admitGroupFile(ctx context.Context, env envelope.Envelope, in en
 	if err = tx.QueryRow(`SELECT count(*) FROM file_requests WHERE message_id=? AND sha256=? AND state='requested'`, source.item.ID, m.SHA256).Scan(&requested); err != nil {
 		return err
 	}
-	if requested == 0 {
-		return nil
+	if requested == 0 { // not waiting for it (any more): only its receipt
+		if err = admitted(tx); err != nil {
+			return err
+		}
+		return a.store.done(tx.Commit())
 	}
 	var requestedDescriptor []byte
 	if err = tx.QueryRow(`SELECT group_descriptor FROM file_requests WHERE message_id=? AND sha256=?`, source.item.ID, m.SHA256).Scan(&requestedDescriptor); err != nil {
@@ -363,6 +380,9 @@ func (a *Agent) admitGroupFile(ctx context.Context, env envelope.Envelope, in en
 		if err == nil {
 			_, err = tx.Exec(`DELETE FROM file_requests WHERE message_id=? AND sha256=?`, source.item.ID, m.SHA256)
 		}
+	}
+	if err == nil {
+		err = admitted(tx)
 	}
 	if err != nil {
 		return err

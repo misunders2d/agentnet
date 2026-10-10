@@ -489,11 +489,6 @@ func waitUntil(t *testing.T, what string, timeout time.Duration, cond func() boo
 	return time.Since(start)
 }
 
-// ownRecordSubs are the own-device record carriers a receiving program
-// stores without a receipt (MIXED-1, found by this gate; not version
-// specific): the relay keeps them in custody after they were received.
-var ownRecordSubs = map[string]bool{"read-sync": true, "invitation-sync": true, "topic-sync": true, "topic-state-sync": true}
-
 // firstKeepsRefused is the first release that knows the relay's refusal of
 // an outdated version (426 update_required): it keeps a refused send queued,
 // delivers it after the update and its doctor says it is suspended. Older
@@ -818,26 +813,19 @@ func TestMixedVersion(t *testing.T) {
 		}
 	}
 	// No copy failed or waits, except copies to the suspended devices, which
-	// wait in custody. Own-device record carriers are never acknowledged,
-	// suspension or not (MIXED-1): counted apart, by kind.
+	// wait in custody. Every other copy, own-device record carriers
+	// included (MIXED-1), was receipted delivered.
 	isSuspended := map[string]bool{}
 	for _, d := range suspended {
 		isSuspended[d.address] = true
 	}
 	for _, d := range []*mixedDevice{alice, alicePhone, bob} {
-		rows, unacked := d.outbox(t), map[string]int{}
+		rows := d.outbox(t)
 		t.Logf("J1: %s outbox %s", d.address, summarize(rows))
 		for _, r := range rows {
-			switch {
-			case r.state == "delivered", isSuspended[r.recipient] && r.state != "failed":
-			case r.state == "custody" && ownRecordSubs[r.sub]:
-				unacked[r.recipient+" "+r.sub]++
-			default:
+			if r.state != "delivered" && (!isSuspended[r.recipient] || r.state == "failed") {
 				t.Errorf("J1: %s's copy %s (%q) to %s is %s (%s)", d.address, r.id, r.sub, r.recipient, r.state, r.err)
 			}
-		}
-		if len(unacked) > 0 {
-			t.Logf("J1: MIXED-1: %s's own-device record carriers to current devices left in custody: %v", d.address, unacked)
 		}
 	}
 	for _, d := range suspended {
@@ -920,11 +908,17 @@ func TestMixedVersion(t *testing.T) {
 			t.Logf("J2: %s's send kept while refused: copy to %s is %s", d.address, r.recipient, r.state)
 		}
 	}
-	// Own-device record carriers stay in custody after their device got
-	// them (MIXED-1); nothing else may.
-	var known int
-	time.Sleep(2 * time.Second)
-	for _, id := range w.custody(aliceOld.address) {
+	// Nothing stays in the relay's custody for alice's updated device, the
+	// own-device record carriers it got before its update included: an older
+	// program stored them without a receipt (MIXED-1), this one receipts them
+	// when the relay pushes them again.
+	deadline := time.Now().Add(15 * time.Second)
+	held := w.custody(aliceOld.address)
+	for len(held) > 0 && time.Now().Before(deadline) {
+		time.Sleep(250 * time.Millisecond)
+		held = w.custody(aliceOld.address)
+	}
+	for _, id := range held {
 		sub := ""
 		for _, d := range []*mixedDevice{alice, alicePhone, bob} {
 			for _, r := range d.outbox(t) {
@@ -933,13 +927,7 @@ func TestMixedVersion(t *testing.T) {
 				}
 			}
 		}
-		if !ownRecordSubs[sub] {
-			t.Errorf("J2: the relay still holds %s (%q) for %s after its update", id, sub, aliceOld.address)
-		}
-		known++
-	}
-	if known > 0 {
-		t.Logf("J2: MIXED-1: the relay keeps %d own-device record carriers (read/invitation/topic sync) for %s in custody after it received them", known, aliceOld.address)
+		t.Errorf("J2: the relay still holds %s (%q) for %s after its update", id, sub, aliceOld.address)
 	}
 	if r, ok, err := client.ReadAutoUpdate(filepath.Join(dir, dave.home)); err != nil || ok && r.Tries > 1 {
 		t.Errorf("J2: dave's automatic update record %+v (%v): tried more than once", r, err)

@@ -210,8 +210,8 @@ func (s *store) addConvInbox(in envelope.Inner, verifiedBy, state string, fromQu
 	case !errors.Is(err, sql.ErrNoRows):
 		return "", err
 	}
-	var stored, storedPID string
-	err = tx.QueryRow(`SELECT coalesce(content_hash, ''), coalesce(pid, '') FROM inbox WHERE verified_by = ? AND lid = ?`, verifiedBy, in.LID).Scan(&stored, &storedPID)
+	var storedID, stored, storedPID string
+	err = tx.QueryRow(`SELECT id, coalesce(content_hash, ''), coalesce(pid, '') FROM inbox WHERE verified_by = ? AND lid = ?`, verifiedBy, in.LID).Scan(&storedID, &stored, &storedPID)
 	if err == nil && stored != hash && in.PID != "" && storedPID == in.PID && stored == legacyContentHash(in) {
 		// Stored before the participation id was hashed: the same message.
 		if _, err := tx.Exec(`UPDATE inbox SET content_hash = ? WHERE verified_by = ? AND lid = ?`, hash, verifiedBy, in.LID); err != nil {
@@ -226,6 +226,14 @@ func (s *store) addConvInbox(in envelope.Inner, verifiedBy, state string, fromQu
 		}
 		if fromQuarantine {
 			if _, err := tx.Exec(`DELETE FROM quarantine WHERE id = ?`, in.ID); err != nil {
+				return "", err
+			}
+		}
+		// The same logical message under another envelope ID (a re-sent fan
+		// copy) stores nothing new, but its own receipt: else the relay keeps
+		// it in custody and pushes it again on every connection (MIXED-1).
+		if storedID != in.ID {
+			if err := receiptCarrier(tx, in.ID); err != nil {
 				return "", err
 			}
 		}

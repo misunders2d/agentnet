@@ -1082,6 +1082,9 @@ func (a *Agent) admitControl(ctx context.Context, env envelope.Envelope, in enve
 	if err != nil {
 		return err
 	}
+	if res == admitConflict { // stored nowhere: held, so it has a receipt (MIXED-1)
+		return hold(reasonDuplicate, "a control with the same key and logical id but other content is stored")
+	}
 	if res != admitted {
 		return nil
 	}
@@ -1151,6 +1154,9 @@ func (a *Agent) admitHumanEdit(ctx context.Context, env envelope.Envelope, in en
 	})
 	if err != nil {
 		return hold(reasonProof, err.Error())
+	}
+	if res == admitConflict { // stored nowhere: held, so it has a receipt (MIXED-1)
+		return hold(reasonDuplicate, "an edit with the same key and logical id but other content is stored")
 	}
 	if res == admitted {
 		a.applyRetraction(in)

@@ -682,6 +682,9 @@ func (a *Agent) admitAssistantReaction(ctx context.Context, env envelope.Envelop
 		}
 		return insertCopies(tx, forward)
 	})
+	if err == nil && res == admitConflict { // stored nowhere: held, so it has a receipt (MIXED-1)
+		return hold(reasonDuplicate, "a reaction with the same key and logical id but other content is stored")
+	}
 	if err == nil && res == admitted && len(forward) > 0 {
 		a.kickNow()
 	}

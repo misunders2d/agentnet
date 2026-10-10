@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
 func TestGroupHistoryOwnOriginalFileAfterRevision(t *testing.T) {
@@ -108,6 +109,20 @@ func TestGroupHistoryOwnOriginalFileAfterRevision(t *testing.T) {
 	}
 	if err = phone.accept(tctx(t), offer); err != nil {
 		t.Fatal(err)
+	}
+	// MIXED-1: neither file carrier has an inbox row; each keeps its
+	// delivered disposition, and the relay that held the offer has it.
+	for _, c := range []struct {
+		at *Agent
+		id string
+	}{{a, request.ID}, {phone, offer.ID}} {
+		if d, err := c.at.store.disposition(c.id); err != nil || d != protocol.StateDelivered {
+			t.Fatalf("group file carrier %s: disposition %q %v", c.id, d, err)
+		}
+	}
+	var relayed protocol.Receipt
+	if err = a.hub.do(tctx(t), "GET", "/v1/messages/"+offer.ID, nil, &relayed); err != nil || relayed.State != protocol.StateDelivered {
+		t.Fatalf("the relay holds the group file offer as %q: %v", relayed.State, err)
 	}
 	paths, err := phone.Download(tctx(t), original.ID, t.TempDir(), false)
 	if err != nil || len(paths) != 1 {
