@@ -372,7 +372,7 @@ func (a *Agent) quarantineUndecodable(ctx context.Context, raw []byte) error {
 		return nil
 	}
 	a.Logf("message %s is malformed; quarantined", head.ID)
-	if err := a.store.quarantineDiagnostic(head.ID, head.From, reasonInvalid, raw, "malformed envelope"); err != nil {
+	if err := a.store.quarantineDiagnostic(head.ID, head.From, reasonInvalid, raw, "malformed envelope", ""); err != nil {
 		return err
 	}
 	a.kickNow()
@@ -461,14 +461,18 @@ func (a *Agent) verifyAndStore(ctx context.Context, env envelope.Envelope) error
 		return err
 	}
 	if err == nil {
+		invalid := func(why string) error { // held after it opened: its logical record is known
+			raw, _ := json.Marshal(env)
+			return a.store.quarantineDiagnostic(env.ID, env.From, reasonInvalid, raw, why, heldLogicalKey(in, sender.Fingerprint()))
+		}
 		if namedAgentFields(in) {
 			if err := a.checkDeviceAgent(in, sender); err != nil {
-				return a.holdDiagnostic(env, reasonInvalid, err.Error())
+				return invalid(err.Error())
 			}
 		}
 		if in.ReceiverRoute != nil && in.ReceiverRoute.Op != "request" {
 			if err := a.receiverSetupSender(a.store.db, in, sender.Fingerprint()); err != nil {
-				return a.holdDiagnostic(env, reasonInvalid, err.Error())
+				return invalid(err.Error())
 			}
 		}
 		// A person grant needs verified membership before initialState, including
@@ -536,7 +540,7 @@ func (a *Agent) hold(env envelope.Envelope, reason string) error {
 
 func (a *Agent) holdDiagnostic(env envelope.Envelope, reason, why string) error {
 	raw, _ := json.Marshal(env)
-	return a.store.quarantineDiagnostic(env.ID, env.From, reason, raw, why)
+	return a.store.quarantineDiagnostic(env.ID, env.From, reason, raw, why, "")
 }
 
 // startWorker marks jobs a previous daemon left running as interrupted and

@@ -827,11 +827,7 @@ func addControlInboxIn(tx *sql.Tx, in envelope.Inner, verifiedBy string, fromQua
 // is checked whenever the target is shown (resolveControls).
 func (a *Agent) admitControl(ctx context.Context, env envelope.Envelope, in envelope.Inner, sender identity.Public, fromQuarantine bool) error {
 	hold := func(reason, why string) error {
-		of, changed, err := a.store.holdCopy(env, "", reason, why)
-		if err == nil {
-			a.logHold("control", env, reason, why, of, changed)
-		}
-		return err
+		return a.holdOpened("control", env, in, sender, reason, why)
 	}
 	if envelope.AssistantReaction(in) { // the assistant's, decided as its reply would be
 		return a.admitAssistantReaction(ctx, env, in, sender, fromQuarantine, hold)

@@ -324,7 +324,7 @@ CREATE TABLE reported(
   PRIMARY KEY(item, recipient));
 `, TeamSchema, GroupClientSchema, GroupProofSchema, agentIdentitySchema, agentCapabilitySchema, groupTurnRecipientSchema, replyReceiverSchema, GroupLifecycleSchema, replySessionSchema, GroupHistorySchema, receiverRouteSchema, humanScopeSchema, convClearSchema, statusDueSchema, runGroupSchema, topicStateSchema, messagingSchema, deliveryPersonSchema, personGrantSchema, operatorPersonsSchema, deviceAdminNoticeSchema, roomSchema, roomReaderSchema, chatTopicSchema, groupInvitationCancellationSchema, readSyncSchema, chatAlertDefaultsSchema, queuedRetractionSchema, heldNoticeSchema, sendGroupSchema, continuationSchema, ownInvitationSchema, historyCatchupSchema, groupHistoryWitnessSchema, topicSyncSchema, `
 CREATE INDEX outbox_conv_lid ON outbox(conv, lid);
-`, historyReceiptSchema, deviceHistorySchema, proposalChoiceSchema, receiptGenerationSchema, requestFollowupSchema, answeredConversationStatusSchema, modelReportSchema, heldCopySchema, retainedConversationStatusSchema}
+`, historyReceiptSchema, deviceHistorySchema, proposalChoiceSchema, receiptGenerationSchema, requestFollowupSchema, answeredConversationStatusSchema, modelReportSchema, heldCopySchema, retainedConversationStatusSchema, heldLogicalSchema}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
 const (
@@ -866,12 +866,13 @@ func (s *store) addReceivedInbox(in envelope.Inner, verifiedBy string, local *en
 
 // quarantine holds an envelope that failed verification, keyed by its id.
 func (s *store) quarantine(id, sender, reason string, raw []byte) error {
-	return s.quarantineDiagnostic(id, sender, reason, raw, "")
+	return s.quarantineDiagnostic(id, sender, reason, raw, "", "")
 }
 
-func (s *store) quarantineDiagnostic(id, sender, reason string, raw []byte, why string) error {
-	_, err := s.db.Exec(`INSERT OR IGNORE INTO quarantine(id, sender, reason, envelope, received_at, detail_code) VALUES(?, ?, ?, ?, ?, ?)`,
-		id, sender, reason, string(raw), time.Now().Unix(), heldFailureCode(reason, why))
+// logical: the record the copy carries (heldLogicalKey), "" before it opened.
+func (s *store) quarantineDiagnostic(id, sender, reason string, raw []byte, why, logical string) error {
+	_, err := s.db.Exec(`INSERT OR IGNORE INTO quarantine(id, sender, reason, envelope, received_at, detail_code, logical) VALUES(?, ?, ?, ?, ?, ?, ?)`,
+		id, sender, reason, string(raw), time.Now().Unix(), heldFailureCode(reason, why), logical)
 	return s.done(err)
 }
 

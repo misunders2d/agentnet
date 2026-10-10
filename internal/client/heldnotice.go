@@ -1,12 +1,50 @@
 package client
 
 import (
+	"cmp"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"strings"
+
+	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
 const heldNoticeSchema = `ALTER TABLE quarantine ADD COLUMN detail_code TEXT NOT NULL DEFAULT '';
 ALTER TABLE quarantine ADD COLUMN notice_archived INTEGER NOT NULL DEFAULT 0;`
+
+// heldLogicalSchema keeps each held copy's logical record (heldLogicalKey).
+// Rows held before it keep it empty and are counted by envelope size.
+const heldLogicalSchema = `ALTER TABLE quarantine ADD COLUMN logical TEXT NOT NULL DEFAULT '';`
+
+// heldLogicalKey names the logical record a held copy carries, so a notice
+// counts records, not envelopes: an older producer re-sending one item under
+// fresh envelope and carrier IDs makes copies of one key. It hashes
+// identifiers only (conversation, author address and key, logical or
+// original ID), never content, and only groups notices: it admits, dedupes
+// and authorizes nothing. History is named by its carried original, so
+// copies forwarded by different own devices share it. The browser engine
+// computes the same (engine.mjs heldLogicalKey; vectors in
+// internal/ui/testdata/held_logical.json).
+func heldLogicalKey(in envelope.Inner, senderFP string) string {
+	fields := []string{"direct", in.Conv, in.Sub, in.From, senderFP, cmp.Or(in.LID, in.ID)}
+	if in.Sub == envelope.SubHistory {
+		var h struct {
+			From    string `json:"from"`
+			FromKey string `json:"from_key"`
+			ID      string `json:"id"`
+			LID     string `json:"lid"`
+			Sub     string `json:"sub"`
+		}
+		if json.Unmarshal([]byte(in.Body), &h) == nil {
+			fields = []string{"history", in.Conv, h.Sub, h.From, h.FromKey, cmp.Or(h.LID, h.ID)}
+		}
+	}
+	sum := sha256.Sum256([]byte("agentnet/held-logical/v1\x00" + strings.Join(fields, "\x00")))
+	return hex.EncodeToString(sum[:16])
+}
 
 // Only exact audited diagnostic constants are persisted. Arbitrary errors may
 // contain received content; an unmapped cause stays explicitly unknown.
@@ -20,8 +58,22 @@ func heldDiagnosticCode(why string) string {
 		return "recipient_mismatch"
 	case "sender key unavailable":
 		return "sender_key_unavailable"
-	case "group: verified decryptable context unavailable":
-		return "context_unavailable"
+	case ErrGroupContextPending.Error():
+		return "group_context_unavailable"
+	case "named participation has no unambiguous invitation", "external output history has no unambiguous invitation",
+		"outside traffic has no invitation proof yet", "external invitation proof is incomplete or conflicting",
+		"outside host has no verified invitation root", "human turn waits for its original invitation root":
+		return "participation_invite_unresolved"
+	case "the target's sender key is no member's (yet)":
+		return "control_target_unknown_key"
+	case "the conversation is not here (yet)":
+		return "conversation_unavailable"
+	case "group: only verified original members forward historical participation ends":
+		return "history_forwarder_not_member"
+	case errGroupRecipientNotCurrent.Error():
+		return "recipient_not_current_member"
+	case errTooManyEvents.Error():
+		return "participation_events_limit"
 	case "a malformed history item", "group: malformed/nonordinary historical item", "group: history file is not a manifest":
 		return "history_malformed"
 	case "participation: the event is not the sending device's own, for this conversation":
@@ -55,6 +107,8 @@ func heldFailureCode(reason, why string) string {
 	}
 	// This stage is known at new admission boundaries; it does not invent a
 	// specific historical cause or persist arbitrary error/received text.
+	// context_unavailable stays the catch-all for unmapped proof waits, as
+	// rows stored before the precise codes keep it.
 	if why != "" {
 		if reason == reasonProof {
 			return "context_unavailable"

@@ -1035,9 +1035,30 @@ type QuarantineItem struct {
 	At         time.Time `json:"at"`
 	// Copies: later envelopes of this same record from the same sender,
 	// held with it rather than listed (client.Quarantined); LastAt the newest.
+	// Each is this one's content under other transport IDs, so it carries
+	// this one's record (Logical) however its own is named.
 	Copies int        `json:"copies,omitempty"`
 	LastAt *time.Time `json:"last_at,omitempty"`
+	// SenderVerified: the envelope opened under Peer's pinned key before it
+	// was held, so Peer sent it; otherwise Peer is only a claim.
+	SenderVerified bool `json:"sender_verified,omitempty"`
+	// Action says who can act on the cause (Held*); "" when no one needs to.
+	Action string `json:"action,omitempty"`
+	// Logical names the record the copy carries; copies of one record share
+	// it. "" before it opened or for copies held before it was recorded; a
+	// page may then match Size, the retained envelope's length, to a record
+	// of the same group, as an estimate, but never counts records by size.
+	Logical string `json:"logical,omitempty"`
+	Size    int    `json:"size,omitempty"`
 }
+
+// What a held notice's cause asks for (QuarantineItem.Action). The browser
+// engine gives the same (engine.mjs heldNoticeAction).
+const (
+	HeldUpdateSender   = "update_sender"   // the sending device produces it: update AgentNet there
+	HeldWaitInvitation = "wait_invitation" // waits for an invitation this device can verify
+	HeldWaitContext    = "wait_context"    // waits for a conversation, group or membership proof
+)
 
 // Why a received message is held back (QuarantineItem.Code). The browser
 // engine gives the same codes (engine.mjs holdCode).

@@ -327,34 +327,87 @@ export const heldDiagnosticCode = why => {
   "only the sender's person edits or deletes a message": "control_target_person_mismatch",
   "Only the current sender person edits or retracts a group message.": "control_target_person_mismatch",
   "Historical group control differs from exact author person.": "control_target_person_mismatch",
+  "local recipient identity changed": "recipient_identity_changed",
+  "named participation has no unambiguous verified invitation": "participation_invite_unresolved",
+  "outside traffic has no unambiguous invitation proof yet": "participation_invite_unresolved",
+  "outside host has no verified invitation root": "participation_invite_unresolved",
+  "history outside host has no invitation proof yet": "participation_invite_unresolved",
+  "Human turn waits for its original invitation root.": "participation_invite_unresolved",
+  "group current context missing": "group_context_unavailable",
+  "group context behind latest head": "group_context_unavailable",
+  "group current context is behind latest head": "group_context_unavailable",
+  "Group current state is behind the latest head.": "group_context_unavailable",
+  "Group custody is behind the latest known head.": "group_context_unavailable",
+  "Group PID current context is missing.": "group_context_unavailable",
+  "Group status context missing.": "group_context_unavailable",
+  "the conversation is not here (yet)": "conversation_unavailable",
+  "the request's conversation is not here (yet)": "conversation_unavailable",
+  "named participation's conversation is not here yet": "conversation_unavailable",
+  "only the sender edits or deletes a message": "control_not_author",
+  "Only current members forward historical participation ends.": "history_forwarder_not_member",
 }; return Object.hasOwn(codes,why) ? codes[why] : ""; };
 const heldFailureCode = (reason,why) => heldDiagnosticCode(why) || (why && reason === "proof_pending" ? "context_unavailable" : why && reason === "invalid" ? "admission_failed" : "");
+// heldWords is ui.heldWords: each recorded cause in words, then who can act.
+const heldWords = {
+  envelope_malformed: ["The received envelope has an invalid format.", "Its contents stay blocked. Archiving only hides this notice on this device."],
+  envelope_verification_failed: ["The encrypted message could not pass validation on this device.", "Its signature, encrypted contents or bound fields could not be validated. Nothing was accepted or run."],
+  recipient_mismatch: ["This envelope is addressed to another device.", "It was not accepted here. Archiving does not forward or resend it."],
+  sender_key_unavailable: ["This device could not obtain the sender's public key.", "The claimed sender has not been verified. Archiving does not trust an identity."],
+  history_malformed: ["This history copy does not have a valid message or file manifest.", "The original retained copy stays blocked. Archiving does not import or run it."],
+  context_unavailable: ["This message needs conversation, membership or person proof that is not available here yet.", "Checks continue when connected; the message appears only when verified. Archiving only hides this notice."],
+  admission_failed: ["The message failed this device's conversation or sender checks.", "The precise check has no diagnostic code yet. The retained message stays blocked; archiving does not accept, resend or run it."],
+  recipient_identity_changed: ["This device's identity changed while the message was being checked.", "It was not accepted here. Archiving does not forward or resend it."],
+  participation_binding_mismatch: ["An internal invitation or membership record does not match its sending device or conversation.", "It stays blocked and grants no access. Older AgentNet versions forward such records under the wrong device. Update AgentNet on the sending device to stop new copies."],
+  participation_invite_unresolved: ["It belongs to an agent or guest participation whose invitation this device can't resolve yet.", "It waits and runs nothing. Checks continue when invitations or membership change here."],
+  control_target_unknown_key: ["This edit or deletion refers to a message signed by a device key that is no current member's.", "It changes nothing while it waits. Checks continue when membership changes here."],
+  group_context_unavailable: ["This group record needs group context that this device hasn't verified yet.", "It waits and runs nothing. Checks continue when the group's latest state arrives."],
+  conversation_unavailable: ["The conversation this record belongs to isn't on this device yet.", "It waits and runs nothing. It appears once the conversation arrives and verifies."],
+  control_not_author: ["This edit or deletion did not come from the device that sent the message.", "It was refused and changes nothing. Archiving does not accept it."],
+  control_target_person_mismatch: ["This edit or deletion is for a message another person sent.", "Only the person who sent a message edits or deletes it. It stays blocked and changed nothing; archiving only hides this notice."],
+  history_forwarder_not_member: ["This history copy came from a device that is not a verified original member.", "It stays blocked and grants no access. Check the group's membership with its administrator."],
+  recipient_not_current_member: ["This group copy is addressed to a device key that is not a current member device.", "It stays blocked. Check this device's group membership with its administrator."],
+  participation_events_limit: ["This conversation already holds the most participation events a device keeps.", "This record was not stored and grants nothing. Archiving does not accept it."],
+  group_invitation_outdated: ["This invitation no longer matches the current group.", "If you still need to join, use the newer invitation or ask the inviter for a fresh one. You can archive this old notice."],
+  group_consent_mismatch: ["This response does not match the invitation and decision recorded on this device.", "Check the group's current invitation. If you still need to join, ask its administrator for a fresh invitation."],
+  group_withdrawal_mismatch: ["This departure record could not be verified against the current group and device identity.", "Check the group's current membership with its administrator. This record has not changed anyone's access."],
+  group_admission_unavailable: ["The group admission named by this operation is withdrawn or unavailable.", "Check the group's membership and pending context. Archiving this notice does not restore access."],
+  group_authority_conflict: ["The signed departure conflicts with the group's current administrator authority.", "Resolve the group authority or context with its administrator. Do not resend work automatically."],
+  group_conflicting_copy: ["This copy conflicts with an existing logical group record.", "Ask the sender to check the original record and its status. Do not automatically resend requests."],
+  history_reader_not_member: ["This history copy is not addressed to an original member's current linked device.", "Check the verified membership and device roster. A history copy cannot grant membership."],
+  captured_consent_mismatch: ["The captured audience does not match the consent proof stored here.", "Check the participation's invitation and acceptance. This notice cannot grant consent."],
+};
 export const heldNoticeText = (code, reason) => {
-  const words = {
-    envelope_malformed: ["The received envelope has an invalid format.", "Its contents stay blocked. Archiving only hides this notice on this device."],
-    envelope_verification_failed: ["The encrypted message could not pass validation on this device.", "Its signature, encrypted contents or bound fields could not be validated. Nothing was accepted or run."],
-    recipient_mismatch: ["This envelope is addressed to another device.", "It was not accepted here. Archiving does not forward or resend it."],
-    sender_key_unavailable: ["This device could not obtain the sender's public key.", "The claimed sender has not been verified. Archiving does not trust an identity."],
-    history_malformed: ["This history copy does not have a valid message or file manifest.", "The original retained copy stays blocked. Archiving does not import or run it."],
-    context_unavailable: ["This message needs conversation, membership or person proof that is not available here yet.", "Checks continue when connected; the message appears only when verified. Archiving only hides this notice."],
-    admission_failed: ["The message failed this device's conversation or sender checks.", "The precise check has no diagnostic code yet. The retained message stays blocked; archiving does not accept, resend or run it."],
-    participation_binding_mismatch: ["An internal invitation or membership record does not match its sending device or conversation.", "AgentNet could not synchronize this record. It stays blocked and grants no access."],
-    group_invitation_outdated: ["This invitation no longer matches the current group.", "If you still need to join, use the newer invitation or ask the inviter for a fresh one. You can archive this old notice."],
-    group_consent_mismatch: ["This response does not match the invitation and decision recorded on this device.", "Check the group's current invitation. If you still need to join, ask its administrator for a fresh invitation."],
-    group_withdrawal_mismatch: ["This departure record could not be verified against the current group and device identity.", "Check the group's current membership with its administrator. This record has not changed anyone's access."],
-    group_admission_unavailable: ["The group admission named by this operation is withdrawn or unavailable.", "Check the group's membership and pending context. Archiving this notice does not restore access."],
-    group_authority_conflict: ["The signed departure conflicts with the group's current administrator authority.", "Resolve the group authority or context with its administrator. Do not resend work automatically."],
-    group_conflicting_copy: ["This copy conflicts with an existing logical group record.", "Ask the sender to check the original record and its status. Do not automatically resend requests."],
-    history_reader_not_member: ["This history copy is not addressed to an original member's current linked device.", "Check the verified membership and device roster. A history copy cannot grant membership."],
-    captured_consent_mismatch: ["The captured audience does not match the consent proof stored here.", "Check the participation's invitation and acceptance. This notice cannot grant consent."],
-    control_target_person_mismatch: ["This edit or deletion is for a message another person sent.", "Only the person who sent a message edits or deletes it. It stays blocked and changed nothing; archiving only hides this notice."],
-  };
-  const [detail,recovery] = (Object.hasOwn(words,code) ? words[code] : null) || (reason === "invalid" ? ["The original detailed reason was not recorded or is unavailable.", "The retained message stays blocked. You can archive this notice locally; this does not accept, resend, or run it."] : reason === "proof_pending" ? ["", "You can archive this notice. Checks continue when connected; the message appears when verified."] : ["", ""]);
+  const [detail,recovery] = (Object.hasOwn(heldWords,code) ? heldWords[code] : null) || (reason === "invalid" ? ["The original detailed reason was not recorded or is unavailable.", "The retained message stays blocked. You can archive this notice locally; this does not accept, resend, or run it."] : reason === "proof_pending" ? ["", "You can archive this notice. Checks continue when connected; the message appears when verified."] : ["", ""]);
   return {detail,recovery};
+};
+// heldSenderVerified is ui.heldSenderVerified: the copy opened under its
+// sender's pinned key before it was held; a cause recorded before that, or
+// none (stored before causes were), only claims who sent it. The catch-all
+// admission_failed counts only with a logical record (kept once it opened):
+// v0.8.16 stored its pre-open "local recipient identity changed" under it.
+const heldBeforeOpen = new Set(["envelope_malformed", "envelope_verification_failed", "recipient_mismatch", "recipient_identity_changed", "sender_key_unavailable"]);
+const heldSenderVerified = (reason, code, logical) => ["proof_pending", "identity_conflict", "conflicting_duplicate"].includes(reason) || reason === "invalid" && Object.hasOwn(heldWords, code || "") && !heldBeforeOpen.has(code) && (code !== "admission_failed" || !!logical);
+// heldNoticeAction is ui.heldNoticeAction: who can act on the cause.
+const heldNoticeAction = (code, reason) => code === "participation_binding_mismatch" ? "update_sender" : code === "participation_invite_unresolved" ? "wait_invitation" : reason === "proof_pending" ? "wait_context" : "";
+// heldLogicalKey is client.heldLogicalKey: the logical record a held copy
+// carries, from identifiers only (never content), so a notice counts
+// records, not envelopes. It groups notices and decides nothing. n is the
+// opened inner; vectors: internal/ui/testdata/held_logical.json.
+export const heldLogicalKey = async (n, fp) => {
+  let fields = ["direct", n.conv || "", n.sub || "", n.from || "", fp, n.lid || n.id || ""];
+  if (n.sub === "history") {
+    let h = null;
+    try { h = JSON.parse(n.body); } catch (e) { /* not an item: named as sent */ }
+    if (h && typeof h === "object" && !Array.isArray(h) && ["from", "from_key", "id", "lid", "sub"].every(k => h[k] == null || typeof h[k] === "string"))
+      fields = ["history", n.conv || "", h.sub || "", h.from || "", h.from_key || "", h.lid || h.id || ""];
+  }
+  return wire.hex(await wire.sha256(new TextEncoder().encode("agentnet/held-logical/v1\0" + fields.join("\0")))).slice(0, 32);
 };
 const canArchiveHeld = reason => reason === "invalid" || reason === "proof_pending";
 // quarantineItem is one held message as the overview lists it (ui.QuarantineItem, live.go quarantineItems).
-export const quarantineItem = (h) => ({ id: h.id, peer: h.from, code: holdCode(h.reason), reason: holdText(h.reason, h.from), at: iso(h.at), can_archive:canArchiveHeld(h.reason), ...(h.detail_code ? {detail_code:h.detail_code} : {}), ...heldNoticeText(h.detail_code,h.reason) });
+export const quarantineItem = (h) => { const verified = heldSenderVerified(h.reason, h.detail_code, h.logical), action = heldNoticeAction(h.detail_code || "", h.reason), size = typeof h.envelope === "string" ? h.envelope.length : 0;
+  return { id: h.id, peer: h.from, code: holdCode(h.reason), reason: holdText(h.reason, h.from), at: iso(h.at), can_archive:canArchiveHeld(h.reason), ...(h.detail_code ? {detail_code:h.detail_code} : {}), ...heldNoticeText(h.detail_code,h.reason),
+    ...(verified ? {sender_verified:true} : {}), ...(action ? {action} : {}), ...(h.logical ? {logical:h.logical} : {}), ...(size ? {size} : {}) }; };
 
 // deviceWords is client.DeviceWords: a device address in words, as every
 // screen shows it ("bohdan/windows-laptop" → "Windows laptop", "admin/iphone"
@@ -5206,10 +5259,13 @@ export class Engine {
     return {note:`Archived ${ops.length} notices on this device. Changed or newer notices stay visible. Nothing was accepted or run.`};
   }
 
-  async hold(env, data, reason, why = "") {
+  // logical: the record the copy carries (heldLogicalKey), "" when it was
+  // held before it opened; a hold that does not know it keeps the earlier one.
+  async hold(env, data, reason, why = "", logical = "") {
     const previous = await this.store.get("held", env.id);
     const detail_code=heldFailureCode(reason,why);
-    const ops=[{ s: "held", k: env.id, v: { id: env.id, from: env.from, reason, envelope: data, at: previous?.at || this.now(), detail_code, notice_archived:canArchiveHeld(reason) && previous?.reason===reason && (previous?.detail_code||"")===detail_code && !!previous?.notice_archived } },
+    logical ||= previous?.logical || "";
+    const ops=[{ s: "held", k: env.id, v: { id: env.id, from: env.from, reason, envelope: data, at: previous?.at || this.now(), detail_code, notice_archived:canArchiveHeld(reason) && previous?.reason===reason && (reason==="proof_pending" || (previous?.detail_code||"")===detail_code) && !!previous?.notice_archived, ...(logical ? {logical} : {}) } },
       { s: "receipts", k: env.id, v: { id: env.id, state: "quarantined" } }],checks=[];
     await this.removeReceivePending(data,env,ops,checks);
     await this.store.write(ops,checks);
@@ -5264,12 +5320,14 @@ export class Engine {
       if (admission?.state.deferred || admission?.localOnly && e instanceof Hold && e.reason === "proof_pending") throw new ReceiveDeferred();
       if (e instanceof StoreConflict) return this.admit(data, env, fromHeld, historyRecovery, admission); // reverify; nothing committed or acknowledged
       if (e instanceof Hold) {
-        if (!fromHeld) await this.hold(env, data, e.reason, e.message);
+        if (!fromHeld) await this.hold(env, data, e.reason, e.message, e.logical);
         else {
+          // A recheck records a precise cause, and the logical record for
+          // copies held before it was kept; an unchanged row is not written.
           const h = await this.store.get("held", env.id);
-          const detail_code=heldFailureCode(e.reason,e.message);
-          if (h && (h.reason !== e.reason || (h.detail_code||"") !== detail_code || historyRecovery && e.reason === "proof_pending" && !h.history_recovery)) {
-            await this.store.write([{s:"held",k:env.id,v:{ ...h, reason: e.reason, notice_archived:canArchiveHeld(e.reason) && h.reason===e.reason && (h.detail_code||"")===detail_code && !!h.notice_archived, detail_code, ...(historyRecovery && e.reason === "proof_pending" ? {history_recovery:historyRecovery} : {}) }}],[{s:"held",k:env.id,v:h}]);
+          const detail_code=heldFailureCode(e.reason,e.message), logical=e.logical||h?.logical||"";
+          if (h && (h.reason !== e.reason || (h.detail_code||"") !== detail_code || (h.logical||"") !== logical || historyRecovery && e.reason === "proof_pending" && !h.history_recovery)) {
+            await this.store.write([{s:"held",k:env.id,v:{ ...h, reason: e.reason, notice_archived:canArchiveHeld(e.reason) && h.reason===e.reason && (e.reason==="proof_pending" || (h.detail_code||"")===detail_code) && !!h.notice_archived, detail_code, ...(logical ? {logical} : {}), ...(historyRecovery && e.reason === "proof_pending" ? {history_recovery:historyRecovery} : {}) }}],[{s:"held",k:env.id,v:h}]);
             this.changed(true);
           }
         }
@@ -5340,6 +5398,17 @@ export class Engine {
       }
       throw new Hold("invalid", "envelope verification failed");
     }
+    // Held from here on, the copy opened under its sender's key: the hold
+    // names the logical record it carries (heldLogicalKey).
+    try {
+      return await this.admitOpened(n, env, pin, admission);
+    } catch (e) {
+      if (e instanceof Hold) e.logical = await heldLogicalKey(n, pin.fingerprint);
+      throw e;
+    }
+  }
+
+  async admitOpened(n, env, pin, admission) {
     if (admission && (n.v === wire.Version2 || n.v === wire.Version3 && n.conv) && this.me && (this.me.state !== "self" || !this.me.devices.some(d => d.address === this.address && d.fingerprint === this.fp))) throw new Hold("invalid", "conversation recipient is not a current own device");
     if (n.receiver_route && n.receiver_route.op !== "request") return this.admitReceiverSetup(n, env, pin);
     if (n.v === wire.Version3) return this.admitControl(n, env, pin, admission);

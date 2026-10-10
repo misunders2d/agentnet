@@ -1212,11 +1212,7 @@ func (a *Agent) retryProof(ctx context.Context) (more bool) {
 // already, and is released when admitted.
 func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelope.Inner, sender identity.Public, fromQuarantine bool) error {
 	hold := func(reason, why string) error {
-		of, changed, err := a.store.holdCopy(env, heldCopyKey(env, in, sender), reason, why)
-		if err == nil {
-			a.logHold("conversation message", env, reason, why, of, changed)
-		}
-		return err
+		return a.holdOpened("conversation message", env, in, sender, reason, why)
 	}
 	// personErr holds the message for a person problem; a failure to ask
 	// the Hub is returned instead, so the message is delivered again.

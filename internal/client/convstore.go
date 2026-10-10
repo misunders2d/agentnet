@@ -460,8 +460,10 @@ func (s *store) holdAs(env envelope.Envelope, reason string) error {
 	return s.holdAsDiagnostic(env, reason, "")
 }
 
+// holdAsDiagnostic holds env with no logical record or copy key it knows
+// of: a row that has them keeps them (heldcopy.go holdCopy).
 func (s *store) holdAsDiagnostic(env envelope.Envelope, reason, why string) error {
-	_, _, err := s.holdCopy(env, "", reason, why)
+	_, _, err := s.holdCopy(env, "", "", reason, why)
 	return err
 }
 

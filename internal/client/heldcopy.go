@@ -50,12 +50,30 @@ func heldCopyKey(env envelope.Envelope, in envelope.Inner, sender identity.Publi
 	return hex.EncodeToString(sum[:])
 }
 
+// holdOpened is the one hold of an envelope that opened under sender's key
+// (admitConv, admitControl): it records the logical record env carries
+// (heldLogicalKey), settles an exact re-sent copy (heldCopyKey) into the
+// first held row of its record, and logs only a change of hold state.
+func (a *Agent) holdOpened(what string, env envelope.Envelope, in envelope.Inner, sender identity.Public, reason, why string) error {
+	of, changed, err := a.store.holdCopy(env, heldCopyKey(env, in, sender), heldLogicalKey(in, sender.Fingerprint()), reason, why)
+	if err == nil {
+		a.logHold(what, env, reason, why, of, changed)
+	}
+	return err
+}
+
 // holdCopy quarantines env with reason, or changes why it is held, and
 // settles a keyed copy (heldCopyKey) into the first held row of the same
-// record, reason and code. It reports whether the hold state changed (a new
-// row, another reason or code) and the row this one is a copy of. Only a
-// change is signalled to the UI: an unchanged recheck changes nothing shown.
-func (s *store) holdCopy(env envelope.Envelope, key, reason, why string) (of string, changed bool, err error) {
+// record, reason and code. logical is the record env carries
+// (heldLogicalKey), "" when the caller does not know it: a row keeps the
+// one recorded, and a proof retry records it for rows held before. A hidden
+// notice stays hidden while the copy keeps waiting for proof, even on
+// another precise cause (all were one code before); a changed refusal or
+// any other reason shows it again. It reports whether the hold state
+// changed (a new row, another reason or code) and the row this one is a
+// copy of. Only a change is signalled to the UI: an unchanged recheck
+// changes nothing shown.
+func (s *store) holdCopy(env envelope.Envelope, key, logical, reason, why string) (of string, changed bool, err error) {
 	raw, _ := json.Marshal(env)
 	code := heldFailureCode(reason, why)
 	tx, err := s.db.Begin()
@@ -63,8 +81,8 @@ func (s *store) holdCopy(env envelope.Envelope, key, reason, why string) (of str
 		return "", false, err
 	}
 	defer tx.Rollback()
-	var oldReason, oldCode string
-	switch err = tx.QueryRow(`SELECT reason,detail_code FROM quarantine WHERE id=?`, env.ID).Scan(&oldReason, &oldCode); {
+	var oldReason, oldCode, oldLogical string
+	switch err = tx.QueryRow(`SELECT reason,detail_code,logical FROM quarantine WHERE id=?`, env.ID).Scan(&oldReason, &oldCode, &oldLogical); {
 	case errors.Is(err, sql.ErrNoRows):
 		changed = true
 	case err != nil:
@@ -72,10 +90,13 @@ func (s *store) holdCopy(env envelope.Envelope, key, reason, why string) (of str
 	default:
 		changed = oldReason != reason || oldCode != code
 	}
-	if _, err = tx.Exec(`INSERT INTO quarantine(id, sender, reason, envelope, received_at, detail_code, copy_key) VALUES(?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET reason = excluded.reason, detail_code = excluded.detail_code, copy_key = CASE WHEN excluded.copy_key<>'' THEN excluded.copy_key ELSE quarantine.copy_key END,
-		notice_archived = CASE WHEN excluded.reason IN ('invalid','proof_pending') AND quarantine.reason=excluded.reason AND quarantine.detail_code=excluded.detail_code THEN quarantine.notice_archived ELSE 0 END`,
-		env.ID, env.From, reason, string(raw), time.Now().Unix(), code, key); err != nil {
+	named := logical != "" && logical != oldLogical // the notice now names its record
+	if _, err = tx.Exec(`INSERT INTO quarantine(id, sender, reason, envelope, received_at, detail_code, copy_key, logical) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET reason = excluded.reason, detail_code = excluded.detail_code,
+		copy_key = CASE WHEN excluded.copy_key<>'' THEN excluded.copy_key ELSE quarantine.copy_key END,
+		logical = CASE WHEN excluded.logical<>'' THEN excluded.logical ELSE quarantine.logical END,
+		notice_archived = CASE WHEN excluded.reason IN ('invalid','proof_pending') AND quarantine.reason=excluded.reason AND (excluded.reason='proof_pending' OR quarantine.detail_code=excluded.detail_code) THEN quarantine.notice_archived ELSE 0 END`,
+		env.ID, env.From, reason, string(raw), time.Now().Unix(), code, key, logical); err != nil {
 		return "", false, err
 	}
 	moved := false
@@ -84,7 +105,7 @@ func (s *store) holdCopy(env envelope.Envelope, key, reason, why string) (of str
 			return "", false, err
 		}
 	}
-	if err = tx.Commit(); err == nil && (changed || moved) {
+	if err = tx.Commit(); err == nil && (changed || moved || named) {
 		s.changed()
 	}
 	return of, changed, err

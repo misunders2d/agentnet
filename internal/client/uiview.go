@@ -453,15 +453,23 @@ type Quarantined struct {
 	ReceivedAt time.Time `json:"received_at"`
 	// Copies counts later envelopes of this same record from the same
 	// sender, held with it (heldcopy.go); LastAt is when the newest came.
+	// Each copy keeps its own row, receipt and exact ID (InspectInboxNotices).
 	Copies int        `json:"copies,omitempty"`
 	LastAt *time.Time `json:"last_at,omitempty"`
+	// Logical names the record the copy carries (heldLogicalKey); "" when it
+	// was held before it opened, or before this was recorded. Size is the
+	// retained envelope's length: older copies are counted by it instead.
+	Logical string `json:"logical,omitempty"`
+	Size    int    `json:"size,omitempty"`
 }
 
 // Quarantine lists held-back envelopes, newest first. Their content is not
 // shown: it did not verify, or the sender's key changed. A re-sent copy of a
 // record still held is counted on that record's notice, not listed again.
 func (a *Agent) Quarantine() ([]Quarantined, error) {
-	rows, err := a.store.db.Query(`SELECT id, sender, reason, received_at, detail_code, (SELECT count(*) FROM quarantine c WHERE c.copy_of=q.id AND c.copy_of<>''), (SELECT coalesce(max(received_at),0) FROM quarantine c WHERE c.copy_of=q.id AND c.copy_of<>'') FROM quarantine q WHERE notice_archived=0 AND ` + heldOwnRow + ` ORDER BY received_at DESC, id`)
+	rows, err := a.store.db.Query(`SELECT id, sender, reason, received_at, detail_code, logical, length(envelope),
+		(SELECT count(*) FROM quarantine c WHERE c.copy_of=q.id AND c.copy_of<>''), (SELECT coalesce(max(received_at),0) FROM quarantine c WHERE c.copy_of=q.id AND c.copy_of<>'')
+		FROM quarantine q WHERE notice_archived=0 AND ` + heldOwnRow + ` ORDER BY received_at DESC, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -470,7 +478,7 @@ func (a *Agent) Quarantine() ([]Quarantined, error) {
 	for rows.Next() {
 		var q Quarantined
 		var at, last int64
-		if err := rows.Scan(&q.ID, &q.Sender, &q.Reason, &at, &q.DetailCode, &q.Copies, &last); err != nil {
+		if err := rows.Scan(&q.ID, &q.Sender, &q.Reason, &at, &q.DetailCode, &q.Logical, &q.Size, &q.Copies, &last); err != nil {
 			return nil, err
 		}
 		q.ReceivedAt = time.Unix(at, 0)
