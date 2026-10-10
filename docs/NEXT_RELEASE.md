@@ -1,4 +1,21 @@
-# AgentNet v0.8.16 — published; physical mobile verification next
+# AgentNet v0.8.18 — qualified; packaging/publication pending
+
+Codex owns the send-starvation/archive repair and the separate native Android
+preview. Shared candidate `484db3e7` contains independently reviewed encrypted
+bootstrap, independent live delivery, durable recovery and bounded idle work.
+[The v0.8.18 plan](plans/V0_8_18.md) records exact evidence and remaining gates;
+[HANDOFF.md](HANDOFF.md) is the publication/deployment record. v0.8.17 is still
+published until that record says otherwise. Do not publish from an incomplete
+check or substitute a passing synthetic test for physical-phone performance.
+
+Native, mixed-version and final Android emulator qualification is complete.
+Finish fresh tagged artifact verification, then use the
+established release and existing-relay workflow. No reset, relink,
+purge, task replay, live grant change or manual installed-client restart.
+Actual phone startup, receive lifecycle and catch-up remain to be measured.
+MEL-546/558 stay open until those user-visible outcomes are confirmed.
+
+# Previous release — v0.8.16
 
 [v0.8.16](https://github.com/misunders2d/agentnet/releases/tag/v0.8.16) published
 October 10 at **00:37:52 UTC**, tag

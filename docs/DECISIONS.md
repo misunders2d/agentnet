@@ -1,5 +1,23 @@
 # AgentNet Revival — Architectural Decision Records & Linear Roadmap
 
+## October 10, 2026 — v0.8.18 linked-device catch-up
+
+The owner's rule is that history sync must not obstruct live communication.
+Bootstrap uses bounded encrypted archives through the existing file service,
+with one signed descriptor per chunk. Every approved own-human device can
+contribute what it holds; recipients deduplicate and apply the existing signed
+history admission, newest first. Upload/import run independently of live sends.
+Descriptor delivery proves retained ciphertext, not completed import; original
+historical requests stay inert. Imported copies never become fresh live traffic
+when a third device forwards them. Existing queues retain their exact IDs and
+ciphertext. No new service, cryptography or authority layer is introduced.
+
+This follows the encrypted-history-transfer pattern described in
+[Meta's multi-device design](https://engineering.fb.com/2021/07/14/security/whatsapp-multi-device/),
+using AgentNet's existing blob and admission facilities. The contract, independent
+review, verification and remaining physical-phone limits are in
+[V0_8_18.md](plans/V0_8_18.md); publication is recorded only in the handoff.
+
 ## October 9, 2026 — MEL-504 native permissions
 
 The owner explicitly selected **Use native permissions unchanged** for v0.8.13.

@@ -6,6 +6,8 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+## [0.8.18] — 2026-10-10
+
 ### Changed
 
 - Linked-device catch-up transfers recent history in bounded encrypted chunks

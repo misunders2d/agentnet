@@ -9,43 +9,42 @@ section at release; keep detailed verification and remaining work here.
 The October 10 mobile handoff ([HANDOFF_CLAUDE_MOBILE.md](HANDOFF_CLAUDE_MOBILE.md))
 was taken over by Claude and shipped as v0.8.17 below.
 
-## Active v0.8.18 work — not released
+## v0.8.18 qualified candidate — publication pending
 
-Codex owns `fix/v0.8.18-send-starvation`. The implementation contract and
-remaining qualification are in [V0_8_18.md](plans/V0_8_18.md). Linked-device
-bootstrap is moving to bounded encrypted archives through the existing blob
-API; independent live delivery and existing admission remain required.
-Reviewed shared-core candidate `30deba56` follows `6ecd3849` and `b92c3dfe`.
-Claude independently cleared all five original blockers after reproducing the
-corrections: imported history stays cold on third devices; roster proof recovers
-in background; browser receipt windows recover after interruptions; offline
-capability discovery remains durable; live sends pass cold history. Packing uses
-the existing encrypted spool without an outer plaintext staging file.
+Codex owns `fix/v0.8.18-send-starvation`. Application source `484db3e7`
+implements bounded encrypted bootstrap archives over the existing blob API,
+newest-first background import and independent live delivery. Existing
+signatures, current roster/admission checks, original IDs and inert historical
+tasks remain intact. No reset, relink or queue purge is needed. See
+[V0_8_18.md](plans/V0_8_18.md) for the contract, failures and exact evidence.
 
-All twelve client race partitions and both UI race partitions pass. The real
-mixed-version gate passes against v0.8.17, and Chromium's real IndexedDB gate
-passes. Native UI passes on Linux, macOS and Windows; Windows client H–Z passes.
-Final native client qualification exposed five asynchronous test-premise
-failures, now corrected without changing production code or raising deadlines.
-A separate guest-control invitation timeout reproduced under the race detector;
-profiling found idle SQL preparation competing with the invitation. Two indexed
-necessary-condition probes now avoid empty archive export and direct-job claim
-queries. They preserve the claim transaction, complete permission predicate and
-independent import wakes. The unchanged guest-control race passes; focused
-native requalification is next. Retain passing evidence and rerun these exact cases on the
-native platforms. Windows A–G finished with the same group-context fixture failure and the guest
-control timeout; the targeted rerun includes both.
-No release, live queue cleanup or installed-client change has happened.
+Claude independently cleared the archive corrections, including three-device
+reforwarding, missing roster proof, browser receipt loss/restart and offline
+capability discovery. GPT-6.1-sol helpers checked fixture fixes and the two
+indexed idle-work probes. Those probes preserve the claim transaction and full
+permission selection whenever candidate work exists.
 
-The Android preview stays on `feat/native-android` in its separate worktree.
-Merge `1e6ff57a` includes the reviewed shared core. Its final APK, SHA256
-`ee842a0fe14893a57ba43d0f6807061411c3b760dcb416e0f91a7c827195082b`,
-passes core race, 28 Android unit tests, lint, both ABI/16KiB packaging checks,
-and in-place x86_64 emulator upgrade preserving 203 exact messages, queued
-sends, file, draft and identity. Native camera opening/cancellation and denial
-fallback pass. Optical QR decoding, arm64 execution and actual owner-phone
-receive lifecycle/timings remain unverified. Artifact/evidence are in the plan. Rebuild the preview with the final idle-work
-corrections before handover; the checkpoint APK is not the final distribution.
+Source qualification is complete: all twelve integrated client race partitions,
+both UI race partitions, retained unchanged nonclient races/container/native
+packages, actual Chromium IndexedDB, and targeted final authority/archive races.
+Seven final native cases each pass three repetitions on Linux, macOS and Windows
+(run 38086700142). The refreshed required real mixed-version gate passes against
+v0.8.17 (38086699221, 104.172s). No deadline was raised. Initial failed runs,
+corrected fixture premises and platform/opt-in skips remain recorded honestly.
+Fresh tag packaging and checksum/version verification are still required before
+publication, followed by the authorized update of the existing Contabo relay.
+No installed client, live grants, queues or desktop session changed.
+
+The separate Android branch `feat/native-android` now includes the final core
+at merge `179f8a8d`. APK SHA256
+`68d4b5446729ff424df11800603bba2fe8a63f5d94416b4c57d96ed343c98190`.
+Eighteen core race tests, 28 Android tests, lint and both ABI/16KiB packaging
+checks pass; the existing signing certificate is preserved. The final in-place
+x86_64 emulator upgrade and cold start preserve all 203 exact messages, queued
+sends, attachment, draft, identity and origin. Native camera opening/cancellation
+passes; earlier denial fallback evidence remains valid. Optical
+QR decoding, physical arm64 execution and owner-phone timing remain unverified.
+Keep MEL-546/558 open until the actual phone confirms the user-visible outcome.
 
 ## Current published release — v0.8.17, October 10, 2026 (UTC)
 
