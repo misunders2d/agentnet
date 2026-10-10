@@ -1,19 +1,22 @@
-# AgentNet v0.8.18 — qualified; packaging/publication pending
+# AgentNet v0.8.18 — published; physical-phone verification remains
 
-Codex owns the send-starvation/archive repair and the separate native Android
-preview. Shared candidate `484db3e7` contains independently reviewed encrypted
-bootstrap, independent live delivery, durable recovery and bounded idle work.
-[The v0.8.18 plan](plans/V0_8_18.md) records exact evidence and remaining gates;
-[HANDOFF.md](HANDOFF.md) is the publication/deployment record. v0.8.17 is still
-published until that record says otherwise. Do not publish from an incomplete
-check or substitute a passing synthetic test for physical-phone performance.
+[v0.8.18](https://github.com/misunders2d/agentnet/releases/tag/v0.8.18) published
+October 10 at **21:29:14 UTC**, tag `35ce9190`, qualified source `484db3e7`.
+All source gates and fresh package/hash/version checks are complete. The existing
+Contabo relay was verified at **21:29:46 UTC**, preserving its realm, volume,
+port and neighboring service. [HANDOFF.md](HANDOFF.md) records deployment and
+[V0_8_18.md](plans/V0_8_18.md) records full qualification and honest limits.
 
-Native, mixed-version and final Android emulator qualification is complete.
-Finish fresh tagged artifact verification, then use the
-established release and existing-relay workflow. No reset, relink,
-purge, task replay, live grant change or manual installed-client restart.
-Actual phone startup, receive lifecycle and catch-up remain to be measured.
-MEL-546/558 stay open until those user-visible outcomes are confirmed.
+The separately maintained Android preview includes the final shared core and
+passes in-place emulator upgrade/data preservation, core races, native unit,
+lint and packaging checks. Artifact and source references are in HANDOFF.
+Neither this preview nor synthetic relay tests establish physical-phone timing.
+
+Next: verify first useful messages, foreground/background receive, immediate
+fresh replies during retained history catch-up and resource usage on the real
+phone. MEL-546/558 stay open until confirmed. Preserve identities and existing
+messages: no reset, relink, purge or task replay. Clients update themselves;
+only the existing relay was deployed by Codex. No extra feature batch is started.
 
 # Previous release — v0.8.16
 
