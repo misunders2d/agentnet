@@ -57,8 +57,8 @@ func TestReleaseAnnouncement(t *testing.T) {
 
 	line := shown(t, w.bob, "A", "PostToolUse")
 	if !strings.Contains(line, "recommends AgentNet v9.9.0") || !strings.Contains(line, "https://example.test/b") ||
-		!strings.Contains(line, "unless they have already authorized it") || strings.Contains(line, "NOTE-FOR-PEOPLE") {
-		t.Fatalf("hook line: %q", line)
+		!strings.Contains(line, "Automatic update is on: the daemon installs it by itself") || strings.Contains(line, "NOTE-FOR-PEOPLE") {
+		t.Fatalf("hook line: %q (automatic update installs a recommendation: the line says so)", line)
 	}
 	if again := shown(t, w.bob, "A", "PostToolUse"); again != "" {
 		t.Fatalf("told twice: %q", again)
@@ -68,6 +68,12 @@ func TestReleaseAnnouncement(t *testing.T) {
 	}
 	if b := shown(t, w.bob, "B", "UserPromptSubmit"); !strings.Contains(b, "v9.9.0") {
 		t.Fatalf("session B: %q", b)
+	}
+	if err := SetAutoUpdate(w.bob.home, false); err != nil {
+		t.Fatal(err)
+	}
+	if c := shown(t, w.bob, "C", "UserPromptSubmit"); !strings.Contains(c, "Automatic update is off") || !strings.Contains(c, "unless they have already authorized it") || strings.Contains(c, "installs it by itself") {
+		t.Fatalf("hook line with automatic update off: %q", c)
 	}
 	if r, ok := LocalRelease(w.bob.home); !ok || r.Version != "v9.9.0" {
 		t.Fatalf("local read: %+v %v", r, ok)

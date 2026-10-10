@@ -14,7 +14,8 @@ import (
 // changes, and never pushed again when set to the same value. A release
 // relay pushes its own release instead when the operator's is older or
 // none (update.go): the recommendation can no longer go stale. A newer one
-// the operator names is a notice only: it suspends nobody.
+// the operator names suspends nobody; member daemons with automatic update
+// on install it from the project's release origin (client autoupdate.go).
 
 func (s *store) release() (protocol.Release, error) {
 	var r protocol.Release

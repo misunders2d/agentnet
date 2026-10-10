@@ -251,3 +251,32 @@ func TestAppStartRecordsFailedAutoUpdate(t *testing.T) {
 		t.Fatalf("each start moves the wait on: %v then %v", failedAt, again.At)
 	}
 }
+
+// The help says what a recommendation does now (SEC-2): member daemons with
+// automatic update on install it, from the fixed origin, and how a person
+// opts out; versions are ordered, not only compared for equality; while
+// suspended, the required release comes first.
+func TestHelpSaysRecommendationsInstall(t *testing.T) {
+	text := func(topic ...string) string {
+		var out strings.Builder
+		if err := printHelp(&out, topic); err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(strings.Fields(out.String()), " ")
+	}
+	admin := text("admin")
+	for _, want := range []string{"installs the recommended release by itself unless its person turned that off", "SHA256SUMS", "never suspends anyone"} {
+		if !strings.Contains(admin, want) {
+			t.Errorf("help admin lacks %q", want)
+		}
+	}
+	if strings.Contains(admin, "compared only for equality") || strings.Contains(admin, "installs nothing") {
+		t.Errorf("help admin still says a recommendation is only a notice: %s", admin)
+	}
+	update := text("update")
+	for _, want := range []string{"--auto off turns this home's automatic updates off", "the release it requires (its own) is the one installed, before any newer recommendation", "With automatic update on (the default) the daemon installs it by itself"} {
+		if !strings.Contains(update, want) {
+			t.Errorf("help update lacks %q", want)
+		}
+	}
+}

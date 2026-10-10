@@ -12,14 +12,18 @@ import (
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
-// The Hub's operator may recommend a client version. The daemon receives it
-// on its stream (on connect and when it changes), saves it, and tells the
-// person once per recommendation (content-free desktop notice) and each
-// harness session once (hook line), only when the recommendation is a
-// release newer than this build (protocol.Newer); a build it cannot compare
-// ("dev", a bare hash) is never told to update. AgentNet never
-// downloads or runs anything; the URL is the operator's recommendation, not
-// authority to install.
+// The Hub's operator may recommend a client version (a release relay also
+// recommends its own release by itself). The daemon receives it on its
+// stream (on connect and when it changes), saves it, and tells the person
+// once per recommendation (content-free desktop notice) and each harness
+// session once (hook line), only when the recommendation is a release newer
+// than this build (protocol.Newer); a build it cannot compare ("dev", a bare
+// hash) is never told to update. Such a recommendation is also installed:
+// the daemon's automatic update (autoupdate.go), on unless the person turned
+// it off (agentnet update --auto off), installs that release by itself once
+// no job runs. The version is all it takes from the Hub: the file comes only
+// from the project's fixed GitHub release origin, checked against that
+// release's SHA256SUMS; the URL is shown, never downloaded from.
 
 // saveRelease stores a pushed recommendation (an empty version clears it).
 func (a *Agent) saveRelease(data []byte) error {
@@ -93,8 +97,8 @@ func (a *Agent) releaseNudge(ev HookEvent) (line, key string, err error) {
 		if !ok {
 			return "", "", nil
 		}
-		line = fmt.Sprintf("AgentNet: your Hub's operator recommends AgentNet %s; this is %s. How to update: `agentnet help update`; operator's page: %s. "+
-			"Ask the person before updating unless they have already authorized it.", r.Version, protocol.Version, r.URL)
+		line = fmt.Sprintf("AgentNet: your Hub's operator recommends AgentNet %s; this is %s. %s How to update: `agentnet help update`; operator's page: %s.",
+			r.Version, protocol.Version, a.recommendedUpdateWords(), r.URL)
 		key = r.Key()
 	}
 	var seen sql.NullString

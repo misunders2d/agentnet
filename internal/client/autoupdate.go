@@ -247,6 +247,22 @@ func (a *Agent) maybeAutoUpdate(ctx context.Context) {
 	}()
 }
 
+const autoUpdateOnWords = "Automatic update is on."
+
+// recommendedUpdateWords says what happens to a recommended release here,
+// for the hook line: with automatic update on, the daemon installs it by
+// itself (or says what its attempt did); otherwise the person decides.
+func (a *Agent) recommendedUpdateWords() string {
+	words := a.autoUpdateWords()
+	if on, err := AutoUpdateOn(a.home); err != nil || !on || !releaseTag.MatchString(protocol.Version) {
+		return words + " Ask the person before updating unless they have already authorized it."
+	}
+	if words == autoUpdateOnWords {
+		return "Automatic update is on: the daemon installs it by itself once no job runs."
+	}
+	return words
+}
+
 // autoUpdateWords says, in a sentence, what this home's automatic update
 // does: for doctor, the hook line and the page.
 func (a *Agent) autoUpdateWords() string {
@@ -260,7 +276,7 @@ func (a *Agent) autoUpdateWords() string {
 	case !on:
 		return "Automatic update is off (agentnet update --auto on turns it on)."
 	}
-	words := "Automatic update is on."
+	words := autoUpdateOnWords
 	if r, ok, _ := ReadAutoUpdate(a.home); ok && r.From == protocol.Version {
 		switch r.State {
 		case AutoUpdating:
