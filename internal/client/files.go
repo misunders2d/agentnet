@@ -102,6 +102,17 @@ func (a *Agent) spoolNamed(f OutgoingFile, recipient age.Recipient) (envelope.At
 	if info.Size() > MaxFileSize {
 		return att, fmt.Errorf("%s is larger than the %d byte limit", path, MaxFileSize)
 	}
+	return a.spoolReader(name, src, recipient)
+}
+
+// spoolReader encrypts src directly into the private spool, without creating
+// a plaintext file. It enforces the same name and streaming size limits as
+// spoolNamed; the caller retains ownership of src.
+func (a *Agent) spoolReader(name string, src io.Reader, recipient age.Recipient) (envelope.Attachment, error) {
+	var att envelope.Attachment
+	if !validSendName(name) {
+		return att, fmt.Errorf("file name %q: at most %d bytes of text, no control characters", name, maxFileName)
+	}
 	dir := filepath.Join(a.home, "spool")
 	if err := secfile.EnsureDir(dir); err != nil {
 		return att, err
@@ -120,7 +131,7 @@ func (a *Agent) spoolNamed(f OutgoingFile, recipient age.Recipient) (envelope.At
 		err = enc.Close()
 	}
 	if err == nil && pt.n > MaxFileSize {
-		err = fmt.Errorf("%s grew past the %d byte limit while reading", path, MaxFileSize)
+		err = fmt.Errorf("%s grew past the %d byte limit while reading", name, MaxFileSize)
 	}
 	if err == nil {
 		err = tmp.Sync()

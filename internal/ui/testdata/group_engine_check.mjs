@@ -555,7 +555,14 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false, contro
    check(firstPage.length===51&&firstPage[0].lid===pageItems[0].lid&&firstPage.slice(1).every((h,i)=>h.body==='newest-page-'+(56-i)),'first bounded group history page is newest first with its exact old reply dependency queued before display');
    const during={...delayed,id:wire.newID(),lid:wire.newID(),at:at-86400000,body:'late arrival while older backfill runs'};await accept(during);
    await w.e.historyStep(fourth,(await w.e.historyBook())[fourthAddress]);
-   check((await fourthCopies()).some(r=>wire.parseHistory(r.body).lid===during.lid),'arrival tail supplies old timestamp immediately while recent/older backfill remains');
+   check(!(await fourthCopies()).some(r=>wire.parseHistory(r.body).lid===during.lid)&&(await w.st.prefix('kv','history-deferred/'+fourthFP+'/')).some(ref=>ref.id===during.id&&!ref.fresh_live),'imported late history retains an exact cold deferred ref while the recipient window is full');
+   // The offline page is deliberately full. Model the relay's terminal
+   // receipts through normal dispatch before expecting older production to
+   // resume; retain every sealed row and its exact tuple ledger.
+   let receiptSeq=(await w.st.get('kv','receipt-cursor'))||0;
+   const pending=(await w.st.all('outbox')).filter(row=>row.to===fourthAddress&&['history','group-proof','group-context','root-sync'].includes(row.sub)&&['queued','waiting','custody'].includes(row.state));
+   for(const row of pending)await w.e.dispatch('receipt',JSON.stringify({id:row.id,state:'delivered',seq:++receiptSeq}));
+   if(w.e.historyRun)await w.e.historyRun;
    await w.reload();w.e.groupSupport=async()=>{};await w.e.runHistory();
    const complete=await fourthCopies();
    check(pageItems.every(item=>complete.filter(r=>wire.parseHistory(r.body).lid===item.lid).length===1)&&complete.filter(r=>wire.parseHistory(r.body).lid===during.lid).length===1,'recent/older/tail resume after restart with each exact original queued once');
@@ -646,7 +653,7 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false, contro
    check(recovered.length===original.length&&JSON.stringify((await w.e.historyBook())[dev.address].pos)===before,'legacy done browser snapshot recovers missing group carriers without cursor reset');
    const context=recovered.find(r=>r.sub===wire.SubGroupContext);await w.st.write([{s:'outbox',k:context.id,v:{...context,state:'expired'}}]);
    await w.e.historyPasses();const count=(await carriers()).length;
-   check(count===2*original.length,'expired browser group carrier batch retries');
+   check(count===original.length+1&&(await carriers()).filter(row=>row.sub===wire.SubGroupProof).every(row=>recovered.some(old=>old.id===row.id&&old.envelope===row.envelope)),'expired group context retries only the missing carrier while exact usable signed proof remains');
    await w.e.historyPasses();check((await carriers()).length===count,'usable recovered browser carrier batch deduplicates');
    for(const row of await carriers())await w.st.write([{s:'outbox',k:row.id}]);
    let wrongKey=false;try{await w.e.groupHistoryCarriers(await w.e.groupRecord(conv),{...dev,fingerprint:await wire.fingerprint(alicePub)},[]);}catch(e){wrongKey=true;}
@@ -1053,7 +1060,7 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false, contro
    let profile=await phoneProfile([wire.CapEnv2,wire.CapPerson,wire.CapControl,wire.CapGroup,wire.CapAgentIdentity,wire.CapExternalParticipation]);
    const posted=[],call=w.e.call.bind(w.e);
    w.e.profile=async a=>a===linkedAddress?profile:null;w.e.groupSupport=async()=>{};w.e.ctlSupport=async()=>[true,''];
-   w.e.call=async(m,p,b)=>p==='/v1/messages'?(posted.push(b),{state:'custody'}):call(m,p,b);
+   w.e.call=async(m,p,b)=>m==='POST'&&p==='/v1/messages?lane=sync'?(posted.push(b),{state:'custody'}):call(m,p,b);
    const source=await w.st.get('inbox',pv['member-assistant-reaction'].inner.id),phoneDev=w.e.me.devices.find(d=>d.address===linkedAddress);
    const copy=await w.e.historyCopy(phoneDev,await w.e.groupRecord(conv),w.e.itemOf(source,false));
    check(copy.required_cap===wire.CapGroup&&wire.historyAssistantReaction(wire.parseHistory(copy.body)),'own history copy keeps its group requirement');
@@ -1062,7 +1069,7 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false, contro
    profile=await phoneProfile([wire.CapEnv2,wire.CapPerson,wire.CapControl,wire.CapGroup,wire.CapAgentIdentity,wire.CapExternalParticipation,wire.CapAgentReaction]);
    await w.e.post({...(await w.st.get('outbox',copy.id)),state:'queued',detail:''});
    const after=await w.st.get('outbox',copy.id);
-   check(after.state==='custody'&&posted.length===1&&wire.parseEnvelope(posted[0]).id===copy.id,'agr1 signed releases and posts the exact copy: '+after.state+' '+(after.detail||''));
+   check(after.state==='custody'&&posted.length===1&&posted[0]===copy.envelope&&wire.parseEnvelope(posted[0]).id===copy.id,'agr1 signed releases and posts the exact copy: '+after.state+' '+(after.detail||''));
    w.e.call=call;
   }
   const linkedRequest=await w.st.get('inbox',pv['member-question'].inner.id),memberHistory=wire.parseHistory(pv['history-member-question']);

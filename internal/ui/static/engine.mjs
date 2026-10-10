@@ -1647,7 +1647,7 @@ export class Engine {
 
   directHistory() { return this.directHistoryModule ||= deviceHistory(this,Hold); }
 
-  archives() { return this.archiveHelper ||= historyArchive(this,Hold,StoreConflict); }
+  archives() { return this.archiveHelper ||= historyArchive(this,Hold,StoreConflict,retryable); }
 
   async historyBook() {
     return (await this.store.get("kv", "history")) || {};
@@ -2277,7 +2277,9 @@ export class Engine {
       if(visiting.has(tuple))throw new Hold("proof_pending","Historical dependency is cyclic.");
       if(attempted.has(tuple))return attempted.get(tuple);
       attempted.set(tuple,false);visiting.add(tuple);
+      fresh=fresh&&!m.history;
       const ref={tuple,conv:m.conv,id:m.id,dir:s,...(fresh?{fresh_live:true}:{})};
+      if(!available&&!fresh){visiting.delete(tuple);await pending(ref,"window_full");return false;}
       try {
         const hash=item.ref?await this.groupControlHash(m.conv,item):await wire.groupHistoryContentHash(m.conv,item),key=copyPrefix+tuple;
         const saved=await this.groupRead(checks,"kv",key);

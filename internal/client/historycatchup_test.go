@@ -345,8 +345,32 @@ func TestHistoryCatchupConcurrentPagesDoNotRegress(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if got := len(historyCopiedItems(t, a, phone)); got != 57 {
-		t.Fatalf("concurrent pages lost or repeated originals: %d", got)
+	if got := len(historyCopiedItems(t, a, phone)); got != historyPage {
+		t.Fatalf("concurrent pages escaped the unacknowledged window: %d", got)
+	}
+	// Both producers share the same outstanding window. The reader must
+	// actually admit that page before its receipts permit the remaining seven.
+	queued, err := a.store.queued()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var receiptSeq int64
+	for _, env := range queued {
+		if env.To != phone.Address {
+			continue
+		}
+		if err := phone.verifyAndStore(tctx(t), env); err != nil {
+			t.Fatal(err)
+		}
+		state, err := phone.store.disposition(env.ID)
+		if err != nil || state != protocol.StateDelivered {
+			t.Fatalf("phone did not admit history: %s %v", state, err)
+		}
+		receiptSeq++
+		raw, _ := json.Marshal(protocol.ReceiptEvent{Seq: receiptSeq, ID: env.ID, State: state})
+		if err := a.dispatch(tctx(t), "receipt", string(raw)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if _, err := a.historyCatchupPage(tctx(t), phone.Self()); err != nil {
 		t.Fatal(err)

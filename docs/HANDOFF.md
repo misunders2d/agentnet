@@ -16,15 +16,23 @@ remaining qualification are in [V0_8_18.md](plans/V0_8_18.md). Linked-device
 bootstrap is moving to bounded encrypted archives through the existing blob
 API; independent live delivery and existing admission remain required.
 Archive candidate `6ecd3849` includes the preliminary sender checkpoint
-`987e81ad`; focused checks pass, but combined CI and final review are pending.
-The non-skipped mixed-version journey passes after checking archive import
-completion explicitly rather than expecting individual child receipts. Claude independently reviews the contract
-and final changes; three GPT-6.1-sol helpers own Go client, browser, and
-protocol/envelope changes respectively. No release, live queue cleanup or
-installed-client change has happened for this work.
+`987e81ad`; `b92c3dfe` adds the actual archive-import mixed-version assertion.
+The first combined CI exposed async fixture failures, and Claude's final review
+found five blockers; their focused corrections are now in the working tree.
+Imported history remains bounded when forwarded to a third device, missing
+signed roster proof recovers in background, browser descriptor receipts recover
+after interruption, offline capability discovery remains durable, and the
+500-record late-send test preserves its real yield trigger. A final producer
+page now wakes the archive worker; packing encrypts directly into its spool.
+Focused three-device, roster, browser/IndexedDB and race evidence is recorded
+in the plan. Two extra Windows fixture failures have focused Linux race fixes;
+native requalification must use the existing split selections, not a longer
+timeout. No release, live queue cleanup or installed-client change has happened.
 
 The Android preview stays on `feat/native-android` in its separate worktree.
-Its next APK must integrate the verified shared-core repair before handover.
+Checkpoint `e3c24cba` integrates the first archive candidate and passes native
+core/build/emulator-upgrade checks. Its next APK must also incorporate the
+final review corrections and qualify before handover.
 Actual owner-phone receive lifecycle and timings remain unverified.
 
 ## Current published release — v0.8.17, October 10, 2026 (UTC)

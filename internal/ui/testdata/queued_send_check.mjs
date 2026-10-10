@@ -38,7 +38,7 @@ for (const sub of ['history', wire.SubClear]) {
   await engine.flushOutbox();
   assert.equal((await store.get('outbox',aux.id)).state,'waiting',sub+' delivery gate stays closed');
   assert.equal((await store.get('outbox',turn.id)).state,'custody',sub+' does not starve later readable turn');
-  assert.deepEqual(calls,sub==='history'?[aux.id,turn.id]:[turn.id]);
+  assert.deepEqual(calls,sub==='history'?[turn.id,aux.id]:[turn.id]);
   if(sub===wire.SubClear)assert.equal(clearChecks,1,'clear capability gate still checked');
   engine.stop();
 }

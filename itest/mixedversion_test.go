@@ -477,6 +477,21 @@ func (w *mixedWorld) releaseSince(release string) time.Time {
 // or nil while the relay does not answer.
 func (w *mixedWorld) members() map[string]protocol.Member {
 	w.t.Helper()
+	var m protocol.Members
+	if !w.get("/v1/agents", &m) {
+		return nil
+	}
+	out := map[string]protocol.Member{}
+	for _, e := range m.Members {
+		out[e.Address] = e
+	}
+	return out
+}
+
+// get reads the isolated relay as its admin, with the relay's pinned TLS
+// certificate and the same signed requests used by the real programs.
+func (w *mixedWorld) get(path string, out any) bool {
+	w.t.Helper()
 	id, err := identity.Load(filepath.Join(w.dir, w.admin.home, "identity.json"))
 	if err != nil {
 		w.t.Fatal(err)
@@ -487,7 +502,7 @@ func (w *mixedWorld) members() map[string]protocol.Member {
 	}
 	tr := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: pool}, Proxy: nil}
 	defer tr.CloseIdleConnections()
-	req, err := http.NewRequestWithContext(context.Background(), "GET", "https://"+w.addr+"/v1/agents", nil)
+	req, err := http.NewRequestWithContext(context.Background(), "GET", "https://"+w.addr+path, nil)
 	if err != nil {
 		w.t.Fatal(err)
 	}
@@ -495,18 +510,10 @@ func (w *mixedWorld) members() map[string]protocol.Member {
 	req.Header.Set(protocol.VersionHeader, w.release) // as the admin's own program does
 	res, err := (&http.Client{Transport: tr, Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
-		return nil
+		return false
 	}
 	defer res.Body.Close()
-	var m protocol.Members
-	if res.StatusCode != http.StatusOK || json.NewDecoder(res.Body).Decode(&m) != nil {
-		return nil
-	}
-	out := map[string]protocol.Member{}
-	for _, e := range m.Members {
-		out[e.Address] = e
-	}
-	return out
+	return res.StatusCode == http.StatusOK && json.NewDecoder(res.Body).Decode(out) == nil
 }
 
 // waitUntil polls cond every 250ms until it holds, at most timeout, and
@@ -674,6 +681,35 @@ func TestMixedVersion(t *testing.T) {
 		time.Sleep(time.Second)
 	}
 	aliceOld.daemon(old) // and the older device reconnects
+	// Starting the process does not mean its new stream has published its
+	// signed capabilities yet. Establish that premise without sending a turn.
+	oldIdentity, err := identity.Load(filepath.Join(w.dir, aliceOld.home, "identity.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "the reconnected old session publishes its capabilities", 15*time.Second, func() bool {
+		log, err := os.ReadFile(filepath.Join(w.dir, fmt.Sprintf("%s-%d.log", aliceOld.home, aliceOld.runs)))
+		if err != nil {
+			return false
+		}
+		var session string
+		for _, line := range strings.Split(string(log), "\n") {
+			if _, value, ok := strings.Cut(line, "session "+aliceOld.address+"#"); ok {
+				session = strings.TrimSpace(value)
+			}
+		}
+		var p protocol.Profile
+		if session == "" || !w.get("/v1/agents/"+aliceOld.address+"/profile", &p) || !p.Live {
+			return false
+		}
+		for _, live := range p.Sessions {
+			if live == session {
+				return p.Supports(aliceOld.address, oldIdentity.Public(aliceOld.address).SignKey, protocol.CapEnv2) &&
+					p.Supports(aliceOld.address, oldIdentity.Public(aliceOld.address).SignKey, protocol.CapPerson)
+			}
+		}
+		return false
+	})
 	send(alice, ab, "ab after the links")
 	send(bob, ab, "ba after the links")
 	waitUntil(t, "the new turns on all of alice's devices", 30*time.Second, func() bool {

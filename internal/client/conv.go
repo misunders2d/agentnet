@@ -1280,7 +1280,7 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 	}
 	personErr := func(err error) error { return holdForPerson(err, hold) }
 	if in.Sub == envelope.SubHistoryArchive {
-		return a.admitHistoryArchive(ctx, env, in, sender, hold)
+		return a.admitHistoryArchive(ctx, env, in, sender, fromQuarantine, hold)
 	}
 	if in.Sub == envelope.SubModelSync {
 		return a.admitModelSync(ctx, env, in, sender, fromQuarantine, hold)

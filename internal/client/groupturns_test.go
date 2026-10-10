@@ -728,6 +728,13 @@ func TestGroupTurnsT4AtomicHeadsRemovalWithdrawalAndExactKey(t *testing.T) {
 	if allowed || err != nil {
 		t.Fatalf("NULL binding inferred %v %v", allowed, err)
 	}
+	// Publication pushes a head before Bob's daemon necessarily installs its
+	// verified context and proof prefix. Offline withdrawal must fail closed
+	// in that interval; wait for the actual current evidence before leaving.
+	eventually(t, "Bob verifies the removal head before local withdrawal", func() bool {
+		packet, e := w.bob.localWithdrawalContext(tctx(t), p.State.Conv)
+		return e == nil && packet.State.Hash() == removed.State.Hash()
+	})
 	withdrawal, err := w.bob.SignGroupWithdrawal(tctx(t), p.State.Conv)
 	if err != nil {
 		t.Fatal(err)
@@ -874,7 +881,9 @@ func TestGroupTurnsT5StaleFanAndUnsupportedOperations(t *testing.T) {
 	// signed roster transition. Restart must retain the original recipient
 	// key and refuse that copy while an unaffected recipient remains valid.
 	stopPhone()
-	aliceFaults.add("POST", "/v1/messages", 3, false)
+	// Keep the sender offline through Close, including independent upkeep
+	// and the background sender's final drain, so these exact copies stay queued.
+	aliceFaults.add("POST", "/v1/messages", 1000, false)
 	queued, err := w.alice.SendConv(tctx(t), p.State.Conv, ConvOutgoing{Body: "before linked-device removal"})
 	if err != nil || len(queued.Copies) != 3 {
 		t.Fatalf("linked exact batch %v %d", err, len(queued.Copies))
@@ -902,6 +911,12 @@ func TestGroupTurnsT5StaleFanAndUnsupportedOperations(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
+	for _, copy := range []envelope.Envelope{removedCopy, unaffectedCopy} {
+		state, _, _, err := reopened.store.outboxState(copy.ID)
+		if err != nil || state != stateQueued {
+			t.Fatalf("offline exact copy %s: %s %v", copy.ID, state, err)
+		}
+	}
 	var originalKey string
 	if err = reopened.store.db.QueryRow(`SELECT recipient_fp FROM outbox WHERE id=?`, removedCopy.ID).Scan(&originalKey); err != nil || originalKey != phone.Self().Fingerprint() {
 		t.Fatalf("original key changed: %q %v", originalKey, err)

@@ -116,6 +116,8 @@ export function deviceHistory(e,Hold){
    if(visiting.has(k)||visiting.size>=64||count>=4*page)fail("dependency page remains.","proof_pending");visiting.add(k);
    try{
     const current=await read(checks,s,id);if(!directHistoryRow(current)||e.erasedRow(current)){done.add(k);return;}
+    ref={...ref,fresh_live:!!ref.fresh_live&&!current.history};
+    if(!available&&!ref.fresh_live)fail("history window is full.","proof_pending");
     const r=await source(current,ref.here),parent=r.item.ref?.id||r.item.reply_to;
     if(parent&&parent!==id){const p=await original(parent,checks,ops);if(p)await queue({row:p.row,here:p.here,fresh_live:ref.fresh_live});}
     const meta=await project(r,own,checks,ops);if(JSON.stringify(current.device_history)!==JSON.stringify(meta))ops.push({s,k:id,v:{...current,device_history:meta}});
@@ -131,7 +133,7 @@ export function deviceHistory(e,Hold){
     done.add(k);
    }finally{visiting.delete(k);}
   };
-  for(const ref of refs){const id=ref.row?.id||ref.id,pk=pendingPrefix+(ref.here?"out/":"in/")+id;try{await queue(ref);ops.push({s:"kv",k:pk,v:undefined});}catch(x){if(!(x instanceof Hold)||x.reason==="conflicting_copy")throw x;ops.push({s:"kv",k:pk,v:{id,here:ref.here,...(ref.fresh_live?{fresh_live:true}:{})}});}}
+  for(const ref of refs){const id=ref.row?.id||ref.id,pk=pendingPrefix+(ref.here?"out/":"in/")+id;try{await queue(ref);ops.push({s:"kv",k:pk,v:undefined});}catch(x){if(!(x instanceof Hold)||x.reason==="conflicting_copy")throw x;ops.push({s:"kv",k:pk,v:{id,here:ref.here,...(ref.fresh_live&&!(await read(checks,ref.here?"outbox":"inbox",id))?.history?{fresh_live:true}:{})}});}}
   if(!await e.ownHistoryAuthority(dev,checks))return false;
   ops.push({s:"kv",k:key,v:job});const copies=ops.filter(o=>o.s==="outbox"&&o.v?.sub===wire.SubDeviceHistory&&o.v.state==="queued").map(o=>o.v);
   let order=Math.max(job.order||0,e.now());for(const copy of copies)copy.send_order=++order;job.order=order;

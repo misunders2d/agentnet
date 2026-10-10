@@ -83,7 +83,7 @@ for (const closing of [false,true]) {
  e.retryHeld=()=>background;e.flushReceipts=()=>background;
  const sent=await e.sendDirect({to:'bob/host',kind:'question',body:'fresh request during old proof recovery'});
  const original=await store.get('outbox',sent.id);e.connected=true;
- try {await bounded(e.onConnect());assert.deepEqual(posts,[original.envelope]);assert.equal((await store.get('outbox',sent.id)).state,'custody');}
+ try {await bounded(e.onConnect());await bounded(e.outboxPass);assert.deepEqual(posts,[original.envelope]);assert.equal((await store.get('outbox',sent.id)).state,'custody');}
  finally {release();e.stop();}
 }
 // A cancelled stream previously awaited its hung onConnect forever. The

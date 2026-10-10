@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -260,28 +261,11 @@ func (a *Agent) archivePack(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	dir := filepath.Join(a.home, "spool")
-	if err = secfile.EnsureDir(dir); err != nil {
-		return err
-	}
-	tmp, err := secfile.CreateTemp(dir, ".archive-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name())
-	if _, err = tmp.Write(data); err == nil {
-		err = tmp.Close()
-	} else {
-		tmp.Close()
-	}
-	if err != nil {
-		return err
-	}
 	recipient, err := dev.Recipient()
 	if err != nil {
 		return err
 	}
-	att, err := a.spoolNamed(OutgoingFile{Path: tmp.Name(), Name: "history.age.json"}, recipient)
+	att, err := a.spoolReader("history.age.json", bytes.NewReader(data), recipient)
 	if err != nil {
 		return err
 	}
@@ -357,19 +341,55 @@ func (a *Agent) archiveAuthority(ctx context.Context, env envelope.Envelope, in 
 	if in.Sub != envelope.SubHistoryArchive || !in.Replica || len(in.Attachments) != 1 || in.Attachments[0].Size > protocol.MaxHistoryArchivePlaintext {
 		return manifest, errors.New("invalid history archive shape")
 	}
+	me, ok, err := a.store.selfPerson(a.Address)
+	if err != nil {
+		return manifest, err
+	}
+	if !ok {
+		return manifest, ErrNoPerson
+	}
+	if manifest.Person != me.info.Person {
+		return manifest, errors.New("archive belongs to another person")
+	}
+	bound, err := inChainIn(a.store.db, manifest.Person, manifest.Roster)
+	if err != nil {
+		return manifest, err
+	}
+	if !bound {
+		return manifest, fmt.Errorf("%w: archive roster not yet verified", errPersonRecord)
+	}
 	err = readSyncAuthority(a.store.db, protocol.ReadSync{V: 1, Person: manifest.Person, Roster: manifest.Roster}, env.From, source.Fingerprint(), a.Address, a.Self().Fingerprint())
 	return manifest, err
 }
 
 // Dispatch records only authenticated small descriptor metadata. No blob I/O
 // or imported turn runs on the held live push stream, and no ACK yet exists.
-func (a *Agent) admitHistoryArchive(ctx context.Context, env envelope.Envelope, in envelope.Inner, source identity.Public, hold func(string, string) error) error {
-	if _, err := a.archiveAuthority(ctx, env, in, source); err != nil {
+func (a *Agent) admitHistoryArchive(ctx context.Context, env envelope.Envelope, in envelope.Inner, source identity.Public, held bool, hold func(string, string) error) error {
+	_, err := a.archiveAuthority(ctx, env, in, source)
+	if held && (errors.Is(err, errPersonRecord) || errors.Is(err, ErrNoPerson)) {
+		// Existing proof recovery runs in background upkeep. Never fetch the
+		// roster on the live stream merely to admit a bootstrap descriptor.
+		if err := a.refreshRecipientPerson(ctx, a.Address, map[string]error{}); err != nil {
+			return holdForPerson(err, hold)
+		}
+		_, err = a.archiveAuthority(ctx, env, in, source)
+	}
+	if errors.Is(err, errPersonRecord) || errors.Is(err, ErrNoPerson) {
+		if err := holdForPerson(err, hold); err != nil {
+			return err
+		}
+		if !held {
+			a.convWork.due(convRetry)
+			a.kickNow()
+		}
+		return nil
+	}
+	if err != nil {
 		return hold(reasonInvalid, err.Error())
 	}
 	raw, _ := json.Marshal(env)
 	var prior string
-	err := a.store.db.QueryRow(`SELECT envelope FROM history_archive_jobs WHERE id=?`, env.ID).Scan(&prior)
+	err = a.store.db.QueryRow(`SELECT envelope FROM history_archive_jobs WHERE id=?`, env.ID).Scan(&prior)
 	if err == nil {
 		if prior != string(raw) {
 			return hold(reasonConflict, "archive descriptor ciphertext changed")
@@ -445,6 +465,9 @@ func (a *Agent) archiveImportStep(ctx context.Context) (bool, error) {
 		defer tx.Rollback()
 		if _, e = tx.Exec(`UPDATE history_archive_jobs SET retained=1,error='' WHERE id=?`, id); e == nil {
 			_, e = tx.Exec(`INSERT OR IGNORE INTO history_receipts(id) VALUES(?)`, id)
+		}
+		if e == nil {
+			_, e = tx.Exec(`DELETE FROM quarantine WHERE id=?`, id)
 		}
 		if e == nil {
 			e = a.store.done(tx.Commit())

@@ -23,6 +23,9 @@ func TestHistoryBacklogLateInteractiveTurn(t *testing.T) {
 	if err := a.FlushOutbox(tctx(t)); err != nil {
 		t.Fatal(err)
 	}
+	// Drive this fixture synchronously before replacing its HTTP transport.
+	a.stopBackgroundPosts()
+	a.stopArchivePosts()
 	a.convWork.take()
 
 	rows, err := a.historySourceRows(a.store.db, "dir='in'", "conv,ms,id", 500)
@@ -80,6 +83,10 @@ func TestHistoryBacklogLateInteractiveTurn(t *testing.T) {
 						return nil, err
 					}
 				}
+				// Reproduce the original early-yield trigger: admitted file
+				// work arrives during the first history handover. The late
+				// live turns must still pass before yielding to that work.
+				a.convWork.bits.Or(convServe)
 			}
 		}
 		return base.RoundTrip(r)
@@ -88,8 +95,15 @@ func TestHistoryBacklogLateInteractiveTurn(t *testing.T) {
 	if err = a.FlushOutbox(tctx(t)); err != nil {
 		t.Fatal(err)
 	}
-	if len(posted) < 3 || posted[1] != late.ID || posted[2] != second.ID {
+	if len(posted) != 3 || posted[1] != late.ID || posted[2] != second.ID {
 		t.Fatalf("late readable FIFO did not get next delivery turns: first=%v", posted[:min(5, len(posted))])
+	}
+	var remaining, handedOver int
+	if err := a.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE recipient=? AND sub='history' AND state=?`, phone.Address, stateQueued).Scan(&remaining); err != nil || remaining != 499 {
+		t.Fatalf("history backlog was lost instead of yielding: %d %v", remaining, err)
+	}
+	if err := a.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE id IN (?,?) AND state IN ('custody','delivered')`, late.ID, second.ID).Scan(&handedOver); err != nil || handedOver != 2 {
+		t.Fatalf("live turns were not durably handed over: %d %v", handedOver, err)
 	}
 }
 

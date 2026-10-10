@@ -236,7 +236,7 @@ try {
   {
     const f = await fixture(), { e } = f, durable = await f.count();
     // Isolate typing from durable reconnect upkeep, including saved-title migration.
-    for (const method of ["publishPerson", "flushReceipts", "retryHeld", "flushOutbox", "retryApproved", "runHistory", "runServes", "keepFiles", "reconcileNotify", "fillListed", "syncReadMarks", "syncTopicTitles"]) e[method] = async () => {};
+    for (const method of ["migrateSyncCustody", "publishPerson", "flushReceipts", "retryHeld", "flushOutbox", "retryApproved", "runHistory", "runServes", "keepFiles", "reconcileNotify", "fillListed", "syncReadMarks", "syncTopicTitles"]) e[method] = async () => {};
     let controller; f.stream(() => new Response(new ReadableStream({ start(c) { controller = c; } }), { headers: { "Agentnet-Members": "1", "Agentnet-Signals": "1" } }));
     const connected = new Promise((resolve) => { const un = e.listen(() => { if (e.connected && e.typing.connected && !e.members.current) { un(); resolve(); } }); });
     const running = e.streamOnce(); await connected;
