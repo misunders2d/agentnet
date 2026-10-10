@@ -4,18 +4,37 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
-## Active handoff to Claude — October 10, 2026
+## Handoff to Claude — completed in v0.8.17
 
-The owner reports v0.8.16 still leaves the phone on a blank Chats skeleton for
-20+ seconds, omits replies, and retains large held-notice/pending-request lists.
-He stopped Codex implementation and assigned the continuation to Claude.
-Read [HANDOFF_CLAUDE_MOBILE.md](HANDOFF_CLAUDE_MOBILE.md) first: it records two
-reproduced startup bottlenecks, the explicitly unfinished local checkpoint,
-a known runtime bug in that checkpoint, failed/passing test evidence, private
-diagnostic locations and repository cleanup. No new release is qualified.
-All helpers are stopped; preserve this state until Claude takes over.
+The October 10 mobile handoff ([HANDOFF_CLAUDE_MOBILE.md](HANDOFF_CLAUDE_MOBILE.md))
+was taken over by Claude and shipped as v0.8.17 below.
 
-## Current published release — v0.8.16, October 10, 2026 (UTC)
+## Current published release — v0.8.17, October 10, 2026 (UTC)
+
+[Download v0.8.17](https://github.com/misunders2d/agentnet/releases/tag/v0.8.17).
+Published at **16:37:32 UTC** from tag `4d6557ab96dbeb7ee0934e1872031e14f3ff4278`.
+All five [packaging jobs](https://github.com/misunders2d/agentnet/actions/runs/38067699593)
+passed; all 12 asset digests and 11 SHA256SUMS entries matched before and after
+publication; the standalone and AppImage-bundled Linux programs report the exact
+clean tag. Linux amd64 SHA256 `fd4c43f610083cf9fb8a7776973583cd72813a0e8206a3f2cb2472bcc90b2b15`.
+
+The existing Contabo relay runs `agentnet-revived:v0.8.17-4d6557ab` (image
+`sha256:62441c164ffa171b74b370983faa8eb1789ef51fdcb56ec3cc58e88b7086a3d1`), started
+**16:38:03 UTC**, verified 16:38:07 UTC after a verified stopped-state backup
+`/opt/agentnet-revived/backups/pre-v0.8.17-S6r7ahhN` (SHA256
+`530a2cd0ad3765ab9eeae8e36f495aba2becf292597f84d4ed5e99a79680b27f`): unchanged
+realm, volume, loopback port and neighbouring service; zero restarts; served
+engine (stamped with the build) and device, history, workspace and Comic assets
+match exact hashes. The relay now recommends v0.8.17 automatically.
+
+**Latest-only is live:** devices on v0.8.16 or older are suspended 30 minutes
+after the relay update until updated by hand (one time; from v0.8.17 devices
+update themselves). Scope, evidence and limits: [V0_8_17.md](plans/V0_8_17.md).
+No physical-phone result is claimed; MEL-546/558 stay open until the owner's
+phone confirms. Next: agent model streamlining ([AGENT_MODEL.md](plans/AGENT_MODEL.md))
+and native apps (Codex branch `feat/native-android`, not merged).
+
+## Previous release — v0.8.16, October 10, 2026 (UTC)
 
 [Download v0.8.16](https://github.com/misunders2d/agentnet/releases/tag/v0.8.16).
 Published at **00:37:52 UTC** from
