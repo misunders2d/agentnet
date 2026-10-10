@@ -115,6 +115,46 @@ The initial failed native export and failed test selectors are retained in
 local development logs. They are not reported as passing evidence. No live
 identity, grant, installed desktop, relay, human message or phone data was changed.
 
+## Qualified v0.8.18 Android candidate — October 11
+
+Android merge `179f8a8d07aeca59d89f0abadfd6263fe73ce7a6` cleanly includes
+qualified shared-core checkpoint `484db3e7bb82fc4e6d3a34c3b8e25b845296ea02`.
+The embedded core identifies itself as `v0.8.18+android.g179f8a8d.preview`.
+This is a development preview, not a Play-signed release.
+
+The handoff APK is `dist/android-preview/AgentNet-v0.8.18-android-preview.apk`
+in the main repository. Package `io.github.misunders2d.agentnet.preview`, version
+code 3 and version name `0.3.0-comic-preview` preserve the existing preview
+installation. Its original signing certificate remains
+`e1d06246fc1e49d5cc24dddb4dea618c2410cc35e3a98efa28daa8ae450b0659`.
+
+- APK SHA-256: `68d4b5446729ff424df11800603bba2fe8a63f5d94416b4c57d96ed343c98190`
+  (66,581,559 bytes).
+- Dual-ABI AAR SHA-256:
+  `6319f96ac4f5fb73ba518d06940c0cbcf5b7c708e53ed686e4ca71001de2c55e`.
+- Mobile/core race: 18 tests passed in 57.950s. The optional fixture-export test
+  skipped; it was not executed. Gradle: 28 unit tests passed with no failures or
+  skips. Lint: zero errors and six existing warnings.
+- ARM64 and x86_64 ELF LOAD segments meet 16 KB alignment; APK signature and
+  `zipalign -c -P 16 4` checks pass. Fresh APK packaging preserves every ZIP
+  entry byte from the incremental build.
+- Only the owned API35 x86_64 emulator was updated in place, without wiping.
+  Cold restart confirmed the final core stamp and exact preservation of all
+  203 synthetic message IDs, bodies and states, including three queued messages,
+  one attachment, the saved draft, identity and stable authenticated origin.
+- The final APK opened JourneyApps' native camera activity. System Back returned
+  a canceled result without changing the invitation form. Earlier permission
+  denial returned a useful paste-link fallback after dismissing the camera
+  dialog, and reopening/canceling worked. Actual QR image decoding remains
+  untested. ARM64 was compiled and checked, not run.
+
+The owned emulator was stopped after verification. No real phone was installed
+or modified. Prior unchanged Comic, SAF, clipboard and navigation evidence above
+is retained; this update does not establish physical-phone performance, live
+peer delivery or whole-product parity. Local qualification logs use
+`/tmp/agentnet-android-qualified-{core-build,mobile-core-race,gradle,unit,package,verification,runtime}.log`;
+these logs and build outputs are not committed.
+
 ## Build
 
 ### Next preview work in progress — October 10
@@ -131,9 +171,8 @@ Focused evidence: real temporary TLS link/approval/receive/restart and terminal
 failure race checks pass (13.353s); shared Comic pending-link and failure
 rendering passes at 390/320px (8.125s); Android host/QR JavaScript tests pass.
 Gradle compilation, all 28 unit tests and lint pass; mobile/core vet passes.
-No physical-phone stream-failure cause has been established. Android camera
-scanning and the next packaged APK still need native qualification. Integrate
-the verified v0.8.18 shared-core sync repair before handing over that APK.
+No physical-phone stream-failure cause has been established. The final packaged v0.8.18 candidate and bounded native camera qualification
+are recorded above; actual QR image decoding remains untested.
 
 ### Build instructions
 
