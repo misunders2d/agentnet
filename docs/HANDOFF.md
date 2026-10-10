@@ -15,25 +15,32 @@ Codex owns `fix/v0.8.18-send-starvation`. The implementation contract and
 remaining qualification are in [V0_8_18.md](plans/V0_8_18.md). Linked-device
 bootstrap is moving to bounded encrypted archives through the existing blob
 API; independent live delivery and existing admission remain required.
-Archive candidate `6ecd3849` includes the preliminary sender checkpoint
-`987e81ad`; `b92c3dfe` adds the actual archive-import mixed-version assertion.
-The first combined CI exposed async fixture failures, and Claude's final review
-found five blockers; their focused corrections are now in the working tree.
-Imported history remains bounded when forwarded to a third device, missing
-signed roster proof recovers in background, browser descriptor receipts recover
-after interruption, offline capability discovery remains durable, and the
-500-record late-send test preserves its real yield trigger. A final producer
-page now wakes the archive worker; packing encrypts directly into its spool.
-Focused three-device, roster, browser/IndexedDB and race evidence is recorded
-in the plan. Two extra Windows fixture failures have focused Linux race fixes;
-native requalification must use the existing split selections, not a longer
-timeout. No release, live queue cleanup or installed-client change has happened.
+Reviewed shared-core candidate `30deba56` follows `6ecd3849` and `b92c3dfe`.
+Claude independently cleared all five original blockers after reproducing the
+corrections: imported history stays cold on third devices; roster proof recovers
+in background; browser receipt windows recover after interruptions; offline
+capability discovery remains durable; live sends pass cold history. Packing uses
+the existing encrypted spool without an outer plaintext staging file.
+
+All twelve client race partitions and both UI race partitions pass. The real
+mixed-version gate passes against v0.8.17, and Chromium's real IndexedDB gate
+passes. Native UI passes on Linux, macOS and Windows; Windows client H–Z passes.
+Final native client qualification exposed five asynchronous test-premise
+failures, now corrected without changing production code or raising deadlines.
+A separate guest-control invitation timeout reproduced under the race detector;
+its cumulative operation budget is under investigation before publication. Retain passing evidence and rerun these exact cases on the
+native platforms. Windows A–G finished with the same group-context fixture failure and the guest
+control timeout; that remaining case is under investigation.
+No release, live queue cleanup or installed-client change has happened.
 
 The Android preview stays on `feat/native-android` in its separate worktree.
-Checkpoint `e3c24cba` integrates the first archive candidate and passes native
-core/build/emulator-upgrade checks. Its next APK must also incorporate the
-final review corrections and qualify before handover.
-Actual owner-phone receive lifecycle and timings remain unverified.
+Merge `1e6ff57a` includes the reviewed shared core. Its final APK, SHA256
+`ee842a0fe14893a57ba43d0f6807061411c3b760dcb416e0f91a7c827195082b`,
+passes core race, 28 Android unit tests, lint, both ABI/16KiB packaging checks,
+and in-place x86_64 emulator upgrade preserving 203 exact messages, queued
+sends, file, draft and identity. Native camera opening/cancellation and denial
+fallback pass. Optical QR decoding, arm64 execution and actual owner-phone
+receive lifecycle/timings remain unverified. Artifact/evidence are in the plan.
 
 ## Current published release — v0.8.17, October 10, 2026 (UTC)
 

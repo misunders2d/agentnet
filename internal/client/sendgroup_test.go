@@ -1,7 +1,6 @@
 package client
 
 import (
-	"context"
 	"encoding/json"
 	"github.com/misunders2d/agentnet/internal/sqlitedb"
 	"path/filepath"
@@ -173,10 +172,11 @@ func TestSendGroupOldPeerAndLinkedHistory(t *testing.T) {
 	}
 	runAgent(t, phone)
 	publishGroupFixtureCaps(t, phone, true)
-	// The phone explicitly advertises sg1 before history construction.
-	if !a.sendGroupSupported(context.Background(), phone.Self()) {
-		t.Fatal("phone fixture did not advertise sg1")
-	}
+	// The asynchronously started phone must expose a verified sg1 record
+	// on its current live session before history construction.
+	eventually(t, "phone signed sg1 capability", func() bool {
+		return a.sendGroupSupported(tctx(t), phone.Self())
+	})
 	if _, err = a.historyPageFor(phone.Self(), historyPos{}); err != nil {
 		t.Fatal(err)
 	}

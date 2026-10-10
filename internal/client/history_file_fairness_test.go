@@ -33,7 +33,26 @@ func TestHistoryFlushYieldsToRequestedFile(t *testing.T) {
 	if result := <-awaited; result.err != nil {
 		t.Fatal(result.err)
 	}
+	// This regression exercises legacy per-carrier flushing. The link's
+	// waiting session may advertise modern archive support; explicitly
+	// publish the legacy reader before constructing its history backlog.
+	stopPhone := runAgent(t, phone)
+	waitNamedAgentCaps(t, phone)
+	signCapsAfter(t, phone, without(ownCaps, protocol.CapHistoryArchive))
+	label, name, _ := protocol.SplitAddress(phone.Address)
+	eventually(t, "signed legacy history reader", func() bool {
+		var profile protocol.Profile
+		err := phone.hub.do(tctx(t), "GET", "/v1/agents/"+label+"/"+name+"/profile", nil, &profile)
+		return err == nil && profile.Supports(phone.Address, phone.Self().SignKey, protocol.CapOwnSyncV3) && !profile.Supports(phone.Address, phone.Self().SignKey, protocol.CapHistoryArchive)
+	})
+	stopPhone()
 	a := w.alice
+	// From here the fixture drives sends/upkeep manually. Join the
+	// independent workers before installing mutable HTTP hooks.
+	a.stopBackgroundPosts()
+	a.stopArchivePosts()
+	phone.stopBackgroundPosts()
+	phone.stopArchivePosts()
 	_, root := rootOf(t, a, conv)
 	for range 3 {
 		env := craft(t, w.bob, a, envelope.Inner{Kind: envelope.KindMessage, Body: "backfill", Conv: conv, Root: root, LID: protocol.NewID(), Origin: envelope.OriginUI})
@@ -63,7 +82,9 @@ func TestHistoryFlushYieldsToRequestedFile(t *testing.T) {
 		}
 	}
 	if len(history) < 3 {
-		t.Fatalf("history backlog: %d", len(history))
+		var rows string
+		a.store.db.QueryRow(`SELECT coalesce(group_concat(sub || ':' || state), '') FROM outbox WHERE recipient=?`, phone.Address).Scan(&rows)
+		t.Fatalf("history backlog: %d; source rows: %s", len(history), rows)
 	}
 	// A turn only the phone received gives its bulk upkeep a copy to make
 	// for alice: what came from alice is never copied back to her.
@@ -123,6 +144,8 @@ func TestHistoryFlushYieldsToRequestedFile(t *testing.T) {
 	})
 	phone.convWork.due(convHistory)
 	phone.sync(tctx(t))
+	phone.stopBackgroundPosts()
+	phone.stopArchivePosts()
 	phone.hub.http.Transport = phoneBase
 	if !beforeUpkeep {
 		t.Fatal("queued file request waited behind bulk upkeep")
@@ -158,7 +181,11 @@ func TestHistoryFlushYieldsToRequestedFile(t *testing.T) {
 		}
 		return resp, e
 	})
-	defer func() { a.hub.http.Transport = base }()
+	defer func() {
+		a.stopBackgroundPosts()
+		a.stopArchivePosts()
+		a.hub.http.Transport = base
+	}()
 	if err = a.FlushOutbox(tctx(t)); err != nil {
 		t.Fatal(err)
 	}

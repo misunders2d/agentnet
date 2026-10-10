@@ -655,7 +655,9 @@ func TestGroupTurnsT4AtomicHeadsRemovalWithdrawalAndExactKey(t *testing.T) {
 	if _, err = w.alice.PublishGroup(tctx(t), commit, next); err != nil {
 		t.Fatal(err)
 	}
-	injectFaults(w.alice).add("POST", "/v1/messages", 2, false)
+	// The sender stays offline through Close. Its context copies must be
+	// recovered explicitly after restart, not by an incidental final drain.
+	injectFaults(w.alice).add("POST", "/v1/messages", 1000, false)
 	queued, err := w.alice.SendConv(tctx(t), p.State.Conv, ConvOutgoing{Body: "fixed old batch"})
 	if err != nil {
 		t.Fatal(err)
@@ -728,9 +730,18 @@ func TestGroupTurnsT4AtomicHeadsRemovalWithdrawalAndExactKey(t *testing.T) {
 	if allowed || err != nil {
 		t.Fatalf("NULL binding inferred %v %v", allowed, err)
 	}
-	// Publication pushes a head before Bob's daemon necessarily installs its
-	// verified context and proof prefix. Offline withdrawal must fail closed
-	// in that interval; wait for the actual current evidence before leaving.
+	var pendingContext int
+	if err = reopened.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE recipient=? AND sub='group-context' AND state IN ('queued','waiting')`, w.bob.Address).Scan(&pendingContext); err != nil || pendingContext == 0 {
+		t.Fatalf("offline publication lost Bob's retained context: %d %v", pendingContext, err)
+	}
+	// Alice's daemon was stopped before both publications. Their public
+	// journal heads do not deliver the recipient's encrypted context copies.
+	if err = reopened.FlushOutbox(tctx(t)); err != nil {
+		t.Fatal(err)
+	}
+	// Bob is an ordinary member, without ciphertext-journal read authority.
+	// Wait for his actual delivered context and verified proof prefix before
+	// asking the offline withdrawal path to use that current evidence.
 	eventually(t, "Bob verifies the removal head before local withdrawal", func() bool {
 		packet, e := w.bob.localWithdrawalContext(tctx(t), p.State.Conv)
 		return e == nil && packet.State.Hash() == removed.State.Hash()

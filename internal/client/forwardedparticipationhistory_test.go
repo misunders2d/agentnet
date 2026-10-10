@@ -2,6 +2,7 @@ package client
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"testing"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
@@ -73,8 +74,26 @@ func TestForwardedParticipationHistoryToOwnPhone(t *testing.T) {
 		}
 	})
 
+	var sharedAccept sharedCopy
+	eventually(t, "Alice discloses Dana's acceptance", func() bool {
+		var ok bool
+		sharedAccept, ok = sharedOf(humanSharedCopies(t, w.alice, conv, pd.PID, carol.Address), protocol.EventAccept)
+		return ok
+	})
 	phone, awaited, _ := linkPhone(t, w.alice, "forwarded-history-phone")
 	request := pendingLink(t, w.alice)
+	// This fixture drives exact sealed copies and later reopens the same
+	// source database. Stop its existing daemon before linking the phone,
+	// so automatic archive bootstrap cannot fill the window underneath the
+	// explicit deferred-repair passes.
+	w.alice.stopRun()
+	stopped, err := lockfile.Wait(filepath.Join(w.alice.home, "daemon.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopped() // Run releases this lock only after its workers have joined.
+	w.alice.stopBackgroundPosts()
+	w.alice.stopArchivePosts()
 	if err := w.alice.DecideLink(tctx(t), request.ID, true); err != nil {
 		t.Fatal(err)
 	}
@@ -96,12 +115,6 @@ func TestForwardedParticipationHistoryToOwnPhone(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, root := rootOf(t, w.alice, conv)
-	var sharedAccept sharedCopy
-	eventually(t, "Alice discloses Dana's acceptance", func() bool {
-		var ok bool
-		sharedAccept, ok = sharedOf(humanSharedCopies(t, w.alice, conv, pd.PID, carol.Address), protocol.EventAccept)
-		return ok
-	})
 	acceptRows, err := w.alice.historySourceRows(w.alice.store.db, "dir='out' AND id=?", "id", 1, sharedAccept.id)
 	if err != nil || len(acceptRows) != 1 {
 		t.Fatalf("forwarded acceptance source: count=%d err=%v", len(acceptRows), err)
@@ -259,6 +272,13 @@ func TestForwardedParticipationHistoryToOwnPhone(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer source.Close()
+		defer func() {
+			if t.Failed() {
+				full, err := syncWindowFull(source.store.db, phone.Self())
+				t.Logf("repair source window full=%t error=%v", full, err)
+				logReplicationFailure(t, source, "repair source")
+			}
+		}()
 		release, err := lockfile.Wait(source.spoolLockPath())
 		if err != nil {
 			t.Fatal(err)
