@@ -359,7 +359,7 @@ export function TopicEnd({ ctx }: { ctx: Ctx }) {
     <section aria-label="Topic state" className="mx-3 mt-4 rounded-2xl bg-surface p-4 stroke lg:mx-5">
       <div className="flex flex-wrap items-center gap-2">
         {archived ? <Tag tone="muted"><IconArchive size={12} stroke={2.6} aria-hidden="true" />Archived</Tag> : <Tag tone="ok"><IconCircleCheck size={12} stroke={2.6} aria-hidden="true" />Done</Tag>}
-        {t.doneBy === "you" && !t.conclusion && <span className="text-[13px] text-text-2">You marked it done on this device.</span>}
+        {t.doneBy === "you" && !t.conclusion && <span className="text-[13px] text-text-2">You marked it done.</span>}
         {t.doneBy === "person" && <span className="text-[13px] text-text-2">{t.concludedBy===ctx.overview?.me.address?"You":ctx.overview?.people?.find(p=>p.address===t.concludedBy||p.devices?.some(d=>d.address===t.concludedBy))?.label||"A participant"} marked this done for everyone.</span>}
         {t.doneBy === "agent" && !archived && <span className="text-[13px] text-text-2">{agent} closed this topic.</span>}
       </div>

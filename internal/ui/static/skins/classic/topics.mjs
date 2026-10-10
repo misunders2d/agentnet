@@ -36,7 +36,7 @@ export function topicControls(root, {api, choose, chooseRoot, fresh, changed, an
   };
   const renderActions=()=>{if(confirming)return;actions.replaceChildren();if(!selected.size)return;actions.append(node('span',selected.size+' selected'));for(const [what,label]of [['delete','Delete for me'],['done','Mark done'],['archive','Archive']]){const b=button(label,()=>confirm(what,label));b.disabled=busy;actions.append(b);}};
   const confirm=(what,label)=>{
-   confirming=true;const ids=[...selected],covered=Object.fromEntries(ids.map(id=>[id,counts.get(id)]));actions.replaceChildren(node('p',label+' '+ids.length+' topics? '+(what==='delete'?'Other people keep their copies. People chats: your devices; agent chats: this device.':what==='done'&&scope.conv?'Shared with everyone.':'On this device.')));
+   confirming=true;const ids=[...selected],covered=Object.fromEntries(ids.map(id=>[id,counts.get(id)]));actions.replaceChildren(node('p',label+' '+ids.length+' topics? '+(what==='delete'?'Other people keep their copies. People chats: your devices; agent chats: this device.':what==='done'&&scope.conv?'Shared with everyone.':'On your linked devices.')));
    const cancel=()=>{if(timer)clearTimeout(timer);timer=null;confirming=false;status.textContent='Cancelled; nothing changed.';render();};
    actions.append(button('Cancel',cancel),button('Confirm',()=>{
     actions.replaceChildren(button('Undo',cancel));status.textContent='Will apply in six seconds.';

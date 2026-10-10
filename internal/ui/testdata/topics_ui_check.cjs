@@ -216,6 +216,10 @@ async function slowly(browser, w, h, scheme, name) {
       await bar.locator('[aria-current="true"]').click();
       await p.getByRole('menuitem', { name: 'Mark done' }).click();
       await p.waitForFunction(() => /marked it done/.test(document.getElementById('skin').shadowRoot.querySelector('section[aria-label="Topic state"]')?.textContent || ''));
+      // Owner (v0.8.17): the mark may come from another of the person's devices.
+      const marked = await p.locator('section[aria-label="Topic state"]').innerText();
+      assert.match(marked, /You marked it done\./, name + ': the end of a topic says the person marked it done');
+      assert.doesNotMatch(marked, /on this device/, name + ': a synced Done is not called this device\'s');
       await bar.locator('[aria-current="true"]').click();
       await p.getByRole('menuitem', { name: 'Rename…' }).click();
       await p.getByText('The name syncs across your linked devices. Other people keep their own names.', { exact: true }).waitFor();
