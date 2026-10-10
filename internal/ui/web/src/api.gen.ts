@@ -862,6 +862,10 @@ export interface QuarantineItem {
   code: string;
   reason: string;
   at: string;
+  sender_verified?: boolean;
+  action?: string;
+  logical?: string;
+  size?: number;
 }
 
 export interface QuestionApproval {

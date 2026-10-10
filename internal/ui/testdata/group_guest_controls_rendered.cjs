@@ -202,8 +202,16 @@ if(variant==='heldback'){
  fixture.retainedHeld=structuredClone(fixture.overview.quarantine);
 }
 if(variant==='held-flood'){
- fixture.overview.group_invitations=[];fixture.overview.review=[];fixture.overview.needs_you=[];
- fixture.overview.quarantine=Array.from({length:300},(_,i)=>({id:(i+1).toString(16).padStart(32,'0'),peer:'claimed/remote',code:'invalid',detail_code:'',detail:'The original detailed reason was not recorded or is unavailable.',recovery:'The retained message stays blocked.',at:'2026-10-05T10:00:00Z',can_archive:true}));
+ // t5-held: an older own device re-sends a few records under new IDs; its
+ // copies opened under its own key. Plus copies waiting on an invitation and
+ // unverified legacy rows counted only by size. 326 notices: over one batch.
+ fixture.overview.group_invitations=[];fixture.overview.review=[];fixture.overview.needs_you=[];fixture.batches=[];
+ fixture.overview.person.devices.push({address:'aster/bezos',fingerprint:'bezos-key'});
+ const hex=i=>(i+1).toString(16).padStart(32,'0'),record=k=>String(k).repeat(32);
+ fixture.overview.quarantine=[
+  ...Array.from({length:300},(_,i)=>({id:hex(i),peer:'aster/bezos',code:'invalid',detail_code:'participation_binding_mismatch',sender_verified:true,action:'update_sender',logical:record(i%4),size:2840+36*(i%4),detail:'An internal invitation or membership record does not match its sending device or conversation.',recovery:'It stays blocked and grants no access. Older AgentNet versions forward such records under the wrong device. Update AgentNet on the sending device to stop new copies.',at:new Date(Date.UTC(2026,9,5,10,0,i)).toISOString(),can_archive:true})),
+  ...Array.from({length:6},(_,i)=>({id:hex(1000+i),peer:'aster/bezos',code:'proof_pending',detail_code:'participation_invite_unresolved',sender_verified:true,action:'wait_invitation',logical:record(5+i%2),size:2404,detail:'It belongs to an agent or guest participation whose invitation this device can’t resolve yet.',recovery:'It waits and runs nothing. Checks continue when invitations or membership change here.',at:'2026-10-05T09:00:00Z',can_archive:true})),
+  ...Array.from({length:20},(_,i)=>({id:hex(2000+i),peer:'claimed/remote',code:'invalid',detail_code:'',size:2000+i%2,detail:'The original detailed reason was not recorded or is unavailable.',recovery:'The retained message stays blocked.',at:'2026-10-05T08:00:00Z',can_archive:true}))];
  fixture.retainedHeld=structuredClone(fixture.overview.quarantine);
 }
 if(variant==='team-tags'){fixture.teams=[];fixture.overview.people=[...fixture.overview.people,fixture.thread.members[1]];}
@@ -264,12 +272,18 @@ if(variant.startsWith('decline-invite-')&&p==='/api/groups/decide'){
  fixture.overview.group_invitations=[];changed?.({type:'change',seq:++fixture.overview.seq});return {};
 }
 if(variant==='held-flood'&&p==='/api/act'){
- if(body.do!=='archive_held_batch'||body.held.length!==256)throw Error('Unexpected batch archive');
+ if(body.do!=='archive_held_batch'||!body.held.length||body.held.length>256)throw Error('Unexpected batch archive');
  if(!fixture.archiveFailed){fixture.archiveFailed=true;throw Error('Synthetic archive failure');}
- fixture.overview.quarantine[0].detail_code='admission_failed';
- fixture.overview.quarantine.push({id:'f'.repeat(32),peer:'claimed/new',code:'invalid',detail_code:'',detail:'New arrival',at:'2026-10-05T11:00:00Z',can_archive:true});
- fixture.overview.quarantine=fixture.overview.quarantine.filter(q=>!body.held.some(r=>r.id===q.id&&r.reason===q.code&&r.detail_code===q.detail_code));
- return {note:'Archived 255 notices on this device. Changed or newer notices stay visible. Nothing was accepted or run.'};
+ fixture.batches.push(body.held.map(r=>r.id));
+ if(fixture.batches.length===1){
+  // Between batches one chosen copy changes cause and a new copy arrives:
+  // the later snapshot must not hide either.
+  const late=fixture.overview.quarantine.find(q=>q.id===(1).toString(16).padStart(32,'0'));late.detail_code='admission_failed';
+  fixture.overview.quarantine.push({id:'f'.repeat(32),peer:'aster/bezos',code:'invalid',detail_code:'participation_binding_mismatch',sender_verified:true,action:'update_sender',logical:'0'.repeat(32),size:2840,detail:'New arrival',at:'2026-10-05T11:00:00Z',can_archive:true});
+ }
+ const before=fixture.overview.quarantine.length;
+ fixture.overview.quarantine=fixture.overview.quarantine.filter(q=>!body.held.some(r=>r.id===q.id&&r.reason===q.code&&r.detail_code===(q.detail_code||'')));
+ return {note:'Archived '+(before-fixture.overview.quarantine.length)+' notices on this device. Changed or newer notices stay visible. Nothing was accepted or run.'};
 }
 if(variant==='heldback'&&p==='/api/act'){
  if(body.do==='archive_held_batch'){
@@ -650,16 +664,30 @@ if(process.env.AGENTNET_HELD_FLOOD_REGRESSION==='1'){
   await page.getByRole('navigation',{name:'Main',exact:true}).getByRole('button',{name:/^OKs/}).click();
   const held=page.getByRole('region',{name:'Held back',exact:true});await held.waitFor();
   await held.locator('summary').filter({hasText:'Chat sync needs attention'}).click();
-  assert.equal(await held.locator('li').count(),1,'300 repeats render one collapsed problem');
-  await held.getByText('300 held messages · unverified sender',{exact:true}).waitFor();
+  assert.equal(await held.locator('li').count(),3,'326 copies render one line per sending device and cause');
+  // Own verified device: named, records not envelopes, and who acts.
+  const own=held.locator('li').filter({hasText:'Your device Bezos re-sent 4 records 300 times'});
+  assert.match(await own.locator('p').first().innerText(),/^Your device Bezos re-sent 4 records 300 times · last .+ · update AgentNet on Bezos$/);
+  await held.locator('li').filter({hasText:'Your device Bezos re-sent 2 records 6 times'}).getByText(/· waiting for its invitation$/).waitFor();
+  const claimed=held.locator('li').filter({hasText:'A device claiming to be claimed/remote re-sent about 2 records 20 times'});
+  assert.doesNotMatch(await claimed.locator('p').first().innerText(),/update AgentNet/,'an unverified claim is asked nothing');
+  assert(!/unverified sender/.test(await held.innerText()),'own verified device not called unverified');
   await settle(page);{const shot=path.join(evidence,'comic-held-flood-group-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);}
-  await held.locator('summary').filter({hasText:'300 held messages'}).click();await held.locator('li li').first().waitFor();assert.equal(await held.locator('li li').count(),20,'expanded diagnostic records are bounded');
+  // Every copy stays inspectable, a bounded page at a time.
+  await own.locator('summary').filter({hasText:'Show copies (300)'}).click();await own.locator('li').first().waitFor();assert.equal(await own.locator('li').count(),20,'expanded copies are bounded');
+  assert.match(await own.locator('li').first().innerText(),/record 33333333/);
+  await own.getByRole('button',{name:'Show more copies (280)',exact:true}).waitFor();
   assert.equal(await held.getByRole('button',{name:'Archive notice',exact:true}).count(),0,'background failures do not become individual decision cards');
-  await held.locator('summary').filter({hasText:'300 held messages'}).click();
-  const archive=held.getByRole('button',{name:'Archive 256 notices',exact:true});await archive.click();
-  await page.waitForFunction(()=>fixture.archiveFailed);await archive.click();
-  await page.waitForFunction(()=>fixture.overview.quarantine.length===46);
-  assert.equal(await page.evaluate(()=>fixture.retainedHeld.length),300,'archive retains original ciphertext metadata');
+  await own.locator('summary').filter({hasText:'Show copies (300)'}).click();
+  await held.getByRole('button',{name:'Archive all 326 notices',exact:true}).waitFor(); // the whole count, not a silent 256
+  const archive=own.getByRole('button',{name:'Archive these 300 notices',exact:true});await archive.click();
+  await page.waitForFunction(()=>fixture.archiveFailed);
+  assert.equal(await page.evaluate(()=>fixture.overview.quarantine.length),326,'a failed batch hides nothing');
+  await archive.click();
+  await page.waitForFunction(()=>fixture.batches.length===2&&fixture.overview.quarantine.length===28);
+  assert.deepEqual(await page.evaluate(()=>fixture.batches.map(b=>b.length)),[256,44],'the group action covers the whole group in bounded exact snapshots');
+  await page.locator('#skin').evaluate(e=>new Promise((resolve,reject)=>{const t=Date.now(),tick=()=>/Archived 299 notices on this device/.test(e.shadowRoot.textContent)?resolve():Date.now()-t>4000?reject(Error('no archive count toast')):setTimeout(tick,50);tick();}));
+  assert.equal(await page.evaluate(()=>fixture.retainedHeld.length),326,'archive retains original ciphertext metadata');
   assert(await page.evaluate(()=>fixture.overview.quarantine.some(q=>q.detail_code==='admission_failed')&&fixture.overview.quarantine.some(q=>q.id==='f'.repeat(32))),'new and changed records survive stale snapshot');
   assert(!await page.evaluate(()=>fixture.requests.some(r=>r.body?.do&&r.body.do!=='archive_held_batch')),'bulk archive never admits/trusts/runs');
   const shot=path.join(evidence,'comic-held-flood-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
@@ -969,7 +997,7 @@ if(process.env.AGENTNET_HELDBACK_REGRESSION==='1'){
   assert.equal(await unknown.count(),1,'unknown old classification stays unverified');
   assert.equal(await unknown.getByRole('button',{name:'Archive notice'}).count(),0);
   if(skin==='comic'){
-   await held.getByRole('button',{name:'Archive 2 notices',exact:true}).click();
+   await held.getByRole('button',{name:'Archive all 2 notices',exact:true}).click();
    await page.waitForFunction(()=>fixture.overview.quarantine.length===2);
    assert.deepEqual(await page.evaluate(()=>fixture.overview.quarantine.map(q=>q.id).sort()),['legacy-unknown','proof-waiting']);
    assert.equal(await page.evaluate(()=>fixture.retainedHeld.length),4,'archiving diagnostics retains blocked messages');

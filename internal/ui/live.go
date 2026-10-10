@@ -171,7 +171,8 @@ func quarantineItems(q []client.Quarantined) []QuarantineItem {
 	out := make([]QuarantineItem, 0, len(q))
 	for _, x := range q {
 		detail, recovery := heldNoticeText(x.DetailCode, x.Reason)
-		out = append(out, QuarantineItem{CanArchive: x.Reason == "invalid" || x.Reason == "proof_pending", DetailCode: x.DetailCode, Detail: detail, Recovery: recovery, ID: x.ID, Peer: x.Sender, Code: holdCode(x.Reason), Reason: holdReason(x.Reason, x.Sender), At: x.ReceivedAt})
+		out = append(out, QuarantineItem{CanArchive: x.Reason == "invalid" || x.Reason == "proof_pending", DetailCode: x.DetailCode, Detail: detail, Recovery: recovery, ID: x.ID, Peer: x.Sender, Code: holdCode(x.Reason), Reason: holdReason(x.Reason, x.Sender), At: x.ReceivedAt,
+			SenderVerified: heldSenderVerified(x.Reason, x.DetailCode), Action: heldNoticeAction(x.DetailCode, x.Reason), Logical: x.Logical, Size: x.Size})
 	}
 	return out
 }

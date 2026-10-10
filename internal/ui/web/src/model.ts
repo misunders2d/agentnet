@@ -647,11 +647,63 @@ export const localInput = (d: Date) => new Date(d.getTime() - d.getTimezoneOffse
 
 // ---- held back (overview.quarantine) ----------------------------------------
 
-/** holdVerified: whether a held message's sender is known (QuarantineItem.code).
- *  One that didn't verify ("unverified", or a code this page doesn't know)
- *  only claims who sent it, so it is never shown as that person. */
-export const holdVerified = (code: string) =>
-  ["key_changed", "proof_pending", "identity_conflict", "conflicting_duplicate"].includes(code);
+/** holdVerified: whether a held message's sender is known: it opened under
+ *  that device's pinned key before it was held (QuarantineItem.sender_verified;
+ *  an invalid copy too, when a later check refused it), or its code says so.
+ *  One that didn't verify ("unverified", a cause recorded before it opened,
+ *  or none) only claims who sent it, so it is never shown as that person. */
+export const holdVerified = (q: Pick<T.QuarantineItem, "code" | "sender_verified">) =>
+  !!q.sender_verified || ["key_changed", "proof_pending", "identity_conflict", "conflicting_duplicate"].includes(q.code || "");
+
+/** heldSender names the device a held copy came from: "Your device Bezos",
+ *  "Brin’s Desktop"; an unverified one only claims an address. */
+export function heldSender(q: T.QuarantineItem, o: T.Overview | null): string {
+  if (!holdVerified(q)) return "A device claiming to be " + (q.peer || "unknown");
+  const p = personOf(q.peer, o), device = niceDevice(q.peer) || "a device";
+  return isMine(q.peer, o) ? "Your device " + device : p ? personName(p) + "’s " + device : device;
+}
+
+/** heldCount counts held copies and the records they carry: copies of one
+ *  record share its logical key (QuarantineItem.logical). Copies held before
+ *  keys were kept are matched by envelope size, so the count is then only
+ *  an estimate; with neither, how many records they carry is unknown. */
+export function heldCount(rows: T.QuarantineItem[]): { copies: number; records?: number; estimate: boolean } {
+  const bySize = new Map<number, string>(), keys = new Set<string>();
+  for (const q of rows) if (q.logical && q.size) bySize.set(q.size, q.logical);
+  let estimate = false, unknown = false;
+  for (const q of rows) {
+    if (q.logical) keys.add(q.logical);
+    else if (q.size) { estimate = true; keys.add(bySize.get(q.size) || "size:" + q.size); }
+    else unknown = true;
+  }
+  return { copies: rows.length, records: unknown ? undefined : keys.size, estimate };
+}
+
+/** heldAction is who can act on a held group's cause (QuarantineItem.action),
+ *  as words for its status line; a device that only claims an address is
+ *  never asked to do anything. */
+export function heldAction(q: T.QuarantineItem, o: T.Overview | null): string {
+  switch (q.action) {
+    case "update_sender": {
+      if (!holdVerified(q)) return "";
+      const p = personOf(q.peer, o), device = niceDevice(q.peer) || "the sending device";
+      return isMine(q.peer, o) || !p ? "update AgentNet on " + device : "ask " + personName(p) + " to update AgentNet on " + device;
+    }
+    case "wait_invitation": return "waiting for its invitation";
+    case "wait_context": return "waiting for context";
+    default: return "";
+  }
+}
+
+/** heldStatus is one held group (one sending device, one cause) in a line:
+ *  "Your device Bezos re-sent 4 records 866 times". */
+export function heldStatus(rows: T.QuarantineItem[], o: T.Overview | null): string {
+  const { copies, records, estimate } = heldCount(rows), who = heldSender(rows[0], o);
+  const n = (k: number, one: string, many: string) => k + " " + (k === 1 ? one : many);
+  if (records === undefined) return who + " · " + n(copies, "held copy", "held copies");
+  const about = estimate ? "about " : "";
+  return copies > records ? who + " re-sent " + about + n(records, "record", "records") + " " + n(copies, "time", "times") : who + " sent " + about + n(records, "record", "records");
+}
 
 /** holdSentence says why a received message is held back (QuarantineItem.code),
  *  naming its sender; its content is never shown. browser: this device can't trust keys. */

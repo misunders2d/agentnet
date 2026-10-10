@@ -1,0 +1,138 @@
+[
+ {
+  "inner": {
+   "v": 2,
+   "id": "11111111111111111111111111111111",
+   "from": "admin/bezos",
+   "to": "admin/zenbook",
+   "conv": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+   "lid": "22222222222222222222222222222222",
+   "kind": "message",
+   "body": "SECRET"
+  },
+  "fp": "abababababababababababababababababababababababababababababababab",
+  "key": "947d127bfd3879a4f2f94508e32d1c45"
+ },
+ {
+  "inner": {
+   "v": 3,
+   "id": "33333333333333333333333333333333",
+   "from": "admin/bezos",
+   "to": "admin/zenbook",
+   "conv": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+   "sub": "revision",
+   "kind": "message",
+   "body": "SECRET"
+  },
+  "fp": "abababababababababababababababababababababababababababababababab",
+  "key": "4d19d610b2ca95ce7496aa1cd76f8572"
+ },
+ {
+  "inner": {
+   "v": 1,
+   "id": "44444444444444444444444444444444",
+   "from": "bob/desk",
+   "to": "admin/zenbook",
+   "kind": "message",
+   "body": "SECRET"
+  },
+  "fp": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+  "key": "e64ceb073596840ebaeae97f8037d64b"
+ },
+ {
+  "inner": {
+   "v": 2,
+   "id": "55555555555555555555555555555555",
+   "from": "admin/bezos",
+   "to": "admin/zenbook",
+   "conv": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+   "lid": "66666666666666666666666666666666",
+   "sub": "history",
+   "kind": "message",
+   "replica": true,
+   "body": "{\"v\":1,\"ts\":1,\"kind\":\"message\",\"body\":\"SECRET\",\"at\":2,\"from\":\"admin/phone\",\"from_key\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\",\"id\":\"77777777777777777777777777777777\",\"lid\":\"88888888888888888888888888888888\",\"sub\":\"event\"}"
+  },
+  "fp": "abababababababababababababababababababababababababababababababab",
+  "key": "62adcbe303c79836748546abf7b0bbb8"
+ },
+ {
+  "inner": {
+   "v": 2,
+   "id": "99999999999999999999999999999999",
+   "from": "admin/linux-laptop",
+   "to": "admin/zenbook",
+   "conv": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+   "lid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "sub": "history",
+   "kind": "message",
+   "replica": true,
+   "body": "{\"v\":1,\"ts\":1,\"kind\":\"message\",\"body\":\"SECRET\",\"at\":2,\"from\":\"admin/phone\",\"from_key\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\",\"id\":\"77777777777777777777777777777777\",\"lid\":\"88888888888888888888888888888888\",\"sub\":\"event\"}"
+  },
+  "fp": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+  "key": "62adcbe303c79836748546abf7b0bbb8"
+ },
+ {
+  "inner": {
+   "v": 2,
+   "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "from": "admin/bezos",
+   "to": "admin/zenbook",
+   "conv": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+   "lid": "cccccccccccccccccccccccccccccccc",
+   "sub": "history",
+   "kind": "message",
+   "replica": true,
+   "body": "{\"v\":1,\"ts\":1,\"kind\":\"message\",\"body\":\"SECRET\",\"at\":2,\"from\":\"admin/phone\",\"from_key\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\",\"id\":\"dddddddddddddddddddddddddddddddd\"}"
+  },
+  "fp": "abababababababababababababababababababababababababababababababab",
+  "key": "cf07fe9d0f4cb4f6208fee875650180d"
+ },
+ {
+  "inner": {
+   "v": 2,
+   "id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+   "from": "admin/bezos",
+   "to": "admin/zenbook",
+   "conv": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+   "lid": "ffffffffffffffffffffffffffffffff",
+   "sub": "history",
+   "kind": "message",
+   "replica": true,
+   "body": "not json"
+  },
+  "fp": "abababababababababababababababababababababababababababababababab",
+  "key": "bf7d488ca4520b2ccb6ee595a74eedd7"
+ },
+ {
+  "inner": {
+   "v": 2,
+   "id": "00000000000000000000000000000000",
+   "from": "admin/bezos",
+   "to": "admin/zenbook",
+   "conv": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+   "lid": "11111111111111111111111111111111",
+   "sub": "history",
+   "kind": "message",
+   "replica": true,
+   "body": "{\"from\":5,\"id\":\"77777777777777777777777777777777\"}"
+  },
+  "fp": "abababababababababababababababababababababababababababababababab",
+  "key": "8a7f79a83c3b803d4419dba053b0f5c2"
+ },
+ {
+  "inner": {
+   "v": 2,
+   "id": "22222222222222222222222222222222",
+   "from": "admin/bezos",
+   "to": "admin/zenbook",
+   "conv": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+   "lid": "33333333333333333333333333333333",
+   "sub": "history",
+   "kind": "message",
+   "replica": true,
+   "body": "[1,2]"
+  },
+  "fp": "abababababababababababababababababababababababababababababababab",
+  "key": "09f655780dadc54b4f57bf84c9bdad69"
+ }
+]

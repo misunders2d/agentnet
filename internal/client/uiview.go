@@ -449,12 +449,17 @@ type Quarantined struct {
 	DetailCode string    `json:"detail_code,omitempty"`
 	Reason     string    `json:"reason"` // "key_changed" (waits for trust) or "invalid"
 	ReceivedAt time.Time `json:"received_at"`
+	// Logical names the record the copy carries (heldLogicalKey); "" when it
+	// was held before it opened, or before this was recorded. Size is the
+	// retained envelope's length: older copies are counted by it instead.
+	Logical string `json:"logical,omitempty"`
+	Size    int    `json:"size,omitempty"`
 }
 
 // Quarantine lists held-back envelopes, newest first. Their content is not
 // shown: it did not verify, or the sender's key changed.
 func (a *Agent) Quarantine() ([]Quarantined, error) {
-	rows, err := a.store.db.Query(`SELECT id, sender, reason, received_at, detail_code FROM quarantine WHERE notice_archived=0 ORDER BY received_at DESC, id`)
+	rows, err := a.store.db.Query(`SELECT id, sender, reason, received_at, detail_code, logical, length(envelope) FROM quarantine WHERE notice_archived=0 ORDER BY received_at DESC, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -463,7 +468,7 @@ func (a *Agent) Quarantine() ([]Quarantined, error) {
 	for rows.Next() {
 		var q Quarantined
 		var at int64
-		if err := rows.Scan(&q.ID, &q.Sender, &q.Reason, &at, &q.DetailCode); err != nil {
+		if err := rows.Scan(&q.ID, &q.Sender, &q.Reason, &at, &q.DetailCode, &q.Logical, &q.Size); err != nil {
 			return nil, err
 		}
 		q.ReceivedAt = time.Unix(at, 0)

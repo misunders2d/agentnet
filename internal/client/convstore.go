@@ -461,10 +461,21 @@ func (s *store) holdAs(env envelope.Envelope, reason string) error {
 }
 
 func (s *store) holdAsDiagnostic(env envelope.Envelope, reason, why string) error {
+	return s.holdOpened(env, reason, why, "")
+}
+
+// holdOpened holds env, which opened under its sender's key, with the
+// logical record it carries (heldLogicalKey). A re-hold that does not know
+// it keeps the one recorded; a proof retry records it for older rows. A
+// hidden notice stays hidden while the copy keeps waiting for proof, even
+// on another precise cause (all were one code before); a changed refusal
+// or any other reason shows it again.
+func (s *store) holdOpened(env envelope.Envelope, reason, why, logical string) error {
 	raw, _ := json.Marshal(env)
-	_, err := s.db.Exec(`INSERT INTO quarantine(id, sender, reason, envelope, received_at, detail_code) VALUES(?, ?, ?, ?, ?, ?)
+	_, err := s.db.Exec(`INSERT INTO quarantine(id, sender, reason, envelope, received_at, detail_code, logical) VALUES(?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET reason = excluded.reason, detail_code = excluded.detail_code,
-		notice_archived = CASE WHEN excluded.reason IN ('invalid','proof_pending') AND quarantine.reason=excluded.reason AND quarantine.detail_code=excluded.detail_code THEN quarantine.notice_archived ELSE 0 END`, env.ID, env.From, reason, string(raw), time.Now().Unix(), heldFailureCode(reason, why))
+		logical = CASE WHEN excluded.logical<>'' THEN excluded.logical ELSE quarantine.logical END,
+		notice_archived = CASE WHEN excluded.reason IN ('invalid','proof_pending') AND quarantine.reason=excluded.reason AND (excluded.reason='proof_pending' OR quarantine.detail_code=excluded.detail_code) THEN quarantine.notice_archived ELSE 0 END`, env.ID, env.From, reason, string(raw), time.Now().Unix(), heldFailureCode(reason, why), logical)
 	return s.done(err)
 }
 
