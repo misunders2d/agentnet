@@ -5074,7 +5074,15 @@ export class Engine {
 
   async removeReceivePending(data, env, ops, checks) {
     const key = "receive-pending/" + env.id, row = await this.store.get("kv", key);
-    if (row?.envelope === data && row.address === this.address && row.fingerprint === this.fp) {
+    if (row?.id === env.id && row.envelope === data && row.address === this.address && row.fingerprint === this.fp) {
+      // Proof can complete after a later useful turn. Preserve this exact
+      // original's first local arrival, without restamping historical copies.
+      const original=ops.find(o=>o.s==="inbox"&&o.k===env.id&&o.v?.id===env.id&&o.v.from===env.from&&!o.v.control&&!o.v.sub&&!o.v.history&&!o.v.replica&&!o.v.device_history&&!o.v.excerpt_pid);
+      if(original&&Number.isSafeInteger(row.at)&&row.at>0&&row.at<=8640000000000000) {
+        const previous=await this.store.get("inbox",env.id);
+        checks.push({s:"inbox",k:env.id,v:previous});
+        if(!previous)original.v.at=row.at;
+      }
       checks.push({s:"kv",k:key,v:row});ops.push({s:"kv",k:key,v:undefined});
     }
   }

@@ -10,6 +10,7 @@ This record starts with v0.8.1; earlier releases remain on the
 
 - Keep fresh browser messages and heartbeat processing moving while older messages wait for missing identity, membership or file evidence. Retain the exact encrypted input for the existing bounded recovery path, recheck current authority before committing, and acknowledge only admitted or explicitly held messages.
 - Retain recovery wakes that arrive during an active pass and drain responsive encrypted messages in small pages, including after restart, without waiting for another heartbeat. Stop when evidence is unavailable instead of polling.
+- Preserve an ordinary message's first receive time when delayed proof finishes, so recovery does not move it after later arrivals. Historical timestamps and control records keep their existing semantics.
 - Open saved chats before restoring additional workspaces. Bound and cancel workspace identity and connection-policy checks without changing realm, consent or origin checks.
 - Read only display-related records when building the browser's chat overview, model reports and notification senders, avoiding repeated copies of unrelated encrypted recovery data.
 - Keep an acknowledged outbox copy from reverting to queued when an older compatibility check finishes late. In Comic, use the exact verified answer consistently for request status and its reply link, and remove the contradictory Sending clock without inventing delivery receipts for other copies.

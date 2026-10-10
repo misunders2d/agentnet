@@ -164,6 +164,56 @@ for(const total of [2,32,102])for(const unavailable of [false,true]){
   checks+=unavailable?6:2;
  }finally{release();await e.close();}
 }
+// A verified fresh turn can appear while an earlier exact carrier waits for
+// proof. Admission completion must preserve that carrier's original arrival.
+for(const restart of [false,true]){
+ const st=await fixtureStore();let clock=10000,release,entered;
+ const gate=new Promise(r=>release=r),started=new Promise(r=>entered=r);
+ const fetch=async url=>{const p=new URL(url).pathname;
+  if(p==='/v1/agents/'+old.address+'/profile'){entered();await gate;return new Response(JSON.stringify({person:JSON.parse(wire.rosterJSON(old.roster))}));}
+  if(p==='/v1/persons/'+old.roster.person+'/chain')return new Response(JSON.stringify({records:[JSON.parse(wire.rosterJSON(old.roster))],more:false}));
+  throw Error('Unexpected chronology route '+p);
+ };
+ let e=new Engine({store:st,base:'https://isolated.invalid',fetch,now:()=>clock});Object.assign(e,phone);e.flushReceipts=async()=>{};e.me=await e.personRecord([phone.roster],'self',null);
+ await st.write([{s:'kv',k:'identity',v:{keys:phone.keys,address:phone.address,fingerprint:phone.fp}},{s:'kv',k:'person',v:e.me},{s:'pins',k:old.address,v:pin(old)}]);
+ const root=await wire.newRoot(old.keys,{person:old.roster.person,roster:old.hash,address:old.address,fingerprint:old.fp},{person:phone.roster.person,roster:phone.hash}),conv=await wire.rootID(root);
+ const signed=async(kind,body)=>wire.seal({v:2,id:wire.newID(),from:old.address,to:phone.address,ts:7,kind,body,conv,root:wire.rootJSON(root),lid:wire.newID()},old.keys,phone.pub);
+ const first=await signed('message','earlier retained original'),second=await signed('question','later useful question'),id=wire.parseEnvelope(first).id,secondID=wire.parseEnvelope(second).id;
+ try{
+  if(restart){e.retryPendingReceives=()=>Promise.resolve();await e.dispatch('message',first);await e.close();e=new Engine({store:st,base:'https://isolated.invalid',fetch,now:()=>clock});await e.load();e.flushReceipts=async()=>{};e.retryPendingReceives();}
+  else await e.dispatch('message',first);
+  await started;assert.equal((await st.get('kv','receive-pending/'+id)).at,10000);
+  const peer=await e.personRecord([old.roster],'pinned',null);await st.write([{s:'persons',k:peer.person,v:peer}]);clock=20000;
+  await e.dispatch('message',second);assert.equal((await st.get('inbox',secondID)).kind,'question','fresh signed turn visible before slow original proof');assert.equal(await st.get('receipts',id),undefined);
+  // A concurrent local roster-metadata write forces normal snapshot reverify;
+  // its authority and keys stay identical, as a real startup/profile race can.
+  const write=st.write;let conflict=true;
+  st.write=async(ops,snapshots)=>{if(conflict&&ops.some(o=>o.s==='inbox'&&o.k===id)){conflict=false;const own=await st.get('kv','person');await write([{s:'kv',k:'person',v:{...own,fixtureRevision:1}}]);}return write(ops,snapshots);};
+  clock=30000;release();await e.receiveRetryRun;
+  const original=await st.get('inbox',id);assert.equal(original.at,10000,'exact original retains first local arrival');assert.equal(original.ts,7,'signed source timestamp unchanged');
+  const shown=await e.convMessages(conv,await st.all('inbox'),await st.all('outbox'));assert.deepEqual(shown.map(r=>r.kind),['message','question'],'display order follows first arrival, not proof completion');
+  assert.equal((await st.get('receipts',id)).state,'delivered');assert.equal(await st.get('kv','receive-pending/'+id),undefined);checks+=8;
+ }finally{release();await e.close();}
+}
+// Pending removal anchors only a new visible original; source-time copies,
+// controls and nonmatching or malformed local pending records keep their time.
+for(const mode of ['control','history','replica','device-history','excerpt','existing','invalid-time','wrong-recipient','different-carrier','pending-CAS']){
+ const st=await fixtureStore(),e=new Engine({store:st,base:'https://isolated.invalid',fetch:async()=>{throw Error('Unexpected timestamp network');}});Object.assign(e,phone);
+ const raw=await wire.seal({id:wire.newID(),from:fresh.address,to:phone.address,ts:7,kind:'message',body:'retained source-time fixture'},fresh.keys,phone.pub),env=wire.parseEnvelope(raw),key='receive-pending/'+env.id;
+ const row={id:env.id,address:phone.address,fingerprint:phone.fp,envelope:raw,at:10000};
+ if(mode==='invalid-time')row.at=-1;if(mode==='wrong-recipient')row.fingerprint=old.fp;if(mode==='different-carrier')row.envelope=raw+' ';
+ const source={id:env.id,from:env.from,kind:'message',body:'retained source-time fixture',ts:7,at:7000};
+ if(mode==='control')source.control=true;if(mode==='history')source.history=true;if(mode==='replica')source.replica=true;if(mode==='device-history')source.device_history=true;if(mode==='excerpt')source.sub='excerpt';
+ await st.write([{s:'kv',k:key,v:row},...(mode==='existing'?[{s:'inbox',k:env.id,v:source}]:[])]);
+ const ops=[{s:'inbox',k:env.id,v:{...source}}],snapshots=[];await e.removeReceivePending(raw,env,ops,snapshots);
+ if(mode==='pending-CAS'){
+  await st.write([{s:'kv',k:key,v:{...row,at:20000}}]);await assert.rejects(()=>st.write(ops,snapshots),/storage changed during verification/);assert.equal(await st.get('inbox',env.id),undefined);checks+=2;
+ }else{
+  await st.write(ops,snapshots);assert.equal((await st.get('inbox',env.id)).at,7000,mode+' preserves source/existing timestamp');assert.equal((await st.get('inbox',env.id)).ts,7);
+  if(['wrong-recipient','different-carrier'].includes(mode))assert.deepEqual(await st.get('kv',key),row,'nonmatching retained carrier is untouched');checks+=['wrong-recipient','different-carrier'].includes(mode)?3:2;
+ }
+ await e.close();
+}
 const result={ok:true,checks,storage:typeof window==='undefined'?'memory unit only':'IndexedDB'};
 for(const {store,name} of stores){store.close();if(typeof window!=='undefined')await new Promise((resolve,reject)=>{const r=indexedDB.deleteDatabase(name);r.onsuccess=resolve;r.onerror=()=>reject(r.error);});}
 if(typeof window!=='undefined')window.receivePriorityResult=result;
