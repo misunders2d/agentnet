@@ -99,6 +99,20 @@ program, `agentnet`, that is both the laptop client and the Hub.
   Platform-specific and opt-in skips must not be reported as executed tests.
   Add a focused regression for every bug. Tests that need a real model or
   infrastructure are opt-in (`AGENTNET_LIVE=claude`, `scripts/hub-container-test.sh`).
+- **Mixed-version gate, required before every release** ("older apps must not
+  impede others"): `TestMixedVersion` (itest/mixedversion_test.go) runs real
+  programs: a relay built from this source as the next release (latest-only
+  policy on), devices on this source, and devices on the newest published
+  release tag below HEAD (v0.8.16 for v0.8.17), built from that tag. It checks
+  that suspension of outdated devices leaves the others' DMs and groups
+  undisturbed and nothing loops, and that an update by hand delivers the
+  backlog. Run it locally with `git fetch --tags` then
+  `go test ./itest -run TestMixedVersion -v -count=1` (about a minute; the tag
+  build is cached in the user cache directory, `AGENTNET_COMPAT_CACHE`
+  overrides; `AGENTNET_MIXED_TAG=vX.Y.Z` tries another published release).
+  Without the tag it skips, and a skip is not a pass. CI's Linux native job
+  checks out full history with tags and sets `AGENTNET_REQUIRE_COMPAT=1`, which
+  makes a missing tag a failure.
 - Claims must match evidence: cross-compiling is not running on that OS;
   a local container test is not a platform deployment.
 - Schema changes are new SQL steps appended in the owning store; never edit

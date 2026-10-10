@@ -3,7 +3,6 @@ package itest
 import (
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -170,9 +169,8 @@ func TestCLIMembersCompat(t *testing.T) {
 	})
 }
 
-// buildCompatCLI builds the released version named by AGENTNET_COMPAT_TAG
-// (a tag or commit, e.g. v0.2.1) from a local repository
-// (AGENTNET_COMPAT_REPO, default the one this test is in), to run in c's
+// buildCompatCLI is the released version named by AGENTNET_COMPAT_TAG (a
+// tag or commit, e.g. v0.2.1), built by buildTagCLI, to run in c's
 // directory; without the tag the test is skipped.
 func buildCompatCLI(t *testing.T, c *cli) *cli {
 	t.Helper()
@@ -180,27 +178,7 @@ func buildCompatCLI(t *testing.T, c *cli) *cli {
 	if tag == "" {
 		t.Skip("set AGENTNET_COMPAT_TAG to a released tag, e.g. v0.2.1")
 	}
-	repo := os.Getenv("AGENTNET_COMPAT_REPO")
-	if repo == "" {
-		repo = ".."
-	}
-	src := t.TempDir()
-	tarball := filepath.Join(t.TempDir(), "src.tar")
-	for _, cmd := range []*exec.Cmd{
-		exec.Command("git", "-C", repo, "archive", "-o", tarball, tag),
-		exec.Command("tar", "-x", "-f", tarball, "-C", src),
-	} {
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("extract %s: %v\n%s", tag, err, out)
-		}
-	}
-	oldBin := filepath.Join(c.dir, "agentnet-"+tag)
-	build := exec.Command("go", "build", "-o", oldBin, "./cmd/agentnet")
-	build.Dir = src
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build %s: %v\n%s", tag, err, out)
-	}
-	old := &cli{t: t, bin: oldBin, dir: c.dir}
+	old := &cli{t: t, bin: buildTagCLI(t, tag), dir: c.dir}
 	t.Logf("%s reports %q", tag, old.run("version"))
 	return old
 }

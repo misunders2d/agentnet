@@ -40,7 +40,12 @@ jobs:
         os: ${{ fromJSON(inputs.native_os || '["ubuntu-latest","macos-latest","windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
+      # Linux fetches the release tags: the mixed-version gate
+      # (itest TestMixedVersion) builds the newest published release from
+      # its tag and fails there, rather than skipping, without one.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: ${{ startsWith(matrix.os, 'ubuntu') && '0' || '1' }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -58,6 +63,7 @@ jobs:
           AGENTNET_TEST_PACKAGES: ${{ inputs.test_packages || './...' }}
           AGENTNET_TEST_RUN: ${{ inputs.test_run || '.' }}
           AGENTNET_TEST_COUNT: ${{ inputs.test_count || '1' }}
+          AGENTNET_REQUIRE_COMPAT: ${{ startsWith(matrix.os, 'ubuntu') && '1' || '' }}
         run: |
           read -r -a packages <<< "$AGENTNET_TEST_PACKAGES"
           go test -count="$AGENTNET_TEST_COUNT" -timeout 1800s -run "$AGENTNET_TEST_RUN" "${packages[@]}"
