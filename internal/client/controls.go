@@ -938,7 +938,7 @@ func (a *Agent) admitControl(ctx context.Context, env envelope.Envelope, in enve
 		switch {
 		case errors.Is(err, errPersonConflict):
 			return hold(reasonConflict, err.Error())
-		case errors.Is(err, ErrNoPerson), errors.Is(err, errPersonRecord), errors.As(err, &he) && !retryable(err):
+		case errors.Is(err, ErrNoPerson), errors.Is(err, errPersonRecord), errors.As(err, &he) && !transient(err):
 			return hold(reasonProof, err.Error())
 		}
 		return err

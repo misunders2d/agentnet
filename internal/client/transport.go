@@ -65,7 +65,8 @@ func retryable(err error) bool {
 
 // transient reports whether err is a typed failure that receiving the same
 // message again may get past: the Hub or the network out of reach or busy
-// (no answer, 5xx, 429), a cancelled or timed-out request, or a database
+// (no answer, 5xx, 429), the Hub refusing this build until it is updated
+// (refusedUntilUpdate), a cancelled or timed-out request, or a database
 // another process held. Anything else (a 4xx answer, a failed check, a
 // record this program cannot read) fails the same way every time, so it
 // must never leave a message unacknowledged at the head of the push stream.
@@ -75,13 +76,22 @@ func transient(err error) bool {
 	}
 	var he *HubError
 	if errors.As(err, &he) {
-		return he.Status >= 500 || he.Status == http.StatusTooManyRequests
+		return he.Status >= 500 || he.Status == http.StatusTooManyRequests || refusedUntilUpdate(err)
 	}
 	var ne net.Error
 	var ue *url.Error
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
 		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
 		errors.As(err, &ne) || errors.As(err, &ue) || sqlitedb.Busy(err)
+}
+
+// refusedUntilUpdate reports whether the Hub refused the request because
+// this build must be updated first (HTTP 426 update_required). It is no
+// failure of the message being received: the Hub keeps it in custody and
+// delivers it again after the update, so it is never held or acknowledged.
+func refusedUntilUpdate(err error) bool {
+	var he *HubError
+	return errors.As(err, &he) && he.Status == http.StatusUpgradeRequired
 }
 
 // requestTimeout bounds every ordinary Hub request and the wait for the push

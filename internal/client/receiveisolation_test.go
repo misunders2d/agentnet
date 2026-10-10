@@ -85,6 +85,7 @@ func TestTransientIsTyped(t *testing.T) {
 		{&HubError{Status: 404}, false},
 		{&HubError{Status: 503}, true},
 		{&HubError{Status: http.StatusTooManyRequests}, true},
+		{&HubError{Status: http.StatusUpgradeRequired, Msg: "update_required"}, true},
 		{&url.Error{Op: "Get", URL: "https://hub", Err: errInjected}, true},
 		{fmt.Errorf("asking: %w", context.DeadlineExceeded), true},
 		{errors.Join(errPermanent, &HubError{Status: 503}), false},
@@ -164,6 +165,72 @@ func TestTransientAdmissionFailureIsSetAside(t *testing.T) {
 	if !inboxHas(t, carol, env.ID) {
 		t.Fatal("a set-aside message was not admitted once the Hub answered")
 	}
+}
+
+// updateRequiredBody is the latest-only Hub's refusal of an outdated build.
+const updateRequiredBody = `{"error":"update_required","latest":"v0.8.18"}`
+
+// refusedEveryTime admits env at a again and again, more often than
+// receiveAttempts, while the Hub refuses this build until it updates: every
+// try returns the refusal and nothing is stored, neither a hold nor a receipt.
+func refusedEveryTime(t *testing.T, a *Agent, env envelope.Envelope) {
+	t.Helper()
+	for i := range receiveAttempts + 1 {
+		if err := a.storeReceived(tctx(t), env); !refusedUntilUpdate(err) {
+			t.Fatalf("try %d: %v", i+1, err)
+		}
+	}
+	if seen, err := a.store.seen(env.ID); err != nil || seen {
+		t.Fatalf("stored while refused (held as %q): %v", heldReason(t, a, env.ID), err)
+	}
+	if s, err := a.store.disposition(env.ID); err == nil {
+		t.Fatalf("receipt %q while refused", s)
+	}
+}
+
+// A device the latest-only Hub refuses with 426 update_required keeps the
+// messages it was admitting in the Hub's custody: they are delivered after
+// it updates. Before, the refusal was taken for a failure of the message: a
+// version 1 message was held as invalid with a quarantined receipt (lost),
+// a conversation message held with a false quarantined receipt.
+func TestUpdateRequiredDuringAdmissionKeepsCustody(t *testing.T) {
+	t.Run("granted question", func(t *testing.T) {
+		w, r := p7Person(t)
+		if err := w.bob.Approve(r.Person); err != nil {
+			t.Fatal(err)
+		}
+		answer := answerHub(w.bob, http.StatusUpgradeRequired, updateRequiredBody)
+		answer("/chain")
+		env := sealTo(t, w.alice, w.bob, envelope.Inner{Kind: envelope.KindQuestion, Body: "q"})
+		refusedEveryTime(t, w.bob, env)
+		answer("") // updated
+		if err := w.bob.storeReceived(tctx(t), env); err != nil || !inboxHas(t, w.bob, env.ID) {
+			t.Fatalf("not received after the update: %v (held as %q)", err, heldReason(t, w.bob, env.ID))
+		}
+	})
+	t.Run("unpinned sender", func(t *testing.T) {
+		w := newWorld(t, "")
+		env := sealTo(t, w.alice, w.bob, envelope.Inner{Kind: envelope.KindMessage, Body: "hello"})
+		answer := answerHub(w.bob, http.StatusUpgradeRequired, updateRequiredBody)
+		answer("/v1/agents/")
+		refusedEveryTime(t, w.bob, env)
+		answer("")
+		if err := w.bob.storeReceived(tctx(t), env); err != nil || !inboxHas(t, w.bob, env.ID) {
+			t.Fatalf("not received after the update: %v (held as %q)", err, heldReason(t, w.bob, env.ID))
+		}
+	})
+	t.Run("conversation", func(t *testing.T) {
+		w, carol, turn := dmToFresh(t)
+		answer := answerHub(carol, http.StatusUpgradeRequired, updateRequiredBody)
+		_, name, _ := protocol.SplitAddress(w.bob.Address)
+		answer("/" + name + "/profile")
+		env := turn("while refused")
+		refusedEveryTime(t, carol, env)
+		answer("")
+		if err := carol.storeReceived(tctx(t), env); err != nil || !inboxHas(t, carol, env.ID) {
+			t.Fatalf("not received after the update: %v (held as %q)", err, heldReason(t, carol, env.ID))
+		}
+	})
 }
 
 // FLOOD-5: a DM history copy whose topic event this version does not know

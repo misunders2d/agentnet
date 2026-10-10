@@ -443,13 +443,18 @@ func (f *receiveFailures) clear(id string) {
 // quarantined receipt instead: a conversation message for pending proof,
 // looked at again with new evidence (retryProof), any other as invalid. A
 // message that can never be admitted must not stay first in the queue: the
-// device would receive nothing from anyone after it.
+// device would receive nothing from anyone after it. The Hub refusing this
+// build until it is updated is never counted against a message: it stays in
+// custody (the stream of a refused device pushes nothing) until the update.
 func (a *Agent) admissionFailed(ctx context.Context, env envelope.Envelope, err error) error {
 	if ctx.Err() != nil {
 		return err // stopping: not this message's failure
 	}
 	if seen, e := a.store.seen(env.ID); e != nil || seen {
 		return e // its disposition is stored (a hold, or a commit before the error); its receipt follows
+	}
+	if refusedUntilUpdate(err) {
+		return err // it waits in the Hub's custody for the update; never counted against it
 	}
 	conv := false
 	if sender, _, found, e := a.store.peer(env.From); e == nil && found {
@@ -505,7 +510,7 @@ func (a *Agent) verifyAndStore(ctx context.Context, env envelope.Envelope) error
 	if !found {
 		e, err := a.directory(ctx, env.From)
 		if err != nil {
-			if retryable(err) {
+			if retryable(err) || transient(err) {
 				return err
 			}
 			return a.holdDiagnostic(env, reasonInvalid, "sender key unavailable")
@@ -583,7 +588,7 @@ func (a *Agent) verifyAndStore(ctx context.Context, env envelope.Envelope) error
 	// the user decides to trust the new keys. If the directory cannot be
 	// asked right now, retry later rather than calling the message invalid.
 	e, derr := a.directory(ctx, env.From)
-	if derr != nil && retryable(derr) {
+	if derr != nil && (retryable(derr) || transient(derr)) {
 		return derr
 	}
 	if derr == nil && !sameKeys(sender, e.Public) {

@@ -1278,14 +1278,15 @@ func (a *Agent) retryProof(ctx context.Context) (more bool) {
 
 // holdForPerson holds a message for a person problem: a frozen person as a
 // conflict; a person record missing, unverifiable or refused by the Hub (a
-// 4xx answer) as pending proof. A failure to ask the Hub is returned
+// 4xx answer) as pending proof. A transient failure to ask the Hub (out of
+// reach, busy, or refusing this build until it is updated) is returned
 // instead, so the message is delivered again.
 func holdForPerson(err error, hold func(string, string) error) error {
 	var he *HubError
 	switch {
 	case errors.Is(err, errPersonConflict):
 		return hold(reasonConflict, err.Error())
-	case errors.Is(err, ErrNoPerson), errors.Is(err, errPersonRecord), errors.As(err, &he) && !retryable(err):
+	case errors.Is(err, ErrNoPerson), errors.Is(err, errPersonRecord), errors.As(err, &he) && !transient(err):
 		return hold(reasonProof, err.Error())
 	}
 	return err
