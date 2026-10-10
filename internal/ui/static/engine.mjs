@@ -373,6 +373,9 @@ export const heldDiagnosticCode = why => {
   "only the sender's person edits or deletes a message": "control_target_person_mismatch",
   "Only the current sender person edits or retracts a group message.": "control_target_person_mismatch",
   "Historical group control differs from exact author person.": "control_target_person_mismatch",
+  "the target's sender key is no member's (yet)": "control_target_unknown_key",
+  "Group control target key is no member's (yet).": "group_context_unavailable",
+  "Historical group control target key is no member's (yet).": "group_context_unavailable",
   "local recipient identity changed": "recipient_identity_changed",
   "named participation has no unambiguous verified invitation": "participation_invite_unresolved",
   "outside traffic has no unambiguous invitation proof yet": "participation_invite_unresolved",
@@ -2736,11 +2739,15 @@ export class Engine {
       return p; // a step that does not follow proves nothing here
     }
     const next = await this.personRecord([await wire.parseRoster(p.json), ...steps.slice(1)], p.state, p);
+    // A newer roster, once pinned, is membership evidence: what waits for a
+    // key no member's yet (an edit of a device's message added since) looks
+    // again.
     if (p.state === "self") {
       this.me = { ...next, published: true };
       await put(this.store, "kv", "person", this.me);
       await this.pinDevices(this.me);
       this.changed();
+      this.retryHeld().catch(() => {});
       this.syncRoots().catch(()=>{});this.syncReadMarks().catch(()=>{});this.syncTopicTitles().catch(()=>{});this.syncInvitations().catch(()=>{});
       this.runHistory().catch(()=>{});
       return this.me;
@@ -2748,6 +2755,7 @@ export class Engine {
     await put(this.store, "persons", next.person, next);
     await this.pinDevices(next);
     this.changed();
+    this.retryHeld().catch(() => {});
     this.runHistory().catch(()=>{}); // newly verified host/member proof may unblock a deferred original
     return next;
   }
@@ -5026,7 +5034,8 @@ export class Engine {
       if(!sender)throw new Hold("invalid","Historical group control author is not current.");
       await this.groupControlFence(members,h.from_key,this.fp);await this.groupControlTarget(conv,h.ref,checks);
       const targetAuthor=[...members.values()].find(p=>(p.known||p.devices).some(d=>d.fingerprint===h.ref.fingerprint)); // a device removed since stays its person's (client personOfKeyIn)
-      if(h.sub!==wire.SubReaction&&targetAuthor?.person!==sender.person)throw new Hold("invalid",targetAuthor?"Historical group control differs from exact author person.":"Historical group control target key is no member's.");
+      // A key no member's (yet) waits, as client groupControlHistory (ErrGroupContextPending).
+      if(h.sub!==wire.SubReaction&&targetAuthor?.person!==sender.person)throw targetAuthor?new Hold("invalid","Historical group control differs from exact author person."):new Hold("proof_pending","Historical group control target key is no member's (yet).");
       return null;
     }
     if(!wire.validID(h.pid)||h.ref||!["","event","excerpt"].includes(h.sub))throw new Hold("invalid","Historical group participation scope malformed.");
@@ -7345,7 +7354,8 @@ export class Engine {
       if(!!n.replica!==!!own)throw new Hold("invalid","Group control replica differs from own sender.");
       await this.groupControlFence(members,pin.fingerprint,this.fp);
       const targets=await this.groupControlTarget(n.conv,n.ref,checks),author=[...members.values()].find(p=>(p.known||p.devices).some(d=>d.fingerprint===n.ref.fingerprint)); // a device removed since stays its person's (client personOfKeyIn)
-      if(n.sub!==wire.SubReaction&&author?.person!==sender.person)throw new Hold("invalid",author?"Only the current sender person edits or retracts a group message.":"Group control target key is no member's.");
+      // A key no member's (yet) waits, as client admitControl (ErrGroupContextPending).
+      if(n.sub!==wire.SubReaction&&author?.person!==sender.person)throw author?new Hold("invalid","Only the current sender person edits or retracts a group message."):new Hold("proof_pending","Group control target key is no member's (yet).");
       if(n.sub===wire.SubRevision&&await this.refTombstoned(n.conv,n.ref))rec.body="";
       rec.targetRow=targets[0];
     }
@@ -7576,7 +7586,10 @@ export class Engine {
     if (!wire.rootMember(root, sp.person)) throw new Hold("invalid", "the sender is not a member of this conversation");
     if (n.sub !== wire.SubReaction) {
       const owner = await this.personOfFp(ref.fingerprint); // current or past (known) devices, as client personOfKeyIn
-      if (sp.person !== owner) throw new Hold("invalid", owner ? "only the sender's person edits or deletes a message" : "the target's sender key is no known person's");
+      // A key no known person's (yet) waits for the roster step that adds
+      // it, checked again when membership changes; another person's is
+      // refused (client controlAuthorized).
+      if (sp.person !== owner) throw owner ? new Hold("invalid", "only the sender's person edits or deletes a message") : new Hold("proof_pending", "the target's sender key is no member's (yet)");
     }
     const key = pin.fingerprint + "/" + n.lid;
     if (await this.store.get("lids", key)) return []; // a copy already here
