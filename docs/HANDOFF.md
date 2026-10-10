@@ -4,6 +4,19 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
+## v0.8.16 source qualified — final packaging pending
+
+Application source `14d214dd384dc453de0113ee122de6aa22cce592` passed composed
+qualification: both complete UI race partitions, affected native browser checks
+on Linux/macOS/Windows, actual Chrome IndexedDB and rendered Comic checks, plus
+retained unchanged v0.8.15 client/Hub and platform evidence. The final native
+correction repeats Journey, signed receive-priority and device-history checks
+ten times per platform; Linux 54.110 s, Windows 55.267 s, macOS 43.891 s.
+Earlier failures were diagnosed and corrected, not hidden by longer waits.
+See [V0_8_16.md](plans/V0_8_16.md) for exact source, CI, review and limitations.
+Final tag-stamped packaging, asset verification, publication and relay rollout
+remain. No v0.8.16 published release or physical-phone convergence is claimed yet.
+
 ## Current published release — v0.8.15, October 9, 2026 (UTC)
 
 [Download v0.8.15](https://github.com/misunders2d/agentnet/releases/tag/v0.8.15).

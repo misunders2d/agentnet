@@ -2,6 +2,13 @@
 
 Active checklist: [V0_8_16.md](plans/V0_8_16.md).
 
+Source `14d214dd384dc453de0113ee122de6aa22cce592` is qualified. Browser receive
+recovery retains active wakes, drains responsive pages and preserves original
+arrival times; saved chats mount independently of other workspace waits. Overview
+reads avoid unrelated recovery data, and exact verified answers no longer retain
+a contradictory Sending clock. Final installers, asset verification, publication
+and the existing relay rollout remain. Physical phone timing remains unverified.
+
 [v0.8.15](https://github.com/misunders2d/agentnet/releases/tag/v0.8.15) was
 published October 9 at **23:21:55 UTC** from
 `7b26d30ca320d25b791c13a2aa40839c2562d909`. All five final packaging jobs and

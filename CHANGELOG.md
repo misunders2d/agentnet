@@ -6,6 +6,8 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+## [0.8.16] — 2026-10-10
+
 ### Fixed
 
 - Keep fresh browser messages and heartbeat processing moving while older messages wait for missing identity, membership or file evidence. Retain the exact encrypted input for the existing bounded recovery path, recheck current authority before committing, and acknowledge only admitted or explicitly held messages.
