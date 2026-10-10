@@ -128,6 +128,7 @@ function GroupInviteCard({ invite: i }: { invite: GroupInvite }) {
     <div className="flex items-center gap-3"><PersonAvatar name={i.name} seed={i.target} size={36} />
       <div className="min-w-0 flex-1"><p className="break-words font-bold">{i.name}</p>
         <p className="text-[13px] text-text-2">{i.state === "accepted" ? "Accepted · waiting to join" : i.state === "pending" ? "Invited as a member · waiting for them to accept" : "Invitation needs refreshing"}</p>
+        {i.state === "accepted" && i.error && <p className="text-[13px] text-approval-ink [overflow-wrap:anywhere]" data-publish-error>Not added yet: {i.error} It is tried again.</p>}
       </div>
     </div>
     {(i.canCancel || i.canRefresh) && <div className="mt-2 flex flex-wrap gap-2">

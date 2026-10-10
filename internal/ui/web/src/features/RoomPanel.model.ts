@@ -94,7 +94,7 @@ export interface Guest {
 
 export interface Waiting { id: string; text: string; asker: string; agent: string; decider: string; mine: boolean }
 
-export interface GroupInvite { id: string; target: string; name: string; state: string; canCancel: boolean; canRefresh: boolean }
+export interface GroupInvite { id: string; target: string; name: string; state: string; canCancel: boolean; canRefresh: boolean; error?: string }
 
 /** Outbound proposals are invitations, never members before publication. */
 export function pendingGroupInvites(t: T.DMThread, o: T.Overview | null): GroupInvite[] {
@@ -105,7 +105,7 @@ export function pendingGroupInvites(t: T.DMThread, o: T.Overview | null): GroupI
     (["pending", "accepted", "stale", "reissue", "history-unavailable"].includes(i.status)) && !members.has(i.target)).sort((a, b) => Number(["pending", "accepted"].includes(b.status)) - Number(["pending", "accepted"].includes(a.status))).flatMap(i => {
       if (seen.has(i.target)) return [];
       seen.add(i.target);
-      return [{ id: i.id, target: i.target, state: i.status, canCancel: !!i.can_cancel, canRefresh: !!i.can_refresh,
+      return [{ id: i.id, target: i.target, state: i.status, canCancel: !!i.can_cancel, canRefresh: !!i.can_refresh, ...(i.error ? { error: i.error } : {}),
         name: o?.people?.find(p => p.person === i.target)?.label || "Person " + i.target.slice(0, 8) }];
     });
 }

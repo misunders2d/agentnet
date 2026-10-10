@@ -63,6 +63,8 @@ func awaitAnswer(ctx context.Context, a *client.Agent, id, show string, wait tim
 		printAnswer(stdout, r.Answer)
 	case r.Stopped != nil:
 		fmt.Fprintln(stderr, stopLine(*r.Stopped, show))
+	case r.Suspended != "":
+		fmt.Fprintf(stderr, "%s: the request waits for it; the answer arrives after it updates: %s\n", client.SuspendedText(r.Suspended), show)
 	default:
 		fmt.Fprintf(stderr, "no answer yet after %s; it will land in %s: %s\n", wait, landsIn(receiver), show)
 	}

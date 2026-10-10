@@ -11,7 +11,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { IconDeviceMobile, IconUsersGroup } from "@tabler/icons-react";
 import type { T } from "../api";
 import { useAgentNames, useApp } from "../context";
-import { agentName, firstLine, isWorkingItem, isWorkingReview, when } from "../model";
+import { agentName, firstLine, isRunningElsewhere, isWorkingItem, isWorkingReview, when } from "../model";
 import { focusedIn } from "../owned";
 import { useStore } from "../store";
 import { AgentAvatar } from "../ui/Avatar";
@@ -100,12 +100,14 @@ export function OksView() {
 
   const items: Item[] = [];
   const elsewhere: T.ConvItem[] = [];
+  const unreported: T.ConvItem[] = [];
   const working: T.ConvItem[] = [];
   const workingReviews = (o?.review || []).filter(isWorkingReview).sort(newestFirst);
   if (o) {
     for (const r of reviewAsks(o)) items.push({ key: "r:" + r.id, at: r.at, node: <ReviewRow r={r} o={o} names={names} /> });
     for (const c of o.needs_you || []) {
-      if (isWorkingItem(c)) working.push(c);
+      if (isWorkingItem(c) || isRunningElsewhere(c)) working.push(c);
+      else if (c.stale) unreported.push(c); // its host's word is not current: nothing to decide, not counted
       else if (c.decide_on) elsewhere.push(c); // decided on another device: listed apart, not counted
       else items.push({ key: "n:" + c.conv + ":" + (c.id || c.pid), at: c.at, node: <ConvRow c={c} o={o} /> });
     }
@@ -113,13 +115,14 @@ export function OksView() {
     for (const l of deviceAsks(o)) items.push({ key: "d:" + l.id, at: l.requested_at, node: <DeviceRow l={l} /> });
     items.sort(newestFirst);
     elsewhere.sort(newestFirst);
+    unreported.sort(newestFirst);
     working.sort(newestFirst);
   }
   const held = [...(o?.held || [])].sort(newestFirst);
   const joined = (o?.review || []).filter(isSelfConsent).sort(newestFirst);
   const security = (o?.review || []).filter((r) => r.reason === "device_admin").sort(newestFirst);
   const notices = (o?.review || []).filter((r) => r.notice && !isSelfConsent(r) && r.reason !== "device_admin");
-  const keys = [...items.map((i) => i.key), ...working.map((c) => "w:" + c.conv + ":" + c.id), ...workingReviews.map((r) => "w:r:" + r.id), ...held.map((c) => "h:" + c.conv + ":" + c.id), ...elsewhere.map((c) => "e:" + c.conv + ":" + (c.id || c.pid)), ...joined.map((r) => "s:" + r.id), ...security.map((r) => "a:" + r.id)];
+  const keys = [...items.map((i) => i.key), ...working.map((c) => "w:" + c.conv + ":" + c.id), ...workingReviews.map((r) => "w:r:" + r.id), ...held.map((c) => "h:" + c.conv + ":" + c.id), ...elsewhere.map((c) => "e:" + c.conv + ":" + (c.id || c.pid)), ...unreported.map((c) => "u:" + c.conv + ":" + c.id), ...joined.map((r) => "s:" + r.id), ...security.map((r) => "a:" + r.id)];
   const { root, title, land } = useLanding(keys.join("\n"));
 
   if (!o) return loadError ? <Failed text={loadError} retry={() => store.retryNow()} /> : <Loading />;
@@ -136,7 +139,7 @@ export function OksView() {
             {items.map((i) => <Listed key={i.key} k={i.key} land={land}>{i.node}</Listed>)}
           </ul>
         </div>
-      ) : !held.length && !elsewhere.length && !working.length && !workingReviews.length && <AllClear />}
+      ) : !held.length && !elsewhere.length && !unreported.length && !working.length && !workingReviews.length && <AllClear />}
       {(working.length > 0 || workingReviews.length > 0) && (
         <section className="px-4 pt-6" aria-labelledby="oks-working">
           <h2 id="oks-working" className="text-[12px] font-extrabold uppercase tracking-[.08em] text-muted">Working</h2>
@@ -162,6 +165,15 @@ export function OksView() {
           <p className="pt-1 text-[14px] text-text-2">Your agent runs on another of your devices, so you decide these there.</p>
           <ul className="flex flex-col gap-3 pt-3">
             {elsewhere.map((c) => { const k = "e:" + c.conv + ":" + (c.id || c.pid); return <Listed key={k} k={k} land={land}><ConvRow c={c} o={o} /></Listed>; })}
+          </ul>
+        </section>
+      )}
+      {unreported.length > 0 && (
+        <section className="px-4 pt-6" aria-labelledby="oks-unreported">
+          <h2 id="oks-unreported" className="text-[12px] font-extrabold uppercase tracking-[.08em] text-muted">No result reported</h2>
+          <p className="pt-1 text-[14px] text-text-2">The device of yours that runs these has reported nothing current about them. Nothing is decided or run again from here.</p>
+          <ul className="flex flex-col gap-3 pt-3">
+            {unreported.map((c) => { const k = "u:" + c.conv + ":" + c.id; return <Listed key={k} k={k} land={land}><ConvRow c={c} o={o} /></Listed>; })}
           </ul>
         </section>
       )}

@@ -963,7 +963,9 @@ func (a *Agent) hostConnected(address string) bool {
 	}
 	for _, m := range v.Members.Members {
 		if m.Address == address {
-			return m.Presence == protocol.PresenceConnected
+			// A suspended host can report nothing new until it updates: its
+			// last word is old news, as an offline host's is.
+			return m.Presence == protocol.PresenceConnected && !m.Suspended
 		}
 	}
 	return false

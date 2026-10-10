@@ -572,10 +572,12 @@ export function agentWhere(host: T.PersonView | null | undefined, address: strin
 // Shared by the chat list's banner and the OKs screen.
 
 /** Why a conversation item waits (client.Review*). */
-export const Reason = { awaiting: "agent_awaiting", needsHuman: "agent_needs_human", interrupted: "agent_interrupted", invite: "agent_invite", heldTurn: "person_turn" } as const;
+export const Reason = { awaiting: "agent_awaiting", needsHuman: "agent_needs_human", interrupted: "agent_interrupted", running: "agent_running", invite: "agent_invite", heldTurn: "person_turn" } as const;
 
 /** Working is stoppable, but never an outstanding approval. */
 export const isWorkingItem = (c: T.ConvItem) => (c.actions || []).includes("cancel");
+/** Running on another device of yours, as its current word says: work, never a decision. */
+export const isRunningElsewhere = (c: T.ConvItem) => !!c.decide_on && !c.stale && c.reason === Reason.running && !isWorkingItem(c);
 /** Device requests use review, with a reason set from their local job state. */
 export const isWorkingReview = (r: T.ReviewItem) => !r.notice && r.reason === "agent_running";
 
@@ -604,6 +606,8 @@ export const senderOf = (c: T.ConvItem, o: T.Overview | null) => (isMine(c.peer,
 /** convTitle: what a conversation item is, as one sentence that names who and what. */
 export function convTitle(c: T.ConvItem, o: T.Overview | null): string {
   const who = senderOf(c, o);
+  // A host word that is not current says nothing of what the agent did.
+  if (c.stale) return who + (c.kind === "task" ? " gave your agent a task" : " asked your agent something");
   switch (c.reason) {
     case Reason.invite: return who + (c.role === "human" ? " invited you into " : " invited your agent into ") + chatName(c.conv, o);
     case Reason.needsHuman: return "Your agent couldn’t finish — it needs your answer";

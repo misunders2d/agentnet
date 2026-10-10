@@ -462,10 +462,13 @@ const assistantActor = (c, hostLabel = () => "") => {
 // message's, as the core reports it).
 const copyRank = { failed: 0, waiting: 1, queued: 2, custody: 3, delivered: 4 };
 export const deliveryRank = state => ({delivered:5,custody:4,waiting:2,quarantined:1,expired:1,failed:0}[state] ?? 3);
+// A device the relay suspended until it updates AgentNet counts only when
+// no other counted device is current: one outdated device never makes a
+// message read as undelivered to everyone (client.deliveryOf).
 export function deliveryOf(copies) {
-  const others = copies.some(c => !c.own), people = new Map();
+  const others = copies.some(c => !c.own), current = copies.some(c => !(others && c.own) && !c.suspended), people = new Map();
   for (const c of copies) {
-    if (others && c.own) continue;
+    if (others && c.own || current && c.suspended) continue;
     const key = c.person || c.to, old = people.get(key);
     if (!people.has(key) || deliveryRank(c.state) > deliveryRank(old) || deliveryRank(c.state) === deliveryRank(old) && c.state < old) people.set(key,c.state);
   }
@@ -638,6 +641,7 @@ export class Engine {
     this.members = { listed: "unknown", current: false, at: 0, list: [], truncated: false };
     this.workspaceName = ""; // the workspace's own name its admin set, as last listed (kept: kv "workspace")
     this.agentDevices = []; // devices that, as last listed, say they run an agent (kept: kv "agent_devices")
+    this.suspendedDevices = []; // devices the relay serves nothing until they update AgentNet, as last listed (kept: kv "suspended_devices")
     this.connected = false;
     this.revoked = false;
     this.running = false;
@@ -682,6 +686,8 @@ export class Engine {
     this.workspaceName = wire.validWorkspaceName(await this.store.get("kv", "workspace"));
     const agents = await this.store.get("kv", "agent_devices");
     this.agentDevices = Array.isArray(agents) ? agents.filter(wire.validAddress) : [];
+    const suspended = await this.store.get("kv", "suspended_devices");
+    this.suspendedDevices = Array.isArray(suspended) ? suspended.filter(wire.validAddress) : [];
     await this.loadErased();
     if (this.erased.size) this.scheduleErase(); // after a restart: what a crash left untold or unerased
     if (id) await this.settleLeftoverNotices();
@@ -2831,7 +2837,7 @@ export class Engine {
       if (rec.files) rec.files = rec.files.map((f) => ({ ...f, ct: null }));
     } catch (e) {
       if (e.code === "receiver_redacted") return; // keep the newer exact-scope retention transaction
-      if (e.code === "followup_unsupported" || e.code === "proposal_unsupported" || e.code === "receiver_unsupported" || e.code === "model_sync_unsupported" || e.code === "read_sync_unsupported" || e.code === "invitation_sync_unsupported" || e.code === "topic_sync_unsupported" || e.code === "control_unsupported" || rec.conv && ["group_invitation_unsupported", "root_sync_unsupported", "agent_identity_unsupported", "human_unsupported", "group_unsupported", "clear_unsupported", "room_unsupported"].includes(e.code)) {
+      if (e.code === "followup_unsupported" || e.code === "proposal_unsupported" || e.code === "receiver_unsupported" || e.code === "topic_organization_unsupported" || e.code === "model_sync_unsupported" || e.code === "read_sync_unsupported" || e.code === "invitation_sync_unsupported" || e.code === "topic_sync_unsupported" || e.code === "control_unsupported" || rec.conv && ["group_invitation_unsupported", "root_sync_unsupported", "agent_identity_unsupported", "human_unsupported", "group_unsupported", "clear_unsupported", "room_unsupported"].includes(e.code)) {
         rec.state = "waiting"; rec.detail = "peer_update: " + e.message;
       } else if(e.code==="device_history_authority") {
         rec.state="not_delivered";rec.detail=e.message;
@@ -2967,6 +2973,11 @@ export class Engine {
       if (blocked.has(key)) continue;
       if (rec.state === "receiver_waiting") { blocked.add(key); continue; }
       if (rec.state !== "queued" && rec.state !== "waiting") continue;
+      // The relay serves a suspended device nothing until it updates: its
+      // waiting copies are not re-checked on every ping (no profile reads);
+      // the member list naming it current again does. Only its own later
+      // copies stay behind it.
+      if (rec.state === "waiting" && this.peerSuspended(rec.to)) { blocked.add(key); continue; }
       if (rec.v === 1 || !rec.conv) {
         const pin = await this.store.get("pins", rec.to);
         const expected = rec.recipient_fp || rec.fp;
@@ -3559,7 +3570,7 @@ export class Engine {
   async requireTopicOrganizationSupport(address,pin) {
     if(!pin||pin.pending)throw Error("Topic organization recipient key changed.");
     const [ok,why]=await this.ctlSupport(address,pin,wire.CapTopicOrganization);
-    if(!ok)throw Error(why||"This device needs an update before topics can be organized.");
+    if(!ok)throw Object.assign(Error((why||"This device needs an update before topics can be organized.").replace(/^peer_update: /,"")),why?.startsWith("peer_update: ")?{code:"topic_organization_unsupported",address}:{});
   }
 
   async topicOrganizationPreview(input) {
@@ -3791,6 +3802,31 @@ export class Engine {
     if(!await wire.profileSupports(profile||{},address,key.sign_key,wire.CapGroupInvitationControl))throw Object.assign(Error(address+" needs an update for refreshable group invitations (gic1)."),{code:"group_invitation_unsupported"});
   }
 
+  // groupDevicePin is the exact pinned key of one group device, or why that
+  // device alone gets nothing now ({skip}): its key changed and is not
+  // trusted here, or the server no longer knows it. Fail closed for it,
+  // never for the others.
+  async groupDevicePin(device, checks) {
+    let pin;
+    try { pin=await this.pinned(device.address); }
+    catch(e) { if(retryable(e) || !(e instanceof HubError))throw e; return {skip:{to:device.address,state:"not_delivered",detail:"not sent: "+device.address+" is not on your server ("+e.message+")."}}; }
+    await this.groupRead(checks,"pins",device.address);
+    if(pin.pending||pin.fingerprint!==device.fingerprint)return {skip:{to:device.address,state:"not_delivered",detail:"not sent: "+device.address+"'s key changed: nothing is sent to it until the new key is trusted in AgentNet on a computer."}};
+    return pin;
+  }
+
+  // groupDeviceSupport runs one device's reader checks: {notify} when it
+  // reads the copy now, else {why} its sealed copy waits (an older
+  // program, or the server out of reach), as postStored parks it.
+  async groupDeviceSupport(address, pin, check) {
+    try { return {notify:!!await check(),why:""}; }
+    catch(e) {
+      if(retryable(e))return {notify:false,why:"server_unavailable: cannot reach your server"};
+      if(String(e.code||"").endsWith("_unsupported"))return {notify:false,why:"peer_update: "+e.message};
+      throw e;
+    }
+  }
+
   async groupSupport(address, pin, admission = null) {
     const [ok, why, notify] = await this.supports(address,pin, admission);
     if (!ok) throw Object.assign(Error(why), { code: "group_unsupported", address });
@@ -3799,18 +3835,20 @@ export class Engine {
     return notify;
   }
 
-  async groupCarrierCopy(root, sub, descriptor, value, device, extra = {}, knownKeysOnly = false) {
+  async groupCarrierCopy(root, sub, descriptor, value, device, extra = {}, knownKeysOnly = false, tolerant = false) {
     const pin = knownKeysOnly ? await this.store.get("pins",device.address) : await this.pinned(device.address);
     if(!pin)throw Error("Exact group recipient key is not kept here.");
     if (pin.pending || pin.fingerprint !== device.fingerprint) throw Error("Group recipient key changed.");
-    if(!knownKeysOnly)await this.groupSupport(device.address,pin);
+    // tolerant (a publication): a device that cannot read groups yet keeps
+    // its sealed carrier waiting; the others get the change now.
+    const {why}=knownKeysOnly?{why:""}:tolerant?await this.groupDeviceSupport(device.address,pin,()=>this.groupSupport(device.address,pin)):(await this.groupSupport(device.address,pin),{why:""});
     const key = await this.pubOf(pin), bytes = new TextEncoder().encode(typeof value === "string" ? value : JSON.stringify(value));
     const limit = [wire.SubGroupContext,wire.SubGroupInvite,wire.SubGroupConsent].includes(sub) ? wire.MaxGroupState : wire.MaxBody-1024;
     if (!bytes.length || bytes.length > limit) throw Error("Group carrier exceeds bound.");
     const sealed = await wire.encryptFile(bytes,sub + ".json",key), id = wire.newID(), lid = wire.newID();
     const body = wire.groupCarrierJSON({...descriptor,to_key:pin.fingerprint});
     const envelope = await wire.seal({v:wire.Version2,id,from:this.address,to:device.address,ts:Math.floor(this.now()/1000),kind:"message",body,conv:await wire.rootID(root),lid,root:wire.rootJSON(root),sub,...(extra.pid?{pid:extra.pid}:{}),attachments:[sealed.attachment]},this.keys,key);
-    return {id,lid,conv:await wire.rootID(root),to:device.address,recipient_fp:pin.fingerprint,required_cap:(sub===wire.SubGroupInvite&&wire.parseGroupInvitation(value).nonce || sub===wire.SubGroupConsent&&wire.parseGroupConsent(value).decision==="cancelled")?wire.CapGroupInvitationControl:wire.CapGroup,sub,body,envelope,at:this.now(),state:"queued",aside:true,files:[{...sealed,uploaded:false}],...extra};
+    return {id,lid,conv:await wire.rootID(root),to:device.address,recipient_fp:pin.fingerprint,required_cap:(sub===wire.SubGroupInvite&&wire.parseGroupInvitation(value).nonce || sub===wire.SubGroupConsent&&wire.parseGroupConsent(value).decision==="cancelled")?wire.CapGroupInvitationControl:wire.CapGroup,sub,body,envelope,at:this.now(),state:why?"waiting":"queued",...(why?{detail:why}:{}),aside:true,files:[{...sealed,uploaded:false}],...extra};
   }
 
   groupProofPages(records) {
@@ -3931,7 +3969,7 @@ export class Engine {
       try {await this.readSyncAuthority(view.record,view.from,view.fp,this.address,this.fp);}catch{continue;}
       const r=view.record;rows.push({id:r.id,direction:"out",status:r.status,proposal:r.proposal,inviter:view.from,fp:view.fp,owner:r.person});
     }
-    return Promise.all(rows.map(async i=>({id:i.id,conv:i.proposal.state.conv,direction:i.direction,status:i.status,title:i.proposal.state.title,inviter:i.inviter,target:i.proposal.target,history:i.proposal.history || [],...await this.groupInvitationCapabilities(i)})));
+    return Promise.all(rows.map(async i=>({id:i.id,conv:i.proposal.state.conv,direction:i.direction,status:i.status,title:i.proposal.state.title,inviter:i.inviter,target:i.proposal.target,history:i.proposal.history || [],...(i.status==="accepted"&&i.last_error?{error:i.last_error}:{}),...await this.groupInvitationCapabilities(i)})));
   }
 
   async groupInvitationPublicationFence(row,checks=[]) {
@@ -4093,7 +4131,7 @@ export class Engine {
       add(await wire.publicEntry(this.keys,this.address));
       for(const member of await wire.effectiveGroupMembers(packet.state,withdrawals)) {
         const p=resolved.people.get(member.person);
-        for(const device of p.devices) {const pin=await this.pinned(device.address);if(pin.pending||pin.fingerprint!==device.fingerprint) throw Error("Exact group recipient key changed.");add(await this.pubOf(pin));}
+        for(const device of p.devices) {const pin=device.address===this.address?null:await this.groupDevicePin(device,checks);if(pin?.skip)continue;if(pin)add(await this.pubOf(pin));} // a changed key never reads it; the others do
       }
       const ciphertext=await encryption.encrypt(new TextEncoder().encode(wire.groupContextJSON(packet)));
       record=await wire.signGroupCommit(this.keys,{v:1,conv,realm:packet.state.realm,bootstrap:packet.root.creator.fingerprint,seq:packet.state.seq,prev:packet.state.prev,hash:await wire.groupStateHash(packet.state),admins:wire.groupAdmins(packet.state),writer:this.address,actor:me.person,actor_roster:me.hash,ciphertext});
@@ -4127,24 +4165,25 @@ export class Engine {
       const p=finalResolved.people.get(member.person);
       for(const device of p.devices) {
         if(device.address===this.address) continue;
-        await this.groupRead(finalChecks,"pins",device.address);
-        for(const page of this.groupProofPages(records)) {const last=page.at(-1);copies.push(await this.groupCarrierCopy(packet.root,wire.SubGroupProof,{v:1,seq:last.seq,hash:last.hash},wire.groupJournalJSON({records:page,more:false}),device));}
-        copies.push(await this.groupCarrierCopy(packet.root,wire.SubGroupContext,{v:1,seq:packet.state.seq,hash:record.hash},wire.groupContextJSON(deliveryPacket),device));
+        if((await this.groupDevicePin(device,finalChecks)).skip)continue; // that device alone gets nothing until its key is trusted
+        for(const page of this.groupProofPages(records)) {const last=page.at(-1);copies.push(await this.groupCarrierCopy(packet.root,wire.SubGroupProof,{v:1,seq:last.seq,hash:last.hash},wire.groupJournalJSON({records:page,more:false}),device,{},false,true));}
+        copies.push(await this.groupCarrierCopy(packet.root,wire.SubGroupContext,{v:1,seq:packet.state.seq,hash:record.hash},wire.groupContextJSON(deliveryPacket),device,{},false,true));
         if(invitation && member.admission.seq===packet.state.seq) {
-          for(const item of historyItems)copies.push(await this.groupDataCopy(packet,"history",wire.historyJSON(item),device));
+          for(const item of historyItems)copies.push(await this.groupDataCopy(packet,"history",wire.historyJSON(item),device,[],null,true));
         }
       }
     }
     for(const target of visitorTargets) {
-      await this.convEvents(conv,finalChecks,target.pid);await this.groupRead(finalChecks,"pins",target.device.address);
-      for(const page of this.groupProofPages(records)){const last=page.at(-1);copies.push(await this.groupCarrierCopy(packet.root,wire.SubGroupProof,{v:1,seq:last.seq,hash:last.hash},wire.groupJournalJSON({records:page,more:false}),target.device,{pid:target.pid}));}
-      copies.push(await this.groupCarrierCopy(packet.root,wire.SubGroupContext,{v:1,seq:packet.state.seq,hash:record.hash},wire.groupContextJSON(packet),target.device,{pid:target.pid}));
+      await this.convEvents(conv,finalChecks,target.pid);
+      if((await this.groupDevicePin(target.device,finalChecks)).skip)continue;
+      for(const page of this.groupProofPages(records)){const last=page.at(-1);copies.push(await this.groupCarrierCopy(packet.root,wire.SubGroupProof,{v:1,seq:last.seq,hash:last.hash},wire.groupJournalJSON({records:page,more:false}),target.device,{pid:target.pid},false,true));}
+      copies.push(await this.groupCarrierCopy(packet.root,wire.SubGroupContext,{v:1,seq:packet.state.seq,hash:record.hash},wire.groupContextJSON(packet),target.device,{pid:target.pid},false,true));
     }
     const ops=[{s:"kv",k:key,v:g},{s:"kv",k:pendingKey,v:undefined},...copies.map(v=>({s:"outbox",k:v.id,v}))];
-    if(invitation) {const k="group-invitation/out/"+invitation,row=await this.groupRead(finalChecks,"kv",k);if(!row || row.status!=="accepted") throw Error("Exact accepted invitation missing.");ops.push({s:"kv",k,v:{...row,status:"published"}});}
+    if(invitation) {const k="group-invitation/out/"+invitation,row=await this.groupRead(finalChecks,"kv",k);if(!row || row.status!=="accepted") throw Error("Exact accepted invitation missing.");const {last_error,...done}=row;void last_error;ops.push({s:"kv",k,v:{...done,status:"published"}});}
     await this.store.write(ops,finalChecks);this.changed();this.syncInvitations().catch(()=>{});
     if (this.connected) this.notifyState().then(st => st.enabled ? this.syncNotify() : undefined).catch(() => {});
-    for(const rec of copies) await this.post(rec);
+    for(const rec of copies) if(rec.state==="queued") await this.post(rec);
     return packet;
   }
 
@@ -4176,7 +4215,12 @@ export class Engine {
           if(row.invitation && (await this.store.get("kv","group-invitation/out/"+row.invitation))?.status==="published")continue;
           await this.publishGroupPacket(wire.parseGroupContext(row.context),row.invitation);
         } else if(row.status==="accepted")await this.publishGroupInvitation(row.id);
-      } catch(e) { /* retained exact intent; common publisher alone retries conditional conflicts */ }
+      } catch(e) {
+        // The exact intent is retained and retried (the common publisher
+        // alone retries conditional conflicts); its last reason is shown.
+        const now=await this.store.get("kv",key);
+        if(now && now.last_error!==e.message)try{await this.store.write([{s:"kv",k:key,v:{...now,last_error:e.message}}],[{s:"kv",k:key,v:now}]);this.changed();}catch(_){ /* a newer write decides */ }
+      }
     }
     this.syncInvitations().catch(()=>{});
   }
@@ -4217,23 +4261,25 @@ export class Engine {
     if(receiver?.host) for(const member of members) if(member.person!==me.person) for(const d of member.devices || []) replyKeys.push({key:d.fingerprint,admission:await wire.groupAdmissionHash(wire.groupMember(packet.state,member.person).admission)});
     replyKeys.sort((a,b)=>a.key.localeCompare(b.key));
     const prepared=await this.prepareReceiverRequest(receiver,{id:firstID,lid,conv:c.id,root:wire.rootJSON(packet.root),ts:Math.floor(at/1000),kind:"message",body,quote,reply_to:reply,origin:"ui",group_admission:stamp,group_replies:replyKeys},plain,checks);
+    const skipped=[];
     for(const member of members)for(const device of member.devices || []) {
       if(device.address===this.address)continue;
-      const pin=await this.pinned(device.address);await this.groupRead(checks,"pins",device.address);
-      if(wire.topicOrganization(topic_event))await this.requireTopicOrganizationSupport(device.address,pin);
-      if(pin.pending||pin.fingerprint!==device.fingerprint)throw Error("Exact group recipient key changed.");
-      const notify = await this.groupSupport(device.address,pin);
-      if(prepared)await this.receiverSupport(device.address,pin);
+      // One device never stops the group (client sendGroupTurn): a changed
+      // key gets that device nothing until trusted; one that cannot read
+      // this yet keeps its sealed copy waiting, as a DM's would.
+      const pin=await this.groupDevicePin(device,checks);
+      if(pin.skip){skipped.push(pin.skip);continue;}
+      const {notify,why}=await this.groupDeviceSupport(device.address,pin,async()=>{if(wire.topicOrganization(topic_event))await this.requireTopicOrganizationSupport(device.address,pin);const n=await this.groupSupport(device.address,pin);if(prepared)await this.receiverSupport(device.address,pin);return n;});
       const publicKey=await this.pubOf(pin), sealed=[];for(const f of plain)sealed.push({...await wire.encryptFile(f.bytes,f.name,publicKey),uploaded:false});
       const id=copies.length?wire.newID():firstID, fan=[{person:me.person,roster:me.hash},...(member.person===me.person?[]:[{person:member.person,roster:(await this.store.get("persons",member.person)).hash}])], replica=member.person===me.person;
       const chan = notify && !replica && !topic_event ? await wire.notifyChannel(c.id, device.fingerprint) : "";
       const envelope=await wire.seal({v:wire.Version2,id,from:this.address,to:device.address,ts:Math.floor(at/1000),kind:"message",body,topic,topic_event,quote,reply_to:reply,conv:c.id,lid,root:wire.rootJSON(packet.root),origin:"ui",chan,replica,fan,attachments:sealed.map(f=>f.attachment),receiver_route:prepared?.route},this.keys,publicKey);
-      copies.push({id,lid,conv:c.id,kind:"message",body,topic,topic_event,quote,reply_to:reply,origin:"ui",from:this.address,to:device.address,person:member.person,own:replica,replica,at,envelope,attachments:sealed.map(f=>f.attachment),files:sealed.length?sealed:undefined,state:"queued",required_cap:wire.CapGroup,recipient_fp:device.fingerprint,group_admission:stamp,...(organization_review?{organization_review}:{}),...(contribution_review?{contribution_review}:{}),...(prepared?{receiver_route:prepared.route}:{})});
+      copies.push({id,lid,conv:c.id,kind:"message",body,topic,topic_event,quote,reply_to:reply,origin:"ui",from:this.address,to:device.address,person:member.person,own:replica,replica,at,envelope,attachments:sealed.map(f=>f.attachment),files:sealed.length?sealed:undefined,state:why?"waiting":"queued",...(why?{detail:why}:{}),required_cap:wire.CapGroup,recipient_fp:device.fingerprint,group_admission:stamp,...(organization_review?{organization_review}:{}),...(contribution_review?{contribution_review}:{}),...(prepared?{receiver_route:prepared.route}:{})});
     }
-    if(!copies.length)throw Error("Group has no other current device to receive a copy.");
+    if(!copies.length||skipped.length&&members.some(m=>m.person!==me.person)&&!copies.some(r=>!r.replica))throw Error("Group has no other current device to receive a copy."+skipped.map(x=>" "+x.detail).join(""));
     await this.commitReceiverCopies(copies,prepared,checks,await this.roomStoredOps(c.id,checks,{lid},this.fp,null,null,packet),queued);this.changed();await this.keepSent(plain);
-    if(queued)this.queueOutbox();else if(prepared)await this.post(prepared.delegation);else for(const rec of copies)await this.post(rec);
-    const least=copyOrder(copies);return {id:copies[0].id,lid,state:least.state,detail:least.detail};
+    if(queued)this.queueOutbox();else if(prepared)await this.post(prepared.delegation);else for(const rec of copies)if(rec.state==="queued")await this.post(rec);
+    const least=copyOrder(copies);return {id:copies[0].id,lid,state:least.state,detail:least.detail,copies:[...copies.map(r=>({id:r.id,to:r.to,state:r.state,detail:r.detail||""})),...skipped]};
   }
 
   async admitGroupTurn(n,env,pin,base, admission = null) {
@@ -4493,15 +4539,15 @@ export class Engine {
     await this.store.write([{s:"outbox",k:rec.id,v:rec}],checks);this.changed();await this.post(rec);
   }
 
-  async groupDataCopy(packet, sub, body, device, sealed=[], admission = null) {
+  async groupDataCopy(packet, sub, body, device, sealed=[], admission = null, tolerant = false) {
     const pin=await this.pinned(device.address, admission);if(pin.pending||pin.fingerprint!==device.fingerprint)throw Error("Group data recipient key changed.");
-    await this.groupSupport(device.address,pin, admission);
+    const {why}=tolerant?await this.groupDeviceSupport(device.address,pin,()=>this.groupSupport(device.address,pin,admission)):(await this.groupSupport(device.address,pin, admission),{why:""});
     const id=wire.newID(),lid=wire.newID(),key=await this.pubOf(pin);
     const envelope=await wire.seal({v:wire.Version2,id,lid,conv:packet.state.conv,root:wire.rootJSON(packet.root),from:this.address,to:device.address,ts:Math.floor(this.now()/1000),kind:"message",sub,body,replica:true,attachments:sealed.map(f=>f.attachment)},this.keys,key);
     const person=(await this.groupPeople(packet)).find(m=>m.devices?.some(d=>d.address===device.address&&d.fingerprint===device.fingerprint));
     if(!person)throw Error("Group data recipient is not current.");
     const recipient_admission=await wire.groupAdmissionHash(wire.groupMember(packet.state,person.person).admission);
-    return {id,lid,conv:packet.state.conv,to:device.address,recipient_fp:device.fingerprint,recipient_admission,required_cap:wire.CapGroup,kind:"message",sub,body,aside:true,replica:true,at:this.now(),envelope,state:"queued",files:sealed.length?sealed.map(f=>({...f,uploaded:false})):undefined};
+    return {id,lid,conv:packet.state.conv,to:device.address,recipient_fp:device.fingerprint,recipient_admission,required_cap:wire.CapGroup,kind:"message",sub,body,aside:true,replica:true,at:this.now(),envelope,state:why?"waiting":"queued",...(why?{detail:why}:{}),files:sealed.length?sealed.map(f=>({...f,uploaded:false})):undefined};
   }
 
   async groupHistoryScope(c,h,checks) {
@@ -6432,7 +6478,18 @@ export class Engine {
       this.agentDevices = agents;
       await put(this.store, "kv", "agent_devices", agents);
     }
+    const suspended = this.members.list.filter((x) => x && x.suspended === true && x.address !== this.address && wire.validAddress(x.address)).map((x) => x.address).sort();
+    if (suspended.join(" ") !== this.suspendedDevices.join(" ")) {
+      this.suspendedDevices = suspended;
+      await put(this.store, "kv", "suspended_devices", suspended);
+    }
   }
+
+  // peerSuspended: the relay, as last listed, serves the device at address
+  // nothing until it updates AgentNet (client.SuspendedDevices).
+  // Availability only, never authority: nobody waits for it, and its
+  // copies never hold anyone else's.
+  peerSuspended(address) { return this.suspendedDevices.includes(address); }
 
   // relayHost is the host name of this device's relay: what people see for
   // a workspace its admin has not named.
@@ -6538,7 +6595,7 @@ export class Engine {
     }
     const sent = [...groups.values()].map((g) => {
       const least = copyOrder(g);
-      const copies=g.map(r=>({id:r.id,to:r.to,state:r.state,detail:r.detail,...this.cancellationView(r),own:!!r.own||!!this.me?.devices?.some(d=>d.address===r.to),person:r.person||personOf(r.to)})); return { ...g[0], key:this.fp, send_group:g.some(r=>r.send_group_conflict)||new Set(g.map(r=>r.send_group).filter(Boolean)).size>1?"":g.find(r=>r.send_group)?.send_group||"", state: least.state, delivery:deliveryOf(copies),detail: least.detail, lagging: least.to, copies, delivery_cancelled:g.some(r=>r.delivery_cancelled)&&!g.some(r=>["custody","delivered"].includes(r.state)), handover_started:g.some(r=>r.delivery_cancelled&&r.state==="failed"&&r.handover_started!==false) ? true : least.handover_started };
+      const copies=g.map(r=>({id:r.id,to:r.to,state:r.state,detail:r.detail,...this.cancellationView(r),own:!!r.own||!!this.me?.devices?.some(d=>d.address===r.to),person:r.person||personOf(r.to),...(this.peerSuspended(r.to)?{suspended:true}:{})})); return { ...g[0], key:this.fp, send_group:g.some(r=>r.send_group_conflict)||new Set(g.map(r=>r.send_group).filter(Boolean)).size>1?"":g.find(r=>r.send_group)?.send_group||"", state: least.state, delivery:deliveryOf(copies),detail: least.detail, lagging: least.to, copies, delivery_cancelled:g.some(r=>r.delivery_cancelled)&&!g.some(r=>["custody","delivered"].includes(r.state)), handover_started:g.some(r=>r.delivery_cancelled&&r.state==="failed"&&r.handover_started!==false) ? true : least.handover_started };
     });
     const received = inbox.filter((m) => m.conv === convId && !m.control && m.sub !== wire.SubRootSync && m.sub !== wire.SubDriveSpace && !this.erasedRow(m)).map((m) => {
       if (m.sub !== "excerpt") return m;
@@ -7279,8 +7336,9 @@ export class Engine {
   // by its executor: the highest counter wins (tie: later id). A terminal
   // answer or result in the thread supersedes any status. stale: the host
   // is not connected as the relay's current member list has it (presence
-  // "connected", as the relay says it), or a running state is older than
-  // EXEC_RUNNING_MAX_AGE (client ExecView.settle).
+  // "connected", as the relay says it), is suspended until it updates, or
+  // a running state is older than EXEC_RUNNING_MAX_AGE (client
+  // ExecView.settle).
   execOn(statuses, host, answered) {
     if (answered || !statuses.length) return null;
     let best = null;
@@ -7293,7 +7351,7 @@ export class Engine {
     }
     if (!best) return null;
     const m = this.members.current ? this.members.list.find((x) => x.address === host) : null;
-    const stale = !m || m.presence !== "connected" || best.state === "running" && Math.floor(this.now() / 1000) - best.at > EXEC_RUNNING_MAX_AGE;
+    const stale = !m || m.presence !== "connected" || m.suspended === true || this.peerSuspended(host) || best.state === "running" && Math.floor(this.now() / 1000) - best.at > EXEC_RUNNING_MAX_AGE; // a suspended host reports nothing new (client hostConnected)
     return { state: best.state, at: iso(best.at * 1000), detail: best.detail, host, stale, attempt: best.attempt || 0, ...(best.refused ? { refused: best.refused } : {}) };
   }
 
@@ -8444,15 +8502,22 @@ export class Engine {
     checkFiles(plain.map(f => ({ name: f.name, size: f.bytes.length })));
     const prepared = request ? null : await this.prepareReceiverRequest(n.receiver, { id: firstID, lid, conv: c.id, root: c.root, ts: Math.floor(at / 1000), kind: "message", body: n.body, quote:n.quote||"",reply_to: n.reply_to || "", origin: "ui", pid: h.author_pid || "", human: h }, plain, checks);
     const turn = request ? { kind: n.kind, pid: n.pid, target: n.target } : { kind: "message", pid: h.author_pid || "" };
+    const skipped = [];
     for (const d of devices) {
       const pin = await this.groupRead(checks, "pins", d.address);
-      if (!pin || pin.pending || pin.fingerprint !== d.fingerprint) throw new Error("Human audience device key changed.");
       const isHost = request && d.address === x.host.address && d.fingerprint === x.host.fingerprint;
+      if (!pin || pin.pending || pin.fingerprint !== d.fingerprint) { // that device alone gets nothing; the request's own host is required
+        if (isHost) throw new Error("Human audience device key changed.");
+        skipped.push({ to: d.address, state: "not_delivered", detail: "not sent: " + d.address + "'s key changed: nothing is sent to it until the new key is trusted in AgentNet on a computer." });
+        continue;
+      }
       await this.humanTurnAuthorization({ ...n, ...turn, conv:c.id, human: h }, evidence, x, this.address, this.fp, d.address, d.fingerprint,false,checks);
-      if(c.kind!=="group") await this.requireHumanSupport(d.address, pin);
+      // A reader that cannot read this yet keeps its sealed copy waiting
+      // (client sendHumanTurn); only the request's executing host must.
       // Group reader compatibility is checked per durable copy at handoff.
+      const readers = async () => { if (c.kind !== "group") await this.requireHumanSupport(d.address, pin); if (prepared) await this.receiverSupport(d.address, pin); };
+      const { why } = isHost ? (await readers(), { why: "" }) : await this.groupDeviceSupport(d.address, pin, readers);
       if (isHost && (x.external || x.agent_id)) await this.requireAgentIdentity(d.address, pin, x.external ? wire.CapExternalParticipation : wire.CapAgentIdentity);
-      if (prepared) await this.receiverSupport(d.address, pin);
       const pub = await this.pubOf(pin), sealed = [];
       for (const f of plain) sealed.push({ ...await wire.encryptFile(f.bytes, f.name, pub), uploaded: false });
       const id = isHost ? lid : recs.length || request ? wire.newID() : firstID, own = this.me.devices.some(x => x.address === d.address), inner = { v: 2, id, from: this.address, to: d.address, ts: Math.floor(at / 1000), kind: turn.kind, body: n.body,followup:n.followup,topic:n.topic||"",topic_event:n.topic_event||null, quote:n.quote||"",reply_to: n.reply_to || "", origin: "ui", conv: c.id, lid, root: c.root, fan, replica: own && !isHost, pid: turn.pid, ...(request ? { target: turn.target } : {}), human: h, attachments: sealed.map(f => f.attachment), receiver_route: prepared?.route };
@@ -8463,7 +8528,7 @@ export class Engine {
       }
       inner.send_group=await this.sendGroupCopy(d.address,pin,n.send_group);
       const envelope = await wire.seal(inner, this.keys, pub);
-      recs.push({ ...inner, ...(n.proposal_choice?{proposal_choice:n.proposal_choice}:{}), ...(n.contribution_review?{contribution_review:n.contribution_review}:{}), send_group:n.send_group||"", send_group_wire:!!inner.send_group, ...(prepared ? { receiver_route: prepared.route } : {}), at, own, envelope, ...(groupAdmission?{group_admission:groupAdmission}:{}), recipient_fp: d.fingerprint, required_cap: wire.CapHumanParticipation, files: sealed.length ? sealed : undefined, state: "queued", detail: "" });
+      recs.push({ ...inner, ...(n.proposal_choice?{proposal_choice:n.proposal_choice}:{}), ...(n.contribution_review?{contribution_review:n.contribution_review}:{}), send_group:n.send_group||"", send_group_wire:!!inner.send_group, ...(prepared ? { receiver_route: prepared.route } : {}), at, own, envelope, ...(groupAdmission?{group_admission:groupAdmission}:{}), recipient_fp: d.fingerprint, required_cap: wire.CapHumanParticipation, files: sealed.length ? sealed : undefined, state: why ? "waiting" : "queued", detail: why });
     }
     if (!recs.length) throw new Error("No authorized human audience device.");
     for (const r of recs) { const gate = await this.humanGate(c, r, checks); if (gate.why) throw new Error(gate.why); }
@@ -8474,9 +8539,9 @@ export class Engine {
       throw e;
     }
     await this.keepSent(plain); this.changed();
-    if (n.queued) this.queueOutbox(); else if (prepared) await this.post(prepared.delegation); else for (const r of recs) await this.post(r);
+    if (n.queued) this.queueOutbox(); else if (prepared) await this.post(prepared.delegation); else for (const r of recs) if (r.state === "queued") await this.post(r);
     const least = copyOrder(recs);
-    return { id: recs[0].id, lid, state: least.state, detail: least.detail, copies: recs.map(r => ({ id: r.id, to: r.to, state: r.state, detail: r.detail })) };
+    return { id: recs[0].id, lid, state: least.state, detail: least.detail, copies: [...recs.map(r => ({ id: r.id, to: r.to, state: r.state, detail: r.detail })), ...skipped] };
   }
 
   async admitHumanTurn(n, env, pin, base, root, senderPerson, group = null, admission = null) {
@@ -9363,9 +9428,28 @@ export class Engine {
       const answered = msgs.some((r) => r.fp && r.reply_to === m.id && (r.kind === "answer" || r.kind === "result"));
       const e = this.execOn(ctls.filter((x) => x.sub === wire.SubStatus && x.ref && x.ref.id === m.lid && x.ref.fingerprint === fp && x.from === m.target.address), m.target.address, answered);
       if (!e || !["awaiting", "needs_human", "interrupted", "running"].includes(e.state)) continue; // client.PageReview's states
+      // A decision waits there only while its host's word is current: a
+      // stale word (the host not connected now, suspended until it
+      // updates, or a run past EXEC_RUNNING_MAX_AGE) reports no result
+      // and asks nothing of the person; running is work, never a decision.
+      const why = e.stale ? "No result reported · " + this.hostStateWords(e.host, m, words) : (e.state === "needs_human" && this.needsYouText(m, reports)) || (e.state === "running" ? "Running on " + words(e.host) : "Decide on " + words(e.host)) + (e.detail ? ": " + e.detail : "") + ". This browser runs no agent.";
       needsYou.push({ reason: { awaiting: "agent_awaiting", needs_human: "agent_needs_human", interrupted: "agent_interrupted", running: "agent_running" }[e.state], conv, pid: m.pid, id: m.id, target:m.target, peer: here ? this.address : m.from, kind: m.kind,
-        why: (e.state === "needs_human" && this.needsYouText(m, reports)) || (e.state === "running" ? "Running on " + words(e.host) : "Decide on " + words(e.host)) + (e.detail ? ": " + e.detail : "") + ". This browser runs no agent.", excerpt: firstLine(m.body), at: iso(m.at), decide_on: e.host, ...(this.continuationOf(m,fp,e)?{continuation:this.continuationOf(m,fp,e),actions:["continue"]}:{}) });
+        why, excerpt: firstLine(m.body), at: iso(m.at), decide_on: e.host, ...(e.stale ? { stale: true } : {}), ...(!e.stale && this.continuationOf(m,fp,e)?{continuation:this.continuationOf(m,fp,e),actions:["continue"]}:{}) });
     }
+  }
+
+  // hostStateWords is what is known of a request's host device that has no
+  // current word on it: suspended by the relay until it updates, a copy
+  // here waiting for its AgentNet update, not connected now, or connected
+  // with a run older than EXEC_RUNNING_MAX_AGE. Nothing is guessed.
+  hostStateWords(host, m, words = (a) => a) {
+    const who = words(host);
+    if (this.peerSuspended(host)) return who + " is suspended until it updates AgentNet";
+    const update = (d) => typeof d === "string" && d.startsWith("peer_update: ") && d.includes(host);
+    if ((m.copies || []).some((c) => c.to === host && c.state === "waiting" && update(c.detail)) || update(m.detail)) return who + " needs an AgentNet update";
+    const listed = this.members.current ? this.members.list.find((x) => x.address === host) : null;
+    if (!listed || listed.presence !== "connected") return who + " is not connected now";
+    return who + " has not reported on it for over an hour";
   }
 
   // agentView is a participation as the page shows it (ui.AgentView).

@@ -143,6 +143,9 @@ func (a *Agent) onMembers(data []byte) {
 	if !prev.Current || !sameMemberFacts(prev.Members, m) || a.convWork.retryStale() {
 		work |= convRetry
 	}
+	if a.convWork.readerWait.Swap(false) {
+		work |= convHistory // own-device history held back for a device's program
+	}
 	a.convWork.due(work)
 	if a.kick != nil {
 		a.kick()
@@ -204,6 +207,45 @@ func (a *Agent) keepMemberFacts(m protocol.Members) {
 			a.Logf("keeping the agent devices: %v", err)
 		}
 	}
+	suspended := []string{}
+	for _, e := range m.Members {
+		if e.Suspended && e.Address != a.Address {
+			suspended = append(suspended, e.Address)
+		}
+	}
+	slices.Sort(suspended)
+	raw, _ = json.Marshal(suspended)
+	if old, _ := a.store.config("suspended_devices"); string(raw) != old && (old != "" || len(suspended) > 0) {
+		if err := a.store.setConfig(map[string]string{"suspended_devices": string(raw)}); err != nil {
+			a.Logf("keeping the suspended devices: %v", err)
+		}
+	}
+}
+
+// SuspendedDevices are the other devices the relay, as last listed,
+// serves nothing until they update AgentNet. Availability only, never
+// authority: nobody waits for them, and their copies never hold anyone
+// else's (a copy each can read goes to the relay's custody; one it cannot
+// waits here, unchecked until the relay lists it current again).
+func (a *Agent) SuspendedDevices() map[string]bool {
+	return a.store.suspendedDevices()
+}
+
+func (s *store) suspendedDevices() map[string]bool {
+	var list []string
+	if v, err := s.config("suspended_devices"); err == nil && v != "" {
+		json.Unmarshal([]byte(v), &list)
+	}
+	out := make(map[string]bool, len(list))
+	for _, address := range list {
+		out[address] = true
+	}
+	return out
+}
+
+// SuspendedText is how a suspended device is named to its senders.
+func SuspendedText(who string) string {
+	return who + " is suspended until it updates AgentNet"
 }
 
 // WorkspaceName is the name the Hub's admin gave this workspace, as last

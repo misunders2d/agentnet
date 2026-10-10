@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
@@ -249,12 +250,15 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 		}
 	}()
 	rosters := map[string]string{}
+	var skipped []ConvCopy // devices whose key cannot be used now: each gets nothing
 	for _, f := range m.Files {
 		if err = a.keepSent(f.Path); err != nil {
 			return ConvSent{}, err
 		}
 	}
+	others := false // the group has another current member
 	for _, member := range packet.State.EffectiveMembers(append(packet.Withdrawals, withdrawals...)) {
+		others = others || member.Person != me.roster.Person
 		person, ok, e := a.store.personByID(member.Person)
 		if e != nil {
 			return ConvSent{}, e
@@ -274,11 +278,18 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 			if hubUnreachable(e) { // a key pinned here would have been used: this one never was
 				return ConvSent{}, fmt.Errorf("cannot reach the Hub, and the key of %s is not known here yet: nothing was sent; send again once the Hub is reachable: %w", device.Address, e)
 			}
+			if e == nil && key.Fingerprint() != device.Fingerprint() {
+				e = errRosterKey
+			}
+			if deviceKeyUnusable(e) {
+				// That device alone gets no copy (a changed key until it is
+				// trusted, a removed device never): the group still talks.
+				a.Logf("group copy for %s not sent: %v", device.Address, e)
+				skipped = append(skipped, ConvCopy{To: device.Address, State: stateNotDelivered, Detail: "not sent: " + e.Error()})
+				continue
+			}
 			if e != nil {
 				return ConvSent{}, e
-			}
-			if key.Fingerprint() != device.Fingerprint() {
-				return ConvSent{}, errors.New("group: directory differs from pinned exact recipient key")
 			}
 			recipient, e := key.Recipient()
 			if e != nil {
@@ -312,8 +323,14 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 			}
 		}
 	}
-	if len(copies) == 0 {
-		return ConvSent{}, errors.New("group: no other current device to receive a copy")
+	// Not sent at all only when no device of another member can get it
+	// (and none of this person's when the group is theirs alone).
+	if len(copies) == 0 || len(skipped) > 0 && others && !slices.ContainsFunc(copies, func(c outCopy) bool { return !c.in.Replica }) {
+		why := "group: no other current device to receive a copy"
+		for _, s := range skipped {
+			why += "; " + s.To + ": " + s.Detail
+		}
+		return ConvSent{}, errors.New(why)
 	}
 	if err = a.prepareRemoteCopies(ctx, binding, copies, m.Files); err != nil {
 		return ConvSent{}, err
@@ -364,7 +381,7 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 	}
 	a.kickNow()
 	defer notifyDaemon(a.home)
-	sent := ConvSent{ID: copies[0].env.ID, LID: lid, State: protocol.StateDelivered}
+	sent := ConvSent{ID: copies[0].env.ID, LID: lid, State: protocol.StateDelivered, Copies: skipped}
 	for _, copy := range copies {
 		cp := ConvCopy{ID: copy.env.ID, To: copy.env.To, State: copy.state, Detail: copy.why}
 		if copy.state != stateConvWaiting { // released by releaseConv, never sent from here

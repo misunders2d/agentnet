@@ -207,7 +207,7 @@ func (a *Agent) groupDeliveryTo(ctx context.Context, packet GroupContext, payloa
 		return copies, e
 	}
 	if key.Fingerprint() != dev.Fingerprint() {
-		return copies, errors.New("group: recipient directory key differs from pinned roster")
+		return copies, errRosterKey
 	}
 	recipient, e := key.Recipient()
 	if e != nil {
@@ -269,6 +269,12 @@ func (a *Agent) groupDeliveryCopies(ctx context.Context, packet GroupContext) (c
 				continue
 			}
 			part, e := a.groupDeliveryTo(ctx, packet, payloads, dev)
+			if deviceKeyUnusable(e) {
+				// That device alone does not get this state (a changed key
+				// until trusted, a removed device never): the others do.
+				a.Logf("group state for %s not sent: %v", dev.Address, e)
+				continue
+			}
 			if e != nil {
 				return copies, e
 			}
