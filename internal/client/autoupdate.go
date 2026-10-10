@@ -163,17 +163,20 @@ func NoteAutoUpdateFailed(home, release, detail string) error {
 // autoUpdateDue is a trigger: the worker looks once.
 func (a *Agent) autoUpdateDue() { a.auto.due.Store(true) }
 
-// autoUpdateTarget is the newest release the Hub names that is newer than
-// this build: its recommendation, or the release it requires.
+// autoUpdateTarget is the release to install. While the Hub refuses this
+// build, the release it requires, its own, which lifts the suspension:
+// never a newer recommendation, an admin's notice, which may name a release
+// not published (yet) for this platform and must keep nobody suspended; it
+// comes next, once the Hub serves this device again. Otherwise the Hub's
+// recommendation when it names a release newer than this build.
 func (a *Agent) autoUpdateTarget() string {
-	target := ""
+	if u, ok := a.UpdateRequired(); ok && releaseTag.MatchString(u.Latest) && protocol.Newer(u.Latest, protocol.Version) {
+		return u.Latest
+	}
 	if r, ok := a.store.updateRecommended(); ok && releaseTag.MatchString(r.Version) {
-		target = r.Version
+		return r.Version
 	}
-	if u, ok := a.UpdateRequired(); ok && protocol.Newer(u.Latest, protocol.Version) && (target == "" || protocol.Newer(u.Latest, target)) {
-		target = u.Latest
-	}
-	return target
+	return ""
 }
 
 // maybeAutoUpdate runs on the worker after a trigger: it starts one attempt

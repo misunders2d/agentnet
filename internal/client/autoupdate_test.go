@@ -386,6 +386,50 @@ func TestAutoUpdateTriggers(t *testing.T) {
 	a.auto.runs.Wait()
 }
 
+// While the Hub refuses this build, the automatic update installs the
+// release it requires, which lifts the suspension, even when the admin
+// recommends a newer one: a recommendation is a notice and may name a
+// release not published (yet) for this platform, so it never keeps the
+// device suspended; it is the target again once the Hub serves the device.
+func TestAutoUpdateRequiredBeforeNewerRecommendation(t *testing.T) {
+	running(t, "v0.8.17")
+	w := newWorld(t, "")
+	a := w.bob
+	var mu sync.Mutex
+	var calls []string
+	a.auto.install = func(ctx context.Context, tag string) (string, error) {
+		mu.Lock()
+		calls = append(calls, tag)
+		mu.Unlock()
+		if tag == "v0.8.19" {
+			return "", errors.New("v0.8.19: no release asset for this platform")
+		}
+		return "installed " + tag, nil
+	}
+	got := func() []string { mu.Lock(); defer mu.Unlock(); return append([]string(nil), calls...) }
+	if err := a.saveRelease([]byte(`{"version":"v0.8.19","url":"https://example.test/r"}`)); err != nil {
+		t.Fatal(err)
+	}
+	a.hub.gate.after(updateRequiredError("v0.8.18", ""))
+	a.required.writes.Wait()
+	if target := a.autoUpdateTarget(); target != "v0.8.18" {
+		t.Fatalf("target while refused: %q, want the required v0.8.18", target)
+	}
+	a.autoUpdateDue()
+	a.maybeAutoUpdate(context.Background())
+	a.auto.runs.Wait()
+	if c := got(); len(c) != 1 || c[0] != "v0.8.18" {
+		t.Fatalf("attempts %v, want the required release first", c)
+	}
+	if r, _, _ := ReadAutoUpdate(a.home); r.State != AutoUpdated || r.To != "v0.8.18" {
+		t.Fatalf("record %+v", r)
+	}
+	a.hub.gate.clear() // the Hub serves this device again
+	if target := a.autoUpdateTarget(); target != "v0.8.19" {
+		t.Fatalf("target once served: %q, want the recommendation", target)
+	}
+}
+
 // A development build never updates itself, nor does a home whose person
 // turned automatic updates off; an unreadable setting is not on.
 func TestAutoUpdateNeverDevelopmentOrOff(t *testing.T) {
