@@ -436,16 +436,28 @@ const defaultWait = 5 * time.Second
 // field) and what it means on stderr, for the agent reading it.
 func printResult(r client.SendResult, wait time.Duration) {
 	fmt.Printf("%s %s %s\n", r.ID, r.State, r.Path)
-	switch {
-	case r.Detail != "":
-		fmt.Fprintf(os.Stderr, "queued for retry by the daemon: %s\n", r.Detail)
-	case r.State == protocol.StateDelivered:
-		fmt.Fprintln(os.Stderr, "delivered: stored in the recipient's inbox (not necessarily read or answered yet)")
-	case r.State == protocol.StateCustody && wait > 0:
-		fmt.Fprintf(os.Stderr, "held by the Hub; delivery to the recipient not confirmed yet. Check: agentnet status --wait 30s %s\n", r.ID)
-	case r.State == protocol.StateQuarantined:
-		fmt.Fprintln(os.Stderr, "the recipient received it but could not verify it (e.g. your key changed for them)")
+	if note := resultNote(r, wait); note != "" {
+		fmt.Fprintln(os.Stderr, note)
 	}
+}
+
+// resultNote is what printResult says of r on stderr, by what is proven:
+// a detail on a copy the Hub holds (its recipient is suspended) is not a
+// local retry.
+func resultNote(r client.SendResult, wait time.Duration) string {
+	switch {
+	case r.Detail != "" && r.State == protocol.StateCustody:
+		return "held by the Hub: " + r.Detail
+	case r.Detail != "":
+		return "queued for retry by the daemon: " + r.Detail
+	case r.State == protocol.StateDelivered:
+		return "delivered: stored in the recipient's inbox (not necessarily read or answered yet)"
+	case r.State == protocol.StateCustody && wait > 0:
+		return "held by the Hub; delivery to the recipient not confirmed yet. Check: agentnet status --wait 30s " + r.ID
+	case r.State == protocol.StateQuarantined:
+		return "the recipient received it but could not verify it (e.g. your key changed for them)"
+	}
+	return ""
 }
 
 // runStatus shows what is known about a message sent from here: one copy

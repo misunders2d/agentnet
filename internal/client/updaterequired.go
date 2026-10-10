@@ -30,13 +30,14 @@ import (
 // daemon's automatic update is asked to install vX. The daemon then sends
 // the Hub only what it still takes from a refused device (updateAllowed):
 // its stream, that stream's ping acknowledgements and the version probe,
-// and what lets admitted work drain (receipts, answers and results, and the
-// lookups they make first). Its retry pass sends only those, so nothing
-// loops, and everything else stays queued for the updated program. The
-// record ends when another version runs here, or when the Hub serves this
-// device again: its stream brings members, a message or a receipt, which
-// it sends only to a device it serves. An answered request proves nothing:
-// the Hub answers a refused device some requests too.
+// and what lets admitted work drain (receipts, answers and results, the
+// lookups they make first and the upload of their files). Its retry pass
+// sends only those, so nothing loops, and everything else stays queued for
+// the updated program. The record ends when another version runs here, or
+// when the Hub serves this device again: its stream brings members, a
+// message or a receipt, which it sends only to a device it serves. An
+// answered request proves nothing: the Hub answers a refused device some
+// requests too.
 
 // codeUpdateRequired is the Hub's refusal of this build.
 const codeUpdateRequired = "update_required"
@@ -108,9 +109,12 @@ func drainsWork(kind string) bool { return kind == envelope.KindAnswer || kind =
 // suspended allowlist, contract REVISION 2.2): the push stream, which says
 // when it is served again, that stream's ping acknowledgements, the version
 // probe and the recommendation; and what lets admitted work drain: receipts
-// of what was received, the read-only lookups of a member a send makes
-// first, and posts of answers and results (by the posted message's outer
-// kind). body is the request's.
+// of what was received, the read-only lookups an answer or a result makes
+// before it is stored (a member's directory entry, sessions and profile,
+// and a person's chain: a conversation reply refreshes each member's person
+// first), the upload of its files (reserve, chunks, the upload's state,
+// complete; never a download), and posts of answers and results (by the
+// posted message's outer kind). body is the request's.
 func updateAllowed(method, path string, body []byte) bool {
 	p, _, _ := strings.Cut(path, "?")
 	seg := strings.Split(strings.TrimPrefix(p, "/v1/"), "/")
@@ -127,6 +131,14 @@ func updateAllowed(method, path string, body []byte) bool {
 		return true
 	case method == http.MethodGet && seg[0] == "agents" && (len(seg) == 3 || len(seg) == 4 && (seg[3] == "sessions" || seg[3] == "profile")):
 		return seg[1] != "" && seg[2] != ""
+	case method == http.MethodGet && len(seg) == 3 && seg[0] == "persons" && seg[2] == "chain":
+		return seg[1] != ""
+	case method == http.MethodPost && p == "/v1/blobs":
+		return true
+	case seg[0] == "blobs" && len(seg) == 2 && seg[1] != "":
+		return method == http.MethodGet || method == http.MethodPut
+	case method == http.MethodPost && len(seg) == 3 && seg[0] == "blobs" && seg[1] != "" && seg[2] == "complete":
+		return true
 	}
 	return false
 }
@@ -139,6 +151,22 @@ func (g *updateGate) before(method, path string, body []byte) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if !g.hold || g.refusal == nil || updateAllowed(method, path, body) {
+		return nil
+	}
+	e := *g.refusal
+	return &e
+}
+
+// beforePost returns the refusal a held message of outer kind gets here,
+// before anything of it is sent: the files of a message the Hub would
+// refuse wait with it, so no retry pass uploads them again and again.
+func (g *updateGate) beforePost(kind string) error {
+	if g == nil || drainsWork(kind) {
+		return nil
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !g.hold || g.refusal == nil {
 		return nil
 	}
 	e := *g.refusal
@@ -302,6 +330,87 @@ func (a *Agent) updateServed(event string) {
 	}
 	a.convWork.due(convPublish | convRetry | convRelease)
 	a.kickNow()
+}
+
+// oldUpdateRefusals are the errors programs before v0.8.17 recorded on a
+// send the Hub refused with 426 update_required, which they took as final
+// (the row failed): the refusal itself, and the same met by a file's
+// upload. This program records neither: to it a refusal waits.
+var oldUpdateRefusals = []string{"hub: update_required (426)", "attachment upload: hub: update_required (426)"}
+
+// requeueOldUpdateRefusals puts back in the queue what an earlier program
+// failed only because the Hub required a newer AgentNet: rows failed with
+// exactly those errors, none other, none the person stopped, and only
+// while every file of it is still spooled here (else it stays failed:
+// nothing incomplete goes). The Hub refused them before custody, so this
+// sends the same sealed envelope again and runs nothing again; each file
+// is offered to the Hub again, resumably (an upload it took then may have
+// been reclaimed since). A startup pass: idempotent.
+func (a *Agent) requeueOldUpdateRefusals() (int, error) {
+	rows, err := a.store.db.Query(`SELECT id, envelope FROM outbox WHERE state = ? AND send_stopped = 0 AND error IN (?, ?)`, stateFailed, oldUpdateRefusals[0], oldUpdateRefusals[1])
+	if err != nil {
+		return 0, err
+	}
+	type refused struct {
+		id    string
+		blobs []envelope.Blob
+	}
+	var found []refused
+	for rows.Next() {
+		var id, raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		var env envelope.Envelope
+		if err := json.Unmarshal([]byte(raw), &env); err != nil {
+			continue // unreadable: left as it is
+		}
+		found = append(found, refused{id, env.Blobs})
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, r := range found {
+		kept := true
+		for _, b := range r.blobs {
+			var owned int
+			if err := a.store.db.QueryRow(`SELECT count(*) FROM uploads WHERE blob_id = ? AND message_id = ?`, b.ID, r.id).Scan(&owned); err != nil {
+				return n, err
+			}
+			if _, err := os.Stat(a.spoolPath(b.ID)); owned == 0 || err != nil {
+				kept = false
+				break
+			}
+		}
+		if !kept {
+			continue
+		}
+		tx, err := a.store.db.Begin()
+		if err != nil {
+			return n, err
+		}
+		res, err := tx.Exec(`UPDATE outbox SET state = ?, error = NULL WHERE id = ? AND state = ? AND send_stopped = 0 AND error IN (?, ?)`, stateQueued, r.id, stateFailed, oldUpdateRefusals[0], oldUpdateRefusals[1])
+		if err == nil {
+			_, err = tx.Exec(`UPDATE uploads SET state = ? WHERE message_id = ?`, protocol.BlobUploading, r.id)
+		}
+		if err != nil {
+			tx.Rollback()
+			return n, err
+		}
+		if err := a.store.done(tx.Commit()); err != nil {
+			return n, err
+		}
+		if c, _ := res.RowsAffected(); c > 0 {
+			n++
+		}
+	}
+	if n > 0 {
+		a.changes.bump()
+	}
+	return n, nil
 }
 
 // UpdateRequired returns the Hub's standing refusal of this build, if any:

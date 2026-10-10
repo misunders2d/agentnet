@@ -731,7 +731,10 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 		}
 	}
 	var r protocol.Receipt
-	err = a.uploadAll(ctx, env)
+	err = a.hub.gate.beforePost(env.Kind) // what a suspended device may not post keeps its files here (updaterequired.go)
+	if err == nil {
+		err = a.uploadAll(ctx, env)
+	}
 	if err == nil && len(env.Blobs) > 0 {
 		// Uploading files takes time: decide again, from what is stored
 		// now, just before the message itself is handed over (a person

@@ -30,8 +30,10 @@ func refusalResponse(r *http.Request) *http.Response {
 // hubServesSuspended is what the Hub still serves a device that must update
 // first (internal/hub/update.go whileSuspended, contract REVISION 2.2): its
 // stream, the stream's ping acknowledgements, the version probe and the
-// recommendation, receipts, the read-only member lookups a send makes
-// first, and posts of messages whose outer kind is answer or result.
+// recommendation, receipts, the read-only lookups an answer or a result
+// makes first (a member's directory entry, sessions and profile, a
+// person's chain), the upload of its files, and posts of messages whose
+// outer kind is answer or result.
 func hubServesSuspended(r *http.Request) bool {
 	p := r.URL.Path
 	seg := strings.Split(strings.TrimPrefix(p, "/v1/"), "/")
@@ -39,7 +41,11 @@ func hubServesSuspended(r *http.Request) bool {
 	case r.Method == "GET" && (p == "/v1/stream" || p == "/v1/version" || p == "/v1/release"),
 		r.Method == "POST" && p == "/v1/stream/ack",
 		r.Method == "POST" && len(seg) == 3 && seg[0] == "messages" && seg[2] == "ack",
-		r.Method == "GET" && seg[0] == "agents" && (len(seg) == 3 || len(seg) == 4 && (seg[3] == "sessions" || seg[3] == "profile")):
+		r.Method == "GET" && seg[0] == "agents" && (len(seg) == 3 || len(seg) == 4 && (seg[3] == "sessions" || seg[3] == "profile")),
+		r.Method == "GET" && len(seg) == 3 && seg[0] == "persons" && seg[2] == "chain",
+		r.Method == "POST" && p == "/v1/blobs",
+		(r.Method == "GET" || r.Method == "PUT") && len(seg) == 2 && seg[0] == "blobs",
+		r.Method == "POST" && len(seg) == 3 && seg[0] == "blobs" && seg[2] == "complete":
 		return true
 	case r.Method == "POST" && p == "/v1/messages":
 		body, _ := io.ReadAll(r.Body)
@@ -66,6 +72,7 @@ type suspendingHub struct {
 	refused atomic.Int64 // requests that reached it while it refused this device
 	served  atomic.Int64 // requests other than the stream it served while it did
 	streams atomic.Int64 // suspended streams it served
+	uploads atomic.Int64 // file reservations it served while it refused this device
 }
 
 func (s *suspendingHub) set(on bool) {
@@ -93,6 +100,9 @@ func (s *suspendingHub) RoundTrip(r *http.Request) (*http.Response, error) {
 	allowed := on && hubServesSuspended(r)
 	if allowed && !stream {
 		s.served.Add(1)
+	}
+	if allowed && r.Method == "POST" && r.URL.Path == "/v1/blobs" {
+		s.uploads.Add(1)
 	}
 	switch {
 	case on && stream:
@@ -240,7 +250,15 @@ func TestUpdateRequiredRefusalHoldsRequests(t *testing.T) {
 		{"GET", "/v1/agents", "", false},
 		{"GET", "/v1/agents/admin/alice/caps", "", false},
 		{"PUT", "/v1/caps", "{}", false},
-		{"POST", "/v1/blobs", "", false},
+		{"GET", "/v1/persons/p1/chain?after=-1", "", true},
+		{"GET", "/v1/persons//chain", "", false},
+		{"GET", "/v1/persons/p1", "", false},
+		{"POST", "/v1/blobs", `{"id":"b"}`, true},
+		{"GET", "/v1/blobs/b", "", true},
+		{"PUT", "/v1/blobs/b?offset=0", "x", true},
+		{"POST", "/v1/blobs/b/complete", "", true},
+		{"GET", "/v1/blobs/b/data", "", false},
+		{"DELETE", "/v1/blobs/b", "", false},
 		{"POST", "/v1/signal", "{}", false},
 	} {
 		if got := updateAllowed(c.method, c.path, []byte(c.body)); got != c.allowed {
@@ -366,6 +384,50 @@ func TestAutoUpdateTriggers(t *testing.T) {
 	eventually(t, "the required release", func() bool { c := got(); return len(c) == 3 && c[2] == "v0.8.19" })
 	answer <- nil
 	a.auto.runs.Wait()
+}
+
+// While the Hub refuses this build, the automatic update installs the
+// release it requires, which lifts the suspension, even when the admin
+// recommends a newer one: a recommendation is a notice and may name a
+// release not published (yet) for this platform, so it never keeps the
+// device suspended; it is the target again once the Hub serves the device.
+func TestAutoUpdateRequiredBeforeNewerRecommendation(t *testing.T) {
+	running(t, "v0.8.17")
+	w := newWorld(t, "")
+	a := w.bob
+	var mu sync.Mutex
+	var calls []string
+	a.auto.install = func(ctx context.Context, tag string) (string, error) {
+		mu.Lock()
+		calls = append(calls, tag)
+		mu.Unlock()
+		if tag == "v0.8.19" {
+			return "", errors.New("v0.8.19: no release asset for this platform")
+		}
+		return "installed " + tag, nil
+	}
+	got := func() []string { mu.Lock(); defer mu.Unlock(); return append([]string(nil), calls...) }
+	if err := a.saveRelease([]byte(`{"version":"v0.8.19","url":"https://example.test/r"}`)); err != nil {
+		t.Fatal(err)
+	}
+	a.hub.gate.after(updateRequiredError("v0.8.18", ""))
+	a.required.writes.Wait()
+	if target := a.autoUpdateTarget(); target != "v0.8.18" {
+		t.Fatalf("target while refused: %q, want the required v0.8.18", target)
+	}
+	a.autoUpdateDue()
+	a.maybeAutoUpdate(context.Background())
+	a.auto.runs.Wait()
+	if c := got(); len(c) != 1 || c[0] != "v0.8.18" {
+		t.Fatalf("attempts %v, want the required release first", c)
+	}
+	if r, _, _ := ReadAutoUpdate(a.home); r.State != AutoUpdated || r.To != "v0.8.18" {
+		t.Fatalf("record %+v", r)
+	}
+	a.hub.gate.clear() // the Hub serves this device again
+	if target := a.autoUpdateTarget(); target != "v0.8.19" {
+		t.Fatalf("target once served: %q, want the recommendation", target)
+	}
 }
 
 // A development build never updates itself, nor does a home whose person
@@ -565,7 +627,8 @@ func TestUpdateRequiredOutlivesWhatTheHubStillServes(t *testing.T) {
 
 // A suspended daemon still finishes admitted work the Hub takes from it
 // (contract REVISION 2.2): receipts of what it received and the answer to
-// a question it holds go; new work stays queued without reaching the Hub;
+// a question it holds go, an answer's files with it; new work stays queued
+// without reaching the Hub, its files too (no retry pass uploads them);
 // neither ends the suspension.
 func TestSuspendedDeviceDrainsAdmittedWork(t *testing.T) {
 	running(t, "v0.8.17")
@@ -580,10 +643,19 @@ func TestSuspendedDeviceDrainsAdmittedWork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "bob holds the question", func() bool {
+	q2, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "send me the plan as a file", Kind: envelope.KindQuestion})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "bob holds the questions", func() bool {
 		_, kind, err := w.bob.store.inboxKind(q.ID)
-		return err == nil && kind == envelope.KindQuestion
+		_, kind2, err2 := w.bob.store.inboxKind(q2.ID)
+		return err == nil && kind == envelope.KindQuestion && err2 == nil && kind2 == envelope.KindQuestion
 	})
+	file := filepath.Join(t.TempDir(), "plan.txt")
+	if err := os.WriteFile(file, []byte("the plan, in a file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	hub.set(true)
 	eventually(t, "bob is told he is suspended", func() bool { return hub.streams.Load() > 0 && w.bob.hub.gate.holding() })
 	if err := w.bob.store.resendReceipt(q.ID); err != nil { // a receipt the Hub has not recorded yet
@@ -594,19 +666,42 @@ func TestSuspendedDeviceDrainsAdmittedWork(t *testing.T) {
 	if err != nil || plain.State != stateQueued {
 		t.Fatalf("new work while suspended: %+v %v (it waits)", plain, err)
 	}
+	uploads := hub.uploads.Load()
+	withFile, err := w.bob.Send(tctx(t), w.alice.Address, "new work with a file", "", file)
+	if err != nil || withFile.State != stateQueued {
+		t.Fatalf("new work with a file while suspended: %+v %v (it waits)", withFile, err)
+	}
+	if n := hub.uploads.Load(); n != uploads {
+		t.Fatalf("held work's file reached the Hub: %d uploads (was %d)", n, uploads)
+	}
 	ans, err := w.bob.Reply(tctx(t), q.ID, "the plan is to update")
 	if err != nil || ans.State != protocol.StateCustody && ans.State != protocol.StateDelivered {
 		t.Fatalf("the answer to admitted work: %+v %v (the Hub takes it)", ans, err)
 	}
-	w.bob.sync(tctx(t)) // the retry pass a ping runs
+	ans2, err := w.bob.Reply(tctx(t), q2.ID, "the plan is attached", file)
+	if err != nil || ans2.State != protocol.StateCustody && ans2.State != protocol.StateDelivered {
+		t.Fatalf("the answer with a file to admitted work: %+v %v (the Hub takes it and its file)", ans2, err)
+	}
+	if hub.uploads.Load() != uploads+1 {
+		t.Fatalf("the answer's file: %d uploads (was %d)", hub.uploads.Load(), uploads)
+	}
+	uploads = hub.uploads.Load()
+	for range 3 {
+		w.bob.sync(tctx(t)) // the retry pass a ping runs
+	}
 	if pending, err := w.bob.store.unsentReceipts(); err != nil || len(pending) != 0 {
 		t.Fatalf("receipts still unsent while suspended: %v %v", pending, err)
 	}
-	if st, _, _, _ := w.bob.store.outboxState(plain.ID); st != stateQueued {
-		t.Fatalf("new work is %q", st)
+	for _, id := range []string{plain.ID, withFile.ID} {
+		if st, _, _, _ := w.bob.store.outboxState(id); st != stateQueued {
+			t.Fatalf("new work %s is %q", id, st)
+		}
 	}
 	if n := hub.refused.Load(); n != before {
 		t.Fatalf("held work reached the Hub: %d refused (was %d)", n, before)
+	}
+	if n := hub.uploads.Load(); n != uploads {
+		t.Fatalf("held work's file reached the Hub: %d uploads (was %d)", n, uploads)
 	}
 	w.bob.required.writes.Wait()
 	if _, ok := w.bob.UpdateRequired(); !ok || !w.bob.hub.gate.holding() {
@@ -614,5 +709,77 @@ func TestSuspendedDeviceDrainsAdmittedWork(t *testing.T) {
 	}
 	if _, ok := w.bob.store.updateRequired(); !ok {
 		t.Fatal("the recorded refusal was erased")
+	}
+}
+
+// A suspended daemon's agent finishes a request it admitted before in a
+// conversation with an external participation: the reply first refreshes
+// each member's person (GET /v1/persons/{id}/chain), which the Hub still
+// serves a suspended device (contract REVISION 2.2), so the reply is
+// stored and goes; the request never ends "not delivered" because the
+// device must update.
+func TestSuspendedDeviceFinishesConversationReply(t *testing.T) {
+	running(t, "v0.8.17")
+	w, host, conv, _, _, records, stopHost := externalAgentWorld(t)
+	p, err := w.alice.InviteNamedAgent(tctx(t), conv, host.Address, records[0].ID, nil, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "external invitation", func() bool { return stateAt(t, host, p.PID).State == PartInvited })
+	if _, err := host.AcceptParticipation(tctx(t), p.PID); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range []*Agent{w.alice, w.bob} {
+		eventually(t, "accepted external identity", func() bool { return stateAt(t, a, p.PID).Claimable() })
+	}
+	stopHost()
+	q, err := w.alice.AskAgent(tctx(t), p.PID, envelope.KindQuestion, "what is the plan?")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := w.alice.store.db.Query(`SELECT envelope FROM outbox WHERE recipient=? AND kind=?`, host.Address, envelope.KindQuestion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var copies []envelope.Envelope
+	for rows.Next() {
+		var raw string
+		var env envelope.Envelope
+		if err := rows.Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal([]byte(raw), &env); err != nil {
+			t.Fatal(err)
+		}
+		copies = append(copies, env)
+	}
+	rows.Close()
+	for _, env := range copies {
+		if err := host.accept(tctx(t), env); err != nil {
+			t.Fatal(err)
+		}
+	}
+	eventually(t, "the host holds it", func() bool { return inboxCount(t, host, `id=? AND state=?`, q.ID, stateAgentWaiting) == 1 })
+	j, found, _, _, err := host.store.claimAgentPage("", host.Address, host.Self().Fingerprint(), 0, agentPage, func(qq dbq, id string) (*ExecutorStamp, error) { return host.ResolveExecutorIn(qq, id, nil) })
+	if err != nil || !found || j.ID != q.ID {
+		t.Fatalf("claim %+v %v %v", j, found, err)
+	}
+	host.hub.gate.setHold(true) // as the daemon does once the Hub suspends it
+	host.hub.gate.after(updateRequiredError("v0.8.18", ""))
+	host.required.writes.Wait()
+	host.finishAgent(tctx(t), j, &j.Executor.Responder, envelope.StatusDone, "the plan\nemotion: calm")
+	m, err := host.store.inboxMessage(q.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.State != stateAnswered {
+		t.Fatalf("the admitted request ended %q (%s), want answered", m.State, m.Detail)
+	}
+	var stored int
+	if err := host.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE pid=? AND origin LIKE 'agent:%'`, p.PID).Scan(&stored); err != nil || stored == 0 {
+		t.Fatalf("the reply was not stored: %d %v", stored, err)
+	}
+	if !host.hub.gate.holding() {
+		t.Fatal("the reply ended the suspension")
 	}
 }

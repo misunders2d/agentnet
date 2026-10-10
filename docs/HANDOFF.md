@@ -1461,7 +1461,10 @@ of a working native UI.
 - Relay upgrades are separate from desktop upgrades. Back up while stopped,
   retain the existing volume and secrets, replace the release binary/image,
   restart, then verify `/v1/version` and unchanged realm identity. An admin's
-  `release set` only recommends a client version; it installs nothing.
+  `release set` installs nothing on the relay, but from v0.8.17 member
+  daemons and apps with automatic update on (the default) install a
+  recommended release newer than their release build by themselves (fixed
+  GitHub origin, SHA256SUMS); `agentnet update --auto off` opts a home out.
 
 ### Open follow-ups after v0.8.1
 

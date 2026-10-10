@@ -373,6 +373,9 @@ export const heldDiagnosticCode = why => {
   "only the sender's person edits or deletes a message": "control_target_person_mismatch",
   "Only the current sender person edits or retracts a group message.": "control_target_person_mismatch",
   "Historical group control differs from exact author person.": "control_target_person_mismatch",
+  "the target's sender key is no member's (yet)": "control_target_unknown_key",
+  "Group control target key is no member's (yet).": "group_context_unavailable",
+  "Historical group control target key is no member's (yet).": "group_context_unavailable",
   "local recipient identity changed": "recipient_identity_changed",
   "named participation has no unambiguous verified invitation": "participation_invite_unresolved",
   "outside traffic has no unambiguous invitation proof yet": "participation_invite_unresolved",
@@ -748,19 +751,30 @@ export function sameOrigin(hub, base) {
 
 const releaseTag = /^v\d{1,6}\.\d{1,6}\.\d{1,6}$/;
 
+// drainsWork says whether a refused device may still post a message of
+// outer kind: an answer or a result finishes what was admitted before.
+const drainsWork = (kind) => kind === "answer" || kind === "result";
+
 // updateAllowed is what the server still takes from a device it refuses
 // (internal/client updateAllowed, the Hub's suspended allowlist): the
 // stream, its ping acknowledgements, the version probe and the
-// recommendation; receipts, the read-only lookups of a member a send makes
-// first, and posts of answers and results (the posted message's outer
-// kind), so admitted work drains. body is the request's.
+// recommendation; receipts, the read-only lookups an answer or a result
+// makes first (a member's directory entry, sessions and profile, a
+// person's chain), the upload of its files (reserve, chunks, the upload's
+// state, complete; never a download), and posts of answers and results
+// (the posted message's outer kind), so admitted work drains. body is the
+// request's.
 const updateAllowed = (method, path, body) => {
   const p = String(path).split("?")[0], seg = p.replace(/^\/v1\//, "").split("/");
   if (method === "GET" && (p === "/v1/stream" || p === "/v1/version" || p === "/v1/release") || method === "POST" && p === "/v1/stream/ack") return true;
   if (method === "POST" && p === "/v1/messages") {
-    try { const kind = JSON.parse(typeof body === "string" ? body : "").kind; return kind === "answer" || kind === "result"; } catch (e) { return false; }
+    try { return drainsWork(JSON.parse(typeof body === "string" ? body : "").kind); } catch (e) { return false; }
   }
   if (method === "POST" && seg.length === 3 && seg[0] === "messages" && seg[1] && seg[2] === "ack") return true;
+  if (method === "GET" && seg.length === 3 && seg[0] === "persons" && seg[1] && seg[2] === "chain") return true;
+  if (method === "POST" && p === "/v1/blobs") return true;
+  if (seg[0] === "blobs" && seg.length === 2 && seg[1]) return method === "GET" || method === "PUT";
+  if (method === "POST" && seg.length === 3 && seg[0] === "blobs" && seg[1] && seg[2] === "complete") return true;
   return method === "GET" && seg[0] === "agents" && !!seg[1] && !!seg[2] && (seg.length === 3 || seg.length === 4 && (seg[3] === "sessions" || seg[3] === "profile"));
 };
 
@@ -840,12 +854,24 @@ export class Engine {
     if(id&&!this.revoked)await this.repairCarrierReceiptsPage();
     this.heldHistoryRecovery = !!id && this.me?.state === "self" && !(await this.store.get("kv", "held-group-history-recovery-v1"));
     this.heldLifecycleHistoryRecovery = !!id && this.me?.state === "self" && !(await this.store.get("kv", "held-dm-lifecycle-recovery-v1"));
+    const outbox = id ? await this.store.all("outbox") : [];
     // Older DM control copies cached their recipient as the author.
     // These locally signed rows belong to this person; retain their wire bytes.
     if (id && this.me) {
-      const rows = (await this.store.all("outbox")).filter(r => r.control && r.conv && r.to && r.fp === this.fp && r.person !== this.me.person);
+      const rows = outbox.filter(r => r.control && r.conv && r.to && r.fp === this.fp && r.person !== this.me.person);
       if (rows.length) try {
         await this.store.write(rows.map(r => ({s:"outbox",k:r.id,v:{...r,person:this.me.person}})), rows.map(r => ({s:"outbox",k:r.id,v:r})));
+      } catch (e) { if (e instanceof StoreConflict) return this.load(); throw e; }
+    }
+    // Pages before v0.8.17 took the server's 426 update_required on a send
+    // as final: the copy failed with the server's code as its detail. The
+    // server refused it before custody, so this build sends the same sealed
+    // envelope again (nothing runs again); a person's cancellation stays,
+    // and so does a copy whose files are no longer kept here.
+    if (id) {
+      const refused = outbox.filter(r => r.state === "failed" && r.detail === "update_required" && !r.delivery_cancelled && !r.receiver_redacted && (r.files || []).every(f => f.uploaded || f.ct));
+      if (refused.length) try {
+        await this.store.write(refused.map(r => ({s:"outbox",k:r.id,v:{...r,state:"queued",detail:""}})), refused.map(r => ({s:"outbox",k:r.id,v:r})));
       } catch (e) { if (e instanceof StoreConflict) return this.load(); throw e; }
     }
     this.link = (await this.store.get("kv", "link")) || null; // this device's own request to join a person, if it joined with a link
@@ -2713,11 +2739,15 @@ export class Engine {
       return p; // a step that does not follow proves nothing here
     }
     const next = await this.personRecord([await wire.parseRoster(p.json), ...steps.slice(1)], p.state, p);
+    // A newer roster, once pinned, is membership evidence: what waits for a
+    // key no member's yet (an edit of a device's message added since) looks
+    // again.
     if (p.state === "self") {
       this.me = { ...next, published: true };
       await put(this.store, "kv", "person", this.me);
       await this.pinDevices(this.me);
       this.changed();
+      this.retryHeld().catch(() => {});
       this.syncRoots().catch(()=>{});this.syncReadMarks().catch(()=>{});this.syncTopicTitles().catch(()=>{});this.syncInvitations().catch(()=>{});
       this.runHistory().catch(()=>{});
       return this.me;
@@ -2725,6 +2755,7 @@ export class Engine {
     await put(this.store, "persons", next.person, next);
     await this.pinDevices(next);
     this.changed();
+    this.retryHeld().catch(() => {});
     this.runHistory().catch(()=>{}); // newly verified host/member proof may unblock a deferred original
     return next;
   }
@@ -3117,7 +3148,10 @@ export class Engine {
         await this.requireAgentIdentity(rec.to, pin, rec.required_cap);
       }
       // The files first, each resumable; the message names them only once
-      // the relay holds them.
+      // the relay holds them. While the server refuses this build, the files
+      // of a message it would refuse wait with it (only an answer's or a
+      // result's go, as internal/client beforePost): none is sent in vain.
+      if (this.outdated?.refused && (rec.files || []).some((f) => !f.uploaded) && !updateAllowed("POST", "/v1/messages", rec.envelope)) throw new HubError(426, "update_required", this.outdatedText());
       for (const f of rec.files || []) {
         if (f.uploaded) continue;
         await this.uploadBlob(rec.to, f.attachment.blob, f.ct);
@@ -5000,7 +5034,8 @@ export class Engine {
       if(!sender)throw new Hold("invalid","Historical group control author is not current.");
       await this.groupControlFence(members,h.from_key,this.fp);await this.groupControlTarget(conv,h.ref,checks);
       const targetAuthor=[...members.values()].find(p=>(p.known||p.devices).some(d=>d.fingerprint===h.ref.fingerprint)); // a device removed since stays its person's (client personOfKeyIn)
-      if(h.sub!==wire.SubReaction&&targetAuthor?.person!==sender.person)throw new Hold("invalid",targetAuthor?"Historical group control differs from exact author person.":"Historical group control target key is no member's.");
+      // A key no member's (yet) waits, as client groupControlHistory (ErrGroupContextPending).
+      if(h.sub!==wire.SubReaction&&targetAuthor?.person!==sender.person)throw targetAuthor?new Hold("invalid","Historical group control differs from exact author person."):new Hold("proof_pending","Historical group control target key is no member's (yet).");
       return null;
     }
     if(!wire.validID(h.pid)||h.ref||!["","event","excerpt"].includes(h.sub))throw new Hold("invalid","Historical group participation scope malformed.");
@@ -7319,7 +7354,8 @@ export class Engine {
       if(!!n.replica!==!!own)throw new Hold("invalid","Group control replica differs from own sender.");
       await this.groupControlFence(members,pin.fingerprint,this.fp);
       const targets=await this.groupControlTarget(n.conv,n.ref,checks),author=[...members.values()].find(p=>(p.known||p.devices).some(d=>d.fingerprint===n.ref.fingerprint)); // a device removed since stays its person's (client personOfKeyIn)
-      if(n.sub!==wire.SubReaction&&author?.person!==sender.person)throw new Hold("invalid",author?"Only the current sender person edits or retracts a group message.":"Group control target key is no member's.");
+      // A key no member's (yet) waits, as client admitControl (ErrGroupContextPending).
+      if(n.sub!==wire.SubReaction&&author?.person!==sender.person)throw author?new Hold("invalid","Only the current sender person edits or retracts a group message."):new Hold("proof_pending","Group control target key is no member's (yet).");
       if(n.sub===wire.SubRevision&&await this.refTombstoned(n.conv,n.ref))rec.body="";
       rec.targetRow=targets[0];
     }
@@ -7550,7 +7586,10 @@ export class Engine {
     if (!wire.rootMember(root, sp.person)) throw new Hold("invalid", "the sender is not a member of this conversation");
     if (n.sub !== wire.SubReaction) {
       const owner = await this.personOfFp(ref.fingerprint); // current or past (known) devices, as client personOfKeyIn
-      if (sp.person !== owner) throw new Hold("invalid", owner ? "only the sender's person edits or deletes a message" : "the target's sender key is no known person's");
+      // A key no known person's (yet) waits for the roster step that adds
+      // it, checked again when membership changes; another person's is
+      // refused (client controlAuthorized).
+      if (sp.person !== owner) throw owner ? new Hold("invalid", "only the sender's person edits or deletes a message") : new Hold("proof_pending", "the target's sender key is no member's (yet)");
     }
     const key = pin.fingerprint + "/" + n.lid;
     if (await this.store.get("lids", key)) return []; // a copy already here
