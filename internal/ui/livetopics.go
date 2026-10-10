@@ -16,8 +16,8 @@ import (
 // at a time through GET /api/topics. Without the flag the overview lists
 // every thread, archived topics too (a page that knows nothing of topics
 // still reaches them all). A name and Mark done / Reopen are set through
-// POST /api/topic/{rename,done,reopen}. Names sync across own linked devices;
-// Mark done / Reopen for agent topics remain on this device.
+// POST /api/topic/{rename,done,reopen}. Names, Mark done / Reopen and Archive
+// sync across own linked human devices (client topicsync.go, topicstatesync.go).
 
 // Topic states (ThreadSummary.State).
 const (
@@ -182,7 +182,7 @@ func (l *Live) ChangeTopic(what string, c TopicChange) (string, error) {
 		if !covered {
 			return "Newer Main flow messages remain active.", nil
 		}
-		return map[string]string{"rename": "Main flow renamed across your linked devices.", "archive": "Archived on this device. Nothing deleted.", "reopen": "Reopened on this device.", "delete": "Deleted for you and your devices. Other people keep their copies."}[what], nil
+		return map[string]string{"rename": "Main flow renamed across your linked devices.", "archive": "Archived. It syncs across your linked devices. Nothing deleted.", "reopen": "Reopened. It syncs across your linked devices.", "delete": "Deleted for you and your devices. Other people keep their copies."}[what], nil
 	}
 
 	if len(c.IDs) > 0 {
@@ -232,7 +232,7 @@ func (l *Live) ChangeTopic(what string, c TopicChange) (string, error) {
 		if !covered {
 			return topicNewer, nil
 		}
-		note := map[string]string{"create": "Topic created. Its replies stay here.", "done": "Marked done for everyone. A new message reopens it.", "reopen": "Reopened for everyone.", "rename": "Topic renamed. The name syncs across your linked devices.", "archive": "Archived on this device. Nothing deleted.", "delete": "Deleted for you and your devices. Other people keep their copies."}[what]
+		note := map[string]string{"create": "Topic created. Its replies stay here.", "done": "Marked done for everyone. A new message reopens it.", "reopen": "Reopened for everyone.", "rename": "Topic renamed. The name syncs across your linked devices.", "archive": "Archived. It syncs across your linked devices. Nothing deleted.", "delete": "Deleted for you and your devices. Other people keep their copies."}[what]
 		if what == TopicRename && strings.Join(strings.Fields(c.Title), " ") == "" {
 			note = "Topic named after its first message again."
 		}
@@ -243,7 +243,7 @@ func (l *Live) ChangeTopic(what string, c TopicChange) (string, error) {
 	switch what {
 	case "archive":
 		err = l.a.ArchiveTopic(c.Peer, c.ID)
-		note = "Archived on this device. Nothing deleted."
+		note = "Archived. It syncs across your linked devices. Nothing deleted."
 	case "delete":
 		_, err = l.a.DeleteThread(c.Peer, c.ID)
 		note = "Deleted on this device. Others keep their copies."
@@ -255,10 +255,10 @@ func (l *Live) ChangeTopic(what string, c TopicChange) (string, error) {
 		}
 	case TopicMark:
 		covered, err = l.a.MarkTopicDone(c.Peer, c.ID, c.Count)
-		note = "Marked done on this device. A new message makes it active again."
+		note = "Marked done. It syncs across your linked devices; a new message makes it active again."
 	case TopicReopen:
 		covered, err = l.a.ReopenTopic(c.Peer, c.ID, c.Count)
-		note = "Reopened on this device."
+		note = "Reopened. It syncs across your linked devices."
 	default:
 		return "", NotFound("no such topic change")
 	}

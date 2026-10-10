@@ -243,6 +243,9 @@ const server = http.createServer((req, res) => {
         }
         await all().click();
         let dialog = page.getByRole('dialog', { name: 'All topics', exact: true });
+        // Owner (v0.8.17): names and Archive (and in agent chats Done) follow the person's linked devices.
+        await dialog.getByRole('checkbox', { name: 'Select Topic 1', exact: true }).waitFor();
+        assert.match(await dialog.innerText(), kind === 'agent' ? /Names, Done and Archive sync across your linked devices\./ : /Names and Archive sync across your linked devices\./, tag + ': All topics says which changes follow linked devices');
         await dialog.getByRole('checkbox', { name: 'Select Topic 1', exact: true }).check();
         await dialog.getByRole('checkbox', { name: 'Select Topic 2', exact: true }).check();
         await dialog.getByRole('button', { name: 'Mark done', exact: true }).click();
@@ -252,6 +255,10 @@ const server = http.createServer((req, res) => {
         assert.equal((await changed()).length, 0, tag + ': Undo stops mutations');
         if (skin === 'comic') await dialog.getByRole('button', { name: 'Mark done', exact: true }).click();
         else await dialog.getByRole('button', { name: 'Mark done', exact: true }).click();
+        // Owner (v0.8.17): the confirmation says where Done applies, like the footer.
+        const doneAsk = await dialog.innerText();
+        assert.match(doneAsk, kind === 'agent' ? /Mark these topics done on your linked devices\?|Mark done 2 topics\? On your linked devices\./ : /Mark these topics done for everyone\?|Mark done 2 topics\? Shared with everyone\./, tag + ': Mark done says where it applies');
+        assert.doesNotMatch(doneAsk, /on this device/i, tag + ': Mark done is not called this device\'s');
         await shot('bulk-confirm');
         await dialog.getByRole('button', { name: 'Confirm', exact: true }).click();
         await page.waitForFunction(() => fixture.requests.some(r => r.path === '/api/topic/done'), null, { timeout: 12000 });
@@ -268,6 +275,9 @@ const server = http.createServer((req, res) => {
         await dialog.getByRole('checkbox', { name: 'Select Topic 3', exact: true }).check();
         await dialog.getByRole('checkbox', { name: 'Select Topic 4', exact: true }).check();
         await dialog.getByRole('button', { name: 'Archive', exact: true }).click();
+        const archiveAsk = await dialog.innerText();
+        assert.match(archiveAsk, /Archive these topics on your linked devices\? Nothing deleted\.|Archive 2 topics\? On your linked devices\./, tag + ': Archive says where it applies');
+        assert.doesNotMatch(archiveAsk, /on this device/i, tag + ': Archive is not called this device\'s');
         await dialog.getByRole('button', { name: 'Confirm', exact: true }).click();
         await page.waitForFunction(() => fixture.requests.some(r => r.path === '/api/topic/archive'), null, { timeout: 12000 });
         await dialog.getByRole('button', { name: /^Archived(?:\s|$)/ }).click();

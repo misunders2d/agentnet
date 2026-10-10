@@ -249,6 +249,7 @@ const (
 	SubInvitationSync  = "invitation-sync"  // inert outgoing invitation view for own-human devices
 	SubModelSync       = "model-sync"       // private agent-reported model snapshots
 	SubTopicSync       = "topic-sync"       // private topic titles for own-human devices
+	SubTopicStateSync  = "topic-state-sync" // private topic marks (done, reopen, archive) for own-human devices
 	SubReadSync        = "read-sync"        // exact read references between current own-human devices
 	SubRootSync        = "root-sync"        // signed DM root only, current own-human devices; no turn or execution
 	SubFile            = "file"             // a request for, or the offer of, a history message's file between devices of one person; never a request to run
@@ -729,7 +730,7 @@ func checkVersion2(in Inner) error {
 		}
 		return nil
 	}
-	if in.Sub == SubReadSync || in.Sub == SubInvitationSync || in.Sub == SubModelSync || in.Sub == SubTopicSync || in.Sub == SubDeviceHistory || in.Sub == SubDeviceFile {
+	if in.Sub == SubReadSync || in.Sub == SubInvitationSync || in.Sub == SubModelSync || in.Sub == SubTopicSync || in.Sub == SubTopicStateSync || in.Sub == SubDeviceHistory || in.Sub == SubDeviceFile {
 		if in.Conv != "" || in.LID != "" || len(in.Root) != 0 || in.Kind != KindMessage || !in.Replica || in.Target != nil || in.PID != "" || (len(in.Attachments) != 0 && in.Sub != SubDeviceFile) || len(in.Attachments) > 1 || in.ReplyTo != "" || in.Origin != "" || in.Emotion != "" || in.Status != "" || in.Fan != nil || in.Human != nil || in.ReceiverRoute != nil || in.AgentID != "" || in.Topic != "" || in.TopicEvent != nil || in.TopicDone || in.Quote != "" || in.Session != "" || in.Fallback {
 			return errors.New("read sync: quiet rootless reference carrier required")
 		}
@@ -759,6 +760,13 @@ func checkVersion2(in Inner) error {
 				return errors.New("topic sync carries no message grouping")
 			}
 			_, err := protocol.ParseTopicSync([]byte(in.Body))
+			return err
+		}
+		if in.Sub == SubTopicStateSync {
+			if in.SendGroup != "" {
+				return errors.New("topic state sync carries no message grouping")
+			}
+			_, err := protocol.ParseTopicStateSync([]byte(in.Body))
 			return err
 		}
 		if in.Sub == SubInvitationSync {
@@ -911,7 +919,7 @@ func SealAttention(in Inner, sender ed25519.PrivateKey, recipient age.Recipient,
 }
 
 func sealEnvelope(in Inner, sender ed25519.PrivateKey, recipient age.Recipient, channel string) (Envelope, error) {
-	if (in.Sub == SubRootSync || in.Sub == SubReadSync || in.Sub == SubInvitationSync || in.Sub == SubModelSync || in.Sub == SubTopicSync || in.Sub == SubDeviceHistory || in.Sub == SubDeviceFile) && channel != "" {
+	if (in.Sub == SubRootSync || in.Sub == SubReadSync || in.Sub == SubInvitationSync || in.Sub == SubModelSync || in.Sub == SubTopicSync || in.Sub == SubTopicStateSync || in.Sub == SubDeviceHistory || in.Sub == SubDeviceFile) && channel != "" {
 		return Envelope{}, errors.New("root sync carries no attention")
 	}
 	if !validKind(in.Kind) {
@@ -1026,7 +1034,7 @@ func Open(e Envelope, self *identity.Identity, selfAddress string, sender identi
 	if err := checkVersion2(in); err != nil {
 		return in, err
 	}
-	if (in.Sub == SubRootSync || in.Sub == SubReadSync || in.Sub == SubInvitationSync || in.Sub == SubModelSync || in.Sub == SubTopicSync || in.Sub == SubDeviceHistory || in.Sub == SubDeviceFile) && e.Attn {
+	if (in.Sub == SubRootSync || in.Sub == SubReadSync || in.Sub == SubInvitationSync || in.Sub == SubModelSync || in.Sub == SubTopicSync || in.Sub == SubTopicStateSync || in.Sub == SubDeviceHistory || in.Sub == SubDeviceFile) && e.Attn {
 		return in, errors.New("root sync carries no attention")
 	}
 	if len(in.Attachments) != len(e.Blobs) {

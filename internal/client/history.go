@@ -213,7 +213,7 @@ func insertCopies(tx *sql.Tx, copies []outCopy) error {
 	for _, c := range copies {
 		data, _ := json.Marshal(c.env)
 		body := ""
-		if c.required == protocol.CapModelSync || c.required == protocol.CapGroup || c.required == protocol.CapReadSync || c.required == protocol.CapOwnSyncV2 || c.required == protocol.CapOwnSyncV3 {
+		if c.required == protocol.CapModelSync || c.required == protocol.CapGroup || c.required == protocol.CapReadSync || c.required == protocol.CapOwnSyncV2 || c.required == protocol.CapOwnSyncV3 || c.required == protocol.CapTopicStateSync {
 			body = c.in.Body
 		} else if c.in.Sub == envelope.SubHistory {
 			var item HistoryItem

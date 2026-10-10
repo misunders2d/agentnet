@@ -205,6 +205,11 @@ func (a *Agent) convSync(ctx context.Context) {
 			a.Logf("copying topic titles: %v", titleErr)
 			a.convWork.due(convHistory)
 		}
+		marks, markErr := a.syncTopicMarks()
+		if markErr != nil {
+			a.Logf("copying topic marks: %v", markErr)
+			a.convWork.due(convHistory)
+		}
 		models, modelErr := a.syncModelReports()
 		if modelErr != nil {
 			a.Logf("copying model reports: %v", modelErr)
@@ -215,7 +220,7 @@ func (a *Agent) convSync(ctx context.Context) {
 		if directErr != nil {
 			a.Logf("copying direct history: %v", directErr)
 		}
-		if roots || reads || invites || titles || models || more || direct {
+		if roots || reads || invites || titles || marks || models || more || direct {
 			a.convWork.due(convHistory) // one page per sync; the next follows at once
 			a.kickNow()
 		}
@@ -241,7 +246,7 @@ func (a *Agent) relayFeatures(ctx context.Context) ([]string, error) {
 // hint (advertisedCaps) it is at most protocol.MaxAdvertisedCaps long;
 // rm1 (protocol.CapRoom) says this program enforces every room reader rule
 // (ROOM_V1 §2.1), so what rm1 implies (rcv1 among them) is not listed.
-var ownCaps = []string{protocol.CapContinuation, protocol.CapRootSync, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapRequestFollowup, protocol.CapGroupInvitationControl, protocol.CapHeadless, protocol.CapGroupHumanParticipation, protocol.CapModelSync, protocol.CapNotify, protocol.CapTopicOrganization, protocol.CapOwnSyncV2, protocol.CapOwnSyncV3, protocol.CapPerson, protocol.CapReadSync, protocol.CapRoom, protocol.CapSendGroup, protocol.CapTopicParticipation, protocol.CapTyping} // apx1 and aid1 are already implied by rm1; preserve the 21-cap advertisement bound including agent1
+var ownCaps = []string{protocol.CapContinuation, protocol.CapRootSync, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapRequestFollowup, protocol.CapGroupInvitationControl, protocol.CapHeadless, protocol.CapGroupHumanParticipation, protocol.CapModelSync, protocol.CapNotify, protocol.CapTopicOrganization, protocol.CapOwnSyncV2, protocol.CapOwnSyncV3, protocol.CapPerson, protocol.CapReadSync, protocol.CapRoom, protocol.CapSendGroup, protocol.CapTopicParticipation, protocol.CapTopicStateSync, protocol.CapTyping} // apx1 and aid1 are already implied by rm1; preserve the 22-cap advertisement bound including agent1
 
 // capsPublisher is the one publisher of this run's capability records:
 // the daemon's and link.go's waiting session share the session id, and the
@@ -1108,7 +1113,7 @@ func (a *Agent) releaseConv(ctx context.Context, feats []string) {
 			case err != nil || !found:
 			case proposalCap && w.conv == "":
 				ok = a.requireParticipationCaps(ctx, key, protocol.CapOwnSyncV3) == nil && (w.required == "" || a.requireParticipationCaps(ctx, key, w.required) == nil)
-			case w.required == protocol.CapModelSync || w.required == protocol.CapReadSync || w.required == protocol.CapOwnSyncV2 || w.required == protocol.CapOwnSyncV3:
+			case w.required == protocol.CapModelSync || w.required == protocol.CapReadSync || w.required == protocol.CapOwnSyncV2 || w.required == protocol.CapOwnSyncV3 || w.required == protocol.CapTopicStateSync:
 				ok = a.requireParticipationCaps(ctx, key, w.required) == nil
 			case w.required == protocol.CapAgentReaction && w.conv == "":
 				// A device thread's assistant reaction: no person gate either.
@@ -1315,6 +1320,9 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 	}
 	if in.Sub == envelope.SubTopicSync {
 		return a.admitTopicSync(ctx, env, in, sender, fromQuarantine, hold)
+	}
+	if in.Sub == envelope.SubTopicStateSync {
+		return a.admitTopicStateSync(ctx, env, in, sender, fromQuarantine, hold)
 	}
 	if in.Sub == envelope.SubDeviceHistory {
 		return a.admitDeviceHistory(ctx, env, in, sender, fromQuarantine, hold)
