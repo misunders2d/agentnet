@@ -328,6 +328,7 @@ func (h *Hub) handleAck(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "", "storage error")
 		return
 	}
+	h.streams.received(caller) // its stream is alive, even while its pings wait behind messages
 	if changed {
 		h.streams.notify(sender)
 	}
