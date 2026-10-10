@@ -1,5 +1,7 @@
 // Comic, rendered: OKs never present a stale or running host word as a
-// decision, and a suspended device's copy says so (peertolerance_rendered_test.go).
+// decision, a suspended device's copy says so, and a message a member's
+// device was not sent at all never reads as delivered
+// (peertolerance_rendered_test.go).
 const assert = require('node:assert/strict');
 const {chromium} = require(process.env.AGENTNET_PLAYWRIGHT);
 (async () => {
@@ -36,8 +38,21 @@ const {chromium} = require(process.env.AGENTNET_PLAYWRIGHT);
     await p.getByText(/Delivered · Bob’s phone is suspended/).first().click();
     const sheet = p.getByRole('dialog');
     await sheet.locator('[data-suspended]').getByText('Bob’s phone is suspended until it updates AgentNet').waitFor();
+    await p.keyboard.press('Escape');
+    await sheet.waitFor({state:'detached'});
+    // Not sent to one member's device: said under it, never "Delivered".
+    const skipped = p.locator('[data-mid="skipped-msg"]');
+    await skipped.waitFor();
+    const under = p.getByText('Not sent · Not sent to Carol’s desk', {exact:true});
+    await under.waitFor();
+    assert.equal(await skipped.getByText(/Delivered/).count(), 0, 'never delivered while a member got nothing');
+    await under.click();
+    const details = p.getByRole('dialog');
+    await details.getByText('Carol’s desk', {exact:true}).waitFor();
+    await details.getByText('not sent: carol/desk\'s key changed').first().waitFor();
+    assert.ok(await details.getByText('Not sent', {exact:true}).count() >= 1, 'that copy reads not sent');
     assert.deepEqual(errors, [], 'runtime errors');
     await ctx.close();
   } finally { await browser.close(); }
-  console.log('peer tolerance rendered PASS: stale words read as no result, running as work, a current one as a decision; a suspended device named on its copy');
+  console.log('peer tolerance rendered PASS: stale words read as no result, running as work, a current one as a decision; a suspended device named on its copy; a device not sent to named, never delivered');
 })().catch(e=>{console.error(e);process.exit(1);});

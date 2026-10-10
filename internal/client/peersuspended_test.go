@@ -153,6 +153,12 @@ func TestDeviceHistoryWaitsForItsReader(t *testing.T) {
 	stopPhone = runAgent(t, phone) // it updates
 	waitNamedAgentCaps(t, phone)
 	signCapsAfter(t, phone, ownCaps)
+	// Every session the relay still lists reads it: the old one lingers in
+	// its grace period, and the new one may connect only after the caps
+	// above were signed and publish its own a moment later.
+	eventually(t, "alice reads the phone as reading own3", func() bool {
+		return w.alice.requireParticipationCaps(tctx(t), phone.Self(), protocol.CapOwnSyncV3) == nil
+	})
 	stopPhone()
 	listMembers(t, w.alice, nil, w.alice.Address, w.bob.Address, phone.Address)
 	w.alice.convSync(tctx(t)) // the member list alone wakes the waiting history

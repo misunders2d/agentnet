@@ -1266,6 +1266,8 @@ func StateText(dir, kind, state, peer string) string {
 			return "Not delivered: that session ended first"
 		case "failed":
 			return "Not sent"
+		case "not_delivered": // nothing was sealed for it, or it was kept here
+			return "Not sent to " + peer
 		case "quarantined":
 			return peer + " could not verify it"
 		}

@@ -483,6 +483,7 @@ export function deliveryWord(state: string): string {
     case "quarantined": return "Couldn’t be verified";
     case "expired": return "Not delivered";
     case "failed": return "Not sent";
+    case "not_delivered": return "Not sent"; // to someone: the line under the message names to whom
     default: return "";
   }
 }

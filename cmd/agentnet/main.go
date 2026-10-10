@@ -462,6 +462,10 @@ func runStatus(ctx context.Context, a *client.Agent, args []string, stdout io.Wr
 		if len(copies) > 1 || c.ID != fs.Arg(0) {
 			to = " to " + c.To
 		}
+		if c.NotSent { // nothing was sealed for it: no Hub record to ask about
+			fmt.Fprintf(stdout, "%s %s%s (local record; %s)\n", c.ID, c.State, to, c.Detail)
+			continue
+		}
 		wait := max(time.Until(deadline), 0)
 		if c.Suspended {
 			wait = 0 // nobody waits for a device the relay serves nothing until it updates

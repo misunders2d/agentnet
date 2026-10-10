@@ -845,6 +845,26 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool) ([]
 		return nil, err
 	}
 	rows.Close()
+	// The devices a message sent here was not sealed for at all: listed
+	// with it, and the first of another person's names its state.
+	skipped, err := s.skippedCopies(conv, "")
+	if err != nil {
+		return nil, err
+	}
+	for lid, cs := range skipped {
+		i, ok := sent[lid]
+		if !ok {
+			continue // not shown (deleted)
+		}
+		for _, c := range cs {
+			c.Own = own[c.To]
+			if c.Person == "" {
+				c.Person = persons[c.To]
+			}
+			out[i].Copies = append(out[i].Copies, c)
+		}
+		out[i].State, out[i].Detail = notSentFirst(out[i].State, out[i].Detail, out[i].Copies)
+	}
 	files, err := s.convFiles(conv)
 	if err != nil {
 		return nil, err

@@ -16,7 +16,9 @@ import (
 // as no result reported, never "Decide on"; a running one as work; only a
 // current awaiting one asks the person to decide there. A message sent to
 // a device the relay suspended says so on that device's copy, and its
-// headline is everyone else's delivery.
+// headline is everyone else's delivery. One a member's device was not
+// sent at all (its key changed) never reads as delivered: it says not sent
+// and to which device, and that copy says why.
 type peerToleranceFixture struct{ *Fixture }
 
 func (f *peerToleranceFixture) Overview() (Overview, error) {
@@ -46,7 +48,10 @@ func (f *peerToleranceFixture) DM(id string) (DMThread, error) {
 	o, _ := f.Overview()
 	m := DMMessage{ID: "tolerance-msg", LID: "tolerance-msg", Dir: "out", From: o.Me.Address, Kind: envelope.KindMessage, Body: "Rotate the key", At: f.now(), State: "waiting", Delivery: "delivered",
 		Copies: []CopyView{{To: "bob/desk", Person: "Bob", State: "delivered"}, {To: "bob/phone", Person: "Bob", State: "waiting", Detail: "peer_update: bob/phone cannot read this yet", Suspended: true}}}
-	return DMThread{ID: id, Peer: o.DMs[0].Peer, Created: f.now(), Mine: true, Messages: []DMMessage{m}}, nil
+	skipped := DMMessage{ID: "skipped-msg", LID: "skipped-msg", Dir: "out", From: o.Me.Address, Kind: envelope.KindMessage, Body: "Before the key changed", At: f.now().Add(-time.Minute),
+		State: "not_delivered", Delivery: "not_delivered", StateText: StateText("out", KindMessage, "not_delivered", "Carol’s desk"), Detail: "not sent: carol/desk's key changed",
+		Copies: []CopyView{{To: "bob/desk", Person: "Bob", State: "delivered"}, {To: "carol/desk", Person: "Carol", State: "not_delivered", Detail: "not sent: carol/desk's key changed"}}}
+	return DMThread{ID: id, Peer: o.DMs[0].Peer, Created: f.now(), Mine: true, Messages: []DMMessage{skipped, m}}, nil
 }
 
 func TestPeerToleranceRendered(t *testing.T) {

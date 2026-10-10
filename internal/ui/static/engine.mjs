@@ -375,6 +375,7 @@ export function outText(state, peer, detail = "") {
   case "delivered": return "Delivered to " + peer;
   case "expired": return "Not delivered: that session ended first";
   case "failed": return "Not sent" + (detail ? ": " + detail : "");
+  case "not_delivered": return "Not sent to " + peer; // nothing was sealed for it, or it was kept here (ui.StateText)
   case "quarantined": return peer + " could not verify it";
   }
   return "";
@@ -476,6 +477,14 @@ export function deliveryOf(copies) {
 }
 const sentAt = m => {const claim=m.to?iso(m.at):isoClaim(m.ts);return claim&&Date.parse(claim)<=m.at?claim:iso(m.at);};
 const copyOrder = (recs) => recs.reduce((a, b) => ((copyRank[b.state] ?? 2) < (copyRank[a.state] ?? 2) ? b : a));
+// sentLeast is a sent message's least advanced copy once the devices it was
+// not sealed for at all count (skipped: their key cannot be used here): one
+// of another person comes before every copy but a failed one, so the
+// message names it (client.notSentFirst).
+const sentLeast = (recs, skipped = []) => { const least = copyOrder(recs), miss = skipped.find((s) => !s.own); return miss && least.state !== "failed" ? miss : least; };
+// skippedOf is the devices a sent message (its copies, recs) was not sealed
+// for, as each of its copies keeps them (sendGroupTurn).
+const skippedOf = (recs) => [...new Map(recs.flatMap((r) => r.skipped || []).map((s) => [s.to, s])).values()];
 const firstLine = (s) => {
   const l = (s || "").split("\n")[0];
   return [...l].length > 120 ? [...l].slice(0, 119).join("") + "…" : l;
@@ -3700,7 +3709,7 @@ export class Engine {
     const privateReports = await this.ownNeedsYouReports(inbox, outbox);
     const visitorPIDs=new Set(infos.filter(i=>i.external&&i.host?.address===this.address&&i.host.fingerprint===this.fp).map(i=>i.pid));
     const messages=(await this.convMessages(conv,inbox,outbox,read)).filter(m=>role==="member"||visitorPIDs.has(m.pid||m.excerpt_pid)||m.human?.audience.some(s=>visitorPIDs.has(s.pid))),shownReply=linkReplies(messages,this.fp);
-    const personLabel=pid=>pid===this.me.person?"You":members.find(p=>p.person===pid)?.label||"Someone";
+    const personLabel=pid=>pid===this.me.person?"You":members.find(p=>p.person===pid)?.label||"Someone", words=await this.peerWordsFn(read);
     const agentCards=new Map();
     for(const i of infos) {
       if(!i.host || i.role==="human")continue;
@@ -3728,7 +3737,7 @@ export class Engine {
       view.can=view.deleted||event||m.excerpt_pid||frozen||role!=="member"?[]:["react",...(targetPerson===this.me.person?["edit","delete"]:[])];
       const answered=messages.some(r=>r.pid===m.pid&&(r.reply_to===m.lid||shownReply(r.reply_to)===m.id)&&["answer","result"].includes(r.kind));
       const exec=m.target&&["question","task"].includes(m.kind)?this.execOn(ctls.filter(x=>x.sub===wire.SubStatus&&x.ref?.id===m.lid&&x.ref.fingerprint===fp&&x.from===m.target.address),m.target.address,answered):null;
-      return {id:m.id,lid:m.lid,dir:out?"out":"in",from:here?this.address:m.from,kind:m.kind,status:m.status||"",actions:await this.proposalActions(m),proposal:await this.proposalProvenance(m,read),body:event?"":m.body,event,...(ev&&ev.type?{event_type:ev.type,event_by:ev.by}:{}),pid:m.pid||"",...(m.human?.author_pid?{agent_author_pid:m.human.author_pid}:{}),...(m.target?{target:m.target,to:m.target.address}:{}),...(m.agent_id?{agent_id:m.agent_id}:{}),...(m.excerpt_pid?{excerpt_pid:m.excerpt_pid}:{}),reply_to:shownReply(m.reply_to),quote:shownReply(m.quote),sent_at:sentAt(m),delivery:m.delivery||"",at:iso(m.at),send_group:m.send_group_conflict?"":m.send_group||"",send_group_author:here?this.fp:m.fp||m.claimed_key||"",origin:m.origin||"",verified_agent:verifiedAgent(m,infos.find(i=>i.pid===(m.human&&wire.agentAuthor(m.human)?m.human.author_pid:m.pid)),here?this.address:m.from,fp),job_detail:this.needsYouText(m,privateReports),state:m.state||"",...this.cancellationView(m),state_text:event?"":here?this.outStateText(m,"the group"):"",detail:m.detail||"",unread:!out&&!m.read,replica:!!m.replica,synced_from:m.history?m.synced_from:"",claimed_key:m.claimed_key||"",via:m.own&&!m.history?m.from:"",copies:here?await this.shownCopies(m.copies):undefined,group_ref:!frozen&&role==="member"&&m.kind==="message"&&!m.sub&&!m.pid&&!m.excerpt_pid?{lid:m.lid,author:m.claimed_key||m.fp||this.fp,hash:await wire.groupHistoryContentHash(conv,m)}:undefined,...view,...(exec?{exec,...(this.continuationOf(m,fp,exec)?{continuation:this.continuationOf(m,fp,exec),actions:["continue"]}:{})}:{}),attachments:await Promise.all((m.attachments||[]).map(async(a,i)=>({index:i,name:wire.safeName(a.name),size:a.size,...(here?await this.sentState(a):this.fileState(a))}))) };
+      return {id:m.id,lid:m.lid,dir:out?"out":"in",from:here?this.address:m.from,kind:m.kind,status:m.status||"",actions:await this.proposalActions(m),proposal:await this.proposalProvenance(m,read),body:event?"":m.body,event,...(ev&&ev.type?{event_type:ev.type,event_by:ev.by}:{}),pid:m.pid||"",...(m.human?.author_pid?{agent_author_pid:m.human.author_pid}:{}),...(m.target?{target:m.target,to:m.target.address}:{}),...(m.agent_id?{agent_id:m.agent_id}:{}),...(m.excerpt_pid?{excerpt_pid:m.excerpt_pid}:{}),reply_to:shownReply(m.reply_to),quote:shownReply(m.quote),sent_at:sentAt(m),delivery:m.delivery||"",at:iso(m.at),send_group:m.send_group_conflict?"":m.send_group||"",send_group_author:here?this.fp:m.fp||m.claimed_key||"",origin:m.origin||"",verified_agent:verifiedAgent(m,infos.find(i=>i.pid===(m.human&&wire.agentAuthor(m.human)?m.human.author_pid:m.pid)),here?this.address:m.from,fp),job_detail:this.needsYouText(m,privateReports),state:m.state||"",...this.cancellationView(m),state_text:event?"":here?this.outStateText(m,m.state==="not_delivered"&&m.lagging?words(m.lagging):"the group"):"",detail:m.detail||"",unread:!out&&!m.read,replica:!!m.replica,synced_from:m.history?m.synced_from:"",claimed_key:m.claimed_key||"",via:m.own&&!m.history?m.from:"",copies:here?await this.shownCopies(m.copies):undefined,group_ref:!frozen&&role==="member"&&m.kind==="message"&&!m.sub&&!m.pid&&!m.excerpt_pid?{lid:m.lid,author:m.claimed_key||m.fp||this.fp,hash:await wire.groupHistoryContentHash(conv,m)}:undefined,...view,...(exec?{exec,...(this.continuationOf(m,fp,exec)?{continuation:this.continuationOf(m,fp,exec),actions:["continue"]}:{})}:{}),attachments:await Promise.all((m.attachments||[]).map(async(a,i)=>({index:i,name:wire.safeName(a.name),size:a.size,...(here?await this.sentState(a):this.fileState(a))}))) };
     }))};
   }
 
@@ -4268,7 +4277,7 @@ export class Engine {
       // key gets that device nothing until trusted; one that cannot read
       // this yet keeps its sealed copy waiting, as a DM's would.
       const pin=await this.groupDevicePin(device,checks);
-      if(pin.skip){skipped.push(pin.skip);continue;}
+      if(pin.skip){skipped.push({id:wire.newID(),...pin.skip,person:member.person,...(member.person===me.person?{own:true}:{})});continue;}
       const {notify,why}=await this.groupDeviceSupport(device.address,pin,async()=>{if(wire.topicOrganization(topic_event))await this.requireTopicOrganizationSupport(device.address,pin);const n=await this.groupSupport(device.address,pin);if(prepared)await this.receiverSupport(device.address,pin);return n;});
       const publicKey=await this.pubOf(pin), sealed=[];for(const f of plain)sealed.push({...await wire.encryptFile(f.bytes,f.name,publicKey),uploaded:false});
       const id=copies.length?wire.newID():firstID, fan=[{person:me.person,roster:me.hash},...(member.person===me.person?[]:[{person:member.person,roster:(await this.store.get("persons",member.person)).hash}])], replica=member.person===me.person;
@@ -4277,9 +4286,10 @@ export class Engine {
       copies.push({id,lid,conv:c.id,kind:"message",body,topic,topic_event,quote,reply_to:reply,origin:"ui",from:this.address,to:device.address,person:member.person,own:replica,replica,at,envelope,attachments:sealed.map(f=>f.attachment),files:sealed.length?sealed:undefined,state:why?"waiting":"queued",...(why?{detail:why}:{}),required_cap:wire.CapGroup,recipient_fp:device.fingerprint,group_admission:stamp,...(organization_review?{organization_review}:{}),...(contribution_review?{contribution_review}:{}),...(prepared?{receiver_route:prepared.route}:{})});
     }
     if(!copies.length||skipped.length&&members.some(m=>m.person!==me.person)&&!copies.some(r=>!r.replica))throw Error("Group has no other current device to receive a copy."+skipped.map(x=>" "+x.detail).join(""));
+    if(skipped.length)for(const rec of copies)rec.skipped=skipped; // kept with the message: it lists them, and its delivery is never everyone's
     await this.commitReceiverCopies(copies,prepared,checks,await this.roomStoredOps(c.id,checks,{lid},this.fp,null,null,packet),queued);this.changed();await this.keepSent(plain);
     if(queued)this.queueOutbox();else if(prepared)await this.post(prepared.delegation);else for(const rec of copies)if(rec.state==="queued")await this.post(rec);
-    const least=copyOrder(copies);return {id:copies[0].id,lid,state:least.state,detail:least.detail,copies:[...copies.map(r=>({id:r.id,to:r.to,state:r.state,detail:r.detail||""})),...skipped]};
+    const least=sentLeast(copies,skipped);return {id:copies[0].id,lid,state:least.state,detail:least.detail||"",copies:[...copies,...skipped].map(r=>({id:r.id,to:r.to,state:r.state,detail:r.detail||""}))};
   }
 
   async admitGroupTurn(n,env,pin,base, admission = null) {
@@ -6594,8 +6604,9 @@ export class Engine {
       groups.set(r.lid || r.id, g);
     }
     const sent = [...groups.values()].map((g) => {
-      const least = copyOrder(g);
-      const copies=g.map(r=>({id:r.id,to:r.to,state:r.state,detail:r.detail,...this.cancellationView(r),own:!!r.own||!!this.me?.devices?.some(d=>d.address===r.to),person:r.person||personOf(r.to),...(this.peerSuspended(r.to)?{suspended:true}:{})})); return { ...g[0], key:this.fp, send_group:g.some(r=>r.send_group_conflict)||new Set(g.map(r=>r.send_group).filter(Boolean)).size>1?"":g.find(r=>r.send_group)?.send_group||"", state: least.state, delivery:deliveryOf(copies),detail: least.detail, lagging: least.to, copies, delivery_cancelled:g.some(r=>r.delivery_cancelled)&&!g.some(r=>["custody","delivered"].includes(r.state)), handover_started:g.some(r=>r.delivery_cancelled&&r.state==="failed"&&r.handover_started!==false) ? true : least.handover_started };
+      const skipped = skippedOf(g), least = sentLeast(g, skipped);
+      const copies=[...g.map(r=>({id:r.id,to:r.to,state:r.state,detail:r.detail,...this.cancellationView(r),own:!!r.own||!!this.me?.devices?.some(d=>d.address===r.to),person:r.person||personOf(r.to),...(this.peerSuspended(r.to)?{suspended:true}:{})})),
+        ...skipped.map(s=>({id:s.id,to:s.to,state:s.state,detail:s.detail,own:!!s.own||!!this.me?.devices?.some(d=>d.address===s.to),person:s.person||personOf(s.to)}))]; return { ...g[0], key:this.fp, send_group:g.some(r=>r.send_group_conflict)||new Set(g.map(r=>r.send_group).filter(Boolean)).size>1?"":g.find(r=>r.send_group)?.send_group||"", state: least.state, delivery:deliveryOf(copies),detail: least.detail, lagging: least.to, copies, delivery_cancelled:g.some(r=>r.delivery_cancelled)&&!g.some(r=>["custody","delivered"].includes(r.state)), handover_started:g.some(r=>r.delivery_cancelled&&r.state==="failed"&&r.handover_started!==false) ? true : least.handover_started };
     });
     const received = inbox.filter((m) => m.conv === convId && !m.control && m.sub !== wire.SubRootSync && m.sub !== wire.SubDriveSpace && !this.erasedRow(m)).map((m) => {
       if (m.sub !== "excerpt") return m;
@@ -8502,15 +8513,13 @@ export class Engine {
     checkFiles(plain.map(f => ({ name: f.name, size: f.bytes.length })));
     const prepared = request ? null : await this.prepareReceiverRequest(n.receiver, { id: firstID, lid, conv: c.id, root: c.root, ts: Math.floor(at / 1000), kind: "message", body: n.body, quote:n.quote||"",reply_to: n.reply_to || "", origin: "ui", pid: h.author_pid || "", human: h }, plain, checks);
     const turn = request ? { kind: n.kind, pid: n.pid, target: n.target } : { kind: "message", pid: h.author_pid || "" };
-    const skipped = [];
     for (const d of devices) {
+      // A changed key refuses the whole turn until it is trusted, as a DM
+      // turn's does (client sendHumanTurn): never a turn only the guest
+      // and this person's own devices get.
       const pin = await this.groupRead(checks, "pins", d.address);
+      if (!pin || pin.pending || pin.fingerprint !== d.fingerprint) throw new Error("Human audience device key changed.");
       const isHost = request && d.address === x.host.address && d.fingerprint === x.host.fingerprint;
-      if (!pin || pin.pending || pin.fingerprint !== d.fingerprint) { // that device alone gets nothing; the request's own host is required
-        if (isHost) throw new Error("Human audience device key changed.");
-        skipped.push({ to: d.address, state: "not_delivered", detail: "not sent: " + d.address + "'s key changed: nothing is sent to it until the new key is trusted in AgentNet on a computer." });
-        continue;
-      }
       await this.humanTurnAuthorization({ ...n, ...turn, conv:c.id, human: h }, evidence, x, this.address, this.fp, d.address, d.fingerprint,false,checks);
       // A reader that cannot read this yet keeps its sealed copy waiting
       // (client sendHumanTurn); only the request's executing host must.
@@ -8541,7 +8550,7 @@ export class Engine {
     await this.keepSent(plain); this.changed();
     if (n.queued) this.queueOutbox(); else if (prepared) await this.post(prepared.delegation); else for (const r of recs) if (r.state === "queued") await this.post(r);
     const least = copyOrder(recs);
-    return { id: recs[0].id, lid, state: least.state, detail: least.detail, copies: [...recs.map(r => ({ id: r.id, to: r.to, state: r.state, detail: r.detail })), ...skipped] };
+    return { id: recs[0].id, lid, state: least.state, detail: least.detail, copies: recs.map(r => ({ id: r.id, to: r.to, state: r.state, detail: r.detail })) };
   }
 
   async admitHumanTurn(n, env, pin, base, root, senderPerson, group = null, admission = null) {

@@ -3,16 +3,20 @@
 // synthetic relay; nothing reaches a network.
 //  - DM with an active human guest: a member device without hgp1 keeps its
 //    sealed copy waiting; the others get the turn (CG-14), and the waiting
-//    copy goes once that device reads it.
+//    copy goes once that device reads it. A changed key still refuses the
+//    turn, as a DM turn's does (fail closed: never a turn only the guest
+//    and this person's own devices get).
 //  - Group turn: a device without grp1 or never connected waits, a changed
 //    key gets nothing (that device only), the rest are sent (CG-1, CG-13).
+//    The message keeps that device as not sent, with why: after a reload
+//    it is listed and the message's delivery is not everyone's.
 //  - Group publication carriers: a device that cannot read groups yet keeps
 //    a waiting carrier; an accepted invitation that cannot be published
 //    yet says why (CG-2).
 //  - A suspended device: its waiting copies are not re-checked (no profile
 //    reads), the headline reads as everyone else's, and its copy says so.
 import assert from 'node:assert/strict';
-import { Engine, HubError, memoryStore, deliveryOf } from '../static/engine.mjs';
+import { Engine, HubError, memoryStore, deliveryOf, outText } from '../static/engine.mjs';
 import * as wire from '../static/wire.mjs';
 let checks = 0, sequence = 1;
 const id = () => (sequence++).toString(16).padStart(32, '0');
@@ -131,6 +135,19 @@ async function world() {
   check(later.state === 'custody' && later.envelope === held.envelope, 'the same sealed copy goes once the device reads it');
 }
 
+// ---- A DM with an active guest: the other member's changed key refuses the turn
+{
+  const w = await world(), a = w.alice, b = w.bob, c = w.carol, conv = w.conv;
+  const invite = await a.changeHuman('invite', { conv, host: c.address });
+  await w.drain(c); await w.drain(b);
+  await c.changeHuman('decide', { pid: invite.pid, accept: true });
+  await w.drain(a); await w.drain(b);
+  const pin = await a.store.get('pins', b.address);
+  await a.store.write([{ s: 'pins', k: b.address, v: { ...pin, pending: { fingerprint: 'f'.repeat(64), json: '{}' } } }]);
+  await assert.rejects(() => a.sendDM({ conv, body: 'PEER KEY CHANGED' }), /key changed/); checks++;
+  check(!(await a.store.all('outbox')).some((r) => r.body === 'PEER KEY CHANGED'), 'nothing is kept for the guest or own devices alone');
+}
+
 // ---- CG-1 / CG-13: a group turn, one device at a time
 async function device(address, caps /* null: never connected */) {
   const keys = await wire.newKeys(), pub = await wire.publicEntry(keys, address), fp = await wire.fingerprint(pub);
@@ -172,7 +189,20 @@ const groupEngine = async (devices) => {
   check(stored.get(fresh.address)?.state === 'waiting', 'a never-connected device keeps its sealed copy waiting');
   check(!stored.has(moved.address), 'a changed key gets nothing');
   check(sent.copies.some((x) => x.to === moved.address && x.state === 'not_delivered' && /key changed/.test(x.detail)), 'and says so for that device only');
+  check(sent.state === 'not_delivered' && /key changed/.test(sent.detail), 'the send names it, never everyone');
   assert.deepEqual(e.posted, [cur.address], 'only what may go is posted now'); checks++;
+  check(e.committed.every((r) => r.skipped?.length === 1 && r.skipped[0].to === moved.address && r.skipped[0].state === 'not_delivered' && /key changed/.test(r.skipped[0].detail) && !r.skipped[0].own), 'the skipped device is stored with the message');
+  // After a reload: the stored rows alone list it, and the message is not
+  // everyone's even once every copy sent is delivered.
+  const reader = new Engine({ store: memoryStore(), base: 'https://synthetic.invalid', now: () => now, fetch: async () => { throw Error('no network in this check'); } });
+  reader.address = 'browser/me';
+  const conv = e.committed[0].conv;
+  await reader.store.write(e.committed.map((r) => ({ s: 'outbox', k: r.id, v: { ...r, state: 'delivered' } })));
+  const [shown] = await reader.convMessages(conv, [], await reader.store.all('outbox'));
+  const listed = shown.copies.find((x) => x.to === moved.address);
+  check(listed?.state === 'not_delivered' && /key changed/.test(listed.detail) && shown.copies.length === 4, 'the reloaded message lists the device it was not sent to');
+  check(shown.delivery === 'not_delivered' && shown.state === 'not_delivered' && shown.lagging === moved.address, 'and its delivery and state are not everyone\'s');
+  check(outText(shown.state, 'Dave’s desk') === 'Not sent to Dave’s desk', 'its line names that device');
   const lonely = await groupEngine([await device('erin/desk', null), { ...await device('frank/desk', NEW), pin: { address: 'frank/desk', fingerprint: 'x', json: '{}', pending: { fingerprint: 'y' } } }]);
   const lonelySent = await lonely.sendGroupTurn({ id: 'd'.repeat(64) }, { body: 'still stored' });
   check(lonely.committed.length === 1 && lonely.committed[0].state === 'waiting' && lonelySent.copies.length === 2, 'a waiting copy still counts as sent to someone');

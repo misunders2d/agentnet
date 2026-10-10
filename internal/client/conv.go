@@ -484,6 +484,10 @@ type ConvCopy struct {
 	// Suspended: the relay, as last listed, serves this device nothing until
 	// it updates AgentNet. Its copy never decides the message's delivery.
 	Suspended bool `json:"suspended,omitempty"`
+	// NotSent: nothing was sealed for this device, as its key cannot be
+	// used here (Detail says why; State is not_delivered). It is no copy:
+	// nothing is sent or retried, and ID is only this record's.
+	NotSent bool `json:"not_sent,omitempty"`
 }
 
 // SentCopies lists the copies this device sent of the conversation message
@@ -505,7 +509,19 @@ func (a *Agent) SentCopies(lid string) ([]ConvCopy, error) {
 		c.Own, c.Suspended = own[c.To], suspended[c.To]
 		out = append(out, c)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	skipped, err := a.store.skippedCopies("", lid)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range skipped[lid] {
+		c.Own = own[c.To]
+		out = append(out, c)
+	}
+	return out, nil
 }
 
 // outCopy is one device's copy being stored.

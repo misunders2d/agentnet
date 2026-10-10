@@ -202,11 +202,12 @@ export function working(m: AnyMsg, all: AnyMsg[], ctx?: Pick<Ctx, "overview">) {
 
 // ---- delivery ----------------------------------------------------------------
 
-export const problem = (state?: string) => ["failed", "expired", "quarantined", "waiting"].includes(state || "");
+export const problem = (state?: string) => ["failed", "expired", "quarantined", "waiting", "not_delivered"].includes(state || "");
 
 const copyWord: Record<string, string> = {
   delivered: "Delivered", custody: "On the server, until it connects", queued: "Waiting to send from here",
   waiting: "Kept here, not sent yet", failed: "Not sent", expired: "Not delivered", quarantined: "Couldn’t be verified there",
+  not_delivered: "Not sent",
 };
 export const copyText = (state: string) => copyWord[state] || deliveryWord(state) || state;
 

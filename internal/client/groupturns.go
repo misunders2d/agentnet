@@ -250,7 +250,7 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 		}
 	}()
 	rosters := map[string]string{}
-	var skipped []ConvCopy // devices whose key cannot be used now: each gets nothing
+	var skipped []ConvCopy // devices whose key cannot be used now: each gets nothing, recorded as such
 	for _, f := range m.Files {
 		if err = a.keepSent(f.Path); err != nil {
 			return ConvSent{}, err
@@ -283,9 +283,10 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 			}
 			if deviceKeyUnusable(e) {
 				// That device alone gets no copy (a changed key until it is
-				// trusted, a removed device never): the group still talks.
+				// trusted, a removed device never): the group still talks,
+				// and the message says it was not sent to that device.
 				a.Logf("group copy for %s not sent: %v", device.Address, e)
-				skipped = append(skipped, ConvCopy{To: device.Address, State: stateNotDelivered, Detail: "not sent: " + e.Error()})
+				skipped = append(skipped, skippedCopy(device.Address, member.Person, member.Person == me.roster.Person, e))
 				continue
 			}
 			if e != nil {
@@ -361,6 +362,9 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 				return e
 			}
 		}
+		if e = addSkippedCopies(tx, conv, lid, skipped); e != nil {
+			return e
+		}
 		if m.claim != nil {
 			return m.claim(tx, copies[0].env.ID)
 		}
@@ -372,7 +376,10 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 	stored = true
 	release()
 	if queuedSend(ctx) {
-		return a.queuedConv(copies, copies[0].env.ID, lid), nil
+		sent := a.queuedConv(copies, copies[0].env.ID, lid)
+		sent.Copies = append(sent.Copies, skipped...)
+		sent.State, sent.Detail = notSentFirst(sent.State, sent.Detail, skipped)
+		return sent, nil
 	}
 	if binding != nil && binding.setup != nil {
 		if _, e := a.deliver(ctx, binding.setup.env, nil); e != nil && !retryable(e) {
@@ -381,7 +388,7 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 	}
 	a.kickNow()
 	defer notifyDaemon(a.home)
-	sent := ConvSent{ID: copies[0].env.ID, LID: lid, State: protocol.StateDelivered, Copies: skipped}
+	sent := ConvSent{ID: copies[0].env.ID, LID: lid, State: protocol.StateDelivered}
 	for _, copy := range copies {
 		cp := ConvCopy{ID: copy.env.ID, To: copy.env.To, State: copy.state, Detail: copy.why}
 		if copy.state != stateConvWaiting { // released by releaseConv, never sent from here
@@ -397,6 +404,8 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 			sent.State, sent.Detail = cp.State, cp.Detail
 		}
 	}
+	sent.Copies = append(sent.Copies, skipped...)
+	sent.State, sent.Detail = notSentFirst(sent.State, sent.Detail, skipped)
 	return sent, nil
 }
 
