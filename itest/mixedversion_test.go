@@ -861,10 +861,11 @@ func TestMixedVersion(t *testing.T) {
 			carol.shows(g, "bob to the group while others are suspended")
 	})
 	t.Logf("J2: carol received her backlog %s after her update", took.Round(time.Millisecond))
-	if keepsRefused {
-		took = waitUntil(t, "carol's kept send after her update", 30*time.Second, func() bool { return alice.shows(ac, "carol while suspended") })
-		t.Logf("J2: carol's send kept while refused (%s) was delivered %s after her update", oldTag, took.Round(time.Millisecond))
-	}
+	// A send the older release marked failed only because the relay refused
+	// it (426 update_required, before custody) is queued again when the
+	// updated daemon starts and goes like a kept one (HC-1).
+	took = waitUntil(t, "carol's refused send after her update", 30*time.Second, func() bool { return alice.shows(ac, "carol while suspended") })
+	t.Logf("J2: carol's send refused while suspended (%s; kept: %v) was delivered %s after her update", oldTag, keepsRefused, took.Round(time.Millisecond))
 	dave.daemon(head)
 	took = waitUntil(t, "dave's kept send and his backlog after his update", 30*time.Second, func() bool {
 		return alice.shows(ad, "dave while suspended") && dave.shows(ad, "backlog for dave")
@@ -891,9 +892,9 @@ func TestMixedVersion(t *testing.T) {
 		waitUntil(t, "the relay's custody for "+d.address+" drained", 15*time.Second, func() bool { return len(w.custody(d.address)) == 0 })
 	}
 	// A send kept while refused went once updated and no copy of it is
-	// failed. What a release before keepsRefused marked failed stays
-	// failed and was delivered nowhere: nothing resends it behind the
-	// person's back.
+	// failed; so did one a release before keepsRefused marked failed only
+	// for the refusal: the updated daemon queued that same sealed envelope
+	// again at its start (nothing else it failed, nothing run again).
 	sendCopies := func(d *mixedDevice, id string) []outboxRow {
 		var out []outboxRow
 		for _, r := range d.outbox(t) {
@@ -903,24 +904,7 @@ func TestMixedVersion(t *testing.T) {
 		}
 		return out
 	}
-	kept := map[*mixedDevice]string{dave: daveID}
-	if keepsRefused {
-		kept[carol] = carolID
-	} else {
-		copies := sendCopies(carol, carolID)
-		if len(copies) == 0 {
-			t.Errorf("J2: carol's outbox has no copy of her refused send %s", carolID)
-		}
-		for _, r := range copies {
-			t.Logf("J2: carol's send the older release marked failed: copy to %s is %s (%s)", r.recipient, r.state, r.err)
-			if r.state != "failed" {
-				t.Errorf("J2: carol's refused send is %s after her update", r.state)
-			}
-		}
-		if alice.shows(ac, "carol while suspended") {
-			t.Error("J2: the send the older release reported failed was delivered")
-		}
-	}
+	kept := map[*mixedDevice]string{dave: daveID, carol: carolID}
 	for d, id := range kept {
 		var copies []outboxRow
 		waitUntil(t, d.address+"'s kept send receipted", 15*time.Second, func() bool {
