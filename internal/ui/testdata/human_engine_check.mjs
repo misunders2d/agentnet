@@ -608,10 +608,13 @@ for (const ending of ['original', 'self']) {
  const repaired=await a.store.get('kv',newKey),row=repaired&&await a.store.get('outbox',repaired.copy);
  check(!!row&&!await a.store.get('kv',oldKey)&&(await a.store.get('outbox',old.id)).state==='quarantined','verified replacement retires only obsolete progress mapping, retaining old ciphertext');
  await w.receive(row.envelope,phone);await a.dispatch('receipt',JSON.stringify({id:row.id,state:'delivered',seq:1}));
- const before=(await a.store.all('outbox')).length,position=JSON.stringify((await a.historyBook())[phone.address].pos);
+ // Receipt wakes coalesced quiet-root and history producers; settle their
+ // legitimate new roots before checking a duplicate reconnect makes no copies.
+ await Promise.all([a.historyRun,a.rootSyncRun,a.readSyncRun,a.topicSyncRun,a.invitationSyncRun].filter(Boolean));
+ const beforeRows=await a.store.all('outbox'),before=beforeRows.length,position=JSON.stringify((await a.historyBook())[phone.address].pos);
  a.historySweeps=new Map();a.historyWake++;
  await a.historyCatchupStep(dev,(await a.historyBook())[phone.address]);
- check((await a.store.all('outbox')).length===before&&JSON.stringify((await a.historyBook())[phone.address].pos)===position,'restart/reconnect preserves completed cursor and exact corrected copy');
+ check((await a.store.all('outbox')).length===before&&JSON.stringify((await a.historyBook())[phone.address].pos)===position,'restart/reconnect preserves completed cursor and exact corrected copy: '+JSON.stringify({added:(await a.store.all('outbox')).filter(row=>!beforeRows.some(old=>old.id===row.id)).map(row=>({sub:row.sub,to:row.to,state:row.state})),position,after:JSON.stringify((await a.historyBook())[phone.address].pos)}));
  check((await a.overview()).history.find(j=>j.device===phone.address).blocked===0,'old quarantined transport tuple no longer falsely reports blocked history');
 }
 console.log('human engine isolated lifecycle checks passed: ' + checks);

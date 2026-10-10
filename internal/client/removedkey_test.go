@@ -331,6 +331,10 @@ func TestGroupControlOfRemovedDeviceMessage(t *testing.T) {
 	if result := <-await; result.err != nil {
 		t.Fatal(result.err)
 	}
+	t.Cleanup(func() {
+		logReplicationFailure(t, w.bob, "group source")
+		logReplicationFailure(t, newPhone, "group phone")
+	})
 
 	// The new phone's catch-up: bob checks the stored edit again inside the
 	// transaction that queues it (checkHistoryCopies).
@@ -358,6 +362,10 @@ func TestGroupControlOfRemovedDeviceMessage(t *testing.T) {
 	}
 	runAgent(t, newPhone)
 	publishGroupFixtureCaps(t, newPhone, true)
+	// The intercepted controls and transactional catch-up above were driven
+	// with Bob stopped. Resume his real daemon now so newly advertised phone
+	// capabilities release the waiting signed proof/context prerequisites.
+	runAgent(t, w.bob)
 	if err = w.bob.FlushOutbox(tctx(t)); err != nil {
 		t.Fatal(err)
 	}

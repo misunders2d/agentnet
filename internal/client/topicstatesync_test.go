@@ -29,6 +29,10 @@ func TestTopicMarkSyncOwnHumanJourney(t *testing.T) {
 	runAgent(t, w.bob)
 	persons(t, w.alice, w.bob)
 	phone := linked(t, w.alice)
+	t.Cleanup(func() {
+		logReplicationFailure(t, w.alice, "source")
+		logReplicationFailure(t, phone, "phone")
+	})
 	msg, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Kind: envelope.KindMessage, Body: "Device topic"})
 	if err != nil {
 		t.Fatal(err)

@@ -34,7 +34,7 @@ export async function parseArchiveChunk(bytes,count){
   }
   return chunk;
 }
-export function historyArchive(e,Hold,StoreConflict){
+export function historyArchive(e,Hold,StoreConflict,retryable){
   async function authority(manifest,from,key,checks=[]){
     return e.readSyncAuthority(manifest,from,key,e.address,e.fp,checks);
   }
@@ -42,8 +42,15 @@ export function historyArchive(e,Hold,StoreConflict){
     if(!await e.ownHistoryAuthority(dev))return false;
     const pin=await e.store.get('pins',dev.address);
     if(!pin||pin.pending||pin.fingerprint!==dev.fingerprint)return false;
-    const [ok]=await e.ctlSupport(dev.address,pin,wire.CapHistoryArchive);
-    return ok;
+    try{
+      const [ok]=await e.ctlSupport(dev.address,pin,wire.CapHistoryArchive);
+      return ok;
+    }catch(error){
+      // Capability discovery cannot strand durable history while offline.
+      // Keep the existing per-message path until support is proven.
+      if(retryable(error))return false;
+      throw error;
+    }
   }
   // The existing source cursor and exact sealed staging rows commit together.
   // Chunk encryption and blob I/O happen later, outside production and SSE.
@@ -66,6 +73,12 @@ export function historyArchive(e,Hold,StoreConflict){
     }),...ops];
   }
   async function pack(){
+    // A durable terminal descriptor may outlive its receipt callback after a crash.
+    for(const job of await e.store.prefix('kv',outgoing)){
+      if(job.state!=='published')continue;
+      const descriptor=await e.store.get('outbox',job.id);
+      if(descriptor?.state==='delivered')await receipt(descriptor);
+    }
     const staged=(await e.store.outboxStates(['archive_staged'])).filter(r=>!r.archive_chunk).sort((a,b)=>(a.send_order??a.at)-(b.send_order??b.at)||a.id.localeCompare(b.id));
     const targets=new Map();
     for(const row of staged){
@@ -114,7 +127,7 @@ export function historyArchive(e,Hold,StoreConflict){
           await gate(rows[0],checks);
           await e.store.write([{
             s:'kv',k:outgoing+id,v:{
-              id,to:rows[0].to,recipient_fp:rows[0].recipient_fp,manifest,...sealed,state:'prepared',children:chosen.map(r=>r.id)
+              id,to:rows[0].to,recipient_fp:rows[0].recipient_fp,manifest,...sealed,order:chosen[0].send_order??chosen[0].at,state:'prepared',children:chosen.map(r=>r.id)
             }
           },...chosen.map(row=>({
             s:'outbox',k:row.id,v:{
@@ -154,18 +167,19 @@ export function historyArchive(e,Hold,StoreConflict){
     await authority(manifest,env.from,pin.fingerprint,checks);
     const key=incoming+env.id,prior=await e.groupRead(checks,'kv',key);
     if(prior&&(JSON.stringify(prior.manifest)!==JSON.stringify(manifest)||JSON.stringify(prior.attachment)!==JSON.stringify(n.attachments[0])||prior.from_key!==pin.fingerprint))throw new Hold('invalid','Conflicting archive descriptor.');
+    const order=prior?prior.order:Math.max(e.now(),(await e.groupRead(checks,'kv','history-archive/in-order')||0)+1);
     const ops=prior?[]:[{
       s:'kv',k:key,v:{
-        id:env.id,from:env.from,from_key:pin.fingerprint,manifest,attachment:n.attachments[0],index:0,state:'pending'
+        id:env.id,from:env.from,from_key:pin.fingerprint,manifest,attachment:n.attachments[0],index:0,order,state:'pending'
       }
-    }];
+    },{s:'kv',k:'history-archive/in-order',v:order}];
     ops.checks=checks;
     ops.archivePending=!prior?.retained;
     ops.archive=true;
     return ops;
   }
   async function uploadPass(){
-    for(const row of await e.store.prefix('kv',outgoing)){
+    for(const row of (await e.store.prefix('kv',outgoing)).sort((a,b)=>(a.order??0)-(b.order??0)||a.id.localeCompare(b.id))){
       if(e.closing||!e.connected)return;
       if(row.state!=='prepared')continue;
       try{
@@ -203,7 +217,7 @@ export function historyArchive(e,Hold,StoreConflict){
     }
   }
   async function importPass(){
-    for(let job of await e.store.prefix('kv',incoming)){
+    for(let job of (await e.store.prefix('kv',incoming)).sort((a,b)=>(a.order??0)-(b.order??0)||a.id.localeCompare(b.id))){
       if(e.closing)return;
       if(job.state==='done')continue;
       try{
@@ -309,7 +323,7 @@ export function historyArchive(e,Hold,StoreConflict){
   }
   async function receipt(row){
     const key=outgoing+row.id,job=await e.store.get('kv',key);
-    if(!job)return;
+    if(!job||job.state==='accepted')return;
     if(row.state!=='delivered')return;
     const ops=[],checks=[{s:'kv',k:key,v:job}];
     for(const id of job.children){

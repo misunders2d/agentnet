@@ -262,6 +262,40 @@ func (d *mixedDevice) outbox(t *testing.T) []outboxRow {
 	return out
 }
 
+// archiveImported requires both the descriptor's real storage receipt and
+// completed import on its exact reader. Retention alone is not delivery of
+// every child, and a held child must still fail this convergence gate.
+func (d *mixedDevice) archiveImported(t *testing.T, r outboxRow, devices []*mixedDevice) bool {
+	t.Helper()
+	if r.state != "archive_accepted" {
+		return false
+	}
+	db := d.db(t)
+	defer db.Close()
+	var manifest string
+	err := db.QueryRow(`SELECT m.id FROM history_archive_entries e JOIN outbox m ON m.id=e.manifest WHERE e.child=? AND m.recipient=? AND m.sub='history-archive' AND m.state='delivered'`, r.id, r.recipient).Scan(&manifest)
+	if err == sql.ErrNoRows {
+		return false
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, reader := range devices {
+		if reader.address != r.recipient {
+			continue
+		}
+		rdb := reader.db(t)
+		defer rdb.Close()
+		var complete bool
+		err = rdb.QueryRow(`SELECT EXISTS(SELECT 1 FROM history_archive_jobs WHERE id=? AND retained=1 AND done=1 AND error='') AND NOT EXISTS(SELECT 1 FROM quarantine WHERE id=?)`, manifest, r.id).Scan(&complete)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return complete
+	}
+	return false
+}
+
 // held counts what the device holds back (its quarantine).
 func (d *mixedDevice) held(t *testing.T) int {
 	t.Helper()
@@ -443,6 +477,21 @@ func (w *mixedWorld) releaseSince(release string) time.Time {
 // or nil while the relay does not answer.
 func (w *mixedWorld) members() map[string]protocol.Member {
 	w.t.Helper()
+	var m protocol.Members
+	if !w.get("/v1/agents", &m) {
+		return nil
+	}
+	out := map[string]protocol.Member{}
+	for _, e := range m.Members {
+		out[e.Address] = e
+	}
+	return out
+}
+
+// get reads the isolated relay as its admin, with the relay's pinned TLS
+// certificate and the same signed requests used by the real programs.
+func (w *mixedWorld) get(path string, out any) bool {
+	w.t.Helper()
 	id, err := identity.Load(filepath.Join(w.dir, w.admin.home, "identity.json"))
 	if err != nil {
 		w.t.Fatal(err)
@@ -453,7 +502,7 @@ func (w *mixedWorld) members() map[string]protocol.Member {
 	}
 	tr := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: pool}, Proxy: nil}
 	defer tr.CloseIdleConnections()
-	req, err := http.NewRequestWithContext(context.Background(), "GET", "https://"+w.addr+"/v1/agents", nil)
+	req, err := http.NewRequestWithContext(context.Background(), "GET", "https://"+w.addr+path, nil)
 	if err != nil {
 		w.t.Fatal(err)
 	}
@@ -461,18 +510,10 @@ func (w *mixedWorld) members() map[string]protocol.Member {
 	req.Header.Set(protocol.VersionHeader, w.release) // as the admin's own program does
 	res, err := (&http.Client{Transport: tr, Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
-		return nil
+		return false
 	}
 	defer res.Body.Close()
-	var m protocol.Members
-	if res.StatusCode != http.StatusOK || json.NewDecoder(res.Body).Decode(&m) != nil {
-		return nil
-	}
-	out := map[string]protocol.Member{}
-	for _, e := range m.Members {
-		out[e.Address] = e
-	}
-	return out
+	return res.StatusCode == http.StatusOK && json.NewDecoder(res.Body).Decode(out) == nil
 }
 
 // waitUntil polls cond every 250ms until it holds, at most timeout, and
@@ -640,6 +681,35 @@ func TestMixedVersion(t *testing.T) {
 		time.Sleep(time.Second)
 	}
 	aliceOld.daemon(old) // and the older device reconnects
+	// Starting the process does not mean its new stream has published its
+	// signed capabilities yet. Establish that premise without sending a turn.
+	oldIdentity, err := identity.Load(filepath.Join(w.dir, aliceOld.home, "identity.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "the reconnected old session publishes its capabilities", 15*time.Second, func() bool {
+		log, err := os.ReadFile(filepath.Join(w.dir, fmt.Sprintf("%s-%d.log", aliceOld.home, aliceOld.runs)))
+		if err != nil {
+			return false
+		}
+		var session string
+		for _, line := range strings.Split(string(log), "\n") {
+			if _, value, ok := strings.Cut(line, "session "+aliceOld.address+"#"); ok {
+				session = strings.TrimSpace(value)
+			}
+		}
+		var p protocol.Profile
+		if session == "" || !w.get("/v1/agents/"+aliceOld.address+"/profile", &p) || !p.Live {
+			return false
+		}
+		for _, live := range p.Sessions {
+			if live == session {
+				return p.Supports(aliceOld.address, oldIdentity.Public(aliceOld.address).SignKey, protocol.CapEnv2) &&
+					p.Supports(aliceOld.address, oldIdentity.Public(aliceOld.address).SignKey, protocol.CapPerson)
+			}
+		}
+		return false
+	})
 	send(alice, ab, "ab after the links")
 	send(bob, ab, "ba after the links")
 	waitUntil(t, "the new turns on all of alice's devices", 30*time.Second, func() bool {
@@ -814,7 +884,8 @@ func TestMixedVersion(t *testing.T) {
 	}
 	// No copy failed or waits, except copies to the suspended devices, which
 	// wait in custody. Every other copy, own-device record carriers
-	// included (MIXED-1), was receipted delivered.
+	// included (MIXED-1), was receipted delivered or imported from a receipted
+	// archive. Check the reader too; archive_accepted only proves retention.
 	isSuspended := map[string]bool{}
 	for _, d := range suspended {
 		isSuspended[d.address] = true
@@ -823,6 +894,9 @@ func TestMixedVersion(t *testing.T) {
 		rows := d.outbox(t)
 		t.Logf("J1: %s outbox %s", d.address, summarize(rows))
 		for _, r := range rows {
+			if d.archiveImported(t, r, devices) {
+				continue
+			}
 			if r.state != "delivered" && (!isSuspended[r.recipient] || r.state == "failed") {
 				t.Errorf("J1: %s's copy %s (%q) to %s is %s (%s)", d.address, r.id, r.sub, r.recipient, r.state, r.err)
 			}

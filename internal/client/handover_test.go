@@ -96,7 +96,11 @@ func TestHistoryCopyNotHandedToRemovedDevice(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "the laptop to have the conversation", func() bool { return len(convBodies(t, w.alice, conv)) == 1 })
-	stopAlice() // nothing sends the copies queued below but the checks
+	stopAlice()
+	// Run's stream has stopped, but its independent live sender may still
+	// drain the outbox. Join that sender before inserting synthetic copies:
+	// only the explicit delivery gates below may change these queued rows.
+	w.alice.stopBackgroundPosts()
 	_, raw := rootOf(t, w.alice, conv)
 	me, _, _ := w.alice.store.selfPerson(w.alice.Address)
 	dev, _ := me.device(phone.Address)
@@ -147,6 +151,9 @@ func TestHistoryCopyNotHandedToRemovedDevice(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, c := range []outCopy{hist, file} {
+		if s := outboxState(t, w.alice, c.env.ID); s != stateQueued {
+			t.Fatalf("%s fixture copy was handed over before the removal check: %s", c.in.Sub, s)
+		}
 		if ok, err := w.alice.mayDeliver(c.env); ok || err != nil {
 			t.Fatalf("%s copy to the removed phone may go: %v %v", c.in.Sub, ok, err)
 		}

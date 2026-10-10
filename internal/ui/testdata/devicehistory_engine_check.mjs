@@ -1,5 +1,5 @@
 const assert={ok:(x,m)=>{if(!x)throw Error(m)},rejects:async(fn,re)=>{try{await fn()}catch(e){if(re.test(e.message))return;throw e}throw Error('Expected rejection '+re)}};
-import {Engine,memoryStore,openIDB} from '../static/engine.mjs';
+import {Engine,HubError,memoryStore,openIDB} from '../static/engine.mjs';
 import * as wire from '../static/wire.mjs';
 let checks=0;const check=(x,m)=>{assert.ok(x,m);checks++;};
 const blobs=new Map();
@@ -364,6 +364,10 @@ const restarted=new Engine({store:a.store,base:a.base,fetch});Object.assign(rest
   }
   return receiptWrite(ops,checks);
  };
+ await receiptWrite([{s:'outbox',k:firstArchive.id,v:{...(await desk.store.get('outbox',firstArchive.id)),state:'delivered'}}]);
+ const recoveredSource=new Engine({store:desk.store,base:desk.base,fetch});Object.assign(recoveredSource,{keys:desk.keys,address:desk.address,pub:desk.pub,fp:desk.fp,me:desk.me});
+ recoveredSource.connected=true;await recoveredSource.archives().wake();if(recoveredSource.historyRun)await recoveredSource.historyRun;if(recoveredSource.archiveRun)await recoveredSource.archiveRun;if(recoveredSource.syncOutboxPass)await recoveredSource.syncOutboxPass;recoveredSource.connected=false;
+ check((await desk.store.get('kv','history-archive/out/'+firstArchive.id)).state==='accepted','restart reconciles durable delivered descriptor without receipt replay');
  await desk.dispatch('receipt',JSON.stringify({id:firstArchive.id,state:'delivered',seq:1}));if(desk.archiveReceiptRun)await desk.archiveReceiptRun;if(desk.historyRun)await desk.historyRun;if(desk.archiveRun)await desk.archiveRun;if(desk.syncOutboxPass)await desk.syncOutboxPass;
  desk.store.write=receiptWrite;check((await desk.store.get('outbox',relayChild.id)).detail==='concurrent child retry metadata','archive receipt CAS preserves concurrent exact child state and mapping');
  const acceptedOverview=(await desk.overview()).history?.find(row=>row.device===phone.address);check(acceptedOverview?.retained===50&&!acceptedOverview.blocked&&!acceptedOverview.delivered,'overview reports accepted archive children as retained, without delivery or import claims');
@@ -375,6 +379,60 @@ const restarted=new Engine({store:a.store,base:a.base,fetch});Object.assign(rest
  const before=(await copies(desk)).length;desk.historyWake=(desk.historyWake||0)+1;await desk.directHistory().step(phone.me.devices.find(d=>d.address===phone.address));await desk.syncRoots();await desk.syncReadMarks();await desk.syncTopicTitles();await desk.syncInvitations();check((await copies(desk)).length===before,'archive accepted mappings suppress copies across all producer/recovery wakes');
 
  desk.connected=false;
+}
+// Retryable discovery preserves exact durable copies and source progress; invalid profiles fail closed.
+{
+ const source=await person('cap-retry/desk'),target=await sibling(source,'cap-retry/phone');
+ const dev=source.me.devices.find(d=>d.address===target.address),id=wire.newID();
+ const copy={id,to:target.address,recipient_fp:target.fp,sub:wire.SubDeviceHistory,state:'queued',envelope:'exact sealed bytes',body:'exact original'};
+ const progress={s:'kv',k:'cap-retry-cursor',v:50},support=source.ctlSupport.bind(source);
+ source.ctlSupport=async()=>{throw new HubError(503,'unavailable');};
+ const ops=await source.archives().prepare([copy],[progress],[],dev);await source.store.write(ops);
+ check(JSON.stringify(await source.store.get('outbox',id))===JSON.stringify(copy)&&await source.store.get('kv',progress.k)===50,'offline capability discovery preserves exact durable copy and atomic source cursor');
+ check((await source.store.outboxSub(wire.SubDeviceHistory)).length===1,'offline discovery creates one copy, no archive flood');
+ source.ctlSupport=async()=>{throw Error('invalid signed profile');};
+ await assert.rejects(()=>source.archives().prepare([copy],[{...progress,v:100}],[],dev),/invalid signed profile/);
+ check(await source.store.get('kv',progress.k)===50,'invalid profile never advances source cursor');source.ctlSupport=support;
+}
+// Imported archive arrivals must not become a fresh LIVE flood to a third device.
+{
+const N=200;
+const desk=await person('rf/desk'),tablet=await sibling(desk,'rf/tablet'),phone=await sibling(desk,'rf/phone'),peer=await person('rfpeer/desk');
+for(const e of [desk,phone,tablet])await caps(e,[wire.CapEnv2,wire.CapPerson,wire.CapRootSync,wire.CapReadSync,wire.CapRoom,wire.CapOwnSyncV2,wire.CapOwnSyncV3,wire.CapControl,wire.CapHistoryArchive]);
+for(const e of [desk,phone])await e.store.write([{s:'persons',k:peer.me.person,v:{...peer.me,state:'pinned'}},{s:'pins',k:peer.address,v:{address:peer.address,json:wire.marshalPublic(peer.pub),fingerprint:peer.fp,pending:null}}]);
+const originals=[];
+for(let i=0;i<N;i++){const id=wire.newID(),m={id,from:desk.address,to:peer.address,ts:i+1,kind:'message',body:'desk history '+i,attachments:[]};originals.push(id);await desk.store.write([{s:'outbox',k:id,v:{...m,v:1,at:(i+1)*1000,fp:peer.fp,envelope:await wire.seal(m,desk.keys,peer.pub),state:'delivered'}}]);}
+const phoneDev=desk.me.devices.find(d=>d.address===phone.address),tabletDev=phone.me.devices.find(d=>d.address===tablet.address);
+// The new phone's first history wake (onConnect) creates its job for the tablet before archives arrive.
+phone.connected=true;await phone.directHistory().step(tabletDev);
+desk.connected=true;let seq=0;
+for(let round=0;round<N;round++){
+ await desk.directHistory().step(phoneDev);await desk.archives().wake();if(desk.archiveRun)await desk.archiveRun;
+ await desk.flushOutboxLane(true);
+ const pending=(await desk.store.outboxSub(wire.SubHistoryArchive)).filter(r=>r.state==='custody');
+ if(!pending.length)break;
+ for(const d of pending){
+  await phone.admit(d.envelope,wire.parseEnvelope(d.envelope));await phone.archives().wake();if(phone.archiveRun)await phone.archiveRun;
+  await desk.dispatch('receipt',JSON.stringify({id:d.id,state:'delivered',seq:++seq}));if(desk.archiveReceiptRun)await desk.archiveReceiptRun;if(desk.historyRun)await desk.historyRun;
+ }
+}
+const imported=(await Promise.all(originals.map(id=>phone.store.get('inbox',id)))).filter(Boolean).length;
+check(imported===N,'three-device fixture imports all exact archive originals');
+// Phone's ordinary production toward the third own device after import.
+let steps=0;while(steps<100&&await phone.directHistory().step(tabletDev))steps++;
+const toTablet=(await phone.store.all('outbox')).filter(r=>r.to===tablet.address&&r.sub===wire.SubDeviceHistory);
+const live=toTablet.filter(r=>r.fresh_live),staged=toTablet.filter(r=>r.state==='archive_staged');
+check(!live.length&&staged.length===50&&toTablet.length===50,'imported archive tail stays in bounded cold window for third device');
+// A user's interactive send on the phone after that production, through the
+// engine's queued UI send path (commitReceiverCopies assigns send_order).
+await phone.store.write([{s:'persons',k:peer.me.person,v:{...peer.me,state:'pinned'}}]);
+posts.length=0;phone.queueOutbox=()=>{};
+const sent=await phone.sendV1({queued:true,to:peer.address,kind:'message',body:'interactive while bootstrapping',files:[]});
+await phone.flushOutboxLane(false);
+const livePosts=posts.map(raw=>wire.parseEnvelope(raw)).filter(env=>env.from===phone.address);
+const idx=livePosts.findIndex(p=>p.id===sent.id);
+check(idx===0&&livePosts.length===1,'third-device archive forwarding never precedes fresh interactive POST');
+phone.connected=false;desk.connected=false;
 }
 // Pending state queries must not materialize ten thousand completed rows.
 {

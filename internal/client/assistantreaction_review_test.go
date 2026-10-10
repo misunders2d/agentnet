@@ -366,6 +366,9 @@ func TestAssistantReactionGroupLinkedHistory(t *testing.T) {
 	}
 	phone, await, _ := linkPhone(t, producer, "phone")
 	request := pendingLink(t, producer)
+	// Configure the older reader before this producer can start its history.
+	// The current phone daemon initially publishes the current capabilities.
+	stops[producer]()
 	if err = producer.DecideLink(tctx(t), request.ID, true); err != nil {
 		t.Fatal(err)
 	}
@@ -374,7 +377,11 @@ func TestAssistantReactionGroupLinkedHistory(t *testing.T) {
 	}
 	runAgent(t, phone)
 	publishGroupFixtureCaps(t, phone, true)
+	// This compatibility probe uses the legacy per-copy reader gates,
+	// rather than the current bounded archive bootstrap.
+	dropCapSuccessor(t, phone, protocol.CapHistoryArchive)
 	dropCapSuccessor(t, phone, protocol.CapAgentReaction) // an older reader: no agr1 yet
+	stops[producer] = runAgent(t, producer)
 	copies, err := w.alice.groupDeliveryCopies(tctx(t), packet)
 	if err != nil {
 		t.Fatal(err)
@@ -551,6 +558,9 @@ func TestAssistantReactionExternalHistoryWaitsForOldReader(t *testing.T) {
 
 	phone, awaited, _ := linkPhone(t, w.bob, "phone")
 	req := pendingLink(t, w.bob)
+	// Stop production until the linked device's signed legacy reader
+	// capabilities are installed, avoiding a current-archive bootstrap first.
+	stopBob()
 	if err = w.bob.DecideLink(tctx(t), req.ID, true); err != nil {
 		t.Fatal(err)
 	}
@@ -563,7 +573,11 @@ func TestAssistantReactionExternalHistoryWaitsForOldReader(t *testing.T) {
 	runPublished(t, phone)
 	fakeNotify(phone)
 	waitNamedAgentCaps(t, phone)
+	// An older reader has no archive transport; keep this probe on the
+	// legacy path whose exact reaction copy waits for agr1.
+	dropCapSuccessor(t, phone, protocol.CapHistoryArchive)
 	dropCapSuccessor(t, phone, protocol.CapAgentReaction) // an older reader: participation caps, no agr1
+	stopBob = runAgent(t, w.bob)
 	w.bob.convWork.due(convRetry | convHistory)
 	w.bob.kickNow()
 	eventually(t, "the request reaches the later device as history", func() bool {

@@ -280,6 +280,19 @@ func (a *Agent) deviceHistoryPage(dev identity.Public) (bool, error) {
 		return nil
 	}
 	for refIndex, ref := range refs {
+		live := false
+		if refIndex < len(newer) {
+			live, err = historyOriginalArrival(tx, ref.storage, ref.id)
+			if err != nil {
+				return false, err
+			}
+			if full && !live {
+				if _, err = tx.Exec(`INSERT OR IGNORE INTO device_history_pending VALUES(?,?,?)`, dev.Fingerprint(), ref.storage, ref.id); err != nil {
+					return false, err
+				}
+				continue
+			}
+		}
 		start := len(copies)
 		if e := queue(ref); e != nil {
 			if !errors.Is(e, errDeviceHistoryBlocked) && !errors.Is(e, ErrGroupContextPending) {
@@ -291,7 +304,7 @@ func (a *Agent) deviceHistoryPage(dev identity.Public) (bool, error) {
 		} else if _, err = tx.Exec(`DELETE FROM device_history_pending WHERE recipient_fp=? AND storage=? AND id=?`, dev.Fingerprint(), ref.storage, ref.id); err != nil {
 			return false, err
 		}
-		if refIndex < len(newer) {
+		if live {
 			for i := start; i < len(copies); i++ {
 				copies[i].live = true
 			}

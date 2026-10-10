@@ -354,6 +354,10 @@ func (a *Agent) sync(ctx context.Context) {
 	a.convSync(ctx)          // only what an event made due: no request otherwise
 	a.syncTeams(ctx)         // team references queued by the stream, verified and pinned (teams.go)
 	a.groupSync(ctx)         // group journal: pending publications first, then heads the stream said changed (convgroup.go)
+	// The last bounded producer page may stage new archive children without
+	// requesting another upkeep turn. Wake after its durable commit as well
+	// as before upkeep, so that page does not depend on an unrelated event.
+	a.postArchiveBackground(ctx)
 	if err := a.FlushOutbox(ctx); err != nil {
 		a.Logf("outbox: %v", err)
 	}

@@ -530,6 +530,21 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 	}
 	liveConvs := map[string]bool{}
 	for _, it := range items {
+		live := false
+		if it.dir == "in" && it.arrival > p.inbox {
+			var e error
+			live, e = historyOriginalArrival(a.store.db, it.dir, it.in.ID)
+			if e != nil {
+				return false, e
+			}
+			if full && !live {
+				deferred = append(deferred, it)
+				// This durable tail ref is new work even if an earlier
+				// deferred sweep was already complete.
+				sweep = historyDeferredScan{}
+				continue
+			}
+		}
 		start := len(copies)
 		if e := queue(it); e != nil {
 			if errors.Is(e, errHistoryCatchupConflict) {
@@ -537,7 +552,7 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 			}
 			deferred = append(deferred, it)
 		}
-		if it.dir == "in" && it.arrival > p.inbox {
+		if live {
 			liveConvs[it.conv] = true
 			for i := start; i < len(copies); i++ {
 				copies[i].live = true
@@ -728,6 +743,23 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 		a.kickNow()
 	}
 	return more, nil
+}
+
+// A replica's new local arrival ordinal is import progress, not a fresh
+// conversation turn. Only arrivals original to this device bypass bootstrap.
+func historyOriginalArrival(q dbq, storage, id string) (bool, error) {
+	if storage == "out" {
+		// Replicated outgoing originals are retained in inbox with their
+		// original direction metadata; this outbox contains local sends.
+		return true, nil
+	}
+	var replica int
+	var via string
+	err := q.QueryRow(`SELECT replica,coalesce(via,'') FROM inbox WHERE id=?`, id).Scan(&replica, &via)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil // the existing source admission handles erased refs
+	}
+	return replica == 0 && via == "", err
 }
 
 func sameHistoryRef(a, b *envelope.Ref) bool {
