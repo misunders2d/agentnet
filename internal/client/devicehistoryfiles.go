@@ -151,7 +151,16 @@ func (a *Agent) requestDeviceHistoryFile(ctx context.Context, id string, index i
 	return err
 }
 
-func (a *Agent) admitDeviceFile(ctx context.Context, env envelope.Envelope, in envelope.Inner, sender identity.Public, hold func(string, string) error) error {
+func (a *Agent) admitDeviceFile(ctx context.Context, env envelope.Envelope, in envelope.Inner, sender identity.Public, held bool, hold func(string, string) error) error {
+	admitted := func(tx *sql.Tx) error { // its hold ends where its receipt is kept
+		if held {
+			if _, err := tx.Exec(`DELETE FROM quarantine WHERE id=?`, env.ID); err != nil {
+				return err
+			}
+		}
+		_, err := tx.Exec(`INSERT OR IGNORE INTO history_receipts(id) VALUES(?)`, env.ID)
+		return err
+	}
 	w, err := protocol.ParseDeviceFile([]byte(in.Body))
 	var m fileMsg
 	if err != nil || decodeStrict(w.Item, &m) != nil || !groupFileMessageValid(m) || m.GroupAdmission != "" || m.Type == "request" && (m.Available || len(in.Attachments) != 0) || m.Type == "offer" && (m.Available != (len(in.Attachments) == 1)) {
@@ -201,7 +210,7 @@ func (a *Agent) admitDeviceFile(ctx context.Context, env envelope.Envelope, in e
 			}
 			// A reissued offer may acknowledge bytes already stored, without
 			// replacing them with unsolicited ciphertext.
-			if _, err = tx.Exec(`INSERT OR IGNORE INTO history_receipts(id) VALUES(?)`, env.ID); err != nil {
+			if err = admitted(tx); err != nil {
 				return err
 			}
 			return a.store.done(tx.Commit())
@@ -227,7 +236,7 @@ func (a *Agent) admitDeviceFile(ctx context.Context, env envelope.Envelope, in e
 	if err != nil {
 		return err
 	}
-	if _, err = tx.Exec(`INSERT OR IGNORE INTO history_receipts(id) VALUES(?)`, env.ID); err != nil {
+	if err = admitted(tx); err != nil {
 		return err
 	}
 	if err = a.store.done(tx.Commit()); err == nil {

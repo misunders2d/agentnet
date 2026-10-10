@@ -211,8 +211,9 @@ func (a *Agent) fileCarrier(to identity.Public, conv string, raw []byte, body st
 
 // admitFile takes a sub "file" message from another device of this
 // person: a request is queued for the worker (serveFiles); an offer
-// completes the history message's file.
-func (a *Agent) admitFile(env envelope.Envelope, in envelope.Inner, hold func(string, string) error, checks ...func(dbq) error) error {
+// completes the history message's file. Each, a stale offer included, is
+// receipted in the step that admits it: it stores no inbox row (MIXED-1).
+func (a *Agent) admitFile(env envelope.Envelope, in envelope.Inner, held bool, hold func(string, string) error, checks ...func(dbq) error) error {
 	check := func(q dbq) error {
 		for _, guard := range checks {
 			if err := guard(q); err != nil {
@@ -220,6 +221,14 @@ func (a *Agent) admitFile(env envelope.Envelope, in envelope.Inner, hold func(st
 			}
 		}
 		return nil
+	}
+	admitted := func(tx *sql.Tx) error {
+		if held {
+			if _, err := tx.Exec(`DELETE FROM quarantine WHERE id = ?`, env.ID); err != nil {
+				return err
+			}
+		}
+		return receiptCarrier(tx, env.ID)
 	}
 	var m fileMsg
 	if err := decodeStrict([]byte(in.Body), &m); err != nil || m.V != 1 || !protocol.ValidID(m.LID) || !protocol.ValidHash(m.SHA256) {
@@ -240,6 +249,9 @@ func (a *Agent) admitFile(env envelope.Envelope, in envelope.Inner, hold func(st
 			env.ID, env.From, in.Conv, m.LID, m.SHA256, now); err != nil {
 			return err
 		}
+		if err = admitted(tx); err != nil {
+			return err
+		}
 		if err = tx.Commit(); err != nil {
 			return err
 		}
@@ -247,22 +259,25 @@ func (a *Agent) admitFile(env envelope.Envelope, in envelope.Inner, hold func(st
 		a.kickNow()
 		return nil
 	case "offer":
+		tx, err := a.store.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
 		var msgID string
-		err := a.store.db.QueryRow(`SELECT i.id FROM inbox i JOIN attachments f ON f.message_id = i.id
+		err = tx.QueryRow(`SELECT i.id FROM inbox i JOIN attachments f ON f.message_id = i.id
 			WHERE i.conv = ? AND i.lid = ? AND i.via IS NOT NULL AND f.sha256 = ? AND f.blob_id LIKE ? LIMIT 1`,
 			in.Conv, m.LID, m.SHA256, historyBlob+"%").Scan(&msgID)
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil // not waiting for it (any more)
+		if errors.Is(err, sql.ErrNoRows) { // not waiting for it (any more): only its receipt
+			if err = admitted(tx); err != nil {
+				return err
+			}
+			return a.store.done(tx.Commit())
 		}
 		if err != nil {
 			return err
 		}
 		if !m.Available {
-			tx, err := a.store.db.Begin()
-			if err != nil {
-				return err
-			}
-			defer tx.Rollback()
 			if err = check(tx); err != nil {
 				return err
 			}
@@ -271,17 +286,16 @@ func (a *Agent) admitFile(env envelope.Envelope, in envelope.Inner, hold func(st
 			if err != nil {
 				return err
 			}
+			if err = admitted(tx); err != nil {
+				return err
+			}
 			return a.store.done(tx.Commit())
 		}
 		if len(in.Attachments) != 1 || in.Attachments[0].SHA256 != m.SHA256 {
+			tx.Rollback()
 			return hold(reasonInvalid, "a file offer without that file")
 		}
 		att := in.Attachments[0]
-		tx, err := a.store.db.Begin()
-		if err != nil {
-			return err
-		}
-		defer tx.Rollback()
 		if err = check(tx); err != nil {
 			return err
 		}
@@ -290,6 +304,9 @@ func (a *Agent) admitFile(env envelope.Envelope, in envelope.Inner, hold func(st
 			return err
 		}
 		if _, err := tx.Exec(`DELETE FROM file_requests WHERE message_id = ? AND sha256 = ?`, msgID, m.SHA256); err != nil {
+			return err
+		}
+		if err = admitted(tx); err != nil {
 			return err
 		}
 		return a.store.done(tx.Commit())

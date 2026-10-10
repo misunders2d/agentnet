@@ -126,7 +126,7 @@ func (a *Agent) admitGroupParticipationStatus(ctx context.Context, env envelope.
 		}
 		return hold(reasonInvalid, err.Error())
 	}
-	_, err = a.store.addConvInbox(in, sender.Fingerprint(), "", fromQuarantine, func(tx *sql.Tx) error {
+	res, err := a.store.addConvInbox(in, sender.Fingerprint(), "", fromQuarantine, func(tx *sql.Tx) error {
 		if e := check(tx); e != nil {
 			return e
 		}
@@ -141,6 +141,9 @@ func (a *Agent) admitGroupParticipationStatus(ctx context.Context, env envelope.
 		_, e = tx.Exec(`UPDATE inbox SET group_admission=? WHERE id=?`, admission.Hash(), in.ID)
 		return e
 	})
+	if err == nil && res == admitConflict { // stored nowhere: held, so it has a receipt (MIXED-1)
+		return hold(reasonDuplicate, "group: logical status conflict")
+	}
 	return err
 }
 func (a *Agent) mayDeliverGroupStatus(env envelope.Envelope) (bool, bool, error) {

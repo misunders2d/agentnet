@@ -309,6 +309,9 @@ func (a *Agent) admitTopicStateSync(ctx context.Context, env envelope.Envelope, 
 			return err
 		}
 	}
+	if err = receiptCarrier(tx, env.ID); err != nil {
+		return err
+	}
 	if err = a.store.done(tx.Commit()); err == nil {
 		a.convWork.due(convHistory)
 		a.kickNow()

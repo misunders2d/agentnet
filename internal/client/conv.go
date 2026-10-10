@@ -1299,7 +1299,7 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 		return a.admitDeviceHistory(ctx, env, in, sender, fromQuarantine, hold)
 	}
 	if in.Sub == envelope.SubDeviceFile {
-		return a.admitDeviceFile(ctx, env, in, sender, hold)
+		return a.admitDeviceFile(ctx, env, in, sender, fromQuarantine, hold)
 	}
 	if in.Sub == envelope.SubInvitationSync {
 		return a.admitInvitationSync(ctx, env, in, sender, fromQuarantine, hold)
@@ -1415,7 +1415,7 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 	case envelope.SubHistory:
 		return a.admitHistory(ctx, env, in, root, hold, fromQuarantine)
 	case envelope.SubFile:
-		return a.admitFile(env, in, hold)
+		return a.admitFile(env, in, fromQuarantine, hold)
 	case envelope.SubDriveSpace: // the conversation's Drive space record (drivespace_wire.go): applied under the sender's person, stored quietly
 		return a.admitDriveControl(ctx, env, in, sender, fromQuarantine)
 	}

@@ -1773,7 +1773,7 @@ export class Engine {
         const current=await this.groupRead(checks,"inbox",m.id);if(current)ops.push({s:"inbox",k:m.id,v:{...current,read:true}});
       }
     }
-    ops.checks=checks;ops.readSync=true;return ops;
+    ops.checks=checks;ops.readSync=true;ops.syncCarrier=true;return ops;
   }
   modelReportKey(hostKey,agentID) { return "model-report/"+hostKey+"/"+agentID; }
   async modelSyncAuthority(r,from,fromFP,to,toFP,checks=[]) {
@@ -1808,7 +1808,7 @@ export class Engine {
       }
       ops.push({s:"kv",k:key,v:{model_report:true,host:env.from,host_key:pin.fingerprint,revision:report.revision,report}});
     }
-    ops.checks=checks;return ops;
+    ops.checks=checks;ops.syncCarrier=true;return ops;
   }
   async modelReports() {
     const own=await this.store.get("kv","person"),reports=[];
@@ -1896,7 +1896,7 @@ export class Engine {
       const ck=this.topicTitleCopyKey(r.person,pin.fingerprint,t),copy=await this.groupRead(checks,"kv",ck);
       if(this.topicTitleOrder(t,copy)>=0)ops.push({s:"kv",k:ck,v:{...t,seen:true}});
     }
-    ops.checks=checks;ops.topicSync=true;return ops;
+    ops.checks=checks;ops.topicSync=true;ops.syncCarrier=true;return ops;
   }
   // Private marks (Mark done, Reopen, Archive) follow own human devices as
   // names do (client topicstatesync.go): the newest signed time wins, then
@@ -1986,7 +1986,7 @@ export class Engine {
       const ck=this.topicMarkCopyKey(r.person,pin.fingerprint,t),copy=await this.groupRead(checks,"kv",ck);
       if(wire.topicMarkNewer(t,copy))ops.push({s:"kv",k:ck,v:{...t,seen:true}});
     }
-    ops.checks=checks;ops.topicSync=true;return ops;
+    ops.checks=checks;ops.topicSync=true;ops.syncCarrier=true;return ops;
   }
   invitationViewKey(fp,id) { return "own-invitation/"+fp+"/"+id; }
   syncInvitations() {
@@ -2043,7 +2043,7 @@ export class Engine {
     const k=this.invitationViewKey(pin.fingerprint,r.id),old=await this.groupRead(checks,"kv",k);
     if(old?.record.revision===r.revision&&wire.invitationSyncJSON(old.record)!==wire.invitationSyncJSON(r))throw new Hold("invalid","Invitation view has a conflicting revision.");
     if(!old||old.record.revision<r.revision)ops.push({s:"kv",k,v:{type:"own-invitation",from:env.from,fp:pin.fingerprint,record:r}});
-    ops.checks=checks;return ops;
+    ops.checks=checks;ops.syncCarrier=true;return ops;
   }
 
   async applyReadArrivals(ops,checks) {
@@ -5571,9 +5571,10 @@ export class Engine {
       }
       return;
     }
-    if ((await this.store.get("inbox", env.id)) || (await this.store.get("held", env.id)) || (await this.store.get("receipts", env.id)) || (await this.store.get("kv", "group-carrier/" + env.id))) {
+    const admittedCarrier = async () => (await this.store.get("kv", "group-carrier/" + env.id)) || (await this.store.get("kv", "sync-carrier/" + env.id));
+    if ((await this.store.get("inbox", env.id)) || (await this.store.get("held", env.id)) || (await this.store.get("receipts", env.id)) || (await admittedCarrier())) {
       // Seen before: its receipt is sent again, nothing is stored twice.
-      const state = (await this.store.get("inbox", env.id)) || (await this.store.get("kv", "group-carrier/" + env.id)) ? "delivered" : "quarantined";
+      const state = (await this.store.get("inbox", env.id)) || (await admittedCarrier()) ? "delivered" : "quarantined";
       const receipt=await this.store.get("receipts",env.id),ops=[{s:"receipts",k:env.id,v:receipt||{id:env.id,state}}],checks=[{s:"receipts",k:env.id,v:receipt}];
       await this.removeReceivePending(data,env,ops,checks);
       await this.store.write(ops,checks);
@@ -5643,6 +5644,11 @@ export class Engine {
       // has stored the message. Persist that upgrade with removal of the hold.
       if (fromHeld) ops.push({ s: "held", k: env.id, v: undefined });
       ops.push({ s: "receipts", k: env.id, v: { id: env.id, state: "delivered" } });
+      // An own-device sync record stores no inbox row. Like a group carrier it
+      // keeps that it was admitted past its receipt's flush: a relay's
+      // re-delivery is receipted again, never applied again (client
+      // store.seen and history_receipts, MIXED-1).
+      if (ops.syncCarrier) ops.push({ s: "kv", k: "sync-carrier/" + env.id, v: true });
       await this.removeReceivePending(data,env,ops,ops.checks);
       await this.store.write(ops, ops.checks);
       if (fromHeld) this.flushReceipts().catch(() => {});
