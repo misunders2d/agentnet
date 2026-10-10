@@ -3,6 +3,9 @@
 // counts records instead of envelopes (an estimate, said so, for copies
 // held before records were named), and says who can act. A device that
 // only claims an address is never named as a person or asked to act.
+// "Re-sent" is said only of copies known to repeat a record: background
+// copies with a logical record, or sized like one in the same group. Equal
+// sizes alone prove nothing, and trust decisions keep a neutral count.
 import assert from "node:assert/strict";
 import * as m from "../web/src/model.ts";
 
@@ -22,6 +25,18 @@ eq(m.holdVerified(flood[0]), true, "opened under its key: not unverified");
 const legacy = flood.slice(0, 600).concat(Array.from({ length: 130 }, (_, i) => copy(1000 + i, { sender_verified: true, action: "update_sender", size: 2840 + 36 * (i % 4) })));
 eq(m.heldStatus(legacy, o), "Your device Bezos re-sent about 4 records 730 times", "size-matched legacy rows");
 eq(m.heldCount(legacy).estimate, true);
+// Copies with no record and no size like one: copies and sizes, no records.
+const sized = Array.from({ length: 866 }, (_, i) => copy(i, { sender_verified: true, action: "update_sender", size: 2840 + 36 * (i % 4) }));
+eq(m.heldStatus(sized, o), "Your device Bezos · 866 held copies, 4 envelope sizes", "size alone is no record");
+eq(m.heldStatus(sized.slice(0, 2).concat(flood.slice(0, 1)), o), "Your device Bezos · 3 held copies, 2 envelope sizes", "a record does not vouch for other sizes");
+// Copies held before they opened never carry a record: equal sizes are not one record re-sent.
+const claimed = Array.from({ length: 3 }, (_, i) => copy(10 + i, { detail_code: "", size: 2000 }));
+eq(m.heldStatus(claimed, o), "A device claiming to be admin/bezos · 3 held copies, 1 envelope size", "unverified background copies");
+// Trust decisions: different messages from a changed key, same length, never opened.
+const changed = Array.from({ length: 5 }, (_, i) => copy(20 + i, { peer: "bohdan/windows-laptop", code: "key_changed", detail_code: "", can_archive: false, size: 1200 }));
+eq(m.heldStatus(changed, o), "5 held messages · Bohdan’s Windows laptop", "key_changed group is a neutral count");
+eq(m.heldStatus(changed.map(q => ({ ...q, code: "identity_conflict", logical: "e".repeat(32) })), o), "5 held messages · Bohdan’s Windows laptop", "decisions never say re-sent");
+eq(m.heldStatus(Array.from({ length: 2 }, (_, i) => copy(30 + i, { code: "unverified", detail_code: "", can_archive: false, size: 700 })), o), "2 held messages · A device claiming to be admin/bezos", "unverified decision");
 // A provider that gives neither: copies only, no invented record count.
 eq(m.heldStatus([copy(1, { sender_verified: true }), copy(2, { sender_verified: true })], o), "Your device Bezos · 2 held copies", "unknown records");
 // Exactly as many records as copies: no "re-sent".

@@ -5,7 +5,9 @@
 // a computer, the same way as from the paused chat. One that didn't verify
 // proves nothing about who sent it: it only says who it claims to be from.
 // Background failures are one line per sending device and cause: how many
-// records it sent how often, and who can act; every copy stays listed.
+// records it sent how often (only where copies are known to repeat one),
+// and who can act; every copy stays listed. Several held trust decisions
+// from one device are a plain count of messages, each listed in full.
 import { useState } from "react";
 import { IconShieldQuestion } from "@tabler/icons-react";
 import { errorText, type T } from "../api";
@@ -74,20 +76,21 @@ export function HeldBack({ o }: { o: T.Overview }) {
 }
 
 // HeldGroup is one sending device and cause: a status line, what it means,
-// and every copy behind "Show copies" (time, ID, size, record).
+// and every copy behind "Show copies" (time, ID, size, record), or every
+// message behind "Show messages" for a group of trust decisions.
 function HeldGroup({ rows, o, busy, onArchive }: { rows: T.QuarantineItem[]; o: T.Overview; busy?: boolean; onArchive?: (rows: T.QuarantineItem[]) => Promise<void> }) {
   const [open, setOpen] = useState(false);
   const [visible, setVisible] = useState(20);
   const first = rows[0], action = heldAction(first, o);
   const quiet = background(first.code);
-  const archiveable = quiet ? rows.filter(q => q.can_archive) : [];
+  const archiveable = quiet ? rows.filter(q => q.can_archive) : [], noun = quiet ? "copies" : "messages";
   return <li className="rounded-2xl bg-surface p-3.5 stroke">
     <p className="font-bold">{heldStatus(rows, o)}<span className="font-normal text-text-2"> · last {when(first.at)}{action ? " · " + action : ""}</span></p>
     <p className="mt-1 text-[14px] text-text-2">{first.detail || holdSentence(first.code, nameOf(first.peer, o), true)}</p>
     {first.recovery && <p className="mt-1 text-[13px] text-muted">{first.recovery}</p>}
     <details className="mt-2" onToggle={e => setOpen(e.currentTarget.open)}>
-      <summary className="cursor-pointer text-[13px] font-bold text-text-2">Show copies ({rows.length})</summary>
-      {open && <><ul className="mt-2 flex flex-col gap-2">{rows.slice(0, visible).map(q => quiet ? <li key={q.id} className="min-w-0 text-[13px] text-muted"><time dateTime={q.at}>{when(q.at)}</time>{q.size ? " · " + size(q.size) : ""}{q.logical ? " · record " + q.logical.slice(0, 8) : ""}<span className="block break-all font-mono">{q.id}</span></li> : <HeldRow key={q.id} q={q} o={o} />)}</ul>{rows.length > visible && <Button className="mt-2" size="sm" variant="ghost" onClick={() => setVisible(n => n + 20)}>Show more copies ({rows.length - visible})</Button>}</>}
+      <summary className="cursor-pointer text-[13px] font-bold text-text-2">Show {noun} ({rows.length})</summary>
+      {open && <><ul className="mt-2 flex flex-col gap-2">{rows.slice(0, visible).map(q => quiet ? <li key={q.id} className="min-w-0 text-[13px] text-muted"><time dateTime={q.at}>{when(q.at)}</time>{q.size ? " · " + size(q.size) : ""}{q.logical ? " · record " + q.logical.slice(0, 8) : ""}<span className="block break-all font-mono">{q.id}</span></li> : <HeldRow key={q.id} q={q} o={o} />)}</ul>{rows.length > visible && <Button className="mt-2" size="sm" variant="ghost" onClick={() => setVisible(n => n + 20)}>Show more {noun} ({rows.length - visible})</Button>}</>}
     </details>
     {onArchive && archiveable.length > 0 && <Button size="sm" variant="ghost" className="mt-2" disabled={busy} onClick={() => void onArchive(archiveable)}>{archiveable.length === 1 ? "Archive this notice" : "Archive these " + archiveable.length + " notices"}</Button>}
   </li>;

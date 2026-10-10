@@ -664,19 +664,23 @@ export function heldSender(q: T.QuarantineItem, o: T.Overview | null): string {
 }
 
 /** heldCount counts held copies and the records they carry: copies of one
- *  record share its logical key (QuarantineItem.logical). Copies held before
- *  keys were kept are matched by envelope size, so the count is then only
- *  an estimate; with neither, how many records they carry is unknown. */
-export function heldCount(rows: T.QuarantineItem[]): { copies: number; records?: number; estimate: boolean } {
-  const bySize = new Map<number, string>(), keys = new Set<string>();
+ *  record share its logical key (QuarantineItem.logical). A copy held before
+ *  keys were kept counts as the record its size matches in the same group,
+ *  so the count is then only an estimate. Equal sizes alone prove nothing
+ *  (different messages can be as long), so with any copy matching no
+ *  record, how many records they carry is unknown: only how many envelope
+ *  sizes (sizes, when every copy has one). */
+export function heldCount(rows: T.QuarantineItem[]): { copies: number; records?: number; estimate: boolean; sizes?: number } {
+  const bySize = new Map<number, string>(), keys = new Set<string>(), sizes = new Set<number>();
   for (const q of rows) if (q.logical && q.size) bySize.set(q.size, q.logical);
   let estimate = false, unknown = false;
   for (const q of rows) {
-    if (q.logical) keys.add(q.logical);
-    else if (q.size) { estimate = true; keys.add(bySize.get(q.size) || "size:" + q.size); }
-    else unknown = true;
+    const key = q.logical || (q.size ? bySize.get(q.size) : undefined);
+    if (q.size) sizes.add(q.size);
+    if (!key) unknown = true;
+    else { keys.add(key); estimate ||= !q.logical; }
   }
-  return { copies: rows.length, records: unknown ? undefined : keys.size, estimate };
+  return { copies: rows.length, records: unknown ? undefined : keys.size, estimate, sizes: rows.every(q => q.size) ? sizes.size : undefined };
 }
 
 /** heldAction is who can act on a held group's cause (QuarantineItem.action),
@@ -696,11 +700,14 @@ export function heldAction(q: T.QuarantineItem, o: T.Overview | null): string {
 }
 
 /** heldStatus is one held group (one sending device, one cause) in a line:
- *  "Your device Bezos re-sent 4 records 866 times". */
+ *  "Your device Bezos re-sent 4 records 866 times". Only background copies
+ *  (invalid, proof_pending) are counted as records; a trust decision's
+ *  copies (key_changed never opens) are a neutral count of messages. */
 export function heldStatus(rows: T.QuarantineItem[], o: T.Overview | null): string {
-  const { copies, records, estimate } = heldCount(rows), who = heldSender(rows[0], o);
+  const { copies, records, estimate, sizes } = heldCount(rows), who = heldSender(rows[0], o);
   const n = (k: number, one: string, many: string) => k + " " + (k === 1 ? one : many);
-  if (records === undefined) return who + " · " + n(copies, "held copy", "held copies");
+  if (!["invalid", "proof_pending"].includes(rows[0].code)) return n(copies, "held message", "held messages") + " · " + who;
+  if (records === undefined) return who + " · " + n(copies, "held copy", "held copies") + (sizes ? ", " + n(sizes, "envelope size", "envelope sizes") : "");
   const about = estimate ? "about " : "";
   return copies > records ? who + " re-sent " + about + n(records, "record", "records") + " " + n(copies, "time", "times") : who + " sent " + about + n(records, "record", "records");
 }

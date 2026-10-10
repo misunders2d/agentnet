@@ -51,14 +51,17 @@ func heldNoticeText(code, reason string) (string, string) {
 // heldSenderVerified: the copy opened under its sender's pinned key before
 // it was held. Every proof wait and conflict is decided after that; an
 // invalid copy only when its recorded cause is a later check. One without a
-// known cause (stored before causes were) proves nothing about its sender.
-func heldSenderVerified(reason, code string) bool {
+// known cause (stored before causes were) proves nothing about its sender,
+// nor does the catch-all admission_failed by itself: a v0.8.16 browser
+// stored its pre-open "local recipient identity changed" under it. Such a
+// copy counts only with its logical record, which is kept once it opened.
+func heldSenderVerified(reason, code, logical string) bool {
 	switch reason {
 	case "proof_pending", "identity_conflict", "conflicting_duplicate":
 		return true
 	case "invalid":
 		_, known := heldWords[code]
-		return known && !heldBeforeOpen[code]
+		return known && !heldBeforeOpen[code] && (code != "admission_failed" || logical != "")
 	}
 	return false
 }

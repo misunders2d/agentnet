@@ -85,7 +85,9 @@ func TestQuarantineCode(t *testing.T) {
 	var parity []client.Quarantined
 	for _, reason := range []string{"invalid", "proof_pending", "key_changed", "identity_conflict", "conflicting_duplicate", "a_reason_added_later"} {
 		for i, code := range heldParityCodes {
-			parity = append(parity, client.Quarantined{ID: "held", Sender: "admin/bezos", Reason: reason, DetailCode: code, ReceivedAt: at, Logical: strings.Repeat("ab", 8*(i%2)), Size: 100 * (i % 3)})
+			for _, logical := range []string{"", strings.Repeat("ab", 8)} {
+				parity = append(parity, client.Quarantined{ID: "held", Sender: "admin/bezos", Reason: reason, DetailCode: code, ReceivedAt: at, Logical: logical, Size: 100 * (i % 3)})
+			}
 		}
 	}
 	input, _ := json.Marshal(map[string]any{"reasons": reasons, "diagnostics": diagnostics, "proofRecovery": proofRecovery, "parity": map[string]any{"held": parity, "items": quarantineItems(parity)}})
@@ -124,7 +126,9 @@ func TestHeldNoticeActionable(t *testing.T) {
 	}{
 		{"invalid", "participation_binding_mismatch", HeldUpdateSender, true}, // opened under bezos's key, then failed the binding check
 		{"invalid", "history_forwarder_not_member", "", true},
-		{"invalid", "admission_failed", "", true},
+		// The catch-all names no stage: v0.8.16 browsers stored the pre-open
+		// "local recipient identity changed" under it (see below).
+		{"invalid", "admission_failed", "", false},
 		{"invalid", "envelope_verification_failed", "", false}, // never opened: only a claim
 		{"invalid", "envelope_malformed", "", false},
 		{"invalid", "recipient_mismatch", "", false},
@@ -144,6 +148,13 @@ func TestHeldNoticeActionable(t *testing.T) {
 		if q.SenderVerified != c.verified || q.Action != c.action {
 			t.Errorf("%s/%s: verified %v action %q, want %v %q", c.reason, c.code, q.SenderVerified, q.Action, c.verified, c.action)
 		}
+	}
+	// Only a logical record, kept once a copy opened (holdOpened,
+	// verifyAndStore; engine admitInner), proves the catch-all was a later
+	// check; a cause recorded before opening outranks it.
+	opened := strings.Repeat("ab", 16)
+	if !item("invalid", "admission_failed", opened, 0).SenderVerified || item("invalid", "envelope_verification_failed", opened, 0).SenderVerified || item("invalid", "", opened, 0).SenderVerified {
+		t.Errorf("a kept logical record decides only the catch-all")
 	}
 	for _, code := range []string{"participation_invite_unresolved", "control_target_unknown_key", "group_context_unavailable", "conversation_unavailable", "control_not_author", "history_forwarder_not_member", "recipient_not_current_member", "participation_events_limit", "recipient_identity_changed"} {
 		detail, recovery := heldNoticeText(code, "proof_pending")

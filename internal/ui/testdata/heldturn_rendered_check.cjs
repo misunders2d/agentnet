@@ -40,7 +40,9 @@ const {chromium}=require(process.env.AGENTNET_PLAYWRIGHT);
    assert.deepEqual(posted.filter(x=>x.do==='resolve'),[{do:'resolve',id:'held-one'}],'only exact chosen turn resolved');
    assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false,'no page overflow');
    if(skin==='comic') {
-    assert.equal(await p.getByRole('button',{name:'Archive notice',exact:true}).count(),1,'security hold gains no archive');
+    // Background notices sit under "Chat sync needs attention", one archive per archivable group.
+    await p.locator('summary').filter({hasText:'Chat sync needs attention'}).click();
+    assert.equal(await p.getByRole('button',{name:'Archive this notice',exact:true}).count(),1,'security hold gains no archive');
     await p.getByRole('button',{name:/Reports from other computers/}).click();
     const dismiss=p.getByRole('button',{name:'Dismiss this report',exact:true});await dismiss.click();
     await p.getByText('Synthetic dismissal failed',{exact:false}).filter({visible:true}).waitFor();

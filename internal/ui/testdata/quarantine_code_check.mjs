@@ -25,6 +25,17 @@ for (const [i, q] of parity.held.entries()) {
  assert.deepEqual({ ...got, at: '', reason: '' }, { ...want, at: '', reason: '' }, 'native/browser held item ' + q.reason + '/' + q.detail_code);
  checks++;
 }
+// A v0.8.16 browser stored its pre-open "local recipient identity changed"
+// hold under the catch-all admission_failed, and never rechecks it: the
+// catch-all names no stage, so it proves nothing about the sender. Only a
+// logical record, kept once a copy opened, does.
+{
+ const v0816 = { id: 'v0816', from: 'admin/bezos', reason: 'invalid', detail_code: 'admission_failed', at: 0, envelope: 'x'.repeat(2000) };
+ assert.equal(quarantineItem(v0816).sender_verified, undefined, 'v0.8.16 pre-open catch-all row names no verified sender');
+ assert.equal(quarantineItem({ ...v0816, logical: 'ab'.repeat(16) }).sender_verified, true, 'an opened catch-all row does');
+ assert.equal(quarantineItem({ ...v0816, detail_code: 'recipient_identity_changed', logical: 'ab'.repeat(16) }).sender_verified, undefined, 'a pre-open cause outranks a kept record');
+ checks += 3;
+}
 // The logical record of a held copy (client.heldLogicalKey): shared vectors.
 for (const v of JSON.parse(readFileSync(new URL('./held_logical.json', import.meta.url), 'utf8'))) {
  assert.equal(await heldLogicalKey(v.inner, v.fp), v.key, 'logical key ' + v.inner.id);

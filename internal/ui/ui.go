@@ -1036,8 +1036,9 @@ type QuarantineItem struct {
 	// Action says who can act on the cause (Held*); "" when no one needs to.
 	Action string `json:"action,omitempty"`
 	// Logical names the record the copy carries; copies of one record share
-	// it. "" before it opened or for copies held before it was recorded,
-	// which a page counts by Size, the retained envelope's length.
+	// it. "" before it opened or for copies held before it was recorded; a
+	// page may then match Size, the retained envelope's length, to a record
+	// of the same group, as an estimate, but never counts records by size.
 	Logical string `json:"logical,omitempty"`
 	Size    int    `json:"size,omitempty"`
 }

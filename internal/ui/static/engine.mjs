@@ -379,9 +379,11 @@ export const heldNoticeText = (code, reason) => {
 };
 // heldSenderVerified is ui.heldSenderVerified: the copy opened under its
 // sender's pinned key before it was held; a cause recorded before that, or
-// none (stored before causes were), only claims who sent it.
+// none (stored before causes were), only claims who sent it. The catch-all
+// admission_failed counts only with a logical record (kept once it opened):
+// v0.8.16 stored its pre-open "local recipient identity changed" under it.
 const heldBeforeOpen = new Set(["envelope_malformed", "envelope_verification_failed", "recipient_mismatch", "recipient_identity_changed", "sender_key_unavailable"]);
-const heldSenderVerified = (reason, code) => ["proof_pending", "identity_conflict", "conflicting_duplicate"].includes(reason) || reason === "invalid" && Object.hasOwn(heldWords, code || "") && !heldBeforeOpen.has(code);
+const heldSenderVerified = (reason, code, logical) => ["proof_pending", "identity_conflict", "conflicting_duplicate"].includes(reason) || reason === "invalid" && Object.hasOwn(heldWords, code || "") && !heldBeforeOpen.has(code) && (code !== "admission_failed" || !!logical);
 // heldNoticeAction is ui.heldNoticeAction: who can act on the cause.
 const heldNoticeAction = (code, reason) => code === "participation_binding_mismatch" ? "update_sender" : code === "participation_invite_unresolved" ? "wait_invitation" : reason === "proof_pending" ? "wait_context" : "";
 // heldLogicalKey is client.heldLogicalKey: the logical record a held copy
@@ -400,7 +402,7 @@ export const heldLogicalKey = async (n, fp) => {
 };
 const canArchiveHeld = reason => reason === "invalid" || reason === "proof_pending";
 // quarantineItem is one held message as the overview lists it (ui.QuarantineItem, live.go quarantineItems).
-export const quarantineItem = (h) => { const verified = heldSenderVerified(h.reason, h.detail_code), action = heldNoticeAction(h.detail_code || "", h.reason), size = typeof h.envelope === "string" ? h.envelope.length : 0;
+export const quarantineItem = (h) => { const verified = heldSenderVerified(h.reason, h.detail_code, h.logical), action = heldNoticeAction(h.detail_code || "", h.reason), size = typeof h.envelope === "string" ? h.envelope.length : 0;
   return { id: h.id, peer: h.from, code: holdCode(h.reason), reason: holdText(h.reason, h.from), at: iso(h.at), can_archive:canArchiveHeld(h.reason), ...(h.detail_code ? {detail_code:h.detail_code} : {}), ...heldNoticeText(h.detail_code,h.reason),
     ...(verified ? {sender_verified:true} : {}), ...(action ? {action} : {}), ...(h.logical ? {logical:h.logical} : {}), ...(size ? {size} : {}) }; };
 
