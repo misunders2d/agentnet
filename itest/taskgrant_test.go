@@ -19,7 +19,7 @@ func TestCLITaskGrantJourney(t *testing.T) {
 	_, _ = c.setup(t, "hub")
 	stubDir := filepath.Join(c.dir, "stub")
 	os.MkdirAll(stubDir, 0o700)
-	os.WriteFile(filepath.Join(stubDir, "claude"), []byte(stubClaude), 0o700)
+	writeClaudeFixture(t, filepath.Join(stubDir, "claude"), stubClaude)
 	work := filepath.Join(c.dir, "bobwork")
 	os.MkdirAll(work, 0o700)
 	c.run("--home", "bob", "responder", "set", "--harness", "claude", "--dir", work, "--timeout", "30s")

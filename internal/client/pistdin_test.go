@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/testhub"
 )
 
 // BUG-32: the pi responder gets the decrypted request on its standard
@@ -21,7 +22,7 @@ func TestPiPromptNotOnCommandLine(t *testing.T) {
 	bin := t.TempDir()
 	log := filepath.Join(bin, "log")
 	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" > '" + log + ".args'\ncat > '" + log + ".stdin'\necho 'stub answer'\n"
-	if err := os.WriteFile(filepath.Join(bin, "pi"), []byte(script), 0o700); err != nil {
+	if err := testhub.WriteNativeScript(filepath.Join(bin, "pi"), script, "pi", "TestNativeFixtureAnswerProcess"); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))

@@ -739,9 +739,9 @@ func TestAgentClaimIsAtomic(t *testing.T) {
 				t.Fatal(err)
 			}
 			eventually(t, "bob to hold it", func() bool { return inboxCount(t, w.bob, `id = ? AND state = ?`, q.ID, stateAgentWaiting) == 1 })
-			if name == "freeze" {
-				stopBob() // the last case: bob's daemon is not needed after this
-			}
+			// Isolate the claim's writer lock from unrelated daemon transactions.
+			// The signed request is stored; neither assertion needs delivery now.
+			stopBob()
 			write := c.write(pid)
 			var during error
 			beforeAgentClaim = func() { during = write() }
@@ -758,6 +758,9 @@ func TestAgentClaimIsAtomic(t *testing.T) {
 				t.Fatal("the running job is not told to stop")
 			}
 		})
+		if name == "dismissal" {
+			stopBob = runAgent(t, w.bob) // deliver the next case's invitation and request
+		}
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
+	"github.com/misunders2d/agentnet/internal/testhub"
 )
 
 // bindProgram makes the lookups bind to a stand-in program for the test.
@@ -356,6 +357,10 @@ exec "$AGENTNET_NATIVE_STUB_EXE" -test.run '^TestNativeFixtureAnswerProcess$' --
 }
 
 func TestNativeFixtureAnswerProcess(t *testing.T) {
+	if os.Getenv("AGENTNET_NATIVE_SCRIPT_HARNESS") != "" {
+		testhub.RunNativeScript(t)
+		return
+	}
 	name := os.Getenv("AGENTNET_NATIVE_STUB_HARNESS")
 	if name == "" {
 		t.Skip("owned synthetic subprocess only")

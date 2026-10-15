@@ -663,6 +663,7 @@ func TestQuestionPromptOffersAskingBack(t *testing.T) {
 }
 
 func TestWorkerStartupTimingAndLaunchFailure(t *testing.T) {
+	t.Run("native-exit", testNativeProcessExitClassification)
 	for _, missing := range []bool{false, true} {
 		t.Run(fmt.Sprintf("missing-%t", missing), func(t *testing.T) {
 			st := installStub(t, "answer")

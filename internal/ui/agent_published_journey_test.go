@@ -24,7 +24,7 @@ func TestBrowserNamedAgentPublishedJourney(t *testing.T) {
 	bin := t.TempDir()
 	runs := filepath.Join(bin, "runs")
 	script := "#!/bin/sh\ncat >/dev/null\ncat agent-name >> '" + runs + "'\ncat agent-name\n"
-	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(script), 0700); err != nil {
+	if err := testhub.WriteNativeScript(filepath.Join(bin, "claude"), script, "claude"); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))

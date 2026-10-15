@@ -96,7 +96,7 @@ func TestTypingCombinedRenderedLinkedEngineAndDaemon(t *testing.T) {
 	started := filepath.Join(bin, "started")
 	release := filepath.Join(bin, "release")
 	script := fmt.Sprintf("#!/bin/sh\ncat >/dev/null\ntouch '%s'\nwhile [ ! -f '%s' ]; do sleep 0.05; done\necho synthetic-answer\n", started, release)
-	if err = os.WriteFile(filepath.Join(bin, "claude"), []byte(script), 0700); err != nil {
+	if err = testhub.WriteNativeScript(filepath.Join(bin, "claude"), script, "claude"); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -140,7 +140,7 @@ const config=%s, sender=location.pathname==='/sender', prefix=sender?'/engine':'
 window.calls=[];window.api=async(path,body)=>{calls.push({path,body});const r=await fetch(prefix+path,{method:body?'POST':'GET',headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined});if(!r.ok)throw new Error('API '+r.status);return r.json();};
 document.querySelector('#composer').hidden=false;document.body.classList.add('show-conv');document.querySelector('#conv-name').textContent='Synthetic linked-device conversation';document.querySelector('#to-name').textContent=sender?'Bob':'Alice';
 window.scope={conv:config.conv};window.remount=async()=>{window.ui=mountTyping({api,input:document.querySelector('#body'),line:document.querySelector('#typing-line'),settings:document.querySelector('#typing-settings')});await ui.setScope(scope);};await remount();
-if(!sender){window.events=new EventSource('/native/events');events.addEventListener('change',()=>ui.refresh());}
+if(!sender){window.events=new EventSource('/native/events');events.addEventListener('change',()=>ui.refresh());events.addEventListener('typing',()=>ui.refresh());}
 window.ready=true;`, config)
 			case serveBundledApp(w, r):
 			case strings.HasPrefix(r.URL.Path, "/assets/"):

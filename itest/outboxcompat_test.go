@@ -42,7 +42,7 @@ func TestCLIOutboxCompat(t *testing.T) {
 
 	stubDir := filepath.Join(c.dir, "stub")
 	os.MkdirAll(stubDir, 0o700)
-	os.WriteFile(filepath.Join(stubDir, "claude"), []byte(stubOutboxClaude), 0o700)
+	writeClaudeFixture(t, filepath.Join(stubDir, "claude"), stubOutboxClaude)
 	work := filepath.Join(c.dir, "bobwork")
 	os.MkdirAll(work, 0o700)
 	c.run("--home", "bob", "responder", "set", "--harness", "claude", "--dir", work, "--timeout", "30s")

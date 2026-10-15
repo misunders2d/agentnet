@@ -590,17 +590,27 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	}
 	if claudeBridge != nil {
 		stopNativeFollowups()
+		// Only an observed native outcome supersedes a process error.
+		// finish's missing-terminal fallback must not hide an actual exit failure.
+		claudeBridge.mu.Lock()
+		settled := claudeBridge.done
+		claudeBridge.mu.Unlock()
 		claudeBridge.finish()
 		claudeBridge.close()
-		if runCtx.Err() == nil {
+		if runCtx.Err() == nil && settled {
 			runErr = nil
 		}
 	}
 	if piBridge != nil {
 		stopNativeFollowups()
+		// Only an observed native outcome supersedes a process error.
+		// finish's missing-terminal fallback must not hide an actual exit failure.
+		piBridge.mu.Lock()
+		settled := piBridge.done
+		piBridge.mu.Unlock()
 		piBridge.finish()
 		piBridge.close()
-		if runCtx.Err() == nil {
+		if runCtx.Err() == nil && settled {
 			runErr = nil
 		}
 	}

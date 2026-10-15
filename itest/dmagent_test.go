@@ -30,7 +30,7 @@ func TestCLIDMAgent(t *testing.T) {
 	c.setup(t, "hub")
 	stubDir := filepath.Join(c.dir, "stub")
 	os.MkdirAll(stubDir, 0o700)
-	os.WriteFile(filepath.Join(stubDir, "claude"), []byte(stubAgent), 0o700)
+	writeClaudeFixture(t, filepath.Join(stubDir, "claude"), stubAgent)
 	work := filepath.Join(c.dir, "bobwork")
 	os.MkdirAll(work, 0o700)
 	c.run("--home", "bob", "responder", "set", "--harness", "claude", "--dir", work, "--timeout", "60s")

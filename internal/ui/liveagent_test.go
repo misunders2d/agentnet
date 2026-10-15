@@ -271,7 +271,7 @@ func TestLiveAgentTaskWaitsForItsOwner(t *testing.T) {
 	t.Setenv("HOME", t.TempDir()) // nothing of the real harness's sessions is read
 	bin := t.TempDir()
 	log := filepath.Join(bin, "runs")
-	os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\ncat > /dev/null\necho run >> '"+log+"'\nprintf 'rotated\\n\\nemotion: calm\\n'\n"), 0o700)
+	testhub.WriteNativeScript(filepath.Join(bin, "claude"), "#!/bin/sh\ncat > /dev/null\necho run >> '"+log+"'\nprintf 'rotated\\n\\nemotion: calm\\n'\n", "claude")
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
@@ -359,7 +359,7 @@ func TestLiveAgentTaskWaitsForItsOwner(t *testing.T) {
 	}
 	// Own requests run automatically, even without grants. A failed run
 	// offers an explicit retry, not another consent decision.
-	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\ncat > /dev/null\necho run >> '"+log+"'\nexit 1\n"), 0o700); err != nil {
+	if err := testhub.WriteNativeScript(filepath.Join(bin, "claude"), "#!/bin/sh\ncat > /dev/null\necho run >> '"+log+"'\nexit 1\n", "claude"); err != nil {
 		t.Fatal(err)
 	}
 	for _, kind := range []string{"question", "task"} {
@@ -385,7 +385,7 @@ func TestLiveAgentTaskWaitsForItsOwner(t *testing.T) {
 	if data, _ := os.ReadFile(log); strings.Count(string(data), "run") != 3 {
 		t.Fatalf("own requests did not run exactly once without approval: %q", data)
 	}
-	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\ncat > /dev/null\necho run >> '"+log+"'\nwhile :; do sleep 1; done\n"), 0o700); err != nil {
+	if err := testhub.WriteNativeScript(filepath.Join(bin, "claude"), "#!/bin/sh\ncat > /dev/null\necho run >> '"+log+"'\nwhile :; do sleep 1; done\n", "claude"); err != nil {
 		t.Fatal(err)
 	}
 	own, err := pa.AskAgent(AgentAsk{PID: inv.PID, Kind: "question", Body: "own stopped request"})

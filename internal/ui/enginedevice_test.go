@@ -53,7 +53,7 @@ func TestBrowserEngineDeviceChat(t *testing.T) {
 	t.Setenv("AGENTNET_NOTIFY", "off")
 	bin := t.TempDir()
 	runs := filepath.Join(bin, "runs")
-	os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\ncat > /dev/null\necho run >> '"+runs+"'\nprintf 'four o clock\\n'\n"), 0o700)
+	testhub.WriteNativeScript(filepath.Join(bin, "claude"), "#!/bin/sh\ncat > /dev/null\necho run >> '"+runs+"'\nprintf 'four o clock\\n'\n", "claude")
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	ran := func() int { b, _ := os.ReadFile(runs); return strings.Count(string(b), "run") }
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)

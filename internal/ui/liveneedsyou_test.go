@@ -44,7 +44,7 @@ func TestLiveNeedsYou(t *testing.T) {
 	t.Setenv("HOME", t.TempDir()) // nothing of the real harness's sessions is read
 	bin := t.TempDir()
 	log := filepath.Join(bin, "runs")
-	os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\ncat > /dev/null\necho run >> '"+log+"'\nprintf 'AGENTNET: NEEDS-HUMAN\\nwhich key do you mean?\\n'\n"), 0o700)
+	testhub.WriteNativeScript(filepath.Join(bin, "claude"), "#!/bin/sh\ncat > /dev/null\necho run >> '"+log+"'\nprintf 'AGENTNET: NEEDS-HUMAN\\nwhich key do you mean?\\n'\n", "claude")
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	runs := func() int { data, _ := os.ReadFile(log); return strings.Count(string(data), "run") }
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)

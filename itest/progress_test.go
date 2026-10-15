@@ -65,7 +65,7 @@ func TestCLIProgressThenResultJourney(t *testing.T) {
 		dir = filepath.Join(c.dir, name)
 		os.MkdirAll(dir, 0o700)
 		bin = filepath.Join(dir, "claude")
-		os.WriteFile(bin, []byte(script), 0o700)
+		writeClaudeFixture(t, bin, script)
 		return dir, bin
 	}
 	bobStub, bobBin := stub("bobstub", progressResponder)

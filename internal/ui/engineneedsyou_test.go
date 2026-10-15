@@ -37,7 +37,7 @@ func TestBrowserEngineNeedsYouReadOnly(t *testing.T) {
 	t.Setenv("HOME", t.TempDir()) // nothing of the real harness's sessions is read
 	bin := t.TempDir()
 	agentText := "Which branch should I use?\n\nChoose the release branch before I continue.\n" + strings.Repeat("LongLine", 80)
-	os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\ncat > /dev/null\nprintf 'AGENTNET: NEEDS-HUMAN\\n%s\\n' '"+agentText+"'\n"), 0o700)
+	testhub.WriteNativeScript(filepath.Join(bin, "claude"), "#!/bin/sh\ncat > /dev/null\nprintf 'AGENTNET: NEEDS-HUMAN\\n%s\\n' '"+agentText+"'\n", "claude")
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()

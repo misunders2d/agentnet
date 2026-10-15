@@ -35,7 +35,7 @@ func TestCLIDMAgentProgressThenAnswer(t *testing.T) {
 	stubDir := filepath.Join(c.dir, "stub")
 	os.MkdirAll(stubDir, 0o700)
 	bin := filepath.Join(stubDir, "claude")
-	os.WriteFile(bin, []byte(progressAgent), 0o700)
+	writeClaudeFixture(t, bin, progressAgent)
 	t.Cleanup(func() {
 		if t.Failed() {
 			out, _ := os.ReadFile(bin + ".progress")

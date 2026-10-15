@@ -107,7 +107,7 @@ func TestCLIReplyToResumesSession(t *testing.T) {
 	c.run("--home", "carol", "join", "--agent", "desk", c.run("--home", "alice", "admin", "invite", "--raw", "carol"))
 	stub := filepath.Join(c.dir, "stub")
 	os.MkdirAll(stub, 0o700)
-	os.WriteFile(filepath.Join(stub, "claude"), []byte("#!/bin/sh\necho \"$*\" >> \"$0.args\"\ncat > /dev/null\necho answered\n"), 0o700)
+	writeClaudeFixture(t, filepath.Join(stub, "claude"), "#!/bin/sh\necho \"$*\" >> \"$0.args\"\ncat > /dev/null\necho answered\n")
 	work := filepath.Join(c.dir, "work")
 	os.MkdirAll(work, 0o700)
 	c.run("--home", "bob", "responder", "set", "--harness", "claude", "--dir", work)

@@ -244,8 +244,8 @@ func TestDeletedConversationNeverComesBack(t *testing.T) {
 	if out := <-awaited; out.err != nil {
 		t.Fatal(out.err)
 	}
-	runAgent(t, phone)
-	waitNamedAgentCaps(t, phone)
+	// Wait for this daemon, not the link's still-live waiting session.
+	runPublished(t, phone)
 	dropCapSuccessor(t, phone, protocol.CapConvClear) // a device that cannot read deletions yet
 	runAgent(t, w.alice)
 	dumpClears(t, w.alice, phone)

@@ -27,7 +27,7 @@ func TestLiveAnswerLinksToTheRequestAsShown(t *testing.T) {
 	t.Setenv("AGENTNET_NOTIFY", "off")
 	t.Setenv("HOME", t.TempDir())
 	bin := t.TempDir()
-	os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\ncat > /dev/null\nprintf 'the build is green\\n\\nemotion: calm\\n'\n"), 0o700)
+	testhub.WriteNativeScript(filepath.Join(bin, "claude"), "#!/bin/sh\ncat > /dev/null\nprintf 'the build is green\\n\\nemotion: calm\\n'\n", "claude")
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()

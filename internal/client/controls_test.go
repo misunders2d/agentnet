@@ -459,7 +459,19 @@ func testControlsReachDevicesTheSenderDoesNotKnow(t *testing.T, queueFirst bool)
 		t.Fatal(err)
 	}
 	flush(retraction.ID)
-	eventually(t, "the phone shows the deletion", func() bool { b, ok := findLID(t, phone, conv, turn.LID); return ok && b.Deleted && b.Body == "" })
+	eventually(t, "the phone shows the deletion and removes its stored text", func() bool {
+		b, ok := findLID(t, phone, conv, turn.LID)
+		if !ok || !b.Deleted || b.Body != "" {
+			return false
+		}
+		// The retraction row is visible before admission finishes scrubbing
+		// ordinary text and revisions; a tombstoned view alone is not proof.
+		var raw string
+		if err := phone.store.db.QueryRow(`SELECT coalesce(group_concat(body, '|'), '') FROM inbox WHERE conv = ? AND (lid = ? OR (ref_id = ? AND sub = 'revision'))`, conv, turn.LID, turn.LID).Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+		return !strings.Contains(raw, "bob's turn")
+	})
 	// Raw rows, not the view: the phone keeps neither the deleted text nor the edit's text.
 	var raw string
 	phone.store.db.QueryRow(`SELECT coalesce(group_concat(body, '|'), '') FROM inbox WHERE conv = ? AND (lid = ? OR (ref_id = ? AND sub = 'revision'))`, conv, turn.LID, turn.LID).Scan(&raw)

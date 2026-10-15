@@ -140,7 +140,7 @@ func TestUpdateSwitchesTheRunningDaemon(t *testing.T) {
 	c.bin = bin
 	stub := filepath.Join(c.dir, "stub")
 	os.MkdirAll(stub, 0o700)
-	os.WriteFile(filepath.Join(stub, "claude"), []byte("#!/bin/sh\ncat > /dev/null\nsleep 3\necho 'done by the responder'\n"), 0o700)
+	writeClaudeFixture(t, filepath.Join(stub, "claude"), "#!/bin/sh\ncat > /dev/null\nsleep 3\necho 'done by the responder'\n")
 	c.env = []string{"AGENTNET_NOTIFY=off", "SSL_CERT_FILE=" + certFile, "PATH=" + stub + string(os.PathListSeparator) + os.Getenv("PATH")}
 
 	c.setup(t, "hub")
