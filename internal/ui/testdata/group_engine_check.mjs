@@ -202,7 +202,7 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false, contro
   }
   await w.close();
   if(backgroundOnly)return {ok:true,storage:realIDB?"real IndexedDB":"memory unit only",checks:labels.length,labels};
-  await checkControlHistory({world,check,realIDB,c,root,conv,keys,address,roster,pub,alicePub});
+  await checkControlHistory({world,check,realIDB,c,root,conv,keys,address,roster,pub,alicePub,aliceKeys});
   if(controlHistoryOnly)return {ok:true,storage:realIDB?'real IndexedDB':'memory unit only',checks:labels.length,labels};
   // A set check must notice records that did not exist during verification,
   // not just changes to already-read keys. A second real IDB connection is

@@ -95,7 +95,7 @@ func TestTopicSnapshotReaderRequirementSurvivesArchiveRepack(t *testing.T) {
 		for session, record := range sessionRecords(t, phone) {
 			var caps []string
 			for _, cap := range record.Caps {
-				if cap != missing {
+				if cap != missing && !(missing==protocol.CapTopicContext && cap==protocol.CapGuestAgent) {
 					caps = append(caps, cap)
 				}
 			}

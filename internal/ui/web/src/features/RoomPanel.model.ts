@@ -55,7 +55,7 @@ export const lineOf = (m: T.DMMessage) => unmark(firstLine(m.text ?? m.body, 140
 const timeline = (t: T.DMThread) => (t.messages || []).filter((m) => !m.event && !m.deleted && lineOf(m) !== "");
 
 /** Messages a person could be shown: real messages here, not copies shared with this computer. */
-export const shareable = (t: T.DMThread) => timeline(t).filter((m) => !m.excerpt_pid && !m.replica);
+export const shareable = (t: T.DMThread) => timeline(t).filter((m) => t.role === "human_guest" ? !!guestParent(t, m.topic || "") : !m.excerpt_pid && !m.replica);
 
 // ---- the room -----------------------------------------------------------------
 
@@ -217,7 +217,8 @@ export function room(t: T.DMThread, o: T.Overview | null, names: Record<string, 
 }
 
 /** canBringIn: whether this person may invite anyone into t at all. */
-export const canBringIn = (t: T.DMThread | null) => !!t && !t.frozen && (!t.role || t.role === "member");
+export const guestParent = (t: T.DMThread | null, topic?: string) => t?.guests?.find(g => g.host_here && g.can_send && g.state === "active" && !g.held && !!g.topic && (topic === undefined || g.topic === topic));
+export const canBringIn = (t: T.DMThread | null, topic?: string) => !!t && !t.frozen && (!t.role || t.role === "member" || t.role === "human_guest" && !!guestParent(t, topic));
 
 // ---- what a guest was shown ---------------------------------------------------------
 
@@ -269,6 +270,7 @@ export function guestUpdateDraft(member: boolean) {
 export function agentRejoinState(t: T.DMThread, pid?: string): string {
   const old = (t.agents || []).find(a => a.pid === pid || a.pids?.includes(pid || ""));
   if (!old?.host.fingerprint) return "";
+  if (["active", "invited"].includes(old.state)) return old.state === "active" ? "Already in this chat" : "Rejoin pending";
   const current = (t.agents || []).find(a => a.pid !== old.pid &&
     a.host.address === old.host.address && a.host.fingerprint === old.host.fingerprint &&
     a.topic === old.topic &&

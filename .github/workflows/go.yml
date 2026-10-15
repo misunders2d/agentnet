@@ -72,7 +72,8 @@ jobs:
             mapfile -t packages <<< "$other_packages"
             pids=()
             logs=()
-            for selection in '[A-G]' '[H-Z]'; do
+            # H-Z exhausted its aggregate 1800s; split it without raising the bound.
+            for selection in '[A-G]' '[H-N]' '[O-Z]'; do
               log="windows-client-${#pids[@]}.log"
               go test -count="$AGENTNET_TEST_COUNT" -timeout 1800s -run "^Test${selection}" ./internal/client >"$log" 2>&1 &
               pids+=("$!")

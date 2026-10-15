@@ -392,7 +392,7 @@ func (a *Agent) tellStatus(ctx context.Context, id string) bool {
 	public, detail, ok := statusOf(state)
 	if state == stateRunning {
 		var stored string
-		if a.store.db.QueryRow(`SELECT coalesce(detail,'') FROM inbox WHERE id=?`, id).Scan(&stored) == nil && stored == roomWaitDetail {
+		if a.store.db.QueryRow(`SELECT coalesce(detail,'') FROM inbox WHERE id=? AND state=? AND attempts=?`, id, stateRunning, attempt).Scan(&stored) == nil && (stored == roomWaitDetail || stored == nativeInputDetail || publicActivityDetail(stored)) {
 			detail = stored
 		}
 	}
@@ -431,6 +431,9 @@ func (a *Agent) tellStatus(ctx context.Context, id string) bool {
 		capability = protocol.CapRequestFollowup
 	}
 	res, err := a.sendControlAs(sctx, ref, envelope.SubStatus, string(body), capability)
+	if errors.Is(err, errNativeActivityDeferred) {
+		return true // keep only latest detail due; other requests still progress
+	}
 	if err != nil && res.ID == "" && !errors.Is(err, ErrNoControls) && unreachableNow(err) {
 		a.Logf("status of %s not told to %s yet: %v", id, sender, err)
 		return false // still due: told on a later pass

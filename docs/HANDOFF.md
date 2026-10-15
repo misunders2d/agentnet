@@ -1,5 +1,16 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+## Next release — v0.8.31 in progress
+
+The owner approved [the v31 scope](plans/V0_8_31.md) and
+[publication goal](plans/V0_8_31_GOAL.md). Root orchestrates/reviews; four
+GPT-6.1-sol xhigh Codex workers implement in Herdr tab 3 with native automatic
+review, and the existing Claude in tab 2 independently challenges designs/code.
+ThinkPad is offline. New work is uncommitted and not release-qualified.
+Guest-owned agents are core scope; WebKit remains urgent investigation with
+the prior carry-forward permission. Current ownership and failed/passing
+evidence are linked from the v31 plan. Preserve live identities/history/work.
+
 Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.

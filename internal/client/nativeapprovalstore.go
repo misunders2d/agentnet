@@ -98,6 +98,7 @@ func (a *Agent) nativeJobCurrentIn(q dbq, j job, attempt int64) bool {
 }
 
 func (a *Agent) nativeRequestChanged(request string) {
+	a.noteNativeWait(request)
 	// Keep recipient coverage so ending sends a settled snapshot, including
 	// after restart. A fresh token needs a fresh snapshot of this same item.
 	_, _ = a.store.db.Exec(`UPDATE reported SET sent_at=0 WHERE item=?`, request)

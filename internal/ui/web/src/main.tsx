@@ -4,6 +4,7 @@
 // host.listen, host.file and host.stage, exactly like any other skin. Comic
 // owns that root and nothing else: its theme, popups and focus stay there.
 import { createRoot, type Root } from "react-dom/client";
+import { useEffect } from "react";
 import { CSPProvider } from "@base-ui/react/csp-provider";
 import { App } from "./App";
 import { StoreContext } from "./context";
@@ -15,6 +16,11 @@ import { clearPictures } from "./features/Message.files";
 
 let live = 0; // mounted roots
 const mounted = new WeakMap<Element, { root: Root; store: Store; stopTheme: () => void; parts: HTMLElement[]; stopBack: (() => void) | undefined }>();
+
+function HostControlsClaim({ host, root }: { host: Host; root: HTMLElement }) {
+  useEffect(() => host.controls?.claim(root), [host, root]);
+  return null;
+}
 
 export async function mount(root: HTMLElement, host: Host): Promise<void> {
   root.classList.add("an-root");
@@ -71,6 +77,7 @@ export async function mount(root: HTMLElement, host: Host): Promise<void> {
     <CSPProvider disableStyleElements>
       <OwnedContext.Provider value={{ root, app, portals }}>
         <StoreContext.Provider value={store}>
+          <HostControlsClaim host={host} root={root} />
           <App />
         </StoreContext.Provider>
       </OwnedContext.Provider>

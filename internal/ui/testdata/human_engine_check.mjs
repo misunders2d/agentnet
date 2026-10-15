@@ -1,5 +1,6 @@
 // Isolated Alice/Bob/Carol human Engine world; source-driven transport, no real peer/model/cloud.
 import assert from 'node:assert/strict';
+import { pathToFileURL } from 'node:url';
 import { Engine, memoryStore } from '../static/engine.mjs';
 import * as wire from '../static/wire.mjs';
 let checks = 0, sequence = 1;
@@ -95,6 +96,9 @@ async function world() {
   return { alice, bob, carol, mallory, users, conv, c, agent, posts, blobs, caps, catalogs, receive, drain, from, decision, accept, sibling, offline: (v) => { offline = v; } };
 }
 
+export { world, check, refuses, id, now, checks };
+
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
 // A DM participation event retries only a failed atomic commit, with fresh
 // authority and exactly the same signed event. Never retry after storage.
 for (const mode of ['once', 'pending-key', 'persistent', 'other-error']) {
@@ -152,6 +156,13 @@ for (const ending of ['member', 'guest']) {
   check(excerpt?.body === 'SELECTED CONTEXT', 'only selected context delivered after acceptance');
   check(new TextDecoder().decode((await c.openFile(excerpt.id, 0, 'in')).bytes) === 'CHOSEN', 'exact selected file bytes');
   check(!(await c.dm(conv)).messages.some(m => m.id === hidden.id || m.body === 'PRIVATE BEFORE INVITE'), 'unselected history absent');
+  for (const ref of [excerpt.lid,excerpt.id]) {
+    const reply=await c.sendDM({conv,pid:invited.pid,reply_to:ref,body:'SELECTED CONTEXT REPLY '+ref});
+    check((await c.store.all('outbox')).filter(r=>r.lid===reply.lid).every(r=>r.reply_to===selected.lid),'selected-context reply uses original LID for both visible aliases');
+    await worldState.drain(a);await worldState.drain(b);
+    check((await a.dm(conv)).messages.some(m=>m.lid===reply.lid),'selected-context reply reaches verified original member');
+  }
+  await refuses(()=>c.sendDM({conv,pid:invited.pid,reply_to:hidden.lid,body:'UNSELECTED PARENT'}),/stays within its conversation/);
   check((await a.dm(conv)).agents.length === 0 && (await c.dm(conv)).agents.length === 0, 'human never displayed as agent');
   await refuses(() => a.askAgent({ pid: invited.pid, body: 'EXECUTE' }), /Human|ordinary/i);
   await refuses(() => a.dismissAgent(invited.pid), /human participation/i);
@@ -813,3 +824,5 @@ for (const ending of ['original', 'self']) {
  check(!!await c.store.get('held',afterEnd)&&!await c.store.get('inbox',afterEnd),'dismissed exact captured helper cannot receive another live turn');
 }
 console.log('human engine isolated lifecycle checks passed: ' + checks);
+
+}

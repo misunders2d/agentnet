@@ -130,7 +130,8 @@ var (
 	anyID    bool   // owner thread only: an identity was given out (lastID is valid)
 )
 
-// Show displays a silent balloon, replacing this process's previous one.
+// Show displays a balloon with the system's notification sound settings,
+// replacing this process's previous one.
 // Windows queues a balloon behind one still shown; the previous one's icon is
 // deleted first, which removes its balloon (as documented).
 func Show(title, body string) error { return ShowAction(title, body, nil, nil) }
@@ -298,13 +299,19 @@ func addIcon(wnd uintptr, id uint16) bool {
 	return false
 }
 
-// balloon shows a silent balloon on icon id that respects quiet time (the
+// balloon shows a balloon on icon id that respects quiet time (the
 // previous notification's icon, and so its balloon, is gone already).
 func balloon(wnd uintptr, id uint16, title, body string) bool {
-	nid := notifyIconData{Wnd: wnd, ID: uint32(id), Flags: nifInfo, InfoFlags: niifInfo | niifNoSound | niifQuietTime}
+	nid := balloonData(wnd, id, title, body)
+	return shellNotify(nimModify, &nid)
+}
+
+func balloonData(wnd uintptr, id uint16, title, body string) notifyIconData {
+	// Leave sound to Windows and the user's notification/volume settings.
+	nid := notifyIconData{Wnd: wnd, ID: uint32(id), Flags: nifInfo, InfoFlags: niifInfo | niifQuietTime}
 	copyUTF16(nid.InfoTitle[:], title)
 	copyUTF16(nid.Info[:], body)
-	return shellNotify(nimModify, &nid)
+	return nid
 }
 
 func shellNotify(msg uintptr, nid *notifyIconData) bool {

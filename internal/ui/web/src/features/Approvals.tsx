@@ -1,3 +1,4 @@
+import { NativeActivity } from "./NativeActivity";
 // Review: unresolved work and decisions needing this person, newest first,
 // each naming who and what, straight from the overview: requests to your
 // agent and invitations for it decided here (needs_you), review decisions,
@@ -240,7 +241,9 @@ function ReviewRow({ r, o, names }: { r: T.ReviewItem; o: T.Overview; names: Rec
   };
   return (
     <OpenCard onOpen={() => go("thread", r.id, r.id)} current={isOpen(r.id)} label={title + (working ? ". Open running request." : ". Review it.")} face={asker.agent ? <AgentAvatar seed={r.peer} size={40} mood={working ? "working" : "waiting"} /> : <PersonAvatar name={asker.you ? "Me" : from} seed={r.peer} size={40} me={asker.you} />} actions={r.reason === "held" && r.kind === "question" ? <Button variant="act" disabled={busy} onClick={() => void allow()}>{busy ? "Checking…" : "Allow once"}</Button> : undefined} detail={<details><summary className="cursor-pointer font-semibold">Read the whole message</summary><p className="pt-2 whitespace-pre-wrap [overflow-wrap:anywhere]">{whyWords(r.why, r.peer, o)}</p></details>}>
-      <Body tag={working ? <Tag tone="agent">Working</Tag> : kindTag(r.kind)} at={r.at} title={title} quote={firstLine(r.excerpt, 160)} meta={working ? "Already running" : undefined} />
+      <Body tag={working ? <Tag tone="agent">Working</Tag> : kindTag(r.kind)} at={r.at} title={title} quote={firstLine(r.excerpt, 160)} meta={working ? "Already running" : undefined}>
+        {working && <NativeActivity detail={r.why} className="pt-1 text-[14px] text-text-2 [overflow-wrap:anywhere]" />}
+      </Body>
     </OpenCard>
   );
 }

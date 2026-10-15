@@ -1,3 +1,4 @@
+import { NativeActivity } from "./NativeActivity";
 // OKs rows for conversation items, straight from the overview
 // (needs_you, held, and self-consent notices in review). Each row opens
 // its exact conversation at the item; its buttons are the item's own
@@ -99,6 +100,7 @@ function RequestRow({ c, o }: Props) {
         detail={said ? <details><summary className="cursor-pointer font-semibold">Read the agent’s whole message</summary><p className="pt-2 whitespace-pre-wrap [overflow-wrap:anywhere]">{said}</p></details> : undefined}>
         <Body tag={working || running ? <Tag tone="agent">Working</Tag> : stale ? <Tag tone="muted">No result</Tag> : human ? <Tag tone={c.decide_on ? "muted" : "act"}>Needs attention</Tag> : kindTag(c.kind)} at={c.at} title={title} quote={firstLine(c.excerpt, 160)}
           meta={capital(inChat(c.conv, o)) + (working ? " · Already running" : retry || c.decide_on ? "" : c.kind === "task" ? " · Runs only if you allow it" : " · Answered only if you allow it")}>
+          {(working || running) && <NativeActivity detail={c.why} className="pt-1 text-[14px] text-text-2 [overflow-wrap:anywhere]" />}
           {targetLabel && <p className="pt-1 text-[14px] font-semibold text-agent-ink" data-request-target>{targetLabel}</p>}
           {said && <p className="pt-1 line-clamp-2 text-[14px] text-text-2 [overflow-wrap:anywhere]"><b className="font-bold text-agent-ink">Your agent says:</b> {said}</p>}
         </Body>

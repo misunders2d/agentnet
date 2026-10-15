@@ -1521,7 +1521,7 @@ if(process.env.AGENTNET_DELIVERY_STOP_REGRESSION==='1'){
     const waiting=page.getByRole('list',{name:'Waiting for you',exact:true});
     const working=page.getByRole('list',{name:'Working',exact:true});
     await activity();await waiting.getByRole('button').filter({hasText:body}).waitFor();
-    if(skin==='comic'){await page.getByText('1 thing needs you',{exact:true}).waitFor();assert.equal(await page.getByRole('navigation',{name:'Main',exact:true}).getByRole('button',{name:/^Review/}).getByText('1',{exact:true}).count(),1,'Direct held request counts in OK badge');}
+    if(skin==='comic'){await page.locator('header').filter({has:page.getByRole('heading',{name:'Review',exact:true})}).getByText('1 needs attention',{exact:true}).waitFor();assert.equal(await page.getByRole('navigation',{name:'Main',exact:true}).getByRole('button',{name:/^Review/}).getByText('1',{exact:true}).count(),1,'Direct held request counts in OK badge');}
     if(skin==='comic'){
      await waiting.getByRole('button',{name:'Brin asked your agent something. Review it.',exact:true}).waitFor();
      await waiting.getByRole('button',{name:'Allow once',exact:true}).waitFor();
@@ -1550,7 +1550,7 @@ if(process.env.AGENTNET_DELIVERY_STOP_REGRESSION==='1'){
     }
     await page.evaluate(()=>setDeviceState('running'));await working.getByRole('button').filter({hasText:body}).waitFor();assert.equal(await waiting.getByRole('button').filter({hasText:body}).count(),0,'Running review[] request leaves decision list');
     if(skin==='comic')assert.equal(await working.getByRole('button',{name:'Allow once',exact:true}).count(),0,'Running requests offer no approval');
-    if(skin==='comic'){assert.equal(await page.getByText('1 thing needs you',{exact:true}).count(),0);assert.equal(await page.getByRole('navigation',{name:'Main',exact:true}).getByRole('button',{name:/^Review/}).getByText('1',{exact:true}).count(),0,'Working review[] request clears OK badge');}
+    if(skin==='comic'){assert.equal(await page.locator('header').filter({has:page.getByRole('heading',{name:'Review',exact:true})}).getByText('1 needs attention',{exact:true}).count(),0);assert.equal(await page.getByRole('navigation',{name:'Main',exact:true}).getByRole('button',{name:/^Review/}).getByText('1',{exact:true}).count(),0,'Working review[] request clears OK badge');}
     assert(!/needs your (OK|decision)|Waiting for approval/.test(await working.innerText()),'Working row uses no approval claim');assert(!/\[object HTML/.test(await working.innerText()),'Working row renders peer name rather than DOM string');assert(!/Already running\s*·\s*Already running/.test(await working.innerText()),'Working status is not duplicated');assert.match(await working.innerText(),/Working|Already running/);await settle(page);const listShot=path.join(evidence,skin+'-direct-review-working-'+width+'.png');await page.screenshot({path:listShot});shots.push(listShot);
     await page.evaluate(()=>openOtherDevice());const unrelated=page.locator('[data-mid="'+'8'.repeat(32)+'"]');await unrelated.waitFor();assert((await unrelated.innerText()).includes('Different device thread'));await activity();
     await working.locator('button').filter({hasText:body}).first().click();const focused=page.locator('[data-mid="'+request+'"]');

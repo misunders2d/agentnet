@@ -5,6 +5,7 @@ import { deviceHistoryDirection } from '../static/devicehistory.mjs';
 import { readFile } from 'node:fs/promises';
 import { stripTypeScriptTypes } from 'node:module';
 import { runInNewContext } from 'node:vm';
+import {collectiveRef,parseCollective} from '../skins/shared/collective-mentions.mjs';
 const {threadAgentID, threadAuthor, agentName, participants} = model;
 
 const host = 'owner/laptop', agent = 'chosen-agent';
@@ -53,6 +54,22 @@ assert.equal(views.find(g=>g.pid==='remote').where,'Bezos','same human is not th
 assert.equal(views.find(g=>g.pid==='local').where,'this computer');
 console.log('Direct agent follow-up identity and self answer authorship PASS');
 
+const inviteRights=runInNewContext(roomSource+'\n({canBringIn,shareable,isMine,online,speaker})',{...model,eventKind:()=>null});
+const topicGuest={...roomThread,role:'human_guest',guests:[{pid:'guest',topic:'warehouse',state:'active',can_send:true,host_here:true,held:0,host:o.person}],messages:[{id:'selected',lid:'original',topic:'warehouse',kind:'message',body:'Already selected',excerpt_pid:'guest',replica:true},{id:'other',topic:'other',kind:'message',body:'Outside topic'}]};
+assert.equal(inviteRights.canBringIn(topicGuest,'warehouse'),true,'accepted exact topic guest can bring own agent');
+assert.equal(inviteRights.canBringIn(topicGuest,''),false,'guest cannot broaden invite to Main');
+assert.equal(inviteRights.canBringIn({...topicGuest,frozen:'conflict'},'warehouse'),false,'frozen guest has no invite action');
+assert.equal(inviteRights.canBringIn({...topicGuest,guests:[{...topicGuest.guests[0],state:'dismissed',can_send:false}]},'warehouse'),false,'ended guest has no invite action');
+assert.deepEqual(Array.from(inviteRights.shareable(topicGuest).map(m=>m.id)),['selected'],'guest may choose its admitted selected excerpt only within its accepted topic');
+const inviteSource=stripTypeScriptTypes((await readFile(new URL('../web/src/features/InviteSheet.candidates.ts',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'')).replace(/^export /gm,'');
+const candidateModel=runInNewContext(inviteSource+'\n({catalogHosts,pool})',{...model,...inviteRights,collectiveRef,parseCollective});
+const guestOverview={...o,agents:true,person:{...o.person,devices:[{address:host},{address:'owner/second-laptop'}]},people:[{person:'outside',address:'outside/laptop',state:'pinned',devices:[{address:'outside/laptop'}]}]};
+const hostList=candidateModel.catalogHosts(topicGuest,guestOverview);
+assert(!hostList.includes('outside/laptop'),'guest catalog lookup stays within own devices');
+const candidates=candidateModel.pool(topicGuest,guestOverview,{loading:false,local:[],remote:{}},{},[],'daemon','guest','warehouse').candidates;
+assert(candidates.length>0&&candidates.every(c=>c.kind==='agent'&&c.mine),'guest invite offers only its own agents');
+console.log('Guest invite rights, admitted context and own-agent candidate sources PASS');
+
 const mentionsSource=stripTypeScriptTypes((await readFile(new URL('../web/src/features/Composer.mentions.ts',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'')).replace(/^export /gm,'');
 const mentionView=runInNewContext(mentionsSource+'\n({candidates,guestAuthor})',{...model});
 const scoped=(pid,topic)=>({pid,topic,host:remote,agent_id:agent,inviter:o.person,state:'active',can_ask:true});
@@ -62,6 +79,10 @@ const oldScope={...scoped('ended','warehouse'),state:'dismissed'};
 assert.equal(rejoin({...scopedRoom,agents:[oldScope,scoped('other','other'),scoped('broad',undefined)]},'ended'),'','Another topic or broad invitation cannot replace the old exact scope');
 assert.equal(rejoin({...scopedRoom,agents:[oldScope,scoped('replacement','warehouse')]},'ended'),'Already in this chat');
 assert.equal(rejoin({...scopedRoom,agents:[oldScope,{...scoped('replacement','warehouse'),state:'invited'}]},'ended'),'Rejoin pending');
+for (const state of ['active','invited']) {
+ const current={...scoped('current','warehouse'),state,pids:['current','retained-alias']};
+ assert.equal(rejoin({...scopedRoom,agents:[current]},'retained-alias'),state==='active'?'Already in this chat':'Rejoin pending','A current aggregated agent card owns its retained PID aliases');
+}
 for(const [topic,want] of [['warehouse','warehouse'],['','main'],['new-topic','broad']]){
  assert.deepEqual(Array.from(mentionView.candidates(scopedRoom,o,{[agent]:'Codex'},topic).filter(c=>c.kind==='agent').map(c=>c.id)),[want],'one exact eligible executor, narrow topic before whole-chat');
 }

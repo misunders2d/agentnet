@@ -148,6 +148,10 @@ type GrantSnapshot struct {
 
 const CapTopicContext = "tpc1"
 
+// CapGuestAgent reads transient assistants derived from exact human consent.
+// It includes the existing topic-context reader contract.
+const CapGuestAgent = "gpa1"
+
 // ParticipationHost is the device that would run the agent, and its person.
 type ParticipationHost struct {
 	Person      string `json:"person"`
@@ -178,6 +182,7 @@ type ParticipationEvent struct {
 
 	Topic     *string         `json:"topic,omitempty"` // absent: whole chat; present empty: Main; otherwise stable topic ID
 	Snapshots []GrantSnapshot `json:"snapshots,omitempty"`
+	Parent    string          `json:"parent,omitempty"` // exact human guest acceptance hash; invite/scope only
 
 	Sig []byte `json:"sig,omitempty"`
 }
@@ -199,6 +204,9 @@ func (e *ParticipationEvent) Sign(key ed25519.PrivateKey) { e.Sig = ed25519.Sign
 // whether its author, host or keys belong to the DM: that needs the DM's
 // pinned persons).
 func (e ParticipationEvent) Validate() error {
+	if e.Parent != "" && (!ValidHash(e.Parent) || e.Type != EventInvite && e.Type != EventScope || e.Role != "" || e.Topic == nil || *e.Topic == "" || e.Host == nil || e.Host.Person != e.Author.Person || len(e.TaskKeys) != 0 || e.Author.GroupAdmission != "" || e.Group != nil && (e.Group.HostRole != "visitor" || len(e.Group.TaskAdmissions) != 0)) {
+		return errors.New("participation: derived agent needs an exact human parent and topic, with no membership or task grants")
+	}
 	if len(e.Snapshots) != 0 {
 		if e.Topic == nil || e.Type != EventInvite && e.Type != EventShare || len(e.Snapshots) != len(e.Grant) {
 			return errors.New("participation: snapshots require an exact scoped history grant")
@@ -273,7 +281,7 @@ func (e ParticipationEvent) Validate() error {
 			return fmt.Errorf("participation: task keys: %w", err)
 		}
 		if g := e.Group; g != nil {
-			if g.Seq < 0 || !ValidHash(g.Hash) || !ValidHash(a.GroupAdmission) || (g.HostRole != "member" && g.HostRole != "visitor") || (g.HostRole == "member" && !ValidHash(g.HostAdmission)) || (g.HostRole == "visitor" && g.HostAdmission != "") || len(g.TaskAdmissions) != len(e.TaskKeys) {
+			if g.Seq < 0 || !ValidHash(g.Hash) || e.Parent == "" && !ValidHash(a.GroupAdmission) || (g.HostRole != "member" && g.HostRole != "visitor") || (g.HostRole == "member" && !ValidHash(g.HostAdmission)) || (g.HostRole == "visitor" && g.HostAdmission != "") || len(g.TaskAdmissions) != len(e.TaskKeys) {
 				return errors.New("participation: malformed group invitation scope")
 			}
 			for _, epoch := range g.TaskAdmissions {
@@ -297,7 +305,7 @@ func (e ParticipationEvent) Validate() error {
 			!room && (e.Group != nil || a.GroupAdmission != "") || e.Role != "" && e.Role != RoleHuman || e.Role == RoleHuman && e.Host.AgentID != "" {
 			return errors.New("participation: a scope names its invite, host, agent and role only")
 		}
-		if g := e.Group; g != nil && (g.Seq < 0 || !ValidHash(g.Hash) || !ValidHash(a.GroupAdmission) || (g.HostRole != "member" && g.HostRole != "visitor") ||
+		if g := e.Group; g != nil && (g.Seq < 0 || !ValidHash(g.Hash) || e.Parent == "" && !ValidHash(a.GroupAdmission) || (g.HostRole != "member" && g.HostRole != "visitor") ||
 			(g.HostRole == "member" && !ValidHash(g.HostAdmission)) || (g.HostRole == "visitor" && g.HostAdmission != "") || len(g.TaskAdmissions) != 0 || e.Role == RoleHuman && g.HostRole != "visitor") ||
 			g == nil && a.GroupAdmission != "" {
 			return errors.New("participation: malformed room scope group binding")
@@ -326,7 +334,7 @@ func (e ParticipationEvent) Validate() error {
 func ScopeOf(inv ParticipationEvent, ts int64) ParticipationEvent {
 	host := *inv.Host
 	s := ParticipationEvent{V: 1, Conv: inv.Conv, PID: inv.PID, Type: EventScope, Prev: inv.Hash(), Author: inv.Author, TS: ts,
-		Host: &host, Audience: inv.Audience, Role: inv.Role, Until: inv.Until, Topic: inv.Topic}
+		Host: &host, Audience: inv.Audience, Role: inv.Role, Until: inv.Until, Topic: inv.Topic, Parent: inv.Parent}
 	if g := inv.Group; g != nil {
 		s.Group = &ParticipationGroup{Seq: g.Seq, Hash: g.Hash, HostRole: g.HostRole, HostAdmission: g.HostAdmission}
 	}

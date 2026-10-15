@@ -11,7 +11,62 @@ import (
 	"unicode/utf8"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/protocol"
 )
+
+// excerptReplyParent resolves only admitted selected context, under the
+// original logical identity shown by showExcerpts. Carrier IDs never become
+// reply identities. Recheck the exact signed grant rather than trusting JSON
+// labels or accepting an arbitrary copied history item as a parent.
+func excerptReplyParent(q dbq, conv, ref string) (parent string, known bool, err error) {
+	rows, err := q.Query(`SELECT coalesce(pid,''),body FROM inbox WHERE conv=? AND sub=? AND json_valid(body) AND (id=? OR json_extract(body,'$.lid')=?)`, conv, envelope.SubExcerpt, ref, ref)
+	if err != nil {
+		return "", false, err
+	}
+	type excerpt struct{ pid, body string }
+	var found []excerpt
+	for rows.Next() {
+		var r excerpt
+		if err = rows.Scan(&r.pid, &r.body); err != nil {
+			break
+		}
+		found = append(found, r)
+	}
+	if err == nil {
+		err = rows.Err()
+	}
+	rows.Close()
+	if err != nil || len(found) == 0 {
+		return "", false, err
+	}
+	m, err := membersIn(q, conv)
+	if err != nil {
+		return "", false, err
+	}
+	var author string
+	for _, r := range found {
+		info, err := participationIn(q, conv, r.pid, m, "")
+		if err != nil {
+			return "", true, err
+		}
+		h, err := parseGrantedExcerpt(envelope.Inner{Conv: conv, PID: r.pid, Body: r.body}, info)
+		if err != nil {
+			return "", true, err
+		}
+		if !protocol.ValidID(h.LID) || known && (parent != h.LID || author != h.FromKey) {
+			return "", true, errors.New("human reply names ambiguous selected context")
+		}
+		deleted, err := retractedRefChecked(q, conv, h.LID, h.FromKey)
+		if err != nil {
+			return "", true, err
+		}
+		if deleted {
+			return "", true, errors.New("human reply names deleted selected context")
+		}
+		parent, author, known = h.LID, h.FromKey, true
+	}
+	return parent, known, nil
+}
 
 // The carrier remains in the existing inbox as a non-executable replica.
 // This computed view preserves the original PID, separately from grant scope,
@@ -23,7 +78,7 @@ func (a *Agent) showExcerpts(rows []ConvMessage) []ConvMessage {
 			out = append(out, msg)
 			continue
 		}
-		if msg.Dir != "in" {
+		if msg.Dir != "in" && msg.Via == "" {
 			continue
 		} // carriers sent here are not additional room turns
 		var h HistoryItem

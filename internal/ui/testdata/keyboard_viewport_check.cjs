@@ -240,7 +240,7 @@ async function ios(browser, scheme) {
     // too. This fixture has one workspace, so the switcher offers no Join:
     // its dialog is opened here as skinbar.mjs opens it, with that form.
     const d = await p.evaluate(() => {
-      const dlg = document.getElementById('skin-bar').shadowRoot.querySelector('dialog');
+      const dlg = document.getElementById('skin-bar').shadowRoot.querySelector('dialog:not(.controls)');
       dlg.innerHTML = '<form method="dialog"><h2>Join a workspace</h2><label>Invitation<textarea rows="3"></textarea></label>'
         + '<label>What you call it<input></label><label>This device’s name there<input></label><div class="actions"><button class="btn act">Join</button><button class="btn">Cancel</button></div></form>';
       dlg.showModal();

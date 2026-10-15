@@ -473,7 +473,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	var agy *agyStream
 	var agyErr agyDiagnostics
 	if h.sessions == agySessions {
-		agy = &agyStream{}
+		agy = &agyStream{onActivity: activity.report}
 		if plan.ref != nil {
 			agy.expected = plan.ref.ID
 		}
@@ -501,6 +501,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 			return
 		}
 		cmd.Stdout = activityWriter{Writer: roomBridge, activity: activity, first: first}
+		roomBridge.onActivity = activity.report
 		roomBridge.native = func(ctx context.Context, c nativeCallback) (json.RawMessage, error) {
 			return a.awaitNativeRequest(ctx, j, c)
 		}
@@ -532,6 +533,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 			return
 		}
 		cmd.Stdout = activityWriter{Writer: piBridge, activity: activity, first: first}
+		piBridge.onActivity = activity.report
 		followupBridge = piBridge
 		defer piBridge.close()
 	}
@@ -546,6 +548,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 			return
 		}
 		cmd.Stdout = activityWriter{Writer: claudeBridge, activity: activity, first: first}
+		claudeBridge.onActivity = activity.report
 		followupBridge = claudeBridge
 		defer claudeBridge.close()
 	}
@@ -1173,6 +1176,27 @@ func (a *Agent) PauseForAppUpdate() (func(), error) {
 func (a *Agent) watchRunActivity(runCtx, ctx context.Context, j job, activity *runActivity, check func() bool) {
 	timer := time.NewTimer(runStallNotice)
 	defer timer.Stop()
+	activityTimer := time.NewTimer(nativeActivityInterval)
+	activityTimer.Stop()
+	defer activityTimer.Stop()
+	var activityC <-chan time.Time
+	var reported nativeActivity
+	var nextActivity time.Time
+	flushActivity := func() {
+		k := nativeActivity(activity.native.Load())
+		if k == activityUnknown || k == reported {
+			return
+		}
+		if delay := time.Until(nextActivity); delay > 0 {
+			activityTimer.Reset(delay)
+			activityC = activityTimer.C
+			return
+		}
+		reported, nextActivity = k, time.Now().Add(nativeActivityInterval)
+		if a.store.markNativeActivity(runCtx, j, k) && j.Receiver == nil {
+			a.wakeStatus()
+		}
+	}
 	stallC := timer.C
 	quiet := false
 	_, changed := a.Changed()
@@ -1203,8 +1227,14 @@ func (a *Agent) watchRunActivity(runCtx, ctx context.Context, j job, activity *r
 					quiet = false
 					a.store.markRunVisibility(j.ID, false)
 					a.reviewAttention(ctx)
+					reported = activityUnknown
 				}
+				flushActivity()
 				continue // output alone cannot change authority
+			case <-activityC:
+				activityC = nil
+				flushActivity()
+				continue
 			case <-stallC:
 				remaining, due := activity.stallDue(time.Now())
 				if remaining > 0 {

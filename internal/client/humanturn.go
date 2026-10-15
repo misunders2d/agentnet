@@ -342,6 +342,9 @@ func (a *Agent) verifyHumanProof(ctx context.Context, root protocol.ConvRoot, h 
 			continue
 		}
 		p, ok := m.author(e.Author)
+		if e.Parent != "" {
+			p, ok = m.guestAuthor(e)
+		}
 		if !ok && m.roomEvents[e.Hash()] {
 			p, ok = m.roomAuthor(e.Author)
 		}
@@ -584,8 +587,11 @@ func disclosedCounted(in envelope.Inner, info ParticipationInfo) error {
 // an active assistant participation of conv: it may learn a human end, so a
 // departed guest's queued request never runs there.
 func assistantHostReader(q dbq, conv, address, fp string) (bool, error) {
+	return assistantHostReaderParent(q, conv, address, fp, "")
+}
+func assistantHostReaderParent(q dbq, conv, address, fp, parent string) (bool, error) {
 	m, err := membersIn(q, conv)
-	if err != nil || !externalDM(m.root) {
+	if err != nil || !humanRoom(m) {
 		return false, err
 	}
 	rows, err := q.Query(`SELECT DISTINCT pid FROM participation_events WHERE conv=?`, conv)
@@ -611,7 +617,8 @@ func assistantHostReader(q dbq, conv, address, fp string) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		if p.Claimable() && p.External && p.Host.Address == address && p.Host.Fingerprint == fp {
+		retainedDerived := p.Parent != "" && p.State == PartDismissed && p.Held == 0 && p.Decision != ""
+		if (p.Claimable() || retainedDerived) && (externalDM(m.root) || p.Parent != "") && (p.Parent == "" || p.Parent == parent) && p.External && p.Host.Address == address && p.Host.Fingerprint == fp {
 			return true, nil
 		}
 	}
@@ -625,6 +632,23 @@ func humanEndRecipient(q dbq, conv, address, fp string) (bool, error) {
 		return ok, err
 	}
 	return assistantHostReader(q, conv, address, fp)
+}
+func humanEndRecipientFor(q dbq, conv, address, fp, pid string) (bool, error) {
+	if ok, err := humanEndReader(q, conv, address, fp); err != nil || ok {
+		return ok, err
+	}
+	m, err := membersIn(q, conv)
+	if err != nil {
+		return false, err
+	}
+	p, err := participationIn(q, conv, pid, m, "")
+	if err != nil {
+		return false, err
+	}
+	if p.Role != protocol.RoleHuman || p.Decision == "" {
+		return false, nil
+	}
+	return assistantHostReaderParent(q, conv, address, fp, p.Decision)
 }
 
 // disclosedHumanEvent checks, at an exact accepted guest, another human
@@ -681,7 +705,9 @@ func (a *Agent) disclosedHumanEvent(ctx context.Context, in envelope.Inner, send
 	}
 	reader := humanEndReader
 	if ev.Type == protocol.EventDismiss && role == protocol.RoleHuman {
-		reader = humanEndRecipient // a guest's end also reaches outside assistant hosts
+		reader = func(q dbq, conv, address, fp string) (bool, error) {
+			return humanEndRecipientFor(q, conv, address, fp, ev.PID)
+		}
 	}
 	if ok, err := reader(a.store.db, in.Conv, a.Address, a.Self().Fingerprint()); err != nil {
 		return ev, false, "", err
@@ -689,7 +715,14 @@ func (a *Agent) disclosedHumanEvent(ctx context.Context, in envelope.Inner, send
 		return ev, false, reasonInvalid, errors.New("human: lifecycle is shared only with an exact accepted guest")
 	}
 	var key ed25519.PublicKey
-	if p, member := m.author(ev.Author); member && ev.Type != protocol.EventAccept {
+	p, member := m.author(ev.Author)
+	if ev.Parent != "" {
+		if err := m.loadHosts(a.store.db, []protocol.ParticipationEvent{ev}); err != nil {
+			return ev, false, "", err
+		}
+		p, member = m.guestAuthor(ev)
+	}
+	if member && ev.Type != protocol.EventAccept {
 		dev, ok := p.roster.Device(ev.Author.Fingerprint)
 		if !ok || dev.Address != ev.Author.Address {
 			return ev, false, reasonInvalid, errors.New("human: shared event author key missing")
@@ -763,7 +796,7 @@ func (a *Agent) discloseHumanConv(ctx context.Context, conv string) error {
 		if p.HumanActive() {
 			guests = append(guests, p)
 		}
-		if p.Claimable() && p.External && p.Host.Address != a.Address {
+		if (p.Claimable() || p.Parent != "" && p.State == PartDismissed && p.Held == 0 && p.Decision != "") && p.External && p.Host.Address != a.Address {
 			hosts = append(hosts, p) // outside assistant hosts learn human ends (claim-time fence)
 		}
 	}
@@ -815,7 +848,13 @@ func (a *Agent) discloseHumanConv(ctx context.Context, conv string) error {
 		}
 		if x.Role == protocol.RoleHuman && !active && ended {
 			for _, h := range hosts {
-				if err := a.shareHumanEvent(ctx, m, raw, x.PID, end, h.Host, assistantHostReader); err != nil {
+				if h.Parent != "" && h.Parent != x.Decision {
+					continue
+				}
+				reader := func(q dbq, conv, address, fp string) (bool, error) {
+					return assistantHostReaderParent(q, conv, address, fp, x.Decision)
+				}
+				if err := a.shareHumanEvent(ctx, m, raw, x.PID, end, h.Host, reader); err != nil {
 					return err
 				}
 			}
@@ -931,23 +970,29 @@ var errHumanShared = errors.New("human lifecycle already shared")
 // humanReplyParent names a human turn's parent by its logical id, the same
 // for every copy; a parent stored without one keeps its own id.
 func humanReplyParent(q dbq, conv, ref string) (parent string, known bool, err error) {
-	rows, err := q.Query(`SELECT coalesce(conv,''),id,coalesce(lid,'') FROM inbox WHERE (id=? OR lid=?) AND ref_id IS NULL UNION SELECT coalesce(conv,''),id,coalesce(lid,'') FROM outbox WHERE (id=? OR lid=?) AND ref_id IS NULL`, ref, ref, ref, ref)
+	rows, err := q.Query(`SELECT coalesce(conv,''),id,coalesce(lid,'') FROM inbox WHERE (id=? OR lid=?) AND ref_id IS NULL AND coalesce(sub,'')<>'excerpt' UNION SELECT coalesce(conv,''),id,coalesce(lid,'') FROM outbox WHERE (id=? OR lid=?) AND ref_id IS NULL AND coalesce(sub,'')<>'excerpt'`, ref, ref, ref, ref)
 	if err != nil {
 		return "", false, err
 	}
-	defer rows.Close()
 	for rows.Next() {
 		var c, id, lid string
 		if err := rows.Scan(&c, &id, &lid); err != nil {
+			rows.Close()
 			return "", false, err
 		}
 		if lid == "" {
 			lid = id
 		}
 		if c != conv || parent != "" && parent != lid {
+			rows.Close()
 			return "", true, errors.New("human reply stays within its conversation")
 		}
 		parent, known = lid, true
 	}
-	return parent, known, rows.Err()
+	err = rows.Err()
+	rows.Close()
+	if err != nil || known {
+		return parent, known, err
+	}
+	return excerptReplyParent(q, conv, ref)
 }

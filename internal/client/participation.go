@@ -43,6 +43,7 @@ const (
 
 // ParticipationInfo is one participation as this installation resolves it.
 type ParticipationInfo struct {
+	Parent      string                   `json:"parent,omitempty"`
 	Snapshots   []protocol.GrantSnapshot `json:"snapshots,omitempty"`
 	Topic       *string                  `json:"topic,omitempty"`
 	NeedsUpdate []string                 `json:"needs_update,omitempty"`
@@ -90,6 +91,7 @@ type dmMembers struct {
 	roomEvents        map[string]bool
 	shareGrants       map[string][]protocol.GrantRef
 	roomAuthors       map[string]personRow
+	guestParents      map[string]ParticipationInfo // parent acceptance hash -> exact resolved human parent, operation-local
 	chains            map[string]map[string]bool
 	departedTaskKeys  map[string]map[string]bool // DM invite hash -> task keys its author's signed step listed, removed since (loadDepartedTaskKeys)
 }
@@ -279,6 +281,9 @@ func resolve(conv, pid string, events []protocol.ParticipationEvent, m dmMembers
 	var decisions, dismisses, scopes, shares []protocol.ParticipationEvent
 	for _, ev := range events {
 		_, author := m.author(ev.Author)
+		if ev.Parent != "" {
+			_, author = m.guestAuthor(ev)
+		}
 		if !author && m.roomEvents[ev.Hash()] {
 			_, author = m.roomAuthor(ev.Author)
 		}
@@ -301,6 +306,9 @@ func resolve(conv, pid string, events []protocol.ParticipationEvent, m dmMembers
 		}
 		if len(ev.Snapshots) > 0 {
 			person, ok := m.author(ev.Author)
+			if ev.Parent != "" {
+				person, ok = m.guestAuthor(ev)
+			}
 			author = author && ok && person.roster.Human(ev.Author.Fingerprint)
 		}
 		if !author {
@@ -350,7 +358,7 @@ func resolve(conv, pid string, events []protocol.ParticipationEvent, m dmMembers
 			held = held || ev.Type == protocol.EventInvite && ev.Hash() == s.Prev
 		}
 		if _, ok := m.host(s.Host); ok && agree && !held {
-			invites[s.Prev] = protocol.ParticipationEvent{V: 1, Conv: s.Conv, PID: s.PID, Type: protocol.EventInvite, Author: s.Author, TS: s.TS, Host: s.Host, Audience: s.Audience, Group: s.Group, Role: s.Role, Until: s.Until, Topic: s.Topic}
+			invites[s.Prev] = protocol.ParticipationEvent{V: 1, Conv: s.Conv, PID: s.PID, Type: protocol.EventInvite, Author: s.Author, TS: s.TS, Host: s.Host, Audience: s.Audience, Group: s.Group, Role: s.Role, Until: s.Until, Topic: s.Topic, Parent: s.Parent}
 			info.Scope = s.Hash()
 		} else if !agree {
 			info.State, info.Conflict = PartConflict, "different invitation scopes share this participation id"
@@ -378,6 +386,9 @@ func resolve(conv, pid string, events []protocol.ParticipationEvent, m dmMembers
 		}
 		host, _ := m.host(inv.Host)
 		inviter, valid := m.author(inv.Author)
+		if inv.Parent != "" {
+			inviter, valid = m.guestAuthor(inv)
+		}
 		if !valid {
 			inviter, _ = m.roomAuthor(inv.Author)
 		}
@@ -399,13 +410,13 @@ func resolve(conv, pid string, events []protocol.ParticipationEvent, m dmMembers
 			// The signed invite still counts; a device removed since asks nothing.
 			info.TaskKeys = slices.DeleteFunc(slices.Clone(inv.TaskKeys), func(fp string) bool { return departed[fp] })
 		} // durable room consent never revives a standing task grant after re-admission
-		info.Audience, info.Until, info.Topic = inv.Audience, inv.Until, inv.Topic
+		info.Audience, info.Until, info.Topic, info.Parent = inv.Audience, inv.Until, inv.Topic, inv.Parent
 		info.State = PartInvited
 	default:
 		info.State, info.Conflict = PartConflict, "different invites share this participation id"
 	}
 	if inv.Host != nil {
-		info.Member = m.group != nil && inv.Role == "" && inv.Audience == protocol.AudienceRoom && inv.Until == 0
+		info.Member = m.group != nil && inv.Role == "" && inv.Audience == protocol.AudienceRoom && inv.Until == 0 && inv.Parent == ""
 		info.Inviters = []PersonInfo{info.Inviter}
 		for _, ev := range shares {
 			if ev.Prev != info.Invite || ev.Host == nil || *ev.Host != *inv.Host || !m.inviteEpoch(ev) || ev.Audience != inv.Audience || !sameParticipationTopic(ev.Topic, inv.Topic) {
@@ -465,6 +476,9 @@ func resolve(conv, pid string, events []protocol.ParticipationEvent, m dmMembers
 	}
 	if info.Until > 0 && (info.State == PartInvited || info.State == PartActive) && time.Now().Unix() > info.Until {
 		info.State = PartDismissed // ended by its own end time, here: no dismissal names it
+	}
+	if inv.Parent != "" && !m.guestParents[inv.Parent].HumanActive() && (info.State == PartInvited || info.State == PartActive) {
+		info.State = PartDismissed
 	}
 	return info
 }
@@ -623,8 +637,26 @@ func (a *Agent) inviteParticipation(ctx context.Context, conv, hostAddress, agen
 	if err != nil {
 		return ParticipationInfo{}, err
 	}
+	var parent ParticipationInfo
 	if _, member := m.persons[me.info.Person]; !ok || !member {
-		return ParticipationInfo{}, errors.New("this installation does not speak for a member of that conversation")
+		if !ok || role != "" || topic == nil || *topic == "" || len(taskKeys) != 0 || !me.roster.Human(me.info.Fingerprint) {
+			return ParticipationInfo{}, errors.New("this installation does not speak for a member or exact human topic guest")
+		}
+		infos, err := a.Participations(conv)
+		if err != nil {
+			return ParticipationInfo{}, err
+		}
+		for _, p := range infos {
+			if p.HumanActive() && p.HostHere && p.Host.Fingerprint == me.info.Fingerprint && sameParticipationTopic(p.Topic, topic) {
+				if parent.PID != "" {
+					return ParticipationInfo{}, errors.New("human topic guest is ambiguous")
+				}
+				parent = p
+			}
+		}
+		if parent.PID == "" {
+			return ParticipationInfo{}, errors.New("this installation has no exact active human topic participation")
+		}
 	}
 	var host *protocol.ParticipationHost
 	for _, p := range m.persons {
@@ -650,6 +682,18 @@ func (a *Agent) inviteParticipation(ctx context.Context, conv, hostAddress, agen
 			}
 		}
 		host = &protocol.ParticipationHost{Person: p.info.Person, Address: hostAddress, Fingerprint: key.Fingerprint(), AgentID: agentID}
+	}
+	if parent.PID != "" && host.Person != me.info.Person {
+		return ParticipationInfo{}, errors.New("a human guest can bring only their own agent")
+	}
+	if parent.PID != "" && host.Address != a.Address {
+		key, e := a.sendKey(ctx, host.Address)
+		if e != nil {
+			return ParticipationInfo{}, e
+		}
+		if e = a.requireParticipationCaps(ctx, key, protocol.CapGuestAgent); e != nil {
+			return ParticipationInfo{}, e
+		}
 	}
 	if role == protocol.RoleHuman {
 		if !humanRoom(m) {
@@ -699,6 +743,14 @@ func (a *Agent) inviteParticipation(ctx context.Context, conv, hostAddress, agen
 	}
 	var refs []protocol.GrantRef
 	for _, lid := range grant {
+		if parent.PID != "" {
+			h, e := a.guestSelectedItem(a.store.db, parent, lid)
+			if e != nil {
+				return ParticipationInfo{}, e
+			}
+			refs = append(refs, protocol.GrantRef{LID: h.LID, Fingerprint: h.FromKey})
+			continue
+		}
 		keys, err := a.store.convLIDKeys(conv, lid, me.info.Fingerprint)
 		if err != nil {
 			return ParticipationInfo{}, err
@@ -712,7 +764,11 @@ func (a *Agent) inviteParticipation(ctx context.Context, conv, hostAddress, agen
 			return ParticipationInfo{}, fmt.Errorf("more than one message here has logical id %s; it cannot be shared by that id", lid)
 		}
 	}
-	snapshots, snapshotClaim, err := a.prepareGrantSnapshots(conv, topic, refs)
+	var snapshots []protocol.GrantSnapshot
+	var snapshotClaim func(*sql.Tx) error
+	if parent.PID == "" {
+		snapshots, snapshotClaim, err = a.prepareGrantSnapshots(conv, topic, refs)
+	}
 	if err != nil {
 		return ParticipationInfo{}, err
 	}
@@ -725,7 +781,7 @@ func (a *Agent) inviteParticipation(ctx context.Context, conv, hostAddress, agen
 			return ParticipationInfo{}, e
 		}
 	}
-	if err := a.checkTopicGrants(a.store.db, conv, topic, refs, snapshots); err != nil {
+	if err := a.checkTopicGrants(a.store.db, conv, topic, refs, snapshots); parent.PID == "" && err != nil {
 		return ParticipationInfo{}, err
 	}
 	for _, fp := range taskKeys {
@@ -733,7 +789,33 @@ func (a *Agent) inviteParticipation(ctx context.Context, conv, hostAddress, agen
 			return ParticipationInfo{}, fmt.Errorf("%s is not the key of a member of that conversation", fp)
 		}
 	}
-	if m.group != nil && role == "" {
+	if parent.PID != "" {
+		infos, e := a.Participations(conv)
+		if e != nil {
+			return ParticipationInfo{}, e
+		}
+		for _, existing := range infos {
+			if existing.Parent == parent.Decision && existing.Host.Address == host.Address && existing.Host.Fingerprint == host.Fingerprint && existing.AgentID == agentID && sameParticipationTopic(existing.Topic, topic) && (existing.State == PartInvited || existing.State == PartActive) {
+				if !slices.Equal(existing.Grant, refs) {
+					return ParticipationInfo{}, errors.New("that own helper is already invited with different selected context")
+				}
+				events, e := a.store.participationEvents(conv, existing.PID)
+				if e != nil {
+					return ParticipationInfo{}, e
+				}
+				for _, ev := range events {
+					if ev.Hash() == existing.Invite {
+						if e = a.resend(ctx, ev); e != nil {
+							return ParticipationInfo{}, e
+						}
+						return a.Participation(existing.PID)
+					}
+				}
+				return existing, nil
+			}
+		}
+	}
+	if m.group != nil && role == "" && parent.PID == "" {
 		infos, err := a.Participations(conv)
 		if err != nil {
 			return ParticipationInfo{}, err
@@ -775,6 +857,9 @@ func (a *Agent) inviteParticipation(ctx context.Context, conv, hostAddress, agen
 	ev := protocol.ParticipationEvent{V: 1, Conv: conv, PID: protocol.NewID(), Type: protocol.EventInvite, TS: time.Now().Unix(),
 		Author: protocol.EventAuthor{Person: me.info.Person, Roster: me.info.Roster, Address: a.Address, Fingerprint: me.info.Fingerprint},
 		Host:   host, Grant: refs, Audience: protocol.AudienceConversation, TaskKeys: taskKeys, Note: note, Role: role, Topic: topic, Snapshots: snapshots}
+	if parent.PID != "" {
+		ev.Parent, ev.Until, ev.Audience = parent.Decision, parent.Until, protocol.AudienceRoom
+	}
 	if m.group != nil {
 		if role == "" || role == protocol.RoleHuman {
 			ev.Audience = protocol.AudienceRoom
@@ -980,7 +1065,11 @@ func (a *Agent) selfConsent(ctx context.Context, pid string) (bool, error) {
 	if !slices.Equal(info.TaskKeys, inv.TaskKeys) {
 		return false, nil // the signed invitation names a device removed since
 	}
-	if author, ok := m.author(inv.Author); !ok || author.info.Person != me.info.Person {
+	author, ownAuthor := m.author(inv.Author)
+	if inv.Parent != "" {
+		author, ownAuthor = m.guestAuthor(inv)
+	}
+	if !ownAuthor || author.info.Person != me.info.Person {
 		return false, nil
 	}
 	trusted, err := a.ownHumanAuthor(a.store.db, inv.Author.Address, inv.Author.Fingerprint)
@@ -1259,7 +1348,18 @@ func (a *Agent) resend(ctx context.Context, ev protocol.ParticipationEvent) erro
 			}
 		}
 	}
-	_, err := a.SendConv(ctx, ev.Conv, ConvOutgoing{Kind: envelope.KindMessage, Body: string(raw), PID: ev.PID, sub: envelope.SubEvent})
+	out := ConvOutgoing{Kind: envelope.KindMessage, Body: string(raw), PID: ev.PID, sub: envelope.SubEvent}
+	if ev.Parent != "" {
+		info, err := a.Participation(ev.PID)
+		if err != nil {
+			return err
+		}
+		out.human, err = a.guestParentProof(ctx, info)
+		if err != nil {
+			return err
+		}
+	}
+	_, err := a.SendConv(ctx, ev.Conv, out)
 	return err
 }
 
@@ -1294,7 +1394,24 @@ func (a *Agent) recordAndSendWith(ctx context.Context, ev protocol.Participation
 		a.humanMu.Lock()
 	}
 	err := a.store.addParticipationEventWith(ev, raw, func(tx *sql.Tx) error {
-		if err := a.checkTopicGrants(tx, ev.Conv, ev.Topic, ev.Grant, ev.Snapshots); err != nil {
+		if ev.Parent != "" {
+			m, e := membersIn(tx, ev.Conv)
+			if e != nil {
+				return e
+			}
+			p, e := guestParentIn(tx, ev.Conv, ev.Parent, m)
+			if e != nil {
+				return e
+			}
+			if !p.HumanActive() {
+				return errors.New("human parent ended before invitation commit")
+			}
+		}
+		if ev.Parent != "" {
+			if err := a.checkGuestGrants(tx, ev); err != nil {
+				return err
+			}
+		} else if err := a.checkTopicGrants(tx, ev.Conv, ev.Topic, ev.Grant, ev.Snapshots); err != nil {
 			return err
 		}
 		if also != nil {

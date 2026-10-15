@@ -87,7 +87,7 @@ async function world() {
       ...(await owner.store.all('pins')).map((p) => ({ s: 'pins', k: p.address, v: p }))]);
     await caps(e); await caps(owner); users.push(e); return e;
   };
-  return { alice, bob, charlie, mallory, dana, users, conv, c, agent, posts, blobs, caps, catalogs, receive, drain, from, decision, accept, sibling, offline: (v) => { offline = v; } };
+  return { alice, bob, charlie, mallory, dana, users, conv, c, agent, posts, blobs, caps, profiles, catalogs, receive, drain, from, decision, accept, sibling, offline: (v) => { offline = v; } };
 }
 
 
@@ -96,6 +96,81 @@ const held = async (e, rid) => (await e.store.get('held', rid))?.reason;
 const reactionBody = (emoji, op = 'add', n = 1) => JSON.stringify({ emoji, op, n });
 const control = (sender, receiver, fields) => wire.seal({ v: 3, id: id(), from: sender.address, to: receiver.address, ts: Math.floor(now / 1000), kind: 'message', sub: 'reaction', body: reactionBody('🎉'), ...fields }, sender.keys, receiver.pub);
 const byOf = (m, emoji) => (m?.reactions || []).find((r) => r.emoji === emoji)?.by || [];
+
+// Social controls commit locally; only each sealed copy waits for its reader.
+// The ordinary waiting turn is independent: ctl3 can be signed even when the
+// same profile does not support the ordinary env2/person conversation copy.
+for (const mode of ['no-sessions', 'unknown', 'old', 'offline-supported']) {
+  const w = await world(), { alice: a, bob: b, mallory: m } = w;
+  const phone = await w.sibling(a, 'alice/control-phone', true);
+  const original = await a.sendDM({ conv: w.conv, body: 'control target ' + mode });
+  await w.drain(b); await w.drain(phone); await a.outboxPass;
+  a.queueOutbox = () => {}; // explicit existing flush boundaries, no background race
+  const shown = (await a.dm(w.conv)).messages.find(r => r.lid === original.lid);
+  const base = [wire.CapEnv2, wire.CapPerson, wire.CapAgentIdentity, wire.CapExternalParticipation];
+  await w.caps(b, []);
+  const ordinary = await a.sendDM({ conv: w.conv, body: 'independent waiting turn ' + mode });
+  await a.flushOutbox();
+  check((await a.store.all('outbox')).some(r => r.lid === ordinary.lid && r.to === b.address && r.state === 'waiting'), mode + ': independent ordinary copy waits');
+  await w.caps(b, mode === 'offline-supported' ? [wire.CapControl] : base);
+  const profile = w.profiles.get(b.address);
+  if (mode === 'no-sessions') Object.assign(profile, { live: false, sessions: [], caps: [] });
+  if (mode === 'unknown') profile.caps = [];
+  if (mode === 'offline-supported') profile.live = false;
+  const target = { conv: w.conv, id: shown.id, dir: 'out' };
+  for (const [path, extra] of [['react', { emoji: '👍' }], ['edit', { text: 'local revision ' + mode }], ['react', { emoji: '👍', remove: true }], ['delete', {}]]) {
+    const sent = await a.api('/api/message/' + path, { ...target, ...extra });
+    const rows = (await a.store.all('outbox')).filter(r => r.control && r.ref?.id === original.lid);
+    const latest = rows.filter(r => r.to === b.address).sort((x,y) => x.at - y.at);
+    check(latest.length > 0 && rows.length === latest.length * 2, mode + ': every exact peer/own copy retained, none skipped');
+    check(rows.filter(r => r.to === phone.address).every(r => r.state === 'custody'), mode + ': supported own recipient progresses');
+    check(latest.every(r => r.state === (mode === 'offline-supported' ? 'custody' : 'waiting') && r.required_cap === wire.CapControl && r.recipient_fp === b.fp), mode + ': per-copy capability state and exact key retained');
+    check(sent.state !== 'delivered' && sent.skipped.length === 0, mode + ': local action never claims delivered or drops a reader');
+    const view = (await a.dm(w.conv)).messages.find(r => r.lid === original.lid);
+    check(path === 'edit' ? view.text === extra.text : path === 'delete' ? view.deleted : byOf(view, '👍').some(r => r.id === a.me.person) === !extra.remove, mode + ': local projection updated durably');
+  }
+  const retained = (await a.store.all('outbox')).filter(r => r.control && r.to === b.address && r.ref?.id === original.lid);
+  check(retained.length === 4, mode + ': one copy per action');
+  if (mode !== 'offline-supported') {
+    const reload = new Engine({ store: a.store, base: a.base, fetch: a.fetch, now: () => now }); await reload.load();
+    check((await reload.dm(w.conv)).messages.find(r => r.lid === original.lid).deleted, mode + ': local projection survives engine reload');
+    const wrong = await wire.newCaps(m.keys, b.address, id(), [...base, wire.CapControl]);
+    w.profiles.set(b.address, { sessions: [wrong.session], caps: [JSON.parse(wire.capsJSON(wrong))] });
+    await a.flushOutbox();
+    check(retained.every(r => !w.posts.some(raw => wire.parseEnvelope(raw).id === r.id)), mode + ': wrong signing key cannot release copies');
+    await w.caps(b, [...base, wire.CapControl]);
+    const mixed = w.profiles.get(b.address), old = await wire.newCaps(b.keys, b.address, id(), base);
+    mixed.sessions.push(old.session); mixed.caps.push(JSON.parse(wire.capsJSON(old)));
+    await a.flushOutbox();
+    check(retained.every(r => !w.posts.some(raw => wire.parseEnvelope(raw).id === r.id)), mode + ': one old open session keeps exact copies waiting');
+    await w.caps(b); await a.flushOutbox(); await a.flushOutbox();
+    for (const row of retained) {
+      const released = await a.store.get('outbox', row.id);
+      check(released.state === 'custody' && released.envelope === row.envelope && w.posts.filter(raw => wire.parseEnvelope(raw).id === row.id).length === 1, mode + ': signed support releases same ciphertext once to custody');
+    }
+  } else check((await a.store.get('outbox', ordinary.id)).state === 'waiting', 'supported offline controls do not wait behind the unsupported ordinary copy');
+}
+
+// Legacy device threads use the same delivery gate without relaxing decisions.
+{
+  const w=await world(),{alice:a,bob:b}=w;a.queueOutbox=()=>{};
+  const original=await a.api('/api/send',{to:b.address,kind:'message',body:'device control target'});
+  const guarded=await a.api('/api/send',{to:b.address,kind:'message',body:'device key guard target'});
+  await w.caps(b,[]);
+  for(const [path,extra] of [['react',{emoji:'👍'}],['edit',{text:'queued device edit'}],['delete',{}]]){
+    const sent=await a.api('/api/message/'+path,{id:original.id,dir:'out',...extra}),row=await a.store.get('outbox',sent.id);
+    check(sent.state==='waiting'&&row.required_cap===wire.CapControl&&row.recipient_fp===b.fp,'device '+path+' is durable and reports waiting');
+    check(!w.posts.some(raw=>wire.parseEnvelope(raw).id===row.id),'device '+path+' stays off transport without signed support');
+  }
+  check((await a.thread(original.id)).messages.find(r=>r.id===original.id&&r.dir==='out').deleted,'device local deletion is projected before delivery');
+  const retained=(await a.store.all('outbox')).filter(r=>r.control),pin=await a.store.get('pins',b.address),count=(await a.store.all('outbox')).length;
+  await a.store.write([{s:'pins',k:b.address,v:{...pin,pending:{fingerprint:w.mallory.fp}}}]);
+  await refuses(()=>a.api('/api/message/react',{id:guarded.id,dir:'out',emoji:'🎉'}),/key changed/);
+  check((await a.store.all('outbox')).length===count,'device authority refusal queues no extra control');
+  await a.store.write([{s:'pins',k:b.address,v:pin}]);await w.caps(b);
+  await a.flushOutbox();await a.flushOutbox();
+  for(const row of retained){const released=await a.store.get('outbox',row.id);check(released.state==='custody'&&released.envelope===row.envelope&&w.posts.filter(raw=>wire.parseEnvelope(raw).id===row.id).length===1,'device signed support releases exact sealed control once to custody');}
+}
 
 // The shared Go shape vectors, judged by the browser's checkVersion2.
 const shapes = {};

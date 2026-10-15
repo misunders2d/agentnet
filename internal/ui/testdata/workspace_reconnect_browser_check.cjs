@@ -45,7 +45,7 @@ const server = http.createServer((req, res) => {
   if (u.pathname === '/') return send(200, 'text/html', '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/assets/core.css"><div id="skin"></div><script src="/assets/loader.js"></script>');
   if (u.pathname === '/assets/skins/index.json') return json([{ api: 1, id: 'comic', name: 'Comic', entry: 'entry.mjs', files: ['entry.mjs'], digest: 'e'.repeat(64) }, { api: 1, id: 'fixture', name: 'Fixture', entry: 'entry.mjs', files: ['entry.mjs'], digest }]);
   if (u.pathname === '/assets/skins/fixture/entry.mjs') return send(200, 'text/javascript', skin);
-  if (['/assets/loader.js', '/assets/drivespace.mjs', '/assets/workspaces.mjs', '/assets/core.css', '/assets/skin-base.css', '/assets/skinbar.mjs', '/assets/skinbar.css', '/assets/skin-choice.mjs'].includes(u.pathname)) {
+  if (['/assets/loader.js', '/assets/conversation-links.mjs', '/assets/drivespace.mjs', '/assets/workspaces.mjs', '/assets/core.css', '/assets/skin-base.css', '/assets/skinbar.mjs', '/assets/skinbar.css', '/assets/skin-choice.mjs'].includes(u.pathname)) {
     return send(200, u.pathname.endsWith('.css') ? 'text/css' : 'text/javascript', fs.readFileSync(base + path.basename(u.pathname)));
   }
   if (u.pathname === '/api/workspaces') return json([state.def, ...(state.acme.state === 'enrolled' ? [state.acme] : [])]);
@@ -81,6 +81,8 @@ const server = http.createServer((req, res) => {
       await page.addInitScript((d) => localStorage.setItem('agentnet.skin.trusted.fixture', d), digest);
       await page.goto(origin + '/?skin=fixture');
       await page.getByRole('heading', { name: 'Fixture skin in This computer' }).waitFor();
+      const tools = async () => { const launcher = page.getByRole('button', { name: 'AgentNet controls', exact: true }); if (await launcher.getAttribute('aria-expanded') !== 'true') await launcher.click(); };
+      await tools();
       // The workspace's own name, then a rename: one change, one overview
       // read (the skin's); the bar takes the name from it.
       await page.getByRole('button', { name: 'Workspace: Mellanni. Switch or join another' }).waitFor();
@@ -93,7 +95,7 @@ const server = http.createServer((req, res) => {
       await new Promise((r) => setTimeout(r, 300));
       const reads = state.overviews[state.def.handle] - readsBefore;
       assert.equal(reads, 1, name + ': a change made ' + reads + ' overview reads; only the skin\'s is wanted');
-      const menu = async () => { await page.getByRole('button', { name: /^Workspace: / }).click(); await page.getByRole('menu', { name: 'Workspaces' }).waitFor(); };
+      const menu = async () => { await tools(); await page.getByRole('button', { name: /^Workspace: / }).click(); await page.getByRole('menu', { name: 'Workspaces' }).waitFor(); };
       const rows = () => page.getByRole('menu', { name: 'Workspaces' }).getByRole('menuitemradio').allInnerTexts();
       const notice = page.locator('#skin-bar .notice .text');
 
@@ -168,6 +170,7 @@ const server = http.createServer((req, res) => {
   } finally {
     for (const x of state.streams) x.res.end();
     if (browser) await browser.close();
+    server.closeAllConnections();
     await new Promise((r) => server.close(r));
   }
 })().catch((e) => { console.error(e); process.exitCode = 1; });

@@ -133,6 +133,7 @@ export function AppearanceSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadi
             })}
           </Card>
           <Hint className="mt-2.5 px-1">Anyone can make a skin: a package with its own look that uses the same chats. Skins from other people can read your chats and act as you, so use only ones you trust.</Hint>
+          {host.controls && <Button className="mt-3" variant="outline" onClick={e => host.controls!.open(e.currentTarget)}>AgentNet controls</Button>}
           {host.gallery && <SkinGallery gallery={host.gallery} onInstalled={pick} onUse={pick} />}
           {host.manageLocalSkins && <ImportSkins host={host} />}
         </section>

@@ -114,6 +114,10 @@ func validateHumanInner(in Inner) error {
 	if in.Human == nil {
 		return nil
 	}
+	if in.Sub == SubEvent {
+		_, err := GuestAgentEvent(in)
+		return err
+	}
 	if in.V == Version3 {
 		// An assistant's reaction to an addressed request, to that request's
 		// captured audience: its host is the author (as of its output), and a
@@ -150,4 +154,27 @@ func validateHumanInner(in Inner) error {
 		return errors.New("human: ordinary turn, addressed request or assistant output only")
 	}
 	return in.Human.Validate(in.Conv)
+}
+
+// GuestAgentEvent reuses the public captured-proof field for one derived
+// invitation or its scope. It carries no private human grant or new audience.
+func GuestAgentEvent(in Inner) (protocol.ParticipationEvent, error) {
+	e, err := protocol.ParseParticipationEvent([]byte(in.Body))
+	if err != nil {
+		return e, err
+	}
+	h := in.Human
+	if h == nil || in.V != Version2 || in.Sub != SubEvent || in.Kind != KindMessage || in.Target != nil || in.Replica || e.Conv != in.Conv || e.PID != in.PID || e.Parent == "" || e.Author.Address != in.From || len(h.Audience) != 1 || len(h.Proof) != 2 || h.Validate(in.Conv) != nil {
+		return e, errors.New("human: event needs one exact public parent consent")
+	}
+	s := h.Audience[0]
+	if h.AuthorPID != s.PID || s.Decision != e.Parent {
+		return e, errors.New("human: child differs from its exact parent acceptance")
+	}
+	for _, p := range h.Proof {
+		if p.Type == protocol.EventScope && (p.Role != protocol.RoleHuman || p.Parent != "" || p.Topic == nil || e.Topic == nil || *p.Topic == "" || *p.Topic != *e.Topic || p.Host == nil || p.Host.Person != e.Author.Person || p.Host.Address != e.Author.Address || p.Host.Fingerprint != e.Author.Fingerprint || p.Until != 0 && (e.Until == 0 || e.Until > p.Until)) {
+			return e, errors.New("human: child expands its human parent's identity or scope")
+		}
+	}
+	return e, nil
 }

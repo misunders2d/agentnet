@@ -1,6 +1,6 @@
-/* The skin switcher (skinbar.mjs): the host's own bar above every skin but
+/* The skin switcher (skinbar.mjs): compact host controls over every skin but
    Comic. It lives in its own shadow tree, so no skin stylesheet reaches it,
-   and in the page's flow, so it never covers the skin. The bar wears
+   and outside page flow, so the skin fills the viewport. The bar wears
    AgentNet's ink in both themes; its menus and dialogs follow the device's
    light or dark setting (data-scheme on the host element). */
 :host {
@@ -8,7 +8,7 @@
   --canvas: #FFF8EC; --surface: #FFFFFF; --sunken: #FBF1DE; --ink: #1B1530; --outline: #1B1530; --hairline: #E9DFCB;
   --muted: #625B7A; --act: #FFD43B; --act-ink: #1B1530; --agent-ink: #4F33C4; --ok-ink: #0B6E46; --ok-bg: #DDF5E8;
   --danger: #B42318; --danger-bg: #FDE8E6; --note: #FFF0B8; --note-ink: #1B1530; --shadow: #1B1530; --scrim: rgb(27 21 48 / .45);
-  display: block; flex: none; position: relative; z-index: 2147483000;
+  display: block; position: fixed; top: max(8px, env(safe-area-inset-top)); right: max(8px, env(safe-area-inset-right)); z-index: 2147483000;
   font: 500 14px/1.35 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   color: var(--ink); -webkit-font-smoothing: antialiased; color-scheme: light;
 }
@@ -25,8 +25,11 @@ button, input, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
 .icon { fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 
-/* The bar: one step to Comic, the skin menu, the workspace menu. */
-.bar { display: flex; align-items: center; gap: 10px; height: 52px; padding: 0 12px; background: var(--bar); color: var(--bar-ink); border-bottom: 1px solid var(--bar-line); }
+/* A compact disclosure; the existing controls open only when requested. */
+.launcher { display: grid; place-items: center; width: 44px; height: 44px; margin-left: auto; border: 1.5px solid var(--bar-line); border-radius: 50%; background: var(--bar); color: var(--bar-ink); box-shadow: 1px 2px 5px rgb(0 0 0 / .2); }
+.launcher:hover, .launcher[aria-expanded="true"] { background: var(--bar-hover); }
+.launcher:focus-visible { outline: 3px solid var(--act); outline-offset: 2px; }
+.bar { position: absolute; top: 52px; right: 0; display: flex; align-items: center; gap: 10px; width: max-content; max-width: calc(100vw - 16px); min-height: 52px; padding: 6px 8px; background: var(--bar); color: var(--bar-ink); border: 1px solid var(--bar-line); border-radius: 16px; }
 .bar :focus-visible { outline: 3px solid var(--act); outline-offset: 2px; }
 .home { display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 16px 0 10px; border: 1.5px solid var(--act); border-radius: 999px;
   background: var(--act); color: var(--act-ink); font-weight: 750; white-space: nowrap; }
@@ -44,9 +47,8 @@ button { cursor: pointer; }
 .pick .chev { color: var(--bar-muted); transition: transform 160ms cubic-bezier(.2, .8, .2, 1); }
 .pick[aria-expanded="true"] .chev { transform: rotate(180deg); }
 
-/* A message from the host under the bar: a notification waiting, or what a
-   workspace action did. In the flow, so it never covers the skin. */
-.notice { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 6px 8px 6px 14px; background: var(--note); color: var(--note-ink);
+/* A dismissible host notification or action result, outside skin layout. */
+.notice { position: fixed; top: 64px; right: 8px; width: min(440px, calc(100vw - 16px)); max-height: calc(var(--an-viewport-h, 100dvh) - 80px); overflow: auto; display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 6px 8px 6px 14px; background: var(--note); color: var(--note-ink);
   border-bottom: 1.5px solid var(--outline); font-weight: 600; }
 .notice .text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .notice button { min-height: 36px; padding: 0 14px; border: 1.5px solid var(--outline); border-radius: 999px; background: var(--surface); color: var(--ink); font-weight: 700; }
@@ -54,10 +56,10 @@ button { cursor: pointer; }
 .notice :focus-visible { outline: 3px solid var(--agent-ink); outline-offset: 2px; }
 
 /* Menus: a card under their button. */
-.menu { position: absolute; top: calc(100% + 8px); left: 0; width: 340px; max-height: calc(100dvh - 72px); overflow: auto; padding: 8px;
+.menu { position: fixed; top: calc(max(8px, env(safe-area-inset-top)) + 116px); right: 8px; width: min(340px, calc(100vw - 16px)); max-height: calc(var(--an-viewport-h, 100dvh) - 140px); overflow: auto; padding: 8px;
   background: var(--canvas); color: var(--ink); border: 1.5px solid var(--outline); border-radius: 22px; box-shadow: 3px 3px 0 0 var(--shadow);
   transform-origin: top left; animation: menu-in 160ms cubic-bezier(.2, .8, .2, 1) both; }
-.anchor.end .menu { left: auto; right: 0; transform-origin: top right; }
+.anchor.end .menu { transform-origin: top right; }
 @keyframes menu-in { from { opacity: 0; transform: scale(.96) translateY(-4px); } to { opacity: 1; transform: none; } }
 .menu h2 { margin: 4px 8px 2px; font-size: 20px; line-height: 1.2; font-weight: 800; letter-spacing: -.01em; }
 .menu .lead { margin: 0 8px 8px; color: var(--muted); font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
@@ -90,6 +92,9 @@ button { cursor: pointer; }
 dialog { bottom: var(--an-keyboard, 0px); width: min(460px, calc(100vw - 32px)); max-height: calc(100dvh - 48px - var(--an-keyboard, 0px)); padding: 0; border: 1.5px solid var(--outline); border-radius: 24px;
   background: var(--canvas); color: var(--ink); box-shadow: 4px 4px 0 0 var(--shadow); overflow: auto; }
 dialog::backdrop { background: var(--scrim); }
+dialog.controls { top: max(8px, env(safe-area-inset-top)); right: 8px; bottom: auto; left: auto; margin: 0; width: max-content; max-width: calc(100vw - 16px); max-height: calc(var(--an-viewport-h, 100dvh) - 16px); border: 0; border-radius: 16px; padding: 0; overflow: visible; background: transparent; box-shadow: none; }
+dialog.controls .bar { position: static; }
+dialog.controls::backdrop { background: var(--scrim); }
 dialog form { display: grid; gap: 14px; padding: 22px 22px 20px; }
 dialog h2 { margin: 0; font-size: 22px; line-height: 1.2; font-weight: 800; letter-spacing: -.01em; }
 dialog p { margin: 0; color: var(--ink); line-height: 1.5; }
@@ -134,14 +139,14 @@ dialog .error:empty { display: none; }
 
 /* Phone: the same controls, words trimmed; menus full width. */
 @media (max-width: 640px) {
-  .bar { gap: 6px; height: 56px; padding: 0 8px; }
+  .bar { gap: 6px; min-height: 56px; padding: 6px; }
   .home { height: 44px; padding: 0 14px 0 8px; }
   .pick .key, .divider { display: none; }
   .pick { height: 44px; padding: 0 8px; gap: 6px; }
   .anchor { position: static; }
   .pick.ws .value { display: none; }
   .pick.skin { flex: 1; min-width: 0; }
-  .menu, .anchor.end .menu { position: fixed; top: 62px; left: 8px; right: 8px; width: auto; max-height: calc(100dvh - 72px); transform-origin: top center; }
+  .menu, .anchor.end .menu { position: fixed; top: calc(max(8px, env(safe-area-inset-top)) + 116px); left: 8px; right: 8px; width: auto; max-height: calc(var(--an-viewport-h, 100dvh) - 140px); transform-origin: top center; }
   .item { min-height: 56px; }
   dialog { width: 100vw; max-width: 100vw; margin: auto 0 0; border-radius: 24px 24px 0 0; border-bottom: 0; box-shadow: none; max-height: calc(92dvh - var(--an-keyboard, 0px)); }
   dialog form { padding: 20px 16px calc(18px + env(safe-area-inset-bottom)); }

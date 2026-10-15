@@ -129,7 +129,7 @@ export function historyArchive(e,Hold,StoreConflict,retryable){
           const proactive=chosen.some(row=>[wire.CapProactiveAgent,wire.CapTopicContext+"+"+wire.CapProactiveAgent].includes(wire.steerRequirementBase(row.required_cap))||row.sub==='history'&&row.body&&wire.proactiveAgent({...wire.parseHistory(row.body),conv:row.conv}));
           let snapshot=false;for(const row of chosen)snapshot ||= await e.snapshotCopy(row);
           const baseRequirement=snapshot?(proactive?wire.CapTopicContext+"+"+wire.CapProactiveAgent:wire.CapTopicContext):proactive?wire.CapProactiveAgent:wire.CapHistoryArchive;
-          const required_cap=wire.conversationAudienceRequirement(wire.steerRequirement(baseRequirement,chosen.some(wire.steerCopy)),chosen.some(wire.conversationAudienceCopy));
+          const required_cap=wire.conversationAudienceRequirement(wire.steerRequirement(wire.guestAgentRequirement(baseRequirement,chosen.some(wire.guestAgentCopy)),chosen.some(wire.steerCopy)),chosen.some(wire.conversationAudienceCopy));
           await gate(rows[0],checks);
           await e.store.write([{
             s:'kv',k:outgoing+id,v:{
@@ -340,7 +340,7 @@ export function historyArchive(e,Hold,StoreConflict,retryable){
       checks.push({s:'outbox',k:id,v:child});
       if(['archive_staged','not_delivered'].includes(child?.state)&&child.archive_chunk===row.id)ops.push({
         s:'outbox',k:id,v:{
-          ...child,...(row.state==='expired'?{state:'archive_staged',archive_chunk:'',mention_cap:!!(child.mention_cap||job.mention_cap),organization_cap:!!(child.organization_cap||job.organization_cap),...([wire.CapProactiveAgent,wire.CapTopicContext,wire.CapTopicContext+"+"+wire.CapProactiveAgent].includes(wire.steerRequirementBase(job.required_cap))||wire.conversationAudienceCopy(job)||wire.steerCopy(job)?{required_cap:job.required_cap}:{})}:{state:'archive_accepted',...(child.files?{files:child.files.map(file=>({...file,ct:null}))}:{})})
+          ...child,...(row.state==='expired'?{state:'archive_staged',archive_chunk:'',mention_cap:!!(child.mention_cap||job.mention_cap),organization_cap:!!(child.organization_cap||job.organization_cap),...([wire.CapProactiveAgent,wire.CapTopicContext,wire.CapTopicContext+"+"+wire.CapProactiveAgent].includes(wire.steerRequirementBase(job.required_cap))||wire.conversationAudienceCopy(job)||wire.steerCopy(job)||wire.guestAgentCopy(job)?{required_cap:job.required_cap}:{})}:{state:'archive_accepted',...(child.files?{files:child.files.map(file=>({...file,ct:null}))}:{})})
         }
       });
     }

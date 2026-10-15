@@ -1,9 +1,9 @@
-// The skin switcher: the host's own bar above every skin but Comic (which
+// The skin switcher: compact host controls over every skin but Comic (which
 // has its own Settings → Appearance → Skin). It is one step back to Comic,
 // the one skin menu (Comic, then installed skins and those stored in this
 // browser, with import and removal), and the workspace control (switch,
-// join, leave, reconnect). It sits in the page's flow above the skin (never
-// over it), in a shadow tree of its own (skinbar.css), so no skin
+// join, leave, reconnect). Its disclosure leaves the skin the full viewport,
+// in a shadow tree of its own (skinbar.css), so no skin
 // stylesheet can hide or restyle it. Text from anywhere is inserted as text
 // nodes only.
 //
@@ -87,6 +87,14 @@ export function mountSkinBar(parent, { skins, selected, home, choose, host, work
   media.addEventListener("change", scheme);
 
   const bar = el("nav", "bar"); bar.setAttribute("aria-label", "Skin and workspace");
+  bar.id = "host-controls"; bar.hidden = true;
+  const tools = el("dialog", "controls"); tools.setAttribute("aria-label", "AgentNet controls"); tools.append(bar);
+  let toolsReturnTo = null, claims = 0, claimGeneration = 0;
+  const launcher = el("button", "launcher"); launcher.type = "button";
+  launcher.setAttribute("aria-label", "AgentNet controls");
+  launcher.setAttribute("aria-expanded", "false"); launcher.setAttribute("aria-controls", bar.id);
+  launcher.title = "AgentNet: skins, workspaces and Comic recovery";
+  launcher.append(icon("brush", 20));
   const homeButton = el("button", "home"); homeButton.type = "button";
   homeButton.setAttribute("aria-label", "Switch to " + home.name);
   homeButton.title = "Switch to " + home.name + ", AgentNet’s own skin";
@@ -98,6 +106,7 @@ export function mountSkinBar(parent, { skins, selected, home, choose, host, work
   const say = (text, action) => {
     notice.replaceChildren(); notice.hidden = !text;
     if (!text) return;
+    closeTools(false);
     notice.append(el("span", "text", text));
     if (action) { const b = el("button", "", action.label); b.type = "button"; b.onclick = action.run; notice.append(b); }
     const close = el("button", "close", "×"); close.type = "button"; close.setAttribute("aria-label", "Dismiss"); close.onclick = () => say("");
@@ -106,6 +115,27 @@ export function mountSkinBar(parent, { skins, selected, home, choose, host, work
 
   // ---- menus: one open at a time; arrows move, Escape closes
   let openMenu = null;
+  const closeTools = (focus = true) => {
+    if (openMenu) openMenu.close(false);
+    bar.hidden = true; launcher.setAttribute("aria-expanded", "false");
+    if (tools.open) tools.close();
+    if (focus) (toolsReturnTo?.isConnected ? toolsReturnTo : launcher).focus();
+  };
+  const openTools = (trigger) => {
+    toolsReturnTo = trigger || launcher;
+    bar.hidden = false; launcher.setAttribute("aria-expanded", "true");
+    if (!tools.open) tools.showModal();
+    homeButton.focus();
+  };
+  launcher.onclick = () => {
+    if (!bar.hidden) { closeTools(); return; }
+    openTools(launcher);
+  };
+  tools.addEventListener("cancel", (e) => { e.preventDefault(); closeTools(); });
+  tools.addEventListener("click", (e) => { if (e.target === tools) closeTools(); });
+  root.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !bar.hidden && !dialog.open) { e.preventDefault(); closeTools(); }
+  });
   const menus = [];
   const makeMenu = (button, label, fill) => {
     const panel = el("div", "menu"); panel.hidden = true; panel.setAttribute("role", "menu"); panel.setAttribute("aria-label", label);
@@ -138,16 +168,16 @@ export function mountSkinBar(parent, { skins, selected, home, choose, host, work
       else if (e.key === "ArrowUp") go(i < 0 ? -1 : i - 1);
       else if (e.key === "Home") go(0);
       else if (e.key === "End") go(-1);
-      else if (e.key === "Escape") { e.preventDefault(); m.close(); }
+      else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); m.close(); }
       else if (e.key === "Tab") m.close(false);
     });
     menus.push(m);
     return m;
   };
   document.addEventListener("pointerdown", (e) => {
-    if (!openMenu) return;
     const path = e.composedPath();
-    if (!path.includes(openMenu.panel) && !path.includes(openMenu.button)) openMenu.close(false);
+    if (openMenu && !path.includes(openMenu.panel) && !path.includes(openMenu.button)) openMenu.close(false);
+    if (!path.includes(holder) && !dialog.open) closeTools(false);
   });
   const item = (role, glyph, name, line, run, extra = {}) => {
     const b = el("button", "item" + (extra.cls ? " " + extra.cls : "")); b.type = "button"; b.setAttribute("role", role); b.tabIndex = -1;
@@ -173,13 +203,15 @@ export function mountSkinBar(parent, { skins, selected, home, choose, host, work
     dialog.replaceChildren(); if (dialog.returnTo) dialog.returnTo.focus(); dialog.returnTo = null;
   });
   const showDialog = (title, build, returnTo) => {
+    const back = tools.open ? toolsReturnTo : returnTo;
+    closeTools(false);
     if (dialog.open) dialog.close();
     const form = el("form"); form.method = "dialog";
     const h = el("h2", "", title); h.id = "dialog-title"; dialog.setAttribute("aria-labelledby", h.id);
     form.append(h);
     build(form);
     dialog.replaceChildren(form);
-    dialog.returnTo = returnTo || null;
+    dialog.returnTo = back || launcher;
     dialog.showModal();
     const first = form.querySelector("input, textarea, .btn.act, .btn");
     if (first) first.focus();
@@ -342,10 +374,18 @@ export function mountSkinBar(parent, { skins, selected, home, choose, host, work
     bar.append(wsAnchor);
   }
 
-  root.append(css, bar, notice, dialog);
+  root.append(css, launcher, tools, notice, dialog);
   parent.prepend(holder);
   return {
     ready,
+    open: openTools,
+    claim() {
+      claims++; launcher.hidden = true;
+      const generation = claimGeneration;
+      let live = true;
+      return () => { if (live) { live = false; if (generation === claimGeneration) { claims--; launcher.hidden = claims > 0; } } };
+    },
+    reset() { claimGeneration++; claims = 0; launcher.hidden = false; closeTools(false); toolsReturnTo = null; },
     // notify shows a notification the skin cannot open, with the way to
     // open it (action: { label, run }), or clears it ("").
     notify(text, action) { say(text, action); },

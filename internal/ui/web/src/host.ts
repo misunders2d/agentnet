@@ -133,6 +133,8 @@ export interface Host {
   /** Calls fn whenever host.skins changes (a package imported or removed). */
   onSkinsChange(fn: () => void): () => void;
   selectSkin(id: string): void;
+  /** Optional host tools for an external skin's existing Settings surface. */
+  controls?: { open(trigger?: HTMLElement): void; claim(root: HTMLElement): () => void };
   /** Mounts the browser-local package manager into root; returns its teardown. */
   manageLocalSkins?(root: HTMLElement): () => void;
   /** The skin gallery; absent on a program without it. */

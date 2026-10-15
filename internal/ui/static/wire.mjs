@@ -30,6 +30,7 @@ export const CapRequestFollowup = "flw1";
 export const CapRequestSteer = "flw2";
 export const CapTopicOrganization = "org1";
 export const CapTopicContext = "tpc1";
+export const CapGuestAgent = "gpa1"; // includes tpc1, with exact parent-derived transient agents
 export const CapTopicParticipation = "tps1"; // explicit ongoing topic scope, never implied by rm1
 export const CapRoom = "rm1"; // protocol.CapRoom: reads room participation (ROOM_V1 §2); implies RoomImplies
 export const CapOwnSyncV2 = "own2", SubInvitationSync = "invitation-sync";
@@ -713,6 +714,8 @@ async function checkV2(n) {
       if (!n.conv || n.pid || n.root || n.kind !== "message") throw new Error("human: an edit carries its turn's captured audience in its conversation only");
     } else if (!assistantReaction(n) || !n.conv || !n.pid || n.human.author_pid || n.root || n.kind !== "message") throw new Error("human: on a control, only an assistant's reaction or an edit to its captured audience");
     await validateHumanTurn(n.human, n.conv);
+  } else if (n.human && n.sub === "event") {
+    await guestAgentEvent(n);
   } else if (n.human) {
     const root = parseConvRoot(n.root), dm = root.kind === "dm" && root.members.length === 2, group = root.kind === "group" && root.v === GroupRootVersion;
     if (await rootID(root) !== n.conv || !dm && !group || n.v !== Version2 || n.sub) throw new Error("human: ordinary non-executing DM or group turn only");
@@ -1848,11 +1851,22 @@ export function steerRequirement(required="",needed=false) {
  return conversationAudienceRequirement(!needed||base.split("+").includes(CapRequestSteer)?base:base?base+"+"+CapRequestSteer:CapRequestSteer,audience);
 }
 export function steerRequirementBase(required="") {
- return conversationAudienceBase(required).split("+").filter(c=>c!==CapRequestSteer).join("+");
+ return conversationAudienceBase(required).split("+").filter(c=>c!==CapRequestSteer&&c!==CapGuestAgent).join("+");
+}
+export function guestAgentCopy(row) {
+ if((row.required_cap||"").split("+").includes(CapGuestAgent))return true;
+ let n=row;if(row.sub==="history"&&row.body)try{n=parseHistory(row.body);}catch{}
+ if(n.human?.proof?.some(e=>e.parent)||n.group_history?.memberships?.some(e=>e.parent))return true;
+ if(n.sub==="event"&&n.body)try{return !!parseEvent(n.body).parent;}catch{}
+ return false;
+}
+export function guestAgentRequirement(required="",needed=false) {
+ const base=conversationAudienceBase(required),audience=base!==required;
+ return conversationAudienceRequirement(!needed||base.split("+").includes(CapGuestAgent)?base:base?base+"+"+CapGuestAgent:CapGuestAgent,audience);
 }
 export function retainedAgentActionRequirements(row) {
  let n=row;if(row.sub==="history"&&row.body)try{n=parseHistory(row.body);}catch{}
- const required=steerRequirement(row.required_cap||agentRequirement(row),steerCopy(row));
+ const required=steerRequirement(guestAgentRequirement(row.required_cap||agentRequirement(row),guestAgentCopy(row)),steerCopy(row));
  return {...(required||conversationAudienceCopy(row)?{required_cap:conversationAudienceRequirement(required,conversationAudienceCopy(row))}:{}),mention_cap:!!(row.mention_cap||row.required_cap===CapMentionReaction||n.origin===OriginMentionReaction&&n.pid&&n.sub===SubReaction),organization_cap:!!(row.organization_cap||row.required_cap===CapAgentOrganization||organizationReaderExtension(n))};
 }
 export function agentRequirement(n) {
@@ -1920,7 +1934,7 @@ export async function verifyCaps(c, signKey) {
 // capsReads is protocol.CapsRecord.Reads: a record lists name, or rm1 when
 // rm1 implies it.
 export const RoomImplies = [CapExternalParticipation, CapAgentIdentity, CapHumanParticipation, CapAgentReaction, CapProgress, CapGroup, CapReplyReceiver, CapConvClear];
-export const capsReads = (c, name) => (c.caps || []).includes(name) || name===CapRequestFollowup&&(c.caps||[]).includes(CapRequestSteer) || name===CapModelSync&&(c.caps||[]).includes(CapModelSyncV2) || name===CapGroupInvitationControl&&(c.caps||[]).includes(CapGroupInvitationManage) || (c.caps || []).includes(CapRoom) && RoomImplies.includes(name);
+export const capsReads = (c, name) => (c.caps || []).includes(name) || name===CapTopicContext&&(c.caps||[]).includes(CapGuestAgent) || name===CapRequestFollowup&&(c.caps||[]).includes(CapRequestSteer) || name===CapModelSync&&(c.caps||[]).includes(CapModelSyncV2) || name===CapGroupInvitationControl&&(c.caps||[]).includes(CapGroupInvitationManage) || (c.caps || []).includes(CapRoom) && RoomImplies.includes(name);
 
 // profileSupports is protocol.Profile.Supports for a profile as the relay
 // sends it ({person, sessions, live, caps}): there are sessions, and each
@@ -1973,6 +1987,7 @@ function marshalEvent(e, withSig) {
   if (e.until) s += ',"until":' + goInt(e.until, "end time");
   if (e.topic != null) s += ',"topic":' + goString(e.topic);
   if(e.snapshots?.length)s+=',"snapshots":['+e.snapshots.map(g=>'{"lid":'+goString(g.lid)+',"fingerprint":'+goString(g.fingerprint)+',"hash":'+goString(g.hash)+'}').join(',')+']';
+  if(e.parent)s+=',"parent":'+goString(e.parent);
   return s + sigJSON(e, withSig) + "}";
 }
 export const eventJSON = (e) => marshalEvent(e, true);
@@ -2016,6 +2031,7 @@ function uniqueList(items, max, valid, what) {
 // null when absent, which matters: an accept, decline or dismiss may not
 // carry them even empty.
 export function validateEvent(e) {
+  if(e.parent&&(!validHash(e.parent)||!["invite","scope"].includes(e.type)||e.role||!e.topic||!validID(e.topic)||!e.host||e.host.person!==e.author.person||e.task_keys?.length||e.author.group_admission||e.group&&(e.group.host_role!=="visitor"||e.group.task_admissions?.length)))throw Error("participation: derived agent needs an exact human parent and topic, with no membership or task grants");
   if(e.snapshots?.length){
     if(e.topic==null||!["invite","share"].includes(e.type)||e.snapshots.length!==(e.grant||[]).length)throw Error("participation: snapshots require an exact scoped history grant");
     const seen=new Set();for(const g of e.snapshots){const key=g.lid+"/"+g.fingerprint;if(!validHash(g.hash)||seen.has(key)||!(e.grant||[]).some(r=>r.lid===g.lid&&r.fingerprint===g.fingerprint))throw Error("participation: invalid or extra history snapshot");seen.add(key);}
@@ -2047,7 +2063,7 @@ export function validateEvent(e) {
     uniqueList(e.task_keys || [], MaxTaskKeys, validFingerprint, "task keys");
     if (e.group) {
       const g=e.group;
-      if (!(g.seq>=0) || !validHash(g.hash) || !validHash(a.group_admission) || !["member","visitor"].includes(g.host_role) || (g.host_role==="member" && !validHash(g.host_admission)) || (g.host_role==="visitor" && g.host_admission) || (g.task_admissions || []).length !== (e.task_keys || []).length) throw new Error("participation: malformed group invitation scope");
+      if (!(g.seq>=0) || !validHash(g.hash) || !e.parent&&!validHash(a.group_admission) || !["member","visitor"].includes(g.host_role) || (g.host_role==="member" && !validHash(g.host_admission)) || (g.host_role==="visitor" && g.host_admission) || (g.task_admissions || []).length !== (e.task_keys || []).length) throw new Error("participation: malformed group invitation scope");
       for (const epoch of g.task_admissions || []) if (!validHash(epoch)) throw new Error("participation: invalid task group admission");
     }
     if (!wellFormed(e.note) || utf8.encode(e.note).length > MaxInviteNote) throw new Error("participation: note too long or not text");
@@ -2058,7 +2074,7 @@ export function validateEvent(e) {
     if (!validHash(e.prev) || !e.host || e.audience !== "conversation" && !room || e.grant !== null || e.task_keys !== null || e.note !== "" || !room && (e.group || a.group_admission) ||
       (e.role && e.role !== "human") || (e.role === "human" && e.host.agent_id)) throw new Error("participation: a scope names its invite, host, agent and role only");
     const g = e.group;
-    if (g && (!(g.seq >= 0) || !validHash(g.hash) || !validHash(a.group_admission) || !["member", "visitor"].includes(g.host_role) || (g.host_role === "member" && !validHash(g.host_admission)) ||
+    if (g && (!(g.seq >= 0) || !validHash(g.hash) || !e.parent&&!validHash(a.group_admission) || !["member", "visitor"].includes(g.host_role) || (g.host_role === "member" && !validHash(g.host_admission)) ||
       (g.host_role === "visitor" && g.host_admission) || g.task_admissions?.length || e.role === "human" && g.host_role !== "visitor") || !g && a.group_admission) throw new Error("participation: malformed room scope group binding");
     if (!validID(e.host.person) || !validFingerprint(e.host.fingerprint) || e.host.agent_id && !validID(e.host.agent_id)) throw new Error("participation: invalid host");
     if (!validAddress(e.host.address)) throw new Error("participation: host: invalid address " + e.host.address);
@@ -2081,7 +2097,7 @@ export async function signEvent(keys, fields) {
 
 export function parseEvent(json) {
   const f = strictRecord(json, MaxParticipationEvent, "participation", { v: "int", conv: "string", pid: "string", type: "string", prev: "string",
-    author: "object", ts: "int", host: "object", grant: "array", audience: "string", task_keys: "array", note: "string", group: "object", role: "string", until: "int", topic: "string", snapshots:"array", sig: "string" });
+    author: "object", ts: "int", host: "object", grant: "array", audience: "string", task_keys: "array", note: "string", group: "object", role: "string", until: "int", topic: "string", snapshots:"array", parent:"string", sig: "string" });
   const a = strict(f.author || {}, "participation author", { person: "string", roster: "string", address: "string", fingerprint: "string", group_admission: "string" });
   const h = f.host ? strict(f.host, "participation host", { person: "string", address: "string", fingerprint: "string", agent_id: "string" }) : null;
   const group = f.group ? strict(f.group,"participation group",{seq:"int",hash:"string",host_role:"string",host_admission:"string",task_admissions:"array"}) : null;
@@ -2093,7 +2109,7 @@ export function parseEvent(json) {
     grant: f.grant ? f.grant.map((g) => { const x = strict(g, "participation grant", { lid: "string", fingerprint: "string" });
       return { lid: x.lid || "", fingerprint: x.fingerprint || "" }; }) : null,
     ...(f.snapshots?.length?{snapshots:f.snapshots.map(g=>{const x=strict(g,"history snapshot",{lid:"string",fingerprint:"string",hash:"string"});return {lid:x.lid||"",fingerprint:x.fingerprint||"",hash:x.hash||""};})}:{}),
-    audience: f.audience || "", task_keys: f.task_keys || null, note: f.note || "", ...(f.role ? { role: f.role } : {}), ...(f.until ? { until: f.until } : {}), ...(f.topic!=null?{topic:f.topic}:{}), ...(group ? {group:{seq:group.seq || 0,hash:group.hash || "",host_role:group.host_role || "",host_admission:group.host_admission || "",task_admissions:group.task_admissions || null}} : {}), sig: f.sig ? unb64(f.sig, "event signature") : null };
+    ...(f.parent?{parent:f.parent}:{}), audience: f.audience || "", task_keys: f.task_keys || null, note: f.note || "", ...(f.role ? { role: f.role } : {}), ...(f.until ? { until: f.until } : {}), ...(f.topic!=null?{topic:f.topic}:{}), ...(group ? {group:{seq:group.seq || 0,hash:group.hash || "",host_role:group.host_role || "",host_admission:group.host_admission || "",task_admissions:group.task_admissions || null}} : {}), sig: f.sig ? unb64(f.sig, "event signature") : null };
   validateEvent(e);
   fitsRecord(eventJSON(e), MaxParticipationEvent, "participation");
   return e;
@@ -2105,7 +2121,7 @@ export function parseEvent(json) {
 // projects is ParticipationEvent.Projects, sameScope protocol.SameScope;
 // projectsHash is projects with the invite's hash known (synchronous).
 export const scopeOfHash = (inv, invHash, ts) => ({ v: 1, conv: inv.conv, pid: inv.pid, type: "scope", prev: invHash, author: { ...inv.author }, ts, host: { ...inv.host },
-  grant: null, audience: inv.audience, task_keys: null, note: "", ...(inv.role ? { role: inv.role } : {}), ...(inv.until ? { until: inv.until } : {}), ...(inv.topic!=null?{topic:inv.topic}:{}),
+  ...(inv.parent?{parent:inv.parent}:{}), grant: null, audience: inv.audience, task_keys: null, note: "", ...(inv.role ? { role: inv.role } : {}), ...(inv.until ? { until: inv.until } : {}), ...(inv.topic!=null?{topic:inv.topic}:{}),
   ...(inv.group ? { group: { seq: inv.group.seq, hash: inv.group.hash, host_role: inv.group.host_role, ...(inv.group.host_admission ? { host_admission: inv.group.host_admission } : {}), task_admissions: null } } : {}) });
 export async function scopeOf(inv, ts) { return scopeOfHash(inv, await eventHash(inv), ts); }
 export const sameScope = (x, y) => marshalEvent({ ...x, ts: 1 }, false) === marshalEvent({ ...y, ts: 1 }, false);
@@ -2161,6 +2177,18 @@ export async function validateHumanTurn(h, conv) {
     if (e.type === "scope") events.add("scope/" + e.pid);
   }
   for (const s of h.audience) if (!events.has("scope/" + s.pid) || !events.has(s.decision)) throw new Error("human: missing scope or acceptance proof");
+}
+
+// The only event carrying HumanTurn is a guest's own exact child invitation
+// or public scope. The proof remains the existing signed public parent pair.
+export async function guestAgentEvent(n) {
+  const e=parseEvent(n.body), h=n.human;
+  if(!h || n.v!==Version2 || n.sub!=="event" || n.kind!=="message" || n.target || n.replica || e.conv!==n.conv || e.pid!==n.pid || !e.parent || e.author.address!==n.from || h.audience.length!==1 || h.proof.length!==2)throw Error("human: event needs one exact public parent consent");
+  await validateHumanTurn(h,n.conv);
+  const s=h.audience[0];
+  if(h.author_pid!==s.pid || s.decision!==e.parent)throw Error("human: child differs from its exact parent acceptance");
+  for(const p of h.proof)if(p.type==="scope" && (p.role!=="human" || p.parent || !p.topic || p.topic!==e.topic || !p.host || p.host.person!==e.author.person || p.host.address!==e.author.address || p.host.fingerprint!==e.author.fingerprint || p.until && (!e.until || e.until>p.until)))throw Error("human: child expands its human parent's identity or scope");
+  return e;
 }
 
 // ---- attachments (envelope.Attachment; client files.go) ---------------------------------------

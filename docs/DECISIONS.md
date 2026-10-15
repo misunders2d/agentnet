@@ -753,3 +753,30 @@ retain revision/deletion/file cursor checks.
 This supersedes the earlier selected-and-addressed-only DM context wording.
 The existing group captured-audience model remains in place. Source tests are
 separate from the integrated v0.8.28 release and native qualification gates.
+
+## October 15, 2026 — a topic guest brings their own agent (MEL-643)
+
+Approved v0.8.31 contract; implementation and qualification are tracked in
+[the release plan](plans/V0_8_31.md). An accepted human topic guest uses the
+existing Bring in flow for an agent on their own verified current person.
+The child stays in that exact nonempty topic, with selected history already
+visible to the guest, no task-key grant and no membership or further derived
+invitation. Current own-human consent remains sufficient on the agent host;
+an agent-host key never supplies human consent.
+
+One signed optional `parent` value binds the child invite/public scope to the
+exact human acceptance hash. Existing public scope and acceptance records
+provide its dependency; the child's event does not embed the private human
+grant. Member-side decisions resolve current parent authority. End, expiry,
+revocation, freeze or key loss stops future derived access and queued handover;
+a new invitation/acceptance cannot revive the old child. A scope-only reader
+must retain the parent and must never promote an indefinite child to Member.
+
+Reuse existing participation, captured audiences, encrypted per-copy delivery
+and inert own-device history witnesses. Public bootstrap proof is pending
+until current context resolves; retained history does not grant live access or
+restart execution. The `gpa1` reader replaces advertised `tpc1` and implies it,
+preserving the existing 28 advertised names, 32 reader names and 1024 signed-byte
+bounds. Unsupported readers keep exact sealed copies; body erasure/archive
+repack must retain this requirement. Legacy event bytes remain unchanged when
+the parent field is absent. No new schema, service, polling or permission mode.

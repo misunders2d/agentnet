@@ -17,7 +17,7 @@ func TestOwnCapabilitySignedByteBudget(t *testing.T) {
 	}
 	caps := append(slices.Clone(ownCaps), protocol.CapAgent)
 	slices.Sort(caps)
-	want := []string{"agent1", "amr1", "ams1", "aorg1", "cau1", "cont1", "crs1", "ctl3", "drv1", "env2", "flw2", "gic2", "ha1", "hdl1", "hgg1", protocol.CapModelSyncV2, "notify1", "org1", "own2", "own3", "person2", "rd1", "rm1", "sg1", "tpc1", "tps1", "tss1", "typing1"}
+	want := []string{"agent1", "amr1", "ams1", "aorg1", "cau1", "cont1", "crs1", "ctl3", "drv1", "env2", "flw2", "gic2", "gpa1", "ha1", "hdl1", "hgg1", protocol.CapModelSyncV2, "notify1", "org1", "own2", "own3", "person2", "rd1", "rm1", "sg1", "tps1", "tss1", "typing1"}
 	if !slices.Equal(caps, want) {
 		t.Fatalf("advertised capabilities=%v, want %v", caps, want)
 	}

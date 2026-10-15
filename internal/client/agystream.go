@@ -27,6 +27,7 @@ func agyInput(prompt string) string {
 }
 
 type agyStream struct {
+	onActivity               func(nativeActivity)
 	line                     []byte
 	skipping, damaged        bool
 	conversation, expected   string
@@ -68,8 +69,9 @@ func (s *agyStream) flush() {
 		return
 	}
 	var ev struct {
-		Event        string `json:"event"`
-		Conversation string `json:"conversation_id"`
+		Event        string          `json:"event"`
+		Conversation string          `json:"conversation_id"`
+		StepUpdate   json.RawMessage `json:"step_update"`
 		Result       *struct {
 			Conversation string `json:"conversation_id"`
 			Status       string `json:"status"`
@@ -84,6 +86,15 @@ func (s *agyStream) flush() {
 	switch ev.Event {
 	case "init":
 		s.setConversation(ev.Conversation)
+	case "step_update":
+		if s.onActivity != nil && !s.complete && !s.damaged && s.conversation != "" && (ev.Conversation == "" || ev.Conversation == s.conversation) {
+			var step struct {
+				Type string `json:"step_type"`
+			}
+			if json.Unmarshal(ev.StepUpdate, &step) == nil && step.Type == "agent_response" {
+				s.onActivity(activityAnswer)
+			}
+		}
 	case "result":
 		if s.complete || ev.Result == nil {
 			s.damaged = true

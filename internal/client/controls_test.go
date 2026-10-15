@@ -328,9 +328,9 @@ func TestControlsInConversationConverge(t *testing.T) {
 	}
 }
 
-// A peer whose program cannot read controls is refused honestly; nothing
-// older is sent instead.
-func TestControlsRefusedWithoutCapability(t *testing.T) {
+// Unknown reader support keeps the exact control waiting; its local
+// reaction is durable and nothing older is sent instead.
+func TestControlsWaitWithoutCapability(t *testing.T) {
 	w := newWorld(t, "")
 	runAgent(t, w.alice)
 	hello, err := w.bob.Send(tctx(t), w.alice.Address, "from an older program", "")
@@ -339,14 +339,16 @@ func TestControlsRefusedWithoutCapability(t *testing.T) {
 	}
 	eventually(t, "alice to hold it", func() bool { return inboxCount(t, w.alice, `id = ?`, hello.ID) == 1 })
 	ref, _ := w.alice.RefOf("", hello.ID, "in")
-	_, err = w.alice.React(tctx(t), ref, "👍", false)
-	if !errors.Is(err, ErrNoControls) {
-		t.Fatalf("reacting to a peer without controls: %v", err)
+	sent, err := w.alice.React(tctx(t), ref, "👍", false)
+	if err != nil || sent.State != stateConvWaiting {
+		t.Fatalf("reaction must wait without reader support: %+v %v", sent, err)
 	}
 	var n int
-	w.alice.store.db.QueryRow(`SELECT count(*) FROM outbox`).Scan(&n)
-	if n != 0 {
-		t.Fatalf("%d message(s) sent instead", n)
+	if err := w.alice.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE id=? AND state='waiting' AND required_cap=? AND ref_id=?`, sent.ID, protocol.CapControl, hello.ID).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("sealed waiting control: %d %v", n, err)
+	}
+	if m := legacyView(t, w.alice, hello.ID); len(m.Reactions) != 1 || !m.Reactions[0].Mine {
+		t.Fatalf("waiting local reaction missing: %+v", m.Controls)
 	}
 	if _, err := w.alice.React(tctx(t), ref, "not-an-emoji", false); err == nil {
 		t.Fatal("a word was accepted as a reaction")

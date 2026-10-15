@@ -66,7 +66,7 @@ export function useCatalogs(api: Api, addresses: string[], enabled: boolean): Ca
  *  devices that run an agent (a phone or a browser publishes none). */
 export function catalogHosts(t: T.DMThread, o: T.Overview): string[] {
   const out = new Set<string>();
-  const people = [o.person, ...(t.members || []), t.peer, ...(o.people || []).filter((p) => p.state === "pinned")];
+  const people = t.role === "human_guest" ? [o.person] : [o.person, ...(t.members || []), t.peer, ...(o.people || []).filter((p) => p.state === "pinned")];
   for (const p of people) {
     if (!p) continue;
     for (const d of p.devices?.length ? p.devices : [{ address: p.address }]) if (d.address !== o.me.address && runsAgent(d.address, o)) out.add(d.address);
@@ -161,7 +161,7 @@ export function pool(t: T.DMThread, o: T.Overview, cat: Catalogs, names: Record<
     c.reasonAt = m.at;
     if (!c.unavailable && (!pick || (out.find((x) => x.key === pick)?.reasonAt || "") < m.at)) pick = c.key;
   }
-  return { candidates: out, peopleNote, pick };
+  return { candidates: t.role === "human_guest" ? out.filter(c => c.kind === "agent" && c.mine) : out, peopleNote, pick };
 }
 
 const agentLine = (p: T.PersonView, me: T.PersonView | undefined, address: string, on: boolean | null) =>

@@ -181,12 +181,23 @@ func (a *Agent) groupParticipationHistoryCheck(q dbq, root protocol.ConvRoot, fo
 		return nil, ErrGroupContextPending
 	}
 	if item.Human != nil {
-		var context []dmMembers
-		if item.GroupHistory != nil {
-			context = append(context, m)
-		}
-		if err = humanTurnAuthorization(q, original, item.From, item.FromKey, a.Address, a.Self().Fingerprint(), true, context...); err != nil {
-			return nil, err
+		if ev != nil && ev.Parent != "" {
+			signed := original
+			signed.Replica = false
+			if _, err = envelope.GuestAgentEvent(signed); err != nil {
+				return nil, err
+			}
+			if _, ok := m.guestAuthor(*ev); !ok {
+				return nil, errors.New("group: historical derived event lacks exact human parent")
+			}
+		} else {
+			var context []dmMembers
+			if item.GroupHistory != nil {
+				context = append(context, m)
+			}
+			if err = humanTurnAuthorization(q, original, item.From, item.FromKey, a.Address, a.Self().Fingerprint(), true, context...); err != nil {
+				return nil, err
+			}
 		}
 	}
 	// Ending an accepted assistant does not erase an original member's inert

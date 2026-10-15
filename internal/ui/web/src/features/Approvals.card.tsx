@@ -26,6 +26,8 @@ import { ResolveOwnRequest } from "./RequestResolution";
 import { RequestFrame } from "../skin/RequestFrame";
 import { Markdown } from "./Markdown";
 import { requestResultText } from "../requestResult";
+import { NativeActivity } from "./NativeActivity";
+import { currentNativeActivity } from "./NativeActivity.model";
 
 export function ApprovalCard({ message, dm, thread, compact, content }: { message: Req; dm?: T.DMThread | null; thread?: T.Thread | null; compact?: boolean; content?: ReactNode }) {
   const store = useApp();
@@ -135,7 +137,9 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
   const named = mine.named;
   const notice = isThreadMsg(m) && m.kind === "message" && m.status === "review_notice";
   const conv = dm?.id || thread?.id || "";
-	const said = requestResultText(localRunningDetail((isThreadMsg(m) ? m.detail : m.job_detail) || (phase === "needs_human" ? remoteNeedsHumanDetail(m, o) : "") || (phase === "needs_human" ? (o?.needs_you || []).find(c => c.conv === conv && c.id === m.id)?.why : "") || "", phase === "running"));
+	const runningDetail = (isThreadMsg(m) ? m.detail : m.job_detail) || (phase === "running" && m.exec?.state === "running" && !m.exec.stale ? m.exec.detail : "") || "";
+	const activity = currentNativeActivity(isThreadMsg(m) ? m.detail : m.job_detail, m.exec, phase === "running");
+	const said = requestResultText(localRunningDetail(runningDetail || (phase === "needs_human" ? remoteNeedsHumanDetail(m, o) : "") || (phase === "needs_human" ? (o?.needs_you || []).find(c => c.conv === conv && c.id === m.id)?.why : "") || "", phase === "running"));
 	const proposal = m.proposal;
 
   const permissionPerson = thread?.permission_person;
@@ -201,7 +205,7 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
           </h3>
         </div>
 
-        {phase === "running" && said && <p role="status" className="mx-4 mt-3 whitespace-pre-wrap text-[14px] text-text-2 [overflow-wrap:anywhere]">{said}</p>}
+        {phase === "running" && (activity ? <NativeActivity detail={activity} /> : said ? <p role="status" className="mx-4 mt-3 whitespace-pre-wrap text-[14px] text-text-2 [overflow-wrap:anywhere]">{said}</p> : null)}
         {proposal && <Details label="How this task was chosen" className="mx-4 mt-3">
           <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{nameOf(proposal.asker, o)} asked: {proposal.question}</p>
           <p className="mt-2 whitespace-pre-wrap [overflow-wrap:anywhere]">Your agent suggested: {proposal.proposal}</p>

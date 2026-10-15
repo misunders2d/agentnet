@@ -259,6 +259,22 @@ func (a *Agent) acceptGroupVisitorContext(ctx context.Context, packet GroupConte
 		if _, e = groupMemberAdmission(q, packet, sender.Address, sender.Fingerprint()); e == nil {
 			return nil
 		}
+		inv, ie := groupVisitorInvite(q, packet.Root, in.PID, a.Address, a.Self().Fingerprint())
+		if ie == nil && inv.Parent != "" {
+			var roster []protocol.ConvMember
+			for _, member := range packet.State.EffectiveMembers(append(withdrawals, pins...)) {
+				roster = append(roster, member.ConvMember)
+			}
+			m, me := memberRowsIn(q, packet.Root, roster)
+			if me != nil {
+				return me
+			}
+			m.group = &packet
+			parent, pe := guestParentIn(q, in.Conv, inv.Parent, m)
+			if pe == nil && parent.HumanActive() && parent.Host.Address == sender.Address && parent.Host.Fingerprint == sender.Fingerprint() && parent.Host.Person == inv.Host.Person && sameParticipationTopic(parent.Topic, inv.Topic) {
+				return nil
+			}
+		}
 		if packet.State.Actor == current.info.Person && packet.State.By == sender.Fingerprint() && packet.State.ActorRoster == current.info.Roster {
 			return nil // exact original departing administrator's signed state
 		}

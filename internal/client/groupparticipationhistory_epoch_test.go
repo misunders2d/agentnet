@@ -25,6 +25,9 @@ func TestGroupHistoryWitnessMissingOriginalCiphertext(t *testing.T) {
 func TestGroupHistoryWitnessRetiredTaskDevice(t *testing.T) {
 	groupParticipationHistoryAfterReadmission(t, true, true)
 }
+func TestGroupHistoryWitnessGuestDerivedParent(t *testing.T) {
+	groupParticipationHistoryAfterReadmission(t, true, false, true)
+}
 func groupParticipationHistoryAfterReadmission(t *testing.T, sharedOriginal bool, retiredTask ...bool) {
 	w, approver, source, packet := groupHistoryLinkedFixture(t)
 	stopApprover := runAgent(t, approver)
@@ -42,6 +45,9 @@ func groupParticipationHistoryAfterReadmission(t *testing.T, sharedOriginal bool
 	}
 	var retired *Agent
 	var part ParticipationInfo
+	derived := len(retiredTask) > 1 && retiredTask[1]
+	executor := w.bob
+	topic := ""
 	if len(retiredTask) > 0 && retiredTask[0] {
 		var awaited chan linkOutcome
 		retired, awaited, _ = linkPhone(t, w.bob, "retired-task-phone")
@@ -62,13 +68,37 @@ func groupParticipationHistoryAfterReadmission(t *testing.T, sharedOriginal bool
 				t.Fatal(err)
 			}
 		}
+	} else if derived {
+		topic = protocol.NewID()
+		executor = proofReader(t, w, "historical-guest")
+		runAgent(t, executor)
+		for _, a := range []*Agent{approver, source, w.bob, executor} {
+			roomReader(t, a)
+		}
+		parent, e := w.bob.InviteHumanInScope(tctx(t), conv, executor.Address, nil, "", &topic)
+		if e != nil {
+			t.Fatal(e)
+		}
+		eventually(t, "historical human parent", func() bool { return stateAt(t, executor, parent.PID).State == PartInvited })
+		if _, e = executor.AcceptParticipation(tctx(t), parent.PID); e != nil {
+			t.Fatal(e)
+		}
+		part, err = executor.InviteAgentInScope(tctx(t), conv, executor.Address, "", nil, nil, "", &topic)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stateAt(t, executor, part.PID).State == PartInvited {
+			if _, err = executor.AcceptParticipation(tctx(t), part.PID); err != nil {
+				t.Fatal(err)
+			}
+		}
 	} else {
 		part = p6Member(t, w.bob, w.bob, conv)
 	}
 	eventually(t, "own laptop sees original accepted member host", func() bool {
 		return stateAt(t, source, part.PID).Claimable() && stateAt(t, approver, part.PID).Claimable()
 	})
-	ask, err := approver.AskAgent(tctx(t), part.PID, envelope.KindQuestion, "older accepted own replica")
+	ask, err := approver.AskAgentInTopic(tctx(t), part.PID, envelope.KindQuestion, "older accepted own replica", topic, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +118,7 @@ func groupParticipationHistoryAfterReadmission(t *testing.T, sharedOriginal bool
 	if err = os.WriteFile(filePath, []byte("EXACT_OLD_HISTORY_BYTES"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	answer, err := w.bob.SendConv(tctx(t), conv, ConvOutgoing{Kind: envelope.KindAnswer, PID: part.PID, AgentID: part.AgentID, ReplyTo: ask.LID, Body: "old exact answer", Files: []OutgoingFile{{Path: filePath, Name: "history.txt"}}})
+	answer, err := executor.SendConv(tctx(t), conv, ConvOutgoing{Kind: envelope.KindAnswer, PID: part.PID, AgentID: part.AgentID, ReplyTo: ask.LID, Body: "old exact answer", Topic: topic, Files: []OutgoingFile{{Path: filePath, Name: "history.txt"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +136,7 @@ func groupParticipationHistoryAfterReadmission(t *testing.T, sharedOriginal bool
 	if err != nil {
 		t.Fatal(err)
 	}
-	status, err := envelope.Seal(envelope.Inner{V: envelope.Version3, ID: protocol.NewID(), LID: protocol.NewID(), From: w.bob.Address, To: source.Address, TS: time.Now().Unix(), Conv: conv, Kind: envelope.KindMessage, Sub: envelope.SubStatus, Body: `{"state":"running","n":1,"at":1700000000,"detail":"fixture"}`, Ref: &envelope.Ref{ID: ask.LID, Fingerprint: approver.Self().Fingerprint()}}, w.bob.id.Sign, recipient)
+	status, err := envelope.Seal(envelope.Inner{V: envelope.Version3, ID: protocol.NewID(), LID: protocol.NewID(), From: executor.Address, To: source.Address, TS: time.Now().Unix(), Conv: conv, Kind: envelope.KindMessage, Sub: envelope.SubStatus, Body: `{"state":"running","n":1,"at":1700000000,"detail":"fixture"}`, Ref: &envelope.Ref{ID: ask.LID, Fingerprint: approver.Self().Fingerprint()}}, executor.id.Sign, recipient)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +178,7 @@ func groupParticipationHistoryAfterReadmission(t *testing.T, sharedOriginal bool
 			original = ev
 		}
 	}
-	if original.Group == nil || original.Group.HostRole != "member" {
+	if original.Group == nil || !derived && original.Group.HostRole != "member" || derived && (original.Group.HostRole != "visitor" || original.Parent == "") {
 		t.Fatal("original invite lacks exact member epoch")
 	}
 	bob, ok, err := w.bob.store.selfPerson(w.bob.Address)
@@ -173,6 +203,32 @@ func groupParticipationHistoryAfterReadmission(t *testing.T, sharedOriginal bool
 	}
 	if stateAt(t, source, part.PID).Claimable() {
 		t.Fatal("host re-admission revived live participation")
+	}
+	if derived {
+		rows, e := source.historySourceRows(source.store.db, "id=?", "dir,id", 1, answerID)
+		if e != nil || len(rows) != 1 {
+			t.Fatalf("derived retained source: %v", e)
+		}
+		item, e := source.historySourceItem(source.store.db, rows[0])
+		if e != nil {
+			t.Fatal(e)
+		}
+		witness, e := source.makeGroupHistoryWitness(source.store.db, current, item)
+		if e != nil {
+			t.Fatalf("derived witness construction: %v", e)
+		}
+		item.GroupHistory = witness
+		hm, e := groupHistoryMembers(source.store.db, current.Root, item)
+		if e != nil {
+			t.Fatal(e)
+		}
+		hi, e := participationIn(source.store.db, conv, part.PID, hm, source.Address)
+		if e != nil || hi.Member || hi.Parent != part.Parent || hi.Invite == "" {
+			t.Fatalf("derived witness resolution %+v %v", hi, e)
+		}
+		if e = humanTurnAuthorization(source.store.db, item.inner(conv), item.From, item.FromKey, source.Address, source.Self().Fingerprint(), true, hm); e != nil {
+			t.Fatalf("derived witnessed output host=%s want=%s authorPID=%s state=%s held=%d: %v", hi.Host.Address, item.From, item.Human.AuthorPID, hi.State, hi.Held, e)
+		}
 	}
 	if _, err := groupProofRecord(source.store.db, conv, packet.Root.Creator.Fingerprint, original.Group.Seq); err != nil {
 		t.Fatalf("original public proof is missing: %v", err)
@@ -272,7 +328,11 @@ func groupParticipationHistoryAfterReadmission(t *testing.T, sharedOriginal bool
 	if err != nil || groupHistoryJSON(kept) != groupHistoryJSON(item.GroupHistory) {
 		t.Fatalf("received exact witness not retained: %v", err)
 	}
-	for _, mode := range []string{"missing-witness", "wrong-state", "forged-state", "other-pid", "unbound-roster", "wrong-task-epoch", "unknown-own-admission", "foreign-forwarder"} {
+	modes := []string{"missing-witness", "wrong-state", "forged-state", "other-pid", "unbound-roster", "wrong-task-epoch", "unknown-own-admission", "foreign-forwarder"}
+	if derived {
+		modes = append(modes, "missing-parent", "wrong-parent-consent")
+	}
+	for _, mode := range modes {
 		t.Run(mode, func(t *testing.T) {
 			var bad HistoryItem
 			if err := json.Unmarshal([]byte(rawItem), &bad); err != nil {
@@ -303,6 +363,28 @@ func groupParticipationHistoryAfterReadmission(t *testing.T, sharedOriginal bool
 				bad.GroupAdmission = strings.Repeat("e", 64)
 			case "foreign-forwarder":
 				forwarder = w.bob.Self()
+			case "missing-parent":
+				var pid string
+				for _, ev := range bad.GroupHistory.Memberships {
+					if ev.Type == protocol.EventAccept && ev.Hash() == part.Parent {
+						pid = ev.PID
+					}
+				}
+				var kept []protocol.ParticipationEvent
+				for _, ev := range bad.GroupHistory.Memberships {
+					if ev.PID != pid {
+						kept = append(kept, ev)
+					}
+				}
+				bad.GroupHistory.Memberships = kept
+			case "wrong-parent-consent":
+				for i := range bad.GroupHistory.Memberships {
+					ev := &bad.GroupHistory.Memberships[i]
+					if ev.Parent != "" {
+						ev.Parent = strings.Repeat("a", 64)
+						ev.Sign(executor.id.Sign)
+					}
+				}
 			}
 			if _, err := phone.groupParticipationHistoryCheck(phone.store.db, packet.Root, forwarder, bad); err == nil {
 				t.Fatal("invalid history witness accepted")
@@ -310,6 +392,9 @@ func groupParticipationHistoryAfterReadmission(t *testing.T, sharedOriginal bool
 		})
 	}
 	t.Run("pending-original-author", func(t *testing.T) {
+		if _, err := phone.sendKey(tctx(t), w.bob.Address); err != nil {
+			t.Fatal(err)
+		}
 		tx, err := phone.store.db.Begin()
 		if err != nil {
 			t.Fatal(err)

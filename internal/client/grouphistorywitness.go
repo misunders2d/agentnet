@@ -58,6 +58,18 @@ func historyWitnessPIDs(item HistoryItem) map[string]bool {
 			pids[s.PID] = true
 		}
 	}
+	if item.GroupHistory != nil {
+		for _, child := range item.GroupHistory.Memberships {
+			if !pids[child.PID] || child.Parent == "" {
+				continue
+			}
+			for _, parent := range item.GroupHistory.Memberships {
+				if parent.Type == protocol.EventAccept && parent.Hash() == child.Parent {
+					pids[parent.PID] = true
+				}
+			}
+		}
+	}
 	return pids
 }
 
@@ -161,7 +173,7 @@ func groupHistoryMembers(q dbq, root protocol.ConvRoot, item HistoryItem) (dmMem
 		if err = ev.Verify(key.SignKey); err != nil {
 			return dmMembers{}, err
 		}
-		if ev.Type == protocol.EventInvite || ev.Type == protocol.EventScope {
+		if (ev.Type == protocol.EventInvite || ev.Type == protocol.EventScope) && ev.Parent == "" {
 			member, ok := p.State.Member(ev.Author.Person)
 			if !ok || ev.Author.GroupAdmission != member.Admission.Hash() {
 				return dmMembers{}, errors.New("group: historical inviter original admission differs")
@@ -183,6 +195,7 @@ func groupHistoryMembers(q dbq, root protocol.ConvRoot, item HistoryItem) (dmMem
 		return dmMembers{}, err
 	}
 	m.group = p
+	m.historyEvents = p.Memberships
 	// Validate historical bindings without the live room-event retention exception.
 	// A witnessed state proves original author/host/task epochs directly.
 	if err = m.loadHosts(q, p.Memberships); err != nil {
@@ -280,7 +293,19 @@ func (a *Agent) makeGroupHistoryWitness(q dbq, current GroupContext, item Histor
 	p.Proof = nil
 	p.Memberships = nil
 	pids := make([]string, 0)
-	for pid := range historyWitnessPIDs(item) {
+	dependencies := historyWitnessPIDs(item)
+	parentPIDs := map[string]bool{}
+	for _, ev := range events {
+		if ev.Parent != "" {
+			var pid string
+			if e := q.QueryRow(`SELECT pid FROM participation_events WHERE conv=? AND hash=? AND type=?`, current.State.Conv, ev.Parent, protocol.EventAccept).Scan(&pid); e != nil {
+				return nil, e
+			}
+			dependencies[pid] = true
+			parentPIDs[pid] = true
+		}
+	}
+	for pid := range dependencies {
 		pids = append(pids, pid)
 	}
 	slices.Sort(pids)
@@ -293,6 +318,9 @@ func (a *Agent) makeGroupHistoryWitness(q dbq, current GroupContext, item Histor
 			kept = mergeHistoryEvents(kept, item.Human.Proof, pid)
 		}
 		for _, ev := range kept {
+			if parentPIDs[pid] && (ev.Type == protocol.EventInvite || ev.Type == protocol.EventShare) {
+				continue
+			}
 			if ev.Type != protocol.EventShare {
 				p.Memberships = append(p.Memberships, ev)
 			}
@@ -358,7 +386,17 @@ func (a *Agent) groupParticipationHistorySource(q dbq, packet GroupContext, item
 		}
 	}
 	stamp, err := a.groupParticipationSourceAdmission(q, packet, item)
-	if err != nil && item.GroupHistory == nil && (errors.Is(err, ErrGroupContextPending) || errors.Is(err, errGroupParticipationHistoryEpoch) || errors.Is(err, errHumanHistoryConsent)) {
+	classification := item
+	if item.Sub == envelope.SubStatus {
+		if scoped, e := groupHistoryScope(q, packet.State.Conv, item, a.Self().Fingerprint()); e == nil {
+			classification = scoped
+		}
+	}
+	derived, deriveErr := guestAgentCopy(nil, packet.State.Conv, classification.PID, classification.Sub, classification.Body, humanJSON(classification.Human))
+	if deriveErr != nil {
+		return item, deriveErr
+	}
+	if err != nil && item.GroupHistory == nil && (derived || errors.Is(err, ErrGroupContextPending) || errors.Is(err, errGroupParticipationHistoryEpoch) || errors.Is(err, errHumanHistoryConsent)) {
 		item.GroupHistory, err = a.makeGroupHistoryWitness(q, packet, item)
 		if err == nil {
 			stamp, err = a.groupParticipationSourceAdmission(q, packet, item)

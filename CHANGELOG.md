@@ -6,6 +6,27 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+- Let accepted topic guests bring their own agents through Bring in. Helpers
+  stay within the guest's topic and selected context; ending the guest's access
+  ends the helper's future access. Preserve native execution consent.
+- Let guests reply to their admitted selected excerpts, and remove stale
+  Bring back actions when the same agent is already invited or active.
+- Keep valid reactions, edits and deletions locally without availability checks
+  against every known reader before saving. Current-key and reader checks remain
+  at delivery; unavailable readers retain their sealed copies for later.
+- Refresh exact viewed-topic read counts when a read push is missing or stale,
+  reusing in-flight refreshes and preserving unread messages in other topics.
+- Let external skins fill the window. Skin, workspace and Comic recovery tools
+  are available from Settings, with recovery access for unknown or failed skins.
+  Start the participants sidebar collapsed and keep its explicit open/close action.
+- Surface topic guest invitation decisions in the standalone skins' Review view
+  at narrow widths. Preserve intentional quotes and normal request navigation.
+- Show concise public native activity in the existing Working presentation, with
+  current request/attempt binding and a generic fallback. Pending progress stays
+  bounded; terminal outcomes keep their normal durable delivery.
+- Let Windows choose notification sounds through its normal settings, retaining
+  quiet-time behavior.
+
 ## [0.8.30] — 2026-10-15
 
 - Preserve the current local job attempt when displaying an agent request, so

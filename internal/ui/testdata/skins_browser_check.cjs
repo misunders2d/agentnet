@@ -5,8 +5,8 @@
 //   - saved "default"/"classic" open Comic and are rewritten; ?skin=default
 //     is Comic;
 //   - an installed skin asks for trust first (with the switcher already
-//     there), then mounts in its own shadow root under the switcher, which
-//     never covers it, works by keyboard and follows light and dark;
+//     there), then fills the viewport in its own shadow root; compact
+//     host controls work by keyboard and follow light and dark;
 //   - notifications a skin does not take are offered in the switcher, kept
 //     until opened in Comic; an unknown workspace opens nothing;
 //   - a browser-local skin is imported from the switcher, asks for trust,
@@ -18,9 +18,9 @@ const fs = require('fs'), path = require('path'), assert = require('node:assert/
 const { chromium } = require(process.env.AGENTNET_PLAYWRIGHT || 'playwright-core');
 const [target, notebook] = process.argv.slice(2);
 const shots = process.env.AGENTNET_SCREENSHOTS;
-const local = (version) => {
+const local = (version, fail = false) => {
   const manifest = { api: 1, id: 'pad', name: 'Scratch pad', entry: 'entry.mjs', style: 'style.css', files: ['entry.mjs', 'style.css'] };
-  const files = { 'skin.json': JSON.stringify(manifest), 'entry.mjs': `export function mount(root,host){const h=document.createElement('h1');h.textContent='Scratch pad ${version}';root.append(h);host.onOpen(()=>{});}export function unmount(root){root.replaceChildren();}`, 'style.css': 'h1 { color: rgb(12, 80, 60); margin: 24px; }' };
+  const files = { 'skin.json': JSON.stringify(manifest), 'entry.mjs': `let release;export function mount(root,host){const h=document.createElement('h1');h.textContent='Scratch pad ${version}';const b=document.createElement('button');b.textContent='AgentNet controls';b.onclick=()=>host.controls?.open(b);root.append(h,b);host.onOpen(()=>{});release=host.controls?.claim(root);${fail ? "throw Error('Synthetic skin mount failure');" : ""}}export function unmount(root){release?.();root.replaceChildren();}`, 'style.css': 'h1 { color: rgb(12, 80, 60); margin: 24px; }' };
   return Object.entries(files).map(([name, content]) => ({ name, mimeType: 'application/octet-stream', buffer: Buffer.from(content) }));
 };
 
@@ -40,6 +40,7 @@ const local = (version) => {
       // Comic is up: its root is mounted and has drawn (the chat list, or the conversation a destination opened).
       const comicUp = () => page.waitForFunction(() => { const sr = document.getElementById('skin').shadowRoot, r = sr && sr.querySelector('.an-root'); return !!r && r.innerText.length > 20; }, null, { timeout: 20000 });
       const noScroll = async (what) => assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, tag + ': horizontal scroll ' + what);
+      const tools = async () => { const launcher = page.getByRole('button', { name: 'AgentNet controls', exact: true }); if (await launcher.getAttribute('aria-expanded') !== 'true') await launcher.click(); };
 
       // Comic, from a saved "default".
       await page.goto(target);
@@ -50,13 +51,16 @@ const local = (version) => {
         await document.fonts.ready;
         const sr = document.getElementById('skin').shadowRoot, root = sr && sr.querySelector('.skin-root');
         const kept = document.adoptedStyleSheets.flatMap((s) => [...s.cssRules].map((r) => r.constructor.name));
-        return { shadow: !!sr, theme: root && root.dataset.theme, kids: [...document.body.children].map((e) => e.id), saved: localStorage.getItem('agentnet.skin'),
+        const notice = document.querySelector('.skin-route-notice');
+        return { shadow: !!sr, theme: root && root.dataset.theme, kids: [...document.body.children].map((e) => e.id || e.className),
+          routeNotice: notice && { tag: notice.tagName, role: notice.getAttribute('role'), hidden: notice.hidden, text: notice.textContent }, saved: localStorage.getItem('agentnet.skin'),
           onest: [...document.fonts].some((f) => f.family === 'Onest' && f.status === 'loaded'), kinds: [...new Set(kept)].sort(),
           shadowPop: getComputedStyle(sr.querySelector('button')).boxShadow };
       });
       assert(comic.shadow, tag + ': Comic in a shadow root');
       assert.equal(comic.theme, scheme, tag + ': Comic follows the device theme');
-      assert.deepEqual(comic.kids, ['skin'], tag + ': Comic shows no switcher');
+      assert.deepEqual(comic.kids, ['skin', 'skin-route-notice'], tag + ': Comic shows no switcher, only its host routing notice');
+      assert.deepEqual(comic.routeNotice, { tag: 'DIV', role: 'alert', hidden: true, text: '' }, tag + ': host routing notice is inert until needed');
       assert.equal(comic.saved, 'comic', tag + ': saved default rewritten');
       assert(comic.onest, tag + ': Comic fonts loaded from its package');
       assert.deepEqual(comic.kinds, ['CSSFontFaceRule', 'CSSPropertyRule'], tag + ': document rules are faces and properties only');
@@ -89,15 +93,16 @@ const local = (version) => {
       assert.deepEqual(await page.evaluate(() => window.__unstyledBars), [], tag + ': a load shows no unstyled host switcher');
       const layout = await page.evaluate(() => {
         const bar = document.getElementById('skin-bar').getBoundingClientRect(), skin = document.getElementById('skin').getBoundingClientRect();
-        return { barBottom: bar.bottom, skinTop: skin.top, skinBottom: skin.bottom, h: innerHeight, scheme: document.getElementById('skin-bar').dataset.scheme };
+        return { barWidth: bar.width, skinTop: skin.top, skinBottom: skin.bottom, h: innerHeight, scheme: document.getElementById('skin-bar').dataset.scheme };
       });
-      assert(layout.barBottom <= layout.skinTop + 0.5, tag + ': the switcher never covers the skin');
-      assert(Math.abs(layout.skinBottom - layout.h) < 1, tag + ': the skin fills the rest of the page');
+      assert.equal(layout.skinTop, 0, tag + ': the skin starts at the viewport top');
+      assert(layout.barWidth <= 44.5, tag + ': compact host control at rest');
+      assert(Math.abs(layout.skinBottom - layout.h) < 1, tag + ': the skin fills the viewport');
       assert.equal(layout.scheme, scheme, tag + ': switcher follows the theme');
       await noScroll('Notebook');
       await snap('notebook');
       // Keyboard: the skin menu opens with the arrow key, closes with Escape.
-      await page.getByRole('button', { name: /^Skin: / }).focus();
+      await tools(); await page.getByRole('button', { name: /^Skin: / }).focus();
       await page.keyboard.press('ArrowDown');
       await page.getByRole('menu', { name: 'Skins' }).waitFor();
       assert.equal(await page.evaluate(() => document.getElementById('skin-bar').shadowRoot.activeElement.getAttribute('aria-checked')), 'true', tag + ': focus on the skin in use');
@@ -128,21 +133,22 @@ const local = (version) => {
       // A browser-local skin, from the switcher.
       await page.goto(origin + '/?skin=notebook');
       await page.getByRole('heading', { name: 'Notebook', exact: true }).waitFor();
-      await page.getByRole('button', { name: /^Skin: / }).click();
+      await tools(); await page.getByRole('button', { name: /^Skin: / }).click();
       await page.getByRole('menuitem', { name: /Import or remove skins/ }).click();
       await page.getByLabel('Import skin files', { exact: true }).setInputFiles(local(1));
       await page.getByText(/Stored Scratch pad/).waitFor();
       await snap('import');
       await page.getByRole('button', { name: 'Done' }).click();
-      await page.getByRole('button', { name: /^Skin: / }).click();
+      await tools(); await page.getByRole('button', { name: /^Skin: / }).click();
       await page.getByRole('menuitemradio', { name: /Scratch pad/ }).click();
       await page.getByRole('button', { name: 'Use this skin' }).click();
       await page.getByRole('heading', { name: 'Scratch pad 1' }).waitFor();
+      assert.equal(await page.locator('#skin-bar .launcher').isVisible(), false, tag + ': a current skin with native controls hides fallback');
       assert.equal(await page.getByRole('heading', { name: 'Scratch pad 1' }).evaluate((e) => getComputedStyle(e).color), 'rgb(12, 80, 60)', tag + ': local CSS in its shadow root');
       await page.reload();
       await page.getByRole('heading', { name: 'Scratch pad 1' }).waitFor();
       assert.equal(await page.getByRole('button', { name: 'Use this skin' }).count(), 0, tag + ': same digest keeps trust');
-      await page.getByRole('button', { name: /^Skin: / }).click();
+      await tools(); await page.getByRole('button', { name: /^Skin: / }).click();
       await page.getByRole('menuitem', { name: /Import or remove skins/ }).click();
       await page.getByLabel('Import skin files', { exact: true }).setInputFiles(local(2));
       await page.getByText(/Stored Scratch pad/).waitFor();
@@ -151,7 +157,16 @@ const local = (version) => {
       await page.getByRole('button', { name: 'Use this skin' }).waitFor(); // changed bytes: asked again
       await page.getByRole('button', { name: 'Use this skin' }).click();
       await page.getByRole('heading', { name: 'Scratch pad 2' }).waitFor();
-      await page.getByRole('button', { name: /^Skin: / }).click();
+      await tools(); await page.getByRole('button', { name: /^Skin: / }).click();
+      await page.getByRole('menuitem', { name: /Import or remove skins/ }).click();
+      await page.getByLabel('Import skin files', { exact: true }).setInputFiles(local(3, true));
+      await page.getByText(/Stored Scratch pad/).waitFor();
+      await page.getByRole('button', { name: 'Done' }).click();
+      await page.reload();
+      await page.getByRole('button', { name: 'Use this skin' }).click();
+      await page.getByRole('heading', { name: 'Couldn’t open Scratch pad', exact: true }).waitFor();
+      assert.equal(await page.locator('#skin-bar .launcher').isVisible(), true, tag + ': failed mount restores fallback despite its earlier claim');
+      await tools(); await page.getByRole('button', { name: /^Skin: / }).click();
       await page.getByRole('menuitem', { name: /Import or remove skins/ }).click();
       page.once('dialog', (d) => d.accept());
       await page.getByRole('button', { name: 'Remove Scratch pad' }).click();
@@ -163,7 +178,7 @@ const local = (version) => {
 
       // One step back to Comic; reload keeps it.
       await page.goto(origin + '/?skin=notebook');
-      await page.getByRole('button', { name: 'Switch to Comic' }).click();
+      await tools(); await page.getByRole('button', { name: 'Switch to Comic' }).click();
       await comicUp();
       await page.reload();
       await comicUp();

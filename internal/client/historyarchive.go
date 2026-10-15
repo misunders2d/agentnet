@@ -190,6 +190,7 @@ func (a *Agent) archivePack(ctx context.Context) (err error) {
 		proactive, snapshot   bool
 		conversationAudience  bool
 		steer                 bool
+		guestAgent            bool
 		mention, organization bool
 	}
 	var selectedRows []selected
@@ -206,6 +207,13 @@ func (a *Agent) archivePack(ctx context.Context) (err error) {
 		// even when a later local erase removed the plaintext classification.
 		priorRequired, r.conversationAudience = splitConversationAudienceRequirement(priorRequired)
 		priorRequired, r.steer = splitSteerRequirement(priorRequired)
+		priorRequired, r.guestAgent = splitGuestAgentRequirement(priorRequired)
+		metadataGuest, ge := guestAgentCopy(nil, conv, "", sub, body, "")
+		if ge != nil {
+			err = ge
+			break
+		}
+		r.guestAgent = r.guestAgent || metadataGuest
 		followup, e := carriedFollowup(sub, body)
 		if e != nil {
 			err = e
@@ -269,6 +277,7 @@ func (a *Agent) archivePack(ctx context.Context) (err error) {
 	snapshotExtension := false
 	conversationAudienceExtension := false
 	steerExtension := false
+	guestAgentExtension := false
 	chunkBytes := len(`{"v":1,"entries":[]}`)
 	mentionExtension, organizationExtension := false, false
 	for _, r := range selectedRows {
@@ -303,6 +312,7 @@ func (a *Agent) archivePack(ctx context.Context) (err error) {
 		chunkBytes += n
 		chunk.Entries = append(chunk.Entries, entry)
 		steerExtension = steerExtension || r.steer
+		guestAgentExtension = guestAgentExtension || r.guestAgent
 		mentionExtension = mentionExtension || r.mention
 		organizationExtension = organizationExtension || r.organization
 		snapshotExtension = snapshotExtension || r.snapshot
@@ -320,6 +330,7 @@ func (a *Agent) archivePack(ctx context.Context) (err error) {
 			required = protocol.CapTopicContext
 		}
 	}
+	required = guestAgentRequirement(required, guestAgentExtension)
 	required = steerRequirement(required, steerExtension)
 	required = conversationAudienceRequirement(required, conversationAudienceExtension)
 	data, err := envelope.MarshalHistoryArchiveChunk(chunk)

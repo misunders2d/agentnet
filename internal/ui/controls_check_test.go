@@ -7,8 +7,8 @@ import (
 
 // The browser engine's message controls (reactions, edits, deletions) in
 // node against the same rules as the Go client: exact direction for equal
-// ids, retraction of shared bytes, resolution order, refusal of an older
-// peer. testdata/controls_check.mjs is the UI side's fixture.
+// ids, retraction of shared bytes, resolution order and older-reader
+// delivery gates. testdata/controls_check.mjs is the UI side's fixture.
 func TestControlsLogic(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {

@@ -2,7 +2,7 @@
 import * as wire from '../static/wire.mjs';
 import {openIDB} from '../static/engine.mjs';
 
-export async function checkControlHistory({world,check,realIDB,c,root,conv,keys,address,roster,pub,alicePub}) {
+export async function checkControlHistory({world,check,realIDB,c,root,conv,keys,address,roster,pub,alicePub,aliceKeys}) {
  const source=await world(),target=await world();
  try {
   await source.receive(c.proof);await source.receive(c.context);
@@ -10,6 +10,32 @@ export async function checkControlHistory({world,check,realIDB,c,root,conv,keys,
   const original={v:2,id:wire.newID(),lid:wire.newID(),from:address,to:alicePub.address,ts:1700000000,kind:'message',conv,root:wire.rootJSON(root),body:'original immutable text',fan:[{person:roster.person,roster:await wire.rosterHash(roster)}]};
   const row={...original,fp:source.e.fp,at:1700000000000,state:'delivered',envelope:await wire.seal(original,keys,alicePub),group_admission:stamp,recipient_fp:await wire.fingerprint(alicePub),required_cap:wire.CapGroup};
   await source.st.write([{s:'outbox',k:row.id,v:row}]);
+  const fetch=source.e.fetch,posted=[],profiles=new Map(),base=[wire.CapEnv2,wire.CapPerson,wire.CapGroup];
+  const caps=async names=>{const record=await wire.newCaps(aliceKeys,alicePub.address,wire.newID(),names);profiles.set(alicePub.address,{sessions:[record.session],caps:[JSON.parse(wire.capsJSON(record))]});};
+  source.e.queueOutbox=()=>{};
+  source.e.fetch=async(url,o)=>{const path=new URL(url).pathname;
+   if(path==='/v1/version')return new Response(JSON.stringify({realm_id:root.realm,features:['env2','env3','caps','person2']}));
+   if(path.endsWith('/profile'))return new Response(JSON.stringify(profiles.get(path.slice(11,-8))||{sessions:[],caps:[]}));
+   if(path==='/v1/messages'){await wire.verifyEnvelope(wire.parseEnvelope(o.body),pub.sign_key);posted.push(o.body);return new Response(JSON.stringify({state:'custody'}));}
+   return fetch(url,o);
+  };
+  await caps(base);
+  await source.e.messageControl('react',{conv,id:row.id,dir:'out',emoji:'🎉'});
+  const waiting=(await source.st.all('outbox')).filter(r=>r.control),copy=waiting.find(r=>r.to===alicePub.address);
+  check(!!copy&&waiting.every(r=>r.state==='waiting')&&posted.length===0,'offline/old group readers keep social controls as waiting copies, never failed/delivered');
+  const controlView=await source.e.groupThread(conv);
+  check(controlView.messages.find(r=>r.lid===row.lid)?.reactions.some(r=>r.emoji==='🎉'),'waiting group reaction is projected locally');
+  await caps([...base,wire.CapControl]);await source.e.post(copy);await source.e.post(copy);
+  const released=await source.st.get('outbox',copy.id);
+  check(released.state==='custody'&&released.envelope===copy.envelope&&posted.filter(raw=>wire.parseEnvelope(raw).id===copy.id).length===1,'signed group support releases exact sealed copy once to custody');
+  const other=waiting.find(r=>r.id!==copy.id);
+  if(other)check((await source.st.get('outbox',other.id)).state==='waiting','supported group reader progresses independently of another waiting copy');
+  const pin=await source.st.get('pins',alicePub.address),count=(await source.st.all('outbox')).length;
+  await source.st.write([{s:'pins',k:alicePub.address,v:{...pin,pending:{fingerprint:'f'.repeat(36)}}}]);
+  let refused='';try{await source.e.messageControl('edit',{conv,id:row.id,dir:'out',text:'must not queue'});}catch(e){refused=e.message;}
+  check(/recipient key changed/.test(refused)&&(await source.st.all('outbox')).length===count&&posted.length===1,'changed group key refuses local control before any copy or handover');
+  await source.st.write([{s:'pins',k:alicePub.address,v:pin}]);
+  source.e.fetch=fetch;
   source.e.groupSupport=async()=>{};source.e.ctlSupport=async(_address,_pin,cap)=>[cap!==wire.CapHistoryArchive,''];source.e.post=async()=>{};
   await source.e.messageControl('edit',{conv,id:row.id,dir:'out',text:'final edited text'});
   await source.e.messageControl('react',{conv,id:row.id,dir:'out',emoji:'👍'});

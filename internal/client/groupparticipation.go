@@ -39,7 +39,12 @@ func (m dmMembers) keyEpoch(fp string) string {
 
 // Scope is bound to original public proof, never a label or today's inferred host role.
 func (m dmMembers) verifyInviteEpoch(q dbq, ev protocol.ParticipationEvent) (bool, error) {
-	if ev.Group == nil || ev.Host == nil || !m.authorEpoch(ev.Author) && !m.roomEvents[ev.Hash()] {
+	derived := false
+	if ev.Parent != "" {
+		p, ok := m.guestParents[ev.Parent]
+		derived = ok && p.Host.Person == ev.Author.Person && p.Host.Address == ev.Author.Address && p.Host.Fingerprint == ev.Author.Fingerprint && sameParticipationTopic(p.Topic, ev.Topic)
+	}
+	if ev.Group == nil || ev.Host == nil || !derived && !m.authorEpoch(ev.Author) && !m.roomEvents[ev.Hash()] {
 		return false, nil
 	}
 	scope := ev.Group
@@ -53,7 +58,7 @@ func (m dmMembers) verifyInviteEpoch(q dbq, ev protocol.ParticipationEvent) (boo
 	if c.Hash != scope.Hash || scope.Seq > m.group.State.Seq {
 		return false, nil
 	}
-	if scope.HostRole == "visitor" && ev.Role != protocol.RoleHuman && (ev.Type == protocol.EventInvite || ev.Type == protocol.EventScope) {
+	if !derived && scope.HostRole == "visitor" && ev.Role != protocol.RoleHuman && (ev.Type == protocol.EventInvite || ev.Type == protocol.EventScope) {
 		if now, ok := m.group.State.Member(ev.Author.Person); !ok || !now.Admin || !slices.Contains(c.Admins, ev.Author.Person) {
 			return false, nil
 		}
@@ -77,6 +82,10 @@ func (m dmMembers) verifyInviteEpoch(q dbq, ev protocol.ParticipationEvent) (boo
 	return true, nil
 }
 func (m dmMembers) bindGroupInvite(ev *protocol.ParticipationEvent) error {
+	if ev.Parent != "" {
+		ev.Group = &protocol.ParticipationGroup{Seq: m.group.State.Seq, Hash: m.group.State.Hash(), HostRole: "visitor"}
+		return nil // the exact current human parent, not group membership, authorizes this transient helper
+	}
 	member, ok := m.group.State.Member(ev.Author.Person)
 	if !ok || !m.device(ev.Author.Address, ev.Author.Fingerprint) {
 		return errors.New("group: inviter is not a current member")
@@ -133,6 +142,7 @@ func (a *Agent) mayDeliverGroupParticipation(env envelope.Envelope) (bool, bool,
 		return true, false, err
 	}
 	required, _ = splitConversationAudienceRequirement(required)
+	required, _ = splitGuestAgentRequirement(required)
 	if topicEvent != "" {
 		if err = json.Unmarshal([]byte(topicEvent), &in.TopicEvent); err != nil {
 			return true, false, err
@@ -167,6 +177,7 @@ func (a *Agent) mayDeliverGroupParticipation(env envelope.Envelope) (bool, bool,
 		}
 	}
 	in.Replica = in.Sub == envelope.SubExcerpt
+	in.V, in.From, in.To = envelope.Version2, a.Address, env.To
 	m, err := membersIn(a.store.db, in.Conv)
 	if errors.Is(err, ErrGroupContextPending) || errors.Is(err, errPersonConflict) {
 		return true, false, nil
@@ -182,6 +193,7 @@ func (a *Agent) mayDeliverGroupParticipation(env envelope.Envelope) (bool, bool,
 		return true, false, err
 	}
 	allowed := m.device(env.To, fp) && epoch != "" && epoch == m.keyEpoch(fp) || info.External && env.To == info.Host.Address && fp == info.Host.Fingerprint && epoch == ""
+	allowed = allowed || epoch == "" && guestParentDecisionReader(a.store.db, in, info, m, env.To, fp)
 	if !allowed && humanEndEvent(in, info) {
 		allowed, err = humanEndReader(a.store.db, in.Conv, env.To, fp)
 		if err != nil {
@@ -189,7 +201,11 @@ func (a *Agent) mayDeliverGroupParticipation(env envelope.Envelope) (bool, bool,
 		}
 	}
 	if in.Human != nil {
-		err = humanTurnAuthorization(a.store.db, in, a.Address, a.Self().Fingerprint(), env.To, fp, false)
+		if in.Sub == envelope.SubEvent && info.Parent != "" {
+			err = guestEventAuthority(a.store.db, in, m, env.To, fp)
+		} else {
+			err = humanTurnAuthorization(a.store.db, in, a.Address, a.Self().Fingerprint(), env.To, fp, false)
+		}
 		allowed = err == nil && (!m.device(env.To, fp) || epoch != "" && epoch == m.keyEpoch(fp))
 	}
 	if allowed && in.Human != nil && in.Human.AgentAuthor() && in.Target != nil {

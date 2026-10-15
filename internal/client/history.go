@@ -211,6 +211,16 @@ func (a *Agent) historyCopy(to identity.Public, conv string, raw []byte, item Hi
 func insertCopies(tx *sql.Tx, copies []outCopy) error {
 	now := time.Now()
 	for _, c := range copies {
+		derived, err := guestAgentCopy(nil, c.in.Conv, c.in.PID, c.in.Sub, c.in.Body, humanJSON(c.in.Human))
+		if err != nil {
+			return err
+		}
+		if !derived && c.in.Sub == envelope.SubHistory {
+			if _, err = topicCopy(tx, c.in.Conv, c.in.PID, c.in.Sub, c.in.Body, "", &derived); err != nil {
+				return err
+			}
+		}
+		c.required = guestAgentRequirement(c.required, derived)
 		data, _ := json.Marshal(c.env)
 		body := ""
 		if c.in.Human != nil && c.in.Human.ConversationAudience() || c.in.Sub == envelope.SubHistory && conversationAudienceCopy(c.in.Sub, c.in.Body, "") || c.required == protocol.CapTopicContext || c.required == protocol.CapModelSync || c.required == protocol.CapModelSyncV2 || c.required == protocol.CapGroup || c.required == protocol.CapReadSync || c.required == protocol.CapOwnSyncV2 || c.required == protocol.CapOwnSyncV3 || c.required == protocol.CapTopicStateSync {

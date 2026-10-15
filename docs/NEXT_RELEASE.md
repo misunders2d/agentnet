@@ -1,12 +1,19 @@
-# v0.8.28 — prepared release package
+# v0.8.31 — approved implementation and release
 
-The current planned work is [V0_8_28.md](plans/V0_8_28.md): WebKit crash and
-corrupted Android skin-cache blockers; moved-topic invitations, retained legacy
-list editing, truthful move notices, explicit request resolution and presentation
-fixes; stable chat/topic links; focused Android, Windows and native-permission
-qualification. The Linear milestone has the same scope. Implementation has not
-started; preserve existing verified behavior and batch focused fixes before one
-integrated release gate pass. Publication and rollout remain gated.
+Current scope and evidence: [V0_8_31.md](plans/V0_8_31.md); full owner goal:
+[V0_8_31_GOAL.md](plans/V0_8_31_GOAL.md). v0.8.30 is published and deployed.
+Guest-owned agents, remaining chat/action latency, resilient social controls,
+guest participation/reinvitation, native live activity, stale request state,
+full-window skins, Windows sounds, narrow invitation decisions, intentional
+quotes and unread correctness are selected. WebKit recurrence remains urgent
+investigation with the existing owner-authorized carry-forward if unresolved.
+Projects stays reserved for v0.9.0.
+
+Root orchestrates, independently challenges and verifies; GPT-6.1-sol xhigh
+workers implement in Herdr tab 3 and Claude consults in tab 2. Batch focused
+fixes before stable integrated qualification. ThinkPad is offline; its actual
+latency/crash acceptance is not inferred from local fixtures. Publication is
+authorized after required gates and artifact verification.
 
 The records below describe earlier releases and their evidence.
 

@@ -5,7 +5,24 @@ import (
 	"testing"
 	"time"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
+
+// Inspect the exact payload sent by balloon without displaying anything.
+// Sound remains the Shell's choice; this does not prove audible acceptance.
+func TestBalloonUsesSystemSoundAndQuietTime(t *testing.T) {
+	nid := balloonData(41, 7, "AgentNet test", "A new message")
+	if nid.InfoFlags&niifNoSound != 0 {
+		t.Fatal("notification unconditionally silences the system sound")
+	}
+	if nid.InfoFlags&niifQuietTime == 0 || nid.InfoFlags&niifInfo == 0 {
+		t.Fatalf("notification must retain quiet time and the information icon: %#x", nid.InfoFlags)
+	}
+	if nid.Wnd != 41 || nid.ID != 7 || nid.Flags != nifInfo || windows.UTF16ToString(nid.InfoTitle[:]) != "AgentNet test" || windows.UTF16ToString(nid.Info[:]) != "A new message" {
+		t.Fatalf("notification routing or content changed: %+v", nid)
+	}
+}
 
 // The struct matches NOTIFYICONDATAW as documented in shellapi.h.
 func TestNotifyIconDataLayout(t *testing.T) {

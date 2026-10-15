@@ -22,6 +22,7 @@
 (async () => {
   "use strict";
   const page = document.getElementById("skin");
+  let bar = null, controlsRoot = null;
   const browser = window.agentnetEngine;
   let openPortable;
 
@@ -258,7 +259,9 @@
       }
       return r;
     };
-    const host = Object.freeze(Object.assign({}, bound, common, { api, workspaces, linkTo: (target) => linkTo(workspaces?.list().find(w=>w.id===wid)?.realm || bound.workspace.realm, target) }, canRebind && bound.platform === "daemon" ? { reconnect: () => rebind(host) } : {}));
+    const controls = { open(trigger) { if (window.agentnet === host) bar?.open(trigger); },
+      claim(root) { return window.agentnet === host && root === controlsRoot && root.isConnected ? bar.claim() : () => {}; } };
+    const host = Object.freeze(Object.assign({}, bound, common, { api, workspaces, linkTo: (target) => linkTo(workspaces?.list().find(w=>w.id===wid)?.realm || bound.workspace.realm, target) }, bar ? { controls } : {}, canRebind && bound.platform === "daemon" ? { reconnect: () => rebind(host) } : {}));
     return host;
   };
   // rebind: this computer's program restarted and retired the membership's
@@ -367,7 +370,6 @@
 
     // The switcher over every skin but Comic: before trust is asked, so the
     // way back is there from the first moment.
-    let bar = null;
     if (selected.id !== HOME) {
       const { mountSkinBar } = await import("/assets/skinbar.mjs");
       bar = mountSkinBar(document.body, {
@@ -375,6 +377,7 @@
         manage: common.manageLocalSkins || null, overviews: (fn) => { overviewSeen.add(fn); return () => overviewSeen.delete(fn); },
       });
       await bar.ready; // No unstyled host controls before the skin’s first paint.
+      window.agentnet = hostFor(shell ? shell.active : "default");
     }
 
     let trusted = isTrusted(selected, null);
@@ -418,16 +421,19 @@
     // its root; operations it started keep the host they started with.
     let root = null, mounting = Promise.resolve();
     const mountSkin = async () => {
+      bar?.reset(); controlsRoot = null;
       openHandler = null; openKinds = new Set();
       if (root) { if (typeof module.unmount === "function") { try { await module.unmount(root); } catch (_) { /* replaced anyway */ } } root.remove(); }
       root = document.createElement("div");
       root.id = "skin";
       root.className = "skin-root";
       surface.append(root);
+      controlsRoot = root;
       await module.mount(root, window.agentnet);
       if (!openHandler) throw new Error("This skin must register notification handling with host.onOpen");
     };
     const failed = (e) => {
+      bar?.reset(); controlsRoot = null;
       const box = text("div", ""); box.className = "skin-root";
       if (root) root.replaceWith(box); else surface.append(box);
       root = box;
@@ -540,6 +546,7 @@
     route();
     if (!fallback) try { localStorage.setItem("agentnet.skin", selected.id); localStorage.setItem("agentnet.skin.package", selected.id); } catch (_) {}
   } catch (e) {
+    bar?.reset(); controlsRoot = null;
     const box = text("div", "");
     box.className = "skin-root";
     surface.replaceChildren(...(surface === page ? [] : [...surface.querySelectorAll("link")]), box);

@@ -18,6 +18,7 @@ type piRPCBridge struct {
 	ctx                  context.Context
 	input                io.WriteCloser
 	output               io.Writer
+	onActivity           func(nativeActivity)
 	ready                chan struct{}
 	readyOnce, closeOnce sync.Once
 	mu, writeMu, readMu  sync.Mutex
@@ -172,13 +173,15 @@ func piMessageText(raw json.RawMessage) (role, text, stop string, tool bool) {
 }
 func (b *piRPCBridge) event(raw []byte) {
 	var e struct {
-		Type    string          `json:"type"`
-		ID      string          `json:"id"`
-		Command string          `json:"command"`
-		Success bool            `json:"success"`
-		Method  string          `json:"method"`
-		Message json.RawMessage `json:"message"`
-		Data    struct {
+		Type                  string          `json:"type"`
+		ID                    string          `json:"id"`
+		Command               string          `json:"command"`
+		Success               bool            `json:"success"`
+		Method                string          `json:"method"`
+		ToolName              json.RawMessage `json:"toolName"`
+		AssistantMessageEvent json.RawMessage `json:"assistantMessageEvent"`
+		Message               json.RawMessage `json:"message"`
+		Data                  struct {
 			Disposition string `json:"disposition"`
 		} `json:"data"`
 		Aborted   bool   `json:"aborted"`
@@ -201,6 +204,28 @@ func (b *piRPCBridge) event(raw []byte) {
 		return
 	}
 	switch e.Type {
+	case "tool_execution_start":
+		if b.onActivity != nil && b.active {
+			var name string
+			if json.Unmarshal(e.ToolName, &name) == nil {
+				if k := nativeToolActivity(name); k != activityUnknown {
+					b.onActivity(k)
+				}
+			}
+		}
+	case "tool_execution_end":
+		if b.onActivity != nil && b.active {
+			b.onActivity(activityWorking)
+		}
+	case "message_update":
+		if b.onActivity != nil && b.active {
+			var event struct {
+				Type string `json:"type"`
+			}
+			if json.Unmarshal(e.AssistantMessageEvent, &event) == nil && event.Type == "text_start" {
+				b.onActivity(activityAnswer)
+			}
+		}
 	case "agent_start":
 		if b.omp && b.ended {
 			return

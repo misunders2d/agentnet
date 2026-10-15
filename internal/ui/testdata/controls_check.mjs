@@ -1,7 +1,7 @@
 // Message controls in the browser engine, on the in-memory store and with
 // no network: the legacy target chosen by direction (a received id can
 // equal a sent one), retraction keeping bytes another live message still
-// shows, resolution order, and an older peer refused by name. Run with
+// shows, resolution order, and an older reader's delivery gate. Run with
 // node; nothing is joined or sent.
 import { Engine, memoryStore, EXEC_RUNNING_MAX_AGE, heldDiagnosticCode } from "../static/engine.mjs";
 import * as wire from "../static/wire.mjs";
@@ -132,23 +132,21 @@ const ctl = (id, sub, body, ref, from = "peer/desk") => ({ id, v: 3, control: tr
   check(m.edited && m.text === "second" && m.revision === 2, "the highest revision shows: " + JSON.stringify([m.edited, m.text, m.revision]));
 }
 
-// 4. An older peer: no ctl3 in its signed capabilities, or a relay without
-// env3, is refused by name; nothing is sent as an older version.
+// 4. Capability checks still require ctl3 and env3. Composition may retain
+// a sealed social control, but its delivery never downgrades the protocol.
 {
   const { store, e } = await fresh();
   await store.write([{ s: "inbox", k: ID, v: { id: ID, v: 1, from: "peer/desk", fp: PEER, kind: "message", body: "theirs", at: 1 } }]);
   e.sendKey = async () => ({ fingerprint: PEER });
   e.pubOf = async () => ({ sign_key: null });
   e.featureList = ["env2", "caps", "person2"];
-  let why = "";
-  try { await e.messageControl("react", { id: ID, dir: "in", emoji: "👍" }); } catch (err) { why = err.message; }
-  check(why.includes("cannot carry"), "a relay without env3 refuses controls: " + why);
+  let [ok, why] = await e.ctlSupport("peer/desk", { fingerprint: PEER });
+  check(!ok && why.includes("cannot carry"), "a relay without env3 cannot deliver controls: " + why);
   e.featureList = ["env2", "caps", "person2", "env3"];
   e.profile = async () => ({ sessions: ["s1"], caps: [] });
-  why = "";
-  try { await e.messageControl("react", { id: ID, dir: "in", emoji: "👍" }); } catch (err) { why = err.message; }
-  check(why.startsWith("peer_update: peer/desk cannot read reactions, edits or deletions yet"), "a peer without ctl3 is refused by name with an update cause: " + why);
-  check((await store.all("outbox")).length === 0, "nothing was queued for the older peer");
+  [ok, why] = await e.ctlSupport("peer/desk", { fingerprint: PEER });
+  check(!ok && why.startsWith("peer_update: peer/desk cannot read reactions, edits or deletions yet"), "a peer without signed ctl3 remains unsupported by name: " + why);
+  check((await store.all("outbox")).length === 0, "capability checks themselves queue no control");
   why = "";
   try { await e.messageControl("edit", { id: ID, dir: "in", text: "x" }); } catch (err) { why = err.message; }
   check(why.includes("Only the sender edits"), "editing their message is refused before any send: " + why);

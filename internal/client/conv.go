@@ -250,7 +250,7 @@ func (a *Agent) relayFeatures(ctx context.Context) ([]string, error) {
 // hint (advertisedCaps) it is at most protocol.MaxAdvertisedCaps long;
 // rm1 (protocol.CapRoom) says this program enforces every room reader rule
 // (ROOM_V1 §2.1), so what rm1 implies (rcv1 among them) is not listed.
-var ownCaps = []string{protocol.CapMentionReaction, protocol.CapProactiveAgent, protocol.CapAgentOrganization, protocol.CapConversationAudience, protocol.CapContinuation, protocol.CapRootSync, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapRequestSteer, protocol.CapGroupInvitationManage, protocol.CapHistoryArchive, protocol.CapHeadless, protocol.CapGroupHumanParticipation, protocol.CapModelSyncV2, protocol.CapNotify, protocol.CapTopicOrganization, protocol.CapOwnSyncV2, protocol.CapOwnSyncV3, protocol.CapPerson, protocol.CapReadSync, protocol.CapRoom, protocol.CapSendGroup, protocol.CapTopicContext, protocol.CapTopicParticipation, protocol.CapTopicStateSync, protocol.CapTyping} // apx1 and aid1 are already implied by rm1; 28 includes agent1; independent cau1 leaves four reader slots
+var ownCaps = []string{protocol.CapMentionReaction, protocol.CapProactiveAgent, protocol.CapAgentOrganization, protocol.CapConversationAudience, protocol.CapContinuation, protocol.CapRootSync, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapRequestSteer, protocol.CapGroupInvitationManage, protocol.CapGuestAgent, protocol.CapHistoryArchive, protocol.CapHeadless, protocol.CapGroupHumanParticipation, protocol.CapModelSyncV2, protocol.CapNotify, protocol.CapTopicOrganization, protocol.CapOwnSyncV2, protocol.CapOwnSyncV3, protocol.CapPerson, protocol.CapReadSync, protocol.CapRoom, protocol.CapSendGroup, protocol.CapTopicParticipation, protocol.CapTopicStateSync, protocol.CapTyping} // apx1 and aid1 are already implied by rm1; 28 includes agent1; independent cau1 leaves four reader slots
 
 // capsPublisher is the one publisher of this run's capability records:
 // the daemon's and link.go's waiting session share the session id, and the
@@ -1418,9 +1418,27 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 	if root.Kind == protocol.ConvKindGroup && roomGroupTurn(in) { // a person guest's turn: its PID names its author, not an agent
 		return a.admitGroupTurn(ctx, env, in, root, me, sp, sender, fromQuarantine, hold)
 	}
+	if in.Sub == envelope.SubEvent && in.Human != nil {
+		if err := a.receiveGuestParentProof(ctx, in); err != nil {
+			return hold(reasonProof, err.Error())
+		}
+		if root.Kind == protocol.ConvKindGroup {
+			if handled, e := a.admitGroupVisitorInvite(ctx, env, in, root, me, sp, sender, fromQuarantine, hold); handled {
+				return e
+			}
+		}
+		if handled, e := a.admitExternalParticipation(ctx, env, in, root, me, sp, sender, fromQuarantine, hold); handled {
+			return e
+		}
+		return hold(reasonInvalid, "derived guest event has no exact participation")
+	}
 	if root.Kind == protocol.ConvKindGroup && in.PID != "" && in.Human != nil {
+		derived := false
+		if p, e := a.Participation(in.PID); e == nil {
+			derived = guestAgentAudience(in.Human, p) && p.Claimable()
+		}
 		for _, e := range in.Human.Proof {
-			if e.Role == protocol.RoleHuman && !envelope.ProactiveAgent(in) {
+			if e.Role == protocol.RoleHuman && !envelope.ProactiveAgent(in) && !derived {
 				return hold(reasonInvalid, "group human guest execution audience is not enabled")
 			}
 		}

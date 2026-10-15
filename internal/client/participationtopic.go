@@ -205,7 +205,7 @@ func topicAudienceAuthorization(q dbq, in envelope.Inner, m dmMembers, self stri
 
 // topicCopy is a second requirement beside the existing room/group/agent
 // capability. It also recognizes retained historical proofs after a restart.
-func topicCopy(q dbq, conv, pid, sub, body, human string) (bool, error) {
+func topicCopy(q dbq, conv, pid, sub, body, human string, derived ...*bool) (bool, error) {
 	if sub == envelope.SubGroupContext {
 		// Body is the encrypted carrier descriptor, not the attached context.
 		// Count exact retained scoped records before exposing its memberships.
@@ -262,6 +262,12 @@ func topicCopy(q dbq, conv, pid, sub, body, human string) (bool, error) {
 		return false, nil
 	}
 	var n int
+	if len(derived) > 0 {
+		var guest int
+		err := q.QueryRow(`SELECT count(*),coalesce(sum(CASE WHEN coalesce(json_extract(event,'$.parent'),'')<>'' THEN 1 ELSE 0 END),0) FROM participation_events WHERE conv=? AND pid=? AND json_type(event,'$.topic')='text'`, conv, pid).Scan(&n, &guest)
+		*derived[0] = *derived[0] || guest > 0
+		return n > 0, err
+	}
 	err := q.QueryRow(`SELECT count(*) FROM participation_events WHERE conv=? AND pid=? AND json_type(event,'$.topic')='text'`, conv, pid).Scan(&n)
 	return n > 0, err
 }

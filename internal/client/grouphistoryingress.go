@@ -64,8 +64,9 @@ func (a *Agent) admitGroupHistory(ctx context.Context, env envelope.Envelope, in
 		return a.admitGroupControlHistory(ctx, env, in, root, sender, item, fromQuarantine, hold)
 	}
 	if item.V == 1 && item.PID != "" && item.Human != nil {
+		derived, _ := guestAgentCopy(nil, in.Conv, item.PID, item.Sub, item.Body, humanJSON(item.Human))
 		for _, ev := range item.Human.Proof {
-			if ev.Role == protocol.RoleHuman && !envelope.ProactiveAgent(item.inner(in.Conv)) {
+			if ev.Role == protocol.RoleHuman && !envelope.ProactiveAgent(item.inner(in.Conv)) && !derived {
 				return hold(reasonInvalid, "group human guest execution audience is not enabled")
 			}
 		}

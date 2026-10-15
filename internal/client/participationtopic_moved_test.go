@@ -295,7 +295,7 @@ func TestTopicSnapshotOlderReaderCopiesWaitIndependently(t *testing.T) {
 	w, old, packet, stops := groupTurnsFixture(t)
 	a := w.alice
 	stops[a]()
-	signCapsAfter(t, old, without(ownCaps, protocol.CapTopicContext))
+	signCapsAfter(t, old, without(without(ownCaps, protocol.CapTopicContext), protocol.CapGuestAgent))
 	listMembers(t, a, map[string]bool{old.Address: true}, a.Address, w.bob.Address, old.Address)
 	selected, err := a.SendConv(tctx(t), packet.State.Conv, ConvOutgoing{Body: "selected Main context"})
 	if err != nil {

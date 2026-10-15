@@ -16,6 +16,7 @@ const runStallNotice = 15 * time.Minute
 
 type runActivity struct {
 	last   atomic.Int64
+	native atomic.Uint32
 	wake   chan struct{}
 	warned bool // accessed only by the run's watcher
 }
@@ -29,6 +30,7 @@ func (a *runActivity) stallDue(now time.Time) (time.Duration, bool) {
 		return remaining, false
 	}
 	a.warned = true
+	a.native.Store(0) // output after silence cannot republish an old tool event
 	return 0, true
 }
 
@@ -89,7 +91,7 @@ func (s *store) markRunVisibility(id string, stalled bool) (bool, error) {
 		return false, err
 	}
 	detail := "Running since " + time.Unix(since, 0).UTC().Format(time.RFC3339) + ". Stop is available; nothing stops automatically unless you set a time limit."
-	if current == roomWaitDetail {
+	if current == roomWaitDetail || current == nativeInputDetail {
 		return false, nil
 	} // a known dependency is not unexplained silence
 	if stalled {

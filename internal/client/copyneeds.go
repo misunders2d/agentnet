@@ -32,6 +32,7 @@ type copyNeeds struct {
 	snapshotCap                                                                    bool
 	conversationAudienceCap                                                        bool
 	steer                                                                          bool
+	guestAgent                                                                     bool
 	// A history copy's carried item. A copy kept as ciphertext only (empty
 	// body) carries none: its requirement is the stored column.
 	item               HistoryItem
@@ -49,6 +50,7 @@ func copyNeedsOf(q dbq, id string, v int) (copyNeeds, error) {
 	}
 	n.required, n.conversationAudienceCap = splitConversationAudienceRequirement(n.stored)
 	n.required, n.steer = splitSteerRequirement(n.required)
+	n.required, n.guestAgent = splitGuestAgentRequirement(n.required)
 	n.conversationAudienceCap = n.conversationAudienceCap || conversationAudienceCopy(n.sub, n.body, n.humanRaw)
 	if n.required == "" && n.conversationAudienceCap {
 		n.required = protocol.CapHumanParticipation
@@ -59,6 +61,14 @@ func copyNeedsOf(q dbq, id string, v int) (copyNeeds, error) {
 		return n, snapshotErr
 	}
 	n.snapshotCap = n.snapshotCap || (n.required == protocol.CapTopicContext || n.required == topicContextArchiveProactive)
+	metadataGuest, snapshotErr := guestAgentCopy(nil, n.conv, n.pid, n.sub, n.body, n.humanRaw)
+	n.guestAgent = n.guestAgent || metadataGuest
+	if snapshotErr != nil {
+		return n, snapshotErr
+	}
+	if n.guestAgent && n.required == "" {
+		n.required = protocol.CapGuestAgent
+	}
 	if target == "" {
 		n.proactive = envelope.ProactiveAgent(envelope.Inner{Conv: n.conv, Kind: kind, Origin: origin, ReplyTo: reply, PID: n.pid, Sub: n.sub, Status: n.status})
 	}
@@ -79,7 +89,7 @@ func copyNeedsOf(q dbq, id string, v int) (copyNeeds, error) {
 	if n.required == "" && n.room {
 		n.required = protocol.CapRoom
 	}
-	if n.topicScoped, err = topicCopy(q, n.conv, n.pid, n.sub, n.body, n.humanRaw); err != nil {
+	if n.topicScoped, err = topicCopy(q, n.conv, n.pid, n.sub, n.body, n.humanRaw, &n.guestAgent); err != nil {
 		return n, err
 	}
 	if n.snapshotCap && (n.sub == envelope.SubGroupProof || n.sub == envelope.SubGroupContext) {
@@ -87,6 +97,9 @@ func copyNeedsOf(q dbq, id string, v int) (copyNeeds, error) {
 	}
 	if n.required == "" && n.topicScoped {
 		n.required = protocol.CapTopicParticipation
+	}
+	if n.required == "" && n.guestAgent {
+		n.required = protocol.CapGuestAgent
 	}
 	if n.organizationCap, err = topicOrganizationCopy(q, id, n.sub, n.body); err != nil {
 		return n, err
@@ -135,7 +148,7 @@ func (n copyNeeds) cacheKey(to string) string {
 	return fmt.Sprintf("%s\x00%d\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%v%v%v%v%v%v%v%v%v%v%v\x00%s\x00%s\x00%s\x00%s",
 		to, n.v, n.required, n.stored, n.conv, n.sub, n.pid, n.humanRaw, n.status, n.agentID,
 		n.progress, n.receiverCap, n.room, n.topicScoped, n.organizationCap, n.followup, n.proposal, n.groupedWire, n.historical, n.helper, item.GroupHistory != nil,
-		item.Sub, item.Status, item.PID, item.AgentID) + fmt.Sprint(n.proactive, n.mentionCap, n.agentOrganizationCap, n.snapshotCap, n.conversationAudienceCap, n.steer)
+		item.Sub, item.Status, item.PID, item.AgentID) + fmt.Sprint(n.proactive, n.mentionCap, n.agentOrganizationCap, n.snapshotCap, n.conversationAudienceCap, n.steer, n.guestAgent)
 }
 
 // copyWait is a reason a copy waits that capSupport words itself.
@@ -168,6 +181,11 @@ func (a *Agent) readerCheck(ctx context.Context, to string, key identity.Public,
 		return nil
 	}
 	var err error
+	if n.guestAgent && required != protocol.CapGuestAgent {
+		if err = a.requireParticipationCaps(ctx, key, protocol.CapGuestAgent); err != nil {
+			return err
+		}
+	}
 	if n.conversationAudienceCap {
 		if err = a.requireParticipationCaps(ctx, key, protocol.CapConversationAudience); err != nil {
 			return err

@@ -18,6 +18,7 @@ type claudeStreamBridge struct {
 	ctx                  context.Context
 	input                io.WriteCloser
 	output               io.Writer
+	onActivity           func(nativeActivity)
 	ready                chan struct{}
 	readyOnce, closeOnce sync.Once
 	mu, writeMu, readMu  sync.Mutex
@@ -180,7 +181,37 @@ func (b *claudeStreamBridge) event(raw []byte) {
 		b.session = e.Session
 	}
 	switch e.Type {
+	case "assistant":
+		if b.onActivity != nil && b.active && e.Session == b.session && !e.Replay && e.Message.Role == "assistant" {
+			var blocks []struct{ Type, Name string }
+			if json.Unmarshal(e.Message.Content, &blocks) == nil {
+				k := activityUnknown
+				for _, block := range blocks {
+					if block.Type == "tool_use" {
+						k = nativeToolActivity(block.Name)
+						break
+					}
+					if block.Type == "text" {
+						k = activityAnswer
+					}
+				}
+				if k != activityUnknown {
+					b.onActivity(k)
+				}
+			}
+		}
 	case "user":
+		if b.onActivity != nil && b.active && e.Session == b.session && !e.Replay && e.Message.Role == "user" {
+			var blocks []struct{ Type string }
+			if json.Unmarshal(e.Message.Content, &blocks) == nil {
+				for _, block := range blocks {
+					if block.Type == "tool_result" {
+						b.onActivity(activityWorking)
+						break
+					}
+				}
+			}
+		}
 		var text string
 		if b.session == "" || e.Session != b.session || e.UUID == "" || !e.Replay || string(e.Parent) != "null" || e.Message.Role != "user" || json.Unmarshal(e.Message.Content, &text) != nil {
 			return

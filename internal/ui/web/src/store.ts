@@ -485,6 +485,7 @@ export class Store {
   // slides it away, and opening it again is instant).
   close() {
     if (this.state.open) this.refreshed.delete(this.state.open.id);
+    this.readAcknowledged = { id: "", ids: new Set<string>() };
     this.set({ open: null, pending: null, dm: null, thread: null, typing: null });
   }
 
@@ -532,19 +533,37 @@ export class Store {
     if (this.host.platform === "android" && (this.mobileHidden() || !document.hasFocus())) return;
     const v = this.state.views[o.id];
     if (!v) return;
-    if (this.readAcknowledged.id !== o.id) this.readAcknowledged = { id: o.id, ids: new Set<string>() };
-    const acknowledged = this.readAcknowledged.ids;
     const draft = this.state.drafts[o.id];
     const messages = o.kind === "dm"
       ? ((v as T.DMThread).messages || []).filter(m => draft?.newTopic ? !m.topic : (m.topic || "") === (draft?.topic || ""))
       : v.messages;
-    const ids = (messages || []).filter(m => (m.unread || o.kind === "thread" && m.dir === "out") && !this.reading.has(m.id) && !acknowledged.has(m.id)).map(m => m.id);
+    const scope = JSON.stringify([o.kind, o.id, draft?.topic || "", !!draft?.newTopic]);
+    if (this.readAcknowledged.id !== scope) this.readAcknowledged = { id: scope, ids: new Set<string>() };
+    const acknowledged = this.readAcknowledged.ids;
+    const visible = new Set((messages || []).map(m => m.id));
+    for (const id of acknowledged) if (!visible.has(id)) acknowledged.delete(id);
+    const pending = (messages || []).filter(m => (m.unread || o.kind === "thread" && m.dir === "out") && !this.reading.has(m.id) && !acknowledged.has(m.id));
+    const ids = pending.map(m => m.id);
     if (!ids.length) return;
     ids.forEach(id => this.reading.add(id));
     // The change stream brings the committed read state. Keep exact successful
     // acknowledgements so refreshing a sent device-thread row cannot loop.
-    void this.api.markRead(ids).then(() => {
-      ids.forEach(id => acknowledged.add(id));
+    void this.api.markRead(ids).then(async () => {
+      ids.forEach(id => { acknowledged.add(id); this.reading.delete(id); });
+      if (!this.alive || !pending.some(m => m.unread)) return;
+      // Reuse the read push's loads first. Only a still-stale exact row or
+      // inconsistent badge needs another read; stream arrivals must not add
+      // a second workspace overview for every acknowledgement.
+      await this.openRefresh;
+      const unread = new Set(pending.filter(m => m.unread).map(m => m.id));
+      const stale = () => this.state.views[o.id]?.messages?.some(m => unread.has(m.id) && m.unread);
+      if (this.alive && this.state.open?.id === o.id && stale()) await this.refreshOpen();
+      await this.refresh;
+      if (!this.alive) return;
+      const current = this.state.views[o.id];
+      const summary = o.kind === "dm" ? this.state.overview?.dms?.find(d => d.id === o.id) : this.state.overview?.threads?.find(t => t.id === o.id);
+      if (this.state.open?.id === o.id && current && !stale() && summary?.unread === (current.messages || []).filter(m => m.unread).length) return;
+      void this.load(false, false);
     }).catch(() => {}).finally(() => ids.forEach(id => this.reading.delete(id)));
   }
 

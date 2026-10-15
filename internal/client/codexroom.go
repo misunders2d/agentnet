@@ -175,6 +175,7 @@ type codexRoomBridge struct {
 	ctx                  context.Context
 	input                io.WriteCloser
 	output               io.Writer
+	onActivity           func(nativeActivity)
 	call                 func(context.Context, json.RawMessage) (string, error)
 	native               func(context.Context, nativeCallback) (json.RawMessage, error)
 	nativeCheck          func(nativeCallback) bool
@@ -412,6 +413,24 @@ func (b *codexRoomBridge) event(raw []byte) {
 			}
 		}
 	case "item/started":
+		if b.onActivity != nil && b.thread != "" && b.turn != "" && p.ThreadID == b.thread && p.TurnID == b.turn {
+			var k nativeActivity
+			switch p.Item.Type {
+			case "commandExecution":
+				k = activityCommand
+			case "fileChange":
+				k = activityEditing
+			case "webSearch":
+				k = activitySearch
+			case "mcpToolCall", "dynamicToolCall":
+				k = activityTool
+			case "agentMessage":
+				k = activityAnswer
+			}
+			if k != activityUnknown {
+				b.onActivity(k)
+			}
+		}
 		if p.ThreadID == b.thread && p.TurnID == b.turn && (p.Item.Type == "commandExecution" || p.Item.Type == "fileChange") {
 			var n struct {
 				Item json.RawMessage `json:"item"`
@@ -472,6 +491,12 @@ func (b *codexRoomBridge) event(raw []byte) {
 			b.send(map[string]any{"id": id, "result": map[string]any{"success": e == nil, "contentItems": []any{map[string]string{"type": "inputText", "text": text}}}})
 		}()
 	case "item/completed":
+		if b.onActivity != nil && b.thread != "" && b.turn != "" && p.ThreadID == b.thread && p.TurnID == b.turn {
+			switch p.Item.Type {
+			case "commandExecution", "fileChange", "webSearch", "mcpToolCall", "dynamicToolCall":
+				b.onActivity(activityWorking)
+			}
+		}
 		if p.ThreadID == b.thread && p.TurnID == b.turn {
 			var n struct {
 				Item struct {

@@ -16,25 +16,18 @@ import { agentRejoinState, callName, canBringIn, room, shareable, type Guest, ty
 import { BringBackSnack, type Snack } from "./RoomPanel.snack";
 import { GroupFooter, MemberMenu, groupRights, useGroupChange } from "./GroupAdmin";
 
-/** RoomPanel is the desktop side panel: open on request, and on its own while
- *  someone is helping or waiting to be let in (until closed for that state). */
+/** RoomPanel is the desktop side panel, opened explicitly from the chat. */
 export function RoomPanel() {
   const store = useApp();
   const wide = useWide();
   const roomy = useMedia("(min-width: 1280px)");
   const open = useStore(store, (s) => s.open);
   const t = useStore(store, (s) => s.dm);
-  const o = useStore(store, (s) => s.overview);
   const panel = useStore(store, (s) => s.panel);
-  const [closed, setClosed] = useState("");
   const [snack, setSnack] = useState<Snack | null>(null);
   const current = wide && open?.kind === "dm" && t?.id === open.id ? t : null;
-  const r = current ? room(current, o, {}) : null; // who is here, for opening; names come with the body
-  const busy = r ? [...r.guests, ...r.invited].map((g) => g.key + g.state).join(",") + "|" + r.waiting.map((w) => w.id).join(",") + "|" + r.groupInvites.map(i => i.id + i.state).join(",") : "";
-  const sig = current ? current.id + "|" + busy : "";
-  const attention = !!r && r.guests.length + r.invited.length + r.waiting.length + r.groupInvites.length > 0;
-  const shown = !!current && !!r && (panel || (roomy && attention && closed !== sig));
-  const close = () => { store.setPanel(false); setClosed(sig); };
+  const shown = !!current && panel;
+  const close = () => store.setPanel(false);
   useEffect(() => setSnack(null), [current?.id]); // a snackbar belongs to its conversation
 
   useEffect(() => {
@@ -44,7 +37,7 @@ export function RoomPanel() {
     return () => removeEventListener("keydown", esc);
   });
 
-  if (!shown || !current || !r) return null;
+  if (!shown || !current) return null;
 
   return (
     <>
@@ -201,7 +194,8 @@ function RoomBody({ t, onDismissed }: { t: T.DMThread; onDismissed: (s: Snack) =
   const r = room(t, o, names);
   const { busy, act } = useRoomAction(t.id, onDismissed);
 
-  const invitable = canBringIn(t);
+  const currentTopic = useStore(store, (s) => s.drafts[t.id]?.topic || "");
+  const invitable = canBringIn(t, currentTopic);
   const rights = groupRights(t, o);
   const change = useGroupChange(t);
   const [diagnostics, setDiagnostics] = useState(false);

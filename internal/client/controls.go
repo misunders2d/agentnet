@@ -101,7 +101,7 @@ type ControlRef struct {
 }
 
 // ControlSent is what became of a control: the first copy's id and state,
-// and the devices that got none because they cannot read controls yet.
+// and destinations refused before sealing. Unavailable social readers wait.
 type ControlSent struct {
 	ID      string   `json:"id"`
 	State   string   `json:"state"`
@@ -365,8 +365,8 @@ func (a *Agent) capSupport(ctx context.Context, address string, key identity.Pub
 
 // sendControl seals and sends one control about ref: to the other party of
 // a device thread, or one copy per device of both persons of a
-// conversation, each only if it can read controls. Nothing is ever sent as
-// an older version instead.
+// conversation. Social copies wait for their reader's signed support;
+// nothing is ever sent as an older version instead.
 func (a *Agent) sendControl(ctx context.Context, ref ControlRef, sub, body string) (ControlSent, error) {
 	return a.sendControlAs(ctx, ref, sub, body, protocol.CapControl)
 }
@@ -375,6 +375,14 @@ func (a *Agent) sendControl(ctx context.Context, ref ControlRef, sub, body strin
 // the receiving device (protocol.CapControl for message controls,
 // protocol.CapHeadless for status and decisions).
 func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, cap string) (ControlSent, error) {
+	// Social controls are local durable changes. Reader support gates each
+	// sealed copy's handover, not the change; decisions/status stay strict.
+	social := cap == protocol.CapControl && groupControlSub(sub)
+	activity := nativeActivityStatus(sub, body)
+	var activityRecipient func(string) (bool, error)
+	if activity != nil {
+		activityRecipient = a.nativeActivityRecipients(ctx, ref, *activity)
+	}
 	var captured *envelope.HumanTurn
 	if sub == envelope.SubRevision || sub == envelope.SubRetraction {
 		var e error
@@ -383,9 +391,36 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 			return ControlSent{}, e
 		}
 	}
-	feats, err := a.relayFeatures(ctx)
-	if err != nil && (sub != envelope.SubRetraction || !retryable(err)) {
-		return ControlSent{}, err
+	var feats []string
+	if !social {
+		var err error
+		feats, err = a.relayFeatures(ctx)
+		if err != nil && (sub != envelope.SubRetraction || !retryable(err)) {
+			return ControlSent{}, err
+		}
+	}
+	controlKey := a.sendKey
+	if social {
+		// Known keys need no availability preflight. A freshly linked home
+		// may still need the existing first-use directory pin; pending key
+		// changes and known revocation remain local refusals. Delivery checks
+		// the current directory and reader again before handover.
+		controlKey = func(ctx context.Context, address string) (identity.Public, error) {
+			key, pending, found, err := a.store.peer(address)
+			if err != nil {
+				return identity.Public{}, err
+			}
+			if !found {
+				key, err = a.sendKey(ctx, address)
+				if err != nil {
+					return identity.Public{}, err
+				}
+			}
+			if pending != nil {
+				return identity.Public{}, &KeyChangedError{address, key.Fingerprint(), pending.Fingerprint()}
+			}
+			return key, currentDeliveryRecipient(a.store.db, address, key.Fingerprint())
+		}
 	}
 	eref := &envelope.Ref{ID: ref.ID, Fingerprint: ref.Fingerprint}
 	if ref.Conv == "" {
@@ -393,12 +428,20 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 		if err != nil {
 			return ControlSent{}, err
 		}
-		key, err := a.sendKey(ctx, peer)
+		if activity != nil {
+			send, err := activityRecipient(peer)
+			if err != nil || !send {
+				return ControlSent{}, err
+			}
+		}
+		key, err := controlKey(ctx, peer)
 		if err != nil {
 			return ControlSent{}, err
 		}
-		if ok, why := a.capSupport(ctx, peer, key, feats, cap); !ok && sub != envelope.SubRetraction {
-			return ControlSent{}, fmt.Errorf("%w: %s", ErrNoControls, why)
+		if !social {
+			if supported, detail := a.capSupport(ctx, peer, key, feats, cap); !supported && sub != envelope.SubRetraction {
+				return ControlSent{}, fmt.Errorf("%w: %s", ErrNoControls, detail)
+			}
 		}
 		recipient, err := key.Recipient()
 		if err != nil {
@@ -423,8 +466,10 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 			if e != nil {
 				return ControlSent{}, e
 			}
-			if ok, why := a.capSupport(ctx, selected.Address, selectedKey, feats, cap); !ok && sub != envelope.SubRetraction {
-				return ControlSent{}, fmt.Errorf("%w: %s", ErrNoControls, why)
+			if !social {
+				if ok, why := a.capSupport(ctx, selected.Address, selectedKey, feats, cap); !ok && sub != envelope.SubRetraction {
+					return ControlSent{}, fmt.Errorf("%w: %s", ErrNoControls, why)
+				}
 			}
 			copy, e := a.receiverReturnCopy(ctx, in, nil, *selected)
 			if e != nil {
@@ -476,8 +521,8 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 		return ControlSent{ID: env.ID, State: res.State, Detail: res.Detail}, err
 	}
 	// A conversation: the same device set as a turn (SendConv), every copy
-	// under one logical id; devices that cannot read controls are skipped
-	// and named, never sent something else.
+	// under one logical id. Social copies for unavailable readers remain
+	// sealed and waiting; destinations refused by identity are named.
 	root, _, found, err := a.store.conversation(ref.Conv)
 	if err != nil {
 		return ControlSent{}, err
@@ -501,7 +546,7 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 		for _, member := range packet.State.Members {
 			// A deletion can be queued against the verified local membership;
 			// its delivery still rechecks the current reader and epoch.
-			if sub == envelope.SubRetraction {
+			if social || sub == envelope.SubRetraction {
 				continue
 			}
 			if _, e = a.refreshPerson(ctx, member.Person, false); e != nil {
@@ -590,9 +635,23 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 	lid := protocol.NewID()
 	var copies []outCopy
 	sent := ControlSent{State: protocol.StateDelivered}
+	deferredActivity := false
 	peerCan := false
 	for _, dev := range devices {
-		key, err := a.sendKey(ctx, dev.Address)
+		if activity != nil {
+			send, err := activityRecipient(dev.Address)
+			if errors.Is(err, errNativeActivityDeferred) {
+				deferredActivity = true
+				continue
+			}
+			if err != nil {
+				return sent, err
+			}
+			if !send {
+				continue
+			}
+		}
+		key, err := controlKey(ctx, dev.Address)
 		if err == nil && key.Fingerprint() != dev.Fingerprint() {
 			err = fmt.Errorf("%s's key is not the one its person's roster names", dev.Address)
 		}
@@ -607,11 +666,13 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 		if combinedGroup {
 			additional = []string{protocol.CapGroup}
 		}
-		if ok, why := a.capSupport(ctx, dev.Address, key, feats, cap, additional...); !ok && sub != envelope.SubRetraction {
-			sent.Skipped = append(sent.Skipped, why)
-			continue
+		if !social {
+			if supported, detail := a.capSupport(ctx, dev.Address, key, feats, cap, additional...); !supported && sub != envelope.SubRetraction {
+				sent.Skipped = append(sent.Skipped, detail)
+				continue
+			}
 		}
-		if captured != nil && sub != envelope.SubRetraction {
+		if !social && captured != nil && sub != envelope.SubRetraction {
 			if e := a.requireParticipationCaps(ctx, key, protocol.CapGroupHumanParticipation); e != nil {
 				sent.Skipped = append(sent.Skipped, e.Error())
 				continue
@@ -621,7 +682,7 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 				continue
 			}
 		}
-		if group != nil && !combinedGroup {
+		if !social && group != nil && !combinedGroup {
 			if err := a.requireParticipationCaps(ctx, key, protocol.CapGroup); err != nil && sub != envelope.SubRetraction {
 				sent.Skipped = append(sent.Skipped, dev.Address+": "+err.Error())
 				continue
@@ -675,7 +736,13 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 			peerCan = true
 		}
 	}
-	if !peerCan && peerRequired {
+	if activity != nil && len(copies) == 0 {
+		if deferredActivity {
+			return sent, errNativeActivityDeferred
+		}
+		return sent, nil
+	}
+	if !peerCan && peerRequired && activity == nil {
 		return sent, fmt.Errorf("%w: %s", ErrNoControls, strings.Join(sent.Skipped, "; "))
 	}
 	local := envelope.Inner{V: envelope.Version3, ID: protocol.NewID(), From: a.Address, To: a.Address, TS: time.Now().Unix(),
@@ -765,6 +832,9 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 	if queuedSend(ctx) {
 		queued := a.queuedConv(copies, local.ID, lid)
 		sent.ID, sent.State, sent.Detail = queued.ID, queued.State, queued.Detail
+		if deferredActivity {
+			return sent, errNativeActivityDeferred
+		}
 		return sent, nil
 	}
 	sent.ID = copies[0].env.ID
@@ -777,6 +847,9 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 		switch {
 		case err == nil:
 			state = res.State
+			if rank(state) < rank(sent.State) {
+				sent.Detail = res.Detail
+			}
 		case retryable(err):
 			sent.Detail = err.Error()
 		default:
@@ -785,6 +858,9 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 		if rank(state) < rank(sent.State) {
 			sent.State = state
 		}
+	}
+	if deferredActivity {
+		return sent, errNativeActivityDeferred
 	}
 	return sent, nil
 }

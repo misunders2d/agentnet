@@ -1,3 +1,5 @@
+import { NativeActivity } from "./NativeActivity";
+import { currentNativeActivity } from "./NativeActivity.model";
 // The timeline: messages by day, runs of one author grouped, participation
 // dividers, who is typing and which agent is working. It opens at the
 // bottom (or at the message a notification or approval points to), stays
@@ -195,18 +197,19 @@ function Activity({ ctx, messages }: { ctx: Ctx; messages: AnyMsg[] }) {
     return () => clearTimeout(t);
   }, [typing, now]);
 
-  const busy = new Map<string, { name: string; seed: string; since?: number; what: string; stop?: T.StopAction; stale?: boolean }>();
+  const busy = new Map<string, { name: string; seed: string; since?: number; what: string; activity?: string; stop?: T.StopAction; stale?: boolean }>();
   for (const m of messages) {
     if ((!working(m, messages, ctx) && !m.stop) || (m.actions || []).includes("cancel")) continue; // its approval card shows it, with Stop
     const what = localRunningDetail((isThreadMsg(m) ? m.detail : m.job_detail) || "", working(m, messages, ctx));
+    const nativeActivity = currentNativeActivity(isThreadMsg(m) ? m.detail : m.job_detail, m.exec, working(m, messages, ctx) && !m.stop?.pending);
     if (isThreadMsg(m)) {
       // In a device thread the agent works on what you sent it; what it was sent works on your side.
       const name = m.dir === "out" ? threadAgentName(ctx) : agentName(undefined, ctx.names, ctx.overview?.person, ctx.overview?.person);
-      busy.set(m.stop ? m.id : m.dir, { stop:m.stop, stale:m.exec?.stale, name, seed: m.dir === "out" ? ctx.thread?.peer || m.id : ctx.overview?.me.address || m.id, since: m.exec?.at, what });
+      busy.set(m.stop ? m.id : m.dir, { activity:nativeActivity, stop:m.stop, stale:m.exec?.stale, name, seed: m.dir === "out" ? ctx.thread?.peer || m.id : ctx.overview?.me.address || m.id, since: m.exec?.at, what });
       continue;
     }
     const a = agentOf(ctx, m.pid);
-    if (a) busy.set(m.stop ? m.id : a.pid, { stop:m.stop, stale:m.exec?.stale, name: agentLabel(a, ctx), seed: a.agent_id || a.host.address, since: m.exec?.at, what });
+    if (a) busy.set(m.stop ? m.id : a.pid, { activity:nativeActivity, stop:m.stop, stale:m.exec?.stale, name: agentLabel(a, ctx), seed: a.agent_id || a.host.address, since: m.exec?.at, what });
   }
   if (!entries.length && !busy.size) return null;
   const names = entries.map((e) => e.label || "Someone");
@@ -215,10 +218,10 @@ function Activity({ ctx, messages }: { ctx: Ctx; messages: AnyMsg[] }) {
       {[...busy.entries()].map(([k, b]) => (
         <div key={k} role="status" className="fade-in ml-10 flex max-w-[min(100%,360px)] items-center gap-3 rounded-xl border-[1.5px] border-dashed border-agent-ink bg-surface px-3 py-2">
           <AgentAvatar seed={b.seed} size={32} mood="working" />
-          <span className="min-w-0 leading-tight">
+          <div className="min-w-0 leading-tight">
             <span className="flex items-center gap-2 text-[14px] font-bold text-agent-ink">{b.name} {b.stop?.result?.state === "cancelled" ? "stopped" : b.stop?.result?.refused ? "reported a changed request" : b.stop?.pending ? "— Stop queued" : b.stop?.result ? "is stopping" : b.stale ? "last reported working" : "is working"}<Dots /></span>
-            {(b.what || b.since) && <span className="block truncate text-[13px] text-text-2">{b.what || "since " + timeOf(new Date(b.since! < 1e11 ? b.since! * 1000 : b.since!).toISOString())}</span>}
-          </span>
+            {b.activity ? <NativeActivity detail={b.activity} className="text-[13px] text-text-2 [overflow-wrap:anywhere]" /> : (b.what || b.since) ? <span className="block truncate text-[13px] text-text-2">{b.what || "since " + timeOf(new Date(b.since! < 1e11 ? b.since! * 1000 : b.since!).toISOString())}</span> : null}
+          </div>
           {b.stop && <StopOwnRequest request={b.stop} />}
         </div>
       ))}
