@@ -171,8 +171,8 @@ func TestQueuedFourMemberControlsCommitBeforeDelivery(t *testing.T) {
 						profiles += n
 					}
 				}
-				if requests != 11 || profiles != 3 {
-					t.Fatalf("precommit requests=%d profile GETs=%d, want 11/3 (formerly 14/6): %v", requests, profiles, precommit)
+				if requests != 0 || profiles != 0 {
+					t.Fatalf("precommit requests=%d profile GETs=%d, want 0/0: %v", requests, profiles, precommit)
 				}
 			}
 			t.Logf("members=4 action=%s elapsed=%s requests=%v", action, acknowledged, counts)

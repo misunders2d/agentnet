@@ -3,6 +3,7 @@ package client
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"reflect"
@@ -148,6 +149,26 @@ func TestNativeActivityExactAttemptAndWaitPrecedence(t *testing.T) {
 	if _, err := s.db.Exec(`INSERT INTO inbox(id,sender,ts,kind,body,received_at,state,verified_by,attempts) VALUES(?, ?,1,'task','PRIVATE task',1,'running',?,?)`, j.ID, j.From, j.Key, j.nativeAttempt); err != nil {
 		t.Fatal(err)
 	}
+	type activityRow struct {
+		ID, Sender, Key, State string
+		Conv, PID, Detail      sql.NullString
+		Attempt, Replica, Due  int
+	}
+	read := func() activityRow {
+		t.Helper()
+		var row activityRow
+		if err := s.db.QueryRow(`SELECT id,sender,verified_by,state,conv,pid,detail,attempts,replica,status_due FROM inbox WHERE id=?`, j.ID).Scan(&row.ID, &row.Sender, &row.Key, &row.State, &row.Conv, &row.PID, &row.Detail, &row.Attempt, &row.Replica, &row.Due); err != nil {
+			t.Fatal(err)
+		}
+		return row
+	}
+	unchanged := func(label string, before activityRow) {
+		t.Helper()
+		if after := read(); after != before {
+			t.Fatalf("%s changed exact activity row: before=%+v after=%+v", label, before, after)
+		}
+	}
+	initial := read()
 	for name, change := range map[string]func(*job){
 		"wrong-request": func(j *job) { j.ID = "other" },
 		"wrong-sender":  func(j *job) { j.From = "other/device" },
@@ -159,9 +180,47 @@ func TestNativeActivityExactAttemptAndWaitPrecedence(t *testing.T) {
 		if s.markNativeActivity(t.Context(), other, activityReading) {
 			t.Fatal(name, "changed activity")
 		}
+		unchanged(name, initial)
 	}
-	if !s.markNativeActivity(t.Context(), j, activityReading) || s.markNativeActivity(t.Context(), j, activityReading) {
-		t.Fatal("first update missing or duplicate persisted")
+	// The exact valid attempt may omit optional telemetry when the sole store
+	// connection is unavailable. False must leave every stored field unchanged.
+	conn, err := s.db.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	start := time.Now()
+	deferred := s.markNativeActivity(t.Context(), j, activityReading)
+	elapsed := time.Since(start)
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	unchanged("deliberately deferred valid update", initial)
+	t.Logf("held-connection valid update=%t elapsed=%s row=%+v", deferred, elapsed, read())
+	if deferred {
+		t.Fatal("optional update persisted through the occupied store")
+	}
+	// A fresh public report may follow an omitted optional write. Allow one
+	// such re-emission only after proving no detail/count/authority field moved;
+	// an accepted write and the subsequent duplicate checks remain mandatory.
+	first := false
+	for emission := 0; emission < 2; emission++ {
+		first = s.markNativeActivity(t.Context(), j, activityReading)
+		t.Logf("available-store emission=%d accepted=%t row=%+v", emission+1, first, read())
+		if first {
+			break
+		}
+		unchanged("omitted optional update", initial)
+	}
+	if !first {
+		t.Fatal("no valid update accepted after bounded optional re-emission")
+	}
+	accepted := read()
+	duplicate := s.markNativeActivity(t.Context(), j, activityReading)
+	unchanged("duplicate", accepted)
+	t.Logf("accepted=%t duplicate=%t row=%+v", first, duplicate, read())
+	if duplicate {
+		t.Fatal("duplicate persisted")
 	}
 	var detail string
 	var due, attempts int
@@ -171,16 +230,20 @@ func TestNativeActivityExactAttemptAndWaitPrecedence(t *testing.T) {
 	if _, err := s.db.Exec(`UPDATE inbox SET detail=? WHERE id=?`, roomWaitDetail, j.ID); err != nil {
 		t.Fatal(err)
 	}
+	waiting := read()
 	if s.markNativeActivity(t.Context(), j, activityCommand) {
 		t.Fatal("activity overwrote dependency wait")
 	}
+	unchanged("dependency wait", waiting)
 	for _, state := range []string{stateNeedHuman, stateAnswered, stateResolved, stateCancelReq, stateCancelled, stateInterrupt, stateJobFailed} {
 		if _, err := s.db.Exec(`UPDATE inbox SET state=?,detail='terminal' WHERE id=?`, state, j.ID); err != nil {
 			t.Fatal(err)
 		}
+		terminal := read()
 		if s.markNativeActivity(t.Context(), j, activityCommand) {
 			t.Fatal("late activity changed", state)
 		}
+		unchanged(state, terminal)
 	}
 }
 

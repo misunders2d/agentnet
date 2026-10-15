@@ -356,9 +356,19 @@ func (a *Agent) sync(ctx context.Context) {
 		a.Logf("receipts: %v", err)
 	}
 	a.postOutboxBackground() // live sends do not await bulk proof/history work or its transport
-	a.convSync(ctx)          // only what an event made due: no request otherwise
-	a.syncTeams(ctx)         // team references queued by the stream, verified and pinned (teams.go)
-	a.groupSync(ctx)         // group journal: pending publications first, then heads the stream said changed (convgroup.go)
+	// Give queued inert copies a turn before preparing more history. Empty
+	// wakes use the existing pending-state index instead of handover scans.
+	var queuedSync bool
+	if err := a.store.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM outbox WHERE state=? AND sub IN `+syncSubs+` AND replication_live=0 LIMIT 1)`, stateQueued).Scan(&queuedSync); err != nil {
+		a.Logf("outbox: %v", err)
+	} else if queuedSync {
+		if err := a.flushLane(ctx, false, true); err != nil {
+			a.Logf("outbox: %v", err)
+		}
+	}
+	a.convSync(ctx)  // only what an event made due: no request otherwise
+	a.syncTeams(ctx) // team references queued by the stream, verified and pinned (teams.go)
+	a.groupSync(ctx) // group journal: pending publications first, then heads the stream said changed (convgroup.go)
 	// The last bounded producer page may stage new archive children without
 	// requesting another upkeep turn. Wake after its durable commit as well
 	// as before upkeep, so that page does not depend on an unrelated event.

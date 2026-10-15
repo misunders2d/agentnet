@@ -290,8 +290,8 @@ func groupParticipationHistoryAfterReadmission(t *testing.T, sharedOriginal bool
 	if err = json.Unmarshal([]byte(rawItem), &item); err != nil || item.GroupHistory == nil {
 		t.Fatalf("missing signed historical witness: %v", err)
 	}
-	runAgent(t, phone)
-	runAgent(t, source)
+	stopPhone := runAgent(t, phone)
+	stopSource = runAgent(t, source)
 	eventually(t, "new phone accepts old inert history", func() bool {
 		return inboxCount(t, phone, `id=? AND replica=1 AND state='' AND group_history IS NOT NULL`, originalID) == 1
 	})
@@ -327,6 +327,109 @@ func groupParticipationHistoryAfterReadmission(t *testing.T, sharedOriginal bool
 	kept, err := storedGroupHistory(phone.store.db, originalID)
 	if err != nil || groupHistoryJSON(kept) != groupHistoryJSON(item.GroupHistory) {
 		t.Fatalf("received exact witness not retained: %v", err)
+	}
+	if derived {
+		stopPhone()
+		stopSource()
+		t.Run("cold-author-admission", func(t *testing.T) {
+			guest := part.Host.Person
+			if _, member := current.State.Member(guest); member {
+				t.Fatal("cold author must be a nonmember")
+			}
+			rootRaw, _ := json.Marshal(packet.Root)
+			copy, err := source.historyCopy(phone.Self(), conv, rootRaw, item)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, table := range []string{"person_devices", "person_chain", "persons"} {
+				if _, err = phone.store.db.Exec(`DELETE FROM `+table+` WHERE person=?`, guest); err != nil {
+					t.Fatal(err)
+				}
+			}
+			phonePacket, err := groupTurnPacketIn(phone.store.db, conv)
+			if err != nil || phonePacket.State.Hash() != current.State.Hash() {
+				t.Fatalf("cold author changed current context: %v", err)
+			}
+			own, err := groupMemberAdmission(phone.store.db, phonePacket, phone.Address, phone.Self().Fingerprint())
+			if err != nil || own.Hash() != item.GroupAdmission {
+				t.Fatalf("cold author changed own admission: %v", err)
+			}
+			if err = phone.verifyAndStore(tctx(t), copy.env); err != nil {
+				t.Fatal(err)
+			}
+			var held int
+			if err = phone.store.db.QueryRow(`SELECT count(*) FROM quarantine WHERE id=?`, copy.env.ID).Scan(&held); err != nil || held != 0 {
+				t.Fatalf("cold author history carrier held: %d %v", held, err)
+			}
+			author, known, err := phone.store.personByID(guest)
+			if err != nil || !known || !author.has(executor.Address, executor.Self().Fingerprint()) {
+				t.Fatalf("normal history admission did not discover its exact author: %v", err)
+			}
+			var savedPublic string
+			if err = phone.store.db.QueryRow(`SELECT public FROM peers WHERE address=?`, executor.Address).Scan(&savedPublic); err != nil {
+				t.Fatal(err)
+			}
+			for _, mode := range []string{"pending", "changed-key", "frozen", "bad-signature", "bad-parent"} {
+				t.Run(mode, func(t *testing.T) {
+					t.Cleanup(func() {
+						if _, err := phone.store.db.Exec(`UPDATE peers SET public=?,pending=NULL WHERE address=?`, savedPublic, executor.Address); err != nil {
+							t.Error(err)
+						}
+						if _, err := phone.store.db.Exec(`UPDATE persons SET state=? WHERE person=?`, author.info.State, guest); err != nil {
+							t.Error(err)
+						}
+					})
+					var bad HistoryItem
+					if err := json.Unmarshal([]byte(rawItem), &bad); err != nil {
+						t.Fatal(err)
+					}
+					switch mode {
+					case "pending":
+						_, err = phone.store.db.Exec(`UPDATE peers SET pending=public WHERE address=?`, executor.Address)
+					case "changed-key":
+						raw, _ := json.Marshal(w.bob.Self())
+						_, err = phone.store.db.Exec(`UPDATE peers SET public=? WHERE address=?`, string(raw), executor.Address)
+					case "frozen":
+						_, err = phone.store.db.Exec(`UPDATE persons SET state=? WHERE person=?`, personConflict, guest)
+					case "bad-signature", "bad-parent":
+						for i := range bad.GroupHistory.Memberships {
+							ev := &bad.GroupHistory.Memberships[i]
+							if ev.Parent == "" {
+								continue
+							}
+							if mode == "bad-signature" {
+								ev.Sig[0] ^= 1
+							} else {
+								ev.Parent = strings.Repeat("a", 64)
+								ev.Sign(executor.id.Sign)
+							}
+							break
+						}
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					in := copy.in
+					in.ID, in.LID = protocol.NewID(), protocol.NewID()
+					raw, _ := json.Marshal(bad)
+					in.Body = string(raw)
+					recipient, _ := phone.Self().Recipient()
+					env, e := envelope.Seal(in, source.id.Sign, recipient)
+					if e != nil {
+						t.Fatal(e)
+					}
+					if e = phone.verifyAndStore(tctx(t), env); e != nil {
+						t.Fatal(e)
+					}
+					if e = phone.store.db.QueryRow(`SELECT count(*) FROM quarantine WHERE id=?`, env.ID).Scan(&held); e != nil || held != 1 {
+						t.Fatalf("unsafe history carrier admitted: %d %v", held, e)
+					}
+				})
+			}
+			if err = phone.store.db.QueryRow(`SELECT count(*) FROM participation_events WHERE conv=? AND pid=?`, conv, part.PID).Scan(&liveEvents); err != nil || liveEvents != 0 || stateAt(t, phone, part.PID).Claimable() {
+				t.Fatalf("discovery imported live authority: events=%d err=%v", liveEvents, err)
+			}
+		})
 	}
 	modes := []string{"missing-witness", "wrong-state", "forged-state", "other-pid", "unbound-roster", "wrong-task-epoch", "unknown-own-admission", "foreign-forwarder"}
 	if derived {

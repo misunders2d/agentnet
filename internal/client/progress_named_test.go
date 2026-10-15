@@ -196,6 +196,10 @@ func TestProgressNamedExecutorProvenanceAndComboCaps(t *testing.T) {
 		}
 	}
 
+	// Own each handover while switching synthetic reader profiles: an in-flight
+	// retry could read prg1 before the switch and agi1 after it.
+	stopBob()
+	w.bob.stopBackgroundPosts()
 	// alice's sessions lack agi1, then prg1: each update waits, never downgraded.
 	signCapsNow(t, w.alice, without(olderRoomFixtureCaps(ownCaps), protocol.CapAgentIdentity))
 	noAgent, err := w.bob.SendProgress(tctx(t), w.alice.Address, req.ID, "WAITS FOR AGI1", 0, false)
@@ -220,7 +224,6 @@ func TestProgressNamedExecutorProvenanceAndComboCaps(t *testing.T) {
 	}
 
 	// Restart: the held copies stay; both capabilities back release each once.
-	stopBob()
 	w.bob.Close()
 	bob, err := Open(w.bobHome)
 	if err != nil {

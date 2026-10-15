@@ -175,8 +175,16 @@ func (a *Agent) nativeActivityRecipients(ctx context.Context, ref ControlRef, st
 		if previous.Attempt > st.Attempt || previous.Attempt == st.Attempt && previous.State != "" && previous.State != "queued" && previous.State != stateRunning {
 			return false, nil // a later or settled outcome is already sealed
 		}
-		if previous.Attempt == st.Attempt && previous.State == st.State && previous.Detail == st.Detail {
-			return false, nil // this exact value already has its immutable copy
+		if previous.Attempt == st.Attempt && previous.State == st.State {
+			same := previous.Detail == st.Detail
+			if !same && publicActivityDetail(previous.Detail) && publicActivityDetail(st.Detail) {
+				previousLabel, _, _ := strings.Cut(previous.Detail, "\nReported at ")
+				label, _, _ := strings.Cut(st.Detail, "\nReported at ")
+				same = previousLabel == label
+			}
+			if same {
+				return false, nil // this public category already has its immutable copy
+			}
 		}
 		if c.pending {
 			return false, errNativeActivityDeferred

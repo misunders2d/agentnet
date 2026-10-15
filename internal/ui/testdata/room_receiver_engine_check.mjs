@@ -148,10 +148,15 @@ for (const [what, rec, want] of [
   const root = await wire.signGroupRoot(keys, { v: 3, kind: 'group', creator: { person: me.person, roster: me.hash, address: alice.address, fingerprint: alice.fp }, members: [{ person: me.person, roster: me.hash }], nonce: id(), created: ts, realm: id(), title: 'Room', admins: [me.person] });
   const gconv = await wire.rootID(root), rootJSON = wire.rootJSON(root);
   const admission = await wire.signGroupAdmission(keys, { conv: gconv, realm: root.realm, person: me.person, roster: me.hash, seq: 0, prev: '', history: null, by: alice.fp });
-  const packet = { root, state: { members: [{ person: me.person, roster: me.hash, admin: true, admission }] } };
-  const saved = { groupTurnEvidence: e.groupTurnEvidence, groupRecord: e.groupRecord, humanEvidence: e.humanEvidence };
+  const state = await wire.signGroupState(keys, { v: 1, conv: gconv, realm: root.realm, seq: 0, prev: '', title: root.title, members: [{ person: me.person, roster: me.hash, admin: true, admission }], actor: me.person, actor_roster: me.hash, by: alice.fp });
+  const packet = { root, proof: [], state, withdrawals: [] };
+  await wire.verifyGroupContext(packet, (person, roster) => person === me.person && roster === me.hash ? alice.roster : null);
+  const saved = { groupTurnEvidence: e.groupTurnEvidence, groupRecord: e.groupRecord, humanEvidence: e.humanEvidence, groupCurrentState: e.groupCurrentState };
   let evidenceOK = true;
   e.groupTurnEvidence = async () => ({ packet, members: [me] });
+  // Keep the real derived-parent resolver on this verified current state,
+  // alongside the existing isolated group-evidence stubs.
+  e.groupCurrentState = async () => packet;
   e.groupRecord = async (cv) => ({ id: cv, kind: 'group', root: rootJSON });
   e.humanEvidence = async () => { if (!evidenceOK) throw Object.assign(new Error('pending'), { reason: 'proof_pending' }); return { members: new Map([[me.person, me]]), scopes: new Map([[G.pid, { pid: G.pid, role: 'human', audience: 'room', state: 'active', held: 0, host: { address: carol.address, fingerprint: carol.fp } }]]) }; };
   const gh = { author_pid: G.pid, audience: [G.entry], proof: [G.scope, G.acc] };
@@ -169,11 +174,12 @@ for (const [what, rec, want] of [
   // (client admitConv, ROOM_V1 P3/P4), live or as history.
   const memberHuman = { audience: [G.entry], proof: [G.scope, G.acc] }, bobPin = await e.store.get('pins', bob.address);
   const request = { ...n, id: id(), lid: id(), from: bob.address, kind: 'question', pid: B.pid, target: { address: bob.address, fingerprint: bob.fp }, human: memberHuman };
-  await assert.rejects(e.admitGroupTurn(request, { id: request.id, from: bob.address }, bobPin, { id: request.id }), /not enabled|not read yet/); checks++;
+  const unsupportedHumanExecution = err => err.reason === 'invalid' && err.message === 'Group human guest execution audience is not enabled.';
+  await assert.rejects(e.admitGroupTurn(request, { id: request.id, from: bob.address }, bobPin, { id: request.id }), unsupportedHumanExecution); checks++;
   const alicePin = await e.store.get('pins', alice.address);
   const hist = { ...n, id: id(), lid: id(), from: alice.address, pid: '', human: undefined, sub: 'history', replica: true, attachments: [],
     body: historyOf({ from: alice.address, from_key: alice.fp, kind: 'question', origin: 'ui', pid: B.pid, target: { address: bob.address, fingerprint: bob.fp }, human: memberHuman }) };
-  await assert.rejects(e.admitGroupTurn(hist, { id: hist.id, from: alice.address }, alicePin, { id: hist.id }), /not enabled|not read yet/); checks++;
+  await assert.rejects(e.admitGroupTurn(hist, { id: hist.id, from: alice.address }, alicePin, { id: hist.id }), unsupportedHumanExecution); checks++;
   // Selected group history keeps to ordinary member turns (client
   // groupHistorySources: no PID): a guest's turn held here is not offered.
   await e.store.write(ops.filter((o) => o.s === 'inbox'));

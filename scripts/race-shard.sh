@@ -18,8 +18,8 @@ fi
 
 run_partition() {
 	local package=$1 k=$2 n=$3 label=$4 tests
-	# Saved measurements on the current list overload client-1/9/10.
-	# Keep twelve partitions and every test; move only fixtures to room.
+	# Saved measurements also overload client-0/11, with unfinished tails.
+	# Keep twelve partitions and every test; move measured fixtures to room.
 	tests=$(go test -list '.*' "$package" | awk -v k="$k" -v n="$n" -v client="$([[ $package = ./internal/client ]] && echo 1 || echo 0)" '
 		/^Test/ {
 			part=i++%n
@@ -34,9 +34,10 @@ run_partition() {
 				if ($0=="TestHistoryArchiveImportedTailRemainsBounded") part=10
 				if ($0=="TestP6AgentQuestionTaskCorrelationAndOrigin") part=6
 				if ($0=="TestRoomBusyAncestorCallback") part=4
-				if ($0=="TestReceiverRemoteGroupNamedNativeMemberVisitor") part=0
+				if ($0=="TestReceiverRemoteGroupNamedNativeMemberVisitor") part=7
+				if ($0=="TestParticipationTopicMovedHistoryInvite") part=2
 				if ($0=="TestProactiveAgentMessageAdmission") part=2
-				if ($0=="TestDMLiveAgentContext") part=11
+				if ($0=="TestDMLiveAgentContext") part=7
 				if ($0=="TestGroupParticipationHistoryDismissedLinkedRestartReorder") part=10
 			}
 			if (part==k) print

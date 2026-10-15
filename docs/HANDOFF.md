@@ -6,7 +6,10 @@ The owner approved [the v31 scope](plans/V0_8_31.md) and
 [publication goal](plans/V0_8_31_GOAL.md). Root orchestrates/reviews; four
 GPT-6.1-sol xhigh Codex workers implement in Herdr tab 3 with native automatic
 review, and the existing Claude in tab 2 independently challenges designs/code.
-ThinkPad is offline. New work is uncommitted and not release-qualified.
+ThinkPad is offline. Candidate `5fe81042` is committed; integrated qualification
+and its reviewed residual batch are in progress. The final nine-parent focused
+race batch passes, including derived history under its original wait; final
+integrated gates and publication remain pending.
 Guest-owned agents are core scope; WebKit remains urgent investigation with
 the prior carry-forward permission. Current ownership and failed/passing
 evidence are linked from the v31 plan. Preserve live identities/history/work.

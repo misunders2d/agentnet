@@ -369,6 +369,7 @@ func TestLiveHumanDMs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { bob.Close() })
 	runDaemon(t, alice)
 	stopBob := runDaemon(t, bob)
 	live := NewLive(bob)

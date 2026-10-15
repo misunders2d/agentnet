@@ -103,7 +103,9 @@ async function world() {
   check(new TextDecoder().decode((await c.openFile(excerpt.id, 0, 'in')).bytes) === 'CHOSEN', 'selected bytes decrypt through existing file opener');
   check((await a.dm(w.conv)).messages.filter((m) => m.body === 'SELECTED TEXT').length === 1, 'sender excerpt carrier never extra room turn');
   await refuses(() => c.sendDM({ conv: w.conv, body: 'ordinary visitor send' }), /member|record|conversation/i);
-  await refuses(() => c.inviteAgent({ conv: w.conv, host: b.address, agent_id: w.agent.id }), /member/);
+  const visitorOutbox = (await c.store.all('outbox')).length, visitorPosts = w.posts.length;
+  await refuses(() => c.inviteAgent({ conv: w.conv, host: b.address, agent_id: w.agent.id }), /^Error: Only an exact accepted topic guest brings its own agent into that topic\.$/);
+  check((await c.store.all('outbox')).length === visitorOutbox && w.posts.length === visitorPosts, 'refused visitor invitation is neither stored nor sent');
   const badOrdinary = await w.receive(await w.from(c, a, { body: 'visitor discussion' }), a);
   check((await a.store.get('held', badOrdinary)).reason === 'invalid', 'ordinary visitor receive refused');
   const wrongPrev = await w.decision(c, invite.pid, 'accept', 'f'.repeat(64));

@@ -23,6 +23,8 @@ func groupParticipationHistoryItem(item HistoryItem) bool {
 // or selected cross-person history. Original signed events and request scope
 // supply the PID authority; the vouched stamp is the original own admission.
 func (a *Agent) groupParticipationHistoryCheck(q dbq, root protocol.ConvRoot, forwarder identity.Public, item HistoryItem) (*protocol.ParticipationEvent, error) {
+	q, closeReads := prepareMembershipReads(q)
+	defer closeReads()
 	packet, err := groupTurnPacketIn(q, root.ID())
 	if err != nil {
 		return nil, err
@@ -424,6 +426,35 @@ func (a *Agent) admitGroupParticipationHistory(ctx context.Context, env envelope
 	if item.Human != nil {
 		var context []dmMembers
 		if item.GroupHistory != nil {
+			prepared := false
+			for _, scope := range item.Human.Proof {
+				if scope.Type != protocol.EventScope || scope.Parent == "" {
+					continue
+				}
+				if _, known, e := a.store.personByID(scope.Author.Person); e != nil {
+					return e
+				} else if known {
+					continue // existing pending, changed and frozen checks stay strict
+				}
+				if !prepared {
+					if e := historyRecoveryCurrent(a.store.db, a.Self(), sender); e != nil {
+						return hold(reasonProof, e.Error())
+					}
+					if e := item.Human.Validate(root.ID()); e != nil {
+						return hold(reasonProof, e.Error())
+					}
+					prepared = true
+				}
+				// Discover only the exact cold derived author. Signed witness and
+				// current authority checks still run below and at atomic import.
+				author := &protocol.ParticipationHost{Person: scope.Author.Person, Address: scope.Author.Address, Fingerprint: scope.Author.Fingerprint}
+				if reason, e := a.externalHostProof(ctx, author); e != nil {
+					if reason != "" {
+						return hold(reason, e.Error())
+					}
+					return e
+				}
+			}
 			m, e := groupHistoryMembers(a.store.db, root, item)
 			if e != nil {
 				return hold(reasonProof, e.Error())

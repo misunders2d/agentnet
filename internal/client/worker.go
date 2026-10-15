@@ -91,7 +91,8 @@ func (a *Agent) worker(ctx context.Context, wake <-chan struct{}) {
 	}
 	for {
 		_, changed := a.Changed() // capture before claiming: no lost local wake
-		for a.reviewAttention(ctx); a.runNextWith(ctx, wake, dispatch); a.reviewAttention(ctx) {
+		for a.runNextWith(ctx, wake, dispatch) {
+			a.reviewAttention(ctx)
 		}
 		// The last look may have moved a request to review without running
 		// anything (a task for this device's agent that needs the person).

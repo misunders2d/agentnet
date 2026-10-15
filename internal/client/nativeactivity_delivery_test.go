@@ -110,6 +110,8 @@ func activityCopies(t *testing.T, a *Agent, j job) int {
 
 func TestNativeActivityOfflineRetainedSupportPendingLatestAndTerminal(t *testing.T) {
 	a, j, h, peerID := activityDeliveryFixture(t)
+	const deliveredDetail = "Preparing answer\nReported at 2026-10-15T22:00:00Z"
+	const latestDetail = "Preparing answer\nReported at 2026-10-15T22:00:01Z"
 	activityAvailability(a, j.From, false)
 	for _, k := range []nativeActivity{activityReading, activityEditing, activityCommand, activitySearch, activityAnswer} {
 		if !a.store.markNativeActivity(t.Context(), j, k) || !a.tellStatus(t.Context(), j.ID) {
@@ -123,6 +125,9 @@ func TestNativeActivityOfflineRetainedSupportPendingLatestAndTerminal(t *testing
 	if err := a.store.db.QueryRow(`SELECT status_due FROM inbox WHERE id=?`, j.ID).Scan(&due); err != nil || due == 0 {
 		t.Fatal("latest value not retained for reconnect", due, err)
 	}
+	if _, err := a.store.db.Exec(`UPDATE inbox SET detail=? WHERE id=?`, deliveredDetail, j.ID); err != nil {
+		t.Fatal(err)
+	}
 	activityAvailability(a, j.From, true)
 	if !a.tellStatus(t.Context(), j.ID) || len(h.posted) != 1 {
 		t.Fatal("reconnect did not send exactly latest value", len(h.posted))
@@ -133,7 +138,7 @@ func TestNativeActivityOfflineRetainedSupportPendingLatestAndTerminal(t *testing
 		t.Fatal("native status not signed/encrypted normally", err)
 	}
 	var st envelope.Status
-	if err := json.Unmarshal([]byte(inner.Body), &st); err != nil || !strings.HasPrefix(st.Detail, "Preparing answer\nReported at ") || st.Attempt != j.nativeAttempt || st.State != stateRunning {
+	if err := json.Unmarshal([]byte(inner.Body), &st); err != nil || st.Detail != deliveredDetail || st.Attempt != j.nativeAttempt || st.State != stateRunning {
 		t.Fatal(st, err)
 	}
 	var sealedBefore string
@@ -147,6 +152,11 @@ func TestNativeActivityOfflineRetainedSupportPendingLatestAndTerminal(t *testing
 			t.Fatal("deferred telemetry blocked unrelated status work")
 		}
 	}
+	// Force different valid report seconds without depending on wall-clock speed.
+	if _, err := a.store.db.Exec(`UPDATE inbox SET detail=?,status_due=status_due+1 WHERE id=?`, latestDetail, j.ID); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("same attempt=%d state=%s: sealed detail=%q latest detail=%q", j.nativeAttempt, stateRunning, st.Detail, latestDetail)
 	if n := activityCopies(t, a, j); n != 1 || len(h.posted) != 1 {
 		t.Fatalf("stalled reader accumulated %d copies (%d posts)", n, len(h.posted))
 	}
@@ -157,13 +167,39 @@ func TestNativeActivityOfflineRetainedSupportPendingLatestAndTerminal(t *testing
 	if err := a.store.setOutboxState(first.ID, protocol.StateDelivered, "", protocol.PathRelay); err != nil {
 		t.Fatal(err)
 	}
-	// The latest identical value already has its copy; no redundant resend.
+	// The same public category already has its copy; a later report second
+	// after unseen intervening categories does not warrant another copy.
 	if !a.tellStatus(t.Context(), j.ID) || len(h.posted) != 1 {
 		t.Fatal("unchanged latest value was resent", len(h.posted))
 	}
+	for _, candidate := range []struct {
+		name, detail string
+		attempt      int64
+		want         bool
+	}{
+		{"same category", latestDetail, j.nativeAttempt, false},
+		{"changed category", "Searching\nReported at 2026-10-15T22:00:01Z", j.nativeAttempt, true},
+		{"invalid report", "Preparing answer\nReported at PRIVATE", j.nativeAttempt, true},
+		{"private suffix", "Preparing answer PRIVATE", j.nativeAttempt, true},
+		{"next attempt", latestDetail, j.nativeAttempt + 1, true},
+	} {
+		selected := a.nativeActivityRecipients(t.Context(), ControlRef{ID: j.ID, Fingerprint: j.Key}, envelope.Status{State: stateRunning, Attempt: candidate.attempt, Detail: candidate.detail})
+		if send, err := selected(j.From); send != candidate.want || err != nil {
+			t.Fatalf("%s: send=%v want=%v err=%v", candidate.name, send, candidate.want, err)
+		}
+	}
 	a.store.markNativeActivity(t.Context(), j, activitySearch)
+	var changedDetail string
+	if err := a.store.db.QueryRow(`SELECT detail FROM inbox WHERE id=?`, j.ID).Scan(&changedDetail); err != nil || !strings.HasPrefix(changedDetail, "Searching\nReported at ") || !publicActivityDetail(changedDetail) {
+		t.Fatal("changed category lost its actual report time", changedDetail, err)
+	}
 	if !a.tellStatus(t.Context(), j.ID) || len(h.posted) != 2 {
 		t.Fatal("new latest value not sent after delivery", len(h.posted))
+	}
+	changed, err := envelope.Open(h.posted[1], peerID, j.From, a.Self())
+	var changedStatus envelope.Status
+	if err != nil || json.Unmarshal([]byte(changed.Body), &changedStatus) != nil || changedStatus.Detail != changedDetail {
+		t.Fatal("changed category report time changed during delivery", changedStatus, err)
 	}
 	activityAvailability(a, j.From, false)
 	if _, err := a.store.db.Exec(`UPDATE inbox SET state='answered',detail=NULL,status_due=status_due+1 WHERE id=?`, j.ID); err != nil {
