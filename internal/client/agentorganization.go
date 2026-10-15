@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/identity"
@@ -277,6 +278,9 @@ func (a *Agent) topicOrganizationAdmission(q dbq, in envelope.Inner, address, fp
 	}
 	for _, move := range in.TopicEvent.Moves {
 		if err := agentOrganizationRefScope(q, in.Conv, protocol.GrantRef{LID: move.LID, Fingerprint: move.Author}, p, a.Self().Fingerprint(), ref); err != nil {
+			if errors.Is(err, errOrganizationGrantProof) {
+				return reasonProof, err
+			}
 			if errors.Is(err, sql.ErrNoRows) {
 				return reasonProof, errors.New("organization waits for the exact selected original")
 			}
@@ -313,6 +317,15 @@ func agentOrganizationRefScope(q dbq, conv string, ref protocol.GrantRef, p Part
 	}) {
 		return nil
 	}
+	if p.Member && p.Scope != "" {
+		var held bool
+		if err := q.QueryRow(`SELECT EXISTS(SELECT 1 FROM participation_events WHERE conv=? AND pid=? AND hash=? AND type=?)`, conv, p.PID, p.Invite, protocol.EventInvite).Scan(&held); err != nil {
+			return err
+		}
+		if !held {
+			return errOrganizationGrantProof
+		}
+	}
 	return errors.New("selected original was not admitted to this agent's scope")
 }
 
@@ -334,4 +347,296 @@ func (a *Agent) agentOrganizationDeliveryGate(env envelope.Envelope) (bool, erro
 		return false, a.store.setOutboxState(env.ID, stateNotDelivered, "not sent: "+err.Error(), "")
 	}
 	return true, nil
+}
+
+// A public scope intentionally omits private grants. Missing signer evidence
+// waits for proof; the organizer host cannot supply the inviter's signature.
+var errOrganizationGrantProof = errors.New("organization waits for its inviter's signed selected grant")
+
+// Existing valid retained moves tell the original inviter which subset needs
+// disclosure, including moves stored before upgrade. Only that exact current
+// human signer can publish an ordinary signed share; no private invite is sent.
+// This is a negative selector, never authority. Counted share rows suppress
+// already disclosed refs; only a missing exact ref reaches full verification.
+// Conversation indexes bound the move scan once per authored conversation,
+// rather than once per participation, and no body is decoded in Go on no-op wakes.
+const organizationGrantCandidatesSQL = `WITH invitations AS MATERIALIZED (
+ SELECT conv,pid,hash,event FROM participation_events WHERE type='invite' AND author=?
+ AND json_extract(event,'$.author.address')=? AND json_type(event,'$.group')='object'
+ AND json_array_length(json_extract(event,'$.grant'))>0
+), moves AS MATERIALIZED (
+ SELECT m.conv,m.pid,m.topic_event FROM (SELECT DISTINCT conv FROM invitations) c
+ JOIN inbox m ON m.conv=c.conv WHERE m.origin='agent:organization' AND m.topic_event IS NOT NULL
+ UNION
+ SELECT m.conv,m.pid,m.topic_event FROM (SELECT DISTINCT conv FROM invitations) c
+ JOIN outbox m ON m.conv=c.conv WHERE m.origin='agent:organization' AND m.topic_event IS NOT NULL
+)
+SELECT DISTINCT i.conv,i.pid FROM moves m JOIN invitations i ON i.conv=m.conv AND i.pid=m.pid
+JOIN json_each(m.topic_event,'$.moves') move JOIN json_each(i.event,'$.grant') grant
+ ON json_extract(move.value,'$.lid')=json_extract(grant.value,'$.lid')
+ AND json_extract(move.value,'$.author')=json_extract(grant.value,'$.fingerprint')
+WHERE NOT EXISTS (
+ SELECT 1 FROM participation_events s JOIN room_membership_events counted ON counted.hash=s.hash
+ JOIN json_each(s.event,'$.grant') disclosed
+ WHERE s.conv=i.conv AND s.pid=i.pid AND s.type='share' AND s.prev=i.hash
+ AND json_extract(disclosed.value,'$.lid')=json_extract(grant.value,'$.lid')
+ AND json_extract(disclosed.value,'$.fingerprint')=json_extract(grant.value,'$.fingerprint')
+)`
+
+func (a *Agent) discloseOrganizationGrants(ctx context.Context) int {
+	rows, err := a.store.db.Query(organizationGrantCandidatesSQL, a.Self().Fingerprint(), a.Address)
+	if err != nil {
+		return 0
+	}
+	type subject struct{ conv, pid string }
+	var subjects []subject
+	for rows.Next() {
+		var s subject
+		if rows.Scan(&s.conv, &s.pid) == nil {
+			subjects = append(subjects, s)
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return 0
+	}
+	for _, s := range subjects {
+		if err := a.discloseOrganizationGrant(ctx, s.conv, s.pid); err != nil {
+			a.Logf("organization grant disclosure held: %v", err)
+		}
+	}
+	return len(subjects) // exactly the number of full per-participation checks
+}
+func (a *Agent) discloseOrganizationGrant(ctx context.Context, conv, pid string) error {
+	p, err := a.Participation(pid)
+	if err != nil {
+		return err
+	}
+	if p.Conv != conv || !p.Member || !p.Claimable() {
+		return nil
+	}
+	events, err := a.store.participationEvents(conv, pid)
+	if err != nil {
+		return err
+	}
+	var invite protocol.ParticipationEvent
+	for _, ev := range events {
+		if ev.Hash() == p.Invite && ev.Type == protocol.EventInvite && ev.Author.Address == a.Address && ev.Author.Fingerprint == a.Self().Fingerprint() {
+			invite = ev
+		}
+	}
+	if invite.Host == nil || len(invite.Grant) == 0 {
+		return nil
+	}
+	m, err := membersIn(a.store.db, conv)
+	if err != nil {
+		return err
+	}
+	if m.group == nil || !m.authorEpoch(invite.Author) {
+		return nil
+	}
+	if err = topicOrganizationAuthor(a.store.db, conv, a.Address, a.Self().Fingerprint()); err != nil {
+		return err
+	}
+	rows, err := a.store.db.Query(`SELECT topic_event FROM inbox WHERE conv=? AND pid=? AND origin=? AND topic_event IS NOT NULL UNION SELECT topic_event FROM outbox WHERE conv=? AND pid=? AND origin=? AND topic_event IS NOT NULL`, conv, pid, envelope.OriginAgentOrganization, conv, pid, envelope.OriginAgentOrganization)
+	if err != nil {
+		return err
+	}
+	var refs []protocol.GrantRef
+	for rows.Next() {
+		var raw string
+		var event envelope.TopicEvent
+		if rows.Scan(&raw) != nil || json.Unmarshal([]byte(raw), &event) != nil {
+			continue
+		}
+		for _, move := range event.Moves {
+			ref := protocol.GrantRef{LID: move.LID, Fingerprint: move.Author}
+			if !slices.Contains(invite.Grant, ref) || slices.Contains(refs, ref) {
+				continue
+			}
+			disclosed := slices.ContainsFunc(events, func(ev protocol.ParticipationEvent) bool {
+				return ev.Type == protocol.EventShare && slices.Contains(p.Shares, ev.Hash()) && slices.Contains(ev.Grant, ref)
+			})
+			if !disclosed {
+				refs = append(refs, ref)
+			}
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil || len(refs) == 0 {
+		return err
+	}
+	me, ok, err := a.store.selfPerson(a.Address)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	share := protocol.ParticipationEvent{V: 1, Conv: conv, PID: pid, Type: protocol.EventShare, Prev: p.Invite, TS: time.Now().Unix(), Author: protocol.EventAuthor{Person: me.info.Person, Roster: me.info.Roster, Address: a.Address, Fingerprint: a.Self().Fingerprint()}, Host: invite.Host, Grant: refs, Audience: invite.Audience, Topic: invite.Topic}
+	for _, ref := range refs {
+		if snapshot, ok := grantSnapshot(ref, invite.Snapshots); ok {
+			share.Snapshots = append(share.Snapshots, snapshot)
+		}
+	}
+	if err = m.bindGroupInvite(&share); err != nil {
+		return err
+	}
+	before, err := a.topicOrganizationStamp(a.store.db, snapshotRequest(conv, invite.Topic, refs))
+	if err != nil {
+		return err
+	}
+	for _, snapshot := range share.Snapshots {
+		ref := protocol.GrantRef{LID: snapshot.LID, Fingerprint: snapshot.Fingerprint}
+		item, err := a.snapshotSourceItem(a.store.db, conv, ref)
+		if err != nil {
+			return err
+		}
+		controls, err := a.controlsOf(ControlRef{Conv: conv, ID: ref.LID, Fingerprint: ref.Fingerprint})
+		if err != nil {
+			return err
+		}
+		item.Body = controls.Shown(item.Body)
+		if controls.Deleted || contentHash(item.inner(conv)) != snapshot.Hash {
+			return errors.New("organization grant snapshot changed")
+		}
+	}
+	return a.recordAndSendWith(ctx, share, func(tx *sql.Tx) error {
+		if err := topicOrganizationAuthor(tx, conv, a.Address, a.Self().Fingerprint()); err != nil {
+			return err
+		}
+		now, err := membersIn(tx, conv)
+		if err != nil {
+			return err
+		}
+		valid, err := now.verifyInviteEpoch(tx, share)
+		if err != nil {
+			return err
+		}
+		if !valid {
+			return errors.New("organization grant current admission changed")
+		}
+		current, err := participationIn(tx, conv, pid, now, a.Address)
+		if err != nil {
+			return err
+		}
+		if !current.Claimable() || current.Invite != p.Invite || current.Decision != p.Decision {
+			return errors.New("organization grant participation changed")
+		}
+		if !now.authorEpoch(invite.Author) || !now.authorEpoch(share.Author) {
+			return errors.New("organization grant inviter admission changed")
+		}
+		stamp, err := a.topicOrganizationStamp(tx, snapshotRequest(conv, invite.Topic, refs))
+		if err != nil {
+			return err
+		}
+		if stamp != before {
+			return ErrTopicOrganizationChanged
+		}
+
+		return nil
+	})
+}
+
+// One upgrade scan moves only verified group organization messages whose sole
+// missing proof is the selected inviter grant into the existing proof queue.
+// No message is admitted here, no execution is restarted, no live replay occurs.
+func (a *Agent) recoverOrganizationGrantProof() error {
+	const marker = "organization-selected-grant-proof-v1"
+	tx, err := a.store.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var done bool
+	if err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM config WHERE k=?)`, marker).Scan(&done); err != nil || done {
+		return err
+	}
+	if err = historyRecoveryCurrent(tx, a.Self()); err != nil {
+		if errors.Is(err, errHistoryRecoveryAuthority) {
+			return nil
+		}
+		return err
+	}
+	deferred := false
+	for after := ""; ; {
+		rows, err := tx.Query(`SELECT id,envelope FROM quarantine WHERE reason=? AND id>? ORDER BY id LIMIT ?`, reasonInvalid, after, proofPage)
+		if err != nil {
+			return err
+		}
+		type held struct{ id, raw string }
+		var page []held
+		for rows.Next() {
+			var h held
+			if err = rows.Scan(&h.id, &h.raw); err != nil {
+				rows.Close()
+				return err
+			}
+			page = append(page, h)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		if len(page) == 0 {
+			break
+		}
+		after = page[len(page)-1].id
+		for _, h := range page {
+			var env envelope.Envelope
+			if json.Unmarshal([]byte(h.raw), &env) != nil || env.ID != h.id {
+				continue
+			}
+			sender, found, err := pinnedKey(tx, env.From)
+			if err != nil {
+				return err
+			}
+			if !found {
+				deferred = true
+				continue
+			}
+			in, err := envelope.Open(env, a.id, a.Address, sender)
+			if err != nil {
+				continue
+			}
+			original, author, fp, historical := in, sender.Address, sender.Fingerprint(), false
+			if in.Sub == envelope.SubHistory && in.Replica {
+				if historyRecoveryCurrent(tx, sender, a.Self()) != nil {
+					deferred = true
+					continue
+				}
+				var item HistoryItem
+				if decodeGroupCarrierJSON([]byte(in.Body), &item) != nil {
+					continue
+				}
+				original, author, fp, historical = item.inner(in.Conv), item.From, item.FromKey, true
+			}
+			if !envelope.AgentTopicOrganization(original) {
+				continue
+			}
+			packet, err := groupTurnPacketIn(tx, in.Conv)
+			if err != nil || groupTurnCheck(tx, packet, a.Address, a.Self().Fingerprint()) != nil || groupTurnCheck(tx, packet, sender.Address, sender.Fingerprint()) != nil {
+				deferred = true
+				continue
+			}
+			reason, admissionErr := a.topicOrganizationAdmission(tx, original, author, fp, historical)
+			if admissionErr != nil {
+				deferred = deferred || reason == reasonProof
+				continue // retained invalid copies wait until the exact grant actually verifies
+			}
+			if _, err = tx.Exec(`UPDATE quarantine SET reason=? WHERE id=? AND reason=?`, reasonProof, h.id, reasonInvalid); err != nil {
+				return err
+			}
+		}
+	}
+	if deferred {
+		return a.store.done(tx.Commit())
+	}
+	if _, err = tx.Exec(`INSERT INTO config(k,v) VALUES(?,'1')`, marker); err != nil {
+		return err
+	}
+	return a.store.done(tx.Commit())
 }

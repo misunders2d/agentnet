@@ -18,8 +18,8 @@ fi
 
 run_partition() {
 	local package=$1 k=$2 n=$3 label=$4 tests
-	# Measured fixtures overloaded client-2/9/10 at 600s. Keep the twelve
-	# partitions and every test, moving only these to shards with room.
+	# Saved measurements on the final list overload client-5/6/7/10.
+	# Keep twelve partitions and every test; move only fixtures to room.
 	tests=$(go test -list '.*' "$package" | awk -v k="$k" -v n="$n" -v client="$([[ $package = ./internal/client ]] && echo 1 || echo 0)" '
 		/^Test/ {
 			part=i++%n
@@ -32,6 +32,10 @@ run_partition() {
 				if ($0=="TestGroupHistoryWitnessRetiredTaskDevice") part=4
 				if ($0=="TestRoomReciprocalRootQuestions") part=5
 				if ($0=="TestHistoryArchiveImportedTailRemainsBounded") part=10
+				if ($0=="TestP6AgentQuestionTaskCorrelationAndOrigin") part=2
+				if ($0=="TestRoomBusyAncestorCallback") part=1
+				if ($0=="TestReceiverRemoteGroupNamedNativeMemberVisitor") part=0
+				if ($0=="TestProactiveAgentMessageAdmission") part=2
 			}
 			if (part==k) print
 		}')

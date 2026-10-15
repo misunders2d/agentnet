@@ -406,7 +406,7 @@ func actualNativeOwnerGroupJourney(t *testing.T, fixtureOnly bool) {
 			return state == stateSteered
 		})
 		stored, err := storedRequestFollowup(w.alice.store.db, "in", id)
-		if err != nil || stored == nil || *stored != ref {
+		if err != nil || stored == nil || stored.Ref != ref {
 			t.Fatal("native followup original changed", err)
 		}
 		if i == 0 {

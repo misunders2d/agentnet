@@ -3,6 +3,7 @@ package client
 import (
 	"database/sql"
 	"encoding/json"
+	"strings"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
@@ -41,7 +42,7 @@ func requestFollowupReadyIn(q dbq, id string) (bool, error) {
 	return ready, err
 }
 
-func requestFollowupJSON(ref *envelope.Ref) string {
+func requestFollowupJSON(ref *envelope.FollowupRef) string {
 	if ref == nil {
 		return ""
 	}
@@ -49,7 +50,7 @@ func requestFollowupJSON(ref *envelope.Ref) string {
 	return string(b)
 }
 
-func storeRequestFollowup(tx *sql.Tx, table, id string, ref *envelope.Ref) error {
+func storeRequestFollowup(tx *sql.Tx, table, id string, ref *envelope.FollowupRef) error {
 	if ref == nil {
 		return nil
 	}
@@ -57,7 +58,7 @@ func storeRequestFollowup(tx *sql.Tx, table, id string, ref *envelope.Ref) error
 	return err
 }
 
-func storedRequestFollowup(q dbq, dir, id string) (*envelope.Ref, error) {
+func storedRequestFollowup(q dbq, dir, id string) (*envelope.FollowupRef, error) {
 	table := "inbox"
 	if dir == "out" {
 		table = "outbox"
@@ -69,7 +70,7 @@ func storedRequestFollowup(q dbq, dir, id string) (*envelope.Ref, error) {
 	if !raw.Valid {
 		return nil, nil
 	}
-	var ref envelope.Ref
+	var ref envelope.FollowupRef
 	if err := json.Unmarshal([]byte(raw.String), &ref); err != nil {
 		return nil, err
 	}
@@ -78,38 +79,73 @@ func storedRequestFollowup(q dbq, dir, id string) (*envelope.Ref, error) {
 
 // Supplemental to group/receiver capabilities: retained history must not lose
 // explicit intent when sent to a reader predating the launch-time guard.
-func requestFollowupCopy(q dbq, id, sub, body string) (bool, error) {
+func carriedFollowup(sub, body string) (*envelope.FollowupRef, error) {
+	if body == "" {
+		return nil, nil
+	}
+	raw := []byte(body)
+	if sub == envelope.SubDeviceHistory {
+		packet, err := protocol.ParseDeviceHistory(raw)
+		if err != nil {
+			return nil, err
+		}
+		raw = packet.Item
+	}
 	if sub == envelope.SubHistory || sub == envelope.SubDeviceHistory {
 		if body == "" {
-			return false, nil // legacy copies retained no parsed body
-		}
-		raw := []byte(body)
-		if sub == envelope.SubDeviceHistory {
-			packet, err := protocol.ParseDeviceHistory(raw)
-			if err != nil {
-				return false, err
-			}
-			raw = packet.Item
+			return nil, nil
 		}
 		var item HistoryItem
 		if err := json.Unmarshal(raw, &item); err != nil {
-			return false, err
+			return nil, err
 		}
-		return item.Followup != nil, nil
+		return item.Followup, nil
+	}
+	var setup envelope.ReceiverOperation
+	if json.Unmarshal(raw, &setup) == nil && setup.Request != nil {
+		return setup.Request.Followup, nil
+	}
+	return nil, nil
+}
+func requestFollowupCopyRef(q dbq, id, sub, body string) (*envelope.FollowupRef, error) {
+	if sub == envelope.SubHistory || sub == envelope.SubDeviceHistory {
+		return carriedFollowup(sub, body)
 	}
 	ref, err := storedRequestFollowup(q, "out", id)
 	if err != nil || ref != nil {
-		return ref != nil, err
+		return ref, err
 	}
-	// A selected receiver's private delegation retains the same immutable
-	// request snapshot. Its older reader must not silently drop this intent.
 	var receiver bool
 	if err = q.QueryRow(`SELECT coalesce(required_cap,'')=? AND reply_receiver IS NULL FROM outbox WHERE id=?`, protocol.CapReplyReceiver, id).Scan(&receiver); err != nil || !receiver {
-		return false, err
+		return nil, err
 	}
-	var setup envelope.ReceiverOperation
-	if err = json.Unmarshal([]byte(body), &setup); err != nil {
-		return false, err
+	return carriedFollowup(sub, body)
+}
+func requestFollowupCopy(q dbq, id, sub, body string) (bool, error) {
+	ref, err := requestFollowupCopyRef(q, id, sub, body)
+	return ref != nil, err
+}
+func requestSteerCopy(q dbq, id, sub, body string) (bool, error) {
+	ref, err := requestFollowupCopyRef(q, id, sub, body)
+	return ref != nil && ref.Attempt > 0, err
+}
+
+func steerRequirement(required string, needed bool) string {
+	if !needed {
+		return required
 	}
-	return setup.Request != nil && setup.Request.Followup != nil, nil
+	if _, present := splitSteerRequirement(required); present {
+		return required
+	}
+	if required == "" {
+		return protocol.CapRequestSteer
+	}
+	return required + "+" + protocol.CapRequestSteer
+}
+func splitSteerRequirement(required string) (string, bool) {
+	if required == protocol.CapRequestSteer {
+		return "", true
+	}
+	base := strings.TrimSuffix(required, "+"+protocol.CapRequestSteer)
+	return base, base != required
 }

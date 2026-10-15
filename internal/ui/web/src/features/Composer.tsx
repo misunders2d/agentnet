@@ -27,7 +27,7 @@ import { coarse, useFieldFocus } from "./Composer.focus";
 import { usePortal } from "../owned";
 import { TrustNotice } from "./Trust";
 import { AgentModelReport } from "./AgentModelReport";
-import { activeComposerFollowups, composerFollowup, type ComposerFollowup } from "./Composer.followup";
+import { composerReplyFollowup, currentComposerFollowup, type ComposerFollowup } from "./Composer.followup";
 import type { Ctx } from "./Message.model";
 
 const EMPTY: Draft = { text: "" };
@@ -128,34 +128,8 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   }, [dm, thread, draft.agent, draft.text, draft.topic, draft.newTopic, answerable?.id, answerable?.kind, overview, names]);
   const latest = (): Draft => store.get().drafts[conv] ?? EMPTY;
   const followupContext: Ctx = {conv,dm:dm || null,thread:thread || null,overview:overview || null,names,canReply:true};
-  const followupScope = [conv,draft.topic || "",!!draft.newTopic,selectedPIDs.join(",")].join("/");
-  const activeRequests = useMemo(() => draft.newTopic ? new Map<string,T.DMMessage[]>() : activeComposerFollowups(dm,selectedPIDs,draft.topic || "",followupContext),
-    [dm,overview,names,followupScope]);
-  const [requestChoices,setRequestChoices] = useState<{scope:string;ids:Record<string,string>;explicit:Record<string,boolean>}>({scope:"",ids:{},explicit:{}});
-  const choices = requestChoices.scope === followupScope ? requestChoices.ids : {};
-  const explicitChoices = requestChoices.scope === followupScope ? requestChoices.explicit : {};
-  useEffect(() => {
-    setRequestChoices(old => {
-      const ids = old.scope === followupScope ? {...old.ids} : {};
-      const explicit = old.scope === followupScope ? old.explicit : {};
-      for (const [pid, rows] of activeRequests) {
-        if (rows.length > 1 && !explicit[pid]) delete ids[pid];
-        else if (!ids[pid] && rows.length === 1) ids[pid] = rows[0].id;
-      }
-      return old.scope === followupScope && JSON.stringify(ids) === JSON.stringify(old.ids) ? old : {scope:followupScope,ids,explicit};
-    });
-  }, [followupScope,activeRequests]);
-  const requestChoice = (pid:string) => (activeRequests.get(pid) || []).length > 1 && !explicitChoices[pid] ? "" : choices[pid] || ((activeRequests.get(pid) || []).length === 1 ? activeRequests.get(pid)![0].id : "");
-  const selectedFollowup = (pid:string): ComposerFollowup | undefined => {
-    const choice = requestChoice(pid);
-    if (!choice || choice === "new") return;
-    const source = dm?.messages?.find(m => m.id === choice);
-    if (!source) throw Error("The selected request is unavailable. Choose another request or a new independent request; your draft is kept.");
-    const followup = composerFollowup(source,pid,draft.topic || "",followupContext);
-    if (!followup) throw Error("The selected request or its agent changed. Choose it again; your draft is kept.");
-    return followup;
-  };
-  const ambiguousRequest = selectedPIDs.some(pid => (activeRequests.get(pid) || []).length > 1 && !requestChoice(pid));
+  const selectedFollowup = (pid:string, d: Draft): ComposerFollowup | undefined =>
+    d.newTopic ? undefined : currentComposerFollowup(dm,pid,d.topic || "",followupContext,d.replyTo);
 
   // Why nothing can be written here now, in words.
   const mine = humanGuest && !author ? (dm?.guests || []).find((g) => g.host_here && scopeMatches(g, draft.newTopic ? "__new__" : draft.topic || "")) : undefined;
@@ -175,7 +149,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   const sending = store.host.platform === "android" && !!busy[conv]; // Android exposes pre-admission progress without a queued receipt
   const gone = target.kind === "agent" && !target.canAsk;
   const needsAgent = visitor && target.kind !== "agent";
-  const ready = !closed && !sending && !gone && !needsAgent && !handled && !missingReply && !missingTopic && !ambiguousRequest && !limit && (!!text.trim() || (files.length > 0 && target.kind !== "answer"));
+  const ready = !closed && !sending && !gone && !needsAgent && !handled && !missingReply && !missingTopic && !limit && (!!text.trim() || (files.length > 0 && target.kind !== "answer"));
 
   const typingScope = dm && !closed && !visitor && !(dm.kind === "group" && target.kind === "agent") ? { conv: dm.id } : null;
   const typing = useTypingSignal(store.api, typingScope, typingView);
@@ -208,14 +182,14 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   useEffect(() => { if (wide && conv && !coarse()) field.current?.focus({ preventScroll: true }); }, [conv]);
 
   // A reply chosen here (from a message, an approval card) puts the cursor
-  // here, on a phone too. Chosen while an agent is addressed, it goes to the
-  // conversation: the agent is let go.
+  // here, on a phone too. An exact running-work reply retains its tagged
+  // agent; other replies return to the ordinary conversation.
   const lastReply = useRef({ conv, replyTo: draft.replyTo });
   useEffect(() => {
     const prev = lastReply.current;
     lastReply.current = { conv, replyTo: draft.replyTo };
     if (prev.conv !== conv || !draft.replyTo || draft.replyTo === prev.replyTo) return;
-    if (draft.agent && dm) stopAsking();
+    if (draft.agent && dm && !selectedPIDs.some(pid => composerReplyFollowup(dm,pid,draft.topic || "",followupContext,draft.replyTo))) stopAsking();
     focusField(true);
   }, [conv, draft.replyTo]);
 
@@ -248,7 +222,8 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     const {kept}=shift(spans,text,cur,trig.start+token.length);
     const added:Span=c.kind==='collective'?{start:trig.start+prefix.length,name:c.name,kind:'collective',id:'',refs:selected.map(p=>({kind:p.kind,id:p.id}))}:{start:trig.start+prefix.length,name:c.name,kind:c.kind,id:c.id};
     const agent=agentTargets(cur,[...kept,added],d.agent)[0];
-    write({...d,text:encode(cur,[...kept,added]),agent, ...(agent?{replyTo:undefined}:{})},trig.start+token.length);
+    const bound = agent && d.replyTo && composerReplyFollowup(dm,agent,d.topic || "",followupContext,d.replyTo);
+    write({...d,text:encode(cur,[...kept,added]),agent, ...(agent && !bound ? {replyTo:undefined} : {})},trig.start+token.length);
     if(c.kind==='collective')announce('@'+c.name+' selects '+selected.length+' exact recipients.');
     else if(agent)announce('Asking '+c.name+'.');
   }
@@ -329,7 +304,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
           const p = participants(dm, overview, names).find(x => x.pid === pid);
           const to: Target = {kind:"agent",pid,name:p?.name || "Unavailable agent",seed:p?.seed || pid,canAsk:!!a?.can_ask && scopeMatches(a, captured.newTopic ? "__new__" : captured.topic || ""),why:a?.state_text};
           const d = {...captured, agent:pid, topic, newTopic:false, files:(captured.files || []).map(f => ({...f,staged:index === 0 ? f.staged : undefined,url:undefined}))};
-          return {id:sendID(),c:conv,d,to,here:dm,fanout:true,group,followup:selectedFollowup(pid)};
+          return {id:sendID(),c:conv,d,to,here:dm,fanout:true,group,followup:selectedFollowup(pid,captured)};
         }); } catch(e) { setNotice({conv,text:errorText(e)}); return; }
         clearSent(conv, captured, captured.files || []);
         if (captured.newTopic) store.setDraft(conv, { ...store.draft(conv), newTopic: false, topic });
@@ -340,11 +315,11 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     }
     const { c, d: captured, to, here, device } = retry || { c: conv, d: latest(), to: target, here: dm, device: thread };
     let followup: ComposerFollowup | undefined;
-    try { followup = retry ? retry.followup : to.kind === "agent" ? selectedFollowup(to.pid) : undefined; }
+    try { followup = retry ? retry.followup : to.kind === "agent" ? selectedFollowup(to.pid,captured) : undefined; }
     catch(e) { setNotice({conv:c,text:errorText(e)}); return; }
     // Allocate the optional topic before yielding so a second send keeps it.
     const d = here && captured.newTopic ? { ...captured, topic: captured.topic && retry ? captured.topic : sendID() } : captured;
-    const id = retry?.id || sendID(), group = retry?.group;
+    const id = retry?.id || sendID(), group = retry?.group, selectedView = store.get().open;
     const was = decode(d.text);
     const body = encode(was.text, was.spans, true).trim();
     const sent = d.files || [];
@@ -377,13 +352,20 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       }
       progress(sent.length ? "Sending…" : "");
       const fileIds = ids.length ? (ids as string[]) : undefined;
+      if (followup && (!store.isActive() || store.get().open !== selectedView || store.get().pending)) {
+        const unused = ids.filter((value): value is string => typeof value === "string");
+        if (unused.length) await store.api.discard(unused).catch(() => {});
+        for (const f of sent) f.staged = undefined;
+        forgetStaged(c, sent);
+        throw Error("The chat changed before steering was submitted. The original text and files are kept for an explicit retry.");
+      }
       if (d.replyTo && !messageOf(d.replyTo, words, here, device)) throw Error("The message you were replying to is unavailable. Choose another message or cancel the reply.");
       const reply = d.replyTo;
       let r: T.Sent | undefined;
       try {
         if (to.kind === "answer") announce((await store.api.act({ do: "reply", id: to.id, send_id: id, body })).note || "Answer sent.");
         else if (to.kind === "agent" && followup) {
-          const result = await store.host.api<{note:string}>("/api/request/followup", {id,conv:c,ref:followup.ref,body,files:fileIds});
+          const result = await store.host.api<{note:string}>("/api/request/followup", {id,conv:c,ref:followup.ref,attempt:followup.attempt,body,files:fileIds});
           announce(result.note);
           r = {id,lid:id,state:"queued"};
         }
@@ -406,7 +388,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       releaseFiles(sent);
 
       if (!r) { /* answered: the request's own card shows what happened */ }
-      else if (followup) store.toast("Follow-up stored for the exact request. Its status shows native acceptance or queued continuation.");
+      else if (followup) store.toast("Steering sent. Waiting for native acceptance on the current work.");
       else if (r.state === "queued") store.toast("Sending…");
       else if (r.state === "waiting") store.toast("Kept here, not sent yet: " + (r.detail || "they can’t receive messages right now."));
       else if (r.state === "receiver_waiting" && r.detail) store.toast(r.detail);
@@ -419,7 +401,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       if (restored) { store.setDraft(c, { ...d, files: sent }); store.sends.remove(id); }
       else store.sends.fail(id, errorText(e));
       const why = errorText(e).replace(/\.?$/, ".");
-      if (visible.current === c) setNotice({ conv: c, text: "Not sent: " + why + (restored ? " Your text and files are restored." : followup ? " The exact follow-up and files are kept above. Check the original work before retrying." : " Your newer draft is kept. Retry the failed message above.") });
+      if (visible.current === c) setNotice({ conv: c, text: "Not sent: " + why + (restored ? " Your text and files are restored." : followup ? " The exact steering request and files are kept above. Check the original work before retrying." : " Your newer draft is kept. Retry the failed message above.") });
       else store.toast("Not sent to " + title + ": " + why + " It’s kept in that chat.", "error");
     } finally {
       setBusy(({ [c]: _, ...rest }) => rest);
@@ -430,7 +412,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   // draft. Recovery retries these payloads explicitly; it never recreates IDs.
   async function sendAndroid() {
     if (!ready || (!dm && !thread) || androidPreparing.current.has(conv)) return;
-    const c = conv, captured = latest(), here = dm, device = thread;
+    const c = conv, captured = latest(), here = dm, device = thread, selectedView = store.get().open;
     const host = store.host, workspace = host.workspace.id;
     const decoded = decode(captured.text), body = encode(decoded.text, decoded.spans, true).trim();
     const pids = here ? agentTargets(decoded.text, decoded.spans, captured.agent) : [];
@@ -449,7 +431,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     setBusy(b=>({...b,[c]:"Preparing send…"}));
     try {
       for (const [index, to] of destinations.entries()) {
-        const followup = to.kind === "agent" ? selectedFollowup(to.pid) : undefined;
+        const followup = to.kind === "agent" ? selectedFollowup(to.pid,captured) : undefined;
         const id = sendID(), fileIDs: string[] = [];
         for (const f of sent) {
           setBusy(b => ({...b,[c]:"Preparing files…"}));
@@ -463,7 +445,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
         const reply = captured.replyTo;
         let endpoint: JournalEntry["endpoint"], request: Record<string,unknown>;
         if (to.kind === "answer") {endpoint="/api/act";request={do:"reply",id:to.id,send_id:id,body};}
-        else if (to.kind === "agent" && followup) {endpoint="/api/request/followup";request={id,conv:c,ref:followup.ref,body,files};}
+        else if (to.kind === "agent" && followup) {endpoint="/api/request/followup";request={id,conv:c,ref:followup.ref,attempt:followup.attempt,body,files};}
         else if (to.kind === "agent") {endpoint="/api/dm/agent/ask";request={id,send_group:group,pid:to.pid,kind:"question",body,topic,files};}
         else if (device) {const last=(device.messages || []).at(-1);endpoint="/api/send";request={id,to:device.peer,
           agent_id:to.kind === "device" && to.ask ? threadAgentID(device) : undefined,
@@ -473,6 +455,13 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
           ...(here && guestAuthor(here, topic || "") ? {pid:guestAuthor(here, topic || "")!.pid} : {})};}
         // JSON removes optional undefined fields and captures no File objects.
         plans.push({to,followup,entry:{id,conversation:c,endpoint,request:JSON.parse(JSON.stringify(request)),createdAt:new Date().toISOString()}});
+      }
+      if (plans.some(p => p.followup) && (!store.isActive() || store.get().open !== selectedView || store.get().pending)) {
+        const unused = plans.flatMap(p => p.entry.request.files as string[] || []);
+        if (unused.length) await store.api.discard(unused).catch(() => {});
+        for (const f of sent) f.staged = undefined;
+        forgetStaged(c, sent);
+        throw Error("The chat changed before steering was submitted. Your original draft is kept.");
       }
       saveBatch(localStorage,workspace,plans.map(p=>p.entry));
     } catch(e) {
@@ -513,7 +502,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       }
       try {
         preview(entry,plans.find(p=>p.entry.id===entry.id)!.to);
-        if (entry.endpoint === "/api/act" || entry.endpoint === "/api/request/followup") {store.sends.finish(entry.id,undefined);announce(result.note || "Follow-up saved.");}
+        if (entry.endpoint === "/api/act" || entry.endpoint === "/api/request/followup") {store.sends.finish(entry.id,undefined);announce(result.note || (entry.endpoint === "/api/request/followup" ? "Steering sent; waiting for native acceptance." : "Reply sent."));}
         else {store.sends.finish(entry.id,result);
           if (device && captured.newTopic && store.isActive()) void store.open({kind:"thread",id:result.id}).catch(e=>store.toast("Saved by AgentNet; could not open the conversation: "+errorText(e),"error"));
         }
@@ -589,7 +578,6 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     : dm?.kind === "group" ? "Message " + (dm.title || "the group")
     : "Message " + personName(dm?.peer);
   const status: Status | null = notice?.conv === conv ? { text: notice.text, kind: "error" }
-    : ambiguousRequest ? {text:"Choose the exact request to follow up, or start a new independent request.",kind:"info"}
     : handled ? { text: "This request was handled meanwhile, so it can’t be answered here now. Cancel the reply to send something new.", kind: "error" }
     : limit ? { text: limit, kind: "error" }
     : sending && busy[conv] ? { text: busy[conv], kind: "progress" }
@@ -598,7 +586,6 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     : null;
   const sendLabel = target.kind === "conversation" || target.kind === "none" || (target.kind === "device" && !target.ask) ? "Send"
     : target.kind === "answer" ? (target.task ? "Send your reply" : "Send your answer")
-    : target.kind === "agent" && selectedPIDs.some(pid => requestChoice(pid) && requestChoice(pid) !== "new") ? "Follow up with " + target.name
     : "Ask " + target.name;
   const actions: MenuAction[] = [
     ...(dm && !humanGuest && !visitor ? [{ label: "Bring someone in", sub: "They see only what you share", icon: menuIcons.invite, tone: "bg-guest-bg text-guest-ink", run: () => store.openInvite(dm.id) }] : []),
@@ -623,23 +610,6 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       className="relative border-t-[1.5px] border-outline bg-surface px-3 pt-2 pb-[max(10px,env(safe-area-inset-bottom))] lg:border-t lg:px-6 lg:pt-3 lg:pb-4">
       {open && <MentionList id={listId} items={offered} active={active} query={trig?.query || ""} onPick={pick} onHover={setActive} />}
       <p className="sr-only" aria-live="polite">{said}</p>
-      {!draft.newTopic && selectedPIDs.map(pid => {
-        const rows = activeRequests.get(pid) || [], choice = requestChoice(pid);
-        const selected = choice && choice !== "new" ? dm?.messages?.find(m => m.id === choice) : undefined;
-        if (!rows.length && !choice) return null;
-        const options = selected && !rows.some(m => m.id === selected.id) ? [...rows,selected] : rows;
-        const agent = participants(dm!,overview,names).find(p => p.pid === pid);
-        return <label key={pid} className="mb-2 block text-[13px] font-semibold">Work for {agent?.name || "this agent"}
-          <select aria-label={"Request for " + (agent?.name || pid)} value={choice} disabled={sending} onChange={e => setRequestChoices(old => ({scope:followupScope,ids:{...(old.scope === followupScope ? old.ids : {}),[pid]:e.target.value},explicit:{...(old.scope === followupScope ? old.explicit : {}),[pid]:true}}))}
-            className="mt-1 block w-full min-w-0 rounded-xl bg-canvas p-2 text-text stroke">
-            {!choice && <option value="">Choose the exact request…</option>}
-            {options.map(m => <option key={m.id} value={m.id}>Continue: {firstLine(m.body).slice(0,72)} · {m.id.slice(0,8)}</option>)}
-            <option value="new">New independent request</option>
-          </select>
-          {choice && choice !== "new" && <span className="mt-1 block font-normal text-muted">Preserves that request’s objective. Status shows native acceptance or queued continuation.</span>}
-        </label>;
-      })}
-
       {missingReply && <ReplyChip title="Reply unavailable" text="Your draft is kept. Choose another message or cancel this reply." cancel="Cancel unavailable reply"
         onCancel={() => { write({ ...latest(), replyTo: undefined }); focusField(); }} />}
       {missingTopic && <ReplyChip title="Topic unavailable" text="Your draft is kept. Choose a topic above, or return to Main." cancel="Move draft to Main"

@@ -149,7 +149,7 @@ func contentHash(in envelope.Inner) string {
 		TopicDone                                                    bool                    `json:",omitempty"`
 		Topic                                                        string                  `json:",omitempty"`
 		TopicEvent                                                   *envelope.TopicEvent    `json:",omitempty"`
-		Followup                                                     *envelope.Ref           `json:",omitempty"`
+		Followup                                                     *envelope.FollowupRef   `json:",omitempty"`
 	}{in.Conv, in.LID, in.Kind, in.Body, in.ReplyTo, in.Status, in.Sub, in.Origin, in.Emotion, in.Target, nil, in.PID, in.AgentID, in.ReceiverRoute, in.Human, in.Quote, in.TopicDone, in.Topic, in.TopicEvent, in.Followup}
 	for _, a := range in.Attachments {
 		c.Attachments = append(c.Attachments, att{a.Name, a.Size, a.SHA256})

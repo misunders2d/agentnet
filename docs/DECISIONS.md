@@ -1,5 +1,21 @@
 # AgentNet Revival — Architectural Decision Records & Linear Roadmap
 
+## 2026-10-15 — natural steering, without extra composer controls
+
+The owner's next tagged message corrects that agent's current work in the same
+chat and topic. No active run means an ordinary request. Remove the follow-up
+chooser, steering mode/button and duplicate modal. Bind each tagged agent
+independently; use existing Reply ancestry for genuine multiple-run ambiguity.
+Preserve drafts, files and exact retry identity when the run ends or changes.
+
+Native consumption in the same run is the acceptance criterion. Queueing,
+writing to a pipe or starting another process cannot substitute for steering.
+Use each supported harness's existing native input, with its settings and
+permissions unchanged. Unsupported, ended or uncertain handovers cannot
+silently become later work. The signed positive attempt travels through the
+existing follow-up carrier; it adds no schema or capability advertisement slot.
+Qualification and honest harness limits are recorded in `plans/V0_8_29.md`.
+
 ## 2026-10-14 — collaboration without manual relaying
 
 Owner explicitly restated: AgentNet is a communications platform. Each agent's

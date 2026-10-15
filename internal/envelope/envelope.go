@@ -132,7 +132,7 @@ type Inner struct {
 	TopicDone     bool           `json:"topic_done,omitempty"`
 	Topic         string         `json:"topic,omitempty"`
 	TopicEvent    *TopicEvent    `json:"topic_event,omitempty"`
-	Followup      *Ref           `json:"followup,omitempty"`   // explicit queued correction/continuation; never a rerun
+	Followup      *FollowupRef   `json:"followup,omitempty"`   // explicit queued correction/continuation; never a rerun
 	SendGroup     string         `json:"send_group,omitempty"` // signed presentation only; never execution identity
 }
 

@@ -181,7 +181,7 @@ Host-internal). Google Drive is outside AgentNet end-to-end encryption.
 |---|---|---|---|---|
 | `POST /api/act` | D B | A local decision on a received item, or a local permission change. Show only the verbs listed in the item's `actions`. B accepts 7 of the 17 verbs (table below). | `{do, id?, body?, reason?, ids?, key?, attempt?, send_id?, held?}` | `{note}` |
 | `POST /api/operator/decide` | D B | Decide a request that another host reported, as its granted operator. A current owner-human device may also answer a private native callback, without an operator grant; see the native contract below. On your own host you can also `continue`, `resolve` or `cancel` it. `check:true` only checks that you may, and only for your own waiting request with `report:""`: `resolve` with `expect:"needs_human"` or `cancel` with `expect:"running"`. | `{host, id, key, action, expect, attempt, report, text?, send_id?, check?}`, where `action` is accept, decline, resolve, reply, cancel or continue | `{note}` |
-| `POST /api/request/followup` | D B | Follow up on a request you sent, to its same executor. | `{id, conv?, ref:{id, fingerprint}, body, files?: [staged]}` | `{note}` |
+| `POST /api/request/followup` | D B | Send a correction to your exact request and executor. A positive `attempt` binds only its current run. | `{id, conv?, ref:{id, fingerprint}, attempt?, body, files?: [staged]}` | `{note}` |
 | `GET /api/approvals` | D B | Standing grants, as `agentnet approvals` lists them. B always answers `{questions:[], tasks:[], participations:[], read_only:true}`, and refuses a body. | — | `{questions, tasks, native_tasks?, own_devices?, removed_devices?, participations, read_only, unresolved?}` |
 | `POST /api/approvals/revoke` | D B† | End one standing grant. B: "Nothing runs in this browser: approvals and grants are made and revoked on a computer with AgentNet." | `{kind:"question" or "task", person}`, `{kind, address}` or `{kind:"participation", pid}` | `{note}` |
 | `GET /api/agents` | D B | Without `host`: this computer's agents (`local:true`, with harnesses). With `?host=`: that host's verified public catalog. B needs another device's `host`; without it, it refuses "This browser runs no local agents or responders." | `?host=` optional | `{host, local, agents:[{record:{v, id, host, host_key, label, ts, sig?}, enabled, responder?}], harnesses?}` |
@@ -194,6 +194,18 @@ Host-internal). Google Drive is outside AgentNet end-to-end encryption.
 | `POST /api/dm/agent/decide` | D B† | Accept or decline an invitation for this device's agent (`needs_you` reason `agent_invite` without `role:"human"`; D refuses a guest invitation here with 409). B: "This browser runs no agent: an agent is accepted on the computer that runs it." | `{pid, accept}` | `AgentView` |
 | `POST /api/dm/agent/dismiss` | D B | End an agent's part in a conversation. | `{pid}` | `AgentView` |
 | `POST /api/dm/agent/ask` | D B | Ask a question of, or give a task to, an active participant agent. The same `reply_receiver` refusals as `/api/send` apply on B and Android. | `{pid, kind, body, topic?, files?: [staged], id?, send_group?, reply_receiver?}` | `{id, lid?, state, path?, detail?}` |
+
+An ordinary tagged message binds to that agent's verified, nonstale `running`
+request in the current chat/topic. Send its positive safe-integer `exec.attempt`
+as `attempt`, with the exact original author/ref, retained send ID and files.
+No active request uses the ordinary ask route. If multiple roots are active,
+resolve through the existing Reply ancestry or retain the draft and report
+ambiguity; do not choose the newest or add a request selector. A strict
+correction cannot start later work or fall back to a queued continuation.
+Only the host's `steered` status proves native consumption; the POST note does
+not. Exact uncertain retries retain their original ID/ref/attempt/body/files.
+Omitted or zero `attempt` preserves the legacy API's queued-followup semantics;
+the ordinary tagged composer always binds a positive attempt for active work.
 
 ### `/api/act` verbs
 

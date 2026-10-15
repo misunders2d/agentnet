@@ -478,7 +478,7 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 	var group *GroupContext
 	peerRequired := true
 	if root.Kind == protocol.ConvKindGroup {
-		if !(groupControlSub(sub) && cap == protocol.CapControl || sub == envelope.SubStatus && cap == protocol.CapHeadless) {
+		if !(groupControlSub(sub) && cap == protocol.CapControl || sub == envelope.SubStatus && (cap == protocol.CapHeadless || cap == protocol.CapRequestFollowup || cap == protocol.CapRequestSteer)) {
 			return ControlSent{}, errors.New("group: this control requires its own addressed authority")
 		}
 		packet, e := groupTurnPacketIn(a.store.db, ref.Conv)

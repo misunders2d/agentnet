@@ -72,7 +72,7 @@ type HistoryItem struct {
 	Topic          string                  `json:"topic,omitempty"`
 	TopicEvent     *envelope.TopicEvent    `json:"topic_event,omitempty"`
 	SendGroup      string                  `json:"send_group,omitempty"`
-	Followup       *envelope.Ref           `json:"followup,omitempty"` // inert explicit request provenance
+	Followup       *envelope.FollowupRef   `json:"followup,omitempty"` // inert explicit request provenance
 }
 
 // inner is the item as the message it records.

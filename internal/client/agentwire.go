@@ -23,6 +23,9 @@ var errAgentIdentityUnsupported = fmt.Errorf("%w: named agent capability unavail
 // to it (roomCopy, ROOM_V1 §2.5).
 func agentRequirement(in envelope.Inner) string {
 	if in.Followup != nil && in.Conv == "" {
+		if in.Followup.Attempt > 0 {
+			return protocol.CapRequestSteer
+		}
 		return protocol.CapRequestFollowup
 	}
 	if isResponderProgress(in) && in.Conv == "" { // a conversation's progress keeps its own requirement; delivery adds prg1
@@ -140,6 +143,11 @@ func copyRequirement(c outCopy) string {
 	if required == "" {
 		required = agentRequirement(c.in)
 	}
+	followup := c.in.Followup
+	if followup == nil {
+		followup, _ = carriedFollowup(c.in.Sub, c.in.Body)
+	}
+	required = steerRequirement(required, followup != nil && followup.Attempt > 0)
 	needed := c.in.Human != nil && c.in.Human.ConversationAudience()
 	if !needed && c.in.Sub == envelope.SubHistory {
 		needed = conversationAudienceCopy(c.in.Sub, c.in.Body, "")
@@ -162,7 +170,7 @@ func (a *Agent) requireParticipationCaps(ctx context.Context, key identity.Publi
 		}
 		return nil
 	}
-	if required != protocol.CapConversationAudience && required != protocol.CapTopicContext && required != protocol.CapModelSync && required != protocol.CapModelSyncV2 && required != protocol.CapTopicStateSync && required != protocol.CapTopicOrganization && required != protocol.CapRequestFollowup && required != protocol.CapTopicParticipation && required != protocol.CapOwnSyncV3 && required != protocol.CapOwnSyncV2 && required != protocol.CapContinuation && required != protocol.CapSendGroup && required != protocol.CapReadSync && required != protocol.CapGroupInvitationManage && required != protocol.CapGroupInvitationControl && required != protocol.CapGroupHumanParticipation && required != protocol.CapRootSync && required != protocol.CapHumanParticipation && required != protocol.CapAgentIdentity && required != protocol.CapExternalParticipation && required != protocol.CapGroup && required != protocol.CapHeadless && required != protocol.CapReplyReceiver && required != protocol.CapProgress && required != protocol.CapAgentReaction && required != protocol.CapConvClear && required != protocol.CapRoom && required != protocol.CapProactiveAgent && required != protocol.CapMentionReaction && required != protocol.CapAgentOrganization {
+	if required != protocol.CapConversationAudience && required != protocol.CapTopicContext && required != protocol.CapModelSync && required != protocol.CapModelSyncV2 && required != protocol.CapTopicStateSync && required != protocol.CapTopicOrganization && required != protocol.CapRequestFollowup && required != protocol.CapRequestSteer && required != protocol.CapTopicParticipation && required != protocol.CapOwnSyncV3 && required != protocol.CapOwnSyncV2 && required != protocol.CapContinuation && required != protocol.CapSendGroup && required != protocol.CapReadSync && required != protocol.CapGroupInvitationManage && required != protocol.CapGroupInvitationControl && required != protocol.CapGroupHumanParticipation && required != protocol.CapRootSync && required != protocol.CapHumanParticipation && required != protocol.CapAgentIdentity && required != protocol.CapExternalParticipation && required != protocol.CapGroup && required != protocol.CapHeadless && required != protocol.CapReplyReceiver && required != protocol.CapProgress && required != protocol.CapAgentReaction && required != protocol.CapConvClear && required != protocol.CapRoom && required != protocol.CapProactiveAgent && required != protocol.CapMentionReaction && required != protocol.CapAgentOrganization {
 		return errors.New("unknown queued capability requirement")
 	}
 	label, device, err := protocol.SplitAddress(key.Address)
@@ -350,6 +358,8 @@ func (e *NeedsUpdateError) Error() string {
 	switch e.Cap {
 	case protocol.CapHistoryArchive:
 		message = "cannot read encrypted history archives yet; update all its active AgentNet sessions"
+	case protocol.CapRequestSteer:
+		message = "cannot safely receive current-run steering yet; update all its active AgentNet sessions"
 	case protocol.CapRequestFollowup:
 		message = "cannot safely queue bound request follow-ups yet; update all its active AgentNet sessions"
 	case protocol.CapModelSync, protocol.CapModelSyncV2:

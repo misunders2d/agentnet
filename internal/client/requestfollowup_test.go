@@ -30,7 +30,7 @@ func TestRequestFollowupGuard(t *testing.T) {
 		return in.ID
 	}
 	original := store(envelope.Inner{Kind: envelope.KindQuestion, Body: "Create contribution-margin.md in Russian"})
-	ref := &envelope.Ref{ID: original, Fingerprint: w.alice.Self().Fingerprint()}
+	ref := &envelope.FollowupRef{Ref: envelope.Ref{ID: original, Fingerprint: w.alice.Self().Fingerprint()}}
 	id := store(envelope.Inner{Kind: envelope.KindQuestion, Body: "Use English instead", ReplyTo: original, Followup: ref})
 	j := job{ID: id, From: w.alice.Address, Key: ref.Fingerprint, Kind: envelope.KindQuestion, Body: "Use English instead", ReplyTo: original}
 	if _, err := w.bob.store.db.Exec(`UPDATE inbox SET state=? WHERE id=?`, stateAnswered, original); err != nil {
@@ -128,7 +128,7 @@ func TestRequestFollowupArrivalOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	original := protocol.NewID()
-	ref := &envelope.Ref{ID: original, Fingerprint: w.alice.Self().Fingerprint()}
+	ref := &envelope.FollowupRef{Ref: envelope.Ref{ID: original, Fingerprint: w.alice.Self().Fingerprint()}}
 	first, last := strings.Repeat("f", 32), strings.Repeat("a", 32)
 	for _, id := range []string{original, first, last} {
 		in := envelope.Inner{V: 1, ID: id, From: w.alice.Address, To: w.bob.Address, TS: 1, Kind: envelope.KindQuestion, Body: id}

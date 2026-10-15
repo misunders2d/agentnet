@@ -17,7 +17,7 @@ func TestRequestFollowupRetainedIntent(t *testing.T) {
 	}
 	defer s.db.Close()
 	fp := strings.Repeat("a", 64)
-	ref := &envelope.Ref{ID: protocol.NewID(), Fingerprint: fp}
+	ref := &envelope.FollowupRef{Ref: envelope.Ref{ID: protocol.NewID(), Fingerprint: fp}}
 	in := envelope.Inner{V: envelope.Version, ID: protocol.NewID(), From: "alice/phone", To: "alice/laptop", Kind: envelope.KindTask, TS: 1, Body: "Use English", ReplyTo: ref.ID, Followup: ref}
 	env := envelope.Envelope{V: envelope.Version, ID: in.ID, From: in.From, To: in.To, Kind: in.Kind, TS: in.TS}
 	if err = s.addOutbox(env, in, "", nil); err != nil {

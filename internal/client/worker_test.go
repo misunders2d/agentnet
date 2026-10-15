@@ -743,9 +743,8 @@ func TestOMPResponderQuestionAndAcceptedTask(t *testing.T) {
   fi
   previous="$arg"
  done
- cat > "$STUB_LOG.stdin"
- echo "omp stub answer"
-`
+ export AGENTNET_NATIVE_STUB_PROMPT="$STUB_LOG.stdin"
+` + nativeAnswerLauncher(t, "omp", "omp stub answer")
 	if err := os.WriteFile(h.bin, []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}

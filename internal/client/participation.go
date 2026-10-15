@@ -115,13 +115,22 @@ func membersIn(q dbq, conv string) (dmMembers, error) {
 // memberRowsIn shares pinned-roster resolution; its caller supplies verified
 // membership, which is immutable for DMs and current effective state for groups.
 func memberRowsIn(q dbq, root protocol.ConvRoot, members []protocol.ConvMember) (dmMembers, error) {
+	return memberRowsKnownIn(q, root, members, nil)
+}
+
+// known belongs only to the caller's current read snapshot; other callers reread.
+func memberRowsKnownIn(q dbq, root protocol.ConvRoot, members []protocol.ConvMember, known map[string]personRow) (dmMembers, error) {
 	q, closeReads := prepareMembershipReads(q)
 	defer closeReads()
 	m := dmMembers{root: root, persons: map[string]personRow{}, hosts: map[string]personRow{}, chains: map[string]map[string]bool{}}
 	for _, mem := range members {
-		p, ok, err := personByIDIn(q, mem.Person)
-		if err != nil {
-			return dmMembers{}, err
+		p, ok := known[mem.Person]
+		if known == nil {
+			var err error
+			p, ok, err = personByIDIn(q, mem.Person)
+			if err != nil {
+				return dmMembers{}, err
+			}
 		}
 		if !ok || p.info.State != personSelf && p.info.State != personPinned {
 			continue

@@ -31,6 +31,7 @@ type copyNeeds struct {
 	mentionCap, agentOrganizationCap                                               bool
 	snapshotCap                                                                    bool
 	conversationAudienceCap                                                        bool
+	steer                                                                          bool
 	// A history copy's carried item. A copy kept as ciphertext only (empty
 	// body) carries none: its requirement is the stored column.
 	item               HistoryItem
@@ -47,6 +48,7 @@ func copyNeedsOf(q dbq, id string, v int) (copyNeeds, error) {
 		return n, err
 	}
 	n.required, n.conversationAudienceCap = splitConversationAudienceRequirement(n.stored)
+	n.required, n.steer = splitSteerRequirement(n.required)
 	n.conversationAudienceCap = n.conversationAudienceCap || conversationAudienceCopy(n.sub, n.body, n.humanRaw)
 	if n.required == "" && n.conversationAudienceCap {
 		n.required = protocol.CapHumanParticipation
@@ -92,8 +94,14 @@ func copyNeedsOf(q dbq, id string, v int) (copyNeeds, error) {
 	if n.required == "" && n.organizationCap {
 		n.required = protocol.CapTopicOrganization
 	}
-	if n.followup, err = requestFollowupCopy(q, id, n.sub, n.body); err != nil {
+	followup, err := requestFollowupCopyRef(q, id, n.sub, n.body)
+	if err != nil {
 		return n, err
+	}
+	n.followup = followup != nil
+	n.steer = n.steer || followup != nil && followup.Attempt > 0
+	if n.required == "" && n.steer {
+		n.required = protocol.CapRequestSteer
 	}
 	if n.required == "" && n.followup {
 		n.required = protocol.CapRequestFollowup
@@ -127,7 +135,7 @@ func (n copyNeeds) cacheKey(to string) string {
 	return fmt.Sprintf("%s\x00%d\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%v%v%v%v%v%v%v%v%v%v%v\x00%s\x00%s\x00%s\x00%s",
 		to, n.v, n.required, n.stored, n.conv, n.sub, n.pid, n.humanRaw, n.status, n.agentID,
 		n.progress, n.receiverCap, n.room, n.topicScoped, n.organizationCap, n.followup, n.proposal, n.groupedWire, n.historical, n.helper, item.GroupHistory != nil,
-		item.Sub, item.Status, item.PID, item.AgentID) + fmt.Sprint(n.proactive, n.mentionCap, n.agentOrganizationCap, n.snapshotCap, n.conversationAudienceCap)
+		item.Sub, item.Status, item.PID, item.AgentID) + fmt.Sprint(n.proactive, n.mentionCap, n.agentOrganizationCap, n.snapshotCap, n.conversationAudienceCap, n.steer)
 }
 
 // copyWait is a reason a copy waits that capSupport words itself.
@@ -209,7 +217,10 @@ func (a *Agent) readerCheck(ctx context.Context, to string, key identity.Public,
 	if err == nil && n.organizationCap && required != protocol.CapTopicOrganization {
 		err = a.requireParticipationCaps(ctx, key, protocol.CapTopicOrganization)
 	}
-	if err == nil && n.followup && required != protocol.CapRequestFollowup {
+	if err == nil && n.steer && required != protocol.CapRequestSteer {
+		err = a.requireParticipationCaps(ctx, key, protocol.CapRequestSteer)
+	}
+	if err == nil && n.followup && required != protocol.CapRequestFollowup && required != protocol.CapRequestSteer {
 		err = a.requireParticipationCaps(ctx, key, protocol.CapRequestFollowup)
 	}
 	if err == nil && n.proposal && required != protocol.CapOwnSyncV3 {

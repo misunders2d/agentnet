@@ -6,6 +6,19 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+- Steer current agent work with the next tagged message in the same chat/topic,
+  without a separate follow-up chooser or mode. Codex, Claude, Pi and OMP use
+  native input; strict corrections keep the exact attempt and never silently
+  start later work when a run ends or refuses the input.
+
+- Recover retained group topic moves when a reader has only the agent's public
+  invitation scope. The original inviter shares the exact selected grant;
+  private invitation details and unselected history remain private.
+- Deliver retained history deletions after their original text has already been
+  erased, using verified prior coverage without changing the immutable ledger.
+- Reduce repeated current-member and agent-host database reads during group
+  callbacks, retaining fresh authority checks for every operation.
+
 - Refresh the open chat independently of the workspace overview, so message
   arrivals and receipts do not wait for a slow sidebar. Typing and presence
   updates avoid reloading history; unchanged message text stays rendered.

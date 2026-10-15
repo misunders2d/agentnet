@@ -497,6 +497,10 @@ const CapHeadless = "hdl1"
 // request before a separate run. It does not advertise native in-run steering.
 const CapRequestFollowup = "flw1"
 
+// CapRequestSteer reads exact-attempt corrections and never launches them later.
+// This replaces flw1 in the existing advertised slot and implies that reader.
+const CapRequestSteer = "flw2"
+
 // CapContinuation reads exact-attempt human clarification decisions.
 const CapContinuation = "cont1"
 
@@ -562,7 +566,7 @@ func (c CapsRecord) ValidateAdvertisement() error {
 // Reads reports whether c says its session reads capability name: it lists
 // it, or lists CapRoom, which implies each of RoomImplies.
 func (c CapsRecord) Reads(name string) bool {
-	return c.Has(name) || name == CapModelSync && c.Has(CapModelSyncV2) || name == CapGroupInvitationControl && c.Has(CapGroupInvitationManage) || c.Has(CapRoom) && slices.Contains(RoomImplies, name)
+	return c.Has(name) || name == CapRequestFollowup && c.Has(CapRequestSteer) || name == CapModelSync && c.Has(CapModelSyncV2) || name == CapGroupInvitationControl && c.Has(CapGroupInvitationManage) || c.Has(CapRoom) && slices.Contains(RoomImplies, name)
 }
 
 // Validate checks the shape of c.

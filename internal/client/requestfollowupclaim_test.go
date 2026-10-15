@@ -15,7 +15,7 @@ func TestRequestFollowupClaimSkipsBlockedRows(t *testing.T) {
 		if err := w.bob.Approve(w.alice.Address); err != nil {
 			t.Fatal(err)
 		}
-		store := func(ref *envelope.Ref) string {
+		store := func(ref *envelope.FollowupRef) string {
 			t.Helper()
 			in := envelope.Inner{V: envelope.Version, ID: protocol.NewID(), From: w.alice.Address, To: w.bob.Address, TS: time.Now().Unix(), Kind: envelope.KindQuestion, Body: "claim regression", Followup: ref}
 			if ref != nil {
@@ -32,7 +32,7 @@ func TestRequestFollowupClaimSkipsBlockedRows(t *testing.T) {
 			return in.ID
 		}
 		original := store(nil)
-		blocked := store(&envelope.Ref{ID: original, Fingerprint: w.alice.Self().Fingerprint()})
+		blocked := store(&envelope.FollowupRef{Ref: envelope.Ref{ID: original, Fingerprint: w.alice.Self().Fingerprint()}})
 		ordinary := store(nil)
 		for i, id := range []string{original, blocked, ordinary} {
 			state := stateAccepted
@@ -88,7 +88,7 @@ func TestRequestFollowupClaimSkipsBlockedRows(t *testing.T) {
 			in := base
 			in.ID, in.LID = protocol.NewID(), protocol.NewID()
 			in.ReplyTo = request.LID
-			in.Followup = &envelope.Ref{ID: request.LID, Fingerprint: w.alice.Self().Fingerprint()}
+			in.Followup = &envelope.FollowupRef{Ref: envelope.Ref{ID: request.LID, Fingerprint: w.alice.Self().Fingerprint()}}
 			if i == agentPage+1 {
 				in.ReplyTo, in.Followup = "", nil
 				ordinary = in.ID

@@ -223,7 +223,7 @@ func TestCodexActualIndependentSteering(t *testing.T) {
 		return state == stateSteered
 	})
 	stored, err := storedRequestFollowup(w.alice.store.db, "in", correctionID)
-	if err != nil || stored == nil || *stored != ref {
+	if err != nil || stored == nil || stored.Ref != ref {
 		t.Fatal("accepted correction differs from exact original ref", err)
 	}
 	if proof := read(ids[1]); proof.state != stateRunning || proof.thread != proofs[1].thread || proof.attempt != 1 {

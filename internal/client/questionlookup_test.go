@@ -293,7 +293,7 @@ func TestQuestionLookupParticipationBranch(t *testing.T) {
 	bindProgram(t, exe)
 	dir := t.TempDir()
 	stub := filepath.Join(dir, "claude-stub")
-	os.WriteFile(stub, []byte(stubClaudeLookup), 0o700)
+	os.WriteFile(stub, []byte(stubClaudeLookup+nativeAnswerLauncher(t, "claude", "looked up\nemotion: calm\n")), 0o700)
 	orig := Harnesses["claude"]
 	h := orig
 	h.bin = stub
@@ -336,9 +336,81 @@ func TestQuestionLookupParticipationBranch(t *testing.T) {
 // stubClaudeLookup records its argv (one per line) and prompt, then answers.
 const stubClaudeLookup = `#!/bin/sh
 printf '%s\n' "$@" > "$0.args"
-cat > "$0.prompt"
-printf 'looked up\nemotion: calm\n'
+export AGENTNET_NATIVE_STUB_PROMPT="$0.prompt"
 `
+
+// nativeAnswerLauncher uses the test binary as a native protocol stand-in.
+// It reads one request while stdin stays open, as the real streaming harnesses do.
+func nativeAnswerLauncher(t *testing.T, harness, answer string) string {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGENTNET_NATIVE_STUB_EXE", exe)
+	t.Setenv("AGENTNET_NATIVE_STUB_HARNESS", harness)
+	t.Setenv("AGENTNET_NATIVE_STUB_ANSWER", answer)
+	return `unset AGENTNET_TEST_LOOKUP_PROGRAM
+exec "$AGENTNET_NATIVE_STUB_EXE" -test.run '^TestNativeFixtureAnswerProcess$' -- "$@"
+`
+}
+
+func TestNativeFixtureAnswerProcess(t *testing.T) {
+	name := os.Getenv("AGENTNET_NATIVE_STUB_HARNESS")
+	if name == "" {
+		t.Skip("owned synthetic subprocess only")
+	}
+	dec, enc := json.NewDecoder(os.Stdin), json.NewEncoder(os.Stdout)
+	var request struct {
+		ID, Type string
+		Message  json.RawMessage
+	}
+	if dec.Decode(&request) != nil {
+		os.Exit(2)
+	}
+	answer := os.Getenv("AGENTNET_NATIVE_STUB_ANSWER")
+	var prompt string
+	if name == "claude" {
+		var message struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		}
+		if request.Type != "user" || json.Unmarshal(request.Message, &message) != nil || message.Role != "user" {
+			os.Exit(3)
+		}
+		prompt = message.Content
+		// One-shot Claude chooses a fresh session when no saved ID is requested.
+		session := newUUID()
+		for i := 1; i+1 < len(os.Args); i++ {
+			if os.Args[i] == "--session-id" {
+				session = os.Args[i+1]
+			}
+		}
+		if err := os.WriteFile(os.Getenv("AGENTNET_NATIVE_STUB_PROMPT"), []byte(prompt), 0600); err != nil {
+			os.Exit(5)
+		}
+		_ = enc.Encode(map[string]string{"type": "system", "subtype": "init", "session_id": session})
+		_ = enc.Encode(map[string]any{"type": "user", "uuid": protocol.NewID(), "isReplay": true, "parent_tool_use_id": nil, "session_id": session, "message": message})
+		_ = enc.Encode(map[string]string{"type": "result", "session_id": session, "result": answer})
+	} else {
+		if name != "omp" || request.Type != "prompt" || request.ID == "" || json.Unmarshal(request.Message, &prompt) != nil {
+			os.Exit(6)
+		}
+		if err := os.WriteFile(os.Getenv("AGENTNET_NATIVE_STUB_PROMPT"), []byte(prompt), 0600); err != nil {
+			os.Exit(7)
+		}
+		_ = enc.Encode(map[string]string{"type": "agent_start"})
+		_ = enc.Encode(map[string]any{"type": "message_end", "message": map[string]string{"role": "assistant", "content": answer, "stopReason": "stop"}})
+		_ = enc.Encode(map[string]string{"type": "agent_end"})
+		_ = enc.Encode(map[string]any{"type": "prompt_result", "id": request.ID, "status": "completed", "sessionSettled": true})
+	}
+	// Terminal native output makes the worker close its input; never require EOF first.
+	var unexpected any
+	if dec.Decode(&unexpected) == nil {
+		os.Exit(8)
+	}
+	os.Exit(0)
+}
 
 func TestQuestionLookupOMPUsesNativeReadTool(t *testing.T) {
 	w := newWorld(t, "")

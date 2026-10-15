@@ -69,19 +69,20 @@ if(variant==='report-history'){
  setReportHistory('active');
 }
 
-if(variant==='followup'||variant==='composer-followup'){
+if(variant==='followup'||variant.startsWith('composer-followup')){
  const key='aaaaaaaa-aaaaaaaa-aaaaaaaa-aaaaaaaa',originalKey='eeeeeeee-eeeeeeee-eeeeeeee-eeeeeeee',id='1'.repeat(32);
  fixture.overview.me.fingerprint=key;fixture.overview.person.fingerprint=key;fixture.thread.members[0].fingerprint=key;fixture.overview.person.devices=[{address:'aster/laptop',fingerprint:key},{address:'aster/other-laptop',fingerprint:originalKey}];
  fixture.overview.group_invitations=[];fixture.thread.guests=[];fixture.followupOriginal='Prepare contribution-margin.md in Russian';
  fixture.thread.agents=[{pid:'followup-agent',host:fixture.thread.members[1],agent_id:'a'.repeat(32),state:'active',state_text:'Active',invited:'2026-10-05T10:00:00Z',host_here:false,shared:[],can_ask:true,inviter:fixture.overview.person}];
- fixture.thread.messages.push({id,lid:id,from:'aster/other-laptop',send_group_author:originalKey,via:'aster/other-laptop',dir:'out',kind:'question',body:fixture.followupOriginal,at:'2026-10-05T10:01:00Z',pid:'followup-agent',target:{address:'brin/desktop',fingerprint:'bbbbbbbb-bbbbbbbb-bbbbbbbb-bbbbbbbb',agent_id:'a'.repeat(32)},state:'delivered',exec:{state:'running',host:'brin/desktop'},actions:[]});
+ fixture.thread.messages.push({id,lid:id,from:'aster/other-laptop',send_group_author:originalKey,via:'aster/other-laptop',dir:'out',kind:'question',body:fixture.followupOriginal,at:'2026-10-05T10:01:00Z',pid:'followup-agent',target:{address:'brin/desktop',fingerprint:'bbbbbbbb-bbbbbbbb-bbbbbbbb-bbbbbbbb',agent_id:'a'.repeat(32)},state:'delivered',exec:{state:'running',host:'brin/desktop',attempt:1},actions:[]});
  fixture.followupID=id;fixture.followupStages=[];
- if(variant==='composer-followup'){
-  fixture.thread.members[1].fingerprint='bbbbbbbb-bbbbbbbb-bbbbbbbb-bbbbbbbb';
-  fixture.thread.members[1].devices[0].fingerprint=fixture.thread.members[1].fingerprint;
+ fixture.thread.members[1].fingerprint='bbbbbbbb-bbbbbbbb-bbbbbbbb-bbbbbbbb';
+ fixture.thread.members[1].devices[0].fingerprint=fixture.thread.members[1].fingerprint;
+ if(variant.startsWith('composer-followup')){
   fixture.thread.agents.push({...fixture.thread.agents[0],pid:'same-name-other-agent',agent_id:'b'.repeat(32)});
   const root=fixture.thread.messages.at(-1);
-  fixture.thread.messages.push({...root,id:'2'.repeat(32),lid:'2'.repeat(32),body:'Prepare independent inventory report'});
+  fixture.thread.messages.push({...root,id:'2'.repeat(32),lid:'2'.repeat(32),body:'Prepare independent inventory report',exec:{...root.exec,state:'queued'}});
+  for(const [i,state] of ['pending','accepted','part_waiting'].entries())fixture.thread.messages.push({...root,id:String(i+5).repeat(32),lid:String(i+5).repeat(32),body:'Non-running '+state+' sibling',exec:{...root.exec,state}});
   fixture.thread.topics=[{id:'9'.repeat(32),title:'Other topic',state:'active',count:1,last_at:root.at}];
   fixture.thread.messages.push({...root,id:'3'.repeat(32),lid:'3'.repeat(32),topic:'9'.repeat(32),body:'Other-topic work'},
    {...root,id:'4'.repeat(32),lid:'4'.repeat(32),origin:'agent:codex',body:'Peer-authored work'});
@@ -285,15 +286,17 @@ if(variant==='agent-child'){
 
 let open;
 const changeListeners=new Set(),changed=event=>{for(const fn of [...changeListeners])fn(event);};
-const host={version:1,platform:'daemon',workspace:{id:'default',name:'P6 fixture',endpoint:location.origin,address:seed.overview.me.address,realm:'',state:'enrolled'},workspaces:null,skins:[],onSkinsChange(){return()=>{};},onOpen(fn){open=fn;},listen(fn){changeListeners.add(fn);return()=>changeListeners.delete(fn);},stage:async f=>{if(variant==='followup'||variant==='composer-followup'){if(fixture.followupStageFailure&&f.name==='fail-second.md'){fixture.followupStageFailure=false;throw Error('Synthetic second stage failure');}const id='followup-staged-'+(fixture.followupStages.length+1);fixture.followupStages.push({id,name:f.name,size:f.size,text:await f.text()});if(fixture.followupStagePause){fixture.followupStagePause=false;await new Promise(resolve=>{window.finishFollowupStage=resolve;});}return id;}if(variant==='multi-agent'){const id='multi-stage-'+(fixture.stages.length+1);fixture.stages.push({id,name:f.name,size:f.size});return {id};}if(variant==='oks'){fixture.staged={name:f.name,size:f.size};return {id:'staged-1'};}throw Error('fixture accepts no files');},file:async(id,index,dir)=>{if(variant==='direct-files'){fixture.download={id,index,dir};return {bytes:new TextEncoder().encode('hello')};}throw Error('fixture contains no files');},api:async(p,body)=>{
+const host={version:1,platform:variant==='composer-followup-android'?'android':'daemon',android:variant==='composer-followup-android'?{legacyDrafts:async()=>({drafts:[]}),visible:()=>true,onVisibility:()=>()=>{}}:undefined,workspace:{id:'default',name:'P6 fixture',endpoint:location.origin,address:seed.overview.me.address,realm:'',state:'enrolled'},workspaces:null,skins:[],onSkinsChange(){return()=>{};},onOpen(fn){open=fn;},listen(fn){changeListeners.add(fn);return()=>changeListeners.delete(fn);},stage:async f=>{if(variant==='followup'||variant.startsWith('composer-followup')){if(fixture.followupStageFailure&&f.name==='fail-second.md'){fixture.followupStageFailure=false;throw Error('Synthetic second stage failure');}const id='followup-staged-'+(fixture.followupStages.length+1);fixture.followupStages.push({id,name:f.name,size:f.size,text:await f.text()});if(fixture.followupStagePause){fixture.followupStagePause=false;await new Promise(resolve=>{window.finishFollowupStage=resolve;});}return id;}if(variant==='multi-agent'){const id='multi-stage-'+(fixture.stages.length+1);fixture.stages.push({id,name:f.name,size:f.size});return {id};}if(variant==='oks'){fixture.staged={name:f.name,size:f.size};return {id:'staged-1'};}throw Error('fixture accepts no files');},file:async(id,index,dir)=>{if(variant==='direct-files'){fixture.download={id,index,dir};return {bytes:new TextEncoder().encode('hello')};}throw Error('fixture contains no files');},api:async(p,body)=>{
 fixture.requests.push({path:p,body});
-if((variant==='followup'||variant==='composer-followup')&&p==='/api/upload/discard')return {};
-if((variant==='followup'||variant==='composer-followup')&&p==='/api/request/followup'){
+if((variant==='followup'||variant.startsWith('composer-followup'))&&p==='/api/upload/discard')return {};
+if((variant==='followup'||variant.startsWith('composer-followup'))&&p==='/api/request/followup'){
+ if(fixture.rejectEndedSteering)throw Error('The selected current work ended; steering was not applied.');
+ if(variant.startsWith('composer-followup') && body.attempt!==fixture.thread.messages.find(m=>(m.lid||m.id)===body.ref.id)?.exec?.attempt)throw Error('Steering must retain the exact host attempt');
  if(!fixture.followupFailed){fixture.followupFailed=true;throw Error('Synthetic uncertain response; retry the same follow-up');}
- fixture.followupSent=true;return {note:'Follow-up queued; native acceptance has not been proven.'};
+ fixture.followupSent=true;return {note:'Correction sent; pending native acceptance.'};
 }
 
-if(variant==='composer-followup'&&p==='/api/dm/agent/ask')return {id:body.id,lid:body.id,state:'custody'};
+if(variant.startsWith('composer-followup')&&p==='/api/dm/agent/ask')return {id:body.id,lid:body.id,state:'custody'};
 if(variant==='reactions'&&p==='/api/message/react'){
  if(body.conv!==fixture.thread.id||body.id!=='context'||body.dir!=='in')throw Error('Unexpected reaction target');
  if(fixture.failReaction){fixture.failReaction=false;throw Error('Synthetic reaction failed');}
@@ -869,89 +872,165 @@ if(process.env.AGENTNET_HELD_FLOOD_REGRESSION==='1'){
  continue;
 }
 if(process.env.AGENTNET_COMPOSER_FOLLOWUP_REGRESSION==='1'){
- const {page,context}=await openCase('composer-followup');
- try{
-  const form=page.locator('form[aria-label="Write a message"]'),field=form.locator('textarea');
-  await field.fill('@');
-  await page.getByRole('option').filter({hasText:'Analyst'}).first().click();
-  await field.pressSequentially(' Use English instead');
-  const select=form.getByRole('combobox',{name:/^Request for/});await select.waitFor();
-  assert.equal(await select.locator('option').count(),4,'two exact requests, ambiguity placeholder and explicit new choice only');
-  const ambiguousShot=path.join(evidence,'comic-ordinary-choice-'+width+'.png');await page.screenshot({path:ambiguousShot});shots.push(ambiguousShot);
-  assert.equal(await form.locator('[data-part="send"]').getAttribute('aria-disabled'),'true','ambiguous runs require an explicit selection');
-  assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/dm/agent/ask'||r.path==='/api/request/followup').length),0);
-  await select.selectOption('1'.repeat(32));
-  await form.locator('input[type=file]').setInputFiles({name:'canonical.md',mimeType:'text/markdown',buffer:Buffer.from('canonical original bytes')});
-  await form.locator('[data-part="send"]').click();
-  await page.getByText(/Synthetic uncertain response/).first().waitFor();
-  const retry=page.getByRole('button',{name:/Retry/}).first();await retry.waitFor();
-  await field.fill('@');
-  await page.getByRole('option').filter({hasText:'Analyst'}).first().click();
-  await field.pressSequentially(' A newer draft stays here');
-  const newerDraft=await field.inputValue();
-  await select.selectOption('new');
-  await retry.click();
-  await page.waitForFunction(()=>fixture.requests.filter(r=>r.path==='/api/request/followup').length===2);
-  const calls=await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/request/followup'));
-  assert.deepEqual({...calls[0].body,files:[]},{...calls[1].body,files:[]},'retry retains exact send ID and original request despite newer choices/draft');
-  const staged=await page.evaluate(()=>fixture.followupStages);
-  for(const call of calls){assert.equal(call.body.files.length,1);const file=staged.find(f=>f.id===call.body.files[0]);assert.equal(file.text,'canonical original bytes');assert.equal(file.name,'canonical.md');}
-  assert.deepEqual(calls[0].body.ref,{id:'1'.repeat(32),fingerprint:'eeeeeeee-eeeeeeee-eeeeeeee-eeeeeeee'});
-  assert.equal(calls[0].body.conv,conv);assert.match(calls[0].body.body,/Use English instead/);
-  assert.equal(await field.inputValue(),newerDraft);
-  assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/dm/agent/ask').length),0,'ordinary correction did not create an independent root');
-  await form.locator('[data-part="send"]').click();
-  await page.waitForFunction(()=>fixture.requests.filter(r=>r.path==='/api/dm/agent/ask').length===1);
-  const fresh=await page.evaluate(()=>fixture.requests.find(r=>r.path==='/api/dm/agent/ask').body);
-  assert.equal(fresh.pid,'followup-agent');assert.match(fresh.body,/A newer draft stays here$/);
-  assert(!fresh.ref&&!fresh.request_followup,'independent work is explicit');
-  assert(!await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),'exact request controls fit phone width');
-  const shot=path.join(evidence,'comic-ordinary-followup-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
- }finally{await context.close();}
+ // The next tagged message naturally goes to exact current work, without a
+ // selector, steering mode, action, or second composer.
+ {
+  const {page,context}=await openCase('composer-followup');
+  try{
+   const form=page.locator('form[aria-label="Write a message"]'),field=form.locator('textarea');
+   const choose=async text=>{await field.fill('@');await page.getByRole('option').filter({hasText:'Analyst'}).first().click();await field.pressSequentially(text);};
+   await choose(' Use English instead');
+   assert.notEqual(await form.locator('[data-part="send"]').getAttribute('aria-disabled'),'true','queued siblings never block the next tagged message');
+   assert.equal(await form.getByRole('combobox').count(),0,'no request selector');assert.equal(await form.getByRole('button',{name:'Cancel steering',exact:true}).count(),0);
+   await form.getByRole('button',{name:'Add to message',exact:true}).click();assert.equal(await page.getByRole('menuitem',{name:/Steer current work/}).count(),0,'no extra steering action');await form.getByRole('button',{name:'Add to message',exact:true}).click();await page.getByRole('menu').waitFor({state:'hidden'});await settle(page);
+   await form.locator('input[type=file]').setInputFiles({name:'canonical.md',mimeType:'text/markdown',buffer:Buffer.from('canonical original bytes')});
+   await form.locator('[data-part="send"]').click();await page.getByText(/Synthetic uncertain response/).first().waitFor();
+   const retry=page.getByRole('button',{name:/Retry/}).first();await retry.waitFor();
+   await choose(' A newer draft stays here');const newer=await field.inputValue();
+   await retry.click();await page.waitForFunction(()=>fixture.requests.filter(r=>r.path==='/api/request/followup').length===2);
+   const calls=await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/request/followup'));
+   assert.deepEqual({...calls[0].body,files:[]},{...calls[1].body,files:[]},'retry captures original ID/ref/attempt/body');
+   assert.equal(calls[0].body.attempt,1);assert.deepEqual(calls[0].body.ref,{id:'1'.repeat(32),fingerprint:'eeeeeeee-eeeeeeee-eeeeeeee-eeeeeeee'});
+   const staged=await page.evaluate(()=>fixture.followupStages);for(const call of calls){const file=staged.find(f=>f.id===call.body.files[0]);assert.equal(file.text,'canonical original bytes');assert.equal(file.name,'canonical.md');}
+   assert.equal(await field.inputValue(),newer);await page.getByText(/Steering sent. Waiting for native acceptance/).first().waitFor();
+   assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/dm/agent/ask').length),0,'tagged current work did not create another run');
+   await page.evaluate(()=>{fixture.thread.messages.find(m=>m.id==='1'.repeat(32)).exec.state='done';reloadFixture();});
+   await form.locator('[data-part="send"]').click();await page.waitForFunction(()=>fixture.requests.filter(r=>r.path==='/api/dm/agent/ask').length===1);
+   const fresh=await page.evaluate(()=>fixture.requests.find(r=>r.path==='/api/dm/agent/ask').body);
+   assert.equal(fresh.pid,'followup-agent');assert.match(fresh.body,/A newer draft stays here$/);assert(!fresh.ref&&!fresh.attempt,'no running work keeps ordinary new-request wire');
+   assert(!await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth));
+   const shot=path.join(evidence,'comic-natural-steering-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
+  }finally{await context.close();}
+ }
+ {
+  const {page,context}=await openCase('composer-followup');
+  try{
+   const form=page.locator('form[aria-label="Write a message"]'),field=form.locator('textarea');
+   await page.evaluate(()=>{fixture.thread.messages.find(m=>m.id==='2'.repeat(32)).exec.state='running';fixture.followupFailed=true;reloadFixture();});
+   await field.fill('@');await page.getByRole('option').filter({hasText:'Analyst'}).first().click();await field.pressSequentially(' Bound by the existing Reply action');const draft=await field.inputValue();
+   await form.locator('[data-part="send"]').click();await form.getByText(/2 distinct running requests/).waitFor();
+   assert.equal(await field.inputValue(),draft);assert.equal(await form.getByRole('combobox').count(),0,'genuine ambiguity adds no chooser');
+   assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>['/api/request/followup','/api/dm/agent/ask'].includes(r.path)).length),0,'ambiguous work never guesses or starts another run');
+   const request=page.locator('[data-mid="'+('1'.repeat(32))+'"]');await request.waitFor();
+   if(width===390){const actions=request.getByRole('button',{name:'Message actions',exact:true});await actions.focus();await actions.press('Enter');await page.getByRole('dialog').getByRole('button',{name:'Reply',exact:true}).click();}
+   else{await request.hover();await request.getByRole('button',{name:'Reply',exact:true}).click();}
+   assert.match(await field.inputValue(),/@.*Analyst/,'exact reply keeps the existing agent tag');
+   await form.locator('[data-part="send"]').click();await page.waitForFunction(()=>fixture.requests.filter(r=>r.path==='/api/request/followup').length===1);
+   const call=await page.evaluate(()=>fixture.requests.find(r=>r.path==='/api/request/followup').body);assert.equal(call.ref.id,'1'.repeat(32));assert.equal(call.attempt,1);
+  }finally{await context.close();}
+ }
+ {
+  const {page,context}=await openCase('composer-followup');
+  try{
+   const form=page.locator('form[aria-label="Write a message"]'),field=form.locator('textarea');
+   await field.fill('@');await page.getByRole('option').filter({hasText:'Analyst'}).first().click();await field.pressSequentially(' Captured before completion');
+   await form.locator('input[type=file]').setInputFiles({name:'race.md',mimeType:'text/markdown',buffer:Buffer.from('retained race bytes')});
+   await page.evaluate(()=>fixture.followupStagePause=true);await form.locator('[data-part="send"]').click();await page.waitForFunction(()=>!!window.finishFollowupStage);
+   await field.fill('Newer draft survives completion race');
+   await page.evaluate(()=>{fixture.rejectEndedSteering=true;fixture.thread.messages.find(m=>m.id==='1'.repeat(32)).exec.state='done';reloadFixture();finishFollowupStage();});
+   await page.getByText(/current work ended; steering was not applied/).first().waitFor();
+   await page.getByRole('button',{name:/Retry/}).first().click();await page.waitForFunction(()=>fixture.requests.filter(r=>r.path==='/api/request/followup').length===2);
+   const calls=await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/request/followup').map(r=>r.body));assert.deepEqual({...calls[0],files:[]},{...calls[1],files:[]});assert.equal(calls[0].attempt,1);
+   assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/dm/agent/ask').length),0,'completion race never starts new execution');assert.equal(await field.inputValue(),'Newer draft survives completion race');
+  }finally{await context.close();}
+ }
+ {
+  const {page,context}=await openCase('composer-followup-android');
+  try{
+   const form=page.locator('form[aria-label="Write a message"]'),field=form.locator('textarea');
+   await field.fill('@');await page.getByRole('option').filter({hasText:'Analyst'}).first().click();await field.pressSequentially(' Android natural current-run steering');
+   await form.locator('input[type=file]').setInputFiles({name:'android.md',mimeType:'text/markdown',buffer:Buffer.from('Android retained stage bytes')});
+   await form.locator('[data-part="send"]').click();await page.getByRole('button',{name:/Saved messages.*Review/}).first().waitFor();
+   const journal=await page.evaluate(()=>JSON.parse(localStorage.getItem('agentnet.android.send-journal.v1.default')));assert.equal(journal.length,1);assert.equal(journal[0].endpoint,'/api/request/followup');assert.equal(journal[0].request.attempt,1);
+   assert.deepEqual(journal[0].request.ref,{id:'1'.repeat(32),fingerprint:'eeeeeeee-eeeeeeee-eeeeeeee-eeeeeeee'});
+   await field.fill('New Android draft remains');await page.getByRole('button',{name:/Saved messages.*Review/}).first().click();
+   const dialog=page.getByRole('dialog',{name:'Saved messages',exact:true});await dialog.waitFor();await dialog.getByRole('button',{name:'Retry saved send',exact:true}).click();
+   await page.waitForFunction(()=>fixture.requests.filter(r=>r.path==='/api/request/followup').length===2);
+   const calls=await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/request/followup'));assert.deepEqual(calls[0].body,calls[1].body,'Android journal retains exact ID/ref/attempt/stageIDs');assert.equal(await page.evaluate(()=>fixture.followupStages.length),1);
+   await page.waitForFunction(()=>JSON.parse(localStorage.getItem('agentnet.android.send-journal.v1.default')).length===0);await dialog.waitFor({state:'hidden'});assert.equal(await field.inputValue(),'New Android draft remains');
+  }finally{await context.close();}
+ }
+ // Each selected agent captures its own current run. The same next send
+ // can steer one current run and make ordinary new work for another agent.
+ {
+  const {page,context}=await openCase('composer-followup');
+  try{
+   const form=page.locator('form[aria-label="Write a message"]'),field=form.locator('textarea');
+   await page.evaluate(()=>{const source=fixture.thread.messages.find(m=>m.id==='1'.repeat(32));fixture.thread.messages.push({...source,id:'b'.repeat(32),lid:'b'.repeat(32),pid:'same-name-other-agent',body:'Second exact agent work',target:{...source.target,agent_id:'b'.repeat(32)},exec:{...source.exec,attempt:2}});fixture.followupFailed=true;reloadFixture();});
+   const both=async suffix=>{await field.fill('@');await page.getByRole('option').filter({hasText:'Analyst'}).first().click();await field.pressSequentially(' @');await page.getByRole('option').filter({hasText:'Analyst'}).nth(1).click();await field.pressSequentially(suffix);};
+   await both(' Both currently running targets');await form.locator('[data-part="send"]').click();
+   await page.waitForFunction(()=>fixture.requests.filter(r=>r.path==='/api/request/followup').length===2);
+   const calls=await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/request/followup').map(r=>r.body));assert.deepEqual(calls.map(c=>[c.ref.id,c.attempt]).sort(),[['1'.repeat(32),1],['b'.repeat(32),2]]);assert.notEqual(calls[0].id,calls[1].id);assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/dm/agent/ask').length),0);
+   await page.evaluate(()=>{fixture.thread.messages.find(m=>m.id==='b'.repeat(32)).exec.state='done';reloadFixture();});
+   await both(' Mixed current and new work');await form.locator('[data-part="send"]').click();
+   await page.waitForFunction(()=>fixture.requests.filter(r=>r.path==='/api/request/followup').length===3&&fixture.requests.filter(r=>r.path==='/api/dm/agent/ask').length===1);
+   const fresh=await page.evaluate(()=>fixture.requests.find(r=>r.path==='/api/dm/agent/ask').body);assert.equal(fresh.pid,'same-name-other-agent');assert(!fresh.attempt&&!fresh.ref);
+  }finally{await context.close();}
+ }
  continue;
 }
 if(process.env.AGENTNET_FOLLOWUP_REGRESSION==='1'){
- const {page,context}=await openCase('followup');
- try{
-  const request=page.locator('[data-mid="'+('1'.repeat(32))+'"]');await request.waitFor();
-  const show=async()=>{if(width===390){const actions=request.getByRole('button',{name:'Message actions',exact:true});await actions.focus();await actions.press('Enter');}else{await request.hover();await request.getByRole('button',{name:'More actions',exact:true}).click();}await page.getByRole(width===390?'button':'menuitem',{name:'Follow up with this agent…',exact:true}).click();};
-  const calls=()=>page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/request/followup'));
-  await show();const dialog=page.getByRole('dialog',{name:'Follow up with the same agent',exact:true});await dialog.waitFor();
-  assert.match(await dialog.innerText(),/Brin|Analyst/);assert.match(await dialog.innerText(),/Desktop|desktop/);assert.match(await dialog.innerText(),/The status shows what the agent accepted/);
-  await dialog.getByRole('button',{name:'Close',exact:true}).click();assert.deepEqual(await calls(),[],'Close sends nothing');
-  await show();await dialog.getByRole('textbox').fill('A staged correction');
-  await dialog.locator('input[type=file]').setInputFiles([{name:'terms.md',mimeType:'text/markdown',buffer:Buffer.from('English terminology')},{name:'fail-second.md',mimeType:'text/markdown',buffer:Buffer.from('later file')}]);
-  await page.evaluate(()=>fixture.followupStageFailure=true);
-  await dialog.getByRole('button',{name:'Send follow-up',exact:true}).click();await dialog.getByRole('alert').getByText(/second stage failure/).waitFor();
-  await page.waitForFunction(()=>fixture.requests.some(r=>r.path==='/api/upload/discard'&&r.body.ids.includes(fixture.followupStages[0].id)));
-  assert.deepEqual(await calls(),[],'Second stage failure sends no correction');assert.match(await dialog.innerText(),/terms.md/,'Original File objects survive staging failure');
-  await dialog.getByRole('button',{name:'Close',exact:true}).click();
-  await show();await dialog.getByRole('textbox').fill('A correction abandoned before send');
-  await dialog.locator('input[type=file]').setInputFiles({name:'terms.md',mimeType:'text/markdown',buffer:Buffer.from('English terminology')});
-  await page.evaluate(()=>fixture.followupStagePause=true);await dialog.getByRole('button',{name:'Send follow-up',exact:true}).click();
-  await page.waitForFunction(()=>!!window.finishFollowupStage);await page.evaluate(()=>openGroup());await page.evaluate(()=>finishFollowupStage());
-  await page.waitForFunction(()=>fixture.requests.some(r=>r.path==='/api/upload/discard'&&r.body.ids.includes(fixture.followupStages[1].id)));
-  assert.deepEqual(await calls(),[],'Captured view change during staging sends no correction');
-  await dialog.getByRole('button',{name:'Close',exact:true}).click();
-  await show();await dialog.getByRole('textbox').fill('Use English instead');
-  await dialog.locator('input[type=file]').setInputFiles({name:'terms.md',mimeType:'text/markdown',buffer:Buffer.from('English terminology')});
-  await dialog.getByRole('button',{name:'Send follow-up',exact:true}).click();await dialog.getByRole('alert').getByText(/Synthetic uncertain response/).waitFor();
-  assert.equal(await dialog.getByRole('textbox').inputValue(),'Use English instead');assert(await dialog.getByRole('textbox').isDisabled(),'Uncertain send retains immutable text');
-  assert.match(await dialog.innerText(),/terms.md/,'Attachment stays on retry');
-  await settle(page);const shot=path.join(evidence,'comic-followup-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
-  await dialog.getByRole('button',{name:'Retry this follow-up',exact:true}).click();await dialog.waitFor({state:'hidden'});
-  const sent=await calls();assert.equal(sent.length,2);assert.deepEqual({...sent[0].body,files:[]},{...sent[1].body,files:[]},'Retry retains exact ID, target and text');
-  const stages=await page.evaluate(()=>fixture.followupStages);for(const call of sent){assert.equal(call.body.files.length,1);const staged=stages.find(s=>s.id===call.body.files[0]);assert(staged);assert.deepEqual({name:staged.name,size:staged.size,text:staged.text},{name:'terms.md',size:19,text:'English terminology'},'Retry re-stages exact retained bytes');}
-  assert.notEqual(sent[0].body.files[0],sent[1].body.files[0],'Native retries use fresh staged upload IDs');
-  await page.waitForFunction(()=>fixture.followupStages.every(s=>fixture.requests.some(r=>r.path==='/api/upload/discard'&&r.body.ids.includes(s.id))));
-  assert.match(sent[0].body.id,/^[a-f0-9]{32}$/);assert.deepEqual(sent[0].body.ref,{id:'1'.repeat(32),fingerprint:'eeeeeeee-eeeeeeee-eeeeeeee-eeeeeeee'});assert.equal(sent[0].body.conv,conv);assert.equal(sent[0].body.body,'Use English instead');assert.equal(typeof sent[0].body.files[0],'string');
-  assert.equal(await page.evaluate(()=>fixture.thread.messages.find(m=>m.id===fixture.followupID).body),'Prepare contribution-margin.md in Russian','Original unchanged');
-  await show();await dialog.getByRole('textbox').fill('Later clarification');
-  await page.evaluate(()=>{fixture.thread.messages.find(m=>m.id===fixture.followupID).deleted=true;});
-  await dialog.getByRole('button',{name:'Send follow-up',exact:true}).click();await dialog.getByRole('alert').getByText(/no longer available/).waitFor();
-  assert.equal((await calls()).length,2,'Deleted/stale source refuses before handover');
-  await dialog.getByRole('button',{name:'Close',exact:true}).click();
- }finally{await context.close();}
+ // Preserve the former sheet's meaningful safety checks through the one composer.
+ {
+  const {page,context}=await openCase('followup');
+  try{
+   const form=page.locator('form[aria-label="Write a message"]'),field=form.locator('textarea');
+   const choose=async text=>{await field.fill('@');await page.getByRole('option').filter({hasText:'Analyst'}).first().click();await field.pressSequentially(text);};
+   const calls=()=>page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/request/followup'));
+   const request=page.locator('[data-mid="'+('1'.repeat(32))+'"]');await request.waitFor();
+   if(width===390){const actions=request.getByRole('button',{name:'Message actions',exact:true});await actions.focus();await actions.press('Enter');}
+   else{await request.hover();await request.getByRole('button',{name:'More actions',exact:true}).click();}
+   assert.equal(await page.getByRole(width===390?'button':'menuitem',{name:'Follow up with this agent…',exact:true}).count(),0,'redundant message action is removed');
+   await page.keyboard.press('Escape');assert.equal(await page.getByRole('dialog',{name:'Follow up with the same agent',exact:true}).count(),0);
+   await choose(' A staged correction');assert.deepEqual(await calls(),[],'typing the next tag submits nothing');
+   await form.locator('input[type=file]').setInputFiles([{name:'terms.md',mimeType:'text/markdown',buffer:Buffer.from('English terminology')},{name:'fail-second.md',mimeType:'text/markdown',buffer:Buffer.from('later file')}]);
+   await page.evaluate(()=>{fixture.followupStageFailure=true;fixture.followupFailed=true;});
+   await form.locator('[data-part="send"]').click();await page.getByText(/Synthetic second stage failure/).first().waitFor();
+   assert.deepEqual(await calls(),[],'second stage failure sends no steering');assert.match(await page.locator('#skin').evaluate(e=>e.shadowRoot.innerText||e.shadowRoot.textContent),/terms.md/,'original files stay with the exact retry');
+   const firstStage=await page.evaluate(()=>fixture.followupStages[0].id);
+   await field.fill('A newer draft during the staged-file retry');
+   await page.getByRole('button',{name:/Retry/}).first().click();await page.waitForFunction(()=>fixture.requests.filter(r=>r.path==='/api/request/followup').length===1);
+   const stagedCall=(await calls())[0];assert.equal(stagedCall.body.files[0],firstStage,'prepared first file is retained across the second-file failure');
+   assert.equal(await page.evaluate(()=>fixture.followupStages.length),2);assert.equal(await field.inputValue(),'A newer draft during the staged-file retry');
+   await choose(' Use English instead');
+   await form.locator('input[type=file]').setInputFiles({name:'terms.md',mimeType:'text/markdown',buffer:Buffer.from('English terminology')});
+   await page.evaluate(()=>fixture.followupFailed=false);
+   await form.locator('[data-part="send"]').click();await page.getByText(/Synthetic uncertain response/).first().waitFor();
+   await field.fill('Newer draft after uncertain handover');
+   await page.getByRole('button',{name:/Retry/}).first().click();await page.waitForFunction(()=>fixture.requests.filter(r=>r.path==='/api/request/followup').length===3);
+   const sent=(await calls()).slice(1);assert.deepEqual({...sent[0].body,files:[]},{...sent[1].body,files:[]},'uncertain retry retains exact ID/ref/attempt/body');
+   const stages=await page.evaluate(()=>fixture.followupStages);
+   for(const call of sent){assert.equal(call.body.attempt,1);const file=stages.find(s=>s.id===call.body.files[0]);assert.deepEqual({name:file.name,size:file.size,text:file.text},{name:'terms.md',size:19,text:'English terminology'});}
+   assert.deepEqual(sent[0].body.ref,{id:'1'.repeat(32),fingerprint:'eeeeeeee-eeeeeeee-eeeeeeee-eeeeeeee'});
+   assert.equal(await field.inputValue(),'Newer draft after uncertain handover');assert.equal(await page.evaluate(()=>fixture.thread.messages.find(m=>m.id===fixture.followupID).body),'Prepare contribution-margin.md in Russian','original request remains exact');
+  }finally{await context.close();}
+ }
+ {
+  const {page,context}=await openCase('followup');
+  try{
+   const form=page.locator('form[aria-label="Write a message"]'),field=form.locator('textarea');
+   await field.fill('@');await page.getByRole('option').filter({hasText:'Analyst'}).first().click();await field.pressSequentially(' A correction abandoned before handover');
+   await form.locator('input[type=file]').setInputFiles({name:'terms.md',mimeType:'text/markdown',buffer:Buffer.from('English terminology')});
+   await page.evaluate(()=>fixture.followupStagePause=true);await form.locator('[data-part="send"]').click();await page.waitForFunction(()=>!!window.finishFollowupStage);
+   await field.fill('Navigation-side newer draft');await page.evaluate(()=>openGroup());await page.evaluate(()=>finishFollowupStage());
+   await page.waitForFunction(()=>fixture.requests.some(r=>r.path==='/api/upload/discard'&&r.body.ids.includes(fixture.followupStages[0].id)));
+   await page.getByText(/chat changed before steering was submitted/).first().waitFor();
+   assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/request/followup').length),0,'view changed during staging sends no correction');
+   assert.equal(await field.inputValue(),'Navigation-side newer draft','navigation never overwrites the newer draft');
+   const shot=path.join(evidence,'comic-steering-navigation-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
+  }finally{await context.close();}
+ }
+ {
+  const {page,context}=await openCase('followup');
+  try{
+   const form=page.locator('form[aria-label="Write a message"]'),field=form.locator('textarea');
+   await field.fill('@');await page.getByRole('option').filter({hasText:'Analyst'}).first().click();await field.pressSequentially(' Later clarification');
+   const before=await field.inputValue();
+   await page.evaluate(()=>{fixture.thread.messages.find(m=>m.id===fixture.followupID).deleted=true;reloadFixture();});
+   await form.locator('[data-part="send"]').click();await form.getByText(/current attempt or identity cannot be verified/).waitFor();
+   assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/request/followup').length),0,'deleted exact request refuses before handover');assert.equal(await field.inputValue(),before);
+  }finally{await context.close();}
+ }
  continue;
 }
 if(process.env.AGENTNET_CONTINUATION_REGRESSION==='1'){
@@ -1490,6 +1569,6 @@ if(process.env.AGENTNET_DELIVERY_STOP_REGRESSION==='1'){
    }
   }
   if(process.env.AGENTNET_RENDERED_RETAIN){const keep=path.resolve(process.env.AGENTNET_RENDERED_RETAIN);assert(keep.startsWith('/tmp/'),'retained synthetic evidence must stay in /tmp');fs.mkdirSync(keep,{recursive:true,mode:0o700});for(const shot of shots)fs.copyFileSync(shot,path.join(keep,path.basename(shot)));}
-  assert.deepEqual(errors,[]);console.log(JSON.stringify({ok:true,checks:process.env.AGENTNET_PRESENTATION_REGRESSION==='1'?'Comic short/long needs-human closure: exact agent/request, compact status, full projected result, immutable original, no action dispatch; desktop/mobile':process.env.AGENTNET_COMPOSER_FOLLOWUP_REGRESSION==='1'?'Comic ordinary composer: exact current request/host/key/topic, mandatory ambiguity choice, same-name agents, independent new request, same-ID/file-byte uncertain retry and newer draft preservation; desktop1280/mobile390':process.env.AGENTNET_LEGACY_LIST_REGRESSION==='1'?'Comic retained legacy list: exact identity/manager, add person, preserved leave, no agent catalog/control/grants; desktop/mobile':process.env.AGENTNET_AGENT_CHILD_REGRESSION==='1'?'Comic verified Codex author to Claude recipient, exact stopped-parent reason, no retry or replay, retained handling; desktop/mobile':process.env.AGENTNET_TOPIC_INVITE_REGRESSION==="1"?"Comic DM/group Main/named topic: Recent/Selected/Since, private files excluded, stable scope after rename/archive/arrival, broad grant disclosure; desktop/mobile":process.env.AGENTNET_REPORT_HISTORY_REGRESSION==="1"?"Comic exact blocker history: arbitrary follow-up success stays separate; confirmed/refused/new attempt and newest empty snapshots; desktop/mobile":completion?'Comic signed exact completion, queued secondary copies/details unchanged; inert/different-target/quote/unrelated negatives desktop1280/mobile390':process.env.AGENTNET_FOLLOWUP_REGRESSION==='1'?'Comic follow-up: exact original/target, no send on close, retained text/files, same-ID uncertain retry, unused staging cleanup, deleted-source refusal; desktop1280/mobile390':process.env.AGENTNET_REACTION_REGRESSION==='1'?'Comic: first-use/persisted frequency, success/failure/removal, human-count ordering and separate agent chips, desktop/mobile':process.env.AGENTNET_PHONE_REJOIN_REGRESSION==='1'?'Comic phone: active/pending rejoin, stale click/navigation, genuine return, exact key/agent/host identity and fresh-read error':process.env.AGENTNET_DIRECT_REVIEW_REGRESSION==='1'?'Direct review[]: held/running/stopping/complete; decision badge/list vs Working; exact request/Stop; desktop/mobile':process.env.AGENTNET_OKS_REGRESSION==='1'?'Comic: working excluded from OK count, exact topic/repeat focus, unsent draft/files preserved, full reason, future approve separate from held accept, exact Stop':process.env.AGENTNET_NOTIFY_REGRESSION==='1'?'Comic: one person grant across duplicate roots and separate conversation mute':(process.env.AGENTNET_TEST_SKINS||'comic')+': guest/member distinction, exact targets, retract/refresh, rights, desktop/mobile',shots}));
+  assert.deepEqual(errors,[]);console.log(JSON.stringify({ok:true,checks:process.env.AGENTNET_PRESENTATION_REGRESSION==='1'?'Comic short/long needs-human closure: exact agent/request, compact status, full projected result, immutable original, no action dispatch; desktop/mobile':process.env.AGENTNET_COMPOSER_FOLLOWUP_REGRESSION==='1'?'Comic natural tagged steering: no extra UI; running-only exact attempt; ordinary new request without a run; concrete ambiguity and existing Reply binding; strict completion race/retry; Android journal; desktop1280/mobile390':process.env.AGENTNET_LEGACY_LIST_REGRESSION==='1'?'Comic retained legacy list: exact identity/manager, add person, preserved leave, no agent catalog/control/grants; desktop/mobile':process.env.AGENTNET_AGENT_CHILD_REGRESSION==='1'?'Comic verified Codex author to Claude recipient, exact stopped-parent reason, no retry or replay, retained handling; desktop/mobile':process.env.AGENTNET_TOPIC_INVITE_REGRESSION==="1"?"Comic DM/group Main/named topic: Recent/Selected/Since, private files excluded, stable scope after rename/archive/arrival, broad grant disclosure; desktop/mobile":process.env.AGENTNET_REPORT_HISTORY_REGRESSION==="1"?"Comic exact blocker history: arbitrary follow-up success stays separate; confirmed/refused/new attempt and newest empty snapshots; desktop/mobile":completion?'Comic signed exact completion, queued secondary copies/details unchanged; inert/different-target/quote/unrelated negatives desktop1280/mobile390':process.env.AGENTNET_FOLLOWUP_REGRESSION==='1'?'Comic natural tagged composer replaces follow-up sheet/action: stage failure retains files, exact uncertain retry/newer draft, navigation abandons unused stages, deleted source refuses; desktop1280/mobile390':process.env.AGENTNET_REACTION_REGRESSION==='1'?'Comic: first-use/persisted frequency, success/failure/removal, human-count ordering and separate agent chips, desktop/mobile':process.env.AGENTNET_PHONE_REJOIN_REGRESSION==='1'?'Comic phone: active/pending rejoin, stale click/navigation, genuine return, exact key/agent/host identity and fresh-read error':process.env.AGENTNET_DIRECT_REVIEW_REGRESSION==='1'?'Direct review[]: held/running/stopping/complete; decision badge/list vs Working; exact request/Stop; desktop/mobile':process.env.AGENTNET_OKS_REGRESSION==='1'?'Comic: working excluded from OK count, exact topic/repeat focus, unsent draft/files preserved, full reason, future approve separate from held accept, exact Stop':process.env.AGENTNET_NOTIFY_REGRESSION==='1'?'Comic: one person grant across duplicate roots and separate conversation mute':(process.env.AGENTNET_TEST_SKINS||'comic')+': guest/member distinction, exact targets, retract/refresh, rights, desktop/mobile',shots}));
  }finally{await browser?.close();server.close();}
 })().catch(e=>{console.error(e.stack);process.exitCode=1;});

@@ -76,7 +76,7 @@ type ReceiverRequest struct {
 	GroupAdmission string             `json:"group_admission,omitempty"`
 	GroupReplies   []ReceiverReplyKey `json:"group_replies,omitempty"`
 	Human          *HumanTurn         `json:"human,omitempty"`
-	Followup       *Ref               `json:"followup,omitempty"`
+	Followup       *FollowupRef       `json:"followup,omitempty"`
 	Topic          string             `json:"topic,omitempty"`
 }
 type ReceiverReplyKey struct {

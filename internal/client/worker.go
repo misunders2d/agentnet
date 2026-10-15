@@ -279,6 +279,10 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	}
 	var prompt string
 	var err error
+	if err = a.store.db.QueryRow(`SELECT attempts FROM inbox WHERE id=? AND state=?`, j.ID, stateRunning).Scan(&j.nativeAttempt); err != nil {
+		a.endJob(j.ID, stateNotRun, "the selected attempt is no longer current")
+		return
+	}
 	var lookup questionLookup // a receiver continuation keeps its delegation; no lookups
 	followupContext, followupErr := a.requestFollowupPrompt(j)
 	if followupErr != nil {
@@ -482,6 +486,9 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		cmd.Stderr = activityWriter{Writer: io.MultiWriter(&stderr, &agyErr), activity: activity, first: first}
 	}
 	var roomBridge *codexRoomBridge
+	var piBridge *piRPCBridge
+	var claudeBridge *claudeStreamBridge
+	var followupBridge nativeFollowupBridge
 	var stopNativeFollowups func()
 	if nativeCodex && launchErr == nil {
 		var roomCall func(context.Context, json.RawMessage) (string, error)
@@ -516,13 +523,40 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 			}()
 		}
 		defer roomBridge.close()
+		followupBridge = roomBridge
+	}
+	if (r.Harness == "pi" || r.Harness == "omp") && launchErr == nil {
+		piBridge, err = newPiRPCBridge(runCtx, cmd, prompt, cmd.Stdout, r.Harness)
+		if err != nil {
+			a.endJob(j.ID, stateJobFailed, "native "+r.Harness+" transport unavailable: "+err.Error())
+			return
+		}
+		cmd.Stdout = activityWriter{Writer: piBridge, activity: activity, first: first}
+		followupBridge = piBridge
+		defer piBridge.close()
+	}
+	if r.Harness == "claude" && launchErr == nil {
+		expected := ""
+		if plan.ref != nil {
+			expected = plan.ref.ID
+		}
+		claudeBridge, err = newClaudeStreamBridge(runCtx, cmd, prompt, cmd.Stdout, expected)
+		if err != nil {
+			a.endJob(j.ID, stateJobFailed, "native Claude transport unavailable: "+err.Error())
+			return
+		}
+		cmd.Stdout = activityWriter{Writer: claudeBridge, activity: activity, first: first}
+		followupBridge = claudeBridge
+		defer claudeBridge.close()
+	}
+	if followupBridge != nil {
 		followupCtx, stopFollowups := context.WithCancel(runCtx)
 		followupsDone := make(chan struct{})
 		processFinished := make(chan struct{})
 		var finishFollowups sync.Once
 		go func() {
 			defer close(followupsDone)
-			a.watchNativeFollowups(followupCtx, j, roomBridge, processFinished)
+			a.watchNativeFollowups(followupCtx, j, followupBridge, processFinished)
 		}()
 		stopNativeFollowups = func() {
 			stopFollowups()
@@ -553,6 +587,22 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 			defer a.store.setRunGroup(j.ID, 0, "")
 		}
 		runErr = cmd.Wait()
+	}
+	if claudeBridge != nil {
+		stopNativeFollowups()
+		claudeBridge.finish()
+		claudeBridge.close()
+		if runCtx.Err() == nil {
+			runErr = nil
+		}
+	}
+	if piBridge != nil {
+		stopNativeFollowups()
+		piBridge.finish()
+		piBridge.close()
+		if runCtx.Err() == nil {
+			runErr = nil
+		}
 	}
 	if roomBridge != nil {
 		stopNativeFollowups()

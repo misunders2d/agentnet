@@ -385,8 +385,8 @@ type SendResult struct {
 
 // Outgoing is a message to send.
 type Outgoing struct {
-	RequestFollowup *envelope.Ref // explicit original request, separate from legacy local summaries
-	To              string        // person/agent, or person/agent#session for one running daemon
+	RequestFollowup *envelope.FollowupRef // explicit original request, separate from legacy local summaries
+	To              string                // person/agent, or person/agent#session for one running daemon
 	Body            string
 	ReplyTo         string
 	Quote           string
@@ -708,7 +708,7 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 			}
 			// Waiting copies release when the recipient's signed capabilities
 			// change; progress is never sent unmarked to an older session.
-			if (n.proposal || conv != "" || sub == envelope.SubHistoryArchive || required == protocol.CapHistoryArchive || required == protocol.CapModelSync || required == protocol.CapModelSyncV2 || required == protocol.CapOwnSyncV2 || required == protocol.CapOwnSyncV3 || required == protocol.CapReadSync || required == protocol.CapTopicStateSync || required == protocol.CapProgress || required == protocol.CapAgentReaction) && errors.Is(err, errAgentIdentityUnsupported) {
+			if (n.steer || n.proposal || conv != "" || sub == envelope.SubHistoryArchive || required == protocol.CapHistoryArchive || required == protocol.CapModelSync || required == protocol.CapModelSyncV2 || required == protocol.CapOwnSyncV2 || required == protocol.CapOwnSyncV3 || required == protocol.CapReadSync || required == protocol.CapTopicStateSync || required == protocol.CapProgress || required == protocol.CapAgentReaction) && errors.Is(err, errAgentIdentityUnsupported) {
 				return SendResult{ID: env.ID, State: stateConvWaiting, Detail: WaitPeerUpdate + err.Error()}, a.store.setOutboxState(env.ID, stateConvWaiting, WaitPeerUpdate+err.Error(), "")
 			}
 			if retryable(err) {

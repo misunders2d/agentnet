@@ -165,6 +165,7 @@ func (a *Agent) convSync(ctx context.Context) {
 	if work&(convRetry|convRetryMore) != 0 {
 		a.recoverHumanExcerpts(ctx)
 		a.discloseHumanAudience(ctx)
+		a.discloseOrganizationGrants(ctx)
 		a.discloseRoomDismissals(ctx, feats)
 		if work&convRetry != 0 {
 			a.convWork.retried.Store(time.Now().Unix())
@@ -249,7 +250,7 @@ func (a *Agent) relayFeatures(ctx context.Context) ([]string, error) {
 // hint (advertisedCaps) it is at most protocol.MaxAdvertisedCaps long;
 // rm1 (protocol.CapRoom) says this program enforces every room reader rule
 // (ROOM_V1 §2.1), so what rm1 implies (rcv1 among them) is not listed.
-var ownCaps = []string{protocol.CapMentionReaction, protocol.CapProactiveAgent, protocol.CapAgentOrganization, protocol.CapConversationAudience, protocol.CapContinuation, protocol.CapRootSync, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapRequestFollowup, protocol.CapGroupInvitationManage, protocol.CapHistoryArchive, protocol.CapHeadless, protocol.CapGroupHumanParticipation, protocol.CapModelSyncV2, protocol.CapNotify, protocol.CapTopicOrganization, protocol.CapOwnSyncV2, protocol.CapOwnSyncV3, protocol.CapPerson, protocol.CapReadSync, protocol.CapRoom, protocol.CapSendGroup, protocol.CapTopicContext, protocol.CapTopicParticipation, protocol.CapTopicStateSync, protocol.CapTyping} // apx1 and aid1 are already implied by rm1; 28 includes agent1; independent cau1 leaves four reader slots
+var ownCaps = []string{protocol.CapMentionReaction, protocol.CapProactiveAgent, protocol.CapAgentOrganization, protocol.CapConversationAudience, protocol.CapContinuation, protocol.CapRootSync, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapRequestSteer, protocol.CapGroupInvitationManage, protocol.CapHistoryArchive, protocol.CapHeadless, protocol.CapGroupHumanParticipation, protocol.CapModelSyncV2, protocol.CapNotify, protocol.CapTopicOrganization, protocol.CapOwnSyncV2, protocol.CapOwnSyncV3, protocol.CapPerson, protocol.CapReadSync, protocol.CapRoom, protocol.CapSendGroup, protocol.CapTopicContext, protocol.CapTopicParticipation, protocol.CapTopicStateSync, protocol.CapTyping} // apx1 and aid1 are already implied by rm1; 28 includes agent1; independent cau1 leaves four reader slots
 
 // capsPublisher is the one publisher of this run's capability records:
 // the daemon's and link.go's waiting session share the session id, and the
@@ -525,9 +526,9 @@ type ConvOutgoing struct {
 	organizationBatch        *topicUndoBatch
 	agentOrganizationCause   string
 	agentOrganizationAttempt int
-	Followup                 *envelope.Ref // explicit original request, never inferred from a reply or quotation
-	SendGroup                string        // explicit human composer gesture; presentation only
-	Kind                     string        // message (default), question or task
+	Followup                 *envelope.FollowupRef // explicit original request, never inferred from a reply or quotation
+	SendGroup                string                // explicit human composer gesture; presentation only
+	Kind                     string                // message (default), question or task
 	Body                     string
 	ReplyTo                  string
 	Quote                    string
@@ -1216,6 +1217,11 @@ func (a *Agent) releaseConv(ctx context.Context, feats []string) {
 // proof, continuing the look under way (heldLook), and reports whether more
 // follow. Messages still without proof stay held, in place.
 func (a *Agent) retryProof(ctx context.Context) (more bool) {
+	if err := a.recoverOrganizationGrantProof(); err != nil {
+		a.Logf("recovering organization grant proof: %v", err)
+		a.convWork.due(convRetryMore)
+		return false
+	}
 	if err := a.recoverErasedDeviceHistory(); err != nil {
 		a.Logf("recovering erased native history: %v", err)
 		a.convWork.due(convRetryMore)

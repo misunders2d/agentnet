@@ -21,7 +21,6 @@ import { ApprovalCard } from "./Approvals";
 import { deviceWords, phaseOf } from "./Approvals.words";
 import { Markdown, MessageLinks, type RenderMention } from "./Markdown";
 import { AssignMessage } from "./Message.assign";
-import { FollowupMessage, followupRef } from "./Message.followup";
 import { MessageFiles } from "./Message.files";
 import { EmojiDialog, Reactions } from "./Message.reactions";
 import { ActionSheet, DeleteMessage, DetailsSheet, EditBox, Toolbar, inside, useTouchGestures, type Acts, type Can } from "./Message.actions";
@@ -68,7 +67,6 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
   const [editing, setEditing] = useState(false);
   const [remind, setRemind] = useState<boolean | null>(null);
   const [assign, setAssign] = useState<boolean | null>(null);
-  const [followup, setFollowup] = useState<boolean | null>(null);
 
   const live = !m._local && !readOnly && !m.deleted && !excerpt(m);
   // A reminder on a stored message, where this device keeps reminders (a computer).
@@ -84,7 +82,6 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
     remind: live && !!ctx.overview?.remind,
   };
   const acts: Acts = {
-    followup: live && ctx.canReply && followupRef(m, ctx) ? () => setFollowup(true) : undefined,
     assign: live && ctx.overview?.person?.state === "self" ? () => setAssign(true) : undefined,
     topic:live&&ctx.dm&&ctx.canReply&&!isThreadMsg(m)&&!m.topic&&!m.topic_event?()=>{void store.run(a=>a.changeTopic("create",{conv:ctx.dm!.id,peer:"",id:m.lid||m.id})).then(r=>{if(r)store.setDraft(ctx.conv,{...store.draft(ctx.conv),topic:m.lid||m.id,newTopic:false});});}:undefined,
     reply: () => store.setDraft(ctx.conv, { ...store.draft(ctx.conv), replyTo: m.id }),
@@ -197,7 +194,6 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
         {confirm !== null && <DeleteMessage open={confirm} onOpenChange={setConfirm} m={m} ctx={ctx} />}
         {remind !== null && <RemindSheet open={remind} onOpenChange={setRemind} m={remindable} r={reminder} />}
         {assign !== null && <AssignMessage open={assign} onOpenChange={setAssign} m={m} ctx={ctx} />}
-        {followup !== null && <FollowupMessage open={followup} onOpenChange={setFollowup} m={m} ctx={ctx} />}
       </div>
       {!readOnly && !isThreadMsg(m) && needsHumanDetail && m.exec?.state === "needs_human" && !(m.actions || []).length && <section data-agent-needs-you tabIndex={-1} aria-label="Your agent says" className="mx-3 mt-2 rounded-xl bg-agent px-3.5 py-2.5 text-agent-ink sm:mx-4"><p className="font-bold">Your agent couldn’t finish — it needs your attention</p><Markdown className="pt-1 text-ink" text={requestResultText(needsHumanDetail)} /><p className="pt-2 text-[13px]">Open it on {deviceWords(m.target?.address || "", ctx.overview)}.</p></section>}
       {/* The approval card is a system card across the timeline, never part of the bubble. */}

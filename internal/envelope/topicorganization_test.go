@@ -17,7 +17,7 @@ func TestTopicOrganizationShape(t *testing.T) {
 		"agent close":   func(in *Inner) { in.TopicDone = true },
 		"private scope": func(in *Inner) { in.Human = &HumanTurn{} },
 		"followup": func(in *Inner) {
-			in.Followup = &Ref{ID: strings.Repeat("d", 32), Fingerprint: in.TopicEvent.Moves[0].Author}
+			in.Followup = &FollowupRef{Ref: Ref{ID: strings.Repeat("d", 32), Fingerprint: in.TopicEvent.Moves[0].Author}}
 		},
 		"duplicate":           func(in *Inner) { in.TopicEvent.Moves = append(in.TopicEvent.Moves, in.TopicEvent.Moves[0]) },
 		"same destination":    func(in *Inner) { in.TopicEvent.Moves[0].Topic = in.Topic },

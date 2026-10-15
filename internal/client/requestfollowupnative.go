@@ -31,7 +31,8 @@ func (a *Agent) claimNativeFollowup(parent job) (nativeFollowupClaim, bool, erro
 	}
 	defer tx.Rollback()
 	var state, rootID, rootKey string
-	if err = tx.QueryRow(`SELECT state,coalesce(lid,id),coalesce(verified_by,'') FROM inbox WHERE id=? AND replica=0`, parent.ID).Scan(&state, &rootID, &rootKey); err != nil {
+	var parentAttempt int64
+	if err = tx.QueryRow(`SELECT state,coalesce(lid,id),coalesce(verified_by,''),attempts FROM inbox WHERE id=? AND replica=0`, parent.ID).Scan(&state, &rootID, &rootKey, &parentAttempt); err != nil {
 		return nativeFollowupClaim{}, false, err
 	}
 	if state != stateRunning || !a.nativeFollowupExecutor(tx, parent) {
@@ -73,6 +74,13 @@ func (a *Agent) claimNativeFollowup(parent job) (nativeFollowupClaim, bool, erro
 			if json.Unmarshal([]byte(c.target), c.j.Target) != nil {
 				continue
 			}
+		}
+		selected, e := storedRequestFollowup(tx, "in", c.j.ID)
+		if e != nil {
+			return nativeFollowupClaim{}, false, e
+		}
+		if selected != nil && selected.Attempt > 0 && (selected.Attempt != parentAttempt || parent.nativeAttempt > 0 && selected.Attempt != parent.nativeAttempt) {
+			continue
 		}
 		ref := envelope.Ref{ID: rootID, Fingerprint: rootKey}
 		original, e := a.followupOriginal(tx, parent.Conv, ref)
@@ -157,7 +165,13 @@ func (a *Agent) nativeFollowupCurrent(parent, correction job) bool {
 	if e != nil || ref == nil {
 		return false
 	}
-	original, e := a.followupOriginal(tx, parent.Conv, *ref)
+	if ref.Attempt > 0 {
+		var attempt int64
+		if tx.QueryRow(`SELECT attempts FROM inbox WHERE id=?`, parent.ID).Scan(&attempt) != nil || (attempt != ref.Attempt || parent.nativeAttempt > 0 && attempt != parent.nativeAttempt) {
+			return false
+		}
+	}
+	original, e := a.followupOriginal(tx, parent.Conv, ref.Ref)
 	if e != nil {
 		return false
 	}
@@ -179,11 +193,11 @@ func (a *Agent) nativeFollowupExecutor(q dbq, parent job) bool {
 	return err == nil && stamp != nil && stamp.Record != nil && stamp.AgentID == id && stamp.Record.Host == parent.Target.Address && stamp.Record.HostKey == parent.Target.Fingerprint
 }
 
-func (a *Agent) watchNativeFollowups(ctx context.Context, parent job, bridge *codexRoomBridge, processFinished <-chan struct{}) {
+func (a *Agent) watchNativeFollowups(ctx context.Context, parent job, bridge nativeFollowupBridge, processFinished <-chan struct{}) {
 	select {
 	case <-ctx.Done():
 		return
-	case <-bridge.ready:
+	case <-bridge.followupReady():
 	}
 	var files []*runDir
 	var captured admittedAgentContext
@@ -289,6 +303,11 @@ func (a *Agent) watchNativeFollowups(ctx context.Context, parent job, bridge *co
 				}
 				_ = a.endJob(correction.ID, stateSteered, "Accepted into the exact current native run; its work is not yet proven complete")
 			case steerQueued, steerUnsupported:
+				selected, e := storedRequestFollowup(a.store.db, "in", correction.ID)
+				if e != nil || selected != nil && selected.Attempt > 0 {
+					_ = a.endJob(correction.ID, stateNeedHuman, "Not applied to the selected run; explicit steering cannot become queued work")
+					return
+				}
 				// Explicitly no handover: restore only our running claim. A concurrent
 				// cancellation is never undone, and ordinary admission still governs it.
 				_, err = a.store.db.Exec(`UPDATE inbox SET state=?,detail='Queued; not accepted into the native run' WHERE id=? AND state=?`, correction.queuedState, correction.ID, stateRunning)
@@ -309,3 +328,10 @@ func (a *Agent) watchNativeFollowups(ctx context.Context, parent job, bridge *co
 		}
 	}
 }
+
+type nativeFollowupBridge interface {
+	followupReady() <-chan struct{}
+	steer(context.Context, string, string) string
+}
+
+func (b *codexRoomBridge) followupReady() <-chan struct{} { return b.ready }

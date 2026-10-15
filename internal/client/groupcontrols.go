@@ -49,6 +49,28 @@ func (a *Agent) groupControlTarget(q dbq, in envelope.Inner) error {
 // controlMembers does not enable participation. The group audience derives
 // only from already verified current context and its durable authority head.
 func controlMembers(q dbq, conv string) (dmMembers, error) {
+	// A plain DB call owns one fresh snapshot. Existing transaction callers
+	// keep theirs; statement wrappers do not establish a separate read lifetime.
+	source := q
+	for {
+		switch reads := source.(type) {
+		case *membershipReads:
+			source = reads.dbq
+		case *preparedReads:
+			source = reads.dbq
+		default:
+			goto unwrapped
+		}
+	}
+unwrapped:
+	if db, ok := source.(*sql.DB); ok {
+		tx, err := db.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+		if err != nil {
+			return dmMembers{}, err
+		}
+		defer tx.Rollback()
+		q = tx
+	}
 	root, _, found, err := conversationIn(q, conv)
 	if err != nil || !found {
 		return dmMembers{}, err
@@ -65,39 +87,60 @@ func controlMembers(q dbq, conv string) (dmMembers, error) {
 	if !sameGroupRoot(root, packet.Root) {
 		return dmMembers{}, errors.New("group control: current root differs")
 	}
-	for _, m := range packet.State.Members {
+	if err = groupDeliveryHead(q, packet); err != nil {
+		return dmMembers{}, err
+	}
+	for _, member := range packet.State.Members {
 		var pending int
-		if err = q.QueryRow(`SELECT count(*) FROM group_pending_withdrawals WHERE conv=? AND person=? AND admission=?`, conv, m.Person, m.Admission.Hash()).Scan(&pending); err != nil {
+		if err = q.QueryRow(`SELECT count(*) FROM group_pending_withdrawals WHERE conv=? AND person=? AND admission=?`, conv, member.Person, member.Admission.Hash()).Scan(&pending); err != nil {
 			return dmMembers{}, err
 		}
 		if pending != 0 {
 			return dmMembers{}, ErrGroupContextPending
 		}
 	}
+	people := make(map[string]personRow, len(packet.State.Members))
+	withdrawn := make(map[string]bool, len(packet.State.Members))
 	var members []protocol.ConvMember
-	for _, m := range packet.State.Members {
-		p, ok, err := personByIDIn(q, m.Person)
+	for _, member := range packet.State.Members {
+		p, ok, err := personByIDIn(q, member.Person)
 		if err != nil {
 			return dmMembers{}, err
 		}
 		if !ok || p.info.State == personConflict {
 			return dmMembers{}, ErrGroupContextPending
 		}
-		var withdrawn int
-		if err = q.QueryRow(`SELECT count(*) FROM group_withdrawals WHERE conv=? AND person=? AND admission=?`, conv, m.Person, m.Admission.Hash()).Scan(&withdrawn); err != nil {
+		people[member.Person] = p
+		var count int
+		if err = q.QueryRow(`SELECT count(*) FROM group_withdrawals WHERE conv=? AND person=? AND admission=?`, conv, member.Person, member.Admission.Hash()).Scan(&count); err != nil {
 			return dmMembers{}, err
 		}
-		if withdrawn != 0 || packet.State.Withdrawn(m, packet.Withdrawals) {
-			continue
+		withdrawn[member.Person] = count != 0 || packet.State.Withdrawn(member, packet.Withdrawals)
+		if !withdrawn[member.Person] {
+			members = append(members, member.ConvMember)
 		}
-		for _, d := range p.roster.Devices {
-			if err = groupDeliveryRecipient(q, packet, d.Address, d.Fingerprint()); err != nil {
-				return dmMembers{}, err
+	}
+	// Preserve the exact recipient walk, including first-match behavior if
+	// conflicting stored rosters happen to claim the same address/key.
+	for _, member := range members {
+		for _, device := range people[member.Person].roster.Devices {
+			found := false
+			for _, candidate := range packet.State.Members {
+				if !people[candidate.Person].has(device.Address, device.Fingerprint()) {
+					continue
+				}
+				if withdrawn[candidate.Person] {
+					return dmMembers{}, errGroupRecipientWithdrawn
+				}
+				found = true
+				break
+			}
+			if !found {
+				return dmMembers{}, errGroupRecipientNotCurrent
 			}
 		}
-		members = append(members, m.ConvMember)
 	}
-	m, err := memberRowsIn(q, root, members)
+	m, err := memberRowsKnownIn(q, root, members, people)
 	m.group = &packet
 	return m, err
 }

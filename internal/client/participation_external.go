@@ -21,6 +21,69 @@ import (
 // External hosts are separate from member persons: their keys never become
 // asker, invite, dismiss, TaskKeys or Fan authority.
 func (m *dmMembers) loadHosts(q dbq, events []protocol.ParticipationEvent) error {
+	// Reconstruct host evidence once inside this fresh operation. No person,
+	// roster or chain result survives the call or replaces a later fence.
+	source := q
+	for {
+		switch reads := source.(type) {
+		case *membershipReads:
+			source = reads.dbq
+		case *preparedReads:
+			source = reads.dbq
+		default:
+			goto unwrapped
+		}
+	}
+unwrapped:
+	if db, ok := source.(*sql.DB); ok {
+		tx, err := db.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		q = tx
+	}
+	reads := prepareReads(q)
+	defer reads.close()
+	q = reads
+	type hostEvidence struct {
+		person personRow
+		chain  map[string]bool
+	}
+	known := map[string]*hostEvidence{}
+	lookup := func(id string) (*hostEvidence, error) {
+		if evidence, read := known[id]; read {
+			return evidence, nil
+		}
+		p, ok, err := personByIDIn(q, id)
+		if err != nil {
+			return nil, err
+		}
+		if !ok || p.info.State != personSelf && p.info.State != personPinned {
+			known[id] = nil
+			return nil, nil
+		}
+		evidence := &hostEvidence{person: p, chain: map[string]bool{}}
+		rows, err := q.Query(`SELECT hash FROM person_chain WHERE person=?`, id)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var hash string
+			if err := rows.Scan(&hash); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			evidence.chain[hash] = true
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, err
+		}
+		known[id] = evidence
+		return evidence, nil
+	}
 	if m.hosts == nil {
 		m.hosts = map[string]personRow{}
 	} else {
@@ -50,19 +113,12 @@ func (m *dmMembers) loadHosts(q dbq, events []protocol.ParticipationEvent) error
 			if !m.roomEvents[ev.Hash()] {
 				continue
 			}
-			p, ok, err := personByIDIn(q, ev.Author.Person)
+			evidence, err := lookup(ev.Author.Person)
 			if err != nil {
 				return err
 			}
-			if !ok || p.info.State != personSelf && p.info.State != personPinned || !p.has(ev.Author.Address, ev.Author.Fingerprint) {
-				continue
-			}
-			var n int
-			if err = q.QueryRow(`SELECT count(*) FROM person_chain WHERE person=? AND hash=?`, ev.Author.Person, ev.Author.Roster).Scan(&n); err != nil {
-				return err
-			}
-			if n > 0 {
-				m.roomAuthors[ev.Author.Person] = p
+			if evidence != nil && evidence.person.has(ev.Author.Address, ev.Author.Fingerprint) && evidence.chain[ev.Author.Roster] {
+				m.roomAuthors[ev.Author.Person] = evidence.person
 			}
 		}
 	}
@@ -113,33 +169,14 @@ func (m *dmMembers) loadHosts(q dbq, events []protocol.ParticipationEvent) error
 		if _, member := m.persons[h.Person]; member {
 			continue
 		}
-		p, ok, err := personByIDIn(q, h.Person)
+		evidence, err := lookup(h.Person)
 		if err != nil {
 			return err
 		}
-		if !ok || p.info.State != personPinned && p.info.State != personSelf || !p.has(h.Address, h.Fingerprint) {
+		if evidence == nil || !evidence.person.has(h.Address, h.Fingerprint) {
 			continue
 		}
-		m.hosts[h.Person] = p
-		chain := map[string]bool{}
-		rows, err := q.Query(`SELECT hash FROM person_chain WHERE person=?`, h.Person)
-		if err != nil {
-			return err
-		}
-		for rows.Next() {
-			var hash string
-			if err := rows.Scan(&hash); err != nil {
-				rows.Close()
-				return err
-			}
-			chain[hash] = true
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			return err
-		}
-		m.chains[h.Person] = chain
+		m.hosts[h.Person], m.chains[h.Person] = evidence.person, evidence.chain
 	}
 	return m.loadDepartedTaskKeys(q, events)
 }

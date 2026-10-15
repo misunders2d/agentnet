@@ -16,11 +16,12 @@ import (
 // RequestFollowup queues a new ordinary request. It never edits the original,
 // resumes its claim, or promises that a native harness accepted live input.
 type RequestFollowup struct {
-	Conv  string         `json:"conv,omitempty"`
-	Ref   envelope.Ref   `json:"ref"`
-	ID    string         `json:"id"`
-	Body  string         `json:"body"`
-	Files []OutgoingFile `json:"-"`
+	Conv    string         `json:"conv,omitempty"`
+	Attempt int64          `json:"attempt,omitempty"`
+	Ref     envelope.Ref   `json:"ref"`
+	ID      string         `json:"id"`
+	Body    string         `json:"body"`
+	Files   []OutgoingFile `json:"-"`
 }
 
 type followupOriginal struct {
@@ -141,7 +142,7 @@ func sameFollowupTarget(a, b *envelope.Target) bool {
 }
 
 func (a *Agent) QueueRequestFollowup(ctx context.Context, x RequestFollowup) (string, error) {
-	if !protocol.ValidID(x.ID) || strings.TrimSpace(x.Body) == "" {
+	if x.Attempt < 0 || x.Attempt > 9007199254740991 || !protocol.ValidID(x.ID) || strings.TrimSpace(x.Body) == "" {
 		return "", errors.New("write a correction and retain its send ID")
 	}
 	r, err := a.followupOriginal(a.store.db, x.Conv, x.Ref)
@@ -156,7 +157,7 @@ func (a *Agent) QueueRequestFollowup(ctx context.Context, x RequestFollowup) (st
 		if n >= 16 {
 			return "", errors.New("follow-up chain is too deep; select the original request")
 		}
-		x.Ref = *r.h.Followup
+		x.Ref = r.h.Followup.Ref
 		r, err = a.followupOriginal(a.store.db, x.Conv, x.Ref)
 		if err != nil {
 			return "", err
@@ -165,12 +166,13 @@ func (a *Agent) QueueRequestFollowup(ctx context.Context, x RequestFollowup) (st
 	if ok, e := a.followupHuman(a.store.db, a.Address, a.Self().Fingerprint(), r.h); e != nil || !ok {
 		return "", errors.Join(errors.New("only the original human can follow up this request"), e)
 	}
+	bound := &envelope.FollowupRef{Ref: x.Ref, Attempt: x.Attempt}
 	// Already queued retries compare the exact immutable request and files;
 	// no second request or claim is created after a lost UI response.
 	var priorBody, priorRef, priorConv, priorID, priorDir string
 	err = a.store.db.QueryRow(`SELECT body,coalesce(request_followup,''),coalesce(conv,''),id,'out' FROM outbox WHERE id=? OR lid=? UNION ALL SELECT body,coalesce(request_followup,''),coalesce(conv,''),id,'in' FROM inbox WHERE local=1 AND (id=? OR lid=?) LIMIT 1`, x.ID, x.ID, x.ID, x.ID).Scan(&priorBody, &priorRef, &priorConv, &priorID, &priorDir)
 	if err == nil {
-		if priorBody != x.Body || priorRef != requestFollowupJSON(&x.Ref) || priorConv != x.Conv {
+		if priorBody != x.Body || priorRef != requestFollowupJSON(bound) || priorConv != x.Conv {
 			return "", errors.New("send ID already names a different follow-up")
 		}
 		table := "sent_attachments"
@@ -211,10 +213,19 @@ func (a *Agent) QueueRequestFollowup(ctx context.Context, x RequestFollowup) (st
 				return "", errors.New("send ID already has different saved attachments")
 			}
 		}
+		if x.Attempt > 0 {
+			return "Steering already sent for the selected attempt; check native consumption status.", nil
+		}
 		return "Follow-up already queued; the original request is unchanged.", nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return "", err
+	}
+	if x.Attempt > 0 {
+		view, e := a.followupExecution(r.h, x.Conv)
+		if e != nil || view == nil || view.State != stateRunning || view.Attempt != x.Attempt || view.Stale {
+			return "", errors.New("the exact running attempt is no longer current; steering was not sent")
+		}
 	}
 	ctx = WithQueuedSend(ctx, x.ID)
 	if x.Conv == "" {
@@ -225,7 +236,7 @@ func (a *Agent) QueueRequestFollowup(ctx context.Context, x RequestFollowup) (st
 		if peer.Fingerprint() != r.key {
 			return "", errors.New("the original target key changed")
 		}
-		_, err = a.SendMessage(ctx, Outgoing{To: r.to, Kind: r.h.Kind, Body: x.Body, ReplyTo: replyTo, Target: r.h.Target, RequestFollowup: &x.Ref, Named: x.Files})
+		_, err = a.SendMessage(ctx, Outgoing{To: r.to, Kind: r.h.Kind, Body: x.Body, ReplyTo: replyTo, Target: r.h.Target, RequestFollowup: bound, Named: x.Files})
 	} else {
 		p, e := a.Participation(r.h.PID)
 		if e != nil {
@@ -234,10 +245,13 @@ func (a *Agent) QueueRequestFollowup(ctx context.Context, x RequestFollowup) (st
 		if !p.Claimable() || p.Conv != x.Conv || p.Host.Address != r.to || p.Host.Fingerprint != r.key || p.AgentID != r.h.Target.AgentID {
 			return "", errors.New("the original agent participation is no longer active")
 		}
-		_, err = a.SendConv(ctx, x.Conv, ConvOutgoing{Kind: r.h.Kind, Body: x.Body, ReplyTo: replyTo, Topic: r.h.Topic, PID: r.h.PID, Target: r.h.Target, Followup: &x.Ref, Files: x.Files, selfJob: p.HostHere})
+		_, err = a.SendConv(ctx, x.Conv, ConvOutgoing{Kind: r.h.Kind, Body: x.Body, ReplyTo: replyTo, Topic: r.h.Topic, PID: r.h.PID, Target: r.h.Target, Followup: bound, Files: x.Files, selfJob: p.HostHere})
 	}
 	if err != nil {
 		return "", err
+	}
+	if x.Attempt > 0 {
+		return "Steering sent for the exact current attempt; native consumption is not yet proven.", nil
 	}
 	return "Follow-up queued for the same agent. Sending has not proven native acceptance; the host reports whether it was accepted into the current run or remains queued.", nil
 }
@@ -249,7 +263,10 @@ func (a *Agent) requestFollowupPrompt(j job) (string, error) {
 	if err != nil || ref == nil {
 		return "", err
 	}
-	r, err := a.followupOriginal(a.store.db, j.Conv, *ref)
+	if ref.Attempt > 0 {
+		return "", errors.New("explicit steering can only enter its exact current run; it cannot launch separate work")
+	}
+	r, err := a.followupOriginal(a.store.db, j.Conv, ref.Ref)
 	if err != nil {
 		return "", fmt.Errorf("follow-up waits for its exact original request: %w", err)
 	}
@@ -339,4 +356,35 @@ func (a *Agent) requestFollowupFiles(ctx context.Context, j job) string {
 	}
 	j.ID, j.Attachments = original, n
 	return "\nOriginal request's retained files (unavailable bytes must not be invented):\n" + a.requestFiles(ctx, j)
+}
+
+func (a *Agent) followupExecution(h HistoryItem, conv string) (*ExecView, error) {
+	if h.Target != nil && h.Target.Address == a.Address && h.Target.Fingerprint == a.Self().Fingerprint() {
+		var state string
+		var attempt int64
+		err := a.store.db.QueryRow(`SELECT state,attempts FROM inbox WHERE (id=? OR lid=?) AND verified_by=? AND replica=0`, h.ID, h.LID, h.FromKey).Scan(&state, &attempt)
+		return &ExecView{State: state, Attempt: attempt, Host: a.Address}, err
+	}
+	if conv != "" {
+		messages, err := a.ConversationMessages(conv)
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range messages {
+			if m.LID == h.LID && m.Key == h.FromKey {
+				return m.Exec, nil
+			}
+		}
+		return nil, nil
+	}
+	messages, err := a.Conversation(h.ID, 0, 0)
+	if err != nil {
+		return nil, err
+	}
+	for _, m := range messages.Messages {
+		if m.ID == h.ID {
+			return m.Exec, nil
+		}
+	}
+	return nil, nil
 }

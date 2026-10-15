@@ -34,6 +34,11 @@ func TestHistoryArchiveGroupStructuralJourney(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Manual staging must use the sender's real exact-key capability and
+	// current-own-device authority predicate, not only the phone's Hub view.
+	eventually(t, "sender selects signed archive reader", func() bool {
+		return a.archivesFor(tctx(t), phone.Self())
+	})
 	for page := 0; page < 10; page++ {
 		more, e := a.historyCatchupPage(tctx(t), phone.Self())
 		if e != nil {

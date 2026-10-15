@@ -31,6 +31,15 @@ func TestDeviceHistoryLinkedLegacyConversation(t *testing.T) {
 	// nothing is sealed for a device before it does (ownSyncReader).
 	stopPhone := runAgent(t, phone)
 	waitNamedAgentCaps(t, phone)
+	// This test delivers individual carriers, not an archive descriptor.
+	// Publish the same signed older-reader profile as the catch-up fixture.
+	signCapsAfter(t, phone, without(ownCaps, protocol.CapHistoryArchive))
+	label, name, _ := protocol.SplitAddress(phone.Address)
+	eventually(t, "sender sees signed per-carrier history reader", func() bool {
+		var profile protocol.Profile
+		err := w.alice.hub.do(tctx(t), "GET", "/v1/agents/"+label+"/"+name+"/profile", nil, &profile)
+		return err == nil && profile.Supports(phone.Address, phone.Self().SignKey, protocol.CapOwnSyncV3) && !profile.Supports(phone.Address, phone.Self().SignKey, protocol.CapHistoryArchive)
+	})
 	stopPhone()
 	for range 8 {
 		w.alice.convWork.due(convHistory)

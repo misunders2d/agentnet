@@ -3364,45 +3364,53 @@ export class Engine {
     const r=await this.followupOriginal(n.conv||"",n.followup,checks),me=await this.groupRead(checks,"kv","person");
     if(!me||me.state!=="self"||!me.human_keys?.includes(this.fp)||!me.devices.some(d=>d.address===this.address&&d.fingerprint===this.fp)||!await this.directHistory().human(me,r.item.from,r.item.from_key))throw Error("Only the original current human can follow up this request.");
     if(n.kind!==r.item.kind||(n.pid||"")!==(r.item.pid||"")||(n.topic||"")!==(r.item.topic||"")||JSON.stringify(n.target||null)!==JSON.stringify(r.item.target||null))throw Error("Follow-up changed its original kind, target, participation or topic.");
+    if(n.followup.attempt)await this.followupAttemptCurrent(n.conv||"",r,n.followup);
     const pin=await this.groupRead(checks,"pins",r.to);if(!pin||pin.pending||pin.fingerprint!==r.key)throw Error("The original target key changed.");
   }
 
-  async queueRequestFollowup({conv="",ref,id,body,files=[]}) {
+  async queueRequestFollowup({conv="",ref,id,body,attempt=0,files=[]}) {
+    if(!Number.isSafeInteger(attempt)||attempt<0)throw Error("A correction needs a safe current attempt.");
     if(!wire.validID(id)||!String(body||"").trim())throw Error("Write a correction and retain its send ID.");
     ref=wire.parseFollowup(ref);checkFiles(files);
     const checks=[];let r=await this.followupOriginal(conv,ref,checks);
     const replyTo=conv?r.item.lid:r.item.id;
     for(let depth=0;r.item.followup;depth++){if(depth>=16)throw Error("Select the original request: follow-up chain is too deep.");ref=wire.parseFollowup(r.item.followup);r=await this.followupOriginal(conv,ref,checks);}
+    ref={id:ref.id,fingerprint:ref.fingerprint,...(attempt?{attempt}:{})};
     const me=await this.groupRead(checks,"kv","person");
     if(!me||me.state!=="self"||!me.human_keys?.includes(this.fp)||!me.devices.some(d=>d.address===this.address&&d.fingerprint===this.fp)||!await this.directHistory().human(me,r.item.from,r.item.from_key))throw Error("Only the original human can follow up this request.");
     const old=(await this.store.get("outbox",id))||(conv?(await this.authorityRows({conv,lid:id})).find(m=>m.to):null);
     if(old){if(old.body!==body||(old.conv||"")!==conv||JSON.stringify(old.followup)!==JSON.stringify(ref))throw Error("Send ID already names a different follow-up.");
       const saved=old.attachments||[];if(saved.length!==files.length)throw Error("Send ID already has different saved attachments.");
       for(let i=0;i<files.length;i++){const f=files[i],bytes=f.bytes instanceof Uint8Array?f.bytes:new Uint8Array(await f.arrayBuffer());if(wire.safeName(f.name)!==saved[i].name||bytes.length!==saved[i].size||wire.hex(await wire.sha256(bytes))!==saved[i].sha256)throw Error("Send ID already has different saved attachments.");}
-      return "Follow-up already queued; the original request is unchanged.";
+      return attempt?"Correction already sent for the captured run; native acceptance is reported by its host.":"Follow-up already queued; the original request is unchanged.";
     }
+    if(attempt)await this.followupAttemptCurrent(conv,r,ref);
     const pin=await this.sendKey(r.to);if(pin.pending||pin.fingerprint!==r.key)throw Error("The original target key changed.");
     if(conv){const {c,info}=await this.agentConv(r.item.pid);if(c.id!==conv||info.state!=="active"||info.held||info.host.address!==r.to||info.host.fingerprint!==r.key||(info.agent_id||"")!==(r.item.target?.agent_id||""))throw Error("The original agent participation is no longer active.");
       const members=await this.dmMembers(c);if(members.group&&members.epochs.get(this.fp)!==r.item.target.group_admission)throw Error("The original group admission changed.");
       await this.askAgent({id,pid:r.item.pid,kind:r.item.kind,body,topic:r.item.topic||"",followup:ref,reply_to:replyTo,files});
     } else await this.sendV1({id,queued:true,to:r.to,kind:r.item.kind,body,replyTo,followup:ref,target:r.item.target,files});
+    if(attempt)return "Correction sent for the captured run. Native consumption is reported by its host; it cannot start later work.";
     return "Follow-up queued for the same agent. Sending has not proven native acceptance; the host reports whether it was accepted into the current run or remains queued.";
   }
 
+  async followupAttemptCurrent(conv,r,ref) {
+    const view=conv?await this.dm(conv):await this.thread(r.item.id);
+    const message=view.messages.find(m=>conv?m.lid===r.item.lid:m.id===r.item.id),exec=message?.exec;
+    if(!exec||exec.host!==r.to||exec.state!=="running"||exec.stale||exec.attempt!==ref.attempt)throw Error("The selected native attempt is no longer current.");
+  }
+
   async followupDeliveryGate(rec) {
-    let carried=rec;
-    if(rec.sub==="history")carried=wire.parseHistory(rec.body);
-    else if(rec.sub===wire.SubDeviceHistory)carried=wire.parseDeviceHistory(rec.body).item;
-    else if(rec.receiver_setup?.request)carried=rec.receiver_setup.request;
-    if(!carried.followup)return;
+    const followup=wire.followupCopy(rec),strict=wire.steerCopy(rec);
+    if(!followup&&!strict)return;
     const pin=await this.pinned(rec.to),expected=rec.recipient_fp||rec.fp;
     if(pin.pending||expected&&pin.fingerprint!==expected)throw Error("Follow-up recipient key changed.");
-    const [ok,why]=await this.ctlSupport(rec.to,pin,wire.CapRequestFollowup);
+    const [ok,why]=await this.ctlSupport(rec.to,pin,strict?wire.CapRequestSteer:wire.CapRequestFollowup);
     if(!ok)throw Object.assign(Error(why),{code:"followup_unsupported"});
   }
 
   async postStored(rec) {
-    const requiredCap=wire.conversationAudienceBase(rec.required_cap);
+    const requiredCap=wire.steerRequirementBase(rec.required_cap);
     if (rec.state === "receiver_waiting") return;
     try {
       const removed = await this.store.get("kv", "revoked-device/" + rec.to + "/" + rec.recipient_fp);
@@ -7397,7 +7405,7 @@ export class Engine {
       if (teams) teams.connected(f.includes("teams1"));
       // This device reads conversations and the attention hint (it never
       // alerts from the stream: its service worker shows the relay's pushes).
-      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapConversationAudience, wire.CapEnv2, "notify1", wire.CapPerson, wire.CapControl, wire.CapHeadless, wire.CapDrive, wire.CapAgentIdentity, wire.CapGroupHumanParticipation, wire.CapGroup, wire.CapSendGroup, wire.CapRootSync, wire.CapGroupInvitationManage, wire.CapReadSync, wire.CapOwnSyncV2, wire.CapOwnSyncV3, wire.CapHistoryArchive, wire.CapTopicContext, wire.CapTopicParticipation, wire.CapRoom, wire.CapProactiveAgent, wire.CapMentionReaction, wire.CapAgentOrganization, wire.CapRequestFollowup, wire.CapTopicOrganization, wire.CapModelSyncV2, wire.CapTopicStateSync, ...(f.includes("signals1") ? [wire.CapTyping] : [])]))); // rcv1 already implied by rm1; independent amr1/aorg1 retain the 28-cap producer ceiling and 32-cap reader bound
+      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapConversationAudience, wire.CapEnv2, "notify1", wire.CapPerson, wire.CapControl, wire.CapHeadless, wire.CapDrive, wire.CapAgentIdentity, wire.CapGroupHumanParticipation, wire.CapGroup, wire.CapSendGroup, wire.CapRootSync, wire.CapGroupInvitationManage, wire.CapReadSync, wire.CapOwnSyncV2, wire.CapOwnSyncV3, wire.CapHistoryArchive, wire.CapTopicContext, wire.CapTopicParticipation, wire.CapRoom, wire.CapProactiveAgent, wire.CapMentionReaction, wire.CapAgentOrganization, wire.CapRequestSteer, wire.CapTopicOrganization, wire.CapModelSyncV2, wire.CapTopicStateSync, ...(f.includes("signals1") ? [wire.CapTyping] : [])]))); // rcv1 already implied by rm1; independent amr1/aorg1 retain the 28-cap producer ceiling and 32-cap reader bound
       await this.publishPerson().catch(() => {});
       // These existing, coalesced recovery jobs can wait for old proofs or
       // network replies. They must not delay the current user's durable send.
@@ -8876,13 +8884,13 @@ export class Engine {
   // ctlSupport says whether a control can go to address: the relay carries
   // version 3 and the device's signed capabilities include controls.
   async ctlSupport(address, pin, cap = wire.CapControl, admission = null) {
-    const what = cap === wire.CapRequestFollowup ? "bound queued request follow-ups" : cap === wire.CapOwnSyncV3 ? "own-device history and decisions" : cap === wire.CapContinuation ? "human clarification continuations" : cap === wire.CapHeadless ? "operator decisions" : cap === wire.CapDrive ? "Drive space records" : cap === wire.CapConvClear ? "conversation deletions" : "reactions, edits or deletions";
+    const what = cap === wire.CapRequestSteer ? "read current-run steering" : cap === wire.CapRequestFollowup ? "bound queued request follow-ups" : cap === wire.CapOwnSyncV3 ? "own-device history and decisions" : cap === wire.CapContinuation ? "human clarification continuations" : cap === wire.CapHeadless ? "operator decisions" : cap === wire.CapDrive ? "Drive space records" : cap === wire.CapConvClear ? "conversation deletions" : "reactions, edits or deletions";
     const f = await this.features(admission);
     if (!f.includes("env3") || !f.includes("caps")) return [false, "server_update: your server cannot carry " + what + " (it needs an update)"];
     let prof = null;
     try { prof = await this.profile(address, admission); } catch (e) { if (retryable(e)) throw e; }
     const key = (await this.pubOf(pin)).sign_key;
-    if (!(await wire.profileSupports(prof || {}, address, key, cap))) return [false, "peer_update: " + address + " cannot " + (cap === wire.CapRequestFollowup ? "safely queue bound request follow-ups" : cap === wire.CapOwnSyncV3 ? "synchronize direct-agent history and handle own requests" : cap === wire.CapContinuation ? "continue waiting requests (update the AgentNet app on that computer)" : cap === wire.CapHeadless ? "receive operator decisions" : cap === wire.CapDrive ? "read Drive space records" : cap === wire.CapConvClear ? "apply conversation deletions" : "read reactions, edits or deletions") + " yet (an older program, or it has not connected since updating)"];
+    if (!(await wire.profileSupports(prof || {}, address, key, cap))) return [false, "peer_update: " + address + " cannot " + (cap === wire.CapRequestSteer ? "read current-run steering" : cap === wire.CapRequestFollowup ? "safely queue bound request follow-ups" : cap === wire.CapOwnSyncV3 ? "synchronize direct-agent history and handle own requests" : cap === wire.CapContinuation ? "continue waiting requests (update the AgentNet app on that computer)" : cap === wire.CapHeadless ? "receive operator decisions" : cap === wire.CapDrive ? "read Drive space records" : cap === wire.CapConvClear ? "apply conversation deletions" : "read reactions, edits or deletions") + " yet (an older program, or it has not connected since updating)"];
     return [true, ""];
   }
 
@@ -9345,7 +9353,7 @@ export class Engine {
     return h;
   }
   async snapshotCopy(rec) {
-    if([wire.CapTopicContext,wire.CapTopicContext+"+"+wire.CapProactiveAgent].includes(wire.conversationAudienceBase(rec.required_cap)))return true;
+    if([wire.CapTopicContext,wire.CapTopicContext+"+"+wire.CapProactiveAgent].includes(wire.steerRequirementBase(rec.required_cap)))return true;
     let item=rec;if(rec.sub==="history"){if(!rec.body)return false;item={...wire.parseHistory(rec.body),conv:rec.conv};}
     if(item.group_history?.memberships?.some(e=>e.snapshots?.length)||item.human?.proof?.some(e=>e.snapshots?.length))return true;
     if(item.sub==="event")return !!wire.parseEvent(item.body).snapshots?.length;
@@ -10639,7 +10647,7 @@ export class Engine {
     const resolve=async()=>{
       const evs=view?await this.convEvents(c.id,undefined,undefined,view):null;
       const m=await this.dmMembers(c,evs,[],null,null,view),events=evs||await this.convEvents(c.id);
-      const waiting=(view?.outbox||await this.store.all("outbox")).filter(r=>r.conv===c.id&&r.state==="waiting"&&wire.conversationAudienceBase(r.required_cap)===wire.CapHumanParticipation&&r.detail?.startsWith("peer_update: ")),persons=[this.me,...(view?.persons||await this.store.all("persons"))].filter(Boolean);
+      const waiting=(view?.outbox||await this.store.all("outbox")).filter(r=>r.conv===c.id&&r.state==="waiting"&&wire.steerRequirementBase(r.required_cap)===wire.CapHumanParticipation&&r.detail?.startsWith("peer_update: ")),persons=[this.me,...(view?.persons||await this.store.all("persons"))].filter(Boolean);
       return Promise.all([...new Set(events.map((x) => x.e.pid))].map(async pid=>{const p=await this.closedParticipation(c,pid,events,m,this.resolveAgent(pid,events,m),view);p.needs_update=[...new Set(waiting.filter(r=>r.pid===pid).map(r=>persons.find(p=>p.devices.some(d=>d.address===r.to))?.label||"Someone"))];return p;}));
     };
     const resolved=resolve();if(view)view.parts.set(c.id,resolved);return resolved;

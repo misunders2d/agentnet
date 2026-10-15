@@ -215,7 +215,7 @@ func actualNativeRetainedDMContext(t *testing.T, configured string) {
 			return state == stateSteered
 		})
 		got, err := storedRequestFollowup(w.bob.store.db, "in", correctionID)
-		if err != nil || got == nil || *got != ref {
+		if err != nil || got == nil || got.Ref != ref {
 			t.Fatal("retained correction ref changed", err)
 		}
 		if i == 0 {

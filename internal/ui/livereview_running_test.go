@@ -81,6 +81,8 @@ func TestLiveDirectReviewSeparatesRunningFromDecisions(t *testing.T) {
 	if n, _ := res.RowsAffected(); n != 1 {
 		t.Fatal("trusted local running-state fixture did not update exact request")
 	}
+	// Raw fixture writes bypass the normal store/daemon change hooks.
+	receiver.NoteChange()
 	check("running", "agent_running", 0, 1)
 	if _, err := live.Act(Action{ID: sent.ID, Do: DoCancel}); err != nil {
 		t.Fatalf("Stop exact running direct request: %v", err)
@@ -89,6 +91,7 @@ func TestLiveDirectReviewSeparatesRunningFromDecisions(t *testing.T) {
 	if _, err := db.Exec(`UPDATE inbox SET state='cancelled' WHERE id=? AND state='cancel_requested'`, sent.ID); err != nil {
 		t.Fatal(err)
 	}
+	receiver.NoteChange()
 	o, err := live.Overview()
 	if err != nil || len(o.Review) != 0 || len(o.NeedsYou) != 0 || len(o.Threads) != 1 || o.Threads[0].Review != 0 || o.Threads[0].Running != 0 {
 		t.Fatalf("completed cancellation still listed as working/decision: %+v %v", o, err)

@@ -27,6 +27,7 @@ export const CapConversationAudience = "cau1";
 export const CapHumanParticipation = "hgp1"; // protocol.CapHumanParticipation: reads human guests' scoped turns
 export const CapSendGroup = "sg1"; // optional signed presentation; never a routing or execution capability
 export const CapRequestFollowup = "flw1";
+export const CapRequestSteer = "flw2";
 export const CapTopicOrganization = "org1";
 export const CapTopicContext = "tpc1";
 export const CapTopicParticipation = "tps1"; // explicit ongoing topic scope, never implied by rm1
@@ -690,8 +691,8 @@ export function checkSendGroup(n) {
   if (!n.send_group) return;
   if (!validID(n.send_group) || n.v !== Version2 || !n.conv || !n.pid || !n.target || n.origin !== "ui" || n.sub || n.status || n.agent_id || n.human && agentAuthor(n.human) || !["question","task"].includes(n.kind)) throw Error("send group belongs only on a human addressed request");
 }
-export const followupJSON = r => '{"id":'+goString(r.id)+',"fingerprint":'+goString(r.fingerprint)+'}';
-export function parseFollowup(r) { const f=strict(r,"follow-up",{id:"string",fingerprint:"string"});if(!validID(f.id)||!validFingerprint(f.fingerprint))throw Error("follow-up requires exact original request and key");return {id:f.id,fingerprint:f.fingerprint}; }
+export const followupJSON = r => '{"id":'+goString(r.id)+',"fingerprint":'+goString(r.fingerprint)+(r.attempt?',"attempt":'+goInt(r.attempt,'attempt'):'')+'}';
+export function parseFollowup(r) { const f=strict(r,"follow-up",{id:"string",fingerprint:"string",attempt:"int"});if(!validID(f.id)||!validFingerprint(f.fingerprint)||f.attempt<0)throw Error("follow-up requires exact original request, key and safe attempt");return {id:f.id,fingerprint:f.fingerprint,...(f.attempt?{attempt:f.attempt}:{})}; }
 export function checkFollowup(n) { if(!n.followup)return;const f=parseFollowup(n.followup);if(f.id===n.id||f.id===n.lid||!n.reply_to||![Version,Version2].includes(n.v)||!["question","task"].includes(n.kind)||n.sub||n.status||n.agent_id||agentOrigin(n.origin)||n.topic_event||n.topic_done)throw Error("follow-up must bind another exact request on a human question or task"); }
 async function checkV2(n) {
   checkFollowup(n);
@@ -1832,9 +1833,27 @@ export function conversationAudienceCopy(row) {
 export function conversationAudienceRequirement(required="",needed=false) {
  return !needed||required===CapConversationAudience||conversationAudienceBase(required)!==required?required:required?required+"+"+CapConversationAudience:CapConversationAudience;
 }
+export function followupCopy(row) {
+ if(row.sub==="history"&&row.body)return parseHistory(row.body).followup;
+ if(row.sub===SubDeviceHistory&&row.body)return parseDeviceHistory(row.body).item.followup;
+ if(row.receiver_setup?.request)return row.receiver_setup.request.followup;
+ if(row.receiver_route?.op==="delegate"&&row.body){const ref=JSON.parse(row.body).request?.followup;return ref?parseFollowup(ref):null;}
+ return row.followup;
+}
+export function steerCopy(row) {
+ return conversationAudienceBase(row.required_cap||"").split("+").includes(CapRequestSteer)||!!followupCopy(row)?.attempt;
+}
+export function steerRequirement(required="",needed=false) {
+ const base=conversationAudienceBase(required),audience=base!==required;
+ return conversationAudienceRequirement(!needed||base.split("+").includes(CapRequestSteer)?base:base?base+"+"+CapRequestSteer:CapRequestSteer,audience);
+}
+export function steerRequirementBase(required="") {
+ return conversationAudienceBase(required).split("+").filter(c=>c!==CapRequestSteer).join("+");
+}
 export function retainedAgentActionRequirements(row) {
  let n=row;if(row.sub==="history"&&row.body)try{n=parseHistory(row.body);}catch{}
- return {...(conversationAudienceCopy(row)?{required_cap:conversationAudienceRequirement(row.required_cap||agentRequirement(row),true)}:{}),mention_cap:!!(row.mention_cap||row.required_cap===CapMentionReaction||n.origin===OriginMentionReaction&&n.pid&&n.sub===SubReaction),organization_cap:!!(row.organization_cap||row.required_cap===CapAgentOrganization||organizationReaderExtension(n))};
+ const required=steerRequirement(row.required_cap||agentRequirement(row),steerCopy(row));
+ return {...(required||conversationAudienceCopy(row)?{required_cap:conversationAudienceRequirement(required,conversationAudienceCopy(row))}:{}),mention_cap:!!(row.mention_cap||row.required_cap===CapMentionReaction||n.origin===OriginMentionReaction&&n.pid&&n.sub===SubReaction),organization_cap:!!(row.organization_cap||row.required_cap===CapAgentOrganization||organizationReaderExtension(n))};
 }
 export function agentRequirement(n) {
   try {
@@ -1901,7 +1920,7 @@ export async function verifyCaps(c, signKey) {
 // capsReads is protocol.CapsRecord.Reads: a record lists name, or rm1 when
 // rm1 implies it.
 export const RoomImplies = [CapExternalParticipation, CapAgentIdentity, CapHumanParticipation, CapAgentReaction, CapProgress, CapGroup, CapReplyReceiver, CapConvClear];
-export const capsReads = (c, name) => (c.caps || []).includes(name) || name===CapModelSync&&(c.caps||[]).includes(CapModelSyncV2) || name===CapGroupInvitationControl&&(c.caps||[]).includes(CapGroupInvitationManage) || (c.caps || []).includes(CapRoom) && RoomImplies.includes(name);
+export const capsReads = (c, name) => (c.caps || []).includes(name) || name===CapRequestFollowup&&(c.caps||[]).includes(CapRequestSteer) || name===CapModelSync&&(c.caps||[]).includes(CapModelSyncV2) || name===CapGroupInvitationControl&&(c.caps||[]).includes(CapGroupInvitationManage) || (c.caps || []).includes(CapRoom) && RoomImplies.includes(name);
 
 // profileSupports is protocol.Profile.Supports for a profile as the relay
 // sends it ({person, sessions, live, caps}): there are sessions, and each

@@ -1178,7 +1178,8 @@ type job struct {
 	Target           *envelope.Target
 	Local            bool // asked here, by this device's own person
 
-	run *runDir // its run folder while it runs (runfiles.go)
+	nativeAttempt int64   // immutable attempt of this owned native process
+	run           *runDir // its run folder while it runs (runfiles.go)
 }
 
 // followUp reports whether j processes a reply to one of our requests,

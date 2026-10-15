@@ -4,6 +4,24 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
+## v0.8.29 candidate — final integration
+
+The release lead has integrated natural tagged steering, cross-device read
+synchronization, compact result/media presentation, the reviewed MEL-642
+responsiveness changes, retained group move proof and history deletion repairs.
+Codex, Claude, Pi and OMP actual-worker steering checks pass with native settings
+and permissions unchanged; agy authentication remains unqualified. The added
+steering chooser/mode/modal is removed. See [the v29 plan](plans/V0_8_29.md) for
+exact evidence, remaining gates and exclusions. No v29 publication yet.
+
+Root focused final corrections and whole vet pass. The original named callback
+race passes with its existing deadline after reducing repeated current evidence
+reads; earlier failures remain recorded and no timing-margin claim is made.
+Final stable-source native/race/mixed-version, complete skins and original-key
+Android qualification remain required. MEL-587's corrupting operation is still
+unproven; packaging is unchanged and the issue remains urgent. Projects stays
+reserved for0.9.0.
+
 ## Pending UI responsiveness fix — MEL-642
 
 Next release remains blocked on [MEL-642](https://linear.app/mellanni/issue/MEL-642).

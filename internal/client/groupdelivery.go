@@ -75,21 +75,8 @@ func (a *Agent) completeSupersededGroupPublication(c protocol.GroupCommit, exact
 // pinned recipient key. The caller uses it both before sealing and in the
 // existing outbox installation transaction; retry uses the installed snapshot.
 func groupDeliveryRecipient(q dbq, packet GroupContext, address, fp string) error {
-	var head sql.NullInt64
-	if err := q.QueryRow(`SELECT max(seq) FROM group_proof_records WHERE conv=? AND bootstrap=?`, packet.State.Conv, packet.Root.Creator.Fingerprint).Scan(&head); err != nil {
+	if err := groupDeliveryHead(q, packet); err != nil {
 		return err
-	}
-	if !head.Valid || head.Int64 != packet.State.Seq {
-		return ErrGroupContextPending
-	}
-	var seq int64
-	var hash string
-	err := q.QueryRow(`SELECT seq,hash FROM group_known_heads WHERE conv=? AND bootstrap=?`, packet.State.Conv, packet.Root.Creator.Fingerprint).Scan(&seq, &hash)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return err
-	}
-	if err == nil && (seq > packet.State.Seq || seq == packet.State.Seq && hash != packet.State.Hash()) {
-		return ErrGroupContextPending
 	}
 	for _, member := range packet.State.Members {
 		person, ok, err := personByIDIn(q, member.Person)
@@ -112,6 +99,27 @@ func groupDeliveryRecipient(q dbq, packet GroupContext, address, fp string) erro
 		return nil
 	}
 	return errGroupRecipientNotCurrent
+}
+
+// groupDeliveryHead is the same committed/current-head fence for one decision.
+func groupDeliveryHead(q dbq, packet GroupContext) error {
+	var head sql.NullInt64
+	if err := q.QueryRow(`SELECT max(seq) FROM group_proof_records WHERE conv=? AND bootstrap=?`, packet.State.Conv, packet.Root.Creator.Fingerprint).Scan(&head); err != nil {
+		return err
+	}
+	if !head.Valid || head.Int64 != packet.State.Seq {
+		return ErrGroupContextPending
+	}
+	var seq int64
+	var hash string
+	err := q.QueryRow(`SELECT seq,hash FROM group_known_heads WHERE conv=? AND bootstrap=?`, packet.State.Conv, packet.Root.Creator.Fingerprint).Scan(&seq, &hash)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if err == nil && (seq > packet.State.Seq || seq == packet.State.Seq && hash != packet.State.Hash()) {
+		return ErrGroupContextPending
+	}
+	return nil
 }
 
 type groupDeliveryPayload struct {

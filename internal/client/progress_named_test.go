@@ -81,7 +81,7 @@ func TestCapabilityFixtureDropsOnlyRequestedReader(t *testing.T) {
 // follow-up readers and the agent discovery hint, rather than truncate readers.
 func olderRoomFixtureCaps(caps []string) []string {
 	return slices.DeleteFunc(slices.Clone(caps), func(cap string) bool {
-		return slices.Contains([]string{protocol.CapDriveSpace, protocol.CapModelSyncV2, protocol.CapNotify, protocol.CapTyping, protocol.CapContinuation, protocol.CapRequestFollowup, protocol.CapAgent}, cap)
+		return slices.Contains([]string{protocol.CapDriveSpace, protocol.CapModelSyncV2, protocol.CapNotify, protocol.CapTyping, protocol.CapContinuation, protocol.CapRequestSteer, protocol.CapAgent}, cap)
 	})
 }
 

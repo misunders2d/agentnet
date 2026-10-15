@@ -189,6 +189,7 @@ func (a *Agent) archivePack(ctx context.Context) (err error) {
 		fp                    string
 		proactive, snapshot   bool
 		conversationAudience  bool
+		steer                 bool
 		mention, organization bool
 	}
 	var selectedRows []selected
@@ -204,6 +205,13 @@ func (a *Agent) archivePack(ctx context.Context) (err error) {
 		// Repacking retained ciphertext inherits its original requirement,
 		// even when a later local erase removed the plaintext classification.
 		priorRequired, r.conversationAudience = splitConversationAudienceRequirement(priorRequired)
+		priorRequired, r.steer = splitSteerRequirement(priorRequired)
+		followup, e := carriedFollowup(sub, body)
+		if e != nil {
+			err = e
+			break
+		}
+		r.steer = r.steer || followup != nil && followup.Attempt > 0
 		r.conversationAudience = r.conversationAudience || conversationAudienceCopy(sub, body, "")
 		r.proactive = priorRequired == protocol.CapProactiveAgent || priorRequired == topicContextArchiveProactive
 		r.snapshot = priorRequired == protocol.CapTopicContext || priorRequired == topicContextArchiveProactive
@@ -260,6 +268,7 @@ func (a *Agent) archivePack(ctx context.Context) (err error) {
 	required := protocol.CapHistoryArchive
 	snapshotExtension := false
 	conversationAudienceExtension := false
+	steerExtension := false
 	chunkBytes := len(`{"v":1,"entries":[]}`)
 	mentionExtension, organizationExtension := false, false
 	for _, r := range selectedRows {
@@ -293,6 +302,7 @@ func (a *Agent) archivePack(ctx context.Context) (err error) {
 		}
 		chunkBytes += n
 		chunk.Entries = append(chunk.Entries, entry)
+		steerExtension = steerExtension || r.steer
 		mentionExtension = mentionExtension || r.mention
 		organizationExtension = organizationExtension || r.organization
 		snapshotExtension = snapshotExtension || r.snapshot
@@ -310,6 +320,7 @@ func (a *Agent) archivePack(ctx context.Context) (err error) {
 			required = protocol.CapTopicContext
 		}
 	}
+	required = steerRequirement(required, steerExtension)
 	required = conversationAudienceRequirement(required, conversationAudienceExtension)
 	data, err := envelope.MarshalHistoryArchiveChunk(chunk)
 	if err != nil {

@@ -128,12 +128,14 @@ Agents work in background sessions. Your open assistant session stays yours.
 People can also talk, share files and make decisions without involving an
 agent at all.
 
-In **Comic**, use a request's correction/follow-up action to keep new instructions
-attached to the exact work. Supported running Codex group questions can accept
-steering; other runs receive a queued follow-up. An uncertain acknowledgement
-is shown as uncertain, not silently retried. Select a message and its available
-files to assign a reviewed task to one of your own agents; its private chat
-retains the source attribution.
+Send the next **tagged message** to steer that agent's current work in the same
+chat and topic. With no active run, it starts an ordinary new request. Codex,
+Claude, Pi and OMP use their native input channels; status confirms when the
+running agent consumes the correction. An ended, unsupported or uncertain run
+never silently turns that correction into a new job. If several requests are
+running, Reply to the exact one. Select a message and its available files to
+assign a reviewed task to one of your own agents; its private chat retains the
+source attribution.
 
 Your own agents can show their **last reported model**, or explicitly say it
 is unknown. That information is owner-only across your verified devices, not
@@ -410,7 +412,7 @@ that a person is needed, rather than claim completion.
 
 Questions and tasks both retain native permissions; a standing task grant can
 cover a verified person or an exact device key. The diagram's **Follow-up** is
-the CLI's local reply summary, distinct from Comic's correction/steering action.
+the CLI's local reply summary, distinct from steering through a tagged message.
 
 **Return to the asking session.** Pi/OMP hooks, the Claude channel and Codex's
 app-server hook integration support this under their documented setup.

@@ -63,9 +63,33 @@ jobs:
           AGENTNET_TEST_PACKAGES: ${{ inputs.test_packages || './...' }}
           AGENTNET_TEST_RUN: ${{ inputs.test_run || '.' }}
           AGENTNET_TEST_COUNT: ${{ inputs.test_count || '1' }}
+          AGENTNET_FULL_NATIVE: ${{ !inputs.test_packages && !inputs.test_run }}
           AGENTNET_REQUIRE_COMPAT: ${{ startsWith(matrix.os, 'ubuntu') && '1' || '' }}
         run: |
           read -r -a packages <<< "$AGENTNET_TEST_PACKAGES"
+          if [[ "$RUNNER_OS" == Windows && "$AGENTNET_FULL_NATIVE" == true ]]; then
+            other_packages=$(go list ./... | awk '!/\/internal\/client$/')
+            mapfile -t packages <<< "$other_packages"
+            pids=()
+            logs=()
+            for selection in '[A-G]' '[H-Z]'; do
+              log="windows-client-${#pids[@]}.log"
+              go test -count="$AGENTNET_TEST_COUNT" -timeout 1800s -run "^Test${selection}" ./internal/client >"$log" 2>&1 &
+              pids+=("$!")
+              logs+=("$log")
+            done
+            result=0
+            for i in "${!pids[@]}"; do
+              if wait "${pids[$i]}"; then code=0; else code=$?; fi
+              cat "${logs[$i]}"
+              echo "Windows client partition $i exit $code"
+              if (( code != 0 )); then result=1; fi
+            done
+            if go test -count="$AGENTNET_TEST_COUNT" -timeout 1800s -run "$AGENTNET_TEST_RUN" "${packages[@]}"; then code=0; else code=$?; fi
+            echo "Windows other packages exit $code"
+            if (( code != 0 )); then result=1; fi
+            exit "$result"
+          fi
           go test -count="$AGENTNET_TEST_COUNT" -timeout 1800s -run "$AGENTNET_TEST_RUN" "${packages[@]}"
   # The race suite on Linux, split over parallel runners: internal/client's
   # tests in twelve bounded shards, every other package in one. Focused

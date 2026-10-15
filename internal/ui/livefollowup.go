@@ -9,11 +9,12 @@ import (
 )
 
 type RequestFollowupDraft struct {
-	Conv  string       `json:"conv,omitempty"`
-	Ref   envelope.Ref `json:"ref"`
-	ID    string       `json:"id"`
-	Body  string       `json:"body"`
-	Files []string     `json:"files,omitempty"`
+	Attempt int64        `json:"attempt,omitempty"`
+	Conv    string       `json:"conv,omitempty"`
+	Ref     envelope.Ref `json:"ref"`
+	ID      string       `json:"id"`
+	Body    string       `json:"body"`
+	Files   []string     `json:"files,omitempty"`
 }
 
 func (l *Live) RequestFollowup(d RequestFollowupDraft) (string, error) {
@@ -24,7 +25,7 @@ func (l *Live) RequestFollowup(d RequestFollowupDraft) (string, error) {
 	defer cleanup()
 	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 	defer cancel()
-	note, err := l.a.QueueRequestFollowup(ctx, client.RequestFollowup{Conv: d.Conv, Ref: d.Ref, ID: d.ID, Body: d.Body, Files: files})
+	note, err := l.a.QueueRequestFollowup(ctx, client.RequestFollowup{Attempt: d.Attempt, Conv: d.Conv, Ref: d.Ref, ID: d.ID, Body: d.Body, Files: files})
 	if err != nil {
 		return "", Refuse(sentence(err))
 	}

@@ -345,15 +345,18 @@ func TestGroupTurnsT2LogicalRepliesOrderingAndRestart(t *testing.T) {
 
 func TestGroupTurnsT3FilesResumeAcrossSenderRestart(t *testing.T) {
 	t.Parallel()
-	var bobFaults *faults
+	var aliceFaults, bobFaults *faults
 	w, carol, p, stops := groupTurnsFixture(t, func(a *Agent) {
+		if a.Address == "admin/alice" {
+			aliceFaults = injectFaults(a)
+		}
 		if a.Address == "bob/laptop" {
 			bobFaults = injectFaults(a)
 		}
 	})
 	stops[w.alice]()
 	path, data := writeFile(t, t.TempDir(), "group-file.bin", 6<<20)
-	injectFaults(w.alice).addAfter("PUT", "/v1/blobs/", 1, 1, false)
+	aliceFaults.addAfter("PUT", "/v1/blobs/", 1, 1, false)
 	res, err := w.alice.SendConv(tctx(t), p.State.Conv, ConvOutgoing{Files: []OutgoingFile{{Path: path, Name: "group-file.bin"}}})
 	if err != nil {
 		t.Fatal(err)

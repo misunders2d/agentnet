@@ -10,7 +10,7 @@ import (
 
 func TestRequestFollowupSignedShape(t *testing.T) {
 	alice, bob := newParty(t, "alice/phone"), newParty(t, "bob/desk")
-	ref := &Ref{ID: protocol.NewID(), Fingerprint: alice.pub.Fingerprint()}
+	ref := &FollowupRef{Ref: Ref{ID: protocol.NewID(), Fingerprint: alice.pub.Fingerprint()}}
 	in := Inner{V: Version, ID: protocol.NewID(), From: alice.pub.Address, To: bob.pub.Address, TS: 1, Kind: KindTask, Body: "Please write the document in English.", ReplyTo: ref.ID, Followup: ref}
 	recipient, _ := bob.pub.Recipient()
 	sealed, err := Seal(in, alice.id.Sign, recipient)
@@ -25,8 +25,8 @@ func TestRequestFollowupSignedShape(t *testing.T) {
 		func(n *Inner) { n.Kind = KindMessage },
 		func(n *Inner) { n.Kind, n.Status = KindAnswer, StatusDone },
 		func(n *Inner) { n.ReplyTo = "" },
-		func(n *Inner) { n.Followup = &Ref{ID: n.ID, Fingerprint: ref.Fingerprint} },
-		func(n *Inner) { n.Followup = &Ref{ID: ref.ID, Fingerprint: "unknown"} },
+		func(n *Inner) { n.Followup = &FollowupRef{Ref: Ref{ID: n.ID, Fingerprint: ref.Fingerprint}} },
+		func(n *Inner) { n.Followup = &FollowupRef{Ref: Ref{ID: ref.ID, Fingerprint: "unknown"}} },
 		func(n *Inner) { n.Origin = OriginAgentPrefix + "codex" },
 	} {
 		bad := in

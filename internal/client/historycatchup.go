@@ -97,12 +97,16 @@ func historyCopyHash(c outCopy) (string, error) {
 	if err := decodeStrict([]byte(c.in.Body), &item); err != nil {
 		return "", err
 	}
+	return historyCopyDigest(historyRef(c.in.Conv, item).Hash, item.Ref), nil
+}
+
+func historyCopyDigest(content string, ref *envelope.Ref) string {
 	data, _ := json.Marshal(struct {
 		Content string
 		Ref     *envelope.Ref
-	}{historyRef(c.in.Conv, item).Hash, item.Ref})
+	}{content, ref})
 	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:]), nil
+	return hex.EncodeToString(sum[:])
 }
 
 func historyCopyPresent(q dbq, dev identity.Public, c outCopy) (bool, error) {
@@ -114,8 +118,12 @@ func historyCopyPresent(q dbq, dev identity.Public, c outCopy) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	return historyCopyPresentHash(q, dev, c, item, hash)
+}
+
+func historyCopyPresentHash(q dbq, dev identity.Public, c outCopy, item HistoryItem, hash string) (bool, error) {
 	var prior, state, fp, conv, sub, raw, body, carrier string
-	err = q.QueryRow(`SELECT h.hash,h.carrier,coalesce(o.state,''),coalesce(o.recipient_fp,''),coalesce(o.conv,''),coalesce(o.sub,''),coalesce(o.envelope,''),coalesce(o.body,'') FROM history_copies h LEFT JOIN outbox o ON o.id=h.carrier AND o.recipient=? WHERE h.recipient_fp=? AND h.conv=? AND h.author=? AND h.lid=?`, dev.Address, dev.Fingerprint(), c.in.Conv, item.FromKey, item.LID).Scan(&prior, &carrier, &state, &fp, &conv, &sub, &raw, &body)
+	err := q.QueryRow(`SELECT h.hash,h.carrier,coalesce(o.state,''),coalesce(o.recipient_fp,''),coalesce(o.conv,''),coalesce(o.sub,''),coalesce(o.envelope,''),coalesce(o.body,'') FROM history_copies h LEFT JOIN outbox o ON o.id=h.carrier AND o.recipient=? WHERE h.recipient_fp=? AND h.conv=? AND h.author=? AND h.lid=?`, dev.Address, dev.Fingerprint(), c.in.Conv, item.FromKey, item.LID).Scan(&prior, &carrier, &state, &fp, &conv, &sub, &raw, &body)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -147,6 +155,47 @@ func historyCopyPresent(q dbq, dev identity.Public, c outCopy) (bool, error) {
 	// Quarantined means the receiver retained this exact ciphertext. Its
 	// normal proof recovery owns reconsideration; a new ID only floods it.
 	return state == stateQueued || state == "waiting" || state == "custody" || state == "delivered" || state == "quarantined" || state == archiveStaged || state == archiveAccepted, nil
+}
+
+// An already-admitted inbound original keeps its content_hash after redaction.
+// This recognizes only existing immutable coverage of that original: no erased
+// text is recovered, copied again, or substituted into the retained ledger.
+// The strict public comparator still hashes current content and rejects changes.
+func historyRedactedSourceCovered(q dbq, dev identity.Public, c outCopy) (bool, error) {
+	var item HistoryItem
+	if err := decodeStrict([]byte(c.in.Body), &item); err != nil {
+		return false, err
+	}
+	if item.Body != "" || !(item.Kind == envelope.KindMessage && item.Sub == "" || item.Sub == envelope.SubRevision && item.Ref != nil) {
+		return false, nil
+	}
+	id, key := item.LID, item.FromKey
+	refID, refKey := "", ""
+	if item.Ref != nil {
+		refID, refKey = item.Ref.ID, item.Ref.Fingerprint
+	}
+	if item.Sub == envelope.SubRevision {
+		id, key = refID, refKey
+	}
+	retracted, err := retractedRefChecked(q, c.in.Conv, id, key)
+	if err != nil || !retracted {
+		return false, err
+	}
+	var content string
+	err = q.QueryRow(`SELECT coalesce(content_hash,'') FROM inbox WHERE id=? AND conv=? AND lid=? AND verified_by=? AND local=0 AND body='' AND kind=? AND coalesce(sub,'')=? AND coalesce(ref_id,'')=? AND coalesce(ref_fp,'')=?`, item.ID, c.in.Conv, item.LID, item.FromKey, item.Kind, item.Sub, refID, refKey).Scan(&content)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if len(content) != sha256.Size*2 {
+		return false, nil
+	}
+	if _, err = hex.DecodeString(content); err != nil {
+		return false, nil
+	}
+	return historyCopyPresentHash(q, dev, c, item, historyCopyDigest(content, item.Ref))
 }
 
 func (a *Agent) historyDependencies(it historySourceRow, prepared HistoryItem) ([]historySourceRow, error) {
@@ -652,6 +701,14 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 				sources = append(sources, it)
 				sourceByCopy[c.env.ID] = it
 			}
+			done[id] = true
+			return nil
+		}
+		covered, e := historyRedactedSourceCovered(a.store.db, dev, *c)
+		if e != nil {
+			return e
+		}
+		if covered {
 			done[id] = true
 			return nil
 		}

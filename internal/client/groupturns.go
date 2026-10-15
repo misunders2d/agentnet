@@ -496,7 +496,7 @@ func (a *Agent) admitGroupTurn(ctx context.Context, env envelope.Envelope, in en
 		return nil
 	}
 	if err = check(a.store.db); err != nil {
-		if errors.Is(err, ErrGroupContextPending) {
+		if errors.Is(err, ErrGroupContextPending) || errors.Is(err, errOrganizationGrantProof) {
 			return hold(reasonProof, err.Error())
 		}
 		return hold(reasonInvalid, err.Error())
