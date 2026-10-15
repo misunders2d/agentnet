@@ -267,6 +267,9 @@ func TestLiveRefreshAsksAboutEveryHeldCopy(t *testing.T) {
 			if _, err := db.Exec("UPDATE outbox SET state='waiting',recipient=?,recipient_person=(SELECT recipient_person FROM outbox WHERE conv=? AND recipient=? LIMIT 1) WHERE conv=? AND recipient IN (?,?)", to, conv, bob.Address, conv, phone.Address, "bob/legacy-device"); err != nil {
 				t.Fatal(err)
 			}
+			// This fixture bypasses the normal store/daemon write hooks. Publish
+			// the staged change just as a real receipt transition would.
+			alice.NoteChange()
 			o, err := l.Overview()
 			if err != nil {
 				t.Fatal(err)
