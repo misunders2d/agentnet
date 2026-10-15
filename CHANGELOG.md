@@ -6,6 +6,8 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+## [0.8.31] — 2026-10-16
+
 - Let accepted topic guests bring their own agents through Bring in. Helpers
   stay within the guest's topic and selected context; ending the guest's access
   ends the helper's future access. Preserve native execution consent.

@@ -1,24 +1,71 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
-## Next release — v0.8.31 in progress
+## Current release — v0.8.31, October 16, 2026
 
-The owner approved [the v31 scope](plans/V0_8_31.md) and
-[publication goal](plans/V0_8_31_GOAL.md). Root orchestrates/reviews; four
-GPT-6.1-sol xhigh Codex workers implement in Herdr tab 3 with native automatic
-review, and the existing Claude in tab 2 independently challenges designs/code.
-ThinkPad is offline. Candidate `5fe81042` is committed; integrated qualification
-and its reviewed residual batch are in progress. The final nine-parent focused
-race batch passes, including derived history under its original wait; final
-integrated gates and publication remain pending.
-Guest-owned agents are core scope; WebKit remains urgent investigation with
-the prior carry-forward permission. Current ownership and failed/passing
-evidence are linked from the v31 plan. Preserve live identities/history/work.
+[Download v0.8.31](https://github.com/misunders2d/agentnet/releases/tag/v0.8.31),
+immutable tag `1894c6cd79c961e3e4df11b2779d24ca26bc8523`, published at
+23:25:08 UTC on October 15. Exact-tag
+[packaging 38822343325](https://github.com/misunders2d/agentnet/actions/runs/38822343325)
+passes every job. All 13 assets match downloaded checksums and GitHub digests.
+Standalone and bundled Linux CLI report the exact clean tag. Public Android
+SHA256 `5dbeaf26b022bff406934cde4e6c87e31b2b6525d543e223b729122ed84aadc9`
+passes original signer, code 8031, nondebuggable, both ABIs and 16 KiB verification.
+
+Accepted topic guests can bring their own agents, bounded by current parent
+scope and selected history. Valid social controls save before reader availability
+checks; delivery retains exact authority and capability gates. Viewed-topic
+unread, selected-excerpt replies and stale rejoin actions are corrected. Existing
+Working views show current public native activity. External skins fill the
+window with Settings access to host controls; participant details start collapsed.
+Windows uses normal sound and quiet-time settings. Actual ThinkPad improvement
+and Windows audible acceptance remain unmeasured. MEL-587 WebKit heap corruption
+is unresolved under the owner's carry-forward authorization.
+
+Whole vet, all 12 client race selections, other packages and both UI partitions,
+Chrome IndexedDB, native Linux/macOS/Windows, required published-v30 mixed-version,
+desktop and container coverage are qualified with unchanged passes retained.
+The exact client union contains 1,253 executed passes and 25 explicit opt-in/helper
+skips. Original failed runs and timeouts remain recorded; final affected client4
+passes in 549.002 seconds inside the unchanged 600-second bound.
+
+[Gallery v2026.10.16.1](https://github.com/misunders2d/agentnet-skins/releases/tag/v2026.10.16.1),
+commit `08d26e3b2bf8dcfeab6039b91fcb6d05aef55d63`, publishes Classic, Holonet,
+Zoom and Pulp 1.6.0 plus Office 1.4.0 at the exact v31 pin. The complete normal
+collection gate passes in 466.185 seconds with every applicable suite. All 121
+public files, package digests, catalog and 20 retained inspected previews are
+verified. Fixture corrections retain assertions and bounds; no historical
+intermittent cause is invented.
+
+One final original-key 2870 APK, from production-identical source, passes
+same-VM-boot v30→v31 warm/fresh-process cold preservation and ordinary Back:
+all 9 native files, schema 79, 200 messages, 100 outbox rows including 3 queued,
+3 encrypted files, origin and Comic storage remain exact. Existing damaged
+caches stay unchanged. The raw cleanup exit 1 on TIME_WAIT is retained; a separate
+read-only checkpoint inside the original 720-second overall budget verifies
+processes absent, ports free and keys unchanged. The public APK is separately verified, not
+claimed byte-identical. Readable-cache recovery, absent-draft recovery,
+VM-reboot persistence and physical-phone acceptance remain unqualified.
+
+The authorized Hub rollout passes in 64.945 seconds using the exact public
+Linux binary. Full stopped-store backup
+`/opt/agentnet-revived/backups/pre-v0.8.31-ezlw__u6` verifies 6,195 entries.
+Realm, 54,126 messages, 6,188 blobs, 13 agents, 7 persons, 19 chain rows and
+schema 23 remain exact. HTTPS and the running binary report v31 with zero
+restarts. Only the image changes; volume, configuration, environment and neighbor
+remain unchanged. An independent read-only final check confirms these facts.
+No identity, history, grant or request was reset or replayed.
+
+The [release record](plans/V0_8_31.md) preserves exact gates and limitations.
+Root orchestrated and reviewed; Codex workers and Claude supplied implementation
+and independent review. Completed owned Herdr helpers are closed; user panes and
+the Claude draft remain intact. ThinkPad is offline. Projects remains reserved
+for v0.9.0.
 
 Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
-## Current release — v0.8.30, October 15, 2026
+## Previous release — v0.8.30, October 15, 2026
 
 [Download v0.8.30](https://github.com/misunders2d/agentnet/releases/tag/v0.8.30),
 immutable tag `33447e2c8b5ea9ba4db9cf365876f519d0838c79`, published
