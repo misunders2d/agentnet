@@ -109,7 +109,17 @@ func TestHistoryBacklogLateInteractiveTurn(t *testing.T) {
 
 func TestHistoryWindowOfflineReceiptRestartAndCompletion(t *testing.T) {
 	w, phone, _, ids := historyCatchupFixture(t, 125)
+	// This fixture drains individual signed carriers and their receipts.
+	// Advertise that reader before taking it offline; link setup may have
+	// already advertised archive support on its waiting session.
+	stopPhone := runAgent(t, phone)
+	waitNamedAgentCaps(t, phone)
+	signCapsAfter(t, phone, without(ownCaps, protocol.CapHistoryArchive))
+	stopPhone()
 	a := w.alice
+	if a.archivesFor(tctx(t), phone.Self()) {
+		t.Fatal("offline per-carrier fixture still advertises archive support")
+	}
 	if _, err := a.historyCatchupPage(tctx(t), phone.Self()); err != nil {
 		t.Fatal(err)
 	}

@@ -161,8 +161,18 @@ func TestResponderChoiceAtSetup(t *testing.T) {
 	}
 	work := filepath.Join(c.dir, "work")
 	os.MkdirAll(work, 0o700)
-	if out := c.run("--home", "alice", "responder", "set", "--harness", "codex", "--dir", work); !strings.Contains(out, "note: Questions and accepted tasks use your native settings, skills, plugins, tools and permissions unchanged") {
-		t.Fatalf("set: %s", out)
+	out = c.run("--home", "alice", "responder", "set", "--harness", "codex", "--dir", work)
+	for _, want := range []string{
+		"note: Questions and accepted tasks retain your native settings, skills, plugins, tools and sandbox.",
+		"AgentNet selects native automatic approval or review at launch.",
+		"Native denials and explicit tool policies remain authoritative.",
+		"Codex app-server selects native automatic approval review and inherits your sandbox policy.",
+		"AgentNet grants no additional writable folders.",
+		"Your open sessions remain untouched.",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("set lacks %q:\n%s", want, out)
+		}
 	}
 	if out := c.run("--home", "alice", "responder", "show"); !strings.Contains(out, "harness codex") {
 		t.Fatalf("show after set: %s", out)

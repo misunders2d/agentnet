@@ -32,7 +32,7 @@ run_partition() {
 				if ($0=="TestGroupHistoryWitnessRetiredTaskDevice") part=4
 				if ($0=="TestRoomReciprocalRootQuestions") part=5
 				if ($0=="TestHistoryArchiveImportedTailRemainsBounded") part=10
-				if ($0=="TestP6AgentQuestionTaskCorrelationAndOrigin") part=2
+				if ($0=="TestP6AgentQuestionTaskCorrelationAndOrigin") part=6
 				if ($0=="TestRoomBusyAncestorCallback") part=4
 				if ($0=="TestReceiverRemoteGroupNamedNativeMemberVisitor") part=0
 				if ($0=="TestProactiveAgentMessageAdmission") part=2
