@@ -27,7 +27,7 @@ export interface ChatItem {
   last: string;
   lastAt: string;
   unread: number;
-  needsYou: number;            // OKs this device gives here: requests or invitations for your agent (not ones decided on another device)
+  needsYou: number;            // unresolved requests or invitations needing attention here (not ones decided on another device)
   held: number;                // questions or tasks held here for you to answer: not OKs, never counted as one
   guests: number;              // people or agents helping right now
   working: boolean;            // an agent is working on something here
@@ -623,7 +623,7 @@ export function convTitle(c: T.ConvItem, o: T.Overview | null): string {
   if (c.stale) return who + (c.kind === "task" ? " gave your agent a task" : " asked your agent something");
   switch (c.reason) {
     case Reason.invite: return who + (c.role === "human" ? " invited you into " : " invited your agent into ") + chatName(c.conv, o);
-    case Reason.needsHuman: return "Your agent couldn’t finish — it needs your answer";
+    case Reason.needsHuman: return "Your agent couldn’t finish — it needs your attention";
     case Reason.interrupted: return "Your agent was interrupted — run it again if needed";
     case Reason.heldTurn: return who + (c.kind === "task" ? " gave you a task" : " asked you something");
     default: return who + (c.kind === "task" ? " gave your agent a task" : " asked your agent something");

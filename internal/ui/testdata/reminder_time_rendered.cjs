@@ -3,7 +3,7 @@ const {chromium}=require(process.env.AGENTNET_PLAYWRIGHT),assert=require('node:a
 (async()=>{
  const browser=await chromium.launch({headless:true,executablePath:process.env.AGENTNET_CHROMIUM||'/usr/bin/chromium'});
  try {
-  for(const [width,zone] of [[1280,'America/New_York'],[390,'America/New_York'],[390,'Europe/Kyiv']]){
+  for(const [width,zone] of [[1280,'America/New_York'],[1100,'Europe/Kyiv'],[390,'America/New_York'],[390,'Europe/Kyiv']]){
    const context=await browser.newContext({viewport:{width,height:900},timezoneId:zone,isMobile:width===390,hasTouch:width===390}),page=await context.newPage(),errors=[],requests=[];
    page.setDefaultTimeout(10000);page.on('pageerror',e=>errors.push(String(e)));
    page.on('request',r=>{if(new URL(r.url()).pathname==='/api/remind')requests.push(r.postDataJSON());});
@@ -51,7 +51,21 @@ const {chromium}=require(process.env.AGENTNET_PLAYWRIGHT),assert=require('node:a
     assert.deepEqual(requests.at(-1),{id:process.env.PARITY_FIRST,due:expected},'exact selected local date/time converts across DST');
     await msg.getByRole('button',{name:'Change…'}).waitFor();
    }
+   if(width>=1024){
+    const bubble=msg.locator('[data-message-bubble]');await bubble.hover();
+    const more=msg.getByRole('button',{name:'More actions',exact:true});await more.waitFor();
+    const geometry=await more.evaluate(b=>({toolbar:b.parentElement.getBoundingClientRect().bottom,bubble:b.closest('[data-message-bubble]').getBoundingClientRect().bottom}));
+    assert(geometry.toolbar<=geometry.bubble+1,'hover toolbar stays above the reminder action line');
+    await more.focus();await more.press('Enter');await page.getByRole('menuitem',{name:'Details',exact:true}).waitFor();await page.keyboard.press('Escape');
+   }
    await msg.getByRole('button',{name:'Cancel',exact:true}).click();await msg.getByRole('button',{name:'Change…'}).waitFor({state:'detached'});
+   // Ordinary pointer actions, never forced: changing, cancelling and
+   // finishing a reminder must coexist with hover/focus message tools.
+   if(width===390){await msg.getByRole('button',{name:'Message actions'}).focus();await page.keyboard.press('Enter');await page.getByRole('button',{name:'Remind me…',exact:true}).click();}
+   else {await msg.locator('[data-message-bubble]').hover();await msg.getByRole('button',{name:'More actions'}).click();await page.getByRole('menuitem',{name:'Remind me…'}).click();}
+   const again=page.getByRole('dialog',{name:'Remind me later',exact:true});await again.waitFor();await again.getByRole('button',{name:'Remind me',exact:true}).click();await again.waitFor({state:'hidden'});
+   await msg.getByRole('button',{name:'Change…',exact:true}).waitFor();
+   await msg.getByRole('button',{name:'Done',exact:true}).click();await msg.getByRole('button',{name:'Change…'}).waitFor({state:'detached'});
    assert.deepEqual(errors,[]);await context.close();
   }
   console.log('reminder date/time PASS: labelled desktop/touch controls, keyboard hour/minute, incomplete validation, no implicit send, NY/Kyiv DST timestamps');

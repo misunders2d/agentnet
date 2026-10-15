@@ -21,7 +21,7 @@ const {chromium}=require(process.env.AGENTNET_PLAYWRIGHT);
     if(a.do==='resolve'&&a.id==='report')reportDone=true;
     await route.fulfill({json:{note:'Synthetic item handled on this device.'}});
    });
-   const open=async()=>{await p.goto(process.argv[2]);await p.goto(new URL(process.argv[2]).origin+'/?skin='+skin);await p.getByRole('navigation',{name:'Main'}).getByRole('button',{name:/^OKs/}).click();};
+   const open=async()=>{await p.goto(process.argv[2]);await p.goto(new URL(process.argv[2]).origin+'/?skin='+skin);await p.getByRole('navigation',{name:'Main'}).getByRole('button',{name:/^Review/}).click();};
    await open();
    const card=p.locator('li').filter({hasText:'Synthetic first human question'}).filter({has:p.getByRole('button',{name:'Mark as handled',exact:true})}).last();
    await card.getByRole('button',{name:'Mark as handled',exact:true}).waitFor();

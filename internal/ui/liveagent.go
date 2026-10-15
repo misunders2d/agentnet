@@ -207,6 +207,14 @@ func (l *Live) people(peer client.PersonInfo) dmPeople {
 }
 
 func (l *Live) conversationPeople(c client.ConversationInfo) dmPeople {
+	var infos []client.ParticipationInfo
+	if c.Kind != protocol.ConvKindGroup {
+		infos, _ = l.a.Participations(c.ID)
+	}
+	return l.conversationPeopleForParticipations(c, infos)
+}
+
+func (l *Live) conversationPeopleForParticipations(c client.ConversationInfo, infos []client.ParticipationInfo) dmPeople {
 	p := l.people(c.Peer)
 	p.role = c.Role
 	p.group = c.Kind == protocol.ConvKindGroup
@@ -227,22 +235,20 @@ func (l *Live) conversationPeople(c client.ConversationInfo) dmPeople {
 		}
 	}
 	if !p.group {
-		if infos, err := l.a.Participations(c.ID); err == nil {
-			for _, info := range infos {
-				if info.Role == protocol.RoleHuman {
-					if p.humans == nil {
-						p.humans = map[string]client.ParticipationInfo{}
-					}
-					p.humans[info.PID] = info
+		for _, info := range infos {
+			if info.Role == protocol.RoleHuman {
+				if p.humans == nil {
+					p.humans = map[string]client.ParticipationInfo{}
 				}
+				p.humans[info.PID] = info
 			}
-			if len(infos) > 0 { // records may name an outside host or author
-				if known, err := l.a.KnownPersons(); err == nil {
-					p.known = map[string]PersonView{}
-					for _, k := range known {
-						if k.State == PersonPinned {
-							p.known[k.Person] = personView(k)
-						}
+		}
+		if len(infos) > 0 { // records may name an outside host or author
+			if known, err := l.a.KnownPersons(); err == nil {
+				p.known = map[string]PersonView{}
+				for _, k := range known {
+					if k.State == PersonPinned {
+						p.known[k.Person] = personView(k)
 					}
 				}
 			}
@@ -360,12 +366,8 @@ func humanEventText(ev protocol.ParticipationEvent, info client.ParticipationInf
 	return "A participation record (" + ev.Type + ")."
 }
 
-// agentViews are conv's participations as the page shows them.
-func (l *Live) agentViews(conv string, p dmPeople, msgs []client.ConvMessage) ([]AgentView, error) {
-	infos, err := l.a.Participations(conv)
-	if err != nil {
-		return nil, err
-	}
+// agentViews projects the participations already resolved for this response.
+func (l *Live) agentViews(infos []client.ParticipationInfo, p dmPeople, msgs []client.ConvMessage) []AgentView {
 	out := make([]AgentView, 0, len(infos))
 	for _, info := range infos {
 		if info.Role == protocol.RoleHuman {
@@ -429,7 +431,7 @@ func (l *Live) agentViews(conv string, p dmPeople, msgs []client.ConvMessage) ([
 		}
 		out = merged
 	}
-	return out, nil
+	return out
 }
 
 // hasResponder says whether this installation has a responder chosen: its
@@ -647,12 +649,12 @@ func (l *Live) DismissAgent(pid string) (AgentView, error) {
 			if other.PID == pid || other.Role != "" || other.Host.Address != p.Host.Address || other.Host.Fingerprint != p.Host.Fingerprint || other.AgentID != p.AgentID || !sameTopicScope(other.Topic, p.Topic) || other.State != client.PartActive && other.State != client.PartInvited {
 				continue
 			}
-			if _, e = l.a.DismissParticipation(ctx, other.PID); e != nil {
+			if _, e = l.a.DismissParticipation(client.WithQueuedSend(ctx, ""), other.PID); e != nil {
 				return AgentView{}, e
 			}
 		}
 	}
-	return l.agentResult(l.a.DismissParticipation(ctx, pid))
+	return l.agentResult(l.a.DismissParticipation(client.WithQueuedSend(ctx, ""), pid))
 }
 
 // AskAgent implements Participants.

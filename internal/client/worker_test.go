@@ -568,7 +568,7 @@ func TestResponderSeesConfiguredDirectory(t *testing.T) {
 
 // Native permissions govern both admitted questions and accepted tasks.
 func TestQuestionPresetsKeepOwnSetup(t *testing.T) {
-	prohibited := []string{"--tools", "--strict-mcp-config", "--mcp-config", "--no-tools", "--no-skills", "--ignore-user-config", "--disable", "--no-builtin-tools", "--permission-mode", "--disallowedTools", "--allowedTools", "--sandbox", "--approval-mode", "--exclude-tools", "--config", "--dangerously-bypass-approvals-and-sandbox"}
+	prohibited := []string{"--tools", "--strict-mcp-config", "--mcp-config", "--no-tools", "--no-skills", "--ignore-user-config", "--disable", "--no-builtin-tools", "--disallowedTools", "--allowedTools", "--sandbox", "--approval-mode", "--exclude-tools", "--config", "--dangerously-bypass-approvals-and-sandbox"}
 	for name, h := range Harnesses {
 		if name != "claude" && name != "codex" && name != "pi" && name != "omp" {
 			continue
@@ -577,6 +577,9 @@ func TestQuestionPresetsKeepOwnSetup(t *testing.T) {
 			t.Errorf("%s adds question policy: %v / %v", name, h.question, h.task)
 		}
 		for _, args := range [][]string{h.question, h.task, resumeArgs(h, "question", h.question, "T")} {
+			if at := slices.Index(args, "--permission-mode"); at >= 0 && (name != "claude" || at+1 >= len(args) || args[at+1] != "auto") {
+				t.Errorf("%s injected unexpected permission mode: %v", name, args)
+			}
 			for _, flag := range prohibited {
 				if slices.Contains(args, flag) {
 					t.Errorf("%s injects %s: %v", name, flag, args)

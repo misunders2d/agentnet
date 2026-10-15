@@ -56,7 +56,7 @@ function Status({ view, me }: { view: T.ResponderView; me?: T.PersonView }) {
   const found = (view.harnesses || []).some((x) => x.name === h && x.found);
   let face: ReactNode, title: string, sub: string, tone: "ok" | "danger" | "surface";
   if (!view.chosen) { face = myFace; title = "Nobody answers yet"; sub = "Questions and tasks wait for you until you choose below."; tone = "surface"; }
-  else if (view.manual) { face = myFace; title = "You answer yourself"; sub = "Questions and tasks wait for you in OKs."; tone = "surface"; }
+  else if (view.manual) { face = myFace; title = "You answer yourself"; sub = "Questions and tasks wait for you in Review."; tone = "surface"; }
   else if (view.ready) { face = <AgentAvatar seed={h} size={56} mood="done" device="laptop" />; title = harnessName(h) + " answers for you"; sub = "Installed here, and its folder exists. That doesn’t check its sign-in."; tone = "ok"; }
   else { face = <AgentAvatar seed={h} size={56} mood="waiting" device="laptop" />; title = harnessName(h) + " can’t start"; sub = !found ? harnessName(h) + " isn’t installed where AgentNet can find it. Until it is, questions and tasks fail." : "Its folder doesn’t exist. Until it does, questions and tasks fail."; tone = "danger"; }
   return (
@@ -123,9 +123,9 @@ export function PermissionsSection({ titleRef }: { titleRef?: React.Ref<HTMLHead
       <PageHead title="Permissions" titleRef={titleRef} lead="Who may use your agent without asking you first." />
       <div className="space-y-6">
         <Card className="divide-y divide-hairline">
-          <Rule icon={<IconMessageQuestion size={20} />} title="Questions">Your agent answers by itself only for people you’ve approved. Everyone else’s questions wait for you in OKs.</Rule>
+          <Rule icon={<IconMessageQuestion size={20} />} title="Questions">Your agent answers by itself only for people you’ve approved. Everyone else’s questions wait for you in Review.</Rule>
           <Rule icon={<IconBolt size={20} />} title="Tasks">A task runs only after you OK it. If you chose Always allow for someone, their current and future verified devices can give tasks without asking. Removing a device ends its person access; key changes and frozen people block it.</Rule>
-          <Rule icon={<IconLock size={20} />} title="Chat messages">Nothing anyone types in a chat can approve anything. Only you can, in OKs.</Rule>
+          <Rule icon={<IconLock size={20} />} title="Chat messages">Nothing anyone types in a chat can approve anything. Only you can, in Review.</Rule>
         </Card>
         {isBrowser(store.host.platform, o) ? (
           <Hint className="px-1">This browser runs nothing. Permissions belong to the computer that runs your agent.</Hint>

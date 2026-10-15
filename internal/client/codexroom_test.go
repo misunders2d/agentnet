@@ -73,10 +73,13 @@ func TestCodexRoomBridgeBoundTransport(t *testing.T) {
 	if p["cwd"] != cmd.Dir || p["ephemeral"] != true {
 		t.Fatal(p)
 	}
-	for _, forbidden := range []string{"disabledPluginIds", "config", "baseInstructions", "developerInstructions", "sandbox", "sandboxPolicy", "approvalPolicy"} {
+	for _, forbidden := range []string{"disabledPluginIds", "config", "baseInstructions", "developerInstructions", "sandbox", "sandboxPolicy"} {
 		if _, ok := p[forbidden]; ok {
 			t.Fatal(forbidden)
 		}
+	}
+	if p["approvalPolicy"] != "on-request" || p["approvalsReviewer"] != "auto_review" {
+		t.Fatal(p)
 	}
 	spec := p["dynamicTools"].([]any)[0].(map[string]any)
 	schema := spec["inputSchema"].(map[string]any)

@@ -116,10 +116,14 @@ func TestInviteDecodeParity(t *testing.T) {
 // carry no certificate pin and invitation links can be made. The front's
 // certificate is written to dir/tls.crt, where engine nodes take their
 // trust from; the Go admin pins it (its bootstrap invitation is given it).
-func platformHub(t *testing.T, ctx context.Context) (dir, base string, admin *client.Agent) {
+func platformHub(t *testing.T, ctx context.Context, wrappers ...func(http.Handler) http.Handler) (dir, base string, admin *client.Agent) {
 	t.Helper()
 	var proxy atomic.Pointer[httputil.ReverseProxy]
-	front := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { proxy.Load().ServeHTTP(w, r) }))
+	var handler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { proxy.Load().ServeHTTP(w, r) })
+	for _, wrap := range wrappers {
+		handler = wrap(handler)
+	}
+	front := httptest.NewUnstartedServer(handler)
 	front.StartTLS()
 	t.Cleanup(front.Close)
 	base = front.URL

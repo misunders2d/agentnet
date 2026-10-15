@@ -63,6 +63,47 @@ func actualOwnedSteering(t *testing.T, name, optIn string) {
 	if err = json.Unmarshal([]byte(target), &parent.Target); err != nil {
 		t.Fatal(err)
 	}
+	// Explicit, private diagnostics for an opt-in actual native failure. Never
+	// put native failure text (which can contain local information) in logs.
+	if private := os.Getenv("AGENTNET_LIVE_STEERING_FAILURE"); private != "" {
+		if !filepath.IsAbs(private) {
+			t.Fatal("absolute private failure artifact required")
+		}
+		t.Cleanup(func() {
+			if !t.Failed() {
+				return
+			}
+			var failure struct {
+				Harness  string `json:"harness"`
+				State    string `json:"state"`
+				Detail   string `json:"detail"`
+				Attempts int    `json:"attempts"`
+			}
+			failure.Harness = name
+			if err := a.store.db.QueryRow(`SELECT state,coalesce(detail,''),attempts FROM inbox WHERE id=?`, root.LID).Scan(&failure.State, &failure.Detail, &failure.Attempts); err != nil {
+				t.Log("private native failure state unavailable")
+				return
+			}
+			if len(failure.Detail) > 4096 {
+				failure.Detail = failure.Detail[:4096]
+			}
+			data, err := json.Marshal(failure)
+			if err != nil {
+				t.Log("private native failure serialization unavailable")
+				return
+			}
+			file, err := os.OpenFile(private, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+			if err != nil {
+				t.Log("private native failure artifact unavailable")
+				return
+			}
+			_, writeErr := file.Write(data)
+			closeErr := file.Close()
+			if writeErr != nil || closeErr != nil {
+				t.Log("private native failure artifact incomplete")
+			}
+		})
+	}
 	ctx, cancel := context.WithTimeout(t.Context(), 150*time.Second)
 	defer cancel()
 	done := make(chan struct{})

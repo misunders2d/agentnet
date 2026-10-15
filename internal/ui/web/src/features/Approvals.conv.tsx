@@ -97,7 +97,7 @@ function RequestRow({ c, o }: Props) {
       <OpenCard onOpen={() => go("dm", c.conv, c.id)} current={isOpen(c.conv, c.id)} label={title + ". Open it in the chat."}
         face={human ? <AgentAvatar seed={c.pid || c.peer} size={40} /> : <SenderFace c={c} o={o} />} actions={actions}
         detail={said ? <details><summary className="cursor-pointer font-semibold">Read the agent’s whole message</summary><p className="pt-2 whitespace-pre-wrap [overflow-wrap:anywhere]">{said}</p></details> : undefined}>
-        <Body tag={working || running ? <Tag tone="agent">Working</Tag> : stale ? <Tag tone="muted">No result</Tag> : human ? <Tag tone={c.decide_on ? "muted" : "act"}>Needs you</Tag> : kindTag(c.kind)} at={c.at} title={title} quote={firstLine(c.excerpt, 160)}
+        <Body tag={working || running ? <Tag tone="agent">Working</Tag> : stale ? <Tag tone="muted">No result</Tag> : human ? <Tag tone={c.decide_on ? "muted" : "act"}>Needs attention</Tag> : kindTag(c.kind)} at={c.at} title={title} quote={firstLine(c.excerpt, 160)}
           meta={capital(inChat(c.conv, o)) + (working ? " · Already running" : retry || c.decide_on ? "" : c.kind === "task" ? " · Runs only if you allow it" : " · Answered only if you allow it")}>
           {targetLabel && <p className="pt-1 text-[14px] font-semibold text-agent-ink" data-request-target>{targetLabel}</p>}
           {said && <p className="pt-1 line-clamp-2 text-[14px] text-text-2 [overflow-wrap:anywhere]"><b className="font-bold text-agent-ink">Your agent says:</b> {said}</p>}

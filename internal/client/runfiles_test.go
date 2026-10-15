@@ -42,15 +42,15 @@ func TestRunArgsGolden(t *testing.T) {
 		got, want []string
 	}{
 		{"claude question", argv(claude.question, question, claude, false),
-			[]string{"-p", "--output-format", "text", "--no-session-persistence", "--add-dir", in}},
+			[]string{"-p", "--output-format", "text", "--no-session-persistence", "--permission-mode", "auto", "--add-dir", in}},
 		{"claude question without files", argv(claude.question, none, claude, false),
-			[]string{"-p", "--output-format", "text", "--no-session-persistence"}},
+			[]string{"-p", "--output-format", "text", "--no-session-persistence", "--permission-mode", "auto"}},
 		{"claude task", argv(claude.task, task, claude, false),
-			withOut("-p", "--output-format", "text", "--no-session-persistence", "--add-dir", in)},
+			withOut("-p", "--output-format", "text", "--no-session-persistence", "--permission-mode", "auto", "--add-dir", in)},
 		{"claude task without received files", argv(claude.task, outOnly, claude, false),
-			withOut("-p", "--output-format", "text", "--no-session-persistence")},
+			withOut("-p", "--output-format", "text", "--no-session-persistence", "--permission-mode", "auto")},
 		{"claude task resumed", argv(resumeArgs(claude, "task", claude.task, "S"), task, claude, true),
-			withOut("-p", "--output-format", "text", "--resume", "S", "--add-dir", in)},
+			withOut("-p", "--output-format", "text", "--permission-mode", "auto", "--resume", "S", "--add-dir", in)},
 		{"codex question", argv(codex.question, question, codex, false),
 			[]string{"app-server"}},
 		{"codex task", argv(codex.task, task, codex, false),
@@ -91,7 +91,7 @@ func gone(path string) bool {
 // writable permissions merely because an output path was supplied.
 func TestHarnessLimitsTellRunFolders(t *testing.T) {
 	codex := Harnesses["codex"].limits
-	for _, want := range []string{"app-server", "native approval and sandbox policy", "grants no additional writable folders"} {
+	for _, want := range []string{"app-server", "native automatic approval review", "inherits your sandbox policy", "grants no additional writable folders"} {
 		if !strings.Contains(codex, want) {
 			t.Errorf("codex limits lack %q", want)
 		}

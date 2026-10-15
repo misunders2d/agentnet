@@ -233,6 +233,7 @@ export function exposure(t: T.DMThread, g: Guest, timeOf: (s: string) => string)
     const s = g.shared;
     return { cells: [], label: n ? "Saw " + plural(n, "message") : "Saw nothing from before", range: s.length ? span(timeOf(s[0].at), timeOf(s[s.length - 1].at)) : "" };
   }
+  if (!g.shared.length) return { cells: [], label: g.missing ? "Saw " + plural(g.missing, "message") + " not on this computer" : "Saw nothing from before", range: "" };
   const list = timeline(t);
   const ids = new Set(g.shared.map((m) => m.id));
   const idx = list.flatMap((m, i) => (ids.has(m.id) ? [i] : []));

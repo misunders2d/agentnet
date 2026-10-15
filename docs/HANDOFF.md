@@ -4,6 +4,23 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
+## Next candidate — v0.8.30
+
+[The v30 plan](plans/V0_8_30.md) tracks the owner's fresh local steering,
+large-chat and action-latency reports, truthful attention labels, reminder
+controls and the layout-independent mention shortcut. Helpers implement;
+root reviews and orchestrates. Projects remains reserved for v0.9.0.
+Focused source/UI and affected race checks pass; integrated release gates and
+publication have not run. Local edit/reaction/deletion responses use the existing
+durable delivery queue. Same-response projection reuse preserves exact synthetic
+group JSON while reducing381 SQL queries to219; group-control preparation removes
+three duplicate profile GETs. Actual Codex write and Claude/OMP steering pass;
+OMP's earlier failure remains retained with its cause unknown.
+Metadata-only reads of the existing Zenbook v29 host
+measured a first overview request at5.23s, a warm overview at3.79ms and the two
+reported chats at0.38–0.91s. Those are not ThinkPad timings or a candidate
+performance result. No live profile, read state or session was changed.
+
 ## Current release — v0.8.29, October 15, 2026
 
 [Download v0.8.29](https://github.com/misunders2d/agentnet/releases/tag/v0.8.29),

@@ -64,7 +64,7 @@ export function ChatRow({ item, summary, overview, selected, wide, onOpen }: {
             )}
             {item.needsYou > 0 && (
               <span className="shrink-0 rounded-full bg-act px-2 py-px text-[12px] font-extrabold leading-[18px] text-act-ink stroke">
-                {item.needsYou > 1 ? item.needsYou + " need your OK" : "Needs your OK"}
+                {item.needsYou > 1 ? item.needsYou + " need attention" : "Needs attention"}
               </span>
             )}
             {/* A question or task held for you to answer: not an OK, so quiet and uncounted. */}

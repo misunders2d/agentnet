@@ -336,6 +336,9 @@ func (b *codexRoomBridge) event(raw []byte) {
 			} else if b.call != nil {
 				params["dynamicTools"] = []any{spec}
 			}
+			// Select native automatic review without changing the native sandbox.
+			params["approvalPolicy"] = "on-request"
+			params["approvalsReviewer"] = "auto_review"
 			b.send(map[string]any{"id": 2, "method": method, "params": params})
 		case "2":
 			var r struct {

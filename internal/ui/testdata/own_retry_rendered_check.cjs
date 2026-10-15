@@ -37,8 +37,8 @@ async function settle(p){await p.evaluate(async()=>{await document.fonts.ready;c
       await held.locator('li').filter({hasText:/couldn.t be checked/}).waitFor();
       await settle(p);
       if(state==='cancelled'&&process.env.AGENTNET_SCREENSHOTS){fs.mkdirSync(process.env.AGENTNET_SCREENSHOTS,{recursive:true});await p.screenshot({path:process.env.AGENTNET_SCREENSHOTS+'/held-'+process.env.RETRY_MODE+'-'+skin+'.png'});}
-      await nav.getByRole('button',{name:/^OKs/}).click();
-      await p.getByRole('heading',{name:'OKs',exact:true}).first().waitFor();
+      await nav.getByRole('button',{name:/^Review/}).click();
+      await p.getByRole('heading',{name:'Review',exact:true}).first().waitFor();
       // Settings stays drawn (inert) while it slides away; then OKs is alone.
       const records=p.getByText(/failed a check and was kept out|couldn.t be (verified|checked)/).filter({visible:true});
       await records.first().waitFor({state:'hidden'});

@@ -46,7 +46,7 @@ export function decidersWords(report: T.Report | undefined, host: string, o: T.O
   if (items.length > 0) {
     if (items.some(x => x.native && (x.native.expires === 0 || x.native.expires > Date.now()))) return "You can answer your agent’s native request from this device. Its host applies the response only to that current operation.";
     return items.some((x) => x.actionable)
-      ? "You decide these from this device: they’re in OKs, under Reports from other computers."
+      ? "You decide these from this device: they’re in Review, under Reports from other computers."
       : capital(where) + " listed these but didn’t let this device decide them.";
   }
   if (!report.count) return "Nothing waits there any more.";

@@ -18,7 +18,7 @@ fi
 
 run_partition() {
 	local package=$1 k=$2 n=$3 label=$4 tests
-	# Saved measurements on the final list overload client-5/6/7/10.
+	# Saved measurements on the current list overload client-1/9/10.
 	# Keep twelve partitions and every test; move only fixtures to room.
 	tests=$(go test -list '.*' "$package" | awk -v k="$k" -v n="$n" -v client="$([[ $package = ./internal/client ]] && echo 1 || echo 0)" '
 		/^Test/ {
@@ -28,15 +28,15 @@ run_partition() {
 				if ($0=="TestGroupParticipationHistoryAfterHostReadmission") part=7
 				if ($0=="TestGroupReplyReceiverMemberAndVisitorPIDNative") part=11
 				if ($0=="TestOwnPersonTasksDirectAndGroup") part=6
-				if ($0=="TestGroupParticipationFilesLateLinkedRequestAndNamedOutput") part=9
+				if ($0=="TestGroupParticipationFilesLateLinkedRequestAndNamedOutput") part=7
 				if ($0=="TestGroupHistoryWitnessRetiredTaskDevice") part=4
 				if ($0=="TestRoomReciprocalRootQuestions") part=5
 				if ($0=="TestHistoryArchiveImportedTailRemainsBounded") part=10
 				if ($0=="TestP6AgentQuestionTaskCorrelationAndOrigin") part=2
-				if ($0=="TestRoomBusyAncestorCallback") part=1
+				if ($0=="TestRoomBusyAncestorCallback") part=4
 				if ($0=="TestReceiverRemoteGroupNamedNativeMemberVisitor") part=0
 				if ($0=="TestProactiveAgentMessageAdmission") part=2
-				if ($0=="TestDMLiveAgentContext") part=10
+				if ($0=="TestDMLiveAgentContext") part=11
 				if ($0=="TestGroupParticipationHistoryDismissedLinkedRestartReorder") part=10
 			}
 			if (part==k) print

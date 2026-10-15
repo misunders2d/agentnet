@@ -41,6 +41,7 @@ func (l *Live) React(x ControlAction) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 	defer cancel()
+	ctx = client.WithQueuedSend(ctx, "")
 	sent, err := l.a.React(ctx, ref, x.Emoji, x.Remove)
 	if err != nil {
 		return "", Refuse(sentence(err))
@@ -63,6 +64,7 @@ func (l *Live) EditMessage(x ControlAction) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 	defer cancel()
+	ctx = client.WithQueuedSend(ctx, "")
 	sent, err := l.a.Revise(ctx, ref, x.Text)
 	if err != nil {
 		return "", Refuse(sentence(err))
@@ -79,10 +81,21 @@ func (l *Live) DeleteMessage(x ControlAction) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 	defer cancel()
+	ctx = client.WithQueuedSend(ctx, "")
 	sent, err := l.a.Retract(ctx, ref, "")
 	if err != nil {
 		return "", Refuse(sentence(err))
 	}
 	l.a.NoteChange()
-	return controlNote(sent, "Deleted here and on devices that can read deletions. What was already read, saved or given to an agent stays with them; nothing running was stopped."), nil
+	return deletionNote(sent), nil
+}
+
+func deletionNote(sent client.ControlSent) string {
+	note := "Deleted here. Deletion queued for other devices."
+	if sent.State == "failed" {
+		note = "Deleted here. Some deletion copies could not be sent."
+	} else if sent.State != "queued" && sent.State != "waiting" {
+		note = "Deleted here. Other devices apply deletion when their copies arrive."
+	}
+	return controlNote(sent, note+" What was already read, saved or given to an agent stays with them; nothing running was stopped.")
 }

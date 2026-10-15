@@ -25,12 +25,12 @@ type Responder struct {
 }
 
 // harness starts a separate background session with the owner's native setup.
-// Questions and tasks inherit the same tools, skills, sandbox and approval
-// policy. AgentNet admits requests; the native harness decides permitted effects.
+// Questions and tasks retain native tools, skills and sandbox. Supported native
+// automatic approval/review is selected at launch; native denials still apply.
 type harness struct {
 	bin      string
 	question []string     // the user's own setup and native permissions
-	task     []string     // the harness's normal permissions; nothing bypassed
+	task     []string     // same native launch policy as admitted questions
 	stdin    bool         // prompt on stdin; otherwise as the last argument
 	out      string       // flag naming a file for the final answer; otherwise stdout
 	limits   string       // what question mode allows, for the person choosing
@@ -43,25 +43,25 @@ type harness struct {
 // Harnesses lists the supported automatic responders. Flags were checked
 // against each tool's --help; see docs/revival/M4.md for what was actually
 // run. Other harnesses can still read and reply through the CLI by hand.
-const nativeHarnessPermissions = "Questions and accepted tasks use your native settings, skills, plugins, tools and permissions unchanged. AgentNet adds no tool exclusions, sandbox or approval overrides. If your agent needs a native approval that a background session cannot obtain, the request needs your attention. Your open sessions remain untouched."
+const nativeHarnessPermissions = "Questions and accepted tasks retain your native settings, skills, plugins, tools and sandbox. Where supported, AgentNet selects native automatic approval or review at launch. Native denials and explicit tool policies remain authoritative. If native approval or input cannot be completed, the request needs your attention. Your open sessions remain untouched."
 
 var Harnesses = map[string]harness{
 	"agy": {
 		bin: "agy", question: []string{"--input-format", "stream-json", "--output-format", "stream-json"},
 		task:  []string{"--input-format", "stream-json", "--output-format", "stream-json"},
-		stdin: true, sessions: agySessions, addDir: "--add-dir", addIn: true, limits: nativeHarnessPermissions + " Received files and task output folders are added with --add-dir; your setup decides access.",
+		stdin: true, sessions: agySessions, addDir: "--add-dir", addIn: true, limits: nativeHarnessPermissions + " An automatic approval equivalent for this background mode is not established; agy keeps its native approval policy. Received files and task output folders are added with --add-dir; your setup decides access.",
 	},
 	"claude": {
-		bin: "claude", question: []string{"-p", "--output-format", "text", "--no-session-persistence"},
-		task:  []string{"-p", "--output-format", "text", "--no-session-persistence"},
+		bin: "claude", question: []string{"-p", "--output-format", "text", "--no-session-persistence", "--permission-mode", "auto"},
+		task:  []string{"-p", "--output-format", "text", "--no-session-persistence", "--permission-mode", "auto"},
 		stdin: true, sessions: claudeSessions, addDir: "--add-dir", addIn: true, limits: nativeHarnessPermissions + " Received files and task output folders are added with --add-dir; your setup decides access.",
 	},
 	"codex": {
 		bin: "codex", question: []string{"app-server"}, task: []string{"app-server"},
-		stdin: true, sessions: codexSessions, limits: nativeHarnessPermissions + " Codex app-server inherits your native approval and sandbox policy. Received files and task output paths are supplied in context; AgentNet grants no additional writable folders.",
+		stdin: true, sessions: codexSessions, limits: nativeHarnessPermissions + " Codex app-server selects native automatic approval review and inherits your sandbox policy. Received files and task output paths are supplied in context; AgentNet grants no additional writable folders.",
 	},
 	"omp": {
-		bin: "omp", question: []string{"-p", "--no-session"}, task: []string{"-p", "--no-session"}, stdin: true, limits: nativeHarnessPermissions,
+		bin: "omp", question: []string{"-p", "--no-session", "--auto-approve"}, task: []string{"-p", "--no-session", "--auto-approve"}, stdin: true, limits: nativeHarnessPermissions,
 	},
 	"pi": {
 		bin: "pi", question: []string{"-p", "--no-session"}, task: []string{"-p", "--no-session"}, stdin: true, limits: nativeHarnessPermissions + " File paths are supplied in context; no folder is added for Pi.",

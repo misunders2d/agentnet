@@ -753,8 +753,9 @@ type ConvMessage struct {
 
 	// A request this device's agent runs (received, or asked here by this
 	// device's own person): the job's state and detail here (agentjob.go).
-	Job       string `json:"job,omitempty"`
-	JobDetail string `json:"job_detail,omitempty"`
+	Job        string `json:"job,omitempty"`
+	JobDetail  string `json:"job_detail,omitempty"`
+	JobAttempt int64  `json:"-"` // current local job row; never inferred from an older status
 
 	// Its files: received ones with where they were saved, sent ones as
 	// sent (the sender keeps no plaintext to open).
@@ -851,7 +852,7 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool, sel
 	rows, err := s.db.Query(prefix+`
 		SELECT id, lid, 'in', sender, coalesce(verified_by, ''), kind, body, coalesce(reply_to, ''), coalesce(sub, ''), replica, coalesce(origin, ''),
 		       coalesce(emotion, ''), coalesce(target, ''), state, coalesce(detail, ''), received_at, received_ms AS ms, coalesce(pid, ''),
-		       CASE WHEN pid IS NOT NULL AND state != '' THEN state ELSE '' END, CASE WHEN pid IS NOT NULL AND state != '' THEN coalesce(detail, '') ELSE '' END, coalesce(via, ''),
+		       CASE WHEN pid IS NOT NULL AND state != '' THEN state ELSE '' END, CASE WHEN pid IS NOT NULL AND state != '' THEN coalesce(detail, '') ELSE '' END, CASE WHEN pid IS NOT NULL AND state != '' THEN attempts ELSE 0 END, coalesce(via, ''),
 		       CASE WHEN verified_by IS NULL THEN coalesce(claimed_fp, '') ELSE '' END,
 		       CASE WHEN kind IN ('question', 'task') THEN '' ELSE coalesce(agent_id, '') END, coalesce(status, ''), coalesce(quote,''), ts, '', coalesce(topic,''),coalesce(topic_event,''),topic_done,0,0,send_group,`+liveIn+`
 		  FROM inbox i`+join+` WHERE conv = ? AND local = 0 AND ref_id IS NULL AND coalesce(sub, '') NOT IN `+recordSubs+`
@@ -859,7 +860,7 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool, sel
 		UNION ALL
 		SELECT o.id, o.lid, 'out', ?, ?, o.kind, o.body, coalesce(o.reply_to, ''), coalesce(o.sub, ''), 0, coalesce(o.origin, ''),
 		       coalesce(o.emotion, ''), coalesce(o.target, ''), o.state, coalesce(o.error, ''), o.created_at, o.created_ms, coalesce(o.pid, ''),
-		       coalesce(j.state, ''), coalesce(j.detail, ''), o.recipient, '', coalesce(o.agent_id, ''), coalesce(o.status, ''),coalesce(o.quote,''),json_extract(o.envelope,'$.ts'),coalesce(o.recipient_person,''),coalesce(o.topic,''),coalesce(o.topic_event,''),o.topic_done,o.send_stopped,o.send_stopped=1 AND o.state='not_delivered' AND coalesce(o.handover_started,1)=1,o.send_group,`+liveOut+`
+		       coalesce(j.state, ''), coalesce(j.detail, ''), coalesce(j.attempts, 0), o.recipient, '', coalesce(o.agent_id, ''), coalesce(o.status, ''),coalesce(o.quote,''),json_extract(o.envelope,'$.ts'),coalesce(o.recipient_person,''),coalesce(o.topic,''),coalesce(o.topic_event,''),o.topic_done,o.send_stopped,o.send_stopped=1 AND o.state='not_delivered' AND coalesce(o.handover_started,1)=1,o.send_group,`+liveOut+`
 		  FROM outbox o LEFT JOIN inbox j ON j.id = o.id AND j.local = 1`+join+` WHERE o.conv = ? AND coalesce(o.sub, '') NOT IN ('read-sync', 'root-sync', 'history', 'file', 'drive-space', 'group-proof', 'group-context','group-invite','group-consent','group-withdrawal') AND o.ref_id IS NULL
 		   AND NOT `+erasedOut+cursorOut+`
 		ORDER BY ms, 1`, args...)
@@ -874,7 +875,7 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool, sel
 		var target, to, person, topicEvent string
 		var ms int64
 		if err := rows.Scan(&m.ID, &m.LID, &m.Dir, &m.From, &m.Key, &m.Kind, &m.Body, &m.ReplyTo, &m.Sub, &m.Replica, &m.Origin,
-			&m.Emotion, &target, &m.State, &m.Detail, &m.At, &ms, &m.PID, &m.Job, &m.JobDetail, &to, &m.Claimed, &m.AgentID, &m.status, &m.Quote, &m.Sent, &person, &m.Topic, &topicEvent, &m.TopicDone, &m.SendStopped, &m.DeliveryUncertain, &m.SendGroup, &m.liveContext); err != nil {
+			&m.Emotion, &target, &m.State, &m.Detail, &m.At, &ms, &m.PID, &m.Job, &m.JobDetail, &m.JobAttempt, &to, &m.Claimed, &m.AgentID, &m.status, &m.Quote, &m.Sent, &person, &m.Topic, &topicEvent, &m.TopicDone, &m.SendStopped, &m.DeliveryUncertain, &m.SendGroup, &m.liveContext); err != nil {
 			return nil, err
 		}
 		if topicEvent != "" {
@@ -900,7 +901,7 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool, sel
 				// The local job belongs to one copy. Keep its full result and
 				// actionable id even when another copy sorted first.
 				if m.Job != "" {
-					out[i].ID, out[i].Job, out[i].JobDetail = m.ID, m.Job, m.JobDetail
+					out[i].ID, out[i].Job, out[i].JobDetail, out[i].JobAttempt = m.ID, m.Job, m.JobDetail, m.JobAttempt
 				}
 				if rank(c.State) < rank(out[i].State) {
 					out[i].State, out[i].Detail = c.State, c.Detail

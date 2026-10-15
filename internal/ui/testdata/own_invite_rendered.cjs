@@ -50,7 +50,7 @@ const server=http.createServer((req,res)=>{
    await context.route('**/*',r=>new URL(r.request().url()).origin===origin?r.continue():r.abort());page.on('pageerror',e=>errors.push(e.stack));
    await page.goto(origin+'/?skin='+skin+'&mode='+mode);await page.waitForFunction(()=>window.ready);
    if(skin==='comic'){
-    const oks=page.getByRole('navigation',{name:'Main'}).getByRole('button',{name:/^OKs/});await oks.click();
+    const oks=page.getByRole('navigation',{name:'Main'}).getByRole('button',{name:/^Review/});await oks.click();
     await page.getByText('Nothing needs you',{exact:true}).waitFor();
     assert.equal(await page.getByRole('button',{name:'Let it join',exact:true}).count(),0,'own pending invite absent from OKs');
     const shot=path.join(evidence,mode+'-'+skin+'-oks-'+width+'.png');await settle(page);await page.screenshot({path:shot});shots.push(shot);

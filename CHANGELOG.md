@@ -6,6 +6,24 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+- Preserve the current local job attempt when displaying an agent request, so
+  the next tagged message can steer that running request.
+- Save edits, reactions, reaction removals and deletions locally before waiting
+  for delivery; retain their durable outbox copies. Topic and room actions
+  refresh their selected conversation without waiting for the workspace overview.
+- Avoid parsing message bodies for empty shared-history cards and closed
+  reminder previews when opening a large chat. Reuse the same response's fresh
+  chat and participation data instead of reading it repeatedly. Normal group
+  controls check their required readers against one freshly signed profile
+  per recipient, while delivery retains its own checks.
+- Use Review and attention labels for unresolved work; reserve approval wording
+  for actual decisions. Keep reminder Cancel, Done and Change buttons reachable.
+- Open the existing mention picker with Ctrl/Command plus the physical 2 key,
+  including when using a Cyrillic keyboard layout.
+- Select native automatic approval or review when launching Codex, Claude and
+  OMP, retaining native tools, configuration and sandbox boundaries. Explicit
+  native denials remain enforced.
+
 ## [0.8.29] — 2026-10-15
 
 - Steer current agent work with the next tagged message in the same chat/topic,

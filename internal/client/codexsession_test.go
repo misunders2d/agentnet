@@ -50,10 +50,17 @@ func TestCodexSessionFixtureProcess(t *testing.T) {
 		if d.Decode(&m) != nil {
 			os.Exit(0)
 		}
-		for _, key := range []string{"config", "sandbox", "sandboxPolicy", "approvalPolicy", "approvalsReviewer", "baseInstructions", "developerInstructions", "disabledPluginIds"} {
+		for _, key := range []string{"config", "sandbox", "sandboxPolicy", "baseInstructions", "developerInstructions", "disabledPluginIds"} {
 			if _, present := m.Params[key]; present {
 				os.Exit(31)
 			}
+		}
+		if m.Method == "thread/start" || m.Method == "thread/resume" {
+			if string(m.Params["approvalPolicy"]) != `"on-request"` || string(m.Params["approvalsReviewer"]) != `"auto_review"` {
+				os.Exit(38)
+			}
+		} else if m.Params["approvalPolicy"] != nil || m.Params["approvalsReviewer"] != nil {
+			os.Exit(39)
 		}
 		switch m.Method {
 		case "initialize":

@@ -31,6 +31,7 @@ import { composerReplyFollowup, currentComposerFollowup, type ComposerFollowup }
 import type { Ctx } from "./Message.model";
 
 const EMPTY: Draft = { text: "" };
+const mac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 
 /** Who a send goes to: the conversation, an agent asked in it, the device of
  *  a device conversation (its agent asked; or, for a person's device that
@@ -543,6 +544,11 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
 
   // ---- keys
   function keys(e: KeyboardEvent<HTMLTextAreaElement>) {
+    if (dm && !closed && !sending && e.code === "Digit2" && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && !e.nativeEvent.isComposing && e.nativeEvent.keyCode !== 229) {
+      e.preventDefault();
+      openMentions();
+      return;
+    }
     if (open) {
       if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setDismissed(trig!.start); setMentionRange(null); return; }
       if (offered.length && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
@@ -644,7 +650,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       <div ref={row} className="flex items-end gap-2">
         <PlusMenu actions={actions} disabled={sending} onOpenChange={setMenuOpen}
           finalFocus={() => !emojiAfterMenu.current} onClosed={() => { emojiAfterMenu.current = false; }} />
-        {dm && <button type="button" aria-label="Mention someone" title="Mention someone" aria-haspopup="listbox"
+        {dm && <button type="button" aria-label="Mention someone" title={"Mention someone (" + (mac ? "⌘2" : "Ctrl+2") + ")"} aria-keyshortcuts={mac ? "Meta+2" : "Control+2"} aria-haspopup="listbox"
           aria-expanded={open} aria-controls={open && offered.length ? listId : undefined} disabled={sending}
           onMouseDown={(e) => e.preventDefault()} onClick={openMentions}
           className="grid size-11 shrink-0 place-items-center rounded-full border-[1.5px] border-outline bg-surface text-text hover:bg-sunken focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-agent-ink disabled:opacity-40">

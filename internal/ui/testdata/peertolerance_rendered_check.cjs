@@ -13,7 +13,7 @@ const {chromium} = require(process.env.AGENTNET_PLAYWRIGHT);
     p.on('pageerror', e=>errors.push(String(e)));
     await p.goto(process.argv[2]);
     await p.goto(new URL(process.argv[2]).origin+'/?skin=comic');
-    await p.getByRole('navigation',{name:'Main'}).getByRole('button',{name:/^OKs/}).click();
+    await p.getByRole('navigation',{name:'Main'}).getByRole('button',{name:/^Review/}).click();
     const card = id => p.locator('[data-card$="'+id+'"]');
     // Stale: listed apart as no result, never a decision.
     const stale = card(':stale-request');
@@ -28,7 +28,7 @@ const {chromium} = require(process.env.AGENTNET_PLAYWRIGHT);
     assert.equal(await running.getByText(/Decide on/).count(), 0, 'running is no decision');
     // Current awaiting: decided on the laptop.
     await card(':awaiting-request').getByText(/^Decide on your laptop/i).waitFor();
-    assert.match(await p.locator('header').first().textContent(), /OKs/);
+    assert.match(await p.locator('header').first().textContent(), /Review/);
     assert.equal(await p.getByText(/things? needs? you/).count(), 0, 'nothing is counted as needing this device');
     // A suspended device's copy says so; the headline is everyone else's.
     await card(':stale-request').click();

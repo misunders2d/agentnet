@@ -135,11 +135,16 @@ func (l *Live) guestMember(conv string) bool {
 	}
 	for _, c := range list {
 		if c.ID == conv {
-			return c.Role == "member" && c.Frozen == "" && (c.Kind == protocol.ConvKindDM || c.Kind == protocol.ConvKindGroup)
+			return guestMemberOf(c)
 		}
 	}
 	return false
 }
+
+func guestMemberOf(c client.ConversationInfo) bool {
+	return c.Role == "member" && c.Frozen == "" && (c.Kind == protocol.ConvKindDM || c.Kind == protocol.ConvKindGroup)
+}
+
 func (l *Live) guestViews(conv string) ([]GuestView, error) {
 	infos, err := l.a.Participations(conv)
 	if err != nil {
@@ -149,15 +154,18 @@ func (l *Live) guestViews(conv string) ([]GuestView, error) {
 	if err != nil {
 		return nil, err
 	}
+	return guestViewsFor(infos, l.guestMember(conv), ends), nil
+}
+
+func guestViewsFor(infos []client.ParticipationInfo, member bool, ends map[string]guestEnd) []GuestView {
 	out := []GuestView{}
-	member := l.guestMember(conv)
 	for _, p := range infos {
 		// A guest sees another guest only once its acceptance is held here.
 		if p.Role == protocol.RoleHuman && (member || p.HostHere || p.Decision != "") {
 			out = append(out, guestView(p, member, ends[p.PID]))
 		}
 	}
-	return out, nil
+	return out
 }
 
 // guestEnds says how each dismissed guest participation among infos ended,
@@ -168,6 +176,19 @@ func (l *Live) guestViews(conv string) ([]GuestView, error) {
 // end (its copy to that device delivered); until every one has, a device
 // that has not applied the end may still send to the guest.
 func (l *Live) guestEnds(conv string, infos []client.ParticipationInfo) (map[string]guestEnd, error) {
+	if !slices.ContainsFunc(infos, func(p client.ParticipationInfo) bool {
+		return p.Role == protocol.RoleHuman && p.State == client.PartDismissed
+	}) {
+		return map[string]guestEnd{}, nil
+	}
+	msgs, err := l.a.ConversationMessages(conv)
+	if err != nil {
+		return nil, err
+	}
+	return guestEndsForMessages(msgs, infos), nil
+}
+
+func guestEndsForMessages(msgs []client.ConvMessage, infos []client.ParticipationInfo) map[string]guestEnd {
 	ends := map[string]guestEnd{}
 	dismissed := map[string]client.ParticipationInfo{}
 	for _, p := range infos {
@@ -176,11 +197,7 @@ func (l *Live) guestEnds(conv string, infos []client.ParticipationInfo) (map[str
 		}
 	}
 	if len(dismissed) == 0 {
-		return ends, nil
-	}
-	msgs, err := l.a.ConversationMessages(conv)
-	if err != nil {
-		return nil, err
+		return ends
 	}
 	accepted := map[string]bool{}
 	for _, m := range msgs {
@@ -213,7 +230,7 @@ func (l *Live) guestEnds(conv string, infos []client.ParticipationInfo) (map[str
 		end.unheard = end.unheard && accepted[pid]
 		ends[pid] = end
 	}
-	return ends, nil
+	return ends
 }
 func (l *Live) ChangeHuman(ctx context.Context, c GuestAction) (GuestView, error) {
 	ctx, cancel := context.WithTimeout(ctx, l.timeout)
@@ -242,7 +259,7 @@ func (l *Live) ChangeHuman(ctx context.Context, c GuestAction) (GuestView, error
 			info, err = l.a.DeclineParticipation(ctx, c.PID)
 		}
 	case "end":
-		info, err = l.a.DismissParticipation(ctx, c.PID)
+		info, err = l.a.DismissParticipation(client.WithQueuedSend(ctx, ""), c.PID)
 	default:
 		err = errors.New("unknown human participation action")
 	}

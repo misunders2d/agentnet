@@ -46,8 +46,8 @@ const address = /\b[a-z0-9._-]+\/[a-z0-9._-]+\b/;
     // toggle, the only place an address may appear (web/CONTRACTS.md, Words).
     if (w < 1024) await p.getByRole('button', { name: /^Back to chats/ }).click();
     const nav = p.getByRole('navigation', { name: 'Main' });
-    await nav.getByRole('button', { name: /^OKs/ }).click();
-    await p.getByRole('heading', { name: 'OKs', exact: true }).first().waitFor(T);
+    await nav.getByRole('button', { name: /^Review/ }).click();
+    await p.getByRole('heading', { name: 'Review', exact: true }).first().waitFor(T);
     assert.equal(await p.getByRole('region', { name: 'Held back', exact: true }).count(), 0, name + ': no decision is held back after trusting');
     assert.equal(await p.getByText(/couldn’t be (verified|checked)|claiming to be/).count(), 0, name + ': the unverified message is not an OK');
     await nav.getByRole('button', { name: w < 700 ? 'You' : 'Settings', exact: true }).click();

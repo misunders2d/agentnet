@@ -8,7 +8,7 @@ export const skin = {
   id: "comic",
   name: "Comic",
   /** One line for Settings → Appearance → Skin. */
-  blurb: "AgentNet’s own skin: chats, agents and OKs as bright stickers.",
+  blurb: "AgentNet’s own skin: chats, agents and Review as bright stickers.",
   /** localStorage key prefix: drafts, emoji skin tone (docs/UI_SKINS.md, Storage). */
   storage: "agentnet.messenger",
   /** The remembered light/dark choice. */

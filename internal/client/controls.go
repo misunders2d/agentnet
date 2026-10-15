@@ -332,7 +332,7 @@ func (a *Agent) ctlSupport(ctx context.Context, address string, key identity.Pub
 
 // capSupport is ctlSupport for one named capability of a version 3
 // control (protocol.CapControl or CapHeadless): each is checked by name.
-func (a *Agent) capSupport(ctx context.Context, address string, key identity.Public, feats []string, cap string) (bool, string) {
+func (a *Agent) capSupport(ctx context.Context, address string, key identity.Public, feats []string, cap string, additional ...string) (bool, string) {
 	what := "reactions, edits or deletions"
 	if cap == protocol.CapHeadless {
 		what = "execution status or operator decisions"
@@ -354,6 +354,11 @@ func (a *Agent) capSupport(ctx context.Context, address string, key identity.Pub
 	}
 	if !prof.Supports(address, key.SignKey, cap) {
 		return false, WaitPeerUpdate + address + " cannot read " + what + " yet. Update AgentNet on that computer and reconnect all its open sessions."
+	}
+	for _, required := range additional {
+		if !prof.Supports(address, key.SignKey, required) {
+			return false, address + ": " + (&NeedsUpdateError{Address: address, Cap: required}).Error()
+		}
 	}
 	return true, ""
 }
@@ -453,6 +458,14 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 			if err := a.stopRetractedRequests(ref); err != nil {
 				return ControlSent{}, err
 			}
+		}
+		if queuedSend(ctx) {
+			copies := []outCopy{{env: env, state: stateQueued}}
+			if extra != nil {
+				copies = append(copies, *extra)
+			}
+			queued := a.queuedConv(copies, env.ID, env.ID)
+			return ControlSent{ID: queued.ID, State: queued.State, Detail: queued.Detail}, nil
 		}
 		if extra != nil {
 			if _, e := a.deliver(ctx, extra.env, nil); e != nil && !retryable(e) {
@@ -587,7 +600,14 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 			sent.Skipped = append(sent.Skipped, dev.Address+": "+err.Error())
 			continue
 		}
-		if ok, why := a.capSupport(ctx, dev.Address, key, feats, cap); !ok && sub != envelope.SubRetraction {
+		// These two requirements describe the same current recipient decision.
+		// Delivery still fetches a fresh profile for its own reader checks.
+		combinedGroup := group != nil && captured == nil && sub != envelope.SubRetraction
+		var additional []string
+		if combinedGroup {
+			additional = []string{protocol.CapGroup}
+		}
+		if ok, why := a.capSupport(ctx, dev.Address, key, feats, cap, additional...); !ok && sub != envelope.SubRetraction {
 			sent.Skipped = append(sent.Skipped, why)
 			continue
 		}
@@ -601,7 +621,7 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 				continue
 			}
 		}
-		if group != nil {
+		if group != nil && !combinedGroup {
 			if err := a.requireParticipationCaps(ctx, key, protocol.CapGroup); err != nil && sub != envelope.SubRetraction {
 				sent.Skipped = append(sent.Skipped, dev.Address+": "+err.Error())
 				continue
@@ -742,6 +762,11 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 		}
 	}
 	defer notifyDaemon(a.home)
+	if queuedSend(ctx) {
+		queued := a.queuedConv(copies, local.ID, lid)
+		sent.ID, sent.State, sent.Detail = queued.ID, queued.State, queued.Detail
+		return sent, nil
+	}
 	sent.ID = copies[0].env.ID
 	for _, c := range copies {
 		if c.state == protocol.StateDelivered { // the local-only copy above

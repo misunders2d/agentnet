@@ -188,3 +188,16 @@ func TestComicClosedRequestPresentationRendered(t *testing.T) {
 	}
 	t.Logf("%s", out)
 }
+
+func TestAttentionLabelsRendered(t *testing.T) {
+	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
+		t.Skip("opt-in: installed Playwright required")
+	}
+	cmd := exec.CommandContext(t.Context(), "node", "testdata/group_guest_controls_rendered.cjs")
+	cmd.Env = append(os.Environ(), "AGENTNET_SCREENSHOTS="+t.TempDir(), "AGENTNET_TEST_SKINS=comic", "AGENTNET_ATTENTION_LABELS=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), `"ok":true`) {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	t.Logf("%s", out)
+}

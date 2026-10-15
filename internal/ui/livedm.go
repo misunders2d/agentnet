@@ -381,11 +381,15 @@ func (l *Live) DM(id string) (DMThread, error) {
 		if c.Peer.State == PersonConflict {
 			t.Frozen = c.Peer.Address + " published a different person record than the one kept here, so this conversation is frozen: nothing more is sent in it."
 		}
-		people := l.conversationPeople(c)
-		words := l.a.PeerWords() // sentences name a person and device, never the address
-		if t.Guests, err = l.guestViews(id); err != nil {
+		// These projections describe the same GET. Reuse its selected chat,
+		// fresh participations and messages; actions still resolve authority.
+		infos, err := l.a.Participations(id)
+		if err != nil {
 			return DMThread{}, err
 		}
+		people := l.conversationPeopleForParticipations(c, infos)
+		words := l.a.PeerWords() // sentences name a person and device, never the address
+		t.Guests = guestViewsFor(infos, guestMemberOf(c), guestEndsForMessages(msgs, infos))
 		for _, guest := range t.Guests {
 			t.AudiencePending = t.AudiencePending || guest.AudiencePending
 		}
@@ -475,7 +479,7 @@ func (l *Live) DM(id string) (DMThread, error) {
 				dm.Actions, dm.JobDetail = l.agentRequestActions(id, m.ID, m.Kind, m.Job, m.JobDetail, m.From == l.a.Address && m.Human != nil && m.Human.AgentAuthor())
 				// This device executes its own request. Its local job is the
 				// execution state; the outgoing row still keeps transport state.
-				dm.Exec = &client.ExecView{State: m.Job, Host: l.a.Address}
+				dm.Exec = &client.ExecView{State: m.Job, Host: l.a.Address, Attempt: m.JobAttempt}
 				if text := DMStateText("in", m.Kind, m.Job, words(c.Peer.Address), m.JobDetail); text != "" {
 					dm.StateText = "Your agent: " + strings.ToLower(text[:1]) + text[1:]
 				}
@@ -499,9 +503,7 @@ func (l *Live) DM(id string) (DMThread, error) {
 			}
 		}
 		linkReplies(msgs, t.Messages)
-		if t.Agents, err = l.agentViews(id, people, msgs); err != nil {
-			return DMThread{}, err
-		}
+		t.Agents = l.agentViews(infos, people, msgs)
 		return t, nil
 	}
 	return DMThread{}, NotFound("no conversation with that id")

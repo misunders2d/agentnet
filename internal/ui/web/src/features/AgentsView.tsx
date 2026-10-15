@@ -264,7 +264,7 @@ function NamedAgent({ a, o, onToggle }: { a: T.CatalogAgent; o: T.Overview; onTo
 // Your agents on your other devices that this one talks with. A device that
 // only sends reports here is not one: it is in ReportsNote.
 // ReportsNote: devices that tell this one when something waits for a person
-// there. Their reports are in OKs; deciding happens on that device.
+// there. Their reports are in Review; deciding happens on that device.
 function ReportsNote({ o }: { o: T.Overview }) {
   const store = useApp();
   const from = latestThreads(o).filter((t) => t.notice_only).map((t) => capital(deviceWords(t.peer, o)));
@@ -275,8 +275,8 @@ function ReportsNote({ o }: { o: T.Overview }) {
       <article className="flex items-start gap-3 rounded-2xl border-[1.5px] border-dashed border-ink/30 px-4 py-3">
         <IconDevices size={22} className="mt-0.5 shrink-0 text-text-2" aria-hidden="true" />
         <div className="min-w-0 flex-1">
-          <p className="text-[15px] text-text-2">{who} this computer when something waits for a person there. The reports show in OKs; you decide on that device.</p>
-          <Button variant="outline" size="sm" className="mt-2" onClick={() => store.showTab("oks")}>See them in OKs</Button>
+          <p className="text-[15px] text-text-2">{who} this computer when something waits for a person there. The reports show in Review; you decide on that device.</p>
+          <Button variant="outline" size="sm" className="mt-2" onClick={() => store.showTab("oks")}>See them in Review</Button>
         </div>
       </article>
     </Section>

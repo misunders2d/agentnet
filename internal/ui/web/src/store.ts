@@ -90,7 +90,7 @@ export class Store {
   private subs = new Set<() => void>();
   private stopListen: (() => void) | null = null;
   private refresh: Promise<void> | null = null;
-  private openRefresh: Promise<void> | null = null;
+  private openRefresh: Promise<boolean> | null = null;
   private openAgain = false;
   private overviewRequest = 0;
   private topicChanges = new Map<string, Promise<{ note: string } | undefined>>();
@@ -204,12 +204,14 @@ export class Store {
 
   // A slow workspace overview never holds the open chat's receipt/arrival
   // behind it. Each lane coalesces independently, including continuous traffic.
-  private refreshOpen(): Promise<void> {
+  refreshOpen(): Promise<boolean> {
     this.openAgain = true;
     if (!this.openRefresh) this.openRefresh = (async () => {
       try {
-        do { this.openAgain = false; await this.loadOpen(); }
+        let loaded = false;
+        do { this.openAgain = false; loaded = await this.loadOpen(); }
         while (this.openAgain && this.alive);
+        return loaded;
       } finally { this.openRefresh = null; }
     })();
     return this.openRefresh;
@@ -243,10 +245,23 @@ export class Store {
     const pending = this.topicChanges.get(key);
     if (pending) return pending;
     this.set({ topicBusy: { ...this.state.topicBusy, [key]: what } });
+    const selected = this.state.open;
+    const selectedTarget = selected && (c.conv
+      ? selected.kind === "dm" && selected.id === c.conv
+      : selected.kind === "thread" && selected.id === c.id);
     const work = (async () => {
       try {
         const result = await this.api.changeTopic(what, c);
-        await this.refetch();
+        if (!this.alive) return undefined;
+        const overview = this.load(false);
+        if (selectedTarget) {
+          if (this.state.open !== selected || this.state.pending) return undefined;
+          if (!await this.refreshOpen()) return undefined;
+          if (!this.alive || this.state.open !== selected || this.state.pending) return undefined;
+        } else {
+          await overview;
+          if (!this.alive || this.state.open !== selected || this.state.pending) return undefined;
+        }
         return result;
       } catch (e) {
         if (errorText(e) !== "stale or disconnected workspace") this.toast(errorText(e), "error");
@@ -476,8 +491,8 @@ export class Store {
   // loadOpen loads o (the open conversation, or the one being opened) and
   // shows it while it is still the one wanted; a load that lost the race is
   // only remembered.
-  private async loadOpen(o: Open = this.state.open) {
-    if (!o) return;
+  private async loadOpen(o: Open = this.state.open): Promise<boolean> {
+    if (!o) return false;
     const wanted = () => this.alive && (this.state.open === o || this.state.pending === o);
     try {
       // Being opened: a prefetch already under way for it is that load.
@@ -490,18 +505,20 @@ export class Store {
       }
       const v: View = await ahead;
       this.keep(o.id, v);
-      if (!wanted()) return; // another conversation was opened meanwhile
+      if (!wanted()) return false; // another conversation was opened meanwhile
       const first = this.state.pending === o;
       const newHost = o.kind === "dm" && ((v as T.DMThread).agents || []).some((a) => !(this.state.dm?.agents || []).some((b) => b.host.address === a.host.address));
       this.set({ ...(first ? { open: o, pending: null } : {}), ...this.viewPatch(o, v, this.state.open?.id === o.id) });
       if (newHost) void this.loadAgentNames();
       this.markOpenRead();
       if (o.kind === "dm") void this.loadTyping();
+      return true;
     } catch (e) {
-      if (!wanted()) return;
+      if (!wanted()) return false;
       // Its placeholder then says it is still opening, with Try again.
       if (this.state.pending === o) this.set({ open: o, pending: null, dm: null, thread: null, typing: null });
       this.toast(errorText(e), "error");
+      return false;
     }
   }
 

@@ -24,7 +24,7 @@ const settle=async p=>p.evaluate(async()=>{await document.fonts.ready;const root
     await p.goto(process.argv[2]);await p.goto(new URL(process.argv[2]).origin+'/?skin='+skin);
     if(skin==='comic'){
      const nav=p.getByRole('navigation',{name:'Main'});
-     await nav.getByRole('button',{name:/^OKs/}).click();
+     await nav.getByRole('button',{name:/^Review/}).click();
      assert.equal(await p.getByText('Synthetic changed device key',{exact:false}).filter({visible:true}).count(),0,'phone has no unsupported trust decision');
      assert.equal(await p.getByText('Chat sync needs attention',{exact:false}).count(),0,'passive sync is not an OK');
      assert.equal(await p.getByText('Synthetic missing chat context',{exact:false}).count(),0,'pending context is absent from OKs');

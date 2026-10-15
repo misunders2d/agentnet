@@ -33,3 +33,28 @@ func TestCollectiveTagsComposerRendered(t *testing.T) {
 		t.Logf("%s", out)
 	}
 }
+
+func TestComposerMentionShortcut(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node required")
+	}
+	out, err := exec.CommandContext(t.Context(), node, "testdata/composer_shortcut_check.mjs").CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	t.Log(string(out))
+}
+
+func TestComposerMentionShortcutRendered(t *testing.T) {
+	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
+		t.Skip("opt-in: installed Playwright required")
+	}
+	cmd := exec.CommandContext(t.Context(), "node", "testdata/group_guest_controls_rendered.cjs")
+	cmd.Env = append(os.Environ(), "AGENTNET_SCREENSHOTS="+t.TempDir(), "AGENTNET_TEST_SKINS=comic", "AGENTNET_MENTION_SHORTCUT=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), `"ok":true`) {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	t.Logf("%s", out)
+}

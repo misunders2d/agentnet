@@ -1,4 +1,4 @@
-// OKs: everything that waits for this person's decision, newest first,
+// Review: unresolved work and decisions needing this person, newest first,
 // each naming who and what, straight from the overview: requests to your
 // agent and invitations for it decided here (needs_you), review decisions,
 // group invitations and new devices: exactly what the header counts.
@@ -31,19 +31,19 @@ const groupInvites = (o: T.Overview) => (o.group_invitations || []).filter((i) =
 const deviceAsks = (o: T.Overview) => (o.links || []).filter((l) => l.state === "pending");
 const reviewAsks = (o: T.Overview) => (o.review || []).filter((r) => !r.notice && !isWorkingReview(r));
 
-/** needsYouCount: the decisions waiting for this device, as the overview
+/** needsYouCount: unresolved items needing attention on this device, as the overview
  *  lists them: requests to your agent and invitations for it that are
  *  decided here (not on another device), review decisions, group
  *  invitations to you and new devices. Notices and questions held for you
- *  are listed in OKs but are not decisions, so they are not counted. */
+ *  are listed in Review but keep their existing separate count semantics. */
 export function needsYouCount(o: T.Overview | null, local = false): number {
   if (!o) return 0;
   const native = (o.review || []).filter(r => r.notice).reduce((count,r) => count + (r.report?.items || []).filter(x => x.native && !x.result && (x.native.expires === 0 || x.native.expires > Date.now())).length,0);
   return native + decidable(o).length + reviewAsks(o).length + groupInvites(o).length + deviceAsks(o).length + heldDecisionPeers(o, local).size;
 }
 
-/** useNeedsYou: the one count of what waits for you, for the OKs badge, the
- *  home banner and the OKs header alike. */
+/** useNeedsYou: the one count of what waits for you, for the Review badge, the
+ *  home banner and the Review header alike. */
 export function useNeedsYou(): number {
   const store = useApp();
   return needsYouCount(useStore(store, (s) => s.overview), store.host.platform === "daemon");
@@ -132,8 +132,8 @@ export function OksView() {
   return (
     <div ref={root} className="pb-8">
       <header className="px-4 pt-5 pb-1">
-        <ScreenTitle ref={title}>OKs</ScreenTitle>
-        {count > 0 && <p className="pt-2 text-[15px] font-semibold text-text-2 tnum">{count === 1 ? "1 thing needs you" : count + " things need you"}</p>}
+        <ScreenTitle ref={title}>Review</ScreenTitle>
+        {count > 0 && <p className="pt-2 text-[15px] font-semibold text-text-2 tnum">{count === 1 ? "1 needs attention" : count + " need attention"}</p>}
       </header>
       {items.length ? (
         <div className="px-4 pt-3">

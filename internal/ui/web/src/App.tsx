@@ -22,7 +22,7 @@ import { NativeRecovery } from "./features/NativeRecovery";
 const tabs: { id: Tab; label: string; icon: typeof IconMessageCircle }[] = [
   { id: "chats", label: "Chats", icon: IconMessageCircle },
   { id: "agents", label: "Agents", icon: IconRobot },
-  { id: "oks", label: "OKs", icon: IconCircleCheck },
+  { id: "oks", label: "Review", icon: IconCircleCheck },
 ];
 
 export function App() {

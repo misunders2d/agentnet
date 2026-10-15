@@ -23,14 +23,14 @@ func TestConversationCopiesKeepNeedsYou(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if _, err := s.db.Exec(`INSERT INTO inbox(id,lid,sender,ts,kind,body,received_at,state,detail,local,conv,pid) VALUES(?, 'logical', 'me/laptop', 1, 'task', 'Original request', 1, 'needs_human', ?, 1, 'chat', 'agent')`, localID, detail); err != nil {
+			if _, err := s.db.Exec(`INSERT INTO inbox(id,lid,sender,ts,kind,body,received_at,state,detail,local,conv,pid,attempts) VALUES(?, 'logical', 'me/laptop', 1, 'task', 'Original request', 1, 'needs_human', ?, 1, 'chat', 'agent',7)`, localID, detail); err != nil {
 				t.Fatal(err)
 			}
 			msgs, err := s.convMessages("chat", "me/laptop", "key", map[string]bool{"me/laptop": true, "me/phone": true})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(msgs) != 1 || msgs[0].ID != localID || msgs[0].Job != stateNeedHuman || msgs[0].JobDetail != detail || len(msgs[0].Copies) != 2 {
+			if len(msgs) != 1 || msgs[0].ID != localID || msgs[0].Job != stateNeedHuman || msgs[0].JobDetail != detail || msgs[0].JobAttempt != 7 || len(msgs[0].Copies) != 2 {
 				t.Fatalf("lost local result or actionable id: %+v", msgs)
 			}
 		})

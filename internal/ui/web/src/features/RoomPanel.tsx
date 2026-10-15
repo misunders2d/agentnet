@@ -144,28 +144,34 @@ function GroupInviteCard({ invite: i }: { invite: GroupInvite }) {
 }
 
 // The chat and optional room panel use the same exact participation action.
-function useRoomAction(onDismissed?: (s: Snack) => void) {
+function useRoomAction(conv: string, onDismissed?: (s: Snack) => void) {
   const store = useApp();
   const [busy, setBusy] = useState("");
   const pending = useRef(false);
   // act runs one decision or dismissal; the change stream then redraws the room.
   const act: Act = async (g, what) => {
     if (pending.current) return;
+    const selected = store.get().open;
+    if (!store.isActive() || selected?.kind !== "dm" || selected.id !== conv || store.get().pending) return;
     pending.current = true;
+    const current = () => store.isActive() && store.get().open === selected && !store.get().pending;
     setBusy(g.key);
     const api = store.api;
     const name = callName(g.name);
-    const ok = await store.run<unknown>(
-      () => what === "accept" ? (g.kind === "agent" ? api.decideAgent(g.pid, true) : api.decideGuest(g.pid, true))
-        : what === "decline" ? (g.kind === "agent" ? api.decideAgent(g.pid, false) : api.decideGuest(g.pid, false))
-        : g.kind === "agent" ? api.dismissAgent(g.pid) : api.endGuest(g.pid),
-      what === "accept" ? (g.kind === "agent" ? cap(name) + " joined — it sees only what was shared with it" : "You joined — you’ll see new messages while you’re here")
-        : what === "decline" ? "Declined. Nothing was shared." : what === "cancel" ? "Invitation cancelled" : what === "leave" ? "You left. What you saw stays with you." : undefined,
-    );
-    if (ok !== undefined) await store.refetch();
-    pending.current = false;
-    setBusy("");
-    if (ok && what === "dismiss") onDismissed?.({ name: g.name, kind: g.kind, who: g.who, pid: g.kind === "agent" ? g.pid : undefined, id: Date.now() });
+    try {
+      const ok = await store.run<unknown>(
+        () => what === "accept" ? (g.kind === "agent" ? api.decideAgent(g.pid, true) : api.decideGuest(g.pid, true))
+          : what === "decline" ? (g.kind === "agent" ? api.decideAgent(g.pid, false) : api.decideGuest(g.pid, false))
+          : g.kind === "agent" ? api.dismissAgent(g.pid) : api.endGuest(g.pid),
+        what === "accept" ? (g.kind === "agent" ? cap(name) + " joined — it sees only what was shared with it" : "You joined — you’ll see new messages while you’re here")
+          : what === "decline" ? "Declined. Nothing was shared." : what === "cancel" ? "Invitation cancelled" : what === "leave" ? "You left. What you saw stays with you." : undefined,
+      );
+      if (ok !== undefined && current() && !await store.refreshOpen()) return;
+      if (ok && current() && what === "dismiss") onDismissed?.({ name: g.name, kind: g.kind, who: g.who, pid: g.kind === "agent" ? g.pid : undefined, id: Date.now() });
+    } finally {
+      pending.current = false;
+      setBusy("");
+    }
   };
 
   return { busy, act };
@@ -176,7 +182,7 @@ export function PendingInvitations({ t }: { t: T.DMThread }) {
   const store = useApp();
   const o = useStore(store, s => s.overview);
   const names = useAgentNames();
-  const { busy, act } = useRoomAction();
+  const { busy, act } = useRoomAction(t.id);
   const hasDecision = t.agents?.some(g => g.can_decide) || t.guests?.some(g => g.can_decide);
   const invited = hasDecision ? room(t, o, names).invited.filter(g => g.can.decide) : [];
   if (!invited.length) return null;
@@ -193,7 +199,7 @@ function RoomBody({ t, onDismissed }: { t: T.DMThread; onDismissed: (s: Snack) =
   const o = useStore(store, (s) => s.overview);
   const names = useAgentNames();
   const r = room(t, o, names);
-  const { busy, act } = useRoomAction(onDismissed);
+  const { busy, act } = useRoomAction(t.id, onDismissed);
 
   const invitable = canBringIn(t);
   const rights = groupRights(t, o);

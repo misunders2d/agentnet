@@ -435,7 +435,7 @@ const server=http.createServer((req,res)=>{if(req.url==='/native-result'&&req.me
   }
   browser=await chromium.launch({headless:true,executablePath:process.env.AGENTNET_CHROMIUM||undefined});
   for(const skin of (process.env.AGENTNET_TEST_SKINS||'comic').split(','))for(const width of (process.env.AGENTNET_GUEST_INLINE==='1'?[1024,1279,390]:[1280,390])){
-   const openCase=async variant=>{const context=await browser.newContext({viewport:{width,height:900},reducedMotion:'reduce'});await context.route('**/*',r=>new URL(r.request().url()).origin===origin?r.continue():r.abort());const page=await context.newPage();page.setDefaultTimeout(8000);page.on('pageerror',e=>errors.push(skin+': '+e.stack));await page.goto(origin+'/?skin='+skin+'&case='+variant);try{await page.waitForFunction(()=>window.ready);}catch(e){console.error(JSON.stringify({skin,width,variant,errors,text:await page.locator('body').innerText()}));throw e;}if(variant==='completion'||variant==='direct-files'||variant==='device-oks'||variant.startsWith('delivery-')||variant.startsWith('decline-invite-'))return {page,context};await page.evaluate(()=>openGroup());try{await page.getByText(variant==='oks'?'Main flow conversation':'Selected warehouse context',{exact:false}).first().waitFor();}catch(e){console.error(JSON.stringify({errors,text:await page.locator('#skin').evaluate(e=>e.shadowRoot.innerText||e.shadowRoot.textContent)}));throw e;}return {page,context};};
+   const openCase=async (variant,platform)=>{const context=await browser.newContext({viewport:{width,height:900},reducedMotion:'reduce'});await context.route('**/*',r=>new URL(r.request().url()).origin===origin?r.continue():r.abort());if(platform)await context.addInitScript(p=>Object.defineProperty(navigator,'platform',{get:()=>p}),platform);const page=await context.newPage();page.setDefaultTimeout(8000);page.on('pageerror',e=>errors.push(skin+': '+e.stack));await page.goto(origin+'/?skin='+skin+'&case='+variant);try{await page.waitForFunction(()=>window.ready);}catch(e){console.error(JSON.stringify({skin,width,variant,errors,text:await page.locator('body').innerText()}));throw e;}if(variant==='completion'||variant==='direct-files'||variant==='device-oks'||variant.startsWith('delivery-')||variant.startsWith('decline-invite-'))return {page,context};await page.evaluate(()=>openGroup());try{await page.getByText(variant==='oks'?'Main flow conversation':'Selected warehouse context',{exact:false}).first().waitFor();}catch(e){console.error(JSON.stringify({errors,text:await page.locator('#skin').evaluate(e=>e.shadowRoot.innerText||e.shadowRoot.textContent)}));throw e;}return {page,context};};
 if(process.env.AGENTNET_PRESENTATION_REGRESSION==='1'){
  const {page,context}=await openCase('presentation');
  try{
@@ -503,6 +503,75 @@ if(completion){
  }
  continue;
 }
+if(process.env.AGENTNET_MENTION_SHORTCUT==='1'){
+ for(const variant of ['oks','multi-agent','topic-invite']){
+  const mac=variant==='oks',platform=mac?'MacIntel':'Linux x86_64';
+  const {page,context}=await openCase(variant,platform);
+  try{
+   console.log('mention shortcut',variant,width,platform);
+   if(variant==='topic-invite'){await page.getByRole('button',{name:'Warehouse',exact:true}).click();await page.locator('[data-mid="topic-message"]').waitFor();}
+   const field=page.locator('textarea'),button=page.getByRole('button',{name:'Mention someone',exact:true}),picker=page.getByRole('listbox',{name:'Mention someone here',exact:true});
+   const text='До SELECT после',choose=async()=>{await field.focus();await field.evaluate(e=>e.setSelectionRange(3,9));};
+   const preserved=async()=>{assert.equal(await field.inputValue(),text,'opening picker preserves every draft byte');assert.deepEqual(await field.evaluate(e=>[e.selectionStart,e.selectionEnd]),[3,9],'selection/caret is unchanged');assert(await field.evaluate(e=>e===e.getRootNode().activeElement),'picker leaves focus in the field');};
+   await field.fill(text);await choose();await button.click();await picker.waitFor();const permitted=await picker.getByRole('option').allTextContents();assert(permitted.length,'existing permitted candidates');await page.keyboard.press('Escape');await preserved();
+   for(const shortcut of ['Control+Digit2','Meta+Digit2']){
+    await choose();await page.keyboard.press(shortcut);await picker.waitFor();await preserved();assert.deepEqual(await picker.getByRole('option').allTextContents(),permitted,'shortcut reuses exact current permitted picker');await page.keyboard.press('Escape');
+   }
+   assert.equal(await button.getAttribute('title'),mac?'Mention someone (⌘2)':'Mention someone (Ctrl+2)','platform shortcut hint');
+   assert.equal(await button.getAttribute('aria-keyshortcuts'),mac?'Meta+2':'Control+2');
+   await choose();const russian=await field.evaluate(e=>{const k=new KeyboardEvent('keydown',{key:'ц',code:'Digit2',ctrlKey:true,bubbles:true,cancelable:true});e.dispatchEvent(k);return k.defaultPrevented;});assert(russian,'physical shortcut ignores layout character');await picker.waitFor();await preserved();await page.keyboard.press('Escape');
+   for(const patch of [{isComposing:true,key:'Process'},{keyCode:229},{altKey:true},{shiftKey:true},{code:'Numpad2'}]){
+    await choose();const prevented=await field.evaluate((e,patch)=>{const k=new KeyboardEvent('keydown',{key:'2',code:'Digit2',ctrlKey:true,bubbles:true,cancelable:true,...patch});e.dispatchEvent(k);return k.defaultPrevented;},patch);assert.equal(prevented,false,'IME/AltGr/Shift/nonphysical2 not intercepted');assert.equal(await picker.count(),0);await preserved();
+   }
+   await field.fill('base');await field.evaluate(e=>e.setSelectionRange(2,2));await field.press('Digit2');assert.equal(await field.inputValue(),'ba2se','ordinary2 types normally');assert.equal(await picker.count(),0);
+   await field.fill(text);await choose();await field.press('Control+Digit2');await picker.waitFor();
+   const brin=picker.getByRole('option').filter({has:page.getByText('Brin',{exact:true})}).first();await brin.click();assert.equal(await field.inputValue(),'До @Brin  после','selection is replaced at its original position only after choosing');
+   assert.deepEqual(await field.evaluate(e=>[e.selectionStart,e.selectionEnd]),[9,9],'caret follows selected mention');
+   if(variant==='topic-invite')assert.equal(await page.locator('[data-topic="'+('1'.repeat(32))+'"]').getAttribute('aria-current'),'true','current topic remains selected');
+   assert.equal(await page.evaluate(()=>fixture.requests.some(r=>['/api/act','/api/dm/send','/api/dm/agent/ask','/api/send','/api/operator/decide'].includes(r.path))),false,'shortcut and selection never send or run work');
+   await settle(page);const shot=path.join(evidence,'comic-mention-shortcut-'+variant+'-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
+  }finally{await context.close();}
+ }
+ continue;
+}
+if(process.env.AGENTNET_ATTENTION_LABELS==='1'){
+ const {page,context}=await openCase('oks');
+ try{
+  const nav=page.getByRole('navigation',{name:'Main',exact:true});
+  if(width<1024)await page.getByRole('button',{name:'Back to chats',exact:true}).click();
+  const banner=page.getByRole('button',{name:/^2 need attention/});await banner.waitFor();
+  assert.doesNotMatch(await banner.innerText(),/your OK|your answer/i,'mixed attention banner promises no approval or answer');
+  assert.match(await page.locator('[data-part="chat-row"]').first().innerText(),/2 need attention/,'sidebar retains both unresolved items');
+  await nav.getByRole('button',{name:/^Review/}).click();
+  await page.getByRole('heading',{name:'Review',exact:true}).waitFor();await settle(page);
+  assert.equal(await page.getByRole('heading',{name:'Review',exact:true}).locator('..').getByText('2 need attention',{exact:true}).count(),1,'same aggregate count in existing destination');
+  await page.getByRole('button',{name:/^Your agent couldn’t finish/}).click();
+  const blocked=page.locator('[data-mid="needs-person"]');await blocked.waitFor();
+  await blocked.getByText('Needs attention',{exact:true}).waitFor();
+  assert.doesNotMatch(await blocked.innerText(),/Needs your OK|needs your answer|Runs only if you allow/i,'runtime blocker is never a consent request');
+  await blocked.getByRole('button',{name:'Ask again',exact:true}).waitFor();
+  await blocked.getByRole('button',{name:'Mark as handled',exact:true}).waitFor();
+  if(width<1024)await page.getByRole('button',{name:'Back to chats',exact:true}).click();
+  await nav.getByRole('button',{name:/^Review/}).click();
+  await page.locator('[data-open]').filter({hasText:'Which carrier should we use?'}).click();
+  const consent=page.locator('[data-mid="held-question"]');await consent.waitFor();
+  await consent.getByText('Needs your OK',{exact:true}).waitFor();
+  await consent.getByRole('button',{name:'Allow once',exact:true}).waitFor();
+  await page.evaluate(()=>{fixture.overview.needs_you=fixture.overview.needs_you.filter(c=>c.reason==='agent_needs_human');reloadFixture();});
+  if(width<1024)await page.getByRole('button',{name:'Back to chats',exact:true}).click();
+  await nav.getByRole('button',{name:/^Chats/}).click();
+  await page.getByRole('button',{name:/^1 needs attention/}).waitFor();
+  assert.match(await page.locator('[data-part="chat-row"]').first().innerText(),/Needs attention/,'a runtime-only badge remains visible');
+  await page.evaluate(()=>{fixture.overview.needs_you[0].why='';fixture.thread.messages.find(m=>m.id==='needs-person').job_detail='';reloadFixture();});
+  await page.getByRole('button',{name:/^1 needs attention/}).click();
+  await blocked.getByText('The reason is not available on this device. Review the agent on its host computer.',{exact:true}).waitFor();
+  assert.doesNotMatch(await blocked.innerText(),/needs a person to decide|needs your answer|This run has stopped/,'missing detail invents neither a decision nor a terminated native operation');
+  await settle(page);const shot=path.join(evidence,'comic-attention-labels-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
+  assert.equal(await page.evaluate(()=>fixture.requests.some(r=>['/api/act','/api/dm/send','/api/dm/agent/ask','/api/operator/decide'].includes(r.path))),false,'viewing wording never resolves, approves, retries or sends');
+  assert.deepEqual(await page.evaluate(()=>fixture.thread.messages.filter(m=>['held-question','needs-person'].includes(m.id)).map(m=>({id:m.id,state:m.state,actions:m.actions}))),[{id:'held-question',state:'held',actions:['accept','decline','approve']},{id:'needs-person',state:'needs_human',actions:['resolve','accept','reply']}],'request states and actual actions stay exact');
+ }finally{await context.close();}
+ continue;
+}
 if(process.env.AGENTNET_GUEST_INLINE==='1'){
  const {page,context}=await openCase('guest-inline');
  try{
@@ -514,7 +583,7 @@ if(process.env.AGENTNET_GUEST_INLINE==='1'){
   assert.equal(await page.getByRole('dialog',{name:'In this chat',exact:true}).count(),0,'Mobile room sheet remains closed');
   const shot=path.join(evidence,'comic-guest-inline-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
   if(width<1024)await page.getByRole('button',{name:'Back to chats',exact:true}).click();
-  const banner=page.getByRole('button',{name:/1 needs your OK/});await banner.waitFor();
+  const banner=page.getByRole('button',{name:/^1 needs attention/});await banner.waitFor();
   assert.match(await banner.innerText(),/invited you into.*orchard_dispatch/s,'Human invitation names the person, not their agent');
   assert.match(await banner.innerText(),/Join when ready/);assert.doesNotMatch(await banner.innerText(),/your agent|It joins/);
   assert.equal(await banner.locator('[data-size="40"]').count(),1,'Human invitation uses person avatar');
@@ -522,7 +591,7 @@ if(process.env.AGENTNET_GUEST_INLINE==='1'){
   await banner.getByText('It joins only when you say so',{exact:true}).waitFor();assert.match(await banner.innerText(),/invited your agent into/,'Agent invitation retains its original wording');
   assert.equal(await banner.locator('[data-size="40"]').count(),0,'Agent invitation retains robot avatar');
   await page.evaluate(()=>{fixture.overview.needs_you[0].role='human';reloadFixture();});await banner.getByText('Join when ready',{exact:true}).waitFor();
-  await page.getByRole('button',{name:/^OKs/}).click();
+  await page.getByRole('button',{name:/^Review/}).click();
   await page.getByRole('button',{name:'Join conversation',exact:true}).waitFor({state:'visible'});
   assert.equal(await page.getByRole('button',{name:'Join conversation',exact:true}).count(),1,'One authoritative invitation in OKs');
   await page.evaluate(()=>openGroup());await inline.waitFor();
@@ -535,7 +604,7 @@ if(process.env.AGENTNET_GUEST_INLINE==='1'){
   assert.deepEqual(await decisions(),[{pid:'human-invite',accept:true}],'Double click sends one exact guest decision');
   await page.evaluate(()=>finishInlineDecision());await inline.waitFor({state:'hidden'});
   if(width<1024)await page.getByRole('button',{name:'Back to chats',exact:true}).click();
-  await page.getByRole('button',{name:/^OKs/}).click();assert.equal(await page.getByRole('button',{name:'Join conversation',exact:true}).count(),0,'Resolution removes the same OKs item');
+  await page.getByRole('button',{name:/^Review/}).click();assert.equal(await page.getByRole('button',{name:'Join conversation',exact:true}).count(),0,'Resolution removes the same OKs item');
   await page.evaluate(()=>openGroup());await page.evaluate(()=>setInlineInvitation('invited',true,'fresh-human-invite'));await inline.waitFor();
   const decline=inline.getByRole('button',{name:'Decline',exact:true});await decline.focus();await page.keyboard.press('Enter');await page.waitForFunction(()=>fixture.requests.filter(r=>r.path==='/api/dm/guest/decide').length===2);await page.evaluate(()=>finishInlineDecision());await inline.waitFor({state:'hidden'});
   assert.deepEqual(await decisions(),[{pid:'human-invite',accept:true},{pid:'fresh-human-invite',accept:false}],'Fresh invitation has exact keyboard Decline');
@@ -567,7 +636,7 @@ if(process.env.AGENTNET_REPORT_HISTORY_REGRESSION==='1'){
   await original.getByRole('button',{name:'Mark as handled',exact:true}).waitFor();
   assert.equal(await page.evaluate(()=>fixture.thread.messages.find(m=>m.id==='3'.repeat(32)).exec.state),'needs_human','same-outcome follow-up success cannot invent an exact resolution');
   if(width===390)await page.getByRole('button',{name:'Back to chats',exact:true}).click();
-  await page.getByRole('navigation',{name:'Main',exact:true}).getByRole('button',{name:/^OKs/}).click();
+  await page.getByRole('navigation',{name:'Main',exact:true}).getByRole('button',{name:/^Review/}).click();
   const reports=page.locator('div').filter({has:page.getByRole('button',{name:/^Reports from other computers/})}).last();
   await page.getByRole('button',{name:/^Reports from other computers/}).click();
   for(const mode of ['active','confirmed','refused','new-attempt','empty-iso','empty-tie']){
@@ -817,7 +886,7 @@ if(process.env.AGENTNET_HELD_FLOOD_REGRESSION==='1'){
  const {page,context}=await openCase('held-flood');
  try{
   if(width===390)await page.getByRole('button',{name:'Back to chats',exact:true}).click();
-  await page.getByRole('navigation',{name:'Main',exact:true}).getByRole('button',{name:/^OKs/}).click();
+  await page.getByRole('navigation',{name:'Main',exact:true}).getByRole('button',{name:/^Review/}).click();
   const decisions=page.getByRole('region',{name:'Held back',exact:true});await decisions.waitFor();
   // Different messages from a changed key are never "one record re-sent".
   const decision=decisions.locator('li').filter({hasText:'3 held messages · Cora’s Windows'});
@@ -1182,7 +1251,7 @@ if(process.env.AGENTNET_TERMINAL_CARD==='1'){
 if(process.env.AGENTNET_GUEST_OKS==='1'){
  const {page,context}=await openCase('guest-oks');
  try{
-  await page.getByRole('button',{name:/^OKs/}).click();
+  await page.getByRole('button',{name:/^Review/}).click();
   await page.getByRole('button',{name:'Join conversation',exact:true}).waitFor();
   const decline=page.getByRole('button',{name:'No thanks',exact:true});await decline.click();
   await page.waitForFunction(()=>fixture.requests.some(r=>r.path==='/api/dm/guest/decide'));
@@ -1358,7 +1427,7 @@ if(process.env.AGENTNET_HELDBACK_REGRESSION==='1'){
   if(skin==='comic'){
    if(width===390)await page.getByRole('button',{name:'Back to chats',exact:true}).click();
    const nav=page.getByRole('navigation',{name:'Main',exact:true});
-   await nav.getByRole('button',{name:/^OKs/}).click();
+   await nav.getByRole('button',{name:/^Review/}).click();
    assert.equal(await page.getByRole('region',{name:'Held back',exact:true}).count(),0,'unknown classification offers no supported decision and stays in diagnostics');
    await nav.getByRole('button',{name:width<700?'You':'Settings',exact:true}).click();
    await page.getByRole('button',{name:/^About/}).click();
@@ -1415,7 +1484,7 @@ if(process.env.AGENTNET_DELIVERY_STOP_REGRESSION==='1'){
     const {page,context}=await openCase('oks');
     if(skin==='comic'){
       if(width===390)await page.getByRole('button',{name:'Back to chats',exact:true}).click();
-      await page.getByRole('navigation',{name:'Main',exact:true}).getByRole('button',{name:/^OKs/}).click();
+      await page.getByRole('navigation',{name:'Main',exact:true}).getByRole('button',{name:/^Review/}).click();
     }
     await page.getByText('Read the agent’s whole message',{exact:true}).click();
     await page.getByText(/FINAL_REASON_MARKER/).filter({visible:true}).first().waitFor();
@@ -1448,11 +1517,11 @@ if(process.env.AGENTNET_DELIVERY_STOP_REGRESSION==='1'){
    }
    if(process.env.AGENTNET_DIRECT_REVIEW_REGRESSION==='1'){
     const {page,context}=await openCase('device-oks');const request='7'.repeat(32),body='Check Orchard warehouse inventory';
-    const activity=async()=>{const back=page.getByRole('button',{name:'Back to chats',exact:true});if(width===390&&await back.isVisible())await back.click();await page.getByRole('navigation',{name:'Main',exact:true}).getByRole('button',{name:/^OKs/}).click();};
+    const activity=async()=>{const back=page.getByRole('button',{name:'Back to chats',exact:true});if(width===390&&await back.isVisible())await back.click();await page.getByRole('navigation',{name:'Main',exact:true}).getByRole('button',{name:/^Review/}).click();};
     const waiting=page.getByRole('list',{name:'Waiting for you',exact:true});
     const working=page.getByRole('list',{name:'Working',exact:true});
     await activity();await waiting.getByRole('button').filter({hasText:body}).waitFor();
-    if(skin==='comic'){await page.getByText('1 thing needs you',{exact:true}).waitFor();assert.equal(await page.getByRole('navigation',{name:'Main',exact:true}).getByRole('button',{name:/^OKs/}).getByText('1',{exact:true}).count(),1,'Direct held request counts in OK badge');}
+    if(skin==='comic'){await page.getByText('1 thing needs you',{exact:true}).waitFor();assert.equal(await page.getByRole('navigation',{name:'Main',exact:true}).getByRole('button',{name:/^Review/}).getByText('1',{exact:true}).count(),1,'Direct held request counts in OK badge');}
     if(skin==='comic'){
      await waiting.getByRole('button',{name:'Brin asked your agent something. Review it.',exact:true}).waitFor();
      await waiting.getByRole('button',{name:'Allow once',exact:true}).waitFor();
@@ -1481,7 +1550,7 @@ if(process.env.AGENTNET_DELIVERY_STOP_REGRESSION==='1'){
     }
     await page.evaluate(()=>setDeviceState('running'));await working.getByRole('button').filter({hasText:body}).waitFor();assert.equal(await waiting.getByRole('button').filter({hasText:body}).count(),0,'Running review[] request leaves decision list');
     if(skin==='comic')assert.equal(await working.getByRole('button',{name:'Allow once',exact:true}).count(),0,'Running requests offer no approval');
-    if(skin==='comic'){assert.equal(await page.getByText('1 thing needs you',{exact:true}).count(),0);assert.equal(await page.getByRole('navigation',{name:'Main',exact:true}).getByRole('button',{name:/^OKs/}).getByText('1',{exact:true}).count(),0,'Working review[] request clears OK badge');}
+    if(skin==='comic'){assert.equal(await page.getByText('1 thing needs you',{exact:true}).count(),0);assert.equal(await page.getByRole('navigation',{name:'Main',exact:true}).getByRole('button',{name:/^Review/}).getByText('1',{exact:true}).count(),0,'Working review[] request clears OK badge');}
     assert(!/needs your (OK|decision)|Waiting for approval/.test(await working.innerText()),'Working row uses no approval claim');assert(!/\[object HTML/.test(await working.innerText()),'Working row renders peer name rather than DOM string');assert(!/Already running\s*·\s*Already running/.test(await working.innerText()),'Working status is not duplicated');assert.match(await working.innerText(),/Working|Already running/);await settle(page);const listShot=path.join(evidence,skin+'-direct-review-working-'+width+'.png');await page.screenshot({path:listShot});shots.push(listShot);
     await page.evaluate(()=>openOtherDevice());const unrelated=page.locator('[data-mid="'+'8'.repeat(32)+'"]');await unrelated.waitFor();assert((await unrelated.innerText()).includes('Different device thread'));await activity();
     await working.locator('button').filter({hasText:body}).first().click();const focused=page.locator('[data-mid="'+request+'"]');
@@ -1518,7 +1587,7 @@ if(process.env.AGENTNET_DELIVERY_STOP_REGRESSION==='1'){
     await page.locator('form[aria-label="Write a message"] input[type=file]').setInputFiles({name:'draft.txt',mimeType:'text/plain',buffer:Buffer.from('synthetic unsent file')});await page.getByRole('list',{name:'Files to send'}).waitFor();
     await page.getByRole('navigation',{name:'Topics',exact:true}).getByRole('button',{name:/^All/}).click();
     await page.getByRole('dialog',{name:'All topics',exact:true}).getByRole('button',{name:/Carrier review/}).click();assert.equal(await page.locator('[data-mid="main-note"]').count(),0);
-    const oks=async()=>{if(width===390)await page.getByRole('button',{name:'Back to chats',exact:true}).click();await page.getByRole('navigation',{name:'Main',exact:true}).getByRole('button',{name:/^OKs/}).click();await page.getByText('2 things need you',{exact:true}).waitFor();};
+    const oks=async()=>{if(width===390)await page.getByRole('button',{name:'Back to chats',exact:true}).click();await page.getByRole('navigation',{name:'Main',exact:true}).getByRole('button',{name:/^Review/}).click();await page.getByText('2 things need you',{exact:true}).waitFor();};
     if(width===390)await page.getByRole('button',{name:'Back to chats',exact:true}).click();await page.getByRole('button',{name:/^Brin 2 need your OK/}).getByText('2 need your OK',{exact:true}).waitFor();if(width===390)await page.getByRole('button',{name:/Brin.*2 need your OK/}).click();await oks();const waiting=page.getByRole('list',{name:'Waiting for you',exact:true}),working=page.getByRole('list',{name:'Working',exact:true});
     assert.equal(await waiting.locator('[data-open]').count(),2,'Running request does not count as an OK');assert.equal(await working.locator('[data-open]').count(),1);assert(!/Runs only if|Answered only if/.test(await working.innerText()),'Running row has no approval wording');await working.getByRole('button',{name:'Stop',exact:true}).waitFor();
     await waiting.getByText('Read the agent’s whole message',{exact:true}).click();assert((await waiting.innerText()).includes('FINAL_REASON_MARKER'),'List expands full needs_human detail');
@@ -1569,6 +1638,6 @@ if(process.env.AGENTNET_DELIVERY_STOP_REGRESSION==='1'){
    }
   }
   if(process.env.AGENTNET_RENDERED_RETAIN){const keep=path.resolve(process.env.AGENTNET_RENDERED_RETAIN);assert(keep.startsWith('/tmp/'),'retained synthetic evidence must stay in /tmp');fs.mkdirSync(keep,{recursive:true,mode:0o700});for(const shot of shots)fs.copyFileSync(shot,path.join(keep,path.basename(shot)));}
-  assert.deepEqual(errors,[]);console.log(JSON.stringify({ok:true,checks:process.env.AGENTNET_PRESENTATION_REGRESSION==='1'?'Comic short/long needs-human closure: exact agent/request, compact status, full projected result, immutable original, no action dispatch; desktop/mobile':process.env.AGENTNET_COMPOSER_FOLLOWUP_REGRESSION==='1'?'Comic natural tagged steering: no extra UI; running-only exact attempt; ordinary new request without a run; concrete ambiguity and existing Reply binding; strict completion race/retry; Android journal; desktop1280/mobile390':process.env.AGENTNET_LEGACY_LIST_REGRESSION==='1'?'Comic retained legacy list: exact identity/manager, add person, preserved leave, no agent catalog/control/grants; desktop/mobile':process.env.AGENTNET_AGENT_CHILD_REGRESSION==='1'?'Comic verified Codex author to Claude recipient, exact stopped-parent reason, no retry or replay, retained handling; desktop/mobile':process.env.AGENTNET_TOPIC_INVITE_REGRESSION==="1"?"Comic DM/group Main/named topic: Recent/Selected/Since, private files excluded, stable scope after rename/archive/arrival, broad grant disclosure; desktop/mobile":process.env.AGENTNET_REPORT_HISTORY_REGRESSION==="1"?"Comic exact blocker history: arbitrary follow-up success stays separate; confirmed/refused/new attempt and newest empty snapshots; desktop/mobile":completion?'Comic signed exact completion, queued secondary copies/details unchanged; inert/different-target/quote/unrelated negatives desktop1280/mobile390':process.env.AGENTNET_FOLLOWUP_REGRESSION==='1'?'Comic natural tagged composer replaces follow-up sheet/action: stage failure retains files, exact uncertain retry/newer draft, navigation abandons unused stages, deleted source refuses; desktop1280/mobile390':process.env.AGENTNET_REACTION_REGRESSION==='1'?'Comic: first-use/persisted frequency, success/failure/removal, human-count ordering and separate agent chips, desktop/mobile':process.env.AGENTNET_PHONE_REJOIN_REGRESSION==='1'?'Comic phone: active/pending rejoin, stale click/navigation, genuine return, exact key/agent/host identity and fresh-read error':process.env.AGENTNET_DIRECT_REVIEW_REGRESSION==='1'?'Direct review[]: held/running/stopping/complete; decision badge/list vs Working; exact request/Stop; desktop/mobile':process.env.AGENTNET_OKS_REGRESSION==='1'?'Comic: working excluded from OK count, exact topic/repeat focus, unsent draft/files preserved, full reason, future approve separate from held accept, exact Stop':process.env.AGENTNET_NOTIFY_REGRESSION==='1'?'Comic: one person grant across duplicate roots and separate conversation mute':(process.env.AGENTNET_TEST_SKINS||'comic')+': guest/member distinction, exact targets, retract/refresh, rights, desktop/mobile',shots}));
+  assert.deepEqual(errors,[]);console.log(JSON.stringify({ok:true,checks:process.env.AGENTNET_MENTION_SHORTCUT==='1'?'Physical Ctrl/Cmd+Digit2 reuses permitted DM/group/topic picker; layout/IME guards; caret/draft/hints/no-send; desktop/phone':process.env.AGENTNET_ATTENTION_LABELS==='1'?'Neutral aggregate attention wording; real consent retains OK/actions; unchanged counts, requests and authority; desktop/phone':process.env.AGENTNET_PRESENTATION_REGRESSION==='1'?'Comic short/long needs-human closure: exact agent/request, compact status, full projected result, immutable original, no action dispatch; desktop/mobile':process.env.AGENTNET_COMPOSER_FOLLOWUP_REGRESSION==='1'?'Comic natural tagged steering: no extra UI; running-only exact attempt; ordinary new request without a run; concrete ambiguity and existing Reply binding; strict completion race/retry; Android journal; desktop1280/mobile390':process.env.AGENTNET_LEGACY_LIST_REGRESSION==='1'?'Comic retained legacy list: exact identity/manager, add person, preserved leave, no agent catalog/control/grants; desktop/mobile':process.env.AGENTNET_AGENT_CHILD_REGRESSION==='1'?'Comic verified Codex author to Claude recipient, exact stopped-parent reason, no retry or replay, retained handling; desktop/mobile':process.env.AGENTNET_TOPIC_INVITE_REGRESSION==="1"?"Comic DM/group Main/named topic: Recent/Selected/Since, private files excluded, stable scope after rename/archive/arrival, broad grant disclosure; desktop/mobile":process.env.AGENTNET_REPORT_HISTORY_REGRESSION==="1"?"Comic exact blocker history: arbitrary follow-up success stays separate; confirmed/refused/new attempt and newest empty snapshots; desktop/mobile":completion?'Comic signed exact completion, queued secondary copies/details unchanged; inert/different-target/quote/unrelated negatives desktop1280/mobile390':process.env.AGENTNET_FOLLOWUP_REGRESSION==='1'?'Comic natural tagged composer replaces follow-up sheet/action: stage failure retains files, exact uncertain retry/newer draft, navigation abandons unused stages, deleted source refuses; desktop1280/mobile390':process.env.AGENTNET_REACTION_REGRESSION==='1'?'Comic: first-use/persisted frequency, success/failure/removal, human-count ordering and separate agent chips, desktop/mobile':process.env.AGENTNET_PHONE_REJOIN_REGRESSION==='1'?'Comic phone: active/pending rejoin, stale click/navigation, genuine return, exact key/agent/host identity and fresh-read error':process.env.AGENTNET_DIRECT_REVIEW_REGRESSION==='1'?'Direct review[]: held/running/stopping/complete; decision badge/list vs Working; exact request/Stop; desktop/mobile':process.env.AGENTNET_OKS_REGRESSION==='1'?'Comic: working excluded from OK count, exact topic/repeat focus, unsent draft/files preserved, full reason, future approve separate from held accept, exact Stop':process.env.AGENTNET_NOTIFY_REGRESSION==='1'?'Comic: one person grant across duplicate roots and separate conversation mute':(process.env.AGENTNET_TEST_SKINS||'comic')+': guest/member distinction, exact targets, retract/refresh, rights, desktop/mobile',shots}));
  }finally{await browser?.close();server.close();}
 })().catch(e=>{console.error(e.stack);process.exitCode=1;});

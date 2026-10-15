@@ -39,7 +39,7 @@ export function ApprovalCard({ message, dm, thread, compact, content }: { messag
       const agent = myAgent(message, names, o, dm);
       const state = message.dir === "in" ? message.state : message.exec?.state;
       const label = phase === "stopped" ? (state === "cancelled" ? "Stopped" : state === "interrupted" ? "Interrupted" : "Didn’t finish")
-        : phase === "running" ? "Working" : phase === "decide" ? "Needs your OK" : "Needs you";
+        : phase === "running" ? "Working" : phase === "decide" ? "Needs your OK" : "Needs attention";
       return <details key={message.id + ":" + phase} data-request-disclosure data-terminal-request={phase === "stopped" || undefined}
         className="w-full rounded-xl border border-outline/20 bg-surface">
         <summary className="min-h-11 cursor-pointer px-3 py-2.5 text-[14px]">
@@ -190,7 +190,7 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
         </p>
       )}
       <RequestFrame tone={phase === "running" ? "work" : phase === "stopped" ? "quiet" : "act"} at={m.at}
-        label={phase === "decide" ? "Needs your OK" : phase === "needs_human" ? "Needs you" : phase === "running" ? "Working" : stoppedWord}>
+        label={phase === "decide" ? "Needs your OK" : phase === "needs_human" ? "Needs attention" : phase === "running" ? "Working" : stoppedWord}>
         <Duo asker={asker} agent={mine.name} sub={named ? mine.where : "On " + mine.where.replace(/^Your agent · /, "")} seed={myAgentSeed(m, o, dm)} device={deviceKind(mine.address)}
           mood={phase === "running" ? "working" : phase === "decide" || phase === "needs_human" ? "waiting" : "neutral"} live={phase === "decide"} />
 
@@ -211,7 +211,7 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
         {phase === "needs_human" || (phase === "stopped" && said) ? (
           <div data-agent-needs-you={phase === "needs_human" || undefined} role="region" aria-label="Your agent says" tabIndex={-1} className="mx-4 mt-3 rounded-xl bg-agent px-3.5 py-2.5 text-agent-ink">
             <p className="text-[13px] font-bold">{phase === "needs_human" ? "Your agent couldn’t finish — it needs your attention" : capital(agent) + " says"}</p>
-            <Markdown className="pt-0.5 text-ink" text={said || "It needs a person to decide. The reason is not available on this device yet."} />
+            <Markdown className="pt-0.5 text-ink" text={said || "The reason is not available on this device. Review the agent on its host computer."} />
           </div>
         ) : null}
 
@@ -243,7 +243,7 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
             {!can("decline") && <p className="px-1 pt-1 text-[13px] text-muted">If you don’t allow it, nothing runs.</p>}
           </>}
           {phase === "needs_human" && <>
-            <p className="text-[14px] text-text-2">This exact request still needs attention. A separate follow-up does not close it. If that follow-up finished the work, mark this request as handled. Reply supplies missing information. For a permission or environment problem, review the native agent on its host computer first. Asking again keeps the same permissions.</p>
+            <p className="text-[14px] text-text-2">This exact request still needs attention. A separate follow-up does not close it. If that follow-up finished the work, mark this request as handled. {m.continuation && "Reply supplies missing information. "}For a permission or environment problem, review the native agent on its host computer first. Asking again keeps the same permissions.</p>
             {m.continuation && <Button variant="act" size="lg" icon={<IconArrowBackUp size={20} />} disabled={!!busy} onClick={() => setAnswer({request: {...m.continuation!}, send: sendID(), question: said})}>Reply</Button>}
             {m.continuation?.host && <ResolveOwnRequest request={m.continuation} disabled={!!busy} />}
             {can("accept") && <Button variant="outline" size="lg" className="min-h-12!" icon={<IconRefresh size={19} />} disabled={!!busy} onClick={allow}>{busy === "accept" ? "Starting…" : "Ask again"}</Button>}
@@ -261,7 +261,7 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
 
         {(phase === "decide" || phase === "needs_human") && (
           <p className="flex items-center gap-2 border-t-[1.5px] border-ink/10 px-4 py-2.5 text-[13px] font-medium text-text-2">
-            <IconLock size={16} className="shrink-0 text-ink" aria-hidden="true" />{phase === "needs_human" ? "Reply answers this request. Ordinary chat messages don’t restart it." : "Only you can approve this. Typing in chat can’t approve it."}
+            <IconLock size={16} className="shrink-0 text-ink" aria-hidden="true" />{phase === "needs_human" ? "This request still needs attention. Chat messages don’t approve or restart it." : "Only you can approve this. Typing in chat can’t approve it."}
           </p>
         )}
       </RequestFrame>

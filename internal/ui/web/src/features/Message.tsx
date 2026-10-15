@@ -71,7 +71,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
   const live = !m._local && !readOnly && !m.deleted && !excerpt(m);
   // A reminder on a stored message, where this device keeps reminders (a computer).
   const reminder = live ? reminderOf(ctx.overview, m.id) : undefined;
-  const remindable = { id: m.id, text: firstLine(shownText(m), 90) };
+  const remindable = { id: m.id, text: reminder || remind !== null ? firstLine(shownText(m), 90) : "" };
   const has = (what: string) => live && (m.can || []).includes(what);
   const can: Can = {
     react: has("react"),

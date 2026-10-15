@@ -175,7 +175,7 @@ const fs = require('node:fs');
       await back();
       await page.locator('section[aria-label="Chats"]').waitFor();
       // Badge text is part of the tab's accessible name (for example, "OKs 3").
-      const oks=nav.getByRole('button',{name:/^OKs(?:\s|$)/});
+      const oks=nav.getByRole('button',{name:/^Review(?:\s|$)/});
       console.log(`${width}px OKs control: ${await oks.ariaSnapshot()}`);
       await oks.click();
       await snap('oks');

@@ -209,7 +209,7 @@ function NeedsYouBanner({ overview: o, agentNames }: { overview: T.Overview; age
       <button type="button" onClick={named.go}
         className="relative flex w-full items-center gap-3 rounded-[18px] bg-act py-3 pl-3 pr-2.5 text-left text-act-ink stroke shadow-pop press">
         <span className="absolute -top-3 left-3.5 -rotate-3 rounded-md bg-white px-2 py-[3px] text-[11px] font-extrabold uppercase leading-none tracking-[.07em] text-on-fill stroke tnum">
-          {count === 1 ? "1 needs your OK" : count + " need your OK"}
+          {count === 1 ? "1 needs attention" : count + " need attention"}
         </span>
         <span className="pt-1">{named.face}</span>
         <span className="min-w-0 flex-1 pt-1 text-act-ink">
