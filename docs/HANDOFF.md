@@ -4,24 +4,74 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
-## Next candidate — v0.8.30
+## Current release — v0.8.30, October 15, 2026
 
-[The v30 plan](plans/V0_8_30.md) tracks the owner's fresh local steering,
-large-chat and action-latency reports, truthful attention labels, reminder
-controls and the layout-independent mention shortcut. Helpers implement;
-root reviews and orchestrates. Projects remains reserved for v0.9.0.
-Focused source/UI and affected race checks pass; integrated release gates and
-publication have not run. Local edit/reaction/deletion responses use the existing
-durable delivery queue. Same-response projection reuse preserves exact synthetic
-group JSON while reducing381 SQL queries to219; group-control preparation removes
-three duplicate profile GETs. Actual Codex write and Claude/OMP steering pass;
-OMP's earlier failure remains retained with its cause unknown.
-Metadata-only reads of the existing Zenbook v29 host
-measured a first overview request at5.23s, a warm overview at3.79ms and the two
-reported chats at0.38–0.91s. Those are not ThinkPad timings or a candidate
-performance result. No live profile, read state or session was changed.
+[Download v0.8.30](https://github.com/misunders2d/agentnet/releases/tag/v0.8.30),
+immutable tag `33447e2c8b5ea9ba4db9cf365876f519d0838c79`, published
+17:38:26 UTC. Exact-tag [packaging 38777742907](https://github.com/misunders2d/agentnet/actions/runs/38777742907)
+passes every job. All 13 public assets match the downloaded checksums and GitHub
+digests. The original-key Android APK verifies both ABIs, code 8030,
+nondebuggable and 16 KiB alignment; public SHA256
+`87f07eb8c5d452576d9012da78ce084236c8b4e441ba9f3f298f986189e4f831`.
+Linux and bundled AppImage CLI report the exact clean tag.
 
-## Current release — v0.8.29, October 15, 2026
+Natural tagged steering keeps the exact local job attempt. Edits, reactions and
+deletions return after durable local storage, with delivery retained in the
+existing outbox. Topic and dismissal actions refresh the selected conversation
+without waiting for the workspace overview. Large-chat opening avoids unused
+preview parsing and repeated same-response reads; synthetic group JSON stays exact while SQL queries
+fall from 381 to 219 and four-member control preparation removes three profile GETs.
+Review/attention wording, reminder action hit areas and Ctrl/Cmd+physical 2 mention
+picker controls ship in Comic and the applicable collection skins. Actual
+ThinkPad end-to-end improvement remains unmeasured; the earlier Zenbook v29
+metadata reads are not a v30 performance result.
+
+Whole vet, all 12 client race selections, both UI partitions, other race packages,
+Chrome IndexedDB, native Linux/macOS/Windows, desktop three-OS, container and
+published-v29 mixed-version coverage are qualified using retained passes and
+exact residual followups. The original full run failed and remains recorded.
+Its Windows H–Z aggregate timeout left 119 suffix parents and 10 earlier parallel
+parents uncompleted; two final selections cover those 129 plus the corrected
+rollback fixture, passing in 102.743 s and 60.296 s at unchanged count 1 / 1800 s bounds.
+Earlier serial parents returned or skipped; skips are not counted as passes.
+
+[Gallery v2026.10.15.2](https://github.com/misunders2d/agentnet-skins/releases/tag/v2026.10.15.2),
+commit `90981ccc7de8e85abef12ec3e1c83872d1e8b4ab`, publishes
+Classic/Holonet/Zoom/Pulp 1.5.0 and Office 1.3.0 at the exact v30 pin. All 121 public
+files, package digests, catalog and 20 previews match frozen evidence. All five
+real skins passed their applicable full-run journeys. The original full skin
+run failed its QA mute observation; a controlled delayed update proves the
+fixed-sleep flaw, the corrected 26-tap journey passes, and the normal final
+check passes 125/125 with zero skips. No single all-green original full run is
+claimed. Product source/assets are identical across the later test-only pins.
+
+The original-key runtime APK passes same-VM-boot v29→v30 warm/fresh-process cold
+preservation and ordinary Back checks: identity, 200 messages, 100 outbox rows
+including 3 queued envelopes, 3 encrypted files, schema 79, origin and Comic storage
+remain exact. Its raw cleanup exit 1 from TIME_WAIT is retained; the final
+read-only checkpoint proves the owned process and ports clear. The public
+tag-built APK is separately verified, not claimed byte-identical to that runtime
+build. Damaged caches remain unreadable; readable-cache recovery, absent-draft
+recovery, VM-reboot persistence and physical-phone acceptance remain unqualified.
+
+Actual Codex write 25.568 s, Claude steering 26.01 s and diagnostic OMP steering 67.905 s
+pass with native sandbox/configuration/denials retained. OMP's earlier 51.45 s
+failure remains recorded with cause unknown; affected-device steering acceptance
+remains pending. agy headless equivalence remains
+unqualified. MEL-587 remains urgent and unresolved. MEL-630 live activity and
+MEL-643 guest own-agent invitation are nonblocking backlog; Projects remains
+reserved for v0.9.0. [The v30 record](plans/V0_8_30.md) preserves exact evidence
+and remaining limits.
+
+Approved Hub rollout passes in 61.013 s using the exact published `33447e2c`
+binary; HTTPS reports v0.8.30. Full stopped-store backup
+`/opt/agentnet-revived/backups/pre-v0.8.30-9xd3p5j0` verifies 6,113 entries.
+Realm, 52,314 messages, 6,106 blobs, 13 agents, 7 persons, 19 chain rows and
+schema 23 remain exact before/after. Configuration, data volume and neighboring
+service are unchanged; Hub restarts 0. No identities, history, grants or requests
+were reset or replayed. Observed result: `.agentnet/v30/relay/deployment-result.json`.
+
+## Previous release — v0.8.29, October 15, 2026
 
 [Download v0.8.29](https://github.com/misunders2d/agentnet/releases/tag/v0.8.29),
 immutable tag `8b6aae52b9b6cb7eaf337bbf41f0e8a78cc7d4c1`, published

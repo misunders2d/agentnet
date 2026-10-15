@@ -6,6 +6,8 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+## [0.8.30] — 2026-10-15
+
 - Preserve the current local job attempt when displaying an agent request, so
   the next tagged message can steer that running request.
 - Save edits, reactions, reaction removals and deletions locally before waiting
