@@ -17,6 +17,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/misunders2d/agentnet/internal/client"
 	"github.com/misunders2d/agentnet/internal/protocol"
 	"github.com/misunders2d/agentnet/internal/ui/static"
 )
@@ -813,11 +814,34 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
+	var previous client.ViewChange
+	first := true
 	for {
 		seq, next := s.p.Changed()
-		if _, err := fmt.Fprintf(w, "event: change\ndata: %d\n\n", seq); err != nil {
-			return
+		names := []string{"change"}
+		if detailed, ok := s.p.(interface {
+			ViewChanges() (client.ViewChange, <-chan struct{})
+		}); ok {
+			var current client.ViewChange
+			current, next = detailed.ViewChanges()
+			seq = current.Seq
+			if !first && current.Content == previous.Content {
+				names = nil
+				if current.Presence != previous.Presence {
+					names = append(names, "presence")
+				}
+				if current.Typing != previous.Typing {
+					names = append(names, "typing")
+				}
+			}
+			previous = current
 		}
+		for _, name := range names {
+			if _, err := fmt.Fprintf(w, "event: %s\ndata: %d\n\n", name, seq); err != nil {
+				return
+			}
+		}
+		first = false
 		fl.Flush()
 		select {
 		case <-next:

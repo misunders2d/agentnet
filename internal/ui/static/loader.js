@@ -108,7 +108,7 @@
     listen(fn) {
       if (browser) return browser.listen((seq) => fn({ type: "change", seq }));
       const es = new EventSource("/events");
-      es.addEventListener("change", (e) => fn({ type: "change", seq: Number(e.data) }));
+      for (const kind of ["change", "typing", "presence"]) es.addEventListener(kind, (e) => fn({ type: "change", seq: Number(e.data), ...(kind === "change" ? {} : { hint: kind }) }));
       es.addEventListener("restart", () => { es.close(); fn({ type: "restart" }); });
       es.onerror = () => { es.close(); fn({ type: "disconnect" }); };
       return () => es.close();

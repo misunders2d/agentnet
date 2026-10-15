@@ -99,11 +99,13 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
     reminded: !!reminder,
   };
   const touch = useTouchGestures(() => (readOnly ? undefined : setSheet(true)), can.reply ? acts.reply : null);
-  const mention = mentionFor(ctx);
+  // Rendering mentions depends on author/participant metadata, not unrelated
+  // messages or the overview's change counter. Keep text subtrees reusable.
+  const mention = useMemo(() => mentionFor(ctx), [ctx.overview?.person, ctx.dm?.guests, ctx.dm?.agents, ctx.dm?.peer, ctx.dm?.members, ctx.names]);
 
   const text = useMemo(() => grouped ? shownText(m) : askChip(shownText(m), m, ctx), [m, ctx, grouped]);
   const answer = answerTo(m, all, ctx);
-  const time = <Meta m={m} who={who} shared={grouped} answered={!!answer} />;
+  const time = useMemo(() => <Meta m={m} who={who} shared={grouped} answered={!!answer} />, [m, who.mine, who.agent, grouped, !!answer]);
   const parent = referenceParent(all,m.quote);
   const quote=!!m.quote;
   const request=referenceParent(all,m.reply_to);

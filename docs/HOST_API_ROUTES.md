@@ -80,7 +80,7 @@ and catch the error. Failures differ by platform.
 | `GET /api/thread` | D B | One device thread, which is a chat with an agent's device. | `?id=<any message id in it>` | `{id, peer, key:{pinned?, pending?}, approved, permission_person?, question_target?, task_target?, task_grant, messages:[Message], topic?}` |
 | `GET /api/dm` | D B | One conversation: a direct message or a group. | `?id=<conv>` | `{id, kind?, title?, peer, members?, role?, created, mine, frozen?, messages:[DMMessage], agents:[AgentView], guests?, main_topic?, topics?, audience_pending?}` |
 
-**Events.** `host.listen(fn)` delivers the change counter.
+**Events.** `host.listen(fn)` delivers the change counter. Native events may add `hint:"typing"` or `hint:"presence"`: refresh typing only, or overview plus typing, respectively. Missing/unknown hints mean a full refresh; existing skins may ignore the hint. Durable and ephemeral revisions are tracked separately, so coalescing never hides a durable invalidation.
 
 - **D** sends `{type:"change", seq, workspace}` once on connect and then
   after changes; changes that come together are sent as one, so `seq` can
@@ -332,7 +332,7 @@ exception is `/api/upload/discard`, which skins call through `host.api`.
 | `POST /api/upload/discard` | D | Release staged ids that will not be sent. Called through `host.api` with D's string ids, as Comic's `discard` does. Staged files older than an hour are also dropped when another file is staged; there is no timer. B: "Unknown request." (browser staged values need no discard) | `{ids:[up to 64 ids]}` | `{ok:true}` |
 | `GET /api/files/{id}/{i}` | D | Behind `host.file(id, i, dir)` on D. | `?dir=in` or `?dir=out` | bytes; the host resolves `{bytes}` |
 | `GET /api/file` | B | Behind `host.file(id, i, dir)` on B. | `?id=&i=&dir=` | `{name, size, image, bytes}` |
-| `GET /events` | D | Behind `host.listen` on D: server-sent events `change` (seq) and `restart` (only when the daemon switches to an updated program). B's `host.listen` uses the engine; `/events` there gives "Unknown request." | — | event stream |
+| `GET /events` | D | Behind `host.listen` on D: server-sent events `change`, `typing`, `presence` (seq; the latter two become hinted `change` in the host) and `restart` (only when the daemon switches to an updated program). B's `host.listen` uses the engine; `/events` there gives "Unknown request." | — | event stream |
 | `GET /api/drive/service` | B | Behind `host.drive` on B: returns the engine's Drive provider object (functions), not JSON. D: `404 page not found` | — | provider object |
 
 ## Not through host.api

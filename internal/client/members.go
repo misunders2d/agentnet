@@ -148,7 +148,11 @@ func (a *Agent) onMembers(data []byte) {
 		more = ", list truncated"
 	}
 	a.Logf("hub members: %d listed, %d connected%s", len(m.Members), connected, more)
-	a.typingMembershipChanged()
+	if discovery != old.discovery {
+		a.typingMembershipChanged()
+	} else {
+		a.changes.bumpKind("presence")
+	}
 	// Presence, persons or capabilities may have changed: look again at
 	// held conversation messages on the stream's worker. Every list does:
 	// evidence for a held message also arrives through local admissions

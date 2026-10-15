@@ -6,6 +6,12 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+- Refresh the open chat independently of the workspace overview, so message
+  arrivals and receipts do not wait for a slow sidebar. Typing and presence
+  updates avoid reloading history; unchanged message text stays rendered.
+  Reuse query preparation within group-history reads without caching access
+  decisions or changing message delivery guarantees.
+
 - Synchronize reads of sent questions and self-agent replies across the owner's
   devices when their exact thread is opened. Unseen threads stay unread;
   reading does not restart or change the result of a request.

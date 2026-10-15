@@ -6,7 +6,7 @@ import { parseCollective } from '../collective-mentions.mjs';
 // Mentions ([@Name](agentnet:person/ID)) are handed to
 // the caller, who knows who is in the conversation.
 import { Lexer, type Token, type Tokens } from "marked";
-import { createContext, Fragment, useContext, useMemo, type ReactNode } from "react";
+import { createContext, Fragment, memo, useContext, useMemo, type ReactNode } from "react";
 import { shortLinkLabel } from "../linkText";
 
 export type MentionKind = "person" | "guest" | "agent" | "collective";
@@ -32,7 +32,7 @@ const decode = (s: string) => s.replace(/&(#x[0-9a-f]{1,6}|#[0-9]{1,7}|[a-z]{2,6
 });
 
 /** Markdown renders text; tail (a message's time) sits at the end of its last line when that line is text. */
-export function Markdown({ text, mention, tail, className = "" }: { text: string; mention?: RenderMention; tail?: ReactNode; className?: string }) {
+export const Markdown = memo(function Markdown({ text, mention, tail, className = "" }: { text: string; mention?: RenderMention; tail?: ReactNode; className?: string }) {
   const tokens = useMemo(() => new Lexer({ gfm: true, breaks: true }).lex(text).filter((t) => t.type !== "space" && t.type !== "def"), [text]);
   const end = tokens[tokens.length - 1];
   const inlineEnd = !!end && ["paragraph", "text", "heading", "html"].includes(end.type);
@@ -42,7 +42,7 @@ export function Markdown({ text, mention, tail, className = "" }: { text: string
       {tail && !inlineEnd && <div className="flow-root">{tail}</div>}
     </div>
   );
-}
+});
 
 function blocks(tokens: Token[], mention?: RenderMention): ReactNode[] {
   return tokens.map((t, i) => <Fragment key={i}>{block(t as Tokens.Generic, mention)}</Fragment>);

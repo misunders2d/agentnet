@@ -45,6 +45,17 @@ func TestQueuedEngineSend(t *testing.T) {
 	t.Log(string(out))
 }
 
+func TestStructuralSharingAndOptimisticTransitions(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node unavailable")
+	}
+	out, err := exec.CommandContext(t.Context(), "node", "--experimental-strip-types", "testdata/structural_check.mjs").CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	t.Log(string(out))
+}
+
 func TestBrowserRequestTimeoutRecovery(t *testing.T) {
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node unavailable")

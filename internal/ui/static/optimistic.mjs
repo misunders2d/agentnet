@@ -54,17 +54,16 @@ export function pendingSends(host, changed = () => {}) {
     finish(id, result) {
       const x = ledger.get(id); if (!x) return;
       x.saved(); x.done = true;
-      x.m.id = result?.id || id;
-      x.m.lid = result?.lid || x.m.lid;
-      x.m.state = result?.state || 'queued'; x.m.delivery = x.m.state;
-      x.m.state_text = ['custody','delivered'].includes(x.m.state) ? (x.m.state === 'custody' ? 'On your server' : 'Delivered') : result?.detail || 'Sending…';
+      const state = result?.state || 'queued';
+      x.m = { ...x.m, id: result?.id || id, lid: result?.lid || x.m.lid, state, delivery: state,
+        state_text: ['custody','delivered'].includes(state) ? (state === 'custody' ? 'On your server' : 'Delivered') : result?.detail || 'Sending…' };
       notify();
     },
     fail(id, reason) {
       const x = ledger.get(id); if (!x) return false;
       x.saved();
-      x.m.state = x.m.delivery = 'failed'; x.m.state_text = 'Not sent: ' + reason;
-      x.m._failed = true; notify(); return true;
+      x.m = { ...x.m, state: 'failed', delivery: 'failed', state_text: 'Not sent: ' + reason, _failed: true };
+      notify(); return true;
     },
     remove(id) { ledger.get(id)?.saved(); ledger.delete(id); notify(); },
     // unsent: a send begun here and not yet stored, or failed and kept with
@@ -72,9 +71,10 @@ export function pendingSends(host, changed = () => {}) {
     unsent: () => [...ledger.values()].some(x => !x.done),
     dispose() { if (shared.changed === changed) shared.changed = null; },
     merge(key, messages = []) {
-      const actual = messages.filter(m => !m._local);
+      const actual = messages.some(m => m._local) ? messages.filter(m => !m._local) : messages;
       for (const [id, x] of ledger) if (x.key === key && actual.some(m => m.dir === 'out' && (m.id === x.m.id || (m.lid && m.lid === x.m.lid)))) { x.saved(); ledger.delete(id); }
-      return [...actual, ...rows(key).map(x => x.m)];
+      const pending = rows(key);
+      return pending.length ? [...actual, ...pending.map(x => x.m)] : actual;
     },
   };
 }

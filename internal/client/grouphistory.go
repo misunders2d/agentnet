@@ -73,6 +73,9 @@ func groupHistorySelected(q dbq, packet GroupContext, address, fp string, ref pr
 // blob keys never enter the selected hash. Copies of one authored logical turn
 // must resolve to the same visible bytes; an arbitrary first candidate is unsafe.
 func (a *Agent) groupHistorySources(q dbq, conv, lid, author string, since int64, limit int, original ...bool) ([]groupHistorySource, error) {
+	reads := prepareReads(q)
+	defer reads.close()
+	q = reads
 	rows, err := q.Query(`SELECT * FROM (
  SELECT id,'in',sender,coalesce(verified_by,claimed_fp,'') AS author,ts,body,coalesce(reply_to,''),coalesce(origin,''),coalesce(emotion,''),lid,coalesce(received_ms,received_at*1000) AS ms,coalesce(group_admission,'') FROM inbox WHERE conv=? AND kind='message' AND coalesce(sub,'')='' AND ref_id IS NULL AND target IS NULL AND pid IS NULL AND agent_id IS NULL AND local=0
  UNION ALL

@@ -360,12 +360,12 @@ func (s *store) setConfig(kv map[string]string) error {
 			return err
 		}
 	}
-	return tx.Commit()
+	return s.done(tx.Commit())
 }
 
 func (s *store) deleteConfig(k string) error {
 	_, err := s.db.Exec(`DELETE FROM config WHERE k = ?`, k)
-	return err
+	return s.done(err)
 }
 
 func (s *store) config(k string) (string, error) {

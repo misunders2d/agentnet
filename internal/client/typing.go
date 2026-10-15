@@ -466,7 +466,7 @@ func (a *Agent) onSignal(raw []byte) {
 	a.typing.seen[key] = typingSeen{ts: in.TS, active: in.Active, expires: expires, scope: scope, entry: TypingEntry{Person: p.info.Person, Address: in.From, Label: label, Expires: expires}}
 	a.armTypingLocked(now)
 	a.typing.mu.Unlock()
-	a.changes.bump()
+	a.changes.bumpKind("typing")
 }
 func (a *Agent) pruneTypingLocked(now time.Time) bool {
 	changed := false
@@ -501,7 +501,7 @@ func (a *Agent) armTypingLocked(now time.Time) {
 		a.armTypingLocked(time.Now())
 		a.typing.mu.Unlock()
 		if changed {
-			a.changes.bump()
+			a.changes.bumpKind("typing")
 		}
 	})
 }

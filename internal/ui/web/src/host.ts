@@ -1,6 +1,6 @@
 // Host API v1, as loader.js builds it (docs/UI_SKINS.md "Host API v1"),
 // with its documented additive extensions. Comic uses only this.
-export type HostEvent = { type: "change"; seq: number } | { type: "restart" } | { type: "disconnect" };
+export type HostEvent = { type: "change"; seq: number; hint?: "typing" | "presence" } | { type: "restart" } | { type: "disconnect" };
 
 export interface Workspace {
   id: string;

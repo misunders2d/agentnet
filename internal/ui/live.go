@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/client"
@@ -19,9 +20,16 @@ type Live struct {
 	a              *client.Agent
 	assistantSetup AssistantSetupFunc
 	// timeout bounds each network request an action makes.
-	timeout time.Duration
-	staged  staged // files the page handed over, not sent yet
-	app     bool   // served by the AgentNet app (SetApp)
+	timeout    time.Duration
+	staged     staged // files the page handed over, not sent yet
+	app        bool   // served by the AgentNet app (SetApp)
+	overviewMu sync.Mutex
+	overviews  map[bool]cachedOverview
+}
+
+type cachedOverview struct {
+	content uint64
+	view    Overview
 }
 
 // SetApp says the page is the AgentNet app's window (overview.app).
@@ -50,6 +58,8 @@ func NewLive(a *client.Agent) *Live {
 // Changed implements Provider.
 func (l *Live) Changed() (uint64, <-chan struct{}) { return l.a.Changed() }
 
+func (l *Live) ViewChanges() (client.ViewChange, <-chan struct{}) { return l.a.ViewChanges() }
+
 // Overview implements Provider: every thread, archived topics included.
 func (l *Live) Overview() (Overview, error) { return l.overview(true) }
 
@@ -57,6 +67,26 @@ func (l *Live) Overview() (Overview, error) { return l.overview(true) }
 func (l *Live) TopicOverview() (Overview, error) { return l.overview(false) }
 
 func (l *Live) overview(listArchived bool) (Overview, error) {
+	l.overviewMu.Lock()
+	defer l.overviewMu.Unlock()
+	revision, _ := l.a.ViewChanges()
+	if cached, ok := l.overviews[listArchived]; ok && cached.content == revision.Content {
+		o := cached.view
+		o.Seq = revision.Seq
+		o.Directory = directoryOf(l.a.MemberView(), l.a.Address)
+		return o, nil
+	}
+	o, err := l.buildOverview(listArchived)
+	if err == nil {
+		if l.overviews == nil {
+			l.overviews = make(map[bool]cachedOverview)
+		}
+		l.overviews[listArchived] = cachedOverview{revision.Content, o}
+	}
+	return o, err
+}
+
+func (l *Live) buildOverview(listArchived bool) (Overview, error) {
 	seq, _ := l.a.Changed()
 	o := Overview{App: l.app, Me: Me{Address: l.a.Address, Fingerprint: l.a.Self().Fingerprint()}, Seq: seq, Version: protocol.Version,
 		Threads: []ThreadSummary{}, Review: []ReviewItem{}, NeedsYou: []ConvItem{}, Held: []ConvItem{}, Quarantine: []QuarantineItem{}}

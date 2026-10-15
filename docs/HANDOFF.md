@@ -4,6 +4,25 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
+## Pending UI responsiveness fix — MEL-642
+
+Next release remains blocked on [MEL-642](https://linear.app/mellanni/issue/MEL-642).
+Open-view refresh no longer waits for overview; typed invalidations keep typing
+and presence out of history reads. Full-field structural sharing and stable text
+rendering preserve edits, reactions, controls and helper context. Configuration
+writes invalidate the overview cache, including workspace and responder changes.
+Group-history reads reuse prepared statements only within the current operation.
+
+On a synthetic 1,000-person/400-message fixture, 1,000 typing events cause two
+typing reads and zero history reads. A copied installed Tauri WebKitGTK shell
+showed optimistic feedback64ms and stored state126ms; after integrating main's
+read-sync/result fixes, a concurrent-test sample measured103ms and179ms. These
+are local fixture timings, not production delivery latency or a capacity claim.
+Focused client races, configuration/cache regressions, native/Chromium rendered
+checks and whole vet pass. Final UI partitions, mixed-version and rebuilt
+external-overlay qualification must be recorded before release. Zenbook owns
+release; no installed app/session was restarted or changed for this work.
+
 ## Current release — v0.8.28, October 15, 2026
 
 [Download v0.8.28](https://github.com/misunders2d/agentnet/releases/tag/v0.8.28)

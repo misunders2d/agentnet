@@ -65,7 +65,7 @@ export class WorkspaceShell {
    ...(provider ? { drive: boundDriveProvider(provider, check) } : {}),
    workspace:entry.binding, platform:entry.engine?"browser":"daemon",api:call,
    listen:(fn)=>{check();if(entry.engine)return entry.engine.listen(seq=>{if(entry.connected)fn({type:"change",seq,workspace:id});});
-    const es=this.eventSource(prefix+"/events");es.addEventListener("change",e=>{if(entry.connected)fn({type:"change",seq:Number(e.data),workspace:id});});
+    const es=this.eventSource(prefix+"/events");for(const kind of ["change","typing","presence"])es.addEventListener(kind,e=>{if(entry.connected)fn({type:"change",seq:Number(e.data),workspace:id,...(kind==="change"?{}:{hint:kind})});});
     es.addEventListener("restart",()=>{es.close();fn({type:"restart",workspace:id});});
     es.onerror=()=>{es.close();fn({type:"disconnect",workspace:id});};return()=>es.close();
    },

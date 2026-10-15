@@ -12,6 +12,7 @@ import type { Host, HostEvent, OpenContext } from "./host";
 import { messageTarget } from "./model";
 import { mainPreferences, personRoots } from "./person-topics.mjs";
 import { skin as brand } from "./skin/brand";
+import { share } from "./structural";
 
 export type Conn = "loading" | "live" | "lost" | "updating" | "gone";
 // A thread names its agent's device (peer) whenever that is known: an
@@ -89,8 +90,12 @@ export class Store {
   private subs = new Set<() => void>();
   private stopListen: (() => void) | null = null;
   private refresh: Promise<void> | null = null;
+  private openRefresh: Promise<void> | null = null;
+  private openAgain = false;
+  private overviewRequest = 0;
   private topicChanges = new Map<string, Promise<{ note: string } | undefined>>();
   private again = false;
+  private catalogsAgain = false;
   private recovering = false;
   private refreshed = new Set<string>(); // conversations already asked about this open
   private toastSeq = 0;
@@ -134,6 +139,7 @@ export class Store {
   subscribe = (fn: () => void) => { this.subs.add(fn); return () => this.subs.delete(fn); };
   private set(patch: Partial<State>) {
     if (!this.alive) return;
+    if (Object.keys(patch).every(key => Object.is(this.state[key as keyof State], patch[key as keyof State]))) return;
     this.state = { ...this.state, ...patch };
     for (const fn of this.subs) fn();
   }
@@ -152,7 +158,7 @@ export class Store {
       window.addEventListener("focus", this.mobileVisible);
     }
     try { this.listen(); } catch { /* the first load fails and shows it */ }
-    await this.load(true);
+    await Promise.all([this.load(true), this.refreshOpen()]);
   }
 
   stop() {
@@ -182,7 +188,11 @@ export class Store {
         if (e.type !== "change") this.set({ conn: e.type === "restart" ? "updating" : "lost" });
         return;
       }
-      if (e.type === "change") void this.refetch();
+      if (e.type === "change") {
+        if (e.hint === "typing") void this.loadTyping();
+        else if (e.hint === "presence") { void this.load(false, false); void this.loadTyping(); }
+        else void this.refetch();
+      }
       else if (e.type === "restart") { this.set({ conn: "updating" }); void this.recover(recovery.update); }
       else { this.set({ conn: "lost" }); void this.recover(recovery.missed); }
     });
@@ -190,17 +200,33 @@ export class Store {
 
   // refetch loads what is shown once per burst of changes: changes that
   // arrive while it loads cause one more load, not one each.
-  refetch(): Promise<void> { return this.load(false); }
+  async refetch(): Promise<void> { await Promise.all([this.load(false), this.refreshOpen()]); }
+
+  // A slow workspace overview never holds the open chat's receipt/arrival
+  // behind it. Each lane coalesces independently, including continuous traffic.
+  private refreshOpen(): Promise<void> {
+    this.openAgain = true;
+    if (!this.openRefresh) this.openRefresh = (async () => {
+      try {
+        do { this.openAgain = false; await this.loadOpen(); }
+        while (this.openAgain && this.alive);
+      } finally { this.openRefresh = null; }
+    })();
+    return this.openRefresh;
+  }
 
   // load is that one load under way. The first one (start) also says why it
   // failed; a later failure waits for the next change, or the person.
-  private load(first: boolean): Promise<void> {
+  private load(first: boolean, catalogs = true): Promise<void> {
     this.again = true;
+    this.catalogsAgain ||= catalogs;
     if (!this.refresh) this.refresh = (async () => {
       try {
         do {
           this.again = false;
-          try { await this.reload(first); }
+          const refreshCatalogs = this.catalogsAgain;
+          this.catalogsAgain = false;
+          try { await this.reload(first, refreshCatalogs); }
           catch (e) { if (!first) throw e; this.set({ loadError: errorText(e), conn: "lost" }); }
           first = false;
         } while (this.again && this.alive);
@@ -235,15 +261,16 @@ export class Store {
     return work;
   }
 
-  private async reload(first: boolean) {
+  private async reload(first: boolean, catalogs = true) {
+    const request = ++this.overviewRequest;
     const o = await this.api.overview();
-    const patch: Partial<State> = { overview: o, loadError: "", conn: "live" };
+    if (!this.alive || request !== this.overviewRequest) return;
+    const patch: Partial<State> = { overview: share(this.state.overview, o), loadError: "", conn: "live" };
     if (first || !this.state.version) patch.version = o.version;
     else if (o.version && o.version !== this.state.version) patch.newVersion = o.version;
     this.set(patch);
-    if (o.groups) this.api.groupInvitations().then((inv) => this.set({ invitations: inv || [] })).catch(() => {});
-    void this.loadAgentNames();
-    await this.loadOpen();
+    if (o.groups) this.set({ invitations: share(this.state.invitations, o.group_invitations || []) });
+    if (catalogs) void this.loadAgentNames();
   }
 
   private async recover(schedule: number[]) {
@@ -255,6 +282,7 @@ export class Store {
         if (!this.alive) return;
         try {
           await this.reload(false);
+          await this.refreshOpen();
           this.listen();
           return;
         } catch (e) {
@@ -346,7 +374,7 @@ export class Store {
 
   private viewPatch(o: NonNullable<Open>, v: View | null, same: boolean): Partial<State> {
     if (same && !v) return {};
-    if (v) v = { ...v, messages: this.sends.merge<T.DMMessage | T.Message>(o.id, v.messages || []) } as View;
+    if (v) v = share(this.state.views[o.id], { ...v, messages: this.sends.merge<T.DMMessage | T.Message>(o.id, v.messages || []) } as View);
     // A request arrow chooses its actual topic, including Main flow. Keep
     // unsent text, staged files and reply intact; only the displayed topic changes.
     const target = o.kind === "dm" && o.focus && o.focusSeq !== this.topicFocusSeq && v ? messageTarget((v as T.DMThread).messages || [], o.focus) : undefined;
@@ -354,7 +382,7 @@ export class Store {
     const draft = this.draft(o.id);
     const drafts = target ? { drafts: { ...this.state.drafts, [o.id]: { ...draft, topic: target.topic || "", newTopic: false } } } : {};
     const typing = same ? {} : { typing: null };
-    const views = v ? { views: { ...this.state.views, [o.id]: v } } : {};
+    const views = v && this.state.views[o.id] !== v ? { views: { ...this.state.views, [o.id]: v } } : {};
     return o.kind === "dm" ? { dm: (v as T.DMThread | null), thread: null, ...views, ...typing, ...drafts } : { thread: (v as T.Thread | null), dm: null, ...views, ...typing };
   }
 
@@ -378,7 +406,8 @@ export class Store {
 
   // keep remembers a loaded view (the most recent VIEWS_KEPT, and the open one).
   private keep(id: string, v: View) {
-    v = { ...v, messages: this.sends.merge<T.DMMessage | T.Message>(id, v.messages || []) } as View;
+    v = share(this.state.views[id], { ...v, messages: this.sends.merge<T.DMMessage | T.Message>(id, v.messages || []) } as View);
+    if (v === this.state.views[id]) return;
     const views: Record<string, View> = { ...this.state.views };
     delete views[id];
     views[id] = v;
@@ -452,8 +481,14 @@ export class Store {
     const wanted = () => this.alive && (this.state.open === o || this.state.pending === o);
     try {
       // Being opened: a prefetch already under way for it is that load.
-      const ahead = this.state.pending === o ? this.fetching.get(o.id) : undefined;
-      const v: View = ahead ? await ahead : o.kind === "dm" ? await this.api.dm(o.id) : await this.api.thread(o.id);
+      let ahead = this.fetching.get(o.id);
+      if (!ahead) {
+        ahead = (o.kind === "dm" ? this.api.dm(o.id) : this.api.thread(o.id)) as Promise<View>;
+        this.fetching.set(o.id, ahead);
+        const loading = ahead;
+        void ahead.finally(() => { if (this.fetching.get(o.id) === loading) this.fetching.delete(o.id); }).catch(() => {});
+      }
+      const v: View = await ahead;
       this.keep(o.id, v);
       if (!wanted()) return; // another conversation was opened meanwhile
       const first = this.state.pending === o;
@@ -461,7 +496,7 @@ export class Store {
       this.set({ ...(first ? { open: o, pending: null } : {}), ...this.viewPatch(o, v, this.state.open?.id === o.id) });
       if (newHost) void this.loadAgentNames();
       this.markOpenRead();
-      if (o.kind === "dm") this.api.typing({ conv: o.id }).then((t) => { if (this.state.open === o) this.set({ typing: t }); }).catch(() => {});
+      if (o.kind === "dm") void this.loadTyping();
     } catch (e) {
       if (!wanted()) return;
       // Its placeholder then says it is still opening, with Try again.
@@ -489,12 +524,30 @@ export class Store {
     const ids = (messages || []).filter(m => (m.unread || o.kind === "thread" && m.dir === "out") && !this.reading.has(m.id) && !acknowledged.has(m.id)).map(m => m.id);
     if (!ids.length) return;
     ids.forEach(id => this.reading.add(id));
+    // The change stream brings the committed read state. Keep exact successful
+    // acknowledgements so refreshing a sent device-thread row cannot loop.
     void this.api.markRead(ids).then(() => {
       ids.forEach(id => acknowledged.add(id));
-      // Fetch the committed read state, including topic and chat counts.
-      // A failed acknowledgement leaves the unread state intact for retry.
-      if (this.alive) void this.refetch();
     }).catch(() => {}).finally(() => ids.forEach(id => this.reading.delete(id)));
+  }
+
+  private typingLoading = false;
+  private typingAgain = false;
+  private async loadTyping() {
+    this.typingAgain = true;
+    if (this.typingLoading) return;
+    this.typingLoading = true;
+    try {
+      do {
+        this.typingAgain = false;
+        const o = this.state.open;
+        if (o?.kind !== "dm") return;
+        try {
+          const typing = await this.api.typing({ conv: o.id });
+          if (this.alive && this.state.open === o) this.set({ typing: share(this.state.typing, typing) });
+        } catch { /* a later push retries; the ordinary view remains usable */ }
+      } while (this.typingAgain && this.alive);
+    } finally { this.typingLoading = false; }
   }
 
   // loadAgentNames reads the agent catalogs once per change: this
