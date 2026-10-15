@@ -41,6 +41,10 @@ func TestScriptAdapterBeforeInputEOF(t *testing.T) {
 	for _, harness := range []string{"claude", "pi"} {
 		t.Run(harness, func(t *testing.T) {
 			dir := t.TempDir()
+			physicalDir, err := filepath.EvalSymlinks(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
 			bin := filepath.Join(dir, harness)
 			script := "cat > \"$0.prompt\"\nprintf '%s\\n' \"$@\" > \"$0.args\"\npwd > \"$0.cwd\"\nprintf '%s' \"$AGENTNET_BACKGROUND\" > \"$0.environment\"\nprintf 'answer\\n'\n"
 			if err := WriteNativeScript(bin, script, harness); err != nil {
@@ -89,7 +93,7 @@ func TestScriptAdapterBeforeInputEOF(t *testing.T) {
 			if err := cmd.Wait(); err != nil {
 				t.Fatalf("%v: %s", err, &stderr)
 			}
-			for suffix, want := range map[string]string{".prompt": prompt, ".args": "--session-id\nowned\n", ".cwd": dir + "\n", ".environment": "owned-worker", ".script": script} {
+			for suffix, want := range map[string]string{".prompt": prompt, ".args": "--session-id\nowned\n", ".cwd": physicalDir + "\n", ".environment": "owned-worker", ".script": script} {
 				got, err := os.ReadFile(bin + suffix)
 				if err != nil || string(got) != want {
 					t.Fatalf("%s: %q, %v; want %q", suffix, got, err, want)
