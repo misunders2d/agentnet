@@ -275,6 +275,9 @@ func TestGroupHistoryLinkEmptyAndDoneRecovery(t *testing.T) {
 
 func TestGroupHistoryLinkAtomicRollback(t *testing.T) {
 	_, a, phone, p := groupHistoryLinkedFixture(t)
+	// Run shutdown leaves its independent sender alive; join it before
+	// comparing global upload/spool counts during this synchronous rollback.
+	a.stopBackgroundPosts()
 	var before string
 	var uploadsBefore, attachmentsBefore int
 	a.store.db.QueryRow(`SELECT count(*) FROM uploads`).Scan(&uploadsBefore)
