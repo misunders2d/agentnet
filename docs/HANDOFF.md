@@ -4,44 +4,61 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
-## v0.8.29 candidate — final integration
+## Current release — v0.8.29, October 15, 2026
 
-The release lead has integrated natural tagged steering, cross-device read
-synchronization, compact result/media presentation, the reviewed MEL-642
-responsiveness changes, retained group move proof and history deletion repairs.
-Codex, Claude, Pi and OMP actual-worker steering checks pass with native settings
-and permissions unchanged; agy authentication remains unqualified. The added
-steering chooser/mode/modal is removed. See [the v29 plan](plans/V0_8_29.md) for
-exact evidence, remaining gates and exclusions. No v29 publication yet.
+[Download v0.8.29](https://github.com/misunders2d/agentnet/releases/tag/v0.8.29),
+immutable tag `8b6aae52b9b6cb7eaf337bbf41f0e8a78cc7d4c1`, published
+14:58:44 UTC. Exact-tag [packaging38754669365](https://github.com/misunders2d/agentnet/actions/runs/38754669365)
+passes on Linux, macOS, Windows and Android. All13 assets (12 packages/programs
+and SHA256SUMS) match the downloaded checksums and GitHub digests. Original Android
+signer, package/code, both ABIs, nondebuggable and16KiB alignment pass; the public
+APK SHA256 is `d8df0180e3e7e8afa42bd1ecd2af44d0558dc645b6a3b1f39fc5718010a87975`.
+Linux and bundled AppImage CLI report the exact clean tag.
 
-Root focused final corrections and whole vet pass. The original named callback
-race passes with its existing deadline after reducing repeated current evidence
-reads; earlier failures remain recorded and no timing-margin claim is made.
-Final stable-source native/race/mixed-version, complete skins and original-key
-Android qualification remain required. MEL-587's corrupting operation is still
-unproven; packaging is unchanged and the issue remains urgent. Projects stays
-reserved for0.9.0.
+The next tagged message steers active Codex, Claude, Pi or OMP work through the
+ordinary composer; the extra follow-up chooser/mode/modal is removed. Actual
+owned native workers consumed corrections before completion with permissions
+unchanged. agy authentication refused before a turn and remains unqualified.
+Exact visible device reads, result/media/reaction/link presentation, retained
+move grants and erased-history coverage are repaired. The MEL-642 responsiveness
+fix refreshes active chat independently of overview, avoids history work for
+transient typing/presence and preserves unchanged rows. Actual WebKit/Chromium
+fixture evidence is retained; no production latency/capacity guarantee is made.
 
-## Pending UI responsiveness fix — MEL-642
+[Gallery v2026.10.15.1](https://github.com/misunders2d/agentnet-skins/releases/tag/v2026.10.15.1),
+commit `272342b7aa55d3292b25932fead4ff294fdbf3fa`, publishes Classic/Holonet/Zoom/Pulp1.4.0
+and Office1.2.0 at the exact v29 pin. All121 remote files match local package,
+catalog and20-preview evidence. All real-skin applicable full-run suites pass;
+one QA scaffold mute check failed and passed the unchanged focused journey.
+Its intermittent cause is unproven; no single clean full npm-test run is invented.
 
-Next release remains blocked on [MEL-642](https://linear.app/mellanni/issue/MEL-642).
-Open-view refresh no longer waits for overview; typed invalidations keep typing
-and presence out of history reads. Full-field structural sharing and stable text
-rendering preserve edits, reactions, controls and helper context. Configuration
-writes invalidate the overview cache, including workspace and responder changes.
-Group-history reads reuse prepared statements only within the current operation.
+All12 client race selections, both UI partitions, other race packages, whole
+vet, affected Linux/macOS/Windows and exact published-v28 mixed-version104.753s
+pass with unchanged evidence retained. Final native fixture CWD correction is
+test-only. The original-key df370e65 APK passes same-VM-boot v28→v29 preservation,
+warm/fresh-process cold and ordinary Back checks: identity,200 messages,100
+outbox rows including3 queued envelopes,3 encrypted files, schema79, origin and
+Comic storage remain exact. Existing damaged-cache observations are unchanged;
+readable-cache recovery, VM reboot package persistence and physical-phone tests
+remain unqualified. The separately verified tag-built APK is not claimed byte-identical.
 
-On a synthetic 1,000-person/400-message fixture, 1,000 typing events cause two
-typing reads and zero history reads. A copied installed Tauri WebKitGTK shell
-showed optimistic feedback64ms and stored state126ms; after integrating main's
-read-sync/result fixes, a concurrent-test sample measured103ms and179ms. These
-are local fixture timings, not production delivery latency or a capacity claim.
-Focused client races, configuration/cache regressions, native/Chromium rendered
-checks and whole vet pass. Final UI partitions, mixed-version and rebuilt
-external-overlay qualification must be recorded before release. Zenbook owns
-release; no installed app/session was restarted or changed for this work.
+Approved Hub rollout passes61.963s using the exact published Linux binary.
+Full stopped-store backup `/opt/agentnet-revived/backups/pre-v0.8.29-55_0rqjp`
+verified5770 entries. Realm `4bd7c66953ccf5496fad8eadbab945bd`,49,904 messages,
+5763 blobs,13 agents,7 persons,19 chain rows and schema23 are exact before/after.
+HTTPS/binary report v29, restarts0; volume/configuration and neighboring service
+are unchanged. The rollout now also restores the old image after a post-start
+validation failure, without replacing live data. No identities/history/grants
+or requests were reset or replayed.
 
-## Current release — v0.8.28, October 15, 2026
+MEL-587 remains urgent and unresolved; no WebKit packaging change or causal fix
+is claimed. MEL-561 retains physical-device acceptance; MEL-617's broader agent
+selection/report/Undo flow stays open despite the shipped retained-grant repair.
+Projects remains reserved for0.9.0. [The v29 record](plans/V0_8_29.md) preserves
+exact gates, earlier failures and limitations. Owned helper panes are dismissed;
+only main worktrees/branches remain and private evidence is retained.
+
+## Previous release — v0.8.28, October 15, 2026
 
 [Download v0.8.28](https://github.com/misunders2d/agentnet/releases/tag/v0.8.28)
 or its [signed Android APK](https://github.com/misunders2d/agentnet/releases/download/v0.8.28/AgentNet-android.apk).

@@ -6,6 +6,8 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+## [0.8.29] — 2026-10-15
+
 - Steer current agent work with the next tagged message in the same chat/topic,
   without a separate follow-up chooser or mode. Codex, Claude, Pi and OMP use
   native input; strict corrections keep the exact attempt and never silently
