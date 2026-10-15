@@ -18,6 +18,16 @@ func TestNotifyIconDataLayout(t *testing.T) {
 	}
 }
 
+func TestBalloonUsesConfiguredWindowsSoundAndQuietTime(t *testing.T) {
+	const niifNoSound = 0x10
+	if balloonFlags&niifNoSound != 0 {
+		t.Fatal("notification balloon suppresses the configured Windows sound")
+	}
+	if balloonFlags&niifQuietTime == 0 {
+		t.Fatal("notification balloon must respect quiet time")
+	}
+}
+
 // On CI the real API is called: it must succeed or fail cleanly within the
 // timeout, and Close must remove what it added. This proves the calls, not
 // that a person saw a notification. Skipped elsewhere so developer desktops

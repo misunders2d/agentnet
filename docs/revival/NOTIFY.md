@@ -304,10 +304,12 @@ Built: `internal/client/alerts.go`; client schema step 18.
   activity" (one conversation: its click; several: the page).
 - **Order and limits, plainly:** removal is committed before the OS call,
   so a crash in between loses that alert (never repeats it); the OS may
-  drop, delay or hide it (Focus, permissions, no notification server). On
-  Linux a new alert replaces this daemon's previous one; Windows and macOS
-  stack as they do. A pending alert survives a daemon restart and is shown
-  once after it. Nothing claims exactly-once display.
+  drop, delay or hide it (Focus, permissions, no notification server).
+  Windows alerts use the person's configured notification sound while
+  respecting Windows quiet time; Windows sound and Focus settings remain
+  authoritative. On Linux a new alert replaces this daemon's previous one;
+  Windows and macOS stack as they do. A pending alert survives a daemon
+  restart and is shown once after it. Nothing claims exactly-once display.
 - **Click:** on Linux, with `agentnet daemon --ui`, the click runs
   `xdg-open http://127.0.0.1:PORT/#conv=ID`: the page's address WITHOUT its
   token (a command line is readable by other local users), so it opens

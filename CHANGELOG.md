@@ -6,6 +6,8 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+- Let Windows AgentNet alerts use the person's configured notification sound
+  while continuing to respect Windows quiet time and notification settings.
 - Synchronize reads of sent questions and self-agent replies across the owner's
   devices when their exact thread is opened. Unseen threads stay unread;
   reading does not restart or change the result of a request.

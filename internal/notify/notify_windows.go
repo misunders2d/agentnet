@@ -52,9 +52,9 @@ const (
 	nifInfo         = 0x10
 	nifShowTip      = 0x80 // keep the standard tooltip under version 4
 	niifInfo        = 0x01
-	niifNoSound     = 0x10
 	niifQuietTime   = 0x80 // NIIF_RESPECT_QUIET_TIME
-	iconVersion4    = 4    // NOTIFYICON_VERSION_4
+	balloonFlags    = niifInfo | niifQuietTime
+	iconVersion4    = 4 // NOTIFYICON_VERSION_4
 	idiInformation  = 32516
 	hwndMessage     = ^uintptr(2) // HWND_MESSAGE, (HWND)-3
 	wmApp           = 0x8000
@@ -298,10 +298,10 @@ func addIcon(wnd uintptr, id uint16) bool {
 	return false
 }
 
-// balloon shows a silent balloon on icon id that respects quiet time (the
-// previous notification's icon, and so its balloon, is gone already).
+// balloon shows a balloon with the person's configured Windows notification
+// sound and respects quiet time (the previous icon and balloon are gone).
 func balloon(wnd uintptr, id uint16, title, body string) bool {
-	nid := notifyIconData{Wnd: wnd, ID: uint32(id), Flags: nifInfo, InfoFlags: niifInfo | niifNoSound | niifQuietTime}
+	nid := notifyIconData{Wnd: wnd, ID: uint32(id), Flags: nifInfo, InfoFlags: balloonFlags}
 	copyUTF16(nid.InfoTitle[:], title)
 	copyUTF16(nid.Info[:], body)
 	return shellNotify(nimModify, &nid)
