@@ -7,6 +7,7 @@ import { runInNewContext } from 'node:vm';
 import { api, errorText } from '../web/src/api.ts';
 import model from './comic_model.mjs';
 import { pendingSends } from '../static/optimistic.mjs';
+import { share } from '../web/src/structural.ts';
 import { mainPreferences, personRoots } from '../skins/shared/person-topics.mjs';
 const { messageTarget } = model;
 
@@ -62,7 +63,7 @@ async function storeJourney(platform) {
     },
   };
   const { native, ...globals } = env;
-  const Store = runInNewContext(storeSource + '\nStore', { ...globals, api, errorText, pendingSends, messageTarget, mainPreferences, personRoots, brand: { storage: 'agentnet.messenger' } });
+  const Store = runInNewContext(storeSource + '\nStore', { ...globals, api, errorText, pendingSends, share, messageTarget, mainPreferences, personRoots, brand: { storage: 'agentnet.messenger' } });
   const store = new Store(host);
   await store.start();
   const opened = store.open({ kind: 'dm', id: 'conversation' });

@@ -307,6 +307,7 @@ func (a *Agent) Resolve(id string) error {
 		}
 		return errors.New("nothing to resolve: not marked needs_human or interrupted, nor held for you in a conversation")
 	}
+	a.NoteChange() // same-process readers must see the handled item immediately
 	notifyDaemon(a.home)
 	a.noteStatus(id)
 	return nil
