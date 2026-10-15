@@ -39,6 +39,7 @@ run_partition() {
 				if ($0=="TestProactiveAgentMessageAdmission") part=2
 				if ($0=="TestDMLiveAgentContext") part=7
 				if ($0=="TestGroupParticipationHistoryDismissedLinkedRestartReorder") part=10
+				if ($0=="TestGroupGuestPublicJourney") part=3
 			}
 			if (part==k) print
 		}')
