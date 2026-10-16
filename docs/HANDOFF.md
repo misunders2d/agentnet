@@ -1,5 +1,19 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+## Next release — v0.8.32 in progress
+
+Sergey approved the [v32 publication goal](plans/V0_8_32_GOAL.md) and
+[shared checklist](plans/V0_8_32.md): notification tap/readiness, measured long-chat
+responsiveness, direct-agent steering, bounded WebKit diagnosis, exact outstanding
+coordination state and deliberate unread. Root orchestrates/reviews; three verified
+GPT-6.1-sol xhigh Codex workers implement in Herdr tab 3 under native automatic
+review. Claude Opus 5.5/xhigh/auto supplies explicit design, implementation and
+integrated pre-gate reviews. Initial design and concrete-seam reviews are collected;
+root challenges their claims against source before assigning changes. Focused
+implementation has started; no v32 gate, release or affected-device acceptance is
+claimed yet. Preserve v31 evidence, identities/history/queues and unrelated user
+plans. Projects, scheduled send, skin-cache recovery and iOS remain outside scope.
+
 ## Current release — v0.8.31, October 16, 2026
 
 [Download v0.8.31](https://github.com/misunders2d/agentnet/releases/tag/v0.8.31),
