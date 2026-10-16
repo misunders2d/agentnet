@@ -1,33 +1,79 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
-## Next release — v0.8.32 in progress
+## Current release — v0.8.32, October 16, 2026
 
-Sergey approved the [v32 publication goal](plans/V0_8_32_GOAL.md) and
-[shared checklist](plans/V0_8_32.md): notification tap/readiness, measured long-chat
-responsiveness, direct-agent steering, bounded WebKit diagnosis, exact outstanding
-coordination state and deliberate unread. Root orchestrates/reviews; three verified
-GPT-6.1-sol xhigh Codex workers implement in Herdr tab 3 under native automatic
-review. Claude Opus 5.5/xhigh/auto supplies explicit design, implementation and
-integrated pre-gate reviews. Design and significant N1/S1/P1/U1 implementation
-reviews are collected. Notification fetch, history scroll and unread fresh-entry
-corrections pass focused checks. Native/browser bounded unread deferral and
-actual Chrome storage/indexed rollback pass. All eight actual direct native
-steering cases (Codex, Claude, Pi and OMP; default and named) pass with a signed
-corrected answer in the original process/attempt and no settings changes.
-Corrected Comic rendered topic/read-only and standalone focused checks pass.
-Signed Go↔Browser Engine unread/tokenless-read/tombstone and exact carrier
-proof pass, including the reviewed older-reader coalescing/fairness correction.
-Full release and Android preservation qualification remain pending.
-MEL-647 all-status topic search was added by the owner; native icon unread dots
-(MEL-648) are a non-blocking follow-up, without delaying this release. The history improvement is a
-measured frontend slice, without a ThinkPad/backend claim. Coordination lacks
-the exact incident correlation needed for a justified patch; WebKit remains an
-authorized unresolved carry-forward after bounded instrumentation preparation.
-No v32 full gate, release or affected-device acceptance is claimed yet.
-Preserve v31 evidence, identities/history/queues and unrelated user
-plans. Projects, scheduled send, skin-cache recovery and iOS remain outside scope.
+[Download v0.8.32](https://github.com/misunders2d/agentnet/releases/tag/v0.8.32),
+immutable tag `ac98b331ce11425d7595beceb53f123068ddd705`, published at
+13:34:11 UTC. Exact-tag [packaging 38907242867](https://github.com/misunders2d/agentnet/actions/runs/38907242867)
+passes all six jobs. All 13 public assets match downloaded SHA256SUMS and GitHub
+digests. Standalone and bundled Linux CLI report the exact clean tag. Public
+Android SHA256 `935f89e4ea0274f1bf3da0ee60ce9068e9f3cb7944a69f3430a8afbfde96128f`
+passes original signer, code 8032, nondebuggable, both ABIs and 16 KiB checks.
 
-## Current release — v0.8.31, October 16, 2026
+Notification navigation retains the exact target while local sync completes,
+with persistent retry/dismiss and bounded fetch reuse. Comic mounts recent message
+groups first and reveals older history while preserving targets and scroll
+position. A same-session frontend comparison improves click-to-usable 217/167 ms
+to 83/67 ms with 400→81 mounted rows; input remains about 16.7 ms. This is not
+backend, ThinkPad or standalone-skin performance acceptance. Ordinary direct-agent
+follow-ups now reach the exact active native run. All eight actual Codex, Claude,
+Pi and OMP default/named cases pass with a signed corrected answer in the original
+process group and attempt, without native settings changes. Deliberate single/from-here
+unread converges across linked devices using exact generations; stale/current-view
+acknowledgments cannot erase new marks. Topic search includes Active, Done and
+Archived together, retaining actual status and restoring the selected filter on clear.
+
+Whole vet, all 12 client race selections, other race packages, both UI partitions,
+real Chrome IndexedDB, native Linux/macOS/Windows, published-v31 mixed-version,
+desktop and container coverage are accounted for with valid unchanged passes
+retained. The combined client union is 1,272 executed passes plus 25 explicit
+opt-in/helper skips. This is **combined per-parent evidence, not one all-green
+client-0 workflow**: the unchanged derived-history parent has one CI pass and one
+CI failure at its 15-second inert-history wait, then one local race pass including
+all 19 nested controls. The cause remains unknown; no fix or CI-environment
+explanation is claimed. Client-0 used 590.520/600 seconds. Keep the failure-only
+probe for the next routine run rather than rerunning solely for a green result.
+
+[Gallery v2026.10.16.2](https://github.com/misunders2d/agentnet-skins/releases/tag/v2026.10.16.2),
+commit `1d8567f5ee9759b701216fd638f64740b9710c8c`, pins exact v32 and publishes
+Classic/Holonet/Zoom/Pulp 1.7.0 and Office 1.5.0. The unchanged integrated gate
+passes in 539.261 seconds: 179 Node tests, 7 contracts, 3 Comic journeys, 5 gallery
+acceptances and 22 applicable world suites; 5 N/A entries are excluded. All 121
+public files, catalog, five consent digests and 20 inspected previews are verified.
+Previews were rendered on production-identical `3ba44749`, with explicit provenance.
+
+One original-key APK from that production-identical source passes same-VM-boot
+v31→v32 warm/fresh-process cold and terminal pre-Activity preservation. Schema
+79→80 adds exactly two empty attention tables and two implicit primary-key indexes;
+all old typed rows/schema, 100 outbox rows including 3 queued, 200 messages,
+files, origin and Comic storage remain exact. All 25 scratch negatives pass.
+The raw cleanup exit 1 on TIME_WAIT remains recorded; a separate read-only
+checkpoint inside the original overall budget proves owned processes/ports absent
+and keys unchanged. The public APK is separately verified, not byte-identical.
+Physical-phone notifications, VM-reboot persistence and readable-cache recovery
+remain unqualified.
+
+The usual authorized Hub rollout passes in 92.911 seconds using the exact public
+Linux binary. Full stopped-store backup
+`/opt/agentnet-revived/backups/pre-v0.8.32-yf45yjxb` verifies 6,448 entries,
+SHA256 `115c6a6d85902348c191126ffae071ef931e51f16d32427d48441b299f0aab88`.
+At transition, realm, 56,157 messages, 6,441 blobs, 13 agents, 7 persons, 19 chain
+rows and schema 23 remain exact. Independent read-only verification confirms
+HTTPS v32, clean exact-tag binary, zero restarts, the same volume/environment and
+unchanged neighboring service; live messages then grew to 56,184. Only the image
+changes. The backup and prior image are retained for rollback; no identity,
+history, grant or request was reset or replayed.
+
+The [release record](plans/V0_8_32.md) preserves exact gates and limits. Root
+orchestrated/integrated; Codex workers implemented and Claude supplied independent
+D1/D2/D3 reviews. All four owned helpers are collected and closed; user panes and
+plans are preserved. MEL-645 and MEL-647 are Done. Broader MEL-610/646/644 remain
+open for unproved acceptance; MEL-641 lacks exact incident correlation and MEL-587
+WebKit exit heap corruption remains an authorized unresolved carry-forward.
+MEL-648 icon badges are separately scheduled for v0.8.33; MEL-615 inline videos
+remain non-blocking Backlog. Projects remains reserved for v0.9.0.
+
+## Previous release — v0.8.31, October 16, 2026
 
 [Download v0.8.31](https://github.com/misunders2d/agentnet/releases/tag/v0.8.31),
 immutable tag `1894c6cd79c961e3e4df11b2779d24ca26bc8523`, published at

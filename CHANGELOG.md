@@ -6,6 +6,8 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+## [0.8.32] — 2026-10-16
+
 - Keep notification navigation bound to the exact message while local sync is
   incomplete, with persistent retry/dismiss feedback. Reuse loaded overview
   data and avoid repeated whole-inbox searches for a missing legacy target.
