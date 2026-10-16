@@ -176,10 +176,10 @@ export function Header({ ctx, wide, helpers: hs, canInvite }: { ctx: Ctx; wide: 
   return (
     <><header data-part="conversation-head" className={"flex shrink-0 items-center gap-2 border-b-[1.5px] border-outline bg-surface " + (wide ? "h-[76px] px-5" : "h-16 pl-1 pr-1.5")}>
       {!wide && (
-        <button type="button" onClick={() => store.close()} aria-label="Back to chats"
+        <button type="button" onClick={() => store.close()} aria-label={store.returningToReview ? "Back to Review" : "Back to chats"}
           className="flex h-11 shrink-0 items-center rounded-full pl-1 pr-1.5 hover:bg-sunken">
           <IconChevronLeft size={26} stroke={2.2} />
-          <span className="text-[13px] font-semibold">Chats</span>
+          <span className="text-[13px] font-semibold">{store.returningToReview ? "Review" : "Chats"}</span>
         </button>
       )}
       <button type="button" onClick={t ? () => store.setPanel(true) : undefined} disabled={!t}

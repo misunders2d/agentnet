@@ -39,22 +39,118 @@ func (a *Agent) nativeNotification(fragment, id, title, body string) {
 		}
 		return
 	}
-	n := NativeNotification{Fragment: fragment, Title: title, Body: body}
-	if protocol.ValidID(id) {
-		a.notificationMessage(&n, id)
+	a.nativeNotifyContent(a.nativeDisplay(fragment, id, title, body, false))
+}
+
+// NativeNotificationPreviewDefault describes the actual message-display host.
+// Legacy fragment-only callbacks cannot choose content and advertise no control.
+// Run publishes these immutable fields before its Owned/UI callback starts.
+func (a *Agent) NativeNotificationPreviewDefault() NotificationPreview {
+	if value := a.nativePreviewHost.Load(); value != nil {
+		return value.(NotificationPreview)
 	}
+	return NotificationPreviewHidden
+}
+
+func (a *Agent) publishNativePreviewHost(opts RunOptions) {
+	value := NotificationPreviewHidden
+	if opts.NotifyContent != nil {
+		value = opts.NotifyPreviewDefault
+		if value == "" {
+			value = NotificationPreviewFull
+		}
+		if !validNotificationPreview(value) {
+			value = NotificationPreviewHidden
+		}
+	} else if opts.Notify != nil {
+		value = ""
+	}
+	a.nativePreviewHost.Store(value)
+}
+
+// One exact local lookup and one final mask, shared by desktop and callbacks.
+func (a *Agent) nativeDisplay(fragment, id, title, body string, builtin bool) NativeNotification {
+	category := notificationCategory(title) // classify only the original trusted product title
+	n := NativeNotification{Fragment: fragment, Title: title, Body: body}
+	author := ""
+	if protocol.ValidID(id) {
+		n.Body = "New activity" // no stale caller text when the exact lookup fails
+		var found bool
+		author, found = a.notificationMessage(&n, id)
+		if !found {
+			n.Fragment = "review"
+		}
+	}
+	fallback := a.nativeNotifyPreviewDefault
+	if builtin {
+		fallback = NotificationPreviewHidden
+	}
+	return a.maskNativeNotificationDefault(n, author, fallback, category)
+}
+
+// Only literal product titles classify a private, fixed signal. Never preserve
+// caller body, counts, remote labels, errors or an already enriched title.
+func notificationCategory(title string) string {
+	switch title {
+	case "Reminder":
+		return "reminder"
+	case "Decision needed":
+		return "decision"
+	case "AgentNet — company settings access":
+		return "security"
+	default:
+		return "activity"
+	}
+}
+
+// Apply privacy last, after exact attribution/control projection and bounds.
+// System notices reuse this policy without changing their delivery callback.
+func (a *Agent) maskNativeNotification(n NativeNotification, author string) NativeNotification {
+	return a.maskNativeNotificationDefault(n, author, a.nativeNotifyPreviewDefault, notificationCategory(n.Title))
+}
+
+func (a *Agent) maskNativeNotificationDefault(n NativeNotification, author string, fallback NotificationPreview, category string) NativeNotification {
 	n.Title, n.Body = notificationText(n.Title, 100), notificationText(n.Body, 240)
-	a.nativeNotifyContent(n)
+	preview, err := a.notificationPreview()
+	if err != nil {
+		preview = NotificationPreviewHidden
+	}
+	if preview == "" {
+		preview = fallback
+	}
+	if preview == "" {
+		preview = NotificationPreviewFull
+	}
+	switch preview {
+	case NotificationPreviewFull:
+		return n
+	case NotificationPreviewSender:
+		if author = notificationText(author, 100); author != "" {
+			n.Title, n.Body = author, "New message"
+			return n
+		}
+	}
+	n.Title, n.Body = "AgentNet", "New activity"
+	switch category {
+	case "reminder":
+		n.Body = "A reminder is due"
+	case "decision":
+		n.Body = "A request needs your decision"
+	case "security":
+		n.Title, n.Body = "AgentNet — company settings access", "Open AgentNet to review"
+	}
+	return n
 }
 
 // Read one exact stored target and its controls, not a conversation/overview.
 // Nothing in this display lookup fetches keys, history, files or network data.
-func (a *Agent) notificationMessage(n *NativeNotification, id string) {
+func (a *Agent) notificationMessage(n *NativeNotification, id string) (author string, found bool) {
 	m, err := a.store.inboxMessage(id)
 	if err != nil {
 		return
 	}
 	var key, conv, lid, topic, origin, pid, human string
+	direction := "in"
 	if m == nil {
 		// A reminder may name our exact sent copy. Use its own plaintext and
 		// sealed outer kind; never look through the conversation for a match.
@@ -66,23 +162,30 @@ func (a *Agent) notificationMessage(n *NativeNotification, id string) {
 			return
 		}
 		m.Kind, key = sealed.Kind, a.Self().Fingerprint()
+		direction = "out"
 	} else {
 		err = a.store.db.QueryRow(`SELECT coalesce(verified_by,''), coalesce(conv,''), coalesce(lid,''), coalesce(topic,''), coalesce(origin,''), coalesce(pid,''), coalesce(human,'') FROM inbox WHERE id=?`, id).Scan(&key, &conv, &lid, &topic, &origin, &pid, &human)
 	}
 	if err != nil || key == "" {
 		return
 	}
+	found = true
 	// The exact stored conversation is already known here. Carry it in the
 	// existing route so a tap needs one local view, not every conversation.
-	if protocol.ValidHash(conv) {
-		if direction, ok := strings.CutPrefix(n.Fragment, "msg="+id+"&dir="); ok && (direction == "in" || direction == "out") {
-			n.Fragment = "msg=" + id + "&conv=" + conv + "&dir=" + direction
+	if supplied, ok := strings.CutPrefix(n.Fragment, "msg="+id+"&dir="); ok && (supplied == "in" || supplied == "out") {
+		n.Fragment = "msg=" + id
+		if protocol.ValidHash(conv) {
+			n.Fragment += "&conv=" + conv
 		}
+		// The exact lookup, including our own sent-copy branch, determines
+		// direction. Reminder callers also use the generic review helper.
+		n.Fragment += "&dir=" + direction
 	}
 	sender := a.senderHere(m.From, key)
 	name := m.From
-	if sender.Relation != SenderUnverified && sender.Label != "" {
-		name = sender.Label
+	verifiedAuthor := false
+	if sender.Relation != SenderUnverified && sender.Label != "" && (m.From != a.Address || key == a.Self().Fingerprint()) {
+		name, verifiedAuthor = sender.Label, true
 	}
 	agent := m.Kind == envelope.KindAnswer || m.Kind == envelope.KindResult
 	if conv != "" {
@@ -110,6 +213,9 @@ func (a *Agent) notificationMessage(n *NativeNotification, id string) {
 				}
 			}
 		}
+	}
+	if verifiedAuthor {
+		author = name
 	}
 	if n.Title != "AgentNet" {
 		name = n.Title + " · " + name
@@ -151,6 +257,7 @@ func (a *Agent) notificationMessage(n *NativeNotification, id string) {
 		}
 	}
 	n.Body = preview
+	return
 }
 
 // Restrict the existing signed-control resolver to this exact message. Its

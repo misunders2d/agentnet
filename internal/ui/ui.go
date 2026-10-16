@@ -57,7 +57,9 @@ type Simulator interface {
 
 // Overview is what the page shows around the open thread.
 type Overview struct {
-	Groups           bool                  `json:"groups"` // explicit human group operations; never agent execution
+	UnreadTotal      *int                  `json:"unread_total,omitempty"` // nil: provider has not projected it
+	AlertTotal       *int                  `json:"alert_total,omitempty"`  // local conversation mutes only
+	Groups           bool                  `json:"groups"`                 // explicit human group operations; never agent execution
 	GroupInvitations []GroupInvitationView `json:"group_invitations,omitempty"`
 	ReplyReceivers   bool                  `json:"reply_receivers"` // native local continuation selection/read-only state
 	ReplySessions    bool                  `json:"reply_sessions"`  // safe native registration catalog, not process liveness
@@ -88,6 +90,9 @@ type Overview struct {
 	// which is device history.
 	NeedsYou []ConvItem `json:"needs_you"`
 	Held     []ConvItem `json:"held"`
+
+	Schedules bool `json:"schedules"` // local durable scheduled sending is supported
+
 	// Human DMs, when the provider holds them (Persons): this installation's
 	// person (nil until the person creates one), the people known or listed,
 	// and the two-person conversations. They are never part of Threads.
@@ -717,13 +722,15 @@ type Reminders interface {
 // (docs/revival/NOTIFY.md). The browser device's engine sends the same
 // shape for Web Push.
 type NotifyView struct {
-	Available bool     `json:"available"`
-	Native    bool     `json:"native"` // this computer shows the alert itself: no browser permission is asked
-	Enabled   bool     `json:"enabled"`
-	Pending   bool     `json:"pending"`
-	Reason    string   `json:"reason,omitempty"`
-	Mutes     []string `json:"mutes"`   // conversation ids
-	Allowed   []string `json:"allowed"` // addresses whose DM turns may alert
+	Preview        string   `json:"preview,omitempty"`         // local native message preview preference; empty means host default
+	PreviewDefault string   `json:"preview_default,omitempty"` // absent when this host cannot choose preview content
+	Available      bool     `json:"available"`
+	Native         bool     `json:"native"` // this computer shows the alert itself: no browser permission is asked
+	Enabled        bool     `json:"enabled"`
+	Pending        bool     `json:"pending"`
+	Reason         string   `json:"reason,omitempty"`
+	Mutes          []string `json:"mutes"`   // conversation ids
+	Allowed        []string `json:"allowed"` // addresses whose DM turns may alert
 }
 
 // Alerts is implemented by providers that alert for DMs on this computer
@@ -735,6 +742,11 @@ type Alerts interface {
 	NotifyMute(conv string, muted bool) (string, error)
 	NotifyAllow(person string, allowed bool) (string, error)
 	NotifySeen(conv string, ids []string) error
+}
+
+// NotificationPreviews is optional: browser push and older hosts stay generic.
+type NotificationPreviews interface {
+	NotifyPreview(preview string) (string, error)
 }
 
 // Participants is implemented by providers where agents can be invited

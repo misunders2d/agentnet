@@ -77,7 +77,7 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 			return ConvSent{}, errors.New("human: addressed turn does not name this exact active assistant")
 		}
 	}
-	if envelope.Blank(out.Body) && len(out.Files) == 0 {
+	if envelope.Blank(out.Body) && len(out.Files) == 0 && !envelope.TopicRename(out.TopicEvent) {
 		return ConvSent{}, errors.New("nothing to send")
 	}
 	if len(out.Files) > envelope.MaxAttachments {
@@ -318,7 +318,7 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 	if out.selfJob { // asked on the host itself: its job is recorded with it
 		jobKey, local.ID, local.To = a.Self().Fingerprint(), in.LID, a.Address
 	}
-	if err := a.store.addConvOutbox(copies, local, a.queuedClaim(ctx, root.ID(), guard), jobKey, binding); err != nil {
+	if err := a.store.addConvOutboxGuarded(copies, local, a.queuedClaim(ctx, root.ID(), guard), jobKey, out.beforeStore, binding); err != nil {
 		return ConvSent{}, err
 	}
 	stored = true

@@ -1,44 +1,57 @@
-// Cheap actual AllTopics component check; JSX is transformed by installed esbuild.
-if(process.env.AGENTNET_TOPIC_SOURCE_CHECK==='1'){
- (async()=>{
-  const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),assert=require('node:assert/strict');
-  const ui=path.resolve(__dirname,'..'),esbuild=require(path.join(ui,'web/node_modules/esbuild'));
-  const source=fs.readFileSync(path.join(ui,'web/src/features/Conversation.alltopics.tsx'),'utf8').replace(/^import .*;$/gm,'');
-  const code=esbuild.transformSync(source,{loader:'tsx',jsxFactory:'h',format:'cjs'}).code;
-  const failures=[];
-  const test=async(label,run)=>{try{await run();console.log(label+' PASS');}catch(e){failures.push(label+': '+e.message);console.log('FAIL '+failures.at(-1));}};
-  const rows=['active','done','archived'].map((state,i)=>({id:String(i+1).repeat(32),state,title:'needle '+state,last:'retained line',peer:'peer/host',lastAt:'2026-10-05T10:00:00Z',unread:0,count:1}));
-  function harness({filter='active',query='needle',q=query.trim(),flat=false}={}){
-   const states=[filter,query,q,[], 'cursor',3,false,'',[],{},null,false,false],refs=[],calls=[],effects=[],timers=[];
-   let si=0,ri=0;
-   const h=(tag,props,...children)=>({tag,props:{...props,children:children.flat(Infinity).filter(x=>x!==false&&x!=null)}});
-   const store={get:()=>({views:{}}),api:{topics:async body=>{calls.push(body);return{topics:rows,matched:3,next:'cursor'};}}};
-   const context={module:{exports:{}},exports:{},h,Dialog:Object.fromEntries(['Root','Portal','Backdrop','Popup','Title','Description','Close'].map(x=>[x,'Dialog.'+x])),IconChevronLeft:'Icon',IconSearch:'Icon',IconX:'Icon',Button:'Button',IconButton:'IconButton',TopicMark:'TopicMark',
-    useApp:()=>store,useWide:()=>true,useStore:()=>({seq:1,threads:[]}),usePortal:()=>null,useModal:()=>({}),
-    useState:init=>{const i=si++;if(!(i in states))states[i]=typeof init==='function'?init():init;return[states[i],v=>{states[i]=typeof v==='function'?v(states[i]):v;}];},
-    useRef:init=>{const i=ri++;return refs[i]??(refs[i]={current:init});},useEffect:(fn,deps)=>effects.push(fn),
-    setTimeout:fn=>{timers.push(fn);return timers.length;},clearTimeout(){},TOPICS:{searchDelay:1,pageSize:2,pageMax:200},topicOf:t=>t,firstLine:t=>t,when:()=>'',topicLabel:t=>t.title,errorText:e=>e.message};
-   context.exports=context.module.exports;vm.runInNewContext(code,context);
-   const props={open:true,onOpenChange(){},peer:'peer/host',conv:flat?undefined:'c'.repeat(64),agent:'Fixture',flat:flat?{topics:rows,loading:false,failed:'',canSelect:()=>true,detail:()=>'',choose(){}}:undefined};
-   const render=()=>{si=ri=0;effects.length=0;return context.module.exports.AllTopics(props);};
-   const nodes=tree=>[tree,...(tree?.props?.children||[]).flatMap(x=>typeof x==='object'?nodes(x):[])];
-   const load=async()=>{const tree=render();for(const fn of effects)if(String(fn).includes('store.api.topics'))fn();await new Promise(r=>setImmediate(r));return tree;};
-   return{states,calls,render,nodes,load,async trim(){render();for(const fn of effects)if(String(fn).includes('setQ(query.trim())'))fn();for(const fn of timers.splice(0))fn();},rows};
+// Actual TopicBar compact-current fallback, with the existing fit callback.
+if(process.env.AGENTNET_TOPIC_COMPACT_CHECK==='1'){
+ const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+ const esbuild=require('../web/node_modules/esbuild');
+ const jsx=(tag,props,...children)=>({tag,props:{...props,children:children.flat(Infinity).filter(c=>c!==false&&c!=null)}});
+ const nodes=t=>t&&typeof t==='object'?[t,...(t.props?.children||[]).flatMap(nodes)]:[];
+ const source=fs.readFileSync(require('node:path').join(__dirname,'../web/src/features/Conversation.topics.tsx'),'utf8');
+ function render(options={},text=source){
+  const cfg={width:320,open:'named',listed:true,fresh:false,state:'active',...options};
+  const topics=[{id:'named',conv:'chat',title:'Named topic',state:cfg.state,unread:5,lastAt:'2026-10-16T00:00:00Z',count:1,needsYou:0},{id:'other',conv:'chat',title:'Other',state:'active',unread:7,lastAt:'2026-10-15T00:00:00Z',count:1,needsYou:0},{id:'closed',conv:'chat',title:'Closed',state:'archived',unread:3,lastAt:'2026-10-14T00:00:00Z',count:1,needsYou:0}];
+  const state={overview:{topic_list:cfg.listed},drafts:{chat:{topic:cfg.open||undefined,newTopic:cfg.fresh}},pending:null};
+  let cells=[],refs=[],cursor=0,refCursor=0;
+  const globals={module:{exports:{}},jsx,Fragment:'Fragment',
+   useState:init=>{const i=cursor++;if(!(i in cells))cells[i]=init;return[cells[i],v=>{cells[i]=typeof v==='function'?v(cells[i]):v;}];},
+   useRef:init=>{const i=refCursor++;return refs[i]??(refs[i]={current:i===0?{clientWidth:cfg.width,querySelector:()=>null}:i===1?{offsetWidth:80}:i===2?{offsetWidth:44}:init});},
+   useLayoutEffect:fn=>fn(),ResizeObserver:class{observe(){}disconnect(){}},getComputedStyle:()=>({columnGap:'8',paddingLeft:'12',paddingRight:'12'}),CSS:{escape:s=>s},
+   useApp:()=>({}),useWide:()=>false,useAgentNames:()=>({}),useStore:(_s,f)=>f(state),
+   useSteadyChoices:rows=>({choices:rows.map(row=>({row,present:true})),bind:{},release(){}}),unreadTopicOrder:()=>0,
+   chatList:()=>[],newestFirst:(a,b)=>b.lastAt.localeCompare(a.lastAt),topicOf:t=>t,topicMark:()=>null,firstLine:t=>t,dayLabel:()=>'day',timeOf:()=>'time',
+   TOPICS:{barMax:6,chipMinWidth:104,chipMaxWidth:'16rem',barTitle:40},AllTopics:'AllTopics',Menu:{Trigger:'Menu.Trigger'},
+   IconPlus:'Icon',IconListSearch:'Icon',IconAlertCircle:'Icon',IconArchive:'Icon',IconCircleCheck:'Icon',IconClock:'Icon',IconClockQuestion:'Icon',IconChevronDown:'Icon'};
+  globals.exports=globals.module.exports;
+  const code=esbuild.transformSync(text.replace(/^import[\s\S]*?from[^;]+;/gm,''),{loader:'tsx',jsxFactory:'jsx',jsxFragment:'Fragment',format:'cjs'}).code;
+  vm.runInNewContext(code,globals);
+  let tree;for(let i=0;i<2;i++){cursor=0;refCursor=0;tree=globals.module.exports.TopicBar({dm:{id:'chat',peer:{label:'Fixture'},main_topic:{unread:2},topics}});}
+  const menus=nodes(tree).filter(n=>n.tag?.name==='TopicMenu'),all=nodes(tree).find(n=>n.tag==='button'&&n.props['aria-label']?.startsWith('All topics'));
+  return {tree,menus,all,buttons:nodes(tree).filter(n=>n.tag==='button')};
+ }
+ // Existing fixed controls cost249px in this isolated geometry: free=width-249.
+ for(const state of ['active','done','archived']){
+  const view=render({state});assert.equal(view.menus.length,1);const trigger=view.menus[0].props.trigger;assert.equal(view.menus[0].props.topic.state,state);
+  assert.equal(trigger.props.style.minWidth,44);assert.equal(trigger.props['aria-current'],'true');assert.equal(trigger.props.title,'Named topic');assert.match(trigger.props['aria-label'],/^Named topic, 5 unread, open topic, menu$/);
+  assert(view.buttons.some(n=>n.props['aria-label']==='Main, 2 unread'));assert(view.buttons.some(n=>n.props['aria-label']==='New topic'));assert.match(view.all.props['aria-label'],/10 unread in other topics$/,'open unread excluded exactly once, archived unread remains');
+ }
+ for(const options of [{open:''},{fresh:true},{listed:false},{width:300}]){
+  const view=render(options);assert.equal(view.menus.length,0,JSON.stringify(options));
+  assert.equal(nodes(view.tree).filter(n=>n.props['data-topic']).length,0,'no dead fallback plain chip');
+  if(options.listed===false)assert.equal(view.all,undefined,'unlisted host has no All control');else assert.match(view.all.props['aria-label'],/15 unread in other topics$/);
+ }
+ assert.equal(render({width:301}).menus.length,1,'free52 equals44+gap, fits');
+ assert.equal(render({width:300}).menus.length,0,'free51 must not clip fixed controls');
+ for(const width of [361,473,1000]){
+  const current=render({width});assert.equal(current.menus.length,1);assert.equal(current.menus[0].props.trigger.props.style.minWidth,104,'normal room path retains chip minimum');
+  if(process.env.AGENTNET_TOPIC_BASE_SOURCE){
+   const before=render({width},fs.readFileSync(process.env.AGENTNET_TOPIC_BASE_SOURCE,'utf8'));
+   assert.equal(JSON.stringify(current.tree).replaceAll('tnum max-[359px]:hidden','tnum'),JSON.stringify(before.tree),'normal tree unchanged except approved narrow All label CSS');
   }
-  for(const filter of ['active','done','archived'])await test('search ignores '+filter+' tab; initial and more keep scope',async()=>{
-   const f=harness({filter});await f.load();assert.equal(f.calls[0].state,'');assert.equal(f.calls[0].conv,'c'.repeat(64));assert.equal(f.calls[0].peer,'peer/host');assert.equal(f.calls[0].q,'needle');
-   const more=f.nodes(f.render()).find(n=>n.tag==='Button'&&n.props.children.join('').startsWith('Show more'));assert(more);more.props.onClick();await new Promise(r=>setImmediate(r));assert.equal(f.calls[1].state,'');assert.equal(f.calls[1].before,'cursor');assert.equal(f.calls[1].conv,f.calls[0].conv);assert.equal(f.calls[1].q,'needle');
-  });
-  await test('flat personal topics search spans active/done/archived and retains statuses',async()=>{
-   for(const filter of ['active','done','archived']){const f=harness({filter,flat:true}),tree=f.render();assert.equal(f.nodes(tree).filter(n=>n.tag==='li').length,3);assert.deepEqual(f.nodes(tree).filter(n=>n.tag==='TopicMark').map(n=>n.props.t.state),['active','done','archived']);await f.load();assert.equal(f.calls.length,0);}
-  });
-  await test('trimmed whitespace/clear restore selected Done filter and copy',async()=>{
-   const f=harness({filter:'done',query:'   ',q:'needle'});await f.trim();assert.equal(f.states[2],'');await f.load();assert.equal(f.calls[0].state,'done');
-   f.states[1]=' needle ';await f.trim();await f.load();assert.equal(f.calls[1].q,'needle');assert.equal(f.calls[1].state,'');
-   f.states[1]='';await f.trim();await f.load();assert.equal(f.calls[2].state,'done');assert.equal(f.states[0],'done');
-  });
-  assert.deepEqual(failures,[]);console.log('actual AllTopics source/model PASS');
- })().catch(e=>{console.error(e);process.exitCode=1;});
+ }
+ console.log('PASS actual TopicBar: room0 current/state/menu44; Main/fresh/unlisted/no-fit guards; exact52/51 boundary; unread excluded once; room>=1 unchanged');
+}else // Cheap actual AllTopics component check; JSX is transformed by installed esbuild.
+if(process.env.AGENTNET_TOPIC_SOURCE_CHECK==='1'){
+ const {spawnSync}=require('node:child_process'),path=require('node:path');
+ const result=spawnSync(process.execPath,[path.join(__dirname,'review_topics_ui_check.mjs')],{stdio:'inherit'});
+ process.exitCode=result.status??1;
 }else{
 // Topics as the messenger renders them (topics_rendered_test.go): the bar,
 // the open topic's menu, All topics and the end of a done topic, at

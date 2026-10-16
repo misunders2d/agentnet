@@ -1,12 +1,15 @@
 package ui
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -228,6 +231,471 @@ func TestWorkspaceJoinSafeFailuresRetainRetryID(t *testing.T) {
 		}
 		if rec.Code != c.status || body["retry_id"] != id || body["error"] == "" || strings.Contains(rec.Body.String(), "PRIVATE_SECRET") || strings.Contains(rec.Body.String(), valid) {
 			t.Fatalf("unsafe or unhelpful failure %d %s", rec.Code, rec.Body.String())
+		}
+	}
+}
+
+// The route uses these provider-owned channels without adding a waiter per mount.
+type workspacePushProvider struct {
+	Provider
+	mu       sync.Mutex
+	view     client.ViewChange
+	wake     chan struct{}
+	observed chan uint64
+}
+
+func (p *workspacePushProvider) ViewChanges() (client.ViewChange, <-chan struct{}) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	select {
+	case p.observed <- p.view.Seq:
+	default:
+	}
+	return p.view, p.wake
+}
+func (p *workspacePushProvider) bump(kind string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.view.Seq++
+	switch kind {
+	case "typing":
+		p.view.Typing = p.view.Seq
+	case "presence":
+		p.view.Presence = p.view.Seq
+	default:
+		p.view.Content = p.view.Seq
+	}
+	close(p.wake)
+	p.wake = make(chan struct{})
+}
+func (p *workspacePushProvider) seen(t *testing.T, seq uint64) {
+	t.Helper()
+	for {
+		select {
+		case got := <-p.observed:
+			if got >= seq {
+				return
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("provider channel was not rearmed")
+		}
+	}
+}
+func TestWorkspaceEventsAuthenticatedContentAndMembership(t *testing.T) {
+	a := &workspacePushProvider{Provider: NewFixture(time.Now), wake: make(chan struct{}), observed: make(chan uint64, 20)}
+	set := NewWorkspaceProviders()
+	first, err := set.Bind(client.Workspace{ID: "default", State: "enrolled", Name: "PRIVATE name", Endpoint: "https://private.example", Address: "private/device"}, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var handler http.Handler
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { handler.ServeHTTP(w, r) }))
+	defer ts.Close()
+	server := New(a, strings.TrimPrefix(ts.URL, "http://"), testToken)
+	handler = server.WorkspaceHandler(set)
+	for _, headers := range []map[string]string{nil, {"Cookie": "agentnet_ui=" + testToken, "Origin": "https://foreign.example"}} {
+		req, _ := http.NewRequest("GET", ts.URL+"/api/workspaces/events", nil)
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		res, err := ts.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		if res.StatusCode != 401 && res.StatusCode != 403 {
+			t.Fatal("unguarded workspace events", res.StatusCode)
+		}
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", ts.URL+"/api/workspaces/events", nil)
+	req.Header.Set("Cookie", "agentnet_ui="+testToken)
+	res, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		t.Fatalf("workspace stream status=%d", res.StatusCode)
+	}
+	scanner := bufio.NewScanner(res.Body)
+	next := func() (string, map[string]any) {
+		t.Helper()
+		name := ""
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.HasPrefix(line, "event: ") {
+				name = strings.TrimPrefix(line, "event: ")
+			}
+			if strings.HasPrefix(line, "data: ") {
+				var data map[string]any
+				if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &data); err != nil {
+					t.Fatal(err)
+				}
+				raw := fmt.Sprint(data)
+				if strings.Contains(raw, "PRIVATE") || strings.Contains(raw, "private") {
+					t.Fatal("private metadata leaked")
+				}
+				return name, data
+			}
+		}
+		t.Fatal("missing stream event", scanner.Err())
+		return "", nil
+	}
+	name, data := next()
+	if name != "workspaces" || data["rev"] != float64(1) {
+		t.Fatal(name, data)
+	}
+	binding := data["bindings"].([]any)[0].(map[string]any)
+	if binding["id"] != "default" || binding["handle"] != first.Handle || binding["seq"] != float64(0) || len(binding) != 3 {
+		t.Fatal(binding)
+	}
+	a.seen(t, 0)
+	a.bump("typing")
+	a.seen(t, 1)
+	a.bump("presence")
+	a.seen(t, 2)
+	a.bump("")
+	name, data = next()
+	if name != "change" || data["seq"] != float64(3) || data["handle"] != first.Handle {
+		t.Fatal("typing/presence became content", name, data)
+	}
+	generic := NewFixture(time.Now)
+	second, err := set.Bind(client.Workspace{ID: strings.Repeat("b", 32), State: "enrolled"}, generic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name, data = next()
+	if name != "workspaces" || len(data["bindings"].([]any)) != 2 {
+		t.Fatal(name, data)
+	}
+	if err := generic.Simulate("arrival"); err != nil {
+		t.Fatal(err)
+	}
+	name, data = next()
+	if name != "change" || data["id"] != second.ID || data["handle"] != second.Handle {
+		t.Fatal("generic provider fallback missing", name, data)
+	}
+	set.Remove(first.ID)
+	name, data = next()
+	if name != "workspaces" || len(data["bindings"].([]any)) != 1 {
+		t.Fatal(name, data)
+	}
+	a.bump("")
+	generic.Simulate("arrival")
+	name, data = next()
+	if name != "change" || data["id"] != second.ID {
+		t.Fatal("removed old handle revived", name, data)
+	}
+	cancel()
+}
+
+func TestWorkspaceMembershipWakeSnapshotAndConcurrentMutation(t *testing.T) {
+	set := NewWorkspaceProviders()
+	rev, wake, _ := set.snapshot()
+	if rev != 0 {
+		t.Fatal(rev)
+	}
+	provider := NewFixture(time.Now)
+	_, err := set.Bind(client.Workspace{ID: "default", State: "enrolled"}, provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-wake:
+	default:
+		t.Fatal("successful Bind lost wake")
+	}
+	rev, wake, entries := set.snapshot()
+	if rev != 1 || len(entries) != 1 {
+		t.Fatal(rev, entries)
+	}
+	if _, err = set.Bind(client.Workspace{ID: "default", State: "enrolled"}, provider); err == nil {
+		t.Fatal("duplicate bound")
+	}
+	set.Remove("missing")
+	select {
+	case <-wake:
+		t.Fatal("failed/no-op mutation woke")
+	default:
+	}
+	set.Remove("default")
+	select {
+	case <-wake:
+	default:
+		t.Fatal("real Remove lost wake")
+	}
+	if rev, _, entries = set.snapshot(); rev != 2 || len(entries) != 0 {
+		t.Fatal(rev, entries)
+	}
+	var workers sync.WaitGroup
+	for worker := 0; worker < 4; worker++ {
+		workers.Add(1)
+		go func(worker int) {
+			defer workers.Done()
+			id := fmt.Sprintf("%032x", worker+1)
+			for step := 0; step < 30; step++ {
+				set.Bind(client.Workspace{ID: id, State: "enrolled"}, provider)
+				set.Remove(id)
+			}
+		}(worker)
+	}
+	done := make(chan struct{})
+	go func() { workers.Wait(); close(done) }()
+	for {
+		before, ch, _ := set.snapshot()
+		after, _, _ := set.snapshot()
+		if after > before {
+			select {
+			case <-ch:
+			default:
+				t.Fatal("advanced map revision kept old wake open")
+			}
+		}
+		select {
+		case <-done:
+			return
+		default:
+		}
+	}
+}
+
+func TestWorkspaceEventsCancelAndRestartDrainOwnedHandler(t *testing.T) {
+	for _, action := range []string{"cancel", "restart"} {
+		t.Run(action, func(t *testing.T) {
+			fixture := NewFixture(time.Now)
+			set := NewWorkspaceProviders()
+			set.Bind(client.Workspace{ID: "default", State: "enrolled"}, fixture)
+			var handler http.Handler
+			done := make(chan struct{})
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { defer close(done); handler.ServeHTTP(w, r) }))
+			defer ts.Close()
+			server := New(fixture, strings.TrimPrefix(ts.URL, "http://"), testToken)
+			handler = server.WorkspaceHandler(set)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			req, _ := http.NewRequestWithContext(ctx, "GET", ts.URL+"/api/workspaces/events", nil)
+			req.Header.Set("Cookie", "agentnet_ui="+testToken)
+			res, err := ts.Client().Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer res.Body.Close()
+			scanner := bufio.NewScanner(res.Body)
+			if !scanner.Scan() || scanner.Text() != "event: workspaces" {
+				t.Fatal("initial membership absent")
+			}
+			if action == "cancel" {
+				cancel()
+			} else {
+				server.Restarting()
+			}
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("owned stream handler did not drain")
+			}
+		})
+	}
+}
+
+type workspaceBrokenWriter struct {
+	*httptest.ResponseRecorder
+	failFlush bool
+}
+
+func (w workspaceBrokenWriter) Write(data []byte) (int, error) {
+	if !w.failFlush {
+		return 0, fmt.Errorf("closed reader")
+	}
+	return w.ResponseRecorder.Write(data)
+}
+func (w workspaceBrokenWriter) FlushError() error { return fmt.Errorf("closed reader") }
+func TestWorkspaceEventsWriteOrFlushFailureReturns(t *testing.T) {
+	for _, flush := range []bool{false, true} {
+		fixture := NewFixture(time.Now)
+		set := NewWorkspaceProviders()
+		set.Bind(client.Workspace{ID: "default", State: "enrolled"}, fixture)
+		server := New(fixture, "127.0.0.1:12345", testToken)
+		req := httptest.NewRequest("GET", "http://127.0.0.1:12345/api/workspaces/events", nil)
+		req.Header.Set("Cookie", "agentnet_ui="+testToken)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			server.WorkspaceHandler(set).ServeHTTP(workspaceBrokenWriter{httptest.NewRecorder(), flush}, req)
+		}()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("failed local event writer retained handler")
+		}
+	}
+}
+
+// A non-draining authenticated reader may block either Write or Flush. Its
+// pending event must never borrow the provider-map lock while doing that I/O.
+type workspaceStalledWriter struct {
+	*httptest.ResponseRecorder
+	flush                  bool
+	calls, sent            int
+	blocked, release       chan struct{}
+	firstSent, changedSent chan struct{}
+}
+
+func (w *workspaceStalledWriter) stall() {
+	w.calls++
+	if w.calls == 2 {
+		close(w.blocked)
+		<-w.release
+	}
+}
+func (w *workspaceStalledWriter) Write(data []byte) (int, error) {
+	if !w.flush {
+		w.stall()
+	}
+	return w.ResponseRecorder.Write(data)
+}
+func (w *workspaceStalledWriter) FlushError() error {
+	if w.flush {
+		w.stall()
+	}
+	w.ResponseRecorder.Flush()
+	w.sent++
+	if w.sent == 1 {
+		close(w.firstSent)
+	}
+	if w.sent == 3 {
+		close(w.changedSent)
+	}
+	return nil
+}
+
+func TestWorkspaceEventsStalledReaderDoesNotLockMembership(t *testing.T) {
+	for _, emission := range []string{"content", "membership"} {
+		for _, flush := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/flush=%t", emission, flush), func(t *testing.T) {
+				provider := &workspacePushProvider{Provider: NewFixture(time.Now), wake: make(chan struct{}), observed: make(chan uint64, 20)}
+				set := NewWorkspaceProviders()
+				old, err := set.Bind(client.Workspace{ID: "default", State: "enrolled"}, provider)
+				if err != nil {
+					t.Fatal(err)
+				}
+				server := New(provider, "127.0.0.1:12345", testToken)
+				handler := server.WorkspaceHandler(set)
+				ctx, cancel := context.WithCancel(t.Context())
+				req := httptest.NewRequest("GET", "http://127.0.0.1:12345/api/workspaces/events", nil).WithContext(ctx)
+				req.Header.Set("Cookie", "agentnet_ui="+testToken)
+				writer := &workspaceStalledWriter{ResponseRecorder: httptest.NewRecorder(), flush: flush, blocked: make(chan struct{}), release: make(chan struct{}), firstSent: make(chan struct{}), changedSent: make(chan struct{})}
+				done := make(chan struct{})
+				var operations sync.WaitGroup
+				var release sync.Once
+				t.Cleanup(func() {
+					cancel()
+					release.Do(func() { close(writer.release) })
+					select {
+					case <-done:
+					case <-time.After(time.Second):
+						t.Error("owned stalled handler did not drain")
+					}
+					joined := make(chan struct{})
+					go func() { operations.Wait(); close(joined) }()
+					select {
+					case <-joined:
+					case <-time.After(time.Second):
+						t.Error("owned membership operations did not drain")
+					}
+				})
+				go func() { defer close(done); handler.ServeHTTP(writer, req) }()
+				select {
+				case <-writer.firstSent:
+				case <-time.After(time.Second):
+					t.Fatal("initial membership not flushed")
+				}
+				if emission == "content" {
+					provider.bump("")
+				} else if _, err := set.Bind(client.Workspace{ID: strings.Repeat("b", 32), State: "enrolled"}, NewFixture(time.Now)); err != nil {
+					t.Fatal(err)
+				}
+				select {
+				case <-writer.blocked:
+				case <-time.After(time.Second):
+					t.Fatal("pending event never reached stalled I/O")
+				}
+				results := make(chan string, 3)
+				bindErrors := make(chan error, 1)
+				operations.Add(3)
+				go func() {
+					defer operations.Done()
+					_, err := set.Bind(client.Workspace{ID: strings.Repeat("c", 32), State: "enrolled"}, NewFixture(time.Now))
+					bindErrors <- err
+					results <- "Bind"
+				}()
+				go func() { defer operations.Done(); set.Remove(old.ID); results <- "Remove" }()
+				go func() { defer operations.Done(); set.List(); results <- "List" }()
+				deadline := time.NewTimer(250 * time.Millisecond)
+				defer deadline.Stop()
+				finished := []string{}
+				for len(finished) < 3 {
+					select {
+					case name := <-results:
+						finished = append(finished, name)
+					case <-deadline.C:
+						t.Fatalf("stalled %s delayed Bind/Remove/List; completed only %v", emission, finished)
+					}
+				}
+				if err := <-bindErrors; err != nil {
+					t.Fatal(err)
+				}
+				stale := httptest.NewRequest("GET", "http://127.0.0.1:12345/workspaces/"+old.ID+"/"+old.Handle+"/api/overview", nil)
+				stale.Header.Set("Cookie", "agentnet_ui="+testToken)
+				response := httptest.NewRecorder()
+				handler.ServeHTTP(response, stale)
+				if response.Code != http.StatusConflict {
+					t.Fatalf("removed binding authoritative: %d", response.Code)
+				}
+				rev, _, _ := set.snapshot()
+				release.Do(func() { close(writer.release) })
+				select {
+				case <-writer.changedSent:
+				case <-time.After(time.Second):
+					t.Fatal("closed membership wake lost after stalled event")
+				}
+				cancel()
+				select {
+				case <-done:
+				case <-time.After(time.Second):
+					t.Fatal("handler did not stop after cancellation")
+				}
+				var latest struct {
+					Rev      uint64                  `json:"rev"`
+					Bindings []workspaceInvalidation `json:"bindings"`
+				}
+				event := ""
+				for _, line := range strings.Split(writer.Body.String(), "\n") {
+					if strings.HasPrefix(line, "event: ") {
+						event = strings.TrimPrefix(line, "event: ")
+					}
+					if event == "workspaces" && strings.HasPrefix(line, "data: ") {
+						if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &latest); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				if latest.Rev != rev {
+					t.Fatalf("membership revision %d, want %d", latest.Rev, rev)
+				}
+				found := false
+				for _, binding := range latest.Bindings {
+					if binding.ID == old.ID || binding.Handle == old.Handle {
+						t.Fatal("removed handle returned in authoritative membership")
+					}
+					found = found || binding.ID == strings.Repeat("c", 32)
+				}
+				if !found {
+					t.Fatal("new binding missing from current membership")
+				}
+			})
 		}
 	}
 }

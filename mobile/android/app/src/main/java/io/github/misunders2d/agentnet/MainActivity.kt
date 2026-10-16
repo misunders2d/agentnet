@@ -11,7 +11,10 @@ import android.os.Build
 import android.os.Bundle
 import android.util.Base64
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowInsets
+import android.view.WindowInsetsController
+import android.view.WindowManager
 import android.webkit.CookieManager
 import android.webkit.SslErrorHandler
 import android.net.http.SslError
@@ -45,6 +48,11 @@ class MainActivity : Activity() {
     private var resumed = false
     private var destroyed = false
     private var backPending = false
+    private var contentFrame: android.widget.FrameLayout? = null
+    private data class Fullscreen(val view: View, val callback: WebChromeClient.CustomViewCallback,
+        val systemUi: Int, val flags: Int, val statusVisible: Boolean, val navigationVisible: Boolean, val barsBehavior: Int)
+    private var fullscreen: Fullscreen? = null
+    private var hidingFullscreen = false
     private val updater by lazy { NativeUpdater(this) }
     private val updatePreferences by lazy { getSharedPreferences("native-update", MODE_PRIVATE) }
     private val updateResultListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
@@ -86,10 +94,10 @@ class MainActivity : Activity() {
         super.onResume(); resumed = true; showHost(host.state)
         web?.visibility = View.VISIBLE; web?.onResume(); applyVisibility()
     }
-    override fun onPause() { resumed = false; applyVisibility(); web?.onPause(); super.onPause() }
+    override fun onPause() { resumed = false; hideCustomView(); applyVisibility(); web?.onPause(); super.onPause() }
     override fun onStop() { resumed = false; applyVisibility(); web?.visibility = View.INVISIBLE; host.foreground(false); super.onStop() }
     override fun onDestroy() {
-        destroyed = true; updatePreferences.unregisterOnSharedPreferenceChangeListener(updateResultListener); host.remove(observer)
+        destroyed = true; hideCustomView(); updatePreferences.unregisterOnSharedPreferenceChangeListener(updateResultListener); host.remove(observer)
         chosenFiles?.onReceiveValue(null); chosenFiles = null
         scanReply = null
         pendingUpdate?.file?.delete(); pendingUpdate = null; updatePermissionReply = null
@@ -155,6 +163,11 @@ class MainActivity : Activity() {
             override fun onPageFinished(view: WebView, url: String) { if (guard.internal(url)) { applyVisibility(); routeNotification() } }
         }
         page.webChromeClient = object : WebChromeClient() {
+            override fun onShowCustomView(view: View, callback: CustomViewCallback) {
+                if (!guard.internal(page.url.orEmpty())) { callback.onCustomViewHidden(); return }
+                showCustomView(view, callback)
+            }
+            override fun onHideCustomView() { hideCustomView() }
             override fun onShowFileChooser(view: WebView, callback: ValueCallback<Array<Uri>>, params: FileChooserParams): Boolean {
                 if (!guard.internal(view.url.orEmpty()) || chosenFiles != null) return false
                 chosenFiles = callback
@@ -174,6 +187,7 @@ class MainActivity : Activity() {
             }
         }
         val frame = android.widget.FrameLayout(this).apply { setBackgroundColor(Color.rgb(79, 51, 196)); addView(page) }
+        contentFrame = frame
         frame.setOnApplyWindowInsetsListener { v, insets ->
             if (Build.VERSION.SDK_INT >= 30) {
                 val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
@@ -205,6 +219,7 @@ class MainActivity : Activity() {
     @Deprecated("Platform callback remains supported for minSdk26")
     override fun onBackPressed() { handleBack() }
     private fun handleBack() {
+        if (fullscreen != null) { hideCustomView(); return }
         if (backPending) return
         val page = web
         if (page == null || policy?.internal(page.url.orEmpty()) != true) { finish(); return }
@@ -213,6 +228,53 @@ class MainActivity : Activity() {
             backPending = false
             if (consumed != "true") finish()
         }
+    }
+    @Suppress("DEPRECATION")
+    private fun showCustomView(view: View, callback: WebChromeClient.CustomViewCallback) {
+        if (destroyed || !resumed || fullscreen != null || hidingFullscreen || view.parent != null) {
+            callback.onCustomViewHidden(); return
+        }
+        val decor = window.decorView as ViewGroup
+        val insets = if (Build.VERSION.SDK_INT >= 30) decor.rootWindowInsets else null
+        val saved = Fullscreen(view, callback, decor.systemUiVisibility, window.attributes.flags,
+            if (Build.VERSION.SDK_INT >= 30) insets?.isVisible(WindowInsets.Type.statusBars()) ?: true else true,
+            if (Build.VERSION.SDK_INT >= 30) insets?.isVisible(WindowInsets.Type.navigationBars()) ?: true else true,
+            if (Build.VERSION.SDK_INT >= 30) window.insetsController?.systemBarsBehavior ?: 0 else 0)
+        fullscreen = saved
+        decor.addView(view, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        if (Build.VERSION.SDK_INT >= 30) {
+            window.insetsController?.apply {
+                systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                hide(WindowInsets.Type.systemBars())
+            }
+        } else {
+            window.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,
+                WindowManager.LayoutParams.FLAG_FULLSCREEN or WindowManager.LayoutParams.FLAG_FORCE_NOT_FULLSCREEN)
+            decor.systemUiVisibility = saved.systemUi or View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+        }
+    }
+    @Suppress("DEPRECATION")
+    private fun hideCustomView() {
+        val saved = fullscreen ?: return
+        fullscreen = null // clear before the foreign callback can reenter
+        hidingFullscreen = true
+        try {
+            (saved.view.parent as? ViewGroup)?.removeView(saved.view)
+            window.setFlags(saved.flags,
+                WindowManager.LayoutParams.FLAG_FULLSCREEN or WindowManager.LayoutParams.FLAG_FORCE_NOT_FULLSCREEN)
+            window.decorView.systemUiVisibility = saved.systemUi
+            if (Build.VERSION.SDK_INT >= 30) {
+                window.insetsController?.apply {
+                    systemBarsBehavior = saved.barsBehavior
+                    if (saved.statusVisible) show(WindowInsets.Type.statusBars()) else hide(WindowInsets.Type.statusBars())
+                    if (saved.navigationVisible) show(WindowInsets.Type.navigationBars()) else hide(WindowInsets.Type.navigationBars())
+                }
+            }
+            contentFrame?.requestApplyInsets()
+            saved.callback.onCustomViewHidden()
+        } finally { hidingFullscreen = false }
     }
     private fun permitted(): Boolean = host.notificationsPermitted()
     private fun askPermission(done: (Boolean) -> Unit) {

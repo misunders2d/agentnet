@@ -1,0 +1,87 @@
+[
+  {
+    "name": "plain",
+    "body": "normal text\nsecond line",
+    "want": "normal text"
+  },
+  {
+    "name": "collective",
+    "body": "[@Amazon_team](agentnet:collective/v1/p.alpha,a.worker) Check inventory",
+    "want": "@Amazon_team Check inventory"
+  },
+  {
+    "name": "ordinary",
+    "body": "[@Casey](agentnet:person/casey) [@Helper](agentnet:agent/pid-a)",
+    "want": "@Casey @Helper"
+  },
+  {
+    "name": "guest",
+    "body": "[@Guest](agentnet:guest/guest_a)",
+    "want": "@Guest"
+  },
+  {
+    "name": "unicode",
+    "body": "😀 [@Команда](agentnet:collective/v1/a.abc) 中文",
+    "want": "😀 @Команда 中文"
+  },
+  {
+    "name": "code",
+    "body": "`plain code` and [docs](https://example.test)",
+    "want": "`plain code` and [docs](https://example.test)"
+  },
+  {
+    "name": "malformed",
+    "body": "[@team](agentnet:collective/v1/a.bad/name)",
+    "want": "[@team](agentnet:collective/v1/a.bad/name)"
+  },
+  {
+    "name": "version",
+    "body": "[@team](agentnet:collective/v2/a.good)",
+    "want": "[@team](agentnet:collective/v2/a.good)"
+  },
+  {
+    "name": "empty",
+    "body": "[@team](agentnet:collective/v1/)",
+    "want": "[@team](agentnet:collective/v1/)"
+  },
+  {
+    "name": "ordinary-bad",
+    "body": "[@x](agentnet:person/a/b)",
+    "want": "[@x](agentnet:person/a/b)"
+  },
+  {
+    "name": "long-id",
+    "body": "[@x](agentnet:agent/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)",
+    "want": "[@x](agentnet:agent/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)"
+  },
+  {
+    "name": "label80",
+    "body": "[@xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx](agentnet:person/a)",
+    "want": "@xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  },
+  {
+    "name": "label81",
+    "body": "[@xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx](agentnet:person/a)",
+    "want": "[@xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx](agentnet:person/a)"
+  },
+  {
+    "name": "astral-label40",
+    "body": "[@😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀](agentnet:person/a)",
+    "want": "@😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+  },
+  {
+    "name": "astral-label41",
+    "body": "[@😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀](agentnet:person/a)",
+    "want": "[@😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀](agentnet:person/a)"
+  },
+  {
+    "name": "unicode-clip",
+    "body": "界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界",
+    "want": "界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界…"
+  },
+  {
+    "name": "duplicates",
+    "body": "[@same](agentnet:collective/v1/p.a,p.a,a.b)",
+    "want": "@same"
+  }
+]

@@ -91,7 +91,7 @@ program, `agentnet`, that is both the laptop client and the Hub.
   when no job runs. The version header is unsigned: availability only, never
   authority.
 - **Keep it lean:** standard library first; current direct dependencies are
-  age, modernc SQLite, x/sys and the official A2A SDK. Add one only when a
+  age, modernc SQLite, x/sys, x/text Unicode normalization and the official A2A SDK. Add one only when a
   requirement needs it. No MCP server, no extra services.
 
 ## Code layout

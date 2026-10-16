@@ -66,7 +66,7 @@ func (a *Agent) admitGroupHistory(ctx context.Context, env envelope.Envelope, in
 	if item.V == 1 && item.PID != "" && item.Human != nil {
 		derived, _ := guestAgentCopy(nil, in.Conv, item.PID, item.Sub, item.Body, humanJSON(item.Human))
 		for _, ev := range item.Human.Proof {
-			if ev.Role == protocol.RoleHuman && !envelope.ProactiveAgent(item.inner(in.Conv)) && !derived {
+			if ev.Role == protocol.RoleHuman && !envelope.ProactiveAgent(item.inner(in.Conv)) && !derived && !envelope.TopicRename(item.TopicEvent) {
 				return hold(reasonInvalid, "group human guest execution audience is not enabled")
 			}
 		}
@@ -117,12 +117,18 @@ func (a *Agent) admitGroupHistory(ctx context.Context, env envelope.Envelope, in
 		if e != nil {
 			return e
 		}
+		if e := saveSharedTopicRename(tx, item.inner(in.Conv), item.FromKey); e != nil {
+			return e
+		}
 		if admission.AllowsHistory(historyRef(in.Conv, item)) {
 			return nil
 		}
 		_, e = tx.Exec(`UPDATE inbox SET group_admission=? WHERE id=?`, item.GroupAdmission, item.ID)
 		return e
 	}, func(tx *sql.Tx) error { return check(tx) })
+	if errors.Is(err, ErrSharedTopicTitleConflict) {
+		return hold(reasonInvalid, err.Error())
+	}
 	if err != nil {
 		return err
 	}

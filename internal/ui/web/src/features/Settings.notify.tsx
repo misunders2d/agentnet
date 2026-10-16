@@ -1,5 +1,5 @@
 // Notifications: off until the person turns them on here. An alert says
-// generic desktop/browser text; Android decrypts previews locally. Each chat can be
+// locally selected native text; closed-page browser push stays generic. Each chat can be
 // muted from its own menu; chats notify by default once alerts are on.
 import { useEffect, useRef, useState } from "react";
 import type { T } from "../api";
@@ -42,7 +42,7 @@ export function NotificationSummary({ n }: { n: T.NotifyView | undefined }) {
 export function NotificationsSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingElement> }) {
   const store = useApp();
   const o = useStore(store, (s) => s.overview);
-  const head = <PageHead title="Notifications" titleRef={titleRef} lead={store.host.android ? <>When someone writes, or an agent you brought in answers, Android shows the sender and a message preview. Your Android notification settings control sound, vibration and lock-screen privacy.</> : <>When someone writes, or an agent you brought in answers, this {store.host.platform !== "daemon" ? "device" : "computer"} shows “AgentNet: New activity”. Never what was written.</>} />;
+  const head = <PageHead title="Notifications" titleRef={titleRef} lead={<>When someone writes, or an agent you brought in answers, this device can notify you. Your operating system controls sound, vibration and lock-screen visibility.</>} />;
   if (!o) return <>{head}<Skeleton /></>;
   const n = o.notify;
   if (!n) return <>{head}<Card className="p-4"><p>Notifications aren’t available in this AgentNet.</p></Card><AndroidConnection /><Typing /></>;
@@ -140,6 +140,12 @@ function NotifyBody({ n }: { n: T.NotifyView }) {
     setBusy(false);
   };
 
+  const preview = async (value: "" | "full" | "sender" | "hidden") => {
+    setBusy(true);
+    await store.run((a) => a.notify("preview", { preview: value }), "Message preview preference saved.");
+    setBusy(false);
+  };
+
   if (!n.available) return <Card className="p-4"><p>{iphone ? "On iPhone, add AgentNet to your Home Screen first, then turn them on there." : n.reason || "Notifications aren’t available here."}</p></Card>;
 
   return (
@@ -161,9 +167,31 @@ function NotifyBody({ n }: { n: T.NotifyView }) {
         {android?.notificationSettings && <button type="button" className="mt-3 rounded-lg border border-hairline px-3 py-2 font-semibold" onClick={() => void openAndroidSettings()}>Android notification settings</button>}
         {n.pending && <Hint className="mt-3">Your server is told about this change when this page reconnects.</Hint>}
       </Card>
+      <NotificationPreviewControl n={n} busy={busy} onChange={value => void preview(value)} />
       <Hint className="px-1">Chats notify you unless muted. Use Mute in the chat’s menu to keep it quiet.</Hint>
     </div>
   );
+}
+
+/** Pure presentation: privacy changes never request permission or enable alerts. */
+export function NotificationPreviewControl({ n, busy, onChange }: {
+  n: T.NotifyView; busy: boolean; onChange: (value: "" | "full" | "sender" | "hidden") => void;
+}) {
+  if (!n.native) return <p className="px-1 text-[13px] text-muted">Browser notifications while the page is closed always hide message content.</p>;
+  const names: Record<string, string> = { full: "Full message preview", sender: "Sender only", hidden: "Hidden" };
+  if (!n.preview_default || !names[n.preview_default]) return null;
+  return <section className="rounded-xl border border-hairline p-4">
+    <label htmlFor="notification-preview" className="block font-semibold">Message previews</label>
+    <select id="notification-preview" className="mt-2 min-h-11 w-full rounded-lg border border-hairline bg-surface px-3" value={n.preview || ""} disabled={busy}
+      onChange={e => onChange(e.currentTarget.value as "" | "full" | "sender" | "hidden")}>
+      <option value="">Default ({names[n.preview_default]})</option>
+      <option value="full">Full message preview</option>
+      <option value="sender">Sender only</option>
+      <option value="hidden">Hidden</option>
+    </select>
+    <p className="mt-2 text-[13px] text-muted">Full shows the sender and current message text. Sender hides the text. Hidden omits names and message text, while keeping fixed activity, reminder, decision or security notices. This choice stays on this device in this workspace and does not turn notifications on.</p>
+    <p className="mt-2 text-[13px] text-muted">Previews may appear on a lock screen or remain in notification history. Your operating system controls that visibility. On macOS, clicking the current native banner does not open AgentNet.</p>
+  </section>;
 }
 
 /** Android connection lifetime is explicit; the notification carries a Stop action. */

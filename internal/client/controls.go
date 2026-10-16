@@ -1324,6 +1324,11 @@ const retractedOut = `EXISTS (SELECT 1 FROM outbox c WHERE c.sub = 'retraction' 
 // sent and retracted, unless a sent message that is not retracted still
 // shares a file: the last retraction of a shared file removes it.
 func (a *Agent) dropKept(ref ControlRef) {
+	release, err := a.scheduledFilesLock()
+	if err != nil {
+		return
+	}
+	defer release()
 	where, args := outScope(ref, a.Self().Fingerprint())
 	rows, err := a.store.db.Query(`SELECT s.sha256 FROM sent_attachments s JOIN outbox o ON o.id = s.message_id WHERE `+where, args...)
 	if err != nil {
@@ -1339,9 +1344,13 @@ func (a *Agent) dropKept(ref ControlRef) {
 	rows.Close()
 	for _, sha := range shas {
 		var n int
-		a.store.db.QueryRow(`SELECT count(*) FROM sent_attachments s JOIN outbox o ON o.id = s.message_id
+		err := a.store.db.QueryRow(`SELECT count(*) FROM sent_attachments s JOIN outbox o ON o.id = s.message_id
 			WHERE s.sha256 = ? AND NOT (`+where+`) AND NOT `+retractedOut, append([]any{sha}, args...)...).Scan(&n)
-		if n == 0 {
+		var scheduled bool
+		if err == nil {
+			err = a.store.db.QueryRow(`SELECT `+scheduledKeptReference+` FROM (SELECT ? AS sha256) s`, sha).Scan(&scheduled)
+		}
+		if err == nil && n == 0 && !scheduled {
 			os.Remove(a.keptPath(sha))
 		}
 	}

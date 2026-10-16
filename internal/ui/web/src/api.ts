@@ -40,6 +40,14 @@ export function api(host: Host) {
     host,
     // topics=1: archived topics are counted, not listed (they are paged through topics below).
     overview: () => get<T.Overview>("/api/overview?topics=1"),
+    unread: (p: { after?: string; limit?: number } = {}) => get<T.UnreadPage>(q("/api/unread", Object.fromEntries(Object.entries(p).filter(([,v])=>v!==undefined&&v!=="").map(([k,v])=>[k,String(v)])))),
+    schedules: (conv = "", all = false) => get<T.ScheduledSend[]>(q("/api/schedules", { conv, all: all ? "1" : "0" })),
+    schedule: (id: string) => get<T.ScheduledSend>(q("/api/schedules", { id })),
+    scheduleAudience: (conv: string, topic = "") => get<T.ScheduledAudience>(q("/api/schedule/audience", { conv, topic })),
+    createSchedule: (d: T.ScheduleDraft) => post<T.ScheduledSend>("/api/schedule/create", d),
+    editSchedule: (d: T.ScheduleDraft) => post<T.ScheduledSend>("/api/schedule/edit", d),
+    cancelSchedule: (id: string, rev: number) => post<T.ScheduledSend>("/api/schedule/cancel", { id, rev }),
+    sendScheduleNow: (id: string, rev: number) => post<T.ScheduledSend>("/api/schedule/send_now", { id, rev }),
     dm: (id: string) => get<T.DMThread>(q("/api/dm", { id })),
     approvals: () => get<T.ApprovalsView>("/api/approvals"),
     thread: (id: string) => get<T.Thread>(q("/api/thread", { id })),
@@ -131,7 +139,7 @@ export function api(host: Host) {
     remindDone: (id: string) => post<unknown>("/api/remind/done", { id }),
     remindCancel: (id: string) => post<unknown>("/api/remind/cancel", { id }),
     notifyResolve: (chan: string) => get<{ conv?: string }>(q("/api/notify/resolve", { chan })), // a browser notification's channel
-    notify: (what:"enable" | "disable" | "mute" | "allow" | "seen", body: { conv?: string; person?: string; muted?: boolean; allowed?: boolean; ids?: string[] } = {}) => post<{ note: string }>("/api/notify/" + what, body),
+    notify: (what:"enable" | "disable" | "mute" | "allow" | "seen" | "preview", body: { conv?: string; person?: string; muted?: boolean; allowed?: boolean; ids?: string[]; preview?: "" | "full" | "sender" | "hidden" } = {}) => post<{ note: string }>("/api/notify/" + what, body),
 
     // Teams and storage
     teams: () => get<T.TeamsView>("/api/teams"),

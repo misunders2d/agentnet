@@ -1,6 +1,7 @@
-// Package notify shows a desktop notification with fixed, content-free
-// text. Callers must never pass message content: the text may be shown on a
-// locked screen or kept by the notification server.
+// Package notify shows desktop notifications with locally masked, bounded
+// display text chosen by the person's local preview preference. Callers must
+// apply that mask before passing content: the OS may show it on a locked screen
+// or keep it in notification history. No display text goes to a push provider.
 package notify
 
 import (

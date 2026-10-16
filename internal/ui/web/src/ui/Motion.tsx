@@ -26,6 +26,7 @@ export function Swap({ id, children, className = "", side = "", enter, leave, ms
   enter: string; leave: string; ms: number;        // CSS classes (styles.css) and the leave duration
   label?: string;                                    // a data-swap name, for checks
 }) {
+  const parentLeaving = useLeaving();
   const [st, setSt] = useState<{ id: string; gone: Gone | null }>({ id, gone: null });
   const last = useRef<ReactNode>(children);
   if (st.id !== id) setSt({ id, gone: { id: st.id, node: last.current } }); // during render: the first frame already has both
@@ -52,7 +53,7 @@ export function Swap({ id, children, className = "", side = "", enter, leave, ms
     <div className={"relative isolate " + className} data-swap={label}>
       {/* Both sides have the same tree shape (div > Leaving > content): the side that
           leaves keeps its mounted content, it is not drawn again from scratch. */}
-      <div key={id} ref={cur} className={side + " " + (gone ? enter : "")} data-swap-side="current"><Leaving.Provider value={false}>{children}</Leaving.Provider></div>
+      <div key={id} ref={cur} className={side + " " + (gone ? enter : "")} data-swap-side="current"><Leaving.Provider value={parentLeaving}>{children}</Leaving.Provider></div>
       {gone && (
         // Opaque, over the new side, which is complete under it from the first frame.
         <div key={gone.id} inert aria-hidden="true" className={side + " an-swap-gone " + leave} data-swap-side="leaving">

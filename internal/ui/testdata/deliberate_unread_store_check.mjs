@@ -39,6 +39,15 @@ function fixture(saved={}) {
   }};
  const Store=runInNewContext(source+'\nStore',{...env,api,errorText,pendingSends,share,messageTarget:model.messageTarget,mainPreferences,personRoots,brand:{storage:'agentnet.messenger'}});
  f.store=new Store(host);f.host=host;
+ // The original small fixture's rows all fit. Model presentation explicitly;
+ // focused cases below restrict it without changing provider read semantics.
+ f.visibleIDs=null;
+ f.present=()=>{const o=f.store.get().open;if(!o||!f.store.readVisit)return;
+  const d=f.store.draft(o.id),visit=f.store.readVisit(o,d.topic||'',!!d.newTopic);
+  if(visit)f.store.reportVisible(visit,(f.store.get().views[o.id]?.messages||[]).filter(m=>f.visibleIDs===null||f.visibleIDs.includes(m.id)));
+ };
+ let scheduled=false;f.store.subscribe(()=>{if(!scheduled){scheduled=true;queueMicrotask(()=>{scheduled=false;f.present();});}});
+ f.capture=()=>{const o=f.store.get().open,d=o&&f.store.draft(o.id),visit=o&&f.store.readVisit?.(o,d.topic||'',!!d.newTopic),rows=structuredClone(f.store.get().views[o?.id]?.messages||[]);return()=>visit&&f.store.reportVisible(visit,rows);};
  f.change=async()=>{for(const fn of listeners)fn({type:'change',seq:1});await drain();};
  f.resume=async()=>{for(const fn of visibility)fn(true);await drain();};
  f.reads=()=>calls.filter(c=>c.path==='/api/act'&&c.body.do==='read');
@@ -203,6 +212,46 @@ await checkFresh('failed first load and same-scope retry keep the unconsumed fre
   assert.equal(f.reads().length,1,'first successful exact entry load survives retry/reselection');
   assert.deepEqual(f.reads()[0].body.attention,{[mid]:{rev:4,writer:fp}});
  }finally{failed?.resolve(f.view());retry?.resolve(f.view());f.store.stop();}
+});
+await checkFresh('unseen tail and stale viewport/visit callbacks retain exact unread generations',async()=>{
+ const f=fixture();try{
+  f.visibleIDs=[mid];f.rows[0].unread=true;f.rows[1].unread=true;f.rows[1].dir='in';f.rows[2].unread=true;
+  await f.store.start();await f.store.open({kind:'dm',id:conv});await drain();
+  assert.deepEqual(f.reads().flatMap(r=>r.body.ids),[mid],'opening reads only the intersecting row');
+  assert(f.rows[1].unread,'unseen tail is retained');assert(f.rows[2].unread,'sibling retained');
+  const stale=f.capture();f.store.close();f.visibleIDs=[];await f.store.open({kind:'dm',id:conv});await drain();
+  stale();await drain();assert(f.rows[1].unread,'old observer cannot acknowledge a reopened visit');
+  f.rows[0].unread=true;f.rows[0].attention={rev:8,writer:otherFP};await f.change();f.visibleIDs=[mid];f.present();await drain();
+  assert(f.rows[0].unread,'new G2 learned during the visit survives presentation');
+  f.store.setDraft(conv,{text:'',topic},true);const oldTopic=f.capture();f.store.setDraft(conv,{text:''},true);oldTopic();await drain();
+  assert(f.rows[2].unread,'old topic observer cannot acknowledge a different scope');
+ }finally{f.store.stop();}
+});
+await checkFresh('first fresh outgoing unread is frozen; exact topic entry reuses loaded view and drafts',async()=>{
+ const f=fixture();try{
+  f.visibleIDs=[];f.rows[0].dir='out';f.rows[0].unread=true;f.rows[0].attention={rev:4,writer:fp};
+  const file={key:'kept-file'},draft={text:'unsent draft',replyTo:next,files:[file]};f.store.setDraft(conv,draft);
+  await f.store.start();await f.store.open({kind:'dm',id:conv});await drain();
+  let o=f.store.get().open,visit=f.store.readVisit(o);assert.equal(visit.firstUnread,mid,'effective outgoing unread can be the entry anchor');
+  f.rows[0].unread=false;delete f.rows[0].attention;f.rows[1].unread=true;await f.change();
+  assert.equal(f.store.readVisit(f.store.get().open).firstUnread,mid,'live read/arrival changes never move the divider');
+  const gets=f.calls.filter(c=>c.path.startsWith('/api/dm?')).length;
+  await f.store.openUnread({kind:'dm',id:conv},topic);await drain();
+  assert.equal(f.calls.filter(c=>c.path.startsWith('/api/dm?')).length,gets,'loaded topic entry adds no GET');
+  assert.equal(f.store.draft(conv).text,draft.text);assert.equal(f.store.draft(conv).replyTo,draft.replyTo);assert.equal(f.store.draft(conv).files[0],file);
+  await f.store.open({kind:'dm',id:conv,focus:sibling});assert.equal(f.store.get().open.focus,sibling,'explicit message focus retains precedence');
+ }finally{f.store.stop();}
+});
+await checkFresh('return to displayed topic cancels a different pending open and keeps a fresh entry',async()=>{
+ const f=fixture();let held;try{
+  f.visibleIDs=[];await f.store.start();await f.store.open({kind:'dm',id:conv});
+  f.rows[0].unread=true;f.rows[0].attention={rev:4,writer:fp};await f.change();
+  const other='f'.repeat(64);held=f.holdDM();const opening=f.store.open({kind:'dm',id:other});await tick();
+  f.visibleIDs=[mid];await f.store.openUnread({kind:'dm',id:conv});await drain();
+  assert.equal(f.reads().length,1,'returning from a pending different open arms exactly its fresh generation');
+  held.resolve({id:other,messages:[],topics:[],agents:[]});await opening;await drain();
+  assert.equal(f.store.get().open.id,conv,'late other load cannot replace the explicit return');
+ }finally{held?.resolve({id:'f'.repeat(64),messages:[],topics:[],agents:[]});f.store.stop();}
 });
 assert.deepEqual(freshFailures,[],'all fresh-entry and visible-topic discriminators pass');
 console.log('PASS deliberate unread Store: current visit, remote/local mark, exact single/from-here/siblings/sent/files, explicit entry, bootstrap/remount, full-generation delayed CAS, ordinary-read cost, uncapped atomic snapshot and fresh-entry/scope fencing');

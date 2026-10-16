@@ -58,7 +58,7 @@ export function EmojiPicker({ onPick, onClose }: { onPick: (emoji: string) => vo
   const viewport = useRef<HTMLDivElement>(null);
   const columns = useMemo(() => (innerWidth < 440 ? 7 : 8), []);
   const parts = useMemo(() => (data ? sections(data, columns) : []), [data, columns]);
-  const [frequent] = useState(() => reactionChoices([], columns));
+  const [frequent] = useState(() => reactionChoices([], columns * 2));
 
   // The default resolver fetches, caches and drops emoji this device cannot
   // draw; we keep a copy to place the category tabs. A failed load shows an
@@ -120,7 +120,7 @@ export function EmojiPicker({ onPick, onClose }: { onPick: (emoji: string) => vo
   return (
     <Picker.Root locale="en" emojibaseUrl={emojiBase} resolveEmojiData={resolve} columns={columns} skinTone={tone}
       onEmojiSelect={(e) => onPick(e.emoji)} onKeyDown={keys} aria-label="Emoji"
-      className="flex h-[min(430px,70dvh,calc(var(--an-viewport-h,100dvh)_-_24px))] w-[min(408px,calc(100vw-24px))] flex-col overflow-hidden rounded-2xl bg-surface text-ink stroke shadow-pop">
+      className="flex h-[min(430px,70dvh,calc(var(--an-viewport-h,100dvh)_-_24px))] max-h-[var(--available-height,100dvh)] w-[min(408px,calc(100vw-24px))] flex-col overflow-hidden rounded-2xl bg-surface text-ink stroke shadow-pop">
       <div className="flex items-center gap-1.5 p-2 pb-1">
         <label className="flex h-11 min-w-0 flex-1 items-center gap-2 rounded-full bg-canvas px-3.5 stroke focus-within:border-agent-ink">
           <IconSearch size={18} stroke={2.2} className="shrink-0 text-muted" aria-hidden="true" />
@@ -139,16 +139,16 @@ export function EmojiPicker({ onPick, onClose }: { onPick: (emoji: string) => vo
         : !search && parts.length > 0 && <CategoryTabs parts={parts} current={current} onJump={jump} />}
 
       {!search && !choosingTone && frequent.length > 0 && (
-        <div role="group" aria-label="Frequently used emoji" className="shrink-0 border-b border-hairline px-2 pb-1">
+        <div role="group" aria-label="Frequently used emoji" className="max-h-[30%] min-h-0 overflow-y-auto border-b border-hairline px-2 pb-1">
           <div className="px-1 pt-1 text-[13px] font-semibold text-muted">Frequently used</div>
-          <div className="flex">
+          <div className="grid" style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
             {frequent.map((e) => <button key={e} type="button" aria-label={"Choose " + e} onClick={() => onPick(e)}
               className="grid size-11 shrink-0 place-items-center rounded-xl text-[26px] hover:bg-sunken">{e}</button>)}
           </div>
         </div>
       )}
 
-      <Picker.Viewport ref={viewport} onScroll={scrolled} className="relative min-h-0 flex-1 outline-none">
+      <Picker.Viewport ref={viewport} onScroll={scrolled} className="relative min-h-11 flex-1 outline-none">
         <Picker.Loading className="absolute inset-0 grid place-items-center text-[13px] text-muted">
           <span className="an-late flex items-center gap-1.5">Loading emoji<span className="working-dot">.</span><span className="working-dot">.</span><span className="working-dot">.</span></span>
         </Picker.Loading>
@@ -168,7 +168,7 @@ export function EmojiPicker({ onPick, onClose }: { onPick: (emoji: string) => vo
         }} />
       </Picker.Viewport>
 
-      <div className="flex h-12 shrink-0 items-center gap-2.5 border-t border-hairline px-3.5" aria-hidden="true">
+      <div className="flex h-12 shrink-0 items-center gap-2.5 border-t border-hairline px-3.5 [@media(max-height:480px)]:hidden" aria-hidden="true">
         <Picker.ActiveEmoji>
           {({ emoji }) => emoji
             ? <><span className="text-[26px] leading-none">{emoji.emoji}</span><span className="truncate text-[13px] font-semibold text-text-2 first-letter:uppercase">{emoji.label}</span></>

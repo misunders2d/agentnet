@@ -21,6 +21,11 @@ func (a *App) activeSessions() []*Session {
 }
 func (a *App) phone(id string, s *Session) *phoneProvider {
 	s.mu.Lock()
+	if s.content == nil {
+		s.live.SetApp(true)
+	}
+	s.contentGeneration++
+	s.content = func(content, generation uint64) { a.refreshUnread(id, s, content, generation, s.unreadOverview) }
 	s.notify = func(notification client.NativeNotification) {
 		a.mu.Lock()
 		n := a.notifier
@@ -31,7 +36,7 @@ func (a *App) phone(id string, s *Session) *phoneProvider {
 		}
 	}
 	s.mu.Unlock()
-	s.live.SetApp(true)
+	s.signal()
 	return &phoneProvider{Live: s.live, available: a.notificationsAvailable, address: s.a.Address, session: s,
 		dismiss: func(fragment string) {
 			a.mu.Lock()
@@ -81,6 +86,7 @@ func (a *App) messenger(defaultSession *Session) (handler http.Handler, failure 
 		}
 		a.sessions[entry.ID] = s
 		a.active[entry.ID] = true
+		a.bindUnreadLocked(entry.ID)
 		if _, err = set.Bind(entry, a.phone(entry.ID, s)); err != nil {
 			return nil, err
 		}
@@ -115,6 +121,7 @@ func (a *App) messenger(defaultSession *Session) (handler http.Handler, failure 
 		a.mu.Lock()
 		a.sessions[entry.ID] = s
 		a.active[entry.ID] = true
+		a.bindUnreadLocked(entry.ID)
 		wanted := a.wanted
 		a.mu.Unlock()
 		if wanted {
@@ -133,6 +140,8 @@ func (a *App) messenger(defaultSession *Session) (handler http.Handler, failure 
 		set.Remove(id)
 		a.mu.Lock()
 		a.active[id] = false
+		delete(a.unread, id)
+		a.markUnreadDirtyLocked()
 		s := a.sessions[id]
 		a.mu.Unlock()
 		if s != nil {
@@ -175,8 +184,10 @@ func (a *App) messenger(defaultSession *Session) (handler http.Handler, failure 
 		a.mu.Lock()
 		a.sessions[id] = s
 		a.active[id] = true
+		a.bindUnreadLocked(id)
 		wanted := a.wanted
 		a.mu.Unlock()
+		s.signal()
 		if wanted {
 			return s.Start()
 		}

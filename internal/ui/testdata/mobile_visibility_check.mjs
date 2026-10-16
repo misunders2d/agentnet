@@ -43,7 +43,7 @@ function environment() {
   return { window, document, localStorage, setTimeout, clearTimeout, native };
 }
 async function storeJourney(platform) {
-  const env = environment(), reads = [], messages = [{ id: 'message-one', dir: 'in', unread: true, topic: '' }];
+  const env = environment(), reads = [], messages = [{ id: 'message-one', kind:'message', dir: 'in', unread: true, topic: '' }];
   let push, completeLoad;
   const deferred = new Promise(resolve => { completeLoad = resolve; });
   let firstLoad = true;
@@ -65,12 +65,17 @@ async function storeJourney(platform) {
   const { native, ...globals } = env;
   const Store = runInNewContext(storeSource + '\nStore', { ...globals, api, errorText, pendingSends, share, messageTarget, mainPreferences, personRoots, brand: { storage: 'agentnet.messenger' } });
   const store = new Store(host);
+  // Model the one presented row; page/native visibility remains a Store guard.
+  const present=()=>{const o=store.get().open;if(!o)return;const visit=store.readVisit(o);if(visit)store.reportVisible(visit,store.get().views[o.id]?.messages||[]);};
+  let queued=false;store.subscribe(()=>{if(!queued){queued=true;queueMicrotask(()=>{queued=false;present();});}});
+  env.document.addEventListener('visibilitychange',present);env.window.addEventListener('focus',present);
+  const offPresent=env.native.api().onVisibility(present);
   await store.start();
   const opened = store.open({ kind: 'dm', id: 'conversation' });
   env.native.visible = false;
   completeLoad(view()); await opened; await tick();
   if (platform === 'daemon') {
-    assert.equal(reads.length, 1, 'desktop behavior remains unchanged'); store.stop(); return;
+    assert.equal(reads.length, 1, 'desktop presented rows still read once'); store.stop();offPresent(); return;
   }
   assert.equal(reads.length, 0, 'an admitted load finishing after native pause leaves messages unread');
   env.document.focused = false;
@@ -82,12 +87,12 @@ async function storeJourney(platform) {
   env.document.visibilityState = 'visible'; env.document.fire('visibilitychange'); await tick();
   assert.deepEqual(reads, [['message-one']], 'visible focused resume acknowledges the completed load without another push');
   env.native.set(false);
-  messages.push({ id: 'message-two', dir: 'in', unread: true, topic: '' });
+  messages.push({ id: 'message-two', kind:'message', dir: 'in', unread: true, topic: '' });
   push({ type: 'change', seq: 2 }); await tick();
   assert.equal(reads.length, 1, 'hidden changes do not read new messages');
   env.native.set(true); await tick(); await tick();
   assert.deepEqual(reads, [['message-one'], ['message-two']], 'resume refreshes and acknowledges the hidden change once');
-  store.stop();
+  store.stop();offPresent();env.document.removeEventListener('visibilitychange',present);env.window.removeEventListener('focus',present);
   assert.equal(env.window.listeners.get('focus').size, 0);
   assert.equal(env.native.listeners.size, 0);
 }

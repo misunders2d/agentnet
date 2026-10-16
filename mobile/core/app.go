@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -43,6 +44,12 @@ type App struct {
 	closed            bool
 	wanted            bool
 	notifier          Notifier
+	unread            map[string]workspaceUnread
+	unreadSink        UnreadSink
+	unreadGeneration  uint64
+	unreadDirty       bool
+	unreadFlushing    bool
+	unreadLast        unreadDelivery
 }
 
 // OpenApp binds exactly preferredPort, or chooses a port when it is zero.
@@ -78,7 +85,9 @@ func OpenApp(home string, preferredPort int) (*App, error) {
 			return nil, e
 		}
 		a.session = s
+		a.mu.Lock()
 		a.handler, e = a.messenger(s)
+		a.mu.Unlock()
 		if e != nil {
 			s.Close()
 			cancel()
@@ -166,6 +175,8 @@ func (a *App) Close() {
 		return
 	}
 	a.closed = true
+	clear(a.unread)
+	a.markUnreadDirtyLocked()
 	a.cancel()
 	a.mu.Unlock()
 	defer close(a.closeDone)
@@ -310,6 +321,135 @@ type Notifier interface {
 }
 
 func (a *App) SetNotifier(n Notifier) { a.mu.Lock(); a.notifier = n; a.mu.Unlock() }
+
+// UnreadSink receives the shared cached alert count. Partial means at least one
+// workspace is unknown; its last known contribution is retained. Like
+// Notifier, implementations return promptly and marshal OS work to their lane.
+// Close sends (0, true). This optional interface leaves Notifier unchanged.
+type UnreadSink interface {
+	Unread(total int64, partial bool)
+}
+
+type workspaceUnread struct {
+	total int64 // last known value, initially absent/zero
+	known bool
+}
+type unreadDelivery struct {
+	generation    uint64
+	total         int64
+	partial, sent bool
+}
+
+// SetUnreadSink replaces the optional observer. Reentrant replacement is safe;
+// an already reserved callback may finish, but no further old calls are queued.
+func (a *App) SetUnreadSink(sink UnreadSink) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.closed {
+		return
+	}
+	a.unreadSink = sink
+	a.unreadGeneration++
+	a.markUnreadDirtyLocked()
+}
+
+func (a *App) unreadTotalLocked() (int64, bool) {
+	if a.closed {
+		return 0, true
+	}
+	var total int64
+	partial, anyActive := false, false
+	for id := range a.sessions {
+		if !a.active[id] {
+			continue
+		}
+		anyActive = true
+		v := a.unread[id]
+		partial = partial || !v.known
+		if v.total > math.MaxInt64-total {
+			total = math.MaxInt64
+		} else {
+			total += v.total
+		}
+	}
+	return total, partial || !anyActive
+}
+
+// One ephemeral flusher coalesces all workspace producers and sink changes.
+// The reservation under mu is the callback start; foreign code runs lock-free.
+func (a *App) markUnreadDirtyLocked() {
+	a.unreadDirty = true
+	if !a.unreadFlushing && a.unreadSink != nil {
+		a.unreadFlushing = true
+		go a.flushUnread()
+	}
+}
+func (a *App) flushUnread() {
+	for {
+		a.mu.Lock()
+		if !a.unreadDirty || a.unreadSink == nil {
+			a.unreadFlushing = false
+			a.mu.Unlock()
+			return
+		}
+		a.unreadDirty = false
+		total, partial := a.unreadTotalLocked()
+		next := unreadDelivery{a.unreadGeneration, total, partial, true}
+		sink := a.unreadSink
+		duplicate := next == a.unreadLast
+		if !duplicate {
+			a.unreadLast = next
+		}
+		a.mu.Unlock()
+		if !duplicate {
+			sink.Unread(total, partial)
+		}
+	}
+}
+
+// Called with mu held at each binding; reads run on the existing Session lane.
+func (a *App) bindUnreadLocked(id string) {
+	if a.closed {
+		return
+	}
+	if a.unread == nil {
+		a.unread = map[string]workspaceUnread{}
+	}
+	a.unread[id] = workspaceUnread{}
+	a.markUnreadDirtyLocked()
+}
+
+func (a *App) refreshUnread(id string, s *Session, content, generation uint64, read func() (ui.Overview, error)) {
+	current := func() bool {
+		if a.closed || !a.active[id] || a.sessions[id] != s {
+			return false
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		revision, _ := s.a.ViewChanges()
+		return !s.closed && s.contentGeneration == generation && revision.Content == content
+	}
+	a.mu.Lock()
+	valid := current()
+	a.mu.Unlock()
+	if !valid {
+		return
+	}
+	// Use exactly the page's Live and cache; no second unread scan or transport.
+	view, err := read()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !current() {
+		return
+	}
+	v := a.unread[id]
+	v.known = err == nil && view.AlertTotal != nil && *view.AlertTotal >= 0
+	if v.known {
+		v.total = int64(*view.AlertTotal)
+	}
+	a.unread[id] = v
+	a.markUnreadDirtyLocked()
+}
 func (a *App) notificationsAvailable() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()

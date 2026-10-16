@@ -463,6 +463,9 @@ func (a *Agent) admitHumanTurn(ctx context.Context, env envelope.Envelope, in en
 		if err := humanDMOutputRequest(tx, in, a.Address, a.Self().Fingerprint()); err != nil {
 			return err
 		}
+		if err := saveSharedTopicRename(tx, in, sender.Fingerprint()); err != nil {
+			return err
+		}
 		if root.Kind == protocol.ConvKindGroup {
 			m, err := membersIn(tx, in.Conv)
 			if err != nil {
@@ -494,6 +497,9 @@ func (a *Agent) admitHumanTurn(ctx context.Context, env envelope.Envelope, in en
 		return nil
 	}
 	result, err := a.store.addConvInbox(in, sender.Fingerprint(), state, fromQuarantine, also)
+	if errors.Is(err, ErrSharedTopicTitleConflict) {
+		return hold(reasonInvalid, err.Error())
+	}
 	if err != nil {
 		return hold(reasonProof, err.Error())
 	}

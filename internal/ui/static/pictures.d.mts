@@ -1,5 +1,6 @@
 export const MaxPictureBytes: number;
 export const MaxPicturePixels: number;
+export function sniffVideo(bytes: Uint8Array): string;
 export function validatePicture(bytes: Uint8Array): void;
 export function cleanPicturePNG(bytes: Uint8Array): Uint8Array;
 export function pictureCrop(width: number, height: number, zoom?: number, x?: number, y?: number): { zoom: number; x: number; y: number; side: number };

@@ -527,6 +527,13 @@ func (s *store) heldForProof() (bool, error) {
 // device's own agent (agentjob.go), verified by that key: one message in
 // the conversation, one job, both or neither.
 func (s *store) addConvOutbox(copies []outCopy, local envelope.Inner, claim func(*sql.Tx, string) error, jobKey string, selected ...*replyBinding) error {
+	return s.addConvOutboxGuarded(copies, local, claim, jobKey, nil, selected...)
+}
+
+// beforeConvStore receives the exact committed copies after ordinary authority.
+type beforeConvStore func(*sql.Tx, []outCopy, envelope.Inner) error
+
+func (s *store) addConvOutboxGuarded(copies []outCopy, local envelope.Inner, claim func(*sql.Tx, string) error, jobKey string, before beforeConvStore, selected ...*replyBinding) error {
 	originals := copies
 	if len(selected) > 0 && selected[0] != nil {
 		originals = nil
@@ -554,6 +561,11 @@ func (s *store) addConvOutbox(copies []outCopy, local envelope.Inner, claim func
 			return err
 		}
 	}
+	if before != nil {
+		if err := before(tx, originals, local); err != nil {
+			return err
+		}
+	}
 	for i, c := range copies {
 		env, in := c.env, c.in
 		data, _ := json.Marshal(env)
@@ -562,6 +574,9 @@ func (s *store) addConvOutbox(copies []outCopy, local envelope.Inner, claim func
 			VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), ?, ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), ?, ?, nullif(?, ''), nullif(?, ''), nullif(?, ''),nullif(?,''))`,
 			env.ID, env.To, in.Body, string(data), c.state, c.why, now.Unix(), in.ReplyTo, in.Status, in.Conv, in.LID,
 			in.Kind, in.Origin, in.Emotion, targetJSON(in.Target), now.UnixMilli(), in.PID, in.Sub, refID, refFP, in.AgentID, copyRequirement(c), c.recipientFP, c.groupAdmission); err != nil {
+			return err
+		}
+		if err := storeSharedTopicRequirement(tx, c); err != nil {
 			return err
 		}
 		if err := storeAgentActionRequirements(tx, c); err != nil {

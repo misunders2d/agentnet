@@ -95,13 +95,17 @@ func TestReviewReportSilentMalformedAndCountOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	w.bob.notifyReview()
-	if n.count() != 1 || !strings.HasPrefix(n.last(), "AgentNet: 1 request needs your decision") || strings.Contains(n.last(), "PRIVATE") {
+	if n.count() != 1 || n.last() != "AgentNet: A request needs your decision" || strings.Contains(n.last(), "PRIVATE") {
 		t.Fatalf("local alert %s", n.last())
 	}
 }
 
 func TestReviewReportSnapshotCountDedupAndRestart(t *testing.T) {
 	w := newWorld(t, "")
+	// This test inspects generic counts; default-Hidden is covered separately.
+	if err := w.bob.SetAlertPrefs(AlertPrefs{Preview: NotificationPreviewFull}); err != nil {
+		t.Fatal(err)
+	}
 	n := fakeNotify(w.bob)
 	host, key := w.alice.Address, w.alice.Self().Fingerprint()
 	a, b, c := reviewAlertItem(w.alice), reviewAlertItem(w.alice), reviewAlertItem(w.alice)
@@ -170,6 +174,10 @@ func mustAlertJSON(t *testing.T, it ReportItem) string {
 
 func TestReviewReportExactKeyPartitionsAndMixedCount(t *testing.T) {
 	w := newWorld(t, "")
+	// This test inspects generic counts; default-Hidden is covered separately.
+	if err := w.bob.SetAlertPrefs(AlertPrefs{Preview: NotificationPreviewFull}); err != nil {
+		t.Fatal(err)
+	}
 	n := fakeNotify(w.bob)
 	host, key := w.alice.Address, w.alice.Self().Fingerprint()
 	it := reviewAlertItem(w.alice)

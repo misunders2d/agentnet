@@ -97,7 +97,9 @@ func startApp(t *testing.T, home string, env map[string]string) *appProc {
 				t.Errorf("not an event line: %q", sc.Text())
 				continue
 			}
-			p.events <- e
+			if e.Event != "unread" {
+				p.events <- e
+			}
 		}
 	}()
 	go func() {
@@ -435,9 +437,20 @@ func TestAppAttachedNeverOpensTheHome(t *testing.T) {
 		i := i
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			cookie, err := r.Cookie("agentnet_ui")
-			if err != nil || cookie.Value != "private" || r.URL.Path != "/api/overview" || r.URL.RawQuery != "" {
+			if err != nil || cookie.Value != "private" || r.URL.RawQuery != "" {
 				t.Error("incorrect authenticated readiness request")
 				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			// An older attached daemon has no optional indicator stream.
+			// It must remain attachable without opening its private database.
+			if r.URL.Path == "/api/workspaces/events" {
+				http.NotFound(w, r)
+				return
+			}
+			if r.URL.Path != "/api/overview" {
+				t.Error("unexpected attached route")
+				w.WriteHeader(404)
 				return
 			}
 			if !ready[i].Load() {

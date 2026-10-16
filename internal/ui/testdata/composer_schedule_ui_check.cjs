@@ -1,0 +1,56 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const esbuild=require('../web/node_modules/esbuild');
+const source=n=>fs.readFileSync(require('node:path').join(__dirname,'../web/src/',n),'utf8');
+const jsx=(tag,props,...children)=>({tag,props:{...props,children:children.flat(Infinity).filter(x=>x!==false&&x!=null)}});
+const nodes=t=>t&&typeof t==='object'?[t,...(t.props?.children||[]).flatMap(nodes)]:[];
+const words=t=>t&&typeof t==='object'?(t.props?.children||[]).map(words).join(' '):String(t??'');
+function load(file,globals){const context={module:{exports:{}},jsx,Fragment:'Fragment',Date,Intl,Object,Error,console,...globals};context.exports=context.module.exports;const code=esbuild.transformSync(source(file).replace(/^import[\s\S]*?from[^;]+;/gm,''),{loader:file.endsWith('tsx')?'tsx':'ts',jsxFactory:'jsx',jsxFragment:'Fragment',format:'cjs'}).code;vm.runInNewContext(code,context);return context.module.exports;}
+function hooks(){let cells=[],cursor=0,pending=[],renderFn,out,queued=false,alive=true;const render=()=>{cursor=0;pending=[];out=renderFn();for(const f of pending)f();return out;};const schedule=()=>{if(!queued){queued=true;queueMicrotask(()=>{queued=false;if(alive)render();});}};const react={useState:init=>{const i=cursor++;if(!cells[i])cells[i]={value:typeof init==='function'?init():init};return[cells[i].value,v=>{cells[i].value=typeof v==='function'?v(cells[i].value):v;schedule();}];},useRef:init=>{const i=cursor++;return cells[i]??(cells[i]={current:init});},useEffect:(fn,deps)=>{const i=cursor++,old=cells[i];if(!old||deps.some((d,j)=>d!==old.deps[j]))pending.push(()=>{old?.cleanup?.();cells[i]={deps,cleanup:fn()};});}};return {react,start:fn=>{renderFn=fn;return render();},render,get:()=>out,stop:()=>{alive=false;for(const c of cells)c?.cleanup?.();}};}
+const drain=async()=>{for(let i=0;i<8;i++)await new Promise(r=>setImmediate(r));};
+(async()=>{
+ const model=load('features/Composer.schedule-model.ts',{}),h=hooks();let revision=1,pane='create',sequence=0,saved=[],calls=[],stages=0,lose=true,conflict=false,rows=[],audience={persons:['person'],pids:[]};
+ const file=new File(['actual'],'draft.txt');let draft={text:'Captured exact encoded body',files:[{key:'f1',file,name:file.name,size:file.size,type:''}]};
+ const api={stage:async f=>{assert(f instanceof File);stages++;return 'handle-'+stages;},discard:async()=>{},scheduleAudience:async()=>{calls.push(['audience']);return structuredClone(audience);},
+  createSchedule:async d=>{calls.push(['create',structuredClone(d)]);if(!rows.some(r=>r.id===d.id))rows.push({...d,rev:1,state:'pending',files:[{name:file.name,size:file.size,sha256:'verified'}]});if(lose){lose=false;throw Error('lost response');}return structuredClone(rows.find(r=>r.id===d.id));},
+  schedule:async id=>{calls.push(['lookup',id]);const row=rows.find(r=>r.id===id);if(!row)throw Error('Not found');return {...row,files:[{name:file.name,size:file.size,sha256:'not-proof'}]};},schedules:async()=>{calls.push(['list']);return structuredClone(rows);},
+  editSchedule:async d=>{calls.push(['edit',structuredClone(d)]);const row=rows.find(r=>r.id===d.id);assert.equal(d.rev,row.rev);Object.assign(row,d,{rev:row.rev+1});return row;},
+  cancelSchedule:async(id,rev)=>{calls.push(['cancel',{id,rev}]);const row=rows.find(r=>r.id===id);assert.equal(row.rev,rev);if(conflict){conflict=false;row.rev++;throw Object.assign(Error('Revision changed'),{code:'scheduled_stale'});}row.rev++;row.state='cancelled';return row;},
+  sendScheduleNow:async(id,rev)=>{calls.push(['now',{id,rev}]);const row=rows.find(r=>r.id===id);assert.equal(row.rev,rev);row.rev++;row.state='sent';return row;}};
+ const storage=new Map(),localStorage={getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)};
+ const host={platform:'daemon',workspace:{id:'ui',handle:'h'}},holder=load('schedule-saves.ts',{brand:{storage:'test'},localStorage});
+ let slots={},ledger;const changed=()=>{for(const slot of ledger.takeConfirmed()){saved.push(slot.attempt);draft=model.clearScheduledDraft(draft,slot.attempt);}slots=ledger.snapshot();h.render();};
+ ledger=holder.scheduleSaves(host,changed);
+ const store={api,host,isActive:()=>true,beginScheduleSave:(c,a)=>ledger.begin(c,a),settleScheduleSave:(c,id,status,note)=>ledger.settle(c,id,status,note),forgetScheduleSave:(c,id)=>ledger.forget(c,id)};let props={pane,onPane:p=>{pane=p;props.pane=p;h.render();},conv:'a'.repeat(64),dm:{members:[],agents:[],guests:[],topics:[]},capture:()=>({draft:{...draft,files:[...draft.files]},body:draft.text}),reason:'',onSaved:a=>saved.push(a)};
+ const component=load('features/Composer.schedule.tsx',{...h.react,...model,useApp:()=>store,useStore:(_s,select)=>select({scheduleSaves:slots,contentRevision:revision,overview:{person:{person:'person',label:'Verified Casey'},people:[]}}),Button:'Button',Sheet:'Sheet',sendID:()=>String(++sequence).padStart(32,'0')});
+ const find=(tag,label)=>{const n=nodes(h.get()).find(n=>n.tag===tag&&(n.props['aria-label']===label||words(n).trim()===label));assert(n,tag+' '+label+' not found');return n;};
+ const click=async label=>{const b=find('Button',label);assert(!b.props.disabled,label+' disabled');b.props.onClick();await drain();};
+ h.start(()=>component.ScheduleDialogs(props));await drain();assert.equal(calls.filter(c=>c[0]==='audience').length,1);assert.equal(calls.filter(c=>c[0]==='create').length,0);
+ await click('Save schedule');assert.equal(saved.length,0);assert.equal(rows.length,1);assert.equal(stages,1);assert(words(h.get()).includes('Unconfirmed save'));
+ draft={...draft,text:'New typing stays',files:[...draft.files,{key:'new',file:new File(['new'],'new.txt')}]};
+ await click('Check saved state');assert.equal(saved.length,0,'GET descriptors never clear draft');assert(words(h.get()).includes('confirm with same-ID save'));
+ await click('Retry same save');assert.equal(stages,2);assert.equal(rows.length,1);assert.equal(saved.length,1);assert.equal(saved[0].draft.text,'Captured exact encoded body');assert.equal(draft.text,'New typing stays');assert.equal(draft.files.length,1);
+ const creates=calls.filter(c=>c[0]==='create');assert.equal(creates[0][1].id,creates[1][1].id);assert.notEqual(creates[0][1].files[0],creates[1][1].files[0]);
+ await click('Edit schedule');find('textarea','Scheduled message text').props.onChange({target:{value:'Edited same audience'}});await drain();await click('Save schedule changes');let change=calls.find(c=>c[0]==='edit')[1];assert.equal(change.rev,1);assert(!('audience'in change));assert(!('files'in change));
+ await click('Edit schedule');audience={persons:['person','new-person'],pids:[]};await click('Review audience');assert(words(h.get()).includes('Confirm reviewed audience'));assert(!words(h.get()).includes('New audience explicitly confirmed'));
+ await click('Confirm reviewed audience');assert(words(h.get()).includes('New audience explicitly confirmed'));await click('Save schedule changes');change=calls.filter(c=>c[0]==='edit').at(-1)[1];assert.deepEqual(Array.from(change.audience.persons),['person','new-person']);
+ await click('Send now');assert.equal(calls.filter(c=>c[0]==='now').at(-1)[1].rev,3);assert(words(h.get()).includes('Queued to send'));assert(!words(h.get()).includes('Delivered'));
+ rows.push({...rows[0],id:'cancel',rev:7,state:'pending'});revision++;h.render();await drain();conflict=true;await click('Cancel schedule');assert(words(h.get()).includes('revision changed'));assert.equal(rows.find(r=>r.id==='cancel').state,'pending');await click('Cancel schedule');assert.deepEqual(calls.filter(c=>c[0]==='cancel').at(-1)[1],{id:'cancel',rev:8});
+ rows.push(...['dispatching','needs_review'].map((state,i)=>({...rows[0],id:'state'+i,state,detail:'PRIVATE REMOTE SECRET',rev:1})));revision++;h.render();await drain();assert(!words(h.get()).includes('PRIVATE REMOTE SECRET'));assert(words(h.get()).includes('Needs review'));assert(words(h.get()).includes('Preparing to send'));
+ const count=calls.length;props.pane=null;h.render();await drain();revision++;h.render();await drain();assert.equal(calls.length,count,'closed list never refreshes');assert(!nodes(h.get()).some(n=>n.tag==='article'));
+ props.pane='create';h.render();await drain();api.createSchedule=async()=>{throw Object.assign(Error('different content'),{code:'scheduled_id_conflict'});};await click('Save schedule');assert.equal(saved.length,1);assert(words(h.get()).includes('Save refused'));assert.equal(draft.text,'New typing stays');assert.equal(draft.files.length,1);
+
+ const coldID='e'.repeat(32),coldConv='a'.repeat(64),tokenKey='test.schedule-save.ui';
+ ledger.forget(coldConv,ledger.snapshot()[coldConv].id);localStorage.setItem(tokenKey,JSON.stringify({v:1,conv:{[coldConv]:{id:coldID,conv:coldConv,files:[{name:'lost-file.txt',size:5}]}}}));
+ ledger=holder.scheduleSaves({...host},changed);slots=ledger.snapshot();props.pane='create';const beforeCold=calls.length;h.render();await drain();assert.equal(calls.length,beforeCold,'cold token causes no audience/list/API calls');assert(!nodes(h.get()).some(n=>n.tag==='Button'&&words(n).trim()==='Retry same save'));
+ await click('Check saved state');assert.equal(ledger.snapshot()[coldConv].id,coldID);assert(localStorage.getItem(tokenKey).includes(coldID),'GET not found keeps token');assert.equal(draft.text,'New typing stays');assert(!nodes(h.get()).some(n=>n.tag==='Button'&&words(n).trim()==='Save schedule'));
+ rows.push({...rows[0],id:coldID,conv:coldConv,body:'Saved before reload'});await click('Check saved state');assert(ledger.snapshot()[coldConv]);assert.equal(draft.text,'New typing stays');await click('Keep draft and finish review');assert(!ledger.snapshot()[coldConv]);assert.equal(draft.text,'New typing stays');assert(!localStorage.getItem(tokenKey));
+ h.stop();
+ // Execute the original shared clearSent guard after the actual schedule scope/file guard.
+ const composer=source('features/Composer.tsx'),fn=composer.match(/^  function clearSent\([\s\S]*?^  }/m)[0];
+ let current={text:'new typing',topic:'old',replyTo:'new reply',files:[{key:'same',file},{key:'new',file:new File(['new'],'new.txt')}]};
+ const capture=model.captureSchedule('a'.repeat(32),'conv','old',{text:'old',topic:'old',replyTo:'old reply',files:[current.files[0]]},new Date(Date.now()+3600000).toISOString(),'UTC',{persons:[],pids:[]});
+ const clear=vm.runInNewContext('('+require('node:module').stripTypeScriptTypes(fn)+')',{EMPTY:{text:''},store:{get:()=>({drafts:{conv:current}}),setDraft:(_c,d)=>current=d}});
+ clear('conv',capture.draft,model.unchangedScheduledFiles(current,capture));assert.equal(current.text,'new typing');assert.equal(current.replyTo,'new reply');assert.equal(current.files.length,1);assert.equal(current.files[0].key,'new');
+ assert(!/\b(sendAndroid|saveBatch|acknowledge|recordFailure)\b/.test(source('features/Composer.schedule.tsx')),'separate save never enters ordinary send/journal');
+ console.log('PASS actual ScheduleDialogs: preview, uncertain same-ID recovery, lookup never clears, retained changed draft, revisions, audience edit/explicit confirmation, safe five states, closed push fence and original clearSent guard');
+})().catch(e=>{console.error(e);process.exitCode=1;});

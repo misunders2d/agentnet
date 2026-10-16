@@ -16,7 +16,7 @@ const runStallNotice = 15 * time.Minute
 
 type runActivity struct {
 	last   atomic.Int64
-	native atomic.Uint32
+	native atomic.Pointer[nativeProgress]
 	wake   chan struct{}
 	warned bool // accessed only by the run's watcher
 }
@@ -30,7 +30,7 @@ func (a *runActivity) stallDue(now time.Time) (time.Duration, bool) {
 		return remaining, false
 	}
 	a.warned = true
-	a.native.Store(0) // output after silence cannot republish an old tool event
+	a.native.Store(nil) // output after silence cannot republish an old tool event
 	return 0, true
 }
 

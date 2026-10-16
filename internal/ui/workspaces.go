@@ -3,10 +3,13 @@ package ui
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/misunders2d/agentnet/internal/client"
 	"github.com/misunders2d/agentnet/internal/protocol"
@@ -17,6 +20,8 @@ import (
 // There is no active global provider: every request resolves its own binding.
 type WorkspaceProviders struct {
 	mu         sync.RWMutex
+	rev        uint64
+	wake       chan struct{}
 	entries    map[string]workspaceProvider
 	Join       func(*http.Request, WorkspaceJoin) (client.Workspace, Provider, error)
 	Disconnect func(string) error
@@ -52,7 +57,7 @@ func (e workspaceProvider) named() WorkspaceBinding {
 }
 
 func NewWorkspaceProviders() *WorkspaceProviders {
-	return &WorkspaceProviders{entries: map[string]workspaceProvider{}}
+	return &WorkspaceProviders{entries: map[string]workspaceProvider{}, wake: make(chan struct{})}
 }
 func workspaceID(id string) bool {
 	if id == client.DefaultWorkspace {
@@ -79,13 +84,134 @@ func (s *WorkspaceProviders) Bind(w client.Workspace, p Provider) (WorkspaceBind
 	}
 	b := WorkspaceBinding{Workspace: w, Handle: protocol.NewID()}
 	s.entries[w.ID] = workspaceProvider{b, p}
+	s.bumpLocked()
 	return b, nil
 }
 func (s *WorkspaceProviders) Remove(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.entries, id)
+	if _, ok := s.entries[id]; ok {
+		delete(s.entries, id)
+		s.bumpLocked()
+	}
 }
+
+// Map, revision and the wake belonging to that exact revision are copied
+// atomically. Provider methods are called only after releasing this lock.
+func (s *WorkspaceProviders) snapshot() (uint64, <-chan struct{}, []workspaceProvider) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	entries := make([]workspaceProvider, 0, len(s.entries))
+	for _, entry := range s.entries {
+		entries = append(entries, entry)
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
+	return s.rev, s.wake, entries
+}
+func (s *WorkspaceProviders) bumpLocked() { close(s.wake); s.wake = make(chan struct{}); s.rev++ }
+
+type workspaceInvalidation struct {
+	ID     string `json:"id"`
+	Handle string `json:"handle"`
+	Seq    uint64 `json:"seq"`
+}
+
+// One local connection selects directly over copied provider and membership
+// channels. It carries invalidations only; totals remain provider-owned.
+func (s *Server) workspaceEvents(w http.ResponseWriter, r *http.Request, set *WorkspaceProviders) {
+	if origin := r.Header.Get("Origin"); origin != "" && origin != "http://"+s.host {
+		http.Error(w, "cross-origin request refused", http.StatusForbidden)
+		return
+	}
+	if _, ok := w.(http.Flusher); !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	controller := http.NewResponseController(w)
+	send := func(name string, value any) bool {
+		data, err := json.Marshal(value)
+		if err != nil {
+			return false
+		}
+		_ = controller.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		if _, err = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", name, data); err != nil {
+			return false
+		}
+		err = controller.Flush()
+		_ = controller.SetWriteDeadline(time.Time{})
+		return err == nil
+	}
+	first := true
+	var previousRev uint64
+	last := map[string]uint64{}
+	for {
+		rev, wake, entries := set.snapshot()
+		bindings := make([]workspaceInvalidation, 0, len(entries))
+		cases := []reflect.SelectCase{{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(r.Context().Done())}, {Dir: reflect.SelectRecv, Chan: reflect.ValueOf(s.restarting)}, {Dir: reflect.SelectRecv, Chan: reflect.ValueOf(wake)}}
+		for _, entry := range entries {
+			seq, next := entry.provider.Changed()
+			if detailed, ok := entry.provider.(interface {
+				ViewChanges() (client.ViewChange, <-chan struct{})
+			}); ok {
+				var view client.ViewChange
+				view, next = detailed.ViewChanges()
+				seq = view.Content
+			}
+			bindings = append(bindings, workspaceInvalidation{entry.ID, entry.Handle, seq})
+			cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(next)})
+		}
+		// Recheck the snapshot and copy pending events under the map lock,
+		// then release it before any writer I/O. A removal after this check
+		// may leave one old-handle invalidation on the wire: its scoped GET
+		// fails closed, and the closed wake reconciles membership next time.
+		set.mu.RLock()
+		if rev != set.rev {
+			set.mu.RUnlock()
+			continue
+		}
+		var pending []struct {
+			name string
+			data any
+		}
+		if first || rev != previousRev {
+			pending = append(pending, struct {
+				name string
+				data any
+			}{"workspaces", struct {
+				Rev      uint64                  `json:"rev"`
+				Bindings []workspaceInvalidation `json:"bindings"`
+			}{rev, bindings}})
+			last = map[string]uint64{}
+			for _, binding := range bindings {
+				last[binding.ID+":"+binding.Handle] = binding.Seq
+			}
+			first, previousRev = false, rev
+		} else {
+			for _, binding := range bindings {
+				key := binding.ID + ":" + binding.Handle
+				if binding.Seq > last[key] {
+					pending = append(pending, struct {
+						name string
+						data any
+					}{"change", binding})
+					last[key] = binding.Seq
+				}
+			}
+		}
+		set.mu.RUnlock()
+		for _, event := range pending {
+			if !send(event.name, event.data) {
+				return
+			}
+		}
+		chosen, _, _ := reflect.Select(cases)
+		if chosen < 2 {
+			return
+		}
+	}
+}
+
 func (s *WorkspaceProviders) List() []WorkspaceBinding {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -111,6 +237,8 @@ func (s *Server) WorkspaceHandler(set *WorkspaceProviders) http.Handler {
 	base := s.Handler()
 	metadata := s.guard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case r.URL.Path == "/api/workspaces/events" && r.Method == "GET":
+			s.workspaceEvents(w, r, set)
 		case r.URL.Path == "/api/workspaces" && r.Method == "GET":
 			writeJSON(w, set.List())
 		case r.URL.Path == "/api/workspaces/all" && r.Method == "GET":

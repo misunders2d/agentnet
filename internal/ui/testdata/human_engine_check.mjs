@@ -1,15 +1,48 @@
 // Isolated Alice/Bob/Carol human Engine world; source-driven transport, no real peer/model/cloud.
-import assert from 'node:assert/strict';
-import { pathToFileURL } from 'node:url';
 import { Engine, memoryStore } from '../static/engine.mjs';
 import * as wire from '../static/wire.mjs';
+// Keep Node's strict assertions; browsers run the same fixtures with tagged,
+// canonical values, never JSON's lossy Map/Set/undefined representation.
+let browserAssertions=0;
+const canonical=value=>{
+  if(value===undefined)return ['undefined'];
+  if(value===null)return ['null'];
+  const type=typeof value;
+  if(type==='number')return ['number',Object.is(value,-0)?'-0':String(value)];
+  if(['string','boolean','bigint'].includes(type))return [type,String(value)];
+  if(ArrayBuffer.isView(value))return [value.constructor.name,[...new Uint8Array(value.buffer,value.byteOffset,value.byteLength)]];
+  if(value instanceof ArrayBuffer)return ['ArrayBuffer',[...new Uint8Array(value)]];
+  if(value instanceof Date)return ['Date',String(value.getTime())];
+  const order=values=>values.sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  if(value instanceof Map)return ['Map',order([...value].map(([k,v])=>[canonical(k),canonical(v)]))];
+  if(value instanceof Set)return ['Set',order([...value].map(canonical))];
+  const proto=Object.getPrototypeOf(value);
+  if(!Array.isArray(value)&&proto!==Object.prototype&&proto!==null)throw Error('Unsupported fixture equality type');
+  if(Object.getOwnPropertySymbols(value).length)throw Error('Unsupported fixture symbol keys');
+  return [Array.isArray(value)?'Array':proto===null?'NullObject':'Object',Array.isArray(value)?value.length:null,Object.keys(value).sort().map(k=>[k,canonical(value[k])])];
+};
+const matches=(error,expected)=>expected===undefined||expected instanceof RegExp?expected===undefined||expected.test(String(error?.message)):typeof expected==='function'&&expected(error)===true;
+const browserAssert={
+  ok(value,message){browserAssertions++;if(!value)throw Error(message||'Expected truthy value');},
+  equal(a,b,message){browserAssertions++;if(!Object.is(a,b))throw Error(message||'Values differ');},
+  deepEqual(a,b,message){browserAssertions++;if(JSON.stringify(canonical(a))!==JSON.stringify(canonical(b)))throw Error(message||'Structures differ');},
+  throws(fn,expected,message){browserAssertions++;try{fn();}catch(error){if(matches(error,expected))return;throw error;}throw Error(message||'Expected exception');},
+  async rejects(fn,expected,message){browserAssertions++;try{await (typeof fn==='function'?fn():fn);}catch(error){if(matches(error,expected))return;throw error;}throw Error(message||'Expected rejection');}
+};
+export const assert=typeof process!=='undefined'?(await import('node:assert/strict')).default:browserAssert;
+export const fixtureAssertionCount=()=>browserAssertions;
+// These vectors exercise the actual selected runtime assertions, before signed cases.
+assert.deepEqual(new Map([['b',new Set([2,1])],['a',undefined]]),new Map([['a',undefined],['b',new Set([1,2])]]));
+for(const [a,b] of [[new Map([['x',1]]),new Map([['x',2]])],[new Set([1]),new Set([2])],[new Uint8Array([1]),new Uint8Array([2])],[{x:undefined},{}],[[undefined],Array(1)],[new Uint8Array([1]),[1]],[NaN,null]])assert.throws(()=>assert.deepEqual(a,b));
+assert.throws(()=>{throw Error('fixture needle');},/needle/);assert.throws(()=>{throw Object.assign(Error('fixture'),{code:'exact'});},e=>e.code==='exact');
+await assert.rejects(async()=>{throw Error('fixture needle');},/needle/);await assert.rejects(async()=>{throw Object.assign(Error('fixture'),{code:'exact'});},e=>e.code==='exact');
 let checks = 0, sequence = 1;
 const id = () => (sequence++).toString(16).padStart(32, '0');
 const now = 1790000000123;
 const check = (v, why) => { assert.ok(v, why); checks++; };
 const refuses = async (fn, re) => { await assert.rejects(fn, re); checks++; };
 const json = (v, status = 200) => new Response(v == null ? null : JSON.stringify(v), { status });
-async function world() {
+async function world({store=()=>memoryStore()}={}) {
   const users = [], pubs = new Map(), profiles = new Map(), rosters = new Map(), catalogs = new Map(), blobs = new Map(), posts = [], groups = new Map();
   let offline = false;
   const fetch = async (url, o = {}) => {
@@ -44,7 +77,8 @@ async function world() {
     throw new Error('unexpected synthetic path ' + p);
   };
   for (const name of ['alice', 'bob', 'carol', 'mallory']) {
-    const e = new Engine({ store: memoryStore(), now: () => now, base: 'https://synthetic.invalid', fetch });
+    const e = new Engine({ store: await store(), now: () => now, base: 'https://synthetic.invalid', fetch });
+    e.fixtureStoreName=e.store.fixtureStoreName;
     e.keys = await wire.newKeys(); e.address = name + '/desk'; e.pub = await wire.publicEntry(e.keys, e.address); e.fp = await wire.fingerprint(e.pub);
     e.roster = await wire.newRoster(e.keys, e.address, name); e.me = await e.personRecord([e.roster], 'self', null);
     await e.store.write([{ s: 'kv', k: 'identity', v: { keys: e.keys, address: e.address, fingerprint: e.fp } }, { s: 'kv', k: 'person', v: e.me }]);
@@ -78,7 +112,8 @@ async function world() {
   };
   const accept = async (pid) => { const ev = await decision(carol, pid); for (const e of [alice, bob, carol]) await receive(await from(carol, e, { sub: 'event', pid, body: wire.eventJSON(ev) }), e); return ev; };
   const sibling = async (owner, address, human = false) => {
-    const e = new Engine({ store: memoryStore(), now: () => now, base: owner.base, fetch });
+    const e = new Engine({ store: await store(), now: () => now, base: owner.base, fetch });
+    e.fixtureStoreName=e.store.fixtureStoreName;
     e.keys = await wire.newKeys(); e.address = address; e.pub = await wire.publicEntry(e.keys, address); e.fp = await wire.fingerprint(e.pub);
     const join = await wire.joinConsent(e.keys, address, owner.me.person, owner.me.seq + 1, owner.me.hash);
     const next = await wire.nextRoster(owner.keys, owner.address, owner.roster, [...owner.me.devices.map((d) => pubs.get(d.address)), e.pub], join, owner.roster.label, human ? [...await wire.rosterHumans(owner.roster), e.fp] : null);
@@ -98,7 +133,7 @@ async function world() {
 
 export { world, check, refuses, id, now, checks };
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (typeof process!=='undefined' && import.meta.url === (await import('node:url')).pathToFileURL(process.argv[1]).href) {
 // A DM participation event retries only a failed atomic commit, with fresh
 // authority and exactly the same signed event. Never retry after storage.
 for (const mode of ['once', 'pending-key', 'persistent', 'other-error']) {

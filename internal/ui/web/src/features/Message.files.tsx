@@ -3,7 +3,7 @@
 // with name, size and Download. Files come checked and decrypted from
 // host.file; a download is a link the browser saves where it saves things,
 // so nothing here claims where the file went. HTML and SVG never render.
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { IconDownload, IconFile, IconFileText, IconFileZip, IconPhoto, IconCloudDownload } from "@tabler/icons-react";
 import { errorText, type Api } from "../api";
 import { useStore } from "../store";
@@ -13,7 +13,8 @@ import { niceDevice, size as bytes } from "../model";
 import { Sheet } from "../ui/Sheet";
 import { ImageViewer } from "../ui/ImageViewer";
 import { Button } from "../ui/Button";
-import { openPictureEditor } from "../pictures.mjs";
+import { useLeaving } from "../ui/Motion";
+import { openPictureEditor, sniffVideo } from "../pictures.mjs";
 import { isThreadMsg, type AnyMsg } from "./Message.model";
 import { SaveToDrive } from "./Drive";
 import { previewText, textPreviewName, TEXT_PREVIEW_LIMIT } from "./Message.files.text";
@@ -22,6 +23,8 @@ import { Markdown } from "./Markdown";
 interface FileItem { index: number; name: string; size: number; openable: boolean; availability?: string; note?: string }
 
 const pictureName = /\.(png|jpe?g|gif|webp)$/i;
+const videoName = /\.(mp4|m4v|mov|webm|ogv|ogg)$/i;
+const INLINE_VIDEO_LIMIT = 16 * 1024 * 1024;
 
 function sniff(b: Uint8Array): string {
   const at = (i: number, s: string) => [...s].every((c, j) => b[i + j] === c.charCodeAt(0));
@@ -54,7 +57,8 @@ export function MessageFiles({ m }: { m: AnyMsg }) {
   return (
     <div className="mt-1.5 flex flex-col gap-1.5">
       {files.map((f) => <div key={pictureKey(m, f)} className="min-w-0 space-y-1">
-        {standing(m, f) === "open" && pictureName.test(f.name) ? <Picture m={m} f={f} /> : <FileChip m={m} f={f} />}
+        {standing(m, f) === "open" && pictureName.test(f.name) ? <Picture m={m} f={f} />
+          : standing(m, f) === "open" && videoName.test(f.name) ? <VideoFile m={m} f={f} /> : <FileChip m={m} f={f} />}
         {standing(m, f) === "open" && !isThreadMsg(m) && <SaveToDrive m={m} index={f.index} />}
       </div>)}
     </div>
@@ -191,6 +195,102 @@ function Picture({ m, f }: { m: AnyMsg; f: FileItem }) {
         actions={<><Button icon={<IconDownload size={20} />} onClick={() => save(url, f.name, portal)}>Download</Button>
           {hasPerson && <Button onClick={async () => { if (await openPictureEditor({ into: portal, src: url, save: png => store.api.setPersonPicture(png) })) await store.refetch(); }}>Use as my picture</Button>}</>} />}
     </>
+  );
+}
+
+// Each open owns one Blob. Closing or leaving invalidates a pending read;
+// host.file has no AbortSignal, so its late bytes are discarded, not cached.
+function VideoFile({ m, f }: { m: AnyMsg; f: FileItem }) {
+  const store = useApp();
+  const leaving = useLeaving();
+  const leavingRef = useRef(leaving);
+  leavingRef.current = leaving;
+  const media = useRef<HTMLVideoElement>(null);
+  // Keep the element through React's ref detach so unmount cleanup can pause
+  // and unload it before revoking the Blob, even after removal from the DOM.
+  const bindMedia = useCallback((node: HTMLVideoElement | null) => { if (node) media.current = node; }, []);
+  const owned = useRef("");
+  const generation = useRef(0);
+  const mounted = useRef(true);
+  const pending = useRef(false);
+  const [url, setURL] = useState("");
+  const [phase, setPhase] = useState<"idle" | "loading" | "ready" | "failed">("idle");
+  const [note, setNote] = useState("");
+  const inline = Number.isSafeInteger(f.size) && f.size > 0 && f.size <= INLINE_VIDEO_LIMIT;
+
+  function release(reset = true) {
+    generation.current++;
+    pending.current = false;
+    const video = media.current;
+    if (video) { video.pause(); video.removeAttribute("src"); video.load(); }
+    if (owned.current) { URL.revokeObjectURL(owned.current); owned.current = ""; }
+    if (reset && mounted.current) { setURL(""); setPhase("idle"); setNote(""); }
+  }
+  function failed(message: string) {
+    release(false);
+    if (mounted.current) { setURL(""); setPhase("failed"); setNote(message); }
+  }
+  useEffect(() => {
+    // Keep the inert outgoing node mounted, but unload it immediately.
+    // A cancelled transition can return this same card: offer Play again.
+    if (leaving) release(false);
+    else if (url && !owned.current) release();
+  }, [leaving]);
+  useEffect(() => {
+    mounted.current = true;
+    const hidden = () => { if (document.hidden) release(); };
+    const leave = () => release();
+    document.addEventListener("visibilitychange", hidden);
+    window.addEventListener("pagehide", leave);
+    const off = store.api.host.android?.onVisibility(visible => { if (!visible) release(); });
+    return () => {
+      mounted.current = false;
+      document.removeEventListener("visibilitychange", hidden);
+      window.removeEventListener("pagehide", leave);
+      off?.(); release(false);
+    };
+  }, [store]);
+  useEffect(() => {
+    if (!url || !media.current || leavingRef.current) return;
+    const visit = generation.current;
+    // This follows an explicit Play click; async decrypt may consume its
+    // transient activation. Keep controls for a second native Play tap.
+    void media.current.play().catch((e: unknown) => {
+      if (!mounted.current || generation.current !== visit) return;
+      if (e instanceof DOMException && e.name === "NotAllowedError") setNote("Tap Play in the video controls to start.");
+      else failed("This video can’t be played here. Download to play it.");
+    });
+  }, [url]);
+  async function open() {
+    if (!inline || leavingRef.current || pending.current || owned.current || document.hidden || store.api.host.android?.visible() === false) return;
+    const visit = ++generation.current;
+    pending.current = true; setPhase("loading"); setNote("Loading video…");
+    try {
+      let b = (await store.api.file(m.id, f.index, m.dir)).bytes;
+      if (!mounted.current || leavingRef.current || generation.current !== visit || !store.isActive()) return;
+      if (b.byteLength > INLINE_VIDEO_LIMIT || b.byteLength !== f.size) throw Error("Video size differs from its attachment details. Download to play it.");
+      const type = sniffVideo(b);
+      if (!type) throw Error("This video can’t be played here. Download to play it.");
+      const blob = new Blob([b as BlobPart], { type });
+      b = new Uint8Array(0);
+      owned.current = URL.createObjectURL(blob);
+      setURL(owned.current); setPhase("ready"); setNote("");
+    } catch (e) {
+      if (mounted.current && !leavingRef.current && generation.current === visit) failed(errorText(e));
+    } finally { if (generation.current === visit) pending.current = false; }
+  }
+  return (
+    <div role="group" aria-label={"Video " + f.name} className="w-full min-w-0 max-w-[480px] space-y-1.5">
+      <FileChip m={m} f={f} />
+      {inline ? <div className="flex flex-wrap items-center gap-2">
+        {phase === "idle" && <Button className="min-h-11" aria-label={"Play video " + f.name} onClick={() => void open()}>Play</Button>}
+        {(phase === "loading" || phase === "ready") && <Button className="min-h-11" aria-label={"Close video " + f.name} onClick={() => release()}>Close video</Button>}
+      </div> : <p className="text-[12px] text-muted">{f.size > INLINE_VIDEO_LIMIT ? "Videos up to 16 MiB can play here." : "This video’s size is unknown."} Download to play this file.</p>}
+      {note && <p role="status" className="text-[13px] text-text-2">{note}</p>}
+      {url && <video ref={bindMedia} src={url} controls playsInline preload="none" aria-label={f.name}
+        className="block max-h-[min(60dvh,480px)] w-full rounded-xl bg-black object-contain"
+        onError={() => { if (owned.current) failed("This video can’t be played here. Download to play it."); }} />}
+    </div>
   );
 }
 

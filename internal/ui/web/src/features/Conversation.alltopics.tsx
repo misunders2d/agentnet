@@ -11,6 +11,7 @@ import { TOPICS, firstLine, topicOf, when, type Topic, type TopicState } from ".
 import { useModal, usePortal } from "../owned";
 import { useStore } from "../store";
 import { Button, IconButton } from "../ui/Button";
+import { usePagedChoices, useSteadyChoices, topicIdentity, unreadTopicOrder } from "./Conversation.choices";
 import { TopicMark, topicLabel } from "./Conversation.topics";
 
 const filters: { id: TopicState; label: string; none: string }[] = [
@@ -35,20 +36,21 @@ export function AllTopics({ open, onOpenChange, peer,conv, agent, current, flat 
   const store = useApp();
   const wide = useWide();
   const overview = useStore(store, (s) => s.overview);
-  const seq = overview?.seq;
+  const revision=useStore(store,s=>s.contentRevision);
   const [filter, setFilter] = useState<TopicState>("active");
   const [query, setQuery] = useState("");
   const [q, setQ] = useState(""); // the query after the person stops typing
-  const [loadedItems, setItems] = useState<Topic[]>([]);
-  const [next, setNext] = useState("");
-  const [matched, setMatched] = useState(0);
-  const [ownLoading, setLoading] = useState(false);
-  const [ownFailed, setFailed] = useState("");
   const state = q ? "" : filter;
-  const items=flat?flat.topics.filter(t=>(q||t.state===filter)&&(t.title+" "+t.last).toLowerCase().includes(q.toLowerCase())):loadedItems;
-  const loading=flat?.loading??ownLoading,failed=flat?.failed??ownFailed;
-  const matchedCount=flat?items.length:matched;
+  const scope=JSON.stringify([conv||"",peer,state,q]);
+  const page=usePagedChoices(open&&!flat,scope,revision,TOPICS.pageSize,topicIdentity,async(before,limit)=>{
+   const p=await store.api.topics({conv,peer,state,q,before,limit});return {rows:(p.topics||[]).map(topicOf),total:p.matched,next:p.next};
+  });
+  const latest=flat?[...flat.topics].filter(t=>(q||t.state===filter)&&q.toLowerCase().split(/\s+/).filter(Boolean).every(w=>(t.title+" "+(t.autoTitle||"")+" "+t.last).toLowerCase().includes(w))).sort(unreadTopicOrder):page.rows;
+  const loading=flat?.loading??page.loading,failed=flat?.failed??page.error;
+  const matchedCount=flat?latest.length:page.total,next=flat?"":page.next;
   const [selected,setSelected]=useState<string[]>([]);
+  const stable=useSteadyChoices(latest,topicIdentity,scope,selected.length>0);
+  const items=stable.choices.map(c=>c.row),present=new Set(latest.map(topicIdentity));
   const [counts,setCounts]=useState<Record<string,number>>({});
   const [action,setAction]=useState<"delete"|"done"|"archive"|null>(null);
   const [undo,setUndo]=useState(false);
@@ -65,7 +67,7 @@ export function AllTopics({ open, onOpenChange, peer,conv, agent, current, flat 
     },TOPICS.undoDelay);
   };
   const toggle=(id:string)=>{setCounts(had=>({...had,[id]:items.find(t=>t.id===id)?.count||1}));setSelected(had=>had.includes(id)?had.filter(x=>x!==id):[...had,id]);};
-  const asked = useRef(0);
+  useEffect(()=>{cancel();setSelected([]);setCounts({});stable.release();},[scope]);
   const search = useRef<HTMLInputElement>(null);
   const portal = usePortal();
   const modal = useModal(open);
@@ -77,32 +79,10 @@ export function AllTopics({ open, onOpenChange, peer,conv, agent, current, flat 
 
   useEffect(() => { const x = setTimeout(() => setQ(query.trim()), TOPICS.searchDelay); return () => clearTimeout(x); }, [query]);
 
-  // The first page again when the filter or the search changes; when
-  // anything else here changes, the same rows again (as many as were shown).
-  const shownFor = useRef("");
-  useEffect(() => {
-    if (!open || flat) return;
-    const ask = ++asked.current, key = state + "\n" + q, same = shownFor.current === key;
-    shownFor.current = key;
-    if (!same) { setItems([]); setNext(""); } // never another filter's rows under this one
-    setLoading(true);
-    store.api.topics({ conv,peer, state, q, limit: same ? Math.min(Math.max(items.length, TOPICS.pageSize), TOPICS.pageMax) : TOPICS.pageSize }).then((p) => {
-      if (ask !== asked.current) return;
-      setItems((p.topics || []).map(topicOf)); setNext(p.next || ""); setMatched(p.matched); setFailed("");
-    }, (e) => { if (ask === asked.current) setFailed(errorText(e)); }).finally(() => { if (ask === asked.current) setLoading(false); });
-  }, [open, conv,peer, state, q, seq,!!flat]);
-  // Emptied once it has slid away, not while it does (it would flash "No topics").
-  const reset = () => { setItems([]); setNext(""); setQuery(""); setQ(""); shownFor.current = ""; };
-
-  const more = () => {
-    const ask = ++asked.current;
-    setLoading(true);
-    store.api.topics({ conv,peer, state, q, before: next, limit: TOPICS.pageSize }).then((p) => {
-      if (ask !== asked.current) return;
-      setItems((had) => [...had, ...(p.topics || []).map(topicOf).filter((t) => !had.some((h) => h.id === t.id))]); setNext(p.next || ""); setMatched(p.matched);
-    }, (e) => { if (ask === asked.current) setFailed(errorText(e)); }).finally(() => { if (ask === asked.current) setLoading(false); });
-  };
-  const go = (t: Topic) => { onOpenChange(false); if(flat)flat.choose(t.id);else if(conv)store.setDraft(conv,{...store.draft(conv),topic:t.id,newTopic:false,replyTo:undefined},true);else void store.open({ kind: "thread", id: t.id, peer: t.peer }); };
+  // The page hook refills the entire displayed prefix after a content push.
+  const reset=()=>{setQuery("");setQ("");stable.release();};
+  const more=page.more;
+  const go = (t: Topic) => { if(!present.has(topicIdentity(t)))return;stable.release();onOpenChange(false); if(flat)flat.choose(t.id);else if(conv)void store.openUnread({kind:"dm",id:conv},t.id);else void store.openUnread({ kind: "thread", id: t.id, peer: t.peer }); };
   const f = filters.find((x) => x.id === filter)!;
 
   return (
@@ -152,7 +132,7 @@ export function AllTopics({ open, onOpenChange, peer,conv, agent, current, flat 
               {q && !loading && !failed ? (matchedCount === 1 ? "1 topic matches across all statuses" : matchedCount + " topics match across all statuses") : ""}
             </p>
             {failed && (
-              <div role="alert" className="mx-2 mt-2 rounded-2xl bg-danger-bg p-3 text-[14px] text-danger stroke">Topics didn’t load: {failed}</div>
+              <div role="alert" className="mx-2 mt-2 rounded-2xl bg-danger-bg p-3 text-[14px] text-danger stroke">Topics didn’t load: {failed} {!flat&&<Button size="sm" onClick={page.retry}>Try again</Button>}</div>
             )}
             {!failed && items.length === 0 && !loading && (
               <div className="px-4 py-10 text-center">
@@ -161,11 +141,11 @@ export function AllTopics({ open, onOpenChange, peer,conv, agent, current, flat 
               </div>
             )}
             {items.length > 0 && (
-              <ul aria-label={q ? "Matching topics" : f.label + " topics"} className="flex flex-col gap-0.5">
+              <ul {...stable.bind} aria-label={q ? "Matching topics" : f.label + " topics"} className="flex flex-col gap-0.5">
                 {items.map((t) => (
-                  <li key={t.id} className="flex items-center">
-                    <input type="checkbox" aria-label={"Select "+(t.title||"Untitled topic")} checked={selected.includes(t.id)} disabled={undo||busy||!!flat&&!flat.canSelect(t.id)} onChange={()=>toggle(t.id)} className="m-3 size-5 shrink-0"/>
-                    <button type="button" onClick={() => go(t)} aria-current={t.id === current ? "true" : undefined} aria-label={topicLabel(t) + ", " + when(t.lastAt)}
+                  <li key={topicIdentity(t)} className="flex items-center">
+                    <input type="checkbox" aria-label={"Select "+(t.title||"Untitled topic")} checked={selected.includes(t.id)} disabled={!present.has(topicIdentity(t))||undo||busy||!!flat&&!flat.canSelect(t.id)} onChange={()=>toggle(t.id)} className="m-3 size-5 shrink-0"/>
+                    <button type="button" onClick={() => go(t)} aria-disabled={!present.has(topicIdentity(t))} aria-current={t.id === current ? "true" : undefined} aria-label={topicLabel(t) + ", " + when(t.lastAt)}
                       className={"flex min-w-0 flex-1 flex-col gap-1 rounded-2xl border px-3 py-2.5 text-left transition-colors duration-200 "
                         + (t.id === current ? "border-outline bg-surface shadow-pop-sm" : "border-transparent hover:bg-sunken")}>
                       <span className="flex min-w-0 items-center gap-2">
@@ -173,9 +153,9 @@ export function AllTopics({ open, onOpenChange, peer,conv, agent, current, flat 
                         <time dateTime={t.lastAt} className="shrink-0 text-[12px] font-semibold text-muted tnum">{when(t.lastAt)}</time>
                       </span>
                       <span className="flex min-w-0 items-center gap-2">
-                        <TopicMark t={t} />{flat&&<span className="shrink-0 text-[12px] text-text-2">{flat.detail(t.id)}</span>}
+                        <TopicMark t={t} />{flat&&<span className="shrink-0 text-[12px] text-text-2">{present.has(topicIdentity(t))?flat.detail(t.id):"No longer available"}</span>}
                         <span className="min-w-0 flex-1 truncate text-[13.5px] text-text-2">
-                          {t.conclusion ? <><b className="font-bold text-agent-ink">{t.doneBy === "you" ? "You:" : t.concludedBy && t.concludedBy === overview?.me.address ? "Your agent:" : "Agent:"}</b> {t.conclusion}</> : t.last}
+                          {!present.has(topicIdentity(t))?"No longer available":t.conclusion ? <><b className="font-bold text-agent-ink">{t.doneBy === "you" ? "You:" : t.concludedBy && t.concludedBy === overview?.me.address ? "Your agent:" : "Agent:"}</b> {t.conclusion}</> : t.last}
                         </span>
                         {t.unread > 0 && <span aria-hidden="true" className="grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-danger px-1 text-[11px] font-bold text-white tnum">{t.unread}</span>}
                       </span>
@@ -186,7 +166,7 @@ export function AllTopics({ open, onOpenChange, peer,conv, agent, current, flat 
             )}
             {next && (
               <div className="flex justify-center pt-2">
-                <Button size="sm" variant="outline" disabled={loading} onClick={more}>Show more ({matched - items.length})</Button>
+                <Button size="sm" variant="outline" disabled={loading} onClick={more}>Show more ({Math.max(0,matchedCount - latest.length)})</Button>
               </div>
             )}
             {loading && items.length === 0 && <p className="px-4 py-6 text-center text-[14px] text-text-2" role="status">Loading topics…</p>}

@@ -23,7 +23,7 @@ class UpdaterInstrumentation : Instrumentation() {
     override fun onStart() {
         val result = Bundle()
         try {
-            check(mode in setOf("install", "snapshot", "network", "cleanup", "interrupt", "notifications", "notifications-denied")) { "Unknown fixture operation." }
+            check(mode in setOf("install", "snapshot", "network", "cleanup", "interrupt", "notifications", "notifications-denied", "indicators-video")) { "Unknown fixture operation." }
             if (mode == "cleanup") {
                 val preferences=targetContext.applicationContext.getSharedPreferences("native-update",0)
                 val id=preferences.getInt("session",-1)
@@ -37,6 +37,10 @@ class UpdaterInstrumentation : Instrumentation() {
             }
             val activity = startActivitySync(Intent(targetContext, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
             waitForIdleSync()
+            if (mode == "indicators-video") {
+                checkIndicatorsVideo(activity, result)
+                finish(Activity.RESULT_OK, result); return
+            }
             if (mode.startsWith("notifications")) {
                 checkNotifications(activity, mode == "notifications-denied", result)
                 finish(Activity.RESULT_OK, result); return
@@ -207,6 +211,172 @@ class UpdaterInstrumentation : Instrumentation() {
             uiAutomation.executeShellCommand("input keyevent 224").close()
             routes.forEach { route -> runOnMainSync { dismiss.invoke(host, workspace, route) } }
         }
+    }
+    /** Authored OS-boundary matrix; run only on the owned isolated Android fixture. */
+    private fun checkIndicatorsVideo(activity: MainActivity, result: Bundle) {
+        val app = targetContext.applicationContext as AgentNetApp
+        val manager = app.getSystemService(android.app.NotificationManager::class.java)
+        check(app.host.notificationsPermitted()) { "Grant existing fixture notification consent before this mode; this test never changes permissions." }
+        check(!connectionNotificationChannel().canShowBadge())
+        app.host.prepareNotificationChannel()
+        fun waitFor(label: String, predicate: () -> Boolean) {
+            val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (!predicate() && System.nanoTime() < end) Thread.sleep(25)
+            check(predicate()) { label }
+        }
+        fun eligible() = manager.activeNotifications.filter { it.notification.channelId == ACTIVITY_CHANNEL && activityBadgeTag(it.tag) }
+        check(eligible().isEmpty()) { "Use the isolated fixture without pre-existing activity notifications." }
+        val tags = listOf("1".repeat(32), "2".repeat(32)).map { WebPolicy.notificationTag("default", "msg=$it&dir=in")!! }
+        val click = android.app.PendingIntent.getActivity(app, 71, Intent(app, MainActivity::class.java).setAction("fixture-indicator"), android.app.PendingIntent.FLAG_IMMUTABLE)
+        val redacted = android.app.Notification.Builder(app, ACTIVITY_CHANNEL).setSmallIcon(R.drawable.ic_agentnet)
+            .setContentTitle("AgentNet").setContentText("New activity").build()
+        fun note() = android.app.Notification.Builder(app, ACTIVITY_CHANNEL).setSmallIcon(R.drawable.ic_agentnet)
+            .setContentTitle("Fixture sender").setContentText("Private retained preview")
+            .setStyle(android.app.Notification.BigTextStyle().bigText("Private retained preview"))
+            .setContentIntent(click).setAutoCancel(true).setVisibility(android.app.Notification.VISIBILITY_PRIVATE)
+            .setPublicVersion(redacted).build()
+        try {
+            runOnMainSync { updateActivityBadges(app, 9, false) }
+            check(eligible().isEmpty()) { "Badge-only notification appeared" }
+            tags.forEachIndexed { index, tag -> manager.notify(tag, index + 71, note()) }
+            manager.notify("unrelated-tag", 73, note())
+            waitFor("Fixture notifications not active") { eligible().size == 2 && manager.activeNotifications.any { it.tag == "unrelated-tag" } }
+            val before = eligible().associateBy { it.tag }
+            val newestKey = before.values.sortedWith(compareByDescending<android.service.notification.StatusBarNotification> { it.postTime }.thenBy { it.key }).first().key
+            runOnMainSync { updateActivityBadges(app, 7, false) }
+            waitFor("Aggregate not assigned to exactly one active notification") { eligible().count { it.notification.number == 7 } == 1 && eligible().count { it.notification.number == 0 } == 1 }
+            check(eligible().single { it.notification.number == 7 }.key == newestKey)
+            for (entry in eligible()) {
+                val prior = before.getValue(entry.tag).notification
+                val now = entry.notification
+                check(now.channelId == prior.channelId && now.contentIntent == prior.contentIntent && now.`when` == prior.`when`)
+                check(now.visibility == prior.visibility && now.flags and android.app.Notification.FLAG_AUTO_CANCEL != 0)
+                check(now.extras.getCharSequence(android.app.Notification.EXTRA_TEXT).toString() == "Private retained preview")
+                check(now.extras.getCharSequence(android.app.Notification.EXTRA_BIG_TEXT).toString() == "Private retained preview")
+                check(now.publicVersion.extras.getCharSequence(android.app.Notification.EXTRA_TEXT).toString() == "New activity")
+                if (now.number == 7) check(now.flags and android.app.Notification.FLAG_ONLY_ALERT_ONCE != 0)
+            }
+            check(manager.activeNotifications.single { it.tag == "unrelated-tag" }.notification.number == 0)
+            runOnMainSync { updateActivityBadges(app, 5, true) }
+            waitFor("Partial positive estimate did not clear numeric badge") { eligible().all { it.notification.number == 0 } }
+            runOnMainSync { updateActivityBadges(app, 0, true) }
+            check(eligible().all { it.notification.number == 0 })
+            runOnMainSync { updateActivityBadges(app, 5, false) }
+            waitFor("Exact aggregate not restored") { eligible().count { it.notification.number == 5 } == 1 }
+            val numbered = eligible().single { it.notification.number == 5 }
+            manager.cancel(numbered.tag, numbered.id)
+            waitFor("Exact dismissal missing") { eligible().size == 1 }
+            runOnMainSync { updateActivityBadges(app, 2, false) }
+            waitFor("Remaining notification count missing") { eligible().single().notification.number == 2 }
+            runOnMainSync { updateActivityBadges(app, 0, true) }
+            waitFor("Unknown numeric badge not cleared") { eligible().all { it.notification.number == 0 } }
+        } finally {
+            tags.forEachIndexed { index, tag -> manager.cancel(tag, index + 71) }
+            manager.cancel("unrelated-tag", 73)
+        }
+        waitFor("Fixture badge cleanup") { eligible().isEmpty() }
+        runOnMainSync { updateActivityBadges(app, 12, false) }
+        check(eligible().isEmpty())
+        // A newly posted ordinary activity notification uses the latest scalar.
+        val totalField = NativeHost::class.java.getDeclaredField("unreadTotal").apply { isAccessible = true }
+        val partialField = NativeHost::class.java.getDeclaredField("unreadPartial").apply { isAccessible = true }
+        val post = NativeHost::class.java.getDeclaredMethod("notifyActivity", String::class.java, String::class.java, String::class.java, String::class.java).apply { isAccessible = true }
+        val dismiss = NativeHost::class.java.getDeclaredMethod("dismissActivity", String::class.java, String::class.java).apply { isAccessible = true }
+        val freshRoute = "msg=" + "3".repeat(32) + "&dir=in"
+        var savedTotal = 0L; var savedPartial = true
+        try {
+            runOnMainSync {
+                savedTotal = totalField.getLong(app.host); savedPartial = partialField.getBoolean(app.host)
+                totalField.setLong(app.host, 6L); partialField.setBoolean(app.host, false)
+                post.invoke(app.host, "default", freshRoute, "Fresh fixture sender", "Fresh private body")
+            }
+            waitFor("New activity did not use latest aggregate") { eligible().singleOrNull()?.notification?.number == 6 }
+            runOnMainSync {
+                partialField.setBoolean(app.host, true)
+                post.invoke(app.host, "default", freshRoute, "Fresh fixture sender", "Fresh private body")
+            }
+            waitFor("New activity exposed partial positive estimate as an exact number") { eligible().singleOrNull()?.notification?.number == 0 }
+        } finally {
+            runOnMainSync {
+                dismiss.invoke(app.host, "default", freshRoute)
+                totalField.setLong(app.host, savedTotal); partialField.setBoolean(app.host, savedPartial)
+            }
+        }
+        waitFor("Fresh activity cleanup") { eligible().isEmpty() }
+
+        val field = MainActivity::class.java.getDeclaredField("web").apply { isAccessible = true }
+        var page: WebView? = null
+        waitFor("Native WebView not ready") { runOnMainSync { page = field.get(activity) as? WebView }; page != null }
+        val web = checkNotNull(page)
+        waitFor("Native WebView not loaded") { var ready = false; runOnMainSync { ready = web.url?.startsWith(app.host.state.origin) == true }; ready }
+        javascript(web, "window.__fullscreenBackCalls=0;window.agentnetNativeBack=()=>{window.__fullscreenBackCalls++;return false}")
+        var chrome: android.webkit.WebChromeClient? = null
+        runOnMainSync { chrome = web.webChromeClient }
+        val client = checkNotNull(chrome)
+        var firstHidden = 0; var secondHidden = 0; var rejectedReentry = 0
+        val first = android.view.View(activity)
+        var oldUi = 0; var oldFlags = 0; var oldBehavior = 0; var oldStatus = true; var oldNavigation = true
+        runOnMainSync {
+            val decor = activity.window.decorView
+            @Suppress("DEPRECATION")
+            oldUi = decor.systemUiVisibility
+            oldFlags = activity.window.attributes.flags
+            if (android.os.Build.VERSION.SDK_INT >= 30) {
+                oldBehavior = activity.window.insetsController?.systemBarsBehavior ?: 0
+                oldStatus = decor.rootWindowInsets?.isVisible(android.view.WindowInsets.Type.statusBars()) ?: true
+                oldNavigation = decor.rootWindowInsets?.isVisible(android.view.WindowInsets.Type.navigationBars()) ?: true
+            }
+            client.onShowCustomView(first, android.webkit.WebChromeClient.CustomViewCallback {
+                firstHidden++
+                client.onHideCustomView() // duplicate/reentrant hide
+                client.onShowCustomView(android.view.View(activity), android.webkit.WebChromeClient.CustomViewCallback { rejectedReentry++ })
+            })
+            check(first.parent === decor && first.layoutParams.width == -1 && first.layoutParams.height == -1)
+            client.onShowCustomView(android.view.View(activity), android.webkit.WebChromeClient.CustomViewCallback { secondHidden++ })
+            check(secondHidden == 1 && first.parent === decor)
+        }
+        if (android.os.Build.VERSION.SDK_INT >= 30) waitFor("Fullscreen bars did not hide") {
+            var hidden = false
+            runOnMainSync { val insets = activity.window.decorView.rootWindowInsets; hidden = insets != null && !insets.isVisible(android.view.WindowInsets.Type.statusBars()) && !insets.isVisible(android.view.WindowInsets.Type.navigationBars()) }
+            hidden
+        } else runOnMainSync {
+            @Suppress("DEPRECATION")
+            check(activity.window.decorView.systemUiVisibility and android.view.View.SYSTEM_UI_FLAG_FULLSCREEN != 0)
+        }
+        runOnMainSync {
+            val decor = activity.window.decorView
+            @Suppress("DEPRECATION")
+            activity.onBackPressed()
+            check(first.parent == null && firstHidden == 1 && rejectedReentry == 1)
+            client.onHideCustomView(); check(firstHidden == 1)
+            @Suppress("DEPRECATION")
+            check(decor.systemUiVisibility == oldUi)
+            check(activity.window.attributes.flags == oldFlags)
+            if (android.os.Build.VERSION.SDK_INT >= 30) check(activity.window.insetsController?.systemBarsBehavior == oldBehavior)
+        }
+        check(javascript(web, "window.__fullscreenBackCalls") == "0" && !activity.isFinishing) { "Fullscreen Back reached page navigation" }
+        if (android.os.Build.VERSION.SDK_INT >= 30) waitFor("Original system bars not restored") {
+            var restored = false
+            runOnMainSync { val insets = activity.window.decorView.rootWindowInsets; restored = insets != null && insets.isVisible(android.view.WindowInsets.Type.statusBars()) == oldStatus && insets.isVisible(android.view.WindowInsets.Type.navigationBars()) == oldNavigation }
+            restored
+        }
+        var pausedHidden = 0; val paused = android.view.View(activity)
+        runOnMainSync {
+            client.onShowCustomView(paused, android.webkit.WebChromeClient.CustomViewCallback { pausedHidden++ })
+            callActivityOnPause(activity)
+            check(paused.parent == null && pausedHidden == 1)
+            client.onHideCustomView(); check(pausedHidden == 1)
+            callActivityOnResume(activity)
+        }
+        var destroyedHidden = 0; val last = android.view.View(activity)
+        runOnMainSync {
+            client.onShowCustomView(last, android.webkit.WebChromeClient.CustomViewCallback { destroyedHidden++ })
+            check(last.parent === activity.window.decorView)
+            activity.finish()
+        }
+        waitFor("Activity fullscreen teardown missing") { activity.isDestroyed }
+        runOnMainSync { check(last.parent == null && destroyedHidden == 1); client.onHideCustomView(); check(destroyedHidden == 1) }
+        result.putString("stream", "PASS owned Android component boundary: eligible active notifications, quiet recovered content/intent/public redaction, one aggregate/remaining/unknown/empty; custom view decor/Back/duplicate/reentry/pause/destroy and bars restoration. Physical launcher and media playback remain separate.\n")
     }
     private fun javascript(page: WebView, script: String): String {
         val complete = CountDownLatch(1)

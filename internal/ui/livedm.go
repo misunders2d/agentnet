@@ -24,7 +24,7 @@ func personView(p client.PersonInfo) PersonView {
 }
 
 // dmOverview adds this installation's person, the people and the DMs.
-func (l *Live) dmOverview(o *Overview) error {
+func (l *Live) dmOverview(o *Overview, unread *[]UnreadRow, mutes map[string]bool) error {
 	o.Persons = true
 	o.Groups = true
 	var err error
@@ -113,6 +113,40 @@ func (l *Live) dmOverview(o *Overview) error {
 				s.Unread++
 			}
 		}
+		*o.UnreadTotal += s.Unread
+		if !mutes[c.ID] {
+			*o.AlertTotal += s.Unread
+		}
+		if unread != nil && s.Unread > 0 {
+			assigned := client.ChatTopicAssignments(msgs) // complete graph, including read ancestors
+			topics, err := l.a.ChatTopicsForMessages(c.ID, msgs, assigned)
+			if err != nil {
+				return err
+			}
+			titles := make(map[string]string, len(topics))
+			for _, topic := range topics {
+				titles[topic.ID] = topic.Title
+			}
+			for _, m := range shown {
+				if m.Unread {
+					text := m.Body
+					if m.Edited {
+						text = m.Text
+					}
+					preview := client.BodyPreview(text)
+					if !m.Edited && m.Body == "" && len(m.Attachments) > 0 {
+						names := make([]string, 0, len(m.Attachments))
+						for _, f := range m.Attachments {
+							names = append(names, client.SafeName(f.Name))
+						}
+						preview = firstLine("📎 " + strings.Join(names, ", "))
+					}
+					row := UnreadRow{Kind: "chat", Conv: c.ID, Topic: assigned[m.LID], TopicTitle: titles[assigned[m.LID]], ID: m.ID, LID: m.LID, Author: cmp.Or(m.Key, m.Claimed), Dir: m.Dir, At: time.Unix(m.At, 0), Label: firstLine(m.From), Preview: preview, ready: true}
+					row.Key = unreadKey(row)
+					*unread = append(*unread, row)
+				}
+			}
+		}
 		s.Kind, s.Frozen = c.Kind, c.Frozen
 		if c.Role == "visitor" {
 			views, e := l.guestViews(c.ID)
@@ -161,7 +195,7 @@ func (l *Live) dmOverview(o *Overview) error {
 					return "Message deleted"
 				}
 				if m.Edited {
-					return firstLine(m.Text)
+					return client.BodyPreview(m.Text)
 				}
 				if m.Sub == envelope.SubEvent {
 					return eventText(m.Body, people)
@@ -180,7 +214,7 @@ func (l *Live) dmOverview(o *Overview) error {
 					}
 					return "📎 " + strings.Join(names, ", ")
 				}
-				return firstLine(m.Body)
+				return client.BodyPreview(m.Body)
 			}
 			last := shown[len(shown)-1]
 			s.Title, s.Last, s.LastEvent = line(shown[0]), line(last), lastEvent(last, people)
@@ -482,9 +516,6 @@ func (l *Live) DM(id string) (DMThread, error) {
 				dm.Actions = append(dm.Actions, DoContinue)
 			}
 			t.Messages = append(t.Messages, dm)
-			if t.MainTopic != nil && dm.Unread && dm.Topic == "" && dm.TopicEvent == nil && dm.Event == "" {
-				t.MainTopic.Unread++
-			}
 		}
 		linkReplies(msgs, t.Messages)
 		t.Agents = l.agentViews(infos, people, msgs)

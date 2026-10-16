@@ -20,20 +20,22 @@ type Listener interface{ OnChange() }
 
 // Session owns one app-private home and at most one transport run.
 type Session struct {
-	data        sync.RWMutex
-	lifecycle   sync.Mutex
-	mu          sync.Mutex
-	a           *client.Agent
-	live        *ui.Live
-	listener    Listener
-	notify      func(client.NativeNotification)
-	cancel      context.CancelFunc
-	done        chan struct{}
-	closed      bool
-	lastError   string
-	eventCancel context.CancelFunc
-	wake        chan struct{}
-	run         func(context.Context) error
+	data              sync.RWMutex
+	lifecycle         sync.Mutex
+	mu                sync.Mutex
+	a                 *client.Agent
+	live              *ui.Live
+	listener          Listener
+	content           func(uint64, uint64)
+	contentGeneration uint64
+	notify            func(client.NativeNotification)
+	cancel            context.CancelFunc
+	done              chan struct{}
+	closed            bool
+	lastError         string
+	eventCancel       context.CancelFunc
+	wake              chan struct{}
+	run               func(context.Context) error
 }
 
 func checkHome(home string) error {
@@ -126,14 +128,22 @@ func (s *Session) signal() {
 	}
 }
 func (s *Session) events(ctx context.Context) {
+	var content, generation uint64
 	for {
 		s.mu.Lock()
 		if s.closed {
 			s.mu.Unlock()
 			return
 		}
-		_, changed := s.a.Changed()
+		revision, changed := s.a.ViewChanges()
+		hook, currentGeneration := s.content, s.contentGeneration
 		s.mu.Unlock()
+		// This one existing event lane serializes overview reads. Recheck before
+		// waiting so a change during a slow hook is never lost or labelled current.
+		if hook != nil && (generation != currentGeneration || content != revision.Content) {
+			content, generation = revision.Content, currentGeneration
+			hook(content, generation)
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -286,6 +296,16 @@ func (s *Session) OverviewJSON() (string, error) {
 		return "", err
 	}
 	return marshal(s.live.Overview())
+}
+
+func (s *Session) unreadOverview() (ui.Overview, error) {
+	s.data.RLock()
+	defer s.data.RUnlock()
+	if err := s.available(); err != nil {
+		return ui.Overview{}, err
+	}
+	// Comic requests topics=1: reuse that exact cache branch and scalar.
+	return s.live.TopicOverview()
 }
 func (s *Session) ConversationJSON(id string) (string, error) {
 	s.data.RLock()

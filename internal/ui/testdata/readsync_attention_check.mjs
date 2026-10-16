@@ -165,6 +165,19 @@ const legacyRead=(await a.store.outboxSub(wire.SubReadSync)).find(r=>wire.parseR
 await receive(incomingMark.envelope,p);await receive(legacyRead.envelope,p);
 const phoneIncoming=await wire.open(incoming.envelope,a.keys,a.address,b.pub);await receive(await wire.seal({...phoneIncoming,to:p.address,id:wire.newID()},b.keys,p.pub),p);
 const phoneIncomingView=(await p.api('/api/dm?id='+conv)).messages.find(m=>m.lid===incoming.lid);check(phoneIncomingView.unread&&phoneIncomingView.attention,'delayed V1 and later original preserve remote deliberate unread');
+// Shared unread provider is warmed before a genuine signed linked read arrives.
+const linkedBefore=await p.overview(false),linkedIndex=p.unreadIndex;
+check((await p.api('/api/unread')).rows.some(r=>r.conv===conv&&r.lid===incoming.lid),'linked unread is in compact Review index');
+const localIncoming=(await a.api('/api/dm?id='+conv)).messages.find(m=>m.lid===incoming.lid);
+await a.api('/api/act',{do:'read',ids:[localIncoming.id],attention:{[localIncoming.id]:localIncoming.attention}});await a.readSyncRun;await drainAttention(a);
+const linkedRead=(await copies(a)).find(r=>wire.parseReadSync(r.body).marks.some(m=>m.lid===incoming.lid&&m.state==='read'));
+check(linkedRead,'actual signed linked read produced');await receive(linkedRead.envelope,p);
+const linkedAfter=await p.overview(false);
+check(linkedAfter.unread_total===linkedBefore.unread_total-1&&p.unreadIndex!==linkedIndex,'signed linked read invalidates totals and compact index');
+check(!(await p.api('/api/unread')).rows.some(r=>r.conv===conv&&r.lid===incoming.lid),'linked read removes only its effective reference');
+// Retain this fixture's later stale-clear race input with a fresh local mark.
+await a.api('/api/act',{do:'unread',id:localIncoming.id,ids:[localIncoming.id]});await a.readSyncRun;await drainAttention(a);
+
 // A real signed one-person group with two current linked human devices.
 a.realm=p.realm=wire.newID();const group=await a.createGroup('Attention group');
 for(const row of await a.store.byConv('outbox',group))if([wire.SubGroupProof,wire.SubGroupContext].includes(row.sub)){for(const f of row.files||[])blobs.set(f.attachment.blob.id,f.ct);await receive(row.envelope,p);}

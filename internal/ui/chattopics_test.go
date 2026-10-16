@@ -80,6 +80,26 @@ func TestBrowserChatTopicJourney(t *testing.T) {
 	if !found {
 		t.Fatal("native lost the browser's captured topic reference")
 	}
+	w.api("/api/topic/rename", map[string]any{"conv": conv, "id": topicID, "title": "Shared HTTP title"})
+	wait("browser public rename reaches native header/list", func() bool {
+		for _, topic := range native() {
+			if topic.ID == topicID {
+				return topic.Title == "Shared HTTP title" && topic.Renamed && topic.AutoTitle == "Optional topic"
+			}
+		}
+		return false
+	})
+	sharedPage, e := alice.Topics(client.TopicQuery{Conv: conv, Query: "Shared HTTP title"})
+	if e != nil || sharedPage.Matched != 1 {
+		t.Fatalf("native shared title search: %+v %v", sharedPage, e)
+	}
+	if _, e := NewLive(alice).ChangeTopic("rename", TopicChange{Conv: conv, ID: topicID, Title: "Native shared title"}); e != nil {
+		t.Fatal(e)
+	}
+	wait("native public rename reaches browser header", func() bool {
+		page := w.api("/api/topics?conv="+conv+"&q=Native%20shared%20title", nil)
+		return page["matched"] == float64(1)
+	})
 	first := w.api("/api/topics?conv="+conv+"&limit=1", nil)
 	if first["matched"] != float64(2) || first["next"] == nil {
 		t.Fatalf("topic page: %v", first)

@@ -60,7 +60,7 @@ type TopicQuery struct {
 	Limit  int    `json:"limit,omitempty"`
 }
 
-// TopicPage is one page of topics, most recently active first; Matched
+// TopicPage lists unread topics first, then newest within each bucket; Matched
 // counts the topics matching on every page.
 type TopicPage struct {
 	Topics  []ThreadSummary `json:"topics"`

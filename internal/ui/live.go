@@ -25,6 +25,7 @@ type Live struct {
 	app        bool   // served by the AgentNet app (SetApp)
 	overviewMu sync.Mutex
 	overviews  map[bool]cachedOverview
+	unread     *unreadIndex // one compact index, shared by both overview modes
 }
 
 type cachedOverview struct {
@@ -69,6 +70,10 @@ func (l *Live) TopicOverview() (Overview, error) { return l.overview(false) }
 func (l *Live) overview(listArchived bool) (Overview, error) {
 	l.overviewMu.Lock()
 	defer l.overviewMu.Unlock()
+	return l.overviewLocked(listArchived)
+}
+
+func (l *Live) overviewLocked(listArchived bool) (Overview, error) {
 	revision, _ := l.a.ViewChanges()
 	if cached, ok := l.overviews[listArchived]; ok && cached.content == revision.Content {
 		o := cached.view
@@ -76,20 +81,30 @@ func (l *Live) overview(listArchived bool) (Overview, error) {
 		o.Directory = directoryOf(l.a.MemberView(), l.a.Address)
 		return o, nil
 	}
-	o, err := l.buildOverview(listArchived)
+	var rows []UnreadRow
+	var collect *[]UnreadRow
+	if l.unread == nil || l.unread.content != revision.Content {
+		collect = &rows
+	}
+	o, err := l.buildOverview(listArchived, collect)
 	if err == nil {
+		o.Seq = revision.Seq // never label a concurrent build with a later revision
 		if l.overviews == nil {
 			l.overviews = make(map[bool]cachedOverview)
 		}
 		l.overviews[listArchived] = cachedOverview{revision.Content, o}
+		if collect != nil {
+			l.unread = &unreadIndex{content: revision.Content, seq: revision.Seq, rows: rows}
+		}
 	}
 	return o, err
 }
 
-func (l *Live) buildOverview(listArchived bool) (Overview, error) {
+func (l *Live) buildOverview(listArchived bool, unread *[]UnreadRow) (Overview, error) {
 	seq, _ := l.a.Changed()
 	o := Overview{App: l.app, Me: Me{Address: l.a.Address, Fingerprint: l.a.Self().Fingerprint()}, Seq: seq, Version: protocol.Version,
 		Threads: []ThreadSummary{}, Review: []ReviewItem{}, NeedsYou: []ConvItem{}, Held: []ConvItem{}, Quarantine: []QuarantineItem{}}
+	o.UnreadTotal, o.AlertTotal = new(int), new(int)
 	if r, err := l.a.Responder(); err == nil && r != nil {
 		o.Me.Responder, o.Me.ResponderDir = r.Harness, r.Dir
 	}
@@ -105,20 +120,31 @@ func (l *Live) buildOverview(listArchived bool) (Overview, error) {
 		o.UpdateRequired = &UpdateRequiredView{Latest: u.Latest, URL: u.URL, Auto: l.a.AutoUpdateWords()}
 	}
 	o.Directory = directoryOf(l.a.MemberView(), l.a.Address)
-	if n, err := l.notifyView(); err == nil {
-		o.Notify = n
+	n, err := l.notifyView()
+	if err != nil {
+		return o, err
+	}
+	o.Notify = n
+	mutes := map[string]bool{}
+	for _, conv := range n.Mutes {
+		mutes[conv] = true
 	}
 	if rs, err := l.reminders(); err == nil {
 		o.Reminders, o.Remind = rs, true
 	}
 	o.Files = l.fileLimits()
-	if err := l.dmOverview(&o); err != nil {
+	if err := l.dmOverview(&o, unread, mutes); err != nil {
 		return o, err
 	}
 	if err := l.identityOverview(&o); err != nil {
 		return o, err
 	}
-	threads, peers, err := l.a.TopicOverview(listArchived) // livetopics.go
+	var device []client.DeviceUnreadRef
+	var deviceSink *[]client.DeviceUnreadRef
+	if unread != nil {
+		deviceSink = &device
+	}
+	threads, peers, err := l.a.TopicOverviewUnread(listArchived, deviceSink)
 	if err != nil {
 		return o, err
 	}
@@ -132,6 +158,8 @@ func (l *Live) buildOverview(listArchived bool) (Overview, error) {
 		return changedKeys[peer], err
 	}
 	for _, t := range threads {
+		*o.UnreadTotal += t.Unread
+		*o.AlertTotal += t.Unread
 		kc, err := changed(t.Peer)
 		if err != nil {
 			return o, err
@@ -139,11 +167,25 @@ func (l *Live) buildOverview(listArchived bool) (Overview, error) {
 		o.Threads = append(o.Threads, threadSummary(t, kc))
 	}
 	for _, p := range peers {
+		if !listArchived {
+			*o.UnreadTotal += p.ArchivedUnread
+			*o.AlertTotal += p.ArchivedUnread
+		}
 		kc, err := changed(p.Peer)
 		if err != nil {
 			return o, err
 		}
 		o.Topics = append(o.Topics, PeerTopics{Peer: p.Peer, Total: p.Total, Archived: p.Archived, ArchivedUnread: p.ArchivedUnread, Latest: threadSummary(p.Latest, kc)})
+	}
+	if unread != nil {
+		for _, r := range device {
+			row := UnreadRow{Kind: "device", Peer: r.Peer, Thread: r.Thread, TopicTitle: r.TopicTitle, ID: r.ID, LID: r.ID, Author: r.Author, Dir: r.Dir, At: r.At, Label: r.Peer, Preview: r.Preview, ready: r.Ready}
+			if r.Dir == "out" {
+				row.Label = "You"
+			}
+			row.Key = unreadKey(row)
+			*unread = append(*unread, row)
+		}
 	}
 	review, err := l.a.PageReview()
 	if err != nil {

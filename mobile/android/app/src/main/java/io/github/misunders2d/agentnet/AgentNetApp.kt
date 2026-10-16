@@ -14,6 +14,7 @@ import android.os.Looper
 import io.github.misunders2d.agentnet.core.core.App as CoreApp
 import io.github.misunders2d.agentnet.core.core.Core
 import io.github.misunders2d.agentnet.core.core.Notifier
+import io.github.misunders2d.agentnet.core.core.UnreadSink
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -63,6 +64,8 @@ class NativeHost(private val application: Application) {
     private var opening = false // main thread only
     private var runningWanted = false // lane only
     private val networkQueued = AtomicBoolean(false)
+    private var unreadTotal = 0L // main thread; partial includes last-known contributions
+    private var unreadPartial = true
     private val networkMonitor = NetworkMonitor(application, main) { networkChanged() }
     var state = HostState(); private set
     fun observe(observer: (HostState) -> Unit) { observers.add(observer); observer(state); open() }
@@ -89,6 +92,12 @@ class NativeHost(private val application: Application) {
                 app.setNotifier(object : Notifier {
                     override fun notify(workspace: String, fragment: String, title: String, body: String) { main.post { notifyActivity(workspace, fragment, title, body) } }
                     override fun dismiss(workspace: String, fragment: String) { main.post { dismissActivity(workspace, fragment) } }
+                })
+                app.setUnreadSink(object : UnreadSink {
+                    override fun unread(total: Long, partial: Boolean) { main.post {
+                        unreadTotal = total.coerceAtLeast(0); unreadPartial = partial
+                        updateActivityBadges(application, unreadTotal, unreadPartial)
+                    } }
                 })
                 core = app
                 publish(HostState(app.url(), app.origin()))
@@ -132,6 +141,7 @@ class NativeHost(private val application: Application) {
     private fun dismissActivity(workspace: String, fragment: String) {
         WebPolicy.notificationTag(workspace, fragment)?.let { tag ->
             application.getSystemService(NotificationManager::class.java).cancel(tag, 0)
+            updateActivityBadges(application, unreadTotal, unreadPartial)
         }
     }
     private fun notifyActivity(workspace: String, fragment: String, title: String, body: String) {
@@ -152,7 +162,38 @@ class NativeHost(private val application: Application) {
             .setContentTitle(title.ifBlank { "AgentNet" }).setContentText(body)
             .setStyle(Notification.BigTextStyle().bigText(body)).setCategory(Notification.CATEGORY_MESSAGE)
             .setVisibility(Notification.VISIBILITY_PRIVATE).setPublicVersion(redacted)
-            .setContentIntent(pending).setAutoCancel(true).build()
+            .setContentIntent(pending).setAutoCancel(true)
+            .setNumber(activityBadgeNumber(unreadTotal, unreadPartial)).build()
         manager.notify(tag, 0, note)
+        updateActivityBadges(application, unreadTotal, unreadPartial)
     }
 }
+
+// Android owns launcher appearance. Never create a notification just for a dot.
+// Recovering the OS object preserves its private content, exact click intent,
+// auto-cancel and public redaction without retaining a second plaintext body map.
+internal fun updateActivityBadges(application: Application, total: Long, partial: Boolean) {
+    val manager = application.getSystemService(NotificationManager::class.java)
+    val active = manager.activeNotifications.filter {
+        it.notification.channelId == ACTIVITY_CHANNEL && activityBadgeTag(it.tag)
+    }.sortedWith(compareByDescending<android.service.notification.StatusBarNotification> { it.postTime }.thenBy { it.key })
+    val number = activityBadgeNumber(total, partial)
+    active.forEachIndexed { index, entry ->
+        val desired = if (index == 0) number else 0
+        if (entry.notification.number != desired) {
+            val note = Notification.Builder.recoverBuilder(application, entry.notification)
+                .setNumber(desired).setOnlyAlertOnce(true).build()
+            manager.notify(entry.tag, entry.id, note)
+        }
+    }
+}
+
+internal fun activityBadgeTag(tag: String?): Boolean {
+    if (tag == null || tag.length > 2048) return false
+    val workspace = tag.split('&').firstOrNull { it.startsWith("workspace=") }?.substringAfter('=') ?: return false
+    return WebPolicy.notificationTag(workspace, tag) == tag
+}
+
+// A partial sum can retain stale contributions; it is not an exact count.
+internal fun activityBadgeNumber(total: Long, partial: Boolean): Int =
+    if (partial) 0 else total.coerceIn(0, Int.MAX_VALUE.toLong()).toInt()

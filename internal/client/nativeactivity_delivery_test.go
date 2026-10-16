@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +17,178 @@ import (
 	"github.com/misunders2d/agentnet/internal/identity"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
+
+func TestNativeThinkingLatestOfflineCipherRestartAndTerminal(t *testing.T) {
+	a, j, h, peerID := activityDeliveryFixture(t)
+	activityAvailability(a, j.From, false)
+	stamp := time.Date(2026, 10, 16, 15, 0, 0, 0, time.UTC)
+	write := func(summary string, at time.Time) bool {
+		return a.store.markNativeProgress(t.Context(), j, nativeProgress{kind: activityWorking, summary: summary, at: at})
+	}
+	first := "Verifying service recovery status"
+	latest := "Reviewing the latest test results"
+	for _, summary := range []string{first, latest, first, latest} {
+		if !write(summary, stamp) || !a.tellStatus(t.Context(), j.ID) {
+			t.Fatal("valid latest summary was not retained")
+		}
+	}
+	if n := activityCopies(t, a, j); n != 0 || len(h.posted) != 0 {
+		t.Fatal("summary fell into ordinary offline status backlog", n, len(h.posted))
+	}
+	// Reopen the actual SQLite store: only latest detail/due persists, no raw
+	// reasoning or replay queue. This is store restart evidence, not a model run.
+	if err := a.store.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	a.store, err = openStore(filepath.Join(a.home, "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var detail string
+	if err := a.store.db.QueryRow(`SELECT detail FROM inbox WHERE id=?`, j.ID).Scan(&detail); err != nil || detail != "Thinking: "+latest+"\nReported at 2026-10-16T15:00:00Z" {
+		t.Fatal("latest summary/time did not survive reopen", detail, err)
+	}
+	activityAvailability(a, j.From, true)
+	if !a.tellStatus(t.Context(), j.ID) || len(h.posted) != 1 {
+		t.Fatal("reconnect did not send exactly latest summary", len(h.posted))
+	}
+	env := h.posted[0]
+	inner, err := envelope.Open(env, peerID, j.From, a.Self())
+	var status envelope.Status
+	if err != nil || json.Unmarshal([]byte(inner.Body), &status) != nil || status.Detail != detail || status.Attempt != j.nativeAttempt || status.State != stateRunning {
+		t.Fatal("summary lost normal signed/encrypted binding", status, err)
+	}
+	var sealedBefore, sealedAfter string
+	if err := a.store.db.QueryRow(`SELECT envelope FROM outbox WHERE id=?`, env.ID).Scan(&sealedBefore); err != nil {
+		t.Fatal(err)
+	}
+	for _, summary := range []string{first, latest, first} {
+		if !write(summary, stamp.Add(time.Second)) || !a.tellStatus(t.Context(), j.ID) {
+			t.Fatal("pending cipher blocked latest summary")
+		}
+	}
+	if n := activityCopies(t, a, j); n != 1 || len(h.posted) != 1 {
+		t.Fatal("pending summary cipher grew a backlog", n, len(h.posted))
+	}
+	if err := a.store.db.QueryRow(`SELECT envelope FROM outbox WHERE id=?`, env.ID).Scan(&sealedAfter); err != nil || sealedBefore != sealedAfter {
+		t.Fatal("pending ciphertext was mutated", err)
+	}
+	if err := a.store.setOutboxState(env.ID, protocol.StateDelivered, "", protocol.PathRelay); err != nil {
+		t.Fatal(err)
+	}
+	if !a.tellStatus(t.Context(), j.ID) || len(h.posted) != 2 {
+		t.Fatal("new latest summary not sent after receipt", len(h.posted))
+	}
+	if err := a.store.setOutboxState(h.posted[1].ID, protocol.StateDelivered, "", protocol.PathRelay); err != nil {
+		t.Fatal(err)
+	}
+	if write(first, stamp.Add(2*time.Second)) {
+		t.Fatal("timestamp-only duplicate persisted")
+	}
+	if _, err := a.store.db.Exec(`UPDATE inbox SET status_due=status_due+1 WHERE id=?`, j.ID); err != nil {
+		t.Fatal(err)
+	}
+	if !a.tellStatus(t.Context(), j.ID) || len(h.posted) != 2 {
+		t.Fatal("timestamp-only duplicate re-sealed")
+	}
+	// A percent in an otherwise safe summary is literal, not a SQL LIKE pattern.
+	if !write("Checking 100% behavior", stamp) || !write("Checking 100X behavior", stamp) || !write("Checking 100% behavior", stamp) {
+		t.Fatal("summary dedup treated display text as a wildcard")
+	}
+	old := j
+	old.nativeAttempt++
+	if a.store.markNativeProgress(t.Context(), old, nativeProgress{kind: activityWorking, summary: latest, at: stamp}) {
+		t.Fatal("foreign attempt wrote a summary")
+	}
+	if _, err := a.store.db.Exec(`UPDATE inbox SET state='answered',detail=NULL,status_due=status_due+1 WHERE id=?`, j.ID); err != nil {
+		t.Fatal(err)
+	}
+	activityAvailability(a, j.From, false)
+	if !a.tellStatus(t.Context(), j.ID) || len(h.posted) != 3 {
+		t.Fatal("optional summary suppressed offline terminal status", len(h.posted))
+	}
+	if write(latest, stamp) {
+		t.Fatal("late summary revived terminal request")
+	}
+}
+
+func TestNativeThinkingStoreFailureAndDeliveryFailureAreOptional(t *testing.T) {
+	a, j, h, _ := activityDeliveryFixture(t)
+	p := nativeProgress{kind: activityWorking, summary: "Checking current behavior", at: time.Now()}
+	conn, err := a.store.db.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	accepted := a.store.markNativeProgress(t.Context(), j, p)
+	conn.Close()
+	if accepted || time.Since(start) > time.Second {
+		t.Fatal("optional summary store failure blocked work")
+	}
+	activityAvailability(a, j.From, true)
+	h.fail = true
+	for _, summary := range []string{"Checking current behavior", "Reviewing current behavior", "Verifying current behavior"} {
+		p.summary = summary
+		a.store.markNativeProgress(t.Context(), j, p)
+		a.tellStatus(t.Context(), j.ID)
+	}
+	if n := activityCopies(t, a, j); n != 1 {
+		t.Fatal("delivery failure queued a summary backlog", n)
+	}
+	if state, err := a.store.jobState(j.ID); err != nil || state != stateRunning {
+		t.Fatal("optional failure changed execution state", state, err)
+	}
+	if err := a.store.finishJob(j.ID, stateAnswered, "original answer"); err != nil {
+		t.Fatal("optional summary failure blocked completion", err)
+	}
+	if a.store.markNativeProgress(t.Context(), j, p) {
+		t.Fatal("summary revived completed attempt")
+	}
+}
+
+func TestNativeThinkingWatcherCoalescesObservedTime(t *testing.T) {
+	a, j, _, _ := activityDeliveryFixture(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	activity := newRunActivity()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		a.watchRunActivity(ctx, ctx, j, activity, func() bool { return true })
+	}()
+	defer func() { cancel(); <-done }()
+	wait := func(want string) {
+		t.Helper()
+		for {
+			_, changed := a.Changed()
+			var detail string
+			if err := a.store.db.QueryRow(`SELECT coalesce(detail,'') FROM inbox WHERE id=?`, j.ID).Scan(&detail); err != nil {
+				t.Fatal(err)
+			}
+			if detail == want {
+				return
+			}
+			select {
+			case <-changed:
+			case <-ctx.Done():
+				t.Fatal("watcher did not retain latest summary observation time", detail, want)
+			}
+		}
+	}
+	stamp := time.Date(2026, 10, 16, 15, 0, 0, 0, time.UTC)
+	activity.reportProgress(nativeProgress{kind: activityWorking, summary: "Checking current behavior", at: stamp})
+	wait("Thinking: Checking current behavior\nReported at 2026-10-16T15:00:00Z")
+	for i := range 1000 {
+		activity.reportProgress(nativeProgress{kind: activityWorking, summary: "Verifying current behavior", at: stamp.Add(time.Duration(2*i+1) * time.Millisecond)})
+		activity.reportProgress(nativeProgress{kind: activityWorking, summary: "Reviewing current behavior", at: stamp.Add(time.Duration(2*i+2) * time.Millisecond)})
+	}
+	wait("Thinking: Reviewing current behavior\nReported at 2026-10-16T15:00:02Z")
+	var due int
+	if err := a.store.db.QueryRow(`SELECT status_due FROM inbox WHERE id=?`, j.ID).Scan(&due); err != nil || due != 2 {
+		t.Fatal("summary burst created extra durable writes", due, err)
+	}
+}
 
 // Real signed capabilities and sealed controls, without a listener, external
 // service or native model. Custody/delivery are explicit fixture receipts.

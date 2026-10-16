@@ -112,7 +112,8 @@ func (a *Agent) notifyDeviceAdminNotices() {
 		}
 		a.notifyTried[key] = true
 		argv, onClick := a.convClick("")
-		if err := a.notify("AgentNet — company settings access", DeviceAdminNoticeText(n), argv, onClick); err != nil {
+		display := a.maskNativeNotification(NativeNotification{Title: "AgentNet — company settings access", Body: DeviceAdminNoticeText(n)}, "")
+		if err := a.notify(display.Title, display.Body, argv, onClick); err != nil {
 			a.Logf("device admin notification not shown (%v); notice remains in OKs", err)
 			continue
 		}

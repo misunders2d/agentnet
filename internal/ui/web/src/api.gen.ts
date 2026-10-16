@@ -792,6 +792,8 @@ export interface NativeRequest {
 }
 
 export interface NotifyView {
+  preview?: string;
+  preview_default?: string;
   available: boolean;
   native: boolean;
   enabled: boolean;
@@ -802,6 +804,8 @@ export interface NotifyView {
 }
 
 export interface Overview {
+  unread_total?: number;
+  alert_total?: number;
   groups: boolean;
   group_invitations?: GroupInvitationView[];
   reply_receivers: boolean;
@@ -820,6 +824,7 @@ export interface Overview {
   directory: Directory;
   needs_you: ConvItem[] | null;
   held: ConvItem[] | null;
+  schedules: boolean;
   persons: boolean;
   agents: boolean;
   notify?: NotifyView;
@@ -1092,6 +1097,53 @@ export interface ReviewItem {
   agent_id?: string;
 }
 
+export interface ScheduleAction {
+  id: string;
+  rev: number;
+}
+
+export interface ScheduleDraft {
+  id?: string;
+  rev?: number;
+  conv: string;
+  topic?: string;
+  body: string;
+  reply_to?: string;
+  quote?: string;
+  due: string;
+  timezone: string;
+  files?: string[];
+  audience?: ScheduledAudience;
+}
+
+export interface ScheduledAudience {
+  persons: string[] | null;
+  pids: string[] | null;
+  author_pid?: string;
+}
+
+export interface ScheduledFile {
+  sha256: string;
+  size: number;
+  name: string;
+}
+
+export interface ScheduledSend {
+  id: string;
+  conv: string;
+  topic: string;
+  body: string;
+  reply_to?: string;
+  quote?: string;
+  due: string;
+  timezone: string;
+  rev: number;
+  state: string;
+  audience: ScheduledAudience;
+  files: ScheduledFile[] | null;
+  detail?: string;
+}
+
 export interface Sent {
   lid?: string;
   id: string;
@@ -1289,6 +1341,8 @@ export interface TopicChange {
 
 export interface TopicEvent {
   action: string;
+  title?: string;
+  rev?: number;
   seen?: string[];
   moves?: TopicMove[];
   merge?: string;
@@ -1358,6 +1412,31 @@ export interface TypingView {
   supported: boolean;
   current: boolean;
   entries: TypingEntry[] | null;
+}
+
+export interface UnreadPage {
+  rows: UnreadRow[] | null;
+  total: number;
+  next?: string;
+  content: number;
+  seq: number;
+}
+
+export interface UnreadRow {
+  key: string;
+  kind: string;
+  conv?: string;
+  peer?: string;
+  thread?: string;
+  topic?: string;
+  topic_title?: string;
+  id: string;
+  lid: string;
+  author: string;
+  dir: string;
+  at: string;
+  label: string;
+  preview: string;
 }
 
 export interface UpdateRequiredView {

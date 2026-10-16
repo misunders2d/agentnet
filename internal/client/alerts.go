@@ -20,7 +20,7 @@ import (
 // conversation adds to it without moving its deadline. The local page
 // reporting that it presented the newest message cancels it. At the
 // deadline the alert is removed (recorded as shown) and then a native
-// notification is asked for, with fixed, content-free text: a crash in
+// notification is asked for, with locally masked preview text: a crash in
 // between loses that alert rather than showing it twice, and the OS may
 // still drop, delay or hide it.
 
@@ -33,8 +33,41 @@ const (
 	maxAlertMutes   = protocol.MaxNotifyMutes
 )
 
+// NotificationPreview is a local display preference, never alert consent.
+// The empty value preserves the callback's explicitly selected default.
+type NotificationPreview string
+
+const (
+	NotificationPreviewFull   NotificationPreview = "full"
+	NotificationPreviewSender NotificationPreview = "sender"
+	NotificationPreviewHidden NotificationPreview = "hidden"
+)
+
+func validNotificationPreview(value NotificationPreview) bool {
+	switch value {
+	case "", NotificationPreviewFull, NotificationPreviewSender, NotificationPreviewHidden:
+		return true
+	}
+	return false
+}
+func (a *Agent) notificationPreview() (NotificationPreview, error) {
+	value, err := a.store.config("notification-preview")
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return NotificationPreviewHidden, err
+	}
+	preview := NotificationPreview(value)
+	if !validNotificationPreview(preview) {
+		return NotificationPreviewHidden, errors.New("notifications: invalid preview preference")
+	}
+	return preview, nil
+}
+
 // AlertPrefs are this desktop's alert preferences.
 type AlertPrefs struct {
+	Preview NotificationPreview     `json:"preview,omitempty"`
 	Enabled bool                    `json:"enabled"`
 	Senders []protocol.NotifySender `json:"senders"` // exact keys whose DM turns may alert here
 	Mutes   []string                `json:"mutes"`   // conversation ids that never alert
@@ -48,6 +81,10 @@ func (a *Agent) AlertPrefs() (AlertPrefs, error) {
 		return p, err
 	}
 	p.Enabled = on == "on"
+	p.Preview, err = a.notificationPreview()
+	if err != nil {
+		return p, err
+	}
 	rows, err := a.store.db.Query(`SELECT address, fingerprint FROM alert_senders ORDER BY address`)
 	if err != nil {
 		return p, err
@@ -80,6 +117,10 @@ func (a *Agent) AlertPrefs() (AlertPrefs, error) {
 // off drops the pending ones; a muted conversation's or a removed sender's
 // pending alert is dropped when due.
 func (a *Agent) SetAlertPrefs(p AlertPrefs) error {
+	if !validNotificationPreview(p.Preview) {
+		return errors.New("alerts: invalid notification preview")
+	}
+
 	if len(p.Senders) > maxAlertSenders || len(p.Mutes) > maxAlertMutes {
 		return errors.New("alerts: too many senders or muted conversations")
 	}
@@ -110,6 +151,7 @@ func (a *Agent) SetAlertPrefs(p AlertPrefs) error {
 		args []any
 	}{
 		{`INSERT OR REPLACE INTO config(k, v) VALUES('alerts', ?)`, []any{on}},
+		{`INSERT OR REPLACE INTO config(k,v) VALUES('notification-preview',?)`, []any{string(p.Preview)}},
 		{`DELETE FROM alert_senders`, nil},
 		{`DELETE FROM alert_mutes`, nil},
 	}
@@ -311,11 +353,9 @@ func (a *Agent) showDueAlerts(now time.Time) (time.Time, error) {
 			}
 			a.nativeNotification(fragment, target.id, "AgentNet", "New activity")
 		} else {
-			argv, onClick := a.convClick(target.conv)
-			if !protocol.ValidHash(target.conv) {
-				argv, onClick = a.reviewClick(target.id)
-			}
-			if err := a.notify("AgentNet", "New activity", argv, onClick); err != nil {
+			display := a.nativeDisplay("msg="+target.id+"&dir=in", target.id, "AgentNet", "New activity", true)
+			argv, onClick := a.notificationClick(target.id, display.Fragment)
+			if err := a.notify(display.Title, display.Body, argv, onClick); err != nil {
 				a.Logf("alert not shown (%v)", err)
 			}
 		}

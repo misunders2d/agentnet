@@ -66,6 +66,9 @@ func (a *Agent) groupParticipationHistoryCheck(q dbq, root protocol.ConvRoot, fo
 		}
 	}
 	original := item.inner(root.ID())
+	if err := envelope.CheckTopic(original); err != nil {
+		return nil, err
+	}
 	if err := envelope.CheckSendGroup(original); err != nil {
 		return nil, err
 	}
@@ -221,6 +224,9 @@ func (a *Agent) groupParticipationHistoryCheck(q dbq, root protocol.ConvRoot, fo
 		if info.Held != 0 || info.Conflict != "" || ev == nil || ev.Type != protocol.EventDismiss || ev.Hash() != info.Dismissal {
 			return nil, errors.New("group: historical forwarded end is not the exact counted dismissal")
 		}
+	} else if envelope.TopicRename(original.TopicEvent) && original.Human != nil && !original.Human.AgentAuthor() {
+		// The exact original human/topic/lifecycle authorization above is the
+		// rename-only historical gate; no assistant output authority is added.
 	} else if err = externalTurn(original, roleInfo, m, item.From, item.FromKey, q); err != nil {
 		if info.State == PartInvited && item.Sub == "" {
 			return nil, ErrGroupContextPending
@@ -489,9 +495,15 @@ func (a *Agent) admitGroupParticipationHistory(ctx context.Context, env envelope
 				return e
 			}
 		}
+		if e = saveSharedTopicRename(tx, item.inner(in.Conv), item.FromKey); e != nil {
+			return e
+		}
 		_, e = tx.Exec(`UPDATE inbox SET group_admission=?,group_history=nullif(?,'') WHERE id=?`, item.GroupAdmission, groupHistoryJSON(item.GroupHistory), item.ID)
 		return e
 	})
+	if errors.Is(err, ErrSharedTopicTitleConflict) {
+		return hold(reasonInvalid, err.Error())
+	}
 	if err != nil {
 		return err
 	}

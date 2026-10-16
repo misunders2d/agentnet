@@ -43,9 +43,16 @@ async function rootCopies(e,conv){return(await e.store.all('outbox')).filter(r=>
 
 const a=await person('alice/desk'),b=await person('bob/desk'),p=await sibling(a,'alice/phone');
 for(const e of [a,p])await e.store.write([{s:'persons',k:b.me.person,v:{...b.me,state:'pinned'}},{s:'pins',k:b.address,v:{address:b.address,json:wire.marshalPublic(b.pub),fingerprint:b.fp,pending:null}}]);
+// Retained pre-v33 conversation-private facts still synchronize. The public
+// conversation rename route now emits shared metadata (covered separately).
+async function retainedPrivateFact(e,{conv,id,title}) {
+ const checks=[],key='topic/'+conv+'/'+id,local=await e.groupRead(checks,'kv',key);
+ await e.store.write([{s:'kv',k:key,v:{...local,type:'topic-state',peer:conv,topic:id,title}},...await e.topicTitleOps(conv,id,title,checks)],checks);
+ e.changed();await e.syncTopicTitles();
+}
 const conv='c'.repeat(64),topic=wire.newID(),original={v:2,id:topic,lid:topic,conv,topic,from:b.address,fp:b.fp,kind:'message',body:'Automatic title',read:false,at:1,ts:1};
 await a.store.write([{s:'inbox',k:topic,v:original}]);
-await a.changeChatTopic('rename',{conv,id:topic,title:'Shared private title'});
+await retainedPrivateFact(a,{conv,id:topic,title:'Shared private title'});
 if(a.topicSyncRun)await a.topicSyncRun;
 const copies=async e=>(await e.store.all('outbox')).filter(o=>o.sub==='topic-sync');
 let rows=await copies(a);check(rows.length===1,'own-human rename queues one quiet encrypted title fact');
@@ -54,14 +61,14 @@ await a.post(first);await receive(first.envelope,p);
 check((await p.store.get('kv','topic/'+conv+'/'+topic)).title==='Shared private title'&&(await p.store.all('inbox')).length===0,'title arrives before history without creating a message');
 await p.store.write([{s:'inbox',k:topic,v:original}]);check((await p.chatTopics(conv))[0].title==='Shared private title'&&!(await p.store.get('inbox',topic)).read,'later original projects title without marking unread');
 check(!(await copies(p)).length,'sender already possessing exact fact gets no echo');
-await a.changeChatTopic('rename',{conv,id:topic,title:''});if(a.topicSyncRun)await a.topicSyncRun;
+await retainedPrivateFact(a,{conv,id:topic,title:''});if(a.topicSyncRun)await a.topicSyncRun;
 rows=await copies(a);const reset=rows.find(r=>wire.parseTopicSync(r.body).titles.some(t=>t.topic===topic&&t.rev===3));await receive(reset.envelope,p);await receive(first.envelope,p);
 check((await p.store.get('kv','topic/'+conv+'/'+topic)).title===''&&(await p.chatTopics(conv))[0].title==='Automatic title','explicit reset survives delayed older name');
 const seal=async(sender,record,target=p)=>wire.seal({v:2,id:wire.newID(),from:sender.address,to:target.address,ts:1,kind:'message',sub:wire.SubTopicSync,replica:true,body:JSON.stringify(record)},sender.keys,target.pub);
 const record=wire.parseTopicSync(reset.body),fact=record.titles[0],highest=[a.fp,p.fp].sort().at(-1),lowest=[a.fp,p.fp].sort()[0];
 const tie={...record,titles:[{...fact,rev:4,writer:highest,title:'Deterministic winner'}]};await receive(await seal(a,tie),p);await receive(await seal(a,{...tie,titles:[{...tie.titles[0],writer:lowest,title:'Other concurrent rename'}]}),p);
 check((await p.store.get('kv','topic/'+conv+'/'+topic)).title==='Deterministic winner','same revision uses deterministic writer fingerprint ordering');
-await receive(await seal(p,tie,a),a);await a.changeChatTopic('rename',{conv,id:topic,title:'After observed winner'});if(a.topicSyncRun)await a.topicSyncRun;
+await receive(await seal(p,tie,a),a);await retainedPrivateFact(a,{conv,id:topic,title:'After observed winner'});if(a.topicSyncRun)await a.topicSyncRun;
 const newest=(await copies(a)).find(r=>wire.parseTopicSync(r.body).titles.some(t=>t.topic===topic&&t.rev===5));check(wire.parseTopicSync(newest.body).titles[0].rev===5,'local rename advances highest observed revision');
 const conflict=await receive(await seal(a,{...tie,titles:[{...tie.titles[0],title:'Conflicting same fact'}]}),p);check((await p.store.get('held',conflict)).reason==='conflicting_duplicate','same writer and revision with another title fails closed');
 const unknown=wire.newID(),mixed={...tie,titles:[{...fact,topic:unknown,rev:1,title:'Must roll back'}, {...tie.titles[0],title:'Conflicting same fact'}]};await receive(await seal(a,mixed),p);check(!await p.store.get('kv','topic/'+conv+'/'+unknown),'conflicting batch stores no partial earlier title');
@@ -75,7 +82,7 @@ const originalFetch=a.fetch;a.fetch=async()=>{throw new TypeError('Failed to fet
 await a.post(await a.store.get('outbox',newest.id));check(posts.length===count+1&&(await a.store.get('outbox',newest.id)).envelope===newest.envelope,'restored capability retries identical encrypted bytes');
 if(typeof window!=='undefined'){a.store.close();a.store=await openIDB(a.fixtureStoreName);}
 const restarted=new Engine({store:a.store,base:a.base,fetch});Object.assign(restarted,{keys:a.keys,address:a.address,pub:a.pub,fp:a.fp,me:a.me,connected:false});const beforeRestart=(await copies(a)).length;await restarted.syncTopicTitles();check((await copies(a)).length===beforeRestart,'restart retains latest per-recipient carrier evidence');
-const resetTopic=wire.newID();await a.store.write([{s:'inbox',k:resetTopic,v:{...original,id:resetTopic,lid:resetTopic,topic:resetTopic}}]);await a.changeChatTopic('rename',{conv,id:resetTopic,title:''});if(a.topicSyncRun)await a.topicSyncRun;
+const resetTopic=wire.newID();await a.store.write([{s:'inbox',k:resetTopic,v:{...original,id:resetTopic,lid:resetTopic,topic:resetTopic}}]);await retainedPrivateFact(a,{conv,id:resetTopic,title:''});if(a.topicSyncRun)await a.topicSyncRun;
 const resetFact=await a.store.get('kv',a.topicTitleKey(a.me.person,{scope:conv,topic:resetTopic}));check(resetFact.rev===2&&resetFact.title==='','first explicit reset reserves revision1 for old saved names');
 await receive(await seal(p,{...record,roster:p.me.hash,titles:[{...fact,topic:resetTopic,title:'Late migrated old name',rev:1,writer:'ffffffff-ffffffff-ffffffff-ffffffff'}]},a),a);
 check((await a.store.get('kv','topic/'+conv+'/'+resetTopic)).title==='','later migration cannot resurrect a name after first explicit reset');

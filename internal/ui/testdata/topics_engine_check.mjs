@@ -221,11 +221,11 @@ do {
 } while (before);
 same(sizes, [15, 15, 11], 'archived topics in pages of 15');
 page = await list({ peer: bob, state: 'archived', limit: '15' });
-check(/^\d{10}\|bob\/desk\|[0-9a-f]{32}$/.test(page.next), 'the cursor is the Go client\'s: seconds|peer|id: ' + page.next);
+check(/^u1\|[01]\|\d{10}\|\|bob\/desk\|[0-9a-f]{32}$/.test(page.next), 'native/browser unread bucket and comparison cursor: ' + page.next);
 check(page.matched === 41, 'matched counts every page');
 page = await list({ peer: bob });
 check(page.topics.length === TOPICS.pageDefault && page.next && page.matched === 156, 'a default page');
-check(page.topics.every((x, i) => i === 0 || Date.parse(x.last_at) <= Date.parse(page.topics[i - 1].last_at)), 'newest first');
+check(page.topics.every((x, i) => i === 0 || Number(x.unread>0)<Number(page.topics[i-1].unread>0) || (x.unread>0)===(page.topics[i-1].unread>0) && Date.parse(x.last_at)<=Date.parse(page.topics[i-1].last_at)), 'unread first, then newest within each bucket');
 page = await list({ q: 'BETA note' });
 check(page.matched === 50 && page.topics.every((x) => x.peer === bob), 'search in any case over every peer: ' + page.matched);
 page = await list({ q: 'beta' });

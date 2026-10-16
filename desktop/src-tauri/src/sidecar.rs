@@ -31,6 +31,7 @@ pub const STOP_LINE: &str = "quit";
 #[serde(tag = "event", rename_all = "lowercase")]
 pub enum Event {
     Page { mode: String, url: String },
+    Unread { workspace: String, seq: u64, total: u64, partial: bool },
     Error { text: String },
     Update { helper: String, plan: String, home: String },
     Appreply { call_id: u64, status: u16, body: String },
@@ -39,6 +40,12 @@ pub enum Event {
 /// parse reads one stdout line; anything else is ignored.
 pub fn parse(line: &str) -> Option<Event> {
     let e: Event = serde_json::from_str(line.trim()).ok()?;
+    if let Event::Unread { workspace, seq, .. } = &e {
+        // A single aggregate only; no per-workspace counts or notification text.
+        if line.len() > 512 || workspace != "*" || *seq == 0 {
+            return None;
+        }
+    }
     if let Event::Page { url, .. } = &e {
         // Only the program's own loopback page is ever shown.
         let u = url::Url::parse(url).ok()?;
@@ -242,6 +249,33 @@ mod tests {
         ] {
             assert_eq!(parse(junk), None, "{junk}");
         }
+    }
+
+    #[test]
+    fn unread_parse_is_typed_bounded_and_aggregate_only() {
+        assert_eq!(
+            parse(r#"{"event":"unread","workspace":"*","seq":1,"total":0,"partial":true}"#),
+            Some(Event::Unread { workspace: "*".into(), seq: 1, total: 0, partial: true })
+        );
+        assert!(matches!(parse(r#"{"event":"unread","workspace":"*","seq":18446744073709551615,"total":18446744073709551615,"partial":false}"#), Some(Event::Unread { seq: u64::MAX, total: u64::MAX, .. })));
+        for invalid in [
+            r#"{"event":"unread","workspace":"default","seq":1,"total":3,"partial":false}"#,
+            r#"{"event":"unread","workspace":"*","seq":0,"total":3,"partial":false}"#,
+            r#"{"event":"unread","workspace":"*","seq":-1,"total":3,"partial":false}"#,
+            r#"{"event":"unread","workspace":"*","seq":18446744073709551616,"total":3,"partial":false}"#,
+            r#"{"event":"unread","workspace":"*","seq":1,"total":18446744073709551616,"partial":false}"#,
+            r#"{"event":"unread","workspace":"*","seq":1.5,"total":3,"partial":false}"#,
+            r#"{"event":"unread","workspace":"*","seq":1,"total":-1,"partial":false}"#,
+            r#"{"event":"unread","workspace":"*","seq":1,"total":"3","partial":false}"#,
+            r#"{"event":"unread","workspace":"*","seq":1,"total":3}"#,
+            r#"{"event":"unread","workspace":"*","seq":1,"total":3,"partial":0}"#,
+            r#"{"event":"unread","seq":1,"total":3,"partial":false}"#,
+            r#"{"event":"unread","workspace":"*","seq":1,"seq":2,"total":3,"partial":false}"#,
+        ] {
+            assert_eq!(parse(invalid), None, "{invalid}");
+        }
+        let oversized = format!("{}{}", " ".repeat(513), r#"{"event":"unread","workspace":"*","seq":1,"total":3,"partial":false}"#);
+        assert_eq!(parse(&oversized), None);
     }
 
     #[test]

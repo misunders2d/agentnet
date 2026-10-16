@@ -21,7 +21,7 @@ func alertWorld(t *testing.T, grace time.Duration) (w *world, conv string, n *no
 	w = newWorld(t, "")
 	n = fakeNotify(w.bob)
 	runAgent(t, w.alice)
-	stopBob, _ = runWith(t, w, w.bob, RunOptions{OpenConv: func(conv string) []string { return []string{"open-page", conv} }})
+	stopBob, _ = runWith(t, w, w.bob, RunOptions{OpenPage: func(fragment string) []string { return []string{"open-page", fragment} }})
 	persons(t, w.alice, w.bob)
 	conv = newDM(t, w.alice, w.bob)
 	return w, conv, n, stopBob
@@ -92,7 +92,7 @@ func TestDesktopAlertOnceAfterGrace(t *testing.T) {
 	if err := w.bob.SetAlertPrefs(AlertPrefs{Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
-	sendAt(t, w.alice, w.bob, conv, ConvOutgoing{Body: "chat alerts without sender grant"})
+	defaultID := sendAt(t, w.alice, w.bob, conv, ConvOutgoing{Body: "chat alerts without sender grant"})
 	if pendingAlerts(t, w.bob) != 1 {
 		t.Fatal("default-unmuted chat needs no sender grant")
 	}
@@ -102,14 +102,14 @@ func TestDesktopAlertOnceAfterGrace(t *testing.T) {
 	n.mu.Lock()
 	defaultBody, defaultArgv := n.bodies[0], n.argvs[0]
 	n.mu.Unlock()
-	if defaultBody != "AgentNet: New activity" || !slices.Equal(defaultArgv, []string{"open-page", conv}) {
+	if defaultBody != "AgentNet: New activity" || !slices.Equal(defaultArgv, []string{"open-page", "msg=" + defaultID + "&conv=" + conv + "&dir=in"}) {
 		t.Fatalf("default alert: %q %v", defaultBody, defaultArgv)
 	}
 	allowAliceAt(t, w)
 	shownBefore := n.count()
 	queued := time.Now()
 	sendAt(t, w.alice, w.bob, conv, ConvOutgoing{Body: "one"})
-	sendAt(t, w.alice, w.bob, conv, ConvOutgoing{Body: "two"})
+	secondID := sendAt(t, w.alice, w.bob, conv, ConvOutgoing{Body: "two"})
 	pending := pendingAlerts(t, w.bob)
 	inGrace := beforeDue(queued) // both turns were admitted before the alert could be due
 	if inGrace && pending != 1 {
@@ -120,7 +120,7 @@ func TestDesktopAlertOnceAfterGrace(t *testing.T) {
 	n.mu.Lock()
 	body, argv := n.bodies[shownBefore], n.argvs[shownBefore]
 	n.mu.Unlock()
-	if body != "AgentNet: New activity" || !slices.Equal(argv, []string{"open-page", conv}) {
+	if body != "AgentNet: New activity" || !slices.Equal(argv, []string{"open-page", "msg=" + secondID + "&conv=" + conv + "&dir=in"}) {
 		t.Fatalf("alert: %q %v", body, argv)
 	}
 	if !inGrace {
@@ -331,5 +331,48 @@ func TestChatAlertQuietMigration(t *testing.T) {
 	p, err = w.bob.AlertPrefs()
 	if err != nil || len(p.Mutes) != 0 {
 		t.Fatalf("unmute left quiet anchors: %+v %v", p, err)
+	}
+}
+
+func TestAlertPreviewPrefsRoundTripAndInvalidRollback(t *testing.T) {
+	w := newWorld(t, "")
+	for _, preview := range []NotificationPreview{"", NotificationPreviewFull, NotificationPreviewSender, NotificationPreviewHidden} {
+		if err := w.bob.SetAlertPrefs(AlertPrefs{Preview: preview}); err != nil {
+			t.Fatal(err)
+		}
+		got, err := w.bob.AlertPrefs()
+		if err != nil || got.Preview != preview || got.Enabled || len(got.Senders) != 0 || len(got.Mutes) != 0 {
+			t.Fatal("preview enabled alerts or lost roundtrip", got, err)
+		}
+	}
+	reopened, err := Open(w.bobHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := reopened.AlertPrefs()
+	reopened.Close()
+	if err != nil || persisted.Preview != NotificationPreviewHidden || persisted.Enabled {
+		t.Fatal("preview not persisted independently of consent", persisted, err)
+	}
+	before, err := w.bob.AlertPrefs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []NotificationPreview{"unknown", "FULL", " full", "sender ", NotificationPreview(strings.Repeat("x", 1000))} {
+		if err := w.bob.SetAlertPrefs(AlertPrefs{Enabled: true, Preview: bad}); err == nil {
+			t.Fatal("invalid preview accepted")
+		}
+		after, err := w.bob.AlertPrefs()
+		old, _ := json.Marshal(before)
+		current, _ := json.Marshal(after)
+		if err != nil || string(old) != string(current) {
+			t.Fatal("invalid preference mutated transaction", after, err)
+		}
+	}
+	if _, err := w.bob.store.db.Exec(`UPDATE config SET v='unknown' WHERE k='notification-preview'`); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := w.bob.AlertPrefs(); err == nil || got.Preview != NotificationPreviewHidden {
+		t.Fatal("invalid stored value did not fail hidden", got, err)
 	}
 }

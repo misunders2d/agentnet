@@ -549,7 +549,7 @@ func TestReviewClickOpensMessengerWhenServed(t *testing.T) {
 	}
 	waitState(t, w.bob, task.ID, stateAwaiting)
 	eventually(t, "grouped notification", func() bool { return n.count() == 2 })
-	if !strings.HasSuffix(n.last(), "Click to review them.") {
+	if n.last() != "AgentNet: A request needs your decision" {
 		t.Fatalf("notification promises wrong destination: %s", n.last())
 	}
 	os.Remove(log)

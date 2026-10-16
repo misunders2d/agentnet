@@ -261,7 +261,7 @@ const GalleryConnectSources = "https://api.github.com/repos/misunders2d/agentnet
 
 // relayCSP lets the page run only its own origin's files and talk only to
 // its own origin and the skin gallery's fixed sources.
-const relayCSP = "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' blob:; connect-src 'self' " + GalleryConnectSources + "; manifest-src 'self'; worker-src 'self'; " +
+const relayCSP = "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' blob:; media-src blob:; connect-src 'self' " + GalleryConnectSources + "; manifest-src 'self'; worker-src 'self'; " +
 	"base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 
 // Relay serves the browser page and its files on a relay's origin, for GET

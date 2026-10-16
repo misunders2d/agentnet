@@ -4,7 +4,7 @@
 // the page's base sheet resets a button's font and color.
 import { forwardRef, type CSSProperties, type ReactNode, type Ref, type MouseEvent as ReactMouseEvent, type TextareaHTMLAttributes } from "react";
 import { Menu } from "@base-ui/react/menu";
-import { IconCornerUpLeft, IconMoodSmile, IconPaperclip, IconPlus, IconUserPlus, IconX } from "@tabler/icons-react";
+import { IconClock, IconCornerUpLeft, IconMoodSmile, IconPaperclip, IconPlus, IconUserPlus, IconX } from "@tabler/icons-react";
 import { AgentAvatar } from "../ui/Avatar";
 import type { Span } from "./Composer.mentions";
 import { usePortal } from "../owned";
@@ -16,6 +16,7 @@ export const keep = (e: ReactMouseEvent) => e.preventDefault();
 export interface MenuAction { label: string; sub?: string; icon: ReactNode; tone: string; disabled?: boolean; run: () => void }
 
 export const menuIcons = {
+  clock: <IconClock size={20} stroke={2} />,
   invite: <IconUserPlus size={20} stroke={2} />,
   file: <IconPaperclip size={20} stroke={2} />,
   emoji: <IconMoodSmile size={20} stroke={2} />,

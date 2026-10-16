@@ -1,3 +1,4 @@
+import { UnreadReview } from "./Approvals.unread";
 import { NativeActivity } from "./NativeActivity";
 // Review: unresolved work and decisions needing this person, newest first,
 // each naming who and what, straight from the overview: requests to your
@@ -136,6 +137,7 @@ export function OksView() {
         <ScreenTitle ref={title}>Review</ScreenTitle>
         {count > 0 && <p className="pt-2 text-[15px] font-semibold text-text-2 tnum">{count === 1 ? "1 needs attention" : count + " need attention"}</p>}
       </header>
+      <UnreadReview />
       {items.length ? (
         <div className="px-4 pt-3">
           <ul className="flex flex-col gap-3" aria-label="Waiting for you">

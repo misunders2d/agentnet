@@ -71,6 +71,7 @@ function OpenView({ open }: { open: NonNullable<Open> }) {
   const canInvite = !!t && !t.frozen && (!t.role || t.role === "member");
   const topic = useStore(store, s => s.drafts[open.id]?.topic);
   const newTopic = useStore(store, s => s.drafts[open.id]?.newTopic);
+  const readVisit = useStore(store, () => store.readVisit(open, open.kind === "dm" ? topic || "" : "", open.kind === "dm" && !!newTopic));
   const personMain=t&&store.personMain(t);
   const messages: AnyMsg[] = useMemo(() => (t ? (t.messages||[]).filter(m => newTopic ? !m.topic : (m.topic||"") === (topic||"")) : th?.messages) || [], [t?.messages, th?.messages, topic, newTopic]);
   const toggle = useCallback((id: string) => setSelected(s => s ? (s.includes(id) ? s.filter(x => x !== id) : [...s, id]) : [id]), []);
@@ -94,12 +95,11 @@ function OpenView({ open }: { open: NonNullable<Open> }) {
       {t && <PendingInvitations t={t} />}
       {!wide && <GuestBar helpers={hs} onDismissed={setLeft} />}
       {t&&personMain ? <PersonTopics dm={t} main={personMain} onMain={()=>{
-        store.setDraft(personMain,{...store.draft(personMain),topic:undefined,newTopic:false,replyTo:undefined});
-        void store.open({kind:"dm",id:personMain});
+        void store.openUnread({kind:"dm",id:personMain});
       }}/> : <TopicBar thread={ctx.thread||undefined} dm={ctx.dm||undefined} />}
       {/* Another topic swaps only the messages: header, topic bar and composer stay. */}
       <Swap id={open.id} className="flex min-h-0 flex-1 flex-col" side="flex min-h-0 flex-1 flex-col" enter="an-topic-in" leave="an-topic-out" ms={MOTION.topic} label="timeline">
-      <Timeline key={open.id + ":" + (newTopic ? "new" : topic || "main")} ctx={ctx} messages={messages} focus={open.focus} focusSeq={open.focusSeq} selected={selected} onSelect={toggle} start={<TopicStart ctx={ctx} messages={messages} />} end={<TopicEnd ctx={ctx} />}
+      <Timeline key={open.id + ":" + (newTopic ? "new" : topic || "main")} ctx={ctx} messages={messages} focus={open.focus} focusSeq={open.focusSeq} unread={open.unread} readVisit={readVisit} selected={selected} onSelect={toggle} start={<TopicStart ctx={ctx} messages={messages} />} end={<TopicEnd ctx={ctx} />}
         footer={left && (
           // The room panel's words; the timeline keeps its last lines clear of it.
           <div role="status" className="pop-in flex items-center gap-3 rounded-2xl stroke bg-ink py-2 pl-4 pr-2 text-canvas shadow-pop">
@@ -158,7 +158,7 @@ function Loading({ o }: { o: NonNullable<Open> }) {
     <section aria-busy="true" aria-label={item ? "Opening " + item.title : "Opening conversation"} className="flex min-h-0 flex-1 flex-col bg-canvas">
       <header className={"flex shrink-0 items-center gap-2 border-b-[1.5px] border-outline bg-surface " + (wide ? "h-[76px] px-5" : "h-16 pl-1 pr-1.5")}>
         {!wide && (
-          <button type="button" onClick={() => store.close()} aria-label="Back to chats" className="flex h-11 shrink-0 items-center rounded-full pl-1 pr-1.5 hover:bg-sunken">
+          <button type="button" onClick={() => store.close()} aria-label={store.returningToReview ? "Back to Review" : "Back to chats"} className="flex h-11 shrink-0 items-center rounded-full pl-1 pr-1.5 hover:bg-sunken">
             <IconChevronLeft size={26} stroke={2.2} />
           </button>
         )}

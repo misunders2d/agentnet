@@ -104,9 +104,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/files/{id}/{i}", s.file)
 	mux.HandleFunc("POST /api/file/request", s.requestFile)
 	mux.HandleFunc("POST /api/file/open-image", s.openImage)
+	mux.HandleFunc("GET /api/schedules", s.schedules)
+	mux.HandleFunc("GET /api/schedule/audience", s.scheduleAudience)
+	mux.HandleFunc("POST /api/schedule/{what}", s.changeSchedule)
 	mux.HandleFunc("POST /api/message/{what}", s.control)
 	mux.HandleFunc("POST /api/conversation/delete", s.deleteConversation) // livedelete.go
 	mux.HandleFunc("GET /api/topics", s.topics)                           // livetopics.go: one page of topics
+	mux.HandleFunc("GET /api/unread", s.unread)                           // display-only effective unread page
 	mux.HandleFunc("POST /api/topic/{what}", s.changeTopic)               // rename, done, reopen (this device only)
 	mux.HandleFunc("POST /api/operator/decide", s.decide)
 	mux.HandleFunc("GET /api/approvals", s.approvals) // liveapprovals.go: standing grants, as agentnet approvals lists them
@@ -164,7 +168,7 @@ func (s *Server) guard(next http.Handler) http.Handler {
 		// native bridges still verify the page and Blob origin before handover.
 		connect := "connect-src 'self' " + static.GalleryConnectSources + " blob:"
 		h.Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; "+
-			"img-src 'self' blob:; "+connect+"; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+			"img-src 'self' blob:; media-src blob:; "+connect+"; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("Cache-Control", "no-store")
@@ -292,6 +296,7 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 	_, o.ReplyReceivers = s.p.(ReplyReceivers)
 	_, o.ReplySessions = s.p.(ReplySessionCatalogProvider)
 	_, o.TopicList = s.p.(Topics)
+	_, o.Schedules = s.p.(Schedules)
 	writeJSON(w, o)
 }
 
@@ -366,6 +371,7 @@ func (s *Server) notify(w http.ResponseWriter, r *http.Request) {
 		Muted   bool     `json:"muted"`
 		Allowed bool     `json:"allowed"`
 		IDs     []string `json:"ids"`
+		Preview *string  `json:"preview"`
 	}
 	if !readJSON(w, r, &v) {
 		return
@@ -383,6 +389,15 @@ func (s *Server) notify(w http.ResponseWriter, r *http.Request) {
 		note, err = p.NotifyAllow(v.Person, v.Allowed)
 	case "seen":
 		err = p.NotifySeen(v.Conv, v.IDs)
+	case "preview":
+		preview, supported := s.p.(NotificationPreviews)
+		if !supported {
+			err = NotFound("preview choices are not available here")
+		} else if v.Preview == nil || (*v.Preview != "" && *v.Preview != "full" && *v.Preview != "sender" && *v.Preview != "hidden") {
+			err = Refuse("Choose Default, Full, Sender or Hidden previews.")
+		} else {
+			note, err = preview.NotifyPreview(*v.Preview)
+		}
 	default:
 		err = NotFound("no such alert control")
 	}

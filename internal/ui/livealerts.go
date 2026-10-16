@@ -19,6 +19,9 @@ func (l *Live) notifyView() (*NotifyView, error) {
 		return nil, err
 	}
 	v := &NotifyView{Available: true, Native: true, Enabled: p.Enabled, Mutes: p.Mutes, Allowed: []string{}}
+	if fallback := l.a.NativeNotificationPreviewDefault(); fallback != "" {
+		v.Preview, v.PreviewDefault = string(p.Preview), string(fallback)
+	}
 	for _, s := range p.Senders {
 		v.Allowed = append(v.Allowed, s.Address)
 	}
@@ -93,6 +96,22 @@ func (l *Live) NotifyEnable() (string, error) {
 // NotifyDisable implements Alerts.
 func (l *Live) NotifyDisable() (string, error) {
 	return "Alerts are off.", l.setAlerts(func(p *client.AlertPrefs) error { p.Enabled = false; return nil })
+}
+
+// NotifyPreview changes only local display privacy, never notification consent.
+func (l *Live) NotifyPreview(preview string) (string, error) {
+	switch preview {
+	case "", "full", "sender", "hidden":
+	default:
+		return "", Refuse("Choose Default, Full, Sender or Hidden previews.")
+	}
+	if l.a.NativeNotificationPreviewDefault() == "" {
+		return "", Refuse("This host does not support preview choices.")
+	}
+	return "Message preview preference saved.", l.setAlerts(func(p *client.AlertPrefs) error {
+		p.Preview = client.NotificationPreview(preview)
+		return nil
+	})
 }
 
 // NotifyMute implements Alerts.

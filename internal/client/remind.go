@@ -188,6 +188,13 @@ func (a *Agent) remindLoop(ctx context.Context) {
 			a.Logf("reminders: %v", err)
 			next = time.Now().Add(time.Minute) // a failure repeating does not spin
 		}
+		scheduled, scheduleErr := a.scheduledDue(ctx, time.Now())
+		if scheduleErr != nil && ctx.Err() == nil {
+			a.Logf("scheduled messages: deadline lookup failed")
+		}
+		if !scheduled.IsZero() && (next.IsZero() || scheduled.Before(next)) {
+			next = scheduled
+		}
 		if err := timer.Arm(next); err != nil {
 			a.Logf("reminders: timer: %v", err)
 		}
@@ -241,18 +248,8 @@ func (a *Agent) remindDue(now time.Time) (time.Time, error) {
 			return time.Time{}, err
 		}
 		body := "A reminder is due"
-		var argv []string
-		var onClick func()
-		if !a.hasNativeNotifier() {
-			switch {
-			case len(dues) > 1:
-				body = fmt.Sprintf("%d reminders are due", len(dues))
-				argv, onClick = a.convClick("") // no one target: the local page
-			case dues[0].conv != "":
-				argv, onClick = a.convClick(dues[0].conv) // the DM, on the local page
-			default:
-				argv, onClick = a.reviewClick(dues[0].message) // the message's whole thread
-			}
+		if len(dues) > 1 {
+			body = fmt.Sprintf("%d reminders are due", len(dues))
 		}
 		if a.hasNativeNotifier() {
 			fragment := ""
@@ -271,8 +268,17 @@ func (a *Agent) remindDue(now time.Time) (time.Time, error) {
 				}
 			}
 			a.nativeNotification(fragment, id, "Reminder", body)
-		} else if err := a.notify("AgentNet", body, argv, onClick); err != nil {
-			a.Logf("reminder notification not shown (%v); see agentnet remind list", err)
+		} else {
+			id, fragment := "", "review"
+			if len(dues) == 1 {
+				id = dues[0].message
+				fragment = a.nativeReviewFragment(id)
+			}
+			display := a.nativeDisplay(fragment, id, "Reminder", body, true)
+			argv, onClick := a.notificationClick(id, display.Fragment)
+			if err := a.notify(display.Title, display.Body, argv, onClick); err != nil {
+				a.Logf("reminder notification not shown (%v); see agentnet remind list", err)
+			}
 		}
 	}
 	if !next.Valid {

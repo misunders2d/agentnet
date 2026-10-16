@@ -17,6 +17,78 @@ func TestComicDeliberateUnreadStore(t *testing.T) {
 	runNodeCheck(t, "testdata/deliberate_unread_store_check.mjs")
 }
 
+func TestComicVisibleUnreadRows(t *testing.T) {
+	runNodeCheck(t, "testdata/visible_rows_check.mjs")
+}
+
+func TestLiveUnreadScopeCounts(t *testing.T) {
+	alice, _, _, conv, _, _ := liveGuestWorld(t)
+	live := NewLive(alice)
+	a, b := protocol.NewID(), protocol.NewID()
+	ids := map[string][]string{}
+	for _, topic := range []string{"", "", a, b, b, b} {
+		sent, err := live.SendDM(DMDraft{Conv: conv, Topic: topic, Body: "Scope attention"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids[topic] = append(ids[topic], sent.ID)
+	}
+	for _, selected := range ids {
+		if err := alice.MarkUnread(selected[0], selected); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := live.ChangeTopic(TopicMark, TopicChange{Conv: conv, ID: b, Count: 3}); err != nil {
+		t.Fatal(err)
+	}
+	assertCounts := func(wantA, wantTotal int) DMThread {
+		t.Helper()
+		dm, err := live.DM(conv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if dm.MainTopic == nil || dm.MainTopic.Unread != 2 {
+			t.Fatalf("Main count: %+v; want 2", dm.MainTopic)
+		}
+		counts := map[string]int{}
+		for _, topic := range dm.Topics {
+			counts[topic.ID] = topic.Unread
+			if topic.ID == b && topic.State != "done" {
+				t.Fatalf("unread changed Done status: %+v", topic)
+			}
+		}
+		if counts[a] != wantA || counts[b] != 3 {
+			t.Fatalf("topic counts: %v; want A=%d B=3", counts, wantA)
+		}
+		o, err := live.Overview()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range o.DMs {
+			if d.ID == conv {
+				if d.Unread != wantTotal {
+					t.Fatalf("chat unread=%d, want %d", d.Unread, wantTotal)
+				}
+				return dm
+			}
+		}
+		t.Fatal("chat missing from overview")
+		return dm
+	}
+	dm := assertCounts(1, 6)
+	for _, m := range dm.Messages {
+		if m.ID == ids[a][0] {
+			if m.Attention == nil {
+				t.Fatal("A lost its effective generation")
+			}
+			if err := alice.MarkReadWithAttention([]string{m.ID}, map[string]protocol.AttentionGeneration{m.ID: *m.Attention}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	assertCounts(0, 5)
+}
+
 // Exercise the real local action decoder, native attention register and both
 // message projections. This is local provider evidence, not cross-device sync.
 func TestLiveDeliberateUnreadHTTP(t *testing.T) {

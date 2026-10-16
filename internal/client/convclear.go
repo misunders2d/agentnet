@@ -296,6 +296,11 @@ func retainedCount(q querier, conv, selfFP string) (int, error) {
 // this device), and a kept copy of a sent file unless a sent turn not erased
 // still has it. Saved files are the person's and stay.
 func (a *Agent) dropErasedFiles(conv string) {
+	release, err := a.scheduledFilesLock()
+	if err != nil {
+		return
+	}
+	defer release()
 	selfFP := a.Self().Fingerprint()
 	if rows, err := a.store.db.Query(`SELECT a.blob_id FROM attachments a JOIN inbox i ON i.id = a.message_id
 		WHERE coalesce(i.conv, '') = ? AND i.local = 0 AND i.body = '' AND `+erasedIn+` AND NOT `+retainedIn, conv); err == nil {
@@ -314,6 +319,7 @@ func (a *Agent) dropErasedFiles(conv string) {
 	}
 	rows, err := a.store.db.Query(`SELECT DISTINCT s.sha256 FROM sent_attachments s JOIN outbox o ON o.id = s.message_id
 		WHERE coalesce(o.conv, '') = ? AND o.body = '' AND `+erasedOut+` AND NOT `+retainedOut+`
+		AND NOT `+scheduledKeptReference+`
 		AND NOT EXISTS (SELECT 1 FROM sent_attachments s2 JOIN outbox o2 ON o2.id = s2.message_id WHERE s2.sha256 = s.sha256
 		  AND NOT EXISTS (SELECT 1 FROM conv_erased e WHERE e.conv = coalesce(o2.conv, '') AND e.key = ? AND e.lid = CASE WHEN o2.conv IS NULL THEN o2.id ELSE o2.lid END))`,
 		conv, selfFP, selfFP)

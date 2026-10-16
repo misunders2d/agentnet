@@ -238,13 +238,16 @@ func insertCopies(tx *sql.Tx, copies []outCopy) error {
 			if err != nil {
 				return err
 			}
-			if _, assistant := historyAssistant(c.in.Body, c.in.Conv); envelope.ProactiveAgent(item.inner(c.in.Conv)) || envelope.TopicOrganization(item.TopicEvent) || item.Followup != nil || item.ReceiverRoute != nil || assistant || room || scoped { // delivery reads the item's own requirement
+			if _, assistant := historyAssistant(c.in.Body, c.in.Conv); envelope.ProactiveAgent(item.inner(c.in.Conv)) || envelope.TopicOrganization(item.TopicEvent) || envelope.TopicRename(item.TopicEvent) || item.Followup != nil || item.ReceiverRoute != nil || assistant || room || scoped { // delivery reads the item's own requirement
 				body = c.in.Body
 			}
 		}
 		if _, err := tx.Exec(`INSERT INTO outbox(id, recipient, body, envelope, state, created_at, conv, lid, kind, created_ms, sub, required_cap,recipient_fp,group_admission)
 			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, nullif(?, ''),nullif(?,''),nullif(?,''))`,
 			c.env.ID, c.env.To, body, string(data), c.state, now.Unix(), c.in.Conv, c.in.LID, c.in.Kind, now.UnixMilli(), c.in.Sub, copyRequirement(c), c.recipientFP, c.groupAdmission); err != nil {
+			return err
+		}
+		if err := storeSharedTopicRequirement(tx, c); err != nil {
 			return err
 		}
 		if err := storeAgentActionRequirements(tx, c); err != nil {
@@ -575,6 +578,15 @@ func (a *Agent) admitHistory(ctx context.Context, env envelope.Envelope, in enve
 			return nil
 		}
 	}
+	priorShared := also
+	also = func(tx *sql.Tx) error {
+		if priorShared != nil {
+			if err := priorShared(tx); err != nil {
+				return err
+			}
+		}
+		return saveSharedTopicRename(tx, orig, item.FromKey)
+	}
 	var guards []func(*sql.Tx) error
 	if envelope.TopicOrganization(orig.TopicEvent) {
 		guards = append(guards, func(tx *sql.Tx) error {
@@ -589,7 +601,7 @@ func (a *Agent) admitHistory(ctx context.Context, env envelope.Envelope, in enve
 		})
 	}
 	res, err := a.store.addHistoryInbox(orig, item.At, item.FromKey, env.From, env.ID, fromQuarantine, also, guards...)
-	if errors.Is(err, errTooManyEvents) {
+	if errors.Is(err, ErrSharedTopicTitleConflict) || errors.Is(err, errTooManyEvents) {
 		return hold(reasonInvalid, err.Error())
 	}
 	if err == nil && res == admitted && orig.Sub == envelope.SubEvent {
@@ -919,7 +931,7 @@ func (a *Agent) historyPage(ctx context.Context, dev identity.Public, pos histor
 
 	var items []historySourceRow
 	if !contextOnly {
-		items, err = a.historySourceRows(a.store.db, "(conv,ms,id)>(?,?,?)", "conv,ms,id", historyPage, pos.Conv, pos.Ms, pos.ID)
+		items, err = a.ownHistorySourceRows(a.store.db, dev, "(conv,ms,id)>(?,?,?)", "conv,ms,id", historyPage, pos.Conv, pos.Ms, pos.ID)
 		if err != nil {
 			return false, err
 		}

@@ -36,6 +36,10 @@ type RunOptions struct {
 	// NotifyContent opts into bounded locally decrypted display text. Native
 	// platforms must provide a redacted public lock-screen presentation.
 	NotifyContent func(NativeNotification)
+	// NotifyPreviewDefault is published with the callback before workers start.
+	// Empty preserves legacy full previews; an owned desktop callback must
+	// explicitly choose Hidden. A local AlertPrefs.Preview overrides this hint.
+	NotifyPreviewDefault NotificationPreview
 
 	// Listen is the address to accept direct deliveries on (e.g. ":7443").
 	// Empty disables direct delivery; everything then goes through the Hub.

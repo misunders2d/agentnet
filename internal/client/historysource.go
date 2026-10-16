@@ -21,18 +21,40 @@ type historySourceRow struct {
 // execution stamps never become signed author identities. The inbox arrival
 // counter is independent of a forwarded message's older conversation timestamp.
 func (a *Agent) historySourceRows(q dbq, filter, order string, limit int, args ...any) ([]historySourceRow, error) {
+	return a.historySourceRowsMode(q, false, filter, order, limit, args...)
+}
+
+// Only verified current own linked history may recover an erased metadata winner.
+// Selected context, guest and review callers retain the generic erased exclusion.
+func (a *Agent) ownHistorySourceRows(q dbq, dev identity.Public, filter, order string, limit int, args ...any) ([]historySourceRow, error) {
+	if err := historyRecoveryCurrent(q, a.Self(), dev); err != nil {
+		return nil, err
+	}
+	return a.historySourceRowsMode(q, true, filter, order, limit, args...)
+}
+func (a *Agent) historySourceRowsMode(q dbq, own bool, filter, order string, limit int, args ...any) ([]historySourceRow, error) {
+	inVisible := "NOT " + erasedInFor("inbox")
+	outVisible := "NOT " + erasedOut
+	if own {
+		inVisible = "(" + inVisible + ` OR EXISTS(SELECT 1 FROM topic_shared_titles t WHERE t.conv=inbox.conv AND t.topic=inbox.topic AND t.lid=inbox.lid AND t.writer=coalesce(inbox.verified_by,inbox.claimed_fp,'') AND json_extract(inbox.topic_event,'$.action')='rename'))`
+		outVisible = "(" + outVisible + ` OR EXISTS(SELECT 1 FROM topic_shared_titles t WHERE t.conv=o.conv AND t.topic=o.topic AND t.lid=o.lid AND t.writer=? AND json_extract(o.topic_event,'$.action')='rename'))`
+	}
+
 	query := `
 		SELECT conv, ms, id, dir, sender, coalesce(verified_by, claimed_fp, '') AS verified_by, ts, kind, body, coalesce(reply_to, '') AS reply_to, coalesce(status, '') AS status, coalesce(sub, '') AS sub,
 		       coalesce(origin, '') AS origin, coalesce(emotion, '') AS emotion, coalesce(target, '') AS target, coalesce(pid, '') AS pid, lid, coalesce(ref_id, '') AS ref_id, coalesce(ref_fp, '') AS ref_fp, coalesce(agent_id, '') AS agent_id,coalesce(quote,'') AS quote,coalesce(topic,'') AS topic,coalesce(topic_event,'') AS topic_event,topic_done,arrival,outseq FROM (
 		  SELECT conv, received_ms AS ms, id, 'in' AS dir, sender, verified_by, claimed_fp, ts, kind, body, reply_to, status, sub, origin, emotion, target, pid, lid, ref_id, ref_fp,
 		         CASE WHEN kind IN ('question', 'task') THEN '' ELSE agent_id END AS agent_id,quote,topic,topic_event,topic_done,arrival,0 AS outseq
 		    FROM inbox WHERE conv IS NOT NULL AND local = 0 AND coalesce(sub, '') NOT IN ('root-sync', 'history', 'clear', 'group-proof', 'group-context', 'group-invite', 'group-consent', 'group-withdrawal')
-		     AND NOT ` + erasedInFor("inbox") + `
+		     AND ` + inVisible + `
 		  UNION ALL
 		  SELECT o.conv, o.created_ms, o.id, 'out', ?, ?, NULL, CASE WHEN coalesce(o.topic,'') <> '' OR (coalesce(o.pid,'') <> '' OR o.sub IN ('status','reaction','revision','retraction')) AND o.conv IN (SELECT conv FROM group_context) THEN json_extract(o.envelope,'$.ts') ELSE o.created_at END, o.kind, o.body, o.reply_to, o.status, o.sub, o.origin, o.emotion, o.target, o.pid, o.lid, o.ref_id, o.ref_fp, o.agent_id,o.quote,o.topic,o.topic_event,o.topic_done,0,o.rowid
 		    FROM outbox o WHERE o.conv IS NOT NULL AND coalesce(o.sub, '') NOT IN ('root-sync', 'history', 'file', 'clear', 'group-proof', 'group-context', 'group-invite', 'group-consent', 'group-withdrawal')
-		     AND o.rowid = (SELECT min(rowid) FROM outbox f WHERE f.conv = o.conv AND f.lid = o.lid) AND NOT ` + erasedOut + `) WHERE conv IN (SELECT id FROM conversations UNION SELECT conv FROM group_context UNION SELECT conv FROM group_proof_roots) AND (` + filter + `) ORDER BY ` + order + ` LIMIT ?`
+		     AND o.rowid = (SELECT min(rowid) FROM outbox f WHERE f.conv = o.conv AND f.lid = o.lid) AND ` + outVisible + `) WHERE conv IN (SELECT id FROM conversations UNION SELECT conv FROM group_context UNION SELECT conv FROM group_proof_roots) AND (` + filter + `) ORDER BY ` + order + ` LIMIT ?`
 	params := []any{a.Address, a.Self().Fingerprint(), a.Self().Fingerprint()}
+	if own {
+		params = append(params, a.Self().Fingerprint())
+	}
 	params = append(params, args...)
 	params = append(params, limit)
 	rows, err := q.Query(query, params...)

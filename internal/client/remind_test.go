@@ -20,9 +20,12 @@ func remindWorld(t *testing.T) (w *world, n *notes, stopBob func()) {
 	clickOS, startConsole = "windows", func([]string, string) error { return nil }
 	t.Cleanup(func() { clickOS, startConsole = oldOS, oldStart })
 	w = newWorld(t, "")
+	if err := w.bob.SetAlertPrefs(AlertPrefs{Preview: NotificationPreviewFull}); err != nil {
+		t.Fatal(err)
+	}
 	n = fakeNotify(w.bob)
 	runAgent(t, w.alice)
-	stopBob, _ = runWith(t, w, w.bob, RunOptions{OpenConv: func(conv string) []string { return []string{"open-page", conv} }})
+	stopBob, _ = runWith(t, w, w.bob, RunOptions{OpenPage: func(fragment string) []string { return []string{"open-page", fragment} }})
 	return w, n, stopBob
 }
 
@@ -42,7 +45,7 @@ func (n *notes) reminded() (count int, bodies []string, argvs [][]string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	for i, b := range n.bodies {
-		if strings.Contains(b, "reminder") {
+		if strings.HasPrefix(b, "Reminder") {
 			count++
 			bodies, argvs = append(bodies, b), append(argvs, n.argvs[i])
 		}
@@ -59,7 +62,7 @@ func reminderOf(t *testing.T, a *Agent, id string) Reminder {
 	return r
 }
 
-// At its time a reminder asks for attention once, content-free, with a
+// At its time a reminder asks for attention once, with an explicit full preview and a
 // click on the message's thread; it stays overdue; the message is
 // untouched; moving it is a new revision, notified once more.
 func TestReminderDueOnceAndMoved(t *testing.T) {
@@ -86,7 +89,7 @@ func TestReminderDueOnceAndMoved(t *testing.T) {
 	eventually(t, "the reminder", func() bool { c, _, _ := n.reminded(); return c == 1 })
 	_, bodies, argvs := n.reminded()
 	body, argv := bodies[0], argvs[0]
-	if body != "AgentNet: A reminder is due" || len(argv) == 0 || argv[len(argv)-1] != q || strings.Contains(strings.Join(argv, " "), "budget") {
+	if !strings.HasPrefix(body, "Reminder") || !strings.HasSuffix(body, ": budget for Q4?") || len(argv) != 2 || argv[1] != "msg="+q+"&dir=in" || strings.Contains(strings.Join(argv, " "), "budget") {
 		t.Fatalf("notification %q, click %v", body, argv)
 	}
 	if r = reminderOf(t, w.bob, q); !r.Overdue || !r.Alerted || r.State != ReminderPending {
@@ -319,12 +322,12 @@ func TestReminderOverdueAtStart(t *testing.T) {
 	if n.count() != 0 {
 		t.Fatal("notified while stopped")
 	}
-	stopBob, _ = runWith(t, w, w.bob, RunOptions{OpenConv: func(conv string) []string { return []string{"open-page", conv} }})
+	stopBob, _ = runWith(t, w, w.bob, RunOptions{OpenPage: func(fragment string) []string { return []string{"open-page", fragment} }})
 	eventually(t, "the overdue reminder", func() bool { return n.count() == 1 })
 	n.mu.Lock()
 	argv := n.argvs[0]
 	n.mu.Unlock()
-	if len(argv) != 2 || argv[1] != conv {
+	if len(argv) != 2 || argv[1] != "msg="+sent.ID+"&conv="+conv+"&dir=in" {
 		t.Fatalf("click %v", argv)
 	}
 	stopBob()

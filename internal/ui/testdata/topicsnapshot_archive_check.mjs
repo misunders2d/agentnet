@@ -34,3 +34,22 @@ available=true;await e.post({...descriptor,state:'queued'});
 assert.equal((await e.store.get('outbox',job.id)).envelope,sealed);
 assert.equal((await e.store.get('outbox',job.id)).state,'custody');
 console.log('Browser snapshot archive: body erasure, repack, independent waiting and same sealed ciphertext release passed');
+// A shared-title child keeps its independent reader gate after plaintext loss,
+// restart, expiry and repack; org/mention and base requirements remain present.
+let titleAvailable=true;
+e.ctlSupport=async(_address,_pin,cap)=>[cap!==wire.CapSharedTopicTitle||titleAvailable,'peer_update: ttl1 required'];
+const rename={v:1,id:wire.newID(),lid:wire.newID(),from:e.address,from_key:e.fp,ts:1,at:2000,kind:'message',body:'',topic:wire.newID(),topic_event:{action:'rename',title:'Shared archive title',rev:1},attachments:[]};
+const renameID=wire.newID(),renameBody=wire.historyJSON(rename),renameEnvelope=await wire.seal({v:2,id:renameID,lid:wire.newID(),from:e.address,to:phone.address,ts:1,kind:'message',conv,root:wire.rootJSON(root),sub:'history',body:renameBody,replica:true},e.keys,phone);
+const renameChild={id:renameID,to:phone.address,recipient_fp:phoneFP,conv,sub:'history',body:renameBody,envelope:renameEnvelope,at:2000,state:'archive_staged',archive_chunk:'',mention_cap:true,organization_cap:true};
+Object.assign(renameChild,wire.retainedAgentActionRequirements(renameChild));assert.equal(renameChild.shared_title_cap,true);
+await e.store.write([{s:'outbox',k:renameID,v:renameChild}]);await e.archives().wake();
+const titleJob=(await e.store.prefix('kv','history-archive/out/')).find(j=>j.children.includes(renameID));assert.equal(titleJob.shared_title_cap,true);
+const titleDescriptor=await e.store.get('outbox',titleJob.id);assert.equal(titleDescriptor.shared_title_cap,true);
+await e.store.write([{s:'outbox',k:renameID,v:{...await e.store.get('outbox',renameID),body:'',shared_title_cap:false}},{s:'outbox',k:titleJob.id,v:{...titleDescriptor,state:'expired'}}]);
+const restarted=new Engine({store:e.store,base:e.base,fetch:e.fetch});for(const k of ['keys','address','pub','fp','me','connected','queueOutbox','changed','runHistory','uploadBlob','supports','ctlSupport'])restarted[k]=e[k];
+await restarted.archives().wake();
+const repacked=(await e.store.prefix('kv','history-archive/out/')).find(j=>j.id!==titleJob.id&&j.children.includes(renameID));assert.ok(repacked);assert.equal(repacked.shared_title_cap,true);assert.equal(repacked.mention_cap,true);assert.equal(repacked.organization_cap,true);
+const retained=await e.store.get('outbox',repacked.id);assert.equal(retained.shared_title_cap,true);assert.equal((await e.store.get('outbox',renameID)).shared_title_cap,true);assert.equal((await e.store.get('outbox',renameID)).envelope,renameEnvelope);
+titleAvailable=false;await restarted.post({...retained});assert.equal((await e.store.get('outbox',retained.id)).state,'waiting');
+titleAvailable=true;await restarted.post({...retained,state:'queued'});assert.equal((await e.store.get('outbox',retained.id)).state,'custody');assert.equal((await e.store.get('outbox',retained.id)).envelope,retained.envelope);
+console.log('Browser shared-title archive: durable independent gate, body loss, restart, repack and exact ciphertext release passed');

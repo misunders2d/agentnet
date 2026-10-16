@@ -213,13 +213,13 @@ func TestReviewNotifiedOnce(t *testing.T) {
 	task, _ := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "secret task text", Kind: envelope.KindTask})
 	waitState(t, w.bob, task.ID, stateAwaiting)
 	eventually(t, "first notification", func() bool { return n.count() == 1 })
-	if want := "AgentNet: 1 request needs your decision. Ask your coding agent to review pending AgentNet requests."; n.last() != want {
+	if want := "AgentNet: A request needs your decision"; n.last() != want {
 		t.Fatalf("notification %q", n.last())
 	}
 	q, _ := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "secret question text", Kind: envelope.KindQuestion})
 	waitState(t, w.bob, q.ID, stateHeld)
 	eventually(t, "second notification", func() bool { return n.count() == 2 })
-	if !strings.HasPrefix(n.last(), "AgentNet: 2 requests need your decision") || strings.Contains(n.last(), "secret") {
+	if n.last() != "AgentNet: A request needs your decision" || strings.Contains(n.last(), "secret") {
 		t.Fatalf("notification %q", n.last())
 	}
 
@@ -252,7 +252,7 @@ func TestReviewNotifiedOnce(t *testing.T) {
 		t.Fatalf("needs-human row %+v", row)
 	}
 	eventually(t, "needs-human notification", func() bool { return n.count() == 3 })
-	if !strings.HasPrefix(n.last(), "AgentNet: 3 requests") {
+	if n.last() != "AgentNet: A request needs your decision" {
 		t.Fatalf("notification %q", n.last())
 	}
 	time.Sleep(300 * time.Millisecond)
@@ -516,7 +516,7 @@ func TestReportNoticeIsNotADecision(t *testing.T) {
 	task, _ := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "real task", Kind: envelope.KindTask})
 	waitState(t, w.bob, task.ID, stateAwaiting)
 	eventually(t, "the real decision notifies", func() bool { return n.count() == 1 })
-	if !strings.HasPrefix(n.last(), "AgentNet: 1 request needs your decision") {
+	if n.last() != "AgentNet: A request needs your decision" {
 		t.Fatalf("notification %q (the report must not be counted)", n.last())
 	}
 	if review, _ := w.bob.Review(); len(review) != 1 || review[0].ID != task.ID {

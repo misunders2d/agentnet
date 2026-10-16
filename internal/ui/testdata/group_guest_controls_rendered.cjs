@@ -905,6 +905,9 @@ if(process.env.AGENTNET_TOPIC_INVITE_REGRESSION==='1'){
 if(process.env.AGENTNET_REACTION_REGRESSION==='1'){
  const {page,context}=await openCase('reactions');
  try{
+  page.on('console',m=>{if(m.type()==='error')errors.push(skin+': '+m.text());});
+  page.on('response',r=>{if(r.status()>=400)errors.push(skin+': HTTP '+r.status()+' '+r.url());});
+  page.on('requestfailed',r=>errors.push(skin+': '+r.url()+' '+r.failure()?.errorText));
   const key='agentnet.messenger.reaction-usage.v1';
   const message=()=>page.locator('[data-mid="context"]');
   const enter=async()=>{await message().waitFor();};
@@ -950,11 +953,93 @@ if(process.env.AGENTNET_REACTION_REGRESSION==='1'){
    assert.deepEqual(await frequent.getByRole('button').allTextContents(),['👍','😂'],'Full picker puts frequently used exact emoji first');
    assert(await frequent.evaluate(e=>e.scrollWidth<=e.clientWidth),'Frequent row fits phone');
    shot=path.join(evidence,skin+'-full-reactions-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
+   await closePicker();
+   const many=['👍','😂','🎉','❤️','👀','🙏','😀','😎','👩🏽‍💻','🙌','🥳','🤔','💯','🔥','✨','🚀','✅','🌈','🍀','🌻'];
+   const savedMany=JSON.stringify(many.map((e,i)=>[e,30-i]));
+   await page.evaluate(([key,value])=>localStorage.setItem(key,value),[key,savedMany]);
+   const priorPicker=page.locator('[frimousse-root]'),reaction=page.getByRole('dialog',{name:'React to this message',exact:true});
+   const picker=reaction.locator('[frimousse-root]'),recent=picker.getByRole('group',{name:'Frequently used emoji',exact:true});
+   const full=async()=>{
+    const quick=reaction.getByRole('button',{name:'React 👍',exact:true});
+    await priorPicker.waitFor({state:'detached'});
+    await message().getByLabel('Add a reaction',{exact:true}).click();
+    await quick.or(picker).filter({visible:true}).first().waitFor();
+    if(await quick.isVisible())await reaction.getByRole('button',{name:'More reactions',exact:true}).click();
+    await picker.waitFor({state:'visible'});await picker.locator('[frimousse-emoji]').filter({visible:true}).first().waitFor();await settle(page);
+   };
+   await full();
+   const loadedFonts=await page.evaluate(async()=>{await document.fonts.ready;return [...document.fonts].filter(f=>f.status==='loaded').map(f=>f.family);});
+   assert(loadedFonts.length>=2,'Both unchanged font families load in the rendered picker');
+   fs.writeFileSync(path.join(evidence,'emoji-fonts-'+width+'.json'),JSON.stringify(loadedFonts,null,2));
+   const layout=await recent.evaluate(group=>{const g=group.getBoundingClientRect(),buttons=[...group.querySelectorAll('button')].map(e=>{const r=e.getBoundingClientRect();return {text:e.textContent,top:r.top,bottom:r.bottom,left:r.left,right:r.right,width:r.width,height:r.height};});return {width:g.width,scrollWidth:group.scrollWidth,visibleRows:[...new Set(buttons.filter(r=>r.top>=g.top&&r.bottom<=g.bottom+.5).map(r=>r.top))],buttons};});
+   shot=path.join(evidence,skin+'-multiple-recent-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
+   fs.writeFileSync(path.join(evidence,'emoji-layout-'+width+'.json'),JSON.stringify(layout,null,2));
+   assert(layout.visibleRows.length>=2,'Enough saved emoji show at least two complete visible rows');
+   assert.deepEqual(await recent.getByRole('button').allTextContents(),many.slice(0,(width<440?7:8)*2),'Multiple rows retain existing frequency order and a bounded choice count');
+   assert(layout.scrollWidth<=layout.width+.5&&layout.buttons.every(r=>r.width>=44&&r.height>=44),'Recent rows fit with 44px touch targets');
+   assert.equal(await stored(),savedMany,'Opening the full picker never changes usage');
+   const search=picker.getByRole('searchbox',{name:'Search emoji',exact:true});
+   await search.fill('smile');await recent.waitFor({state:'hidden'});await picker.locator('[frimousse-emoji]').filter({visible:true}).first().waitFor();
+   await search.fill('');await recent.waitFor();
+   const categories=picker.getByRole('tablist',{name:'Emoji categories',exact:true});await categories.getByRole('tab').nth(1).click();assert.equal(await categories.getByRole('tab').nth(1).getAttribute('aria-selected'),'true');
+   const exact=recent.getByRole('button',{name:'Choose 👩🏽‍💻',exact:true});await page.keyboard.press('Tab');await exact.focus();
+   const keyboardFocus=await exact.evaluate(e=>({active:e.getRootNode().activeElement===e,outline:getComputedStyle(e).outlineStyle,focusVisible:e.matches(':focus-visible')}));
+   fs.writeFileSync(path.join(evidence,'emoji-focus-'+width+'.json'),JSON.stringify(keyboardFocus,null,2));
+   assert(keyboardFocus.active&&keyboardFocus.outline!=='none'&&keyboardFocus.focusVisible,'Second-row choice retains visible keyboard focus');
+   await page.keyboard.press('Enter');await page.waitForFunction(()=>fixture.requests.filter(r=>r.path==='/api/message/react').at(-1)?.body.emoji==='👩🏽‍💻');
+   await full();assert.equal(await recent.getByRole('button',{name:'Choose 👩🏽‍💻',exact:true}).count(),1,'Exact toned/joined choice remains on reopen');await picker.getByRole('button',{name:'Close emoji',exact:true}).click();
+   // The same component also inserts into the composer without sending.
+   await priorPicker.waitFor({state:'detached'});
+   await page.getByRole('button',{name:'Add to message',exact:true}).click();await page.getByRole('menuitem',{name:'Emoji',exact:true}).click();
+   const composerPicker=page.getByRole('dialog',{name:'Emoji',exact:true}).locator('[frimousse-root]');await composerPicker.waitFor({state:'visible'});
+   await composerPicker.getByRole('group',{name:'Frequently used emoji',exact:true}).getByRole('button',{name:'Choose 👩🏽‍💻',exact:true}).click();assert.equal(await page.getByRole('form',{name:'Write a message',exact:true}).getByRole('textbox').inputValue(),'👩🏽‍💻');
+   assert(!await page.evaluate(()=>fixture.requests.some(r=>r.path==='/api/dm/send')),'Choosing a recent emoji inserts without sending');
+   if(width===390){
+    await page.setViewportSize({width,height:400});await full();
+    const accessible=await picker.evaluate(picker=>{const p=picker.getBoundingClientRect(),vp=picker.querySelector('[frimousse-viewport]').getBoundingClientRect();return {top:p.top,bottom:p.bottom,viewport:vp.height,inside:[...picker.querySelectorAll('input,[aria-label="Close emoji"],[role="tab"]')].every(e=>{const r=e.getBoundingClientRect();return r.top>=p.top&&r.bottom<=p.bottom+.5;}),overflow:document.documentElement.scrollWidth>innerWidth};});
+    const geometry=await picker.evaluate(root=>{const box=e=>({tag:e.tagName,label:e.getAttribute('aria-label'),role:e.getAttribute('role'),rect:e.getBoundingClientRect().toJSON(),height:getComputedStyle(e).height,minHeight:getComputedStyle(e).minHeight,maxHeight:getComputedStyle(e).maxHeight,flexShrink:getComputedStyle(e).flexShrink,overflowY:getComputedStyle(e).overflowY,clientHeight:e.clientHeight,scrollHeight:e.scrollHeight});return {dialog:root.closest('[role="dialog"]')?.getAttribute('aria-label'),root:box(root),children:[...root.children].map(box),controls:[...root.querySelectorAll('input,[aria-label="Close emoji"],[role="tab"]')].map(box),html:root.outerHTML};});
+    fs.writeFileSync(path.join(evidence,'emoji-short-geometry-'+width+'.json'),JSON.stringify({accessible,geometry},null,2));
+    shot=path.join(evidence,skin+'-recent-short-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
+    assert(accessible.top>=0&&accessible.bottom<=400&&accessible.viewport>=44&&accessible.inside&&!accessible.overflow,'Short phone viewport keeps search, categories, dismissal and a grid row accessible');
+    // A 44px viewport can initially contain a category heading. Scroll the
+    // MAIN grid and prove an entire actual emoji target is reachable.
+    const completeMain=async(button,label)=>{
+     await button.evaluate(e=>{const vp=e.closest('[frimousse-viewport]');const r=e.getBoundingClientRect(),v=vp.getBoundingClientRect();vp.scrollTop+=r.top-v.top-Math.max(0,(v.height-r.height)/2);});
+     let failure;
+     try{await page.waitForFunction(e=>{const r=e.getBoundingClientRect(),v=e.closest('[frimousse-viewport]')?.getBoundingClientRect();const hit=e.getRootNode().elementFromPoint(r.left+r.width/2,r.top+r.height/2);return e.isConnected&&v&&r.height>=44&&r.top>=v.top-.5&&r.bottom<=v.bottom+.5&&(hit===e||e.contains(hit));},await button.elementHandle());}catch(e){failure=e;}
+     const measured=await button.evaluate(e=>({emoji:e.textContent.trim(),connected:e.isConnected,button:e.getBoundingClientRect().toJSON(),viewport:e.closest('[frimousse-viewport]')?.getBoundingClientRect().toJSON(),active:e.hasAttribute('data-active'),centerHit:(()=>{const r=e.getBoundingClientRect(),hit=e.getRootNode().elementFromPoint(r.left+r.width/2,r.top+r.height/2);return {tag:hit?.tagName,label:hit?.getAttribute('aria-label'),inside:hit===e||e.contains(hit)};})()})).catch(e=>({error:String(e)}));
+     fs.writeFileSync(path.join(evidence,'emoji-short-main-'+label+'.json'),JSON.stringify(measured,null,2));
+     await page.screenshot({path:path.join(evidence,'emoji-short-main-'+label+'.png')});
+     assert(!failure,'Complete44px main emoji target: '+JSON.stringify(measured));return measured.emoji;
+    };
+    const mainFirst=picker.locator('[frimousse-viewport] [frimousse-emoji][aria-label]:not([aria-label=""])').filter({visible:true}).first();
+    const pointerLabel=await mainFirst.getAttribute('aria-label');
+    const pointerButton=picker.getByRole('gridcell',{name:pointerLabel,exact:true});
+    const pointerEmoji=await completeMain(pointerButton,'pointer');await pointerButton.click();
+    await page.waitForFunction(emoji=>{const r=fixture.requests.filter(r=>r.path==='/api/message/react').at(-1);return r?.body.emoji===emoji&&!r.body.remove;},pointerEmoji);
+    await full();
+    await picker.getByRole('searchbox',{name:'Search emoji',exact:true}).focus();
+    await page.keyboard.press('ArrowRight');await page.keyboard.press('ArrowRight');
+    const activeMain=picker.locator('[frimousse-viewport] [frimousse-emoji][data-active]');await activeMain.waitFor();
+    const keyboardEmoji=await completeMain(activeMain,'keyboard');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(emoji=>{const r=fixture.requests.filter(r=>r.path==='/api/message/react').at(-1);return r?.body.emoji===emoji&&!r.body.remove;},keyboardEmoji);
+    assert.equal(await page.getByRole('form',{name:'Write a message',exact:true}).getByRole('textbox').inputValue(),'👩🏽‍💻','Short-grid reactions retain the composer draft');
+    assert(!await page.evaluate(()=>fixture.requests.some(r=>r.path==='/api/dm/send')),'Short-grid pointer/arrow/Enter selection never sends the composer');
+    fs.writeFileSync(path.join(evidence,'emoji-short-selection.json'),JSON.stringify({pointerEmoji,keyboardEmoji},null,2));
+    await page.keyboard.press('Escape');await page.setViewportSize({width,height:900});
+   }
+   await page.evaluate(key=>localStorage.removeItem(key),key);await full();assert.equal(await recent.count(),0,'Empty history does not invent recent entries');await closePicker();
+   await page.evaluate(key=>localStorage.setItem(key,JSON.stringify([['👍',2],['😂',1]])),key);
   }
   const usage=await stored();await page.reload();await page.waitForFunction(()=>window.ready);await page.evaluate(()=>openGroup());await enter();await openPicker();
   assert.deepEqual((await choices()).slice(0,2),['👍','😂'],'Usage survives reload');assert.equal(await stored(),usage,'Reload/render does not increment');
   await closePicker();await page.evaluate(key=>localStorage.setItem(key,'{malformed'),key);await openPicker();assert.equal((await choices())[0],'👍','Malformed preference falls back');await closePicker();
   await page.evaluate(()=>{Storage.prototype.getItem=()=>{throw Error('Denied');};Storage.prototype.setItem=()=>{throw Error('Denied');};});await openPicker();assert.equal((await choices())[0],'👍','Denied storage falls back');await closePicker();
+ }catch(error){
+  await page.screenshot({path:path.join(evidence,'emoji-failure-'+width+'.png')}).catch(()=>{});
+  const state=await page.evaluate(()=>({requests:fixture.requests,html:document.querySelector('#skin').shadowRoot.innerHTML})).catch(e=>({captureError:String(e)}));
+  fs.writeFileSync(path.join(evidence,'emoji-failure-'+width+'.json'),JSON.stringify({error:String(error),state},null,2));throw error;
  }finally{await context.close();}
  continue;
 }

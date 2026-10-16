@@ -29,6 +29,8 @@ import { TrustNotice } from "./Trust";
 import { AgentModelReport } from "./AgentModelReport";
 import { composerReplyFollowup, currentComposerFollowup, currentDirectComposerFollowup, type ComposerFollowup } from "./Composer.followup";
 import type { Ctx } from "./Message.model";
+import { ScheduleDialogs, type SchedulePane } from "./Composer.schedule";
+import { scheduleReason } from "./Composer.schedule-model";
 
 const EMPTY: Draft = { text: "" };
 const mac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
@@ -80,6 +82,8 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   useEffect(() => setMentionRange(null), [conv]);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [schedulePane, setSchedulePane] = useState<SchedulePane>(null);
+  useEffect(() => setSchedulePane(null), [conv]);
   const [zone, setZone] = useState<HTMLElement | null>(null);
   useEmojiPreload(menuOpen);
 
@@ -596,26 +600,34 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   const sendLabel = target.kind === "conversation" || target.kind === "none" || (target.kind === "device" && !target.ask) ? "Send"
     : target.kind === "answer" ? (target.task ? "Send your reply" : "Send your answer")
     : "Ask " + target.name;
+  const scheduleWhy = scheduleReason({supported:overview?.schedules,conv,ordinary:!!dm && target.kind === "conversation",
+    frozen:!!closed,visitor,newTopic:!!draft.newTopic,missing:missingReply || missingTopic,
+    fileReason:files.length && store.host.platform === "android" ? "File scheduling is unavailable in this mobile interface. Remove the files to schedule text." : limit});
+  const scheduleDialogs = <ScheduleDialogs key={conv} pane={schedulePane} onPane={setSchedulePane} conv={conv} dm={dm} reason={scheduleWhy}
+    capture={() => {const current=latest(), decoded=decode(current.text);return {draft:{...current,files:[...(current.files || [])]},body:encode(decoded.text,decoded.spans,true).trim()};}} />;
   const actions: MenuAction[] = [
     ...(dm && !humanGuest && !visitor ? [{ label: "Bring someone in", sub: "They see only what you share", icon: menuIcons.invite, tone: "bg-guest-bg text-guest-ink", run: () => store.openInvite(dm.id) }] : []),
     { label: "Photo or file", sub: filesAllowed && lim ? "Up to " + lim.max_count + " at once, " + bytes(lim.max_file) + " each" : target.kind === "answer" ? "Files can’t go with an answer" : "Files can’t be sent here", icon: menuIcons.file, tone: "bg-agent text-agent-ink", disabled: !filesAllowed, run: () => picker.current?.click() },
+    { label: "Schedule message…", sub: scheduleWhy || "Save for a future date and time on this device", disabled:!!scheduleWhy, icon:menuIcons.clock, tone:"bg-agent text-agent-ink", run:()=>setSchedulePane("create") },
+    { label: "Scheduled messages", sub: overview?.schedules && dm ? "Review schedules in this chat on this device" : "Scheduled sending is unavailable for this target", disabled:!overview?.schedules || !dm, icon:menuIcons.clock, tone:"bg-sunken text-ink", run:()=>setSchedulePane("list") },
     { label: "Emoji", icon: menuIcons.emoji, tone: "bg-act text-act-ink", run: () => { emojiAfterMenu.current = true; setEmojiOpen(true); } }, // opens as the menu leaves: no gap between them
   ];
 
   // A changed identity: checked and trusted from here (on a computer).
   if (closed && thread?.key.pending && !dm) return <TrustNotice thread={thread} />;
   if (closed) return (
-    <div className="flex items-start gap-3 border-t-[1.5px] border-outline bg-surface px-4 pt-3 pb-[max(12px,env(safe-area-inset-bottom))] lg:border-t lg:px-6 lg:py-4">
+    <><div className="flex items-start gap-3 border-t-[1.5px] border-outline bg-surface px-4 pt-3 pb-[max(12px,env(safe-area-inset-bottom))] lg:border-t lg:px-6 lg:py-4">
       <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-sunken text-muted"><IconLock size={20} aria-hidden="true" /></span>
       <div className="min-w-0 py-0.5">
         <p className="font-semibold">{closed.title}</p>
         {closed.detail && <p className="text-[13px] text-text-2">{closed.detail}</p>}
       </div>
-    </div>
+      <PlusMenu actions={actions.filter(a=>a.label === "Schedule message…" || a.label === "Scheduled messages")} onOpenChange={setMenuOpen} finalFocus={()=>!schedulePane} />
+    </div>{scheduleDialogs}</>
   );
 
   return (
-    <form ref={form} onSubmit={(e: FormEvent) => { e.preventDefault(); void send(); }} {...watch} aria-label="Write a message" data-conv={conv} data-part="composer"
+    <><form ref={form} onSubmit={(e: FormEvent) => { e.preventDefault(); void send(); }} {...watch} aria-label="Write a message" data-conv={conv} data-part="composer"
       className="relative border-t-[1.5px] border-outline bg-surface px-3 pt-2 pb-[max(10px,env(safe-area-inset-bottom))] lg:border-t lg:px-6 lg:pt-3 lg:pb-4">
       {open && <MentionList id={listId} items={offered} active={active} query={trig?.query || ""} onPick={pick} onHover={setActive} />}
       <p className="sr-only" aria-live="polite">{said}</p>
@@ -652,7 +664,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
 
       <div ref={row} className="flex items-end gap-2">
         <PlusMenu actions={actions} disabled={sending} onOpenChange={setMenuOpen}
-          finalFocus={() => !emojiAfterMenu.current} onClosed={() => { emojiAfterMenu.current = false; }} />
+          finalFocus={() => !emojiAfterMenu.current && !schedulePane} onClosed={() => { emojiAfterMenu.current = false; }} />
         {dm && <button type="button" aria-label="Mention someone" title={"Mention someone (" + (mac ? "⌘2" : "Ctrl+2") + ")"} aria-keyshortcuts={mac ? "Meta+2" : "Control+2"} aria-haspopup="listbox"
           aria-expanded={open} aria-controls={open && offered.length ? listId : undefined} disabled={sending}
           onMouseDown={(e) => e.preventDefault()} onClick={openMentions}
@@ -684,7 +696,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
           </Popover.Positioner>
         </Popover.Portal>
       </Popover.Root>
-    </form>
+    </form>{scheduleDialogs}</>
   );
 }
 

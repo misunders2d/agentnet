@@ -11,8 +11,12 @@ import {share} from '../web/src/structural.ts';
 import {mainPreferences,personRoots} from '../skins/shared/person-topics.mjs';
 const source=stripTypeScriptTypes((await readFile(new URL('../web/src/store.ts',import.meta.url),'utf8'))
  .replace(/^import .*;$/gm,'').replace('constructor(readonly host: Host) {','constructor(host: Host) { this.host = host;')).replace(/^export /gm,'');
-const Store=runInNewContext(source+'\nStore',{api,errorText,pendingSends,share,messageTarget:model.messageTarget,mainPreferences,personRoots,brand:{storage:'test'},localStorage:{getItem:()=>null,setItem:()=>{}},setTimeout,clearTimeout});
+const Store=runInNewContext(source+'\nStore',{api,errorText,pendingSends,share,messageTarget:model.messageTarget,mainPreferences,personRoots,brand:{storage:'test'},document:{visibilityState:'visible',hasFocus:()=>true},localStorage:{getItem:()=>null,setItem:()=>{}},setTimeout,clearTimeout});
 const tick=()=>new Promise(r=>setImmediate(r)),gate=()=>{let release;const promise=new Promise(r=>release=r);return{promise,release};};
+// These small fixtures present every row of the selected topic. The actual
+// timeline supplies this viewport input through its one observer.
+const present=s=>{const o=s.get().open;if(!o)return;const d=s.draft(o.id),v=s.readVisit(o,d.topic||'',!!d.newTopic);if(v)s.reportVisible(v,s.get().views[o.id]?.messages||[]);};
+const mount=s=>{let queued=false;s.subscribe(()=>{if(!queued){queued=true;queueMicrotask(()=>{queued=false;present(s);});}});};
 const conv='a'.repeat(64),topic='b'.repeat(32),sibling='c'.repeat(32);
 for(const mode of ['quiet','stale','push-before-ack','stream']){
  const stale=mode==='stale',pushed=mode==='push-before-ack'||mode==='stream';let push;
@@ -29,7 +33,7 @@ for(const mode of ['quiet','stale','push-before-ack','stream']){
   if(path==='/api/act'){reads.push(Array.from(body.ids));await readGate.promise;for(const m of messages)if(body.ids.includes(m.id))m.unread=false;if(pushed){push({type:'change'});await tick();await tick();}return{};}
   if(path.startsWith('/api/agents'))return{agents:[]};return{};
  }};
- const s=new Store(host);await s.start();s.setDraft(conv,{text:'',topic});await s.open({kind:'dm',id:conv});
+ const s=new Store(host);mount(s);await s.start();s.setDraft(conv,{text:'',topic});await s.open({kind:'dm',id:conv});
  assert.deepEqual(reads,[['member','guest','agent','imported']],'only exact viewed rows acknowledged');
  let older;
  if(stale){hold=true;older=s.refetch();await tick();}
@@ -57,11 +61,11 @@ for(const stop of [false,true]){
  const other='d'.repeat(64),readGate=gate(),reads=[];let overviewCalls=0,dmCalls=0,committed=false;
  const host={platform:'daemon',workspace:{id:'navigate-'+stop},listen:()=>()=>{},async api(path,body){
   if(path.startsWith('/api/overview')){overviewCalls++;return{version:'test',dms:[{id:conv,unread:committed?1:2},{id:other,unread:0}],threads:[]};}
-  if(path.startsWith('/api/dm?')){dmCalls++;const id=new URL('http://fixture'+path).searchParams.get('id');return{id,peer:{},agents:[],messages:id===other?[]:[{id:'viewed',topic,dir:'in',unread:!committed},{id:'unseen',topic:sibling,dir:'in',unread:true}]};}
+  if(path.startsWith('/api/dm?')){dmCalls++;const id=new URL('http://fixture'+path).searchParams.get('id');return{id,peer:{},agents:[],messages:id===other?[]:[{id:'viewed',kind:'message',topic,dir:'in',unread:!committed},{id:'unseen',kind:'message',topic:sibling,dir:'in',unread:true}]};}
   if(path==='/api/act'){reads.push(Array.from(body.ids));await readGate.promise;committed=true;return{};}
   if(path.startsWith('/api/agents'))return{agents:[]};return{};
  }};
- const s=new Store(host);await s.start();s.setDraft(conv,{text:'',topic});await s.open({kind:'dm',id:conv});
+ const s=new Store(host);mount(s);await s.start();s.setDraft(conv,{text:'',topic});await s.open({kind:'dm',id:conv});
  if(stop)s.stop();else await s.open({kind:'dm',id:other});
  readGate.release();for(let i=0;i<20;i++)await tick();
  assert.deepEqual(reads,[['viewed']],'navigation never reads the unviewed sibling');

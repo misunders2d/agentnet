@@ -10,13 +10,16 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 
+internal fun connectionNotificationChannel() =
+    NotificationChannel("connection", "Background connection", NotificationManager.IMPORTANCE_LOW).apply { setShowBadge(false) }
+
 /** User-started messaging continuity; never a polling worker or boot-started service. */
 class ConnectionService : Service() {
     private val repo get() = (application as AgentNetApp).host
     override fun onCreate() {
         super.onCreate()
         getSystemService(NotificationManager::class.java).createNotificationChannel(
-            NotificationChannel("connection", "Background connection", NotificationManager.IMPORTANCE_LOW))
+            connectionNotificationChannel())
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == "stop" || !repo.keepConnected()) {

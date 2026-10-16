@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 )
 
 // claudeStreamBridge owns one fresh native process and one initial request. Native
@@ -19,6 +20,8 @@ type claudeStreamBridge struct {
 	input                io.WriteCloser
 	output               io.Writer
 	onActivity           func(nativeActivity)
+	onThinking           func(string)
+	thinking             nativeThinkingBuffer
 	ready                chan struct{}
 	readyOnce, closeOnce sync.Once
 	mu, writeMu, readMu  sync.Mutex
@@ -44,6 +47,9 @@ func newClaudeStreamBridge(ctx context.Context, cmd *exec.Cmd, prompt string, ou
 		}
 	}
 	cmd.Args = append(cmd.Args, "--input-format", "stream-json", "--verbose", "--replay-user-messages")
+	if claudePartialMessagesSupported(ctx, cmd) {
+		cmd.Args = append(cmd.Args, "--include-partial-messages")
+	}
 	cmd.Stdout = b
 	b.writes.Add(1)
 	go func() {
@@ -61,6 +67,33 @@ func newClaudeStreamBridge(ctx context.Context, cmd *exec.Cmd, prompt string, ou
 	}()
 	return b, nil
 }
+
+// Optional output telemetry must not change whether the native work launch is
+// supported. Inspect only --help on the same selected launcher/environment;
+// absence, refusal, oversized output, cancellation or timeout omit the flag.
+// No prompt, native permission option, cache or model retry is involved.
+func claudePartialMessagesSupported(ctx context.Context, work *exec.Cmd) bool {
+	probeCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+	defer cancel()
+	probe := exec.CommandContext(probeCtx, work.Path, "--help")
+	probe.Dir, probe.Env = work.Dir, work.Environ()
+	probe.WaitDelay = 100 * time.Millisecond
+	var out, stderr limitedBuffer
+	out.max, stderr.max = 64<<10, 4<<10
+	probe.Stdout, probe.Stderr = &out, &stderr
+	ownProcessGroup(probe)
+	defer stopGroup(probe)
+	if probe.Run() != nil || probeCtx.Err() != nil || out.truncated || stderr.truncated {
+		return false
+	}
+	for _, field := range strings.Fields(out.String()) {
+		if field == "--include-partial-messages" {
+			return true
+		}
+	}
+	return false
+}
+
 func (b *claudeStreamBridge) followupReady() <-chan struct{} { return b.ready }
 func (b *claudeStreamBridge) send(ctx context.Context, id string, pending *piSteer, v any) error {
 	b.writeMu.Lock()
@@ -103,6 +136,7 @@ func (b *claudeStreamBridge) failLocked(why string) {
 func (b *claudeStreamBridge) endLocked() {
 	b.done = true
 	b.active = false
+	b.thinking = nativeThinkingBuffer{}
 	for id, p := range b.pending {
 		p.result <- steerUnknown
 		delete(b.pending, id)
@@ -151,6 +185,7 @@ func (b *claudeStreamBridge) event(raw []byte) {
 		UUID    string          `json:"uuid"`
 		Replay  bool            `json:"isReplay"`
 		Parent  json.RawMessage `json:"parent_tool_use_id"`
+		Event   json.RawMessage `json:"event"`
 		Message struct {
 			Role    string          `json:"role"`
 			Content json.RawMessage `json:"content"`
@@ -173,6 +208,13 @@ func (b *claudeStreamBridge) event(raw []byte) {
 		_ = b.input.Close()
 		return
 	}
+	// Optional stream events cannot establish or change the owned session.
+	if e.Type == "stream_event" {
+		if b.onThinking != nil && b.active && e.Session != "" && e.Session == b.session && !e.Replay && (len(e.Parent) == 0 || string(e.Parent) == "null") {
+			b.thinkingEvent(e.Event)
+		}
+		return
+	}
 	if e.Session != "" {
 		if b.session != "" && b.session != e.Session {
 			b.failLocked("Claude changed the owned native session")
@@ -182,6 +224,21 @@ func (b *claudeStreamBridge) event(raw []byte) {
 	}
 	switch e.Type {
 	case "assistant":
+		if b.onThinking != nil && b.active && e.Session == b.session && !e.Replay && e.Message.Role == "assistant" && (len(e.Parent) == 0 || string(e.Parent) == "null") {
+			var blocks []struct {
+				Type     string          `json:"type"`
+				Thinking json.RawMessage `json:"thinking"`
+			}
+			if json.Unmarshal(e.Message.Content, &blocks) == nil {
+				for _, block := range blocks {
+					if block.Type == "thinking" {
+						var summary string
+						_ = json.Unmarshal(block.Thinking, &summary)
+						emitNativeThinking(b.onThinking, b.onActivity, summary)
+					}
+				}
+			}
+		}
 		if b.onActivity != nil && b.active && e.Session == b.session && !e.Replay && e.Message.Role == "assistant" {
 			var blocks []struct{ Type, Name string }
 			if json.Unmarshal(e.Message.Content, &blocks) == nil {
@@ -196,7 +253,8 @@ func (b *claudeStreamBridge) event(raw []byte) {
 					}
 				}
 				if k != activityUnknown {
-					b.onActivity(k)
+					b.thinking = nativeThinkingBuffer{}
+					emitNativeActivity(b.onActivity, k)
 				}
 			}
 		}
@@ -206,7 +264,8 @@ func (b *claudeStreamBridge) event(raw []byte) {
 			if json.Unmarshal(e.Message.Content, &blocks) == nil {
 				for _, block := range blocks {
 					if block.Type == "tool_result" {
-						b.onActivity(activityWorking)
+						b.thinking = nativeThinkingBuffer{}
+						emitNativeActivity(b.onActivity, activityWorking)
 						break
 					}
 				}
@@ -254,6 +313,70 @@ func (b *claudeStreamBridge) event(raw []byte) {
 		}
 	}
 }
+
+func (b *claudeStreamBridge) thinkingEvent(raw json.RawMessage) {
+	var event struct {
+		Type         string          `json:"type"`
+		Index        *int64          `json:"index"`
+		ContentBlock json.RawMessage `json:"content_block"`
+		Delta        json.RawMessage `json:"delta"`
+	}
+	if json.Unmarshal(raw, &event) != nil {
+		b.thinking = nativeThinkingBuffer{}
+		emitNativeThinking(b.onThinking, b.onActivity, "")
+		return
+	}
+	switch event.Type {
+	case "message_start":
+		b.thinking = nativeThinkingBuffer{}
+		emitNativeThinking(b.onThinking, b.onActivity, "")
+	case "message_stop":
+		b.thinking = nativeThinkingBuffer{}
+	case "content_block_start":
+		b.thinking = nativeThinkingBuffer{}
+		var block struct {
+			Type     string          `json:"type"`
+			Thinking json.RawMessage `json:"thinking"`
+		}
+		if json.Unmarshal(event.ContentBlock, &block) != nil || block.Type != "thinking" || event.Index == nil || *event.Index < 0 {
+			emitNativeThinking(b.onThinking, b.onActivity, "")
+			return
+		}
+		b.thinking.start("", *event.Index)
+		var initial string
+		_ = json.Unmarshal(block.Thinking, &initial)
+		emitNativeThinking(b.onThinking, b.onActivity, "")
+		b.thinking.add("", *event.Index, initial, b.onThinking, b.onActivity)
+	case "content_block_delta":
+		if event.Index == nil || !b.thinking.open || *event.Index != b.thinking.index {
+			return
+		}
+		var delta struct {
+			Type     string          `json:"type"`
+			Thinking json.RawMessage `json:"thinking"`
+		}
+		if json.Unmarshal(event.Delta, &delta) != nil {
+			b.thinking = nativeThinkingBuffer{}
+			emitNativeThinking(b.onThinking, b.onActivity, "")
+			return
+		}
+		if delta.Type != "thinking_delta" {
+			return
+		}
+		var text string
+		if json.Unmarshal(delta.Thinking, &text) != nil {
+			b.thinking = nativeThinkingBuffer{}
+			emitNativeThinking(b.onThinking, b.onActivity, "")
+			return
+		}
+		b.thinking.add("", *event.Index, text, b.onThinking, b.onActivity)
+	case "content_block_stop":
+		if event.Index != nil && b.thinking.open && *event.Index == b.thinking.index {
+			b.thinking.finish(b.onThinking, b.onActivity)
+		}
+	}
+}
+
 func (b *claudeStreamBridge) publishLocked() {
 	if strings.TrimSpace(b.answer) == "" {
 		b.failLocked("Native request settled without an assistant answer")

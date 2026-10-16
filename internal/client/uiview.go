@@ -30,7 +30,7 @@ type ThreadSummary struct {
 	LastAt   time.Time `json:"last_at"`
 	Count    int       `json:"count"`
 	Review   int       `json:"review"`  // received items waiting for a decision here
-	Unread   int       `json:"unread"`  // received messages not yet read (review notices not counted)
+	Unread   int       `json:"unread"`  // effective personal unread turns (review notices not counted)
 	Running  int       `json:"running"` // received items the worker is on
 	Waiting  bool      `json:"waiting"` // a question or task sent here has no reply yet (a conversation topic: its executor's current word says it waits or runs)
 	// Notices counts open review notices: reports from another machine that
@@ -61,16 +61,18 @@ type ThreadSummary struct {
 	// (as admission bound them); never a received request's local executor.
 	AgentID string `json:"agent_id,omitempty"`
 
-	lastID, conclusionID, custom string // what topicText reads, and the name set here
+	lastID, conclusionID, custom        string  // what topicText reads, and the name set here
+	titleLine, lastLine, conclusionLine *string // bounded resolved controls, never original bodies
 }
 
 // threadRow is what a summary needs to know about one message.
 type threadRow struct {
 	link
-	localJob  bool   // local execution state without changing reply direction
-	execState string // exact target's admitted execution report
-	execStale bool   // that report may be old news (ExecView.Stale)
-	key       string // admitted original author key, including own-history replicas
+	localJob  bool    // local execution state without changing reply direction
+	execState string  // exact target's admitted execution report
+	execStale bool    // that report may be old news (ExecView.Stale)
+	key       string  // admitted original author key, including own-history replicas
+	preview   *string // edited/deleted display, resolved in the existing controls pass
 	in        bool
 	kind      string
 	state     string
@@ -82,6 +84,43 @@ type threadRow struct {
 	selected  bool // in only: local receiver input, not a remote execution job
 	// agent is the agent it names: a request's target, an output's author.
 	agent string
+}
+
+// DeviceUnreadRef is compact display/navigation metadata from the existing
+// admitted device-thread pass. It confers no action authority.
+type DeviceUnreadRef struct {
+	Peer, Thread, ID, Author, Dir string
+	TopicTitle                    string
+	At                            time.Time
+	Preview                       string
+	Ready                         bool
+}
+
+// UnreadDevicePreviews hydrates only a bounded selected page. Resolved edits
+// already ride the refs; original text uses the existing indexed firstLines.
+func (a *Agent) UnreadDevicePreviews(refs []DeviceUnreadRef) (map[string]string, error) {
+	if len(refs) > TopicPageMax {
+		return nil, ErrTopicQuery
+	}
+	byPeer := map[string][]string{}
+	out := map[string]string{}
+	for _, r := range refs {
+		if r.Ready {
+			out[r.Peer+"\x00"+r.ID] = r.Preview
+		} else {
+			byPeer[r.Peer] = append(byPeer[r.Peer], r.ID)
+		}
+	}
+	for peer, ids := range byPeer {
+		lines, err := a.store.firstLines(peer, ids)
+		if err != nil {
+			return nil, err
+		}
+		for id, line := range lines {
+			out[peer+"\x00"+id] = line
+		}
+	}
+	return out, nil
 }
 
 // Threads lists every thread with every peer, archived topics included,
@@ -124,7 +163,15 @@ func (a *Agent) peerThreadGroups(peer string) ([][]string, map[string]threadRow,
 	resolved := resolveControls(controls, legacyAuthority(peer, a.Address, a.Self().Fingerprint()))
 	for id, r := range rows {
 		ref := protocol.ReadRef{Fingerprint: r.key, LID: id}
-		r.unread = !r.notice && normalAttentionMessage(r.kind) && !resolved[ControlRef{ID: id, Fingerprint: r.key}].Deleted && attentionUnread(marks[ref], r.in && r.unread)
+		display := resolved[ControlRef{ID: id, Fingerprint: r.key}]
+		if display.Deleted {
+			line := "Message deleted"
+			r.preview = &line
+		} else if display.Edited {
+			line := BodyPreview(display.Text)
+			r.preview = &line
+		}
+		r.unread = !r.notice && normalAttentionMessage(r.kind) && !display.Deleted && attentionUnread(marks[ref], r.in && r.unread)
 		rows[id] = r
 	}
 	execs := execViews(controls)

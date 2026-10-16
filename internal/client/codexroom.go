@@ -176,6 +176,8 @@ type codexRoomBridge struct {
 	input                io.WriteCloser
 	output               io.Writer
 	onActivity           func(nativeActivity)
+	onThinking           func(string)
+	thinking             nativeThinkingBuffer
 	call                 func(context.Context, json.RawMessage) (string, error)
 	native               func(context.Context, nativeCallback) (json.RawMessage, error)
 	nativeCheck          func(nativeCallback) bool
@@ -392,6 +394,7 @@ func (b *codexRoomBridge) event(raw []byte) {
 			Status string `json:"status"`
 		} `json:"turn"`
 		Item struct {
+			ID   string `json:"id"`
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"item"`
@@ -413,6 +416,13 @@ func (b *codexRoomBridge) event(raw []byte) {
 			}
 		}
 	case "item/started":
+		if b.onThinking != nil && b.thread != "" && b.turn != "" && p.ThreadID == b.thread && p.TurnID == b.turn {
+			b.thinking = nativeThinkingBuffer{}
+			if p.Item.Type == "reasoning" && p.Item.ID != "" {
+				b.thinking.start(p.Item.ID, 0)
+				emitNativeThinking(b.onThinking, b.onActivity, "")
+			}
+		}
 		if b.onActivity != nil && b.thread != "" && b.turn != "" && p.ThreadID == b.thread && p.TurnID == b.turn {
 			var k nativeActivity
 			switch p.Item.Type {
@@ -428,7 +438,7 @@ func (b *codexRoomBridge) event(raw []byte) {
 				k = activityAnswer
 			}
 			if k != activityUnknown {
-				b.onActivity(k)
+				emitNativeActivity(b.onActivity, k)
 			}
 		}
 		if p.ThreadID == b.thread && p.TurnID == b.turn && (p.Item.Type == "commandExecution" || p.Item.Type == "fileChange") {
@@ -447,6 +457,44 @@ func (b *codexRoomBridge) event(raw []byte) {
 				}
 			}
 		}
+	case "item/reasoning/summaryPartAdded", "item/reasoning/summaryTextDelta":
+		if b.onThinking == nil || b.thread == "" || b.turn == "" || p.ThreadID != b.thread || p.TurnID != b.turn {
+			return
+		}
+		var event struct {
+			ItemID       string          `json:"itemId"`
+			SummaryIndex json.RawMessage `json:"summaryIndex"`
+			Delta        json.RawMessage `json:"delta"`
+		}
+		if json.Unmarshal(m.Params, &event) != nil {
+			return
+		}
+		if !b.thinking.open || event.ItemID == "" || event.ItemID != b.thinking.key {
+			return
+		}
+		var index *int64
+		if json.Unmarshal(event.SummaryIndex, &index) != nil || index == nil || *index < 0 {
+			b.thinking = nativeThinkingBuffer{}
+			emitNativeThinking(b.onThinking, b.onActivity, "")
+			return
+		}
+		if m.Method == "item/reasoning/summaryPartAdded" {
+			if *index < b.thinking.index || *index == b.thinking.index && b.thinking.started {
+				return
+			}
+			if *index > b.thinking.index {
+				b.thinking.finish(b.onThinking, b.onActivity)
+			}
+			b.thinking.start(event.ItemID, *index)
+			return
+		}
+		var delta string
+		if json.Unmarshal(event.Delta, &delta) != nil {
+			b.thinking = nativeThinkingBuffer{}
+			emitNativeThinking(b.onThinking, b.onActivity, "")
+			return
+		}
+		b.thinking.add(event.ItemID, *index, delta, b.onThinking, b.onActivity)
 	case "thread/settings/updated":
 		var settings struct {
 			ThreadID       string `json:"threadId"`
@@ -491,10 +539,13 @@ func (b *codexRoomBridge) event(raw []byte) {
 			b.send(map[string]any{"id": id, "result": map[string]any{"success": e == nil, "contentItems": []any{map[string]string{"type": "inputText", "text": text}}}})
 		}()
 	case "item/completed":
+		if p.ThreadID == b.thread && p.TurnID == b.turn && p.Item.Type == "reasoning" && p.Item.ID == b.thinking.key {
+			b.thinking.finish(b.onThinking, b.onActivity)
+		}
 		if b.onActivity != nil && b.thread != "" && b.turn != "" && p.ThreadID == b.thread && p.TurnID == b.turn {
 			switch p.Item.Type {
 			case "commandExecution", "fileChange", "webSearch", "mcpToolCall", "dynamicToolCall":
-				b.onActivity(activityWorking)
+				emitNativeActivity(b.onActivity, activityWorking)
 			}
 		}
 		if p.ThreadID == b.thread && p.TurnID == b.turn {

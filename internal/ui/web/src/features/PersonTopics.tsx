@@ -47,10 +47,9 @@ export function PersonTopics({ dm, main, onMain }: { dm: T.DMThread; main: strin
  const selectedMain=dm.id===main&&!draft?.topic&&!draft?.newTopic;
  const choose=(e:PersonTopicEntry)=>{
   setOpen(false);
-  store.setDraft(e.conv,{...store.draft(e.conv),topic:e.topic||undefined,newTopic:false,replyTo:undefined});
-  void store.open({kind:"dm",id:e.conv});
+  void store.openUnread({kind:"dm",id:e.conv},e.topic);
  };
- const flatTopics:Topic[]=entries.map(e=>e.native?{...topicOf({...e.native,conv:e.conv}),id:e.key}:e.main?{...topicOf({...e.main,conv:e.conv}),id:e.key,root:true}:{id:e.key,conv:e.conv,peer:"",title:e.title,last:e.last,lastAt:e.root.last_at||e.root.created,unread:e.unread,needsYou:0,waiting:false,pending:false,state:"active",renamed:false,count:e.count,quietSince:e.root.last_at||e.root.created});
+ const flatTopics:Topic[]=entries.map(e=>e.native?{...topicOf({...e.native,conv:e.conv}),id:e.key,orderID:e.topic}:e.main?{...topicOf({...e.main,conv:e.conv}),id:e.key,orderID:"",root:true}:{id:e.key,conv:e.conv,peer:"",title:e.title,last:e.last,lastAt:e.root.last_at||e.root.created,unread:e.unread,needsYou:0,waiting:false,pending:false,state:"active",renamed:false,count:e.count,quietSince:e.root.last_at||e.root.created});
  const change=async(what:"delete"|"done"|"archive",ids:string[],counts:Record<string,number>)=>{
   const groups=new Map<string,{ids:string[];counts:Record<string,number>}>();
   for(const e of entries.filter(e=>e.native&&ids.includes(e.key))){const group=groups.get(e.conv)||{ids:[],counts:{}};group.ids.push(e.topic);group.counts[e.topic]=counts[e.key];groups.set(e.conv,group);}
@@ -70,11 +69,13 @@ export function PersonTopics({ dm, main, onMain }: { dm: T.DMThread; main: strin
   return [...mainResults,...results].every(Boolean)?{note:[...mainResults,...results].map(r=>r!.note).join(" ")}:undefined;
  };
  const knownCount=!loading&&!failed;
+ const mainView=main===dm.id?dm:views[main]||store.get().views[main] as T.DMThread|undefined;
+ const mainUnread=mainView?.main_topic?.unread||0;
  const chip="min-h-11 min-w-0 truncate rounded-full px-3 text-[14px] font-semibold stroke ";
  return <>
   <nav aria-label="Topics" data-part="topic-bar" className="flex min-w-0 items-center gap-2 border-b border-hairline bg-canvas px-4 py-2">
-   <button type="button" aria-pressed={selectedMain} onClick={onMain} className={chip+(selectedMain?"bg-ink text-canvas":"bg-surface")}>Main</button>
-   {selectedTopic ? <TopicMenu topic={selectedTopic} onAll={()=>setOpen(true)} trigger={<Menu.Trigger className={chip+"flex-1 bg-ink text-canvas"} aria-label={topicLabel(selectedTopic)+", open topic, menu"}>{firstLine(selectedTopic.title,30,selectedTopic.renamed)}</Menu.Trigger>}/> : current&&<button type="button" aria-current="true" onClick={()=>setOpen(true)} className={chip+"flex-1 bg-ink text-canvas"}>{firstLine(current.title,30)}</button>}
+   <button type="button" aria-pressed={selectedMain} aria-label={"Main"+(mainUnread?", "+mainUnread+" unread":"")} onClick={onMain} className={chip+"inline-flex shrink-0 items-center gap-1.5 "+(selectedMain?"bg-ink text-canvas":"bg-surface")}>Main{mainUnread>0&&<span aria-hidden="true" className="grid h-5 min-w-5 place-items-center rounded-full bg-danger px-1 text-[11px] font-bold text-white tnum">{mainUnread}</span>}</button>
+   {selectedTopic ? <TopicMenu topic={selectedTopic} onAll={()=>setOpen(true)} trigger={<Menu.Trigger className={chip+"inline-flex flex-1 items-center gap-1.5 bg-ink text-canvas"} aria-label={topicLabel(selectedTopic)+", open topic, menu"}><span className="min-w-0 truncate">{firstLine(selectedTopic.title,30,selectedTopic.renamed)}</span>{selectedTopic.unread>0&&<span aria-hidden="true" className="grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-danger px-1 text-[11px] font-bold text-white tnum">{selectedTopic.unread}</span>}</Menu.Trigger>}/> : current&&<button type="button" aria-current="true" onClick={()=>setOpen(true)} className={chip+"flex-1 bg-ink text-canvas"}>{firstLine(current.title,30)}</button>}
    <Button size="sm" variant="outline" onClick={()=>setOpen(true)} aria-label={"All topics"+(knownCount?" ("+entries.length+")":"")}>{wide?"All topics"+(knownCount?" ("+entries.length+")":""):"All"+(knownCount?" "+entries.length:"")}</Button>
    <Button size="sm" variant="ghost" aria-label="New topic" aria-pressed={!!draft?.newTopic} onClick={()=>store.setDraft(dm.id,{...store.draft(dm.id),topic:undefined,newTopic:!draft?.newTopic,replyTo:undefined})}>{wide?"New topic":"+"}</Button>
   </nav>

@@ -88,6 +88,8 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 	// a review already waiting when this run starts.
 	a.openConv, a.openPage = opts.OpenConv, opts.OpenPage
 	a.nativeNotify, a.nativeNotifyContent = opts.Notify, opts.NotifyContent
+	a.nativeNotifyPreviewDefault = opts.NotifyPreviewDefault
+	a.publishNativePreviewHost(opts)
 	if !opts.HumanOnly {
 		stopWorker, err := a.startWorker(ctx)
 		if err != nil {

@@ -76,6 +76,16 @@ func (a *Agent) groupHistorySources(q dbq, conv, lid, author string, since int64
 	reads := prepareReads(q)
 	defer reads.close()
 	q = reads
+	ownWinner := len(original) > 0 && original[0]
+	erasedClause := `NOT EXISTS(SELECT 1 FROM conv_erased e WHERE e.conv=? AND e.lid=s.lid AND e.key=s.author)`
+	if ownWinner {
+		erasedClause = "(" + erasedClause + ` OR EXISTS(SELECT 1 FROM topic_shared_titles t WHERE t.conv=? AND t.lid=s.lid AND t.writer=s.author AND EXISTS(SELECT 1 FROM inbox i WHERE i.id=s.id AND i.topic=t.topic AND json_extract(i.topic_event,'$.action')='rename' UNION ALL SELECT 1 FROM outbox o WHERE o.id=s.id AND o.topic=t.topic AND json_extract(o.topic_event,'$.action')='rename')))`
+	}
+	params := []any{conv, a.Address, a.Self().Fingerprint(), conv, lid, lid, author, author, since, conv, conv, conv}
+	if ownWinner {
+		params = append(params, conv)
+	}
+	params = append(params, limit)
 	rows, err := q.Query(`SELECT * FROM (
  SELECT id,'in',sender,coalesce(verified_by,claimed_fp,'') AS author,ts,body,coalesce(reply_to,''),coalesce(origin,''),coalesce(emotion,''),lid,coalesce(received_ms,received_at*1000) AS ms,coalesce(group_admission,'') FROM inbox WHERE conv=? AND kind='message' AND coalesce(sub,'')='' AND ref_id IS NULL AND target IS NULL AND pid IS NULL AND agent_id IS NULL AND local=0
  UNION ALL
@@ -83,8 +93,8 @@ func (a *Agent) groupHistorySources(q dbq, conv, lid, author string, since int64
  s WHERE (?='' OR lid=?) AND (?='' OR author=?) AND ms>=?
  AND NOT EXISTS(SELECT 1 FROM inbox c WHERE c.conv=? AND c.sub='retraction' AND c.ref_id=s.lid AND c.ref_fp=s.author)
  AND NOT EXISTS(SELECT 1 FROM outbox c WHERE c.conv=? AND c.sub='retraction' AND c.ref_id=s.lid AND c.ref_fp=s.author)
- AND NOT EXISTS(SELECT 1 FROM conv_erased e WHERE e.conv=? AND e.lid=s.lid AND e.key=s.author)
- ORDER BY ms DESC,id DESC LIMIT ?`, conv, a.Address, a.Self().Fingerprint(), conv, lid, lid, author, author, since, conv, conv, conv, limit)
+ AND `+erasedClause+`
+ ORDER BY ms DESC,id DESC LIMIT ?`, params...)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +118,7 @@ func (a *Agent) groupHistorySources(q dbq, conv, lid, author string, since int64
 	for _, s := range result {
 		// Preserve the complete immutable source before optionally projecting edits
 		// for a selected excerpt. Own-device sync sends edits as separate controls.
-		rows, e := a.historySourceRows(q, "dir=? AND id=?", "conv,ms,id", 1, s.dir, s.item.ID)
+		rows, e := a.historySourceRowsMode(q, ownWinner, "dir=? AND id=?", "conv,ms,id", 1, s.dir, s.item.ID)
 		if e != nil {
 			return nil, e
 		}

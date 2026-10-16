@@ -16,6 +16,7 @@ mod linux;
 mod navigation;
 mod page_event;
 mod sidecar;
+mod unread;
 #[cfg(any(windows, test))]
 mod win_autostart;
 
@@ -60,6 +61,7 @@ struct Shell {
     running: Mutex<Option<sidecar::Running>>,
     signals: Mutex<Option<Sender<Signal>>>,
     last_error: Mutex<Option<String>>,
+    unread: Mutex<unread::State>,
     quitting: AtomicBool,
 }
 
@@ -382,11 +384,74 @@ fn signal(app: &AppHandle, s: Signal) {
     }
 }
 
+/// Reset the sequence even for a repeated Page URL: Go starts a new epoch.
+fn reset_unread(app: &AppHandle, page: bool) {
+    let shell = app.state::<Shell>();
+    {
+        let mut state = shell.unread.lock().unwrap_or_else(|e| e.into_inner());
+        if page && !shell.quitting.load(Ordering::SeqCst) {
+            state.page();
+        } else {
+            state.reset();
+        }
+    }
+    refresh_unread(app);
+}
+
+/// Native calls run on the main thread, with no Shell lock held. Read the
+/// latest value there so an already queued update cannot restore an old badge
+/// after a reset. Unsupported platform calls or OS failures remain nonfatal.
+fn refresh_unread(app: &AppHandle) {
+    let h = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let value = {
+            let shell = h.state::<Shell>();
+            let state = shell.unread.lock().unwrap_or_else(|e| e.into_inner());
+            state.value()
+        };
+        let original = h.default_window_icon();
+        let indicator = original.and_then(|icon| {
+            unread::icon_rgba(icon.rgba(), icon.width(), icon.height(), value.total > 0)
+                .map(|rgba| tauri::image::Image::new_owned(rgba, icon.width(), icon.height()))
+        });
+        if let Some(tray) = h.tray_by_id("agentnet") {
+            if let Some(icon) = indicator.clone() {
+                let _ = tray.set_icon(Some(icon));
+            } else if let Some(icon) = original {
+                let _ = tray.set_icon(Some(icon.clone()));
+            }
+            // Linux does not support this tooltip; its supported surface is
+            // the tray dot, not a promised universal launcher count.
+            let _ = tray.set_tooltip(Some(value.tooltip()));
+            #[cfg(target_os = "macos")]
+            { let _ = tray.set_title(value.label().as_deref()); }
+        }
+        if let Some(w) = window(&h) {
+            #[cfg(target_os = "windows")]
+            {
+                let overlay = unread::overlay_rgba(value.total > 0).map(|rgba|
+                    tauri::image::Image::new_owned(rgba, unread::OVERLAY_SIDE, unread::OVERLAY_SIDE));
+                let _ = w.set_overlay_icon(overlay);
+            }
+            #[cfg(target_os = "macos")]
+            {
+                let _ = w.set_badge_count(value.count());
+                // A partial aggregate retains estimates; never present it as
+                // an exact count. Labels also retain totals beyond i64::MAX.
+                let _ = w.set_badge_label(value.label());
+            }
+            #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+            let _ = w;
+        }
+    });
+}
+
 /// on_line acts on one line of the program's stdout.
 fn on_line(app: &AppHandle, line: String) {
     match sidecar::parse(&line) {
         Some(sidecar::Event::Page { mode, url }) => {
             let Ok(mut u) = Url::parse(&url) else { return };
+            reset_unread(app, true); // BEFORE the same-URL navigation return
             let shell = app.state::<Shell>();
             *shell.last_error.lock().unwrap() = None;
             {
@@ -405,6 +470,7 @@ fn on_line(app: &AppHandle, line: String) {
             }
         }
         Some(sidecar::Event::Error { text }) => {
+            reset_unread(app, false);
             *app.state::<Shell>().last_error.lock().unwrap() = Some(text.clone());
             show_error(app, &text);
         }
@@ -414,6 +480,14 @@ fn on_line(app: &AppHandle, line: String) {
         }
         Some(sidecar::Event::Appreply { call_id, status, body }) => {
             if let Some(reply) = app.state::<Shell>().app_calls.lock().unwrap().remove(&call_id) { let _ = reply.send((status, body)); }
+        }
+        Some(sidecar::Event::Unread { seq, total, partial, .. }) => {
+            let accepted = {
+                let shell = app.state::<Shell>();
+                let mut state = shell.unread.lock().unwrap_or_else(|e| e.into_inner());
+                !shell.quitting.load(Ordering::SeqCst) && state.accept(seq, total, partial)
+            };
+            if accepted { refresh_unread(app); }
         }
         None => {}
     }
@@ -450,10 +524,13 @@ fn supervise(app: AppHandle) {
         if shell.quitting.load(Ordering::SeqCst) {
             return;
         }
+        reset_unread(&app, false); // initial start and every daemon restart
         let started = sidecar::program().and_then(|program| {
             let h = app.clone();
+            let exited = app.clone();
             let t = tx.clone();
             sidecar::start(&program, &app_exe, log_path(&app), move |line| on_line(&h, line), move || {
+                reset_unread(&exited, false);
                 let _ = t.send(Signal::Exited);
             })
         });
@@ -465,6 +542,7 @@ fn supervise(app: AppHandle) {
                     match rx.recv() {
                         Ok(Signal::Exited) => { shell.app_calls.lock().unwrap().clear(); break; },
                         Ok(Signal::Retry) => {
+                            reset_unread(&app, false);
                             // Try again while it runs (it showed an error): start it afresh.
                             let running = shell.running.lock().unwrap().take();
                             if let Some(mut r) = running {
@@ -518,6 +596,7 @@ fn supervise(app: AppHandle) {
 fn stop_program(app: &AppHandle) {
     let shell = app.state::<Shell>();
     shell.quitting.store(true, Ordering::SeqCst);
+    reset_unread(app, false);
     signal(app, Signal::Quit);
     let running = shell.running.lock().unwrap().take();
     if let Some(mut r) = running {

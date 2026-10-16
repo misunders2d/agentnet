@@ -27,6 +27,7 @@ import { browserStorageSetupProvider } from "./drivespace-setup.mjs"; // Setting
 import * as getapp from "./getapp.mjs"; // where the AgentNet app is downloaded (getapp.json, shared with Go)
 
 const HEARTBEAT = 90_000;
+const scheduledDispatch = Symbol("scheduled dispatch");
 // Tunables mirrored from Go, pinned by parity tests: device names tried
 // when one is taken (cmd/agentnet appNameTries), and the days an
 // invitation may work (ui.InviteDays).
@@ -618,6 +619,28 @@ const firstLine = (s) => {
   const l = (s || "").split("\n")[0];
   return [...l].length > 120 ? [...l].slice(0, 119).join("") + "…" : l;
 };
+// Presentation-only parity with shared/collective-mentions.mjs and model.ts.
+// Keep this inline: the engine's served module graph does not include skins.
+const bodyPreview = (s) => firstLine(String(s || "").split("\n")[0].replace(/\[@([^\[\]\r\n]{1,80})\]\((agentnet:(?:(?:person|guest|agent)\/[A-Za-z0-9_-]{1,64}|collective\/v1\/[^\s()]{1,280000}))\)/g, (all, name, href) => {
+  if (href.startsWith("agentnet:collective/v1/")) {
+    const refs = href.slice("agentnet:collective/v1/".length).split(",");
+    if (refs.length > 4096 || !refs.every(ref => /^[pga]\.[A-Za-z0-9_-]{1,64}$/.test(ref))) return all;
+  }
+  return "@" + name;
+}));
+const unreadKey = r => [r.kind,r.kind==="device"?r.peer:r.conv,r.author,r.lid||r.id].join(":");
+const unreadPreview = m => m.edited ? bodyPreview(m.text||"") : !m.body&&(m.attachments||[]).length ? firstLine("📎 "+m.attachments.map(a=>wire.safeName(a.name)).join(", ")) : bodyPreview(m.body);
+const unreadAt = r => Math.floor(Date.parse(r.at)/1000);
+const unreadOrder = (a,b) => unreadAt(b)-unreadAt(a) || (a.key<b.key?-1:a.key>b.key?1:0);
+const unreadCursor = r => btoa(JSON.stringify({v:1,at:unreadAt(r),key:r.key})).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+const parseUnreadCursor = value => {
+  try {
+    if(value.length>2048||!/^[A-Za-z0-9_-]+$/.test(value))throw Error();
+    const c=JSON.parse(atob(value.replace(/-/g,"+").replace(/_/g,"/")));
+    if(!c||Object.keys(c).some(k=>!["v","at","key"].includes(k))||c.v!==1||!Number.isSafeInteger(c.at)||c.at<0||typeof c.key!=="string"||!c.key||c.key.length>512)throw Error();
+    return c;
+  }catch{throw Error("That unread list request is not valid.");}
+};
 // ---- topics (client topics.go, docs/plans/TOPICS.md) ---------------------------------------
 // Topic tunables: the Go client's (topics.go), the one place to change them
 // there; the same values here, pinned by internal/ui topics_browser_test.go.
@@ -699,14 +722,14 @@ const chatDepths=g=>{const aliases=new Map();for(const m of g){if(m.id)aliases.s
 const sortChatTurns=g=>{const d=chatDepths(g);return g.sort((a,b)=>chatSent(a)===chatSent(b)&&d.get(a.lid)!==d.get(b.lid)?d.get(a.lid)-d.get(b.lid):chatOrder(a,b));};
 const sortChatEvents=g=>{const d=chatDepths(g);return g.sort((a,b)=>d.get(a.lid)-d.get(b.lid)||chatOrder(a,b));};
 const chatOrder=(a,b)=>chatSent(a)-chatSent(b)||(a.lid<b.lid?-1:a.lid>b.lid?1:0);
-export function summarizeChatTopics(conv,msgs,locals=new Map(),now=Math.floor(Date.now()/1000)) {
- return summarizeChatTopicView(conv,msgs,locals,now,false);
+export function summarizeChatTopics(conv,msgs,locals=new Map(),now=Math.floor(Date.now()/1000),assigned=null) {
+ return summarizeChatTopicView(conv,msgs,locals,now,false,assigned);
 }
 const MAIN_TOPIC_KEY="0".repeat(32);
 const mainTopicScope=async conv=>wire.hex(await wire.sha256(new TextEncoder().encode("agentnet/main-flow-preference/v1\0"+conv)));
 const mainChatMessages=msgs=>{const assigned=chatTopicAssignments(msgs);return msgs.filter(m=>!m.sub&&!m.topic_event&&!assigned.get(m.lid));};
-function summarizeChatTopicView(conv,msgs,locals,now,main) {
- const assigned=chatTopicAssignments(msgs),groups=new Map(),events=new Map(),out=[];
+function summarizeChatTopicView(conv,msgs,locals,now,main,assigned=null) {
+ assigned ||= chatTopicAssignments(msgs);const groups=new Map(),events=new Map(),out=[];
  for(const m of msgs){if(m.sub)continue;if(m.topic_event){if(!main)events.set(m.topic,[...(events.get(m.topic)||[]),m]);continue;}const id=assigned.get(m.lid)||"";if(main?!id:!!id)groups.set(id,[...(groups.get(id)||[]),m]);}
  for(const [id,g] of groups){sortChatTurns(g);const first=g[0],last=g.at(-1),local=locals.get(conv+"/"+id)||{};let shared={},by="";
   const aliases=new Map();for(const m of g){if(m.id)aliases.set(m.id,m.lid);for(const c of m.copies||[])if(c.id)aliases.set(c.id,m.lid);}
@@ -716,12 +739,12 @@ function summarizeChatTopicView(conv,msgs,locals,now,main) {
   const activity=Math.max(chatSent(last),...(events.get(id)||[]).map(chatSent));
   v.quiet_since=Math.max(v.quiet_since,activity);
   if(v.state==="archived"&&l.mark!=="archived"&&now-v.quiet_since<TOPICS.archiveAfter)v.state=v.done_by?"done":"active";
-  const t={id,conv,peer:"",title:firstLine(first.body),last:firstLine(last.body),last_at:iso(activity*1000),count:g.length,state:v.state,pending:v.pending,quiet_since:iso(v.quiet_since*1000),review:g.filter(m=>["held","needs_human"].includes(m.job)).length,unread:0,running:g.filter(m=>m.job==="running").length,waiting:false,key_changed:false,notices:0,notice_only:false};
+  const t={id,conv,peer:"",title:bodyPreview(first.body),last:bodyPreview(last.body),last_at:iso(activity*1000),count:g.length,state:v.state,pending:v.pending,quiet_since:iso(v.quiet_since*1000),review:g.filter(m=>["held","needs_human"].includes(m.job)).length,unread:0,running:g.filter(m=>m.job==="running").length,waiting:false,key_changed:false,notices:0,notice_only:false};
   const pending=pendingTopicRows(facts),work=topicWaiting(facts,pending); // Pending alone is no evidence anything waits
   t.waiting=work.waiting;if(work.unconfirmed)t.unconfirmed=work.unconfirmed;
   if(v.pending)t.pending_ids=pending.map(i=>g[i].id);
   if(v.done_by)t.done_by=v.done_by;if(shared.mark==="done"&&v.done_by==="you"){t.done_by="person";t.concluded_by=by;}
-  const conclusion=g.find(m=>m.lid===v.conclusion);if(conclusion){t.conclusion=firstLine(conclusion.body);t.concluded_by=conclusion.from||"";}
+  const conclusion=g.find(m=>m.lid===v.conclusion);if(conclusion){t.conclusion=bodyPreview(conclusion.body);t.concluded_by=conclusion.from||"";}
   if(local.title)Object.assign(t,{auto_title:t.title,title:local.title,renamed:true});out.push(t);
  }
  if(!main&&msgs.some(m=>m.topic_event?.merge)) {
@@ -742,7 +765,14 @@ function summarizeChatTopicView(conv,msgs,locals,now,main) {
 const topicAt = (t) => Math.floor(Date.parse(t.last_at) / 1000);
 const newerTopic = (a, b) => topicAt(a) !== topicAt(b) ? topicAt(a) > topicAt(b) : a.id !== b.id ? a.id > b.id : a.peer < b.peer;
 const byNewest = (a, b) => (newerTopic(a, b) ? -1 : newerTopic(b, a) ? 1 : 0);
-const topicCursor = (t) => topicAt(t) + "|" + t.peer + "|" + t.id;
+const topicCursor = t => ["u1",t.unread>0?"1":"0",topicAt(t),t.conv||"",t.peer||"",t.id].join("|");
+const unreadTopicOrder=(a,b)=>(a.unread>0)!==(b.unread>0)?(a.unread>0?-1:1):byNewest(a,b);
+const parseTopicPageCursor=(before,conv="",peer="")=>{
+ if(!before)return null;
+ const p=before.split("|");
+ if(before.length>1024||p.length!==6||p[0]!=="u1"||!["0","1"].includes(p[1])||!/^\d+$/.test(p[2])||!Number.isSafeInteger(Number(p[2]))||Number(p[2])>8640000000000||p[3]!==conv||peer&&p[4]!==peer||!p[5])throw Error(topicQueryError);
+ return {unread:Number(p[1]),last_at:iso(Number(p[2])*1000),conv:p[3],peer:p[4],id:p[5]};
+};
 const topicQueryError = "That topic list request is not valid.";
 const topicNewer = "A newer message came in, so the topic stays active. Read it, then mark it done again."; // ui topicNewer
 
@@ -847,6 +877,8 @@ export class Engine {
     this.connected = false;
     this.revoked = false;
     this.running = false;
+    this.scheduledEpoch = 0;this.scheduledTimer = null;
+    this.scheduleSetTimeout = (fn,ms)=>setTimeout(fn,ms);this.scheduleClearTimeout = id=>clearTimeout(id);
     this.version = "";
     this.featureList = null;
     this.sendAbort = new AbortController();
@@ -2454,14 +2486,15 @@ export class Engine {
     const copies=[];
     for(const c of convs.values())if(c.kind==="group")copies.push(...await this.groupHistoryCarriers(c,dev,checks));
     if(contextOnly && !copies.length)return false;
+    const recoverTitles=await this.ownHistoryAuthority(dev,checks);
     const rows = [];
     if(!contextOnly) {
     for (const m of await this.store.all("inbox")) { // never a deleted turn or a deletion record (client historyPage)
-      if (m.conv && convs.has(m.conv) && m.fp !== dev.fingerprint && m.sub !== wire.SubRootSync && m.sub !== wire.SubClear && !this.erasedRow(m)) rows.push({ conv: m.conv, ms: m.at, id: m.id, m, here: false });
+      if (m.conv && convs.has(m.conv) && m.fp !== dev.fingerprint && m.sub !== wire.SubRootSync && m.sub !== wire.SubClear && (!this.erasedRow(m)||recoverTitles&&await this.ownSharedTitleWinner(m,checks))) rows.push({ conv: m.conv, ms: m.at, id: m.id, m, here: false });
     }
     const first = new Map();
     for (const r of await this.store.all("outbox")) {
-      if (!r.conv || r.aside || !convs.has(r.conv) || this.erasedRow(r)) continue;
+      if (!r.conv || r.aside || !convs.has(r.conv) || this.erasedRow(r)&&!(recoverTitles&&await this.ownSharedTitleWinner(r,checks))) continue;
       const f = first.get(r.lid);
       if (!f || r.id < f.id) first.set(r.lid, r);
     }
@@ -2585,7 +2618,7 @@ export class Engine {
     };
     const queue=async(row,here=false,fresh=false)=>{
       const s=here?"outbox":"inbox",m=await this.groupRead(checks,s,row.id);
-      if(!m||!historySource(m)||this.erasedRow(m))return;
+      if(!m||!historySource(m)||this.erasedRow(m)&&!await this.ownSharedTitleWinner(m,checks))return;
       if(m.history&&m.synced_from===dev.address&&m.synced_key===dev.fingerprint)return true; // that exact device forwarded it here: it holds it
       let item=this.itemOf(m,here);
       const sourceTuple=m.conv+"/"+item.from_key+"/"+item.lid;
@@ -2776,6 +2809,264 @@ export class Engine {
   // encrypted to that device, or says why not. Storage that fails (full)
   // never keeps a message from being admitted: the file is then not kept,
   // and the page says so.
+
+  // Local schedules are admitted only by the ordinary send path at their due time.
+  scheduledKey(id) { if(!wire.validID(id))throw Error("Invalid scheduled message.");return "schedule/"+id; }
+  scheduledError(code,message) { return Object.assign(Error(message),{code}); }
+  scheduledDueTime(value) {
+    if(typeof value!=="string")throw Error("Choose an absolute RFC3339 time.");
+    const m=/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})$/.exec(value);
+    if(!m||m[7]?.slice(3).replace(/0/g,"")||+m[4]>23||+m[5]>59||+m[6]>59)throw Error("Choose a valid time with millisecond precision.");
+    const calendar=new Date(0);calendar.setUTCFullYear(+m[1],+m[2]-1,+m[3]);
+    if(calendar.getUTCFullYear()!==+m[1]||calendar.getUTCMonth()!==+m[2]-1||calendar.getUTCDate()!==+m[3])throw Error("Choose a valid date.");
+    const due=Date.parse(value);if(!Number.isFinite(due))throw Error("Choose a valid absolute time.");return due;
+  }
+  async scheduledSend(id) { return await this.store.get("kv",this.scheduledKey(id))||null; }
+  async scheduledSends(all=false) { return (await this.store.prefix("kv","schedule/")).filter(r=>all||["pending","dispatching","needs_review"].includes(r.state)).sort((a,b)=>Date.parse(a.due)-Date.parse(b.due)||a.id.localeCompare(b.id)); }
+  async scheduledAudience(conv,topic,checks=[]) {
+    const own=await this.groupRead(checks,"kv","person"),identity=await this.groupRead(checks,"kv","identity");
+    if(!own||own.state!=="self"||own.hash!==this.me?.hash||!own.human_keys?.includes(this.fp)||!own.devices.some(d=>d.address===this.address&&d.fingerprint===this.fp)||identity?.revoked||identity?.fingerprint!==this.fp)throw this.scheduledError("scheduled_audience","This sender's current human identity is unavailable.");
+    const c=await this.groupRead(checks,"convs",conv)||await this.groupRecord(conv);if(!c)throw Error("Conversation is unavailable.");
+    if(c.kind==="group")await this.groupRead(checks,"kv","group/"+conv);
+    const events=await this.convEvents(conv,checks),members=await this.dmMembers(c,events,checks);
+    const expected=members.group?await wire.effectiveGroupMembers(members.group.state,members.group.withdrawals):wire.parseRoot(c.root).members;
+    if(expected.some(p=>!members.has(p.person)))throw this.scheduledError("scheduled_audience","Current conversation membership is unavailable.");
+    for(const p of [...members.values(),...members.hosts.values()]) {
+      const current=await this.groupRead(checks,p.person===own.person?"kv":"persons",p.person===own.person?"person":p.person);
+      if(!current||!["self","pinned"].includes(current.state)||current.hash!==p.hash)throw this.scheduledError("scheduled_audience","A participant's current roster changed.");
+    }
+    if(topic) {
+      const rows=await this.authorityRows({conv},checks),msgs=await this.convMessages(conv,rows.filter(r=>!r.to),rows.filter(r=>r.to));
+      if(![...chatTopicAssignments(msgs).values()].includes(topic))throw this.scheduledError("scheduled_audience","This topic is no longer available.");
+    }
+    const audience={persons:[...members.keys()].sort(),pids:[]},parts=[];
+    for(const pid of [...new Set(events.map(x=>x.e.pid))].sort()) {
+      const p=this.resolveAgent(pid,events,members);
+      if(!follows(p)||p.state!=="active"||p.held||p.topic!=null&&p.topic!==topic)continue;
+      const pin=await this.groupRead(checks,"pins",p.host.address);
+      if(!pin||pin.pending||pin.fingerprint!==p.host.fingerprint)throw this.scheduledError("scheduled_audience","A participant's exact key changed.");
+      audience.pids.push(pid);parts.push(p);
+      if(!members.has(own.person)&&p.role==="human"&&p.host.address===this.address&&p.host.fingerprint===this.fp)audience.author_pid=pid;
+    }
+    if(!members.has(own.person)&&!audience.author_pid)throw this.scheduledError("scheduled_audience","Only a current member or exact active human guest can schedule here.");
+    return {audience,members,parts,c};
+  }
+  async scheduleAudience(conv,topic="") {
+    if(!wire.validHash(conv)||topic&&!wire.validID(topic))throw Error("Choose an existing chat and topic.");
+    return (await this.scheduledAudience(conv,topic)).audience;
+  }
+  scheduledWithin(current,approved) { return (current.author_pid||"")===(approved.author_pid||"")&&current.persons.every(p=>approved.persons.includes(p))&&current.pids.every(p=>approved.pids.includes(p)); }
+  async scheduledReferenceOps(before,after,checks) {
+    const old=new Set((before||[]).map(f=>f.sha256)),next=new Set((after||[]).map(f=>f.sha256)),ops=[];
+    for(const sha of new Set([...old,...next])) {
+      const delta=Number(next.has(sha))-Number(old.has(sha));if(!delta)continue;
+      const key="schedule-file/"+sha,prior=await this.groupRead(checks,"kv",key),count=(prior?.count||0)+delta;
+      if(count<0)throw Error("Scheduled attachment reference is inconsistent.");ops.push({s:"kv",k:key,v:count?{count}:undefined});
+    }
+    return ops;
+  }
+  async scheduledGC(ops,checks) {
+    const out=[];
+    for(const op of ops){if(op.s==="files"&&op.v===undefined&&op.k.startsWith("kept/")&&(await this.groupRead(checks,"kv","schedule-file/"+op.k.slice(5)))?.count>0)continue;out.push(op);}
+    return out;
+  }
+  async scheduledFileBytes(file,checks=[]) {
+    const kept=await this.groupRead(checks,"files","kept/"+file.sha256);
+    if(!kept?.ct||kept.attachment?.sha256!==file.sha256||kept.attachment.size!==file.size)throw Error("A scheduled attachment is missing or changed.");
+    const bytes=await wire.decryptFile(kept.ct,kept.attachment,this.keys);
+    if(bytes.length!==file.size||wire.hex(await wire.sha256(bytes))!==file.sha256)throw Error("A scheduled attachment failed verification.");return bytes;
+  }
+  async scheduledInputBytes(f) {
+    const source=f?.bytes,known=source instanceof Uint8Array?source.byteLength:source instanceof ArrayBuffer?source.byteLength:f?.size;
+    if(!Number.isSafeInteger(known)||known<0||known>wire.BrowserMaxFile)throw Error("Invalid scheduled attachment size.");
+    const bytes=source instanceof Uint8Array?new Uint8Array(source):source instanceof ArrayBuffer?new Uint8Array(source):new Uint8Array(await f.arrayBuffer());
+    if(bytes.length!==known||f.size!=null&&f.size!==bytes.length)throw Error("Invalid scheduled attachment size.");return bytes;
+  }
+  async sameScheduledCreate(old,input) {
+    if(old.conv!==input.conv||old.body!==String(input.body||"").trim()||Date.parse(old.due)!==this.scheduledDueTime(input.due)||old.timezone!==(input.timezone||"UTC"))return false;
+    const topic=await this.outgoingTopic(input.conv,input.topic||"",input.reply_to||""),reply=await this.logicalReply(input.conv,input.reply_to||"",true),quote=await this.logicalReply(input.conv,input.quote||"",true);
+    if(old.topic!==topic||(old.reply_to||"")!==reply||(old.quote||"")!==quote)return false;
+    const files=input.files||[];checkFiles(files);if(files.length!==old.files.length)return false;
+    let total=0;
+    for(let i=0;i<files.length;i++) {
+      const f=files[i],bytes=await this.scheduledInputBytes(f),name=wire.safeName(f.name),saved=old.files[i];
+      total+=bytes.length;if(total>wire.BrowserMaxMessage)throw Error("Scheduled attachments are too large.");
+      if(name!==f.name||f.size!=null&&f.size!==bytes.length||saved.name!==name||saved.size!==bytes.length||saved.sha256!==wire.hex(await wire.sha256(bytes)))return false;
+    }
+    return true;
+  }
+  // Same optional host contract as liveschedule.go. File values here are the
+  // actual workspace-bound File/bytes objects, never native staging paths.
+  async scheduleAPI(u,body) {
+    const bad=(status,message)=>{throw new HubError(status,"schedule_request",message);};
+    const query=allowed=>{for(const key of u.searchParams.keys())if(!allowed.includes(key)||u.searchParams.getAll(key).length!==1)bad(409,"Invalid schedule query.");};
+    try {
+      if(u.pathname==="/api/schedules") {
+        if(body!==undefined)bad(405,"The schedule list is read only.");query(["id","conv","all"]);
+        const id=u.searchParams.get("id")||"",conv=u.searchParams.get("conv")||"",all=u.searchParams.get("all")||"";
+        if(id){if(!wire.validID(id)||conv||all)bad(409,"Choose an exact scheduled message.");const row=await this.scheduledSend(id);if(!row)bad(404,"That scheduled message is not on this device.");return row;}
+        if(conv&&!wire.validHash(conv)||!["","0","1"].includes(all))bad(409,"Invalid schedule query.");return (await this.scheduledSends(all==="1")).filter(r=>!conv||r.conv===conv);
+      }
+      if(u.pathname==="/api/schedule/audience") {
+        if(body!==undefined)bad(405,"The audience preview is read only.");query(["conv","topic"]);return await this.scheduleAudience(u.searchParams.get("conv")||"",u.searchParams.get("topic")||"");
+      }
+      const what=u.pathname.slice("/api/schedule/".length);
+      if(!["create","edit","cancel","send_now"].includes(what))bad(404,"That schedule action is not available.");
+      if(body===undefined)bad(405,"Use a schedule action request.");
+      const draft=["create","edit"].includes(what),allowed=draft?["id","rev","conv","topic","body","reply_to","quote","due","timezone","files","audience"]:["id","rev"];
+      if(!body||typeof body!=="object"||Array.isArray(body)||Object.keys(body).some(k=>!allowed.includes(k)))bad(400,"Invalid schedule request.");
+      if(["id","conv","topic","body","reply_to","quote","due","timezone"].some(k=>body[k]!=null&&typeof body[k]!=="string")||body.rev!=null&&(!Number.isSafeInteger(body.rev)||body.rev<0)||body.files!=null&&!Array.isArray(body.files))bad(400,"Invalid schedule request.");
+      if(body.audience!=null){const a=body.audience;if(typeof a!=="object"||Array.isArray(a)||Object.keys(a).some(k=>!["persons","pids","author_pid"].includes(k))||!Array.isArray(a.persons)||!Array.isArray(a.pids)||![...a.persons,...a.pids].every(wire.validID)||a.author_pid!=null&&a.author_pid!==""&&!wire.validID(a.author_pid))bad(400,"Invalid scheduled audience.");}
+      if(body.id&&!wire.validID(body.id)||what!=="create"&&(!wire.validID(body.id)||!Number.isSafeInteger(body.rev)||body.rev<1)||what==="create"&&(body.rev||0)!==0)bad(409,"Choose the exact scheduled message and current revision.");
+      if(what==="create")return await this.scheduleSend(body);
+      if(what==="edit")return await this.editScheduledSend(body.id,body.rev,body);
+      if(what==="cancel")return await this.cancelScheduledSend(body.id,body.rev);
+      return await this.sendScheduledNow(body.id,body.rev);
+    }catch(error){if(error instanceof HubError)throw error;throw new HubError(409,error.code||"schedule_refused","The scheduled message is unavailable or could not be saved. Check its chat, time and attachments.");}
+  }
+  async saveScheduledSend(id,rev,input,rechecked=false) {
+    const conflict=()=>this.scheduledError("scheduled_id_conflict","The scheduled message ID already names different content.");
+    if(input?.id != null && input.id !== "" && (!wire.validID(input.id)||id&&input.id!==id))throw conflict();
+    const checks=[],createID=id?"":input?.id||wire.newID(),old=id?await this.groupRead(checks,"kv",this.scheduledKey(id)):null;
+    if(!id) {
+      const existing=await this.groupRead(checks,"kv",this.scheduledKey(createID));
+      if(existing){if(!await this.sameScheduledCreate(existing,input))throw conflict();return existing;}
+      // Existing authority scope checks also guard absence at the checked write.
+      let collision=false;
+      for(const table of ["outbox","inbox"]) {
+        const matching=(await this.store.all(table)).filter(r=>r.lid===createID);
+        if(matching.some(r=>table==="outbox"||r.local||(r.fp||r.claimed_key)===this.fp))collision=true;
+        checks.push({s:table,scope:{lid:createID},rows:matching.filter(r=>!r.forwarded).map(v=>({k:v.id,v:authorityValue(table,v)})).sort((a,b)=>a.k<b.k?-1:a.k>b.k?1:0)});
+      }
+      if(collision)throw conflict();
+    }
+    if(id&&(!old||old.rev!==rev||!["pending","needs_review"].includes(old.state)))throw this.scheduledError("scheduled_stale","The scheduled message changed; review it again.");
+    if(!input||!wire.validHash(input.conv)||input.topic==="new")throw Error("Choose an existing chat and topic before scheduling.");
+    const due=this.scheduledDueTime(input.due);if(due<=this.now()||due-this.now()>3650*86400000)throw Error("Choose a future time within ten years.");
+    const timezone=input.timezone||"UTC";try{new Intl.DateTimeFormat("en",{timeZone:timezone});}catch{throw Error("Choose a valid display timezone.");}
+    const body=String(input.body||"").trim();if(new TextEncoder().encode(body).length>wire.MaxBody)throw Error("Message is too long.");
+    const topic=await this.outgoingTopic(input.conv,input.topic||"",input.reply_to||"");
+    const current=(await this.scheduledAudience(input.conv,topic,checks)).audience,reply_to=await this.logicalReply(input.conv,input.reply_to||"",true),quote=await this.logicalReply(input.conv,input.quote||"",true);
+    let audience=current;
+    if(input.audience!=null) {
+      const approved=input.audience;
+      if(!Array.isArray(approved.persons)||!Array.isArray(approved.pids)||![...approved.persons,...approved.pids].every(wire.validID)||approved.author_pid&&!wire.validID(approved.author_pid)||!this.scheduledWithin(current,approved)||!this.scheduledWithin(approved,current))throw this.scheduledError("scheduled_audience","The reviewed audience changed; review it again.");
+    } else if(old) {
+      if(old.conv!==input.conv||old.topic!==topic)throw this.scheduledError("scheduled_audience","Review the current audience before changing the chat or topic.");
+      audience=old.audience;
+    }
+    const files=[],ops=[];
+    if(input.files==null&&old) { for(const f of old.files){await this.scheduledFileBytes(f,checks);files.push(f);} }
+    else {
+      const supplied=input.files||[];checkFiles(supplied);
+      for(const f of supplied) {
+        const bytes=await this.scheduledInputBytes(f),name=wire.safeName(f.name);
+        if(!name||name!==f.name||f.size!=null&&f.size!==bytes.length)throw Error("Invalid scheduled attachment.");
+        const descriptor={sha256:wire.hex(await wire.sha256(bytes)),size:bytes.length,name},key="kept/"+descriptor.sha256,kept=await this.groupRead(checks,"files",key);
+        if(kept)await this.scheduledFileBytes(descriptor,checks);
+        else if(!ops.some(o=>o.s==="files"&&o.k===key)){const sealed=await wire.encryptFile(bytes,name,await wire.publicEntry(this.keys,this.address));ops.push({s:"files",k:key,v:{attachment:sealed.attachment,ct:sealed.ct}});}
+        files.push(descriptor);
+      }
+    }
+    checkFiles(files);
+    if(wire.blank(body)&&!files.length)throw Error("Write a message or add a file first.");
+    const record={id:id||createID,conv:input.conv,topic,body,...(reply_to?{reply_to}:{}),...(quote?{quote}:{}),due:new Date(due).toISOString(),timezone,rev:(old?.rev||0)+1,state:"pending",audience,files};
+    if(!id&&await this.groupRead(checks,"kv",this.scheduledKey(record.id)))throw this.scheduledError("scheduled_stale","Scheduled message ID already exists.");
+    ops.push(...await this.scheduledReferenceOps(old?.files,files,checks),{s:"kv",k:this.scheduledKey(record.id),v:record});
+    try{await this.store.write(ops,checks);}catch(error){
+      if(error instanceof StoreConflict){
+        if(!id&&!rechecked&&input?.id)return this.saveScheduledSend("",0,input,true);
+        throw this.scheduledError("scheduled_stale","The schedule or its source changed; review it again.");
+      }throw error;
+    }
+    this.changed();this.scheduledWake();return record;
+  }
+  async scheduleSend(input) { return this.saveScheduledSend("",0,input); }
+  async editScheduledSend(id,rev,input) { return this.saveScheduledSend(id,rev,input); }
+  async cancelScheduledSend(id,rev) {
+    const checks=[],old=await this.groupRead(checks,"kv",this.scheduledKey(id));
+    if(!old||old.rev!==rev||!["pending","needs_review"].includes(old.state))throw this.scheduledError("scheduled_stale","The scheduled message changed; review it again.");
+    const record={...old,rev:old.rev+1,state:"cancelled",detail:""};
+    await this.store.write([...await this.scheduledReferenceOps(old.files,[],checks),{s:"kv",k:this.scheduledKey(id),v:record}],checks);this.changed();this.scheduledWake();return record;
+  }
+  async sendScheduledNow(id,rev) {
+    const checks=[],old=await this.groupRead(checks,"kv",this.scheduledKey(id));
+    if(!old||old.rev!==rev||!["pending","needs_review"].includes(old.state))throw this.scheduledError("scheduled_stale","The scheduled message changed; review it again.");
+    await this.store.write([{s:"kv",k:this.scheduledKey(id),v:{...old,rev:rev+1,state:"pending",due:new Date(this.now()).toISOString(),detail:""}}],checks);
+    this.changed();try{return await this.dispatchScheduledSend(id);}finally{this.scheduledWake();}
+  }
+  async dispatchScheduledSend(id,automaticEpoch=null) {
+    this.scheduledDispatches ||= new Map();if(this.scheduledDispatches.has(id))return this.scheduledDispatches.get(id);
+    const run=this.dispatchScheduledAttempt(id,automaticEpoch);this.scheduledDispatches.set(id,run);try{return await run;}finally{if(this.scheduledDispatches.get(id)===run)this.scheduledDispatches.delete(id);}
+  }
+  async dispatchScheduledAttempt(id,automaticEpoch) {
+    const epoch=this.scheduledEpoch||0,key=this.scheduledKey(id),checks=[];let record=await this.groupRead(checks,"kv",key);
+    const active=()=>!this.closing&&!this.revoked&&(this.scheduledEpoch||0)===epoch&&(automaticEpoch===null||this.running&&epoch===automaticEpoch);
+    if(!record||!["pending","dispatching"].includes(record.state)||!active())return record;
+    const recover=async()=>{
+      const rows=(await this.store.byConv("outbox",record.conv)).filter(r=>r.lid===id);
+      if(!rows.length)return false;
+      const guard=[],current=await this.groupRead(guard,"kv",key);if(!current||!["pending","dispatching"].includes(current.state))return true;
+      for(const row of rows){const kept=await this.groupRead(guard,"outbox",row.id);if(!kept||kept.conv!==record.conv||kept.topic!==record.topic||kept.kind!=="message"||kept.sub||kept.target||kept.topic_event)throw Error("Scheduled logical ID conflicts with an existing send.");}
+      record={...current,state:"sent",detail:""};await this.store.write([...await this.scheduledReferenceOps(current.files,[],guard),{s:"kv",k:key,v:record}],guard);this.changed();return true;
+    };
+    if(await recover())return await this.scheduledSend(id);
+    if(Date.parse(record.due)>this.now())return record;
+    if(record.state==="pending"){record={...record,rev:record.rev+1,state:"dispatching",detail:""};await this.store.write([{s:"kv",k:key,v:record}],checks);this.changed();}
+    try {
+      const initial=await this.scheduledAudience(record.conv,record.topic);if(!this.scheduledWithin(initial.audience,record.audience))throw this.scheduledError("scheduled_audience","The audience grew; review the scheduled message.");
+      const files=[];for(const f of record.files)files.push({name:f.name,size:f.size,bytes:await this.scheduledFileBytes(f)});
+      const beforeStore=async(copies,guard)=>{
+        const current=await this.groupRead(guard,"kv",key);
+        if(!active())throw this.scheduledError("scheduled_stopped","The sending browser stopped.");
+        if(!current||current.state!=="dispatching"||current.rev!==record.rev||current.conv!==record.conv||current.topic!==record.topic||current.due!==record.due)throw this.scheduledError("scheduled_stale","The scheduled message changed.");
+        if(this.now()<Date.parse(current.due))throw this.scheduledError("scheduled_early","The message is not due.");
+        const actual=await this.scheduledAudience(record.conv,record.topic,guard);
+        if(!this.scheduledWithin(actual.audience,record.audience))throw this.scheduledError("scheduled_audience","The audience grew; review the scheduled message.");
+        for(const f of record.files)await this.scheduledFileBytes(f,guard);
+        for(const row of copies) {
+          if(row.conv!==record.conv||row.topic!==record.topic||row.lid!==id||row.body!==record.body||(row.pid||"")!==(record.audience.author_pid||"")||wire.parseEnvelope(row.envelope).from!==this.address||row.kind!=="message"||row.sub||row.target||row.agent_id||row.topic_event||row.followup||row.origin&&row.origin!=="ui")throw this.scheduledError("scheduled_audience","Scheduled dispatch changed its ordinary message scope.");
+          const pin=await this.groupRead(guard,"pins",row.to),fp=row.recipient_fp;
+          if(!fp||!pin||pin.pending||pin.fingerprint!==fp)throw this.scheduledError("scheduled_audience","A sealed recipient key changed.");
+          const allowed=actual.audience.persons.some(p=>actual.members.get(p)?.devices.some(d=>d.address===row.to&&d.fingerprint===fp))||actual.parts.some(p=>record.audience.pids.includes(p.pid)&&p.host.address===row.to&&p.host.fingerprint===fp);
+          if(!allowed)throw this.scheduledError("scheduled_audience","A sealed copy exceeds the approved audience.");
+        }
+        const refs=await this.scheduledReferenceOps(record.files,[],guard);
+        if(!active())throw this.scheduledError("scheduled_stopped","The sending browser stopped.");
+        if(this.now()<Date.parse(current.due))throw this.scheduledError("scheduled_early","The message is not due.");
+        return [...refs,{s:"kv",k:key,v:{...current,state:"sent",detail:""}}];
+      };
+      beforeStore[scheduledDispatch] = id;
+      await this.sendDM({id,conv:record.conv,topic:record.topic,body:record.body,reply_to:record.reply_to||"",quote:record.quote||"",files,pid:record.audience.author_pid||"",beforeStore});
+      return await this.scheduledSend(id);
+    } catch(error) {
+      if(await recover())return await this.scheduledSend(id);
+      const guard=[],current=await this.groupRead(guard,"kv",key);
+      if(!current||current.state!=="dispatching"||current.rev!==record.rev)return current;
+      const waiting=retryable(error)||error instanceof Hold&&error.reason==="proof_pending";
+      const state=waiting||["scheduled_early","scheduled_stopped"].includes(error.code)?"pending":"needs_review";
+      record={...current,state,detail:waiting?"Waiting for connectivity or current chat information.":state==="pending"?"":error.code==="scheduled_audience"?"The audience changed. Review the scheduled message.":"The message could not be queued safely. Review its chat and attachments."};
+      await this.store.write([{s:"kv",k:key,v:record}],guard);this.changed();return record;
+    }
+  }
+  // One deadline while this Engine runs. Overdue failures have no timer,
+  // so transient pending records wait for a genuine lifecycle wake. Sleep/closed tabs have no delivery promise.
+  scheduledWake() {
+    if(this.scheduledTimer!=null){this.scheduleClearTimeout(this.scheduledTimer);this.scheduledTimer=null;}
+    if(!this.running||this.revoked||this.closing)return Promise.resolve();
+    if(this.scheduledDrain){this.scheduledAgain=true;return this.scheduledDrain;}
+    const epoch=this.scheduledEpoch||0;
+    const run=(async()=>{
+      for(const r of await this.scheduledSends())if(r.state==="dispatching"||r.state==="pending"&&Date.parse(r.due)<=this.now()){
+        if(!this.running||(this.scheduledEpoch||0)!==epoch)return;
+        await this.dispatchScheduledSend(r.id,epoch);
+      }
+      if(!this.running||(this.scheduledEpoch||0)!==epoch||this.closing)return;
+      const rows=(await this.scheduledSends()).filter(r=>["pending","dispatching"].includes(r.state)&&Date.parse(r.due)>this.now());
+      if(rows.length)this.scheduledTimer=this.scheduleSetTimeout(()=>{this.scheduledTimer=null;if(this.running&&(this.scheduledEpoch||0)===epoch)this.scheduledWake();},Math.min(2147483647,Math.max(0,Date.parse(rows[0].due)-this.now())));
+    })().catch(()=>{}).finally(()=>{if(this.scheduledDrain===run)this.scheduledDrain=null;if(this.scheduledAgain){this.scheduledAgain=false;this.scheduledWake();}});
+    this.scheduledDrain=run;return run;
+  }
 
   async keepSent(plain) {
     for (const f of plain) {
@@ -3252,33 +3543,33 @@ export class Engine {
 
   // sendDM sends a message to the person. Never a question or task for
   // them, never v1.
-  async sendDM({ id: sendID = "", conv, body, topic="",topic_event=null,quote="", reply_to: replyTo, files = [], reply_receiver = null, pid = "" }) {
+  async sendDM({ id: sendID = "", conv, body, topic="",topic_event=null,quote="", reply_to: replyTo, files = [], reply_receiver = null, pid = "", beforeStore = null }) {
     topic=await this.outgoingTopic(conv,topic,replyTo);
     if(topic&&!replyTo&&!topic_event)replyTo=await this.chatTopicHead(conv,topic);
     body = String(body || "").trim();
-    if (wire.blank(body) && !files.length) throw new Error("Write a message or add a file first.");
+    if (wire.blank(body) && !files.length && !wire.topicRename(topic_event)) throw new Error("Write a message or add a file first.");
     checkFiles(files);
     const c = (await this.store.get("convs", conv)) || await this.groupRecord(conv);
     if (!c) throw new Error("No conversation " + conv + " here.");
     if(wire.topicOrganization(topic_event)){
       wire.checkTopic({v:wire.Version2,kind:"message",topic,topic_event,pid,attachments:files,receiver_route:reply_receiver});
-      const outgoing={id:sendID,queued:true,kind:"message",body,topic,topic_event,quote,reply_to:replyTo||"",origin:"ui"};
+      const outgoing={id:sendID,queued:true,beforeStore,kind:"message",body,topic,topic_event,quote,reply_to:replyTo||"",origin:"ui"};
       return c.kind==="group"?this.sendGroupTurn(c,outgoing):this.sendConv(c,outgoing);
     }
     if (c.kind === "group") {
       if (pid) {
         const h=await this.humanPlan(c,pid,topic);
-        return this.sendHumanTurn(c,{id:sendID,queued:true,kind:"message",body,topic,topic_event,quote,reply_to:replyTo||"",origin:"ui",files,receiver:reply_receiver,pid},h);
+        return this.sendHumanTurn(c,{id:sendID,queued:true,beforeStore,kind:"message",body,topic,topic_event,quote,reply_to:replyTo||"",origin:"ui",files,receiver:reply_receiver,pid},h);
       }
       const events=await this.convEvents(c.id),members=await this.dmMembers(c,events);
       const captured=await this.roomPlan(c,events,members,topic);
-      if(captured)return this.sendHumanTurn(c,{id:sendID,queued:true,kind:"message",body,topic,topic_event,quote,reply_to:replyTo||"",origin:"ui",files,receiver:reply_receiver},captured);
-      return this.sendGroupTurn(c, {id:sendID,queued:true,body, topic,topic_event,quote,reply_to:replyTo || "",files,receiver:reply_receiver});
+      if(captured)return this.sendHumanTurn(c,{id:sendID,queued:true,beforeStore,kind:"message",body,topic,topic_event,quote,reply_to:replyTo||"",origin:"ui",files,receiver:reply_receiver},captured);
+      return this.sendGroupTurn(c, {id:sendID,queued:true,beforeStore,body, topic,topic_event,quote,reply_to:replyTo || "",files,receiver:reply_receiver});
     }
     try { replyTo=await this.logicalReply(conv,replyTo,true,"Conversation"); } catch(e) { throw Error("A reply stays within its conversation: "+e.message); }
     const human = await this.livePlan(c,pid,"",topic);
-    if (human) return this.sendHumanTurn(c, { id: sendID, queued: true, kind: "message", body, topic,topic_event,quote,reply_to: replyTo || "", origin: "ui", files, receiver: reply_receiver, pid }, human);
-    return this.sendConv(c, { id: sendID, queued: true, kind: "message", body, topic,topic_event,quote,reply_to: replyTo || "", origin: "ui", files, receiver: reply_receiver });
+    if (human) return this.sendHumanTurn(c, { id: sendID, queued: true, beforeStore, kind: "message", body, topic,topic_event,quote,reply_to: replyTo || "", origin: "ui", files, receiver: reply_receiver, pid }, human);
+    return this.sendConv(c, { id: sendID, queued: true, beforeStore, kind: "message", body, topic,topic_event,quote,reply_to: replyTo || "", origin: "ui", files, receiver: reply_receiver });
   }
 
   // sendConv stores the sealed envelope before it is sent, and sends that
@@ -3307,7 +3598,7 @@ export class Engine {
   }
 
   async sendConv(c, fields, attempt = 0) {
-    let { id: sendID = "", queued = false, kind, body, topic="",topic_event=null,quote="",reply_to: replyTo = "", origin = "", sub = "", pid = "", send_group = "", followup = null, target = null, files = [], receiver = null, proposal_choice = null, organization_review = null,organization_batch=null, human=null } = fields;
+    let { id: sendID = "", queued = false, kind, body, topic="",topic_event=null,quote="",reply_to: replyTo = "", origin = "", sub = "", pid = "", send_group = "", followup = null, target = null, files = [], receiver = null, proposal_choice = null, organization_review = null,organization_batch=null, human=null, beforeStore=null } = fields;
     if(wire.topicOrganization(topic_event)){wire.checkTopic({v:wire.Version2,kind,topic,topic_event,origin,sub,pid,followup,target,attachments:files,receiver_route:receiver});await this.topicOrganizationAuthor(c);}
     if (pid) {
       const ev = sub === "event" ? await this.eventRecord(body) : null;
@@ -3374,7 +3665,7 @@ export class Engine {
       const envelope = await wire.seal({ v: wire.Version2, id, from: this.address, to: dev.address, ts: Math.floor(at / 1000), kind,
         body, topic,topic_event,quote,reply_to: replyTo, conv: c.id, lid, root: c.root, origin, sub, pid, target, chan, replica, fan, followup, send_group:copyGroup, attachments: sealed.map((f) => f.attachment), receiver_route: prepared?.route },
       this.keys, recipient);
-      recs.push({ id, conv: c.id, lid, body, topic,topic_event,quote,reply_to: replyTo, kind, origin, sub, pid, ...(proposal_choice?{proposal_choice}:{}), ...(organization_review?{organization_review}:{}), send_group, followup, send_group_wire:!!copyGroup, target, ...(required_cap ? { required_cap } : {}), ...(prepared || wire.topicOrganization(topic_event) ? { ...(prepared?{receiver_route:prepared.route}:{}), recipient_fp:dev.fingerprint } : {}), at, to: dev.address, person:dev.own ? me.person : peer.person,own: dev.own, envelope,
+      recs.push({ id, conv: c.id, lid, body, topic,topic_event,quote,reply_to: replyTo, kind, origin, sub, pid, ...(proposal_choice?{proposal_choice}:{}), ...(organization_review?{organization_review}:{}), send_group, followup, send_group_wire:!!copyGroup, target, ...(required_cap ? { required_cap } : {}), ...(prepared || wire.topicOrganization(topic_event) || wire.topicRename(topic_event) || beforeStore ? { ...(prepared?{receiver_route:prepared.route}:{}), recipient_fp:dev.fingerprint } : {}), at, to: dev.address, person:dev.own ? me.person : peer.person,own: dev.own, envelope,
         attachments: sealed.map((f) => f.attachment), files: sealed.length ? sealed : undefined, state: ok ? "queued" : "waiting", detail: why });
     }
     if (turn && !recs.some((r) => !r.own)) throw new Error("Not sent: no device of the other person can get a copy now.");
@@ -3384,7 +3675,7 @@ export class Engine {
     if(sub==="event"){const e=wire.parseEvent(body);await this.checkTopicGrants(c.id,e.topic,e.grant,checks,e.snapshots);}
     if(pid){const evs=await this.convEvents(c.id,checks),info=this.resolveAgent(pid,evs,await this.dmMembers(c,evs,checks));await this.checkParticipationTopic(info.topic,{conv:c.id,sub,topic,reply_to:replyTo},checks);}
     if(organization_batch){organization_batch.copies.push(...recs);organization_batch.checks.push(...checks);const least=copyOrder(recs);return {id:recs[0].id,lid,state:least.state,detail:least.detail,copies:recs.map(r=>({id:r.id,to:r.to,state:r.state,detail:r.detail}))};}
-    try { await this.commitReceiverCopies(recs, prepared, checks, [], queued); }
+    try { await this.commitReceiverCopies(recs, prepared, checks, [], queued, beforeStore); }
     catch (e) {
       // Nothing was stored on a checked-write conflict. Rebuild and verify
       // the same requested turn against current keys, membership and scope.
@@ -3513,7 +3804,7 @@ export class Engine {
       if(await this.snapshotCopy(rec)){const pin=await this.pinned(rec.to);try{await this.requireSnapshotSupport(rec.to,pin);}catch(error){if(rec.sub===wire.SubHistoryArchive&&error.code==="topic_unsupported")error.code="history_archive_unsupported";throw error;}if(rec.sub===wire.SubGroupContext)await this.groupSupport(rec.to,pin);}
       let carried = null;
       if (rec.sub === "history") try { carried = wire.parseHistory(rec.body); } catch (e) { carried = null; }
-      for(const needed of [rec.mention_cap||requiredCap===wire.CapMentionReaction||wire.mentionReaction(carried||rec)||carried?.origin===wire.OriginMentionReaction?wire.CapMentionReaction:null,rec.organization_cap||requiredCap===wire.CapAgentOrganization||wire.organizationReaderExtension(carried||rec)?wire.CapAgentOrganization:null].filter(Boolean)){
+      for(const needed of [rec.shared_title_cap||wire.topicRename((carried||rec).topic_event)?wire.CapSharedTopicTitle:null,rec.mention_cap||requiredCap===wire.CapMentionReaction||wire.mentionReaction(carried||rec)||carried?.origin===wire.OriginMentionReaction?wire.CapMentionReaction:null,rec.organization_cap||requiredCap===wire.CapAgentOrganization||wire.organizationReaderExtension(carried||rec)?wire.CapAgentOrganization:null].filter(Boolean)){
         const pin=await this.pinned(rec.to),[ok,why]=await this.ctlSupport(rec.to,pin,needed);
         if(!ok)throw Object.assign(Error(why),{code:rec.sub===wire.SubHistoryArchive?"history_archive_unsupported":"agent_identity_unsupported"});
       }
@@ -3967,7 +4258,7 @@ export class Engine {
     return { route: wire.parseReceiverRoute({ ...route, op: "request" }), delegation, checks };
   }
 
-  async commitReceiverCopies(copies, prepared, checks = [], extraOps = [], queued = false) {
+  async commitReceiverCopies(copies, prepared, checks = [], extraOps = [], queued = false, beforeStore = null) {
     for(const n of copies)if(n.followup){await this.followupSendCheck(n,checks);break;}
     if(prepared && prepared.delegation.receiver_setup.choice.kind!=="human")for(const rec of copies)if(await this.topicCopy(rec))throw Error("Topic-only sharing cannot use a selected agent or session to receive replies. Choose Yourself for replies; you can still ask the topic's agent.");
     if (prepared) {
@@ -3999,12 +4290,17 @@ export class Engine {
       const kept = await this.store.all("outbox");
       let order = kept.reduce((last,r) => Math.max(last,r.send_order ?? r.at ?? 0), this.now());
       if (queued && rows.some(r => r.conv && r.lid && kept.some(old => old.conv === r.conv && old.lid === r.lid))) throw Error("This send is already kept here.");
+      if (queued) for (const lid of new Set(rows.map(r => r.lid).filter(Boolean))) {
+        if (beforeStore?.[scheduledDispatch] !== lid && await this.groupRead(checks,"kv",this.scheduledKey(lid))) throw Error("This send ID is reserved by a scheduled message.");
+      }
       for (const r of rows) {
         if (await this.groupRead(checks,"outbox", r.id)) throw Error("Local send id already exists.");
         r.send_order = ++order;
+        if(wire.topicRename(r.topic_event))r.shared_title_cap=true;
         if (["question","task"].includes(r.kind)) r.handover_started = false;
       }
-      try{await this.store.write(rows.map(v => ({ s: "outbox", k: v.id, v })).concat(extraOps), checks);}catch(error){if(error instanceof StoreConflict){if(contribution)throw Error("The selected history or destination audience changed; review the contribution again.");if(organizations.length)throw Error("The selected messages, topic or audience changed; review the move again.");}throw error;}
+      if(beforeStore)extraOps.push(...await beforeStore(copies,checks));
+      try{await this.store.write(rows.map(v => ({ s: "outbox", k: v.id, v })).concat(extraOps), checks);}catch(error){if(error instanceof StoreConflict){if(beforeStore&&rows.some(r=>wire.topicRename(r.topic_event)))throw Object.assign(Error("Shared topic title or its authority changed; retry the rename."),{code:"shared_topic_title_stale"});if(contribution)throw Error("The selected history or destination audience changed; review the contribution again.");if(organizations.length)throw Error("The selected messages, topic or audience changed; review the move again.");}throw error;}
     });
     this.sendCommit = run;
     await run;
@@ -4184,16 +4480,35 @@ export class Engine {
     const groups=projectDeviceThreads(view,{address:this.address,fingerprint:this.fp,erased:row=>this.erasedRow(row)});
     // The same admitted executor reports drive both cards and topic pending state.
     // Index once: unrelated messages and long reply chains do not multiply scans.
-    const statuses=new Map();
-    for(const r of view.inbox) if(r.control && !r.conv && r.sub===wire.SubStatus && r.ref){
-      const key=r.ref.id+"/"+r.ref.fingerprint;
-      let list=statuses.get(key);if(!list)statuses.set(key,list=[]);list.push(r);
+    const statuses=new Map(),textControls=new Map();
+    for(const [rows,incoming] of [[view.inbox,true],[view.outbox,false]]) for(const r of rows) if(r.control && !r.conv && r.ref){
+      if(incoming && r.sub===wire.SubStatus){
+        const key=r.ref.id+"/"+r.ref.fingerprint;
+        let list=statuses.get(key);if(!list)statuses.set(key,list=[]);list.push(r);
+      }
+      if(r.sub===wire.SubRevision || r.sub===wire.SubRetraction){
+        const peer=deviceHistoryPeer(r,incoming?r.from:r.to),key=peer+"/"+r.ref.fingerprint+"/"+r.ref.id;
+        let list=textControls.get(key);if(!list)textControls.set(key,list=[]);
+        list.push({...r,preview_author:incoming?r.fp:this.fp});
+      }
     }
     for(const g of groups){
-      for(const m of g)Object.assign(m,{personal_attention:this.attentionFields(m,view,m.dir==="out")});
+      for(const m of g){
+        Object.assign(m,{personal_attention:this.attentionFields(m,view,m.dir==="out")});
+        const controls=textControls.get(m.peer+"/"+m.author_fp+"/"+m.id);
+        if(controls){
+          const display=this.controlsOn(controls,m.author_fp,c=>c.preview_author,()=>"",()=>false);
+          if(display.deleted)m.preview_line="Message deleted";
+          else if(display.edited)m.preview_line=bodyPreview(display.text || "");
+        }
+      }
       const answered=new Set(g.filter(r=>r.dir==="in" && (r.kind==="answer"||r.kind==="result") && r.status!==wire.StatusProgress).map(r=>r.reply_to));
       for(const m of g) if(m.dir==="out" && topicRequest(m.kind))
         m.exec=this.execOn((statuses.get(m.id+"/"+m.author_fp)||[]).filter(r=>r.from===m.peer),m.peer,answered.has(m.id));
+      if(view.collectUnread)for(const m of g)if(m.personal_attention?.unread){
+        const row={kind:"device",peer:m.peer,thread:g[0].id,id:m.id,lid:m.id,author:m.author_fp,dir:m.dir,at:iso(m.at),label:m.dir==="out"?"You":m.from||m.peer,preview:m.preview_line??bodyPreview(m.body)};
+        row.key=unreadKey(row);view.unreadDeviceRows.push(row);
+      }
     }
     return groups;
   }
@@ -4207,6 +4522,7 @@ export class Engine {
       if (!pins.has(peer)) pins.set(peer, await this.store.get("pins", peer)); // one read per peer, not per topic
       out.push(this.topicSummary(g, locals, now, pins.get(peer)));
     }
+    if(view?.collectUnread){const titles=new Map(out.map(t=>[t.peer+"/"+t.id,t.title]));for(const row of view.unreadDeviceRows)row.topic_title=titles.get(row.peer+"/"+row.thread)||"";}
     return out.sort(byNewest);
   }
 
@@ -4216,7 +4532,7 @@ export class Engine {
     // counted while open, and a thread of nothing but reports is not a
     // conversation (the page lists it under reports).
     const notice = (m) => m.kind === "message" && m.status === "review_notice" && !m.reply_to && !(m.attachments || []).length;
-    const line = (m) => (notice(m) ? this.noticeLine({...m,from:m.from||this.address}) : firstLine(m.body));
+    const line = (m) => (notice(m) ? this.noticeLine({...m,from:m.from||this.address}) : m.preview_line ?? bodyPreview(m.body));
     const local = this.topicLocalOf(locals, first.peer, g);
     // A browser device runs no agent: a received request it answered
     // (replyV1: "answered") was answered by hand, the Go client's "manual".
@@ -4233,7 +4549,7 @@ export class Engine {
       waiting: pendingTopicRows(facts).some(i=>!facts[i].in),
       key_changed: !!(pin && pin.pending), notices: g.filter((m) => m.dir === "in" && notice(m) && !m.resolved).length, notice_only: g.every(notice),
       state: v.state, pending: v.pending, quiet_since: iso(v.quiet_since * 1000), ...(v.done_by ? { done_by: v.done_by } : {}),
-      ...(concluded ? { conclusion: firstLine(concluded.body), concluded_by: concluded.dir === "in" ? first.peer : this.address } : {}) };
+      ...(concluded ? { conclusion: line(concluded), concluded_by: concluded.dir === "in" ? first.peer : this.address } : {}) };
     if(v.pending)t.pending_ids=pendingTopicRows(facts).map(i=>g[i].id);
     if (local.title) Object.assign(t, { auto_title: t.title, title: local.title, renamed: true });
     return t;
@@ -4278,16 +4594,11 @@ export class Engine {
     const state = q.get("state") || "", peer = q.get("peer") || "", before = q.get("before") || "", raw = q.get("limit");
     const limit = raw === null || raw === "" ? 0 : /^-?\d+$/.test(raw) ? Number(raw) : NaN;
     if (!["", "active", "done", "archived"].includes(state) || !(limit >= 0 && limit <= TOPICS.pageMax)) throw new Error(topicQueryError);
-    let after = null;
-    if (before) {
-      const [at, p, id, ...rest] = before.split("|");
-      if (rest.length || !/^\d+$/.test(at || "") || p === undefined || !id) throw new Error(topicQueryError);
-      after = { last_at: iso(Number(at) * 1000), peer: p, id };
-    }
+    const after=parseTopicPageCursor(before,"",peer);
     const words = (q.get("q") || "").toLowerCase().split(/\s+/).filter(Boolean);
     const matched = (await this.threadSummaries()).filter((t) => !t.notice_only && (!peer || t.peer === peer) && (!state || t.state === state)
-      && words.every((w) => (t.title + "\n" + (t.auto_title || "") + "\n" + t.last).toLowerCase().includes(w)));
-    const start = after ? matched.findIndex((t) => newerTopic(after, t)) : 0;
+      && words.every((w) => (t.title + "\n" + (t.auto_title || "") + "\n" + t.last).toLowerCase().includes(w))).sort(unreadTopicOrder);
+    const start = after ? matched.findIndex((t) => unreadTopicOrder(after,t)<0) : 0;
     const from = start < 0 ? matched.length : start, page = matched.slice(from, from + (limit || TOPICS.pageDefault));
     const end = from + page.length;
     return { topics: page, ...(end < matched.length && page.length ? { next: topicCursor(page[page.length - 1]) } : {}), matched: matched.length };
@@ -4340,8 +4651,58 @@ export class Engine {
     return m?chatTopicAssignments(msgs.filter(m=>!wire.topicOrganization(m.topic_event))).get(m.lid)||"":"";
   }
   async chatTopicHead(conv,topic){const msgs=await this.convMessages(conv,await this.store.all("inbox"),await this.store.all("outbox")),assigned=chatTopicAssignments(msgs);return sortChatTurns(msgs.filter(m=>assigned.get(m.lid)===topic&&!m.sub&&!m.topic_event)).at(-1)?.lid||"";}
+  sharedTopicTitleKey(conv,topic){return "topic-shared-title/"+conv+"/"+topic;}
+  async sharedTopicTitle(conv,topic,checks=[]){return this.groupRead(checks,"kv",this.sharedTopicTitleKey(conv,topic));}
+  async sharedTopicTitleOps(n,writer,checks=[]){
+    if(!wire.topicRename(n.topic_event))return [];
+    wire.checkTopic({...n,v:wire.Version2});
+    if(!wire.validHash(n.conv)||!wire.validID(n.lid)||!wire.validFingerprint(writer))throw new Hold("invalid","Shared topic rename lacks exact original identity.");
+    const key=this.sharedTopicTitleKey(n.conv,n.topic),old=await this.groupRead(checks,"kv",key),event=n.topic_event;
+    if(old&&(event.rev<old.rev||event.rev===old.rev&&writer<old.writer))return [];
+    if(old&&event.rev===old.rev&&writer===old.writer){if(event.title!==old.title)throw new Hold("invalid","Shared topic title conflicts at the same revision and writer.");return [];}
+    return [{s:"kv",k:key,v:{conv:n.conv,topic:n.topic,title:event.title,rev:event.rev,writer,lid:n.lid}}];
+  }
+  async mergeSharedTopicTitleOps(ops,n,pin){
+    const item=n.sub==="history"?{...wire.parseHistory(n.body),conv:n.conv,v:wire.Version2}:n;
+    if(!wire.topicRename(item.topic_event))return ops;
+    const checks=ops.checks||[],current=await this.groupRead(checks,"pins",n.from);
+    if(!current||current.pending||current.fingerprint!==pin.fingerprint)throw new StoreConflict();
+    if(n.sub!=="history"&&!item.human&&wire.parseRoot(n.root).kind!=="group"){
+      const root=wire.parseRoot(n.root),people=[];
+      for(const m of root.members){const p=await this.groupRead(checks,m.person===this.me.person?"kv":"persons",m.person===this.me.person?"person":m.person);if(!p||!["self","pinned"].includes(p.state)||!p.hashes.includes(m.roster))throw new Hold("proof_pending","Shared topic member proof changed.");people.push(p);}
+      if(!people.some(p=>p.devices.some(d=>d.address===n.from&&d.fingerprint===pin.fingerprint))||!people.some(p=>p.devices.some(d=>d.address===this.address&&d.fingerprint===this.fp)))throw new Hold("invalid","Shared topic author or recipient is not current.");
+    }
+    ops.push(...await this.sharedTopicTitleOps(item,n.sub==="history"?item.from_key:pin.fingerprint,checks));ops.checks=checks;return ops;
+  }
+  async renameSharedTopic(conv,topic,title){
+    if(!wire.validHash(conv)||!wire.validID(topic))throw Error("Choose one exact conversation topic.");
+    const old=await this.sharedTopicTitle(conv,topic),rev=(old?.rev||0)+1;
+    if(!Number.isSafeInteger(rev))throw Error("Shared topic title revision limit reached.");
+    title=wire.normalizeSharedTopicTitle(String(title||""));
+    const c=await this.store.get("convs",conv)||await this.groupRecord(conv);if(!c)throw Error("Conversation is not kept here.");
+    const beforeStore=async(copies,checks)=>{
+      const current=await this.sharedTopicTitle(conv,topic,checks);
+      if(!!current!==!!old||current?.rev!==old?.rev||current?.writer!==old?.writer)throw Object.assign(Error("Shared topic title changed; retry the rename."),{code:"shared_topic_title_stale"});
+      const actual=copies.find(r=>wire.topicRename(r.topic_event));if(!actual||actual.conv!==conv||actual.topic!==topic||actual.topic_event.rev!==rev)throw Error("Shared topic rename differs from committed copies.");
+      for(const r of copies){if(r.human){const gate=await this.humanGate(c,r,checks);if(gate.why)throw Error(gate.why);}else if(c.kind!=="group"){
+        const me=await this.groupRead(checks,"kv","person"),peer=await this.groupRead(checks,"persons",c.peer),pin=await this.groupRead(checks,"pins",r.to);
+        if(!me||me.hash!==this.me.hash||me.state!=="self"||!me.devices.some(d=>d.address===this.address&&d.fingerprint===this.fp)||!peer||peer.state!=="pinned"||!pin||pin.pending||pin.fingerprint!==r.recipient_fp)throw Error("Shared topic sender or recipient authority changed.");
+        const gate=await this.gate(c,r);if(gate.why)throw Error(gate.why);
+      }}
+      return this.sharedTopicTitleOps(actual,this.fp,checks);
+    };
+    let pid="";
+    {const events=await this.convEvents(conv),members=await this.dmMembers(c,events);if(!members.has(this.me.person)){const guest=(await this.participationsOf(c)).find(p=>p.role==="human"&&p.state==="active"&&!p.held&&p.host?.address===this.address&&p.host.fingerprint===this.fp&&(p.topic==null||p.topic===topic));if(!guest)throw Error("Only the exact current member or active human guest may rename this topic.");pid=guest.pid;}}
+    return this.sendDM({conv,topic,body:"",topic_event:{action:"rename",title,rev},pid,beforeStore});
+  }
+  async ownSharedTitleWinner(row,checks=[]){
+    if(!wire.topicRename(row?.topic_event)||row.body||!row.conv||!row.topic)return false;
+    const winner=await this.sharedTopicTitle(row.conv,row.topic,checks),writer=row.to?this.fp:row.fp||row.claimed_key;
+    return !!winner&&winner.conv===row.conv&&winner.topic===row.topic&&winner.lid===row.lid&&winner.writer===writer;
+  }
+
   async chatTopics(conv,msgs=null) { return (await this.chatTopicSummaries(conv,msgs)).topics; }
-  async chatTopicSummaries(conv,msgs=null,read=null) {
+  async chatTopicSummaries(conv,msgs=null,read=null,assigned=null) {
     read ||= await this.readView(conv);
     msgs ||= await this.convMessages(conv,read.inbox,read.outbox,read);
     const controls=read.inbox.filter(c=>c.control&&c.conv===conv&&c.sub===wire.SubStatus);
@@ -4351,27 +4712,33 @@ export class Engine {
       const exec=!m.excerpt_pid&&topicRequest(m.kind)&&m.target&&fp?this.execOn(controls.filter(c=>c.ref?.id===m.lid&&c.ref.fingerprint===fp&&c.from===m.target.address),m.target.address,false):undefined;
       return {...m,...(m.to?{from:this.address}:{}),exec};
     });
-    const locals=await this.topicLocals(),now=Math.floor(this.now()/1000),assigned=chatTopicAssignments(msgs);
-    const topics=summarizeChatTopics(conv,msgs,locals,now),scope=await mainTopicScope(conv),local=locals.get(scope+"/"+MAIN_TOPIC_KEY)||{};
-    const main_topic=summarizeChatTopicView(conv,msgs,new Map([[conv+"/",local]]),now,true)[0];
-    for(const t of [...topics,...(main_topic?[main_topic]:[])])t.unread=msgs.filter(m=>this.attentionFields(m,read).unread&&(assigned.get(m.lid)||"")===t.id).length;
+    assigned ||= chatTopicAssignments(msgs);
+    const ids=[...new Set(assigned.values())].filter(id=>wire.validID(id)),scope=await mainTopicScope(conv);
+    const selected=await this.store.getMany("kv",[...ids.map(id=>"topic/"+conv+"/"+id),"topic/"+scope+"/"+MAIN_TOPIC_KEY,...ids.map(id=>this.sharedTopicTitleKey(conv,id))]);
+    const locals=new Map(selected.filter(v=>v?.type==="topic-state").map(v=>[v.peer+"/"+v.topic,v])),now=Math.floor(this.now()/1000);
+    const topics=summarizeChatTopics(conv,msgs,locals,now,assigned),local=locals.get(scope+"/"+MAIN_TOPIC_KEY)||{};
+    const main_topic=summarizeChatTopicView(conv,msgs,new Map([[conv+"/",local]]),now,true,assigned)[0];
+    const unreadCounts=new Map();for(const m of msgs)if(!m.topic_event&&this.attentionFields(m,read).unread){const id=assigned.get(m.lid)||"";unreadCounts.set(id,(unreadCounts.get(id)||0)+1);}
+    for(const t of [...topics,...(main_topic?[main_topic]:[])])t.unread=unreadCounts.get(t.id)||0;
+    const titles=selected.filter(v=>v?.conv===conv&&v.topic&&Number.isSafeInteger(v.rev)&&v.writer);
+    for(const row of titles.filter(Boolean)){const t=topics.find(t=>t.id===row.topic);if(!t)continue;const auto=t.renamed?t.auto_title:t.title;t.title=row.title||auto;t.renamed=row.title!=="";if(t.renamed)t.auto_title=auto;else delete t.auto_title;}
     return {topics,...(main_topic?{main_topic}:{})};
   }
 
   async decorateChatTopics(view,read=null) {
     read ||= await this.readView(view.id);
     const msgs=await this.convMessages(view.id,read.inbox,read.outbox,read),shown=new Set(view.messages.map(m=>m.lid)),visible=msgs.filter(m=>shown.has(m.lid)),assigned=chatTopicAssignments(visible);
-    Object.assign(view,await this.chatTopicSummaries(view.id,visible,read));
+    Object.assign(view,await this.chatTopicSummaries(view.id,visible,read,assigned));
     for(const m of view.messages){m.topic=assigned.get(m.lid)||"";const raw=visible.find(r=>r.lid===m.lid);if(raw?.topic_event)m.topic_event=raw.topic_event;if(wire.topicOrganization(raw?.topic_event))m.body=await this.topicOrganizationNotice(view.id,raw.topic,view.topics.find(t=>t.id===raw.topic)?.title);}
     return view;
   }
   async chatTopicList(q) {
-    const conv=q.get("conv"),state=q.get("state")||"",words=(q.get("q")||"").toLowerCase().split(/\s+/).filter(Boolean),limit=Number(q.get("limit")||TOPICS.pageDefault)||TOPICS.pageDefault,before=q.get("before")||"";
+    const conv=q.get("conv"),state=q.get("state")||"",words=(q.get("q")||"").toLowerCase().split(/\s+/).filter(Boolean),raw=q.get("limit"),limit=raw===null||raw===""||raw==="0"?TOPICS.pageDefault:/^\d+$/.test(raw)?Number(raw):NaN,before=q.get("before")||"";
     if(!["","active","done","archived"].includes(state)||!Number.isInteger(limit)||limit<1||limit>TOPICS.pageMax)throw Error(topicQueryError);
-    const matched=(await this.chatTopics(conv)).filter(t=>(!state||t.state===state)&&words.every(w=>(t.title+"\n"+(t.auto_title||"")+"\n"+t.last).toLowerCase().includes(w)));
-    const cursor=t=>new Date(t.last_at).toISOString().replace(/[-:TZ.]/g,"").slice(0,14)+"|"+conv+"|"+t.id;
-    const start=before?matched.findIndex(t=>cursor(t)===before)+1:0;if(before&&!start)throw Error(topicQueryError);
-    const page=matched.slice(start,start+limit);return {topics:page,matched:matched.length,...(start+page.length<matched.length?{next:cursor(page.at(-1))}:{})};
+    const after=parseTopicPageCursor(before,conv);
+    const matched=(await this.chatTopics(conv)).filter(t=>(!state||t.state===state)&&words.every(w=>(t.title+"\n"+(t.auto_title||"")+"\n"+t.last).toLowerCase().includes(w))).sort(unreadTopicOrder);
+    let start=after?matched.findIndex(t=>unreadTopicOrder(after,t)<0):0;if(start<0)start=matched.length;
+    const page=matched.slice(start,start+limit);return {topics:page,matched:matched.length,...(start+page.length<matched.length?{next:topicCursor(page.at(-1))}:{})};
   }
 
   async topicOrganizationAuthor(c,address=this.address,fp=this.fp,checks=[]) {
@@ -4534,7 +4901,7 @@ export class Engine {
       for(const [k,n]of names){ops.push({s:"erased",k,v:{conv,key:n.key,lid:n.lid,deletion,shared:false}});this.erased.add(k);}
       if(prior)ops.push({s:"kv",k:key,v:{...prior,mark:"",mark_at:0,mark_count:0}});
       if(prior?.mark)ops.push(...(await this.topicMarkOps(scope,MAIN_TOPIC_KEY,"",0,checks)).ops); // the erasure reaches own devices; so does the cleared mark
-      try{ops.push(...this.eraseOps(conv,inbox,outbox));await this.store.write(ops,checks);}finally{await this.loadErased();}this.changed();if(prior?.mark)this.syncTopicMarks().catch(()=>{});await this.shareErased();return {note:"Deleted for you and your devices. Other people keep their copies."};
+      try{ops.push(...await this.eraseOps(conv,inbox,outbox,checks));await this.store.write(ops,checks);}finally{await this.loadErased();}this.changed();if(prior?.mark)this.syncTopicMarks().catch(()=>{});await this.shareErased();return {note:"Deleted for you and your devices. Other people keep their copies."};
     }
     const scope=await mainTopicScope(conv),key="topic/"+scope+"/"+MAIN_TOPIC_KEY,checks=[],l={...(await this.groupRead(checks,"kv",key)||{}),type:"topic-state",peer:scope,topic:MAIN_TOPIC_KEY};
     let marked={ops:[]};
@@ -4557,18 +4924,18 @@ export class Engine {
       await this.sendDM({conv,topic:id,reply_to:prior.at(-1)?.lid||"",topic_event:{action,seen},body:{create:"Made a topic.",done:"Marked this topic done.",reopen:"Reopened this topic."}[what]});
       return {note:what==="create"?"Topic created. Its replies stay here.":what==="done"?"Marked done for everyone. A new message reopens it.":"Reopened for everyone."};
     }
+    if(what==="rename"){await this.renameSharedTopic(conv,id,body.title);return {note:body.title?"Topic renamed for everyone.":"Topic named after its first message again."};}
     if(what==="delete"){
-      const inbox=await this.store.all("inbox"),outbox=await this.store.all("outbox"),names=new Map(),deletion=wire.newID(),ops=[];
+      const inbox=await this.store.all("inbox"),outbox=await this.store.all("outbox"),names=new Map(),deletion=wire.newID(),ops=[],checks=[];
       for(const r of [...inbox,...outbox])if(r.conv===conv&&assigned.get(r.lid)===id&&this.erasable(r)&&!this.erasedRow(r)){const n=this.rowName(r);if(n.key&&n.lid)names.set(erasedKey(conv,n.key,n.lid),n);}
       for(const [k,n]of names){ops.push({s:"erased",k,v:{conv,key:n.key,lid:n.lid,deletion,shared:false}});this.erased.add(k);}
-      try{ops.push(...this.eraseOps(conv,inbox,outbox));await this.store.write(ops);}finally{await this.loadErased();}this.changed();await this.shareErased();return {note:"Deleted for you and your devices. Other people keep their copies."};
+      try{ops.push(...await this.eraseOps(conv,inbox,outbox,checks));await this.store.write(ops,checks);}finally{await this.loadErased();}this.changed();await this.shareErased();return {note:"Deleted for you and your devices. Other people keep their copies."};
     }
     const key="topic/"+conv+"/"+id,checks=[],l={...(await this.groupRead(checks,"kv",key)||{}),type:"topic-state",peer:conv,topic:id};
-    let marked={ops:[]};
-    if(what==="rename"){const title=wire.topicTitle(body.title);if([...title].length>TOPICS.titleMax)throw Error("Topic name too long.");l.title=title;}else{Object.assign(l,{mark:"archived",mark_count:t.count+msgs.filter(m=>m.topic===id&&m.topic_event).length});marked=await this.topicMarkOps(conv,id,l.mark,l.mark_count,checks);l.mark_at=marked.at;}
-    const ops=[{s:"kv",k:key,v:l},...marked.ops];if(what==="rename")ops.push(...await this.topicTitleOps(conv,id,l.title,checks));
-    await this.store.write(ops,checks);this.changed();if(what==="rename")this.syncTopicTitles().catch(()=>{});else this.syncTopicMarks().catch(()=>{});
-    return {note:what==="rename"?(l.title?"Topic renamed. The name syncs across your linked devices.":"Topic named after its first message again."):"Archived. It syncs across your linked devices. Nothing deleted."};
+    Object.assign(l,{mark:"archived",mark_count:t.count+msgs.filter(m=>m.topic===id&&m.topic_event).length});
+    const marked=await this.topicMarkOps(conv,id,l.mark,l.mark_count,checks);l.mark_at=marked.at;
+    await this.store.write([{s:"kv",k:key,v:l},...marked.ops],checks);this.changed();this.syncTopicMarks().catch(()=>{});
+    return {note:"Archived. It syncs across your linked devices. Nothing deleted."};
   }
 
   // ---- quiet group proof/current-context carriers (grp1 remains off) ---------------------------
@@ -5158,11 +5525,11 @@ export class Engine {
     return rows[0].lid || rows[0].id;
   }
 
-  async sendGroupTurn(c,{id:sendID="",queued=false,body,topic="",topic_event=null,quote="",reply_to="",files=[],receiver=null,organization_review=null,contribution_review=null,organization_batch=null}) {
+  async sendGroupTurn(c,{id:sendID="",queued=false,beforeStore=null,body,topic="",topic_event=null,quote="",reply_to="",files=[],receiver=null,organization_review=null,contribution_review=null,organization_batch=null}) {
     checkFiles(files);
     if(wire.topicOrganization(topic_event)){wire.checkTopic({v:wire.Version2,kind:"message",topic,topic_event,attachments:files,receiver_route:receiver});await this.topicOrganizationAuthor(c);}
     const consentChecks=[], consentEvents=await this.convEvents(c.id,consentChecks), consentMembers=await this.dmMembers(c,consentEvents,consentChecks), human=wire.topicOrganization(topic_event)?null:await this.roomPlan(c,consentEvents,consentMembers,topic);
-    if(human&&!wire.topicOrganization(topic_event))return this.sendHumanTurn(c,{id:sendID,queued,kind:"message",body,topic,topic_event,quote,reply_to,files,receiver,contribution_review},human);
+    if(human&&!wire.topicOrganization(topic_event))return this.sendHumanTurn(c,{id:sendID,queued,kind:"message",body,topic,topic_event,quote,reply_to,files,receiver,contribution_review,beforeStore},human);
     const checks=consentChecks, {packet,members}=await this.groupTurnEvidence(c.id,checks), me=await this.groupRead(checks,"kv","person"), own=wire.groupMember(packet.state,me.person), reply=await this.groupReply(c.id,reply_to);
     quote=await this.groupReply(c.id,quote);
     const plain=[];for(const file of files)plain.push({name:wire.safeName(file.name),bytes:file.bytes instanceof Uint8Array?file.bytes:new Uint8Array(await file.arrayBuffer())});
@@ -5190,7 +5557,7 @@ export class Engine {
     if(skipped.length)for(const rec of copies)rec.skipped=skipped; // kept with the message: it lists them, and its delivery is never everyone's
     const roomOps=await this.roomStoredOps(c.id,checks,{lid},this.fp,null,null,packet);
     if(organization_batch){organization_batch.copies.push(...copies);organization_batch.checks.push(...checks);organization_batch.ops.push(...roomOps);const least=sentLeast(copies,skipped);return {id:copies[0].id,lid,state:least.state,detail:least.detail||"",copies:[...copies,...skipped].map(r=>({id:r.id,to:r.to,state:r.state,detail:r.detail||""}))};}
-    await this.commitReceiverCopies(copies,prepared,checks,roomOps,queued);this.changed();await this.keepSent(plain);
+    await this.commitReceiverCopies(copies,prepared,checks,roomOps,queued,beforeStore);this.changed();await this.keepSent(plain);
     if(queued)this.queueOutbox();else if(prepared)await this.post(prepared.delegation);else for(const rec of copies)if(rec.state==="queued")await this.post(rec);
     const least=sentLeast(copies,skipped);return {id:copies[0].id,lid,state:least.state,detail:least.detail||"",copies:[...copies,...skipped].map(r=>({id:r.id,to:r.to,state:r.state,detail:r.detail||""}))};
   }
@@ -5567,6 +5934,7 @@ export class Engine {
     if(!own?.devices.some(d=>d.address===forwarder.address&&d.fingerprint===forwarder.fingerprint)||!h.group_admission||h.group_admission!==members.epochs.get(this.fp))throw new Hold("invalid","Group PID history requires exact current own linked admission.");
     if(h.group_history&&!await this.ownHistoryAuthority(forwarder,checks))throw new Hold("invalid","Historical witness requires current own human devices.");
     if(h.v!==1||!wire.validID(h.id)||!wire.validID(h.lid)||!wire.validFingerprint(h.from_key)||h.ts<=0||!wire.validAddress(h.from)||h.reply_to&&!wire.validID(h.reply_to)||h.attachments.length>8||h.attachments.some(a=>!a.name||!Number.isSafeInteger(a.size)||a.size<0||a.size>(100<<20)||!wire.validHash(a.sha256)||a.blob))throw new Hold("invalid","Malformed historical group PID item.");
+    wire.checkTopic({...h,v:wire.Version2,conv});
     if(h.sub===wire.SubStatus) {
       if(h.pid||h.attachments.length||!h.ref)throw new Hold("invalid","Historical group status scope malformed.");
       try{wire.parseControl(h.sub,h.body);}catch(e){throw new Hold("invalid",e.message);}
@@ -5629,7 +5997,7 @@ export class Engine {
     // Retained own-member history is inert; only its lifecycle gate differs
     // from live delivery. Exact targets, author keys and requests still bind it.
     const retained=(h.sub==="excerpt"||!h.sub&&(["question","task","answer","result"].includes(h.kind)||progressOutput(h)||wire.proactiveAgent({...h,conv})||wire.agentTopicOrganization({...h,conv})))&&this.retainedAssistant(info,events);
-    if(!retiredEnd)await this.externalRole({...h,conv,replica:h.sub==="excerpt"},retained?{...info,state:"active"}:info,current,h.from,h.from_key,checks);
+    if(!retiredEnd&&!(wire.topicRename(h.topic_event)&&h.human&&!wire.agentAuthor(h.human)))await this.externalRole({...h,conv,replica:h.sub==="excerpt"},retained?{...info,state:"active"}:info,current,h.from,h.from_key,checks);
     await this.checkExternalReply({...h,conv},info,current,checks,true);
     if(wire.agentTopicOrganization({...h,conv}))await this.receivedOrganizationAuthor(c,h.from,h.from_key,checks,{...h,conv,v:wire.Version2},true);
     return info;
@@ -5654,7 +6022,7 @@ export class Engine {
     if(!sender || !n.replica || n.attachments.length)throw new Hold("invalid","Group history is not from a current device or carries unexpected bytes.");
     let h;try{h=wire.parseHistory(n.body);}catch(e){throw new Hold("invalid",e.message);}
     if((JSON.parse(n.body).attachments||[]).some(a=>a.blob?.id||a.blob?.size||a.blob?.sha256))throw new Hold("invalid","Historical group file is not a manifest.");
-    if(h.pid&&h.human?.proof.some(e=>e.role==="human")&&!wire.proactiveAgent({...h,conv:n.conv})&&!wire.guestAgentCopy(h))throw new Hold("invalid","Group human guest execution audience is not enabled.");
+    if(h.pid&&h.human?.proof.some(e=>e.role==="human")&&!wire.proactiveAgent({...h,conv:n.conv})&&!wire.guestAgentCopy(h)&&!wire.topicRename(h.topic_event))throw new Hold("invalid","Group human guest execution audience is not enabled.");
     if(h.pid||h.ref)return this.admitGroupParticipationHistory(n,env,pin,h,checks,packet,members, admission);
     if(h.kind!=="message"||h.sub||h.target||h.pid||h.agent_id||h.status||h.ref||h.origin&&h.origin!=="ui"||h.ts<=0||h.reply_to&&!wire.validID(h.reply_to))throw new Hold("invalid","Group history contains nonordinary input.");
     wire.checkTopic({...h,v:wire.Version2});
@@ -6449,8 +6817,8 @@ export class Engine {
       if (isNotice(row)) return this.noticeOps(await this.store.all("inbox"), row); // one card per host (client.supersedeNotices)
       return [{ s: "inbox", k: env.id, v: row }];
     }
-    if (n.v === wire.Version2 && JSON.parse(n.root).kind === "group") return this.mergeSendGroupOps(await this.admitGroupTurn(n, env, pin, base, admission),n,n.sub==="history"?wire.parseHistory(n.body).from_key:pin.fingerprint);
-    return this.mergeSendGroupOps(await this.admitConv(n, env, pin, base, admission),n,n.sub==="history"?wire.parseHistory(n.body).from_key:pin.fingerprint);
+    if (n.v === wire.Version2 && JSON.parse(n.root).kind === "group") return this.mergeSharedTopicTitleOps(await this.mergeSendGroupOps(await this.admitGroupTurn(n, env, pin, base, admission),n,n.sub==="history"?wire.parseHistory(n.body).from_key:pin.fingerprint),n,pin);
+    return this.mergeSharedTopicTitleOps(await this.mergeSendGroupOps(await this.admitConv(n, env, pin, base, admission),n,n.sub==="history"?wire.parseHistory(n.body).from_key:pin.fingerprint),n,pin);
   }
 
   async admitConv(n, env, pin, base, admission = null) {
@@ -6840,6 +7208,7 @@ export class Engine {
       const scope = item.human.author_pid && humanEvidence.scopes.get(item.human.author_pid);
       const author = scope ? scope.host.address === item.from && scope.host.fingerprint === item.from_key : [...humanEvidence.members.values()].some(p => p.devices.some(d => d.address === item.from && d.fingerprint === item.from_key));
       if (!author) throw new Hold("invalid", "Historical human attribution differs from captured consent.");
+      if(wire.topicRename(item.topic_event))await this.humanTurnAuthorization({...item,v:wire.Version2,conv:n.conv},humanEvidence,null,item.from,item.from_key,this.address,this.fp,true,checks);
       // Already-authorized own-member history is inert even after end; this
       // never admits guest sibling history or grants a fresh live audience.
     }
@@ -6906,7 +7275,7 @@ export class Engine {
         const inbox = await this.store.all("inbox"), outbox = await this.store.all("outbox");
         const t = inbox.find((m) => m.conv === n.conv && !m.control && !m.aside && m.lid === item.ref.id && m.fp === item.ref.fingerprint)
           || outbox.find((m) => m.conv === n.conv && !m.control && !m.aside && m.lid === item.ref.id && this.fp === item.ref.fingerprint);
-        if (t) extra.push(...(await this.dropCached(t, ctl)), ...(await this.blankRetracted(t, t.fp ? "inbox" : "outbox", checks)));
+        if (t) extra.push(...(await this.dropCached(t, ctl, checks)), ...(await this.blankRetracted(t, t.fp ? "inbox" : "outbox", checks)));
       }
       const result = [...ops, { s: "inbox", k: item.id, v: ctl }, { s: "lids", k: key, v: { id: item.id, hash: "", history: true } }, ...extra];
       result.checks = checks; return result;
@@ -7281,7 +7650,11 @@ export class Engine {
     if (this.running || this.revoked || !this.joined) return;
     this.session = wire.newID();
     this.running = true;
-    this.loop();
+    this.scheduledEpoch++;
+    this.scheduledResume=event=>{if(event.type!=="visibilitychange"||globalThis.document?.visibilityState==="visible")this.scheduledWake();};
+    for(const event of ["focus","online"])globalThis.addEventListener?.(event,this.scheduledResume);
+    globalThis.document?.addEventListener("visibilitychange",this.scheduledResume);
+    this.scheduledWake();this.loop();
   }
 
   // Managed workspace shutdown lets in-flight posts settle before its IDB
@@ -7298,6 +7671,8 @@ export class Engine {
   }
 
   stop() {
+    this.scheduledEpoch++;if(this.scheduledTimer!=null)this.scheduleClearTimeout(this.scheduledTimer);this.scheduledTimer=null;
+    if(this.scheduledResume){for(const event of ["focus","online"])globalThis.removeEventListener?.(event,this.scheduledResume);globalThis.document?.removeEventListener("visibilitychange",this.scheduledResume);this.scheduledResume=null;}
     this.receiveGeneration++;
     for (const ctrl of this.downloads) ctrl.abort();
     this.pictureGeneration++;
@@ -7328,6 +7703,7 @@ export class Engine {
   // or a long backoff. Only these events call it (no timer), and a page
   // shown again resumes at most once per resumeGap.
   resume(online = false) {
+    this.scheduledWake();
     if (!this.running || this.revoked || this.closing) return;
     const now = Date.now();
     if (this.connected && now - this.streamHeard <= resumeSilence) return;
@@ -7506,7 +7882,7 @@ export class Engine {
       if (teams) teams.connected(f.includes("teams1"));
       // This device reads conversations and the attention hint (it never
       // alerts from the stream: its service worker shows the relay's pushes).
-      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapConversationAudience, wire.CapEnv2, "notify1", wire.CapPerson, wire.CapControl, wire.CapHeadless, wire.CapDrive, wire.CapAgentIdentity, wire.CapGroupHumanParticipation, wire.CapGroup, wire.CapSendGroup, wire.CapRootSync, wire.CapGroupInvitationManage, wire.CapReadSyncV2, wire.CapOwnSyncV2, wire.CapOwnSyncV3, wire.CapHistoryArchive, wire.CapGuestAgent, wire.CapTopicParticipation, wire.CapRoom, wire.CapProactiveAgent, wire.CapMentionReaction, wire.CapAgentOrganization, wire.CapRequestSteer, wire.CapTopicOrganization, wire.CapModelSyncV2, wire.CapTopicStateSync, ...(f.includes("signals1") ? [wire.CapTyping] : [])]))); // rcv1 already implied by rm1; independent amr1/aorg1 retain the 28-cap producer ceiling and 32-cap reader bound
+      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapSharedTopicTitle, wire.CapConversationAudience, wire.CapEnv2, "notify1", wire.CapPerson, wire.CapControl, wire.CapHeadless, wire.CapDrive, wire.CapAgentIdentity, wire.CapGroupHumanParticipation, wire.CapGroup, wire.CapSendGroup, wire.CapRootSync, wire.CapGroupInvitationManage, wire.CapReadSyncV2, wire.CapOwnSyncV2, wire.CapOwnSyncV3, wire.CapHistoryArchive, wire.CapGuestAgent, wire.CapTopicParticipation, wire.CapRoom, wire.CapProactiveAgent, wire.CapMentionReaction, wire.CapAgentOrganization, wire.CapRequestSteer, wire.CapTopicOrganization, wire.CapModelSyncV2, wire.CapTopicStateSync, ...(f.includes("signals1") ? [wire.CapTyping] : [])]))); // rcv1 already implied by rm1; independent ttl1/amr1/aorg1 retain the 29-cap producer ceiling and 32-cap reader bound
       await this.publishPerson().catch(() => {});
       // These existing, coalesced recovery jobs can wait for old proofs or
       // network replies. They must not delay the current user's durable send.
@@ -7781,7 +8157,7 @@ export class Engine {
       return { ...m, ...h, id: m.id, at: h.ts * 1000, sub: "", fp: "", excerpt_pid: m.pid, claimed_key: h.from_key,
         attachments: m.attachments, history: true, synced_from: m.from, replica: true, state: "" };
     });
-    return [...received, ...sent].sort((a, b) => a.at - b.at);
+    return [...received, ...sent].filter(m=>!wire.topicRename(m.topic_event)).sort((a, b) => a.at - b.at);
   }
 
   // ---- the optional Google Drive space of a conversation (MEL-490)
@@ -8021,7 +8397,7 @@ export class Engine {
     if(seen){if(seen.hash!==hash)throw new Hold("conflicting_duplicate","Group control logical content differs.");const ops=[];ops.checks=checks;return ops;}
     const target=rec.targetRow;delete rec.targetRow;
     const ops=[{s:"inbox",k:env.id,v:rec},{s:"lids",k:key,v:{id:env.id,conv:n.conv,hash}}];
-    if(n.sub===wire.SubRetraction)ops.push(...await this.dropCached(target,rec),...await this.blankRetracted(target,target.to?"outbox":"inbox",checks));
+    if(n.sub===wire.SubRetraction)ops.push(...await this.dropCached(target,rec,checks),...await this.blankRetracted(target,target.to?"outbox":"inbox",checks));
     ops.checks=checks;return ops;
   }
 
@@ -8178,7 +8554,7 @@ export class Engine {
     const rec = { id: env.id, v: 3, control: true, from: env.from, fp: pin.fingerprint, kind: "message", sub: n.sub, body: n.body, ref: n.ref, at: this.now(), read: true,
       conv: n.conv, lid: n.lid, replica: !!n.replica, own, person: evidence.members.has(sp.person) ? sp.person : "", human: n.human, fan: n.fan || null };
     const ops = [{ s: "inbox", k: env.id, v: rec }, { s: "lids", k: key, v: { id: env.id, hash: "" } }];
-    if (n.sub === wire.SubRetraction) ops.push(...(await this.dropCached(turn, rec)), ...(await this.blankRetracted(turn, turn.fp ? "inbox" : "outbox", checks)));
+    if (n.sub === wire.SubRetraction) ops.push(...(await this.dropCached(turn, rec, checks)), ...(await this.blankRetracted(turn, turn.fp ? "inbox" : "outbox", checks)));
     ops.checks = checks; return ops;
   }
 
@@ -8252,7 +8628,7 @@ export class Engine {
       if (n.sub !== wire.SubReaction && pin.fingerprint !== ref.fingerprint) throw new Hold("invalid", "only the sender edits or deletes a message");
       if (n.sub === wire.SubRevision && (await this.refTombstoned("", ref))) rec.body = ""; // a revision after the deletion keeps no text
       const ops = [{ s: "inbox", k: env.id, v: rec }];
-      if (n.sub === wire.SubRetraction) ops.push(...(await this.dropCached(target, rec)), ...(await this.blankRetracted(target, inbound ? "inbox" : "outbox", checks)));
+      if (n.sub === wire.SubRetraction) ops.push(...(await this.dropCached(target, rec, checks)), ...(await this.blankRetracted(target, inbound ? "inbox" : "outbox", checks)));
       ops.checks = checks; return ops;
     }
     const conv = await this.store.get("convs", n.conv);
@@ -8279,7 +8655,7 @@ export class Engine {
       const inbox = await this.store.all("inbox"), outbox = await this.store.all("outbox");
       const t = inbox.find((m) => m.conv === n.conv && !m.control && !m.aside && m.lid === ref.id && m.fp === ref.fingerprint)
         || outbox.find((m) => m.conv === n.conv && !m.control && !m.aside && m.lid === ref.id && this.fp === ref.fingerprint);
-      if (t) ops.push(...(await this.dropCached(t, rec)), ...(await this.blankRetracted(t, t.fp ? "inbox" : "outbox", checks)));
+      if (t) ops.push(...(await this.dropCached(t, rec, checks)), ...(await this.blankRetracted(t, t.fp ? "inbox" : "outbox", checks)));
     }
     // A device that knows a newer roster than the sender's fan names
     // forwards the control, as history, to the devices the sender missed.
@@ -8696,7 +9072,7 @@ export class Engine {
   // say here, except what unfinished work needs, and drops the file copies
   // only they held: received ciphertext, and a kept copy of a sent file no
   // un-erased sent turn still has. Ids, states and receipts stay.
-  eraseOps(conv, inbox, outbox) {
+  async eraseOps(conv, inbox, outbox, checks=[]) {
     const ops = [], blanked = new Set();
     for (const r of [...inbox, ...outbox]) {
       if ((r.conv || "") !== conv || !r.body || !this.erasedRow(r) || (r.to ? retainedOut(r) : retainedIn(r))) continue;
@@ -8713,7 +9089,7 @@ export class Engine {
       if (a.blob?.id && !shown((x) => x.blob && x.blob.id === a.blob.id)) ops.push({ s: "files", k: "ct/" + a.blob.id, v: undefined });
       if (r.to && a.sha256 && !shown((x) => x.sha256 === a.sha256)) ops.push({ s: "files", k: "kept/" + a.sha256, v: undefined });
     }
-    return ops;
+    return this.scheduledGC(ops,checks);
   }
   // keptCount counts erased turns of conv whose text unfinished work keeps.
   keptCount(conv, inbox, outbox) {
@@ -8741,12 +9117,12 @@ export class Engine {
       if (n.key && n.lid) names.set(erasedKey(conv, n.key, n.lid), n);
     }
     if (!names.size) throw new Error("There is nothing here to delete.");
-    const deletion = wire.newID(), ops = [];
+    const deletion = wire.newID(), ops = [], checks = [];
     for (const [k, n] of names) { ops.push({ s: "erased", k, v: { conv, key: n.key, lid: n.lid, deletion, shared: false } }); this.erased.add(k); }
     let kept = 0;
     try {
-      ops.push(...this.eraseOps(conv, inbox, outbox)); kept = this.keptCount(conv, inbox, outbox);
-      await this.store.write(ops);
+      ops.push(...await this.eraseOps(conv, inbox, outbox, checks)); kept = this.keptCount(conv, inbox, outbox);
+      await this.store.write(ops,checks);
     } finally { await this.loadErased(); }
     this.changed();
     return { note: deletionNote(false, await this.shareErased(), kept) };
@@ -8763,14 +9139,14 @@ export class Engine {
     for (const r of [...await this.store.all("inbox"), ...await this.store.all("outbox")]) {
       if (!r.conv && r.control && r.ref && ids.has(r.ref.id) && (deviceHistoryPeer(r,r.to || r.from)) === peer) add(r.to ? this.fp : r.fp, r.id); // its messages' controls go with them
     }
-    const ops = [];
+    const ops = [], checks = [];
     for (const [k, n] of names) { ops.push({ s: "erased", k, v: { conv: "", key: n.key, lid: n.lid, deletion, shared: true } }); this.erased.add(k); }
     for (const m of thread) if (await this.store.get("kv", "topic/" + peer + "/" + m.id)) ops.push({ s: "kv", k: "topic/" + peer + "/" + m.id, v: undefined }); // its name and marks go with it
     let kept = 0;
     try {
       const inbox = await this.store.all("inbox"), outbox = await this.store.all("outbox");
-      ops.push(...this.eraseOps("", inbox, outbox)); kept = this.keptCount("", inbox, outbox);
-      await this.store.write(ops);
+      ops.push(...await this.eraseOps("", inbox, outbox, checks)); kept = this.keptCount("", inbox, outbox);
+      await this.store.write(ops,checks);
     } finally { await this.loadErased(); }
     this.changed();
     return { note: deletionNote(true, 0, kept) };
@@ -8844,7 +9220,7 @@ export class Engine {
     try { part = wire.parseControl(wire.SubClear, n.body); } catch (e) { throw new Hold("invalid", "a malformed conversation deletion"); }
     if (!this.me || env.from === this.address || !this.me.devices.some((d) => d.address === env.from && d.fingerprint === pin.fingerprint)) throw new Hold("invalid", "a conversation deletion comes only from another current device of this person");
     if (!(await this.store.get("convs", n.conv)) && !(await this.groupRecord(n.conv))) throw new Hold("proof_pending", "the conversation is not here (yet)");
-    const turns = [n.ref, ...part.turns], ops = [{ s: "inbox", k: env.id, v: { id: env.id, v: 3, control: true, from: env.from, fp: pin.fingerprint, kind: "message", sub: wire.SubClear, body: n.body,
+    const checks=[],turns = [n.ref, ...part.turns], ops = [{ s: "inbox", k: env.id, v: { id: env.id, v: 3, control: true, from: env.from, fp: pin.fingerprint, kind: "message", sub: wire.SubClear, body: n.body,
       ref: n.ref, conv: n.conv, lid: n.lid, replica: true, own: true, person: this.me.person, fan: n.fan || null, at: this.now(), read: true } }];
     const prior = this.erased, next = new Set(prior);
     for (const t of turns) {
@@ -8853,14 +9229,14 @@ export class Engine {
       next.add(k);
     }
     this.erased = next;
-    try { ops.push(...this.eraseOps(n.conv, await this.store.all("inbox"), await this.store.all("outbox"))); } finally { this.erased = prior; }
+    try { ops.push(...await this.eraseOps(n.conv, await this.store.all("inbox"), await this.store.all("outbox"),checks)); } finally { this.erased = prior; }
     // forwardClear: devices of this person the sender's fan roster did not have.
     const f = (n.fan || []).find((x) => x.person === this.me.person), old = f && f.roster !== this.me.hash && (this.me.steps || []).find((st) => st.hash === f.roster);
     if (old) {
       const devs = this.me.devices.filter((d) => d.address !== this.address && d.address !== env.from && !old.devices.includes(d.address + "|" + d.fingerprint));
       if (devs.length) ops.push(...(await this.clearCopies(devs, n.conv, wire.newID(), turns, admission)).map((r) => ({ s: "outbox", k: r.id, v: r })));
     }
-    return ops;
+    ops.checks=checks;return ops;
   }
 
   // eraseArrivals keeps only the skeleton of a turn arriving after its
@@ -8885,13 +9261,13 @@ export class Engine {
     this.erasing = (async () => { do { this.eraseAgain = false; await this.sweepErased().catch(() => {}); } while (this.eraseAgain); })().finally(() => { this.erasing = null; });
   }
   async sweepErased() {
-    const inbox = await this.store.all("inbox"), outbox = await this.store.all("outbox"), ops = [];
-    for (const conv of new Set([...this.erased].map((k) => k.slice(0, k.indexOf("|"))))) ops.push(...this.eraseOps(conv, inbox, outbox));
-    if (ops.length) { await this.store.write(ops); this.changed(); }
+    const inbox = await this.store.all("inbox"), outbox = await this.store.all("outbox"), ops = [], checks = [];
+    for (const conv of new Set([...this.erased].map((k) => k.slice(0, k.indexOf("|"))))) ops.push(...await this.eraseOps(conv, inbox, outbox,checks));
+    if (ops.length) { await this.store.write(ops,checks); this.changed(); }
     if ((await this.store.all("erased")).some((r) => !r.shared && r.conv)) await this.shareErased();
   }
 
-  async dropCached(m, retraction) {
+  async dropCached(m, retraction, checks=[]) {
     const ops = [];
     const atts = m.attachments || [];
     if (!atts.length) return ops;
@@ -8912,7 +9288,7 @@ export class Engine {
       if (a.blob && a.blob.id && !stillShown((x) => x.blob && x.blob.id === a.blob.id)) ops.push({ s: "files", k: "ct/" + a.blob.id, v: undefined });
       if (a.sha256 && !stillShown((x) => x.sha256 === a.sha256)) ops.push({ s: "files", k: "kept/" + a.sha256, v: undefined });
     }
-    return ops;
+    return this.scheduledGC(ops,checks);
   }
 
   // controlsOn resolves what ctls (this device's control rows) did to one
@@ -9039,7 +9415,7 @@ export class Engine {
     const sent = conv ? await this.sendConvControl(await this.store.get("convs", conv) || await this.groupRecord(conv), ref, sub, body)
       : await this.sendDeviceControl(kept === "outbox" ? rec.to : rec.from, ref, sub, body);
     if (sub === wire.SubRetraction) for (;;) {
-      const checks = [], drop = [...(await this.dropCached(rec, { control: true, sub, ref, conv: conv || "" })), ...(await this.blankRetracted(rec, kept, checks))];
+      const checks = [], drop = [...(await this.dropCached(rec, { control: true, sub, ref, conv: conv || "" }, checks)), ...(await this.blankRetracted(rec, kept, checks))];
       try { if (drop.length) await this.store.write(drop, checks); break; }
       catch (e) { if (!(e instanceof StoreConflict)) throw e; } // refresh custody; never resend the control
     }
@@ -9165,7 +9541,16 @@ export class Engine {
   }
 
   async overview(listArchived = true) {
+    const seq=this.seq;
+    if(this.unreadBuild?.seq===seq&&this.unreadBuild.mode===listArchived)return this.unreadBuild.promise;
+    const task={seq,mode:listArchived,promise:this.buildOverview(listArchived,seq)};
+    this.unreadBuild=task;
+    try{return await task.promise;}finally{if(this.unreadBuild===task)this.unreadBuild=null;}
+  }
+
+  async buildOverview(listArchived = true, capturedSeq = this.seq) {
     const read=await this.readView(), persons=read.persons;
+    const notify=await this.notifyView(),mutes=new Set(notify?.mutes||[]),unreadRows=[],collectUnread=this.unreadIndex?.seq!==capturedSeq;
     const people = persons.map((p) => this.personView(p));
     const listedSeen = new Set();
     for (const m of this.members.list) {
@@ -9201,9 +9586,16 @@ export class Engine {
       }
       // Use the same resolved revisions/retractions as the open conversation.
       const presented = new Map((await this.dm(c.id, read)).messages.map(m => [m.id, m]));
-      const line = (m) => (presented.get(m.id)?.deleted ? "Message deleted" : presented.get(m.id)?.edited ? firstLine(presented.get(m.id).text || "") : m.sub === "event" ? this.eventText(m.body, peer, null, participations.find(p => p.pid === m.pid && p.role === "human") || false, { originals, member })
+      if(collectUnread&&[...presented.values()].some(m=>m.unread&&!m.deleted)){
+        const full=msgs,assigned=chatTopicAssignments(full),raw=new Map(full.map(m=>[m.id,m])),topics=(await this.chatTopicSummaries(c.id,full,read,assigned)).topics,titles=new Map(topics.map(t=>[t.id,t.title]));
+        for(const m of presented.values())if(m.unread&&!m.deleted){
+          const original=raw.get(m.id)||{},row={kind:"chat",conv:c.id,topic:assigned.get(m.lid)||"",topic_title:titles.get(assigned.get(m.lid))||"",id:m.id,lid:m.lid||m.id,author:m.send_group_author||original.fp||original.claimed_key||this.fp,dir:m.dir,at:m.at,label:firstLine(m.from||this.address),preview:unreadPreview(m)};
+          row.key=unreadKey(row);unreadRows.push(row);
+        }
+      }
+      const line = (m) => (presented.get(m.id)?.deleted ? "Message deleted" : presented.get(m.id)?.edited ? bodyPreview(presented.get(m.id).text || "") : m.sub === "event" ? this.eventText(m.body, peer, null, participations.find(p => p.pid === m.pid && p.role === "human") || false, { originals, member })
         : !m.body && (m.attachments || []).length ? "📎 " + m.attachments.map((a) => wire.safeName(a.name)).join(", ") // files only: their names
-          : firstLine(m.body));
+          : bodyPreview(m.body));
       const last = msgs.length ? this.lastEvent(msgs.at(-1), [peer, ...originals], pinned) : undefined;
       dms.push({ id: c.id, peer: this.personView(peer), ...(member ? {} : { members: originals.map(p => this.personView(p)) }), role: member ? "member" : participations.some(p => p.role === "human" && p.host?.address === this.address && p.host.fingerprint === this.fp) ? "human_guest" : "visitor", created: iso(c.created * 1000), mine: c.creator === this.address, count: msgs.length,
         title: msgs[0] ? line(msgs[0]) : "", last: msgs.length ? wire.topicOrganization(msgs.at(-1).topic_event)?await this.topicOrganizationNotice(c.id,msgs.at(-1).topic):line(msgs.at(-1)) : "",
@@ -9218,11 +9610,18 @@ export class Engine {
     for(const g of (read.groups).filter(v=>v?.root&&v?.context&&Array.isArray(v.records))) {
       const packet=wire.parseGroupContext(g.context), conv=packet.state.conv, msgs=(await this.convMessages(conv,inbox,outbox,read));
       const view=await this.groupThread(conv,read), shown=new Set(view.messages.map(m=>m.id)),visible=msgs.filter(m=>shown.has(m.id));
+      if(collectUnread&&view.messages.some(m=>m.unread&&!m.deleted)){
+        const assigned=chatTopicAssignments(msgs),raw=new Map(msgs.map(m=>[m.id,m])),topics=(await this.chatTopicSummaries(conv,msgs,read,assigned)).topics,titles=new Map(topics.map(t=>[t.id,t.title]));
+        for(const m of view.messages)if(m.unread&&!m.deleted){
+          const original=raw.get(m.id)||{},row={kind:"chat",conv,topic:assigned.get(m.lid)||"",topic_title:titles.get(assigned.get(m.lid))||"",id:m.id,lid:m.lid||m.id,author:m.send_group_author||original.fp||original.claimed_key||this.fp,dir:m.dir,at:m.at,label:firstLine(m.from||this.address),preview:unreadPreview(m)};
+          row.key=unreadKey(row);unreadRows.push(row);
+        }
+      }
       const parts=await this.participationsOf({id:conv,kind:"group",root:g.root},read).catch(()=>[]),last=visible.length?this.lastEvent(visible.at(-1),view.members):undefined;
       this.needsYouOf(conv,parts,visible,inbox.filter(r=>r.control&&r.conv===conv),needsYou,heldTurns,words,privateReports);
       if(this.erasedConv(conv)&&!visible.some(m=>!m.sub))continue; // deleted here, and no later turn
       const latestView = view.messages.at(-1);
-      const latestText = !latestView ? "" : latestView.deleted ? "Message deleted" : firstLine(latestView.edited ? latestView.text || "" : latestView.event || latestView.body);
+      const latestText = !latestView ? "" : latestView.deleted ? "Message deleted" : latestView.edited ? bodyPreview(latestView.text || "") : latestView.event ? firstLine(latestView.event) : bodyPreview(latestView.body);
       const previewText=wire.topicOrganization(visible.at(-1)?.topic_event)?await this.topicOrganizationNotice(conv,visible.at(-1).topic):latestText;
       dms.push({id:conv,kind:"group",title:packet.state.title,peer:{label:packet.state.title,address:"",state:""},members:view.members,role:view.role,frozen:view.frozen,created:iso(packet.root.created*1000),mine:packet.root.creator.address===this.address,count:visible.length,last:previewText,...(latestView?{last_id:previewMessageID(view.messages,latestView)}:{}),last_at:iso(visible.length?visible.at(-1).at:packet.root.created*1000),unread:view.messages.filter(m=>m.unread&&!m.deleted).length,held:0,waiting:visible.filter(m=>!!m.to&&["waiting","queued"].includes(m.delivery||m.state)).length,
         guests:parts.filter(p=>p.state==="active").length,decide:0,...(last?{last_event:last}:{})});
@@ -9231,7 +9630,11 @@ export class Engine {
     // countDecisions); a browser runs no agent, so its items carry none.
     for (const d of dms) d.decide = needsYou.filter((x) => x.conv === d.id && x.id && (x.actions || []).length).length;
     for (const p of people) if (links.has(p.person)) p.agents = links.get(p.person);
+    read.collectUnread=collectUnread;read.unreadDeviceRows=[];
     const { threads, topics } = await this.topicOverview(listArchived,read); // ?topics=1: archived topics counted, not listed
+    unreadRows.push(...read.unreadDeviceRows);
+    const deviceTotal=threads.reduce((n,t)=>n+t.unread,0)+(listArchived?0:topics.reduce((n,t)=>n+t.archived_unread,0));
+    const unreadTotal=dms.reduce((n,d)=>n+d.unread,0)+deviceTotal,alertTotal=dms.reduce((n,d)=>n+(mutes.has(d.id)?0:d.unread),0)+deviceTotal;
     const held = (await this.store.all("held")).filter(h => !h.notice_archived);
     const now = Math.floor(this.now() / 1000);
     const link = this.link && !["linked", ""].includes(this.link.state) ? { state: this.link.state === "pending" && now >= this.link.expires ? "expired" : this.link.state, detail: this.link.detail || "" } : undefined;
@@ -9263,21 +9666,21 @@ export class Engine {
     }));
     const asks = (await this.linkRequests()).filter((r) => r.state === "pending")
       .map((r) => ({ id: r.id, address: r.address, name: r.address.split("/")[1], fingerprint: r.fingerprint, requested_at: iso(r.requested_at * 1000), expires: iso(r.expires * 1000), state: r.state }));
-    return {
+    const overview = {
       // The build the skin reloads for when it changes: this page's, until
       // its server serves another (outdate).
-      demo: false, seq: this.seq, version: this.outdated?.stale && this.outdated.reload ? this.version : this.pageBuild || this.version, release: "",
+      demo: false, seq: capturedSeq, unread_total:unreadTotal,alert_total:alertTotal, version: this.outdated?.stale && this.outdated.reload ? this.version : this.pageBuild || this.version, release: "",
       update_required: this.outdated?.refused ? { latest: this.outdated.latest, url: this.outdated.url || undefined,
         auto: this.outdated.stale ? (this.outdated.reload ? "" : "Reload this page to get your server's current version.")
           : this.version && this.version === this.pageBuild ? "Your server does not offer it to this page yet: ask its admin to update the server." : "" } : undefined,
       me: { address: this.address, fingerprint: this.fp, responder: "", responder_dir: "", browser: true, agent: false }, // a browser runs no agent
       workspace: { name: this.workspaceName, server: this.relayHost() }, agent_devices: [...this.agentDevices], model_reports: await this.modelReports(),
       device: { online: this.connected, revoked: this.revoked, persisted: this.storage ? this.storage.persisted : null }, receive_status: await this.receiveStatus(),
-      threads, topics, topic_list: true, review: [...await this.activeReportItems(inbox, outbox, words), ...await this.deviceAdminReview()], needs_you: needsYou, held: heldTurns, quarantine: held.map(h => ({ ...quarantineItem(h), reason: holdText(h.reason, words(h.from)) })),
+      threads, topics, topic_list: true, schedules: true, review: [...await this.activeReportItems(inbox, outbox, words), ...await this.deviceAdminReview()], needs_you: needsYou, held: heldTurns, quarantine: held.map(h => ({ ...quarantineItem(h), reason: holdText(h.reason, words(h.from)) })),
       directory: { status: this.members.listed, current: this.members.current, at: this.members.at ? iso(this.members.at) : undefined,
         truncated: this.members.truncated, members: this.members.list.filter((m) => m.address !== this.address)
           .map((m) => ({ address: m.address, presence: this.members.current ? m.presence : "", joined: iso((m.joined || 0) * 1000) })) },
-      notify: await this.notifyView(),
+      notify,
       files: { max_file: wire.BrowserMaxFile, max_message: wire.BrowserMaxMessage, max_count: 8 },
       persons: true, agents: true, // agents on the other person's computer: invited, asked and dismissed here, never run here
       groups:true, group_invitations:await this.groupInvitations(),
@@ -9285,6 +9688,23 @@ export class Engine {
       // A browser is always a person's device (never a service).
       role: this.me ? "person" : "unset", link, links: asks.length ? asks : undefined, history: history.length ? history : undefined,
     };
+    if(collectUnread&&(!this.unreadIndex||this.unreadIndex.seq<=capturedSeq))this.unreadIndex={seq:capturedSeq,rows:unreadRows,sorted:false};
+    return overview;
+  }
+
+  async unreadPage(q) {
+    const raw=q.get("limit"),limit=raw===null||raw===""||raw==="0"?TOPICS.pageDefault:/^\d+$/.test(raw)?Number(raw):NaN;
+    if(!Number.isInteger(limit)||limit<1||limit>TOPICS.pageMax)throw Error("That unread list request is not valid.");
+    const after=q.get("after")||"",cursor=after?parseUnreadCursor(after):null;
+    if(!this.unreadIndex||this.unreadIndex.seq!==this.seq){
+      if(this.unreadBuild?.seq===this.seq)await this.unreadBuild.promise;else await this.overview(false);
+    }
+    const index=this.unreadIndex;if(!index)throw Error("Unread projection is unavailable.");
+    if(!index.sorted){index.rows.sort(unreadOrder);index.sorted=true;}
+    let start=0;
+    if(cursor){let low=0,high=index.rows.length;while(low<high){const mid=(low+high)>>>1,r=index.rows[mid];if(unreadAt(r)<cursor.at||unreadAt(r)===cursor.at&&r.key>cursor.key)high=mid;else low=mid+1;}start=low;}
+    const end=Math.min(start+limit,index.rows.length),rows=index.rows.slice(start,end).map(r=>({...r}));
+    return {rows,total:index.rows.length,content:index.seq,seq:index.seq,...(end<index.rows.length?{next:unreadCursor(index.rows[end-1])}:{})};
   }
 
   async dm(id, read = null) {
@@ -9869,7 +10289,7 @@ export class Engine {
     if (!recs.length) throw new Error("No authorized human audience device.");
     for (const r of recs) { const gate = await this.humanGate(c, r, checks); if (gate.why) throw new Error(gate.why); }
     const consentEvents=c.kind==="group"?[...await this.convEvents(c.id,checks),...await Promise.all(h.proof.map(async e=>({e,hash:await wire.eventHash(e)})))]:[];
-    try { await this.commitReceiverCopies(recs, prepared, checks, c.kind==="group"?await this.roomStoredOps(c.id,checks,recs[0],this.fp,consentEvents,evidence.members):[],n.queued); }
+    try { await this.commitReceiverCopies(recs, prepared, checks, c.kind==="group"?await this.roomStoredOps(c.id,checks,recs[0],this.fp,consentEvents,evidence.members):[],n.queued,n.beforeStore); }
     catch (e) {
       if (e instanceof StoreConflict && attempt < 3) return this.sendHumanTurn(c, original, h, x, attempt + 1);
       throw e;
@@ -11837,7 +12257,7 @@ export class Engine {
 
   // api answers the page's requests as the daemon's page API does.
   async api(path, body) {
-    const sending = ["/api/send", "/api/dm/send", "/api/dm/agent/ask", "/api/request/followup", "/api/topic/organization/apply", "/api/topic/organization/undo", "/api/history/contribution/apply"].includes(path) || path === "/api/act" && ["reply", "do_it"].includes(body?.do);
+    const sending = ["/api/send", "/api/dm/send", "/api/dm/agent/ask", "/api/request/followup", "/api/topic/organization/apply", "/api/topic/organization/undo", "/api/history/contribution/apply", "/api/schedule/create", "/api/schedule/edit", "/api/schedule/cancel", "/api/schedule/send_now"].includes(path) || path === "/api/act" && ["reply", "do_it"].includes(body?.do);
     if (sending && this.closing) throw Error("This workspace is closing. Your draft is kept.");
     const request = this.apiResult(path, body);
     if (sending) { this.sendRequests ??= new Set(); this.sendRequests.add(request); }
@@ -11869,6 +12289,7 @@ export class Engine {
 
       }
     }
+    if(u.pathname==="/api/schedules"||u.pathname.startsWith("/api/schedule/"))return this.scheduleAPI(u,body);
     switch (u.pathname) {
     case "/api/groups/new": return {id:await this.createGroup(body.title)};
     case "/api/groups/invitations": return this.groupInvitations();
@@ -11896,6 +12317,7 @@ export class Engine {
     }
     case "/api/typing/preferences": return this.setTypingPreferences(body);
     case "/api/overview": return this.overview(u.searchParams.get("topics") !== "1");
+    case "/api/unread": return this.unreadPage(u.searchParams);
     case "/api/dm": { const id=u.searchParams.get("id"),read=await this.readView(id);return this.decorateChatTopics(await this.dm(id,read),read); }
     case "/api/thread": return this.thread(u.searchParams.get("id"));
     case "/api/dm/new": return { id: await this.newDM(body.address) };

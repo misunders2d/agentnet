@@ -465,9 +465,57 @@ types are the Go structs in `internal/ui/*.go`, generated into
   learned during the visit remain unread. Acknowledgments use
   `{do:"read",ids,attention:{id:{rev,writer}}}` with the exact full observed
   generation; never clear by revision alone or by an old cached entry. Deduplicate
-  pending/successful reads by generation and retain the existing normal open-topic
-  read policy. No polling or viewport observer is required. Linked-device marks
+  pending/successful reads by generation. Acknowledge only meaningfully visible
+  rows in the active, focused chat: opening a topic must not read its unseen tail,
+  a one-pixel sliver or content covered by the composer/footer. Tall messages
+  count once at least half the available timeline viewport is visible; ordinary
+  rows count once at least half the row is visible. Re-evaluate during scrolling
+  and layout changes without scanning offscreen history. Keep the visit and
+  full-generation fences above; no polling. Linked-device marks
   use `rd2`, which succeeds/implies `rd1`; unchanged refs-only carriers remain V1.
+- Unread overview and Review: optional `overview.unread_total` is the full
+  accessible effective count, including Main, named, Done/Archived topics and
+  marked outgoing turns. `alert_total` applies local conversation mutes to that
+  same set; it does not change read state or notification consent. An absent
+  total is unknown, never zero. Do not add topic or archived subtotals again.
+  Optional `GET /api/unread?after=&limit=` returns display/navigation rows with
+  an uncapped `total`, default50/max200 pages and captured `content`/`seq`.
+  Keep this section separate from approvals; visiting it never accepts or runs
+  work. Use the returned stable `key` for deduplication and the selected `id`
+  plus exact chat/topic or device scope for navigation. Refresh loaded prefixes
+  on durable changes, reject stale responses and preserve pointer/focus order.
+  Optional literal `topic_title` supplies the resolved name even before the
+  topic was opened; `label` remains the author. Empty chat topic means Main.
+- Native notification privacy: when `overview.notify.preview_default` is
+  present, offer Default, Full, Sender and Hidden through the optional
+  `/api/notify/preview` route. Empty `preview` uses the returned host default;
+  never infer it from the operating system. Full shows locally resolved
+  content, Sender only the verified author with generic text. Hidden and Sender
+  without a verified author retain fixed activity, reminder, decision or security
+  notices without names or caller text. Saving this choice neither enables alerts nor changes mutes,
+  permissions, sound or lock-screen rules. Do not offer it for closed-page
+  browser push, which stays generic. The existing macOS banner mechanism
+  cannot navigate a click to the exact message; state that limit honestly.
+- Scheduled messages: offer the optional routes only with `overview.schedules`.
+  Use a separate durable Save for ordinary human DM/group/existing-topic drafts;
+  do not call normal send, clear a draft early or show an optimistic sent bubble.
+  Show the chosen timezone, a future instant, approved audience and the local
+  running/page-open requirement. Preserve an unconfirmed save's immutable ID,
+  payload and actual files across navigation. Retry that same ID with re-staged
+  actual files; a presence lookup alone never clears a draft. A reload cannot
+  recover file bytes and must not automatically resend or allocate a replacement
+  ID. Display `sent` as queued, keep revision conflicts visible, and require an
+  explicit reviewed audience for widening; ordinary edits and Send now retain
+  the saved ceiling. See the route reference for all five states and actions.
+  Comic and the shared controller use the same purpose-specific recovery key,
+  `agentnet.messenger.schedule-save.<workspace-id>`, with only attempt ID,
+  conversation and file names/sizes. The shared in-memory ledger preserves the
+  creating skin's draft namespace: another skin may settle that exact ID but
+  cannot consume its guarded draft-clear. Cold tokens are owner-agnostic and
+  require explicit Check or Forget; they do not defer self-updates. Actual
+  in-memory saving/uncertain attempts do defer reload, including when storage
+  is unavailable. Pass the existing draft namespace as the shared controller's
+  `owner`, and destroy controllers before replacing their view or binding.
 - Standing grants: GET `/api/approvals` lists what `agentnet approvals` does:
   `{questions[{address, status?}|{person, label, status}],
   tasks[{address, fingerprint, status}|{person, label, status}],
@@ -542,7 +590,10 @@ types are the Go structs in `internal/ui/*.go`, generated into
   today; never ask for a typed path.
 - Agents: `/api/dm/agent/invite`, `/decide`, `/dismiss`, `/ask` under that prefix.
 - Notifications: `/api/notify/enable`, `/disable`, `/mute`, `/allow`, `/seen`,
-  plus, in a browser only, GET `/api/notify/resolve?chan=...`.
+  optional native `/preview`, plus, in a browser only, GET `/api/notify/resolve?chan=...`.
+- Scheduled messages, when `overview.schedules`: GET `/api/schedules` and
+  `/api/schedule/audience`; POST `/api/schedule/create`, `/edit`, `/cancel`,
+  `/send_now`. Files use the existing `host.stage` values, never native paths.
 - Files: `/api/upload/discard` (this computer's program and Android only),
   `/api/file/request`; use host stage/file for platform differences. On a
   computer, `POST /api/file/open-image` `{id, dir: "in"|"out", index}` asks
@@ -635,12 +686,17 @@ types are the Go structs in `internal/ui/*.go`, generated into
   Mark done carries no conclusion), `concluded_by`, `pending`, `renamed`,
   `auto_title`, `quiet_since`; `/api/thread` adds `topic`. GET
   `/api/topics?peer=&state=&q=&before=&limit=` pages `{topics, next,
-  matched}`. A trimmed non-empty search omits `state` on every page and searches
+  matched}`, unread first with activity time, ID and peer tie breaks. Cursors
+  are opaque comparison positions; an old chronological cursor requires a
+  first-page reload. Refill the loaded prefix on live changes and deduplicate
+  scoped IDs. Freeze displayed order under pointer/focus/selection, updating
+  counts without moving the target; vanished rows cannot act. A trimmed
+  non-empty search omits `state` on every page and searches
   Active, Done and Archived together within the same peer/conversation scope;
   results keep their actual state. Clearing search restores the selected status
   tab. POST `/api/topic/rename` `{peer,id,title}`, `/api/topic/done`
   and `/api/topic/reopen` `{peer,id,count}` (`count`: the messages shown).
-  Names, device-chat Done/Reopen and Archive follow this person's own
+  Device-chat names, Done/Reopen and Archive follow this person's own
   linked devices, never other people; say so. People DMs/groups
   keep a main flow and opt-in topics: `/api/dm` adds `topics[]`, messages
   have derived `topic` and optional shared `topic_event`, and
@@ -652,8 +708,14 @@ types are the Go structs in `internal/ui/*.go`, generated into
   `{conv|peer,id:"",ids:[...],counts?:{id:shownCount}}`. Offer one confirmation and a six-second
   pending Undo before calling the host. Delete for me in people chats
   affects only this person's devices; others keep their copies. Archive
-  and names follow this person's own linked devices only; new
-  messages/shared actions clear an archive. Comic implements these controls
+  follows this person's own linked devices only; new messages/shared actions
+  clear an archive. A named people-topic rename is shared with everyone who
+  has access, including authorized topic guests. Say that before submitting;
+  an empty name restores the automatic name for everyone. Existing private
+  names are not published until the next explicit rename. Main-flow labels
+  remain personal. Admitted changes converge by revision and original writer;
+  a stale rename is refused for explicit retry. Renaming changes no topic ID,
+  access, message, status or read state. Comic implements these controls
   through Host API v1 only, as do Classic and Zoom in the agentnet-skins
   collection.
 - Topic organization uses `/api/topic/organization/preview` and `/apply` with
@@ -669,13 +731,20 @@ types are the Go structs in `internal/ui/*.go`, generated into
   refuses intervening changes. See the route reference for sent results.
   These agent moves and the new explicitly human-to-Main wire shape require
   independent `aorg1`; ordinary canonical-PID agent reactions require `amr1`.
-  Shipped `org1`/`agr1`/`rm1` meanings are unchanged. v27 advertises at most 26
-  signed names; readers still parse 32 names and records stay bounded at 1024
-  bytes. Missing readers retain their own copies; history/archive/repack keeps
+  Shipped `org1`/`agr1`/`rm1` meanings are unchanged. Shared topic renames add
+  the independent `ttl1` gate. v33 advertises at most 29 signed names; readers
+  still parse 32 names and records stay bounded at 1024 bytes. Missing readers
+  retain their own copies; history/archive/repack keeps
   each extension independently and never runs the imported work.
 - Headless: a request message may carry `exec` `{state, at, host, stale?, attempt?, detail?}`,
   the executing host's own signed word (never delivery, presence or a timer);
-  show it apart from delivery and say when it is stale. A review notice may carry
+  show it apart from delivery and say when it is stale. Current native activity
+  may include `Thinking: ` followed by a host-filtered line of at most120
+  characters, alongside the fixed lifecycle/tool labels. Display usable wording
+  literally in the current request/attempt's Working slot, replacing the prior
+  line; never render it as Markdown or append chat messages. Unsupported or
+  absent detail keeps the ordinary generic activity. Activity is not an answer,
+  delivery receipt or new permission. A review notice may carry
   `report` `{host, at, items[{id, from, key, kind, state, blocker, since, attempt, excerpt?, actionable?, conv?, proposal?, native?, result?}]}`:
   a snapshot at `at`, never a live queue; offer actions only for `actionable`
   items, through `POST /api/operator/decide` `{host, id, key, action, expect,

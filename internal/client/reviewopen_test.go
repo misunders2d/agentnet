@@ -109,7 +109,7 @@ func TestReviewClickOpensReview(t *testing.T) {
 	q, _ := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "q", Kind: envelope.KindQuestion})
 	waitState(t, w.bob, q.ID, stateHeld)
 	eventually(t, "notification", func() bool { return n.count() == 1 })
-	if !strings.HasSuffix(n.last(), "Click to review it.") {
+	if n.last() != "AgentNet: A request needs your decision" {
 		t.Fatalf("body: %q", n.last())
 	}
 	click := n.lastClick()
@@ -144,7 +144,7 @@ func TestReviewClickOpensReview(t *testing.T) {
 	t2, _ := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "t", Kind: envelope.KindTask})
 	waitState(t, w.bob, t2.ID, stateAwaiting)
 	eventually(t, "second notification", func() bool { return n.count() == 2 })
-	if !strings.HasSuffix(n.last(), "2 requests need your decision. Click to review them.") {
+	if n.last() != "AgentNet: A request needs your decision" {
 		t.Fatalf("batch body: %q", n.last())
 	}
 	os.Remove(log)

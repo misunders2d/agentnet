@@ -1,5 +1,42 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+## Active work — v0.8.33, not released
+
+The owner-approved [publication goal](plans/V0_8_33_GOAL.md) and root-edited
+[checklist](plans/V0_8_33.md) govern the active release. Its sixteen tracks include
+shared renaming, inline video, local scheduled sending, damaged Android skin-cache
+recovery, unread navigation and Review, notification privacy and indicators,
+native thinking detail, emoji recents and readable mention previews. These are
+part of this release; the older backlog wording in historical records is superseded.
+
+Native/browser scheduling, shared-title and unread projections have focused
+source evidence and independent reviews. Comic emoji, video, scheduling and unread
+Review now have complete focused desktop/narrow rendered passes. Shared rename
+and automatic-title reset also pass on the phone; the compact topic menu fits and
+remains hit-testable at 320 px. The fixture's relative font URLs were corrected
+to use the production loader rules, with zero unexplained resource errors.
+The later cross-skin scheduling owner fence has focused tests and independent
+review; the final integrated candidate must include both changes.
+Android indicator/fullscreen source is reviewed, with Go race and pure Kotlin
+checks; this is not an AAR/app build or physical-device acceptance. Rust source,
+standalone entry parity and native/platform gates remain open. Shared titles now
+pass the full signed fixture against real IndexedDB, including close/reopen;
+the complete scheduling fixture also passes against real IndexedDB, with
+435 assertions and sixteen close/reopens. Its earlier timer failure came from
+awaiting only the first of queued lifecycle drains; the reviewed bounded test
+join preserves every timing assertion and leaves production unchanged. Real
+quota pressure, crash and multi-context persistence remain unqualified.
+Shared visibility, activity, video and scheduling helpers have focused evidence
+and independent review. Classic now passes its complete focused desktop/phone
+entry checks, including shared rename/reset, scheduling with actual Files and
+video unload/revoke. Zoom and Holonet integration still have open entry gates.
+
+Android schema 80→82 preservation and one-install/cold-cache recovery tooling is
+prepared in ignored copies, not executed. Retain the pre-Activity-only database
+boundary and original profile. No v33 public artifacts, Hub rollout or whole
+release qualification is claimed. Preserve valid v32 evidence and known limits
+below; complete the goal's integrated gates before publication.
+
 ## Current release — v0.8.32, October 16, 2026
 
 [Download v0.8.32](https://github.com/misunders2d/agentnet/releases/tag/v0.8.32),
@@ -70,8 +107,8 @@ D1/D2/D3 reviews. All four owned helpers are collected and closed; user panes an
 plans are preserved. MEL-645 and MEL-647 are Done. Broader MEL-610/646/644 remain
 open for unproved acceptance; MEL-641 lacks exact incident correlation and MEL-587
 WebKit exit heap corruption remains an authorized unresolved carry-forward.
-MEL-648 icon badges are separately scheduled for v0.8.33; MEL-615 inline videos
-remain non-blocking Backlog. Projects remains reserved for v0.9.0.
+MEL-648 icon badges and MEL-615 inline video now belong to the approved v33
+package above. Projects remains reserved for v0.9.0.
 
 ## Previous release — v0.8.31, October 16, 2026
 

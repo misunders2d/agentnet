@@ -82,3 +82,38 @@ func TestDeviceAdminNoticePersistsDismissesAndAlertsOnce(t *testing.T) {
 		}
 	}
 }
+
+func TestDeviceAdminNoticeUsesSharedPreviewMaskOnce(t *testing.T) {
+	s := securityStore(t)
+	notices := []NativeNotification{}
+	a := &Agent{store: s, Logf: t.Logf, notify: func(title, body string, _ []string, _ func()) error {
+		notices = append(notices, NativeNotification{Title: title, Body: body})
+		return nil
+	}}
+	// Preserve this path's existing desktop callback choice.
+	a.nativeNotifyContent = func(NativeNotification) { t.Fatal("system notice changed native callback consent") }
+	for _, mode := range []NotificationPreview{NotificationPreviewFull, NotificationPreviewSender, NotificationPreviewHidden, "invalid"} {
+		if _, err := s.db.Exec(`INSERT OR REPLACE INTO config(k,v) VALUES('notification-preview',?)`, string(mode)); err != nil {
+			t.Fatal(err)
+		}
+		n := protocol.DeviceAdminNotice{ID: protocol.NewID(), Device: "owner/pixel", By: "owner/laptop", Admin: true, At: 1791214800}
+		raw, _ := json.Marshal(n)
+		if _, err := s.db.Exec(`INSERT INTO device_admin_notices(id,notice) VALUES(?,?)`, n.ID, string(raw)); err != nil {
+			t.Fatal(err)
+		}
+		before := len(notices)
+		a.notifyDeviceAdminNotices()
+		a.notifyDeviceAdminNotices()
+		if len(notices) != before+1 {
+			t.Fatal("privacy changed at-most-once state", len(notices), before)
+		}
+		got := notices[len(notices)-1]
+		if mode == NotificationPreviewFull {
+			if !strings.Contains(got.Body, "Your Pixel can now") {
+				t.Fatal(got)
+			}
+		} else if got.Title != "AgentNet — company settings access" || got.Body != "Open AgentNet to review" {
+			t.Fatal("system names bypassed mask", mode, got)
+		}
+	}
+}

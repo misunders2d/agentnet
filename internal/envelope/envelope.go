@@ -139,11 +139,14 @@ type Inner struct {
 // TopicEvent is a shared human action. Seen names exact logical turns covered
 // by done/open; a later or previously unseen turn always ends the mark.
 type TopicEvent struct {
-	Action  string        `json:"action"`
-	Seen    []string      `json:"seen,omitempty"`
-	Moves   []TopicMove   `json:"moves,omitempty"`
-	Merge   string        `json:"merge,omitempty"` // old topic; only the explicitly selected cutoff moves
-	Request *TopicRequest `json:"request,omitempty"`
+	titlePresent, revPresent bool
+	Action                   string        `json:"action"`
+	Title                    *string       `json:"title,omitempty"`
+	Rev                      int64         `json:"rev,omitempty"`
+	Seen                     []string      `json:"seen,omitempty"`
+	Moves                    []TopicMove   `json:"moves,omitempty"`
+	Merge                    string        `json:"merge,omitempty"` // old topic; only the explicitly selected cutoff moves
+	Request                  *TopicRequest `json:"request,omitempty"`
 }
 
 // CheckTopic is shared by live envelopes and retained history.
@@ -154,6 +157,15 @@ func CheckTopic(in Inner) error {
 	if e := in.TopicEvent; e != nil {
 		if in.Topic == "" && !MainTopicOrganization(in) || in.Kind != KindMessage || in.Target != nil || AgentOrigin(in.Origin) && !AgentTopicOrganization(in) || in.Status != "" || len(in.Attachments) != 0 {
 			return errors.New("topic event belongs only on a human conversation message")
+		}
+		if e.Action == "rename" {
+			if e.Title == nil || e.Rev < 1 || e.Rev > protocol.MaxTopicTitleRevision || *e.Title != NormalizeSharedTopicTitle(*e.Title) || in.Body != "" || in.AgentID != "" || AgentOrigin(in.Origin) || in.Human != nil && in.Human.AgentAuthor() || in.PID != "" && (in.Human == nil || in.PID != in.Human.AuthorPID) || in.Ref != nil || in.ReceiverRoute != nil || in.Followup != nil || in.TopicDone || in.Quote != "" || in.SendGroup != "" || len(e.Seen) != 0 || len(e.Moves) != 0 || e.Merge != "" || e.Request != nil {
+				return errors.New("invalid shared topic rename")
+			}
+			return nil
+		}
+		if e.Title != nil || e.Rev != 0 || e.titlePresent || e.revPresent {
+			return errors.New("unexpected topic title fields")
 		}
 		if TopicOrganization(e) {
 			return checkTopicOrganization(in)
@@ -1076,4 +1088,44 @@ func validID(s string) bool {
 		}
 	}
 	return true
+}
+
+// TopicRename is inert shared metadata, never an organization or execution action.
+func TopicRename(e *TopicEvent) bool { return e != nil && e.Action == "rename" }
+
+// NormalizeSharedTopicTitle is shared by senders and strict admission. Controls
+// and bidi formatting never become literal topic titles; the wire limit is runes.
+func NormalizeSharedTopicTitle(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || r == 0x061c || r == 0x200e || r == 0x200f || r >= 0x202a && r <= 0x202e || r >= 0x2066 && r <= 0x2069 {
+			return -1
+		}
+		return r
+	}, s)
+	s = strings.Join(strings.Fields(s), " ")
+	r := []rune(s)
+	if len(r) > 120 {
+		s = string(r[:120])
+	}
+	return strings.TrimSpace(s)
+}
+
+// Preserve field presence during strict nested decoding, including explicit zero
+// or null on legacy actions, without changing their canonical absent-field bytes.
+func (e *TopicEvent) UnmarshalJSON(data []byte) error {
+	type plain TopicEvent
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	var v plain
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&v); err != nil {
+		return err
+	}
+	_, v.titlePresent = fields["title"]
+	_, v.revPresent = fields["rev"]
+	*e = TopicEvent(v)
+	return nil
 }

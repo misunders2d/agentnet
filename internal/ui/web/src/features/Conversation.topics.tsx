@@ -18,6 +18,7 @@ import { Button } from "../ui/Button";
 import { Sheet } from "../ui/Sheet";
 import { Tag } from "../ui/Tag";
 import { focusedIn, usePortal } from "../owned";
+import { useSteadyChoices, unreadTopicOrder } from "./Conversation.choices";
 import { AllTopics } from "./Conversation.alltopics";
 import { OrganizeMessages } from "./Conversation.organize";
 import { deviceWords, isThreadMsg, requestState, shownText, threadAgentName, type AnyMsg, type Ctx } from "./Message.model";
@@ -31,8 +32,8 @@ export function barTopics(topics: Topic[], open: Topic | null, room: number): To
   const pick: Topic[] = [];
   const add = (t: Topic) => { if (pick.length < room && !pick.some((p) => p.id === t.id)) pick.push(t); };
   const newest = [...topics].sort(newestFirst);
-  newest.filter((t) => t.needsYou > 0).forEach(add);
   newest.filter((t) => t.unread > 0).forEach(add);
+  newest.filter((t) => t.needsYou > 0).forEach(add);
   if (open) add(open);
   newest.filter((t) => t.state === "active").forEach(add);
   if (open && room > 0 && !pick.some((p) => p.id === open.id)) pick[pick.length - 1] = open;
@@ -115,6 +116,7 @@ export function TopicBar({ thread,dm }: { thread?: T.Thread;dm?:T.DMThread }) {
   // As many chips as fit: the rest are under All topics, never in a scroll.
   const nav = useRef<HTMLElement>(null), allRef = useRef<HTMLButtonElement>(null), newRef = useRef<HTMLButtonElement>(null);
   const [room, setRoom] = useState<number>(TOPICS.barMax - 1);
+  const [menuFits, setMenuFits] = useState(false);
   useLayoutEffect(() => {
     const el = nav.current;
     if (!el) return;
@@ -124,6 +126,7 @@ export function TopicBar({ thread,dm }: { thread?: T.Thread;dm?:T.DMThread }) {
       // All topics (when listed) and one to New topic.
       const free = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - (allRef.current?.offsetWidth || 0) - (newRef.current?.offsetWidth || 0) - (listed ? 2 : 1) * gap - (dm ? 85 : 0);
       setRoom(Math.max(dm?0:1, Math.min(TOPICS.barMax - (listed ? 1 : 0), Math.floor(free / (TOPICS.chipMinWidth + gap)))));
+      setMenuFits(free >= 44 + gap);
     };
     fit();
     const ro = new ResizeObserver(fit);
@@ -153,17 +156,23 @@ export function TopicBar({ thread,dm }: { thread?: T.Thread;dm?:T.DMThread }) {
   // The chips stay in their slots across a topic switch (steadyBar).
   const shown = useRef<{ ids: string[]; open: string; left: string }>({ ids: [], open: open?.id || "", left: "" });
   if ((open?.id || "") !== shown.current.open) shown.current = { ...shown.current, open: open?.id || "", left: shown.current.open };
-  const pick = steadyBar(shown.current.ids, topics, open, shown.current.left, room);
-  shown.current.ids = pick.map((t) => t.id);
+  const ranked=steadyBar(shown.current.ids, topics, open, shown.current.left, room).sort(unreadTopicOrder);
+  const [menuHeld,setMenuHeld]=useState(false);
+  const choices=useSteadyChoices(ranked,t=>t.id,dm?.id||thread?.peer||"",menuHeld);
+  const compact = room === 0 && open && !fresh && listed && menuFits;
+  const pick=compact&&open?[open]:choices.choices.slice(0,room).map(c=>c.row),present=new Set(topics.map(t=>t.id));
+  if(open)present.add(open.id);
+  shown.current.ids=pick.map(t=>t.id);
   const hidden = topics.filter((t) => !pick.some((p) => p.id === t.id));
-  const hiddenUnread = hidden.reduce((n, t) => n + t.unread, 0) + ((overview?.topics || []).find((c) => c.peer === thread?.peer)?.archived_unread || 0);
+  const hiddenUnread = dm ? (dm.topics || []).filter(t => !pick.some(p => p.id === t.id)).reduce((n,t) => n + t.unread, 0)
+    : hidden.reduce((n,t) => n + t.unread, 0) + ((overview?.topics || []).find(c => c.peer === thread?.peer)?.archived_unread || 0);
   const hiddenNeeds = hidden.filter((t) => t.needsYou > 0).length; // never archived: what needs you is pending
   const leaveNew = () => { if (fresh) store.setDraft(dm?.id||thread!.id, { ...store.draft(dm?.id||thread!.id), newTopic: false }); };
   const chip = "inline-flex h-11 min-w-0 items-center gap-1.5 rounded-full px-3.5 text-[14px] font-semibold ";
 
   return (
-    <nav ref={nav} aria-label={"Topics with " + agent} data-part="topic-bar" className="flex shrink-0 items-center gap-2 overflow-hidden border-b border-hairline bg-canvas px-3 py-1.5 lg:px-5">
-      {dm && <button type="button" aria-pressed={!draft?.topic&&!fresh} className={chip+"shrink-0 "+(!draft?.topic&&!fresh?"bg-ink text-canvas":"bg-surface stroke")} onClick={()=>store.setDraft(dm.id,{...store.draft(dm.id),topic:undefined,newTopic:false,replyTo:undefined},true)}>{wide?"Main flow":"Main"}</button>}
+    <nav {...choices.bind} ref={nav} aria-label={"Topics with " + agent} data-part="topic-bar" className="flex shrink-0 items-center gap-2 overflow-hidden border-b border-hairline bg-canvas px-3 py-1.5 lg:px-5">
+      {dm && <button type="button" aria-pressed={!draft?.topic&&!fresh} aria-label={(wide?"Main flow":"Main")+(dm.main_topic?.unread?", "+dm.main_topic.unread+" unread":"")} className={chip+"shrink-0 "+(!draft?.topic&&!fresh?"bg-ink text-canvas":"bg-surface stroke")} onClick={()=>void store.openUnread({kind:"dm",id:dm.id})}>{wide?"Main flow":"Main"}{!!dm.main_topic?.unread && <span aria-hidden="true" className="grid h-5 min-w-5 place-items-center rounded-full bg-danger px-1 text-[11px] font-bold text-white tnum">{dm.main_topic.unread}</span>}</button>}
       {pick.map((t) => {
         const current = !!open && t.id === open.id && !fresh;
         const lit = going ? t.id === going : current;
@@ -174,10 +183,10 @@ export function TopicBar({ thread,dm }: { thread?: T.Thread;dm?:T.DMThread }) {
             {t.unread > 0 && <span aria-hidden="true" className="grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-danger px-1 text-[11px] font-bold text-white tnum">{t.unread}</span>}
           </>
         );
-        const width = { minWidth: TOPICS.chipMinWidth, maxWidth: wide ? TOPICS.chipMaxWidth : undefined };
-        if (current && listed) {
+        const width = { minWidth: compact ? 44 : TOPICS.chipMinWidth, maxWidth: wide ? TOPICS.chipMaxWidth : undefined };
+        if (current && listed && present.has(t.id)) {
           return (
-            <TopicMenu key={t.id} topic={t} onAll={() => setAll(true)}
+            <TopicMenu key={t.id} topic={t} onHeldChange={setMenuHeld} onAll={() => setAll(true)}
               trigger={<Menu.Trigger data-topic={t.id} aria-current="true" aria-label={topicLabel(t) + ", open topic, menu"} title={t.title}
                 style={width} className={chip + "flex-1 basis-0 " + (lit ? "bg-ink text-canvas" : "bg-surface stroke text-ink") + " data-[popup-open]:ring-2 data-[popup-open]:ring-act"}>
                 {body}<IconChevronDown size={16} stroke={2.4} aria-hidden="true" className="shrink-0" />
@@ -185,8 +194,8 @@ export function TopicBar({ thread,dm }: { thread?: T.Thread;dm?:T.DMThread }) {
           );
         }
         return (
-          <button key={t.id} data-topic={t.id} type="button" aria-current={current ? "true" : undefined} aria-label={topicLabel(t)} title={t.title + " · " + dayLabel(t.lastAt) + " " + timeOf(t.lastAt)}
-            onClick={() => { leaveNew(); refocus.current = t.id; if (!open || t.id !== open.id) dm?store.setDraft(dm.id,{...store.draft(dm.id),topic:t.id,newTopic:false,replyTo:undefined}):void store.open({ kind: "thread", id: t.id, peer: thread!.peer }); }}
+          <button key={t.id} data-topic={t.id} type="button" aria-disabled={!present.has(t.id)} aria-current={current ? "true" : undefined} aria-label={topicLabel(t)} title={t.title + " · " + dayLabel(t.lastAt) + " " + timeOf(t.lastAt)}
+            onClick={() => { if(!present.has(t.id))return;choices.release();leaveNew(); refocus.current = t.id; if (!open || t.id !== open.id) void store.openUnread(dm ? {kind:"dm",id:dm.id} : {kind:"thread",id:t.id,peer:thread!.peer}, dm ? t.id : ""); }}
             style={width} className={chip + "flex-1 basis-0 " + (lit ? "bg-ink text-canvas" : "bg-surface stroke text-ink hover:bg-sunken")}>
             {body}
           </button>
@@ -204,7 +213,7 @@ export function TopicBar({ thread,dm }: { thread?: T.Thread;dm?:T.DMThread }) {
               </span>
             : <IconListSearch size={18} stroke={2.2} aria-hidden="true" className="shrink-0" />}
           {/* A phone keeps the words short: its one topic chip keeps room for its name. */}
-          <span className="tnum">{wide ? "All topics (" + total + ")" : "All " + total}</span>
+          <span className="tnum max-[359px]:hidden">{wide ? "All topics (" + total + ")" : "All " + total}</span>
           {hiddenUnread > 0 && (wide
             ? <span aria-hidden="true" className="grid h-5 min-w-5 place-items-center rounded-full bg-danger px-1 text-[11px] font-bold text-white tnum">{hiddenUnread > 99 ? "99+" : hiddenUnread}</span>
             : <span aria-hidden="true" className="size-2.5 shrink-0 rounded-full bg-danger" />)}
@@ -221,7 +230,7 @@ export function TopicBar({ thread,dm }: { thread?: T.Thread;dm?:T.DMThread }) {
 }
 
 /** TopicMenu: the open topic's menu (its chip): rename, mark done or reopen, all topics. */
-export function TopicMenu({ topic, trigger, onAll }: { topic: Topic; trigger: ReactNode; onAll: () => void }) {
+export function TopicMenu({ topic, trigger, onAll, onHeldChange }: { topic: Topic; trigger: ReactNode; onAll: () => void; onHeldChange?: (held:boolean)=>void }) {
   const store = useApp();
   const portal = usePortal();
   const busy = useStore(store, s => s.topicBusy[topicChangeKey(topic)]);
@@ -232,7 +241,7 @@ export function TopicMenu({ topic, trigger, onAll }: { topic: Topic; trigger: Re
   const item = "flex min-h-11 cursor-pointer items-center gap-3 rounded-xl px-3 text-[15px] font-medium outline-none data-[highlighted]:bg-sunken";
   return (
     <>
-      <Menu.Root modal={false}>
+      <Menu.Root modal={false} onOpenChange={onHeldChange}>
         {trigger}
         <Menu.Portal container={portal}>
           <Menu.Positioner side="bottom" align="start" sideOffset={6} collisionPadding={12} className="z-50">
@@ -309,9 +318,10 @@ export function changeTopic(store: ReturnType<typeof useApp>, what: "rename" | "
   });
 }
 
-/** RenameTopic: a name of your own for a topic, synced across your linked devices. */
+/** Named people-chat topics share names; Main/device names stay personal. */
 function RenameTopic({ open, onOpenChange, topic }: { open: boolean; onOpenChange: (o: boolean) => void; topic: Topic }) {
   const store = useApp();
+  const shared = !!topic.conv && !!topic.id && !topic.root;
   const [title, setTitle] = useState(topic.title);
   const [busy, setBusy] = useState(false);
   useLayoutEffect(() => { if (open) setTitle(topic.title); }, [open]);
@@ -323,10 +333,10 @@ function RenameTopic({ open, onOpenChange, topic }: { open: boolean; onOpenChang
   };
   return (
     <Sheet open={open} onOpenChange={onOpenChange} title="Rename topic"
-      description="The name syncs across your linked devices. Other people keep their own names."
+      description={shared ? "This name changes for everyone with access to this topic. Resetting restores the automatic title for everyone." : "The name syncs across your linked devices. Other people keep their own names."}
       footer={
         <div className="flex flex-wrap items-center justify-end gap-2">
-          {topic.renamed && <Button variant="ghost" disabled={busy} onClick={() => void save("")}>Use its first message</Button>}
+          {topic.renamed && <Button variant="ghost" disabled={busy} onClick={() => void save("")}>{shared ? "Use automatic title for everyone" : "Use its first message"}</Button>}
           <Button variant="act" type="submit" form="rename-topic" disabled={busy || !title.trim() || title.trim() === topic.title}>Save</Button>
         </div>
       }>

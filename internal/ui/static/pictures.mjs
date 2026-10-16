@@ -1,6 +1,21 @@
 // Public, self-chosen person pictures. Never use this field for authority.
 export const MaxPictureBytes = 65536;
 export const MaxPicturePixels = 256;
+// Container hints only; the native media decoder still decides codec support.
+// Inspect at most one small ftyp box, never scan an attachment's full contents.
+export function sniffVideo(b) {
+  if (!(b instanceof Uint8Array)) return "";
+  const at = (i,s) => [...s].every((c,j) => b[i+j] === c.charCodeAt(0));
+  if (b.length >= 4 && b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3) return "video/webm";
+  if (b.length >= 4 && at(0,"OggS")) return "video/ogg";
+  if (b.length < 16 || !at(4,"ftyp")) return "";
+  const n = new DataView(b.buffer,b.byteOffset,b.byteLength).getUint32(0);
+  if (n < 16 || n > 1024 || n > b.length || n % 4) return "";
+  const brands = [8];
+  for (let i=16;i+4<=n;i+=4) brands.push(i);
+  if (brands.some(i => at(i,"qt  "))) return "video/quicktime";
+  return brands.some(i => ["isom","iso2","mp41","mp42","avc1","M4V "].some(s => at(i,s))) ? "video/mp4" : "";
+}
 const pictureChunks = ["IHDR","PLTE","IDAT","IEND","tRNS","sRGB","gAMA","cHRM","pHYs"];
 // WebKit canvas adds color-profile chunks. Keep the server's PNG contract,
 // removing ancillary metadata without changing pixels or weakening validation.

@@ -51,6 +51,7 @@ const calls=[],host={workspace:{id:'default',handle:'a'.repeat(32)},platform:'da
    assert.equal(path,'/api/act');assert.equal(body.do,'read');reads.push(body.ids);
    if(failRead)throw Error('synthetic read failure');return {};
  }};
+ global.document.hasFocus=()=>true;
  const reading=new Store(readHost),tick=()=>new Promise(r=>setImmediate(r));
  reading.refetch=async()=>{reading.markOpenRead();};
  reading.state={...reading.state,overview:{me:{address:'owner/linux'}},open:{kind:'thread',id:ids.topic},views:{
@@ -58,17 +59,18 @@ const calls=[],host={workspace:{id:'default',handle:'a'.repeat(32)},platform:'da
     {id:ids.answer,kind:'answer',dir:'in',unread:true}]},
   [ids.sibling]:{messages:[{id:ids.sibling,kind:'question',dir:'in',unread:true}]}
  }};
- reading.markOpenRead();await tick();await tick();
+ const present=()=>{const o=reading.state.open,v=reading.state.views[o.id];reading.state.readVisit=reading.prepareReadScope(o,v,{text:''});reading.reportVisible(reading.state.readVisit,v.messages);};
+ present();await tick();await tick();
  assert.deepEqual(reads,[[ids.question,ids.answer]],'acknowledge exact viewed outgoing question and incoming answer');
  reading.markOpenRead();await tick();assert.equal(reads.length,1,'successful refetch never loops');
  reading.state.views[ids.topic].messages.push({id:ids.sibling,kind:'question',dir:'out'});
- failRead=true;reading.markOpenRead();await tick();failRead=false;reading.markOpenRead();await tick();
+ failRead=true;present();await tick();failRead=false;present();await tick();
  assert.deepEqual(reads.slice(-2),[[ids.sibling],[ids.sibling]],'failed read acknowledgment retries only its exact ID');
  assert(!reads[0].includes(ids.sibling),'unviewed sibling topic omitted');
  const previous=reading.readAcknowledged.ids;
- reading.state={...reading.state,open:{kind:'thread',id:ids.sibling}};reading.markOpenRead();await tick();
+ reading.state={...reading.state,open:{kind:'thread',id:ids.sibling}};present();await tick();
  assert.notEqual(reading.readAcknowledged.ids,previous,'read acknowledgments retained only for the current topic');
- reading.state={...reading.state,open:{kind:'thread',id:ids.topic}};reading.markOpenRead();await tick();
+ reading.state={...reading.state,open:{kind:'thread',id:ids.topic}};present();await tick();
  assert(reads.at(-1).includes(ids.question),'reopening a topic can acknowledge its exact displayed IDs again');
  reading.stop();
  console.log('conversation link store read check PASS: exact IDs, sibling isolation, dedup, retry, topic-scoped retention');

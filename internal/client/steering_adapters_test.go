@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -175,6 +177,75 @@ func TestOMPRPCRejectsReceiptAndUnsettledCompletion(t *testing.T) {
 		}
 	}
 }
+func TestClaudePartialMessagesCapabilityIsOptional(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX fake CLI fixture")
+	}
+	for _, mode := range []string{"supported", "old", "near-match", "refused", "timeout", "oversized"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := t.TempDir()
+			script := filepath.Join(dir, "claude")
+			log := filepath.Join(dir, "calls")
+			source := `#!/bin/sh
+if [ "$1" = "--help" ]; then
+ printf 'help|%s|%s\n' "$CLAUDE_CAPABILITY_SETTING" "$PWD" >> "$CLAUDE_CAPABILITY_LOG"
+ case "$CLAUDE_CAPABILITY_MODE" in
+ supported) printf '  --include-partial-messages  Include partial chunks\n';;
+ old) printf '  --replay-user-messages\n';;
+ near-match) printf '  --include-partial-messages-unsupported\n';;
+ refused) exit 9;;
+ timeout) exec sleep 30;;
+ oversized) printf '  --include-partial-messages\n'; head -c 70000 /dev/zero;;
+ esac
+ exit 0
+fi
+printf 'work\n' >> "$CLAUDE_CAPABILITY_LOG"
+IFS= read -r request
+printf '{"type":"result","session_id":"owned","result":"original answer","is_error":false}\n'
+`
+			if err := os.WriteFile(script, []byte(source), 0700); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, script, "-p", "--output-format", "text", "--session-id", "owned")
+			cmd.Dir = dir
+			cmd.Env = append(os.Environ(), "CLAUDE_CAPABILITY_MODE="+mode, "CLAUDE_CAPABILITY_LOG="+log, "CLAUDE_CAPABILITY_SETTING=owner-setting")
+			var result bytes.Buffer
+			began := time.Now()
+			b, err := newClaudeStreamBridge(ctx, cmd, "Original", &result, "owned")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer b.close()
+			if time.Since(began) > 2*time.Second {
+				t.Fatal("optional help exceeded two-second bound")
+			}
+			partial := false
+			for _, arg := range cmd.Args {
+				partial = partial || arg == "--include-partial-messages"
+			}
+			if partial != (mode == "supported") {
+				t.Fatalf("mode %s optional flag=%t", mode, partial)
+			}
+			if err := cmd.Run(); err != nil {
+				t.Fatal(err)
+			}
+			b.finish()
+			if result.String() != "original answer\n" {
+				t.Fatal("optional probe changed result", result.String())
+			}
+			calls, err := os.ReadFile(log)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(calls) != "help|owner-setting|"+dir+"\nwork\n" {
+				t.Fatalf("probe lost environment/directory or repeated work: %q", calls)
+			}
+		})
+	}
+}
+
 func TestNativeAdapterFailedStartJoinsInput(t *testing.T) {
 	for _, name := range []string{"claude", "omp"} {
 		t.Run(name, func(t *testing.T) {

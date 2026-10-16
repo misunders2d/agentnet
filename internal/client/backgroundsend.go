@@ -11,6 +11,7 @@ import (
 )
 
 type queuedSendKey struct{}
+type scheduledDispatchKey struct{}
 
 // WithQueuedSend is a local caller's choice to return after durable storage.
 // id correlates that caller's optimistic turn; it grants no received authority.
@@ -137,6 +138,15 @@ func (a *Agent) queuedClaim(ctx context.Context, conv string, claim func(*sql.Tx
 		}
 		if n > 0 {
 			return errors.New("this send is already kept here")
+		}
+		if dispatchID, _ := ctx.Value(scheduledDispatchKey{}).(string); dispatchID != id {
+			var reserved bool
+			if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM scheduled_sends WHERE id=?)`, id).Scan(&reserved); err != nil {
+				return err
+			}
+			if reserved {
+				return ErrScheduledIDConflict
+			}
 		}
 		if claim != nil {
 			return claim(tx, first)

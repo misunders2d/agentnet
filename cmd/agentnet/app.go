@@ -76,16 +76,20 @@ var (
 var errAnotherDaemon = errors.New("another agentnet daemon took this home")
 
 type appEvent struct {
-	Event  string `json:"event"`
-	Mode   string `json:"mode,omitempty"`
-	URL    string `json:"url,omitempty"`
-	Text   string `json:"text,omitempty"`
-	Helper string `json:"helper,omitempty"`
-	Plan   string `json:"plan,omitempty"`
-	Home   string `json:"home,omitempty"`
-	CallID uint64 `json:"call_id,omitempty"`
-	Status int    `json:"status,omitempty"`
-	Body   string `json:"body,omitempty"`
+	Event     string  `json:"event"`
+	Mode      string  `json:"mode,omitempty"`
+	URL       string  `json:"url,omitempty"`
+	Text      string  `json:"text,omitempty"`
+	Helper    string  `json:"helper,omitempty"`
+	Plan      string  `json:"plan,omitempty"`
+	Home      string  `json:"home,omitempty"`
+	CallID    uint64  `json:"call_id,omitempty"`
+	Status    int     `json:"status,omitempty"`
+	Body      string  `json:"body,omitempty"`
+	Workspace string  `json:"workspace,omitempty"`
+	Seq       uint64  `json:"seq,omitempty"`
+	Total     *uint64 `json:"total,omitempty"`
+	Partial   *bool   `json:"partial,omitempty"`
 }
 
 type appRunner struct {
@@ -101,6 +105,9 @@ type appRunner struct {
 	controlsReady       atomic.Bool
 	independent         *appIndependentDaemon // only the serialized update action writes/reads it
 	updateReplies       chan bool
+	unreadWG            sync.WaitGroup
+	unreadContext       context.Context
+	unread              *appUnreadSession
 	outMu               sync.Mutex
 	out                 io.Writer
 
@@ -130,7 +137,7 @@ func runApp(ctx context.Context, home string, args []string, stdin io.Reader, st
 	if err := secfile.EnsureDir(home); err != nil {
 		return err
 	}
-	r := &appRunner{home: home, exe: exe, logf: appLogf, out: stdout, token: protocol.NewID() + protocol.NewID(), updateReplies: make(chan bool, 1)}
+	r := &appRunner{home: home, exe: exe, unreadContext: ctx, logf: appLogf, out: stdout, token: protocol.NewID() + protocol.NewID(), updateReplies: make(chan bool, 1)}
 	go func() { // EOF or quit ends the app; only shell input acknowledges a handoff.
 		sc := bufio.NewScanner(stdin)
 		for sc.Scan() {
@@ -202,9 +209,15 @@ func appWords(err error) string {
 }
 
 func (r *appRunner) emit(e appEvent) {
-	data, _ := json.Marshal(e)
 	r.outMu.Lock()
 	defer r.outMu.Unlock()
+	r.writeEventLocked(e)
+	if e.Event == "page" || e.Event == "error" {
+		r.unreadPageLocked(e)
+	}
+}
+func (r *appRunner) writeEventLocked(e appEvent) {
+	data, _ := json.Marshal(e)
 	r.out.Write(append(data, '\n'))
 }
 
@@ -420,6 +433,7 @@ func (r *appRunner) serve(h http.Handler) { r.handler.Store(&h) }
 
 // close stops serving the page and lets its address go.
 func (r *appRunner) close() {
+	r.stopUnread()
 	r.controlsReady.Store(false)
 	if data, err := secfile.Read(filepath.Join(r.home, appControlsURLFile)); err == nil && strings.TrimSpace(string(data)) == r.pageURL() {
 		os.Remove(filepath.Join(r.home, appControlsURLFile))

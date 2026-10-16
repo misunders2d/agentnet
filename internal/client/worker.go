@@ -503,6 +503,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		}
 		cmd.Stdout = activityWriter{Writer: roomBridge, activity: activity, first: first}
 		roomBridge.onActivity = activity.report
+		roomBridge.onThinking = activity.reportThinking
 		roomBridge.native = func(ctx context.Context, c nativeCallback) (json.RawMessage, error) {
 			return a.awaitNativeRequest(ctx, j, c)
 		}
@@ -535,6 +536,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		}
 		cmd.Stdout = activityWriter{Writer: piBridge, activity: activity, first: first}
 		piBridge.onActivity = activity.report
+		piBridge.onThinking = activity.reportThinking
 		followupBridge = piBridge
 		defer piBridge.close()
 	}
@@ -550,6 +552,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		}
 		cmd.Stdout = activityWriter{Writer: claudeBridge, activity: activity, first: first}
 		claudeBridge.onActivity = activity.report
+		claudeBridge.onThinking = activity.reportThinking
 		followupBridge = claudeBridge
 		defer claudeBridge.close()
 	}
@@ -921,9 +924,13 @@ func (a *Agent) notifyReview() {
 	}
 	if a.hasNativeNotifier() {
 		a.nativeNotification(a.nativeReviewFragment(target), target, "Decision needed", body)
-	} else if err := a.notify("AgentNet", body, argv, onClick); err != nil {
-		a.Logf("desktop notification not shown (%v); see `agentnet inbox --review`", err)
-		return
+	} else {
+		display := a.nativeDisplay(a.nativeReviewFragment(target), target, "Decision needed", body, true)
+		argv, onClick = a.notificationClick(target, display.Fragment)
+		if err := a.notify(display.Title, display.Body, argv, onClick); err != nil {
+			a.Logf("desktop notification not shown (%v); see `agentnet inbox --review`", err)
+			return
+		}
 	}
 	if err := a.store.markNotified(append(ids, remote.Covered...)); err != nil {
 		a.Logf("review: %v", err)
@@ -1181,11 +1188,11 @@ func (a *Agent) watchRunActivity(runCtx, ctx context.Context, j job, activity *r
 	activityTimer.Stop()
 	defer activityTimer.Stop()
 	var activityC <-chan time.Time
-	var reported nativeActivity
+	var reported *nativeProgress
 	var nextActivity time.Time
 	flushActivity := func() {
-		k := nativeActivity(activity.native.Load())
-		if k == activityUnknown || k == reported {
+		p := activity.native.Load()
+		if p == nil || p.same(reported) {
 			return
 		}
 		if delay := time.Until(nextActivity); delay > 0 {
@@ -1193,8 +1200,8 @@ func (a *Agent) watchRunActivity(runCtx, ctx context.Context, j job, activity *r
 			activityC = activityTimer.C
 			return
 		}
-		reported, nextActivity = k, time.Now().Add(nativeActivityInterval)
-		if a.store.markNativeActivity(runCtx, j, k) && j.Receiver == nil {
+		reported, nextActivity = p, time.Now().Add(nativeActivityInterval)
+		if a.store.markNativeProgress(runCtx, j, *p) && j.Receiver == nil {
 			a.wakeStatus()
 		}
 	}
@@ -1228,7 +1235,7 @@ func (a *Agent) watchRunActivity(runCtx, ctx context.Context, j job, activity *r
 					quiet = false
 					a.store.markRunVisibility(j.ID, false)
 					a.reviewAttention(ctx)
-					reported = activityUnknown
+					reported = nil
 				}
 				flushActivity()
 				continue // output alone cannot change authority

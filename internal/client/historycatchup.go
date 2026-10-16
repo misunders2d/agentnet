@@ -384,7 +384,7 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 	if err = a.store.db.QueryRow(`SELECT CAST(v AS INTEGER) FROM config WHERE k='arrival'`).Scan(&tailCeiling); err != nil {
 		return false, err
 	}
-	tail, err := a.historySourceRows(a.store.db, "dir='in' AND arrival>? AND arrival<=?", "arrival", historyPage, p.tail, tailCeiling)
+	tail, err := a.ownHistorySourceRows(a.store.db, dev, "dir='in' AND arrival>? AND arrival<=?", "arrival", historyPage, p.tail, tailCeiling)
 	if err != nil {
 		return false, err
 	}
@@ -399,7 +399,7 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 	// timestamp index, never repeatedly rank the whole message corpus.
 	if p.phase == "recent" && !full {
 		for conversations := 0; conversations < historyPage; conversations++ {
-			latest, e := a.historySourceRows(a.store.db, "conv>? AND arrival<=? AND outseq<=?", "conv,ms DESC,id DESC", 1, p.pos.Conv, p.inbox, p.outbox)
+			latest, e := a.ownHistorySourceRows(a.store.db, dev, "conv>? AND arrival<=? AND outseq<=?", "conv,ms DESC,id DESC", 1, p.pos.Conv, p.inbox, p.outbox)
 			if e != nil {
 				return false, e
 			}
@@ -408,7 +408,7 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 				p.pos = historyPos{}
 				break
 			}
-			page, e := a.historySourceRows(a.store.db, "conv=? AND arrival<=? AND outseq<=?", "ms DESC,id DESC", historyPage, latest[0].conv, p.inbox, p.outbox)
+			page, e := a.ownHistorySourceRows(a.store.db, dev, "conv=? AND arrival<=? AND outseq<=?", "ms DESC,id DESC", historyPage, latest[0].conv, p.inbox, p.outbox)
 			if e != nil {
 				return false, e
 			}
@@ -429,7 +429,7 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 		}
 	}
 	if p.phase == "older" && !full {
-		page, e := a.historySourceRows(a.store.db, "arrival<=? AND outseq<=? AND (conv,ms,id)>(?,?,?)", "conv,ms,id", historyPage, p.inbox, p.outbox, p.pos.Conv, p.pos.Ms, p.pos.ID)
+		page, e := a.ownHistorySourceRows(a.store.db, dev, "arrival<=? AND outseq<=? AND (conv,ms,id)>(?,?,?)", "conv,ms,id", historyPage, p.inbox, p.outbox, p.pos.Conv, p.pos.Ms, p.pos.ID)
 		if e != nil {
 			return false, e
 		}
@@ -468,7 +468,7 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 				sweep = ref
 				continue
 			}
-			source, e := a.historySourceRows(a.store.db, "dir=? AND id=?", "conv,ms,id", 1, ref.dir, ref.id)
+			source, e := a.ownHistorySourceRows(a.store.db, dev, "dir=? AND id=?", "conv,ms,id", 1, ref.dir, ref.id)
 			if e != nil {
 				return false, e
 			}
@@ -802,7 +802,7 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 	// Sources and progress share the transaction with each encrypted copy. A
 	// deletion or replacement during preparation cancels this whole page.
 	for i, it := range sources {
-		current, e := a.historySourceRows(tx, "dir=? AND id=?", "conv,ms,id", 1, it.dir, it.in.ID)
+		current, e := a.ownHistorySourceRows(tx, dev, "dir=? AND id=?", "conv,ms,id", 1, it.dir, it.in.ID)
 		if e != nil {
 			return false, e
 		}
@@ -916,7 +916,7 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 		// Recheck both immutable sources and current canonical authority in
 		// the same transaction that creates coverage and retires this ref.
 		for _, prior := range []historySourceRow{alias.source, alias.canonical} {
-			current, e := a.historySourceRows(tx, "dir=? AND id=?", "conv,ms,id", 1, prior.dir, prior.in.ID)
+			current, e := a.ownHistorySourceRows(tx, dev, "dir=? AND id=?", "conv,ms,id", 1, prior.dir, prior.in.ID)
 			if e != nil {
 				return false, e
 			}

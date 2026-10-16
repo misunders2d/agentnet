@@ -79,6 +79,7 @@ and catch the error. Failures differ by platform.
 | `GET /api/overview` | D B | Everything around the open chat. Read it again on every `change` event. With `topics=1`, archived agent topics are only counted in `topics` and are paged through `/api/topics` (Comic does this). Without it, every thread is listed. A read through `host.api` (with or without a query) records the identity that `host.reconnect()` needs. | `?topics=1` optional | `Overview` (see Overview fields) |
 | `GET /api/thread` | D B | One device thread, which is a chat with an agent's device. | `?id=<any message id in it>` | `{id, peer, key:{pinned?, pending?}, approved, permission_person?, question_target?, task_target?, task_grant, messages:[Message], topic?}` |
 | `GET /api/dm` | D B | One conversation: a direct message or a group. | `?id=<conv>` | `{id, kind?, title?, peer, members?, role?, created, mine, frozen?, messages:[DMMessage], agents:[AgentView], guests?, main_topic?, topics?, audience_pending?}` |
+| `GET /api/unread` | D B | Optional, read-only page of effective unread messages, including accessible Done/Archived topics and deliberately marked sent messages. Unsupported providers omit the overview totals and refuse this route. | Optional `after` (previous `next`) and `limit` (default 50, maximum 200) | `{rows:[{key,kind,conv?,peer?,thread?,topic?,topic_title?,id,lid,author,dir,at,label,preview}],total,next?,content,seq}` |
 
 **Events.** `host.listen(fn)` delivers the change counter. Native events may add `hint:"typing"` or `hint:"presence"`: refresh typing only, or overview plus typing, respectively. Missing/unknown hints mean a full refresh; existing skins may ignore the hint. Durable and ephemeral revisions are tracked separately, so coalescing never hides a durable invalidation.
 
@@ -104,15 +105,17 @@ and catch the error. Failures differ by platform.
 | `release` | D | A recommended build newer than this one, else absent. Always `""` on B. |
 | `update_required` | D B | `{latest, url?, auto?}` while the relay refuses this device until it updates. Show a prominent update banner. |
 | `seq` | D B | The change counter. It matches the `change` events. |
+| `unread_total`, `alert_total` | D B | Optional authoritative totals across the accessible messages, including Main, named topics, Done/Archived and deliberately unread outgoing turns. `alert_total` excludes locally muted conversations; it does not enable alerts or change read state. Missing means unknown/unsupported, not zero. Do not add topic counts or `archived_unread` again. |
 | `demo` | D B | `true` only on `agentnet ui --demo`. |
 | `app` | D | `true` in the desktop app's or the Android app's window, otherwise absent (never on B). It does not mean the `host.app*` methods are present: they always are. |
 | `topic_list` | D B | Topics are kept here, so use `?topics=1` and `/api/topics`. `false` in the demo. |
 | `remind` | D | Reminders can be set. `false` in the demo and absent on B, so hide "Remind me" there. |
+| `schedules` | D B | Optional local scheduled sending. Offer its controls only when true; absent/false providers refuse the routes below. No schedule records are included in overview. |
 | `persons` | D B | Conversations between people are available. |
 | `agents` | D B | Agents can be invited into conversations. `false` in the demo. |
 | `groups` | D B | Group operations are available. `false` in the demo. |
 | `files` | D B | Attachment limits `{max_file, max_count, max_message?}`. Absent means no attachments (the demo). `max_count` is 8 on both; B adds `max_message`. |
-| `notify` | D B | `{available, native, enabled, pending, reason?, mutes:[conv], allowed:[address]}`; B has no `native`. Absent when the provider has no alerts. On Android, `available` and `native` mean only that the app's notifier is registered; they do not follow the OS permission: use `host.android.notificationStatus()`. |
+| `notify` | D B | `{available, native, enabled, pending, reason?, mutes:[conv], allowed:[address], preview?, preview_default?}`; B has no `native`. Absent when the provider has no alerts. Native preview choices are supported only when `preview_default` is present; `preview` absent/empty uses that default. On Android, `available` and `native` mean only that the app's notifier is registered; they do not follow the OS permission: use `host.android.notificationStatus()`. |
 | `reply_receivers` | D | `GET /api/reply-receivers` is served. `true` on a live program, Android included, and `false` in the demo. Absent on B. |
 | `reply_sessions` | D | Native reply sessions are listed. `true` on a live program and `false` in the demo. Absent on B, although `GET /api/reply-sessions` answers there. |
 | `me` | D B | `{address, fingerprint, responder, responder_dir, agent}`. B adds `browser:true` and always has `responder:""` and `agent:false`. |
@@ -149,9 +152,9 @@ and catch the error. Failures differ by platform.
 
 | Route | Platforms | Purpose | Request | Response |
 |---|---|---|---|---|
-| `GET /api/topics` | D B | One page of topics, most recently active first. | `?conv=` (a people chat) or `?peer=` (agent chats; empty means every peer), plus optional `state` (active, done or archived), `q`, `before` (the previous page's `next`) and `limit` | `{topics:[ThreadSummary], next?, matched}` |
+| `GET /api/topics` | D B | One page of topics, unread first, then most recently active; ID and peer break ties. | `?conv=` (a people chat) or `?peer=` (agent chats; empty means every peer), plus optional `state` (active, done or archived), `q`, `before` (the previous page's opaque `next`) and `limit` | `{topics:[ThreadSummary], next?, matched}` |
 | `POST /api/topic/create` | D B | Start a topic in a people chat, rooted at one message. Agent threads have no `create`: D answers 404 and B "No such topic change." | `{conv, peer:"", id:<the message's lid>}` | `{note}` |
-| `POST /api/topic/rename` | D B | Rename a topic. An empty `title` restores the automatic name. `root:true` renames the chat's Main flow. | `{peer, id, title}`, `{conv, peer:"", id, title}` or `{conv, root:true, peer:"", id:"", title}` | `{note}` |
+| `POST /api/topic/rename` | D B | Rename a named people-chat topic for everyone with access; any current authorized participant may do so. An empty `title` restores its automatic name for everyone. Device-thread names and `root:true` Main-flow labels remain personal. | `{peer, id, title}`, `{conv, peer:"", id, title}` or `{conv, root:true, peer:"", id:"", title}` | `{note}` |
 | `POST /api/topic/done` | D B | Mark a topic done. `count` is how many messages the page showed. Batch with `ids` and `counts`. The Main flow (`root`) has no `done`: archive it instead, as Comic does. | `{peer or conv, id, count?}` or `{…, id:"", ids:[id], counts:{id:n}}` | `{note}` |
 | `POST /api/topic/reopen` | D B | Reopen a topic, or the Main flow with `root:true`. | `{peer or conv, id, count?}` or `{conv, root:true, peer:"", id:"", count?}` | `{note}` |
 | `POST /api/topic/archive` | D B | Archive a topic. This deletes nothing. Works in batches and with `root:true`. | `{peer or conv, id}`, `{…, ids, counts?}` or `{conv, root:true, peer:"", id:"", count?}` | `{note}` |
@@ -160,6 +163,32 @@ and catch the error. Failures differ by platform.
 | `POST /api/topic/organization/apply` | D B | Apply exactly the reviewed move. If anything changed, it is refused. | the review, unchanged | D: `{ID, LID, State, Detail, Copies}`. B: `{id, lid, state, detail?, copies?}` (a repeated apply answers without `detail`) |
 | `POST /api/topic/organization/undo` | D B | A current full-member human restores an admitted agent move to its persisted prior source topics, including Main. All source groups are checked and committed together; intervening changes refuse the inverse. Reuse the same `id` for a retry. | `{conv, lid, author, id}` | array of sent operations, in the platform's existing sent shape |
 
+Unread rows supply navigation references only. `key` identifies the original
+author and logical message within its scope; `id` is the currently selected
+local message ID. For `kind:"chat"`, use `conv` and `topic` (absent/empty is Main);
+for `kind:"device"`, use `peer` and `thread`. Open that exact scope and focus
+`id`, preserving `dir`; do not search unrelated conversations or infer authority
+from the label/preview. Merely listing or sorting unread rows never acknowledges
+them or decides a request.
+
+`topic_title` is a bounded literal display name from the same topic projection,
+including shared renames and automatic-name resets. Use it to identify a named
+scope that has never been opened; `label` still identifies the author. An empty
+chat topic means Main flow. These names never establish access or authority.
+
+Old personal people-topic names remain personal until an explicit shared
+rename. No historical cross-person rename time is inferred. Later admitted
+renames converge by revision and original writer; a rename made after observing
+another supersedes it. A stale allocation is refused for explicit retry. Topic
+IDs, membership, read state and messages are unchanged by renaming.
+
+Both topic and unread cursors describe positions, not retained row identities.
+Pass them unchanged. A topic cursor from the older chronological format is
+refused; reload from the first page. During live changes, refill the already
+loaded prefix and deduplicate scoped identities. This is a moving list, not a
+snapshot: a representative can change position. Preserve displayed order under
+pointer/focus/selection while updating counts, and make vanished rows inactive
+until the interaction ends.
 A non-empty topic search uses trimmed `q` and omits `state` on every page,
 searching Active, Done and Archived together within the existing conversation
 or peer scope. Show each result's actual state. Clearing the search restores
@@ -296,6 +325,7 @@ operation grants conversation or task access.
 | `POST /api/notify/mute` | D B | Mute one conversation, or unmute it. | `{conv, muted}` | `{note}` |
 | `POST /api/notify/allow` | D B | Let one person's turns alert, or stop them. | `{person: <person id>, allowed}` | `{note}` |
 | `POST /api/notify/seen` | D B | Report the messages this page actually presented. | `{conv, ids:[id]}` | `{note}` |
+| `POST /api/notify/preview` | D | Optional local native notification content preference. Changes neither alert consent nor mute/sender scopes. Unsupported providers refuse it. | `{preview:""\|"full"\|"sender"\|"hidden"}`; empty means host default | `{note}` |
 | `GET /api/notify/resolve` | B | Turn a browser notification's channel into a conversation (`host.onOpen` kind `"channel"`). D has only `POST /api/notify/{what}`: GET gives 405, and POST gives 404 "no such alert control". | `?chan=` | `{conv}` (`""` when unknown) |
 | `GET /api/typing` | D B | Who is typing in a scope, and this device's preferences. | `?conv=&peer=&thread=` | `{scope, preferences:{send, show}, supported, current, entries:[{person?, address, label, expires}]}` |
 | `POST /api/typing` | D B | Report that this person is typing. It carries no content. | `{scope:{conv?, peer?, thread?}, active}` | `{submitted, skipped, throttled}` |
@@ -303,6 +333,60 @@ operation grants conversation or task access.
 | `POST /api/remind` | D | Set or move a "remind me later" reminder on a received message. B: "Unknown request." (`overview.remind` is absent there.) | `{id, due: unix seconds}` | `{note}` |
 | `POST /api/remind/done` | D | Mark a reminder done. B: "Unknown request." | `{id}` | `{note}` |
 | `POST /api/remind/cancel` | D | Cancel a reminder. B: "Unknown request." | `{id}` | `{note}` |
+
+Full preview includes locally resolved message content; Sender includes only the
+verified author and generic text. Hidden, and Sender without a verified author,
+retain only fixed activity, reminder, decision or security notices, never caller
+text or remote computer names. Built-in desktop
+notifications default to Hidden. Content-callback hosts retain their configured
+default, including the mobile Full default. Show the actual `preview_default`,
+not a guessed platform default. Changing this preference does not dismiss old
+OS notifications or change lock-screen, sound, DND or permission settings.
+Closed-page browser push stays generic. Existing macOS osascript banners cannot
+route a click back to the exact message; do not promise that behavior there.
+
+## Scheduled messages
+
+These optional routes belong to the selected local workspace/device. They do
+not schedule an agent job. A browser must have its AgentNet page open; a native
+sender must be running. Pending work dispatches at or after its deadline when
+connectivity and current chat information permit. Mobile process limits can
+delay it. No relay-side timer or closed-page browser execution is promised.
+
+| Route | Platforms | Purpose | Request | Response |
+|---|---|---|---|---|
+| `GET /api/schedules` | D B | List this device's schedules, optionally for one exact conversation. | Optional `conv`; `all=1` includes terminal records, absent/0 lists active records | `ScheduledSend[]` |
+| `GET /api/schedules?id=…` | D B | Read one exact schedule, or 404. Cannot combine with a nonempty `conv` or `all`. | Exact 32-lowercase-hex `id` | `ScheduledSend` |
+| `GET /api/schedule/audience` | D B | Read the current verified audience for explicit review. Reads do not change a saved ceiling. | `conv`, optional existing `topic` | `{persons,pids,author_pid?}` |
+| `POST /api/schedule/create` | D B | Durably save an ordinary human chat message locally. | `ScheduleDraft`, optional stable `id`, no positive `rev` | `ScheduledSend` |
+| `POST /api/schedule/edit` | D B | Change a mutable schedule at its exact revision. | `ScheduleDraft` with `id` and positive `rev` | `ScheduledSend` |
+| `POST /api/schedule/cancel` | D B | Cancel a mutable schedule. | `{id,rev}` | `ScheduledSend` |
+| `POST /api/schedule/send_now` | D B | Dispatch through the same guarded sender now, retaining its approved audience. | `{id,rev}` | `ScheduledSend` |
+
+`ScheduleDraft` is `{id?,rev?,conv,topic?,body,reply_to?,quote?,due,timezone,
+files?,audience?}`. `due` is an absolute RFC3339 instant. Browser precision is
+milliseconds; nonzero finer digits are refused. Stage actual files through
+`host.stage` and pass its values unchanged: native string IDs and browser
+workspace-bound file handles differ. Parsed save/refusal attempts consume native
+stage IDs. A retry re-stages the original actual files. Omitted edit files retain
+and reverify them; `files:[]` removes them.
+
+`ScheduledSend` returns the draft fields, `id`, `rev`, `state`, the saved audience,
+file descriptors `{sha256,size,name}`, and optional fixed `detail`. States are
+`pending`, `dispatching`, `sent`, `cancelled`, `needs_review`. **Sent means queued
+in the ordinary outbox, not delivered.** A same-scope text/time edit omitting
+`audience` retains its ceiling. Scope changes or reapproval require a newly
+reviewed exact audience; Send now never recaptures one silently.
+
+Capture one immutable create ID, payload and actual files before saving. The same
+ID and equal canonical content return the existing record without another save,
+including a terminal or past-due record; different content or a pre-existing
+ordinary message LID refuses with 409. A response loss or failed exact lookup is
+not a reason to allocate another ID. Exact GET proves presence only: it never
+proves file equality from a name/size or permits clearing a different draft.
+An unconfirmed request can still commit after a not-found lookup. Keep that
+uncertainty visible, preserve the draft, and do not automatically resend after a
+page reload or recover nonexistent file bytes.
 
 A validated `ReportItem.native` is an actionable native request for the current
 owner-human device even with `actionable:false`; it never grants operator access.

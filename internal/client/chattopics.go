@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -100,28 +101,91 @@ func (a *Agent) ChatTopics(conv string) ([]ThreadSummary, error) {
 // ChatTopicsForMessages derives the topic view from the same accepted messages
 // the caller is displaying. It avoids loading and decorating the full history a
 // second time for one chat response; local visibility/read state is still fresh.
-func (a *Agent) ChatTopicsForMessages(conv string, msgs []ConvMessage) ([]ThreadSummary, error) {
+func (a *Agent) ChatTopicsForMessages(conv string, msgs []ConvMessage, precomputed ...map[string]string) ([]ThreadSummary, error) {
 	locals, err := a.store.topicLocals(conv)
 	if err != nil {
 		return nil, err
 	}
-	ts := summarizeChatTopics(conv, msgs, locals, storeNow().Unix())
-	assigned := ChatTopicAssignments(msgs)
-	for i := range ts {
-		for _, m := range msgs {
-			if assigned[m.LID] == ts[i].ID && m.TopicEvent == nil && m.Unread {
-				ts[i].Unread++
-			}
+	assigned := topicAssignmentMap(msgs, precomputed)
+	ts := summarizeChatTopics(conv, msgs, locals, storeNow().Unix(), assigned)
+	counts := make(map[string]int)
+	for _, m := range msgs {
+		if m.TopicEvent == nil && m.Unread {
+			counts[assigned[m.LID]]++
 		}
+	}
+	for i := range ts {
+		ts[i].Unread = counts[ts[i].ID]
+	}
+	if err := a.projectSharedTopicTitles(conv, ts); err != nil {
+		return nil, err
 	}
 	return ts, nil
 }
-func summarizeChatTopics(conv string, msgs []ConvMessage, locals map[string]topicLocal, now int64) []ThreadSummary {
-	return summarizeChatTopicView(conv, msgs, locals, now, false)
+
+// Read only the already selected conversation/topic set in one batch. Shared
+// presence is applied after private labels; an empty reset restores automatic.
+func (a *Agent) projectSharedTopicTitles(conv string, topics []ThreadSummary) error {
+	if len(topics) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(topics))
+	by := make(map[string]int, len(topics))
+	for i, t := range topics {
+		if protocol.ValidID(t.ID) {
+			ids = append(ids, t.ID)
+			by[t.ID] = i
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	selected, err := json.Marshal(ids)
+	if err != nil {
+		return err
+	}
+	rows, err := a.store.db.Query(`SELECT topic,title FROM topic_shared_titles WHERE conv=? AND topic IN (SELECT value FROM json_each(?)) LIMIT ?`, conv, string(selected), len(ids))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, title string
+		if err = rows.Scan(&id, &title); err != nil {
+			return err
+		}
+		i, ok := by[id]
+		if !ok {
+			continue
+		}
+		t := &topics[i]
+		auto := t.Title
+		if t.Renamed {
+			auto = t.AutoTitle
+		}
+		t.Title = title
+		t.AutoTitle = auto
+		t.Renamed = title != ""
+		if title == "" {
+			t.Title = auto
+			t.AutoTitle = ""
+		}
+	}
+	return rows.Err()
+}
+func summarizeChatTopics(conv string, msgs []ConvMessage, locals map[string]topicLocal, now int64, precomputed ...map[string]string) []ThreadSummary {
+	return summarizeChatTopicView(conv, msgs, locals, now, false, precomputed...)
 }
 
-func summarizeChatTopicView(conv string, msgs []ConvMessage, locals map[string]topicLocal, now int64, main bool) []ThreadSummary {
-	assigned := ChatTopicAssignments(msgs)
+func topicAssignmentMap(msgs []ConvMessage, precomputed []map[string]string) map[string]string {
+	if len(precomputed) > 0 && precomputed[0] != nil {
+		return precomputed[0]
+	}
+	return ChatTopicAssignments(msgs)
+}
+
+func summarizeChatTopicView(conv string, msgs []ConvMessage, locals map[string]topicLocal, now int64, main bool, precomputed ...map[string]string) []ThreadSummary {
+	assigned := topicAssignmentMap(msgs, precomputed)
 	groups := map[string][]ConvMessage{}
 	events := map[string][]ConvMessage{}
 	for _, m := range msgs {
@@ -221,7 +285,7 @@ func summarizeChatTopicView(conv string, msgs []ConvMessage, locals map[string]t
 			}
 		}
 
-		t := ThreadSummary{ID: id, Conv: conv, Title: firstLine(first.Body), Last: firstLine(last.Body), LastAt: time.Unix(activity, 0), Count: len(g), State: v.State, DoneBy: v.DoneBy, Pending: v.Pending, QuietSince: time.Unix(v.QuietSince, 0)}
+		t := ThreadSummary{ID: id, Conv: conv, Title: BodyPreview(first.Body), Last: BodyPreview(last.Body), LastAt: time.Unix(activity, 0), Count: len(g), State: v.State, DoneBy: v.DoneBy, Pending: v.Pending, QuietSince: time.Unix(v.QuietSince, 0)}
 		pending := pendingTopicRows(facts)
 		for _, i := range pending {
 			// The logical id matches replies; the stored copy id opens the
@@ -237,7 +301,7 @@ func summarizeChatTopicView(conv string, msgs []ConvMessage, locals map[string]t
 		}
 		for _, m := range g {
 			if m.LID == v.Conclusion {
-				t.Conclusion = firstLine(m.Body)
+				t.Conclusion = BodyPreview(m.Body)
 				t.ConcludedBy = m.From
 			}
 			if m.Job == stateRunning {
@@ -386,11 +450,7 @@ func (a *Agent) ChangeChatTopic(ctx context.Context, conv, id, what, title strin
 		}
 		_, err = a.SendConv(ctx, conv, ConvOutgoing{Body: text, Topic: id, ReplyTo: parent, TopicEvent: &envelope.TopicEvent{Action: action, Seen: seen}})
 	case "rename":
-		title = strings.Join(strings.Fields(title), " ")
-		if utf8.RuneCountInString(title) > TopicTitleMax {
-			return false, ErrTopicTitle
-		}
-		err = a.setTopicTitle(conv, id, title)
+		_, err = a.RenameSharedTopic(ctx, conv, id, title)
 	case "archive":
 		count := t.Count
 		for _, m := range msgs {
@@ -472,41 +532,74 @@ func chatTopicPage(all []ThreadSummary, q TopicQuery) (TopicPage, error) {
 	if limit == 0 {
 		limit = TopicPageDefault
 	}
-	if limit < 0 || limit > TopicPageMax {
+	if limit < 1 || limit > TopicPageMax {
 		return TopicPage{}, ErrTopicQuery
 	}
-	page := TopicPage{Topics: []ThreadSummary{}}
+	after, err := parseTopicPageCursor(q)
+	if err != nil {
+		return TopicPage{}, err
+	}
 	words := strings.Fields(strings.ToLower(q.Query))
-	start := q.Before == ""
-	more := false
+	matched := make([]ThreadSummary, 0, len(all))
 	for _, t := range all {
-		if q.State != "" && q.State != t.State || !topicMatches(t, words) {
-			continue
-		}
-		page.Matched++
-		cursor := topicPageCursor(t)
-		if !start {
-			if cursor == q.Before {
-				start = true
-			}
-			continue
-		}
-		if len(page.Topics) < limit {
-			page.Topics = append(page.Topics, t)
-		} else {
-			more = true
+		if (q.State == "" || q.State == t.State) && topicMatches(t, words) {
+			matched = append(matched, t)
 		}
 	}
-	if !start {
-		return TopicPage{}, ErrTopicQuery
+	sortUnreadTopics(matched)
+	start := 0
+	if after != nil {
+		start = sort.Search(len(matched), func(i int) bool { return unreadTopicBefore(*after, matched[i]) })
 	}
-	if more && len(page.Topics) > 0 {
-		page.Next = topicPageCursor(page.Topics[len(page.Topics)-1])
+	end := min(start+limit, len(matched))
+	page := TopicPage{Topics: append([]ThreadSummary{}, matched[start:end]...), Matched: len(matched)}
+	if end < len(matched) {
+		page.Next = topicPageCursor(matched[end-1])
 	}
 	return page, nil
 }
+
+// A cursor is a position, never an exact-row lookup. Keep its unread bucket
+// even if that topic was read, moved or deleted between requests. Pre-u1
+// chronological cursors are deliberately refused: reload from the first page.
 func topicPageCursor(t ThreadSummary) string {
-	return t.LastAt.UTC().Format("20060102150405") + "|" + t.Conv + "|" + t.ID
+	bucket := "0"
+	if t.Unread > 0 {
+		bucket = "1"
+	}
+	return strings.Join([]string{"u1", bucket, strconv.FormatInt(t.LastAt.Unix(), 10), t.Conv, t.Peer, t.ID}, "|")
+}
+func parseTopicPageCursor(q TopicQuery) (*ThreadSummary, error) {
+	if q.Before == "" {
+		return nil, nil
+	}
+	p := strings.Split(q.Before, "|")
+	if len(q.Before) > 1024 || len(p) != 6 || p[0] != "u1" || (p[1] != "0" && p[1] != "1") || p[3] != q.Conv || p[5] == "" || (q.Peer != "" && p[4] != q.Peer) {
+		return nil, ErrTopicQuery
+	}
+	for _, c := range p[2] {
+		if c < '0' || c > '9' {
+			return nil, ErrTopicQuery
+		}
+	}
+	sec, err := strconv.ParseInt(p[2], 10, 64)
+	if err != nil || sec < 0 || sec > 8640000000000 {
+		return nil, ErrTopicQuery
+	}
+	unread := 0
+	if p[1] == "1" {
+		unread = 1
+	}
+	return &ThreadSummary{Conv: p[3], Peer: p[4], ID: p[5], LastAt: time.Unix(sec, 0), Unread: unread}, nil
+}
+func unreadTopicBefore(a, b ThreadSummary) bool {
+	if (a.Unread > 0) != (b.Unread > 0) {
+		return a.Unread > 0
+	}
+	return newer(a, b)
+}
+func sortUnreadTopics(ts []ThreadSummary) {
+	sort.Slice(ts, func(i, j int) bool { return unreadTopicBefore(ts[i], ts[j]) })
 }
 
 // Within equal signed seconds, parents precede replies. Shared actions are

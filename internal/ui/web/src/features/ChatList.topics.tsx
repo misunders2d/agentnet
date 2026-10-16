@@ -9,46 +9,23 @@ import { TOPICS, chatList, deviceKind, firstLine, topicOf, when, type Topic } fr
 import { useStore } from "../store";
 import { AgentAvatar } from "../ui/Avatar";
 import { Button } from "../ui/Button";
+import { usePagedChoices, useSteadyChoices, topicIdentity } from "./Conversation.choices";
 import { TopicMark, topicLabel } from "./Conversation.topics";
 
 export function TopicResults({ query, onCount }: { query: string; onCount: (n: number) => void }) {
   const store = useApp();
   const overview = useStore(store, (s) => s.overview);
   const names = useAgentNames();
-  const [hits, setHits] = useState<{ q: string; topics: Topic[]; matched: number; next: string } | null>(null);
-  const [failed, setFailed] = useState("");
-  const [more, setMore] = useState(false); // a further page is being read
-  const long = query.length >= TOPICS.searchMin;
-
-  useEffect(() => {
-    if (!long) { setHits(null); onCount(0); return; }
-    let alive = true;
-    const x = setTimeout(() => {
-      // When anything changes, as many as were shown (one request).
-      const shown = hits && hits.q === query ? hits.topics.length : 0;
-      store.api.topics({ q: query, limit: Math.min(Math.max(shown, TOPICS.chatSearchMax), TOPICS.pageMax) }).then((p) => {
-        if (!alive) return;
-        const topics = (p.topics || []).map(topicOf);
-        setHits({ q: query, topics, matched: p.matched, next: p.next || "" }); setFailed(""); onCount(topics.length);
-      }, (e) => { if (alive) { setFailed(errorText(e)); onCount(0); } });
-    }, TOPICS.searchDelay);
-    return () => { alive = false; clearTimeout(x); };
-  }, [query, overview?.seq]);
-
-  const showMore = () => {
-    if (!hits?.next) return;
-    const was = hits;
-    setMore(true);
-    store.api.topics({ q: was.q, before: was.next, limit: TOPICS.pageSize }).then((p) => {
-      setHits((h) => {
-        if (!h || h.q !== was.q) return h; // the search changed meanwhile
-        const topics = [...h.topics, ...(p.topics || []).map(topicOf).filter((t) => !h.topics.some((x) => x.id === t.id && x.peer === t.peer))];
-        onCount(topics.length);
-        return { ...h, topics, matched: p.matched, next: p.next || "" };
-      });
-    }, (e) => setFailed(errorText(e))).finally(() => setMore(false));
-  };
-
+  const [q,setQ]=useState(query.trim());
+  const revision=useStore(store,s=>s.contentRevision);
+  useEffect(()=>{const timer=setTimeout(()=>setQ(query.trim()),TOPICS.searchDelay);return()=>clearTimeout(timer);},[query]);
+  const long=q.length>=TOPICS.searchMin;
+  const page=usePagedChoices(long,"topic-search/"+q,revision,TOPICS.chatSearchMax,topicIdentity,async(before,limit)=>{
+   const p=await store.api.topics({q,before,limit});return {rows:(p.topics||[]).map(topicOf),total:p.matched,next:p.next};
+  });
+  const stable=useSteadyChoices(page.rows,topicIdentity,"topic-search/"+q);
+  useEffect(()=>onCount(page.rows.length),[page.rows.length,q]);
+  const hits={topics:page.rows,matched:page.total,next:page.next},failed=page.error,more=page.loading,showMore=page.more;
   if (!long || (!hits?.topics.length && !failed)) return null;
   const agents = new Map(chatList(overview, names).filter((i) => i.open.kind === "thread").map((i) => [i.peer || "", i.title]));
   return (
@@ -56,11 +33,11 @@ export function TopicResults({ query, onCount }: { query: string; onCount: (n: n
       <h2 className="px-4 pb-1 text-[12px] font-extrabold uppercase tracking-[.08em] text-muted lg:px-3">
         Topics{hits && hits.matched > hits.topics.length ? " · " + hits.topics.length + " of " + hits.matched : ""}
       </h2>
-      {failed && <p role="alert" className="px-4 text-[14px] text-danger lg:px-3">Topics couldn’t be searched: {failed}</p>}
-      <ul aria-label="Matching topics" className="px-2">
-        {(hits?.topics || []).map((t) => (
+      {failed && <p role="alert" className="px-4 text-[14px] text-danger lg:px-3">Topics couldn’t be searched: {failed} <Button size="sm" onClick={page.retry}>Try again</Button></p>}
+      <ul {...stable.bind} aria-label="Matching topics" className="px-2">
+        {stable.choices.map(({row:t,present}) => (
           <li key={t.peer + "/" + t.id}>
-            <button type="button" onClick={() => void store.open({ kind: "thread", id: t.id, peer: t.peer })} aria-label={topicLabel(t) + ", with " + (agents.get(t.peer) || t.peer) + ", " + when(t.lastAt)}
+            <button type="button" aria-disabled={!present} onClick={() => {if(present){stable.release();void store.openUnread({ kind: "thread", id: t.id, peer: t.peer });}}} aria-label={topicLabel(t) + ", with " + (agents.get(t.peer) || t.peer) + ", " + when(t.lastAt)}
               className="flex min-h-11 w-full items-center gap-3 rounded-2xl px-2 py-2 text-left hover:bg-sunken">
               <AgentAvatar seed={t.peer} size={36} device={deviceKind(t.peer)} />
               <span className="min-w-0 flex-1">

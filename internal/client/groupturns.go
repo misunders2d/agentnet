@@ -182,7 +182,7 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 	if !ordinaryGroupTurn(test) || m.claim != nil && !envelope.TopicOrganization(m.TopicEvent) && !m.contribution || m.selfJob {
 		return ConvSent{}, errors.New("group: only ordinary human messages are supported")
 	}
-	if envelope.Blank(m.Body) && len(m.Files) == 0 {
+	if envelope.Blank(m.Body) && len(m.Files) == 0 && !envelope.TopicRename(m.TopicEvent) {
 		return ConvSent{}, errors.New("nothing to send: no text and no files")
 	}
 	if len(m.Files) > envelope.MaxAttachments {
@@ -376,7 +376,7 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 		}
 		return m.organizationBatch.stage(a, copies, envelope.Inner{}, claim)
 	}
-	err = a.store.addConvOutbox(copies, envelope.Inner{}, claim, "", binding)
+	err = a.store.addConvOutboxGuarded(copies, envelope.Inner{}, claim, "", m.beforeStore, binding)
 	if err != nil {
 		return ConvSent{}, err
 	}
@@ -523,8 +523,16 @@ func (a *Agent) admitGroupTurn(ctx context.Context, env envelope.Envelope, in en
 			if e := humanTurnAuthorization(tx, in, sender.Address, sender.Fingerprint(), a.Address, a.Self().Fingerprint(), false); e != nil {
 				return e
 			}
+			if e := saveSharedTopicRename(tx, in, sender.Fingerprint()); e != nil {
+				return e
+			}
 			if !readerMember {
 				return nil // a following host: no admission to stamp, no alert (as a DM guest)
+			}
+		}
+		if in.Human == nil {
+			if e := saveSharedTopicRename(tx, in, sender.Fingerprint()); e != nil {
+				return e
 			}
 		}
 		for _, copy := range forward {
@@ -559,6 +567,9 @@ func (a *Agent) admitGroupTurn(ctx context.Context, env envelope.Envelope, in en
 		}
 		return queueAlert(tx, in, sender.Fingerprint(), now)
 	})
+	if errors.Is(err, ErrSharedTopicTitleConflict) {
+		return hold(reasonInvalid, err.Error())
+	}
 	if err != nil && in.Human != nil {
 		return hold(reasonProof, err.Error()) // as a DM's captured turn: authority waits for its evidence
 	}

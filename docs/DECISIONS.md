@@ -1,5 +1,53 @@
 # AgentNet Revival — Architectural Decision Records & Linear Roadmap
 
+## 2026-10-16 — v33 shared names, unread attention and local deadlines
+
+Sergey approved the complete [v33 goal](plans/V0_8_33_GOAL.md), including the
+previously nonblocking additions. The [release checklist](plans/V0_8_33.md)
+distinguishes source implementation, independent review and executed acceptance;
+this design record is not a release or qualification claim.
+
+For shared topic names (MEL-654), Sergey chose to resolve old private conflicts
+on the next explicit rename. Old private labels have no cross-person application
+time, so they are neither automatically published nor ordered by invented
+recency. An explicit rename by a current authorized participant becomes shared
+metadata. Later admitted changes use revision and original-writer ordering;
+observing a rename before making another advances the revision. A present empty
+shared value restores the automatic name and still suppresses private labels.
+Main flow and device names remain private. Rename metadata grants no membership,
+history access or execution authority and produces no message/unread notice.
+
+Unread totals, Review entries and native indicators use the same effective
+read/attention projection, including accessible Done/Archived topics and marked
+outgoing turns (MEL-649–653). Local mute affects the indicator total, never read
+state. Opening a chat acknowledges only meaningfully visible rows, with the
+existing visit and full revision-plus-writer fences. Sorting and listing unread
+entries acknowledge nothing and remain separate from approvals. Moving lists
+use comparison cursors and prefix refresh/deduplication; displayed order stays
+stable during pointer, focus and selection interactions.
+
+Scheduled sending (MEL-637) belongs to the scheduling device's existing runtime,
+with one next-deadline wake and durable local records. It must never send early
+or promise on-time delivery while that runtime is stopped, asleep or browser
+background execution is unavailable. At dispatch, use the ordinary fresh-authority
+send path and check actual recipients atomically with the outbox and schedule
+state; a widened person/PID/topic audience needs review. Files reuse verified
+owner-encrypted kept copies with schedule-aware cleanup. A saved schedule is
+neither sent nor delivered and starts no mentioned agent before dispatch.
+Creation may carry a stable local ID. An identical retry returns the existing
+record; conflicting content and ordinary sends reusing a reserved schedule ID
+are refused. An ambiguous save keeps its immutable in-memory intent and Files
+across navigation. A reload retains only a small recovery token, never the
+message or file bytes. Exact lookup cannot prove that a saved file's contents
+match the old draft, and a not-found lookup cannot prove an interrupted request
+will never commit. Neither outcome clears a draft or automatically sends again.
+Cold recovery tokens survive self-updates; only in-memory originals defer reload.
+The recovery key is purpose-specific and shared across skins:
+`agentnet.messenger.schedule-save.<workspace-id>`. It contains only the attempt
+ID, conversation and file names/sizes. The shared in-memory slot retains its
+creating draft namespace; another skin may confirm the exact attempt but cannot
+consume its guarded draft-clear. Cold tokens carry no creating-owner claim.
+
 ## 2026-10-15 — natural steering, without extra composer controls
 
 The owner's next tagged message corrects that agent's current work in the same

@@ -29,6 +29,7 @@ export const CapSendGroup = "sg1"; // optional signed presentation; never a rout
 export const CapRequestFollowup = "flw1";
 export const CapRequestSteer = "flw2";
 export const CapTopicOrganization = "org1";
+export const CapSharedTopicTitle = "ttl1";
 export const CapTopicContext = "tpc1";
 export const CapGuestAgent = "gpa1"; // includes tpc1, with exact parent-derived transient agents
 export const CapTopicParticipation = "tps1"; // explicit ongoing topic scope, never implied by rm1
@@ -670,12 +671,16 @@ export async function verifyTopicRequestProof(value,key) {
 }
 export function topicRequestJSON(r) {return '{"lid":'+goString(r.lid)+',"author":'+goString(r.author)+',"hash":'+goString(r.hash)+(r.proof?',"proof":'+topicProofJSON(r.proof):'')+'}';}
 
+export const topicRename=e=>!!e&&e.action==="rename";
+export function normalizeSharedTopicTitle(s) {return [...s.replace(/[\p{Cc}\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu,"").replace(/[\u0009-\u000d\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+/gu," ").replace(/^ +| +$/g,"")].slice(0,120).join("").replace(/ +$/g,"");}
 export function topicEventJSON(e) {
- return '{"action":'+goString(e.action)+(e.seen?.length?',"seen":['+e.seen.map(goString).join(',')+']':'')+(e.moves?.length?',"moves":['+e.moves.map(m=>'{"lid":'+goString(m.lid)+',"author":'+goString(m.author)+',"hash":'+goString(m.hash)+(m.topic?',"topic":'+goString(m.topic):'')+'}').join(',')+']':'')+(e.merge?',"merge":'+goString(e.merge):'')+(e.request?',"request":'+topicRequestJSON(e.request):'')+'}';
+ return '{"action":'+goString(e.action)+(e.title!==undefined?',"title":'+goString(e.title):'')+(e.rev?',"rev":'+goInt(e.rev,'rev'):'')+(e.seen?.length?',"seen":['+e.seen.map(goString).join(',')+']':'')+(e.moves?.length?',"moves":['+e.moves.map(m=>'{"lid":'+goString(m.lid)+',"author":'+goString(m.author)+',"hash":'+goString(m.hash)+(m.topic?',"topic":'+goString(m.topic):'')+'}').join(',')+']':'')+(e.merge?',"merge":'+goString(e.merge):'')+(e.request?',"request":'+topicRequestJSON(e.request):'')+'}';
 }
 export function parseTopicEvent(e) {
- const v=strict(e,"topic event",{action:"string",seen:"array",moves:"array",merge:"string",request:"object"});
- if(!["create","done","open","move","merge"].includes(v.action)||v.seen?.some(id=>typeof id!=="string"||!validID(id)))throw Error("invalid topic action");
+ const v=strict(e,"topic event",{action:"string",title:"string",rev:"int",seen:"array",moves:"array",merge:"string",request:"object"});
+ if(!["create","done","open","move","merge","rename"].includes(v.action)||v.seen?.some(id=>typeof id!=="string"||!validID(id)))throw Error("invalid topic action");
+ if(v.action==="rename"){if(v.title===undefined||v.title!==normalizeSharedTopicTitle(v.title)||!Number.isSafeInteger(v.rev)||v.rev<1||v.seen?.length||v.moves?.length||v.merge||v.request)throw Error("invalid shared topic rename");return {action:v.action,title:v.title,rev:v.rev};}
+ if(Object.hasOwn(e,"title")||Object.hasOwn(e,"rev"))throw Error("unexpected topic title fields");
  if(!topicOrganization(v)){if(v.moves?.length||v.merge||v.request)throw Error("unexpected organization fields");return {action:v.action,...(v.seen?.length?{seen:v.seen}:{})};}
  if(v.seen?.length||!v.moves?.length||v.moves.length>200||v.action==="merge"&&!validID(v.merge)||v.action==="move"&&v.merge)throw Error("invalid selected topic action");
  const seen=new Set(),moves=v.moves.map(ref=>{const m=strict(ref,"topic move",{lid:"string",author:"string",hash:"string",topic:"string"}),key=m.author+":"+m.lid;if(!validID(m.lid)||!validFingerprint(m.author)||!validHash(m.hash)||m.topic&&!validID(m.topic)||seen.has(key)||v.merge&&m.topic!==v.merge)throw Error("invalid selected topic message");seen.add(key);return {lid:m.lid,author:m.author,hash:m.hash,...(m.topic?{topic:m.topic}:{})};});
@@ -684,6 +689,7 @@ export function parseTopicEvent(e) {
 export function checkTopic(n) {
  if(n.topic && (n.v!==Version2||!validID(n.topic)||n.sub))throw Error("topic belongs only on a conversation turn");
  if(n.topic_event){parseTopicEvent(n.topic_event);if(!n.topic&&!mainTopicOrganization(n)||n.kind!=="message"||n.target||agentOrigin(n.origin)&&!agentTopicOrganization(n)||n.status||n.attachments?.length)throw Error("topic event belongs only on a human conversation message");}
+ if(topicRename(n.topic_event)&&(n.body||n.agent_id||agentOrigin(n.origin)||n.human&&agentAuthor(n.human)||n.pid&&(!n.human||n.pid!==n.human.author_pid)||n.ref||n.receiver_route||n.followup||n.topic_done||n.quote||n.send_group))throw Error("invalid shared topic rename");
  if(topicOrganization(n.topic_event)&&(n.pid&&!agentTopicOrganization(n)||n.agent_id&&!agentTopicOrganization(n)||n.topic_event.request&&!agentTopicOrganization(n)||n.human||n.ref||n.receiver_route||n.followup||n.topic_done||n.topic_event.merge&&n.topic_event.merge===n.topic||n.topic_event.moves.some(m=>(m.topic||"")===(n.topic||""))))throw Error("topic organization is an original-member display action");
  if(agentTopicOrganization(n)){const r=parseTopicRequest(n.topic_event.request);if(!validID(n.pid)||n.agent_id&&!validID(n.agent_id)||r.proof&&(n.conv&&r.proof.conv!==n.conv||r.proof.pid!==n.pid||r.proof.target.agent_id!==(n.agent_id||"")))throw Error("compact proof differs from exact organization binding");}
  if(n.topic_done&&(![Version,Version2].includes(n.v)||n.status!=="done"||!["answer","result"].includes(n.kind)||n.v===Version2&&(!n.topic||!n.pid||!agentOrigin(n.origin))))throw Error("topic_done belongs only on a completed agent answer or result");
@@ -1030,7 +1036,7 @@ export const convRootVersionLimit = (v) => v === GroupRootVersion ? MaxGroupRoot
 const convRootSizeLimit = (json) => { try { return convRootVersionLimit(JSON.parse(json).v); } catch (_) { return MaxConvRoot; } };
 export const CapProactiveAgent = "ams1";
 export const proactiveAgent = n => n.kind === "message" && !n.sub && !n.status && !n.reply_to && !n.target && !!n.conv && !!n.pid && n.origin === "agent:proactive" && !n.receiver_route;
-export const MaxCaps = 32, MaxAdvertisedCaps = 28; // older readers already parse up to 32 names
+export const MaxCaps = 32, MaxAdvertisedCaps = 29; // older readers already parse up to 32 names
 export const MaxCapsRecord = 1024;
 export const CapEnv2 = "env2";
 export const CapPerson = "person2"; // reads person roster chains, roots v2, fan-out and history
@@ -1872,7 +1878,7 @@ export function guestAgentRequirement(required="",needed=false) {
 export function retainedAgentActionRequirements(row) {
  let n=row;if(row.sub==="history"&&row.body)try{n=parseHistory(row.body);}catch{}
  const required=steerRequirement(guestAgentRequirement(row.required_cap||agentRequirement(row),guestAgentCopy(row)),steerCopy(row));
- return {...(required||conversationAudienceCopy(row)?{required_cap:conversationAudienceRequirement(required,conversationAudienceCopy(row))}:{}),mention_cap:!!(row.mention_cap||row.required_cap===CapMentionReaction||n.origin===OriginMentionReaction&&n.pid&&n.sub===SubReaction),organization_cap:!!(row.organization_cap||row.required_cap===CapAgentOrganization||organizationReaderExtension(n))};
+ return {...(required||conversationAudienceCopy(row)?{required_cap:conversationAudienceRequirement(required,conversationAudienceCopy(row))}:{}),shared_title_cap:!!(row.shared_title_cap||topicRename(n.topic_event)),mention_cap:!!(row.mention_cap||row.required_cap===CapMentionReaction||n.origin===OriginMentionReaction&&n.pid&&n.sub===SubReaction),organization_cap:!!(row.organization_cap||row.required_cap===CapAgentOrganization||organizationReaderExtension(n))};
 }
 export function agentRequirement(n) {
   try {

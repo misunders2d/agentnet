@@ -19,6 +19,9 @@ type piRPCBridge struct {
 	input                io.WriteCloser
 	output               io.Writer
 	onActivity           func(nativeActivity)
+	onThinking           func(string)
+	thinking             nativeThinkingBuffer
+	activityMessageID    string
 	ready                chan struct{}
 	readyOnce, closeOnce sync.Once
 	mu, writeMu, readMu  sync.Mutex
@@ -104,6 +107,8 @@ func (b *piRPCBridge) failLocked(why string) {
 func (b *piRPCBridge) endLocked() {
 	b.done = true
 	b.active = false
+	b.thinking = nativeThinkingBuffer{}
+	b.activityMessageID = ""
 	for id, p := range b.pending {
 		p.result <- steerUnknown
 		delete(b.pending, id)
@@ -209,21 +214,25 @@ func (b *piRPCBridge) event(raw []byte) {
 			var name string
 			if json.Unmarshal(e.ToolName, &name) == nil {
 				if k := nativeToolActivity(name); k != activityUnknown {
-					b.onActivity(k)
+					emitNativeActivity(b.onActivity, k)
 				}
 			}
 		}
 	case "tool_execution_end":
 		if b.onActivity != nil && b.active {
-			b.onActivity(activityWorking)
+			emitNativeActivity(b.onActivity, activityWorking)
 		}
 	case "message_update":
+		if b.onThinking != nil && b.active && (!b.omp || e.MessageID != "" && e.MessageID == b.activityMessageID) {
+			b.thinkingEvent(e.AssistantMessageEvent)
+		}
 		if b.onActivity != nil && b.active {
 			var event struct {
 				Type string `json:"type"`
 			}
 			if json.Unmarshal(e.AssistantMessageEvent, &event) == nil && event.Type == "text_start" {
-				b.onActivity(activityAnswer)
+				b.thinking = nativeThinkingBuffer{}
+				emitNativeActivity(b.onActivity, activityAnswer)
 			}
 		}
 	case "agent_start":
@@ -231,6 +240,8 @@ func (b *piRPCBridge) event(raw []byte) {
 			return
 		}
 		b.active = true
+		b.thinking = nativeThinkingBuffer{}
+		b.activityMessageID = ""
 		b.readyOnce.Do(func() { close(b.ready) })
 	case "agent_end":
 		if b.omp {
@@ -238,6 +249,8 @@ func (b *piRPCBridge) event(raw []byte) {
 		}
 		b.ended = true
 		b.active = false
+		b.thinking = nativeThinkingBuffer{}
+		b.activityMessageID = ""
 		// A late native queue response never establishes consumption.
 		for id, p := range b.pending {
 			p.result <- steerUnknown
@@ -260,6 +273,14 @@ func (b *piRPCBridge) event(raw []byte) {
 		}
 	case "message_start":
 		role, text, _, _ := piMessageText(e.Message)
+		if role == "assistant" && b.active {
+			b.thinking = nativeThinkingBuffer{}
+			b.activityMessageID = ""
+			if len(e.MessageID) <= 256 {
+				b.activityMessageID = e.MessageID
+			}
+			emitNativeThinking(b.onThinking, b.onActivity, "")
+		}
 		var native struct {
 			Steering    bool   `json:"steering"`
 			Attribution string `json:"attribution"`
@@ -280,6 +301,10 @@ func (b *piRPCBridge) event(raw []byte) {
 			}
 		}
 	case "message_end":
+		if !b.omp || e.MessageID == b.activityMessageID {
+			b.thinking = nativeThinkingBuffer{}
+			b.activityMessageID = ""
+		}
 		role, text, stop, tool := piMessageText(e.Message)
 		if role == "assistant" && !tool {
 			if stop == "error" || stop == "aborted" {
@@ -317,6 +342,56 @@ func (b *piRPCBridge) event(raw []byte) {
 		b.publishLocked()
 	}
 }
+
+func (b *piRPCBridge) thinkingEvent(raw json.RawMessage) {
+	var event struct {
+		Type         string          `json:"type"`
+		ContentIndex *int64          `json:"contentIndex"`
+		Delta        json.RawMessage `json:"delta"`
+		Content      json.RawMessage `json:"content"`
+	}
+	if json.Unmarshal(raw, &event) != nil {
+		b.thinking = nativeThinkingBuffer{}
+		emitNativeThinking(b.onThinking, b.onActivity, "")
+		return
+	}
+	switch event.Type {
+	case "thinking_start", "thinking_delta", "thinking_end":
+	default:
+		return
+	}
+	if event.ContentIndex == nil || *event.ContentIndex < 0 {
+		b.thinking = nativeThinkingBuffer{}
+		emitNativeThinking(b.onThinking, b.onActivity, "")
+		return
+	}
+	index := *event.ContentIndex
+	if event.Type == "thinking_start" {
+		b.thinking.start("", index)
+		emitNativeThinking(b.onThinking, b.onActivity, "")
+		return
+	}
+	if !b.thinking.open || b.thinking.index != index {
+		return
+	}
+	value := event.Delta
+	if event.Type == "thinking_end" {
+		value = event.Content
+	}
+	var text string
+	if json.Unmarshal(value, &text) != nil {
+		b.thinking = nativeThinkingBuffer{}
+		emitNativeThinking(b.onThinking, b.onActivity, "")
+		return
+	}
+	if event.Type == "thinking_end" {
+		emitNativeThinking(b.onThinking, b.onActivity, text)
+		b.thinking = nativeThinkingBuffer{}
+	} else {
+		b.thinking.add("", index, text, b.onThinking, b.onActivity)
+	}
+}
+
 func (b *piRPCBridge) publishLocked() {
 	if strings.TrimSpace(b.answer) == "" {
 		b.failLocked("Native request settled without an assistant answer")

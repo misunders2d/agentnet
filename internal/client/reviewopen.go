@@ -46,16 +46,21 @@ var startConsole = startInOwnConsole
 // or history click) and calls onClick for the standard click action while
 // the notification is live (on Windows, only for a real click on it).
 func (a *Agent) reviewClick(target string) (argv []string, onClick func()) {
+	return a.notificationClick(target, a.nativeReviewFragment(target))
+}
+
+// Reuse the registered app/workspace and exact-home fallback for a fragment
+// computed by the exact notification lookup, including sent-copy direction.
+func (a *Agent) notificationClick(target, fragment string) (argv []string, onClick func()) {
+	if fragment == "" {
+		fragment = "review"
+	}
 	// Local exact items land on their message; remote report snapshots land
 	// on Activity's actionable review surface, never their read-only message.
 	// A click only opens the page; it never accepts or sends anything.
 	// In the AgentNet app the click opens its window on the item (never a
 	// terminal); the workspace-bound OpenPage adds the workspace.
 	if a.openPage != nil {
-		fragment := "review"
-		if protocol.ValidID(target) && !a.isReceivedReviewNotice(target) {
-			fragment = "msg=" + target + "&dir=in"
-		}
 		if argv = a.openPage(fragment); len(argv) == 0 {
 			return nil, nil
 		}
@@ -79,10 +84,6 @@ func (a *Agent) reviewClick(target string) (argv []string, onClick func()) {
 			workspace := params.Get("workspace")
 			if parseErr != nil || workspace != "" && !validWorkspaceID(workspace) {
 				return nil, nil
-			}
-			fragment := "review"
-			if protocol.ValidID(target) && !a.isReceivedReviewNotice(target) {
-				fragment = "msg=" + target + "&dir=in"
 			}
 			if workspace != "" {
 				fragment += "&workspace=" + url.QueryEscape(workspace)
@@ -118,7 +119,7 @@ func (a *Agent) reviewClick(target string) (argv []string, onClick func()) {
 	if term != "" {
 		argv = append([]string{term, "--title=AgentNet review", "--dir=" + a.reviewDir(), "--"}, argv...)
 	}
-	if protocol.ValidID(target) && !a.isReceivedReviewNotice(target) {
+	if protocol.ValidID(target) && fragment != "review" && !strings.Contains(fragment, "dir=out") && !a.isReceivedReviewNotice(target) {
 		argv = append(argv, target)
 	} else {
 		argv = append(argv, "--review")

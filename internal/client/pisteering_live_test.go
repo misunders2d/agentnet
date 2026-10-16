@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -297,7 +298,33 @@ func actualOwnedDirectSteering(t *testing.T, name, optIn string, named bool) {
 		v, e := sender.followupExecution(h.h, "")
 		return e == nil && v != nil && v.State == stateRunning && v.Attempt == 1 && !v.Stale
 	}
+	evidence := newNativeActivityEvidence(name, named)
+	evidenceDir := os.Getenv("AGENTNET_LIVE_NATIVE_ACTIVITY_EVIDENCE")
+	if evidenceDir != "" {
+		if err := nativeActivityEvidenceDirectory(evidenceDir); err != nil {
+			t.Fatal("private native activity evidence directory unavailable")
+		}
+	}
+	t.Cleanup(func() {
+		t.Logf("native activity evidence thinking=%d fallback=%d input=%d unsafe=%d mismatch=%d samples=%d thinking_absent=%t attempt_match=%t request_match=%t target_match=%t stale_seen=%t", len(evidence.Thinking), len(evidence.Fallback), evidence.InputCount, evidence.Unsafe, evidence.Mismatch, evidence.SamplesTotal, evidence.ThinkingAbsent, evidence.AttemptMatch, evidence.RequestMatch, evidence.TargetMatch, evidence.StaleSeen)
+		if evidenceDir != "" && writeNativeActivityEvidence(evidenceDir, evidence) != nil {
+			t.Error("private native activity evidence artifact unavailable")
+		}
+	})
+	observe := func() {
+		ref := envelope.Ref{ID: root.ID, Fingerprint: parent.Key}
+		h, err := sender.followupOriginal(sender.store.db, "", ref)
+		var v *ExecView
+		if err == nil {
+			v, err = sender.followupExecution(h.h, "")
+		}
+		if err != nil {
+			v = nil
+		}
+		evidence.observe(h, v, ref, a.Address, a.Self().Fingerprint(), target)
+	}
 	eventually(t, "sender verified current running attempt", senderRunning)
+	observe()
 	ctx, cancel := context.WithTimeout(t.Context(), 150*time.Second)
 	done := make(chan struct{})
 	go func() { defer close(done); a.runJob(ctx, parent, &responder, nil) }()
@@ -333,6 +360,7 @@ func actualOwnedDirectSteering(t *testing.T, name, optIn string, named bool) {
 		t.Helper()
 		for !check() {
 			checkApproval()
+			observe()
 			select {
 			case <-done:
 				t.Fatalf("native job ended before %s; no retry", what)
@@ -377,10 +405,16 @@ func actualOwnedDirectSteering(t *testing.T, name, optIn string, named bool) {
 	if err = a.store.db.QueryRow(`SELECT run_pgid FROM inbox WHERE id=?`, root.ID).Scan(&after); err != nil || after != before {
 		t.Fatal("original native process changed", err)
 	}
-	select {
-	case <-done:
-	case <-ctx.Done():
-		t.Fatal("owned request did not finish")
+	for waiting := true; waiting; {
+		select {
+		case <-done:
+			observe()
+			waiting = false
+		case <-ctx.Done():
+			t.Fatal("owned request did not finish")
+		case <-ticker.C:
+			observe()
+		}
 	}
 	state, err := a.store.jobState(root.ID)
 	if err != nil || state != stateAnswered {
@@ -417,4 +451,115 @@ func actualOwnedDirectSteering(t *testing.T, name, optIn string, named bool) {
 		t.Fatal("finished correction replayed", found, e)
 	}
 	t.Logf("direct harness=%s named=%t root=%s correction=%s answer=%s pgid_before=%d pgid_after=%d attempts=1 signed_sender_admission=true exact_nonce_reversal=true no_replay=true executor=%s", name, named, root.ID, correction, answerID, before, after, parent.AgentID)
+}
+
+// Test-only public projection evidence. No raw native event, identifier or
+// rejected detail is retained; the same helper is used by passive observation.
+type nativeActivityEvidence struct {
+	Harness        string   `json:"harness"`
+	Named          bool     `json:"named"`
+	Thinking       []string `json:"thinking"`
+	Fallback       []string `json:"fallback"`
+	ThinkingCount  int      `json:"thinking_count"`
+	FallbackCount  int      `json:"fallback_count"`
+	InputSeen      bool     `json:"input_seen"`
+	InputCount     int      `json:"input_count"`
+	Unsafe         int      `json:"unsafe"`
+	Mismatch       int      `json:"mismatch"`
+	AttemptMatch   bool     `json:"attempt_match"`
+	RequestMatch   bool     `json:"request_match"`
+	TargetMatch    bool     `json:"target_match"`
+	StaleSeen      bool     `json:"stale_seen"`
+	SamplesTotal   int      `json:"samples_total"`
+	ThinkingAbsent bool     `json:"thinking_absent"`
+}
+
+func newNativeActivityEvidence(harness string, named bool) *nativeActivityEvidence {
+	return &nativeActivityEvidence{Harness: harness, Named: named, Thinking: []string{}, Fallback: []string{}, ThinkingAbsent: true}
+}
+
+func (e *nativeActivityEvidence) observe(original followupOriginal, v *ExecView, ref envelope.Ref, recipient, key string, target *envelope.Target) {
+	e.SamplesTotal++
+	requestOK := ref.ID != "" && ref.Fingerprint != "" && original.h.ID == ref.ID && original.h.FromKey == ref.Fingerprint
+	attemptOK := v != nil && v.Attempt == 1
+	targetOK := recipient != "" && key != "" && original.to == recipient && original.key == key && v != nil && v.Host == recipient && sameFollowupTarget(original.h.Target, target)
+	if original.h.Target != nil {
+		targetOK = targetOK && original.h.Target.Address == recipient && original.h.Target.Fingerprint == key
+	}
+	e.RequestMatch = e.RequestMatch || requestOK
+	e.AttemptMatch = e.AttemptMatch || attemptOK
+	e.TargetMatch = e.TargetMatch || targetOK
+	e.StaleSeen = e.StaleSeen || v != nil && v.Stale
+	if !requestOK || !attemptOK || !targetOK || v.State != stateRunning || v.Stale {
+		e.Mismatch++
+		return
+	}
+	label, stamp, timed := strings.Cut(v.Detail, "\nReported at ")
+	if timed {
+		at, err := time.Parse(time.RFC3339, stamp)
+		if err != nil || at.UTC().Format(time.RFC3339) != stamp {
+			e.Unsafe++
+			return
+		}
+	}
+	if label == nativeInputDetail {
+		e.InputSeen = true
+		e.InputCount++
+		return
+	}
+	if !publicActivityDetail(v.Detail) {
+		e.Unsafe++
+		return
+	}
+	labels := &e.Fallback
+	if strings.HasPrefix(label, "Thinking: ") {
+		e.ThinkingCount++
+		e.ThinkingAbsent = false
+		labels = &e.Thinking
+	} else {
+		e.FallbackCount++
+	}
+	if len(*labels) < 16 && (len(*labels) == 0 || (*labels)[len(*labels)-1] != label) {
+		*labels = append(*labels, label)
+	}
+}
+
+func nativeActivityEvidenceDirectory(dir string) error {
+	if !filepath.IsAbs(dir) {
+		return errors.New("absolute private evidence directory required")
+	}
+	info, err := os.Lstat(dir)
+	if err != nil || !info.IsDir() || info.Mode().Perm()&0077 != 0 || info.Mode().Perm()&0700 != 0700 {
+		return errors.New("existing private evidence directory required")
+	}
+	return nil
+}
+
+func writeNativeActivityEvidence(dir string, evidence *nativeActivityEvidence) error {
+	switch evidence.Harness {
+	case "pi", "omp", "claude", "codex":
+	default:
+		return errors.New("unknown evidence harness")
+	}
+	if err := nativeActivityEvidenceDirectory(dir); err != nil {
+		return err
+	}
+	mode := "default"
+	if evidence.Named {
+		mode = "named"
+	}
+	data, err := json.Marshal(evidence)
+	if err != nil || len(data) > 16*1024 {
+		return errors.New("bounded public evidence required")
+	}
+	f, err := os.OpenFile(filepath.Join(dir, evidence.Harness+"-"+mode+".json"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return err
+	}
+	_, writeErr := f.Write(data)
+	closeErr := f.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	return closeErr
 }

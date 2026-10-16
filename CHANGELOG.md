@@ -6,6 +6,29 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+- Count unread messages across Main and accessible topics, add exact unread
+  navigation from Review, and keep choices stable while someone selects them.
+  Acknowledge meaningfully visible messages with the existing attention fences.
+- Save scheduled human messages locally with exact audience review, attachments,
+  editing, cancellation and Send now. Dispatch through the ordinary guarded send
+  path when this device is running at or after the deadline; a browser needs
+  its AgentNet page open. Recover ambiguous saves by the same ID.
+- Accept bounded changing native thinking detail from Pi, OMP, Codex and Claude,
+  retaining generic activity when safe detail or optional CLI support is absent.
+- Show multiple rows of frequently used emoji, keeping the full picker usable
+  on short screens and retaining existing ranking and local history.
+- Play supported video attachments in Comic through an explicit Play action,
+  with native controls and a download fallback. Load verified local bytes on
+  demand, limit in-app playback to 16 MiB, and release media on navigation.
+- Add Full, Sender and Hidden notification previews. Desktop notifications
+  default to Hidden; private modes retain fixed reminder, decision and security
+  signals without message text or remote computer names.
+- Share explicit topic renames with authorized participants. Existing private
+  names stay private until the next rename; Main and device-chat titles retain
+  their personal behavior.
+- Normalize collective mentions before clipping chat previews, including
+  edited messages, while retaining the original message text and recipients.
+
 ## [0.8.32] — 2026-10-16
 
 - Keep notification navigation bound to the exact message while local sync is

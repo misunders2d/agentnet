@@ -250,7 +250,7 @@ func (a *Agent) relayFeatures(ctx context.Context) ([]string, error) {
 // hint (advertisedCaps) it is at most protocol.MaxAdvertisedCaps long;
 // rm1 (protocol.CapRoom) says this program enforces every room reader rule
 // (ROOM_V1 §2.1), so what rm1 implies (rcv1 among them) is not listed.
-var ownCaps = []string{protocol.CapMentionReaction, protocol.CapProactiveAgent, protocol.CapAgentOrganization, protocol.CapConversationAudience, protocol.CapContinuation, protocol.CapRootSync, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapRequestSteer, protocol.CapGroupInvitationManage, protocol.CapGuestAgent, protocol.CapHistoryArchive, protocol.CapHeadless, protocol.CapGroupHumanParticipation, protocol.CapModelSyncV2, protocol.CapNotify, protocol.CapTopicOrganization, protocol.CapOwnSyncV2, protocol.CapOwnSyncV3, protocol.CapPerson, protocol.CapReadSyncV2, protocol.CapRoom, protocol.CapSendGroup, protocol.CapTopicParticipation, protocol.CapTopicStateSync, protocol.CapTyping} // apx1 and aid1 are already implied by rm1; 28 includes agent1; independent cau1 leaves four reader slots
+var ownCaps = []string{protocol.CapMentionReaction, protocol.CapProactiveAgent, protocol.CapAgentOrganization, protocol.CapConversationAudience, protocol.CapContinuation, protocol.CapRootSync, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapRequestSteer, protocol.CapGroupInvitationManage, protocol.CapGuestAgent, protocol.CapHistoryArchive, protocol.CapHeadless, protocol.CapGroupHumanParticipation, protocol.CapModelSyncV2, protocol.CapNotify, protocol.CapTopicOrganization, protocol.CapOwnSyncV2, protocol.CapOwnSyncV3, protocol.CapPerson, protocol.CapReadSyncV2, protocol.CapRoom, protocol.CapSendGroup, protocol.CapTopicParticipation, protocol.CapTopicStateSync, protocol.CapSharedTopicTitle, protocol.CapTyping} // apx1 and aid1 are already implied by rm1; 29 includes agent1; independent ttl1 leaves three reader slots
 
 // capsPublisher is the one publisher of this run's capability records:
 // the daemon's and link.go's waiting session share the session id, and the
@@ -347,7 +347,7 @@ func (a *Agent) convSupport(ctx context.Context, address string, key identity.Pu
 // person typed, or an invited agent's answer or result. Events, excerpts,
 // replicas and everything else stay quiet.
 func asksAttention(in envelope.Inner) bool {
-	if in.V != envelope.Version2 || in.Sub != "" || in.Replica {
+	if in.V != envelope.Version2 || in.Sub != "" || in.Replica || envelope.TopicRename(in.TopicEvent) {
 		return false
 	}
 	switch {
@@ -472,7 +472,13 @@ func (a *Agent) ConversationMessages(conv string) ([]ConvMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-	return msgs, a.projectConvAttention(conv, msgs)
+	visible := msgs[:0]
+	for _, m := range msgs {
+		if !envelope.TopicRename(m.TopicEvent) {
+			visible = append(visible, m)
+		}
+	}
+	return visible, a.projectConvAttention(conv, visible)
 }
 
 // reply selects only one exact request and its replies for a local waiter.
@@ -527,6 +533,7 @@ func (a *Agent) conversationMessages(conv, reply string, selection ...*contextMe
 
 // ConvOutgoing is a message to send in a conversation.
 type ConvOutgoing struct {
+	beforeStore              beforeConvStore // neutral atomic guard, after normal authority and before inserts
 	organizationBatch        *topicUndoBatch
 	agentOrganizationCause   string
 	agentOrganizationAttempt int
@@ -620,6 +627,7 @@ func (a *Agent) SentCopies(lid string) ([]ConvCopy, error) {
 
 // outCopy is one device's copy being stored.
 type outCopy struct {
+	sharedTitleCap              bool
 	env                         envelope.Envelope
 	in                          envelope.Inner
 	state                       string
@@ -652,6 +660,9 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		m.Topic, err = a.outgoingTopic(conv, m.Topic, m.ReplyTo)
 	}
 	if err != nil {
+		return ConvSent{}, err
+	}
+	if err := a.prepareSharedTopicTitle(conv, &m); err != nil {
 		return ConvSent{}, err
 	}
 	if err := a.prepareTopicOrganization(ctx, conv, &m); err != nil {
@@ -864,7 +875,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		if len(m.Files) > envelope.MaxAttachments {
 			return ConvSent{}, fmt.Errorf("at most %d attachments per message", envelope.MaxAttachments)
 		}
-	} else if envelope.Blank(m.Body) && m.sub == "" {
+	} else if envelope.Blank(m.Body) && m.sub == "" && !envelope.TopicRename(m.TopicEvent) {
 		return ConvSent{}, errors.New("nothing to send: no text and no files")
 	}
 	// Fresh evidence first: newer roster steps of both persons decide the
@@ -964,9 +975,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		}
 		copies = append(copies, outCopy{in: in}) // listed before spooling, so a failure releases what it spooled
 		c := &copies[len(copies)-1]
-		if binding != nil {
-			c.recipientFP = key.Fingerprint()
-		}
+		c.recipientFP = key.Fingerprint()
 		for _, f := range m.Files {
 			att, err := a.spoolNamed(f, recipient)
 			if err != nil {
@@ -1052,7 +1061,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		}
 		return m.organizationBatch.stage(a, copies, local, claim)
 	}
-	if err := a.store.addConvOutbox(copies, local, claim, jobKey, binding); err != nil {
+	if err := a.store.addConvOutboxGuarded(copies, local, claim, jobKey, m.beforeStore, binding); err != nil {
 		return ConvSent{}, err
 	}
 	receiverStored = true
@@ -1577,6 +1586,9 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 				return e
 			}
 		}
+		if err := saveSharedTopicRename(tx, in, sender.Fingerprint()); err != nil {
+			return err
+		}
 		if err := insertCopies(tx, forward); err != nil {
 			return err
 		}
@@ -1600,7 +1612,7 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 		}
 	}
 	res, err := a.store.addConvInbox(in, sender.Fingerprint(), state, fromQuarantine, also)
-	if errors.Is(err, errTooManyEvents) {
+	if errors.Is(err, ErrSharedTopicTitleConflict) || errors.Is(err, errTooManyEvents) {
 		return hold(reasonInvalid, err.Error())
 	}
 	if err != nil {

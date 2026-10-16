@@ -368,13 +368,13 @@ func TestCapsRoomImplicationAndHeadroom(t *testing.T) {
 	for _, n := range []int{28, 29, 32} {
 		k := CapsRecord{Address: "vitalii/desk", Session: s1, Caps: names(n), TS: 5}
 		k.Sign(key)
-		if err := k.ValidateAdvertisement(); (err == nil) != (n == 28) {
+		if err := k.ValidateAdvertisement(); (err == nil) != (n <= 29) {
 			t.Errorf("producer %d names: %v", n, err)
 		}
 	}
-	// Explicit v28 producer evolution adds independent cau1 support,
-	// while existing readers still parse 32 and retain four unused slots.
-	if MaxCaps != 32 || MaxAdvertisedCaps != 28 || MaxCaps-MaxAdvertisedCaps != 4 {
+	// Explicit v33 producer evolution adds independent ttl1 support,
+	// while existing readers still parse 32 and retain three unused slots.
+	if MaxCaps != 32 || MaxAdvertisedCaps != 29 || MaxCaps-MaxAdvertisedCaps != 3 {
 		t.Fatalf("parse %d, advertise %d", MaxCaps, MaxAdvertisedCaps)
 	}
 }

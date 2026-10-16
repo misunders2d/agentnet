@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
 // Topics: an agent's separate conversations (device threads, uiview.go),
@@ -256,7 +257,7 @@ func localOf(locals map[string]topicLocal, g []string) (topicLocal, string) {
 // (topicText fills it); self is this device's address.
 func summarize(self, peer string, g []string, rows map[string]threadRow, l topicLocal, now int64) ThreadSummary {
 	first, last := rows[g[0]], rows[g[len(g)-1]]
-	t := ThreadSummary{ID: first.id, Peer: peer, Count: len(g), LastAt: time.Unix(last.at, 0), NoticeOnly: true, lastID: last.id, custom: l.Title}
+	t := ThreadSummary{ID: first.id, Peer: peer, Count: len(g), LastAt: time.Unix(last.at, 0), NoticeOnly: true, lastID: last.id, custom: l.Title, titleLine: first.preview, lastLine: last.preview}
 	facts := make([]threadRow, len(g))
 	for i, id := range g {
 		r := rows[id]
@@ -290,6 +291,7 @@ func summarize(self, peer string, g []string, rows map[string]threadRow, l topic
 	}
 	t.State, t.DoneBy, t.Pending, t.conclusionID, t.QuietSince = v.State, v.DoneBy, v.Pending, v.Conclusion, time.Unix(v.QuietSince, 0)
 	if v.Conclusion != "" {
+		t.conclusionLine = rows[v.Conclusion].preview
 		t.ConcludedBy = peer
 		if !rows[v.Conclusion].in {
 			t.ConcludedBy = self
@@ -299,7 +301,7 @@ func summarize(self, peer string, g []string, rows map[string]threadRow, l topic
 }
 
 // peerTopics summarizes every device thread with peer, without text.
-func (a *Agent) peerTopics(peer string, now int64) ([]ThreadSummary, error) {
+func (a *Agent) peerTopics(peer string, now int64, unread ...*[]DeviceUnreadRef) ([]ThreadSummary, error) {
 	groups, rows, err := a.peerThreadGroups(peer)
 	if err != nil || len(groups) == 0 {
 		return nil, err
@@ -312,6 +314,22 @@ func (a *Agent) peerTopics(peer string, now int64) ([]ThreadSummary, error) {
 	for _, g := range groups {
 		l, _ := localOf(locals, g)
 		out = append(out, summarize(a.Address, peer, g, rows, l, now))
+		if len(unread) > 0 && unread[0] != nil {
+			for _, id := range g {
+				r := rows[id]
+				if !r.unread {
+					continue
+				}
+				ref := DeviceUnreadRef{Peer: peer, Thread: g[0], ID: id, Author: r.key, Dir: "out", At: time.Unix(r.at, 0)}
+				if r.in {
+					ref.Dir = "in"
+				}
+				if r.preview != nil {
+					ref.Preview, ref.Ready = *r.preview, true
+				}
+				*unread[0] = append(*unread[0], ref)
+			}
+		}
 	}
 	return out, nil
 }
@@ -321,8 +339,13 @@ func (a *Agent) peerTopics(peer string, now int64) ([]ThreadSummary, error) {
 func (a *Agent) topicText(peer string, ts []*ThreadSummary) error {
 	var ids []string
 	for _, t := range ts {
-		ids = append(ids, t.ID, t.lastID)
-		if t.conclusionID != "" {
+		if t.titleLine == nil {
+			ids = append(ids, t.ID)
+		}
+		if t.lastLine == nil {
+			ids = append(ids, t.lastID)
+		}
+		if t.conclusionID != "" && t.conclusionLine == nil {
 			ids = append(ids, t.conclusionID)
 		}
 	}
@@ -330,10 +353,16 @@ func (a *Agent) topicText(peer string, ts []*ThreadSummary) error {
 	if err != nil {
 		return err
 	}
+	line := func(id string, resolved *string) string {
+		if resolved != nil {
+			return *resolved
+		}
+		return lines[id]
+	}
 	for _, t := range ts {
-		t.Title, t.Last = lines[t.ID], lines[t.lastID]
+		t.Title, t.Last = line(t.ID, t.titleLine), line(t.lastID, t.lastLine)
 		if t.conclusionID != "" {
-			t.Conclusion = lines[t.conclusionID]
+			t.Conclusion = line(t.conclusionID, t.conclusionLine)
 		}
 		if t.custom != "" {
 			t.AutoTitle, t.Title, t.Renamed = t.Title, t.custom, true
@@ -342,8 +371,8 @@ func (a *Agent) topicText(peer string, ts []*ThreadSummary) error {
 	return nil
 }
 
-// firstLines reads the first line of each message ids exchanged with peer,
-// shortened as firstLine does, without reading whole bodies.
+// firstLines reads small first-line prefixes for ids exchanged with peer.
+// Candidate mentions get a bounded message scan before display clipping.
 func (s *store) firstLines(peer string, ids []string) (map[string]string, error) {
 	out := map[string]string{}
 	seen := map[string]bool{}
@@ -355,6 +384,11 @@ func (s *store) firstLines(peer string, ids []string) (map[string]string, error)
 		}
 	}
 	line := `substr(body, 1, min(coalesce(nullif(instr(body, char(10)), 0) - 1, ` + strconv.Itoa(topicLineScan) + `), ` + strconv.Itoa(topicLineScan) + `))`
+	// Normal lines keep the small read. Only a possible canonical mention
+	// needs its closing delimiter before display clipping. Several compact
+	// labels may precede the visible tail, so bound that scan by a message,
+	// not by one collective payload. Neither branch returns raw text to UI.
+	line = `CASE WHEN instr(substr(body, 1, ` + strconv.Itoa(topicLineScan) + `), '](agentnet:') > 0 THEN substr(body, 1, min(coalesce(nullif(instr(body, char(10)), 0) - 1, ` + strconv.Itoa(protocol.MaxBody) + `), ` + strconv.Itoa(protocol.MaxBody) + `)) ELSE ` + line + ` END`
 	for len(unique) > 0 {
 		chunk := unique[:min(len(unique), topicLineChunk)]
 		unique = unique[len(chunk):]
@@ -378,7 +412,7 @@ func (s *store) firstLines(peer string, ids []string) (map[string]string, error)
 				rows.Close()
 				return nil, err
 			}
-			out[id] = firstLine(l)
+			out[id] = BodyPreview(l)
 		}
 		rows.Close()
 		if err := rows.Err(); err != nil {
@@ -406,6 +440,16 @@ type PeerTopics struct {
 // skins) gets every thread, archived topics included, each with its state.
 // Review-notice threads are always listed.
 func (a *Agent) TopicOverview(listArchived bool) ([]ThreadSummary, []PeerTopics, error) {
+	return a.topicOverview(listArchived, nil)
+}
+
+// TopicOverviewUnread collects refs while the existing thread rows are live;
+// it never runs another conversation/history pass.
+func (a *Agent) TopicOverviewUnread(listArchived bool, unread *[]DeviceUnreadRef) ([]ThreadSummary, []PeerTopics, error) {
+	return a.topicOverview(listArchived, unread)
+}
+
+func (a *Agent) topicOverview(listArchived bool, unread *[]DeviceUnreadRef) ([]ThreadSummary, []PeerTopics, error) {
 	peers, err := a.store.conversationPeers()
 	if err != nil {
 		return nil, nil, err
@@ -414,7 +458,11 @@ func (a *Agent) TopicOverview(listArchived bool) ([]ThreadSummary, []PeerTopics,
 	var out []ThreadSummary
 	var counts []PeerTopics
 	for _, peer := range peers {
-		all, err := a.peerTopics(peer, now)
+		unreadStart := 0
+		if unread != nil {
+			unreadStart = len(*unread)
+		}
+		all, err := a.peerTopics(peer, now, unread)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -442,8 +490,28 @@ func (a *Agent) TopicOverview(listArchived bool) ([]ThreadSummary, []PeerTopics,
 		if latest >= 0 && all[latest].State == TopicArchived && !listArchived {
 			text = append(text, &all[latest])
 		}
+		if unread != nil {
+			included := make(map[string]bool, len(text))
+			for _, t := range text {
+				included[t.ID] = true
+			}
+			for i := range all {
+				if all[i].Unread > 0 && !included[all[i].ID] {
+					text = append(text, &all[i])
+				}
+			}
+		}
 		if err := a.topicText(peer, text); err != nil {
 			return nil, nil, err
+		}
+		if unread != nil {
+			titles := make(map[string]string, len(all))
+			for _, t := range all {
+				titles[t.ID] = t.Title
+			}
+			for i := unreadStart; i < len(*unread); i++ {
+				(*unread)[i].TopicTitle = titles[(*unread)[i].Thread]
+			}
 		}
 		for _, t := range shown {
 			out = append(out, *t)
@@ -484,7 +552,7 @@ type TopicQuery struct {
 	Limit  int    // 0: TopicPageDefault
 }
 
-// TopicPage is one page of topics, most recently active first.
+// TopicPage lists unread topics first, then newest first within each bucket.
 type TopicPage struct {
 	Topics  []ThreadSummary `json:"topics"`
 	Next    string          `json:"next,omitempty"` // Before for the next page; "" when this is the last
@@ -515,15 +583,9 @@ func (a *Agent) Topics(q TopicQuery) (TopicPage, error) {
 	if limit < 0 || limit > TopicPageMax {
 		return TopicPage{}, ErrTopicQuery
 	}
-	var after *ThreadSummary
-	if q.Before != "" {
-		at, rest, ok := strings.Cut(q.Before, "|")
-		peer, id, ok2 := strings.Cut(rest, "|")
-		sec, err := strconv.ParseInt(at, 10, 64)
-		if !ok || !ok2 || err != nil || id == "" {
-			return TopicPage{}, ErrTopicQuery
-		}
-		after = &ThreadSummary{LastAt: time.Unix(sec, 0), Peer: peer, ID: id}
+	after, err := parseTopicPageCursor(q)
+	if err != nil {
+		return TopicPage{}, err
 	}
 	peers := []string{q.Peer}
 	if q.Peer == "" {
@@ -557,11 +619,11 @@ func (a *Agent) Topics(q TopicQuery) (TopicPage, error) {
 			}
 		}
 	}
-	sortTopics(matched)
+	sortUnreadTopics(matched)
 	p := TopicPage{Matched: len(matched), Topics: []ThreadSummary{}}
 	start := 0
 	if after != nil {
-		start = sort.Search(len(matched), func(i int) bool { return newer(*after, matched[i]) })
+		start = sort.Search(len(matched), func(i int) bool { return unreadTopicBefore(*after, matched[i]) })
 	}
 	end := min(start+limit, len(matched))
 	page := matched[start:end]
@@ -579,7 +641,7 @@ func (a *Agent) Topics(q TopicQuery) (TopicPage, error) {
 	p.Topics = append(p.Topics, page...)
 	if end < len(matched) && end > start {
 		last := page[len(page)-1]
-		p.Next = fmt.Sprintf("%d|%s|%s", last.LastAt.Unix(), last.Peer, last.ID)
+		p.Next = topicPageCursor(last)
 	}
 	return p, nil
 }

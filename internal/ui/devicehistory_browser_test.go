@@ -36,6 +36,14 @@ func TestBrowserReceivePendingRealIndexedDB(t *testing.T) {
 	testOwnDeviceModuleIndexedDB(t, "receive_pending_check.mjs", "receivePendingResult")
 }
 
+func TestSharedTitleEngineRealIndexedDB(t *testing.T) {
+	testOwnDeviceModuleIndexedDB(t, "sharedtitle_engine_check.mjs", "sharedTitleIDBResult")
+}
+
+func TestScheduleEngineRealIndexedDB(t *testing.T) {
+	testOwnDeviceModuleIndexedDB(t, "schedule_engine_check.mjs", "scheduleIDBResult")
+}
+
 func testOwnDeviceModuleIndexedDB(t *testing.T, module, resultField string) {
 	chrome := os.Getenv("AGENTNET_CHROME")
 	if chrome == "" {
@@ -53,7 +61,7 @@ func testOwnDeviceModuleIndexedDB(t *testing.T, module, resultField string) {
 				done <- result
 			}
 		default:
-			if !strings.HasPrefix(r.URL.Path, "/static/") && r.URL.Path != "/testdata/"+module {
+			if !strings.HasPrefix(r.URL.Path, "/static/") && r.URL.Path != "/testdata/"+module && r.URL.Path != "/testdata/human_engine_check.mjs" {
 				http.NotFound(w, r)
 				return
 			}

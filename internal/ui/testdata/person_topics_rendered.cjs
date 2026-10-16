@@ -4,6 +4,26 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('n
 const assets=path.resolve(process.env.AGENTNET_TOPIC_ASSETS||path.join(__dirname,'../static'));
 const evidence=process.env.AGENTNET_SCREENSHOTS;
 if(evidence)fs.mkdirSync(evidence,{recursive:true,mode:0o700});
+const adoptDocument = async (href, base) => {
+  const r = await fetch(href);
+  if (!r.ok) throw new Error("Could not load the skin’s fonts");
+  const parsed = new CSSStyleSheet();
+  parsed.replaceSync(await r.text()); // never follows @import
+  const kept = new CSSStyleSheet(), inside = new URL(base, location.href);
+  for (const rule of parsed.cssRules) {
+    if (typeof CSSPropertyRule !== "undefined" && rule instanceof CSSPropertyRule) kept.insertRule(rule.cssText, kept.cssRules.length);
+    else if (rule instanceof CSSFontFaceRule) {
+      let ok = true;
+      const css = rule.cssText.replace(/url\(\s*(["']?)([^"')]*)\1\s*\)/g, (_, q, u) => {
+        const abs = new URL(u, new URL(href, location.href));
+        if (abs.origin !== inside.origin || !abs.pathname.startsWith(inside.pathname)) ok = false;
+        return 'url("' + abs.href + '")';
+      });
+      if (ok) kept.insertRule(css, kept.cssRules.length);
+    }
+  }
+  document.adoptedStyleSheets = [...document.adoptedStyleSheets, kept];
+};
 const boot=`
 const skin=new URL(location).searchParams.get('skin');
 const me={person:'1'.repeat(32),label:'Tester',address:'tester/laptop',state:'self'},peer={person:'2'.repeat(32),label:'Casey',address:'casey/desktop',state:'pinned',devices:[]};
@@ -21,6 +41,16 @@ const views={
  [ids.guest]:{id:ids.guest,created:'2024-01-01T00:00:00Z',role:'human_guest',messages:[msg('guest-turn','Separate guest audience')],topics:[],guests:[]}
 };
 for(const view of Object.values(views))Object.assign(view,{peer,kind:'dm',mine:true,role:view.role||'member',members:[me,peer],agents:[],frozen:''});
+if (${process.env.AGENTNET_UNREAD_FIRST==='1'}) {
+ const v=views[ids.main],anchor='6'.repeat(32),done='7'.repeat(32);
+ v.messages=[msg('main-turn','Main planning',{unread:true}),msg('main-second','Second Main unread',{unread:true}),
+  ...Array.from({length:40},(_,i)=>msg((100+i).toString(16).padStart(32,'0'),'Earlier invoice context '+i,{topic:native})),
+  msg(anchor,'First unread outgoing invoice',{topic:native,dir:'out',from:me.address,unread:true,attention:{rev:4,writer:'11111111-11111111-11111111-11111111'}}),
+  ...Array.from({length:120},(_,i)=>msg((200+i).toString(16).padStart(32,'0'),'Later invoice context '+i+' '+('body '.repeat(12)),{topic:native,unread:i===80||i===119})),
+  ...Array.from({length:3},(_,i)=>msg((400+i).toString(16).padStart(32,'0'),'Done invoice item '+i,{topic:done,unread:true}))];
+ v.main_topic={id:'',conv:ids.main,title:'Main',count:2,unread:2,state:'active'};
+ v.topics=[{...topic(native,'Invoice review',ids.main),count:161,unread:3},{...topic(done,'Done invoices',ids.main,'done'),count:3,unread:3}];
+}
 if (${process.env.AGENTNET_TOPIC_UNREAD==='1'}) for(const id of [ids.main,ids.other])for(const m of views[id].messages)if(m.dir==='in')m.unread=true;
 if (${process.env.AGENTNET_ADDRESSING==='1'}) {
  const pi='5'.repeat(32),codex='6'.repeat(32);
@@ -29,23 +59,64 @@ if (${process.env.AGENTNET_ADDRESSING==='1'}) {
 }
 const summary=v=>({id:v.id,...(${process.env.AGENTNET_PREVIEW_ROUTE==='1'}&&v.messages.length?{last_id:v.messages.at(-1).lid||v.messages.at(-1).id}:{}),created:v.created,peer,kind:v.kind,role:v.role,count:v.messages.length,title:v.messages[0]?.deleted?'Message deleted':v.messages[0]?.body||'',last:v.messages.at(-1)?.deleted?'Message deleted':v.messages.at(-1)?.body||'',last_at:v.id===ids.other?'2026-10-07T12:00:00Z':at,unread:0,held:0,waiting:0,guests:v.guests.length});
 const overview={version:'fictional',seq:1,topic_list:true,me:{address:me.address,fingerprint:'own'},person:me,persons:true,agents:true,files:false,controls:false,role:'person',people:[peer],review:[],links:[],reminders:[],threads:[],dms:[ids.main,ids.other,ids.deleted,ids.empty,ids.guest].map(id=>summary(views[id])),directory:{current:true,members:[{address:me.address,presence:'connected'},{address:peer.address,presence:'connected'}]},quarantine:[],needs_you:[],held:[],agent_devices:[]};
-function unreadCounts(){for(const v of Object.values(views)){for(const t of v.topics)t.unread=v.messages.filter(m=>m.unread&&m.topic===t.id).length;const s=overview.dms.find(s=>s.id===v.id);if(s)s.unread=v.messages.filter(m=>m.unread).length;}}
-if (${process.env.AGENTNET_TOPIC_UNREAD==='1'})unreadCounts();
+if (${process.env.AGENTNET_COMPOSER_SCHEDULE==='1'}) {overview.schedules=true;overview.files={max_count:8,max_file:1048576,max_message:2097152};}
+function unreadCounts(){for(const v of Object.values(views)){if(v.main_topic)v.main_topic.unread=v.messages.filter(m=>m.unread&&!m.topic).length;for(const t of v.topics)t.unread=v.messages.filter(m=>m.unread&&m.topic===t.id).length;const s=overview.dms.find(s=>s.id===v.id);if(s)s.unread=v.messages.filter(m=>m.unread).length;}}
+if (${process.env.AGENTNET_TOPIC_UNREAD==='1'}||${process.env.AGENTNET_UNREAD_FIRST==='1'})unreadCounts();
+if (${process.env.AGENTNET_UNREAD_FIRST==='1'})overview.dms.find(d=>d.id===ids.main).last_at='2026-12-01T12:00:00Z';
 if (${process.env.AGENTNET_PREVIEW_ROUTE==='1'}) overview.dms.sort((a,b)=>b.last_at.localeCompare(a.last_at));
+if (${process.env.AGENTNET_UNREAD_REVIEW==='1'}) {
+ const v=views[ids.main],closed='7'.repeat(32),fp='aaaaaaaa-bbbbbbbb-cccccccc-dddddddd';
+ v.kind='group';v.title='Fictional review group';
+ v.messages=Array.from({length:263},(_,i)=>msg((1000+i).toString(16).padStart(32,'0'),'Review item '+i,{topic:i<2?'':i>=260?closed:native,unread:true,send_group_author:fp,attention:{rev:1,writer:fp}}));
+ v.main_topic={id:'',conv:v.id,title:'Main',count:2,unread:2,state:'active'};
+ v.topics=[{...topic(native,'Review topic',v.id),count:258,unread:258,renamed:true,auto_title:'Automatic review title'},{...topic(closed,'Archived review',v.id,'archived'),count:3,unread:3},...Array.from({length:258},(_,i)=>({...topic((500+i).toString(16).padStart(32,'0'),'Extra choice '+i,v.id),unread:0}))];
+ // Provider-shaped projection from the already tested long-mention contract:
+ // no parser is added here; actual native/Engine parsing is separate evidence.
+ const raw='[@Amazon_team](agentnet:collective/v1/'+Array.from({length:1000},(_,i)=>'p.'+i.toString(16).padStart(32,'0')).join(',')+') Check inventory';
+ overview.dms=[{...summary(v),kind:'group',title:v.title,last:'@Amazon_team Check inventory'}];
+ window.longMentionInput={raw,projected:overview.dms[0].last};
+ unreadCounts();overview.unread_total=263;overview.alert_total=263;
+}
 overview.remind=${process.env.AGENTNET_OWN_REMIND==='1'};overview.reminders=JSON.parse(localStorage.getItem('fictional-reminders')||'[]');
 if(localStorage.getItem('fictional-late'))overview.dms.push(summary(views[ids.late]));
 let changed,open,release;
 const requests=[];window.fixture={ids,views,overview,requests,native,delay:'',release:()=>release?.(),open:(...args)=>open(...args),addLate:()=>{localStorage.setItem('fictional-late','1');if(!overview.dms.some(d=>d.id===ids.late))overview.dms.push(summary(views[ids.late]));changed?.({type:'change',seq:++overview.seq});},tick:()=>changed?.({type:'change',seq:++overview.seq})};
-fixture.unreadCounts=unreadCounts;
-const host={version:1,platform:'daemon',workspace:{id:'r4-fictional',name:'Fictional workspace',address:me.address,realm:'fictional'},workspaces:null,skins:[],skin:{id:skin},skinURL:'/assets/skins/'+skin+'/',listen(fn){changed=fn;return()=>{};},onOpen(fn){open=fn;},onSkinsChange(){return()=>{};},selectSkin(){},file(){throw Error('No fixture files');},stage(){throw Error('No fixture files');},api:async(p,body)=>{
+fixture.unreadCounts=()=>{unreadCounts();if(${process.env.AGENTNET_UNREAD_REVIEW==='1'})overview.unread_total=overview.dms.reduce((n,d)=>n+d.unread,0);};
+fixture.pauseRead=${process.env.AGENTNET_UNREAD_REVIEW==='1'};
+fixture.scheduleRows=[];fixture.scheduleStages=new Map();fixture.scheduleStageCount=0;fixture.scheduleAudience={persons:[me.person,peer.person],pids:[views[ids.main].guests[0].pid]};fixture.loseScheduleResponse=true;
+fixture.scheduleStage=async file=>{const bytes=new Uint8Array(await file.arrayBuffer()),sha256=[...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(x=>x.toString(16).padStart(2,'0')).join('');const id='stage-'+(++fixture.scheduleStageCount);fixture.scheduleStages.set(id,{name:file.name,size:file.size,sha256});return id;};
+fixture.unreadRows=()=>Object.values(views).flatMap(v=>v.messages.filter(m=>m.unread&&!m.deleted).map(m=>({key:['chat',v.id,m.send_group_author||'author',m.lid||m.id].join(':'),kind:'chat',conv:v.id,topic:m.topic||'',topic_title:m.topic?(v.topics.find(t=>t.id===m.topic)?.title||''):'',id:m.id,lid:m.lid||m.id,author:m.send_group_author||'author',dir:m.dir,at:m.at,label:m.dir==='out'?'You':'Casey',preview:m.body}))).sort((a,b)=>b.at.localeCompare(a.at)||a.key.localeCompare(b.key));
+const host={version:1,platform:'daemon',workspace:{id:'r4-fictional',name:'Fictional workspace',address:me.address,realm:'fictional'},workspaces:null,skins:[],skin:{id:skin},skinURL:'/assets/skins/'+skin+'/',listen(fn){changed=fn;return()=>{};},onOpen(fn){open=fn;},onSkinsChange(){return()=>{};},selectSkin(){},file(){throw Error('No fixture files');},stage(file){if(${process.env.AGENTNET_COMPOSER_SCHEDULE==='1'})return fixture.scheduleStage(file);throw Error('No fixture files');},api:async(p,body)=>{
  requests.push({path:p,body:body||null});const url=new URL(p,location.origin);
+ if(${process.env.AGENTNET_COMPOSER_SCHEDULE==='1'} && url.pathname==='/api/schedule/audience')return structuredClone(fixture.scheduleAudience);
+ if(${process.env.AGENTNET_COMPOSER_SCHEDULE==='1'} && url.pathname==='/api/schedules'){if(url.searchParams.has('id')){const row=fixture.scheduleRows.find(r=>r.id===url.searchParams.get('id'));if(!row)throw Error('No exact fixture schedule');return structuredClone(row);}return structuredClone(fixture.scheduleRows.filter(r=>r.conv===url.searchParams.get('conv')));}
+ if(${process.env.AGENTNET_COMPOSER_SCHEDULE==='1'} && url.pathname==='/api/schedule/create'){
+  const files=(body.files||[]).map(id=>{const f=fixture.scheduleStages.get(id);fixture.scheduleStages.delete(id);if(!f)throw Error('Consumed fixture stage');return f;});
+  const canonical={...body,files},old=fixture.scheduleRows.find(r=>r.id===body.id);
+  if(old){if(JSON.stringify(old.canonical)!==JSON.stringify(canonical))throw Object.assign(Error('different payload'),{code:'scheduled_id_conflict'});return structuredClone(old);}
+  if(Date.parse(body.due)<=Date.now())throw Error('Future fixture time required');
+  const row={...canonical,rev:1,state:'pending',canonical};fixture.scheduleRows.push(row);
+  if(fixture.loseScheduleResponse){fixture.loseScheduleResponse=false;throw Error('Fictional response lost after save');}return structuredClone(row);
+ }
+ if(${process.env.AGENTNET_COMPOSER_SCHEDULE==='1'} && ['/api/schedule/edit','/api/schedule/cancel','/api/schedule/send_now'].includes(url.pathname)){
+  const row=fixture.scheduleRows.find(r=>r.id===body.id);if(!row||row.rev!==body.rev)throw Object.assign(Error('Revision changed'),{code:'scheduled_stale'});
+  if(fixture.scheduleConflict){fixture.scheduleConflict=false;row.rev++;throw Object.assign(Error('Revision changed'),{code:'scheduled_stale'});}
+  if(url.pathname.endsWith('/cancel'))row.state='cancelled';else if(url.pathname.endsWith('/send_now'))row.state='sent';else Object.assign(row,body);row.rev++;return structuredClone(row);
+ }
  if(url.pathname==='/api/remind'){const m=views[ids.main].messages.find(m=>m.id===body.id);if(!m)throw Error('Exact stored message required');const r={message:m.id,conv:ids.main,from:m.from,title:m.body,due:new Date(body.due*1000).toISOString(),overdue:false};overview.reminders=overview.reminders.filter(x=>x.message!==m.id).concat(r);localStorage.setItem('fictional-reminders',JSON.stringify(overview.reminders));changed?.({type:'change',seq:++overview.seq});return{note:'Fictional reminder stored.'};}
+ if(${process.env.AGENTNET_UNREAD_REVIEW==='1'}&&url.pathname==='/api/unread'){const all=fixture.unreadRows(),from=Number(url.searchParams.get('after')||0),limit=Number(url.searchParams.get('limit')||50),rows=all.slice(from,from+limit);return{rows:structuredClone(rows),total:all.length,seq:overview.seq,content:overview.seq,...(from+rows.length<all.length?{next:String(from+rows.length)}:{})};}
  if(url.pathname==='/api/overview')return structuredClone(overview);
- if(${process.env.AGENTNET_TOPIC_UNREAD==='1'}&&url.pathname==='/api/act'&&body.do==='read'){if(fixture.failRead)throw Error('Fictional read acknowledgement unavailable');for(const v of Object.values(views))for(const m of v.messages)if(body.ids.includes(m.id))m.unread=false;unreadCounts();changed?.({type:'change',seq:++overview.seq});return{note:'Read.'};}
+ if((${process.env.AGENTNET_UNREAD_REVIEW==='1'}||${process.env.AGENTNET_TOPIC_UNREAD==='1'}||${process.env.AGENTNET_UNREAD_FIRST==='1'})&&url.pathname==='/api/act'&&body.do==='read'){if(fixture.pauseRead)return{note:'Paused fictional read'};if(fixture.failRead)throw Error('Fictional read acknowledgement unavailable');for(const v of Object.values(views))for(const m of v.messages)if(body.ids.includes(m.id)&&(!m.attention||(body.attention?.[m.id]?.rev===m.attention.rev&&body.attention?.[m.id]?.writer===m.attention.writer))){m.unread=false;delete m.attention;}fixture.unreadCounts();changed?.({type:'change',seq:++overview.seq});return{note:'Read.'};}
  if(url.pathname==='/api/dm'){const id=url.searchParams.get('id');if(id===ids.other&&fixture.holdReopenRead){fixture.reopenReadWaiting=true;await new Promise(resolve=>fixture.finishReopenRead=()=>{fixture.holdReopenRead=false;resolve();});}if(id===fixture.delay){fixture.delay='';await new Promise(resolve=>release=resolve);}if(!views[id])throw Error('Unknown fictional root');return structuredClone(views[id]);}
  if(url.pathname==='/api/dm/send'){const view=views[body.conv];const m=msg(body.id,body.body,{dir:'out',from:me.address,topic:body.topic||'',reply_to:body.reply_to,at:new Date().toISOString()});view.messages.push(m);overview.dms=overview.dms.map(d=>d.id===view.id?summary(view):d);changed?.({type:'change',seq:++overview.seq});return{id:m.id,lid:m.id,state:'delivered'};}
+ if(${process.env.AGENTNET_UNREAD_REVIEW==='1'}&&url.pathname==='/api/topics'){
+  const q=(url.searchParams.get('q')||'').toLowerCase().trim(),state=url.searchParams.get('state'),from=Number(url.searchParams.get('before')||0),limit=Number(url.searchParams.get('limit')||50);
+  const all=(views[url.searchParams.get('conv')]?.topics||[]).filter(t=>(!state||t.state===state)&&q.split(/\\s+/).filter(Boolean).every(w=>(t.title+' '+t.last).toLowerCase().includes(w))).sort((a,b)=>Number(b.unread>0)-Number(a.unread>0)||b.last_at.localeCompare(a.last_at)||b.id.localeCompare(a.id)),topics=all.slice(from,from+limit);
+  return {topics:structuredClone(topics),matched:all.length,...(from+topics.length<all.length?{next:String(from+topics.length)}:{})};
+ }
  if(url.pathname==='/api/topics'){const rows=(views[url.searchParams.get('conv')]?.topics||[]).filter(t=>!url.searchParams.get('state')||t.state===url.searchParams.get('state'));return{topics:structuredClone(rows),matched:rows.length};}
  if(${process.env.AGENTNET_TOPIC_REOPEN==='1'}&&url.pathname==='/api/topic/reopen'){if(body.conv!==ids.other||body.id!==otherNative||body.count!==1)throw Error('Wrong exact reopen target');await new Promise(resolve=>fixture.finishReopen=resolve);views[ids.other].topics[0].state='active';fixture.holdReopenRead=true;return{note:'Reopened'};}
+ if(${process.env.AGENTNET_UNREAD_REVIEW==='1'}&&url.pathname==='/api/topic/rename'){const t=views[body.conv]?.topics.find(t=>t.id===body.id);if(!t)throw Error('Wrong exact rename target');await new Promise(resolve=>fixture.finishRename=resolve);t.title=body.title||t.auto_title;t.renamed=!!body.title;changed?.({type:'change',seq:++overview.seq});return{note:'Shared name changed after acknowledgement.'};}
  if(url.pathname.startsWith('/api/topic/')){const view=views[body.conv],ids=body.ids||[body.id];for(const id of ids){const t=view.topics.find(t=>t.id===id);if(t)t.state=url.pathname.endsWith('/done')?'done':url.pathname.endsWith('/archive')?'archived':'active';}changed?.({type:'change',seq:++overview.seq});return{note:'Fictional topic changed.'};}
  if(url.pathname==='/api/message/react')return{note:'Fictional reaction recorded.'};
  if(p.includes('/groups/invitations'))return[];
@@ -54,7 +125,8 @@ const host={version:1,platform:'daemon',workspace:{id:'r4-fictional',name:'Ficti
  return{};
 }};
 const base='/assets/skins/'+skin+'/',manifest=await(await fetch(base+'skin.json')).json();
-if(manifest.document){const css=new CSSStyleSheet();css.replaceSync(await(await fetch(base+manifest.document)).text());document.adoptedStyleSheets=[css];}
+const adoptDocument=${adoptDocument.toString()};
+if(manifest.document)await adoptDocument(base+manifest.document,base);
 const shadow=document.querySelector('#skin').attachShadow({mode:'open'}),css=new CSSStyleSheet();css.replaceSync(await(await fetch(base+manifest.style)).text());shadow.adoptedStyleSheets=[css];
 const root=document.createElement('div');root.className='skin-root';shadow.append(root);await(await import(base+manifest.entry)).mount(root,host);window.ready=true;
 `;
@@ -66,13 +138,20 @@ const server=http.createServer((req,res)=>{
  res.statusCode=404;res.end('No fictional route');
 });
 (async()=>{
- let browser;try{
+ let browser,activePage,activeWidth,activeEvidence;try{
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const origin='http://127.0.0.1:'+server.address().port;
   browser=await chromium.launch({headless:true,executablePath:process.env.AGENTNET_CHROMIUM||'/usr/bin/chromium'});
   for(const skin of (process.env.PERSON_TOPIC_SKINS||'comic').split(','))for(const width of [1280,390]){
    const context=await browser.newContext({viewport:{width,height:900},reducedMotion:'reduce',isMobile:width===390,hasTouch:width===390});
    await context.route('**/*',route=>new URL(route.request().url()).origin===origin?route.continue():route.abort());
-   const page=await context.newPage(),errors=[];page.setDefaultTimeout(10000);page.on('pageerror',e=>errors.push(e.stack));
+   const page=await context.newPage(),errors=[],consoleIssues=[],consoleLocations=[],failedResponses=[],failedRequests=[],fontResponses=[];
+   const network={pageerrors:errors,consoleIssues,consoleLocations,failedResponses,failedRequests,fontResponses};
+   page.setDefaultTimeout(10000);page.on('pageerror',e=>errors.push(e.stack));page.on('console',m=>{if(['error','warning'].includes(m.type())){consoleIssues.push(m.type()+': '+m.text());consoleLocations.push({type:m.type(),text:m.text(),location:m.location()});}});
+   page.on('response',r=>{const request=r.request(),details={url:r.url(),status:r.status(),method:request.method(),resourceType:request.resourceType(),referer:request.headers().referer};if(r.status()>=400)failedResponses.push(details);if(request.resourceType()==='font')fontResponses.push(details);});
+   page.on('requestfailed',r=>failedRequests.push({url:r.url(),method:r.method(),resourceType:r.resourceType(),failure:r.failure(),referer:r.headers().referer}));
+   page.on('close',()=>{if(evidence)fs.writeFileSync(path.join(evidence,'network-'+skin+'-'+width+'.json'),JSON.stringify(network,null,2));});
+   activeEvidence=network;
+   activePage=page;activeWidth=width;
    const shot=async(name)=>{if(evidence){await page.waitForTimeout(350);await page.screenshot({path:path.join(evidence,'person-topics-'+skin+'-'+width+'-'+name+'.png')});}};
    const all=()=>page.getByRole('navigation',{name:'Topics',exact:true}).getByRole('button',{name:/^All/});
    const shown=text=>page.locator('[role=log] [data-mid]').filter({hasText:text}).first();
@@ -81,7 +160,186 @@ const server=http.createServer((req,res)=>{
    const edit=async text=>{await field().fill(text);};
    const choose=async(pattern)=>{await all().click();await list().getByRole('button',{name:pattern}).click();};
    await page.goto(origin+'/?skin='+skin);await page.waitForFunction(()=>window.ready);
+   if(process.env.AGENTNET_COMPOSER_SCHEDULE==='1'){
+    const composer=page.locator('[data-part="composer"][data-conv="'+'a'.repeat(64)+'"]');
+    const draftValue=()=>composer.locator('textarea').inputValue();
+    await page.getByRole('list',{name:'Chats',exact:true}).getByRole('button',{name:/Casey/}).first().click();
+    await composer.waitFor({state:'visible'});
+    await field().waitFor();await field().fill('Captured scheduled draft');
+    await page.locator('input[type=file]').setInputFiles({name:'captured.txt',mimeType:'text/plain',buffer:Buffer.from('captured exact file bytes')});
+    const menu=async name=>{await page.getByRole('button',{name:'Add to message',exact:true}).click();await page.getByRole('menuitem',{name:new RegExp('^'+name)}).click();};
+    const create=()=>page.getByRole('dialog',{name:'Schedule message',exact:true}),schedules=()=>page.getByRole('dialog',{name:'Scheduled messages',exact:true});
+    await menu('Schedule message');await create().getByText('Approved audience',{exact:true}).waitFor();await create().getByRole('button',{name:'Save schedule',exact:true}).waitFor({state:'visible'});
+    await create().getByLabel('Send date and time',{exact:true}).fill('2030-10-17T12:30');await shot('schedule-preview');
+    await create().getByRole('button',{name:'Save schedule',exact:true}).click();await create().getByText('Unconfirmed save',{exact:true}).waitFor();
+    assert.equal(await draftValue(),'Captured scheduled draft');assert.equal(await page.evaluate(()=>fixture.scheduleRows.length),1);
+    await create().getByRole('button',{name:'Check saved state',exact:true}).click();await create().getByText(/Saved state found; confirm with same-ID save/).waitFor();assert.equal(await draftValue(),'Captured scheduled draft','descriptor lookup alone keeps draft');
+    await create().getByRole('button',{name:'Close',exact:true}).click();await create().waitFor({state:'hidden'});
+    await field().fill('New typing after unconfirmed save');await page.locator('input[type=file]').setInputFiles({name:'new.txt',mimeType:'text/plain',buffer:Buffer.from('new file stays')});
+    await menu('Schedule message');await create().getByRole('button',{name:'Retry same save',exact:true}).click();await schedules().waitFor();await schedules().getByText('Captured scheduled draft',{exact:true}).waitFor();
+    assert.equal(await page.evaluate(()=>fixture.scheduleRows.length),1,'lost response retry creates exactly one row');assert.equal(await page.evaluate(()=>fixture.scheduleStageCount),2,'original actual file restaged');assert.equal(await draftValue(),'New typing after unconfirmed save');
+    assert.equal(await composer.locator('[aria-label="Files to send"]').getByText('new.txt',{exact:true}).count(),1,'new file retained');assert.equal(await composer.locator('[aria-label="Files to send"]').getByText('captured.txt',{exact:true}).count(),0,'only confirmed captured file cleared');
+    const creates=await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/schedule/create').map(r=>r.body));assert.equal(creates.length,2);assert.equal(creates[0].id,creates[1].id);assert.notDeepEqual(creates[0].files,creates[1].files);assert.deepEqual({...creates[0],files:undefined},{...creates[1],files:undefined});
+    await schedules().getByRole('button',{name:'Edit schedule',exact:true}).click();await schedules().getByLabel('Scheduled message text',{exact:true}).fill('Edited scheduled draft');await schedules().getByRole('button',{name:'Save schedule changes',exact:true}).click();await schedules().getByText('Edited scheduled draft',{exact:true}).waitFor();
+    let editRequest=await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/schedule/edit').at(-1).body);assert(!('audience'in editRequest));assert(!('files'in editRequest));assert.equal(editRequest.rev,1);
+    await page.evaluate(()=>{fixture.scheduleAudience.persons.push('9'.repeat(32));fixture.tick();});await schedules().getByRole('button',{name:'Edit schedule',exact:true}).click();await schedules().getByRole('button',{name:'Review audience',exact:true}).click();await schedules().getByRole('button',{name:'Confirm reviewed audience',exact:true}).click();await schedules().getByText(/New audience explicitly confirmed/).waitFor();await schedules().getByRole('button',{name:'Save schedule changes',exact:true}).click();
+    await schedules().getByRole('button',{name:'Send now',exact:true}).click();await schedules().getByText(/^Queued to send/).waitFor();assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/schedule/send_now').at(-1).body.rev),3);assert.equal(await schedules().getByRole('button',{name:'Edit schedule',exact:true}).count(),0,'queued schedule read only');
+    await page.evaluate(()=>{const row=structuredClone(fixture.scheduleRows[0]);Object.assign(row,{id:'7'.repeat(32),state:'pending',rev:5,body:'Cancel this schedule'});fixture.scheduleRows.push(row);fixture.tick();});await schedules().getByText('Cancel this schedule',{exact:true}).waitFor();await page.evaluate(()=>fixture.scheduleConflict=true);await schedules().getByRole('button',{name:'Cancel schedule',exact:true}).click();await schedules().getByText(/The action was not confirmed or the revision changed/).waitFor();await schedules().getByRole('button',{name:'Cancel schedule',exact:true}).click();await schedules().getByText(/^Cancelled/).waitFor();assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/schedule/cancel').at(-1).body.rev),6);
+    await page.evaluate(()=>{for(const state of ['dispatching','needs_review'])fixture.scheduleRows.push({...structuredClone(fixture.scheduleRows[0]),id:state.padEnd(32,'0'),state,body:'State '+state,detail:'PRIVATE REMOTE DETAIL'});fixture.tick();});await schedules().getByText(/^Needs review/).waitFor();await schedules().getByText(/^Preparing to send/).waitFor();assert(!(await schedules().innerText()).includes('PRIVATE REMOTE DETAIL'));await shot('schedule-states');
+    await schedules().getByRole('button',{name:'Close',exact:true}).click();await schedules().waitFor({state:'hidden'});const listGets=await page.evaluate(()=>fixture.requests.filter(r=>r.path.startsWith('/api/schedules?')).length);await page.evaluate(()=>fixture.tick());await page.waitForTimeout(120);assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path.startsWith('/api/schedules?')).length),listGets,'closed list does not refetch');
+    await menu('Schedule message');await create().getByLabel('Send date and time',{exact:true}).fill('2020-01-01T12:00');await create().getByRole('button',{name:'Save schedule',exact:true}).click();await create().getByText(/Choose a future time/).waitFor();assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/schedule/create').length),2,'past date refused before POST');await create().getByRole('button',{name:'Close',exact:true}).click();await create().waitFor({state:'hidden'});
+    await choose(/Invoice review/);await field().fill('Exact existing topic schedule');await menu('Schedule message');await create().getByLabel('Send date and time',{exact:true}).fill('2030-10-18T14:30');await create().getByRole('button',{name:'Save schedule',exact:true}).click();await schedules().waitFor();await schedules().getByText('Exact existing topic schedule',{exact:true}).waitFor();assert.equal(await page.evaluate(()=>fixture.scheduleRows.at(-1).topic),'3'.repeat(32));assert.equal(await draftValue(),'');
+    assert.equal(await page.evaluate(()=>fixture.requests.some(r=>['/api/dm/send','/api/send','/api/request/followup','/api/dm/agent/ask'].includes(r.path))),false,'scheduling never calls normal send');assert.equal(await page.evaluate(()=>fixture.scheduleStages.size),0,'all staging handles consumed');assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.deepEqual(errors,[]);assert.deepEqual(consoleIssues,[]);
+    fs.writeFileSync(path.join(evidence,'schedule-'+width+'.json'),JSON.stringify(await page.evaluate(()=>({requests:fixture.requests,rows:fixture.scheduleRows,stages:fixture.scheduleStageCount})),null,2));await shot('schedule-existing-topic');console.log('schedule comic '+width+' PASS: exact audience/time/file; response-loss same-ID; lookup keeps draft; changed draft/files; revision edit/cancel/send-now; explicit audience; five states; closed push fence; existing topic; no normal send');await context.close();continue;
+   }
+   if(process.env.AGENTNET_UNREAD_REVIEW==='1'){
+    const mid=i=>(1000+i).toString(16).padStart(32,'0');
+    // A returned literal title must render before any destination DM is opened.
+    await page.getByRole('button',{name:'Review',exact:true}).click();
+    await page.getByRole('list',{name:'Unread messages',exact:true}).getByRole('button',{name:/Fictional review group · Review topic, Casey/}).first().waitFor();
+    assert.equal(await page.evaluate(()=>fixture.requests.some(r=>r.path.startsWith('/api/dm?'))),false,'never-opened topic label adds no destination GET');
+    await shot('never-opened-topic');await page.getByRole('button',{name:'Chats',exact:true}).click();
+    const sidebarRow=page.getByRole('list',{name:'Chats',exact:true}).getByRole('button',{name:/Fictional review group/}).first();
+    await sidebarRow.getByText('@Amazon_team Check inventory',{exact:true}).waitFor();assert(!(await sidebarRow.innerText()).includes('agentnet:collective'),'sidebar displays the compact projected long mention');
+    assert((await page.evaluate(()=>window.longMentionInput.raw.length))>10000,'long signed anchor remains distinct from the clipped projection');await shot('compact-long-mention');
+    await sidebarRow.click();
+    const compose=page.getByRole('textbox',{name:'Message Fictional review group',exact:true});await compose.fill('Kept Review draft');
+    if(width===390)await page.getByRole('button',{name:'Back to chats',exact:true}).click();
+    await page.getByRole('button',{name:'Review',exact:true}).click();
+    const unread=page.getByRole('list',{name:'Unread messages',exact:true});await unread.locator('li').first().waitFor();
+    if(width===1280){
+     const id='8'.repeat(32),before=await page.evaluate(()=>fixture.requests.length);
+     await page.evaluate(id=>{const v=fixture.views[fixture.ids.main];fixture.pauseRead=false;v.messages.push({id,lid:id,dir:'in',from:'casey/desktop',kind:'message',body:'Visible Review-to-Chats signal',at:'2026-12-03T00:00:00Z',unread:true,send_group_author:'aaaaaaaa-bbbbbbbb-cccccccc-dddddddd'});fixture.unreadCounts();fixture.tick();},id);
+     await page.locator('[data-mid="'+id+'"]').waitFor();await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));
+     assert.equal(await page.evaluate(before=>fixture.requests.slice(before).filter(r=>r.path==='/api/act').length,before),0,'Review fences already visible chat rows');
+     await page.getByRole('button',{name:'Chats',exact:true}).click();
+     await page.waitForFunction(id=>fixture.views[fixture.ids.main].messages.find(m=>m.id===id).unread===false,id);
+     const reads=await page.evaluate(before=>fixture.requests.slice(before).filter(r=>r.path==='/api/act'),before);
+     assert.equal(reads.length,1,'switching to Chats retries the unchanged visible set once');assert.deepEqual(reads[0].body.ids,[id]);
+     assert.equal(await page.evaluate(()=>fixture.views[fixture.ids.main].messages.find(m=>m.body==='Review item 259').unread),true,'unseen topic tail remains unread');
+     fs.writeFileSync(path.join(evidence,'review-to-chats.json'),JSON.stringify({before,reads},null,2));
+     await page.getByRole('button',{name:'Review',exact:true}).click();
+     await page.evaluate(id=>{const v=fixture.views[fixture.ids.main];v.messages=v.messages.filter(m=>m.id!==id);fixture.pauseRead=true;fixture.unreadCounts();fixture.tick();},id);
+     await page.waitForFunction(()=>document.querySelector('#skin').shadowRoot.querySelectorAll('[data-unread-key]').length===50);
+    }
+    const start=await page.evaluate(()=>fixture.requests.length);
+    await shot('unread-review');
+    for(let i=0;i<5;i++){const count=await unread.locator('li').count();await page.getByRole('button',{name:'Show more unread messages',exact:true}).click();await page.waitForFunction(count=>document.querySelector('#skin').shadowRoot.querySelectorAll('[data-unread-key]').length>count,count);}
+    assert.equal(await unread.locator('li').count(),263,'Review loads beyond200');
+    const first=unread.locator('li').first(),firstKey=await first.getAttribute('data-unread-key');await first.getByRole('button').hover();
+    await page.evaluate(()=>{const v=fixture.views[fixture.ids.main];v.messages[0].unread=false;v.messages[1].body='Updated linked preview';fixture.unreadCounts();fixture.tick();});
+    await first.getByRole('button').getAttribute('aria-disabled').then(async()=>{await page.waitForFunction(()=>document.querySelector('#skin').shadowRoot.querySelector('[data-unread-key] button')?.getAttribute('aria-disabled')==='true');});
+    assert.equal(await unread.locator('li').first().getAttribute('data-unread-key'),firstKey,'vanished row stays under pointer');
+    await page.getByRole('heading',{name:/^Unread/}).hover();await page.waitForFunction(()=>document.querySelector('#skin').shadowRoot.querySelectorAll('[data-unread-key]').length===262);
+    assert.equal(await unread.getByText('Updated linked preview',{exact:true}).count(),1,'text updates in place');
+    const focused=unread.locator('li').first();await focused.getByRole('button').focus();const focusKey=await focused.getAttribute('data-unread-key');
+    await page.evaluate(()=>{fixture.views[fixture.ids.main].messages[2].at='2026-12-01T00:00:00Z';fixture.tick();});
+    await unread.locator('time[datetime="2026-12-01T00:00:00Z"]').waitFor();
+    assert.equal(await unread.locator('li').first().getAttribute('data-unread-key'),focusKey,'keyboard choice keeps slot');
+    await page.getByRole('heading',{name:/^Unread/}).evaluate(n=>{n.tabIndex=-1;n.focus();});
+    await page.waitForFunction(()=>document.querySelector('#skin').shadowRoot.querySelector('[data-unread-key]')?.textContent.includes('Review item 2'));
+    assert.equal(await page.evaluate(start=>fixture.requests.slice(start).some(r=>r.path==='/api/act'),start),false,'Review/list interaction does not read or accept');
+    // The first unread target exercises the actual divider and keyboard entry.
+    await unread.getByRole('button',{name:/, Review item 2\. Open message\.$/}).press('Enter');
+    await page.locator('[data-mid="'+mid(2)+'"]').waitFor();await page.getByRole('separator',{name:'Unread messages',exact:true}).waitFor();await shot('unread-divider');
+    if(width===390)await page.getByRole('button',{name:'Back to Review',exact:true}).click();else await page.getByRole('button',{name:'Review',exact:true}).click();
+    await unread.locator('li').first().waitFor();await page.waitForFunction(()=>document.querySelector('#skin').shadowRoot.querySelectorAll('[data-unread-key]').length>200);
+    const landingStart=await page.evaluate(()=>fixture.requests.length);
+    const target=unread.locator('li').filter({hasText:'Review item 200'}).getByRole('button');await page.evaluate(()=>fixture.pauseRead=false);await target.click();
+    const selected=page.locator('[data-mid="'+mid(200)+'"]');await selected.waitFor();
+    assert(await selected.evaluate(n=>{const r=n.getBoundingClientRect(),b=n.closest('[role=log]').parentElement.getBoundingClientRect();return r.top<b.bottom&&r.bottom>b.top;}),'explicit Review target is visible');
+    assert.equal(await compose.inputValue(),'Kept Review draft');
+    await selected.evaluate(e=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));
+    const readEvidence=await page.evaluate(({start,target})=>{const log=document.querySelector('#skin').shadowRoot.querySelector('[role=log]'),root=log.parentElement,v=root.getBoundingClientRect(),reserve=parseFloat(log.style.paddingBottom||'0')?parseFloat(log.style.paddingBottom)-24:0,bottom=v.bottom-reserve,height=bottom-v.top;const visible=[...log.querySelectorAll('[data-mid]')].filter(e=>{const r=e.getBoundingClientRect(),overlap=Math.min(r.bottom,bottom)-Math.max(r.top,v.top);return overlap>0&&overlap>=Math.min(r.height/2,height/2)&&Math.min(r.right,v.right)>Math.max(r.left,v.left);}).map(e=>e.getAttribute('data-mid'));const reads=fixture.requests.slice(start).filter(r=>r.path==='/api/act'&&r.body.do==='read');return{target,visible,reads,remaining:fixture.views[fixture.ids.main].messages.filter(m=>m.unread).map(m=>m.id)};},{start:landingStart,target:mid(200)});
+    assert(readEvidence.reads.length>0,'visible exact landing produces a read acknowledgement');assert(readEvidence.reads.every(r=>r.body.ids.every(id=>readEvidence.visible.includes(id))),'no offscreen row acknowledgement');assert(readEvidence.remaining.includes(mid(259)),'unseen tail survives exact landing');
+    fs.writeFileSync(path.join(evidence,'review-visible-'+width+'.json'),JSON.stringify(readEvidence,null,2));
+    if(width===390){await page.getByRole('button',{name:'Back to Review',exact:true}).click();await unread.locator('li').first().waitFor();await page.waitForFunction(()=>document.querySelector('#skin').shadowRoot.querySelectorAll('[data-unread-key]').length>200);await unread.locator('li').filter({hasText:'Review item 259'}).getByRole('button').press('Enter');await compose.waitFor();}
+    const group=page.getByRole('navigation',{name:/^Topics with /});await group.getByRole('button',{name:/^All/}).click();
+    const panel=list(),topicRows=panel.getByRole('list',{name:'Active topics',exact:true});
+    for(let i=0;i<8&&await topicRows.locator('li').count()<250;i++){const count=await topicRows.locator('li').count();await panel.getByRole('button',{name:/^Show more/}).click();await page.waitForFunction(count=>document.querySelector('#skin').shadowRoot.querySelector('ul[aria-label="Active topics"]').children.length>count,count);}
+    assert((await topicRows.locator('li').count())>200,'All topics loads beyond200');
+    const prior=(await topicRows.locator('li').first().textContent());await topicRows.locator('li').first().getByRole('button').hover();await topicRows.locator('li').first().getByRole('checkbox').check();
+    await page.evaluate(()=>{const v=fixture.views[fixture.ids.main],t=v.topics.at(-1);v.messages.filter(m=>m.topic===fixture.native).forEach(m=>m.unread=false);v.messages.push({id:'9'.repeat(32),lid:'9'.repeat(32),dir:'in',from:'casey/desktop',kind:'message',body:'New topic arrival',topic:t.id,at:'2026-12-02T00:00:00Z',unread:true,send_group_author:'aaaaaaaa-bbbbbbbb-cccccccc-dddddddd'});fixture.unreadCounts();fixture.tick();});
+    await panel.getByRole('button',{name:/Extra choice 257.*1 unread/}).waitFor();
+    assert((await topicRows.locator('li').count())>200,'push retains loaded topic prefix');assert((await topicRows.locator('li').first().textContent()).includes('Review topic'),'selected ID stays in its slot');
+    await panel.getByRole('button',{name:'Cancel selection',exact:true}).click();await page.waitForFunction(()=>document.querySelector('#skin').shadowRoot.querySelector('ul[aria-label="Active topics"] li')?.textContent.includes('Extra choice 257'));
+    await shot('unread-topics');
+    await panel.getByRole('button',{name:/^Archived/}).click();await panel.getByRole('button',{name:/Archived review/}).waitFor();
+    await page.evaluate(()=>{fixture.views[fixture.ids.main].topics.find(t=>t.id===fixture.native).state='done';fixture.tick();});
+    await panel.getByRole('button',{name:/^Done/}).click();await panel.getByRole('button',{name:/^Review topic,/}).waitFor();
+    await panel.getByRole('button',{name:/^Review topic,/}).click();await panel.waitFor({state:'hidden'});
+    await page.getByRole('button',{name:/^Review topic,.*open topic, menu$/}).click();await page.getByRole('menuitem',{name:/^Rename/}).click();
+    const rename=page.getByRole('dialog',{name:'Rename topic',exact:true});await rename.getByText('This name changes for everyone with access to this topic. Resetting restores the automatic title for everyone.',{exact:true}).waitFor();
+    await rename.getByRole('button',{name:'Use automatic title for everyone',exact:true}).click();await page.waitForFunction(()=>!!fixture.finishRename);
+    assert.equal(await page.getByRole('button',{name:/^Automatic review title,.*open topic, menu$/}).count(),0,'shared reset is not optimistic before acknowledgement');
+    await page.evaluate(()=>fixture.finishRename());await rename.waitFor({state:'hidden'});await page.getByRole('button',{name:/^Automatic review title,.*open topic, menu$/}).waitFor();
+    assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/topic/rename').at(-1).body.title),'','empty reset uses the shared automatic title');await shot('shared-rename-reset');
+    if(width===390){
+     await page.setViewportSize({width:320,height:900});
+     const compactMenu=page.getByRole('button',{name:/^Automatic review title,.*open topic, menu$/});
+     await compactMenu.click();await page.getByRole('menuitem',{name:/^Rename/}).waitFor();
+     if(evidence)await page.screenshot({path:path.join(evidence,'topic-menu-320-open.png')});
+     await page.keyboard.press('Escape');await page.getByRole('menuitem',{name:/^Rename/}).waitFor({state:'hidden'});
+     const geometry=await page.getByRole('navigation',{name:/^Topics with /}).evaluate(nav=>{
+      const root=nav.getRootNode(),buttons=[...nav.querySelectorAll('button')],rect=nav.getBoundingClientRect();
+      const targets=[['current',b=>b.hasAttribute('data-topic')&&b.getAttribute('aria-haspopup')==='menu'],['Main',b=>/^Main(?:,|$)/.test(b.getAttribute('aria-label')||'')],['All',b=>/^All topics/.test(b.getAttribute('aria-label')||'')],['New',b=>b.getAttribute('aria-label')==='New topic']].map(([name,find])=>{
+       const b=buttons.find(find);if(!b)return{name,present:false};const r=b.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2,hit=root.elementFromPoint(x,y);
+       return{name,present:true,label:b.getAttribute('aria-label'),title:b.title,width:r.width,height:r.height,left:r.left,right:r.right,top:r.top,bottom:r.bottom,enabled:!b.disabled&&b.getAttribute('aria-disabled')!=='true',inside:r.left>=rect.left&&r.right<=rect.right&&r.top>=rect.top&&r.bottom<=rect.bottom,centerHit:!!hit&&(hit===b||b.contains(hit))};
+      });return{viewport:innerWidth,pageWidth:document.documentElement.scrollWidth,navWidth:nav.clientWidth,navScrollWidth:nav.scrollWidth,targets};
+     });
+     if(evidence)fs.writeFileSync(path.join(evidence,'topic-menu-320-geometry.json'),JSON.stringify(geometry,null,2));
+     assert.equal(geometry.viewport,320);assert(geometry.pageWidth<=320,'320 page has no overflow: '+JSON.stringify(geometry));assert(geometry.navScrollWidth<=geometry.navWidth,'320 topic nav has no overflow: '+JSON.stringify(geometry));
+     for(const t of geometry.targets)assert(t.present&&t.label&&t.width>=44&&t.height>=44&&t.enabled&&t.inside&&t.centerHit,'320 '+t.name+' remains accessible and hit-testable: '+JSON.stringify(geometry));
+     await page.setViewportSize({width:390,height:900});
+    }
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'no page overflow');assert.deepEqual(errors,[]);assert.deepEqual(consoleIssues,[]);
+    console.log(JSON.stringify({flow:'Review unread -> exact target -> Back -> stable All topics',skin,width,title:await page.title(),pageerrors:errors,consoleIssues,result:'PASS'}));await context.close();continue;
+   }
    await page.getByRole('list',{name:'Chats',exact:true}).getByRole('button',{name:/Casey/}).first().click();
+   if(process.env.AGENTNET_UNREAD_FIRST==='1'){
+    const anchor='6'.repeat(32),done='7'.repeat(32),tail=(319).toString(16).padStart(32,'0');
+    const row=id=>page.locator('[data-mid="'+id+'"]');
+    const flag=id=>page.evaluate(id=>fixture.views[fixture.ids.main].messages.find(m=>m.id===id).unread,id);
+    await shown('Main planning').waitFor();await page.waitForFunction(()=>!fixture.views[fixture.ids.main].messages[0].unread);
+    await edit('Preserved invoice draft');const gets=await page.evaluate(()=>fixture.requests.filter(r=>r.path.includes('/api/dm?id='+fixture.ids.main)).length);
+    await choose(/Invoice review/);await row(anchor).waitFor();
+    await page.waitForFunction(id=>!fixture.views[fixture.ids.main].messages.find(m=>m.id===id).unread,anchor);
+    assert.equal(await flag(tail),true,'unseen tail beyond the viewport stays unread');
+    assert.equal(await flag((280).toString(16).padStart(32,'0')),true,'second unseen tail stays unread');
+    assert.equal(await field().inputValue(),'Preserved invoice draft');
+    // Opening All topics can load other roots; selecting the already loaded
+    // topic itself must not add another selected-conversation history GET.
+    const selectedGets=await page.evaluate(()=>fixture.requests.filter(r=>r.path.includes('/api/dm?id='+fixture.ids.main)).length);
+    assert.equal(selectedGets,gets+1,'only the read acknowledgement refreshes the selected view');
+    const geometry=await row(anchor).evaluate(n=>{const box=n.closest('[role=log]').parentElement,r=n.getBoundingClientRect(),b=box.getBoundingClientRect();return{top:r.top,bottom:r.bottom,boxTop:b.top,boxBottom:b.bottom,mounted:n.closest('[role=log]').querySelectorAll('[data-mid]').length};});
+    assert(geometry.top<geometry.boxBottom&&geometry.bottom>geometry.boxTop,'first unread old target is actually in the viewport');
+    assert(geometry.mounted>80,'old target reveals the earlier mounted groups');
+    await page.getByRole('separator',{name:'Unread messages',exact:true}).waitFor();
+    await page.evaluate(()=>document.fonts.ready);await shot('first-unread');
+    await page.evaluate(id=>{const v=fixture.views[fixture.ids.main],m=v.messages.find(m=>m.id===id);m.unread=true;m.attention={rev:5,writer:'22222222-22222222-22222222-22222222'};v.messages.filter(m=>!m.topic).forEach(m=>m.unread=true);v.messages.push({id:'8'.repeat(32),lid:'8'.repeat(32),topic:fixture.native,dir:'in',from:'casey/desktop',kind:'message',body:'New tail while reading earlier context',at:'2026-10-07T12:00:00Z',unread:true,actions:[]});fixture.unreadCounts();fixture.tick();},anchor);
+    await page.getByRole('navigation',{name:'Topics',exact:true}).getByRole('button',{name:'Main, 2 unread',exact:true}).waitFor();
+    await page.waitForTimeout(160);assert.equal(await flag(anchor),true,'new deliberate generation survives current viewport');
+    assert.equal(await flag('8'.repeat(32)),true,'new offscreen arrival stays unread');
+    assert.equal(await page.getByRole('separator',{name:'Unread messages',exact:true}).count(),1,'divider remains frozen');
+    const after=await row(anchor).evaluate(n=>({top:n.getBoundingClientRect().top,bottom:n.getBoundingClientRect().bottom}));assert(after.top<geometry.boxBottom&&after.bottom>geometry.boxTop,'arrival preserves the earlier viewport');
+    await page.evaluate(done=>{const v=fixture.views[fixture.ids.main];v.kind='group';v.title='Fictional group';v.topics.find(t=>t.id===done).state='archived';Object.assign(fixture.overview.dms.find(d=>d.id===v.id),{kind:'group',title:v.title});fixture.tick();},done);
+    const group=page.getByRole('navigation',{name:/^Topics with /});
+    await group.getByRole('button',{name:'Main'+(width>1000?' flow':'')+', 2 unread',exact:true}).waitFor();
+    await group.getByRole('button',{name:/All topics.*3 unread in other topics/}).waitFor();
+    await shot('main-and-archived-counts');
+    await group.getByRole('button',{name:/^All/}).click();await list().getByRole('button',{name:/^Archived/}).click();
+    await list().getByRole('button',{name:/Done invoices.*3 unread/}).click();
+    await shown('Done invoice item 0').waitFor();
+    await page.waitForFunction(()=>fixture.views[fixture.ids.main].topics.find(t=>t.id==='7'.repeat(32)).unread===0);
+    assert.equal(await flag('main-turn'),true,'reading archived topic leaves unseen Main unread');
+    assert.equal(await flag(anchor),true,'reading archived topic leaves A deliberate unread');
+    await page.evaluate(id=>fixture.open(id,'message',{conv:fixture.ids.main}),tail);await row(tail).waitFor();
+    const exact=await row(tail).evaluate(n=>{const r=n.getBoundingClientRect(),b=n.closest('[role=log]').parentElement.getBoundingClientRect();return r.top<b.bottom&&r.bottom>b.top;});assert(exact,'exact notification target wins over first unread');
+    assert.equal(await page.getByRole('textbox',{name:'Message Fictional group',exact:true}).inputValue(),'Preserved invoice draft');
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'no page overflow');
+    assert.equal(await page.evaluate(()=>fixture.requests.some(r=>r.body&&r.path==='/api/act'&&r.body.do!=='read')),false,'navigation never accepts work');
+    assert.deepEqual(errors,[]);console.log('v33 first unread '+skin+' '+width+' PASS: old outgoing target, divider, visible-only read, fresh generation, Main/archived counts, exact target/draft');await context.close();continue;
+   }
    if(process.env.AGENTNET_TOPIC_REOPEN==='1'){
     await all().click();await list().getByRole('button',{name:/^Archived(?:\s|$)/}).click();await list().getByRole('button',{name:/Archived details/}).click();
     const reopen=page.getByRole('button',{name:'Reopen',exact:true});await reopen.waitFor();
@@ -287,5 +545,12 @@ const server=http.createServer((req,res)=>{
    console.log('person topics '+skin+' '+width+' PASS: flat roots/native/archived/empty/deleted; exact send/drafts; late sync/reload; no hidden audience merge');
    await context.close();
   }
+ }catch(error){
+  if(evidence&&activePage&&!activePage.isClosed()){
+   await activePage.screenshot({path:path.join(evidence,'failure-'+activeWidth+'.png')}).catch(()=>{});
+   const state=await activePage.evaluate(()=>({requests:fixture.requests,unread:fixture.unreadRows().length,rows:[...document.querySelector('#skin').shadowRoot.querySelectorAll('[data-unread-key]')].map(n=>({key:n.getAttribute('data-unread-key'),disabled:n.querySelector('button')?.getAttribute('aria-disabled')}))})).catch(e=>({captureError:String(e)}));
+   fs.writeFileSync(path.join(evidence,'failure-'+activeWidth+'.json'),JSON.stringify({error:String(error),stack:error.stack,actual:error.actual,expected:error.expected,operator:error.operator,network:activeEvidence,state},null,2));
+   fs.writeFileSync(path.join(evidence,'failure-'+activeWidth+'.dom.txt'),await activePage.locator('#skin').evaluate(e=>e.shadowRoot.innerHTML).catch(String));
+  }throw error;
  }finally{await browser?.close();server.close();}
 })().catch(e=>{console.error(e);process.exitCode=1});
