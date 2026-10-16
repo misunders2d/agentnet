@@ -931,7 +931,15 @@ func (a *Agent) historyPage(ctx context.Context, dev identity.Public, pos histor
 
 	var items []historySourceRow
 	if !contextOnly {
-		items, err = a.ownHistorySourceRows(a.store.db, dev, "(conv,ms,id)>(?,?,?)", "conv,ms,id", historyPage, pos.Conv, pos.Ms, pos.ID)
+		if e := historyRecoveryCurrent(a.store.db, a.Self(), dev); e == nil {
+			items, err = a.ownHistorySourceRows(a.store.db, dev, "(conv,ms,id)>(?,?,?)", "conv,ms,id", historyPage, pos.Conv, pos.Ms, pos.ID)
+		} else if !errors.Is(e, errHistoryRecoveryAuthority) {
+			return false, e
+		} else if e := currentOwnLegacyHistory(a.store.db, a.Self(), dev); e != nil {
+			return false, e
+		} else {
+			items, err = a.historySourceRows(a.store.db, "(conv,ms,id)>(?,?,?)", "conv,ms,id", historyPage, pos.Conv, pos.Ms, pos.ID)
+		}
 		if err != nil {
 			return false, err
 		}

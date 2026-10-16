@@ -171,8 +171,12 @@ func TestOperatorDecidesOnHeadlessHost(t *testing.T) {
 		t.Fatalf("report item: %+v", item)
 	}
 	eventually(t, "the operator is alerted once", func() bool { return n.count() == 1 })
-	if !strings.HasPrefix(n.last(), "AgentNet: 1 remote request(s) on "+bob.Address+" need your decision") {
-		t.Fatalf("alert: %q", n.last())
+	alert := n.last()
+	if alert != "AgentNet: A request needs your decision" {
+		t.Fatalf("alert: %q", alert)
+	}
+	if strings.Contains(alert, bob.Address) || strings.Contains(alert, "please run the nightly export") {
+		t.Fatalf("hidden alert disclosed the host or private request: %q", alert)
 	}
 	if notices := mustNotices(t, dave); len(notices) != 0 {
 		t.Fatalf("the requester got a report: %+v", notices)

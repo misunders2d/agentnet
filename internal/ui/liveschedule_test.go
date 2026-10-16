@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/misunders2d/agentnet/internal/client"
 	"github.com/misunders2d/agentnet/internal/protocol"
+	"github.com/misunders2d/agentnet/internal/secfile"
 )
 
 func TestScheduleUnsupportedAndMethods(t *testing.T) {
@@ -93,9 +95,9 @@ func TestLiveScheduleAPI(t *testing.T) {
 			t.Fatal(e)
 		}
 		path := live.staged.files[id].path
-		info, e := os.Stat(path)
-		if e != nil || info.Mode().Perm()&0077 != 0 {
-			t.Fatal("staging permissions", info, e)
+		data, e := secfile.Read(path)
+		if e != nil || !bytes.Equal(data, []byte(content)) {
+			t.Fatal("staging permissions or bytes", len(data), e)
 		}
 		return id, path
 	}

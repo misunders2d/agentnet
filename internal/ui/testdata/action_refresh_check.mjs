@@ -21,6 +21,7 @@ registerHooks({load(url,context,next){
 }});
 const {Store}=await import(new URL('web/src/store.ts',root));
 const saved=new Map();globalThis.localStorage={getItem:k=>saved.get(k)||null,setItem:(k,v)=>saved.set(k,v)};
+globalThis.document={visibilityState:'visible',hasFocus:()=>true,addEventListener(){},removeEventListener(){}};
 
 const gate=()=>{let release;const promise=new Promise(r=>release=r);return {promise,release};};
 const pause=ms=>new Promise(r=>setTimeout(r,ms));

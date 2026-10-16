@@ -17,7 +17,8 @@ This record starts with v0.8.1; earlier releases remain on the
   retaining generic activity when safe detail or optional CLI support is absent.
 - Show multiple rows of frequently used emoji, keeping the full picker usable
   on short screens and retaining existing ranking and local history.
-- Play supported video attachments in Comic through an explicit Play action,
+- Play supported video attachments in Comic and applicable standalone skins
+  through an explicit Play action,
   with native controls and a download fallback. Load verified local bytes on
   demand, limit in-app playback to 16 MiB, and release media on navigation.
 - Add Full, Sender and Hidden notification previews. Desktop notifications

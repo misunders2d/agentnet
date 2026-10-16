@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/secfile"
 )
 
 func TestNativeThinkingSummaryReferenceVectors(t *testing.T) {
@@ -179,7 +180,7 @@ func nativeActivityEvidenceVectors(t *testing.T) {
 		}
 	}
 	dir := t.TempDir()
-	if err := os.Chmod(dir, 0700); err != nil {
+	if err := secfile.EnsureDir(dir); err != nil {
 		t.Fatal("private evidence fixture setup failed")
 	}
 	for _, harness := range []string{"pi", "claude", "codex", "omp"} {
@@ -198,19 +199,31 @@ func nativeActivityEvidenceVectors(t *testing.T) {
 		t.Fatal("unexpected bounded artifact set")
 	}
 	for _, entry := range entries {
-		info, err := entry.Info()
-		if err != nil || info.Mode().Perm() != 0600 {
+		if err := checkNativeEvidencePermissions(filepath.Join(dir, entry.Name()), false); err != nil {
 			t.Fatal("artifact is not private")
 		}
 	}
 	if writeNativeActivityEvidence(dir, newNativeActivityEvidence("../collector-secret", false)) == nil || nativeActivityEvidenceDirectory("relative") == nil || nativeActivityEvidenceDirectory(filepath.Join(dir, "missing")) == nil {
 		t.Fatal("unknown harness or invalid directory accepted")
 	}
-	if err := os.Chmod(dir, 0755); err != nil {
+	if err := shareNativeEvidenceDirectory(dir); err != nil {
 		t.Fatal("nonprivate fixture setup failed")
 	}
 	if nativeActivityEvidenceDirectory(dir) == nil {
 		t.Fatal("nonprivate directory accepted")
+	}
+	shared := t.TempDir()
+	if err := shareNativeEvidenceDirectory(shared); err != nil {
+		t.Fatal("shared fixture setup failed")
+	}
+	if writeNativeActivityEvidence(shared, newNativeActivityEvidence("pi", false)) == nil {
+		t.Fatal("artifact created in shared directory")
+	}
+	if entries, err := os.ReadDir(shared); err != nil || len(entries) != 0 {
+		t.Fatal("refused shared directory gained an artifact")
+	}
+	if nativeActivityEvidenceDirectory(shared) == nil {
+		t.Fatal("supplied shared directory was tightened instead of refused")
 	}
 }
 
@@ -750,50 +763,38 @@ func TestNativeActivityExactAttemptAndWaitPrecedence(t *testing.T) {
 	} {
 		other := j
 		change(&other)
-		if s.markNativeActivity(t.Context(), other, activityReading) {
+		if changed, err := s.markNativeProgressOutcome(t.Context(), other, nativeProgress{kind: activityReading, at: time.Now()}); changed || err != nil {
 			t.Fatal(name, "changed activity")
 		}
 		unchanged(name, initial)
 	}
 	// The exact valid attempt may omit optional telemetry when the sole store
-	// connection is unavailable. False must leave every stored field unchanged.
+	// connection is unavailable. This known fixture omits the step, but the
+	// returned error still means an unknown outcome to the caller.
 	conn, err := s.db.Conn(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { conn.Close() })
 	start := time.Now()
-	deferred := s.markNativeActivity(t.Context(), j, activityReading)
+	deferred, deferredErr := s.markNativeProgressOutcome(t.Context(), j, nativeProgress{kind: activityReading, at: time.Now()})
 	elapsed := time.Since(start)
 	if err := conn.Close(); err != nil {
 		t.Fatal(err)
 	}
 	unchanged("deliberately deferred valid update", initial)
-	t.Logf("held-connection valid update=%t elapsed=%s row=%+v", deferred, elapsed, read())
-	if deferred {
-		t.Fatal("optional update persisted through the occupied store")
+	t.Logf("held-connection accepted=%t unknown=%t elapsed=%s", deferred, deferredErr != nil, elapsed)
+	if deferred || deferredErr == nil {
+		t.Fatal("occupied store did not return an unknown optional outcome")
 	}
-	// A fresh public report may follow an omitted optional write. Allow one
-	// such re-emission only after proving no detail/count/authority field moved;
-	// an accepted write and the subsequent duplicate checks remain mandatory.
-	first := false
-	for emission := 0; emission < 2; emission++ {
-		first = s.markNativeActivity(t.Context(), j, activityReading)
-		t.Logf("available-store emission=%d accepted=%t row=%+v", emission+1, first, read())
-		if first {
-			break
-		}
-		unchanged("omitted optional update", initial)
-	}
-	if !first {
-		t.Fatal("no valid update accepted after bounded optional re-emission")
-	}
-	accepted := read()
-	duplicate := s.markNativeActivity(t.Context(), j, activityReading)
-	unchanged("duplicate", accepted)
-	t.Logf("accepted=%t duplicate=%t row=%+v", first, duplicate, read())
-	if duplicate {
-		t.Fatal("duplicate persisted")
+	// Acceptance and persistence are separate: an unknown write may have applied.
+	p := nativeProgress{kind: activityReading, at: time.Date(2026, 10, 16, 15, 0, 0, 0, time.UTC)}
+	nativeProgressPersisted(t, s, j, p)
+	persisted := read()
+	duplicate, duplicateErr := s.markNativeProgressOutcome(t.Context(), j, p)
+	unchanged("duplicate", persisted)
+	if duplicate || duplicateErr != nil {
+		t.Fatal("duplicate was not known unchanged")
 	}
 	var detail string
 	var due, attempts int
@@ -804,8 +805,8 @@ func TestNativeActivityExactAttemptAndWaitPrecedence(t *testing.T) {
 		t.Fatal(err)
 	}
 	waiting := read()
-	if s.markNativeActivity(t.Context(), j, activityCommand) {
-		t.Fatal("activity overwrote dependency wait")
+	if changed, err := s.markNativeProgressOutcome(t.Context(), j, nativeProgress{kind: activityCommand, at: time.Now()}); changed || err != nil {
+		t.Fatal("dependency wait was not known unchanged")
 	}
 	unchanged("dependency wait", waiting)
 	for _, state := range []string{stateNeedHuman, stateAnswered, stateResolved, stateCancelReq, stateCancelled, stateInterrupt, stateJobFailed} {
@@ -813,8 +814,8 @@ func TestNativeActivityExactAttemptAndWaitPrecedence(t *testing.T) {
 			t.Fatal(err)
 		}
 		terminal := read()
-		if s.markNativeActivity(t.Context(), j, activityCommand) {
-			t.Fatal("late activity changed", state)
+		if changed, err := s.markNativeProgressOutcome(t.Context(), j, nativeProgress{kind: activityCommand, at: time.Now()}); changed || err != nil {
+			t.Fatal("terminal activity was not known unchanged", state)
 		}
 		unchanged(state, terminal)
 	}

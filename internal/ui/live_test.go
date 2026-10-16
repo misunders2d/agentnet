@@ -394,9 +394,33 @@ func TestLiveHumanDMs(t *testing.T) {
 	if o := overview(live); !o.Persons || o.Person != nil || len(o.People) != 0 || len(o.DMs) != 0 {
 		t.Fatalf("before any person: %+v %+v %+v", o.Person, o.People, o.DMs)
 	}
-	if _, err := alice.CreatePerson(ctx, "Alice"); err != nil {
+	alicePerson, err := alice.CreatePerson(ctx, "Alice")
+	if err != nil {
 		t.Fatal(err)
 	}
+	discovered := false
+	defer func() {
+		if !t.Failed() || discovered {
+			return
+		}
+		view := bob.MemberView()
+		memberPresent, personPresent, hashMatches := false, false, false
+		for _, m := range view.Members.Members {
+			if m.Address == alice.Address {
+				memberPresent = true
+				personPresent = m.Person != nil
+				if m.Person != nil {
+					hashMatches = m.Person.ID == alicePerson.Person && m.Person.Hash == alicePerson.Roster
+				}
+			}
+		}
+		people, readErr := bob.ListedPersons()
+		listedPresent := false
+		for _, p := range people {
+			listedPresent = listedPresent || p.Address == alice.Address && p.Person == alicePerson.Person
+		}
+		t.Logf("human discovery member_present=%t person_ref_present=%t roster_hash_matches=%t member_view_current=%t listed_read_ok=%t listed_present=%t listed_count=%d cache_completion_available=false", memberPresent, personPresent, hashMatches, view.Current, readErr == nil, listedPresent, len(people))
+	}()
 	var listed PersonView
 	eventually("alice listed by the name she claims", func() bool {
 		for _, p := range overview(live).People {
@@ -406,6 +430,7 @@ func TestLiveHumanDMs(t *testing.T) {
 		}
 		return listed.Address != ""
 	})
+	discovered = true
 	if listed.State != PersonListed || listed.Label != "Alice" || listed.Person != "" {
 		t.Fatalf("listed person shown as known: %+v", listed)
 	}

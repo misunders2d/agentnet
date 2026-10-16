@@ -423,11 +423,12 @@ func TestAdminRecommendationNeverSuspends(t *testing.T) {
 	h.streams.mu.Unlock()
 	phase, phaseStarted := "recommendation-update-event", time.Now()
 	var clearElapsed time.Duration
+	acks, streamClosed := 0, false
 	defer func() {
 		if !t.Failed() {
 			return
 		}
-		t.Logf("phase=%s elapsed=%v lease=%v admin_clear=%v captured=%t", phase, time.Since(phaseStarted), 200*time.Millisecond, clearElapsed, measured != nil)
+		t.Logf("phase=%s elapsed=%v lease=%v admin_clear=%v captured=%t successful_acks_during_clear=%d stream_closed_during_clear=%t close_reason_available=false", phase, time.Since(phaseStarted), 200*time.Millisecond, clearElapsed, measured != nil, acks, streamClosed)
 		if measured != nil {
 			h.streams.mu.Lock()
 			_, live := h.streams.subs[bob.addr][measured]
@@ -439,8 +440,50 @@ func TestAdminRecommendationNeverSuspends(t *testing.T) {
 		t.Fatalf("suspended stream: %+v", e)
 	}
 	phase, phaseStarted = "recommendation-clear", time.Now()
-	c, b := admin.callAs(t, h, "v1.2.0", "POST", "/v1/admin/release", protocol.ReleaseRequest{Clear: true})
-	clearElapsed = time.Since(phaseStarted)
+	clearBody, err := json.Marshal(protocol.ReleaseRequest{Clear: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clearRequest := signed(t, admin.id, admin.addr, "POST", "/v1/admin/release", clearBody)
+	clearRequest.Header.Set(protocol.VersionHeader, "v1.2.0")
+	clearStarted := time.Now()
+	clearDone := make(chan struct{})
+	var c int
+	var b []byte
+	go func() {
+		// No testing calls in this goroutine; the test keeps consuming pings.
+		response := serve(h, clearRequest)
+		c, b = response.Code, response.Body.Bytes()
+		clearElapsed = time.Since(clearStarted)
+		close(clearDone)
+	}()
+	defer func() { <-clearDone }()
+	var afterClear pushEvent
+	haveAfterClear := false
+waitClear:
+	for {
+		select {
+		case <-clearDone:
+			break waitClear
+		case e, ok := <-events:
+			if !ok {
+				streamClosed = true
+				t.Fatal("the recommendation stream ended")
+			}
+			if e.name != "ping" {
+				if !haveAfterClear {
+					afterClear, haveAfterClear = e, true
+				}
+				continue
+			}
+			var p protocol.PingAck
+			json.Unmarshal([]byte(e.data), &p)
+			if code, body := bob.callAs(t, h, "v1.1.0", "POST", "/v1/stream/ack", p); code != http.StatusNoContent {
+				t.Fatalf("ping acknowledgement: %d %s", code, body)
+			}
+			acks++
+		}
+	}
 	if c != http.StatusOK {
 		t.Fatalf("clear: %d %s", c, b)
 	}
@@ -448,7 +491,10 @@ func TestAdminRecommendationNeverSuspends(t *testing.T) {
 		t.Fatalf("after clear: %+v", r)
 	}
 	phase, phaseStarted = "recommendation-release-read", time.Now()
-	if e := nextEvent(t, h, bob, "v1.1.0", events); e.name != "release" || !strings.Contains(e.data, `"version":"v1.2.0"`) {
+	if !haveAfterClear {
+		afterClear = nextEvent(t, h, bob, "v1.1.0", events)
+	}
+	if e := afterClear; e.name != "release" || !strings.Contains(e.data, `"version":"v1.2.0"`) {
 		t.Fatalf("suspended stream after clear: %+v", e)
 	}
 }

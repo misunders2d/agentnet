@@ -102,6 +102,24 @@ func (l *Live) dmOverview(o *Overview, unread *[]UnreadRow, mutes map[string]boo
 		if err != nil {
 			return err
 		}
+		var assigned, titles map[string]string
+		var titleErr error
+		projectTitles := func() error {
+			if assigned != nil {
+				return titleErr
+			}
+			assigned = client.ChatTopicAssignments(msgs) // complete graph, including read ancestors
+			topics, err := l.a.ChatTopicsForMessages(c.ID, msgs, assigned)
+			titleErr = err
+			if err != nil {
+				return err
+			}
+			titles = make(map[string]string, len(topics))
+			for _, topic := range topics {
+				titles[topic.ID] = topic.Title
+			}
+			return nil
+		}
 		people := l.conversationPeople(c)
 		shown := shownRows(msgs, people) // its rows as the conversation shows them (DM)
 		s := DMSummary{ID: c.ID, Role: c.Role, Peer: personView(c.Peer), Created: time.Unix(c.Created, 0), Mine: c.Creator == l.a.Address,
@@ -118,14 +136,8 @@ func (l *Live) dmOverview(o *Overview, unread *[]UnreadRow, mutes map[string]boo
 			*o.AlertTotal += s.Unread
 		}
 		if unread != nil && s.Unread > 0 {
-			assigned := client.ChatTopicAssignments(msgs) // complete graph, including read ancestors
-			topics, err := l.a.ChatTopicsForMessages(c.ID, msgs, assigned)
-			if err != nil {
+			if err := projectTitles(); err != nil {
 				return err
-			}
-			titles := make(map[string]string, len(topics))
-			for _, topic := range topics {
-				titles[topic.ID] = topic.Title
 			}
 			for _, m := range shown {
 				if m.Unread {
@@ -201,11 +213,12 @@ func (l *Live) dmOverview(o *Overview, unread *[]UnreadRow, mutes map[string]boo
 					return eventText(m.Body, people)
 				}
 				if envelope.TopicOrganization(m.TopicEvent) {
-					notice, e := l.a.TopicOrganizationNotice(c.ID, m.Topic, "")
-					if e == nil {
-						return notice
+					if m.Topic != "" {
+						if err := projectTitles(); err != nil {
+							return client.TopicOrganizationNotice(m.Topic, "")
+						}
 					}
-					return client.TopicOrganizationNotice(m.Topic, "")
+					return client.TopicOrganizationNotice(m.Topic, titles[m.Topic])
 				}
 				if m.Body == "" && len(m.Attachments) > 0 { // files only: their names
 					var names []string

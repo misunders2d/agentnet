@@ -26,7 +26,8 @@ func TestHostAPIRoutesDocumented(t *testing.T) {
 	type row struct{ method, path, platforms string }
 	var rows []row
 	for _, m := range regexp.MustCompile("(?m)^\\| `(GET|POST) (/[^` ]+)` \\| ([^|]+) \\|").FindAllStringSubmatch(doc, -1) {
-		rows = append(rows, row{m[1], m[2], strings.TrimSpace(m[3])})
+		path, _, _ := strings.Cut(m[2], "?")
+		rows = append(rows, row{m[1], path, strings.TrimSpace(m[3])})
 	}
 	if len(rows) < 60 {
 		t.Fatalf("only %d route rows parsed from HOST_API_ROUTES.md", len(rows))
@@ -57,6 +58,31 @@ func TestHostAPIRoutesDocumented(t *testing.T) {
 	engineRoutes := map[string]bool{}
 	for _, m := range regexp.MustCompile(`case "(/api/[^"]+)"`).FindAllStringSubmatch(engine[start:end], -1) {
 		engineRoutes[m[1]] = true
+	}
+	// Scheduling dispatches before that switch. Read its actual bounded
+	// handler's explicit paths and action allowlist, never unrelated literals.
+	scheduleStart, scheduleEnd := strings.Index(engine, "async scheduleAPI("), strings.Index(engine, "async saveScheduledSend(")
+	if scheduleStart < 0 || scheduleEnd < scheduleStart || !strings.Contains(engine[start:end], `return this.scheduleAPI(u,body)`) {
+		t.Fatal("engine schedule dispatcher not found")
+	}
+	schedule := engine[scheduleStart:scheduleEnd]
+	scheduleMethods := map[string]string{}
+	for _, m := range regexp.MustCompile(`if\(u.pathname==="(/api/[^"]+)"\)`).FindAllStringSubmatch(schedule, -1) {
+		engineRoutes[m[1]] = true
+		scheduleMethods[m[1]] = "GET"
+	}
+	actions := regexp.MustCompile(`if\(!\[("[^"]+"(?:,"[^"]+")*)\]\.includes\(what\)\)`).FindStringSubmatch(schedule)
+	if len(scheduleMethods) != 2 || len(actions) != 2 {
+		t.Fatal("engine schedule paths or action allowlist not found")
+	}
+	allowed := regexp.MustCompile(`"([^"]+)"`).FindAllStringSubmatch(actions[1], -1)
+	if len(allowed) != 4 {
+		t.Fatalf("parsed %d schedule actions", len(allowed))
+	}
+	for _, action := range allowed {
+		path := "/api/schedule/" + action[1]
+		engineRoutes[path] = true
+		scheduleMethods[path] = "POST"
 	}
 	if len(patterns) < 50 || len(engineRoutes) < 50 {
 		t.Fatalf("parsed %d program and %d engine routes", len(patterns), len(engineRoutes))
@@ -98,6 +124,9 @@ func TestHostAPIRoutesDocumented(t *testing.T) {
 		}
 		if browser(r) && !engineRoutes[r.path] {
 			t.Errorf("HOST_API_ROUTES.md says the browser serves %s %s; its engine does not", r.method, r.path)
+		}
+		if method, ok := scheduleMethods[r.path]; browser(r) && ok && r.method != method {
+			t.Errorf("HOST_API_ROUTES.md says the browser serves %s %s; its engine serves %s", r.method, r.path, method)
 		}
 		if !daemon(r) && !browser(r) {
 			t.Errorf("HOST_API_ROUTES.md row %s %s names no platform: %q", r.method, r.path, r.platforms)

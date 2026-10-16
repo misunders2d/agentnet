@@ -438,10 +438,17 @@ func (s *store) markNativeActivity(ctx context.Context, j job, k nativeActivity)
 	return s.markNativeProgress(ctx, j, nativeProgress{kind: k, at: time.Now()})
 }
 
+// The bool helpers report only known updates, not whether an error rolled back.
 func (s *store) markNativeProgress(ctx context.Context, j job, p nativeProgress) bool {
+	changed, err := s.markNativeProgressOutcome(ctx, j, p)
+	return changed && err == nil
+}
+
+// An error leaves the write outcome unknown; false alone is not rollback proof.
+func (s *store) markNativeProgressOutcome(ctx context.Context, j job, p nativeProgress) (bool, error) {
 	label := p.label()
 	if j.nativeAttempt < 1 || p.kind.detail() == "" || !publicActivityDetail(label) || p.at.IsZero() {
-		return false
+		return false, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
 	defer cancel()
@@ -459,14 +466,17 @@ func (s *store) markNativeProgress(ctx context.Context, j job, p nativeProgress)
 		AND NOT EXISTS(SELECT 1 FROM native_requests n WHERE n.request=inbox.id AND n.attempt=inbox.attempts
 		 AND n.state='pending' AND (n.deadline=0 OR n.deadline>?))`, detail, due, j.ID, j.From, j.Key, j.nativeAttempt, j.Conv, j.PID, label, roomWaitDetail, prefix, prefix, time.Now().UnixMilli())
 	if err != nil {
-		return false // optional telemetry has no execution or error-reporting effect
+		return false, err // optional telemetry has no execution or error-reporting effect
 	}
 	n, err := res.RowsAffected()
-	if err == nil && n > 0 {
-		s.changed()
-		return true
+	if err != nil {
+		return false, err
 	}
-	return false
+	if n > 0 {
+		s.changed()
+		return true, nil
+	}
+	return false, nil
 }
 
 func (a *Agent) noteNativeWait(request string) {

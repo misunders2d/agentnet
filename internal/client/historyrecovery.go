@@ -26,12 +26,18 @@ type historyRecoveryDevices struct {
 }
 
 func historyRecoveryCurrent(q dbq, devices ...identity.Public) error {
+	return currentOwnDevices(q, true, devices...)
+}
+
+// currentOwnDevices shares current membership and exact-key checks. Callers
+// that do not require humans must separately establish their permitted role.
+func currentOwnDevices(q dbq, human bool, devices ...identity.Public) error {
 	me, ok, err := scanPersonIn(q, "state = ?", personSelf)
 	if err != nil {
 		return err
 	}
 	for _, device := range devices {
-		if !ok || !me.has(device.Address, device.Fingerprint()) || !me.roster.Human(device.Fingerprint()) {
+		if !ok || !me.has(device.Address, device.Fingerprint()) || human && !me.roster.Human(device.Fingerprint()) {
 			return errHistoryRecoveryAuthority
 		}
 		pinned, found, err := pinnedKey(q, device.Address)

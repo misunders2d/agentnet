@@ -32,6 +32,28 @@ func (a *Agent) ownHistorySourceRows(q dbq, dev identity.Public, filter, order s
 	}
 	return a.historySourceRowsMode(q, true, filter, order, limit, args...)
 }
+
+// Legacy own history permits ordinary inert rows, never the erased human
+// metadata exception. Absence of human-role metadata is not a grant.
+func currentOwnLegacyHistory(q dbq, sender, reader identity.Public) error {
+	if err := currentOwnDevices(q, false, sender, reader); err != nil {
+		return err
+	}
+	me, ok, err := scanPersonIn(q, "state = ?", personSelf)
+	if err != nil {
+		return err
+	}
+	if !ok || len(me.roster.HumanKeys) == 0 {
+		return errHistoryRecoveryAuthority
+	}
+	for _, device := range []identity.Public{sender, reader} {
+		if err := currentDeliveryRecipient(q, device.Address, device.Fingerprint()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (a *Agent) historySourceRowsMode(q dbq, own bool, filter, order string, limit int, args ...any) ([]historySourceRow, error) {
 	inVisible := "NOT " + erasedInFor("inbox")
 	outVisible := "NOT " + erasedOut

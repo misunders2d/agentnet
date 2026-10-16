@@ -5,6 +5,7 @@ import (
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
 	"testing"
+	"time"
 )
 
 func TestHistoryArchiveImportedTailRemainsBounded(t *testing.T) {
@@ -152,7 +153,12 @@ func importedTailRemainsBounded(t *testing.T, direct bool) {
 		if err = phone.storeReceived(tctx(t), desc); err != nil {
 			t.Fatal(err)
 		}
-		if _, err = phone.archiveImportStep(tctx(t)); err != nil {
+		importCtx := tctx(t)
+		importStarted := time.Now()
+		if _, err = phone.archiveImportStep(importCtx); err != nil {
+			deadline, _ := importCtx.Deadline()
+			// Existing failure cleanup reports retained/pos/done for each job.
+			t.Logf("archive import page=%d elapsed_ms=%d deadline_remaining_ms=%d context_done=%t", page, time.Since(importStarted).Milliseconds(), time.Until(deadline).Milliseconds(), importCtx.Err() != nil)
 			t.Fatal(err)
 		}
 		if err = a.store.applyReceipt(protocol.ReceiptEvent{ID: desc.ID, State: protocol.StateDelivered, Seq: page}); err != nil {

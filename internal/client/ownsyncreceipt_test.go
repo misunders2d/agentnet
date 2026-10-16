@@ -209,7 +209,7 @@ func TestOwnSyncCarriersReceiptedOnce(t *testing.T) {
 		return true
 	})
 	t.Run("topic-sync", func(t *testing.T) {
-		if _, err := w.alice.ChangeChatTopic(tctx(t), conv, topic, "rename", "A private name", 0); err != nil {
+		if err := w.alice.setTopicTitle(conv, topic, "A private name"); err != nil {
 			t.Fatal(err)
 		}
 		env := receipted(t, w.alice, phone, phoneAcks, envelope.SubTopicSync)

@@ -106,6 +106,25 @@ func TestQueuedFourMemberControlsCommitBeforeDelivery(t *testing.T) {
 					t.Fatal(e)
 				}
 			case <-time.After(time.Second):
+				if action == "dismiss" {
+					entered := false
+					select {
+					case <-pause.entered:
+						entered = true
+					default:
+					}
+					part, partErr := w.alice.Participation(p.PID)
+					var total, queued, custody, delivered int
+					countErr := w.alice.store.db.QueryRowContext(ctx, `SELECT count(*),coalesce(sum(state='queued'),0),coalesce(sum(state='custody'),0),coalesce(sum(state='delivered'),0) FROM outbox WHERE conv=? AND pid=?`, next.State.Conv, p.PID).Scan(&total, &queued, &custody, &delivered)
+					class := "none"
+					switch ctx.Err() {
+					case context.DeadlineExceeded:
+						class = "deadline"
+					case context.Canceled:
+						class = "canceled"
+					}
+					t.Logf("queued dismiss before release elapsed_ms=%d pause_entered=%t context_class=%s participation_read_ok=%t locally_dismissed=%t outbox_read_ok=%t outbox[total,queued,custody,delivered]=%v", time.Since(start).Milliseconds(), entered, class, partErr == nil, partErr == nil && part.State == PartDismissed, countErr == nil, [4]int{total, queued, custody, delivered})
+				}
 				release()
 				<-done
 				t.Fatal("queued action waited for delivery after durable local commit")

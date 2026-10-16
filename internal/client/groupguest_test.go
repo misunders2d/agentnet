@@ -195,7 +195,9 @@ func TestGroupGuestPublicJourney(t *testing.T) {
 	if _, err = guest.SendConv(tctx(t), conv, ConvOutgoing{PID: p.PID, Body: "after end"}); err == nil {
 		t.Fatal("ended guest sent")
 	}
-	left, err := w.bob.InviteHuman(tctx(t), conv, guest.Address, nil, "guest may leave")
+	inviteCtx, finishInvite := traceFixtureHTTP(t, tctx(t))
+	left, err := w.bob.InviteHuman(inviteCtx, conv, guest.Address, nil, "guest may leave")
+	finishInvite(err)
 	if err != nil {
 		t.Fatal(err)
 	}

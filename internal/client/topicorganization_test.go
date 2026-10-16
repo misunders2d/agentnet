@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/identity"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
@@ -247,6 +248,40 @@ func TestTopicOrganizationRejectsAgentHost(t *testing.T) {
 		t.Fatal(e)
 	}
 	host := linkedVia(t, w.alice, "worker", w.alice.ApproveAgentLink)
+	me, own, err := w.alice.store.selfPerson(w.alice.Address)
+	if err != nil {
+		t.Fatal("own roster prerequisite lookup", err)
+	}
+	checks := map[string]bool{
+		"own-person":           own,
+		"sender-current":       me.has(w.alice.Address, w.alice.Self().Fingerprint()),
+		"reader-current":       me.has(host.Address, host.Self().Fingerprint()),
+		"explicit-human-roles": len(me.roster.HumanKeys) > 0,
+		"reader-agent":         !me.roster.Human(host.Self().Fingerprint()),
+	}
+	for name, device := range map[string]*Agent{"sender": w.alice, "reader": host} {
+		pin, found, err := pinnedKey(w.alice.store.db, device.Address)
+		if err != nil {
+			t.Fatal(name+" pin prerequisite lookup", err)
+		}
+		checks[name+"-pin-absent-or-matching"] = !found || sameKeys(pin, device.Self())
+		var pending int
+		if err := w.alice.store.db.QueryRow(`SELECT count(*) FROM peers WHERE address=? AND pending IS NOT NULL`, device.Address).Scan(&pending); err != nil {
+			t.Fatal(name+" pending prerequisite lookup", err)
+		}
+		checks[name+"-no-pending-key"] = pending == 0
+		revoked, err := revokedDeviceKnown(w.alice.store.db, device.Address, device.Self().Fingerprint())
+		if err != nil {
+			t.Fatal(name+" revocation prerequisite lookup", err)
+		}
+		checks[name+"-not-revoked"] = !revoked
+	}
+	t.Logf("legacy history prerequisites: %v", checks)
+	for name, pass := range checks {
+		if !pass {
+			t.Fatal("legacy history prerequisite failed: " + name)
+		}
+	}
 	eventually(t, "agent host receives inert original conversation", func() bool {
 		_, e := membersIn(host.store.db, conv)
 		return e == nil
@@ -259,6 +294,279 @@ func TestTopicOrganizationRejectsAgentHost(t *testing.T) {
 	}
 	if e := topicOrganizationAuthor(w.alice.store.db, conv, w.alice.Address, w.alice.Self().Fingerprint()); e != nil {
 		t.Fatalf("current original human lost organization authority: %v", e)
+	}
+	t.Run("history-role-boundaries", testTopicOrganizationHistoryRoles)
+	t.Run("agent-producer-history", testTopicOrganizationAgentProducerHistory)
+}
+
+func testTopicOrganizationHistoryRoles(t *testing.T) {
+	w := newWorld(t, "")
+	stop := runAgent(t, w.alice)
+	runAgent(t, w.bob)
+	persons(t, w.alice, w.bob)
+	a := w.alice
+	conv := newDM(t, a, w.bob)
+	stop() // Source pages below run without a daemon changing their outbox.
+	seed, err := a.SendConv(tctx(t), conv, ConvOutgoing{Body: "ordinary inert history", Topic: "new"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	topic := convMsgByID(t, a, conv, seed.ID).Topic
+	old, err := a.RenameSharedTopic(tctx(t), conv, topic, "old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	winner, err := a.RenameSharedTopic(tctx(t), conv, topic, "winner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, lid := range []string{old.LID, winner.LID} {
+		if _, err := a.store.db.Exec(`INSERT INTO conv_erased(conv,lid,key,deletion) VALUES(?,?,?,?)`, conv, lid, a.Self().Fingerprint(), protocol.NewID()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	me, ok, err := a.store.selfPerson(a.Address)
+	if err != nil || !ok {
+		t.Fatalf("source roster: %v %v", ok, err)
+	}
+	// These helpers create and verify signed roster steps, including each
+	// reader's join signature. Neither reader runs a delivery daemon.
+	roster, agentKey := p7Added(t, w, me.roster, "admin/history-agent", false)
+	p7PinStep(t, a, roster)
+	roster, humanKey := p7Added(t, w, roster, "admin/history-human", true)
+	p7PinStep(t, a, roster)
+	agent := &Agent{id: agentKey, Address: "admin/history-agent"}
+	human := &Agent{id: humanKey, Address: "admin/history-human"}
+	var agentItems map[protocol.GroupHistoryRef]bool
+	for _, control := range []struct {
+		name   string
+		reader *Agent
+		pin    bool
+	}{{"agent-without-pin", agent, false}, {"agent-matching-pin", agent, true}, {"human-winner", human, true}} {
+		t.Run(control.name, func(t *testing.T) {
+			reader := control.reader
+			if control.pin {
+				if err := a.store.pin(reader.Self()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if pin, found, err := pinnedKey(a.store.db, reader.Address); err != nil || found != control.pin || found && !sameKeys(pin, reader.Self()) {
+				t.Fatalf("reader pin control found=%v matching=%v want-present=%v err=%v", found, found && sameKeys(pin, reader.Self()), control.pin, err)
+			}
+			if _, err := a.historyPageFor(reader.Self(), historyPos{}); err != nil {
+				t.Fatalf("legacy page for %s: %v", control.name, err)
+			}
+			items := historyCopiedItems(t, a, reader)
+			ordinary, recovered := false, false
+			for _, item := range items {
+				if item.LID == seed.LID {
+					if item.From != a.Address || item.FromKey != a.Self().Fingerprint() || item.Body != "ordinary inert history" {
+						t.Fatal("ordinary history changed its original human author or body")
+					}
+					ordinary = true
+				}
+				if item.LID == old.LID {
+					t.Fatal("obsolete erased title recovered")
+				}
+				if item.LID == winner.LID {
+					if item.Body != "" {
+						t.Fatal("metadata recovery restored a body")
+					}
+					recovered = true
+				}
+			}
+			if !ordinary || recovered != (reader == human) {
+				t.Fatalf("reader=%s ordinary=%v erased-winner=%v", control.name, ordinary, recovered)
+			}
+			if control.name == "agent-without-pin" {
+				agentItems = make(map[protocol.GroupHistoryRef]bool)
+				for _, item := range items {
+					agentItems[historyRef(conv, item)] = true
+				}
+			} else if reader == agent {
+				refs := make(map[protocol.GroupHistoryRef]bool)
+				for _, item := range items {
+					refs[historyRef(conv, item)] = true
+				}
+				if !reflect.DeepEqual(refs, agentItems) {
+					t.Fatal("matching pin changed the exact selected source set")
+				}
+			}
+		})
+	}
+	if err := topicOrganizationAuthor(a.store.db, conv, agent.Address, agent.Self().Fingerprint()); err == nil {
+		t.Fatal("ordinary history granted human organization authority")
+	}
+	if _, err := a.ownHistorySourceRows(a.store.db, agent.Self(), "conv=?", "id", 10, conv); !errors.Is(err, errHistoryRecoveryAuthority) {
+		t.Fatalf("agent entered human erased recovery: %v", err)
+	}
+	if rows, err := a.historySourceRows(a.store.db, "conv=? AND lid IN (?,?)", "id", 10, conv, old.LID, winner.LID); err != nil || len(rows) != 0 {
+		t.Fatalf("generic selected/guest selector recovered erased rows: %d %v", len(rows), err)
+	}
+	if err := currentOwnLegacyHistory(a.store.db, a.Self(), human.Self()); err != nil {
+		t.Fatalf("valid own human reader lost generic history authority: %v", err)
+	}
+	if rows, err := a.ownHistorySourceRows(a.store.db, human.Self(), "conv=? AND lid=?", "id", 1, conv, winner.LID); err != nil || len(rows) != 1 || rows[0].in.LID != winner.LID {
+		t.Fatalf("valid human pair lost its separate erased-winner path: %d %v", len(rows), err)
+	}
+	replacement, err := identity.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err := json.Marshal(replacement.Public(agent.Address))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"changed-pin", "pending", "revoked", "frozen", "removed", "missing-role", "sender-pending", "db-error"} {
+		t.Run(mode, func(t *testing.T) {
+			tx, err := a.store.db.Begin()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback()
+			switch mode {
+			case "changed-pin":
+				_, err = tx.Exec(`UPDATE peers SET public=? WHERE address=?`, changed, agent.Address)
+			case "pending":
+				_, err = tx.Exec(`UPDATE peers SET pending=public WHERE address=?`, agent.Address)
+			case "revoked":
+				_, err = tx.Exec(`INSERT INTO config(k,v) VALUES(?,?)`, revokedDevicePrefix+agent.Address+"/"+agent.Self().Fingerprint(), agent.Address)
+			case "frozen":
+				_, err = tx.Exec(`UPDATE persons SET state='conflict' WHERE state='self'`)
+			case "removed":
+				_, err = tx.Exec(`UPDATE persons SET record=json_set(record,'$.devices',json('[]')) WHERE state='self'`)
+			case "missing-role":
+				_, err = tx.Exec(`UPDATE persons SET record=json_remove(record,'$.human_keys') WHERE state='self'`)
+			case "sender-pending":
+				if _, err = tx.Exec(`INSERT OR IGNORE INTO peers(address,public,pinned_at) VALUES(?,?,0)`, a.Address, mustJSON(a.Self())); err == nil {
+					_, err = tx.Exec(`UPDATE peers SET pending=public WHERE address=?`, a.Address)
+				}
+			case "db-error":
+				err = tx.Rollback()
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := currentOwnLegacyHistory(tx, a.Self(), agent.Self()); err == nil {
+				t.Fatal("invalid agent history authority accepted")
+			} else if mode == "db-error" && errors.Is(err, errHistoryRecoveryAuthority) {
+				t.Fatal("database error was converted to a role fallback")
+			}
+		})
+	}
+}
+
+func testTopicOrganizationAgentProducerHistory(t *testing.T) {
+	w := newWorld(t, "")
+	stopOwner := runAgent(t, w.alice)
+	runAgent(t, w.bob)
+	persons(t, w.alice, w.bob)
+	owner := w.alice
+	conv := newDM(t, owner, w.bob)
+	producer, awaited, _ := linkPhone(t, owner, "history-producer")
+	if err := owner.ApproveAgentLink(tctx(t), pendingLink(t, owner).ID); err != nil {
+		t.Fatal(err)
+	}
+	if result := <-awaited; result.err != nil {
+		t.Fatal(result.err)
+	}
+	stopProducer := runAgent(t, producer)
+	seed, err := owner.SendConv(tctx(t), conv, ConvOutgoing{Body: "original human history for every role pair", Topic: "new"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	topic := convMsgByID(t, owner, conv, seed.ID).Topic
+	old, err := owner.RenameSharedTopic(tctx(t), conv, topic, "old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	winner, err := owner.RenameSharedTopic(tctx(t), conv, topic, "winner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "real linked agent retains the human originals before erasure", func() bool {
+		rows, err := producer.historySourceRows(producer.store.db, "conv=? AND lid IN (?,?,?)", "id", 10, conv, seed.LID, old.LID, winner.LID)
+		if err != nil || len(rows) != 3 {
+			return false
+		}
+		title, present, err := producer.SharedTopicTitle(conv, topic)
+		return err == nil && present && title.LID == winner.LID && title.Writer == owner.Self().Fingerprint()
+	})
+	stopProducer() // Keep this real agent's store and identity; stop its producer.
+	for _, source := range []*Agent{owner, producer} {
+		for _, lid := range []string{old.LID, winner.LID} {
+			if _, err := source.store.db.Exec(`INSERT INTO conv_erased(conv,lid,key,deletion) VALUES(?,?,?,?)`, conv, lid, owner.Self().Fingerprint(), protocol.NewID()); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	// Actual joins give each reader a separate store/key and the owner's signed
+	// role decision. The stopped producer verifies those same roster steps.
+	human, awaited, _ := linkPhone(t, owner, "history-human-reader")
+	if err := owner.DecideLink(tctx(t), pendingLink(t, owner).ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if result := <-awaited; result.err != nil {
+		t.Fatal(result.err)
+	}
+	me, ok, err := owner.store.selfPerson(owner.Address)
+	if err != nil || !ok {
+		t.Fatalf("human reader roster: %v %v", ok, err)
+	}
+	p7PinStep(t, producer, me.roster)
+	agent, awaited, _ := linkPhone(t, owner, "history-agent-reader")
+	if err := owner.ApproveAgentLink(tctx(t), pendingLink(t, owner).ID); err != nil {
+		t.Fatal(err)
+	}
+	if result := <-awaited; result.err != nil {
+		t.Fatal(result.err)
+	}
+	me, ok, err = owner.store.selfPerson(owner.Address)
+	if err != nil || !ok {
+		t.Fatalf("agent reader roster: %v %v", ok, err)
+	}
+	p7PinStep(t, producer, me.roster)
+	stopOwner()
+	current, ok, err := producer.store.selfPerson(producer.Address)
+	if err != nil || !ok || current.roster.Human(producer.Self().Fingerprint()) || !current.has(producer.Address, producer.Self().Fingerprint()) || !current.roster.Human(human.Self().Fingerprint()) || current.roster.Human(agent.Self().Fingerprint()) {
+		t.Fatalf("actual agent producer/reader role prerequisites failed: own=%v err=%v", ok, err)
+	}
+	for _, source := range []struct {
+		name string
+		a    *Agent
+	}{{"human", owner}, {"agent", producer}} {
+		for _, reader := range []struct {
+			name string
+			a    *Agent
+		}{{"human", human}, {"agent", agent}} {
+			t.Run(source.name+"-to-"+reader.name, func(t *testing.T) {
+				if _, err := source.a.historyPageFor(reader.a.Self(), historyPos{}); err != nil {
+					t.Fatalf("actual legacy page: %v", err)
+				}
+				ordinary, recovered := false, false
+				for _, item := range historyCopiedItems(t, source.a, reader.a) {
+					if item.LID == seed.LID {
+						if item.From != owner.Address || item.FromKey != owner.Self().Fingerprint() || item.Body != "original human history for every role pair" {
+							t.Fatal("history reattributed or changed the human original")
+						}
+						ordinary = true
+					}
+					if item.LID == old.LID {
+						t.Fatal("obsolete erased title recovered")
+					}
+					if item.LID == winner.LID {
+						if item.FromKey != owner.Self().Fingerprint() || item.Body != "" {
+							t.Fatal("winner changed its original human author or body")
+						}
+						recovered = true
+					}
+				}
+				wantWinner := source.name == "human" && reader.name == "human"
+				if !ordinary || recovered != wantWinner {
+					t.Fatalf("ordinary=%v erased-winner=%v want-winner=%v", ordinary, recovered, wantWinner)
+				}
+			})
+		}
 	}
 }
 

@@ -166,7 +166,8 @@ func TestBrowserEngineNeedsYouReadOnly(t *testing.T) {
 	// The tablet asks the laptop's agent, which leaves it for Alice: shown
 	// here as the laptop reports it, until explicitly resolved there.
 	w.until("the laptop's agent active in the browser", func() bool { a := agent(inv.PID); return a != nil && a["can_ask"] == true })
-	asked := w.api("/api/dm/agent/ask", map[string]any{"pid": inv.PID, "body": "deploy now?"})["id"].(string)
+	askedResult := w.api("/api/dm/agent/ask", map[string]any{"pid": inv.PID, "body": "deploy now?"})
+	asked := askedResult["id"].(string)
 	privateText := "Request: deploy now?\n\nAgent response:\n" + agentText
 	w.until("the laptop's full private needs-human text", func() bool { it := item(client.ReviewNeedsHuman); return it != nil && it["why"] == privateText })
 	it = item(client.ReviewNeedsHuman)
@@ -176,13 +177,33 @@ func TestBrowserEngineNeedsYouReadOnly(t *testing.T) {
 	if err != nil || before == nil || before.Attempt != 1 || before.Host != "" || before.Key != phoneKey {
 		t.Fatalf("host's waiting attempt: %+v %v", before, err)
 	}
+	if askedResult["lid"] != nativeTurn.LID {
+		t.Fatalf("sent logical request differs from its native copy: sent %v native %s", askedResult["lid"], nativeTurn.LID)
+	}
+	// A logical turn has several transport copies. Compare Review with the
+	// exact canonical row this conversation displays, still bound to its author.
+	dm := w.api("/api/dm?id="+conv, nil)
+	var phoneTurn map[string]any
+	for _, value := range dm["messages"].([]any) {
+		row := value.(map[string]any)
+		if row["lid"] == nativeTurn.LID && row["send_group_author"] == phoneKey {
+			if phoneTurn != nil {
+				t.Fatal("the exact logical request has duplicate displayed rows")
+			}
+			phoneTurn = row
+		}
+	}
+	target, _ := phoneTurn["target"].(map[string]any)
+	if dm["id"] != conv || phoneTurn == nil || phoneTurn["dir"] != "out" || phoneTurn["pid"] != inv.PID || phoneTurn["topic"] != "" || phoneTurn["kind"] != envelope.KindQuestion || phoneTurn["body"] != "deploy now?" || target["address"] != laptop.Address || target["fingerprint"] != laptop.Self().Fingerprint() {
+		t.Fatalf("canonical request lost its exact author, logical identity or scope: %v", phoneTurn)
+	}
 	wantContinuation := map[string]any{"id": nativeTurn.LID, "key": phoneKey, "host": laptop.Address, "attempt": float64(before.Attempt)}
 	decisionActions, _ := it["actions"].([]any)
-	if it["conv"] != conv || it["pid"] != inv.PID || it["id"] != asked || it["kind"] != envelope.KindQuestion || it["excerpt"] != "deploy now?" ||
+	t.Logf("needs-you identity diagnostic: first transport=%v send LID=%v native ID=%v native LID=%v display ID=%v expected continuation=%v actual continuation=%v", asked, askedResult["lid"], nativeTurn.ID, nativeTurn.LID, it["id"], wantContinuation, it["continuation"])
+	if it["conv"] != conv || it["pid"] != inv.PID || it["id"] != phoneTurn["id"] || it["kind"] != envelope.KindQuestion || it["excerpt"] != "deploy now?" ||
 		it["decide_on"] != laptop.Address || !slices.Equal(decisionActions, []any{DoContinue}) || !reflect.DeepEqual(it["continuation"], wantContinuation) || it["why"] != privateText {
 		t.Fatalf("needs-human in the browser: %v", it)
 	}
-	phoneTurn := dmMessage(w, conv, "deploy now?")
 	// The action remains bound to the host's exact request/key/attempt;
 	// displaying it does not run or accept anything on either device.
 	turnActions, hasActions := phoneTurn["actions"].([]any)

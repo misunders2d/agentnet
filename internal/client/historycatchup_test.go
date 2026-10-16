@@ -364,6 +364,26 @@ func TestHistoryCatchupAuthorityAndAtomicPage(t *testing.T) {
 func TestHistoryCatchupConcurrentPagesDoNotRegress(t *testing.T) {
 	w, phone, _, _ := historyCatchupFixture(t, 57)
 	a := w.alice
+	var initialQueued, initialStaged int
+	if err := a.store.db.QueryRow(`SELECT count(*) FILTER (WHERE state='queued'),count(*) FILTER (WHERE state='archive_staged') FROM outbox WHERE recipient=? AND sub='history'`, phone.Address).Scan(&initialQueued, &initialStaged); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("initial reader archive=%v queued=%d staged=%d", a.archivesFor(tctx(t), phone.Self()), initialQueued, initialStaged)
+	// This fixture manually admits individual envelopes. Select that signed
+	// transport explicitly, as TestHistoryCatchupRecentTailRestart does.
+	stopPhone := runAgent(t, phone)
+	defer stopPhone()
+	waitNamedAgentCaps(t, phone)
+	signCapsAfter(t, phone, without(ownCaps, protocol.CapHistoryArchive))
+	label, name, _ := protocol.SplitAddress(phone.Address)
+	eventually(t, "signed concurrent per-carrier history reader", func() bool {
+		var profile protocol.Profile
+		err := phone.hub.do(tctx(t), "GET", "/v1/agents/"+label+"/"+name+"/profile", nil, &profile)
+		return err == nil && profile.Supports(phone.Address, phone.Self().SignKey, protocol.CapOwnSyncV3) && !profile.Supports(phone.Address, phone.Self().SignKey, protocol.CapHistoryArchive)
+	})
+	if a.archivesFor(tctx(t), phone.Self()) {
+		t.Fatal("manual receipt fixture selected archive transport")
+	}
 	done := make(chan error, 2)
 	for range 2 {
 		go func() { _, err := a.historyCatchupPage(tctx(t), phone.Self()); done <- err }()
@@ -375,6 +395,14 @@ func TestHistoryCatchupConcurrentPagesDoNotRegress(t *testing.T) {
 	}
 	if got := len(historyCopiedItems(t, a, phone)); got != historyPage {
 		t.Fatalf("concurrent pages escaped the unacknowledged window: %d", got)
+	}
+	var queuedHistory, stagedHistory int
+	if err := a.store.db.QueryRow(`SELECT count(*) FILTER (WHERE state='queued'),count(*) FILTER (WHERE state='archive_staged') FROM outbox WHERE recipient=? AND sub='history'`, phone.Address).Scan(&queuedHistory, &stagedHistory); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("manual reader archive=false queued=%d staged=%d", queuedHistory, stagedHistory)
+	if queuedHistory != historyPage || stagedHistory != 0 {
+		t.Fatalf("manual receipt fixture transport: queued=%d staged=%d", queuedHistory, stagedHistory)
 	}
 	// Both producers share the same outstanding window. The reader must
 	// actually admit that page before its receipts permit the remaining seven.

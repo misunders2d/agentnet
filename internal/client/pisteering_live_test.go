@@ -529,7 +529,10 @@ func nativeActivityEvidenceDirectory(dir string) error {
 		return errors.New("absolute private evidence directory required")
 	}
 	info, err := os.Lstat(dir)
-	if err != nil || !info.IsDir() || info.Mode().Perm()&0077 != 0 || info.Mode().Perm()&0700 != 0700 {
+	if err != nil || !info.IsDir() {
+		return errors.New("existing private evidence directory required")
+	}
+	if err := checkNativeEvidencePermissions(dir, true); err != nil {
 		return errors.New("existing private evidence directory required")
 	}
 	return nil
@@ -554,6 +557,10 @@ func writeNativeActivityEvidence(dir string, evidence *nativeActivityEvidence) e
 	}
 	f, err := os.OpenFile(filepath.Join(dir, evidence.Harness+"-"+mode+".json"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
+		return err
+	}
+	if err := restrictNativeEvidenceFile(f.Name()); err != nil {
+		f.Close()
 		return err
 	}
 	_, writeErr := f.Write(data)

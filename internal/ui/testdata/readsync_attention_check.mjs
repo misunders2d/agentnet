@@ -141,6 +141,9 @@ const view=await a.api('/api/dm?id='+conv),main=view.main_topic;check(main?.unre
 check((await a.overview()).dms.find(d=>d.id===conv).unread===3,'chat total includes Main and ordinary sibling');
 // Full snapshot count does not depend on any rendered window; only specified IDs change.
 const beforeSibling=(await a.api('/api/dm?id='+conv)).messages.find(m=>m.id===siblingRow.id).attention;
+// Admission already launched history production. Finish that captured-set
+// change before this stationary action; authority-race refusal stays below.
+await a.historyRun;await a.historyProduction;
 await a.api('/api/act',{do:'unread',id:sent.id,ids:[sent.id,incoming.id]});await a.readSyncRun;await drainAttention(a);
 check(!(await a.api('/api/dm?id='+conv)).messages.find(m=>m.id===siblingRow.id).attention&&!beforeSibling,'from-here exact IDs leave sibling untouched');
 // Restart retries same ciphertext and latest per-recipient ledger without replay growth.
@@ -276,17 +279,54 @@ const ownDirect=await a.sendV1({to:b.address,kind:'question',body:'Own direct qu
 let ownDirectView=(await a.thread(ownDirect.id)).messages.find(m=>m.id===ownDirect.id);check(ownDirectView.unread&&ownDirectView.attention,'actual outgoing direct row resolves local author despite recipient fp metadata');
 await a.api('/api/act',{do:'read',ids:[ownDirect.id],attention:{[ownDirect.id]:ownDirectView.attention}});await a.readSyncRun;await drainAttention(a);check(!(await a.thread(ownDirect.id)).messages.find(m=>m.id===ownDirect.id).unread,'outgoing direct exact generation clears');
 // Provider/replica operations must not scan all history once per reference.
-await a.readSyncRun;const cost={},snapshots={},originals={};
-for(const name of ['all','prefix','byConv','get','getMany']){originals[name]=a.store[name];a.store[name]=async(...args)=>{const key=name+':'+args[0]+(name==='prefix'?':'+args[1].split('/')[0]:'');cost[key]=(cost[key]||0)+1;const result=await originals[name](...args);if(name==='prefix'||name==='byConv')cost['rows:'+key]=(cost['rows:'+key]||0)+result.length;if(name==='getMany'){cost.requested=(cost.requested||0)+args[1].length;cost.loaded=(cost.loaded||0)+result.filter(Boolean).length;}return result;};}
-const reset=()=>{for(const k of Object.keys(cost))delete cost[k];};
-await a.api('/api/dm?id='+conv);snapshots.dm={...cost};check(cost['getMany:kv']===1,'one attention register snapshot for complete DM/Main/topics operation');reset();
-const observed=(await a.api('/api/dm?id='+conv)).messages.find(m=>m.id===incoming.id).attention;reset();await a.markRead([incoming.id],{[incoming.id]:{rev:observed.rev,writer:observed.writer===a.fp?p.fp:a.fp}});await a.readSyncRun;snapshots.singleChatCAS={...cost};check(cost['getMany:kv']===1&&!cost['all:inbox']&&!cost['all:outbox'],'single-chat attention CAS reads only its conversation snapshot');reset();
-await a.thread(directID);snapshots.direct={...cost};check(cost['getMany:kv']===1&&cost.requested===1&&cost.loaded===1,'direct view loads only its admitted ref instead of all owner attention');reset();
-await a.overview();snapshots.overview={...cost};check(cost['getMany:kv']===1,'one attention register snapshot shared by overview/group/threads/counts');reset();
-const refs=Array.from({length:64},()=>({...ref,lid:wire.newID(),state:'unread',rev:1,writer:p.fp}));await receive(await seal(p,refs,a),a);await a.readSyncRun;snapshots.admit64={...cost};
+await a.readSyncRun;const cost={},snapshots={},originals={},titleBatches=[];
+// This fixture has one named DM topic and a group containing Main only.
+const titleTopics=new Map([[conv,[siblingRow.topic]],[group,[]]]),titleKeys=new Map();
+for(const [id,topics] of titleTopics){
+ const main=wire.hex(await wire.sha256(new TextEncoder().encode('agentnet/main-flow-preference/v1\0'+id)));
+ titleKeys.set(id,[...topics.map(t=>'topic/'+id+'/'+t),'topic/'+main+'/'+('0'.repeat(32)),...topics.map(t=>'topic-shared-title/'+id+'/'+t)].sort());
+}
+const bump=(key,n=1)=>cost[key]=(cost[key]||0)+n;
+const failureCost=()=>console.log('attention namespace cost at failure',JSON.stringify(cost));
+process.on('uncaughtExceptionMonitor',failureCost);
+for(const name of ['all','prefix','byConv','get','getMany']){
+ originals[name]=a.store[name];a.store[name]=async(...args)=>{
+  const key=name+':'+args[0]+(name==='prefix'?':'+args[1].split('/')[0]:'');bump(key);
+  const result=await originals[name](...args);
+  if(name==='prefix'||name==='byConv')bump('rows:'+key,result.length);
+  if(name==='getMany'){
+   const keys=args[1],kinds=new Set(keys.map(k=>k.startsWith('attention/'+a.me.person+'/')?'attention':k.startsWith('topic/')||k.startsWith('topic-shared-title/')?'titles':'unexpected'));
+   const kind=args[0]==='kv'&&keys.length&&kinds.size===1?[...kinds][0]:'unexpected',loaded=result.filter(Boolean).length;
+   bump('batches');bump('requested',keys.length);bump('loaded',loaded);
+   bump(kind+'Batches');bump(kind+'Requested',keys.length);bump(kind+'Loaded',loaded);
+   if(kind==='titles')titleBatches.push([...keys].sort());
+   if(kind==='unexpected')cost.unexpectedNamespaces=[...(cost.unexpectedNamespaces||[]),[...kinds].sort()];
+  }
+  return result;
+ };
+}
+const reset=()=>{for(const k of Object.keys(cost))delete cost[k];titleBatches.length=0;};
+const capture=name=>{
+ snapshots[name]={...cost};console.log('attention namespace cost',name,JSON.stringify(snapshots[name]));
+ check(!cost.unexpectedBatches,'no unexpected, empty or mixed namespace batch is hidden');
+ check((cost.batches||0)===(cost.attentionBatches||0)+(cost.titlesBatches||0),'total batch count includes attention and title work');
+ check((cost.requested||0)===(cost.attentionRequested||0)+(cost.titlesRequested||0)&&(cost.loaded||0)===(cost.attentionLoaded||0)+(cost.titlesLoaded||0),'total requested/loaded keys include both namespaces');
+};
+const checkTitles=ids=>{
+ check(titleBatches.length===ids.length,'one title batch per expected conversation');
+ for(const id of ids)check(titleKeys.get(id).length===2*titleTopics.get(id).length+1,'private/shared/Main title key bound');
+ const ordered=rows=>rows.map(keys=>JSON.stringify(keys)).sort();
+ assert.deepEqual(ordered(titleBatches),ordered(ids.map(id=>titleKeys.get(id))),'exact known private/shared/Main title keysets, without unrelated or repeated keys');checks++;
+};
+const measuredDM=await a.api('/api/dm?id='+conv);capture('dm');check(cost.attentionBatches===1,'one attention register snapshot for complete DM/Main/topics operation');checkTitles([conv]);reset();
+const observed=measuredDM.messages.find(m=>m.id===incoming.id).attention;await a.markRead([incoming.id],{[incoming.id]:{rev:observed.rev,writer:observed.writer===a.fp?p.fp:a.fp}});await a.readSyncRun;capture('singleChatCAS');check(cost.attentionBatches===1&&!cost['all:inbox']&&!cost['all:outbox'],'single-chat attention CAS reads only its conversation snapshot');checkTitles([conv]);reset();
+await a.thread(directID);capture('direct');check(cost.attentionBatches===1&&cost.attentionRequested===1&&cost.attentionLoaded===1,'direct view loads only its admitted ref instead of all owner attention');checkTitles([]);reset();
+await a.overview();capture('overview');check(cost.attentionBatches===1,'one attention register snapshot shared by overview/group/threads/counts');checkTitles([conv,group]);reset();
+const refs=Array.from({length:64},()=>({...ref,lid:wire.newID(),state:'unread',rev:1,writer:p.fp}));await receive(await seal(p,refs,a),a);await a.readSyncRun;capture('admit64');
 check(!cost['all:kv']&&(cost['all:inbox']||0)<=2,'64 marks do not rescan all inbox/KV per reference');reset();
-await a.syncReadMarks();snapshots.sync={...cost};check(!cost['all:kv']&&!cost['all:inbox'],'recovery wake reuses latest/copy prefixes without whole-history scans');
+await a.syncReadMarks();capture('sync');check(!cost['all:kv']&&!cost['all:inbox'],'recovery wake reuses latest/copy prefixes without whole-history scans');
 for(const name of Object.keys(originals))a.store[name]=originals[name];
+process.removeListener('uncaughtExceptionMonitor',failureCost);
 // Real published v31 parser/caps snapshot, optional outside the release packet.
 const {readFile}=await import('node:fs/promises'),{createHash}=await import('node:crypto');
 let compatibility='not executed: AGENTNET_COMPAT_V31_WIRE unset';
@@ -300,6 +340,6 @@ if(process.env.AGENTNET_COMPAT_V31_WIRE){
  compatibility='published v0.8.31 1894c6cd parser/caps executed; dependency import URLs only rewritten';
 }
 const advertisement=Engine.prototype.onConnect.toString().match(/wire\.newCaps\(this\.keys, this\.address, this\.session, (\[.*\])\)\)/)[1],advertised=Function('wire','f','return '+advertisement)(wire,['signals1']);
-check(advertised.length===28&&new Set(advertised).size===28&&advertised.includes(wire.CapReadSyncV2)&&!advertised.includes(wire.CapReadSync),'actual browser advertisement replaces rd1 within28 slots');
+check(wire.MaxAdvertisedCaps===29&&wire.MaxCaps===32&&advertised.length===wire.MaxAdvertisedCaps&&new Set(advertised).size===wire.MaxAdvertisedCaps&&advertised.includes(wire.CapSharedTopicTitle)&&advertised.includes(wire.CapTopicOrganization)&&advertised.includes(wire.CapRequestSteer)&&!advertised.includes(wire.CapRequestFollowup)&&advertised.includes(wire.CapReadSyncV2)&&!advertised.includes(wire.CapReadSync),'actual browser advertisement keeps ttl1/org1 and strict flw2/rd2 replacements within the reviewed29 slots');
 await wire.newCaps(a.keys,a.address,wire.newID(),advertised);
 console.log('attention browser checks',checks,JSON.stringify({cost:snapshots,carriers:(await copies(a)).length,compatibility,advertised:advertised.length}));

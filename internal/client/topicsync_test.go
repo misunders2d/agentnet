@@ -48,14 +48,14 @@ func TestTopicSyncOwnHumanRenameJourney(t *testing.T) {
 	if topic == "" || seed.LID == "" {
 		t.Fatal("missing topic")
 	}
-	if _, err = w.alice.ChangeChatTopic(tctx(t), conv, topic, "rename", "A shared private name", 0); err != nil {
+	if err = w.alice.setTopicTitle(conv, topic, "A shared private name"); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "own phone title renamed", func() bool { return titleAt(t, phone, conv, topic) == "A shared private name" })
 	if titleAt(t, w.bob, conv, topic) != "" {
 		t.Fatal("private title leaked to another person")
 	}
-	if _, err = phone.ChangeChatTopic(tctx(t), conv, topic, "rename", "", 0); err != nil {
+	if err = phone.setTopicTitle(conv, topic, ""); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "reset returns laptop to automatic title", func() bool {

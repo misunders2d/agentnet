@@ -80,7 +80,9 @@ let row=await receive(wire.SubReadSync);await again(row,p.readMarkKey(a.me.perso
 // A private topic name, then a topic mark.
 const topic=wire.newID(),original={v:2,id:topic,lid:topic,conv,topic,from:b.address,fp:b.fp,kind:'message',body:'Automatic title',read:false,at:1,ts:1};
 await a.store.write([{s:'inbox',k:topic,v:original}]);
-await a.changeChatTopic('rename',{conv,id:topic,title:'Private name'});await settle(a);
+const titleChecks=[],legacyTitle={type:'topic-state',peer:conv,topic,title:'Private name'};
+await a.store.write([{s:'kv',k:'topic/'+conv+'/'+topic,v:legacyTitle},...await a.topicTitleOps(conv,topic,legacyTitle.title,titleChecks)],titleChecks);
+await a.syncTopicTitles();await settle(a);
 row=await receive(wire.SubTopicSync);await again(row,p.topicTitleKey(a.me.person,wire.parseTopicSync(row.body).titles[0]));
 await a.changeChatTopic('archive',{conv,id:topic});await settle(a);
 row=await receive(wire.SubTopicStateSync);await again(row,p.topicMarkKey(a.me.person,wire.parseTopicStateSync(row.body).marks[0]));

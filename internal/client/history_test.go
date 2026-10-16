@@ -274,10 +274,57 @@ func TestHistoryFilesOnRequest(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	answersStarted, answersObserved := time.Now(), false
+	defer func() {
+		if !t.Failed() || answersObserved {
+			return
+		}
+		current, readErr := phone.ConversationMessages(conv)
+		var available [3]bool
+		for n, index := range []int{1, 2, 3} {
+			if len(current) > index && len(current[index].Attachments) > 0 {
+				want := ""
+				if index == 2 {
+					want = "unavailable"
+				}
+				available[n] = current[index].Attachments[0].Availability == want
+			}
+		}
+		t.Logf("file answers elapsed_ms=%d read_ok=%t available[sent,missing,received]=%v", time.Since(answersStarted).Milliseconds(), readErr == nil, available)
+		for _, side := range []struct {
+			label string
+			a     *Agent
+			peer  string
+		}{{"laptop", w.alice, phone.Address}, {"phone", phone, w.alice.Address}} {
+			rows, err := side.a.store.db.Query(`SELECT 'request',state,count(*) FROM file_requests WHERE message_id IN (?,?,?) GROUP BY state
+				UNION ALL SELECT 'serve',state,count(*) FROM file_serves WHERE device=? AND conv=? GROUP BY state
+				UNION ALL SELECT 'outbox',state,count(*) FROM outbox WHERE recipient=? AND conv=? AND sub='file' GROUP BY state
+				UNION ALL SELECT 'quarantine',CASE acked WHEN 0 THEN 'pending_ack' ELSE 'acked' END,count(*) FROM quarantine GROUP BY acked`, msgs[1].ID, msgs[2].ID, msgs[3].ID, side.peer, conv, side.peer, conv)
+			if err != nil {
+				t.Logf("file answers side=%s state_counts_read_ok=false", side.label)
+				continue
+			}
+			groups, total, scanOK := 0, 0, true
+			for rows.Next() {
+				var kind, state string
+				var count int
+				if err := rows.Scan(&kind, &state, &count); err != nil {
+					scanOK = false
+					break
+				}
+				groups++
+				total += count
+				t.Logf("file answers side=%s kind=%s state=%s count=%d", side.label, kind, state, count)
+			}
+			t.Logf("file answers side=%s state_groups=%d rows_total=%d iteration_ok=%t", side.label, groups, total, scanOK && rows.Err() == nil)
+			rows.Close()
+		}
+	}()
 	eventually(t, "the answers", func() bool {
 		m, _ := phone.ConversationMessages(conv)
 		return m[1].Attachments[0].Availability == "" && m[2].Attachments[0].Availability == "unavailable" && m[3].Attachments[0].Availability == ""
 	})
+	answersObserved = true
 	for i, want := range map[int][]byte{1: sentData, 3: recvData} {
 		r, f, err := phone.OpenAttachment(tctx(t), msgs[i].ID, 0)
 		if err != nil {

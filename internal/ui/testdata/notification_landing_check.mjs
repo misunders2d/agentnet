@@ -9,6 +9,8 @@ import { pendingSends } from '../static/optimistic.mjs';
 import { share } from '../web/src/structural.ts';
 import { mainPreferences, personRoots } from '../skins/shared/person-topics.mjs';
 
+const scheduleSource = stripTypeScriptTypes((await readFile(new URL('../web/src/schedule-saves.ts', import.meta.url), 'utf8'))
+  .replace(/^import .*;$/gm, '')).replace(/^export /gm, '');
 const source = stripTypeScriptTypes((await readFile(new URL('../web/src/store.ts', import.meta.url), 'utf8'))
   .replace(/^import .*;$/gm, '')
   .replace('constructor(readonly host: Host) {', 'constructor(host: Host) { this.host = host;'))
@@ -36,7 +38,7 @@ function fixture(workspace = 'default') {
       if (path.startsWith('/api/typing') || path === '/api/refresh') return {};
       throw Error('Unexpected route: ' + path);
     } };
-  const Store = runInNewContext(source + '\nStore', { ...env, api, errorText, pendingSends, share, messageTarget: model.messageTarget,
+  const Store = runInNewContext(scheduleSource + '\n' + source + '\nStore', { ...env, api, errorText, pendingSends, share, messageTarget: model.messageTarget,
     mainPreferences, personRoots, brand: { storage: 'agentnet.messenger' } });
   f.store = new Store(host); f.host = host; f.env = env;
   f.change = async () => { for (const fn of listeners) fn({ type: 'change', seq: 1 }); await tick(); await tick(); };

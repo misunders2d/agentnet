@@ -22,13 +22,22 @@ func TestNativeThinkingLatestOfflineCipherRestartAndTerminal(t *testing.T) {
 	a, j, h, peerID := activityDeliveryFixture(t)
 	activityAvailability(a, j.From, false)
 	stamp := time.Date(2026, 10, 16, 15, 0, 0, 0, time.UTC)
-	write := func(summary string, at time.Time) bool {
-		return a.store.markNativeProgress(t.Context(), j, nativeProgress{kind: activityWorking, summary: summary, at: at})
+	write := func(summary string, at time.Time) {
+		nativeProgressPersisted(t, a.store, j, nativeProgress{kind: activityWorking, summary: summary, at: at})
+	}
+	unchanged := func(candidate job, summary string, at time.Time) {
+		t.Helper()
+		before := nativeProgressSnapshot(t, a.store, j)
+		changed, err := a.store.markNativeProgressOutcome(t.Context(), candidate, nativeProgress{kind: activityWorking, summary: summary, at: at})
+		if changed || err != nil || nativeProgressSnapshot(t, a.store, j) != before {
+			t.Fatal("guarded summary was not known unchanged")
+		}
 	}
 	first := "Verifying service recovery status"
 	latest := "Reviewing the latest test results"
 	for _, summary := range []string{first, latest, first, latest} {
-		if !write(summary, stamp) || !a.tellStatus(t.Context(), j.ID) {
+		write(summary, stamp)
+		if !a.tellStatus(t.Context(), j.ID) {
 			t.Fatal("valid latest summary was not retained")
 		}
 	}
@@ -64,7 +73,8 @@ func TestNativeThinkingLatestOfflineCipherRestartAndTerminal(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, summary := range []string{first, latest, first} {
-		if !write(summary, stamp.Add(time.Second)) || !a.tellStatus(t.Context(), j.ID) {
+		write(summary, stamp.Add(time.Second))
+		if !a.tellStatus(t.Context(), j.ID) {
 			t.Fatal("pending cipher blocked latest summary")
 		}
 	}
@@ -83,9 +93,7 @@ func TestNativeThinkingLatestOfflineCipherRestartAndTerminal(t *testing.T) {
 	if err := a.store.setOutboxState(h.posted[1].ID, protocol.StateDelivered, "", protocol.PathRelay); err != nil {
 		t.Fatal(err)
 	}
-	if write(first, stamp.Add(2*time.Second)) {
-		t.Fatal("timestamp-only duplicate persisted")
-	}
+	unchanged(j, first, stamp.Add(2*time.Second))
 	if _, err := a.store.db.Exec(`UPDATE inbox SET status_due=status_due+1 WHERE id=?`, j.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -93,14 +101,12 @@ func TestNativeThinkingLatestOfflineCipherRestartAndTerminal(t *testing.T) {
 		t.Fatal("timestamp-only duplicate re-sealed")
 	}
 	// A percent in an otherwise safe summary is literal, not a SQL LIKE pattern.
-	if !write("Checking 100% behavior", stamp) || !write("Checking 100X behavior", stamp) || !write("Checking 100% behavior", stamp) {
-		t.Fatal("summary dedup treated display text as a wildcard")
+	for _, summary := range []string{"Checking 100% behavior", "Checking 100X behavior", "Checking 100% behavior"} {
+		write(summary, stamp)
 	}
 	old := j
 	old.nativeAttempt++
-	if a.store.markNativeProgress(t.Context(), old, nativeProgress{kind: activityWorking, summary: latest, at: stamp}) {
-		t.Fatal("foreign attempt wrote a summary")
-	}
+	unchanged(old, latest, stamp)
 	if _, err := a.store.db.Exec(`UPDATE inbox SET state='answered',detail=NULL,status_due=status_due+1 WHERE id=?`, j.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -108,9 +114,7 @@ func TestNativeThinkingLatestOfflineCipherRestartAndTerminal(t *testing.T) {
 	if !a.tellStatus(t.Context(), j.ID) || len(h.posted) != 3 {
 		t.Fatal("optional summary suppressed offline terminal status", len(h.posted))
 	}
-	if write(latest, stamp) {
-		t.Fatal("late summary revived terminal request")
-	}
+	unchanged(j, latest, stamp)
 }
 
 func TestNativeThinkingStoreFailureAndDeliveryFailureAreOptional(t *testing.T) {
@@ -285,9 +289,14 @@ func TestNativeActivityOfflineRetainedSupportPendingLatestAndTerminal(t *testing
 	a, j, h, peerID := activityDeliveryFixture(t)
 	const deliveredDetail = "Preparing answer\nReported at 2026-10-15T22:00:00Z"
 	const latestDetail = "Preparing answer\nReported at 2026-10-15T22:00:01Z"
+	stamp := time.Date(2026, 10, 15, 22, 0, 0, 0, time.UTC)
+	write := func(k nativeActivity) {
+		nativeProgressPersisted(t, a.store, j, nativeProgress{kind: k, at: stamp})
+	}
 	activityAvailability(a, j.From, false)
 	for _, k := range []nativeActivity{activityReading, activityEditing, activityCommand, activitySearch, activityAnswer} {
-		if !a.store.markNativeActivity(t.Context(), j, k) || !a.tellStatus(t.Context(), j.ID) {
+		write(k)
+		if !a.tellStatus(t.Context(), j.ID) {
 			t.Fatal("latest optional activity lost")
 		}
 	}
@@ -320,7 +329,7 @@ func TestNativeActivityOfflineRetainedSupportPendingLatestAndTerminal(t *testing
 	}
 	// Connected but stalled: its previous control remains in relay custody.
 	for _, k := range []nativeActivity{activityReading, activityEditing, activityCommand, activityAnswer} {
-		a.store.markNativeActivity(t.Context(), j, k)
+		write(k)
 		if !a.tellStatus(t.Context(), j.ID) {
 			t.Fatal("deferred telemetry blocked unrelated status work")
 		}
@@ -361,7 +370,7 @@ func TestNativeActivityOfflineRetainedSupportPendingLatestAndTerminal(t *testing
 			t.Fatalf("%s: send=%v want=%v err=%v", candidate.name, send, candidate.want, err)
 		}
 	}
-	a.store.markNativeActivity(t.Context(), j, activitySearch)
+	write(activitySearch)
 	var changedDetail string
 	if err := a.store.db.QueryRow(`SELECT detail FROM inbox WHERE id=?`, j.ID).Scan(&changedDetail); err != nil || !strings.HasPrefix(changedDetail, "Searching\nReported at ") || !publicActivityDetail(changedDetail) {
 		t.Fatal("changed category lost its actual report time", changedDetail, err)
@@ -386,8 +395,10 @@ func TestNativeActivityOfflineRetainedSupportPendingLatestAndTerminal(t *testing
 	if err != nil || json.Unmarshal([]byte(last.Body), &st) != nil || st.State != "answered" || st.Detail != "" {
 		t.Fatal("terminal status changed", st, err)
 	}
-	if a.store.markNativeActivity(t.Context(), j, activityReading) {
-		t.Fatal("late native event reopened a terminal request")
+	before := nativeProgressSnapshot(t, a.store, j)
+	changedOutcome, outcomeErr := a.store.markNativeProgressOutcome(t.Context(), j, nativeProgress{kind: activityReading, at: stamp})
+	if changedOutcome || outcomeErr != nil || nativeProgressSnapshot(t, a.store, j) != before {
+		t.Fatal("late native event was not known unchanged")
 	}
 }
 
@@ -443,6 +454,12 @@ func TestNativeActivityHealthyRecipientSharesPendingSnapshot(t *testing.T) {
 }
 
 func TestNativeActivityWatcherCoalescesLatestWithoutOutputWrites(t *testing.T) {
+	t.Run("after-step-error", testNativeProgressAfterStepError)
+	t.Run("before-step-omission", testNativeProgressBeforeStepOmission)
+	t.Run("rows-affected-error", testNativeProgressRowsAffectedError)
+	t.Run("repeated-unknown", testNativeProgressRepeatedUnknown)
+	t.Run("latest-wins", testNativeProgressLatestWins)
+	t.Run("unchanged-guards", testNativeProgressUnchangedGuards)
 	a, j, _, _ := activityDeliveryFixture(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()

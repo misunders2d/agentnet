@@ -184,6 +184,10 @@ func TestClaudePartialMessagesCapabilityIsOptional(t *testing.T) {
 	for _, mode := range []string{"supported", "old", "near-match", "refused", "timeout", "oversized"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
+			dir, err := filepath.EvalSymlinks(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
 			script := filepath.Join(dir, "claude")
 			log := filepath.Join(dir, "calls")
 			source := `#!/bin/sh

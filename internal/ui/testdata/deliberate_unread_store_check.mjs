@@ -8,6 +8,8 @@ import model from './comic_model.mjs';
 import {pendingSends} from '../static/optimistic.mjs';
 import {share} from '../web/src/structural.ts';
 import {mainPreferences,personRoots} from '../skins/shared/person-topics.mjs';
+const scheduleSource=stripTypeScriptTypes((await readFile(new URL('../web/src/schedule-saves.ts',import.meta.url),'utf8'))
+ .replace(/^import .*;$/gm,'')).replace(/^export /gm,'');
 const source=stripTypeScriptTypes((await readFile(new URL('../web/src/store.ts',import.meta.url),'utf8'))
  .replace(/^import .*;$/gm,'').replace('constructor(readonly host: Host) {','constructor(host: Host) { this.host = host;')).replace(/^export /gm,'');
 const conv='a'.repeat(64),topic='b'.repeat(32),mid='c'.repeat(32),next='d'.repeat(32),sibling='e'.repeat(32);
@@ -37,7 +39,7 @@ function fixture(saved={}) {
     else throw Error('Unexpected action');return{};
    }throw Error('Unexpected route '+path);
   }};
- const Store=runInNewContext(source+'\nStore',{...env,api,errorText,pendingSends,share,messageTarget:model.messageTarget,mainPreferences,personRoots,brand:{storage:'agentnet.messenger'}});
+ const Store=runInNewContext(scheduleSource+'\n'+source+'\nStore',{...env,api,errorText,pendingSends,share,messageTarget:model.messageTarget,mainPreferences,personRoots,brand:{storage:'agentnet.messenger'}});
  f.store=new Store(host);f.host=host;
  // The original small fixture's rows all fit. Model presentation explicitly;
  // focused cases below restrict it without changing provider read semantics.

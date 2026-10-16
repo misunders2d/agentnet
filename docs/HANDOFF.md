@@ -18,8 +18,13 @@ to use the production loader rules, with zero unexplained resource errors.
 The later cross-skin scheduling owner fence has focused tests and independent
 review; the final integrated candidate must include both changes.
 Android indicator/fullscreen source is reviewed, with Go race and pure Kotlin
-checks; this is not an AAR/app build or physical-device acceptance. Rust source,
-standalone entry parity and native/platform gates remain open. Shared titles now
+checks. An original-key build from the initial candidate passes unit tests,
+lint and package checks; the final corrected source needs a new bound build
+before runtime acceptance. Desktop Rust tests pass on all three CI systems;
+physical indicator/banner appearance remains unverified. Classic, Zoom and
+Holonet pass their focused desktop/phone entry checks, including actual video,
+shared rename/reset and schedules with Files. The whole gallery gate remains
+open. Shared titles now
 pass the full signed fixture against real IndexedDB, including close/reopen;
 the complete scheduling fixture also passes against real IndexedDB, with
 435 assertions and sixteen close/reopens. Its earlier timer failure came from
@@ -27,9 +32,18 @@ awaiting only the first of queued lifecycle drains; the reviewed bounded test
 join preserves every timing assertion and leaves production unchanged. Real
 quota pressure, crash and multi-context persistence remain unqualified.
 Shared visibility, activity, video and scheduling helpers have focused evidence
-and independent review. Classic now passes its complete focused desktop/phone
-entry checks, including shared rename/reset, scheduling with actual Files and
-video unload/revoke. Zoom and Holonet integration still have open entry gates.
+and independent review. Zoom's divider is placed before scroll restoration;
+its focused regression preserves the visible row after a read-triggered refresh.
+
+Initial integrated CI retains passing desktop/container and client race gates,
+but qualification is incomplete. Focused corrections address legacy own-agent
+history, projected topic-notice names and stale fixture setup. Portable privacy
+checks and explicit optional-progress outcomes pass focused tests and review;
+remaining Windows failures carry narrow diagnostics into qualification. Failed
+and unfinished selections remain open; an isolated pass is not a cause or a
+replacement for their required gates. All eight actual native steering cases
+pass with unchanged settings. Changing Thinking wording is observed for Pi and
+OMP; Codex/Claude evidence and the owner's disposition remain pending.
 
 Android schema 80→82 preservation and one-install/cold-cache recovery tooling is
 prepared in ignored copies, not executed. Retain the pre-Activity-only database

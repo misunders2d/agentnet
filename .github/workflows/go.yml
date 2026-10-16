@@ -55,6 +55,13 @@ jobs:
         with:
           node-version: '26'
           package-manager-cache: false
+      - name: pinned UI test tooling
+        if: ${{ !inputs.test_packages || contains(inputs.test_packages, './...') || contains(inputs.test_packages, 'internal/ui') }}
+        working-directory: internal/ui/web
+        shell: bash
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          node -e "require('./node_modules/esbuild').transformSync('')"
       - run: go vet ./...
       # Expanded suite needs time on slow CI disks; individual assertions stay bounded.
       - name: test (real binaries and processes on this OS)
@@ -111,6 +118,13 @@ jobs:
         with:
           node-version: '26'
           package-manager-cache: false
+      - name: pinned UI test tooling
+        if: matrix.shard == 'others'
+        working-directory: internal/ui/web
+        shell: bash
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          node -e "require('./node_modules/esbuild').transformSync('')"
       - name: race (${{ matrix.shard }})
         env:
           AGENTNET_RACE_SHARD: ${{ matrix.shard }}

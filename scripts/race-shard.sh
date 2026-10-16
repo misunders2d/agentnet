@@ -27,7 +27,7 @@ run_partition() {
 				if ($0=="TestGroupInteractionNamedMemberAndVisitor") part=1
 				if ($0=="TestGroupParticipationHistoryAfterHostReadmission") part=8
 				if ($0=="TestGroupReplyReceiverMemberAndVisitorPIDNative") part=11
-				if ($0=="TestOwnPersonTasksDirectAndGroup") part=0
+				if ($0=="TestOwnPersonTasksDirectAndGroup") part=8
 				if ($0=="TestGroupParticipationFilesLateLinkedRequestAndNamedOutput") part=8
 				if ($0=="TestGroupHistoryWitnessRetiredTaskDevice") part=4
 				if ($0=="TestRoomReciprocalRootQuestions") part=11
@@ -43,6 +43,7 @@ run_partition() {
 				if ($0=="TestGroupGuestPublicJourney") part=3
 				if ($0=="TestGroupHistoryWitnessGuestDerivedParent") part=0
 				if ($0=="TestNativeCursorRetriesUnavailableFile") part=10
+				if ($0=="TestNativeActivityWatcherCoalescesLatestWithoutOutputWrites") part=9
 				if ($0=="TestHistoryCatchupGroupParticipation") part=5
 				if ($0=="TestAssistantReactionGuestAudience") part=7
 				if ($0=="TestP6FixOutsideAdmissionAndRemovalRights") part=9

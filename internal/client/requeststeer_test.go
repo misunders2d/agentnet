@@ -145,7 +145,7 @@ func TestStrictSteerArchiveRequirementRetention(t *testing.T) {
 	}
 	caps := append(slices.Clone(ownCaps), protocol.CapAgent)
 	slices.Sort(caps)
-	if slices.Contains(caps, protocol.CapRequestFollowup) || !slices.Contains(caps, protocol.CapRequestSteer) || len(caps) != 28 {
+	if slices.Contains(caps, protocol.CapRequestFollowup) || !slices.Contains(caps, protocol.CapRequestSteer) || len(caps) != protocol.MaxAdvertisedCaps || protocol.MaxAdvertisedCaps != 29 {
 		t.Fatal("advertisement slot grew", caps)
 	}
 	if !strings.Contains(required, protocol.CapRequestSteer) {

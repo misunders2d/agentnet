@@ -1189,19 +1189,34 @@ func (a *Agent) watchRunActivity(runCtx, ctx context.Context, j job, activity *r
 	defer activityTimer.Stop()
 	var activityC <-chan time.Time
 	var reported *nativeProgress
+	var retryFor *nativeProgress
+	var retried bool
 	var nextActivity time.Time
 	flushActivity := func() {
 		p := activity.native.Load()
 		if p == nil || p.same(reported) {
 			return
 		}
+		if !p.same(retryFor) {
+			retryFor, retried = p, false
+		}
 		if delay := time.Until(nextActivity); delay > 0 {
 			activityTimer.Reset(delay)
 			activityC = activityTimer.C
 			return
 		}
-		reported, nextActivity = p, time.Now().Add(nativeActivityInterval)
-		if a.store.markNativeProgress(runCtx, j, *p) && j.Receiver == nil {
+		changed, err := a.store.markNativeProgressOutcome(runCtx, j, *p)
+		nextActivity = time.Now().Add(nativeActivityInterval)
+		if err != nil && !retried {
+			// Retry this latest value once, using the existing coalescing timer.
+			retried = true
+			activityTimer.Reset(nativeActivityInterval)
+			activityC = activityTimer.C
+			return
+		}
+		reported = p
+		// An unknown applied write waits for the next ordinary status wake.
+		if err == nil && changed && j.Receiver == nil {
 			a.wakeStatus()
 		}
 	}
