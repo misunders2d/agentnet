@@ -140,7 +140,10 @@ func TestBrowserProgressMatchesGo(t *testing.T) {
 		t.Fatalf("waiting %q negotiated readers %v", got.Waiting, got.Caps)
 	}
 	roomOnly := protocol.CapsRecord{Caps: []string{protocol.CapRoom}}
-	for _, cap := range []string{protocol.CapGroupHumanParticipation, protocol.CapGroupInvitationManage, protocol.CapReadSync} {
+	if !record.Reads(protocol.CapReadSync) || roomOnly.Reads(protocol.CapReadSync) {
+		t.Fatalf("legacy read-sync must be implied only by the explicit current capability: %v", got.Caps)
+	}
+	for _, cap := range []string{protocol.CapGroupHumanParticipation, protocol.CapGroupInvitationManage, protocol.CapReadSyncV2} {
 		if !slices.Contains(got.Caps, cap) || roomOnly.Reads(cap) {
 			t.Fatalf("new capability %s must remain explicit: %v", cap, got.Caps)
 		}

@@ -377,10 +377,12 @@ if (humanVectors) {
   await e.onConnect().catch(() => {});
   const rec = wire.parseCaps(puts[0]);
   await wire.verifyCaps(rec, pub.sign_key);
-  const profile={sessions:[rec.session],caps:[JSON.parse(puts[0])]},basic=[wire.CapAgentReaction,wire.CapHumanParticipation,wire.CapConvClear],explicit=[wire.CapGroupHumanParticipation,wire.CapGroupInvitationManage,wire.CapReadSync,wire.CapMentionReaction,wire.CapAgentOrganization];
+  const profile={sessions:[rec.session],caps:[JSON.parse(puts[0])]},basic=[wire.CapAgentReaction,wire.CapHumanParticipation,wire.CapConvClear],explicit=[wire.CapGroupHumanParticipation,wire.CapGroupInvitationManage,wire.CapReadSyncV2,wire.CapMentionReaction,wire.CapAgentOrganization];
   check(rec.caps.length<=wire.MaxAdvertisedCaps,'published record fits advertisement bound');
   for(const cap of [...basic,...explicit])check(await wire.profileSupports(profile,e.address,pub.sign_key,cap),'signed browser profile reads '+cap);
   const old=await wire.newCaps(keys,e.address,'5'.repeat(32),[wire.CapRoom]),mixed={sessions:[rec.session,old.session],caps:[...profile.caps,JSON.parse(wire.capsJSON(old))]};
+  check(wire.capsReads(rec,wire.CapReadSync),'rd2 preserves the older read-sync reader');
+  check(!wire.capsReads(old,wire.CapReadSync),'rm1 does not imply read synchronization');
   for(const cap of basic)check(await wire.profileSupports(mixed,e.address,pub.sign_key,cap),'rm1 preserves '+cap);
   for(const cap of explicit){
     check(rec.caps.includes(cap)&&!wire.capsReads(old,cap),'new cap stays explicit: '+cap);

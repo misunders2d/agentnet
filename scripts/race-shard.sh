@@ -25,13 +25,14 @@ run_partition() {
 			part=i++%n
 			if (client && n==12) {
 				if ($0=="TestGroupInteractionNamedMemberAndVisitor") part=1
-				if ($0=="TestGroupParticipationHistoryAfterHostReadmission") part=7
+				if ($0=="TestGroupParticipationHistoryAfterHostReadmission") part=8
 				if ($0=="TestGroupReplyReceiverMemberAndVisitorPIDNative") part=11
-				if ($0=="TestOwnPersonTasksDirectAndGroup") part=6
+				if ($0=="TestOwnPersonTasksDirectAndGroup") part=0
 				if ($0=="TestGroupParticipationFilesLateLinkedRequestAndNamedOutput") part=8
 				if ($0=="TestGroupHistoryWitnessRetiredTaskDevice") part=4
 				if ($0=="TestRoomReciprocalRootQuestions") part=11
-				if ($0=="TestHistoryArchiveImportedTailRemainsBounded") part=3
+				if ($0=="TestHistoryArchiveImportedTailRemainsBounded") part=8
+				if ($0=="TestHistoryBacklogLateInteractiveTurn") part=8
 				if ($0=="TestP6AgentQuestionTaskCorrelationAndOrigin") part=6
 				if ($0=="TestRoomBusyAncestorCallback") part=4
 				if ($0=="TestReceiverRemoteGroupNamedNativeMemberVisitor") part=7

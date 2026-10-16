@@ -3,6 +3,7 @@ package client
 import (
 	"encoding/json"
 	"net"
+	"slices"
 	"testing"
 	"time"
 
@@ -150,12 +151,40 @@ func TestDeviceHistoryWaitsForItsReader(t *testing.T) {
 	if copies, jobs := produced(); copies != 0 || jobs != 0 {
 		t.Fatalf("sealed for a device that cannot read it: %d copies, %d jobs", copies, jobs)
 	}
+	label, device, _ := protocol.SplitAddress(phone.Address)
+	var oldProfile protocol.Profile
+	if err := phone.hub.do(tctx(t), "GET", "/v1/agents/"+label+"/"+device+"/profile", nil, &oldProfile); err != nil {
+		t.Fatal(err)
+	}
+	freshSession := func(profile protocol.Profile) bool {
+		for _, session := range profile.Sessions {
+			if !slices.Contains(oldProfile.Sessions, session) && profile.Supports(phone.Address, phone.Self().SignKey, protocol.CapAgentIdentity) {
+				return true
+			}
+		}
+		return false
+	}
+	oldGeneric, oldFresh := oldProfile.Supports(phone.Address, phone.Self().SignKey, protocol.CapAgentIdentity), freshSession(oldProfile)
+	if !oldGeneric || oldFresh {
+		t.Fatalf("old-only signed profile: generic=%t fresh=%t", oldGeneric, oldFresh)
+	}
+	t.Logf("reader readiness control: old-only generic=%t fresh=%t sessions=%d", oldGeneric, oldFresh, len(oldProfile.Sessions))
 	stopPhone = runAgent(t, phone) // it updates
+	eventually(t, "new exact native session before fixture capability", func() bool {
+		var profile protocol.Profile
+		if phone.hub.do(tctx(t), "GET", "/v1/agents/"+label+"/"+device+"/profile", nil, &profile) != nil {
+			return false
+		}
+		if !freshSession(profile) {
+			return false
+		}
+		t.Logf("reader readiness: fresh signed session observed; old_sessions=%d current_sessions=%d", len(oldProfile.Sessions), len(profile.Sessions))
+		return true
+	})
 	waitNamedAgentCaps(t, phone)
 	signCapsAfter(t, phone, ownCaps)
-	// Every session the relay still lists reads it: the old one lingers in
-	// its grace period, and the new one may connect only after the caps
-	// above were signed and publish its own a moment later.
+	// Every listed session reads it, including the old one in its grace
+	// period and the restarted session observed before replacing its caps.
 	eventually(t, "alice reads the phone as reading own3", func() bool {
 		return w.alice.requireParticipationCaps(tctx(t), phone.Self(), protocol.CapOwnSyncV3) == nil
 	})

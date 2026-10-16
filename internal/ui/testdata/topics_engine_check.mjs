@@ -147,16 +147,18 @@ for (const room of [false,true]) {
 
 // 3. Routes, on a browser device holding many topics with one agent.
 const day = 86400_000, now = 1790000000_000, me = 'ann/phone', bob = 'bob/desk', other = 'eve/box';
+const ownFP = 'ffffffff-ffffffff-ffffffff-ffffffff', bobFP = 'bbbbbbbb-bbbbbbbb-bbbbbbbb-bbbbbbbb', otherFP = 'eeeeeeee-eeeeeeee-eeeeeeee-eeeeeeee';
+check([ownFP,bobFP,otherFP].every(wire.validFingerprint),'legacy device-route seeds are valid wire fingerprints');
 const store = memoryStore();
 let network = 0, changes = 0, clock = now;
 const fetch = async () => { network++; throw Error('topics never use the network'); };
 const engine = new Engine({ store, base: 'https://synthetic.invalid', fetch, now: () => clock });
-engine.address = me; engine.fp = 'f'.repeat(16); engine.listen(() => changes++);
+engine.address = me; engine.fp = ownFP; engine.listen(() => changes++);
 let seq = 0;
 const id = () => (++seq).toString(16).padStart(32, '0');
 const ops = [];
-const out = (v) => { const r = { v: 1, id: id(), to: bob, fp: 'b'.repeat(16), kind: 'message', body: '', state: 'delivered', status: '', reply_to: '', ...v }; ops.push({ s: 'outbox', k: r.id, v: r }); return r; };
-const inn = (v) => { const r = { v: 1, id: id(), from: bob, fp: 'b'.repeat(16), kind: 'message', body: '', state: '', status: '', reply_to: '', read: true, ...v }; ops.push({ s: 'inbox', k: r.id, v: r }); return r; };
+const out = (v) => { const r = { v: 1, id: id(), to: bob, fp: bobFP, kind: 'message', body: '', state: 'delivered', status: '', reply_to: '', ...v }; ops.push({ s: 'outbox', k: r.id, v: r }); return r; };
+const inn = (v) => { const r = { v: 1, id: id(), from: bob, fp: bobFP, kind: 'message', body: '', state: '', status: '', reply_to: '', read: true, ...v }; ops.push({ s: 'inbox', k: r.id, v: r }); return r; };
 // 150 one-message topics a minute apart, the oldest 40 more than a week ago.
 const plain = [];
 for (let i = 0; i < 150; i++) plain.push(out({ body: (i % 3 ? 'Alpha note ' : 'Beta note ') + i + '\nsecond line', at: now - (i < 40 ? 9 * day : day) + i * 60_000 }));
@@ -176,7 +178,7 @@ const mine = out({ kind: 'result', status: 'done', body: 'Labelled A to F\ndone'
 // An old, unread message: archived, and its unread count kept.
 inn({ body: 'old unread', read: false, at: now - 12 * day });
 // Another agent's topic.
-ops.push({ s: 'outbox', k: 'e'.repeat(32), v: { v: 1, id: 'e'.repeat(32), to: other, fp: 'e'.repeat(16), kind: 'message', body: 'Beta for eve', state: 'delivered', status: '', reply_to: '', at: now - 2 * day } });
+ops.push({ s: 'outbox', k: 'e'.repeat(32), v: { v: 1, id: 'e'.repeat(32), to: other, fp: otherFP, kind: 'message', body: 'Beta for eve', state: 'delivered', status: '', reply_to: '', at: now - 2 * day } });
 await store.write(ops);
 await engine.loadErased();
 
@@ -265,7 +267,7 @@ await engine.api('/api/topic/rename', { peer: bob, id: a.id, title: '' });
 t = await topicOf(a.id);
 check(t.title === 'Alpha note 121' && !t.renamed && t.state === 'done', 'an empty name gives back the automatic one');
 // A new message ends Mark done.
-await store.write([{ s: 'inbox', k: 'c'.repeat(32), v: { v: 1, id: 'c'.repeat(32), from: bob, fp: 'b'.repeat(16), kind: 'message', body: 'one more', state: '', status: '', reply_to: a.id, read: false, at: now + 1000 } }]);
+await store.write([{ s: 'inbox', k: 'c'.repeat(32), v: { v: 1, id: 'c'.repeat(32), from: bob, fp: bobFP, kind: 'message', body: 'one more', state: '', status: '', reply_to: a.id, read: false, at: now + 1000 } }]);
 t = await topicOf(a.id);
 check(t.state === 'active' && !t.done_by && t.unread === 1, 'a new message makes it active again');
 // Mark done covers only what the page showed (count): with the new message unseen it does not hold.

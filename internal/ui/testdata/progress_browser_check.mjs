@@ -49,10 +49,12 @@ await c.onConnect().catch(() => {});
 assert.equal(puts.length, 1);
 const rec = wire.parseCaps(puts[0]);
 await wire.verifyCaps(rec, pub.sign_key);
-const profile={sessions:[rec.session],caps:[JSON.parse(puts[0])]},basic=[wire.CapProgress,wire.CapHumanParticipation],explicit=[wire.CapGroupHumanParticipation,wire.CapGroupInvitationManage,wire.CapReadSync];
+const profile={sessions:[rec.session],caps:[JSON.parse(puts[0])]},basic=[wire.CapProgress,wire.CapHumanParticipation],explicit=[wire.CapGroupHumanParticipation,wire.CapGroupInvitationManage,wire.CapReadSyncV2];
 assert(rec.caps.length<=wire.MaxAdvertisedCaps,'published record fits advertisement bound');
 for(const cap of [...basic,...explicit])assert(await wire.profileSupports(profile,c.address,pub.sign_key,cap),'signed profile reads '+cap);
 const old=await wire.newCaps(keys,c.address,'5'.repeat(32),[wire.CapRoom]),mixed={sessions:[rec.session,old.session],caps:[...profile.caps,JSON.parse(wire.capsJSON(old))]};
+assert(wire.capsReads(rec,wire.CapReadSync),'rd2 preserves the older read-sync reader');
+assert(!wire.capsReads(old,wire.CapReadSync),'rm1 does not imply read synchronization');
 for(const cap of basic)assert(await wire.profileSupports(mixed,c.address,pub.sign_key,cap),'rm1 implies '+cap);
 for(const cap of explicit){
  assert(rec.caps.includes(cap)&&!wire.capsReads(old,cap),'new capability stays explicit: '+cap);

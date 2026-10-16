@@ -61,7 +61,7 @@ func TestHumanHistoryReceiverSerializationAndLegacyAbsence(t *testing.T) {
 	}
 	profile := protocol.Profile{Sessions: []string{rec.Session}, Caps: []json.RawMessage{raw}}
 	basic := []string{protocol.CapHumanParticipation, protocol.CapAgentReaction, protocol.CapConvClear, protocol.CapProgress}
-	explicit := []string{protocol.CapGroupHumanParticipation, protocol.CapGroupInvitationManage, protocol.CapReadSync}
+	explicit := []string{protocol.CapGroupHumanParticipation, protocol.CapGroupInvitationManage, protocol.CapReadSyncV2}
 	for _, c := range append(append([]string(nil), basic...), explicit...) {
 		if !profile.Supports(rec.Address, key.Public(rec.Address).SignKey, c) {
 			t.Fatalf("signed current profile cannot negotiate %s", c)
@@ -72,6 +72,9 @@ func TestHumanHistoryReceiverSerializationAndLegacyAbsence(t *testing.T) {
 	}
 	room := protocol.CapsRecord{Address: rec.Address, Session: protocol.NewID(), TS: 1, Caps: []string{protocol.CapRoom}}
 	room.Sign(key.Sign)
+	if !rec.Reads(protocol.CapReadSync) || room.Reads(protocol.CapReadSync) {
+		t.Fatal("rd2 must imply rd1, never rm1 alone")
+	}
 	oldRaw, err := json.Marshal(room)
 	if err != nil {
 		t.Fatal(err)
