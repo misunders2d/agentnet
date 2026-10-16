@@ -27,7 +27,7 @@ import { coarse, useFieldFocus } from "./Composer.focus";
 import { usePortal } from "../owned";
 import { TrustNotice } from "./Trust";
 import { AgentModelReport } from "./AgentModelReport";
-import { composerReplyFollowup, currentComposerFollowup, type ComposerFollowup } from "./Composer.followup";
+import { composerReplyFollowup, currentComposerFollowup, currentDirectComposerFollowup, type ComposerFollowup } from "./Composer.followup";
 import type { Ctx } from "./Message.model";
 
 const EMPTY: Draft = { text: "" };
@@ -131,6 +131,9 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   const followupContext: Ctx = {conv,dm:dm || null,thread:thread || null,overview:overview || null,names,canReply:true};
   const selectedFollowup = (pid:string, d: Draft): ComposerFollowup | undefined =>
     d.newTopic ? undefined : currentComposerFollowup(dm,pid,d.topic || "",followupContext,d.replyTo);
+  const selectedTargetFollowup = (to: Target, d: Draft): ComposerFollowup | undefined =>
+    d.newTopic ? undefined : to.kind === "agent" ? selectedFollowup(to.pid,d)
+      : to.kind === "device" && to.ask ? currentDirectComposerFollowup(thread,followupContext,d.replyTo) : undefined;
 
   // Why nothing can be written here now, in words.
   const mine = humanGuest && !author ? (dm?.guests || []).find((g) => g.host_here && scopeMatches(g, draft.newTopic ? "__new__" : draft.topic || "")) : undefined;
@@ -316,7 +319,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     }
     const { c, d: captured, to, here, device } = retry || { c: conv, d: latest(), to: target, here: dm, device: thread };
     let followup: ComposerFollowup | undefined;
-    try { followup = retry ? retry.followup : to.kind === "agent" ? selectedFollowup(to.pid,captured) : undefined; }
+    try { followup = retry ? retry.followup : selectedTargetFollowup(to,captured); }
     catch(e) { setNotice({conv:c,text:errorText(e)}); return; }
     // Allocate the optional topic before yielding so a second send keeps it.
     const d = here && captured.newTopic ? { ...captured, topic: captured.topic && retry ? captured.topic : sendID() } : captured;
@@ -365,8 +368,8 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       let r: T.Sent | undefined;
       try {
         if (to.kind === "answer") announce((await store.api.act({ do: "reply", id: to.id, send_id: id, body })).note || "Answer sent.");
-        else if (to.kind === "agent" && followup) {
-          const result = await store.host.api<{note:string}>("/api/request/followup", {id,conv:c,ref:followup.ref,attempt:followup.attempt,body,files:fileIds});
+        else if (followup) {
+          const result = await store.host.api<{note:string}>("/api/request/followup", {id,conv:here ? c : "",ref:followup.ref,attempt:followup.attempt,body,files:fileIds});
           announce(result.note);
           r = {id,lid:id,state:"queued"};
         }
@@ -432,7 +435,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     setBusy(b=>({...b,[c]:"Preparing send…"}));
     try {
       for (const [index, to] of destinations.entries()) {
-        const followup = to.kind === "agent" ? selectedFollowup(to.pid,captured) : undefined;
+        const followup = selectedTargetFollowup(to,captured);
         const id = sendID(), fileIDs: string[] = [];
         for (const f of sent) {
           setBusy(b => ({...b,[c]:"Preparing files…"}));
@@ -446,7 +449,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
         const reply = captured.replyTo;
         let endpoint: JournalEntry["endpoint"], request: Record<string,unknown>;
         if (to.kind === "answer") {endpoint="/api/act";request={do:"reply",id:to.id,send_id:id,body};}
-        else if (to.kind === "agent" && followup) {endpoint="/api/request/followup";request={id,conv:c,ref:followup.ref,attempt:followup.attempt,body,files};}
+        else if (followup) {endpoint="/api/request/followup";request={id,conv:here ? c : "",ref:followup.ref,attempt:followup.attempt,body,files};}
         else if (to.kind === "agent") {endpoint="/api/dm/agent/ask";request={id,send_group:group,pid:to.pid,kind:"question",body,topic,files};}
         else if (device) {const last=(device.messages || []).at(-1);endpoint="/api/send";request={id,to:device.peer,
           agent_id:to.kind === "device" && to.ask ? threadAgentID(device) : undefined,

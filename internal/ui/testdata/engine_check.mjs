@@ -50,6 +50,7 @@ const raw = memoryStore(); // the test's own reads (count) are not counted
 let store = counted(raw);
 let engine = null;
 let offline = false, dropPosts = false, receiptReads = 0;
+let firstStreamGate=null;const streamRuns=[];
 const realFetch = globalThis.fetch.bind(globalThis);
 const activeFetches=new Map(),recentFetches=[];
 // A network that can be switched off, as a phone on a train, or that
@@ -58,9 +59,14 @@ const fetchNet = async (url, opts) => {
   const path=(opts?.method||"GET")+" "+new URL(url).pathname.replace(/[0-9a-f]{32,}/g,":id");
   activeFetches.set(path,(activeFetches.get(path)||0)+1);
   let status="network_error";
+  let streamRun=null;
+  if(new URL(url).pathname==="/v1/stream"){
+    streamRun={session:engine.session,waitingLink:!!engine.waitingLink,membersHeader:null};streamRuns.push(streamRun);
+    if(firstStreamGate&&streamRuns.length===1)await firstStreamGate.promise;
+  }
   try {
     if(offline||(dropPosts&&opts?.method==="POST"&&url.endsWith("/v1/messages")))throw new TypeError("fetch failed");
-    const response=await realFetch(url,opts);status=response.status;return response;
+    const response=await realFetch(url,opts);status=response.status;if(streamRun)streamRun.membersHeader=response.headers.get("Agentnet-Members");return response;
   } finally {
     const n=activeFetches.get(path)-1;if(n)activeFetches.set(path,n);else activeFetches.delete(path);
     recentFetches.push({path,status});if(recentFetches.length>16)recentFetches.shift();
@@ -188,6 +194,16 @@ async function handle(req) {
     return { v: wire.decodeInvite(req.code) };
   case "person":
     return await engine.createPerson(req.label);
+  case "holdFirstStream": {
+    if(streamRuns.length)throw Error("first stream already started");
+    let release;const promise=new Promise(r=>release=r);firstStreamGate={promise,release};return {};
+  }
+  case "releaseFirstStream":
+    if(!firstStreamGate)throw Error("first stream was not held");firstStreamGate.release();return {};
+  case "streamState":
+    return {session:engine.session,generation:engine.typing.generation,streams:streamRuns,...(req.profile?{profile:await engine.profile(engine.address)}:{})};
+  case "reconnectStream":
+    engine.abort?.abort();return {session:engine.session,generation:engine.typing.generation,streams:streamRuns.length};
   case "start":
     engine.start();
     return {};
@@ -267,7 +283,18 @@ async function handle(req) {
     engine.stop();
     return {};
   case "outbox": { // a kept message; a file's ciphertext as its length
-    const rec = (await store.get("outbox", req.id)) || null;
+    let rec = null;
+    if (req.readSync) { // exact private fixture selector; at most one carrier returned
+      const q=req.readSync,matches=[];
+      wire.parseReadSync(JSON.stringify({v:2,person:engine.me.person,roster:engine.me.hash,refs:[],marks:[q.mark]}));
+      for(const row of await store.outboxSub(wire.SubReadSync)) {
+        if(row.to!==q.to||row.recipient_fp!==q.fingerprint||row.read_owner!==engine.me.person||row.required_cap!==wire.CapReadSyncV2)continue;
+        const r=wire.parseReadSync(row.body);
+        if(r.v===2&&r.person===engine.me.person&&r.marks.some(m=>["conv","fingerprint","lid","state","rev","writer"].every(k=>m[k]===q.mark[k])))matches.push(row);
+        if(matches.length===2)throw Error("Ambiguous exact read-sync fixture carrier");
+      }
+      rec=matches[0]||null;
+    } else rec = (await store.get("outbox", req.id)) || null;
     if (rec && rec.files) rec.files = rec.files.map((f) => ({ ...f, ct: f.ct ? f.ct.length : null }));
     return { rec };
   }

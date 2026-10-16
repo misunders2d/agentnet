@@ -382,9 +382,7 @@ func (l *Live) Thread(id string) (Thread, error) {
 		if err != nil {
 			return t, err
 		}
-		if m.Dir == "in" && m.Read != nil && !*m.Read {
-			v.Unread = true
-		}
+		v.Unread, v.Attention = m.Unread, m.Attention
 		for i, f := range m.Attachments {
 			fv := File{Index: i, Name: client.SafeName(f.Name), Size: f.Size, Saved: f.SavedPath, Openable: f.Openable, Availability: f.Availability} // the name it is saved under
 			if !fv.Openable && fv.Availability == "" {
@@ -610,7 +608,10 @@ func (l *Live) Act(x Action) (string, error) {
 		count, err = l.a.ArchiveHeldNotices(x.Held)
 		note = fmt.Sprintf("Archived %d notices on this device. Changed or newer notices stay visible. Nothing was accepted or run.", count)
 	case DoRead:
-		err = l.a.MarkRead(x.IDs)
+		err = l.a.MarkReadWithAttention(x.IDs, x.Attention)
+	case DoUnread:
+		err = l.a.MarkUnread(x.ID, x.IDs)
+		note = "Marked unread."
 	default:
 		return "", Refuse("Unknown action.")
 	}

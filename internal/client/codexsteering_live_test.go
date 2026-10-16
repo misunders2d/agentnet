@@ -25,6 +25,10 @@ import (
 // Nonce files prove native tools ran; stored refs, reservations,
 // attempts, staged bytes and the recipient's verified answer prove the journey.
 func TestCodexActualIndependentSteering(t *testing.T) {
+	if os.Getenv("AGENTNET_LIVE_STEERING_DIRECT") == "1" {
+		actualOwnedSteering(t, "codex", "AGENTNET_LIVE_CODEX_STEERING")
+		return
+	}
 	configured := os.Getenv("AGENTNET_LIVE_CODEX_STEERING")
 	if configured == "" {
 		t.Skip("opt-in: AGENTNET_LIVE_CODEX_STEERING=/absolute/path/to/codex")

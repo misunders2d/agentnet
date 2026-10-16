@@ -40,6 +40,12 @@ export interface StagedFile {
 }
 
 export interface Toast { id: number; text: string; tone?: "ok" | "error" }
+export interface MessageLanding {
+  target: { id: string; context?: OpenContext };
+  busy: boolean;
+  error: string;
+  legacyMiss?: boolean; // a completed unbound search waits for explicit retry/resume/reconnect
+}
 
 export type Tab = "chats" | "agents" | "oks" | "settings";
 
@@ -64,6 +70,7 @@ export interface State {
   unsent: boolean;           // a send begun here is not yet stored, or failed with its Retry (sends.unsent)
   drafts: Record<string, Draft>;
   toasts: Toast[];
+  messageLanding: MessageLanding | null; // one exact notification, only for this mounted workspace
   loadError: string;
   invite: null | { conv: string; selected?: string[]; who?: string; label?: string; topic?: string };  // the "Bring someone in" sheet
   section: string;                                        // the open settings section, when chosen from elsewhere
@@ -101,6 +108,7 @@ export class Store {
   private toastSeq = 0;
   private focusSeq = 0;
   private topicFocusSeq = 0;
+  private messageRefresh: { target: MessageLanding["target"]; again: boolean; promise: Promise<void> } | null = null;
   private alive = true;
   private chooseMain: ReturnType<typeof mainPreferences>;
   private hiddenChange = false;
@@ -111,10 +119,10 @@ export class Store {
     if (!this.alive || this.mobileHidden() || !document.hasFocus()) return;
     // A load admitted before Android paused may already have finished. Retry
     // its unread acknowledgement even when no push arrived while hidden.
-    if (!this.hiddenChange) { this.markOpenRead(); return; }
+    if (!this.hiddenChange) { this.markOpenRead(); void this.retryMessageLanding(); return; }
     this.hiddenChange = false;
     if (this.state.conn === "lost" || this.state.conn === "updating") void this.recover(recovery.missed);
-    else void this.refetch();
+    else void this.refetch(true);
   };
 
   constructor(readonly host: Host) {
@@ -128,7 +136,7 @@ export class Store {
     });
     this.state = {
       tab: "chats", overview: null, open: null, pending: null, views: {}, dm: null, thread: null, typing: null, invitations: [],
-      conn: "loading", version: "", newVersion: "", unsent: false, drafts: this.loadDrafts(), toasts: [], loadError: "", invite: null, topicBusy: {}, panel: false, section: "", agentNames: {},
+      conn: "loading", version: "", newVersion: "", unsent: false, drafts: this.loadDrafts(), toasts: [], messageLanding: null, loadError: "", invite: null, topicBusy: {}, panel: false, section: "", agentNames: {},
     };
     const saved=host.workspaces?.state?.(host.workspace.id)?.comicDrafts as {handle?:string;open:Open;dm:T.DMThread|null;thread:T.Thread|null;tab:State['tab']}|undefined;
     if(saved&&saved.handle===host.workspace.handle)Object.assign(this.state,{open:saved.open,dm:saved.dm,thread:saved.thread,tab:saved.tab});
@@ -159,9 +167,11 @@ export class Store {
     }
     try { this.listen(); } catch { /* the first load fails and shows it */ }
     await Promise.all([this.load(true), this.refreshOpen()]);
+    await this.retryMessageLanding(true);
   }
 
   stop() {
+    this.dismissMessageLanding();
     const saved=this.host.workspaces?.state?.(this.host.workspace.id);
     if(saved)saved.comicDrafts={handle:this.host.workspace.handle,drafts:this.state.drafts,open:this.state.open,dm:this.state.dm,thread:this.state.thread,tab:this.state.tab};
     this.alive = false;
@@ -200,7 +210,10 @@ export class Store {
 
   // refetch loads what is shown once per burst of changes: changes that
   // arrive while it loads cause one more load, not one each.
-  async refetch(): Promise<void> { await Promise.all([this.load(false), this.refreshOpen()]); }
+  async refetch(retryLegacy = false): Promise<void> {
+    await Promise.all([this.load(false), this.refreshOpen()]);
+    await this.retryMessageLanding(!retryLegacy);
+  }
 
   // A slow workspace overview never holds the open chat's receipt/arrival
   // behind it. Each lane coalesces independently, including continuous traffic.
@@ -299,6 +312,7 @@ export class Store {
           await this.reload(false);
           await this.refreshOpen();
           this.listen();
+          await this.retryMessageLanding();
           return;
         } catch (e) {
           // The daemon was replaced under a workspace of this computer: the
@@ -343,6 +357,7 @@ export class Store {
   // load (OPEN_SLOW) shows the opening placeholder. Switching topics with
   // one agent never shows it: the open topic stays until the next is ready.
   async open(o: Open) {
+    this.dismissMessageLanding();
     if (!o) { this.close(); return; }
     if (o.focus) o = { ...o, focusSeq: ++this.focusSeq };
     if (o.kind === "thread" && !o.peer) {
@@ -352,6 +367,8 @@ export class Store {
     }
     const cur = this.state.open;
     const cached = this.state.views[o.id];
+    if (!cur || cur.kind !== o.kind || cur.id !== o.id) this.beginReadVisit(undefined, o);
+    else if (this.readAcknowledged.entering === cur) this.readAcknowledged.entering = o;
     if ((cur && cur.kind === o.kind && cur.id === o.id) || cached) {
       this.set({ open: o, pending: null, ...this.viewPatch(o, cached ?? null, cur?.id === o.id) });
       await this.loadOpen(o);
@@ -372,6 +389,7 @@ export class Store {
 
   // viewPatch: the state that shows o with view v (null: not loaded yet).
   async openLinkTarget(id: string, kind: 'topic' | 'thread', context?: OpenContext) {
+    this.dismissMessageLanding();
     const view=kind==='topic'?await this.api.dm(id):await this.api.thread(id);
     if(!this.alive||view.id!==id)throw new Error('That exact conversation is not available on this device.');
     if(kind==='topic'){
@@ -383,6 +401,7 @@ export class Store {
       if(thread.topic?.id!==id||!thread.messages?.some(m=>m.id===id&&!m.deleted))throw new Error('That exact conversation root is not available on this device.');
     }
     const o: NonNullable<Open>=kind==='topic'?{kind:'dm',id}:{kind:'thread',id,peer:(view as T.Thread).peer};
+    this.beginReadVisit(view);
     this.set({...this.viewPatch(o,view,this.state.open?.id===id),open:o,pending:null,tab:'chats'});
     // Link landing never invokes ordinary open's remote history refresh.
   }
@@ -432,46 +451,116 @@ export class Store {
   }
 
   showTab(tab: Tab, section = "") {
+    this.dismissMessageLanding();
     const hidden = this.state.tab === "settings";
     this.set({ tab, section });
     if (hidden && tab !== "settings") this.markOpenRead();
   }
   openInvite(conv: string, selected?: string[], preset?: { who: string; label?: string }) {
+    this.dismissMessageLanding();
     // Capture the visible scope once. Empty means Main flow, never all topics.
     this.set({ invite: { conv, selected, ...preset, topic: this.draft(conv).topic || "" } });
   }
   closeInvite() { this.set({ invite: null }); }
   setPanel(panel: boolean) { this.set({ panel }); }
 
-  // openMessage opens the conversation a notification's message belongs to:
-  // the conversation the host names (context.conv); else the device
-  // conversation that message starts; else the conversation that holds it,
-  // found by looking (a DM's review notice names only the message and its
-  // direction), never guessed. Nothing is sent, accepted or read by landing.
+  // Keep the exact destination until local views can prove it. Legacy taps
+  // need the initial overview; enriched native taps read just their bound DM.
   async openMessage(id: string, context?: OpenContext) {
-    this.set({ tab: "chats" });
-    if (context?.conv && /^[0-9a-f]{64}$/.test(context.conv)) { await this.open({ kind: "dm", id: context.conv, focus: id }); return; }
-    const o = this.state.overview, dms = o?.dms || [];
-    if (dms.some((d) => d.id === id)) { await this.open({ kind: "dm", id }); return; }
-    if ((o?.threads || []).some((t) => t.id === id)) { await this.open({ kind: "thread", id, focus: id }); return; }
-    for (const d of dms) {
-      try {
-        const v = await this.api.dm(d.id);
-        if (messageTarget((v.messages || []).filter(m => !context?.dir || m.dir === context.dir), id)) { await this.open({ kind: "dm", id: d.id, focus: id }); return; }
-      } catch { /* the next one */ }
+    if (!/^[0-9a-f]{32}$/.test(id) || context?.conv !== undefined && !/^[0-9a-f]{64}$/.test(context.conv) ||
+      context?.dir !== undefined && context.dir !== "in" && context.dir !== "out") {
+      this.dismissMessageLanding();
+      this.toast("This notification destination is invalid.", "error"); return;
     }
-    if (!context?.conv) { // a later message of a device conversation
-      try {
-        const t = await this.api.thread(id);
-        if ((t.messages || []).some((m) => m.id === id)) { await this.open({ kind: "thread", id, focus: id }); return; }
-      } catch { /* not a device conversation here */ }
+    const previous = this.state.messageLanding;
+    if (previous?.busy && previous.target.id === id && previous.target.context?.conv === context?.conv && previous.target.context?.dir === context?.dir) {
+      await (this.messageRefresh?.promise || this.retryMessageLanding()); return;
     }
-    this.toast("That message is not on this device.");
+    this.dismissMessageLanding();
+    this.set({ tab: "chats", pending: null, messageLanding: { target: { id, context: context && { ...context } }, busy: true, error: "" } });
+    await this.retryMessageLanding();
+  }
+
+  dismissMessageLanding() { if (this.state.messageLanding) this.set({ messageLanding: null }); }
+
+  retryMessageLanding(automatic = false): Promise<void> {
+    const landing = this.state.messageLanding;
+    if (!landing || !this.alive) return Promise.resolve();
+    if (automatic && landing.legacyMiss) return Promise.resolve();
+    if (this.messageRefresh?.target === landing.target) {
+      if (!automatic || landing.target.context?.conv || !this.state.overview) this.messageRefresh.again = true;
+      return this.messageRefresh.promise;
+    }
+    const run = { target: landing.target, again: false, promise: Promise.resolve() };
+    const current = () => this.alive && this.state.messageLanding?.target === run.target;
+    run.promise = Promise.resolve().then(async () => {
+      do {
+        run.again = false;
+        if (!current()) return;
+        this.set({ messageLanding: { ...this.state.messageLanding!, busy: true, error: "" } });
+        try { await this.resolveMessageLanding(run.target, current); }
+        catch (e) {
+          if (current()) this.set({ messageLanding: { ...this.state.messageLanding!, busy: false, error: errorText(e) } });
+        }
+      } while (current() && run.again);
+    }).finally(() => { if (this.messageRefresh === run) this.messageRefresh = null; });
+    this.messageRefresh = run;
+    return run.promise;
+  }
+
+  private async resolveMessageLanding(target: MessageLanding["target"], current: () => boolean) {
+    const { id, context } = target;
+    const contains = (view: View) => {
+      const m = messageTarget((view.messages || []).filter(m => !context?.dir || m.dir === context.dir), id);
+      return !!m && !m.deleted;
+    };
+    let view: View | undefined, kind: "dm" | "thread" = "dm";
+    if (context?.conv) {
+      view = await this.api.dm(context.conv);
+      if (view.id !== context.conv || (view as T.DMThread).frozen || !contains(view)) {
+        throw new Error("The notified message is not available in this chat. Try again after reconnecting.");
+      }
+    } else {
+      if (this.refresh) await this.refresh;
+      else if (!this.state.overview) await this.load(true);
+      if (!current()) return;
+      if (!this.state.overview) throw new Error("Your chats have not loaded. Try again after reconnecting.");
+      if ((this.state.overview.threads || []).some(t => t.id === id)) {
+        try {
+          const v = await this.api.thread(id);
+          if (v.id === id && contains(v)) { view = v; kind = "thread"; }
+        } catch { /* A known device thread never falls back to unrelated DMs. */ }
+      } else {
+        for (const d of this.state.overview.dms || []) {
+          if (!current()) return;
+          try {
+            const v = await this.api.dm(d.id);
+            if (v.id === d.id && !v.frozen && contains(v)) { view = v; break; }
+          } catch { /* Legacy taps may belong to another admitted conversation. */ }
+        }
+        if (!view && current()) {
+          try { const v = await this.api.thread(id); if (v.id === id && contains(v)) { view = v; kind = "thread"; } }
+          catch { /* Not an available device conversation. */ }
+        }
+      }
+      if (!view) {
+        if (current()) this.set({ messageLanding: { ...this.state.messageLanding!, legacyMiss: true } });
+        throw new Error("The notified message is not available on this device. Try again after reconnecting.");
+      }
+    }
+    if (!current()) return;
+    const o: NonNullable<Open> = kind === "dm" ? { kind, id: view.id, focus: id, focusSeq: ++this.focusSeq }
+      : { kind, id: view.id, focus: id, focusSeq: ++this.focusSeq, peer: (view as T.Thread).peer };
+    this.beginReadVisit(view);
+    this.set({ ...this.viewPatch(o, view, this.state.open?.id === o.id), open: o, pending: null, tab: "chats", messageLanding: null });
+    this.markOpenRead();
+    if (kind === "dm") void this.loadTyping();
   }
 
   // openChannel opens the conversation a browser notification's channel
   // names; one this device does not have opens nothing in its place.
   async openChannel(chan: string) {
+    this.dismissMessageLanding();
     this.set({ tab: "chats" });
     try {
       const r = await this.api.notifyResolve(chan);
@@ -484,8 +573,9 @@ export class Store {
   // close leaves the conversation; its view stays remembered (a phone
   // slides it away, and opening it again is instant).
   close() {
+    this.dismissMessageLanding();
     if (this.state.open) this.refreshed.delete(this.state.open.id);
-    this.readAcknowledged = { id: "", ids: new Set<string>() };
+    this.beginReadVisit();
     this.set({ open: null, pending: null, dm: null, thread: null, typing: null });
   }
 
@@ -494,6 +584,7 @@ export class Store {
   // only remembered.
   private async loadOpen(o: Open = this.state.open): Promise<boolean> {
     if (!o) return false;
+    const visit = this.readAcknowledged;
     const wanted = () => this.alive && (this.state.open === o || this.state.pending === o);
     try {
       // Being opened: a prefetch already under way for it is that load.
@@ -510,6 +601,12 @@ export class Store {
       const first = this.state.pending === o;
       const newHost = o.kind === "dm" && ((v as T.DMThread).agents || []).some((a) => !(this.state.dm?.agents || []).some((b) => b.host.address === a.host.address));
       this.set({ ...(first ? { open: o, pending: null } : {}), ...this.viewPatch(o, v, this.state.open?.id === o.id) });
+      // Only this entry's first committed fresh load arms deliberate reads.
+      // Cached display and routine acknowledgement calls cannot consume it.
+      if (this.readAcknowledged === visit && visit.entering === o && this.state.open === o && v.id === o.id) {
+        visit.entry = new Map((v.messages || []).filter(m => m.attention).map(m => [m.id, this.readKey(m)]));
+        visit.entering = null;
+      }
       if (newHost) void this.loadAgentNames();
       this.markOpenRead();
       if (o.kind === "dm") void this.loadTyping();
@@ -526,10 +623,39 @@ export class Store {
   // Reading one topic does not read the other topics returned by the same
   // conversation endpoint. Match Conversation's visible-message selection.
   private reading = new Set<string>();
-  private readAcknowledged = { id: "", ids: new Set<string>() };
+  private readAcknowledged = { id: "", ids: new Set<string>(), entry: new Map<string, string>(), entering: null as Open };
+  private readKey(m: T.DMMessage | T.Message): string {
+    return m.attention ? JSON.stringify([m.id, m.attention.rev, m.attention.writer]) : m.id;
+  }
+  private beginReadVisit(view?: View, entering: Open = null) {
+    // A superseded entry's request must not become a later entry's baseline.
+    if (this.readAcknowledged.entering) this.fetching.delete(this.readAcknowledged.entering.id);
+    this.readAcknowledged = { id: "", ids: new Set<string>(), entering,
+      entry: new Map((view?.messages || []).filter(m => m.attention).map(m => [m.id, this.readKey(m)])) };
+  }
+
+  canMarkUnread(m: T.DMMessage | T.Message): boolean {
+    const notice = this.state.open?.kind === "thread" && m.kind === "message" && m.status === "review_notice" &&
+      !m.reply_to && !("files" in m && m.files?.length);
+    return !("_local" in m && m._local) && !m.deleted && !("event" in m && m.event) &&
+      !("topic_event" in m && m.topic_event) && !notice && ["message", "question", "task", "answer", "result"].includes(m.kind);
+  }
+
+  async markUnread(id: string, fromHere = false) {
+    const o = this.state.open, view = o && this.state.views[o.id];
+    if (!o || !view) return;
+    const draft = this.draft(o.id);
+    const messages = o.kind === "dm" ? ((view as T.DMThread).messages || []).filter(m => draft.newTopic ? !m.topic : (m.topic || "") === (draft.topic || "")) : view.messages || [];
+    const anchor = messages.findIndex(m => m.id === id && this.canMarkUnread(m));
+    if (anchor < 0) { this.toast("That message is no longer available here.", "error"); return; }
+    const ids = [...new Set((fromHere ? messages.slice(anchor) : [messages[anchor]]).filter(m => this.canMarkUnread(m)).map(m => m.id))];
+    await this.run(a => a.act({ do: "unread", id, ids }));
+  }
+
   private markOpenRead() {
     const o = this.state.open;
     if (!this.alive || !o || this.state.tab === "settings" || o.kind === "dm" && o.focus && o.focusSeq !== this.topicFocusSeq) return;
+    if (this.state.pending && this.state.pending !== o) return;
     if (this.host.platform === "android" && (this.mobileHidden() || !document.hasFocus())) return;
     const v = this.state.views[o.id];
     if (!v) return;
@@ -538,25 +664,36 @@ export class Store {
       ? ((v as T.DMThread).messages || []).filter(m => draft?.newTopic ? !m.topic : (m.topic || "") === (draft?.topic || ""))
       : v.messages;
     const scope = JSON.stringify([o.kind, o.id, draft?.topic || "", !!draft?.newTopic]);
-    if (this.readAcknowledged.id !== scope) this.readAcknowledged = { id: scope, ids: new Set<string>() };
+    if (this.readAcknowledged.id !== scope) {
+      if (this.readAcknowledged.id !== "") this.readAcknowledged.entry = new Map<string, string>();
+      this.readAcknowledged.id = scope;
+      this.readAcknowledged.ids = new Set<string>();
+    }
     const acknowledged = this.readAcknowledged.ids;
-    const visible = new Set((messages || []).map(m => m.id));
+    const visible = new Set((messages || []).flatMap(m => [m.id, this.readKey(m)]));
     for (const id of acknowledged) if (!visible.has(id)) acknowledged.delete(id);
-    const pending = (messages || []).filter(m => (m.unread || o.kind === "thread" && m.dir === "out") && !this.reading.has(m.id) && !acknowledged.has(m.id));
+    const pending = (messages || []).filter(m => (m.unread || o.kind === "thread" && m.dir === "out") &&
+      (!m.attention || this.readAcknowledged.entry.get(m.id) === this.readKey(m)) &&
+      !this.reading.has(this.readKey(m)) && !acknowledged.has(this.readKey(m)));
     const ids = pending.map(m => m.id);
     if (!ids.length) return;
-    ids.forEach(id => this.reading.add(id));
+    const keys = pending.map(m => this.readKey(m));
+    const attention = Object.fromEntries(pending.filter(m => m.attention).map(m => [m.id, m.attention!]));
+    keys.forEach(key => this.reading.add(key));
     // The change stream brings the committed read state. Keep exact successful
     // acknowledgements so refreshing a sent device-thread row cannot loop.
-    void this.api.markRead(ids).then(async () => {
-      ids.forEach(id => { acknowledged.add(id); this.reading.delete(id); });
+    void this.api.markRead(ids, Object.keys(attention).length ? attention : undefined).then(async () => {
+      keys.forEach(key => { acknowledged.add(key); this.reading.delete(key); });
+      // The native action also writes legacy read state. A cleared sent row
+      // returns to its plain ID; keep that acknowledgement within this visit.
+      pending.filter(m => m.attention).forEach(m => acknowledged.add(m.id));
       if (!this.alive || !pending.some(m => m.unread)) return;
       // Reuse the read push's loads first. Only a still-stale exact row or
       // inconsistent badge needs another read; stream arrivals must not add
       // a second workspace overview for every acknowledgement.
       await this.openRefresh;
-      const unread = new Set(pending.filter(m => m.unread).map(m => m.id));
-      const stale = () => this.state.views[o.id]?.messages?.some(m => unread.has(m.id) && m.unread);
+      const unread = new Set(pending.filter(m => m.unread).map(m => this.readKey(m)));
+      const stale = () => this.state.views[o.id]?.messages?.some(m => unread.has(this.readKey(m)) && m.unread);
       if (this.alive && this.state.open?.id === o.id && stale()) await this.refreshOpen();
       await this.refresh;
       if (!this.alive) return;
@@ -564,7 +701,7 @@ export class Store {
       const summary = o.kind === "dm" ? this.state.overview?.dms?.find(d => d.id === o.id) : this.state.overview?.threads?.find(t => t.id === o.id);
       if (this.state.open?.id === o.id && current && !stale() && summary?.unread === (current.messages || []).filter(m => m.unread).length) return;
       void this.load(false, false);
-    }).catch(() => {}).finally(() => ids.forEach(id => this.reading.delete(id)));
+    }).catch(() => {}).finally(() => keys.forEach(key => this.reading.delete(key)));
   }
 
   private typingLoading = false;
@@ -634,12 +771,22 @@ export class Store {
 
   setDraft(conv: string, d: Draft, topicSelected = false) {
     const prior = this.state.drafts[conv];
+    if (topicSelected || (prior?.topic || "") !== (d.topic || "") || !!prior?.newTopic !== !!d.newTopic) this.dismissMessageLanding();
     const drafts = { ...this.state.drafts };
     if (!d.text && !d.replyTo && !d.agent && !d.newTopic && !d.topic && !(d.files && d.files.length)) delete drafts[conv];
     else drafts[conv] = d;
     this.set({ drafts });
     this.saveDrafts(drafts);
     if (this.state.open?.id === conv && (topicSelected || (prior?.topic || "") !== (d.topic || "") || !!prior?.newTopic !== !!d.newTopic)) {
+      if ((prior?.topic || "") !== (d.topic || "") || !!prior?.newTopic !== !!d.newTopic) {
+        const entering = this.readAcknowledged.entering;
+        if (entering) {
+          // The pending full-conversation load also contains the new topic.
+          this.readAcknowledged.id = "";
+          this.readAcknowledged.ids.clear();
+          this.readAcknowledged.entry.clear();
+        } else this.beginReadVisit(this.state.views[conv]);
+      }
       this.topicFocusSeq = this.state.open.focusSeq || 0;
       this.markOpenRead();
     }

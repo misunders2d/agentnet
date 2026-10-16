@@ -103,8 +103,16 @@ function UpdateRequired({ required, app, reload, unsent }: { required: T.UpdateR
 export function Toasts() {
   const store = useApp();
   const toasts = useStore(store, (s) => s.toasts);
+  const landing = useStore(store, (s) => s.messageLanding);
   return (
     <div aria-live="polite" className="pointer-events-none fixed inset-x-0 bottom-20 z-50 flex flex-col items-center gap-2 px-4 lg:bottom-6">
+      {landing && (
+        <div role="status" aria-busy={landing.busy} className="pointer-events-auto flex w-full max-w-md flex-wrap items-center gap-2 rounded-2xl stroke bg-surface px-4 py-2.5 text-sm text-ink shadow-pop">
+          <span className="min-w-0 flex-1 basis-48 font-semibold">{landing.error || "Opening the notified message…"}</span>
+          {!landing.busy && <Button size="sm" variant="outline" onClick={() => void store.retryMessageLanding()}>Try again</Button>}
+          <Button size="sm" variant="outline" onClick={() => store.dismissMessageLanding()}>Dismiss</Button>
+        </div>
+      )}
       {toasts.map((t) => (
         <div key={t.id} role={t.tone === "error" ? "alert" : "status"}
           className={"pop-in pointer-events-auto max-w-md rounded-2xl stroke px-4 py-2.5 text-sm font-semibold shadow-pop " + (t.tone === "error" ? "bg-danger-bg text-danger" : t.tone === "ok" ? "bg-ok-bg text-ok-ink" : "bg-surface text-ink")}>

@@ -24,6 +24,7 @@ type Item =
   | { type: "msg"; key: string; m: AnyMsg; first: boolean; last: boolean; status: boolean; compact: boolean; targets?: AnyMsg[] };
 
 const RUN = 5 * 60e3;
+const HISTORY_PAGE = 80; // message groups, keeping every target of one send together
 const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 export function Timeline({ ctx, messages, focus, focusSeq, selected, onSelect, empty, footer, start, end }: {
@@ -44,27 +45,80 @@ export function Timeline({ ctx, messages, focus, focusSeq, selected, onSelect, e
   const [firstUnread] = useState(() => messages.find((m) => m.unread && m.dir === "in")?.id);
 
   const items = useMemo(() => build(messages, ctx, firstUnread), [messages, ctx, firstUnread]);
+  const groups = useMemo(() => items.filter((it): it is Extract<Item, { type: "msg" }> => it.type === "msg"), [items]);
+  const [first, setFirst] = useState(() => groups[Math.max(0, groups.length - HISTORY_PAGE)]?.key);
+  const retained = useRef<string[]>([]);
+  const prependAnchor = useRef<{ row: HTMLElement; top: number; focus: boolean } | null>(null);
+  const [requested, setRequested] = useState<{ id: string; focus?: string; seq?: number }>();
   const focused = messageTarget(messages, focus)?.id;
+  const target = requested && requested.focus === focus && requested.seq === focusSeq ? requested.id : focused;
+  let from = groups.findIndex(it => it.key === first);
+  if (from < 0) {
+    // A deletion or a different canonical copy can remove the boundary row.
+    // Keep the next surviving displayed group rather than dropping history.
+    const keys = new Set(groups.map(it => it.key));
+    const next = retained.current.find(key => keys.has(key));
+    from = next ? groups.findIndex(it => it.key === next) : Math.max(0, groups.length - HISTORY_PAGE);
+  }
+  const wanted = groups.findIndex(it => it.m.id === target || it.targets?.some(m => m.id === target));
+  if (wanted >= 0 && wanted < from) {
+    // Revealing an exact old target is permanent for this mounted timeline.
+    // A subsequent focus must not hide history the reader has already opened.
+    from = wanted;
+    setFirst(groups[wanted].key);
+  }
+  let begin = groups.length ? items.indexOf(groups[from]) : 0;
+  while (begin > 0 && items[begin - 1].type !== "msg") begin--;
+  const visible = items.slice(begin);
+
+  const earlier = (event?: { detail: number }) => {
+    if (!from || prependAnchor.current) return;
+    // Capture one existing node only for this known prepend. Browser scroll
+    // anchoring normally keeps it still; this delta is also the fallback on
+    // engines without anchoring. Ordinary scrolling measures no message rows.
+    const row = inner.current?.querySelector<HTMLElement>("[data-mid]");
+    if (row) prependAnchor.current = { row, top: row.getBoundingClientRect().top,
+      focus: event?.detail === 0 && from <= HISTORY_PAGE };
+    setFirst(groups[Math.max(0, from - HISTORY_PAGE)].key);
+  };
 
   // Open at the bottom or at the focused message; afterwards follow new
   // messages only while at the bottom (or when they are your own).
   useLayoutEffect(() => {
     const el = box.current;
     if (!el) return;
+    retained.current = groups.slice(from).map(it => it.key);
+    const saved = prependAnchor.current;
+    prependAnchor.current = null;
+    if (saved?.row.isConnected && el.contains(saved.row)) {
+      el.scrollTop += saved.row.getBoundingClientRect().top - saved.top;
+      if (saved.focus && from === 0) {
+        saved.row.tabIndex = -1;
+        saved.row.focus({ preventScroll: true });
+      }
+    }
     if (!seen.current) {
       seen.current = new Set(messages.map((m) => m.id));
-      if (focused && flash(el, focused, false)) return;
+      if (target && flash(el, target, false)) return;
       el.scrollTop = el.scrollHeight;
       return;
     }
     const added = messages.filter((m) => !seen.current!.has(m.id));
     for (const m of added) seen.current.add(m.id);
     if (!added.length) return;
-    if (atBottom.current || added.some((m) => whoWrote(m, ctx).mine)) el.scrollTo({ top: el.scrollHeight, behavior: reduced() ? "auto" : "smooth" });
+    if (atBottom.current || added.some((m) => whoWrote(m, ctx).mine)) {
+      atBottom.current = true;
+      el.scrollTo({ top: el.scrollHeight, behavior: reduced() ? "auto" : "smooth" });
+    }
     else setFresh((n) => n + added.filter((m) => !ev(m)).length);
-  }, [messages]);
+  }, [messages, items, first, target]);
 
-  useEffect(() => { if (focused && seen.current && box.current) flash(box.current, focused, true); }, [focused, focusSeq]);
+  useLayoutEffect(() => {
+    if (target && seen.current && box.current) {
+      atBottom.current = false;
+      flash(box.current, target, false);
+    }
+  }, [target, focusSeq, requested]);
 
   // Pictures, reactions and the typing line change the height, and a
   // phone's keyboard (or a growing message box) shrinks the view: the
@@ -72,7 +126,9 @@ export function Timeline({ ctx, messages, focus, focusSeq, selected, onSelect, e
   useEffect(() => {
     const el = box.current, content = inner.current;
     if (!el || !content) return;
-    const ro = new ResizeObserver(() => { if (atBottom.current) el.scrollTop = el.scrollHeight; });
+    const ro = new ResizeObserver(() => {
+      if (atBottom.current) el.scrollTop = el.scrollHeight;
+    });
     ro.observe(content);
     ro.observe(el);
     return () => ro.disconnect();
@@ -94,10 +150,14 @@ export function Timeline({ ctx, messages, focus, focusSeq, selected, onSelect, e
     const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
     atBottom.current = gap < 80;
     setFar(gap > 600);
+    if (el.scrollTop < 80 && !atBottom.current) earlier();
     if (atBottom.current) { if (fresh) setFresh(0); reportSeen(); }
   };
   const down = () => { box.current?.scrollTo({ top: box.current.scrollHeight, behavior: reduced() ? "auto" : "smooth" }); setFresh(0); };
-  const jump = useCallback((id: string) => { if (box.current) flash(box.current, id, true); }, []);
+  const jump = useCallback((id: string) => {
+    atBottom.current = false;
+    setRequested({ id, focus, seq: focusSeq });
+  }, [focus, focusSeq]);
 
   return (
     <div className="relative min-h-0 flex-1">
@@ -105,8 +165,9 @@ export function Timeline({ ctx, messages, focus, focusSeq, selected, onSelect, e
         <div ref={inner} role="log" aria-live="polite" aria-relevant="additions" aria-label="Messages" data-part="timeline" className="mx-auto flex min-h-full w-full max-w-[800px] flex-col justify-end pb-6 pt-3"
           style={reserve ? { paddingBottom: reserve + 24 } : undefined}>
           {items.length === 0 && empty}
-          {items.length > 0 && start}
-          {items.map((it) =>
+          {from > 0 ? <button type="button" onClick={earlier} className="mx-auto min-h-11 px-4 text-sm font-semibold underline">Earlier messages</button> : items.length > 0 && start}
+          {begin > 0 && visible[0]?.type !== "day" && groups[from] && <DayChip label={dayLabel(groups[from].m.at)} />}
+          {visible.map((it) =>
             it.type === "day" ? <DayChip key={it.key} label={it.label} />
               : it.type === "new" ? <NewLine key={it.key} />
                 : it.targets ? <div key={it.key} data-send-group={isThreadMsg(it.m) ? undefined : it.m.send_group} className="mt-3 rounded-2xl border border-outline/20 py-2">

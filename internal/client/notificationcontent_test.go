@@ -30,7 +30,7 @@ func TestNativeNotificationExactMessagePreview(t *testing.T) {
 	if _, err := w.bob.showDueAlerts(time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if len(notices) != 1 || notices[0].Fragment != "msg="+latest+"&dir=in" || notices[0].Body != "Exact new message with a second line" || notices[0].Title != person.Label {
+	if len(notices) != 1 || notices[0].Fragment != "msg="+latest+"&conv="+conv+"&dir=in" || notices[0].Body != "Exact new message with a second line" || notices[0].Title != person.Label {
 		t.Fatalf("notices: %+v", notices)
 	}
 	if _, err := w.bob.showDueAlerts(time.Now().Add(time.Hour)); err != nil {
@@ -42,7 +42,7 @@ func TestNativeNotificationExactMessagePreview(t *testing.T) {
 	var own NativeNotification
 	w.alice.nativeNotifyContent = func(n NativeNotification) { own = n }
 	w.alice.nativeNotification("msg="+latest+"&dir=out", latest, "Reminder", "A reminder is due")
-	if own.Fragment != "msg="+latest+"&dir=out" || own.Body != "Exact new message with a second line" || !strings.HasPrefix(own.Title, "Reminder · ") {
+	if own.Fragment != "msg="+latest+"&conv="+conv+"&dir=out" || own.Body != "Exact new message with a second line" || !strings.HasPrefix(own.Title, "Reminder · ") {
 		t.Fatalf("own sent reminder target: %+v", own)
 	}
 }

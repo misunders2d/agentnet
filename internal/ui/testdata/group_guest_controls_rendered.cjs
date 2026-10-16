@@ -284,10 +284,53 @@ if(variant==='agent-child'){
  fixture.thread.messages.push({id:'agent-child',lid:'agent-child',from:fixture.overview.me.address,dir:'out',kind:'question',body:'Child request from a verified agent',at:'2026-10-05T10:01:00Z',pid:'target',agent_author_pid:'source',verified_agent:true,target:{address:fixture.overview.me.address,agent_id:'2'.repeat(32)},exec:{state:'interrupted',host:fixture.overview.me.address},job_detail:'Cannot run this request again: originating local run stopped. Mark it as handled if no more work is needed.',actions:['resolve'],state:'delivered'});
 }
 
+
+// Bounded v32 qualification uses the actual current-source Comic module.
+if(variant==='v32-attention'||variant==='v32-landing'||variant==='v32-readonly'){
+ fixture.thread.guests=[];fixture.overview.group_invitations=[];
+ fixture.thread.topics=[{id:'9'.repeat(32),title:'Sibling topic',state:'active',count:1,last_at:seed.thread.messages[0].at}];
+ fixture.thread.messages=Array.from({length:180},(_,i)=>({id:(i+1).toString(16).padStart(32,'0'),lid:(i+1).toString(16).padStart(32,'0'),from:i%2?'aster/laptop':'brin/desktop',dir:i%2?'out':'in',kind:'message',body:i===179?'Selected warehouse context':'History turn '+i,at:new Date(Date.parse('2026-10-05T10:00:00Z')+i*1000).toISOString(),unread:false}));
+ Object.assign(fixture.thread.messages[177],{attachments:[{name:'retained.txt',size:12,id:'fixture-file'}]});
+ Object.assign(fixture.thread.messages[178],{excerpt_pid:'stored-grant',claimed_key:'bbbbbbbb-bbbbbbbb-bbbbbbbb-bbbbbbbb',lid:'8'.repeat(32),body:'Admitted stored excerpt'});
+ fixture.thread.messages.push({id:'9'.repeat(32),lid:'9'.repeat(32),kind:'message',dir:'in',from:'brin/desktop',topic:'9'.repeat(32),body:'Sibling stays unread',at:'2026-10-05T10:03:00Z',unread:true,attention:{rev:8,writer:'bbbbbbbb-bbbbbbbb-bbbbbbbb-bbbbbbbb'}});
+ fixture.overview.dms[0].count=181;fixture.overview.dms[0].unread=1;
+ fixture.attentionRevs={};
+ if(variant==='v32-readonly')fixture.thread.guests=[{...${JSON.stringify(guest)},missing:0,shared:[fixture.thread.messages[177].lid]}];
+}
+if(variant.startsWith('v32-direct-')){
+ const id='1'.repeat(32),peer='brin/desktop',key='bbbbbbbb-bbbbbbbb-bbbbbbbb-bbbbbbbb',author='eeeeeeee-eeeeeeee-eeeeeeee-eeeeeeee';
+ fixture.overview.group_invitations=[];fixture.overview.dms=[];fixture.overview.agent_devices=[peer];
+ fixture.overview.person.devices.push({address:'aster/other-laptop',fingerprint:author});
+ const summary={id,peer,title:'Current direct work',last:'Direct running request',count:1,unread:0,state:'active'};
+ const named=variant.includes('named'),target=named?{address:peer,fingerprint:key,agent_id:'a'.repeat(32)}:undefined;
+ fixture.overview.threads=[summary];
+ fixture.deviceThread={id,peer,key:{pinned:key},approved:true,topic:summary,messages:[{id,from:'aster/other-laptop',from_key:author,to:peer,dir:'out',kind:'question',body:'Direct running request',at:'2026-10-05T10:00:00Z',author:{label:'You',about:''},target,exec:{state:'running',host:peer,attempt:3},state:'delivered',actions:[]}]};
+ fixture.followupStages=[];
+}
+
 let open;
 const changeListeners=new Set(),changed=event=>{for(const fn of [...changeListeners])fn(event);};
-const host={version:1,platform:variant==='composer-followup-android'?'android':'daemon',android:variant==='composer-followup-android'?{legacyDrafts:async()=>({drafts:[]}),visible:()=>true,onVisibility:()=>()=>{}}:undefined,workspace:{id:'default',name:'P6 fixture',endpoint:location.origin,address:seed.overview.me.address,realm:'',state:'enrolled'},workspaces:null,skins:[],onSkinsChange(){return()=>{};},onOpen(fn){open=fn;},listen(fn){changeListeners.add(fn);return()=>changeListeners.delete(fn);},stage:async f=>{if(variant==='followup'||variant.startsWith('composer-followup')){if(fixture.followupStageFailure&&f.name==='fail-second.md'){fixture.followupStageFailure=false;throw Error('Synthetic second stage failure');}const id='followup-staged-'+(fixture.followupStages.length+1);fixture.followupStages.push({id,name:f.name,size:f.size,text:await f.text()});if(fixture.followupStagePause){fixture.followupStagePause=false;await new Promise(resolve=>{window.finishFollowupStage=resolve;});}return id;}if(variant==='multi-agent'){const id='multi-stage-'+(fixture.stages.length+1);fixture.stages.push({id,name:f.name,size:f.size});return {id};}if(variant==='oks'){fixture.staged={name:f.name,size:f.size};return {id:'staged-1'};}throw Error('fixture accepts no files');},file:async(id,index,dir)=>{if(variant==='direct-files'){fixture.download={id,index,dir};return {bytes:new TextEncoder().encode('hello')};}throw Error('fixture contains no files');},api:async(p,body)=>{
+const host={version:1,platform:(variant==='composer-followup-android'||variant.endsWith('-android'))?'android':'daemon',android:(variant==='composer-followup-android'||variant.endsWith('-android'))?{legacyDrafts:async()=>({drafts:[]}),visible:()=>true,onVisibility:()=>()=>{}}:undefined,workspace:{id:'default',name:'P6 fixture',endpoint:location.origin,address:seed.overview.me.address,realm:'',state:'enrolled'},workspaces:null,skins:[],onSkinsChange(){return()=>{};},onOpen(fn){open=fn;},listen(fn){changeListeners.add(fn);return()=>changeListeners.delete(fn);},stage:async f=>{if(variant==='followup'||variant.startsWith('composer-followup')){if(fixture.followupStageFailure&&f.name==='fail-second.md'){fixture.followupStageFailure=false;throw Error('Synthetic second stage failure');}const id='followup-staged-'+(fixture.followupStages.length+1);fixture.followupStages.push({id,name:f.name,size:f.size,text:await f.text()});if(fixture.followupStagePause){fixture.followupStagePause=false;await new Promise(resolve=>{window.finishFollowupStage=resolve;});}return id;}if(variant==='multi-agent'){const id='multi-stage-'+(fixture.stages.length+1);fixture.stages.push({id,name:f.name,size:f.size});return {id};}if(variant==='oks'){fixture.staged={name:f.name,size:f.size};return {id:'staged-1'};}throw Error('fixture accepts no files');},file:async(id,index,dir)=>{if(variant==='direct-files'){fixture.download={id,index,dir};return {bytes:new TextEncoder().encode('hello')};}throw Error('fixture contains no files');},api:async(p,body)=>{
 fixture.requests.push({path:p,body});
+
+if(variant.startsWith('v32-direct-')&&p.startsWith('/api/thread?'))return structuredClone(fixture.deviceThread);
+if(variant.startsWith('v32-direct-')&&p==='/api/request/followup'){
+ if(variant.endsWith('-android')&&!fixture.directFailed){fixture.directFailed=true;throw Error('Synthetic uncertain direct steering');}
+ return {note:'Steering sent. Waiting for native acceptance.'};
+}
+if((variant==='v32-attention'||variant==='v32-landing')&&p.startsWith('/api/dm?')&&fixture.holdNextDM){
+ fixture.holdNextDM=false;const snapshot=structuredClone(fixture.thread);return new Promise(resolve=>{window.finishV32DM=()=>resolve(snapshot);});
+}
+if((variant==='v32-attention'||variant==='v32-landing')&&p==='/api/act'){
+ if(!['read','unread'].includes(body.do))throw Error('Unexpected attention action');
+ for(const m of fixture.thread.messages)if(body.ids.includes(m.id)){
+  if(body.do==='unread'){const rev=(fixture.attentionRevs[m.id]||0)+1;fixture.attentionRevs[m.id]=rev;m.unread=true;m.attention={rev,writer:'aaaaaaaa-aaaaaaaa-aaaaaaaa-aaaaaaaa'};}
+  else if(!m.attention||JSON.stringify(body.attention?.[m.id])===JSON.stringify(m.attention)){m.unread=false;delete m.attention;}
+ }
+ fixture.overview.dms[0].unread=fixture.thread.messages.filter(m=>m.unread).length;
+ return {};
+}
+
 if((variant==='followup'||variant.startsWith('composer-followup'))&&p==='/api/upload/discard')return {};
 if((variant==='followup'||variant.startsWith('composer-followup'))&&p==='/api/request/followup'){
  if(fixture.rejectEndedSteering)throw Error('The selected current work ended; steering was not applied.');
@@ -399,10 +442,10 @@ if(p.includes('/groups/invitations'))return variant.startsWith('decline-invite-'
 if(variant==='browser-app')host.platform='browser';
 const skin=new URL(location.href).searchParams.get('skin'),base='/assets/skins/'+skin+'/';
 const manifest=await(await fetch(base+'skin.json')).json();
-if(manifest.document){const css=new CSSStyleSheet();css.replaceSync(await(await fetch(base+manifest.document)).text());document.adoptedStyleSheets=[css];}
+if(manifest.document){const css=new CSSStyleSheet();css.replaceSync((await(await fetch(base+manifest.document)).text()).replaceAll('url(m/','url('+base+'m/'));document.adoptedStyleSheets=[css];}
 const shadow=document.querySelector('#skin').attachShadow({mode:'open'}),css=new CSSStyleSheet();css.replaceSync(await(await fetch(base+manifest.style)).text());shadow.adoptedStyleSheets=[css];
 const skinRoot=document.createElement('div');skinRoot.className='skin-root';shadow.append(skinRoot);const module=await import(base+manifest.entry);await module.mount(skinRoot,host);
-window.openGroup=()=>open(seed.thread.id,'conversation');window.openFixtureMessage=id=>open(id,'message');window.reloadFixture=()=>changed?.({type:'change',seq:++fixture.overview.seq});
+window.openGroup=()=>open(seed.thread.id,'conversation');window.v32Open=(id,kind,context)=>open(id,kind,context);window.v32Close=()=>open('');window.openFixtureMessage=id=>open(id,'message');window.reloadFixture=()=>changed?.({type:'change',seq:++fixture.overview.seq});
 window.disableInvite=()=>{Object.assign(fixture.overview.group_invitations[0],{can_cancel:false,can_refresh:false});changed?.({type:'change',seq:++fixture.overview.seq});};window.ready=true;
 if(new URL(location.href).searchParams.get('native')==='1'){
  const frame=()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))),sleep=ms=>new Promise(r=>setTimeout(r,ms));
@@ -434,8 +477,150 @@ const server=http.createServer((req,res)=>{if(req.url==='/native-result'&&req.me
    await new Promise(resolve=>{nativeFinish=resolve;});return;
   }
   browser=await chromium.launch({headless:true,executablePath:process.env.AGENTNET_CHROMIUM||undefined});
+
+  if(process.env.AGENTNET_V32_ASSET_PROBE==='1'){
+   const context=await browser.newContext({viewport:{width:1280,height:900}}),page=await context.newPage(),requests=[],consoleErrors=[];
+   page.on('response',r=>{if(r.status()>=400)requests.push({url:r.url(),status:r.status()});});page.on('requestfailed',r=>requests.push({url:r.url(),failure:r.failure()}));page.on('console',m=>{if(m.type()==='error')consoleErrors.push(m.text());});
+   try{await page.goto(origin+'/?skin=comic&case=v32-attention');await page.waitForFunction(()=>window.ready);await page.evaluate(()=>openGroup());await settle(page);fs.writeFileSync(path.join(evidence,'asset-probe.json'),JSON.stringify({requests,consoleErrors},null,2));console.log(JSON.stringify({requests,consoleErrors}));}finally{await context.close();}return;
+  }
+
   for(const skin of (process.env.AGENTNET_TEST_SKINS||'comic').split(','))for(const width of (process.env.AGENTNET_GUEST_INLINE==='1'?[1024,1279,390]:[1280,390])){
-   const openCase=async (variant,platform)=>{const context=await browser.newContext({viewport:{width,height:900},reducedMotion:'reduce'});await context.route('**/*',r=>new URL(r.request().url()).origin===origin?r.continue():r.abort());if(platform)await context.addInitScript(p=>Object.defineProperty(navigator,'platform',{get:()=>p}),platform);const page=await context.newPage();page.setDefaultTimeout(8000);page.on('pageerror',e=>errors.push(skin+': '+e.stack));await page.goto(origin+'/?skin='+skin+'&case='+variant);try{await page.waitForFunction(()=>window.ready);}catch(e){console.error(JSON.stringify({skin,width,variant,errors,text:await page.locator('body').innerText()}));throw e;}if(variant==='completion'||variant==='direct-files'||variant==='device-oks'||variant.startsWith('delivery-')||variant.startsWith('decline-invite-'))return {page,context};await page.evaluate(()=>openGroup());try{await page.getByText(variant==='oks'?'Main flow conversation':'Selected warehouse context',{exact:false}).first().waitFor();}catch(e){console.error(JSON.stringify({errors,text:await page.locator('#skin').evaluate(e=>e.shadowRoot.innerText||e.shadowRoot.textContent)}));throw e;}return {page,context};};
+   const openCase=async (variant,platform)=>{const context=await browser.newContext({viewport:{width,height:900},reducedMotion:'reduce'});await context.route('**/*',r=>new URL(r.request().url()).origin===origin?r.continue():r.abort());if(platform)await context.addInitScript(p=>Object.defineProperty(navigator,'platform',{get:()=>p}),platform);const page=await context.newPage();page.setDefaultTimeout(8000);page.on('pageerror',e=>errors.push(skin+': '+e.stack));if(process.env.AGENTNET_V32_RENDERED==='1')page.on('console',m=>{if(m.type()==='error')errors.push(skin+': '+m.text());});if(process.env.AGENTNET_V32_RENDERED==='1'){page.on('response',r=>{if(r.status()>=400)errors.push(skin+': HTTP '+r.status()+' '+r.url());});page.on('requestfailed',r=>errors.push(skin+': '+r.url()+' '+r.failure()?.errorText));}await page.goto(origin+'/?skin='+skin+'&case='+variant);try{await page.waitForFunction(()=>window.ready);}catch(e){console.error(JSON.stringify({skin,width,variant,errors,text:await page.locator('body').innerText()}));throw e;}if(variant.startsWith('v32-direct-')||variant==='completion'||variant==='direct-files'||variant==='device-oks'||variant.startsWith('delivery-')||variant.startsWith('decline-invite-'))return {page,context};await page.evaluate(()=>openGroup());try{await page.getByText(variant==='oks'?'Main flow conversation':'Selected warehouse context',{exact:false}).first().waitFor();}catch(e){console.error(JSON.stringify({errors,text:await page.locator('#skin').evaluate(e=>e.shadowRoot.innerText||e.shadowRoot.textContent)}));throw e;}return {page,context};};
+
+if(process.env.AGENTNET_V32_RENDERED==='1'){
+ const findings=[];const fonts=await browser.newContext().then(async context=>{try{const page=await context.newPage();const urls=[];page.on('response',r=>{if(r.url().endsWith('.woff2'))urls.push({url:r.url(),status:r.status()});});await page.goto(origin+'/?skin=comic&case=v32-attention');await page.waitForFunction(()=>window.ready);await page.evaluate(()=>openGroup());await settle(page);const loaded=await page.evaluate(()=>[...document.fonts].filter(f=>f.status==='loaded').map(f=>f.family));assert(loaded.length>=2,'both unchanged font families load through the corrected fixture routes');return{urls,loaded};}finally{await context.close();}});fs.writeFileSync(path.join(evidence,'v32-fonts-'+width+'.json'),JSON.stringify(fonts,null,2));
+ const shot=async(page,name)=>{await settle(page);const file=path.join(evidence,'v32-'+name+'-'+width+'.png');await page.screenshot({path:file});shots.push(file);};
+ const check=async(name,variant,run)=>{
+  let page,context;const result={name,width,variant};
+  try{({page,context}=await openCase(variant));await run(page);await settle(page);assert(!await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),'no horizontal page overflow');result.ok=true;}
+  catch(e){result.ok=false;result.error=e.stack;console.error('V32 FINDING',name,width,e.message);}
+  finally{if(page){result.requests=await page.evaluate(()=>fixture.requests);result.focus=await page.locator('#skin').evaluate(e=>{const a=e.shadowRoot.activeElement;return a?{tag:a.tagName,text:a.innerText,html:a.outerHTML}:null;});fs.writeFileSync(path.join(evidence,'v32-'+name+'-'+width+'.dom.txt'),await page.locator('#skin').evaluate(e=>e.shadowRoot.innerHTML));await shot(page,name);}if(context)await context.close();findings.push(result);if(!result.ok)process.exitCode=1;}
+ };
+ const actions=async(page,id,{touch=false,keyboard=false}={})=>{
+  const row=page.locator('[data-mid="'+id+'"]');await row.scrollIntoViewIfNeeded();
+  if(width===390){
+   if(touch){const bubble=row.locator(':scope > div').first();await bubble.dispatchEvent('pointerdown',{pointerType:'touch',pointerId:7,clientX:80,clientY:200,bubbles:true});await page.getByRole('dialog').waitFor();await bubble.dispatchEvent('pointerup',{pointerType:'touch',pointerId:7,bubbles:true});}
+   else{const b=row.getByRole('button',{name:'Message actions',exact:true});await b.focus();await b.press('Enter');}
+   return page.getByRole('dialog');
+  }
+  await row.hover();const b=row.getByRole('button',{name:'More actions',exact:true});await b.waitFor();if(keyboard){await b.focus();await b.press('Enter');}else await b.click();return page.getByRole('menu');
+ };
+ const unread=page=>page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/act'&&r.body.do==='unread').map(r=>r.body));
+ await check('unread-actions','v32-attention',async page=>{
+  assert.equal(await page.locator('[data-mid]').count(),80,'latest eighty groups initially mounted');
+  for(const [i,opts] of [[177,{touch:width===390}],[179,{keyboard:true}]]){
+   const id=(i+1).toString(16).padStart(32,'0'),menu=await actions(page,id,opts);
+   const item=menu.getByRole(width===390?'button':'menuitem',{name:'Mark unread',exact:true});await item.focus();await item.press('Enter');await menu.waitFor({state:'hidden'});
+   await page.waitForFunction(id=>fixture.requests.some(r=>r.body?.do==='unread'&&r.body.ids[0]===id),id);
+   assert.deepEqual((await unread(page)).at(-1).ids,[id]);
+  }
+  await page.evaluate(()=>reloadFixture());await settle(page);
+  assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.body?.do==='read').length),0,'current visit refresh keeps deliberate marks');
+  await page.evaluate(()=>v32Close());await page.evaluate(()=>openGroup());
+  await page.waitForFunction(()=>fixture.requests.some(r=>r.body?.do==='read'&&r.body.attention));
+  const ack=await page.evaluate(()=>fixture.requests.find(r=>r.body?.do==='read'&&r.body.attention).body);
+  assert.deepEqual(Object.keys(ack.attention).sort(),[178,180].map(i=>i.toString(16).padStart(32,'0')).sort());
+  for(const g of Object.values(ack.attention))assert.deepEqual(g,{rev:1,writer:'aaaaaaaa-aaaaaaaa-aaaaaaaa-aaaaaaaa'});
+  assert.equal(await page.evaluate(()=>fixture.thread.messages.at(-1).attention.rev),8,'sibling scope survives reopening Main');
+ });
+ await check('unread-excerpt','v32-attention',async page=>{
+  const id=(179).toString(16).padStart(32,'0'),menu=await actions(page,id,{touch:width===390});
+  await menu.getByRole(width===390?'button':'menuitem',{name:'Mark unread',exact:true}).click();await menu.waitFor({state:'hidden'});
+  await page.waitForFunction(id=>fixture.requests.some(r=>r.body?.do==='unread'&&r.body.ids[0]===id),id);
+  assert.deepEqual((await unread(page)).at(-1).ids,[id],'stored excerpt uses carrier ID');
+ });
+ await check('unread-keyboard-focus','v32-attention',async page=>{
+  const id=(180).toString(16).padStart(32,'0'),menu=await actions(page,id,{keyboard:true});
+  const item=menu.getByRole(width===390?'button':'menuitem',{name:'Mark unread',exact:true});await item.focus();await item.press('Enter');await menu.waitFor({state:'hidden'});await settle(page);
+  const focused=await page.locator('#skin').evaluate(e=>{const a=e.shadowRoot.activeElement;return a?{tag:a.tagName,text:a.textContent,label:a.getAttribute('aria-label')}:null;});
+  assert(focused&&focused.tag==='BUTTON'&&(width===1280?focused.label==='More actions':focused.text==='Message actions'),'closing keyboard action returns to its exact trigger');
+ });
+ await check('history-reveal-focus','v32-attention',async page=>{
+  const earlier=page.getByRole('button',{name:'Earlier messages',exact:true});await earlier.focus();await settle(page);
+  // Focusing the offscreen button scrolls to it and invokes the existing automatic earlier().
+  assert.equal(await page.locator('[data-mid]').count(),160);assert(await earlier.evaluate(e=>e===e.getRootNode().activeElement),'Earlier retains focus while more history remains');
+  const retained=page.locator('[data-mid]').first(),retainedID=await retained.getAttribute('data-mid'),beforeY=(await retained.boundingBox()).y;
+  await earlier.press('Enter');await settle(page);assert.equal(await page.locator('[data-mid]').count(),180);assert.equal(await earlier.count(),0);
+  const focused=await page.locator('#skin').evaluate(e=>{const a=e.shadowRoot.activeElement;return a&&{tag:a.tagName,html:a.outerHTML};});
+  assert(focused&&focused.tag==='DIV'&&focused.html.includes('data-mid="'+retainedID+'"'),'final Earlier activation focuses its retained visible row');
+  assert(Math.abs((await page.locator('[data-mid="'+retainedID+'"]').boundingBox()).y-beforeY)<=2,'final reveal retains scroll position');
+ });
+
+ await check('excerpt-keyboard-authority','v32-attention',async page=>{
+  const id=(179).toString(16).padStart(32,'0'),row=page.locator('[data-mid="'+id+'"]');await row.scrollIntoViewIfNeeded();
+  if(width===1280){const bubble=row.locator('[data-message-bubble]');assert.equal(await bubble.getAttribute('tabindex'),'0');assert.equal(await bubble.getAttribute('role'),'group');assert.match(await bubble.getAttribute('aria-label'),/Brin/);await bubble.focus();}
+  const menu=await actions(page,id,{keyboard:true});
+  assert.equal(await menu.getByRole(width===390?'button':'menuitem',{name:/^(Edit|Delete…|Reply|Select)$/}).count(),0,'attention does not grant excerpt edit/react/reply/select authority');
+  const item=menu.getByRole(width===390?'button':'menuitem',{name:'Mark unread',exact:true});await item.focus();await shot(page,'excerpt-keyboard-menu');await item.press('Enter');await menu.waitFor({state:'hidden'});
+  await page.waitForFunction(id=>fixture.requests.some(r=>r.body?.do==='unread'&&r.body.ids[0]===id),id);
+ });
+ await check('readonly-view-inert','v32-readonly',async page=>{
+  await page.getByRole('button',{name:'orchard_dispatch. Who’s in this chat',exact:true}).click();await page.getByRole('button',{name:'What Dune saw',exact:true}).click();
+  const dialog=page.getByRole('dialog',{name:'What Dune saw',exact:true});await dialog.waitFor();await dialog.getByText('History turn 177',{exact:true}).waitFor();
+  assert.equal(await dialog.getByRole('button',{name:/Mark unread|Message actions|More actions/}).count(),0);assert.equal(await dialog.locator('[data-message-bubble][tabindex]').count(),0);
+  assert.equal((await unread(page)).length,0,'read-only shared history dispatches no attention action');
+ });
+ await check('automatic-history-focus-neutral','v32-attention',async page=>{
+  const field=page.locator('form[aria-label="Write a message"] textarea');await field.focus();
+  await page.getByRole('log',{name:'Messages',exact:true}).evaluate(e=>{e.parentElement.scrollTop=0;e.parentElement.dispatchEvent(new Event('scroll',{bubbles:true}));});
+  await page.waitForFunction(()=>document.querySelector('#skin').shadowRoot.querySelectorAll('[data-mid]').length>80);await settle(page);
+  assert(await field.evaluate(e=>e===e.getRootNode().activeElement),'automatic earlier() remains focus-neutral');
+ });
+
+ await check('unread-from-here','v32-attention',async page=>{
+  await page.evaluate(()=>v32Open('1'.padStart(32,'0'),'message',{conv:fixture.thread.id,dir:'in'}));
+  const row=page.locator('[data-mid="'+('1'.padStart(32,'0'))+'"]');await row.waitFor();await settle(page);
+  assert.equal(await page.locator('[data-mid]').count(),180,'exact old target reveals complete retained Main history');
+  const menu=await actions(page,'1'.padStart(32,'0'),{keyboard:true});await menu.getByRole(width===390?'button':'menuitem',{name:'Mark unread from here',exact:true}).click();await menu.waitFor({state:'hidden'});
+  await page.waitForFunction(()=>fixture.requests.some(r=>r.body?.do==='unread'&&r.body.ids.length===180));
+  assert.deepEqual((await unread(page)).at(-1).ids,Array.from({length:180},(_,i)=>(i+1).toString(16).padStart(32,'0')));
+  assert.equal(await page.evaluate(()=>fixture.thread.messages.at(-1).attention.rev),8,'from-here excludes sibling topic');
+ });
+ await check('landing-arrival','v32-landing',async page=>{
+  const id='f'.repeat(32);await page.evaluate(id=>v32Open(id,'message',{conv:fixture.thread.id,dir:'in'}),id);
+  const retry=page.getByRole('button',{name:'Try again',exact:true}),dismiss=page.getByRole('button',{name:'Dismiss',exact:true});await retry.waitFor();await dismiss.waitFor();
+  await retry.focus();await retry.press('Enter');await retry.waitFor();await settle(page);await shot(page,'landing-waiting');
+  assert.match(await retry.locator('..').innerText(),/message|available|ready/i);
+  await page.evaluate(id=>{fixture.thread.messages.splice(3,0,{...fixture.thread.messages[0],id,lid:id,body:'EXACT_NOTIFICATION_TARGET'});reloadFixture();},id);
+  const target=page.locator('[data-mid="'+id+'"]');await target.waitFor();await retry.waitFor({state:'hidden'});await settle(page);
+  assert.match(await target.innerText(),/EXACT_NOTIFICATION_TARGET/);assert(await target.evaluate(e=>{const r=e.getBoundingClientRect();return r.top>=0&&r.bottom<=innerHeight;}),'arrival scrolls exact old target into view');
+ });
+ await check('landing-cancel-supersede','v32-landing',async page=>{
+  const a='e'.repeat(32),b='d'.repeat(32);
+  await page.evaluate(id=>v32Open(id,'message',{conv:fixture.thread.id,dir:'in'}),a);await page.getByRole('button',{name:'Dismiss',exact:true}).waitFor();
+  await page.getByRole('button',{name:'Dismiss',exact:true}).focus();await page.keyboard.press('Enter');await page.getByRole('button',{name:'Try again',exact:true}).waitFor({state:'hidden'});
+  await page.evaluate(id=>{fixture.thread.messages.unshift({...fixture.thread.messages[0],id,lid:id,body:'Cancelled old target'});reloadFixture();},a);await settle(page);
+  assert.equal(await page.locator('[data-mid="'+a+'"]').count(),0,'dismissed late arrival does not reveal old history');
+  await page.evaluate(({a,b})=>{fixture.holdNextDM=true;void v32Open(a,'message',{conv:fixture.thread.id,dir:'in'});void v32Open(b,'message',{conv:fixture.thread.id,dir:'in'});},{a:'f'.repeat(32),b});
+  await page.waitForFunction(()=>!!window.finishV32DM);await page.evaluate(()=>finishV32DM());
+  await page.getByRole('button',{name:'Try again',exact:true}).waitFor();
+  await page.evaluate(id=>{fixture.thread.messages.unshift({...fixture.thread.messages[0],id,lid:id,body:'Superseded old target'});reloadFixture();},'f'.repeat(32));await settle(page);
+  assert.equal(await page.locator('[data-mid="'+('f'.repeat(32))+'"]').count(),0,'superseded arrival cannot hijack newer missing target');
+ });
+ for(const kind of ['default','named','named-android'])await check('direct-'+kind,'v32-direct-'+kind,async page=>{
+  await page.evaluate(()=>v32Open(fixture.deviceThread.id,'message'));const field=page.locator('form[aria-label="Write a message"] textarea');await field.waitFor();
+  await field.fill('Adjust the currently running direct request');await page.locator('form[aria-label="Write a message"] [data-part="send"]').click();
+  await page.waitForFunction(()=>fixture.requests.some(r=>r.path==='/api/request/followup'));
+  const call=await page.evaluate(()=>fixture.requests.find(r=>r.path==='/api/request/followup').body);
+  assert.equal(call.conv,'');assert.equal(call.attempt,3);assert.deepEqual(call.ref,{id:'1'.repeat(32),fingerprint:'eeeeeeee-eeeeeeee-eeeeeeee-eeeeeeee'});
+  assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>['/api/send','/api/dm/agent/ask'].includes(r.path)).length),0,'ordinary send steers without new execution');
+  if(kind.endsWith('android')){
+   await page.getByRole('button',{name:/Saved messages.*Review/}).first().waitFor();
+   const journal=await page.evaluate(()=>JSON.parse(localStorage.getItem('agentnet.android.send-journal.v1.default')));assert.equal(journal.length,1);assert.equal(journal[0].endpoint,'/api/request/followup');assert.equal(journal[0].request.attempt,3);assert.deepEqual(journal[0].request.ref,call.ref);
+   await page.getByRole('button',{name:/Saved messages.*Review/}).first().click();const dialog=page.getByRole('dialog',{name:'Saved messages',exact:true});await dialog.getByRole('button',{name:'Retry saved send',exact:true}).click();
+   await page.waitForFunction(()=>fixture.requests.filter(r=>r.path==='/api/request/followup').length===2);
+   const calls=await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/request/followup').map(r=>r.body));assert.deepEqual(calls[0],calls[1]);
+  }
+ });
+ await check('invited-steering-retained','composer-followup',async page=>{
+  await page.evaluate(()=>fixture.followupFailed=true);const field=page.locator('form[aria-label="Write a message"] textarea');await field.fill('@');await page.getByRole('option').filter({hasText:'Analyst'}).first().click();await field.pressSequentially(' Continue this exact invited request');
+  await page.locator('form[aria-label="Write a message"] [data-part="send"]').click();await page.waitForFunction(()=>fixture.requests.some(r=>r.path==='/api/request/followup'));
+  const call=await page.evaluate(()=>fixture.requests.find(r=>r.path==='/api/request/followup').body);assert.equal(call.conv,'c'.repeat(64));assert.equal(call.attempt,1);assert.deepEqual(call.ref,{id:'1'.repeat(32),fingerprint:'eeeeeeee-eeeeeeee-eeeeeeee-eeeeeeee'});
+ });
+ fs.writeFileSync(path.join(evidence,'v32-results-'+width+'.json'),JSON.stringify({width,findings,errors},null,2));
+ continue;
+}
+
 if(process.env.AGENTNET_PRESENTATION_REGRESSION==='1'){
  const {page,context}=await openCase('presentation');
  try{
@@ -1638,6 +1823,6 @@ if(process.env.AGENTNET_DELIVERY_STOP_REGRESSION==='1'){
    }
   }
   if(process.env.AGENTNET_RENDERED_RETAIN){const keep=path.resolve(process.env.AGENTNET_RENDERED_RETAIN);assert(keep.startsWith('/tmp/'),'retained synthetic evidence must stay in /tmp');fs.mkdirSync(keep,{recursive:true,mode:0o700});for(const shot of shots)fs.copyFileSync(shot,path.join(keep,path.basename(shot)));}
-  assert.deepEqual(errors,[]);console.log(JSON.stringify({ok:true,checks:process.env.AGENTNET_MENTION_SHORTCUT==='1'?'Physical Ctrl/Cmd+Digit2 reuses permitted DM/group/topic picker; layout/IME guards; caret/draft/hints/no-send; desktop/phone':process.env.AGENTNET_ATTENTION_LABELS==='1'?'Neutral aggregate attention wording; real consent retains OK/actions; unchanged counts, requests and authority; desktop/phone':process.env.AGENTNET_PRESENTATION_REGRESSION==='1'?'Comic short/long needs-human closure: exact agent/request, compact status, full projected result, immutable original, no action dispatch; desktop/mobile':process.env.AGENTNET_COMPOSER_FOLLOWUP_REGRESSION==='1'?'Comic natural tagged steering: no extra UI; running-only exact attempt; ordinary new request without a run; concrete ambiguity and existing Reply binding; strict completion race/retry; Android journal; desktop1280/mobile390':process.env.AGENTNET_LEGACY_LIST_REGRESSION==='1'?'Comic retained legacy list: exact identity/manager, add person, preserved leave, no agent catalog/control/grants; desktop/mobile':process.env.AGENTNET_AGENT_CHILD_REGRESSION==='1'?'Comic verified Codex author to Claude recipient, exact stopped-parent reason, no retry or replay, retained handling; desktop/mobile':process.env.AGENTNET_TOPIC_INVITE_REGRESSION==="1"?"Comic DM/group Main/named topic: Recent/Selected/Since, private files excluded, stable scope after rename/archive/arrival, broad grant disclosure; desktop/mobile":process.env.AGENTNET_REPORT_HISTORY_REGRESSION==="1"?"Comic exact blocker history: arbitrary follow-up success stays separate; confirmed/refused/new attempt and newest empty snapshots; desktop/mobile":completion?'Comic signed exact completion, queued secondary copies/details unchanged; inert/different-target/quote/unrelated negatives desktop1280/mobile390':process.env.AGENTNET_FOLLOWUP_REGRESSION==='1'?'Comic natural tagged composer replaces follow-up sheet/action: stage failure retains files, exact uncertain retry/newer draft, navigation abandons unused stages, deleted source refuses; desktop1280/mobile390':process.env.AGENTNET_REACTION_REGRESSION==='1'?'Comic: first-use/persisted frequency, success/failure/removal, human-count ordering and separate agent chips, desktop/mobile':process.env.AGENTNET_PHONE_REJOIN_REGRESSION==='1'?'Comic phone: active/pending rejoin, stale click/navigation, genuine return, exact key/agent/host identity and fresh-read error':process.env.AGENTNET_DIRECT_REVIEW_REGRESSION==='1'?'Direct review[]: held/running/stopping/complete; decision badge/list vs Working; exact request/Stop; desktop/mobile':process.env.AGENTNET_OKS_REGRESSION==='1'?'Comic: working excluded from OK count, exact topic/repeat focus, unsent draft/files preserved, full reason, future approve separate from held accept, exact Stop':process.env.AGENTNET_NOTIFY_REGRESSION==='1'?'Comic: one person grant across duplicate roots and separate conversation mute':(process.env.AGENTNET_TEST_SKINS||'comic')+': guest/member distinction, exact targets, retract/refresh, rights, desktop/mobile',shots}));
+  assert.deepEqual(errors,[]);console.log(JSON.stringify({ok:true,checks:process.env.AGENTNET_V32_RENDERED==='1'?'Bounded v32 rendered journey results are in v32-results-WIDTH.json; inspect each finding':process.env.AGENTNET_MENTION_SHORTCUT==='1'?'Physical Ctrl/Cmd+Digit2 reuses permitted DM/group/topic picker; layout/IME guards; caret/draft/hints/no-send; desktop/phone':process.env.AGENTNET_ATTENTION_LABELS==='1'?'Neutral aggregate attention wording; real consent retains OK/actions; unchanged counts, requests and authority; desktop/phone':process.env.AGENTNET_PRESENTATION_REGRESSION==='1'?'Comic short/long needs-human closure: exact agent/request, compact status, full projected result, immutable original, no action dispatch; desktop/mobile':process.env.AGENTNET_COMPOSER_FOLLOWUP_REGRESSION==='1'?'Comic natural tagged steering: no extra UI; running-only exact attempt; ordinary new request without a run; concrete ambiguity and existing Reply binding; strict completion race/retry; Android journal; desktop1280/mobile390':process.env.AGENTNET_LEGACY_LIST_REGRESSION==='1'?'Comic retained legacy list: exact identity/manager, add person, preserved leave, no agent catalog/control/grants; desktop/mobile':process.env.AGENTNET_AGENT_CHILD_REGRESSION==='1'?'Comic verified Codex author to Claude recipient, exact stopped-parent reason, no retry or replay, retained handling; desktop/mobile':process.env.AGENTNET_TOPIC_INVITE_REGRESSION==="1"?"Comic DM/group Main/named topic: Recent/Selected/Since, private files excluded, stable scope after rename/archive/arrival, broad grant disclosure; desktop/mobile":process.env.AGENTNET_REPORT_HISTORY_REGRESSION==="1"?"Comic exact blocker history: arbitrary follow-up success stays separate; confirmed/refused/new attempt and newest empty snapshots; desktop/mobile":completion?'Comic signed exact completion, queued secondary copies/details unchanged; inert/different-target/quote/unrelated negatives desktop1280/mobile390':process.env.AGENTNET_FOLLOWUP_REGRESSION==='1'?'Comic natural tagged composer replaces follow-up sheet/action: stage failure retains files, exact uncertain retry/newer draft, navigation abandons unused stages, deleted source refuses; desktop1280/mobile390':process.env.AGENTNET_REACTION_REGRESSION==='1'?'Comic: first-use/persisted frequency, success/failure/removal, human-count ordering and separate agent chips, desktop/mobile':process.env.AGENTNET_PHONE_REJOIN_REGRESSION==='1'?'Comic phone: active/pending rejoin, stale click/navigation, genuine return, exact key/agent/host identity and fresh-read error':process.env.AGENTNET_DIRECT_REVIEW_REGRESSION==='1'?'Direct review[]: held/running/stopping/complete; decision badge/list vs Working; exact request/Stop; desktop/mobile':process.env.AGENTNET_OKS_REGRESSION==='1'?'Comic: working excluded from OK count, exact topic/repeat focus, unsent draft/files preserved, full reason, future approve separate from held accept, exact Stop':process.env.AGENTNET_NOTIFY_REGRESSION==='1'?'Comic: one person grant across duplicate roots and separate conversation mute':(process.env.AGENTNET_TEST_SKINS||'comic')+': guest/member distinction, exact targets, retract/refresh, rights, desktop/mobile',shots}));
  }finally{await browser?.close();server.close();}
 })().catch(e=>{console.error(e.stack);process.exitCode=1;});

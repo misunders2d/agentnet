@@ -44,7 +44,8 @@ export function AllTopics({ open, onOpenChange, peer,conv, agent, current, flat 
   const [matched, setMatched] = useState(0);
   const [ownLoading, setLoading] = useState(false);
   const [ownFailed, setFailed] = useState("");
-  const items=flat?flat.topics.filter(t=>t.state===filter&&(t.title+" "+t.last).toLowerCase().includes(q.toLowerCase())):loadedItems;
+  const state = q ? "" : filter;
+  const items=flat?flat.topics.filter(t=>(q||t.state===filter)&&(t.title+" "+t.last).toLowerCase().includes(q.toLowerCase())):loadedItems;
   const loading=flat?.loading??ownLoading,failed=flat?.failed??ownFailed;
   const matchedCount=flat?items.length:matched;
   const [selected,setSelected]=useState<string[]>([]);
@@ -81,22 +82,22 @@ export function AllTopics({ open, onOpenChange, peer,conv, agent, current, flat 
   const shownFor = useRef("");
   useEffect(() => {
     if (!open || flat) return;
-    const ask = ++asked.current, key = filter + "\n" + q, same = shownFor.current === key;
+    const ask = ++asked.current, key = state + "\n" + q, same = shownFor.current === key;
     shownFor.current = key;
     if (!same) { setItems([]); setNext(""); } // never another filter's rows under this one
     setLoading(true);
-    store.api.topics({ conv,peer, state: filter, q, limit: same ? Math.min(Math.max(items.length, TOPICS.pageSize), TOPICS.pageMax) : TOPICS.pageSize }).then((p) => {
+    store.api.topics({ conv,peer, state, q, limit: same ? Math.min(Math.max(items.length, TOPICS.pageSize), TOPICS.pageMax) : TOPICS.pageSize }).then((p) => {
       if (ask !== asked.current) return;
       setItems((p.topics || []).map(topicOf)); setNext(p.next || ""); setMatched(p.matched); setFailed("");
     }, (e) => { if (ask === asked.current) setFailed(errorText(e)); }).finally(() => { if (ask === asked.current) setLoading(false); });
-  }, [open, conv,peer, filter, q, seq,!!flat]);
+  }, [open, conv,peer, state, q, seq,!!flat]);
   // Emptied once it has slid away, not while it does (it would flash "No topics").
   const reset = () => { setItems([]); setNext(""); setQuery(""); setQ(""); shownFor.current = ""; };
 
   const more = () => {
     const ask = ++asked.current;
     setLoading(true);
-    store.api.topics({ conv,peer, state: filter, q, before: next, limit: TOPICS.pageSize }).then((p) => {
+    store.api.topics({ conv,peer, state, q, before: next, limit: TOPICS.pageSize }).then((p) => {
       if (ask !== asked.current) return;
       setItems((had) => [...had, ...(p.topics || []).map(topicOf).filter((t) => !had.some((h) => h.id === t.id))]); setNext(p.next || ""); setMatched(p.matched);
     }, (e) => { if (ask === asked.current) setFailed(errorText(e)); }).finally(() => { if (ask === asked.current) setLoading(false); });
@@ -148,7 +149,7 @@ export function AllTopics({ open, onOpenChange, peer,conv, agent, current, flat 
           </div>}
           <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-3 pt-2 lg:px-3" aria-busy={loading}>
             <p role="status" className={q && !loading && !failed && items.length ? "px-3 pb-1 text-[13px] font-semibold text-text-2" : "sr-only"}>
-              {q && !loading && !failed ? (matchedCount === 1 ? "1 " + f.label.toLowerCase() + " topic matches" : matchedCount + " " + f.label.toLowerCase() + " topics match") : ""}
+              {q && !loading && !failed ? (matchedCount === 1 ? "1 topic matches across all statuses" : matchedCount + " topics match across all statuses") : ""}
             </p>
             {failed && (
               <div role="alert" className="mx-2 mt-2 rounded-2xl bg-danger-bg p-3 text-[14px] text-danger stroke">Topics didn’t load: {failed}</div>
@@ -156,11 +157,11 @@ export function AllTopics({ open, onOpenChange, peer,conv, agent, current, flat 
             {!failed && items.length === 0 && !loading && (
               <div className="px-4 py-10 text-center">
                 <p className="font-display text-[18px] font-bold">{q ? "Nothing here matches “" + q + "”" : f.none}</p>
-                <p className="mt-1 text-[14px] text-text-2">{q ? "Try Done or Archived, or other words." : filter === "archived" ? "A topic is archived after a quiet week with nothing waiting." : ""}</p>
+                <p className="mt-1 text-[14px] text-text-2">{q ? "Try other words. Search includes Active, Done and Archived." : filter === "archived" ? "A topic is archived after a quiet week with nothing waiting." : ""}</p>
               </div>
             )}
             {items.length > 0 && (
-              <ul aria-label={f.label + " topics"} className="flex flex-col gap-0.5">
+              <ul aria-label={q ? "Matching topics" : f.label + " topics"} className="flex flex-col gap-0.5">
                 {items.map((t) => (
                   <li key={t.id} className="flex items-center">
                     <input type="checkbox" aria-label={"Select "+(t.title||"Untitled topic")} checked={selected.includes(t.id)} disabled={undo||busy||!!flat&&!flat.canSelect(t.id)} onChange={()=>toggle(t.id)} className="m-3 size-5 shrink-0"/>

@@ -102,3 +102,98 @@ func TestBrowserTopicSyncWireMatchesGo(t *testing.T) {
 	}
 	t.Log(string(out))
 }
+
+func TestBrowserReadSyncAttention(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node unavailable")
+	}
+	out, err := exec.Command(node, "testdata/readsync_attention_check.mjs").CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	t.Log(string(out))
+}
+
+func TestBrowserReadSyncWireMatchesGo(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node unavailable")
+	}
+	ref := protocol.ReadRef{Conv: strings.Repeat("b", 64), Fingerprint: "aaaaaaaa-bbbbbbbb-cccccccc-dddddddd", LID: protocol.NewID()}
+	mark := protocol.AttentionMark{ReadRef: ref, AttentionGeneration: protocol.AttentionGeneration{Rev: 1, Writer: ref.Fingerprint}, State: "unread"}
+	base := protocol.ReadSync{V: 2, Person: protocol.NewID(), Roster: strings.Repeat("a", 64), Marks: []protocol.AttentionMark{mark}}
+	var cases []map[string]any
+	add := func(raw string) {
+		_, e := protocol.ParseReadSync([]byte(raw))
+		cases = append(cases, map[string]any{"raw": raw, "valid": e == nil})
+	}
+	add(marshal(t, base))
+	for _, rev := range []int64{0, 1, protocol.MaxAttentionRevision, protocol.MaxAttentionRevision + 1} {
+		r := base
+		r.Marks = append([]protocol.AttentionMark(nil), base.Marks...)
+		r.Marks[0].Rev = rev
+		add(marshal(t, r))
+	}
+	for _, state := range []string{"read", "unread", "", "other"} {
+		r := base
+		r.Marks = append([]protocol.AttentionMark(nil), base.Marks...)
+		r.Marks[0].State = state
+		add(marshal(t, r))
+	}
+	raw := marshal(t, base)
+	for _, value := range []string{
+		strings.Replace(raw, `"rev":1`, `"rev":1.5`, 1), strings.Replace(raw, `"rev":1`, `"rev":null`, 1),
+		strings.Replace(raw, `"writer":"`+ref.Fingerprint+`"`, `"writer":"bad"`, 1),
+		strings.Replace(raw, `"v":2`, `"v":3`, 1), strings.Replace(raw, `"v":2`, `"v":2,"unknown":true`, 1),
+		strings.Replace(raw, `"state":"unread"`, `"state":null`, 1),
+		raw + strings.Repeat(" ", 32769-len(raw)),
+	} {
+		add(value)
+	}
+	r := base
+	r.Refs = []protocol.ReadRef{ref}
+	add(marshal(t, r)) // duplicate across arrays
+	r = base
+	r.Marks = append(r.Marks, mark)
+	add(marshal(t, r))
+	r = base
+	r.Marks = nil
+	add(marshal(t, r))
+	r = base
+	r.V = 1
+	add(marshal(t, r))
+	r = base
+	r.V = 1
+	r.Marks = nil
+	r.Refs = []protocol.ReadRef{ref}
+	legacy := marshal(t, r)
+	add(legacy)
+	add(strings.TrimSuffix(legacy, "}") + `,"marks":null}`)
+	add(strings.TrimSuffix(legacy, "}") + `,"marks":[]}`)
+	r = base
+	r.Marks = nil
+	r.Refs = []protocol.ReadRef{ref}
+	add(marshal(t, r))
+	r = base
+	r.Refs = []protocol.ReadRef{{Conv: "", Fingerprint: ref.Fingerprint, LID: protocol.NewID()}}
+	add(marshal(t, r))
+	for len(r.Marks)+len(r.Refs) < 64 {
+		m := mark
+		m.LID = protocol.NewID()
+		r.Marks = append(r.Marks, m)
+	}
+	add(marshal(t, r))
+	m := mark
+	m.LID = protocol.NewID()
+	r.Marks = append(r.Marks, m)
+	add(marshal(t, r))
+	cmd := exec.Command(node, "--input-type=module", "-e", `import * as wire from './static/wire.mjs';let input='';for await(const s of process.stdin)input+=s;for(const [i,c] of JSON.parse(input).entries()){let valid=true;try{wire.parseReadSync(c.raw)}catch{valid=false}if(valid!==c.valid)throw Error('read sync Go/browser differs at '+i+' '+c.raw)}console.log('read sync Go/browser parser vectors',JSON.parse(input).length)`)
+	data, _ := json.Marshal(cases)
+	cmd.Stdin = strings.NewReader(string(data))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	t.Log(string(out))
+}

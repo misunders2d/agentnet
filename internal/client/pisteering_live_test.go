@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +29,14 @@ func TestOMPActualOwnedSteering(t *testing.T) {
 }
 func actualOwnedSteering(t *testing.T, name, optIn string) {
 	t.Helper()
+	if os.Getenv("AGENTNET_LIVE_STEERING_DIRECT") == "1" {
+		for _, mode := range []string{"default", "named"} {
+			if !t.Run("direct/"+mode, func(t *testing.T) { actualOwnedDirectSteering(t, name, optIn, mode == "named") }) {
+				return
+			}
+		}
+		return
+	}
 	binary := os.Getenv(optIn)
 	if binary == "" {
 		t.Skip("opt-in " + optIn + "=/absolute/verified/" + name)
@@ -171,4 +180,241 @@ func actualOwnedSteering(t *testing.T, name, optIn string) {
 		t.Fatal("original reran", attempts, err)
 	}
 	t.Logf("actual %s consumed strict correction in same owned worker process, preserved original-only nonce, exactly one correlated answer; attempts=1", name)
+}
+
+// Direct mode uses real sender/recipient daemons for verified progress and
+// carrier admission. Only the original worker is invoked explicitly; no
+// correction exists before native readiness.
+func actualOwnedDirectSteering(t *testing.T, name, optIn string, named bool) {
+	t.Helper()
+	binary := os.Getenv(optIn)
+	if binary == "" {
+		t.Skip("opt-in " + optIn + "=/absolute/verified/" + name)
+	}
+	if !filepath.IsAbs(binary) {
+		t.Fatal("absolute verified native executable required")
+	}
+	original := Harnesses[name]
+	selected := original
+	selected.bin = binary
+	Harnesses[name] = selected
+	t.Cleanup(func() { Harnesses[name] = original })
+	w := newWorld(t, "")
+	a, sender := w.bob, w.alice
+	if err := a.Approve(sender.Address); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	ready := filepath.Join(dir, "owned-ready")
+	nonce := protocol.NewID()[:8]
+	command := fmt.Sprintf("printf READY > '%s'; sleep 12", ready)
+	if name == "omp" {
+		command = fmt.Sprintf("touch '%s'; sleep 12", ready)
+	}
+	prompt := fmt.Sprintf("Harmless owned steering qualification. Use your existing bash tool exactly once to run this exact command: %s . It writes only this disposable readiness file and sleeps once. The local human preauthorizes only this exact command in this working directory. If native permissions require upfront approval, request that exact approval before execution. Never retry a refusal. Do not read other files, use network, delegate, change settings, or run other commands. After it finishes answer exactly ORIGINAL_%s . Process any explicit correction before answering.", command, nonce)
+	responder := Responder{Harness: name, Dir: dir, Timeout: 130 * time.Second}
+	var target *envelope.Target
+	var stamp *ExecutorStamp
+	if named {
+		local, err := a.CreateLocalAgent("owned direct qualification", responder)
+		if err != nil {
+			t.Fatal(err)
+		}
+		target = &envelope.Target{Address: a.Address, Fingerprint: a.Self().Fingerprint(), AgentID: local.ID}
+		stamp, err = a.ResolveExecutorIn(a.store.db, local.ID, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Start communication before the manually claimed worker. HumanOnly keeps
+	// this fixture's recipient daemon from independently scheduling a second job;
+	// it does not alter the selected native child's settings or permissions.
+	stopSender := runAgent(t, sender)
+	defer stopSender()
+	daemonCtx, stopRecipient := context.WithCancel(t.Context())
+	recipientDone := make(chan struct{})
+	go func() { defer close(recipientDone); _ = a.Run(daemonCtx, RunOptions{HumanOnly: true}) }()
+	defer func() { stopRecipient(); <-recipientDone }()
+	eventually(t, "recipient status daemon ready", func() bool { return a.statusLive.Load() })
+	root := sealTo(t, sender, a, envelope.Inner{Kind: envelope.KindQuestion, Body: prompt, Target: target})
+	inner, err := envelope.Open(root, a.id, a.Address, sender.Self())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = sender.store.addOutbox(root, inner, "", nil, boundOutgoing{fingerprint: a.Self().Fingerprint()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = sender.store.db.Exec(`UPDATE outbox SET state=? WHERE id=?`, protocol.StateCustody, root.ID); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "real signed direct root delivery", func() bool {
+		var n int
+		return a.store.db.QueryRow(`SELECT count(*) FROM inbox WHERE id=?`, root.ID).Scan(&n) == nil && n == 1
+	})
+	var exact bool
+	if err = a.store.db.QueryRow(`SELECT conv IS NULL AND pid IS NULL AND receiver_route IS NULL AND verified_by=? AND replica=0 FROM inbox WHERE id=?`, sender.Self().Fingerprint(), root.ID).Scan(&exact); err != nil || !exact {
+		t.Fatal("direct signed NULL conversation/PID admission missing", err)
+	}
+	if _, err = a.store.db.Exec(`UPDATE inbox SET state=?,attempts=1,last_attempt_at=unixepoch() WHERE id=?`, stateRunning, root.ID); err != nil {
+		t.Fatal(err)
+	}
+	a.noteStatus(root.ID) // same durable status trigger as the normal scheduler
+	parent := job{ID: root.ID, From: sender.Address, Key: sender.Self().Fingerprint(), Kind: envelope.KindQuestion, Body: prompt, Target: target, Executor: stamp, nativeAttempt: 1}
+	if target != nil {
+		parent.AgentID = target.AgentID
+	}
+	// Only an explicit private owner-only diagnostic receives native failure text.
+	if private := os.Getenv("AGENTNET_LIVE_STEERING_FAILURE"); private != "" {
+		if !filepath.IsAbs(private) {
+			t.Fatal("absolute private failure artifact required")
+		}
+		t.Cleanup(func() {
+			if !t.Failed() {
+				return
+			}
+			var state, detail string
+			var attempts int
+			if a.store.db.QueryRow(`SELECT state,coalesce(detail,''),attempts FROM inbox WHERE id=?`, root.ID).Scan(&state, &detail, &attempts) != nil {
+				return
+			}
+			if len(detail) > 4096 {
+				detail = detail[:4096]
+			}
+			data, _ := json.Marshal(map[string]any{"harness": name, "named": named, "state": state, "attempts": attempts, "detail": detail})
+			f, e := os.OpenFile(private, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+			if e == nil {
+				_, _ = f.Write(data)
+				_ = f.Close()
+			}
+		})
+	}
+	eventually(t, "recipient capability advertised", func() bool { return a.requireAgentIdentity(t.Context(), sender.Self()) == nil })
+	senderRunning := func() bool {
+		h, e := sender.followupOriginal(sender.store.db, "", envelope.Ref{ID: root.ID, Fingerprint: parent.Key})
+		if e != nil {
+			return false
+		}
+		v, e := sender.followupExecution(h.h, "")
+		return e == nil && v != nil && v.State == stateRunning && v.Attempt == 1 && !v.Stale
+	}
+	eventually(t, "sender verified current running attempt", senderRunning)
+	ctx, cancel := context.WithTimeout(t.Context(), 150*time.Second)
+	done := make(chan struct{})
+	go func() { defer close(done); a.runJob(ctx, parent, &responder, nil) }()
+	defer func() { cancel(); <-done }()
+	ticker := time.NewTicker(30 * time.Millisecond)
+	defer ticker.Stop()
+	approved := ""
+	checkApproval := func() {
+		n := a.nativeRequestFor(parent.ID)
+		if n == nil {
+			return
+		}
+		if approved == n.Token {
+			return
+		}
+		if name != "codex" || approved != "" || n.Request != parent.ID || n.Key != parent.Key || n.Attempt != 1 || n.Harness != name || n.AgentID != parent.AgentID || n.Thread == "" || n.Turn == "" || n.Item == "" || n.Unsupported != "" || n.CancelRun {
+			t.Fatal("unexpected native precondition; no response or retry")
+		}
+		wrapped := "/usr/bin/bash -lc " + strconv.Quote(command) + "\nNative execution environment: local"
+		if err := nativeFixtureApprovalError(n, command, wrapped, dir); err != nil {
+			_ = writeNativeSteeringRefusalDiagnostic(os.Getenv("AGENTNET_LIVE_CODEX_STEERING_REFUSAL"), n, command, wrapped)
+			t.Fatal(err)
+		}
+		if _, e := os.Stat(ready); !os.IsNotExist(e) {
+			t.Fatal("readiness approval arrived after execution; no response")
+		}
+		if err := a.RespondNativeRequest(parent.ID, parent.Key, 1, nativeResponseText(n.Token, "allow"), protocol.NewID()); err != nil {
+			t.Fatal("exact native readiness approval refused; no retry", err)
+		}
+		approved = n.Token
+	}
+	wait := func(what string, check func() bool) {
+		t.Helper()
+		for !check() {
+			checkApproval()
+			select {
+			case <-done:
+				t.Fatalf("native job ended before %s; no retry", what)
+			case <-ctx.Done():
+				t.Fatalf("%s timed out; no retry", what)
+			case <-ticker.C:
+			}
+		}
+	}
+	wait("owned readiness file", func() bool {
+		if name == "omp" {
+			info, e := os.Stat(ready)
+			return e == nil && info.Mode().IsRegular()
+		}
+		b, e := os.ReadFile(ready)
+		return e == nil && string(b) == "READY"
+	})
+	wait("sender verified current running attempt", senderRunning)
+	var before, after int
+	if err = a.store.db.QueryRow(`SELECT run_pgid FROM inbox WHERE id=?`, root.ID).Scan(&before); err != nil || before == 0 {
+		t.Fatal("native process proof missing", err)
+	}
+	t.Logf("direct readiness harness=%s named=%t root=%s pgid_before=%d sender_current_attempt=1", name, named, root.ID, before)
+	correction := protocol.NewID()
+	body := "Correction to this same still-running request: replace the final answer with CORRECTED_ followed by the reverse of the original nonce. Do not run the command again; preserve original context."
+	if _, err = sender.QueueRequestFollowup(ctx, RequestFollowup{Conv: "", Ref: envelope.Ref{ID: root.ID, Fingerprint: parent.Key}, Attempt: 1, ID: correction, Body: body}); err != nil {
+		t.Fatal("real sender correction rejected", err)
+	}
+	var raw []byte
+	if err = sender.store.db.QueryRow(`SELECT envelope FROM outbox WHERE id=?`, correction).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	var carrier envelope.Envelope
+	if json.Unmarshal(raw, &carrier) != nil {
+		t.Fatal("correction carrier malformed")
+	}
+	correctionInner, err := envelope.Open(carrier, a.id, a.Address, sender.Self())
+	if err != nil || carrier.ID != correction || correctionInner.Conv != "" || correctionInner.Followup == nil || correctionInner.Followup.Attempt != 1 || correctionInner.Followup.Ref.ID != root.ID || correctionInner.Followup.Ref.Fingerprint != parent.Key || !sameFollowupTarget(correctionInner.Target, target) {
+		t.Fatal("exact signed sender correction carrier changed", err)
+	}
+	wait("native consumption", func() bool { s, _ := a.store.jobState(correction); return s == stateSteered })
+	if err = a.store.db.QueryRow(`SELECT run_pgid FROM inbox WHERE id=?`, root.ID).Scan(&after); err != nil || after != before {
+		t.Fatal("original native process changed", err)
+	}
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatal("owned request did not finish")
+	}
+	state, err := a.store.jobState(root.ID)
+	if err != nil || state != stateAnswered {
+		t.Fatal("original request did not answer", state, err)
+	}
+	chars := []byte(nonce)
+	for i, j := 0, len(chars)-1; i < j; i, j = i+1, j-1 {
+		chars[i], chars[j] = chars[j], chars[i]
+	}
+	expected := "CORRECTED_" + string(chars)
+	var count, attempts int
+	var answerID, result string
+	if err = a.store.db.QueryRow(`SELECT count(DISTINCT coalesce(lid,id)),coalesce(max(id),''),coalesce(max(body),'') FROM outbox WHERE reply_to=? AND json_extract(envelope,'$.kind')=?`, root.ID, envelope.KindAnswer).Scan(&count, &answerID, &result); err != nil || count != 1 || strings.TrimSpace(result) != expected {
+		t.Fatalf("expected exactly one exact corrected answer; count=%d matched=%t err=%v", count, strings.TrimSpace(result) == expected, err)
+	}
+	if err = a.store.db.QueryRow(`SELECT attempts FROM inbox WHERE id=?`, root.ID).Scan(&attempts); err != nil || attempts != 1 {
+		t.Fatal("original repeated", attempts, err)
+	}
+	// Real daemon delivery, signature verification and receiver admission. Never
+	// manually receive the answer a second time to mask a missing verified row.
+	for {
+		var author, agentID, body string
+		e := sender.store.db.QueryRow(`SELECT verified_by,coalesce(agent_id,''),body FROM inbox WHERE id=? AND kind=? AND state!='quarantined'`, answerID, envelope.KindAnswer).Scan(&author, &agentID, &body)
+		if e == nil && author == a.Self().Fingerprint() && agentID == parent.AgentID && strings.TrimSpace(body) == expected {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("sender did not admit signed corrected answer")
+		case <-ticker.C:
+		}
+	}
+	if _, found, e := a.claimNativeFollowup(parent); e != nil || found {
+		t.Fatal("finished correction replayed", found, e)
+	}
+	t.Logf("direct harness=%s named=%t root=%s correction=%s answer=%s pgid_before=%d pgid_after=%d attempts=1 signed_sender_admission=true exact_nonce_reversal=true no_replay=true executor=%s", name, named, root.ID, correction, answerID, before, after, parent.AgentID)
 }

@@ -1,5 +1,5 @@
 import type { T } from "../api";
-import { scopeMatches } from "../model";
+import { scopeMatches, threadAgentID } from "../model";
 import { isRequest, isThreadMsg, whoWrote, type AnyMsg, type Ctx } from "./Message.model";
 
 function followupRef(m: AnyMsg, ctx: Ctx) {
@@ -75,4 +75,34 @@ export function currentComposerFollowup(dm: T.DMThread | undefined, pid: string,
   const bound = composerReplyFollowup(dm,pid,topic,ctx,replyTo);
   if (bound) return bound;
   throw Error("This agent has " + rows.length + " distinct running requests in this chat/topic, and this message has no exact reply binding. Nothing was sent; your draft is kept.");
+}
+
+// Direct threads already contain only this selected topic. Their immutable
+// request IDs replace conversation/PID bindings; the current pin still owns
+// the destination, including the default agent's absent Target.
+export function currentDirectComposerFollowup(thread: T.Thread | undefined, ctx: Ctx, replyTo?: string): ComposerFollowup | undefined {
+  if (!thread) return;
+  const selected = threadAgentID(thread) || "", rows = new Map<string, ComposerFollowup>();
+  for (const message of thread.messages || []) {
+    if (message.exec?.state !== "running" || message.dir !== "out" || !isRequest(message)) continue;
+    const ref = followupRef({...message, deleted:false}, ctx), attempt = message.exec.attempt;
+    if (!ref) continue;
+    if (message.deleted || thread.key.pending || !thread.key.pinned || message.to !== thread.peer ||
+        message.exec.host !== thread.peer || message.exec.stale || !Number.isSafeInteger(attempt) || !attempt || attempt < 1 ||
+        (message.target?.agent_id || "") !== selected ||
+        message.target && (message.target.address !== thread.peer || message.target.fingerprint !== thread.key.pinned))
+      throw Error("Running work is reported, but its current attempt or identity cannot be verified. Nothing was sent; your draft is kept.");
+    const bound = {ref, kind:message.kind, attempt, binding:JSON.stringify([thread.id,thread.peer,thread.key.pinned,selected,attempt])};
+    if (rows.has(ref.id) && JSON.stringify(rows.get(ref.id)) !== JSON.stringify(bound))
+      throw Error("Running work is reported, but its current attempt or identity cannot be verified. Nothing was sent; your draft is kept.");
+    rows.set(ref.id,bound);
+  }
+  if (rows.size < 2) return rows.values().next().value;
+  const seen = new Set<string>();
+  for (let next = replyTo; next && !seen.has(next);) {
+    seen.add(next);
+    if (rows.has(next)) return rows.get(next);
+    next = thread.messages?.find(m => m.id === next)?.reply_to;
+  }
+  throw Error("This agent has multiple running requests in this topic, and this message has no exact reply binding. Nothing was sent; your draft is kept.");
 }

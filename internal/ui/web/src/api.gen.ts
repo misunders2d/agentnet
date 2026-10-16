@@ -2,6 +2,7 @@
 // Regenerate: go test ./internal/ui -run TestTypeScriptViewTypes -update
 
 export interface Action {
+  attention?: Record<string, AttentionGeneration>;
   held?: HeldNoticeRef[];
   attempt?: number;
   send_id?: string;
@@ -148,6 +149,11 @@ export interface AssistantSetupView {
   note?: string;
 }
 
+export interface AttentionGeneration {
+  rev: number;
+  writer: string;
+}
+
 export interface Author {
   label: string;
   about: string;
@@ -251,6 +257,7 @@ export interface DMMessage {
   delivery_uncertain?: boolean;
   at: string;
   unread?: boolean;
+  attention?: AttentionGeneration;
   replica?: boolean;
   pid?: string;
   attachments?: FileView[];
@@ -719,6 +726,7 @@ export interface Message {
   send_stopped?: boolean;
   delivery_uncertain?: boolean;
   unread?: boolean;
+  attention?: AttentionGeneration;
   files?: File[];
   author: Author;
   state_text?: string;

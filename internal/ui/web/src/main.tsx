@@ -38,7 +38,7 @@ export async function mount(root: HTMLElement, host: Host): Promise<void> {
   host.onOpen((target, kind, context) => {
     if (kind === 'topic' || kind === 'thread') return store.openLinkTarget(target,kind,context);
     if (kind === "conversation" && /^[0-9a-f]{64}$/.test(target)) void store.open({ kind: "dm", id: target });
-    else if (kind === "message" && target) void store.openMessage(target, context);
+    else if (kind === "message" && target) return store.openMessage(target, context);
     else if (kind === "review") store.showTab("oks");
     else if (target) void store.openChannel(target); // a browser notification's channel
     else { store.close(); store.showTab("chats"); } // news in more than one conversation
@@ -61,6 +61,7 @@ export async function mount(root: HTMLElement, host: Host): Promise<void> {
       return true;
     }
     const state = store.get();
+    if (state.messageLanding) { store.dismissMessageLanding(); return true; }
     if (state.invite) { store.closeInvite(); return true; }
     if (state.panel) { store.setPanel(false); return true; }
     if (state.open || state.pending) { store.close(); return true; }

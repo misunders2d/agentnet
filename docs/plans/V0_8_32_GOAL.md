@@ -13,6 +13,12 @@ Drive **AgentNet v0.8.32 to verified publication**, starting from published v0.8
 
 **Deferred:** MEL-620 damaged skin-cache recovery and MEL-637 scheduled messages are follow-on candidates, not automatic additions. Exclude Projects/MEL-527/MEL-490 and associated v0.9.0 work, iOS/xtool exploration, unrelated backlog and unrelated inbox conversations. Do not expand the batch without the owner's direction. Preserve v31 guest-owned agents, natural tagged steering, live invited context, native permission inheritance, signatures, exact current identity/rosters, recipient consent and history boundaries.
 
+**Added by Sergey October 16 during implementation — topic search:** a non-empty topic search must search Active, Done and Archived topics together within the current chat/person's existing topic scope, irrespective of the selected status tab. Results retain their actual status. Clearing search restores status-filtered browsing. Apply equivalent behavior to supported skins and preserve existing pagination, scope/visibility, selection and navigation; reuse the existing all-state topic query rather than adding an API.
+
+**Non-blocking follow-up requested October 16 — MEL-648:** unread dots/badges on native app icons across supported systems. Capture and inspect existing hooks without delaying v32; broader implementation and native OS acceptance remain separately scheduled if not already cheap. Recording it is not implementation or a blocking v32 completion criterion.
+
+**Non-blocking follow-up updated by Sergey October16 — MEL-615:** inline video previews/playback in chats, similar to Slack/Telegram. Record in Linear Backlog; retain external open/download fallback. This updates the existing video issue and must not delay v32 or become a current release gate.
+
 ## Orchestration and independent review
 
 - **Root orchestrates; workers code.** Root owns scope, the shared checklist, design/code challenges, integration, evidence verification, records and publication. Delegate production coding and meaningful regressions. Do not quietly become the main implementer when delegation is inconvenient.

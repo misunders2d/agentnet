@@ -22,6 +22,13 @@ var errAgentIdentityUnsupported = fmt.Errorf("%w: named agent capability unavail
 // conversation's primary (a group's grp1, a DM's hgp1); delivery adds rm1
 // to it (roomCopy, ROOM_V1 §2.5).
 func agentRequirement(in envelope.Inner) string {
+	if in.Sub == envelope.SubReadSync {
+		r, err := protocol.ParseReadSync([]byte(in.Body))
+		if err == nil && len(r.Marks) > 0 {
+			return protocol.CapReadSyncV2
+		}
+		return protocol.CapReadSync
+	}
 	if in.Followup != nil && in.Conv == "" {
 		if in.Followup.Attempt > 0 {
 			return protocol.CapRequestSteer
@@ -172,7 +179,7 @@ func (a *Agent) requireParticipationCaps(ctx context.Context, key identity.Publi
 		}
 		return nil
 	}
-	if required != protocol.CapGuestAgent && required != protocol.CapConversationAudience && required != protocol.CapTopicContext && required != protocol.CapModelSync && required != protocol.CapModelSyncV2 && required != protocol.CapTopicStateSync && required != protocol.CapTopicOrganization && required != protocol.CapRequestFollowup && required != protocol.CapRequestSteer && required != protocol.CapTopicParticipation && required != protocol.CapOwnSyncV3 && required != protocol.CapOwnSyncV2 && required != protocol.CapContinuation && required != protocol.CapSendGroup && required != protocol.CapReadSync && required != protocol.CapGroupInvitationManage && required != protocol.CapGroupInvitationControl && required != protocol.CapGroupHumanParticipation && required != protocol.CapRootSync && required != protocol.CapHumanParticipation && required != protocol.CapAgentIdentity && required != protocol.CapExternalParticipation && required != protocol.CapGroup && required != protocol.CapHeadless && required != protocol.CapReplyReceiver && required != protocol.CapProgress && required != protocol.CapAgentReaction && required != protocol.CapConvClear && required != protocol.CapRoom && required != protocol.CapProactiveAgent && required != protocol.CapMentionReaction && required != protocol.CapAgentOrganization {
+	if required != protocol.CapGuestAgent && required != protocol.CapConversationAudience && required != protocol.CapTopicContext && required != protocol.CapModelSync && required != protocol.CapModelSyncV2 && required != protocol.CapTopicStateSync && required != protocol.CapTopicOrganization && required != protocol.CapRequestFollowup && required != protocol.CapRequestSteer && required != protocol.CapTopicParticipation && required != protocol.CapOwnSyncV3 && required != protocol.CapOwnSyncV2 && required != protocol.CapContinuation && required != protocol.CapSendGroup && required != protocol.CapReadSync && required != protocol.CapReadSyncV2 && required != protocol.CapGroupInvitationManage && required != protocol.CapGroupInvitationControl && required != protocol.CapGroupHumanParticipation && required != protocol.CapRootSync && required != protocol.CapHumanParticipation && required != protocol.CapAgentIdentity && required != protocol.CapExternalParticipation && required != protocol.CapGroup && required != protocol.CapHeadless && required != protocol.CapReplyReceiver && required != protocol.CapProgress && required != protocol.CapAgentReaction && required != protocol.CapConvClear && required != protocol.CapRoom && required != protocol.CapProactiveAgent && required != protocol.CapMentionReaction && required != protocol.CapAgentOrganization {
 		return errors.New("unknown queued capability requirement")
 	}
 	label, device, err := protocol.SplitAddress(key.Address)
@@ -378,7 +385,7 @@ func (e *NeedsUpdateError) Error() string {
 		message = "cannot synchronize direct-agent history or resolve own requests yet; update all its active AgentNet sessions"
 	case protocol.CapOwnSyncV2:
 		message = "cannot synchronize newer own-device history and invitation views yet; update all its active AgentNet sessions"
-	case protocol.CapReadSync:
+	case protocol.CapReadSync, protocol.CapReadSyncV2:
 		message = "cannot synchronize read state yet; update all its active AgentNet sessions"
 	case protocol.CapTopicStateSync:
 		message = "cannot synchronize topic Done, Reopen and Archive marks yet; update all its active AgentNet sessions"

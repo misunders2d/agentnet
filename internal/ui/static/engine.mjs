@@ -147,6 +147,9 @@ export async function openIDB(name = "agentnet") {
     // retractions held (Engine.retractions keeps them between such writes).
     retractionMark: () => retractionMark,
     get: (s, k) => db.get(s, k),
+    async getMany(s, keys) {
+      const tx=db.transaction(s),values=await Promise.all(keys.map(key=>tx.store.get(key)));await tx.done;return values;
+    },
     all: (s) => db.getAll(s),
     // after returns up to n values whose keys follow k, in key order ("" is the start).
     after: (s, k, n) => db.getAll(s, k === "" ? null : IDBKeyRange.lowerBound(k, true), n),
@@ -193,7 +196,7 @@ export async function openIDB(name = "agentnet") {
             // its index range holds exactly those, in the same key order.
             // Two bulk reads in this transaction (keys, then values, in that
             // one order) instead of a request per row.
-            const store = tx.objectStore(c.s), conv = typeof c.scope.conv === "string", source = conv ? store.index("conv") : store, range = conv ? IDBKeyRange.only(c.scope.conv) : undefined;
+            const store = tx.objectStore(c.s), index=typeof c.scope.conv==="string"?"conv":typeof c.scope.thread_peer==="string"?"thread_peer":"", source=index?store.index(index):store, range=index?IDBKeyRange.only(c.scope[index]):undefined;
             const [keys, values] = await Promise.all([source.getAllKeys(range), source.getAll(range)]), rows = [];
             values.forEach((v, i) => { if (scopeRow(v, c.scope)) rows.push(authorityJSON(c.s, keys[i], v)); });
             if ("[" + rows.join(",") + "]" !== JSON.stringify(c.rows)) throw new StoreConflict();
@@ -238,6 +241,7 @@ export function memoryStore() {
   return {
     retractionMark: () => retractionMark,
     get: async (s, k) => (data[s].has(k) ? structuredClone(data[s].get(k)) : undefined),
+    getMany: async (s, keys) => keys.map(key=>data[s].has(key)?structuredClone(data[s].get(key)):undefined),
     all: async (s) => [...data[s].values()].map((v) => structuredClone(v)),
     after: async (s, k, n) => [...data[s].keys()].filter((x) => x > k).sort().slice(0, n).map((x) => structuredClone(data[s].get(x))),
     keysAfter: async (s,k,n) => [...data[s].keys()].filter(x=>x>k).sort().slice(0,n),
@@ -303,7 +307,7 @@ const authorityValue = (store, row) => structuredClone(authorityFields(store, ro
 // authorityJSON is one captured {k, v} entry as JSON. The write-time check
 // only reads its rows, so it compares them without copying each one first.
 const authorityJSON = (store, k, row) => JSON.stringify({ k, v: authorityFields(store, row) });
-const scopeRow = (row, scope) => !row.forwarded && ["conv", "pid", "sub", "lid"].every((k) => scope[k] === undefined || row[k] === scope[k]) && (!scope.organization || !!row.topic_event || scope.ids.includes(row.id) || scope.ids.includes(row.lid) || [wire.SubRevision,wire.SubRetraction].includes(row.sub) && scope.ids.includes(row.ref?.id));
+const scopeRow = (row, scope) => !row.forwarded && ["conv", "pid", "sub", "lid", "thread_peer"].every((k) => scope[k] === undefined || row[k] === scope[k]) && (!scope.organization || !!row.topic_event || scope.ids.includes(row.id) || scope.ids.includes(row.lid) || [wire.SubRevision,wire.SubRetraction].includes(row.sub) && scope.ids.includes(row.ref?.id));
 
 const put = (st, s, k, v) => st.write([{ s, k, v }]);
 
@@ -1921,7 +1925,7 @@ export class Engine {
   }
   syncReadMarks() {
     this.readSyncAgain=true;
-    if(!this.readSyncRun)this.readSyncRun=(async()=>{do{this.readSyncAgain=false;await this.syncReadPages();}while(this.readSyncAgain);})().finally(()=>{this.readSyncRun=null;});
+    if(!this.readSyncRun)this.readSyncRun=(async()=>{let conflicts=0;do{this.readSyncAgain=false;try{await this.syncReadPages();conflicts=0;}catch(e){if(e instanceof StoreConflict&&conflicts++<3)this.readSyncAgain=true;else throw e;}}while(this.readSyncAgain);})().finally(()=>{this.readSyncRun=null;});
     return this.readSyncRun;
   }
   async syncReadPages() { return this.withHistoryProduction(()=>this.syncReadPagesUnpaced()); }
@@ -1940,7 +1944,7 @@ export class Engine {
         }
         recovery.push({s:"kv",k:recoveryKey,v:{done:true}});await this.store.write(recovery,recoveryChecks);
       }
-      const marks=(await this.store.all("kv")).filter(m=>m?.owner===own.person&&m.ref),saved=await this.store.outboxSub(wire.SubReadSync),ops=[],checks=[];let more=false;
+      const marks=await this.store.prefix("kv","read-mark/"+own.person+"/"),saved=await this.store.outboxSub(wire.SubReadSync),ops=[],checks=[];let more=false;
       // A single O(mark count + outbox references) pass, never one scan per mark.
       // Quarantine retains the same ciphertext for recovery, not another batch.
       const present=new Set();for(const o of saved)if(o.sub===wire.SubReadSync&&o.read_owner===own.person&&["queued","waiting","custody","delivered","quarantined"].includes(o.state))for(const key of o.read_refs||[])present.add(o.recipient_fp+"|"+key);
@@ -1955,6 +1959,7 @@ export class Engine {
         ops.push({s:"outbox",k:id,v:{id,to:dev.address,recipient_fp:dev.fingerprint,required_cap:wire.CapReadSync,sub:wire.SubReadSync,body,envelope,at,state:"queued",aside:true,read_owner:own.person,read_refs:refs.map(ref=>this.readMarkKey(own.person,ref))}});
         if(refs.length===64)more=true;if(ops.length===historyPage)break;
       }
+      const attention=await this.attentionSyncOps(own,checks,saved);ops.push(...attention.ops);more ||= attention.more;
       if(!ops.length)return;
       await this.store.write(ops,checks);this.changed();if(this.connected)this.queueOutbox();
       if(!more && ops.length<historyPage)return;
@@ -1965,7 +1970,7 @@ export class Engine {
     const checks=[],r=wire.parseReadSync(rec.body);
     await this.readSyncAuthority(r,this.address,this.fp,rec.to,rec.recipient_fp,checks);
     const pin=await this.store.get("pins",rec.to),features=await this.features(),profile=await this.profile(rec.to);
-    if(!features.includes("env2") || !features.includes("caps") || !await wire.profileSupports(profile,rec.to,(await this.pubOf(pin)).sign_key,wire.CapReadSync))throw Object.assign(Error("This device needs to update AgentNet to synchronize read state."),{code:"read_sync_unsupported"});
+    if(!features.includes("env2") || !features.includes("caps") || !await wire.profileSupports(profile,rec.to,(await this.pubOf(pin)).sign_key,r.v===2?wire.CapReadSyncV2:wire.CapReadSync))throw Object.assign(Error("This device needs to update AgentNet to synchronize read state."),{code:"read_sync_unsupported"});
     // Recheck current admission after the asynchronous profile lookup.
     await this.readSyncAuthority(r,this.address,this.fp,rec.to,rec.recipient_fp);
     return {why:"",pin};
@@ -1975,15 +1980,81 @@ export class Engine {
     if(!this.me || this.me.person!==r.person)throw new Hold("invalid","Read sync belongs to another person.");
     await this.refreshPerson(this.me, admission ? {...admission,roster:r.roster} : null);
     try{await this.readSyncAuthority(r,env.from,pin.fingerprint,this.address,this.fp,checks);}catch(e){throw new Hold("invalid",e.message);}
+    const byRef=new Map();
+    if(r.refs.length)for(const m of await this.store.all("inbox")){
+      const ref=this.readRef(m);if(!ref||m.read)continue;const k=this.readMarkKey(r.person,ref),rows=byRef.get(k)||[];rows.push(m);byRef.set(k,rows);
+    }
     for(const ref of r.refs) {
       const k=this.readMarkKey(r.person,ref);
       if(!await this.groupRead(checks,"kv",k))ops.push({s:"kv",k,v:{owner:r.person,ref}});
-      for(const m of await this.store.all("inbox")) {
-        const actual=this.readRef(m);if(!actual || this.readMarkKey(r.person,actual)!==k || m.read)continue;
+      for(const m of byRef.get(k)||[]) {
         const current=await this.groupRead(checks,"inbox",m.id);if(current)ops.push({s:"inbox",k:m.id,v:{...current,read:true}});
       }
     }
+    for(const mark of r.marks||[]) {
+      const {conv,fingerprint,lid,state,rev,writer}=mark,ref={conv,fingerprint,lid},k=this.attentionKey(r.person,ref),old=await this.groupRead(checks,"kv",k),order=this.topicTitleOrder(mark,old);
+      if(order===0&&state!==old.state)throw new Hold("conflicting_duplicate","Attention has a conflicting generation.");
+      if(order>0)ops.push({s:"kv",k,v:{key:k,owner:r.person,ref,state,rev,writer}});
+      const ck=this.attentionCopyKey(r.person,pin.fingerprint,ref),copy=await this.groupRead(checks,"kv",ck);
+      if(this.topicTitleOrder(mark,copy)>=0)ops.push({s:"kv",k:ck,v:{key:ck,state,rev,writer,seen:true}});
+    }
     ops.checks=checks;ops.readSync=true;ops.syncCarrier=true;return ops;
+  }
+  attentionKey(owner,ref) { return "attention/"+owner+"/"+ref.conv+"/"+ref.fingerprint+"/"+ref.lid; }
+  attentionCopyKey(owner,recipient,ref) { return "attention-copy/"+owner+"/"+recipient+"/"+ref.conv+"/"+ref.fingerprint+"/"+ref.lid; }
+  attentionRef(m,here=false) {
+    if(m?.sub==="excerpt"){try{const h=wire.parseHistory(m.body);m={...h,id:m.id,conv:m.conv,claimed_key:h.from_key,sub:""};}catch{return null;}}
+    if(!m||!["message","question","task","answer","result"].includes(m.kind)||m.local||m.control||m.ref||m.aside||m.topic_event||m.sub&&m.sub!=="excerpt"||isNotice(m))return null;
+    const ref={conv:m.conv||"",fingerprint:m.claimed_key||m.author_fp||m.key||(here?this.fp:m.fp||this.fp),lid:m.conv?(m.lid||m.id):m.id};
+    return wire.validFingerprint(ref.fingerprint)&&wire.validID(ref.lid)?ref:null;
+  }
+  async attentionSnapshot(view) {
+    if(view.attention)return view;
+    const own=await this.store.get("kv","person");view.attentionOwner=own;
+    const selected=view.attentionTarget?projectDeviceThreads(view,{address:this.address,fingerprint:this.fp,erased:row=>this.erasedRow(row)}).find(g=>g.some(m=>m.id===view.attentionTarget)):null;
+    const refs=selected?selected.map(m=>this.attentionRef(m)):[...view.inbox.map(m=>this.attentionRef(m)),...view.outbox.map(m=>this.attentionRef(m,true))];
+    const keys=own?[...new Set(refs.filter(Boolean).map(ref=>this.attentionKey(own.person,ref)))]:[];
+    // One indexed KV transaction for this admitted snapshot, including absent
+    // registers. Unknown/unrelated synced attention is never materialized here.
+    const marks=keys.length?await this.store.getMany("kv",keys):[];
+    view.attention=new Map(marks.filter(Boolean).map(m=>[m.key,m]));
+    view.attentionRetractions=new Map();
+    for(const c of [...view.inbox,...view.outbox])if(c.control&&c.sub===wire.SubRetraction&&c.ref){const key=(c.conv||"")+"/"+c.ref.fingerprint+"/"+c.ref.id,list=view.attentionRetractions.get(key)||[];list.push(c);view.attentionRetractions.set(key,list);}
+    return view;
+  }
+  attentionFields(m,view,out=!!m.to||!!m.own) {
+    const ref=this.attentionRef(m);if(!ref||m.deleted||this.erasedRow(m))return {unread:false};
+    const controls=view.attentionRetractions?.get(ref.conv+"/"+ref.fingerprint+"/"+ref.lid)||[],person=view.fpPersons?.get(ref.fingerprint);
+    if(this.retractedBy({...m,fp:ref.fingerprint},controls,person))return {unread:false};
+    const mark=view.attention.get(this.attentionKey(view.attentionOwner?.person,ref));
+    if(mark)return mark.state==="unread"?{unread:true,attention:{rev:mark.rev,writer:mark.writer}}:{unread:false};
+    return {unread:!out&&!m.read};
+  }
+  async attentionSyncOps(own,checks,saved) {
+    const latest=await this.store.prefix("kv","attention/"+own.person+"/"),ops=[],checked=new Set(checks.filter(c=>c.s==="kv").map(c=>c.k));let more=false;
+    if(!latest.length)return {ops,more};
+    await this.groupRead(checks,"kv","person");
+    for(const dev of own.devices){
+      if(dev.address===this.address||!own.human_keys.includes(dev.fingerprint)||!await this.recipientAvailable(dev,checks)||!await historyWindow(this.store,dev))continue;
+      // Coalesce later generations behind one immutable pending carrier;
+      // ordinary V1 refs are produced independently by syncReadPages.
+      if(saved.some(row=>row.read_owner===own.person&&row.to===dev.address&&row.recipient_fp===dev.fingerprint&&row.required_cap===wire.CapReadSyncV2&&["queued","waiting"].includes(row.state)))continue;
+      const marks=[],copies=new Map((await this.store.prefix("kv","attention-copy/"+own.person+"/"+dev.fingerprint+"/")).map(c=>[c.key,c])),outbox=new Map(saved.map(row=>[row.id,row]));
+      for(const fact of latest){
+        const current=fact;if(!checked.has(fact.key)){checks.push({s:"kv",k:fact.key,v:fact});checked.add(fact.key);}
+        const ck=this.attentionCopyKey(own.person,dev.fingerprint,fact.ref),copy=copies.get(ck),row=copy?.id&&outbox.get(copy.id);
+        checks.push({s:"kv",k:ck,v:copy});
+        if(copy&&this.topicTitleOrder(current,copy)===0&&current.state===copy.state&&(copy.seen||row&&["queued","waiting","custody","delivered","quarantined"].includes(row.state)))continue;
+        marks.push({...current.ref,state:current.state,rev:current.rev,writer:current.writer});if(marks.length===64){more=true;break;}
+      }
+      if(!marks.length)continue;
+      const body=JSON.stringify({v:2,person:own.person,roster:own.hash,refs:[],marks}),r=wire.parseReadSync(body);
+      try{await this.readSyncAuthority(r,this.address,this.fp,dev.address,dev.fingerprint,checks);}catch{continue;}
+      const id=wire.newID(),at=this.now(),envelope=await wire.seal({v:wire.Version2,id,from:this.address,to:dev.address,ts:Math.floor(at/1000),kind:"message",sub:wire.SubReadSync,replica:true,body},this.keys,await wire.parsePublic(JSON.parse(dev.json)));
+      ops.push({s:"outbox",k:id,v:{id,to:dev.address,recipient_fp:dev.fingerprint,required_cap:wire.CapReadSyncV2,sub:wire.SubReadSync,body,envelope,at,state:"queued",aside:true,read_owner:own.person}});
+      for(const mark of marks){const k=this.attentionCopyKey(own.person,dev.fingerprint,mark);ops.push({s:"kv",k,v:{key:k,rev:mark.rev,writer:mark.writer,state:mark.state,id}});}
+    }
+    return {ops,more};
   }
   modelReportKey(hostKey,agentID) { return "model-report/"+hostKey+"/"+agentID; }
   async modelSyncAuthority(r,from,fromFP,to,toFP,checks=[]) {
@@ -4107,7 +4178,9 @@ export class Engine {
   // received and sent, joined by replies as the core does (peerThreads),
   // each oldest first.
   async v1Threads(view = null) {
+    if(view?.attentionThreads)return view.attentionThreads;
     if(!view){const [inbox,outbox]=await Promise.all([this.store.all("inbox"),this.store.all("outbox")]);view={inbox,outbox};}
+    await this.attentionSnapshot(view);
     const groups=projectDeviceThreads(view,{address:this.address,fingerprint:this.fp,erased:row=>this.erasedRow(row)});
     // The same admitted executor reports drive both cards and topic pending state.
     // Index once: unrelated messages and long reply chains do not multiply scans.
@@ -4117,6 +4190,7 @@ export class Engine {
       let list=statuses.get(key);if(!list)statuses.set(key,list=[]);list.push(r);
     }
     for(const g of groups){
+      for(const m of g)Object.assign(m,{personal_attention:this.attentionFields(m,view,m.dir==="out")});
       const answered=new Set(g.filter(r=>r.dir==="in" && (r.kind==="answer"||r.kind==="result") && r.status!==wire.StatusProgress).map(r=>r.reply_to));
       for(const m of g) if(m.dir==="out" && topicRequest(m.kind))
         m.exec=this.execOn((statuses.get(m.id+"/"+m.author_fp)||[]).filter(r=>r.from===m.peer),m.peer,answered.has(m.id));
@@ -4155,7 +4229,7 @@ export class Engine {
     // as its author.
     const agent = g.map((m) => (m.kind === "question" || m.kind === "task" ? m.target?.agent_id : m.agent_id) || "").filter(Boolean).at(-1);
     const t = { id: first.id, peer: first.peer, title: line(first), last: line(last), last_at: iso(last.at), count: g.length, ...(agent ? { agent_id: agent } : {}),
-      review: g.filter((m) => m.dir === "in" && m.state === "held").length, unread: g.filter((m) => m.dir === "in" && !m.read).length, running: 0,
+      review: g.filter((m) => m.dir === "in" && m.state === "held").length, unread: g.filter((m) => m.personal_attention?.unread).length, running: 0,
       waiting: pendingTopicRows(facts).some(i=>!facts[i].in),
       key_changed: !!(pin && pin.pending), notices: g.filter((m) => m.dir === "in" && notice(m) && !m.resolved).length, notice_only: g.every(notice),
       state: v.state, pending: v.pending, quiet_since: iso(v.quiet_since * 1000), ...(v.done_by ? { done_by: v.done_by } : {}),
@@ -4267,9 +4341,10 @@ export class Engine {
   }
   async chatTopicHead(conv,topic){const msgs=await this.convMessages(conv,await this.store.all("inbox"),await this.store.all("outbox")),assigned=chatTopicAssignments(msgs);return sortChatTurns(msgs.filter(m=>assigned.get(m.lid)===topic&&!m.sub&&!m.topic_event)).at(-1)?.lid||"";}
   async chatTopics(conv,msgs=null) { return (await this.chatTopicSummaries(conv,msgs)).topics; }
-  async chatTopicSummaries(conv,msgs=null) {
-    msgs ||= await this.convMessages(conv,await this.store.all("inbox"),await this.store.all("outbox"));
-    const controls=(await this.store.all("inbox")).filter(c=>c.control&&c.conv===conv&&c.sub===wire.SubStatus);
+  async chatTopicSummaries(conv,msgs=null,read=null) {
+    read ||= await this.readView(conv);
+    msgs ||= await this.convMessages(conv,read.inbox,read.outbox,read);
+    const controls=read.inbox.filter(c=>c.control&&c.conv===conv&&c.sub===wire.SubStatus);
     // Sent records must carry their actual author, just as native ConvMessage.
     msgs=msgs.map(m=>{
       const fp=m.to?this.fp:m.fp||(m.history?m.claimed_key:"");
@@ -4279,13 +4354,14 @@ export class Engine {
     const locals=await this.topicLocals(),now=Math.floor(this.now()/1000),assigned=chatTopicAssignments(msgs);
     const topics=summarizeChatTopics(conv,msgs,locals,now),scope=await mainTopicScope(conv),local=locals.get(scope+"/"+MAIN_TOPIC_KEY)||{};
     const main_topic=summarizeChatTopicView(conv,msgs,new Map([[conv+"/",local]]),now,true)[0];
-    for(const t of [...topics,...(main_topic?[main_topic]:[])])t.unread=msgs.filter(m=>!m.to&&!m.own&&!m.read&&!m.sub&&!m.topic_event&&(assigned.get(m.lid)||"")===t.id).length;
+    for(const t of [...topics,...(main_topic?[main_topic]:[])])t.unread=msgs.filter(m=>this.attentionFields(m,read).unread&&(assigned.get(m.lid)||"")===t.id).length;
     return {topics,...(main_topic?{main_topic}:{})};
   }
 
-  async decorateChatTopics(view) {
-    const msgs=await this.convMessages(view.id,await this.store.all("inbox"),await this.store.all("outbox")),shown=new Set(view.messages.map(m=>m.lid)),visible=msgs.filter(m=>shown.has(m.lid)),assigned=chatTopicAssignments(visible);
-    Object.assign(view,await this.chatTopicSummaries(view.id,visible));
+  async decorateChatTopics(view,read=null) {
+    read ||= await this.readView(view.id);
+    const msgs=await this.convMessages(view.id,read.inbox,read.outbox,read),shown=new Set(view.messages.map(m=>m.lid)),visible=msgs.filter(m=>shown.has(m.lid)),assigned=chatTopicAssignments(visible);
+    Object.assign(view,await this.chatTopicSummaries(view.id,visible,read));
     for(const m of view.messages){m.topic=assigned.get(m.lid)||"";const raw=visible.find(r=>r.lid===m.lid);if(raw?.topic_event)m.topic_event=raw.topic_event;if(wire.topicOrganization(raw?.topic_event))m.body=await this.topicOrganizationNotice(view.id,raw.topic,view.topics.find(t=>t.id===raw.topic)?.title);}
     return view;
   }
@@ -4545,7 +4621,7 @@ export class Engine {
       view.can=view.deleted||event||m.excerpt_pid||frozen||role!=="member"?[]:["react",...(targetPerson===this.me.person?["edit","delete"]:[])];
       const answered=messages.some(r=>r.pid===m.pid&&(r.reply_to===m.lid||shownReply(r.reply_to)===m.id)&&["answer","result"].includes(r.kind));
       const exec=m.target&&["question","task"].includes(m.kind)?this.execOn(ctls.filter(x=>x.sub===wire.SubStatus&&x.ref?.id===m.lid&&x.ref.fingerprint===fp&&x.from===m.target.address),m.target.address,answered):null;
-      return {id:m.id,lid:m.lid,dir:out?"out":"in",from:here?this.address:m.from,kind:m.kind,status:m.status||"",actions:await this.proposalActions(m),proposal:await this.proposalProvenance(m,read),body:event?"":m.body,event,...(ev&&ev.type?{event_type:ev.type,event_by:ev.by}:{}),pid:m.pid||"",...(m.human?.author_pid?{agent_author_pid:m.human.author_pid}:{}),...(m.target?{target:m.target,to:m.target.address}:{}),...(m.agent_id?{agent_id:m.agent_id}:{}),...(m.excerpt_pid?{excerpt_pid:m.excerpt_pid}:{}),reply_to:shownReply(m.reply_to),quote:shownReply(m.quote),sent_at:sentAt(m),delivery:m.delivery||"",at:iso(m.at),send_group:m.send_group_conflict?"":m.send_group||"",send_group_author:here?this.fp:m.fp||m.claimed_key||"",origin:m.origin||"",verified_agent:verifiedAgent(m,infos.find(i=>i.pid===(m.human&&wire.agentAuthor(m.human)?m.human.author_pid:m.pid)),here?this.address:m.from,fp),job_detail:this.needsYouText(m,privateReports),state:m.state||"",...this.cancellationView(m),state_text:event?"":here?this.outStateText(m,m.state==="not_delivered"&&m.lagging?words(m.lagging):"the group"):"",detail:m.detail||"",unread:!out&&!m.read,replica:!!m.replica,synced_from:m.history?m.synced_from:"",claimed_key:m.claimed_key||"",via:m.own&&!m.history?m.from:"",copies:here?await this.shownCopies(m.copies):undefined,group_ref:!frozen&&role==="member"&&m.kind==="message"&&!m.sub&&!m.pid&&!m.excerpt_pid?{lid:m.lid,author:m.claimed_key||m.fp||this.fp,hash:await wire.groupHistoryContentHash(conv,m)}:undefined,...view,...(exec?{exec,stop:await this.stopOf(m,fp,exec),...(this.continuationOf(m,fp,exec)?{continuation:this.continuationOf(m,fp,exec),actions:["continue"]}:{})}:{}),attachments:await Promise.all((m.attachments||[]).map(async(a,i)=>({index:i,name:wire.safeName(a.name),size:a.size,...(here?await this.sentState(a):this.fileState(a))}))) };
+      return {id:m.id,lid:m.lid,dir:out?"out":"in",from:here?this.address:m.from,kind:m.kind,status:m.status||"",actions:await this.proposalActions(m),proposal:await this.proposalProvenance(m,read),body:event?"":m.body,event,...(ev&&ev.type?{event_type:ev.type,event_by:ev.by}:{}),pid:m.pid||"",...(m.human?.author_pid?{agent_author_pid:m.human.author_pid}:{}),...(m.target?{target:m.target,to:m.target.address}:{}),...(m.agent_id?{agent_id:m.agent_id}:{}),...(m.excerpt_pid?{excerpt_pid:m.excerpt_pid}:{}),reply_to:shownReply(m.reply_to),quote:shownReply(m.quote),sent_at:sentAt(m),delivery:m.delivery||"",at:iso(m.at),send_group:m.send_group_conflict?"":m.send_group||"",send_group_author:here?this.fp:m.fp||m.claimed_key||"",origin:m.origin||"",verified_agent:verifiedAgent(m,infos.find(i=>i.pid===(m.human&&wire.agentAuthor(m.human)?m.human.author_pid:m.pid)),here?this.address:m.from,fp),job_detail:this.needsYouText(m,privateReports),state:m.state||"",...this.cancellationView(m),state_text:event?"":here?this.outStateText(m,m.state==="not_delivered"&&m.lagging?words(m.lagging):"the group"):"",detail:m.detail||"",...this.attentionFields(m,read,out),replica:!!m.replica,synced_from:m.history?m.synced_from:"",claimed_key:m.claimed_key||"",via:m.own&&!m.history?m.from:"",copies:here?await this.shownCopies(m.copies):undefined,group_ref:!frozen&&role==="member"&&m.kind==="message"&&!m.sub&&!m.pid&&!m.excerpt_pid?{lid:m.lid,author:m.claimed_key||m.fp||this.fp,hash:await wire.groupHistoryContentHash(conv,m)}:undefined,...view,...(exec?{exec,stop:await this.stopOf(m,fp,exec),...(this.continuationOf(m,fp,exec)?{continuation:this.continuationOf(m,fp,exec),actions:["continue"]}:{})}:{}),attachments:await Promise.all((m.attachments||[]).map(async(a,i)=>({index:i,name:wire.safeName(a.name),size:a.size,...(here?await this.sentState(a):this.fileState(a))}))) };
     }))};
   }
 
@@ -7203,6 +7279,7 @@ export class Engine {
 
   start() {
     if (this.running || this.revoked || !this.joined) return;
+    this.session = wire.newID();
     this.running = true;
     this.loop();
   }
@@ -7292,7 +7369,9 @@ export class Engine {
   async streamOnce() {
     this.resetTyping(false, false);
     this.featureList = null;
-    this.session = wire.newID();
+    // Direct stream fixtures may enter without start(); real reconnects keep
+    // the logical session allocated for this explicit browser run.
+    this.session ||= wire.newID();
     const path = "/v1/stream?ad=" + (await wire.sessionAd(this.keys, this.address, this.session)) + "&receipts=" + ((await this.store.get("kv","receipt-cursor")) || 0) + "&teams=2&legacy_teams=3";
     const ctrl = new AbortController();
     this.abort = ctrl;
@@ -7427,7 +7506,7 @@ export class Engine {
       if (teams) teams.connected(f.includes("teams1"));
       // This device reads conversations and the attention hint (it never
       // alerts from the stream: its service worker shows the relay's pushes).
-      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapConversationAudience, wire.CapEnv2, "notify1", wire.CapPerson, wire.CapControl, wire.CapHeadless, wire.CapDrive, wire.CapAgentIdentity, wire.CapGroupHumanParticipation, wire.CapGroup, wire.CapSendGroup, wire.CapRootSync, wire.CapGroupInvitationManage, wire.CapReadSync, wire.CapOwnSyncV2, wire.CapOwnSyncV3, wire.CapHistoryArchive, wire.CapGuestAgent, wire.CapTopicParticipation, wire.CapRoom, wire.CapProactiveAgent, wire.CapMentionReaction, wire.CapAgentOrganization, wire.CapRequestSteer, wire.CapTopicOrganization, wire.CapModelSyncV2, wire.CapTopicStateSync, ...(f.includes("signals1") ? [wire.CapTyping] : [])]))); // rcv1 already implied by rm1; independent amr1/aorg1 retain the 28-cap producer ceiling and 32-cap reader bound
+      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapConversationAudience, wire.CapEnv2, "notify1", wire.CapPerson, wire.CapControl, wire.CapHeadless, wire.CapDrive, wire.CapAgentIdentity, wire.CapGroupHumanParticipation, wire.CapGroup, wire.CapSendGroup, wire.CapRootSync, wire.CapGroupInvitationManage, wire.CapReadSyncV2, wire.CapOwnSyncV2, wire.CapOwnSyncV3, wire.CapHistoryArchive, wire.CapGuestAgent, wire.CapTopicParticipation, wire.CapRoom, wire.CapProactiveAgent, wire.CapMentionReaction, wire.CapAgentOrganization, wire.CapRequestSteer, wire.CapTopicOrganization, wire.CapModelSyncV2, wire.CapTopicStateSync, ...(f.includes("signals1") ? [wire.CapTyping] : [])]))); // rcv1 already implied by rm1; independent amr1/aorg1 retain the 28-cap producer ceiling and 32-cap reader bound
       await this.publishPerson().catch(() => {});
       // These existing, coalesced recovery jobs can wait for old proofs or
       // network replies. They must not delay the current user's durable send.
@@ -7690,6 +7769,8 @@ export class Engine {
       groups.set(r.lid || r.id, g);
     }
     const sent = [...groups.values()].map((g) => {
+      // Canonical local IDs must agree for scoped and complete snapshots.
+      g.sort((a,b)=>a.id<b.id?-1:a.id>b.id?1:0);
       const skipped = skippedOf(g), least = sentLeast(g, skipped);
       const copies=[...g.map(r=>({id:r.id,to:r.to,state:r.state,detail:r.detail,...this.cancellationView(r),own:!!r.own||!!this.me?.devices?.some(d=>d.address===r.to),person:r.person||personOf(r.to),...(this.peerSuspended(r.to)?{suspended:true}:{})})),
         ...skipped.map(s=>({id:s.id,to:s.to,state:s.state,detail:s.detail,own:!!s.own||!!this.me?.devices?.some(d=>d.address===s.to),person:s.person||personOf(s.to)}))]; return { ...g[0], key:this.fp, send_group:g.some(r=>r.send_group_conflict)||new Set(g.map(r=>r.send_group).filter(Boolean)).size>1?"":g.find(r=>r.send_group)?.send_group||"", state: least.state, delivery:deliveryOf(copies),detail: least.detail, lagging: least.to, copies, delivery_cancelled:g.some(r=>r.delivery_cancelled)&&!g.some(r=>["custody","delivered"].includes(r.state)), handover_started:g.some(r=>r.delivery_cancelled&&r.state==="failed"&&r.handover_started!==false) ? true : least.handover_started };
@@ -9079,8 +9160,8 @@ export class Engine {
 
   // One presentation operation shares its saved rows. Actions and admission
   // never use this view: their current reads and transaction checks stay intact.
-  readView(conv = null) {
-    return readChatView(this.store,{me:this.me,fingerprint:this.fp},conv);
+  async readView(conv = null) {
+    return this.attentionSnapshot(await readChatView(this.store,{me:this.me,fingerprint:this.fp},conv));
   }
 
   async overview(listArchived = true) {
@@ -9128,7 +9209,7 @@ export class Engine {
         title: msgs[0] ? line(msgs[0]) : "", last: msgs.length ? wire.topicOrganization(msgs.at(-1).topic_event)?await this.topicOrganizationNotice(c.id,msgs.at(-1).topic):line(msgs.at(-1)) : "",
         ...(msgs.length ? {last_id:previewMessageID(msgs,msgs.at(-1))} : {}),
         last_at: iso(msgs.length ? msgs[msgs.length - 1].at : c.created * 1000),
-        unread: msgs.filter((m) => m.fp && !m.own && !m.read).length, held: msgs.filter((m) => this.heldOpen(m, msgs)).length,
+        unread: [...presented.values()].filter(m=>m.unread&&!m.deleted).length, held: msgs.filter((m) => this.heldOpen(m, msgs)).length,
         waiting: msgs.filter((m) => !!m.to && (m.delivery || m.state) === "waiting").length,
         guests: participations.filter((p) => p.state === "active").length, decide: 0, // who is present to help; decisions counted below
         ...(last ? { last_event: last } : {}) });
@@ -9143,7 +9224,7 @@ export class Engine {
       const latestView = view.messages.at(-1);
       const latestText = !latestView ? "" : latestView.deleted ? "Message deleted" : firstLine(latestView.edited ? latestView.text || "" : latestView.event || latestView.body);
       const previewText=wire.topicOrganization(visible.at(-1)?.topic_event)?await this.topicOrganizationNotice(conv,visible.at(-1).topic):latestText;
-      dms.push({id:conv,kind:"group",title:packet.state.title,peer:{label:packet.state.title,address:"",state:""},members:view.members,role:view.role,frozen:view.frozen,created:iso(packet.root.created*1000),mine:packet.root.creator.address===this.address,count:visible.length,last:previewText,...(latestView?{last_id:previewMessageID(view.messages,latestView)}:{}),last_at:iso(visible.length?visible.at(-1).at:packet.root.created*1000),unread:visible.filter(m=>m.fp&&!m.own&&!m.read).length,held:0,waiting:visible.filter(m=>!!m.to&&["waiting","queued"].includes(m.delivery||m.state)).length,
+      dms.push({id:conv,kind:"group",title:packet.state.title,peer:{label:packet.state.title,address:"",state:""},members:view.members,role:view.role,frozen:view.frozen,created:iso(packet.root.created*1000),mine:packet.root.creator.address===this.address,count:visible.length,last:previewText,...(latestView?{last_id:previewMessageID(view.messages,latestView)}:{}),last_at:iso(visible.length?visible.at(-1).at:packet.root.created*1000),unread:view.messages.filter(m=>m.unread&&!m.deleted).length,held:0,waiting:visible.filter(m=>!!m.to&&["waiting","queued"].includes(m.delivery||m.state)).length,
         guests:parts.filter(p=>p.state==="active").length,decide:0,...(last?{last_event:last}:{})});
     }
     // decide: a conversation's requests this person decides here (live.go
@@ -9266,7 +9347,7 @@ export class Engine {
           ...(m.agent_id ? { agent_id: m.agent_id } : {}), ...(m.target ? { target: m.target } : {}),
           send_group:m.send_group_conflict?"":m.send_group||"", send_group_author:here?this.fp:m.fp||m.claimed_key||"", origin: m.origin || "", verified_agent: verifiedAgent(m, parts.get(m.human&&wire.agentAuthor(m.human)?m.human.author_pid:m.pid), here ? this.address : m.from, here ? this.fp : m.fp),
           job_detail: this.needsYouText(m, privateReports),
-          state, detail: m.detail || "", ...this.cancellationView(m), at: iso(m.at), unread: !out && !m.read, replica: !!m.replica,
+          state, detail: m.detail || "", ...this.cancellationView(m), at: iso(m.at), ...this.attentionFields(m,read,out), replica: !!m.replica,
           pid: m.pid || "", to: m.target ? m.target.address : "", event, via: m.own && !m.history ? m.from : "", copies: here ? await this.shownCopies(m.copies) : undefined,
           ...(m.excerpt_pid ? { excerpt_pid: m.excerpt_pid, claimed_key: m.claimed_key } : {}),
           synced_from: m.history ? m.synced_from : "",
@@ -11504,8 +11585,8 @@ export class Engine {
   }
 
   // thread is the device conversation holding message id.
-  async thread(id) {
-    const view=await readThreadRows(this.store,id);
+  async thread(id, view=null) {
+    view ||= await readThreadRows(this.store,id);view.attentionTarget ||= id;
     const g = (await this.v1Threads(view)).find((x) => x.some((m) => m.id === id));
     if (!g) throw new Error("No message with that id.");
     const peer = g[0].peer;
@@ -11537,7 +11618,7 @@ export class Engine {
         return { id: m.id, dir: m.dir, from: m.stored_in ? m.from : this.address, to:m.device_history?.recipient||(m.stored_in?this.address:m.to), kind: m.kind, body: m.body,
           ...(m.history?{history:true,synced_from:m.synced_from,from_key:m.author_fp}:{}),
           ...(m.agent_id ? { agent_id: m.agent_id } : {}), ...(m.target ? { target: m.target } : {}),
-          reply_to: m.reply_to || "",quote:m.quote||"",sent_at:sentAt(m), at: iso(m.at), state: m.state, status: m.status || "", detail: m.detail || "", ...this.cancellationView(m), unread: inbound && !m.read,
+          reply_to: m.reply_to || "",quote:m.quote||"",sent_at:sentAt(m), at: iso(m.at), state: m.state, status: m.status || "", detail: m.detail || "", ...this.cancellationView(m), ...m.personal_attention,
           files: await Promise.all((m.attachments || []).map(async (a) => ({ name: wire.safeName(a.name), size: a.size, ...(m.stored_in ? this.fileState(a) : await this.sentState(a)) }))),
           ...ctlView(m), ...await execView(m), proposal:await this.proposalProvenance(m),
           actions: m.status === wire.StatusProposal ? await this.proposalActions(m) : inbound && m.state === "held" && !(pin && pin.pending) ? ["reply"] : [], // a held question or task: answered here by hand
@@ -11559,19 +11640,86 @@ export class Engine {
     } catch { return null; }
   }
 
-  async markRead(ids) {
-    const ops=[],checks=[],own=await this.groupRead(checks,"kv","person");
-    for(const id of ids||[]) {
-      const m=await this.groupRead(checks,"inbox",id);
-      if(m&&!m.read)ops.push({s:"inbox",k:id,v:{...m,read:true}});
-      const ref=m?this.readRef(m):await this.sentReadRef(await this.groupRead(checks,"outbox",id),own);
-      if(own?.state==="self" && ref) {
-        const k=this.readMarkKey(own.person,ref);
-        if(!await this.groupRead(checks,"kv",k))ops.push({s:"kv",k,v:{owner:own.person,ref}});
+  async attentionLocalIdentity(own,checks) {
+    const identity=await this.groupRead(checks,"kv","identity");
+    if(this.revoked||identity?.revoked||identity?.address!==this.address||identity?.fingerprint!==this.fp||own?.state!=="self"||!own.human_keys?.includes(this.fp)||!own.devices.some(d=>d.address===this.address&&d.fingerprint===this.fp))throw Error("Attention needs a current own-human device.");
+  }
+  async markRead(ids,attention={},attempt=0) {
+    if(!attention||typeof attention!=="object"||Array.isArray(attention)||Object.entries(attention).some(([id,g])=>!ids?.includes(id)||!wire.validAttentionGeneration(g)||Object.keys(g).some(k=>!["rev","writer"].includes(k))))throw Error("Invalid attention generation.");
+    const ops=[],checks=[],own=await this.groupRead(checks,"kv","person"),resolved=new Map();
+    if(Object.keys(attention).length){
+      await this.attentionLocalIdentity(own,checks);
+      const reads=new Map();
+      for(const id of Object.keys(attention))if(!resolved.has(id)){
+        const source=await this.groupRead(checks,"inbox",id)||await this.groupRead(checks,"outbox",id);if(!source)throw Error("Selected message is unavailable.");
+        const scope=source.conv||"direct/"+(source.thread_peer||""),read=reads.get(scope)||(source.conv?await this.readView(source.conv):await this.attentionSnapshot(Object.assign(await readThreadRows(this.store,id),{attentionTarget:id})));reads.set(scope,read);
+        for(const [key,ref] of await this.attentionActionScope(id,checks,read))resolved.set(key,ref);
       }
     }
-    try{if(ops.length){await this.store.write(ops,checks);this.changed();}}catch(e){if(e instanceof StoreConflict)return this.markRead(ids);throw e;}
+    for(const id of new Set(ids||[])) {
+      const m=await this.groupRead(checks,"inbox",id);
+      if(m&&!m.read)ops.push({s:"inbox",k:id,v:{...m,read:true}});
+      const outgoing=!m?await this.groupRead(checks,"outbox",id):null;
+      const legacy=m?this.readRef(m):await this.sentReadRef(outgoing,own);
+      const ref=attention[id]?resolved.get(id):legacy;
+      if(attention[id]&&(!ref||await this.groupRead(checks,"erased",erasedKey(ref.conv,ref.fingerprint,ref.lid))))throw Error("Selected message is unavailable.");
+      if(own?.state==="self" && ref) {
+        const generation=attention[id];
+        if(generation){
+          const ak=this.attentionKey(own.person,ref),old=await this.groupRead(checks,"kv",ak);
+          if(old?.state==="unread"&&old.rev===generation.rev&&old.writer===generation.writer){
+            if(old.rev===Number.MAX_SAFE_INTEGER)throw Error("Attention revision exhausted.");
+            ops.push({s:"kv",k:ak,v:{...old,state:"read",rev:old.rev+1,writer:this.fp}});
+          }
+        }
+        if(legacy){const k=this.readMarkKey(own.person,legacy);
+        if(!await this.groupRead(checks,"kv",k))ops.push({s:"kv",k,v:{owner:own.person,ref:legacy}});}
+      }
+    }
+    try{if(ops.length){await this.store.write(ops,checks);this.changed();}}catch(e){if(e instanceof StoreConflict){if(Object.keys(attention).length&&attempt>=3)return this.markRead(ids);return this.markRead(ids,attention,attempt+1);}throw e;}
     this.syncReadMarks().catch(()=>{});
+  }
+
+  async attentionActionScope(anchor,checks,shared=null) {
+    const initial=await this.groupRead(checks,"inbox",anchor)||await this.groupRead(checks,"outbox",anchor);if(!initial)throw Error("Selected message is unavailable.");
+    const conv=initial.conv||"",read=shared||(conv?await this.readView(conv):await this.attentionSnapshot(Object.assign(await readThreadRows(this.store,anchor),{attentionTarget:anchor}))),scope=conv?{conv}:{thread_peer:initial.thread_peer};
+    read.attentionGuarded ||= new Set();
+    if(!read.attentionGuarded.has(conv)){
+      await this.authorityRows(scope,checks,read);read.attentionGuarded.add(conv);
+    }
+    for(const person of read.persons||[])if(!checks.some(c=>c.s==="persons"&&c.k===person.person))checks.push({s:"persons",k:person.person,v:person});
+    if(conv){await this.groupRead(checks,"convs",conv);await this.groupRead(checks,"kv","group/"+conv);}
+    read.attentionActionViews ||= new Map();
+    let view=conv&&read.attentionActionViews.get(conv);
+    if(!view){view=conv?await this.decorateChatTopics(await this.dm(conv,read),read):await this.thread(anchor,read);if(conv)read.attentionActionViews.set(conv,view);}
+    if(view.frozen)throw Error("Selected conversation is frozen.");
+    const head=view.messages.find(m=>m.id===anchor);if(!head||head.deleted||head.event||head.topic_event)throw Error("Selected message is unavailable.");
+    read.attentionCanonical ||= new Map();
+    if(!conv&&!read.attentionThreads)read.attentionThreads=await this.v1Threads(read);
+    let raw=read.attentionCanonical.get(conv);
+    if(!raw){raw=conv?await this.convMessages(conv,read.inbox,read.outbox,read):read.attentionThreads.flat();read.attentionCanonical.set(conv,raw);}
+    const byID=new Map(raw.map(m=>[m.id,m])),resolved=new Map();
+    for(const displayed of view.messages){
+      const ref=this.attentionRef(byID.get(displayed.id));
+      if(ref&&!displayed.deleted&&!displayed.event&&!displayed.topic_event&&(displayed.topic||"")===(head.topic||""))resolved.set(displayed.id,ref);
+    }
+    if(!resolved.has(anchor))throw Error("Selected message is unavailable.");
+    return resolved;
+  }
+  async markUnread(anchor,ids) {
+    if(!wire.validID(anchor)||!Array.isArray(ids)||!ids.length||!ids.includes(anchor)||ids.some(id=>!wire.validID(id)))throw Error("Choose exact admitted messages in one topic.");
+    const checks=[],ops=[],own=await this.groupRead(checks,"kv","person");
+    await this.attentionLocalIdentity(own,checks);
+    const scope=await this.attentionActionScope(anchor,checks),seen=new Set();
+    for(const id of ids){
+      const ref=scope.get(id);if(!ref)throw Error("Selected message is unavailable or outside this topic.");
+      if(await this.groupRead(checks,"erased",erasedKey(ref.conv,ref.fingerprint,ref.lid)))throw Error("Selected message was erased.");
+      const k=this.attentionKey(own.person,ref);if(seen.has(k))continue;seen.add(k);
+      const old=await this.groupRead(checks,"kv",k);if(old?.rev===Number.MAX_SAFE_INTEGER)throw Error("Attention revision exhausted.");
+      ops.push({s:"kv",k,v:{key:k,owner:own.person,ref,state:"unread",rev:(old?.rev||0)+1,writer:this.fp}});
+    }
+    try{await this.store.write(ops,checks);}catch(e){if(e instanceof StoreConflict)throw Error("Selected messages changed; review the exact selection again.");throw e;}
+    this.changed();this.syncReadMarks().catch(()=>{});
   }
 
   // refreshDM asks once, when a DM is opened, about messages the server
@@ -11748,7 +11896,7 @@ export class Engine {
     }
     case "/api/typing/preferences": return this.setTypingPreferences(body);
     case "/api/overview": return this.overview(u.searchParams.get("topics") !== "1");
-    case "/api/dm": return this.decorateChatTopics(await this.dm(u.searchParams.get("id")));
+    case "/api/dm": { const id=u.searchParams.get("id"),read=await this.readView(id);return this.decorateChatTopics(await this.dm(id,read),read); }
     case "/api/thread": return this.thread(u.searchParams.get("id"));
     case "/api/dm/new": return { id: await this.newDM(body.address) };
     case "/api/dm/send": return this.sendDM(body);
@@ -11809,7 +11957,8 @@ export class Engine {
       if (body.do === "archive_held_batch") return this.archiveHeldNotices(body.held);
       if (body.do === "do_it") return this.confirmProposal(body.id);
       if (body.do === "change_proposal") return this.confirmProposal(body.id,body.body);
-      if (body.do === "read") { await this.markRead(body.ids); return { note: "" }; }
+      if (body.do === "read") { await this.markRead(body.ids,body.attention); return { note: "" }; }
+      if (body.do === "unread") { await this.markUnread(body.id,body.ids);return {note:""}; }
       if (body.do === "reply") return this.replyV1(body.id, body.body, body.send_id);
       if (body.do === "resolve") return await this.resolveHeldTurn(body.id) || await this.dismissDeviceAdminNotice(body.id) || this.dismissReport(body.id);
       throw new Error("Nothing runs in this browser: accept, approve and grants are made on a computer with AgentNet.");

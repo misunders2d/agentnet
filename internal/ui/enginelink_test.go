@@ -3,7 +3,9 @@ package ui
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -14,6 +16,7 @@ import (
 	"github.com/misunders2d/agentnet/internal/client"
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/hub"
+	"github.com/misunders2d/agentnet/internal/identity"
 	"github.com/misunders2d/agentnet/internal/protocol"
 	"github.com/misunders2d/agentnet/internal/testhub"
 )
@@ -96,7 +99,16 @@ func TestBrowserEngineLinksAsNewDevice(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "hub")
 	hub := testhub.Start(t, dir, "127.0.0.1:0", "")
 	base := "https://" + hub.Addr
-	laptop := personAgent(t, ctx, testhub.BootstrapCode(t, dir), "laptop", "Alice")
+	laptopHome := filepath.Join(t.TempDir(), "laptop")
+	laptop, err := client.Join(ctx, laptopHome, testhub.BootstrapCode(t, dir), "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { laptop.Close() })
+	runDaemon(t, laptop)
+	if _, err = laptop.CreatePerson(ctx, "Alice"); err != nil {
+		t.Fatal(err)
+	}
 	code, err := laptop.Invite(ctx, "bob", time.Hour, false)
 	if err != nil {
 		t.Fatal(err)
@@ -133,7 +145,14 @@ func TestBrowserEngineLinksAsNewDevice(t *testing.T) {
 	w := startEngineNode(t, dir)
 	w.ok(map[string]any{"op": "init", "base": base})
 	tablet := w.ok(map[string]any{"op": "joinLink", "code": base + "/#" + o.Encode(), "name": "tablet"})["address"].(string)
+	w.ok(map[string]any{"op": "holdFirstStream"})
 	w.ok(map[string]any{"op": "start"})
+	w.until("pending first stream barrier", func() bool {
+		state := w.ok(map[string]any{"op": "streamState"})
+		streams, _ := state["streams"].([]any)
+		return len(streams) == 1 && streams[0].(map[string]any)["waitingLink"] == true && streams[0].(map[string]any)["membersHeader"] == nil
+	})
+	firstSession := w.ok(map[string]any{"op": "streamState"})["session"].(string)
 	ov := w.api("/api/overview", nil)
 	if ov["role"] != "unset" || ov["link"].(map[string]any)["state"] != "pending" || ov["person"] != nil {
 		t.Fatalf("pending: role %v link %v person %v", ov["role"], ov["link"], ov["person"])
@@ -154,6 +173,7 @@ func TestBrowserEngineLinksAsNewDevice(t *testing.T) {
 	if err := laptop.DecideLink(ctx, req.ID, true); err != nil {
 		t.Fatal(err)
 	}
+	w.ok(map[string]any{"op": "releaseFirstStream"})
 	w.until("linked as Alice on two devices", func() bool {
 		o := w.api("/api/overview", nil)
 		p, _ := o["person"].(map[string]any)
@@ -166,6 +186,36 @@ func TestBrowserEngineLinksAsNewDevice(t *testing.T) {
 		s := w.ok(map[string]any{"op": "status"})
 		return s["connected"] == true && s["members"] == true
 	})
+
+	// The server has already approved before this first pending-local stream
+	// opens. Both the member-header transition and transport reconnect must use
+	// one logical browser run, with a valid signed rd2 record for every session.
+	browserPublic := w.devicePublic(t)
+	requireProfile := func() bool {
+		snapshot := w.ok(map[string]any{"op": "streamState", "profile": true})
+		raw, e := json.Marshal(snapshot["profile"])
+		if e != nil {
+			t.Fatal(e)
+		}
+		var profile protocol.Profile
+		if e = json.Unmarshal(raw, &profile); e != nil {
+			t.Fatal(e)
+		}
+		return snapshot["session"] == firstSession && len(profile.Sessions) == 1 && profile.Sessions[0] == firstSession && profile.Supports(tablet, browserPublic.SignKey, protocol.CapReadSyncV2)
+	}
+	w.until("one signed rd2 session after member transition", requireProfile)
+	streamSnapshot := w.ok(map[string]any{"op": "streamState"})
+	streams := streamSnapshot["streams"].([]any)
+	if len(streams) < 2 || streams[0].(map[string]any)["membersHeader"] != "1" {
+		t.Fatal("member-header race was not exercised", streamSnapshot)
+	}
+	beforeReconnect := w.ok(map[string]any{"op": "reconnectStream"})
+	w.until("same session after transport reconnect", func() bool {
+		state := w.ok(map[string]any{"op": "streamState"})
+		runs, _ := state["streams"].([]any)
+		return len(runs) > int(beforeReconnect["streams"].(float64)) && state["generation"].(float64) > beforeReconnect["generation"].(float64) && requireProfile()
+	})
+	t.Logf("browser logical session=%s member-header transition and reconnect retained one valid signed rd2 profile; typing generation advanced", firstSession)
 
 	// The chats from before, as history from the laptop: the laptop's own
 	// message is yours, Bob's is his.
@@ -213,6 +263,148 @@ func TestBrowserEngineLinksAsNewDevice(t *testing.T) {
 	}
 	waitFor(t, "Bob has the tablet's", goHas(bob, conv, "from the tablet", func(m client.ConvMessage) bool { return m.Dir == "in" }))
 	waitFor(t, "the laptop has the tablet's as its own", goHas(laptop, conv, "from the tablet", func(m client.ConvMessage) bool { return m.Via == tablet }))
+
+	// Cross-provider V2 journey. Only real APIs create marks; the read-only
+	// connection observes the Go ledger and signed-carrier admission evidence.
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(laptopHome, "agent.db")+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	m := goMessage(laptop, conv, "bob after")
+	if m.ID == "" || m.LID == "" || m.Key != bob.Self().Fingerprint() {
+		t.Fatal("exact signed logical reference missing")
+	}
+	if err = laptop.MarkUnread(m.ID, []string{m.ID}); err != nil {
+		t.Fatal(err)
+	}
+	marked := goMessage(laptop, conv, "bob after")
+	if !marked.Unread || marked.Attention == nil || marked.Attention.Writer != laptop.Self().Fingerprint() {
+		t.Fatal("Go unread generation missing")
+	}
+	generation := *marked.Attention
+	w.until("signed Go V2 unread admitted by browser", func() bool {
+		v := dmMessage(w, conv, "bob after")
+		if v == nil {
+			return false
+		}
+		g, ok := v["attention"].(map[string]any)
+		return ok && v["unread"] == true && v["lid"] == m.LID && v["send_group_author"] == m.Key && g["rev"] == float64(generation.Rev) && g["writer"] == generation.Writer
+	})
+	browserM := dmMessage(w, conv, "bob after")
+	browserID := browserM["id"].(string)
+	w.api("/api/act", map[string]any{"do": "read", "ids": []string{browserID}})
+	still := dmMessage(w, conv, "bob after")
+	g, _ := still["attention"].(map[string]any)
+	if still["unread"] != true || g["rev"] != float64(generation.Rev) || g["writer"] != generation.Writer {
+		t.Fatal("tokenless browser read cleared deliberate unread")
+	}
+	browserFP := w.devicePublic(t).Fingerprint()
+	w.api("/api/act", map[string]any{"do": "read", "ids": []string{browserID}, "attention": map[string]any{browserID: generation}})
+	var revision int64
+	var writer, state string
+	waitFor(t, "browser V2 tombstone admitted by Go", func() bool {
+		e := db.QueryRow(`SELECT state,revision,writer FROM attention_marks WHERE conv=? AND fingerprint=? AND lid=?`, conv, m.Key, m.LID).Scan(&state, &revision, &writer)
+		return e == nil && state == "read" && revision == generation.Rev+1 && writer == browserFP
+	})
+	cleared := goMessage(laptop, conv, "bob after")
+	if cleared.Unread || cleared.Attention != nil {
+		t.Fatal("Go projection did not clear after exact browser generation")
+	}
+	// An admitted read-sync carrier is inert: its disposition is kept in
+	// history_receipts, not as an inbox message. Match its actual signed
+	// browser outbox ID to that disposition and the canonical register.
+	carries := func(body string, want protocol.AttentionMark) bool {
+		r, e := protocol.ParseReadSync([]byte(body))
+		if e != nil || r.V != 2 {
+			return false
+		}
+		for _, mark := range r.Marks {
+			if mark == want {
+				return true
+			}
+		}
+		return false
+	}
+	findOutbound := func(want protocol.AttentionMark) string {
+		t.Helper()
+		rows, e := db.Query(`SELECT id,body FROM outbox WHERE sub=? AND recipient=? AND recipient_fp=? AND required_cap=?`, envelope.SubReadSync, tablet, browserFP, protocol.CapReadSyncV2)
+		if e != nil {
+			t.Fatal(e)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id, body string
+			if e = rows.Scan(&id, &body); e != nil {
+				t.Fatal(e)
+			}
+			if carries(body, want) {
+				return id
+			}
+		}
+		if e = rows.Err(); e != nil {
+			t.Fatal(e)
+		}
+		return ""
+	}
+	ref := protocol.ReadRef{Conv: conv, Fingerprint: m.Key, LID: m.LID}
+	goMark := protocol.AttentionMark{ReadRef: ref, AttentionGeneration: generation, State: "unread"}
+	browserMark := protocol.AttentionMark{ReadRef: ref, AttentionGeneration: protocol.AttentionGeneration{Rev: generation.Rev + 1, Writer: browserFP}, State: "read"}
+	var outbound string
+	var browserCarrier map[string]any
+	waitFor(t, "both exact V2 outbox carriers", func() bool {
+		outbound = findOutbound(goMark)
+		browserCarrier, _ = w.ok(map[string]any{"op": "outbox", "readSync": map[string]any{"to": laptop.Address, "fingerprint": laptop.Self().Fingerprint(), "mark": browserMark}})["rec"].(map[string]any)
+		return outbound != "" && browserCarrier != nil
+	})
+	var raw []byte
+	if err = db.QueryRow(`SELECT envelope FROM outbox WHERE id=?`, outbound).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	var signed envelope.Envelope
+	if json.Unmarshal(raw, &signed) != nil || signed.ID != outbound || signed.From != laptop.Address || signed.To != tablet || signed.V != 2 || signed.Attn {
+		t.Fatal("Go V2 encrypted carrier provenance missing")
+	}
+	if err = signed.VerifySig(laptop.Self().SignKey); err != nil {
+		t.Fatal("Go outbound signature", err)
+	}
+	inbound, ok := browserCarrier["id"].(string)
+	if !ok || !protocol.ValidID(inbound) {
+		t.Fatal("browser carrier ID missing")
+	}
+	encoded, ok := browserCarrier["envelope"].(string)
+	if !ok {
+		t.Fatal("browser encrypted carrier missing")
+	}
+	var incoming envelope.Envelope
+	if json.Unmarshal([]byte(encoded), &incoming) != nil || incoming.ID != inbound || incoming.From != tablet || incoming.To != laptop.Address || incoming.V != 2 || incoming.Attn {
+		t.Fatal("browser encrypted carrier direction/ID missing")
+	}
+	laptopID, err := identity.Load(filepath.Join(laptopHome, "identity.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inner, err := envelope.Open(incoming, laptopID, laptop.Address, w.devicePublic(t))
+	if err != nil {
+		t.Fatal("Go cannot verify/decrypt browser tombstone", err)
+	}
+	if inner.Kind != envelope.KindMessage || inner.Sub != envelope.SubReadSync || !inner.Replica || inner.Body != browserCarrier["body"] || !carries(inner.Body, browserMark) {
+		t.Fatal("browser signed plaintext does not bind exact tombstone")
+	}
+	var acked int
+	waitFor(t, "exact browser carrier admission receipt", func() bool {
+		e := db.QueryRow(`SELECT acked FROM history_receipts WHERE id=?`, inbound).Scan(&acked)
+		return e == nil && (acked == 0 || acked == 1)
+	})
+	var quarantined int
+	if err = db.QueryRow(`SELECT count(*) FROM quarantine WHERE id=?`, inbound).Scan(&quarantined); err != nil || quarantined != 0 {
+		t.Fatal("browser carrier quarantined", quarantined, err)
+	}
+	if err = db.QueryRow(`SELECT state,revision,writer FROM attention_marks WHERE conv=? AND fingerprint=? AND lid=?`, ref.Conv, ref.Fingerprint, ref.LID).Scan(&state, &revision, &writer); err != nil || state != "read" || revision != browserMark.Rev || writer != browserMark.Writer {
+		t.Fatal("exact carrier lacks canonical tombstone", err)
+	}
+	t.Logf("linked V2 logical_ref=%s/%s/%s go_carrier=%s browser_carrier=%s unread_rev=%d go_writer=%s tombstone_rev=%d browser_writer=%s tokenless_preserved=true signatures_verified=true browser_decrypted_in_go=true receipt_admitted=true receipt_acked=%d quarantine=0", conv, m.Key, m.LID, outbound, inbound, generation.Rev, generation.Writer, revision, writer, acked)
+
 }
 
 // The browser approves a Go device of its person: its link, the request

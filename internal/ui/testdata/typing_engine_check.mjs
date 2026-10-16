@@ -73,6 +73,15 @@ async function fixture() {
 }
 
 try {
+
+  // Explicit run lifetime differs from transport reconnect lifetime.
+  {
+    const f=await fixture(),{e}=f;const before=e.session;e.loop=()=>{};
+    e.start();const first=e.session;check(wire.validID(first)&&first!==before,"explicit Engine start allocates a fresh logical session");
+    e.start();check(e.session===first,"already-running start keeps its session");
+    e.stop();e.start();check(e.session!==first,"explicit stop/start allocates a distinct session");
+    const other=await fixture();other.e.loop=()=>{};other.e.start();check(other.e.session!==e.session,"another Engine run has its own session");e.stop();other.e.stop();
+  }
   // Receipt, refresh, STOP tie ordering and local expiry: reads never publish changes.
   {
     const f = await fixture(), { e } = f, durable = await f.count();
@@ -239,13 +248,19 @@ try {
     for (const method of ["migrateSyncCustody", "publishPerson", "flushReceipts", "retryHeld", "flushOutbox", "retryApproved", "runHistory", "runServes", "keepFiles", "reconcileNotify", "fillListed", "syncReadMarks", "syncTopicTitles"]) e[method] = async () => {};
     let controller; f.stream(() => new Response(new ReadableStream({ start(c) { controller = c; } }), { headers: { "Agentnet-Members": "1", "Agentnet-Signals": "1" } }));
     const connected = new Promise((resolve) => { const un = e.listen(() => { if (e.connected && e.typing.connected && !e.members.current) { un(); resolve(); } }); });
+    const sessionBefore=e.session,generationBefore=e.typing.generation;
+    let profileStarted,releaseProfile;const profileEntered=new Promise(r=>profileStarted=r),profileHeld=new Promise(r=>releaseProfile=r);
+    f.gate(async()=>{profileStarted();await profileHeld;});
+    const pendingSend=e.api("/api/typing",{scope:f.scope,active:true});await profileEntered;
     const running = e.streamOnce(); await connected;
+    check(e.session===sessionBefore&&e.typing.generation>generationBefore,"transport reconnect preserves session and advances typing generation");
     const active = new Promise((resolve) => { const un = e.listen(() => { if (e.typing.visible !== "[]") { un(); resolve(); } }); });
     const members = JSON.stringify({ members: e.members.list });
     const raw = await f.signal();
     const frame = new TextEncoder().encode("event:members\r\ndata:" + members + "\r\n\r\nevent:signal\r\ndata:" + raw + "\r\n\r\n");
     controller.enqueue(frame.subarray(0, 13)); controller.enqueue(frame.subarray(13, frame.length - 3)); controller.enqueue(frame.subarray(frame.length - 3));
     await active; check((await f.view()).entries.length === 1, "actual stream parser dispatches ordered members then signal across chunks");
+    releaseProfile();check((await pendingSend).submitted===0&&!f.posts.length&&e.members.current&&e.session===sessionBefore,"same-session reconnect generation drops pre-reconnect typing send after fresh members arrive");f.gate(null);
     controller.close(); await running;
     check(!e.typing.connected && !e.typing.seen.size && !e.typing.replay.size && e.typing.timer === null, "actual EOF disconnect clears typing");
     const caps = f.calls.find((c) => c.path === "/v1/caps");

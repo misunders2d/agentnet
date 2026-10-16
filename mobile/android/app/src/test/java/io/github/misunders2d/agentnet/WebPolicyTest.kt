@@ -58,6 +58,21 @@ class WebPolicyTest {
         for (fragment in listOf("conv=$conv&workspace=default", "conv=$conv&conv=$conv", "msg=$msg&dir=unknown", "review&conv=$conv", "conv=$conv&extra=1", "conv=broken")) assertNull(WebPolicy.notificationDestination(workspace, fragment))
         assertNull(WebPolicy.notificationDestination("unknown", "conv=$conv"))
     }
+    @Test fun enrichedNotificationUsesLegacyExactReadTag() {
+        val workspace = "a".repeat(32); val conv = "b".repeat(64); val msg = "c".repeat(32)
+        for (direction in listOf("in", "out")) {
+            val legacy = "msg=$msg&dir=$direction"
+            val enriched = "msg=$msg&conv=$conv&dir=$direction"
+            assertEquals("$legacy&workspace=$workspace", WebPolicy.notificationTag(workspace, enriched))
+            assertEquals(WebPolicy.notificationTag(workspace, legacy), WebPolicy.notificationTag(workspace, enriched))
+            assertEquals("$enriched&workspace=$workspace", WebPolicy.notificationDestination(workspace, enriched))
+            assertNotEquals(WebPolicy.notificationTag("default", enriched), WebPolicy.notificationTag(workspace, enriched))
+        }
+        assertNotEquals(WebPolicy.notificationTag(workspace, "msg=$msg&dir=in"), WebPolicy.notificationTag(workspace, "msg=${"d".repeat(32)}&dir=in"))
+        assertEquals("conv=$conv&workspace=$workspace", WebPolicy.notificationTag(workspace, "conv=$conv"))
+        assertNull(WebPolicy.notificationTag(workspace, "msg=$msg&conv=invalid&dir=in"))
+        assertNull(WebPolicy.notificationTag(workspace, "msg=$msg&dir=in&workspace=default"))
+    }
     @Test fun externalNavigationHasNoNativeSchemesOrCredentials() {
         assertTrue(policy.external("https://example.com/docs"))
         for (url in listOf("intent://x", "file:///x", "javascript:alert(1)", "https://user@example.com", "https://localhost/x", "https://127.0.0.1/x")) assertFalse(policy.external(url))

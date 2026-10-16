@@ -72,6 +72,13 @@ func (a *Agent) notificationMessage(n *NativeNotification, id string) {
 	if err != nil || key == "" {
 		return
 	}
+	// The exact stored conversation is already known here. Carry it in the
+	// existing route so a tap needs one local view, not every conversation.
+	if protocol.ValidHash(conv) {
+		if direction, ok := strings.CutPrefix(n.Fragment, "msg="+id+"&dir="); ok && (direction == "in" || direction == "out") {
+			n.Fragment = "msg=" + id + "&conv=" + conv + "&dir=" + direction
+		}
+	}
 	sender := a.senderHere(m.From, key)
 	name := m.From
 	if sender.Relation != SenderUnverified && sender.Label != "" {

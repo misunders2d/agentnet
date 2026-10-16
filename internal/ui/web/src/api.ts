@@ -82,7 +82,7 @@ export function api(host: Host) {
     // Device conversations (one agent's own threads) and decisions
     send: (d: T.Draft) => post<T.Sent>("/api/send", d),
     act: (a: T.Action) => post<{ note: string }>("/api/act", a),
-    markRead: (ids: string[]) => post<{ note: string }>("/api/act", { do: "read", ids } satisfies T.Action),
+    markRead: (ids: string[], attention?: T.Action["attention"]) => post<{ note: string }>("/api/act", { do: "read", ids, ...(attention ? {attention} : {}) } satisfies T.Action),
     decide: (d: T.DecisionAction) => post<{ note: string }>("/api/operator/decide", d),
 
     // Topics (an agent's separate conversations): one page of the All topics

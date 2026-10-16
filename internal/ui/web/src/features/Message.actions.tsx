@@ -33,6 +33,8 @@ export interface Acts {
   details: () => void;
   select?: () => void;
   remind?: () => void;        // "Remind me…" (or "Change reminder…" when it has one)
+  unread?: () => void;
+  unreadFrom?: () => void;
   reminded?: boolean;         // it has a pending reminder
   topic?:()=>void;
   assign?: () => void;
@@ -75,6 +77,8 @@ function Items({ can, acts, m, render }: { can: Can; acts: Acts; m: AnyMsg; rend
   return (
     <>
       {text && render(<IconCopy size={20} />, "Copy text", acts.copy)}
+      {acts.unread && render(<IconClock size={20} />, "Mark unread", acts.unread)}
+      {acts.unreadFrom && render(<IconClock size={20} />, "Mark unread from here", acts.unreadFrom)}
       {acts.assign && render(<IconSquareCheck size={20} />, "Assign to your agent…", acts.assign)}
       {acts.topic && render(<IconSquareCheck size={20}/>,"Make a topic",acts.topic)}
       {can.select && acts.select && render(<IconSquareCheck size={20} />, "Select", acts.select)}
@@ -110,7 +114,7 @@ export function ActionSheet({ open, onOpenChange, m, ctx, can, acts, who, onMore
       )}
       <div className="flex flex-col">
         {can.reply && <SheetItem icon={<IconArrowBackUp size={22} />} label="Reply" onClick={reply} />}
-        <Items can={can} acts={{ ...acts, copy: close(acts.copy), edit: close(acts.edit), del: close(acts.del), details: close(acts.details), select: acts.select && close(acts.select), remind: acts.remind && close(acts.remind), topic: acts.topic && close(acts.topic), assign: acts.assign && close(acts.assign) }} m={m}
+        <Items can={can} acts={{ ...acts, copy: close(acts.copy), unread: acts.unread && close(acts.unread), unreadFrom: acts.unreadFrom && close(acts.unreadFrom), edit: close(acts.edit), del: close(acts.del), details: close(acts.details), select: acts.select && close(acts.select), remind: acts.remind && close(acts.remind), topic: acts.topic && close(acts.topic), assign: acts.assign && close(acts.assign) }} m={m}
           render={(icon, label, onClick, danger) => <SheetItem key={label} icon={icon} label={label} onClick={onClick} danger={danger} />} />
       </div>
     </Sheet>

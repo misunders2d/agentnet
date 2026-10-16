@@ -223,7 +223,7 @@ func insertCopies(tx *sql.Tx, copies []outCopy) error {
 		c.required = guestAgentRequirement(c.required, derived)
 		data, _ := json.Marshal(c.env)
 		body := ""
-		if c.in.Human != nil && c.in.Human.ConversationAudience() || c.in.Sub == envelope.SubHistory && conversationAudienceCopy(c.in.Sub, c.in.Body, "") || c.required == protocol.CapTopicContext || c.required == protocol.CapModelSync || c.required == protocol.CapModelSyncV2 || c.required == protocol.CapGroup || c.required == protocol.CapReadSync || c.required == protocol.CapOwnSyncV2 || c.required == protocol.CapOwnSyncV3 || c.required == protocol.CapTopicStateSync {
+		if c.in.Human != nil && c.in.Human.ConversationAudience() || c.in.Sub == envelope.SubHistory && conversationAudienceCopy(c.in.Sub, c.in.Body, "") || c.required == protocol.CapTopicContext || c.required == protocol.CapModelSync || c.required == protocol.CapModelSyncV2 || c.required == protocol.CapGroup || c.required == protocol.CapReadSync || c.required == protocol.CapReadSyncV2 || c.required == protocol.CapOwnSyncV2 || c.required == protocol.CapOwnSyncV3 || c.required == protocol.CapTopicStateSync {
 			body = c.in.Body
 		} else if c.in.Sub == envelope.SubHistory {
 			var item HistoryItem

@@ -1,3 +1,45 @@
+// Cheap actual AllTopics component check; JSX is transformed by installed esbuild.
+if(process.env.AGENTNET_TOPIC_SOURCE_CHECK==='1'){
+ (async()=>{
+  const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),assert=require('node:assert/strict');
+  const ui=path.resolve(__dirname,'..'),esbuild=require(path.join(ui,'web/node_modules/esbuild'));
+  const source=fs.readFileSync(path.join(ui,'web/src/features/Conversation.alltopics.tsx'),'utf8').replace(/^import .*;$/gm,'');
+  const code=esbuild.transformSync(source,{loader:'tsx',jsxFactory:'h',format:'cjs'}).code;
+  const failures=[];
+  const test=async(label,run)=>{try{await run();console.log(label+' PASS');}catch(e){failures.push(label+': '+e.message);console.log('FAIL '+failures.at(-1));}};
+  const rows=['active','done','archived'].map((state,i)=>({id:String(i+1).repeat(32),state,title:'needle '+state,last:'retained line',peer:'peer/host',lastAt:'2026-10-05T10:00:00Z',unread:0,count:1}));
+  function harness({filter='active',query='needle',q=query.trim(),flat=false}={}){
+   const states=[filter,query,q,[], 'cursor',3,false,'',[],{},null,false,false],refs=[],calls=[],effects=[],timers=[];
+   let si=0,ri=0;
+   const h=(tag,props,...children)=>({tag,props:{...props,children:children.flat(Infinity).filter(x=>x!==false&&x!=null)}});
+   const store={get:()=>({views:{}}),api:{topics:async body=>{calls.push(body);return{topics:rows,matched:3,next:'cursor'};}}};
+   const context={module:{exports:{}},exports:{},h,Dialog:Object.fromEntries(['Root','Portal','Backdrop','Popup','Title','Description','Close'].map(x=>[x,'Dialog.'+x])),IconChevronLeft:'Icon',IconSearch:'Icon',IconX:'Icon',Button:'Button',IconButton:'IconButton',TopicMark:'TopicMark',
+    useApp:()=>store,useWide:()=>true,useStore:()=>({seq:1,threads:[]}),usePortal:()=>null,useModal:()=>({}),
+    useState:init=>{const i=si++;if(!(i in states))states[i]=typeof init==='function'?init():init;return[states[i],v=>{states[i]=typeof v==='function'?v(states[i]):v;}];},
+    useRef:init=>{const i=ri++;return refs[i]??(refs[i]={current:init});},useEffect:(fn,deps)=>effects.push(fn),
+    setTimeout:fn=>{timers.push(fn);return timers.length;},clearTimeout(){},TOPICS:{searchDelay:1,pageSize:2,pageMax:200},topicOf:t=>t,firstLine:t=>t,when:()=>'',topicLabel:t=>t.title,errorText:e=>e.message};
+   context.exports=context.module.exports;vm.runInNewContext(code,context);
+   const props={open:true,onOpenChange(){},peer:'peer/host',conv:flat?undefined:'c'.repeat(64),agent:'Fixture',flat:flat?{topics:rows,loading:false,failed:'',canSelect:()=>true,detail:()=>'',choose(){}}:undefined};
+   const render=()=>{si=ri=0;effects.length=0;return context.module.exports.AllTopics(props);};
+   const nodes=tree=>[tree,...(tree?.props?.children||[]).flatMap(x=>typeof x==='object'?nodes(x):[])];
+   const load=async()=>{const tree=render();for(const fn of effects)if(String(fn).includes('store.api.topics'))fn();await new Promise(r=>setImmediate(r));return tree;};
+   return{states,calls,render,nodes,load,async trim(){render();for(const fn of effects)if(String(fn).includes('setQ(query.trim())'))fn();for(const fn of timers.splice(0))fn();},rows};
+  }
+  for(const filter of ['active','done','archived'])await test('search ignores '+filter+' tab; initial and more keep scope',async()=>{
+   const f=harness({filter});await f.load();assert.equal(f.calls[0].state,'');assert.equal(f.calls[0].conv,'c'.repeat(64));assert.equal(f.calls[0].peer,'peer/host');assert.equal(f.calls[0].q,'needle');
+   const more=f.nodes(f.render()).find(n=>n.tag==='Button'&&n.props.children.join('').startsWith('Show more'));assert(more);more.props.onClick();await new Promise(r=>setImmediate(r));assert.equal(f.calls[1].state,'');assert.equal(f.calls[1].before,'cursor');assert.equal(f.calls[1].conv,f.calls[0].conv);assert.equal(f.calls[1].q,'needle');
+  });
+  await test('flat personal topics search spans active/done/archived and retains statuses',async()=>{
+   for(const filter of ['active','done','archived']){const f=harness({filter,flat:true}),tree=f.render();assert.equal(f.nodes(tree).filter(n=>n.tag==='li').length,3);assert.deepEqual(f.nodes(tree).filter(n=>n.tag==='TopicMark').map(n=>n.props.t.state),['active','done','archived']);await f.load();assert.equal(f.calls.length,0);}
+  });
+  await test('trimmed whitespace/clear restore selected Done filter and copy',async()=>{
+   const f=harness({filter:'done',query:'   ',q:'needle'});await f.trim();assert.equal(f.states[2],'');await f.load();assert.equal(f.calls[0].state,'done');
+   f.states[1]=' needle ';await f.trim();await f.load();assert.equal(f.calls[1].q,'needle');assert.equal(f.calls[1].state,'');
+   f.states[1]='';await f.trim();await f.load();assert.equal(f.calls[2].state,'done');assert.equal(f.states[0],'done');
+  });
+  assert.deepEqual(failures,[]);console.log('actual AllTopics source/model PASS');
+ })().catch(e=>{console.error(e);process.exitCode=1;});
+}else{
 // Topics as the messenger renders them (topics_rendered_test.go): the bar,
 // the open topic's menu, All topics and the end of a done topic, at
 // 1800x960 and 390x844, light and dark. Needs AGENTNET_PLAYWRIGHT;
@@ -246,3 +288,5 @@ async function slowly(browser, w, h, scheme, name) {
     console.log('topics ui check PASS');
   } finally { await browser.close(); }
 })().catch((e) => { console.error(e); process.exit(1); });
+
+}

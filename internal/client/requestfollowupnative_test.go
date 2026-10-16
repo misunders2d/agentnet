@@ -311,3 +311,442 @@ func TestNativeRequestFollowupDisabledNamedExecutorRefused(t *testing.T) {
 		t.Fatal("disabled identity received new native corrections")
 	}
 }
+
+// Direct requests retain SQL NULL conversation/PID bindings and use the same
+// signed carrier as real senders. No native model is involved in this fixture.
+func directNativeCorrection(t *testing.T, named bool, kind string) (*Agent, *Agent, job, string) {
+	t.Helper()
+	w := newWorld(t, "")
+	a, sender := w.bob, w.alice
+	a.Logf = t.Logf
+	if err := a.Approve(sender.Address); err != nil {
+		t.Fatal(err)
+	}
+	var target *envelope.Target
+	var executor *ExecutorStamp
+	if named {
+		local, err := a.CreateLocalAgent("same display name", Responder{Harness: "codex", Dir: t.TempDir()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		target = &envelope.Target{Address: a.Address, Fingerprint: a.Self().Fingerprint(), AgentID: local.ID}
+		executor, err = a.ResolveExecutorIn(a.store.db, local.ID, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	root := sealTo(t, sender, a, envelope.Inner{Kind: kind, Body: "Prepare the original report", Target: target})
+	inner, err := envelope.Open(root, a.id, a.Address, sender.Self())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = sender.store.addOutbox(root, inner, "", nil, boundOutgoing{fingerprint: a.Self().Fingerprint()}); err != nil {
+		t.Fatal(err)
+	}
+	// sealTo already received relay custody; the saved author copy must not
+	// pretend it still needs another network send when the reader starts.
+	if _, err = sender.store.db.Exec(`UPDATE outbox SET state=? WHERE id=?`, protocol.StateCustody, root.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.verifyAndStore(tctx(t), root); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.store.db.Exec(`UPDATE inbox SET state=?,attempts=1,last_attempt_at=unixepoch() WHERE id=?`, stateRunning, root.ID); err != nil {
+		t.Fatal(err)
+	}
+	parent := job{ID: root.ID, From: sender.Address, Key: sender.Self().Fingerprint(), Kind: kind, Body: "Prepare the original report", Target: target, Executor: executor, nativeAttempt: 1}
+	if target != nil {
+		parent.AgentID = target.AgentID
+	}
+	ref := &envelope.FollowupRef{Ref: envelope.Ref{ID: root.ID, Fingerprint: parent.Key}, Attempt: 1}
+	correction := sealTo(t, sender, a, envelope.Inner{Kind: kind, Body: "Use English instead", ReplyTo: root.ID, Target: target, Followup: ref})
+	if err := a.verifyAndStore(tctx(t), correction); err != nil {
+		t.Fatal(err)
+	}
+	return a, sender, parent, correction.ID
+}
+
+func TestDirectNativeFollowupExactAdmission(t *testing.T) {
+	for _, named := range []bool{false, true} {
+		t.Run(fmt.Sprint("named=", named), func(t *testing.T) {
+			a, sender, parent, id := directNativeCorrection(t, named, envelope.KindQuestion)
+			original, err := sender.followupOriginal(sender.store.db, "", envelope.Ref{ID: parent.ID, Fingerprint: parent.Key})
+			if err != nil {
+				t.Fatal("sender exact original lookup failed", err)
+			}
+			if original.h.ID != parent.ID || original.h.FromKey != parent.Key || original.h.Kind != parent.Kind || original.h.Body != parent.Body || original.to != a.Address || original.key != a.Self().Fingerprint() {
+				t.Fatal("sender original lost exact human request or recipient key")
+			}
+			if named {
+				if original.h.Target == nil || *original.h.Target != *parent.Target {
+					t.Fatal("sender original lost exact named target")
+				}
+			} else if original.h.Target != nil {
+				t.Fatal("sender default original acquired a named target")
+			}
+			claim, found, err := a.claimNativeFollowup(parent)
+			if err != nil || !found || claim.ID != id {
+				t.Fatalf("direct correction not claimed: found=%t id=%s err=%v", found, claim.ID, err)
+			}
+			if !a.nativeFollowupCurrent(parent, claim.job) {
+				t.Fatal("direct correction not current before handover")
+			}
+			if _, found, err := a.claimNativeFollowup(parent); err != nil || found {
+				t.Fatal("claimed twice", found, err)
+			}
+		})
+	}
+}
+
+func TestDirectNativeFollowupGuards(t *testing.T) {
+	for _, mode := range []string{"ended", "cancelled", "attempt", "host-key", "kind", "topic", "receiver-route", "receiver-input", "revoked", "pending-key", "disabled", "unapproved", "author", "replica"} {
+		t.Run(mode, func(t *testing.T) {
+			a, sender, parent, id := directNativeCorrection(t, mode == "disabled", envelope.KindQuestion)
+			var err error
+			switch mode {
+			case "ended":
+				_, err = a.store.db.Exec(`UPDATE inbox SET state=? WHERE id=?`, stateAnswered, parent.ID)
+			case "cancelled":
+				_, err = a.store.db.Exec(`UPDATE inbox SET state=? WHERE id=?`, stateCancelReq, parent.ID)
+			case "attempt":
+				_, err = a.store.db.Exec(`UPDATE inbox SET attempts=2 WHERE id=?`, parent.ID)
+			case "host-key":
+				_, err = a.store.db.Exec(`UPDATE inbox SET target=? WHERE id=?`, targetJSON(&envelope.Target{Address: a.Address, Fingerprint: sender.Self().Fingerprint(), AgentID: protocol.NewID()}), id)
+			case "kind":
+				_, err = a.store.db.Exec(`UPDATE inbox SET kind='task' WHERE id=?`, id)
+			case "topic":
+				_, err = a.store.db.Exec(`UPDATE inbox SET topic=? WHERE id=?`, protocol.NewID(), id)
+			case "receiver-route":
+				_, err = a.store.db.Exec(`UPDATE inbox SET receiver_route='{"op":"request"}' WHERE id=?`, id)
+			case "receiver-input":
+				binding := protocol.NewID()
+				if _, err = a.store.db.Exec(`INSERT INTO reply_receivers(id,conv,request_ref,receiver,created_at) VALUES(?,'','{}','{}',1)`, binding); err == nil {
+					_, err = a.store.db.Exec(`INSERT INTO reply_receiver_inputs(binding,inbox_id) VALUES(?,?)`, binding, id)
+				}
+			case "author":
+				_, err = a.store.db.Exec(`UPDATE inbox SET verified_by=? WHERE id=?`, a.Self().Fingerprint(), id)
+			case "replica":
+				_, err = a.store.db.Exec(`UPDATE inbox SET replica=1 WHERE id=?`, id)
+			case "revoked":
+				_, err = a.store.db.Exec(`INSERT OR REPLACE INTO config(k,v) VALUES(?,?)`, revokedDevicePrefix+sender.Address+"/"+parent.Key, sender.Address)
+			case "pending-key":
+				_, err = a.store.db.Exec(`UPDATE peers SET pending=public WHERE address=?`, sender.Address)
+			case "disabled":
+				err = a.SetLocalAgentResponder(parent.AgentID, nil)
+			case "unapproved":
+				_, err = a.store.db.Exec(`DELETE FROM approvals WHERE address=?`, sender.Address)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, found, err := a.claimNativeFollowup(parent); err != nil || found {
+				t.Fatalf("%s admitted: %t %v", mode, found, err)
+			}
+		})
+	}
+}
+
+func TestDirectNativeFollowupTaskConsentAndPrewrite(t *testing.T) {
+	a, sender, parent, id := directNativeCorrection(t, false, envelope.KindTask)
+	// The already-admitted parent's one-time acceptance is not a task grant.
+	if _, err := a.store.db.Exec(`UPDATE inbox SET state=? WHERE id=?`, statePending, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := a.claimNativeFollowup(parent); err != nil || found {
+		t.Fatal("parent acceptance authorized separate task", found, err)
+	}
+	if _, err := a.GrantTasks(sender.Address); err != nil {
+		t.Fatal(err)
+	}
+	claim, found, err := a.claimNativeFollowup(parent)
+	if err != nil || !found {
+		t.Fatal("standing grant did not authorize correction", found, err)
+	}
+	if !a.nativeFollowupCurrent(parent, claim.job) {
+		t.Fatal("admitted task unavailable")
+	}
+	if _, err := a.RevokeTasks(sender.Address); err != nil {
+		t.Fatal(err)
+	}
+	if a.nativeFollowupCurrent(parent, claim.job) {
+		t.Fatal("revoked task grant survived prewrite")
+	}
+	// Explicit acceptance of this correction is independently sufficient.
+	if _, err := a.store.db.Exec(`UPDATE inbox SET state=? WHERE id=?`, stateAccepted, id); err != nil {
+		t.Fatal(err)
+	}
+	claim, found, err = a.claimNativeFollowup(parent)
+	if err != nil || !found {
+		t.Fatal("exact correction acceptance refused", found, err)
+	}
+	if !a.nativeFollowupCurrent(parent, claim.job, true) {
+		t.Fatal("one-time accepted correction refused")
+	}
+}
+
+func TestDirectNativeFollowupPrewriteFences(t *testing.T) {
+	for _, mode := range []string{"grant", "key", "attempt", "cancel", "disabled", "route"} {
+		t.Run(mode, func(t *testing.T) {
+			a, sender, parent, _ := directNativeCorrection(t, mode == "disabled", envelope.KindQuestion)
+			claim, found, err := a.claimNativeFollowup(parent)
+			if err != nil || !found {
+				t.Fatal(found, err)
+			}
+			switch mode {
+			case "route":
+				_, err = a.store.db.Exec(`UPDATE inbox SET receiver_route='{"op":"request"}' WHERE id=?`, claim.ID)
+			case "grant":
+				_, err = a.store.db.Exec(`DELETE FROM approvals WHERE address=?`, sender.Address)
+			case "key":
+				_, err = a.store.db.Exec(`UPDATE peers SET pending=public WHERE address=?`, sender.Address)
+			case "attempt":
+				_, err = a.store.db.Exec(`UPDATE inbox SET attempts=2 WHERE id=?`, parent.ID)
+			case "cancel":
+				_, err = a.store.db.Exec(`UPDATE inbox SET state=? WHERE id=?`, stateCancelReq, parent.ID)
+			case "disabled":
+				err = a.SetLocalAgentResponder(parent.AgentID, nil)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if a.nativeFollowupCurrent(parent, claim.job) {
+				t.Fatal("prewrite fence failed", mode)
+			}
+		})
+	}
+}
+
+func TestDirectStrictFollowupNeverLaunchesFallback(t *testing.T) {
+	for _, mode := range []string{"ended", "cancelled", "changed", "unsupported", "unknown"} {
+		t.Run(mode, func(t *testing.T) {
+			st := installStub(t, "answer")
+			a, _, parent, id := directNativeCorrection(t, false, envelope.KindQuestion)
+			if mode == "unsupported" || mode == "unknown" {
+				ready := make(chan struct{})
+				close(ready)
+				outcome := steerUnsupported
+				if mode == "unknown" {
+					outcome = steerUnknown
+				}
+				a.watchNativeFollowups(t.Context(), parent, refusedFollowup{ready, outcome}, nil)
+				waitState(t, a, id, stateNeedHuman)
+			}
+			state := stateAnswered
+			if mode == "cancelled" {
+				state = stateCancelled
+			}
+			if _, err := a.store.db.Exec(`UPDATE inbox SET state=?,attempts=2 WHERE id=?`, state, parent.ID); err != nil {
+				t.Fatal(err)
+			}
+			child, found, err := a.store.claimJob("stub")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if found {
+				a.runJob(tctx(t), child, &Responder{Harness: "stub", Dir: st.dir, Timeout: time.Second}, nil)
+			}
+			if st.count() != 0 {
+				t.Fatal("strict correction launched fresh process", mode, st.count())
+			}
+			waitState(t, a, id, stateNeedHuman)
+		})
+	}
+}
+
+func TestDirectNativeFollowupOwnedWorkerProcess(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix executable wrapper fixture")
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapper := filepath.Join(t.TempDir(), "codex")
+	processLog := filepath.Join(t.TempDir(), "processes")
+	script := "#!/bin/sh\necho started >> \"$AGENTNET_DIRECT_PROCESS_LOG\"\nexec \"$AGENTNET_CODEX_FIXTURE_EXE\" -test.run '^TestCodexRoomFixtureProcess$'\n"
+	if err = os.WriteFile(wrapper, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", filepath.Dir(wrapper)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("AGENTNET_CODEX_FIXTURE_EXE", exe)
+	t.Setenv("AGENTNET_CODEX_ROOM_FIXTURE", "steer")
+	t.Setenv("AGENTNET_DIRECT_PROCESS_LOG", processLog)
+	for _, named := range []bool{false, true} {
+		t.Run(fmt.Sprint("named=", named), func(t *testing.T) {
+			a, sender, parent, id := directNativeCorrection(t, named, envelope.KindQuestion)
+			stop := runAgent(t, sender)
+			defer stop()
+			eventually(t, "recipient named capability advertised", func() bool { return a.requireAgentIdentity(tctx(t), sender.Self()) == nil })
+			a.runJob(tctx(t), parent, &Responder{Harness: "codex", Dir: t.TempDir(), Timeout: 10 * time.Second}, nil)
+			waitState(t, a, id, stateSteered)
+			var parentState, parentDetail string
+			a.store.db.QueryRow(`SELECT state,coalesce(detail,'') FROM inbox WHERE id=?`, parent.ID).Scan(&parentState, &parentDetail)
+			t.Logf("owned direct result state=%s detail=%s", parentState, parentDetail)
+			if parentState != stateAnswered {
+				t.Fatalf("original did not finish: %s %s", parentState, parentDetail)
+			}
+			var raw []byte
+			if err := a.store.db.QueryRow(`SELECT envelope FROM outbox WHERE id=(SELECT result_id FROM inbox WHERE id=?) AND body=?`, parent.ID, "OWNED_CORRECTION_ACCEPTED").Scan(&raw); err != nil {
+				t.Fatal("missing correlated corrected answer", err)
+			}
+			var env envelope.Envelope
+			if err := json.Unmarshal(raw, &env); err != nil {
+				t.Fatal(err)
+			}
+			if err := sender.verifyAndStore(tctx(t), env); err != nil {
+				t.Fatal("signed corrected answer rejected", err)
+			}
+			if state, err := sender.store.jobState(env.ID); err != nil || state == "quarantined" {
+				t.Fatal("verified answer unavailable", state, err)
+			}
+			var resultID string
+			if err := a.store.db.QueryRow(`SELECT result_id FROM inbox WHERE id=?`, parent.ID).Scan(&resultID); err != nil || resultID != env.ID || env.Kind != envelope.KindAnswer {
+				t.Fatal("correlated signed result is not the exact answer", err)
+			}
+			t.Log("correlated result_id and signed answer kind verified")
+			var count, attempts int
+			var answerID, result string
+			if err := a.store.db.QueryRow(`SELECT count(DISTINCT coalesce(lid,id)),coalesce(max(id),''),coalesce(max(body),'') FROM outbox WHERE reply_to=? AND json_extract(envelope,'$.kind')=?`, parent.ID, envelope.KindAnswer).Scan(&count, &answerID, &result); err != nil || count != 1 || answerID != resultID || strings.TrimSpace(result) != "OWNED_CORRECTION_ACCEPTED" {
+				t.Fatalf("direct answer proof failed: count=%d correlated=%t matched=%t err=%v", count, answerID == resultID, strings.TrimSpace(result) == "OWNED_CORRECTION_ACCEPTED", err)
+			}
+			if err := a.store.db.QueryRow(`SELECT attempts FROM inbox WHERE id=?`, parent.ID).Scan(&attempts); err != nil || attempts != 1 {
+				t.Fatal("original repeated", attempts, err)
+			}
+			var author, agentID, body string
+			if err := sender.store.db.QueryRow(`SELECT verified_by,coalesce(agent_id,''),body FROM inbox WHERE id=? AND kind=? AND state!='quarantined'`, answerID, envelope.KindAnswer).Scan(&author, &agentID, &body); err != nil || author != a.Self().Fingerprint() || agentID != parent.AgentID || strings.TrimSpace(body) != "OWNED_CORRECTION_ACCEPTED" {
+				t.Fatal("sender did not admit exact signed corrected answer", err)
+			}
+			if _, found, err := a.claimNativeFollowup(parent); err != nil || found {
+				t.Fatal("finished correction replayed", found, err)
+			}
+		})
+	}
+	data, err := os.ReadFile(processLog)
+	if err != nil || strings.Count(string(data), "started") != 2 {
+		t.Fatal("expected one owned process per original", string(data), err)
+	}
+}
+
+func TestDirectNativeFollowupLinkedHuman(t *testing.T) {
+	w, first, _, _ := historyCatchupFixture(t, 0)
+	a := w.alice
+	stop := runAgent(t, a)
+	second, awaited, _ := linkPhone(t, a, "second-correction-phone")
+	request := pendingLink(t, a)
+	stop()
+	if err := a.DecideLink(tctx(t), request.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if result := <-awaited; result.err != nil {
+		t.Fatal(result.err)
+	}
+	original := sealTo(t, first, a, envelope.Inner{Kind: envelope.KindTask, Body: "Prepare original report"})
+	if err := a.verifyAndStore(tctx(t), original); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.store.db.Exec(`UPDATE inbox SET state=?,attempts=1,last_attempt_at=unixepoch() WHERE id=?`, stateRunning, original.ID); err != nil {
+		t.Fatal(err)
+	}
+	parent := job{ID: original.ID, From: first.Address, Key: first.Self().Fingerprint(), Kind: envelope.KindTask, nativeAttempt: 1, OwnHumanRequest: true}
+	correction := sealTo(t, second, a, envelope.Inner{Kind: envelope.KindTask, Body: "Use English instead", ReplyTo: original.ID, Followup: &envelope.FollowupRef{Ref: envelope.Ref{ID: original.ID, Fingerprint: first.Self().Fingerprint()}, Attempt: 1}})
+	if err := a.verifyAndStore(tctx(t), correction); err != nil {
+		t.Fatal(err)
+	}
+	claim, found, err := a.claimNativeFollowup(parent)
+	if err != nil || !found || claim.ID != correction.ID {
+		t.Fatal("current linked human correction refused", found, err)
+	}
+	if !a.nativeFollowupCurrent(parent, claim.job) {
+		t.Fatal("current linked human unavailable before handover")
+	}
+	if _, err := a.store.db.Exec(`UPDATE peers SET pending=public WHERE address=?`, second.Address); err != nil {
+		t.Fatal(err)
+	}
+	if a.nativeFollowupCurrent(parent, claim.job) {
+		t.Fatal("linked changed key survived prewrite")
+	}
+}
+
+func TestDirectNativeFollowupOrderFilesAndRetry(t *testing.T) {
+	a, sender, parent, first := directNativeCorrection(t, false, envelope.KindQuestion)
+	session := protocol.NewID()
+	record := protocol.CapsRecord{Address: a.Address, Session: session, Caps: []string{protocol.CapRequestSteer}, TS: time.Now().Unix()}
+	record.Sign(a.id.Sign)
+	raw, _ := json.Marshal(record)
+	sender.hub.http.Transport = &invitationCapsTransport{base: sender.hub.http.Transport, profile: protocol.Profile{Live: true, Sessions: []string{session}, Caps: []json.RawMessage{raw}}}
+	file := filepath.Join(t.TempDir(), "terms.md")
+	if err := os.WriteFile(file, []byte("English terminology"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	followup := &envelope.FollowupRef{Ref: envelope.Ref{ID: parent.ID, Fingerprint: parent.Key}, Attempt: 1}
+	sent, err := sender.SendMessage(tctx(t), Outgoing{To: a.Address, Kind: envelope.KindQuestion, Body: "Use English and retain this file", ReplyTo: parent.ID, RequestFollowup: followup, Named: []OutgoingFile{{Path: file}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := sender.store.outboxEnvelope(sent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = a.verifyAndStore(tctx(t), env); err != nil {
+		t.Fatal(err)
+	}
+	if err = a.verifyAndStore(tctx(t), env); err != nil {
+		t.Fatal("duplicate delivery", err)
+	}
+	ctx, cancel := context.WithCancel(tctx(t))
+	defer cancel()
+	in, out := io.Pipe()
+	defer in.Close()
+	ready := make(chan struct{})
+	close(ready)
+	var output bytes.Buffer
+	bridge := &codexRoomBridge{ctx: ctx, input: out, output: &output, thread: "owned", turn: "active", calls: map[string]bool{}, ready: ready}
+	defer bridge.close()
+	messages := make(chan map[string]any, 2)
+	go func() {
+		dec := json.NewDecoder(in)
+		for {
+			var m map[string]any
+			if dec.Decode(&m) != nil {
+				return
+			}
+			messages <- m
+		}
+	}()
+	done := make(chan struct{})
+	go func() { defer close(done); a.watchNativeFollowups(ctx, parent, bridge, nil) }()
+	for i, id := range []string{first, sent.ID} {
+		var m map[string]any
+		select {
+		case m = <-messages:
+		case <-time.After(3 * time.Second):
+			t.Fatal("ordered direct correction unavailable", i)
+		}
+		params := m["params"].(map[string]any)
+		if params["clientUserMessageId"] != id {
+			t.Fatal("direct correction reordered", params)
+		}
+		text := params["input"].([]any)[0].(map[string]any)["text"].(string)
+		if i == 1 && !strings.Contains(text, "terms.md") {
+			t.Fatal("direct file missing", text)
+		}
+		if i == 1 {
+			entries, e := os.ReadDir(filepath.Join(a.home, "runs", id, "in"))
+			if e != nil || len(entries) != 1 {
+				t.Fatal("staged direct bytes unavailable", e)
+			}
+			data, e := os.ReadFile(filepath.Join(a.home, "runs", id, "in", entries[0].Name()))
+			if e != nil || string(data) != "English terminology" {
+				t.Fatal("staged direct bytes changed", string(data), e)
+			}
+		}
+		ack, _ := json.Marshal(map[string]any{"id": m["id"], "result": map[string]string{"turnId": "active"}})
+		bridge.event(ack)
+		waitState(t, a, id, stateSteered)
+	}
+	cancel()
+	<-done
+	if _, found, err := a.claimNativeFollowup(parent); err != nil || found {
+		t.Fatal("duplicate correction replayed", found, err)
+	}
+}

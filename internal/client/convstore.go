@@ -709,37 +709,39 @@ func (s *store) releaseWaiting(id string) error {
 // ConvMessage is one message of a conversation as this installation holds
 // it, sent or received.
 type ConvMessage struct {
-	SendGroup         string               `json:"send_group,omitempty"`
-	Human             *envelope.HumanTurn  `json:"human,omitempty"`
-	ExcerptPID        string               `json:"excerpt_pid,omitempty"` // scope of a claimed snapshot; original PID stays PID
-	ID                string               `json:"id"`                    // this copy's envelope id
-	LID               string               `json:"lid"`                   // the logical id
-	Dir               string               `json:"dir"`                   // in or out
-	From              string               `json:"from"`
-	Kind              string               `json:"kind"`
-	Body              string               `json:"body"`
-	ReplyTo           string               `json:"reply_to,omitempty"`
-	Quote             string               `json:"quote,omitempty"`
-	Topic             string               `json:"topic,omitempty"`
-	TopicEvent        *envelope.TopicEvent `json:"topic_event,omitempty"`
-	TopicDone         bool                 `json:"topic_done,omitempty"`
-	Sent              int64                `json:"sent"`
-	Delivery          string               `json:"delivery"`
-	Sub               string               `json:"sub,omitempty"`
-	Replica           bool                 `json:"replica,omitempty"`
-	Origin            string               `json:"origin,omitempty"`  // the sender's assertion ("" for none)
-	Emotion           string               `json:"emotion,omitempty"` // "" means none sent
-	Target            *envelope.Target     `json:"target,omitempty"`
-	PID               string               `json:"pid,omitempty"`         // the agent participation it is for, from or about
-	AgentID           string               `json:"agent_id,omitempty"`    // the named answer/result author, asserted by its host
-	Key               string               `json:"key"`                   // the sender's key fingerprint (received: the key that verified it)
-	Claimed           string               `json:"claimed_key,omitempty"` // history only: the key the forwarding device says sent it (Key is then empty)
-	State             string               `json:"state"`                 // inbox: its response state; outbox: queued, waiting, custody, delivered, not_delivered, …
-	Detail            string               `json:"detail,omitempty"`
-	SendStopped       bool                 `json:"send_stopped,omitempty"`
-	DeliveryUncertain bool                 `json:"delivery_uncertain,omitempty"`
-	At                int64                `json:"at"` // received or created here, unix seconds (listed in that order, to the millisecond)
-	liveContext       bool                 // exact retained DM proof, derived while selecting; never a clock comparison
+	Unread            bool                          `json:"unread,omitempty"`
+	Attention         *protocol.AttentionGeneration `json:"attention,omitempty"`
+	SendGroup         string                        `json:"send_group,omitempty"`
+	Human             *envelope.HumanTurn           `json:"human,omitempty"`
+	ExcerptPID        string                        `json:"excerpt_pid,omitempty"` // scope of a claimed snapshot; original PID stays PID
+	ID                string                        `json:"id"`                    // this copy's envelope id
+	LID               string                        `json:"lid"`                   // the logical id
+	Dir               string                        `json:"dir"`                   // in or out
+	From              string                        `json:"from"`
+	Kind              string                        `json:"kind"`
+	Body              string                        `json:"body"`
+	ReplyTo           string                        `json:"reply_to,omitempty"`
+	Quote             string                        `json:"quote,omitempty"`
+	Topic             string                        `json:"topic,omitempty"`
+	TopicEvent        *envelope.TopicEvent          `json:"topic_event,omitempty"`
+	TopicDone         bool                          `json:"topic_done,omitempty"`
+	Sent              int64                         `json:"sent"`
+	Delivery          string                        `json:"delivery"`
+	Sub               string                        `json:"sub,omitempty"`
+	Replica           bool                          `json:"replica,omitempty"`
+	Origin            string                        `json:"origin,omitempty"`  // the sender's assertion ("" for none)
+	Emotion           string                        `json:"emotion,omitempty"` // "" means none sent
+	Target            *envelope.Target              `json:"target,omitempty"`
+	PID               string                        `json:"pid,omitempty"`         // the agent participation it is for, from or about
+	AgentID           string                        `json:"agent_id,omitempty"`    // the named answer/result author, asserted by its host
+	Key               string                        `json:"key"`                   // the sender's key fingerprint (received: the key that verified it)
+	Claimed           string                        `json:"claimed_key,omitempty"` // history only: the key the forwarding device says sent it (Key is then empty)
+	State             string                        `json:"state"`                 // inbox: its response state; outbox: queued, waiting, custody, delivered, not_delivered, …
+	Detail            string                        `json:"detail,omitempty"`
+	SendStopped       bool                          `json:"send_stopped,omitempty"`
+	DeliveryUncertain bool                          `json:"delivery_uncertain,omitempty"`
+	At                int64                         `json:"at"` // received or created here, unix seconds (listed in that order, to the millisecond)
+	liveContext       bool                          // exact retained DM proof, derived while selecting; never a clock comparison
 
 	// An agent's turn (agentTurn) sent by its participation's exact host
 	// key, as admission checks it (checkConversationAgent): for history,
@@ -854,13 +856,13 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool, sel
 		       coalesce(emotion, ''), coalesce(target, ''), state, coalesce(detail, ''), received_at, received_ms AS ms, coalesce(pid, ''),
 		       CASE WHEN pid IS NOT NULL AND state != '' THEN state ELSE '' END, CASE WHEN pid IS NOT NULL AND state != '' THEN coalesce(detail, '') ELSE '' END, CASE WHEN pid IS NOT NULL AND state != '' THEN attempts ELSE 0 END, coalesce(via, ''),
 		       CASE WHEN verified_by IS NULL THEN coalesce(claimed_fp, '') ELSE '' END,
-		       CASE WHEN kind IN ('question', 'task') THEN '' ELSE coalesce(agent_id, '') END, coalesce(status, ''), coalesce(quote,''), ts, '', coalesce(topic,''),coalesce(topic_event,''),topic_done,0,0,send_group,`+liveIn+`
+		       CASE WHEN kind IN ('question', 'task') THEN '' ELSE coalesce(agent_id, '') END, coalesce(status, ''), coalesce(quote,''), ts, '', coalesce(topic,''),coalesce(topic_event,''),topic_done,0,0,send_group,i.read_at IS NULL,`+liveIn+`
 		  FROM inbox i`+join+` WHERE conv = ? AND local = 0 AND ref_id IS NULL AND coalesce(sub, '') NOT IN `+recordSubs+`
 		   AND NOT `+erasedIn+cursorIn+`
 		UNION ALL
 		SELECT o.id, o.lid, 'out', ?, ?, o.kind, o.body, coalesce(o.reply_to, ''), coalesce(o.sub, ''), 0, coalesce(o.origin, ''),
 		       coalesce(o.emotion, ''), coalesce(o.target, ''), o.state, coalesce(o.error, ''), o.created_at, o.created_ms, coalesce(o.pid, ''),
-		       coalesce(j.state, ''), coalesce(j.detail, ''), coalesce(j.attempts, 0), o.recipient, '', coalesce(o.agent_id, ''), coalesce(o.status, ''),coalesce(o.quote,''),json_extract(o.envelope,'$.ts'),coalesce(o.recipient_person,''),coalesce(o.topic,''),coalesce(o.topic_event,''),o.topic_done,o.send_stopped,o.send_stopped=1 AND o.state='not_delivered' AND coalesce(o.handover_started,1)=1,o.send_group,`+liveOut+`
+		       coalesce(j.state, ''), coalesce(j.detail, ''), coalesce(j.attempts, 0), o.recipient, '', coalesce(o.agent_id, ''), coalesce(o.status, ''),coalesce(o.quote,''),json_extract(o.envelope,'$.ts'),coalesce(o.recipient_person,''),coalesce(o.topic,''),coalesce(o.topic_event,''),o.topic_done,o.send_stopped,o.send_stopped=1 AND o.state='not_delivered' AND coalesce(o.handover_started,1)=1,o.send_group,0,`+liveOut+`
 		  FROM outbox o LEFT JOIN inbox j ON j.id = o.id AND j.local = 1`+join+` WHERE o.conv = ? AND coalesce(o.sub, '') NOT IN ('read-sync', 'root-sync', 'history', 'file', 'drive-space', 'group-proof', 'group-context','group-invite','group-consent','group-withdrawal') AND o.ref_id IS NULL
 		   AND NOT `+erasedOut+cursorOut+`
 		ORDER BY ms, 1`, args...)
@@ -875,7 +877,7 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool, sel
 		var target, to, person, topicEvent string
 		var ms int64
 		if err := rows.Scan(&m.ID, &m.LID, &m.Dir, &m.From, &m.Key, &m.Kind, &m.Body, &m.ReplyTo, &m.Sub, &m.Replica, &m.Origin,
-			&m.Emotion, &target, &m.State, &m.Detail, &m.At, &ms, &m.PID, &m.Job, &m.JobDetail, &m.JobAttempt, &to, &m.Claimed, &m.AgentID, &m.status, &m.Quote, &m.Sent, &person, &m.Topic, &topicEvent, &m.TopicDone, &m.SendStopped, &m.DeliveryUncertain, &m.SendGroup, &m.liveContext); err != nil {
+			&m.Emotion, &target, &m.State, &m.Detail, &m.At, &ms, &m.PID, &m.Job, &m.JobDetail, &m.JobAttempt, &to, &m.Claimed, &m.AgentID, &m.status, &m.Quote, &m.Sent, &person, &m.Topic, &topicEvent, &m.TopicDone, &m.SendStopped, &m.DeliveryUncertain, &m.SendGroup, &m.Unread, &m.liveContext); err != nil {
 			return nil, err
 		}
 		if topicEvent != "" {

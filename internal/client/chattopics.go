@@ -106,20 +106,10 @@ func (a *Agent) ChatTopicsForMessages(conv string, msgs []ConvMessage) ([]Thread
 		return nil, err
 	}
 	ts := summarizeChatTopics(conv, msgs, locals, storeNow().Unix())
-	unread, err := a.ConvUnread()
-	if err != nil {
-		return nil, err
-	}
-	ids := map[string]bool{}
-	for _, m := range unread[conv] {
-		ids[m] = true
-	}
 	assigned := ChatTopicAssignments(msgs)
 	for i := range ts {
 		for _, m := range msgs {
-			// Own-device copies are stored in inbox but shown as outgoing,
-			// so they cannot be unread in the timeline or its topic badge.
-			if m.Dir == "in" && assigned[m.LID] == ts[i].ID && m.TopicEvent == nil && ids[m.ID] {
+			if assigned[m.LID] == ts[i].ID && m.TopicEvent == nil && m.Unread {
 				ts[i].Unread++
 			}
 		}
@@ -626,6 +616,14 @@ func (a *Agent) ChatMainTopicForMessages(conv string, msgs []ConvMessage) (*Thre
 		return nil, err
 	}
 	ts := summarizeChatTopicView(conv, msgs, map[string]topicLocal{"": locals[mainTopicKey]}, storeNow().Unix(), true)
+	assigned := ChatTopicAssignments(msgs)
+	if len(ts) > 0 {
+		for _, m := range msgs {
+			if m.Unread && assigned[m.LID] == "" {
+				ts[0].Unread++
+			}
+		}
+	}
 	if len(ts) == 0 {
 		return nil, nil
 	}

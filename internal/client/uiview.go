@@ -109,6 +109,24 @@ func (a *Agent) peerThreadGroups(peer string) ([][]string, map[string]threadRow,
 	if err != nil {
 		return nil, nil, err
 	}
+	owner, err := attentionOwner(a.store.db)
+	if err != nil {
+		return nil, nil, err
+	}
+	refs := make([]protocol.ReadRef, 0, len(rows))
+	for id, r := range rows {
+		refs = append(refs, protocol.ReadRef{Fingerprint: r.key, LID: id})
+	}
+	marks, err := loadAttentionMarks(a.store.db, owner, refs)
+	if err != nil {
+		return nil, nil, err
+	}
+	resolved := resolveControls(controls, legacyAuthority(peer, a.Address, a.Self().Fingerprint()))
+	for id, r := range rows {
+		ref := protocol.ReadRef{Fingerprint: r.key, LID: id}
+		r.unread = !r.notice && normalAttentionMessage(r.kind) && !resolved[ControlRef{ID: id, Fingerprint: r.key}].Deleted && attentionUnread(marks[ref], r.in && r.unread)
+		rows[id] = r
+	}
 	execs := execViews(controls)
 	for id, r := range rows {
 		if r.in || (r.kind != envelope.KindQuestion && r.kind != envelope.KindTask) {
@@ -199,9 +217,8 @@ func (s *store) threadRows(peer, selfFP string) (map[string]threadRow, error) {
 	// A review notice is exactly the shape the store files as one (see
 	// receivedNotice); a reply or a message with files never is.
 	rows, err := s.db.Query(`SELECT id, kind, state, read_at IS NULL, coalesce(reply_to, ''), coalesce(status, ''), (`+receivedNotice+`), EXISTS(SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id),
-		CASE WHEN kind IN ('`+envelope.KindQuestion+`', '`+envelope.KindTask+`') THEN coalesce(json_extract(target, '$.agent_id'), '') ELSE coalesce(agent_id, '') END,topic_done,coalesce(verified_by,claimed_fp,''),
-		(SELECT direction FROM device_thread_links l WHERE l.id=inbox.id AND l.storage='in')
-		FROM inbox WHERE id IN (SELECT id FROM device_thread_links WHERE peer=? AND storage='in') AND conv IS NULL AND ref_id IS NULL AND coalesce(sub,'') NOT IN `+recordSubs+` AND NOT `+erasedInFor("inbox"),
+		CASE WHEN kind IN ('`+envelope.KindQuestion+`', '`+envelope.KindTask+`') THEN coalesce(json_extract(target, '$.agent_id'), '') ELSE coalesce(agent_id, '') END,topic_done,l.thread_key,l.thread_dir
+		FROM inbox JOIN (SELECT id AS thread_id,direction AS thread_dir,author_fp AS thread_key FROM device_thread_links WHERE peer=? AND storage='in') l ON l.thread_id=inbox.id WHERE conv IS NULL AND ref_id IS NULL AND coalesce(sub,'') NOT IN `+recordSubs+` AND NOT `+erasedInFor("inbox"),
 		envelope.KindMessage, envelope.StatusReviewNotice, peer)
 	if err != nil {
 		return nil, err
@@ -227,8 +244,8 @@ func (s *store) threadRows(peer, selfFP string) (map[string]threadRow, error) {
 	}
 	rows, err = s.db.Query(`SELECT id, coalesce(json_extract(envelope, '$.kind'), ''), state, coalesce(status, ''), coalesce(json_extract(target, '$.agent_id'), agent_id, ''),topic_done,
 		(coalesce(json_extract(envelope,'$.kind'),'')='message' AND coalesce(status,'')='review_notice' AND reply_to IS NULL AND NOT EXISTS(SELECT 1 FROM sent_attachments a WHERE a.message_id=o.id)),
-		(SELECT direction FROM device_thread_links l WHERE l.id=o.id AND l.storage='out'),coalesce(reply_to,'')
-		FROM outbox o WHERE id IN (SELECT id FROM device_thread_links WHERE peer=? AND storage='out') AND conv IS NULL AND ref_id IS NULL AND coalesce(sub,'') NOT IN `+recordSubs+` AND NOT `+erasedOut, peer, selfFP)
+		l.thread_dir,coalesce(reply_to,''),l.thread_key
+		FROM outbox o JOIN (SELECT id AS thread_id,direction AS thread_dir,author_fp AS thread_key FROM device_thread_links WHERE peer=? AND storage='out') l ON l.thread_id=o.id WHERE conv IS NULL AND ref_id IS NULL AND coalesce(sub,'') NOT IN `+recordSubs+` AND NOT `+erasedOut, peer, selfFP)
 	if err != nil {
 		return nil, err
 	}
@@ -236,11 +253,13 @@ func (s *store) threadRows(peer, selfFP string) (map[string]threadRow, error) {
 	for rows.Next() {
 		var r threadRow
 		var direction string
-		if err := rows.Scan(&r.id, &r.kind, &r.state, &r.status, &r.agent, &r.topicDone, &r.notice, &direction, &r.replyTo); err != nil {
+		if err := rows.Scan(&r.id, &r.kind, &r.state, &r.status, &r.agent, &r.topicDone, &r.notice, &direction, &r.replyTo, &r.key); err != nil {
 			return nil, err
 		}
 		r.in = direction == "in"
-		r.key = selfFP
+		if r.key == "" {
+			r.key = selfFP
+		}
 		if r.in && r.replyTo != "" && r.status != envelope.StatusProgress {
 			replies[r.replyTo] = true
 		}
@@ -541,31 +560,25 @@ func (a *Agent) PeerKeyOf(address string) (PeerKey, error) {
 }
 
 // MarkRead acknowledges exact visible messages, including locally signed device sends.
-func (a *Agent) MarkRead(ids []string) error {
-	if err := a.store.markRead(ids); err != nil {
-		return err
-	}
-	if err := a.markVisibleSentRead(ids); err != nil {
-		return err
-	}
-	notifyDaemon(a.home)
-	return nil
-}
+func (a *Agent) MarkRead(ids []string) error { return a.MarkReadWithAttention(ids, nil) }
 
 // ConvUnread lists, per conversation, the received messages not yet read.
 func (a *Agent) ConvUnread() (map[string][]string, error) {
-	rows, err := a.store.db.Query(`SELECT conv, id FROM inbox i WHERE conv IS NOT NULL AND read_at IS NULL AND ref_id IS NULL AND NOT ` + erasedIn)
+	convs, err := a.Conversations()
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	out := map[string][]string{}
-	for rows.Next() {
-		var conv, id string
-		if err := rows.Scan(&conv, &id); err != nil {
-			return nil, err
+	for _, conv := range convs {
+		msgs, e := a.ConversationMessages(conv.ID)
+		if e != nil {
+			return nil, e
 		}
-		out[conv] = append(out[conv], id)
+		for _, m := range msgs {
+			if m.Unread {
+				out[conv.ID] = append(out[conv.ID], m.ID)
+			}
+		}
 	}
-	return out, rows.Err()
+	return out, nil
 }

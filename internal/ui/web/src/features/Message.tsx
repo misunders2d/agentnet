@@ -69,6 +69,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
   const [assign, setAssign] = useState<boolean | null>(null);
 
   const live = !m._local && !readOnly && !m.deleted && !excerpt(m);
+  const attention = !readOnly && store.canMarkUnread(m);
   // A reminder on a stored message, where this device keeps reminders (a computer).
   const reminder = live ? reminderOf(ctx.overview, m.id) : undefined;
   const remindable = { id: m.id, text: reminder || remind !== null ? firstLine(shownText(m), 90) : "" };
@@ -82,6 +83,8 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
     remind: live && !!ctx.overview?.remind,
   };
   const acts: Acts = {
+    unread: attention ? () => { void store.markUnread(m.id); } : undefined,
+    unreadFrom: attention ? () => { void store.markUnread(m.id, true); } : undefined,
     assign: live && ctx.overview?.person?.state === "self" ? () => setAssign(true) : undefined,
     topic:live&&ctx.dm&&ctx.canReply&&!isThreadMsg(m)&&!m.topic&&!m.topic_event?()=>{void store.run(a=>a.changeTopic("create",{conv:ctx.dm!.id,peer:"",id:m.lid||m.id})).then(r=>{if(r)store.setDraft(ctx.conv,{...store.draft(ctx.conv),topic:m.lid||m.id,newTopic:false});});}:undefined,
     reply: () => store.setDraft(ctx.conv, { ...store.draft(ctx.conv), replyTo: m.id }),
@@ -119,9 +122,9 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
 
   const terminal = !selecting && !readOnly && !grouped && phaseOf(m) === "stopped";
   const body = (
-    <div data-message-bubble data-part="bubble" tabIndex={wide && live && !selecting ? 0 : undefined} role={wide && live ? "group" : undefined} aria-label={wide && live ? who.name + ", " + timeOf(m.at) : undefined}
+    <div data-message-bubble data-part="bubble" tabIndex={wide && (live || attention) && !selecting ? 0 : undefined} role={wide && (live || attention) ? "group" : undefined} aria-label={wide && (live || attention) ? who.name + ", " + timeOf(m.at) : undefined}
       className={"relative min-w-0 max-w-full stroke px-3.5 py-2 focus-visible:outline-offset-2 " + shape + (selected ? " ring-[3px] ring-agent-ink ring-offset-2 ring-offset-canvas" : "")}>
-      {wide && hot && live && !selecting && !editing && <Toolbar m={m} ctx={ctx} can={can} acts={acts} mine={who.mine} />}
+      {wide && hot && (live || attention) && !selecting && !editing && <Toolbar m={m} ctx={ctx} can={can} acts={acts} mine={who.mine} />}
       {last && !who.mine && (
         <span className="absolute -left-10 bottom-0">
           {who.agent ? <AgentAvatar seed={who.seed} size={32} guest={who.guest} device={who.device} /> : <PersonAvatar name={who.name} seed={who.seed} size={32} guest={who.guest} />}
@@ -183,7 +186,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
             aria-label={"Actions for " + requestLabel(m, ctx)} onClick={() => setSheet(true)}>Actions</button>}
           {reminder && !selecting && <ReminderLine r={reminder} m={remindable} />}
         </div>
-        {!wide && live && !selecting && (
+        {!wide && (live || attention) && !selecting && (
           <button type="button" onClick={() => setSheet(true)} className="sr-only focus:not-sr-only focus:absolute focus:right-2 focus:top-0 focus:inline-flex focus:min-h-11 focus:items-center focus:rounded-full focus:bg-surface focus:px-3 focus:stroke">
             Message actions
           </button>

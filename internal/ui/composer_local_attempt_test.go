@@ -185,3 +185,162 @@ func TestComposerOwnGroupCurrentAttempt(t *testing.T) {
 	}
 	t.Logf("%s", out)
 }
+
+// A starts the original on another host; B is a real signed linked human
+// device and learns it through production device-history replication.
+// Only the host's worker lifecycle is staged, as in the group fixture above.
+func TestComposerLinkedDirectCurrentAttempt(t *testing.T) {
+	t.Setenv("AGENTNET_NOTIFY", "off")
+	ctx, cancel := context.WithTimeout(t.Context(), 45*time.Second)
+	defer cancel()
+	hub, home, hostHome := t.TempDir(), t.TempDir(), t.TempDir()
+	testhub.Start(t, hub, "127.0.0.1:0", "")
+	a, err := client.Join(ctx, home, testhub.BootstrapCode(t, hub), "human-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	code, err := a.Invite(ctx, "host", time.Hour, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, err := client.Join(ctx, hostHome, code, "agent-host")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer host.Close()
+	stopA := runDaemon(t, a)
+	defer stopA()
+	if _, err = a.CreatePerson(ctx, "Owner"); err != nil {
+		t.Fatal(err)
+	}
+	offer, err := a.NewDeviceLink(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := client.JoinAndLink(ctx, t.TempDir(), offer.Code, "human-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	stopB := runDaemon(t, b)
+	defer stopB()
+	waitFor(t, "signed linked B request", func() bool {
+		rows, e := a.PendingLinks()
+		for _, row := range rows {
+			if row.State == client.LinkPending {
+				return a.DecideLink(ctx, row.ID, true) == nil
+			}
+		}
+		if e != nil {
+			t.Fatal(e)
+		}
+		return false
+	})
+	waitFor(t, "B holds current owner roster", func() bool { p, ok, e := b.Person(); return e == nil && ok && len(p.Devices) == 2 })
+	named, err := host.CreateLocalAgent("Selected agent", client.Responder{Harness: "pi", Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = host.PublishAgentCatalog(ctx); err != nil {
+		t.Fatal(err)
+	}
+	runHuman := func() func() {
+		c, stop := context.WithCancel(ctx)
+		done := make(chan struct{})
+		go func() { defer close(done); host.Run(c, client.RunOptions{HumanOnly: true}) }()
+		return func() { stop(); <-done }
+	}
+	stopHost := runHuman()
+	defer stopHost()
+	// B establishes its own exact current host pin through the ordinary API.
+	if _, err = b.SendMessage(ctx, client.Outgoing{To: host.Address, Body: "linked B host pin"}); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(hostHome, "agent.db")+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	type projection struct {
+		Label    string   `json:"label"`
+		Original string   `json:"original"`
+		Author   string   `json:"author"`
+		HostKey  string   `json:"host_key"`
+		Overview Overview `json:"overview"`
+		Thread   Thread   `json:"thread"`
+	}
+	var linked []projection
+	for _, target := range []*envelope.Target{nil, {Address: host.Address, Fingerprint: host.Self().Fingerprint(), AgentID: named.ID}} {
+		q, e := a.SendMessage(ctx, client.Outgoing{To: host.Address, Kind: envelope.KindQuestion, Body: "Original linked steering work", Target: target})
+		if e != nil {
+			stopHost()
+			t.Fatal(e)
+		}
+		waitFor(t, "host stores signed original", func() bool {
+			var n int
+			return db.QueryRow(`SELECT count(*) FROM inbox WHERE id=?`, q.ID).Scan(&n) == nil && n == 1
+		})
+		linked = append(linked, projection{Original: q.ID, Author: a.Self().Fingerprint(), HostKey: host.Self().Fingerprint()})
+	}
+	stopHost()
+	for i := range linked {
+		res, e := db.Exec(`UPDATE inbox SET state='running',attempts=1,last_attempt_at=unixepoch(),status_due=1 WHERE id=?`, linked[i].Original)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if n, _ := res.RowsAffected(); n != 1 {
+			t.Fatal("original worker row missing")
+		}
+	}
+	stopHost = runHuman()
+	defer stopHost()
+	live := NewLive(b)
+	for i := range linked {
+		c := &linked[i]
+		c.Label = []string{"linked-default", "linked-named"}[i]
+		waitFor(t, c.Label+" original and signed running status in B's actual Thread", func() bool {
+			v, e := live.Thread(c.Original)
+			if e != nil {
+				return false
+			}
+			for _, m := range v.Messages {
+				if m.ID == c.Original && m.Exec != nil && m.Exec.State == "running" && m.Exec.Attempt == 1 {
+					c.Thread = v
+					return true
+				}
+			}
+			return false
+		})
+		c.Overview, err = live.Overview()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range c.Thread.Messages {
+			if m.ID == c.Original {
+				t.Logf("%s original=%s dir=%s from_key=%s history=%v exec=%+v pin=%s target=%+v", c.Label, m.ID, m.Dir, m.FromKey, m.History, m.Exec, c.Thread.Key.Pinned, m.Target)
+			}
+		}
+	}
+	payload, err := json.Marshal(map[string]any{"cases": []any{}, "linked": linked})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dest := os.Getenv("AGENTNET_LINKED_PROJECTION"); dest != "" {
+		if err = os.WriteFile(dest, payload, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	source, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.CommandContext(ctx, "node", "testdata/composer_local_attempt_check.mjs")
+	cmd.Env = append(os.Environ(), "AGENTNET_SOURCE="+source)
+	cmd.Stdin = strings.NewReader(string(payload))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("linked Live.Thread through actual Composer sends: %v\n%s", err, out)
+	}
+	t.Logf("%s", out)
+}

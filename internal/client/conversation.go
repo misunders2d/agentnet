@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/identity"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
@@ -17,34 +18,37 @@ import (
 // as stored locally. Summary and Detail are local notes about the message,
 // never part of what the peer wrote.
 type ConversationMessage struct {
-	ID                string           `json:"id"`
-	Dir               string           `json:"dir"` // "in" (received) or "out" (sent)
-	From              string           `json:"from"`
-	To                string           `json:"to"`
-	Kind              string           `json:"kind"`
-	Status            string           `json:"status,omitempty"` // outcome carried by an answer or result
-	Body              string           `json:"body"`
-	ReplyTo           string           `json:"reply_to,omitempty"`
-	Quote             string           `json:"quote,omitempty"`
-	At                time.Time        `json:"at"`                // when this installation stored it
-	SentAt            time.Time        `json:"sent_at,omitempty"` // the sender's timestamp, for received messages
-	State             string           `json:"state,omitempty"`   // delivery state (out) or response state (in)
-	Path              string           `json:"path,omitempty"`    // relay or direct, for sent messages
-	Responder         string           `json:"responder,omitempty"`
-	AgentID           string           `json:"agent_id,omitempty"`
-	Target            *envelope.Target `json:"target,omitempty"`
-	Summary           string           `json:"summary,omitempty"` // follow-up summary written by the local responder
-	Detail            string           `json:"detail,omitempty"`  // other local note (failure, needs-human reason)
-	SendStopped       bool             `json:"send_stopped,omitempty"`
-	DeliveryUncertain bool             `json:"delivery_uncertain,omitempty"`
-	Read              *bool            `json:"read,omitempty"` // received messages only
-	Attachments       []FileInfo       `json:"attachments,omitempty"`
-	Controls                           // reactions, edits and deletion applied to it (controls.go)
-	Exec              *ExecView        `json:"exec,omitempty"` // a sent request: where its executor last said it stands (headless.go)
-	History           bool             `json:"history,omitempty"`
-	SyncedFrom        string           `json:"synced_from,omitempty"`
-	FromKey           string           `json:"from_key,omitempty"`
+	Unread            bool                          `json:"unread,omitempty"`
+	Attention         *protocol.AttentionGeneration `json:"attention,omitempty"`
+	ID                string                        `json:"id"`
+	Dir               string                        `json:"dir"` // "in" (received) or "out" (sent)
+	From              string                        `json:"from"`
+	To                string                        `json:"to"`
+	Kind              string                        `json:"kind"`
+	Status            string                        `json:"status,omitempty"` // outcome carried by an answer or result
+	Body              string                        `json:"body"`
+	ReplyTo           string                        `json:"reply_to,omitempty"`
+	Quote             string                        `json:"quote,omitempty"`
+	At                time.Time                     `json:"at"`                // when this installation stored it
+	SentAt            time.Time                     `json:"sent_at,omitempty"` // the sender's timestamp, for received messages
+	State             string                        `json:"state,omitempty"`   // delivery state (out) or response state (in)
+	Path              string                        `json:"path,omitempty"`    // relay or direct, for sent messages
+	Responder         string                        `json:"responder,omitempty"`
+	AgentID           string                        `json:"agent_id,omitempty"`
+	Target            *envelope.Target              `json:"target,omitempty"`
+	Summary           string                        `json:"summary,omitempty"` // follow-up summary written by the local responder
+	Detail            string                        `json:"detail,omitempty"`  // other local note (failure, needs-human reason)
+	SendStopped       bool                          `json:"send_stopped,omitempty"`
+	DeliveryUncertain bool                          `json:"delivery_uncertain,omitempty"`
+	Read              *bool                         `json:"read,omitempty"` // received messages only
+	Attachments       []FileInfo                    `json:"attachments,omitempty"`
+	Controls                                        // reactions, edits and deletion applied to it (controls.go)
+	Exec              *ExecView                     `json:"exec,omitempty"` // a sent request: where its executor last said it stands (headless.go)
+	History           bool                          `json:"history,omitempty"`
+	SyncedFrom        string                        `json:"synced_from,omitempty"`
+	FromKey           string                        `json:"from_key,omitempty"`
 	storedIn          bool
+	attentionSub      string
 }
 
 // Conversation is one page of a conversation with one peer.
@@ -65,6 +69,10 @@ var ErrNoMessage = errors.New("no message with that id")
 // other conversations by naming their ids. It changes nothing (not even
 // read state). limit <= 0 means all.
 func (a *Agent) Conversation(id string, offset, limit int) (Conversation, error) {
+	return a.conversation(id, offset, limit, true)
+}
+
+func (a *Agent) conversation(id string, offset, limit int, projectAttention bool) (Conversation, error) {
 	peer, err := a.store.peerOf(id)
 	if err != nil {
 		return Conversation{}, err
@@ -111,7 +119,7 @@ func (a *Agent) Conversation(id string, offset, limit int) (Conversation, error)
 	if limit > 0 && len(page) > limit {
 		page = page[:limit]
 	}
-	full, err := a.store.peerMessages(peer, page)
+	full, err := a.store.peerMessages(peer, page, a.Self())
 	if err != nil {
 		return Conversation{}, err
 	}
@@ -143,7 +151,13 @@ func (a *Agent) Conversation(id string, offset, limit int) (Conversation, error)
 		}
 		c.Messages = append(c.Messages, m)
 	}
-	return c, a.decorateLegacy(peer, c.Messages)
+	if err = a.decorateLegacy(peer, c.Messages); err != nil {
+		return Conversation{}, err
+	}
+	if projectAttention {
+		err = a.projectDirectAttention(c.Messages)
+	}
+	return c, err
 }
 
 // sortThread orders one thread's messages oldest first. Times have whole
@@ -257,7 +271,7 @@ func (s *store) peerLinks(peer string) ([]link, error) {
 }
 
 // peerMessages loads the messages ids exchanged with peer, both directions.
-func (s *store) peerMessages(peer string, ids []string) (map[string]ConversationMessage, error) {
+func (s *store) peerMessages(peer string, ids []string, own ...identity.Public) (map[string]ConversationMessage, error) {
 	out := map[string]ConversationMessage{}
 	for len(ids) > 0 {
 		chunk := ids[:min(len(ids), 500)]
@@ -269,7 +283,7 @@ func (s *store) peerMessages(peer string, ids []string) (map[string]Conversation
 		}
 		rows, err := s.db.Query(`SELECT i.id, kind, coalesce(status, ''), body, coalesce(i.reply_to, ''), ts, received_at, read_at IS NOT NULL,
 			state, coalesce(responder, ''), coalesce(detail, ''),
-			CASE WHEN kind IN ('question', 'task') THEN '' ELSE coalesce(agent_id, '') END, coalesce(target, ''),coalesce(quote,''),l.direction,i.sender,l.recipient,l.author_fp,i.replica,coalesce(i.via,''),EXISTS(SELECT 1 FROM device_history_rows h WHERE h.storage='in' AND h.id=i.id) FROM inbox i JOIN device_thread_links l ON l.id=i.id AND l.storage='in' WHERE l.peer=? AND i.conv IS NULL AND ref_id IS NULL AND i.id IN (`+marks+`)`, args...)
+			CASE WHEN kind IN ('question', 'task') THEN '' ELSE coalesce(agent_id, '') END, coalesce(target, ''),coalesce(quote,''),l.direction,i.sender,l.recipient,l.author_fp,i.replica,coalesce(i.via,''),EXISTS(SELECT 1 FROM device_history_rows h WHERE h.storage='in' AND h.id=i.id),coalesce(i.sub,'') FROM inbox i JOIN device_thread_links l ON l.id=i.id AND l.storage='in' WHERE l.peer=? AND i.conv IS NULL AND ref_id IS NULL AND i.id IN (`+marks+`)`, args...)
 		if err != nil {
 			return nil, err
 		}
@@ -278,7 +292,7 @@ func (s *store) peerMessages(peer string, ids []string) (map[string]Conversation
 			var ts, recv int64
 			var read, deviceHistory bool
 			var detail, target string
-			if err := rows.Scan(&m.ID, &m.Kind, &m.Status, &m.Body, &m.ReplyTo, &ts, &recv, &read, &m.State, &m.Responder, &detail, &m.AgentID, &target, &m.Quote, &m.Dir, &m.From, &m.To, &m.FromKey, &m.History, &m.SyncedFrom, &deviceHistory); err != nil {
+			if err := rows.Scan(&m.ID, &m.Kind, &m.Status, &m.Body, &m.ReplyTo, &ts, &recv, &read, &m.State, &m.Responder, &detail, &m.AgentID, &target, &m.Quote, &m.Dir, &m.From, &m.To, &m.FromKey, &m.History, &m.SyncedFrom, &deviceHistory, &m.attentionSub); err != nil {
 				rows.Close()
 				return nil, err
 			}
@@ -305,7 +319,7 @@ func (s *store) peerMessages(peer string, ids []string) (map[string]Conversation
 		if err := rows.Err(); err != nil {
 			return nil, err
 		}
-		rows, err = s.db.Query(`SELECT o.id, envelope, coalesce(status, ''), body, coalesce(o.reply_to, ''), created_at, state, coalesce(path, ''), coalesce(error, ''), coalesce(agent_id, ''), coalesce(target, ''),coalesce(quote,''),send_stopped,send_stopped=1 AND state='not_delivered' AND coalesce(handover_started,1)=1,l.direction,l.recipient,l.author_fp,EXISTS(SELECT 1 FROM device_history_rows h WHERE h.storage='out' AND h.id=o.id)
+		rows, err = s.db.Query(`SELECT o.id, envelope, coalesce(status, ''), body, coalesce(o.reply_to, ''), created_at, state, coalesce(path, ''), coalesce(error, ''), coalesce(agent_id, ''), coalesce(target, ''),coalesce(quote,''),send_stopped,send_stopped=1 AND state='not_delivered' AND coalesce(handover_started,1)=1,l.direction,l.recipient,l.author_fp,EXISTS(SELECT 1 FROM device_history_rows h WHERE h.storage='out' AND h.id=o.id),coalesce(o.sub,'')
 			FROM outbox o JOIN device_thread_links l ON l.id=o.id AND l.storage='out' WHERE l.peer=? AND conv IS NULL AND ref_id IS NULL AND o.id IN (`+marks+`)`, args...)
 		if err != nil {
 			return nil, err
@@ -315,7 +329,7 @@ func (s *store) peerMessages(peer string, ids []string) (map[string]Conversation
 			var data, target string
 			var created int64
 			var deviceHistory bool
-			if err := rows.Scan(&m.ID, &data, &m.Status, &m.Body, &m.ReplyTo, &created, &m.State, &m.Path, &m.Detail, &m.AgentID, &target, &m.Quote, &m.SendStopped, &m.DeliveryUncertain, &m.Dir, &m.To, &m.FromKey, &deviceHistory); err != nil {
+			if err := rows.Scan(&m.ID, &data, &m.Status, &m.Body, &m.ReplyTo, &created, &m.State, &m.Path, &m.Detail, &m.AgentID, &target, &m.Quote, &m.SendStopped, &m.DeliveryUncertain, &m.Dir, &m.To, &m.FromKey, &deviceHistory, &m.attentionSub); err != nil {
 				rows.Close()
 				return nil, err
 			}
@@ -331,6 +345,9 @@ func (s *store) peerMessages(peer string, ids []string) (map[string]Conversation
 				return nil, fmt.Errorf("sent message %s: %w", m.ID, err)
 			}
 			m.From, m.Kind, m.At = env.From, env.Kind, time.Unix(created, 0)
+			if m.FromKey == "" && len(own) > 0 && env.ID == m.ID && env.To == m.To && env.From == own[0].Address && env.VerifySig(own[0].SignKey) == nil {
+				m.FromKey = own[0].Fingerprint()
+			}
 			if deviceHistory && (m.Kind == envelope.KindQuestion || m.Kind == envelope.KindTask) {
 				m.Dir = deviceHistoryRequestDirection(m.From, m.To, peer)
 			}

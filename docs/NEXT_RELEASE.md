@@ -1,4 +1,29 @@
-# v0.8.31 — approved implementation and release
+# v0.8.32 — approved implementation and release
+
+Current scope and qualification: [V0_8_32.md](plans/V0_8_32.md); owner goal:
+[V0_8_32_GOAL.md](plans/V0_8_32_GOAL.md). Starting release is published
+v0.8.31. Selected work is exact Android notification landing, measured long-chat
+responsiveness, natural direct-agent steering, deliberate unread, and bounded
+coordination/WebKit investigations, plus MEL-647 all-status topic search added
+by Sergey during implementation. Implementation and focused checks are in
+progress; no v0.8.32 publication or completed release qualification is claimed.
+
+Root orchestrates and challenges worker code. GPT-6.1-sol xhigh workers use
+Herdr tab 3 and native automatic review; Claude independently reviews design,
+significant code and the integrated candidate in tab 2. Stabilize focused
+corrections before expensive gates. Projects and unrelated backlog remain out
+of scope; affected ThinkPad and physical-phone acceptance remain explicit.
+
+Non-blocking follow-up requested October 16: [MEL-648](https://linear.app/mellanni/issue/MEL-648/show-an-unread-notification-dot-on-the-app-icon-across-supported),
+an unread dot/badge on native app icons across supported systems. Initial local
+inspection finds a static desktop tray icon and no badge updater in the Rust
+shell. Reuse native platform facilities when implemented; verify actual icon
+appearance/clearing per OS. This feature must not delay v32 and is not claimed
+implemented or qualified.
+
+Non-blocking follow-up updated October16: [MEL-615](https://linear.app/mellanni/issue/MEL-615/preview-and-play-video-attachments-inline-in-chats), inline video previews/playback like Slack or Telegram. This updates the existing video request; earlier OS-only playback notes are historical. Keep external opening/download fallback, encrypted file handling and responsive chat. No v32 milestone or implementation commitment.
+
+## v0.8.31 — historical approved scope
 
 Current scope and evidence: [V0_8_31.md](plans/V0_8_31.md); full owner goal:
 [V0_8_31_GOAL.md](plans/V0_8_31_GOAL.md). v0.8.30 is published and deployed.

@@ -130,13 +130,13 @@ class NativeHost(private val application: Application) {
         application.getSystemService(NotificationManager::class.java).createNotificationChannel(activityNotificationChannel())
     }
     private fun dismissActivity(workspace: String, fragment: String) {
-        WebPolicy.notificationDestination(workspace, fragment)?.let { route ->
-            application.getSystemService(NotificationManager::class.java).cancel(route, 0)
+        WebPolicy.notificationTag(workspace, fragment)?.let { tag ->
+            application.getSystemService(NotificationManager::class.java).cancel(tag, 0)
         }
     }
     private fun notifyActivity(workspace: String, fragment: String, title: String, body: String) {
         if (!notificationsPermitted()) return
-        val route = WebPolicy.notificationDestination(workspace, fragment) ?: return
+        val tag = WebPolicy.notificationTag(workspace, fragment) ?: return
         val manager = application.getSystemService(NotificationManager::class.java)
         // Defaults apply to a newly created channel only. Reusing its id leaves
         // existing sound/vibration/mute/DND choices under Android's authority.
@@ -153,6 +153,6 @@ class NativeHost(private val application: Application) {
             .setStyle(Notification.BigTextStyle().bigText(body)).setCategory(Notification.CATEGORY_MESSAGE)
             .setVisibility(Notification.VISIBILITY_PRIVATE).setPublicVersion(redacted)
             .setContentIntent(pending).setAutoCancel(true).build()
-        manager.notify(route, 0, note)
+        manager.notify(tag, 0, note)
     }
 }

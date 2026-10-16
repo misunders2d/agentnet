@@ -449,7 +449,25 @@ types are the Go structs in `internal/ui/*.go`, generated into
   even while the host is online. No report grants access or controls a harness.
 - Device threads: `/api/send` `{to,kind,body,reply_to,files}`.
   Conversations: `/api/dm/new`; `/api/dm/send` `{conv,body,reply_to,files}`.
-- Decisions: `/api/act`; returned message actions determine availability.
+- Decisions: `/api/act`; returned message actions determine request-decision
+  availability. Personal unread controls are separate: normal admitted message
+  rows carry effective `unread` and optional `attention:{rev,writer}`. Offer
+  Mark unread and Mark unread from here in the existing message menu/sheet,
+  including own-sent and personally held excerpt rows; read-only context viewers,
+  deleted, optimistic and protocol/event rows do not get these controls.
+  Use `unread` for all badges/counts, including deliberately marked outgoing rows.
+  Send one atomic `/api/act {do:"unread",id,ids}` using the full current topic's
+  admitted ordered rows, independently of any rendered window. Preserve other
+  topics and later arrivals. Marking creates no notification or execution effect.
+  Deliberate marks survive the current visit, refresh, restart and restored mount.
+  Only an actual leave/reopen or topic transition arms read tokens, from that
+  entry's first fresh view; same-scope reselection does not. Later generations
+  learned during the visit remain unread. Acknowledgments use
+  `{do:"read",ids,attention:{id:{rev,writer}}}` with the exact full observed
+  generation; never clear by revision alone or by an old cached entry. Deduplicate
+  pending/successful reads by generation and retain the existing normal open-topic
+  read policy. No polling or viewport observer is required. Linked-device marks
+  use `rd2`, which succeeds/implies `rd1`; unchanged refs-only carriers remain V1.
 - Standing grants: GET `/api/approvals` lists what `agentnet approvals` does:
   `{questions[{address, status?}|{person, label, status}],
   tasks[{address, fingerprint, status}|{person, label, status}],
@@ -617,7 +635,10 @@ types are the Go structs in `internal/ui/*.go`, generated into
   Mark done carries no conclusion), `concluded_by`, `pending`, `renamed`,
   `auto_title`, `quiet_since`; `/api/thread` adds `topic`. GET
   `/api/topics?peer=&state=&q=&before=&limit=` pages `{topics, next,
-  matched}`; POST `/api/topic/rename` `{peer,id,title}`, `/api/topic/done`
+  matched}`. A trimmed non-empty search omits `state` on every page and searches
+  Active, Done and Archived together within the same peer/conversation scope;
+  results keep their actual state. Clearing search restores the selected status
+  tab. POST `/api/topic/rename` `{peer,id,title}`, `/api/topic/done`
   and `/api/topic/reopen` `{peer,id,count}` (`count`: the messages shown).
   Names, device-chat Done/Reopen and Archive follow this person's own
   linked devices, never other people; say so. People DMs/groups

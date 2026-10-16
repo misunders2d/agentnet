@@ -277,7 +277,7 @@ func summarize(self, peer string, g []string, rows map[string]threadRow, l topic
 		case r.in && !r.selected && (r.state == stateRunning || r.state == stateCancelReq):
 			t.Running++
 		}
-		if r.in && r.unread {
+		if r.unread {
 			t.Unread++
 		}
 		if !r.in && topicOpen(r, r.replied) {

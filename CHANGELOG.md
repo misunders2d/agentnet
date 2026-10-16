@@ -6,6 +6,27 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+- Keep notification navigation bound to the exact message while local sync is
+  incomplete, with persistent retry/dismiss feedback. Reuse loaded overview
+  data and avoid repeated whole-inbox searches for a missing legacy target.
+- Render recent message groups first in Comic and reveal earlier history on
+  demand, preserving exact jump/reply targets and scroll position. Remove
+  message-row measurement from ordinary scrolling. The measured benefit is
+  frontend rendering; affected ThinkPad and backend latency remain unverified.
+- Route ordinary direct-agent corrections through the existing exact current-run
+  follow-up path, including linked owner devices, default/named agents, files
+  and retained retry intent. Ended or unverifiable work keeps the draft instead
+  of silently starting another request.
+- Add deliberate single-message and from-here unread state using exact linked
+  device generations. Current visits and stale acknowledgments cannot erase a
+  new mark; a later explicit entry may acknowledge its observed generation.
+  Keep notification, receipt and execution state unchanged.
+- Search Active, Done and Archived topics together while a query is entered,
+  preserving each result's status and restoring the selected tab when cleared.
+- WebKit's exit heap-corruption incident remains unresolved. Bounded tool
+  preparation stopped at unavailable matching loader symbols; no crash fix or
+  system rendering workaround is claimed.
+
 ## [0.8.31] — 2026-10-16
 
 - Let accepted topic guests bring their own agents through Bring in. Helpers

@@ -38,7 +38,7 @@ export const CapHistoryArchive="ha1",SubHistoryArchive="history-archive";
 export const CapOwnSyncV3 = "own3", CapDeviceHistory = CapOwnSyncV3, SubDeviceHistory = "device-history", SubDeviceFile="device-file";
 export const SubTopicSync = "topic-sync";
 export const CapTopicStateSync = "tss1", SubTopicStateSync = "topic-state-sync"; // private topic marks between current own-human devices; NOT implied by rm1
-export const CapReadSync = "rd1", SubReadSync = "read-sync";
+export const CapReadSync = "rd1", CapReadSyncV2 = "rd2", SubReadSync = "read-sync";
 export const CapModelSync = "mdl1", CapModelSyncV2 = "mdl2", SubModelSync = "model-sync";
 export const CapRootSync = "crs1", SubRootSync = "root-sync"; // explicit quiet DM-root copies, current own-human devices; NOT implied by rm1
 export const MaxHumanAudience = 16, MaxHumanProof = 32;
@@ -1084,14 +1084,19 @@ export function parseModelSync(json) {
   seen.add(m.agent_id);return {agent_id:m.agent_id,model:m.model,...(m.reasoning?{reasoning:m.reasoning}:{}),harness:m.harness,executor:m.executor,at:m.at,revision:m.revision};
  });return r;
 }
+export const validAttentionGeneration = g => !!g && Number.isSafeInteger(g.rev) && g.rev>0 && validFingerprint(g.writer);
 export function parseReadSync(json) {
- const r=strictRecord(json,32768,"read sync",{v:"number",person:"string",roster:"string",refs:"array"});
- if(r.v!==1 || !validID(r.person) || !validHash(r.roster) || !r.refs?.length || r.refs.length>64)throw Error("read sync: invalid owner or references");
- const seen=new Set();r.refs=r.refs.map(ref=>{
-  const x=strict(ref,"read reference",{conv:"string",fingerprint:"string",lid:"string"});
-  if(typeof x.conv!=="string" || x.conv && !validHash(x.conv) || !validFingerprint(x.fingerprint) || !validID(x.lid))throw Error("read sync: invalid reference");
+ if(typeof json==="string"&&utf8.encode(json).length>32768)throw Error("read sync: record too large");
+ const raw=typeof json==="string"?JSON.parse(json):json,hasMarks=Object.hasOwn(raw||{},"marks");
+ const r=strict(raw,"read sync",{v:"number",person:"string",roster:"string",refs:"array",marks:"array"});
+ if(![1,2].includes(r.v) || r.v===1&&hasMarks || !validID(r.person) || !validHash(r.roster) || !(r.refs?.length||r.marks?.length) || (r.refs?.length||0)+(r.marks?.length||0)>64)throw Error("read sync: invalid owner or references");
+ const seen=new Set(),ref=x=>{
+  if(typeof x.conv!=="string" || x.conv&&!validHash(x.conv) || !validFingerprint(x.fingerprint) || !validID(x.lid))throw Error("read sync: invalid reference");
   const key=x.conv+"|"+x.fingerprint+"|"+x.lid;if(seen.has(key))throw Error("read sync: duplicate reference");seen.add(key);return x;
- });return r;
+ };
+ r.refs=(r.refs||[]).map(x=>ref(strict(x,"read reference",{conv:"string",fingerprint:"string",lid:"string"})));
+ if(r.marks)r.marks=r.marks.map(x=>{const m=ref(strict(x,"attention mark",{conv:"string",fingerprint:"string",lid:"string",state:"string",rev:"int",writer:"string"}));if(!validAttentionGeneration(m)||!["read","unread"].includes(m.state))throw Error("read sync: invalid attention mark");return m;});
+ return r;
 }
 export const topicTitle = s => String(s||"").split(/\p{White_Space}+/u).filter(Boolean).join(" ");
 export function parseTopicSync(json) {
@@ -1934,7 +1939,7 @@ export async function verifyCaps(c, signKey) {
 // capsReads is protocol.CapsRecord.Reads: a record lists name, or rm1 when
 // rm1 implies it.
 export const RoomImplies = [CapExternalParticipation, CapAgentIdentity, CapHumanParticipation, CapAgentReaction, CapProgress, CapGroup, CapReplyReceiver, CapConvClear];
-export const capsReads = (c, name) => (c.caps || []).includes(name) || name===CapTopicContext&&(c.caps||[]).includes(CapGuestAgent) || name===CapRequestFollowup&&(c.caps||[]).includes(CapRequestSteer) || name===CapModelSync&&(c.caps||[]).includes(CapModelSyncV2) || name===CapGroupInvitationControl&&(c.caps||[]).includes(CapGroupInvitationManage) || (c.caps || []).includes(CapRoom) && RoomImplies.includes(name);
+export const capsReads = (c, name) => (c.caps || []).includes(name) || name===CapReadSync&&(c.caps||[]).includes(CapReadSyncV2) || name===CapTopicContext&&(c.caps||[]).includes(CapGuestAgent) || name===CapRequestFollowup&&(c.caps||[]).includes(CapRequestSteer) || name===CapModelSync&&(c.caps||[]).includes(CapModelSyncV2) || name===CapGroupInvitationControl&&(c.caps||[]).includes(CapGroupInvitationManage) || (c.caps || []).includes(CapRoom) && RoomImplies.includes(name);
 
 // profileSupports is protocol.Profile.Supports for a profile as the relay
 // sends it ({person, sessions, live, caps}): there are sessions, and each

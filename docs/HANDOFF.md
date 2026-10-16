@@ -8,10 +8,23 @@ responsiveness, direct-agent steering, bounded WebKit diagnosis, exact outstandi
 coordination state and deliberate unread. Root orchestrates/reviews; three verified
 GPT-6.1-sol xhigh Codex workers implement in Herdr tab 3 under native automatic
 review. Claude Opus 5.5/xhigh/auto supplies explicit design, implementation and
-integrated pre-gate reviews. Initial design and concrete-seam reviews are collected;
-root challenges their claims against source before assigning changes. Focused
-implementation has started; no v32 gate, release or affected-device acceptance is
-claimed yet. Preserve v31 evidence, identities/history/queues and unrelated user
+integrated pre-gate reviews. Design and significant N1/S1/P1/U1 implementation
+reviews are collected. Notification fetch, history scroll and unread fresh-entry
+corrections pass focused checks. Native/browser bounded unread deferral and
+actual Chrome storage/indexed rollback pass. All eight actual direct native
+steering cases (Codex, Claude, Pi and OMP; default and named) pass with a signed
+corrected answer in the original process/attempt and no settings changes.
+Corrected Comic rendered topic/read-only and standalone focused checks pass.
+Signed Go↔Browser Engine unread/tokenless-read/tombstone and exact carrier
+proof pass, including the reviewed older-reader coalescing/fairness correction.
+Full release and Android preservation qualification remain pending.
+MEL-647 all-status topic search was added by the owner; native icon unread dots
+(MEL-648) are a non-blocking follow-up, without delaying this release. The history improvement is a
+measured frontend slice, without a ThinkPad/backend claim. Coordination lacks
+the exact incident correlation needed for a justified patch; WebKit remains an
+authorized unresolved carry-forward after bounded instrumentation preparation.
+No v32 full gate, release or affected-device acceptance is claimed yet.
+Preserve v31 evidence, identities/history/queues and unrelated user
 plans. Projects, scheduled send, skin-cache recovery and iOS remain outside scope.
 
 ## Current release — v0.8.31, October 16, 2026

@@ -35,7 +35,7 @@ func (a *Agent) claimNativeFollowup(parent job) (nativeFollowupClaim, bool, erro
 	if err = tx.QueryRow(`SELECT state,coalesce(lid,id),coalesce(verified_by,''),attempts FROM inbox WHERE id=? AND replica=0`, parent.ID).Scan(&state, &rootID, &rootKey, &parentAttempt); err != nil {
 		return nativeFollowupClaim{}, false, err
 	}
-	if state != stateRunning || !a.nativeFollowupExecutor(tx, parent) {
+	if state != stateRunning || parent.Conv != "" && !a.nativeFollowupExecutor(tx, parent) {
 		return nativeFollowupClaim{}, false, nil
 	}
 	root, err := storedRequestFollowup(tx, "in", parent.ID)
@@ -46,7 +46,17 @@ func (a *Agent) claimNativeFollowup(parent job) (nativeFollowupClaim, bool, erro
 		rootID, rootKey = root.ID, root.Fingerprint
 	}
 	ready := strings.Replace(requestFollowupReady, "earlier.id<>inbox.id", "earlier.id<>inbox.id AND earlier.id<>?", 1)
-	rows, err := tx.Query(`SELECT id,sender,verified_by,kind,body,coalesce(reply_to,''),conv,pid,coalesce(target,''),state,local,coalesce(topic,'') FROM inbox WHERE replica=0 AND conv=? AND pid=? AND json_extract(request_followup,'$.id')=? AND json_extract(request_followup,'$.fingerprint')=? AND state IN (?,?) AND `+ready+` ORDER BY arrival LIMIT 50`, parent.Conv, parent.PID, rootID, rootKey, stateAgentWaiting, stateAccepted, parent.ID)
+	binding, eligible := `conv=? AND pid=?`, `state IN (?,?)`
+	args := []any{parent.Conv, parent.PID, rootID, rootKey, stateAgentWaiting, stateAccepted, parent.ID}
+	if parent.Conv == "" {
+		if !a.nativeJobCurrentIn(tx, parent, parentAttempt) {
+			return nativeFollowupClaim{}, false, nil
+		}
+		binding = `conv IS NULL AND pid IS NULL AND receiver_route IS NULL AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id)`
+		eligible = `(state IN ('pending','accepted') OR attempts=0 AND ((state='held' AND kind='question') OR (state='awaiting' AND kind='task')) AND ` + ownTaskHolds + `)`
+		args = []any{rootID, rootKey, parent.ID}
+	}
+	rows, err := tx.Query(`SELECT id,sender,verified_by,kind,body,coalesce(reply_to,''),coalesce(conv,''),coalesce(pid,''),coalesce(target,''),state,local,coalesce(topic,'') FROM inbox WHERE replica=0 AND `+binding+` AND json_extract(request_followup,'$.id')=? AND json_extract(request_followup,'$.fingerprint')=? AND `+eligible+` AND `+ready+` ORDER BY arrival LIMIT 50`, args...)
 	if err != nil {
 		return nativeFollowupClaim{}, false, err
 	}
@@ -98,20 +108,28 @@ func (a *Agent) claimNativeFollowup(parent job) (nativeFollowupClaim, bool, erro
 		if !human || c.j.Kind != parent.Kind || c.topic != parentTopic || !sameFollowupTarget(c.j.Target, parent.Target) || original.to != a.Address || original.key != a.Self().Fingerprint() {
 			continue
 		}
-		views := map[string]*partView{}
-		v, _, e := agentVerdict(tx, parent.agentReq(stateRunning), a.Address, a.Self().Fingerprint(), true, views)
-		if e != nil {
-			return nativeFollowupClaim{}, false, e
-		}
-		if v != verdictRun {
-			return nativeFollowupClaim{}, false, nil
-		}
-		v, _, e = agentVerdict(tx, c.j.agentReq(c.state), a.Address, a.Self().Fingerprint(), false, views)
-		if e != nil {
-			return nativeFollowupClaim{}, false, e
-		}
-		if v != verdictRun {
-			continue
+		if parent.Conv == "" {
+			if allowed, e := a.directFollowupConsent(tx, c.j, c.state == stateAccepted); e != nil {
+				return nativeFollowupClaim{}, false, e
+			} else if !allowed {
+				continue
+			}
+		} else {
+			views := map[string]*partView{}
+			v, _, e := agentVerdict(tx, parent.agentReq(stateRunning), a.Address, a.Self().Fingerprint(), true, views)
+			if e != nil {
+				return nativeFollowupClaim{}, false, e
+			}
+			if v != verdictRun {
+				return nativeFollowupClaim{}, false, nil
+			}
+			v, _, e = agentVerdict(tx, c.j.agentReq(c.state), a.Address, a.Self().Fingerprint(), false, views)
+			if e != nil {
+				return nativeFollowupClaim{}, false, e
+			}
+			if v != verdictRun {
+				continue
+			}
 		}
 		c.j.Executor, c.j.AgentID = parent.Executor, parent.AgentID
 		stamp, _ := json.Marshal(parent.Executor)
@@ -141,7 +159,7 @@ func (a *Agent) claimNativeFollowup(parent job) (nativeFollowupClaim, bool, erro
 
 // Still-current checks run after attachment staging, immediately before the
 // native handover. Store failure or cancellation sends no input.
-func (a *Agent) nativeFollowupCurrent(parent, correction job) bool {
+func (a *Agent) nativeFollowupCurrent(parent, correction job, accepted ...bool) bool {
 	tx, err := a.store.db.Begin()
 	if err != nil {
 		return false
@@ -151,14 +169,24 @@ func (a *Agent) nativeFollowupCurrent(parent, correction job) bool {
 	if tx.QueryRow(`SELECT (SELECT state FROM inbox WHERE id=?)=? AND (SELECT state FROM inbox WHERE id=?)=?`, parent.ID, stateRunning, correction.ID, stateRunning).Scan(&current) != nil || !current {
 		return false
 	}
-	if !a.nativeFollowupExecutor(tx, parent) {
+	if parent.Conv != "" && !a.nativeFollowupExecutor(tx, parent) {
 		return false
 	}
-	views := map[string]*partView{}
-	for _, j := range []job{parent, correction} {
-		v, _, e := agentVerdict(tx, j.agentReq(stateRunning), a.Address, a.Self().Fingerprint(), true, views)
-		if e != nil || v != verdictRun {
+	if parent.Conv == "" {
+		var attempt int64
+		if tx.QueryRow(`SELECT attempts FROM inbox WHERE id=?`, parent.ID).Scan(&attempt) != nil || !a.nativeJobCurrentIn(tx, parent, attempt) {
 			return false
+		}
+		if allowed, e := a.directFollowupConsent(tx, correction, len(accepted) > 0 && accepted[0]); e != nil || !allowed {
+			return false
+		}
+	} else {
+		views := map[string]*partView{}
+		for _, j := range []job{parent, correction} {
+			v, _, e := agentVerdict(tx, j.agentReq(stateRunning), a.Address, a.Self().Fingerprint(), true, views)
+			if e != nil || v != verdictRun {
+				return false
+			}
 		}
 	}
 	ref, e := storedRequestFollowup(tx, "in", correction.ID)
@@ -183,7 +211,7 @@ func (a *Agent) nativeFollowupCurrent(parent, correction job) bool {
 // cannot receive new corrections merely because that process was once admitted.
 func (a *Agent) nativeFollowupExecutor(q dbq, parent job) bool {
 	if parent.Target == nil {
-		return false
+		return parent.Conv == "" && parent.PID == ""
 	}
 	id := parent.Target.AgentID
 	if id == "" {
@@ -191,6 +219,20 @@ func (a *Agent) nativeFollowupExecutor(q dbq, parent job) bool {
 	} // the existing default run retains its immutable setup
 	stamp, err := a.ResolveExecutorIn(q, id, nil)
 	return err == nil && stamp != nil && stamp.Record != nil && stamp.AgentID == id && stamp.Record.Host == parent.Target.Address && stamp.Record.HostKey == parent.Target.Fingerprint
+}
+
+// A parent's one-time acceptance grants no authority to a separate correction.
+// Reuse the direct scheduler's current question/task/own-human predicates.
+func (a *Agent) directFollowupConsent(q dbq, j job, accepted bool) (bool, error) {
+	if revoked, e := revokedDeviceKnown(q, j.From, j.Key); e != nil || revoked {
+		return false, e
+	}
+	var allowed bool
+	err := q.QueryRow(`SELECT (? OR kind='question' AND `+questionApprovalHolds+` OR kind='task' AND (`+taskGrantHolds+` OR `+ownTaskHolds+` OR `+ownProposalHolds+`))
+ AND replica=0 AND conv IS NULL AND pid IS NULL AND receiver_route IS NULL
+ AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id)
+ FROM inbox WHERE id=? AND sender=? AND verified_by=?`, accepted, j.ID, j.From, j.Key).Scan(&allowed)
+	return allowed, err
 }
 
 func (a *Agent) watchNativeFollowups(ctx context.Context, parent job, bridge nativeFollowupBridge, processFinished <-chan struct{}) {
@@ -277,7 +319,7 @@ func (a *Agent) watchNativeFollowups(ctx context.Context, parent job, bridge nat
 				_ = a.endJob(correction.ID, stateNeedHuman, "The owned run's bounded evidence cursor is full; review the exact work before continuing")
 				return
 			}
-			if !a.nativeFollowupCurrent(parent, correction.job) {
+			if !a.nativeFollowupCurrent(parent, correction.job, correction.queuedState == stateAccepted) {
 				_ = a.endJob(correction.ID, stateNeedHuman, "The exact run or correction changed before native handover; review it before continuing")
 				continue
 			}

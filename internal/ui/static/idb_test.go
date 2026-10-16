@@ -17,7 +17,7 @@ import (
 // idbCheck runs in a real browser: the device store's IndexedDB writes are
 // all or nothing, keep a CryptoKey (the probe), and page in key order.
 const idbCheck = `<!doctype html><meta charset="utf-8"><script type="module">
-import { openIDB, probeStore } from "/engine.mjs";
+import { openIDB, probeStore, Engine } from "/engine.mjs";
 const out = {};
 try {
   const name = "agentnet-check-" + Date.now();
@@ -45,6 +45,56 @@ try {
   await st.write(["c", "a", "d", "b"].map((k) => ({ s: "held", k, v: { id: k } })));
   out.pages = [];
   for (let pos = "", page; (page = await st.after("held", pos, 2)).length; pos = page[page.length - 1].id) out.pages.push(page.map((v) => v.id).join(""));
+  // The production bulk read preserves caller order, missing entries and
+  // independent structured clones, including duplicate and empty keys.
+  await st.write([
+    { s: "kv", k: "bulk/a", v: { label: "A", nested: { value: 1 } } },
+    { s: "kv", k: "bulk/b", v: { label: "B", nested: { value: 2 } } },
+    { s: "kv", k: "", v: { label: "empty" } },
+  ]);
+  const bulk = await st.getMany("kv", ["bulk/b", "", "bulk/missing", "bulk/a", "bulk/a"]);
+  out.bulkOrder = bulk.map(v => v?.label ?? "<missing>").join(",");
+  out.bulkMissing = bulk[2] === undefined;
+  out.bulkDuplicate = bulk[3] !== bulk[4] && bulk[3].nested !== bulk[4].nested;
+  bulk[3].nested.value = 99;
+  const again = await st.getMany("kv", ["bulk/a"]);
+  out.bulkClone = bulk[4].nested.value === 1 && again[0].nested.value === 1 && (await st.get("kv", "bulk/a")).nested.value === 1;
+  const empty = await st.getMany("kv", []);
+  out.bulkEmpty = Array.isArray(empty) && empty.length === 0;
+
+  // Build the real authority-check format from the existing peer index and
+  // production engine helper; the write itself is the actual IDB transaction.
+  const engine = new Engine({ store: st, base: location.origin });
+  const peer = "selected/peer", other = "unrelated/peer";
+  const incoming = { v: 1, id: "peer-in", from: peer, kind: "message", body: "original incoming", at: 1000 };
+  const outgoing = { v: 1, id: "peer-out", to: peer, kind: "message", body: "original outgoing", at: 2000, state: "queued" };
+  const unrelated = { ...incoming, id: "other-in", from: other };
+  await st.write([{ s: "inbox", k: incoming.id, v: incoming }, { s: "outbox", k: outgoing.id, v: outgoing }, { s: "inbox", k: unrelated.id, v: unrelated }]);
+  const peerChecks = async () => {
+    const checks = [], view = { inbox: await st.byThreadPeer("inbox", peer), outbox: await st.byThreadPeer("outbox", peer) };
+    await engine.authorityRows({ thread_peer: peer }, checks, view);
+    return checks;
+  };
+  await st.write([{ s: "kv", k: "peer-success", v: true }], await peerChecks());
+  out.peerGuardSuccess = await st.get("kv", "peer-success") === true;
+  const unaffected = await peerChecks();
+  await st.write([{ s: "inbox", k: unrelated.id, v: { ...unrelated, body: "other changed" } }, { s: "outbox", k: "other-out", v: { ...outgoing, id: "other-out", to: other } }]);
+  await st.write([{ s: "kv", k: "other-peer-safe", v: true }], unaffected);
+  out.otherPeerSafe = await st.get("kv", "other-peer-safe") === true;
+
+  const beforeInsert = await peerChecks();
+  await st.write([{ s: "inbox", k: "peer-inserted", v: { ...incoming, id: "peer-inserted", body: "concurrent insertion" } }]);
+  try {
+    await st.write([{ s: "kv", k: "insert-partial", v: true }, { s: "outbox", k: outgoing.id, v: { ...outgoing, body: "must roll back" } }], beforeInsert);
+  } catch (e) { out.peerInsertError = e.message; }
+  out.peerInsertRollback = await st.get("kv", "insert-partial") === undefined && (await st.get("outbox", outgoing.id)).body === outgoing.body && (await st.get("inbox", "peer-inserted")).body === "concurrent insertion";
+
+  const beforeChange = await peerChecks();
+  await st.write([{ s: "outbox", k: outgoing.id, v: { ...outgoing, body: "concurrent change" } }]);
+  try {
+    await st.write([{ s: "kv", k: "change-partial", v: true }, { s: "inbox", k: incoming.id, v: { ...incoming, body: "must roll back" } }], beforeChange);
+  } catch (e) { out.peerChangeError = e.message; }
+  out.peerChangeRollback = await st.get("kv", "change-partial") === undefined && (await st.get("inbox", incoming.id)).body === incoming.body && (await st.get("outbox", outgoing.id)).body === "concurrent change";
   st.close();
   indexedDB.deleteDatabase(name);
   // Blocked: an older connection (another tab, at version 1) keeps our open
@@ -118,13 +168,24 @@ func TestDeviceStoreInChrome(t *testing.T) {
 		os.RemoveAll(profile)
 	}()
 	var got struct {
-		Probe bool     `json:"probe"`
-		Error string   `json:"error"`
-		First any      `json:"first"`
-		Kept  any      `json:"kept"`
-		Pages []string `json:"pages"`
-		Marks string   `json:"marks"`
-		Fail  string   `json:"fail"`
+		Probe              bool     `json:"probe"`
+		Error              string   `json:"error"`
+		First              any      `json:"first"`
+		Kept               any      `json:"kept"`
+		Pages              []string `json:"pages"`
+		Marks              string   `json:"marks"`
+		Fail               string   `json:"fail"`
+		BulkOrder          string   `json:"bulkOrder"`
+		BulkMissing        bool     `json:"bulkMissing"`
+		BulkDuplicate      bool     `json:"bulkDuplicate"`
+		BulkClone          bool     `json:"bulkClone"`
+		BulkEmpty          bool     `json:"bulkEmpty"`
+		PeerGuardSuccess   bool     `json:"peerGuardSuccess"`
+		OtherPeerSafe      bool     `json:"otherPeerSafe"`
+		PeerInsertError    string   `json:"peerInsertError"`
+		PeerInsertRollback bool     `json:"peerInsertRollback"`
+		PeerChangeError    string   `json:"peerChangeError"`
+		PeerChangeRollback bool     `json:"peerChangeRollback"`
 		// A blocked open is refused at once; the connection that completes
 		// later is closed, so the database can be deleted right away.
 		Blocked    string `json:"blocked"`
@@ -132,6 +193,7 @@ func TestDeviceStoreInChrome(t *testing.T) {
 	}
 	select {
 	case data := <-result:
+		t.Logf("real IndexedDB results: %s", data)
 		if err := json.Unmarshal(data, &got); err != nil {
 			t.Fatalf("%v: %s", err, data)
 		}
@@ -151,6 +213,15 @@ func TestDeviceStoreInChrome(t *testing.T) {
 	}
 	if got.Marks != "0,0,1,1,2" {
 		t.Fatalf("retraction marks after a message, a retraction, a failed retraction, a removal: %s", got.Marks)
+	}
+	if got.BulkOrder != "B,empty,<missing>,A,A" || !got.BulkMissing || !got.BulkDuplicate || !got.BulkClone || !got.BulkEmpty {
+		t.Fatalf("bulk reads lost order, missing entries, independent clones or empty keys: %+v", got)
+	}
+	if !got.PeerGuardSuccess || !got.OtherPeerSafe {
+		t.Fatalf("indexed peer guard rejected an unchanged scope or unrelated-peer write: %+v", got)
+	}
+	if got.PeerInsertError != "storage changed during verification" || !got.PeerInsertRollback || got.PeerChangeError != "storage changed during verification" || !got.PeerChangeRollback {
+		t.Fatalf("indexed peer guard did not atomically reject a same-peer insertion/change: %+v", got)
 	}
 	if got.Blocked != "storage is blocked by another tab" {
 		t.Fatalf("a blocked open was not refused: %q", got.Blocked)

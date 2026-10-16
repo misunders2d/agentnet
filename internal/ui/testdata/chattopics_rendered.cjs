@@ -10,11 +10,13 @@ fs.mkdirSync(evidence, { recursive: true, mode: 0o700 });
 const boot = `
 const kind=new URL(location).searchParams.get('kind'),skin=new URL(location).searchParams.get('skin');
 const renamedMode=${!!process.env.P28_RENAMED_ONLY};
+const searchMode=${!!process.env.AGENTNET_ALL_STATUS_SEARCH};
 const stopMode=${!!process.env.P11_STOP_ONLY},draftsMode=${!!process.env.P11_DRAFTS_ONLY},pendingMode=${!!process.env.P11_PENDING_ONLY},importMode=${!!process.env.P11_HISTORY_IMPORT_ONLY};
 const conv='c'.repeat(64),at='2026-10-05T10:00:00Z';
 const person=(label,address,key)=>({person:label.toLowerCase().padEnd(32,'a'),label,address,fingerprint:key,state:'pinned',devices:[{address,fingerprint:key}]});
 const me=person(renamedMode?'Atlas':'Sergey',renamedMode?'atlas/laptop':'sergey/laptop','own-key'),peer=person(renamedMode?'Briar':'Vitalii',renamedMode?'briar/desktop':'vitalii/desktop','peer-key');me.state='self';
 const topics=Array.from({length:4},(_,i)=>({id:String(i+1).repeat(32),...(kind==='agent'?{peer:peer.address}:{conv}),title:'Topic '+(i+1),last:'Topic '+(i+1)+' message',last_at:at,count:1,unread:0,review:0,running:0,waiting:false,pending:false,state:'active',quiet_since:at}));
+if(searchMode){for(const [i,state] of ['active','done','archived'].entries())Object.assign(topics[i],{title:'needle '+state,last:'Matching '+state+' topic',state});topics[3].title='Unrelated active topic';}
 if(renamedMode){Object.assign(topics[0],{title:'**Literal name**',renamed:true});Object.assign(topics[1],{title:'**Automatic title**',renamed:false});Object.assign(topics[2],{title:String.fromCharCode(92)+'*literal'+String.fromCharCode(92)+'* _code_',renamed:true});}
 const message=(i)=>({id:topics[i].id,lid:topics[i].id,from:peer.address,dir:'in',body:'Topic '+(i+1)+' message',kind:'message',at,state:'stored',actions:[],...(kind==='agent'?{to:me.address,author:{label:peer.label,about:'Fixture author'}}:{topic:topics[i].id})});
 const main={id:'a'.repeat(32),lid:'a'.repeat(32),from:peer.address,dir:'in',body:'Quick main flow message',kind:'message',at,state:'stored',actions:[]};
@@ -25,7 +27,7 @@ let thread=kind==='agent'?{id:topics[0].id,peer:peer.address,key:{pinned:'peer-k
 const asked=m=>({...m,dir:'out',from:me.address,...(kind==='agent'?{to:peer.address}:{})});
 const update={to:peer.address,state:'waiting',detail:'peer_update: named agent capability unavailable: '+peer.address+' cannot synchronize direct-agent history or resolve own requests yet; update all its active AgentNet sessions'};
 if(pendingMode){topics[0].pending=true;topics[0].waiting=false;topics[0].unconfirmed=2;topics[0].pending_ids=[topics[0].id,'b'.repeat(32)];thread.messages=[...(kind==='agent'?[]:[main]),asked({...message(0),kind:'task',body:'Earlier unresolved task',target:{address:peer.address,fingerprint:peer.fingerprint},...(kind==='agent'?{}:{copies:[update]})}),asked({...message(0),id:'b'.repeat(32),lid:'b'.repeat(32),kind:'question',body:'Second pending question',exec:{state:'needs_human',host:peer.address,attempt:1,stale:true},target:{address:peer.address,fingerprint:peer.fingerprint}}),{...message(0),id:'d'.repeat(32),lid:'d'.repeat(32),kind:'answer',body:'Unrelated final answer'}];}
-const overview={version:'fixture',topic_list:true,seq:1,me:{address:me.address,fingerprint:me.fingerprint},person:me,persons:true,agents:true,files:false,controls:false,role:'person',people:[peer],review:[],links:[],reminders:[],threads:kind==='agent'?topics:[],topics:kind==='agent'?[{peer:peer.address,total:4,archived:0,archived_unread:0,latest:topics[0]}]:[],dms:kind==='agent'?[]:[{id:conv,kind:thread.kind,title:thread.title,peer:thread.peer,count:5,unread:0}],directory:{current:true,members:[{address:me.address,presence:'connected'},{address:peer.address,presence:'connected'}]},quarantine:[]};
+const overview={version:'fixture',topic_list:true,seq:1,me:{address:me.address,fingerprint:me.fingerprint},person:me,persons:true,agents:true,files:false,controls:false,role:'person',people:[peer],review:[],links:[],reminders:[],threads:kind==='agent'?topics:[],topics:kind==='agent'?[{peer:peer.address,total:4,archived:searchMode?1:0,archived_unread:0,latest:topics[0]}]:[],dms:kind==='agent'?[]:[{id:conv,kind:thread.kind,title:thread.title,peer:thread.peer,count:5,unread:0}],directory:{current:true,members:[{address:me.address,presence:'connected'},{address:peer.address,presence:'connected'}]},quarantine:[]};
 if(pendingMode)overview.directory.members[1].presence='offline';
 if(stopMode){
  const pid='9'.repeat(32),m=asked({...message(0),kind:'question',body:'Exact remote running request',topic:'',pid,target:{address:peer.address,fingerprint:peer.fingerprint},exec:{host:peer.address,state:'running',attempt:2,at:Math.floor(Date.now()/1000)},stop:{host:peer.address,id:topics[0].id,key:me.fingerprint,attempt:2,pending:sessionStorage.getItem('stopQueued')==='1'}});
@@ -40,7 +42,8 @@ if(importMode){
  overview.dms.push({id:destination.id,kind:'group',title:destination.title,peer:destination.peer,count:0,unread:0},{id:'e'.repeat(64),kind:'group',title:'Frozen archive',peer:{label:'Frozen archive',address:'',state:''},frozen:'frozen',count:0});
 }
 if(draftsMode)overview.files={max_file:1048576,max_message:2097152,max_count:8};
-window.fixture={overview,thread,requests:[],topics,destination,previews:0,shares:{}};let open,changed;
+window.fixture={overview,thread,requests:[],topics,destination,previews:0,shares:{}};
+fixture.topicCatalog=[...topics,{...topics[0],id:'f'.repeat(32),conv:'d'.repeat(64),peer:'outside/host',title:'needle unauthorized scope'}];let open,changed;
 window.refreshFixture=()=>changed?.({type:'change',seq:++overview.seq});
 
 window.confirmStop=()=>{thread.messages[0].exec.state="cancelled";delete thread.messages[0].stop;changed?.({type:"change",seq:++overview.seq});};
@@ -52,6 +55,7 @@ const host={version:1,platform:'daemon',workspace:{id:'default',name:'P11 local 
  if(draftsMode&&p.startsWith('/api/dm?')&&url.searchParams.get('id')==='d'.repeat(64))return {...thread,id:'d'.repeat(64),messages:[],topics:[]};
  if(p.startsWith('/api/dm?'))return structuredClone(importMode&&url.searchParams.get('id')===destination.id?destination:thread);
  if(p.startsWith('/api/thread?')){if(pendingMode||stopMode)return structuredClone(thread);const t=topics.find(t=>t.id===url.searchParams.get('id'))||topics[0];return {id:t.id,peer:peer.address,key:{pinned:'peer-key'},approved:false,task_grant:'',topic:structuredClone(t),messages:[t.id==='f'.repeat(32)?window.freshMessage:{...message(topics.indexOf(t))}]};}
+ if(searchMode&&p.startsWith('/api/topics?')){const state=url.searchParams.get('state'),q=(url.searchParams.get('q')||'').toLowerCase(),scope=url.searchParams.get('conv'),who=url.searchParams.get('peer');const rows=fixture.topicCatalog.filter(t=>(scope?t.conv===scope:t.peer===who)&&(!state||t.state===state)&&(t.title+' '+t.last).toLowerCase().includes(q));const offset=url.searchParams.get('before')==='page2'?2:0,limit=q?2:Number(url.searchParams.get('limit')||40);return{topics:structuredClone(rows.slice(offset,offset+limit)),matched:rows.length,next:offset+limit<rows.length?'page2':''};}
  if(p.startsWith('/api/topics?')){const state=url.searchParams.get('state'),q=(url.searchParams.get('q')||'').toLowerCase();const rows=topics.filter(t=>(!state||t.state===state)&&t.title.toLowerCase().includes(q));return {topics:structuredClone(rows),matched:rows.length};}
  if(importMode&&p==='/api/history/contribution/preview'){
   const operation=String(++fixture.previews+5).repeat(32),selected=new Set((body.files||[]).map(f=>f.id+':'+f.index));
@@ -78,7 +82,7 @@ const host={version:1,platform:'daemon',workspace:{id:'default',name:'P11 local 
  if(p.includes('/groups/invitations'))return [];if(p.startsWith('/api/typing/status'))return {send:false,scopes:[]};if(p.startsWith('/api/agents'))return {host:peer.address,agents:[],sessions:[],local:false};return {};
 }};
 const base='/assets/skins/'+skin+'/',manifest=await(await fetch(base+'skin.json')).json();
-if(manifest.document){const css=new CSSStyleSheet();css.replaceSync(await(await fetch(base+manifest.document)).text());document.adoptedStyleSheets=[css];}
+if(manifest.document){const css=new CSSStyleSheet();css.replaceSync((await(await fetch(base+manifest.document)).text()).replaceAll('url(m/','url('+base+'m/'));document.adoptedStyleSheets=[css];}
 const shadow=document.querySelector('#skin').attachShadow({mode:'open'}),css=new CSSStyleSheet();css.replaceSync(await(await fetch(base+manifest.style)).text());shadow.adoptedStyleSheets=[css];
 const root=document.createElement('div');root.className='skin-root';shadow.append(root);await(await import(base+manifest.entry)).mount(root,host);
 window.openOther=()=>open("d".repeat(64),"conversation");
@@ -109,7 +113,7 @@ const server = http.createServer((req, res) => {
       const ctx = await browser.newContext({ viewport: { width, height: 900 }, hasTouch: width < 500, reducedMotion: 'reduce' });
       await ctx.route('**/*', r => new URL(r.request().url()).origin === origin ? r.continue() : r.abort());
       const page = await ctx.newPage(); page.setDefaultTimeout(10000);
-      page.on('pageerror', e => errors.push(tag + ': ' + e.stack));
+      page.on('pageerror', e => errors.push(tag + ': ' + e.stack));if(process.env.AGENTNET_ALL_STATUS_SEARCH==='1'){page.on('console',m=>{if(m.type()==='error')errors.push(tag+': '+m.text());});page.on('response',r=>{if(r.status()>=400)errors.push(tag+': HTTP '+r.status()+' '+r.url());});}
       const shot = async name => { await page.waitForTimeout(400); await page.screenshot({ path: path.join(evidence, tag + '-' + name + '.png') }); };
       const changed = () => page.evaluate(() => fixture.requests.filter(r => r.path.startsWith('/api/topic/')));
       const all = () => page.getByRole('button', { name: process.env.P11_HISTORY_IMPORT_ONLY ? /^All topics/ : /^All(?: topics| \d|$)/ }).first();
@@ -124,6 +128,30 @@ const server = http.createServer((req, res) => {
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, tag + ': page fits');
         await page.evaluate(() => document.fonts.ready); await shot('main');
 
+
+
+        if(process.env.AGENTNET_ALL_STATUS_SEARCH==='1'){
+          await all().click();const panel=page.getByRole('dialog',{name:'All topics',exact:true}),query=panel.getByRole('searchbox');
+          await panel.getByRole('button',{name:/^Done/}).click();await panel.getByRole('list',{name:'Done topics',exact:true}).getByRole('listitem').filter({hasText:'needle done'}).waitFor();
+          await query.fill('  needle  ');let results=panel.getByRole('list',{name:'Matching topics',exact:true});await results.waitFor();
+          if(kind!=='dm'){await panel.getByRole('button',{name:/^Show more/}).click();await page.waitForFunction(()=>[...document.querySelector('#skin').shadowRoot.querySelectorAll('[role="dialog"] li')].length===3);}
+          assert.equal(await results.getByRole('listitem').count(),3,tag+': every status matches');
+          for(const state of ['active','done','archived'])await results.getByRole('button',{name:new RegExp('^needle '+state)}).waitFor();
+          assert.match(await results.innerText(),/Done/i);assert.match(await results.innerText(),/Archived/i);assert.equal(await results.getByText(/unauthorized/).count(),0);
+          await panel.getByText('3 topics match across all statuses',{exact:true}).waitFor();
+          const before=await page.evaluate(()=>fixture.requests.filter(r=>r.path.startsWith('/api/topics?')).length);
+          await panel.getByRole('button',{name:/^Archived/}).click();assert.equal(await results.getByRole('listitem').count(),3,'status tab does not filter search results');
+          await query.focus();await query.press('Tab');await shot('all-status-search');
+          assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path.startsWith('/api/topics?')).length),before,'search tab selection adds no request');
+          const calls=await page.evaluate(()=>fixture.requests.filter(r=>r.path.startsWith('/api/topics?')).map(r=>r.path));
+          for(const call of calls){const u=new URL(call,'http://fixture');if(u.searchParams.get('q')){assert.equal(u.searchParams.get('state')||'','');assert.equal(u.searchParams.get('q'),'needle');assert.equal(kind==='agent'?u.searchParams.get('peer'):u.searchParams.get('conv'),kind==='agent'?'vitalii/desktop':'c'.repeat(64));}}
+          if(kind==='dm')assert.equal(calls.length,0,'flat person topics search never adds native count/query requests');
+          else assert(calls.some(p=>new URL(p,'http://fixture').searchParams.get('before')==='page2'),'next page retains all-state scope');
+          await query.fill('   ');await panel.getByRole('list',{name:'Archived topics',exact:true}).getByRole('listitem').filter({hasText:'needle archived'}).waitFor();assert.equal(await panel.getByRole('listitem').count(),1);
+          await query.fill('needle');await panel.getByRole('list',{name:'Matching topics',exact:true}).waitFor();await panel.getByRole('button',{name:'Clear search',exact:true}).click();await panel.getByRole('list',{name:'Archived topics',exact:true}).waitFor();assert.equal(await panel.getByRole('listitem').count(),1,'clear restores selected Archived tab');
+          fs.writeFileSync(path.join(evidence,tag+'-search-requests.json'),JSON.stringify(await page.evaluate(()=>fixture.requests),null,2));await shot('search-cleared');
+          combinations++;continue;
+        }
 
         if(process.env.P28_RENAMED_ONLY){
           await all().click();const list=page.getByRole('dialog',{name:'All topics',exact:true});

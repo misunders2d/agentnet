@@ -160,6 +160,11 @@ and catch the error. Failures differ by platform.
 | `POST /api/topic/organization/apply` | D B | Apply exactly the reviewed move. If anything changed, it is refused. | the review, unchanged | D: `{ID, LID, State, Detail, Copies}`. B: `{id, lid, state, detail?, copies?}` (a repeated apply answers without `detail`) |
 | `POST /api/topic/organization/undo` | D B | A current full-member human restores an admitted agent move to its persisted prior source topics, including Main. All source groups are checked and committed together; intervening changes refuse the inverse. Reuse the same `id` for a retry. | `{conv, lid, author, id}` | array of sent operations, in the platform's existing sent shape |
 
+A non-empty topic search uses trimmed `q` and omits `state` on every page,
+searching Active, Done and Archived together within the existing conversation
+or peer scope. Show each result's actual state. Clearing the search restores
+the selected status filter; changing tabs during search does not narrow results.
+
 ## Files and Drive
 
 Staging, opening and discarding files are covered by host methods (see
@@ -179,7 +184,7 @@ Host-internal). Google Drive is outside AgentNet end-to-end encryption.
 
 | Route | Platforms | Purpose | Request | Response |
 |---|---|---|---|---|
-| `POST /api/act` | D B | A local decision on a received item, or a local permission change. Show only the verbs listed in the item's `actions`. B accepts 7 of the 17 verbs (table below). | `{do, id?, body?, reason?, ids?, key?, attempt?, send_id?, held?}` | `{note}` |
+| `POST /api/act` | D B | A local decision, permission change, or personal read/attention state. Request decisions use only the item's `actions`; personal read/unread controls use admitted visible messages. B accepts 8 of the 18 verbs (table below). | `{do, id?, body?, reason?, ids?, attention?: {id:{rev,writer}}, key?, attempt?, send_id?, held?}` | `{note}` |
 | `POST /api/operator/decide` | D B | Decide a request that another host reported, as its granted operator. A current owner-human device may also answer a private native callback, without an operator grant; see the native contract below. On your own host you can also `continue`, `resolve` or `cancel` it. `check:true` only checks that you may, and only for your own waiting request with `report:""`: `resolve` with `expect:"needs_human"` or `cancel` with `expect:"running"`. | `{host, id, key, action, expect, attempt, report, text?, send_id?, check?}`, where `action` is accept, decline, resolve, reply, cancel or continue | `{note}` |
 | `POST /api/request/followup` | D B | Send a correction to your exact request and executor. A positive `attempt` binds only its current run. | `{id, conv?, ref:{id, fingerprint}, attempt?, body, files?: [staged]}` | `{note}` |
 | `GET /api/approvals` | D B | Standing grants, as `agentnet approvals` lists them. B always answers `{questions:[], tasks:[], participations:[], read_only:true}`, and refuses a body. | — | `{questions, tasks, native_tasks?, own_devices?, removed_devices?, participations, read_only, unresolved?}` |
@@ -195,8 +200,11 @@ Host-internal). Google Drive is outside AgentNet end-to-end encryption.
 | `POST /api/dm/agent/dismiss` | D B | End an agent's part in a conversation. | `{pid}` | `AgentView` |
 | `POST /api/dm/agent/ask` | D B | Ask a question of, or give a task to, an active participant agent. The same `reply_receiver` refusals as `/api/send` apply on B and Android. | `{pid, kind, body, topic?, files?: [staged], id?, send_group?, reply_receiver?}` | `{id, lid?, state, path?, detail?}` |
 
-An ordinary tagged message binds to that agent's verified, nonstale `running`
-request in the current chat/topic. Send its positive safe-integer `exec.attempt`
+An ordinary tagged message or direct-agent follow-up binds to that agent's
+verified, nonstale `running` request in the current chat/topic. Direct threads
+send `conv:""`, the exact original message ID and `from_key`, with the current
+host pin and selected default/named identity; invited requests retain their
+conversation/PID binding. Send the positive safe-integer `exec.attempt`
 as `attempt`, with the exact original author/ref, retained send ID and files.
 No active request uses the ordinary ask route. If multiple roots are active,
 resolve through the existing Reply ancestry or retain the draft and report
@@ -227,7 +235,8 @@ the ordinary tagged composer always binds a positive attempt for active work.
 | `revoke_tasks` | `id`: person id or device address | End that task permission. | no |
 | `archive_held` | `id` | Hide one held-envelope notice here. Nothing is accepted. | yes |
 | `archive_held_batch` | `held:[{id, reason, detail_code}]` | Hide several notices. | yes |
-| `read` | `ids:[id]` | Acknowledge the exact displayed messages. For device threads, include visible outgoing IDs too: verified original sends can have incoming copies on another own device. Submit only the open topic's IDs, deduplicate successful acknowledgments while it stays open, and retain failed acknowledgments for retry. Reading never accepts or reruns work. | yes |
+| `read` | `ids:[id], attention?: {id:{rev,writer}}` | Acknowledge the exact displayed messages. For device threads, include visible outgoing IDs too: verified original sends can have incoming copies on another own device. Submit only the open topic's IDs and deduplicate successful acknowledgments. Only the exact full observed attention generation clears a deliberate unread mark; absent or stale generations leave it intact. Reading never accepts or reruns work. | yes |
+| `unread` | `id` anchor, `ids:[id]` including the anchor | Atomically mark these exact admitted normal messages in the anchor's current chat/topic unread. A single-message action sends one ID; from-here sends that row and later admitted rows in display order from the complete topic view, without a product count cap. Later arrivals and sibling topics are excluded. This changes personal attention only, not receipts, notifications, permissions or execution. | yes |
 
 The browser refuses the other verbs with "Nothing runs in this browser:
 accept, approve and grants are made on a computer with AgentNet." Android

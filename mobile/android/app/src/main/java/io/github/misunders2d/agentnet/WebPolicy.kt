@@ -52,6 +52,12 @@ class WebPolicy(val origin: String) {
             require(text.isNotBlank() && text.length <= 16 * 1024 && text.toByteArray(Charsets.UTF_8).size <= 16 * 1024)
             return text
         }
+        /** Enriching a click destination must not change the notification that
+         *  an exact message read dismisses. Keep the legacy message tag. */
+        fun notificationTag(workspace: String, fragment: String): String? {
+            val route = notificationDestination(workspace, fragment) ?: return null
+            return if (route.startsWith("msg=")) route.split('&').filterNot { it.startsWith("conv=") }.joinToString("&") else route
+        }
         /** Bind a validated content-free destination to its exact membership. */
         fun notificationDestination(workspace: String, fragment: String): String? = runCatching {
             require(workspace == "default" || workspace.matches(Regex("[0-9a-f]{32}")))
