@@ -9,7 +9,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 shard=${1:-}
-count=${2:-12}
+count=${2:-18}
 if ! [[ "$count" =~ ^[1-9][0-9]*$ ]] ||
    ! [[ "$shard" = others || "$shard" =~ ^(client|ui)-[0-9]+$ ]]; then
 	echo 'usage: race-shard.sh others|client-K|ui-0|ui-1 [positive client COUNT]' >&2
@@ -19,7 +19,7 @@ fi
 run_partition() {
 	local package=$1 k=$2 n=$3 label=$4 tests
 	# Balance measured v32/v33 parent costs with literal fixture moves.
-	# Keep twelve partitions, every test, and the 600-second bound.
+	# Keep every test and the 600-second bound for the selected count.
 	tests=$(go test -list '.*' "$package" | awk -v k="$k" -v n="$n" -v client="$([[ $package = ./internal/client ]] && echo 1 || echo 0)" '
 		/^Test/ {
 			part=i++%n

@@ -15,6 +15,8 @@ This record starts with v0.8.1; earlier releases remain on the
   its AgentNet page open. Recover ambiguous saves by the same ID.
 - Accept bounded changing native thinking detail from Pi, OMP, Codex and Claude,
   retaining generic activity when safe detail or optional CLI support is absent.
+  Real changing summaries were observed for Pi/OMP; none were observed for
+  Codex/Claude under the unchanged native settings.
 - Show multiple rows of frequently used emoji, keeping the full picker usable
   on short screens and retaining existing ranking and local history.
 - Play supported video attachments in Comic and applicable standalone skins

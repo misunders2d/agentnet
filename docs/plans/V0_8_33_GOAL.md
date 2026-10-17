@@ -4,6 +4,25 @@
 
 Drive **AgentNet v0.8.33 to verified public release**, starting from published v0.8.32 (`ac98b331ce11425d7595beceb53f123068ddd705`). Complete implementation, independent review, integration, required qualification, public artifacts, matching skin-gallery publication and the usual preserved-data Hub rollout with a verified full backup. Continue autonomously through the authorized release workflow; a delivered patch, build or submitted CI run is not completion.
 
+## Owner acceptance amendment — October 17, 2026
+
+Sergey approved the prepared eighteen-client-partition layout, retaining every
+registered case, count 1 and the existing 600-second bound. All eighteen new
+memberships require actual qualification; twelve-layout passes do not substitute.
+UI remains two partitions and Windows retains three 1,800-second bands.
+
+For A2, the approved acceptance is changing Thinking summaries where the native
+provider emits safe summaries, with the existing generic fallback otherwise.
+All eight real steering cases passed unchanged settings; changing wording was
+observed for Pi/OMP, while Codex/Claude had none observed. This is not evidence
+of all-four changing wording, and no native settings or sessions are changed.
+
+Sergey reports that the required physical devices are unavailable. Continue the
+release with those physical Windows/other-OS badge/banner/click and Android
+background/locked/sound/vibration/fullscreen checks explicitly unverified. Build,
+CI, emulator and rendered results remain distinct; device availability is not a
+claim of physical acceptance. No other release gate or preservation rule is waived.
+
 ## Included scope
 
 All items in this section are included in the approved v33 package. Video, scheduled sending, shared renaming and cache recovery are no longer merely optional additions to this package. Existing bounded-investigation and explicit carry-forward rules below remain distinct from verified fixes.
@@ -51,7 +70,7 @@ Preserve v32 direct-agent steering, actual native permission inheritance, guest-
 ## Integrated verification and publication
 
 - Batch known issues and cheap focused regressions first. Stabilize source, generated assets and all affected skins; collect D3; then run costly full/platform suites for the integrated candidate. Retain valid unchanged evidence and repeat only checks affected by new changes, failures or unresolved concerns. New failures need an explicit disposition; the v32 combined-evidence record is not a blanket waiver.
-- Complete `go vet ./...`, all twelve current client race partitions at 600 seconds, other race packages and both UI partitions. Native Windows retains disjoint A–G/H–N/O–Z selections at 1,800 seconds; include actual Linux/macOS native qualification, desktop and container coverage. Derive current test registration; never omit cases, inflate timeouts or relabel skips. Any measured selector rebalance must preserve exact coverage/order/argv and have review plus recording proof. Keep margin uncertainty visible.
+- Complete `go vet ./...`, all eighteen current client race partitions at 600 seconds, other race packages and both UI partitions. Native Windows retains disjoint A–G/H–N/O–Z selections at 1,800 seconds; include actual Linux/macOS native qualification, desktop and container coverage. Derive current test registration; never omit cases, inflate timeouts or relabel skips. Any measured selector rebalance must preserve exact coverage/order/argv and have review plus recording proof. Keep margin uncertainty visible.
 - Run the actual required mixed-version gate against published **v0.8.32**, with full tags and the missing-tag refusal enabled. Verify obsolete-device suspension never blocks current participants or loses retained copies.
 - Complete original-key Android build, actual unit/lint results, package/version/signer/ABI/alignment checks and guarded **v32→v33 preservation**, including any real schema transition. Bind immutable source/archive/APK/observer/driver identities. Reuse the reviewed pre-Activity database-access rules: no database/WAL/SHM opens after Activity startup; preserve keys/config/history/files/queues/origin/storage and original AVD inputs. No reset/re-enrollment or permission changes. Keep raw preservation and cleanup results separate; never edit a failed predicate to manufacture exit 0.
 - Pin the complete gallery to the exact stable candidate; update Comic, standalone and overlay behavior and contract docs. Run normal builds/catalog/previews/local publication and the required integrated `AGENTNET_SOURCE=... npm test`. Inspect actual responsive output. Fix required skin/contract failures or revert the change; never release past them. Reuse preview bytes only with explicit valid provenance.

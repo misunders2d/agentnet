@@ -61,12 +61,12 @@ wait failure. Its HTTP Transport fixture race is fixed with a constructor-time
 wrapper and passes a narrow race. A failure-only, bounded read-only Hub/phone
 probe has schema-backed smoke evidence and awaits the next routine relevant
 partition. No history liveness cause or production fix is claimed. The measured
-12-partition budget is near capacity; an owner decision on18 partitions is pending.
-Until approved, the specified twelve partitions remain the rule; all cases and
-bounds must be retained. The three missing current receiver measurements pass
-572.373/553.064/520.422s, but the conservative rebalance model still lacks5.703s
-of aggregate capacity at the reviewed20s margin. No supported move set or count
-change is applied. Original failures and unfinished selections remain open.
+12-partition budget is near capacity. On October 17 Sergey approved eighteen
+client partitions with every case, count1 and the same600s bound. The reviewed
+two-file default/matrix change is applied; all eighteen memberships must execute
+on the frozen candidate. The earlier three receiver measurements remain historical
+evidence, not eighteen-layout passes. Original failures and unfinished selections
+remain retained, with the P1 probe in the next routine relevant selection.
 
 Android's original-key590-source build passes42 units, mandatory lint, signer,
 version, both ABI and16KiB checks; the rebuilt observer passes37 units. One
@@ -87,12 +87,14 @@ rebuilding and explicit content-equivalence verification.
 Desktop Rust tests pass on three CI systems; Android source/component checks and
 the build are reviewed. Actual Windows minimized badge/banner/click acceptance,
 other-OS appearance and physical Android receive/background/locked/sound/vibration
-and fullscreen evidence remain open; fixtures and emulator checks are distinct.
+and fullscreen evidence remain unverified. On October 17 Sergey reported those
+devices unavailable and authorized proceeding with these limits explicit; fixtures
+and emulator checks are distinct.
 All eight real native steering cases pass with unchanged settings. Changing
 Thinking wording is observed for Pi/OMP only; Codex/Claude show none in the public
-sample, and the owner's native-settings or provider-dependent acceptance decision
-is pending. No settings, permissions, sessions or raw reasoning are inspected or
-changed. Backend/frontend timing comparisons remain single controlled samples,
+sample. On October 17 Sergey approved provider-dependent Thinking acceptance: safe
+changing summaries where emitted, with generic fallback otherwise. No settings, permissions, sessions or raw
+reasoning are inspected or changed. Backend/frontend timing comparisons remain single controlled samples,
 with no ThinkPad or general performance claim.
 
 A1 still lacks the exact signed incident correlation; no completion inference or
