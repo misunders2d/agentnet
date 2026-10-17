@@ -32,8 +32,10 @@ with actual Files and lazy verified video playback/resource release. Comic's
 compact topic menu also fits and remains hit-testable at320px. Later gallery
 corrections preserve fresh-topic selection, defer only initial Zoom ancestor
 observer registration by one cancellable frame, and keep the short-phone dialog
-footer reachable. Their focused world checks and independent review pass. Exact
-main0859f188 and local gallery18a31fcc are the current qualification commits.
+footer reachable. Their focused world checks and independent review pass.
+The full-gallery execution pair is exact
+main0859f188 and local gallery18a31fcc; later non-runtime source changes are
+covered by the explicit eight-path dependency retention review.
 The first full gallery gate stops before its world stage:228 of230 Node tests
 pass; two Zoom lifecycle VM extracts omit the required cancelHeaderSync helper.
 The two-line actual-helper/state correction passes all21 lifecycle tests and the
@@ -55,18 +57,25 @@ actual Chrome IndexedDB test passes13.494s. Neither is whole-release qualificati
 Whole compilation, vet and the unchanged1354-parent registration pass. Valid
 unchanged native Linux/macOS/Windows, three separate Windows client bands,
 desktop Rust/container, mixed published-v32 and unaffected race results are
-retained with exact dependency reviews. Qualification is incomplete: client0/4
-exhaust the unchanged600s bound; client0 also has the unexplained derived-history
-wait failure. Its HTTP Transport fixture race is fixed with a constructor-time
-wrapper and passes a narrow race. A failure-only, bounded read-only Hub/phone
-probe has schema-backed smoke evidence and awaits the next routine relevant
-partition. No history liveness cause or production fix is claimed. The measured
-12-partition budget is near capacity. On October 17 Sergey approved eighteen
-client partitions with every case, count1 and the same600s bound. The reviewed
-two-file default/matrix change is applied; all eighteen memberships must execute
-on the frozen candidate. The earlier three receiver measurements remain historical
-evidence, not eighteen-layout passes. Original failures and unfinished selections
-remain retained, with the P1 probe in the next routine relevant selection.
+retained with exact dependency reviews. On October17 Sergey approved eighteen
+client partitions with every case, count1 and the same600s bound. Their first
+run39009285632 accounts for all1354parents once:1328pass,25explicit skips and
+one failure, with0race reports. Seventeen partitions pass; every package finishes
+below600s (maximum489.059s). The sole failure is a guest-invite test predicate
+that aborts on the documented transient context-pending state before its15s wait
+can continue. The reviewed local correction preserves its deadline, success and
+negative assertions; normal/narrowrace and integrated vet pass. Affected client0
+passes400.289s in39010802441 on58db710f:76parents,0skips
+and0races. Combined with the17retained selections, all18qualify:1329passes
+and25explicit skips,1354registered parents once with0missing/duplicate. The
+original full run remains a failure in the record, not relabeled. All final
+memberships finish below600s; these are actual samples, not future timing promises.
+
+Earlier twelve-layout timeouts and the HTTP Transport fixture race remain in
+the record. The constructor-time Transport correction is independently reviewed.
+History P1 passes56.86s in the routine current client7 selection; that success
+does not explain its original liveness failure. Its bounded failure-only probe
+stays available for a future failure, with no production cause or fix claimed.
 
 Android's original-key590-source build passes42 units, mandatory lint, signer,
 version, both ABI and16KiB checks; the rebuilt observer passes37 units. One

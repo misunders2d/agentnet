@@ -4,7 +4,7 @@ Notable changes to AgentNet, newest first. Dates use `YYYY-MM-DD`.
 This record starts with v0.8.1; earlier releases remain on the
 [releases page](https://github.com/misunders2d/agentnet/releases).
 
-## Unreleased
+## [0.8.33] — 2026-10-17
 
 - Count unread messages across Main and accessible topics, add exact unread
   navigation from Review, and keep choices stable while someone selects them.
