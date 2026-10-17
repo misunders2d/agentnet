@@ -21,6 +21,8 @@ This record starts with v0.8.1; earlier releases remain on the
   through an explicit Play action,
   with native controls and a download fallback. Load verified local bytes on
   demand, limit in-app playback to 16 MiB, and release media on navigation.
+- Update native app/tray unread indicators from the existing workspace aggregate,
+  with platform-specific counts/dots and truthful partial-state labels.
 - Add Full, Sender and Hidden notification previews. Desktop notifications
   default to Hidden; private modes retain fixed reminder, decision and security
   signals without message text or remote computer names.

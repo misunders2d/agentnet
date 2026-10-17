@@ -3,66 +3,103 @@
 ## Active work — v0.8.33, not released
 
 The owner-approved [publication goal](plans/V0_8_33_GOAL.md) and root-edited
-[checklist](plans/V0_8_33.md) govern the active release. Its sixteen tracks include
-shared renaming, inline video, local scheduled sending, damaged Android skin-cache
-recovery, unread navigation and Review, notification privacy and indicators,
-native thinking detail, emoji recents and readable mention previews. These are
-part of this release; the older backlog wording in historical records is superseded.
+[checklist](plans/V0_8_33.md) govern the sixteen release tracks. They include
+unread counts/navigation/Review, native indicators and private notifications,
+shared topic names, inline video, durable local schedules, Android damaged-cache
+recovery, emoji recents, native thinking detail and readable mention previews.
+No v33 tag, public assets, gallery publication or Hub rollout has occurred.
 
-Native/browser scheduling, shared-title and unread projections have focused
-source evidence and independent reviews. Comic emoji, video, scheduling and unread
-Review now have complete focused desktop/narrow rendered passes. Shared rename
-and automatic-title reset also pass on the phone; the compact topic menu fits and
-remains hit-testable at 320 px. The fixture's relative font URLs were corrected
-to use the production loader rules, with zero unexplained resource errors.
-The later cross-skin scheduling owner fence has focused tests and independent
-review; the final integrated candidate must include both changes.
-Android indicator/fullscreen source is reviewed, with Go race and pure Kotlin
-checks. An original-key build from the initial candidate passes unit tests,
-lint and package checks; the final corrected source needs a new bound build
-before runtime acceptance. Desktop Rust tests pass on all three CI systems;
-physical indicator/banner appearance remains unverified. Classic, Zoom and
-Holonet pass their focused desktop/phone entry checks, including actual video,
-shared rename/reset and schedules with Files. The whole gallery gate remains
-open. Shared titles now
-pass the full signed fixture against real IndexedDB, including close/reopen;
-the complete scheduling fixture also passes against real IndexedDB, with
-435 assertions and sixteen close/reopens. Its earlier timer failure came from
-awaiting only the first of queued lifecycle drains; the reviewed bounded test
-join preserves every timing assertion and leaves production unchanged. Real
-quota pressure, crash and multi-context persistence remain unqualified.
-Shared visibility, activity, video and scheduling helpers have focused evidence
-and independent review. Zoom's divider is placed before scroll restoration;
-its focused regression preserves the visible row after a read-triggered refresh.
+Native and browser unread, shared-title and scheduling implementations have
+independent source reviews and focused signed tests. Shared titles pass187
+assertions against real IndexedDB, including two close/reopens. Scheduling passes
+31 groups/435 assertions with125 databases and sixteen close/reopens. Its earlier
+lifecycle failure came from awaiting only the first coalesced test drain; the
+reviewed finite join leaves production unchanged. Dispatch uses the scheduling
+device's existing runtime and current authority checks, with no on-time promise
+while that runtime is stopped, asleep or unavailable. Browser scheduling needs
+the AgentNet page open. Real quota exhaustion, process termination during an IDB
+commit, two-context contention and physical suspend/resume remain unmeasured;
+transaction-failure, restart, deadline, audience and exactly-once controls pass.
+These limits are not claims that those experiments executed. In native-host
+mode the Go store owns the schedule; in browser Engine mode the checked IndexedDB
+transaction owns schedules, encrypted kept files and their reference counts.
+Browser durability depends on the origin remaining stored; actual quota pressure
+and best-effort origin eviction have not been tested.
 
-Initial integrated CI retains passing desktop/container and client race gates,
-but qualification is incomplete. Focused corrections address legacy own-agent
-history, projected topic-notice names and stale fixture setup. Portable privacy
-checks and explicit optional-progress outcomes pass focused tests and review;
-remaining Windows failures carry narrow diagnostics into qualification. Failed
-and unfinished selections remain open; an isolated pass is not a cause or a
-replacement for their required gates. The three Windows client bands now pass
-on separate hosts against3454. The next reviewed correction publishes one
-Content change after listed-roster cache completion; its deterministic ordering
-regression and actual Live integration pass. The stale recovery-key and signed
-capability fixture prerequisites are also corrected. Whole compile/vet and the
-unchanged1354-parent registration pass. Required next gates are client0/4/8/9,
-both UI partitions and the affected four-parent focus on all three systems,
-with valid unchanged passes retained. The exact four race moves preserve every
-case and the600s bound; the recorder proof is not a timing pass.
-The whole gallery check found a missing canonical ID on Zoom device-thread rows
-and exposed fixture allocation/menu sizing seams; focused corrections remain
-underway. The actual-endpoint history snapshot is prepared, with schema-backed
-SQL smoke only; the historical liveness cause remains unknown.
-All eight actual native steering cases
-pass with unchanged settings. Changing Thinking wording is observed for Pi and
-OMP; Codex/Claude evidence and the owner's disposition remain pending.
+Comic and Classic/Holonet/Zoom have focused desktop/phone acceptance for exact
+unread navigation, visible-only acknowledgments, shared rename/reset, schedules
+with actual Files and lazy verified video playback/resource release. Comic's
+compact topic menu also fits and remains hit-testable at320px. Later gallery
+corrections preserve fresh-topic selection, defer only initial Zoom ancestor
+observer registration by one cancellable frame, and keep the short-phone dialog
+footer reachable. Their focused world checks and independent review pass. Exact
+main0859f188 and local gallery18a31fcc are the current qualification commits.
+The first full gallery gate stops before its world stage:228 of230 Node tests
+pass; two Zoom lifecycle VM extracts omit the required cancelHeaderSync helper.
+The two-line actual-helper/state correction passes all21 lifecycle tests and the
+complete cheap check (147 passes,14 browser-parent skips). Independent D2/D3
+approves one corrected full gate on the exact gallery tree. It completes548.196s
+with230 Node passes/zero skips and21 applicable world-suite passes; the sole
+failure is Classic's browser fixture throwing “Route is already handled” while
+fulfilling its synthetic second-agent response. No product assertion is shown;
+the historical request order is unknown. A one-hunk exact-error guard passes a
+real-route regression and both affected Classic/Holonet journeys on unchanged
+assets. The ensuing normal full gate passes533.215s on exact0859/18a31fcc:
+231 Node cases with zero skips, seven demo contracts, three Comic journeys, five
+gallery acceptances and all22 applicable world suites. Five N/A entries are not
+passes. All278 built/published files stay exact and disposable homes are removed.
+This qualifies that source/gallery pair; later repins need an explicit dependency
+retention decision or the literal gate. UI1 passes572.373s (171 parents,65 explicit skips, zero races); the following
+actual Chrome IndexedDB test passes13.494s. Neither is whole-release qualification.
 
-Android schema 80→82 preservation and one-install/cold-cache recovery tooling is
-prepared in ignored copies, not executed. Retain the pre-Activity-only database
-boundary and original profile. No v33 public artifacts, Hub rollout or whole
-release qualification is claimed. Preserve valid v32 evidence and known limits
-below; complete the goal's integrated gates before publication.
+Whole compilation, vet and the unchanged1354-parent registration pass. Valid
+unchanged native Linux/macOS/Windows, three separate Windows client bands,
+desktop Rust/container, mixed published-v32 and unaffected race results are
+retained with exact dependency reviews. Qualification is incomplete: client0/4
+exhaust the unchanged600s bound; client0 also has the unexplained derived-history
+wait failure. Its HTTP Transport fixture race is fixed with a constructor-time
+wrapper and passes a narrow race. A failure-only, bounded read-only Hub/phone
+probe has schema-backed smoke evidence and awaits the next routine relevant
+partition. No history liveness cause or production fix is claimed. The measured
+12-partition budget is near capacity; an owner decision on18 partitions is pending.
+Until approved, the specified twelve partitions remain the rule; all cases and
+bounds must be retained. The three missing current receiver measurements pass
+572.373/553.064/520.422s, but the conservative rebalance model still lacks5.703s
+of aggregate capacity at the reviewed20s margin. No supported move set or count
+change is applied. Original failures and unfinished selections remain open.
+
+Android's original-key590-source build passes42 units, mandatory lint, signer,
+version, both ABI and16KiB checks; the rebuilt observer passes37 units. One
+protected run on an independent clone executes40 native mutation negatives and
+preserves all86 old typed tables across the warm v33 launch and subsequent
+pre-Activity schema82 snapshot, adding only the approved empty objects and
+zero-valued outbox field. All database evidence is pre-Activity; no database,
+WAL or SHM is opened after Activity startup. One cache install
+repairs the chosen package and catalog; a cold process verifies both with zero
+install calls, retaining200 messages, identity, native files, queues, origin and
+storage. Healthy unrelated cache stays present but unreadable; its bytes are not
+claimed verified. The original31-path lineage stays unchanged. Both raw process
+exits remain1 because kernel TIME_WAIT outlives the cleanup predicate; later
+read-only evidence separately proves owned resources absent. Independent review
+accepts the body and preserves that raw failure. Final-tag artifacts still need
+rebuilding and explicit content-equivalence verification.
+
+Desktop Rust tests pass on three CI systems; Android source/component checks and
+the build are reviewed. Actual Windows minimized badge/banner/click acceptance,
+other-OS appearance and physical Android receive/background/locked/sound/vibration
+and fullscreen evidence remain open; fixtures and emulator checks are distinct.
+All eight real native steering cases pass with unchanged settings. Changing
+Thinking wording is observed for Pi/OMP only; Codex/Claude show none in the public
+sample, and the owner's native-settings or provider-dependent acceptance decision
+is pending. No settings, permissions, sessions or raw reasoning are inspected or
+changed. Backend/frontend timing comparisons remain single controlled samples,
+with no ThinkPad or general performance claim.
+
+A1 still lacks the exact signed incident correlation; no completion inference or
+speculative fix is introduced. K1 retains the authorized unresolved WebKit heap
+corruption carry and exact missing instrumentation prerequisite. Preserve the
+user's two untracked plans and all original failed evidence. Complete the goal's
+required gates and owner dispositions before publication or backed-up Hub rollout.
 
 ## Current release — v0.8.32, October 16, 2026
 
