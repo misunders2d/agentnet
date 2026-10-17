@@ -1,6 +1,7 @@
 package client
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -190,7 +191,16 @@ func TestGroupGuestInviteOlderMemberDoesNotVeto(t *testing.T) {
 	if err != nil {
 		t.Fatalf("one suspended member device stopped a group guest invitation: elapsed=%v remaining=%v context=%v: %v", time.Since(started), time.Until(deadline), ctx.Err(), err)
 	}
-	eventually(t, "guest invited", func() bool { return stateAt(t, guest, p.PID).State == PartInvited })
+	eventually(t, "guest invited", func() bool {
+		info, err := guest.Participation(p.PID)
+		if errors.Is(err, ErrNoParticipation) || errors.Is(err, ErrGroupContextPending) {
+			return false
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return err == nil && info.State == PartInvited
+	})
 	states, details := copyStates(t, carol, "pid", p.PID, w.bob.Address)
 	heldForUpdate(t, "suspended member", states, details)
 	if stateAt(t, w.bob, p.PID).Invite != "" {
