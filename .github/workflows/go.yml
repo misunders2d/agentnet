@@ -119,7 +119,7 @@ jobs:
           node-version: '26'
           package-manager-cache: false
       - name: pinned UI test tooling
-        if: matrix.shard == 'others'
+        if: matrix.shard == 'others' || startsWith(matrix.shard, 'ui-')
         working-directory: internal/ui/web
         shell: bash
         run: |
@@ -130,7 +130,7 @@ jobs:
           AGENTNET_RACE_SHARD: ${{ matrix.shard }}
         run: scripts/race-shard.sh "$AGENTNET_RACE_SHARD" 12
       - name: browser storage (real IndexedDB, headless)
-        if: matrix.shard == 'others'
+        if: matrix.shard == 'others' || matrix.shard == 'ui-1'
         shell: bash
         run: |
           export AGENTNET_CHROME="$(command -v google-chrome-stable || command -v google-chrome || command -v chromium)"
