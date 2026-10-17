@@ -2,8 +2,10 @@ package client
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -349,6 +351,68 @@ SELECT (SELECT json_group_array(json_object('physical',physical,'count',coalesce
 			decodeError := present && json.Unmarshal(raw, &seen) != nil
 			matchDefined := present && !decodeError
 			t.Logf("history snapshot new_phone rows=%s context_present=%t context_decode_error=%t context_match_defined=%t context_matches_current=%t historical_proof_present=%t current_proof_present=%t held=%s receipts=%d archives=%s", rows, present, decodeError, matchDefined, matchDefined && sameGroupRoot(seen.Root, current.Root) && seen.State.Hash() == current.State.Hash(), historicalProof != 0, currentProof != 0, held, receipts, archives)
+			// This is the eligible queue head, not the stream's connection-local
+			// syncInFlight. Separate Hub/phone reads cannot prove delivery or cause.
+			hubPath := filepath.ToSlash(filepath.Join(w.hub.Dir, "hub.db"))
+			if filepath.VolumeName(w.hub.Dir) != "" {
+				hubPath = "/" + hubPath
+			}
+			hubURI := url.URL{Scheme: "file", Path: hubPath, RawQuery: "mode=ro"}
+			hub, e := sql.Open("sqlite", hubURI.String())
+			if e != nil {
+				t.Logf("history snapshot hub_head open_error=true budget_expired=%t head_unobserved=true", ctx.Err() != nil)
+				return
+			}
+			defer hub.Close()
+			hub.SetMaxOpenConns(1)
+			var related, headID, senderAlias string
+			var sessionKnown, headRelated bool
+			e = hub.QueryRowContext(ctx, `WITH reader AS (SELECT last_session FROM agents WHERE address=?),
+ carriers AS (SELECT value id FROM json_each(?)), related AS (
+ SELECT CASE WHEN m.id IS NULL THEN 'missing' WHEN m.state IN ('custody','delivered','quarantined','expired') THEN m.state ELSE 'other' END state,
+ CASE WHEN m.id IS NULL THEN 'missing' WHEN m.lane IN ('live','sync') THEN m.lane ELSE 'other' END lane,
+ CASE WHEN m.id IS NULL OR coalesce((SELECT last_session FROM reader),'')='' THEN 'unknown'
+ WHEN m.session IS NULL OR m.session=(SELECT last_session FROM reader) OR m.fallback=1 THEN 'eligible' ELSE 'ineligible' END eligibility
+ FROM carriers c LEFT JOIN messages m ON m.id=c.id AND m.recipient=?
+), head AS (
+ SELECT m.id,m.sender FROM messages m,reader r WHERE m.recipient=? AND m.state='custody' AND m.lane='sync'
+ AND coalesce(r.last_session,'')<>'' AND (m.session IS NULL OR m.session=r.last_session OR m.fallback=1)
+ ORDER BY m.seq LIMIT 1
+)
+SELECT (SELECT json_group_array(json_object('state',state,'lane',lane,'eligibility',eligibility,'count',n))
+ FROM (SELECT state,lane,eligibility,count(*) n FROM related GROUP BY state,lane,eligibility)),
+ coalesce((SELECT id FROM head),''),
+ CASE WHEN NOT EXISTS(SELECT 1 FROM head) THEN 'none' WHEN (SELECT sender FROM head)=? THEN 'source'
+ WHEN (SELECT sender FROM head)=? THEN 'approver' ELSE 'other' END,
+ coalesce((SELECT last_session FROM reader),'')<>'', EXISTS(SELECT 1 FROM head WHERE id IN (SELECT id FROM carriers))`, phone.Address, ids, phone.Address, phone.Address, source.Address, approver.Address).Scan(&related, &headID, &senderAlias, &sessionKnown, &headRelated)
+			if e != nil {
+				t.Logf("history snapshot hub_head query_error=true budget_expired=%t head_unobserved=true", ctx.Err() != nil)
+				return
+			}
+			t.Logf("history snapshot hub_head related=%s session_known=%t eligible_head_present=%t head_related=%t sender_alias=%s actual_in_flight_unobserved=true cross_store_atomic=false", related, sessionKnown, headID != "", headRelated, senderAlias)
+			if headID == "" {
+				return
+			}
+			var disposition string
+			e = phone.store.db.QueryRowContext(ctx, `WITH wanted(id) AS (VALUES(?)), dispositions AS (
+ SELECT id,acked FROM inbox WHERE id=(SELECT id FROM wanted)
+ UNION ALL SELECT id,acked FROM quarantine WHERE id=(SELECT id FROM wanted)
+ UNION ALL SELECT id,acked FROM history_receipts WHERE id=(SELECT id FROM wanted)
+)
+SELECT json_object('inbox',(SELECT count(*) FROM inbox WHERE id=(SELECT id FROM wanted)),
+ 'quarantine',(SELECT count(*) FROM quarantine WHERE id=(SELECT id FROM wanted)),
+ 'receipts',(SELECT count(*) FROM history_receipts WHERE id=(SELECT id FROM wanted)),
+ 'dedup_seen',(SELECT count(*) FROM dispositions),
+ 'ack_due',(SELECT count(*) FROM dispositions WHERE acked=0 AND id NOT IN (SELECT id FROM history_archive_children)),
+ 'archive_child',(SELECT count(*) FROM history_archive_children WHERE id=(SELECT id FROM wanted)),
+ 'jobs',count(*),'retained',coalesce(sum(retained=1),0),'done',coalesce(sum(done=1),0),
+ 'error_present',coalesce(sum(error<>''),0),'position_total',coalesce(sum(pos),0))
+ FROM history_archive_jobs WHERE id=(SELECT id FROM wanted)`, headID).Scan(&disposition)
+			if e != nil {
+				t.Logf("history snapshot head_phone query_error=true budget_expired=%t disposition_unobserved=true", ctx.Err() != nil)
+				return
+			}
+			t.Logf("history snapshot head_phone disposition=%s", disposition)
 		}()
 		eventually(t, "new phone accepts old inert history", func() bool {
 			return inboxCount(t, phone, `id=? AND replica=1 AND state='' AND group_history IS NOT NULL`, originalID) == 1

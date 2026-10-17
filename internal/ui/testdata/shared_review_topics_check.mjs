@@ -196,3 +196,19 @@ console.log('PASS T1 validation/person-flat gates: empty/65characters noPOST; ex
  controls.update({conv:'chat'},[topic('named')],'',null,{revision:1});const fresh=button(f.root,'New topic'),bar=f.root.querySelector('.topics-bar');fresh.click();assert.deepEqual(chosen,['new']);assert.equal(calls.length,0);assert.equal(f.root.querySelector('.topics-bar'),bar);controls.stop();controls.repaint();fresh.click();assert.deepEqual(chosen,['new']);assert.equal(f.root.querySelector('.topics-bar'),null);assert.equal(calls.length,0);
 }
 console.log('PASS retained topicControls API: New callback invokes repaint; stop prevents repaint/fresh/request work');
+
+// Fresh is the entry's existing draft state; only its pressed projection belongs here.
+for(const flat of [false,true]){
+ const f=dom(),calls=[],chosen=[],rows=[topic('named'),topic('other')],roots=[{id:'r1',created:'2026-01-01',count:1,peer:{person:'p'}},{id:'r2',created:'2026-01-02',count:1,title:'Other Main',peer:{person:'p'}}],views={r1:{messages:[{body:'Main'}],topics:rows},r2:{messages:[{body:'Other Main'}],main_topic:{title:'Other Main'},topics:[]}};
+ let freshState=false,conv='r1',current='named',controls;
+ const update=()=>controls.update({conv},views[conv].topics,current,flat?{main:'r1',roots,view:views[conv]}:null,{revision:1});
+ controls=topicControls(f.root,{api:async(path,body)=>{calls.push({path,body});throw Error('Fresh selection adds no request');},isFresh:()=>freshState,choose:id=>{chosen.push(id);freshState=false;current=id;update();},chooseRoot:(id,topic)=>{chosen.push({conv:id,topic});freshState=false;conv=id;current=topic;update();},fresh:()=>{chosen.push('new');freshState=true;controls.repaint();},changed:async()=>{},announce(){}});
+ update();const fresh=button(f.root,'New topic'),main=button(f.root,'Main flow'),bar=f.root.querySelector('.topics-bar');
+ const pressedOnly=expected=>{for(const b of all(bar).filter(n=>n.tagName==='BUTTON'))assert.equal(b.getAttribute('aria-pressed')==='true',b===expected,(flat?'person':'native')+' pressed '+b.textContent);};
+ fresh.click();assert.equal(fresh.getAttribute('aria-pressed'),'true','New topic projects existing fresh state');pressedOnly(fresh);assert.equal(f.root.querySelector('.topics-bar'),bar);assert.equal(calls.length,0);
+ const named=button(bar,/^needle named/);named.click();assert.equal(fresh.getAttribute('aria-pressed'),'false');pressedOnly(named);assert.deepEqual(chosen.at(-1),flat?{conv:'r1',topic:'named'}:'named');
+ main.click();assert.equal(fresh.getAttribute('aria-pressed'),'false');pressedOnly(main);fresh.click();pressedOnly(fresh);controls.repaint();pressedOnly(fresh);assert.equal(button(bar,'New topic'),fresh);
+ if(flat){conv='r2';current='';update();pressedOnly(fresh);const other=button(bar,/^Other Main/);other.click();assert.deepEqual(chosen.at(-1),{conv:'r2',topic:''});pressedOnly(other);assert.equal(fresh.getAttribute('aria-pressed'),'false');}
+ const before=chosen.length;controls.stop();controls.repaint();fresh.click();assert.equal(chosen.length,before);assert.equal(f.root.querySelector('.topics-bar'),null);assert.equal(calls.length,0);
+}
+console.log('PASS fresh topic projection: native/person Main and chips exclude New, selection resets fresh, stable repaint and stopped zero-request behavior');

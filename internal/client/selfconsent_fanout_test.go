@@ -20,6 +20,30 @@ func TestSelfConsentBeforeFanout(t *testing.T) {
 }
 
 func testSelfConsentBeforeFanout(t *testing.T, scenario string) {
+	type inviteCallKey struct{}
+	entered, release := make(chan string, 1), make(chan struct{})
+	var once, released sync.Once
+	previousWrap := wrapTransport
+	wrapTransport = func(base http.RoundTripper) http.RoundTripper {
+		if previousWrap != nil {
+			base = previousWrap(base)
+		}
+		return roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			// Other incoming fixture traffic may still refresh proof after Run
+			// stops. Only this InviteAgent call's fanout is the test boundary.
+			if r.Context().Value(inviteCallKey{}) != true {
+				return base.RoundTrip(r)
+			}
+			once.Do(func() { entered <- r.Method + " " + r.URL.RequestURI() })
+			select {
+			case <-release:
+			case <-r.Context().Done():
+			}
+			return nil, errors.New("isolated fanout unavailable")
+		})
+	}
+	t.Cleanup(func() { wrapTransport = previousWrap })
+	defer func() { released.Do(func() { close(release) }) }()
 	var w *world
 	var conv, pid string
 	var stop func()
@@ -42,27 +66,6 @@ func testSelfConsentBeforeFanout(t *testing.T, scenario string) {
 	if err := w.alice.SetResponder(&Responder{Harness: "claude", Dir: t.TempDir()}); err != nil {
 		t.Fatal(err)
 	}
-	base := w.alice.hub.http.Transport
-	type inviteCallKey struct{}
-	entered, release := make(chan string, 1), make(chan struct{})
-	var once, released sync.Once
-	w.alice.hub.http.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		// Other incoming fixture traffic may still refresh proof after Run
-		// stops. Only this InviteAgent call's fanout is the test boundary.
-		if r.Context().Value(inviteCallKey{}) != true {
-			return base.RoundTrip(r)
-		}
-		once.Do(func() { entered <- r.Method + " " + r.URL.RequestURI() })
-		select {
-		case <-release:
-		case <-r.Context().Done():
-		}
-		return nil, errors.New("isolated fanout unavailable")
-	})
-	defer func() {
-		released.Do(func() { close(release) })
-		w.alice.hub.http.Transport = base
-	}()
 	// Force unrelated traffic before the invitation: the old any-request
 	// barrier incorrectly entered here, before its invitation even existed.
 	probeCtx, probeCancel := context.WithCancel(tctx(t))
@@ -89,7 +92,6 @@ func testSelfConsentBeforeFanout(t *testing.T, scenario string) {
 		released.Do(func() { close(release) })
 		<-done
 		cancel()
-		w.alice.hub.http.Transport = base
 	}
 	defer finish()
 	select {

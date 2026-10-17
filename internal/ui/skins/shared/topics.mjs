@@ -4,7 +4,7 @@ import {holdChoices,pagedChoices,placeChoices} from './choices.mjs';
 // Host API v1 only: no provider, storage, transport or global document access.
 export const TOPIC_UI = Object.freeze({barMax:4,pageSize:50,undoDelay:6000});
 const unreadFirst=(a,b)=>Number(b.unread>0)-Number(a.unread>0)||Date.parse(b.last_at||'')-Date.parse(a.last_at||'')||String(b.topic??b.id).localeCompare(String(a.topic??a.id))||String(a.conv||a.peer||'').localeCompare(String(b.conv||b.peer||''));
-export function topicControls(root,{api,choose,chooseRoot,fresh,changed,announce}) {
+export function topicControls(root,{api,choose,chooseRoot,fresh,changed,announce,isFresh=()=>false}) {
  const doc=root.ownerDocument,win=doc.defaultView,bar=doc.createElement('nav');bar.className='topics-bar';bar.setAttribute('aria-label','Topics');
  const zoom=root.querySelector('#zoom');if(zoom)zoom.before(bar);else root.querySelector('.conv-head').after(bar);
  const node=(tag,text='',props={})=>{const n=doc.createElement(tag);if(text)n.textContent=text;Object.assign(n,props);return n;};
@@ -117,13 +117,13 @@ export function topicControls(root,{api,choose,chooseRoot,fresh,changed,announce
   if(dead)return;const nodes=[],keep=new Set(),put=(id,text,click)=>{let b=barNodes.get(id);if(!b){b=button(text,()=>{if(barNodes.get(id)===b)return b.run?.();});barNodes.set(id,b);}b.textContent=text;b.run=click;keep.add(id);nodes.push(b);return b;};
   let entries=person?flatEntries():topics,picked=[],mainUnread=meta.mainUnread??(person?views[person.main]?.main_topic?.unread??person.roots.find(r=>r.id===person.main)?.scopes?.find(s=>!s.topic)?.unread:undefined);
   const main=scope.conv||person?put('main',(root.clientWidth<700?'Main':'Main flow')+(mainUnread?' · '+mainUnread+' unread':''),()=>{barStable.release();person?chooseRoot(person.main,''):choose('');}):null;
-  if(main)main.setAttribute('aria-pressed',String(person?scope.conv===person.main&&!current:!current));
+  if(main)main.setAttribute('aria-pressed',String(person?scope.conv===person.main&&!current&&!isFresh():!current&&!isFresh()));
   if(person){const selected=entries.find(t=>t.conv===scope.conv&&t.topic===current);picked=selected?[{...selected,id:selected.key}]:[];}
   else{picked=[...topics].filter(t=>t.state==='active'||t.id===current).sort(unreadFirst).slice(0,TOPIC_UI.barMax);const opened=topics.find(t=>t.id===current);if(opened&&!picked.includes(opened)){if(picked.length)picked[picked.length-1]=opened;else picked.push(opened);}}
-  for(const {row:t,present}of barStable.update(picked)){const b=put('topic:'+t.id,(t.title||'Untitled').slice(0,40)+(t.unread?' · '+t.unread+' unread':''),()=>{if(!present)return;barStable.release();person?chooseRoot(t.conv,t.topic):choose(t.id);});b.className='topic-chip an-hit';b.title=t.title+' · '+t.state;b.setAttribute('aria-pressed',String(person?t.conv===scope.conv&&t.topic===current:current===t.id));b.setAttribute('aria-disabled',String(!present));}
+  for(const {row:t,present}of barStable.update(picked)){const b=put('topic:'+t.id,(t.title||'Untitled').slice(0,40)+(t.unread?' · '+t.unread+' unread':''),()=>{if(!present)return;barStable.release();person?chooseRoot(t.conv,t.topic):choose(t.id);});b.className='topic-chip an-hit';b.title=t.title+' · '+t.state;b.setAttribute('aria-pressed',String((person?t.conv===scope.conv&&t.topic===current:current===t.id)&&!isFresh()));b.setAttribute('aria-disabled',String(!present));}
   const total=meta.unreadTotal??(person?person.roots.reduce((n,r)=>n+(r.unread||0),0):undefined),other=typeof total==='number'?Math.max(0,total-(mainUnread||0)-picked.reduce((n,t)=>n+(t.unread||0),0)):0;
   put('all',(root.clientWidth<700?'All':'All topics')+(person?(personReady?' ('+entries.length+')':''):' ('+topics.length+')')+(other?' · '+other+' unread in other topics':''),()=>void list());
-  const freshButton=put('new',root.clientWidth<700?'+ New':'New topic',fresh);freshButton.setAttribute('aria-label','New topic');
+  const freshButton=put('new',root.clientWidth<700?'+ New':'New topic',fresh);freshButton.setAttribute('aria-label','New topic');freshButton.setAttribute('aria-pressed',String(isFresh()));
   const t=topics.find(t=>t.id===current);if(t)put('state',t.state==='active'?(root.clientWidth<700?'Done':'Mark done'):'Reopen',async()=>{try{const r=await api('/api/topic/'+(t.state==='active'?'done':'reopen'),{...scope,id:t.id,count:t.count});if(dead)return;announce(r.note);await changed();}catch{if(!dead)announce('This topic couldn’t change. Try again.');}});
   for(const id of barNodes.keys())if(!keep.has(id))barNodes.delete(id);placeChoices(bar,nodes);
  }
