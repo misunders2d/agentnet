@@ -1,118 +1,106 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
-## Active work — v0.8.33, not released
+## Current release — v0.8.33, October 17, 2026
 
-The owner-approved [publication goal](plans/V0_8_33_GOAL.md) and root-edited
-[checklist](plans/V0_8_33.md) govern the sixteen release tracks. They include
-unread counts/navigation/Review, native indicators and private notifications,
-shared topic names, inline video, durable local schedules, Android damaged-cache
-recovery, emoji recents, native thinking detail and readable mention previews.
-No v33 tag, public assets, gallery publication or Hub rollout has occurred.
+[Download v0.8.33](https://github.com/misunders2d/agentnet/releases/tag/v0.8.33),
+immutable source `1800d7dcde713299d4fd0e5e334a4045e620785b`.
+The [publication goal](plans/V0_8_33_GOAL.md) and [release record](plans/V0_8_33.md)
+contain scope, owner dispositions, qualification and unresolved limits.
+Exact-tag [packaging 39016322658](https://github.com/misunders2d/agentnet/actions/runs/39016322658)
+passes all six jobs. All 13 public assets were independently downloaded and
+matched SHA256SUMS and GitHub digests. Standalone and bundled CLI provenance is
+clean at the tag. Public Android APK SHA256
+`ea986ec9c94c24991ed3c71fa1cfb1444b876632f93652e1861aec2e68de7539`
+passes original signer, code8033, nondebuggable, both ABIs and16KiB checks.
 
-Native and browser unread, shared-title and scheduling implementations have
-independent source reviews and focused signed tests. Shared titles pass187
-assertions against real IndexedDB, including two close/reopens. Scheduling passes
-31 groups/435 assertions with125 databases and sixteen close/reopens. Its earlier
-lifecycle failure came from awaiting only the first coalesced test drain; the
-reviewed finite join leaves production unchanged. Dispatch uses the scheduling
-device's existing runtime and current authority checks, with no on-time promise
-while that runtime is stopped, asleep or unavailable. Browser scheduling needs
-the AgentNet page open. Real quota exhaustion, process termination during an IDB
-commit, two-context contention and physical suspend/resume remain unmeasured;
-transaction-failure, restart, deadline, audience and exactly-once controls pass.
-These limits are not claims that those experiments executed. In native-host
-mode the Go store owns the schedule; in browser Engine mode the checked IndexedDB
-transaction owns schedules, encrypted kept files and their reference counts.
-Browser durability depends on the origin remaining stored; actual quota pressure
-and best-effort origin eviction have not been tested.
+The matching [gallery v2026.10.17.1](https://github.com/misunders2d/agentnet-skins/releases/tag/v2026.10.17.1)
+is commit `4f1cb86342042153ef6d2f7afab3ecd9c159130c`, pinned to the exact release.
+Classic/Holonet/Pulp are1.8.0, Zoom1.8.1 and Office1.6.0.
+[Normal Node22 CI39020701101](https://github.com/misunders2d/agentnet-skins/actions/runs/39020701101)
+passes150 named tests, with15 explicit opt-in skips, all22 applicable world
+suites, seven demo contracts, three Comic journeys and five gallery acceptances;
+five N/A entries are not passes. The earlier import failure and Zoom late-animation
+teardown failure remain recorded. The reviewed Zoom fix keeps owned-layer cleanup
+and fences effects after unmount or host replacement. All146 public files,
+20 previews, package consent digests, tag/latest pointers and source pin were
+independently verified. Only Zoom's entry and its catalog record differ from the
+previously qualified published bytes; all previews retain their provenance.
 
-Comic and Classic/Holonet/Zoom have focused desktop/phone acceptance for exact
-unread navigation, visible-only acknowledgments, shared rename/reset, schedules
-with actual Files and lazy verified video playback/resource release. Comic's
-compact topic menu also fits and remains hit-testable at320px. Later gallery
-corrections preserve fresh-topic selection, defer only initial Zoom ancestor
-observer registration by one cancellable frame, and keep the short-phone dialog
-footer reachable. Their focused world checks and independent review pass.
-The full-gallery execution pair is exact
-main0859f188 and local gallery18a31fcc; later non-runtime source changes are
-covered by the explicit eight-path dependency retention review.
-The first full gallery gate stops before its world stage:228 of230 Node tests
-pass; two Zoom lifecycle VM extracts omit the required cancelHeaderSync helper.
-The two-line actual-helper/state correction passes all21 lifecycle tests and the
-complete cheap check (147 passes,14 browser-parent skips). Independent D2/D3
-approves one corrected full gate on the exact gallery tree. It completes548.196s
-with230 Node passes/zero skips and21 applicable world-suite passes; the sole
-failure is Classic's browser fixture throwing “Route is already handled” while
-fulfilling its synthetic second-agent response. No product assertion is shown;
-the historical request order is unknown. A one-hunk exact-error guard passes a
-real-route regression and both affected Classic/Holonet journeys on unchanged
-assets. The ensuing normal full gate passes533.215s on exact0859/18a31fcc:
-231 Node cases with zero skips, seven demo contracts, three Comic journeys, five
-gallery acceptances and all22 applicable world suites. Five N/A entries are not
-passes. All278 built/published files stay exact and disposable homes are removed.
-This qualifies that source/gallery pair; later repins need an explicit dependency
-retention decision or the literal gate. UI1 passes572.373s (171 parents,65 explicit skips, zero races); the following
-actual Chrome IndexedDB test passes13.494s. Neither is whole-release qualification.
+Unread counts cover Main and accessible Active/Done/Archived topics. Exact
+first-unread landing, meaningful-visible-only acknowledgments and deliberate-unread
+generation fences apply across the supported skins. Unread Review remains separate
+from permission decisions, and live topic choices stay stable under pointer/focus.
+Explicit named-topic renames become shared within current authorized scope; old
+private names remain until an explicit shared rename. Main/device names stay personal.
+Inline video loads verified files only after Play, with size/type guards, download
+fallback and cleanup on navigation/Review/unmount. Multiple recent emoji rows and
+compact collective-mention previews reuse existing state and signed bodies.
 
-Whole compilation, vet and the unchanged1354-parent registration pass. Valid
-unchanged native Linux/macOS/Windows, three separate Windows client bands,
-desktop Rust/container, mixed published-v32 and unaffected race results are
-retained with exact dependency reviews. On October17 Sergey approved eighteen
-client partitions with every case, count1 and the same600s bound. Their first
-run39009285632 accounts for all1354parents once:1328pass,25explicit skips and
-one failure, with0race reports. Seventeen partitions pass; every package finishes
-below600s (maximum489.059s). The sole failure is a guest-invite test predicate
-that aborts on the documented transient context-pending state before its15s wait
-can continue. The reviewed local correction preserves its deadline, success and
-negative assertions; normal/narrowrace and integrated vet pass. Affected client0
-passes400.289s in39010802441 on58db710f:76parents,0skips
-and0races. Combined with the17retained selections, all18qualify:1329passes
-and25explicit skips,1354registered parents once with0missing/duplicate. The
-original full run remains a failure in the record, not relabeled. All final
-memberships finish below600s; these are actual samples, not future timing promises.
+Schedules are owned by the scheduling device's existing runtime and encrypted local
+store; browser Engine schedules require the page open. They support text/files,
+revision-fenced edits, cancellation, Send now, explicit audience reapproval and
+stable-ID recovery. They never promise on-time sending while stopped, asleep or
+offline. Real IndexedDB checks retain187 shared-title assertions/two reopens and
+435 scheduling assertions/sixteen reopens. Real quota exhaustion, eviction,
+termination during a commit, two-context contention and physical sleep/wake remain
+unmeasured; synthetic failure/restart checks are not those experiments.
 
-Earlier twelve-layout timeouts and the HTTP Transport fixture race remain in
-the record. The constructor-time Transport correction is independently reviewed.
-History P1 passes56.86s in the routine current client7 selection; that success
-does not explain its original liveness failure. Its bounded failure-only probe
-stays available for a future failure, with no production cause or fix claimed.
+Vet, eighteen client race partitions at600s, other packages/UI2, native three-OS,
+Windows's three1800s bands, desktop Rust/container and real mixed-v32 qualification
+are accounted for by exact reviewed retention. The client union is1329 passes and
+25 explicit skips:1354 parents once, no gaps, duplicates or races. The original
+17-pass/one-failure run remains failed; the sole local guest predicate correction
+passes the same76 parents in400.289s, completing the combined record.
 
-Android's original-key590-source build passes42 units, mandatory lint, signer,
-version, both ABI and16KiB checks; the rebuilt observer passes37 units. One
-protected run on an independent clone executes40 native mutation negatives and
-preserves all86 old typed tables across the warm v33 launch and subsequent
-pre-Activity schema82 snapshot, adding only the approved empty objects and
-zero-valued outbox field. All database evidence is pre-Activity; no database,
-WAL or SHM is opened after Activity startup. One cache install
-repairs the chosen package and catalog; a cold process verifies both with zero
-install calls, retaining200 messages, identity, native files, queues, origin and
-storage. Healthy unrelated cache stays present but unreadable; its bytes are not
-claimed verified. The original31-path lineage stays unchanged. Both raw process
-exits remain1 because kernel TIME_WAIT outlives the cleanup predicate; later
-read-only evidence separately proves owned resources absent. Independent review
-accepts the body and preserves that raw failure. Final-tag artifacts still need
-rebuilding and explicit content-equivalence verification.
+Android preservation on the retained590 source executes40 native negatives,
+pre-Activity80→82 migration/typed-table checks and chosen damaged-cache recovery:
+one install followed by cold verification with zero install calls. Identity,
+200 messages, native files/queues and origin/storage are preserved. Unreadable
+healthy unrelated cache bytes are not claimed verified. Raw preservation exits
+remain failures for TIME_WAIT cleanup; later resource absence is separate.
+Production/build-input equivalence to1800 permits body retention, not a claim
+that the final-tag APK reran that preservation experiment. A separate fresh API35
+batch passes indicators-video, notifications and notifications-denied components
+in75.071s, with clean owned teardown; its original setup failure is preserved.
+This is retained590 component evidence, not final-tag whole-producer or physical
+phone acceptance.
 
-Desktop Rust tests pass on three CI systems; Android source/component checks and
-the build are reviewed. Actual Windows minimized badge/banner/click acceptance,
-other-OS appearance and physical Android receive/background/locked/sound/vibration
-and fullscreen evidence remain unverified. On October 17 Sergey reported those
-devices unavailable and authorized proceeding with these limits explicit; fixtures
-and emulator checks are distinct.
-All eight real native steering cases pass with unchanged settings. Changing
-Thinking wording is observed for Pi/OMP only; Codex/Claude show none in the public
-sample. On October 17 Sergey approved provider-dependent Thinking acceptance: safe
-changing summaries where emitted, with generic fallback otherwise. No settings, permissions, sessions or raw
-reasoning are inspected or changed. Backend/frontend timing comparisons remain single controlled samples,
-with no ThinkPad or general performance claim.
+The Hub rollout passes in69.898s, followed by an independent09:35:03UTC check.
+Stopped full backup `/opt/agentnet-revived/backups/pre-v0.8.33-k3jps4kj/hub-backup.tgz`
+has SHA256 `e5c5e9377687ff0f67507af32b175a002c30bd3b9a840733a558295e8ed13a75`;
+all6585 entries match the stopped store. Before/after integrity and counts match:
+13 agents,57706 messages,6578 blobs,7 persons,19 chain rows, schema23.
+Realm `4bd7c66953ccf5496fad8eadbab945bd`, volume, ports, network, environment
+and neighboring service are preserved; only the image changed. The running binary
+reports exact clean1800, HTTPS reportsv0.8.33, and restarts remain0. Rollback uses
+the old image on current data; no rollback drill or stale-snapshot restore is claimed.
 
-A1 still lacks the exact signed incident correlation; no completion inference or
-speculative fix is introduced. K1 retains the authorized unresolved WebKit heap
-corruption carry and exact missing instrumentation prerequisite. Preserve the
-user's two untracked plans and all original failed evidence. Complete the goal's
-required gates and owner dispositions before publication or backed-up Hub rollout.
+Windows Server2022 VM screenshots establish the source-equivalent shell's taskbar
+dot appearing, remaining minimized/partial-positive and clearing at zero. The raw
+harness still fails its final sharing-violation read; tray/count/tooltip, receive
+producer and banner/click behavior are unverified. Quiet-time6 makes its banners
+N/A. The hosted macOS post returned0 but no banner was observed; no cause is claimed.
+Physical/OEM badge/banner/click, Android background/locked/sound/vibration/real
+fullscreen and ThinkPad acceptance remain unavailable/unverified under the owner's
+explicit disposition. MEL-648 and MEL-652 remain open.
 
-## Current release — v0.8.32, October 16, 2026
+All eight real native steering cases pass without configuration or permission
+changes. Changing Thinking was observed for Pi/OMP, none for Codex/Claude. The owner
+accepts safe summaries where emitted and truthful generic fallback otherwise;
+this is not all-four changing-wording proof. MEL-646 remains open for the unexplained
+history liveness/performance discriminator; its current56.86s pass is not a cause
+or fix. MEL-641 lacks the exact signed incident correlation. MEL-587 retains the
+unresolved WebKit heap corruption/debug-symbol prerequisite and authorized carry.
+No replay, completion inference, profile reset or native-setting override occurred.
+
+Final Linear comments/statuses were read back:11 Done, five In Progress, all original
+descriptions preserved. [MEL-656](https://linear.app/mellanni/issue/MEL-656/remove-obsolete-cloudflare-tunnel-approval-route-to-unused-port-8090)
+records the owner's cloudflared cleanup request for later; no tunnel change occurred.
+Owned workers, temporary branches/worktrees, VM/server processes and disposable
+runtime2 disks are cleaned up; audit evidence and original profiles remain. The
+user's two untracked plans, original shell and Claude session are preserved.
+
+## Historical release — v0.8.32, October 16, 2026
 
 [Download v0.8.32](https://github.com/misunders2d/agentnet/releases/tag/v0.8.32),
 immutable tag `ac98b331ce11425d7595beceb53f123068ddd705`, published at

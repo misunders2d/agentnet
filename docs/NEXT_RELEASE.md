@@ -1,4 +1,20 @@
-# v0.8.32 — approved implementation and release
+# v0.8.33 — released October 17, 2026
+
+[Public release](https://github.com/misunders2d/agentnet/releases/tag/v0.8.33),
+[matching gallery](https://github.com/misunders2d/agentnet-skins/releases/tag/v2026.10.17.1)
+and the backed-up existing-Hub rollout are verified. See the current
+[handoff](HANDOFF.md) and [release record](plans/V0_8_33.md) for qualification,
+owner dispositions and exact preservation evidence.
+
+MEL-648/652 retain unverified physical/native badge and notification acceptance;
+MEL-646/641/587 retain the measured-performance, missing-incident and unresolved
+WebKit discriminators. Provider-dependent Thinking acceptance and unavailable
+physical devices are recorded explicitly. No v0.8.34 implementation goal is activated.
+MEL-656 is the deferred cloudflared cleanup; no unrelated infrastructure was changed.
+
+The following sections are historical planning records, not current release status.
+
+# v0.8.32 — historical approved implementation and release
 
 Current scope and qualification: [V0_8_32.md](plans/V0_8_32.md); owner goal:
 [V0_8_32_GOAL.md](plans/V0_8_32_GOAL.md). Starting release is published

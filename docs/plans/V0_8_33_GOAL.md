@@ -1,6 +1,6 @@
 # AgentNet v0.8.33 — publication goal
 
-**ACTIVE — approved and started October 16, 2026.** Sergey approved applying this goal under the saved goal-text standard and starting implementation. The approved scope, orchestration, Claude checkpoints, overthinking guards and release/preservation boundaries below govern execution. The shared checklist is [V0_8_33.md](V0_8_33.md); root is its sole editor.
+**COMPLETE — released and independently verified October 17, 2026.** Sergey approved applying this goal under the saved goal-text standard and starting implementation. The approved scope, orchestration, Claude checkpoints, overthinking guards and release/preservation boundaries below governed execution. The final publication and closure record is in the shared checklist. The shared checklist is [V0_8_33.md](V0_8_33.md); root is its sole editor.
 
 Drive **AgentNet v0.8.33 to verified public release**, starting from published v0.8.32 (`ac98b331ce11425d7595beceb53f123068ddd705`). Complete implementation, independent review, integration, required qualification, public artifacts, matching skin-gallery publication and the usual preserved-data Hub rollout with a verified full backup. Continue autonomously through the authorized release workflow; a delivered patch, build or submitted CI run is not completion.
 
