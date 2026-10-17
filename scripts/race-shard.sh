@@ -27,8 +27,8 @@ run_partition() {
 				if ($0=="TestGroupInteractionNamedMemberAndVisitor") part=1
 				if ($0=="TestGroupParticipationHistoryAfterHostReadmission") part=8
 				if ($0=="TestGroupReplyReceiverMemberAndVisitorPIDNative") part=11
-				if ($0=="TestOwnPersonTasksDirectAndGroup") part=8
-				if ($0=="TestGroupParticipationFilesLateLinkedRequestAndNamedOutput") part=8
+				if ($0=="TestOwnPersonTasksDirectAndGroup") part=4
+				if ($0=="TestGroupParticipationFilesLateLinkedRequestAndNamedOutput") part=0
 				if ($0=="TestGroupHistoryWitnessRetiredTaskDevice") part=4
 				if ($0=="TestRoomReciprocalRootQuestions") part=11
 				if ($0=="TestHistoryArchiveImportedTailRemainsBounded") part=8
@@ -38,7 +38,7 @@ run_partition() {
 				if ($0=="TestReceiverRemoteGroupNamedNativeMemberVisitor") part=7
 				if ($0=="TestParticipationTopicMovedHistoryInvite") part=2
 				if ($0=="TestProactiveAgentMessageAdmission") part=2
-				if ($0=="TestDMLiveAgentContext") part=8
+				if ($0=="TestDMLiveAgentContext") part=0
 				if ($0=="TestGroupParticipationHistoryDismissedLinkedRestartReorder") part=10
 				if ($0=="TestGroupGuestPublicJourney") part=3
 				if ($0=="TestGroupHistoryWitnessGuestDerivedParent") part=0
@@ -46,6 +46,7 @@ run_partition() {
 				if ($0=="TestNativeActivityWatcherCoalescesLatestWithoutOutputWrites") part=9
 				if ($0=="TestHistoryCatchupGroupParticipation") part=5
 				if ($0=="TestAssistantReactionGuestAudience") part=7
+				if ($0=="TestAssistantReactionGroupLinkedHistory") part=4
 				if ($0=="TestP6FixOutsideAdmissionAndRemovalRights") part=9
 				if ($0=="TestSharedTopicCurrentAuthorityFences") part=11
 				if ($0=="TestHistoryCatchupDuplicateForeignDismissal") part=8

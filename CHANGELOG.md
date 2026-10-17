@@ -29,6 +29,8 @@ This record starts with v0.8.1; earlier releases remain on the
   their personal behavior.
 - Normalize collective mentions before clipping chat previews, including
   edited messages, while retaining the original message text and recipients.
+- Refresh the people list when an unpinned person's claimed profile finishes
+  loading, without changing trust or approval state.
 
 ## [0.8.32] — 2026-10-16
 

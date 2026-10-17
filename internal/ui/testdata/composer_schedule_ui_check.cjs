@@ -39,7 +39,7 @@ const drain=async()=>{for(let i=0;i<8;i++)await new Promise(r=>setImmediate(r));
  const count=calls.length;props.pane=null;h.render();await drain();revision++;h.render();await drain();assert.equal(calls.length,count,'closed list never refreshes');assert(!nodes(h.get()).some(n=>n.tag==='article'));
  props.pane='create';h.render();await drain();api.createSchedule=async()=>{throw Object.assign(Error('different content'),{code:'scheduled_id_conflict'});};await click('Save schedule');assert.equal(saved.length,1);assert(words(h.get()).includes('Save refused'));assert.equal(draft.text,'New typing stays');assert.equal(draft.files.length,1);
 
- const coldID='e'.repeat(32),coldConv='a'.repeat(64),tokenKey='test.schedule-save.ui';
+ const coldID='e'.repeat(32),coldConv='a'.repeat(64),tokenKey='agentnet.messenger.schedule-save.'+host.workspace.id;
  ledger.forget(coldConv,ledger.snapshot()[coldConv].id);localStorage.setItem(tokenKey,JSON.stringify({v:1,conv:{[coldConv]:{id:coldID,conv:coldConv,files:[{name:'lost-file.txt',size:5}]}}}));
  ledger=holder.scheduleSaves({...host},changed);slots=ledger.snapshot();props.pane='create';const beforeCold=calls.length;h.render();await drain();assert.equal(calls.length,beforeCold,'cold token causes no audience/list/API calls');assert(!nodes(h.get()).some(n=>n.tag==='Button'&&words(n).trim()==='Retry same save'));
  await click('Check saved state');assert.equal(ledger.snapshot()[coldConv].id,coldID);assert(localStorage.getItem(tokenKey).includes(coldID),'GET not found keeps token');assert.equal(draft.text,'New typing stays');assert(!nodes(h.get()).some(n=>n.tag==='Button'&&words(n).trim()==='Save schedule'));

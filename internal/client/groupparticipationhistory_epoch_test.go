@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -292,9 +293,68 @@ func groupParticipationHistoryAfterReadmission(t *testing.T, sharedOriginal bool
 	}
 	stopPhone := runAgent(t, phone)
 	stopSource = runAgent(t, source)
-	eventually(t, "new phone accepts old inert history", func() bool {
-		return inboxCount(t, phone, `id=? AND replica=1 AND state='' AND group_history IS NOT NULL`, originalID) == 1
-	})
+	func() {
+		accepted := false
+		defer func() {
+			if accepted || !derived {
+				return
+			}
+			// One post-wait snapshot, before daemon cleanup; identifiers stay in query parameters/results only.
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			var ids, carriers string
+			var selected, originalCarriers int
+			e := source.store.db.QueryRowContext(ctx, `WITH direct AS (
+ SELECT id,sub,state FROM outbox WHERE recipient=? AND recipient_fp=? AND conv=?
+ AND ((sub='history' AND json_extract(body,'$.id')=?) OR sub IN ('group-context','group-proof'))
+ ORDER BY sub='history' DESC,id LIMIT 32
+), copies AS (
+ SELECT * FROM direct UNION SELECT o.id,o.sub,o.state FROM direct d
+ JOIN history_archive_entries a ON a.child=d.id JOIN outbox o ON o.id=a.manifest
+ WHERE o.recipient=? AND o.recipient_fp=? AND o.sub='history-archive'
+), classes AS (
+ SELECT sub,CASE WHEN state IN ('queued','waiting','custody','delivered','quarantined','archive_staged','archive_accepted','archive_uploading','not_delivered','expired') THEN state ELSE 'other' END AS class FROM copies
+)
+SELECT (SELECT json_group_array(id) FROM copies),
+ (SELECT json_group_array(json_object('sub',sub,'state',class,'count',n)) FROM (SELECT sub,class,count(*) n FROM classes GROUP BY sub,class)),
+ (SELECT count(*) FROM direct), (SELECT count(*) FROM direct WHERE sub='history')`, phone.Address, phone.Self().Fingerprint(), conv, originalID, phone.Address, phone.Self().Fingerprint()).Scan(&ids, &carriers, &selected, &originalCarriers)
+			if e != nil {
+				t.Logf("history snapshot source_to_new_phone query_error=true budget_expired=%t target_unobserved=true", ctx.Err() != nil)
+				return
+			}
+			t.Logf("history snapshot source_to_new_phone original_carriers=%d selected=%d possibly_capped=%t carriers=%s", originalCarriers, selected, selected == 32, carriers)
+			var rows, held, archives string
+			var raw []byte
+			var historicalProof, currentProof, receipts int
+			e = phone.store.db.QueryRowContext(ctx, `WITH carriers AS (SELECT value id FROM json_each(?)), kinds(physical) AS (VALUES('original'),('equivalent')),
+ wanted(id,conv,author,lid,hash) AS (VALUES(?,?,?,?,?)), matches AS (
+ SELECT CASE WHEN i.id=w.id THEN 'original' ELSE 'equivalent' END physical,replica,state,group_history,
+ (i.conv=w.conv AND coalesce(verified_by,claimed_fp)=w.author AND i.lid=w.lid AND content_hash=w.hash) exact_tuple
+ FROM inbox i,wanted w WHERE i.id=w.id OR (i.conv=w.conv AND coalesce(verified_by,claimed_fp)=w.author AND i.lid=w.lid AND content_hash=w.hash)
+)
+SELECT (SELECT json_group_array(json_object('physical',physical,'count',coalesce(n,0),'exact_tuple',exact_tuple,'replica',replicas,'inert',inert,'witness',witness,'complete',complete))
+ FROM kinds LEFT JOIN (SELECT physical,count(*) n,sum(exact_tuple) exact_tuple,sum(replica=1) replicas,sum(state='') inert,sum(group_history IS NOT NULL) witness,sum(replica=1 AND state='' AND group_history IS NOT NULL) complete FROM matches GROUP BY physical) USING(physical)),
+ coalesce((SELECT payload FROM group_context WHERE conv=?),X''),
+ EXISTS(SELECT 1 FROM group_proof_records WHERE conv=? AND bootstrap=? AND seq=?),
+ EXISTS(SELECT 1 FROM group_proof_records WHERE conv=? AND bootstrap=? AND seq=?),
+ (SELECT json_group_array(json_object('reason',class,'count',n)) FROM (SELECT CASE WHEN reason IN ('proof_pending','identity_conflict','conflicting_duplicate','key_changed','invalid') THEN reason ELSE 'other' END class,count(*) n FROM quarantine WHERE sender=? AND id IN (SELECT id FROM carriers) GROUP BY class)),
+ (SELECT count(*) FROM history_receipts WHERE id IN (SELECT id FROM carriers)),
+ (SELECT json_object('jobs',count(*),'retained',coalesce(sum(retained=1),0),'done',coalesce(sum(done=1),0),'error_present',coalesce(sum(error<>''),0),'position_total',coalesce(sum(pos),0)) FROM history_archive_jobs WHERE source_fp=? AND id IN (SELECT id FROM carriers))`, ids, originalID, conv, item.FromKey, item.LID, contentHash(item.inner(conv)), conv, conv, packet.Root.Creator.Fingerprint, item.GroupHistory.State.Seq, conv, packet.Root.Creator.Fingerprint, current.State.Seq, source.Address, source.Self().Fingerprint()).Scan(&rows, &raw, &historicalProof, &currentProof, &held, &receipts, &archives)
+			if e != nil {
+				t.Logf("history snapshot new_phone query_error=true budget_expired=%t target_unobserved=true", ctx.Err() != nil)
+				return
+			}
+			var seen GroupContext
+			present := len(raw) != 0
+			decodeError := present && json.Unmarshal(raw, &seen) != nil
+			matchDefined := present && !decodeError
+			t.Logf("history snapshot new_phone rows=%s context_present=%t context_decode_error=%t context_match_defined=%t context_matches_current=%t historical_proof_present=%t current_proof_present=%t held=%s receipts=%d archives=%s", rows, present, decodeError, matchDefined, matchDefined && sameGroupRoot(seen.Root, current.Root) && seen.State.Hash() == current.State.Hash(), historicalProof != 0, currentProof != 0, held, receipts, archives)
+		}()
+		eventually(t, "new phone accepts old inert history", func() bool {
+			return inboxCount(t, phone, `id=? AND replica=1 AND state='' AND group_history IS NOT NULL`, originalID) == 1
+		})
+		accepted = true
+	}()
 	eventually(t, "new phone accepts bound old output and status", func() bool {
 		return inboxCount(t, phone, `id IN (?,?) AND state='' AND group_history IS NOT NULL`, answerID, status.ID) == 2
 	})

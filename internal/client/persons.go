@@ -537,6 +537,7 @@ func (a *Agent) observeRef(ctx context.Context, ref *protocol.PersonRef) {
 // here into the listed cache (for their names; never pinned or trusted).
 func (a *Agent) checkPersons(ctx context.Context, ms protocol.Members) {
 	seen, wanted := map[string]bool{}, map[string]bool{}
+	changed := false
 	for _, m := range ms.Members {
 		if m.Person == nil || seen[m.Person.ID] {
 			continue
@@ -556,10 +557,17 @@ func (a *Agent) checkPersons(ctx context.Context, ms protocol.Members) {
 			continue
 		}
 		if r, err := protocol.ParsePersonRoster(prof.Person); err == nil && r.Hash() == m.Person.Hash {
-			a.listed.put(r)
+			if a.listed.put(r) {
+				changed = true
+			}
 		}
 	}
-	a.listed.keep(wanted)
+	if a.listed.keep(wanted) {
+		changed = true
+	}
+	if changed {
+		a.NoteChange() // roster names became available after the member-list event
+	}
 }
 
 // listedCache holds, by roster hash, the rosters the Hub lists for persons
@@ -576,26 +584,32 @@ func (c *listedCache) has(hash string) bool {
 	return ok
 }
 
-func (c *listedCache) put(r protocol.PersonRoster) {
+func (c *listedCache) put(r protocol.PersonRoster) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	hash := r.Hash()
+	if _, ok := c.byHash[hash]; ok || len(c.byHash) >= protocol.MaxMembers {
+		return false
+	}
 	if c.byHash == nil {
 		c.byHash = map[string]protocol.PersonRoster{}
 	}
-	if len(c.byHash) < protocol.MaxMembers {
-		c.byHash[r.Hash()] = r
-	}
+	c.byHash[hash] = r
+	return true
 }
 
 // keep drops the rosters the member list no longer names.
-func (c *listedCache) keep(wanted map[string]bool) {
+func (c *listedCache) keep(wanted map[string]bool) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	changed := false
 	for h := range c.byHash {
 		if !wanted[h] {
 			delete(c.byHash, h)
+			changed = true
 		}
 	}
+	return changed
 }
 
 // ListedPersons returns the persons the Hub's member list names that are

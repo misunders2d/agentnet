@@ -41,7 +41,20 @@ history, projected topic-notice names and stale fixture setup. Portable privacy
 checks and explicit optional-progress outcomes pass focused tests and review;
 remaining Windows failures carry narrow diagnostics into qualification. Failed
 and unfinished selections remain open; an isolated pass is not a cause or a
-replacement for their required gates. All eight actual native steering cases
+replacement for their required gates. The three Windows client bands now pass
+on separate hosts against3454. The next reviewed correction publishes one
+Content change after listed-roster cache completion; its deterministic ordering
+regression and actual Live integration pass. The stale recovery-key and signed
+capability fixture prerequisites are also corrected. Whole compile/vet and the
+unchanged1354-parent registration pass. Required next gates are client0/4/8/9,
+both UI partitions and the affected four-parent focus on all three systems,
+with valid unchanged passes retained. The exact four race moves preserve every
+case and the600s bound; the recorder proof is not a timing pass.
+The whole gallery check found a missing canonical ID on Zoom device-thread rows
+and exposed fixture allocation/menu sizing seams; focused corrections remain
+underway. The actual-endpoint history snapshot is prepared, with schema-backed
+SQL smoke only; the historical liveness cause remains unknown.
+All eight actual native steering cases
 pass with unchanged settings. Changing Thinking wording is observed for Pi and
 OMP; Codex/Claude evidence and the owner's disposition remain pending.
 

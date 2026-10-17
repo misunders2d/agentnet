@@ -41,10 +41,12 @@ func topicNoticeDMFixture(t *testing.T, home string) (*Live, *client.Agent, *sql
 	}
 	runDaemon(t, bob)
 	live := NewLive(alice)
-	conv, err := live.NewDM(bob.Address)
-	if err != nil {
-		t.Fatal(err)
-	}
+	var conv string
+	// The daemon publishes its signed session capabilities asynchronously.
+	waitFor(t, "bob's conversation capabilities", func() bool {
+		conv, err = live.NewDM(bob.Address)
+		return err == nil
+	})
 	db, err := sql.Open("sqlite", "file:"+filepath.Join(home, "agent.db")+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		t.Fatal(err)
