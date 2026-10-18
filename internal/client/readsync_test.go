@@ -1059,15 +1059,28 @@ func TestAttentionExactAuthorReferences(t *testing.T) {
 	}
 	lid := protocol.NewID()
 	refs := []protocol.ReadRef{{Fingerprint: a.Self().Fingerprint(), LID: lid}, {Fingerprint: phone.Self().Fingerprint(), LID: lid}}
+	// Equal logical IDs remain distinct across chats, authors, owners and
+	// multiple bounded lookup batches.
+	for range 129 {
+		conv := protocol.NewID() + protocol.NewID()
+		refs = append(refs, protocol.ReadRef{Conv: conv, Fingerprint: a.Self().Fingerprint(), LID: lid},
+			protocol.ReadRef{Conv: conv, Fingerprint: phone.Self().Fingerprint(), LID: lid})
+	}
+	otherOwner := protocol.NewID()
 	want := map[protocol.ReadRef]protocol.AttentionMark{}
 	tx, err := a.store.db.Begin()
 	if err != nil {
 		t.Fatal(err)
 	}
 	for i, ref := range refs {
-		m := protocol.AttentionMark{ReadRef: ref, AttentionGeneration: protocol.AttentionGeneration{Rev: 1, Writer: a.Self().Fingerprint()}, State: []string{"read", "unread"}[i]}
+		m := protocol.AttentionMark{ReadRef: ref, AttentionGeneration: protocol.AttentionGeneration{Rev: 1, Writer: a.Self().Fingerprint()}, State: []string{"read", "unread"}[i%2]}
 		want[ref] = m
 		if err = saveAttentionMark(tx, owner, m); err != nil {
+			t.Fatal(err)
+		}
+		other := m
+		other.Rev = 2
+		if err = saveAttentionMark(tx, otherOwner, other); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1076,7 +1089,7 @@ func TestAttentionExactAuthorReferences(t *testing.T) {
 	}
 	got, err := loadAttentionMarks(a.store.db, owner, refs)
 	if err != nil || !reflect.DeepEqual(got, want) {
-		t.Fatal("bare LID collapsed exact authors", got, err)
+		t.Fatal("exact owner/chat/author references collapsed across lookup batches", got, err)
 	}
 }
 

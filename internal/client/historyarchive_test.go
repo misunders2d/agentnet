@@ -21,7 +21,7 @@ import (
 func archiveFixture(t *testing.T, n int) (*world, *Agent, *Agent, string) {
 	t.Helper()
 	w, phone, conv, _ := historyCatchupFixture(t, n)
-	stop := runAgent(t, phone)
+	stop := runPublished(t, phone)
 	label, name, _ := protocol.SplitAddress(phone.Address)
 	eventually(t, "phone archive capability", func() bool {
 		var profile protocol.Profile

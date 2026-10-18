@@ -374,6 +374,29 @@ states, actual process cancellation and stale-snapshot attention guards;
 `go vet ./...` passes. Full normal-push CI on the corrected commit is still
 required; these fixture changes are not a new production-policy exception.
 
+The subsequent `b708a98e` full run exposed another older-link-session
+capability race in the archive fixture and UI partition budget exhaustion with
+live CPU in `loadAttentionMarks`/`json_each`. The archive fixture now waits for
+its actual daemon's signed capability publication. SQLite had reordered the
+bounded reference input behind an owner-only scan; keeping `json_each` outermost
+with `CROSS JOIN` makes each reference seek the complete existing
+owner/chat/author/logical-ID index key. The 128-reference batch size is unchanged.
+The exact-author regression now checks 260 references across three batches,
+including identical references belonging to another owner and reused logical IDs
+across chats and authors. Focused archive/attention/unread race checks pass
+31 parents with one existing opt-in Playwright skip; `go vet ./...` passes.
+The actual CLI governance journey also passes while sharing two CPUs with a
+UI race partition, but the native-Windows convergence failure's cause remains
+unproven. No transport workaround, authority change, assertion relaxation or
+timeout increase is justified by that Linux result. Full normal-push CI remains
+the qualification gate.
+
+The read-only browser invitation fixture also waits for its native host to
+store the invitation before checking that browser operations leave it invited:
+observing the linked browser's copy alone proves no delivery to that host.
+The unchanged journey passes three consecutive race executions after this
+prerequisite correction; no read-only assertion is relaxed.
+
 Witnessed admission retains full current-group validation, then selects its
 signed historical graph without rereading today's unused PID ledger. A
 self-contained witnessed request or output no longer recursively prepares

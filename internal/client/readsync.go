@@ -371,8 +371,10 @@ func loadAttentionMarks(q dbq, owner string, refs []protocol.ReadRef) (map[proto
 		return out, nil
 	}
 	for start := 0; start < len(refs); start += 128 {
+		// Keep the bounded reference batch outermost: an ordinary JOIN lets
+		// SQLite rescan json_each for every mark owned by this person.
 		raw, _ := json.Marshal(refs[start:min(start+128, len(refs))])
-		rows, err := q.Query(`SELECT m.conv,m.fingerprint,m.lid,m.state,m.revision,m.writer FROM json_each(?) w JOIN attention_marks m ON m.owner=? AND m.conv=json_extract(w.value,'$.conv') AND m.fingerprint=json_extract(w.value,'$.fingerprint') AND m.lid=json_extract(w.value,'$.lid')`, string(raw), owner)
+		rows, err := q.Query(`SELECT m.conv,m.fingerprint,m.lid,m.state,m.revision,m.writer FROM json_each(?) w CROSS JOIN attention_marks m ON m.owner=? AND m.conv=json_extract(w.value,'$.conv') AND m.fingerprint=json_extract(w.value,'$.fingerprint') AND m.lid=json_extract(w.value,'$.lid')`, string(raw), owner)
 		if err != nil {
 			return nil, err
 		}

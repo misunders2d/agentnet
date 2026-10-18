@@ -129,6 +129,12 @@ func TestBrowserEngineNeedsYouReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The linked copies arrive independently; the browser's copy does not
+	// establish that the native host has stored its invitation yet.
+	waitFor(t, "the invitation at the native host", func() bool {
+		_, err := laptop.Participation(inv.PID)
+		return err == nil
+	})
 	w.until("the invitation in needs-you", func() bool { return item(client.ReviewInvite) != nil })
 	it := item(client.ReviewInvite)
 	if it["conv"] != conv || it["pid"] != inv.PID || it["id"] != nil || it["peer"] != bob.Address || it["excerpt"] != "help" ||

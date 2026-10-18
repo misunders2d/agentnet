@@ -38,6 +38,8 @@ This record starts with v0.8.1; earlier releases remain on the
   the manual attempt and hide its audience or attachment rejection.
 - Avoid per-message continuation lookups for ordinary chat rows and repeated
   activity derivation. Reuse the chat's existing topic assignments.
+- Seek explicit read/unread marks by their complete owner, chat, author and
+  logical-ID key, avoiding owner-wide rescans when building unread pages.
 - Keep phone dismissal feedback pending until the exact participation is
   confirmed dismissed by the refreshed conversation.
 
