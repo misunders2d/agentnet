@@ -22,6 +22,9 @@ This record starts with v0.8.1; earlier releases remain on the
   member list every read is fresh; exact-key and handover checks are unchanged.
   Administrator-role queries always ask the Hub directly, including immediately
   after a grant or revocation and when cached availability exists offline.
+- Keep caller deadlines local to their requests instead of resetting healthy
+  shared Hub connections and interrupting other RPCs or the push stream.
+  Transport-owned timeouts still retire stalled routes without replaying sends.
 - Avoid per-message continuation lookups for ordinary chat rows and repeated
   activity derivation. Reuse the chat's existing topic assignments.
 - Keep phone dismissal feedback pending until the exact participation is

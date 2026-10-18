@@ -63,7 +63,9 @@ func testAgentOrganizationScopeOnlySelectedGrant(t *testing.T, legacy bool) {
 	if _, err = w.bob.AcceptParticipation(tctx(t), p.PID); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "scope and exact acceptance at reader", func() bool { return stateAt(t, reader, p.PID).Claimable() })
+	eventually(t, "scope and exact acceptance at inviter and reader", func() bool {
+		return stateAt(t, w.alice, p.PID).Claimable() && stateAt(t, reader, p.PID).Claimable()
+	})
 	// Model the existing public scope+accept carrier at a late reader. The
 	// original signed invitation remains at its author and host; this reader
 	// holds only the already signed public projection and host acceptance.

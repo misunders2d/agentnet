@@ -108,6 +108,10 @@ func refusedUntilUpdate(err error) bool {
 // A variable so tests can shorten it.
 var requestTimeout = 30 * time.Second
 
+// Only our transport bound diagnoses a stalled route. A caller's shorter
+// deadline ends that request, not the other requests sharing its HTTP/2 socket.
+var errHubRequestTimeout = errors.New("Hub request timeout")
+
 // wrapTransport lets tests inject network faults; nil in production.
 var wrapTransport func(http.RoundTripper) http.RoundTripper
 
@@ -200,7 +204,7 @@ func (c *hubConn) do(ctx context.Context, method, path string, in, out any) erro
 // doBytes sends a raw body within the request timeout and decodes a JSON
 // answer into out.
 func (c *hubConn) doBytes(ctx context.Context, method, path string, body []byte, out any) error {
-	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	ctx, cancel := context.WithTimeoutCause(ctx, c.timeout, errHubRequestTimeout)
 	defer cancel()
 	req, err := c.request(ctx, method, path, body)
 	if err != nil {
@@ -219,13 +223,13 @@ func (c *hubConn) doBytes(ctx context.Context, method, path string, body []byte,
 		return nil
 	}
 	err = json.NewDecoder(io.LimitReader(resp.Body, protocol.MaxBody)).Decode(out)
-	c.resetAfterTimeout(err, generation)
+	c.resetAfterTimeout(ctx, err, generation)
 	return err
 }
 
 // getRange copies bytes [from, to) of path into w within the request timeout.
 func (c *hubConn) getRange(ctx context.Context, path string, from, to int64, w io.Writer) error {
-	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	ctx, cancel := context.WithTimeoutCause(ctx, c.timeout, errHubRequestTimeout)
 	defer cancel()
 	req, err := c.request(ctx, "GET", path, nil)
 	if err != nil {
@@ -245,7 +249,7 @@ func (c *hubConn) getRange(ctx context.Context, path string, from, to int64, w i
 		return fmt.Errorf("hub ignored range request (%s)", resp.Status)
 	}
 	n, err := io.Copy(w, io.LimitReader(resp.Body, to-from))
-	c.resetAfterTimeout(err, generation)
+	c.resetAfterTimeout(ctx, err, generation)
 	if err == nil && n != to-from {
 		err = io.ErrUnexpectedEOF
 	}
@@ -377,7 +381,10 @@ func (c *hubConn) connectionGeneration() uint64 {
 	defer p.Unlock()
 	return p.generation
 }
-func (c *hubConn) resetAfterTimeout(err error, generation uint64) {
+func (c *hubConn) resetAfterTimeout(ctx context.Context, err error, generation uint64) {
+	if ctx.Err() != nil && context.Cause(ctx) != errHubRequestTimeout {
+		return // caller cancellation/deadline says nothing about the shared route
+	}
 	var networkError net.Error
 	if err != nil && !errors.Is(err, context.Canceled) && errors.As(err, &networkError) && networkError.Timeout() {
 		c.resetConnectionsAt(&generation)
@@ -386,6 +393,6 @@ func (c *hubConn) resetAfterTimeout(err error, generation uint64) {
 func (c *hubConn) sendRequest(req *http.Request) (*http.Response, error) {
 	generation := c.connectionGeneration()
 	resp, err := c.http.Do(req)
-	c.resetAfterTimeout(err, generation)
+	c.resetAfterTimeout(req.Context(), err, generation)
 	return resp, err
 }

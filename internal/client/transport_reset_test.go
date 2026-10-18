@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/pem"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -37,13 +38,15 @@ func (c *resetLostRoute) Read(b []byte) (int, error) {
 }
 func (c *resetLostRoute) Close() error { c.once.Do(func() { close(c.closed) }); return c.Conn.Close() }
 
+const resetPictureHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
 func TestHubConnectionsResetHTTP2Route(t *testing.T) {
 	var posts atomic.Int32
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.ProtoMajor != 2 {
 			t.Errorf("not HTTP2: %s", r.Proto)
 		}
-		if r.URL.Path == "/body" || r.URL.Path == "/range" {
+		if r.URL.Path == "/body" || r.URL.Path == "/range" || r.URL.Path == "/v1/pictures/"+resetPictureHash {
 			if r.URL.Path == "/range" {
 				w.WriteHeader(http.StatusPartialContent)
 			}
@@ -158,6 +161,19 @@ func TestHubConnectionsResetHTTP2Route(t *testing.T) {
 	if dials.Load() != 4 {
 		t.Fatal("range timeout did not reset route")
 	}
+	a := &Agent{home: t.TempDir(), hub: c}
+	if _, err := a.PersonPicture(ctx, resetPictureHash); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("picture blackhole: %v", err)
+	}
+	req, _ = http.NewRequestWithContext(ctx, "GET", server.URL+"/ok", nil)
+	resp, err = c.sendRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if dials.Load() != 5 {
+		t.Fatal("picture timeout did not reset route")
+	}
 
 }
 
@@ -207,6 +223,122 @@ func TestHubConnectionResetDoesNotTreatCancellationAsRouteFailure(t *testing.T) 
 	resp.Body.Close()
 	if c.connectionGeneration() != 0 {
 		t.Fatal("HTTP authority refusal reset network")
+	}
+}
+
+// A local flush/preflight deadline must not tear down unrelated RPCs or the
+// push stream multiplexed on the same healthy HTTP/2 connection. Exercise
+// cancellation both before headers and while reading JSON/range bodies.
+func TestHubCallerDeadlinePreservesHTTP2Requests(t *testing.T) {
+	for _, mode := range []string{"headers", "body", "range", "picture"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			release := make(chan struct{})
+			var releaseOnce sync.Once
+			unblock := func() { releaseOnce.Do(func() { close(release) }) }
+			defer unblock()
+			profileEntered := make(chan struct{})
+			server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.ProtoMajor != 2 {
+					t.Errorf("not HTTP2: %s", r.Proto)
+				}
+				switch r.URL.Path {
+				case "/stream":
+					w.Write([]byte("ready\n"))
+					w.(http.Flusher).Flush()
+					select {
+					case <-release:
+						w.Write([]byte("alive\n"))
+					case <-r.Context().Done():
+					}
+				case "/profile":
+					close(profileEntered)
+					select {
+					case <-release:
+						w.Write([]byte(`{"sessions":["live"],"live":true}`))
+					case <-r.Context().Done():
+					}
+				case "/timed", "/v1/pictures/" + resetPictureHash:
+					if mode == "body" || mode == "picture" {
+						w.Write([]byte("{"))
+						w.(http.Flusher).Flush()
+					} else if mode == "range" {
+						w.WriteHeader(http.StatusPartialContent)
+						w.Write([]byte("x"))
+						w.(http.Flusher).Flush()
+					}
+					<-r.Context().Done()
+				}
+			}))
+			server.EnableHTTP2 = true
+			server.StartTLS()
+			defer server.Close()
+			cert := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}))
+			c, err := newHubConn(server.URL, cert, "", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.release()
+			var dials atomic.Int32
+			tr := c.http.Transport.(*http.Transport)
+			dial := tr.DialContext
+			tr.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+				dials.Add(1)
+				return dial(ctx, network, address)
+			}
+			req, _ := http.NewRequestWithContext(ctx, "GET", server.URL+"/stream", nil)
+			stream, err := c.sendRequest(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer stream.Body.Close()
+			var frame [6]byte
+			if _, err = io.ReadFull(stream.Body, frame[:]); err != nil || string(frame[:]) != "ready\n" {
+				t.Fatalf("opening stream: %q %v", frame, err)
+			}
+			profileDone := make(chan error, 1)
+			go func() {
+				var profile struct {
+					Live bool `json:"live"`
+				}
+				err := c.do(ctx, "GET", "/profile", nil, &profile)
+				if err == nil && !profile.Live {
+					err = errors.New("unrelated profile lost its response")
+				}
+				profileDone <- err
+			}()
+			select {
+			case <-profileEntered:
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			local, stop := context.WithTimeout(ctx, 100*time.Millisecond)
+			if mode == "range" {
+				var sink strings.Builder
+				err = c.getRange(local, "/timed", 0, 2, &sink)
+			} else if mode == "picture" {
+				a := &Agent{home: t.TempDir(), hub: c}
+				_, err = a.PersonPicture(local, resetPictureHash)
+			} else {
+				var body map[string]any
+				err = c.do(local, "GET", "/timed", nil, &body)
+			}
+			stop()
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("local deadline: %v", err)
+			}
+			unblock()
+			if err = <-profileDone; err != nil {
+				t.Fatalf("local deadline interrupted unrelated profile: %v", err)
+			}
+			if _, err = io.ReadFull(stream.Body, frame[:]); err != nil || string(frame[:]) != "alive\n" {
+				t.Fatalf("local deadline interrupted push stream: %q %v", frame, err)
+			}
+			if c.connectionGeneration() != 0 || dials.Load() != 1 {
+				t.Fatalf("local deadline retired healthy route: generation=%d dials=%d", c.connectionGeneration(), dials.Load())
+			}
+		})
 	}
 }
 

@@ -256,6 +256,36 @@ skips (55.862 s), including the new role regression and the original failed
 journeys; `go vet ./...` passes. Real CLI selected-history/file, linked-device
 history and task-grant/`whoami` journeys pass (8.038 s).
 
+The following full normal-push run,
+[39154774467](https://github.com/misunders2d/agentnet/actions/runs/39154774467)
+at `69ca27ca`, finished with 28 successful jobs, four failed jobs and the optional
+Windows task probe skipped. All 18 client race shards and `others` passed.
+Five scenarios failed: two Windows group RPCs, a Windows suspended-stream ping,
+and macOS organization-acceptance and archived-search fixtures.
+
+A caller deadline was being mistaken for a transport failure, resetting the
+entire shared HTTP/2 pool. A real HTTP/2 regression fails before the correction:
+all three header/JSON/range cases interrupt an unrelated profile request
+(0.32 s). Caller cancellation/deadlines now stay local; owned request, JSON,
+range and picture-download timeouts retain route recovery and generation fences.
+The regression now also verifies picture downloads. This proves the reconnect
+amplification bug, not the initial CI disk/CPU slowdown.
+
+The organization fixture now waits for signed acceptance at its request sender
+as well as the reader. The suspended-stream fixture uses virtual time around
+real signatures, nonce SQLite writes and handlers, retaining its 100 ms heartbeat,
+200 ms lease and custody/update assertions; a negative control requires actual
+expiry after acknowledgements stop and rejects a late signed ack. The topic
+fixture advances its actual debounce only after the input render commits,
+instead of guessing a wall-clock delay. No production timing bound is raised.
+
+The integrated race check passes all 13 parents without skips: client
+100.257 s, Hub 1.843 s and UI 1.465 s. It includes both failed group scenarios,
+organization variants, unrelated-RPC/stream survival for all four download modes,
+owned route recovery and picture-cache behavior. Real CLI selected-history/file,
+linked-device history and task-grant journeys pass (6.169 s); `go vet ./...`
+passes. Full normal-push CI on the integrated source remains the final gate.
+
 Witnessed admission retains full current-group validation, then selects its
 signed historical graph without rereading today's unused PID ledger. A
 self-contained witnessed request or output no longer recursively prepares

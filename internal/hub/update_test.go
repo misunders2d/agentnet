@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
@@ -166,6 +167,15 @@ func TestDevelopmentRelaySuspendsNobody(t *testing.T) {
 // custody until it connects updated, then it is delivered. The member list
 // shows each device's reported version and whether it is suspended.
 func TestSuspendedStreamKeepsCustody(t *testing.T) {
+	// A real signed acknowledgement reads the agent and commits its nonce.
+	// Slow CI disk I/O can outlast the entire 200ms lease, legitimately
+	// expiring the stream before that request authenticates. Advance time
+	// only while this in-process client and Hub are idle, not during that
+	// work; signatures, nonce storage and stream handlers remain real.
+	synctest.Test(t, testSuspendedStreamKeepsCustody)
+}
+
+func testSuspendedStreamKeepsCustody(t *testing.T) {
 	const hb = 100 * time.Millisecond
 	h := releaseHub(t, filepath.Join(t.TempDir(), "hub"), "v1.2.0", -1, hb)
 	defer h.Close()
@@ -257,6 +267,63 @@ func TestSuspendedStreamKeepsCustody(t *testing.T) {
 	if b := memberOf(t, listMembersAs(t, h, alice, "v1.2.0"), bob.addr); b.Version != "v1.2.0" || b.Suspended {
 		t.Fatalf("bob updated: %+v", b)
 	}
+}
+
+// A suspended stream still expires after real acknowledgements stop; virtual
+// time must not turn the custody test into an always-live stream.
+func TestSuspendedStreamExpiresWithoutAcknowledgement(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const hb = 100 * time.Millisecond
+		h := releaseHub(t, filepath.Join(t.TempDir(), "hub"), "v1.2.0", -1, hb)
+		defer h.Close()
+		bob := enroll(t, h, "bob")
+		events := pushStream(t, h, bob, "v1.1.0")
+		if e := <-events; e.name != "update_required" {
+			t.Fatalf("after release: %+v", e)
+		}
+		e, ok := <-events
+		if !ok || e.name != "ping" {
+			t.Fatalf("first ping: %+v, open=%t", e, ok)
+		}
+		var p protocol.PingAck
+		if err := json.Unmarshal([]byte(e.data), &p); err != nil {
+			t.Fatal(err)
+		}
+		if c, b := bob.callAs(t, h, "v1.1.0", "POST", "/v1/stream/ack", p); c != http.StatusNoContent {
+			t.Fatalf("live ping acknowledgement: %d %s", c, b)
+		}
+
+		// Drain frames but send no acknowledgements. The two-interval lease
+		// is checked each heartbeat: at equality it stays live, then closes
+		// on the third tick. One nanosecond separates that tick and guard.
+		lastAckAt := time.Now()
+		deadline := time.After(3*hb + time.Nanosecond)
+		for {
+			select {
+			case e, ok := <-events:
+				if !ok {
+					if age := time.Since(lastAckAt); age <= 2*hb {
+						t.Fatalf("acknowledged stream expired before its lease: %v", age)
+					}
+					h.streams.mu.Lock()
+					live := len(h.streams.subs[bob.addr])
+					h.streams.mu.Unlock()
+					if live != 0 {
+						t.Fatalf("silent stream remains registered: %d", live)
+					}
+					if c, b := bob.callAs(t, h, "v1.1.0", "POST", "/v1/stream/ack", p); c != http.StatusNotFound {
+						t.Fatalf("expired ping acknowledgement: %d %s", c, b)
+					}
+					return
+				}
+				if e.name != "ping" {
+					t.Fatalf("the suspended stream carried %s: %s", e.name, e.data)
+				}
+			case <-deadline:
+				t.Fatal("silent suspended stream survived its lease check")
+			}
+		}
+	})
 }
 
 func listMembersAs(t *testing.T, h *Hub, m member, version string) protocol.Members {

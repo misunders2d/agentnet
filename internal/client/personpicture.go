@@ -37,7 +37,7 @@ func (a *Agent) PersonPicture(ctx context.Context, hash string) ([]byte, error) 
 	if b, err := os.ReadFile(path); err == nil && good(b) {
 		return b, nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, a.hub.timeout)
+	ctx, cancel := context.WithTimeoutCause(ctx, a.hub.timeout, errHubRequestTimeout)
 	defer cancel()
 	req, err := a.hub.request(ctx, "GET", "/v1/pictures/"+hash, nil)
 	if err != nil {
@@ -54,7 +54,7 @@ func (a *Agent) PersonPicture(ctx context.Context, hash string) ([]byte, error) 
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, protocol.MaxPictureBytes+1))
 	if err != nil {
-		a.hub.resetAfterTimeout(err, generation)
+		a.hub.resetAfterTimeout(ctx, err, generation)
 		return nil, err
 	}
 	if !good(b) {

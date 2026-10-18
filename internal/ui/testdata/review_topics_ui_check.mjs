@@ -74,18 +74,24 @@ gate=deferred();const closing=gate;revision++;h.render();await tick();enabled=fa
 h=hooks();choice=load('features/Conversation.choices.ts',h.react);let repeatCalls=0;
 h.start(()=>choice.usePagedChoices(true,'repeat',1,50,r=>r.id,async()=>{repeatCalls++;return {rows:[row('one')],total:500,next:'same'};}));await drain();assert.equal(repeatCalls,2);assert.match(h.get().error,/changed/);h.stop();
 // Actual AllTopics source: all-status search, trim/clear/filter and held order.
-function component(globals){const host=hooks();const helpers=load('features/Conversation.choices.ts',host.react);const store={get:()=>({views:{}}),api:{topics:async q=>({topics:[],matched:0})},draft:()=>({text:''}),openUnread(){},toast(){}};
+function component(globals){
+ const timers=new Map();let now=0,timerID=0;
+ const clock={setTimeout:(fn,ms)=>{const id=++timerID;timers.set(id,{fn,at:now+ms});return id;},clearTimeout:id=>timers.delete(id)};
+ const host=hooks();const helpers=load('features/Conversation.choices.ts',host.react);const store={get:()=>({views:{}}),api:{topics:async q=>({topics:[],matched:0})},draft:()=>({text:''}),openUnread(){},toast(){}};
  const shared={...host.react,...helpers,jsx,useApp:()=>store,useWide:()=>true,useStore:(_s,select)=>select({overview:{seq:1,threads:[]},contentRevision:1}),usePortal:()=>null,useModal:()=>({}),TOPICS:{searchDelay:1,pageSize:50,pageMax:200,undoDelay:1},topicOf:t=>t,firstLine:t=>t,when:()=>'',topicLabel:t=>t.title,errorText:e=>e.message,Button:'Button',IconButton:'IconButton',TopicMark:'TopicMark',IconSearch:'Icon',IconChevronLeft:'Icon',IconX:'Icon',Dialog:Object.fromEntries(['Root','Portal','Backdrop','Popup','Title','Description','Close'].map(k=>[k,k])),...globals};
- const exports=load('features/Conversation.alltopics.tsx',shared);return {host,store,exports};}
+ const exports=load('features/Conversation.alltopics.tsx',{...shared,...clock});
+ // Commit the input render before advancing its debounce, independent of host load.
+ const advance=async ms=>{await drain();now+=ms;for(const [id,timer]of [...timers])if(timer.at<=now){timers.delete(id);timer.fn();}await drain();};
+ return {host,store,exports,advance};}
 let flat=[row('read',0,9),row('unread',2,1),{...row('done'),state:'done'},{...row('archived'),state:'archived'}];
 const c=component();let props={open:true,onOpenChange(){},peer:'',conv:'chat',agent:'Fixture',flat:{topics:flat,loading:false,failed:'',canSelect:()=>true,detail:()=>'',choose(){}}};
 c.host.start(()=>c.exports.AllTopics(props));await drain();let tree=c.host.get();assert.equal(nodes(tree).find(n=>n.tag==='li').props.children[1].props.children[0].props.children[0].props.children[0],'needle unread');
-const search=nodes(tree).find(n=>n.tag==='input'&&n.props.type==='search');search.props.onChange({target:{value:'  needle  '}});await new Promise(r=>setTimeout(r,5));await drain();tree=c.host.get();assert.equal(nodes(tree).filter(n=>n.tag==='li').length,4,'search spans all statuses');
-const clear=nodes(tree).find(n=>n.tag==='IconButton'&&n.props.label==='Clear search');clear.props.onClick();await new Promise(r=>setTimeout(r,5));await drain();assert.equal(nodes(c.host.get()).filter(n=>n.tag==='li').length,2,'clear restores Active');
+const search=nodes(tree).find(n=>n.tag==='input'&&n.props.type==='search');search.props.onChange({target:{value:'  needle  '}});await c.advance(1);tree=c.host.get();assert.equal(nodes(tree).filter(n=>n.tag==='li').length,4,'search spans all statuses');
+const clear=nodes(tree).find(n=>n.tag==='IconButton'&&n.props.label==='Clear search');clear.props.onClick();await c.advance(1);assert.equal(nodes(c.host.get()).filter(n=>n.tag==='li').length,2,'clear restores Active');
 nodes(c.host.get()).find(n=>n.tag==='button'&&n.props.children?.[0]?.props?.children?.[0]==='Done').props.onClick();await drain();
-nodes(c.host.get()).find(n=>n.tag==='input'&&n.props.type==='search').props.onChange({target:{value:'  needle  '}});await new Promise(r=>setTimeout(r,5));await drain();assert.equal(nodes(c.host.get()).filter(n=>n.tag==='li').length,4);
-nodes(c.host.get()).find(n=>n.tag==='IconButton'&&n.props.label==='Clear search').props.onClick();await new Promise(r=>setTimeout(r,5));await drain();assert.equal(nodes(c.host.get()).filter(n=>n.tag==='li').length,1,'clear preserves selected Done');
-nodes(c.host.get()).find(n=>n.tag==='input'&&n.props.type==='search').props.onChange({target:{value:'undefined'}});await new Promise(r=>setTimeout(r,5));await drain();assert.equal(nodes(c.host.get()).filter(n=>n.tag==='li').length,0,'missing autoTitle cannot add a false search match');
+nodes(c.host.get()).find(n=>n.tag==='input'&&n.props.type==='search').props.onChange({target:{value:'  needle  '}});await c.advance(1);assert.equal(nodes(c.host.get()).filter(n=>n.tag==='li').length,4);
+nodes(c.host.get()).find(n=>n.tag==='IconButton'&&n.props.label==='Clear search').props.onClick();await c.advance(1);assert.equal(nodes(c.host.get()).filter(n=>n.tag==='li').length,1,'clear preserves selected Done');
+nodes(c.host.get()).find(n=>n.tag==='input'&&n.props.type==='search').props.onChange({target:{value:'undefined'}});await c.advance(1);assert.equal(nodes(c.host.get()).filter(n=>n.tag==='li').length,0,'missing autoTitle cannot add a false search match');
 c.host.stop();
 // Keep existing non-flat query/filter/Show more scope assertions on actual TSX.
 for(const filter of ['Active','Done','Archived']){
@@ -93,11 +99,11 @@ for(const filter of ['Active','Done','Archived']){
  f.store.api.topics=async q=>{calls.push(q);const from=q.before?Number(q.before):0;return{topics:rows.slice(from,from+q.limit),matched:120,next:from+q.limit<120?String(from+q.limit):''};};
  f.host.start(()=>f.exports.AllTopics({...props,flat:undefined,peer:'peer/host'}));await drain();
  nodes(f.host.get()).find(n=>n.tag==='button'&&n.props.children?.[0]?.props?.children?.[0]===filter).props.onClick();await drain();
- nodes(f.host.get()).find(n=>n.tag==='input'&&n.props.type==='search').props.onChange({target:{value:'  needle  '}});await new Promise(r=>setTimeout(r,5));await drain();
+ nodes(f.host.get()).find(n=>n.tag==='input'&&n.props.type==='search').props.onChange({target:{value:'  needle  '}});await f.advance(1);
  assert.equal(calls.at(-1).state,'');assert.equal(calls.at(-1).q,'needle');assert.equal(calls.at(-1).conv,'chat');assert.equal(calls.at(-1).peer,'peer/host');
  nodes(f.host.get()).find(n=>n.tag==='Button'&&String(n.props.children[0]).startsWith('Show more')).props.onClick();await drain();
  assert.equal(calls.at(-1).state,'');assert.equal(calls.at(-1).before,'50');assert.equal(calls.at(-1).conv,'chat');assert.equal(calls.at(-1).peer,'peer/host');
- nodes(f.host.get()).find(n=>n.tag==='IconButton'&&n.props.label==='Clear search').props.onClick();await new Promise(r=>setTimeout(r,5));await drain();assert.equal(calls.at(-1).state,filter.toLowerCase());f.host.stop();
+ nodes(f.host.get()).find(n=>n.tag==='IconButton'&&n.props.label==='Clear search').props.onClick();await f.advance(1);assert.equal(calls.at(-1).state,filter.toLowerCase());f.host.stop();
 }
 // Preserve the existing zero-chip archived-unread regression on actual TopicBar.
 {
