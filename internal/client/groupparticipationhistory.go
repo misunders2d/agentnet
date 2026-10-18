@@ -100,21 +100,29 @@ func (a *Agent) groupParticipationHistoryCheck(q dbq, root protocol.ConvRoot, fo
 	if !protocol.ValidID(item.PID) || item.Ref != nil || item.ReplyTo != "" && !protocol.ValidID(item.ReplyTo) {
 		return nil, errors.New("group: malformed historical PID scope")
 	}
-	m, err := membersIn(q, root.ID())
-	if err == nil && item.GroupHistory != nil {
+	// A witnessed turn resolves only its signed original graph. Building and
+	// then discarding today's members/ledger adds work at every send and
+	// admission fence, and cannot supply authority for this inert import.
+	// Current own-reader/forwarder fences above still apply independently.
+	var m dmMembers
+	if item.GroupHistory != nil {
 		m, err = groupHistoryMembers(q, root, item)
+	} else {
+		m, err = membersIn(q, root.ID())
 	}
 	if err != nil {
 		return nil, err
 	}
-	events, err := participationEventsIn(q, root.ID(), item.PID)
-	if err != nil {
-		return nil, err
-	}
+	var events []protocol.ParticipationEvent
 	if item.GroupHistory != nil {
 		events = mergeHistoryEvents(nil, m.historyEvents, item.PID)
 		if m.keyEpoch(a.Self().Fingerprint()) != item.GroupAdmission {
 			return nil, errGroupParticipationHistoryEpoch
+		}
+	} else {
+		events, err = participationEventsIn(q, root.ID(), item.PID)
+		if err != nil {
+			return nil, err
 		}
 	}
 	var ev *protocol.ParticipationEvent

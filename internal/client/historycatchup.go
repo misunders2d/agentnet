@@ -200,6 +200,7 @@ func historyRedactedSourceCovered(q dbq, dev identity.Public, c outCopy) (bool, 
 
 func (a *Agent) historyDependencies(it historySourceRow, prepared HistoryItem) ([]historySourceRow, error) {
 	var deps []historySourceRow
+	witnessed := prepared.ID == it.in.ID && prepared.PID == it.in.PID && prepared.GroupHistory != nil
 	if it.in.Sub == envelope.SubEvent {
 		ev, e := protocol.ParseParticipationEvent([]byte(it.in.Body))
 		if e != nil {
@@ -210,7 +211,7 @@ func (a *Agent) historyDependencies(it historySourceRow, prepared HistoryItem) (
 			// historyCopy already reverified this exact source's witness. Its
 			// signed predecessor travels with the copy and stays inert; it does
 			// not need a separately installed inbox or live participation row.
-			if prepared.ID == it.in.ID && prepared.PID == it.in.PID && prepared.GroupHistory != nil {
+			if witnessed {
 				for _, candidate := range prepared.GroupHistory.Memberships {
 					if candidate.Conv == it.conv && candidate.PID == it.in.PID && candidate.Hash() == ev.Prev {
 						found = true
@@ -239,7 +240,10 @@ func (a *Agent) historyDependencies(it historySourceRow, prepared HistoryItem) (
 			}
 		}
 	}
-	if it.in.PID != "" && it.in.Sub != envelope.SubEvent {
+	// The verified inert witness already carries the exact participation and
+	// parent graph. Standalone live-event copies are not prerequisites for a
+	// witnessed request/output; exact reply/control dependencies below remain.
+	if it.in.PID != "" && it.in.Sub != envelope.SubEvent && !witnessed {
 		rows, err := a.historySourceRows(a.store.db, "conv=? AND pid=? AND sub='event'", "ms,id", maxPendingPerConversation+1, it.conv, it.in.PID)
 		if err != nil {
 			return nil, err

@@ -526,12 +526,15 @@ func (a *Agent) participation(conv, pid string) (ParticipationInfo, error) {
 // participationIn resolves a participation from the events q holds, with
 // the DM's members m; self is this installation's address.
 func participationIn(q dbq, conv, pid string, m dmMembers, self string) (ParticipationInfo, error) {
-	events, err := participationEventsIn(q, conv, pid)
-	if err != nil {
-		return ParticipationInfo{}, err
-	}
+	var events []protocol.ParticipationEvent
+	var err error
 	if m.historyEvents != nil {
 		events = mergeHistoryEvents(nil, m.historyEvents, pid)
+	} else {
+		events, err = participationEventsIn(q, conv, pid)
+		if err != nil {
+			return ParticipationInfo{}, err
+		}
 	}
 	if len(events) == 0 {
 		return ParticipationInfo{}, ErrNoParticipation

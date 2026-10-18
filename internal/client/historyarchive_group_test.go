@@ -2,6 +2,7 @@ package client
 
 import (
 	"encoding/json"
+	"slices"
 	"testing"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
@@ -11,12 +12,27 @@ import (
 func TestHistoryArchiveGroupStructuralJourney(t *testing.T) {
 	_, a, phone, packet := groupHistoryLinkedFixture(t)
 	conv := packet.State.Conv
-	stopPhone := runAgent(t, phone)
 	label, name, _ := protocol.SplitAddress(phone.Address)
+	var previous protocol.Profile
+	if err := phone.hub.do(tctx(t), "GET", "/v1/agents/"+label+"/"+name+"/profile", nil, &previous); err != nil {
+		t.Fatal(err)
+	}
+	stopPhone := runAgent(t, phone)
 	eventually(t, "registered phone archive capability", func() bool {
 		var profile protocol.Profile
 		err := phone.hub.do(tctx(t), "GET", "/v1/agents/"+label+"/"+name+"/profile", nil, &profile)
-		return err == nil && profile.Supports(phone.Address, phone.Self().SignKey, protocol.CapHistoryArchive)
+		if err != nil || !profile.Live || !profile.Supports(phone.Address, phone.Self().SignKey, protocol.CapHistoryArchive) {
+			return false
+		}
+		// AwaitLink may already have published these capabilities. Wait for
+		// the new daemon's session before stopping it, or its uncapped
+		// session can become the offline reader remembered by the Hub.
+		for _, session := range profile.Sessions {
+			if !slices.Contains(previous.Sessions, session) {
+				return true
+			}
+		}
+		return false
 	})
 	stopPhone()
 	sent, err := a.SendConv(tctx(t), conv, ConvOutgoing{Body: "archive immutable group original"})

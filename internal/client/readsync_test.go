@@ -518,9 +518,19 @@ func TestAttentionSignedLinkedJourney(t *testing.T) {
 		}
 		return local != "" && remote != ""
 	})
-	if err = w.alice.MarkUnread(local, []string{local}); err != nil {
-		t.Fatal(err)
-	}
+	eventually(t, "deliberate unread obtains a current snapshot", func() bool {
+		// The running daemons may commit between canonical projection and
+		// the write transaction. Only that explicit, mutation-free conflict
+		// retries the same exact selection through a newly resolved scope.
+		err = w.alice.MarkUnread(local, []string{local})
+		if errors.Is(err, errAttentionScopeChanged) {
+			return false
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return true
+	})
 	eventually(t, "signed V2 unread converges", func() bool { m := attentionMessage(t, phone, conv, remote); return m.Attention != nil && m.Unread })
 	observed := *attentionMessage(t, phone, conv, remote).Attention
 	if err = phone.MarkRead([]string{remote}); err != nil {

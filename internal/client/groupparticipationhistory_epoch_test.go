@@ -232,6 +232,42 @@ func groupParticipationHistoryAfterReadmission(t *testing.T, sharedOriginal bool
 		if e = humanTurnAuthorization(source.store.db, item.inner(conv), item.From, item.FromKey, source.Address, source.Self().Fingerprint(), true, hm); e != nil {
 			t.Fatalf("derived witnessed output host=%s want=%s authorPID=%s state=%s held=%d: %v", hi.Host.Address, item.From, item.Human.AuthorPID, hi.State, hi.Held, e)
 		}
+		deps, e := source.historyDependencies(rows[0], item)
+		if e != nil {
+			t.Fatal(e)
+		}
+		requestFound := false
+		for _, dep := range deps {
+			if dep.in.PID == part.PID && dep.in.Sub == envelope.SubEvent {
+				t.Fatal("self-contained witnessed output depends on standalone live participation history")
+			}
+			requestFound = requestFound || dep.in.LID == ask.LID
+		}
+		if !requestFound {
+			t.Fatal("witnessed output lost its exact original request dependency")
+		}
+		for _, mode := range []string{"unwitnessed", "other-original", "other-participation"} {
+			scoped := item
+			switch mode {
+			case "unwitnessed":
+				scoped.GroupHistory = nil
+			case "other-original":
+				scoped.ID = protocol.NewID()
+			case "other-participation":
+				scoped.PID = protocol.NewID()
+			}
+			deps, e := source.historyDependencies(rows[0], scoped)
+			if e != nil {
+				t.Fatal(e)
+			}
+			participationFound := false
+			for _, dep := range deps {
+				participationFound = participationFound || dep.in.PID == part.PID && dep.in.Sub == envelope.SubEvent
+			}
+			if !participationFound {
+				t.Fatalf("%s skipped required standalone participation evidence", mode)
+			}
+		}
 	}
 	if _, err := groupProofRecord(source.store.db, conv, packet.Root.Creator.Fingerprint, original.Group.Seq); err != nil {
 		t.Fatalf("original public proof is missing: %v", err)

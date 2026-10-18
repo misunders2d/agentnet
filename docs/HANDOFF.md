@@ -212,12 +212,49 @@ and no incomplete/unstarted cases. Partition 7 remains **not green**:
 `TestGroupHistoryWitnessGuestDerivedParent` timed out accepting the new phone's
 inert history (82.50 s). Later focused passes do not replace that failure.
 
-The witness failure also reproduced 3/3 on clean HEAD `5a7da455`, so its
-investigation is stopped without changing assertions, deadlines or authority checks.
+The witness failure also reproduced 3/3 on clean HEAD `5a7da455`. Investigation
+was initially stopped; the owner's subsequent requirement for green full CI
+supersedes that exception. Assertions, deadlines and authority checks stay intact.
 
-Temporary probes and the disposable browser/server were removed after use.
-The original reported 20-minute incident and MEL-646's earlier derived-history
-liveness failure remain unexplained, not fixed by a later passing fixture.
+### CI-green follow-up
+
+The first pushed candidate, `4be3877d`, failed normal CI: the witness race
+case, two macOS client cases, and Windows client package alarms. Linux native,
+the other client race shards, non-client race checks, container and all three
+desktop builds passed. A focused workflow-dispatch green that skipped native
+jobs was not counted as a full platform baseline.
+
+Historical full Windows runs had the same 1800-second package alarms, while
+the same source's alphabet bands passed on separate runners. Full qualification
+now gives six list-derived client partitions their own Windows runners and keeps
+non-client packages separate. Every runnable parent is assigned exactly once;
+the 1800-second bound and all individual deadlines remain unchanged.
+
+The macOS archive fixture now waits for the new daemon's live signed session,
+not the earlier AwaitLink profile, before stopping it. The attention journey
+retries only the documented mutation-free snapshot conflict for the same exact
+selection; unexpected errors still fail and signed convergence remains required.
+
+Witnessed admission selects its verified historical graph directly instead of
+first building and discarding today's membership/ledger. A self-contained
+witnessed request or output no longer recursively prepares obsolete standalone
+PID events; exact original/PID binding and reply/control dependencies remain.
+The derived-history regression checks both that exemption and the mismatched
+original/PID/unwitnessed cases, retaining the real linked-phone and adversarial
+authority assertions.
+
+The five focused Linux race scenarios pass without skips (87.338 s), including
+the previously failing derived-history journey (70.05 s). Five other witnessed
+history/host-readmission boundary scenarios pass with race checking (143.809 s).
+The real CLI selected-history/file and linked-device-history journeys pass
+(4.189 s), as does `go vet ./...`. Workflow actionlint and shell syntax pass.
+The compiled Linux list's 1,357 parents form six complete, disjoint partitions;
+actual Windows lists and execution remain the native CI gate. These focused
+passes are not a replacement for the full normal-push CI result or release gates.
+
+Earlier temporary probes and the disposable browser/server were removed after use.
+The original reported 20-minute incident remains unqualified; the corrected
+derived-history fixture does not establish full field performance acceptance.
 Physical phone/ThinkPad and other-OS performance, every-control p95 and external
 skin collection qualification remain unverified; these issues are not closed.
 

@@ -128,10 +128,13 @@ program, `agentnet`, that is both the laptop client and the Hub.
   The older four/six/twelve partitions outgrew that bound; do not reuse their
   obsolete duration estimates or raise timeouts to make a run fit. Retain passing
   unchanged partitions when correcting a failure. Native Windows client
-  qualification uses disjoint `^Test[A-G]`, `^Test[H-N]` and `^Test[O-Z]`
-  selections in parallel, separately from other packages, at the existing
-  1800-second bound. The older H–Z aggregate exhausted that bound; retain every
-  case when splitting it, without changing individual timeouts.
+  qualification uses `bash scripts/native-client-shard.sh K 6` for K=0 through
+  5, each on its own Windows runner, separately from other packages, at the
+  existing 1800-second bound. The script derives the platform's complete parent
+  list and assigns disjoint exact-name selections. Three alphabet bands sharing
+  one runner exhausted that bound through disk/process contention; do not
+  co-locate those test processes or raise timeouts. Retain every case when
+  splitting selections, without changing individual timeouts.
   Platform-specific and opt-in skips must not be reported as executed tests.
   Add a focused regression for every bug. Tests that need a real model or
   infrastructure are opt-in (`AGENTNET_LIVE=claude`, `scripts/hub-container-test.sh`).
