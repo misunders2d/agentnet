@@ -2,10 +2,13 @@ package client
 
 import (
 	"encoding/json"
-	"github.com/misunders2d/agentnet/internal/envelope"
-	"github.com/misunders2d/agentnet/internal/protocol"
+	"net/http"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
 func TestHistoryArchiveImportedTailRemainsBounded(t *testing.T) {
@@ -131,6 +134,17 @@ func importedTailRemainsBounded(t *testing.T, direct bool) {
 	}
 	var before int
 	phone.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE recipient=? AND sub=?`, third.Address, sub).Scan(&before)
+	var refreshes atomic.Int64
+	if direct {
+		base := phone.hub.http.Transport
+		phone.hub.http.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.Method == "GET" && r.URL.Path == "/v1/persons/"+me.info.Person+"/chain" {
+				refreshes.Add(1)
+			}
+			return base.RoundTrip(r)
+		})
+		defer func() { phone.hub.http.Transport = base }()
+	}
 	// The phone then imports the laptop's bootstrap archives (receipt-driven chunks).
 	for page := int64(1); page <= 4; page++ {
 		if err = pageFor(a, phone); err != nil {
@@ -155,11 +169,16 @@ func importedTailRemainsBounded(t *testing.T, direct bool) {
 		}
 		importCtx := tctx(t)
 		importStarted := time.Now()
-		if _, err = phone.archiveImportStep(importCtx); err != nil {
+		beforeRefresh := refreshes.Load()
+		var progressed bool
+		if progressed, err = phone.archiveImportStep(importCtx); err != nil {
 			deadline, _ := importCtx.Deadline()
 			// Existing failure cleanup reports retained/pos/done for each job.
 			t.Logf("archive import page=%d elapsed_ms=%d deadline_remaining_ms=%d context_done=%t", page, time.Since(importStarted).Milliseconds(), time.Until(deadline).Milliseconds(), importCtx.Err() != nil)
 			t.Fatal(err)
+		}
+		if direct && progressed && refreshes.Load()-beforeRefresh != 1 {
+			t.Fatalf("device archive page refreshed own roster per child or reused a prior page: %d", refreshes.Load()-beforeRefresh)
 		}
 		if err = a.store.applyReceipt(protocol.ReceiptEvent{ID: desc.ID, State: protocol.StateDelivered, Seq: page}); err != nil {
 			t.Fatal(err)

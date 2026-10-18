@@ -242,6 +242,46 @@ async function handle(req) {
     if (req.page !== undefined) pageConv = req.page;
     return out;
   }
+  case "heldRetryProbes": {
+    // Reuse the real signed over-page carriers, but make lookup cost
+    // deterministic: one negative lookup per device per evidence pass,
+    // not one per envelope. New Fay evidence arrives during the first
+    // pass, after its negative response was captured.
+    const results = [];
+    for (const status of [200, 404]) {
+      const mem = memoryStore();
+      await mem.write([
+        ...await Promise.all(["identity", "person"].map(async k => ({s:"kv",k,v:await raw.get("kv",k)}))),
+        ...(await raw.all("pins")).map(v => ({s:"pins",k:v.address,v})),
+        ...(await raw.all("held")).map(v => ({s:"held",k:v.id,v})),
+      ]);
+      const e = new Engine({store:mem,base:"https://fixture.invalid",fetch:()=>{throw Error("external fetch forbidden")}});
+      await e.load();
+      let available = false, gusProfiles = 0, fayProfiles = 0;
+      e.call = async (method, path) => {
+        if (method === "GET" && path === "/v1/agents/" + req.unproven + "/profile") {
+          gusProfiles++;
+        } else if (method === "GET" && path === "/v1/agents/" + req.address + "/profile") {
+          fayProfiles++;
+          if (available) return {person:req.person};
+          available = true;
+          e.retryHeld(); // evidence wake while the old negative result is in flight
+        } else if (method === "GET" && path.startsWith("/v1/persons/" + req.person.person + "/chain?")) {
+          return {records:[req.person],more:false};
+        } else if (method === "POST" && path.endsWith("/ack")) {
+          return {};
+        } else throw Error("unexpected held proof request " + method + " " + path);
+        if (status === 404) throw new HubError(404, "not_found", "person unavailable");
+        return {};
+      };
+      await e.retryHeld();
+      const held = await mem.all("held"), inbox = await mem.all("inbox");
+      results.push({status,gusProfiles,fayProfiles,held:held.length,
+        gusOnly:held.every(h => h.from === req.unproven && h.reason === "proof_pending"),
+        admitted:inbox.length,body:inbox[0]?.body});
+    }
+    return {results};
+  }
   case "status":
     return { connected: engine.connected, revoked: engine.revoked, members: engine.members.current, link: engine.link ? engine.link.state : "" };
   case "receiveState": { // Bounded timeout evidence; no keys, plaintext or encrypted carriers.

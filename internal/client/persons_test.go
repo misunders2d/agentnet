@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -37,6 +38,44 @@ func freeze(t *testing.T, at, owner *Agent) {
 	person, raw := forkedStep(t, owner, "someone else")
 	if _, err := at.store.pinChain(person, [][]byte{raw}, at.Self(), false); !errors.Is(err, errPersonConflict) {
 		t.Fatalf("freeze: %v", err)
+	}
+}
+
+// An unchanged signed roster is a read, even when another local client
+// owns the WAL writer reservation. It still cannot unfreeze a person.
+func TestPersonChainUnchangedDoesNotWaitForWriter(t *testing.T) {
+	for _, tc := range []struct {
+		state string
+		want  error
+	}{{personPinned, nil}, {personConflict, errPersonConflict}} {
+		t.Run(tc.state, func(t *testing.T) {
+			w := newWorld(t, "")
+			persons(t, w.alice, w.bob)
+			person, err := w.bob.personOfKey(tctx(t), w.alice.Address, w.alice.Self())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := w.bob.store.db.Exec(`UPDATE persons SET state=? WHERE person=?`, tc.state, person.info.Person); err != nil {
+				t.Fatal(err)
+			}
+			writer, err := openStore(filepath.Join(w.bob.home, "agent.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer writer.db.Close()
+			if _, err := w.bob.store.db.Exec(`PRAGMA busy_timeout=0`); err != nil {
+				t.Fatal(err)
+			}
+			tx, err := writer.db.Begin()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback()
+			got, err := w.bob.store.pinChain(person.info.Person, nil, w.bob.Self(), false)
+			if !errors.Is(err, tc.want) || got != (pinResult{}) {
+				t.Fatalf("unchanged roster with active writer: %+v %v, want %v", got, err, tc.want)
+			}
+		})
 	}
 }
 

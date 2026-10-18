@@ -482,21 +482,21 @@ func (a *Agent) admitGroupParticipationHistory(ctx context.Context, env envelope
 	check := func(q dbq) (*protocol.ParticipationEvent, error) {
 		return a.groupParticipationHistoryCheck(q, root, sender, item)
 	}
-	if _, err = check(a.store.db); err != nil {
-		if errors.Is(err, ErrGroupContextPending) {
-			return hold(reasonProof, err.Error())
-		}
-		return hold(reasonInvalid, err.Error())
-	}
+	var admittedEvent *protocol.ParticipationEvent
+	var admissionErr error
 	result, err := a.store.addHistoryInbox(item.inner(in.Conv), item.At, item.FromKey, env.From, env.ID, fromQuarantine, func(tx *sql.Tx) error {
+		ev := admittedEvent
+		var e error
 		if item.Human != nil && item.GroupHistory == nil {
 			if err := insertHumanProof(tx, item.Human); err != nil {
 				return err
 			}
-		}
-		ev, e := check(tx)
-		if e != nil {
-			return e
+			// Installing unwitnessed live proof can change PID resolution.
+			// Witnessed proof stays inert and the guard already checked it.
+			ev, e = check(tx)
+			if e != nil {
+				return e
+			}
 		}
 		if ev != nil && item.GroupHistory == nil {
 			if e = insertParticipationEvent(tx, *ev, []byte(item.Body)); e != nil {
@@ -508,7 +508,18 @@ func (a *Agent) admitGroupParticipationHistory(ctx context.Context, env envelope
 		}
 		_, e = tx.Exec(`UPDATE inbox SET group_admission=?,group_history=nullif(?,'') WHERE id=?`, item.GroupAdmission, groupHistoryJSON(item.GroupHistory), item.ID)
 		return e
+	}, func(tx *sql.Tx) error {
+		// Check before deduplication too: a retained original must not lend
+		// a fresh carrier today's withdrawn or conflicted group authority.
+		admittedEvent, admissionErr = check(tx)
+		return admissionErr
 	})
+	if admissionErr != nil {
+		if errors.Is(admissionErr, ErrGroupContextPending) {
+			return hold(reasonProof, admissionErr.Error())
+		}
+		return hold(reasonInvalid, admissionErr.Error())
+	}
 	if errors.Is(err, ErrSharedTopicTitleConflict) {
 		return hold(reasonInvalid, err.Error())
 	}

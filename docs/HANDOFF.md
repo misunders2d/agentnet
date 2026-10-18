@@ -286,6 +286,62 @@ owned route recovery and picture-cache behavior. Real CLI selected-history/file,
 linked-device history and task-grant journeys pass (6.169 s); `go vet ./...`
 passes. Full normal-push CI on the integrated source remains the final gate.
 
+The next full normal-push run,
+[39158085456](https://github.com/misunders2d/agentnet/actions/runs/39158085456)
+at `9f7b21dd`, finished with 24 successful jobs, eight failed jobs and the
+optional Windows task probe skipped. The owned-timeout marker had lost standard
+`context.DeadlineExceeded` and `net.Error.Timeout` behavior; this also prevented
+owned header deadlines from retiring a stalled route. Its private marker now
+preserves both contracts. The real HTTP/2 recovery test forces that deadline
+separately from the header watchdog, retaining generation, TLS and no-replay
+assertions.
+
+Other repairs remove redundant work without relaxing authority: an unchanged
+person chain reads current conflict state without an immediate writer reservation;
+the new locked-writer regression fails before this change (0.327 s). Member-host
+refreshes are deduplicated within an operation. A bounded device-archive import
+shares successful roster refreshes, not authority snapshots; each child still
+checks its current pin and own roster. A trigger-driven regression changes the
+source pin after one child and requires exact partial progress. Witness admission
+uses one transactional guard before duplicate short-circuits, retaining pending
+withdrawal/conflict versus definitively withdrawn-reader classifications.
+
+The browser held retry shares only missing-person evidence within a pass,
+including across pages. Fresh evidence arriving during a scan or recovery-marker
+write gets a new pass. The regression retains 101 unproven Gus messages and
+requires Fay's later evidence to admit exactly her message for both empty/200 and
+404 profile responses. Positive authority and transport failures are not cached.
+The receipt fixture now observes an encrypted live message ordered after receipt
+replay, rather than guessing a 350 ms wall-clock window that also timed TLS and
+storage. All cursor, sender-isolation and invalid-query assertions remain.
+The peer-word fixture gives each operation its original 10 s context instead of
+reusing one already consumed by enrollment and linking.
+
+A later complete goroutine capture located the phone's stream reader waiting
+for its database behind an idle worker's immediate claim transaction. A
+conservative read-only absence probe now avoids that writer reservation only
+when neither a claim nor revoked-request cleanup can have work. All existing
+claim-time permission, key and revocation checks remain inside the transaction;
+the worker captures its change notification before probing, so arrivals are
+not lost. A second-WAL-writer regression fails before the fix with `SQLITE_BUSY`
+(0.114 s), then passes with the idle-to-authorized-request transitions.
+
+The integrated post-fix race selection passes all 12 parents (210.619 s, no
+skips): all four historical-witness variants, including the derived duplicate
+withdrawal/conflict controls, plus atomic claims, current-key/person grants,
+revocation, receiver/delegation and bound-proposal fences. The temporary stack
+captures were removed. Retained unchanged focused checks also pass: all three
+receipt parents (4.437 s), seven browser-engine parents (109.903 s), transport
+deadline/recovery controls, and archive pin-change/roster-lag checks. Both tail
+import variants pass (62.08 s); an empty final page need not refresh a roster.
+These observations identify a concrete blocker, not every possible cause of
+the original physical-phone incident.
+
+Final-source real CLI governance/offline-leave, selected-history/file,
+linked-device-history and task-grant journeys pass together (10.531 s);
+`go vet ./...` passes. Qualification is the full normal-push CI run for this
+commit, not these local selections.
+
 Witnessed admission retains full current-group validation, then selects its
 signed historical graph without rereading today's unused PID ledger. A
 self-contained witnessed request or output no longer recursively prepares

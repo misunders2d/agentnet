@@ -590,6 +590,80 @@ SELECT json_object('inbox',(SELECT count(*) FROM inbox WHERE id=(SELECT id FROM 
 				t.Fatalf("discovery imported live authority: events=%d err=%v", liveEvents, err)
 			}
 		})
+		for _, mode := range []string{"pending-current-withdrawal", "conflicted-current-member", "withdrawn-own-reader"} {
+			t.Run("duplicate-"+mode, func(t *testing.T) {
+				rootRaw, _ := json.Marshal(packet.Root)
+				copy, err := source.historyCopy(phone.Self(), conv, rootRaw, item)
+				if err != nil {
+					t.Fatal(err)
+				}
+				person := bob.info.Person
+				wantErr, wantReason := ErrGroupContextPending, reasonProof
+				if mode == "withdrawn-own-reader" {
+					person = self.info.Person
+					wantErr, wantReason = errGroupRecipientWithdrawn, reasonInvalid
+				}
+				member, ok := current.State.Member(person)
+				if !ok {
+					t.Fatal("current fixture member missing")
+				}
+				if mode == "conflicted-current-member" {
+					p, found, e := phone.store.personByID(person)
+					if e != nil || !found {
+						t.Fatalf("current member person missing: %v", e)
+					}
+					_, err = phone.store.db.Exec(`UPDATE persons SET state=? WHERE person=?`, personConflict, person)
+					t.Cleanup(func() {
+						if _, err := phone.store.db.Exec(`UPDATE persons SET state=? WHERE person=?`, p.info.State, person); err != nil {
+							t.Error(err)
+						}
+					})
+				} else {
+					table := "group_pending_withdrawals"
+					if mode == "withdrawn-own-reader" {
+						table = "group_withdrawals"
+					}
+					_, err = phone.store.db.Exec(`INSERT INTO `+table+`(conv,person,admission,record) VALUES(?,?,?,'{}')`, conv, person, member.Admission.Hash())
+					t.Cleanup(func() {
+						if _, err := phone.store.db.Exec(`DELETE FROM `+table+` WHERE conv=? AND person=? AND admission=?`, conv, person, member.Admission.Hash()); err != nil {
+							t.Error(err)
+						}
+					})
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err = phone.groupParticipationHistoryCheck(phone.store.db, packet.Root, source.Self(), item); !errors.Is(err, wantErr) {
+					t.Fatalf("current group classification changed: want=%v got=%v", wantErr, err)
+				}
+				if mode == "conflicted-current-member" {
+					// A pre-existing conflict stops the network refresh before
+					// admission. Exercise the atomic duplicate guard directly.
+					_, err = phone.store.addHistoryInbox(item.inner(conv), item.At, item.FromKey, source.Address, copy.env.ID, false, nil, func(tx *sql.Tx) error {
+						_, err := phone.groupParticipationHistoryCheck(tx, packet.Root, source.Self(), item)
+						return err
+					})
+					if !errors.Is(err, ErrGroupContextPending) {
+						t.Fatalf("duplicate guard changed conflict classification: %v", err)
+					}
+				} else {
+					if err = phone.verifyAndStore(tctx(t), copy.env); err != nil {
+						t.Fatal(err)
+					}
+					var reason string
+					if err = phone.store.db.QueryRow(`SELECT reason FROM quarantine WHERE id=?`, copy.env.ID).Scan(&reason); err != nil || reason != wantReason {
+						t.Fatalf("duplicate classification changed: want=%q reason=%q err=%v", wantReason, reason, err)
+					}
+				}
+				var receipts int
+				if err = phone.store.db.QueryRow(`SELECT count(*) FROM history_receipts WHERE id=?`, copy.env.ID).Scan(&receipts); err != nil || receipts != 0 {
+					t.Fatalf("duplicate gained delivered disposition: receipts=%d err=%v", receipts, err)
+				}
+				if inboxCount(t, phone, `id=? AND replica=1 AND state='' AND group_history IS NOT NULL`, originalID) != 1 {
+					t.Fatal("deferring a duplicate erased the admitted inert original")
+				}
+			})
+		}
 	}
 	modes := []string{"missing-witness", "wrong-state", "forged-state", "other-pid", "unbound-roster", "wrong-task-epoch", "unknown-own-admission", "foreign-forwarder"}
 	if derived {

@@ -46,6 +46,10 @@ func TestHubConnectionsResetHTTP2Route(t *testing.T) {
 		if r.ProtoMajor != 2 {
 			t.Errorf("not HTTP2: %s", r.Proto)
 		}
+		if r.URL.Path == "/headers" {
+			<-r.Context().Done()
+			return
+		}
 		if r.URL.Path == "/body" || r.URL.Path == "/range" || r.URL.Path == "/v1/pictures/"+resetPictureHash {
 			if r.URL.Path == "/range" {
 				w.WriteHeader(http.StatusPartialContent)
@@ -135,6 +139,21 @@ func TestHubConnectionsResetHTTP2Route(t *testing.T) {
 		t.Fatal("old generation reset healthy route")
 	}
 	c.timeout = 100 * time.Millisecond
+	// Force the request's owned deadline, not the header watchdog.
+	tr.ResponseHeaderTimeout = 0
+	var timeout net.Error
+	if err := c.doBytes(ctx, "GET", "/headers", nil, nil); !errors.Is(err, context.DeadlineExceeded) || !errors.As(err, &timeout) || !timeout.Timeout() {
+		t.Fatalf("owned header deadline: %v", err)
+	}
+	req, _ = http.NewRequestWithContext(ctx, "GET", server.URL+"/ok", nil)
+	resp, err = c.sendRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if dials.Load() != 3 {
+		t.Fatal("owned header timeout did not reset route")
+	}
 	var out map[string]any
 	if err := c.doBytes(ctx, "GET", "/body", nil, &out); err == nil {
 		t.Fatal("body blackhole did not time out")
@@ -145,7 +164,7 @@ func TestHubConnectionsResetHTTP2Route(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if dials.Load() != 3 {
+	if dials.Load() != 4 {
 		t.Fatal("body timeout did not reset route")
 	}
 	var sink strings.Builder
@@ -158,7 +177,7 @@ func TestHubConnectionsResetHTTP2Route(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if dials.Load() != 4 {
+	if dials.Load() != 5 {
 		t.Fatal("range timeout did not reset route")
 	}
 	a := &Agent{home: t.TempDir(), hub: c}
@@ -171,7 +190,7 @@ func TestHubConnectionsResetHTTP2Route(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if dials.Load() != 5 {
+	if dials.Load() != 6 {
 		t.Fatal("picture timeout did not reset route")
 	}
 

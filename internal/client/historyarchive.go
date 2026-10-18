@@ -24,6 +24,17 @@ const archiveUploading = "archive_uploading"
 
 type isolatedArchivePackError struct{ error }
 
+type historyArchiveRefreshKey struct{}
+
+// Only one bounded import shares successful person refreshes. Ordinary receive
+// calls get their own pass; every child still checks current local authority.
+func historyArchiveRefreshes(ctx context.Context) map[string]error {
+	if refreshed, ok := ctx.Value(historyArchiveRefreshKey{}).(map[string]error); ok {
+		return refreshed
+	}
+	return map[string]error{}
+}
+
 const historyArchiveSchema = `
 CREATE TABLE history_archive_entries(child TEXT PRIMARY KEY,manifest TEXT NOT NULL);
 CREATE INDEX history_archive_manifest ON history_archive_entries(manifest);
@@ -579,6 +590,7 @@ func (a *Agent) archiveImportStep(ctx context.Context) (bool, error) {
 	if len(chunk.Entries) != manifest.Count {
 		return failed(errors.New("archive count does not match signed manifest"))
 	}
+	ctx = context.WithValue(ctx, historyArchiveRefreshKey{}, map[string]error{})
 	// Decode this bounded chunk once, then checkpoint each ordinary admission.
 	// No transaction spans crypto, network, or filesystem work.
 	for pos < len(chunk.Entries) {

@@ -1194,6 +1194,13 @@ func (j job) followUp() bool {
 // pending and, at claim time, its sender is still approved (question) or
 // still holds a task grant for the key that verified it (task).
 func (s *store) claimJob(responder string, resolve ...func(dbq, job) (*ExecutorStamp, error)) (job, bool, error) {
+	// An idle worker must not reserve the writer needed by incoming history.
+	// This is only a conservative absence probe: claims and revoked-request
+	// cleanup still run in the transaction whenever either can have work.
+	var pending bool
+	if err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM inbox WHERE replica=0 AND state IN ('pending','accepted','held','awaiting','conv_held','part_waiting'))`).Scan(&pending); err != nil || !pending {
+		return job{}, false, err
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return job{}, false, err

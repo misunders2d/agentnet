@@ -17,6 +17,7 @@ This record starts with v0.8.1; earlier releases remain on the
   without redundant live-ledger reads or obsolete standalone PID prerequisites.
   Preserve current-group withdrawal/conflict fences, device authority and exact
   reply/control dependencies.
+  Recheck authority transactionally before admitting duplicate copies too.
 - Cache device profiles until the next member-list push or stream disconnect,
   avoiding repeated capability GETs during catch-up. Without a complete current
   member list every read is fresh; exact-key and handover checks are unchanged.
@@ -24,7 +25,15 @@ This record starts with v0.8.1; earlier releases remain on the
   after a grant or revocation and when cached availability exists offline.
 - Keep caller deadlines local to their requests instead of resetting healthy
   shared Hub connections and interrupting other RPCs or the push stream.
-  Transport-owned timeouts still retire stalled routes without replaying sends.
+  Transport-owned timeouts retain standard deadline/timeout errors and still
+  retire stalled routes without replaying sends.
+- Avoid writer reservations for unchanged person rosters and duplicate
+  member-host refreshes. Refresh an own roster once per bounded archive import,
+  while checking every child's current pin and authority.
+  Idle workers likewise avoid reserving the writer when no claim or revocation
+  cleanup is possible; pending work keeps its transactional authority checks.
+- Keep a browser's held-message retry moving past unpublished senders by sharing
+  only missing-person evidence within one pass; fresh evidence starts a new pass.
 - Avoid per-message continuation lookups for ordinary chat rows and repeated
   activity derivation. Reuse the chat's existing topic assignments.
 - Keep phone dismissal feedback pending until the exact participation is

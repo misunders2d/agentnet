@@ -212,19 +212,18 @@ func TestSenderWordsLabelMimicsOwner(t *testing.T) {
 func TestPeerWordsPersons(t *testing.T) {
 	w := newWorld(t, "")
 	runAgent(t, w.bob)
-	ctx := tctx(t)
 	carol := mustJoin(t, filepath.Join(t.TempDir(), "carol"), w.aliceInvites("carol"), "desk")
 	for a, label := range map[*Agent]string{w.bob: "Sergey", w.alice: "sergey", carol: "Vitalii"} {
-		if _, err := a.CreatePerson(ctx, label); err != nil {
+		if _, err := a.CreatePerson(tctx(t), label); err != nil {
 			t.Fatal(err)
 		}
 	}
 	phone := linked(t, w.bob)
 	for _, a := range []*Agent{w.alice, carol} { // pinned through their verified chains
-		if _, err := w.bob.sendKey(ctx, a.Address); err != nil {
+		if _, err := w.bob.sendKey(tctx(t), a.Address); err != nil {
 			t.Fatal(err)
 		}
-		if s := w.bob.sender(ctx, a.Address, a.Self().Fingerprint(), false); s.Relation != SenderPerson {
+		if s := w.bob.sender(tctx(t), a.Address, a.Self().Fingerprint(), false); s.Relation != SenderPerson {
 			t.Fatalf("%s: %+v", a.Address, s)
 		}
 	}

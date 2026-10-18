@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/pem"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -210,7 +211,8 @@ func TestStalledRequestIsBounded(t *testing.T) {
 	}
 	start := time.Now()
 	err = conn.do(context.Background(), "GET", "/v1/agents/a/b", nil, nil)
-	if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 5*time.Second {
+	var timeout net.Error
+	if !errors.Is(err, context.DeadlineExceeded) || !errors.As(err, &timeout) || !timeout.Timeout() || time.Since(start) > 5*time.Second {
 		t.Fatalf("stalled request: err=%v after %s", err, time.Since(start))
 	}
 	// The push stream must not wait forever for response headers either.
@@ -222,7 +224,7 @@ func TestStalledRequestIsBounded(t *testing.T) {
 	defer st.db.Close()
 	a := &Agent{Address: "a/b", id: id, store: st, hub: conn, heartbeat: time.Hour, Logf: t.Logf}
 	start = time.Now()
-	if _, err := a.streamOnce(context.Background()); !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 5*time.Second {
+	if _, err := a.streamOnce(context.Background()); !errors.Is(err, context.DeadlineExceeded) || !errors.As(err, &timeout) || !timeout.Timeout() || time.Since(start) > 5*time.Second {
 		t.Fatalf("stalled stream: err=%v after %s", err, time.Since(start))
 	}
 }

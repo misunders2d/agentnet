@@ -110,7 +110,15 @@ var requestTimeout = 30 * time.Second
 
 // Only our transport bound diagnoses a stalled route. A caller's shorter
 // deadline ends that request, not the other requests sharing its HTTP/2 socket.
-var errHubRequestTimeout = errors.New("Hub request timeout")
+// The private cause must keep the standard deadline and net.Error contracts:
+// net/http returns it to callers when this bound expires.
+var errHubRequestTimeout = &hubRequestTimeoutError{context.DeadlineExceeded}
+
+type hubRequestTimeoutError struct{ error }
+
+func (e *hubRequestTimeoutError) Unwrap() error { return e.error }
+func (*hubRequestTimeoutError) Timeout() bool   { return true }
+func (*hubRequestTimeoutError) Temporary() bool { return true }
 
 // wrapTransport lets tests inject network faults; nil in production.
 var wrapTransport func(http.RoundTripper) http.RoundTripper
@@ -382,11 +390,11 @@ func (c *hubConn) connectionGeneration() uint64 {
 	return p.generation
 }
 func (c *hubConn) resetAfterTimeout(ctx context.Context, err error, generation uint64) {
-	if ctx.Err() != nil && context.Cause(ctx) != errHubRequestTimeout {
+	if err == nil || ctx.Err() != nil && context.Cause(ctx) != errHubRequestTimeout {
 		return // caller cancellation/deadline says nothing about the shared route
 	}
 	var networkError net.Error
-	if err != nil && !errors.Is(err, context.Canceled) && errors.As(err, &networkError) && networkError.Timeout() {
+	if !errors.Is(err, context.Canceled) && errors.As(err, &networkError) && networkError.Timeout() {
 		c.resetConnectionsAt(&generation)
 	}
 }

@@ -1,6 +1,7 @@
 package client
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
@@ -15,6 +16,25 @@ func TestClaimJobIdleThenNewAuthorizedRequest(t *testing.T) {
 			t.Fatalf("unexpected idle claim: %s %v %v", j.ID, found, err)
 		}
 	}
+	t.Run("idle-with-active-writer", func(t *testing.T) {
+		reader, err := openStore(filepath.Join(w.bob.home, "agent.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer reader.db.Close()
+		if _, err = reader.db.Exec(`PRAGMA busy_timeout=0`); err != nil {
+			t.Fatal(err)
+		}
+		tx, err := w.bob.store.db.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback()
+		j, found, err := reader.claimJob("fixture")
+		if err != nil || found {
+			t.Fatalf("idle worker with active writer: %s found=%v err=%v", j.ID, found, err)
+		}
+	})
 	claimNone()
 	// Configure a responder for acceptance, but never start a worker or
 	// invoke a harness: this test exercises admission and claiming only.

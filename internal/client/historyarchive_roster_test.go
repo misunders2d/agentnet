@@ -105,3 +105,58 @@ func TestHistoryArchiveRosterLagRecoversWithoutReflood(t *testing.T) {
 		t.Fatalf("source window did not settle its original children: %d %v", retained, err)
 	}
 }
+
+func TestHistoryArchiveDeviceRefreshKeepsCurrentSourcePin(t *testing.T) {
+	w, source, phone, _ := archiveFixture(t, 0)
+	for _, a := range []*Agent{source, phone} {
+		a.stopBackgroundPosts()
+		a.stopArchivePosts()
+	}
+	var originals []string
+	for range 2 {
+		env := sealTo(t, w.bob, source, envelope.Inner{Kind: envelope.KindQuestion, Body: "retained direct original"})
+		if err := source.verifyAndStore(tctx(t), env); err != nil {
+			t.Fatal(err)
+		}
+		originals = append(originals, env.ID)
+	}
+	if _, err := source.store.db.Exec(`DELETE FROM device_history_jobs WHERE device=? AND fingerprint=?`, phone.Address, phone.Self().Fingerprint()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.deviceHistoryPage(phone.Self()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.archiveStep(tctx(t)); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.FlushOutbox(tctx(t)); err != nil {
+		t.Fatal(err)
+	}
+	descriptor := archiveDescriptor(t, source)
+	if err := phone.storeReceived(tctx(t), descriptor); err != nil {
+		t.Fatal(err)
+	}
+	// Change the current local pin atomically with the first child's admission.
+	// A successful refresh of the bounded pass must not snapshot that authority
+	// for the next child, nor roll back the already admitted inert original.
+	if _, err := phone.store.db.Exec(`CREATE TRIGGER history_test_source_pending AFTER INSERT ON history_receipts
+ WHEN EXISTS(SELECT 1 FROM history_archive_children WHERE id=NEW.id)
+ BEGIN
+ UPDATE peers SET pending=public WHERE address=(
+ SELECT json_extract(j.envelope,'$.from') FROM history_archive_children c
+ JOIN history_archive_jobs j ON j.id=c.manifest WHERE c.id=NEW.id);
+ END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := phone.archiveImportStep(tctx(t)); err == nil {
+		t.Fatal("archive imported another child after source pin became pending")
+	}
+	var pos, done int
+	if err := phone.store.db.QueryRow(`SELECT pos,done FROM history_archive_jobs WHERE id=?`, descriptor.ID).Scan(&pos, &done); err != nil || pos != 1 || done != 0 {
+		t.Fatalf("changed pin lost exact partial progress: pos=%d done=%d err=%v", pos, done, err)
+	}
+	var imported int
+	if err := phone.store.db.QueryRow(`SELECT count(*) FROM inbox WHERE id IN (?,?) AND replica=1 AND state=''`, originals[0], originals[1]).Scan(&imported); err != nil || imported != 1 {
+		t.Fatalf("changed pin admitted too much or lost prior original: imported=%d err=%v", imported, err)
+	}
+}

@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestReceiptLogAtomicAndSenderOnly(t *testing.T) {
@@ -85,7 +84,13 @@ func TestReceiptStreamOptInAndCursor(t *testing.T) {
 		code   int
 	}{{"sender", a, "&receipts=0", true, 200}, {"foreign", c, "&receipts=4", false, 200}, {"absent", a, "", false, 200}, {"restore clamp", a, "&receipts=999", true, 200}, {"sender clamp", a, "&receipts=2", true, 200}, {"negative", a, "&receipts=-1", false, 400}, {"empty", a, "&receipts=", false, 400}, {"non decimal", a, "&receipts=1.2", false, 400}} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 350*time.Millisecond)
+			// Receipt replay precedes live messages. A known live message
+			// proves replay finished, without timing TLS, storage or silence.
+			var marker string
+			if tc.code == http.StatusOK {
+				marker = sendMessage(t, h, b, tc.member)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			ad := protocol.SessionAd{Address: tc.member.addr, Session: protocol.NewID()}
 			protocol.SignAd(&ad, tc.member.id.Sign)
@@ -104,8 +109,9 @@ func TestReceiptStreamOptInAndCursor(t *testing.T) {
 			}
 			sc := bufio.NewScanner(resp.Body)
 			got := false
+			replayed := false
 			event := ""
-			for sc.Scan() {
+			for !replayed && sc.Scan() {
 				line := sc.Text()
 				if strings.HasPrefix(line, "event: ") {
 					event = strings.TrimPrefix(line, "event: ")
@@ -116,8 +122,19 @@ func TestReceiptStreamOptInAndCursor(t *testing.T) {
 						t.Fatalf("%+v %v", r, err)
 					}
 					got = true
-					break
 				}
+				if event == "message" && strings.HasPrefix(line, "data: ") {
+					var message struct {
+						ID string `json:"id"`
+					}
+					if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &message); err != nil {
+						t.Fatal(err)
+					}
+					replayed = message.ID == marker
+				}
+			}
+			if !replayed {
+				t.Fatalf("stream ended before receipt replay barrier: %v", sc.Err())
 			}
 			if got != tc.want {
 				t.Fatalf("receipt=%v want %v", got, tc.want)

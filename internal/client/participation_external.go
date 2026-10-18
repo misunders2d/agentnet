@@ -519,10 +519,12 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 	if err != nil {
 		return ConvSent{}, err
 	}
-	// Refresh every affected proof before creating a recipient-encrypted copy.
+	// Refresh every distinct affected proof before creating a recipient-encrypted copy.
 	ids := []string{info.Host.Person}
 	for id := range m.persons {
-		ids = append(ids, id)
+		if id != info.Host.Person {
+			ids = append(ids, id)
+		}
 	}
 	for _, id := range ids {
 		if _, err := a.refreshPerson(ctx, id, false); err != nil {

@@ -678,6 +678,23 @@ func TestBrowserEngineRetriesEveryHeld(t *testing.T) {
 		Conv: fayRoot.ID(), LID: protocol.NewID(), Root: fayJSON, Origin: "ui"})
 	w.until("everything held", func() bool { return held() == unproven+1 })
 
+	// Check work rather than elapsed time as well: identical missing
+	// profiles cost one lookup per evidence pass, across every held page.
+	// The fixture delivers fresh Fay evidence during the negative lookup,
+	// so a queued second pass must discard both 200/empty and 404 misses.
+	probes := w.ok(map[string]any{"op": "heldRetryProbes", "unproven": gus.addr, "address": fay.addr, "person": fayRoster})["results"].([]any)
+	if len(probes) != 2 {
+		t.Fatalf("held retry probes: %v", probes)
+	}
+	for _, probe := range probes {
+		p := probe.(map[string]any)
+		if p["gusProfiles"] != float64(2) || p["fayProfiles"] != float64(2) ||
+			p["held"] != float64(unproven) || p["gusOnly"] != true ||
+			p["admitted"] != float64(1) || p["body"] != "proven later" {
+			t.Fatalf("held retry work or admission: %v", p)
+		}
+	}
+
 	// Fay publishes her person: the member list that follows is new
 	// evidence, and her message is admitted past all of Gus's.
 	fay.publish(fayRoster)

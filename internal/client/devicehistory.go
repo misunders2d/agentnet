@@ -289,7 +289,9 @@ func (a *Agent) admitDeviceHistory(ctx context.Context, env envelope.Envelope, i
 	if err = validateDeviceHistoryItem(r); err != nil {
 		return hold(reasonInvalid, err.Error())
 	}
-	if err = a.refreshRecipientPerson(ctx, env.From, map[string]error{}); err != nil {
+	refreshed := historyArchiveRefreshes(ctx)
+	if err = a.refreshRecipientPerson(ctx, env.From, refreshed); err != nil {
+		clear(refreshed)
 		return holdForPerson(err, hold)
 	}
 	tx, err := a.store.db.Begin()

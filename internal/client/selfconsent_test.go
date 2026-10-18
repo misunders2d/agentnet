@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/http"
 	"slices"
 	"strings"
 	"sync"
@@ -458,7 +459,7 @@ func TestSelfConsentOffline(t *testing.T) {
 // In a group the own agent joins the same way, with the invite's epoch
 // verified; another member's invite of it waits for its owner's accept.
 func TestSelfConsentGroup(t *testing.T) {
-	w, carol, packet, _ := groupTurnsFixture(t)
+	w, carol, packet, stops := groupTurnsFixture(t)
 	conv := packet.State.Conv
 	named, err := w.alice.CreateLocalAgent("Own builder", Responder{Harness: "claude", Dir: t.TempDir()})
 	if err != nil {
@@ -499,6 +500,39 @@ func TestSelfConsentGroup(t *testing.T) {
 	eventually(t, "bob's fresh invite at alice", func() bool { return stateAt(t, w.alice, q.PID).State == PartInvited })
 	if ok, err := w.alice.selfConsent(tctx(t), q.PID); ok || err != nil {
 		t.Fatalf("another member's invite accepted without a click (%v)", err)
+	}
+	// Isolate one further consumer operation from daemon refreshes. A member
+	// host is also in the room roster: its current chain must be checked once,
+	// not twice, while every other person's current proof is still checked.
+	for _, stop := range stops {
+		stop()
+	}
+	base := w.alice.hub.http.Transport
+	defer func() { w.alice.hub.http.Transport = base }()
+	var mu sync.Mutex
+	reads := map[string]int{}
+	w.alice.hub.http.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/persons/") && strings.HasSuffix(r.URL.Path, "/chain") {
+			person := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/persons/"), "/chain")
+			mu.Lock()
+			reads[person]++
+			mu.Unlock()
+		}
+		return base.RoundTrip(r)
+	})
+	reused, err := w.alice.InviteNamedAgent(tctx(t), conv, w.alice.Address, named.ID, nil, nil, "")
+	if err != nil || reused.PID != p.PID || !reused.Claimable() || reused.Decision != p.Decision {
+		t.Fatalf("own re-invitation changed the accepted participation: %+v %v", reused, err)
+	}
+	if n := decisionsBy(t, w.alice, conv, p.PID, w.alice.Self().Fingerprint()); n != 1 {
+		t.Fatalf("own re-invitation added consent: %d", n)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, member := range packet.State.Members {
+		if n := reads[member.Person]; n != 1 {
+			t.Errorf("re-invitation refreshed person %s %d times, want once", member.Person, n)
+		}
 	}
 }
 

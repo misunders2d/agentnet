@@ -213,6 +213,18 @@ type pinResult struct {
 // person listing it becomes this installation's own (a device link).
 func (s *store) pinChain(person string, raws [][]byte, me identity.Public, adopt bool) (pinResult, error) {
 	var res pinResult
+	if len(raws) == 0 {
+		// No steps can change the pin. Recheck its current conflict state
+		// without taking SQLite's immediate writer reservation.
+		head, pinned, err := s.personByID(person)
+		if err != nil {
+			return res, err
+		}
+		if pinned && head.info.State == personConflict {
+			return res, errPersonConflict
+		}
+		return res, nil
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return res, err

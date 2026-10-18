@@ -3452,14 +3452,20 @@ export class Engine {
       }
       return known;
     }
+    // A held pass may contain many copies from one unpublished device.
+    // Share only absence, never positive person/roster authority, for that
+    // pass; every envelope still opens and checks its current key first.
+    if (admission?.missingPersons?.has(address)) throw new Hold("proof_pending", address + " has no person on this server");
     let prof;
     try {
       prof = await this.profile(address, admission);
     } catch (e) {
-      if (e.status === 404) throw new Hold("proof_pending", address + " has no person on this server");
-      throw e;
+      if (e.status !== 404) throw e;
     }
-    if (!prof || !prof.person) throw new Hold("proof_pending", address + " has no person on this server");
+    if (!prof || !prof.person) {
+      admission?.missingPersons?.add(address);
+      throw new Hold("proof_pending", address + " has no person on this server");
+    }
     let r;
     try {
       r = await wire.parseRoster(prof.person);
@@ -7315,6 +7321,7 @@ export class Engine {
       const ownHuman=own?.state === "self" && own.human_keys?.includes(this.fp) && own.devices.some(d => d.address === this.address && d.fingerprint === this.fp);
       const recoverHistory=this.heldHistoryRecovery&&ownHuman,recoverLifecycle=this.heldLifecycleHistoryRecovery&&ownHuman,recoverRoster=this.heldRosterPrefixRecovery&&ownHuman;
       const recovered = new Set(); // each invalid row at most once, even when admitted proof adds a pass
+      const missingPersons = new Set(); // reset at each new evidence pass, including across pages
       for (;;) {
         const page = await this.store.after("held", pos, heldPage);
         let at = pos;
@@ -7331,18 +7338,17 @@ export class Engine {
           try {
             let env;
             try { env = wire.parseEnvelope(h.envelope); } catch (e) { if (historyRecovery) continue; throw e; }
-            await this.admit(h.envelope, env, true, historyRecovery, h.relay_ingress ? {[relayIngress]:env.id,checks:[],state:{deferred:false}} : null);
+            await this.admit(h.envelope, env, true, historyRecovery, {
+              ...(h.relay_ingress ? {[relayIngress]:env.id} : {}),
+              checks:[],state:{deferred:false},missingPersons,
+            });
           } catch (e) {
             if (retryable(e)) { this.heldCursor = before; return; }
             this.noteHeldFailure(h.id, e); // stays held, in place; later rows are still looked at
           }
         }
-        if (page.length === heldPage) pos = at;
-        else if (this.retryAgain) {
-          [this.retryAgain, pos] = [false, ""];
-          this.heldRetriedAt = this.now();
-        }
-        else {
+        if (page.length === heldPage) { pos = at; continue; }
+        if (!this.retryAgain) {
           if (recoverHistory||recoverLifecycle||recoverRoster) {
             try {
               await this.store.write([...(recoverHistory?[{s:"kv",k:"held-group-history-recovery-v1",v:true}]:[]),...(recoverLifecycle?[{s:"kv",k:"held-dm-lifecycle-recovery-v1",v:true}]:[]),...(recoverRoster?[{s:"kv",k:"held-roster-prefix-recovery-v1",v:true}]:[])],[{s:"kv",k:"person",v:own}]);
@@ -7351,8 +7357,13 @@ export class Engine {
             this.heldLifecycleHistoryRecovery = false;
             this.heldRosterPrefixRecovery = false;
           }
-          return;
+          // A member/profile wake may have arrived while recovery markers
+          // were being committed. It still needs its own fresh proof pass.
+          if (!this.retryAgain) return;
         }
+        [this.retryAgain, pos] = [false, ""];
+        missingPersons.clear();
+        this.heldRetriedAt = this.now();
       }
     } finally {
       this.retrying = null;
