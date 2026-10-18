@@ -134,7 +134,9 @@ func TestOwnHumanStopSurvivesReopen(t *testing.T) {
 			if out := <-awaited; out.err != nil {
 				t.Fatal(out.err)
 			}
-			stopPhone := runAgent(t, phone)
+			// The link's older session must not stand in for the daemon
+			// being stopped: its own signed record must exist first.
+			stopPhone := runPublished(t, phone)
 			eventually(t, "phone advertises decision status support", func() bool {
 				features, err := w.alice.relayFeatures(tctx(t))
 				if err != nil {

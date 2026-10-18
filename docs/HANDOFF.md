@@ -362,6 +362,18 @@ unproven; its failure-only diagnostics now include every device's publication
 and carrier custody/upload boundary. This Linux pass is not native-Windows
 qualification. The full normal-push CI run remains the qualification gate.
 
+The full `9b4d1211` run then passed all 19 race jobs, all six native Windows
+client partitions, native Windows, the three desktop builds and the container
+journey; native macOS and Linux still failed. The remaining fixture corrections
+wait for the actual phone daemon's signed capability record before stopping it
+(not its older linking session), and stop unrelated daemons and finish queued
+posting before testing local unread-count snapshots. No authority, snapshot
+conflict, scope/count or durable Stop assertion is relaxed. The focused two-CPU
+race check passes all ten parents without skips, including both reopened Stop
+states, actual process cancellation and stale-snapshot attention guards;
+`go vet ./...` passes. Full normal-push CI on the corrected commit is still
+required; these fixture changes are not a new production-policy exception.
+
 Witnessed admission retains full current-group validation, then selects its
 signed historical graph without rereading today's unused PID ledger. A
 self-contained witnessed request or output no longer recursively prepares

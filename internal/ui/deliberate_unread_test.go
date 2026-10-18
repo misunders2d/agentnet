@@ -22,7 +22,11 @@ func TestComicVisibleUnreadRows(t *testing.T) {
 }
 
 func TestLiveUnreadScopeCounts(t *testing.T) {
-	alice, _, _, conv, _, _ := liveGuestWorld(t)
+	alice, _, _, conv, _, stops := liveGuestWorld(t)
+	// These are local projection counts, not a concurrent receipt journey.
+	for _, stop := range stops {
+		stop()
+	}
 	live := NewLive(alice)
 	a, b := protocol.NewID(), protocol.NewID()
 	ids := map[string][]string{}
@@ -32,6 +36,10 @@ func TestLiveUnreadScopeCounts(t *testing.T) {
 			t.Fatal(err)
 		}
 		ids[topic] = append(ids[topic], sent.ID)
+	}
+	// Finish the independent queued sender before taking attention snapshots.
+	if err := alice.FlushOutbox(t.Context()); err != nil {
+		t.Fatal(err)
 	}
 	for _, selected := range ids {
 		if err := alice.MarkUnread(selected[0], selected); err != nil {
