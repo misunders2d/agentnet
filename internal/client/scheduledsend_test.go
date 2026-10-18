@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/lockfile"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
@@ -291,6 +292,54 @@ func TestScheduledSendMissingAndTamperedFiles(t *testing.T) {
 		}
 	}
 	assertOnlyFiles(t, filepath.Join(a.home, "opened"))
+}
+
+func TestScheduledSendNowOwnsDispatchBeforeWake(t *testing.T) {
+	w, conv := scheduledWorld(t)
+	// A separate local API process has its own store callback, independent of
+	// the stopped daemon's remaining background activity.
+	a, err := Open(w.alice.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	path, _ := writeFile(t, t.TempDir(), "file.bin", 400)
+	in := futureSchedule(conv)
+	in.Files = []OutgoingFile{{Path: path}}
+	s, err := a.ScheduleSend(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(a.keptPath(s.Files[0].SHA256)); err != nil {
+		t.Fatal(err)
+	}
+	changed := a.store.onChange
+	woke := false
+	a.store.onChange = func() {
+		changed()
+		if woke {
+			return
+		}
+		woke = true
+		// Deterministically let another dispatcher take a just-due schedule
+		// if the manual caller has not yet acquired its cross-process lock.
+		release, e := lockfile.Acquire(filepath.Join(a.home, "scheduled-send.lock"))
+		if errors.Is(e, lockfile.ErrLocked) {
+			return
+		}
+		if e != nil {
+			t.Fatal(e)
+		}
+		release()
+		if _, e := a.dispatchScheduled(tctx(t), s.ID); e == nil {
+			t.Fatal("competing dispatcher did not reject the missing attachment")
+		}
+	}
+	result, err := a.SendScheduledNow(tctx(t), s.ID, s.Rev)
+	a.store.onChange = changed
+	if !woke || err == nil || result.State != ScheduledNeedsReview || scheduleCopies(t, a, s) != 0 {
+		t.Fatal("manual dispatch lost the attempt's rejection", result, err, woke)
+	}
 }
 
 // Exercise the real neutral transaction hook: failures after it must also roll

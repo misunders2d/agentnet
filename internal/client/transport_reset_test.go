@@ -139,8 +139,12 @@ func TestHubConnectionsResetHTTP2Route(t *testing.T) {
 		t.Fatal("old generation reset healthy route")
 	}
 	c.timeout = 100 * time.Millisecond
-	// Force the request's owned deadline, not the header watchdog.
-	tr.ResponseHeaderTimeout = 0
+	// Force owned deadlines on a separately configured transport: HTTP/2
+	// still reads the original transport while its stream goroutines exit.
+	ownedTransport := tr.Clone()
+	ownedTransport.ResponseHeaderTimeout = 0
+	c.http.Transport = ownedTransport
+	dialsBeforeOwned := dials.Load()
 	var timeout net.Error
 	if err := c.doBytes(ctx, "GET", "/headers", nil, nil); !errors.Is(err, context.DeadlineExceeded) || !errors.As(err, &timeout) || !timeout.Timeout() {
 		t.Fatalf("owned header deadline: %v", err)
@@ -151,7 +155,7 @@ func TestHubConnectionsResetHTTP2Route(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if dials.Load() != 3 {
+	if dials.Load() != dialsBeforeOwned+2 {
 		t.Fatal("owned header timeout did not reset route")
 	}
 	var out map[string]any
@@ -164,7 +168,7 @@ func TestHubConnectionsResetHTTP2Route(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if dials.Load() != 4 {
+	if dials.Load() != dialsBeforeOwned+3 {
 		t.Fatal("body timeout did not reset route")
 	}
 	var sink strings.Builder
@@ -177,7 +181,7 @@ func TestHubConnectionsResetHTTP2Route(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if dials.Load() != 5 {
+	if dials.Load() != dialsBeforeOwned+4 {
 		t.Fatal("range timeout did not reset route")
 	}
 	a := &Agent{home: t.TempDir(), hub: c}
@@ -190,7 +194,7 @@ func TestHubConnectionsResetHTTP2Route(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if dials.Load() != 6 {
+	if dials.Load() != dialsBeforeOwned+5 {
 		t.Fatal("picture timeout did not reset route")
 	}
 

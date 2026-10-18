@@ -238,6 +238,17 @@ func TestDeletedConversationNeverComesBack(t *testing.T) {
 	phone, awaited, _ := linkPhone(t, w.alice, "phone")
 	req := pendingLink(t, w.alice)
 	stopAlice()
+	// Queued sends also have an independent background poster. Closing drains
+	// it, so no earlier wake can hand over the replay during reader setup.
+	if err := w.alice.Close(); err != nil {
+		t.Fatal(err)
+	}
+	alice, err := Open(w.alice.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.alice = alice
+	t.Cleanup(func() { w.alice.Close() })
 	if err := w.alice.DecideLink(tctx(t), req.ID, true); err != nil {
 		t.Fatal(err)
 	}

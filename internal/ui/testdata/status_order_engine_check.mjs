@@ -16,6 +16,8 @@ const fetch = async url => {
 async function device(address) {
   const e = new Engine({ store: memoryStore(), base: 'https://synthetic.invalid', fetch });
   e.keys = await wire.newKeys(); e.address = address; e.pub = await wire.publicEntry(e.keys, address); e.fp = await wire.fingerprint(e.pub);
+  // Held replay checks the persisted recipient identity, as a loaded browser does.
+  await e.store.write([{ s: 'kv', k: 'identity', v: { keys: e.keys, address, fingerprint: e.fp } }]);
   e.changed = () => {}; e.runHistory = async () => {}; e.discloseHumanAudience = () => {}; e.recoverHumanExcerpts = async () => {}; e.flushReceipts = async () => {};
   pubs.set(address, e.pub); devices.push(e); return e;
 }
@@ -116,7 +118,7 @@ const blocked = await request(), blockedID = await receive(await status(blocked)
 let release; const gate = new Promise(resolve => { release = resolve; });
 const admitInner = phone.admitInner.bind(phone); let reached;
 const started = new Promise(resolve => { reached = resolve; });
-phone.admitInner = async (data, env) => { if (env.id === blockedID) { reached(); await gate; } return admitInner(data, env); };
+phone.admitInner = async (data, env, admission) => { if (env.id === blockedID) { reached(); await gate; } return admitInner(data, env, admission); };
 await receive(blocked.raw); await started;
 const fresh = await from(peer, { body: 'Fresh after original' }), freshID = await receive(fresh);
 check((await phone.store.get('inbox', freshID))?.body === 'Fresh after original', 'held proof retry never blocks later foreground turn');
@@ -130,7 +132,7 @@ const lateID = await receive(await status(late, host, undefined, { id: '0'.repea
 const laterID = await receive(await status(laterBlock, host, undefined, { id: 'f'.repeat(31) + 'e' }));
 let releasePass, enteredPass;
 const passGate = new Promise(resolve => { releasePass = resolve; }), passEntered = new Promise(resolve => { enteredPass = resolve; });
-phone.admitInner = async (data, env) => { if (env.id === laterID) { enteredPass(); await passGate; } return admitInner(data, env); };
+phone.admitInner = async (data, env, admission) => { if (env.id === laterID) { enteredPass(); await passGate; } return admitInner(data, env, admission); };
 const runningPass = phone.retryHeld(); await passEntered;
 check(!await phone.store.get('inbox', lateID), 'running pass inspected missing earlier status before original');
 await receive(late.raw);
@@ -145,7 +147,6 @@ const legacyRaw = await status(legacyOriginal), legacyEnv = wire.parseEnvelope(l
 await phone.hold(legacyEnv, legacyRaw, 'proof_pending', 'no request of this device that own/host executes is here (yet)');
 const untouched = await status(original, outsider), untouchedEnv = wire.parseEnvelope(untouched);
 await phone.hold(untouchedEnv, untouched, 'invalid', 'known wrong executor');
-await phone.store.write([{ s: 'kv', k: 'identity', v: { keys: phone.keys, address: phone.address, fingerprint: phone.fp } }]);
 const oldEngine = phone;
 phone = new Engine({ store: oldEngine.store, base: oldEngine.base, fetch });
 for (const field of ['pub', 'roster', 'changed', 'runHistory', 'discloseHumanAudience', 'recoverHumanExcerpts', 'flushReceipts']) phone[field] = oldEngine[field];

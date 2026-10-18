@@ -97,7 +97,8 @@ func TestP6FixLegacyDuplicatesRemoveTogether(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	db, err := sql.Open("sqlite", filepath.Join(ah, "agent.db"))
+	// Match the client store's lock-wait policy for this second writable connection.
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(ah, "agent.db")+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		t.Fatal(err)
 	}

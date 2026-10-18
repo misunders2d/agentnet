@@ -34,6 +34,8 @@ This record starts with v0.8.1; earlier releases remain on the
   cleanup is possible; pending work keeps its transactional authority checks.
 - Keep a browser's held-message retry moving past unpublished senders by sharing
   only missing-person evidence within one pass; fresh evidence starts a new pass.
+- Serialize Send now before making a schedule due, so the daemon cannot consume
+  the manual attempt and hide its audience or attachment rejection.
 - Avoid per-message continuation lookups for ordinary chat rows and repeated
   activity derivation. Reuse the chat's existing topic assignments.
 - Keep phone dismissal feedback pending until the exact participation is

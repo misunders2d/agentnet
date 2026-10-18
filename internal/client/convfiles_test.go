@@ -159,25 +159,29 @@ func TestDMFilesRefused(t *testing.T) {
 // A file whose ciphertext was damaged is refused, whether opened or saved,
 // and nothing unchecked is handed over.
 func TestDMFileDamagedRefused(t *testing.T) {
-	w, conv, _ := dmFiles(t)
+	w, conv, stopBob := dmFiles(t)
 	path, _ := writeFile(t, t.TempDir(), "x.bin", 70000)
 	sent, err := w.alice.SendConv(tctx(t), conv, ConvOutgoing{Body: "x", Files: []OutgoingFile{{Path: path}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "bob to hold it", func() bool { return inboxCount(t, w.bob, `id = ?`, sent.ID) == 1 })
+	// Fetch-fault fixtures own the cache only after the daemon has stopped;
+	// otherwise its prefetch can read the blob while it is being damaged.
+	stopBob()
+	if err := os.RemoveAll(filepath.Join(w.bob.home, "downloads")); err != nil {
+		t.Fatal(err)
+	}
 	blobID := convMsgByID(t, w.bob, conv, sent.ID).Attachments[0].BlobID
 	blob := filepath.Join(w.hub.Dir, "blobs", blobID+".blob")
-	data, _ := os.ReadFile(blob)
+	data, err := os.ReadFile(blob)
+	if err != nil {
+		t.Fatal(err)
+	}
 	data[len(data)/2] ^= 1
-	os.WriteFile(blob, data, 0o600)
-	// Bob keeps conversation files once fetched: drop his copy, so the
-	// damaged one is what the Hub serves him.
-	eventually(t, "bob's fetch to settle", func() bool {
-		_, err := os.Stat(w.bob.downloadPath(blobID) + ".part")
-		return os.IsNotExist(err)
-	})
-	os.Remove(w.bob.downloadPath(blobID))
+	if err := os.WriteFile(blob, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if _, _, err := w.bob.OpenAttachment(tctx(t), sent.ID, 0); err == nil || !strings.Contains(err.Error(), "signed digest") {
 		t.Fatalf("damaged file opened: %v", err)
 	}

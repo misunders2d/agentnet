@@ -133,6 +133,13 @@ func testOwnInvitationUpdates(t *testing.T, w *world, phone *Agent, inv GroupInv
 	}
 	// Supports requires every live session. Use the shared fixture publisher,
 	// which waits for startup and updates each listed session, not slot zero.
+	// Normal delivery resolves the exact recipient before its authority gate.
+	// This direct gate test must establish that pin too, independently of any
+	// incidental traffic from the phone's running daemon.
+	key, err := again.sendKey(tctx(t), phone.Address)
+	if err != nil || key.Fingerprint() != phone.Self().Fingerprint() {
+		t.Fatal("invitation reader key", key.Fingerprint(), err)
+	}
 	signCapsAfter(t, phone, []string{protocol.CapEnv2, protocol.CapPerson, protocol.CapRoom})
 	if handled, allowed, err := again.mayDeliverInvitationSync(latest); err != nil || !handled || allowed {
 		t.Fatalf("old reader allowed %v %v %v", handled, allowed, err)

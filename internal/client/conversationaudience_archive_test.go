@@ -24,6 +24,9 @@ func TestConversationAudienceLiveDelivery(t *testing.T) {
 	stage := func(body string) (ConvSent, envelope.Envelope, string) {
 		t.Helper()
 		signCapsAfter(t, host, without(ownCaps, protocol.CapConversationAudience))
+		eventually(t, "sender to observe the older live-audience reader", func() bool {
+			return errors.Is(w.alice.requireParticipationCaps(tctx(t), host.Self(), protocol.CapConversationAudience), errAgentIdentityUnsupported)
+		})
 		sent, e := w.alice.SendConv(tctx(t), conv, ConvOutgoing{Body: body})
 		if e != nil {
 			t.Fatal(e)
@@ -42,6 +45,9 @@ func TestConversationAudienceLiveDelivery(t *testing.T) {
 	resume := func(env envelope.Envelope) SendResult {
 		t.Helper()
 		addCapSuccessor(t, host, protocol.CapConversationAudience)
+		eventually(t, "sender to observe signed live-audience reader support", func() bool {
+			return w.alice.requireParticipationCaps(tctx(t), host.Self(), protocol.CapConversationAudience) == nil
+		})
 		features, e := w.alice.relayFeatures(tctx(t))
 		if e != nil {
 			t.Fatal(e)

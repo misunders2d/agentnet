@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/client"
+	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/identity"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
@@ -301,7 +302,13 @@ func groupGovernanceFailureDetails(t *testing.T, c *cli, addr, cert, conv string
 	tr := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: pool}, Proxy: nil}
 	defer tr.CloseIdleConnections()
 	h := &http.Client{Transport: tr, Timeout: 2 * time.Second}
-	for _, home := range []string{"alice", "phone"} {
+	for _, fixture := range []struct{ home, address string }{
+		{"alice", "admin/laptop"},
+		{"bob", "bob/desk"},
+		{"carol", "carol/desk"},
+		{"phone", "admin/phone"},
+	} {
+		home, address := fixture.home, fixture.address
 		path := filepath.Join(c.dir, home, "agent.db")
 		for _, line := range groupHistoryStateSummary(path, conv) {
 			t.Logf("governance %s %s", home, line)
@@ -318,6 +325,7 @@ func groupGovernanceFailureDetails(t *testing.T, c *cli, addr, cert, conv string
 			defer cancel()
 			for _, q := range []struct{ label, sql string }{
 				{"carrier", `SELECT sub||':'||state||':cap='||coalesce(required_cap,'')||':error='||CASE WHEN coalesce(error,'')='' THEN 'none' WHEN error LIKE 'peer_update:%' THEN 'peer-update' WHEN error LIKE 'server_update:%' OR error LIKE 'server_unavailable:%' THEN 'server' ELSE 'present' END,count(*) FROM outbox WHERE conv=? AND sub IN ('group-proof','group-context') GROUP BY 1 ORDER BY 1 LIMIT 20`},
+				{"carrier-progress", `SELECT sub||':seq='||coalesce(json_extract(body,'$.seq'),-1)||':to='||CASE recipient WHEN 'admin/laptop' THEN 'alice' WHEN 'admin/phone' THEN 'phone' WHEN 'bob/desk' THEN 'bob' WHEN 'carol/desk' THEN 'carol' ELSE 'other' END||':state='||state||':created='||created_at||':error='||CASE WHEN coalesce(error,'')='' THEN 'none' WHEN error LIKE 'peer_update:%' THEN 'peer-update' WHEN error LIKE 'server_update:%' OR error LIKE 'server_unavailable:%' THEN 'server' ELSE 'present' END||':upload='||coalesce((SELECT group_concat(u.state) FROM uploads u WHERE u.message_id=outbox.id),'none'),count(*) FROM outbox WHERE conv=? AND sub IN ('group-proof','group-context') AND state NOT IN ('delivered','quarantined','expired') GROUP BY 1 ORDER BY 1 LIMIT 20`},
 				{"quarantine-all", `SELECT reason||':code='||detail_code,count(*) FROM quarantine WHERE ?<>'' GROUP BY reason,detail_code ORDER BY reason,detail_code LIMIT 20`},
 			} {
 				rows, err := db.QueryContext(ctx, q.sql, conv)
@@ -349,10 +357,7 @@ func groupGovernanceFailureDetails(t *testing.T, c *cli, addr, cert, conv string
 				t.Logf("governance %s profile unavailable", home)
 				return
 			}
-			address := "admin/phone"
-			if home == "alice" {
-				address = "admin/laptop"
-			}
+			groupGovernanceCarrierCustody(t, path, h, addr, home, address, id, conv)
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
 			req, err := http.NewRequestWithContext(ctx, "GET", "https://"+addr+"/v1/agents/"+address+"/profile", nil)
@@ -383,5 +388,75 @@ func groupGovernanceFailureDetails(t *testing.T, c *cli, addr, cert, conv string
 				}
 			}
 		}()
+	}
+}
+
+// Read-only custody boundaries distinguish an unattempted carrier, an uploaded
+// blob whose envelope has not reached the Hub, and an acknowledged envelope
+// still awaiting local admission. Nothing here wakes or repairs either daemon.
+func groupGovernanceCarrierCustody(t *testing.T, path string, h *http.Client, addr, home, address string, id *identity.Identity, conv string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path)+"?mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(100)")
+	if err != nil {
+		t.Logf("governance %s carrier custody unavailable", home)
+		return
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	rows, err := db.QueryContext(ctx, `SELECT envelope,sub,json_extract(body,'$.seq'),recipient FROM outbox WHERE conv=? AND sub IN ('group-proof','group-context') AND state IN ('queued','custody') ORDER BY rowid DESC LIMIT 4`, conv)
+	if err != nil {
+		t.Logf("governance %s carrier custody unavailable", home)
+		return
+	}
+	type carrier struct {
+		env envelope.Envelope
+		sub string
+		seq int64
+		to  string
+	}
+	var carriers []carrier
+	for rows.Next() {
+		var raw []byte
+		var c carrier
+		if err = rows.Scan(&raw, &c.sub, &c.seq, &c.to); err != nil {
+			break
+		}
+		if err = json.Unmarshal(raw, &c.env); err != nil {
+			break
+		}
+		carriers = append(carriers, c)
+	}
+	if err != nil || rows.Err() != nil {
+		t.Logf("governance %s carrier custody metadata incomplete", home)
+	}
+	rows.Close()
+	get := func(route string, value any) int {
+		req, err := http.NewRequestWithContext(ctx, "GET", "https://"+addr+route, nil)
+		if err != nil {
+			return 0
+		}
+		protocol.SignRequest(req, address, id.Sign, nil)
+		res, err := h.Do(req)
+		if err != nil {
+			return 0
+		}
+		defer res.Body.Close()
+		if res.StatusCode == http.StatusOK && json.NewDecoder(res.Body).Decode(value) != nil {
+			return 0
+		}
+		return res.StatusCode
+	}
+	homes := map[string]string{"admin/laptop": "alice", "admin/phone": "phone", "bob/desk": "bob", "carol/desk": "carol"}
+	for _, c := range carriers {
+		var receipt protocol.Receipt
+		status := get("/v1/messages/"+c.env.ID, &receipt)
+		t.Logf("governance %s carrier custody %s seq=%d to=%s http=%d custody=%t delivered=%t", home, c.sub, c.seq, homes[c.to], status, receipt.State == protocol.StateCustody, receipt.State == protocol.StateDelivered)
+		for _, blob := range c.env.Blobs {
+			var progress protocol.BlobStatus
+			status := get("/v1/blobs/"+blob.ID, &progress)
+			t.Logf("governance %s carrier upload %s seq=%d to=%s http=%d stored=%t received=%d size=%d", home, c.sub, c.seq, homes[c.to], status, progress.State == protocol.BlobStored, progress.Received, progress.Size)
+		}
 	}
 }

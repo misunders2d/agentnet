@@ -337,10 +337,30 @@ import variants pass (62.08 s); an empty final page need not refresh a roster.
 These observations identify a concrete blocker, not every possible cause of
 the original physical-phone incident.
 
-Final-source real CLI governance/offline-leave, selected-history/file,
-linked-device-history and task-grant journeys pass together (10.531 s);
-`go vet ./...` passes. Qualification is the full normal-push CI run for this
-commit, not these local selections.
+The subsequent full normal-push run for `fc640655` was not green: seven jobs
+failed across ten parent scenarios. The follow-up repairs include a real
+scheduled-send race: Send now now owns the existing dispatcher lock before
+making a schedule due, preserving the manual caller's rejection even if the
+daemon wakes immediately. A deterministic competing-dispatch regression retains
+the missing-attachment rejection and verifies that no message copies commit.
+
+Fixture corrections preserve the original consumer assertions: persist browser
+identity before held replay and pass its admission context through fault gates;
+use the standard SQLite busy timeout for a second writer; observe signed reader
+capability changes at the sender; pin the exact reader before directly testing
+its delivery gate; quiesce background posting/prefetch before restart or
+ciphertext-damage setup. The HTTP/2 fault fixture configures a separate transport
+instead of changing one still read by its stream goroutines.
+
+The integrated two-CPU race selection passes all 35 parents without skips,
+including all repaired scenarios, scheduled-send boundaries, browser held retry
+and profile adversaries, transport recovery/caller isolation, and four actual
+CLI journeys. Package times are 88.710 s (client), 30.956 s (UI), and 27.947 s
+(CLI integration); governance/offline-leave itself passes in 16.02 s. All
+original bounds remain. The native-Windows governance failure's cause is still
+unproven; its failure-only diagnostics now include every device's publication
+and carrier custody/upload boundary. This Linux pass is not native-Windows
+qualification. The full normal-push CI run remains the qualification gate.
 
 Witnessed admission retains full current-group validation, then selects its
 signed historical graph without rereading today's unused PID ledger. A

@@ -2,6 +2,7 @@ package client
 
 import (
 	"encoding/json"
+	"errors"
 	"github.com/misunders2d/agentnet/internal/sqlitedb"
 	"path/filepath"
 	"strings"
@@ -115,6 +116,9 @@ func TestSendGroupOldPeerAndLinkedHistory(t *testing.T) {
 	p := p6Member(t, a, w.bob, packet.State.Conv)
 	// Remove only optional presentation support: all execution/room caps stay.
 	signCapsAfter(t, w.bob, without(ownCaps, protocol.CapSendGroup))
+	eventually(t, "sender to observe the older reader's signed sg1 absence", func() bool {
+		return errors.Is(a.requireParticipationCaps(tctx(t), w.bob.Self(), protocol.CapSendGroup), errAgentIdentityUnsupported)
+	})
 	group := protocol.NewID()
 	child := protocol.NewID()
 	sent, err := a.AskAgent(WithHumanSendGroup(WithQueuedSend(tctx(t), child), group), p.PID, envelope.KindQuestion, "one human send")
@@ -147,6 +151,9 @@ func TestSendGroupOldPeerAndLinkedHistory(t *testing.T) {
 		t.Fatalf("requests merged: %+v %v", sent2, err)
 	}
 	signCapsAfter(t, w.bob, ownCaps)
+	eventually(t, "sender to observe the new reader's signed sg1 support", func() bool {
+		return a.sendGroupSupported(tctx(t), w.bob.Self())
+	})
 	newSent, e := a.AskAgent(WithHumanSendGroup(WithQueuedSend(tctx(t), protocol.NewID()), group), p.PID, envelope.KindQuestion, "new reader request")
 	if e != nil {
 		t.Fatal(e)

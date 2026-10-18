@@ -484,6 +484,14 @@ func (a *Agent) CancelScheduledSend(id string, rev int64) (ScheduledSend, error)
 	return s, err
 }
 func (a *Agent) SendScheduledNow(ctx context.Context, id string, rev int64) (ScheduledSend, error) {
+	// Own the dispatch before making it due or waking the daemon. Otherwise
+	// another dispatcher can consume the attempt and its error before this
+	// caller reaches dispatchScheduled.
+	release, err := lockfile.Wait(filepath.Join(a.home, "scheduled-send.lock"))
+	if err != nil {
+		return ScheduledSend{}, err
+	}
+	defer release()
 	result, err := a.store.db.Exec(`UPDATE scheduled_sends SET state='pending',due_at=?,rev=rev+1,detail='',updated_at=? WHERE id=? AND rev=? AND state IN ('pending','needs_review')`, time.Now().UnixNano(), time.Now().UnixNano(), id, rev)
 	if err != nil {
 		return ScheduledSend{}, err
@@ -494,7 +502,7 @@ func (a *Agent) SendScheduledNow(ctx context.Context, id string, rev int64) (Sch
 	}
 	a.store.changed()
 	notifyDaemon(a.home)
-	return a.dispatchScheduled(ctx, id)
+	return a.dispatchScheduledLocked(ctx, id)
 }
 func scheduledWithin(current, approved ScheduledAudience) bool {
 	if current.AuthorPID != approved.AuthorPID {
@@ -576,6 +584,11 @@ func (a *Agent) dispatchScheduled(ctx context.Context, id string) (ScheduledSend
 		return ScheduledSend{}, err
 	}
 	defer release()
+	return a.dispatchScheduledLocked(ctx, id)
+}
+
+// dispatchScheduledLocked runs one attempt while the caller owns scheduled-send.lock.
+func (a *Agent) dispatchScheduledLocked(ctx context.Context, id string) (ScheduledSend, error) {
 	s, found, err := a.ScheduledSend(id)
 	if err != nil {
 		return s, err
