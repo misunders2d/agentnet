@@ -15,7 +15,8 @@ This record starts with v0.8.1; earlier releases remain on the
   does not block packing a mixed DM/group archive.
 - Recover witnessed requests and outputs from their signed historical graph
   without redundant live-ledger reads or obsolete standalone PID prerequisites.
-  Preserve current-device authority and exact reply/control dependencies.
+  Preserve current-group withdrawal/conflict fences, device authority and exact
+  reply/control dependencies.
 - Cache device profiles until the next member-list push or stream disconnect,
   avoiding repeated capability GETs during catch-up. Without a complete current
   member list every read is fresh; exact-key and handover checks are unchanged.

@@ -654,6 +654,30 @@ SELECT json_object('inbox',(SELECT count(*) FROM inbox WHERE id=(SELECT id FROM 
 			}
 		})
 	}
+	for _, mode := range []string{"pending-current-withdrawal", "conflicted-current-member"} {
+		t.Run(mode, func(t *testing.T) {
+			tx, err := phone.store.db.Begin()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback()
+			member, ok := current.State.Member(bob.info.Person)
+			if !ok {
+				t.Fatal("current host member missing")
+			}
+			if mode == "pending-current-withdrawal" {
+				_, err = tx.Exec(`INSERT INTO group_pending_withdrawals(conv,person,admission,record) VALUES(?,?,?,'{}')`, conv, member.Person, member.Admission.Hash())
+			} else {
+				_, err = tx.Exec(`UPDATE persons SET state=? WHERE person=?`, personConflict, member.Person)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = phone.groupParticipationHistoryCheck(tx, packet.Root, source.Self(), item); !errors.Is(err, ErrGroupContextPending) {
+				t.Fatalf("unresolved current group admitted witnessed history: %v", err)
+			}
+		})
+	}
 	t.Run("pending-original-author", func(t *testing.T) {
 		if _, err := phone.sendKey(tctx(t), w.bob.Address); err != nil {
 			t.Fatal(err)

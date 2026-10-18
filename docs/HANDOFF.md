@@ -235,19 +235,28 @@ not the earlier AwaitLink profile, before stopping it. The attention journey
 retries only the documented mutation-free snapshot conflict for the same exact
 selection; unexpected errors still fail and signed convergence remains required.
 
-Witnessed admission selects its verified historical graph directly instead of
-first building and discarding today's membership/ledger. A self-contained
-witnessed request or output no longer recursively prepares obsolete standalone
-PID events; exact original/PID binding and reply/control dependencies remain.
-The derived-history regression checks both that exemption and the mismatched
-original/PID/unwitnessed cases, retaining the real linked-phone and adversarial
-authority assertions.
+Witnessed admission retains full current-group validation, then selects its
+signed historical graph without rereading today's unused PID ledger. A
+self-contained witnessed request or output no longer recursively prepares
+obsolete standalone PID events; exact original/PID binding and reply/control
+dependencies remain. The derived-history regression checks both that exemption
+and the mismatched original/PID/unwitnessed cases, retaining the real linked-phone
+and adversarial authority assertions.
 
-The five focused Linux race scenarios pass without skips (87.338 s), including
-the previously failing derived-history journey (70.05 s). Five other witnessed
-history/host-readmission boundary scenarios pass with race checking (143.809 s).
-The real CLI selected-history/file and linked-device-history journeys pass
-(4.189 s), as does `go vet ./...`. Workflow actionlint and shell syntax pass.
+A follow-up adversarial check caught a dropped current-group fence in the first
+optimization: another current member's pending withdrawal was accepted. The
+correction restores normal membership validation before historical resolution.
+The added withdrawal/conflict controls fail on `124b786b` (4.772 s) and pass
+after the correction (5.584 s native). The actual `client-8` race partition
+passes in 525.339 s: 74 parent passes and one explicit opt-in Codex skip,
+including the derived witness (82.65 s) and both new rejection controls.
+The current-source CLI selected-history/file and linked-device-history journeys
+pass (6.595 s), as does `go vet ./...`.
+
+Additional focused Linux race evidence predating this guard correction covers
+five scenarios (87.338 s) and five other witnessed history/host-readmission
+boundary scenarios (143.809 s), without skips. Workflow actionlint and shell
+syntax pass.
 The compiled Linux list's 1,357 parents form six complete, disjoint partitions;
 actual Windows lists and execution remain the native CI gate. These focused
 passes are not a replacement for the full normal-push CI result or release gates.
