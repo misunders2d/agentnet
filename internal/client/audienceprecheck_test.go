@@ -128,6 +128,7 @@ func TestTopicOrganizationOlderOrSuspendedMemberDeviceStopsNobody(t *testing.T) 
 	}
 
 	signCapsAfter(t, carol, ownCaps)
+	listMembers(t, w.alice, nil, everyone...) // stopped sender receives the capability update
 	releaseTo(t, w.alice)
 	for _, lid := range []string{first.LID, second.LID} {
 		eventually(t, "updated member sees the move", func() bool { return moved(carol, lid) })

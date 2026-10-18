@@ -174,6 +174,10 @@ func (a *Agent) readerCheck(ctx context.Context, to string, key identity.Public,
 	if required == "" {
 		return nil
 	}
+	var snapshot readerCapsSnapshot
+	require := func(cap string) error {
+		return a.requireParticipationCapsSnapshot(ctx, key, cap, &snapshot)
+	}
 	capWait := func(cap string) error {
 		features, err := a.relayFeatures(ctx)
 		if err != nil {
@@ -186,40 +190,40 @@ func (a *Agent) readerCheck(ctx context.Context, to string, key identity.Public,
 	}
 	var err error
 	if n.sharedTitleCap && required != protocol.CapSharedTopicTitle {
-		if err = a.requireParticipationCaps(ctx, key, protocol.CapSharedTopicTitle); err != nil {
+		if err = require(protocol.CapSharedTopicTitle); err != nil {
 			return err
 		}
 	}
 	if n.guestAgent && required != protocol.CapGuestAgent {
-		if err = a.requireParticipationCaps(ctx, key, protocol.CapGuestAgent); err != nil {
+		if err = require(protocol.CapGuestAgent); err != nil {
 			return err
 		}
 	}
 	if n.conversationAudienceCap {
-		if err = a.requireParticipationCaps(ctx, key, protocol.CapConversationAudience); err != nil {
+		if err = require(protocol.CapConversationAudience); err != nil {
 			return err
 		}
-		if err = a.requireParticipationCaps(ctx, key, protocol.CapHumanParticipation); err != nil {
+		if err = require(protocol.CapHumanParticipation); err != nil {
 			return err
 		}
 	}
 	if n.snapshotCap {
 		if n.sub == envelope.SubGroupContext || n.sub == envelope.SubGroupProof {
-			if err = a.requireParticipationCaps(ctx, key, protocol.CapGroup); err != nil {
+			if err = require(protocol.CapGroup); err != nil {
 				return err
 			}
 		}
-		if err = a.requireParticipationCaps(ctx, key, protocol.CapTopicContext); err != nil {
+		if err = require(protocol.CapTopicContext); err != nil {
 			return err
 		}
 	}
 	if n.mentionCap {
-		if err = a.requireParticipationCaps(ctx, key, protocol.CapMentionReaction); err != nil {
+		if err = require(protocol.CapMentionReaction); err != nil {
 			return err
 		}
 	}
 	if n.agentOrganizationCap {
-		if err = a.requireParticipationCaps(ctx, key, protocol.CapAgentOrganization); err != nil {
+		if err = require(protocol.CapAgentOrganization); err != nil {
 			return err
 		}
 	}
@@ -231,10 +235,10 @@ func (a *Agent) readerCheck(ctx context.Context, to string, key identity.Public,
 	if required == protocol.CapControl {
 		err = capWait(protocol.CapControl)
 	} else {
-		err = a.requireParticipationCaps(ctx, key, required)
+		err = require(required)
 	}
 	if err == nil && n.sub == envelope.SubHistoryArchive && required != protocol.CapHistoryArchive {
-		err = a.requireParticipationCaps(ctx, key, protocol.CapHistoryArchive)
+		err = require(protocol.CapHistoryArchive)
 	}
 	// Captured human controls retain their participation requirement,
 	// and also need the reader's control capability before handover.
@@ -242,43 +246,43 @@ func (a *Agent) readerCheck(ctx context.Context, to string, key identity.Public,
 		err = capWait(protocol.CapControl)
 	}
 	if err == nil && n.organizationCap && required != protocol.CapTopicOrganization {
-		err = a.requireParticipationCaps(ctx, key, protocol.CapTopicOrganization)
+		err = require(protocol.CapTopicOrganization)
 	}
 	if err == nil && n.steer && required != protocol.CapRequestSteer {
-		err = a.requireParticipationCaps(ctx, key, protocol.CapRequestSteer)
+		err = require(protocol.CapRequestSteer)
 	}
 	if err == nil && n.followup && required != protocol.CapRequestFollowup && required != protocol.CapRequestSteer {
-		err = a.requireParticipationCaps(ctx, key, protocol.CapRequestFollowup)
+		err = require(protocol.CapRequestFollowup)
 	}
 	if err == nil && n.proposal && required != protocol.CapOwnSyncV3 {
-		err = a.requireParticipationCaps(ctx, key, protocol.CapOwnSyncV3)
+		err = require(protocol.CapOwnSyncV3)
 	}
 	if err == nil && n.receiverCap && required != protocol.CapReplyReceiver {
-		err = a.requireParticipationCaps(ctx, key, protocol.CapReplyReceiver)
+		err = require(protocol.CapReplyReceiver)
 	}
 	// Progress needs prg1 and, besides, whatever its author's identity or
 	// participation already needs: never one without the other.
 	if err == nil && n.progress && required != protocol.CapProgress {
-		err = a.requireParticipationCaps(ctx, key, protocol.CapProgress)
+		err = require(protocol.CapProgress)
 	}
 	if err == nil && n.progress && required == protocol.CapProgress && n.agentID != "" {
-		err = a.requireParticipationCaps(ctx, key, protocol.CapAgentIdentity)
+		err = require(protocol.CapAgentIdentity)
 	}
 	if err == nil && (required == protocol.CapAgentReaction || required == protocol.CapMentionReaction) { // and what the assistant's own reply needs there
 		err = a.assistantReactionCaps(ctx, key, n.conv, n.pid, n.agentID)
 	}
 	if err == nil && (required == protocol.CapAgentReaction || required == protocol.CapMentionReaction) && n.humanRaw != "" { // to a captured audience: as a human-audience turn
-		err = a.requireParticipationCaps(ctx, key, protocol.CapHumanParticipation)
+		err = require(protocol.CapHumanParticipation)
 	}
 	if err == nil && n.groupedWire {
-		err = a.requireParticipationCaps(ctx, key, protocol.CapSendGroup)
+		err = require(protocol.CapSendGroup)
 	}
 	if err == nil && n.topicScoped {
-		err = a.requireParticipationCaps(ctx, key, protocol.CapTopicParticipation)
+		err = require(protocol.CapTopicParticipation)
 	}
 	// A room shape needs rm1 besides its primary requirement (ROOM_V1 §2.5).
 	if err == nil && n.room && required != protocol.CapRoom {
-		err = a.requireParticipationCaps(ctx, key, protocol.CapRoom)
+		err = require(protocol.CapRoom)
 	}
 	control := n.v == envelope.Version3 && groupControlSub(n.sub)
 	status := n.sub == envelope.SubStatus
@@ -289,16 +293,16 @@ func (a *Agent) readerCheck(ctx context.Context, to string, key identity.Public,
 		pid = n.item.PID
 	}
 	if err == nil && n.historical && n.item.GroupHistory != nil {
-		err = a.requireParticipationCaps(ctx, key, protocol.CapOwnSyncV2)
+		err = require(protocol.CapOwnSyncV2)
 	}
 	if err == nil && required == protocol.CapGroup && control {
 		err = a.requireGroupControlCapability(ctx, key)
 	}
 	if err == nil && required == protocol.CapGroup && status {
-		err = a.requireParticipationCaps(ctx, key, protocol.CapHeadless)
+		err = require(protocol.CapHeadless)
 	}
 	if err == nil && required == protocol.CapGroup && n.historical && n.item.PID != "" {
-		err = a.requireParticipationCaps(ctx, key, protocol.CapAgentIdentity)
+		err = require(protocol.CapAgentIdentity)
 	}
 	if err == nil && required == protocol.CapGroup && pid != "" {
 		cap := protocol.CapAgentIdentity
@@ -307,14 +311,14 @@ func (a *Agent) readerCheck(ctx context.Context, to string, key identity.Public,
 		} else if p, e := a.participation(n.conv, pid); e == nil && p.External && (p.Host.Address == to || n.historical && n.item.PID != "") {
 			cap = protocol.CapExternalParticipation
 		}
-		err = a.requireParticipationCaps(ctx, key, cap)
+		err = require(cap)
 	}
 	// An assistant's reaction as history needs agr1 and what that
 	// assistant's own output needs there, besides the copy's own
 	// participation or group requirement: never to an older reader.
 	if err == nil && n.helper {
 		if required != protocol.CapAgentReaction {
-			err = a.requireParticipationCaps(ctx, key, protocol.CapAgentReaction)
+			err = require(protocol.CapAgentReaction)
 		}
 		if err == nil {
 			err = a.assistantReactionCaps(ctx, key, n.conv, n.item.PID, n.item.AgentID)

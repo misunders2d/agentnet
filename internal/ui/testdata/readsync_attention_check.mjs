@@ -264,14 +264,23 @@ const winnerState=a.fp>p.fp?'read':'unread',am=await a.store.get('kv',a.attentio
  check(!failure&&attempts===4&&outcome.registerUnchanged,'attention CAS stops after four conflicts, defers without error and leaves its register byte-identical');
  check(outcome.markedLegacyRead&&outcome.ordinaryLegacyRead&&outcome.ordinaryLegacyMark,'mixed contention still acknowledges both inbox rows and creates the ordinary legacy read fact');
 }
-// Existing per-recipient history window blocks production until capacity returns.
+// Cold pressure cannot consume state capacity; state pressure remains bounded
+// and resumes the same pending attention generation after restart.
 {
- const blockedRef={conv,fingerprint:b.fp,lid:wire.newID()},key=a.attentionKey(a.me.person,blockedRef),fill=Array.from({length:50},()=>{const id=wire.newID();return {s:'outbox',k:id,v:{id,to:p.address,recipient_fp:p.fp,sub:'history',aside:true,state:'custody'}};});
+ const reservedRef={conv,fingerprint:b.fp,lid:wire.newID()},reservedKey=a.attentionKey(a.me.person,reservedRef),cold=Array.from({length:50},()=>{const id=wire.newID();return {s:'outbox',k:id,v:{id,to:p.address,recipient_fp:p.fp,sub:'history',aside:true,state:'custody'}};});
+ await a.store.write([...cold,{s:'kv',k:reservedKey,v:{key:reservedKey,owner:a.me.person,ref:reservedRef,state:'unread',rev:1,writer:a.fp}}]);
+ await a.syncReadMarks();
+ const reserved=(await copies(a)).find(r=>wire.parseReadSync(r.body).marks.some(m=>m.lid===reservedRef.lid));
+ check(reserved,'full cold window leaves capacity for the exact attention generation');
+ await receive(reserved.envelope,p);
+ check((await p.store.get('kv',p.attentionKey(p.me.person,reservedRef)))?.state==='unread','quiet encrypted attention converges while cold history stays in custody');
+ await acknowledge(a,reserved);
+ const blockedRef={conv,fingerprint:b.fp,lid:wire.newID()},key=a.attentionKey(a.me.person,blockedRef),fill=Array.from({length:50},()=>{const id=wire.newID();return {s:'outbox',k:id,v:{id,to:p.address,recipient_fp:p.fp,sub:wire.SubRootSync,aside:true,state:'custody'}};});
  await a.store.write([...fill,{s:'kv',k:key,v:{key,owner:a.me.person,ref:blockedRef,state:'unread',rev:1,writer:a.fp}}]);const before=(await copies(a)).length;
- await a.syncReadMarks();check((await copies(a)).length===before,'full history window admits no new attention carrier');
- const restarted=new Engine({store:a.store,base:a.base,fetch});Object.assign(restarted,{keys:a.keys,address:a.address,pub:a.pub,fp:a.fp,me:a.me,connected:false});await restarted.syncReadMarks();check((await copies(a)).length===before,'restart respects closed recipient window');
- await a.store.write(fill.map(o=>({...o,v:{...o.v,state:'delivered'}})));await restarted.syncReadMarks();
- const resumed=(await copies(a)).find(r=>wire.parseReadSync(r.body).marks.some(m=>m.lid===blockedRef.lid));check(resumed,'existing recovery resumes pending exact mark after capacity');await restarted.syncReadMarks();check((await copies(a)).length===before+1,'window recovery never repeats generation');
+ await a.syncReadMarks();check((await copies(a)).length===before,'full state window defers new attention without growing the queue');
+ const restarted=new Engine({store:a.store,base:a.base,fetch});Object.assign(restarted,{keys:a.keys,address:a.address,pub:a.pub,fp:a.fp,me:a.me,connected:false});await restarted.syncReadMarks();check((await copies(a)).length===before,'restart preserves state backpressure and the pending generation');
+ await a.store.write([...fill,...cold].map(o=>({...o,v:{...o.v,state:'delivered'}})));await restarted.syncReadMarks();
+ const resumed=(await copies(a)).find(r=>wire.parseReadSync(r.body).marks.some(m=>m.lid===blockedRef.lid));check(resumed,'state capacity recovery resumes the exact pending mark');await restarted.syncReadMarks();check((await copies(a)).length===before+1,'window recovery never repeats generation');
  const latest=await a.store.prefix('kv','attention/'+a.me.person+'/'),ledger=await a.store.prefix('kv','attention-copy/'+a.me.person+'/'+p.fp+'/');check(ledger.length<=latest.length,'copy ledger bounded by latest refs per recipient');
 }
 // Actual direct producer stores the recipient fp; attention keeps the author fp.

@@ -55,10 +55,9 @@ func TestAssistantReactionExactKeys(t *testing.T) {
 	})
 
 	// Queued for the old requester key, the copy is not sent once it changes.
-	// The requests' statuses are told first: their capability reads must not
-	// take the fault meant for the reaction's.
+	// Hold the actual send, independently of cached capability reads.
 	eventually(t, "statuses told", func() bool { return inboxCount(t, w.bob, "status_due > 0") == 0 })
-	f.addAfter("GET", "/profile", 1, 1, false) // the send-time control check passes; delivery's capability read is lost
+	f.add("POST", "/v1/messages", 1000, false)
 	queued, err := w.bob.reactAsAssistant(tctx(t), q1, "claude", "🎉", false)
 	if err != nil {
 		t.Fatal(err)

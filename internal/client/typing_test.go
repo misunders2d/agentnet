@@ -299,6 +299,8 @@ func TestTypingComposerThrottleOldPeerAndPreferences(t *testing.T) {
 		t.Fatalf("clear was throttled: %+v %v", res, err)
 	}
 	r.old = true
+	raw, _ := json.Marshal(w.alice.MemberView().Members)
+	w.alice.onMembers(raw) // the stub's capability change announces a new list
 	res, err = w.alice.SendTyping(tctx(t), scope, true)
 	if err != nil || res.Submitted != 0 || res.Skipped != 1 {
 		t.Fatalf("old peer: %+v %v", res, err)

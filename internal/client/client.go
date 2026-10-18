@@ -84,6 +84,7 @@ type Agent struct {
 	changes          *changeFeed                // local state changed (changes.go)
 	listed           listedCache                // rosters the Hub lists for persons not pinned here (persons.go)
 	members          memberState                // the Hub's member list from the push stream (members.go)
+	profiles         profileCache               // device profiles until the next member list (profilecache.go)
 	session          string                     // this run's session id (Run); "" outside Run
 	convWork         convWork                   // conversation upkeep due on the next sync (conv.go)
 	capsPub          capsPublisher              // this run's capability records (conv.go)

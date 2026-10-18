@@ -131,8 +131,6 @@ func TestGroupDeletionWaitsWithoutPingPong(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "carol's copy waits", func() bool { _ = w.alice.FlushOutbox(tctx(t)); return outboxState(t, w.alice, id) == stateConvWaiting })
-	counter := &profileCounter{base: w.alice.hub.http.Transport}
-	w.alice.hub.http.Transport = counter
 	feats, err := w.alice.relayFeatures(tctx(t))
 	if err != nil {
 		t.Fatal(err)

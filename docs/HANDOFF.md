@@ -1,5 +1,226 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+## Unreleased responsiveness work — October 18, 2026
+
+Implementation work for MEL-642/MEL-546/MEL-646. The owner authorized source
+commit/push, not a release, tag, publication, relay/phone deployment,
+live-profile modification or Linear status change. The sender-only trial
+below has ended and the official sender was restored.
+An independent Claude reviewer reviewed diagnosis, design, implementation and
+verification, including the full-backlog correction below.
+
+The relay overlaps at most eight unacknowledged sync frames, preserving oldest
+custody order and checking live arrivals between individual frames. It uses no
+sequence cursor: late demotion of an older live row still works. Unrelated
+receipts cannot release slots; quarantine, reconnect and restart retain their
+existing meanings. Eight times the existing 1 MiB message-body bound limits
+background wire frames, not the recipient's entire spool or archive storage.
+The stream also recognizes the store's translated `errNotFound` when pruning a
+missing in-flight row, correcting a pre-existing dead exemption: the injected
+row-loss regression failed with `stream ended`, then passed with `-race`;
+this is not an observed production loss or an explanation for the phone delay
+or the witness failure.
+The focused lane checks pass, and the post-correction full Hub race run passes
+all 148 parent cases (67.239 s), with no skips or race reports; Hub vet passes.
+
+Native and browser producers use a separate state-only 50-carrier gate for reads,
+roots, private topic names/marks, models and invitations. Cold history keeps its
+existing one-page (50-record) threshold, exact-key counting and atomic dependency
+commit. Existing atomic producer pages can exceed either threshold by their
+existing page/dependency expansion; these are gates, not strict reservation
+quotas. State rows still count toward the cold gate and can backpressure history,
+but cold rows never consume the state-only gate. The initially tried shared
+threshold of 100 was wrong: one archive plus its next prepared page starved state
+again. The expanded 123-original regression failed on that candidate before
+passing with separate gates. The phone fixture removes bootstrap originals before
+verifying that a read marker arrives ahead of its exact archived original.
+
+Serial archive upload/download/import and the native one-pending-archive guard
+are unchanged. A descriptor's receipt proves verified ciphertext retention,
+not completed child import. Existing dependency expansion can exceed a page;
+the structural-group-journal aggregate remains a pre-existing unbounded
+expansion. This work does not claim a strict total-spool byte/count cap.
+
+Full-batch verification also exposed a concrete archive producer defect: legacy
+DM snapshots omitted the recipient fingerprint, so packing a mixed DM/group
+batch failed scanning `recipient_fp` before recipient isolation. The shared
+history-copy constructor now binds every copy to the same exact key used for
+encryption; redundant catch-up assignments were removed. The existing two-linked-
+device regression passes both DM/group delivery and inert-history/withdrawal
+fences. No existing ciphertext is rebound to a replacement key.
+DM copies now also count toward the cold-history gate; missing key metadata
+previously undercounted them. This producer correction does not repair already
+persisted NULL-key rows: those can still block archive export until a separately
+authorized rebuild exists. No historical key is guessed. The NULL error was
+observed in the mixed-snapshot regression, not the derived-history witness cases.
+The same deterministic no-NULL assertion in that regression fails on clean HEAD
+`5a7da455` with one unbound history copy (7.811 s package time), then passes on
+the candidate (21.038 s with `-race`); the subsequent `go vet ./...` also passes.
+
+Native clients now cache Hub profiles per device between member-list pushes,
+clearing all entries on every list and stream disconnect. Absent, unreadable
+or truncated lists disable reuse: changes to omitted devices may not push
+another list. Existing pushes announce capability, session and roster changes.
+Failed reads and reads overtaken by a push are not kept.
+All ten profile reads use `profilecache.go`; a queued-copy decision retains
+one consistent snapshot across its checks. No TTL, protocol or relay change;
+exact-key and handover checks are unchanged. The focused regression covers
+reuse, invalidation, in-flight updates, errors, incomplete lists and disconnects.
+Measured cold catch-up of 447 signed DM originals to an empty linked phone
+(one-shot local probe, 300 ms injected request latency, native):
+
+| 447 originals, 300 ms RTT | Before | After |
+|---|---:|---:|
+| First useful message (ms) | 4400 | 3820 |
+| Full catch-up (ms) | 36203 | 24441 |
+| Source profile GETs | 60 | 1 |
+| Phone profile GETs | 41 | 2 |
+
+Both runs completed 9/9 archives with no duplicate or executable rows.
+Post-cache `go vet ./...` passes. The full native client run exposed seven
+fixtures that assumed repeated GETs or immediate capability visibility;
+they now deliver/await the member-list update or hold the actual message
+POST. Those seven plus the cache regression pass natively (5.871 s), and
+the affected 55-case race selection passes (276.320 s). Earlier passing
+native cases are retained; this is not a clean full-suite rerun or release
+qualification.
+The later truncated-list guard failed the focused regression before the fix;
+vet and the cache/member race rerun pass afterward (6.550 s). Cold447 and
+the 55-case selection above used complete lists; that evidence is retained.
+
+An owner-authorized sender-only trial ran `v0.8.33+sendercheck.20261018` on
+Zenbook; the phone and relay stayed on v0.8.33. Phone questions and automated
+answers round-tripped, and the owner reported already-synced chats “swift”
+and “all good”. This is connectivity/smoke evidence, not a live catch-up
+comparison or phone-side performance qualification. After the trial, the
+official v0.8.33 sender was restored through its job-safe handover; doctor
+passes and automatic updates are on. Identity/history were preserved and
+permissions unchanged; the live and both binary schemas remained 82.
+
+Ordinary native chat rows no longer query continuation/stop state unless they
+are questions, tasks or carry execution state. Actual request authority checks
+are unchanged. DM projection reuses its existing topic assignments, and Comic
+derives working status once per row. Phone dismissal displays “Dismissing…”
+until the same participation ID is confirmed dismissed in the authoritative
+conversation. Failed refreshes do not re-enable the queued dismissal: a later
+failure can leave “Dismissing…” until the conversation remounts. Host API routes,
+DTOs and skin contracts are unchanged; Comic's bundle was rebuilt.
+
+One-shot local measurements (Linux, Go 1.26.8, Node 26.8.1, Chromium; not physical
+phone/ThinkPad acceptance):
+
+| Real-relay diagnostic: 32 sync frames, delayed terminal receipts | Before | After |
+|---|---:|---:|
+| Simulated 100 ms RTT | 6.493 s | 0.835 s |
+| Simulated 300 ms RTT | 19.305 s | 2.438 s |
+| Peak unacknowledged frames in those delayed runs | 1 | 8 |
+
+The read-only local size inventory found a maximum of 447 logical chat rows.
+A representative 450-row native projection took 54 ms, and its complete HTTP
+body 57 ms. At 1,000 rows these were 92/95 ms. Synthetic 10,000-row projection
+fell from 1.174 s to 733 ms, with a 775 ms complete HTTP read afterward. The
+earlier HTTP measurement stopped at headers and is not a full-body comparison.
+A CPU profile showed substantial database/SQL preparation work. Backend history
+is still materialized in full; 10,000-row latency is an explicit scaling limit,
+not a claim of arbitrary-size 200 ms opening or a new paginated API.
+
+An actual disposable Comic browser surface, with 400 retained messages and
+1,000 people, preserved the initial 80 complete groups, exact hidden targets,
+drafts and prepend/arrival anchors (under 0.4 px drift). With overview held:
+edit/reaction visibility was 68 ms, typing paint 4 ms, optimistic send 26 ms and
+stored display 89 ms; measured frame p95 was 16.9 ms. These are fixture samples,
+not p95 acceptance for every existing control or device.
+
+Browser direct-history checks pass in memory and real IndexedDB (210 checks).
+They cover bounded cold refill, encrypted topic convergence while an outgoing
+archive is held, same-phone live admission plus a durable local topic decision
+while an incoming archive GET is held, no premature retention receipt, failed-GET
+and partial-import restart, exact original IDs and inert historical requests.
+The held-GET live/topic sample was about 4.3 ms in the memory fixture.
+The rendered phone regression failed before the fix on premature dismissal
+success, then passed its held-refresh and existing stale-navigation/identity cases.
+`TestMixedVersion`, with `AGENTNET_MIXED_TAG=v0.8.33`, passed the real published
+client's 16 encrypted own-device read-sync frames and the existing suspension,
+quiet-time and manual-update journeys against an isolated next-version candidate.
+
+`go vet ./...` passed. The focused native race invocation covering message lanes,
+archives, read/root/topic/model/invitation synchronization and selected recipient
+and history regressions passed: `internal/hub` 7.049 s and `internal/client`
+314.838 s, at the unchanged 600 s bound. The explicit read-before-original
+assertion also passed its focused race rerun. Final rendered checks passed both
+`TestComicPhoneRejoinRendered` and `TestUIResponsivenessRendered`; under concurrent
+verification the latter recorded edit 115 ms, typing 16 ms, optimistic send
+78 ms, stored display 196 ms and frame p95 18.2 ms, without page errors.
+
+UI race partition `ui-0` initially completed with 174 parent passes, 61 explicit
+skips and one failure: its attention fixture still required cold history to
+block state sync. That obsolete shared-window expectation was replaced with
+encrypted attention convergence under cold pressure, state-only backpressure,
+restart and exact-generation recovery. Its focused race rerun passes 151 checks.
+Retaining the unchanged passing cases accounts for all 236 selected parents as
+175 passes and 61 skips; this is combined evidence, not a clean full rerun.
+Partition `ui-1` passed in 539.899 s: 171 parent passes and 65 skips account for
+all 236 selected parents, with no race reports. Both partitions used the unchanged
+600 s Go bound. Skipped cases are not executions; the opt-in rendered checks
+above were run separately. This is not full client/platform/skins release
+qualification.
+
+The complete non-client/non-UI portion of `others` also passed with `-race
+-count=1 -timeout 600s`: 15 packages passed and five had no test files.
+This includes the full Hub package (136.585 s), integration journeys (320.782 s),
+CLI package (562.206 s) and mobile core (241.389 s). These are Linux runs;
+they do not establish native qualification on other operating systems.
+
+The full non-client, UI-partition and mixed-version passes above predate the
+recipient-fingerprint constructor fix. After that fix, the 717 client selections
+below and these two directly affected linked-device DM-history journeys were
+rerun with `go test -race -count=1 -timeout=600s`:
+
+| Focused post-fix journey | Parent result |
+| --- | --- |
+| `itest.TestCLILinkedDeviceGetsHistory` | Pass, 2.48 s |
+| `ui.TestBrowserEngineLinksAsNewDevice` | Pass, 12.52 s |
+
+The CLI journey's driver is race-instrumented; its existing helper builds an
+ordinary native subprocess. Mobile core's link-approval fixture has no pre-link
+DM history to exercise this branch. Mixed-version evidence is retained for the
+unchanged wire contract: `recipient_fp` is local metadata, not a protocol field.
+
+The first complete 18-client batch used two concurrent local processes. Ten
+partitions passed; eight failed, including four package alarms at the unchanged
+600 s bound. Its 1,355 selected parent cases yielded 1,288 passes, 25 skips, nine
+failures and 33 incomplete/unstarted cases. These failures are not qualification.
+A demonstrated test-only race came from swapping an unused HTTP counter into a
+running daemon; removing that unused instrumentation preserves every assertion.
+Its focused race check and the mixed-archive regression both pass (28.107 s).
+Deadline failures elsewhere are not yet attributed to the candidate.
+
+A clean-HEAD control (`5a7da455`) used the exact same 76+76 case names, not a
+shifted modulo split. Control 0 exhausted 600 s after 69 passes and two skips;
+control 1 passed in 568.296 s (75 passes, one skip). No individual control case
+reported failure. This shows a package-budget exhaustion without these changes,
+not that every candidate deadline is explained. The first candidate pair also
+overlapped the non-UI suite, so total load was not identical. Subsequent client
+qualification isolates one process at a time without increasing any deadline.
+
+The isolated requalification completed all 717 selected parents: the eight
+previously failing partitions in full, plus 114 history/archive/catch-up cases
+from the ten retained partitions. It yielded 706 passes, ten skips and one
+failure, without races or package alarms. Retaining only unaffected earlier
+passes gives an exact 1,355-parent ledger: 1,329 passes, 25 skips, one failure,
+and no incomplete/unstarted cases. Partition 7 remains **not green**:
+`TestGroupHistoryWitnessGuestDerivedParent` timed out accepting the new phone's
+inert history (82.50 s). Later focused passes do not replace that failure.
+
+The witness failure also reproduced 3/3 on clean HEAD `5a7da455`, so its
+investigation is stopped without changing assertions, deadlines or authority checks.
+
+Temporary probes and the disposable browser/server were removed after use.
+The original reported 20-minute incident and MEL-646's earlier derived-history
+liveness failure remain unexplained, not fixed by a later passing fixture.
+Physical phone/ThinkPad and other-OS performance, every-control p95 and external
+skin collection qualification remain unverified; these issues are not closed.
+
 ## Current release — v0.8.33, October 17, 2026
 
 [Download v0.8.33](https://github.com/misunders2d/agentnet/releases/tag/v0.8.33),

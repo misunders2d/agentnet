@@ -474,12 +474,7 @@ func (a *Agent) personOfKey(ctx context.Context, address string, key identity.Pu
 		}
 		return p, nil
 	}
-	label, name, err := protocol.SplitAddress(address)
-	if err != nil {
-		return p, err
-	}
-	var prof protocol.Profile
-	err = a.hub.do(ctx, "GET", "/v1/agents/"+label+"/"+name+"/profile", nil, &prof)
+	prof, err := a.peerProfile(ctx, address)
 	var he *HubError
 	if errors.As(err, &he) && he.Status == 404 {
 		return p, ErrNoPerson
@@ -551,9 +546,8 @@ func (a *Agent) checkPersons(ctx context.Context, ms protocol.Members) {
 		if a.listed.has(m.Person.Hash) {
 			continue
 		}
-		label, name, _ := protocol.SplitAddress(m.Address)
-		var prof protocol.Profile
-		if err := a.hub.do(ctx, "GET", "/v1/agents/"+label+"/"+name+"/profile", nil, &prof); err != nil {
+		prof, err := a.peerProfile(ctx, m.Address)
+		if err != nil {
 			continue
 		}
 		if r, err := protocol.ParsePersonRoster(prof.Person); err == nil && r.Hash() == m.Person.Hash {

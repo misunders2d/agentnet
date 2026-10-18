@@ -344,12 +344,11 @@ func (a *Agent) capSupport(ctx context.Context, address string, key identity.Pub
 	if !slices.Contains(feats, protocol.FeatureEnv3) || !slices.Contains(feats, protocol.FeatureCaps) {
 		return false, WaitServerUpdate + "your Hub cannot carry " + what + " (it needs an update)"
 	}
-	label, name, err := protocol.SplitAddress(address)
-	if err != nil {
+	if _, _, err := protocol.SplitAddress(address); err != nil {
 		return false, err.Error()
 	}
-	var prof protocol.Profile
-	if err := a.hub.do(ctx, "GET", "/v1/agents/"+label+"/"+name+"/profile", nil, &prof); err != nil {
+	prof, err := a.peerProfile(ctx, address)
+	if err != nil {
 		return false, WaitServerUnavailable + "cannot ask the Hub what " + address + " can read: " + err.Error()
 	}
 	if !prof.Supports(address, key.SignKey, cap) {

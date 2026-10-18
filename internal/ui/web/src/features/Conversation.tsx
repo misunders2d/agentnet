@@ -93,7 +93,7 @@ function OpenView({ open }: { open: NonNullable<Open> }) {
     <section aria-label={title} data-part="conversation" className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-canvas">
       <Header ctx={ctx} wide={wide} helpers={hs} canInvite={canInvite} />
       {t && <PendingInvitations t={t} />}
-      {!wide && <GuestBar helpers={hs} onDismissed={setLeft} />}
+      {!wide && t && <GuestBar thread={t} helpers={hs} onDismissed={setLeft} />}
       {t&&personMain ? <PersonTopics dm={t} main={personMain} onMain={()=>{
         void store.openUnread({kind:"dm",id:personMain});
       }}/> : <TopicBar thread={ctx.thread||undefined} dm={ctx.dm||undefined} />}

@@ -315,6 +315,81 @@ func TestHistoryArchiveReceiptDrivenMultiChunkCompletion(t *testing.T) {
 	t.Fatal("receipt-driven bounded archives did not converge")
 }
 
+func TestHistoryArchiveDoesNotBlockExactReadSync(t *testing.T) {
+	_, a, phone, conv := archiveFixture(t, 123)
+	a.stopBackgroundPosts()
+	a.stopArchivePosts()
+	// Bootstrap may already have replicated rows before the fixture stopped
+	// its daemons. This receiver must genuinely await the selected originals.
+	if _, err := phone.store.db.Exec(`DELETE FROM inbox WHERE conv=? AND body LIKE 'row-%'`, conv); err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range []string{
+		`DELETE FROM outbox WHERE recipient_fp=? AND sub IN ` + syncSubs,
+		`DELETE FROM history_catchup WHERE fingerprint=?`,
+		`DELETE FROM history_copies WHERE recipient_fp=?`,
+		`DELETE FROM history_deferred WHERE recipient_fp=?`,
+	} {
+		if _, err := a.store.db.Exec(query, phone.Self().Fingerprint()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := a.historyCatchupPage(tctx(t), phone.Self()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.archiveStep(tctx(t)); err != nil {
+		t.Fatal(err)
+	}
+	descriptor := archiveDescriptor(t, a)
+	if err := a.FlushOutbox(tctx(t)); err != nil {
+		t.Fatal(err)
+	}
+	// A long backlog tries to refill while the first archive remains in
+	// custody. State synchronization must keep its own bounded capacity.
+	if _, err := a.historyCatchupPage(tctx(t), phone.Self()); err != nil {
+		t.Fatal(err)
+	}
+	var original string
+	if err := a.store.db.QueryRow(`SELECT id FROM inbox WHERE conv=? AND body='row-122'`, conv).Scan(&original); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.MarkRead([]string{original}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.syncReadMarks(); err != nil {
+		t.Fatal(err)
+	}
+	var encoded string
+	if err := a.store.db.QueryRow(`SELECT envelope FROM outbox WHERE recipient=? AND sub=? ORDER BY rowid DESC LIMIT 1`, phone.Address, envelope.SubReadSync).Scan(&encoded); err != nil {
+		t.Fatalf("pending archive blocked a newer exact read marker: %v", err)
+	}
+	var marker envelope.Envelope
+	if err := json.Unmarshal([]byte(encoded), &marker); err != nil {
+		t.Fatal(err)
+	}
+	if err := phone.verifyAndStore(tctx(t), marker); err != nil {
+		t.Fatal(err)
+	}
+	var arrived bool
+	if err := phone.store.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM inbox WHERE conv=? AND body='row-122')`, conv).Scan(&arrived); err != nil || arrived {
+		t.Fatalf("fixture admitted the original before its archive: arrived=%v error=%v", arrived, err)
+	}
+	// The marker can precede the original; completing the unchanged archive
+	// must apply that exact read without clearing another unseen turn.
+	if err := phone.storeReceived(tctx(t), descriptor); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := phone.archiveImportStep(tctx(t)); err != nil {
+		t.Fatal(err)
+	}
+	if _, read := readState(t, phone, conv, "row-122"); !read {
+		t.Fatal("read marker did not survive the archive's delayed arrival")
+	}
+	if _, read := readState(t, phone, conv, "row-121"); read {
+		t.Fatal("read marker cleared a different unseen turn")
+	}
+}
+
 func TestHistoryArchiveTenThousandSourcesBoundedNewestFirst(t *testing.T) {
 	_, a, phone, conv := archiveFixture(t, 1)
 	// This test drives every source send synchronously. Join and disable the
@@ -352,7 +427,7 @@ func TestHistoryArchiveTenThousandSourcesBoundedNewestFirst(t *testing.T) {
 		}
 	}
 	if err = a.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE state=?`, archiveStaged).Scan(&count); err != nil || count != historyPage {
-		t.Fatalf("full chunk produced more source ciphertext: %d %v", count, err)
+		t.Fatalf("cold production consumed reserved state capacity: %d %v", count, err)
 	}
 	base := a.hub.http.Transport
 	var posted []string

@@ -4,6 +4,23 @@ Notable changes to AgentNet, newest first. Dates use `YYYY-MM-DD`.
 This record starts with v0.8.1; earlier releases remain on the
 [releases page](https://github.com/misunders2d/agentnet/releases).
 
+## Unreleased
+
+- Overlap up to eight background relay deliveries while checking for live
+  arrivals between frames; preserve custody, receipt and reconnect semantics.
+- Give own-device state sync its own bounded gate, separate from cold history,
+  so a stalled archive cannot starve read markers or topic updates. Keep the
+  existing serial archive transfer and exact-key authority checks.
+- Bind every new history copy to its exact encryption recipient, so DM history
+  does not block packing a mixed DM/group archive.
+- Cache device profiles until the next member-list push or stream disconnect,
+  avoiding repeated capability GETs during catch-up. Without a complete current
+  member list every read is fresh; exact-key and handover checks are unchanged.
+- Avoid per-message continuation lookups for ordinary chat rows and repeated
+  activity derivation. Reuse the chat's existing topic assignments.
+- Keep phone dismissal feedback pending until the exact participation is
+  confirmed dismissed by the refreshed conversation.
+
 ## [0.8.33] — 2026-10-17
 
 - Count unread messages across Main and accessible topics, add exact unread

@@ -164,33 +164,43 @@ func copyRequirement(c outCopy) string {
 	return conversationAudienceRequirement(required, needed)
 }
 
+type readerCapsSnapshot struct {
+	profile protocol.Profile
+	loaded  bool
+}
+
 func (a *Agent) requireParticipationCaps(ctx context.Context, key identity.Public, required string) error {
-	if required == protocol.CapHistoryArchive {
-		label, device, err := protocol.SplitAddress(key.Address)
+	var snapshot readerCapsSnapshot
+	return a.requireParticipationCapsSnapshot(ctx, key, required, &snapshot)
+}
+
+// A snapshot belongs to one readerCheck decision, never to a device or flush:
+// a member list may clear the shared profile cache between its checks.
+func (a *Agent) requireParticipationCapsSnapshot(ctx context.Context, key identity.Public, required string, snapshot *readerCapsSnapshot) error {
+	switch required {
+	case protocol.CapHistoryArchive, protocol.CapSharedTopicTitle, protocol.CapGuestAgent,
+		protocol.CapConversationAudience, protocol.CapTopicContext, protocol.CapModelSync,
+		protocol.CapModelSyncV2, protocol.CapTopicStateSync, protocol.CapTopicOrganization,
+		protocol.CapRequestFollowup, protocol.CapRequestSteer, protocol.CapTopicParticipation,
+		protocol.CapOwnSyncV3, protocol.CapOwnSyncV2, protocol.CapContinuation,
+		protocol.CapSendGroup, protocol.CapReadSync, protocol.CapReadSyncV2,
+		protocol.CapGroupInvitationManage, protocol.CapGroupInvitationControl,
+		protocol.CapGroupHumanParticipation, protocol.CapRootSync, protocol.CapHumanParticipation,
+		protocol.CapAgentIdentity, protocol.CapExternalParticipation, protocol.CapGroup,
+		protocol.CapHeadless, protocol.CapReplyReceiver, protocol.CapProgress,
+		protocol.CapAgentReaction, protocol.CapConvClear, protocol.CapRoom,
+		protocol.CapProactiveAgent, protocol.CapMentionReaction, protocol.CapAgentOrganization:
+	default:
+		return errors.New("unknown queued capability requirement")
+	}
+	if !snapshot.loaded {
+		profile, err := a.peerProfile(ctx, key.Address)
 		if err != nil {
 			return err
 		}
-		var profile protocol.Profile
-		if err = a.hub.do(ctx, "GET", "/v1/agents/"+label+"/"+device+"/profile", nil, &profile); err != nil {
-			return err
-		}
-		if !profile.Supports(key.Address, key.SignKey, required) {
-			return &NeedsUpdateError{Address: key.Address, Cap: required}
-		}
-		return nil
+		snapshot.profile, snapshot.loaded = profile, true
 	}
-	if required != protocol.CapSharedTopicTitle && required != protocol.CapGuestAgent && required != protocol.CapConversationAudience && required != protocol.CapTopicContext && required != protocol.CapModelSync && required != protocol.CapModelSyncV2 && required != protocol.CapTopicStateSync && required != protocol.CapTopicOrganization && required != protocol.CapRequestFollowup && required != protocol.CapRequestSteer && required != protocol.CapTopicParticipation && required != protocol.CapOwnSyncV3 && required != protocol.CapOwnSyncV2 && required != protocol.CapContinuation && required != protocol.CapSendGroup && required != protocol.CapReadSync && required != protocol.CapReadSyncV2 && required != protocol.CapGroupInvitationManage && required != protocol.CapGroupInvitationControl && required != protocol.CapGroupHumanParticipation && required != protocol.CapRootSync && required != protocol.CapHumanParticipation && required != protocol.CapAgentIdentity && required != protocol.CapExternalParticipation && required != protocol.CapGroup && required != protocol.CapHeadless && required != protocol.CapReplyReceiver && required != protocol.CapProgress && required != protocol.CapAgentReaction && required != protocol.CapConvClear && required != protocol.CapRoom && required != protocol.CapProactiveAgent && required != protocol.CapMentionReaction && required != protocol.CapAgentOrganization {
-		return errors.New("unknown queued capability requirement")
-	}
-	label, device, err := protocol.SplitAddress(key.Address)
-	if err != nil {
-		return err
-	}
-	var profile protocol.Profile
-	if err := a.hub.do(ctx, "GET", "/v1/agents/"+label+"/"+device+"/profile", nil, &profile); err != nil {
-		return err
-	}
-	if !profile.Supports(key.Address, key.SignKey, required) || required == protocol.CapExternalParticipation && !profile.Supports(key.Address, key.SignKey, protocol.CapAgentIdentity) {
+	if !snapshot.profile.Supports(key.Address, key.SignKey, required) || required == protocol.CapExternalParticipation && !snapshot.profile.Supports(key.Address, key.SignKey, protocol.CapAgentIdentity) {
 		return &NeedsUpdateError{Address: key.Address, Cap: required}
 	}
 	return nil

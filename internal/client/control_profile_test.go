@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
@@ -78,4 +79,70 @@ func TestControlPreflightUsesOneCurrentSignedProfile(t *testing.T) {
 		t.Fatalf("transport failure lost its original classification: %q", beforeWhy)
 	}
 	check(protocol.CapControl, false, beforeWhy)
+}
+
+// A queued copy must not combine capabilities from mutually incompatible
+// signed session snapshots, or retain yesterday's snapshot for a new decision.
+func TestQueuedReaderRequiresConsistentCurrentProfile(t *testing.T) {
+	w := newWorld(t, "") // no daemon or background sender uses this transport
+	groupOnly := socialReaderProfile(t, w.bob, []string{protocol.CapGroup}, nil)
+	contextOnly := socialReaderProfile(t, w.bob, []string{protocol.CapTopicContext}, nil)
+	full := socialReaderProfile(t, w.bob, []string{protocol.CapGroup, protocol.CapTopicContext}, nil)
+	current := []protocol.Profile{groupOnly, contextOnly}
+	var fetchError error
+	reads := 0
+	base := w.alice.hub.http.Transport
+	w.alice.hub.http.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Method != "GET" || req.URL.Path != "/v1/agents/bob/laptop/profile" {
+			t.Fatalf("unexpected reader request: %s %s", req.Method, req.URL.Path)
+		}
+		if fetchError != nil {
+			return nil, fetchError
+		}
+		profile := current[reads%len(current)]
+		reads++
+		raw, err := json.Marshal(profile)
+		if err != nil {
+			return nil, err
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(string(raw)))}, nil
+	})
+	defer func() { w.alice.hub.http.Transport = base }()
+	needs := copyNeeds{required: protocol.CapGroup, sub: envelope.SubGroupContext, snapshotCap: true}
+	missing := func(n copyNeeds, cap string) {
+		t.Helper()
+		err := w.alice.readerCheck(tctx(t), w.bob.Address, w.bob.Self(), n)
+		var update *NeedsUpdateError
+		if !errors.As(err, &update) || update.Cap != cap {
+			t.Fatalf("incompatible current reader: got %v, want missing %s", err, cap)
+		}
+	}
+	// The old implementation accepted Group from one session and TopicContext
+	// from another, although no returned snapshot could read the whole copy.
+	missing(needs, protocol.CapTopicContext)
+	current = []protocol.Profile{full}
+	if err := w.alice.readerCheck(tctx(t), w.bob.Address, w.bob.Self(), needs); err != nil {
+		t.Fatalf("compatible current reader: %v", err)
+	}
+	current = []protocol.Profile{groupOnly}
+	missing(needs, protocol.CapTopicContext)
+	current = []protocol.Profile{contextOnly}
+	missing(needs, protocol.CapGroup)
+	current = []protocol.Profile{full}
+	current[0].Sessions = append(current[0].Sessions, protocol.NewID())
+	missing(needs, protocol.CapGroup)
+	current = []protocol.Profile{socialReaderProfile(t, w.bob, []string{protocol.CapExternalParticipation}, nil)}
+	missing(copyNeeds{required: protocol.CapExternalParticipation}, protocol.CapExternalParticipation)
+	fetchError = errors.New("unavailable profile fixture")
+	if err := w.alice.readerCheck(tctx(t), w.bob.Address, w.bob.Self(), copyNeeds{required: "unknown-fixture-capability"}); err == nil || errors.Is(err, fetchError) {
+		t.Fatalf("unknown requirement reached the profile instead of failing locally: %v", err)
+	}
+	if err := w.alice.readerCheck(tctx(t), w.bob.Address, w.bob.Self(), needs); !errors.Is(err, fetchError) {
+		t.Fatalf("profile failure changed classification: %v", err)
+	}
+	fetchError = nil
+	current = []protocol.Profile{full}
+	if err := w.alice.readerCheck(tctx(t), w.bob.Address, w.bob.Self(), needs); err != nil {
+		t.Fatalf("fresh decision did not recover after profile failure: %v", err)
+	}
 }

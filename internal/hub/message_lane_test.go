@@ -163,8 +163,12 @@ func TestMessageLaneLegacyCatchupLiveBypassAndReconnect(t *testing.T) {
 		t.Fatalf("initial live %s, got %s", fresh.ID, got)
 	}
 	laneAck(t, h, bob, fresh.ID, protocol.StateDelivered)
-	if got := nextLaneMessage(t, events); got != old[0].ID {
-		t.Fatalf("first sync %s, got %s", old[0].ID, got)
+	// Several dependent background records arrive in order before any
+	// terminal receipt: receipt latency must not serialize catch-up.
+	for i := range syncStreamWindow {
+		if got := nextLaneMessage(t, events); got != old[i].ID {
+			t.Fatalf("unacknowledged sync %d: got %s want %s", i, got, old[i].ID)
+		}
 	}
 	late := laneTestEnvelope(t, alice, bob)
 	lanePost(t, h, alice, late, "")
@@ -172,17 +176,26 @@ func TestMessageLaneLegacyCatchupLiveBypassAndReconnect(t *testing.T) {
 		t.Fatalf("late live waited for sync ack: %s", got)
 	}
 	laneAck(t, h, bob, late.ID, protocol.StateDelivered)
-	// An unrelated terminal receipt wakes the stream but cannot free sync.
+	// The full window cannot grow on an unrelated terminal receipt. Live
+	// arrivals still bypass every unacknowledged background record.
 	marker := laneTestEnvelope(t, alice, bob)
 	lanePost(t, h, alice, marker, "")
 	if got := nextLaneMessage(t, events); got != marker.ID {
 		t.Fatalf("unrelated receipt released sync: %s", got)
 	}
 	laneAck(t, h, bob, marker.ID, protocol.StateDelivered)
-	laneAck(t, h, bob, old[0].ID, protocol.StateQuarantined)
-	if got := nextLaneMessage(t, events); got != old[1].ID {
-		t.Fatalf("quarantine did not resume sync: %s", got)
+	marker2 := laneTestEnvelope(t, alice, bob)
+	lanePost(t, h, alice, marker2, "")
+	if got := nextLaneMessage(t, events); got != marker2.ID {
+		t.Fatalf("unrelated terminal receipt grew the sync window: %s", got)
 	}
+	laneAck(t, h, bob, marker2.ID, protocol.StateDelivered)
+	laneAck(t, h, bob, old[0].ID, protocol.StateQuarantined)
+	if got := nextLaneMessage(t, events); got != old[syncStreamWindow].ID {
+		t.Fatalf("quarantine did not release exactly one sync slot: %s", got)
+	}
+	// A repeated terminal receipt is idempotent across the next reconnect.
+	laneAck(t, h, bob, old[0].ID, protocol.StateQuarantined)
 	h.streams.disconnect(bob.addr)
 	// Reconnect resets live delivery but keeps the unacknowledged sync copy.
 	fresh = laneTestEnvelope(t, alice, bob)
@@ -201,6 +214,36 @@ func TestMessageLaneLegacyCatchupLiveBypassAndReconnect(t *testing.T) {
 	var remaining int
 	if err := h.store.db.QueryRow(`SELECT count(*) FROM messages WHERE recipient=? AND lane=? AND state=?`, bob.addr, protocol.MessageLaneSync, protocol.StateCustody).Scan(&remaining); err != nil || remaining != 0 {
 		t.Fatalf("sync custody remaining %d: %v", remaining, err)
+	}
+}
+
+func TestMessageLaneMissingInFlightReleasesSlot(t *testing.T) {
+	h, alice, bob, _ := blobHub(t, 1<<30)
+	var backlog [syncStreamWindow + 1]envelope.Envelope
+	for i := range backlog {
+		backlog[i] = laneTestEnvelope(t, alice, bob)
+		lanePost(t, h, alice, backlog[i], protocol.MessageLaneSync)
+	}
+	events := pushStream(t, h, bob)
+	defer h.streams.disconnect(bob.addr)
+	for i := range syncStreamWindow {
+		if got := nextLaneMessage(t, events); got != backlog[i].ID {
+			t.Fatalf("initial sync %d: got %s want %s", i, got, backlog[i].ID)
+		}
+	}
+	// Ordinary receipts retain rows. Inject loss to exercise the store's
+	// translated not-found boundary without inventing a receipt.
+	if _, err := h.store.db.Exec(`DELETE FROM messages WHERE id=?`, backlog[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	live := laneTestEnvelope(t, alice, bob)
+	lanePost(t, h, alice, live, "")
+	// The live arrival can race the post-frame recheck. Both must arrive on
+	// this stream, without an acknowledgement for the vanished row.
+	first, second := nextLaneMessage(t, events), nextLaneMessage(t, events)
+	next := backlog[syncStreamWindow].ID
+	if !((first == live.ID && second == next) || (first == next && second == live.ID)) {
+		t.Fatalf("missing in-flight slot: got %s, %s; want live %s and sync %s", first, second, live.ID, next)
 	}
 }
 

@@ -325,12 +325,11 @@ func (a *Agent) convSupport(ctx context.Context, address string, key identity.Pu
 	if !slices.Contains(feats, protocol.FeatureEnv2) || !slices.Contains(feats, protocol.FeatureCaps) {
 		return false, WaitServerUpdate + "your Hub cannot carry conversations (it needs an update)", false
 	}
-	label, name, err := protocol.SplitAddress(address)
-	if err != nil {
+	if _, _, err := protocol.SplitAddress(address); err != nil {
 		return false, err.Error(), false
 	}
-	var prof protocol.Profile
-	if err := a.hub.do(ctx, "GET", "/v1/agents/"+label+"/"+name+"/profile", nil, &prof); err != nil {
+	prof, err := a.peerProfile(ctx, address)
+	if err != nil {
 		return false, WaitServerUnavailable + "cannot ask the Hub what " + address + " can read: " + err.Error(), false
 	}
 	if r, err := protocol.ParsePersonRoster(prof.Person); err == nil { // fresh evidence, checked before anything is sent

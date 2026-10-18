@@ -166,12 +166,8 @@ func groupControlAdmissionFence(sender, recipient protocol.GroupAdmission) strin
 }
 
 func (a *Agent) requireGroupControlCapability(ctx context.Context, key identity.Public) error {
-	label, device, err := protocol.SplitAddress(key.Address)
+	profile, err := a.peerProfile(ctx, key.Address)
 	if err != nil {
-		return err
-	}
-	var profile protocol.Profile
-	if err = a.hub.do(ctx, "GET", "/v1/agents/"+label+"/"+device+"/profile", nil, &profile); err != nil {
 		return err
 	}
 	if !profile.Supports(key.Address, key.SignKey, protocol.CapControl) {

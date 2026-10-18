@@ -344,9 +344,8 @@ func (a *Agent) SendTyping(ctx context.Context, scope protocol.TypingScope, acti
 	a.typing.sent[key] = typingSent{at: now, ts: ts, active: active}
 	a.typing.mu.Unlock()
 	for _, pub := range keys {
-		label, name, _ := protocol.SplitAddress(pub.Address)
-		var prof protocol.Profile
-		if e := a.hub.do(ctx, "GET", "/v1/agents/"+label+"/"+name+"/profile", nil, &prof); e != nil || !prof.Live || !prof.Supports(pub.Address, pub.SignKey, protocol.CapTyping) {
+		prof, e := a.peerProfile(ctx, pub.Address)
+		if e != nil || !prof.Live || !prof.Supports(pub.Address, pub.SignKey, protocol.CapTyping) {
 			result.Skipped++
 			continue
 		}

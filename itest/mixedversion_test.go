@@ -1,6 +1,7 @@
 package itest
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/client"
+	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/identity"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
@@ -570,6 +572,9 @@ func TestMixedVersion(t *testing.T) {
 		t.Skip("no published release tag below HEAD in this repository (a shallow clone?): git fetch --tags to run the mixed-version gate")
 	}
 	release := nextRelease(t, below)
+	if protocol.Newer(oldTag, below) {
+		release = nextRelease(t, oldTag)
+	}
 	keepsRefused := !protocol.Newer(firstKeepsRefused, oldTag)
 	start := time.Now()
 	dir := t.TempDir()
@@ -666,6 +671,97 @@ func TestMixedVersion(t *testing.T) {
 	waitUntil(t, "alice's history on her older device", 60*time.Second, func() bool {
 		return aliceOld.shows(ab, "ba in grace") && aliceOld.shows(g, "carol to the group in grace")
 	})
+
+	// Queue more than one relay window of genuine, encrypted own-device read
+	// markers before reconnecting the published client. Its serial admission
+	// must retain every exact reference and receipt every carrier.
+	aliceOld.stop()
+	aliceOld.stop = nil
+	senderKey, err := identity.Load(filepath.Join(w.dir, alice.home, "identity.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	readerKey, err := identity.Load(filepath.Join(w.dir, aliceOld.home, "identity.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	peerKey, err := identity.Load(filepath.Join(w.dir, bob.home, "identity.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceDB := alice.db(t)
+	var owner, roster string
+	err = sourceDB.QueryRow(`SELECT person,hash FROM persons WHERE state='self'`).Scan(&owner, &roster)
+	sourceDB.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM([]byte(w.cert)) {
+		t.Fatal("relay certificate")
+	}
+	transport := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: pool}}
+	defer transport.CloseIdleConnections()
+	httpClient := &http.Client{Transport: transport, Timeout: 10 * time.Second}
+	recipient, err := readerKey.Public(aliceOld.address).Recipient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const syncBurst = 16
+	var refs, carriers [syncBurst]string
+	for i := range syncBurst {
+		refs[i] = protocol.NewID()
+		mark, err := json.Marshal(protocol.ReadSync{V: 1, Person: owner, Roster: roster, Refs: []protocol.ReadRef{{Conv: ab, Fingerprint: peerKey.Public(bob.address).Fingerprint(), LID: refs[i]}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sealed, err := envelope.Seal(envelope.Inner{V: 2, ID: protocol.NewID(), From: alice.address, To: aliceOld.address, TS: time.Now().Unix(), Kind: envelope.KindMessage, Sub: envelope.SubReadSync, Replica: true, Body: string(mark)}, senderKey.Sign, recipient)
+		if err != nil {
+			t.Fatal(err)
+		}
+		carriers[i] = sealed.ID
+		wire, err := json.Marshal(sealed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req, err := http.NewRequestWithContext(t.Context(), "POST", "https://"+w.addr+"/v1/messages?lane=sync", bytes.NewReader(wire))
+		if err != nil {
+			t.Fatal(err)
+		}
+		protocol.SignRequest(req, alice.address, senderKey.Sign, wire)
+		req.Header.Set(protocol.VersionHeader, w.release)
+		res, err := httpClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		if res.StatusCode != http.StatusAccepted {
+			t.Fatalf("own-device sync burst POST %d: HTTP %d", i, res.StatusCode)
+		}
+	}
+	aliceOld.daemon(old)
+	waitUntil(t, "published client retains and receipts the whole own-device sync burst", 30*time.Second, func() bool {
+		readerDB := aliceOld.db(t)
+		defer readerDB.Close()
+		for _, ref := range refs {
+			var kept bool
+			if err := readerDB.QueryRow(`SELECT EXISTS(SELECT 1 FROM read_marks WHERE owner=? AND conv=? AND lid=?)`, owner, ab, ref).Scan(&kept); err != nil {
+				t.Fatal(err)
+			}
+			if !kept {
+				return false
+			}
+		}
+		for _, id := range w.custody(aliceOld.address) {
+			for _, carrier := range carriers {
+				if id == carrier {
+					return false
+				}
+			}
+		}
+		return true
+	})
+	t.Logf("J3: published %s retained and receipted %d own-device sync frames", oldTag, syncBurst)
 	alicePhone := w.link(alice, "alice-phone", "phone", head)
 	waitUntil(t, "alice's history on her new device", 60*time.Second, func() bool {
 		return alicePhone.shows(ab, "ba in grace") && alicePhone.shows(g, "carol to the group in grace")

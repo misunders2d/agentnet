@@ -392,14 +392,14 @@ func (l *Live) DM(id string) (DMThread, error) {
 			summary := threadSummary(*main, false)
 			t.MainTopic = &summary
 		}
-		topics, err := l.a.ChatTopicsForMessages(id, msgs)
+		assigned := client.ChatTopicAssignments(msgs)
+		topics, err := l.a.ChatTopicsForMessages(id, msgs, assigned)
 		if err != nil {
 			return DMThread{}, err
 		}
 		for _, topic := range topics {
 			t.Topics = append(t.Topics, threadSummary(topic, false))
 		}
-		assigned := client.ChatTopicAssignments(msgs)
 		var groupRefs []protocol.GroupHistoryRef
 		if c.Kind == protocol.ConvKindGroup && c.Role == "member" && c.Frozen == "" {
 			ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
@@ -456,13 +456,15 @@ func (l *Live) DM(id string) (DMThread, error) {
 				}
 				dm.Body = client.TopicOrganizationNotice(m.Topic, title)
 			}
-			dm.Continuation, err = l.a.ContinuationFor(m.ID, m.Key, m.Exec)
-			if err != nil {
-				return DMThread{}, err
-			}
-			dm.Stop, err = l.a.StopFor(m.ID, m.Key, m.Exec)
-			if err != nil {
-				return DMThread{}, err
+			if m.Kind == envelope.KindQuestion || m.Kind == envelope.KindTask || m.Exec != nil {
+				dm.Continuation, err = l.a.ContinuationFor(m.ID, m.Key, m.Exec)
+				if err != nil {
+					return DMThread{}, err
+				}
+				dm.Stop, err = l.a.StopFor(m.ID, m.Key, m.Exec)
+				if err != nil {
+					return DMThread{}, err
+				}
 			}
 			if m.SendStopped && m.State == "not_delivered" {
 				dm.StateText = "Not sent; local sending stopped."

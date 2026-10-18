@@ -45,9 +45,8 @@ func (a *Agent) HumanInviteSupport(ctx context.Context, conv, host string) ([]Hu
 	if v.Me {
 		v.Role = "me"
 	}
-	label, device, _ := protocol.SplitAddress(host)
-	var profile protocol.Profile
-	if err := a.hub.do(ctx, "GET", "/v1/agents/"+label+"/"+device+"/profile", nil, &profile); err != nil {
+	profile, err := a.peerProfile(ctx, host)
+	if err != nil {
 		return nil, err
 	}
 	v.State = humanSupportState(profile, host, key.SignKey)

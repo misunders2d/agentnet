@@ -198,8 +198,8 @@ func (a *Agent) AgentCatalog(ctx context.Context, host string) ([]protocol.Agent
 	if err != nil {
 		return nil, err
 	}
-	var profile protocol.Profile
-	if err = a.hub.do(ctx, "GET", "/v1/agents/"+label+"/"+name+"/profile", nil, &profile); err != nil {
+	profile, err := a.peerProfile(ctx, host)
+	if err != nil {
 		return nil, err
 	}
 	if !profile.Supports(host, key.SignKey, protocol.CapAgentIdentity) {

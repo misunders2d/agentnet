@@ -130,7 +130,7 @@ func (a *Agent) syncInvitations() (bool, error) {
 		if dev.Address == a.Address || !me.roster.Human(dev.Fingerprint()) {
 			continue
 		}
-		if full, e := syncWindowFull(tx, dev); e != nil {
+		if full, e := syncStateWindowFull(tx, dev); e != nil {
 			return false, e
 		} else if full {
 			continue

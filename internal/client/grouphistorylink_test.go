@@ -54,6 +54,13 @@ func TestGroupHistoryLinkAfterAuthorLeaves(t *testing.T) {
 		if _, err := w.alice.historyPageFor(device.Self(), historyPos{}); err != nil {
 			t.Fatalf("departed author's old message blocked linked history: %v", err)
 		}
+		var unbound int
+		if err := w.alice.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE sub=? AND recipient_fp IS NULL`, envelope.SubHistory).Scan(&unbound); err != nil {
+			t.Fatal(err)
+		}
+		if unbound != 0 {
+			t.Fatalf("history copies lack an exact recipient key: %d", unbound)
+		}
 		runAgent(t, device)
 	}
 	runAgent(t, w.alice)

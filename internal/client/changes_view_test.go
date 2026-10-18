@@ -122,6 +122,8 @@ func TestMemberPresenceKeepsContentRevision(t *testing.T) {
 		if refused != empty || a.listed.has(second.Roster) || a.listed.has(alice.Roster) {
 			t.Fatal("mismatched roster changed the cache or content")
 		}
+		a.onMembers(raw) // a new list requires a fresh profile before completion
+		empty, _ = a.ViewChanges()
 		faults := injectFaults(a)
 		label, name, err := protocol.SplitAddress(alice.Address)
 		if err != nil {

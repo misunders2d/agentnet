@@ -2,7 +2,7 @@ import { pendingGroupInvites } from "./RoomPanel.model";
 // The conversation's header (who this is, whether their computer is on,
 // Bring in, and the overflow menu) and, on phones, the guest bar: who is
 // helping here right now, with Dismiss said in words.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Menu } from "@base-ui/react/menu";
 import {
   IconChevronLeft, IconDotsVertical, IconUserPlus, IconUsers, IconBell, IconBellOff, IconTrash, IconHandStop,
@@ -281,9 +281,16 @@ function GuestChips({ helpers: hs }: { helpers: Helper[] }) {
 
 // ---- the phone guest bar ----------------------------------------------------------------------
 
-export function GuestBar({ helpers: hs, onDismissed }: { helpers: Helper[]; onDismissed: (h: Helper) => void }) {
+export function GuestBar({ thread, helpers: hs, onDismissed }: { thread: T.DMThread; helpers: Helper[]; onDismissed: (h: Helper) => void }) {
   const store = useApp();
-  const [busy, setBusy] = useState(false);
+  const [pending, setPending] = useState<Helper | null>(null);
+  useEffect(() => {
+    if (!pending || !store.isActive() || store.get().open?.id !== thread.id || store.get().pending) return;
+    const current = (pending.agent ? thread.agents : thread.guests)?.find(p => p.pid === pending.pid);
+    if (current?.state !== "dismissed") return;
+    setPending(null);
+    onDismissed(pending);
+  }, [thread, pending, onDismissed]);
   if (!hs.length) return null;
   if (hs.length > 1) {
     return (
@@ -298,11 +305,13 @@ export function GuestBar({ helpers: hs, onDismissed }: { helpers: Helper[]; onDi
   }
   const h = hs[0];
   const dismiss = async () => {
-    if (!h.dismiss) return;
-    setBusy(true);
+    if (!h.dismiss || pending) return;
+    const selected = store.get().open;
+    if (!store.isActive() || selected?.kind !== "dm" || selected.id !== thread.id) return;
+    setPending(h);
     const r = await h.dismiss();
-    setBusy(false);
-    if (r) onDismissed(h);
+    if (r === undefined) setPending(null);
+    else if (store.get().open === selected) await store.refreshOpen();
   };
   return (
     <div className="flex h-[52px] shrink-0 items-center gap-2.5 border-b-[1.5px] border-outline bg-guest-bg pl-3 pr-2">
@@ -313,8 +322,8 @@ export function GuestBar({ helpers: hs, onDismissed }: { helpers: Helper[]; onDi
       </span>
       {h.review ? <Button size="sm" variant="act" onClick={() => store.setPanel(true)}>Review</Button>
         : h.dismiss && (
-          <Button size="sm" variant="outline" icon={<IconHandStop size={18} />} disabled={busy} onClick={dismiss}
-            title="Stops new messages. What was already shared stays with them.">{h.member ? "Remove agent" : "Dismiss"}</Button>
+          <Button size="sm" variant="outline" icon={<IconHandStop size={18} />} disabled={!!pending} onClick={dismiss}
+            title="Stops new messages. What was already shared stays with them.">{pending ? "Dismissing…" : h.member ? "Remove agent" : "Dismiss"}</Button>
         )}
     </div>
   );

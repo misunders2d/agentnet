@@ -181,10 +181,9 @@ func (a *Agent) historyCopy(to identity.Public, conv string, raw []byte, item Hi
 	if err != nil {
 		return outCopy{}, err
 	}
-	copy := outCopy{env: env, in: in, state: stateQueued}
+	copy := outCopy{env: env, in: in, state: stateQueued, recipientFP: to.Fingerprint()}
 	if root.Kind == protocol.ConvKindGroup {
 		copy.required = protocol.CapGroup
-		copy.recipientFP = to.Fingerprint()
 		packet, e := groupTurnPacketIn(a.store.db, conv)
 		if e != nil {
 			return outCopy{}, e

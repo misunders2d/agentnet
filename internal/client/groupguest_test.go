@@ -356,6 +356,10 @@ func TestGroupGuestCapturedMessageControls(t *testing.T) {
 	}
 	oldCaps := slices.DeleteFunc(slices.Clone(ownCaps), func(c string) bool { return c == protocol.CapGroupHumanParticipation })
 	signCapsAfter(t, guest, oldCaps)
+	eventually(t, "member observes guest reader downgrade", func() bool {
+		p, err := member.peerProfile(tctx(t), guest.Address)
+		return err == nil && !p.Supports(guest.Address, guest.Self().SignKey, protocol.CapGroupHumanParticipation)
+	})
 	transport.blocked.Store(false)
 	if e = member.FlushOutbox(tctx(t)); e != nil {
 		t.Fatal(e)
@@ -365,6 +369,10 @@ func TestGroupGuestCapturedMessageControls(t *testing.T) {
 		t.Fatalf("V3 old reader crossed final gate: %s %v immutable=%t", state, e, unchanged == queuedRaw)
 	}
 	roomReader(t, guest)
+	eventually(t, "member observes guest reader update", func() bool {
+		p, err := member.peerProfile(tctx(t), guest.Address)
+		return err == nil && p.Supports(guest.Address, guest.Self().SignKey, protocol.CapRoom)
+	})
 	if e = member.FlushOutbox(tctx(t)); e != nil {
 		t.Fatal(e)
 	}

@@ -416,13 +416,15 @@ func (l *Live) Thread(id string) (Thread, error) {
 	for _, m := range c.Messages {
 		v := Message{ID: m.ID, AgentID: m.AgentID, Target: m.Target, Dir: m.Dir, From: m.From, To: m.To, Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Quote: m.Quote, At: m.At, SentAt: shownSent(m.SentAt, m.At),
 			State: m.State, Status: m.Status, Path: m.Path, Responder: m.Responder, Summary: m.Summary, Detail: m.Detail, SendStopped: m.SendStopped, DeliveryUncertain: m.DeliveryUncertain, Controls: m.Controls, Exec: m.Exec, History: m.History, SyncedFrom: m.SyncedFrom, FromKey: m.FromKey}
-		v.Continuation, err = l.a.ContinuationFor(m.ID, "", m.Exec)
-		if err != nil {
-			return t, err
-		}
-		v.Stop, err = l.a.StopFor(m.ID, "", m.Exec)
-		if err != nil {
-			return t, err
+		if m.Kind == envelope.KindQuestion || m.Kind == envelope.KindTask || m.Exec != nil {
+			v.Continuation, err = l.a.ContinuationFor(m.ID, "", m.Exec)
+			if err != nil {
+				return t, err
+			}
+			v.Stop, err = l.a.StopFor(m.ID, "", m.Exec)
+			if err != nil {
+				return t, err
+			}
 		}
 		v.Unread, v.Attention = m.Unread, m.Attention
 		for i, f := range m.Attachments {

@@ -24,7 +24,10 @@ type staleCapsKey struct{}
 // staleCapsRT answers a profile read made with a staleCapsKey context as the
 // Hub answered it before the device's live session published its record:
 // the same profile, without records.
-type staleCapsRT struct{ base http.RoundTripper }
+type staleCapsRT struct {
+	base   http.RoundTripper
+	onRead func()
+}
 
 func (rt staleCapsRT) RoundTrip(r *http.Request) (*http.Response, error) {
 	resp, err := rt.base.RoundTrip(r)
@@ -38,6 +41,7 @@ func (rt staleCapsRT) RoundTrip(r *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 	prof.Caps = nil
+	rt.onRead() // the newer member list overtakes this older profile response
 	data, _ := json.Marshal(prof)
 	resp.Body, resp.ContentLength = io.NopCloser(bytes.NewReader(data)), int64(len(data))
 	resp.Header.Del("Content-Length")
@@ -55,11 +59,15 @@ func (rt staleCapsRT) RoundTrip(r *http.Request) (*http.Response, error) {
 // for good: TestSelfConsentLinkedDevices.)
 func TestWaitingCopyLooksAgainOnceStored(t *testing.T) {
 	w := newWorld(t, "")
-	w.alice.hub.http.Transport = staleCapsRT{w.alice.hub.http.Transport}
+	w.alice.hub.http.Transport = staleCapsRT{w.alice.hub.http.Transport, func() {
+		raw, _ := json.Marshal(w.alice.MemberView().Members)
+		w.alice.onMembers(raw)
+	}}
 	runAgent(t, w.alice)
 	runAgent(t, w.bob)
 	persons(t, w.alice, w.bob)
 	conv := newDM(t, w.alice, w.bob)
+	w.alice.membersDisconnected() // a reconnect's first profile read is uncached
 	sent, err := w.alice.SendConv(context.WithValue(tctx(t), staleCapsKey{}, true), conv, ConvOutgoing{Body: "decided on an older read"})
 	if err != nil || sent.State != stateConvWaiting || !strings.Contains(sent.Detail, "needs to update AgentNet") {
 		t.Fatalf("setup: %+v %v", sent, err)

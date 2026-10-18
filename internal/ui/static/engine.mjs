@@ -16,7 +16,7 @@ import * as wire from "./wire.mjs";
 import { threadIndexed, readThreadRows, projectDeviceThreads, readChatView } from "./chatprojection.mjs";
 import { contributionPreview, contributionApply, contributionRecheck } from "./historycontribution.mjs";
 import {deviceHistory,deviceHistoryDirection,deviceHistoryPeer,directHistoryRow} from "./devicehistory.mjs";
-import { backgroundCopy, historyWindow } from "./historywindow.mjs";
+import { backgroundCopy, historyWindow, stateWindow } from "./historywindow.mjs";
 import { historyArchive } from "./historyarchive.mjs";
 import { Decrypter, Encrypter } from "./vendor/age.mjs";
 import { openDB } from "./vendor/idb.mjs"; // idb: promises over IndexedDB (webvendor, pinned)
@@ -1982,7 +1982,7 @@ export class Engine {
       const present=new Set();for(const o of saved)if(o.sub===wire.SubReadSync&&o.read_owner===own.person&&["queued","waiting","custody","delivered","quarantined"].includes(o.state))for(const key of o.read_refs||[])present.add(o.recipient_fp+"|"+key);
       for(const dev of own.devices) {
         if (!await this.recipientAvailable(dev,checks)) continue;
-        if(!await historyWindow(this.store,dev))continue;
+        if(!await stateWindow(this.store,dev))continue;
         if(dev.address===this.address || !(own.human_keys||[]).includes(dev.fingerprint))continue;
         const refs=marks.filter(m=>!present.has(dev.fingerprint+"|"+this.readMarkKey(own.person,m.ref))).slice(0,64).map(m=>m.ref);if(!refs.length)continue;
         const body=JSON.stringify({v:1,person:own.person,roster:own.hash,refs}),r=wire.parseReadSync(body);
@@ -2067,7 +2067,7 @@ export class Engine {
     if(!latest.length)return {ops,more};
     await this.groupRead(checks,"kv","person");
     for(const dev of own.devices){
-      if(dev.address===this.address||!own.human_keys.includes(dev.fingerprint)||!await this.recipientAvailable(dev,checks)||!await historyWindow(this.store,dev))continue;
+      if(dev.address===this.address||!own.human_keys.includes(dev.fingerprint)||!await this.recipientAvailable(dev,checks)||!await stateWindow(this.store,dev))continue;
       // Coalesce later generations behind one immutable pending carrier;
       // ordinary V1 refs are produced independently by syncReadPages.
       if(saved.some(row=>row.read_owner===own.person&&row.to===dev.address&&row.recipient_fp===dev.fingerprint&&row.required_cap===wire.CapReadSyncV2&&["queued","waiting"].includes(row.state)))continue;
@@ -2171,7 +2171,7 @@ export class Engine {
       if(!current||current.person!==own.person||current.state!=="self"||!current.human_keys?.includes(this.fp)||!current.devices.some(d=>d.address===this.address&&d.fingerprint===this.fp))return;
       for(const dev of current.devices){
         if (!await this.recipientAvailable(dev,checks)) continue;
-        if(!await historyWindow(this.store,dev))continue;
+        if(!await stateWindow(this.store,dev))continue;
         if(dev.address===this.address||!current.human_keys.includes(dev.fingerprint))continue;
         const titles=[];
         for(const saved of page){
@@ -2258,7 +2258,7 @@ export class Engine {
       if(!this.ownTopicWriter(current)||current.person!==own.person)return;
       for(const dev of current.devices){
         if (!await this.recipientAvailable(dev,checks)) continue;
-        if(!await historyWindow(this.store,dev))continue;
+        if(!await stateWindow(this.store,dev))continue;
         if(dev.address===this.address||!current.human_keys.includes(dev.fingerprint))continue;
         // A device that cannot read marks yet keeps one waiting carrier; later
         // marks stay unsealed here, so nothing piles up for an older program.
@@ -2334,7 +2334,7 @@ export class Engine {
       let count=0;
       outer:for(const dev of own.devices) {
         if (!await this.recipientAvailable(dev,checks)) continue;
-        if(!await historyWindow(this.store,dev))continue;
+        if(!await stateWindow(this.store,dev))continue;
         if(dev.address===this.address||!(own.human_keys||[]).includes(dev.fingerprint))continue;
         for(const r of views) {
           if(present.has(dev.fingerprint+"/"+r.id+"/"+r.revision))continue;
@@ -2396,7 +2396,7 @@ export class Engine {
         const root=wire.parseRoot(c.root);if(!wire.rootMember(root,own.person))continue;
         for(const dev of own.devices) {
         if (!await this.recipientAvailable(dev,checks)) continue;
-        if(!await historyWindow(this.store,dev))continue;
+        if(!await stateWindow(this.store,dev))continue;
           if(dev.address===this.address || !(own.human_keys||[]).includes(dev.fingerprint))continue;
           try { await this.rootSyncAuthority(root,this.address,this.fp,dev.address,dev.fingerprint,checks); } catch(e) { continue; }
           const saved=await this.authorityRows({conv:c.id,sub:wire.SubRootSync},checks);

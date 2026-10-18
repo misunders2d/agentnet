@@ -348,9 +348,9 @@ func testGroupParticipationHistoryLinkedRestartReorder(t *testing.T, dismissed, 
 	})
 	publishGroupFixtureCaps(t, producer, true)
 	publishGroupFixtureCaps(t, phone, true)
-	if err = phone.requireParticipationCaps(tctx(t), producer.Self(), protocol.CapGroup); err != nil {
-		t.Fatal(err)
-	}
+	eventually(t, "phone observes producer group capabilities", func() bool {
+		return phone.requireParticipationCaps(tctx(t), producer.Self(), protocol.CapGroup) == nil
+	})
 	t.Cleanup(func() {
 		if t.Failed() {
 			for _, a := range []*Agent{producer, phone} {

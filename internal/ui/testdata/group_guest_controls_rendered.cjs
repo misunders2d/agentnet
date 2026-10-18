@@ -1045,6 +1045,20 @@ if(process.env.AGENTNET_REACTION_REGRESSION==='1'){
 }
 if(process.env.AGENTNET_PHONE_REJOIN_REGRESSION==='1'){
  assert.equal(skin,'comic');if(width!==390)continue;
+ {
+  const {page,context}=await openCase('phone-rejoin');
+  try{
+   await page.evaluate(()=>fixture.holdDM=true);
+   await page.getByRole('button',{name:'Dismiss',exact:true}).click();
+   await page.waitForFunction(()=>!!window.finishRejoinRead);await settle(page);
+   const premature=await page.getByRole('status').filter({hasText:'left · dismissed by you'}).count();
+   const pending=await page.getByRole('button',{name:'Dismissing…',exact:true}).count();
+   await page.evaluate(()=>{fixture.holdDM=false;window.finishRejoinRead();});
+   await page.getByRole('status').filter({hasText:'left · dismissed by you'}).waitFor();
+   assert.equal(premature,0,'enqueue response must not claim dismissal before the exact conversation refresh');
+   assert.equal(pending,1,'held authority read keeps truthful visible dismissal feedback');
+  }finally{await context.close();}
+ }
  for(const mode of ['navigate-loaded','navigate-pending','navigate-error','update-active','update-invited','click-active','click-invited','ended','key','name','host','error']){
   const {page,context}=await openCase('phone-rejoin');
   try{

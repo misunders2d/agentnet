@@ -3,11 +3,11 @@ package hub
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,6 +16,10 @@ import (
 
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
+
+// Bound unacknowledged background frames while overlapping receipt round trips.
+// Each frame is already bounded by MaxBody; blobs remain independently fetched.
+const syncStreamWindow = 8
 
 // streams tracks live push connections per agent so new messages wake them
 // and revocation closes them.
@@ -271,7 +275,7 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 	signals := h.signals.subscribe(caller, sub)
 	defer h.signals.unsubscribe(caller, sub)
 	var liveSeq, adminNoticeCursor int64
-	syncInFlight := ""
+	var syncInFlight [syncStreamWindow]string
 	sentRelease := int64(-1) // the release is sent on connect and when it changes
 	sentMembers := int64(-1) // so is the member list
 	sentAgain := int64(-1)   // as of this look-again generation
@@ -392,35 +396,44 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 		if len(msgs) != 0 {
 			continue // recheck live arrivals before giving sync a delivery turn
 		}
-		if syncInFlight != "" {
-			_, _, state, err := h.store.messageState(syncInFlight, caller)
-			if err != nil && !errors.Is(err, sql.ErrNoRows) {
-				return
+		free := -1
+		for i, id := range syncInFlight {
+			if id != "" {
+				_, _, state, err := h.store.messageState(id, caller)
+				if err != nil && !errors.Is(err, errNotFound) {
+					return
+				}
+				if err != nil || state != protocol.StateCustody {
+					syncInFlight[i] = ""
+				}
 			}
-			if err != nil || state != protocol.StateCustody {
-				syncInFlight = ""
+			if syncInFlight[i] == "" {
+				free = i
 			}
 		}
-		if syncInFlight == "" {
-			// Single-flight sync needs no sequence cursor: its terminal ack
-			// removes it from custody. An older live row may be demoted while
-			// connected, so a cursor would silently skip that newly sync row.
-			msgs, err := h.store.pendingForLane(caller, ad.Session, protocol.MessageLaneSync, 0, 1)
+		if free >= 0 {
+			// Query oldest custody without a sequence cursor: an older live
+			// row may have been demoted since the last sync frame was sent.
+			msgs, err := h.store.pendingForLane(caller, ad.Session, protocol.MessageLaneSync, 0, syncStreamWindow)
 			if err != nil {
 				return
 			}
-			if len(msgs) != 0 {
-				m := msgs[0]
+			sent := false
+			for _, m := range msgs {
+				if slices.Contains(syncInFlight[:], m.ID) {
+					continue
+				}
 				if !write("event: message\ndata: %s\n\n", m.Envelope) {
 					return
 				}
-				syncInFlight = m.ID
+				syncInFlight[free] = m.ID
 				if !between() {
 					return
 				}
-				// At most one sync frame can be waiting in TCP/client admission.
-				// Its ordinary terminal receipt wakes this stream to resume. A
-				// later live turn bypasses it; an already-written frame cannot.
+				sent = true
+				break // recheck live arrivals between every background frame
+			}
+			if sent {
 				continue
 			}
 		}

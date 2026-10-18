@@ -377,7 +377,7 @@ const restarted=new Engine({store:a.store,base:a.base,fetch});Object.assign(rest
  }
  const dev=phone.me.devices.find(d=>d.address===phone.address),active=async()=>(await copies(desk)).filter(r=>r.to===phone.address&&['queued','waiting','custody'].includes(r.state));
  await desk.directHistory().step(dev);
- check((await active()).length===50,'offline direct catchup is bounded to one exact-recipient window');
+ check((await active()).length===50,'offline direct catchup prepares one source page');
  check(!await desk.directHistory().step(dev),'full window sleeps instead of producing another page');
  const batch=await active();await desk.store.write(batch.map(r=>({s:'outbox',k:r.id,v:{...r,state:'custody'}})));
  check(!await desk.directHistory().step(dev),'custody still occupies offline recipient capacity');
@@ -388,7 +388,7 @@ const restarted=new Engine({store:a.store,base:a.base,fetch});Object.assign(rest
   const pending=await active();if(!pending.length)break;
   for(const row of pending)await desk.dispatch('receipt',JSON.stringify({id:row.id,state:'delivered',seq:++seq}));
   if(desk.historyRun)await desk.historyRun;
-  check((await active()).length<=50,'receipt refill retains exact-recipient window');
+  check((await active()).length<=50,'receipt refill retains the cold exact-recipient window');
  }
  const all=(await copies(desk)).filter(r=>r.to===phone.address),ids=all.map(r=>JSON.parse(r.body).item.id);
  check(ids.length===500&&new Set(ids).size===500&&originals.every(id=>ids.includes(id)),'receipt resume completely catches up all 500 durable originals once');
@@ -426,6 +426,13 @@ const restarted=new Engine({store:a.store,base:a.base,fetch});Object.assign(rest
  const staged=(await copies(desk)).filter(r=>r.state==='archive_staged').sort((a,b)=>(a.send_order??a.at)-(b.send_order??b.at)||a.id.localeCompare(b.id));check(staged.length===50,'archive bootstrap atomically stages one bounded page instead of individual POSTs');
  check(JSON.parse(staged[0].body).item.id===originals.at(-1),'browser archive bootstrap selects newest originals first');
  const stagedOverview=(await desk.overview()).history?.find(row=>row.device===phone.address);check(stagedOverview?.queued===50&&!stagedOverview.retained&&!stagedOverview.blocked,'overview reports staged archive children as queued');
+ await desk.directHistory().step(phone.me.devices.find(d=>d.address===phone.address));
+ await desk.changeTopic('rename',{peer:peer.address,id:originals[0],title:'Private title while cold archive is held'});
+ if(desk.topicSyncRun)await desk.topicSyncRun;await desk.syncTopicTitles();
+ const titleCarrier=(await desk.store.outboxSub(wire.SubTopicSync)).find(r=>r.to===phone.address&&r.body.includes('Private title while cold archive is held'));
+ check(!!titleCarrier,'full cold archive leaves bounded capacity for a newer encrypted topic update');
+ await receive(titleCarrier.envelope,phone);
+ check((await phone.store.get('kv','topic/'+peer.address+'/'+originals[0]))?.title==='Private title while cold archive is held','same-phone topic update converges before its blocked cold archive');
  const fresh=wire.newID(),m={id:fresh,from:desk.address,to:peer.address,ts:101,kind:'message',body:'live during archive upload'};
  const live={...m,v:1,at:101000,fp:peer.fp,envelope:await wire.seal(m,desk.keys,peer.pub),state:'queued'};await desk.store.write([{s:'outbox',k:fresh,v:live}]);await desk.post(live);
  check((await desk.store.get('outbox',fresh)).state==='custody','blocked archive upload cannot block fresh live POST');
@@ -468,13 +475,41 @@ const restarted=new Engine({store:a.store,base:a.base,fetch});Object.assign(rest
  check(!(await phone.store.get('kv','history-archive/in/'+firstArchive.id)).retained&&!(await phone.store.all('receipts')).some(r=>r.id===firstArchive.id),'corrupt archive ciphertext is neither retained nor acknowledged');
  archiveBlob.bytes=goodCipher;
 
- // Pause after one admitted record, then resume with a fresh Engine instance.
- const originalImport=phone.importArchiveChild.bind(phone);let imports=0;
- phone.importArchiveChild=async(...args)=>{await originalImport(...args);if(++imports===1)phone.closing=true;};phone.connected=true;await phone.archives().wake();
+ // A blocked incoming blob must not occupy live admission or local topic
+ // decisions. Disconnecting it leaves the same durable descriptor retryable.
+ let downloadEntered,disconnectDownload;
+ const downloading=new Promise(r=>downloadEntered=r),disconnected=new Promise((_,reject)=>disconnectDownload=()=>reject(Error('synthetic disconnected archive GET')));
+ const phoneFetch=phone.fetch;let blockedDownload=true;
+ phone.fetch=async(url,opts)=>{
+  if(blockedDownload&&new URL(url).pathname==='/v1/blobs/'+firstArchive.attachments[0].blob.id+'/data'){
+   blockedDownload=false;downloadEntered();await disconnected;
+  }
+  return phoneFetch(url,opts);
+ };
+ phone.connected=true;const stalledImport=phone.archives().wake();await downloading;
+ const foregroundID=wire.newID(),foreground={id:foregroundID,from:peer.address,to:phone.address,ts:Math.floor(Date.now()/1000),kind:'message',body:'Live while archive GET is held',attachments:[]};
+ const foregroundStart=performance.now();
+ await receiveHistory(await wire.seal(foreground,peer.keys,phone.pub),phone);
+ check((await phone.store.get('inbox',foregroundID))?.body===foreground.body,'same-phone live admission proceeds while archive GET is held');
+ await phone.changeTopic('archive',{peer:peer.address,id:foregroundID,count:1});
+ const localMark=await phone.store.get('kv','topic/'+peer.address+'/'+foregroundID);
+ check(localMark?.mark==='archived','same-phone local topic mutation persists while archive GET is held');
+ check(!(await phone.store.all('receipts')).some(r=>r.id===firstArchive.id),'held archive GET never claims retention');
+ console.log('held archive GET: live admission plus durable local topic ms',performance.now()-foregroundStart);
+ phone.closing=true;phone.connected=false;disconnectDownload();await stalledImport;phone.fetch=phoneFetch;
+ check((await phone.store.get('kv','history-archive/in/'+firstArchive.id)).index===0,'disconnected blob keeps exact archive ID and unadvanced admission cursor');
+ phone.closing=false;
+
+ // Restart after the failed GET, pause after one admitted record, and restart
+ // again from retained ciphertext. Both restarts keep the exact descriptor.
+ const retryPhone=new Engine({store:phone.store,base:phone.base,fetch:phoneFetch});Object.assign(retryPhone,{keys:phone.keys,address:phone.address,pub:phone.pub,fp:phone.fp,me:phone.me});
+ const originalImport=retryPhone.importArchiveChild.bind(retryPhone);let imports=0;
+ retryPhone.importArchiveChild=async(...args)=>{await originalImport(...args);if(++imports===1)retryPhone.closing=true;};retryPhone.connected=true;await retryPhone.archives().wake();
  check((await phone.store.get('kv','history-archive/in/'+firstArchive.id)).index===1,'archive import persists bounded progress before interruption');
  check((await phone.store.get('files','archive/'+firstArchive.id)).ct.length>0,'descriptor is retained durably before acknowledgement');
  check((await phone.store.get('kv','history-archive/in/'+firstArchive.id)).retained,'retained archive may acknowledge independently of unfinished import');
  const resumed=new Engine({store:phone.store,base:'https://synthetic.invalid',fetch});Object.assign(resumed,{keys:phone.keys,address:phone.address,pub:phone.pub,fp:phone.fp,me:phone.me});await resumed.archives().wake();phone.closing=false;phone.connected=false;
+ check((await resumed.store.get('inbox',foregroundID))?.body===foreground.body&&JSON.stringify(await resumed.store.get('kv','topic/'+peer.address+'/'+foregroundID))===JSON.stringify(localMark),'restarts preserve the exact live original and local topic decision without replay');
  check((await phone.store.get('kv','history-archive/in/'+firstArchive.id)).state==='done','fresh Engine resumes interrupted import from durable ciphertext without cursor loss');
  check(!await phone.store.get('files','archive/'+firstArchive.id),'completed import releases duplicate archive ciphertext');
  await receive(firstArchive.envelope,phone);check((await phone.store.get('kv','history-archive/in/'+firstArchive.id)).state==='done','descriptor duplicate after cleanup never downloads or reimports history');
@@ -555,7 +590,7 @@ check(imported===N,'three-device fixture imports all exact archive originals');
 let steps=0;while(steps<100&&await phone.directHistory().step(tabletDev))steps++;
 const toTablet=(await phone.store.all('outbox')).filter(r=>r.to===tablet.address&&r.sub===wire.SubDeviceHistory);
 const live=toTablet.filter(r=>r.fresh_live),staged=toTablet.filter(r=>r.state==='archive_staged');
-check(!live.length&&staged.length===50&&toTablet.length===50,'imported archive tail stays in bounded cold window for third device');
+check(!live.length&&staged.length===toTablet.length&&staged.length<N&&!await phone.directHistory().step(tabletDev),'third-device imported history fills a bounded cold window without fresh-live promotion');
 // A user's interactive send on the phone after that production, through the
 // engine's queued UI send path (commitReceiverCopies assigns send_order).
 await phone.store.write([{s:'persons',k:peer.me.person,v:{...peer.me,state:'pinned'}}]);
@@ -570,10 +605,10 @@ phone.connected=false;desk.connected=false;
 // Pending state queries must not materialize ten thousand completed rows.
 {
  const e=await device('indexed-pending/desk'),fp=e.fp,target={address:'indexed-pending/phone',fingerprint:fp};
+ const {historyWindow}=await import('../static/historywindow.mjs'),availableBefore=await historyWindow(e.store,target);
  for(let offset=0;offset<10000;offset+=50)await e.store.write(Array.from({length:50},()=>{const id=wire.newID();return{s:'outbox',k:id,v:{id,to:target.address,recipient_fp:fp,sub:wire.SubHistoryArchive,state:'delivered',at:1,body:'completed archive descriptor',envelope:'completed ciphertext fixture '+'.'.repeat(4096)}};}));
  const all=e.store.all.bind(e.store);e.store.all=async table=>{if(table==='outbox')throw Error('Pending scheduler scanned completed history.');return all(table);};
- const {historyWindow}=await import('../static/historywindow.mjs');
- check(await historyWindow(e.store,target)===50,'10k completed rows neither consume history capacity nor require all-outbox materialization');
+ check(await historyWindow(e.store,target)===availableBefore,'10k completed rows neither consume history capacity nor require all-outbox materialization');
  e.connected=true;await e.flushOutbox();await e.archives().wake();e.connected=false;
  check((await e.store.outboxStates(['queued','waiting','archive_staged'])).length===0,'10k completed archives create no new queue pressure');
  e.store.all=all;

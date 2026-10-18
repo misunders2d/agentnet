@@ -95,6 +95,7 @@ func (a *Agent) membersConnected(h http.Header) {
 // membersDisconnected records that the push stream closed: presence in the
 // last list is no longer current.
 func (a *Agent) membersDisconnected() {
+	a.profiles.reset(false)
 	a.members.mu.Lock()
 	a.members.view.Current = false
 	a.members.mu.Unlock()
@@ -109,6 +110,10 @@ func (a *Agent) onMembers(data []byte) {
 	if err == nil {
 		err = m.Valid()
 	}
+	// Every list may announce changed capabilities, sessions or rosters.
+	// Unreadable or truncated lists cannot witness all changes: omitted
+	// devices' presence changes may not produce another push.
+	a.profiles.reset(err == nil && !m.Truncated)
 	a.members.mu.Lock()
 	if err != nil {
 		a.members.view.Current = false

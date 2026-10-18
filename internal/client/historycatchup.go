@@ -610,7 +610,6 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 					if prepareErr != nil || canonical == nil {
 						continue
 					}
-					canonical.recipientFP = dev.Fingerprint()
 					if queueErr := queue(row); queueErr != nil {
 						if errors.Is(queueErr, errHistoryCatchupConflict) {
 							return queueErr
@@ -672,7 +671,6 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 			done[id] = true
 			return nil
 		}
-		c.recipientFP = dev.Fingerprint()
 		if _, ok := batches[it.conv]; !ok {
 			batch, e := a.prepareGroupHistoryCarriers(ctx, dev, it.conv)
 			if e != nil {

@@ -340,9 +340,10 @@ function Activity({ ctx, messages }: { ctx: Ctx; messages: AnyMsg[] }) {
 
   const busy = new Map<string, { name: string; seed: string; since?: number; what: string; activity?: string; stop?: T.StopAction; stale?: boolean }>();
   for (const m of messages) {
-    if ((!working(m, messages, ctx) && !m.stop) || (m.actions || []).includes("cancel")) continue; // its approval card shows it, with Stop
-    const what = localRunningDetail((isThreadMsg(m) ? m.detail : m.job_detail) || "", working(m, messages, ctx));
-    const nativeActivity = currentNativeActivity(isThreadMsg(m) ? m.detail : m.job_detail, m.exec, working(m, messages, ctx) && !m.stop?.pending);
+    const running = working(m, messages, ctx);
+    if ((!running && !m.stop) || (m.actions || []).includes("cancel")) continue; // its approval card shows it, with Stop
+    const what = localRunningDetail((isThreadMsg(m) ? m.detail : m.job_detail) || "", running);
+    const nativeActivity = currentNativeActivity(isThreadMsg(m) ? m.detail : m.job_detail, m.exec, running && !m.stop?.pending);
     if (isThreadMsg(m)) {
       // In a device thread the agent works on what you sent it; what it was sent works on your side.
       const name = m.dir === "out" ? threadAgentName(ctx) : agentName(undefined, ctx.names, ctx.overview?.person, ctx.overview?.person);
