@@ -58,6 +58,9 @@ func pausePosts(a *Agent) *pausedPosts {
 	a.hub.http.Transport = p
 	return p
 }
+
+// The one-second return bound includes durable disk work. Keep these fixtures
+// serial so unrelated parallel test I/O cannot consume that same bound.
 func queuedTurn(t *testing.T, a *Agent, conv, body string) ConvSent {
 	t.Helper()
 	id := protocol.NewID()
@@ -81,7 +84,6 @@ func queuedTurn(t *testing.T, a *Agent, conv, body string) ConvSent {
 	return sent
 }
 func TestQueuedSendReturnsBeforePostAndOrdersTwoTurns(t *testing.T) {
-	t.Parallel()
 	w, conv := queuedDMWorld(t)
 	p := pausePosts(w.alice)
 	t.Cleanup(func() {
@@ -121,7 +123,6 @@ func TestQueuedSendReturnsBeforePostAndOrdersTwoTurns(t *testing.T) {
 // Pending auxiliary copies keep their own delivery gate closed without
 // starving a readable turn to the same recipient in the same conversation.
 func TestQueuedSendAuxiliaryCopiesDoNotStarveTurns(t *testing.T) {
-	t.Parallel()
 	for _, sub := range []string{envelope.SubHistory, envelope.SubClear, envelope.SubInvitationSync} {
 		t.Run(sub, func(t *testing.T) {
 			w, conv := queuedDMWorld(t)
@@ -263,7 +264,6 @@ func TestQueuedSendRejectsReusedCorrelationBeforeSaving(t *testing.T) {
 }
 
 func TestQueuedSendCloseCancelsBlockedPostAfterBound(t *testing.T) {
-	t.Parallel()
 	w, conv := queuedDMWorld(t)
 	p := pausePosts(w.alice)
 	sent := queuedTurn(t, w.alice, conv, "bounded close")

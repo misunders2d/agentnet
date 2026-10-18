@@ -403,6 +403,42 @@ func TestHubRole(t *testing.T) {
 	}
 }
 
+func TestHubRoleDoesNotWaitForMemberPush(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.alice)
+	persons(t, w.alice, w.bob)
+	phone, awaited, _ := linkPhone(t, w.alice, "role-phone")
+	req := pendingLink(t, w.alice)
+	if err := w.alice.DecideLink(tctx(t), req.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if result := <-awaited; result.err != nil {
+		t.Fatal(result.err)
+	}
+	// The phone has a complete discovery snapshot but no running daemon to
+	// deliver the next push. Role changes must already be visible at the Hub.
+	for _, admin := range []bool{true, false} {
+		phone.onMembers([]byte(`{"members":[],"truncated":false}`))
+		if _, err := phone.HubRole(tctx(t)); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.alice.SetDeviceAdmin(tctx(t), phone.Address, admin); err != nil {
+			t.Fatal(err)
+		}
+		want := protocol.RoleMember
+		if admin {
+			want = protocol.RoleAdmin
+		}
+		if role, err := phone.HubRole(tctx(t)); err != nil || role != want {
+			t.Errorf("role before the next member push: %q %v, want %q", role, err, want)
+		}
+	}
+	w.hub.Stop()
+	if role, err := phone.HubRole(tctx(t)); err == nil || role != HubRoleUnknown {
+		t.Fatalf("cached role with the Hub unreachable: %q %v", role, err)
+	}
+}
+
 // A phone linked to the admin's person is a member until the person
 // grants it the role from the admin device; the grant is only for another
 // device of their own person, and a member's grant is refused.

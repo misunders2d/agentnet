@@ -20,6 +20,8 @@ This record starts with v0.8.1; earlier releases remain on the
 - Cache device profiles until the next member-list push or stream disconnect,
   avoiding repeated capability GETs during catch-up. Without a complete current
   member list every read is fresh; exact-key and handover checks are unchanged.
+  Administrator-role queries always ask the Hub directly, including immediately
+  after a grant or revocation and when cached availability exists offline.
 - Avoid per-message continuation lookups for ordinary chat rows and repeated
   activity derivation. Reuse the chat's existing topic assignments.
 - Keep phone dismissal feedback pending until the exact participation is

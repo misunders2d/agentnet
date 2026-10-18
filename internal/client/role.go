@@ -19,7 +19,10 @@ const HubRoleUnknown = "unknown"
 // error; not reaching the relay gives HubRoleUnknown and the error. The
 // label in an address says nothing about this.
 func (a *Agent) HubRole(ctx context.Context) (string, error) {
-	prof, err := a.peerProfile(ctx, a.Address)
+	// Authority must not wait for the next discovery push or reuse an offline
+	// availability snapshot after a role grant or revocation.
+	var prof protocol.Profile
+	err := a.hub.do(ctx, "GET", "/v1/agents/"+a.Address+"/profile", nil, &prof)
 	if err != nil {
 		return HubRoleUnknown, err
 	}

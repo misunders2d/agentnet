@@ -7,12 +7,13 @@ import (
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
-// profileCache keeps the Hub's profiles of devices only while the push
+// profileCache keeps the Hub's device availability profiles only while the push
 // stream is delivering complete member lists. The Hub pushes them whenever a
 // device's capabilities, sessions, person roster or role change (lookAgain),
 // so every list and every disconnect drop all entries: a profile is at most as
 // old as the push this program already relies on. Without a stream (CLI
 // commands, tests without a daemon) nothing is kept and every read asks.
+// Authority reads such as HubRole bypass this availability cache.
 type profileCache struct {
 	mu      sync.Mutex
 	active  bool   // a complete member list arrived on the open stream

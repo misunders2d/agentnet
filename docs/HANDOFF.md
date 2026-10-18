@@ -62,10 +62,11 @@ clearing all entries on every list and stream disconnect. Absent, unreadable
 or truncated lists disable reuse: changes to omitted devices may not push
 another list. Existing pushes announce capability, session and roster changes.
 Failed reads and reads overtaken by a push are not kept.
-All ten profile reads use `profilecache.go`; a queued-copy decision retains
-one consistent snapshot across its checks. No TTL, protocol or relay change;
-exact-key and handover checks are unchanged. The focused regression covers
-reuse, invalidation, in-flight updates, errors, incomplete lists and disconnects.
+Availability/capability reads use `profilecache.go`; authoritative `HubRole`
+queries always ask the Hub directly. A queued-copy decision retains one
+consistent availability snapshot across its checks. No TTL, protocol or relay
+change; exact-key and handover checks are unchanged. Focused regressions cover
+cache invalidation/errors and role changes before the next push or while offline.
 Measured cold catch-up of 447 signed DM originals to an empty linked phone
 (one-shot local probe, 300 ms injected request latency, native):
 
@@ -235,6 +236,26 @@ not the earlier AwaitLink profile, before stopping it. The attention journey
 retries only the documented mutation-free snapshot conflict for the same exact
 selection; unexpected errors still fail and signed convergence remains required.
 
+The next full run, [39151367064](https://github.com/misunders2d/agentnet/actions/runs/39151367064)
+at `124b786b`, finished with 30 successful jobs, two failures and the optional
+Windows task probe skipped. All 18 client race shards passed. All six native
+Windows client partitions completed within the unchanged bound; one failed an
+assertion rather than a package alarm. The previous macOS archive/attention
+failures did not recur.
+
+The remaining macOS failure exposed cached role authority: a linked phone could
+report admin after revocation until the next discovery push. `HubRole` now bypasses
+the availability cache. A deterministic no-next-push regression fails before the
+fix (1.288 s), observing stale grants/revocations and a cached role offline.
+The Windows failure was the one-second queued-send return check in a parallel
+fixture. Its three latency-sensitive fixtures now run serially; all existing
+timeouts, blocked-POST checks, delivery/order assertions and cases remain intact.
+
+The integrated role/cache/queued-send race check passes all 14 parents without
+skips (55.862 s), including the new role regression and the original failed
+journeys; `go vet ./...` passes. Real CLI selected-history/file, linked-device
+history and task-grant/`whoami` journeys pass (8.038 s).
+
 Witnessed admission retains full current-group validation, then selects its
 signed historical graph without rereading today's unused PID ledger. A
 self-contained witnessed request or output no longer recursively prepares
@@ -250,16 +271,17 @@ The added withdrawal/conflict controls fail on `124b786b` (4.772 s) and pass
 after the correction (5.584 s native). The actual `client-8` race partition
 passes in 525.339 s: 74 parent passes and one explicit opt-in Codex skip,
 including the derived witness (82.65 s) and both new rejection controls.
-The current-source CLI selected-history/file and linked-device-history journeys
-pass (6.595 s), as does `go vet ./...`.
+Those guard-correction checks also include actual CLI selected-history/file and
+linked-device-history journeys (6.595 s), plus `go vet ./...`.
 
 Additional focused Linux race evidence predating this guard correction covers
 five scenarios (87.338 s) and five other witnessed history/host-readmission
 boundary scenarios (143.809 s), without skips. Workflow actionlint and shell
 syntax pass.
-The compiled Linux list's 1,357 parents form six complete, disjoint partitions;
-actual Windows lists and execution remain the native CI gate. These focused
-passes are not a replacement for the full normal-push CI result or release gates.
+Both native and race scripts derive their selections from each platform's current
+compiled test list. Actual Windows execution remains the native CI gate. Focused
+passes are not a replacement for full normal-push CI on the final source or the
+release gates.
 
 Earlier temporary probes and the disposable browser/server were removed after use.
 The original reported 20-minute incident remains unqualified; the corrected
