@@ -1,5 +1,36 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+## v0.9.0 — local candidate, not released
+
+The owner's corrected MEL-527 scope is ordinary group-chat metadata: named
+HTTP(S) links edited by human members in the existing header and read by member
+agents in their existing context. There is no Project entity, new command,
+provider integration or guest metadata grant. The register reuses shared topic
+metadata with `res1` reader gating; Main-flow labels remain personal.
+
+MEL-661 now has separate date/time controls and stable scheduled-edit identity
+across pushes. Local Linux WebKitGTK native-input proof and real TLS-daemon
+restart/deadline/one-delivery proof pass. Production Comic also passes actual
+two-member link editing, phone/desktop rendering, retained stale drafts,
+refusal without overwrite, non-admin edits and clear propagation. A member
+agent's prompt omits links when its captured reply audience includes human
+guests; the focused prompt-boundary regression passes.
+
+Full members joining without selected history now receive the current links,
+including cleared registers, through one ordinary edit from the admission
+publisher. Native and signed-browser regressions and real three-member TLS
+smokes pass, including replay and the newcomer's first edit.
+
+Final-core Android packaging, 42 JVM checks, lint and memory-only preservation
+guards pass. The collection's corrected Zoom phone geometry and four affected
+rendered journeys pass, as does disposable local catalog assembly. These are
+working-tree checks, not exact-commit or native-device acceptance.
+
+See [the current acceptance record](plans/V0_9_0.md) for evidence and limits.
+Collection, Android runtime and full release qualification remain open. Nothing
+is published or deployed; the required Claude production-review gate remains
+unresolved.
+
 ## v0.8.34 — responsiveness and CI hardening (October 19, 2026)
 
 Implementation work for MEL-642/MEL-546/MEL-646. The owner authorized v0.8.34

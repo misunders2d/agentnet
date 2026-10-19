@@ -20,9 +20,19 @@ export function scheduleReason(s: {supported?: boolean; conv: string; ordinary: 
 export function localScheduleTime(date = new Date(Date.now() + 3600000)) {
   return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0,16);
 }
+// Keep the local wall-clock parts explicit; do not normalize a mistyped day or
+// a DST gap into a different send time without the sender noticing.
+export function scheduleSummary(local: string) {
+  const date = new Date(local);
+  if (!Number.isFinite(date.getTime()) || !/(Z|[+-]\d\d:\d\d)$/.test(local) && localScheduleTime(date) !== local) return "Choose a valid local date and time.";
+  return date.toLocaleString([], {dateStyle:"medium",timeStyle:"short"}) + " · UTC" +
+    (date.getTimezoneOffset() <= 0 ? "+" : "−") +
+    String(Math.floor(Math.abs(date.getTimezoneOffset()) / 60)).padStart(2,"0") + ":" +
+    String(Math.abs(date.getTimezoneOffset()) % 60).padStart(2,"0");
+}
 export function scheduleDue(local: string, now = Date.now()) {
   const time = new Date(local).getTime();
-  if (!Number.isFinite(time) || time <= now) throw Error("Choose a date and time in the future.");
+  if (!Number.isFinite(time) || time <= now || !/(Z|[+-]\d\d:\d\d)$/.test(local) && localScheduleTime(new Date(time)) !== local) throw Error("Choose a valid date and time in the future.");
   return new Date(time).toISOString();
 }
 export function captureSchedule(id: string, conv: string, body: string, draft: Draft, due: string, timezone: string, audience: T.ScheduledAudience): ScheduleAttempt {

@@ -250,7 +250,7 @@ func (a *Agent) relayFeatures(ctx context.Context) ([]string, error) {
 // hint (advertisedCaps) it is at most protocol.MaxAdvertisedCaps long;
 // rm1 (protocol.CapRoom) says this program enforces every room reader rule
 // (ROOM_V1 §2.1), so what rm1 implies (rcv1 among them) is not listed.
-var ownCaps = []string{protocol.CapMentionReaction, protocol.CapProactiveAgent, protocol.CapAgentOrganization, protocol.CapConversationAudience, protocol.CapContinuation, protocol.CapRootSync, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapRequestSteer, protocol.CapGroupInvitationManage, protocol.CapGuestAgent, protocol.CapHistoryArchive, protocol.CapHeadless, protocol.CapGroupHumanParticipation, protocol.CapModelSyncV2, protocol.CapNotify, protocol.CapTopicOrganization, protocol.CapOwnSyncV2, protocol.CapOwnSyncV3, protocol.CapPerson, protocol.CapReadSyncV2, protocol.CapRoom, protocol.CapSendGroup, protocol.CapTopicParticipation, protocol.CapTopicStateSync, protocol.CapSharedTopicTitle, protocol.CapTyping} // apx1 and aid1 are already implied by rm1; 29 includes agent1; independent ttl1 leaves three reader slots
+var ownCaps = []string{protocol.CapMentionReaction, protocol.CapProactiveAgent, protocol.CapAgentOrganization, protocol.CapConversationAudience, protocol.CapContinuation, protocol.CapRootSync, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapRequestSteer, protocol.CapGroupInvitationManage, protocol.CapGuestAgent, protocol.CapHistoryArchive, protocol.CapHeadless, protocol.CapGroupHumanParticipation, protocol.CapModelSyncV2, protocol.CapNotify, protocol.CapTopicOrganization, protocol.CapOwnSyncV2, protocol.CapOwnSyncV3, protocol.CapPerson, protocol.CapReadSyncV2, protocol.CapConversationResources, protocol.CapRoom, protocol.CapSendGroup, protocol.CapTopicParticipation, protocol.CapTopicStateSync, protocol.CapSharedTopicTitle, protocol.CapTyping} // apx1 and aid1 are already implied by rm1.
 
 // capsPublisher is the one publisher of this run's capability records:
 // the daemon's and link.go's waiting session share the session id, and the
@@ -346,7 +346,7 @@ func (a *Agent) convSupport(ctx context.Context, address string, key identity.Pu
 // person typed, or an invited agent's answer or result. Events, excerpts,
 // replicas and everything else stay quiet.
 func asksAttention(in envelope.Inner) bool {
-	if in.V != envelope.Version2 || in.Sub != "" || in.Replica || envelope.TopicRename(in.TopicEvent) {
+	if in.V != envelope.Version2 || in.Sub != "" || in.Replica || envelope.TopicMetadata(in.TopicEvent) {
 		return false
 	}
 	switch {
@@ -473,7 +473,7 @@ func (a *Agent) ConversationMessages(conv string) ([]ConvMessage, error) {
 	}
 	visible := msgs[:0]
 	for _, m := range msgs {
-		if !envelope.TopicRename(m.TopicEvent) {
+		if !envelope.TopicMetadata(m.TopicEvent) {
 			visible = append(visible, m)
 		}
 	}
@@ -626,7 +626,7 @@ func (a *Agent) SentCopies(lid string) ([]ConvCopy, error) {
 
 // outCopy is one device's copy being stored.
 type outCopy struct {
-	sharedTitleCap              bool
+	sharedTitleCap, resourcesCap bool
 	env                         envelope.Envelope
 	in                          envelope.Inner
 	state                       string
@@ -661,7 +661,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 	if err != nil {
 		return ConvSent{}, err
 	}
-	if err := a.prepareSharedTopicTitle(conv, &m); err != nil {
+	if err := a.prepareSharedTopicMetadata(conv, &m); err != nil {
 		return ConvSent{}, err
 	}
 	if err := a.prepareTopicOrganization(ctx, conv, &m); err != nil {
@@ -754,7 +754,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 			}
 			return a.sendExternalParticipation(ctx, root, raw, info, m)
 		}
-		if m.sub == "" && m.Target == nil && (m.Kind == "" || m.Kind == envelope.KindMessage) && !envelope.TopicOrganization(m.TopicEvent) {
+		if m.sub == "" && m.Target == nil && (m.Kind == "" || m.Kind == envelope.KindMessage) && !envelope.TopicOrganization(m.TopicEvent) && !envelope.TopicResources(m.TopicEvent) {
 			infos, e := a.Participations(conv)
 			if e != nil {
 				return ConvSent{}, e
@@ -874,7 +874,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		if len(m.Files) > envelope.MaxAttachments {
 			return ConvSent{}, fmt.Errorf("at most %d attachments per message", envelope.MaxAttachments)
 		}
-	} else if envelope.Blank(m.Body) && m.sub == "" && !envelope.TopicRename(m.TopicEvent) {
+	} else if envelope.Blank(m.Body) && m.sub == "" && !envelope.TopicMetadata(m.TopicEvent) {
 		return ConvSent{}, errors.New("nothing to send: no text and no files")
 	}
 	// Fresh evidence first: newer roster steps of both persons decide the
@@ -1585,7 +1585,7 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 				return e
 			}
 		}
-		if err := saveSharedTopicRename(tx, in, sender.Fingerprint()); err != nil {
+		if err := saveSharedTopicMetadata(tx, in, sender.Fingerprint()); err != nil {
 			return err
 		}
 		if err := insertCopies(tx, forward); err != nil {

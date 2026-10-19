@@ -16,12 +16,18 @@ CREATE TABLE topic_shared_titles(conv TEXT NOT NULL,topic TEXT NOT NULL,title TE
 ALTER TABLE outbox ADD COLUMN shared_title_cap INTEGER NOT NULL DEFAULT 0;
 `
 
+const conversationResourcesSchema = `
+ALTER TABLE topic_shared_titles ADD COLUMN resources TEXT NOT NULL DEFAULT '';
+ALTER TABLE outbox ADD COLUMN resources_cap INTEGER NOT NULL DEFAULT 0;
+`
+
 // SharedTopicTitleRecord includes presence even when Title is the empty reset.
 type SharedTopicTitleRecord struct {
-	Title  string `json:"title"`
-	Rev    int64  `json:"rev"`
-	Writer string `json:"writer"`
-	LID    string `json:"lid"`
+	Title     string `json:"title"`
+	Rev       int64  `json:"rev"`
+	Writer    string `json:"writer"`
+	LID       string `json:"lid"`
+	resources string
 }
 
 var ErrSharedTopicTitleStale = errors.New("shared topic title changed; retry the rename")
@@ -29,7 +35,7 @@ var ErrSharedTopicTitleConflict = errors.New("shared topic title conflicts at th
 
 func sharedTopicTitle(q dbq, conv, topic string) (SharedTopicTitleRecord, bool, error) {
 	var r SharedTopicTitleRecord
-	err := q.QueryRow(`SELECT title,rev,writer,lid FROM topic_shared_titles WHERE conv=? AND topic=?`, conv, topic).Scan(&r.Title, &r.Rev, &r.Writer, &r.LID)
+	err := q.QueryRow(`SELECT title,rev,writer,lid,resources FROM topic_shared_titles WHERE conv=? AND topic=?`, conv, topic).Scan(&r.Title, &r.Rev, &r.Writer, &r.LID, &r.resources)
 	if errors.Is(err, sql.ErrNoRows) {
 		return r, false, nil
 	}
@@ -59,8 +65,8 @@ func (a *Agent) RenameSharedTopic(ctx context.Context, conv, topic, title string
 	return a.SendConv(ctx, conv, ConvOutgoing{PID: pid, Topic: topic, TopicEvent: &envelope.TopicEvent{Action: "rename", Title: &title, Rev: old.Rev + 1}})
 }
 
-func (a *Agent) prepareSharedTopicTitle(conv string, m *ConvOutgoing) error {
-	if !envelope.TopicRename(m.TopicEvent) {
+func (a *Agent) prepareSharedTopicMetadata(conv string, m *ConvOutgoing) error {
+	if !envelope.TopicMetadata(m.TopicEvent) {
 		return nil
 	}
 	old, present, err := a.SharedTopicTitle(conv, m.Topic)
@@ -80,7 +86,7 @@ func (a *Agent) prepareSharedTopicTitle(conv string, m *ConvOutgoing) error {
 		in.PID = ""
 	}
 	if len(m.Files) != 0 {
-		return errors.New("shared topic rename cannot attach files")
+		return errors.New("shared metadata cannot attach files")
 	}
 	if err = envelope.CheckTopic(in); err != nil {
 		return err
@@ -101,37 +107,54 @@ func (a *Agent) prepareSharedTopicTitle(conv string, m *ConvOutgoing) error {
 		}
 		var actual *envelope.Inner
 		for i := range copies {
-			if envelope.TopicRename(copies[i].in.TopicEvent) {
+			if envelope.TopicMetadata(copies[i].in.TopicEvent) {
 				actual = &copies[i].in
 				break
 			}
 		}
-		if actual == nil && envelope.TopicRename(local.TopicEvent) {
+		if actual == nil && envelope.TopicMetadata(local.TopicEvent) {
 			actual = &local
 		}
 		if actual == nil {
-			return errors.New("shared topic rename has no committed metadata copy")
+			return errors.New("shared metadata has no committed copy")
 		}
 		if actual.Conv != conv || actual.Topic != m.Topic || actual.TopicEvent.Rev != old.Rev+1 {
 			return ErrSharedTopicTitleStale
 		}
-		return saveSharedTopicRename(tx, *actual, a.Self().Fingerprint())
+		return saveSharedTopicMetadata(tx, *actual, a.Self().Fingerprint())
 	}
 	return nil
 }
 
 // Called only after the caller's exact live/historical original-author checks.
-func saveSharedTopicRename(tx *sql.Tx, in envelope.Inner, writer string) error {
-	if !envelope.TopicRename(in.TopicEvent) {
+func saveSharedTopicMetadata(tx *sql.Tx, in envelope.Inner, writer string) error {
+	if !envelope.TopicMetadata(in.TopicEvent) {
 		return nil
 	}
 	if err := envelope.CheckTopic(in); err != nil {
 		return err
 	}
 	if !protocol.ValidFingerprint(writer) || !protocol.ValidID(in.LID) {
-		return errors.New("shared topic rename lacks exact original identity")
+		return errors.New("shared metadata lacks exact original identity")
 	}
 	e := in.TopicEvent
+	title, resources := "", ""
+	if envelope.TopicResources(e) {
+		root, _, found, err := conversationIn(tx, in.Conv)
+		if err != nil {
+			return err
+		}
+		if !found || root.Kind != protocol.ConvKindGroup {
+			return errors.New("shared links belong only to a group conversation")
+		}
+		raw, err := json.Marshal(*e.Resources)
+		if err != nil {
+			return err
+		}
+		resources = string(raw)
+	} else {
+		title = *e.Title
+	}
 	old, found, err := sharedTopicTitle(tx, in.Conv, in.Topic)
 	if err != nil {
 		return err
@@ -141,36 +164,37 @@ func saveSharedTopicRename(tx *sql.Tx, in envelope.Inner, writer string) error {
 			return nil
 		}
 		if e.Rev == old.Rev && writer == old.Writer {
-			if *e.Title != old.Title {
+			if title != old.Title || resources != old.resources {
 				return ErrSharedTopicTitleConflict
 			}
 			return nil
 		}
 	}
-	_, err = tx.Exec(`INSERT INTO topic_shared_titles(conv,topic,title,rev,writer,lid) VALUES(?,?,?,?,?,?) ON CONFLICT(conv,topic) DO UPDATE SET title=excluded.title,rev=excluded.rev,writer=excluded.writer,lid=excluded.lid`, in.Conv, in.Topic, *e.Title, e.Rev, writer, in.LID)
+	_, err = tx.Exec(`INSERT INTO topic_shared_titles(conv,topic,title,rev,writer,lid,resources) VALUES(?,?,?,?,?,?,?) ON CONFLICT(conv,topic) DO UPDATE SET title=excluded.title,rev=excluded.rev,writer=excluded.writer,lid=excluded.lid,resources=excluded.resources`, in.Conv, in.Topic, title, e.Rev, writer, in.LID, resources)
 	return err
 }
 
-func sharedTopicRenameCopy(in envelope.Inner) (bool, error) {
+func sharedTopicMetadataCopy(in envelope.Inner) (title, resources bool, err error) {
+	event := in.TopicEvent
 	if in.Sub == envelope.SubHistory && in.Body != "" {
 		var item HistoryItem
-		if err := json.Unmarshal([]byte(in.Body), &item); err != nil {
-			return false, err
+		if err = json.Unmarshal([]byte(in.Body), &item); err != nil {
+			return false, false, err
 		}
-		return envelope.TopicRename(item.TopicEvent), nil
+		event = item.TopicEvent
 	}
-	return envelope.TopicRename(in.TopicEvent), nil
+	return envelope.TopicRename(event), envelope.TopicResources(event), nil
 }
 
 func storeSharedTopicRequirement(tx *sql.Tx, c outCopy) error {
-	needed, err := sharedTopicRenameCopy(c.in)
+	title, resources, err := sharedTopicMetadataCopy(c.in)
 	if err != nil {
 		return err
 	}
-	needed = needed || c.sharedTitleCap
-	if !needed {
+	title, resources = title || c.sharedTitleCap, resources || c.resourcesCap
+	if !title && !resources {
 		return nil
 	}
-	_, err = tx.Exec(`UPDATE outbox SET shared_title_cap=1 WHERE id=?`, c.env.ID)
+	_, err = tx.Exec(`UPDATE outbox SET shared_title_cap=max(shared_title_cap,?),resources_cap=max(resources_cap,?) WHERE id=?`, title, resources, c.env.ID)
 	return err
 }

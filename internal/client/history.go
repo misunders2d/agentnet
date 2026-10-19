@@ -237,7 +237,7 @@ func insertCopies(tx *sql.Tx, copies []outCopy) error {
 			if err != nil {
 				return err
 			}
-			if _, assistant := historyAssistant(c.in.Body, c.in.Conv); envelope.ProactiveAgent(item.inner(c.in.Conv)) || envelope.TopicOrganization(item.TopicEvent) || envelope.TopicRename(item.TopicEvent) || item.Followup != nil || item.ReceiverRoute != nil || assistant || room || scoped { // delivery reads the item's own requirement
+			if _, assistant := historyAssistant(c.in.Body, c.in.Conv); envelope.ProactiveAgent(item.inner(c.in.Conv)) || envelope.TopicOrganization(item.TopicEvent) || envelope.TopicMetadata(item.TopicEvent) || item.Followup != nil || item.ReceiverRoute != nil || assistant || room || scoped { // delivery reads the item's own requirement
 				body = c.in.Body
 			}
 		}
@@ -584,7 +584,7 @@ func (a *Agent) admitHistory(ctx context.Context, env envelope.Envelope, in enve
 				return err
 			}
 		}
-		return saveSharedTopicRename(tx, orig, item.FromKey)
+		return saveSharedTopicMetadata(tx, orig, item.FromKey)
 	}
 	var guards []func(*sql.Tx) error
 	if envelope.TopicOrganization(orig.TopicEvent) {

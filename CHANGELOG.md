@@ -6,6 +6,17 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+- Separate scheduled-message date and time controls so Linux/WebKit users can
+  edit the time independently, with an explicit local timezone and saved-time
+  summary. Preserve an open schedule edit and its original revision across
+  background refreshes instead of discarding typed changes.
+- Let group members keep named HTTP(S) links in the existing chat header.
+  Share edits through the existing metadata register with stale-edit protection;
+  admitted member agents read them in their existing chat context. Guests do not
+  receive them, and older devices retain their copies until they support `res1`.
+  New members receive current links without sharing earlier chat history;
+  cleared lists remain convergent when a new member edits.
+
 ## [0.8.34] — 2026-10-19
 
 - Overlap up to eight background relay deliveries while checking for live

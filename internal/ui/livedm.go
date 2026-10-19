@@ -381,6 +381,21 @@ func (l *Live) DM(id string) (DMThread, error) {
 			if t.Members, err = l.groupMembers(c); err != nil {
 				return DMThread{}, err
 			}
+			if c.Role == "member" {
+				me, ok, e := l.a.Person()
+				if e != nil {
+					return DMThread{}, e
+				}
+				if ok && me.State == "self" && slices.ContainsFunc(me.Devices, func(d client.DeviceInfo) bool {
+					return d.This && d.Human
+				}) {
+					resources, e := l.a.ConversationResources(id)
+					if e != nil {
+						return DMThread{}, e
+					}
+					t.Resources = &resources
+				}
+			}
 		} else {
 			t.Members = originalViews(c)
 		}

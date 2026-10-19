@@ -29,7 +29,7 @@ func TestSharedTopicRegisterOrderingAndReset(t *testing.T) {
 		}
 		defer tx.Rollback()
 		n := envelope.Inner{V: 2, Conv: conv, Topic: topic, LID: protocol.NewID(), Kind: envelope.KindMessage, TopicEvent: &envelope.TopicEvent{Action: "rename", Title: &title, Rev: rev}}
-		if e = saveSharedTopicRename(tx, n, writer); e != nil {
+		if e = saveSharedTopicMetadata(tx, n, writer); e != nil {
 			return e
 		}
 		return tx.Commit()
@@ -90,14 +90,14 @@ func TestSharedTopicDMMetadataAndRollback(t *testing.T) {
 	old, _, _ := a.SharedTopicTitle(conv, topic)
 	title := "must rollback"
 	m := ConvOutgoing{Topic: topic, TopicEvent: &envelope.TopicEvent{Action: "rename", Title: &title, Rev: old.Rev + 1}}
-	if e = a.prepareSharedTopicTitle(conv, &m); e != nil {
+	if e = a.prepareSharedTopicMetadata(conv, &m); e != nil {
 		t.Fatal(e)
 	}
 	// An observed concurrent winner invalidates the allocation inside the commit.
 	tx, _ := a.store.db.Begin()
 	newTitle := "concurrent"
 	n := envelope.Inner{V: 2, Conv: conv, Topic: topic, LID: protocol.NewID(), Kind: envelope.KindMessage, TopicEvent: &envelope.TopicEvent{Action: "rename", Title: &newTitle, Rev: old.Rev + 1}}
-	if e = saveSharedTopicRename(tx, n, a.Self().Fingerprint()); e != nil {
+	if e = saveSharedTopicMetadata(tx, n, a.Self().Fingerprint()); e != nil {
 		t.Fatal(e)
 	}
 	tx.Commit()
@@ -636,12 +636,6 @@ func TestSharedTopicCurrentAuthorityFences(t *testing.T) {
 	})
 }
 
-func TestSharedTopicCiphertextOnlyClassifier(t *testing.T) {
-	needed, e := sharedTopicRenameCopy(envelope.Inner{Sub: envelope.SubHistory})
-	if e != nil || needed {
-		t.Fatalf("ciphertext-only legacy history %v %v", needed, e)
-	}
-}
 
 func TestSharedTopicConflictingPairIsQuarantined(t *testing.T) {
 	w, conv, _ := dmFiles(t)

@@ -6,3 +6,7 @@ import "testing"
 func TestBrowserSharedTopicTitle(t *testing.T) {
 	runNodeCheck(t, "testdata/sharedtitle_engine_check.mjs")
 }
+
+func TestBrowserConversationResources(t *testing.T) {
+	runNodeCheck(t, "testdata/resources_engine_check.mjs")
+}

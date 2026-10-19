@@ -5,6 +5,10 @@ skin that keeps Comic's whole interface (every chat, topic, agent, approval,
 setting and flow) and replaces only this folder. Because an overlay is built
 from the AgentNet release it names, Comic's fixes and new features reach
 every overlay skin on its next build; the overlay never forks Comic's code.
+This includes the existing group header's optional shared-links sheet: overlays
+inherit its member-only visibility, local drafts and stale-edit protection.
+Standalone skins implement that optional field on the same Host API contract.
+
 
 A skin that needs a different interface altogether is a **standalone skin**
 instead: its own code on the [skin contract](../../../../../docs/UI_SKINS.md)

@@ -178,7 +178,7 @@ func (a *Agent) requireParticipationCaps(ctx context.Context, key identity.Publi
 // a member list may clear the shared profile cache between its checks.
 func (a *Agent) requireParticipationCapsSnapshot(ctx context.Context, key identity.Public, required string, snapshot *readerCapsSnapshot) error {
 	switch required {
-	case protocol.CapHistoryArchive, protocol.CapSharedTopicTitle, protocol.CapGuestAgent,
+	case protocol.CapHistoryArchive, protocol.CapSharedTopicTitle, protocol.CapConversationResources, protocol.CapGuestAgent,
 		protocol.CapConversationAudience, protocol.CapTopicContext, protocol.CapModelSync,
 		protocol.CapModelSyncV2, protocol.CapTopicStateSync, protocol.CapTopicOrganization,
 		protocol.CapRequestFollowup, protocol.CapRequestSteer, protocol.CapTopicParticipation,
@@ -385,6 +385,8 @@ func (e *NeedsUpdateError) Error() string {
 		message = "cannot read private model reports yet; update all its active AgentNet sessions"
 	case protocol.CapSharedTopicTitle:
 		message = "cannot read shared topic names yet; update all its active AgentNet sessions"
+	case protocol.CapConversationResources:
+		message = "cannot read shared conversation links yet; update all its active AgentNet sessions"
 	case protocol.CapTopicOrganization:
 		message = "cannot read selected topic moves and merges yet; update all its active AgentNet sessions"
 	case protocol.CapTopicContext:

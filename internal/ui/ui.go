@@ -439,6 +439,7 @@ type LastEvent struct {
 
 // DMThread is one conversation's messages, oldest first.
 type DMThread struct {
+	Resources       *client.ConversationResources `json:"resources,omitempty"`
 	MainTopic       *ThreadSummary    `json:"main_topic,omitempty"`
 	Topics          []ThreadSummary   `json:"topics,omitempty"`
 	Kind            string            `json:"kind,omitempty"`

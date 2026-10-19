@@ -42,3 +42,14 @@ const opaque={workspace:'bound-host',name:file.name,size:file.size,arrayBuffer:(
 await submitSchedule({stage:async()=>opaque,discard:async()=>{},createSchedule:async p=>{assert.equal(p.files[0],opaque,'browser opaque wrapper remains unmodified');assert.equal(new TextDecoder().decode(await p.files[0].arrayBuffer()),'real bytes');return{id:p.id};}},attempt);
 assert.throws(()=>scheduleEdit({...row,files:[]},'',attempt.payload.due,'UTC',false),/message|attachment/);
 console.log('PASS browser same-host opaque File handle preserves actual bytes, and empty edit is refused');
+const previousTZ=process.env.TZ;
+try {
+ process.env.TZ='America/New_York';
+ assert.throws(()=>scheduleDue('2030-02-30T12:00'),'a normalized invalid date is not the chosen day');
+ assert.throws(()=>scheduleDue('2030-03-10T02:30'),'DST gap must not silently become 03:30');
+ assert.equal(scheduleDue('2030-03-10T03:30'),'2030-03-10T07:30:00.000Z');
+ assert(model.scheduleSummary('2030-01-20T14:45').includes('UTC−05:00'));
+ assert(model.scheduleSummary('2030-07-20T14:45').includes('UTC−04:00'));
+ assert(model.scheduleSummary('2030-11-03T06:30:00.000Z').includes('UTC−05:00'),'saved absolute instant keeps its actual DST offset');
+ assert.throws(()=>scheduleDue(''));
+} finally { if(previousTZ===undefined)delete process.env.TZ;else process.env.TZ=previousTZ; }

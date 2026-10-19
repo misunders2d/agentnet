@@ -365,17 +365,12 @@ func TestCapsRoomImplicationAndHeadroom(t *testing.T) {
 			t.Errorf("a %d-name record: parse error %v, want parsed %v", n, err, ok)
 		}
 	}
-	for _, n := range []int{28, 29, 32} {
+	for _, n := range []int{MaxAdvertisedCaps - 1, MaxAdvertisedCaps, MaxAdvertisedCaps + 1, MaxCaps} {
 		k := CapsRecord{Address: "vitalii/desk", Session: s1, Caps: names(n), TS: 5}
 		k.Sign(key)
-		if err := k.ValidateAdvertisement(); (err == nil) != (n <= 29) {
+		if err := k.ValidateAdvertisement(); (err == nil) != (n <= MaxAdvertisedCaps) {
 			t.Errorf("producer %d names: %v", n, err)
 		}
-	}
-	// Explicit v33 producer evolution adds independent ttl1 support,
-	// while existing readers still parse 32 and retain three unused slots.
-	if MaxCaps != 32 || MaxAdvertisedCaps != 29 || MaxCaps-MaxAdvertisedCaps != 3 {
-		t.Fatalf("parse %d, advertise %d", MaxCaps, MaxAdvertisedCaps)
 	}
 }
 

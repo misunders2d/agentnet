@@ -191,25 +191,25 @@ func (a *Agent) archiveStep(ctx context.Context) (more bool, err error) {
 // A staged child is already exact signed ciphertext, committed with its
 // source cursor. A crash before packing discovers it here; no source is lost.
 func (a *Agent) archivePack(ctx context.Context) (err error) {
-	rows, err := a.store.db.Query(`SELECT o.envelope,o.recipient_fp,coalesce(o.conv,''),coalesce(o.sub,''),coalesce(o.body,''),coalesce(m.required_cap,o.required_cap,''),(o.mention_cap OR coalesce(m.mention_cap,0)),(o.organization_cap OR coalesce(m.organization_cap,0)),(o.shared_title_cap OR coalesce(m.shared_title_cap,0)) FROM outbox o LEFT JOIN history_archive_entries e ON e.child=o.id LEFT JOIN outbox m ON m.id=e.manifest WHERE o.state=? AND (e.child IS NULL OR m.state IN ('expired','failed','not_delivered')) AND NOT EXISTS(SELECT 1 FROM history_archive_export_errors x WHERE x.recipient=o.recipient AND x.recipient_fp=o.recipient_fp) AND NOT EXISTS(SELECT 1 FROM outbox live WHERE live.recipient=o.recipient AND live.recipient_fp=o.recipient_fp AND live.sub=? AND live.state IN ('archive_uploading','queued','waiting','custody')) ORDER BY o.rowid LIMIT ?`, archiveStaged, envelope.SubHistoryArchive, protocol.MaxHistoryArchiveEntries)
+	rows, err := a.store.db.Query(`SELECT o.envelope,o.recipient_fp,coalesce(o.conv,''),coalesce(o.sub,''),coalesce(o.body,''),coalesce(m.required_cap,o.required_cap,''),(o.mention_cap OR coalesce(m.mention_cap,0)),(o.organization_cap OR coalesce(m.organization_cap,0)),(o.shared_title_cap OR coalesce(m.shared_title_cap,0)),(o.resources_cap OR coalesce(m.resources_cap,0)) FROM outbox o LEFT JOIN history_archive_entries e ON e.child=o.id LEFT JOIN outbox m ON m.id=e.manifest WHERE o.state=? AND (e.child IS NULL OR m.state IN ('expired','failed','not_delivered')) AND NOT EXISTS(SELECT 1 FROM history_archive_export_errors x WHERE x.recipient=o.recipient AND x.recipient_fp=o.recipient_fp) AND NOT EXISTS(SELECT 1 FROM outbox live WHERE live.recipient=o.recipient AND live.recipient_fp=o.recipient_fp AND live.sub=? AND live.state IN ('archive_uploading','queued','waiting','custody')) ORDER BY o.rowid LIMIT ?`, archiveStaged, envelope.SubHistoryArchive, protocol.MaxHistoryArchiveEntries)
 	if err != nil {
 		return err
 	}
 	type selected struct {
-		sharedTitle           bool
-		env                   envelope.Envelope
-		fp                    string
-		proactive, snapshot   bool
-		conversationAudience  bool
-		steer                 bool
-		guestAgent            bool
-		mention, organization bool
+		sharedTitle, resources bool
+		env                    envelope.Envelope
+		fp                     string
+		proactive, snapshot    bool
+		conversationAudience   bool
+		steer                  bool
+		guestAgent             bool
+		mention, organization  bool
 	}
 	var selectedRows []selected
 	for rows.Next() {
 		var raw, conv, sub, body, priorRequired string
 		var r selected
-		if err = rows.Scan(&raw, &r.fp, &conv, &sub, &body, &priorRequired, &r.mention, &r.organization, &r.sharedTitle); err != nil {
+		if err = rows.Scan(&raw, &r.fp, &conv, &sub, &body, &priorRequired, &r.mention, &r.organization, &r.sharedTitle, &r.resources); err != nil {
 			break
 		}
 		if err = json.Unmarshal([]byte(raw), &r.env); err != nil {
@@ -292,7 +292,7 @@ func (a *Agent) archivePack(ctx context.Context) (err error) {
 	guestAgentExtension := false
 	chunkBytes := len(`{"v":1,"entries":[]}`)
 	mentionExtension, organizationExtension := false, false
-	sharedTitleExtension := false
+	sharedTitleExtension, resourcesExtension := false, false
 	for _, r := range selectedRows {
 		if r.env.To != dev.Address || r.fp != dev.Fingerprint() {
 			break
@@ -329,6 +329,7 @@ func (a *Agent) archivePack(ctx context.Context) (err error) {
 		mentionExtension = mentionExtension || r.mention
 		organizationExtension = organizationExtension || r.organization
 		sharedTitleExtension = sharedTitleExtension || r.sharedTitle
+		resourcesExtension = resourcesExtension || r.resources
 		snapshotExtension = snapshotExtension || r.snapshot
 		conversationAudienceExtension = conversationAudienceExtension || r.conversationAudience
 		if r.proactive {
@@ -400,7 +401,7 @@ func (a *Agent) archivePack(ctx context.Context) (err error) {
 			return errors.New("archive staged ciphertext changed")
 		}
 	}
-	if err = insertCopies(tx, []outCopy{{env: env, in: in, state: archiveUploading, required: required, recipientFP: dev.Fingerprint(), mentionCap: mentionExtension, organizationCap: organizationExtension, sharedTitleCap: sharedTitleExtension}}); err != nil {
+	if err = insertCopies(tx, []outCopy{{env: env, in: in, state: archiveUploading, required: required, recipientFP: dev.Fingerprint(), mentionCap: mentionExtension, organizationCap: organizationExtension, sharedTitleCap: sharedTitleExtension, resourcesCap: resourcesExtension}}); err != nil {
 		return err
 	}
 	// This descriptor is deliberately rootless. Existing copy insertion stores

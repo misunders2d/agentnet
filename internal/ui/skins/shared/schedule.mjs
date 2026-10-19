@@ -1,6 +1,6 @@
 // Shared scheduled-message UI. Entries supply their existing draft/host binding;
 // this never invokes ordinary Send, switches workspaces or installs a timer.
-import {captureSchedule,clearScheduledDraft,localScheduleTime,scheduleDue,scheduleEdit,scheduleReason,scheduleRefused,submitSchedule} from './schedule-model.mjs';
+import {captureSchedule,clearScheduledDraft,localScheduleTime,scheduleDue,scheduleEdit,scheduleReason,scheduleRefused,scheduleSummary,submitSchedule} from './schedule-model.mjs';
 import {scheduleSaves} from './schedule-saves.mjs';
 
 const states=Object.freeze({pending:'Pending',dispatching:'Preparing to send',sent:'Queued to send',cancelled:'Cancelled',needs_review:'Needs review'});
@@ -17,6 +17,12 @@ export function mountSchedule({root,host,owner,context,capture,getDraft,setDraft
   const button=(text,run,disabled=false)=>{const b=node('button',text,{type:'button',className:'an-hit',disabled,onclick:()=>{if(active()&&!b.disabled)run();}});return b;};
   const para=(text,role)=>{const p=node('p',text,{className:'hint'});if(role)p.setAttribute('role',role);return p;};
   const field=(label,type,value,change)=>{const box=node('label',label),input=node(type==='textarea'?'textarea':'input','',{...(type==='textarea'?{}:{type}),value,disabled:busy});input.setAttribute('aria-label',label);input.oninput=()=>change(input.value);box.append(input);return box;};
+  const timeFields=(label,value,change)=>{
+    const box=node('fieldset','',{className:'an-schedule-time'}),fields=node('div','',{className:'an-schedule-fields'}),summary=para(scheduleSummary(value));
+    const update=()=>{const local=date.children[0].value+'T'+time.children[0].value;change(local);summary.textContent=scheduleSummary(local);};
+    const date=field(label+' date','date',value.split('T')[0],update),time=field(label+' time','time',value.split('T')[1]||'',update);
+    fields.append(date,time);box.append(node('legend',label==='Send'?'When to send':'Change send time'),fields,para('Local timezone: '+zone()),summary);return box;
+  };
   let dead=false,pane=null,conv='',epoch=0,listRequest=0,busy=false,loading=false,notice='',snapshot=null,audience=null,due='',rows=[],selected=null,editBody='',editTime='',removeFiles=false,review=null,approved,found=null,forgetting=false;
   let lastBlocking,ledger,off;
   const menu=node('div','',{className:'topics-actions'}),hint=para(''),dialog=node('dialog','',{className:'topics-list an-schedule-dialog'}),content=node('div');
@@ -87,9 +93,9 @@ export function mountSchedule({root,host,owner,context,capture,getDraft,setDraft
   async function refresh(){
     if(!viewing()||pane!=='list')return;
     const version=epoch,request=++listRequest,chat=conv;loading=true;paint();
-    try{const result=await host.api('/api/schedules?'+new URLSearchParams({conv:chat,all:'1'}));if(viewing(version)&&request===listRequest)rows=result||[];}
+    try{const result=await host.api('/api/schedules?'+new URLSearchParams({conv:chat,all:'1'}));if(viewing(version)&&request===listRequest&&!selected)rows=result||[];}
     catch{if(viewing(version)&&request===listRequest)notice='Scheduled messages could not be loaded. Close and reopen to try again.';}
-    finally{if(viewing(version)&&request===listRequest){loading=false;paint();}}
+    finally{if(viewing(version)&&request===listRequest){loading=false;if(!selected)paint();}}
   }
   async function save(attempt){
     if(!viewing()||busy||eligibility())return;
@@ -160,21 +166,19 @@ export function mountSchedule({root,host,owner,context,capture,getDraft,setDraft
     if(!snapshot)return;
     const form=node('form'),why=eligibility();form.onsubmit=e=>{e.preventDefault();start();};
     form.append(para(snapshot.body||'Attachment message'));for(const f of snapshot.draft.files||[])form.append(para(f.name));
-    form.append(field('Send date and time','datetime-local',due,v=>{due=v;const t=new Date(v);utc.textContent=Number.isFinite(t.getTime())?'UTC: '+t.toISOString():'Choose a date and time in the future.';}));
-    const utc=para('UTC: '+(Number.isFinite(new Date(due).getTime())?new Date(due).toISOString():'Unavailable'));
-    form.append(para('Timezone: '+zone()),utc,para('Approved audience'),para(loading?'Verifying current audience…':audience?audienceText(audience,conv):'Audience unavailable'),para('This exact preview is saved as the audience ceiling. Membership and keys are checked again before sending.'));
+    form.append(timeFields('Send',due,v=>{due=v;}),para('Approved audience'),para(loading?'Verifying current audience…':audience?audienceText(audience,conv):'Audience unavailable'),para('This exact preview is saved as the audience ceiling. Membership and keys are checked again before sending.'));
     if(why)form.append(para(why,'alert'));
     form.append(button(s?'Save changed schedule':'Save schedule',start,busy||loading||!audience||!!why));content.append(form);
   }
   function paintEdit(row,article){
-    article.append(field('Scheduled message text','textarea',editBody,v=>{editBody=v;}),field('Reschedule date and time','datetime-local',editTime,v=>{editTime=v;}),para('Timezone for this edit: '+zone()));
+    article.append(field('Scheduled message text','textarea',editBody,v=>{editBody=v;}),timeFields('Reschedule',editTime,v=>{editTime=v;}));
     if(row.files?.length){const label=node('label','Remove all attachments'),check=node('input','',{type:'checkbox',checked:removeFiles,disabled:busy});check.setAttribute('aria-label','Remove all attachments');check.onchange=()=>{removeFiles=check.checked;};label.append(check);article.append(label);}
     article.append(para(approved?'New audience explicitly confirmed: '+audienceText(approved,conv):'Editing text or time keeps the saved audience ceiling and attachments unless explicitly removed.'),button('Review audience',()=>void reviewAudience(row),busy));
     if(review)article.append(para(audienceText(review,conv)),button('Confirm reviewed audience',()=>{approved=review;review=null;paint();},busy));
     article.append(button('Save schedule changes',()=>{
       try{const change=scheduleEdit(row,editBody,scheduleDue(editTime),zone(),removeFiles,approved);void action(()=>host.api('/api/schedule/edit',change));}
       catch{notice='Choose a future time and include a message or keep an attachment. No change was saved.';paint();}
-    },busy),button('Keep saved schedule',()=>{selected=null;review=null;approved=undefined;paint();},busy));
+    },busy),button('Keep saved schedule',()=>{selected=null;review=null;approved=undefined;void refresh();},busy));
   }
   function paint(){
     if(!viewing())return;
@@ -185,18 +189,21 @@ export function mountSchedule({root,host,owner,context,capture,getDraft,setDraft
     if(!loading&&!rows.length)content.append(para('No scheduled messages in this chat on this device.'));
     for(const row of rows){
       const article=node('article');article.setAttribute('aria-label','Scheduled message: '+(states[row.state]||'Unavailable'));
-      article.append(para(states[row.state]||'Unavailable'),para(row.body),para(new Date(row.due).toLocaleString()+' ('+zone()+') · saved timezone '+row.timezone),para(audienceText(row.audience||{},conv)));
+      article.append(para(states[row.state]||'Unavailable'),para(row.body),para('Send at: '+scheduleSummary(row.due)),para(zone()+' · saved timezone '+row.timezone),para(audienceText(row.audience||{},conv)));
       for(const f of row.files||[])article.append(para(f.name));
       if(row.state==='needs_review')article.append(para('The chat, audience or attachments need review before sending.'));
       if(row.state==='dispatching')article.append(para('AgentNet is preparing the ordinary send. A delivery receipt is separate.'));
       if(mutable(row)){
-        if(selected===row)paintEdit(row,article);
+        if(selected?.id===row.id)paintEdit(selected,article);
         else article.append(button('Edit schedule',()=>{selected=row;editBody=row.body;editTime=localScheduleTime(new Date(row.due));removeFiles=false;review=null;approved=undefined;notice='';paint();},busy),button('Send now',()=>void action(()=>host.api('/api/schedule/send_now',{id:row.id,rev:row.rev})),busy),button('Cancel schedule',()=>void action(()=>host.api('/api/schedule/cancel',{id:row.id,rev:row.rev})),busy));
       }
       content.append(article);
     }
   }
   const cancel=e=>{e.preventDefault();close();};dialog.addEventListener('cancel',cancel);
-  off=subscribe?.(()=>{if(viewing()&&pane==='list')void refresh();});changed();
+  // Freeze the open editor and its original revision. Repainting on a host
+  // push replaces native inputs/focus and used to discard the entire edit.
+  // Save still uses CAS; closing the editor explicitly reloads current state.
+  off=subscribe?.(()=>{if(viewing()&&pane==='list'&&!selected)void refresh();});changed();
   return {openCreate,openList,close,update,get blocking(){return block();},destroy(){if(dead)return;close();dead=true;off?.();ledger.dispose();dialog.removeEventListener('cancel',cancel);menu.remove();}};
 }

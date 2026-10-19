@@ -58,8 +58,8 @@ func (a *Agent) historySourceRowsMode(q dbq, own bool, filter, order string, lim
 	inVisible := "NOT " + erasedInFor("inbox")
 	outVisible := "NOT " + erasedOut
 	if own {
-		inVisible = "(" + inVisible + ` OR EXISTS(SELECT 1 FROM topic_shared_titles t WHERE t.conv=inbox.conv AND t.topic=inbox.topic AND t.lid=inbox.lid AND t.writer=coalesce(inbox.verified_by,inbox.claimed_fp,'') AND json_extract(inbox.topic_event,'$.action')='rename'))`
-		outVisible = "(" + outVisible + ` OR EXISTS(SELECT 1 FROM topic_shared_titles t WHERE t.conv=o.conv AND t.topic=o.topic AND t.lid=o.lid AND t.writer=? AND json_extract(o.topic_event,'$.action')='rename'))`
+		inVisible = "(" + inVisible + ` OR EXISTS(SELECT 1 FROM topic_shared_titles t WHERE t.conv=inbox.conv AND t.topic=inbox.topic AND t.lid=inbox.lid AND t.writer=coalesce(inbox.verified_by,inbox.claimed_fp,'') AND json_extract(inbox.topic_event,'$.action') IN ('rename','resources')))`
+		outVisible = "(" + outVisible + ` OR EXISTS(SELECT 1 FROM topic_shared_titles t WHERE t.conv=o.conv AND t.topic=o.topic AND t.lid=o.lid AND t.writer=? AND json_extract(o.topic_event,'$.action') IN ('rename','resources')))`
 	}
 
 	query := `

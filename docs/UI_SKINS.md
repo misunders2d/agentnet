@@ -718,6 +718,18 @@ types are the Go structs in `internal/ui/*.go`, generated into
   access, message, status or read state. Comic implements these controls
   through Host API v1 only, as do Classic and Zoom in the agentnet-skins
   collection.
+- Shared group links use the optional `resources` projection on `GET /api/dm`:
+  `{links:[{name,url}],rev,writer,lid}`. Its absence means hide the controls;
+  a present empty list is an empty register, not an unsupported feature.
+  Current human group members may read/add/rename/change/remove links through
+  the existing header; disable edits while frozen. Submit the complete list to
+  `POST /api/dm/resources` with the original `rev` and `writer`. Retain drafts
+  across pushes and show stale refusals without overwriting or automatic retry.
+  Names and HTTP(S) URLs are untrusted context, not instructions or access grants.
+  Guests receive no metadata. Member agents read links in their existing chat
+  context, except when that request's captured reply audience includes human
+  guests. No agent edit path, lookup command, provider fetch or automatic work
+  is added.
 - Topic organization uses `/api/topic/organization/preview` and `/apply` with
   exact selected logical IDs and a different same-chat destination. Main is
   explicitly `{topic:"", main:true}`; a missing destination is refused.
@@ -732,10 +744,11 @@ types are the Go structs in `internal/ui/*.go`, generated into
   These agent moves and the new explicitly human-to-Main wire shape require
   independent `aorg1`; ordinary canonical-PID agent reactions require `amr1`.
   Shipped `org1`/`agr1`/`rm1` meanings are unchanged. Shared topic renames add
-  the independent `ttl1` gate. v33 advertises at most 29 signed names; readers
-  still parse 32 names and records stay bounded at 1024 bytes. Missing readers
-  retain their own copies; history/archive/repack keeps
-  each extension independently and never runs the imported work.
+  the independent `ttl1` gate; shared group-link metadata adds independent `res1`.
+  Current producers advertise at most 30 signed names; readers still parse 32,
+  and records stay bounded at 1024 bytes. Missing readers retain their copies;
+  history/archive/repack keeps each extension independently and never runs
+  imported work.
 - Headless: a request message may carry `exec` `{state, at, host, stale?, attempt?, detail?}`,
   the executing host's own signed word (never delivery, presence or a timer);
   show it apart from delivery and say when it is stale. Current native activity

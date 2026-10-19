@@ -24,6 +24,7 @@ import { usePortal } from "../owned";
 import { ProjectSpaceSheet } from "./Drive";
 import { AgentModelReport } from "./AgentModelReport";
 import { copyText } from './Settings.parts';
+import { ConversationLinks } from "./Conversation.links";
 
 // ---- who is helping -------------------------------------------------------------------
 
@@ -198,6 +199,7 @@ export function Header({ ctx, wide, helpers: hs, canInvite }: { ctx: Ctx; wide: 
       </button>
 
       {wide && hs.length > 0 && <GuestChips helpers={hs} />}
+      {t && <ConversationLinks key={t.id} thread={t} />}
 
       {canInvite && (wide
         ? <Button variant="act" icon={<IconUserPlus size={20} />} onClick={() => store.openInvite(ctx.conv)} className="shrink-0">Bring in</Button>

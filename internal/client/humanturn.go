@@ -463,7 +463,7 @@ func (a *Agent) admitHumanTurn(ctx context.Context, env envelope.Envelope, in en
 		if err := humanDMOutputRequest(tx, in, a.Address, a.Self().Fingerprint()); err != nil {
 			return err
 		}
-		if err := saveSharedTopicRename(tx, in, sender.Fingerprint()); err != nil {
+		if err := saveSharedTopicMetadata(tx, in, sender.Fingerprint()); err != nil {
 			return err
 		}
 		if root.Kind == protocol.ConvKindGroup {

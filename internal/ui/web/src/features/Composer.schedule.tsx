@@ -6,11 +6,11 @@ import type { ScheduleSave } from "../schedule-saves";
 import { Button } from "../ui/Button";
 import { Sheet } from "../ui/Sheet";
 import { sendID } from "../optimistic.mjs";
-import { captureSchedule, localScheduleTime, scheduleDue, scheduleEdit, scheduleRefused, submitSchedule, type ScheduleAttempt } from "./Composer.schedule-model";
+import { captureSchedule, localScheduleTime, scheduleDue, scheduleEdit, scheduleRefused, scheduleSummary, submitSchedule, type ScheduleAttempt } from "./Composer.schedule-model";
 
 export type SchedulePane = "create" | "list" | null;
 type Snapshot = {draft: Draft; body: string};
-const input = "mt-1 block w-full min-w-0 rounded-xl border border-outline bg-surface p-3 text-[15px]";
+const input = "mt-1 block min-h-11 w-full min-w-0 rounded-xl border border-outline bg-surface p-3 text-[16px] outline-none focus-visible:outline-3 focus-visible:outline-agent-ink";
 const states: Record<string,string> = {pending:"Pending",dispatching:"Preparing to send",sent:"Queued to send",cancelled:"Cancelled",needs_review:"Needs review"};
 const mutable = (row: T.ScheduledSend) => row.state === "pending" || row.state === "needs_review";
 const timezone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
@@ -109,8 +109,13 @@ export function ScheduleDialogs({pane,onPane,conv,dm,capture,reason}: {
     {pane==="create" && !blocked && <div className="space-y-4 pt-2">
       {reason && <p role="alert" className="text-sm text-danger">{reason}</p>}
       <div className="rounded-xl bg-surface p-3 stroke"><p className="whitespace-pre-wrap break-words text-sm">{snapshot?.body || "Attachment message"}</p>{snapshot?.draft.files?.map(f=><p key={f.key} className="mt-1 break-all text-sm text-text-2">{f.name}</p>)}</div>
-      <label className="block text-sm font-semibold">Send date and time<input aria-label="Send date and time" type="datetime-local" value={due} onChange={e=>setDue(e.target.value)} className={input} disabled={busy} /></label>
-      <p className="text-sm text-text-2">Timezone: {timezone()}{Number.isFinite(new Date(due).getTime()) && <span className="block">UTC: {new Date(due).toISOString()}</span>}</p>
+      <fieldset className="min-w-0"><legend className="text-sm font-semibold">When to send</legend>
+        <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
+          <label className="min-w-0 text-sm">Send date<input aria-label="Send date" type="date" value={due.split("T")[0]} onChange={e=>setDue(e.target.value+"T"+(due.split("T")[1] || ""))} className={input} disabled={busy}/></label>
+          <label className="min-w-0 text-sm">Send time<input aria-label="Send time" type="time" value={due.split("T")[1] || ""} onChange={e=>setDue(due.split("T")[0]+"T"+e.target.value)} className={input} disabled={busy}/></label>
+        </div>
+        <p className="mt-2 text-sm text-text-2">Local timezone: {timezone()}<span className="block">{scheduleSummary(due)}</span></p>
+      </fieldset>
       <div className="text-sm"><p className="font-semibold">Approved audience</p><p>{loading?"Verifying current audience…":audience?audienceText(audience):"Audience unavailable"}</p><p className="mt-1 text-text-2">This exact preview is saved as the audience ceiling. Membership and keys are checked again before sending.</p></div>
       <Button variant="act" disabled={busy||loading||!audience||!!reason||same||blocked} onClick={start}>{slot?"Save changed schedule":"Save schedule"}</Button>
       {slot && <p className="text-sm text-text-2">A changed save starts a separate schedule after the prior refusal.</p>}
@@ -135,7 +140,7 @@ export function ScheduleDialogs({pane,onPane,conv,dm,capture,reason}: {
       {rows.map(row=><article key={row.id} className="rounded-xl bg-surface p-3 stroke" aria-label={"Scheduled message: "+(states[row.state] || "Unavailable")}>
         <p className="font-semibold">{states[row.state] || "Unavailable"} · {row.topic ? dm?.topics?.find(t=>t.id===row.topic)?.title || "Topic" : "Main"}</p>
         <p className="mt-1 whitespace-pre-wrap break-words text-sm">{row.body}</p>
-        <p className="mt-2 text-sm">{new Date(row.due).toLocaleString()} ({timezone()}) · saved timezone {row.timezone}</p>
+        <p className="mt-2 text-sm"><span className="font-semibold">Send at: </span>{scheduleSummary(row.due)}<span className="block text-text-2">{timezone()} · saved timezone {row.timezone}</span></p>
         <p className="text-sm text-text-2">{audienceText(row.audience)}</p>
         {row.files?.map((f,i)=><p key={i} className="break-all text-sm">{f.name}</p>)}
         {row.state==="needs_review"&&<p className="text-sm text-text-2">The chat, audience or attachments need review before sending.</p>}
@@ -143,8 +148,13 @@ export function ScheduleDialogs({pane,onPane,conv,dm,capture,reason}: {
         {mutable(row)&&selected?.id!==row.id&&<div className="mt-3 flex flex-wrap gap-2"><Button size="sm" disabled={busy} onClick={()=>edit(row)}>Edit schedule</Button><Button size="sm" disabled={busy} onClick={()=>void action(()=>store.api.sendScheduleNow(row.id,row.rev))}>Send now</Button><Button size="sm" variant="ghost" disabled={busy} onClick={()=>void action(()=>store.api.cancelSchedule(row.id,row.rev))}>Cancel schedule</Button></div>}
         {mutable(row)&&selected?.id===row.id&&<div className="mt-3 space-y-3 border-t border-hairline pt-3">
           <label className="block text-sm font-semibold">Message<textarea aria-label="Scheduled message text" className={input} value={body} onChange={e=>setBody(e.target.value)} disabled={busy}/></label>
-          <label className="block text-sm font-semibold">Reschedule<input aria-label="Reschedule date and time" type="datetime-local" className={input} value={editTime} onChange={e=>setEditTime(e.target.value)} disabled={busy}/></label>
-          <p className="text-sm">Timezone for this edit: {timezone()}</p>
+          <fieldset className="min-w-0"><legend className="text-sm font-semibold">Change send time</legend>
+            <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
+              <label className="min-w-0 text-sm">Reschedule date<input aria-label="Reschedule date" type="date" className={input} value={editTime.split("T")[0]} onChange={e=>setEditTime(e.target.value+"T"+(editTime.split("T")[1] || ""))} disabled={busy}/></label>
+              <label className="min-w-0 text-sm">Reschedule time<input aria-label="Reschedule time" type="time" className={input} value={editTime.split("T")[1] || ""} onChange={e=>setEditTime(editTime.split("T")[0]+"T"+e.target.value)} disabled={busy}/></label>
+            </div>
+            <p className="mt-2 text-sm text-text-2">Local timezone: {timezone()}<span className="block">{scheduleSummary(editTime)}</span></p>
+          </fieldset>
           {!!row.files?.length&&<label className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" checked={removeFiles} onChange={e=>setRemoveFiles(e.target.checked)} disabled={busy}/>Remove all attachments</label>}
           <p className="text-sm text-text-2">{approved?"New audience explicitly confirmed: "+audienceText(approved):"Editing text or time keeps the saved audience ceiling and attachments unless explicitly removed."}</p>
           <Button size="sm" disabled={busy} onClick={()=>void reviewAudience(row)}>Review audience</Button>

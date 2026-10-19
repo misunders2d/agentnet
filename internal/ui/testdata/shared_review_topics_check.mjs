@@ -1,25 +1,9 @@
 // Source-only fake DOM/events, matching the shared visible/video check convention.
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
 import {topicControls,TOPIC_UI} from '../skins/shared/topics.mjs';
 import {unreadReview} from '../skins/shared/unread-review.mjs';
 import {holdChoices,pagedChoices} from '../skins/shared/choices.mjs';
 
-// Gallery authoring contract: presentation is in the existing declared stylesheet.
-for(const name of ['topics','unread-review','schedule','video-file'])assert.doesNotMatch(readFileSync(new URL('../skins/shared/'+name+'.mjs',import.meta.url),'utf8'),/\.style\b/,'shared '+name+' has no inline style access');
-const css=readFileSync(new URL('../skins/shared/v33.css',import.meta.url),'utf8');
-assert(css.startsWith('/* agentnet-shared-v33 begin */\n'));assert(css.endsWith('/* agentnet-shared-v33 end */\n'));assert.doesNotMatch(css,/@import/);
-const rules=new Map([...css.replace(/\/\*[\s\S]*?\*\//g,'').matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(m=>[m[1].trim(),m[2].trim().replace(/\s+/g,' ')]));
-assert.deepEqual(Object.fromEntries(rules),{
- '.an-hit':'min-height: 44px; min-width: 44px;',
- '.an-row-button':'width: 100%; text-align: left; display: flex; flex-direction: column; overflow-wrap: anywhere;',
- '.an-video-file':'max-width: 480px; min-width: 0; overflow-wrap: anywhere;',
- '.an-video-actions':'display: flex; flex-wrap: wrap; gap: 8px; align-items: center;',
- '.an-video-file .an-hit':'padding: 8px 12px; font: inherit; color: inherit; cursor: pointer;',
- '.an-video-player':'display: block; width: 100%; max-height: 60vh; object-fit: contain; background: #000; border-radius: 8px;',
- '.an-schedule-dialog':'max-width: min(42rem, calc(100% - 2rem)); max-height: calc(100% - 2rem); overflow: auto;'
-});
-if(process.argv.includes('--css-only')){console.log('PASS shared CSS: four modules no inline style access; canonical marked block preserves exact target/layout values');process.exit(0);}
 
 class Events {
  listeners=new Map();

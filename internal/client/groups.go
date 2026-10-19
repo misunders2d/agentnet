@@ -434,6 +434,13 @@ func (a *Agent) PublishGroup(ctx context.Context, c protocol.GroupCommit, packet
 		return result, err
 	}
 	contextCopies := copies
+	resourceCopies, resourceCheck, err := a.groupResourcesPublicationCopies(ctx, delivery, invitation, contextCopies)
+	if err != nil {
+		a.releaseGroupCopies(copies)
+		return result, err
+	}
+	copies = append(copies, resourceCopies...)
+	baseCopies := copies
 	historyCopies, intent, historyErr := a.groupHistoryPublicationCopies(ctx, delivery)
 	unavailable := errors.Is(historyErr, ErrGroupHistoryUnavailable)
 	if historyErr != nil && !unavailable {
@@ -481,6 +488,11 @@ func (a *Agent) PublishGroup(ctx context.Context, c protocol.GroupCommit, packet
 			if err := installGroupMembership(tx, packet, withdrawals); err != nil {
 				return err
 			}
+			if resourceCheck != nil {
+				if err := resourceCheck(tx); err != nil {
+					return err
+				}
+			}
 			if err := a.groupHistoryPublicationCheck(tx, delivery, intent, historyCopies, missing); err != nil {
 				return err
 			}
@@ -492,7 +504,7 @@ func (a *Agent) PublishGroup(ctx context.Context, c protocol.GroupCommit, packet
 	if errors.Is(err, ErrGroupHistoryUnavailable) && !unavailable {
 		// Exact custody already exists; content changed before the atomic local
 		// enqueue. Complete context only, with an explicit durable outcome.
-		copies = contextCopies
+		copies = baseCopies
 		unavailable = true
 		err = enqueue(copies, true)
 	}

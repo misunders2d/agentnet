@@ -72,13 +72,13 @@ func AgentTopicOrganization(in Inner) bool {
 	return TopicOrganization(in.TopicEvent) && in.TopicEvent.Request != nil && in.TopicEvent.Action == "move" && in.PID != "" && in.Origin == OriginAgentOrganization
 }
 
-// Main destination is a v27 reader extension too: org1's shipped events
-// always name a nonempty topic. This restores presentation, never scope.
+// Main admits presentation moves and the conversation-wide links register.
+// Neither changes participation scope or execution authority.
 func MainTopicOrganization(in Inner) bool {
-	return in.Topic == "" && TopicOrganization(in.TopicEvent) && in.TopicEvent.Action == "move"
+	return in.Topic == "" && (TopicOrganization(in.TopicEvent) && in.TopicEvent.Action == "move" || TopicResources(in.TopicEvent))
 }
 func OrganizationReaderExtension(in Inner) bool {
-	return AgentTopicOrganization(in) || MainTopicOrganization(in)
+	return AgentTopicOrganization(in) || MainTopicOrganization(in) && TopicOrganization(in.TopicEvent)
 }
 func (r TopicRequest) Validate(in Inner) error {
 	if !protocol.ValidID(r.LID) || !protocol.ValidFingerprint(r.Author) || !protocol.ValidHash(r.Hash) {

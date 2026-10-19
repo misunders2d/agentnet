@@ -79,8 +79,8 @@ try{
  // Distinct actions; native modal, explicit local/UTC time and verified ceiling.
  {
   const f=fixture();assert.equal(f.calls.length,0);assert.equal(f.captures,0);assert.deepEqual(f.blocks,[false]);f.push();await tick();assert.equal(f.calls.length,0);
-  await f.click('Schedule message…');const dialog=all(f.root).find(n=>n.tagName==='DIALOG');assert(dialog.open);assert.equal(dialog.className,'topics-list an-schedule-dialog');for(const b of all(f.root).filter(n=>n.tagName==='BUTTON'))assert.equal(b.className,'an-hit');assert.equal(dialog.modalCalls,1);assert.equal(f.input('Send date and time').type,'datetime-local');assert(words(f.root).includes('Timezone:'));assert(words(f.root).includes('UTC:'));assert(words(f.root).includes('approved-person'));assert(words(f.root).includes('daemon must be running'));assert.equal(count(f,'/api/schedule/create'),0);
-  f.input('Send date and time','2000-01-01T00:00');await f.click('Save schedule');assert.equal(count(f,'/api/schedule/create'),0);assert(words(f.root).includes('future'));assert.equal(f.drafts.get(conv),f.original);
+  await f.click('Schedule message…');const dialog=all(f.root).find(n=>n.tagName==='DIALOG');assert(dialog.open);assert.equal(dialog.modalCalls,1);assert.equal(f.input('Send date').type,'date');assert.equal(f.input('Send time').type,'time');assert.match(words(f.root),/UTC[+−]\d\d:\d\d/);assert(words(f.root).includes('approved-person'));assert.equal(count(f,'/api/schedule/create'),0);
+  f.input('Send date','2000-01-01');f.input('Send time','00:00');await f.click('Save schedule');assert.equal(count(f,'/api/schedule/create'),0);assert(words(f.root).includes('future'));assert.equal(f.drafts.get(conv),f.original);
   f.controller.close();assert(!dialog.isConnected);assert(!dialog.open);f.push();await tick();assert.equal(count(f,'/api/schedules?'),0);f.stop();checks++;
  }
  // The actual lost-response path re-stages the SAME File, ID, encoded text,
@@ -136,6 +136,21 @@ try{
   const r=row(),f=fixture({rows:new Map([[r.id,r]])});await f.click('Scheduled messages');assert.equal(count(f,'/api/schedule/audience?'),0);await f.click('Edit schedule');f.input('Scheduled message text','edited text');await f.click('Save schedule changes');let edit=f.calls.filter(c=>c.path==='/api/schedule/edit').at(-1).body;assert.equal(edit.rev,1);assert(!('files'in edit));assert(!('audience'in edit));assert.equal(edit.topic,'topic');
   await f.click('Edit schedule');f.setAudience({persons:['approved-person','new-person'],pids:[]});await f.click('Review audience');assert(words(f.root).includes('Confirm reviewed audience'));assert(!words(f.root).includes('New audience explicitly confirmed'));await f.click('Confirm reviewed audience');assert(words(f.root).includes('New audience explicitly confirmed'));await f.click('Save schedule changes');edit=f.calls.filter(c=>c.path==='/api/schedule/edit').at(-1).body;assert.deepEqual(edit.audience.persons,['approved-person','new-person']);assert.equal(edit.rev,2);
   f.setConflict();await f.click('Cancel schedule');assert(words(f.root).includes('revision changed'));assert.equal(f.rows.get(r.id).state,'pending');assert.equal(count(f,'/api/schedule/create'),0);await f.click('Send now');const now=f.calls.find(c=>c.path==='/api/schedule/send_now').body;assert.deepEqual(now,{id:r.id,rev:4});assert(words(f.root).includes('Queued to send'));assert(!words(f.root).includes('Delivered'));assert(!words(f.root).includes('PRIVATE'));f.stop();checks++;
+ }
+ // Ordinary host pushes must not discard a time edit or replace its CAS base.
+ {
+  const r=row(),f=fixture({rows:new Map([[r.id,r]])});await f.click('Scheduled messages');await f.click('Edit schedule');
+  const changed='2030-10-20T14:45';f.input('Reschedule date','2030-10-20');const time=f.input('Reschedule time','14:45');f.input('Scheduled message text','typing during a push');
+  f.push();await tick();assert.equal(f.input('Reschedule date').value,'2030-10-20');assert.equal(f.input('Reschedule time'),time,'a push must not replace the focused native input');assert.equal(time.value,'14:45');assert.equal(f.input('Scheduled message text').value,'typing during a push');
+  await f.click('Save schedule changes');const edit=f.calls.filter(c=>c.path==='/api/schedule/edit').at(-1).body;
+  assert.equal(edit.due,new Date(changed).toISOString());assert.equal(edit.rev,1);assert.equal(edit.body,'typing during a push');assert(!('files'in edit));assert(!('audience'in edit));f.stop();checks++;
+ }
+ // A genuinely newer record must not silently promote the editor's revision.
+ {
+  const r=row(),f=fixture({rows:new Map([[r.id,r]])});await f.click('Scheduled messages');await f.click('Edit schedule');f.input('Reschedule date','2030-10-20');f.input('Reschedule time','18:30');
+  f.rows.get(r.id).rev=9;f.rows.get(r.id).body='saved elsewhere';f.push();await tick();await f.click('Save schedule changes');
+  assert.equal(f.calls.filter(c=>c.path==='/api/schedule/edit').at(-1).body.rev,1);assert.equal(f.rows.get(r.id).body,'saved elsewhere');assert(all(f.root).some(n=>n.getAttribute('role')==='status'));
+  await f.click('Edit schedule');await f.click('Keep saved schedule');assert(!all(f.root).some(n=>n.getAttribute('aria-label')==='Reschedule time'));assert(words(f.root).includes('saved elsewhere'));f.stop();checks++;
  }
  // Terminal/dispatching states are read-only; only an open list follows pushes.
  {

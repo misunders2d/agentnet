@@ -503,7 +503,7 @@ func (a *Agent) admitGroupParticipationHistory(ctx context.Context, env envelope
 				return e
 			}
 		}
-		if e = saveSharedTopicRename(tx, item.inner(in.Conv), item.FromKey); e != nil {
+		if e = saveSharedTopicMetadata(tx, item.inner(in.Conv), item.FromKey); e != nil {
 			return e
 		}
 		_, e = tx.Exec(`UPDATE inbox SET group_admission=?,group_history=nullif(?,'') WHERE id=?`, item.GroupAdmission, groupHistoryJSON(item.GroupHistory), item.ID)

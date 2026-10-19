@@ -126,6 +126,7 @@ export function historyArchive(e,Hold,StoreConflict,retryable){
             v:1,person:own.person,roster:own.hash,count:entries.length,format:'agentnet-history-v1'
           };
           const shared_title_cap=chosen.some(row=>row.shared_title_cap);
+          const resources_cap=chosen.some(row=>row.resources_cap||wire.conversationResources(row.topic_event)||row.sub==='history'&&wire.conversationResources(wire.parseHistory(row.body).topic_event));
           const mention_cap=chosen.some(row=>row.mention_cap||row.required_cap===wire.CapMentionReaction),organization_cap=chosen.some(row=>row.organization_cap||row.required_cap===wire.CapAgentOrganization);
           const proactive=chosen.some(row=>[wire.CapProactiveAgent,wire.CapTopicContext+"+"+wire.CapProactiveAgent].includes(wire.steerRequirementBase(row.required_cap))||row.sub==='history'&&row.body&&wire.proactiveAgent({...wire.parseHistory(row.body),conv:row.conv}));
           let snapshot=false;for(const row of chosen)snapshot ||= await e.snapshotCopy(row);
@@ -134,7 +135,7 @@ export function historyArchive(e,Hold,StoreConflict,retryable){
           await gate(rows[0],checks);
           await e.store.write([{
             s:'kv',k:outgoing+id,v:{
-              id,to:rows[0].to,recipient_fp:rows[0].recipient_fp,manifest,...sealed,required_cap,mention_cap,organization_cap,shared_title_cap,order:chosen[0].send_order??chosen[0].at,state:'prepared',children:chosen.map(r=>r.id)
+              id,to:rows[0].to,recipient_fp:rows[0].recipient_fp,manifest,...sealed,required_cap,mention_cap,organization_cap,shared_title_cap,resources_cap,order:chosen[0].send_order??chosen[0].at,state:'prepared',children:chosen.map(r=>r.id)
             }
           },...chosen.map(row=>({
             s:'outbox',k:row.id,v:{
@@ -206,7 +207,7 @@ export function historyArchive(e,Hold,StoreConflict,retryable){
         if(previous?.state!=='prepared')continue;
         await e.store.write([{
           s:'outbox',k:row.id,v:{
-            id:row.id,to:row.to,recipient_fp:row.recipient_fp,sub:wire.SubHistoryArchive,body,envelope,at,aside:true,state:'queued',required_cap:row.required_cap||wire.CapHistoryArchive,mention_cap:row.mention_cap,organization_cap:row.organization_cap,shared_title_cap:row.shared_title_cap,attachments:[row.attachment],files:[{
+            id:row.id,to:row.to,recipient_fp:row.recipient_fp,sub:wire.SubHistoryArchive,body,envelope,at,aside:true,state:'queued',required_cap:row.required_cap||wire.CapHistoryArchive,mention_cap:row.mention_cap,organization_cap:row.organization_cap,shared_title_cap:row.shared_title_cap,resources_cap:row.resources_cap,attachments:[row.attachment],files:[{
               attachment:row.attachment,uploaded:true
             }]
           }
@@ -341,7 +342,7 @@ export function historyArchive(e,Hold,StoreConflict,retryable){
       checks.push({s:'outbox',k:id,v:child});
       if(['archive_staged','not_delivered'].includes(child?.state)&&child.archive_chunk===row.id)ops.push({
         s:'outbox',k:id,v:{
-          ...child,...(row.state==='expired'?{state:'archive_staged',archive_chunk:'',shared_title_cap:!!(child.shared_title_cap||job.shared_title_cap),mention_cap:!!(child.mention_cap||job.mention_cap),organization_cap:!!(child.organization_cap||job.organization_cap),...([wire.CapProactiveAgent,wire.CapTopicContext,wire.CapTopicContext+"+"+wire.CapProactiveAgent].includes(wire.steerRequirementBase(job.required_cap))||wire.conversationAudienceCopy(job)||wire.steerCopy(job)||wire.guestAgentCopy(job)?{required_cap:job.required_cap}:{})}:{state:'archive_accepted',...(child.files?{files:child.files.map(file=>({...file,ct:null}))}:{})})
+          ...child,...(row.state==='expired'?{state:'archive_staged',archive_chunk:'',resources_cap:!!(child.resources_cap||job.resources_cap),shared_title_cap:!!(child.shared_title_cap||job.shared_title_cap),mention_cap:!!(child.mention_cap||job.mention_cap),organization_cap:!!(child.organization_cap||job.organization_cap),...([wire.CapProactiveAgent,wire.CapTopicContext,wire.CapTopicContext+"+"+wire.CapProactiveAgent].includes(wire.steerRequirementBase(job.required_cap))||wire.conversationAudienceCopy(job)||wire.steerCopy(job)||wire.guestAgentCopy(job)?{required_cap:job.required_cap}:{})}:{state:'archive_accepted',...(child.files?{files:child.files.map(file=>({...file,ct:null}))}:{})})
         }
       });
     }

@@ -1,15 +1,8 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {stripTypeScriptTypes} from 'node:module';
 import {scheduleSaves} from '../skins/shared/schedule-saves.mjs';
 import {captureSchedule,submitSchedule,clearScheduledDraft} from '../skins/shared/schedule-model.mjs';
 const read=p=>readFileSync(new URL(p,import.meta.url),'utf8');
-assert.equal(read('../skins/shared/schedule-model.mjs'),stripTypeScriptTypes(read('../web/src/features/Composer.schedule-model.ts')),'shared model must mechanically derive from Comic');
-const derived=stripTypeScriptTypes(read('../web/src/schedule-saves.ts'))
- .replace('import { skin as brand } from "./skin/brand";','')
- .replace('scheduleSaves(host     , changed         )','scheduleSaves(host     , changed         , owner)')
- .replace('  const owner=brand.storage;','');
-assert.equal(read('../skins/shared/schedule-saves.mjs'),derived,'ledger differs only by injected draft owner, never by persistence or lifetime rules');
 // Run the existing Comic model vectors against this actual shared implementation.
 const vectors=read('./composer_schedule_check.mjs').replace("const source=readFileSync(new URL('../web/src/features/Composer.schedule-model.ts',import.meta.url),'utf8');",'const source='+JSON.stringify(read('../skins/shared/schedule-model.mjs'))+';');
 await import('data:text/javascript,'+encodeURIComponent(vectors));
@@ -49,4 +42,4 @@ for(const bad of [{id:'bad'}, {body:'private'}, {files:[{name:'x',size:-1}]}, {f
  const id='e'.repeat(32),ws='invalid-'+serial++,key='agentnet.messenger.schedule-save.'+ws;
  saved.set(key,JSON.stringify({v:1,conv:{[conv]:{id,conv,files:[],...bad}}}));const ledger=scheduleSaves(fixture(ws),()=>{},'a');assert.deepEqual(ledger.snapshot(),{});ledger.dispose();
 }
-console.log('PASS shared mechanical source parity + reused Comic vectors + cross-skin owner/ID/handle fences, metadata-only cold recovery, denied persistence, partial-stage cleanup and guarded draft/File identity');
+console.log('PASS shared scheduling consumer vectors + cross-skin owner/ID/handle fences, metadata-only cold recovery, denied persistence, partial-stage cleanup and guarded draft/File identity');

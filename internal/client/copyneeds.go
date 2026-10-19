@@ -22,7 +22,7 @@ import (
 const topicContextArchiveProactive = protocol.CapTopicContext + "+" + protocol.CapProactiveAgent
 
 type copyNeeds struct {
-	sharedTitleCap                                                                 bool
+	sharedTitleCap, resourcesCap                                                    bool
 	required                                                                       string // the stored requirement, or the one its shape derives
 	stored                                                                         string // required_cap as stored
 	conv, sub, body, pid, humanRaw, status, agentID, capturedFP                    string
@@ -45,8 +45,8 @@ type copyNeeds struct {
 func copyNeedsOf(q dbq, id string, v int) (copyNeeds, error) {
 	n := copyNeeds{v: v}
 	var kind, origin, reply, target string
-	if err := q.QueryRow(`SELECT coalesce(required_cap, ''), coalesce(conv, ''),coalesce(sub,''),coalesce(body,''),coalesce(pid,''),coalesce(human,''),coalesce(status,''),coalesce(agent_id,''),coalesce(recipient_fp,''),wire_send_group,coalesce(kind,''),coalesce(origin,''),coalesce(reply_to,''),coalesce(target,''),mention_cap,organization_cap,shared_title_cap FROM outbox WHERE id=?`, id).
-		Scan(&n.stored, &n.conv, &n.sub, &n.body, &n.pid, &n.humanRaw, &n.status, &n.agentID, &n.capturedFP, &n.groupedWire, &kind, &origin, &reply, &target, &n.mentionCap, &n.agentOrganizationCap, &n.sharedTitleCap); err != nil {
+	if err := q.QueryRow(`SELECT coalesce(required_cap, ''), coalesce(conv, ''),coalesce(sub,''),coalesce(body,''),coalesce(pid,''),coalesce(human,''),coalesce(status,''),coalesce(agent_id,''),coalesce(recipient_fp,''),wire_send_group,coalesce(kind,''),coalesce(origin,''),coalesce(reply_to,''),coalesce(target,''),mention_cap,organization_cap,shared_title_cap,resources_cap FROM outbox WHERE id=?`, id).
+		Scan(&n.stored, &n.conv, &n.sub, &n.body, &n.pid, &n.humanRaw, &n.status, &n.agentID, &n.capturedFP, &n.groupedWire, &kind, &origin, &reply, &target, &n.mentionCap, &n.agentOrganizationCap, &n.sharedTitleCap, &n.resourcesCap); err != nil {
 		return n, err
 	}
 	n.required, n.conversationAudienceCap = splitConversationAudienceRequirement(n.stored)
@@ -136,6 +136,9 @@ func copyNeedsOf(q dbq, id string, v int) (copyNeeds, error) {
 	if n.required == "" && n.sharedTitleCap {
 		n.required = protocol.CapSharedTopicTitle
 	}
+	if n.required == "" && n.resourcesCap {
+		n.required = protocol.CapConversationResources
+	}
 	if n.required == "" && n.mentionCap {
 		n.required = protocol.CapMentionReaction
 	}
@@ -152,7 +155,7 @@ func (n copyNeeds) cacheKey(to string) string {
 	return fmt.Sprintf("%s\x00%d\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%v%v%v%v%v%v%v%v%v%v%v\x00%s\x00%s\x00%s\x00%s",
 		to, n.v, n.required, n.stored, n.conv, n.sub, n.pid, n.humanRaw, n.status, n.agentID,
 		n.progress, n.receiverCap, n.room, n.topicScoped, n.organizationCap, n.followup, n.proposal, n.groupedWire, n.historical, n.helper, item.GroupHistory != nil,
-		item.Sub, item.Status, item.PID, item.AgentID) + fmt.Sprint(n.sharedTitleCap, n.proactive, n.mentionCap, n.agentOrganizationCap, n.snapshotCap, n.conversationAudienceCap, n.steer, n.guestAgent)
+		item.Sub, item.Status, item.PID, item.AgentID) + fmt.Sprint(n.sharedTitleCap, n.resourcesCap, n.proactive, n.mentionCap, n.agentOrganizationCap, n.snapshotCap, n.conversationAudienceCap, n.steer, n.guestAgent)
 }
 
 // copyWait is a reason a copy waits that capSupport words itself.
@@ -191,6 +194,11 @@ func (a *Agent) readerCheck(ctx context.Context, to string, key identity.Public,
 	var err error
 	if n.sharedTitleCap && required != protocol.CapSharedTopicTitle {
 		if err = require(protocol.CapSharedTopicTitle); err != nil {
+			return err
+		}
+	}
+	if n.resourcesCap && required != protocol.CapConversationResources {
+		if err = require(protocol.CapConversationResources); err != nil {
 			return err
 		}
 	}

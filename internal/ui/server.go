@@ -90,6 +90,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/dm", s.dm)
 	mux.HandleFunc("POST /api/dm/new", s.newDM)
 	mux.HandleFunc("POST /api/dm/send", s.sendDM)
+	mux.HandleFunc("POST /api/dm/resources", s.setDMResources)
 	mux.HandleFunc("POST /api/dm/agent/invite", s.inviteAgent)
 	mux.HandleFunc("POST /api/dm/agent/decide", s.decideAgent)
 	mux.HandleFunc("POST /api/dm/agent/dismiss", s.dismissAgent)
@@ -735,6 +736,24 @@ func (s *Server) dm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, t)
+}
+
+func (s *Server) setDMResources(w http.ResponseWriter, r *http.Request) {
+	var change ConversationResourcesChange
+	if !readJSON(w, r, &change) {
+		return
+	}
+	p, ok := s.p.(ConversationResourceEditor)
+	if !ok {
+		writeErr(w, NotFound("Group links are not available here"))
+		return
+	}
+	resources, err := p.SetConversationResources(r.Context(), change)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, resources)
 }
 
 func (s *Server) newDM(w http.ResponseWriter, r *http.Request) {

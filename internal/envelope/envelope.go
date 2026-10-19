@@ -139,14 +139,15 @@ type Inner struct {
 // TopicEvent is a shared human action. Seen names exact logical turns covered
 // by done/open; a later or previously unseen turn always ends the mark.
 type TopicEvent struct {
-	titlePresent, revPresent bool
-	Action                   string        `json:"action"`
-	Title                    *string       `json:"title,omitempty"`
-	Rev                      int64         `json:"rev,omitempty"`
-	Seen                     []string      `json:"seen,omitempty"`
-	Moves                    []TopicMove   `json:"moves,omitempty"`
-	Merge                    string        `json:"merge,omitempty"` // old topic; only the explicitly selected cutoff moves
-	Request                  *TopicRequest `json:"request,omitempty"`
+	titlePresent, revPresent, resourcesPresent bool
+	Action                                     string                   `json:"action"`
+	Title                                      *string                  `json:"title,omitempty"`
+	Resources                                  *[]protocol.ResourceLink `json:"resources,omitempty"`
+	Rev                                        int64                    `json:"rev,omitempty"`
+	Seen                                       []string                 `json:"seen,omitempty"`
+	Moves                                      []TopicMove              `json:"moves,omitempty"`
+	Merge                                      string                   `json:"merge,omitempty"` // old topic; only the explicitly selected cutoff moves
+	Request                                    *TopicRequest            `json:"request,omitempty"`
 }
 
 // CheckTopic is shared by live envelopes and retained history.
@@ -158,14 +159,26 @@ func CheckTopic(in Inner) error {
 		if in.Topic == "" && !MainTopicOrganization(in) || in.Kind != KindMessage || in.Target != nil || AgentOrigin(in.Origin) && !AgentTopicOrganization(in) || in.Status != "" || len(in.Attachments) != 0 {
 			return errors.New("topic event belongs only on a human conversation message")
 		}
-		if e.Action == "rename" {
-			if e.Title == nil || e.Rev < 1 || e.Rev > protocol.MaxTopicTitleRevision || *e.Title != NormalizeSharedTopicTitle(*e.Title) || in.Body != "" || in.AgentID != "" || AgentOrigin(in.Origin) || in.Human != nil && in.Human.AgentAuthor() || in.PID != "" && (in.Human == nil || in.PID != in.Human.AuthorPID) || in.Ref != nil || in.ReceiverRoute != nil || in.Followup != nil || in.TopicDone || in.Quote != "" || in.SendGroup != "" || len(e.Seen) != 0 || len(e.Moves) != 0 || e.Merge != "" || e.Request != nil {
-				return errors.New("invalid shared topic rename")
+		if TopicMetadata(e) {
+			if e.Rev < 1 || e.Rev > protocol.MaxTopicTitleRevision || in.Body != "" || in.AgentID != "" || AgentOrigin(in.Origin) || in.Human != nil && in.Human.AgentAuthor() || in.PID != "" && (in.Human == nil || in.PID != in.Human.AuthorPID) || in.Ref != nil || in.ReceiverRoute != nil || in.Followup != nil || in.TopicDone || in.Quote != "" || in.SendGroup != "" || len(e.Seen) != 0 || len(e.Moves) != 0 || e.Merge != "" || e.Request != nil {
+				return errors.New("invalid shared topic metadata")
+			}
+			if TopicRename(e) {
+				if e.Title == nil || *e.Title != NormalizeSharedTopicTitle(*e.Title) || e.Resources != nil || e.resourcesPresent {
+					return errors.New("invalid shared topic rename")
+				}
+			} else {
+				if in.V != Version2 || in.Conv == "" || in.Topic != "" || in.Sub != "" || in.Human != nil || in.PID != "" || in.Emotion != "" || in.ReplyTo != "" || e.Title != nil || e.titlePresent || e.Resources == nil || *e.Resources == nil {
+					return errors.New("invalid shared conversation resources")
+				}
+				if err := protocol.ValidateResourceLinks(*e.Resources); err != nil {
+					return err
+				}
 			}
 			return nil
 		}
-		if e.Title != nil || e.Rev != 0 || e.titlePresent || e.revPresent {
-			return errors.New("unexpected topic title fields")
+		if e.Title != nil || e.Rev != 0 || e.titlePresent || e.revPresent || e.Resources != nil || e.resourcesPresent {
+			return errors.New("unexpected shared metadata fields")
 		}
 		if TopicOrganization(e) {
 			return checkTopicOrganization(in)
@@ -1093,6 +1106,12 @@ func validID(s string) bool {
 // TopicRename is inert shared metadata, never an organization or execution action.
 func TopicRename(e *TopicEvent) bool { return e != nil && e.Action == "rename" }
 
+// TopicResources is a human-edited, conversation-wide named-links register.
+func TopicResources(e *TopicEvent) bool { return e != nil && e.Action == "resources" }
+
+// TopicMetadata is quiet shared state, never a chat turn or execution request.
+func TopicMetadata(e *TopicEvent) bool { return TopicRename(e) || TopicResources(e) }
+
 // NormalizeSharedTopicTitle is shared by senders and strict admission. Controls
 // and bidi formatting never become literal topic titles; the wire limit is runes.
 func NormalizeSharedTopicTitle(s string) string {
@@ -1126,6 +1145,7 @@ func (e *TopicEvent) UnmarshalJSON(data []byte) error {
 	}
 	_, v.titlePresent = fields["title"]
 	_, v.revPresent = fields["rev"]
+	_, v.resourcesPresent = fields["resources"]
 	*e = TopicEvent(v)
 	return nil
 }

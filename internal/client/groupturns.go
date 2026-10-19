@@ -182,7 +182,7 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 	if !ordinaryGroupTurn(test) || m.claim != nil && !envelope.TopicOrganization(m.TopicEvent) && !m.contribution || m.selfJob {
 		return ConvSent{}, errors.New("group: only ordinary human messages are supported")
 	}
-	if envelope.Blank(m.Body) && len(m.Files) == 0 && !envelope.TopicRename(m.TopicEvent) {
+	if envelope.Blank(m.Body) && len(m.Files) == 0 && !envelope.TopicMetadata(m.TopicEvent) {
 		return ConvSent{}, errors.New("nothing to send: no text and no files")
 	}
 	if len(m.Files) > envelope.MaxAttachments {
@@ -523,7 +523,7 @@ func (a *Agent) admitGroupTurn(ctx context.Context, env envelope.Envelope, in en
 			if e := humanTurnAuthorization(tx, in, sender.Address, sender.Fingerprint(), a.Address, a.Self().Fingerprint(), false); e != nil {
 				return e
 			}
-			if e := saveSharedTopicRename(tx, in, sender.Fingerprint()); e != nil {
+			if e := saveSharedTopicMetadata(tx, in, sender.Fingerprint()); e != nil {
 				return e
 			}
 			if !readerMember {
@@ -531,7 +531,7 @@ func (a *Agent) admitGroupTurn(ctx context.Context, env envelope.Envelope, in en
 			}
 		}
 		if in.Human == nil {
-			if e := saveSharedTopicRename(tx, in, sender.Fingerprint()); e != nil {
+			if e := saveSharedTopicMetadata(tx, in, sender.Fingerprint()); e != nil {
 				return e
 			}
 		}

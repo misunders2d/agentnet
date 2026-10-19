@@ -79,7 +79,7 @@ func (a *Agent) groupHistorySources(q dbq, conv, lid, author string, since int64
 	ownWinner := len(original) > 0 && original[0]
 	erasedClause := `NOT EXISTS(SELECT 1 FROM conv_erased e WHERE e.conv=? AND e.lid=s.lid AND e.key=s.author)`
 	if ownWinner {
-		erasedClause = "(" + erasedClause + ` OR EXISTS(SELECT 1 FROM topic_shared_titles t WHERE t.conv=? AND t.lid=s.lid AND t.writer=s.author AND EXISTS(SELECT 1 FROM inbox i WHERE i.id=s.id AND i.topic=t.topic AND json_extract(i.topic_event,'$.action')='rename' UNION ALL SELECT 1 FROM outbox o WHERE o.id=s.id AND o.topic=t.topic AND json_extract(o.topic_event,'$.action')='rename')))`
+		erasedClause = "(" + erasedClause + ` OR EXISTS(SELECT 1 FROM topic_shared_titles t WHERE t.conv=? AND t.lid=s.lid AND t.writer=s.author AND EXISTS(SELECT 1 FROM inbox i WHERE i.id=s.id AND i.topic=t.topic AND json_extract(i.topic_event,'$.action') IN ('rename','resources') UNION ALL SELECT 1 FROM outbox o WHERE o.id=s.id AND o.topic=t.topic AND json_extract(o.topic_event,'$.action') IN ('rename','resources'))))`
 	}
 	params := []any{conv, a.Address, a.Self().Fingerprint(), conv, lid, lid, author, author, since, conv, conv, conv}
 	if ownWinner {
@@ -128,6 +128,9 @@ func (a *Agent) groupHistorySources(q dbq, conv, lid, author string, since int64
 		complete, e := a.historySourceItem(q, rows[0])
 		if e != nil {
 			return nil, e
+		}
+		if envelope.TopicResources(complete.TopicEvent) && !ownWinner {
+			continue
 		}
 		if len(original) > 0 && original[0] {
 			s.item = complete
@@ -302,7 +305,7 @@ func (a *Agent) groupHistoryOutboundCheck(q dbq, packet GroupContext, to, fp str
 	}
 	ref := historyRef(packet.State.Conv, item)
 	original := false
-	if !admission.AllowsHistory(ref) {
+	if envelope.TopicResources(item.TopicEvent) || !admission.AllowsHistory(ref) {
 		me, ok, e := scanPersonIn(q, "state = ?", personSelf)
 		if e != nil {
 			return e

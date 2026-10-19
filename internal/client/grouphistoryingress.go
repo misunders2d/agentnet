@@ -37,7 +37,7 @@ func (a *Agent) groupHistoryReceiveCheck(q dbq, root protocol.ConvRoot, sender i
 		return err
 	}
 	ref := historyRef(root.ID(), item)
-	if !recipient.AllowsHistory(ref) {
+	if envelope.TopicResources(item.TopicEvent) || !recipient.AllowsHistory(ref) {
 		me, ok, e := scanPersonIn(q, "state = ?", personSelf)
 		if e != nil {
 			return e
@@ -117,7 +117,7 @@ func (a *Agent) admitGroupHistory(ctx context.Context, env envelope.Envelope, in
 		if e != nil {
 			return e
 		}
-		if e := saveSharedTopicRename(tx, item.inner(in.Conv), item.FromKey); e != nil {
+		if e := saveSharedTopicMetadata(tx, item.inner(in.Conv), item.FromKey); e != nil {
 			return e
 		}
 		if admission.AllowsHistory(historyRef(in.Conv, item)) {
