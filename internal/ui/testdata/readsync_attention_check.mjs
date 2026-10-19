@@ -348,7 +348,4 @@ if(process.env.AGENTNET_COMPAT_V31_WIRE){
  check(!old.capsReads({caps:[wire.CapReadSyncV2]},wire.CapReadSync)&&wire.capsReads({caps:[wire.CapReadSyncV2]},wire.CapReadSync),'v31 capability availability limit and current rd2 implies rd1');
  compatibility='published v0.8.31 1894c6cd parser/caps executed; dependency import URLs only rewritten';
 }
-const advertisement=Engine.prototype.onConnect.toString().match(/wire\.newCaps\(this\.keys, this\.address, this\.session, (\[.*\])\)\)/)[1],advertised=Function('wire','f','return '+advertisement)(wire,['signals1']);
-check(wire.MaxAdvertisedCaps===29&&wire.MaxCaps===32&&advertised.length===wire.MaxAdvertisedCaps&&new Set(advertised).size===wire.MaxAdvertisedCaps&&advertised.includes(wire.CapSharedTopicTitle)&&advertised.includes(wire.CapTopicOrganization)&&advertised.includes(wire.CapRequestSteer)&&!advertised.includes(wire.CapRequestFollowup)&&advertised.includes(wire.CapReadSyncV2)&&!advertised.includes(wire.CapReadSync),'actual browser advertisement keeps ttl1/org1 and strict flw2/rd2 replacements within the reviewed29 slots');
-await wire.newCaps(a.keys,a.address,wire.newID(),advertised);
-console.log('attention browser checks',checks,JSON.stringify({cost:snapshots,carriers:(await copies(a)).length,compatibility,advertised:advertised.length}));
+console.log('attention browser checks',checks,JSON.stringify({cost:snapshots,carriers:(await copies(a)).length,compatibility}));

@@ -126,7 +126,7 @@ export function historyArchive(e,Hold,StoreConflict,retryable){
             v:1,person:own.person,roster:own.hash,count:entries.length,format:'agentnet-history-v1'
           };
           const shared_title_cap=chosen.some(row=>row.shared_title_cap);
-          const resources_cap=chosen.some(row=>row.resources_cap||wire.conversationResources(row.topic_event)||row.sub==='history'&&wire.conversationResources(wire.parseHistory(row.body).topic_event));
+          const resources_cap=chosen.some(row=>row.resources_cap||wire.conversationResources(row.topic_event)||row.sub==='history'&&row.body&&wire.conversationResources(wire.parseHistory(row.body).topic_event));
           const mention_cap=chosen.some(row=>row.mention_cap||row.required_cap===wire.CapMentionReaction),organization_cap=chosen.some(row=>row.organization_cap||row.required_cap===wire.CapAgentOrganization);
           const proactive=chosen.some(row=>[wire.CapProactiveAgent,wire.CapTopicContext+"+"+wire.CapProactiveAgent].includes(wire.steerRequirementBase(row.required_cap))||row.sub==='history'&&row.body&&wire.proactiveAgent({...wire.parseHistory(row.body),conv:row.conv}));
           let snapshot=false;for(const row of chosen)snapshot ||= await e.snapshotCopy(row);

@@ -14,25 +14,25 @@ import (
 
 func TestConversationResourcesMembersCASRestartAndGuestBoundary(t *testing.T) {
 	w, carol, packet, stops := groupTurnsFixture(t)
-	ctx, conv := tctx(t), packet.State.Conv
+	conv := packet.State.Conv
 	guest := proofReader(t, w, "links-guest")
 	runAgent(t, guest)
 	for _, a := range []*Agent{w.alice, w.bob, carol, guest} {
 		roomReader(t, a)
 	}
-	invited, err := w.alice.InviteHuman(ctx, conv, guest.Address, nil, "")
+	invited, err := w.alice.InviteHuman(tctx(t), conv, guest.Address, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "guest invitation", func() bool { return stateAt(t, guest, invited.PID).State == PartInvited })
-	if _, err = guest.AcceptParticipation(ctx, invited.PID); err != nil {
+	if _, err = guest.AcceptParticipation(tctx(t), invited.PID); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "guest active", func() bool { return stateAt(t, w.alice, invited.PID).HumanActive() })
 
 	// Carol is a non-administrator. Link names need not be unique or providers.
 	links := []protocol.ResourceLink{{Name: "Notes", URL: "https://example.com/notes?a=1&b=2"}, {Name: "Notes", URL: "https://example.org/other"}}
-	first, err := carol.SetConversationResources(ctx, conv, links, 0, "")
+	first, err := carol.SetConversationResources(tctx(t), conv, links, 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,13 +45,13 @@ func TestConversationResourcesMembersCASRestartAndGuestBoundary(t *testing.T) {
 			return err == nil && reflect.DeepEqual(r, first)
 		})
 	}
-	if _, err = w.alice.SetConversationResources(ctx, conv, nil, 0, ""); !errors.Is(err, ErrConversationResourcesStale) {
+	if _, err = w.alice.SetConversationResources(tctx(t), conv, nil, 0, ""); !errors.Is(err, ErrConversationResourcesStale) {
 		t.Fatalf("stale edit: %v", err)
 	}
 	if _, err = guest.ConversationResources(conv); err == nil {
 		t.Fatal("guest read member links")
 	}
-	if _, err = guest.SetConversationResources(ctx, conv, links, 0, ""); err == nil {
+	if _, err = guest.SetConversationResources(tctx(t), conv, links, 0, ""); err == nil {
 		t.Fatal("guest edited member links")
 	}
 	var leaked int
@@ -68,7 +68,7 @@ func TestConversationResourcesMembersCASRestartAndGuestBoundary(t *testing.T) {
 				t.Fatal("links rendered as a conversation message")
 			}
 		}
-		refs, err := a.SelectGroupHistory(ctx, conv, GroupHistorySelection{Last: 64})
+		refs, err := a.SelectGroupHistory(tctx(t), conv, GroupHistorySelection{Last: 64})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -95,7 +95,7 @@ func TestConversationResourcesMembersCASRestartAndGuestBoundary(t *testing.T) {
 		r, err := phone.ConversationResources(conv)
 		return err == nil && reflect.DeepEqual(r, first)
 	})
-	cleared, err := w.alice.SetConversationResources(ctx, conv, []protocol.ResourceLink{}, first.Rev, first.Writer)
+	cleared, err := w.alice.SetConversationResources(tctx(t), conv, []protocol.ResourceLink{}, first.Rev, first.Writer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,10 +107,10 @@ func TestConversationResourcesMembersCASRestartAndGuestBoundary(t *testing.T) {
 
 func TestConversationResourcesOldReaderWaits(t *testing.T) {
 	w, _, packet, _ := groupTurnsFixture(t)
-	a, b, conv, ctx := w.alice, w.bob, packet.State.Conv, tctx(t)
+	a, b, conv := w.alice, w.bob, packet.State.Conv
 	signCapsAfter(t, b, without(ownCaps, protocol.CapConversationResources))
 	links := []protocol.ResourceLink{{Name: "Plan", URL: "https://example.com/plan"}}
-	saved, err := a.SetConversationResources(ctx, conv, links, 0, "")
+	saved, err := a.SetConversationResources(tctx(t), conv, links, 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestConversationResourcesOldReaderWaits(t *testing.T) {
 	if err != nil || before.Rev != 0 {
 		t.Fatalf("old reader received unsupported metadata: %+v %v", before, err)
 	}
-	ordinary, err := a.SendConv(ctx, conv, ConvOutgoing{Body: "Ordinary chat still works"})
+	ordinary, err := a.SendConv(tctx(t), conv, ConvOutgoing{Body: "Ordinary chat still works"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,12 +135,12 @@ func TestConversationResourcesOldReaderWaits(t *testing.T) {
 		return false
 	})
 	signCapsAfter(t, b, ownCaps)
-	features, err := a.relayFeatures(ctx)
+	features, err := a.relayFeatures(tctx(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.releaseConv(ctx, features)
-	if err = a.FlushOutbox(ctx); err != nil {
+	a.releaseConv(tctx(t), features)
+	if err = a.FlushOutbox(tctx(t)); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "reader upgrade releases retained links", func() bool {
@@ -153,7 +153,7 @@ func TestConversationResourcesMemberAgentContext(t *testing.T) {
 	stub := installAgentStub(t)
 	w, _, packet, _ := groupTurnsFixture(t)
 	setResponder(t, w.bob, "agentstub", stub.dir, time.Minute)
-	conv, ctx := packet.State.Conv, tctx(t)
+	conv := packet.State.Conv
 	p := p6Member(t, w.bob, w.bob, conv)
 	var requestLID string
 	for _, url := range []string{"https://example.com/FIRST_SHARED_REFERENCE", "https://example.com/UPDATED_SHARED_REFERENCE"} {
@@ -161,12 +161,12 @@ func TestConversationResourcesMemberAgentContext(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		saved, err := w.alice.SetConversationResources(ctx, conv, []protocol.ResourceLink{{Name: "Member notes", URL: url}}, current.Rev, current.Writer)
+		saved, err := w.alice.SetConversationResources(tctx(t), conv, []protocol.ResourceLink{{Name: "Member notes", URL: url}}, current.Rev, current.Writer)
 		if err != nil {
 			t.Fatal(err)
 		}
 		eventually(t, "member host sees current resources", func() bool { r, err := w.bob.ConversationResources(conv); return err == nil && r.Rev == saved.Rev })
-		q, err := w.bob.AskAgent(ctx, p.PID, envelope.KindQuestion, "Review the chat's shared reference")
+		q, err := w.bob.AskAgent(tctx(t), p.PID, envelope.KindQuestion, "Review the chat's shared reference")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -183,20 +183,19 @@ func TestConversationResourcesMemberAgentContext(t *testing.T) {
 	for _, a := range []*Agent{w.alice, w.bob, guest} {
 		roomReader(t, a)
 	}
-	invited, err := w.alice.InviteHuman(ctx, conv, guest.Address, nil, "")
+	invited, err := w.alice.InviteHuman(tctx(t), conv, guest.Address, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "context guest invited", func() bool { return stateAt(t, guest, invited.PID).State == PartInvited })
-	if _, err = guest.AcceptParticipation(ctx, invited.PID); err != nil {
+	if _, err = guest.AcceptParticipation(tctx(t), invited.PID); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "member host knows active context guest", func() bool {
 		return stateAt(t, w.bob, invited.PID).HumanActive()
 	})
-	// Exercise the prompt boundary with a real current guest audience. Group
-	// human-guest execution is refused upstream today; do not relax that guard
-	// just to test the context that a guest-visible reply must omit.
+	// Capture the real accepted guest audience on the stored request to
+	// exercise prompt disclosure independently of dispatch.
 	human, err := w.bob.roomAudience(conv, "", "")
 	if err != nil {
 		t.Fatal(err)
@@ -209,7 +208,7 @@ func TestConversationResourcesMemberAgentContext(t *testing.T) {
 	if _, err = w.bob.store.db.Exec(`UPDATE inbox SET human=? WHERE id=?`, humanJSON(human), request.ID); err != nil {
 		t.Fatal(err)
 	}
-	prompt, err := w.bob.agentPrompt(request, &Responder{Dir: stub.dir}, "", ctx)
+	prompt, err := w.bob.agentPrompt(request, &Responder{Dir: stub.dir}, "", tctx(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,13 +221,13 @@ func TestConversationResourcesNewMember(t *testing.T) {
 	for _, cleared := range []bool{false, true} {
 		t.Run(map[bool]string{false: "current-links", true: "cleared-register"}[cleared], func(t *testing.T) {
 			w, carol, packet, _ := groupTurnsFixture(t)
-			ctx, conv := tctx(t), packet.State.Conv
-			saved, err := carol.SetConversationResources(ctx, conv, []protocol.ResourceLink{{Name: "Current plan", URL: "https://example.com/current-plan"}}, 0, "")
+			conv := packet.State.Conv
+			saved, err := carol.SetConversationResources(tctx(t), conv, []protocol.ResourceLink{{Name: "Current plan", URL: "https://example.com/current-plan"}}, 0, "")
 			if err != nil {
 				t.Fatal(err)
 			}
 			if cleared {
-				saved, err = carol.SetConversationResources(ctx, conv, nil, saved.Rev, saved.Writer)
+				saved, err = carol.SetConversationResources(tctx(t), conv, nil, saved.Rev, saved.Writer)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -242,12 +241,12 @@ func TestConversationResourcesNewMember(t *testing.T) {
 			for _, a := range []*Agent{w.alice, w.bob, carol, guest} {
 				roomReader(t, a)
 			}
-			guestInvite, err := w.alice.InviteHuman(ctx, conv, guest.Address, nil, "")
+			guestInvite, err := w.alice.InviteHuman(tctx(t), conv, guest.Address, nil, "")
 			if err != nil {
 				t.Fatal(err)
 			}
 			eventually(t, "bootstrap guest invitation", func() bool { return stateAt(t, guest, guestInvite.PID).State == PartInvited })
-			if _, err = guest.AcceptParticipation(ctx, guestInvite.PID); err != nil {
+			if _, err = guest.AcceptParticipation(tctx(t), guestInvite.PID); err != nil {
 				t.Fatal(err)
 			}
 			eventually(t, "bootstrap guest active", func() bool { return stateAt(t, w.alice, guestInvite.PID).HumanActive() })
@@ -258,7 +257,7 @@ func TestConversationResourcesNewMember(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			invited, err := w.alice.InviteGroup(ctx, conv, person.roster.Person, nil)
+			invited, err := w.alice.InviteGroup(tctx(t), conv, person.roster.Person, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -271,7 +270,7 @@ func TestConversationResourcesNewMember(t *testing.T) {
 				}
 				return false
 			})
-			if err = joiner.DecideGroupInvitation(ctx, invited.ID, true); err != nil {
+			if err = joiner.DecideGroupInvitation(tctx(t), invited.ID, true); err != nil {
 				t.Fatal(err)
 			}
 			eventually(t, "new resource member admitted", func() bool {
@@ -313,7 +312,7 @@ func TestConversationResourcesNewMember(t *testing.T) {
 			if err = json.Unmarshal(payload, &published); err != nil {
 				t.Fatal(err)
 			}
-			if _, err = w.alice.PublishGroup(ctx, commit, published, invited.ID); err != nil {
+			if _, err = w.alice.PublishGroup(tctx(t), commit, published, invited.ID); err != nil {
 				t.Fatal(err)
 			}
 			after, err := w.alice.ConversationResources(conv)
@@ -325,7 +324,7 @@ func TestConversationResourcesNewMember(t *testing.T) {
 				t.Fatalf("admission publications=%d: %v", events, err)
 			}
 			if cleared {
-				added, err := joiner.SetConversationResources(ctx, conv, []protocol.ResourceLink{{Name: "New member plan", URL: "https://example.org/new-plan"}}, bootstrapped.Rev, bootstrapped.Writer)
+				added, err := joiner.SetConversationResources(tctx(t), conv, []protocol.ResourceLink{{Name: "New member plan", URL: "https://example.org/new-plan"}}, bootstrapped.Rev, bootstrapped.Writer)
 				if err != nil {
 					t.Fatal(err)
 				}

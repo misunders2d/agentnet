@@ -365,6 +365,26 @@ func testGroupParticipationHistoryLinkedRestartReorder(t *testing.T, dismissed, 
 					rows.Close()
 				}
 			}
+			rows, e := phone.store.db.Query(`SELECT i.id,f.blob_id FROM inbox i JOIN attachments f ON f.message_id=i.id WHERE i.conv=? AND i.lid=? ORDER BY i.id`, packet.State.Conv, original.LID)
+			if e == nil {
+				for rows.Next() {
+					var id, blob string
+					if rows.Scan(&id, &blob) == nil {
+						t.Logf("linked file alias target=%s id=%s blob=%s", fileID, id, blob)
+					}
+				}
+				rows.Close()
+			}
+			rows, e = phone.store.db.Query(`SELECT id,reason,detail_code FROM quarantine ORDER BY id`)
+			if e == nil {
+				for rows.Next() {
+					var id, reason, code string
+					if rows.Scan(&id, &reason, &code) == nil {
+						t.Logf("linked file receiver held id=%s reason=%s code=%s", id, reason, code)
+					}
+				}
+				rows.Close()
+			}
 		}
 	})
 	if err = phone.RequestFile(tctx(t), fileID, 0); err != nil {

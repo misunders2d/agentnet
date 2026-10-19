@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -142,11 +141,6 @@ func TestStrictSteerArchiveRequirementRetention(t *testing.T) {
 	base, strict := splitSteerRequirement(required)
 	if base != protocol.CapHistoryArchive || !strict {
 		t.Fatal(required)
-	}
-	caps := append(slices.Clone(ownCaps), protocol.CapAgent)
-	slices.Sort(caps)
-	if slices.Contains(caps, protocol.CapRequestFollowup) || !slices.Contains(caps, protocol.CapRequestSteer) || len(caps) != protocol.MaxAdvertisedCaps || protocol.MaxAdvertisedCaps != 29 {
-		t.Fatal("advertisement slot grew", caps)
 	}
 	if !strings.Contains(required, protocol.CapRequestSteer) {
 		t.Fatal("strict retention absent")

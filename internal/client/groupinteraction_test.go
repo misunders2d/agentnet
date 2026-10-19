@@ -860,6 +860,10 @@ func TestGroupInteractionNamedMemberAndVisitor(t *testing.T) {
 	if strings.Contains(stub.last(), "GROUP_UNSELECTED_SECRET") {
 		t.Fatal("other member request leaked unselected context")
 	}
+	const memberLink = "https://example.com/GROUP_MEMBER_REFERENCE"
+	if _, err = w.alice.SetConversationResources(tctx(t), packet.State.Conv, []protocol.ResourceLink{{Name: "Member-only reference", URL: memberLink}}, 0, ""); err != nil {
+		t.Fatal(err)
+	}
 	v, err := w.alice.InviteNamedAgent(tctx(t), packet.State.Conv, host.Address, visitor.ID, []string{sent.LID}, nil, "visitor scope")
 	if err != nil {
 		t.Fatal(err)
@@ -895,7 +899,7 @@ func TestGroupInteractionNamedMemberAndVisitor(t *testing.T) {
 			t.Fatalf("visitor output attribution %+v", answer)
 		}
 	}
-	if !strings.Contains(stub.last(), "GROUP_SELECTED_BYTES") || !strings.Contains(stub.last(), "GROUP_FUTURE_CONTEXT") || strings.Contains(stub.last(), "GROUP_UNSELECTED_SECRET") || strings.Contains(stub.last(), "member question") {
+	if !strings.Contains(stub.last(), "GROUP_SELECTED_BYTES") || !strings.Contains(stub.last(), "GROUP_FUTURE_CONTEXT") || strings.Contains(stub.last(), "GROUP_UNSELECTED_SECRET") || strings.Contains(stub.last(), "member question") || strings.Contains(stub.last(), memberLink) {
 		t.Fatalf("visitor grant isolation %s", stub.last())
 	}
 	if stub.runs() != 3 {

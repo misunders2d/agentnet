@@ -630,7 +630,7 @@ func (a *Agent) agentPrompt(j job, r *Responder, lookupText string, contexts ...
 	} else {
 		fmt.Fprintf(&b, "You are the agent of %s, running on their device %s. %s accepted your participation in their direct conversation with %s; your reply is sent to both of them.%s\n", host, hostAt, host, other, also)
 	}
-	if info.Member && m.group != nil && len(guests) == 0 {
+	if info.Member && !info.External && m.group != nil && len(guests) == 0 {
 		resources, err := a.ConversationResources(j.Conv)
 		if err != nil {
 			return "", err

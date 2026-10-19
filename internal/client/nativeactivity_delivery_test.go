@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
@@ -460,69 +461,71 @@ func TestNativeActivityWatcherCoalescesLatestWithoutOutputWrites(t *testing.T) {
 	t.Run("repeated-unknown", testNativeProgressRepeatedUnknown)
 	t.Run("latest-wins", testNativeProgressLatestWins)
 	t.Run("unchanged-guards", testNativeProgressUnchangedGuards)
-	a, j, _, _ := activityDeliveryFixture(t)
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-	activity := newRunActivity()
-	ready, done := make(chan struct{}, 1), make(chan struct{})
-	go func() {
-		defer close(done)
-		a.watchRunActivity(ctx, ctx, j, activity, func() bool {
-			select {
-			case ready <- struct{}{}:
-			default:
-			}
-			return true
-		})
-	}()
-	defer func() { cancel(); <-done }()
-	select {
-	case <-ready:
-	case <-ctx.Done():
-		t.Fatal("watcher did not start")
-	}
-	waitDetail := func(label string) {
-		t.Helper()
-		for {
-			_, changed := a.Changed()
-			var detail string
-			if err := a.store.db.QueryRow(`SELECT coalesce(detail,'') FROM inbox WHERE id=?`, j.ID).Scan(&detail); err != nil {
-				t.Fatal(err)
-			}
-			if strings.HasPrefix(detail, label+"\nReported at ") {
-				return
-			}
-			select {
-			case <-changed:
-			case <-ctx.Done():
-				t.Fatal("latest native category not annotated", label)
+	synctest.Test(t, func(t *testing.T) {
+		a, j, _, _ := activityDeliveryFixture(t)
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+		activity := newRunActivity()
+		ready, done := make(chan struct{}, 1), make(chan struct{})
+		go func() {
+			defer close(done)
+			a.watchRunActivity(ctx, ctx, j, activity, func() bool {
+				select {
+				case ready <- struct{}{}:
+				default:
+				}
+				return true
+			})
+		}()
+		defer func() { cancel(); <-done }()
+		select {
+		case <-ready:
+		case <-ctx.Done():
+			t.Fatal("watcher did not start")
+		}
+		waitDetail := func(label string) {
+			t.Helper()
+			for {
+				_, changed := a.Changed()
+				var detail string
+				if err := a.store.db.QueryRow(`SELECT coalesce(detail,'') FROM inbox WHERE id=?`, j.ID).Scan(&detail); err != nil {
+					t.Fatal(err)
+				}
+				if strings.HasPrefix(detail, label+"\nReported at ") {
+					return
+				}
+				select {
+				case <-changed:
+				case <-ctx.Done():
+					t.Fatal("latest native category not annotated", label)
+				}
 			}
 		}
-	}
-	activity.report(activityReading)
-	waitDetail("Reading files")
-	for range 10000 {
-		activity.report(activityCommand)
-		activity.report(activityEditing)
-	}
-	w := activityWriter{Writer: io.Discard, activity: activity}
-	for range 10000 {
-		w.Write([]byte("PRIVATE output"))
-	}
-	waitDetail("Editing files")
-	var due int
-	if err := a.store.db.QueryRow(`SELECT status_due FROM inbox WHERE id=?`, j.ID).Scan(&due); err != nil || due != 2 {
-		t.Fatal("burst/output created extra status writes", due, err)
-	}
-	if _, err := a.store.db.Exec(`UPDATE inbox SET state='cancel_requested' WHERE id=?`, j.ID); err != nil {
-		t.Fatal(err)
-	}
-	activity.report(activitySearch)
-	cancel()
-	<-done
-	if state, err := a.store.jobState(j.ID); err != nil || state != stateCancelReq {
-		t.Fatal("optional watcher affected cancellation", state, err)
-	}
+		activity.report(activityReading)
+		waitDetail("Reading files")
+		for range 10000 {
+			activity.report(activityCommand)
+			activity.report(activityEditing)
+		}
+		w := activityWriter{Writer: io.Discard, activity: activity}
+		for range 10000 {
+			w.Write([]byte("PRIVATE output"))
+		}
+		waitDetail("Editing files")
+		var due int
+		if err := a.store.db.QueryRow(`SELECT status_due FROM inbox WHERE id=?`, j.ID).Scan(&due); err != nil || due != 2 {
+			t.Fatal("burst/output created extra status writes", due, err)
+		}
+		if _, err := a.store.db.Exec(`UPDATE inbox SET state='cancel_requested' WHERE id=?`, j.ID); err != nil {
+			t.Fatal(err)
+		}
+		activity.report(activitySearch)
+		cancel()
+		<-done
+		if state, err := a.store.jobState(j.ID); err != nil || state != stateCancelReq {
+			t.Fatal("optional watcher affected cancellation", state, err)
+		}
+	})
 }
 
 func TestNativeActivityOnlyOptionalSnapshotsAreGated(t *testing.T) {

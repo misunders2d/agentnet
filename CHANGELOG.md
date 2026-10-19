@@ -16,6 +16,10 @@ This record starts with v0.8.1; earlier releases remain on the
   receive them, and older devices retain their copies until they support `res1`.
   New members receive current links without sharing earlier chat history;
   cleared lists remain convergent when a new member edits.
+  Outside invited agents keep answering within their existing scope without
+  attempting to read those member-only links.
+- Preserve browser archive repacking after retained plaintext has been cleared,
+  keeping the original encrypted content and capability requirements intact.
 
 ## [0.8.34] — 2026-10-19
 

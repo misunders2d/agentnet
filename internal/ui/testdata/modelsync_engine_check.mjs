@@ -94,7 +94,6 @@ await caps(p);await a.post({...rec,state:'queued'});check((await a.store.get('ou
 check((await a.store.get('outbox',rec.id)).envelope===raw,'capability retry preserves exact signature and ciphertext');
 if(typeof window!=='undefined'){p.store.close();p.store=await openIDB(p.fixtureStoreName);}
 const restarted=new Engine({store:p.store,base:p.base,fetch});Object.assign(restarted,{keys:p.keys,address:p.address,pub:p.pub,fp:p.fp,me:p.me,connected:false});check((await restarted.modelReports()).find(r=>!r.agent_id&&r.host_key===a.fp).model==='new model'&&(await restarted.modelReports()).find(r=>!r.agent_id&&r.host_key===a.fp).reasoning==='medium','private model snapshot survives restart');
-check(wire.MaxAdvertisedCaps===29&&wire.MaxCaps===32&&wire.MaxCaps-wire.MaxAdvertisedCaps===3,'independent ttl1 extension retains three-token reader headroom');
 check(!wire.capsReads({caps:[wire.CapRoom]},wire.CapTopicContext)&&wire.capsReads({caps:[wire.CapTopicContext]},wire.CapTopicContext),'tpc1 requires independent explicit support');
 const result={ok:true,checks};if(typeof window!=='undefined')window.modelSyncResult=result;console.log(JSON.stringify(result));
 

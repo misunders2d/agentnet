@@ -41,7 +41,7 @@ var tsRoots = []any{
 	Draft{}, DMDraft{}, Action{}, ControlAction{}, AgentInvite{}, AgentAsk{}, GuestAction{},
 	GroupInviteDraft{}, GroupChange{}, DecisionAction{}, DeleteConversationAction{}, ResponderChange{},
 	AgentCatalogChange{}, WorkspaceJoin{}, client.TeamChange{}, protocol.TypingScope{}, AssistantSetupRequest{},
-	ScheduleDraft{}, ScheduleAction{}, ReplyReceiverSelection{}, TopicChange{}, ApprovalRevoke{}, WorkspaceNameChange{}, InviteRequest{},
+	ScheduleDraft{}, ScheduleAction{}, ConversationResourcesChange{}, ReplyReceiverSelection{}, TopicChange{}, ApprovalRevoke{}, WorkspaceNameChange{}, InviteRequest{},
 }
 
 func TestTypeScriptViewTypes(t *testing.T) {

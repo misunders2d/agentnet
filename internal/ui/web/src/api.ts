@@ -7,9 +7,6 @@ import type { Host } from "./host";
 export type { T };
 
 
-export interface ResourceLink { name: string; url: string }
-export interface ConversationResources { links: ResourceLink[]; rev: number; writer: string; lid: string }
-export interface ConversationResourcesChange { conv: string; links: ResourceLink[]; rev: number; writer: string }
 export interface TopicOrganizationRequest {
 	main?: boolean;
   conv: string; ids: string[]; topic: string; merge?: string; new?: boolean; title?: string;
@@ -52,8 +49,8 @@ export function api(host: Host) {
     editSchedule: (d: T.ScheduleDraft) => post<T.ScheduledSend>("/api/schedule/edit", d),
     cancelSchedule: (id: string, rev: number) => post<T.ScheduledSend>("/api/schedule/cancel", { id, rev }),
     sendScheduleNow: (id: string, rev: number) => post<T.ScheduledSend>("/api/schedule/send_now", { id, rev }),
-    dm: (id: string) => get<T.DMThread & { resources?: ConversationResources }>(q("/api/dm", { id })),
-    setConversationResources: (change: ConversationResourcesChange) => post<ConversationResources>("/api/dm/resources", change),
+    dm: (id: string) => get<T.DMThread>(q("/api/dm", { id })),
+    setConversationResources: (change: T.ConversationResourcesChange) => post<T.ConversationResources>("/api/dm/resources", change),
     approvals: () => get<T.ApprovalsView>("/api/approvals"),
     thread: (id: string) => get<T.Thread>(q("/api/thread", { id })),
     refresh: (id: string) => post<T.Presence>("/api/refresh", { id }),

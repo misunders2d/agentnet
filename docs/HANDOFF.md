@@ -21,15 +21,17 @@ including cleared registers, through one ordinary edit from the admission
 publisher. Native and signed-browser regressions and real three-member TLS
 smokes pass, including replay and the newcomer's first edit.
 
-Final-core Android packaging, 42 JVM checks, lint and memory-only preservation
-guards pass. The collection's corrected Zoom phone geometry and four affected
-rendered journeys pass, as does disposable local catalog assembly. These are
-working-tree checks, not exact-commit or native-device acceptance.
+Earlier Android packaging, 42 JVM checks, lint and memory-only preservation
+guards pass, but that snapshot predates the candidate-1 repairs and is stale.
+The collection's corrected Zoom phone geometry, four affected rendered journeys
+and disposable local catalog assembly pass; exact-commit qualification is open.
 
-See [the current acceptance record](plans/V0_9_0.md) for evidence and limits.
-Collection, Android runtime and full release qualification remain open. Nothing
-is published or deployed; the required Claude production-review gate remains
-unresolved.
+Candidate 1 (`5b473a4`) failed full normal CI. Focused repairs now pass the
+member/visitor worker boundary and rebuilt phone link-edit/clear smoke, but a
+later linked-file recovery timeout remains under diagnosis. See the
+[current acceptance record](plans/V0_9_0.md) for exact evidence and limits.
+Nothing is published or deployed; stop at a qualified candidate for the owner's
+direct go/no-go. The Claude production-review gate remains unresolved.
 
 ## v0.8.34 — responsiveness and CI hardening (October 19, 2026)
 

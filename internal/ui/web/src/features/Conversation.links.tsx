@@ -1,24 +1,25 @@
 import { useState } from "react";
 import { IconLink } from "@tabler/icons-react";
-import { errorText, type ConversationResources, type ResourceLink, type T } from "../api";
+import { errorText, type T } from "../api";
 import { useApp } from "../context";
 import { Button } from "../ui/Button";
 import { Sheet } from "../ui/Sheet";
 
 // The optional projection is also the read capability: guests and agent hosts
 // never receive it. Drafts and their CAS revision stay local across pushes.
-export function ConversationLinks({ thread }: { thread: T.DMThread & { resources?: ConversationResources } }) {
+export function ConversationLinks({ thread }: { thread: T.DMThread }) {
   const store = useApp();
   const [open, setOpen] = useState(false);
-  const [draft, setDraft] = useState<{ base: ConversationResources; links: ResourceLink[] } | null>(null);
+  const [draft, setDraft] = useState<{ base: T.ConversationResources; links: T.ResourceLink[] } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const resources = thread.resources;
   if (thread.kind !== "group" || thread.role !== "member" || !resources) return null;
+  const currentLinks = resources.links ?? [];
   const editable = !thread.frozen;
   const changed = !!draft && (draft.base.rev !== resources.rev || draft.base.writer !== resources.writer);
   const edit = () => {
-    setDraft({ base: resources, links: resources.links.map(link => ({ ...link })) });
+    setDraft({ base: resources, links: currentLinks.map(link => ({ ...link })) });
     setError("");
   };
   const close = (value: boolean) => {
@@ -26,7 +27,7 @@ export function ConversationLinks({ thread }: { thread: T.DMThread & { resources
     setOpen(value);
     if (!value) { setDraft(null); setError(""); }
   };
-  const update = (index: number, field: keyof ResourceLink, value: string) => {
+  const update = (index: number, field: keyof T.ResourceLink, value: string) => {
     setDraft(current => current && ({ ...current, links: current.links.map((link, i) => i === index ? { ...link, [field]: value } : link) }));
   };
   const save = async () => {
@@ -81,8 +82,8 @@ export function ConversationLinks({ thread }: { thread: T.DMThread & { resources
         </fieldset>)}
         {!draft.links.length && <p className="text-text-2">No links. Save to clear the group’s links, or add one.</p>}
         <Button variant="outline" disabled={busy || !editable} onClick={() => setDraft(current => current && ({ ...current, links: [...current.links, { name: "", url: "" }] }))}>Add link</Button>
-      </div> : resources.links.length ? <ul className="flex flex-col gap-2">
-        {resources.links.map((link, index) => <li key={index} className="min-w-0"><a href={link.url} target="_blank" rel="noopener noreferrer" className="block min-h-11 rounded-xl px-2 py-2 font-bold underline [overflow-wrap:anywhere] hover:bg-sunken">{link.name}<span className="mt-0.5 block text-[13px] font-normal text-text-2">{link.url}</span></a></li>)}
+      </div> : currentLinks.length ? <ul className="flex flex-col gap-2">
+        {currentLinks.map((link, index) => <li key={index} className="min-w-0"><a href={link.url} target="_blank" rel="noopener noreferrer" className="block min-h-11 rounded-xl px-2 py-2 font-bold underline [overflow-wrap:anywhere] hover:bg-sunken">{link.name}<span className="mt-0.5 block text-[13px] font-normal text-text-2">{link.url}</span></a></li>)}
       </ul> : <p className="text-text-2">No links yet.</p>}
     </Sheet>
   </>;

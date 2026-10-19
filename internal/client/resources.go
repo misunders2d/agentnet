@@ -87,6 +87,10 @@ func (a *Agent) groupResourcesPublicationCopies(ctx context.Context, packet Grou
 	if invitation == "" {
 		return nil, nil, nil
 	}
+	old, found, err := sharedTopicTitle(a.store.db, packet.State.Conv, "")
+	if err != nil || !found || old.resources == "" {
+		return nil, nil, err
+	}
 	r, err := groupInvitationIn(a.store.db, invitation, "out")
 	if err != nil {
 		return nil, nil, err
@@ -98,10 +102,6 @@ func (a *Agent) groupResourcesPublicationCopies(ctx context.Context, packet Grou
 		r.Proposal.Prev != packet.State.Prev || r.Proposal.Root.ID() != packet.Root.ID() ||
 		r.Inviter != a.Address || r.peerFP != a.Self().Fingerprint() {
 		return nil, nil, ErrGroupInvitationStale
-	}
-	old, found, err := sharedTopicTitle(a.store.db, packet.State.Conv, "")
-	if err != nil || !found || old.resources == "" {
-		return nil, nil, err
 	}
 	var links []protocol.ResourceLink
 	if err = json.Unmarshal([]byte(old.resources), &links); err != nil {

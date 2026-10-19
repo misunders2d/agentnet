@@ -205,6 +205,20 @@ export interface ConvItem {
   stale?: boolean;
 }
 
+export interface ConversationResources {
+  links: ResourceLink[] | null;
+  rev: number;
+  writer: string;
+  lid: string;
+}
+
+export interface ConversationResourcesChange {
+  conv: string;
+  links: ResourceLink[] | null;
+  rev: number;
+  writer: string;
+}
+
 export interface CopyView {
   own?: boolean;
   person?: string;
@@ -307,6 +321,7 @@ export interface DMSummary {
 }
 
 export interface DMThread {
+  resources?: ConversationResources;
   main_topic?: ThreadSummary;
   topics?: ThreadSummary[];
   kind?: string;
@@ -1064,6 +1079,11 @@ export interface ReportItem {
   native?: NativeRequest;
 }
 
+export interface ResourceLink {
+  name: string;
+  url: string;
+}
+
 export interface ResponderChange {
   manual: boolean;
   harness: string;
@@ -1342,6 +1362,7 @@ export interface TopicChange {
 export interface TopicEvent {
   action: string;
   title?: string;
+  resources?: ResourceLink[];
   rev?: number;
   seen?: string[];
   moves?: TopicMove[];
