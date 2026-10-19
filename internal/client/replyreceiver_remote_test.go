@@ -176,7 +176,10 @@ func TestReceiverRemotePreparedApprovalReadyFiles(t *testing.T) {
 		t.Fatal(e)
 	}
 	t.Cleanup(func() { phone.Close() })
-	stopPhone = runAgent(t, phone)
+	stopPhone = runPublished(t, phone)
+	eventually(t, "selected host sees reopened origin receiver support", func() bool {
+		return w.alice.requireParticipationCaps(tctx(t), phone.Self(), protocol.CapReplyReceiver) == nil
+	})
 	if e = w.alice.Accept(setup); e != nil {
 		t.Fatal(e)
 	}

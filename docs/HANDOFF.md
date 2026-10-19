@@ -409,6 +409,21 @@ observing the linked browser's copy alone proves no delivery to that host.
 The unchanged journey passes three consecutive race executions after this
 prerequisite correction; no read-only assertion is relaxed.
 
+The docs-only v0.8.34 preparation at `350f2b28` triggered another full
+[normal-push CI run](https://github.com/misunders2d/agentnet/actions/runs/39213928650):
+30 jobs passed, while macOS exposed a reopened receiver-origin capability race
+and Windows exposed an unexpected additional unknown outcome in the controlled
+native-progress fault sequence. The prepared-file approval fixture now waits for
+the reopened phone's own signed advertisement and for the selected host to read
+its receiver support before accepting the delegation. The fault retry leaf runs
+its existing real SQLite calls and coalescing/deadline timers under `synctest`,
+isolating controlled fault outcomes from host disk scheduling. The 100 ms
+production store deadline, retry cap, authority and wake assertions are unchanged;
+the separate real-wall-clock blocked-store deadline check remains outside the
+bubble. All three complete journeys pass three consecutive race executions,
+without skips (48.893 s package time), followed by the existing full-CI gate
+before tagging. `go vet ./...` also passes.
+
 Witnessed admission retains full current-group validation, then selects its
 signed historical graph without rereading today's unused PID ledger. A
 self-contained witnessed request or output no longer recursively prepares

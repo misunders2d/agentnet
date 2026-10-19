@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -235,120 +236,124 @@ func testNativeProgressRowsAffectedError(t *testing.T) {
 }
 
 func testNativeProgressRetry(t *testing.T, afterStep bool, failures int, latestWins, resultError bool) {
-	a, j, h, _ := activityDeliveryFixture(t)
-	f := nativeProgressFaultStore(t, a, afterStep)
-	f.failures, f.resultError = failures, resultError
-	before := nativeProgressFaultSnapshot(t, a, j)
-	a.statusLive.Store(true) // Observe wakeStatus without starting a sender/socket.
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-	activity := newRunActivity()
-	checked, done := make(chan struct{}, 1), make(chan struct{})
-	go func() {
-		defer close(done)
-		a.watchRunActivity(ctx, ctx, j, activity, func() bool {
+	// Keep the coalescing timer and optional store deadline on one clock:
+	// disk scheduling must not add unknown outcomes to controlled faults.
+	synctest.Test(t, func(t *testing.T) {
+		a, j, h, _ := activityDeliveryFixture(t)
+		f := nativeProgressFaultStore(t, a, afterStep)
+		f.failures, f.resultError = failures, resultError
+		before := nativeProgressFaultSnapshot(t, a, j)
+		a.statusLive.Store(true) // Observe wakeStatus without starting a sender/socket.
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+		activity := newRunActivity()
+		checked, done := make(chan struct{}, 1), make(chan struct{})
+		go func() {
+			defer close(done)
+			a.watchRunActivity(ctx, ctx, j, activity, func() bool {
+				select {
+				case checked <- struct{}{}:
+				default:
+				}
+				return true
+			})
+		}()
+		defer func() { cancel(); <-done; a.statusLive.Store(false) }()
+		barrier := func() {
+			t.Helper()
 			select {
-			case checked <- struct{}{}:
-			default:
+			case <-checked:
+			case <-ctx.Done():
+				t.Fatal("watcher barrier expired")
 			}
-			return true
-		})
-	}()
-	defer func() { cancel(); <-done; a.statusLive.Store(false) }()
-	barrier := func() {
-		t.Helper()
+		}
+		barrier()
+		_, changed := a.Changed()
+		next := func() nativeProgressFaultEvent {
+			t.Helper()
+			select {
+			case event := <-f.events:
+				return event
+			case <-ctx.Done():
+				t.Fatal("timer retry did not execute")
+			}
+			return nativeProgressFaultEvent{}
+		}
+		p := nativeProgress{kind: activityReading, at: time.Date(2026, 10, 16, 15, 0, 0, 0, time.UTC)}
+		activity.reportProgress(p)
+		first := next()
+		a.wakeWorker()
+		barrier() // The first flush has returned, even though it issued no changed wake.
+		mid := nativeProgressFaultSnapshot(t, a, j)
+		wantFirst := int64(0)
+		if afterStep {
+			wantFirst = 1
+		}
+		if !first.unknown || first.affected != wantFirst || mid.due-before.due != int(wantFirst) || mid.authority != before.authority {
+			t.Fatal("unknown step metadata differs from controlled outcome")
+		}
 		select {
-		case <-checked:
-		case <-ctx.Done():
-			t.Fatal("watcher barrier expired")
+		case <-changed:
+			t.Fatal("unknown outcome issued changed wake")
+		default:
 		}
-	}
-	barrier()
-	_, changed := a.Changed()
-	next := func() nativeProgressFaultEvent {
-		t.Helper()
-		select {
-		case event := <-f.events:
-			return event
-		case <-ctx.Done():
-			t.Fatal("timer retry did not execute")
+		if len(a.statusWake) != 0 {
+			t.Fatal("unknown outcome issued status wake")
 		}
-		return nativeProgressFaultEvent{}
-	}
-	p := nativeProgress{kind: activityReading, at: time.Date(2026, 10, 16, 15, 0, 0, 0, time.UTC)}
-	activity.reportProgress(p)
-	first := next()
-	a.wakeWorker()
-	barrier() // The first flush has returned, even though it issued no changed wake.
-	mid := nativeProgressFaultSnapshot(t, a, j)
-	wantFirst := int64(0)
-	if afterStep {
-		wantFirst = 1
-	}
-	if !first.unknown || first.affected != wantFirst || mid.due-before.due != int(wantFirst) || mid.authority != before.authority {
-		t.Fatal("unknown step metadata differs from controlled outcome")
-	}
-	select {
-	case <-changed:
-		t.Fatal("unknown outcome issued changed wake")
-	default:
-	}
-	if len(a.statusWake) != 0 {
-		t.Fatal("unknown outcome issued status wake")
-	}
-	if latestWins {
-		p = nativeProgress{kind: activityEditing, at: p.at.Add(time.Second)}
-		activity.reportProgress(p) // New distinct key supersedes the failed value before its timer.
-	}
-	second := next()
-	if second.unknown != (failures > 1) {
-		t.Fatal("retry outcome classification changed")
-	}
-	if latestWins {
-		third := next() // The newer value receives its own single retry.
-		if third.unknown || third.affected != 1 {
-			t.Fatal("latest value lost its independent retry")
+		if latestWins {
+			p = nativeProgress{kind: activityEditing, at: p.at.Add(time.Second)}
+			activity.reportProgress(p) // New distinct key supersedes the failed value before its timer.
 		}
-	} else {
-		// Observe another full interval: neither a second unknown nor an unchanged
-		// result may arm another retry. Raw output also cannot bypass that cap.
-		w := activityWriter{Writer: io.Discard, activity: activity}
-		w.Write([]byte("PRIVATE output is not another progress report"))
-		observation := time.NewTimer(nativeActivityInterval + 50*time.Millisecond)
-		defer observation.Stop()
-		select {
-		case <-f.events:
-			t.Fatal("progress exceeded one timer retry")
-		case <-observation.C:
-		case <-ctx.Done():
-			t.Fatal("retry-cap observation expired")
+		second := next()
+		if second.unknown != (failures > 1) {
+			t.Fatal("retry outcome classification changed")
 		}
-	}
-	cancel()
-	<-done
-	final := nativeProgressFaultSnapshot(t, a, j)
-	attempts, delegated, rows := f.counts()
-	wantAttempts, wantWrites := 2, 1
-	if failures > 1 && !latestWins {
-		wantWrites = 0
-	}
-	if latestWins {
-		wantAttempts = 3
-	}
-	if attempts != wantAttempts || rows != int64(wantWrites) || final.due-before.due != wantWrites || final.authority != before.authority {
-		t.Fatal("capped retry changed persistence or authority")
-	}
-	if wantWrites == 1 && final.detail != p.label()+"\nReported at "+p.at.UTC().Format(time.RFC3339) {
-		t.Fatal("retry did not persist exact latest label/time")
-	}
-	if wantWrites == 0 && final != before {
-		t.Fatal("omitted repeated unknown mutated row")
-	}
-	wantWake := !afterStep && wantWrites == 1
-	if (len(a.statusWake) == 1) != wantWake || len(h.posted) != 0 {
-		t.Fatal("retry changed optional status/output behavior")
-	}
-	t.Logf("retry metadata: attempts=%d delegated=%d persisted=%d due_delta=%d latest=%t status_wake=%t", attempts, delegated, rows, final.due-before.due, latestWins, len(a.statusWake) == 1)
+		if latestWins {
+			third := next() // The newer value receives its own single retry.
+			if third.unknown || third.affected != 1 {
+				t.Fatal("latest value lost its independent retry")
+			}
+		} else {
+			// Observe another full interval: neither a second unknown nor an unchanged
+			// result may arm another retry. Raw output also cannot bypass that cap.
+			w := activityWriter{Writer: io.Discard, activity: activity}
+			w.Write([]byte("PRIVATE output is not another progress report"))
+			observation := time.NewTimer(nativeActivityInterval + 50*time.Millisecond)
+			defer observation.Stop()
+			select {
+			case <-f.events:
+				t.Fatal("progress exceeded one timer retry")
+			case <-observation.C:
+			case <-ctx.Done():
+				t.Fatal("retry-cap observation expired")
+			}
+		}
+		cancel()
+		<-done
+		final := nativeProgressFaultSnapshot(t, a, j)
+		attempts, delegated, rows := f.counts()
+		wantAttempts, wantWrites := 2, 1
+		if failures > 1 && !latestWins {
+			wantWrites = 0
+		}
+		if latestWins {
+			wantAttempts = 3
+		}
+		if attempts != wantAttempts || rows != int64(wantWrites) || final.due-before.due != wantWrites || final.authority != before.authority {
+			t.Fatal("capped retry changed persistence or authority")
+		}
+		if wantWrites == 1 && final.detail != p.label()+"\nReported at "+p.at.UTC().Format(time.RFC3339) {
+			t.Fatal("retry did not persist exact latest label/time")
+		}
+		if wantWrites == 0 && final != before {
+			t.Fatal("omitted repeated unknown mutated row")
+		}
+		wantWake := !afterStep && wantWrites == 1
+		if (len(a.statusWake) == 1) != wantWake || len(h.posted) != 0 {
+			t.Fatal("retry changed optional status/output behavior")
+		}
+		t.Logf("retry metadata: attempts=%d delegated=%d persisted=%d due_delta=%d latest=%t status_wake=%t", attempts, delegated, rows, final.due-before.due, latestWins, len(a.statusWake) == 1)
+	})
 }
 
 func testNativeProgressUnchangedGuards(t *testing.T) {
