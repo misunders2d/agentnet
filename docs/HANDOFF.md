@@ -1,13 +1,25 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
-## Unreleased responsiveness work — October 18, 2026
+## v0.8.34 — responsiveness and CI hardening (October 19, 2026)
 
-Implementation work for MEL-642/MEL-546/MEL-646. The owner authorized source
-commit/push, not a release, tag, publication, relay/phone deployment,
-live-profile modification or Linear status change. The sender-only trial
-below has ended and the official sender was restored.
+Implementation work for MEL-642/MEL-546/MEL-646. The owner authorized v0.8.34
+publication on October 19 after the full normal-push CI run passed on
+`ca7b408414e519aae08c592cc116d7b9a24d9f3f`. The sender-only trial below has ended
+and the official sender was restored. Release publication does not authorize
+separate relay or device deployment, live-profile changes or Linear status changes.
 An independent Claude reviewer reviewed diagnosis, design, implementation and
 verification, including the full-backlog correction below.
+
+The [complete source CI run](https://github.com/misunders2d/agentnet/actions/runs/39175299727)
+passed all 32 required jobs; only the existing optional Windows Task Scheduler
+probe was skipped. Qualification includes all 18 client race partitions, both
+complete UI race partitions at the unchanged 600-second bound, all six Windows
+client partitions, native Linux/macOS/Windows suites, desktop builds and the
+container journey. Existing platform and opt-in skips are not executed tests.
+The old native-Windows governance failure's cause remains unproven; the final
+unfiltered native-Windows integration suite passes without a speculative workaround.
+Physical-phone catch-up, all-control p95, ThinkPad and WebKitGTK acceptance remain
+separate from this release's automated evidence.
 
 The relay overlaps at most eight unacknowledged sync frames, preserving oldest
 custody order and checking live arrivals between individual frames. It uses no

@@ -6,6 +6,8 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+## [0.8.34] — 2026-10-19
+
 - Overlap up to eight background relay deliveries while checking for live
   arrivals between frames; preserve custody, receipt and reconnect semantics.
 - Give own-device state sync its own bounded gate, separate from cold history,
@@ -924,6 +926,7 @@ guide and test/rollout evidence in the handoff.
 
 </details>
 
+[0.8.34]: https://github.com/misunders2d/agentnet/releases/tag/v0.8.34
 [0.8.22]: https://github.com/misunders2d/agentnet/releases/tag/v0.8.22
 [0.8.4]: https://github.com/misunders2d/agentnet/releases/tag/v0.8.4
 [0.8.3]: https://github.com/misunders2d/agentnet/releases/tag/v0.8.3
