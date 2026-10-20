@@ -127,13 +127,8 @@ func TestProactiveHistoryArchiveReaderRequirement(t *testing.T) {
 			}
 			probe("signing reader upgrade")
 			signCapsAfter(t, phone, ownCaps)
-			waiting, waitingErr := a.store.convWaiting()
-			_, descriptorWaiting := waiting[descriptor.ID]
-			pinned, _, pinFound, pinErr := a.store.peer(phone.Address)
-			var live int
-			liveErr := a.store.db.QueryRow(`SELECT replication_live FROM outbox WHERE id=?`, descriptor.ID).Scan(&live)
-			probe("release begins descriptor_waiting=%t waiting_error=%v suspended=%t pin_found=%t pin=%s expected_pin=%s pin_error=%v replication_live=%d live_error=%v", descriptorWaiting, waitingErr, a.store.suspendedDevices()[phone.Address], pinFound, pinned.Fingerprint(), phone.Self().Fingerprint(), pinErr, live, liveErr)
-			releaseCtx := tctx(t)
+			probe("release begins descriptor=%s", descriptor.ID)
+			releaseCtx := context.WithValue(tctx(t), archiveReleaseProbeKey{}, true)
 			a.releaseConv(releaseCtx, nil)
 			probe("release finished context=%v", releaseCtx.Err())
 			if err := releaseCtx.Err(); err != nil {

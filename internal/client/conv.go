@@ -1140,15 +1140,22 @@ func (a *Agent) refreshRecipientPerson(ctx context.Context, address string, done
 	return err
 }
 
+// Temporary exact-call diagnostics for the native qualification investigation.
+type archiveReleaseProbeKey struct{}
+
 // releaseConv queues waiting conversation messages whose recipient can now
 // read them; the sync's outbox flush sends them. Agent outputs that may no
 // longer go out are held back first.
 func (a *Agent) releaseConv(ctx context.Context, feats []string) {
+	probe := ctx.Value(archiveReleaseProbeKey{}) != nil
 	if _, err := a.holdEndedOutputs(""); err != nil {
 		a.Logf("agent outputs: %v", err)
 		return
 	}
 	waiting, err := a.store.convWaiting()
+	if probe {
+		a.Logf("archive release probe: waiting=%d error=%v", len(waiting), err)
+	}
 	if err != nil || len(waiting) == 0 {
 		return
 	}
@@ -1157,6 +1164,9 @@ func (a *Agent) releaseConv(ctx context.Context, feats []string) {
 	suspended := a.store.suspendedDevices()
 	for id, w := range waiting {
 		to := w.to
+		if probe {
+			a.Logf("archive release probe: id=%s sub=%s waiting=true suspended=%t", id, w.sub, suspended[to])
+		}
 		if suspended[to] {
 			// The relay serves that device nothing until it updates: no
 			// profile is read for it on every push. The list naming it
@@ -1172,17 +1182,27 @@ func (a *Agent) releaseConv(ctx context.Context, feats []string) {
 		}
 		cacheKey := n.cacheKey(to)
 		ok, seen := checked[cacheKey]
+		if probe {
+			a.Logf("archive release probe: id=%s required=%s checked=%t previous_ok=%t", id, n.required, seen, ok)
+		}
 		if !seen {
 			key, _, found, err := a.store.peer(to)
 			switch {
 			case err != nil || !found:
+				if probe {
+					a.Logf("archive release probe: id=%s peer_found=%t peer_error=%v", id, found, err)
+				}
 			// Own-device records and a device thread's copies (its assistant
 			// reactions, version 1 progress, deletions) have no person gate:
 			// only what the reader's signed capabilities read.
 			case w.conv == "",
 				w.required == protocol.CapModelSync || w.required == protocol.CapModelSyncV2 || w.required == protocol.CapReadSync || w.required == protocol.CapReadSyncV2 || w.required == protocol.CapOwnSyncV2 || w.required == protocol.CapOwnSyncV3 || w.required == protocol.CapTopicStateSync,
 				w.required == protocol.CapProgress:
-				ok = a.readerCheck(ctx, to, key, n) == nil
+				readerErr := a.readerCheck(ctx, to, key, n)
+				if probe {
+					a.Logf("archive release probe: id=%s peer=%s reader=%v", id, key.Fingerprint(), readerErr)
+				}
+				ok = readerErr == nil
 			default:
 				ok, _, _ = a.convSupport(ctx, to, key, feats)
 				if ok && w.sub == envelope.SubDriveSpace {
