@@ -1,149 +1,94 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
-## v0.9.1 — integrated release qualification (October 20, 2026)
+## v0.9.1 — published and deployed to the relay (October 20, 2026)
 
-The owner activated the [goal](plans/V0_9_1_GOAL.md) and
-[acceptance checklist](plans/V0_9_1.md) for MEL-550, MEL-661, MEL-662, MEL-663,
-MEL-664 and MEL-665, later adding MEL-666, MEL-667 and MEL-668. Scope is concrete harness/device
-identity with no phantom default chat; safe blocked-send reconciliation;
-scheduling and a dedicated Outbox with Scheduled, Drafts and Reminders views;
-Linux exact-message notification landing; the justified
-macOS notifier fix; and direct-agent message moves/merges into existing or new
-named topics. The owner initially limited this phase to code and local testing,
-then explicitly instructed: “finish the full coverage and roll out a new
-release, deploy to relay”. CI, publication and relay deployment are now authorized
-after qualification; live chat reorganization remains excluded. The earlier
-Linux laptop incident and its bounded evidence remain in the checklist.
-The checklist records
-the current evidence and remaining work; this section makes no completion claim.
+[AgentNet v0.9.1](https://github.com/misunders2d/agentnet/releases/tag/v0.9.1)
+is published from immutable `d5318cd92ccd48ebdc5caf771c409b2beb0104b4`.
+The owner explicitly expanded the [goal](plans/V0_9_1_GOAL.md) to full
+qualification, release publication and relay deployment. Those steps are
+complete. At 20:58:41 UTC, the relay's [public TLS version endpoint](https://agentnet.bezosapp.uk/v1/version)
+reports v0.9.1, protocol 1 and the original realm
+`4bd7c66953ccf5496fad8eadbab945bd`.
+The [acceptance checklist](plans/V0_9_1.md) holds the detailed evidence,
+retained failures, review dispositions and remaining field observations.
+Live chat reorganization remains excluded; preserve the two user-authored
+`ANDROID_NOTIFICATION_TAP.md` and `MARK_UNREAD.md` drafts.
 
-Actual Herdr Claude D1/D2/D3 reviews have been retrieved from the existing
-owner-selected session. D3 found no blocker to local qualification; the later
-Outbox consultation required a due-reminder badge, now implemented and tested.
-These reviews ran no tests and are not release approval. An extra Claude
-session opened earlier in error was closed and its absence verified.
+The release covers concrete configured harness/device identities with default
+as a setting on an existing agent; exact-target blocked-send recovery; a
+dedicated Outbox with Scheduled, Drafts and Reminders; prompt exact-message
+Linux notification landing; requested macOS notification sound; original-message
+direct-topic moves, merge, new topics and undo; authoritative terminal Stop
+reconciliation; strict-steering delivery and FIFO; and compact multiple-image
+attachments. Signed catalog compatibility, immutable original host/key/agent
+bindings, native harness permissions, inert history and draft/File recovery
+remain intact. Actual Herdr-Claude D1/D2/D3 and Outbox reviews are recorded in
+the checklist; explicit GPT-6.1-sol/xhigh workers supplied bounded implementation
+and verification.
 
-Signed agent-record canonical bytes stay compatible; the default pointer is
-local, and original host/key/agent destinations remain immutable. Review cards,
-focused needs-human regions and existing standalone answer dialogs also name
-the exact historical target/device, with explicit unknown legacy identity.
-The preserved T1 draft now supports synthetic named topics, original-message
-moves, merge and undo without changing execution identity. Outbox has separate
-Scheduled, Drafts and Reminders views in Comic and all three standalone skins,
-with compact lists, exact draft/File recovery, due badges and lazy history.
-Focused native/browser/rendered checks pass, including 20-item lists and real
-scheduled delivery across daemon restart at the edited deadline only.
+Full qualification uses retained unchanged passes and exact affected
+continuations at the original bounds. All 18 Linux client race inventories
+are accounted for: 1,363 parent passes and 25 explicit skips. All 484 original
+UI parents have disjoint terminal evidence: 352 passes and 132 skips, including
+the exact 65-parent completion after UI1 exhausted its aggregate 600s budget.
+The six Windows client inventories and affected native Linux/macOS/Windows
+checks are accounted for; focused native checks without verbose/JSON output
+supply package-level success, not invented per-parent pass counts. Vet,
+remaining packages, required v0.9.0 mixed-version behavior, desktop and container
+gates are recorded in the checklist. The separate final real-Chromium IndexedDB
+race gate passes. Original failed or partial invocations remain failures in the
+record; no assertion or deadline was removed or raised. Machine audits are
+`.agentnet/v091/ci-coverage/final-client-coverage.json` and
+`.agentnet/v091/ui1-continuation/all-ui-audit.json`.
 
-The public integrated candidate is now
-`771e738ee5b8d097cf342e375659992d10ecf80b`; its full CI qualification is recorded
-in the checklist. No v0.9.1 release is published or deployed yet. A direct
-Tailscale SSH relay preflight confirms the original v0.9.0 configuration,
-data volume and public realm. Current fixture-only corrections preserve all
-production routing and deadlines, and unchanged passing gates are retained.
+The compatible [skins v2026.10.20.2](https://github.com/misunders2d/agentnet-skins/releases/tag/v2026.10.20.2)
+are published at `283a5042faac0b7bfff131b3fd76dde78ae7e1e8`, a documentation-only
+child of qualified runtime `43a4b86a24e884e4374962c57325308ef2aceff7`, pinned to
+the exact core release commit above. The complete [collection CI run](https://github.com/misunders2d/agentnet-skins/actions/runs/39491173106)
+passes for all five skins and both scaffolds through their applicable contract,
+lifecycle, Comic or standalone/backend journeys. Its Node stage has 158 passes
+and 20 optional rendered skips; explicit local rendered evidence is recorded
+separately. Overlay-only and inapplicable motion journeys are not counted as
+executed standalone checks. The earlier local full collection run failed
+Classic's restored-draft assertion; that failure and its unproven cause remain
+in the checklist despite the final complete CI pass. See
+`.agentnet/v091/collection-ci39491173106-qualification.json`.
 
-The earlier private candidate is `860a0b41621090fd68e1a521780a3ce176124d9a`, in
-`/tmp/agentnet-v091-qualification-n_a8iu95/agentnet`, with its sibling collection
-and exact manifest in `.agentnet/v091/qualification.json`. Vet26.164s and all
-skin builds22.291s pass. Production Go and collection source remain unchanged
-from b18; the only new production correction makes legacy peer-host labels use
-the actual peer address. Focused regressions pass after rebuilding Comic.
-Retained normal collection checks executed271cases:270passed, one test
-extractor failed, zero skipped. Its extractor-only correction passes on the
-private snapshot; all 270 unchanged passing cases are retained. The corrected
-complete backend stage passes850.990s for all5packages and bothscaffolds.
-The first `others` run retains passes for every other package, including
-requiredv0.9.0 mixed-version integration and mobile Go core. Its CLI package
-alone exhausted the600s aggregate budget at its final207thparent, only3s into
-that case. Two exact disjoint CLI selections pass (205parents,2explicit skips).
-UI0 retained74passes/37skips, with4diagnosed fixture failures corrected and
-race-verified;127unfinished UI0parents and242UI1parents remain. The first client aggregate also timed out with43passes/1skip and no individual
-assertion failure. A disjoint2lane continuation now covers all remaining
-1343client/369UI parents while retaining every original18client/2UI membership
-and unchanged600s bounds. That continuation stopped after three deadline
-failures. Whole-parent Codex question/task/cancellation subsequently passes
-69.18s alone; two other cases fail alone and also reproduce on byte-verified
-publishedv0.9.0 at unchanged bounds (history85.73s; named callback75.20s).
-No cause or product fix is claimed from these failures. Temporary failure-phase
-diagnostics were restored after capturing evidence. Reusing unchanged earlier
-passes leaves1203client/369UIparents in the exact local continuation inventory.
-The new release authorization permits the existing full dedicated CI workflow
-to supply remaining integrated/platform qualification without further local
-repetition. No assertion, case or deadline was removed or raised.
-The initial `npm test` exited1; composed stage
-evidence is recorded honestly in the checklist. No complete candidate pass is
-yet claimed. The v0.9.0 tag, public gallery release and installed apps remain
-unchanged. Root owns integration/checklist; three explicit GPT-6.1-sol/xhigh
-workers handled bounded implementation and verification.
+The [release packaging run](https://github.com/misunders2d/agentnet/actions/runs/39493636007)
+passes all six jobs. All twelve payloads match `SHA256SUMS` and GitHub digests;
+all six Go programs carry clean provenance for the exact release commit. The
+Android APK passes independent original-signer, version, ABI and 16KiB checks.
+Details are in `.agentnet/v091/release-draft-qualification.json`. Package
+verification does not prove installed-device pickup or physical preservation.
 
-The first backend collection stage collected four failures. Holonet's Outbox
-button occupied Activity's wrapper; one insertion-line correction restores a
-single navigation row and passes the focused390×480geometry check. Its browser
-fixture also now expects the actual concrete catalog caption. Zoom's original
-long-history touch journey passes once in isolation, and an independent
-Open/SELECT enrollment probe passes; neither establishes the earlier durable
-wait or `SQLITE_BUSY` cause. No native retry, schema, cache or timeout change
-was made for those unproven failures. Both paths pass in the corrected full
-backend run too; retain the original failures without claiming their cause.
-An explicit setup check separately exposed an old optional fixture whose
-home selector, OMP expectation and mobile Rename action already disagree with
-baseline. Root ended that detour after the owner's duration correction and
-restored only its exploratory fixture edits; all failed evidence remains and
-the optional check is explicitly unqualified. Required coverage takes priority.
+The relay runs image
+`sha256:8bd63f3bf82248d52955981a347a1db0925c91d53f5636dc1463221a6a807442`;
+its actual process executable matches the published Linux amd64 payload
+`b913b85c2987d4f9e6970c089589070cac967a4dcbadf49c731b30d986e8e21b`.
+A fresh native backup and restore with the new binary verify every file and
+table exactly: 7,623 files, 1,265,554,854 uncompressed bytes. The private
+1,149,189,331-byte backup is retained remotely; the scratch restore was removed.
+Raw HostConfig is unchanged, effective Compose differs only by image, and
+environment, mounts, user and command are preserved. The neighboring service
+is unchanged and the new container has zero restarts. All 13 public release
+files download successfully with all 12 payload checksums matching. The public
+gallery check passes for five packages, 125 files and 20 previews across 147
+HTTPS requests; see `.agentnet/v091/public-gallery-result.json`.
 
-Earlier private candidates `9be26407` and `0a43d3be` remain unqualified historical
-attempts. All six collected client failures pass in isolated focused evidence,
-including the two-parent baseline/candidate comparison, but their original
-cause remains unproven. A separately proven redundant-catalog push is fixed
-with a small Hub no-op guard and RED/GREEN/race evidence; it is not claimed
-as their cause. Archived-release builds disable VCS stamping only for the
-metadata-free archive. Real v0.9.0 mixed-version coverage remains required.
-Available Android bridge/send-journal and390/320Comic checks pass; current
-JVM/lint could not start because Java/SDK/Gradle tooling is unavailable. Old
-Android reports and the old AAR do not qualify this candidate. Physical Mac
-banner/audio, Linux OS callback latency and minimum-spec hardware checks remain
-unexecuted, separate from local rendered and native-module evidence.
-
-The later group-send incident has a separate reproduced delivery defect:
-strict steering adds `+flw2`, which three participation/group delivery guards
-failed to normalize before comparing the base capability. The minimal fix
-retains reader and recipient checks; a real queue regression now drains the
-steering and subsequent ordinary turns without changing their envelopes. All
-three actual stuck logical IDs arrived on Zenbook at16:34Kyiv; Pi's MEL-667
-follow-up reports all18 original copies delivered. Native steering consumption
-of that incident remains unproven. No runtime was
-replaced here. See the checklist for incident evidence and the owner's explicit
-earlier instruction not to resume deployment, superseded by the explicit
-release/relay deployment instruction above.
-
-MEL-666 reproduces authorized terminal Stop refusals that did not refresh
-ordinary execution state. The minimal fix durably marks the existing status
-path and emits the actual current attempt separately from the decision's
-echoed CAS attempt. Legacy group physical/shared-ID lookup is corrected too.
-Retained old decision replies remain explicit host snapshots; they never
-promote execution state or hide a newer running attempt. Native/browser,
-restart/linked history, real child cancellation and rendered phone/desktop
-checks pass, including focused race coverage. The reported Bezos response
-already said answered; this is not evidence that a new cancellation is needed
-or that Stop caused completion.
-
-MEL-668 uses contained two-column previews for multiple images in one message,
-reusing each original's viewer/download/project-save actions. Final canonical
-Comic passes12 rendered cases; standalone image compatibility also passes.
-The owner requires low resource use on limited-RAM office laptops without a
-dedicated GPU; this is now a standing requirement in the Linear project
-description. Software-rendered, CPU-throttled image tests verify lazy reads
-and cleanup, with heap/RSS reported separately. Physical low-resource hardware
-and OS notification observations remain unexecuted field checks.
-
-Bookkeeping reconciliation: MEL-644 is already Done in Linear (October 19).
-Its unread actions shipped in v0.8.32 and earliest-unread navigation in v0.8.33;
-the preserved `MARK_UNREAD.md` is a historical requirements note, not new work.
-MEL-527's old Project specification/Backlog wording does not supersede the
-owner's corrected ordinary group-link scope shipped in v0.9.0 below. Do not
-reimplement a Project subsystem from that stale wording. Physical notification
-observations remain separate from these software checks. The original MEL-664
-incident predates the recorded v0.9.0 relay cutover; its historical trigger is
-unknown even though a concrete composer defect is established in source.
+Physical Mac banner/audio, Linux OS callback latency, physical Android
+preservation, minimum-spec office hardware and the intended live direct-chat
+consolidation remain unexecuted field checks. The optional native setup fixture
+remains baseline-failing and unqualified. Earlier send and notification incident
+causes remain unknown where evidence was missing; repaired source defects do
+not establish those historical causes. Release and data-preserving relay
+deployment are complete. At 20:59:33 UTC, independent read-only aggregation
+observes two new recipient-delivered messages, 166 signed-request nonces since
+cutover and five devices reporting v0.9.1. The original 30-minute grace ends
+at 21:28:12 UTC. Required native mixed-version enforcement tests pass; this
+pre-grace observation does not claim live after-grace enforcement. Proof is
+`.agentnet/v091/relay-post-cutover-verification.json`.
+All-client pickup, physical latency and live latest-only enforcement after the
+30-minute grace period have not been established by these checks.
 
 ## v0.9.0 — published; rollout in progress
 

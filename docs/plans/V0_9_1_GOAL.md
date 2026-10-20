@@ -1,34 +1,34 @@
-# AgentNet v0.9.1 — active implementation, qualification and release goal
+# AgentNet v0.9.1 — qualified, published and deployed to the relay
 
-**Current boundary:** the owner subsequently authorized full coverage, release
-publication and relay deployment. The code-only exclusions below record the
-original scope and are superseded by the explicit expansion section.
+**Current scope:** the owner activated this goal on October 20, 2026, then
+explicitly expanded it from code and testing to full qualification, release
+publication and relay deployment. The original code-only boundary and earlier
+temporary instruction not to resume deployment are superseded. Live chat
+reorganization remains outside scope. Root owns the shared execution and
+evidence checklist, [V0_9_1.md](V0_9_1.md).
 
-**ACTIVE — owner started October 20, 2026 with “kick it off”.** The approved
-scope is code and thorough testing, with explicit GPT-6.1/xhigh Codex workers
-and Claude consultation through Herdr. Live changes, CI and publication remain
-outside this phase. The clarification already added to MEL-550 is a scope
-record, not implementation or release completion.
+**Current result:** implementation, available acceptance checks, composed full
+qualification, publication and data-preserving relay deployment are complete.
+[AgentNet v0.9.1](https://github.com/misunders2d/agentnet/releases/tag/v0.9.1)
+is published from immutable `d5318cd92ccd48ebdc5caf771c409b2beb0104b4`.
+The compatible [skins v2026.10.20.2](https://github.com/misunders2d/agentnet-skins/releases/tag/v2026.10.20.2)
+are published at `283a5042faac0b7bfff131b3fd76dde78ae7e1e8`, a documentation-only
+child of qualified runtime `43a4b86a24e884e4374962c57325308ef2aceff7`, pinned to
+that exact core commit. Native backup and new-binary scratch restore preserve
+all files and tables exactly; deployment preserves configuration and the
+original realm. At 20:58:41 UTC, the relay's [public TLS version endpoint](https://agentnet.bezosapp.uk/v1/version)
+reports v0.9.1/protocol 1, with the actual executable matching the published
+payload. Public release and gallery downloads pass verification. This does
+not establish all-client pickup, physical field acceptance or live latest-only
+enforcement after the 30-minute grace period; root is collecting final
+post-cutover evidence.
 
-Complete **the code and thorough testing for the next AgentNet
-version**, provisionally v0.9.1, starting from published v0.9.0, immutable
-`6bd64377db879e7e61596cd7f084bcda080a1034`. Deliver one integrated candidate
-covering the six original outcomes and the owner-approved additions below,
-actual Claude consultation through the existing Herdr consultant,
-meaningful regressions, local integration/race coverage, rendered checks and
-accurate evidence. Assess and reuse the existing drafts before adding code.
-
-**This phase ends at implemented and thoroughly tested code.** CI execution,
-release tags, release packaging/signing/publication, gallery publication,
-relay/device deployment and live-chat reorganization are outside this phase and
-are not completion requirements. A later release/deployment phase must meet the
-then-current release gates separately; no published or deployed claim is made
-from this work. The shared execution/evidence checklist is [V0_9_1.md](V0_9_1.md).
-
-The owner later authorized immediate recovery of the Linux laptop’s stuck
-sends. This narrow incident exception permits bounded recovery, without
-deployment, reset or unrelated chat changes; see the live evidence in the
-shared checklist. The owner subsequently said not to resume deployment.
+The goal starts from published v0.9.0, immutable
+`6bd64377db879e7e61596cd7f084bcda080a1034`, and covers the six original outcomes
+and three owner-approved additions below. Existing drafts were preserved and
+integrated. Explicit GPT-6.1-sol/xhigh workers and actual Herdr-Claude
+D1/D2/D3 consultation supplied implementation, review and bounded verification;
+the checklist records exact evidence, retained failures and dispositions.
 
 On October 20 the owner additionally included fresh **MEL-666** (terminal
 stop-result reconciliation), **MEL-667** (strict steering delivery/FIFO), and
@@ -40,7 +40,7 @@ truthful presentation. Existing focused tests are insufficient by themselves:
 exercise the integrated flows and retain proof that later messages progress
 without lost drafts, wrong routing, duplicate jobs or completed-work replay.
 Use the existing Claude session through Herdr; do not start another Claude.
-These additions retain the code-and-testing boundary above.
+These additions are included in the expanded qualification and release scope.
 
 The owner also requires low resource use on office laptops with limited RAM
 and no dedicated GPU. This standing requirement is recorded in the Linear
@@ -163,7 +163,7 @@ transport receipt or unverified platform build as a passing release gate.
    messages and cross-compilation cannot substitute for that observation. An
    unavailable physical Mac must be recorded as unexecuted field acceptance.
    Complete the available native/code-level checks and document the exact
-   remaining observation; this code-and-testing goal does not require waiting
+   remaining observation; automated qualification does not require waiting
    indefinitely for production hardware or claiming that field acceptance passed.
 
 6. **T1 — MEL-665: organize original messages in direct-agent chats.**
@@ -289,52 +289,65 @@ this session; they are not a work queue or permission source.
   `scripts/race-shard.sh client-K 18` for K=0…17 at the unchanged 600-second
   bound. `others` retains two sequential UI partitions; focused UI uses `ui-0`
   and `ui-1`. Derive current selections without dropping tests or importing
-  obsolete shard layouts from the v33 example. CI jobs and the release's remote
-  cross-platform matrix are not required now. Run affected native-platform
-  checks where available and distinguish actual execution from cross-compilation.
+  obsolete shard layouts from the v33 example. Complete the release's remote
+  cross-platform matrix and six dedicated Windows client partitions. Retain
+  unchanged passing coverage and use exact disjoint continuations when an
+  aggregate bound expires. Distinguish actual execution from cross-compilation.
 - For changed reader/capability/queue paths, run real local mixed-version
   coverage against published **v0.9.0**, with tags and missing-tag refusal
   enabled. Prove suspended outdated devices neither impede supported peers nor
   lose retained copies and manual updating drains backlog without loops or
-  replay. This is local behavior testing, not release qualification or CI.
+  replay. Include the required mixed-version gate in release qualification.
 - Run relevant Android unit/lint and available runtime checks for affected
   shared/browser behavior. Test schema transitions and restart/preservation with
   the existing disposable fixtures and guarded tooling. Preserve keys, config,
   history, files, drafts, queues and browser origin/storage; never touch
   protected profiles without native authority or change a failed preservation
-  predicate into success. Release APK packaging/signing and distribution checks
-  belong to the later release phase. Keep native, synthetic and physical results
-  distinct.
+  predicate into success. Complete release APK packaging/signing and distribution
+  checks. Keep native, synthetic and physical results distinct.
 - Update Comic and every applicable standalone/overlay skin and contract doc.
   Test the collection locally against the exact candidate using canonical
   `AGENTNET_SOURCE=<candidate repository> npm test` and relevant local builds/
   previews plus rendered narrow/wide acceptance. Fix applicable collection
-  failures; gallery publication and public/latest-pointer verification are not
-  required now.
+  failures; publish the compatible gallery release and verify its public packages
+  and exact core pin.
 - Record physical/live acceptance honestly. Use available authorized test
   environments without indefinite waiting or production mutation. Missing
   device observations remain explicit follow-up acceptance; they do not become
-  passes or prevent finishing the fully implemented, locally tested code phase.
+  passes. Keep those field observations distinct from automated qualification
+  and the explicitly authorized relay deployment.
 - Update CHANGELOG, HANDOFF, the shared checklist and scoped Linear issues;
   credit actual Codex/Claude contributors. Leave a reviewable integrated diff,
   exact tested source/material, test commands and results, Claude findings and
   dispositions, and the concrete remaining field/release checks. Linear records
   must distinguish implemented/tested code from released or field-accepted work.
-  Do not start CI, tag/publish, deploy, force device updates or mutate live chats
-  as part of this phase.
+  Root performs authorized CI, publication and relay deployment after the
+  required gates pass. Preserve production data and user drafts; do not force
+  device updates or reorganize live chats as part of this goal.
 
 ## Completion
 
-Complete this phase when all six code outcomes are implemented and their
-meaningful available local acceptance checks pass, the stable combined candidate
-has thorough integrated testing, actual Herdr-Claude D1/D2/D3 responses and root
-dispositions are collected, scoped documentation/Linear agree with evidence, and
-owned workers/processes/temporary resources are cleaned up. Preserve existing
-user work and required evidence. Clearly enumerate any physical/live observations
-and later release/CI/packaging/deployment checks not performed in this phase.
-Missing field access is not permission to omit implementation or meaningful
-available testing. Never silently drop a feature, invent device proof or call an
-unknown historical cause fixed. No public release or production rollout is
-needed for completion of this goal.
+Complete the expanded goal when all nine outcomes and meaningful available
+acceptance checks pass, full integrated/platform qualification and actual
+Herdr-Claude reviews are recorded, qualified core and compatible skins are
+published, and the relay's data-preserving deployment, version enforcement and
+healthy messaging are verified. Scoped documentation/Linear must agree with
+evidence; preserve user work and required records and clean up owned resources.
 
-Activation does not expand the code-and-testing boundaries above.
+Qualification, publication and data-preserving relay deployment are complete
+at the commits above. Native backup/restore, unchanged configuration and
+realm, exact running executable and external TLS version checks pass.
+Independent post-cutover read-only aggregation observes two new
+recipient-delivered messages, 166 signed-request nonces and five devices on
+v0.9.1. The preserved release-policy record and required native mixed-version
+gate establish configured enforcement and tested nonblocking custody behavior;
+no all-client pickup or live after-grace enforcement claim is made. Linear
+closeout records six Done issues and MEL-662/663/665 In Review for their explicit
+remaining field acceptance.
+The checklist retains original failed/partial runs alongside their qualified
+continuations; skips and inapplicable checks are not executed passes. Physical
+Mac banners/audio, native Linux callback latency, physical Android preservation,
+minimum-spec hardware and the intended live direct-chat consolidation remain
+explicit field limits. The optional setup check remains unqualified. Missing
+field access never permits inventing device proof, silently dropping a feature
+or assigning a cause to an unexplained historical incident.
