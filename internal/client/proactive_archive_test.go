@@ -13,6 +13,7 @@ func TestProactiveHistoryArchiveReaderRequirement(t *testing.T) {
 	for _, proactive := range []bool{false, true} {
 		t.Run(map[bool]string{false: "ordinary", true: "proactive"}[proactive], func(t *testing.T) {
 			w, a, phone, conv := archiveFixture(t, 1)
+			probe := observeArchiveRelease(t, a, phone)
 			_, root := rootOf(t, a, conv)
 			var item HistoryItem
 			if proactive {
@@ -124,10 +125,24 @@ func TestProactiveHistoryArchiveReaderRequirement(t *testing.T) {
 					t.Fatalf("missing %s must park descriptor: %+v %v", cap, result, err)
 				}
 			}
+			probe("signing reader upgrade")
 			signCapsAfter(t, phone, ownCaps)
-			a.releaseConv(tctx(t), nil)
-			if outboxState(t, a, descriptor.ID) != stateQueued {
-				t.Fatal("signed reader update did not release descriptor")
+			waiting, waitingErr := a.store.convWaiting()
+			_, descriptorWaiting := waiting[descriptor.ID]
+			pinned, _, pinFound, pinErr := a.store.peer(phone.Address)
+			var live int
+			liveErr := a.store.db.QueryRow(`SELECT replication_live FROM outbox WHERE id=?`, descriptor.ID).Scan(&live)
+			probe("release begins descriptor_waiting=%t waiting_error=%v suspended=%t pin_found=%t pin=%s expected_pin=%s pin_error=%v replication_live=%d live_error=%v", descriptorWaiting, waitingErr, a.store.suspendedDevices()[phone.Address], pinFound, pinned.Fingerprint(), phone.Self().Fingerprint(), pinErr, live, liveErr)
+			releaseCtx := tctx(t)
+			a.releaseConv(releaseCtx, nil)
+			probe("release finished context=%v", releaseCtx.Err())
+			if err := releaseCtx.Err(); err != nil {
+				t.Fatalf("signed reader release exceeded its context: %v", err)
+			}
+			if state := outboxState(t, a, descriptor.ID); state != stateQueued {
+				_, pending, found, peerErr := a.store.peer(phone.Address)
+				readerErr := a.readerCheck(tctx(t), phone.Address, phone.Self(), retained)
+				t.Fatalf("signed reader update did not release descriptor: state=%s reader=%v peer_found=%t peer_pending=%t peer_error=%v suspended=%t", state, readerErr, found, pending != nil, peerErr, a.store.suspendedDevices()[phone.Address])
 			}
 			result, err := a.deliver(tctx(t), descriptor, nil)
 			if err != nil || result.State != protocol.StateCustody {
@@ -158,3 +173,4 @@ func TestProactiveHistoryArchiveReaderRequirement(t *testing.T) {
 		})
 	}
 }
+
