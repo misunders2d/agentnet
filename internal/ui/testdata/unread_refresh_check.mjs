@@ -20,6 +20,7 @@ const tick=()=>new Promise(r=>setImmediate(r)),gate=()=>{let release;const promi
 const present=s=>{const o=s.get().open;if(!o)return;const d=s.draft(o.id),v=s.readVisit(o,d.topic||'',!!d.newTopic);if(v)s.reportVisible(v,s.get().views[o.id]?.messages||[]);};
 const mount=s=>{let queued=false;s.subscribe(()=>{if(!queued){queued=true;queueMicrotask(()=>{queued=false;present(s);});}});};
 const conv='a'.repeat(64),topic='b'.repeat(32),sibling='c'.repeat(32);
+const me={address:'self/tablet',fingerprint:'e'.repeat(64),responder:'',responder_dir:'',agent:false};
 for(const mode of ['quiet','stale','push-before-ack','stream']){
  const stale=mode==='stale',pushed=mode==='push-before-ack'||mode==='stream';let push;
  const messages=[...['member','guest','agent','imported'].map(id=>({id,topic,unread:true,dir:'in',kind:'message'})),
@@ -28,7 +29,7 @@ for(const mode of ['quiet','stale','push-before-ack','stream']){
  const readGate=gate(),oldOverview=gate(),oldView=gate(),reads=[];let hold=false,overviewCalls=0,dmCalls=0;
  const count=id=>messages.filter(m=>m.unread&&m.topic===id).length;
  const view=()=>({id:conv,peer:{},kind:'group',messages:structuredClone(messages),agents:[],topics:[{id:topic,unread:count(topic)},{id:sibling,unread:count(sibling)}],main_topic:{id:'main',unread:count(undefined)}});
- const overview=()=>({version:'test',dms:[{id:conv,count:7,unread:messages.filter(m=>m.unread).length}],threads:[]});
+ const overview=()=>({version:'test',me,dms:[{id:conv,count:7,unread:messages.filter(m=>m.unread).length}],threads:[]});
  const host={platform:'daemon',workspace:{id:'test-'+mode},listen:fn=>{push=fn;return()=>{};},async api(path,body){
   if(path.startsWith('/api/overview')){overviewCalls++;const result=overview();if(hold){hold=false;await oldOverview.promise;}return result;}
   if(path.startsWith('/api/dm?')){dmCalls++;const result=view();if(stale&&dmCalls===2)await oldView.promise;return result;}
@@ -62,7 +63,7 @@ for(const mode of ['quiet','stale','push-before-ack','stream']){
 for(const stop of [false,true]){
  const other='d'.repeat(64),readGate=gate(),reads=[];let overviewCalls=0,dmCalls=0,committed=false;
  const host={platform:'daemon',workspace:{id:'navigate-'+stop},listen:()=>()=>{},async api(path,body){
-  if(path.startsWith('/api/overview')){overviewCalls++;return{version:'test',dms:[{id:conv,unread:committed?1:2},{id:other,unread:0}],threads:[]};}
+  if(path.startsWith('/api/overview')){overviewCalls++;return{version:'test',me,dms:[{id:conv,unread:committed?1:2},{id:other,unread:0}],threads:[]};}
   if(path.startsWith('/api/dm?')){dmCalls++;const id=new URL('http://fixture'+path).searchParams.get('id');return{id,peer:{},agents:[],messages:id===other?[]:[{id:'viewed',kind:'message',topic,dir:'in',unread:!committed},{id:'unseen',kind:'message',topic:sibling,dir:'in',unread:true}]};}
   if(path==='/api/act'){reads.push(Array.from(body.ids));await readGate.promise;committed=true;return{};}
   if(path.startsWith('/api/agents'))return{agents:[]};return{};

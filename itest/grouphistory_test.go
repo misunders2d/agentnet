@@ -3,16 +3,22 @@ package itest
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/client"
+	"github.com/misunders2d/agentnet/internal/identity"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
@@ -54,12 +60,15 @@ func TestCLIGroupSelectedHistoryFile(t *testing.T) {
 		if !t.Failed() {
 			return
 		}
-		// Capture before process cleanup. Only local status/count metadata
-		// is emitted: never envelopes, consent bytes, identities or errors.
+		// Capture before process cleanup. Only synthetic routing/status and
+		// public capability metadata are emitted, never payloads or key bytes.
 		for _, home := range []string{"alice", "bob", "carol"} {
 			for _, line := range groupHistoryStateSummary(filepath.Join(c.dir, home, "agent.db"), conv) {
 				t.Logf("group-state %s %s", home, line)
 			}
+		}
+		for _, line := range groupHistoryProfileSummary(c, addr, invitation.CertPEM) {
+			t.Logf("group-profile %s", line)
 		}
 	}()
 	var bobInvite client.GroupInvitationInfo
@@ -182,6 +191,7 @@ func groupHistoryStateSummary(path, conv string) []string {
 	for _, query := range []struct{ label, sql string }{
 		{"invitation", `SELECT direction||':'||state,count(*) FROM group_invitations WHERE conv=? GROUP BY direction,state ORDER BY direction,state`},
 		{"outbound-control", `SELECT sub||':'||state||CASE WHEN coalesce(error,'')<>'' THEN ':has-error' ELSE '' END,count(*) FROM outbox WHERE conv=? AND sub IN('group-invite','group-consent','group-proof','group-context','history') GROUP BY sub,state,coalesce(error,'')<>'' ORDER BY sub,state`},
+		{"carrier", `SELECT recipient||' sub='||sub||' required='||coalesce(required_cap,'')||' state='||state||' has_error='||(coalesce(error,'')<>'')||' seq='||CASE WHEN json_valid(body) AND json_type(body,'$.seq')='integer' THEN CAST(json_extract(body,'$.seq') AS TEXT) ELSE 'none' END,count(*) FROM outbox WHERE conv=? AND sub IN('group-invite','group-consent','group-proof','group-context','history') GROUP BY 1 ORDER BY 1 LIMIT 64`},
 		{"admitted-control", `SELECT sub,count(*) FROM inbox WHERE conv=? AND sub IN('group-invite','group-consent','group-proof','group-context','history') GROUP BY sub ORDER BY sub`},
 		{"publication", `SELECT 'seq='||seq||':published='||published,count(*) FROM group_publications WHERE conv=? GROUP BY seq,published ORDER BY seq`},
 		{"context", `SELECT 'seq='||json_extract(payload,'$.state.seq'),count(*) FROM group_context WHERE conv=? GROUP BY json_extract(payload,'$.state.seq')`},
@@ -213,6 +223,52 @@ func groupHistoryStateSummary(path, conv string) []string {
 	return result
 }
 
+// Read only the three disposable participants' current public profile facts.
+// One shared deadline bounds diagnostics without extending the failed wait.
+func groupHistoryProfileSummary(c *cli, addr, cert string) []string {
+	id, err := identity.Load(filepath.Join(c.dir, "alice", "identity.json"))
+	if err != nil {
+		return []string{"caller unavailable"}
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM([]byte(cert)) {
+		return []string{"certificate unavailable"}
+	}
+	tr := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: pool}, Proxy: nil}
+	defer tr.CloseIdleConnections()
+	h := &http.Client{Transport: tr}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var result []string
+	for _, address := range []string{"admin/laptop", "bob/desk", "carol/desk"} {
+		req, err := http.NewRequestWithContext(ctx, "GET", "https://"+addr+"/v1/agents/"+address+"/profile", nil)
+		if err != nil {
+			result = append(result, address+" unavailable")
+			continue
+		}
+		protocol.SignRequest(req, "admin/laptop", id.Sign, nil)
+		res, err := h.Do(req)
+		if err != nil {
+			result = append(result, address+" unavailable")
+			continue
+		}
+		var profile protocol.Profile
+		err = json.NewDecoder(io.LimitReader(res.Body, protocol.MaxBody)).Decode(&profile)
+		res.Body.Close()
+		if err != nil || res.StatusCode != http.StatusOK {
+			result = append(result, fmt.Sprintf("%s unavailable status=%d", address, res.StatusCode))
+			continue
+		}
+		result = append(result, fmt.Sprintf("%s live=%t sessions=%d records=%d", address, profile.Live, len(profile.Sessions), len(profile.Caps)))
+		for _, raw := range profile.Caps {
+			if record, err := protocol.ParseCapsRecord(raw); err == nil {
+				result = append(result, fmt.Sprintf("%s current_session=%t caps=%s", address, slices.Contains(profile.Sessions, record.Session), strings.Join(record.Caps, ",")))
+			}
+		}
+	}
+	return result
+}
+
 func TestGroupHistoryStateSummaryRedactsAndDoesNotWrite(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "agent.db")
 	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path))
@@ -221,14 +277,14 @@ func TestGroupHistoryStateSummaryRedactsAndDoesNotWrite(t *testing.T) {
 	}
 	_, err = db.Exec(`
 CREATE TABLE group_invitations(conv, direction, state, consent);
-CREATE TABLE outbox(conv, sub, state, error);
+CREATE TABLE outbox(conv, sub, state, error, recipient, required_cap, body);
 CREATE TABLE inbox(conv, sub);
 CREATE TABLE group_publications(conv, seq, published);
 CREATE TABLE group_context(conv, payload);
 CREATE TABLE group_proof_records(conv, seq);
 CREATE TABLE group_known_heads(conv, seq);
 INSERT INTO group_invitations VALUES('private-id','in','accepted','private-consent');
-INSERT INTO outbox VALUES('private-id','group-consent','custody','private-error');
+INSERT INTO outbox VALUES('private-id','group-consent','custody','private-error','bob/desk','grp1','{"seq":2,"private":"private-payload"}');
 INSERT INTO inbox VALUES('private-id','group-context');
 INSERT INTO group_publications VALUES('private-id',1,0);
 INSERT INTO group_context VALUES('private-id','{"state":{"seq":1},"private":"private-payload"}');
@@ -243,7 +299,7 @@ INSERT INTO group_invitations VALUES('another-group','out','pending','other-priv
 		t.Fatal(err)
 	}
 	text := strings.Join(groupHistoryStateSummary(path, "private-id"), "\n")
-	for _, want := range []string{"invitation in:accepted count=1", "outbound-control group-consent:custody:has-error count=1", "admitted-control group-context count=1", "publication seq=1:published=0 count=1", "context seq=1 count=1", "proof seq=0 count=1", "known-head count=0"} {
+	for _, want := range []string{"invitation in:accepted count=1", "outbound-control group-consent:custody:has-error count=1", "carrier bob/desk sub=group-consent required=grp1 state=custody has_error=1 seq=2 count=1", "admitted-control group-context count=1", "publication seq=1:published=0 count=1", "context seq=1 count=1", "proof seq=0 count=1", "known-head count=0"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing diagnostic %q: %s", want, text)
 		}

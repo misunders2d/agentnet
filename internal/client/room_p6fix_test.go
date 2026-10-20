@@ -253,6 +253,9 @@ func TestP6FixRemovedAudienceDoesNotKillOtherAnswer(t *testing.T) {
 	if err := w.bob.SetResponder(&Responder{Harness: "agentstub", Dir: stub.dir}); err != nil {
 		t.Fatal(err)
 	}
+	eventually(t, "third member sees target acceptance and original audience", func() bool {
+		return stateAt(t, carol, target.PID).Claimable() && stateAt(t, carol, removed.PID).Following()
+	})
 	ask, err := carol.AskAgent(tctx(t), target.PID, envelope.KindQuestion, "answer survives another agent leaving")
 	if err != nil {
 		t.Fatal(err)

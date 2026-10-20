@@ -34,7 +34,14 @@ with compact lists, exact draft/File recovery, due badges and lazy history.
 Focused native/browser/rendered checks pass, including 20-item lists and real
 scheduled delivery across daemon restart at the edited deadline only.
 
-Current private candidate is `860a0b41621090fd68e1a521780a3ce176124d9a`, in
+The public integrated candidate is now
+`771e738ee5b8d097cf342e375659992d10ecf80b`; its full CI qualification is recorded
+in the checklist. No v0.9.1 release is published or deployed yet. A direct
+Tailscale SSH relay preflight confirms the original v0.9.0 configuration,
+data volume and public realm. Current fixture-only corrections preserve all
+production routing and deadlines, and unchanged passing gates are retained.
+
+The earlier private candidate is `860a0b41621090fd68e1a521780a3ce176124d9a`, in
 `/tmp/agentnet-v091-qualification-n_a8iu95/agentnet`, with its sibling collection
 and exact manifest in `.agentnet/v091/qualification.json`. Vet26.164s and all
 skin builds22.291s pass. Production Go and collection source remain unchanged
@@ -64,7 +71,7 @@ to supply remaining integrated/platform qualification without further local
 repetition. No assertion, case or deadline was removed or raised.
 The initial `npm test` exited1; composed stage
 evidence is recorded honestly in the checklist. No complete candidate pass is
-yet claimed. Original main/tag, public gallery pins and installed apps remain
+yet claimed. The v0.9.0 tag, public gallery release and installed apps remain
 unchanged. Root owns integration/checklist; three explicit GPT-6.1-sol/xhigh
 workers handled bounded implementation and verification.
 

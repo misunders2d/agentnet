@@ -265,6 +265,20 @@ func TestDirectTopicSyncOwnEndpointsUseOriginalIdentity(t *testing.T) {
 		return v.ID
 	}
 	source, destination, third := send("original source"), send("existing destination"), send("other existing topic")
+	// History production fills the outgoing author metadata asynchronously.
+	// Wait for that presentation input before capturing the move's CAS review.
+	eventually(t, "original author metadata ready on both endpoints", func() bool {
+		for _, id := range []string{source, destination, third} {
+			var author string
+			if err := w.alice.store.db.QueryRow(`SELECT author_fp FROM device_thread_links WHERE storage='out' AND id=?`, id).Scan(&author); err != nil || author != w.alice.Self().Fingerprint() {
+				return false
+			}
+			if _, err := phone.TopicOf(id); err != nil {
+				return false
+			}
+		}
+		return true
+	})
 	review, err := w.alice.PreviewTopicOrganization(TopicOrganizationRequest{Peer: phone.Address, IDs: []string{source}, Topic: destination})
 	if err != nil {
 		t.Fatal(err)

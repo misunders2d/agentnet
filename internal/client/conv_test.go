@@ -260,11 +260,11 @@ func TestConversationProof(t *testing.T) {
 // the Hub's members push after it is published admits it: nothing polls.
 func TestProofArrivesLater(t *testing.T) {
 	w := newWorld(t, "")
-	runAgent(t, w.alice)
+	stopAlice := runAgent(t, w.alice)
 	runAgent(t, w.bob)
 	persons(t, w.bob)
-	// Alice's daemon publishes what it has when it connects; wait for that
-	// (its capabilities), so the person made below stays unpublished.
+	// Capabilities arrive before the startup publication finishes. Stop and
+	// join Alice after seeing them so it cannot publish the person made below.
 	label, name, _ := protocol.SplitAddress(w.alice.Address)
 	pub := w.alice.id.Public(w.alice.Address)
 	eventually(t, "alice's daemon to publish on connecting", func() bool {
@@ -272,6 +272,7 @@ func TestProofArrivesLater(t *testing.T) {
 		return w.bob.hub.do(tctx(t), "GET", "/v1/agents/"+label+"/"+name+"/profile", nil, &prof) == nil &&
 			prof.Supports(w.alice.Address, pub.SignKey, protocol.CapEnv2)
 	})
+	stopAlice()
 	// Alice's person exists here but is not published yet.
 	r := protocol.PersonRoster{Person: protocol.NewID(), Label: "Alice", Devices: []identity.Public{pub}}
 	r.Sign(w.alice.id.Sign)

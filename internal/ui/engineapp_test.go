@@ -129,6 +129,9 @@ func platformHub(t *testing.T, ctx context.Context, wrappers ...func(http.Handle
 	base = front.URL
 	dir = filepath.Join(t.TempDir(), "hub")
 	h := testhub.StartConfig(t, hub.Config{DataDir: dir, PublicURL: base, PlatformTLS: true, Web: true}, "127.0.0.1:0")
+	// Close is idempotent: keep the early startup-failure fallback, but drain the
+	// frontend before the backend Hub's cleanup during normal LIFO teardown.
+	t.Cleanup(front.Close)
 	proxy.Store(httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "http", Host: h.Addr}))
 	certPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: front.Certificate().Raw}))
 	if err := os.WriteFile(filepath.Join(dir, "tls.crt"), []byte(certPEM), 0o644); err != nil {

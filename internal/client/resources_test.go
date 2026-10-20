@@ -334,7 +334,9 @@ func TestConversationResourcesNewMember(t *testing.T) {
 			for _, a := range []*Agent{w.alice, w.bob, carol, guest} {
 				roomReader(t, a)
 			}
-			guestInvite, err := w.alice.InviteHuman(tctx(t), conv, guest.Address, nil, "")
+			inviteCtx, traceInvite := traceFixtureHTTP(t, tctx(t))
+			guestInvite, err := w.alice.InviteHuman(inviteCtx, conv, guest.Address, nil, "")
+			traceInvite(err)
 			if err != nil {
 				t.Fatal(err)
 			}

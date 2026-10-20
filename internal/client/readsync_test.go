@@ -1112,11 +1112,16 @@ func TestAttentionLinkedOutgoingDeviceProjectionAndRetraction(t *testing.T) {
 func TestAttentionNormalAgentAndFileOnlyRows(t *testing.T) {
 	w, _, _, _ := historyCatchupFixture(t, 0)
 	a := w.alice
-	question := sealTo(t, w.bob, a, envelope.Inner{Kind: envelope.KindQuestion, Body: "normal request"})
+	agent, err := a.CreateLocalAgent("Attention", Responder{Harness: "codex", Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentID := agent.ID
+	question := sealTo(t, w.bob, a, envelope.Inner{Kind: envelope.KindQuestion, Body: "normal request",
+		Target: &envelope.Target{Address: a.Address, Fingerprint: a.Self().Fingerprint(), AgentID: agentID}})
 	if err := a.verifyAndStore(tctx(t), question); err != nil {
 		t.Fatal(err)
 	}
-	agentID := protocol.NewID()
 	reply, err := a.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Kind: envelope.KindAnswer, ReplyTo: question.ID, Body: "agent response", AgentID: agentID})
 	if err != nil {
 		t.Fatal(err)
@@ -1134,7 +1139,17 @@ func TestAttentionNormalAgentAndFileOnlyRows(t *testing.T) {
 	if err != nil || len(view.Messages) != 3 {
 		t.Fatal(view, err)
 	}
+	expected := map[string]string{question.ID: "in", reply.ID: "out", file.ID: "out"}
 	for _, m := range view.Messages {
+		wantKey := a.Self().Fingerprint()
+		wantFrom := a.Address
+		if m.ID == question.ID {
+			wantKey, wantFrom = w.bob.Self().Fingerprint(), w.bob.Address
+		}
+		if m.Dir != expected[m.ID] || m.FromKey != wantKey || m.From != wantFrom {
+			t.Fatal("normal row changed exact identity/direction", m)
+		}
+		delete(expected, m.ID)
 		if !m.Unread || m.Attention == nil {
 			t.Fatal("normal row omitted", m)
 		}
@@ -1145,8 +1160,11 @@ func TestAttentionNormalAgentAndFileOnlyRows(t *testing.T) {
 			t.Fatal("agent fixture", m)
 		}
 	}
+	if len(expected) != 0 {
+		t.Fatal("normal row IDs omitted", expected)
+	}
 	summary, err := a.TopicOf(question.ID)
-	if err != nil || summary.Unread != 3 {
+	if err != nil || summary.Unread != 3 || summary.AgentID != agentID || summary.AgentHost != a.Address || summary.AgentKey != a.Self().Fingerprint() || summary.AgentLegacy {
 		t.Fatal("normal rows did not share count", summary, err)
 	}
 }

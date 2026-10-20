@@ -122,7 +122,10 @@ const shown = (view, body) => view.messages.find((m) => m.body === body);
   check((await thread(q)).agent_id === agentA, "a device conversation names the agent asked");
   check(!(await thread(plain)).agent_id, "a device conversation with no agent names none");
   await store.write([{ s: "inbox", k: "an".padEnd(32, "0"), v: { v: 1, id: "an".padEnd(32, "0"), from: f.peerAddress, fp: f.peer.fingerprint, kind: "answer", body: "the green one", reply_to: q, agent_id: agentB, at: now + 6, read: true, state: "" } }]);
-  check((await thread(q)).agent_id === agentB, "its latest agent named: the answer's author");
+  const bound = await thread(q);
+  check(bound.agent_id === agentA && bound.agent_host === f.peerAddress && bound.agent_key === f.peer.fingerprint, "the original agent destination stays bound after another agent answers");
+  const answer = (await e.thread("an".padEnd(32, "0"))).messages.find((m) => m.id === "an".padEnd(32, "0"));
+  check(answer.agent_id === agentB && answer.from === f.peerAddress && answer.reply_to === q, "the linked answer retains its own agent author");
   e.stop();
 }
 
