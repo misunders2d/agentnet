@@ -20,8 +20,8 @@ original realm. At 20:58:41 UTC, the relay's [public TLS version endpoint](https
 reports v0.9.1/protocol 1, with the actual executable matching the published
 payload. Public release and gallery downloads pass verification. This does
 not establish all-client pickup, physical field acceptance or live latest-only
-enforcement after the 30-minute grace period; root is collecting final
-post-cutover evidence.
+enforcement after the 30-minute grace period. Independent post-cutover
+traffic and release-policy evidence are recorded in Completion below.
 
 The goal starts from published v0.9.0, immutable
 `6bd64377db879e7e61596cd7f084bcda080a1034`, and covers the six original outcomes
