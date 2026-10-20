@@ -1,10 +1,31 @@
 // Real Engine signing/encryption and admission over the existing isolated world.
 import {assert,world} from './human_engine_check.mjs';
 import * as wire from '../static/wire.mjs';
+import {Engine} from '../static/engine.mjs';
 const caps=[wire.CapEnv2,wire.CapPerson,wire.CapAgentIdentity,wire.CapExternalParticipation,wire.CapHumanParticipation,wire.CapConversationAudience,wire.CapGroupHumanParticipation,wire.CapGroupInvitationControl,wire.CapGroup,wire.CapRoom,wire.CapTopicParticipation,wire.CapTopicContext,wire.CapSharedTopicTitle,wire.CapConversationResources];
 const w=await world();
 async function ready(){for(const e of w.users){e.realm='f'.repeat(32);e.featureList=null;const fetch=e.fetch;e.fetch=async(url,o)=>new URL(url).pathname==='/v1/version'?new Response(JSON.stringify({features:['env2','env3','person2','caps','notify1'],realm_id:'f'.repeat(32)})):fetch(url,o);await w.caps(e,caps);}}
 await ready();const {alice:a,bob:b,carol:g}=w;
+// A group starts with just its creator. Metadata is durable even though an
+// ordinary message still needs another recipient.
+const solo=await a.createGroup('Local shared links');
+await assert.rejects(()=>a.sendDM({conv:solo,body:'No remote recipient'}),/no other current device/i);
+const soloLinks=[{name:'Local notes',url:'https://example.com/local'}];
+const soloResources=await a.api('/api/dm/resources',{conv:solo,links:soloLinks,rev:0,writer:''});
+assert.deepEqual(soloResources.links,soloLinks);
+const soloRows=(await a.store.all('outbox')).filter(r=>r.conv===solo&&wire.conversationResources(r.topic_event));
+assert.equal(soloRows.length,1);assert.equal(soloRows[0].to,a.address);assert.equal(soloRows[0].state,'delivered');
+assert.equal(w.posts.some(p=>wire.parseEnvelope(p).id===soloRows[0].id),false);
+assert.deepEqual((await a.api('/api/dm?id='+solo)).messages,[]);
+const restarted=new Engine({store:a.store,base:a.base,fetch:a.fetch,now:a.now});
+await restarted.load();
+// Normal connection learns the authenticated relay realm via /v1/version;
+// loading local storage alone deliberately does not authorize another realm.
+await restarted.features();
+const restartedChat=await restarted.api('/api/dm?id='+solo);
+assert.equal(restartedChat.frozen,'');assert.equal(restartedChat.role,'member');
+assert.deepEqual(restartedChat.resources,soloResources);
+await assert.rejects(()=>restarted.api('/api/dm/resources',{conv:solo,links:[],rev:0,writer:''}),e=>e.code==='conversation_resources_stale');
 const conv=await a.createGroup('Minimal shared links');
 const invite=await a.inviteGroup({conv,person:b.me.person});await w.drain(b);await b.retryHeld();await b.decideGroup({id:invite.id,accept:true});await w.drain(a);if(a.recoveringGroups)await a.recoveringGroups;await a.recoverGroupIntents();await w.drain(b);await b.retryHeld();
 assert.equal(!!await a.sharedTopicTitle(conv,''),false);
@@ -64,13 +85,14 @@ await a.publishGroupInvitation(admission.id);await a.recoverGroupIntents();await
 assert.deepEqual(await a.conversationResources(conv),last);
 assert.deepEqual((await a.store.all('outbox')).filter(r=>r.conv===conv&&r.lid===last.lid).map(r=>({id:r.id,envelope:r.envelope})),publication);
 const phone=await w.sibling(a,'alice/resource-phone',true);await ready();
-const dev=a.me.devices.find(d=>d.address===phone.address),chat=await a.groupRecord(conv);
-for(const carrier of await a.groupHistoryCarriers(chat,dev,[])){await a.store.write([{s:'outbox',k:carrier.id,v:carrier}]);await a.post(carrier);}
+const dev=a.me.devices.find(d=>d.address===phone.address);
+for(const room of [conv,solo])for(const carrier of await a.groupHistoryCarriers(await a.groupRecord(room),dev,[])){await a.store.write([{s:'outbox',k:carrier.id,v:carrier}]);await a.post(carrier);}
 await w.drain(phone);
 const job={state:'running',device:dev.address,fingerprint:dev.fingerprint,own_human:a.fp};await a.store.write([{s:'kv',k:'history',v:{[dev.address]:job}}]);
 for(let page=0;page<4;page++)await a.historyCatchupPage(dev,(await a.store.get('kv','history'))[dev.address]);
 await w.drain(phone);await phone.retryHeld();
 assert.deepEqual(await phone.conversationResources(conv),last);
+assert.deepEqual(await phone.conversationResources(solo),soloResources);
 // The fixture adds an Alice device without running normal background roster
 // propagation. Resolve that changed roster before Bob's unrelated new edit.
 await b.refreshPerson(await b.store.get('persons',a.me.person));
@@ -89,4 +111,24 @@ const newcomerEdit=await w.mallory.setConversationResources({conv:clearedRoom,li
 await w.drain(a);await w.drain(b);await a.retryHeld();await b.retryHeld();
 assert.deepEqual(await a.conversationResources(clearedRoom),newcomerEdit);
 assert.deepEqual(await b.conversationResources(clearedRoom),newcomerEdit);
-console.log('PASS group resources: member sync/DM projection, quiet timeline, stale CAS, concurrency/reorder, guest omission/no copies, own-linked recovery, admission bootstrap/recovery/idempotence, clear/join/edit convergence');
+// Stop before any send commit exists: shutdown must await the admitted API
+// mutation itself, and refuse subsequent edits before touching storage.
+const closingResources=await a.conversationResources(conv),get=a.store.get.bind(a.store);
+let unblock,entered,closed=false;
+const blocked=new Promise(resolve=>{unblock=resolve;}),started=new Promise(resolve=>{entered=resolve;});
+let paused=false;
+a.store.get=async(s,k)=>{if(!paused&&s==='kv'&&k==='group/'+conv){paused=true;entered();await blocked;}return get(s,k);};
+const saving=a.api('/api/dm/resources',{conv,links:soloLinks,rev:closingResources.rev,writer:closingResources.writer});
+await started;
+const closing=a.close().then(()=>{closed=true;});
+try {
+  await assert.rejects(()=>a.api('/api/dm/resources',{conv,links:[],rev:closingResources.rev,writer:closingResources.writer}),/workspace is closing/i);
+  await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(closed,false);
+  assert.deepEqual(await a.sharedTopicTitle(conv,''),{conv,topic:'',title:'',resources:closingResources.links,rev:closingResources.rev,writer:closingResources.writer,lid:closingResources.lid});
+} finally {unblock();a.store.get=get;}
+const saved=await saving;await closing;
+assert.equal(closed,true);
+assert.deepEqual(saved.links,soloLinks);
+assert.deepEqual((await a.sharedTopicTitle(conv,'')).resources,soloLinks);
+console.log('PASS group resources: sole-member durable save/restart/own-linked recovery, member sync/DM projection, quiet timeline, stale CAS, concurrency/reorder, guest omission/no copies, admission bootstrap/recovery/idempotence, clear/join/edit convergence, shutdown waits/refuses mutations');

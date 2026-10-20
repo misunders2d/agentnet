@@ -79,7 +79,11 @@ func (a *Agent) groupHistorySources(q dbq, conv, lid, author string, since int64
 	ownWinner := len(original) > 0 && original[0]
 	erasedClause := `NOT EXISTS(SELECT 1 FROM conv_erased e WHERE e.conv=? AND e.lid=s.lid AND e.key=s.author)`
 	if ownWinner {
-		erasedClause = "(" + erasedClause + ` OR EXISTS(SELECT 1 FROM topic_shared_titles t WHERE t.conv=? AND t.lid=s.lid AND t.writer=s.author AND EXISTS(SELECT 1 FROM inbox i WHERE i.id=s.id AND i.topic=t.topic AND json_extract(i.topic_event,'$.action') IN ('rename','resources') UNION ALL SELECT 1 FROM outbox o WHERE o.id=s.id AND o.topic=t.topic AND json_extract(o.topic_event,'$.action') IN ('rename','resources'))))`
+		erasedClause = "(" + erasedClause + ` OR EXISTS(SELECT 1 FROM topic_shared_titles t WHERE t.conv=? AND t.lid=s.lid AND t.writer=s.author AND EXISTS(SELECT 1 FROM inbox i WHERE i.id=s.id AND coalesce(i.topic,'')=t.topic AND json_extract(i.topic_event,'$.action') IN ('rename','resources') UNION ALL SELECT 1 FROM outbox o WHERE o.id=s.id AND coalesce(o.topic,'')=t.topic AND json_extract(o.topic_event,'$.action') IN ('rename','resources'))))`
+	}
+	resourceClause := ""
+	if !ownWinner {
+		resourceClause = ` AND coalesce(json_extract(topic_event,'$.action'),'')<>'resources'`
 	}
 	params := []any{conv, a.Address, a.Self().Fingerprint(), conv, lid, lid, author, author, since, conv, conv, conv}
 	if ownWinner {
@@ -87,9 +91,9 @@ func (a *Agent) groupHistorySources(q dbq, conv, lid, author string, since int64
 	}
 	params = append(params, limit)
 	rows, err := q.Query(`SELECT * FROM (
- SELECT id,'in',sender,coalesce(verified_by,claimed_fp,'') AS author,ts,body,coalesce(reply_to,''),coalesce(origin,''),coalesce(emotion,''),lid,coalesce(received_ms,received_at*1000) AS ms,coalesce(group_admission,'') FROM inbox WHERE conv=? AND kind='message' AND coalesce(sub,'')='' AND ref_id IS NULL AND target IS NULL AND pid IS NULL AND agent_id IS NULL AND local=0
+ SELECT id,'in',sender,coalesce(verified_by,claimed_fp,'') AS author,ts,body,coalesce(reply_to,''),coalesce(origin,''),coalesce(emotion,''),lid,coalesce(received_ms,received_at*1000) AS ms,coalesce(group_admission,'') FROM inbox WHERE conv=? AND kind='message' AND coalesce(sub,'')='' AND ref_id IS NULL AND target IS NULL AND pid IS NULL AND agent_id IS NULL AND local=0`+resourceClause+`
  UNION ALL
- SELECT id,'out',?,?,created_at,body,coalesce(reply_to,''),coalesce(origin,''),coalesce(emotion,''),lid,coalesce(created_ms,created_at*1000),coalesce(group_admission,'') FROM outbox o WHERE conv=? AND kind='message' AND coalesce(sub,'')='' AND ref_id IS NULL AND target IS NULL AND pid IS NULL AND agent_id IS NULL AND o.rowid=(SELECT min(f.rowid) FROM outbox f WHERE f.conv=o.conv AND f.lid=o.lid AND coalesce(f.sub,'')=''))
+ SELECT id,'out',?,?,created_at,body,coalesce(reply_to,''),coalesce(origin,''),coalesce(emotion,''),lid,coalesce(created_ms,created_at*1000),coalesce(group_admission,'') FROM outbox o WHERE conv=? AND kind='message' AND coalesce(sub,'')='' AND ref_id IS NULL AND target IS NULL AND pid IS NULL AND agent_id IS NULL AND o.rowid=(SELECT min(f.rowid) FROM outbox f WHERE f.conv=o.conv AND f.lid=o.lid AND coalesce(f.sub,'')='')`+resourceClause+`)
  s WHERE (?='' OR lid=?) AND (?='' OR author=?) AND ms>=?
  AND NOT EXISTS(SELECT 1 FROM inbox c WHERE c.conv=? AND c.sub='retraction' AND c.ref_id=s.lid AND c.ref_fp=s.author)
  AND NOT EXISTS(SELECT 1 FROM outbox c WHERE c.conv=? AND c.sub='retraction' AND c.ref_id=s.lid AND c.ref_fp=s.author)
@@ -128,9 +132,6 @@ func (a *Agent) groupHistorySources(q dbq, conv, lid, author string, since int64
 		complete, e := a.historySourceItem(q, rows[0])
 		if e != nil {
 			return nil, e
-		}
-		if envelope.TopicResources(complete.TopicEvent) && !ownWinner {
-			continue
 		}
 		if len(original) > 0 && original[0] {
 			s.item = complete

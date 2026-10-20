@@ -4317,12 +4317,7 @@ export class Engine {
         if (["question","task"].includes(r.kind)) r.handover_started = false;
       }
       if(beforeStore)extraOps.push(...await beforeStore(copies,checks));
-      if(beforeStore&&rows.some(r=>wire.conversationResources(r.topic_event))) {
-        try{await this.store.write(rows.map(v=>({s:"outbox",k:v.id,v})).concat(extraOps),checks);}
-        catch(error){if(error instanceof StoreConflict)throw Object.assign(Error("Resources or group membership changed; reopen and review the current links."),{code:"conversation_resources_stale"});throw error;}
-        return;
-      }
-      try{await this.store.write(rows.map(v => ({ s: "outbox", k: v.id, v })).concat(extraOps), checks);}catch(error){if(error instanceof StoreConflict){if(beforeStore&&rows.some(r=>wire.topicRename(r.topic_event)))throw Object.assign(Error("Shared topic title or its authority changed; retry the rename."),{code:"shared_topic_title_stale"});if(contribution)throw Error("The selected history or destination audience changed; review the contribution again.");if(organizations.length)throw Error("The selected messages, topic or audience changed; review the move again.");}throw error;}
+      try{await this.store.write(rows.map(v => ({ s: "outbox", k: v.id, v })).concat(extraOps), checks);}catch(error){if(error instanceof StoreConflict){if(beforeStore&&rows.some(r=>wire.conversationResources(r.topic_event)))throw Object.assign(Error("Resources or group membership changed; reopen and review the current links."),{code:"conversation_resources_stale"});if(beforeStore&&rows.some(r=>wire.topicRename(r.topic_event)))throw Object.assign(Error("Shared topic title or its authority changed; retry the rename."),{code:"shared_topic_title_stale"});if(contribution)throw Error("The selected history or destination audience changed; review the contribution again.");if(organizations.length)throw Error("The selected messages, topic or audience changed; review the move again.");}throw error;}
     });
     this.sendCommit = run;
     await run;
@@ -5037,7 +5032,7 @@ export class Engine {
       card.missing=[...grants.values()].filter(ref=>!messages.some(m=>!m.sub&&m.lid===ref.lid&&(m.fp===ref.fingerprint&&!m.replica || !m.fp&&!m.history&&this.fp===ref.fingerprint || card.pids.includes(m.excerpt_pid)&&m.claimed_key===ref.fingerprint&&m.history))).length;
     }
     const resources=role==="member"&&!frozen?await this.conversationResources(conv):undefined;
-    return {id:conv,kind:"group",title:packet.state.title,peer:{label:packet.state.title,address:"",state:""},role,members,frozen,...(resources?{resources}:{}),created:iso(packet.root.created*1000),mine:packet.root.creator.address===this.address,agents:[...agentCards.values()],guests:infos.filter(i=>i.role==="human").map(i=>this.guestView(i,role==="member")),audience_pending:infos.some(i=>i.role==="human"&&i.state==="active"&&i.held),messages:await Promise.all(messages.filter(m=>!wire.conversationResources(m.topic_event)).map(async m=>{
+    return {id:conv,kind:"group",title:packet.state.title,peer:{label:packet.state.title,address:"",state:""},role,members,frozen,...(resources?{resources}:{}),created:iso(packet.root.created*1000),mine:packet.root.creator.address===this.address,agents:[...agentCards.values()],guests:infos.filter(i=>i.role==="human").map(i=>this.guestView(i,role==="member")),audience_pending:infos.some(i=>i.role==="human"&&i.state==="active"&&i.held),messages:await Promise.all(messages.map(async m=>{
       const here=!m.fp&&!m.history,out=here||!!m.own,event=m.sub==="event"?this.eventText(m.body,null,members):"",fp=m.fp||m.claimed_key||this.fp,ev=event?this.eventFields(m.body,members):null;
       const targetPerson=await this.personOfFp(fp,read),rel=ctls.filter(x=>x.ref?.id===m.lid&&x.ref.fingerprint===fp&&x.sub!==wire.SubStatus&&x.sub!==wire.SubDecision);
       const view=event||m.excerpt_pid?{can:[],reactions:[]}:this.controlsOn(rel,targetPerson,x=>x.person||"",personLabel,p=>p===this.me.person,undefined,pid=>infos.find(i=>i.pid===pid)?.host?.label||"");
@@ -5635,6 +5630,13 @@ export class Engine {
       const chan = notify && !replica && !topic_event ? await wire.notifyChannel(c.id, device.fingerprint) : "";
       const envelope=await wire.seal({v:wire.Version2,id,from:this.address,to:device.address,ts:Math.floor(at/1000),kind:"message",body,topic,topic_event,quote,reply_to:reply,conv:c.id,lid,root:wire.rootJSON(packet.root),origin:"ui",chan,replica,fan,attachments:sealed.map(f=>f.attachment),receiver_route:prepared?.route},this.keys,publicKey);
       copies.push({id,lid,conv:c.id,kind:"message",body,topic,topic_event,quote,reply_to:reply,origin:"ui",from:this.address,to:device.address,person:member.person,own:replica,replica,at,envelope,attachments:sealed.map(f=>f.attachment),files:sealed.length?sealed:undefined,state:why?"waiting":"queued",...(why?{detail:why}:{}),required_cap:wire.CapGroup,recipient_fp:device.fingerprint,group_admission:stamp,...(organization_review?{organization_review}:{}),...(contribution_review?{contribution_review}:{}),...(prepared?{receiver_route:prepared.route}:{})});
+    }
+    if(!copies.length&&wire.conversationResources(topic_event)&&members.length===1&&members[0].person===me.person) {
+      // Like a sole member's controls, retain a signed local original for
+      // durable metadata and later own-device history, not remote delivery.
+      const fan=[{person:me.person,roster:me.hash}];
+      const envelope=await wire.seal({v:wire.Version2,id:firstID,from:this.address,to:this.address,ts:Math.floor(at/1000),kind:"message",body,topic,topic_event,conv:c.id,lid,root:wire.rootJSON(packet.root),origin:"ui",replica:true,fan,attachments:[]},this.keys,await wire.publicEntry(this.keys,this.address));
+      copies.push({id:firstID,lid,conv:c.id,kind:"message",body,topic,topic_event,origin:"ui",from:this.address,to:this.address,person:me.person,own:true,replica:true,at,envelope,attachments:[],state:"delivered",required_cap:wire.CapGroup,recipient_fp:this.fp,group_admission:stamp});
     }
     if(!copies.length||skipped.length&&members.some(m=>m.person!==me.person)&&!copies.some(r=>!r.replica))throw Error("Group has no other current device to receive a copy."+skipped.map(x=>" "+x.detail).join(""));
     if(skipped.length)for(const rec of copies)rec.skipped=skipped; // kept with the message: it lists them, and its delivery is never everyone's
@@ -12351,7 +12353,7 @@ export class Engine {
 
   // api answers the page's requests as the daemon's page API does.
   async api(path, body) {
-    const sending = ["/api/send", "/api/dm/send", "/api/dm/agent/ask", "/api/request/followup", "/api/topic/organization/apply", "/api/topic/organization/undo", "/api/history/contribution/apply", "/api/schedule/create", "/api/schedule/edit", "/api/schedule/cancel", "/api/schedule/send_now"].includes(path) || path === "/api/act" && ["reply", "do_it"].includes(body?.do);
+    const sending = ["/api/send", "/api/dm/send", "/api/dm/resources", "/api/dm/agent/ask", "/api/request/followup", "/api/topic/organization/apply", "/api/topic/organization/undo", "/api/history/contribution/apply", "/api/schedule/create", "/api/schedule/edit", "/api/schedule/cancel", "/api/schedule/send_now"].includes(path) || path === "/api/act" && ["reply", "do_it"].includes(body?.do);
     if (sending && this.closing) throw Error("This workspace is closing. Your draft is kept.");
     const request = this.apiResult(path, body);
     if (sending) { this.sendRequests ??= new Set(); this.sendRequests.add(request); }

@@ -63,13 +63,6 @@ func (a *Agent) SetConversationResources(ctx context.Context, conv string, links
 	if err = protocol.ValidateResourceLinks(links); err != nil {
 		return current, err
 	}
-	pid, err := a.ownHumanPID(conv, "")
-	if err != nil {
-		return current, err
-	}
-	if pid != "" {
-		return current, errors.New("only current human group members may edit shared links")
-	}
 	_, err = a.SendConv(ctx, conv, ConvOutgoing{Kind: envelope.KindMessage, TopicEvent: &envelope.TopicEvent{Action: "resources", Resources: &links, Rev: rev + 1}})
 	if err != nil {
 		if errors.Is(err, ErrSharedTopicTitleStale) {

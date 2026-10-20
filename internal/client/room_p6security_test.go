@@ -227,13 +227,16 @@ func TestP6SecurityWithdrawalStripsPrivateMemberships(t *testing.T) {
 	if _, err = w.bob.SignGroupWithdrawal(tctx(t), conv); err != nil {
 		t.Fatal(err)
 	}
-	if err = w.bob.FlushOutbox(tctx(t)); err != nil {
-		t.Fatal(err)
-	}
 	var id string
 	if err = w.bob.store.db.QueryRow(`SELECT id FROM outbox WHERE conv=? AND recipient=? AND pid=? AND sub=? ORDER BY rowid DESC LIMIT 1`, conv, outside.Address, visitor.PID, envelope.SubGroupContext).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
+	// The daemon sends this carrier; unrelated outbox work is not part of
+	// the privacy assertion and need not finish before its blob can be read.
+	eventually(t, "visitor departure carrier handed over", func() bool {
+		state, _, found, err := w.bob.store.outboxState(id)
+		return err == nil && found && (state == protocol.StateCustody || state == protocol.StateDelivered)
+	})
 	env := groupTurnEnvelope(t, w.bob, id)
 	in, err := envelope.Open(env, outside.id, outside.Address, w.bob.Self())
 	if err != nil {

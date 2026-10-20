@@ -21,17 +21,24 @@ including cleared registers, through one ordinary edit from the admission
 publisher. Native and signed-browser regressions and real three-member TLS
 smokes pass, including replay and the newcomer's first edit.
 
-Earlier Android packaging, 42 JVM checks, lint and memory-only preservation
-guards pass, but that snapshot predates the candidate-1 repairs and is stale.
-The collection's corrected Zoom phone geometry, four affected rendered journeys
-and disposable local catalog assembly pass; exact-commit qualification is open.
+The exact `3d97387b` Android build passes its original-key package checks,
+42 JVM tests, lint and memory-only preservation guards. The entire skin
+collection also passes 238 checks on that pin. These do not prove physical
+Android preservation or actual device pickup.
 
-Candidate 1 (`5b473a4`) failed full normal CI. Focused repairs now pass the
-member/visitor worker boundary and rebuilt phone link-edit/clear smoke, but a
-later linked-file recovery timeout remains under diagnosis. See the
-[current acceptance record](plans/V0_9_0.md) for exact evidence and limits.
-Nothing is published or deployed; stop at a qualified candidate for the owner's
-direct go/no-go. The Claude production-review gate remains unresolved.
+The second source CI run passes 31 jobs, fails Windows client partition 4
+on the withdrawal privacy fixture's whole-outbox drain, and skips the existing
+optional Windows task probe. Reassessment's four shared-link history/browser
+defects are now repaired and pass focused native-race and signed-browser checks.
+A rebuilt native daemon retains all 64 ordinary history references after two
+link edits; see the [acceptance record](plans/V0_9_0.md). Full integrated-source
+qualification is still pending. The earlier linked-file recovery timeout remains
+causally unexplained.
+
+The owner authorized full delivery. Claude provides technical consultation,
+not an additional permission layer or authority to cap the goal. Native
+harness permissions and the required qualification/data-preservation checks
+remain in force. Publication, deployment and actual pickup need their own evidence.
 
 ## v0.8.34 — responsiveness and CI hardening (October 19, 2026)
 

@@ -4,7 +4,7 @@ Notable changes to AgentNet, newest first. Dates use `YYYY-MM-DD`.
 This record starts with v0.8.1; earlier releases remain on the
 [releases page](https://github.com/misunders2d/agentnet/releases).
 
-## Unreleased
+## [0.9.0] — 2026-10-20
 
 - Separate scheduled-message date and time controls so Linux/WebKit users can
   edit the time independently, with an explicit local timezone and saved-time
@@ -18,6 +18,11 @@ This record starts with v0.8.1; earlier releases remain on the
   cleared lists remain convergent when a new member edits.
   Outside invited agents keep answering within their existing scope without
   attempting to read those member-only links.
+- Recover the current Main-chat links on own linked devices after local erasure,
+  without restoring obsolete winners or exposing them as selected message history.
+  Link edits no longer consume ordinary selected-history slots.
+- Keep browser links durable in a single-member group without claiming remote
+  delivery, and finish admitted link saves before closing a workspace.
 - Preserve browser archive repacking after retained plaintext has been cleared,
   keeping the original encrypted content and capability requirements intact.
 
@@ -941,6 +946,7 @@ guide and test/rollout evidence in the handoff.
 
 </details>
 
+[0.9.0]: https://github.com/misunders2d/agentnet/releases/tag/v0.9.0
 [0.8.34]: https://github.com/misunders2d/agentnet/releases/tag/v0.8.34
 [0.8.22]: https://github.com/misunders2d/agentnet/releases/tag/v0.8.22
 [0.8.4]: https://github.com/misunders2d/agentnet/releases/tag/v0.8.4

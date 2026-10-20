@@ -105,6 +105,99 @@ func TestConversationResourcesMembersCASRestartAndGuestBoundary(t *testing.T) {
 	})
 }
 
+func TestConversationResourcesErasedMainWinnerOwnRecovery(t *testing.T) {
+	w, _, packet, _ := groupTurnsFixture(t)
+	a, conv := w.alice, packet.State.Conv
+	old, err := a.SetConversationResources(tctx(t), conv, []protocol.ResourceLink{{Name: "Old", URL: "https://example.com/old"}}, 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	winner, err := a.SetConversationResources(tctx(t), conv, []protocol.ResourceLink{{Name: "Current", URL: "https://example.com/current"}}, old.Rev, old.Writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "received Main resource winner", func() bool {
+		got, err := w.bob.ConversationResources(conv)
+		return err == nil && reflect.DeepEqual(got, winner)
+	})
+	for _, source := range []*Agent{a, w.bob} {
+		for _, saved := range []ConversationResources{old, winner} {
+			if _, err = source.store.db.Exec(`INSERT INTO conv_erased(conv,lid,key,deletion) VALUES(?,?,?,?)`, conv, saved.LID, winner.Writer, protocol.NewID()); err != nil {
+				t.Fatal(err)
+			}
+			for _, own := range []bool{false, true} {
+				want := 0
+				if own && saved.LID == winner.LID {
+					want = 1
+				}
+				rows, err := source.historySourceRowsMode(source.store.db, own, "conv=? AND lid=?", "conv,ms,id", 3, conv, saved.LID)
+				if err != nil || len(rows) != want {
+					t.Fatalf("%s snapshot own=%v winner=%v: rows=%d err=%v", source.Address, own, saved.LID == winner.LID, len(rows), err)
+				}
+				group, err := source.groupHistorySources(source.store.db, conv, saved.LID, winner.Writer, 0, 3, own)
+				if err != nil || len(group) != want {
+					t.Fatalf("%s group own=%v winner=%v: rows=%d err=%v", source.Address, own, saved.LID == winner.LID, len(group), err)
+				}
+				if want == 1 && (!envelope.TopicResources(group[0].item.TopicEvent) || !reflect.DeepEqual(*group[0].item.TopicEvent.Resources, winner.Links)) {
+					t.Fatalf("recovered wrong resource winner: %+v", group[0].item)
+				}
+			}
+		}
+	}
+	phone := humanLinked(t, a)
+	eventually(t, "linked human recovers erased Main resource winner", func() bool {
+		got, err := phone.ConversationResources(conv)
+		return err == nil && reflect.DeepEqual(got, winner)
+	})
+}
+
+func TestConversationResourcesDoNotConsumeSelectedHistorySlots(t *testing.T) {
+	w, _, packet, _ := groupTurnsFixture(t)
+	a, conv := w.alice, packet.State.Conv
+	want := map[string]bool{}
+	for range protocol.MaxGroupHistory {
+		sent, err := a.SendConv(tctx(t), conv, ConvOutgoing{Body: "ordinary selected context"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want[sent.LID] = true
+	}
+	current := ConversationResources{}
+	for _, name := range []string{"First", "Updated"} {
+		var err error
+		current, err = a.SetConversationResources(tctx(t), conv, []protocol.ResourceLink{{Name: name, URL: "https://example.com/context"}}, current.Rev, current.Writer)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	eventually(t, "receiver has all ordinary context and resource edits", func() bool {
+		var ordinary, resources int
+		err := w.bob.store.db.QueryRow(`SELECT count(*) FILTER (WHERE topic_event IS NULL), count(*) FILTER (WHERE json_extract(topic_event,'$.action')='resources') FROM inbox WHERE conv=? AND kind='message' AND coalesce(sub,'')=''`, conv).Scan(&ordinary, &resources)
+		return err == nil && ordinary == protocol.MaxGroupHistory && resources == 2
+	})
+	for _, source := range []*Agent{a, w.bob} {
+		// Make both metadata edits strictly newer than ordinary turns, without
+		// depending on wall-clock resolution or random ID ordering.
+		if _, err := source.store.db.Exec(`UPDATE outbox SET created_ms=CASE WHEN json_extract(topic_event,'$.action')='resources' THEN 2 ELSE 1 END WHERE conv=? AND kind='message' AND coalesce(sub,'')=''`, conv); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := source.store.db.Exec(`UPDATE inbox SET received_ms=CASE WHEN json_extract(topic_event,'$.action')='resources' THEN 2 ELSE 1 END WHERE conv=? AND kind='message' AND coalesce(sub,'')=''`, conv); err != nil {
+			t.Fatal(err)
+		}
+		refs, err := source.SelectGroupHistory(tctx(t), conv, GroupHistorySelection{Last: protocol.MaxGroupHistory})
+		if err != nil || len(refs) != len(want) {
+			t.Fatalf("%s selected %d of %d ordinary turns: %v", source.Address, len(refs), len(want), err)
+		}
+		seen := map[string]bool{}
+		for _, ref := range refs {
+			if !want[ref.LID] || seen[ref.LID] || ref.Author != a.Self().Fingerprint() {
+				t.Fatalf("unexpected selected reference: %+v", ref)
+			}
+			seen[ref.LID] = true
+		}
+	}
+}
+
 func TestConversationResourcesOldReaderWaits(t *testing.T) {
 	w, _, packet, _ := groupTurnsFixture(t)
 	a, b, conv := w.alice, w.bob, packet.State.Conv
