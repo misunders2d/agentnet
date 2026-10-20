@@ -87,13 +87,16 @@ async function fixture() {
     const bad = await f.receive(await f.fromPeer(fields));
     check(!(await f.store.get("inbox", bad)) && (await f.store.get("held", bad)).reason === "invalid", "wrong ID/request answer refused");
   }
+  const thread = await e.thread(r.id);
+  const shown = thread.messages.find((m) => m.id === answer);
+  check(shown.agent_id === f.agentA.id && shown.from === f.peerAddress && shown.author.label === "Agent " + f.agentA.id, "named author preserved in device view");
   const changed = await f.store.get("outbox", r.id);
   await f.store.write([{ s: "outbox", k: r.id, v: { ...changed, target: { ...changed.target, fingerprint: e.fp } } }]);
   const wrongKey = await f.receive(await f.fromPeer({ reply_to: r.id, agent_id: f.agentA.id }));
   check((await f.store.get("held", wrongKey)).reason === "invalid", "answer must match outbound host fingerprint");
-  const thread = await e.thread(r.id);
-  const shown = thread.messages.find((m) => m.id === answer);
-  check(shown.agent_id === f.agentA.id && shown.from === f.peerAddress && shown.author.label === "Agent " + f.agentA.id, "named author preserved in device view");
+  check(!(await e.thread(r.id)).messages.some((m) => m.id === answer), "deliberately changed request fingerprint cannot join the original host's answer");
+  const originalAnswer = await e.thread(answer);
+  check(originalAnswer.topic.agent_host === f.peerAddress && originalAnswer.topic.agent_key === f.peer.fingerprint && originalAnswer.messages.some((m) => m.id === answer && m.agent_id === f.agentA.id), "original named answer remains accessible under its exact host/key/agent history");
   await f.caps([wire.CapEnv2, wire.CapPerson]);
   const before = (await f.store.all("outbox")).length;
   await refuses(() => e.api("/api/send", { to: f.peerAddress, kind: "task", body: "t", agent_id: f.agentB.id }), { code: "agent_identity_unsupported", message: "Peer’s app needs an update first." });

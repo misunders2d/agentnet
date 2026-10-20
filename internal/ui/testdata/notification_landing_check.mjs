@@ -79,7 +79,8 @@ function fixture(workspace = 'default') {
   const f = fixture(); await f.store.start();
   f.views.set(conv,{id:conv,messages:[]});
   await f.store.openMessage(mid,{conv,dir:'in'});
-  assert.equal(f.store.get().open,null,'never substitute Latest for a missing exact target');
+  assert.equal(f.store.get().open?.id,conv,'missing exact target still shows its bound chat context');
+  assert.equal(f.store.get().open.focus,undefined,'chat context never substitutes another message for the target');
   assert.equal(f.store.get().messageLanding.target.id,mid);
   assert.equal(f.store.get().messageLanding.busy,false);
   assert.match(f.store.get().messageLanding.error,/not available/);
@@ -87,6 +88,37 @@ function fixture(workspace = 'default') {
   await f.change();
   assert.equal(f.store.get().open?.focus,mid,'existing local change retries the retained target');
   assert.equal(f.store.get().messageLanding,null); f.store.stop();
+}
+
+// Already loaded messages use the existing cache before unrelated overview
+// work or another local-view GET. Both notification forms keep draft files.
+for (const bound of [false,true]) {
+  const f=fixture();await f.store.start();await f.store.prefetch({kind:'dm',id:conv});
+  const file={key:'cached-file',file:{name:'draft.txt'},staged:{id:'kept-token'}};
+  f.store.setDraft(conv,{text:'Cached draft',files:[file],replyTo:next,agent:'chosen',topic:'old-topic'});
+  const overview=deferred(),target=deferred();f.overviewGate=overview;f.dmGates.set(conv,target);
+  const refreshing=f.store.load(false);await tick();const before=f.calls.length;
+  const landing=f.store.openMessage(mid,bound?{conv,dir:'in'}:{dir:'in'});await tick();
+  try {
+    assert.equal(f.store.get().open?.focus,mid,'cached '+(bound?'bound':'legacy')+' destination opens before either gate');
+    assert.equal(f.calls.slice(before).filter(c=>/^\/api\/(?:overview|agents|dm|thread)(?:\?|$)/.test(c.path)).length,0,'cached landing adds no overview, catalog or view GET');
+    assert.equal(f.store.draft(conv).topic,topic);assert.equal(f.store.draft(conv).text,'Cached draft');
+    assert.equal(f.store.draft(conv).replyTo,next);assert.equal(f.store.draft(conv).agent,'chosen');
+    assert.equal(f.store.draft(conv).files[0],file);assert.equal(f.store.get().messageLanding,null);
+  } finally { overview.resolve();target.resolve();await Promise.all([refreshing,landing]);f.store.stop(); }
+}
+
+// A warm legacy tap with an overview need not wait for a newer overview to
+// finish. A later cached arrival also recovers a previously completed miss.
+{
+  const f=fixture();await f.store.start();const gate=deferred();f.overviewGate=gate;
+  const refreshing=f.store.load(false);await tick();const landing=f.store.openMessage(mid,{dir:'in'});await tick();
+  try { assert.equal(f.store.get().open?.focus,mid,'warm lookup starts its exact local read while overview is blocked'); }
+  finally {gate.resolve();await Promise.all([refreshing,landing]);f.store.stop();}
+  const late=fixture();late.views.set(conv,{id:conv,messages:[]});await late.store.start();await late.store.openMessage(mid,{dir:'in'});
+  assert(late.store.get().messageLanding.legacyMiss);
+  late.views.set(conv,{id:conv,messages:[{id:mid,dir:'in',topic}]});await late.store.prefetch({kind:'dm',id:conv});
+  await late.change();assert.equal(late.store.get().open?.focus,mid,'existing change retries a target that has entered the existing cache');late.store.stop();
 }
 
 // Offline initial overview failure remains retryable. Native resume also retries.
@@ -146,7 +178,7 @@ for (const cancel of ['back','chat','tab','topic','stop']) {
   }
   const before=f.calls.length; await f.store.openMessage('invalid',{conv});assert.equal(f.calls.length,before);
   for(const view of [undefined,{id:other,messages:[{id:mid}]},{id:conv,frozen:'revoked',messages:[{id:mid}]},{id:conv,messages:[{id:mid,deleted:true}]},{id:conv,messages:[{id:mid,dir:'out'}]}]) {
-    f.store.close(); if(view)f.views.set(conv,view);else f.views.delete(conv);
+    f.store.close(); f.store.set({views:view?{[conv]:view}:{}}); if(view)f.views.set(conv,view);else f.views.delete(conv);
     await f.store.openMessage(mid,{conv,dir:'in'});
     assert.equal(f.store.get().open,null); assert(f.store.get().messageLanding.error);
   }
@@ -163,7 +195,8 @@ for (const cancel of ['back','chat','tab','topic','stop']) {
   await b.store.openMessage(mid,{conv,dir:'in'});
   assert.equal(b.store.get().open.focus,mid); assert.equal(b.store.draft(conv).topic,topic);
   assert.equal(a.calls.filter(c=>c.path.startsWith('/api/dm?')).length,0,'other workspace is never searched');
-  await a.store.openMessage(mid,{conv}); assert.equal(a.store.get().open,null);
+  await a.store.openMessage(mid,{conv}); assert.equal(a.store.get().open?.id,conv);
+  assert.equal(a.store.get().open.focus,undefined);assert.equal(a.store.get().messageLanding.target.id,mid);
   assert.equal(b.store.get().open.id,conv); a.store.stop();b.store.stop();
 }
 {

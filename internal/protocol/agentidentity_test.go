@@ -1,10 +1,40 @@
 package protocol
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"testing"
 )
+
+func TestAgentHarnessExtensionPreservesV1(t *testing.T) {
+	key, pub := vecDesk()
+	r := AgentRecord{V: 1, ID: "00112233445566778899aabbccddeeff", Host: pub.Address, HostKey: pub.Fingerprint(), Label: "Builder <&> Ю", TS: 1700000000, Harness: "pi"}
+	r.Sign(key.Sign)
+	if string(r.Canonical()) != AgentVectorCanonical || r.Hash() != AgentVectorHash || hex.EncodeToString(r.Sig) != AgentVectorSignature || r.Verify(pub) != nil {
+		t.Fatal("extension changed v1 identity")
+	}
+	raw, _ := json.Marshal(r)
+	parsed, err := ParseAgentRecord(raw)
+	if err != nil || parsed.Verify(pub) != nil || parsed.Harness != "pi" {
+		t.Fatal("extension round trip", err)
+	}
+	legacy := r
+	legacy.Harness, legacy.HarnessSig = "", nil
+	if legacy.Verify(pub) != nil || !bytes.Equal(legacy.Canonical(), r.Canonical()) {
+		t.Fatal("old native reader cannot verify v1")
+	}
+	r.Harness = "claude"
+	if r.Verify(pub) == nil {
+		t.Fatal("unsigned harness mutation verified")
+	}
+	r = parsed
+	r.HarnessSig = append([]byte{}, r.HarnessSig...)
+	r.HarnessSig[0] ^= 1
+	if r.Verify(pub) == nil {
+		t.Fatal("forged extension verified")
+	}
+}
 
 const AgentVectorCanonical = `agentnet-agent-v1
 {"v":1,"id":"00112233445566778899aabbccddeeff","host":"vitalii/desk","host_key":"19c77bce-aca933c7-80e1c0e9-e46fc988","label":"Builder \u003c\u0026\u003e Ю","ts":1700000000}`

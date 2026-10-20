@@ -5,9 +5,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Dialog } from "@base-ui/react/dialog";
 import { IconChevronLeft, IconSearch, IconX } from "@tabler/icons-react";
-import { errorText } from "../api";
+import { errorText, type T } from "../api";
 import { useApp, useWide } from "../context";
-import { TOPICS, firstLine, topicOf, when, type Topic, type TopicState } from "../model";
+import { TOPICS, directChatKey, firstLine, topicOf, when, type Topic, type TopicState } from "../model";
 import { useModal, usePortal } from "../owned";
 import { useStore } from "../store";
 import { Button, IconButton } from "../ui/Button";
@@ -30,8 +30,8 @@ export interface FlatTopics {
  change: (what: "delete" | "done" | "archive", ids: string[], counts: Record<string,number>) => Promise<{note: string} | undefined>;
 }
 
-export function AllTopics({ open, onOpenChange, peer,conv, agent, current, flat }: {
-  open: boolean; onOpenChange: (o: boolean) => void; peer: string;conv?:string; agent: string; current?: string; flat?: FlatTopics;
+export function AllTopics({ open, onOpenChange, peer,conv, binding, agent, current, flat }: {
+  open: boolean; onOpenChange: (o: boolean) => void; peer: string;conv?:string;binding?:T.ThreadSummary; agent: string; current?: string; flat?: FlatTopics;
 }) {
   const store = useApp();
   const wide = useWide();
@@ -41,9 +41,10 @@ export function AllTopics({ open, onOpenChange, peer,conv, agent, current, flat 
   const [query, setQuery] = useState("");
   const [q, setQ] = useState(""); // the query after the person stops typing
   const state = q ? "" : filter;
-  const scope=JSON.stringify([conv||"",peer,state,q]);
+  const destination=binding?{agent_host:binding.agent_host,agent_key:binding.agent_key,agent_id:binding.agent_id||""}:{};
+  const scope=JSON.stringify([conv||"",peer,state,q,binding?.agent_host,binding?.agent_key,binding?.agent_id]);
   const page=usePagedChoices(open&&!flat,scope,revision,TOPICS.pageSize,topicIdentity,async(before,limit)=>{
-   const p=await store.api.topics({conv,peer,state,q,before,limit});return {rows:(p.topics||[]).map(topicOf),total:p.matched,next:p.next};
+   const p=await store.api.topics({conv,peer,state,q,before,limit,...destination});return {rows:(p.topics||[]).map(topicOf),total:p.matched,next:p.next};
   });
   const latest=flat?[...flat.topics].filter(t=>(q||t.state===filter)&&q.toLowerCase().split(/\s+/).filter(Boolean).every(w=>(t.title+" "+(t.autoTitle||"")+" "+t.last).toLowerCase().includes(w))).sort(unreadTopicOrder):page.rows;
   const loading=flat?.loading??page.loading,failed=flat?.failed??page.error;
@@ -73,9 +74,9 @@ export function AllTopics({ open, onOpenChange, peer,conv, agent, current, flat 
   const modal = useModal(open);
 
   // Counts per filter, from the overview: it lists active and done topics and counts archived ones.
-  const shown = flat?.topics || (conv ? ((store.get().views[conv] as import("../api").T.DMThread)?.topics||[]) : overview?.threads || []).filter((t) => (conv?t.conv===conv:t.peer===peer) && !t.notice_only).map(topicOf);
+  const shown = flat?.topics || (conv ? ((store.get().views[conv] as import("../api").T.DMThread)?.topics||[]) : overview?.threads || []).filter((t) => (conv?t.conv===conv:binding?directChatKey(t)===directChatKey(binding):t.peer===peer) && !t.notice_only).map(topicOf);
   const count = { active: shown.filter((t) => t.state === "active").length, done: shown.filter((t) => t.state === "done").length,
-    archived:flat||conv?shown.filter(t=>t.state==="archived").length:(overview?.topics || []).find((c) => c.peer === peer)?.archived || 0 };
+    archived:flat||conv?shown.filter(t=>t.state==="archived").length:(overview?.topics || []).find((c) => binding?directChatKey(c.latest)===directChatKey(binding):c.peer===peer)?.archived || 0 };
 
   useEffect(() => { const x = setTimeout(() => setQ(query.trim()), TOPICS.searchDelay); return () => clearTimeout(x); }, [query]);
 

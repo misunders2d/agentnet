@@ -11,4 +11,30 @@
 .an-schedule-dialog input:not([type="checkbox"]), .an-schedule-dialog textarea { display: block; box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; padding: 8px; font: inherit; }
 .an-schedule-time { min-width: 0; margin-block: 12px; padding: 0; border: 0; }
 .an-schedule-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); gap: 12px; }
+.an-schedule-nav { display: flex; flex-wrap: wrap; gap: 8px; margin-block: 12px; }
+.an-schedule-nav button[aria-pressed="true"] { font-weight: 700; text-decoration: underline; text-underline-offset: 4px; }
+.an-schedule-when { display: block; font-weight: 700; }
+.an-schedule-preview { white-space: pre-wrap; margin-block: 8px; }
+.an-schedule-recipients summary { min-height: 44px; box-sizing: border-box; padding-block: 12px; cursor: pointer; }
+.an-schedule-history[hidden] { display: none; }
+.an-outbox-view { box-sizing: border-box; width: min(72rem, calc(100% - 2rem)); max-width: calc(100% - 2rem); height: min(52rem, calc(100% - 2rem)); padding: 20px; }
+.an-outbox-view .an-outbox-row { margin: 0; padding: 0; border-block-start: 1px solid currentColor; }
+.an-outbox-summary { display: grid; grid-template-columns: minmax(9rem, 1.1fr) minmax(6rem, 1fr) minmax(0, 2fr) minmax(5rem, .7fr); grid-template-areas: "time chat preview status"; align-items: center; gap: 8px 16px; box-sizing: border-box; width: 100%; min-height: 64px; padding: 12px 8px; border: 0; color: inherit; background: transparent; text-align: start; font: inherit; }
+.an-outbox-summary:hover, .an-outbox-summary:focus-visible { background: var(--surface, var(--an-surface, #eee)); }
+.an-outbox-summary .an-schedule-when { grid-area: time; font-size: 13px; }
+.an-outbox-chat { grid-area: chat; min-width: 0; overflow-wrap: anywhere; }
+.an-outbox-preview { grid-area: preview; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.an-outbox-status { grid-area: status; }
+.an-outbox-draft { grid-template-columns: minmax(8rem, 1fr) minmax(0, 2fr); grid-template-areas: "chat preview" "meta files"; }
+.an-outbox-meta { grid-area: meta; }
+.an-outbox-files { grid-area: files; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.an-schedule-detail { padding: 12px; background: var(--surface, var(--an-surface, #eee)); }
+@media (max-width: 600px) {
+  .an-outbox-view { width: calc(100% - 16px); max-width: calc(100% - 16px); height: calc(100% - 16px); max-height: calc(100% - 16px); padding: 12px; }
+  .an-outbox-summary { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "time status" "chat chat" "preview preview"; gap: 4px 8px; }
+  .an-outbox-draft { grid-template-areas: "chat chat" "preview preview" "meta meta" "files files"; }
+}
 /* agentnet-shared-v33 end */
+
+.an-outbox-due { display: inline-block; min-width: 1.5em; padding: 2px 5px; border: 1px solid currentColor; border-radius: 999px; font-size: 12px; font-weight: 700; line-height: 1.2; }
+.an-outbox-due[hidden] { display: none; }

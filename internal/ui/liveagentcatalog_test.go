@@ -115,7 +115,7 @@ func TestLiveAgentCatalogGuardLocalSaveAndVerifiedSelection(t *testing.T) {
 	}
 	get := request("GET", "/api/agents", "", "", true)
 	var local AgentCatalogView
-	if get.Code != 200 || json.Unmarshal(get.Body.Bytes(), &local) != nil || !local.Local || len(local.Agents) != 1 || local.Agents[0].Responder.Dir != nextDir {
+	if get.Code != 200 || json.Unmarshal(get.Body.Bytes(), &local) != nil || !local.Local || len(local.Agents) != 2 || !local.Agents[0].Default || local.Agents[1].Responder.Dir != nextDir {
 		t.Fatalf("local view %d %s", get.Code, get.Body)
 	}
 
@@ -152,7 +152,7 @@ func TestLiveAgentCatalogGuardLocalSaveAndVerifiedSelection(t *testing.T) {
 		t.Fatalf("caps %d %s", status, data)
 	}
 	remote, err := l.AgentCatalog(ctx, a.Address)
-	if err != nil || remote.Local || len(remote.Agents) != 1 || remote.Agents[0].Responder != nil || len(remote.Harnesses) != 0 {
+	if err != nil || remote.Local || len(remote.Agents) != 2 || remote.Agents[0].Responder != nil || len(remote.Harnesses) != 0 {
 		t.Fatalf("public isolation %+v %v", remote, err)
 	}
 	target, err := l.namedSendTarget(ctx, Draft{To: a.Address, Kind: KindQuestion, AgentID: id})
@@ -286,7 +286,17 @@ func TestLiveAgentCatalogGuardLocalSaveAndVerifiedSelection(t *testing.T) {
 		t.Fatalf("offline save %+v %v", offline, err)
 	}
 	entries, err := a.LocalAgents()
-	if err != nil || len(entries) != 2 {
+	if err != nil || len(entries) != 3 {
 		t.Fatal("offline rollback", err)
+	}
+	// A concrete local choice does not depend on its public catalog having
+	// reached the Hub. Keep the exact selected identity in the queued request.
+	queued, err := l.Send(Draft{To: a.Address, Kind: KindQuestion, Body: "queued for this local agent", AgentID: offline.Agent.Record.ID})
+	if err != nil || queued.State != "queued" {
+		t.Fatalf("offline concrete local send %+v %v", queued, err)
+	}
+	offlineThread, err := l.Thread(queued.ID)
+	if err != nil || len(offlineThread.Messages) != 1 || offlineThread.Messages[0].Target == nil || offlineThread.Messages[0].Target.AgentID != offline.Agent.Record.ID || offlineThread.Messages[0].Target.Fingerprint != a.Self().Fingerprint() {
+		t.Fatalf("offline concrete local binding %+v %v", offlineThread, err)
 	}
 }

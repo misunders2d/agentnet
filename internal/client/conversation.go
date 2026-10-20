@@ -72,7 +72,15 @@ func (a *Agent) Conversation(id string, offset, limit int) (Conversation, error)
 	return a.conversation(id, offset, limit, true)
 }
 
-func (a *Agent) conversation(id string, offset, limit int, projectAttention bool) (Conversation, error) {
+func (a *Agent) DisplayConversation(id string, offset, limit int) (Conversation, error) {
+	anchor, err := a.directTopicAnchor(id)
+	if err != nil {
+		return Conversation{}, err
+	}
+	return a.conversation(anchor, offset, limit, true, true)
+}
+
+func (a *Agent) conversation(id string, offset, limit int, projectAttention bool, display ...bool) (Conversation, error) {
 	peer, err := a.store.peerOf(id)
 	if err != nil {
 		return Conversation{}, err
@@ -113,6 +121,24 @@ func (a *Agent) conversation(id string, offset, limit int, projectAttention bool
 			}
 		}
 	}
+	if len(display) > 0 && display[0] {
+		groups, _, e := a.peerThreadGroups(peer)
+		if e != nil {
+			return Conversation{}, e
+		}
+		order = nil
+		for _, g := range groups {
+			for _, m := range g {
+				if m == id {
+					order = g
+					break
+				}
+			}
+		}
+		if len(order) == 0 {
+			return Conversation{}, ErrNoMessage
+		}
+	}
 	sortThread(order, byID)
 	c := Conversation{Peer: peer, Total: len(order), Offset: min(max(offset, 0), len(order))}
 	page := order[c.Offset:]
@@ -151,7 +177,33 @@ func (a *Agent) conversation(id string, offset, limit int, projectAttention bool
 		}
 		c.Messages = append(c.Messages, m)
 	}
-	if err = a.decorateLegacy(peer, c.Messages); err != nil {
+	var completionEvidence []ConversationMessage
+	if len(display) > 0 && display[0] {
+		// A display move can separate a request from its retained result. That
+		// changes neither completion nor the executor's original state.
+		selected := map[string]bool{}
+		for _, m := range c.Messages {
+			selected[m.ID] = true
+		}
+		var ids []string
+		for _, l := range links {
+			if selected[l.replyTo] && !selected[l.id] {
+				ids = append(ids, l.id)
+			}
+		}
+		if len(ids) > 0 {
+			extra, e := a.store.peerMessages(peer, ids, a.Self())
+			if e != nil {
+				return Conversation{}, e
+			}
+			for _, id := range ids {
+				if m, ok := extra[id]; ok {
+					completionEvidence = append(completionEvidence, m)
+				}
+			}
+		}
+	}
+	if err = a.decorateLegacy(peer, c.Messages, completionEvidence); err != nil {
 		return Conversation{}, err
 	}
 	if projectAttention {
@@ -350,6 +402,9 @@ func (s *store) peerMessages(peer string, ids []string, own ...identity.Public) 
 			}
 			if deviceHistory && (m.Kind == envelope.KindQuestion || m.Kind == envelope.KindTask) {
 				m.Dir = deviceHistoryRequestDirection(m.From, m.To, peer)
+			}
+			if original, ok := out[m.ID]; ok && original.From == m.From && original.FromKey == m.FromKey {
+				m.Responder = original.Responder
 			}
 			out[m.ID] = m
 		}

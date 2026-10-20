@@ -60,11 +60,37 @@ fn portable_fragment(fragment: &str) -> bool {
     else { conv.is_some_and(|v| hex(v, 64)) && topic.is_some_and(|v| v == "main" || hex(v, 32)) }
 }
 
-/// Warm portable entry stays on the existing local page so a refused link
+fn notification_fragment(fragment: &str) -> bool {
+    let mut message = None; let mut conv = None; let mut direction = None; let mut workspace = None;
+    let mut review = false;
+    for part in fragment.split('&') {
+        if part == "review" {
+            if review { return false; }
+            review = true;
+            continue;
+        }
+        let Some((key, value)) = part.split_once('=') else { return false; };
+        let field = match key { "msg" => &mut message, "conv" => &mut conv, "dir" => &mut direction, "workspace" => &mut workspace, _ => return false };
+        if field.is_some() { return false; } *field = Some(value);
+    }
+    let hex = |value: &str, length: usize| value.len() == length && value.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+    if workspace.is_some_and(|v| v != "default" && !hex(v, 32)) { return false; }
+    if let Some(id) = message {
+        fragment.starts_with("msg=") && !review && hex(id, 32) && conv.map_or(true, |v| hex(v, 64)) && direction.map_or(true, |v| v == "in" || v == "out")
+    } else if let Some(id) = conv {
+        fragment.starts_with("conv=") && !review && hex(id, 64) && direction.is_none()
+    } else if review {
+        (fragment == "review" || fragment.starts_with("review&")) && direction.is_none()
+    } else {
+        fragment.starts_with("workspace=") && workspace.is_some() && direction.is_none()
+    }
+}
+
+/// Warm navigation stays on the existing local page so a refused link
 /// cannot reload it and discard draft files. Validated fields contain no JS
 /// string delimiters; the page's shared router performs destination checks.
-pub fn portable_script(fragment: &str) -> Option<String> {
-    portable_fragment(fragment).then(|| format!("location.hash=\"{fragment}\";"))
+pub fn navigation_script(fragment: &str) -> Option<String> {
+    (portable_fragment(fragment) || notification_fragment(fragment)).then(|| format!("location.hash=\"{fragment}\";"))
 }
 
 /// Bytes a fragment keeps as they are in a URL: visible ASCII without
@@ -120,14 +146,29 @@ mod tests {
     fn portable_destinations_are_exact() {
         let r = "a".repeat(32); let c = "b".repeat(64); let t = "c".repeat(32);
         for fragment in [format!("realm={r}&conv={c}&topic=main"), format!("realm={r}&conv={c}&topic={t}"), format!("realm={r}&thread={t}")] {
-            assert_eq!(portable_script(&fragment), Some(format!("location.hash=\"{fragment}\";")));
+            assert_eq!(navigation_script(&fragment), Some(format!("location.hash=\"{fragment}\";")));
             assert_eq!(super::fragment(&format!("agentnet://open#{fragment}")), Some(fragment.clone()));
             assert_eq!(super::fragment(&format!("agentnet://open/#{fragment}")), None);
             assert_eq!(super::fragment(&format!(" agentnet://open#{fragment}")), None);
         }
         for fragment in [format!("realm={r}&conv={c}"), format!("realm={r}&conv={c}&topic=main&realm={r}"), format!("realm={r}&thread={t}&topic=main"), format!("realm={r}&conv={c}&topic=%6dain"), format!("realm={r}&conv={c}&topic=main&extra=1")] {
-            assert_eq!(portable_script(&fragment), None);
+            assert_eq!(navigation_script(&fragment), None);
             assert_eq!(super::fragment(&format!("agentnet://open#{fragment}")), None);
         }
+    }
+
+    #[test]
+    fn notification_navigation_preserves_exact_fields_without_reloading() {
+        let id = "a".repeat(32); let conv = "b".repeat(64); let workspace = "c".repeat(32);
+        for fragment in [format!("msg={id}"), format!("msg={id}&dir=in&workspace=default"), format!("msg={id}&conv={conv}&dir=out&workspace={workspace}"), format!("conv={conv}&workspace={workspace}"), format!("review&workspace={workspace}"), format!("workspace={workspace}")] {
+            assert_eq!(super::fragment(&format!("agentnet://open#{fragment}")), Some(fragment.clone()));
+            assert_eq!(navigation_script(&fragment), Some(format!("location.hash=\"{fragment}\";")));
+        }
+        for fragment in [format!("msg={id}&conv=invalid"), format!("msg={id}&dir=unknown"), format!("msg={id}&workspace=unknown"), format!("msg={id}&msg={id}"), format!("conv={conv}&msg={id}"), format!("msg={id}&review"), format!("msg={id}&extra=1"), format!("msg={id}&workspace=default%22"), "review&review".into(), "msg=0123".into(), "conv=0123abcd".into()] {
+            assert_eq!(super::fragment(&format!("agentnet://open#{fragment}")), Some(fragment.clone()), "legacy fallback: {fragment}");
+            assert_eq!(navigation_script(&fragment), None, "{fragment}");
+        }
+        assert_eq!(navigation_script("review&workspace=bbbb"), None);
+        assert_eq!(navigation_script("agentnet-invite-v1:secret"), None);
     }
 }

@@ -16,6 +16,7 @@ import * as wire from "./wire.mjs";
 import { threadIndexed, readThreadRows, projectDeviceThreads, readChatView } from "./chatprojection.mjs";
 import { contributionPreview, contributionApply, contributionRecheck } from "./historycontribution.mjs";
 import {deviceHistory,deviceHistoryDirection,deviceHistoryPeer,directHistoryRow} from "./devicehistory.mjs";
+import {directTopics} from "./directtopics.mjs";
 import { backgroundCopy, historyWindow, stateWindow } from "./historywindow.mjs";
 import { historyArchive } from "./historyarchive.mjs";
 import { Decrypter, Encrypter } from "./vendor/age.mjs";
@@ -662,7 +663,7 @@ const topicRequest = (k) => k === "question" || k === "task";
 // topicOpen: one message keeps its topic pending (client topicOpen).
 const topicOpen = (r, replied) => r.notice ? r.state === "needs_human"
   : r.in || r.localJob ? !r.selected && (topicOpenIn.has(r.state) || r.state === "interrupted" && topicRequest(r.kind)) // interrupted: waits for the person (client reviewStates)
-  : topicRequest(r.kind) && !replied && !topicUndelivered.has(r.state) && !topicExecutionClosed.has(r.execState);
+  : topicRequest(r.kind) && !replied && !r.replied && !topicUndelivered.has(r.state) && !topicExecutionClosed.has(r.execState);
 const pendingTopicRows = g => {
   const replied = new Set(g.filter(r => r.in && r.reply_to && r.status !== "progress").map(r => r.reply_to));
   return g.flatMap((r,i) => topicOpen(r,replied.has(r.id)) ? [i] : []);
@@ -1707,6 +1708,14 @@ export class Engine {
   // page must be open for it to run).
 
   directHistory() { return this.directHistoryModule ||= deviceHistory(this,Hold); }
+  directTopics() { return this.directTopicsModule ||= directTopics(this,Hold,StoreConflict); }
+  directPlacements(view) { return this.directTopics().placements(view); }
+  directTopicPreview(request) { return this.directTopics().preview(request); }
+  applyDirectTopicOrganization(review) { return this.directTopics().apply(review); }
+  undoDirectTopicOrganization(request) { return this.directTopics().undo(request); }
+  syncDirectTopics() { return this.directTopics().sync(); }
+  directTopicSyncGate(rec) { return this.directTopics().gate(rec); }
+  admitDirectTopicSync(n,env,pin,admission) { return this.directTopics().admit(n,env,pin,admission); }
 
   archives() { return this.archiveHelper ||= historyArchive(this,Hold,StoreConflict,retryable); }
 
@@ -1749,7 +1758,7 @@ export class Engine {
           if (job.state === "accepted" || descriptor?.state === "delivered") retained.add(id);
         }
       }
-      const sync = new Set(["history", wire.SubHistoryArchive, wire.SubDeviceHistory, wire.SubReadSync, wire.SubRootSync, wire.SubTopicSync, wire.SubTopicStateSync, wire.SubModelSync, wire.SubInvitationSync]);
+      const sync = new Set(["history", wire.SubHistoryArchive, wire.SubDeviceHistory, wire.SubReadSync, wire.SubRootSync, wire.SubTopicSync, wire.SubTopicStateSync, wire.SubDirectTopicSync, wire.SubModelSync, wire.SubInvitationSync]);
       const detail = revoked ? "That device was removed from the server." : "That exact device is no longer one of your devices.";
       for (const row of await this.store.outboxStates(["queued","waiting","receiver_waiting","archive_staged","archive_uploading"], address)) {
         if (retained.has(row.id) || row.recipient_fp !== fingerprint || !revoked && (!sync.has(row.sub) && !children.has(row.id) || row.sub === "history" && row.recipient_admission && !row.group_history)) continue;
@@ -1783,7 +1792,7 @@ export class Engine {
     const own = await this.store.get("kv", "person");
     if (own?.state !== "self") return;
     const book = await this.historyBook(), targets = new Map();
-    const sync = new Set(["history", wire.SubHistoryArchive, wire.SubDeviceHistory, wire.SubReadSync, wire.SubRootSync, wire.SubTopicSync, wire.SubTopicStateSync, wire.SubModelSync, wire.SubInvitationSync]);
+    const sync = new Set(["history", wire.SubHistoryArchive, wire.SubDeviceHistory, wire.SubReadSync, wire.SubRootSync, wire.SubTopicSync, wire.SubTopicStateSync, wire.SubDirectTopicSync, wire.SubModelSync, wire.SubInvitationSync]);
     for (const row of await this.store.outboxStates(["queued","waiting","receiver_waiting","archive_staged","archive_uploading"])) if (sync.has(row.sub) && row.to && row.recipient_fp && (own.known || []).some(d => d.address === row.to && d.fingerprint === row.recipient_fp)) targets.set(row.to + "/" + row.recipient_fp, {address:row.to,fingerprint:row.recipient_fp});
     for (const job of Object.values(book)) targets.set(job.device + "/" + job.fingerprint, {address:job.device,fingerprint:job.fingerprint});
     for (const job of await this.store.prefix("kv", "history-archive/out/")) targets.set(job.to + "/" + job.recipient_fp, {address:job.to,fingerprint:job.recipient_fp});
@@ -1939,7 +1948,7 @@ export class Engine {
   }
 
   readRef(m) {
-    if(!m || m.local || m.control || m.ref || m.aside || [wire.SubModelSync,wire.SubTopicSync,wire.SubTopicStateSync,wire.SubInvitationSync,wire.SubReadSync,wire.SubRootSync,wire.SubDriveSpace,wire.SubGroupProof,wire.SubGroupContext,wire.SubGroupInvite,wire.SubGroupConsent,wire.SubGroupWithdrawal].includes(m.sub))return null;
+    if(!m || m.local || m.control || m.ref || m.aside || [wire.SubModelSync,wire.SubTopicSync,wire.SubTopicStateSync,wire.SubDirectTopicSync,wire.SubInvitationSync,wire.SubReadSync,wire.SubRootSync,wire.SubDriveSpace,wire.SubGroupProof,wire.SubGroupContext,wire.SubGroupInvite,wire.SubGroupConsent,wire.SubGroupWithdrawal].includes(m.sub))return null;
     const ref={conv:m.conv||"",fingerprint:m.fp||m.claimed_key||"",lid:m.lid||m.id};
     if(!wire.validFingerprint(ref.fingerprint) || !wire.validID(ref.lid))return null;
     return ref;
@@ -2043,7 +2052,7 @@ export class Engine {
   async attentionSnapshot(view) {
     if(view.attention)return view;
     const own=await this.store.get("kv","person");view.attentionOwner=own;
-    const selected=view.attentionTarget?projectDeviceThreads(view,{address:this.address,fingerprint:this.fp,erased:row=>this.erasedRow(row)}).find(g=>g.some(m=>m.id===view.attentionTarget)):null;
+    const selected=view.attentionTarget?projectDeviceThreads(view,{address:this.address,fingerprint:this.fp,erased:row=>this.erasedRow(row),placements:await this.directPlacements(view)}).find(g=>g.some(m=>m.id===view.attentionTarget)):null;
     const refs=selected?selected.map(m=>this.attentionRef(m)):[...view.inbox.map(m=>this.attentionRef(m)),...view.outbox.map(m=>this.attentionRef(m,true))];
     const keys=own?[...new Set(refs.filter(Boolean).map(ref=>this.attentionKey(own.person,ref)))]:[];
     // One indexed KV transaction for this admitted snapshot, including absent
@@ -2145,6 +2154,7 @@ export class Engine {
     return [{s:"kv",k,v:{...fact,key:k,person:own.person}}];
   }
   syncTopicTitles() {
+    this.syncDirectTopics().catch(()=>{});
     this.syncTopicMarks().catch(()=>{}); // marks follow every wake names do (connect, own roster, admission)
     this.topicSyncAgain=true;
     if(!this.topicSyncRun)this.topicSyncRun=(async()=>{do{this.topicSyncAgain=false;try{await this.syncTopicPages();}catch(e){if(e instanceof StoreConflict)this.topicSyncAgain=true;else throw e;}}while(this.topicSyncAgain);})().finally(()=>{this.topicSyncRun=null;});
@@ -3804,6 +3814,7 @@ export class Engine {
       if(wire.conversationAudienceCopy(rec))await this.requireConversationAudienceSupport(rec.to,await this.pinned(rec.to),rec.sub===wire.SubHistoryArchive);
       if(wire.guestAgentCopy(rec))await this.requireGuestAgentSupport(rec.to,await this.pinned(rec.to),rec.sub===wire.SubHistoryArchive);
       if(rec.sub===wire.SubTopicSync)await this.topicSyncGate(rec);
+      if(rec.sub===wire.SubDirectTopicSync)await this.directTopicSyncGate(rec);
       if(rec.sub===wire.SubTopicStateSync)await this.topicStateSyncGate(rec);
       if(rec.sub===wire.SubInvitationSync)await this.invitationSyncGate(rec);
       if(rec.sub===wire.SubModelSync)await this.modelSyncGate(rec);
@@ -3898,6 +3909,7 @@ export class Engine {
       if(wire.conversationAudienceCopy(rec))await this.requireConversationAudienceSupport(rec.to,await this.pinned(rec.to),rec.sub===wire.SubHistoryArchive);
       if(wire.guestAgentCopy(rec))await this.requireGuestAgentSupport(rec.to,await this.pinned(rec.to),rec.sub===wire.SubHistoryArchive);
       if(rec.sub===wire.SubTopicSync)await this.topicSyncGate(rec);
+      if(rec.sub===wire.SubDirectTopicSync)await this.directTopicSyncGate(rec);
       if(rec.sub===wire.SubTopicStateSync)await this.topicStateSyncGate(rec);
       if(rec.sub===wire.SubInvitationSync)await this.invitationSyncGate(rec);
       if(rec.sub===wire.SubModelSync)await this.modelSyncGate(rec);
@@ -3995,6 +4007,7 @@ export class Engine {
     catch (e) { return { why: e.message, code: e.code }; }
     if([wire.SubDeviceHistory,wire.SubDeviceFile].includes(rec?.sub))return this.directHistory().gate(rec);
     if(rec?.sub===wire.SubTopicSync)return this.topicSyncGate(rec);
+    if(rec?.sub===wire.SubDirectTopicSync)return this.directTopicSyncGate(rec);
     if(rec?.sub===wire.SubTopicStateSync)return this.topicStateSyncGate(rec);
     if(rec?.sub===wire.SubInvitationSync)return this.invitationSyncGate(rec);
     if(rec?.sub===wire.SubModelSync)return this.modelSyncGate(rec);
@@ -4494,10 +4507,11 @@ export class Engine {
     if(view?.attentionThreads)return view.attentionThreads;
     if(!view){const [inbox,outbox]=await Promise.all([this.store.all("inbox"),this.store.all("outbox")]);view={inbox,outbox};}
     await this.attentionSnapshot(view);
-    const groups=projectDeviceThreads(view,{address:this.address,fingerprint:this.fp,erased:row=>this.erasedRow(row)});
+    const groups=projectDeviceThreads(view,{address:this.address,fingerprint:this.fp,erased:row=>this.erasedRow(row),placements:await this.directPlacements(view)});
     // The same admitted executor reports drive both cards and topic pending state.
     // Index once: unrelated messages and long reply chains do not multiply scans.
-    const statuses=new Map(),textControls=new Map();
+    const statuses=new Map(),textControls=new Map(),heldTurns=groups.flat(),allReplies=new Set(heldTurns.filter(m=>m.dir==="in"&&m.reply_to&&m.status!==wire.StatusProgress).map(m=>m.peer+"/"+m.reply_to)),finalReplies=new Map();
+    for(const m of [...heldTurns].sort((a,b)=>a.at-b.at||a.id.localeCompare(b.id)))if(m.dir==="in"&&m.reply_to&&["answer","result"].includes(m.kind)&&m.status!==wire.StatusProgress){const k=m.peer+"/"+m.reply_to;if(!finalReplies.has(k))finalReplies.set(k,m);}
     for(const [rows,incoming] of [[view.inbox,true],[view.outbox,false]]) for(const r of rows) if(r.control && !r.conv && r.ref){
       if(incoming && r.sub===wire.SubStatus){
         const key=r.ref.id+"/"+r.ref.fingerprint;
@@ -4511,7 +4525,7 @@ export class Engine {
     }
     for(const g of groups){
       for(const m of g){
-        Object.assign(m,{personal_attention:this.attentionFields(m,view,m.dir==="out")});
+        Object.assign(m,{personal_attention:this.attentionFields(m,view,m.dir==="out"),original_replied:allReplies.has(m.peer+"/"+m.id)});
         const controls=textControls.get(m.peer+"/"+m.author_fp+"/"+m.id);
         if(controls){
           const display=this.controlsOn(controls,m.author_fp,c=>c.preview_author,()=>"",()=>false);
@@ -4519,11 +4533,13 @@ export class Engine {
           else if(display.edited)m.preview_line=bodyPreview(display.text || "");
         }
       }
-      const answered=new Set(g.filter(r=>r.dir==="in" && (r.kind==="answer"||r.kind==="result") && r.status!==wire.StatusProgress).map(r=>r.reply_to));
-      for(const m of g) if(m.dir==="out" && topicRequest(m.kind))
-        m.exec=this.execOn((statuses.get(m.id+"/"+m.author_fp)||[]).filter(r=>r.from===m.peer),m.peer,answered.has(m.id));
+      const visible=new Set(g.map(m=>m.id));
+      for(const m of g) if(m.dir==="out" && topicRequest(m.kind)) {
+        const result=finalReplies.get(m.peer+"/"+m.id),outside=result&&!visible.has(result.id)?{state:result.status||"answered",at:result.ts||Math.floor(result.at/1000),authorFp:result.author_fp}:null;
+        m.exec=this.execOn((statuses.get(m.id+"/"+m.author_fp)||[]).filter(r=>r.from===m.peer),m.peer,!!result&&!outside,outside);
+      }
       if(view.collectUnread)for(const m of g)if(m.personal_attention?.unread){
-        const row={kind:"device",peer:m.peer,thread:g[0].id,id:m.id,lid:m.id,author:m.author_fp,dir:m.dir,at:iso(m.at),label:m.dir==="out"?"You":m.from||m.peer,preview:m.preview_line??bodyPreview(m.body)};
+        const row={kind:"device",peer:m.peer,thread:g[0].display_topic||g[0].id,id:m.id,lid:m.id,author:m.author_fp,dir:m.dir,at:iso(m.at),label:m.dir==="out"?"You":m.from||m.peer,preview:m.preview_line??bodyPreview(m.body)};
         row.key=unreadKey(row);view.unreadDeviceRows.push(row);
       }
     }
@@ -4544,7 +4560,7 @@ export class Engine {
   }
 
   topicSummary(g, locals, now, pin) {
-    const first = g[0], last = g[g.length - 1];
+    const first = g.find(m=>m.id===g[0].display_topic)||g[0], last = g[g.length - 1];
     // A review notice is a report from that machine (client.ThreadSummary):
     // counted while open, and a thread of nothing but reports is not a
     // conversation (the page lists it under reports).
@@ -4555,13 +4571,10 @@ export class Engine {
     // (replyV1: "answered") was answered by hand, the Go client's "manual".
     const state = (m) => notice(m) ? (m.resolved ? "resolved" : "needs_human") : m.dir === "in" && topicRequest(m.kind) && m.state === "answered" ? "manual" : m.state || "";
     const facts = g.map((m) => ({ id: m.id, reply_to: m.reply_to || "", at: Math.floor(m.at / 1000), in: m.dir === "in", kind: m.kind,
-      state: state(m), status: m.status || "", topic_done:!!m.topic_done, notice: notice(m), selected: false, execState:m.exec?.state||"", execStale:!!m.exec?.stale }));
+      state: state(m), replied:!!m.original_replied, status: m.status || "", topic_done:!!m.topic_done, notice: notice(m), selected: false, execState:m.exec?.state||"", execStale:!!m.exec?.stale }));
     const v = deriveTopic(facts, local, now), concluded = v.conclusion ? g.find((m) => m.id === v.conclusion) : null;
-    // The thread's agent (client.ThreadSummary.AgentID): the latest one a
-    // request names as its target, or an answer, result or progress names
-    // as its author.
-    const agent = g.map((m) => (m.kind === "question" || m.kind === "task" ? m.target?.agent_id : m.agent_id) || "").filter(Boolean).at(-1);
-    const t = { id: first.id, peer: first.peer, title: line(first), last: line(last), last_at: iso(last.at), count: g.length, ...(agent ? { agent_id: agent } : {}),
+    const destination=first.destination;
+    const t = { id: g[0].display_topic||first.id, peer: first.peer, title: line(first), last: line(last), last_at: iso(last.at), count: g.length, ...(destination?{agent_id:destination.agent_id||"",agent_host:destination.host,agent_key:destination.fingerprint,agent_legacy:!destination.agent_id&&g.some(m=>["question","task","answer","result"].includes(m.kind)||m.status==="progress")}:{}),
       review: g.filter((m) => m.dir === "in" && m.state === "held").length, unread: g.filter((m) => m.personal_attention?.unread).length, running: 0,
       waiting: pendingTopicRows(facts).some(i=>!facts[i].in),
       key_changed: !!(pin && pin.pending), notices: g.filter((m) => m.dir === "in" && notice(m) && !m.resolved).length, notice_only: g.every(notice),
@@ -4584,6 +4597,7 @@ export class Engine {
 
   // topicLocalOf: the row naming the topic's earliest message, else one naming any of its messages (client localOf).
   topicLocalOf(locals, peer, g) {
+    if(g[0].organized)return locals.get(peer+"/"+g[0].display_topic)||{};
     for (const m of g) { const l = locals.get(peer + "/" + m.id); if (l) return l; }
     return {};
   }
@@ -4597,23 +4611,25 @@ export class Engine {
     for (const t of all) {
       if (listArchived || t.state !== "archived" || t.notice_only) threads.push(t);
       if (t.notice_only) continue;
-      const c = counts.get(t.peer) || { peer: t.peer, total: 0, archived: 0, archived_unread: 0, latest: t }; // all is newest first
+      const c = counts.get(JSON.stringify(t.agent_id||t.agent_legacy?[t.agent_host||t.peer,t.agent_key||"",t.agent_id||""]:[t.peer,"","human"])) || { peer: t.peer, total: 0, archived: 0, archived_unread: 0, latest: t }; // all is newest first
       c.total++;
       if (t.state === "archived") { c.archived++; c.archived_unread += t.unread; }
-      counts.set(t.peer, c);
+      counts.set(JSON.stringify(t.agent_id||t.agent_legacy?[t.agent_host||t.peer,t.agent_key||"",t.agent_id||""]:[t.peer,"","human"]), c);
     }
     return { threads, topics: [...counts.values()].sort((a, b) => (a.peer < b.peer ? -1 : 1)) };
   }
 
   // topicList is GET /api/topics (ui livetopics.go, client Topics).
   async topicList(q) {
+    const agentHost=q.get("agent_host")||"",agentKey=q.get("agent_key")||"",agentID=q.get("agent_id")||"";
+    if((agentHost||agentKey||agentID)&&(q.get("conv")||!wire.validAddress(agentHost)||!wire.validFingerprint(agentKey)||agentID&&!wire.validID(agentID)))throw Error(topicQueryError);
     if(q.get("conv"))return this.chatTopicList(q);
     const state = q.get("state") || "", peer = q.get("peer") || "", before = q.get("before") || "", raw = q.get("limit");
     const limit = raw === null || raw === "" ? 0 : /^-?\d+$/.test(raw) ? Number(raw) : NaN;
     if (!["", "active", "done", "archived"].includes(state) || !(limit >= 0 && limit <= TOPICS.pageMax)) throw new Error(topicQueryError);
     const after=parseTopicPageCursor(before,"",peer);
     const words = (q.get("q") || "").toLowerCase().split(/\s+/).filter(Boolean);
-    const matched = (await this.threadSummaries()).filter((t) => !t.notice_only && (!peer || t.peer === peer) && (!state || t.state === state)
+    const matched = (await this.threadSummaries()).filter((t) => !t.notice_only && (!agentHost||(t.agent_host===agentHost&&t.agent_key===agentKey&&(t.agent_id||"")===agentID)) && (!peer || t.peer === peer) && (!state || t.state === state)
       && words.every((w) => (t.title + "\n" + (t.auto_title || "") + "\n" + t.last).toLowerCase().includes(w))).sort(unreadTopicOrder);
     const start = after ? matched.findIndex((t) => unreadTopicOrder(after,t)<0) : 0;
     const from = start < 0 ? matched.length : start, page = matched.slice(from, from + (limit || TOPICS.pageDefault));
@@ -4632,10 +4648,10 @@ export class Engine {
     if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some((k) => !["peer", "id", "title", "count","conv","ids","counts","root"].includes(k))
       || body.count != null && !Number.isInteger(body.count)) throw new Error("Bad request.");
     const peer = String(body.peer || ""), id = String(body.id || "");
-    const g = (await this.v1Threads()).find((x) => x[0].id === id && x[0].peer === peer);
+    const g = (await this.v1Threads()).find((x) => (x[0].display_topic||x[0].id) === id && x[0].peer === peer);
     if (!g) throw new Error("No such topic here.");
     if(what==="delete")return this.deleteThread(peer,id);
-    const locals = await this.topicLocals(), was = g.find((m) => locals.has(peer + "/" + m.id));
+    const locals = await this.topicLocals(), was = g[0].organized ? (locals.has(peer+"/"+id)?{id}:undefined) : g.find((m) => locals.has(peer + "/" + m.id));
     const checks=[],oldKey="topic/"+peer+"/"+(was?.id||id),prior=await this.groupRead(checks,"kv",oldKey);
     if(was&&was.id!==id)await this.groupRead(checks,"kv","topic/"+peer+"/"+id);
     const l = { ...prior, type: "topic-state", peer, topic: id, updated_at: Math.floor(this.now() / 1000) };
@@ -4890,7 +4906,7 @@ export class Engine {
     return {review:{...request,operation:wire.newID(),token,moves,...(parent?{parent}:{})},checks,c,people};
   }
 
-  async previewTopicOrganization(request) { return (await this.topicOrganizationPreview(request)).review; }
+  async previewTopicOrganization(request) { if(request?.peer)return (await this.directTopicPreview(request)).review;return (await this.topicOrganizationPreview(request)).review; }
 
   async previewHistoryContribution(request) { return (await contributionPreview(this,request)).review; }
   async applyHistoryContribution(review) { const sent=await contributionApply(this,review);if(review.new_topic)this.syncTopicTitles().catch(()=>{});return sent; }
@@ -4908,6 +4924,7 @@ export class Engine {
     return title?"Moved selected messages to “"+title+"”.":"Moved selected messages to topic "+topic+".";
   }
   async applyTopicOrganization(review) {
+    if(review?.peer)return this.applyDirectTopicOrganization(review);
     if(!wire.validID(review.operation)||!wire.validHash(review.token))throw Error("Review the move again.");
     const event=wire.parseTopicEvent({action:review.merge?"merge":"move",moves:review.moves,...(review.merge?{merge:review.merge}:{})}),kept=await this.keptTopicOrganization(review,event);
     if(kept)return kept;
@@ -4919,6 +4936,7 @@ export class Engine {
   }
 
   async undoTopicOrganization(request) {
+    if(request?.peer)return this.undoDirectTopicOrganization(request);
     if(!wire.validHash(request.conv)||!wire.validID(request.lid)||!wire.validFingerprint(request.author)||!wire.validID(request.id))throw Error("Choose the exact topic move.");
     const checks=[],c=await this.groupRead(checks,"convs",request.conv)||await this.groupRecord(request.conv);await this.topicOrganizationAuthor(c,this.address,this.fp,checks);
     const msgs=await this.convMessages(c.id,await this.store.all("inbox"),await this.store.all("outbox")),matching=msgs.filter(m=>m.lid===request.lid&&(m.key||m.fp||m.claimed_key||this.fp)===request.author),original=matching[0];
@@ -6890,6 +6908,7 @@ export class Engine {
     if(n.sub===wire.SubDeviceHistory)return this.directHistory().admit(n,env,pin,admission);
     if(n.sub===wire.SubDeviceFile)return this.directHistory().admitFile(n,env,pin,admission);
     if(n.sub===wire.SubTopicSync)return this.admitTopicSync(n,env,pin, admission);
+    if(n.sub===wire.SubDirectTopicSync)return this.admitDirectTopicSync(n,env,pin,admission);
     if(n.sub===wire.SubTopicStateSync)return this.admitTopicStateSync(n,env,pin, admission);
     if(n.sub===wire.SubInvitationSync)return this.admitInvitationSync(n,env,pin, admission);
     if(n.sub===wire.SubModelSync)return this.admitModelSync(n,env,pin, admission);
@@ -7978,7 +7997,7 @@ export class Engine {
       if (teams) teams.connected(f.includes("teams1"));
       // This device reads conversations and the attention hint (it never
       // alerts from the stream: its service worker shows the relay's pushes).
-      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapConversationResources, wire.CapSharedTopicTitle, wire.CapConversationAudience, wire.CapEnv2, "notify1", wire.CapPerson, wire.CapControl, wire.CapHeadless, wire.CapDrive, wire.CapAgentIdentity, wire.CapGroupHumanParticipation, wire.CapGroup, wire.CapSendGroup, wire.CapRootSync, wire.CapGroupInvitationManage, wire.CapReadSyncV2, wire.CapOwnSyncV2, wire.CapOwnSyncV3, wire.CapHistoryArchive, wire.CapGuestAgent, wire.CapTopicParticipation, wire.CapRoom, wire.CapProactiveAgent, wire.CapMentionReaction, wire.CapAgentOrganization, wire.CapRequestSteer, wire.CapTopicOrganization, wire.CapModelSyncV2, wire.CapTopicStateSync, ...(f.includes("signals1") ? [wire.CapTyping] : [])])));
+      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapConversationResources, wire.CapSharedTopicTitle, wire.CapConversationAudience, wire.CapEnv2, "notify1", wire.CapPerson, wire.CapControl, wire.CapHeadless, wire.CapDrive, wire.CapAgentIdentity, wire.CapGroupHumanParticipation, wire.CapGroup, wire.CapSendGroup, wire.CapRootSync, wire.CapGroupInvitationManage, wire.CapReadSyncV2, wire.CapOwnSyncV2, wire.CapOwnSyncV3, wire.CapHistoryArchive, wire.CapGuestAgent, wire.CapTopicParticipation, wire.CapRoom, wire.CapProactiveAgent, wire.CapMentionReaction, wire.CapAgentOrganization, wire.CapRequestSteer, wire.CapTopicOrganization, wire.CapModelSyncV2, wire.CapDirectTopicSync, wire.CapTopicStateSync, ...(f.includes("signals1") ? [wire.CapTyping] : [])])));
       await this.publishPerson().catch(() => {});
       // These existing, coalesced recovery jobs can wait for old proofs or
       // network replies. They must not delay the current user's durable send.
@@ -9052,16 +9071,17 @@ export class Engine {
   // "connected", as the relay says it), is suspended until it updates, or
   // a running state is older than EXEC_RUNNING_MAX_AGE (client
   // ExecView.settle).
-  execOn(statuses, host, answered) {
-    if (answered || !statuses.length) return null;
+  execOn(statuses, host, answered, completion=null) {
+    if (answered || !statuses.length&&!completion) return null;
     let best = null;
     for (const c of statuses) {
       let pay;
       try { pay = wire.parseControl(c.sub, c.body); } catch (e) { continue; }
-      if (pay.decision) continue; // an answer to an operator's decision: it belongs to that report's item, never to exec
+      if (pay.decision) continue; // Attempt echoes the submitted CAS; only a normal status proves the actual current execution attempt.
       const id = c.lid || c.id; // as controlsOn: the same on every device
       if (!best || pay.n > best.n || (pay.n === best.n && id > best.id)) best = { ...pay, id, authorFp:c.fp };
     }
+    if(completion&&(!best||!topicExecutionClosed.has(best.state)))best={...best,...completion,detail:""};
     if (!best) return null;
     if (this.revokedRecipientKeys?.has(host + "/" + best.authorFp) && !["done","answered","failed","timeout","cancelled","stopped","declined","resolved","not_run"].includes(best.state)) return {state:"unavailable",at:iso(best.at * 1000),detail:"The host was permanently removed from this workspace.",host,stale:true,attempt:best.attempt || 0};
     const m = this.members.current ? this.members.list.find((x) => x.address === host) : null;
@@ -9227,7 +9247,7 @@ export class Engine {
   // deleteThread erases exactly the device thread with peer whose earliest
   // message is id, and the controls on its messages, here only.
   async deleteThread(peer, id) {
-    const thread = (await this.v1Threads()).find((g) => g[0].id === id && g[0].peer === peer);
+    const thread = (await this.v1Threads()).find((g) => (g[0].display_topic||g[0].id) === id && g[0].peer === peer);
     if (!thread) throw new Error("No such conversation here.");
     const ids = new Set(thread.map((m) => m.id)), names = new Map(), deletion = wire.newID();
     const add = (key, lid) => names.set(erasedKey("", key, lid), { key, lid });
@@ -12102,8 +12122,15 @@ export class Engine {
 
   // thread is the device conversation holding message id.
   async thread(id, view=null) {
-    view ||= await readThreadRows(this.store,id);view.attentionTarget ||= id;
-    const g = (await this.v1Threads(view)).find((x) => x.some((m) => m.id === id));
+    if(!view){
+      view=await readThreadRows(this.store,id);
+      if(!view.inbox.length&&!view.outbox.length){
+        const candidates=(await this.directPlacements()).filter(p=>p.synthetic&&p.topic===id);
+        for(const p of candidates){view=await readThreadRows(this.store,p.id);if(view.inbox.length||view.outbox.length)break;}
+      }
+    }
+    view.attentionTarget ||= id;
+    const g = (await this.v1Threads(view)).find((x) => x[0].display_topic===id||x.some((m) => m.id === id));
     if (!g) throw new Error("No message with that id.");
     const peer = g[0].peer;
     const pin = await this.store.get("pins", peer);
@@ -12128,7 +12155,9 @@ export class Engine {
     const peerWords = (await this.peerWordsFn())(peer); // the sentences name a person and device, never the address
     const topic = this.topicSummary(g, await this.topicLocals(), Math.floor(this.now() / 1000), pin);
     const permissionPerson=pin && !pin.pending ? [this.me,...await this.store.all("persons")].find(p=>p && ["self","pinned"].includes(p.state)&&p.devices.some(d=>d.address===peer&&d.fingerprint===pin.fingerprint)) : null;
-    return { ...(permissionPerson?{permission_person:this.personView(permissionPerson)}:{}), id: g[0].id, peer, topic, key: { pinned: pin ? pin.fingerprint : "", pending: pin && pin.pending ? pin.pending.fingerprint : "" }, approved: false, task_grant: "",
+    const agentHostPin=topic.agent_host&&topic.agent_host!==peer?(topic.agent_host===this.address?{fingerprint:this.fp}:await this.store.get("pins",topic.agent_host)):null;
+    const agentHostKey=topic.agent_host&&topic.agent_host!==peer?{agent_host_key:{pinned:agentHostPin?.fingerprint||"",pending:agentHostPin?.pending?.fingerprint||""}}:{};
+    return { ...agentHostKey,...(permissionPerson?{permission_person:this.personView(permissionPerson)}:{}), id: topic.id, peer, topic, key: { pinned: pin ? pin.fingerprint : "", pending: pin && pin.pending ? pin.pending.fingerprint : "" }, approved: false, task_grant: "",
       messages: await Promise.all(g.map(async (m) => {
         const inbound = m.dir === "in";
         return { id: m.id, dir: m.dir, from: m.stored_in ? m.from : this.address, to:m.device_history?.recipient||(m.stored_in?this.address:m.to), kind: m.kind, body: m.body,

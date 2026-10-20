@@ -340,7 +340,7 @@ const notShownHere = "This message belongs to a conversation, which this page do
 
 // Thread implements Provider.
 func (l *Live) Thread(id string) (Thread, error) {
-	c, err := l.a.Conversation(id, 0, 0)
+	c, err := l.a.DisplayConversation(id, 0, 0)
 	if errors.Is(err, client.ErrNoMessage) {
 		return Thread{}, NotFound("no message with that id")
 	}
@@ -362,6 +362,17 @@ func (l *Live) Thread(id string) (Thread, error) {
 	}
 	ts := threadSummary(topic, k.Pending != "")
 	t.Topic = &ts
+	if ts.AgentHost != "" && ts.AgentHost != c.Peer {
+		key, err := l.a.PeerKeyOf(ts.AgentHost)
+		if err != nil {
+			return t, err
+		}
+		current := PeerKey{Pinned: key.Pinned, Pending: key.Pending}
+		if ts.AgentHost == l.a.Address {
+			current = PeerKey{Pinned: l.a.Self().Fingerprint()}
+		}
+		t.AgentHostKey = &current
+	}
 	if approved, err := l.a.QuestionApprovals(); err == nil {
 		for _, a := range approved {
 			if a == c.Peer {
@@ -489,7 +500,7 @@ func (l *Live) Refresh(threadID string) (Presence, error) {
 	if p, ok, err := l.refreshDM(threadID); ok || err != nil {
 		return p, err
 	}
-	c, err := l.a.Conversation(threadID, 0, 0)
+	c, err := l.a.DisplayConversation(threadID, 0, 0)
 	if errors.Is(err, client.ErrConversationItem) {
 		return Presence{}, Refuse(notShownHere)
 	}

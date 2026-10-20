@@ -1626,7 +1626,7 @@ func legacyAuthority(peer, self, selfFP string) authority {
 
 // decorateLegacy fills Controls and Can on the messages of the thread with
 // peer.
-func (a *Agent) decorateLegacy(peer string, msgs []ConversationMessage) error {
+func (a *Agent) decorateLegacy(peer string, msgs []ConversationMessage, extra ...[]ConversationMessage) error {
 	self, selfFP := a.Address, a.Self().Fingerprint()
 	rows, err := a.store.legacyControls(peer, self, selfFP)
 	if err != nil {
@@ -1635,6 +1635,10 @@ func (a *Agent) decorateLegacy(peer string, msgs []ConversationMessage) error {
 	resolved := resolveControls(rows, legacyAuthority(peer, self, selfFP))
 	a.labelOwnAssistants(resolved)
 	execs := execViews(rows)
+	evidence := msgs
+	if len(extra) > 0 && len(extra[0]) > 0 {
+		evidence = append(slices.Clone(msgs), extra[0]...)
+	}
 	for i := range msgs {
 		m := &msgs[i]
 		fp := m.FromKey
@@ -1648,8 +1652,32 @@ func (a *Agent) decorateLegacy(peer string, msgs []ConversationMessage) error {
 			}
 			fp = got
 		}
-		if e, ok := execs[ControlRef{ID: m.ID, Fingerprint: fp}]; m.Dir == "out" && ok && e.Host == peer { // my request: the peer's word on it
-			status, at := legacyAnswer(msgs, m.ID)
+		e, known := execs[ControlRef{ID: m.ID, Fingerprint: fp}]
+		if !known && m.Dir == "out" && (m.Kind == envelope.KindQuestion || m.Kind == envelope.KindTask) && len(extra) > 0 {
+			// A final signed response may now be displayed in another topic.
+			// Preserve its proof of completion without inventing a receipt,
+			// attempt or execution permission from the organizational move.
+			for _, result := range extra[0] {
+				if result.Dir == "in" && result.ReplyTo == m.ID && (result.Kind == envelope.KindAnswer || result.Kind == envelope.KindResult) && result.Status != envelope.StatusProgress {
+					state := result.Status
+					if state == "" {
+						state = stateAnswered
+					}
+					if !topicExecutionClosed(state) {
+						continue
+					}
+					at := result.SentAt.Unix()
+					if result.SentAt.IsZero() {
+						at = result.At.Unix()
+					}
+					e = ExecView{State: state, At: at, Host: peer, sourceKey: result.FromKey}
+					known = true
+					break
+				}
+			}
+		}
+		if m.Dir == "out" && known && e.Host == peer { // my request: the peer's word on it
+			status, at := legacyAnswer(evidence, m.ID)
 			e.settle(a.hostConnected(peer), status, at, time.Now().Unix())
 			if err := a.projectRevokedExec(&e, e.sourceKey); err != nil {
 				return err

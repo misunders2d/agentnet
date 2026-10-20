@@ -214,6 +214,11 @@ func (a *Agent) convSync(ctx context.Context) {
 			a.Logf("copying topic marks: %v", markErr)
 			a.convWork.due(convHistory)
 		}
+		placements, placementErr := a.syncDirectTopics()
+		if placementErr != nil {
+			a.Logf("copying direct topic placements: %v", placementErr)
+			a.convWork.due(convHistory)
+		}
 		models, modelErr := a.syncModelReports()
 		if modelErr != nil {
 			a.Logf("copying model reports: %v", modelErr)
@@ -224,7 +229,7 @@ func (a *Agent) convSync(ctx context.Context) {
 		if directErr != nil {
 			a.Logf("copying direct history: %v", directErr)
 		}
-		if roots || reads || invites || titles || marks || models || more || direct {
+		if roots || reads || invites || titles || marks || placements || models || more || direct {
 			a.convWork.due(convHistory) // one page per sync; the next follows at once
 			a.kickNow()
 		}
@@ -250,7 +255,7 @@ func (a *Agent) relayFeatures(ctx context.Context) ([]string, error) {
 // hint (advertisedCaps) it is at most protocol.MaxAdvertisedCaps long;
 // rm1 (protocol.CapRoom) says this program enforces every room reader rule
 // (ROOM_V1 §2.1), so what rm1 implies (rcv1 among them) is not listed.
-var ownCaps = []string{protocol.CapMentionReaction, protocol.CapProactiveAgent, protocol.CapAgentOrganization, protocol.CapConversationAudience, protocol.CapContinuation, protocol.CapRootSync, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapRequestSteer, protocol.CapGroupInvitationManage, protocol.CapGuestAgent, protocol.CapHistoryArchive, protocol.CapHeadless, protocol.CapGroupHumanParticipation, protocol.CapModelSyncV2, protocol.CapNotify, protocol.CapTopicOrganization, protocol.CapOwnSyncV2, protocol.CapOwnSyncV3, protocol.CapPerson, protocol.CapReadSyncV2, protocol.CapConversationResources, protocol.CapRoom, protocol.CapSendGroup, protocol.CapTopicParticipation, protocol.CapTopicStateSync, protocol.CapSharedTopicTitle, protocol.CapTyping} // apx1 and aid1 are already implied by rm1.
+var ownCaps = []string{protocol.CapMentionReaction, protocol.CapProactiveAgent, protocol.CapAgentOrganization, protocol.CapConversationAudience, protocol.CapContinuation, protocol.CapRootSync, protocol.CapControl, protocol.CapDriveSpace, protocol.CapDirectTopicSync, protocol.CapEnv2, protocol.CapRequestSteer, protocol.CapGroupInvitationManage, protocol.CapGuestAgent, protocol.CapHistoryArchive, protocol.CapHeadless, protocol.CapGroupHumanParticipation, protocol.CapModelSyncV2, protocol.CapNotify, protocol.CapTopicOrganization, protocol.CapOwnSyncV2, protocol.CapOwnSyncV3, protocol.CapPerson, protocol.CapReadSyncV2, protocol.CapConversationResources, protocol.CapRoom, protocol.CapSendGroup, protocol.CapTopicParticipation, protocol.CapTopicStateSync, protocol.CapSharedTopicTitle, protocol.CapTyping} // apx1 and aid1 are already implied by rm1.
 
 // capsPublisher is the one publisher of this run's capability records:
 // the daemon's and link.go's waiting session share the session id, and the
@@ -309,6 +314,9 @@ func (a *Agent) publishOwn(ctx context.Context, feats []string) error {
 		if err := a.putCaps(ctx, a.session); err != nil {
 			return err
 		}
+	}
+	if err := a.PublishAgentCatalog(ctx); err != nil {
+		return err
 	}
 	if slices.Contains(feats, protocol.FeaturePerson) {
 		return a.publishPerson(ctx)
@@ -627,15 +635,15 @@ func (a *Agent) SentCopies(lid string) ([]ConvCopy, error) {
 // outCopy is one device's copy being stored.
 type outCopy struct {
 	sharedTitleCap, resourcesCap bool
-	env                         envelope.Envelope
-	in                          envelope.Inner
-	state                       string
-	live                        bool // fresh post-snapshot mirror, never cold bootstrap
-	why                         string
-	required                    string
-	recipientFP                 string // exact sealed ordinary group recipient; never inferred on retry
-	groupAdmission              string // ordinary: original own admission; history: frozen receiver grant epoch
-	mentionCap, organizationCap bool   // explicit v27 retained reader extensions
+	env                          envelope.Envelope
+	in                           envelope.Inner
+	state                        string
+	live                         bool // fresh post-snapshot mirror, never cold bootstrap
+	why                          string
+	required                     string
+	recipientFP                  string // exact sealed ordinary group recipient; never inferred on retry
+	groupAdmission               string // ordinary: original own admission; history: frozen receiver grant epoch
+	mentionCap, organizationCap  bool   // explicit v27 retained reader extensions
 }
 
 // SendConv sends m in conversation conv: one copy to each current device of
@@ -1180,7 +1188,7 @@ func (a *Agent) releaseConv(ctx context.Context, feats []string) {
 			// reactions, version 1 progress, deletions) have no person gate:
 			// only what the reader's signed capabilities read.
 			case w.conv == "",
-				w.required == protocol.CapModelSync || w.required == protocol.CapModelSyncV2 || w.required == protocol.CapReadSync || w.required == protocol.CapReadSyncV2 || w.required == protocol.CapOwnSyncV2 || w.required == protocol.CapOwnSyncV3 || w.required == protocol.CapTopicStateSync,
+				w.required == protocol.CapModelSync || w.required == protocol.CapModelSyncV2 || w.required == protocol.CapReadSync || w.required == protocol.CapReadSyncV2 || w.required == protocol.CapOwnSyncV2 || w.required == protocol.CapOwnSyncV3 || w.required == protocol.CapDirectTopicSync || w.required == protocol.CapTopicStateSync,
 				w.required == protocol.CapProgress:
 				ok = a.readerCheck(ctx, to, key, n) == nil
 			default:
@@ -1380,6 +1388,9 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 	}
 	if in.Sub == envelope.SubTopicSync {
 		return a.admitTopicSync(ctx, env, in, sender, fromQuarantine, hold)
+	}
+	if in.Sub == envelope.SubDirectTopicSync {
+		return a.admitDirectTopicSync(ctx, env, in, sender, fromQuarantine, hold)
 	}
 	if in.Sub == envelope.SubTopicStateSync {
 		return a.admitTopicStateSync(ctx, env, in, sender, fromQuarantine, hold)

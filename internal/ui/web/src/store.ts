@@ -53,7 +53,7 @@ export interface MessageLanding {
   legacyMiss?: boolean; // a completed unbound search waits for explicit retry/resume/reconnect
 }
 
-export type Tab = "chats" | "agents" | "oks" | "settings";
+export type Tab = "chats" | "agents" | "oks" | "outbox" | "settings";
 
 /** A conversation as last loaded: a DM or group, or a device thread (one topic). */
 export type View = T.DMThread | T.Thread;
@@ -535,8 +535,8 @@ export class Store {
   closeInvite() { this.set({ invite: null }); }
   setPanel(panel: boolean) { this.set({ panel }); }
 
-  // Keep the exact destination until local views can prove it. Legacy taps
-  // need the initial overview; enriched native taps read just their bound DM.
+  // Keep the exact destination until local views can prove it. Cached targets
+  // open immediately; other enriched taps read just their bound DM.
   async openMessage(id: string, context?: OpenContext) {
     if (!/^[0-9a-f]{32}$/.test(id) || context?.conv !== undefined && !/^[0-9a-f]{64}$/.test(context.conv) ||
       context?.dir !== undefined && context.dir !== "in" && context.dir !== "out") {
@@ -557,7 +557,10 @@ export class Store {
   retryMessageLanding(automatic = false): Promise<void> {
     const landing = this.state.messageLanding;
     if (!landing || !this.alive) return Promise.resolve();
-    if (automatic && landing.legacyMiss) return Promise.resolve();
+    if (automatic && landing.legacyMiss && !Object.values(this.state.views).some(view => {
+      const message = messageTarget((view.messages || []).filter(m => !landing.target.context?.dir || m.dir === landing.target.context.dir), landing.target.id);
+      return !(view as T.DMThread).frozen && !!message && !message.deleted;
+    })) return Promise.resolve();
     if (this.messageRefresh?.target === landing.target) {
       if (!automatic || landing.target.context?.conv || !this.state.overview) this.messageRefresh.again = true;
       return this.messageRefresh.promise;
@@ -569,7 +572,7 @@ export class Store {
         run.again = false;
         if (!current()) return;
         this.set({ messageLanding: { ...this.state.messageLanding!, busy: true, error: "" } });
-        try { await this.resolveMessageLanding(run.target, current); }
+        try { await this.resolveMessageLanding(run.target, current, automatic); }
         catch (e) {
           if (current()) this.set({ messageLanding: { ...this.state.messageLanding!, busy: false, error: errorText(e) } });
         }
@@ -579,21 +582,40 @@ export class Store {
     return run.promise;
   }
 
-  private async resolveMessageLanding(target: MessageLanding["target"], current: () => boolean) {
+  private async resolveMessageLanding(target: MessageLanding["target"], current: () => boolean, automatic = false) {
     const { id, context } = target;
     const contains = (view: View) => {
       const m = messageTarget((view.messages || []).filter(m => !context?.dir || m.dir === context.dir), id);
       return !!m && !m.deleted;
     };
-    let view: View | undefined, kind: "dm" | "thread" = "dm";
-    if (context?.conv) {
-      view = await this.api.dm(context.conv);
+    const knownThread = !context?.conv && (this.state.overview?.threads || []).some(t => t.id === id);
+    const cachedThread = this.state.views[id];
+    const cached = context?.conv ? this.state.views[context.conv]
+      : (cachedThread?.id === id ? cachedThread : undefined) || (!knownThread ? Object.values(this.state.views).find(v => /^[0-9a-f]{64}$/.test(v.id) && !(v as T.DMThread).frozen && contains(v)) : undefined);
+    let view = cached && (!context?.conv || cached.id === context.conv) && !(cached as T.DMThread).frozen && contains(cached) ? cached : undefined;
+    let kind: "dm" | "thread" = view && /^[0-9a-f]{32}$/.test(view.id) ? "thread" : "dm";
+    // A bound chat remains useful while catch-up has not supplied its exact
+    // message. Keep the destination/retry notice and the person's draft topic;
+    // never substitute another message or manufacture a read acknowledgement.
+    const showContext = (v: View) => {
+      if (!current() || v.id !== context?.conv || (v as T.DMThread).frozen || messageTarget<T.DMMessage | T.Message>(v.messages || [], id)) return;
+      const o = { kind: "dm" as const, id: v.id };
+      this.beginReadVisit(v);
+      this.set({ ...this.viewPatch(o, v, this.state.open?.id === o.id), open: o, pending: null, tab: "chats" });
+    };
+    if (!view && context?.conv) {
+      // Automatic retries follow refetch's open-view lane. A failed or
+      // still-missing view needs the next push/manual retry, not a duplicate GET.
+      const refreshedContext = automatic && cached && this.state.open?.kind === "dm" && this.state.open.id === context.conv;
+      if (cached) showContext(cached);
+      view = refreshedContext && cached ? cached : await this.api.dm(context.conv);
+      if (!current()) return;
       if (view.id !== context.conv || (view as T.DMThread).frozen || !contains(view)) {
+        showContext(view);
         throw new Error("The notified message is not available in this chat. Try again after reconnecting.");
       }
-    } else {
-      if (this.refresh) await this.refresh;
-      else if (!this.state.overview) await this.load(true);
+    } else if (!view) {
+      if (!this.state.overview) await (this.refresh || this.load(true));
       if (!current()) return;
       if (!this.state.overview) throw new Error("Your chats have not loaded. Try again after reconnecting.");
       if ((this.state.overview.threads || []).some(t => t.id === id)) {
@@ -830,13 +852,15 @@ export class Store {
       const hosts = new Set<string>([""]);
       for (const a of this.state.dm?.agents || []) hosts.add(a.host.address);
       const next: Record<string, string> = { ...this.state.agentNames };
-      for (const h of hosts) {
-        try {
-          const c = await this.api.agents(h || undefined);
-          for (const a of c.agents || []) next[a.record.id] = a.record.label;
-        } catch { /* names stay as words from addresses */ }
+      if(this.state.thread)hosts.add(this.state.thread.topic?.agent_host||this.state.thread.peer);
+      for(const t of this.state.overview?.threads||[])if(t.agent_host)hosts.add(t.agent_host);
+      const catalogs=await Promise.allSettled([...hosts].map(h=>this.api.agents(h===this.state.overview?.me.address?undefined:h||undefined)));
+      for(const result of catalogs)if(result.status==="fulfilled"){
+        const view=result.value,agents=view.agents||[];
+        for(const key of Object.keys(next))if(key.endsWith("#host")&&next[key]===view.host){const id=key.slice(0,-5);delete next[id+"#host"];delete next[id+"#host_key"];}
+        for(const a of agents){next[a.record.id]=a.record.label;next[a.record.id+"#harness"]=a.record.harness||"";next[a.record.id+"#host"]=a.record.host;next[a.record.id+"#host_key"]=a.record.host_key;}
       }
-      if (Object.keys(next).some(id => this.state.agentNames[id] !== next[id])) this.set({ agentNames: next });
+      if ([...new Set([...Object.keys(next),...Object.keys(this.state.agentNames)])].some(id => this.state.agentNames[id] !== next[id])) this.set({ agentNames: next });
     } finally { this.namesLoading = false; }
   }
 

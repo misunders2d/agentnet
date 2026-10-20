@@ -26,11 +26,12 @@ globalThis.document={visibilityState:'visible',hasFocus:()=>true,addEventListene
 const gate=()=>{let release;const promise=new Promise(r=>release=r);return {promise,release};};
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 const conv='a'.repeat(64),other='c'.repeat(64),topic='b'.repeat(32);
+const me={address:'fixture/laptop',fingerprint:'11111111-11111111-11111111-11111111',responder:'',responder_dir:'',agent:false};
 const view=id=>({id,kind:'group',peer:{},messages:[],agents:[],guests:[],topics:[{id:topic,state:'active'}]});
 async function world(){
  let viewA=view(conv),holdOverview,holdDM,holdAction,actionEntered,dmEntered,dmError=false,calls=0;
  const host={platform:'daemon',workspace:{id:Math.random()+''},listen:()=>()=>{},api:async(path,body)=>{
-  if(path.startsWith('/api/overview')){if(holdOverview)await holdOverview.promise;return {version:'fixture',groups:true,dms:[],threads:[],people:[]};}
+  if(path.startsWith('/api/overview')){if(holdOverview)await holdOverview.promise;return {version:'fixture',me,groups:true,dms:[],threads:[],people:[]};}
   if(path.startsWith('/api/topic/')){calls++;actionEntered?.release();if(holdAction)await holdAction.promise;viewA={...viewA,topics:[{id:topic,state:'archived'}]};return {note:'Archived'};}
   if(path.startsWith('/api/dm?')){const id=new URL('http://fixture'+path).searchParams.get('id');if(id===conv&&holdDM){dmEntered?.release();await holdDM.promise;}if(id===conv&&dmError)throw Error('selected view unavailable');return structuredClone(id===conv?viewA:view(id));}
   if(path.startsWith('/api/agents'))return {agents:[]};if(path.startsWith('/api/typing'))return {entries:[]};return {};
@@ -62,7 +63,7 @@ for(const target of ['current-thread','same-peer-other-thread']){
  const summary=(which,state='active')=>({id:which,peer,title:which===a?'A':'B',last:'',last_at:'2026-10-15T12:00:00Z',count:2,state,unread:0,review:0,running:0,pending:false});
  let hold=false,changed=false,calls=0;const threadCalls=[];
  const host={platform:'daemon',workspace:{id:target},listen:()=>()=>{},api:async(path,body)=>{
-  if(path.startsWith('/api/overview')){if(hold)await overview.promise;return {version:'fixture',topic_list:true,dms:[],threads:[summary(a,changed&&id===a?'done':'active'),summary(b,changed&&id===b?'done':'active')],people:[]};}
+  if(path.startsWith('/api/overview')){if(hold)await overview.promise;return {version:'fixture',me,topic_list:true,dms:[],threads:[summary(a,changed&&id===a?'done':'active'),summary(b,changed&&id===b?'done':'active')],people:[]};}
   if(path.startsWith('/api/thread?')){const which=new URL('http://fixture'+path).searchParams.get('id');threadCalls.push(which);return {id:which,peer,messages:[],topic:summary(which,changed&&which===id?'done':'active')};}
   if(path.startsWith('/api/topic/')){assert.equal(body.id,id);calls++;changed=true;return {note:'Marked done'};}
   if(path.startsWith('/api/agents'))return {agents:[]};if(path.startsWith('/api/typing'))return {entries:[]};return {};

@@ -23,6 +23,8 @@ class Element extends Events {
  close(){this.open=false;this.fire('close');}
 }
 const all=n=>[n,...n.children.flatMap(all)],words=n=>[n.textContent,...n.children.map(words)].join(' ');
+const visible=n=>!n.hidden&&(!n.parentNode||visible(n.parentNode));
+const visibleArticles=f=>all(f.root).filter(n=>n.tagName==='ARTICLE'&&visible(n));
 const tick=async()=>{for(let i=0;i<10;i++)await new Promise(r=>setImmediate(r));};
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b;});return{promise,resolve,reject};};
 const saved=new Map();let denied=false;
@@ -64,9 +66,14 @@ function fixture(options={}){
   }
   throw Error('UNAUTHORIZED ROUTE '+path);
  };
- const controller=mountSchedule({root,host,owner:options.owner||'skin.a',context:()=>ctx,capture:c=>{assert.equal(c,ctx.conv);captures++;const d=drafts.get(c)||{text:'',files:[]};return {body:d.text,draft:d};},getDraft:c=>drafts.get(c)||{text:'',files:[]},setDraft:(c,d)=>{clears.push({conv:c,draft:d});drafts.set(c,d);options.onSetDraft?.();},audienceText:a=>[...(a.persons||[]),...(a.pids||[])].join(', ')||'No recipients',subscribe:f=>{pushes.add(f);return()=>{off++;pushes.delete(f);};},isCurrent:()=>current,onBlockingChange:b=>blocks.push(b)});
+ const controller=mountSchedule({root,host,owner:options.owner||'skin.a',context:()=>ctx,capture:c=>{assert.equal(c,ctx.conv);captures++;const d=drafts.get(c)||{text:'',files:[]};return {body:d.text,draft:d};},getDraft:c=>drafts.get(c)||{text:'',files:[]},setDraft:(c,d)=>{clears.push({conv:c,draft:d});drafts.set(c,d);options.onSetDraft?.();},audienceText:a=>[...(a.persons||[]),...(a.pids||[])].join(', ')||'No recipients',topicText:id=>id==='topic'?'Invoice review':'Named topic',subscribe:f=>{pushes.add(f);return()=>{off++;pushes.delete(f);};},isCurrent:()=>current,onBlockingChange:b=>blocks.push(b)});
  const button=(name,within=root)=>{const b=all(within).find(n=>n.tagName==='BUTTON'&&(n.textContent===name||n.getAttribute('aria-label')===name));assert(b,'missing button '+name+' in '+words(within));return b;};
- const click=async name=>{const b=button(name);assert(!b.disabled,name+' disabled');b.click();await tick();};
+ const click=async name=>{
+  if(!all(root).some(n=>n.tagName==='BUTTON'&&n.textContent===name)&&(name==='Schedule message'||name==='Scheduled messages')){
+   await (name==='Schedule message'?controller.openCreate():controller.openList());await tick();return;
+  }
+  const b=button(name);assert(!b.disabled,name+' disabled');b.click();await tick();
+ };
  const input=(label,value)=>{const n=all(root).find(n=>['INPUT','TEXTAREA'].includes(n.tagName)&&n.getAttribute('aria-label')===label);assert(n,'missing field '+label);if(value!==undefined){n.value=value;n.fire('input');}return n;};
  const stop=()=>{controller.destroy();controller.destroy();assert.deepEqual(root.children,[sentinel]);assert.equal(off,1);assert.equal(pushes.size,0);assert.equal([...doc.listeners.values(),...win.listeners.values()].reduce((n,s)=>n+s.size,0),0);};
  return{root,doc,win,file,original,drafts,state,host,controller,calls,stages,discards,clears,blocks,rows,ctx,button,click,input,stop,push:()=>{for(const f of pushes)f();},setAudience:a=>{audience=a;},set404:v=>{lookup404=v;},setConflict:()=>{conflict=true;},setCurrent:v=>{current=v;},get captures(){return captures;}};
@@ -76,17 +83,17 @@ const row=(state='pending',id='1'.repeat(32),rev=1)=>({id,conv,topic:'topic',bod
 const ambient=['window','document','fetch','IntersectionObserver','MutationObserver'];const descriptors=ambient.map(k=>[k,Object.getOwnPropertyDescriptor(globalThis,k)]);
 for(const key of ambient)Object.defineProperty(globalThis,key,{configurable:true,get(){throw Error('ambient '+key+' used');}});
 try{
- // Distinct actions; native modal, explicit local/UTC time and verified ceiling.
+ // Public create API: native modal, explicit local/UTC time and verified ceiling.
  {
   const f=fixture();assert.equal(f.calls.length,0);assert.equal(f.captures,0);assert.deepEqual(f.blocks,[false]);f.push();await tick();assert.equal(f.calls.length,0);
-  await f.click('Schedule message…');const dialog=all(f.root).find(n=>n.tagName==='DIALOG');assert(dialog.open);assert.equal(dialog.modalCalls,1);assert.equal(f.input('Send date').type,'date');assert.equal(f.input('Send time').type,'time');assert.match(words(f.root),/UTC[+−]\d\d:\d\d/);assert(words(f.root).includes('approved-person'));assert.equal(count(f,'/api/schedule/create'),0);
+  await f.click('Schedule message');const dialog=all(f.root).find(n=>n.tagName==='DIALOG');assert(dialog.open);assert.equal(dialog.modalCalls,1);assert.equal(f.input('Send date').type,'date');assert.equal(f.input('Send time').type,'time');assert.match(words(f.root),/UTC[+−]\d\d:\d\d/);assert(words(f.root).includes('approved-person'));assert.equal(count(f,'/api/schedule/create'),0);
   f.input('Send date','2000-01-01');f.input('Send time','00:00');await f.click('Save schedule');assert.equal(count(f,'/api/schedule/create'),0);assert(words(f.root).includes('future'));assert.equal(f.drafts.get(conv),f.original);
   f.controller.close();assert(!dialog.isConnected);assert(!dialog.open);f.push();await tick();assert.equal(count(f,'/api/schedules?'),0);f.stop();checks++;
  }
  // The actual lost-response path re-stages the SAME File, ID, encoded text,
  // reply/quote and approved audience, preserving newer typing and attachments.
  for(const opaque of [false,true]){
-  const f=fixture({lose:true,opaque});await f.click('Schedule message…');await f.click('Save schedule');assert.equal(f.rows.size,1);assert.equal(f.clears.length,0);assert(f.controller.blocking);assert(words(f.root).includes('Unconfirmed save'));assert(!words(f.root).includes('PRIVATE'));assert.equal(count(f,'/api/schedules?'),0,'no automatic GET');
+  const f=fixture({lose:true,opaque});await f.click('Schedule message');await f.click('Save schedule');assert.equal(f.rows.size,1);assert.equal(f.clears.length,0);assert(f.controller.blocking);assert(words(f.root).includes('Unconfirmed save'));assert(!words(f.root).includes('PRIVATE'));assert.equal(count(f,'/api/schedules?'),0,'no automatic GET');
   const first=f.calls.find(c=>c.path==='/api/schedule/create').body,extra=new File(['new'],'new.txt');
   f.drafts.set(conv,{...f.original,text:'new typing stays',replyTo:'new reply',files:[...f.original.files,{key:'two',name:extra.name,size:extra.size,file:extra}]});f.setAudience({persons:['newly-added'],pids:[]});
   await f.click('Check saved state');assert.equal(f.clears.length,0);assert(f.controller.blocking);assert(words(f.root).includes('lookup alone cannot verify'));
@@ -94,17 +101,27 @@ try{
  }
  // Same-name/size replacement Files and a changed topic never get cleared.
  for(const patch of ['file','topic']){
-  const held=deferred(),f=fixture({create:()=>held.promise});await f.click('Schedule message…');f.button('Save schedule').click();await tick();const body=f.calls.find(c=>c.path==='/api/schedule/create').body;
+  const held=deferred(),f=fixture({create:()=>held.promise});await f.click('Schedule message');f.button('Save schedule').click();await tick();const body=f.calls.find(c=>c.path==='/api/schedule/create').body;
   const replacement=new File(['replacement same size'],'draft.txt');const changed=patch==='file'?{...f.original,files:[{...f.original.files[0],file:replacement}]}:{...f.original,topic:'another topic'};f.drafts.set(conv,changed);held.resolve({...row(),id:body.id});await tick();assert.equal(f.clears.length,1);if(patch==='file')assert.equal(f.drafts.get(conv).files[0].file,replacement);else assert.equal(f.drafts.get(conv),changed);f.stop();checks++;
  }
- // Every ineligible target has a readable disabled action and zero API calls.
+ // One external entry; existing-chat list stays reachable when creation is unavailable.
  for(const context of [{supported:false},{ordinary:false},{followup:true},{frozen:true},{visitor:true},{newTopic:true},{missing:true},{conv:''}]){
-  const f=fixture({context});assert(f.button('Schedule message…').disabled);assert(f.button('Schedule message…').title);f.button('Schedule message…').click();await f.controller.openCreate();assert.equal(f.calls.length,0);f.stop();checks++;
+  const f=fixture({context}),listUnavailable=!f.ctx.supported||!f.ctx.conv||!f.ctx.ordinary||!!f.ctx.followup;
+  assert.equal(all(f.root).filter(n=>n.tagName==='BUTTON').length,1);
+  assert.equal(f.button('Schedule…').disabled,listUnavailable);
+  await f.controller.openCreate();assert.equal(f.calls.length,0);
+  if(!listUnavailable){await f.click('Schedule…');assert(f.button('Schedule message').disabled);assert(f.button('Schedule message').title);assert(!f.button('Scheduled messages').disabled);assert.equal(count(f,'/api/schedule/audience?'),0);assert.equal(count(f,'/api/schedules?'),1);}
+  f.stop();checks++;
  }
  {
-  const f=fixture({platform:'android'});assert(f.button('Schedule message…').disabled);assert(words(f.root).includes('Android'));assert.equal(f.calls.length,0);f.stop();checks++;
-  const text=fixture({platform:'android',noFiles:true});await text.click('Schedule message…');assert(words(text.root).includes('Mobile background'));text.stop();checks++;
-  const browser=fixture({platform:'browser',noFiles:true});await browser.click('Schedule message…');assert(words(browser.root).includes('browser page must stay open'));browser.stop();checks++;
+  const f=fixture({platform:'android'});assert(!f.button('Schedule…').disabled);assert(words(f.root).includes('Android'));await f.click('Schedule…');assert(f.button('Schedule message').disabled);assert.equal(count(f,'/api/schedule/create'),0);f.stop();checks++;
+  const text=fixture({platform:'android',noFiles:true});await text.click('Schedule…');assert(words(text.root).includes('Background limits can delay sending.'));text.stop();checks++;
+  const browser=fixture({platform:'browser',noFiles:true});await browser.click('Schedule…');assert(words(browser.root).includes('Keep this page open and online to send.'));await browser.click('Scheduled messages');assert.equal(count(browser,'/api/schedules?'),1);await browser.click('Schedule message');assert.equal(count(browser,'/api/schedule/audience?'),2);browser.stop();checks++;
+ }
+ // Empty/whitespace drafts enter the list; file-only drafts still enter creation.
+ {
+  const empty=fixture({noFiles:true});empty.drafts.set(conv,{text:'  ',files:[]});await empty.click('Schedule…');assert.equal(count(empty,'/api/schedules?'),1);assert.equal(count(empty,'/api/schedule/audience?'),0);assert.equal(empty.captures,0);assert(!empty.button('Schedule message').disabled);empty.stop();checks++;
+  const attached=fixture();attached.drafts.set(conv,{...attached.original,text:''});await attached.click('Schedule…');assert.equal(count(attached,'/api/schedule/audience?'),1);assert.equal(count(attached,'/api/schedules?'),0);assert.equal(attached.captures,1);attached.stop();checks++;
  }
  // A foreign in-memory attachment intent is also unavailable on Android even
  // when this skin's current draft is text-only (the original Files are retained).
@@ -112,12 +129,12 @@ try{
   const state={},host={platform:'android',workspace:{id:'android-original',handle:'h'},workspaces:{state:()=>state}},file=new File(['original'],'original.txt');
   const attempt=captureSchedule('d'.repeat(32),conv,'old file',{text:'old file',files:[{key:'original',name:file.name,size:file.size,file}]},new Date(Date.now()+3600000).toISOString(),'UTC',{persons:[],pids:[]});
   const ledger=scheduleSaves(host,()=>{},'foreign.skin');ledger.begin(conv,attempt);ledger.settle(conv,attempt.payload.id,'uncertain');ledger.dispose();
-  const f=fixture({host,state,noFiles:true});await f.click('Schedule message…');assert(f.button('Retry same save').disabled);assert(words(f.root).includes('file bridge is qualified'));assert.equal(f.stages.length,0);assert.equal(count(f,'/api/schedule/create'),0);assert.equal(f.controller.blocking,true);f.stop();checks++;
+  const f=fixture({host,state,noFiles:true});await f.click('Schedule message');assert(f.button('Retry same save').disabled);assert(words(f.root).includes('file bridge is qualified'));assert.equal(f.stages.length,0);assert.equal(count(f,'/api/schedule/create'),0);assert.equal(f.controller.blocking,true);f.stop();checks++;
  }
  // Existing cold token makes no request, permits self-reload, but blocks new ID.
  for(const found of [false,true]){
   const ws='cold-dom-'+(++serial),r=row(),key='agentnet.messenger.schedule-save.'+ws;const raw=JSON.stringify({v:1,conv:{[conv]:{id:r.id,conv,files:[{name:'kept.txt',size:10}]}}});saved.set(key,raw);
-  const f=fixture({id:ws,rows:found?new Map([[r.id,r]]):undefined});assert.equal(f.calls.length,0);assert.equal(f.controller.blocking,false);await f.click('Schedule message…');assert.equal(f.captures,0);assert.equal(count(f,'/api/schedule/audience?'),0);assert(!all(f.root).some(n=>n.textContent==='Save schedule'));
+  const f=fixture({id:ws,rows:found?new Map([[r.id,r]]):undefined});assert.equal(f.calls.length,0);assert.equal(f.controller.blocking,false);await f.click('Schedule message');assert.equal(f.captures,0);assert.equal(count(f,'/api/schedule/audience?'),0);assert(!all(f.root).some(n=>n.textContent==='Save schedule'));
   await f.click('Check saved state');assert.equal(f.clears.length,0);assert.equal(saved.get(key),raw);assert.equal(count(f,'/api/schedule/create'),0);
   if(found){assert(words(f.root).includes('names and sizes do not prove'));await f.click('Keep draft and finish review');assert.equal(f.drafts.get(conv),f.original);assert(!saved.has(key));}
   else{assert(words(f.root).includes('may still be saved'));await f.click('Forget…');assert(words(f.root).includes('It may already be scheduled'));await f.click('Forget unconfirmed save');assert(!saved.has(key));assert.equal(f.clears.length,0);assert.equal(count(f,'/api/schedule/create'),0);}
@@ -125,17 +142,17 @@ try{
  }
  // GET 404 after an in-memory ambiguous response retains intent, token and ID.
  {
-  const f=fixture({lose:true});await f.click('Schedule message…');await f.click('Save schedule');const before=saved.get('agentnet.messenger.schedule-save.'+f.host.workspace.id);f.set404(true);await f.click('Check saved state');assert.equal(saved.get('agentnet.messenger.schedule-save.'+f.host.workspace.id),before);assert(f.controller.blocking);assert.equal(f.clears.length,0);assert.equal(count(f,'/api/schedule/create'),1);f.stop();checks++;
+  const f=fixture({lose:true});await f.click('Schedule message');await f.click('Save schedule');const before=saved.get('agentnet.messenger.schedule-save.'+f.host.workspace.id);f.set404(true);await f.click('Check saved state');assert.equal(saved.get('agentnet.messenger.schedule-save.'+f.host.workspace.id),before);assert(f.controller.blocking);assert.equal(f.clears.length,0);assert.equal(count(f,'/api/schedule/create'),1);f.stop();checks++;
  }
  // Denied localStorage keeps originals in memory and exposes the reload guard.
  {
-  denied=true;const f=fixture({lose:true});await f.click('Schedule message…');await f.click('Save schedule');assert(f.controller.blocking);assert(words(f.root).includes('won’t be remembered'));await f.click('Retry same save');assert.equal(f.clears.length,1);assert.equal(f.controller.blocking,false);f.stop();denied=false;checks++;
+  denied=true;const f=fixture({lose:true});await f.click('Schedule message');await f.click('Save schedule');assert(f.controller.blocking);assert(words(f.root).includes('won’t be remembered'));await f.click('Retry same save');assert.equal(f.clears.length,1);assert.equal(f.controller.blocking,false);f.stop();denied=false;checks++;
  }
  // Revision actions retain scope; only a separately confirmed audience changes it.
  {
   const r=row(),f=fixture({rows:new Map([[r.id,r]])});await f.click('Scheduled messages');assert.equal(count(f,'/api/schedule/audience?'),0);await f.click('Edit schedule');f.input('Scheduled message text','edited text');await f.click('Save schedule changes');let edit=f.calls.filter(c=>c.path==='/api/schedule/edit').at(-1).body;assert.equal(edit.rev,1);assert(!('files'in edit));assert(!('audience'in edit));assert.equal(edit.topic,'topic');
   await f.click('Edit schedule');f.setAudience({persons:['approved-person','new-person'],pids:[]});await f.click('Review audience');assert(words(f.root).includes('Confirm reviewed audience'));assert(!words(f.root).includes('New audience explicitly confirmed'));await f.click('Confirm reviewed audience');assert(words(f.root).includes('New audience explicitly confirmed'));await f.click('Save schedule changes');edit=f.calls.filter(c=>c.path==='/api/schedule/edit').at(-1).body;assert.deepEqual(edit.audience.persons,['approved-person','new-person']);assert.equal(edit.rev,2);
-  f.setConflict();await f.click('Cancel schedule');assert(words(f.root).includes('revision changed'));assert.equal(f.rows.get(r.id).state,'pending');assert.equal(count(f,'/api/schedule/create'),0);await f.click('Send now');const now=f.calls.find(c=>c.path==='/api/schedule/send_now').body;assert.deepEqual(now,{id:r.id,rev:4});assert(words(f.root).includes('Queued to send'));assert(!words(f.root).includes('Delivered'));assert(!words(f.root).includes('PRIVATE'));f.stop();checks++;
+  f.setConflict();await f.click('Cancel schedule');assert(words(f.root).includes('revision changed'));assert.equal(f.rows.get(r.id).state,'pending');assert.equal(count(f,'/api/schedule/create'),0);await f.click('Send now');const now=f.calls.find(c=>c.path==='/api/schedule/send_now').body;assert.deepEqual(now,{id:r.id,rev:4});assert.equal(visibleArticles(f).length,0);await f.click('Show history');assert.equal(visibleArticles(f).length,1);assert(words(visibleArticles(f)[0]).includes('Queued to send'));assert(!words(f.root).includes('Delivered'));assert(!words(f.root).includes('PRIVATE'));f.stop();checks++;
  }
  // Ordinary host pushes must not discard a time edit or replace its CAS base.
  {
@@ -152,42 +169,61 @@ try{
   assert.equal(f.calls.filter(c=>c.path==='/api/schedule/edit').at(-1).body.rev,1);assert.equal(f.rows.get(r.id).body,'saved elsewhere');assert(all(f.root).some(n=>n.getAttribute('role')==='status'));
   await f.click('Edit schedule');await f.click('Keep saved schedule');assert(!all(f.root).some(n=>n.getAttribute('aria-label')==='Reschedule time'));assert(words(f.root).includes('saved elsewhere'));f.stop();checks++;
  }
- // Terminal/dispatching states are read-only; only an open list follows pushes.
+ // Active-first list, read-only history and unknown states retained; pushes keep disclosure choice.
  {
-  const rs=new Map(['sent','cancelled','dispatching','needs_review','pending'].map((s,i)=>{const r=row(s,(i+1).toString().repeat(32));return[r.id,r];})),f=fixture({rows:rs});await f.click('Scheduled messages');
-  const articles=all(f.root).filter(n=>n.tagName==='ARTICLE');assert.equal(articles.length,5);for(const a of articles.slice(0,3))assert.equal(all(a).filter(n=>n.tagName==='BUTTON').length,0);assert.equal(all(f.root).filter(n=>n.textContent==='Edit schedule').length,2);assert(!words(f.root).includes('PRIVATE'));
-  const before=count(f,'/api/schedules?');f.push();await tick();assert.equal(count(f,'/api/schedules?'),before+1);f.controller.close();f.push();await tick();assert.equal(count(f,'/api/schedules?'),before+1);assert.equal(all(f.root).filter(n=>n.tagName==='ARTICLE').length,0);f.stop();checks++;
+  const rs=new Map(['sent','cancelled','dispatching','needs_review','pending','future_state'].map((s,i)=>{const r=row(s,(i+1).toString().repeat(32));return[r.id,r];})),f=fixture({rows:rs});await f.click('Scheduled messages');
+  const articles=visibleArticles(f);assert.equal(articles.length,4);assert.equal(articles[0].getAttribute('aria-label'),'Scheduled message: Preparing to send');assert.equal(all(articles[0]).filter(n=>n.tagName==='BUTTON').length,0);assert.equal(articles[3].getAttribute('aria-label'),'Scheduled message: Unavailable');assert.equal(all(f.root).filter(n=>n.textContent==='Edit schedule').length,2);assert(!words(f.root).includes('PRIVATE'));
+  assert.equal(f.button('Show history').textContent,'Show history (2)');assert.equal(f.button('Show history').getAttribute('aria-expanded'),'false');
+  for(const article of all(f.root).filter(n=>n.tagName==='ARTICLE')){
+   const recipients=all(article).find(n=>n.tagName==='DETAILS');assert(recipients);assert(!recipients.open);assert.equal(recipients.children[0].tagName,'SUMMARY');assert.equal(recipients.children[0].textContent,'Recipients');assert(words(recipients).includes('approved-person'));assert(words(article).includes('kept.txt'));assert(words(article).includes('Invoice review'));assert(!words(article).includes('Topic: topic'));assert(!article.children.some(n=>n.textContent.includes('saved timezone')));
+  }
+  assert.equal(all(f.root).filter(n=>n.textContent.startsWith('On this device · Local timezone: ')).length,1);
+  await f.click('Show history');assert.equal(visibleArticles(f).length,6);assert.equal(f.button('Hide history').getAttribute('aria-expanded'),'true');
+  const history=all(f.root).find(n=>n.getAttribute('aria-label')==='Schedule history');assert.equal(all(history).filter(n=>n.tagName==='BUTTON').length,0);assert(words(history).includes('Queued to send'));assert(!words(history).includes('Delivered'));
+  const before=count(f,'/api/schedules?');f.push();await tick();assert.equal(count(f,'/api/schedules?'),before+1);assert.equal(f.button('Hide history').getAttribute('aria-expanded'),'true');assert.equal(visibleArticles(f).length,6);
+  await f.click('Edit schedule');const input=f.input('Reschedule time');await f.click('Hide history');assert.equal(f.input('Reschedule time'),input,'history toggle preserves native edit input');await f.click('Show history');assert.equal(f.input('Reschedule time'),input);await f.click('Keep saved schedule');
+  await f.click('Cancel schedule');assert.equal(visibleArticles(f).length,6);assert.equal(f.button('Hide history').textContent,'Hide history (3)');assert.equal(count(f,'/api/schedule/cancel'),1);assert.equal(f.rows.size,6);
+  f.controller.close();const closedCount=count(f,'/api/schedules?');f.push();await tick();assert.equal(count(f,'/api/schedules?'),closedCount);assert.equal(all(f.root).filter(n=>n.tagName==='ARTICLE').length,0);await f.controller.openList();assert.equal(visibleArticles(f).length,3);assert.equal(f.button('Show history').getAttribute('aria-expanded'),'false');f.stop();checks++;
+ }
+ // All-terminal records are history, never current work; toggle does not issue commands.
+ {
+  const r=row('cancelled'),f=fixture({rows:new Map([[r.id,r]])});await f.controller.openList();assert.equal(visibleArticles(f).length,0);assert(words(f.root).includes('No scheduled messages pending here on this device.'));assert.equal(f.button('Show history').textContent,'Show history (1)');const before=f.calls.length;await f.click('Show history');assert.equal(visibleArticles(f).length,1);await f.click('Hide history');assert.equal(f.calls.length,before);assert.equal(f.rows.size,1);f.stop();checks++;
+ }
+ // Saved timezone is progressive only when different; the list names local time once.
+ {
+  const local=Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC',a={...row('pending','a'.repeat(32)),timezone:local},b={...row('pending','b'.repeat(32)),timezone:local==='UTC'?'Europe/London':'UTC'},f=fixture({rows:new Map([[a.id,a],[b.id,b]])});
+  await f.controller.openList();const articles=visibleArticles(f),first=all(articles[0]).find(n=>n.tagName==='DETAILS'),second=all(articles[1]).find(n=>n.tagName==='DETAILS');assert(!words(first).includes('Saved timezone:'));assert(words(second).includes('Saved timezone: '+b.timezone));assert(!second.open);assert.equal(all(f.root).filter(n=>n.textContent.includes('Local timezone:')).length,1);await f.click('Edit schedule');assert.equal(all(f.root).filter(n=>n.textContent.includes('Local timezone:')).length,1);f.stop();checks++;
  }
  // Late result after destroy touches only the holder. Next same-owner mount
  // consumes it once, with no GET, navigation, normal send or draft clearing in old UI.
  {
-  const held=deferred(),f=fixture({create:()=>held.promise});await f.click('Schedule message…');f.button('Save schedule').click();await tick();const payload=f.calls.find(c=>c.path==='/api/schedule/create').body;f.stop();const calls=f.calls.length;held.resolve({id:payload.id});await tick();assert.equal(f.clears.length,0);assert.equal(f.calls.length,calls);assert.equal(f.drafts.get(conv),f.original);
+  const held=deferred(),f=fixture({create:()=>held.promise});await f.click('Schedule message');f.button('Save schedule').click();await tick();const payload=f.calls.find(c=>c.path==='/api/schedule/create').body;f.stop();const calls=f.calls.length;held.resolve({id:payload.id});await tick();assert.equal(f.clears.length,0);assert.equal(f.calls.length,calls);assert.equal(f.drafts.get(conv),f.original);
   const next=fixture({host:{...f.host},state:f.state,drafts:f.drafts});assert.equal(next.clears.length,1);assert.equal(next.drafts.get(conv).text,'');assert.equal(next.calls.length,0);next.controller.update();assert.equal(next.clears.length,1);next.stop();checks++;
  }
  // Late A result while B is mounted cannot clear B; owner survives recovery.
  {
-  const held=deferred(),f=fixture({create:()=>held.promise,owner:'skin.a'});await f.click('Schedule message…');f.button('Save schedule').click();await tick();const payload=f.calls.find(c=>c.path==='/api/schedule/create').body;f.stop();
-  const foreign=fixture({host:{...f.host},state:f.state,owner:'skin.b'});held.resolve({id:payload.id});await tick();assert.equal(foreign.clears.length,0);assert.equal(foreign.drafts.get(conv),foreign.original);await foreign.click('Schedule message…');assert(words(foreign.root).includes('creating skin'));assert.equal(count(foreign,'/api/schedule/audience?'),0);foreign.stop();
+  const held=deferred(),f=fixture({create:()=>held.promise,owner:'skin.a'});await f.click('Schedule message');f.button('Save schedule').click();await tick();const payload=f.calls.find(c=>c.path==='/api/schedule/create').body;f.stop();
+  const foreign=fixture({host:{...f.host},state:f.state,owner:'skin.b'});held.resolve({id:payload.id});await tick();assert.equal(foreign.clears.length,0);assert.equal(foreign.drafts.get(conv),foreign.original);await foreign.click('Schedule message');assert(words(foreign.root).includes('creating skin'));assert.equal(count(foreign,'/api/schedule/audience?'),0);foreign.stop();
   const own=fixture({host:{...f.host},state:f.state,owner:'skin.a',drafts:f.drafts});assert.equal(own.clears.length,1);own.stop();checks++;
  }
  // Entries may replace their view synchronously after a guarded draft clear.
  // That stopped renderer must not emit a later status callback or fetch a list.
  {
-  let stop;const f=fixture({onSetDraft:()=>stop()});stop=()=>f.controller.destroy();await f.click('Schedule message…');await f.click('Save schedule');assert.equal(f.clears.length,1);assert.deepEqual(f.blocks,[false,true]);assert.equal(count(f,'/api/schedules?'),0);f.stop();checks++;
+  let stop;const f=fixture({onSetDraft:()=>stop()});stop=()=>f.controller.destroy();await f.click('Schedule message');await f.click('Save schedule');assert.equal(f.clears.length,1);assert.deepEqual(f.blocks,[false,true]);assert.equal(count(f,'/api/schedules?'),0);f.stop();checks++;
  }
  // Partial stage failure and a view change during staging never POST a schedule.
  {
-  const f=fixture({stage:async(_file,n)=>{if(n===2)throw Error('PRIVATE stage');return 'partial';}}),two=new File(['two'],'two.txt');f.drafts.set(conv,{...f.original,files:[...f.original.files,{key:'two',name:two.name,size:two.size,file:two}]});await f.click('Schedule message…');await f.click('Save schedule');assert.deepEqual(f.discards,[['partial']]);assert.equal(count(f,'/api/schedule/create'),0);assert.equal(f.clears.length,0);assert(!words(f.root).includes('PRIVATE'));f.stop();checks++;
-  const held=deferred(),late=fixture({stage:()=>held.promise});await late.click('Schedule message…');late.button('Save schedule').click();await tick();late.stop();held.resolve('late-stage');await tick();assert.equal(count(late,'/api/schedule/create'),0);assert.deepEqual(late.discards,[['late-stage']]);assert.equal(late.clears.length,0);checks++;
+  const f=fixture({stage:async(_file,n)=>{if(n===2)throw Error('PRIVATE stage');return 'partial';}}),two=new File(['two'],'two.txt');f.drafts.set(conv,{...f.original,files:[...f.original.files,{key:'two',name:two.name,size:two.size,file:two}]});await f.click('Schedule message');await f.click('Save schedule');assert.deepEqual(f.discards,[['partial']]);assert.equal(count(f,'/api/schedule/create'),0);assert.equal(f.clears.length,0);assert(!words(f.root).includes('PRIVATE'));f.stop();checks++;
+  const held=deferred(),late=fixture({stage:()=>held.promise});await late.click('Schedule message');late.button('Save schedule').click();await tick();late.stop();held.resolve('late-stage');await tick();assert.equal(count(late,'/api/schedule/create'),0);assert.deepEqual(late.discards,[['late-stage']]);assert.equal(late.clears.length,0);checks++;
  }
  // Handle and view fences discard late previews and prevent commands in another chat.
  {
-  const held=deferred(),f=fixture({audience:()=>held.promise});f.button('Schedule message…').click();await tick();f.ctx.conv=other;f.controller.update();held.resolve({persons:['PRIVATE-LATE'],pids:[]});await tick();assert.equal(all(f.root).filter(n=>n.tagName==='DIALOG').length,0);assert(!words(f.root).includes('PRIVATE-LATE'));assert.equal(count(f,'/api/schedule/create'),0);f.stop();checks++;
+  const held=deferred(),f=fixture({audience:()=>held.promise});void f.controller.openCreate();await tick();f.ctx.conv=other;f.controller.update();held.resolve({persons:['PRIVATE-LATE'],pids:[]});await tick();assert.equal(all(f.root).filter(n=>n.tagName==='DIALOG').length,0);assert(!words(f.root).includes('PRIVATE-LATE'));assert.equal(count(f,'/api/schedule/create'),0);f.stop();checks++;
   const hidden=fixture();hidden.host.workspace.handle='changed';await hidden.controller.openList();assert.equal(hidden.calls.length,0);hidden.stop();checks++;
  }
  // Close/Escape teardown is native and isolated to this supplied entry root.
  {
-  const f=fixture();await f.click('Schedule message…');const dialog=all(f.root).find(n=>n.tagName==='DIALOG');const e=dialog.fire('cancel');assert(e.defaultPrevented);assert(!dialog.open);assert(!dialog.isConnected);assert.equal(f.root.children.length,2);f.stop();checks++;
+  const f=fixture();await f.click('Schedule message');const dialog=all(f.root).find(n=>n.tagName==='DIALOG');const e=dialog.fire('cancel');assert(e.defaultPrevented);assert(!dialog.open);assert(!dialog.isConnected);assert.equal(f.root.children.length,2);f.stop();checks++;
  }
  console.log('PASS shared schedule DOM: '+checks+' groups; immutable actual Files/opaque handles, lost response same-ID, current draft/owner fences, cold/404/denied recovery, explicit audience/revision actions, read-only states, closed push and late teardown; zero ordinary Send');
 }finally{for(const [key,descriptor]of descriptors){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete globalThis[key];}}

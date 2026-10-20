@@ -9,10 +9,12 @@ export type { T };
 
 export interface TopicOrganizationRequest {
 	main?: boolean;
-  conv: string; ids: string[]; topic: string; merge?: string; new?: boolean; title?: string;
+  conv: string; peer?: string; ids: string[]; topic: string; merge?: string; new?: boolean; title?: string;
 }
 export interface TopicOrganizationReview extends TopicOrganizationRequest {
   operation: string; token: string; parent?: string;
+  destination?: { host: string; fingerprint: string; agent_id?: string };
+  synthetic_topics?: string[];
   moves: { lid: string; author: string; hash: string; topic?: string }[];
 }
 
@@ -97,12 +99,12 @@ export function api(host: Host) {
 
     // Topics (an agent's separate conversations): one page of the All topics
     // list, and the person's own changes, which follow their linked devices.
-    topics: (p: { conv?: string; peer?: string; state?: string; q?: string; before?: string; limit?: number }) =>
+    topics: (p: { agent_host?:string;agent_key?:string;agent_id?:string;conv?: string; peer?: string; state?: string; q?: string; before?: string; limit?: number }) =>
       get<T.TopicPage>(q("/api/topics", Object.fromEntries(Object.entries(p).filter(([, v]) => v !== undefined && v !== "").map(([k, v]) => [k, String(v)])))),
     changeTopic: (what: "create" | "archive" | "delete" | "rename" | "done" | "reopen", c: T.TopicChange) => post<{ note: string }>("/api/topic/" + what, c),
     previewTopicOrganization: (d: TopicOrganizationRequest) => post<TopicOrganizationReview>("/api/topic/organization/preview", d),
-    applyTopicOrganization: (d: TopicOrganizationReview) => post<T.Sent>("/api/topic/organization/apply", d),
-	undoTopicOrganization:(d:{conv:string;lid:string;author:string;id:string})=>post<T.Sent[]>("/api/topic/organization/undo",d),
+    applyTopicOrganization: async (d: TopicOrganizationReview) => {const v=await post<T.Sent & {ID?:string;LID?:string;State?:string}>("/api/topic/organization/apply", d);return {...v,id:v.id||v.ID||"",lid:v.lid||v.LID,state:v.state||v.State||""};},
+	undoTopicOrganization:(d:{conv:string;peer?:string;lid:string;author:string;id:string})=>post<T.Sent[]>("/api/topic/organization/undo",d),
     previewHistoryContribution: (d: HistoryContributionRequest) => post<HistoryContributionReview>("/api/history/contribution/preview", d),
     applyHistoryContribution: (d: HistoryContributionReview) => post<T.Sent>("/api/history/contribution/apply", d),
 

@@ -1,3 +1,4 @@
+import { Button } from "../ui/Button";
 import { saveBatch, acknowledge, recordFailure, type JournalEntry } from "../send-journal.mjs";
 import { sendID } from "../optimistic.mjs";
 import { pastePictures } from "../pictures.mjs";
@@ -13,7 +14,7 @@ import { Popover } from "@base-ui/react/popover";
 import { IconAlertCircle, IconAt, IconCloudOff, IconLock } from "@tabler/icons-react";
 import { errorText, type T } from "../api";
 import { useAgentNames, useApp, useWide } from "../context";
-import { agentName, deviceTarget, deviceWho, firstLine, niceDevice, participants, personName, scopeMatches, threadAgentID, threadAuthor, whoName } from "../model";
+import { agentName, deviceTarget, deviceWho, firstLine, niceDevice, participants, personName, scopeMatches, threadAgentHost, threadAgentKey, threadAgentID, threadAuthor, whoName } from "../model";
 import { useStore, type Draft, type StagedFile } from "../store";
 import { EmojiPicker, useEmojiPreload } from "./Emoji";
 import { DropTarget, FilesTray, bytes, draftFiles, overLimit, releaseFiles, useFileDrop } from "./Composer.files";
@@ -73,7 +74,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   const answering = useRef(new Set<string>());                        // requests this person chose to answer by hand
 
   const [busy, setBusy] = useState<Record<string, string>>({});      // conv → progress words while sending
-  const [notice, setNotice] = useState<{ conv: string; text: string } | null>(null);
+  const [notice, setNotice] = useState<{ conv: string; text: string; refresh?:boolean } | null>(null);
   const [said, setSaid] = useState("");                               // for screen readers
   const [caret, setCaret] = useState<number | null>(null);            // null while the field is not focused
   const [dismissed, setDismissed] = useState(-1);                     // the "@" whose picker was closed
@@ -117,9 +118,11 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   const target: Target = useMemo(() => {
     if (thread) {
       if (answerable) return { kind: "answer", id: answerable.id, task: answerable.kind === "task" };
-      const to = deviceTarget(thread.peer, overview); // a device that runs no agent cannot be asked
+      if(thread.topic?.agent_key&&thread.topic.agent_key!==threadAgentKey(thread).pinned)return {kind:"none",note:"This conversation belongs to an earlier host key. Choose the current configured agent in Agents; its history is kept."};
+      if(thread.topic?.agent_legacy&&!threadAgentID(thread)&&!thread.messages?.some(m=>m.exec?.state==="running"&&m.dir==="out"&&!m.target?.agent_id))return {kind:"none",note:"This earlier default conversation has no concrete agent binding. Choose an agent in Agents to start new work; its history stays here."};
+      const to = deviceTarget(threadAgentHost(thread), overview); // a device that runs no agent cannot be asked
       if (threadAgentID(thread) && to.kind !== "agent") return { kind: "none", note: "The selected agent is unavailable on that computer." };
-      return to.kind === "agent" ? { kind: "device", name: deviceAgent(thread.peer, overview, names, threadAgentID(thread)), seed: thread.peer, ask: true }
+      return to.kind === "agent" ? { kind: "device", name: deviceAgent(threadAgentHost(thread), overview, names, threadAgentID(thread)), seed: thread.peer, ask: true }
         : to.kind === "person" ? { kind: "device", name: to.name, seed: thread.peer, ask: false }
         : { kind: "none", note: to.note };
     }
@@ -321,10 +324,18 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
         return;
       }
     }
-    const { c, d: captured, to, here, device } = retry || { c: conv, d: latest(), to: target, here: dm, device: thread };
+    let { c, d: captured, to, here, device } = retry || { c: conv, d: latest(), to: target, here: dm, device: thread };
     let followup: ComposerFollowup | undefined;
     try { followup = retry ? retry.followup : selectedTargetFollowup(to,captured); }
-    catch(e) { setNotice({conv:c,text:errorText(e)}); return; }
+    catch(e) {
+      if((e as Error).name!=="ComposerRecovery"||!device||retry){setNotice({conv:c,text:errorText(e)});return;}
+      const selected=store.get().open,agent=threadAgentID(device),peer=device.peer,pin=threadAgentKey(device).pinned;
+      try { const fresh=await store.api.thread(device.id);
+        if(!store.isActive()||store.get().open!==selected||fresh.peer!==peer||threadAgentKey(fresh).pinned!==pin||threadAgentID(fresh)!==agent)throw Error("The selected chat, agent or host key changed. Refresh and choose the destination again; your text and files are kept.");
+        followup=currentDirectComposerFollowup(fresh,{...followupContext,thread:fresh},captured.replyTo);device=fresh;
+      }catch(error){setNotice({conv:c,text:errorText(error),refresh:true});return;}
+    }
+    if(device&&to.kind==="device"&&to.ask&&!threadAgentID(device)&&!followup){setNotice({conv:c,text:"This earlier conversation has no concrete agent binding. Choose a configured agent in Agents to start new work. Your text and files are kept."});return;}
     // Allocate the optional topic before yielding so a second send keeps it.
     const d = here && captured.newTopic ? { ...captured, topic: captured.topic && retry ? captured.topic : sendID() } : captured;
     const id = retry?.id || sendID(), group = retry?.group, selectedView = store.get().open;
@@ -381,7 +392,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
         else if (device) {
           const last = (device.messages || []).at(-1);
           // A new topic starts a separate conversation with this agent; otherwise the thread continues.
-          r = await store.api.send({ id, to: device.peer, agent_id: to.kind === "device" && to.ask ? threadAgentID(device) : undefined, kind: to.kind === "device" && !to.ask ? "message" : "question", body, reply_to: d.newTopic ? undefined : last?.id, quote:reply, files: fileIds });
+          r = await store.api.send({ id, to: threadAgentHost(device), agent_id: to.kind === "device" && to.ask ? threadAgentID(device) : undefined, kind: to.kind === "device" && !to.ask ? "message" : "question", body, reply_to: d.newTopic ? undefined : last?.id, quote:reply, files: fileIds });
           // Keep the preview in the visible conversation throughout saving;
           // once the new topic exists its loaded view takes over the same id.
           if (d.newTopic) store.sends.move(id, id);
@@ -420,7 +431,8 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   // draft. Recovery retries these payloads explicitly; it never recreates IDs.
   async function sendAndroid() {
     if (!ready || (!dm && !thread) || androidPreparing.current.has(conv)) return;
-    const c = conv, captured = latest(), here = dm, device = thread, selectedView = store.get().open;
+    const c = conv, captured = latest(), here = dm, selectedView = store.get().open;
+    let device = thread;
     const host = store.host, workspace = host.workspace.id;
     const decoded = decode(captured.text), body = encode(decoded.text, decoded.spans, true).trim();
     const pids = here ? agentTargets(decoded.text, decoded.spans, captured.agent) : [];
@@ -439,7 +451,14 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     setBusy(b=>({...b,[c]:"Preparing send…"}));
     try {
       for (const [index, to] of destinations.entries()) {
-        const followup = selectedTargetFollowup(to,captured);
+        let followup:ComposerFollowup|undefined;
+        try{followup=selectedTargetFollowup(to,captured);}catch(e){
+          if((e as Error).name!=="ComposerRecovery"||!device)throw e;
+          const agent=threadAgentID(device),peer=device.peer,pin=threadAgentKey(device).pinned,fresh=await store.api.thread(device.id);
+          if(!store.isActive()||store.get().open!==selectedView||fresh.peer!==peer||threadAgentKey(fresh).pinned!==pin||threadAgentID(fresh)!==agent)throw Error("The selected chat, agent or host key changed. Refresh and choose the destination again; your text and files are kept.");
+          followup=currentDirectComposerFollowup(fresh,{...followupContext,thread:fresh},captured.replyTo);device=fresh;
+        }
+        if(device&&to.kind==="device"&&to.ask&&!threadAgentID(device)&&!followup)throw Error("This earlier conversation has no concrete agent binding. Choose a configured agent in Agents to start new work. Your text and files are kept.");
         const id = sendID(), fileIDs: string[] = [];
         for (const f of sent) {
           setBusy(b => ({...b,[c]:"Preparing files…"}));
@@ -455,7 +474,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
         if (to.kind === "answer") {endpoint="/api/act";request={do:"reply",id:to.id,send_id:id,body};}
         else if (followup) {endpoint="/api/request/followup";request={id,conv:here ? c : "",ref:followup.ref,attempt:followup.attempt,body,files};}
         else if (to.kind === "agent") {endpoint="/api/dm/agent/ask";request={id,send_group:group,pid:to.pid,kind:"question",body,topic,files};}
-        else if (device) {const last=(device.messages || []).at(-1);endpoint="/api/send";request={id,to:device.peer,
+        else if (device) {const last=(device.messages || []).at(-1);endpoint="/api/send";request={id,to:threadAgentHost(device),
           agent_id:to.kind === "device" && to.ask ? threadAgentID(device) : undefined,
           kind:to.kind === "device" && !to.ask ? "message" : "question",body,
           reply_to:captured.newTopic ? undefined : last?.id,quote:reply,files};}
@@ -473,7 +492,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       }
       saveBatch(localStorage,workspace,plans.map(p=>p.entry));
     } catch(e) {
-      setNotice({conv:c,text:"Send was not submitted. Your draft is kept: "+errorText(e)});
+      setNotice({conv:c,text:"Send was not submitted. Your draft is kept: "+errorText(e),refresh:(e as Error).name==="ComposerRecovery"});
       setBusy(({[c]:_,...rest})=>rest);androidPreparing.current.delete(c);return;
     }
     if (store.isActive()) {
@@ -603,13 +622,13 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   const scheduleWhy = scheduleReason({supported:overview?.schedules,conv,ordinary:!!dm && target.kind === "conversation",
     frozen:!!closed,visitor,newTopic:!!draft.newTopic,missing:missingReply || missingTopic,
     fileReason:files.length && store.host.platform === "android" ? "File scheduling is unavailable in this mobile interface. Remove the files to schedule text." : limit});
-  const scheduleDialogs = <ScheduleDialogs key={conv} pane={schedulePane} onPane={setSchedulePane} conv={conv} dm={dm} reason={scheduleWhy}
+  const showSchedule = (pane: SchedulePane) => { if (pane === "list") { setSchedulePane(null); store.showTab("outbox", "scheduled"); } else setSchedulePane(pane); };
+  const scheduleDialogs = <ScheduleDialogs key={conv} pane={schedulePane} onPane={showSchedule} conv={conv} dm={dm} reason={scheduleWhy}
     capture={() => {const current=latest(), decoded=decode(current.text);return {draft:{...current,files:[...(current.files || [])]},body:encode(decoded.text,decoded.spans,true).trim()};}} />;
   const actions: MenuAction[] = [
     ...(dm && !humanGuest && !visitor ? [{ label: "Bring someone in", sub: "They see only what you share", icon: menuIcons.invite, tone: "bg-guest-bg text-guest-ink", run: () => store.openInvite(dm.id) }] : []),
     { label: "Photo or file", sub: filesAllowed && lim ? "Up to " + lim.max_count + " at once, " + bytes(lim.max_file) + " each" : target.kind === "answer" ? "Files can’t go with an answer" : "Files can’t be sent here", icon: menuIcons.file, tone: "bg-agent text-agent-ink", disabled: !filesAllowed, run: () => picker.current?.click() },
-    { label: "Schedule message…", sub: scheduleWhy || "Save for a future date and time on this device", disabled:!!scheduleWhy, icon:menuIcons.clock, tone:"bg-agent text-agent-ink", run:()=>setSchedulePane("create") },
-    { label: "Scheduled messages", sub: overview?.schedules && dm ? "Review schedules in this chat on this device" : "Scheduled sending is unavailable for this target", disabled:!overview?.schedules || !dm, icon:menuIcons.clock, tone:"bg-sunken text-ink", run:()=>setSchedulePane("list") },
+    { label: "Schedule…", disabled:!overview?.schedules || !dm, icon:menuIcons.clock, tone:"bg-agent text-agent-ink", run:()=>showSchedule(!scheduleWhy && (text.trim() || files.length) ? "create" : "list") },
     { label: "Emoji", icon: menuIcons.emoji, tone: "bg-act text-act-ink", run: () => { emojiAfterMenu.current = true; setEmojiOpen(true); } }, // opens as the menu leaves: no gap between them
   ];
 
@@ -622,7 +641,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
         <p className="font-semibold">{closed.title}</p>
         {closed.detail && <p className="text-[13px] text-text-2">{closed.detail}</p>}
       </div>
-      <PlusMenu actions={actions.filter(a=>a.label === "Schedule message…" || a.label === "Scheduled messages")} onOpenChange={setMenuOpen} finalFocus={()=>!schedulePane} />
+      <PlusMenu actions={actions.filter(a=>a.label === "Schedule…")} onOpenChange={setMenuOpen} finalFocus={()=>!schedulePane} />
     </div>{scheduleDialogs}</>
   );
 
@@ -661,6 +680,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
         </div> : null;
       })}
       {status && <StatusLine status={status} />}
+      {notice?.conv===conv&&notice.refresh&&<Button size="sm" variant="outline" onClick={()=>void store.refreshOpen().then(ok=>{if(ok)setNotice(null);},e=>setNotice({conv,text:errorText(e),refresh:true}))}>Refresh work status</Button>}
 
       <div ref={row} className="flex items-end gap-2">
         <PlusMenu actions={actions} disabled={sending} onOpenChange={setMenuOpen}
@@ -712,7 +732,7 @@ function StatusLine({ status }: { status: Status }) {
     <p role={status.kind === "error" ? "alert" : "status"}
       className={"mb-2 flex items-start gap-1.5 px-1 text-[13px] leading-snug fade-in " + (status.kind === "error" ? "font-semibold text-danger" : "text-text-2")}>
       <span aria-hidden="true" className="mt-px grid h-4 shrink-0 place-items-center">{icon}</span>
-      <span className="min-w-0">{status.text}</span>
+      <span className="min-w-0 [overflow-wrap:anywhere]">{status.text}</span>
     </p>
   );
 }

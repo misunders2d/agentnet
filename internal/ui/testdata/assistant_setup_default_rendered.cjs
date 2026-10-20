@@ -1,31 +1,36 @@
 // "Choose your agents" with the owner's Zenbook catalog: Codex, Claude and Pi
 // made together, and "Zenbook" (Codex too, same folder) an hour later; the
-// default agent is Codex in another folder. The real Comic package on an
-// inert host (no Hub, credentials or harness). It checks: the default agent
-// shows at the top with its program, folder and state, and changes right
-// there (and on the Agents card) through POST /api/responder; the duplicate
-// is preselected and explained, review needs no choice, and applying never
-// touches the other agent. Run by TestComicDefaultAgentSetupRendered.
+// existing Codex row is also the default, in another folder. The real Comic
+// package on an inert host (no Hub, credentials or harness). It checks the
+// default setting, exact existing-row selection, older Codex preselection,
+// review without a required choice, and apply once without editing other
+// agents. Run by TestComicDefaultAgentSetupRendered.
 const fs = require('node:fs'), path = require('node:path'), http = require('node:http'), assert = require('node:assert/strict');
 const { chromium } = require(process.env.AGENTNET_PLAYWRIGHT || 'playwright-core');
-const root = path.resolve(__dirname, '../static'), evidence = process.env.AGENTNET_SCREENSHOTS;
+const root = path.resolve(__dirname, '../static'), evidence = process.env.AGENTNET_SETUP_SCREENSHOTS || process.env.AGENTNET_SCREENSHOTS;
 assert(evidence, 'private screenshot directory required'); fs.mkdirSync(evidence, { recursive: true, mode: 0o700 });
 const local = 'sergey/zenbook', projects = '/home/sergey/projects', other = '/home/sergey/other';
+const ids = { codex: '52e7fc64'+'0'.repeat(24), claude: 'c1a0de00'+'0'.repeat(24), pi: 'b1000000'+'0'.repeat(24), zenbook: '09a818fd'+'0'.repeat(24), automaticClaude: 'ca0def00'+'0'.repeat(24) };
 const me = { person: 'sergey', label: 'Sergey', address: local, state: 'self', devices: [{ address: local, fingerprint: 'local-key' }] };
 const overview = { version: 'fixture', seq: 1, me: { address: local, fingerprint: 'local-key', responder: 'codex', responder_dir: other, agent: true }, person: me, persons: true, agents: true, role: 'person', people: [], review: [], links: [], reminders: [], threads: [], dms: [], directory: { current: true, members: [] }, quarantine: [], files: { max_count: 8, max_file: 100000, max_message: 200000 } };
 const found = [{ name: 'claude', found: true }, { name: 'codex', found: true }, { name: 'pi', found: true }];
-const responder = { chosen: true, manual: false, harness: 'codex', dir: other, ready: true, harnesses: found };
-const named = (id, label, harness, ts) => ({ record: { v: 1, id, host: local, host_key: 'local-key', label, ts }, enabled: true, responder: { chosen: true, manual: false, harness, dir: projects, ready: true, harnesses: null } });
-const catalog = { host: local, local: true, harnesses: found, agents: [named('52e7fc64', 'Codex', 'codex', 1791280000), named('c1aude00', 'Claude', 'claude', 1791280000), named('p1000000', 'Pi', 'pi', 1791280000), named('09a818fd', 'Zenbook', 'codex', 1791283600)] };
+const responder = { chosen: true, manual: false, agent_id: ids.codex, harness: 'codex', dir: other, ready: true, harnesses: found };
+const named = (id, label, harness, ts, dir=projects) => ({ record: { v: 1, id, host: local, host_key: 'local-key', label, harness, ts }, enabled: true, responder: { chosen: true, manual: false, harness, dir, ready: true, harnesses: null } });
+const catalog = { host: local, local: true, harnesses: found, agents: [{...named(ids.codex, 'Codex', 'codex', 1791280000, other),default:true}, named(ids.claude, 'Claude', 'claude', 1791280000), named(ids.pi, 'Pi', 'pi', 1791280000), named(ids.zenbook, 'Zenbook', 'codex', 1791283600)] };
 const tool = (id, label) => ({ id, label, detected: true, configured: true, registered: true, supported: true, state: 'connected', note: 'Fixture native setup.' });
 const tools = [tool('claude', 'Claude Code'), tool('codex', 'Codex'), tool('pi', 'Pi')];
 const boot = `
-const seed=${JSON.stringify({ overview, responder, catalog, tools, local })};
+const seed=${JSON.stringify({ overview, responder, catalog, tools, local, ids })};
 window.fixture={...structuredClone(seed),requests:[]};
 const host={version:1,platform:'daemon',workspace:{id:'default',name:'Default agent fixture',endpoint:location.origin,address:seed.local,realm:'',state:'enrolled'},workspaces:null,skins:[],onSkinsChange(){return()=>{};},onOpen(){},listen(){return()=>{};},api:async(p,body)=>{
 fixture.requests.push({path:p,body:structuredClone(body)});
 if(p.startsWith('/api/overview'))return structuredClone(fixture.overview);
-if(p==='/api/responder'&&body){fixture.responder={...fixture.responder,chosen:true,manual:body.manual,harness:body.harness,dir:body.dir,ready:!body.manual};fixture.overview.me.responder=body.harness;fixture.overview.me.responder_dir=body.dir;fixture.overview.seq++;return structuredClone(fixture.responder);}
+if(p==='/api/responder'&&body){
+let selected=body.agent_id?fixture.catalog.agents.find(a=>a.record.id===body.agent_id):fixture.catalog.agents.find(a=>a.default&&a.responder.harness===body.harness);
+if(!body.manual&&!selected){if(body.harness!=='claude')throw Error('fixture: unexpected new automatic program');selected={record:{v:1,id:seed.ids.automaticClaude,host:seed.local,host_key:'local-key',label:'Claude',harness:'claude',ts:1791287200},enabled:true,responder:{chosen:true,manual:false,harness:'claude',dir:body.dir,ready:true,harnesses:null}};fixture.catalog.agents.push(selected);}
+if(selected&&!body.agent_id)selected.responder={...selected.responder,dir:body.dir};
+for(const a of fixture.catalog.agents)a.default=a===selected&&!body.manual;
+fixture.responder={...fixture.responder,...(selected?.responder||{}),chosen:true,manual:body.manual,agent_id:body.manual?'':selected.record.id,ready:!body.manual,harnesses:seed.responder.harnesses};fixture.overview.me.responder=fixture.responder.harness;fixture.overview.me.responder_dir=fixture.responder.dir;fixture.overview.seq++;return structuredClone(fixture.responder);}
 if(p==='/api/responder')return structuredClone(fixture.responder);
 if(p==='/api/agents'&&body){if(body.action==='publish')return {saved:true,published:true,note:''};throw Error('fixture: no agent change expected');}
 if(p.startsWith('/api/agents'))return structuredClone(fixture.catalog);
@@ -67,14 +72,17 @@ const server = http.createServer((req, res) => {
       await page.goto(origin); await page.waitForFunction(() => window.ready);
       await page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: 'Agents', exact: true }).click();
 
-      // Agents → Default agent: changed right on the card, one click away.
+      // The default is a setting on an existing concrete row, with no extra chat.
       const yours = page.getByRole('region', { name: 'Your agents', exact: true });
-      const card = yours.locator('article').filter({ hasText: 'Used when a request to this computer doesn’t name an agent.' });
-      await card.getByRole('button', { name: 'Change default agent', exact: true }).click();
+      const card = yours.getByText('Default for requests without an agent', {exact:true}).locator('..');
+      await yours.locator('article').filter({hasText:'Codex'}).filter({hasText:'Default'}).getByText('Default',{exact:true}).waitFor();
+      assert.equal(await yours.locator('article').count(),4,'only the four concrete agents have chat cards');
+      assert.equal(await card.getByRole('button',{name:/Chat/}).count(),0,'default setting has no phantom chat');
+      await card.getByRole('button', { name: 'Change default setting', exact: true }).click();
       await card.getByText('Answers for you', { exact: true }).waitFor();
       await shot('agents-card');
       await card.getByRole('button', { name: 'Cancel', exact: true }).click();
-      await card.getByRole('button', { name: 'Change default agent', exact: true }).waitFor();
+      await card.getByRole('button', { name: 'Change default setting', exact: true }).waitFor();
       assert.deepEqual(await requests('/api/responder'), [], 'Cancel saves nothing');
 
       // Choose your agents: the default agent first, with program, folder and state.
@@ -119,6 +127,20 @@ const server = http.createServer((req, res) => {
       await page.getByRole('button', { name: 'Apply changes', exact: true }).click();
       await page.getByRole('heading', { name: 'Agent setup saved', exact: true }).waitFor();
       assert.deepEqual((await requests('/api/agents')).map((b) => b.action), ['publish'], 'no agent is created, updated or turned off');
+      assert.deepEqual((await requests('/api/assistant-setup')).map(b=>b.action),['review','apply'],'review and apply each run once');
+      const unchanged=await page.evaluate(()=>fixture.catalog.agents.filter(a=>Object.values(fixture.ids).slice(0,4).includes(a.record.id)).map(a=>({record:a.record,responder:a.responder})));
+      assert.deepEqual(unchanged,catalog.agents.map(a=>({record:a.record,responder:a.responder})),'program change and applying leave every original agent configuration intact');
+
+      // Selecting another existing concrete row changes only the default pointer.
+      await page.getByRole('button', { name: 'Done', exact: true }).click();
+      const piCard=yours.locator('article').filter({has:page.getByRole('button',{name:'Chat with Pi',exact:true})});
+      await piCard.getByRole('button',{name:'Use as default',exact:true}).click();
+      await page.waitForFunction(id=>fixture.responder.agent_id===id,ids.pi);
+      await piCard.getByText('Default',{exact:true}).waitFor();
+      assert.deepEqual(await requests('/api/responder'),[{manual:false,harness:'claude',dir:other},{agent_id:ids.pi,manual:false,harness:'',dir:''}]);
+      assert.equal(await page.evaluate(()=>fixture.responder.agent_id),ids.pi,'default points to the exact existing Pi ID');
+      assert.equal(await yours.locator('article').count(),5,'changing programs adds one concrete instance, not a default-only chat');
+      await shot('existing-default');
       assert.deepEqual(errors, []);
     }
     console.log(JSON.stringify({ ok: true, shots }));

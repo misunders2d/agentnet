@@ -1,5 +1,5 @@
 // Reminders ("Remind me later", MEL-528): a personal reminder on a received
-// message, kept on this computer. It only asks for this person's attention
+// or sent message, kept on this computer. It only asks for this person's attention
 // at the time they chose: nothing is sent, nobody else sees it, and the
 // message stays as it is. A reply to the message ends it; so do Done and
 // Cancel. When it comes due, this computer shows a notification while
@@ -7,7 +7,7 @@
 // A browser device keeps no reminders (overview.remind is false there), so
 // nothing here is drawn on it.
 import { useMemo, useState } from "react";
-import { IconAlarm, IconAlarmSnooze, IconCheck, IconChevronDown } from "@tabler/icons-react";
+import { IconAlarm, IconAlarmSnooze, IconCheck } from "@tabler/icons-react";
 import type { T } from "../api";
 import { useAgentNames, useApp } from "../context";
 import { REMIND, agentName, dueText, firstLine, isMine, localInput, nameOf, personOf, reminderTimes, timeZone } from "../model";
@@ -139,7 +139,7 @@ export function ReminderLine({ r, m, right }: { r: T.ReminderView; m: Remindable
   );
 }
 
-// ---- the list at the top of Chats ---------------------------------------------------------
+// ---- the dedicated Outbox view -----------------------------------------------------------
 
 /** Reminders lists the pending reminders, the ones due first, each opening
  *  its message. Shown only where reminders are kept (a computer). */
@@ -147,39 +147,43 @@ export function Reminders() {
   const store = useApp();
   const o = useStore(store, (s) => s.overview);
   const names = useAgentNames();
-  const [all, setAll] = useState(false);
+  const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState<T.ReminderView | null>(null);
   const rs = o?.remind ? o.reminders || [] : [];
-  if (!rs.length) return null;
+  if (!o?.remind) return <p className="py-5 text-text-2">Personal reminders are unavailable on this host.</p>;
   const sorted = [...rs].sort((a, b) => Number(b.overdue) - Number(a.overdue) || a.due.localeCompare(b.due));
   const due = rs.filter((r) => r.overdue).length;
-  const shown = all ? sorted : sorted.slice(0, REMIND.listMax);
+  const shown = sorted.filter(r => !query.trim() || (r.title+" "+reminderFrom(r,o,names)).toLowerCase().includes(query.trim().toLowerCase()));
   return (
-    <section aria-labelledby="chats-reminders" className="px-4 pt-5 lg:px-3">
-      <h2 id="chats-reminders" className="flex items-center gap-1.5 px-1 pb-1.5 text-[12px] font-extrabold uppercase tracking-[.08em] text-muted">
+    <section aria-labelledby="outbox-reminders">
+      <h2 id="outbox-reminders" className="flex items-center gap-1.5 pb-2 text-sm font-bold">
         <IconAlarm size={15} aria-hidden="true" />Reminders
         {due > 0 && <span className="rounded-full bg-act px-2 py-px text-[11px] tracking-normal text-act-ink stroke tnum">{due} due</span>}
       </h2>
-      <ul className="flex flex-col gap-1.5">
-        {shown.map((r) => <ReminderRow key={r.message} r={r} o={o} names={names} />)}
+      <p className="mb-3 text-sm text-text-2">Only you are reminded. Nothing is sent. Open a reminder to see its original message.</p>
+      {!!rs.length&&<label className="block text-sm font-semibold">Find reminders<input type="search" value={query} onChange={e=>setQuery(e.target.value)} placeholder="Message or sender" className="my-2 block min-h-11 w-full rounded-xl border border-outline bg-surface px-3 text-[16px] outline-none focus-visible:outline-3 focus-visible:outline-agent-ink"/></label>}
+      {!rs.length&&<p className="py-5">No reminders pending on this device.</p>}
+      {!!rs.length&&!shown.length&&<p className="py-5">No reminders match your search.</p>}
+      <ul className="divide-y divide-hairline">
+        {shown.map((r) => <ReminderRow key={r.message} r={r} o={o} names={names} onChange={()=>setSelected(r)} />)}
       </ul>
-      {sorted.length > shown.length && (
-        <button type="button" onClick={() => setAll(true)} className="mt-1 flex min-h-11 items-center gap-1 rounded-full px-2 text-[13px] font-bold text-text-2 hover:bg-sunken">
-          Show all {sorted.length}<IconChevronDown size={16} aria-hidden="true" />
-        </button>
-      )}
+      {selected&&rs.some(r=>r.message===selected.message)&&<Sheet open onOpenChange={open=>{if(!open)setSelected(null);}} title="Reminder" description={firstLine(selected.title,REMIND.titleMax)}>
+        <ReminderLine r={rs.find(r=>r.message===selected.message) || selected} m={{id:selected.message,text:selected.title}} />
+        <Button className="mt-4" onClick={()=>{void openReminder(store,selected);setSelected(null);}}>Open original message</Button>
+      </Sheet>}
     </section>
   );
 }
 
-function ReminderRow({ r, o, names }: { r: T.ReminderView; o: T.Overview | null; names: Record<string, string> }) {
+function ReminderRow({ r, o, names, onChange }: { r: T.ReminderView; o: T.Overview | null; names: Record<string, string>; onChange:()=>void }) {
   const store = useApp();
   const from = reminderFrom(r, o, names);
   const p = personOf(r.from, o);
   const face = r.conv ? <PersonAvatar name={from} seed={p?.person || r.from} size={36} /> : <AgentAvatar seed={r.from} size={36} mood={r.overdue ? "waiting" : "neutral"} />;
   return (
-    <li className="flex items-center gap-1">
+    <li className="flex items-center gap-1 py-2">
       <button type="button" onClick={() => void openReminder(store, r)}
-        className={"flex min-h-14 min-w-0 flex-1 items-center gap-3 rounded-2xl px-2.5 py-2 text-left stroke press " + (r.overdue ? "bg-act text-act-ink" : "bg-surface hover:bg-sunken")}>
+        className={"flex min-h-14 min-w-0 flex-1 items-center gap-3 rounded-xl px-2 py-2 text-left press " + (r.overdue ? "bg-act/15 text-ink" : "hover:bg-sunken")}>
         {face}
         <span className="min-w-0 flex-1">
           <span className="block truncate font-bold">{firstLine(r.title, REMIND.titleMax) || "A message"}</span>
@@ -190,6 +194,7 @@ function ReminderRow({ r, o, names }: { r: T.ReminderView; o: T.Overview | null;
           </span>
         </span>
       </button>
+      <Button size="sm" variant="ghost" onClick={onChange}>Details</Button>
       <button type="button" aria-label={"Reminder done: " + (firstLine(r.title, 40) || "a message")} title="Done"
         onClick={() => void store.run((a) => a.remindDone(r.message), "Reminder done")}
         className="grid size-11 shrink-0 place-items-center rounded-full text-text-2 hover:bg-sunken hover:text-ink"><IconCheck size={20} /></button>

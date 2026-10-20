@@ -20,6 +20,7 @@ type CatalogAgent struct {
 	Record    protocol.AgentRecord `json:"record"`
 	Enabled   bool                 `json:"enabled"`
 	Responder *ResponderView       `json:"responder,omitempty"`
+	Default   bool                 `json:"default,omitempty"` // local host setting; never a separate recipient
 }
 type AgentCatalogView struct {
 	Host      string         `json:"host"`
@@ -77,8 +78,14 @@ func (l *Live) AgentCatalog(ctx context.Context, host string) (AgentCatalogView,
 	if err != nil {
 		return v, Refuse(sentence(err))
 	}
+	defaultID, err := l.a.DefaultAgentID()
+	if err != nil {
+		return v, Refuse(sentence(err))
+	}
 	for _, entry := range entries {
-		v.Agents = append(v.Agents, localCatalogAgent(entry, v.Harnesses))
+		agent := localCatalogAgent(entry, v.Harnesses)
+		agent.Default = entry.Record.ID == defaultID
+		v.Agents = append(v.Agents, agent)
 	}
 	return v, nil
 }
@@ -171,7 +178,15 @@ func (l *Live) namedSendTarget(ctx context.Context, d Draft) (*envelope.Target, 
 	if d.Kind != KindQuestion && d.Kind != KindTask {
 		return nil, Refuse("A named agent can receive a question or task.")
 	}
-	records, err := l.a.AgentCatalog(ctx, d.To)
+	var records []protocol.AgentRecord
+	var err error
+	if d.To == l.a.Address {
+		// Local configuration is already authenticated by this host. Its
+		// publication may still be queued while the Hub is unavailable.
+		records, err = l.a.PublicAgentCatalog()
+	} else {
+		records, err = l.a.AgentCatalog(ctx, d.To)
+	}
 	if err != nil {
 		return nil, Refuse(sentence(err))
 	}

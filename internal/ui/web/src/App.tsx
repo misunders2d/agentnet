@@ -3,7 +3,7 @@
 // "In this chat" panel. Phones show one of these at a time: a conversation
 // is a card pushed over the tabs. How each change moves: ui/Motion.tsx.
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
-import { IconMessageCircle, IconRobot, IconCircleCheck, IconSettings } from "@tabler/icons-react";
+import { IconMessageCircle, IconRobot, IconCircleCheck, IconSettings, IconInbox } from "@tabler/icons-react";
 import type { T } from "./api";
 import { useApp, useWide } from "./context";
 import { useStore, type Open, type Store, type Tab } from "./store";
@@ -18,11 +18,13 @@ import { WorkspaceCoin } from "./features/WorkspaceSwitcher";
 import { Toasts, ConnectionBanner } from "./features/Status";
 import { PersonAvatar } from "./ui/Avatar";
 import { NativeRecovery } from "./features/NativeRecovery";
+import { Outbox } from "./features/Outbox";
 
 const tabs: { id: Tab; label: string; icon: typeof IconMessageCircle }[] = [
   { id: "chats", label: "Chats", icon: IconMessageCircle },
   { id: "agents", label: "Agents", icon: IconRobot },
   { id: "oks", label: "Review", icon: IconCircleCheck },
+  { id: "outbox", label: "Outbox", icon: IconInbox },
 ];
 
 export function App() {
@@ -39,13 +41,13 @@ export function App() {
   const ready = !!overview;
   useEffect(() => { if (ready) warmAgentData(store); }, [ready]);
 
-  const main = tab === "agents" ? <AgentsView /> : tab === "oks" ? <OksView /> : tab === "settings" ? <Settings /> : <ChatList />;
+  const main = tab === "outbox" ? <Outbox /> : tab === "agents" ? <AgentsView /> : tab === "oks" ? <OksView /> : tab === "settings" ? <Settings /> : <ChatList />;
   // Phone: an open conversation is a card pushed over the tabs from the
   // right; Back pulls it away. The tabs stay drawn under it only while it
   // moves. Another topic of the same agent is the same card; another
   // conversation (a notification, a link) is a new card pushed over the
   // one that was open, which stays under it until it has arrived.
-  const card = usePresence(wide ? null : open, MOTION.pop);
+  const card = usePresence(wide || tab === "outbox" ? null : open, MOTION.pop);
   const cardKey = card.shown ? convKey(card.shown, views) : "";
   const below = useBelow(card.shown, cardKey, card.leaving);
   const arrived = useSettled(card.shown && !card.leaving ? cardKey : "", MOTION.push);
@@ -101,7 +103,7 @@ function useBelow(o: Open, key: string, leaving: boolean): { key: string; o: Non
 
 // usePages: the tabs are pages in their order (Chats, Agents, OKs,
 // Settings): a later tab slides in from the right, an earlier one from the left.
-const order: Record<Tab, number> = { chats: 0, agents: 1, oks: 2, settings: 3 };
+const order: Record<Tab, number> = { chats: 0, agents: 1, oks: 2, outbox: 3, settings: 4 };
 function usePages(tab: Tab): { enter: string; leave: string } {
   const [st, setSt] = useState({ tab, next: true });
   if (st.tab !== tab) setSt({ tab, next: order[tab] > order[st.tab] });
@@ -109,6 +111,7 @@ function usePages(tab: Tab): { enter: string; leave: string } {
 }
 
 function PhoneTabs({ tab, oks, overview, store, main, scroll }: { tab: Tab; oks: number; overview: T.Overview | null; store: Store; main: ReactNode; scroll: RefObject<number> }) {
+  const due = overview?.remind ? (overview.reminders || []).filter(r=>r.overdue).length : 0;
   // The tab's own scroll position comes back with it (it was unmounted under the open conversation).
   const box = useRef<HTMLDivElement>(null);
   const pages = usePages(tab);
@@ -120,13 +123,15 @@ function PhoneTabs({ tab, oks, overview, store, main, scroll }: { tab: Tab; oks:
         <Swap id={tab} className="min-h-0 flex-1 overflow-clip" side="h-full" {...pages} ms={MOTION.page} label="tab">
           <div ref={box} className="h-full overflow-y-auto" onScroll={(e) => { if (tab === "chats") scroll.current = e.currentTarget.scrollTop; }}>{main}</div>
         </Swap>
-        <nav aria-label="Main" data-part="tabs" className="grid grid-cols-4 border-t-[1.5px] border-outline bg-surface pb-[env(safe-area-inset-bottom)]">
+        <nav aria-label="Main" data-part="tabs" className="grid grid-cols-5 border-t-[1.5px] border-outline bg-surface pb-[env(safe-area-inset-bottom)]">
           {tabs.map((t) => (
             <button key={t.id} type="button" onClick={() => store.showTab(t.id)} aria-current={tab === t.id ? "page" : undefined}
+              aria-label={t.id === "outbox" && due ? "Outbox, "+due+" reminders due" : undefined}
               className={"relative flex min-h-14 flex-col items-center justify-center gap-0.5 text-[12px] font-semibold " + (tab === t.id ? "text-ink" : "text-muted")}>
               <span className={"grid h-7 w-12 place-items-center rounded-full " + (tab === t.id ? "bg-act text-act-ink stroke" : "")}><t.icon size={20} stroke={2} /></span>
               {t.label}
               {t.id === "oks" && oks > 0 && <span className="absolute right-[22%] top-1 min-w-5 h-5 px-1 grid place-items-center rounded-full bg-danger text-white text-[11px] font-bold tnum">{oks}</span>}
+              {t.id === "outbox" && due > 0 && <span aria-hidden="true" className="absolute right-[22%] top-1 min-w-5 h-5 px-1 grid place-items-center rounded-full bg-danger text-white text-[11px] font-bold tnum">{due}</span>}
             </button>
           ))}
           <button type="button" onClick={() => store.showTab("settings")} aria-current={tab === "settings" ? "page" : undefined}
@@ -140,22 +145,26 @@ function PhoneTabs({ tab, oks, overview, store, main, scroll }: { tab: Tab; oks:
 }
 
 function Desktop({ tab, oks, overview, store, main }: { tab: Tab; oks: number; overview: T.Overview | null; store: Store; main: ReactNode }) {
+  const due = overview?.remind ? (overview.reminders || []).filter(r=>r.overdue).length : 0;
   const open = useStore(store, (s) => s.open);
   const views = useStore(store, (s) => s.views);
   const settings = tab === "settings";
+  const outbox = tab === "outbox";
   const pages = usePages(tab);
   // The right pane moves only when what it shows changes: another
   // conversation, or Settings. Topics of one agent are one pane.
   const pane = settings ? "settings" : open ? convKey(open, views) : "none";
   return (
-    <div className="grid h-full grid-cols-[76px_minmax(300px,360px)_1fr] bg-canvas">
+    <div className={"grid h-full bg-canvas " + (outbox ? "grid-cols-[76px_1fr]" : "grid-cols-[76px_minmax(300px,360px)_1fr]")}>
       <nav aria-label="Main" data-part="rail" className="flex flex-col items-center gap-2 border-r-[1.5px] border-outline bg-rail py-3 text-rail-ink">
         <WorkspaceCoin />
         {tabs.map((t) => (
           <button key={t.id} type="button" onClick={() => store.showTab(t.id)} aria-current={tab === t.id ? "page" : undefined}
+            aria-label={t.id === "outbox" && due ? "Outbox, "+due+" reminders due" : undefined}
             className={"relative flex w-[60px] flex-col items-center gap-1 rounded-2xl py-2 text-[12px] font-semibold " + (tab === t.id ? "bg-act text-act-ink" : "text-white/80 hover:bg-white/10")}>
             <t.icon size={22} stroke={2} />{t.label}
             {t.id === "oks" && oks > 0 && <span className="absolute right-1 top-1 min-w-5 h-5 px-1 grid place-items-center rounded-full bg-danger text-white text-[11px] font-bold tnum">{oks}</span>}
+            {t.id === "outbox" && due > 0 && <span aria-hidden="true" className="absolute right-1 top-1 min-w-5 h-5 px-1 grid place-items-center rounded-full bg-danger text-white text-[11px] font-bold tnum">{due}</span>}
           </button>
         ))}
         <div className="flex-1" />
@@ -165,18 +174,18 @@ function Desktop({ tab, oks, overview, store, main }: { tab: Tab; oks: number; o
         </button>
         <button type="button" aria-label="You: profile and devices" onClick={() => store.showTab("settings", "profile")} className="grid size-11 place-items-center rounded-full"><PersonAvatar name={overview?.person?.label || "Me"} seed={overview?.person?.person || "me"} size={40} /></button>
       </nav>
-      <aside className="min-h-0 border-r-[1.5px] border-outline bg-canvas">
+      {!outbox && <aside className="min-h-0 border-r-[1.5px] border-outline bg-canvas">
         <Swap id={tab} className="h-full overflow-clip" side="h-full overflow-y-auto" {...pages} ms={MOTION.page} label="list">{main}</Swap>
-      </aside>
+      </aside>}
       <main className="flex min-h-0 min-w-0">
         <div className="flex min-w-0 flex-1 flex-col">
           <ConnectionBanner />
           <NativeRecovery />
-          <Swap id={pane} className="flex min-h-0 flex-1 flex-col" side="flex min-h-0 flex-1 flex-col" enter="an-pane-in" leave="an-pane-out" ms={MOTION.pane} label="pane">
-            {settings ? <SettingsPane /> : open ? <Conversation o={open} /> : <NothingOpen />}
+          <Swap id={outbox ? "outbox" : pane} className="flex min-h-0 flex-1 flex-col" side="flex min-h-0 flex-1 flex-col" enter="an-pane-in" leave="an-pane-out" ms={MOTION.pane} label="pane">
+            {outbox ? <div className="min-h-0 flex-1 overflow-y-auto">{main}</div> : settings ? <SettingsPane /> : open ? <Conversation o={open} /> : <NothingOpen />}
           </Swap>
         </div>
-        {!settings && <RoomPanel />}
+        {!settings && !outbox && <RoomPanel />}
       </main>
       <Toasts />
     </div>

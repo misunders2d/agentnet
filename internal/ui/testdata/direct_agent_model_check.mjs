@@ -42,16 +42,23 @@ assert.equal(pending.merge('self-thread',[{...request,id:'another',dir:'in'}]).l
 assert.equal(threadAuthor(answer,o,{},host,[{...request,state:'manual'},answer]).mine,true,'manual answer remains human');
 const remote = {...o.person,address:'owner/bezos',fingerprint:'owner-key',label:'Sergey'};
 const roomThread = {kind:'group',messages:[],members:[o.person],agents:[{pid:'remote',host:remote,inviter:o.person,state:'active',member:true,host_here:false},{pid:'local',host:o.person,inviter:o.person,state:'active',member:true,host_here:true}]};
-assert.equal(agentName(undefined,{},remote,o.person),'Your agent on Bezos','default remote agent keeps its exact host visible');
+assert.equal(agentName(undefined,{},remote,o.person),'Your earlier default on Bezos','default remote agent keeps its exact host visible');
 assert.equal(agentName(agent,{[agent]:'Codex'},remote,o.person),'Your Codex','named agent retains its executor and verified owner');
 assert.equal(agentName(agent,{[agent]:'Codex'},{...remote,person:'another-owner',label:'Dana'},o.person),'Dana’s Codex','another person’s same-named executor stays distinguishable');
 assert.equal(agentName(agent,{[agent]:'Codex'},undefined,o.person),'Codex','missing host cannot invent an owner');
-assert.equal(participants(roomThread,o,{}).find(p=>p.pid==='remote').name,'Your agent on Bezos','mention/header identity agrees');
+assert.equal(participants(roomThread,o,{}).find(p=>p.pid==='remote').name,'Your earlier default on Bezos','mention/header identity agrees');
 const roomSource=stripTypeScriptTypes((await readFile(new URL('../web/src/features/RoomPanel.model.ts',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'')).replace(/^export /gm,'');
 const room=runInNewContext(roomSource+'\nroom',{...model,eventKind:()=>null});
 const views=room(roomThread,o,{}).guests;
 assert.equal(views.find(g=>g.pid==='remote').where,'Bezos','same human is not the same host');
 assert.equal(views.find(g=>g.pid==='local').where,'this computer');
+const oldDefault=threadAuthor({...answer,agent_id:undefined}, {...o,me:{...o.me,responder:'pi'}}, {},host,[{...request,target:undefined,responder:'claude'},answer]);assert.equal(oldDefault.name,'Claude','old admitted default output retains captured harness after default changes');
+const twinA='a'.repeat(32),twinB='b'.repeat(32),twinNames={[twinA]:'Twin',[twinA+'#harness']:'pi',[twinB]:'Twin',[twinB+'#harness']:'pi'};
+const topic=(id,agent)=>({id,peer:host,agent_id:agent,agent_host:host,agent_key:'aaaaaaaa-aaaaaaaa-aaaaaaaa-aaaaaaaa',title:'Retained topic',last:'Done',last_at:'2026-10-20T10:00:00Z',count:1,review:0,unread:0,running:0,state:'archived',pending:false});
+const ta=topic('1'.repeat(32),twinA),tb=topic('2'.repeat(32),twinB),rows=model.chatList({...o,dms:[],threads:[],topics:[{peer:host,total:2,archived:2,archived_unread:0,latest:ta},{peer:host,total:3,archived:3,archived_unread:0,latest:tb}]},twinNames);
+assert.equal(rows.length,2,'same host and same name retain distinct agent rows even archived-only');assert.deepEqual(rows.map(r=>r.topicTotal).sort(),[2,3]);assert.notEqual(rows[0].title,rows[1].title,'same-name instances show stable disambiguators');
+assert.equal(threadAgentID({peer:host,topic:ta,messages:[request,{...request,target:{address:host,agent_id:twinB}}]}),twinA,'immutable original binding wins over latest moved/display row');
+const historical=threadAuthor({...answer,agent_id:twinA},o,{...twinNames,[twinA+'#harness']:'claude'},host,[request,answer]);assert.match(historical.name,/Twin/);assert(!historical.name.includes('Claude'),'current harness never relabels historical output');
 console.log('Direct agent follow-up identity and self answer authorship PASS');
 
 const inviteRights=runInNewContext(roomSource+'\n({canBringIn,shareable,isMine,online,speaker})',{...model,eventKind:()=>null});
@@ -66,8 +73,9 @@ const candidateModel=runInNewContext(inviteSource+'\n({catalogHosts,pool})',{...
 const guestOverview={...o,agents:true,person:{...o.person,devices:[{address:host},{address:'owner/second-laptop'}]},people:[{person:'outside',address:'outside/laptop',state:'pinned',devices:[{address:'outside/laptop'}]}]};
 const hostList=candidateModel.catalogHosts(topicGuest,guestOverview);
 assert(!hostList.includes('outside/laptop'),'guest catalog lookup stays within own devices');
-const candidates=candidateModel.pool(topicGuest,guestOverview,{loading:false,local:[],remote:{}},{},[],'daemon','guest','warehouse').candidates;
+const candidates=candidateModel.pool(topicGuest,guestOverview,{loading:false,local:[{record:{id:agent,host,label:"Connected Pi",harness:"pi"},enabled:true,responder:{ready:true}}],remote:{}},{},[],'daemon','guest','warehouse').candidates;
 assert(candidates.length>0&&candidates.every(c=>c.kind==='agent'&&c.mine),'guest invite offers only its own agents');
+assert.equal(candidateModel.pool(topicGuest,guestOverview,{loading:false,local:[],remote:{}},{},[],'daemon','guest','warehouse').candidates.length,0,'unconfigured default never fabricates a candidate');
 console.log('Guest invite rights, admitted context and own-agent candidate sources PASS');
 
 const mentionsSource=stripTypeScriptTypes((await readFile(new URL('../web/src/features/Composer.mentions.ts',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'')).replace(/^export /gm,'');

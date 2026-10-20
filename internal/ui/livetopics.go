@@ -52,12 +52,15 @@ type PeerTopics struct {
 // line), before (the Next of the page before) and limit (0: the default
 // page; at most client.TopicPageMax).
 type TopicQuery struct {
-	Conv   string `json:"conv,omitempty"`
-	Peer   string `json:"peer,omitempty"`
-	State  string `json:"state,omitempty"`
-	Q      string `json:"q,omitempty"`
-	Before string `json:"before,omitempty"`
-	Limit  int    `json:"limit,omitempty"`
+	AgentHost string `json:"agent_host,omitempty"`
+	AgentKey  string `json:"agent_key,omitempty"`
+	AgentID   string `json:"agent_id,omitempty"`
+	Conv      string `json:"conv,omitempty"`
+	Peer      string `json:"peer,omitempty"`
+	State     string `json:"state,omitempty"`
+	Q         string `json:"q,omitempty"`
+	Before    string `json:"before,omitempty"`
+	Limit     int    `json:"limit,omitempty"`
 }
 
 // TopicPage lists unread topics first, then newest within each bucket; Matched
@@ -105,7 +108,7 @@ func (s *Server) topics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v := r.URL.Query()
-	q := TopicQuery{Conv: v.Get("conv"), Peer: v.Get("peer"), State: v.Get("state"), Q: v.Get("q"), Before: v.Get("before")}
+	q := TopicQuery{AgentHost: v.Get("agent_host"), AgentKey: v.Get("agent_key"), AgentID: v.Get("agent_id"), Conv: v.Get("conv"), Peer: v.Get("peer"), State: v.Get("state"), Q: v.Get("q"), Before: v.Get("before")}
 	if l := v.Get("limit"); l != "" {
 		n, err := strconv.Atoi(l)
 		if err != nil {
@@ -138,12 +141,12 @@ func threadSummary(t client.ThreadSummary, keyChanged bool) ThreadSummary {
 	return ThreadSummary{Conv: t.Conv, ID: t.ID, Peer: t.Peer, Title: t.Title, Last: t.Last, LastAt: t.LastAt,
 		Count: t.Count, Review: t.Review, Unread: t.Unread, Running: t.Running, Waiting: t.Waiting, Unconfirmed: t.Unconfirmed, KeyChanged: keyChanged,
 		Notices: t.Notices, NoticeOnly: t.NoticeOnly, State: t.State, DoneBy: t.DoneBy, Conclusion: t.Conclusion,
-		ConcludedBy: t.ConcludedBy, Pending: t.Pending, PendingIDs: t.PendingIDs, Renamed: t.Renamed, AutoTitle: t.AutoTitle, QuietSince: t.QuietSince, AgentID: t.AgentID, Redirect: t.Redirect}
+		ConcludedBy: t.ConcludedBy, Pending: t.Pending, PendingIDs: t.PendingIDs, Renamed: t.Renamed, AutoTitle: t.AutoTitle, QuietSince: t.QuietSince, AgentID: t.AgentID, AgentHost: t.AgentHost, AgentLegacy: t.AgentLegacy, AgentKey: t.AgentKey, Redirect: t.Redirect}
 }
 
 // TopicList implements Topics.
 func (l *Live) TopicList(q TopicQuery) (TopicPage, error) {
-	page, err := l.a.Topics(client.TopicQuery{Conv: q.Conv, Peer: q.Peer, State: q.State, Query: q.Q, Before: q.Before, Limit: q.Limit})
+	page, err := l.a.Topics(client.TopicQuery{AgentHost: q.AgentHost, AgentKey: q.AgentKey, AgentID: q.AgentID, Conv: q.Conv, Peer: q.Peer, State: q.State, Query: q.Q, Before: q.Before, Limit: q.Limit})
 	if errors.Is(err, client.ErrTopicQuery) {
 		return TopicPage{}, Refuse("That topic list request is not valid.")
 	}

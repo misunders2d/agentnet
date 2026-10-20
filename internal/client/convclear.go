@@ -174,7 +174,7 @@ func (a *Agent) DeleteThread(peer, id string) (ConversationDeleted, error) {
 	}
 	var thread []string
 	for _, g := range groups {
-		if len(g) > 0 && g[0] == id {
+		if len(g) > 0 && directTopicID(g, rows) == id {
 			thread = g
 		}
 	}

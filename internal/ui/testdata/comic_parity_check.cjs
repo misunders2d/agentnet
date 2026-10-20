@@ -1,6 +1,6 @@
 // MEL-528 parity as Comic renders it over a real installation
 // (comicparity_rendered_test.go): reminders set, moved, done and cancelled
-// from a message, the list at the top of Chats with the due one first,
+// from a message, Outbox reminders with the due one first,
 // "Remind me about this chat", automatic answers turned on before they
 // ask and off again, and the typing preferences kept after a reload; at
 // 1440x900 light and 390x844 dark (touch). No visible text names an
@@ -26,6 +26,14 @@ async function noAddresses(p, name, what) {
   assert.ok(!/\bagentnet [a-z]/.test(text), name + ' ' + what + ': tells the person to run a command');
 }
 
+async function openReminders(p) {
+  await p.getByRole('navigation', { name: 'Main', exact: true }).getByRole('button', { name: /^Outbox\b/ }).click();
+  await p.getByRole('navigation', { name: 'Outbox', exact: true }).getByRole('button', { name: /^Reminders\b/ }).click();
+  const list = p.locator('section[aria-labelledby="outbox-reminders"]');
+  await list.waitFor(T);
+  return list;
+}
+
 async function desktop(browser) {
   const name = '1440x900-light';
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: 'light' });
@@ -37,8 +45,7 @@ async function desktop(browser) {
   await p.waitForSelector('section[aria-label="Chats"]', T);
 
   // The reminder already due leads the list, with its sender by name.
-  const list = p.locator('section[aria-labelledby="chats-reminders"]');
-  await list.waitFor(T);
+  const list = await openReminders(p);
   assert.match(await list.textContent(), /1 due/, name + ': the list says one is due');
   const dueRow = list.getByRole('button', { name: /^The Denver pallets/ });
   assert.match(await dueRow.textContent(), /Due today .*· From Laptop/, name + ': due row says when, then who');
@@ -67,8 +74,12 @@ async function desktop(browser) {
   await sheet.getByText('In 2 hours').click();
   await sheet.getByRole('button', { name: 'Remind me' }).click();
   await msg.getByText(/^Reminder (today|tomorrow) /).waitFor(T);
-  await list.getByRole('button', { name: /^Please check the Savannah order/ }).waitFor(T);
+  await openReminders(p);
+  const firstReminder = list.getByRole('button', { name: /^Please check the Savannah order/ });
+  await firstReminder.waitFor(T);
   await snap('reminder-set');
+  await firstReminder.click();
+  await msg.getByText(/^Reminder (today|tomorrow) /).waitFor(T);
 
   // Change… moves it to a time chosen.
   await msg.getByRole('button', { name: 'Change…' }).click();
@@ -87,12 +98,14 @@ async function desktop(browser) {
   await p.getByRole('menuitem', { name: /Change reminder…|Remind me about this chat…/ }).waitFor(T);
   await p.keyboard.press('Escape');
 
-  // Done and Cancel end them; the list goes with the last one.
+  // Done and Cancel end them; Outbox keeps an explicit empty state.
   await msg.getByRole('button', { name: 'Done', exact: true }).click();
   await msg.getByText(/^Reminder /).waitFor({ state: 'detached', ...T });
   await dueMsg.getByRole('button', { name: 'Cancel', exact: true }).click();
   await dueMsg.getByText(/^Reminder /).waitFor({ state: 'detached', ...T });
-  await list.waitFor({ state: 'detached', ...T });
+  await openReminders(p);
+  await list.getByText('No reminders pending on this device.', { exact: true }).waitFor(T);
+  assert.equal(await list.getByRole('button', { name: /^Reminder done:/ }).count(), 0, name + ': no reminders remain');
 
   // Automatic answers, turned on before they ask, and off again.
   await p.getByRole('button', { name: 'You: profile and devices' }).click();
@@ -160,12 +173,16 @@ async function phone(browser) {
   await msg.getByText(/^Reminder today |^Reminder tomorrow /).waitFor(T);
   await snap('reminder-set');
   await p.getByRole('button', { name: /^Back to chats/ }).click();
-  const list = p.locator('section[aria-labelledby="chats-reminders"]');
-  await list.waitFor(T);
+  const list = await openReminders(p);
   await snap('list');
-  await noAddresses(p, name, 'chat list');
+  await noAddresses(p, name, 'Outbox reminders');
+  await list.getByRole('button', { name: /^Please check the Savannah order/ }).click();
+  await msg.getByText(/^Reminder today |^Reminder tomorrow /).waitFor(T);
+  await p.getByRole('button', { name: /^Back to chats/ }).click();
+  await openReminders(p);
   await list.getByRole('button', { name: /^Reminder done:/ }).click();
-  await list.waitFor({ state: 'detached', ...T });
+  await list.getByText('No reminders pending on this device.', { exact: true }).waitFor(T);
+  assert.equal(await list.getByRole('button', { name: /^Reminder done:/ }).count(), 0, name + ': no reminders remain');
   assert.deepEqual(errors, [], name + ': page errors');
   await ctx.close();
   console.log('ok', name);

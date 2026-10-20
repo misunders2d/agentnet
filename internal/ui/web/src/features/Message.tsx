@@ -25,7 +25,7 @@ import { MessageFiles } from "./Message.files";
 import { EmojiDialog, Reactions } from "./Message.reactions";
 import { ActionSheet, DeleteMessage, DetailsSheet, EditBox, Toolbar, inside, useTouchGestures, type Acts, type Can } from "./Message.actions";
 import {
-  agentLabel, agentOf, answerTo, eventKind, ev, excerpt, guestOf, isReply, isRequest, isThreadMsg, joinedBefore, lower, problem, requestLabel, requestState, shownText, whoWrote, working,
+  agentLabel, agentOf, answerTo, eventKind, ev, excerpt, guestOf, historicalTargetLabel, isReply, isRequest, isThreadMsg, joinedBefore, lower, problem, requestLabel, requestState, shownText, whoWrote, working,
   type AnyMsg, type Ctx, type Who,
 } from "./Message.model";
 import { RemindSheet, ReminderLine } from "./Reminders";
@@ -79,7 +79,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
     reply: live && ctx.canReply,
     edit: has("edit"),
     del: has("delete"),
-    select: live && !!ctx.dm && ctx.canReply && !!onSelect && (ctx.dm.role || "member") === "member",
+    select: live && ctx.canReply && !!onSelect && (ctx.thread || ctx.dm && (ctx.dm.role || "member") === "member") ? true : false,
     remind: live && !!ctx.overview?.remind,
   };
   const acts: Acts = {
@@ -198,7 +198,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
         {remind !== null && <RemindSheet open={remind} onOpenChange={setRemind} m={remindable} r={reminder} />}
         {assign !== null && <AssignMessage open={assign} onOpenChange={setAssign} m={m} ctx={ctx} />}
       </div>
-      {!readOnly && !isThreadMsg(m) && needsHumanDetail && m.exec?.state === "needs_human" && !(m.actions || []).length && <section data-agent-needs-you tabIndex={-1} aria-label="Your agent says" className="mx-3 mt-2 rounded-xl bg-agent px-3.5 py-2.5 text-agent-ink sm:mx-4"><p className="font-bold">Your agent couldn’t finish — it needs your attention</p><Markdown className="pt-1 text-ink" text={requestResultText(needsHumanDetail)} /><p className="pt-2 text-[13px]">Open it on {deviceWords(m.target?.address || "", ctx.overview)}.</p></section>}
+      {!readOnly && !isThreadMsg(m) && needsHumanDetail && m.exec?.state === "needs_human" && !(m.actions || []).length && <AgentNeedsHumanTurn m={m} ctx={ctx} detail={needsHumanDetail} />}
       {/* The approval card is a system card across the timeline, never part of the bubble. */}
       {!readOnly && (isRequest(m) || (m.actions || []).length > 0) && (
         <div className="mx-auto mt-2.5 w-full max-w-[600px] px-3 empty:hidden sm:px-4">
@@ -208,6 +208,16 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
     </div>
     </MessageLinks.Provider>
   );
+}
+
+export function AgentNeedsHumanTurn({m, ctx, detail}: {m:T.DMMessage; ctx:Ctx; detail:string}) {
+  const name = historicalTargetLabel(m.target, ctx.names);
+  const label = name + (m.target?.address ? " on " + deviceWords(m.target.address, ctx.overview) : "");
+  return <section data-agent-needs-you tabIndex={-1} aria-label={label + " says"} className="mx-3 mt-2 rounded-xl bg-agent px-3.5 py-2.5 text-agent-ink sm:mx-4">
+    <p className="font-bold">{label} couldn’t finish — it needs your attention</p>
+    <Markdown className="pt-1 text-ink" text={requestResultText(detail)} />
+    <p className="pt-2 text-[13px]">Open it on {deviceWords(m.target?.address || "", ctx.overview)}.</p>
+  </section>;
 }
 
 function adjacent(all: AnyMsg[], a: AnyMsg, b: AnyMsg) {

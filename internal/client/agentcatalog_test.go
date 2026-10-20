@@ -1,7 +1,11 @@
 package client
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"reflect"
 	"strings"
 	"testing"
@@ -9,6 +13,75 @@ import (
 
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
+
+func TestAgentCatalogOldRelayPublicationFallback(t *testing.T) {
+	stub := installStub(t, "answer")
+	w := newWorld(t, "")
+	if _, err := w.bob.CreateLocalAgent("Pi", Responder{Harness: "stub", Dir: stub.dir}); err != nil {
+		t.Fatal(err)
+	}
+	base := w.bob.hub.http.Transport
+	puts := 0
+	w.bob.hub.http.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == "/v1/version" {
+			response, err := base.RoundTrip(r)
+			if err != nil {
+				return nil, err
+			}
+			raw, err := io.ReadAll(response.Body)
+			response.Body.Close()
+			if err != nil {
+				return nil, err
+			}
+			var version protocol.VersionInfo
+			if err = json.Unmarshal(raw, &version); err != nil {
+				return nil, err
+			}
+			features := version.Features[:0]
+			for _, f := range version.Features {
+				if f != protocol.FeatureAgentHarness {
+					features = append(features, f)
+				}
+			}
+			version.Features = features
+			raw, _ = json.Marshal(version)
+			response.Body = io.NopCloser(bytes.NewReader(raw))
+			response.ContentLength = int64(len(raw))
+			return response, nil
+		}
+		if r.Method == "PUT" && r.URL.Path == "/v1/agent-catalog" {
+			puts++
+			raw, err := io.ReadAll(r.Body)
+			if err != nil {
+				return nil, err
+			}
+			var old []struct {
+				V       int    `json:"v"`
+				ID      string `json:"id"`
+				Host    string `json:"host"`
+				HostKey string `json:"host_key"`
+				Label   string `json:"label"`
+				TS      int64  `json:"ts"`
+				Sig     []byte `json:"sig"`
+			}
+			d := json.NewDecoder(bytes.NewReader(raw))
+			d.DisallowUnknownFields()
+			if err = d.Decode(&old); err != nil {
+				t.Errorf("old strict relay rejected publication: %v", err)
+			}
+			r.Body = io.NopCloser(bytes.NewReader(raw))
+			r.ContentLength = int64(len(raw))
+		}
+		return base.RoundTrip(r)
+	})
+	defer func() { w.bob.hub.http.Transport = base }()
+	if err := w.bob.PublishAgentCatalog(tctx(t)); err != nil {
+		t.Fatal(err)
+	}
+	if puts != 1 {
+		t.Fatal("catalog not published", puts)
+	}
+}
 
 func TestLocalAgentIdentityMappingsAndImmutableSelection(t *testing.T) {
 	stub := installStub(t, "answer")
@@ -48,11 +121,11 @@ func TestLocalAgentIdentityMappingsAndImmutableSelection(t *testing.T) {
 	if err := w.bob.SetLocalAgentResponder(a.ID, &Responder{Harness: "stub2", Dir: stub.dir}); err != nil {
 		t.Fatal(err)
 	}
-	if stamp.Responder.Harness != "stub" || stamp.Record.ID != a.ID {
+	if stamp.Responder.Harness != "stub" || stamp.Record.Harness != "stub" || stamp.Record.ID != a.ID {
 		t.Fatal("running selection changed with catalog")
 	}
 	next, err := w.bob.ResolveExecutorIn(w.bob.store.db, a.ID, after)
-	if err != nil || next.Responder.Harness != "stub2" {
+	if err != nil || next.Responder.Harness != "stub2" || next.Record.Harness != "stub2" || next.Record.Verify(w.bob.Self()) != nil {
 		t.Fatal("next selection not updated", err)
 	}
 	if err := w.bob.SetLocalAgentResponder(a.ID, nil); err != nil {
@@ -72,11 +145,11 @@ func TestLocalAgentIdentityMappingsAndImmutableSelection(t *testing.T) {
 		t.Fatal("foreign identity mapped locally", err)
 	}
 	public, err := w.bob.PublicAgentCatalog()
-	if err != nil || len(public) != 1 || public[0].ID != b.ID {
+	if err != nil || len(public) != 2 || public[1].ID != b.ID {
 		t.Fatal("removed record public", err)
 	}
 	entries, err := w.bob.LocalAgents()
-	if err != nil || len(entries) != 2 || entries[0].Record.ID != a.ID {
+	if err != nil || len(entries) != 3 || entries[1].Record.ID != a.ID {
 		t.Fatal("historical identity lost", err)
 	}
 	legacy, err := w.bob.ResolveExecutorIn(w.bob.store.db, "", after)

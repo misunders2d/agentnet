@@ -224,6 +224,8 @@ func run(args []string) error {
 		return runSend(ctx, a, rest, true)
 	case "open":
 		return runOpen(a, rest)
+	case "topic":
+		return runTopic(ctx, a, rest, os.Stdout)
 	case "conversation":
 		return runConversation(a, rest)
 	case "inbox":

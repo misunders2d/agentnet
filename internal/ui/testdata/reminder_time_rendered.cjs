@@ -2,6 +2,7 @@
 const {chromium}=require(process.env.AGENTNET_PLAYWRIGHT),assert=require('node:assert/strict'),path=require('node:path'),fs=require('node:fs');
 (async()=>{
  const browser=await chromium.launch({headless:true,executablePath:process.env.AGENTNET_CHROMIUM||'/usr/bin/chromium'});
+ let desktopKeyboardSequences=0,touchPickerSequences=0;
  try {
   for(const [width,zone] of [[1280,'America/New_York'],[1100,'Europe/Kyiv'],[390,'America/New_York'],[390,'Europe/Kyiv']]){
    const context=await browser.newContext({viewport:{width,height:900},timezoneId:zone,isMobile:width===390,hasTouch:width===390}),page=await context.newPage(),errors=[],requests=[];
@@ -21,11 +22,18 @@ const {chromium}=require(process.env.AGENTNET_PLAYWRIGHT),assert=require('node:a
     assert((await sheet.innerText()).includes(displayedZone),'visible timezone unchanged');
     const before=requests.length,dateValue=`${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
     await date.fill(dateValue);await time.fill('10:30');
-    await time.focus();await page.keyboard.press('Home');await page.keyboard.press('Backspace');
-    await page.keyboard.type('11');
-    assert.equal(await time.inputValue(),'11:30','typing into incomplete hour retains minute segment');
-    await page.keyboard.type('45');
-    assert.equal(await time.inputValue(),'11:45','typed minutes persist');
+    // In Chromium's mobile-picker emulation the same keys reached InputTime
+    // but produced no input events (also on the unchanged baseline). Its
+    // hour/minute segments are not keyboard-editable; retain these assertions
+    // for desktop segments and all fill/empty/date/DST checks for touch below.
+    if(width>=1024){
+     await time.focus();await page.keyboard.press('Home');await page.keyboard.press('Backspace');
+     await page.keyboard.type('11');
+     assert.equal(await time.inputValue(),'11:30','typing into incomplete hour retains minute segment');
+     await page.keyboard.type('45');
+     assert.equal(await time.inputValue(),'11:45','typed minutes persist');
+     desktopKeyboardSequences++;
+    }else touchPickerSequences++;
     // Invalid intermediate fields must remain editable instead of restoring default.
     await time.fill('');await page.waitForTimeout(20);assert.equal(await time.inputValue(),'');
     await sheet.getByRole('button',{name:index?'Move it':'Remind me',exact:true}).click();
@@ -68,6 +76,7 @@ const {chromium}=require(process.env.AGENTNET_PLAYWRIGHT),assert=require('node:a
    await msg.getByRole('button',{name:'Done',exact:true}).click();await msg.getByRole('button',{name:'Change…'}).waitFor({state:'detached'});
    assert.deepEqual(errors,[]);await context.close();
   }
-  console.log('reminder date/time PASS: labelled desktop/touch controls, keyboard hour/minute, incomplete validation, no implicit send, NY/Kyiv DST timestamps');
+  assert.deepEqual({desktopKeyboardSequences,touchPickerSequences},{desktopKeyboardSequences:4,touchPickerSequences:4},'both desktop keyboard and native touch-picker coverage ran');
+  console.log('reminder date/time PASS: labelled desktop/touch controls, incomplete validation, no implicit send, NY/Kyiv DST timestamps; keyboard hour/minute desktop-only ('+desktopKeyboardSequences+' sequences), not executed on native touch pickers ('+touchPickerSequences+' sequences)');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

@@ -15,6 +15,7 @@ import { ConfirmSheet, DeclineSheet } from "./Approvals.sheets";
 import { Body, OpenCard, kindTag, useLand, useOpen } from "./Approvals.parts";
 import { Reason, capital, chatName, convTitle, deviceWords, inChat, personOf, senderOf, whyWords } from "./Approvals.words";
 import { ResolveOwnRequest } from "./RequestResolution";
+import { historicalTargetLabel } from "./Message.model";
 
 type Props = { c: T.ConvItem; o: T.Overview };
 
@@ -73,10 +74,12 @@ function RequestRow({ c, o }: Props) {
   const human = c.reason === Reason.needsHuman && !stale;
   const retry = human || c.reason === Reason.interrupted && !stale;
   const working = isWorkingItem(c);
-  const title = convTitle(c, o);
   const targetID = c.target?.agent_id;
-  const targetName = (targetID && names[targetID]) || "Your agent";
-  const duplicateName = targetID && (o.needs_you || []).some(x => x.conv === c.conv && x.target?.agent_id && x.target.agent_id !== targetID && ((names[x.target.agent_id] || "Your agent") === targetName));
+  const targetName = historicalTargetLabel(c.target, names);
+  const targetHeading = targetName + (c.target?.address ? " on " + deviceWords(c.target.address, o) : "");
+  const title = human ? targetHeading + " couldn’t finish — it needs your attention"
+    : c.reason === Reason.interrupted && !stale ? targetHeading + " was interrupted — run it again if needed" : convTitle(c, o,names);
+  const duplicateName = targetID && (o.needs_you || []).some(x => x.conv === c.conv && x.target?.agent_id && x.target.agent_id !== targetID && ((names[x.target.agent_id] || "Agent "+x.target.agent_id.slice(0,8)) === targetName));
   const targetLabel = c.target ? "To " + targetName + " · " + deviceWords(c.target.address, o) + (duplicateName ? " · " + targetID!.slice(0, 8) : "") : "";
   const who = senderOf(c, o);
   const kind = c.kind === "task" ? "task" : "question";
@@ -102,7 +105,7 @@ function RequestRow({ c, o }: Props) {
           meta={capital(inChat(c.conv, o)) + (working ? " · Already running" : retry || c.decide_on ? "" : c.kind === "task" ? " · Runs only if you allow it" : " · Answered only if you allow it")}>
           {(working || running) && <NativeActivity detail={c.why} className="pt-1 text-[14px] text-text-2 [overflow-wrap:anywhere]" />}
           {targetLabel && <p className="pt-1 text-[14px] font-semibold text-agent-ink" data-request-target>{targetLabel}</p>}
-          {said && <p className="pt-1 line-clamp-2 text-[14px] text-text-2 [overflow-wrap:anywhere]"><b className="font-bold text-agent-ink">Your agent says:</b> {said}</p>}
+          {said && <p className="pt-1 line-clamp-2 text-[14px] text-text-2 [overflow-wrap:anywhere]"><b className="font-bold text-agent-ink">{targetHeading} says:</b> {said}</p>}
         </Body>
       </OpenCard>
       <ConfirmSheet open={sheet === "stop"} onOpenChange={(v) => setSheet(v ? "stop" : "")}
@@ -165,11 +168,12 @@ function GuestInviteRow({ c, o }: Props) {
 }
 
 function InviteRow({ c, o }: Props) {
+  const names=useAgentNames();
   const { isOpen, go } = useOpen();
   const { busy, run } = useAct();
   const acts = c.decide_on ? [] : c.actions || [];
   const { a, failed } = useInvitation(c, !!c.decide_on);
-  const title = convTitle(c, o);
+  const title = convTitle(c, o,names);
   const seen = (a?.shared || []).length;
   const tasks = (a?.tasks_from || []).filter((p) => p.person !== o.person?.person).map((p) => p.label || p.address);
   const meta = a?.owner_invited ? a.state_text : c.decide_on ? "Nothing runs unless you let it join." : failed ? "Couldn’t check what it would see here."

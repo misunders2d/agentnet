@@ -136,7 +136,8 @@ export function Header({ ctx, wide, helpers: hs, canInvite }: { ctx: Ctx; wide: 
   } else if (t && (t.role === "human_guest" || t.role === "visitor")) {
     title = roomTitle(t);
     const mine = (t.guests || []).find((g) => g.host_here);
-    sub = t.role === "visitor" ? "Your agent’s view · only what was shared"
+    const visitorAgent=t.agents?.find(a=>a.host_here);
+    sub = t.role === "visitor" ? (visitorAgent?agentLabel(visitorAgent,ctx):"Shared agent")+" view · only what was shared"
       : mine?.state === "active" ? "You’re a guest here" : mine?.state === "invited" ? "You’re invited as a guest" : "You were a guest here";
     const names = (t.members || []).map((p) => personName(p));
     avatar = <GroupAvatar names={names.length ? names : [title]} seed={t.id} size={wide ? 48 : 40} />;
@@ -148,7 +149,7 @@ export function Header({ ctx, wide, helpers: hs, canInvite }: { ctx: Ctx; wide: 
     avatar = <PersonAvatar name={title} seed={t.peer.person || t.peer.address} size={wide ? 48 : 40} online={online} />;
   } else if (th) {
     // An agent only where one runs (model.threadRow): your phone is you, Vitalii's phone is Vitalii.
-    const row = threadRow(th.peer, overview, ctx.names);
+    const row = threadRow(th.peer, overview, ctx.names,th.topic);
     title = row.title;
     const p = presence([th.peer], overview);
     online = p.online;

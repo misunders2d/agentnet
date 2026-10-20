@@ -21,7 +21,7 @@ import { GroupLabel, Hint } from "./Settings.parts";
 
 export const MANUAL = "manual";
 
-export const harnessName = (h: string) => ({ claude: "Claude", codex: "Codex", pi: "Pi" } as Record<string, string>)[h] || (h ? h.charAt(0).toUpperCase() + h.slice(1) : "");
+export const harnessName = (h: string) => ({ claude: "Claude", codex: "Codex", pi: "Pi", omp:"OMP", agy:"Antigravity" } as Record<string, string>)[h] || (h ? h.charAt(0).toUpperCase() + h.slice(1) : "");
 
 /** DefaultAgentChoice: the default agent's program (or none: the person
  *  answers) and its folder, and Save. extra: what shows under the choice

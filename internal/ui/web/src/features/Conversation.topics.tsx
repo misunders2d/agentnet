@@ -12,7 +12,7 @@ import {
 } from "@tabler/icons-react";
 import type { T } from "../api";
 import { useAgentNames, useApp, useWide } from "../context";
-import { TOPICS, chatList, dayLabel, firstLine, newestFirst, timeOf, topicMark, topicOf, type Topic } from "../model";
+import { TOPICS, directChatKey, chatList, dayLabel, firstLine, newestFirst, timeOf, topicMark, topicOf, type Topic } from "../model";
 import { topicChangeKey, useStore } from "../store";
 import { Button } from "../ui/Button";
 import { Sheet } from "../ui/Sheet";
@@ -104,7 +104,8 @@ export function TopicBar({ thread,dm }: { thread?: T.Thread;dm?:T.DMThread }) {
   const names = useAgentNames();
   const draft = useStore(store, (s) => s.drafts[dm?.id||thread!.id]);
   const [all, setAll] = useState(false);
-  const item = chatList(overview, names).find((i) => i.open.kind === "thread" && i.peer === thread?.peer);
+  const [directMerge,setDirectMerge]=useState<{thread:T.Thread;source:string;ids:string[]}|null>(null);
+  const item = chatList(overview, names).find((i) => i.open.kind === "thread" && (thread?.topic?i.key==="agent:"+directChatKey(thread.topic):i.peer===thread?.peer));
   const current=dm?.topics?.find(t=>t.id===draft?.topic);
   const open = dm ? current?topicOf(current):null : thread?.topic ? topicOf(thread.topic) : null;
   const topics = dm ? (dm.topics||[]).filter(t=>t.state!=="archived").map(topicOf) : item?.topics || [];
@@ -186,7 +187,7 @@ export function TopicBar({ thread,dm }: { thread?: T.Thread;dm?:T.DMThread }) {
         const width = { minWidth: compact ? 44 : TOPICS.chipMinWidth, maxWidth: wide ? TOPICS.chipMaxWidth : undefined };
         if (current && listed && present.has(t.id)) {
           return (
-            <TopicMenu key={t.id} topic={t} onHeldChange={setMenuHeld} onAll={() => setAll(true)}
+            <TopicMenu key={t.id} topic={t} onHeldChange={setMenuHeld} onAll={() => setAll(true)} onDirectMerge={thread?ids=>setDirectMerge({thread,source:t.id,ids}):undefined}
               trigger={<Menu.Trigger data-topic={t.id} aria-current="true" aria-label={topicLabel(t) + ", open topic, menu"} title={t.title}
                 style={width} className={chip + "flex-1 basis-0 " + (lit ? "bg-ink text-canvas" : "bg-surface stroke text-ink") + " data-[popup-open]:ring-2 data-[popup-open]:ring-act"}>
                 {body}<IconChevronDown size={16} stroke={2.4} aria-hidden="true" className="shrink-0" />
@@ -224,13 +225,14 @@ export function TopicBar({ thread,dm }: { thread?: T.Thread;dm?:T.DMThread }) {
         className={chip + "shrink-0 " + (wide ? "" : "w-11 justify-center px-0 ") + (fresh ? "bg-act text-act-ink stroke" : "text-agent-ink hover:bg-sunken")}>
         <IconPlus size={18} stroke={2.2} aria-hidden="true" />{wide && "New topic"}
       </button>
-      {listed && <AllTopics open={all} onOpenChange={setAll} peer={thread?.peer||""} conv={dm?.id} agent={agent} current={open?.id} />}
+      {listed && <AllTopics open={all} onOpenChange={setAll} peer={thread?.peer||""} binding={thread?.topic?.agent_id||thread?.topic?.agent_legacy?thread.topic:undefined} conv={dm?.id} agent={agent} current={open?.id} />}
+      {directMerge&&<OrganizeMessages thread={directMerge.thread} ids={directMerge.ids} merge={directMerge.source} onClose={()=>setDirectMerge(null)} onDone={()=>setDirectMerge(null)} />}
     </nav>
   );
 }
 
 /** TopicMenu: the open topic's menu (its chip): rename, mark done or reopen, all topics. */
-export function TopicMenu({ topic, trigger, onAll, onHeldChange }: { topic: Topic; trigger: ReactNode; onAll: () => void; onHeldChange?: (held:boolean)=>void }) {
+export function TopicMenu({ topic, trigger, onAll, onHeldChange,onDirectMerge }: { topic: Topic; trigger: ReactNode; onAll: () => void; onHeldChange?: (held:boolean)=>void;onDirectMerge?:(ids:string[])=>void }) {
   const store = useApp();
   const portal = usePortal();
   const busy = useStore(store, s => s.topicBusy[topicChangeKey(topic)]);
@@ -238,6 +240,7 @@ export function TopicMenu({ topic, trigger, onAll, onHeldChange }: { topic: Topi
   const [pending, setPending] = useState(false);
   const [merge, setMerge] = useState<string[] | null>(null);
   const dm = useStore(store, s => topic.conv ? s.views[topic.conv] as T.DMThread | undefined : undefined);
+  const thread=useStore(store,s=>!topic.conv && s.open?.kind==="thread" ? s.views[s.open.id] as T.Thread | undefined:undefined);
   const item = "flex min-h-11 cursor-pointer items-center gap-3 rounded-xl px-3 text-[15px] font-medium outline-none data-[highlighted]:bg-sunken";
   return (
     <>
@@ -249,6 +252,7 @@ export function TopicMenu({ topic, trigger, onAll, onHeldChange }: { topic: Topi
               {!!topic.pendingIDs?.length && <Menu.Item className={item} onClick={() => setPending(true)}><IconClock size={20} aria-hidden="true" />Show pending requests ({topic.pendingIDs.length})</Menu.Item>}
               <Menu.Item disabled={!!busy} className={item} onClick={() => setRename(true)}><IconPencil size={20} aria-hidden="true" />Rename…</Menu.Item>
               {dm && !dm.frozen && (!dm.role || dm.role === "member") && <Menu.Item className={item} onClick={() => setMerge((dm.messages || []).filter(m => m.topic === topic.id && !m.topic_event && !m.event && !m.deleted && !m.excerpt_pid).map(m => m.id))}>Merge into another topic…</Menu.Item>}
+              {thread && !thread.key?.pending && <Menu.Item className={item} onClick={() => {const ids=(thread.messages||[]).filter(m=>!m.deleted).map(m=>m.id);if(onDirectMerge)onDirectMerge(ids);else setMerge(ids);}}>Merge into another topic…</Menu.Item>}
               {topic.state === "active"
                 ? <Menu.Item disabled={!!busy} className={item} onClick={() => void changeTopic(store, topic.root ? "archive" : "done", topic)}><IconCircleCheck size={20} aria-hidden="true" />{topic.root ? "Archive" : "Mark done"}</Menu.Item>
                 : <Menu.Item disabled={!!busy} className={item} onClick={() => void changeTopic(store, "reopen", topic)}><IconRotateClockwise size={20} aria-hidden="true" />Reopen</Menu.Item>}
@@ -260,7 +264,7 @@ export function TopicMenu({ topic, trigger, onAll, onHeldChange }: { topic: Topi
       </Menu.Root>
       <RenameTopic open={rename} onOpenChange={setRename} topic={topic} />
       <PendingTopic open={pending} onOpenChange={setPending} topic={topic} />
-      {merge && dm && <OrganizeMessages dm={dm} ids={merge} merge={topic.id} onClose={() => setMerge(null)} onDone={() => setMerge(null)} />}
+      {merge && (dm || thread) && <OrganizeMessages dm={dm} thread={thread} ids={merge} merge={topic.id} onClose={() => setMerge(null)} onDone={() => setMerge(null)} />}
     </>
   );
 }

@@ -77,6 +77,8 @@ export interface AgentRecord {
   label: string;
   ts: number;
   sig?: string;
+  harness?: string;
+  harness_sig?: string;
 }
 
 export interface AgentView {
@@ -168,6 +170,7 @@ export interface CatalogAgent {
   record: AgentRecord;
   enabled: boolean;
   responder?: ResponderView;
+  default?: boolean;
 }
 
 export interface ContinuationAction {
@@ -1085,12 +1088,14 @@ export interface ResourceLink {
 }
 
 export interface ResponderChange {
+  agent_id?: string;
   manual: boolean;
   harness: string;
   dir: string;
 }
 
 export interface ResponderView {
+  agent_id?: string;
   chosen: boolean;
   manual: boolean;
   harness?: string;
@@ -1307,6 +1312,7 @@ export interface TeamsView {
 }
 
 export interface Thread {
+  agent_host_key?: PeerKey;
   id: string;
   peer: string;
   key: PeerKey;
@@ -1346,6 +1352,9 @@ export interface ThreadSummary {
   auto_title?: string;
   quiet_since: string;
   agent_id?: string;
+  agent_host?: string;
+  agent_legacy?: boolean;
+  agent_key?: string;
 }
 
 export interface TopicChange {

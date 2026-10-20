@@ -5,6 +5,7 @@ import { niceDevice } from "../model";
 import { sendID } from "../optimistic.mjs";
 import { Button } from "../ui/Button";
 import { Sheet } from "../ui/Sheet";
+import { terminalStopLabel } from "./Message.model";
 
 /** An explicit exact-request decision. Only the host's returned status closes
  * the request; sending this control never means the job has been resolved. */
@@ -61,17 +62,19 @@ export function StopOwnRequest({request}:{request:T.StopAction}) {
   const [busy,setBusy]=useState(false),[queued,setQueued]=useState(false);
   const send=useRef(sendID());
   const identity=[request.host,request.id,request.key,request.attempt].join("/");
-  useEffect(()=>{send.current=sendID();setQueued(false);},[identity]);
+  const current=useRef(identity);current.current=identity;
+  useEffect(()=>{send.current=sendID();setQueued(false);setBusy(false);},[identity]);
+  const terminal=terminalStopLabel(request),acknowledged=!!request.result&&!request.result.refused;
   const submit=async()=>{
-    if(busy)return;setBusy(true);
+    if(busy||request.pending||terminal||acknowledged||queued&&!request.result)return;setBusy(true);
+    const selected=identity;
     try {
       const result=await store.run(api=>api.decide({host:request.host!,id:request.id,key:request.key,attempt:request.attempt,action:"cancel",expect:"running",report:"",send_id:send.current}));
-      if(result){setQueued(true);store.toast("Stop queued. Waiting for the host to confirm; completed actions are not undone.");}
-    }finally{setBusy(false);}
+      if(result&&current.current===selected){setQueued(true);store.toast("Stop queued. Waiting for the host to confirm; completed actions are not undone.");}
+    }finally{if(current.current===selected)setBusy(false);}
   };
-  const acknowledged=!!request.result&&!request.result.refused;
   return <div className="shrink-0">
-    <Button size="sm" variant="ghost" disabled={busy||request.pending||acknowledged||queued&&!request.result} onClick={()=>void submit()}>{busy?"Sending…":request.pending||queued&&!request.result?"Stop queued":acknowledged?request.result?.state==="cancelled"?"Stopped":"Stopping…":"Stop"}</Button>
+    <Button size="sm" variant="ghost" disabled={busy||!!terminal||request.pending||acknowledged||queued&&!request.result} onClick={()=>void submit()}>{terminal|| (busy?"Sending…":request.pending||queued&&!request.result?"Stop queued":acknowledged?"Stopping…":"Stop")}</Button>
     {request.result?.refused&&<p role="status" className="max-w-48 text-[12px] text-text-2">{request.result.refused}</p>}
   </div>;
 }

@@ -35,7 +35,15 @@ func (l *Live) ResponderStatus() (ResponderView, error) {
 		return v, nil
 	}
 	v.Chosen, v.Harness, v.Dir, v.Context, v.Timeout = true, r.Harness, r.Dir, r.Context, int(r.Timeout.Seconds())
+	v.AgentID, err = l.a.DefaultAgentID()
+	if err != nil {
+		return v, Refuse(sentence(err))
+	}
 	v.Ready, v.Problem = responderReady(v.Harnesses, r)
+	if v.AgentID == "" {
+		v.Ready = false
+		v.Problem = "The agent catalog is full. Choose an existing configured agent as the default in Agents. Earlier requests and history are kept."
+	}
 	return v, nil
 }
 
@@ -61,6 +69,12 @@ func responderReady(hs []HarnessView, r *client.Responder) (bool, string) {
 // harness and directory, keeping the timeout and context files already
 // chosen (the CLI edits those). It applies to the next job.
 func (l *Live) SetResponder(c ResponderChange) (string, error) {
+	if c.AgentID != "" {
+		if err := l.a.SetDefaultAgent(c.AgentID); err != nil {
+			return "", Refuse(sentence(err))
+		}
+		return "Default agent selected.", nil
+	}
 	if c.Manual {
 		if err := l.a.SetResponder(nil); err != nil {
 			return "", Refuse(sentence(err))

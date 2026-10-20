@@ -129,7 +129,7 @@ func topicOpen(r threadRow, replied bool) bool {
 		// close it (reviewStates): open, like one held for them.
 		return !r.selected && (topicOpenIn[r.state] || r.state == stateInterrupt && (r.kind == envelope.KindQuestion || r.kind == envelope.KindTask))
 	}
-	return (r.kind == envelope.KindQuestion || r.kind == envelope.KindTask) && !replied && !topicUndelivered[r.state] && !topicExecutionClosed(r.execState)
+	return (r.kind == envelope.KindQuestion || r.kind == envelope.KindTask) && !replied && !r.replied && !topicUndelivered[r.state] && !topicExecutionClosed(r.execState)
 }
 
 func topicExecutionClosed(state string) bool {
@@ -257,13 +257,19 @@ func localOf(locals map[string]topicLocal, g []string) (topicLocal, string) {
 // (topicText fills it); self is this device's address.
 func summarize(self, peer string, g []string, rows map[string]threadRow, l topicLocal, now int64) ThreadSummary {
 	first, last := rows[g[0]], rows[g[len(g)-1]]
-	t := ThreadSummary{ID: first.id, Peer: peer, Count: len(g), LastAt: time.Unix(last.at, 0), NoticeOnly: true, lastID: last.id, custom: l.Title, titleLine: first.preview, lastLine: last.preview}
+	if anchor, held := rows[directTopicID(g, rows)]; held {
+		first = anchor
+	}
+	t := ThreadSummary{ID: directTopicID(g, rows), Peer: peer, Count: len(g), LastAt: time.Unix(last.at, 0), NoticeOnly: true, firstID: first.id, lastID: last.id, custom: l.Title, titleLine: first.preview, lastLine: last.preview}
+	if d, err := directGroupDestination(g, rows); err == nil {
+		t.AgentID, t.AgentHost, t.AgentKey = d.AgentID, d.Host, d.Fingerprint
+	}
 	facts := make([]threadRow, len(g))
 	for i, id := range g {
 		r := rows[id]
 		facts[i] = r
-		if r.agent != "" { // oldest first: the latest named one stays
-			t.AgentID = r.agent
+		if t.AgentID == "" && (r.kind == envelope.KindQuestion || r.kind == envelope.KindTask || r.kind == envelope.KindAnswer || r.kind == envelope.KindResult || r.status == envelope.StatusProgress) {
+			t.AgentLegacy = true
 		}
 		t.NoticeOnly = t.NoticeOnly && r.notice
 		switch {
@@ -312,7 +318,7 @@ func (a *Agent) peerTopics(peer string, now int64, unread ...*[]DeviceUnreadRef)
 	}
 	out := make([]ThreadSummary, 0, len(groups))
 	for _, g := range groups {
-		l, _ := localOf(locals, g)
+		l, _ := directTopicLocal(locals, g, rows)
 		out = append(out, summarize(a.Address, peer, g, rows, l, now))
 		if len(unread) > 0 && unread[0] != nil {
 			for _, id := range g {
@@ -320,7 +326,7 @@ func (a *Agent) peerTopics(peer string, now int64, unread ...*[]DeviceUnreadRef)
 				if !r.unread {
 					continue
 				}
-				ref := DeviceUnreadRef{Peer: peer, Thread: g[0], ID: id, Author: r.key, Dir: "out", At: time.Unix(r.at, 0)}
+				ref := DeviceUnreadRef{Peer: peer, Thread: directTopicID(g, rows), ID: id, Author: r.key, Dir: "out", At: time.Unix(r.at, 0)}
 				if r.in {
 					ref.Dir = "in"
 				}
@@ -339,8 +345,12 @@ func (a *Agent) peerTopics(peer string, now int64, unread ...*[]DeviceUnreadRef)
 func (a *Agent) topicText(peer string, ts []*ThreadSummary) error {
 	var ids []string
 	for _, t := range ts {
+		first := t.firstID
+		if first == "" {
+			first = t.ID
+		}
 		if t.titleLine == nil {
-			ids = append(ids, t.ID)
+			ids = append(ids, first)
 		}
 		if t.lastLine == nil {
 			ids = append(ids, t.lastID)
@@ -360,7 +370,11 @@ func (a *Agent) topicText(peer string, ts []*ThreadSummary) error {
 		return lines[id]
 	}
 	for _, t := range ts {
-		t.Title, t.Last = line(t.ID, t.titleLine), line(t.lastID, t.lastLine)
+		first := t.firstID
+		if first == "" {
+			first = t.ID
+		}
+		t.Title, t.Last = line(first, t.titleLine), line(t.lastID, t.lastLine)
 		if t.conclusionID != "" {
 			t.Conclusion = line(t.conclusionID, t.conclusionLine)
 		}
@@ -486,7 +500,40 @@ func (a *Agent) topicOverview(listArchived bool, unread *[]DeviceUnreadRef) ([]T
 			}
 			shown = append(shown, t)
 		}
+		byAgent := map[string]*PeerTopics{}
+		for _, t := range all {
+			if t.NoticeOnly {
+				continue
+			}
+			key := t.AgentHost + "/" + t.AgentKey + "/" + t.AgentID
+			if t.AgentID == "" && !t.AgentLegacy {
+				key = "human/" + t.Peer
+			}
+			c := byAgent[key]
+			if c == nil {
+				c = &PeerTopics{Peer: peer, Latest: t}
+				byAgent[key] = c
+			}
+			c.Total++
+			if newer(t, c.Latest) {
+				c.Latest = t
+			}
+			if t.State == TopicArchived {
+				c.Archived++
+				c.ArchivedUnread += t.Unread
+			}
+		}
 		text := shown
+		for _, c := range byAgent {
+			if c.Latest.State == TopicArchived && !listArchived {
+				for i := range all {
+					if all[i].ID == c.Latest.ID {
+						text = append(text, &all[i])
+						break
+					}
+				}
+			}
+		}
 		if latest >= 0 && all[latest].State == TopicArchived && !listArchived {
 			text = append(text, &all[latest])
 		}
@@ -516,9 +563,14 @@ func (a *Agent) topicOverview(listArchived bool, unread *[]DeviceUnreadRef) ([]T
 		for _, t := range shown {
 			out = append(out, *t)
 		}
-		if c.Total > 0 {
-			c.Latest = all[latest]
-			counts = append(counts, c)
+		for _, c := range byAgent {
+			for _, t := range all {
+				if t.ID == c.Latest.ID {
+					c.Latest = t
+					break
+				}
+			}
+			counts = append(counts, *c)
 		}
 	}
 	sortTopics(out)
@@ -544,12 +596,13 @@ func sortTopics(ts []ThreadSummary) {
 
 // TopicQuery asks for one page of the All topics list.
 type TopicQuery struct {
-	Conv   string
-	Peer   string // "" every peer
-	State  string // "" every state, or TopicActive, TopicDone, TopicArchived
-	Query  string // words in the title (the person's name and the automatic one) or the last line, any case
-	Before string // TopicPage.Next of the page before
-	Limit  int    // 0: TopicPageDefault
+	AgentHost, AgentKey, AgentID string // optional exact original execution scope
+	Conv                         string
+	Peer                         string // "" every peer
+	State                        string // "" every state, or TopicActive, TopicDone, TopicArchived
+	Query                        string // words in the title (the person's name and the automatic one) or the last line, any case
+	Before                       string // TopicPage.Next of the page before
+	Limit                        int    // 0: TopicPageDefault
 }
 
 // TopicPage lists unread topics first, then newest first within each bucket.
@@ -564,6 +617,11 @@ var ErrTopicQuery = errors.New("that topic list request is not valid")
 
 // Topics lists one page of topics (never review-notice threads).
 func (a *Agent) Topics(q TopicQuery) (TopicPage, error) {
+	if q.AgentHost != "" || q.AgentKey != "" || q.AgentID != "" {
+		if q.Conv != "" || !(DirectDestination{Host: q.AgentHost, Fingerprint: q.AgentKey, AgentID: q.AgentID}).Valid() {
+			return TopicPage{}, ErrTopicQuery
+		}
+	}
 	if q.Conv != "" {
 		all, err := a.ChatTopics(q.Conv)
 		if err != nil {
@@ -604,7 +662,7 @@ func (a *Agent) Topics(q TopicQuery) (TopicPage, error) {
 		}
 		var keep []*ThreadSummary
 		for i := range all {
-			if t := &all[i]; !t.NoticeOnly && (q.State == "" || t.State == q.State) {
+			if t := &all[i]; !t.NoticeOnly && (q.AgentHost == "" || (t.AgentHost == q.AgentHost && t.AgentKey == q.AgentKey && t.AgentID == q.AgentID)) && (q.State == "" || t.State == q.State) {
 				keep = append(keep, t)
 			}
 		}
@@ -663,6 +721,11 @@ func topicMatches(t ThreadSummary, words []string) bool {
 
 // TopicOf is the topic that message id belongs to.
 func (a *Agent) TopicOf(id string) (ThreadSummary, error) {
+	anchor, err := a.directTopicAnchor(id)
+	if err != nil {
+		return ThreadSummary{}, err
+	}
+	id = anchor
 	peer, err := a.store.peerOf(id)
 	if err != nil {
 		return ThreadSummary{}, err
@@ -680,7 +743,7 @@ func (a *Agent) TopicOf(id string) (ThreadSummary, error) {
 			if err != nil {
 				return ThreadSummary{}, err
 			}
-			l, _ := localOf(locals, g)
+			l, _ := directTopicLocal(locals, g, rows)
 			t := summarize(a.Address, peer, g, rows, l, storeNow().Unix())
 			err = a.topicText(peer, []*ThreadSummary{&t})
 			return t, err
@@ -733,13 +796,13 @@ func (a *Agent) mark(peer, id, mark string, seen int) (covered bool, err error) 
 // setTopic changes what the person set on topic id (its earliest message)
 // with peer and stores it under that id.
 func (a *Agent) setTopic(peer, id string, change func(l *topicLocal, count int), renamed ...bool) error {
-	groups, _, err := a.peerThreadGroups(peer)
+	groups, rows, err := a.peerThreadGroups(peer)
 	if err != nil {
 		return err
 	}
 	var g []string
 	for _, x := range groups {
-		if x[0] == id {
+		if directTopicID(x, rows) == id {
 			g = x
 		}
 	}
@@ -750,7 +813,7 @@ func (a *Agent) setTopic(peer, id string, change func(l *topicLocal, count int),
 	if err != nil {
 		return err
 	}
-	l, was := localOf(locals, g)
+	l, was := directTopicLocal(locals, g, rows)
 	change(&l, len(g))
 	tx, err := a.store.db.Begin()
 	if err != nil {

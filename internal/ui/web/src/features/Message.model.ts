@@ -1,3 +1,4 @@
+import { historicalAgentName, concreteAgentLabel } from "../model";
 // What one message in the open conversation says, in words: who wrote it,
 // what it asked of an agent and how far that got, where its copies are.
 // DM messages (T.DMMessage) and device-thread messages (T.Message) differ in
@@ -53,12 +54,22 @@ export function roomTitle(t: T.DMThread) {
 export const agentOf = (ctx: Pick<Ctx, "dm">, pid?: string) => (pid ? (ctx.dm?.agents || []).find((a) => a.pid === pid) : undefined);
 export const guestOf = (ctx: Pick<Ctx, "dm">, pid?: string) => (pid ? (ctx.dm?.guests || []).find((g) => g.pid === pid) : undefined);
 
+/** A detached heading names the original target. Catalog aliases require its
+ * exact host/key; today's program or default cannot label an older run. */
+export function historicalTargetLabel(target: T.Target | undefined, names: Record<string, string>): string {
+  const id = target?.agent_id;
+  if (!id) return "Earlier default · identity unknown";
+  const sameHost = !target.address || names[id + "#host"] === target.address;
+  const sameKey = !target.fingerprint || names[id + "#host_key"] === target.fingerprint;
+  return historicalAgentName(id, sameHost && sameKey ? names : {});
+}
+
 /** The device thread's other end, as the chat list names it (model.threadRow):
  *  its agent where one runs ("Bohdan’s agent"; its device is said apart,
  *  "on Desk"), this computer's agent for your own device that runs none, or
  *  the person whose device it is ("Vitalii"). */
 export function threadAgentName(ctx: Pick<Ctx, "thread" | "names" | "overview">) {
-  return threadRow(ctx.thread?.peer || "", ctx.overview, ctx.names).title;
+  return threadRow(ctx.thread?.peer || "", ctx.overview, ctx.names,ctx.thread?.topic).title;
 }
 
 // ---- authors ------------------------------------------------------------------
@@ -91,11 +102,11 @@ export function whoWrote(m: AnyMsg, ctx: Ctx): Who {
       // A named agent says whose it is; "Your agent" already does, so it says where.
       const named = !!(a.agent_id && ctx.names[a.agent_id]);
       const sub = a.member ? (named ? owner(a.host, me) + " agent" : undefined) : named ? agentWhere(a.host, a.host.address, me) : "on " + niceDevice(a.host.address);
-      return { key: "a:" + a.pid, name: agentLabel(a, ctx), sub, agent: true, mine: false, guest: !a.member, seed: a.agent_id || a.host.address, device: a.member ? undefined : deviceKind(a.host.address) };
+      return { key: "a:" + a.pid, name: (a.agent_id&&historicalAgentName(a.agent_id,ctx.names))||"Earlier default", sub, agent: true, mine: false, guest: !a.member, seed: a.agent_id || a.host.address, device: a.member ? undefined : deviceKind(a.host.address) };
     }
     const host = hostOf(m.from, o);
     return {
-      key: "a:" + m.from, name: agentName(m.agent_id, ctx.names, host, me), sub: "on " + niceDevice(m.from),
+      key: "a:" + m.from, name: (m.agent_id&&historicalAgentName(m.agent_id,ctx.names))||"Earlier default", sub: "on " + niceDevice(m.from),
       agent: true, mine: false, guest: false, seed: m.agent_id || m.from, device: deviceKind(m.from),
     };
   }
@@ -126,7 +137,8 @@ export function requestLabel(m: AnyMsg, ctx: Ctx): string {
   let to = "";
   if (isThreadMsg(m)) {
     const t = m.target;
-    to = (t?.agent_id && ctx.names[t.agent_id]) || (m.dir === "out" ? threadAgentName(ctx) : "your agent");
+    to = t?.agent_id ? historicalAgentName(t.agent_id,ctx.names)
+      : m.responder && m.responder !== "manual" ? concreteAgentLabel({id:"",label:m.responder,harness:m.responder}) : "Earlier default";
   } else {
     const a = agentOf(ctx, m.pid);
     if (!a) return "";
@@ -140,6 +152,21 @@ const localJob: Record<string, string> = {
   part_waiting: "Not started yet", not_delivered: "Reply kept here", manual: "Answered by hand", conv_held: "Held for you",
 };
 const word = (s?: string) => jobWord(s) || (s ? localJob[s] || "" : "");
+
+const stopTerminalLabels: Record<string, string> = {
+  done: "Host reports finished", answered: "Host reports finished: answered",
+  failed: "Host reports failed", timeout: "Host reports timed out",
+  cancelled: "Host reports cancelled", stopped: "Host reports stopped",
+  declined: "Host reports declined", resolved: "Host reports closed", not_run: "Host reports not run",
+};
+
+// An old decision is a host snapshot, not proof that Stop caused its outcome
+// or that a newer execution attempt has ended. Never promote execution here.
+export function terminalStopLabel(request?: T.StopAction, exec?: T.ExecView): string {
+  if (request && exec?.attempt && exec.attempt > request.attempt) return "";
+  const state=request?.result?.state || "";
+  return Object.hasOwn(stopTerminalLabels,state) ? stopTerminalLabels[state] : "";
+}
 
 /** A stored reply from this request's exact executor. A quotation is inert. */
 export function answerTo(m: AnyMsg, all: AnyMsg[], ctx?: Pick<Ctx, "overview">) {
@@ -169,6 +196,8 @@ export function requestState(m: AnyMsg, all: AnyMsg[], ctx?: Pick<Ctx, "overview
   // nothing was done. Confirmation comes from the host's actions[] list.
   if (answer && "status" in answer && answer.status === "proposal") return { text: "Suggested a task · not run", tone: "wait" };
   if (answer) return { text: m.kind === "task" ? "Done" : "Answered", tone: "ok" };
+  const snapshot = terminalStopLabel(m.stop,m.exec);
+  if (snapshot) return {text:snapshot,tone:"muted"};
   const e = m.exec;
   if (e && e.state) {
     if (e.state === "unavailable") return { text: "Host removed", tone: "muted" };
@@ -196,7 +225,7 @@ function tone(state: string): "ok" | "work" | "wait" | "bad" | "muted" {
 
 /** working: a request its executor says is running now (and not answered yet). */
 export function working(m: AnyMsg, all: AnyMsg[], ctx?: Pick<Ctx, "overview">) {
-  if (!isRequest(m) || answerTo(m, all, ctx)) return false;
+  if (!isRequest(m) || answerTo(m, all, ctx) || terminalStopLabel(m.stop,m.exec)) return false;
   if (m.exec?.state === "running") return !m.exec.stale;
   return m.state === "running" || (m.actions || []).includes("cancel");
 }

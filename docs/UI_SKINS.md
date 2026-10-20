@@ -443,7 +443,8 @@ types are the Go structs in `internal/ui/*.go`, generated into
 - Reads: `/api/overview`, `/api/thread?id=...`, `/api/dm?id=...`.
   Private `overview.model_reports` are last reported runtime observations, not
   settings or availability. Match exact `host`, `host_key` and `agent_id`
-  (empty means default), and show `model`, optional `reasoning` and `at` in
+  (empty identifies an unnamed legacy executor, not today's concrete default),
+  and show `model`, optional `reasoning` and `at` in
   own-agent picker/details and active agent chat. Missing model/reasoning is
   not reported, never inferred from names/configuration; a report can be stale
   even while the host is online. No report grants access or controls a harness.
@@ -516,6 +517,23 @@ types are the Go structs in `internal/ui/*.go`, generated into
   in-memory saving/uncertain attempts do defer reload, including when storage
   is unavailable. Pass the existing draft namespace as the shared controller's
   `owner`, and destroy controllers before replacing their view or binding.
+  Manage scheduled messages, drafts and personal reminders in a dedicated
+  Outbox, using compact rows and a due-reminder count in navigation. Personal
+  reminder lists do not belong above Chats. Request pending schedules with
+  `all=0`; request sent/cancelled history only while explicitly expanded. An
+  open edit keeps its captured revision, field focus and position across pushes.
+  Listing drafts does not fetch every chat, decode attachments or choose a new
+  default agent. Resume their exact original chat/topic/agent and available File
+  objects; do not claim file persistence across reload.
+  The optional shared controller's `outboxRoot` enables its global panel;
+  `openOutbox('scheduled'|'drafts'|'reminders')` opens the selected view.
+  Entries supply `chatText(conv)`, `getDrafts()` records
+  `{key,record,title,text,files,detail}`, `resumeDraft(key,record)`, and
+  `getReminders()` records `{id,title,chat,when,detail,overdue,open,change,done,cancel}`.
+  `openOriginalSave(conv)` reopens the bound uncertain-save review, and
+  `onOutboxChange(open)` supports the entry's existing visibility/focus cleanup.
+  These callbacks use the captured host and original drafts; they do not grant
+  send authority. Existing callers without `outboxRoot` retain scoped behavior.
 - Standing grants: GET `/api/approvals` lists what `agentnet approvals` does:
   `{questions[{address, status?}|{person, label, status}],
   tasks[{address, fingerprint, status}|{person, label, status}],
@@ -665,8 +683,9 @@ types are the Go structs in `internal/ui/*.go`, generated into
   exactly that reviewed change and refuses one that changed since. Then each
   chosen tool that `/api/agents` lists as `found` gets its named agent through
   POST `/api/agents` `{action: "create", label, harness, dir}` or `{action:
-  "update", id, harness, dir}` (reuse an agent with the same tool, name and
-  folder instead of making a second), and one `{action: "publish"}`.
+  "update", id, harness, dir}`, and one `{action: "publish"}`. Update an
+  explicitly selected existing ID; distinct configured instances keep distinct
+  IDs even when their names, tools or folders match.
   Read the tool list first: `local: false` (nothing can be installed here)
   means show `note` and skip `/api/agents`. A browser does not serve this
   route ("Unknown request."): treat that like `local: false`. Say an agent is ready only when
@@ -675,6 +694,32 @@ types are the Go structs in `internal/ui/*.go`, generated into
   set, and when a folder can't be read (deleted, or closed to the person)
   still offer Up and Home, not only a retry. Setup approves nobody, shares
   no history and keeps the default agent.
+- Concrete agent identity (MEL-550): list configured catalog records, labelled
+  with their actual `record.harness` and execution device. The optional
+  `harness`/`harness_sig` extension is signed separately by the exact host; v1
+  identity canonical bytes remain unchanged. Missing metadata means the program
+  is unavailable, not a guessed current harness. A local catalog's `default`
+  and `/api/responder.agent_id` are settings on one concrete record, never an
+  additional recipient. New agent sends carry that concrete `agent_id`.
+  Do not fabricate a recipient from `me.agent`, detected executables or an empty
+  remote catalog. Keep unavailable historical chats readable without silently
+  routing them to the current default.
+  Thread summaries and `/api/thread.topic` add `agent_host`, `agent_key`,
+  `agent_id` and optional `agent_legacy`. The tuple belongs to the original
+  exchange; moving messages, relabelling a topic or changing the default cannot
+  change it. Group agent chats by the full tuple, not by device or display name.
+  Plain human threads may also carry an organization tuple; only a concrete
+  `agent_id` or `agent_legacy:true` selects agent chat behavior. Legacy unnamed
+  history is its own identity and is never attributed to today's default.
+  When the execution host differs from `/api/thread.peer`, the optional
+  `agent_host_key` carries that host's current pin and pending-key state.
+  `thread.key` still belongs to `peer`; never compare an agent target against
+  another device's pin.
+  Filter a composer's possible running requests to its exact selected target
+  before considering freshness. Reconcile an uncertain matching request with
+  one exact fresh view; if it remains uncertain, show the request and Refresh
+  recovery while retaining text and files. Do not guess an attempt or send new
+  work to escape a blocked follow-up.
 - Topics (every chat, docs/plans/TOPICS.md): `overview.threads`
   lists every thread, archived topics too; a skin that pages topics itself
   asks `/api/overview?topics=1` and gets them without archived topics.
@@ -686,7 +731,10 @@ types are the Go structs in `internal/ui/*.go`, generated into
   Mark done carries no conclusion), `concluded_by`, `pending`, `renamed`,
   `auto_title`, `quiet_since`; `/api/thread` adds `topic`. GET
   `/api/topics?peer=&state=&q=&before=&limit=` pages `{topics, next,
-  matched}`, unread first with activity time, ID and peer tie breaks. Cursors
+  matched}`, unread first with activity time, ID and peer tie breaks. Optional
+  `agent_host`, `agent_key` and `agent_id` scope the immutable agent destination
+  before counting and pagination; pass the complete tuple from the selected
+  topic, including an empty legacy agent ID. Cursors
   are opaque comparison positions; an old chronological cursor requires a
   first-page reload. Refill the loaded prefix on live changes and deduplicate
   scoped IDs. Freeze displayed order under pointer/focus/selection, updating
@@ -747,7 +795,8 @@ types are the Go structs in `internal/ui/*.go`, generated into
   independent `aorg1`; ordinary canonical-PID agent reactions require `amr1`.
   Shipped `org1`/`agr1`/`rm1` meanings are unchanged. Shared topic renames add
   the independent `ttl1` gate; shared group-link metadata adds independent `res1`.
-  Current producers advertise at most 30 signed names; readers still parse 32,
+  Direct agent chats use `{peer, ids, topic, merge?}` for an existing destination or `{peer, ids, new:true, title, topic:""}` for a named new topic, instead of `conv`. Preview returns the normalized destination; a new direct topic uses the review operation ID as its topic ID. Echo the entire review, including `destination` and `synthetic_topics`, unchanged for apply/retry. Only select topics with the same immutable `agent_host`, `agent_key` and `agent_id` (empty legacy IDs stay distinct). Synthetic IDs are accepted by `/api/thread`; navigation anchors are held originals and do not replace the topic ID. These placements are private to the owner’s current linked human devices, require explicit `dts1`, and produce no message or execution event. The result proves local storage (`state:stored`), not remote delivery. Direct undo uses `{peer,lid,id}` on the originating device; retain `id` for retries. Original reply links still determine later replies and native context.
+  Current producers advertise at most 31 signed names; readers still parse 32,
   and records stay bounded at 1024 bytes. Missing readers retain their copies;
   history/archive/repack keeps each extension independently and never runs
   imported work.

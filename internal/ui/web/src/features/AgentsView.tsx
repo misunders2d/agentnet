@@ -7,7 +7,7 @@ import { Switch } from "@base-ui/react/switch";
 import { IconChevronRight, IconDevices, IconPlus, IconSettings } from "@tabler/icons-react";
 import { errorText, type T } from "../api";
 import { useAgentNames, useApp } from "../context";
-import { agentName, agentWhere, deviceKind, niceDevice, personName, runsAgent } from "../model";
+import { concreteAgentLabel, agentName, agentWhere, deviceKind, niceDevice, personName, runsAgent } from "../model";
 import { useStore, type Store } from "../store";
 import { AgentAvatar } from "../ui/Avatar";
 import { Button } from "../ui/Button";
@@ -103,66 +103,17 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 // ---- this computer's agent ----------------------------------------------------
 
 function MyAgent({ o, r, onSaved }: { o: T.Overview; r: Load<T.ResponderView>; onSaved: () => void }) {
-  const store = useApp();
-  const v = r.v;
-  const [editing, setEditing] = useState(false);
-  const harness = v?.harness || o.me.responder;
-  const state: "ready" | "problem" | "manual" | "unset" | "loading" = !v ? (r.error ? "problem" : "loading")
-    : !v.chosen ? "unset" : v.manual ? "manual" : v.ready ? "ready" : "problem";
-  const found = (v?.harnesses || []).find((h) => h.name === harness);
-  const chats = (o.person?.agents || []).filter((a) => a.address === o.me.address && !a.agent_id).flatMap((a) => a.dms || []).filter((d) => d.state === "active");
-  return (
-    <article className="rounded-2xl bg-surface p-4 stroke shadow-pop-sm">
-      <div className="flex items-center gap-3.5">
-        <AgentAvatar seed={o.me.address} size={56} mood={state === "ready" ? "neutral" : "asleep"} device={deviceKind(o.me.address)} />
-        <div className="min-w-0 flex-1">
-          <p className="font-display text-[20px] font-bold leading-tight">Default agent</p>
-          <p className="truncate text-[14px] font-medium text-text-2">On {niceDevice(o.me.address)}{harness && state !== "manual" && state !== "unset" ? " · " + capital(harness) : ""}</p>
-        </div>
-      </div>
-      <AgentModelReport overview={o} host={o.me.address} />
-      <p className="pt-2 text-[13px] text-muted">Used when a request to this computer doesn’t name an agent.</p>
-      <p className="pt-3 flex items-center gap-2 text-[15px] font-bold">
-        <Dot tone={state === "ready" ? "ok" : state === "problem" ? "bad" : "off"} />
-        {{ ready: "Ready", problem: "Not ready", manual: "No automatic answers", unset: "Not set up yet", loading: "Checking…" }[state]}
-      </p>
-      <p className="pt-1 text-[15px] text-text-2">
-        {state === "ready" && "Answers the questions you approve and does the tasks you allow."}
-        {state === "problem" && (v?.problem || r.error || "Check its program and folder in Settings.")}
-        {state === "manual" && "Every question and task waits for you."}
-        {state === "unset" && "Until you choose a program for it, every question and task waits for you."}
-      </p>
-      {found && state !== "manual" && state !== "unset" && (
-        <p className="pt-1 text-[13px] text-muted">{found.found ? capital(found.name) + " is installed here. Whether it’s signed in shows the first time it works." : capital(found.name) + " isn’t installed where AgentNet can find it."}</p>
-      )}
-      {chats.length > 0 && <Chats o={o} dms={chats} />}
-      {v?.chosen && !v.manual && (
-        <Details>
-          <Row k="Works in"><span className="font-mono text-[14px] [overflow-wrap:anywhere]">{v.dir}</span></Row>
-          {found?.path && <Row k="Program"><span className="font-mono text-[14px] [overflow-wrap:anywhere]">{found.path}</span></Row>}
-          {!!v.timeout_seconds && <Row k="Time limit">{Math.round(v.timeout_seconds / 60)} min per question or task</Row>}
-          {(v.context || []).length > 0 && <Row k="Always given">{(v.context || []).join(", ")}</Row>}
-        </Details>
-      )}
-      <div className="mt-3 flex flex-wrap gap-2">
-        <AgentChatButton target={{host:o.me.address,label:"Your agent",local:true,unavailable:state === "ready" ? undefined : "Choose a ready program in Settings first"}} />
-        {v ? !editing && (
-          // Changed right here: the same setting as Settings → Your agent.
-          <Button variant={state === "unset" || state === "problem" ? "act" : "outline"} size="sm" icon={<IconSettings size={18} />} onClick={() => setEditing(true)}>
-            {state === "unset" ? "Choose a default agent" : "Change default agent"}
-          </Button>
-        ) : (
-          <Button variant="outline" size="sm" icon={<IconSettings size={18} />} onClick={() => store.showTab("settings", "assistant")}>Open in Settings</Button>
-        )}
-      </div>
-      {v && editing && (
-        <div className="mt-3 border-t border-hairline pt-3">
-          <DefaultAgentChoice view={v} inline saved={() => { setEditing(false); onSaved(); }} onCancel={() => setEditing(false)} />
-        </div>
-      )}
-    </article>
-  );
+  const [editing,setEditing]=useState(false),v=r.v;
+  return <div className="space-y-2 rounded-xl bg-surface p-3 stroke">
+    <p className="font-semibold">Default for requests without an agent</p>
+    <p className="text-[14px] text-text-2">{v?.harness&&!v.manual?capital(v.harness)+" · "+niceDevice(o.me.address):"Questions and tasks wait for you."}</p>
+    {v?.problem&&<p className="text-[13px] text-muted">{v.problem}</p>}
+    {r.error&&<p role="alert">{r.error}</p>}
+    {v&&!editing&&<Button size="sm" variant="outline" onClick={()=>setEditing(true)}>Change default setting</Button>}
+    {v&&editing&&<DefaultAgentChoice view={v} inline saved={()=>{setEditing(false);onSaved();}} onCancel={()=>setEditing(false)}/>}
+  </div>;
 }
+
 
 function BrowserNote() {
   const store = useApp();
@@ -184,7 +135,7 @@ function NamedAgents({ o, catalog }: { o: T.Overview; catalog: Load<T.AgentCatal
   const [unshared, setUnshared] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const c = catalog.v;
-  if (catalog.error) return <p className="px-1 text-[14px] text-muted">Named agents aren’t available here: {catalog.error}</p>;
+  if (catalog.error) return <p className="px-1 text-[14px] text-muted">Agents aren’t available here: {catalog.error}</p>;
   if (!c?.local) return null;
   if (connecting) return <AssistantSetup start onDone={() => setConnecting(false)} />;
   const agents = c.agents || [];
@@ -200,7 +151,7 @@ function NamedAgents({ o, catalog }: { o: T.Overview; catalog: Load<T.AgentCatal
     : change({ action: "create", label: s.label, harness: s.harness, dir: s.dir }, s.label + " is ready.");
   return (
     <>
-      {agents.map((a) => <NamedAgent key={a.record.id} a={a} o={o} onToggle={(on) => (on ? setSheet({ agent: a }) : setOff(a))} />)}
+      {agents.map((a) => <NamedAgent key={a.record.id} a={a} label={concreteAgentLabel(a.record,agents)} o={o} onToggle={(on) => (on ? setSheet({ agent: a }) : setOff(a))} />)}
       {unshared && (
         <p className="flex flex-wrap items-center gap-x-3 rounded-2xl bg-guest-bg px-3.5 py-2 text-[14px] font-semibold text-guest-ink">
           Saved here, but others can’t see the change yet.
@@ -212,7 +163,7 @@ function NamedAgents({ o, catalog }: { o: T.Overview; catalog: Load<T.AgentCatal
         className="flex min-h-14 items-center gap-3 rounded-2xl border-[1.5px] border-dashed border-ink/40 px-4 text-left font-bold hover:bg-sunken">
         <span className="grid size-9 place-items-center rounded-xl bg-agent text-agent-ink" aria-hidden="true"><IconPlus size={20} /></span>
         <span className="flex-1">
-          New named agent
+          New agent
           {!agents.length && <span className="block text-[13px] font-medium text-muted">Its own name, program and folder, so others can pick it</span>}
         </span>
       </button>
@@ -224,7 +175,7 @@ function NamedAgents({ o, catalog }: { o: T.Overview; catalog: Load<T.AgentCatal
   );
 }
 
-function NamedAgent({ a, o, onToggle }: { a: T.CatalogAgent; o: T.Overview; onToggle: (on: boolean) => void }) {
+function NamedAgent({ a, label, o, onToggle }: { a: T.CatalogAgent; label:string; o: T.Overview; onToggle: (on: boolean) => void }) {
   const r = a.responder;
   const chats = (o.person?.agents || []).filter((x) => x.address === o.me.address && x.agent_id === a.record.id).flatMap((x) => x.dms || []).filter((d) => d.state === "active");
   const status = !a.enabled ? "Turned off" : !r ? "On" : r.ready ? capital(r.harness || "") + " · Ready" : capital(r.harness || "") + " · Not ready";
@@ -233,7 +184,7 @@ function NamedAgent({ a, o, onToggle }: { a: T.CatalogAgent; o: T.Overview; onTo
       <div className="flex items-center gap-3">
         <AgentAvatar seed={a.record.id} size={48} mood={a.enabled && r?.ready ? "neutral" : "asleep"} />
         <div className="min-w-0 flex-1">
-          <p className="truncate text-[17px] font-bold leading-tight">{a.record.label}</p>
+          <p className="truncate text-[17px] font-bold leading-tight">{label} {a.default&&<Tag>Default</Tag>}</p>
           <p className="pt-0.5 text-[13px] text-muted">On {niceDevice(a.record.host)}</p>
           <p className="pt-0.5 flex items-center gap-1.5 text-[14px] text-text-2"><Dot tone={!a.enabled ? "off" : r?.ready ? "ok" : "bad"} />{status}</p>
         </div>
@@ -248,7 +199,8 @@ function NamedAgent({ a, o, onToggle }: { a: T.CatalogAgent; o: T.Overview; onTo
       <AgentModelReport overview={o} host={a.record.host} agentId={a.record.id} />
       {a.enabled && r && !r.ready && r.problem && <p className="pt-2 text-[14px] text-danger">{r.problem}</p>}
       {chats.length > 0 && <Chats o={o} dms={chats} />}
-      <div className="mt-3"><AgentChatButton target={{host:a.record.host,agentId:a.record.id,label:a.record.label,local:true,unavailable:!a.enabled || !r?.ready ? "This agent is not ready" : undefined}} /></div>
+      <div className="mt-3"><AgentChatButton target={{host:a.record.host,agentId:a.record.id,harness:a.record.harness,hostKey:a.record.host_key,label,local:true,unavailable:!a.enabled || !r?.ready ? "This agent is not ready" : undefined}} /></div>
+      {a.enabled&&!a.default&&<MakeDefault id={a.record.id}/>}
       {r && (
         <Details>
           <Row k="Works in"><span className="font-mono text-[14px] [overflow-wrap:anywhere]">{r.dir}</span></Row>
@@ -260,6 +212,8 @@ function NamedAgent({ a, o, onToggle }: { a: T.CatalogAgent; o: T.Overview; onTo
 }
 
 // ---- your other devices -------------------------------------------------------------
+
+function MakeDefault({id}:{id:string}){const store=useApp();return <Button size="sm" variant="ghost" onClick={()=>void store.run(a=>a.setResponder({agent_id:id,manual:false,harness:"",dir:""}))}>Use as default</Button>;}
 
 // Your agents on your other devices that this one talks with. A device that
 // only sends reports here is not one: it is in ReportsNote.

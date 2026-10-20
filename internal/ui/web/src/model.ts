@@ -14,6 +14,21 @@ export function messageTarget<M extends { id: string; lid?: string }>(messages: 
   return logical.length === 1 ? logical[0] : undefined;
 }
 
+export function concreteAgentLabel(record: {id:string;label:string;harness?:string}, agents: {record:{id:string;label:string;harness?:string}}[] = []): string {
+  const harness=({pi:"Pi",claude:"Claude",codex:"Codex",omp:"OMP",agy:"Antigravity"} as Record<string,string>)[record.harness||""]||record.harness||"";
+  const label=harness ? record.label.toLowerCase()===harness.toLowerCase()?harness:record.label+" · "+harness : record.label+" · program unavailable";
+  return agents.filter(a=>a.record.label===record.label&&a.record.harness===record.harness).length>1 ? label+" · "+record.id.slice(0,8) : label;
+}
+export function concreteAgentName(id:string,names:Record<string,string>):string {
+  if(!names[id])return "Agent "+id.slice(0,8);
+  if(!Object.prototype.hasOwnProperty.call(names,id+"#harness"))return names[id];
+  return concreteAgentLabel({id,label:names[id],harness:names[id+"#harness"]},Object.keys(names).filter(k=>/^[a-f0-9]{32}$/.test(k)).map(id=>({record:{id,label:names[id],harness:names[id+"#harness"]}})));
+}
+
+export function historicalAgentName(id:string,names:Record<string,string>):string {const name=names[id]||"Agent "+id.slice(0,8);return Object.keys(names).filter(k=>/^[a-f0-9]{32}$/.test(k)&&names[k]===name).length>1?name+" · "+id.slice(0,8):name;}
+
+export const directChatKey=(t:Pick<T.ThreadSummary,"peer"|"agent_host"|"agent_key"|"agent_id"|"agent_legacy">)=>JSON.stringify(t.agent_id||t.agent_legacy?[t.agent_host||t.peer,t.agent_key||"",t.agent_id||""]:[t.peer,"","human"]);
+
 // ---- people and agents ---------------------------------------------------
 
 /** One chat in the list: a person (DM), a group, or an agent's own device thread. */
@@ -206,16 +221,17 @@ export function chatList(o: T.Overview | null, agentNames: Record<string, string
   const byPeer = new Map<string, T.ThreadSummary[]>();
   for (const t of o.threads || []) {
     if (t.notice_only) continue; // another computer's reports: shown under OKs, not as a chat
-    byPeer.set(t.peer, [...(byPeer.get(t.peer) || []), t]);
+    const key=directChatKey(t); byPeer.set(key, [...(byPeer.get(key) || []), t]);
   }
-  const counts = new Map((o.topics || []).map((c) => [c.peer, c]));
-  for (const peer of new Set([...byPeer.keys(), ...counts.keys()])) {
-    const ts = (byPeer.get(peer) || []).map(topicOf).sort(newestFirst), c = counts.get(peer);
+  const counts = new Map((o.topics || []).map((c) => [directChatKey(c.latest), c]));
+  for (const key of new Set([...byPeer.keys(), ...counts.keys()])) {
+    const summaries=byPeer.get(key)||[], c=counts.get(key), binding=summaries[0]||c?.latest; if(!binding)continue; const peer=binding.peer;
+    const ts = summaries.map(topicOf).sort(newestFirst);
     const latest = c && (!ts[0] || newestFirst(topicOf(c.latest), ts[0]) < 0) ? topicOf(c.latest) : ts[0];
     if (!latest) continue;
-    const row = threadRow(peer, o, agentNames); // an agent only where one runs (MEL-529)
+    const row = threadRow(peer, o, agentNames,binding); // an agent only where one runs (MEL-529)
     items.push({
-      key: "agent:" + peer,
+      key: "agent:" + key,
       open: { kind: "thread", id: latest.id, peer },
       kind: row.kind,
       title: row.title,
@@ -227,11 +243,11 @@ export function chatList(o: T.Overview | null, agentNames: Record<string, string
       needsYou: ts.reduce((n, t) => n + t.needsYou, 0),
       held: 0,
       guests: 0,
-      working: (byPeer.get(peer) || []).some((t) => t.running > 0),
+      working: summaries.some((t) => t.running > 0),
       topics: ts,
       peer,
       topicTotal: c ? c.total : ts.length,
-      keyChanged: (byPeer.get(peer) || []).some((t) => t.key_changed) || !!c?.latest.key_changed,
+      keyChanged: summaries.some((t) => t.key_changed) || !!c?.latest.key_changed,
     });
   }
   return items.sort((a, b) => (b.lastAt || "").localeCompare(a.lastAt || ""));
@@ -262,7 +278,7 @@ export const nameOf = (address: string, o: T.Overview | null) => {
 export function agentSubtitle(address: string, o: T.Overview | null): string {
   if (!o) return "";
   const person = o.person && (o.person.devices || []).some((d) => d.address === address) ? o.person : null;
-  if (person) return "Your agent · " + niceDevice(address);
+  if (person) return "Earlier default · " + niceDevice(address);
   for (const p of o.people || []) {
     if ((p.devices || []).some((d) => d.address === address) || p.address === address) return personName(p) + "’s agent · " + niceDevice(address);
   }
@@ -330,14 +346,15 @@ export interface ThreadRow { kind: "agent" | "person"; title: string; subtitle: 
  *    this computer's agent, asked from there ("Your agent" · "On this computer · asked from your Pixel");
  *  - another device of yours otherwise: "Your Pixel";
  *  - another person's device that runs none: that person ("Vitalii" · "from Phone"). */
-export function threadRow(peer: string, o: T.Overview | null | undefined, names: Record<string, string>): ThreadRow {
+export function threadRow(peer: string, o: T.Overview | null | undefined, names: Record<string, string>, binding?:T.ThreadSummary): ThreadRow {
+  if(binding?.agent_host&&(binding.agent_id||binding.agent_legacy)){const host=binding.agent_host;return {kind:"agent",title:binding.agent_id?concreteAgentName(binding.agent_id,names):"Earlier default",subtitle:"on "+niceDevice(host),seed:binding.agent_id||host,local:host===o?.me.address};}
   const w = deviceWho(peer, o), me = o?.person;
   if (w.agent) {
     if (!w.person) return { kind: "agent", title: w.device || "Agent", subtitle: "Agent · not linked to a person", seed: peer, local: false };
-    return { kind: "agent", title: agentName(undefined, names, w.person, me) + (w.short ? " · " + w.short : ""), subtitle: "on " + w.device, seed: peer, local: false };
+    return { kind: "agent", title: agentName(undefined, names, { ...w.person, address: peer }, me) + (w.short ? " · " + w.short : ""), subtitle: "on " + w.device, seed: peer, local: false };
   }
   if (w.relation === "own" || w.relation === "this") {
-    if (o?.me.agent) return { kind: "agent", title: "Your agent", subtitle: "On this computer · asked from your " + w.device, seed: o.me.address, local: true };
+    if (o?.me.agent) return { kind: "agent", title: "Earlier default", subtitle: "On this computer · asked from your " + w.device, seed: o.me.address, local: true };
     return { kind: "person", title: "Your " + w.device, subtitle: "Your device", seed: peer, local: false };
   }
   if (w.relation === "person") return { kind: "person", title: whoName(w), subtitle: "from " + w.device, seed: w.person?.person || peer, local: false };
@@ -359,14 +376,14 @@ export function threadAuthor(m: T.Message, o: T.Overview | null | undefined, nam
   if (m.dir === "out") {
     if (o?.me.agent && (peer === o.me.address || !runsAgent(peer, o)) && (m.kind === "answer" || m.kind === "result")) {
       const req = all.find((x) => x.id === m.reply_to);
-      if (!req || req.state !== "manual") return { key: "local:" + o.me.address, name: (m.agent_id && names[m.agent_id]) || "Your agent", sub: "On this computer", agent: true, mine: false, seed: m.agent_id || o.me.address };
+      if (!req || req.state !== "manual") return { key: "local:" + o.me.address, name: (m.agent_id && historicalAgentName(m.agent_id,names)) || (m.responder||req?.responder ? concreteAgentLabel({id:"",label:m.responder||req!.responder!,harness:m.responder||req!.responder!}) : "Earlier default"), sub: "On this computer", agent: true, mine: false, seed: m.agent_id || o.me.address };
     }
     return { key: "me", name: "You", agent: false, mine: true, seed: me?.person || "me" };
   }
   const w = deviceWho(m.from, o);
   if (w.agent) {
     const row = threadRow(m.from, o, names);
-    return { key: "in:" + m.from + "#" + (m.agent_id || ""), name: (m.agent_id && names[m.agent_id]) || row.title, sub: "on " + w.device, agent: true, mine: false, seed: m.agent_id || m.from };
+    return { key: "in:" + m.from + "#" + (m.agent_id || ""), name: (m.agent_id && historicalAgentName(m.agent_id,names)) || (m.kind==="answer"||m.kind==="result" ? "Earlier default" : row.title), sub: "on " + w.device, agent: true, mine: false, seed: m.agent_id || m.from };
   }
   if (w.relation === "own" || w.relation === "this") return { key: "me:" + m.from, name: "You", sub: "from " + w.device, agent: false, mine: true, seed: me?.person || "me" };
   if (w.relation === "person") return { key: "p:" + (w.person?.person || m.from), name: whoName(w), sub: "from " + w.device, agent: false, mine: false, seed: w.person?.person || m.from };
@@ -376,16 +393,18 @@ export function threadAuthor(m: T.Message, o: T.Overview | null | undefined, nam
 /** Keep follow-ups addressed to the named agent recorded in this thread's
  * verified messages. The send API resolves it against the current catalog. */
 export function threadAgentID(thread: T.Thread): string | undefined {
-  for (const m of [...(thread.messages || [])].reverse()) {
-    if ((m as T.Message & { _local?: boolean })._local) continue; // pending preview carries no signed target
-    if (m.dir === "out" && (m.kind === "question" || m.kind === "task"))
-      return m.target?.address === thread.peer ? m.target.agent_id : undefined;
-    // A paged view may contain the answer without its original question.
-    if (m.from === thread.peer && (m.kind === "answer" || m.kind === "result") && m.agent_id)
-      return m.agent_id;
-  }
-  return undefined;
+  if(thread.topic && Object.prototype.hasOwnProperty.call(thread.topic,"agent_host"))return thread.topic.agent_id||undefined;
+  // Old providers expose only immutable request targets. Refuse a mixed view.
+  const messages=(thread.messages||[]).filter(m=>!(m as T.Message&{_local?:boolean})._local);
+  const requests=messages.filter(m=>m.dir==="out"&&(m.kind==="question"||m.kind==="task"));
+  if(requests.some(m=>m.target&&m.target.address!==thread.peer))return;
+  const ids=new Set(requests.length?requests.map(m=>m.target?.agent_id||""):messages.filter(m=>m.from===thread.peer&&(m.kind==="answer"||m.kind==="result")).map(m=>m.agent_id||""));
+  return ids.size===1 ? [...ids][0]||undefined : undefined;
 }
+
+export const threadAgentHost=(thread:T.Thread)=>(thread.topic?.agent_id||thread.topic?.agent_legacy)&&thread.topic.agent_host||thread.peer;
+
+export const threadAgentKey=(thread:T.Thread)=>threadAgentHost(thread)!==thread.peer?thread.agent_host_key||{}:thread.key;
 
 /** What a device thread's composer may send to peer. */
 export type DeviceTarget =
@@ -416,7 +435,7 @@ export function askerWords(address: string, o: T.Overview | null | undefined, na
  *  offered one by one). A phone or a browser is never offered. */
 export function bringInDevices(p: T.PersonView, o: T.Overview | null | undefined, remote: Record<string, unknown[] | undefined>): string[] {
   const devices = (p.devices || []).length ? (p.devices || []).map((d) => d.address) : [p.address];
-  return devices.filter((a) => runsAgent(a, o) && !(remote[a] || []).length);
+  return []; // Only verified concrete catalog entries are selectable.
 }
 
 // ---- who is in a conversation ---------------------------------------------
@@ -561,10 +580,10 @@ export function deviceKind(address?: string): DeviceKind | undefined {
 /** Name agents with their owner even in compact mentions. Unnamed own agents
  *  on other devices also retain the host name. */
 export function agentName(agentId: string | undefined, names: Record<string, string>, host: T.PersonView | null | undefined, me: T.PersonView | null | undefined): string {
-  const name = agentId && names[agentId];
+  const name = agentId && names[agentId] && concreteAgentName(agentId,names);
   if (name) return (host ? owner(host, me) + " " : "") + name;
   const remoteOwn = host?.person && host.person === me?.person && host.address && host.address !== me.address;
-  return owner(host, me) + " agent" + (remoteOwn ? " on " + niceDevice(host.address) : "");
+  return owner(host, me) + " earlier default" + (host?.address ? " on " + niceDevice(host.address) : "");
 }
 
 /** agentWhere says whose agent it is and where it runs: "Your agent · Zenbook". */
@@ -617,16 +636,17 @@ export function chatName(conv: string, o: T.Overview | null) {
 export const senderOf = (c: T.ConvItem, o: T.Overview | null) => (isMine(c.peer, o) ? "You" : nameOf(c.peer, o));
 
 /** convTitle: what a conversation item is, as one sentence that names who and what. */
-export function convTitle(c: T.ConvItem, o: T.Overview | null): string {
+export function convTitle(c: T.ConvItem, o: T.Overview | null, names:Record<string,string> = {}): string {
   const who = senderOf(c, o);
+  const agent=(c.target?.agent_id?(names[c.target.agent_id]||"Agent "+c.target.agent_id.slice(0,8)):"the earlier default")+(c.target?.address?" on "+niceDevice(c.target.address):"");
   // A host word that is not current says nothing of what the agent did.
-  if (c.stale) return who + (c.kind === "task" ? " gave your agent a task" : " asked your agent something");
+  if (c.stale) return who + (c.kind === "task" ? " gave "+agent+" a task" : " asked "+agent+" something");
   switch (c.reason) {
-    case Reason.invite: return who + (c.role === "human" ? " invited you into " : " invited your agent into ") + chatName(c.conv, o);
-    case Reason.needsHuman: return "Your agent couldn’t finish — it needs your attention";
-    case Reason.interrupted: return "Your agent was interrupted — run it again if needed";
+    case Reason.invite: return who + (c.role === "human" ? " invited you into " : " invited "+agent+" into ") + chatName(c.conv, o);
+    case Reason.needsHuman: return agent.charAt(0).toUpperCase()+agent.slice(1)+" couldn’t finish — it needs your attention";
+    case Reason.interrupted: return agent.charAt(0).toUpperCase()+agent.slice(1)+" was interrupted — run it again if needed";
     case Reason.heldTurn: return who + (c.kind === "task" ? " gave you a task" : " asked you something");
-    default: return who + (c.kind === "task" ? " gave your agent a task" : " asked your agent something");
+    default: return who + (c.kind === "task" ? " gave "+agent+" a task" : " asked "+agent+" something");
   }
 }
 

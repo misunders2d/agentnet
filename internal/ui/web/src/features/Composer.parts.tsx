@@ -34,11 +34,11 @@ export function PlusMenu({ actions, disabled, onOpenChange, onClosed, finalFocus
       </Menu.Trigger>
       <Menu.Portal container={portal}>
         <Menu.Positioner side="top" align="start" sideOffset={10} collisionPadding={12} className="z-40 outline-none">
-          <Menu.Popup finalFocus={finalFocus} className="w-72 origin-[var(--transform-origin)] rounded-2xl bg-surface p-1.5 text-ink outline-none stroke shadow-pop transition-[transform,opacity] duration-200 ease-out-soft data-[ending-style]:scale-95 data-[ending-style]:opacity-0 data-[starting-style]:scale-95 data-[starting-style]:opacity-0 motion-reduce:transition-opacity">
+          <Menu.Popup finalFocus={finalFocus} className="w-64 origin-[var(--transform-origin)] rounded-2xl bg-surface p-1.5 text-ink outline-none stroke shadow-pop transition-[transform,opacity] duration-200 ease-out-soft data-[ending-style]:scale-95 data-[ending-style]:opacity-0 data-[starting-style]:scale-95 data-[starting-style]:opacity-0 motion-reduce:transition-opacity">
             {actions.map((a) => (
               <Menu.Item key={a.label} disabled={a.disabled} onClick={a.run}
-                className="flex min-h-14 cursor-pointer items-center gap-3 rounded-xl px-2.5 py-1.5 outline-none select-none data-[highlighted]:bg-sunken data-[disabled]:cursor-default data-[disabled]:opacity-50">
-                <span aria-hidden="true" className={"grid size-10 shrink-0 place-items-center rounded-xl " + a.tone}>{a.icon}</span>
+                className="flex min-h-12 cursor-pointer items-center gap-3 rounded-xl px-2.5 py-1.5 outline-none select-none data-[highlighted]:bg-sunken data-[disabled]:cursor-default data-[disabled]:opacity-50">
+                <span aria-hidden="true" className={"grid size-9 shrink-0 place-items-center rounded-xl " + a.tone}>{a.icon}</span>
                 <span className="min-w-0">
                   <span className="block font-semibold leading-tight">{a.label}</span>
                   {a.sub && <span className="mt-0.5 block text-[13px] leading-tight text-muted">{a.sub}</span>}

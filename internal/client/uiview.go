@@ -56,32 +56,37 @@ type ThreadSummary struct {
 	// done or Reopen here. Archived counts from it.
 	QuietSince time.Time `json:"quiet_since"`
 
-	// AgentID is the thread's agent when one is named: the latest a request
-	// names as its target, or an answer, result or progress as its author
-	// (as admission bound them); never a received request's local executor.
-	AgentID string `json:"agent_id,omitempty"`
+	// The original exchange destination is resolved before personal placement.
+	// Current defaults and a moved/latest display row never choose its agent.
+	AgentID     string `json:"agent_id,omitempty"`
+	AgentHost   string `json:"agent_host,omitempty"`
+	AgentLegacy bool   `json:"agent_legacy,omitempty"`
+	AgentKey    string `json:"agent_key,omitempty"`
 
-	lastID, conclusionID, custom        string  // what topicText reads, and the name set here
-	titleLine, lastLine, conclusionLine *string // bounded resolved controls, never original bodies
+	firstID, lastID, conclusionID, custom string  // what topicText reads, and the name set here
+	titleLine, lastLine, conclusionLine   *string // bounded resolved controls, never original bodies
 }
 
 // threadRow is what a summary needs to know about one message.
 type threadRow struct {
 	link
-	localJob  bool    // local execution state without changing reply direction
-	execState string  // exact target's admitted execution report
-	execStale bool    // that report may be old news (ExecView.Stale)
-	key       string  // admitted original author key, including own-history replicas
-	preview   *string // edited/deleted display, resolved in the existing controls pass
-	in        bool
-	kind      string
-	state     string
-	topicDone bool
-	status    string // the outcome an answer or result carries
-	unread    bool
-	notice    bool // in only: a review notice (see envelope.StatusReviewNotice)
-	replied   bool // out only: a received message replies to it
-	selected  bool // in only: local receiver input, not a remote execution job
+	destination DirectDestination
+	topic       string // personal display placement; never an execution binding
+	organized   bool
+	localJob    bool    // local execution state without changing reply direction
+	execState   string  // exact target's admitted execution report
+	execStale   bool    // that report may be old news (ExecView.Stale)
+	key         string  // admitted original author key, including own-history replicas
+	preview     *string // edited/deleted display, resolved in the existing controls pass
+	in          bool
+	kind        string
+	state       string
+	topicDone   bool
+	status      string // the outcome an answer or result carries
+	unread      bool
+	notice      bool // in only: a review notice (see envelope.StatusReviewNotice)
+	replied     bool // out only: a received message replies to it
+	selected    bool // in only: local receiver input, not a remote execution job
 	// agent is the agent it names: a request's target, an output's author.
 	agent string
 }
@@ -140,7 +145,7 @@ func (a *Agent) peerThreadGroups(peer string) ([][]string, map[string]threadRow,
 	if err != nil {
 		return nil, nil, err
 	}
-	rows, err := a.store.threadRows(peer, a.Self().Fingerprint())
+	rows, err := a.store.threadRows(peer, a.Address, a.Self().Fingerprint())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -211,7 +216,7 @@ func (a *Agent) peerThreadGroups(peer string) ([][]string, map[string]threadRow,
 		parent[l.id] = l.id
 	}
 	for _, l := range links {
-		if _, ok := parent[l.replyTo]; ok && l.replyTo != "" {
+		if _, ok := parent[l.replyTo]; ok && l.replyTo != "" && rows[l.id].destination == rows[l.replyTo].destination {
 			parent[find(l.id)] = find(l.replyTo)
 		}
 	}
@@ -232,7 +237,8 @@ func (a *Agent) peerThreadGroups(peer string) ([][]string, map[string]threadRow,
 		}
 		groups = append(groups, g)
 	}
-	return groups, rows, nil
+	organized, err := a.organizeDirectGroups(peer, groups, rows)
+	return organized, rows, err
 }
 
 // conversationPeers lists every address this installation has exchanged
@@ -259,12 +265,12 @@ func (s *store) conversationPeers() ([]string, error) {
 // tasks have a reply, and the agent each names: a request's target agent,
 // or an output's author (a received request's agent_id is its local
 // executor, never its sender's word).
-func (s *store) threadRows(peer, selfFP string) (map[string]threadRow, error) {
+func (s *store) threadRows(peer, self, selfFP string) (map[string]threadRow, error) {
 	out := map[string]threadRow{}
 	// A review notice is exactly the shape the store files as one (see
 	// receivedNotice); a reply or a message with files never is.
 	rows, err := s.db.Query(`SELECT id, kind, state, read_at IS NULL, coalesce(reply_to, ''), coalesce(status, ''), (`+receivedNotice+`), EXISTS(SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id),
-		CASE WHEN kind IN ('`+envelope.KindQuestion+`', '`+envelope.KindTask+`') THEN coalesce(json_extract(target, '$.agent_id'), '') ELSE coalesce(agent_id, '') END,topic_done,l.thread_key,l.thread_dir
+		CASE WHEN kind IN ('`+envelope.KindQuestion+`', '`+envelope.KindTask+`') THEN coalesce(json_extract(target, '$.agent_id'), '') ELSE coalesce(agent_id, '') END,topic_done,l.thread_key,l.thread_dir,coalesce(json_extract(target,'$.address'),CASE WHEN kind IN ('question','task') OR (kind='message' AND reply_to IS NULL) THEN (SELECT recipient FROM device_history_rows WHERE storage='in' AND id=inbox.id) END,''),coalesce(json_extract(target,'$.fingerprint'),(SELECT recipient_fp FROM device_history_rows WHERE storage='in' AND id=inbox.id),'')
 		FROM inbox JOIN (SELECT id AS thread_id,direction AS thread_dir,author_fp AS thread_key FROM device_thread_links WHERE peer=? AND storage='in') l ON l.thread_id=inbox.id WHERE conv IS NULL AND ref_id IS NULL AND coalesce(sub,'') NOT IN `+recordSubs+` AND NOT `+erasedInFor("inbox"),
 		envelope.KindMessage, envelope.StatusReviewNotice, peer)
 	if err != nil {
@@ -275,11 +281,30 @@ func (s *store) threadRows(peer, selfFP string) (map[string]threadRow, error) {
 		var r threadRow
 		var status string
 		var direction string
-		if err := rows.Scan(&r.id, &r.kind, &r.state, &r.unread, &r.replyTo, &status, &r.notice, &r.selected, &r.agent, &r.topicDone, &r.key, &direction); err != nil {
+		var host, hostKey string
+		if err := rows.Scan(&r.id, &r.kind, &r.state, &r.unread, &r.replyTo, &status, &r.notice, &r.selected, &r.agent, &r.topicDone, &r.key, &direction, &host, &hostKey); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		r.in, r.status = direction == "in", status
+		if host != "" {
+			r.destination = DirectDestination{Host: host, Fingerprint: hostKey, AgentID: r.agent}
+		} else if r.kind == envelope.KindQuestion || r.kind == envelope.KindTask {
+			if r.in {
+				r.destination = DirectDestination{Host: self, Fingerprint: selfFP}
+			} else {
+				r.destination = DirectDestination{Host: peer, Fingerprint: hostKey}
+			}
+		} else if r.kind == envelope.KindAnswer || r.kind == envelope.KindResult || status == envelope.StatusProgress {
+			if r.in {
+				r.destination = DirectDestination{Host: peer, Fingerprint: r.key, AgentID: r.agent}
+			} else {
+				r.destination = DirectDestination{Host: self, Fingerprint: selfFP, AgentID: r.agent}
+			}
+		}
+		if r.destination.Host == "" && r.replyTo == "" {
+			r.destination = DirectDestination{Host: self, Fingerprint: selfFP}
+		}
 		out[r.id] = r
 		if r.in && r.replyTo != "" && status != envelope.StatusProgress {
 			replies[r.replyTo] = true
@@ -291,7 +316,7 @@ func (s *store) threadRows(peer, selfFP string) (map[string]threadRow, error) {
 	}
 	rows, err = s.db.Query(`SELECT id, coalesce(json_extract(envelope, '$.kind'), ''), state, coalesce(status, ''), coalesce(json_extract(target, '$.agent_id'), agent_id, ''),topic_done,
 		(coalesce(json_extract(envelope,'$.kind'),'')='message' AND coalesce(status,'')='review_notice' AND reply_to IS NULL AND NOT EXISTS(SELECT 1 FROM sent_attachments a WHERE a.message_id=o.id)),
-		l.thread_dir,coalesce(reply_to,''),l.thread_key
+		l.thread_dir,coalesce(reply_to,''),l.thread_key,coalesce(json_extract(target,'$.address'),''),coalesce(json_extract(target,'$.fingerprint'),recipient_fp,'')
 		FROM outbox o JOIN (SELECT id AS thread_id,direction AS thread_dir,author_fp AS thread_key FROM device_thread_links WHERE peer=? AND storage='out') l ON l.thread_id=o.id WHERE conv IS NULL AND ref_id IS NULL AND coalesce(sub,'') NOT IN `+recordSubs+` AND NOT `+erasedOut, peer, selfFP)
 	if err != nil {
 		return nil, err
@@ -300,15 +325,30 @@ func (s *store) threadRows(peer, selfFP string) (map[string]threadRow, error) {
 	for rows.Next() {
 		var r threadRow
 		var direction string
-		if err := rows.Scan(&r.id, &r.kind, &r.state, &r.status, &r.agent, &r.topicDone, &r.notice, &direction, &r.replyTo, &r.key); err != nil {
+		var host, hostKey string
+		if err := rows.Scan(&r.id, &r.kind, &r.state, &r.status, &r.agent, &r.topicDone, &r.notice, &direction, &r.replyTo, &r.key, &host, &hostKey); err != nil {
 			return nil, err
 		}
 		r.in = direction == "in"
+		if host != "" {
+			r.destination = DirectDestination{Host: host, Fingerprint: hostKey, AgentID: r.agent}
+		} else if r.kind == envelope.KindQuestion || r.kind == envelope.KindTask {
+			r.destination = DirectDestination{Host: peer, Fingerprint: hostKey}
+		} else if r.kind == envelope.KindAnswer || r.kind == envelope.KindResult || r.status == envelope.StatusProgress {
+			if r.in {
+				r.destination = DirectDestination{Host: peer, Fingerprint: r.key, AgentID: r.agent}
+			} else {
+				r.destination = DirectDestination{Host: self, Fingerprint: selfFP, AgentID: r.agent}
+			}
+		}
 		if r.key == "" {
 			r.key = selfFP
 		}
 		if r.in && r.replyTo != "" && r.status != envelope.StatusProgress {
 			replies[r.replyTo] = true
+		}
+		if r.destination.Host == "" && r.replyTo == "" {
+			r.destination = DirectDestination{Host: peer, Fingerprint: hostKey}
 		}
 		r.replied = replies[r.id]
 		out[r.id] = r
@@ -317,6 +357,7 @@ func (s *store) threadRows(peer, selfFP string) (map[string]threadRow, error) {
 		r.replied = replies[id]
 		out[id] = r
 	}
+	resolveDirectDestinations(out)
 	return out, rows.Err()
 }
 

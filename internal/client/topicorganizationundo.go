@@ -13,7 +13,8 @@ import (
 )
 
 type TopicOrganizationUndo struct {
-	Conv   string `json:"conv"`
+	Conv   string `json:"conv,omitempty"`
+	Peer   string `json:"peer,omitempty"`
 	LID    string `json:"lid"`
 	Author string `json:"author"`
 	ID     string `json:"id"` // one human action's durable retry identity
@@ -70,6 +71,9 @@ func undoOperation(request TopicOrganizationUndo, topic string) string {
 // before any effect. Their current stamps/author/recipient checks commit in one
 // existing outbox transaction; stale or interrupted batches store nothing.
 func (a *Agent) UndoTopicOrganization(ctx context.Context, request TopicOrganizationUndo) ([]ConvSent, error) {
+	if request.Peer != "" {
+		return a.undoDirectTopicOrganization(request)
+	}
 	if !protocol.ValidHash(request.Conv) || !protocol.ValidID(request.LID) || !protocol.ValidFingerprint(request.Author) || !protocol.ValidID(request.ID) {
 		return nil, ErrNoMessage
 	}

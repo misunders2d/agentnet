@@ -77,7 +77,7 @@ assert.equal(directModule.currentDirectComposerFollowup(ambiguous,directContext(
 assert.throws(()=>selectDirect({...directThread,key:{pinned:directHostKey,pending:directAuthor}}),/cannot be verified/);
 assert.throws(()=>selectDirect({...directThread,messages:[directMessage,{...directMessage,exec:{...directMessage.exec,attempt:2}}]}),/cannot be verified/);
 const namedID='c'.repeat(32),otherNamed='e'.repeat(32);
-assert.throws(()=>selectDirect({...directThread,messages:[{...directMessage,target:{address:directPeer,fingerprint:directHostKey,agent_id:namedID}},{...secondDirect,target:{address:directPeer,fingerprint:directHostKey,agent_id:otherNamed}}]}),/cannot be verified/,'same display names never bridge named identities');
+assert.equal(selectDirect({...directThread,topic:{agent_host:directPeer,agent_key:directHostKey,agent_id:namedID},messages:[{...directMessage,target:{address:directPeer,fingerprint:directHostKey,agent_id:namedID}},{...secondDirect,target:{address:directPeer,fingerprint:directHostKey,agent_id:otherNamed},exec:{...secondDirect.exec,stale:true}}]}).ref.id,directID,'another exact agent never blocks selected work');
 console.log('direct selector default identity and refusal checks PASS');
 
 // Execute the actual desktop and Android send functions with the same
@@ -90,8 +90,8 @@ const desktopSource=sendSource.match(/^  async function send\([\s\S]*?^  }/m)?.[
 const androidSource=sendSource.match(/^  async function sendAndroid\([\s\S]*?^  }/m)?.[0];
 const selectorSource=composerSource.match(/^  const selectedTargetFollowup = [\s\S]*?;$/m)?.[0];
 assert.ok(desktopSource&&androidSource&&selectorSource,'actual send paths and shared destination selector');
-async function directSend(platform,{named=false,fail=false,newTopic=false,ended=false,invalid=false,projection,refusal}={}) {
- const calls=[],previews=[],notices=[],savedRows=new Map();let cleared=0,serial=0,retry;
+async function directSend(platform,{named=false,fail=false,newTopic=false,ended=false,invalid=false,projection,refusal,refreshState,refreshFails=false,otherStale=false}={}) {
+ const calls=[],previews=[],notices=[],savedRows=new Map();let cleared=0,serial=0,retry,refreshes=0,stages=0;
  const storage={getItem:k=>savedRows.get(k)||null,setItem:(k,v)=>savedRows.set(k,v)};
  const target={kind:'device',ask:true,name:'Selected agent',seed:directPeer};
  const namedTarget=named?{address:directPeer,fingerprint:directHostKey,agent_id:'c'.repeat(32)}:undefined;
@@ -101,28 +101,31 @@ async function directSend(platform,{named=false,fail=false,newTopic=false,ended=
  if(projection){thread.messages=thread.messages.map(m=>m.id===message.id?message:m);if(ended)message.exec={...message.exec,state:'done'};if(invalid)message.exec={...message.exec,attempt:0};}
  if(refusal==='pending')thread.key={...thread.key,pending:directAuthor};
  if(refusal==='key')message.target={...message.target,address:thread.peer,fingerprint:directAuthor};
- if(refusal==='stale')message.exec={...message.exec,stale:true};
+ if(refusal==='stale'||refreshState||refreshFails)message.exec={...message.exec,stale:true};
+ if(otherStale){thread.topic={agent_host:directPeer,agent_key:directHostKey,agent_id:namedTarget?.agent_id||''};thread.messages.push({...secondDirect,target:{address:directPeer,fingerprint:directHostKey,agent_id:'e'.repeat(32)},exec:{...secondDirect.exec,stale:true}});}
  const overview=projection?.overview||directOverview;
  const draft={text:'Use English instead',newTopic,files:[{key:'terms',name:'terms.md',size:1,file:{}}]};
  const state={open:'selected-view',overview,drafts:{[thread.id]:draft}};
  const api=async(endpoint,request)=>{calls.push({endpoint,request:JSON.parse(JSON.stringify(request))});if(fail)throw Error('offline');return {id:request.id,state:'queued',note:'accepted for transport'};};
  const store={host:{platform,workspace:{id:platform},api},get:()=>state,isActive:()=>true,draft:()=>state.drafts[thread.id],setDraft:(_,d)=>state.drafts[thread.id]=d,
- api:{stage:async()=> 'staged-terms',send:request=>api('/api/send',request),discard:async()=>{}},toast:()=>{},refetch:async()=>{},open:async()=>{},
+ api:{thread:async()=>{refreshes++;assert.equal(cleared,0,'refresh precedes draft clearing');if(refreshFails)throw Error('offline while refreshing exact work');return refreshState?{...thread,messages:[{...message,exec:{...message.exec,state:refreshState,stale:false,attempt:2}}]}:thread;},stage:async()=>{stages++;return 'staged-terms';},send:request=>api('/api/send',request),discard:async()=>{}},toast:()=>{},refetch:async()=>{},open:async()=>{},
  sends:{begin:(_,m,r)=>{previews.push(m);retry=r;},ready:async()=>{},finish:()=>{},remove:()=>{},move:()=>{},has:()=>true,fail:()=>{}}};
  const env={store,thread,dm:undefined,conv:thread.id,ready:true,latest:()=>draft,target,overview,names:{},words:{},visible:{current:thread.id},EMPTY:{text:''},
  followupContext:{...directContext(thread),overview},currentDirectComposerFollowup:directModule.currentDirectComposerFollowup,selectedFollowup:()=>{throw Error('invited selector used for direct chat');},
  setNotice:n=>{if(n)notices.push(n.text);},setBusy:()=>{},clearSent:()=>{cleared++;state.drafts[thread.id]={text:''};},typing:{stop:()=>{}},
  sendID:()=> (++serial).toString(16).padStart(32,'0'),decode:text=>({text,spans:[]}),encode:text=>text,
  releaseFiles:()=>{},keepStaged:()=>{},forgetStaged:()=>{},announce:()=>{},errorText:e=>e.message,messageOf:()=>message,
- threadAgentID:t=>t.messages[0].target?.agent_id,androidPreparing:{current:new Set()},saveBatch:journal.saveBatch,acknowledge:journal.acknowledge,recordFailure:journal.recordFailure,localStorage:storage};
+ threadAgentKey:t=>t.key,threadAgentHost:t=>(t.topic?.agent_id||t.topic?.agent_legacy)&&t.topic.agent_host||t.peer,threadAgentID:t=>t.messages[0].target?.agent_id,androidPreparing:{current:new Set()},saveBatch:journal.saveBatch,acknowledge:journal.acknowledge,recordFailure:journal.recordFailure,localStorage:storage};
  runInNewContext(stripTypeScriptTypes(selectorSource)+'; globalThis.boundSelector = selectedTargetFollowup;',env);env.selectedTargetFollowup=env.boundSelector;
  const send=runInNewContext('('+stripTypeScriptTypes(desktopSource)+')',env);
  env.sendAndroid=runInNewContext('('+stripTypeScriptTypes(androidSource)+')',env);
  await send();
+ if(!message.target?.agent_id&&(newTopic||ended||refreshState==='done')){assert.equal(calls.length,0,'legacy terminal/new work has no send');assert.equal(cleared,0);assert.equal(stages,0,'legacy recovery stages no files');assert.equal(journal.readPending(storage,platform).length,0,'legacy recovery freezes no send journal');assert.match(notices.join(' '),/concrete agent binding/);return;}
+ if(refreshFails){assert.equal(calls.length,0);assert.equal(cleared,0);assert.equal(refreshes,1);assert.match(notices.join(' '),/offline/);return;}
  if((invalid||refusal)&&!newTopic){assert.equal(calls.length,0);assert.equal(cleared,0);assert.match(notices.join(' '),/cannot be verified/);return;}
  assert.equal(calls.length,1,platform+' submits one request');
- assert.equal(calls[0].endpoint,newTopic||ended?'/api/send':'/api/request/followup',platform+' routes ordinary direct send');
- if(!newTopic&&!ended){assert.equal(calls[0].request.conv,'');assert.equal(calls[0].request.ref.id,projection?.original||directID);assert.equal(calls[0].request.ref.fingerprint,projection?.author||directAuthor);assert.equal(calls[0].request.attempt,original.exec.attempt);assert.deepEqual(calls[0].request.files,['staged-terms']);}
+ assert.equal(calls[0].endpoint,newTopic||ended||refreshState==='done'?'/api/send':'/api/request/followup',platform+' routes ordinary direct send');
+ if(!newTopic&&!ended&&refreshState!=='done'){assert.equal(calls[0].request.conv,'');assert.equal(calls[0].request.ref.id,projection?.original||directID);assert.equal(calls[0].request.ref.fingerprint,projection?.author||directAuthor);assert.equal(calls[0].request.attempt,refreshState?2:original.exec.attempt);assert.deepEqual(calls[0].request.files,['staged-terms']);}
  if(fail&&platform==='android'){
   const entries=journal.readPending(storage,platform);assert.equal(entries.length,1);assert.deepEqual(entries[0].request,calls[0].request,'journal freezes exact intent and stages');
   assert.equal(entries[0].endpoint,'/api/request/followup');
@@ -131,7 +134,7 @@ async function directSend(platform,{named=false,fail=false,newTopic=false,ended=
   assert.equal(calls.length,2);assert.deepEqual(calls[1],calls[0],'desktop retry retains exact ID/ref/attempt/files');
  }else if(platform==='android') assert.equal(journal.readPending(storage,platform).length,0);
 }
-for(const platform of process.env.AGENTNET_COMPOSER_PLATFORM?[process.env.AGENTNET_COMPOSER_PLATFORM]:['daemon','android'])for(const opts of [{},{named:true},{fail:true},{newTopic:true},{ended:true},{invalid:true}])await directSend(platform,opts);
+for(const platform of process.env.AGENTNET_COMPOSER_PLATFORM?[process.env.AGENTNET_COMPOSER_PLATFORM]:['daemon','android'])for(const opts of [{},{named:true},{fail:true},{newTopic:true},{ended:true},{invalid:true},{named:true,otherStale:true},{refreshState:'done'},{named:true,refreshState:'done'},{named:true,refreshState:'running'},{named:true,refreshFails:true}])await directSend(platform,opts);
 console.log('actual desktop/Android direct send, named/default, files, offline exact retry/journal, new-topic/no-run and invalid draft retention PASS');
 
 // These original DTOs come unchanged from the linked human's actual Live.Thread.

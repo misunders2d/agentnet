@@ -183,7 +183,7 @@ await store.write(ops);
 await engine.loadErased();
 
 const { threads, topics } = await engine.topicOverview(false);
-const tb = topics.find((t) => t.peer === bob);
+const tb = topics.filter(t=>t.peer===bob).reduce((sum,t)=>({total:sum.total+t.total,archived:sum.archived+t.archived,archived_unread:sum.archived_unread+t.archived_unread,latest:!sum.latest||sum.latest.last_at<t.latest.last_at?t.latest:sum.latest}),{total:0,archived:0,archived_unread:0,latest:null});
 check(tb.total === 156 && tb.archived === 41 && tb.archived_unread === 1, 'counts: 156 topics with bob, 41 archived (one unread message among them): ' + JSON.stringify({ ...tb, latest: undefined }));
 check(threads.filter((t) => t.peer === bob).length === 115 && !threads.some((t) => t.state === 'archived'), 'the overview lists the 115 not archived');
 // Without topics=1 (the previous interface, installed skins) every thread
@@ -310,6 +310,15 @@ check(changes > writesBefore && network === 0, 'changes are announced; nothing t
  page=await e.topicList(new URLSearchParams());
  const settled=page.topics.find(t=>t.id===id);
  check(settled?.pending===false&&settled.state==='done','actual later accepted terminal answer wins normal topic derivation');
+}
+
+// Exact configured agents on one host retain complete pagination/counts.
+{
+ const e=new Engine({store:memoryStore(),base:'https://synthetic.invalid'}),host='owner/host',key='aaaaaaaa-aaaaaaaa-aaaaaaaa-aaaaaaaa',ids=['a'.repeat(32),'b'.repeat(32)],all=[];
+ for(const agent of ids)for(let i=0;i<TOPICS.pageMax+3;i++)all.push({id:wire.newID(),peer:host,agent_host:host,agent_key:key,agent_id:agent,title:'Same name',last:'Done',state:'archived',last_at:new Date(1700000000000+i*1000).toISOString(),unread:0,notice_only:false});
+ e.threadSummaries=async()=>all;
+ for(const agent of ids){const q=new URLSearchParams({peer:host,agent_host:host,agent_key:key,agent_id:agent,state:'archived',limit:'17'}),seen=new Set();for(;;){const page=await e.topicList(q);same(page.matched,TOPICS.pageMax+3,'exact agent total before paging');for(const t of page.topics){check(t.agent_id===agent&&!seen.has(t.id),'exact scoped topic once');seen.add(t.id);}if(!page.next)break;q.set('before',page.next);}same(seen.size,TOPICS.pageMax+3,'all scoped topics beyond maximum page');}
+ const overview=await e.topicOverview(false);same(overview.topics.length,2,'archived-only rows stay separate by agent');check(overview.topics.every(c=>c.total===TOPICS.pageMax+3&&c.archived===TOPICS.pageMax+3),'archived totals scoped to exact agents');await refuses(()=>e.topicList(new URLSearchParams({agent_id:ids[0]})),/not valid/,'partial identity refused');
 }
 
 console.log(JSON.stringify({ checks }));

@@ -3,7 +3,7 @@ import { AgentModelReport } from "./AgentModelReport";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { errorText, type Api, type T } from "../api";
 import { useApp } from "../context";
-import { niceDevice, runsAgent } from "../model";
+import { concreteAgentLabel, niceDevice, runsAgent } from "../model";
 import { sendID } from "../optimistic.mjs";
 import { Button } from "../ui/Button";
 import { Sheet } from "../ui/Sheet";
@@ -11,6 +11,8 @@ import { Sheet } from "../ui/Sheet";
 export interface AgentChatTarget {
   host: string;
   agentId?: string;
+  harness?:string;
+  hostKey?:string;
   label: string;
   local: boolean;
   unavailable?: string;
@@ -30,16 +32,15 @@ export async function ownAgentChatTargets(api: Api, o: T.Overview, includeLocal:
   const hosts = [...devices].filter(h => h !== o.me.address && runsAgent(h, o));
   const work: Promise<AgentChatTarget[]>[] = hosts.map(async host => {
     const published = catalog(await api.agents(host), host).filter(a => a.enabled !== false);
-    return published.length ? published.map(a => ({host, agentId:a.record.id, label:a.record.label, local:false}))
-      : [{host, label:"Your agent", local:false}];
+    if(!published.length||!published.some(a=>a.record.harness))throw Error("Update or configure the agent on " + niceDevice(host) + " to choose it.");
+    return published.filter(a=>!!a.record.harness).map(a => ({host, agentId:a.record.id, harness:a.record.harness,hostKey:a.record.host_key,label:concreteAgentLabel(a.record,published), local:false}));
   });
   if (includeLocal) work.unshift((async () => {
-    const [v, r] = await Promise.all([api.agents(), api.responder()]);
+    const v = await api.agents();
     if (!v.local) return [];
-    const local: AgentChatTarget[] = catalog(v, o.me.address).map(a => ({host:o.me.address, agentId:a.record.id, label:a.record.label, local:true,
+    const agents=catalog(v,o.me.address);
+    const local: AgentChatTarget[] = agents.map(a => ({host:o.me.address, agentId:a.record.id, harness:a.record.harness,hostKey:a.record.host_key,label:concreteAgentLabel(a.record,agents), local:true,
       unavailable:!a.enabled ? "Turned off" : !a.responder?.ready ? a.responder?.problem || "Not ready on this computer" : undefined}));
-    if (o.me.agent) local.unshift({host:o.me.address, agentId:undefined, label:"Your agent", local:true,
-      unavailable:r.chosen && !r.manual && r.ready ? undefined : r.problem || "Choose a ready program in Settings first"});
     return local;
   })());
   const results = await Promise.allSettled(work);
@@ -52,6 +53,7 @@ export async function ownAgentChatTargets(api: Api, o: T.Overview, includeLocal:
 
 /** Recheck the selected identity/capability before sending, never substitute a default. */
 export async function checkAgentChatTarget(api: Api, target: AgentChatTarget, platform: string) {
+  if(!target.agentId)throw Error("Choose a configured agent on that computer. Your earlier conversation is kept.");
   const fresh = await api.overview();
   if (target.local) {
     if (platform !== "daemon" || target.host !== fresh.me.address) throw Error("This computer's agent is unavailable in this workspace.");
@@ -64,7 +66,7 @@ export async function checkAgentChatTarget(api: Api, target: AgentChatTarget, pl
   if (target.agentId) {
     const v = await api.agents(target.local ? undefined : target.host);
     const selected = catalog(v, target.host).find(a => a.record.id === target.agentId);
-    if (!selected || selected.enabled === false || (target.local && (!v.local || !selected.responder?.ready)))
+    if (!selected || !selected.record.harness || target.harness&&selected.record.harness!==target.harness || target.hostKey&&selected.record.host_key!==target.hostKey || selected.enabled === false || (target.local && (!v.local || !selected.responder?.ready)))
       throw Error("The selected agent is unavailable. Nothing sent; no default was chosen.");
   } else if (target.local) {
     const r = await api.responder();
@@ -129,7 +131,7 @@ export function OwnAgentChats({overview:o, includeLocal = true, query = "", onSt
       <div className="w-full"><AgentModelReport overview={o} host={t.host} agentId={t.agentId} /></div>
     </div>)}
     {reports.map(r => <div key={r.host + "#" + r.agent_id} className="rounded-xl bg-surface p-3 stroke">
-      <p className="font-semibold">{r.agent_id ? "Agent " + r.agent_id.slice(0, 8) : "Default agent"}</p>
+      <p className="font-semibold">{r.agent_id ? "Agent " + r.agent_id.slice(0, 8) : "Earlier default · identity unknown"}</p>
       <p className="text-[13px] text-muted">On {niceDevice(r.host)}</p>
       <AgentModelReport overview={o} host={r.host} agentId={r.agent_id} />
     </div>)}

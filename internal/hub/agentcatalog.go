@@ -43,13 +43,16 @@ func (h *Hub) handleAgentCatalogPut(w http.ResponseWriter, r *http.Request) {
 		seen[record.ID] = true
 	}
 	raw, _ := json.Marshal(records)
-	_, err = h.store.db.ExecContext(r.Context(), `INSERT INTO agent_catalogs(host,host_key,records,updated_at) VALUES(?,?,?,?)
- ON CONFLICT(host) DO UPDATE SET host_key=excluded.host_key,records=excluded.records,updated_at=excluded.updated_at`, caller, member.Public.Fingerprint(), string(raw), time.Now().Unix())
+	res, err := h.store.db.ExecContext(r.Context(), `INSERT INTO agent_catalogs(host,host_key,records,updated_at) VALUES(?,?,?,?)
+ ON CONFLICT(host) DO UPDATE SET host_key=excluded.host_key,records=excluded.records,updated_at=excluded.updated_at
+ WHERE agent_catalogs.host_key<>excluded.host_key OR agent_catalogs.records<>excluded.records`, caller, member.Public.Fingerprint(), string(raw), time.Now().Unix())
 	if err != nil {
 		writeError(w, 500, "", "agent catalog unavailable")
 		return
 	}
-	h.lookAgain() // push directory refresh, no polling or job
+	if changed, _ := res.RowsAffected(); changed > 0 {
+		h.lookAgain() // changed discovery evidence wakes readers once
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 func (h *Hub) handleAgentCatalogGet(w http.ResponseWriter, r *http.Request) {

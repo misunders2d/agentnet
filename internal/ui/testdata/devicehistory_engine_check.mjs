@@ -167,20 +167,34 @@ const restarted=new Engine({store:a.store,base:a.base,fetch});Object.assign(rest
  await drain(host,reader);
  const expected=new Map([[followup.id,'out'],[reply2.id,'in'],[task.id,'out'],[peerQuestion.id,'in'],[peerTask.id,'in']]);
  for(const copy of (await copies(host)).filter(r=>r.to===reader.address&&expected.has(JSON.parse(r.body).item.id)))await receiveHistory(copy.envelope,reader);
- const fresh=await reader.thread(requestID);
- check(fresh.messages.length===7&&fresh.peer===host.address,'follow-ups keep one original host thread and seven exact IDs');
- for(const [id,dir]of expected){
-  const row=await reader.store.get('inbox',id),m=fresh.messages.find(m=>m.id===id);
+ const allExpected=new Map([[requestID,'out'],[replyID,'in'],...expected]);
+ const originalReplies=new Map([[requestID,''],[replyID,requestID],[followup.id,replyID],[reply2.id,followup.id],[task.id,reply2.id],[peerQuestion.id,task.id],[peerTask.id,task.id]]);
+ // The counter-requests execute on the laptop, not the original host. Their
+ // cross-host reply links remain exact, while display topics keep hosts apart.
+ const exactViews=async()=>{
+  const all=new Map();
+  for(const [anchor,ids,destination]of [[requestID,[requestID,replyID,followup.id,reply2.id,task.id],host],[peerQuestion.id,[peerQuestion.id],sender],[peerTask.id,[peerTask.id],sender]]){
+   const view=await reader.thread(anchor),wanted=new Set(ids);
+   check(view.peer===host.address&&view.topic.agent_host===destination.address&&view.topic.agent_key===destination.fp&&!view.topic.agent_id&&view.topic.agent_legacy,'display group preserves original legacy host/key');
+   check(view.messages.length===wanted.size&&view.messages.every(m=>wanted.has(m.id)),'display group has exact original membership');
+   for(const m of view.messages){check(!all.has(m.id)&&m.reply_to===originalReplies.get(m.id),'each original appears once with its unchanged reply link');all.set(m.id,m);}
+  }
+  check(all.size===7&&[...allExpected.keys()].every(id=>all.has(id)),'all seven exact originals survive separate execution-host topics');
+  return all;
+ };
+ const fresh=await exactViews();
+ for(const [id,dir]of allExpected){
+  const row=await reader.store.get('inbox',id),m=fresh.get(id);
   check(row.device_history.direction===dir&&m.dir===dir&&m.history&&!m.state,'fresh mapped request/output has sender-relative inert direction '+id);
  }
  // Recreate shipped incorrect metadata. Reading corrects the presentation,
  // including the outgoing file path, without changing any retained field.
  for(const [id,dir]of expected)if(id!==reply2.id){const row=await reader.store.get('inbox',id);await reader.store.write([{s:'inbox',k:id,v:{...row,device_history:{...row.device_history,direction:dir==='out'?'in':'out'}}}]);}
- const retained=new Map(await Promise.all([...expected.keys()].map(async id=>[id,JSON.stringify(await reader.store.get('inbox',id))])));
- const corrected=await reader.thread(requestID);
- for(const [id,dir]of expected){
-  const row=await reader.store.get('inbox',id),m=corrected.messages.find(m=>m.id===id);
-  check(m.dir===dir&&corrected.peer===host.address&&m.from_key===(m.from===host.address?host.fp:sender.fp)&&m.synced_from===host.address&&JSON.stringify(row)===retained.get(id),'retained read preserves exact sender key, peer, provenance and stored original '+id);
+ const retained=new Map(await Promise.all([...allExpected.keys()].map(async id=>[id,JSON.stringify(await reader.store.get('inbox',id))])));
+ const corrected=await exactViews();
+ for(const [id,dir]of allExpected){
+  const row=await reader.store.get('inbox',id),m=corrected.get(id);
+  check(m.dir===dir&&m.history&&!m.state&&m.from_key===(m.from===host.address?host.fp:sender.fp)&&m.synced_from===host.address&&JSON.stringify(row)===retained.get(id),'retained read preserves exact sender key, peer, provenance and stored original '+id);
  }
  const originalFile=await reader.store.get('inbox',followup.id);
  check(originalFile.device_history.recipient===host.address&&originalFile.device_history.recipient_key===host.fp&&originalFile.attachments[0].sha256===file.attachment.sha256,'retained follow-up preserves exact original recipient and attachment manifest');

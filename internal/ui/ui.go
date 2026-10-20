@@ -440,21 +440,21 @@ type LastEvent struct {
 // DMThread is one conversation's messages, oldest first.
 type DMThread struct {
 	Resources       *client.ConversationResources `json:"resources,omitempty"`
-	MainTopic       *ThreadSummary    `json:"main_topic,omitempty"`
-	Topics          []ThreadSummary   `json:"topics,omitempty"`
-	Kind            string            `json:"kind,omitempty"`
-	Title           string            `json:"title,omitempty"`
-	Members         []GroupMemberView `json:"members,omitempty"`
-	Role            string            `json:"role,omitempty"` // visitor context confers no ordinary room actions
-	ID              string            `json:"id"`
-	Peer            PersonView        `json:"peer"`
-	Created         time.Time         `json:"created"`
-	Mine            bool              `json:"mine"`
-	Frozen          string            `json:"frozen,omitempty"` // why nothing can be sent in it
-	Messages        []DMMessage       `json:"messages"`
-	Agents          []AgentView       `json:"agents"` // agents invited into it, oldest first
-	Guests          []GuestView       `json:"guests,omitempty"`
-	AudiencePending bool              `json:"audience_pending,omitempty"`
+	MainTopic       *ThreadSummary                `json:"main_topic,omitempty"`
+	Topics          []ThreadSummary               `json:"topics,omitempty"`
+	Kind            string                        `json:"kind,omitempty"`
+	Title           string                        `json:"title,omitempty"`
+	Members         []GroupMemberView             `json:"members,omitempty"`
+	Role            string                        `json:"role,omitempty"` // visitor context confers no ordinary room actions
+	ID              string                        `json:"id"`
+	Peer            PersonView                    `json:"peer"`
+	Created         time.Time                     `json:"created"`
+	Mine            bool                          `json:"mine"`
+	Frozen          string                        `json:"frozen,omitempty"` // why nothing can be sent in it
+	Messages        []DMMessage                   `json:"messages"`
+	Agents          []AgentView                   `json:"agents"` // agents invited into it, oldest first
+	Guests          []GuestView                   `json:"guests,omitempty"`
+	AudiencePending bool                          `json:"audience_pending,omitempty"`
 }
 
 // DMMessage is one message of a DM.
@@ -660,6 +660,7 @@ type ResponderControl interface {
 
 // ResponderView is how this computer handles questions and tasks now.
 type ResponderView struct {
+	AgentID string   `json:"agent_id,omitempty"`
 	Chosen  bool     `json:"chosen"`            // the person has decided (a harness, or manual)
 	Manual  bool     `json:"manual"`            // no automatic responder: everything waits for the person
 	Harness string   `json:"harness,omitempty"` // the chosen harness, when not manual
@@ -687,6 +688,7 @@ type HarnessView struct {
 // harness and its directory. Timeout and context files are kept as they
 // are (the CLI sets them); an empty Dir keeps the current one.
 type ResponderChange struct {
+	AgentID string `json:"agent_id,omitempty"`
 	Manual  bool   `json:"manual"`
 	Harness string `json:"harness"`
 	Dir     string `json:"dir"`
@@ -699,7 +701,7 @@ type HistoryFiles interface {
 	RequestFile(ctx context.Context, msgID string, index int) error
 }
 
-// ReminderView is a pending reminder on a received message (S-R): it only
+// ReminderView is a pending reminder on a stored message (received or own sent): it only
 // asks for the person's attention, and nobody else sees it.
 type ReminderView struct {
 	Message string    `json:"message"`
@@ -927,7 +929,10 @@ type ThreadSummary struct {
 	// done or Reopen here); it is archived TopicArchiveAfter later.
 	QuietSince time.Time `json:"quiet_since"`
 	// AgentID is the thread's agent, when one is named (client.ThreadSummary).
-	AgentID string `json:"agent_id,omitempty"`
+	AgentID     string `json:"agent_id,omitempty"`
+	AgentHost   string `json:"agent_host,omitempty"`
+	AgentLegacy bool   `json:"agent_legacy,omitempty"`
+	AgentKey    string `json:"agent_key,omitempty"`
 }
 
 // Directory is who else the server (Hub) lists as enrolled, for finding
@@ -1137,6 +1142,7 @@ func holdCode(reason string) string {
 
 // Thread is one conversation with one peer.
 type Thread struct {
+	AgentHostKey     *PeerKey    `json:"agent_host_key,omitempty"` // current pin for topic.agent_host when it differs from peer
 	ID               string      `json:"id"`
 	Peer             string      `json:"peer"`
 	Key              PeerKey     `json:"key"`

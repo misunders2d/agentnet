@@ -7,7 +7,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"net/url"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -73,6 +76,21 @@ func TestBrowserNamedAgentWireMatchesGo(t *testing.T) {
 	v := w.ok(map[string]any{"op": "agent", "json": marshal(t, record), "host": marshal(t, pub)})
 	if v["canonical"] != string(record.Canonical()) || v["hash"] != hash || v["json"] != marshal(t, record) {
 		t.Fatal("agent canonical differs")
+	}
+	extended := record
+	extended.Harness = "pi"
+	extended.Sign(host.Sign)
+	checkOldBrowserHarnessReload(t, extended, pub)
+	v = w.ok(map[string]any{"op": "agent", "json": marshal(t, extended), "host": marshal(t, pub)})
+	if v["canonical"] != string(record.Canonical()) || v["hash"] != hash || v["json"] != marshal(t, extended) {
+		t.Fatal("signed harness differs from Go or changed v1")
+	}
+	extended.Harness = "claude"
+	w.refuses("unsigned harness", w.call(map[string]any{"op": "agent", "json": marshal(t, extended), "host": marshal(t, pub)}), "")
+	v = w.ok(map[string]any{"op": "sign-agent", "fields": map[string]any{"id": id, "label": "Pi", "ts": 1700000000, "harness": "pi"}})
+	signedHarness, err := protocol.ParseAgentRecord([]byte(v["json"].(string)))
+	if err != nil || signedHarness.Verify(browser) != nil || signedHarness.Harness != "pi" {
+		t.Fatal("browser harness extension", err)
 	}
 	v = w.ok(map[string]any{"op": "sign-agent", "fields": map[string]any{"id": id, "label": "Browser <&> Ю", "ts": 1700000000}})
 	back, err := protocol.ParseAgentRecord([]byte(v["json"].(string)))
@@ -177,6 +195,35 @@ func TestBrowserNamedAgentWireMatchesGo(t *testing.T) {
 		if v["requirement"] != want {
 			t.Fatal("history capability differs")
 		}
+	}
+}
+
+// An open v0.9.0 browser has a strict reader. Prove its actual parser refuses
+// the optional extension, and that loading the new module reads both shapes.
+func checkOldBrowserHarnessReload(t *testing.T, record protocol.AgentRecord, pub identity.Public) {
+	t.Helper()
+	cmd := exec.Command("git", "show", "6bd64377db879e7e61596cd7f084bcda080a1034:internal/ui/static/wire.mjs")
+	old, err := cmd.Output()
+	if err != nil {
+		t.Fatal("published browser source unavailable", err)
+	}
+	base, err := filepath.Abs("static")
+	if err != nil {
+		t.Fatal(err)
+	}
+	asURL := func(p string) string { return (&url.URL{Scheme: "file", Path: filepath.ToSlash(p)}).String() }
+	source := strings.ReplaceAll(string(old), `"./pictures.mjs"`, marshal(t, asURL(filepath.Join(base, "pictures.mjs"))))
+	source = strings.ReplaceAll(source, `"./vendor/age.mjs"`, marshal(t, asURL(filepath.Join(base, "vendor", "age.mjs"))))
+	oldPath := filepath.Join(t.TempDir(), "wire-v090.mjs")
+	if err = os.WriteFile(oldPath, []byte(source), 0600); err != nil {
+		t.Fatal(err)
+	}
+	legacy := record
+	legacy.Harness, legacy.HarnessSig = "", nil
+	script := `import assert from 'node:assert/strict';const old=await import(` + marshal(t, asURL(oldPath)) + `),fresh=await import(` + marshal(t, asURL(filepath.Join(base, "wire.mjs"))) + `);const host=await fresh.parsePublic(` + marshal(t, pub) + `);const legacy=` + marshal(t, marshal(t, legacy)) + `,extended=` + marshal(t, marshal(t, record)) + `;assert.doesNotThrow(()=>old.parseAgentRecord(legacy));assert.throws(()=>old.parseAgentRecord(extended));await fresh.verifyAgent(fresh.parseAgentRecord(extended),host);await fresh.verifyAgent(fresh.parseAgentRecord(legacy),host);`
+	out, err := exec.Command("node", "--input-type=module", "-e", script).CombinedOutput()
+	if err != nil {
+		t.Fatalf("old tab/reload admission: %v\n%s", err, out)
 	}
 }
 

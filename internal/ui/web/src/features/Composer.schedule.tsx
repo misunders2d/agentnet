@@ -15,17 +15,21 @@ const states: Record<string,string> = {pending:"Pending",dispatching:"Preparing 
 const mutable = (row: T.ScheduledSend) => row.state === "pending" || row.state === "needs_review";
 const timezone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 
-export function ScheduleDialogs({pane,onPane,conv,dm,capture,reason}: {
+export function ScheduleDialogs({pane,onPane,conv,dm,capture,reason,page=false,reviewOnly=false}: {
   pane: SchedulePane; onPane:(pane:SchedulePane)=>void; conv:string; dm?:T.DMThread;
-  capture:()=>Snapshot; reason:string;
+  capture:()=>Snapshot; reason:string; page?:boolean; reviewOnly?:boolean;
 }) {
   const store = useApp(), revision = useStore(store,s=>s.contentRevision), overview = useStore(store,s=>s.overview);
+  const tab = useStore(store,s=>s.tab), showing = !page || tab === "outbox";
   const [snapshot,setSnapshot] = useState<Snapshot | null>(null), [due,setDue] = useState(localScheduleTime);
   const [audience,setAudience] = useState<T.ScheduledAudience | null>(null);
   const slot=useStore(store,s=>s.scheduleSaves[conv]);
   const blocked=!!slot && slot.status!=="refused";
   const [notice,setNotice] = useState(""), [found,setFound] = useState<T.ScheduledSend | null>(null), [forgetting,setForgetting] = useState(false);
   const [rows,setRows] = useState<T.ScheduledSend[]>([]), [selected,setSelected] = useState<T.ScheduledSend | null>(null);
+  const [historyOpen,setHistoryOpen] = useState(false);
+  const [editOrder,setEditOrder] = useState<string[]>([]);
+  const [query,setQuery] = useState("");
   const [body,setBody] = useState(""), [editTime,setEditTime] = useState("");
   const [removeFiles,setRemoveFiles] = useState(false), [review,setReview] = useState<T.ScheduledAudience | null>(null), [approved,setApproved] = useState<T.ScheduledAudience | undefined>();
   const [loading,setLoading] = useState(false), [busy,setBusy] = useState(false), busyRef = useRef(false);
@@ -33,27 +37,36 @@ export function ScheduleDialogs({pane,onPane,conv,dm,capture,reason}: {
   useEffect(() => {mounted.current=true;return ()=>{mounted.current=false;epoch.current++;};},[]);
 
   useEffect(() => {
-    if (pane !== "create") return;
+    if (pane !== "create" || reviewOnly) return;
     if(blocked){setSnapshot(null);setAudience(null);setLoading(false);return;}
     let current = true;
     const next = capture();setSnapshot(next);setDue(localScheduleTime());setAudience(null);setNotice("");setLoading(true);
     store.api.scheduleAudience(conv,next.draft.topic || "").then(a=>{if(current)setAudience(a);},()=>{if(current)setNotice("The current audience could not be verified. Your draft is kept. Close and reopen to review it again.");}).finally(()=>{if(current)setLoading(false);});
     return ()=>{current=false;};
-  },[pane,conv,store,blocked]);
+  },[pane,conv,store,blocked,reviewOnly]);
+  useEffect(() => {setHistoryOpen(false);},[pane,conv]);
   useEffect(() => {
     if (pane !== "list") { epoch.current++;setSelected(null);setRows([]);setReview(null);setApproved(undefined);return; }
+    if (!showing) { epoch.current++;return; }
     let current = true;const request=++epoch.current;setLoading(true);
-    store.api.schedules(conv,true).then(list=>{if(current && request===epoch.current)setRows(list || []);},()=>{if(current)setNotice("Scheduled messages could not be loaded. Close and reopen to try again.");}).finally(()=>{if(current)setLoading(false);});
+    store.api.schedules(conv,historyOpen).then(list=>{if(current && request===epoch.current)setRows(list || []);},()=>{if(current)setNotice("Scheduled messages could not be loaded. Reopen Scheduled to try again.");}).finally(()=>{if(current)setLoading(false);});
     return ()=>{current=false;};
-  },[pane,conv,store,revision]);
+  },[pane,conv,store,revision,historyOpen,showing]);
 
-  const people = [overview?.person,...(overview?.people || []),...(dm?.members || [])].filter((p):p is T.PersonView=>!!p && (p.state === "self" || p.state === "pinned"));
+  const views = useStore(store,s=>s.views);
+  const selectedDM = selected ? views?.[selected.conv] as T.DMThread | undefined : dm;
+  const people = [overview?.person,...(overview?.people || []),...(selectedDM?.members || [])].filter((p):p is T.PersonView=>!!p && (p.state === "self" || p.state === "pinned"));
+  function chatTitle(row:T.ScheduledSend) {
+    const summary = overview?.dms?.find(d=>d.id===row.conv);
+    const cached = views?.[row.conv] as T.DMThread | undefined;
+    return (summary?.kind === "group" || cached?.kind === "group" ? summary?.title || cached?.title : summary?.peer?.label || cached?.peer?.label) || summary?.title || cached?.title || "Chat "+row.conv.slice(0,8);
+  }
   function audienceText(a: T.ScheduledAudience) {
     const persons = (a.persons || []).map(id=>people.find(p=>p.person===id)?.label || "Verified participant ("+id.slice(0,8)+")");
-    const pids = (a.pids || []).map(id=>{const guest=dm?.guests?.find(g=>g.pid===id), agent=dm?.agents?.find(g=>g.pid===id);return guest?.host.label || (agent ? (agent.host.label || "Verified host")+" · invited agent" : "Invited participant ("+id.slice(0,8)+")");});
+    const pids = (a.pids || []).map(id=>{const guest=selectedDM?.guests?.find(g=>g.pid===id), agent=selectedDM?.agents?.find(g=>g.pid===id);return guest?.host.label || (agent ? (agent.host.label || "Verified host")+" · invited agent" : "Invited participant ("+id.slice(0,8)+")");});
     return [...persons,...pids].join(", ") || "No recipients";
   }
-  async function refresh() { const request=++epoch.current;const list=await store.api.schedules(conv,true);if(mounted.current&&store.isActive()&&request===epoch.current)setRows(list || []); }
+  async function refresh() { if(page&&store.get().tab!=="outbox")return;const request=++epoch.current;const list=await store.api.schedules(conv,historyOpen);if(mounted.current&&store.isActive()&&request===epoch.current)setRows(list || []); }
   async function save(attempt: ScheduleAttempt) {
     if (busyRef.current) return;
     try {store.beginScheduleSave(conv,attempt);}catch {setNotice("Resolve the original unconfirmed save before starting another schedule.");return;}
@@ -82,7 +95,7 @@ export function ScheduleDialogs({pane,onPane,conv,dm,capture,reason}: {
     } catch {store.settleScheduleSave(conv,p.id,"uncertain","Saved state could not be confirmed. It may still be saved by an earlier request. This original intent is kept; no new ID was allocated.");}
     finally {busyRef.current=false;setBusy(false);}
   }
-  function edit(row:T.ScheduledSend) {setSelected(row);setBody(row.body);setEditTime(localScheduleTime(new Date(row.due)));setRemoveFiles(false);setReview(null);setApproved(undefined);setNotice("");}
+  function edit(row:T.ScheduledSend) {setEditOrder(activeRows.map(r=>r.id));setSelected(row);setBody(row.body);setEditTime(localScheduleTime(new Date(row.due)));setRemoveFiles(false);setReview(null);setApproved(undefined);setNotice("");}
   async function reviewAudience(row:T.ScheduledSend) {
     if(busyRef.current)return;busyRef.current=true;setBusy(true);setNotice("");
     try {const fresh=await store.api.scheduleAudience(row.conv,row.topic);if(mounted.current&&store.isActive())setReview(fresh);}
@@ -97,16 +110,72 @@ export function ScheduleDialogs({pane,onPane,conv,dm,capture,reason}: {
   }
   const previous = slot?.attempt;
   const same = !!previous && !!snapshot && previous.payload.body===snapshot.body && previous.draft.text===snapshot.draft.text && previous.payload.topic===(snapshot.draft.topic || "") && previous.payload.reply_to===snapshot.draft.replyTo && localScheduleTime(new Date(previous.payload.due))===due && JSON.stringify(previous.payload.audience)===JSON.stringify(audience) && previous.files.length===(snapshot.draft.files || []).length && previous.files.every((f,i)=>f.file===snapshot.draft.files?.[i].file);
+  const localTimezone = timezone();
+  const matches = (row:T.ScheduledSend) => !query.trim() || (chatTitle(row)+" "+row.body+" "+(row.files || []).map(f=>f.name).join(" ")).toLowerCase().includes(query.trim().toLowerCase());
+  // Moving a keyed DOM row can still drop native input focus. Keep its place
+  // while an editor is open; new pending rows append until the edit closes.
+  const positions = new Map(selected ? editOrder.map((id,i)=>[id,i]) : []);
+  const activeRows = rows.filter(row=>row.state!=="sent"&&row.state!=="cancelled").sort((a,b)=>(positions.get(a.id) ?? Number.MAX_SAFE_INTEGER)-(positions.get(b.id) ?? Number.MAX_SAFE_INTEGER)||a.due.localeCompare(b.due));
+  const historyRows = rows.filter(row=>row.state==="sent"||row.state==="cancelled");
   const runningCopy = store.host.platform === "browser"
-    ? "This browser page must stay open. If it is offline, pending messages retry when it is online again."
+    ? "Keep this page open and online to send."
     : store.host.platform === "android"
-    ? "AgentNet must be running and online at or after the scheduled time. Mobile background and process limits can delay sending; pending messages retry when the app is running online."
-    : "The AgentNet daemon must be running at or after the scheduled time. If it is off or offline, pending messages retry when it is running online again.";
+    ? "Sends while AgentNet is running and online. Background limits can delay sending."
+    : "Sends from this device while AgentNet is running and online.";
   const close = () => {if(!busyRef.current){onPane(null);setNotice("");setSelected(null);setReview(null);setApproved(undefined);}};
 
-  return <Sheet open={!!pane} onOpenChange={open=>{if(!open)close();}} title={pane==="create"?"Schedule message":"Scheduled messages"} description={runningCopy}>
+  const renderRow = (current:T.ScheduledSend) => {
+    const expanded = selected?.id===current.id;
+    // A push may replace the list row; an open edit keeps its captured revision.
+    const row = expanded ? selected! : current;
+    return <article key={row.id} className="border-b border-hairline py-3" aria-label={"Scheduled message: "+(states[row.state] || "Unavailable")}>
+    <div className="flex min-w-0 items-start gap-3">
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-semibold">{chatTitle(row)}</p>
+        <p className="mt-1 truncate text-sm">{row.body.slice(0,180) || (row.files?.length ? row.files.length+" attachment"+(row.files.length===1?"":"s") : "Message")}</p>
+        <p className="mt-1 flex flex-wrap gap-x-2 text-[13px] text-text-2"><time className="whitespace-nowrap" dateTime={row.due}>{new Date(row.due).toLocaleString([], {dateStyle:"medium",timeStyle:"short"})}</time><span className="whitespace-nowrap">{states[row.state] || "Unavailable"}</span>{!!row.files?.length&&<span className="whitespace-nowrap">{row.files.length+" file"+(row.files.length===1?"":"s")}</span>}</p>
+      </div>
+      <Button size="sm" variant="ghost" disabled={busy} aria-expanded={expanded} onClick={()=>expanded?setSelected(null):edit(current)}>{expanded?"Close details":mutable(row)?"Edit schedule":"View schedule"}</Button>
+    </div>
+    {expanded&&<div className="mt-3 rounded-xl bg-surface p-3 stroke">
+    <p className="font-semibold"><time dateTime={row.due}>{new Date(row.due).toLocaleString([], {dateStyle:"medium",timeStyle:"short"})}</time></p>
+    <p className="mt-1 text-sm text-text-2">{states[row.state] || "Unavailable"}{row.topic && " · "+(selectedDM?.topics?.find(t=>t.id===row.topic)?.title || "Topic")}</p>
+    <p className="mt-2 whitespace-pre-wrap break-words text-sm">{row.body}</p>
+    {row.files?.map((f,i)=><p key={i} className="mt-1 break-all text-sm text-text-2">{f.name}</p>)}
+    {row.state==="needs_review"&&<p className="mt-2 text-sm text-text-2">The chat, audience or attachments need review before sending.</p>}
+    {row.state==="dispatching"&&<p className="mt-2 text-sm text-text-2">Preparing to send. Delivery is confirmed separately.</p>}
+    {mutable(row)&&<div className="mt-3 flex flex-wrap gap-2"><Button size="sm" disabled={busy} onClick={()=>void action(()=>store.api.sendScheduleNow(row.id,row.rev))}>Send now</Button><Button size="sm" variant="ghost" disabled={busy} onClick={()=>void action(()=>store.api.cancelSchedule(row.id,row.rev))}>Cancel schedule</Button></div>}
+    <details className="mt-2 text-sm text-text-2">
+      <summary className="min-h-11 cursor-pointer py-3 font-semibold">Recipients</summary>
+      <p className="break-words">{audienceText(row.audience)}</p>
+      {row.timezone!==localTimezone&&<p className="mt-1">Saved timezone: {row.timezone}</p>}
+    </details>
+    {mutable(row)&&selected?.id===row.id&&<div className="mt-3 space-y-3 border-t border-hairline pt-3">
+      <label className="block text-sm font-semibold">Message<textarea aria-label="Scheduled message text" className={input} value={body} onChange={e=>setBody(e.target.value)} disabled={busy}/></label>
+      <fieldset className="min-w-0"><legend className="text-sm font-semibold">Change send time</legend>
+        <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
+          <label className="min-w-0 text-sm">Reschedule date<input aria-label="Reschedule date" type="date" className={input} value={editTime.split("T")[0]} onChange={e=>setEditTime(e.target.value+"T"+(editTime.split("T")[1] || ""))} disabled={busy}/></label>
+          <label className="min-w-0 text-sm">Reschedule time<input aria-label="Reschedule time" type="time" className={input} value={editTime.split("T")[1] || ""} onChange={e=>setEditTime(editTime.split("T")[0]+"T"+e.target.value)} disabled={busy}/></label>
+        </div>
+        <p className="mt-2 text-sm text-text-2">{scheduleSummary(editTime)}</p>
+      </fieldset>
+      {!!row.files?.length&&<label className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" checked={removeFiles} onChange={e=>setRemoveFiles(e.target.checked)} disabled={busy}/>Remove all attachments</label>}
+      <p className="text-sm text-text-2">{approved?"New audience explicitly confirmed: "+audienceText(approved):"Editing text or time keeps the saved audience ceiling and attachments unless explicitly removed."}</p>
+      <Button size="sm" disabled={busy} onClick={()=>void reviewAudience(row)}>Review audience</Button>
+      {review&&<div className="rounded-xl bg-sunken p-3 text-sm"><p>{audienceText(review)}</p><Button size="sm" disabled={busy} onClick={()=>{setApproved(review);setReview(null);}}>Confirm reviewed audience</Button></div>}
+      <div className="flex flex-wrap gap-2"><Button variant="act" size="sm" disabled={busy} onClick={()=>{try {const change=scheduleEdit(selected,body,scheduleDue(editTime),timezone(),removeFiles,approved);void action(()=>store.api.editSchedule(change));}catch{setNotice("Choose a date and time in the future. No change was saved.");}}}>Save schedule changes</Button><Button variant="ghost" size="sm" disabled={busy} onClick={()=>{setSelected(null);setReview(null);setApproved(undefined);}}>Keep saved schedule</Button></div>
+    </div>}
+    </div>}
+  </article>;
+  };
+
+  const content = <>
+    {!page&&<nav aria-label="Scheduling" className="flex flex-wrap gap-2 pt-2">
+      {!reviewOnly&&<Button size="sm" variant={pane==="create"?"outline":"ghost"} aria-pressed={pane==="create"} disabled={!!reason||busy} onClick={()=>{if(!reason&&!busyRef.current&&pane!=="create")onPane("create");}}>Schedule message</Button>}
+      <Button size="sm" variant={pane==="list"?"outline":"ghost"} aria-pressed={pane==="list"} disabled={busy} onClick={()=>{if(!busyRef.current&&pane!=="list")onPane("list");}}>Scheduled messages</Button>
+    </nav>}
     {notice && <p role="status" className="my-3 rounded-xl bg-sunken p-3 text-sm">{notice}</p>}
-    {pane==="create" && !blocked && <div className="space-y-4 pt-2">
+    {pane==="create" && !blocked && !reviewOnly && <div className="space-y-4 pt-2">
       {reason && <p role="alert" className="text-sm text-danger">{reason}</p>}
       <div className="rounded-xl bg-surface p-3 stroke"><p className="whitespace-pre-wrap break-words text-sm">{snapshot?.body || "Attachment message"}</p>{snapshot?.draft.files?.map(f=><p key={f.key} className="mt-1 break-all text-sm text-text-2">{f.name}</p>)}</div>
       <fieldset className="min-w-0"><legend className="text-sm font-semibold">When to send</legend>
@@ -135,33 +204,20 @@ export function ScheduleDialogs({pane,onPane,conv,dm,capture,reason}: {
       {forgetting&&<div className="mt-3"><p>It may already be scheduled. Check Scheduled messages before saving again.</p><Button size="sm" variant="danger" disabled={busy||slot.status==="saving"} onClick={()=>{store.forgetScheduleSave(conv,slot.id);setForgetting(false);setFound(null);}}>Forget unconfirmed save</Button></div>}
     </div>}
     {pane==="list" && <div className="space-y-3 pt-3">
+      {page&&<><p className="text-sm text-text-2">{runningCopy}</p><label className="block text-sm font-semibold">Find scheduled messages<input type="search" className={input} value={query} onChange={e=>setQuery(e.target.value)} placeholder="Chat, message or attachment"/></label></>}
       {loading && <p role="status">Loading scheduled messages…</p>}
-      {!loading&&!rows.length&&<p>No scheduled messages in this chat on this device.</p>}
-      {rows.map(row=><article key={row.id} className="rounded-xl bg-surface p-3 stroke" aria-label={"Scheduled message: "+(states[row.state] || "Unavailable")}>
-        <p className="font-semibold">{states[row.state] || "Unavailable"} · {row.topic ? dm?.topics?.find(t=>t.id===row.topic)?.title || "Topic" : "Main"}</p>
-        <p className="mt-1 whitespace-pre-wrap break-words text-sm">{row.body}</p>
-        <p className="mt-2 text-sm"><span className="font-semibold">Send at: </span>{scheduleSummary(row.due)}<span className="block text-text-2">{timezone()} · saved timezone {row.timezone}</span></p>
-        <p className="text-sm text-text-2">{audienceText(row.audience)}</p>
-        {row.files?.map((f,i)=><p key={i} className="break-all text-sm">{f.name}</p>)}
-        {row.state==="needs_review"&&<p className="text-sm text-text-2">The chat, audience or attachments need review before sending.</p>}
-        {row.state==="dispatching"&&<p className="text-sm text-text-2">AgentNet is preparing the ordinary send. A delivery receipt is separate.</p>}
-        {mutable(row)&&selected?.id!==row.id&&<div className="mt-3 flex flex-wrap gap-2"><Button size="sm" disabled={busy} onClick={()=>edit(row)}>Edit schedule</Button><Button size="sm" disabled={busy} onClick={()=>void action(()=>store.api.sendScheduleNow(row.id,row.rev))}>Send now</Button><Button size="sm" variant="ghost" disabled={busy} onClick={()=>void action(()=>store.api.cancelSchedule(row.id,row.rev))}>Cancel schedule</Button></div>}
-        {mutable(row)&&selected?.id===row.id&&<div className="mt-3 space-y-3 border-t border-hairline pt-3">
-          <label className="block text-sm font-semibold">Message<textarea aria-label="Scheduled message text" className={input} value={body} onChange={e=>setBody(e.target.value)} disabled={busy}/></label>
-          <fieldset className="min-w-0"><legend className="text-sm font-semibold">Change send time</legend>
-            <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
-              <label className="min-w-0 text-sm">Reschedule date<input aria-label="Reschedule date" type="date" className={input} value={editTime.split("T")[0]} onChange={e=>setEditTime(e.target.value+"T"+(editTime.split("T")[1] || ""))} disabled={busy}/></label>
-              <label className="min-w-0 text-sm">Reschedule time<input aria-label="Reschedule time" type="time" className={input} value={editTime.split("T")[1] || ""} onChange={e=>setEditTime(editTime.split("T")[0]+"T"+e.target.value)} disabled={busy}/></label>
-            </div>
-            <p className="mt-2 text-sm text-text-2">Local timezone: {timezone()}<span className="block">{scheduleSummary(editTime)}</span></p>
-          </fieldset>
-          {!!row.files?.length&&<label className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" checked={removeFiles} onChange={e=>setRemoveFiles(e.target.checked)} disabled={busy}/>Remove all attachments</label>}
-          <p className="text-sm text-text-2">{approved?"New audience explicitly confirmed: "+audienceText(approved):"Editing text or time keeps the saved audience ceiling and attachments unless explicitly removed."}</p>
-          <Button size="sm" disabled={busy} onClick={()=>void reviewAudience(row)}>Review audience</Button>
-          {review&&<div className="rounded-xl bg-sunken p-3 text-sm"><p>{audienceText(review)}</p><Button size="sm" disabled={busy} onClick={()=>{setApproved(review);setReview(null);}}>Confirm reviewed audience</Button></div>}
-          <div className="flex flex-wrap gap-2"><Button variant="act" size="sm" disabled={busy} onClick={()=>{try {const change=scheduleEdit(selected,body,scheduleDue(editTime),timezone(),removeFiles,approved);void action(()=>store.api.editSchedule(change));}catch{setNotice("Choose a date and time in the future. No change was saved.");}}}>Save schedule changes</Button><Button variant="ghost" size="sm" disabled={busy} onClick={()=>{setSelected(null);setReview(null);setApproved(undefined);}}>Keep saved schedule</Button></div>
-        </div>}
-      </article>)}
+      <p className="text-sm text-text-2">This device · Local timezone: {localTimezone}</p>
+      {!loading&&!activeRows.length&&<p>{page?"No scheduled messages pending on this device.":"No scheduled messages pending in this chat on this device."}</p>}
+      {!!query.trim()&&!activeRows.some(matches)&&<p>No pending messages match your search.</p>}
+      <section aria-label="Active scheduled messages">
+      {activeRows.filter(matches).map(renderRow)}
+      </section>
+      {<div className="space-y-3">
+        <Button size="sm" variant="ghost" aria-label={historyOpen?"Hide history":"Show history"} aria-expanded={historyOpen} onClick={()=>setHistoryOpen(open=>!open)}>{historyOpen?"Hide history":"Show history"}{historyOpen&&!loading&&" ("+historyRows.length+")"}</Button>
+        {historyOpen&&<section aria-label="Scheduled message history">{historyRows.filter(matches).map(renderRow)}</section>}
+        {historyOpen&&!loading&&!historyRows.length&&<p className="text-sm text-text-2">No scheduled message history on this device.</p>}
+      </div>}
     </div>}
-  </Sheet>;
+  </>;
+  return page ? <section aria-label="Scheduled messages">{content}</section> : <Sheet open={!!pane} onOpenChange={open=>{if(!open)close();}} title={pane==="create"?"Schedule message":"Scheduled messages"} description={runningCopy}>{content}</Sheet>;
 }

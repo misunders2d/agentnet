@@ -54,12 +54,16 @@ function standing(m: AnyMsg, f: FileItem): "open" | "request" | "requested" | "g
 export function MessageFiles({ m }: { m: AnyMsg }) {
   const files = filesOf(m);
   if (!files.length) return null;
+  const isPicture = (f: FileItem) => standing(m, f) === "open" && pictureName.test(f.name);
+  // A shared preview row keeps tall screenshots compact. Each original keeps
+  // its own viewer, filename and actions, in the attachment's existing order.
+  const grouped = files.filter(isPicture).length > 1;
   return (
-    <div className="mt-1.5 flex flex-col gap-1.5">
-      {files.map((f) => <div key={pictureKey(m, f)} className="min-w-0 space-y-1">
-        {standing(m, f) === "open" && pictureName.test(f.name) ? <Picture m={m} f={f} />
+    <div data-image-group={grouped ? "" : undefined} className={grouped ? "mt-1.5 grid w-[480px] max-w-full grid-cols-2 gap-2" : "mt-1.5 flex flex-col gap-1.5"}>
+      {files.map((f) => <div key={pictureKey(m, f)} className={"min-w-0 space-y-1 " + (grouped && !isPicture(f) ? "col-span-2" : "")}>
+        {isPicture(f) ? <Picture m={m} f={f} grouped={grouped} />
           : standing(m, f) === "open" && videoName.test(f.name) ? <VideoFile m={m} f={f} /> : <FileChip m={m} f={f} />}
-        {standing(m, f) === "open" && !isThreadMsg(m) && <SaveToDrive m={m} index={f.index} />}
+        {standing(m, f) === "open" && !isThreadMsg(m) && !(grouped && isPicture(f)) && <SaveToDrive m={m} index={f.index} />}
       </div>)}
     </div>
   );
@@ -149,7 +153,7 @@ export function warmPictures(api: Api, messages: AnyMsg[] | null | undefined, n 
   for (const [m, f] of want) fetchPicture(api, m, f).catch(() => {});
 }
 
-function Picture({ m, f }: { m: AnyMsg; f: FileItem }) {
+function Picture({ m, f, grouped = false }: { m: AnyMsg; f: FileItem; grouped?: boolean }) {
   const store = useApp();
   const hasPerson = useStore(store, s => s.overview?.person?.state === "self");
   const portal = usePortal();
@@ -179,21 +183,26 @@ function Picture({ m, f }: { m: AnyMsg; f: FileItem }) {
     io.observe(el);
     return () => { alive = false; io.disconnect(); };
   }, [key]);
-  if (failed) return <FileChip m={m} f={f} />;
+  if (failed) return <><FileChip m={m} f={f} />
+    {grouped && <span className="block truncate text-[12px] text-muted" title={f.name}>{f.name}</span>}
+    {grouped && !isThreadMsg(m) && <SaveToDrive m={m} index={f.index} />}</>;
   // Keep a placeholder while loading; decoded images retain their whole
   // aspect ratio, bounded by the conversation and viewport.
   return (
     <>
-      <button ref={box} type="button" onClick={() => url && setBig(true)} aria-label={"Open picture " + f.name}
-        className="relative flex max-w-full items-center justify-center overflow-hidden rounded-xl border border-outline/30 bg-sunken" style={url ? { width: "fit-content" } : { width: "min(360px, 100%)", aspectRatio: "4 / 3" }}>
-        {url && <img src={url} alt={f.name} onLoad={() => setShown(true)} onError={() => setFailed(true)} decoding="async"
-          className={"block h-auto w-auto max-h-[min(60dvh,480px)] max-w-full object-contain transition-opacity duration-200 motion-reduce:transition-none " + (shown ? "opacity-100" : "opacity-0")} />}
+      <button ref={box} type="button" onClick={() => url && setBig(true)} aria-label={"Open picture " + f.name} title={"Open full image: " + f.name}
+        className={"relative flex max-w-full items-center justify-center overflow-hidden rounded-xl border border-outline/30 bg-sunken " + (grouped ? "aspect-square w-full" : "")}
+        style={grouped ? undefined : url ? { width: "fit-content" } : { width: "min(360px, 100%)", aspectRatio: "4 / 3" }}>
+        {url && <img src={url} alt={f.name} onLoad={() => setShown(true)} onError={() => setFailed(true)} loading="lazy" decoding="async"
+          className={"block h-auto w-auto max-w-full object-contain transition-opacity duration-200 motion-reduce:transition-none " + (grouped ? "max-h-full" : "max-h-[min(60dvh,480px)]") + " " + (shown ? "opacity-100" : "opacity-0")} />}
         {!shown && <span className="absolute inset-0 grid place-items-center text-muted"><IconPhoto size={28} stroke={1.6} className="animate-pulse motion-reduce:animate-none" /></span>}
       </button>
+      {grouped && <span className="block truncate text-[12px] text-muted" title={f.name}>{f.name}</span>}
       {big && <ImageViewer src={url} name={f.name} onClose={() => setBig(false)}
         openInApp={store.api.host.platform === "daemon" ? () => store.api.openImage(m.id, f.index, m.dir) : undefined}
         actions={<><Button icon={<IconDownload size={20} />} onClick={() => save(url, f.name, portal)}>Download</Button>
-          {hasPerson && <Button onClick={async () => { if (await openPictureEditor({ into: portal, src: url, save: png => store.api.setPersonPicture(png) })) await store.refetch(); }}>Use as my picture</Button>}</>} />}
+          {hasPerson && <Button onClick={async () => { if (await openPictureEditor({ into: portal, src: url, save: png => store.api.setPersonPicture(png) })) await store.refetch(); }}>Use as my picture</Button>}
+          {grouped && !isThreadMsg(m) && <SaveToDrive m={m} index={f.index} />}</>} />}
     </>
   );
 }

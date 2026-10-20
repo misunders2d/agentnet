@@ -121,6 +121,114 @@ func TestNativeRequestFollowupAcceptanceOrderFilesAndNoReplay(t *testing.T) {
 	}
 }
 
+// Pi's queue ACK does not prove that a correction reached native work. A
+// completed parent must retain the uncertain correction without replaying it;
+// an ordinary ask to the same participation remains separate eligible work.
+func TestGroupNativeFollowupResultBeforeConsumption(t *testing.T) {
+	a, parent, ref := nativeFollowupFixture(t)
+	parent.nativeAttempt = 1
+	if _, err := a.store.db.Exec(`UPDATE inbox SET attempts=1,last_attempt_at=unixepoch() WHERE id=?`, parent.ID); err != nil {
+		t.Fatal(err)
+	}
+	correction := RequestFollowup{Conv: parent.Conv, Ref: ref, ID: protocol.NewID(), Attempt: 1, Body: "Include the second requested comparison"}
+	if _, err := a.QueueRequestFollowup(tctx(t), correction); err != nil {
+		t.Fatal(err)
+	}
+	if marker, err := storedRequestFollowup(a.store.db, "in", correction.ID); err != nil || marker == nil || marker.Ref != ref || marker.Attempt != 1 {
+		t.Fatalf("strict correction lost its exact binding: %+v %v", marker, err)
+	}
+	ordinaryID := protocol.NewID()
+	ordinary, err := a.AskAgent(WithQueuedSend(tctx(t), ordinaryID), parent.PID, envelope.KindQuestion, "A separate question for the same agent")
+	if err != nil || ordinary.LID != ordinaryID {
+		t.Fatalf("ordinary same-participation ask %+v %v", ordinary, err)
+	}
+	if marker, err := storedRequestFollowup(a.store.db, "in", ordinaryID); err != nil || marker != nil {
+		t.Fatalf("ordinary ask acquired steering metadata: %+v %v", marker, err)
+	}
+
+	bridge, decoder, output := piBridgeFixture(t)
+	ctx, cancel := context.WithCancel(tctx(t))
+	defer cancel()
+	done := make(chan struct{})
+	go func() { defer close(done); a.watchNativeFollowups(ctx, parent, bridge, nil) }()
+	request := make(chan map[string]any, 1)
+	go func() {
+		var m map[string]any
+		_ = decoder.Decode(&m)
+		request <- m
+	}()
+	var native map[string]any
+	select {
+	case native = <-request:
+	case <-time.After(3 * time.Second):
+		t.Fatal("strict correction did not reach the owned Pi bridge")
+	}
+	if native["type"] != "steer" || native["id"] != correction.ID {
+		t.Fatalf("wrong native correction: %v", native)
+	}
+	piEvent(bridge, map[string]any{"type": "response", "id": correction.ID, "command": "steer", "success": true, "data": map[string]string{"disposition": "queued"}})
+	if state := jobState(t, a, correction.ID); state != stateRunning {
+		t.Fatalf("queue ACK falsely proved consumption: %s", state)
+	}
+	if state := jobState(t, a, ordinaryID); state != stateAgentWaiting {
+		t.Fatalf("ordinary same-participation ask joined native steering: %s", state)
+	}
+	answer := "The first requested comparison is complete."
+	piEvent(bridge, map[string]any{"type": "message_end", "message": map[string]any{"role": "assistant", "content": []any{map[string]string{"type": "text", "text": answer}}, "stopReason": "stop"}})
+	piEvent(bridge, map[string]any{"type": "agent_end"})
+	piEvent(bridge, map[string]any{"type": "agent_settled", "aborted": false})
+	bridge.finish()
+	if got := strings.TrimSpace(output.String()); got != answer {
+		t.Fatalf("parent result changed: %q", got)
+	}
+	// Use the production atomic result commit, including its correlated reply.
+	a.finishAgent(WithQueuedSend(tctx(t), protocol.NewID()), parent, &Responder{Harness: "pi"}, envelope.StatusDone, output.String())
+	waitState(t, a, parent.ID, stateAnswered)
+	waitState(t, a, correction.ID, stateNeedHuman)
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("uncertain correction watcher did not settle")
+	}
+	var resultID string
+	if err = a.store.db.QueryRow(`SELECT coalesce(result_id,'') FROM inbox WHERE id=?`, parent.ID).Scan(&resultID); err != nil || resultID == "" {
+		t.Fatalf("parent lacks committed result identity: %q %v", resultID, err)
+	}
+	var results int
+	if err = a.store.db.QueryRow(`SELECT count(DISTINCT lid) FROM outbox WHERE conv=? AND pid=? AND reply_to=? AND kind=? AND body=?`, parent.Conv, parent.PID, parent.ID, envelope.KindAnswer, answer).Scan(&results); err != nil || results != 1 {
+		t.Fatalf("parent result duplicated or lost: %d %v", results, err)
+	}
+	if err = a.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE id=? AND conv=? AND pid=? AND reply_to=? AND kind=? AND body=?`, resultID, parent.Conv, parent.PID, parent.ID, envelope.KindAnswer, answer).Scan(&results); err != nil || results != 1 {
+		t.Fatalf("parent result_id differs from its committed reply: %d %v", results, err)
+	}
+	if _, err = a.QueueRequestFollowup(tctx(t), correction); err != nil {
+		t.Fatal("exact retry lost its durable correlation", err)
+	}
+	var corrections int
+	if err = a.store.db.QueryRow(`SELECT count(*) FROM inbox WHERE id=? AND lid=?`, correction.ID, correction.ID).Scan(&corrections); err != nil || corrections != 1 {
+		t.Fatalf("correction identity changed on retry: %d %v", corrections, err)
+	}
+	// A late consumption-looking event and restart recovery cannot turn this
+	// uncertain handover into an accepted correction or another automatic job.
+	piEvent(bridge, map[string]any{"type": "message_start", "message": map[string]string{"role": "user", "content": native["message"].(string)}})
+	bridge.mu.Lock()
+	_, accepted := bridge.seen[correction.ID]
+	bridge.mu.Unlock()
+	if accepted {
+		t.Fatal("late native event retroactively accepted uncertain correction")
+	}
+	if err = a.store.interruptRunning(); err != nil {
+		t.Fatal(err)
+	}
+	if state := jobState(t, a, correction.ID); state != stateNeedHuman {
+		t.Fatalf("restart replayed uncertain correction: %s", state)
+	}
+	next, found, _, _, err := a.store.claimAgentPage("pi", a.Address, a.Self().Fingerprint(), 0, agentPage)
+	if err != nil || !found || next.ID != ordinaryID {
+		t.Fatalf("ordinary ask was lost or correction replayed: %s %v %v", next.ID, found, err)
+	}
+}
+
 func TestNativeRequestFollowupExactAdmission(t *testing.T) {
 	a, parent, ref := nativeFollowupFixture(t)
 	id := protocol.NewID()

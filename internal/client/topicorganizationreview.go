@@ -20,7 +20,8 @@ var ErrTopicOrganizationChanged = errors.New("the selected messages, topic or au
 // A review is local and inert. Apply echoes its exact selection and token;
 // the operation ID makes a retry of the same reviewed action idempotent.
 type TopicOrganizationRequest struct {
-	Conv  string   `json:"conv"`
+	Conv  string   `json:"conv,omitempty"`
+	Peer  string   `json:"peer,omitempty"`
 	IDs   []string `json:"ids"`
 	Topic string   `json:"topic"`
 	Merge string   `json:"merge,omitempty"`
@@ -30,13 +31,18 @@ type TopicOrganizationRequest struct {
 }
 type TopicOrganizationReview struct {
 	TopicOrganizationRequest
-	Operation string               `json:"operation"`
-	Token     string               `json:"token"`
-	Moves     []envelope.TopicMove `json:"moves"`
-	Parent    string               `json:"parent,omitempty"`
+	Operation       string                           `json:"operation"`
+	Token           string                           `json:"token"`
+	Moves           []envelope.TopicMove             `json:"moves"`
+	Parent          string                           `json:"parent,omitempty"`
+	Destination     *protocol.DirectTopicDestination `json:"destination,omitempty"`
+	SyntheticTopics []string                         `json:"synthetic_topics,omitempty"`
 }
 
 func (a *Agent) PreviewTopicOrganization(request TopicOrganizationRequest) (TopicOrganizationReview, error) {
+	if request.Peer != "" {
+		return a.previewDirectTopicOrganization(request)
+	}
 	return a.previewTopicOrganization(request, func(q dbq) error {
 		return topicOrganizationAuthor(q, request.Conv, a.Address, a.Self().Fingerprint())
 	})
@@ -199,6 +205,9 @@ func (a *Agent) previewTopicOrganization(request TopicOrganizationRequest, autho
 }
 
 func (a *Agent) ApplyTopicOrganization(ctx context.Context, review TopicOrganizationReview) (ConvSent, error) {
+	if review.Peer != "" {
+		return a.applyDirectTopicOrganization(review)
+	}
 	if !protocol.ValidID(review.Operation) || !protocol.ValidHash(review.Token) {
 		return ConvSent{}, ErrTopicOrganizationChanged
 	}

@@ -11,7 +11,6 @@ import { useNeedsYou } from "./Approvals";
 import { ChatRow } from "./ChatList.row";
 import { chatItems, personAt } from "./ChatList.words";
 import { GroupInvitations } from "./ChatList.invites";
-import { Reminders } from "./Reminders";
 import { warmPictures } from "./Message.files";
 import { TopicResults } from "./ChatList.topics";
 import { CandidateRow, NewChatButton, candidates, matches, startChat } from "./NewChat";
@@ -124,7 +123,6 @@ export function ChatList() {
       {!overview ? (loadError ? <LoadFailed text={loadError} /> : <Skeleton />) : (
         <>
           {!q && <NeedsYouBanner overview={overview} agentNames={agentNames} />}
-          {!q && <Reminders />}
           {!q && <GroupInvitations />}
           {overview.persons && !overview.person && <NoName />}
           {shownFilters.length > 0 && (
@@ -191,8 +189,8 @@ function NeedsYouBanner({ overview: o, agentNames }: { overview: T.Overview; age
     const p = personOf(conv.peer, o);
     named = {
       face: invite && !humanInvite ? <AgentAvatar seed={o.me.address} size={40} mood="waiting" /> : <PersonAvatar name={senderOf(conv, o)} seed={p?.person || p?.address || conv.peer} size={40} />,
-      headline: invite ? convTitle(conv, o) : firstLine(conv.excerpt, 120) || convTitle(conv, o),
-      line: humanInvite ? "Join when ready" : invite ? "It joins only when you say so" : convTitle(conv, o),
+      headline: invite ? convTitle(conv, o,agentNames) : firstLine(conv.excerpt, 120) || convTitle(conv, o,agentNames),
+      line: humanInvite ? "Join when ready" : invite ? "It joins only when you say so" : convTitle(conv, o,agentNames),
       go: () => void store.open({ kind: "dm", id: conv.conv, focus: conv.id }),
     };
   } else if (device) {

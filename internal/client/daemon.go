@@ -822,12 +822,13 @@ func (a *Agent) startWorker(ctx context.Context) (func(), error) {
 		a.wakeStatus() // a status another process noted (noteStatus)
 		a.changes.bump()
 		work := convHistory | convServe | convFetch | convRelease | convRecipients
-		if !a.ownKick() {
+		ownKick := a.ownKick()
+		if !ownKick {
 			work |= convRetry // a local participation record shares its public scope with guests now
 		}
 		a.convWork.due(work)
 		// A responder or named agent was set or removed: say so.
-		if a.agentHintStale() {
+		if !ownKick || a.agentHintStale() {
 			a.convWork.due(convPublish)
 		}
 		a.kickNow()

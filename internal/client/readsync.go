@@ -532,6 +532,9 @@ func (a *Agent) projectDirectAttention(msgs []ConversationMessage) error {
 func (a *Agent) attentionScope(anchor string) (map[string]protocol.ReadRef, error) {
 	var conv string
 	err := a.store.db.QueryRow(`SELECT coalesce(conv,'') FROM inbox WHERE id=? UNION ALL SELECT coalesce(conv,'') FROM outbox WHERE id=? LIMIT 1`, anchor, anchor).Scan(&conv)
+	if errors.Is(err, sql.ErrNoRows) {
+		anchor, err = a.directTopicAnchor(anchor)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -572,7 +575,12 @@ func (a *Agent) attentionScope(anchor string) (map[string]protocol.ReadRef, erro
 			}
 		}
 	} else {
-		view, e := a.conversation(anchor, 0, 0, false)
+		resolved, e := a.directTopicAnchor(anchor)
+		if e != nil {
+			return nil, e
+		}
+		anchor = resolved
+		view, e := a.conversation(anchor, 0, 0, false, true)
 		if e != nil {
 			return nil, e
 		}

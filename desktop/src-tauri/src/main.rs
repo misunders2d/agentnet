@@ -361,7 +361,7 @@ fn take_link(app: &AppHandle, link: &str, raise: bool) {
     match page {
         Some(mut u) if !fragment.is_empty() => {
             if let Some(w) = window(app) {
-                if let Some(script) = deeplink::portable_script(&fragment) {
+                if let Some(script) = deeplink::navigation_script(&fragment) {
                     let _ = w.eval(&script); // preserve the warm page until host validation
                 } else {
                     u.set_query(None); // the session cookie is set: same page, new destination

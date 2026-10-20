@@ -1,5 +1,5 @@
 import type { T } from "../api";
-import { scopeMatches, threadAgentID } from "../model";
+import { scopeMatches, threadAgentHost, threadAgentKey, threadAgentID } from "../model";
 import { isRequest, isThreadMsg, whoWrote, type AnyMsg, type Ctx } from "./Message.model";
 
 function followupRef(m: AnyMsg, ctx: Ctx) {
@@ -15,6 +15,13 @@ export interface ComposerFollowup {
   kind: string;
   attempt: number;
   binding: string;
+}
+
+export class ComposerRecovery extends Error {
+  constructor(request:string,host:string,attempt:number|undefined){
+    super("Request "+request+" on "+host+(attempt?" (attempt "+attempt+")":"")+" still reports running, but its current attempt or identity cannot be verified. Refresh to check that work. Nothing was sent; your text and files are kept.");
+    this.name="ComposerRecovery";
+  }
 }
 
 // A display name or the last message never chooses work. The exact current
@@ -82,19 +89,21 @@ export function currentComposerFollowup(dm: T.DMThread | undefined, pid: string,
 // the destination, including the default agent's absent Target.
 export function currentDirectComposerFollowup(thread: T.Thread | undefined, ctx: Ctx, replyTo?: string): ComposerFollowup | undefined {
   if (!thread) return;
-  const selected = threadAgentID(thread) || "", rows = new Map<string, ComposerFollowup>();
+  const selected = threadAgentID(thread) || "", host=threadAgentHost(thread),key=threadAgentKey(thread), rows = new Map<string, ComposerFollowup>();
   for (const message of thread.messages || []) {
     if (message.exec?.state !== "running" || message.dir !== "out" || !isRequest(message)) continue;
+    // Another exact executor's work is outside this selected destination.
+    if((message.target?.agent_id||"")!==selected)continue;
     const ref = followupRef({...message, deleted:false}, ctx), attempt = message.exec.attempt;
     if (!ref) continue;
-    if (message.deleted || thread.key.pending || !thread.key.pinned || message.to !== thread.peer ||
-        message.exec.host !== thread.peer || message.exec.stale || !Number.isSafeInteger(attempt) || !attempt || attempt < 1 ||
+    if (message.deleted || key.pending || !key.pinned || message.to !== host ||
+        message.exec.host !== host || message.exec.stale || !Number.isSafeInteger(attempt) || !attempt || attempt < 1 ||
         (message.target?.agent_id || "") !== selected ||
-        message.target && (message.target.address !== thread.peer || message.target.fingerprint !== thread.key.pinned))
-      throw Error("Running work is reported, but its current attempt or identity cannot be verified. Nothing was sent; your draft is kept.");
-    const bound = {ref, kind:message.kind, attempt, binding:JSON.stringify([thread.id,thread.peer,thread.key.pinned,selected,attempt])};
+        message.target && (message.target.address !== host || message.target.fingerprint !== key.pinned))
+      throw new ComposerRecovery(ref.id,host,attempt);
+    const bound = {ref, kind:message.kind, attempt, binding:JSON.stringify([thread.id,host,key.pinned,selected,attempt])};
     if (rows.has(ref.id) && JSON.stringify(rows.get(ref.id)) !== JSON.stringify(bound))
-      throw Error("Running work is reported, but its current attempt or identity cannot be verified. Nothing was sent; your draft is kept.");
+      throw new ComposerRecovery(ref.id,host,attempt);
     rows.set(ref.id,bound);
   }
   if (rows.size < 2) return rows.values().next().value;

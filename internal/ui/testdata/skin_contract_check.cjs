@@ -232,9 +232,23 @@ const journeys = {
     await page.getByRole('dialog').waitFor({ state: 'detached' });
     await page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: 'Chats' }).click();
     await listTitle.waitFor();
-    // A conversation with its menus: every popup renders inside the root.
-    await page.getByRole('button', { name: /Bob’s agent/ }).first().click();
+    // The demo has retained legacy threads, not a concrete agent catalog.
+    // Select the original Bob topic by its provider summary and prove its ID;
+    // a default setting or display name must not invent an executor for it.
+    const response = await fetch(new URL('/api/overview', daemon), { headers: { cookie } });
+    assert.equal(response.status, 200);
+    const overview = await response.json();
+    const latest = peer => overview.threads.filter(t => t.peer === peer && !t.notice_only)
+      .sort((a, b) => b.last_at.localeCompare(a.last_at) || b.id.localeCompare(a.id))[0];
+    const legacy = latest('bob/desk'), human = latest('vitalii/phone');
+    assert(legacy && human, 'The original legacy and ordinary device fixtures exist');
+    assert(!legacy.agent_id, 'The retained Bob fixture has no concrete executor binding');
+    const row = topic => page.locator('[data-part="chat-row"]').filter({ has:
+      page.locator('[data-part="chat-preview"]').filter({ hasText: topic.last.split('\n')[0].slice(0, 50) }) });
+    assert.equal(await row(legacy).count(), 1, 'One chat matches the original provider summary');
+    await row(legacy).click();
     await page.getByRole('log').first().waitFor();
+    await page.locator('[data-mid="' + legacy.id + '"]').waitFor();
     await page.getByRole('button', { name: 'More', exact: true }).click();
     await page.getByRole('menu').waitFor();
     await page.waitForTimeout(300);
@@ -244,14 +258,24 @@ const journeys = {
     await staysModal(page, 'alertdialog', 'the delete confirmation');
     await page.getByRole('button', { name: 'Keep it' }).click();
     await page.getByRole('alertdialog').waitFor({ state: 'detached' });
-    // A message in a new topic with Bob's agent, sent with host.api. (The
-    // demo daemon offers no file limits, so Comic offers no files here;
-    // host.stage is walked in the company world, internal/ui/testdata.)
+    // New work cannot silently use an earlier default. The ordinary human
+    // device fixture retains the real host.api send assertion; concrete agent
+    // routing is verified by the company-world journey's exact catalog/PID.
+    // The demo has no file limits; host.stage is walked in the company world.
+    const back = page.getByRole('button', { name: 'Back to chats', exact: true });
+    if (await back.isVisible()) await back.click();
+    else await page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: 'Chats' }).click();
+    await row(human).click();
+    await page.locator('[data-mid="' + human.id + '"]').waitFor();
     await page.getByRole('button', { name: 'New topic' }).click();
     const text = 'Contract check message ' + (++sent);
     const form = page.getByRole('form', { name: 'Write a message' });
     await form.getByRole('textbox').fill(text);
+    const sending = page.waitForRequest(r => new URL(r.url()).pathname === '/api/send' && r.method() === 'POST' && r.postDataJSON().body === text);
     await form.locator('button[type=submit]').click(); // Enter is a new line on phones
+    const request = (await sending).postDataJSON();
+    assert.equal(request.to, human.peer);assert.equal(request.kind, 'message');assert(!('agent_id' in request));
+    assert(!request.reply_to, 'New ordinary topic keeps its original device and creates no reply binding');
     await page.getByRole('log').first().getByText(text).first().waitFor({ timeout: 15000 });
     const plus = page.getByRole('button', { name: 'Add to message' });
     await plus.waitFor();

@@ -93,4 +93,4 @@ func (h *Hub) handleProfile(w http.ResponseWriter, r *http.Request) {
 }
 
 // features lists what this Hub supports (GET /v1/version).
-var features = []string{protocol.FeatureCaps, protocol.FeatureEnv2, protocol.FeatureEnv3, protocol.FeatureMembers, protocol.FeaturePerson, protocol.FeatureNotify, protocol.FeatureTeams, protocol.FeatureTeamTags, protocol.FeatureSignals, protocol.FeatureUpdate}
+var features = []string{protocol.FeatureAgentHarness, protocol.FeatureCaps, protocol.FeatureEnv2, protocol.FeatureEnv3, protocol.FeatureMembers, protocol.FeaturePerson, protocol.FeatureNotify, protocol.FeatureTeams, protocol.FeatureTeamTags, protocol.FeatureSignals, protocol.FeatureUpdate}

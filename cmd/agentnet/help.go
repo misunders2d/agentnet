@@ -41,6 +41,7 @@ Messages and files:
   reply      reply to a received message (takes over a question or task)
   inbox      list received messages
   conversation  show a whole conversation, sent and received
+  topic      list, inspect, move or merge direct agent-chat topics
   download   save a message's attachments
   status     what is known about a message you sent
   sessions   list another agent's running sessions
@@ -1408,6 +1409,10 @@ func wantsHelp(args []string) bool {
 // printHelp writes help for the command named by args (words before any
 // flag); it fails only for unknown topics.
 func printHelp(w io.Writer, args []string) error {
+	if len(args) > 0 && args[0] == "topic" {
+		_, err := io.WriteString(w, topicHelp+"\n")
+		return err
+	}
 	if len(args) > 0 && args[0] == "help" {
 		args = args[1:]
 	}

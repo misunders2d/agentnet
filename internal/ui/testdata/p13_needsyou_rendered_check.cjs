@@ -46,8 +46,8 @@ async function noHorizontalScroll(target, label) {
       assert.equal(await p.locator('details[open] p').first().textContent(),full,skin+': expansion keeps every paragraph');
       if(skin==='comic') await noHorizontalScroll(summary,'Comic OKs '+mode);
       await snap('oks-expanded');
-      await p.getByRole('button',{name:/^Your agent couldn’t finish/}).click();
-      const turn=p.getByRole('region',{name:'Your agent says'});
+      await p.locator('[data-open]').filter({hasText:'Original request'}).click();
+      const turn=p.locator('[data-agent-needs-you]').filter({visible:true});
       // Markdown keeps paragraph nodes rather than one raw multiline text
       // node. Check every rendered word, including the final unbroken tail.
       const tail=full.split("\n").at(-1);

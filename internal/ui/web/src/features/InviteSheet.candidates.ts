@@ -5,7 +5,7 @@ import { collectiveRef, parseCollective } from '../collective-mentions.mjs';
 // stated local reason, a mention in the recent messages.
 import { useEffect, useState } from "react";
 import type { Api, T } from "../api";
-import { agentName, agentWhere, bringInDevices, deviceKind, personName, runsAgent, timeOf, type DeviceKind } from "../model";
+import { concreteAgentLabel, agentName, agentWhere, bringInDevices, deviceKind, personName, runsAgent, timeOf, type DeviceKind } from "../model";
 import { isMine, online, speaker } from "./RoomPanel.model";
 
 export type Route = "agent" | "guest" | "group";
@@ -110,23 +110,18 @@ export function pool(t: T.DMThread, o: T.Overview, cat: Catalogs, names: Record<
   }
 
   if (o.agents && !cat.loading) { // agents appear together, once every list is in
-    // One row per agent (its device and id; a device's default agent has no id), none already here.
+    // One row per agent (its device and id; a migrated default is a concrete catalog identity), none already here.
     const current = new Set((t.agents || []).filter((a) => a.topic === topic && LIVE.has(a.state)).map((a) => a.host.address + "#" + (a.agent_id || "")));
     const broad = new Set((t.agents || []).filter(a => LIVE.has(a.state) && a.topic === undefined).map(a => a.host.address + "#" + (a.agent_id || "")));
     const seen = new Set<string>(group ? [] : current);
     const add = (c: Candidate) => { const k = c.host + "#" + (c.agentId || ""); if (!seen.has(k)) { seen.add(k); c.broadAccess = topic !== undefined && broad.has(k); if (group && current.has(k)) { c.alreadyHere = true; c.subtitle = "Already in this chat · share more messages"; } out.push(c); } };
-    // This computer's named agents, then its default agent, which is always offered next to them.
+    // Configured concrete agents on this computer.
     const self: T.PersonView = me || { person: "this computer", label: "", address: o.me.address, state: "" }; // "Your agent"
-    for (const a of (cat.local || []).filter((a) => a.enabled)) add({
-      key: "a:" + a.record.host + "#" + a.record.id, kind: "agent", name: a.record.label || agentName(a.record.id, names, self, self), seed: a.record.id,
+    for (const a of (cat.local || []).filter((a) => a.enabled&&!!a.record.harness)) add({
+      key: "a:" + a.record.host + "#" + a.record.id, kind: "agent", name: concreteAgentLabel(a.record,cat.local||[]), seed: a.record.id,
       subtitle: agentWhere(self, a.record.host, self), online: true, device: deviceKind(a.record.host),
       host: a.record.host, agentId: a.record.id, mine: true,
       unavailable: a.responder && !a.responder.ready ? "Not set up on this computer yet." : undefined,
-    });
-    if (platform === "daemon") add({ // a browser runs no agent: nothing of its own to bring in
-      key: "a:" + o.me.address + "#", kind: "agent", name: agentName(undefined, names, self, self), seed: o.me.address,
-      subtitle: agentWhere(self, o.me.address, self), online: true, device: deviceKind(o.me.address), host: o.me.address, mine: true,
-      unavailable: o.me.responder ? undefined : "Not set up on this computer yet.",
     });
     // Members' agents: each published agent, or a device's own default agent
     // when it runs one and publishes none (model.bringInDevices).
@@ -136,17 +131,12 @@ export function pool(t: T.DMThread, o: T.Overview, cat: Catalogs, names: Record<
     for (const [address, records] of Object.entries(cat.remote)) {
       const p = known.get(address);
       if (!p) continue;
-      for (const r of records) add({
-        key: "a:" + address + "#" + r.id, kind: "agent", name: r.label || agentName(r.id, names, p, me), seed: r.id,
+      for (const r of records.filter(r=>!!r.harness)) add({
+        key: "a:" + address + "#" + r.id, kind: "agent", name: concreteAgentLabel(r,records.map(record=>({record}))), seed: r.id,
         subtitle: agentLine(p, me, address, online(o, address)), online: online(o, address), device: deviceKind(address), host: address, agentId: r.id, ownerName: personName(p), mine: isMine(o, address),
       });
     }
-    for (const p of members) {
-      for (const address of bringInDevices(p, o, cat.remote).filter((a) => a !== o.me.address)) add({
-        key: "a:" + address + "#", kind: "agent", name: agentName(undefined, names, p, me), seed: address,
-        subtitle: agentLine(p, me, address, online(o, address)), online: online(o, address), device: deviceKind(address), host: address, ownerName: personName(p), mine: isMine(o, address),
-      });
-    }
+
   }
 
   // A stated local reason: a person named in the last messages here.

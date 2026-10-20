@@ -20,6 +20,7 @@ const fake = { person: "p-fake", label: "sergey", address: "mallory/box", state:
 const laptop = (agent) => ({ me: { address: "admin/laptop", fingerprint: "11111111-a", responder: agent ? "claude" : "", responder_dir: "", agent },
   person: me, people: [vitalii, bohdan, fake], agent_devices: ["admin/zenbook", "vitalii/desk", "bohdan/windows-laptop"], threads: [], dms: [] });
 const o = laptop(true);
+const legacy = (host, key) => ({ agent_host:host, agent_key:key, agent_id:"", agent_legacy:true });
 
 // runsAgent: only what the device says; a phone never.
 assert.equal(m.runsAgent("admin/pixel", o), false);
@@ -31,23 +32,23 @@ assert.equal(m.runsAgent("x/y", { ...o, agent_devices: null }), false, "a null l
 
 // Chat rows: the own phone is never "Your agent · on Pixel".
 let r = m.threadRow("admin/pixel", o, {});
-assert.deepEqual([r.kind, r.title, r.subtitle, r.local], ["agent", "Your agent", "On this computer · asked from your Pixel", true]);
+assert.deepEqual([r.kind, r.title, r.subtitle, r.local], ["agent", "Earlier default", "On this computer · asked from your Pixel", true]);
 r = m.threadRow("admin/pixel", laptop(false), {});
 assert.deepEqual([r.kind, r.title], ["person", "Your Pixel"], "a computer running no agent: the phone is you");
 r = m.threadRow("admin/zenbook", o, {});
-assert.deepEqual([r.kind, r.title, r.subtitle], ["agent", "Your agent", "on Zenbook"]);
+assert.deepEqual([r.kind, r.title, r.subtitle], ["agent", "Your earlier default on Zenbook", "on Zenbook"]);
 r = m.threadRow("admin/zenbook", { ...laptop(false), agent_devices: [] }, {});
 assert.deepEqual([r.kind, r.title], ["person", "Your Zenbook"], "its responder removed: your Zenbook (seen from a device running none)");
 r = m.threadRow("admin/zenbook", { ...o, agent_devices: [] }, {});
-assert.deepEqual([r.kind, r.title, r.subtitle], ["agent", "Your agent", "On this computer · asked from your Zenbook"], "seen from a computer running an agent: its questions come here");
+assert.deepEqual([r.kind, r.title, r.subtitle], ["agent", "Earlier default", "On this computer · asked from your Zenbook"], "seen from a computer running an agent: its questions come here");
 r = m.threadRow("vitalii/phone", o, {});
 assert.deepEqual([r.kind, r.title, r.subtitle], ["person", "Vitalii", "from Phone"]);
 r = m.threadRow("vitalii/desk", o, {});
-assert.deepEqual([r.kind, r.title, r.subtitle], ["agent", "Vitalii’s agent", "on Desk"]);
+assert.deepEqual([r.kind, r.title, r.subtitle], ["agent", "Vitalii’s earlier default on Desk", "on Desk"]);
 r = m.threadRow("hub/bezos", { ...o, agent_devices: ["hub/bezos"] }, {});
 assert.deepEqual([r.kind, r.title, r.subtitle], ["agent", "Bezos", "Agent · not linked to a person"]);
 const list = m.chatList({ ...o, threads: [{ id: "t1", peer: "admin/pixel", title: "x", last: "hi", last_at: "2026-10-05T10:00:00Z", count: 1, review: 0, unread: 0, running: 0, waiting: false, key_changed: false, notices: 0 }] }, {});
-assert.equal(list[0].title, "Your agent"); assert.notEqual(list[0].subtitle, "on Pixel");
+assert.equal(list[0].title, "Earlier default"); assert.notEqual(list[0].subtitle, "on Pixel");
 
 // Message authors in the laptop↔Pixel thread.
 const q = { id: "q1", dir: "in", from: "admin/pixel", kind: "question", body: "?", state: "answered" };
@@ -58,13 +59,13 @@ assert.deepEqual([w.name, w.sub, w.mine, w.agent], ["You", "from Pixel", true, f
 w = m.threadAuthor(typed, o, {}, "admin/pixel", [q, a, typed]);
 assert.deepEqual([w.name, w.mine], ["You", true], "plain messages too");
 w = m.threadAuthor(a, o, {}, "admin/pixel", [q, a]);
-assert.deepEqual([w.name, w.agent, w.mine], ["Your agent", true, false], "only the laptop agent's answers are on the left");
+assert.deepEqual([w.name, w.agent, w.mine], ["Earlier default", true, false], "only the laptop agent's answers are on the left; its earlier identity is unknown");
 w = m.threadAuthor(a, o, {}, "admin/pixel", [{ ...q, state: "manual" }, a]);
 assert.deepEqual([w.name, w.mine], ["You", true], "answered by hand: you");
 w = m.threadAuthor({ id: "v", dir: "in", from: "vitalii/phone", kind: "message", body: "hi" }, o, {}, "vitalii/phone");
 assert.deepEqual([w.name, w.sub, w.mine, w.agent], ["Vitalii", "from Phone", false, false]);
 w = m.threadAuthor({ id: "z", dir: "in", from: "admin/zenbook", kind: "answer", body: "ok" }, o, {}, "admin/zenbook");
-assert.deepEqual([w.name, w.agent], ["Your agent", true]);
+assert.deepEqual([w.name, w.agent], ["Earlier default", true]);
 w = m.threadAuthor({ id: "o", dir: "out", from: "admin/laptop", kind: "question", body: "?" }, o, {}, "admin/zenbook");
 assert.deepEqual([w.name, w.mine], ["You", true]);
 
@@ -74,10 +75,10 @@ assert.equal(m.deviceTarget("admin/pixel", o).kind, "own");
 assert.match(m.deviceTarget("admin/pixel", o).note, /your own Pixel\. Questions you ask there come to this computer’s agent\./);
 assert.deepEqual(m.deviceTarget("vitalii/phone", o), { kind: "person", name: "Vitalii" });
 
-// Bring in: Bohdan's browser is never offered; his agent device is, while it publishes no named agents.
-assert.deepEqual(m.bringInDevices(bohdan, o, {}), ["bohdan/windows-laptop"]);
+// Bring in: neither a browser nor an advertised device invents a default recipient.
+assert.deepEqual(m.bringInDevices(bohdan, o, {}), [], "an advertised agent device without a concrete catalog entry is not a recipient");
 assert.deepEqual(m.bringInDevices(bohdan, o, { "bohdan/windows-laptop": [{ id: "x" }] }), [], "named agents are offered one by one");
-assert.deepEqual(m.bringInDevices(vitalii, o, {}), ["vitalii/desk"]);
+assert.deepEqual(m.bringInDevices(vitalii, o, {}), [], "a verified human's device still needs a concrete agent selection");
 
 // Look-alike names: a short key; the real owner's own devices have none.
 let d = m.deviceWho("mallory/box", o);
@@ -93,13 +94,21 @@ assert.equal(m.whoName(d), "Vitalii");
 assert.deepEqual(m.askerWords("admin/pixel", o, {}), { name: "you", device: "Pixel", agent: false, you: true });
 assert.deepEqual(m.askerWords("vitalii/phone", o, {}), { name: "Vitalii", device: "Phone", agent: false, you: false });
 assert.equal(m.askerWords("vitalii/desk", o, {}).agent, true);
+assert.deepEqual(m.askerWords("admin/zenbook", o, {}), { name:"Your earlier default on Zenbook", device:"Zenbook", agent:true, you:false }, "the live no-binding caller names the peer host, not its owner's primary device");
 
 // A phone (a browser runs no agent): the thread with the laptop is your agent there.
 const phone = { ...laptop(false), me: { address: "admin/pixel", fingerprint: "19c77bce-b", responder: "", responder_dir: "", agent: false }, agent_devices: ["admin/laptop"] };
 r = m.threadRow("admin/laptop", phone, {});
-assert.deepEqual([r.kind, r.title, r.subtitle], ["agent", "Your agent", "on Laptop"]);
+assert.deepEqual([r.kind, r.title, r.subtitle], ["agent", "Your earlier default on Laptop", "on Laptop"]);
 w = m.threadAuthor({ id: "o", dir: "out", from: "admin/pixel", kind: "question", body: "?" }, phone, {}, "admin/laptop");
 assert.equal(w.name, "You");
+
+// A concrete historical target stays distinct from the current local Claude default.
+const concreteID = "a".repeat(32), concreteNames = { [concreteID]:"Pi", [concreteID+"#harness"]:"pi" };
+r = m.threadRow("admin/zenbook", o, concreteNames, { ...legacy("admin/zenbook", "22222222-c"), agent_id:concreteID, agent_legacy:false });
+assert.deepEqual([r.kind, r.title, r.subtitle, r.local], ["agent", "Pi", "on Zenbook", false]);
+w = m.threadAuthor({ ...a, agent_id:concreteID }, o, concreteNames, "admin/pixel", [q, a]);
+assert.deepEqual([w.name, w.agent, w.mine], ["Pi", true, false], "named historical output does not inherit today's default program");
 console.log("Comic people model: agents only where one runs, own devices are you, people are people, look-alikes keyed, Bring in agents only PASS");
 
 // Same-named assistants remain distinguishable in compact labels and mentions.

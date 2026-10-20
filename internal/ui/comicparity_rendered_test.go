@@ -20,7 +20,7 @@ import (
 
 // MEL-528 parity as the default messenger renders it over a real
 // installation (testdata/comic_parity_check.cjs): a reminder already due
-// leads the list at the top of Chats and opens its message; a reminder is
+// leads Outbox's Reminders list and opens its message; a reminder is
 // set from a message's menu (desktop) and its action sheet (phone), moved,
 // done and cancelled; "Remind me about this chat" is in the header menu;
 // automatic answers are turned on before they ask and off again; the

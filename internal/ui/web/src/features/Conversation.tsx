@@ -114,13 +114,13 @@ function OpenView({ open }: { open: NonNullable<Open> }) {
           to={t ? "What you write here goes to " + (t.kind === "group" ? "the members of " + title : title) + " only." : "Messages with " + title + " show up here."} />} />
       </Swap>
       {selected
-        ? <SelectBar count={selected.length} onCancel={() => setSelected(null)} onMove={canInvite ? () => setOrganize(true) : undefined}
+        ? <SelectBar count={selected.length} onCancel={() => setSelected(null)} onMove={canInvite || th && !th.key?.pending ? () => setOrganize(true) : undefined}
             onContribute={canInvite ? () => setContribute(true) : undefined}
             onBringIn={() => { store.openInvite(ctx.conv, selected); setSelected(null); }} />
         : <Composer dm={t ?? undefined} thread={th ?? undefined} />}
       {!wide && !leaving && <RoomSheet />}
       {!leaving && <InviteSheet />}
-      {organize && t && selected && <OrganizeMessages dm={t} ids={selected} onClose={() => setOrganize(false)} onDone={() => { setOrganize(false); setSelected(null); }} />}
+      {organize && (t || th) && selected && <OrganizeMessages dm={t ?? undefined} thread={th ?? undefined} ids={selected} onClose={() => setOrganize(false)} onDone={() => { setOrganize(false); setSelected(null); }} />}
       {contribute && t && selected && <ContributeHistory dm={t} ids={selected} names={names} onClose={() => setContribute(false)} onDone={() => { setContribute(false); setSelected(null); }} />}
     </section>
   );

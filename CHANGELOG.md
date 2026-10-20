@@ -4,6 +4,40 @@ Notable changes to AgentNet, newest first. Dates use `YYYY-MM-DD`.
 This record starts with v0.8.1; earlier releases remain on the
 [releases page](https://github.com/misunders2d/agentnet/releases).
 
+## [0.9.1] — 2026-10-20
+
+- Identify configured agents by their actual harness and device. The default
+  selects one concrete agent, with no additional generic agent chat. Preserve
+  original destinations and historical executor identities across changes.
+- Avoid storage rewrites and directory refreshes for identical valid agent
+  catalog uploads; actual harness, catalog and exact-key changes still propagate.
+- Reconcile uncertain direct-agent work before sending, retaining text and
+  files when the exact current attempt cannot be verified. Other agents' stale
+  requests no longer block the selected agent.
+- Deliver retained strict steering through group and external participation
+  guards without mistaking its reader capability extension for a different
+  base capability and blocking later messages in the same queue.
+- Re-send the host's ordinary current status after an authorized Stop refusal,
+  preserving its actual attempt and refusal reason. Show terminal host reports
+  without working animations, retain newer running attempts, and resolve
+  retained group request IDs correctly.
+- Show multiple image attachments in a compact two-column layout with filenames,
+  retaining each original image, lazy loading, viewer, download and project-save
+  actions. Single-image previews keep their existing layout.
+- Add Outbox with separate Scheduled, Drafts and Reminders views. Keep personal
+  reminders out of Chats, show their due count in navigation, load cancelled
+  history on demand and resume each draft in its original chat and agent.
+  Preserve schedule edits and focus across pushes, files, audience review and
+  same-ID save recovery.
+- Open cached notification targets before unrelated refreshes and keep exact
+  missing targets available for Retry. Reuse the native warm-navigation path.
+- Request the existing macOS system notification sound. Physical banner and
+  audio behavior still requires device observation.
+- Direct agent chats can move selected original messages or merge a held
+  exchange into an existing or newly named topic, with reviewed CLI/API
+  operations, Comic controls and undo. Personal placement syncs across linked
+  human devices without rewriting messages, files, reply links or execution state.
+
 ## [0.9.0] — 2026-10-20
 
 - Separate scheduled-message date and time controls so Linux/WebKit users can

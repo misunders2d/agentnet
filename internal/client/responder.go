@@ -144,29 +144,26 @@ func (a *Agent) suggestedHarness() string {
 // setup does not ask again. The change applies to the next job; a running
 // job keeps the responder it started with.
 func (a *Agent) SetResponder(r *Responder) error {
-	if r == nil {
-		if err := a.store.deleteConfig("responder"); err != nil {
+	if r != nil {
+		if err := validateResponder(r); err != nil {
 			return err
 		}
-		if err := a.store.setConfig(map[string]string{"responder_manual": "1"}); err != nil {
+		if err := checkOMPResponderSetup(r); err != nil {
 			return err
 		}
-		notifyDaemon(a.home)
-		return nil
 	}
-	if err := validateResponder(r); err != nil {
+	tx, err := a.store.db.Begin()
+	if err != nil {
 		return err
 	}
-	if err := checkOMPResponderSetup(r); err != nil {
+	defer tx.Rollback()
+	if err = a.saveDefaultIn(tx, r, ""); err != nil {
 		return err
 	}
-	data, _ := json.Marshal(r)
-	if err := a.store.setConfig(map[string]string{"responder": string(data)}); err != nil {
+	if err = tx.Commit(); err != nil {
 		return err
 	}
-	if err := a.store.deleteConfig("responder_manual"); err != nil {
-		return err
-	}
+	a.store.changed()
 	notifyDaemon(a.home)
 	return nil
 }

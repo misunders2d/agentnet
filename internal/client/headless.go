@@ -620,6 +620,7 @@ func (a *Agent) admitDecision(ctx context.Context, env envelope.Envelope, in env
 	}
 	senderFP := sender.Fingerprint()
 	ownerDecision := d.Action == "continue" || (d.Action == "resolve" || d.Action == "cancel") && d.Report == ""
+	actualRequest, refreshRequest := in.Ref.ID, ""
 	// The decision's row, written with whatever it decides (or the refusal
 	// it met), so a replay meets the recorded outcome.
 	record := func(tx *sql.Tx, outcome string) (fresh bool, err error) {
@@ -631,6 +632,15 @@ func (a *Agent) admitDecision(ctx context.Context, env envelope.Envelope, in env
 			return false, err
 		}
 		n, _ := res.RowsAffected()
+		if n == 1 && outcome != "" && !tellsNothing(outcome) && refreshRequest != "" {
+			// A refusal echoes the submitted CAS attempt. Publish the actual
+			// current execution separately through the existing durable status
+			// path; a decision snapshot cannot safely replace it in a reader.
+			_, err = tx.Exec(`UPDATE inbox SET status_due=status_due+1 WHERE id=? AND kind IN (?,?)`, refreshRequest, envelope.KindQuestion, envelope.KindTask)
+			if err != nil {
+				return false, err
+			}
+		}
 		return n == 1, nil
 	}
 	// A replay: the recorded outcome, never a fresh look.
@@ -662,8 +672,11 @@ func (a *Agent) admitDecision(ctx context.Context, env envelope.Envelope, in env
 		if err := a.store.done(tx.Commit()); err != nil {
 			return err
 		}
+		if refreshRequest != "" {
+			a.wakeStatus()
+		}
 		a.Logf("decision %s from %s refused: %s", in.ID, env.From, why)
-		state, _ := a.store.jobState(in.Ref.ID)
+		state, _ := a.store.jobState(actualRequest)
 		if ok, _ := operatorHolds(a.store.db, env.From, senderFP); !ok || tellsNothing(why) {
 			state = "" // nothing about the request for a non-operator, or one that named it wrong
 		}
@@ -675,7 +688,6 @@ func (a *Agent) admitDecision(ctx context.Context, env envelope.Envelope, in env
 	// device request held here, or a DM or group request to this device's
 	// agent (its participation's, not a replica: conv), which a decision
 	// accepts, declines, resolves or stops but never answers by hand.
-	actualRequest := in.Ref.ID
 	var kind, from string
 	var conv bool
 	decide := func(tx *sql.Tx, change string, changeArgs []any) (string, error) {
@@ -721,6 +733,7 @@ func (a *Agent) admitDecision(ctx context.Context, env envelope.Envelope, in env
 		if err != nil {
 			return "", err
 		}
+		refreshRequest = actualRequest // exact request found after current operator/own-human checks
 		if state != d.Expect || attempts != d.Attempt {
 			return fmt.Sprintf("the request is no longer as you saw it (now %s, attempt %d)", state, attempts), nil
 		}
@@ -812,8 +825,11 @@ func (a *Agent) admitDecision(ctx context.Context, env envelope.Envelope, in env
 			return err
 		}
 		if refused != "" {
+			if refreshRequest != "" {
+				a.wakeStatus()
+			}
 			a.Logf("decision %s from %s on %s refused: %s", in.ID, env.From, in.Ref.ID, refused)
-			state, _ := a.store.jobState(in.Ref.ID)
+			state, _ := a.store.jobState(actualRequest)
 			if tellsNothing(refused) {
 				state = ""
 			}
@@ -967,7 +983,8 @@ func (a *Agent) sendControlTo(ctx context.Context, address string, ref ControlRe
 // ---- reading: what the requester and the operator see ----
 
 // execViews resolves the statuses among rows: the newest per request from
-// its executor, statuses answering decisions left out.
+// its executor, statuses answering decisions left out: their Attempt echoes
+// the submitted CAS and can differ from the attempt whose state they report.
 func execViews(rows []controlRow) map[ControlRef]ExecView {
 	type best struct {
 		n  int64

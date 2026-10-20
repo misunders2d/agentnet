@@ -19,6 +19,12 @@ AgentNet is an end-to-end encrypted messenger between coding agents: the `agentn
 - `agentnet task`: work to do; it runs only after the recipient accepts it once or has given the sender's key standing permission. Use it only when the person wants work done there.
 - Attach files with `--file`. To continue a thread, even days later, `ask` and `task` take `--reply-to ID`, and a received message is answered with `agentnet reply ID TEXT`. Read the whole thread with `agentnet conversation ID`.
 
+## Organize a direct agent conversation
+- `agentnet topic list --peer ADDRESS` lists the held topics; `topic show ID` reads the original messages at their displayed location.
+- For an explicit organization request, choose the relevant original IDs within the same exact agent identity and an existing destination, or create the appropriately named new topic requested by the person. Use `topic preview --peer ADDRESS --to TOPIC ID...` or `topic preview --peer ADDRESS --new "Topic name" ID...` to inspect the exact move, then `topic apply REVIEW.json`; retain that reviewed operation for uncertain retries. `topic move` applies at once, and `topic merge --peer ADDRESS --to TOPIC SOURCE_TOPIC` selects the currently held source exchange.
+- Move original messages and files. Never substitute a summary, duplicate message, rename or archive for consolidation. Leave unrelated exchanges in place.
+- `topic undo --peer ADDRESS --id RETRY_ID OPERATION_ID` on the originating device restores its persisted prior placement unless a later move intervened. Organization is personal display metadata and syncs to current linked human devices with `dts1`; it changes no audience, native context, permission or execution state and reruns no work.
+
 ## What results mean
 - `delivered` means stored in the recipient's inbox, not read, answered or done. Report the state you actually have (`agentnet status ID`).
 - Answers and results arrive in the inbox. Do not poll: when told something arrived (a session notice or the person), read it once. If this session gets no AgentNet notices, do not promise to report a reply later; say it can be checked on request.

@@ -39,6 +39,7 @@ export const CapOwnSyncV2 = "own2", SubInvitationSync = "invitation-sync";
 export const CapHistoryArchive="ha1",SubHistoryArchive="history-archive";
 export const CapOwnSyncV3 = "own3", CapDeviceHistory = CapOwnSyncV3, SubDeviceHistory = "device-history", SubDeviceFile="device-file";
 export const SubTopicSync = "topic-sync";
+export const CapDirectTopicSync="dts1", SubDirectTopicSync="direct-topic-sync";
 export const CapTopicStateSync = "tss1", SubTopicStateSync = "topic-state-sync"; // private topic marks between current own-human devices; NOT implied by rm1
 export const CapReadSync = "rd1", CapReadSyncV2 = "rd2", SubReadSync = "read-sync";
 export const CapModelSync = "mdl1", CapModelSyncV2 = "mdl2", SubModelSync = "model-sync";
@@ -774,10 +775,11 @@ async function checkV2(n) {
     if(n.conv||n.lid||n.root||n.kind!=="message"||!n.replica||n.attachments.length!==1||n.target||n.pid||n.reply_to||n.origin||n.emotion||n.status||n.fan||n.human||n.receiver_route||n.agent_id||n.topic||n.topic_event||n.topic_done||n.quote||n.send_group||n.session||n.fallback)throw Error("history archive: quiet rootless replica required");
     parseHistoryArchive(n.body);if(!n.attachments[0].blob||n.attachments[0].size>HistoryArchiveMaxBytes||n.attachments[0].blob.size>HistoryArchiveMaxBytes+(64<<10))throw Error("history archive exceeds bound");return;
   }
-  if(n.sub===SubModelSync || n.sub===SubReadSync || n.sub===SubInvitationSync || n.sub===SubTopicSync || n.sub===SubTopicStateSync || n.sub===SubDeviceHistory || n.sub===SubDeviceFile) {
+  if(n.sub===SubModelSync || n.sub===SubReadSync || n.sub===SubInvitationSync || n.sub===SubTopicSync || n.sub===SubTopicStateSync || n.sub===SubDirectTopicSync || n.sub===SubDeviceHistory || n.sub===SubDeviceFile) {
     if(n.conv || n.lid || n.root || n.kind!=="message" || !n.replica || n.target || n.pid || (n.attachments.length && n.sub!==SubDeviceFile) || n.attachments.length>1 || n.reply_to || n.origin || n.emotion || n.status || n.fan || n.human || n.receiver_route || n.agent_id || n.topic || n.topic_event || n.topic_done || n.quote)throw Error("read sync: quiet rootless reference carrier required");
     if(n.sub===SubModelSync){if(n.send_group||n.session||n.fallback)throw Error("model sync: quiet carrier required");parseModelSync(n.body);return;}
     if(n.sub===SubDeviceHistory||n.sub===SubDeviceFile){if(n.send_group||n.session||n.fallback)throw Error("device history: quiet carrier required");parseDeviceHistory(n.body,n.sub===SubDeviceFile);return;}
+    if(n.sub===SubDirectTopicSync){if(n.send_group||n.session||n.fallback)throw Error("direct topic sync: quiet carrier required");parseDirectTopicSync(n.body);return;}
     if(n.sub===SubTopicStateSync){if(n.send_group||n.session||n.fallback)throw Error("topic state sync: quiet rootless mark carrier required");parseTopicStateSync(n.body);return;}
     if(n.sub===SubTopicSync){if(n.session||n.fallback)throw Error("topic sync: quiet rootless title carrier required");parseTopicSync(n.body);}else if(n.sub===SubInvitationSync)await validateInvitationSync(parseInvitationSync(n.body));else parseReadSync(n.body);return;
   }
@@ -867,7 +869,7 @@ export async function seal(m, keys, recipient) {
   // A turn that asks for the recipient's attention names its channel
   // (envelope.SealAttention); only version 2 carries it.
   const chan = m.chan || "";
-  if ((inner.sub === SubHistoryArchive || inner.sub === SubRootSync || inner.sub === SubModelSync || inner.sub === SubReadSync || inner.sub === SubInvitationSync || inner.sub === SubTopicSync || inner.sub === SubTopicStateSync || inner.sub === SubDeviceHistory || inner.sub === SubDeviceFile) && chan) throw new Error("root sync carries no attention");
+  if ((inner.sub === SubHistoryArchive || inner.sub === SubRootSync || inner.sub === SubModelSync || inner.sub === SubReadSync || inner.sub === SubInvitationSync || inner.sub === SubTopicSync || inner.sub === SubTopicStateSync || inner.sub === SubDirectTopicSync || inner.sub === SubDeviceHistory || inner.sub === SubDeviceFile) && chan) throw new Error("root sync carries no attention");
   if (chan && (v !== Version2 || !validChannel(chan))) throw new Error("attention needs a version 2 message and a notification channel");
   const env = { v, id: m.id, from: m.from, to: m.to, ts: m.ts, kind: m.kind, ct,
     blobs: attachments.map((a) => a.blob), session: inner.session, fallback: inner.fallback, attn: !!chan, chan };
@@ -954,7 +956,7 @@ export async function open(json, keys, selfAddress, sender) {
     throw new Error("encrypted header does not match signed envelope");
   }
   await checkV2(n);
-  if ((n.sub === SubHistoryArchive || n.sub === SubRootSync || n.sub === SubModelSync || n.sub === SubReadSync || n.sub === SubInvitationSync || n.sub === SubTopicSync || n.sub === SubTopicStateSync || n.sub === SubDeviceHistory || n.sub === SubDeviceFile) && e.attn) throw new Error("root sync carries no attention");
+  if ((n.sub === SubHistoryArchive || n.sub === SubRootSync || n.sub === SubModelSync || n.sub === SubReadSync || n.sub === SubInvitationSync || n.sub === SubTopicSync || n.sub === SubTopicStateSync || n.sub === SubDirectTopicSync || n.sub === SubDeviceHistory || n.sub === SubDeviceFile) && e.attn) throw new Error("root sync carries no attention");
   if (n.attachments.length !== e.blobs.length) throw new Error("encrypted manifest does not match signed attachments");
   n.attachments.forEach((a, i) => {
     const b = e.blobs[i];
@@ -1056,7 +1058,7 @@ export const convRootVersionLimit = (v) => v === GroupRootVersion ? MaxGroupRoot
 const convRootSizeLimit = (json) => { try { return convRootVersionLimit(JSON.parse(json).v); } catch (_) { return MaxConvRoot; } };
 export const CapProactiveAgent = "ams1";
 export const proactiveAgent = n => n.kind === "message" && !n.sub && !n.status && !n.reply_to && !n.target && !!n.conv && !!n.pid && n.origin === "agent:proactive" && !n.receiver_route;
-export const MaxCaps = 32, MaxAdvertisedCaps = 30; // older readers already parse up to 32 names
+export const MaxCaps = 32, MaxAdvertisedCaps = 31; // older readers already parse up to 32 names
 export const MaxCapsRecord = 1024;
 export const CapEnv2 = "env2";
 export const CapPerson = "person2"; // reads person roster chains, roots v2, fan-out and history
@@ -1148,6 +1150,15 @@ export function parseTopicStateSync(json) {
   if(!validTopicMark(x)||seen.has(key))throw Error("topic state sync: invalid or duplicate mark");
   seen.add(key);return x;
  });return r;
+}
+
+export const validDirectTopicDestination=d=>!!d&&validAddress(d.host)&&validFingerprint(d.fingerprint)&&(d.agent_id==null||d.agent_id===''||validID(d.agent_id));
+export const directTopicNewer=(a,b)=>!b||(a.revision!==b.revision?a.revision>b.revision:a.writer!==b.writer?a.writer>b.writer:a.topic!==b.topic?a.topic>b.topic:a.peer!==b.peer?a.peer>b.peer:!!a.synthetic!==!!b.synthetic?!!a.synthetic:a.destination?.host!==b.destination?.host?a.destination?.host>b.destination?.host:a.destination?.fingerprint!==b.destination?.fingerprint?a.destination?.fingerprint>b.destination?.fingerprint:(a.destination?.agent_id||'')>(b.destination?.agent_id||''));
+export function parseDirectTopicSync(json) {
+ const r=strictRecord(json,65536,"direct topic sync",{v:"int",person:"string",roster:"string",placements:"array"});
+ if(r.v!==1||!validID(r.person)||!validHash(r.roster)||!r.placements?.length||r.placements.length>64)throw Error("direct topic sync: invalid owner or placements");
+ const fields={peer:"string",id:"string",author:"string",topic:"string",revision:"int",writer:"string",synthetic:"boolean",destination:"object"},seen=new Set();
+ r.placements=r.placements.map(p=>{const x=strict(p,"direct topic placement",fields),key=x.author+"/"+x.id;if(x.destination)x.destination=strict(x.destination,"direct topic destination",{host:"string",fingerprint:"string",agent_id:"string"});if(!validAddress(x.peer)||!validID(x.id)||!validFingerprint(x.author)||!validID(x.topic)||!Number.isSafeInteger(x.revision)||x.revision<1||!validFingerprint(x.writer)||!validDirectTopicDestination(x.destination)||seen.has(key))throw Error("direct topic sync: invalid or duplicate placement");seen.add(key);return x;});return r;
 }
 function strictRecord(json, max, what, fields) {
   if (typeof json === "string" && utf8.encode(json).length > max) throw new Error(what + ": record too large");
@@ -1830,27 +1841,32 @@ function marshalAgent(r, withSig) {
   return '{"v":' + goInt(r.v, "version") + ',"id":' + goString(r.id) + ',"host":' + goString(r.host) +
     ',"host_key":' + goString(r.host_key) + ',"label":' + goString(r.label) + ',"ts":' + goInt(r.ts, "time") + sigJSON(r, withSig) + "}";
 }
-export const agentJSON = (r) => marshalAgent(r, true);
+export const agentJSON = (r) => { const base=marshalAgent(r,true);return r.harness?base.slice(0,-1)+',"harness":'+goString(r.harness)+',"harness_sig":'+goString(b64(r.harness_sig))+'}':base; };
 export const agentCanonical = (r) => utf8.encode(agentDomain + marshalAgent(r, false));
 export const agentHash = (r) => hashOf(agentCanonical(r));
+export const agentHarnessCanonical = async r => utf8.encode('agentnet-agent-harness-v1\n{"identity":'+goString(await agentHash(r))+',"harness":'+goString(r.harness)+'}');
 export function validateAgent(r) {
   if (r.v !== 1 || !validID(r.id) || !validAddress(r.host) || !validFingerprint(r.host_key) || !(r.ts > 0)) throw new Error("agent: invalid identity, host key or timestamp");
   validLabel(r.label);
+  if(r.harness&&!/^[a-z][a-z0-9-]{0,31}$/.test(r.harness))throw Error("agent: invalid harness extension");
 }
 export function parseAgentRecord(json) {
-  const f = strictRecord(json, 8192, "agent", { v: "int", id: "string", host: "string", host_key: "string", label: "string", ts: "int", sig: "string" });
+  const f = strictRecord(json, 8192, "agent", { v: "int", id: "string", host: "string", host_key: "string", label: "string", ts: "int", sig: "string", harness:"string", harness_sig:"string" });
   const r = { v: f.v || 0, id: f.id || "", host: f.host || "", host_key: f.host_key || "", label: f.label || "", ts: f.ts || 0, sig: f.sig ? unb64(f.sig, "agent signature") : null };
+  if(f.harness||f.harness_sig){r.harness=f.harness||"";r.harness_sig=f.harness_sig?unb64(f.harness_sig,"agent harness signature"):null;if(!r.harness||!r.harness_sig)throw Error("agent: invalid harness extension");}
   validateAgent(r); fitsRecord(agentJSON(r), 8192, "agent");
   return r;
 }
 export async function signAgent(keys, fields) {
   const r = { v: 1, ...fields };
   validateAgent(r); r.sig = await signBytes(keys, agentCanonical(r));
+  if(r.harness)r.harness_sig=await signBytes(keys,await agentHarnessCanonical(r));
   return r;
 }
 export async function verifyAgent(r, host) {
   validateAgent(r); await checkPublic(host);
   if (host.address !== r.host || await fingerprint(host) !== r.host_key || !await verifyBytes(host.sign_key, agentCanonical(r), r.sig)) throw new Error("agent: identity is not signed by its exact host device");
+  if(r.harness&&!await verifyBytes(host.sign_key,await agentHarnessCanonical(r),r.harness_sig))throw Error("agent: harness is not signed by its exact host device");
 }
 // The durable outbox keeps this requirement even when ciphertext cannot be reopened.
 // A room shape keeps its conversation's primary (a group's grp1, a DM's

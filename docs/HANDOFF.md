@@ -1,6 +1,157 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
-## v0.9.0 — local candidate, not released
+## v0.9.1 — integrated release qualification (October 20, 2026)
+
+The owner activated the [goal](plans/V0_9_1_GOAL.md) and
+[acceptance checklist](plans/V0_9_1.md) for MEL-550, MEL-661, MEL-662, MEL-663,
+MEL-664 and MEL-665, later adding MEL-666, MEL-667 and MEL-668. Scope is concrete harness/device
+identity with no phantom default chat; safe blocked-send reconciliation;
+scheduling and a dedicated Outbox with Scheduled, Drafts and Reminders views;
+Linux exact-message notification landing; the justified
+macOS notifier fix; and direct-agent message moves/merges into existing or new
+named topics. The owner initially limited this phase to code and local testing,
+then explicitly instructed: “finish the full coverage and roll out a new
+release, deploy to relay”. CI, publication and relay deployment are now authorized
+after qualification; live chat reorganization remains excluded. The earlier
+Linux laptop incident and its bounded evidence remain in the checklist.
+The checklist records
+the current evidence and remaining work; this section makes no completion claim.
+
+Actual Herdr Claude D1/D2/D3 reviews have been retrieved from the existing
+owner-selected session. D3 found no blocker to local qualification; the later
+Outbox consultation required a due-reminder badge, now implemented and tested.
+These reviews ran no tests and are not release approval. An extra Claude
+session opened earlier in error was closed and its absence verified.
+
+Signed agent-record canonical bytes stay compatible; the default pointer is
+local, and original host/key/agent destinations remain immutable. Review cards,
+focused needs-human regions and existing standalone answer dialogs also name
+the exact historical target/device, with explicit unknown legacy identity.
+The preserved T1 draft now supports synthetic named topics, original-message
+moves, merge and undo without changing execution identity. Outbox has separate
+Scheduled, Drafts and Reminders views in Comic and all three standalone skins,
+with compact lists, exact draft/File recovery, due badges and lazy history.
+Focused native/browser/rendered checks pass, including 20-item lists and real
+scheduled delivery across daemon restart at the edited deadline only.
+
+Current private candidate is `860a0b41621090fd68e1a521780a3ce176124d9a`, in
+`/tmp/agentnet-v091-qualification-n_a8iu95/agentnet`, with its sibling collection
+and exact manifest in `.agentnet/v091/qualification.json`. Vet26.164s and all
+skin builds22.291s pass. Production Go and collection source remain unchanged
+from b18; the only new production correction makes legacy peer-host labels use
+the actual peer address. Focused regressions pass after rebuilding Comic.
+Retained normal collection checks executed271cases:270passed, one test
+extractor failed, zero skipped. Its extractor-only correction passes on the
+private snapshot; all 270 unchanged passing cases are retained. The corrected
+complete backend stage passes850.990s for all5packages and bothscaffolds.
+The first `others` run retains passes for every other package, including
+requiredv0.9.0 mixed-version integration and mobile Go core. Its CLI package
+alone exhausted the600s aggregate budget at its final207thparent, only3s into
+that case. Two exact disjoint CLI selections pass (205parents,2explicit skips).
+UI0 retained74passes/37skips, with4diagnosed fixture failures corrected and
+race-verified;127unfinished UI0parents and242UI1parents remain. The first client aggregate also timed out with43passes/1skip and no individual
+assertion failure. A disjoint2lane continuation now covers all remaining
+1343client/369UI parents while retaining every original18client/2UI membership
+and unchanged600s bounds. That continuation stopped after three deadline
+failures. Whole-parent Codex question/task/cancellation subsequently passes
+69.18s alone; two other cases fail alone and also reproduce on byte-verified
+publishedv0.9.0 at unchanged bounds (history85.73s; named callback75.20s).
+No cause or product fix is claimed from these failures. Temporary failure-phase
+diagnostics were restored after capturing evidence. Reusing unchanged earlier
+passes leaves1203client/369UIparents in the exact local continuation inventory.
+The new release authorization permits the existing full dedicated CI workflow
+to supply remaining integrated/platform qualification without further local
+repetition. No assertion, case or deadline was removed or raised.
+The initial `npm test` exited1; composed stage
+evidence is recorded honestly in the checklist. No complete candidate pass is
+yet claimed. Original main/tag, public gallery pins and installed apps remain
+unchanged. Root owns integration/checklist; three explicit GPT-6.1-sol/xhigh
+workers handled bounded implementation and verification.
+
+The first backend collection stage collected four failures. Holonet's Outbox
+button occupied Activity's wrapper; one insertion-line correction restores a
+single navigation row and passes the focused390×480geometry check. Its browser
+fixture also now expects the actual concrete catalog caption. Zoom's original
+long-history touch journey passes once in isolation, and an independent
+Open/SELECT enrollment probe passes; neither establishes the earlier durable
+wait or `SQLITE_BUSY` cause. No native retry, schema, cache or timeout change
+was made for those unproven failures. Both paths pass in the corrected full
+backend run too; retain the original failures without claiming their cause.
+An explicit setup check separately exposed an old optional fixture whose
+home selector, OMP expectation and mobile Rename action already disagree with
+baseline. Root ended that detour after the owner's duration correction and
+restored only its exploratory fixture edits; all failed evidence remains and
+the optional check is explicitly unqualified. Required coverage takes priority.
+
+Earlier private candidates `9be26407` and `0a43d3be` remain unqualified historical
+attempts. All six collected client failures pass in isolated focused evidence,
+including the two-parent baseline/candidate comparison, but their original
+cause remains unproven. A separately proven redundant-catalog push is fixed
+with a small Hub no-op guard and RED/GREEN/race evidence; it is not claimed
+as their cause. Archived-release builds disable VCS stamping only for the
+metadata-free archive. Real v0.9.0 mixed-version coverage remains required.
+Available Android bridge/send-journal and390/320Comic checks pass; current
+JVM/lint could not start because Java/SDK/Gradle tooling is unavailable. Old
+Android reports and the old AAR do not qualify this candidate. Physical Mac
+banner/audio, Linux OS callback latency and minimum-spec hardware checks remain
+unexecuted, separate from local rendered and native-module evidence.
+
+The later group-send incident has a separate reproduced delivery defect:
+strict steering adds `+flw2`, which three participation/group delivery guards
+failed to normalize before comparing the base capability. The minimal fix
+retains reader and recipient checks; a real queue regression now drains the
+steering and subsequent ordinary turns without changing their envelopes. All
+three actual stuck logical IDs arrived on Zenbook at16:34Kyiv; Pi's MEL-667
+follow-up reports all18 original copies delivered. Native steering consumption
+of that incident remains unproven. No runtime was
+replaced here. See the checklist for incident evidence and the owner's explicit
+earlier instruction not to resume deployment, superseded by the explicit
+release/relay deployment instruction above.
+
+MEL-666 reproduces authorized terminal Stop refusals that did not refresh
+ordinary execution state. The minimal fix durably marks the existing status
+path and emits the actual current attempt separately from the decision's
+echoed CAS attempt. Legacy group physical/shared-ID lookup is corrected too.
+Retained old decision replies remain explicit host snapshots; they never
+promote execution state or hide a newer running attempt. Native/browser,
+restart/linked history, real child cancellation and rendered phone/desktop
+checks pass, including focused race coverage. The reported Bezos response
+already said answered; this is not evidence that a new cancellation is needed
+or that Stop caused completion.
+
+MEL-668 uses contained two-column previews for multiple images in one message,
+reusing each original's viewer/download/project-save actions. Final canonical
+Comic passes12 rendered cases; standalone image compatibility also passes.
+The owner requires low resource use on limited-RAM office laptops without a
+dedicated GPU; this is now a standing requirement in the Linear project
+description. Software-rendered, CPU-throttled image tests verify lazy reads
+and cleanup, with heap/RSS reported separately. Physical low-resource hardware
+and OS notification observations remain unexecuted field checks.
+
+Bookkeeping reconciliation: MEL-644 is already Done in Linear (October 19).
+Its unread actions shipped in v0.8.32 and earliest-unread navigation in v0.8.33;
+the preserved `MARK_UNREAD.md` is a historical requirements note, not new work.
+MEL-527's old Project specification/Backlog wording does not supersede the
+owner's corrected ordinary group-link scope shipped in v0.9.0 below. Do not
+reimplement a Project subsystem from that stale wording. Physical notification
+observations remain separate from these software checks. The original MEL-664
+incident predates the recorded v0.9.0 relay cutover; its historical trigger is
+unknown even though a concrete composer defect is established in source.
+
+## v0.9.0 — published; rollout in progress
+
+Published October 20 from immutable `6bd64377db879e7e61596cd7f084bcda080a1034`.
+The [release packaging run](https://github.com/misunders2d/agentnet/actions/runs/39404788118)
+passes all six jobs. All twelve payloads and `SHA256SUMS` were independently
+downloaded from the public release and match the checked draft bytes. All six
+programs carry clean exact-source provenance; the downloaded Android APK passes
+its original-signer, version, ABI and 16KiB checks.
+The matching [gallery release](https://github.com/misunders2d/agentnet-skins/releases/tag/v2026.10.20.1)
+passes the exact-pin collection gate and
+[full remote qualification](https://github.com/misunders2d/agentnet-skins/actions/runs/39404931308).
+The actual public gallery loader verifies all five package digests and twenty
+previews. Relay deployment and owner-device updating are in progress; no
+all-device pickup or physical-phone preservation claim is made.
 
 The owner's corrected MEL-527 scope is ordinary group-chat metadata: named
 HTTP(S) links edited by human members in the existing header and read by member

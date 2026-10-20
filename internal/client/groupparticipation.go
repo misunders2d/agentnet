@@ -142,6 +142,7 @@ func (a *Agent) mayDeliverGroupParticipation(env envelope.Envelope) (bool, bool,
 		return true, false, err
 	}
 	required, _ = splitConversationAudienceRequirement(required)
+	required, _ = splitSteerRequirement(required)
 	required, _ = splitGuestAgentRequirement(required)
 	if topicEvent != "" {
 		if err = json.Unmarshal([]byte(topicEvent), &in.TopicEvent); err != nil {

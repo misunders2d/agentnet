@@ -20,12 +20,14 @@ ALTER TABLE inbox ADD COLUMN executor TEXT;
 const agentCatalogConfig = "agent_catalog_v1"
 
 var ErrUnknownAgent = errors.New("selected agent is unknown, removed or belongs to another host")
+var ErrAgentCatalogFull = errors.New("local agent catalog is full; choose an existing configured agent as the default")
 
 // LocalAgentInfo contains private host configuration. Only Record is public.
 // A disabled identity remains here for historical authorship; it cannot run.
 type LocalAgentInfo struct {
-	Record    protocol.AgentRecord `json:"record"`
-	Responder *Responder           `json:"responder,omitempty"`
+	Record           protocol.AgentRecord `json:"record"`
+	Responder        *Responder           `json:"responder,omitempty"`
+	DefaultResponder bool                 `json:"default_responder,omitempty"` // migrated unnamed configuration, not a named twin
 }
 
 // ExecutorStamp is immutable admitted local execution input. It never comes
@@ -59,7 +61,16 @@ func (a *Agent) localAgentsIn(q dbq) ([]LocalAgentInfo, error) {
 	}
 	return entries, nil
 }
-func (a *Agent) LocalAgents() ([]LocalAgentInfo, error) { return a.localAgentsIn(a.store.db) }
+func (a *Agent) LocalAgents() ([]LocalAgentInfo, error) {
+	entries, err := a.localAgentsIn(a.store.db)
+	for i := range entries {
+		if entries[i].Responder != nil {
+			entries[i].Record.Harness = entries[i].Responder.Harness
+			entries[i].Record.Sign(a.id.Sign)
+		}
+	}
+	return entries, err
+}
 
 func copyResponder(r Responder) Responder { r.Context = append([]string(nil), r.Context...); return r }
 func (a *Agent) CreateLocalAgent(label string, r Responder) (protocol.AgentRecord, error) {
@@ -70,7 +81,7 @@ func (a *Agent) CreateLocalAgent(label string, r Responder) (protocol.AgentRecor
 	if err := checkOMPResponderSetup(&r); err != nil {
 		return protocol.AgentRecord{}, err
 	}
-	record := protocol.AgentRecord{V: 1, ID: protocol.NewID(), Host: a.Address, HostKey: a.Self().Fingerprint(), Label: label, TS: time.Now().Unix()}
+	record := protocol.AgentRecord{V: 1, ID: protocol.NewID(), Host: a.Address, HostKey: a.Self().Fingerprint(), Label: label, Harness: r.Harness, TS: time.Now().Unix()}
 	record.Sign(a.id.Sign)
 	if err := record.Verify(a.Self()); err != nil {
 		return protocol.AgentRecord{}, err
@@ -124,6 +135,10 @@ func (a *Agent) SetLocalAgentResponder(id string, r *Responder) error {
 	for i := range entries {
 		if entries[i].Record.ID == id {
 			entries[i].Responder = normalized
+			if normalized != nil {
+				entries[i].Record.Harness = normalized.Harness
+				entries[i].Record.Sign(a.id.Sign)
+			}
 			found = true
 			break
 		}
@@ -134,6 +149,20 @@ func (a *Agent) SetLocalAgentResponder(id string, r *Responder) error {
 	raw, _ := json.Marshal(entries)
 	if _, err = tx.Exec(`UPDATE config SET v=? WHERE k=?`, string(raw), agentCatalogConfig); err != nil {
 		return err
+	}
+	var defaultID string
+	_ = tx.QueryRow(`SELECT v FROM config WHERE k=?`, defaultAgentConfig).Scan(&defaultID)
+	if defaultID == id {
+		if normalized == nil {
+			if err = a.saveDefaultIn(tx, nil, ""); err != nil {
+				return err
+			}
+		} else {
+			data, _ := json.Marshal(normalized)
+			if _, err = tx.Exec(`UPDATE config SET v=? WHERE k='responder'`, string(data)); err != nil {
+				return err
+			}
+		}
 	}
 	if err = tx.Commit(); err != nil {
 		return err
@@ -163,6 +192,8 @@ func (a *Agent) ResolveExecutorIn(q dbq, id string, defaultResponder *Responder)
 				return nil, fmt.Errorf("selected local agent unavailable: %w", err)
 			}
 			record := entry.Record
+			record.Harness = r.Harness
+			record.Sign(a.id.Sign)
 			return &ExecutorStamp{AgentID: id, Record: &record, Responder: r}, nil
 		}
 	}
@@ -186,6 +217,19 @@ func (a *Agent) PublishAgentCatalog(ctx context.Context) error {
 	records, err := a.PublicAgentCatalog()
 	if err != nil {
 		return err
+	}
+	features, err := a.relayFeatures(ctx)
+	if err != nil {
+		return err
+	}
+	modern := false
+	for _, feature := range features {
+		modern = modern || feature == protocol.FeatureAgentHarness
+	}
+	if !modern {
+		for i := range records {
+			records[i].Harness, records[i].HarnessSig = "", nil
+		}
 	}
 	return a.hub.do(ctx, "PUT", "/v1/agent-catalog", records, nil)
 }

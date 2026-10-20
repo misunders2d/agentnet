@@ -143,7 +143,8 @@ func buildTagCLI(t *testing.T, tag string) string {
 	// Built beside the cached file and renamed into place: a concurrent
 	// run never sees half a binary.
 	tmp := filepath.Join(filepath.Dir(bin), fmt.Sprintf(".build-%d-%s", os.Getpid(), name))
-	build := exec.Command("go", "build", "-trimpath", "-ldflags", stampFlags(tag), "-o", tmp, "./cmd/agentnet")
+	// Archives have no VCS metadata; the resolved tag commit above identifies the source.
+	build := exec.Command("go", "build", "-buildvcs=false", "-trimpath", "-ldflags", stampFlags(tag), "-o", tmp, "./cmd/agentnet")
 	build.Dir = src
 	if out, err := build.CombinedOutput(); err != nil {
 		os.Remove(tmp)

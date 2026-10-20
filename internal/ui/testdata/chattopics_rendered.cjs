@@ -9,18 +9,22 @@ assert(evidence, 'AGENTNET_SCREENSHOTS must be outside the repository');
 fs.mkdirSync(evidence, { recursive: true, mode: 0o700 });
 const boot = `
 const kind=new URL(location).searchParams.get('kind'),skin=new URL(location).searchParams.get('skin');
+const directMode=${!!process.env.DIRECT_AGENT_ORGANIZE_ONLY};
 const renamedMode=${!!process.env.P28_RENAMED_ONLY};
 const searchMode=${!!process.env.AGENTNET_ALL_STATUS_SEARCH};
 const stopMode=${!!process.env.P11_STOP_ONLY},draftsMode=${!!process.env.P11_DRAFTS_ONLY},pendingMode=${!!process.env.P11_PENDING_ONLY},importMode=${!!process.env.P11_HISTORY_IMPORT_ONLY};
+const stopResultMode=${!!process.env.P11_STOP_RESULT_ONLY};
 const conv='c'.repeat(64),at='2026-10-05T10:00:00Z';
 const person=(label,address,key)=>({person:label.toLowerCase().padEnd(32,'a'),label,address,fingerprint:key,state:'pinned',devices:[{address,fingerprint:key}]});
-const me=person(renamedMode?'Atlas':'Sergey',renamedMode?'atlas/laptop':'sergey/laptop','own-key'),peer=person(renamedMode?'Briar':'Vitalii',renamedMode?'briar/desktop':'vitalii/desktop','peer-key');me.state='self';
-const topics=Array.from({length:4},(_,i)=>({id:String(i+1).repeat(32),...(kind==='agent'?{peer:peer.address}:{conv}),title:'Topic '+(i+1),last:'Topic '+(i+1)+' message',last_at:at,count:1,unread:0,review:0,running:0,waiting:false,pending:false,state:'active',quiet_since:at}));
+const me=person(renamedMode||directMode?'Atlas':'Sergey',renamedMode||directMode?'atlas/laptop':'sergey/laptop',directMode?'11111111-11111111-11111111-11111111':'own-key'),peer=person(renamedMode||directMode?'Briar':'Vitalii',renamedMode||directMode?'briar/desktop':'vitalii/desktop',directMode?'22222222-22222222-22222222-22222222':'peer-key');me.state='self';
+const piBinding={agent_host:peer.address,agent_key:peer.fingerprint,agent_id:'5'.repeat(32)},claudeBinding={...piBinding,agent_id:'6'.repeat(32)};
+const topics=Array.from({length:4},(_,i)=>({id:String(i+1).repeat(32),...(kind==='agent'?{peer:peer.address}:{conv}),...(directMode?piBinding:{}),title:'Topic '+(i+1),last:'Topic '+(i+1)+' message',last_at:at,count:1,unread:0,review:0,running:0,waiting:false,pending:false,state:'active',quiet_since:at}));
+if(directMode)topics.push({...topics[0],...claudeBinding,id:'9'.repeat(32),title:'Claude separate topic',last:'Separate concrete agent context'});
 if(searchMode){for(const [i,state] of ['active','done','archived'].entries())Object.assign(topics[i],{title:'needle '+state,last:'Matching '+state+' topic',state});topics[3].title='Unrelated active topic';}
 if(renamedMode){Object.assign(topics[0],{title:'**Literal name**',renamed:true});Object.assign(topics[1],{title:'**Automatic title**',renamed:false});Object.assign(topics[2],{title:String.fromCharCode(92)+'*literal'+String.fromCharCode(92)+'* _code_',renamed:true});}
-const message=(i)=>({id:topics[i].id,lid:topics[i].id,from:peer.address,dir:'in',body:'Topic '+(i+1)+' message',kind:'message',at,state:'stored',actions:[],...(kind==='agent'?{to:me.address,author:{label:peer.label,about:'Fixture author'}}:{topic:topics[i].id})});
+const message=(i)=>({id:topics[i].id,lid:topics[i].id,from:peer.address,dir:'in',body:'Topic '+(i+1)+' message',kind:'message',at,state:'stored',actions:[],...(kind==='agent'?{to:me.address,author:{label:peer.label,about:'Fixture author'},...(directMode?{from_key:peer.fingerprint,agent_id:topics[i].agent_id}:{})}:{topic:topics[i].id})});
 const main={id:'a'.repeat(32),lid:'a'.repeat(32),from:peer.address,dir:'in',body:'Quick main flow message',kind:'message',at,state:'stored',actions:[]};
-let thread=kind==='agent'?{id:topics[0].id,peer:peer.address,key:{pinned:'peer-key'},approved:false,task_grant:'',topic:topics[0],messages:[message(0)]}:{id:conv,kind:kind==='group'?'group':'dm',title:kind==='group'?'Team launch':'',peer:kind==='group'?{label:'Team launch',address:'',state:''}:peer,role:'member',members:[{...me,admin:true},peer],frozen:'',agents:[],guests:[],topics,messages:[main,...topics.map((_,i)=>message(i))]};
+let thread=kind==='agent'?{id:topics[0].id,peer:peer.address,key:{pinned:peer.fingerprint},approved:false,task_grant:'',topic:topics[0],messages:[message(0)]}:{id:conv,kind:kind==='group'?'group':'dm',title:kind==='group'?'Team launch':'',peer:kind==='group'?{label:'Team launch',address:'',state:''}:peer,role:'member',members:[{...me,admin:true},peer],frozen:'',agents:[],guests:[],topics,messages:[main,...topics.map((_,i)=>message(i))]};
 // Pending: requests this person sent to the peer's agent. Neither has a current
 // executor word (one none, one stale), so the topic is unconfirmed, not Waiting;
 // the DM copy still waits for the peer's program, which the relay lists offline.
@@ -28,10 +32,12 @@ const asked=m=>({...m,dir:'out',from:me.address,...(kind==='agent'?{to:peer.addr
 const update={to:peer.address,state:'waiting',detail:'peer_update: named agent capability unavailable: '+peer.address+' cannot synchronize direct-agent history or resolve own requests yet; update all its active AgentNet sessions'};
 if(pendingMode){topics[0].pending=true;topics[0].waiting=false;topics[0].unconfirmed=2;topics[0].pending_ids=[topics[0].id,'b'.repeat(32)];thread.messages=[...(kind==='agent'?[]:[main]),asked({...message(0),kind:'task',body:'Earlier unresolved task',target:{address:peer.address,fingerprint:peer.fingerprint},...(kind==='agent'?{}:{copies:[update]})}),asked({...message(0),id:'b'.repeat(32),lid:'b'.repeat(32),kind:'question',body:'Second pending question',exec:{state:'needs_human',host:peer.address,attempt:1,stale:true},target:{address:peer.address,fingerprint:peer.fingerprint}}),{...message(0),id:'d'.repeat(32),lid:'d'.repeat(32),kind:'answer',body:'Unrelated final answer'}];}
 const overview={version:'fixture',topic_list:true,seq:1,me:{address:me.address,fingerprint:me.fingerprint},person:me,persons:true,agents:true,files:false,controls:false,role:'person',people:[peer],review:[],links:[],reminders:[],threads:kind==='agent'?topics:[],topics:kind==='agent'?[{peer:peer.address,total:4,archived:searchMode?1:0,archived_unread:0,latest:topics[0]}]:[],dms:kind==='agent'?[]:[{id:conv,kind:thread.kind,title:thread.title,peer:thread.peer,count:5,unread:0}],directory:{current:true,members:[{address:me.address,presence:'connected'},{address:peer.address,presence:'connected'}]},quarantine:[]};
+if(directMode){overview.agent_devices=[peer.address];Object.assign(overview.topics[0],piBinding);overview.topics.unshift({peer:peer.address,...claudeBinding,total:1,archived:3,archived_unread:0,latest:topics[4]});}
 if(pendingMode)overview.directory.members[1].presence='offline';
 if(stopMode){
  const pid='9'.repeat(32),m=asked({...message(0),kind:'question',body:'Exact remote running request',topic:'',pid,target:{address:peer.address,fingerprint:peer.fingerprint},exec:{host:peer.address,state:'running',attempt:2,at:Math.floor(Date.now()/1000)},stop:{host:peer.address,id:topics[0].id,key:me.fingerprint,attempt:2,pending:sessionStorage.getItem('stopQueued')==='1'}});
  thread.messages=[m];if(kind!=='agent')thread.agents=[{pid,host:{...me,address:peer.address},name:'Own agent',state:'active',state_text:'Active',host_here:false,inviter:me,shared:[],tasks_from:[],held:0,missing:0,invited:at,can_ask:true,can_decide:false,can_dismiss:false}];
+ if(stopResultMode){const saved=JSON.parse(sessionStorage.getItem('stopResponse')||'null');if(saved){m.exec.stale=true;m.stop.pending=false;m.stop.result=saved;}if(sessionStorage.getItem('confirmedStop')){m.exec.state='cancelled';delete m.stop;}}
 }
 
 let destination;
@@ -42,18 +48,22 @@ if(importMode){
  overview.dms.push({id:destination.id,kind:'group',title:destination.title,peer:destination.peer,count:0,unread:0},{id:'e'.repeat(64),kind:'group',title:'Frozen archive',peer:{label:'Frozen archive',address:'',state:''},frozen:'frozen',count:0});
 }
 if(draftsMode)overview.files={max_file:1048576,max_message:2097152,max_count:8};
-window.fixture={overview,thread,requests:[],topics,destination,previews:0,shares:{}};
+window.fixture={overview,thread,requests:[],topics,destination,previews:0,shares:{},directMessages:topics.map((_,i)=>({...message(i),placement:topics[i].id})),directOperations:{}};
+const updateDirect=()=>{for(const t of topics)t.count=fixture.directMessages.filter(m=>m.placement===t.id).length;overview.threads=topics.filter(t=>t.count>0);for(const scope of overview.topics)scope.total=overview.threads.filter(t=>t.agent_host===scope.agent_host&&t.agent_key===scope.agent_key&&t.agent_id===scope.agent_id).length;};
 fixture.topicCatalog=[...topics,{...topics[0],id:'f'.repeat(32),conv:'d'.repeat(64),peer:'outside/host',title:'needle unauthorized scope'}];let open,changed;
 window.refreshFixture=()=>changed?.({type:'change',seq:++overview.seq});
 
-window.confirmStop=()=>{thread.messages[0].exec.state="cancelled";delete thread.messages[0].stop;changed?.({type:"change",seq:++overview.seq});};
+window.confirmStop=()=>{thread.messages[0].exec.state="cancelled";delete thread.messages[0].stop;if(stopResultMode)sessionStorage.setItem('confirmedStop','1');changed?.({type:"change",seq:++overview.seq});};
+window.replyStop=(state,refused='',execAttempt=2)=>{const m=thread.messages[0],result={decision:sessionStorage.getItem('stopDecision')||'8'.repeat(32),state,refused,at:1792501200};sessionStorage.setItem('stopResponse',JSON.stringify(result));m.exec={...m.exec,state:'running',attempt:execAttempt,stale:state!=='running'&&execAttempt===2};m.stop={host:peer.address,id:topics[0].id,key:me.fingerprint,attempt:2,pending:false,result};changed?.({type:'change',seq:++overview.seq});};
 window.resolvePending=()=>{topics[0].pending_ids=[];topics[0].pending=topics[0].waiting=false;changed?.({type:'change',seq:++overview.seq});};
 const host={version:1,platform:'daemon',workspace:{id:'default',name:'P11 local fixture',endpoint:location.origin,address:me.address,realm:'',state:'enrolled'},workspaces:null,skins:[],onSkinsChange(){return()=>{};},onOpen(fn){open=fn;},listen(fn){changed=fn;return()=>{};},stage:async()=>{throw Error('No fixture files');},file:async()=>{throw Error('No fixture files');},api:async(p,body)=>{
  fixture.requests.push({path:p,body});const url=new URL(p,location.origin);
- if(stopMode&&p==='/api/operator/decide'){sessionStorage.setItem('stopQueued','1');thread.messages[0].stop.pending=true;changed?.({type:'change',seq:++overview.seq});return {note:'Stop queued; host offline.'};}
+ if(stopMode&&p==='/api/operator/decide'){sessionStorage.setItem('stopQueued','1');if(stopResultMode){sessionStorage.setItem('stopDecision',body.send_id);sessionStorage.setItem('stopDecisionCount',String(Number(sessionStorage.getItem('stopDecisionCount')||0)+1));}thread.messages[0].stop.pending=true;changed?.({type:'change',seq:++overview.seq});return {note:'Stop queued; host offline.'};}
  if(p.startsWith('/api/overview'))return structuredClone(overview);
  if(draftsMode&&p.startsWith('/api/dm?')&&url.searchParams.get('id')==='d'.repeat(64))return {...thread,id:'d'.repeat(64),messages:[],topics:[]};
  if(p.startsWith('/api/dm?'))return structuredClone(importMode&&url.searchParams.get('id')===destination.id?destination:thread);
+ if(directMode&&p.startsWith('/api/thread?')){const id=url.searchParams.get('id'),m=fixture.directMessages.find(m=>m.id===id),topic=topics.find(t=>t.id===(m?.placement||id));return {...thread,id,topic:structuredClone(topic),messages:structuredClone(fixture.directMessages.filter(m=>m.placement===topic.id))};}
+ if(directMode&&p.startsWith('/api/topics?')){const fields=['agent_host','agent_key','agent_id'],rows=topics.filter(t=>t.count>0&&t.peer===url.searchParams.get('peer')&&fields.every(key=>!url.searchParams.has(key)||(t[key]||'')===url.searchParams.get(key)));return {topics:structuredClone(rows),matched:rows.length};}
  if(p.startsWith('/api/thread?')){if(pendingMode||stopMode)return structuredClone(thread);const t=topics.find(t=>t.id===url.searchParams.get('id'))||topics[0];return {id:t.id,peer:peer.address,key:{pinned:'peer-key'},approved:false,task_grant:'',topic:structuredClone(t),messages:[t.id==='f'.repeat(32)?window.freshMessage:{...message(topics.indexOf(t))}]};}
  if(searchMode&&p.startsWith('/api/topics?')){const state=url.searchParams.get('state'),q=(url.searchParams.get('q')||'').toLowerCase(),scope=url.searchParams.get('conv'),who=url.searchParams.get('peer');const rows=fixture.topicCatalog.filter(t=>(scope?t.conv===scope:t.peer===who)&&(!state||t.state===state)&&(t.title+' '+t.last).toLowerCase().includes(q));const offset=url.searchParams.get('before')==='page2'?2:0,limit=q?2:Number(url.searchParams.get('limit')||40);return{topics:structuredClone(rows.slice(offset,offset+limit)),matched:rows.length,next:offset+limit<rows.length?'page2':''};}
  if(p.startsWith('/api/topics?')){const state=url.searchParams.get('state'),q=(url.searchParams.get('q')||'').toLowerCase();const rows=topics.filter(t=>(!state||t.state===state)&&t.title.toLowerCase().includes(q));return {topics:structuredClone(rows),matched:rows.length};}
@@ -68,6 +78,9 @@ const host={version:1,platform:'daemon',workspace:{id:'default',name:'P11 local 
   if(fixture.loseSuccess){fixture.loseSuccess=false;throw Error('Synthetic lost success response; retry this exact share');}
   return {id:body.operation,lid:body.operation,state:'queued'};
  }
+ if(directMode&&p==='/api/topic/organization/preview')return {...body,operation:body.new?body.topic:String(++fixture.previews+5).repeat(32),token:'7'.repeat(64),moves:body.ids.map(id=>({lid:id,author:'11111111-22222222-33333333-44444444',hash:'8'.repeat(64),topic:fixture.directMessages.find(m=>m.id===id).placement}))};
+ if(directMode&&p==='/api/topic/organization/apply'){if(body.new&&!topics.some(t=>t.id===body.topic))topics.push({...topics[0],id:body.topic,title:body.title,count:0});fixture.directOperations[body.operation]=body;for(const id of body.ids)fixture.directMessages.find(m=>m.id===id).placement=body.topic;updateDirect();changed?.({type:'change',seq:++overview.seq});return {ID:body.operation,LID:body.operation,State:'stored'};}
+ if(directMode&&p==='/api/topic/organization/undo'){for(const m of fixture.directOperations[body.lid].moves)fixture.directMessages.find(row=>row.id===m.lid).placement=m.topic;updateDirect();changed?.({type:'change',seq:++overview.seq});return [{ID:body.id,LID:body.id,State:'stored'}];}
  if(p==='/api/topic/organization/preview')return {...body,operation:String(++fixture.previews+5).repeat(32),token:'7'.repeat(64),moves:body.ids.map(id=>({lid:thread.messages.find(m=>m.id===id).lid,author:'11111111-22222222-33333333-44444444',hash:'8'.repeat(64),topic:thread.messages.find(m=>m.id===id).topic||''}))};
  if(p==='/api/topic/organization/apply'){if(fixture.rejectOrganizationStale){fixture.rejectOrganizationStale=false;throw Error('The selected messages, topic or audience changed; review the move again.');}for(const id of body.ids){const m=thread.messages.find(m=>m.id===id);m.topic=body.topic;}changed?.({type:'change',seq:++overview.seq});return {id:body.operation,lid:body.operation,state:'queued'};}
  if(p==='/api/topic/organization/undo'){if(fixture.loseUndo){fixture.loseUndo=false;throw Error('Synthetic lost response; retry the same undo.');}return [{id:body.id,lid:body.id,state:'queued'}];}
@@ -79,7 +92,7 @@ const host={version:1,platform:'daemon',workspace:{id:'default',name:'P11 local 
   changed?.({type:'change',seq:++overview.seq});return {id:m.id,lid:m.lid,state:'delivered'};
  }
  if(p.startsWith('/api/topic/')){const what=url.pathname.split('/').at(-1),ids=body.ids||[body.id];for(const id of ids){const t=topics.find(t=>t.id===id);if(what==='create'){topics.push({id,conv,title:'Quick main flow message',last:'Quick main flow message',last_at:at,count:1,unread:0,state:'active',pending:false});for(const m of thread.messages)if(m.lid===id)m.topic=id;}else if(t){if(what==='delete'){topics.splice(topics.indexOf(t),1);if(kind!=='agent')thread.messages=thread.messages.filter(m=>m.topic!==id);}else t.state=what==='done'?'done':what==='archive'?'archived':'active';}}if(kind==='agent')overview.threads=topics;else thread.topics=topics;changed?.({type:'change',seq:++overview.seq});return {note:ids.length+' topics changed.'};}
- if(p.includes('/groups/invitations'))return [];if(p.startsWith('/api/typing/status'))return {send:false,scopes:[]};if(p.startsWith('/api/agents'))return {host:peer.address,agents:[],sessions:[],local:false};return {};
+ if(p.includes('/groups/invitations'))return [];if(p.startsWith('/api/typing/status'))return {send:false,scopes:[]};if(p.startsWith('/api/agents'))return {host:peer.address,agents:directMode?[{record:{id:piBinding.agent_id,host:peer.address,host_key:peer.fingerprint,label:'Pi',harness:'pi'},enabled:true},{record:{id:claudeBinding.agent_id,host:peer.address,host_key:peer.fingerprint,label:'Claude',harness:'claude'},enabled:true}]:[],sessions:[],local:false};return {};
 }};
 const base='/assets/skins/'+skin+'/',manifest=await(await fetch(base+'skin.json')).json();
 if(manifest.document){const css=new CSSStyleSheet();css.replaceSync((await(await fetch(base+manifest.document)).text()).replaceAll('url(m/','url('+base+'m/'));document.adoptedStyleSheets=[css];}
@@ -108,7 +121,7 @@ const server = http.createServer((req, res) => {
     await new Promise(r => server.listen(0, '127.0.0.1', r));
     const origin = 'http://127.0.0.1:' + server.address().port;
     browser = await chromium.launch({ headless: true, executablePath: process.env.AGENTNET_CHROMIUM || '/usr/bin/chromium' });
-    for (const skin of (process.env.P11_SKINS||'comic').split(',')) for (const kind of ((process.env.P11_ORGANIZE_ONLY||process.env.P11_HISTORY_IMPORT_ONLY||process.env.P11_DRAFTS_ONLY||process.env.P11_MENTIONS_ONLY)?['dm','group']:(process.env.P11_PENDING_ONLY||process.env.P11_STOP_ONLY)?['group','agent']:['dm', 'group', 'agent'])) for (const width of [1280, 390]) {
+    for (const skin of (process.env.P11_SKINS||'comic').split(',')) for (const kind of (process.env.DIRECT_AGENT_ORGANIZE_ONLY?['agent']:(process.env.P11_ORGANIZE_ONLY||process.env.P11_HISTORY_IMPORT_ONLY||process.env.P11_DRAFTS_ONLY||process.env.P11_MENTIONS_ONLY)?['dm','group']:(process.env.P11_PENDING_ONLY||process.env.P11_STOP_ONLY)?['group','agent']:['dm', 'group', 'agent'])) for (const width of [1280, 390]) {
       const tag = skin + '-' + kind + '-' + width;
       const ctx = await browser.newContext({ viewport: { width, height: 900 }, hasTouch: width < 500, reducedMotion: 'reduce' });
       await ctx.route('**/*', r => new URL(r.request().url()).origin === origin ? r.continue() : r.abort());
@@ -186,7 +199,34 @@ const server = http.createServer((req, res) => {
           await page.reload();await page.waitForFunction(()=>window.ready);await page.evaluate(()=>openChat());
           await page.getByRole('button',{name:'Stop queued',exact:true}).waitFor();
           assert.equal(await page.getByRole('button',{name:'Stop queued',exact:true}).isDisabled(),true,'pending survives reload');
+          if(process.env.P11_STOP_RESULT_ONLY){
+            const refusal='the request is no longer as you saw it (now answered, attempt 2)';
+            await page.evaluate(reason=>replyStop('answered',reason),refusal);
+            const finished=()=>page.getByRole('status').filter({hasText:'Host reports finished: answered'}).first();
+            await finished().waitFor();assert((await finished().innerText()).includes(refusal),'authoritative refusal reason stays visible');
+            assert.equal(await finished().locator('.working-dot,.robot-scan').count(),0,'terminal host snapshot has no working animation');
+            assert.equal(await page.getByRole('button',{name:'Stop',exact:true}).count(),0,'terminal snapshot offers no redundant Stop');
+            assert.equal(await page.evaluate(()=>fixture.thread.messages[0].exec.state),'running','UI does not promote an ambiguous legacy decision into execution state');
+            await shot('stop-host-finished');
+            await page.reload();await page.waitForFunction(()=>window.ready);await page.evaluate(()=>openChat());await finished().waitFor();
+            assert.equal(await page.getByRole('button',{name:'Stop queued',exact:true}).count(),0,'terminal response survives reload without queued Stop');
+            assert.equal(await page.evaluate(()=>sessionStorage.getItem('stopDecisionCount')),'1','reload and terminal display send no new decision');
+            await page.evaluate(()=>replyStop('running','the running request changed'));
+            await page.getByRole('button',{name:'Stop',exact:true}).waitFor();assert.equal(await page.getByRole('button',{name:'Stop',exact:true}).isDisabled(),false,'genuine running refusal retains explicit action');
+            await page.getByText('the running request changed',{exact:true}).waitFor();
+            await page.evaluate(()=>replyStop('running'));await page.getByRole('button',{name:'Stopping…',exact:true}).waitFor();
+            assert.equal(await page.getByRole('button',{name:'Stopping…',exact:true}).isDisabled(),true,'acknowledged running cancellation is not yet stopped');
+            await page.evaluate(()=>replyStop('cancelled'));
+            const cancelled=page.getByRole('status').filter({hasText:'Host reports cancelled'}).first();await cancelled.waitFor();assert.equal(await cancelled.locator('.working-dot,.robot-scan').count(),0,'cancelled snapshot has no working animation');
+            await shot('stop-host-cancelled');
+            await page.evaluate(reason=>replyStop('answered',reason,3),refusal);
+            const newer=page.getByRole('status').filter({hasText:'is working'}).first();await newer.waitFor();
+            assert(await newer.locator('.working-dot').count()>0,'newer genuine attempt keeps working dots');
+            assert.equal(await finished().count(),0,'old decision cannot replace newer current work');
+            assert.equal(await page.getByRole('button',{name:'Stop',exact:true}).count(),0,'old-attempt Stop is not offered on newer work');
+          }
           await page.evaluate(()=>confirmStop());await page.getByRole('button',{name:'Stop queued',exact:true}).waitFor({state:'detached'});
+          if(process.env.P11_STOP_RESULT_ONLY){await page.reload();await page.waitForFunction(()=>window.ready);await page.evaluate(()=>openChat());await all().waitFor();assert.equal(await page.locator('.working-dot,.robot-scan').count(),0,'normal current cancelled status remains settled after reload');assert.equal(await page.evaluate(()=>sessionStorage.getItem('stopDecisionCount')),'1');}
           assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>['/api/send','/api/dm/send','/api/agent/ask'].includes(r.path)).length),0,'Stop never sends natural-language work');
           await shot('remote-stop');combinations++;continue;
         }
@@ -282,6 +322,74 @@ const server = http.createServer((req, res) => {
           assert.equal(await page.evaluate(()=>JSON.stringify(fixture.thread.messages)),original,'Original tasks/messages/files remain unchanged');assert.deepEqual(await page.evaluate(()=>Object.values(fixture.shares)),[1],'Lost response creates one attributed context message');
           assert.equal(await page.evaluate(()=>fixture.destination.messages[0].kind),'message','Old task contributes context, never executable work');assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/dm/send'||r.path==='/api/send'||r.path==='/api/act'&&r.body?.do!=='read').length),0,'No old task is sent, accepted or rerun');
           assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,tag+': reviewed sharing fits narrow view');combinations++;console.log('HISTORY IMPORT PASS '+tag);await ctx.close();continue;
+        }
+
+        if(process.env.DIRECT_AGENT_ORGANIZE_ONLY){
+          const header=page.locator('[data-part="conversation-head"]');
+          await header.getByText('Pi',{exact:true}).waitFor();
+          assert.match(await header.innerText(),/Desktop/i,tag+': concrete agent header retains its host device');
+          await page.getByRole('textbox',{name:/^Ask .*Pi$/}).waitFor();
+          assert.match(await all().innerText(),/4/,tag+': Pi topic count excludes same-host Claude');
+          await all().click();
+          const scoped=page.getByRole('dialog',{name:'All topics',exact:true});
+          await scoped.getByRole('list',{name:'Active topics',exact:true}).getByRole('listitem').nth(3).waitFor();
+          assert.equal(await scoped.getByRole('list',{name:'Active topics',exact:true}).getByRole('listitem').count(),4,tag+': scoped server topic page contains only Pi');
+          assert.equal(await scoped.getByText('Claude separate topic',{exact:false}).count(),0,tag+': other concrete agent is absent');
+          const badgeCounts={active:Number((await scoped.getByRole('button',{name:/^Active/}).innerText()).match(/\d+/)?.[0]||0),archived:Number((await scoped.getByRole('button',{name:/^Archived/}).innerText()).match(/\d+/)?.[0]||0)};
+          console.log('DIRECT AGENT BADGE COUNTS '+tag+' '+JSON.stringify(badgeCounts));
+          await shot('direct-agent-topic-counts');
+          assert.deepEqual(badgeCounts,{active:4,archived:0},tag+': All topics badges belong to the selected Pi full tuple, independent of first same-host Claude summary');
+          await scoped.getByRole('button',{name:width>600?'Close':'Back to the conversation',exact:true}).click();await scoped.waitFor({state:'hidden'});
+          const row=page.locator('[data-mid="'+ '1'.repeat(32)+'"]');
+          if(width>600){await row.hover();await page.getByRole('button',{name:'More actions',exact:true}).click();await page.getByRole('menuitem',{name:'Select',exact:true}).click();}
+          else{const actions=page.getByRole('button',{name:'Message actions',exact:true});await actions.focus();await actions.click();await page.getByRole('button',{name:'Select',exact:true}).click();}
+          await page.getByRole('button',{name:'Move to topic',exact:true}).click();
+          let sheet=page.getByRole('dialog',{name:'Move selected messages',exact:true});
+          await sheet.getByRole('combobox',{name:'Destination topic',exact:true}).selectOption('2'.repeat(32));
+          assert.equal(await sheet.getByRole('option',{name:'Claude separate topic',exact:true}).count(),0,tag+': move chooser excludes same-host other agent');
+          await sheet.getByRole('button',{name:'Review move',exact:true}).click();await shot('direct-move-review');
+          await sheet.getByRole('button',{name:'Move 1 message',exact:true}).click();
+          await sheet.getByRole('button',{name:'Undo move',exact:true}).waitFor();
+          assert.equal(await page.evaluate(()=>fixture.overview.topics.find(t=>t.agent_id==='5'.repeat(32)).total),3,tag+': move actually reduces topic count');
+          const applied=await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/topic/organization/apply').at(-1));
+          assert.equal(applied.body.peer,'briar/desktop');assert.deepEqual(applied.body.ids,['1'.repeat(32)]);assert.equal(applied.body.conv,'');
+          assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/send').length),0,tag+': no originals resent');
+          await sheet.getByRole('button',{name:'Undo move',exact:true}).click();await sheet.waitFor({state:'hidden'});
+          const undone=await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/topic/organization/undo').at(-1));
+          assert.equal(undone.body.lid,applied.body.operation,tag+': native capitalized result supplies exact undo operation');
+          assert.equal(await page.evaluate(()=>fixture.overview.topics.find(t=>t.agent_id==='5'.repeat(32)).total),4,tag+': undo restores original topics');
+          await page.getByRole('button',{name:/^Topic 1.*open topic, menu$/}).click();
+          await page.getByRole('menuitem',{name:'Merge into another topic…',exact:true}).click();
+          sheet=page.getByRole('dialog',{name:'Merge this topic',exact:true});await sheet.getByRole('combobox',{name:'Destination topic',exact:true}).selectOption('2'.repeat(32));
+          await sheet.getByRole('button',{name:'Review move',exact:true}).click();await sheet.getByRole('button',{name:'Move 1 message',exact:true}).click();
+          await sheet.getByRole('button',{name:'Done',exact:true}).click();await sheet.waitFor({state:'hidden'});
+          const merged=await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/topic/organization/apply').at(-1));assert.equal(merged.body.merge,'1'.repeat(32));
+          const originalRows=await page.evaluate(()=>fixture.directMessages.map(({placement,...m})=>m));
+          const selectedRow=page.locator('[data-mid="'+ '1'.repeat(32)+'"]');
+          if(width>600){await selectedRow.hover();await page.getByRole('button',{name:'More actions',exact:true}).click();await page.getByRole('menuitem',{name:'Select',exact:true}).click();}
+          else{const actions=selectedRow.getByRole('button',{name:'Message actions',exact:true});await actions.focus();await actions.click();await page.getByRole('button',{name:'Select',exact:true}).click();}
+          await page.getByRole('button',{name:'Move to topic',exact:true}).click();
+          sheet=page.getByRole('dialog',{name:'Move selected messages',exact:true});
+          await sheet.getByRole('combobox',{name:'Destination topic',exact:true}).selectOption('new');
+          await sheet.getByRole('textbox',{name:'New topic name',exact:true}).fill('Build decisions');
+          await sheet.getByRole('button',{name:'Review move',exact:true}).click();
+          await sheet.getByText('Move 1 message to “Build decisions”?',{exact:true}).waitFor();
+          await shot('direct-new-topic-review');
+          await sheet.getByRole('button',{name:'Move 1 message',exact:true}).click();
+          await sheet.getByRole('button',{name:'Undo move',exact:true}).waitFor();
+          const fresh=await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/topic/organization/apply').at(-1));
+          assert.equal(fresh.body.new,true);assert.equal(fresh.body.topic,fresh.body.operation,tag+': new topic uses exact reviewed operation identity');
+          assert.equal(fresh.body.title,'Build decisions');
+          assert.deepEqual(await page.evaluate(()=>fixture.directMessages.map(({placement,...m})=>m)),originalRows,tag+': new topic preserves every original');
+          await sheet.getByRole('button',{name:'Undo move',exact:true}).click();await sheet.waitFor({state:'hidden'});
+          assert.equal(await page.evaluate(()=>fixture.overview.topics.find(t=>t.agent_id==='5'.repeat(32)).total),3,tag+': undo restores consolidated topics');
+          assert.equal(await page.evaluate(()=>fixture.overview.topics.find(t=>t.agent_id==='6'.repeat(32)).total),1,tag+': Claude topic is unchanged by Pi organization');
+          await header.getByText('Pi',{exact:true}).waitFor();await page.getByRole('textbox',{name:/^Ask .*Pi$/}).waitFor();
+          const topicRequests=await page.evaluate(()=>fixture.requests.filter(r=>r.path.startsWith('/api/topics?')).map(r=>r.path));
+          assert(topicRequests.length>=4,tag+': actual All topics and organization consumers queried scoped topics');
+          for(const request of topicRequests){const query=new URL(request,'http://fixture').searchParams;assert.equal(query.get('peer'),'briar/desktop');assert.equal(query.get('agent_host'),'briar/desktop');assert.equal(query.get('agent_key'),'22222222-22222222-22222222-22222222');assert.equal(query.get('agent_id'),'5'.repeat(32));}
+          assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,tag+': direct organization fits narrow view');
+          await shot('direct-merged');combinations++;console.log('DIRECT ORGANIZE PASS '+tag);await ctx.close();continue;
         }
 
         if(process.env.P11_ORGANIZE_ONLY){

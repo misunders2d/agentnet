@@ -8,6 +8,9 @@ every overlay skin on its next build; the overlay never forks Comic's code.
 This includes the existing group header's optional shared-links sheet: overlays
 inherit its member-only visibility, local drafts and stale-edit protection.
 Standalone skins implement that optional field on the same Host API contract.
+Overlays also inherit Outbox's Scheduled, Drafts and Reminders views and its due
+count. Restyle those controls without hiding them or returning reminder lists
+to the top of Chats. The existing Host API supplies these views.
 
 
 A skin that needs a different interface altogether is a **standalone skin**

@@ -1055,6 +1055,9 @@ func (a *Agent) mayDeliver(env envelope.Envelope) (bool, error) {
 	if handled, allowed, err := a.mayDeliverTopicSync(env); handled {
 		return allowed, err
 	}
+	if handled, allowed, err := a.mayDeliverDirectTopicSync(env); handled {
+		return allowed, err
+	}
 	if handled, allowed, err := a.mayDeliverTopicStateSync(env); handled {
 		return allowed, err
 	}
