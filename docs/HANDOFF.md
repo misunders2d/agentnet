@@ -37,11 +37,14 @@ busy-stream lease scenario; native Linux failed the archive reader-upgrade
 release scenario. The Windows fixture now checks unchanged leases with Go's
 virtual clock and real signed handlers; its local race check and
 [actual Windows qualification](https://github.com/misunders2d/agentnet/actions/runs/39389846071)
-pass at `7a621840`. Linux's cause remains unproven after the instrumented,
-single-run CPU-contention scenario passed; that is not a repair. Its affected
-native check must pass before publication. Reassessment's four
-shared-link history/browser defects pass their
-focused checks and actual native TLS smoke; see the [acceptance record](plans/V0_9_0.md).
+pass at `7a621840`. The [complete native Linux run](https://github.com/misunders2d/agentnet/actions/runs/39392204821)
+passes at `53226b2f`, including client, UI and required mixed-version coverage.
+Its temporary observers did not reproduce the original archive failure, whose
+cause remains unproven—not a claimed repair or proven pre-existing defect.
+All investigation hooks and observers are removed; the original archive branches
+and warm predecessor pass with race detection (27.499s package). This is composed
+evidence, not a retroactively green CI3. Reassessment's four shared-link defects
+also pass focused checks and actual native TLS smoke; see the [acceptance record](plans/V0_9_0.md).
 The earlier linked-file recovery timeout remains causally unexplained.
 
 The owner authorized full delivery. Claude provides technical consultation,

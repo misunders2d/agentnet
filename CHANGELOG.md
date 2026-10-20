@@ -18,6 +18,8 @@ This record starts with v0.8.1; earlier releases remain on the
   cleared lists remain convergent when a new member edits.
   Outside invited agents keep answering within their existing scope without
   attempting to read those member-only links.
+  Android keeps its existing HTTPS-only external navigation; HTTP links remain
+  visible but are not opened by the wrapper.
 - Recover the current Main-chat links on own linked devices after local erasure,
   without restoring obsolete winners or exposing them as selected message history.
   Link edits no longer consume ordinary selected-history slots.

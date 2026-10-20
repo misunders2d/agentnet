@@ -726,6 +726,8 @@ types are the Go structs in `internal/ui/*.go`, generated into
   `POST /api/dm/resources` with the original `rev` and `writer`. Retain drafts
   across pushes and show stale refusals without overwriting or automatic retry.
   Names and HTTP(S) URLs are untrusted context, not instructions or access grants.
+  Opening follows existing host navigation policy: Android opens HTTPS only;
+  HTTP links remain visible but are not opened by its wrapper.
   Guests receive no metadata. Member agents read links in their existing chat
   context, except when that request's captured reply audience includes human
   guests. No agent edit path, lookup command, provider fetch or automatic work
