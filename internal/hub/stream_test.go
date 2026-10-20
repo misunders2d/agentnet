@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/protocol"
@@ -145,6 +146,15 @@ func envelopeID(t *testing.T, data string) string {
 // it abandoned (half-open, as the Hub sees it) is still closed by the lease,
 // and so is the newest once nothing at all is acknowledged.
 func TestMessageAcksKeepBusyStreamAlive(t *testing.T) {
+	// The in-process reader also signs requests and commits SQLite writes.
+	// Native disk/scheduler delays can consume the whole 400ms lease before
+	// an ACK reaches streams.received. As in the suspended-stream fixture,
+	// advance time only when the client and Hub are idle; keep the real
+	// handlers, signatures, storage and unchanged lease.
+	synctest.Test(t, testMessageAcksKeepBusyStreamAlive)
+}
+
+func testMessageAcksKeepBusyStreamAlive(t *testing.T) {
 	const hb = 200 * time.Millisecond // the lease is two
 	h, err := Open(Config{DataDir: filepath.Join(t.TempDir(), "hub"), PublicURL: "https://127.0.0.1:1", Logf: t.Logf, Heartbeat: hb})
 	if err != nil {
@@ -160,31 +170,7 @@ func TestMessageAcksKeepBusyStreamAlive(t *testing.T) {
 		close(abandonedEnded)
 	}()
 	current := pushStream(t, h, bob)
-	// Retain this synthetic connection's atomic ack clock after removal so a
-	// failure distinguishes a late receipt from closure after a timely one.
-	h.streams.mu.Lock()
-	var measured *subscriber
-	for sub := range h.streams.subs[bob.addr] {
-		if measured == nil || sub.n > measured.n {
-			measured = sub
-		}
-	}
-	h.streams.mu.Unlock()
-	phase, phaseStarted := "busy-send", time.Now()
-	var sendElapsed, ackElapsed, ackAgeBefore time.Duration
-	acks := 0
-	defer func() {
-		if !t.Failed() {
-			return
-		}
-		t.Logf("phase=%s elapsed=%v lease=%v message_send=%v ack_call=%v ack_age_before=%v successful_acks=%d captured=%t", phase, time.Since(phaseStarted), 2*hb, sendElapsed, ackElapsed, ackAgeBefore, acks, measured != nil)
-		if measured != nil {
-			h.streams.mu.Lock()
-			_, live := h.streams.subs[bob.addr][measured]
-			h.streams.mu.Unlock()
-			t.Logf("busy stream: live=%t last_ack_age=%v", live, time.Since(time.Unix(0, measured.lastAck.Load())))
-		}
-	}()
+	lastAckAt := time.Now()
 
 	// Busy for at least four leases, and until the abandoned connection ended
 	// while the newest one's acknowledgements went on.
@@ -198,10 +184,7 @@ func TestMessageAcksKeepBusyStreamAlive(t *testing.T) {
 			abandonedClosed = true
 		default:
 		}
-		phase, phaseStarted = "busy-send", time.Now()
 		id := sendMessage(t, h, alice, bob)
-		sendElapsed = time.Since(phaseStarted)
-		phase, phaseStarted = "busy-read", time.Now()
 		for got := ""; got != id; {
 			e, ok := <-current
 			if !ok {
@@ -211,23 +194,20 @@ func TestMessageAcksKeepBusyStreamAlive(t *testing.T) {
 				got = envelopeID(t, e.data)
 			}
 		}
-		phase, phaseStarted = "message-ack", time.Now()
-		if measured != nil {
-			ackAgeBefore = time.Since(time.Unix(0, measured.lastAck.Load()))
-		}
 		c, b := bob.call(t, h, "POST", "/v1/messages/"+id+"/ack", protocol.AckRequest{State: protocol.StateDelivered})
-		ackElapsed = time.Since(phaseStarted)
 		if c != http.StatusOK {
 			t.Fatalf("ack: %d %s", c, b)
 		}
-		acks++
+		lastAckAt = time.Now()
 	}
-	phase, phaseStarted = "idle-close", time.Now()
 	idle := time.After(5 * time.Second) // nothing acknowledged any more: the lease ends it
 	for {
 		select {
 		case _, ok := <-current:
 			if !ok {
+				if age := time.Since(lastAckAt); age <= 2*hb {
+					t.Fatalf("busy stream expired before its last acknowledgement's lease: %v", age)
+				}
 				return
 			}
 		case <-idle:
