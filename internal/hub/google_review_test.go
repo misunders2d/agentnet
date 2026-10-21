@@ -27,7 +27,9 @@ func TestGoogleReviewPendingGrace(t *testing.T) {
 	}
 	key, _ := identity.Generate()
 	pub := key.Public(protocol.GoogleLabel(claims.Email) + "/phone")
-	l := protocol.GoogleLink{Email: claims.Email, Person: r.Person, Seq: r.Seq, Roster: r.Hash(), Approver: protocol.LinkApprover{Address: first.Address, Fingerprint: first.Fingerprint()}, Offer: protocol.NewID(), Expires: time.Now().Unix() + 1, Join: ed25519.Sign(key.Sign, protocol.JoinBytes(r.Person, 1, r.Hash(), pub))}
+	// Enrollment needs a live offer; its expiry is backdated explicitly below.
+	// A one-second offer can expire inside enrollment across a wall-clock tick.
+	l := protocol.GoogleLink{Email: claims.Email, Person: r.Person, Seq: r.Seq, Roster: r.Hash(), Approver: protocol.LinkApprover{Address: first.Address, Fingerprint: first.Fingerprint()}, Offer: protocol.NewID(), Expires: time.Now().Unix() + protocol.MaxLinkTTL, Join: ed25519.Sign(key.Sign, protocol.JoinBytes(r.Person, 1, r.Hash(), pub))}
 	if _, _, err := h.store.enrollGoogle(claims, protocol.GoogleRequest{Public: pub, Link: &l}); err != nil {
 		t.Fatal(err)
 	}

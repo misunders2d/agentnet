@@ -18,11 +18,10 @@ func listedAgent(a *Agent, address string) (agent, listed bool) {
 	return false, false
 }
 
-// A device says it runs an agent only while a responder (or a named agent
-// with one) is set: setting or removing it from another process on the
-// same home makes the running daemon publish again through its local wake,
-// and the other members follow without a reload. What they learned is kept
-// for offline use.
+// A device says it runs an agent while an enabled harness identity exists.
+// Changing the untargeted default to manual leaves that identity connected;
+// explicitly disabling it from another handle wakes the running daemon to
+// republish. Other members follow without a reload and keep the hint offline.
 func TestAgentHintFollowsResponder(t *testing.T) {
 	w := newWorld(t, "")
 	runAgent(t, w.alice)
@@ -39,6 +38,10 @@ func TestAgentHintFollowsResponder(t *testing.T) {
 	if err := cli.SetResponder(&Responder{Harness: "claude", Dir: t.TempDir()}); err != nil {
 		t.Fatal(err)
 	}
+	agentID, err := cli.DefaultAgentID()
+	if err != nil || agentID == "" {
+		t.Fatalf("selected harness identity: %q %v", agentID, err)
+	}
 	eventually(t, "alice lists bob running an agent", func() bool {
 		agent, _ := listedAgent(w.alice, w.bob.Address)
 		return agent && slices.Contains(w.alice.AgentDevices(), w.bob.Address)
@@ -52,12 +55,21 @@ func TestAgentHintFollowsResponder(t *testing.T) {
 	if err := cli.SetResponder(nil); err != nil {
 		t.Fatal(err)
 	}
+	if !cli.AdvertisesAgent() {
+		t.Fatal("manual handling of untargeted requests disconnected the harness")
+	}
+	if err := cli.SetLocalAgentResponder(agentID, nil); err != nil {
+		t.Fatal(err)
+	}
 	eventually(t, "alice lists bob without an agent again", func() bool {
 		agent, listed := listedAgent(w.alice, w.bob.Address)
 		return listed && !agent && !slices.Contains(w.alice.AgentDevices(), w.bob.Address)
 	})
 	if err := cli.SetResponder(&Responder{Harness: "claude", Dir: t.TempDir()}); err != nil {
 		t.Fatal(err)
+	}
+	if current, err := cli.DefaultAgentID(); err != nil || current != agentID {
+		t.Fatalf("reconnecting changed the harness identity: %q %v", current, err)
 	}
 	eventually(t, "the agent again", func() bool { return slices.Contains(w.alice.AgentDevices(), w.bob.Address) })
 	// Kept offline: a fresh handle on alice's home, with no stream, still
