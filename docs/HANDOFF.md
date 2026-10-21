@@ -14,7 +14,9 @@ identity when changing defaults, and reconciles a proven current pointer without
 rewriting historical messages or admitted executor snapshots. An ambiguous
 request stays pending with an actionable reason while independent work proceeds.
 Comic's active choices exclude retired/unready agents and unbound legacy chats;
-current names omit internal ID suffixes. Search preserves history, with explicit
+current names omit internal ID suffixes. Historical attribution without a proven
+identity says “Unknown agent”; “Earlier default” is not a user-facing identity.
+Search preserves history, with explicit
 new-agent recovery that leaves its draft and files intact. A collapsed saved-setup
 manager retains exact-ID repair/current-selection controls. Track in MEL-550.
 
@@ -31,7 +33,9 @@ The exact previous Claude conversation was resumed through Herdr for a bounded
 guard review. Its two blockers (queue starvation and missing configuration
 recovery) are addressed with focused regressions. The canonical Comic build,
 Node model/component checks and desktop/phone starter/setup recovery journeys
-pass. Remaining interaction and integrated race qualification is in progress;
+pass. The remaining attribution-copy regressions also pass under the race
+detector. Integrated race qualification is running on isolated CI runners after
+the local batch exhausted original package budgets under measured CPU pressure;
 no new release/deployment is being prepared in this pass. Preserve the two
 owner-authored drafts below. MEL-671 separately tracks a future left-panel
 redesign across all flows; it is outside this correction batch.

@@ -32,8 +32,8 @@ for(const dir of ['in','out']){
  assert.equal(messageModel.requestLabel({...original,target:{agent_id:'e'.repeat(32)}},labelContext),'Asked Agent eeeeeeee','unknown named target remains the original identity');
  assert.equal(messageModel.requestLabel({...original,kind:'task',responder:'pi'},labelContext),'Task for Pi','original responder snapshot labels legacy work');
  assert.equal(messageModel.requestLabel({...original,responder:'codex'},labelContext),'Asked Codex');
- assert.equal(messageModel.requestLabel({...original,responder:'manual'},labelContext),'Asked Earlier default','manual is not an executor identity');
- assert.equal(messageModel.requestLabel(original,labelContext),'Asked Earlier default','unknown legacy request never borrows current default or context');
+ assert.equal(messageModel.requestLabel({...original,responder:'manual'},labelContext),'Asked unknown agent','manual is not an executor identity');
+ assert.equal(messageModel.requestLabel(original,labelContext),'Asked unknown agent','unknown legacy request never borrows current default or context');
 }
 const retained={id:base.id,author:{label:'You'},dir:'out',kind:'task',exec:{state:'running',attempt:1,stale:true},stop:{...base,result:result('answered',refused)}};
 assert.match(messageModel.requestState(retained,[]).text,/Host reports finished/,'bubble caption must also distinguish a host terminal snapshot from stale working');

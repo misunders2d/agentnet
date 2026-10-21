@@ -58,7 +58,7 @@ export const guestOf = (ctx: Pick<Ctx, "dm">, pid?: string) => (pid ? (ctx.dm?.g
  * exact host/key; today's program or default cannot label an older run. */
 export function historicalTargetLabel(target: T.Target | undefined, names: Record<string, string>): string {
   const id = target?.agent_id;
-  if (!id) return "Earlier default · identity unknown";
+  if (!id) return "Unknown agent";
   const sameHost = !target.address || names[id + "#host"] === target.address;
   const sameKey = !target.fingerprint || names[id + "#host_key"] === target.fingerprint;
   return historicalAgentName(id, sameHost && sameKey ? names : {});
@@ -102,11 +102,11 @@ export function whoWrote(m: AnyMsg, ctx: Ctx): Who {
       // A named agent says whose it is; "Your agent" already does, so it says where.
       const named = !!(a.agent_id && ctx.names[a.agent_id]);
       const sub = a.member ? (named ? owner(a.host, me) + " agent" : undefined) : named ? agentWhere(a.host, a.host.address, me) : "on " + niceDevice(a.host.address);
-      return { key: "a:" + a.pid, name: (a.agent_id&&historicalAgentName(a.agent_id,ctx.names))||"Earlier default", sub, agent: true, mine: false, guest: !a.member, seed: a.agent_id || a.host.address, device: a.member ? undefined : deviceKind(a.host.address) };
+      return { key: "a:" + a.pid, name: (a.agent_id&&historicalAgentName(a.agent_id,ctx.names))||"Unknown agent", sub, agent: true, mine: false, guest: !a.member, seed: a.agent_id || a.host.address, device: a.member ? undefined : deviceKind(a.host.address) };
     }
     const host = hostOf(m.from, o);
     return {
-      key: "a:" + m.from, name: (m.agent_id&&historicalAgentName(m.agent_id,ctx.names))||"Earlier default", sub: "on " + niceDevice(m.from),
+      key: "a:" + m.from, name: (m.agent_id&&historicalAgentName(m.agent_id,ctx.names))||"Unknown agent", sub: "on " + niceDevice(m.from),
       agent: true, mine: false, guest: false, seed: m.agent_id || m.from, device: deviceKind(m.from),
     };
   }
@@ -138,7 +138,7 @@ export function requestLabel(m: AnyMsg, ctx: Ctx): string {
   if (isThreadMsg(m)) {
     const t = m.target;
     to = t?.agent_id ? historicalAgentName(t.agent_id,ctx.names)
-      : m.responder && m.responder !== "manual" ? concreteAgentLabel({id:"",label:m.responder,harness:m.responder}) : "Earlier default";
+      : m.responder && m.responder !== "manual" ? concreteAgentLabel({id:"",label:m.responder,harness:m.responder}) : "unknown agent";
   } else {
     const a = agentOf(ctx, m.pid);
     if (!a) return "";

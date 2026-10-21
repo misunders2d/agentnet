@@ -31,8 +31,11 @@ for(const changed of [{[pi+'#host_key']:'changed-key'},{[pi+'#host']:'another/ho
  const label=message.historicalTargetLabel(target(pi),{...names,...changed});assert.equal(label,'Agent aaaaaaaa','a historical pin mismatch never borrows a catalog name');
 }
 assert.equal(message.historicalTargetLabel(target('9'.repeat(32)),names),'Agent 99999999');
-assert.equal(message.historicalTargetLabel({address:host,fingerprint},names),'Earlier default · identity unknown');
-assert.equal(message.historicalTargetLabel(undefined,names),'Earlier default · identity unknown');
+assert.equal(message.historicalTargetLabel({address:host,fingerprint},names),'Unknown agent');
+assert.equal(message.historicalTargetLabel(undefined,names),'Unknown agent');
+const legacyReply={id:'legacy-reply',from:host,verified_agent:true,kind:'answer',dir:'in'};
+assert.equal(message.whoWrote(legacyReply,ctx).name,'Unknown agent','a verified reply without an exact identity never borrows the current default');
+assert.equal(message.whoWrote({...legacyReply,pid:'legacy-participant'},{...ctx,dm:{agents:[{pid:'legacy-participant',host:{address:host},member:true}]}}).name,'Unknown agent','an unnamed historical participant is not a default agent');
 
 // The independently focused Review card must name its target even when two
 // requests share the same group, rather than relying on a separate To caption.
@@ -55,7 +58,7 @@ assert.match(openCard(reviewRow({...item(pi),reason:model.Reason.interrupted})).
 reviewNames={...names,[pi+'#host_key']:'replacement-key'};assert.match(openCard(reviewRow(item(pi))).props.label,/^Agent aaaaaaaa on /,'Review rejects a replacement catalog key');
 reviewNames={...names,[claude]:'Pi'};
 for(const [id,short] of [[pi,'aaaaaaaa'],[claude,'bbbbbbbb']])assert(openCard(reviewRow(item(id))).props.label.includes('Pi · '+short),'same-name instances remain distinguishable');
-reviewNames=names;assert.match(openCard(reviewRow({...item(pi),target:{address:host,fingerprint}})).props.label,/^Earlier default · identity unknown on /);
+reviewNames=names;assert.match(openCard(reviewRow({...item(pi),target:{address:host,fingerprint}})).props.label,/^Unknown agent on /);
 
 // Execute the existing Store method so refresh/removal/rekey assertions cover
 // the metadata producer as well as the display consumer.
