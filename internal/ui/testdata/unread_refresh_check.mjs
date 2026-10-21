@@ -13,7 +13,7 @@ const scheduleSource=stripTypeScriptTypes((await readFile(new URL('../web/src/sc
  .replace(/^import .*;$/gm,'')).replace(/^export /gm,'');
 const source=stripTypeScriptTypes((await readFile(new URL('../web/src/store.ts',import.meta.url),'utf8'))
  .replace(/^import .*;$/gm,'').replace('constructor(readonly host: Host) {','constructor(host: Host) { this.host = host;')).replace(/^export /gm,'');
-const Store=runInNewContext(scheduleSource+'\n'+source+'\nStore',{api,errorText,pendingSends,share,messageTarget:model.messageTarget,mainPreferences,personRoots,brand:{storage:'test'},document:{visibilityState:'visible',hasFocus:()=>true},localStorage:{getItem:()=>null,setItem:()=>{}},setTimeout,clearTimeout});
+const Store=runInNewContext(scheduleSource+'\n'+source+'\nStore',{api,errorText,pendingSends,share,messageTarget:model.messageTarget,currentCatalogAgents:model.currentCatalogAgents,mainPreferences,personRoots,brand:{storage:'test'},document:{visibilityState:'visible',hasFocus:()=>true},localStorage:{getItem:()=>null,setItem:()=>{}},setTimeout,clearTimeout});
 const tick=()=>new Promise(r=>setImmediate(r)),gate=()=>{let release;const promise=new Promise(r=>release=r);return{promise,release};};
 // These small fixtures present every row of the selected topic. The actual
 // timeline supplies this viewport input through its one observer.

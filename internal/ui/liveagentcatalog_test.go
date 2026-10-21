@@ -26,7 +26,9 @@ func TestLiveAgentCatalogGuardLocalSaveAndVerifiedSelection(t *testing.T) {
 	t.Setenv("AGENTNET_NOTIFY", "off")
 	bin := t.TempDir()
 	invoked := filepath.Join(bin, "invoked")
-	writeUIHarnessStub(t, bin, "pi", "#!/bin/sh\ntouch "+invoked+"\n", "type nul > \""+invoked+"\"\r\n")
+	for _, harness := range []string{"pi", "claude", "codex"} {
+		writeUIHarnessStub(t, bin, harness, "#!/bin/sh\ntouch "+invoked+"\n", "type nul > \""+invoked+"\"\r\n")
+	}
 	t.Setenv("PATH", bin)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -84,7 +86,7 @@ func TestLiveAgentCatalogGuardLocalSaveAndVerifiedSelection(t *testing.T) {
 		t.Fatal(err)
 	}
 	before, _ := a.Responder()
-	body, _ := json.Marshal(AgentCatalogChange{Action: "create", Label: "Builder", Harness: "pi", Dir: work})
+	body, _ := json.Marshal(AgentCatalogChange{Action: "create", Label: "Builder", Harness: "claude", Dir: work})
 	w := request("POST", "/api/agents", string(body), "http://127.0.0.1:8123", true)
 	var created AgentCatalogChangeResult
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &created) != nil || !created.Saved || !created.Published || created.Agent == nil || !created.Agent.Responder.Ready {
@@ -95,7 +97,9 @@ func TestLiveAgentCatalogGuardLocalSaveAndVerifiedSelection(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Preserve existing local timeout/context when selecting new next-job dir.
-	if err = a.SetLocalAgentResponder(id, defaultConfig); err != nil {
+	namedConfig := *defaultConfig
+	namedConfig.Harness = "claude"
+	if err = a.SetLocalAgentResponder(id, &namedConfig); err != nil {
 		t.Fatal(err)
 	}
 	nextDir := t.TempDir()
@@ -281,7 +285,7 @@ func TestLiveAgentCatalogGuardLocalSaveAndVerifiedSelection(t *testing.T) {
 
 	hub.Stop()
 	l.timeout = 100 * time.Millisecond
-	offline, err := l.ChangeAgent(ctx, AgentCatalogChange{Action: "create", Label: "Saved offline", Harness: "pi", Dir: work})
+	offline, err := l.ChangeAgent(ctx, AgentCatalogChange{Action: "create", Label: "Saved offline", Harness: "codex", Dir: work})
 	if err != nil || !offline.Saved || offline.Published || offline.Agent == nil || !strings.Contains(offline.Note, "not confirmed") {
 		t.Fatalf("offline save %+v %v", offline, err)
 	}

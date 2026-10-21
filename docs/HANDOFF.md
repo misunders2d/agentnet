@@ -34,11 +34,30 @@ guard review. Its two blockers (queue starvation and missing configuration
 recovery) are addressed with focused regressions. The canonical Comic build,
 Node model/component checks and desktop/phone starter/setup recovery journeys
 pass. The remaining attribution-copy regressions also pass under the race
-detector. Integrated race qualification is running on isolated CI runners after
-the local batch exhausted original package budgets under measured CPU pressure;
-no new release/deployment is being prepared in this pass. Preserve the two
-owner-authored drafts below. MEL-671 separately tracks a future left-panel
-redesign across all flows; it is outside this correction batch.
+detector. Integrated code qualification is complete using retained unchanged CI
+passes and exact local corrections/continuations at the original bounds. All
+1,395 client parents are accounted for: 1,370 pass and 25 explicit skips. All
+489 UI parents are accounted for: 356 pass and 133 explicit skips. Final vet
+and the actual Chromium IndexedDB race check pass. The canonical Comic build
+and rendered desktop/phone journeys retain their passing evidence.
+
+The original failed/partial local and CI runs remain failures in the record.
+The CI corrections adapt obsolete duplicate/default fixtures, provide the real
+catalog helper to the existing Store VM fixtures, use the existing request
+switch for browser reminder routes, and construct the capability overflow
+vector without slicing past the reader bound. No assertion, individual deadline
+or reader bound was removed or raised. The UI continuation retained completed
+parents when the aggregate 600-second budget ended, then completed the exact
+unfinished selection and repaired fixture. Audits are
+`.agentnet/v091-followup/final-client-coverage.json` and
+`.agentnet/v091-followup/final-ui-coverage.json`.
+
+No new release/deployment is being prepared in this pass; source corrections
+remain uninstalled. Preserve the two owner-authored drafts below. Separate
+Backlog items are MEL-671 (left-panel redesign across all flows), MEL-672
+(native download-control contrast), MEL-673 (Outbox section attention badges)
+and MEL-674 (5–10 second stale unread/reminder attention). These reports do not
+establish a shared cause and are outside this correction batch.
 
 Current normal fixtures were updated for the new harness uniqueness rule
 without removing assertions or changing timeouts. Three existing native opt-in

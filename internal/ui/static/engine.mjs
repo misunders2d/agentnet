@@ -12550,9 +12550,13 @@ export class Engine {
 
       }
     }
-    if(["/api/remind","/api/remind/done","/api/remind/cancel"].includes(u.pathname)){if(body===undefined)throw Error("Use a reminder action request.");return this.reminderChange(body,u.pathname.endsWith("/done")?"done":u.pathname.endsWith("/cancel")?"cancelled":"pending");}
     if(u.pathname==="/api/schedules"||u.pathname.startsWith("/api/schedule/"))return this.scheduleAPI(u,body);
     switch (u.pathname) {
+    case "/api/remind":
+    case "/api/remind/done":
+    case "/api/remind/cancel":
+      if(body===undefined)throw Error("Use a reminder action request.");
+      return this.reminderChange(body,u.pathname.endsWith("/done")?"done":u.pathname.endsWith("/cancel")?"cancelled":"pending");
     case "/api/groups/new": return {id:await this.createGroup(body.title)};
     case "/api/groups/invitations": return this.groupInvitations();
     case "/api/groups/invite": return this.inviteGroup(body);

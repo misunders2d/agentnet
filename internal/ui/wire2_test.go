@@ -422,11 +422,13 @@ func TestBrowserWireV2MatchesGo(t *testing.T) {
 		if v := w.call(map[string]any{"op": "parseCaps", "json": marshal(t, mk(bobID, bob.Address, session, many)), "key": b64(bob.SignKey)}); v["error"] != nil {
 			t.Fatalf("the device refuses a 17-name record: %v", v["error"])
 		}
-		headroom := make([]string, protocol.MaxCaps)
+		// Keep one extra name for the invalid producer case even when the
+		// producer now fills every slot accepted by the reader.
+		headroom := make([]string, max(protocol.MaxCaps, protocol.MaxAdvertisedCaps+1))
 		for i := range headroom {
 			headroom[i] = fmt.Sprintf("c%02d", i)
 		}
-		full := marshal(t, mk(bobID, bob.Address, session, headroom))
+		full := marshal(t, mk(bobID, bob.Address, session, headroom[:protocol.MaxCaps]))
 		if _, err := protocol.ParseCapsRecord([]byte(full)); err != nil {
 			t.Fatalf("Go refuses the reader capability limit: %v", err)
 		}
