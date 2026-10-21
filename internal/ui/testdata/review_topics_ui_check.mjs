@@ -142,7 +142,7 @@ const Store=runInNewContext(scheduleSource+'\n'+storeSource+'\nStore',{api,error
 {
  const extra=(id,rev)=>({...dm.messages[0],id,lid:id,attention:{rev,writer:fp}});
  dm.messages.push(extra('f'.repeat(32),4),extra('d'.repeat(32),4));
- const active=new Store(host);await active.start();active.setDraft(conv,{text:'kept',topic});active.showTab('oks');await active.open({kind:'dm',id:conv});
+ const active=new Store(host);await active.start();active.setDraft(conv,{text:'kept',topic});await active.open({kind:'dm',id:conv});active.showTab('oks');
  dm.messages[1].attention={rev:5,writer:fp};await active.refetch();
  const view=active.get().views[conv],visit=active.readVisit(active.get().open,topic),before=requests.filter(r=>r.path==='/api/act').length;
  active.reportVisible(visit,view.messages.slice(0,2));await drain();

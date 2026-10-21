@@ -83,11 +83,20 @@ reminder-time, download contrast/keyboard and real Chromium IndexedDB checks
 have passing evidence. Android’s 42 Kotlin unit tests pass and instrumentation
 compiles after regenerating its stale core binding; instrumentation was not run
 on a phone/emulator. The static/mobile-core race batch passes (61 parent passes, two explicit skips).
-The first UI partition reached its aggregate 600s budget after 67 parent passes
-and 42 skips, with no individual failure; its 138 unfinished parents and the
-second official partition are running at the same bounds. Completed results
-are retained.
-The temporary evidence root is `.agentnet/oct21-ui`; opt-in skips are not passes.
+Both current UI inventories are fully accounted for: 494 parents, 360 passes
+and 134 explicit opt-in skips. Completed parents were retained across exact
+continuations at the original 600s package bound; aggregate timeouts remain
+failed invocations. An unchanged 45s native fixture context expired in the
+parallel batch and passed alone in 39.96s. A Review fixture now opens its chat
+before switching to Review, preserving every read-fencing/CAS assertion under
+the intentional open-to-Chats behavior. No assertion or deadline was removed
+or raised. Native client/Hub/protocol runtime is unchanged from the qualified
+cf883068 baseline; its earlier full client evidence is retained.
+The audit is `.agentnet/oct21-ui/final-ui-coverage.json`; explicit rendered
+journeys, Kotlin compilation/unit evidence and original failures are separate.
+Code is pushed to `fix/harness-reminder-sync` at 770d2aed; no release, install
+or deployment was made. The archived non-latest aggregate badge and physical
+Pixel qualification remain explicit limits.
 No new dependency or polling was added. The compressed Comic entry grows by
 860 bytes versus cf883068; this is not a minimum-hardware performance claim.
 
