@@ -3,13 +3,26 @@
   if (typeof invoke !== 'function') return;
   const rows = new Map();
   const nativeLinks = new WeakSet();
+  // Native shell chrome is outside the skin. Give it its own system palette
+  // so page resets and dark native button defaults cannot hide its controls.
+  const style = new CSSStyleSheet();
+  style.replaceSync(`
+    #agentnet-native-downloads { color-scheme:light dark;color:CanvasText;background:Canvas;border:1px solid CanvasText; }
+    :root[data-theme="light"] #agentnet-native-downloads { color-scheme:light; }
+    :root[data-theme="dark"] #agentnet-native-downloads { color-scheme:dark; }
+    #agentnet-native-downloads button { appearance:none;min-height:36px;margin:4px 6px 0 0;padding:8px 12px;border:1px solid ButtonText;border-radius:6px;font:inherit;font-weight:600;line-height:1.25;color:ButtonText;background:ButtonFace;cursor:pointer; }
+    #agentnet-native-downloads button:not(:disabled):hover { color:Canvas;background:CanvasText;border-color:CanvasText; }
+    #agentnet-native-downloads button:focus-visible { outline:3px solid CanvasText;outline-offset:2px; }
+    #agentnet-native-downloads button:disabled { color:CanvasText;background:Canvas;border-style:dashed;opacity:1;cursor:default; }
+  `);
+  document.adoptedStyleSheets = [...document.adoptedStyleSheets, style];
   function row(url, name) {
     if (rows.has(url)) return rows.get(url);
     let tray = document.getElementById('agentnet-native-downloads');
     if (!tray) {
       tray = document.createElement('section'); tray.id = 'agentnet-native-downloads';
       tray.setAttribute('aria-label', 'Downloads');
-      tray.style.cssText = 'position:fixed;right:12px;bottom:12px;width:min(360px,calc(100vw - 24px));max-height:45vh;overflow:auto;z-index:2147483647;font:14px system-ui;color:#202020;background:#fff;border:1px solid #999;border-radius:10px;box-shadow:0 3px 18px #0003;padding:8px;';
+      tray.style.cssText = 'position:fixed;right:12px;bottom:12px;width:min(360px,calc(100vw - 24px));max-height:45vh;overflow:auto;z-index:2147483647;font:14px system-ui;border-radius:10px;box-shadow:0 3px 18px #0003;padding:8px;';
       document.body.append(tray);
     }
     for (const [oldURL, old] of rows) if (old.done && rows.size >= 8) { old.node.remove(); rows.delete(oldURL); }

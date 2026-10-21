@@ -70,3 +70,13 @@ func (l *Live) DoneReminder(id string) error { return l.reminderResult(l.a.DoneR
 
 // CancelReminder implements Reminders.
 func (l *Live) CancelReminder(id string) error { return l.reminderResult(l.a.CancelReminder(id)) }
+
+// Read back the exact original after a successful action. A concurrent newer
+// pending generation stays pending; an action's requested due time is no proof.
+func (l *Live) reminderSnapshot(id string) (*ReminderView, error) {
+	r, found, err := l.a.Reminder(id)
+	if err != nil || !found || r.State != client.ReminderPending {
+		return nil, err
+	}
+	return &ReminderView{Message: r.Message, Conv: r.Conv, From: r.From, Title: l.firstLineOf(r), Due: time.Unix(r.Due, 0), Overdue: r.Overdue}, nil
+}

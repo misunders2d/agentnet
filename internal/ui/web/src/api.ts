@@ -6,6 +6,8 @@ import type { Host } from "./host";
 
 export type { T };
 
+// Older/non-live providers may still return only the action's note.
+export interface ReminderResult { note: string; seq?: number; message?: string; reminder?: T.ReminderView | null }
 
 export interface TopicOrganizationRequest {
 	main?: boolean;
@@ -139,9 +141,9 @@ export function api(host: Host) {
     folders: (path?: string) => get<FoldersView>(path ? q("/api/folders", { path }) : "/api/folders"),
 
     // Reminders and notifications
-    remind: (id: string, due: Date) => post<unknown>("/api/remind", { id, due: Math.floor(due.getTime() / 1000) }), // unix seconds
-    remindDone: (id: string) => post<unknown>("/api/remind/done", { id }),
-    remindCancel: (id: string) => post<unknown>("/api/remind/cancel", { id }),
+    remind: (id: string, due: Date) => post<ReminderResult>("/api/remind", { id, due: Math.floor(due.getTime() / 1000) }), // unix seconds
+    remindDone: (id: string) => post<ReminderResult>("/api/remind/done", { id }),
+    remindCancel: (id: string) => post<ReminderResult>("/api/remind/cancel", { id }),
     notifyResolve: (chan: string) => get<{ conv?: string }>(q("/api/notify/resolve", { chan })), // a browser notification's channel
     notify: (what:"enable" | "disable" | "mute" | "allow" | "seen" | "preview", body: { conv?: string; person?: string; muted?: boolean; allowed?: boolean; ids?: string[]; preview?: "" | "full" | "sender" | "hidden" } = {}) => post<{ note: string }>("/api/notify/" + what, body),
 

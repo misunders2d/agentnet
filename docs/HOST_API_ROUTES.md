@@ -77,8 +77,8 @@ and catch the error. Failures differ by platform.
 | Route | Platforms | Purpose | Request | Response |
 |---|---|---|---|---|
 | `GET /api/overview` | D B | Everything around the open chat. Read it again on every `change` event. With `topics=1`, archived agent topics are only counted in `topics` and are paged through `/api/topics` (Comic does this). Without it, every thread is listed. A read through `host.api` (with or without a query) records the identity that `host.reconnect()` needs. | `?topics=1` optional | `Overview` (see Overview fields) |
-| `GET /api/thread` | D B | One device thread, which is a chat with an agent's device. | `?id=<any message id or synthetic direct-topic id in it>` | `{id, peer, key:{pinned?, pending?}, approved, permission_person?, question_target?, task_target?, task_grant, messages:[Message], topic?}` |
-| `GET /api/dm` | D B | One conversation: a direct message or a group. | `?id=<conv>` | `{id, kind?, title?, peer, members?, role?, created, mine, frozen?, messages:[DMMessage], agents:[AgentView], guests?, main_topic?, topics?, audience_pending?, resources?:{links:[{name,url}],rev,writer,lid}}`; resources are present only for current human group members, never guests or DMs |
+| `GET /api/thread` | D B | One device thread, which is a chat with an agent's device. | `?id=<any message id or synthetic direct-topic id in it>` | `{id, seq?, peer, key:{pinned?, pending?}, approved, permission_person?, question_target?, task_target?, task_grant, messages:[Message], topic?}` |
+| `GET /api/dm` | D B | One conversation: a direct message or a group. | `?id=<conv>` | `{id, seq?, kind?, title?, peer, members?, role?, created, mine, frozen?, messages:[DMMessage], agents:[AgentView], guests?, main_topic?, topics?, audience_pending?, resources?:{links:[{name,url}],rev,writer,lid}}`; resources are present only for current human group members, never guests or DMs |
 | `GET /api/unread` | D B | Optional, read-only page of effective unread messages, including accessible Done/Archived topics and deliberately marked sent messages. Unsupported providers omit the overview totals and refuse this route. | Optional `after` (previous `next`) and `limit` (default 50, maximum 200) | `{rows:[{key,kind,conv?,peer?,thread?,topic?,topic_title?,id,lid,author,dir,at,label,preview}],total,next?,content,seq}` |
 
 **Events.** `host.listen(fn)` delivers the change counter. Native events may add `hint:"typing"` or `hint:"presence"`: refresh typing only, or overview plus typing, respectively. Missing/unknown hints mean a full refresh; existing skins may ignore the hint. Durable and ephemeral revisions are tracked separately, so coalescing never hides a durable invalidation.
@@ -331,9 +331,17 @@ operation grants conversation or task access.
 | `GET /api/typing` | D B | Who is typing in a scope, and this device's preferences. | `?conv=&peer=&thread=` | `{scope, preferences:{send, show}, supported, current, entries:[{person?, address, label, expires}]}` |
 | `POST /api/typing` | D B | Report that this person is typing. It carries no content. | `{scope:{conv?, peer?, thread?}, active}` | `{submitted, skipped, throttled}` |
 | `POST /api/typing/preferences` | D B | This device's own choices: share my typing, show others'. | `{send, show}` | `{send, show}` |
-| `POST /api/remind` | DB | Set or move a personal reminder on a stored received or own-sent message. | `{id, due: unix seconds}` | `{note}` |
-| `POST /api/remind/done` | DB | Mark a reminder done across current linked own-human devices. | `{id}` | `{note}` |
-| `POST /api/remind/cancel` | DB | Cancel a reminder across current linked own-human devices. | `{id}` | `{note}` |
+| `POST /api/remind` | DB | Set or move a personal reminder on a stored received or own-sent message. | `{id, due: unix seconds}` | `{note, seq?, message?, reminder?: ReminderView or null}` |
+| `POST /api/remind/done` | DB | Mark a reminder done across current linked own-human devices. | `{id}` | `{note, seq?, message?, reminder?: ReminderView or null}` |
+| `POST /api/remind/cancel` | DB | Cancel a reminder across current linked own-human devices. | `{id}` | `{note, seq?, message?, reminder?: ReminderView or null}` |
+
+The optional view/result `seq` is captured before loading the local snapshot,
+using the overview's revision sequence. A reminder result reads back only its
+exact `message`: `reminder:null` means no pending reminder; a concurrent newer
+pending reminder is returned as it stands. Older providers or a failed readback
+may return only `{note}` after a successful action. Skins may reconcile confirmed
+attention immediately, retaining newer overview state and ignoring late older
+snapshots. A successful read action alone does not prove a generation CAS won.
 
 Reminder intent uses signed, encrypted quiet `reminder-sync` carriers, explicitly gated by
 `rem1`; it grants no execution or read authority. This allocation consumes the final

@@ -439,6 +439,7 @@ type LastEvent struct {
 
 // DMThread is one conversation's messages, oldest first.
 type DMThread struct {
+	Seq             uint64                        `json:"seq,omitempty"` // revision captured before loading this view
 	Resources       *client.ConversationResources `json:"resources,omitempty"`
 	MainTopic       *ThreadSummary                `json:"main_topic,omitempty"`
 	Topics          []ThreadSummary               `json:"topics,omitempty"`
@@ -1142,6 +1143,7 @@ func holdCode(reason string) string {
 
 // Thread is one conversation with one peer.
 type Thread struct {
+	Seq              uint64      `json:"seq,omitempty"`            // revision captured before loading this view
 	AgentHostKey     *PeerKey    `json:"agent_host_key,omitempty"` // current pin for topic.agent_host when it differs from peer
 	ID               string      `json:"id"`
 	Peer             string      `json:"peer"`

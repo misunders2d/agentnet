@@ -157,6 +157,10 @@ class UpdaterInstrumentation : Instrumentation() {
         val settings = activityNotificationSettings(targetContext.packageName)
         check(settings.action == android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
         check(settings.getStringExtra(android.provider.Settings.EXTRA_APP_PACKAGE) == targetContext.packageName)
+        val connectionSettings = connectionNotificationSettings(targetContext.packageName)
+        check(connectionSettings.action == android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+        check(connectionSettings.getStringExtra(android.provider.Settings.EXTRA_APP_PACKAGE) == targetContext.packageName)
+        check(connectionSettings.getStringExtra(android.provider.Settings.EXTRA_CHANNEL_ID) == CONNECTION_CHANNEL)
         check(settings.getStringExtra(android.provider.Settings.EXTRA_CHANNEL_ID) == ACTIVITY_CHANNEL)
         val manager = targetContext.getSystemService(android.app.NotificationManager::class.java)
         val post = NativeHost::class.java.getDeclaredMethod("notifyActivity", String::class.java, String::class.java, String::class.java, String::class.java).apply { isAccessible = true }
@@ -218,6 +222,14 @@ class UpdaterInstrumentation : Instrumentation() {
         val manager = app.getSystemService(android.app.NotificationManager::class.java)
         check(app.host.notificationsPermitted()) { "Grant existing fixture notification consent before this mode; this test never changes permissions." }
         check(!connectionNotificationChannel().canShowBadge())
+        // The registered object, rather than the fresh defaults, owns the
+        // setting after an upgrade. Re-creation must preserve that choice.
+        val savedConnection = manager.getNotificationChannel(CONNECTION_CHANNEL)
+        if (savedConnection != null) {
+            val badging = savedConnection.canShowBadge()
+            manager.createNotificationChannel(connectionNotificationChannel())
+            check(manager.getNotificationChannel(CONNECTION_CHANNEL).canShowBadge() == badging)
+        }
         app.host.prepareNotificationChannel()
         fun waitFor(label: String, predicate: () -> Boolean) {
             val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)

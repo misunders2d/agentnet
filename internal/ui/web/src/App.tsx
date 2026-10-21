@@ -19,6 +19,7 @@ import { Toasts, ConnectionBanner } from "./features/Status";
 import { PersonAvatar } from "./ui/Avatar";
 import { NativeRecovery } from "./features/NativeRecovery";
 import { Outbox } from "./features/Outbox";
+import { outboxAttention } from "./outbox-attention";
 
 const tabs: { id: Tab; label: string; icon: typeof IconMessageCircle }[] = [
   { id: "chats", label: "Chats", icon: IconMessageCircle },
@@ -111,7 +112,7 @@ function usePages(tab: Tab): { enter: string; leave: string } {
 }
 
 function PhoneTabs({ tab, oks, overview, store, main, scroll }: { tab: Tab; oks: number; overview: T.Overview | null; store: Store; main: ReactNode; scroll: RefObject<number> }) {
-  const due = overview?.remind ? (overview.reminders || []).filter(r=>r.overdue).length : 0;
+  const due = outboxAttention(overview).total;
   // The tab's own scroll position comes back with it (it was unmounted under the open conversation).
   const box = useRef<HTMLDivElement>(null);
   const pages = usePages(tab);
@@ -126,7 +127,7 @@ function PhoneTabs({ tab, oks, overview, store, main, scroll }: { tab: Tab; oks:
         <nav aria-label="Main" data-part="tabs" className="grid grid-cols-5 border-t-[1.5px] border-outline bg-surface pb-[env(safe-area-inset-bottom)]">
           {tabs.map((t) => (
             <button key={t.id} type="button" onClick={() => store.showTab(t.id)} aria-current={tab === t.id ? "page" : undefined}
-              aria-label={t.id === "outbox" && due ? "Outbox, "+due+" reminders due" : undefined}
+              aria-label={t.id === "outbox" && due ? "Outbox, "+due+" "+(due === 1 ? "reminder" : "reminders")+" due" : undefined}
               className={"relative flex min-h-14 flex-col items-center justify-center gap-0.5 text-[12px] font-semibold " + (tab === t.id ? "text-ink" : "text-muted")}>
               <span className={"grid h-7 w-12 place-items-center rounded-full " + (tab === t.id ? "bg-act text-act-ink stroke" : "")}><t.icon size={20} stroke={2} /></span>
               {t.label}
@@ -145,22 +146,24 @@ function PhoneTabs({ tab, oks, overview, store, main, scroll }: { tab: Tab; oks:
 }
 
 function Desktop({ tab, oks, overview, store, main }: { tab: Tab; oks: number; overview: T.Overview | null; store: Store; main: ReactNode }) {
-  const due = overview?.remind ? (overview.reminders || []).filter(r=>r.overdue).length : 0;
+  const due = outboxAttention(overview).total;
   const open = useStore(store, (s) => s.open);
   const views = useStore(store, (s) => s.views);
   const settings = tab === "settings";
-  const outbox = tab === "outbox";
+  // Lists use the side column. Setup and review are tasks in the workspace,
+  // with room to read and act; the current chat stays remembered in the store.
+  const workspace = tab === "agents" || tab === "oks" || tab === "outbox";
   const pages = usePages(tab);
-  // The right pane moves only when what it shows changes: another
-  // conversation, or Settings. Topics of one agent are one pane.
-  const pane = settings ? "settings" : open ? convKey(open, views) : "none";
+  // The main pane moves when its workspace or conversation changes.
+  // Topics of one agent are one pane.
+  const pane = workspace ? tab : settings ? "settings" : open ? convKey(open, views) : "none";
   return (
-    <div className={"grid h-full bg-canvas " + (outbox ? "grid-cols-[76px_1fr]" : "grid-cols-[76px_minmax(300px,360px)_1fr]")}>
+    <div className={"grid h-full bg-canvas " + (workspace ? "grid-cols-[76px_minmax(0,1fr)]" : "grid-cols-[76px_minmax(300px,360px)_minmax(0,1fr)]")}>
       <nav aria-label="Main" data-part="rail" className="flex flex-col items-center gap-2 border-r-[1.5px] border-outline bg-rail py-3 text-rail-ink">
         <WorkspaceCoin />
         {tabs.map((t) => (
           <button key={t.id} type="button" onClick={() => store.showTab(t.id)} aria-current={tab === t.id ? "page" : undefined}
-            aria-label={t.id === "outbox" && due ? "Outbox, "+due+" reminders due" : undefined}
+            aria-label={t.id === "outbox" && due ? "Outbox, "+due+" "+(due === 1 ? "reminder" : "reminders")+" due" : undefined}
             className={"relative flex w-[60px] flex-col items-center gap-1 rounded-2xl py-2 text-[12px] font-semibold " + (tab === t.id ? "bg-act text-act-ink" : "text-white/80 hover:bg-white/10")}>
             <t.icon size={22} stroke={2} />{t.label}
             {t.id === "oks" && oks > 0 && <span className="absolute right-1 top-1 min-w-5 h-5 px-1 grid place-items-center rounded-full bg-danger text-white text-[11px] font-bold tnum">{oks}</span>}
@@ -174,18 +177,22 @@ function Desktop({ tab, oks, overview, store, main }: { tab: Tab; oks: number; o
         </button>
         <button type="button" aria-label="You: profile and devices" onClick={() => store.showTab("settings", "profile")} className="grid size-11 place-items-center rounded-full"><PersonAvatar name={overview?.person?.label || "Me"} seed={overview?.person?.person || "me"} size={40} /></button>
       </nav>
-      {!outbox && <aside className="min-h-0 border-r-[1.5px] border-outline bg-canvas">
+      {!workspace && <aside className="min-h-0 min-w-0 border-r-[1.5px] border-outline bg-canvas">
         <Swap id={tab} className="h-full overflow-clip" side="h-full overflow-y-auto" {...pages} ms={MOTION.page} label="list">{main}</Swap>
       </aside>}
       <main className="flex min-h-0 min-w-0">
         <div className="flex min-w-0 flex-1 flex-col">
           <ConnectionBanner />
           <NativeRecovery />
-          <Swap id={outbox ? "outbox" : pane} className="flex min-h-0 flex-1 flex-col" side="flex min-h-0 flex-1 flex-col" enter="an-pane-in" leave="an-pane-out" ms={MOTION.pane} label="pane">
-            {outbox ? <div className="min-h-0 flex-1 overflow-y-auto">{main}</div> : settings ? <SettingsPane /> : open ? <Conversation o={open} /> : <NothingOpen />}
+          <Swap id={pane} className="flex min-h-0 flex-1 flex-col" side="flex min-h-0 flex-1 flex-col" enter="an-pane-in" leave="an-pane-out" ms={MOTION.pane} label="pane">
+            {workspace ? (
+              <div data-workspace={tab} className="min-h-0 flex-1 overflow-y-auto">
+                <div className={tab === "outbox" ? "" : "@container mx-auto w-full max-w-[832px] lg:px-4 lg:pt-3"}>{main}</div>
+              </div>
+            ) : settings ? <SettingsPane /> : open ? <Conversation o={open} /> : <NothingOpen />}
           </Swap>
         </div>
-        {!settings && !outbox && <RoomPanel />}
+        {!settings && !workspace && <RoomPanel />}
       </main>
       <Toasts />
     </div>

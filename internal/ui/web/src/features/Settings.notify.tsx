@@ -199,11 +199,12 @@ function AndroidConnection() {
   const store = useApp(), android = store.host.android;
   const notificationsEnabled = useStore(store, s => s.overview?.notify?.enabled);
   const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [badging, setBadging] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
   useEffect(() => {
     if (!android) return;
     let alive = true;
-    const refresh = () => { void android.connection().then(v => { if (alive) { setEnabled(v.enabled); setError(""); } }, () => { if (alive) setError("Could not read Android connection settings."); }); };
+    const refresh = () => { void android.connection().then(v => { if (alive) { setEnabled(v.enabled); setBadging(!!v.badging); setError(""); } }, () => { if (alive) setError("Could not read Android connection settings."); }); };
     refresh();
     const off = android.onVisibility(refresh);
     return () => { alive = false; off(); };
@@ -215,11 +216,19 @@ function AndroidConnection() {
     catch (e) { setError(e instanceof Error ? e.message : "Could not change the background connection."); }
     finally { setBusy(false); }
   };
+  const settings = async () => {
+    try { await android.connectionSettings?.(); }
+    catch { setError("Open AgentNet’s Background connection notification category in Android settings."); }
+  };
   return <section className="mt-6"><GroupLabel>Connection</GroupLabel><Card className="p-4">
     <div className="flex items-center gap-3"><div className="min-w-0 flex-1">
       <p className="font-semibold">Stay connected in the background</p>
-      <Hint>Keep receiving while you use other apps. Android shows a connection notification with a Stop button.</Hint>
+      <Hint>Keep receiving while you use other apps. Android requires a connection notification with a Stop button. It does not mean unread messages.</Hint>
     </div><Toggle label="Background connection" checked={!!enabled} disabled={busy || enabled === null} onChange={turn} /></div>
+    {badging && <div className="mt-3">
+      <Hint>Android allows the background connection to show a notification dot. Change this category’s dot or visibility in Android settings; keep Chat activity enabled for message alerts.</Hint>
+      {android.connectionSettings && <button type="button" className="mt-2 rounded-lg border border-hairline px-3 py-2 font-semibold" onClick={() => void settings()}>Background notification settings</button>}
+    </div>}
     {error && <p role="alert" className="mt-2 text-danger">{error}</p>}
   </Card></section>;
 }

@@ -98,7 +98,8 @@ export interface Host {
   platform: "daemon" | "browser" | "android";
   /** Android OS actions only, scoped to the trusted local main frame. */
   android?: {
-    connection(): Promise<{ enabled: boolean }>;
+    connection(): Promise<{ enabled: boolean; badging?: boolean }>;
+    connectionSettings?(): Promise<{ opened: boolean }>;
     setConnection(enabled: boolean): Promise<{ enabled: boolean }>;
     requestNotifications(): Promise<AndroidNotificationStatus>;
     notificationStatus(): Promise<AndroidNotificationStatus>;

@@ -324,6 +324,7 @@ export interface DMSummary {
 }
 
 export interface DMThread {
+  seq?: number;
   resources?: ConversationResources;
   main_topic?: ThreadSummary;
   topics?: ThreadSummary[];
@@ -1312,6 +1313,7 @@ export interface TeamsView {
 }
 
 export interface Thread {
+  seq?: number;
   agent_host_key?: PeerKey;
   id: string;
   peer: string;

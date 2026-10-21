@@ -2,7 +2,7 @@
 // here come first; others the server lists are offered too, said plainly
 // to be unchecked (starting a chat checks who they are). A group starts
 // with a name; its creator then brings people in, and each one accepts.
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type RefObject } from "react";
 import { IconArrowLeft, IconMessagePlus, IconPencil, IconSearch, IconUsersPlus, IconX } from "@tabler/icons-react";
 import { useAgentNames, useApp, useWide } from "../context";
 import { useStore, type Store } from "../store";
@@ -128,31 +128,32 @@ const heading = "px-2 pt-4 pb-1 text-[12px] font-extrabold uppercase tracking-[.
 /** NewChatButton: the yellow "New" button and the sheet it opens. */
 export function NewChatButton({ size = "md" }: { size?: "md" | "lg" }) {
   const [open, setOpen] = useState(false);
+  const trigger = useRef<HTMLButtonElement>(null);
   return (
     <>
-      <Button variant="act" size={size} onClick={() => setOpen(true)} icon={<IconPencil size={19} stroke={2.4} aria-hidden="true" />}
+      <Button ref={trigger} variant="act" size={size} onClick={() => setOpen(true)} icon={<IconPencil size={19} stroke={2.4} aria-hidden="true" />}
         className={size === "lg" ? "!w-auto px-6" : ""}>
         {size === "lg" ? "Start a chat" : "New"}
       </Button>
-      <NewChatSheet open={open} onOpenChange={setOpen} />
+      <NewChatSheet open={open} onOpenChange={setOpen} finalFocus={trigger} />
     </>
   );
 }
 
-function NewChatSheet({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+function NewChatSheet({ open, onOpenChange, finalFocus }: { open: boolean; onOpenChange: (open: boolean) => void; finalFocus?: RefObject<HTMLElement | null> }) {
   const store = useApp();
   const overview = useStore(store, (s) => s.overview);
   const [step, setStep] = useState<"pick" | "group">("pick");
   const close = (o: boolean) => { onOpenChange(o); if (!o) setStep("pick"); };
 
   if (step === "group") return (
-    <Sheet open={open} onOpenChange={close} title="New group"
+    <Sheet open={open} onOpenChange={close} finalFocus={finalFocus} title="New group"
       description="Give it a name. Then bring people in: each person says yes before they join.">
       <NewGroupForm onBack={() => setStep("pick")} onCreated={() => close(false)} />
     </Sheet>
   );
   return (
-    <Sheet open={open} onOpenChange={close} title="New chat" description="Talk with one person, or start a group.">
+    <Sheet open={open} onOpenChange={close} finalFocus={finalFocus} title="New chat" description="Talk with one person, or start a group.">
       {!overview ? <p className="py-6 text-muted">Loading…</p>
         : !overview.persons ? <p className="py-4 text-text-2">This AgentNet can’t hold chats between people yet.</p>
         : !overview.person ? <NeedsName onDone={() => close(false)} />

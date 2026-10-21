@@ -60,7 +60,7 @@ export function RemindSheet({ open, onOpenChange, m, r }: { open: boolean; onOpe
     if (due.getTime() <= Date.now()) { setError("Choose a time in the future."); return; }
     setError("");
     setBusy(true);
-    const ok = await store.run((a) => a.remind(m.id, due), (r ? "Reminder moved to " : "I’ll remind you ") + dueText(due));
+    const ok = await store.changeReminder((a) => a.remind(m.id, due), (r ? "Reminder moved to " : "I’ll remind you ") + dueText(due));
     setBusy(false);
     if (ok !== undefined) onOpenChange(false);
   };
@@ -131,9 +131,9 @@ export function ReminderLine({ r, m, right }: { r: T.ReminderView; m: Remindable
       <span aria-hidden="true" className="text-muted">·</span>
       <button type="button" className={link} onClick={() => setMove(true)}>{r.overdue ? "Later…" : "Change…"}</button>
       <span aria-hidden="true" className="text-muted">·</span>
-      <button type="button" className={link} onClick={() => void store.run((a) => a.remindDone(m.id), "Reminder done")}>Done</button>
+      <button type="button" className={link} onClick={() => void store.changeReminder((a) => a.remindDone(m.id), "Reminder done")}>Done</button>
       <span aria-hidden="true" className="text-muted">·</span>
-      <button type="button" className={link} onClick={() => void store.run((a) => a.remindCancel(m.id), "Reminder cancelled")}>Cancel</button>
+      <button type="button" className={link} onClick={() => void store.changeReminder((a) => a.remindCancel(m.id), "Reminder cancelled")}>Cancel</button>
       {move !== null && <RemindSheet open={move} onOpenChange={setMove} m={m} r={r} />}
     </div>
   );
@@ -196,7 +196,7 @@ function ReminderRow({ r, o, names, onChange }: { r: T.ReminderView; o: T.Overvi
       </button>
       <Button size="sm" variant="ghost" onClick={onChange}>Details</Button>
       <button type="button" aria-label={"Reminder done: " + (firstLine(r.title, 40) || "a message")} title="Done"
-        onClick={() => void store.run((a) => a.remindDone(r.message), "Reminder done")}
+        onClick={() => void store.changeReminder((a) => a.remindDone(r.message), "Reminder done")}
         className="grid size-11 shrink-0 place-items-center rounded-full text-text-2 hover:bg-sunken hover:text-ink"><IconCheck size={20} /></button>
     </li>
   );

@@ -10,8 +10,14 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 
+internal const val CONNECTION_CHANNEL = "connection"
+
 internal fun connectionNotificationChannel() =
-    NotificationChannel("connection", "Background connection", NotificationManager.IMPORTANCE_LOW).apply { setShowBadge(false) }
+    NotificationChannel(CONNECTION_CHANNEL, "Background connection", NotificationManager.IMPORTANCE_LOW).apply { setShowBadge(false) }
+
+internal fun connectionNotificationSettings(packageName: String) = Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+    .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, packageName)
+    .putExtra(android.provider.Settings.EXTRA_CHANNEL_ID, CONNECTION_CHANNEL)
 
 /** User-started messaging continuity; never a polling worker or boot-started service. */
 class ConnectionService : Service() {
@@ -27,7 +33,7 @@ class ConnectionService : Service() {
         }
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val stop = PendingIntent.getService(this, 1, Intent(this, ConnectionService::class.java).setAction("stop"), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        val notification = Notification.Builder(this, "connection").setSmallIcon(R.drawable.ic_agentnet)
+        val notification = Notification.Builder(this, CONNECTION_CHANNEL).setSmallIcon(R.drawable.ic_agentnet)
             .setContentTitle("AgentNet background connection")
             .setContentText("Keeping your chats connected. Tap to open.")
             .setVisibility(Notification.VISIBILITY_PRIVATE).setOngoing(true).setContentIntent(open)

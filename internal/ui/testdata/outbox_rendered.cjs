@@ -151,7 +151,7 @@ const settle=async page=>{
       await nav.getByRole('button',{name:/^Outbox\b/}).waitFor();
       const dueTab=nav.getByRole('button',{name:'Outbox, 3 reminders due',exact:true});await dueTab.waitFor();
       assert.equal(await dueTab.locator('span[aria-hidden="true"]').innerText(),'3','due reminders remain visible from main navigation');
-      assert.equal(await page.getByRole('heading',{name:'Reminders',exact:true}).count(),0,'personal reminders are absent from Chats');
+      assert.equal(await page.getByRole('heading',{name:/^Reminders\b/}).count(),0,'personal reminders are absent from Chats');
       assert.equal(await page.getByText(/^Reminder 00 —/).count(),0);
       if(width===390){
         assert.equal(await nav.getByRole('button').count(),5,'phone retains five main tabs');
@@ -161,6 +161,14 @@ const settle=async page=>{
       await nav.getByRole('button',{name:/^Outbox\b/}).click();
       let outbox=page.getByRole('region',{name:'Outbox',exact:true});await outbox.getByRole('heading',{name:'Outbox',exact:true}).waitFor();
       const sections=()=>outbox.getByRole('navigation',{name:'Outbox',exact:true});
+      const reminderTab=()=>sections().getByRole('button',{name:/^Reminders\b/});
+      await reminderTab().getByText('3 due',{exact:true}).waitFor();
+      assert.equal(await reminderTab().getAttribute('aria-label'),'Reminders, 3 reminders due','active Scheduled pane identifies the attention section');
+      assert.equal(await nav.getByRole('button',{name:'Outbox, 3 reminders due',exact:true}).count(),1,'section and rail share the same attention count');
+      assert.equal(await sections().getByRole('button',{name:'Drafts',exact:true}).locator('[aria-hidden=\"true\"]').count(),0,'drafts do not invent unread attention');
+      await reminderTab().focus();await page.keyboard.press('Enter');
+      await outbox.getByRole('region',{name:/^Reminders\b/}).waitFor();
+      await sections().getByRole('button',{name:'Scheduled',exact:true}).focus();await page.keyboard.press('Enter');
       await settle(page);
       assert.equal(await page.getByRole('dialog').count(),0,'Outbox is a page, not a chat modal');
       const bounds=await outbox.boundingBox();assert(bounds.width>(width===1280?700:330),'Outbox uses the available page width');
@@ -223,7 +231,7 @@ const settle=async page=>{
       assert.deepEqual({...edits[1].body,timezone:'Europe/Kiev'},{...expected,rev:original.rev+1,body:'Reviewed exact Outbox edit'});
       const saved=await page.evaluate(id=>fixture.schedules.find(r=>r.id===id),original.id);assert.deepEqual(saved.files,original.files);assert.deepEqual(saved.audience,original.audience);
 
-      await sections().getByRole('button',{name:'Reminders',exact:true}).click();
+      await sections().getByRole('button',{name:/^Reminders\b/}).click();
       const personal=outbox.getByRole('region',{name:/^Reminders\b/});await personal.getByRole('listitem').last().waitFor();
       assert.equal(await personal.getByRole('listitem').count(),20);assert.equal(await personal.locator('img').count(),0);
       const reminderHeights=await personal.getByRole('listitem').evaluateAll(ns=>ns.map(n=>n.getBoundingClientRect().height));assert(reminderHeights.every(h=>h>50&&h<130),'twenty reminders use compact rows');
@@ -233,10 +241,11 @@ const settle=async page=>{
         const remaining=2-n;
         await personal.getByRole('listitem').filter({hasText:'Reminder '+String(n).padStart(2,'0')+' —'}).getByRole('button',{name:/^Reminder done:/}).click();
         await page.waitForFunction(()=>typeof fixture.finishReminder==='function');
-        const tab=nav.getByRole('button',{name:remaining?'Outbox, '+remaining+' reminders due':'Outbox',exact:true});await tab.waitFor();
+        const tab=nav.getByRole('button',{name:remaining?'Outbox, '+remaining+' '+(remaining===1?'reminder':'reminders')+' due':'Outbox',exact:true});await tab.waitFor();
         if(remaining)assert.equal(await tab.locator('span[aria-hidden="true"]').innerText(),String(remaining));
         else assert.equal(await tab.locator('span[aria-hidden="true"]').count(),0,'last Done clears the badge');
         assert.equal(await personal.getByRole('listitem').count(),19-n,'each exact Done removes only its reminder');
+        assert.equal(await reminderTab().getAttribute('aria-label'),remaining?'Reminders, '+remaining+' '+(remaining===1?'reminder':'reminders')+' due':null,'tab count follows the same committed snapshot as the rail');
         assert.equal(await page.evaluate(()=>typeof fixture.finishReminder),'function','badge updates through push while action response is pending');
         await page.evaluate(()=>fixture.finishReminder());await settle(page);
       }

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useApp } from "../context";
 import { useStore } from "../store";
+import { outboxAttention } from "../outbox-attention";
 import { Button } from "../ui/Button";
 import { ScheduleDialogs } from "./Composer.schedule";
 import { DraftsView } from "./Outbox.drafts";
@@ -19,11 +20,17 @@ export function Outbox() {
   const [refresh, setRefresh] = useState(0);
   const unresolved = Object.values(saves).filter(s=>s.status === "saving" || s.status === "uncertain");
   const current = sections.find(s => s === section) || "scheduled";
+  const attention = outboxAttention(overview);
   return <section aria-label="Outbox" className="mx-auto w-full max-w-4xl px-4 py-5 sm:px-6">
     <h1 className="font-display text-3xl font-extrabold tracking-tight">Outbox</h1>
     <p className="mt-2 text-sm text-text-2">Scheduled messages, unfinished drafts and personal reminders on this device.</p>
     <nav aria-label="Outbox" className="my-4 flex flex-wrap gap-2">
-      {sections.map(s => <Button key={s} variant={s === current ? "outline" : "ghost"} aria-current={s === current ? "page" : undefined} onClick={() => store.showTab("outbox", s)}>{titles[s]}</Button>)}
+      {sections.map(s => <Button key={s} variant={s === current ? "outline" : "ghost"} aria-current={s === current ? "page" : undefined}
+        aria-label={attention[s] ? `${titles[s]}, ${attention[s]} ${attention[s] === 1 ? "reminder" : "reminders"} due` : undefined}
+        onClick={() => store.showTab("outbox", s)}>
+        {titles[s]}
+        {attention[s] > 0 && <span data-outbox-attention={s} aria-hidden="true" className="whitespace-nowrap rounded-full bg-act px-2 py-px text-[11px] text-act-ink stroke tnum">{attention[s]} due</span>}
+      </Button>)}
     </nav>
     {current === "scheduled" ? overview?.schedules
       ? <>

@@ -609,7 +609,17 @@ func (s *Server) remind(w http.ResponseWriter, r *http.Request) {
 	default:
 		err = NotFound("no such reminder control")
 	}
-	writeResult(w, map[string]string{"note": note}, err)
+	result := map[string]any{"note": note}
+	if p, ok := s.p.(interface {
+		reminderSnapshot(string) (*ReminderView, error)
+	}); ok && err == nil {
+		seq, _ := s.p.Changed() // never label an earlier snapshot with a later revision
+		if reminder, snapshotErr := p.reminderSnapshot(v.ID); snapshotErr == nil {
+			result["seq"], result["message"], result["reminder"] = seq, v.ID, reminder
+		}
+		// Snapshot failure cannot turn an already saved action into a failure.
+	}
+	writeResult(w, result, err)
 }
 
 // writeResult writes v, or err as the page's error.
@@ -622,11 +632,13 @@ func writeResult(w http.ResponseWriter, v any, err error) {
 }
 
 func (s *Server) thread(w http.ResponseWriter, r *http.Request) {
+	seq, _ := s.p.Changed()
 	t, err := s.p.Thread(r.URL.Query().Get("id"))
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
+	t.Seq = seq
 	writeJSON(w, t)
 }
 
@@ -730,11 +742,13 @@ func (s *Server) dm(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	seq, _ := s.p.Changed()
 	t, err := p.DM(r.URL.Query().Get("id"))
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
+	t.Seq = seq
 	writeJSON(w, t)
 }
 

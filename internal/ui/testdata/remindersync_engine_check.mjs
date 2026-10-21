@@ -58,9 +58,13 @@ for(const e of [a,p])await e.store.write([{s:'persons',k:b.me.person,v:{...b.me,
 check(current.includes(wire.CapReminderSync)&&!wire.RoomImplies.includes(wire.CapReminderSync),'rem1 is an explicit reader capability');
 const id=wire.newID(),original={v:1,id,from:b.address,fp:b.fp,kind:'message',body:'Remember this exact original',read:false,at:Date.now()};
 for(const e of [a,p])await e.store.write([{s:'inbox',k:id,v:original}]);
+let threadMuteRefused=false;try{await a.api('/api/notify/mute',{conv:id,muted:true});}catch{threadMuteRefused=true;}
+check(threadMuteRefused,'device-thread IDs cannot become DM/group notification mutes');
 const pending=async e=>await e.reminders();
 let due=Math.floor(Date.now()/1000)+3600;
-check((await a.api('/api/remind',{id,due})).note==='Reminder set.','existing API creates the personal reminder');await settle(a);
+const created=await a.api('/api/remind',{id,due});
+check(created.note==='Reminder set.','existing API creates the personal reminder');
+check(created.message===id&&created.reminder.message===id&&Date.parse(created.reminder.due)===due*1000&&!created.reminder.overdue&&Number.isSafeInteger(created.seq)&&created.seq<=a.seq,'existing action returns exact authoritative pending reminder and conservative sequence');await settle(a);
 let rows=await carriers(a,p);check(rows.length===1&&rows[0].required_cap===wire.CapReminderSync&&rows[0].aside&&!wire.parseEnvelope(rows[0].envelope).attn,'one quiet encrypted explicitly gated carrier');
 check(!(await carriers(a,b)).length,'no carrier to another person');await deliver(a,p);
 check((await pending(p)).length===1&&Date.parse((await pending(p))[0].due)===due*1000,'create reaches linked phone');
@@ -68,11 +72,11 @@ check(!(await p.store.all('inbox')).some(r=>r.sub===wire.SubReminderSync),'metad
 const stale=rows[0].envelope;
 due+=1200;await p.api('/api/remind',{id,due});await settle(p);await deliver(p,a);
 check(Date.parse((await pending(a))[0].due)===due*1000,'phone snooze updates exact laptop reminder');
-await a.api('/api/remind/done',{id});await settle(a);await deliver(a,p);
+const done=await a.api('/api/remind/done',{id});check(done.message===id&&done.reminder===null&&Number.isSafeInteger(done.seq),'done returns exact ended snapshot');await settle(a);await deliver(a,p);
 check(!(await pending(p)).length&&(await p.reminders(true))[0].state==='done','dismissed reminder follows own devices');
 await receive(stale,p);check(!(await pending(p)).length,'stale pending carrier never resurrects a tombstone');
 await a.api('/api/remind',{id,due});await settle(a);await deliver(a,p);
-await p.api('/api/remind/cancel',{id});await settle(p);await deliver(p,a);
+const cancelled=await p.api('/api/remind/cancel',{id});check(cancelled.message===id&&cancelled.reminder===null&&Number.isSafeInteger(cancelled.seq),'cancel returns exact ended snapshot');await settle(p);await deliver(p,a);
 check(!(await pending(a)).length,'cancel follows linked devices');
 await a.api('/api/remind',{id,due});await settle(a);await deliver(a,p);
 await p.api('/api/send',{to:b.address,kind:'message',body:'reply ends exact reminder',reply_to:id});await settle(p);await deliver(p,a);
@@ -111,6 +115,9 @@ await p.reminderWake();check((await p.store.prefix('kv','reminder-alert/')).leng
 const reopenedStore=typeof window==='undefined'?p.store:(p.store.close(),await openIDB(p.fixtureStoreName));
 const reopened=new Engine({store:reopenedStore,base:'https://synthetic.invalid',fetch});Object.assign(reopened,{keys:p.keys,address:p.address,fp:p.fp,me:p.me,now:p.now,running:true});await reopened.reminderWake();check((await reopenedStore.prefix('kv','reminder-alert/')).length===2,'restart retains notified generations');reopened.stop();
 check((await reopenedStore.get('inbox',id)).read===false&&(await reopenedStore.get('inbox',id)).body===original.body,'reminder never changes the original or its read state');
+const originalLookup=a.reminderOriginal;a.reminderOriginal=async()=>{throw Error('readback unavailable');};
+const noteOnly=await a.api('/api/remind',{id,due:due+120});a.reminderOriginal=originalLookup;
+check(noteOnly.note==='Reminder set.'&&!('reminder'in noteOnly)&&Date.parse((await pending(a)).find(r=>r.message===id).due)===(due+120)*1000,'readback failure returns note-only success without replaying or losing the saved reminder');
 for(const e of engines)e.stop();
 if(typeof window!=='undefined'){reopenedStore.close();for(const e of engines){e.store.close();await new Promise((resolve,reject)=>{const req=indexedDB.deleteDatabase(e.fixtureStoreName);req.onsuccess=resolve;req.onerror=()=>reject(req.error);});}window.reminderSyncResult={ok:true,checks};}
 console.log('remindersync Engine checks: '+checks+' PASS');

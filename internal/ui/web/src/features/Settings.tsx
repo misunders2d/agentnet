@@ -119,7 +119,7 @@ export function SettingsPane() {
   const View = VIEWS[id];
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
-      <div key={id} className="@container an-tab-in mx-auto w-full max-w-[720px] px-8 pb-16 pt-8"><View titleRef={title} /></div>
+      <div key={id} className="@container an-tab-in mx-auto w-full max-w-[720px] px-6 pb-12 pt-6"><View titleRef={title} /></div>
     </div>
   );
 }
@@ -129,8 +129,8 @@ function List({ selected, onPick, rows, title, desktop }: { selected?: Id; onPic
   const o = useStore(store, (s) => s.overview);
   const requests = pendingLinks(o);
   return (
-    <div className={desktop ? "px-3 pb-8 pt-5" : "mx-auto max-w-xl px-4 pb-10 pt-5"}>
-      <h1 className="mb-5 px-1 font-display text-[28px] font-extrabold leading-tight">{title}</h1>
+    <div className={desktop ? "px-3 pb-6 pt-5" : "mx-auto max-w-xl px-4 pb-8 pt-5"}>
+      <h1 className="mb-4 px-1 font-display text-[28px] font-extrabold leading-tight">{title}</h1>
       {requests.length > 0 && (
         <button type="button" onClick={() => onPick("devices")}
           className="press mb-4 flex w-full items-center gap-3 rounded-2xl stroke bg-act p-3 text-left text-act-ink shadow-pop">
@@ -144,7 +144,7 @@ function List({ selected, onPick, rows, title, desktop }: { selected?: Id; onPic
       )}
       <ProfileRow o={o} selected={selected === "profile"} onPick={() => onPick("profile")} rowRef={(el) => { rows.profile = el; }} desktop={desktop} />
       {GROUPS.map((g) => (
-        <section key={g.label} aria-label={g.label} className="mt-5">
+        <section key={g.label} aria-label={g.label} className="mt-4">
           <GroupLabel>{g.label}</GroupLabel>
           <div className={desktop ? "space-y-1" : "overflow-hidden rounded-2xl stroke bg-surface"}>
             {g.ids.map((id, i) => (
@@ -164,10 +164,10 @@ function ProfileRow({ o, selected, onPick, rowRef, desktop }: { o: T.Overview | 
     : o.link?.state === "pending" ? "Waiting for your other device" : o.role === "service" ? "A service, with no person" : "Set up your person";
   return (
     <button ref={rowRef} type="button" onClick={onPick} aria-current={selected ? "page" : undefined}
-      className={"flex w-full items-center gap-4 rounded-2xl stroke p-4 text-left " + (selected ? "bg-surface shadow-pop-sm" : desktop ? "bg-surface/60 hover:bg-surface" : "bg-surface active:bg-sunken")}>
-      <PersonAvatar name={p?.label || "You"} seed={p?.person || o?.me.address || "me"} size={56} />
+      className={"flex w-full items-center gap-3 rounded-xl stroke text-left " + (desktop ? "p-3 " : "p-4 ") + (selected ? "bg-surface shadow-pop-sm" : desktop ? "bg-surface/60 hover:bg-surface" : "bg-surface active:bg-sunken")}>
+      <PersonAvatar name={p?.label || "You"} seed={p?.person || o?.me.address || "me"} size={desktop ? 40 : 48} />
       <span className="min-w-0 flex-1">
-        <span className="block truncate font-display text-[22px] font-bold leading-tight">{p ? p.label : "You"}</span>
+        <span className={"block truncate font-display font-bold leading-tight " + (desktop ? "text-[18px]" : "text-[20px]")}>{p ? p.label : "You"}</span>
         <span className={"block truncate text-[13px] " + (p || !o ? "text-muted" : "font-semibold text-agent-ink")}>{sub}</span>
       </span>
       <IconChevronRight size={20} className="shrink-0 text-muted" aria-hidden="true" />
@@ -204,7 +204,7 @@ function Row({ id, o, selected, desktop, first, onPick, rowRef }: { id: RowId; o
     : (first ? "" : "border-t border-hairline ") + "active:bg-sunken";
   return (
     <button ref={rowRef} type="button" onClick={onPick} aria-current={selected ? "page" : undefined}
-      className={"flex min-h-14 w-full items-center gap-3 px-3 py-2 text-left " + look}>
+      className={"flex w-full items-center gap-3 px-3 text-left " + (desktop ? "min-h-12 py-1.5 " : "min-h-14 py-2 ") + look}>
       <Tile color={s.color}>{s.icon}</Tile>
       <span className="min-w-0 flex-1 truncate font-semibold">{s.label}</span>
       {value != null && <span className="max-w-[45%] shrink-0 truncate text-[13px] text-muted tnum">{value}</span>}

@@ -73,7 +73,6 @@ export function AgentsView() {
     <div className="pb-10">
       <header className="px-4 pt-5 pb-1">
         <ScreenTitle>Agents</ScreenTitle>
-        <p className="pt-2 text-[15px] font-semibold text-text-2">Yours, and the ones you work with</p>
       </header>
 
       <Section title="Your agents">
@@ -84,7 +83,7 @@ export function AgentsView() {
 
       <ReportsNote o={o} />
 
-      {!data.browser && <Section title="What they may do without asking"><Permissions grants={grants} /></Section>}
+      {!data.browser && <Section title="Permissions"><Permissions grants={grants} /></Section>}
 
       <Section title="Other people’s agents"><Others o={o} /></Section>
     </div>
@@ -93,9 +92,9 @@ export function AgentsView() {
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="mt-6 px-4" aria-label={title}>
-      <h2 className="pb-2.5 text-[13px] font-extrabold uppercase tracking-[0.07em] text-muted">{title}</h2>
-      <div className="flex flex-col gap-3">{children}</div>
+    <section className="mt-5 px-4" aria-label={title}>
+      <h2 className="pb-2 text-[12px] font-extrabold uppercase tracking-[0.07em] text-muted">{title}</h2>
+      <div className="flex min-w-0 flex-col gap-2">{children}</div>
     </section>
   );
 }
@@ -120,7 +119,7 @@ function BrowserNote() {
   return (
     <article className="rounded-2xl bg-surface p-4 stroke">
       <p className="font-bold">This browser doesn’t run agents</p>
-      <p className="pt-1 text-[15px] text-text-2">Questions and tasks sent to you here wait for you. An agent runs on a computer with AgentNet installed.</p>
+      <p className="pt-1 text-[15px] text-text-2">Set up an agent in AgentNet on the computer where it runs. Requests sent to this browser wait for you.</p>
       <Button variant="act" className="mt-3" onClick={() => store.showTab("settings", "assistant")}>Connect an agent on your computer</Button>
     </article>
   );
@@ -168,15 +167,10 @@ function NamedAgents({ o, catalog }: { o: T.Overview; catalog: Load<T.AgentCatal
           <button type="button" className="min-h-11 font-bold underline underline-offset-2" onClick={() => change({ action: "publish" }, "Shared.")}>Share again</button>
         </p>
       )}
-      <Button variant="act" size="sm" icon={<IconPlus size={18} />} onClick={() => setConnecting(true)}>Connect an agent</Button>
-      {available.length>0&&<button type="button" onClick={() => setSheet({})}
-        className="flex min-h-14 items-center gap-3 rounded-2xl border-[1.5px] border-dashed border-ink/40 px-4 text-left font-bold hover:bg-sunken">
-        <span className="grid size-9 place-items-center rounded-xl bg-agent text-agent-ink" aria-hidden="true"><IconPlus size={20} /></span>
-        <span className="flex-1">
-          New agent
-          {!agents.length && <span className="block text-[13px] font-medium text-muted">Its own name, program and folder, so others can pick it</span>}
-        </span>
-      </button>}
+      <div className="flex flex-wrap gap-2 pt-1">
+        <Button variant="act" size="sm" icon={<IconPlus size={18} />} onClick={() => setConnecting(true)}>Connect an agent</Button>
+        {available.length>0&&<Button variant="outline" size="sm" onClick={() => setSheet({})}>New agent</Button>}
+      </div>
       {(sheet?.agent||available.length>0)&&<AgentSheet open={!!sheet} onOpenChange={(v) => !v && setSheet(null)} harnesses={sheet?.agent?editable:available} agent={sheet?.agent} onSave={save} />}
       <ConfirmSheet open={!!off} onOpenChange={(v) => !v && setOff(null)} title={"Turn off " + (off?.record.label || "") + "?"}
         body="It stops taking questions and tasks on this computer. Earlier messages stay. You can turn it on again."
@@ -190,15 +184,14 @@ function NamedAgent({ a, label, o, onToggle }: { a: T.CatalogAgent; label:string
   const chats = (o.person?.agents || []).filter((x) => x.address === o.me.address && x.agent_id === a.record.id).flatMap((x) => x.dms || []).filter((d) => d.state === "active");
   const status = !a.enabled ? "Turned off" : !r ? "On" : r.ready ? capital(r.harness || "") + " · Ready" : capital(r.harness || "") + " · Not ready";
   return (
-    <article className="rounded-2xl bg-surface p-3.5 stroke">
+    <article className="rounded-xl bg-surface p-3 stroke">
       <div className="flex items-center gap-3">
-        <AgentAvatar seed={a.record.id} size={48} mood={a.enabled && r?.ready ? "neutral" : "asleep"} />
+        <AgentAvatar seed={a.record.id} size={40} mood={a.enabled && r?.ready ? "neutral" : "asleep"} />
         <div className="min-w-0 flex-1">
-          <p className="truncate text-[17px] font-bold leading-tight">{label} {a.default&&<Tag>Default</Tag>}</p>
-          <p className="pt-0.5 text-[13px] text-muted">On {niceDevice(a.record.host)}</p>
-          <p className="pt-0.5 flex items-center gap-1.5 text-[14px] text-text-2"><Dot tone={!a.enabled ? "off" : r?.ready ? "ok" : "bad"} />{status}</p>
+          <div className="flex items-center gap-2"><p title={label} className="min-w-0 truncate text-[16px] font-bold leading-tight">{label}</p>{a.default&&<Tag className="shrink-0">Default</Tag>}</div>
+          <p className="pt-1 flex items-start gap-1.5 text-[13px] text-text-2"><span className="shrink-0 pt-1"><Dot tone={!a.enabled ? "off" : r?.ready ? "ok" : "bad"} /></span><span className="min-w-0 [overflow-wrap:anywhere]">{status} · {niceDevice(a.record.host)}</span></p>
         </div>
-        <label className="flex min-h-11 cursor-pointer items-center gap-2 pl-2">
+        <label className="flex min-h-11 shrink-0 cursor-pointer items-center gap-2 pl-2">
           <span className="sr-only">{a.record.label} is {a.enabled ? "on" : "off"}</span>
           <Switch.Root checked={a.enabled} onCheckedChange={(on) => onToggle(on)}
             className="relative flex h-7 w-12 shrink-0 items-center rounded-full bg-sunken p-0.5 stroke transition-colors duration-200 ease-out-soft data-[checked]:bg-ok-ink before:absolute before:-inset-2 before:content-['']">
@@ -209,8 +202,10 @@ function NamedAgent({ a, label, o, onToggle }: { a: T.CatalogAgent; label:string
       <AgentModelReport overview={o} host={a.record.host} agentId={a.record.id} />
       {a.enabled && r && !r.ready && r.problem && <p className="pt-2 text-[14px] text-danger">{r.problem}</p>}
       {chats.length > 0 && <Chats o={o} dms={chats} />}
-      <div className="mt-3"><AgentChatButton target={{host:a.record.host,agentId:a.record.id,harness:a.record.harness,hostKey:a.record.host_key,label,local:true,unavailable:!a.enabled || !r?.ready ? "This agent is not ready" : undefined}} /></div>
-      {a.enabled&&!a.default&&<MakeDefault id={a.record.id}/>}
+      <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2 [&>button]:max-w-full [&>button]:[overflow-wrap:anywhere]">
+        <AgentChatButton target={{host:a.record.host,agentId:a.record.id,harness:a.record.harness,hostKey:a.record.host_key,label,local:true,unavailable:!a.enabled || !r?.ready ? "This agent is not ready" : undefined}} />
+        {a.enabled&&!a.default&&<MakeDefault id={a.record.id}/>}
+      </div>
       {r && (
         <Details>
           <Row k="Works in"><span className="font-mono text-[14px] [overflow-wrap:anywhere]">{r.dir}</span></Row>
@@ -280,7 +275,7 @@ function Others({ o }: { o: T.Overview }) {
   }
   const joined = useEverJoined(rows.filter((r) => r.state === "dismissed"));
   if (!rows.length) {
-    return <p className="rounded-2xl border-[1.5px] border-dashed border-ink/25 px-4 py-4 text-[15px] text-text-2">No one else’s agents yet. When someone brings their agent into a chat with you, it shows up here.</p>;
+    return <p className="py-1 text-[14px] text-text-2">Agents other people bring into your chats appear here.</p>;
   }
   return (
     <ul className="flex flex-col gap-2">

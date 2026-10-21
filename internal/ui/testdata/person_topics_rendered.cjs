@@ -82,6 +82,8 @@ if(localStorage.getItem('fictional-late'))overview.dms.push(summary(views[ids.la
 let changed,open,release;
 const requests=[];window.fixture={ids,views,overview,requests,native,delay:'',release:()=>release?.(),open:(...args)=>open(...args),addLate:()=>{localStorage.setItem('fictional-late','1');if(!overview.dms.some(d=>d.id===ids.late))overview.dms.push(summary(views[ids.late]));changed?.({type:'change',seq:++overview.seq});},tick:()=>changed?.({type:'change',seq:++overview.seq})};
 fixture.unreadCounts=()=>{unreadCounts();if(${process.env.AGENTNET_UNREAD_REVIEW==='1'})overview.unread_total=overview.dms.reduce((n,d)=>n+d.unread,0);};
+const unreadRevisions=new Map();
+fixture.markUnread=(conv,id)=>{const m=views[conv].messages.find(m=>m.id===id),key=conv+'/'+id,rev=Math.max(unreadRevisions.get(key)||0,m.attention?.rev||0)+1;unreadRevisions.set(key,rev);Object.assign(m,{unread:true,attention:{rev,writer:'11111111-11111111-11111111-11111111'}});};
 fixture.pauseRead=${process.env.AGENTNET_UNREAD_REVIEW==='1'};
 fixture.scheduleRows=[];fixture.scheduleStages=new Map();fixture.scheduleStageCount=0;fixture.scheduleAudience={persons:[me.person,peer.person],pids:[views[ids.main].guests[0].pid]};fixture.loseScheduleResponse=true;
 fixture.scheduleStage=async file=>{const bytes=new Uint8Array(await file.arrayBuffer()),sha256=[...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(x=>x.toString(16).padStart(2,'0')).join('');const id='stage-'+(++fixture.scheduleStageCount);fixture.scheduleStages.set(id,{name:file.name,size:file.size,sha256});return id;};
@@ -428,36 +430,43 @@ const server=http.createServer((req,res)=>{
     await page.waitForFunction(()=>!fixture.views[fixture.ids.main].messages.find(m=>m.id==='main-native').unread);
     await all().click();await rowRead('Invoice review',false);await closeList();
     const attempts=(await reads()).length;
-    await page.evaluate(()=>{fixture.failRead=true;fixture.views[fixture.ids.main].messages.find(m=>m.id==='main-native').unread=true;fixture.unreadCounts();fixture.tick();});
+    await page.evaluate(()=>{fixture.failRead=true;fixture.markUnread(fixture.ids.main,'main-native');fixture.unreadCounts();fixture.tick();});
+    // A deliberate mark survives its current visit. Re-enter the exact
+    // topic before exercising a failed acknowledgement of its new generation.
+    await page.getByRole('navigation',{name:'Topics',exact:true}).getByRole('button',{name:'Main',exact:true}).click();await shown('Main planning').waitFor();
+    await choose(/Invoice review/);await shown('Invoice message').waitFor();
     await page.waitForFunction(before=>fixture.requests.filter(r=>r.path==='/api/act'&&r.body?.do==='read').flatMap(r=>r.body.ids).length>before,attempts);
     assert.equal(await readFlag('main','main-native'),true,'failed acknowledgement preserves unread');
     await all().click();await rowRead('Invoice review',true);await closeList();
     await page.evaluate(()=>{fixture.failRead=false;fixture.tick();});
     await page.waitForFunction(()=>!fixture.views[fixture.ids.main].messages.find(m=>m.id==='main-native').unread);
-    // A message arriving in Main while its sibling is selected is unseen.
-    await page.evaluate(()=>{fixture.views[fixture.ids.main].messages.find(m=>m.id==='main-turn').unread=true;fixture.unreadCounts();fixture.tick();});
+    // A fresh deliberate Main generation stays unseen while its sibling is selected.
+    await page.evaluate(()=>{fixture.markUnread(fixture.ids.main,'main-turn');fixture.unreadCounts();fixture.tick();});
     await all().click();await rowRead('Invoice review',false);await closeList();
     assert.equal(await readFlag('main','main-turn'),true,'hidden Main remains unread');
     await page.getByRole('navigation',{name:'Topics',exact:true}).getByRole('button',{name:'Main',exact:true}).click();await shown('Main planning').waitFor();
     await page.waitForFunction(()=>!fixture.views[fixture.ids.main].messages.find(m=>m.id==='main-turn').unread);
     // A delayed response from a view already left must not acknowledge it.
-    await page.evaluate(()=>{fixture.views[fixture.ids.other].messages.find(m=>m.id==='other-turn').unread=true;fixture.unreadCounts();fixture.delay=fixture.ids.other;fixture.open(fixture.ids.other,'conversation');});
+    await page.evaluate(()=>{fixture.markUnread(fixture.ids.other,'other-turn');fixture.unreadCounts();fixture.delay=fixture.ids.other;fixture.open(fixture.ids.other,'conversation');});
     await page.waitForFunction(()=>fixture.delay==='');
     await page.evaluate(()=>fixture.open(fixture.ids.main,'conversation'));await shown('Main planning').waitFor();
     await page.evaluate(()=>fixture.release());await page.waitForTimeout(180);
     assert.equal(await readFlag('other','other-turn'),true,'stale view response remains unread');
     // Group topic chips change the displayed draft topic without reopening the DM.
-    await page.evaluate(()=>{const v=fixture.views[fixture.ids.main];v.kind='group';v.title='Fictional group';v.messages.find(m=>m.id==='main-native').unread=true;Object.assign(fixture.overview.dms.find(d=>d.id===v.id),{kind:'group',title:v.title});fixture.unreadCounts();fixture.tick();});
+    await page.evaluate(()=>{const v=fixture.views[fixture.ids.main];v.kind='group';v.title='Fictional group';fixture.markUnread(v.id,'main-native');Object.assign(fixture.overview.dms.find(d=>d.id===v.id),{kind:'group',title:v.title});fixture.unreadCounts();fixture.tick();});
     const groupNav=page.getByRole('navigation',{name:/^Topics with /,exact:false});
     await groupNav.getByRole('button',{name:/^All/}).waitFor();
     assert.equal(await readFlag('main','main-native'),true,'group sibling stays unread before selection');
     await groupNav.getByRole('button',{name:/^All/}).click();await list().getByRole('button',{name:/Invoice review/}).click();
     await shown('Invoice message').waitFor();await page.waitForFunction(()=>!fixture.views[fixture.ids.main].messages.find(m=>m.id==='main-native').unread);
     await groupNav.getByRole('button',{name:/^Main(?: flow)?$/,exact:true}).click();await shown('Main planning').waitFor();
-    await page.evaluate(()=>{fixture.views[fixture.ids.main].messages.find(m=>m.id==='main-turn').unread=true;fixture.unreadCounts();fixture.open('missing-group-target','message',{conv:fixture.ids.main});});
+    await page.evaluate(()=>{fixture.markUnread(fixture.ids.main,'main-turn');fixture.unreadCounts();fixture.tick();fixture.open('missing-group-target','message',{conv:fixture.ids.main});});
     await page.waitForTimeout(120);
     assert.equal(await readFlag('main','main-turn'),true,'absent exact target does not read fallback Main');
     await groupNav.getByRole('button',{name:/^Main(?: flow)?$/,exact:true}).click();
+    assert.equal(await readFlag('main','main-turn'),true,'same Main selection preserves its deliberate unread generation');
+    await groupNav.getByRole('button',{name:/^All/}).click();await list().getByRole('button',{name:/Invoice review/}).click();await shown('Invoice message').waitFor();
+    await groupNav.getByRole('button',{name:/^Main(?: flow)?$/,exact:true}).click();await shown('Main planning').waitFor();
     await page.waitForFunction(()=>!fixture.views[fixture.ids.main].messages.find(m=>m.id==='main-turn').unread);
     await page.evaluate(()=>{fixture.views[fixture.ids.main].messages.push({id:'missing-group-target',lid:'missing-group-target',topic:fixture.native,dir:'in',from:'casey/desktop',kind:'message',body:'Arrived after manual Main choice',at:'2026-10-06T12:00:00Z',state:'stored',unread:true,actions:[]});fixture.unreadCounts();fixture.tick();});
     await page.waitForTimeout(120);await shown('Main planning').waitFor();

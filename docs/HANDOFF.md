@@ -52,12 +52,44 @@ unfinished selection and repaired fixture. Audits are
 `.agentnet/v091-followup/final-client-coverage.json` and
 `.agentnet/v091-followup/final-ui-coverage.json`.
 
-No new release/deployment is being prepared in this pass; source corrections
-remain uninstalled. Preserve the two owner-authored drafts below. Separate
-Backlog items are MEL-671 (left-panel redesign across all flows), MEL-672
-(native download-control contrast), MEL-673 (Outbox section attention badges)
-and MEL-674 (5–10 second stale unread/reminder attention). These reports do not
-establish a shared cause and are outside this correction batch.
+The owner subsequently activated MEL-671–674 for implementation, with no new
+release or deployment. Preserve both owner-authored drafts below. This second
+batch gives Agents and Review bounded workspace views, compacts list/settings
+flows, makes native download controls readable across system themes, and shows
+Outbox section counts from the same due-reminder source as its navigation.
+Confirmed visible reads and reminder changes update attention from exact saved
+results while retaining newer-generation and stale-response guards. An older
+archived non-latest thread omitted from the overview still waits for the normal
+overview to reconcile its aggregate; no speculative subtraction is made.
+
+MEL-675 tracks the additional Pixel 6 notification report. Before 02ec0348 the
+connection channel had default badging enabled. Android retains registered
+channel choices through upgrades; the current no-badge factory does not prove
+an upgraded phone’s state. The correction reads the actual channel and offers
+its exact Android settings only when badging is enabled, separately from Chat
+activity. It neither replaces channels nor changes notification preferences.
+Android’s required foreground-service indicator remains. Physical Pixel
+behavior and OS-channel recovery are not yet qualified. All these corrections
+remain uninstalled; verification evidence for this second batch is recorded
+separately from the completed baseline qualification above.
+
+The same Claude conversation c86bd851-a8b5-43cf-b989-27cd6ac81faa reviewed this
+second batch through Herdr. Readiness, exact session, completion and owned-pane
+cleanup were verified. A same-ID pending-open race was reproduced and repaired;
+thread mutes were verified unsupported, and complete view counts retain unseen
+viewport rows. Rendered testing also repaired Review-to-chat navigation and
+New Chat keyboard focus return. Final desktop/phone panel, Android-host channel recovery, Outbox, native
+reminder-time, download contrast/keyboard and real Chromium IndexedDB checks
+have passing evidence. Android’s 42 Kotlin unit tests pass and instrumentation
+compiles after regenerating its stale core binding; instrumentation was not run
+on a phone/emulator. The static/mobile-core race batch passes (61 parent passes, two explicit skips).
+The first UI partition reached its aggregate 600s budget after 67 parent passes
+and 42 skips, with no individual failure; its 138 unfinished parents and the
+second official partition are running at the same bounds. Completed results
+are retained.
+The temporary evidence root is `.agentnet/oct21-ui`; opt-in skips are not passes.
+No new dependency or polling was added. The compressed Comic entry grows by
+860 bytes versus cf883068; this is not a minimum-hardware performance claim.
 
 Current normal fixtures were updated for the new harness uniqueness rule
 without removing assertions or changing timeouts. Three existing native opt-in

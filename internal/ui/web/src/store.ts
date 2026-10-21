@@ -7,7 +7,7 @@
 // can act on another workspace by accident.
 import { pendingSends } from "./optimistic.mjs";
 import { useSyncExternalStore } from "react";
-import { api, errorText, type Api, type T } from "./api";
+import { api, errorText, type Api, type ReminderResult, type T } from "./api";
 import type { Host, HostEvent, OpenContext } from "./host";
 import { currentCatalogAgents, messageTarget } from "./model";
 import { mainPreferences, personRoots } from "./person-topics.mjs";
@@ -111,6 +111,8 @@ export class Store {
   private openRefresh: Promise<boolean> | null = null;
   private openAgain = false;
   private overviewRequest = 0;
+  private confirmedReads = new Map<string, { kind: "dm" | "thread"; id: string; seq: number; unread: number }>();
+  private confirmedReminders = new Map<string, { seq: number; reminder: T.ReminderView | null }>();
   private topicChanges = new Map<string, Promise<{ note: string } | undefined>>();
   private again = false;
   private catalogsAgain = false;
@@ -324,12 +326,80 @@ export class Store {
     const request = ++this.overviewRequest;
     const o = await this.api.overview();
     if (!this.alive || request !== this.overviewRequest) return;
-    const patch: Partial<State> = { ...(catalogs ? {contentRevision:this.state.contentRevision+1}:{}), overview: share(this.state.overview, o), loadError: "", conn: "live" };
+    const patch: Partial<State> = { ...(catalogs ? {contentRevision:this.state.contentRevision+1}:{}), overview: share(this.state.overview, this.attentionOverview(o)), loadError: "", conn: "live" };
     if (first || !this.state.version) patch.version = o.version;
     else if (o.version && o.version !== this.state.version) patch.newVersion = o.version;
     this.set(patch);
     if (o.groups) this.set({ invitations: share(this.state.invitations, o.group_invitations || []) });
     if (catalogs) void this.loadAgentNames();
+  }
+
+  // A small committed result can arrive before an older workspace build.
+  // Preserve only its exact attention scope until the overview catches up.
+  private attentionOverview(o: T.Overview): T.Overview {
+    for (const [key, read] of this.confirmedReads) {
+      if (o.seq >= read.seq) this.confirmedReads.delete(key);
+      else o = this.readOverview(o, read);
+    }
+    for (const [message, result] of this.confirmedReminders) {
+      if (o.seq >= result.seq) this.confirmedReminders.delete(message);
+      else o = this.reminderOverview(o, message, result.reminder);
+    }
+    return o;
+  }
+
+  private readOverview(o: T.Overview, read: { kind: "dm" | "thread"; id: string; unread: number }): T.Overview {
+    const summary = read.kind === "dm" ? o.dms?.find(d => d.id === read.id)
+      : o.threads?.find(t => t.id === read.id) || o.topics?.find(t => t.latest.id === read.id)?.latest;
+    if (!summary || summary.unread === read.unread) return o;
+    const delta = read.unread - summary.unread;
+    const totals = {
+      ...(typeof o.unread_total === "number" ? { unread_total: Math.max(0, o.unread_total + delta) } : {}),
+      ...(typeof o.alert_total === "number" && !(read.kind === "dm" && o.notify?.mutes?.includes(read.id)) ? { alert_total: Math.max(0, o.alert_total + delta) } : {}),
+    };
+    if (read.kind === "dm") return { ...o, ...totals, dms: o.dms!.map(d => d.id === read.id ? { ...d, unread: read.unread } : d) };
+    return { ...o, ...totals,
+      threads: o.threads?.map(t => t.id === read.id ? { ...t, unread: read.unread } : t) || null,
+      topics: o.topics?.map(t => t.latest.id === read.id ? { ...t, latest: { ...t.latest, unread: read.unread },
+        ...(t.latest.state === "archived" ? { archived_unread: Math.max(0, t.archived_unread + delta) } : {}) } : t),
+    };
+  }
+
+  private confirmReadOverview(o: NonNullable<Open>, view: View) {
+    const overview = this.state.overview, seq = view.seq;
+    if (!overview || typeof seq !== "number" || seq < overview.seq) return;
+    const read = { kind: o.kind, id: o.id, seq, unread: (view.messages || []).filter(m => m.unread).length };
+    const key = JSON.stringify([o.kind, o.id]);
+    if ((this.confirmedReads.get(key)?.seq || 0) > seq) return;
+    this.confirmedReads.set(key, read);
+    this.set({ overview: share(overview, this.readOverview(overview, read)) });
+  }
+
+  private reminderOverview(o: T.Overview, message: string, reminder: T.ReminderView | null): T.Overview {
+    const reminders = (o.reminders || []).filter(r => r.message !== message);
+    if (reminder) reminders.push(reminder);
+    reminders.sort((a, b) => a.due.localeCompare(b.due) || a.message.localeCompare(b.message));
+    return { ...o, reminders };
+  }
+
+  async changeReminder(fn: (a: Api) => Promise<ReminderResult>, ok?: string): Promise<ReminderResult | undefined> {
+    if (!this.alive) return undefined;
+    try {
+      const result = await fn(this.api);
+      if (!this.alive) return undefined;
+      const o = this.state.overview;
+      if (o && typeof result.seq === "number" && result.message && result.reminder !== undefined &&
+          result.seq >= o.seq && result.seq >= (this.confirmedReminders.get(result.message)?.seq || 0)) {
+        this.confirmedReminders.set(result.message, { seq: result.seq, reminder: result.reminder });
+        this.set({ overview: share(o, this.reminderOverview(o, result.message, result.reminder)) });
+      }
+      if (ok) this.toast(ok, "ok");
+      void this.refetch();
+      return result;
+    } catch (e) {
+      if (this.alive && errorText(e) !== "stale or disconnected workspace") this.toast(errorText(e), "error");
+      return undefined;
+    }
   }
 
   private async recover(schedule: number[]) {
@@ -404,10 +474,10 @@ export class Store {
     if (!cur || cur.kind !== o.kind || cur.id !== o.id || differentPending) this.beginReadVisit(undefined, o);
     else if (this.readAcknowledged.entering === cur) this.readAcknowledged.entering = o;
     if ((cur && cur.kind === o.kind && cur.id === o.id) || cached) {
-      this.set({ open: o, pending: null, ...this.viewPatch(o, cached ?? null, cur?.id === o.id) });
+      this.set({ tab: "chats", open: o, pending: null, ...this.viewPatch(o, cached ?? null, cur?.id === o.id) });
       await this.loadOpen(o);
     } else {
-      this.set({ pending: o });
+      this.set({ tab: "chats", pending: o });
       const topicSwitch = cur?.kind === "thread" && o.kind === "thread";
       const slow = topicSwitch ? undefined : setTimeout(() => {
         if (this.state.pending === o) this.set({ open: o, pending: null, dm: null, thread: null, typing: null });
@@ -495,6 +565,7 @@ export class Store {
   // follows uses the same request. A read only: nothing is marked read by
   // it. It answers the view (loaded before, or now), or null.
   private fetching = new Map<string, Promise<View>>();
+  private latestFetch = new Map<string, Promise<View>>();
   prefetch(o: Open): Promise<View | null> {
     if (!o) return Promise.resolve(null);
     const have = this.state.views[o.id];
@@ -503,20 +574,27 @@ export class Store {
     if (!f) {
       f = (o.kind === "dm" ? this.api.dm(o.id) : this.api.thread(o.id)) as Promise<View>;
       this.fetching.set(o.id, f);
-      f.then((v) => { if (!this.state.views[o.id]) this.keep(o.id, v); }, () => {}).finally(() => this.fetching.delete(o.id));
+      this.latestFetch.set(o.id, f);
+      f.then((v) => { if (this.latestFetch.get(o.id) === f && !this.state.views[o.id]) this.keep(o.id, v); }, () => {
+        if (this.latestFetch.get(o.id) === f && !this.state.views[o.id]) this.latestFetch.delete(o.id);
+      }).finally(() => { if (this.fetching.get(o.id) === f) this.fetching.delete(o.id); });
     }
     return f.catch(() => null);
   }
 
   // keep remembers a loaded view (the most recent VIEWS_KEPT, and the open one).
   private keep(id: string, v: View) {
+    if (typeof v.seq === "number" && (this.state.views[id]?.seq || 0) > v.seq) return;
     v = share(this.state.views[id], { ...v, messages: this.sends.merge<T.DMMessage | T.Message>(id, v.messages || []) } as View);
     if (v === this.state.views[id]) return;
     const views: Record<string, View> = { ...this.state.views };
     delete views[id];
     views[id] = v;
     const ids = Object.keys(views);
-    for (const old of ids.slice(0, Math.max(0, ids.length - VIEWS_KEPT))) if (old !== this.state.open?.id) delete views[old];
+    for (const old of ids.slice(0, Math.max(0, ids.length - VIEWS_KEPT))) if (old !== this.state.open?.id) {
+      delete views[old];
+      if (!this.fetching.has(old)) this.latestFetch.delete(old);
+    }
     this.set({ views });
   }
 
@@ -676,21 +754,26 @@ export class Store {
   // loadOpen loads o (the open conversation, or the one being opened) and
   // shows it while it is still the one wanted; a load that lost the race is
   // only remembered.
-  private async loadOpen(o: Open = this.state.open): Promise<boolean> {
+  private async loadOpen(o: Open = this.state.open, fresh = false): Promise<boolean> {
     if (!o) return false;
     const visit = this.readAcknowledged;
     const wanted = () => this.alive && (this.state.open === o || this.state.pending === o);
     try {
       // Being opened: a prefetch already under way for it is that load.
-      let ahead = this.fetching.get(o.id);
+      let ahead = fresh ? undefined : this.fetching.get(o.id);
       if (!ahead) {
         ahead = (o.kind === "dm" ? this.api.dm(o.id) : this.api.thread(o.id)) as Promise<View>;
         this.fetching.set(o.id, ahead);
+        this.latestFetch.set(o.id, ahead);
         const loading = ahead;
         void ahead.finally(() => { if (this.fetching.get(o.id) === loading) this.fetching.delete(o.id); }).catch(() => {});
       }
-      const v: View = await ahead;
-      this.keep(o.id, v);
+      const loaded: View = await ahead;
+      if (!this.alive) return false;
+      if (this.latestFetch.get(o.id) === ahead) this.keep(o.id, loaded);
+      // A newer same-ID load may already be kept. It still completes this
+      // exact pending open; returning early would strand its focus/entry.
+      const v = this.state.views[o.id] || loaded;
       if (!wanted()) return false; // another conversation was opened meanwhile
       const first = this.state.pending === o;
       const newHost = o.kind === "dm" && ((v as T.DMThread).agents || []).some((a) => !(this.state.dm?.agents || []).some((b) => b.host.address === a.host.address));
@@ -701,11 +784,15 @@ export class Store {
         visit.entering = null;
       }
       this.set({ ...(first ? { open: o, pending: null } : {}), ...this.viewPatch(o, v, this.state.open?.id === o.id) });
+      // A newer deliberate mark/arrival may follow a confirmed read while
+      // its older overview is still blocked. Advance that exact snapshot too.
+      if (this.confirmedReads.has(JSON.stringify([o.kind, o.id]))) this.confirmReadOverview(o, v);
       if (newHost) void this.loadAgentNames();
       this.markOpenRead();
       if (o.kind === "dm") void this.loadTyping();
       return true;
     } catch (e) {
+      if (!this.fetching.has(o.id) && !this.state.views[o.id]) this.latestFetch.delete(o.id);
       if (!wanted()) return false;
       // Its placeholder then says it is still opening, with Try again.
       if (this.state.pending === o) this.set({ open: o, pending: null, dm: null, thread: null, typing: null });
@@ -807,16 +894,14 @@ export class Store {
       // returns to its plain ID; keep that acknowledgement within this visit.
       pending.filter(m => m.attention).forEach(m => acknowledged.add(m.id));
       if (!this.alive || !pending.some(m => m.unread)) return;
-      // Reuse the read push's loads first. Only a still-stale exact row or
-      // inconsistent badge needs another read; stream arrivals must not add
-      // a second workspace overview for every acknowledgement.
-      await this.openRefresh;
+      // Reuse a completed committed push; an older in-flight view cannot
+      // hold this read behind it. The exact fresh view proves a CAS result.
       const unread = new Set(pending.filter(m => m.unread).map(m => this.readKey(m)));
       const stale = () => this.state.views[o.id]?.messages?.some(m => unread.has(this.readKey(m)) && m.unread);
-      if (this.alive && this.state.open?.id === o.id && stale()) await this.refreshOpen();
-      await this.refresh;
+      if (this.state.open?.id === o.id && stale()) await this.loadOpen(this.state.open, true);
       if (!this.alive) return;
       const current = this.state.views[o.id];
+      if (this.state.open?.id === o.id && current) this.confirmReadOverview(o, current);
       const summary = o.kind === "dm" ? this.state.overview?.dms?.find(d => d.id === o.id) : this.state.overview?.threads?.find(t => t.id === o.id);
       if (this.state.open?.id === o.id && current && !stale() && summary?.unread === (current.messages || []).filter(m => m.unread).length) return;
       void this.load(false, false);

@@ -12,10 +12,14 @@ const fs = require('node:fs');
       await page.addInitScript(() => {
         window.androidAppCalls=[];window.androidNotificationGranted=true;window.androidNotificationCalls=[];
         window.androidNotificationChannel={importance:3,sound:true,vibration:true};
-        window.androidUpdateResult='';
+        window.androidUpdateResult='';window.androidConnectionBadging=true;window.androidConnectionCalls=[];
         let updateCalls=0;
         window.AgentNetAndroid = { postMessage(raw) {
           const request=JSON.parse(raw);
+          if(request.type.startsWith('connection:')) {
+            window.androidConnectionCalls.push(request.type);
+            queueMicrotask(()=>this.onmessage?.({data:JSON.stringify({id:request.id,ok:true,...(request.type==='connection:settings'?{opened:true}:{enabled:true,badging:window.androidConnectionBadging})})}));return;
+          }
           if(request.type.startsWith('notifications:')) {
             window.androidNotificationCalls.push(request.type);
             const channel=window.androidNotificationChannel;
@@ -60,7 +64,8 @@ const fs = require('node:fs');
         assert.equal(await page.locator('.an-root').evaluate(root=>root.scrollWidth<=root.clientWidth+1),true,`${width}px ${label} Comic overflow`);
       };
       const back=async()=>assert.equal(await page.evaluate(()=>window.agentnetNativeBack()),true);
-      await page.getByRole('button',{name:'All',exact:true}).waitFor();
+      await page.getByRole('list',{name:'Chats',exact:true}).getByRole('button').filter({hasText:'Vitalii'}).first().waitFor();
+      assert.equal(await page.getByRole('group',{name:'Show',exact:true}).count(),0,'a single-kind chat list avoids redundant filters');
       await snap('chats'); await fits('chats');
       // Open the wrapper's real Vitalii DM through its actual phone chat row.
       await page.getByRole('list',{name:'Chats',exact:true}).getByRole('button').filter({hasText:'Vitalii'}).first().click();
@@ -135,6 +140,15 @@ const fs = require('node:fs');
       await page.evaluate(()=>{window.androidNotificationGranted=false;window.agentnetNativeVisibility(true);});
       await page.getByRole('button',{name:/Notifications/}).first().click();
       await page.getByText('Stay connected in the background',{exact:true}).waitFor();
+      await page.getByText(/Android allows the background connection to show a notification dot/).waitFor();
+      await page.getByRole('button',{name:'Background notification settings',exact:true}).click();
+      assert.equal(await page.evaluate(()=>window.androidConnectionCalls.filter(x=>x==='connection:settings').length),1);
+      assert.equal(await page.evaluate(()=>window.androidNotificationCalls.filter(x=>x==='notifications:settings').length),0,'background recovery opens its own channel, not Chat activity');
+      assert.equal(await page.evaluate(()=>window.androidConnectionCalls.filter(x=>x==='connection:set').length),0,'recovery never toggles the connection');
+      await page.evaluate(()=>{window.androidConnectionBadging=false;window.agentnetNativeVisibility(true);});
+      await page.getByText(/Android allows the background connection to show a notification dot/).waitFor({state:'hidden'});
+      assert.equal(await page.getByRole('button',{name:'Background notification settings',exact:true}).count(),0,'fresh no-badge channel needs no repair action');
+
       await page.getByText(/Notifications are blocked in Android settings/).waitFor();
       const notificationToggle=page.getByRole('switch',{name:'Notifications',exact:true});
       assert.equal(await notificationToggle.getAttribute('aria-checked'),'false','stored On never overrules OS denial');

@@ -2283,7 +2283,13 @@ export class Engine {
     const fact={...ref,due,state,revision:Math.max(this.now(),(old?.revision||0)+1),writer:this.fp};
     if(!wire.validReminderMark(fact))throw Error("The original message identity is unavailable.");
     await this.store.write([{s:"kv",k:key,v:{...fact,key,person:own.person}}],checks);
-    this.changed();this.syncReminders().catch(()=>{});this.reminderWake();return {note:state==="pending"?"Reminder set.":state==="done"?"Reminder done.":"Reminder cancelled."};
+    this.changed();this.syncReminders().catch(()=>{});this.reminderWake();
+    const result={note:state==="pending"?"Reminder set.":state==="done"?"Reminder done.":"Reminder cancelled."};
+    try {
+      const seq=this.seq,current=await this.store.get("kv",key),original=current?.state==="pending"&&await this.reminderOriginal(current);
+      const reminder=original?{message:original.id,conv:current.conv||undefined,from:original.to?this.address:original.from,title:bodyPreview(original.body||""),due:iso(current.due*1000),overdue:current.due*1000<=this.now()}:null;
+      return {...result,seq,message:input.id,reminder};
+    }catch{return result;} // Readback failure cannot fail an already saved action.
   }
   async reminderReplyOps(rows,checks){
     const replies=rows.filter(r=>r.reply_to&&!r.sub&&!r.aside&&!["progress","failed","timeout","cancelled"].includes(r.status));if(!replies.length)return [];
@@ -12584,8 +12590,8 @@ export class Engine {
     case "/api/typing/preferences": return this.setTypingPreferences(body);
     case "/api/overview": return this.overview(u.searchParams.get("topics") !== "1");
     case "/api/unread": return this.unreadPage(u.searchParams);
-    case "/api/dm": { const id=u.searchParams.get("id"),read=await this.readView(id);return this.decorateChatTopics(await this.dm(id,read),read); }
-    case "/api/thread": return this.thread(u.searchParams.get("id"));
+    case "/api/dm": { const seq=this.seq,id=u.searchParams.get("id"),read=await this.readView(id);return {...await this.decorateChatTopics(await this.dm(id,read),read),seq}; }
+    case "/api/thread": { const seq=this.seq;return {...await this.thread(u.searchParams.get("id")),seq}; }
     case "/api/dm/new": return { id: await this.newDM(body.address) };
     case "/api/dm/send": return this.sendDM(body);
     case "/api/dm/resources": if(body===undefined)throw Error("Resources mutation requires POST.");return this.setConversationResources(body);

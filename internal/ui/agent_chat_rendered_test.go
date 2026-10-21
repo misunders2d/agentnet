@@ -11,6 +11,19 @@ func TestAgentChatStarterRendered(t *testing.T) {
 	testAgentChatRendered(t, false)
 }
 
+func TestComicPanelLayoutRendered(t *testing.T) {
+	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
+		t.Skip("opt-in: set AGENTNET_PLAYWRIGHT to an installed playwright-core")
+	}
+	cmd := exec.CommandContext(t.Context(), "node", "testdata/agent_chat_rendered.cjs")
+	cmd.Env = append(os.Environ(), "AGENTNET_PANEL_LAYOUT=1", "AGENTNET_SCREENSHOTS="+t.TempDir())
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), `"ok":true`) {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	t.Logf("%s", out)
+}
+
 func TestOwnAgentModelStatusRendered(t *testing.T) {
 	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
 		t.Skip("opt-in: set AGENTNET_PLAYWRIGHT to an installed playwright-core")

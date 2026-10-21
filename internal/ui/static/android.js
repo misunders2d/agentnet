@@ -36,6 +36,7 @@
   };
   window.__agentnetAndroid = Object.freeze({
     connection: () => request('connection:get'),
+    connectionSettings: () => request('connection:settings'),
     setConnection: enabled => request('connection:set', { enabled: !!enabled }),
     requestNotifications: () => request('notifications:request'),
     notificationStatus: () => request('notifications:status'),

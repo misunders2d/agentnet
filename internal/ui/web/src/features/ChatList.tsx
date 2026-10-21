@@ -83,7 +83,7 @@ export function ChatList() {
   }, []);
 
   const closeSearch = () => { setQuery(""); setSearching(false); };
-  const title = <h1 className={"font-display text-[34px] font-extrabold leading-none tracking-[-.03em] lg:text-[30px] " + stripe} data-part="list-title">{words.chats}</h1>;
+  const title = <h1 className={"font-display text-[34px] font-extrabold leading-none tracking-[-.03em] lg:text-[28px] " + stripe} data-part="list-title">{words.chats}</h1>;
 
   return (
     <section aria-label="Chats" data-part="list" className="pb-8 lg:pb-4">
@@ -106,7 +106,7 @@ export function ChatList() {
       )}
 
       {showSearch && (
-        <div className="flex items-center gap-1 px-4 pt-4">
+        <div className="flex items-center gap-1 px-4 pt-3">
           <label className="flex h-11 min-w-0 flex-1 items-center gap-2 rounded-xl bg-surface pl-3 stroke has-[input:focus-visible]:outline-3 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-agent-ink">
             <IconSearch size={18} stroke={2.2} aria-hidden="true" className="shrink-0" />
             <span className="sr-only">Search chats</span>
@@ -230,8 +230,8 @@ function SearchExtras({ query, overview, none }: { query: string; overview: T.Ov
   const { people, server } = candidates(overview);
   const fresh = people.concat(server).filter((c) => !c.chat && matches(query, c.name));
   if (!fresh.length) return none ? (
-    <div className="px-6 py-12 text-center">
-      <p className="font-display text-[20px] font-bold">Nothing matches “{query}”</p>
+    <div className="px-6 py-8 text-center">
+      <p className="font-display text-[20px] font-bold [overflow-wrap:anywhere]">Nothing matches “{query}”</p>
       <p className="mt-1 text-text-2">Try a name, a group, or words from a message.</p>
     </div>
   ) : null;
@@ -250,16 +250,11 @@ function SearchExtras({ query, overview, none }: { query: string; overview: T.Ov
 
 function NoChats() {
   return (
-    <div className="flex flex-col items-center px-8 pt-14 pb-6 text-center">
-      <div aria-hidden="true" className="relative mb-6 h-28 w-40">
-        <span className="absolute top-2 left-1 -rotate-6 rounded-[20px] rounded-bl-md bg-surface px-4 py-3 stroke shadow-pop-sm">
-          <span className="flex gap-1.5"><i className="working-dot size-2 rounded-full bg-muted" /><i className="working-dot size-2 rounded-full bg-muted" /><i className="working-dot size-2 rounded-full bg-muted" /></span>
-        </span>
-        <span className="absolute right-1 bottom-0 rotate-6"><AgentAvatar seed="hello" size={56} mood="waiting" /></span>
-      </div>
-      <h2 className="font-display text-[22px] font-bold">No chats yet</h2>
-      <p className="mt-1.5 max-w-[30ch] text-text-2">Start one with <b className="font-bold text-ink">New</b>: pick a person to talk to, or make a group.</p>
-      <div className="mt-5"><NewChatButton size="lg" /></div>
+    <div className="flex flex-col items-center px-6 py-8 text-center">
+      <span aria-hidden="true" className="mb-3"><AgentAvatar seed="hello" size={48} mood="waiting" /></span>
+      <h2 className="font-display text-[20px] font-bold">No chats yet</h2>
+      <p className="mt-1.5 max-w-[30ch] text-[14px] text-text-2">Choose a person or agent, or create a group.</p>
+      <div className="mt-4"><NewChatButton size="lg" /></div>
     </div>
   );
 }

@@ -364,7 +364,17 @@ class MainActivity : Activity() {
                         .setPrimaryClip(android.content.ClipData.newPlainText("AgentNet", text))
                     reply()
                 }
-                "connection:get" -> reply(JSONObject().put("enabled", host.keepConnected()))
+                "connection:get" -> {
+                    // Upgraded installs retain their registered channel's choices.
+                    // A newly constructed channel does not report those choices.
+                    val channel = getSystemService(android.app.NotificationManager::class.java).getNotificationChannel(CONNECTION_CHANNEL)
+                    reply(JSONObject().put("enabled", host.keepConnected()).put("badging", channel?.canShowBadge() == true))
+                }
+                "connection:settings" -> {
+                    require(resumed && request.keys().asSequence().all { it == "id" || it == "type" })
+                    startActivity(connectionNotificationSettings(packageName))
+                    reply(JSONObject().put("opened", true))
+                }
                 "connection:set" -> {
                     require(request.get("enabled") is Boolean)
                     val enabled = request.getBoolean("enabled")
