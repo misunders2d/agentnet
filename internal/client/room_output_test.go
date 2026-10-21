@@ -9,11 +9,13 @@ import (
 
 func TestRoomCompletedChildOutputAfterParentAnswer(t *testing.T) {
 	stub := installAgentStub(t)
+	Harnesses["roomparent"] = Harnesses["agentstub"]
+	t.Cleanup(func() { delete(Harnesses, "roomparent") })
 	w, _, packet, stops := groupTurnsFixture(t)
 	a, conv := w.alice, packet.State.Conv
 	var parts []ParticipationInfo
-	for _, name := range []string{"parent", "child"} {
-		entry, err := a.CreateLocalAgent(name, Responder{Harness: "agentstub", Dir: stub.dir})
+	for i, name := range []string{"parent", "child"} {
+		entry, err := a.CreateLocalAgent(name, Responder{Harness: []string{"roomparent", "agentstub"}[i], Dir: stub.dir})
 		if err != nil {
 			t.Fatal(err)
 		}

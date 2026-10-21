@@ -9,9 +9,9 @@
 // Setting this up approves nobody, shares no history and gives no
 // permission to send tasks. The default agent (used when a request names no
 // agent) shows at the top of the list with its own Change, the same setting
-// as Settings → Your agent; applying the setup leaves it as it is. When
-// several agents run one tool, one is used and said so; the others are
-// never turned off or merged here. A browser installs nothing: there it only
+// as Settings → Coding agents; each harness has one current agent on this
+// computer. Retired configurations keep their history. A browser installs
+// nothing: there it only
 // says where this is done.
 import { IconPlugConnected } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -21,13 +21,14 @@ import { useStore } from "../store";
 import { Button } from "../ui/Button";
 import { Tag } from "../ui/Tag";
 import {
-  agentStatus, agentsFor, applySetup, browserDevice, canHaveAgent, firstPicks, NAME_MAX, othersKept, pickFor, pickOf, readSetup, sameToolNote, selectable, startChosen, STATE_SENTENCE, STATE_WORDS, tools, notReady, nativeSelectable, watchSetupFocus,
+  agentStatus, agentsFor, applySetup, browserDevice, canHaveAgent, firstPicks, NAME_MAX, pickFor, readSetup, selectable, startChosen, STATE_SENTENCE, STATE_WORDS, tools, notReady, nativeSelectable, watchSetupFocus,
   type AgentPick, type SavedAgent, type SetupCalls, type Stage,
 } from "./AssistantSetup.model";
 import { FolderField } from "./AssistantSetup.folders";
 import { Card, Details, Fact, Hint, input } from "./Settings.parts";
 import { BrowserAppSetup } from "./BrowserAppSetup";
 import { DefaultAgentPanel, harnessName } from "./DefaultAgent";
+import { AgentSetupManager } from "./AgentSetupManager";
 
 const CARD_TITLE = "Set up your agents";
 const them = (n: number) => (n === 1 ? "it" : "them");
@@ -92,16 +93,19 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
       setView(v); setBusy("");
       if (!v.local) return;   // this installation sets nothing up: its note is shown instead
       setCatalog(c); setResponder({ v: r || null, error: responderError });
-      // Several agents for one tool: one is used (said so), never a forced choice.
+      // Keep the exact current identity while this setup is reviewed.
       setPicks(firstPicks(v, c, r)); setChosen(startChosen(v, c)); setReview(null); setDone(null);
       setStage("choose");
     } catch (e) { fail(e); }
   };
   useEffect(() => { if (start && !browser) void read(); }, []);
 
-  // After a change of the default agent: read it again (the server's own view).
+  // A default change may select a newly saved configuration. Refresh both
+  // views so the exact responder ID is not compared with an older catalog.
   const rereadDefault = () => {
-    store.api.responder().then((v) => { if (alive.current) setResponder({ v }); }, (e) => { if (alive.current) setResponder((r) => ({ ...r, error: errorText(e) })); });
+    Promise.all([store.api.responder(), store.api.agents()]).then(([v, c]) => {
+      if (alive.current) { setResponder({ v }); setCatalog(c); }
+    }, (e) => { if (alive.current) setResponder((r) => ({ ...r, error: errorText(e) })); });
   };
 
   const list = tools(view);
@@ -188,6 +192,7 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
 
         {stage === "choose" && <>
           <DefaultAgentPanel view={responder.v} error={responder.error} disabled={!!busy} onSaved={rereadDefault} />
+          <AgentSetupManager catalog={catalog} onSaved={read}/>
           <p className="text-[15px] text-text-2">Their own settings, skills, plugins and sign-in stay as they are. Ready checks the installed program and folder; it does not test sign-in.</p>
           <ChooseAll catalog={catalog} list={list} chosen={chosen} disabled={!!busy} onChange={setChosen} />
           <ul className="space-y-2.5">
@@ -197,8 +202,8 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
                   <input type="checkbox" checked={chosen.has(h.id)} disabled={!!busy || !selectable(h, catalog)} onChange={(e) => toggle(h.id, e.target.checked)}
                     aria-label={"Set up " + h.label} className="mt-1 size-5 shrink-0 accent-[var(--an-agent-ink)]" />
                   <span className="min-w-0 flex-1">
-                    <span className="flex flex-wrap items-center gap-2"><span className="font-semibold">{h.label}</span><Tag tone={agentStatus(h, catalog).tone}>{agentStatus(h, catalog).word}</Tag></span>
-                    <span className="block text-[14px] text-text-2">{agentStatus(h, catalog).sentence}</span>
+                    <span className="flex flex-wrap items-center gap-2"><span className="font-semibold">{h.label}</span><Tag tone={agentStatus(h, catalog, pickFor(picks, h, catalog, def)).tone}>{agentStatus(h, catalog, pickFor(picks, h, catalog, def)).word}</Tag></span>
+                    <span className="block text-[14px] text-text-2">{agentStatus(h, catalog, pickFor(picks, h, catalog, def)).sentence}</span>
                   </span>
                 </label>
                 <div className="px-3 pb-1"><NativeDetails h={h}/></div>
@@ -238,8 +243,8 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
           <ul className="space-y-2.5">
             {list.filter((h) => chosen.has(h.id)).map((h) => (
               <li key={h.id} className="space-y-1 rounded-2xl stroke bg-surface p-3">
-                <p className="flex flex-wrap items-center gap-2"><span className="font-semibold">{h.label}</span><Tag tone={agentStatus(h, catalog).tone}>{agentStatus(h, catalog).word}</Tag></p>
-                <p className="text-[15px] text-text-2">{agentStatus(h, catalog).sentence}</p>
+                <p className="flex flex-wrap items-center gap-2"><span className="font-semibold">{h.label}</span><Tag tone={agentStatus(h, catalog, pickFor(picks, h, catalog, def)).tone}>{agentStatus(h, catalog, pickFor(picks, h, catalog, def)).word}</Tag></p>
+                <p className="text-[15px] text-text-2">{agentStatus(h, catalog, pickFor(picks, h, catalog, def)).sentence}</p>
 
                 <NativeDetails h={h}/>
               </li>
@@ -293,36 +298,17 @@ function AgentChoice({ h, catalog, pick, disabled, onPick }: {
   }
   const mine = agentsFor(catalog, h.id);
   const name = "setup-agent-" + h.id;
-  const note = sameToolNote(h, catalog, pick);
   return (
     <div className="space-y-3 border-t border-hairline p-3">
-      {mine.length === 1 && pick.id === mine[0].record.id ? <p className="text-[14px] font-semibold">Agent: {mine[0].record.label}</p> : mine.length > 0 ? (
-        <fieldset>
-          <legend className="text-[14px] font-bold">Agent</legend>
-          {note && <p className="mt-1 text-[14px] text-text-2">{note}</p>}
-          <div className="mt-1.5 flex flex-col gap-2">
-            {mine.map((a) => (
-              <label key={a.record.id} className="flex min-h-12 cursor-pointer items-center gap-3 rounded-2xl stroke bg-surface px-3.5 has-[:checked]:bg-agent">
-                <input type="radio" name={name} checked={pick.id === a.record.id} disabled={disabled} onChange={() => onPick(pickOf(a))} className="size-5 accent-[var(--an-agent-ink)]" />
-                <span className="min-w-0 flex-1">
-                  <span className="block font-semibold [overflow-wrap:anywhere]">{a.record.label}</span>
-                  <span className="block font-mono text-[12px] text-text-2 [overflow-wrap:anywhere]">{a.responder?.dir}</span>
-                </span>
-              </label>
-            ))}
-          </div>
-          <Hint className="mt-1.5 px-1">Nothing is turned off here. To turn one off, use its switch in Agents.</Hint>
-        </fieldset>
-      ) : (
-        <div>
-          <label htmlFor={name} className="mb-1.5 block text-[14px] font-bold">Agent name</label>
-          <input id={name} className={input} value={pick.label} maxLength={NAME_MAX} disabled={disabled} autoComplete="off"
-            onChange={(e) => onPick({ ...pick, label: e.target.value })} />
-        </div>
-      )}
-      <FolderField label={"Where " + (pick.label.trim() || h.label) + " works"} value={pick.dir} disabled={disabled}
+      {!mine.length && !pick.id && <div>
+        <label htmlFor={name} className="mb-1.5 block text-[14px] font-bold">Name in AgentNet</label>
+        <input id={name} className={input} value={pick.label} maxLength={NAME_MAX} disabled={disabled} autoComplete="off"
+          onChange={(e) => onPick({ ...pick, label: e.target.value })} />
+      </div>}
+      <FolderField label={"Where " + h.label + " works"} value={pick.dir} disabled={disabled}
         onChange={(dir) => onPick({ ...pick, dir })}
-        hint={pick.id ? "It keeps its name; only its folder changes if you choose another." : "Others can pick it in a conversation. It works there with your own setup and permissions."} />
+        hint="New requests start here, with your own setup and permissions." />
+
     </div>
   );
 }
@@ -330,12 +316,10 @@ function AgentChoice({ h, catalog, pick, disabled, onPick }: {
 /** AgentLine: what the review will do with the tool's agent, in words. */
 function AgentLine({ h, catalog, pick }: { h: T.AssistantSetupHarness; catalog: T.AgentCatalogView | null; pick: AgentPick }) {
   if (!canHaveAgent(catalog, h.id)) return <p className="text-[14px] text-text-2">An AgentNet agent cannot run with this tool here yet.</p>;
-  const others = othersKept(h, catalog, pick);
   return (
     <>
-      <p className="text-[14px]"><span className="font-semibold">{pick.id ? "Keeps its agent: " : "New agent: "}</span>{pick.label.trim()}</p>
+      <p className="text-[14px]"><span className="font-semibold">{pick.id ? "Existing setup: " : "New setup: "}</span>{pick.label.trim()}</p>
       <p className="text-[14px]"><span className="font-semibold">Works in: </span><span className="font-mono text-[13px] [overflow-wrap:anywhere]">{pick.dir}</span></p>
-      {others.length > 0 && <p className="text-[14px]"><span className="font-semibold">Stays as it is: </span>{others.join(", ")}</p>}
     </>
   );
 }

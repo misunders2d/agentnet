@@ -7,7 +7,7 @@ import { Switch } from "@base-ui/react/switch";
 import { IconChevronRight, IconDevices, IconPlus, IconSettings } from "@tabler/icons-react";
 import { errorText, type T } from "../api";
 import { useAgentNames, useApp } from "../context";
-import { concreteAgentLabel, agentName, agentWhere, deviceKind, niceDevice, personName, runsAgent } from "../model";
+import { concreteAgentLabel, currentAgentTarget, currentCatalogAgents, agentName, agentWhere, deviceKind, niceDevice, personName } from "../model";
 import { useStore, type Store } from "../store";
 import { AgentAvatar } from "../ui/Avatar";
 import { Button } from "../ui/Button";
@@ -138,7 +138,11 @@ function NamedAgents({ o, catalog }: { o: T.Overview; catalog: Load<T.AgentCatal
   if (catalog.error) return <p className="px-1 text-[14px] text-muted">Agents aren’t available here: {catalog.error}</p>;
   if (!c?.local) return null;
   if (connecting) return <AssistantSetup start onDone={() => setConnecting(false)} />;
-  const agents = c.agents || [];
+  const localAgents=(c.agents || []).filter(a=>a.record.host===o.me.address&&a.record.host_key===o.me.fingerprint);
+  const agents = currentCatalogAgents(localAgents,true);
+  const occupied=new Set(localAgents.filter(a=>a.enabled).map(a=>a.record.harness));
+  const available=(c.harnesses||[]).filter(h=>h.found&&!occupied.has(h.name));
+  const editable=(c.harnesses||[]).filter(h=>h.found&&(h.name===sheet?.agent?.record.harness||!occupied.has(h.name)));
   const change = async (body: T.AgentCatalogChange, ok: string) => {
     const r = await store.run((api) => api.changeAgents(body));
     if (!r) return false;
@@ -146,9 +150,15 @@ function NamedAgents({ o, catalog }: { o: T.Overview; catalog: Load<T.AgentCatal
     store.toast(r.published ? ok : ok + " Others can’t see the change yet.", r.published ? "ok" : undefined);
     return true;
   };
-  const save = (s: AgentSetup) => sheet?.agent
-    ? change({ action: "update", id: sheet.agent.record.id, harness: s.harness, dir: s.dir }, sheet.agent.record.label + " is on.")
-    : change({ action: "create", label: s.label, harness: s.harness, dir: s.dir }, s.label + " is ready.");
+  const save = (s: AgentSetup) => {
+    if(localAgents.some(a=>a.enabled&&a.record.harness===s.harness&&a.record.id!==sheet?.agent?.record.id)){
+      store.toast("That program already has an enabled agent on this computer. Nothing changed.","error");
+      return Promise.resolve(false);
+    }
+    return sheet?.agent
+      ? change({ action: "update", id: sheet.agent.record.id, harness: s.harness, dir: s.dir }, sheet.agent.record.label + " is on.")
+      : change({ action: "create", label: s.label, harness: s.harness, dir: s.dir }, s.label + " is ready.");
+  };
   return (
     <>
       {agents.map((a) => <NamedAgent key={a.record.id} a={a} label={concreteAgentLabel(a.record,agents)} o={o} onToggle={(on) => (on ? setSheet({ agent: a }) : setOff(a))} />)}
@@ -159,15 +169,15 @@ function NamedAgents({ o, catalog }: { o: T.Overview; catalog: Load<T.AgentCatal
         </p>
       )}
       <Button variant="act" size="sm" icon={<IconPlus size={18} />} onClick={() => setConnecting(true)}>Connect an agent</Button>
-      <button type="button" onClick={() => setSheet({})}
+      {available.length>0&&<button type="button" onClick={() => setSheet({})}
         className="flex min-h-14 items-center gap-3 rounded-2xl border-[1.5px] border-dashed border-ink/40 px-4 text-left font-bold hover:bg-sunken">
         <span className="grid size-9 place-items-center rounded-xl bg-agent text-agent-ink" aria-hidden="true"><IconPlus size={20} /></span>
         <span className="flex-1">
           New agent
           {!agents.length && <span className="block text-[13px] font-medium text-muted">Its own name, program and folder, so others can pick it</span>}
         </span>
-      </button>
-      <AgentSheet open={!!sheet} onOpenChange={(v) => !v && setSheet(null)} harnesses={c.harnesses || []} agent={sheet?.agent} onSave={save} />
+      </button>}
+      {(sheet?.agent||available.length>0)&&<AgentSheet open={!!sheet} onOpenChange={(v) => !v && setSheet(null)} harnesses={sheet?.agent?editable:available} agent={sheet?.agent} onSave={save} />}
       <ConfirmSheet open={!!off} onOpenChange={(v) => !v && setOff(null)} title={"Turn off " + (off?.record.label || "") + "?"}
         body="It stops taking questions and tasks on this computer. Earlier messages stay. You can turn it on again."
         confirm="Turn off" tone="danger" onConfirm={() => void change({ action: "disable", id: off!.record.id }, (off?.record.label || "It") + " is off.")} />
@@ -252,8 +262,9 @@ function Others({ o }: { o: T.Overview }) {
   const rows: Other[] = [];
   for (const p of o.people || []) {
     for (const a of p.agents || []) {
-      const dms = a.dms || [];
-      const live = dms.find((d) => d.state === "active") || dms[0];
+      if(!currentAgentTarget(a.agent_id,a.address,names[(a.agent_id||"")+"#host_key"],names))continue;
+      const live = (a.dms || []).find((d) => d.state === "active");
+      if(!live)continue;
       rows.push({
         key: a.address + "#" + (a.agent_id || ""), seed: a.agent_id || a.address, address: a.address, agentId: a.agent_id, owner: p,
         open: () => live && void store.open({ kind: "dm", id: live.conv }),
@@ -261,9 +272,11 @@ function Others({ o }: { o: T.Overview }) {
       });
     }
   }
-  for (const t of latestThreads(o).filter((t) => !t.notice_only && !isMine(t.peer, o) && runsAgent(t.peer, o) && !rows.some((r) => r.address === t.peer && !r.agentId))) {
-    const p = (o.people || []).find((x) => x.address === t.peer || (x.devices || []).some((d) => d.address === t.peer)) || null;
-    rows.push({ key: t.peer, seed: t.peer, address: t.peer, owner: p, open: () => void store.open({ kind: "thread", id: t.id, peer: t.peer }), where: "Talks with your agent directly", state: "active", conv: "", pid: "" });
+  for(const t of o.threads||[]){
+    const host=t.agent_host||t.peer;
+    if(t.notice_only||isMine(host,o)||!currentAgentTarget(t.agent_id,host,t.agent_key,names)||rows.some(r=>r.address===host&&r.agentId===t.agent_id))continue;
+    const p=(o.people||[]).find(x=>x.address===host||x.devices?.some(d=>d.address===host))||null;
+    rows.push({key:host+"#"+t.agent_id,seed:t.agent_id!,address:host,agentId:t.agent_id,owner:p,open:()=>void store.open({kind:"thread",id:t.id,peer:t.peer}),where:"Direct conversation",state:"active",conv:"",pid:""});
   }
   const joined = useEverJoined(rows.filter((r) => r.state === "dismissed"));
   if (!rows.length) {

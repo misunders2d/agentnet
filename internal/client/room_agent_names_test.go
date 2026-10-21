@@ -12,7 +12,9 @@ func TestRoomAgentNamesMatchSignedCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := w.alice.CreateLocalAgent("Codex", Responder{Harness: "stub", Dir: stub.dir})
+	Harnesses["roomnamesother"] = Harnesses["stub"]
+	t.Cleanup(func() { delete(Harnesses, "roomnamesother") })
+	second, err := w.alice.CreateLocalAgent("Codex", Responder{Harness: "roomnamesother", Dir: stub.dir})
 	if err != nil {
 		t.Fatal(err)
 	}

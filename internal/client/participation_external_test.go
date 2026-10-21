@@ -17,6 +17,8 @@ import (
 func externalAgentWorld(t *testing.T) (*world, *Agent, string, []string, *agentStub, []protocol.AgentRecord, func()) {
 	t.Helper()
 	stub := installAgentStub(t)
+	Harnesses["externalother"] = Harnesses["agentstub"]
+	t.Cleanup(func() { delete(Harnesses, "externalother") })
 	w, conv, lids, _ := agentWorld(t)
 	charlie := mustJoin(t, filepath.Join(t.TempDir(), "charlie"), w.aliceInvites("charlie"), "host")
 	stop := runAgent(t, charlie)
@@ -26,8 +28,8 @@ func externalAgentWorld(t *testing.T) (*world, *Agent, string, []string, *agentS
 		waitNamedAgentCaps(t, a)
 	}
 	var records []protocol.AgentRecord
-	for _, label := range []string{"Builder", "Reviewer"} {
-		record, err := charlie.CreateLocalAgent(label, Responder{Harness: "agentstub", Dir: stub.dir})
+	for i, label := range []string{"Builder", "Reviewer"} {
+		record, err := charlie.CreateLocalAgent(label, Responder{Harness: []string{"agentstub", "externalother"}[i], Dir: stub.dir})
 		if err != nil {
 			t.Fatal(err)
 		}

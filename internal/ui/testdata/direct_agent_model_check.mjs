@@ -42,11 +42,11 @@ assert.equal(pending.merge('self-thread',[{...request,id:'another',dir:'in'}]).l
 assert.equal(threadAuthor(answer,o,{},host,[{...request,state:'manual'},answer]).mine,true,'manual answer remains human');
 const remote = {...o.person,address:'owner/bezos',fingerprint:'owner-key',label:'Sergey'};
 const roomThread = {kind:'group',messages:[],members:[o.person],agents:[{pid:'remote',host:remote,inviter:o.person,state:'active',member:true,host_here:false},{pid:'local',host:o.person,inviter:o.person,state:'active',member:true,host_here:true}]};
-assert.equal(agentName(undefined,{},remote,o.person),'Your earlier default on Bezos','default remote agent keeps its exact host visible');
+assert.equal(agentName(undefined,{},remote,o.person),'Your agent history on Bezos','default remote agent keeps its exact host visible');
 assert.equal(agentName(agent,{[agent]:'Codex'},remote,o.person),'Your Codex','named agent retains its executor and verified owner');
 assert.equal(agentName(agent,{[agent]:'Codex'},{...remote,person:'another-owner',label:'Dana'},o.person),'Dana’s Codex','another person’s same-named executor stays distinguishable');
 assert.equal(agentName(agent,{[agent]:'Codex'},undefined,o.person),'Codex','missing host cannot invent an owner');
-assert.equal(participants(roomThread,o,{}).find(p=>p.pid==='remote').name,'Your earlier default on Bezos','mention/header identity agrees');
+assert.equal(participants(roomThread,o,{}).find(p=>p.pid==='remote').name,'Your agent history on Bezos','mention/header identity agrees');
 const roomSource=stripTypeScriptTypes((await readFile(new URL('../web/src/features/RoomPanel.model.ts',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'')).replace(/^export /gm,'');
 const room=runInNewContext(roomSource+'\nroom',{...model,eventKind:()=>null});
 const views=room(roomThread,o,{}).guests;
@@ -56,7 +56,7 @@ const oldDefault=threadAuthor({...answer,agent_id:undefined}, {...o,me:{...o.me,
 const twinA='a'.repeat(32),twinB='b'.repeat(32),twinNames={[twinA]:'Twin',[twinA+'#harness']:'pi',[twinB]:'Twin',[twinB+'#harness']:'pi'};
 const topic=(id,agent)=>({id,peer:host,agent_id:agent,agent_host:host,agent_key:'aaaaaaaa-aaaaaaaa-aaaaaaaa-aaaaaaaa',title:'Retained topic',last:'Done',last_at:'2026-10-20T10:00:00Z',count:1,review:0,unread:0,running:0,state:'archived',pending:false});
 const ta=topic('1'.repeat(32),twinA),tb=topic('2'.repeat(32),twinB),rows=model.chatList({...o,dms:[],threads:[],topics:[{peer:host,total:2,archived:2,archived_unread:0,latest:ta},{peer:host,total:3,archived:3,archived_unread:0,latest:tb}]},twinNames);
-assert.equal(rows.length,2,'same host and same name retain distinct agent rows even archived-only');assert.deepEqual(rows.map(r=>r.topicTotal).sort(),[2,3]);assert.notEqual(rows[0].title,rows[1].title,'same-name instances show stable disambiguators');
+assert.equal(rows.length,0,'historical same-harness identities without current catalog proof are not active recipients');const currentNames={...twinNames,[twinB+'#current']:'true',[twinB+'#host']:host,[twinB+'#host_key']:tb.agent_key};const currentRows=model.chatList({...o,dms:[],threads:[],topics:[{peer:host,total:2,archived:2,archived_unread:0,latest:ta},{peer:host,total:3,archived:3,archived_unread:0,latest:tb}]},currentNames);assert.equal(currentRows.length,1);assert.equal(currentRows[0].topicTotal,3,'current archived-only topic count remains exact');assert.equal(currentRows[0].open.id,tb.id);assert.equal(currentRows[0].title,'Twin · Pi','one current agent needs no raw identity suffix');assert.equal(model.historicalAgentName(twinA,twinNames),'Twin · aaaaaaaa','historical authors remain distinct');
 assert.equal(threadAgentID({peer:host,topic:ta,messages:[request,{...request,target:{address:host,agent_id:twinB}}]}),twinA,'immutable original binding wins over latest moved/display row');
 const historical=threadAuthor({...answer,agent_id:twinA},o,{...twinNames,[twinA+'#harness']:'claude'},host,[request,answer]);assert.match(historical.name,/Twin/);assert(!historical.name.includes('Claude'),'current harness never relabels historical output');
 console.log('Direct agent follow-up identity and self answer authorship PASS');

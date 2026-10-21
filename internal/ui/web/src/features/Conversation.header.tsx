@@ -23,6 +23,7 @@ import { agentLabel, eventKind, hostOf, roomTitle, threadAgentName, type Ctx } f
 import { usePortal } from "../owned";
 import { ProjectSpaceSheet } from "./Drive";
 import { AgentModelReport } from "./AgentModelReport";
+import { AgentHistoryRecovery } from "./AgentChat";
 import { copyText } from './Settings.parts';
 import { ConversationLinks } from "./Conversation.links";
 
@@ -253,6 +254,7 @@ export function Header({ ctx, wide, helpers: hs, canInvite }: { ctx: Ctx; wide: 
         </>}
       </Confirm>
     </header>
+    {th&&overview&&<AgentHistoryRecovery thread={th} overview={overview}/>}
     {ownAgentThread && overview && th && <div className="shrink-0 border-b border-outline bg-surface px-4 pb-2" data-part="agent-runtime">
       <AgentModelReport overview={overview} host={th.peer} agentId={th.topic?.agent_id} />
     </div>}

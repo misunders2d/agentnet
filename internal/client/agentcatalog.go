@@ -21,6 +21,18 @@ const agentCatalogConfig = "agent_catalog_v1"
 
 var ErrUnknownAgent = errors.New("selected agent is unknown, removed or belongs to another host")
 var ErrAgentCatalogFull = errors.New("local agent catalog is full; choose an existing configured agent as the default")
+var ErrAgentHarnessConflict = errors.New("this harness already has an enabled agent on this device; update that agent instead")
+var ErrAgentHarnessAmbiguous = errors.New("choose the current agent for this harness before using its legacy configurations")
+
+func enabledHarnessCount(entries []LocalAgentInfo, harness string) int {
+	n := 0
+	for _, entry := range entries {
+		if entry.Responder != nil && entry.Responder.Harness == harness {
+			n++
+		}
+	}
+	return n
+}
 
 // LocalAgentInfo contains private host configuration. Only Record is public.
 // A disabled identity remains here for historical authorship; it cannot run.
@@ -95,6 +107,9 @@ func (a *Agent) CreateLocalAgent(label string, r Responder) (protocol.AgentRecor
 	if err != nil {
 		return protocol.AgentRecord{}, err
 	}
+	if enabledHarnessCount(entries, r.Harness) != 0 {
+		return protocol.AgentRecord{}, ErrAgentHarnessConflict
+	}
 	if len(entries) >= protocol.MaxAgentCatalog {
 		return protocol.AgentRecord{}, errors.New("local agent catalog is full")
 	}
@@ -146,6 +161,9 @@ func (a *Agent) SetLocalAgentResponder(id string, r *Responder) error {
 	if !found {
 		return ErrUnknownAgent
 	}
+	if normalized != nil && enabledHarnessCount(entries, normalized.Harness) > 1 {
+		return ErrAgentHarnessConflict
+	}
 	raw, _ := json.Marshal(entries)
 	if _, err = tx.Exec(`UPDATE config SET v=? WHERE k=?`, string(raw), agentCatalogConfig); err != nil {
 		return err
@@ -175,18 +193,24 @@ func (a *Agent) SetLocalAgentResponder(id string, r *Responder) error {
 // ResolveExecutorIn must be called in the existing authority claim transaction.
 // A named target cannot fall back to the default, even after removal.
 func (a *Agent) ResolveExecutorIn(q dbq, id string, defaultResponder *Responder) (*ExecutorStamp, error) {
-	if id == "" {
-		if defaultResponder == nil {
-			return nil, nil
-		}
-		return &ExecutorStamp{Responder: copyResponder(*defaultResponder)}, nil
-	}
 	entries, err := a.localAgentsIn(q)
 	if err != nil {
 		return nil, err
 	}
+	if id == "" {
+		if defaultResponder == nil {
+			return nil, nil
+		}
+		if enabledHarnessCount(entries, defaultResponder.Harness) > 1 {
+			return nil, ErrAgentHarnessAmbiguous
+		}
+		return &ExecutorStamp{Responder: copyResponder(*defaultResponder)}, nil
+	}
 	for _, entry := range entries {
 		if entry.Record.ID == id && entry.Responder != nil {
+			if enabledHarnessCount(entries, entry.Responder.Harness) > 1 {
+				return nil, ErrAgentHarnessAmbiguous
+			}
 			r := copyResponder(*entry.Responder)
 			if err := validateResponder(&r); err != nil {
 				return nil, fmt.Errorf("selected local agent unavailable: %w", err)
@@ -207,7 +231,7 @@ func (a *Agent) PublicAgentCatalog() ([]protocol.AgentRecord, error) {
 	}
 	records := make([]protocol.AgentRecord, 0, len(entries))
 	for _, entry := range entries {
-		if entry.Responder != nil {
+		if entry.Responder != nil && enabledHarnessCount(entries, entry.Responder.Harness) == 1 {
 			records = append(records, entry.Record)
 		}
 	}

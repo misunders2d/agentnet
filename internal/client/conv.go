@@ -214,6 +214,11 @@ func (a *Agent) convSync(ctx context.Context) {
 			a.Logf("copying topic marks: %v", markErr)
 			a.convWork.due(convHistory)
 		}
+		reminders, reminderErr := a.syncReminders()
+		if reminderErr != nil {
+			a.Logf("copying reminders: %v", reminderErr)
+			a.convWork.due(convHistory)
+		}
 		placements, placementErr := a.syncDirectTopics()
 		if placementErr != nil {
 			a.Logf("copying direct topic placements: %v", placementErr)
@@ -229,7 +234,7 @@ func (a *Agent) convSync(ctx context.Context) {
 		if directErr != nil {
 			a.Logf("copying direct history: %v", directErr)
 		}
-		if roots || reads || invites || titles || marks || placements || models || more || direct {
+		if roots || reads || invites || titles || marks || reminders || placements || models || more || direct {
 			a.convWork.due(convHistory) // one page per sync; the next follows at once
 			a.kickNow()
 		}
@@ -255,7 +260,7 @@ func (a *Agent) relayFeatures(ctx context.Context) ([]string, error) {
 // hint (advertisedCaps) it is at most protocol.MaxAdvertisedCaps long;
 // rm1 (protocol.CapRoom) says this program enforces every room reader rule
 // (ROOM_V1 §2.1), so what rm1 implies (rcv1 among them) is not listed.
-var ownCaps = []string{protocol.CapMentionReaction, protocol.CapProactiveAgent, protocol.CapAgentOrganization, protocol.CapConversationAudience, protocol.CapContinuation, protocol.CapRootSync, protocol.CapControl, protocol.CapDriveSpace, protocol.CapDirectTopicSync, protocol.CapEnv2, protocol.CapRequestSteer, protocol.CapGroupInvitationManage, protocol.CapGuestAgent, protocol.CapHistoryArchive, protocol.CapHeadless, protocol.CapGroupHumanParticipation, protocol.CapModelSyncV2, protocol.CapNotify, protocol.CapTopicOrganization, protocol.CapOwnSyncV2, protocol.CapOwnSyncV3, protocol.CapPerson, protocol.CapReadSyncV2, protocol.CapConversationResources, protocol.CapRoom, protocol.CapSendGroup, protocol.CapTopicParticipation, protocol.CapTopicStateSync, protocol.CapSharedTopicTitle, protocol.CapTyping} // apx1 and aid1 are already implied by rm1.
+var ownCaps = []string{protocol.CapMentionReaction, protocol.CapProactiveAgent, protocol.CapAgentOrganization, protocol.CapConversationAudience, protocol.CapContinuation, protocol.CapRootSync, protocol.CapControl, protocol.CapDriveSpace, protocol.CapDirectTopicSync, protocol.CapEnv2, protocol.CapRequestSteer, protocol.CapGroupInvitationManage, protocol.CapGuestAgent, protocol.CapHistoryArchive, protocol.CapHeadless, protocol.CapGroupHumanParticipation, protocol.CapModelSyncV2, protocol.CapNotify, protocol.CapTopicOrganization, protocol.CapOwnSyncV2, protocol.CapOwnSyncV3, protocol.CapPerson, protocol.CapReadSyncV2, protocol.CapReminderSync, protocol.CapConversationResources, protocol.CapRoom, protocol.CapSendGroup, protocol.CapTopicParticipation, protocol.CapTopicStateSync, protocol.CapSharedTopicTitle, protocol.CapTyping} // apx1 and aid1 are already implied by rm1.
 
 // capsPublisher is the one publisher of this run's capability records:
 // the daemon's and link.go's waiting session share the session id, and the
@@ -1188,7 +1193,7 @@ func (a *Agent) releaseConv(ctx context.Context, feats []string) {
 			// reactions, version 1 progress, deletions) have no person gate:
 			// only what the reader's signed capabilities read.
 			case w.conv == "",
-				w.required == protocol.CapModelSync || w.required == protocol.CapModelSyncV2 || w.required == protocol.CapReadSync || w.required == protocol.CapReadSyncV2 || w.required == protocol.CapOwnSyncV2 || w.required == protocol.CapOwnSyncV3 || w.required == protocol.CapDirectTopicSync || w.required == protocol.CapTopicStateSync,
+				w.required == protocol.CapModelSync || w.required == protocol.CapModelSyncV2 || w.required == protocol.CapReadSync || w.required == protocol.CapReadSyncV2 || w.required == protocol.CapOwnSyncV2 || w.required == protocol.CapOwnSyncV3 || w.required == protocol.CapDirectTopicSync || w.required == protocol.CapTopicStateSync || w.required == protocol.CapReminderSync,
 				w.required == protocol.CapProgress:
 				ok = a.readerCheck(ctx, to, key, n) == nil
 			default:
@@ -1391,6 +1396,9 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 	}
 	if in.Sub == envelope.SubDirectTopicSync {
 		return a.admitDirectTopicSync(ctx, env, in, sender, fromQuarantine, hold)
+	}
+	if in.Sub == envelope.SubReminderSync {
+		return a.admitReminderSync(ctx, env, in, sender, fromQuarantine, hold)
 	}
 	if in.Sub == envelope.SubTopicStateSync {
 		return a.admitTopicStateSync(ctx, env, in, sender, fromQuarantine, hold)

@@ -198,7 +198,9 @@ func TestClosedReplyReceiverOneRefusalDoesNotStrandOtherBinding(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	b, e := w.alice.CreateLocalAgent("disabled", Responder{Harness: "agentstub", Dir: st.dir})
+	Harnesses["handoffother"] = Harnesses["agentstub"]
+	t.Cleanup(func() { delete(Harnesses, "handoffother") })
+	b, e := w.alice.CreateLocalAgent("disabled", Responder{Harness: "handoffother", Dir: st.dir})
 	if e != nil {
 		t.Fatal(e)
 	}

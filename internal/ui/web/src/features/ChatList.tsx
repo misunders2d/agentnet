@@ -6,7 +6,7 @@ import { IconChevronRight, IconRobot, IconSearch, IconX } from "@tabler/icons-re
 import { useAgentNames, useApp, useWide } from "../context";
 import { useStore, type Open } from "../store";
 import type { T } from "../api";
-import { Reason, askerWords, convTitle, decidable, firstLine, personOf, senderOf, type ChatItem } from "../model";
+import { Reason, askerWords, convTitle, currentAgentTarget, decidable, firstLine, personOf, senderOf, type ChatItem } from "../model";
 import { useNeedsYou } from "./Approvals";
 import { ChatRow } from "./ChatList.row";
 import { chatItems, personAt } from "./ChatList.words";
@@ -66,6 +66,7 @@ export function ChatList() {
   const shown = items.filter((i) => (active === "all" || i.kind === active)
     && matches(q, i.title, i.subtitle, i.note, i.last, ...(i.members || []), summaries.get(i.open.id)?.title, threads.get(i.open.id)?.title, ...(i.topics || []).map((t) => t.title), ...(i.conversations || []).flatMap((d) => [d.title, d.last])));
   const unread = items.reduce((n, i) => n + i.unread, 0);
+  const savedAgentHistory=overview?.threads?.some(t=>t.agent_legacy||!!t.agent_id&&agentNames[(t.agent_host||t.peer)+"#catalog"]==="current"&&!currentAgentTarget(t.agent_id,t.agent_host||t.peer,t.agent_key,agentNames));
   const showSearch = wide || searching || !!q;
 
   // Ctrl K (⌘K) finds a chat from anywhere on this screen.
@@ -124,6 +125,7 @@ export function ChatList() {
         <>
           {!q && <NeedsYouBanner overview={overview} agentNames={agentNames} />}
           {!q && <GroupInvitations />}
+          {!q&&savedAgentHistory&&<p className="px-4 pt-3 text-[13px] text-muted">Saved agent history is available in Search chats.</p>}
           {overview.persons && !overview.person && <NoName />}
           {shownFilters.length > 0 && (
             <div role="group" aria-label="Show" className="flex gap-2 overflow-x-auto px-4 pt-4 [scrollbar-width:none] lg:px-3">

@@ -40,6 +40,8 @@ func TestHistoryAttachmentManifestDirectionAndOrder(t *testing.T) {
 
 func TestGroupParticipationFilesLateLinkedRequestAndNamedOutput(t *testing.T) {
 	stub := installAgentStub(t)
+	Harnesses["fileother"] = Harnesses["agentstub"]
+	t.Cleanup(func() { delete(Harnesses, "fileother") })
 	w, _, packet, stops := groupTurnsFixture(t)
 	fakeNotify(w.alice)
 	fakeNotify(w.bob)
@@ -54,7 +56,7 @@ func TestGroupParticipationFilesLateLinkedRequestAndNamedOutput(t *testing.T) {
 	for i := range 2 {
 		agent := record
 		if i == 1 { // distinct named agents: re-inviting one now reuses its PID
-			agent, e = w.bob.CreateLocalAgent("second file reviewer", Responder{Harness: "agentstub", Dir: stub.dir})
+			agent, e = w.bob.CreateLocalAgent("second file reviewer", Responder{Harness: "fileother", Dir: stub.dir})
 			if e != nil {
 				t.Fatal(e)
 			}

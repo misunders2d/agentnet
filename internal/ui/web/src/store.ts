@@ -9,7 +9,7 @@ import { pendingSends } from "./optimistic.mjs";
 import { useSyncExternalStore } from "react";
 import { api, errorText, type Api, type T } from "./api";
 import type { Host, HostEvent, OpenContext } from "./host";
-import { messageTarget } from "./model";
+import { currentCatalogAgents, messageTarget } from "./model";
 import { mainPreferences, personRoots } from "./person-topics.mjs";
 import { skin as brand } from "./skin/brand";
 import { share } from "./structural";
@@ -849,16 +849,28 @@ export class Store {
     if (this.namesLoading) return;
     this.namesLoading = true;
     try {
-      const hosts = new Set<string>([""]);
+      const local=this.state.overview?.me.address;
+      const hosts = new Set<string>([local||""]);
       for (const a of this.state.dm?.agents || []) hosts.add(a.host.address);
       const next: Record<string, string> = { ...this.state.agentNames };
       if(this.state.thread)hosts.add(this.state.thread.topic?.agent_host||this.state.thread.peer);
       for(const t of this.state.overview?.threads||[])if(t.agent_host)hosts.add(t.agent_host);
-      const catalogs=await Promise.allSettled([...hosts].map(h=>this.api.agents(h===this.state.overview?.me.address?undefined:h||undefined)));
-      for(const result of catalogs)if(result.status==="fulfilled"){
+      for(const t of this.state.overview?.topics||[])if(t.latest.agent_host)hosts.add(t.latest.agent_host);
+      for(const p of [this.state.overview?.person,...(this.state.overview?.people||[])])for(const a of p?.agents||[])if(a.dms?.some(d=>d.state==="active"))hosts.add(a.address);
+      const addresses=[...hosts],catalogs=await Promise.allSettled(addresses.map(h=>this.api.agents(h===local?undefined:h||undefined)));
+      for(const [index,result] of catalogs.entries())if(result.status==="fulfilled"){
         const view=result.value,agents=view.agents||[];
-        for(const key of Object.keys(next))if(key.endsWith("#host")&&next[key]===view.host){const id=key.slice(0,-5);delete next[id+"#host"];delete next[id+"#host_key"];}
-        for(const a of agents){next[a.record.id]=a.record.label;next[a.record.id+"#harness"]=a.record.harness||"";next[a.record.id+"#host"]=a.record.host;next[a.record.id+"#host_key"]=a.record.host_key;}
+        const requested=addresses[index]||local||view.host;
+        for(const key of Object.keys(next))if(key.endsWith("#host")&&next[key]===requested){const id=key.slice(0,-5);delete next[id+"#host"];delete next[id+"#host_key"];delete next[id+"#current"];}
+        next[requested+"#catalog"]="current";
+        if(view.host!==requested||agents.some(a=>a.record.host!==requested||!/^[0-9a-f]{32}$/.test(a.record.id)||!a.record.host_key))continue;
+        for(const a of agents){next[a.record.id]=a.record.label;next[a.record.id+"#harness"]=a.record.harness||"";}
+        const owner=[this.state.overview?.person,...(this.state.overview?.people||[])].find(p=>p?.address===requested||p?.devices?.some(d=>d.address===requested));
+        const pinned=requested===local?this.state.overview?.me.fingerprint:owner?.devices?.find(d=>d.address===requested)?.fingerprint||(owner?.address===requested?owner.fingerprint:undefined);
+        for(const a of currentCatalogAgents(agents,view.local)){
+          if(pinned&&a.record.host_key!==pinned)continue;
+          next[a.record.id+"#host"]=a.record.host;next[a.record.id+"#host_key"]=a.record.host_key;next[a.record.id+"#current"]="true";
+        }
       }
       if ([...new Set([...Object.keys(next),...Object.keys(this.state.agentNames)])].some(id => this.state.agentNames[id] !== next[id])) this.set({ agentNames: next });
     } finally { this.namesLoading = false; }

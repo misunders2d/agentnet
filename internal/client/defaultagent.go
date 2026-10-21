@@ -42,25 +42,11 @@ func (a *Agent) DefaultAgentID() (string, error) {
 
 func (a *Agent) saveDefaultIn(tx *sql.Tx, r *Responder, selectID string) error {
 	if r == nil {
-		var id string
-		_ = tx.QueryRow(`SELECT v FROM config WHERE k=?`, defaultAgentConfig).Scan(&id)
-		entries, err := a.localAgentsIn(tx)
-		if err != nil {
-			return err
-		}
-		for i := range entries {
-			if entries[i].Record.ID == id && entries[i].DefaultResponder {
-				entries[i].Responder = nil
-			}
-		}
-		raw, _ := json.Marshal(entries)
-		if _, err = tx.Exec(`UPDATE config SET v=? WHERE k=?`, string(raw), agentCatalogConfig); err != nil {
-			return err
-		}
 		if _, err := tx.Exec(`DELETE FROM config WHERE k='responder'`); err != nil {
 			return err
 		}
-		_, err = tx.Exec(`INSERT INTO config(k,v) VALUES('responder_manual','1') ON CONFLICT(k) DO UPDATE SET v='1'`)
+		// Manual handling of untargeted requests does not disconnect a harness.
+		_, err := tx.Exec(`INSERT INTO config(k,v) VALUES('responder_manual','1') ON CONFLICT(k) DO UPDATE SET v='1'`)
 		return err
 	}
 	entries, err := a.localAgentsIn(tx)
@@ -84,12 +70,24 @@ func (a *Agent) saveDefaultIn(tx *sql.Tx, r *Responder, selectID string) error {
 		return ErrUnknownAgent
 	}
 	if selected < 0 && selectID == "" {
-		// Returning to an automatic program selects its existing concrete
-		// lineage; config edits affect future admissions. Named twins stay distinct.
+		// A harness has one active identity on this device, regardless of name
+		// or working folder. Never mint a parallel default identity.
 		for i := range entries {
-			if entries[i].DefaultResponder && entries[i].Record.Harness == r.Harness {
+			if entries[i].Responder != nil && entries[i].Responder.Harness == r.Harness {
+				if selected >= 0 {
+					return ErrAgentHarnessAmbiguous
+				}
 				selected = i
-				break
+			}
+		}
+		if selected < 0 {
+			for i := range entries {
+				if entries[i].DefaultResponder && entries[i].Record.Harness == r.Harness {
+					if selected >= 0 {
+						return ErrAgentHarnessAmbiguous
+					}
+					selected = i
+				}
 			}
 		}
 	}
@@ -107,6 +105,14 @@ func (a *Agent) saveDefaultIn(tx *sql.Tx, r *Responder, selectID string) error {
 	r = entries[selected].Responder
 	entries[selected].Record.Harness = r.Harness
 	entries[selected].Record.Sign(a.id.Sign)
+	// An exact saved pointer or an explicit selection proves the current
+	// identity. Retire only duplicate configurations of that same harness;
+	// all records, original conversations and admitted executors stay intact.
+	for i := range entries {
+		if i != selected && entries[i].Responder != nil && entries[i].Responder.Harness == r.Harness {
+			entries[i].Responder = nil
+		}
+	}
 	raw, _ := json.Marshal(entries)
 	if _, err = tx.Exec(`INSERT INTO config(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, agentCatalogConfig, string(raw)); err != nil {
 		return err
@@ -119,26 +125,39 @@ func (a *Agent) saveDefaultIn(tx *sql.Tx, r *Responder, selectID string) error {
 	return err
 }
 
-// The migration reads only saved host configuration; it never probes a program,
-// joins named twins, or changes an old request/executor/session.
+// Migration reads only saved configuration. It never changes an old request,
+// admitted executor or native session, and never guesses among legacy twins.
 func (a *Agent) ensureDefaultAgent() error {
 	tx, err := a.store.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	var id string
-	if err = tx.QueryRow(`SELECT v FROM config WHERE k=?`, defaultAgentConfig).Scan(&id); err == nil {
-		return nil
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return err
-	}
 	r, err := responderIn(tx)
 	if err != nil || r == nil {
 		return err
 	}
+	var id string
+	if err = tx.QueryRow(`SELECT v FROM config WHERE k=?`, defaultAgentConfig).Scan(&id); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	entries, err := a.localAgentsIn(tx)
+	if err != nil {
+		return err
+	}
+	if enabledHarnessCount(entries, r.Harness) == 1 {
+		want, _ := json.Marshal(r)
+		for _, entry := range entries {
+			if entry.Record.ID == id && entry.Record.Harness == r.Harness {
+				saved, _ := json.Marshal(entry.Responder)
+				if string(saved) == string(want) {
+					return nil // ordinary CLI/hook opens do not rewrite canonical settings
+				}
+			}
+		}
+	}
 	if err = a.saveDefaultIn(tx, r, ""); err != nil {
-		if errors.Is(err, ErrAgentCatalogFull) {
+		if errors.Is(err, ErrAgentCatalogFull) || errors.Is(err, ErrAgentHarnessAmbiguous) || errors.Is(err, ErrUnknownAgent) {
 			return nil
 		} // preserve readable old profiles; no identity is guessed
 		return err

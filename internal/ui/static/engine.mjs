@@ -1758,7 +1758,7 @@ export class Engine {
           if (job.state === "accepted" || descriptor?.state === "delivered") retained.add(id);
         }
       }
-      const sync = new Set(["history", wire.SubHistoryArchive, wire.SubDeviceHistory, wire.SubReadSync, wire.SubRootSync, wire.SubTopicSync, wire.SubTopicStateSync, wire.SubDirectTopicSync, wire.SubModelSync, wire.SubInvitationSync]);
+      const sync = new Set(["history", wire.SubHistoryArchive, wire.SubDeviceHistory, wire.SubReadSync, wire.SubRootSync, wire.SubTopicSync, wire.SubTopicStateSync,wire.SubReminderSync, wire.SubDirectTopicSync, wire.SubModelSync, wire.SubInvitationSync]);
       const detail = revoked ? "That device was removed from the server." : "That exact device is no longer one of your devices.";
       for (const row of await this.store.outboxStates(["queued","waiting","receiver_waiting","archive_staged","archive_uploading"], address)) {
         if (retained.has(row.id) || row.recipient_fp !== fingerprint || !revoked && (!sync.has(row.sub) && !children.has(row.id) || row.sub === "history" && row.recipient_admission && !row.group_history)) continue;
@@ -1792,7 +1792,7 @@ export class Engine {
     const own = await this.store.get("kv", "person");
     if (own?.state !== "self") return;
     const book = await this.historyBook(), targets = new Map();
-    const sync = new Set(["history", wire.SubHistoryArchive, wire.SubDeviceHistory, wire.SubReadSync, wire.SubRootSync, wire.SubTopicSync, wire.SubTopicStateSync, wire.SubDirectTopicSync, wire.SubModelSync, wire.SubInvitationSync]);
+    const sync = new Set(["history", wire.SubHistoryArchive, wire.SubDeviceHistory, wire.SubReadSync, wire.SubRootSync, wire.SubTopicSync, wire.SubTopicStateSync,wire.SubReminderSync, wire.SubDirectTopicSync, wire.SubModelSync, wire.SubInvitationSync]);
     for (const row of await this.store.outboxStates(["queued","waiting","receiver_waiting","archive_staged","archive_uploading"])) if (sync.has(row.sub) && row.to && row.recipient_fp && (own.known || []).some(d => d.address === row.to && d.fingerprint === row.recipient_fp)) targets.set(row.to + "/" + row.recipient_fp, {address:row.to,fingerprint:row.recipient_fp});
     for (const job of Object.values(book)) targets.set(job.device + "/" + job.fingerprint, {address:job.device,fingerprint:job.fingerprint});
     for (const job of await this.store.prefix("kv", "history-archive/out/")) targets.set(job.to + "/" + job.recipient_fp, {address:job.to,fingerprint:job.recipient_fp});
@@ -1948,7 +1948,7 @@ export class Engine {
   }
 
   readRef(m) {
-    if(!m || m.local || m.control || m.ref || m.aside || [wire.SubModelSync,wire.SubTopicSync,wire.SubTopicStateSync,wire.SubDirectTopicSync,wire.SubInvitationSync,wire.SubReadSync,wire.SubRootSync,wire.SubDriveSpace,wire.SubGroupProof,wire.SubGroupContext,wire.SubGroupInvite,wire.SubGroupConsent,wire.SubGroupWithdrawal].includes(m.sub))return null;
+    if(!m || m.local || m.control || m.ref || m.aside || [wire.SubModelSync,wire.SubTopicSync,wire.SubTopicStateSync,wire.SubReminderSync,wire.SubDirectTopicSync,wire.SubInvitationSync,wire.SubReadSync,wire.SubRootSync,wire.SubDriveSpace,wire.SubGroupProof,wire.SubGroupContext,wire.SubGroupInvite,wire.SubGroupConsent,wire.SubGroupWithdrawal].includes(m.sub))return null;
     const ref={conv:m.conv||"",fingerprint:m.fp||m.claimed_key||"",lid:m.lid||m.id};
     if(!wire.validFingerprint(ref.fingerprint) || !wire.validID(ref.lid))return null;
     return ref;
@@ -2155,6 +2155,7 @@ export class Engine {
   }
   syncTopicTitles() {
     this.syncDirectTopics().catch(()=>{});
+    this.syncReminders().catch(()=>{});
     this.syncTopicMarks().catch(()=>{}); // marks follow every wake names do (connect, own roster, admission)
     this.topicSyncAgain=true;
     if(!this.topicSyncRun)this.topicSyncRun=(async()=>{do{this.topicSyncAgain=false;try{await this.syncTopicPages();}catch(e){if(e instanceof StoreConflict)this.topicSyncAgain=true;else throw e;}}while(this.topicSyncAgain);})().finally(()=>{this.topicSyncRun=null;});
@@ -2250,6 +2251,134 @@ export class Engine {
       facts.set(k,fact);ops.push({s:"kv",k,v:{...fact,key:k,person:own.person}});
     }
     ops.push({s:"kv",k:marker,v:{done:true}});return {ops,facts};
+  }
+  reminderMarkKey(person,m){return "reminder-mark/"+person+"/"+m.conv+"/"+m.fingerprint+"/"+m.lid;}
+  reminderMarkCopyKey(person,fp,m){return "reminder-mark-copy/"+fp+"/"+this.reminderMarkKey(person,m);}
+  reminderGenerationCheck(m,old){if(old&&m.revision===old.revision&&m.writer===old.writer&&(m.due!==old.due||m.state!==old.state))throw new Hold("invalid","Reminder generation conflicts.");}
+  async reminderOriginal(m,checks=[]){
+    let rows;
+    if(m.conv)rows=await this.authorityRows({conv:m.conv},checks);
+    else rows=[await this.groupRead(checks,"inbox",m.lid),await this.groupRead(checks,"outbox",m.lid)].filter(Boolean);
+    return rows.filter(r=>!r.aside&&!r.control&&!r.local&&!r.sub&&!r.deleted).find(r=>{const item=this.itemOf(r,!!r.to);return (r.conv||"")===m.conv&&(item.lid||item.id)===m.lid&&item.from_key===m.fingerprint;});
+  }
+  async reminders(all=false){
+    const own=await this.store.get("kv","person");if(!this.ownTopicWriter(own))return [];
+    const rows=[];
+    for(const m of await this.store.prefix("kv","reminder-mark/"+own.person+"/")){
+      if(!all&&m.state!=="pending")continue;
+      const original=await this.reminderOriginal(m);if(!original)continue;
+      rows.push({message:original.id,conv:m.conv||undefined,from:original.to?this.address:original.from,title:bodyPreview(original.body||""),due:iso(m.due*1000),overdue:m.state==="pending"&&m.due*1000<=this.now(),state:m.state,fact:m});
+    }
+    return rows.sort((a,b)=>Date.parse(a.due)-Date.parse(b.due)||a.message.localeCompare(b.message));
+  }
+  async reminderChange(input,state="pending"){
+    if(!input||typeof input!=="object"||Array.isArray(input)||Object.keys(input).some(k=>!["id","due"].includes(k))||!wire.validID(input.id))throw Error("Choose an exact stored message.");
+    const checks=[],own=await this.groupRead(checks,"kv","person");if(!this.ownTopicWriter(own))throw Error("Reminders require your current human device.");
+    const row=await this.groupRead(checks,"inbox",input.id)||await this.groupRead(checks,"outbox",input.id);
+    if(!row||row.aside||row.control||row.local||row.sub||row.deleted)throw Error("Choose an existing message.");
+    const item=this.itemOf(row,!!row.to),ref={conv:row.conv||"",fingerprint:item.from_key,lid:item.lid||item.id},key=this.reminderMarkKey(own.person,ref),old=await this.groupRead(checks,"kv",key);
+    if(state!=="pending"&&old?.state!=="pending")throw Error("That message has no pending reminder.");
+    const due=state==="pending"?input.due:old.due;
+    if(!Number.isSafeInteger(due)||state==="pending"&&(due*1000<=this.now()||due*1000-this.now()>3650*86400000))throw Error("Choose a future time within ten years.");
+    const fact={...ref,due,state,revision:Math.max(this.now(),(old?.revision||0)+1),writer:this.fp};
+    if(!wire.validReminderMark(fact))throw Error("The original message identity is unavailable.");
+    await this.store.write([{s:"kv",k:key,v:{...fact,key,person:own.person}}],checks);
+    this.changed();this.syncReminders().catch(()=>{});this.reminderWake();return {note:state==="pending"?"Reminder set.":state==="done"?"Reminder done.":"Reminder cancelled."};
+  }
+  async reminderReplyOps(rows,checks){
+    const replies=rows.filter(r=>r.reply_to&&!r.sub&&!r.aside&&!["progress","failed","timeout","cancelled"].includes(r.status));if(!replies.length)return [];
+    const own=await this.groupRead(checks,"kv","person");if(!this.ownTopicWriter(own))return [];
+    const ops=[];
+    for(const saved of await this.store.prefix("kv","reminder-mark/"+own.person+"/")){
+      if(saved.state!=="pending")continue;
+      const current=await this.groupRead(checks,"kv",saved.key);if(current?.state!=="pending")continue;
+      const original=await this.reminderOriginal(current,checks);if(!original)continue;
+      if(!replies.some(r=>(r.conv||"")===current.conv&&(r.reply_to===current.lid||r.reply_to===original.id)))continue;
+      ops.push({s:"kv",k:saved.key,v:{...current,state:"replied",revision:Math.max(this.now(),current.revision+1),writer:this.fp}});
+    }
+    return ops;
+  }
+  // No closed-tab scheduling promise. One deadline updates existing reminder UI;
+  // the local ledger never travels, so replay/restart cannot repeat this generation.
+  reminderWake(){
+    if(this.reminderTimer!=null){this.scheduleClearTimeout(this.reminderTimer);this.reminderTimer=null;}
+    if(!this.running||this.revoked||this.closing)return Promise.resolve();
+    if(this.reminderDrain){this.reminderAgain=true;return this.reminderDrain;}
+    const epoch=this.scheduledEpoch||0;
+    const run=(async()=>{
+      let next=Infinity,changed=false;
+      for(const r of await this.reminders()){
+        if(!this.running||(this.scheduledEpoch||0)!==epoch)return;
+        const m=r.fact,key="reminder-alert/"+this.reminderMarkKey(m.person,m),checks=[],old=await this.groupRead(checks,"kv",key);
+        if(old?.revision===m.revision&&old.writer===m.writer)continue;
+        if(m.due*1000>this.now()){next=Math.min(next,m.due*1000);continue;}
+        const current=await this.groupRead(checks,"kv",m.key);if(!current||current.revision!==m.revision||current.writer!==m.writer||current.state!=="pending")continue;
+        await this.store.write([{s:"kv",k:key,v:{revision:m.revision,writer:m.writer}}],checks);changed=true;
+      }
+      if(changed)this.changed();
+      if(Number.isFinite(next)&&this.running&&(this.scheduledEpoch||0)===epoch)this.reminderTimer=this.scheduleSetTimeout(()=>{this.reminderTimer=null;this.reminderWake();},Math.min(2147483647,Math.max(0,next-this.now())));
+    })().catch(()=>{}).finally(()=>{if(this.reminderDrain===run)this.reminderDrain=null;if(this.reminderAgain){this.reminderAgain=false;this.reminderWake();}});
+    this.reminderDrain=run;return run;
+  }
+  syncReminders() {
+    this.reminderSyncAgain=true;
+    if(!this.reminderSyncRun)this.reminderSyncRun=(async()=>{do{this.reminderSyncAgain=false;try{await this.syncReminderPages();}catch(e){if(e instanceof StoreConflict)this.reminderSyncAgain=true;else throw e;}}while(this.reminderSyncAgain);})().finally(()=>{this.reminderSyncRun=null;});
+    return this.reminderSyncRun;
+  }
+  async syncReminderPages() { return this.withHistoryProduction(()=>this.syncReminderPagesUnpaced()); }
+  async syncReminderPagesUnpaced() {
+    const seedChecks=[],own=await this.groupRead(seedChecks,"kv","person");
+    if(!this.ownTopicWriter(own))return;
+    const prefix="reminder-mark/"+own.person+"/";let after=prefix;
+    for(;;){
+      const page=(await this.store.after("kv",after,64)).filter(r=>r?.key?.startsWith(prefix));if(!page.length)return;after=page.at(-1).key;
+      const checks=[],current=await this.groupRead(checks,"kv","person"),ops=[];
+      if(!this.ownTopicWriter(current)||current.person!==own.person)return;
+      for(const dev of current.devices){
+        if (!await this.recipientAvailable(dev,checks)) continue;
+        if(!await stateWindow(this.store,dev))continue;
+        if(dev.address===this.address||!current.human_keys.includes(dev.fingerprint))continue;
+        // A device that cannot read marks yet keeps one waiting carrier; later
+        // marks stay unsealed here, so nothing piles up for an older program.
+        const pointer="reminder-mark-carrier/"+current.person+"/"+dev.fingerprint,last=await this.groupRead(checks,"kv",pointer);
+        if(last?.id&&(await this.groupRead(checks,"outbox",last.id))?.state==="waiting")continue;
+        const reminders=[];
+        for(const saved of page){
+          const fact=await this.groupRead(checks,"kv",saved.key);if(!fact)continue;
+          const ck=this.reminderMarkCopyKey(current.person,dev.fingerprint,fact),copy=await this.groupRead(checks,"kv",ck),row=copy?.id&&await this.groupRead(checks,"outbox",copy.id);
+          if(copy&&!wire.reminderMarkNewer(fact,copy)&&!wire.reminderMarkNewer(copy,fact)&&(copy.seen||row&&["queued","waiting","custody","delivered","quarantined"].includes(row.state)))continue;
+          const {conv,fingerprint,lid,due,state,revision,writer}=fact;reminders.push({conv,fingerprint,lid,due,state,revision,writer});
+        }
+        if(!reminders.length)continue;
+        const body=JSON.stringify({v:1,person:current.person,roster:current.hash,reminders}),r=wire.parseReminderSync(body);
+        try{await this.readSyncAuthority(r,this.address,this.fp,dev.address,dev.fingerprint,checks);}catch{continue;}
+        const id=wire.newID(),at=this.now(),envelope=await wire.seal({v:wire.Version2,id,from:this.address,to:dev.address,ts:Math.floor(at/1000),kind:"message",sub:wire.SubReminderSync,replica:true,body},this.keys,await wire.parsePublic(JSON.parse(dev.json)));
+        ops.push({s:"outbox",k:id,v:{id,to:dev.address,recipient_fp:dev.fingerprint,required_cap:wire.CapReminderSync,sub:wire.SubReminderSync,body,envelope,at,state:"queued",aside:true}},{s:"kv",k:pointer,v:{id}});
+        for(const t of reminders)ops.push({s:"kv",k:this.reminderMarkCopyKey(current.person,dev.fingerprint,t),v:{...t,id}});
+      }
+      if(ops.length){await this.store.write(ops,checks);this.changed();if(this.connected)this.queueOutbox();}
+      if(page.length<64)return;
+    }
+  }
+  async reminderSyncGate(rec) {
+    await this.refreshPerson(this.me);const r=wire.parseReminderSync(rec.body);
+    await this.readSyncAuthority(r,this.address,this.fp,rec.to,rec.recipient_fp);
+    const pin=await this.store.get("pins",rec.to),features=await this.features(),profile=await this.profile(rec.to);
+    if(!features.includes("env2")||!features.includes("caps")||!await wire.profileSupports(profile,rec.to,(await this.pubOf(pin)).sign_key,wire.CapReminderSync))throw Object.assign(Error("This device needs to update AgentNet to synchronize personal reminders."),{code:"topic_sync_unsupported"});
+    await this.readSyncAuthority(r,this.address,this.fp,rec.to,rec.recipient_fp);return {why:"",pin};
+  }
+  async admitReminderSync(n,env,pin, admission = null) {
+    const r=wire.parseReminderSync(n.body),checks=[],ops=[];
+    if(!this.me||this.me.person!==r.person)throw new Hold("invalid","Reminders belong to another person.");
+    await this.refreshPerson(this.me, admission ? {...admission,roster:r.roster} : null);try{await this.readSyncAuthority(r,env.from,pin.fingerprint,this.address,this.fp,checks);}catch(e){throw new Hold("invalid",e.message);}
+    for(const t of r.reminders){
+      const k=this.reminderMarkKey(r.person,t),old=await this.groupRead(checks,"kv",k);
+      this.reminderGenerationCheck(t,old);
+      if(wire.reminderMarkNewer(t,old))ops.push({s:"kv",k,v:{...t,key:k,person:r.person}});
+      const ck=this.reminderMarkCopyKey(r.person,pin.fingerprint,t),copy=await this.groupRead(checks,"kv",ck);
+      if(wire.reminderMarkNewer(t,copy))ops.push({s:"kv",k:ck,v:{...t,seen:true}});
+    }
+    ops.checks=checks;ops.reminderSync=true;ops.syncCarrier=true;return ops;
   }
   syncTopicMarks() {
     this.topicMarkSyncAgain=true;
@@ -3815,6 +3944,7 @@ export class Engine {
       if(wire.guestAgentCopy(rec))await this.requireGuestAgentSupport(rec.to,await this.pinned(rec.to),rec.sub===wire.SubHistoryArchive);
       if(rec.sub===wire.SubTopicSync)await this.topicSyncGate(rec);
       if(rec.sub===wire.SubDirectTopicSync)await this.directTopicSyncGate(rec);
+      if(rec.sub===wire.SubReminderSync)await this.reminderSyncGate(rec);
       if(rec.sub===wire.SubTopicStateSync)await this.topicStateSyncGate(rec);
       if(rec.sub===wire.SubInvitationSync)await this.invitationSyncGate(rec);
       if(rec.sub===wire.SubModelSync)await this.modelSyncGate(rec);
@@ -3910,6 +4040,7 @@ export class Engine {
       if(wire.guestAgentCopy(rec))await this.requireGuestAgentSupport(rec.to,await this.pinned(rec.to),rec.sub===wire.SubHistoryArchive);
       if(rec.sub===wire.SubTopicSync)await this.topicSyncGate(rec);
       if(rec.sub===wire.SubDirectTopicSync)await this.directTopicSyncGate(rec);
+      if(rec.sub===wire.SubReminderSync)await this.reminderSyncGate(rec);
       if(rec.sub===wire.SubTopicStateSync)await this.topicStateSyncGate(rec);
       if(rec.sub===wire.SubInvitationSync)await this.invitationSyncGate(rec);
       if(rec.sub===wire.SubModelSync)await this.modelSyncGate(rec);
@@ -4008,6 +4139,7 @@ export class Engine {
     if([wire.SubDeviceHistory,wire.SubDeviceFile].includes(rec?.sub))return this.directHistory().gate(rec);
     if(rec?.sub===wire.SubTopicSync)return this.topicSyncGate(rec);
     if(rec?.sub===wire.SubDirectTopicSync)return this.directTopicSyncGate(rec);
+    if(rec?.sub===wire.SubReminderSync)return this.reminderSyncGate(rec);
     if(rec?.sub===wire.SubTopicStateSync)return this.topicStateSyncGate(rec);
     if(rec?.sub===wire.SubInvitationSync)return this.invitationSyncGate(rec);
     if(rec?.sub===wire.SubModelSync)return this.modelSyncGate(rec);
@@ -4329,11 +4461,12 @@ export class Engine {
         if(wire.conversationResources(r.topic_event))r.resources_cap=true;
         if (["question","task"].includes(r.kind)) r.handover_started = false;
       }
+      extraOps.push(...await this.reminderReplyOps(rows,checks));
       if(beforeStore)extraOps.push(...await beforeStore(copies,checks));
       try{await this.store.write(rows.map(v => ({ s: "outbox", k: v.id, v })).concat(extraOps), checks);}catch(error){if(error instanceof StoreConflict){if(beforeStore&&rows.some(r=>wire.conversationResources(r.topic_event)))throw Object.assign(Error("Resources or group membership changed; reopen and review the current links."),{code:"conversation_resources_stale"});if(beforeStore&&rows.some(r=>wire.topicRename(r.topic_event)))throw Object.assign(Error("Shared topic title or its authority changed; retry the rename."),{code:"shared_topic_title_stale"});if(contribution)throw Error("The selected history or destination audience changed; review the contribution again.");if(organizations.length)throw Error("The selected messages, topic or audience changed; review the move again.");}throw error;}
     });
     this.sendCommit = run;
-    await run;
+    await run;this.syncReminders().catch(()=>{});this.reminderWake();
   }
 
   async receiverOriginAuthority(rec, checks, admission = null) {
@@ -6758,6 +6891,7 @@ export class Engine {
       if (this.connected && ops.some(o => o.s === "convs" || o.s === "kv" && o.k.startsWith("group/") && o.v?.context || o.s === "inbox" && o.v?.sub === "event")) {
         this.notifyState().then(st => st.enabled ? this.syncNotify() : undefined).catch(() => {});
       }
+      this.reminderWake();if(ops.reminderSync)this.syncReminders().catch(()=>{});
       if(ops.topicSync)this.syncTopicTitles().catch(()=>{});
       if(ops.readSync)this.syncReadMarks().catch(()=>{});
       if(ops.rootSync){this.syncRoots().catch(()=>{});this.syncReadMarks().catch(()=>{});}
@@ -6909,6 +7043,7 @@ export class Engine {
     if(n.sub===wire.SubDeviceFile)return this.directHistory().admitFile(n,env,pin,admission);
     if(n.sub===wire.SubTopicSync)return this.admitTopicSync(n,env,pin, admission);
     if(n.sub===wire.SubDirectTopicSync)return this.admitDirectTopicSync(n,env,pin,admission);
+    if(n.sub===wire.SubReminderSync)return this.admitReminderSync(n,env,pin,admission);
     if(n.sub===wire.SubTopicStateSync)return this.admitTopicStateSync(n,env,pin, admission);
     if(n.sub===wire.SubInvitationSync)return this.admitInvitationSync(n,env,pin, admission);
     if(n.sub===wire.SubModelSync)return this.admitModelSync(n,env,pin, admission);
@@ -7766,10 +7901,10 @@ export class Engine {
     this.session = wire.newID();
     this.running = true;
     this.scheduledEpoch++;
-    this.scheduledResume=event=>{if(event.type!=="visibilitychange"||globalThis.document?.visibilityState==="visible")this.scheduledWake();};
+    this.scheduledResume=event=>{if(event.type!=="visibilitychange"||globalThis.document?.visibilityState==="visible"){this.scheduledWake();this.reminderWake();}};
     for(const event of ["focus","online"])globalThis.addEventListener?.(event,this.scheduledResume);
     globalThis.document?.addEventListener("visibilitychange",this.scheduledResume);
-    this.scheduledWake();this.loop();
+    this.scheduledWake();this.reminderWake();this.loop();
   }
 
   // Managed workspace shutdown lets in-flight posts settle before its IDB
@@ -7786,6 +7921,7 @@ export class Engine {
   }
 
   stop() {
+    if(this.reminderTimer!=null)this.scheduleClearTimeout(this.reminderTimer);this.reminderTimer=null;
     this.scheduledEpoch++;if(this.scheduledTimer!=null)this.scheduleClearTimeout(this.scheduledTimer);this.scheduledTimer=null;
     if(this.scheduledResume){for(const event of ["focus","online"])globalThis.removeEventListener?.(event,this.scheduledResume);globalThis.document?.removeEventListener("visibilitychange",this.scheduledResume);this.scheduledResume=null;}
     this.receiveGeneration++;
@@ -9792,7 +9928,7 @@ export class Engine {
       me: { address: this.address, fingerprint: this.fp, responder: "", responder_dir: "", browser: true, agent: false }, // a browser runs no agent
       workspace: { name: this.workspaceName, server: this.relayHost() }, agent_devices: [...this.agentDevices], model_reports: await this.modelReports(),
       device: { online: this.connected, revoked: this.revoked, persisted: this.storage ? this.storage.persisted : null }, receive_status: await this.receiveStatus(),
-      threads, topics, topic_list: true, schedules: true, review: [...await this.activeReportItems(inbox, outbox, words), ...await this.deviceAdminReview()], needs_you: needsYou, held: heldTurns, quarantine: held.map(h => ({ ...quarantineItem(h), reason: holdText(h.reason, words(h.from)) })),
+      threads, topics, topic_list: true, schedules: true, remind:true, reminders:(await this.reminders()).map(({state,fact,...r})=>r), review: [...await this.activeReportItems(inbox, outbox, words), ...await this.deviceAdminReview()], needs_you: needsYou, held: heldTurns, quarantine: held.map(h => ({ ...quarantineItem(h), reason: holdText(h.reason, words(h.from)) })),
       directory: { status: this.members.listed, current: this.members.current, at: this.members.at ? iso(this.members.at) : undefined,
         truncated: this.members.truncated, members: this.members.list.filter((m) => m.address !== this.address)
           .map((m) => ({ address: m.address, presence: this.members.current ? m.presence : "", joined: iso((m.joined || 0) * 1000) })) },
@@ -12414,6 +12550,7 @@ export class Engine {
 
       }
     }
+    if(["/api/remind","/api/remind/done","/api/remind/cancel"].includes(u.pathname)){if(body===undefined)throw Error("Use a reminder action request.");return this.reminderChange(body,u.pathname.endsWith("/done")?"done":u.pathname.endsWith("/cancel")?"cancelled":"pending");}
     if(u.pathname==="/api/schedules"||u.pathname.startsWith("/api/schedule/"))return this.scheduleAPI(u,body);
     switch (u.pathname) {
     case "/api/groups/new": return {id:await this.createGroup(body.title)};

@@ -238,6 +238,10 @@ func groupInteractionRejoin(t *testing.T, admin, person *Agent, packet GroupCont
 
 func TestGroupInteractionEpochRetryFences(t *testing.T) {
 	stub := installAgentStub(t)
+	for _, name := range []string{"epochlanea", "epochlaneb", "epochlanec"} {
+		Harnesses[name] = Harnesses["agentstub"]
+		t.Cleanup(func() { delete(Harnesses, name) })
+	}
 	w, carol, packet, _ := groupTurnsFixture(t)
 	msg, err := w.alice.SendConv(tctx(t), packet.State.Conv, ConvOutgoing{Body: "recipient epoch original"})
 	if err != nil {
@@ -300,7 +304,8 @@ func TestGroupInteractionEpochRetryFences(t *testing.T) {
 		inviter  *Agent
 		taskKeys []string
 	}{{w.alice, nil}, {w.alice, []string{carol.Self().Fingerprint()}}, {carol, nil}} {
-		separate, e := w.bob.CreateLocalAgent("Epoch lane "+string(rune('A'+i)), Responder{Harness: "agentstub", Dir: stub.dir})
+		name := "epochlane" + string(rune('a'+i))
+		separate, e := w.bob.CreateLocalAgent("Epoch lane "+string(rune('A'+i)), Responder{Harness: name, Dir: stub.dir})
 		if e != nil {
 			t.Fatal(e)
 		}

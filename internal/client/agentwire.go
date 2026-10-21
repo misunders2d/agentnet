@@ -180,7 +180,7 @@ func (a *Agent) requireParticipationCapsSnapshot(ctx context.Context, key identi
 	switch required {
 	case protocol.CapHistoryArchive, protocol.CapSharedTopicTitle, protocol.CapConversationResources, protocol.CapGuestAgent,
 		protocol.CapConversationAudience, protocol.CapTopicContext, protocol.CapModelSync,
-		protocol.CapModelSyncV2, protocol.CapDirectTopicSync, protocol.CapTopicStateSync, protocol.CapTopicOrganization,
+		protocol.CapModelSyncV2, protocol.CapDirectTopicSync, protocol.CapTopicStateSync, protocol.CapReminderSync, protocol.CapTopicOrganization,
 		protocol.CapRequestFollowup, protocol.CapRequestSteer, protocol.CapTopicParticipation,
 		protocol.CapOwnSyncV3, protocol.CapOwnSyncV2, protocol.CapContinuation,
 		protocol.CapSendGroup, protocol.CapReadSync, protocol.CapReadSyncV2,
@@ -403,6 +403,8 @@ func (e *NeedsUpdateError) Error() string {
 		message = "cannot synchronize read state yet; update all its active AgentNet sessions"
 	case protocol.CapDirectTopicSync:
 		message = "cannot synchronize direct-agent topic organization yet; update all its active AgentNet sessions"
+	case protocol.CapReminderSync:
+		message = "cannot synchronize personal reminders yet; update all its active AgentNet sessions"
 	case protocol.CapTopicStateSync:
 		message = "cannot synchronize topic Done, Reopen and Archive marks yet; update all its active AgentNet sessions"
 	case protocol.CapGroupInvitationManage:

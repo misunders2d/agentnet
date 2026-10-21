@@ -12,9 +12,9 @@ import (
 )
 
 // "Remind me later" (S-R; docs/MESSENGER_ARCHITECTURE.md §16): a personal,
-// local reminder on one locally stored message, due at a time the person chose.
+// reminder on one original, shared privately by current own-human devices.
 // It only asks for attention: it never answers, accepts, declines or runs
-// anything, never changes the message's own state, and nothing is sent.
+// anything and never changes the message's own state. Only quiet own-human metadata is sent.
 // Only a reply to that very message, stored here by any reply path (a reply
 // typed by hand or a decline, the worker's answer, a DM reply naming it),
 // ends it, in the same step that stores the reply; a later message that
@@ -85,13 +85,17 @@ func (a *Agent) SetReminder(id string, due time.Time) (Reminder, error) {
 	} else if retracted || retractedRef(a.store.db, conv.String, ref, key) {
 		return Reminder{}, errors.New("its sender deleted this message: there is nothing to be reminded of")
 	}
-	_, err = a.store.db.Exec(`INSERT INTO reminders(message, conv, due_at, state, rev, notified_rev, created_at, updated_at)
-		VALUES(?, ?, ?, ?, 1, 0, ?, ?)
-		ON CONFLICT(message) DO UPDATE SET due_at = excluded.due_at, state = excluded.state, rev = rev + 1, updated_at = excluded.updated_at`,
+	_, err = a.store.db.Exec(`INSERT INTO reminders(message, conv, due_at, state, rev, notified_rev, created_at, updated_at, sync_dirty)
+		VALUES(?, ?, ?, ?, 1, 0, ?, ?, 1)
+		ON CONFLICT(message) DO UPDATE SET due_at = excluded.due_at, state = excluded.state, rev = rev + 1, updated_at = excluded.updated_at, sync_dirty=1`,
 		id, conv, due.Unix(), ReminderPending, now.Unix(), now.Unix())
 	if err := a.store.done(err); err != nil {
 		return Reminder{}, err
 	}
+	if err := a.reconcileReminders(); err != nil {
+		return Reminder{}, err
+	}
+	a.topicTitlesChanged()
 	notifyDaemon(a.home) // a daemon in another process looks again
 	r, _, err := a.Reminder(id)
 	return r, err
@@ -105,7 +109,8 @@ func (a *Agent) DoneReminder(id string) error { return a.endReminder(id, Reminde
 func (a *Agent) CancelReminder(id string) error { return a.endReminder(id, ReminderCancelled) }
 
 func (a *Agent) endReminder(id, state string) error {
-	res, err := a.store.db.Exec(`UPDATE reminders SET state = ?, updated_at = ? WHERE message = ? AND state = ?`,
+	id = a.reminderLocalID(id)
+	res, err := a.store.db.Exec(`UPDATE reminders SET state = ?, updated_at = ?, sync_dirty=1 WHERE message = ? AND state = ?`,
 		state, time.Now().Unix(), id, ReminderPending)
 	if err != nil {
 		return err
@@ -128,7 +133,7 @@ func replyEndsReminder(tx *sql.Tx, conv, replyTo, status string) error {
 	}
 	// Conversation replies name a logical turn; reminders retain the local
 	// physical copy. Keep aliases within that conversation.
-	_, err := tx.Exec(`UPDATE reminders SET state = ?, updated_at = ?
+	_, err := tx.Exec(`UPDATE reminders SET state = ?, updated_at = ?, sync_dirty=1
 		WHERE state = ? AND coalesce(conv, '') = ?
 		AND (message = ? OR message IN (SELECT id FROM inbox WHERE conv = ? AND lid = ? UNION ALL SELECT id FROM outbox WHERE conv = ? AND lid = ?))`,
 		ReminderReplied, time.Now().Unix(), ReminderPending, conv, replyTo, conv, replyTo, conv, replyTo)
@@ -146,6 +151,10 @@ func scanReminder(row interface{ Scan(...any) error }, now time.Time) (Reminder,
 
 // Reminder returns the reminder on message id, if any.
 func (a *Agent) Reminder(id string) (Reminder, bool, error) {
+	if err := a.reconcileReminders(); err != nil {
+		return Reminder{}, false, err
+	}
+	id = a.reminderLocalID(id)
 	r, err := scanReminder(a.store.db.QueryRow(`SELECT `+reminderCols+` FROM reminders r LEFT JOIN inbox i ON i.id = r.message LEFT JOIN outbox o ON o.id = r.message
 		WHERE r.message = ?`, a.Address, id), time.Now())
 	if errors.Is(err, sql.ErrNoRows) {
@@ -157,6 +166,9 @@ func (a *Agent) Reminder(id string) (Reminder, bool, error) {
 // Reminders lists the pending reminders (overdue ones included), soonest
 // first; with all, the ended ones too.
 func (a *Agent) Reminders(all bool) ([]Reminder, error) {
+	if err := a.reconcileReminders(); err != nil {
+		return nil, err
+	}
 	rows, err := a.store.db.Query(`SELECT `+reminderCols+` FROM reminders r LEFT JOIN inbox i ON i.id = r.message LEFT JOIN outbox o ON o.id = r.message
 		WHERE ? OR r.state = ? ORDER BY r.due_at, r.message`, a.Address, all, ReminderPending)
 	if err != nil {
@@ -212,6 +224,9 @@ func (a *Agent) remindLoop(ctx context.Context) {
 // content-free notification. It returns the next time a reminder comes due
 // (zero: none).
 func (a *Agent) remindDue(now time.Time) (time.Time, error) {
+	if err := a.reconcileReminders(); err != nil {
+		return time.Time{}, err
+	}
 	tx, err := a.store.db.Begin()
 	if err != nil {
 		return time.Time{}, err

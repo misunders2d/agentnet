@@ -26,7 +26,7 @@ export interface AgentPick { id: string; label: string; dir: string }
 
 /** The default agent as GET /api/responder reports it: the program and
  *  folder used when a request names no agent. Setup only reads its folder. */
-export type DefaultAgent = Pick<T.ResponderView, "chosen" | "manual" | "harness" | "dir"> | null | undefined;
+export type DefaultAgent = Pick<T.ResponderView, "chosen" | "manual" | "harness" | "dir" | "agent_id"> | null | undefined;
 
 /** What each tool state the server reports means, in a few plain words. */
 export const STATE_WORDS: Record<string, string> = {
@@ -76,46 +76,46 @@ export const startChosen = (v: T.AssistantSetupView, c?: T.AgentCatalogView | nu
 /** The person's named agents that run this tool. */
 export const agentsFor = (c: T.AgentCatalogView | null | undefined, harness: string) =>
   (c?.agents || []).filter((a) => a.enabled && a.responder?.harness === harness);
+const retiredFor = (c: T.AgentCatalogView | null | undefined, harness: string) =>
+  (c?.agents || []).filter(a => !a.enabled && a.record.harness === harness);
 
 /** A tool gets a named agent when the existing responder registry can run it. */
 export const canHaveAgent = (c: T.AgentCatalogView | null | undefined, harness: string) =>
   (c?.harnesses || []).some((h) => h.name === harness && h.found);
 
 /** Chat readiness comes from the named-agent catalog, never hook registration. */
-export function agentStatus(h: T.AssistantSetupHarness, c: T.AgentCatalogView | null | undefined) {
-  const agents = agentsFor(c, h.id), ready = agents.filter(a => a.responder?.ready);
-  if (ready.length) return { word: "Ready", tone: "ok" as const, sentence: andList(ready.map(a => a.record.label)) + (ready.length === 1 ? " is" : " are") + " set up for chats, questions and approved tasks." };
-  if (agents.length) return { word: "Needs attention", tone: "danger" as const, sentence: agents.map(a => a.record.label + ": " + (a.responder?.problem || "It cannot start on this computer.")).join(" ") };
+export function agentStatus(h: T.AssistantSetupHarness, c: T.AgentCatalogView | null | undefined, pick?: AgentPick) {
+  const agents = agentsFor(c, h.id), selected = pick?.id ? agents.find(a => a.record.id === pick.id) : preferredAgent(agents);
+  if (selected?.responder?.ready) return { word: "Ready", tone: "ok" as const, sentence: h.label + " is set up for chats, questions and approved tasks." };
+  if (selected) return { word: "Needs attention", tone: "danger" as const, sentence: selected.responder?.problem || h.label + " cannot start on this computer." };
+  if (pick?.id) return { word: "Needs attention", tone: "danger" as const, sentence: "The saved " + h.label + " setup is unavailable. Check again." };
   if (canHaveAgent(c,h.id)) return { word: "Needs setup", tone: "act" as const, sentence: "Choose a name and working folder for its agent." };
   if (!h.detected) return { word: "Not found", tone: "muted" as const, sentence: "Not installed on this computer." };
   if (!h.supported || !canHaveAgent(c, h.id)) return { word: "Unavailable", tone: "muted" as const, sentence: "An AgentNet agent cannot run with this tool here yet." };
   return { word: "Needs setup", tone: "act" as const, sentence: "Choose a name and working folder for its agent." };
 }
 
-/** sameFolder: the same folder, ignoring a trailing separator. */
-const sameFolder = (a: string | undefined, b: string | undefined) => {
-  const t = (p: string | undefined) => (p || "").trim().replace(/(.)[\\/]+$/, "$1");
-  return !!t(a) && t(a) === t(b);
-};
-
-/** byAge: agents oldest first (by their signed record's time; the catalog's
- *  own order, which is the order they were made in, breaks ties). */
-const byAge = (agents: T.CatalogAgent[]) =>
-  agents.map((a, i) => ({ a, i })).sort((x, y) => (x.a.record.ts - y.a.record.ts) || (x.i - y.i)).map((x) => x.a);
-
-/** preferredAgent: of the agents that run one tool, the one setup uses
- *  unless the person switches: the one working in the default agent's
- *  folder, else the oldest. Choosing it changes nothing about the others. */
+/** One current agent per harness on this device. An exact saved selection
+ *  wins; a legacy duplicate without that proof needs explicit recovery. */
 export function preferredAgent(agents: T.CatalogAgent[], def?: DefaultAgent): T.CatalogAgent | undefined {
-  const old = byAge(agents);
-  const dir = def && def.chosen && !def.manual ? def.dir : "";
-  return old.find((a) => sameFolder(a.responder?.dir, dir)) || old[0];
+  const exact = def?.chosen && !def.manual && def.agent_id ? agents.find(a => a.record.id === def.agent_id) : undefined;
+  if (exact) return exact;
+  const current = agents.filter(a => a.default);
+  if (current.length === 1) return current[0];
+  return agents.length === 1 ? agents[0] : undefined;
 }
 
 /** firstPick: the tool's existing agent (of several, preferredAgent), or a
  *  new one named after the tool. Nothing waits for a choice. */
 export function firstPick(h: T.AssistantSetupHarness, c: T.AgentCatalogView | null | undefined, def?: DefaultAgent): AgentPick {
-  const a = preferredAgent(agentsFor(c, h.id), def);
+  if (def?.chosen && !def.manual && def.harness === h.id && def.agent_id) {
+    const exact = agentsFor(c, h.id).find(a => a.record.id === def.agent_id);
+    // Preserve a missing exact target for refresh; never select another row
+    // or create a replacement because its name/folder happens to match.
+    return exact ? pickOf(exact) : { id: def.agent_id, label: h.label, dir: def.dir || "" };
+  }
+  const enabled = agentsFor(c, h.id), retired = retiredFor(c, h.id);
+  const a = preferredAgent(enabled, def) || (!enabled.length && retired.length === 1 ? retired[0] : undefined);
   return a ? pickOf(a) : { id: "", label: h.label, dir: "" };
 }
 
@@ -133,24 +133,6 @@ export function firstPicks(v: T.AssistantSetupView | null | undefined, c: T.Agen
   return out;
 }
 
-const COUNT: Record<number, string> = { 2: "Two", 3: "Three", 4: "Four", 5: "Five", 6: "Six", 7: "Seven", 8: "Eight", 9: "Nine" };
-const quoted = (s: string) => "“" + s + "”";
-const andList = (xs: string[]) => (xs.length < 2 ? xs.join("") : xs.slice(0, -1).join(", ") + " and " + xs[xs.length - 1]);
-
-/** sameToolNote: when several agents run one tool, which one setup uses and
- *  that the others stay, in plain words; "" when there is only one. */
-export function sameToolNote(h: T.AssistantSetupHarness, c: T.AgentCatalogView | null | undefined, pick: AgentPick): string {
-  const mine = byAge(agentsFor(c, h.id)), using = mine.find((a) => a.record.id === pick.id);
-  if (mine.length < 2 || !using) return "";
-  const others = mine.filter((a) => a !== using).map((a) => quoted(a.record.label));
-  return (COUNT[mine.length] || String(mine.length)) + " agents run " + h.label + " on this computer: " + andList(mine.map((a) => quoted(a.record.label))) + ". " +
-    "Using " + quoted(using.record.label) + "; " + (others.length === 1 ? others[0] + " stays available with its history." : "the others stay available with their history.") + " You can switch below.";
-}
-
-/** othersKept: the tool's other agents, which setup leaves exactly as they are. */
-export const othersKept = (h: T.AssistantSetupHarness, c: T.AgentCatalogView | null | undefined, pick: AgentPick) =>
-  byAge(agentsFor(c, h.id)).filter((a) => a.record.id !== pick.id).map((a) => a.record.label);
-
 /** defaultAgentState: the default agent in a few words for the top of the
  *  list. Ready is the server's own check (installed here, folder exists). */
 export function defaultAgentState(v: T.ResponderView | null | undefined, program: (h: string) => string) {
@@ -166,6 +148,10 @@ export function notReady(chosen: T.AssistantSetupHarness[], c: T.AgentCatalogVie
   for (const h of chosen) {
     if (!canHaveAgent(c, h.id)) continue;
     const p = pickFor(picks, h, c, def);
+    if (!p.id && agentsFor(c, h.id).length > 1) return "The saved " + h.label + " setups need a current agent selected in Manage saved setups. Check again after choosing it.";
+    const retired = retiredFor(c, h.id), reconnect = !agentsFor(c, h.id).length && retired.length === 1 && retired[0].record.id === p.id && def?.agent_id !== p.id;
+    if (!p.id && retired.length > 1) return "Choose the saved " + h.label + " setup to reconnect in Manage saved setups.";
+    if (p.id && !reconnect && !agentsFor(c, h.id).some(a => a.record.id === p.id)) return "The saved " + h.label + " setup changed. Check again.";
     if (!p.label.trim()) return "Give the agent for " + h.label + " a name.";
     if (!p.dir.trim()) return "Choose the folder the agent for " + h.label + " works in.";
   }
@@ -228,10 +214,17 @@ export async function applySetup(calls: SetupCalls, chosen: T.AssistantSetupHarn
   for (const w of wanted.filter((x) => x.agent)) {
     const p = w.pick, label = p.label.trim(), dir = p.dir.trim();
     const exact = p.id ? (now.agents || []).find((a) => a.record.id === p.id) : undefined;
-    if (p.id && (!exact || !exact.enabled || exact.responder?.harness !== w.harness)) throw new Error("The agent you picked changed or was turned off. Check the list again.");
-    const existing = exact || agentsFor(now, w.harness).find((a) => a.record.label === label && a.responder?.dir === dir);
+    const before = (catalog?.agents || []).find(a => a.record.id === p.id);
+    const reconnect = !!exact && !exact.enabled && !!before && !before.enabled && before.record.harness === w.harness && exact.record.harness === w.harness && def?.agent_id !== p.id;
+    if (p.id && (!exact || !reconnect && (!exact.enabled || exact.responder?.harness !== w.harness))) throw new Error("The agent you picked changed or was turned off. Check the list again.");
+    const enabled = agentsFor(now, w.harness);
+    if (!exact && enabled.length > 1) throw new Error("Choose the current " + w.harness + " agent in Manage saved setups, then check again.");
+    // A concurrent setup may already have connected this harness. Reuse its
+    // identity, but do not overwrite a different configuration from a stale view.
+    const existing = exact || enabled[0];
+    if (!exact && existing && existing.responder?.dir !== dir) throw new Error("The agent setup changed. Check the list again before changing its folder.");
     let agent: T.CatalogAgent | undefined;
-    if (existing && existing.responder?.harness === w.harness && existing.responder?.dir === dir) agent = existing;
+    if (existing?.enabled && existing.responder?.harness === w.harness && existing.responder?.dir === dir) agent = existing;
     else {
       const r = await calls.changeAgents(existing ? { action: "update", id: existing.record.id, harness: w.harness, dir } : { action: "create", label, harness: w.harness, dir });
       if (!r.saved || !r.agent) throw new Error("Saving the agent wasn’t confirmed. Check the list again before you retry.");

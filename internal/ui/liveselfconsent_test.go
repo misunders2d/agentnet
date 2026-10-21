@@ -60,7 +60,7 @@ func TestLiveSelfConsentNotice(t *testing.T) {
 	if err := alice.SetResponder(&client.Responder{Harness: "claude", Dir: t.TempDir()}); err != nil {
 		t.Fatal(err)
 	}
-	named, err := alice.CreateLocalAgent("Builder", client.Responder{Harness: "claude", Dir: t.TempDir()})
+	named, err := alice.CreateLocalAgent("Builder", client.Responder{Harness: "pi", Dir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}

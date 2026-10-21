@@ -33,8 +33,12 @@ printf 'barrier answer\n'
 		t.Fatal(err)
 	}
 	t.Setenv("CONCURRENCY_LOG", filepath.Join(dir, "starts"))
-	Harnesses["concurrencybarrier"] = harness{bin: script, stdin: true}
-	t.Cleanup(func() { delete(Harnesses, "concurrencybarrier") })
+	// Separate logical harnesses share the same deterministic subprocess.
+	// New configuration permits only one enabled agent per harness/device.
+	for _, name := range []string{"concurrencybarrier", "concurrencybarrier2"} {
+		Harnesses[name] = harness{bin: script, stdin: true}
+		t.Cleanup(func() { delete(Harnesses, name) })
+	}
 	return dir
 }
 
@@ -70,7 +74,7 @@ func TestWorkerDistinctExecutorsConcurrent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := w.bob.CreateLocalAgent("same label", Responder{Harness: "concurrencybarrier", Dir: dir, Timeout: time.Minute})
+	b, err := w.bob.CreateLocalAgent("same label", Responder{Harness: "concurrencybarrier2", Dir: dir, Timeout: time.Minute})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +107,7 @@ func TestWorkerExecutorLaneWakeCancelAndUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := w.bob.CreateLocalAgent("B", Responder{Harness: "concurrencybarrier", Dir: dir, Timeout: time.Minute})
+	b, err := w.bob.CreateLocalAgent("B", Responder{Harness: "concurrencybarrier2", Dir: dir, Timeout: time.Minute})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,8 +169,8 @@ func TestWorkerGroupDistinctExecutorsConcurrent(t *testing.T) {
 	w, _, packet, _ := groupTurnsFixture(t)
 	conv := packet.State.Conv
 	var requests []string
-	for range 2 {
-		agent, err := w.alice.CreateLocalAgent("same label", Responder{Harness: "concurrencybarrier", Dir: dir, Timeout: time.Minute})
+	for _, harnessName := range []string{"concurrencybarrier", "concurrencybarrier2"} {
+		agent, err := w.alice.CreateLocalAgent("same label", Responder{Harness: harnessName, Dir: dir, Timeout: time.Minute})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -206,8 +210,8 @@ func TestWorkerConcurrentStopRestartDoesNotReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	var requests []string
-	for range 2 {
-		agent, err := w.bob.CreateLocalAgent("same label", Responder{Harness: "concurrencybarrier", Dir: dir, Timeout: time.Minute})
+	for _, harnessName := range []string{"concurrencybarrier", "concurrencybarrier2"} {
+		agent, err := w.bob.CreateLocalAgent("same label", Responder{Harness: harnessName, Dir: dir, Timeout: time.Minute})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -248,8 +252,8 @@ func TestWorkerConcurrentRealNamedRequests(t *testing.T) {
 		t.Fatal(err)
 	}
 	var ids []string
-	for range 2 {
-		rec, err := w.bob.CreateLocalAgent("same label", Responder{Harness: "concurrencybarrier", Dir: dir, Timeout: time.Minute})
+	for _, harnessName := range []string{"concurrencybarrier", "concurrencybarrier2"} {
+		rec, err := w.bob.CreateLocalAgent("same label", Responder{Harness: harnessName, Dir: dir, Timeout: time.Minute})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -300,8 +304,8 @@ func TestWorkerConcurrentPersonRemovalStopsEveryLane(t *testing.T) {
 		t.Fatal(err)
 	}
 	var requests []string
-	for range 2 {
-		agent, err := w.bob.CreateLocalAgent("same label", Responder{Harness: "concurrencybarrier", Dir: dir, Timeout: time.Minute})
+	for _, harnessName := range []string{"concurrencybarrier", "concurrencybarrier2"} {
+		agent, err := w.bob.CreateLocalAgent("same label", Responder{Harness: harnessName, Dir: dir, Timeout: time.Minute})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -328,8 +332,8 @@ func TestWorkerConcurrentKickBroadcastCancelsEveryLane(t *testing.T) {
 		t.Fatal(err)
 	}
 	var requests []string
-	for range 2 {
-		agent, err := w.bob.CreateLocalAgent("same label", Responder{Harness: "concurrencybarrier", Dir: dir, Timeout: time.Minute})
+	for _, harnessName := range []string{"concurrencybarrier", "concurrencybarrier2"} {
+		agent, err := w.bob.CreateLocalAgent("same label", Responder{Harness: harnessName, Dir: dir, Timeout: time.Minute})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -381,8 +385,8 @@ func TestWorkerReceiverLaneSkipsBusyWithoutClaim(t *testing.T) {
 	w := newWorld(t, "")
 	var inputs []string
 	var agents []*ExecutorStamp
-	for range 2 {
-		local, err := w.alice.CreateLocalAgent("same label", Responder{Harness: "stub", Dir: st.dir})
+	for _, harnessName := range []string{"stub", "stub2"} {
+		local, err := w.alice.CreateLocalAgent("same label", Responder{Harness: harnessName, Dir: st.dir})
 		if err != nil {
 			t.Fatal(err)
 		}

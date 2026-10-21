@@ -1,5 +1,29 @@
 # AgentNet Revival — Architectural Decision Records & Linear Roadmap
 
+## 2026-10-21 — one current agent per harness and private reminder sync
+
+The owner's correction supersedes earlier multiple-configuration UX: one
+enabled agent per harness per device. Selecting a default reuses that concrete
+identity. Exact current configuration proves which duplicate can be retired;
+without it, retain readable history and require an explicit selection rather
+than choosing by label, age or folder. Historical IDs and admitted executor
+snapshots never change. Active lists exclude retired and unbound legacy
+recipients; history remains searchable and offers an explicit route to a
+current agent without moving its draft or files. Track this correction in
+[MEL-550](https://linear.app/mellanni/issue/MEL-550).
+
+Personal reminders belong to the person and must converge across their current
+verified human devices, using the existing signed/encrypted private state lane,
+portable message references and retained terminal generations. This does not
+move scheduled-message dispatch between devices. New reminder readers use an
+explicit capability, consuming the final reserved advertisement slot within
+the existing 32-capability reader and 1,024-byte record bounds. Delivery stays
+push driven with one next-deadline wake. Native OS alerts remain local;
+closed-browser notification delivery is not promised by while-open reminder
+support. Track implementation and verification in
+[MEL-670](https://linear.app/mellanni/issue/MEL-670). This record is not evidence
+that either correction has shipped.
+
 ## 2026-10-16 — v33 shared names, unread attention and local deadlines
 
 Sergey approved the complete [v33 goal](plans/V0_8_33_GOAL.md), including the

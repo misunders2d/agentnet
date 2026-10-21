@@ -456,9 +456,9 @@ func ParseConvRoot(data []byte) (ConvRoot, error) {
 //
 // At most MaxCaps entries of 1–32 characters [a-z0-9-], sorted and unique;
 // the signed record at most MaxCapsRecord bytes. A device advertises at
-// most MaxAdvertisedCaps: readers retain headroom, so a later program may
-// list more without looking, to an older reader, as if it read nothing (a
-// record that does not parse counts for nothing). Each daemon session
+// most MaxAdvertisedCaps. rem1 consumes the last reserved slot; existing
+// v0.9.1 readers already parse 32 names (a record that does not parse
+// counts for nothing). Each daemon session
 // publishes its own; the relay keeps the newest per (device, session).
 // A relay can withhold a record but cannot forge one; which sessions are
 // live is only the relay's statement (see Profile).
@@ -515,10 +515,10 @@ const CapControl = "ctl3"
 const CapAgent = "agent1"
 
 // Bounds of a capability record: what a reader parses, and what a device
-// advertises (ROOM_V1 §2.1: parse headroom).
+// advertises. rem1 explicitly consumes the final ROOM_V1 parse-headroom slot.
 const (
 	MaxCaps           = 32
-	MaxAdvertisedCaps = 31 // dts1 uses one of the two reserved slots; old readers still accept all 32.
+	MaxAdvertisedCaps = 32 // rem1 consumes the final reserved slot; v0.9.1 readers already parse all 32.
 	MaxCapsRecord     = 1024
 )
 
@@ -544,8 +544,8 @@ func (c *CapsRecord) Sign(key ed25519.PrivateKey) { c.Sig = ed25519.Sign(key, c.
 // Has reports whether c lists capability name.
 func (c CapsRecord) Has(name string) bool { return slices.Contains(c.Caps, name) }
 
-// ValidateAdvertisement bounds our producer, retaining reader headroom. The
-// receiver's Validate/ParseCapsRecord still accepts later 32-name records.
+// ValidateAdvertisement bounds our producer. rem1 uses the final reserved
+// slot; the v0.9.1 receiver already accepts 32-name records.
 func (c CapsRecord) ValidateAdvertisement() error {
 	if len(c.Caps) > MaxAdvertisedCaps {
 		return errors.New("caps: advertisement exceeds producer ceiling")

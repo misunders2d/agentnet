@@ -1,5 +1,52 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+## Unreleased corrections — October 21, 2026
+
+The owner requires one enabled agent per harness per device. Default is a
+setting on that exact identity. The approved old Codex configurations on
+Zenbook and old Pi configuration on ThinkPad were disabled through supported
+APIs, with history/current defaults preserved and Hub publication confirmed.
+Bezos publishes one Pi. Those live configuration changes do not install the
+unreleased UI: the installed v0.9.1 can still display old labels and history rows.
+
+The correction candidate rejects enabled harness duplicates, reuses an existing
+identity when changing defaults, and reconciles a proven current pointer without
+rewriting historical messages or admitted executor snapshots. An ambiguous
+request stays pending with an actionable reason while independent work proceeds.
+Comic's active choices exclude retired/unready agents and unbound legacy chats;
+current names omit internal ID suffixes. Search preserves history, with explicit
+new-agent recovery that leaves its draft and files intact. A collapsed saved-setup
+manager retains exact-ID repair/current-selection controls. Track in MEL-550.
+
+MEL-670 adds private personal-reminder sync over the existing signed/encrypted
+own-human state lane, including native/browser persistence, terminal generations,
+offline catch-up and restart recovery. It consumes the reserved 32nd capability
+slot within the existing reader/record bounds. Focused native, Engine, parser,
+actual IndexedDB and archived v0.9.1 reader checks pass; this is not installed
+reminder-sync behavior. Closed-browser deadlines/OS banners and person-wide
+exactly-once offline notifications are not claimed. Scheduled dispatch remains
+owned by its scheduling device.
+
+The exact previous Claude conversation was resumed through Herdr for a bounded
+guard review. Its two blockers (queue starvation and missing configuration
+recovery) are addressed with focused regressions. The canonical Comic build,
+Node model/component checks and desktop/phone starter/setup recovery journeys
+pass. Remaining interaction and integrated race qualification is in progress;
+no new release/deployment is being prepared in this pass. Preserve the two
+owner-authored drafts below. MEL-671 separately tracks a future left-panel
+redesign across all flows; it is outside this correction batch.
+
+Current normal fixtures were updated for the new harness uniqueness rule
+without removing assertions or changing timeouts. Three existing native opt-in
+parents still have obsolete multiple-Claude setup assumptions and remain
+unqualified: `TestManagedReceiverDaemonContinuesAfterCLIExit`,
+`TestClosedReplyReceiverActualNativeShutdownToManaged` and
+`TestClosedReplyReceiverActualOMPShutdownToManaged`. Their original opt-in
+gates are unchanged. The generic backup in
+`TestCodexActualCleanCloseOriginalBackup` uses a distinct test harness now,
+but actual native execution was not performed. These are explicit limits,
+not executed passes or newly introduced skips.
+
 ## v0.9.1 — published and deployed to the relay (October 20, 2026)
 
 [AgentNet v0.9.1](https://github.com/misunders2d/agentnet/releases/tag/v0.9.1)

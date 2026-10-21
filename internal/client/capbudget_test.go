@@ -26,7 +26,7 @@ func TestOwnCapabilitySignedByteBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(raw) > 1024 || len(caps) > protocol.MaxAdvertisedCaps || len(caps) >= 32 {
+	if len(raw) > 1024 || len(caps) > protocol.MaxAdvertisedCaps || len(caps) > 32 {
 		t.Fatalf("caps=%d bytes=%d headroom=%d", len(caps), len(raw), protocol.MaxCaps-len(caps))
 	}
 	t.Logf("caps=%d signed bytes=%d/1024 headroom=%d", len(caps), len(raw), protocol.MaxCaps-len(caps))

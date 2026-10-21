@@ -52,16 +52,22 @@ func TestModelReportExactOwnedSnapshotAndQuietSync(t *testing.T) {
 	// Run shutdown joins stream/archive work; the detached sender can still
 	// finish a setup flush and signal Changed. Join it before measuring quiet.
 	w.alice.stopBackgroundPosts()
-	r := Responder{Harness: "codex", Dir: t.TempDir(), Timeout: time.Minute}
-	if err := w.alice.SetResponder(&r); err != nil {
+	r := Responder{Harness: "pi", Dir: t.TempDir(), Timeout: time.Minute}
+	namedResponder := r
+	namedResponder.Harness = "codex"
+	named, err := w.alice.CreateLocalAgent("Private fixture", namedResponder)
+	if err != nil {
 		t.Fatal(err)
 	}
-	named, err := w.alice.CreateLocalAgent("Private fixture", r)
-	if err != nil {
+	if err = w.alice.SetResponder(&r); err != nil {
 		t.Fatal(err)
 	}
 	fp := w.alice.Self().Fingerprint()
 	for _, id := range []string{"", named.ID} {
+		r := r
+		if id == named.ID {
+			r = namedResponder
+		}
 		j := seedModelRun(t, w.alice, w.bob, r, id)
 		if err = w.alice.recordModelReport(j, &r, "gpt-6.1-sol", "xhigh"); err != nil {
 			t.Fatal(err)

@@ -30,7 +30,7 @@ export function AssistantSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadin
   const o = useStore(store, (s) => s.overview);
   const browser = isBrowser(store.host.platform, o);
   const r = useLoad(() => store.api.responder(), [o?.me.responder, o?.me.responder_dir, browser]);
-  const head = <PageHead title="Your agent" titleRef={titleRef} lead="The program on this computer that answers questions and does tasks for you, with your own setup." />;
+  const head = <PageHead title="Coding agents" titleRef={titleRef} lead="Choose the coding programs this computer uses for chats, questions and tasks, with your own setup." />;
   // Named-agent setup is primary; the legacy default routing stays subordinate.
   const setup = <div className="space-y-4"><AssistantSetup /></div>;
   if (browser) return <>{head}{setup}<AppControls command /></>;

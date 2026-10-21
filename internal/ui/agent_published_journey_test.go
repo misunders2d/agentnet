@@ -24,8 +24,10 @@ func TestBrowserNamedAgentPublishedJourney(t *testing.T) {
 	bin := t.TempDir()
 	runs := filepath.Join(bin, "runs")
 	script := "#!/bin/sh\ncat >/dev/null\ncat agent-name >> '" + runs + "'\ncat agent-name\n"
-	if err := testhub.WriteNativeScript(filepath.Join(bin, "claude"), script, "claude"); err != nil {
-		t.Fatal(err)
+	for _, harness := range []string{"claude", "pi"} {
+		if err := testhub.WriteNativeScript(filepath.Join(bin, harness), script, harness); err != nil {
+			t.Fatal(err)
+		}
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -34,12 +36,12 @@ func TestBrowserNamedAgentPublishedJourney(t *testing.T) {
 	hub := testhub.Start(t, hubDir, "127.0.0.1:0", "")
 	host := personAgent(t, ctx, testhub.BootstrapCode(t, hubDir), "laptop", "Host")
 	var agents []protocol.AgentRecord
-	for _, label := range []string{"A", "B"} {
+	for i, label := range []string{"A", "B"} {
 		dir := t.TempDir()
 		if err := os.WriteFile(filepath.Join(dir, "agent-name"), []byte(label+"\n"), 0600); err != nil {
 			t.Fatal(err)
 		}
-		agent, err := host.CreateLocalAgent(label, client.Responder{Harness: "claude", Dir: dir, Timeout: 20 * time.Second})
+		agent, err := host.CreateLocalAgent(label, client.Responder{Harness: []string{"claude", "pi"}[i], Dir: dir, Timeout: 20 * time.Second})
 		if err != nil {
 			t.Fatal(err)
 		}

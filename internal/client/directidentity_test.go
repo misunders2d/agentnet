@@ -16,7 +16,9 @@ func TestConcreteAgentTopicsScopeBeforePaginationAndArchivedCounts(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := w.bob.CreateLocalAgent("Same name", Responder{Harness: "stub", Dir: stub.dir})
+	Harnesses["identityother"] = Harnesses["stub"]
+	t.Cleanup(func() { delete(Harnesses, "identityother") })
+	b, err := w.bob.CreateLocalAgent("Same name", Responder{Harness: "identityother", Dir: stub.dir})
 	if err != nil {
 		t.Fatal(err)
 	}

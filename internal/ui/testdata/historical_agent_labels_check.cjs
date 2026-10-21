@@ -62,14 +62,14 @@ reviewNames=names;assert.match(openCard(reviewRow({...item(pi),target:{address:h
 const storeSource=source('store.ts'),start=storeSource.indexOf('  private async loadAgentNames()'),end=storeSource.indexOf('\n  // ---- drafts',start);
 assert(start>=0&&end>start,'actual name hydration method exists');
 const harness=`export class Harness { namesLoading=false; state; api; changes=0; constructor(state,api){this.state=state;this.api=api;} set(patch){this.changes++;Object.assign(this.state,patch);} ${storeSource.slice(start,end)} }`;
-const env={module:{exports:{}},Promise,Map,Set};env.exports=env.module.exports;
+const env={module:{exports:{}},Promise,Map,Set,currentCatalogAgents:model.currentCatalogAgents};env.exports=env.module.exports;
 vm.runInNewContext(esbuild.transformSync(harness,{loader:'ts',format:'cjs'}).code,env);
 (async()=>{
  const state={agentNames:{...names},dm:{agents:[{host:{address:host}}]},overview:{me:{address:'atlas/laptop'},threads:[]}};
- let records=[{record:{id:pi,host,host_key:fingerprint,label:'Pi',harness:'claude'}}],reads=[];
+ let records=[{record:{id:pi,host,host_key:fingerprint,label:'Pi',harness:'claude'},enabled:true}],reads=[];
  const h=new env.module.exports.Harness(state,{agents:async address=>{reads.push(address);return {host:address||'atlas/laptop',agents:address?records:[]};}});
  await h.loadAgentNames();assert.equal(message.historicalTargetLabel(target(pi),state.agentNames),'Pi');assert.deepEqual(reads,[undefined,host],'metadata shares the existing catalog fetch');
- records=[{record:{id:pi,host,host_key:'replacement-key',label:'Replacement named agent',harness:'codex'}}];await h.loadAgentNames();
+ records=[{record:{id:pi,host,host_key:'replacement-key',label:'Replacement named agent',harness:'codex'},enabled:true}];await h.loadAgentNames();
  assert.equal(message.historicalTargetLabel(target(pi),state.agentNames),'Agent aaaaaaaa','a replaced host key cannot relabel a historical request');
  const changes=h.changes;records=[];await h.loadAgentNames();assert(h.changes>changes,'deleting stale key metadata publishes the new name map');
  assert.equal(state.agentNames[pi+'#host_key'],undefined);assert.equal(message.historicalTargetLabel({...target(pi),fingerprint:'replacement-key'},state.agentNames),'Agent aaaaaaaa','removed record cannot retain its old proof');

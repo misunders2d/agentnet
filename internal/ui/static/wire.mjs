@@ -40,6 +40,7 @@ export const CapHistoryArchive="ha1",SubHistoryArchive="history-archive";
 export const CapOwnSyncV3 = "own3", CapDeviceHistory = CapOwnSyncV3, SubDeviceHistory = "device-history", SubDeviceFile="device-file";
 export const SubTopicSync = "topic-sync";
 export const CapDirectTopicSync="dts1", SubDirectTopicSync="direct-topic-sync";
+export const CapReminderSync = "rem1", SubReminderSync = "reminder-sync";
 export const CapTopicStateSync = "tss1", SubTopicStateSync = "topic-state-sync"; // private topic marks between current own-human devices; NOT implied by rm1
 export const CapReadSync = "rd1", CapReadSyncV2 = "rd2", SubReadSync = "read-sync";
 export const CapModelSync = "mdl1", CapModelSyncV2 = "mdl2", SubModelSync = "model-sync";
@@ -775,11 +776,12 @@ async function checkV2(n) {
     if(n.conv||n.lid||n.root||n.kind!=="message"||!n.replica||n.attachments.length!==1||n.target||n.pid||n.reply_to||n.origin||n.emotion||n.status||n.fan||n.human||n.receiver_route||n.agent_id||n.topic||n.topic_event||n.topic_done||n.quote||n.send_group||n.session||n.fallback)throw Error("history archive: quiet rootless replica required");
     parseHistoryArchive(n.body);if(!n.attachments[0].blob||n.attachments[0].size>HistoryArchiveMaxBytes||n.attachments[0].blob.size>HistoryArchiveMaxBytes+(64<<10))throw Error("history archive exceeds bound");return;
   }
-  if(n.sub===SubModelSync || n.sub===SubReadSync || n.sub===SubInvitationSync || n.sub===SubTopicSync || n.sub===SubTopicStateSync || n.sub===SubDirectTopicSync || n.sub===SubDeviceHistory || n.sub===SubDeviceFile) {
+  if(n.sub===SubModelSync || n.sub===SubReadSync || n.sub===SubInvitationSync || n.sub===SubTopicSync || n.sub===SubTopicStateSync || n.sub===SubReminderSync || n.sub===SubDirectTopicSync || n.sub===SubDeviceHistory || n.sub===SubDeviceFile) {
     if(n.conv || n.lid || n.root || n.kind!=="message" || !n.replica || n.target || n.pid || (n.attachments.length && n.sub!==SubDeviceFile) || n.attachments.length>1 || n.reply_to || n.origin || n.emotion || n.status || n.fan || n.human || n.receiver_route || n.agent_id || n.topic || n.topic_event || n.topic_done || n.quote)throw Error("read sync: quiet rootless reference carrier required");
     if(n.sub===SubModelSync){if(n.send_group||n.session||n.fallback)throw Error("model sync: quiet carrier required");parseModelSync(n.body);return;}
     if(n.sub===SubDeviceHistory||n.sub===SubDeviceFile){if(n.send_group||n.session||n.fallback)throw Error("device history: quiet carrier required");parseDeviceHistory(n.body,n.sub===SubDeviceFile);return;}
     if(n.sub===SubDirectTopicSync){if(n.send_group||n.session||n.fallback)throw Error("direct topic sync: quiet carrier required");parseDirectTopicSync(n.body);return;}
+    if(n.sub===SubReminderSync){if(n.send_group||n.session||n.fallback)throw Error("reminder sync: quiet rootless carrier required");parseReminderSync(n.body);return;}
     if(n.sub===SubTopicStateSync){if(n.send_group||n.session||n.fallback)throw Error("topic state sync: quiet rootless mark carrier required");parseTopicStateSync(n.body);return;}
     if(n.sub===SubTopicSync){if(n.session||n.fallback)throw Error("topic sync: quiet rootless title carrier required");parseTopicSync(n.body);}else if(n.sub===SubInvitationSync)await validateInvitationSync(parseInvitationSync(n.body));else parseReadSync(n.body);return;
   }
@@ -869,7 +871,7 @@ export async function seal(m, keys, recipient) {
   // A turn that asks for the recipient's attention names its channel
   // (envelope.SealAttention); only version 2 carries it.
   const chan = m.chan || "";
-  if ((inner.sub === SubHistoryArchive || inner.sub === SubRootSync || inner.sub === SubModelSync || inner.sub === SubReadSync || inner.sub === SubInvitationSync || inner.sub === SubTopicSync || inner.sub === SubTopicStateSync || inner.sub === SubDirectTopicSync || inner.sub === SubDeviceHistory || inner.sub === SubDeviceFile) && chan) throw new Error("root sync carries no attention");
+  if ((inner.sub === SubHistoryArchive || inner.sub === SubRootSync || inner.sub === SubModelSync || inner.sub === SubReadSync || inner.sub === SubInvitationSync || inner.sub === SubTopicSync || inner.sub === SubTopicStateSync || inner.sub === SubReminderSync || inner.sub === SubDirectTopicSync || inner.sub === SubDeviceHistory || inner.sub === SubDeviceFile) && chan) throw new Error("root sync carries no attention");
   if (chan && (v !== Version2 || !validChannel(chan))) throw new Error("attention needs a version 2 message and a notification channel");
   const env = { v, id: m.id, from: m.from, to: m.to, ts: m.ts, kind: m.kind, ct,
     blobs: attachments.map((a) => a.blob), session: inner.session, fallback: inner.fallback, attn: !!chan, chan };
@@ -956,7 +958,7 @@ export async function open(json, keys, selfAddress, sender) {
     throw new Error("encrypted header does not match signed envelope");
   }
   await checkV2(n);
-  if ((n.sub === SubHistoryArchive || n.sub === SubRootSync || n.sub === SubModelSync || n.sub === SubReadSync || n.sub === SubInvitationSync || n.sub === SubTopicSync || n.sub === SubTopicStateSync || n.sub === SubDirectTopicSync || n.sub === SubDeviceHistory || n.sub === SubDeviceFile) && e.attn) throw new Error("root sync carries no attention");
+  if ((n.sub === SubHistoryArchive || n.sub === SubRootSync || n.sub === SubModelSync || n.sub === SubReadSync || n.sub === SubInvitationSync || n.sub === SubTopicSync || n.sub === SubTopicStateSync || n.sub === SubReminderSync || n.sub === SubDirectTopicSync || n.sub === SubDeviceHistory || n.sub === SubDeviceFile) && e.attn) throw new Error("root sync carries no attention");
   if (n.attachments.length !== e.blobs.length) throw new Error("encrypted manifest does not match signed attachments");
   n.attachments.forEach((a, i) => {
     const b = e.blobs[i];
@@ -1058,7 +1060,7 @@ export const convRootVersionLimit = (v) => v === GroupRootVersion ? MaxGroupRoot
 const convRootSizeLimit = (json) => { try { return convRootVersionLimit(JSON.parse(json).v); } catch (_) { return MaxConvRoot; } };
 export const CapProactiveAgent = "ams1";
 export const proactiveAgent = n => n.kind === "message" && !n.sub && !n.status && !n.reply_to && !n.target && !!n.conv && !!n.pid && n.origin === "agent:proactive" && !n.receiver_route;
-export const MaxCaps = 32, MaxAdvertisedCaps = 31; // older readers already parse up to 32 names
+export const MaxCaps = 32, MaxAdvertisedCaps = 32; // rem1 consumes the final slot; v0.9.1 readers already parse all 32
 export const MaxCapsRecord = 1024;
 export const CapEnv2 = "env2";
 export const CapPerson = "person2"; // reads person roster chains, roots v2, fan-out and history
@@ -1150,6 +1152,16 @@ export function parseTopicStateSync(json) {
   if(!validTopicMark(x)||seen.has(key))throw Error("topic state sync: invalid or duplicate mark");
   seen.add(key);return x;
  });return r;
+}
+
+// Private reminder intent. Alert delivery is a separate local generation ledger.
+export const validReminderMark=m=>(m.conv===""||validHash(m.conv))&&validFingerprint(m.fingerprint)&&validID(m.lid)&&validFingerprint(m.writer)&&Number.isSafeInteger(m.revision)&&m.revision>=1&&Number.isSafeInteger(m.due)&&m.due>=1&&["pending","done","cancelled","replied"].includes(m.state);
+export const reminderMarkNewer=(a,b)=>!b||a.revision>b.revision||a.revision===b.revision&&a.writer>b.writer;
+export function parseReminderSync(json){
+ const r=strictRecord(json,65536,"reminder sync",{v:"number",person:"string",roster:"string",reminders:"array"});
+ if(r.v!==1||!validID(r.person)||!validHash(r.roster)||!r.reminders?.length||r.reminders.length>64)throw Error("reminder sync: invalid owner or reminders");
+ const fields={conv:"string",fingerprint:"string",lid:"string",due:"int",state:"string",revision:"int",writer:"string"},seen=new Set();
+ r.reminders=r.reminders.map(mark=>{if(!mark||typeof mark!=="object"||Object.keys(fields).some(k=>mark[k]==null))throw Error("reminder sync: incomplete reminder");const x=strict(mark,"reminder",fields),key=x.conv+"|"+x.fingerprint+"|"+x.lid;if(!validReminderMark(x)||seen.has(key))throw Error("reminder sync: invalid or duplicate reminder");seen.add(key);return x;});return r;
 }
 
 export const validDirectTopicDestination=d=>!!d&&validAddress(d.host)&&validFingerprint(d.fingerprint)&&(d.agent_id==null||d.agent_id===''||validID(d.agent_id));
@@ -1954,7 +1966,8 @@ export function validateCaps(c) {
 }
 
 // newCaps is this device session's signed record (for PUT /v1/caps): at
-// most MaxAdvertisedCaps names, so readers parsing MaxCaps keep headroom.
+// most MaxAdvertisedCaps names. rem1 consumes the final slot; v0.9.1 readers
+// already parse 32 names.
 export async function newCaps(keys, address, session, caps = [CapEnv2, CapPerson]) {
   const c = { address, session, caps: [...caps].sort(), ts: Math.floor(Date.now() / 1000) };
   if (c.caps.length > MaxAdvertisedCaps) throw new Error("caps: a device advertises at most " + MaxAdvertisedCaps);

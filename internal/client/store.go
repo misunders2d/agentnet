@@ -327,7 +327,7 @@ CREATE TABLE reported(
 CREATE INDEX outbox_conv_lid ON outbox(conv, lid);
 `, historyReceiptSchema, deviceHistorySchema, proposalChoiceSchema, receiptGenerationSchema, requestFollowupSchema, answeredConversationStatusSchema, modelReportSchema, heldCopySchema, retainedConversationStatusSchema, heldLogicalSchema, waitingConversationStatusSchema, topicMarkSyncSchema, skippedCopySchema, historyArchiveSchema, `
 ALTER TABLE quarantine ADD COLUMN relay_ingress INTEGER NOT NULL DEFAULT 0;
-`, deviceHistoryOriginalPeerSchema, groupPublicationBindingSchema, agentActionSchema, nativeApprovalSchema, attentionMarkSchema, sharedTopicTitleSchema, scheduledSendSchema, conversationResourcesSchema, directTopicSchema}
+`, deviceHistoryOriginalPeerSchema, groupPublicationBindingSchema, agentActionSchema, nativeApprovalSchema, attentionMarkSchema, sharedTopicTitleSchema, scheduledSendSchema, conversationResourcesSchema, directTopicSchema, reminderSyncSchema}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
 const (
@@ -1318,7 +1318,7 @@ func (s *store) claimJob(responder string, resolve ...func(dbq, job) (*ExecutorS
 		} else if j.AgentID != "" {
 			err = ErrUnknownAgent
 		}
-		if errors.Is(err, errExecutorBusy) {
+		if errors.Is(err, errExecutorBusy) || errors.Is(err, ErrAgentHarnessAmbiguous) {
 			wrote, e := noteExecutionWait(tx, j.ID, err.Error())
 			if e != nil {
 				return job{}, false, e

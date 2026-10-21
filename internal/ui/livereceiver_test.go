@@ -34,6 +34,7 @@ func TestLiveReplyReceiverAllowlistAndThreeSendPaths(t *testing.T) {
 	t.Setenv("AGENTNET_NOTIFY", "off")
 	bin := t.TempDir()
 	writeUIHarnessStub(t, bin, "codex", "#!/bin/sh\nexit 97\n", "exit /b 97\r\n")
+	writeUIHarnessStub(t, bin, "pi", "#!/bin/sh\nexit 97\n", "exit /b 97\r\n")
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -63,14 +64,16 @@ func TestLiveReplyReceiverAllowlistAndThreeSendPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	config := client.Responder{Harness: "codex", Dir: t.TempDir()}
-	if err = a.SetResponder(&config); err != nil {
-		t.Fatal(err)
-	}
-	before, _ := a.Responder()
 	record, err := a.CreateLocalAgent("Local Receiver A", config)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defaultConfig := config
+	defaultConfig.Harness = "pi"
+	if err = a.SetResponder(&defaultConfig); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := a.Responder()
 	selection := &ReplyReceiverSelection{Kind: "managed_agent", AgentID: record.ID, Instructions: "original local instruction", Mode: "question"}
 	// Use the native registry API; these fixture files are not a live harness.
 	nativeFile := filepath.Join(t.TempDir(), "native.jsonl")

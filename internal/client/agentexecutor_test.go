@@ -113,6 +113,12 @@ func TestNamedExecutorABAAndImmutableClaim(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatal(err)
 	}
+	if err = w.bob.SetLocalAgentResponder(a.ID, &Responder{Harness: "cstyle2", Dir: st.dir}); !errors.Is(err, ErrAgentHarnessConflict) {
+		t.Fatal("running mapping change did not report the other enabled harness", err)
+	}
+	if err = w.bob.SetLocalAgentResponder(b.ID, nil); err != nil {
+		t.Fatal(err)
+	}
 	if err = w.bob.SetLocalAgentResponder(a.ID, &Responder{Harness: "cstyle2", Dir: st.dir}); err != nil {
 		t.Fatal(err)
 	}
@@ -232,6 +238,35 @@ func TestNamedExecutorParticipationResolverRollback(t *testing.T) {
 	st := installAgentStub(t)
 	w, conv, _, stopBob := agentWorld(t)
 	pid := participate(t, w, conv, nil, nil)
+	// These distinct named participations are admitted before a pre-upgrade
+	// duplicate Pi configuration is restored below.
+	waitNamedAgentCaps(t, w.alice)
+	waitNamedAgentCaps(t, w.bob)
+	pi := Responder{Harness: "pi", Dir: st.dir}
+	piAgent, err := w.bob.CreateLocalAgent("Selected Pi", pi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid, err := w.bob.CreateLocalAgent("Independent stub", Responder{Harness: "agentstub", Dir: st.dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = w.bob.PublishAgentCatalog(tctx(t)); err != nil {
+		t.Fatal(err)
+	}
+	namedPIDs := make([]string, 0, 2)
+	for _, record := range []protocol.AgentRecord{piAgent, valid} {
+		invited, err := w.alice.InviteNamedAgent(tctx(t), conv, w.bob.Address, record.ID, nil, nil, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		eventually(t, "named participation invitation", func() bool { return stateAt(t, w.bob, invited.PID).State == PartInvited })
+		if _, err = w.bob.AcceptParticipation(tctx(t), invited.PID); err != nil {
+			t.Fatal(err)
+		}
+		eventually(t, "named participation active", func() bool { return stateAt(t, w.alice, invited.PID).Claimable() })
+		namedPIDs = append(namedPIDs, invited.PID)
+	}
 	stopBob()
 	in := agentRequest(t, w, conv, pid, envelope.KindQuestion)
 	if _, err := w.bob.store.addConvInbox(in, w.alice.Self().Fingerprint(), stateAgentWaiting, false, nil); err != nil {
@@ -259,5 +294,36 @@ func TestNamedExecutorParticipationResolverRollback(t *testing.T) {
 	}
 	if st.runs() != 0 {
 		t.Fatal("resolver failure executed harness")
+	}
+	entries, err := w.bob.LocalAgents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedLegacyAgentCatalog(t, w.bob, append(entries, legacyLocalAgentEntry(w.bob, "Earlier Pi", pi)))
+	requests := make([]envelope.Inner, 0, 2)
+	for i, record := range []protocol.AgentRecord{piAgent, valid} {
+		request := agentRequest(t, w, conv, namedPIDs[i], envelope.KindQuestion)
+		request.Target.AgentID = record.ID
+		if _, err := w.bob.store.addConvInbox(request, w.alice.Self().Fingerprint(), stateAgentWaiting, false, nil); err != nil {
+			t.Fatal(err)
+		}
+		requests = append(requests, request)
+	}
+	const originalQuery = `SELECT json_array(id,sender,verified_by,body,ts,reply_to,target,state,attempts,executor,agent_id) FROM inbox WHERE id=?`
+	var before string
+	if err = w.bob.store.db.QueryRow(originalQuery, requests[0].ID).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	j, found, _, _, err := w.bob.store.claimAgentPage("", w.bob.Address, w.bob.Self().Fingerprint(), 0, agentPage,
+		func(q dbq, j job) (*ExecutorStamp, error) { return w.bob.ResolveExecutorIn(q, j.AgentID, nil) })
+	if err != nil || !found || j.ID != requests[1].ID || j.Executor == nil || j.Executor.AgentID != valid.ID || j.Executor.Responder.Harness != "agentstub" {
+		t.Fatalf("ambiguous participation blocked independent exact selection: id=%s found=%v error=%v", j.ID, found, err)
+	}
+	var after string
+	if err = w.bob.store.db.QueryRow(originalQuery, requests[0].ID).Scan(&after); err != nil || after != before {
+		t.Fatal("ambiguous participation changed its original request or acquired an attempt", err)
+	}
+	if err = w.bob.store.db.QueryRow(`SELECT coalesce(detail,'') FROM inbox WHERE id=?`, requests[0].ID).Scan(&detail); err != nil || !strings.Contains(detail, ErrAgentHarnessAmbiguous.Error()) {
+		t.Fatal("ambiguous participation lacks its actionable configuration reason", detail, err)
 	}
 }

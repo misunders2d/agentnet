@@ -14,7 +14,7 @@ import { Popover } from "@base-ui/react/popover";
 import { IconAlertCircle, IconAt, IconCloudOff, IconLock } from "@tabler/icons-react";
 import { errorText, type T } from "../api";
 import { useAgentNames, useApp, useWide } from "../context";
-import { agentName, deviceTarget, deviceWho, firstLine, niceDevice, participants, personName, scopeMatches, threadAgentHost, threadAgentKey, threadAgentID, threadAuthor, whoName } from "../model";
+import { agentHistoryThread, agentName, deviceTarget, deviceWho, firstLine, niceDevice, participants, personName, scopeMatches, threadAgentHost, threadAgentKey, threadAgentID, threadAuthor, whoName } from "../model";
 import { useStore, type Draft, type StagedFile } from "../store";
 import { EmojiPicker, useEmojiPreload } from "./Emoji";
 import { DropTarget, FilesTray, bytes, draftFiles, overLimit, releaseFiles, useFileDrop } from "./Composer.files";
@@ -119,7 +119,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     if (thread) {
       if (answerable) return { kind: "answer", id: answerable.id, task: answerable.kind === "task" };
       if(thread.topic?.agent_key&&thread.topic.agent_key!==threadAgentKey(thread).pinned)return {kind:"none",note:"This conversation belongs to an earlier host key. Choose the current configured agent in Agents; its history is kept."};
-      if(thread.topic?.agent_legacy&&!threadAgentID(thread)&&!thread.messages?.some(m=>m.exec?.state==="running"&&m.dir==="out"&&!m.target?.agent_id))return {kind:"none",note:"This earlier default conversation has no concrete agent binding. Choose an agent in Agents to start new work; its history stays here."};
+      if(agentHistoryThread(thread,names)&&!thread.messages?.some(m=>m.exec?.state==="running"&&m.dir==="out"&&(m.target?.agent_id||"")===(threadAgentID(thread)||"")))return {kind:"none",note:"This is saved agent history. Choose a configured agent above to start new work; your draft and files stay here."};
       const to = deviceTarget(threadAgentHost(thread), overview); // a device that runs no agent cannot be asked
       if (threadAgentID(thread) && to.kind !== "agent") return { kind: "none", note: "The selected agent is unavailable on that computer." };
       return to.kind === "agent" ? { kind: "device", name: deviceAgent(threadAgentHost(thread), overview, names, threadAgentID(thread)), seed: thread.peer, ask: true }

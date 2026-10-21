@@ -395,7 +395,7 @@ func (s *store) claimAgentPageForCause(responder, self, selfFP string, pos int64
 			if errors.Is(err, errExecutorBusy) && reciprocal != nil {
 				stamp, err = reciprocal(tx, r.j)
 			}
-			if errors.Is(err, errExecutorBusy) {
+			if errors.Is(err, errExecutorBusy) || errors.Is(err, ErrAgentHarnessAmbiguous) {
 				updated, e := noteExecutionWait(tx, r.j.ID, err.Error())
 				if e != nil {
 					return j, false, pos, false, nil, e
@@ -1056,6 +1056,9 @@ func (a *Agent) mayDeliver(env envelope.Envelope) (bool, error) {
 		return allowed, err
 	}
 	if handled, allowed, err := a.mayDeliverDirectTopicSync(env); handled {
+		return allowed, err
+	}
+	if handled, allowed, err := a.mayDeliverReminderSync(env); handled {
 		return allowed, err
 	}
 	if handled, allowed, err := a.mayDeliverTopicStateSync(env); handled {

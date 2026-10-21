@@ -11,6 +11,14 @@ program, `agentnet`, that is both the laptop client and the Hub.
 
 ## Product rules that code must keep
 
+- **One active agent per harness per device** (owner rule, 2026-10-21).
+  Default is a setting on that concrete agent, never another chat identity.
+  Active directories and chat lists show usable current agents; retired
+  configurations and unbound legacy conversations remain searchable history.
+  Preserve original signed identities, messages and admitted executor snapshots.
+  Never guess a historical harness from today's default or silently rebind a
+  conversation. Reuse a proven existing identity when changing its default or
+  folder; do not create a duplicate enabled configuration of the same harness.
 - **AgentNet communicates; native harnesses govern execution** (owner rule,
   2026-10-14). Agents keep their own tools, skills, configuration and guardrails.
   Authorized collaboration must proceed through peer questions, task delegation,

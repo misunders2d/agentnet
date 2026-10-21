@@ -73,7 +73,9 @@ func codexActualCloseGate(t *testing.T, a, b *Agent, selected, other replySessio
 	if err != nil {
 		t.Fatal(err)
 	}
-	unused, err := a.CreateLocalAgent("unselected backup", Responder{Harness: "agentstub", Dir: st.dir})
+	Harnesses["closeother"] = Harnesses["agentstub"]
+	t.Cleanup(func() { delete(Harnesses, "closeother") })
+	unused, err := a.CreateLocalAgent("unselected backup", Responder{Harness: "closeother", Dir: st.dir})
 	if err != nil {
 		t.Fatal(err)
 	}

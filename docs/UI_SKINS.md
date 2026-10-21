@@ -796,8 +796,9 @@ types are the Go structs in `internal/ui/*.go`, generated into
   Shipped `org1`/`agr1`/`rm1` meanings are unchanged. Shared topic renames add
   the independent `ttl1` gate; shared group-link metadata adds independent `res1`.
   Direct agent chats use `{peer, ids, topic, merge?}` for an existing destination or `{peer, ids, new:true, title, topic:""}` for a named new topic, instead of `conv`. Preview returns the normalized destination; a new direct topic uses the review operation ID as its topic ID. Echo the entire review, including `destination` and `synthetic_topics`, unchanged for apply/retry. Only select topics with the same immutable `agent_host`, `agent_key` and `agent_id` (empty legacy IDs stay distinct). Synthetic IDs are accepted by `/api/thread`; navigation anchors are held originals and do not replace the topic ID. These placements are private to the owner’s current linked human devices, require explicit `dts1`, and produce no message or execution event. The result proves local storage (`state:stored`), not remote delivery. Direct undo uses `{peer,lid,id}` on the originating device; retain `id` for retries. Original reply links still determine later replies and native context.
-  Current producers advertise at most 31 signed names; readers still parse 32,
-  and records stay bounded at 1024 bytes. Missing readers retain their copies;
+  Private own-device reminder state adds independent `rem1`, consuming the
+  last reserved producer slot. Producers and existing readers accept at most
+  32 signed names; records stay bounded at 1024 bytes. Missing readers retain their copies;
   history/archive/repack keeps each extension independently and never runs
   imported work.
 - Headless: a request message may carry `exec` `{state, at, host, stale?, attempt?, detail?}`,

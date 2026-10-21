@@ -119,6 +119,8 @@ func quarantined(t *testing.T, a *Agent, id string) bool {
 // member a host+id fallback with host, agent and PID for a catalog lookup.
 func TestAssistantReactionMemberHostedDMAndLabels(t *testing.T) {
 	bin := reactHarness(t, "reactmember", `ok\nreaction: 🎉\nemotion: calm\n`)
+	Harnesses["reactmemberother"] = Harnesses["reactmember"]
+	t.Cleanup(func() { delete(Harnesses, "reactmemberother") })
 	w, conv, _, _ := agentWorld(t)
 	waitNamedAgentCaps(t, w.bob)
 	withAgentReaction(t, w.alice, w.bob)
@@ -127,7 +129,7 @@ func TestAssistantReactionMemberHostedDMAndLabels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	two, err := w.bob.CreateLocalAgent("Bob Reviewer", Responder{Harness: "reactmember", Dir: t.TempDir()})
+	two, err := w.bob.CreateLocalAgent("Bob Reviewer", Responder{Harness: "reactmemberother", Dir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}

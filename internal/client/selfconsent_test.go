@@ -155,11 +155,11 @@ func TestSelfConsentHostInvite(t *testing.T) {
 func TestSelfConsentConditions(t *testing.T) {
 	w, conv, _ := selfConsentWorld(t)
 	aliceFP, bobFP := w.alice.Self().Fingerprint(), w.bob.Self().Fingerprint()
-	named, err := w.alice.CreateLocalAgent("Builder", Responder{Harness: "claude", Dir: t.TempDir()})
+	named, err := w.alice.CreateLocalAgent("Builder", Responder{Harness: "pi", Dir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	retired, err := w.alice.CreateLocalAgent("Retired", Responder{Harness: "claude", Dir: t.TempDir()})
+	retired, err := w.alice.CreateLocalAgent("Retired", Responder{Harness: "codex", Dir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -486,7 +486,7 @@ func TestSelfConsentGroup(t *testing.T) {
 		t.Fatalf("re-invitation added consent: %d", n)
 	}
 	// A fresh agent invited by another member still needs its owner's click.
-	other, err := w.alice.CreateLocalAgent("Other own builder", Responder{Harness: "claude", Dir: t.TempDir()})
+	other, err := w.alice.CreateLocalAgent("Other own builder", Responder{Harness: "pi", Dir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}

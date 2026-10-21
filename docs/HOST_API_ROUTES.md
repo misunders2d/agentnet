@@ -109,7 +109,7 @@ and catch the error. Failures differ by platform.
 | `demo` | D B | `true` only on `agentnet ui --demo`. |
 | `app` | D | `true` in the desktop app's or the Android app's window, otherwise absent (never on B). It does not mean the `host.app*` methods are present: they always are. |
 | `topic_list` | D B | Topics are kept here, so use `?topics=1` and `/api/topics`. `false` in the demo. |
-| `remind` | D | Reminders can be set. `false` in the demo and absent on B, so hide "Remind me" there. |
+| `remind` | DB | Personal reminders can be set and sync privately across current linked own-human devices. `false` in the demo. |
 | `schedules` | D B | Optional local scheduled sending. Offer its controls only when true; absent/false providers refuse the routes below. No schedule records are included in overview. |
 | `persons` | D B | Conversations between people are available. |
 | `agents` | D B | Agents can be invited into conversations. `false` in the demo. |
@@ -130,7 +130,7 @@ and catch the error. Failures differ by platform.
 | `review`, `quarantine` | D B | Received device items and review notices, and held envelopes with `code` and `action`. |
 | `directory`, `agent_devices`, `model_reports` | D B | The relay's member list, the devices that say they run an agent (a hint), and private model reports. Each report carries exact `host`, `host_key`, `agent_id`, `model`, optional `reasoning`, `harness`, `executor`, `at` (Unix seconds), and `revision`. Reports are historical observations for current own-human readers, not current settings; match the exact agent/host/key and show absent reasoning honestly. |
 | `link`, `links`, `history`, `group_invitations` | D B | This device's own join request, new devices asking to join, history copying, and group invitations. |
-| `reminders` | D | Pending reminders, soonest first. |
+| `reminders` | DB | Pending personal reminders, soonest first, resolving exact stored originals on this device. |
 | `picture_url` (any `PersonView`) | D B | D: `/workspaces/<id>/<handle>/api/picture/<64 hex>`, already qualified by the host. Use it only as `<img src>`, never through `host.api`. B: `""` until the picture loads, then a `blob:` URL that arrives with a later `change`. |
 
 ## Conversations and messages
@@ -331,9 +331,18 @@ operation grants conversation or task access.
 | `GET /api/typing` | D B | Who is typing in a scope, and this device's preferences. | `?conv=&peer=&thread=` | `{scope, preferences:{send, show}, supported, current, entries:[{person?, address, label, expires}]}` |
 | `POST /api/typing` | D B | Report that this person is typing. It carries no content. | `{scope:{conv?, peer?, thread?}, active}` | `{submitted, skipped, throttled}` |
 | `POST /api/typing/preferences` | D B | This device's own choices: share my typing, show others'. | `{send, show}` | `{send, show}` |
-| `POST /api/remind` | D | Set or move a "remind me later" reminder on a received message. B: "Unknown request." (`overview.remind` is absent there.) | `{id, due: unix seconds}` | `{note}` |
-| `POST /api/remind/done` | D | Mark a reminder done. B: "Unknown request." | `{id}` | `{note}` |
-| `POST /api/remind/cancel` | D | Cancel a reminder. B: "Unknown request." | `{id}` | `{note}` |
+| `POST /api/remind` | DB | Set or move a personal reminder on a stored received or own-sent message. | `{id, due: unix seconds}` | `{note}` |
+| `POST /api/remind/done` | DB | Mark a reminder done across current linked own-human devices. | `{id}` | `{note}` |
+| `POST /api/remind/cancel` | DB | Cancel a reminder across current linked own-human devices. | `{id}` | `{note}` |
+
+Reminder intent uses signed, encrypted quiet `reminder-sync` carriers, explicitly gated by
+`rem1`; it grants no execution or read authority. This allocation consumes the final
+reserved capability slot: producers may now advertise 32 names, matching the existing
+v0.9.1 reader limit; the 1024-byte signed-record ceiling is unchanged. Older readers
+receive no unknown carrier and ordinary messages continue. Native notifications remain
+once per winning generation on each device. Browser devices update due state while
+running and retain it across reopen; closed tabs have no deadline or OS-banner promise.
+
 
 Full preview includes locally resolved message content; Sender includes only the
 verified author and generic text. Hidden, and Sender without a verified author,

@@ -4,8 +4,8 @@ import "github.com/misunders2d/agentnet/internal/identity"
 
 // Background replication carries no new human turn. User decisions, edits,
 // reactions, group invitations and requested files retain their normal lane.
-const syncSubs = `('history-archive','history','device-history','read-sync','root-sync','topic-sync','topic-state-sync','direct-topic-sync','model-sync','invitation-sync')`
-const syncStateSubs = `('read-sync','root-sync','topic-sync','topic-state-sync','direct-topic-sync','model-sync','invitation-sync')`
+const syncSubs = `('history-archive','history','device-history','read-sync','root-sync','topic-sync','topic-state-sync','reminder-sync','direct-topic-sync','model-sync','invitation-sync')`
+const syncStateSubs = `('read-sync','root-sync','topic-sync','topic-state-sync','reminder-sync','direct-topic-sync','model-sync','invitation-sync')`
 
 const syncWindowQuery = `SELECT (SELECT coalesce(sum(CASE WHEN sub='history-archive' THEN ? ELSE 1 END),0) FROM outbox WHERE state IN ('queued','waiting','custody','archive_uploading') AND recipient=? AND recipient_fp=? AND sub IN ` + syncSubs + `) + (SELECT count(*) FROM outbox o WHERE state='archive_staged' AND recipient=? AND recipient_fp=? AND NOT EXISTS(SELECT 1 FROM history_archive_entries e WHERE e.child=o.id))`
 const syncStateWindowQuery = `SELECT count(*) FROM outbox WHERE state IN ('queued','waiting','custody') AND recipient=? AND recipient_fp=? AND sub IN ` + syncStateSubs
@@ -62,7 +62,7 @@ func isSyncSub(sub string) bool {
 
 func isSyncStateSub(sub string) bool {
 	switch sub {
-	case "read-sync", "root-sync", "topic-sync", "topic-state-sync", "direct-topic-sync", "model-sync", "invitation-sync":
+	case "read-sync", "root-sync", "topic-sync", "topic-state-sync", "reminder-sync", "direct-topic-sync", "model-sync", "invitation-sync":
 		return true
 	}
 	return false

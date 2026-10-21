@@ -65,12 +65,11 @@ func TestStoredOldDefaultLimitCleared(t *testing.T) {
 	a := w.bob
 	dir := t.TempDir()
 	setResponder(t, a, "claude", dir, oldDefaultLimit)
-	five, err := a.CreateLocalAgent("Five", Responder{Harness: "claude", Dir: dir, Timeout: oldDefaultLimit})
-	if err != nil {
-		t.Fatal(err)
-	}
-	own, err := a.CreateLocalAgent("Own", Responder{Harness: "claude", Dir: dir, Timeout: 7 * time.Minute})
-	if err != nil {
+	// This is an old installation, not a new duplicate enabled-harness setup.
+	five := legacyLocalAgentEntry(a, "Five", Responder{Harness: "claude", Dir: dir, Timeout: oldDefaultLimit})
+	own := legacyLocalAgentEntry(a, "Own", Responder{Harness: "claude", Dir: dir, Timeout: 7 * time.Minute})
+	seedLegacyAgentCatalog(t, a, []LocalAgentInfo{five, own})
+	if _, err := a.store.db.Exec(`DELETE FROM config WHERE k=?`, defaultAgentConfig); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := a.store.db.Exec(`DELETE FROM config WHERE k = ?`, oldDefaultLimitGone); err != nil { // as a home of an earlier build
@@ -87,7 +86,9 @@ func TestStoredOldDefaultLimitCleared(t *testing.T) {
 		}
 		by = map[string]time.Duration{}
 		for _, e := range agents {
-			by[e.Record.ID] = e.Responder.Timeout
+			if e.Responder != nil {
+				by[e.Record.ID] = e.Responder.Timeout
+			}
 		}
 		return r.Timeout, by
 	}
@@ -97,10 +98,19 @@ func TestStoredOldDefaultLimitCleared(t *testing.T) {
 	}
 	def, by := limits(opened)
 	opened.Close()
-	if def != 0 || by[five.ID] != 0 || by[own.ID] != 7*time.Minute {
+	_, fivePresent := by[five.Record.ID]
+	_, ownPresent := by[own.Record.ID]
+	if !fivePresent || !ownPresent || def != 0 || by[five.Record.ID] != 0 || by[own.Record.ID] != 7*time.Minute {
 		t.Fatalf("after clearing: default %v, agents %v", def, by)
 	}
 	// Once: a five-minute limit the person sets afterwards stays.
+	// Resolve the old enabled-harness ambiguity before making a new configuration.
+	if err := a.SetLocalAgentResponder(five.Record.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SetLocalAgentResponder(own.Record.ID, nil); err != nil {
+		t.Fatal(err)
+	}
 	setResponder(t, a, "claude", dir, oldDefaultLimit)
 	if err := a.store.clearOldDefaultLimit(); err != nil {
 		t.Fatal(err)

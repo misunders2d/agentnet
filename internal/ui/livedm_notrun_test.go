@@ -75,7 +75,7 @@ func TestLiveDMOwnNestedNotRunKeepsExactCause(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, "colleague membership", func() bool { g, e := a.GroupContext(group.State.Conv); return e == nil && len(g.State.Members) == 2 })
-	named, err := a.CreateLocalAgent("Reviewer", client.Responder{Harness: "claude", Dir: t.TempDir()})
+	named, err := a.CreateLocalAgent("Reviewer", client.Responder{Harness: "pi", Dir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}

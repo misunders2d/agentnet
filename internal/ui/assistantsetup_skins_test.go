@@ -9,12 +9,10 @@ import (
 	"testing"
 )
 
-// TestComicDefaultAgentSetupRendered drives Comic's "Choose your agents"
-// with two concrete agents for Codex (the owner's Zenbook): its default
-// setting and exact existing-row selection work, the older Codex agent
-// is preselected and explained, review needs no choice, and applying once
-// leaves the other agent untouched. Opt-in: it needs Comic built
-// from these sources and an installed Playwright.
+// TestComicDefaultAgentSetupRendered keeps the owner's three saved Codex
+// configurations while presenting one current coding program. Setup selects
+// the exact current ID; retired settings stay in history without duplicate cards.
+// Opt-in: needs built Comic and an installed Playwright.
 func TestComicDefaultAgentSetupRendered(t *testing.T) {
 	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
 		t.Skip("opt-in: set AGENTNET_PLAYWRIGHT to an installed playwright-core")

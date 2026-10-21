@@ -86,7 +86,7 @@ func TestAgentCatalogOldRelayPublicationFallback(t *testing.T) {
 func TestLocalAgentIdentityMappingsAndImmutableSelection(t *testing.T) {
 	stub := installStub(t, "answer")
 	w := newWorld(t, "")
-	defaultConfig := &Responder{Harness: "stub", Dir: stub.dir, Timeout: time.Minute}
+	defaultConfig := &Responder{Harness: "pi", Dir: stub.dir, Timeout: time.Minute}
 	if err := w.bob.SetResponder(defaultConfig); err != nil {
 		t.Fatal(err)
 	}
@@ -118,6 +118,16 @@ func TestLocalAgentIdentityMappingsAndImmutableSelection(t *testing.T) {
 	if err != nil || stamp.AgentID != a.ID || stamp.Responder.Harness != "stub" {
 		t.Fatal("first executor", err)
 	}
+	beforeConflict, _ := w.bob.store.config(agentCatalogConfig)
+	if err := w.bob.SetLocalAgentResponder(a.ID, &Responder{Harness: "stub2", Dir: stub.dir}); !errors.Is(err, ErrAgentHarnessConflict) {
+		t.Fatal("mapping change did not report the other enabled harness", err)
+	}
+	if afterConflict, _ := w.bob.store.config(agentCatalogConfig); afterConflict != beforeConflict {
+		t.Fatal("refused mapping change rewrote the catalog")
+	}
+	if err := w.bob.SetLocalAgentResponder(b.ID, nil); err != nil {
+		t.Fatal(err)
+	}
 	if err := w.bob.SetLocalAgentResponder(a.ID, &Responder{Harness: "stub2", Dir: stub.dir}); err != nil {
 		t.Fatal(err)
 	}
@@ -130,6 +140,9 @@ func TestLocalAgentIdentityMappingsAndImmutableSelection(t *testing.T) {
 	}
 	if err := w.bob.SetLocalAgentResponder(a.ID, nil); err != nil {
 		t.Fatal(err)
+	}
+	if err := w.bob.SetLocalAgentResponder(b.ID, &Responder{Harness: "stub2", Dir: stub.dir}); err != nil {
+		t.Fatal("freed harness identity could not be re-enabled", err)
 	}
 	if _, err = w.bob.ResolveExecutorIn(w.bob.store.db, a.ID, after); !errors.Is(err, ErrUnknownAgent) {
 		t.Fatal("removed identity fell back", err)
