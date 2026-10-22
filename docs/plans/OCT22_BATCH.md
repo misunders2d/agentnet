@@ -37,7 +37,7 @@ Failures, unavailable evidence and skips remain explicit.
 | Review 1 | Minimal state/hook approach, bounded Drive change and practical complete video path | Claude 2f109062-e9c2-4dde-ad01-4c3f9f9221dc | collected; root decisions recorded | Reviewed d196537c; complete marker 69c31ae7; private review/dispositions in .agentnet/oct22-run and .agentnet/herdr |
 | Review 1 Q1/H1 addendum | Tagged-chat correction and read-reply exception challenge | Same Claude session | collected; accepted | Complete marker 70c4db19; broad read-reply exception withdrawn, generic Stop never blocks; exact selected receivers preserved |
 | Review 2 | Significant implementations reviewed with focused before/after evidence | Existing Claude tab 2 | collected; refinements in progress | Marker 3f9a41d6; duration budget and own-human settle coverage accepted; uploader-only status shortcut declined after API inspection; dispositions in private review2 record |
-| Review 3 | Frozen integrated candidate independently reviewed before costly gates | Existing Claude tab 2 | pending | Pending |
+| Review 3 | Frozen integrated candidate independently reviewed before costly gates | Existing Claude tab 2 | collected; accepted with CI portability fix | Frozen57806d62; marker c6138f2a; grep replaces an unnecessary CI rg dependency; stable enough for integrated qualification; physical/platform/release gates remain open |
 
 ## Integrated qualification
 

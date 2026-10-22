@@ -29,7 +29,7 @@ instrument() {
   local mode=$1 output=$2
   adb -s "$serial" shell am instrument -w -r -e mode "$mode" "$runner" > "$output"
   cat "$output"
-  rg -q '^INSTRUMENTATION_CODE: -1\r?$' "$output"
+  grep -Eq '^INSTRUMENTATION_CODE: -1[[:space:]]*$' "$output"
 }
 instrument snapshot "$RUNNER_TEMP/android-before-upgrade.txt"
 adb -s "$serial" shell am force-stop "$package"

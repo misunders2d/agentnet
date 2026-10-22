@@ -19,6 +19,12 @@ and completed migration are state to preserve. Do not disconnect or remigrate
 it for tests. Physical Pixel and actual macOS results remain separate from
 source, emulator and rendered evidence.
 
+The actual browser signed capability list now has 31 entries without typing
+signals and 32 with them, at the existing `MaxAdvertisedCaps=32` bound. Reminder
+sync consumes that last slot; do not add another name without revisiting the
+wire contract. Media preparation is an explicit sender choice: files retain
+their original bytes until Smaller photo or Smaller video is selected.
+
 ## v0.9.2 released and relay updated — October22, 2026
 
 [App v0.9.2](https://github.com/misunders2d/agentnet/releases/tag/v0.9.2) is public
