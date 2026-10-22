@@ -1,28 +1,29 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
-## v0.9.2 regular release authorized — October 22, 2026
+## v0.9.2 released and relay updated — October22, 2026
 
-The owner now explicitly requests release of the app, with Play Store later.
-The earlier regular-release hold is superseded. See
-[the release checklist](plans/V0_9_2_RELEASE.md). Root is integrating an isolated
-regular-app candidate while preserving the original Play source and owner drafts.
-Play consent/public pages/person-block compliance and SDK packaging work stay
-out of that candidate as complete dependency groups; approved Drive and other
-messenger fixes remain included.
+[App v0.9.2](https://github.com/misunders2d/agentnet/releases/tag/v0.9.2) is public
+from immutable `628f30dbcbaff103a6edff6657a03dd2b1efbe7e`, with the signed Android
+preview and desktop/CLI artifacts. The matching gallery is
+[v2026.10.22.1](https://github.com/misunders2d/agentnet-skins/releases/tag/v2026.10.22.1).
+All required race/native/mixed-version/skin gates and independent draft/public
+artifact checks passed, retaining valid unchanged selections and distinguishing
+skips. The owner approved3UI partitions and balancing within18client partitions;
+all tests and bounds remain intact. See [the completed release checklist](plans/V0_9_2_RELEASE.md)
+for exact CI, source, artifact and deployment evidence.
 
-The seven local timing failures below are not established product defects.
-All seven passed the project's actual race CI run39577187806 on9133893b;
-root verified those exact PASS events independently. That run had unrelated
-failures, and is not qualification of the current candidate. Do not change
-timeouts, fixtures, daemons or SQL to fit the laptop's local lane. One full
-candidate CI run will qualify every race/native partition, alongside the
-required mixed-version, skin and artifact gates. Publication and existing-relay
-deployment proceed only on actual candidate evidence; neither has happened yet.
+The existing relay is healthy on v0.9.2, with a verified native backup and both
+old/new-binary restores, schema23→24, unchanged realm/volume/environment/neighbor,
+zero restarts and observed signed client traffic. Public HTTPS confirms it.
+Play Store and push work remain paused; original source/checkpoint and owner drafts
+are preserved. No live Google Drive connect or move was run. Physical-device and
+unrelated backlog acceptance remain separate. Earlier failed attempts below are
+historical records superseded by the qualified release, not current blockers.
 
-## Messenger candidate tested; seven retained failures — October 22, 2026
+## Historical pre-release candidate and seven local failures — October22, 2026
 
-The current non-Play code batch and bounded verification are complete, with a
-**failed full race gate**. Nothing was released or deployed. Play Store
+At this earlier checkpoint, the non-Play code batch and bounded verification had
+a **failed local full race gate**; nothing had been released or deployed then. Play Store
 packaging, compliance, reviewer provisioning and native push remain paused;
 no shared gateway was approved or implemented. Preserve the verified source
 checkpoint `.agentnet/checkpoints/2026-10-21T153550Z-play-store-paused/` and both

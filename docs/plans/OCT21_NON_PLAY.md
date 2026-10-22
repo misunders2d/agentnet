@@ -1,5 +1,13 @@
 # Messenger fixes after the Play Store pause
 
+Release completion, October22: [v0.9.2 is published](https://github.com/misunders2d/agentnet/releases/tag/v0.9.2)
+and the existing relay is healthy on it. The qualified final source, full retained
+CI coverage, matching gallery, artifact verification and preserved-data cutover are
+recorded in [V0_9_2_RELEASE.md](V0_9_2_RELEASE.md). Play remains paused; no live Drive
+connect or move was performed. The scope and failure notes below are historical;
+they do not describe the completed release gate. Physical/live acceptance and
+unrelated backlog remain separate.
+
 Owner direction, October 21, 2026: save Play Store work for later and continue
 the other bugs/features. No release, deployment or live attachment migration.
 Root maintains this checklist; existing workers retain bounded file ownership.
