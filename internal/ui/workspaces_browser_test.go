@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestWorkspaceBrowserContracts(t *testing.T) {
@@ -53,7 +54,10 @@ func TestWorkspaceReconnectRendered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := exec.CommandContext(t.Context(), node, "testdata/workspace_reconnect_browser_check.cjs").CombinedOutput()
+	cmd := exec.CommandContext(t.Context(), node, "testdata/workspace_reconnect_browser_check.cjs")
+	// A canceled child must not leave CombinedOutput waiting on inherited pipes.
+	cmd.WaitDelay = 2 * time.Second
+	out, err := cmd.CombinedOutput()
 	if err != nil || !strings.Contains(string(out), "workspace reconnect check PASS") {
 		t.Fatalf("%v\n%s", err, out)
 	}

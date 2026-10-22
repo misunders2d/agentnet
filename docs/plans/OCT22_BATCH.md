@@ -31,7 +31,7 @@ Failures, unavailable evidence and skips remain explicit.
 | Q1 / MEL-497 | Ordinary clarification uses tagged chat and a valid tagged reply continues without a sticky decision gate | Actual group-worker saved-answer/repeated-round regression; ask/tagged-answer/same-context continuation and stale-attention clearing; thirty-minute delay split into queue/start/run/response; true native permission/authorization boundaries preserved | oct22-state backend / oct22-interaction UI | Root / Claude | implemented | Actual group prompt now includes saved continuation rounds; tagged follow-up claim settles only exact matching stale needs_human under normal authority. Actual repeated group-worker, tagged/authority boundaries and own-human linked task claim regressions pass; original attempts1/no duplicate rerun; Linear comment 8f7d6f61-f0c8-4b54-a286-3f30bec024ba |
 
 | G1 | Claude reviews every GUI area and interaction; all demonstrated gaps corrected for smooth direct chat UX | Complete reachable control/state/role inventory; rendered wide/narrow/light/dark, keyboard/pointer/touch/Back/focus/loading/offline/error/recovery and every gallery skin; independent recheck of corrections | Root integrates / existing helpers | Existing Claude tab 2 | in progress | Comprehensive review oct22-gui-review active; private shared GUI checklist, prior source reviews do not replace rendered coverage |
-| P1 | Every interaction responds promptly on every supported system | Visible-feedback, durable API, projection/paint and frame measurements for all reachable interaction families on real Linux/macOS/Windows shells, Android WebView and browsers; fix demonstrated delays, retain raw timings and distinguish emulator/physical | oct22-interaction fixtures / Root CI | Root / Claude | in progress | Static654-handler/75-file inventory and existing fixture map collected; complete measured system cells remain open |
+| P1 | Every interaction responds promptly on every supported system | Visible-feedback, durable API, projection/paint and frame measurements for all reachable interaction families on real Linux/macOS/Windows shells, Android WebView and browsers; fix demonstrated delays, retain raw timings and distinguish emulator/physical | oct22-interaction fixtures / Root CI | Root / Claude | in progress | Seventeen portable workloads extend all16 family groups; current role/state map and174 prior raw actions retained. New 1000-person invite cost is being corrected; routine native/browser timings above200ms and actual complete system cells remain open |
 
 ## Reviews
 
@@ -50,10 +50,10 @@ affected selections after a correction. Never weaken assertions or bounds.
 | Gate | State | Exact evidence |
 | --- | --- | --- |
 | go vet ./... | verified on frozen9b | All three native jobs pass vet in [39827811802](https://github.com/misunders2d/agentnet/actions/runs/39827811802) |
-| Client race shards 0–17, count18, existing600s package bound | 14 passed;4 corrections open | Same run retains0–3,5,7–10,12–15,17;4/6/11/16 fail known queued-output/prompt/error assertions.11/16 focused regular+race pass after correction;4/6 investigation in progress |
-| Other race packages and three sequential UI partitions | partial; affected replacement pending | Non-UI others fails two obsolete hook tests; all other package results retained. Script stops before three UI partitions, which remain unexecuted |
-| Required native Linux/macOS/Windows; six Windows client runners at1800s | partial; failures batched | Same run: Windows client1/2/3/5 and all three desktop builds pass. Native jobs and Windows client0/4 fail collected assertions; Windows Drive backoff fixture also assumes slow uploads finish within1s |
-| Android unit/lint/build/affected instrumentation and preserved upgrade | build verified; instrumentation correction open | Same run signed build, lint, unit tests, prior checksum/signer checks pass. Emulator snapshot expects203 against exported200; correction in progress. Later instrumentation has not run |
+| Client race shards 0–17, count18, existing600s package bound | 14 original passes retained; focused corrections pass; integrated replacement pending | Same run retains0–3,5,7–10,12–15,17;4/6/11/16 fail known queued-output/prompt/error assertions.All four failed selections now have bounded focused regular/race corrections, including the causally reproduced catalog publication race; new1421-parent registration changes partition membership, so qualify the current18 selections |
+| Other race packages and three sequential UI partitions | partial; affected replacement pending | Original non-UI others fails two obsolete hook tests; corrected CLI peek/read assertions pass focused races. Other original package results are retained; current three UI partitions remain required |
+| Required native Linux/macOS/Windows; six Windows client runners at1800s | partial; failures batched | Same run: Windows client1/2/3/5 and all three desktop builds pass. Native jobs and Windows client0/4 fail collected assertions; Windows Drive backoff fixture assumption was corrected using provider start timestamps; actual affected Windows rerun remains required |
+| Android unit/lint/build/affected instrumentation and preserved upgrade | original build verified; corrected upgrade/expanded instrumentation pending | Same run signed build, lint, unit tests, prior checksum/signer checks pass. Snapshot assertion now matches exactly exported200;17 actual WebView workloads are staged independently. Current emulator instrumentation has not run |
 | Actual Mac window cases and physical Pixel acceptance | Mac rendered check passed; physical open | Same run actual macOS headed WebKit TestMessageInteractionRendered17.67s passes normal/fullscreen/half-width controls. Native shell/full interaction timings remain open; owner has no Mac. Physical upgraded Pixel remains open |
 | Representative office-hardware latency and CPU-only media behavior | selective checks passed; P1 open | ZenBook i7-1165G7 CPU-only actual photo/video/frame measurements retained; complete all-interaction/native-system timing coverage in progress |
 | Required real MixedVersion with published tag | exact result accounting pending | Linux native run requires compatibility, but aggregate itest fails hooks; collect named result/replacement without reporting skips as passes |
@@ -120,8 +120,9 @@ requests and the pending-invitation prerequisite preserved. P7 person grants pas
 1280/390. Four additional trust/model/onboarding/gallery parents pass together
 in54.896s, including exact keys/harnesses, retired-model exclusion and fresh
 consent for changed gallery code. Workspace reconnect normal passes7.949s; a
-subsequent aggregate race retains six parent passes but times out in that fixture,
-so its cleanup/race acceptance remains under investigation. The failure is retained.
+subsequent aggregate race retains six parent passes but times out in that fixture.
+The causal fixture-only subscription correction and final normal/race evidence
+are recorded in the corrective-child section below; original failure is retained.
 
 Claude remaining-review marker603ed19a is collected. It disclosed that its main
 interactive worlds used dirty main rather than the candidate. All those coverage
@@ -138,3 +139,43 @@ browser712checks and four rendered native/browser×wide/narrow cases. P1 packet
 174 raw action observations and above200ms results are retained. The same portable
 runner is being extended test-only to the remaining reachable interaction families.
 See [release qualification record](V0_9_3_RELEASE.md) for still-open gates.
+
+## Corrective child after6a6d3fcb
+
+The final workspace fixture failure is now causally distinguished: its fake skin
+discarded the host.listen disposer on every mount, leaving six SSE responses
+occupying Chromium's HTTP connections. The stale overview lookup before reconnect
+then never reached the fake server. Listener disposal corrects this test-only
+seam; normal8.941s and race11.037s pass at the original bounds, with cleanup before
+the success marker. All16 assertions remain. Deliberate stuck-evaluation and
+cleanup faults exit nonzero and preserve the original error. The six earlier
+aggregate race passes are retained rather than rerun.
+
+Speed extension found another actual source defect: the group invite picker
+mounted1000people at once (2018.5ms feedback). Bounded40-row per-kind display,
+explicit reveal, complete search/reset and out-of-page exact preselection pass
+33 focused functional actions. A richer1000people+45agents workload still takes
+1003/1071ms before useful paint; its synchronous pre-effect cause remains under
+investigation. This is a different workload, not a claimed equivalent speed
+comparison or no-lag pass. Full qualification waits for this demonstrated seam.
+
+The corrective product source is frozen after the accepted roster and setup
+checks. The canonical build (including strict TypeScript) and `go vet ./...`
+pass; Comic entry SHA256 is
+`b97e4b62ce084678205c048f630c643e4d7ae951f10cf05c01fdcd8ebe6c24cc`.
+The six changed component/model files stayed byte-identical throughout the build.
+The new-group form retains every eligible person with first40/reveal40/full
+name-or-device search: paired opening201→74ms wide and174→39ms narrow, with
+initial selections and all1001 choices preserved. The accepted people/device
+selectors retain exact choices and pending disabling; final wide create348→180ms
+and reopen199→59ms. Extra fieldset and presence-index experiments were rejected.
+
+Setup review uses prepared-focus activation rather than claiming a synthetic
+DOM click supplies native pointer focus. An isolated control disproved the first
+focus-removal proposal, which was reverted. Only the real offscreen refusal and
+Back-context gaps were corrected: the same error appears below the heading, and
+Back restores the exact Connect opener. Both widths pass reviewed-token/harness,
+visible refusal and exact returned agent-ID checks, with17–24ms feedback.
+Topic typing/Clear feedback is5–11ms; results still complete after the existing
+250ms debounce (262–270ms), separately recorded. These focused proofs do not
+replace remaining all-system/platform/GUI and full qualification gates.

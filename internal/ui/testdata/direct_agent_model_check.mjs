@@ -78,6 +78,39 @@ assert(candidates.length>0&&candidates.every(c=>c.kind==='agent'&&c.mine),'guest
 assert.equal(candidateModel.pool(topicGuest,guestOverview,{loading:false,local:[],remote:{}},{},[],'daemon','guest','warehouse').candidates.length,0,'unconfigured default never fabricates a candidate');
 console.log('Guest invite rights, admitted context and own-agent candidate sources PASS');
 
+// Invite reasons keep the original Unicode whole-name semantics while the
+// directory compiles a name matcher only once for its recent-message scan.
+const inviteMentions=runInNewContext(inviteSource+'\nmentions',{...model,...inviteRights,collectiveRef,parseCollective});
+const priorMention=(text,p)=>{
+ if(!text)return false;
+ if(text.includes('agentnet:person/'+p.person+')'))return true;
+ if([...text.matchAll(collectiveRef)].some(m=>parseCollective(m[2])?.some(r=>r.kind==='person'&&r.id===p.person)))return true;
+ const name=(p.label||'').trim(),escaped=name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+ return name.length>=2&&new RegExp('(?<![\\p{L}\\p{N}])'+escaped+'(?![\\p{L}\\p{N}])','iu').test(text);
+};
+for(const label of ['Anna',' Åsa ','ſam','Ken','Σς','I\u0345','e\u0301','张三','𐐀𐐨','a-a','[AB]','a\\b','😁a','A','']){
+ const p={person:'target',label},mentioned=inviteMentions(p);
+ for(const text of [undefined,'','[@tag](agentnet:person/target)','[@all](agentnet:collective/v1/p.target,a.other)','[@bad](agentnet:collective/v1/p.target,broken)','xa-a-a',...['','x','٧','𐐀','\u0345',' ','😁'].flatMap(left=>['','x','٧','𐐀','\u0345',' ','😁'].flatMap(right=>[left+label.trim()+right,left+label.trim().toUpperCase()+right]))])
+  assert.equal(mentioned(text),priorMention(text,p),JSON.stringify({label,text}));
+}
+let inviteRegexCount=0;
+const boundedInvite=runInNewContext(inviteSource+'\npool',{...model,...inviteRights,collectiveRef,parseCollective,RegExp:new Proxy(RegExp,{construct(target,args){inviteRegexCount++;return Reflect.construct(target,args);}})});
+const invitePeople=Array.from({length:1000},(_,i)=>({person:'invite-person-'+i,label:'Person '+i,address:'fixture-'+i+'/laptop',state:'pinned'}));
+const inviteThread={...roomThread,id:'invite-cost',messages:Array.from({length:4},(_,i)=>({id:'recent-'+i,kind:'message',body:'Retained message '+i,at:'2026-10-22T10:00:00Z'}))};
+const inviteCatalog={loading:true,local:null,remote:{}};
+const fullInvite=boundedInvite(inviteThread,{...o,people:invitePeople},inviteCatalog,{});
+assert.equal(fullInvite.candidates.length,1000,'the full pinned directory remains available');
+assert.equal(fullInvite.pick,'');
+assert(inviteRegexCount<=invitePeople.length,'one directory opening must not recompile each name for every message');
+inviteThread.messages=[{id:'older',dir:'out',from:host,body:'[@person](agentnet:person/invite-person-998)',at:'2026-10-22T10:00:00Z'},{id:'newer',dir:'out',from:host,body:'[@person](agentnet:person/invite-person-999)',at:'2026-10-22T11:00:00Z'}];
+const inviteOverview={...o,people:invitePeople};
+assert.equal(candidateModel.pool(inviteThread,inviteOverview,inviteCatalog,{}).pick,'p:invite-person-999','latest mentioned person beyond first page remains exact');
+const pendingInvite=candidateModel.pool(inviteThread,inviteOverview,inviteCatalog,{},[{conv:'invite-cost',direction:'out',status:'pending',target:'invite-person-999'}]);
+assert.equal(pendingInvite.pick,'p:invite-person-998','pending recipient retains its reason but is not preselected');
+assert.equal(pendingInvite.candidates.at(-1).unavailable,'Invited · waiting for them to accept');
+assert.equal(pendingInvite.candidates.at(-1).reasonAt,'2026-10-22T11:00:00Z','pending recipient keeps the latest mention reason');
+console.log('Invite directory bounded matching, Unicode/reference parity and exact pending/latest selection PASS');
+
 const mentionsSource=stripTypeScriptTypes((await readFile(new URL('../web/src/features/Composer.mentions.ts',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'')).replace(/^export /gm,'');
 const mentionView=runInNewContext(mentionsSource+'\n({candidates,guestAuthor})',{...model});
 const scoped=(pid,topic)=>({pid,topic,host:remote,agent_id:agent,inviter:o.person,state:'active',can_ask:true});

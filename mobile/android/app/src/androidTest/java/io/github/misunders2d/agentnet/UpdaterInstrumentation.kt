@@ -403,7 +403,7 @@ class UpdaterInstrumentation : Instrumentation() {
      * The runner stages these two test-only files in the owned app's cache;
      * no production URL, permission or bridge is added or overridden. */
     private fun checkLatency(activity: MainActivity, result: Bundle) {
-        check(latencySuite in setOf("history", "navigation", "settings", "unread", "actions")) { "Unknown timing workload." }
+        check(latencySuite in setOf("history", "navigation", "settings", "unread", "actions", "topics", "groups", "compose", "media", "review", "outbox", "agents", "teams", "profile", "storage", "workspaces", "permissions")) { "Unknown timing workload." }
         val scriptFile = File(targetContext.cacheDir, "latency-fixture.mjs")
         val inputFile = File(targetContext.cacheDir, "latency-input.json")
         check(scriptFile.isFile && scriptFile.length() in 1L..262144L) { "Stage the bounded latency fixture in this owned app's private cache." }

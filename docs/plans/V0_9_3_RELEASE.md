@@ -21,9 +21,13 @@ The current canonical Comic build and strict TypeScript check pass. Required
 report-history, group guest controls, revised proposal and remote needs-human
 rendered parents pass together in54.156s. Exact legacy requests open through
 the real public notification route; tests do not invent a current agent binding
-for old history. Person approval passes at1280/390. Workspace reconnect passes
-in7.949s after correcting the synthetic fixture's event-stream socket cleanup;
-the actual leave/reconnect/rebind assertions were already succeeding.
+for old history. Person approval passes at1280/390. The seven-parent race
+invocation retained six passing parents and failed when
+the workspace fixture stalled. A causal HTTP trace found six leaked fixture
+subscriptions occupying Chromium's six connections before reconnect. Disposing
+the fixture listener on unmount fixes that seam; final workspace normal8.941s
+and race11.037s pass with cleanup completed before the success marker. Original
+failures and deliberately injected evaluation/cleanup failures remain recorded.
 
 Other focused packets cover stored-state/hooks, actual group-worker continuation
 rounds, actual Composer Reply/tag production, reactions, fair bounded Drive work,
@@ -33,6 +37,14 @@ ordering, schedules and human guest events. Their exact commands, retained REDs,
 hashes, platform distinctions and timing limitations are in the batch checklist
 and private evidence inventory. A focused pass does not replace the gates below.
 
+The corrective canonical build and vet pass with entry SHA256
+`b97e4b62ce084678205c048f630c643e4d7ae951f10cf05c01fdcd8ebe6c24cc`.
+Current fixes also bound group/list roster rendering without losing search,
+selection or consent, and expose setup refusal/Back return context. Rejected
+page-size/presence/focus proposals remain out of production. Seventeen timing
+workloads are wired into the existing desktop builds and Android qualification;
+the remaining named timing branches and complete platform runs remain open.
+
 ## Required gates still open
 
 | Gate | Required evidence |
@@ -40,7 +52,7 @@ and private evidence inventory. A focused pass does not replace the gates below.
 | Integrated race/native tests | Every current parent accounted for across18client shards, others/three UI groups and six separate native Windows runners; retain valid unchanged evidence; no timeout inflation or skip-as-pass |
 | Actual platform interactions | Linux/macOS/Windows native shells, Android WebView and named browsers; exact canonical asset hash, visible feedback, completed state, API/projection and frame timings |
 | Complete GUI review | Claude rebuilds exact frozen source and re-establishes every reachable control/state/role coverage row, then rechecks all demonstrated corrections |
-| Complete interaction speed | Current five portable workloads plus remaining family/state coverage; measured routine >200ms findings remain open, including native Linux unread/open/exact targets |
+| Complete interaction speed | Seventeen portable workloads and explicit family/state mapping; measured routine >200ms findings remain open, including native Linux unread/open/exact targets |
 | Android upgrade/notification/device acceptance | Signed-preview continuity, retained-data upgrade and actual instrumentation; physical upgraded Pixel remains separate and open |
 | Mixed-version | Actual candidate/latest-published-release programs, latest-only suspension without blocking healthy senders and backlog after update; missing tag is not a pass |
 | Matching gallery | Pin exact candidate, rebuild every standalone/overlay skin, inspect refreshed previews and pass complete collection tests, including Zoom touch |

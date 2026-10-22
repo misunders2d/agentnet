@@ -65,7 +65,6 @@ jobs:
         shell: bash
         env:
           AGENTNET_LATENCY_DISPOSABLE_GUI: '1'
-          AGENTNET_LATENCY_SUITES: history,navigation,settings,unread,actions
         run: |
           set -euo pipefail
           evidence="$RUNNER_TEMP/agentnet-interactions"
@@ -75,8 +74,6 @@ jobs:
           if [[ "$RUNNER_OS" == Linux ]]; then
             "$tooling/.bin/playwright" install --with-deps chromium firefox webkit
             export AGENTNET_NATIVE_SHELL="$GITHUB_WORKSPACE/desktop/src-tauri/target/release/agentnet-app"
-            dbus-run-session -- xvfb-run -a -s '-screen 0 1440x960x24 -nolisten tcp' \
-              go test ./internal/ui -run '^TestUIResponsivenessRendered$' -count=1 -timeout 180s -v 2>&1 | tee "$evidence/native.log"
           else
             "$tooling/.bin/playwright" install chromium firefox webkit
             if [[ "$RUNNER_OS" == macOS ]]; then
@@ -84,15 +81,30 @@ jobs:
             else
               export AGENTNET_NATIVE_SHELL="$GITHUB_WORKSPACE/desktop/src-tauri/target/release/agentnet-app.exe"
             fi
-            go test ./internal/ui -run '^TestUIResponsivenessRendered$' -count=1 -timeout 180s -v 2>&1 | tee "$evidence/native.log"
           fi
+          # Split added workloads rather than increasing any existing bound.
+          groups=(history,navigation,settings,unread,actions topics,groups,compose,media review,outbox,agents,teams profile,storage,workspaces,permissions)
+          failed=0
+          for suites in "${groups[@]}"; do
+            export AGENTNET_LATENCY_SUITES="$suites"
+            if [[ "$RUNNER_OS" == Linux ]]; then
+              if ! dbus-run-session -- xvfb-run -a -s '-screen 0 1440x960x24 -nolisten tcp' \
+                go test ./internal/ui -run '^TestUIResponsivenessRendered$' -count=1 -timeout 180s -v 2>&1 | tee "$evidence/native-$suites.log"; then failed=1; fi
+            else
+              if ! go test ./internal/ui -run '^TestUIResponsivenessRendered$' -count=1 -timeout 180s -v 2>&1 | tee "$evidence/native-$suites.log"; then failed=1; fi
+            fi
+          done
           unset AGENTNET_NATIVE_SHELL
           export AGENTNET_PLAYWRIGHT="$tooling/playwright"
-          export AGENTNET_LATENCY_ENGINES=chromium,firefox,webkit
-          export AGENTNET_LATENCY_VIEWPORTS=1440x960,390x844
-          export AGENTNET_LATENCY_EVIDENCE="$evidence/browser.png"
           export AGENTNET_LATENCY_HOST_PLATFORM=browser
-          go test ./internal/ui -run '^TestUIResponsivenessRendered$' -count=1 -timeout 600s -v 2>&1 | tee "$evidence/browser.log"
+          for suites in "${groups[@]}"; do
+            export AGENTNET_LATENCY_SUITES="$suites"
+            export AGENTNET_LATENCY_EVIDENCE="$evidence/browser-$suites.png"
+            export AGENTNET_LATENCY_ENGINES=chromium,firefox,webkit
+            export AGENTNET_LATENCY_VIEWPORTS=1440x960,390x844
+            if ! go test ./internal/ui -run '^TestUIResponsivenessRendered$' -count=1 -timeout 600s -v 2>&1 | tee "$evidence/browser-$suites.log"; then failed=1; fi
+          done
+          exit "$failed"
       - name: retain interaction timings and screenshots
         if: always() && inputs.interaction_qualification
         uses: actions/upload-artifact@v4

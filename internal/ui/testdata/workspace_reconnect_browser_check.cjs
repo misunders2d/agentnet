@@ -9,9 +9,21 @@
 // is attached. Optional AGENTNET_SCREENSHOTS writes only to that directory.
 const fs = require('fs'), http = require('http'), path = require('path'), assert = require('node:assert/strict');
 const { chromium } = require(process.env.AGENTNET_PLAYWRIGHT || 'playwright-core');
+// Match the locator bound for async browser evaluations and owned teardown.
+// Playwright's default locator timeout does not bound page.evaluate promises.
+const bounded = async (phase, run) => {
+  console.log('workspace fixture phase: ' + phase);
+  let timer;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(run),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('workspace fixture timed out: ' + phase)), 10000); }),
+    ]);
+  } finally { clearTimeout(timer); }
+};
 const base = path.resolve(__dirname, '../static') + '/';
 const other = 'c'.repeat(32), hostOf = (n) => n.toString(16).padStart(32, '0'), digest = 'f'.repeat(64);
-const skin = `export async function mount(root,host){window.mounts=(window.mounts||0)+1;window.skinHost=host;const h=document.createElement('h1');h.textContent='Fixture skin in '+host.workspace.name;root.append(h);host.onOpen(()=>{});host.listen((e)=>{if(e.type==='change')host.api('/api/overview').catch(()=>{});});await host.api('/api/overview?topics=1');}export function unmount(root){root.replaceChildren();}`;
+const skin = `let stop;export async function mount(root,host){window.mounts=(window.mounts||0)+1;window.skinHost=host;const h=document.createElement('h1');h.textContent='Fixture skin in '+host.workspace.name;root.append(h);host.onOpen(()=>{});stop=host.listen((e)=>{if(e.type==='change')host.api('/api/overview').catch(()=>{});});await host.api('/api/overview?topics=1');}export function unmount(root){if(stop)stop();stop=null;root.replaceChildren();}`;
 
 const world = () => {
   let generation = 1;
@@ -73,10 +85,11 @@ server.on('connection', socket => { sockets.add(socket); socket.on('close', () =
 (async () => {
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const origin = 'http://127.0.0.1:' + server.address().port;
-  let browser;
+  let browser, failure;
   try {
     browser = await chromium.launch({ executablePath: process.env.AGENTNET_CHROMIUM || '/usr/bin/chromium', headless: true });
     for (const [name, width, height] of [['desktop', 1280, 800], ['phone', 390, 844]]) {
+      console.log('workspace fixture viewport: ' + name);
       state = world();
       const page = await browser.newPage({ viewport: { width, height } }), errors = [];
       page.setDefaultTimeout(10000);
@@ -141,12 +154,12 @@ server.on('connection', socket => { sockets.add(socket); socket.on('close', () =
       await page.getByRole('menuitem', { name: /Leave Acme/ }).click();
       await page.getByRole('dialog').getByRole('button', { name: 'Leave Acme', exact: true }).click();
       await notice.filter({ hasText: 'You left Acme' }).waitFor();
-      const viaHost = await page.evaluate(async (id) => {
+      const viaHost = await bounded(name + ': host.workspaces.reconnect', () => page.evaluate(async (id) => {
         const w = window.agentnet.workspaces, gone = await w.disconnected();
         const listed = w.list().some((x) => x.id === id);
         await w.reconnect(id);
         return { gone: gone.map((x) => [x.id, x.state, x.name]), listed, has: w.has(id) };
-      }, other);
+      }, other));
       assert.deepEqual(viaHost, { gone: [[other, 'disconnected', 'Acme']], listed: false, has: true }, name + ': host.workspaces');
       assert.deepEqual(state.posts.slice(2).map((p) => [p.path, p.body.id]), [['/api/workspaces/disconnect', other], ['/api/workspaces/reconnect', other]]);
       assert.notEqual(state.acme.handle, before, name + ': the same membership under a new handle');
@@ -158,25 +171,36 @@ server.on('connection', socket => { sockets.add(socket); socket.on('close', () =
       await page.getByRole('menuitemradio', { name: /Acme/ }).click();
       await page.getByRole('heading', { name: 'Fixture skin in Acme' }).waitFor();
       const restarted = state.reconnect().handle;
-      const rebound = await page.evaluate(async () => {
+      const rebound = await bounded(name + ': host.reconnect after restart', () => page.evaluate(async () => {
         const host = window.skinHost, mounts = window.mounts;
         const stale = await host.api('/api/overview').then(() => 'answered', (e) => e.message);
         await host.reconnect();
         return { stale, remounted: window.mounts === mounts + 1, handle: window.skinHost.workspace.handle, old: host.workspace.handle };
-      });
+      }));
       assert.equal(rebound.stale, 'stale or disconnected workspace', name + ': the old handle is retired');
       assert.deepEqual([rebound.remounted, rebound.handle], [true, restarted], name + ': rebound and mounted again');
       assert.notEqual(rebound.old, restarted);
       await page.getByRole('heading', { name: 'Fixture skin in Acme' }).waitFor();
       assert.deepEqual(errors, [], name + ': page errors');
-      await page.close();
+      await bounded(name + ': page close', () => page.close());
     }
-    console.log('workspace reconnect check PASS: desktop/390, leaving points to Reconnect, same membership under a new handle, skin remounted, nothing left to reconnect, host.workspaces disconnected()/reconnect(id), host.reconnect after a restart');
+  } catch (error) {
+    // Report assertions before teardown: an independent cleanup failure must
+    // never hide the browser failure that brought us here.
+    failure = error;
+    console.error('workspace fixture assertion failure:', error);
   } finally {
-    for (const x of state.streams) x.res.end();
-    if (browser) await browser.close();
-    const closed = new Promise((r) => server.close(r));
+    // Stop accepting requests before destroying every owned connection. This
+    // includes event streams from worlds replaced earlier in the test.
+    const closed = new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     for (const socket of sockets) socket.destroy();
-    await closed;
+    const cleanup = await Promise.allSettled([
+      bounded('browser close', () => browser && browser.close()),
+      bounded('server close', () => closed),
+    ]);
+    const errors = cleanup.filter((result) => result.status === 'rejected').map((result) => result.reason);
+    if (errors.length) failure = new AggregateError([...(failure ? [failure] : []), ...errors], 'workspace fixture failed during cleanup');
   }
+  if (failure) throw failure;
+  console.log('workspace reconnect check PASS: desktop/390, leaving points to Reconnect, same membership under a new handle, skin remounted, nothing left to reconnect, host.workspaces disconnected()/reconnect(id), host.reconnect after a restart');
 })().catch((e) => { console.error(e); process.exitCode = 1; });

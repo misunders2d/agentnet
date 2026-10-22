@@ -278,6 +278,12 @@ export function NewGroupForm({ onBack, onCreated, initialPeople = [], navigate =
   const [error, setError] = useState("");
   const [people, setPeople] = useState<Pick<T.PersonRef, "id">[]>(initialPeople);
   const [created, setCreated] = useState("");
+  const pageSize = 40;
+  const [query, setQuery] = useState("");
+  const [peopleLimit, setPeopleLimit] = useState(pageSize);
+  const eligible = useMemo(() => (overview?.people || []).filter(p => p.state === "pinned" && p.person && p.person !== overview?.person?.person), [overview?.people, overview?.person?.person]);
+  const matching = useMemo(() => eligible.filter(p => matches(query, personName(p), p.address, ...(p.devices || []).flatMap(d => [d.name, d.address]))), [eligible, query]);
+
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     const t = title.trim();
@@ -321,12 +327,18 @@ export function NewGroupForm({ onBack, onCreated, initialPeople = [], navigate =
       </button>)}</div>
       <fieldset disabled={busy} className="space-y-2">
         <legend className="font-semibold">People</legend>
-        <div className="max-h-48 overflow-y-auto">{(overview?.people || []).filter(p => p.state === "pinned" && p.person && p.person !== overview?.person?.person).map(p =>
+        <div className="flex items-end gap-2">
+          <label className="min-w-0 flex-1 text-sm">Search people<input type="search" value={query} onChange={e => { setQuery(e.target.value); setPeopleLimit(pageSize); }} placeholder="Name or device" autoComplete="off" className="mt-1 block h-11 w-full rounded-xl bg-surface px-3 text-[16px] stroke" /></label>
+          {query && <Button type="button" size="sm" variant="outline" onClick={() => { setQuery(""); setPeopleLimit(pageSize); }}>Clear search</Button>}
+        </div>
+        <div className="max-h-48 overflow-y-auto">{matching.slice(0, peopleLimit).map(p =>
           <label key={p.person} className="flex min-h-11 cursor-pointer items-center gap-3 px-1">
             <input type="checkbox" checked={people.some(x => x.id === p.person)} className="size-5 shrink-0 accent-[var(--an-agent-ink)]" onChange={e => setPeople(e.target.checked ?
               [...people, { id: p.person! }] : people.filter(x => x.id !== p.person))} />
             <span className="break-words">{personName(p)}</span>
           </label>)}</div>
+        {matching.length > peopleLimit && <Button type="button" size="sm" variant="outline" onClick={() => setPeopleLimit(n => n + pageSize)}>Show more people ({matching.length - peopleLimit})</Button>}
+        {!matching.length && <p className="text-sm text-muted">No matching people.</p>}
       </fieldset>
       <TeamPeople selected={people} onChange={setPeople} disabled={busy} showSelected={false} />
       {created && <p role="status">The group is already created. Only the remaining people below will be invited when you retry.</p>}

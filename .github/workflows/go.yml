@@ -25,6 +25,10 @@ on:
         description: 'Native runner selection as a JSON array; empty uses all three systems'
         type: string
         default: ''
+      interaction_qualification:
+        description: 'Also measure all shared GUI workloads in the desktop builds'
+        type: boolean
+        default: false
       windows_task_probe:
         description: "Run only the native Windows Task Scheduler tests (the probe's private task, and the task agentnet for the update switch; both removed afterwards)"
         type: boolean
@@ -166,6 +170,8 @@ jobs:
   desktop:
     if: ${{ !inputs.windows_task_probe && !inputs.test_packages && !inputs.test_run && !inputs.race_shards }}
     uses: ./.github/workflows/desktop.yml
+    with:
+      interaction_qualification: ${{ inputs.interaction_qualification || false }}
   container:
     if: ${{ !inputs.windows_task_probe && !inputs.test_packages && !inputs.test_run && !inputs.race_shards }}
     runs-on: ubuntu-latest

@@ -259,7 +259,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
           className="h-12 w-full rounded-2xl stroke bg-surface pl-11 pr-4 text-[16px] text-ink outline-none placeholder:text-muted focus-visible:outline-3 focus-visible:outline-agent-ink lg:text-[15px]" />
       </label>
 
-      <Candidates list={visible} chosen={chosenKey} onChoose={(k) => { setChoice(k); setError(""); }} note={query ? "" : p?.peopleNote || ""}
+      <Candidates key={query.trim() + "/" + humanMode + "/" + scope + "/" + selectedTopic} list={visible} chosen={chosenKey} onChoose={(k) => { setChoice(k); setError(""); }} note={query ? "" : p?.peopleNote || ""}
         loading={catalogs.loading} query={query.trim()} total={p?.candidates.length || 0} />
 
       {c && route && (
@@ -396,16 +396,28 @@ function TaskChoice({ people, chosen, onToggle, mine, owner, keys }: {
 function Candidates({ list, chosen, onChoose, note, loading, query, total }: {
   list: Candidate[]; chosen: string; onChoose: (key: string) => void; note: string; loading: boolean; query: string; total: number;
 }) {
+  const [limit, setLimit] = useState({ people: 40, agents: 40 });
   const people = list.filter((c) => c.kind === "person");
   const agents = list.filter((c) => c.kind === "agent");
+  const page = (rows: Candidate[], count: number) => {
+    const shown = rows.slice(0, count);
+    const selected = rows.find(c => c.key === chosen);
+    // Bring back can preselect a candidate beyond the first page. Keep that
+    // exact choice visible without mounting the whole directory.
+    if (selected && !shown.includes(selected)) shown.push(selected);
+    return shown;
+  };
+  const shownPeople = page(people, limit.people), shownAgents = page(agents, limit.agents);
   const both = people.length > 0 && agents.length > 0;
   return (
     <div role="radiogroup" aria-label="Who to bring in" className="mt-3 flex flex-col gap-1">
       {note && <p className="mb-1 flex gap-2 px-1 text-[13px] font-semibold text-text-2"><IconInfoCircle size={17} className="mt-px shrink-0" aria-hidden="true" />{note}</p>}
       {both && <Section>People</Section>}
-      {people.map((c) => <Row key={c.key} c={c} on={c.key === chosen} onChoose={onChoose} />)}
+      {shownPeople.map((c) => <Row key={c.key} c={c} on={c.key === chosen} onChoose={onChoose} />)}
+      {people.length > shownPeople.length && <Button variant="ghost" onClick={() => setLimit(v => ({ ...v, people: v.people + 40 }))}>Show more people ({people.length - shownPeople.length} more)</Button>}
       {both && <Section>Agents</Section>}
-      {agents.map((c) => <Row key={c.key} c={c} on={c.key === chosen} onChoose={onChoose} />)}
+      {shownAgents.map((c) => <Row key={c.key} c={c} on={c.key === chosen} onChoose={onChoose} />)}
+      {agents.length > shownAgents.length && <Button variant="ghost" onClick={() => setLimit(v => ({ ...v, agents: v.agents + 40 }))}>Show more agents ({agents.length - shownAgents.length} more)</Button>}
       {loading && (
         <p className="flex items-center gap-2 px-2 py-2 text-[13px] font-semibold text-muted" role="status">
           <span className="flex gap-0.5" aria-hidden="true"><i className="working-dot size-1.5 rounded-full bg-muted" /><i className="working-dot size-1.5 rounded-full bg-muted" /><i className="working-dot size-1.5 rounded-full bg-muted" /></span>

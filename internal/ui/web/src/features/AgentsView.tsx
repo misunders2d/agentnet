@@ -2,7 +2,7 @@
 // without asking you) and other people's agents seen in your chats. It says
 // only what the daemon proves: a program is installed, never that it is
 // signed in or working; a permission holds only as the server lists it.
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Switch } from "@base-ui/react/switch";
 import { IconChevronRight, IconDevices, IconPlus, IconSettings } from "@tabler/icons-react";
 import { errorText, type T } from "../api";
@@ -133,10 +133,11 @@ function NamedAgents({ o, catalog }: { o: T.Overview; catalog: Load<T.AgentCatal
   const [off, setOff] = useState<T.CatalogAgent | null>(null);
   const [unshared, setUnshared] = useState(false);
   const [connecting, setConnecting] = useState(false);
+  const connect = useRef<HTMLButtonElement>(null);
   const c = catalog.v;
   if (catalog.error) return <p className="px-1 text-[14px] text-muted">Agents aren’t available here: {catalog.error}</p>;
   if (!c?.local) return null;
-  if (connecting) return <AssistantSetup start onDone={() => setConnecting(false)} />;
+  if (connecting) return <AssistantSetup start onDone={() => { setConnecting(false); requestAnimationFrame(() => connect.current?.focus()); }} />;
   const localAgents=(c.agents || []).filter(a=>a.record.host===o.me.address&&a.record.host_key===o.me.fingerprint);
   const agents = currentCatalogAgents(localAgents,true);
   const occupied=new Set(localAgents.filter(a=>a.enabled).map(a=>a.record.harness));
@@ -168,7 +169,7 @@ function NamedAgents({ o, catalog }: { o: T.Overview; catalog: Load<T.AgentCatal
         </p>
       )}
       <div className="flex flex-wrap gap-2 pt-1">
-        <Button variant="act" size="sm" icon={<IconPlus size={18} />} onClick={() => setConnecting(true)}>Connect an agent</Button>
+        <Button ref={connect} variant="act" size="sm" icon={<IconPlus size={18} />} onClick={() => setConnecting(true)}>Connect an agent</Button>
         {available.length>0&&<Button variant="outline" size="sm" onClick={() => setSheet({})}>New agent</Button>}
       </div>
       {(sheet?.agent||available.length>0)&&<AgentSheet open={!!sheet} onOpenChange={(v) => !v && setSheet(null)} harnesses={sheet?.agent?editable:available} agent={sheet?.agent} onSave={save} />}

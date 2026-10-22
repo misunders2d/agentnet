@@ -140,12 +140,14 @@ func TestUIResponsivenessRendered(t *testing.T) {
 			suites = "history,navigation,settings,unread,actions"
 		}
 		for _, suite := range strings.Split(suites, ",") {
-			cmd := exec.CommandContext(t.Context(), python, "testdata/latency_native_check.py", shell, ts.URL+"/latency?run=native-"+suite+"&suite="+suite, testToken, sidecar)
-			out, err := cmd.CombinedOutput()
-			if err != nil {
-				t.Fatalf("%s: %v\n%s", suite, err, out)
-			}
-			t.Log(string(out))
+			t.Run(suite, func(t *testing.T) {
+				cmd := exec.CommandContext(t.Context(), python, "testdata/latency_native_check.py", shell, ts.URL+"/latency?run=native-"+suite+"&suite="+suite, testToken, sidecar)
+				out, err := cmd.CombinedOutput()
+				if err != nil {
+					t.Fatalf("%v\n%s", err, out)
+				}
+				t.Log(string(out))
+			})
 		}
 	}
 }

@@ -144,7 +144,8 @@ export function pool(t: T.DMThread, o: T.Overview, cat: Catalogs, names: Record<
   let pick = "";
   for (const c of out) {
     if (c.kind !== "person" || !c.person) continue;
-    const m = recent.find((m) => mentions(m.text ?? m.body, c.person!));
+    const mentioned = mentions(c.person);
+    const m = recent.find((m) => mentioned(m.text ?? m.body));
     if (!m) continue;
     const who = speaker(m, t, o, names);
     c.reason = "Mentioned by " + (who.me ? "you" : who.name) + " · " + timeOf(m.at);
@@ -159,13 +160,27 @@ const agentLine = (p: T.PersonView, me: T.PersonView | undefined, address: strin
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+// The boundary is independent of the person's name. Compile its Unicode
+// classes once, rather than compiling them for every name/message pair.
+const wordCharacter = /[\p{L}\p{N}]/iu;
+
 /** mentions: an exact @mention of this person, or their name as a whole word. */
-function mentions(text: string | undefined, p: T.PersonView): boolean {
-  if (!text) return false;
-  if (text.includes("agentnet:person/" + p.person + ")")) return true;
-  if([...text.matchAll(collectiveRef)].some(m=>parseCollective(m[2])?.some(r=>r.kind==='person'&&r.id===p.person)))return true;
+function mentions(p: T.PersonView): (text: string | undefined) => boolean {
   const name = (p.label || "").trim();
-  return name.length >= 2 && new RegExp("(?<![\\p{L}\\p{N}])" + escape(name) + "(?![\\p{L}\\p{N}])", "iu").test(text);
+  // A lookahead retains overlapping occurrences; an earlier occurrence can
+  // fail its boundary while a later overlapping occurrence is a whole name.
+  const atName = name.length >= 2 ? new RegExp("(?=(" + escape(name) + "))", "giu") : null;
+  return (text) => {
+    if (!text) return false;
+    if (text.includes("agentnet:person/" + p.person + ")")) return true;
+    if([...text.matchAll(collectiveRef)].some(m=>parseCollective(m[2])?.some(r=>r.kind==='person'&&r.id===p.person)))return true;
+    if (atName) for (const match of text.matchAll(atName)) {
+      const previous = [...text.slice(Math.max(0, match.index - 2), match.index)].at(-1) || "";
+      const next = text.codePointAt(match.index + match[1].length);
+      if (!wordCharacter.test(previous) && (next === undefined || !wordCharacter.test(String.fromCodePoint(next)))) return true;
+    }
+    return false;
+  };
 }
 
 /** routeFor: which invitation a candidate takes in t. */

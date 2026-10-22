@@ -183,6 +183,7 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
     <Card className="p-4">
       <section aria-label={CARD_TITLE} aria-busy={!!busy} className="space-y-4">
         {head(TITLE[stage])}
+        {error && <p role="alert" className="rounded-2xl bg-danger-bg px-3.5 py-2.5 text-[15px] font-semibold text-danger">{error}</p>}
 
         {stage === "home" && <>
           <p className="text-[15px] text-text-2">Set up a Claude Code, Codex, Pi or OMP agent for chats, questions and approved tasks. It uses your own settings, skills, plugins and sign-in.</p>
@@ -265,7 +266,6 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
           </div>
         </>}
 
-        {error && <p role="alert" className="rounded-2xl bg-danger-bg px-3.5 py-2.5 text-[15px] font-semibold text-danger">{error}</p>}
       </section>
     </Card>
   );

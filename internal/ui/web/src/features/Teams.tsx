@@ -1,6 +1,6 @@
 // A team grants no conversation access. Expand a verified snapshot, review
 // the people, then send independent invitations (each still needs consent).
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { errorText, type T } from "../api";
 import { useApp } from "../context";
 import { useStore } from "../store";
@@ -126,9 +126,11 @@ export function TeamsSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingEle
 
 function TeamTargets({team,legacyAdd,busy,act}: {team:T.TeamView;legacyAdd:boolean;busy:boolean;act:(c:T.TeamChange)=>Promise<void>}) {
   const store=useApp(),o=useStore(store,s=>s.overview);
-  const people=[...(o?.person?[o.person]:[]),...(o?.people||[])].filter(p=>p.person && (p.state==="self"||p.state==="pinned"));
-  const persons=[...new Map(people.map(p=>[p.person,p])).values()];
-  const hosts=team.version===2?[...new Map(people.flatMap(p=>(p.devices||[]).map(d=>[d.address,{address:d.address,name:p.label+" · "+(d.name||d.address)}] as const))).values()]:[];
+  const people=useMemo(()=>[...(o?.person?[o.person]:[]),...(o?.people||[])].filter(p=>p.person && (p.state==="self"||p.state==="pinned")),[o?.person,o?.people]);
+  const persons=useMemo(()=>[...new Map(people.map(p=>[p.person,p])).values()],[people]);
+  const hosts=useMemo(()=>team.version===2?[...new Map(people.flatMap(p=>(p.devices||[]).map(d=>[d.address,{address:d.address,name:p.label+" · "+(d.name||d.address)}] as const))).values()]:[],[people,team.version]);
+  const personOptions=useMemo(()=>{const members=new Set(team.members);return persons.filter(p=>!members.has(p.person!)).map(p=>({value:p.person!,label:p.label,search:[p.address,...(p.devices||[]).flatMap(d=>[d.name,d.address])].filter(Boolean).join(" ")}));},[persons,team.members]);
+  const hostOptions=useMemo(()=>hosts.filter(h=>h.address!==o?.me.address).map(h=>({value:h.address,label:h.name})),[hosts,o?.me.address]);
   const [person,setPerson]=useState(""),[host,setHost]=useState(""),[agent,setAgent]=useState("");
   const catalog=useLoad(()=>team.version===2?store.api.agents(host):Promise.resolve(null),[host,team.version]);
   const catalogCurrent=!catalog.loading && catalog.data?.host===(host||o?.me.address);
@@ -147,16 +149,47 @@ function TeamTargets({team,legacyAdd,busy,act}: {team:T.TeamView;legacyAdd:boole
     {team.version!==2&&canEdit&&<Hint>Adding a person keeps this list and its current roles. Older apps keep their last readable copy until they update. Chat membership and permissions stay the same.</Hint>}
     {canEdit&&<fieldset disabled={busy} className="space-y-2 rounded-xl border border-hairline p-3">
       <legend className="px-1 font-semibold">Add to this {team.version===2?"tag":"list"}</legend>
-      <label className="block">Person<select aria-label="Person" className={input} value={person} onChange={e=>setPerson(e.target.value)}><option value="">Choose a person</option>{persons.filter(p=>!team.members?.includes(p.person!)).map(p=><option key={p.person} value={p.person}>{p.label}</option>)}</select></label>
+      <RosterSelect label="Person" noun="people" placeholder="Choose a person" options={personOptions} value={person} onChange={setPerson} />
       <Button size="sm" disabled={!person||busy} onClick={()=>void act({team:team.id,op:"add",target:person}).then(()=>setPerson(""))}>Add person</Button>
       {team.version===2&&<>
-      <label className="block">Agent’s device<select aria-label="Agent’s device" className={input} value={host} onChange={e=>{setHost(e.target.value);setAgent("");}}><option value="">This device</option>{hosts.filter(h=>h.address!==o?.me.address).map(h=><option key={h.address} value={h.address}>{h.name}</option>)}</select></label>
+      <RosterSelect label="Agent’s device" noun="devices" placeholder="This device" options={hostOptions} value={host} onChange={value=>{setHost(value);setAgent("");}} />
       <label className="block">Agent<select aria-label="Agent" className={input} value={agent} disabled={!catalogCurrent} onChange={e=>setAgent(e.target.value)}><option value="">{catalog.loading ? "Reading agents…" : "Choose an agent"}</option>{available.filter(a=>a.enabled&&!team.agents?.some(x=>x.id===a.record.id&&x.host===a.record.host&&x.host_key===a.record.host_key)).map(a=><option key={a.record.id} value={a.record.id}>{a.record.label}</option>)}</select></label>
       {catalog.error&&<p role="alert" className="text-sm text-danger">{catalog.error}</p>}
       <Button size="sm" disabled={!record||busy} onClick={()=>record&&void act({team:team.id,op:"agent-add",agent:{id:record.id,host:record.host,host_key:record.host_key}}).then(()=>setAgent(""))}>Add agent</Button>
       </>}
     </fieldset>}
   </>;
+}
+
+// Keep the native chooser small, with full-roster search and explicit paging.
+// A selected exact ID/address stays selectable while another search is shown.
+function RosterSelect({ label, noun, placeholder, options, value, onChange }: {
+  label: string; noun: string; placeholder: string; options: { value: string; label: string; search?: string }[];
+  value: string; onChange: (value: string) => void;
+}) {
+  const pageSize = 40;
+  const [query, setQuery] = useState("");
+  const [searching, setSearching] = useState(false);
+  const [limit, setLimit] = useState(pageSize);
+  const matches = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return q ? options.filter(o => (o.label + " " + o.value + " " + (o.search || "")).toLowerCase().includes(q)) : options;
+  }, [options, query]);
+  const shown = matches.slice(0, limit);
+  const chosen = options.find(o => o.value === value);
+  if (chosen && !shown.some(o => o.value === value)) shown.push(chosen);
+  return <div className="space-y-2">
+    <label className="block">{label}<select aria-label={label} className={input} value={value} onChange={e => onChange(e.target.value)}>
+      <option value="">{placeholder}</option>{shown.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+    </select></label>
+    {(options.length > pageSize || searching) && <Hint>Search all {options.length} {noun} by name{noun === "people" ? ", person ID or device address" : " or address"}.</Hint>}
+    {searching ? <>
+      <label className="block text-sm">Search all {noun}<input type="search" autoFocus className={input} value={query} onChange={e => { setQuery(e.target.value); setLimit(pageSize); }} /></label>
+      <Button size="sm" variant="outline" onClick={() => { setSearching(false); setQuery(""); setLimit(pageSize); }}>Close {noun} search</Button>
+      {!matches.length && <Hint>No matching {noun}.</Hint>}
+    </> : options.length > pageSize && <Button size="sm" variant="outline" onClick={() => setSearching(true)}>Search all {noun}</Button>}
+    {matches.length > limit && <Button size="sm" variant="outline" onClick={() => setLimit(n => n + pageSize)}>Show more {noun} ({matches.length - limit})</Button>}
+  </div>;
 }
 
 export function TeamPeople({ selected, onChange, excluded = [], disabled = false, showSelected = true }: {
