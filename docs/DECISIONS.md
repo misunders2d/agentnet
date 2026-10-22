@@ -1,5 +1,25 @@
 # AgentNet Revival — Architectural Decision Records & Linear Roadmap
 
+## 2026-10-22 — tagged clarification and one effective attention state
+
+Ordinary missing information and business choices use normal chat questions
+tagging the intended person. They must not create a persistent blocking form
+or require manual handling before an exact authorized tagged follow-up can run.
+The normal claim retains identity, participation, task grants and native
+permissions, includes all saved clarification rounds, and settles only its
+corresponding stale clarification. Untagged context and history remain inert.
+Concrete native permissions and required execution authorization retain their
+explicit controls and reason. Track the correction in
+[MEL-497](https://linear.app/mellanni/issue/MEL-497).
+
+The person's effective synchronized read/reminder state also governs generic
+harness attention. A session cursor is not another unread inbox; read unbound
+chat and replies stay read, while exact selected receivers retain their own
+delivery. Generic awareness never blocks unrelated Stop. See
+[MEL-692](https://linear.app/mellanni/issue/MEL-692),
+[MEL-693](https://linear.app/mellanni/issue/MEL-693) and the
+[active batch checklist](plans/OCT22_BATCH.md) for evidence and remaining gates.
+
 ## 2026-10-21 — one current agent per harness and private reminder sync
 
 The owner's correction supersedes earlier multiple-configuration UX: one

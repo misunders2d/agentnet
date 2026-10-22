@@ -1,5 +1,24 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+## Active October 22 batch — v0.9.3 candidate
+
+The complete [batch handoff](plans/OCT22_BATCH_HANDOFF.md),
+[active release goal](plans/OCT22_BATCH_GOAL.md) and
+[acceptance checklist](plans/OCT22_BATCH.md) cover all eleven original areas
+plus the owner's tagged-chat clarification correction (MEL-497). The candidate
+includes focused fixes for effective-read hooks, saved group clarification
+rounds, reaction projection, independent recipient fanout, bounded Drive work,
+storage controls/errors/retry, media preparation and mouse controls. A real-Hub
+ordinary-user journey also reproduced the browser's omitted reminder capability.
+Qualification, publication and existing-relay rollout remain in progress;
+candidate source and focused tests are not a released or deployed result.
+
+Preserve the dirty main checkout and parked Play work; use the isolated
+`.agentnet/oct22-batch` candidate. The existing relay's connected Google Drive
+and completed migration are state to preserve. Do not disconnect or remigrate
+it for tests. Physical Pixel and actual macOS results remain separate from
+source, emulator and rendered evidence.
+
 ## v0.9.2 released and relay updated — October22, 2026
 
 [App v0.9.2](https://github.com/misunders2d/agentnet/releases/tag/v0.9.2) is public

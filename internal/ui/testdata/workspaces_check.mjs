@@ -26,6 +26,25 @@ await shell.disconnect(b.id);
 await assert.rejects(bh.api("/api/send",{}),/Stale/);
 assert.equal(shell.active,a.id);
 console.log("workspace transport, drafts, staged files, endpoints and stale handles PASS");
+
+// Raw media stays bound to the authenticated native membership. A browser
+// engine has no native transcoder; cancellation covers both probe and upload.
+const mediaCalls=[];let finishMedia;
+const mediaShell=new WorkspaceShell({fetch:async(url,opts)=>{
+ mediaCalls.push({url,opts});
+ if(url.endsWith('/api/media/capabilities'))return{ok:true,json:async()=>({video:true})};
+ if(url.endsWith('/api/media/video'))return new Promise(r=>finishMedia=()=>r({ok:true,headers:new Headers({'Content-Type':'video/mp4','Content-Length':'4'}),blob:async()=>new Blob(['MP4!'],{type:'video/mp4'})}));
+ return{ok:true,json:async()=>({})};
+}});
+const mediaA=mediaShell.register(a),mediaB=mediaShell.register(b),source=new File(['ORIGINAL'],'source.mov',{type:'video/quicktime'}),controller=new AbortController();
+const preparing=mediaA.prepareVideo(source,controller.signal);
+while(!finishMedia)await new Promise(r=>setImmediate(r));mediaShell.select(b.id);finishMedia();
+const prepared=await preparing;assert.equal(prepared.name,'source.mp4');assert.equal(prepared.type,'video/mp4');assert.equal(await prepared.text(),'MP4!');
+assert(mediaCalls.every(c=>c.url.startsWith('/workspaces/default/'+a.handle+'/')));assert.equal(mediaCalls[1].opts.body,source);assert.equal(mediaCalls[1].opts.signal,controller.signal);
+const browserMedia=mediaShell.register({...a,id:'d'.repeat(32)}, {api:async()=>({})});assert.equal(browserMedia.prepareVideo,undefined);
+const cancelled=new AbortController();cancelled.abort();const beforeMedia=mediaCalls.length;await assert.rejects(mediaB.prepareVideo(source,cancelled.signal),e=>e.name==='AbortError');assert.equal(mediaCalls.length,beforeMedia);
+await mediaShell.disconnect(a.id);await assert.rejects(mediaA.prepareVideo(source,controller.signal),/Stale/);
+console.log('native media captured binding, streamed original, result MIME, browser exclusion and cancellation PASS');
 const {BrowserMemberships,workspacePush}=await import("../static/workspaces.mjs");
 const storageMap=new Map(),storage={getItem:k=>storageMap.get(k),setItem:(k,v)=>storageMap.set(k,v)};
 const dbs=new Map(),locked=new Set();

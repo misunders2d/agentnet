@@ -6,6 +6,7 @@ import { IconFileUpload, IconX } from "@tabler/icons-react";
 import type { T } from "../api";
 import type { StagedFile } from "../store";
 import { size } from "../model";
+import { mediaKind } from "./Composer.media";
 
 const pictures = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 
@@ -21,7 +22,7 @@ export function draftFiles(list: File[], pasted = false): StagedFile[] {
   return list.filter((f) => f.size > 0).map((f) => {
     const name = pasted && (!f.name || /^image\.(png|jpe?g|gif|webp)$/i.test(f.name))
       ? "pasted-image-" + stamp() + "." + (f.type.split("/")[1] || "png").replace("jpeg", "jpg") : f.name || "file";
-    return { key: "f" + ++seq, name, size: f.size, type: f.type, file: f, url: pictures.includes(f.type) ? URL.createObjectURL(f) : undefined };
+    return { key: "f" + ++seq, name, size: f.size, type: f.type, file: f, url: pictures.includes(f.type) || mediaKind(f) === "video" ? URL.createObjectURL(f) : undefined };
   });
 }
 
@@ -42,18 +43,36 @@ export function overLimit(files: Pick<StagedFile, "name" | "size">[], lim: T.Fil
 
 const ext = (name: string) => ((name.includes(".") ? name.split(".").pop() : "") || "file").slice(0, 4).toUpperCase();
 
-export function FilesTray({ files, lim, onRemove, busy }: { files: StagedFile[]; lim?: T.FileLimits; onRemove: (key: string) => void; busy: boolean }) {
+export function FilesTray({ files, lim, onRemove, onMedia, busy }: { files: StagedFile[]; lim?: T.FileLimits; onRemove: (key: string) => void; onMedia?: (key: string, mode: "original" | "smaller") => void; busy: boolean }) {
   if (!files.length) return null;
   return (
     <ul aria-label="Files to send" className="-mx-1 mb-2 flex gap-3 overflow-x-auto px-1 pt-3 pb-1 [scrollbar-width:thin]">
       {files.map((f) => {
         const tooBig = !!lim && f.size > lim.max_file;
+        const kind = mediaKind(f.original || f.file);
         const remove = (
           <button type="button" disabled={busy} onClick={() => onRemove(f.key)} aria-label={"Remove " + f.name}
             className="absolute -top-4 -right-4 grid size-11 place-items-center rounded-full disabled:opacity-40">
             <span className="grid size-6 place-items-center rounded-full bg-ink text-canvas stroke shadow-pop-sm"><IconX size={14} stroke={3} /></span>
           </button>
         );
+        if (kind && onMedia) return <li key={f.key} className="relative w-64 shrink-0 rounded-xl bg-canvas p-2 stroke" aria-label={f.name}>
+          <div className="flex items-center gap-2">
+            {kind === "photo" && f.url ? <img src={f.url} alt={f.name} className="size-16 shrink-0 rounded-lg bg-white object-cover" />
+              : kind === "video" && f.url ? <video src={f.url} controls playsInline preload="metadata" className="h-24 w-full rounded-lg bg-ink" aria-label={"Preview " + f.name} /> : null}
+            {kind === "photo" && <span className="min-w-0 text-sm font-semibold [overflow-wrap:anywhere]">{f.name}</span>}
+          </div>
+          {kind === "video" && <p className="mt-1 truncate text-sm font-semibold">{f.name}</p>}
+          <p className={"mt-1 text-[13px] tnum " + (tooBig ? "font-semibold text-danger" : "text-muted")}>
+            {f.original && f.size !== f.original.size ? bytes(f.original.size) + " → " : ""}{bytes(f.size)}{tooBig ? " · too big" : ""}
+          </p>
+          <div className="mt-1 flex flex-wrap gap-1">
+            <button type="button" disabled={busy || f.preparing} aria-pressed={f.mediaMode === "smaller"} onClick={() => onMedia(f.key, "smaller")} className="min-h-11 rounded-lg px-2 text-[13px] font-semibold hover:bg-sunken aria-pressed:bg-agent aria-pressed:text-agent-ink disabled:opacity-40">Smaller {kind}</button>
+            <button type="button" disabled={busy} aria-pressed={f.mediaMode !== "smaller"} onClick={() => onMedia(f.key, "original")} className="min-h-11 rounded-lg px-2 text-[13px] font-semibold hover:bg-sunken aria-pressed:bg-agent aria-pressed:text-agent-ink disabled:opacity-40">{f.preparing ? "Cancel preparation" : "Original file"}</button>
+          </div>
+          <p className="text-[12px] text-muted [overflow-wrap:anywhere]" role="status">{f.preparing ? "Preparing on this device…" + (f.mediaProgress ? " " + f.mediaProgress + "%" : "") : f.mediaNote || "Original bytes. Choose a smaller version before sending."}</p>
+          {remove}
+        </li>;
         return f.url ? (
           <li key={f.key} className="relative shrink-0 pop-in" title={f.name + " · " + bytes(f.size)}>
             <img src={f.url} alt={f.name} className={"size-16 rounded-xl bg-white object-cover stroke " + (tooBig ? "outline-2 outline-danger" : "")} />

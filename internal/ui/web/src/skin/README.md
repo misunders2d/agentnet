@@ -69,6 +69,13 @@ a contract: AgentNet keeps them on the same elements, and
 | `request` | A request card (`data-tone`: act, work, quiet) |
 | `relay-attachment-storage` | Relay-wide attachment storage status and admin controls |
 
+The shared sender supports photo/video preparation and exact-original files.
+Video codecs are loaded from the package's lazy `m/chunks/*.mjs` files only when
+needed; overlay packages must retain every file in the generated manifest and
+checksum list. Preparation stays on the sending device before ordinary staging
+and encryption. Optional `host.prepareVideo` provides a local Linux fallback;
+see [Host API v1](../../../../../docs/UI_SKINS.md#host-api-v1) for its bounds.
+
 Prefer tokens over part styles, and part styles over new slots. Never hide a
 control or text with a part style: restyle it. Write part styles outside any
 `@layer`: unlayered rules win over Comic's Tailwind utilities, so no

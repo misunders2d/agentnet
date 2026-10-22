@@ -40,7 +40,7 @@ func TestRequestFollowupGuard(t *testing.T) {
 	if err != nil || !strings.Contains(prompt, "Russian") || !strings.Contains(prompt, "queued, not accepted as live steering") || !strings.Contains(prompt, "Do not rerun completed effects") {
 		t.Fatal(prompt, err)
 	}
-	for _, state := range []string{stateCancelled, "interrupted", stateJobFailed, stateNeedHuman, statePending} {
+	for _, state := range []string{stateCancelled, "interrupted", stateJobFailed, statePending} {
 		if _, err = w.bob.store.db.Exec(`UPDATE inbox SET state=? WHERE id=?`, state, original); err != nil {
 			t.Fatal(err)
 		}

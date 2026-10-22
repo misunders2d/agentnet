@@ -31,6 +31,7 @@ assert.deepEqual(m.continuation,{host,id,key,attempt},'presentation preserves ex
 for (const state of ['done','answered','resolved','declined','proposal','unavailable'])
  assert.equal(words.phaseOf({...m,exec:{...m.exec,state},actions:['continue']}),null,'a confirmed terminal outcome cannot display an old continuation as a new human decision');
 assert.equal(words.phaseOf({...m,actions:['continue']}),'needs_human','a different later request succeeding never closes this exact blocker');
+assert.equal(words.phaseOf({...m,kind:'answer',body:'@Sergey Which budget should I use?',continuation:undefined,exec:undefined,actions:[]} ),null,'ordinary signed chat clarification never creates a separate decision form');
 const old=notice([item],100),empty=notice([],101);
 assert.equal(model.latestReviewReport([old,empty]),empty,'newest empty report settles historical blockers');
 assert.equal(model.latestReviewReport([old,notice([],100)]).report.items.length,0,'settled snapshot wins a same-second tie');

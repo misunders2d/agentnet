@@ -33,6 +33,7 @@ export interface Draft {
   topic?: string;
   newTopic?: boolean;        // in an agent's conversation: start a separate one with the next send
   files?: StagedFile[];
+  mediaMode?: "original" | "smaller";
 }
 
 export interface StagedFile {
@@ -43,6 +44,11 @@ export interface StagedFile {
   url?: string;              // object URL for an image preview (revoked when dropped)
   staged?: unknown;          // what host.stage returned (an id on a daemon, a file handle in a browser)
   file: File;
+  original?: File;           // untouched source for an explicit Original file choice
+  mediaMode?: "original" | "smaller";
+  preparing?: boolean;
+  mediaProgress?: number;
+  mediaNote?: string;
 }
 
 export interface Toast { id: number; text: string; tone?: "ok" | "error" }
@@ -985,7 +991,8 @@ export class Store {
   // ---- drafts, kept per workspace and conversation; File objects stay in memory
   private loadDrafts(): Record<string, Draft> {
     const saved=this.host.workspaces?.state?.(this.host.workspace.id)?.comicDrafts as {handle?:string;drafts:Record<string,Draft>}|undefined;
-    if(saved&&saved.handle===this.host.workspace.handle)return saved.drafts;
+    if(saved&&saved.handle===this.host.workspace.handle)return Object.fromEntries(Object.entries(saved.drafts).map(([id,d])=>[id,{...d,
+      files:d.files?.map(f=>f.preparing?{...f,preparing:false,mediaProgress:undefined,mediaNote:"Preparation was interrupted. The original file is kept."}:f)}]));
     try {
       const raw = JSON.parse(localStorage.getItem(draftsKey(this.host.workspace.id)) || "{}");
       const out: Record<string, Draft> = {};
@@ -993,6 +1000,7 @@ export class Store {
         text: v.text, replyTo: typeof v.replyTo === "string" ? v.replyTo : undefined,
         agent: typeof v.agent === "string" ? v.agent : undefined,
         topic: typeof v.topic === "string" ? v.topic : undefined, newTopic: v.newTopic === true,
+        mediaMode: v.mediaMode === "smaller" ? "smaller" : v.mediaMode === "original" ? "original" : undefined,
       };
       return out;
     } catch { return {}; }
@@ -1001,7 +1009,7 @@ export class Store {
   private saveDrafts(drafts: Record<string, Draft>) {
     try {
       const keep: Record<string, Draft> = {};
-      for (const [k, d] of Object.entries(drafts)) if (d.text || d.replyTo || d.agent || d.topic || d.newTopic) keep[k] = { text: d.text, replyTo: d.replyTo, agent: d.agent, topic: d.topic, newTopic: d.newTopic };
+      for (const [k, d] of Object.entries(drafts)) if (d.text || d.replyTo || d.agent || d.topic || d.newTopic || d.mediaMode) keep[k] = { text: d.text, replyTo: d.replyTo, agent: d.agent, topic: d.topic, newTopic: d.newTopic, mediaMode: d.mediaMode };
       localStorage.setItem(draftsKey(this.host.workspace.id), JSON.stringify(keep));
     } catch { /* a convenience only */ }
   }
@@ -1012,7 +1020,7 @@ export class Store {
     const prior = this.state.drafts[conv];
     if (topicSelected || (prior?.topic || "") !== (d.topic || "") || !!prior?.newTopic !== !!d.newTopic) this.dismissMessageLanding();
     const drafts = { ...this.state.drafts };
-    if (!d.text && !d.replyTo && !d.agent && !d.newTopic && !d.topic && !(d.files && d.files.length)) delete drafts[conv];
+    if (!d.text && !d.replyTo && !d.agent && !d.newTopic && !d.topic && !d.mediaMode && !(d.files && d.files.length)) delete drafts[conv];
     else drafts[conv] = d;
     const changedScope = (prior?.topic || "") !== (d.topic || "") || !!prior?.newTopic !== !!d.newTopic;
     const selected = this.state.open?.id === conv && (topicSelected || changedScope);
@@ -1058,6 +1066,26 @@ export class Store {
       // A workspace being left or replaced answers its old view this way:
       // the host remounts the interface, so there is nothing to tell.
       if (errorText(e) !== "stale or disconnected workspace") this.toast(errorText(e), "error");
+      return undefined;
+    }
+  }
+
+  // A control is already durable when its API returns. A history fetch that
+  // started before that commit must not hold its projection behind old work.
+  // loadOpen's existing latest-fetch fence keeps that older response from
+  // replacing the new authoritative view when it eventually finishes.
+  async react(change: T.ControlAction): Promise<{ note: string } | undefined> {
+    const selected = this.state.open;
+    try {
+      const result = await this.api.react(change);
+      if (!this.alive) return undefined;
+      if (selected && this.state.open === selected && (change.conv ? selected.id === change.conv : selected.kind === "thread")) {
+        await this.loadOpen(selected, true);
+      }
+      void this.load(false);
+      return result;
+    } catch (e) {
+      if (this.alive && errorText(e) !== "stale or disconnected workspace") this.toast(errorText(e), "error");
       return undefined;
     }
   }

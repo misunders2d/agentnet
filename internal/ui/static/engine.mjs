@@ -334,6 +334,16 @@ export class HubError extends Error {
     this.code = code;
   }
 }
+const storageSendDetail = e => {
+  const reasons = {
+    relay_quota: "Relay attachment quota is full. Ask a server admin to raise the limit or clean up eligible files, then retry this message.",
+    file_too_large: "This file exceeds the relay's file-size limit. Choose a smaller file.",
+    relay_disk_full: "The relay disk is full. Ask a server admin to free disk space, then retry this message.",
+  };
+  if (reasons[e.code]) return "send_error:"+e.code+": "+reasons[e.code];
+  if (e instanceof HubError && e.status===0) return "send_error:network_unavailable: Cannot reach the server. Your message and files are kept here for retry.";
+  return e.message;
+};
 // A server that requires a newer AgentNet (426 update_required) takes the
 // same request from the updated page: it waits, never fails.
 const retryable = (e) => e instanceof HubError && (e.status === 0 || e.status >= 500 || e.status === 429 || e.status === 426);
@@ -3299,6 +3309,7 @@ export class Engine {
       const a = this.keepQueue.pop();
       if (!a) return;
       if (!a.blob || this.notKept.has(a.blob.id)) continue;
+      if (await this.store.get("kv", "cache-cleared/"+a.blob.id) === a.blob.sha256) continue;
       if (a.size > wire.BrowserMaxFile) { this.notKept.set(a.blob.id, "large"); continue; }
       if (await this.store.get("files", "ct/" + a.blob.id)) continue;
       try {
@@ -4084,11 +4095,11 @@ export class Engine {
       } else if(e.code==="device_history_authority") {
         rec.state="not_delivered";rec.detail=e.message;
       } else if (retryable(e)) {
-        rec.detail = e.message;
+        rec.detail = storageSendDetail(e);
       } else {
         rec.state = "failed";
         rec.detail = e.code === "recipient_revoked" ? "that device was removed from the server"
-          : e.status === 413 ? "your server refuses this file (its size limit or its space is reached): " + e.message : e.message;
+          : storageSendDetail(e);
       }
     }
     if (!await this.receiverOutboxProgress(rec, rec.state === "custody" || rec.state === "delivered")) return;
@@ -4109,7 +4120,6 @@ export class Engine {
     for (;;) {
       const current = await this.store.get("outbox", rec.id);
       if (!current || current.delivery_cancelled || !["queued", "waiting"].includes(current.state)) return false;
-      if (!["question", "task"].includes(rec.kind) || rec.control) return true;
       try {
         await this.store.write([{s:"outbox",k:rec.id,v:{...current,handover_started:true}}],[{s:"outbox",k:rec.id,v:current}]);
         rec.handover_started = true;
@@ -4481,7 +4491,8 @@ export class Engine {
         r.send_order = ++order;
         if(wire.topicRename(r.topic_event))r.shared_title_cap=true;
         if(wire.conversationResources(r.topic_event))r.resources_cap=true;
-        if (["question","task"].includes(r.kind)) r.handover_started = false;
+        r.handover_started = false;
+        r.handover_proven = true;
       }
       extraOps.push(...await this.reminderReplyOps(rows,checks));
       if(beforeStore)extraOps.push(...await beforeStore(copies,checks));
@@ -8159,7 +8170,7 @@ export class Engine {
       if (teams) teams.connected(f.includes("teams1"));
       // This device reads conversations and the attention hint (it never
       // alerts from the stream: its service worker shows the relay's pushes).
-      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapConversationResources, wire.CapSharedTopicTitle, wire.CapConversationAudience, wire.CapEnv2, "notify1", wire.CapPerson, wire.CapControl, wire.CapHeadless, wire.CapDrive, wire.CapAgentIdentity, wire.CapGroupHumanParticipation, wire.CapGroup, wire.CapSendGroup, wire.CapRootSync, wire.CapGroupInvitationManage, wire.CapReadSyncV2, wire.CapOwnSyncV2, wire.CapOwnSyncV3, wire.CapHistoryArchive, wire.CapGuestAgent, wire.CapTopicParticipation, wire.CapRoom, wire.CapProactiveAgent, wire.CapMentionReaction, wire.CapAgentOrganization, wire.CapRequestSteer, wire.CapTopicOrganization, wire.CapModelSyncV2, wire.CapDirectTopicSync, wire.CapTopicStateSync, ...(f.includes("signals1") ? [wire.CapTyping] : [])])));
+      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapConversationResources, wire.CapSharedTopicTitle, wire.CapConversationAudience, wire.CapEnv2, "notify1", wire.CapPerson, wire.CapControl, wire.CapHeadless, wire.CapDrive, wire.CapAgentIdentity, wire.CapGroupHumanParticipation, wire.CapGroup, wire.CapSendGroup, wire.CapRootSync, wire.CapGroupInvitationManage, wire.CapReadSyncV2, wire.CapOwnSyncV2, wire.CapOwnSyncV3, wire.CapHistoryArchive, wire.CapGuestAgent, wire.CapTopicParticipation, wire.CapRoom, wire.CapProactiveAgent, wire.CapMentionReaction, wire.CapAgentOrganization, wire.CapRequestSteer, wire.CapTopicOrganization, wire.CapModelSyncV2, wire.CapDirectTopicSync, wire.CapTopicStateSync, wire.CapReminderSync, ...(f.includes("signals1") ? [wire.CapTyping] : [])])));
       await this.publishPerson().catch(() => {});
       // These existing, coalesced recovery jobs can wait for old proofs or
       // network replies. They must not delay the current user's durable send.
@@ -8600,6 +8611,70 @@ export class Engine {
       else remote.reason = "Storage usage could not be verified with the server.";
     }
     return { local, remote };
+  }
+
+  async changeStorageQuota(body) {
+    if (!body || body.confirm!==true || !Number.isSafeInteger(body.quota_bytes) || body.quota_bytes<=0
+      || Object.keys(body).some(k=>!["confirm","quota_bytes"].includes(k))) throw Error("Confirm a positive relay quota in whole bytes.");
+    await this.call("POST","/v1/admin/storage/quota",body);
+    return this.storageSummary();
+  }
+
+  async storageCache() {
+    const files=[], seen=new Set(); let bytes=0;
+    for (const row of await this.store.all("inbox")) {
+      if (row.local || row.history) continue;
+      for (const a of row.attachments||[]) {
+        const b=a.blob;
+        if (!b || !wire.validID(b.id) || seen.has(b.id) || a.size>wire.BrowserMaxFile) continue;
+        seen.add(b.id);
+        const kept=await this.store.get("files","ct/"+b.id);
+        if (!kept?.ct || kept.attachment || kept.ct.length!==b.size) continue;
+        files.push({id:b.id,size:b.size,sha256:b.sha256});bytes+=b.size;
+        if(files.length===200)return {files,usage:{files:files.length,bytes}};
+      }
+    }
+    return {files,usage:{files:files.length,bytes}};
+  }
+
+  async clearStorageCache(body) {
+    if (!body || body.confirm!==true || !Array.isArray(body.selection) || body.selection.length>200) throw Error("Confirm the reviewed received-cache selection (up to 200 files).");
+    const selected=await this.storageCache(), result={removed:{files:0,bytes:0},retained:{files:0,bytes:0}},seen=new Set();
+    for(const f of body.selection){
+      if(!f || seen.has(f.id) || !selected.files.some(a=>a.id===f.id&&a.size===f.size&&a.sha256===f.sha256))continue;
+      seen.add(f.id);let removed=false;
+      try{
+        // A current fetch owns this cache key; never race its completion.
+        if(this.fetching.has("ct/"+f.id))throw Error("File is being fetched.");
+        const kept=await this.store.get("files","ct/"+f.id);
+        if(!kept?.ct || kept.attachment || kept.ct.length!==f.size || wire.hex(await wire.sha256(kept.ct))!==f.sha256)throw Error("Cached file changed.");
+        // Bypass the cache: prove full authorized remote custody afresh.
+        const remote=await this.getBytes("/v1/blobs/"+f.id+"/data",f.size);
+        if(remote.length!==f.size||wire.hex(await wire.sha256(remote))!==f.sha256)throw Error("Server copy could not be verified.");
+        await this.store.write([{s:"files",k:"ct/"+f.id,v:undefined},{s:"kv",k:"cache-cleared/"+f.id,v:f.sha256}], [{s:"files",k:"ct/"+f.id,v:kept}]);
+        removed=true;
+      }catch(e){ /* retain the only known recoverable copy on every failure */ }
+      const amount=removed?result.removed:result.retained;amount.files++;amount.bytes+=f.size;
+    }
+    if(result.removed.files)this.changed();
+    return result;
+  }
+
+  async retryStorageSend(body) {
+    if(!body || !wire.validID(body.id) || typeof body.conv!=="string")throw Error("Choose the exact stored message to retry.");
+    let retried=0;
+    for(const row of await this.store.all("outbox")){
+      if((row.conv||"")!==body.conv || row.id!==body.id&&row.lid!==body.id || row.state!=="failed"
+        || row.handover_proven!==true || row.handover_started!==false || row.delivery_cancelled
+        || !/^send_error:(relay_quota|file_too_large|relay_disk_full):/.test(row.detail||"") || !(row.files||[]).length)continue;
+      let intact=true;
+      for(const f of row.files){const b=f.attachment?.blob;if(!b||!f.ct||f.ct.length!==b.size||wire.hex(await wire.sha256(f.ct))!==b.sha256){intact=false;break;}}
+      if(!intact)continue;
+      try{await this.store.write([{s:"outbox",k:row.id,v:{...row,state:"queued",detail:""}}],[{s:"outbox",k:row.id,v:row}]);retried++;}
+      catch(e){if(!(e instanceof StoreConflict))throw e;}
+    }
+    if(retried){this.changed();this.queueOutbox();}
+    return {id:body.id,retried};
   }
 
   // relayAttachmentStorage is where the relay keeps attachment ciphertext
@@ -12663,6 +12738,9 @@ export class Engine {
     case "/api/file/request": return this.requestFile(body.id, Number(body.index));
     case "/api/message/react": case "/api/message/edit": case "/api/message/delete": return this.messageControl(u.pathname.split("/").pop(), body || {});
     case "/api/storage": return this.storageSummary();
+    case "/api/storage/quota": return this.changeStorageQuota(body);
+    case "/api/storage/cache": return body===undefined?this.storageCache():this.clearStorageCache(body);
+    case "/api/storage/retry_send": return this.retryStorageSend(body);
     case "/api/storage/attachments": return this.relayAttachmentStorage(body);
     case "/api/workspace": return this.workspaceInfo();
     case "/api/workspace/name": return this.renameWorkspace(body);

@@ -13,7 +13,7 @@ import {
   IconArrowBackUp, IconBolt, IconMessageQuestion, IconCheck, IconChecks, IconClock, IconAlertTriangle, IconEye, IconCircleCheckFilled, IconCircle,
 } from "@tabler/icons-react";
 import type { T } from "../api";
-import { useApp, useWide } from "../context";
+import { useApp, useHoverPointer, useWide } from "../context";
 import { deliveryWord, deviceName, firstLine, owner, personName, plain, reminderOf, timeOf } from "../model";
 import { AgentAvatar, PersonAvatar } from "../ui/Avatar";
 import { Tag } from "../ui/Tag";
@@ -32,6 +32,7 @@ import { RemindSheet, ReminderLine } from "./Reminders";
 import { WhatTheySaw } from "./RoomPanel.cards";
 import { room } from "./RoomPanel.model";
 import { copyText } from "./Settings.parts";
+import { sendFailure } from "./Message.send-error";
 
 export interface MessageProps {
   m: AnyMsg;
@@ -57,6 +58,7 @@ export const MessageView = memo(function MessageView(p: MessageProps) {
 function Bubble({ m, ctx, all, first = true, last = true, status, compact, grouped, readOnly, onJump, selecting, selected, onSelect }: MessageProps) {
   const store = useApp();
   const wide = useWide();
+  const hoverPointer = useHoverPointer();
   const who = whoWrote(m, ctx);
   // Sheets and menus mount on first use: a long conversation keeps none of them around unopened.
   const [sheet, setSheet] = useState<boolean | null>(null);
@@ -131,7 +133,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
         </span>
       )}
       {link && <button type="button" className="mb-1 block max-w-full truncate text-left text-[13px] text-muted" onClick={()=>onJump?.(request!.id)}>↳ {m.kind==="message"?"update on":"answer to"} {plain(shownText(request!)).split("\n")[0]}</button>}
-      {!grouped && m._local && <p className="text-xs text-muted" role="status">{m.state_text}{m._failed && <button type="button" className="ml-2 underline" onClick={m._retry}>Retry</button>}</p>}
+      {!grouped && m._local && <p className="text-xs text-muted" role="status">{sendFailure(m.state_text, ctx.overview?.role === "admin")?.reason || m.state_text}{m._failed && <button type="button" className="ml-2 underline" onClick={m._retry}>Retry</button>}</p>}
       {!grouped && !m.deleted && !isThreadMsg(m) && isRequest(m) && m.pid && <p className="mb-1 text-[13px]" data-agent-recipient title={m.pid}>To {mention("agent", m.pid, agentOf(ctx, m.pid) ? agentLabel(agentOf(ctx, m.pid)!, ctx) : "agent")}</p>}
       {!m.deleted && approved && <p className="mb-1 text-[13px] text-muted" data-proposal-provenance>{m.proposal?.edited ? (who.mine ? "You edited and sent this task" : "Edited and sent this task") : (who.mine ? "You approved this task" : "Approved this task")} · suggested by {!isThreadMsg(m) && agentOf(ctx, m.pid) ? agentLabel(agentOf(ctx, m.pid)!, ctx) : "the agent"}</p>}
       {!compact && quote && <ReplyQuote parent={parent} ctx={ctx} onJump={onJump} />}
@@ -160,7 +162,12 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
         onClick={selecting && can.select ? (e) => { if (inside(e)) onSelect?.(m.id); } : undefined}
         onPointerEnter={wide ? () => setHot(true) : undefined} onFocus={wide ? () => setHot(true) : undefined}
         onPointerLeave={wide ? (e) => { if (!e.currentTarget.querySelector("[data-popup-open]")) setHot(false); } : undefined}
-        {...(readOnly || selecting ? {} : touch.handlers)}>
+        {...(readOnly || selecting ? {} : touch.handlers)}
+        onPointerMove={e => { if (wide && !hot) setHot(true); if (!readOnly && !selecting) touch.handlers.onPointerMove(e); }}
+        onContextMenu={readOnly || selecting ? undefined : e => {
+          if (!inside(e) || (e.target as Element).closest("a[href]")) return;
+          if (live || attention) { e.preventDefault(); setSheet(true); }
+        }}>
         {selecting && (
           <span className={"mr-2 grid size-11 shrink-0 place-items-center self-center " + (can.select ? "text-agent-ink" : "text-hairline")} aria-hidden="true">
             {selected ? <IconCircleCheckFilled size={26} /> : <IconCircle size={26} stroke={1.6} />}
@@ -171,13 +178,14 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
             style={{ opacity: Math.min(1, touch.dx / 64) }}><IconArrowBackUp size={18} /></span>
         )}
         <div className={"flex min-w-0 flex-col " + (who.mine ? "items-end " : "items-start ") + (who.mine ? "max-w-[85%] lg:max-w-[70%]" : "ml-10 max-w-[calc(100%-3rem)] sm:max-w-[80%] lg:max-w-[70%]")}
-          style={touch.dx ? { transform: "translateX(" + touch.dx + "px)" } : undefined}>
+          style={{ ...(touch.dx ? { transform: "translateX(" + touch.dx + "px)" } : {}),
+            ...(!wide && hoverPointer ? { maxWidth: "calc(100% - " + (who.mine ? "3rem" : "5.5rem") + ")" } : {}) }}>
           {first && !who.mine && <NameLine m={m} who={who} />}
           {first && who.mine && excerpt(m) && <span className="mb-1 text-[13px] text-muted">From before you joined</span>}
           {first && who.mine && !excerpt(m) && who.sub && <span className="mb-1 pr-1 text-[13px] text-muted">You · {who.sub}</span>}
           {!compact && !terminal && body}
           {grouped && m._local && <p className="mt-1 text-[13px] text-muted" role="status">
-            {requestLabel(m, ctx)} · {m.state_text}
+            {requestLabel(m, ctx)} · {sendFailure(m.state_text, ctx.overview?.role === "admin")?.reason || m.state_text}
             {m._failed && <button type="button" className="ml-2 min-h-11 underline" onClick={m._retry}>Retry</button>}
           </p>}
           <Reactions m={m} ctx={ctx} can={can.react} wide={wide} />
@@ -187,8 +195,10 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
           {reminder && !selecting && <ReminderLine r={reminder} m={remindable} />}
         </div>
         {!wide && (live || attention) && !selecting && (
-          <button type="button" onClick={() => setSheet(true)} className="sr-only focus:not-sr-only focus:absolute focus:right-2 focus:top-0 focus:inline-flex focus:min-h-11 focus:items-center focus:rounded-full focus:bg-surface focus:px-3 focus:stroke">
-            Message actions
+          <button type="button" aria-label={hoverPointer ? "More actions" : "Message actions"} onClick={() => setSheet(true)} className={hoverPointer
+            ? "ml-1 inline-flex min-h-11 shrink-0 self-end items-center rounded-full bg-surface px-2 stroke"
+            : "sr-only focus:not-sr-only focus:absolute focus:right-2 focus:top-0 focus:inline-flex focus:min-h-11 focus:items-center focus:rounded-full focus:bg-surface focus:px-3 focus:stroke"}>
+            {hoverPointer ? "•••" : "Message actions"}
           </button>
         )}
         {sheet !== null && <ActionSheet open={sheet} onOpenChange={setSheet} m={m} ctx={ctx} can={can} acts={acts} who={who.name} onMoreEmoji={() => setEmoji(true)} />}
@@ -273,6 +283,8 @@ function ReplyQuote({ parent, ctx, onJump }: { parent?: AnyMsg; ctx: Ctx; onJump
 // Under a bubble: what a request asked and how far it got, or (for your
 // latest message, or one with a problem) its delivery in words.
 function Under({ m, ctx, all, who, status, answer, onDetails, onJump }: { m: AnyMsg; ctx: Ctx; all: AnyMsg[]; who: Who; status: boolean; answer?: AnyMsg; onDetails: () => void; onJump?: (id: string) => void }) {
+  const failure = sendFailure(m.detail, ctx.overview?.role === "admin") || sendFailure(m.state_text, ctx.overview?.role === "admin");
+  if (failure && who.mine && !m.deleted) return <SendFailure m={m} ctx={ctx} failure={failure} onDetails={onDetails} />;
   const target = !isThreadMsg(m) ? agentOf(ctx, m.pid) : undefined;
   const duplicateName = target && (ctx.dm?.agents || []).some(a => a.pid !== target.pid && agentLabel(a, ctx) === agentLabel(target, ctx));
   const label = requestLabel(m, ctx) + (duplicateName ? " · " + deviceWords(target.host.address, ctx.overview) + " · " + (target.agent_id || target.pid).slice(0, 8) : "");
@@ -308,6 +320,31 @@ function Under({ m, ctx, all, who, status, answer, onDetails, onJump }: { m: Any
       {word}{bad && m.state_text ? " · " + m.state_text : ""}{pausedText}
     </button>
   );
+}
+
+function SendFailure({m,ctx,failure,onDetails}: {m:AnyMsg;ctx:Ctx;failure:NonNullable<ReturnType<typeof sendFailure>>;onDetails:()=>void}) {
+  const store = useApp(), inFlight = useRef(false);
+  const [busy, setBusy] = useState(false);
+  const failed = (("delivery" in m ? m.delivery : undefined) ?? m.state) === "failed";
+  // The server rechecks intact ciphertext and proven non-handover. A copied
+  // old error string alone never authorizes retry, and no new send ID is made.
+  const retryable = failed && (failure.code === "relay_quota" || failure.code === "relay_disk_full");
+  const retry = async () => {
+    if (inFlight.current) return;
+    inFlight.current = true; setBusy(true);
+    try {
+      const result = await store.run(a => a.retryStorageSend(isThreadMsg(m) ? "" : ctx.conv, isThreadMsg(m) ? m.id : m.lid || m.id));
+      if (result) store.toast(result.retried ? "Retry queued. Delivery is not yet confirmed." : "This stored message cannot be retried safely. Check its delivery details.", result.retried ? "ok" : "error");
+    } finally { inFlight.current = false; setBusy(false); }
+  };
+  return <div className="mt-1 max-w-sm px-1 text-[13px] text-danger" role="status" data-send-error={failure.code}>
+    <p className="font-semibold">{failure.reason}</p><p className="text-text-2">{failure.action}</p>
+    <div className="flex flex-wrap gap-3">
+      {failure.storage && <button type="button" className="min-h-11 underline" onClick={() => store.showTab("settings", "storage")}>Open Storage</button>}
+      {retryable && <button type="button" disabled={busy} className="min-h-11 underline disabled:opacity-40" onClick={() => void retry()}>{busy ? "Queuing retry…" : "Retry this message"}</button>}
+      <button type="button" className="min-h-11 underline" onClick={onDetails}>Delivery details</button>
+    </div>
+  </div>;
 }
 
 // ---- participation dividers ----------------------------------------------------------

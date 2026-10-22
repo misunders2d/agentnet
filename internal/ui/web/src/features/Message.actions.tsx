@@ -46,7 +46,7 @@ export function Toolbar({ m, ctx, can, acts, mine }: { m: AnyMsg; ctx: Ctx; can:
   const portal = usePortal();
   const btn = "grid size-11 place-items-center rounded-full text-text-2 hover:bg-sunken hover:text-ink data-[popup-open]:bg-sunken";
   return (
-    <div className={"absolute bottom-0 z-10 flex items-center rounded-2xl bg-surface p-1 stroke opacity-0 shadow-pop-sm transition-opacity duration-150 group-hover/msg:opacity-100 group-focus-within/msg:opacity-100 has-[[data-popup-open]]:opacity-100 "
+    <div className={"absolute bottom-0 z-10 flex items-center rounded-2xl bg-surface p-1 stroke opacity-0 shadow-pop-sm transition-opacity duration-150 group-hover/msg:opacity-100 group-has-[:focus-visible]/msg:opacity-100 has-[[data-popup-open]]:opacity-100 "
       + (mine ? "right-full mr-2" : "left-full ml-2")}>
       {can.react && (
         <ReactPopover m={m} ctx={ctx} wide

@@ -55,7 +55,8 @@ func (h *Hub) routes() http.Handler {
 	mux.HandleFunc("PUT /v1/blobs/{id}", h.handleBlobChunk)
 	mux.HandleFunc("POST /v1/blobs/{id}/complete", h.handleBlobComplete)
 	mux.HandleFunc("GET /v1/blobs/{id}/data", h.handleBlobData)
-	mux.HandleFunc("GET /v1/storage", h.handleStorage)                     // hub/storage.go: the caller's own ciphertext usage, read-only
+	mux.HandleFunc("GET /v1/storage", h.handleStorage) // hub/storage.go: the caller's own ciphertext usage, read-only
+	mux.HandleFunc("POST /v1/admin/storage/quota", h.handleStorageQuota)
 	mux.HandleFunc("GET /v1/storage/drive", h.handleDriveStorageGet)       // hub/drivestorage.go: public Drive storage config (no tokens)
 	mux.HandleFunc("PUT /v1/admin/storage/drive", h.handleDriveStoragePut) // admin only, compare-and-swap
 	mux.HandleFunc("GET /v1/storage/attachments", h.handleAttachmentStorageGet)

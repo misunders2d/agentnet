@@ -3,11 +3,11 @@
 # package (docs/UI_SKINS.md) in ../static/skins/comic/:
 #   skin.json     the manifest: api 1, id, name, entry, style, document and
 #                 every file the package uses
-#   entry.mjs     the React app, one ES module (mount/unmount)
+#   entry.mjs     the React app's ES module (mount/unmount)
 #   style.css     Tailwind, compiled to one static file (in the skin's shadow tree)
 #   document.css  the rules that only work at document level: the fonts'
 #                 @font-face and Tailwind's @property registrations
-#   m/            fonts (OFL) and emoji data, fetched relative to the package
+#   m/            fonts (OFL), emoji data and lazy media modules
 # from src/ and the exact package graph in package-lock.json. Also writes
 # LICENSES.txt (every bundled package's license) and SHA256SUMS (exactly the
 # package's files, checked by the Go tests).
@@ -47,7 +47,13 @@ cp "$here/../skins/shared/drivespace.mjs" "$work/src/drive-space.mjs"
 cp "$here/../skins/shared/drivespace-setup.mjs" "$work/src/drive-setup.mjs"
 if [ -n "$overlay" ]; then
 	# The overlay's skin layer replaces Comic's, file by file; fonts/ is not source.
-	(cd "$overlay" && find . -type f ! -path './fonts/*' | while read -r f; do mkdir -p "$work/src/skin/$(dirname "$f")"; cp "$f" "$work/src/skin/$f"; done)
+	(cd "$overlay" && node -e '
+const fs = require("node:fs"), path = require("node:path");
+for (const file of fs.readdirSync(".", {recursive:true}).sort()) {
+  if (file.startsWith("fonts/") || !fs.statSync(file).isFile()) continue;
+  const target = path.join(process.argv[1], file);
+  fs.mkdirSync(path.dirname(target), {recursive:true}); fs.copyFileSync(file, target);
+}' "$work/src/skin")
 fi
 cd "$work"
 npm ci --ignore-scripts --no-audit --no-fund >/dev/null
@@ -59,9 +65,9 @@ npm ci --ignore-scripts --no-audit --no-fund >/dev/null
   --minify --legal-comments=eof --log-level=warning --outfile="$here/../skins/shared/link-text.mjs"
 [ -n "$overlay" ] || { printf '\n/*!\n'; cat node_modules/marked/LICENSE; printf '\n*/\n'; } >> "$here/../skins/shared/link-text.mjs"
 rm -rf "$out" && mkdir -p "$out"
-./node_modules/.bin/esbuild src/main.tsx --bundle --format=esm --platform=browser --target=es2022 \
+./node_modules/.bin/esbuild src/main.tsx --bundle --splitting --format=esm --platform=browser --target=es2022 \
 	--jsx=automatic --minify --legal-comments=eof --define:process.env.NODE_ENV='"production"' \
-	--log-level=warning --outfile="$out/entry.mjs"
+	--log-level=warning --outdir="$out" --entry-names=entry --chunk-names='m/chunks/[name]-[hash]' --out-extension:.js=.mjs
 ./node_modules/.bin/tailwindcss -i src/styles.css -o "$work/tailwind.css" --minify >/dev/null 2>&1
 cat "$here/../skins/shared/drivespace.css" >> "$work/tailwind.css"
 # Fonts and emoji data are served from the package itself: no CDN, and
@@ -89,7 +95,12 @@ for (const [dir, p] of Object.entries(lock.packages)) {
   const name = dir.slice(dir.lastIndexOf("node_modules/") + "node_modules/".length);
   const lic = fs.readdirSync(dir).find((f) => /^licen[cs]e/i.test(f));
   text += "\n==== " + name + " " + p.version + " (" + p.license + ")\n\n" + (lic ? fs.readFileSync(path.join(dir, lic), "utf8").trim() : "(no license file shipped; see the package metadata)") + "\n";
+  if (name === "mediabunny") text += "\nUnmodified Mediabunny source, including src/ and its MPL-2.0 license: " + p.resolved + "\n";
 }
 fs.writeFileSync(process.argv[1], text);
 '  "$licenses"
-cd "$out" && sha256sum $(find . -type f | sed 's|^\./||' | LC_ALL=C sort) > "$sums"
+cd "$out" && node -e '
+const fs = require("node:fs"), {execFileSync} = require("node:child_process");
+const files = fs.readdirSync(".", {recursive:true}).filter(file => fs.statSync(file).isFile()).sort();
+process.stdout.write(execFileSync("sha256sum", ["--", ...files]));
+' > "$sums"

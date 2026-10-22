@@ -87,6 +87,387 @@ func deviceCount(o map[string]any) int {
 	return len(ds)
 }
 
+// Two ordinary people use the same signed transport and existing history,
+// controls, read and reminder APIs on native and browser devices. The bootstrap
+// administrator only issues their non-admin invitations. Node keeps the browser
+// store in memory; the companion real-IndexedDB tests cover durable reopening.
+func TestTwoOrdinaryPeopleLinkedStateJourney(t *testing.T) {
+	t.Setenv("AGENTNET_NOTIFY", "off")
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	dir := filepath.Join(t.TempDir(), "hub")
+	h := testhub.Start(t, dir, "127.0.0.1:0", "")
+	base := "https://" + h.Addr
+	admin, err := client.Join(ctx, filepath.Join(t.TempDir(), "admin"), testhub.BootstrapCode(t, dir), "issuer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	type person struct {
+		name, home string
+		native     *client.Agent
+		stop       func()
+		browser    *engineNode
+		later      *engineNode
+		incoming   string
+	}
+	people := make([]*person, 0, 2)
+	for _, name := range []string{"Alice", "Bob"} {
+		code, err := admin.Invite(ctx, strings.ToLower(name), time.Hour, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := &person{name: name, home: filepath.Join(t.TempDir(), name)}
+		p.native, err = client.Join(ctx, p.home, code, "native")
+		if err != nil {
+			t.Fatal(err)
+		}
+		a := p.native
+		t.Cleanup(func() { a.Close() })
+		p.stop = runDaemon(t, a)
+		if _, err = a.CreatePerson(ctx, name); err != nil {
+			t.Fatal(err)
+		}
+		role, err := a.HubRole(ctx)
+		if err != nil || role != protocol.RoleMember {
+			t.Fatalf("%s must be an ordinary member: role=%s err=%v", name, role, err)
+		}
+		people = append(people, p)
+	}
+	alice, bob := people[0], people[1]
+	var conv string
+	waitFor(t, "ordinary members' DM", func() bool { conv, err = alice.native.CreateDM(ctx, bob.native.Address); return err == nil })
+	send := func(p *person, body string) string {
+		t.Helper()
+		x, err := p.native.SendConv(ctx, conv, client.ConvOutgoing{Body: body})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return x.LID
+	}
+	aLID := send(alice, "Alice's original")
+	waitFor(t, "Bob's original history", goHas(bob.native, conv, "Alice's original", nil))
+	bLID := send(bob, "Bob's original")
+	waitFor(t, "Alice's original history", goHas(alice.native, conv, "Bob's original", nil))
+	alice.incoming, bob.incoming = bLID, aLID
+	goTurn := func(p *person, lid string) client.ConvMessage {
+		ms, err := p.native.ConversationMessages(conv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range ms {
+			if m.LID == lid {
+				return m
+			}
+		}
+		return client.ConvMessage{}
+	}
+	browserTurn := func(w *engineNode, lid string) map[string]any {
+		response := w.call(map[string]any{"op": "api", "path": "/api/dm?id=" + conv})
+		if response["error"] != nil {
+			return nil // a newly linked device may still be receiving its root
+		}
+		v := response["v"].(map[string]any)
+		for _, row := range v["messages"].([]any) {
+			m := row.(map[string]any)
+			if m["lid"] == lid {
+				return m
+			}
+		}
+		return nil
+	}
+	link := func(p *person, name string) *engineNode {
+		t.Helper()
+		offer, err := p.native.NewDeviceLink(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		o, err := protocol.DecodeLinkOffer(offer.Code)
+		if err != nil {
+			t.Fatal(err)
+		}
+		o.Invite = browserCode(t, o.Invite)
+		w := startEngineNode(t, dir)
+		w.ok(map[string]any{"op": "init", "base": base})
+		address := w.ok(map[string]any{"op": "joinLink", "code": base + "/#" + o.Encode(), "name": name})["address"].(string)
+		w.ok(map[string]any{"op": "start"})
+		var request string
+		waitFor(t, p.name+" linked-device request", func() bool {
+			rs, _ := p.native.PendingLinks()
+			for _, r := range rs {
+				if r.State == "pending" && r.Address == address {
+					request = r.ID
+				}
+			}
+			return request != ""
+		})
+		if err := p.native.DecideLink(ctx, request, true); err != nil {
+			t.Fatal(err)
+		}
+		w.until(p.name+" ordinary browser linked", func() bool {
+			s := w.ok(map[string]any{"op": "status"})
+			return s["connected"] == true && s["members"] == true && s["link"] == "linked"
+		})
+		profile := w.ok(map[string]any{"op": "streamState", "profile": true})["profile"].(map[string]any)
+		if profile["self_role"] != protocol.RoleMember {
+			t.Fatalf("%s browser gained administrator privilege: %v", p.name, profile["self_role"])
+		}
+		pub := w.devicePublic(t)
+		w.until(p.name+" actual signed read/reminder capabilities", func() bool {
+			snapshot := w.ok(map[string]any{"op": "streamState", "profile": true})
+			raw, _ := json.Marshal(snapshot["profile"])
+			var profile protocol.Profile
+			if err := json.Unmarshal(raw, &profile); err != nil {
+				t.Fatal(err)
+			}
+			return profile.Supports(address, pub.SignKey, protocol.CapReadSyncV2) && profile.Supports(address, pub.SignKey, protocol.CapReminderSync)
+		})
+		w.until(p.name+" granted history", func() bool { return browserTurn(w, aLID) != nil && browserTurn(w, bLID) != nil })
+		return w
+	}
+	for _, p := range people {
+		p.browser = link(p, "browser")
+		if deviceCount(p.browser.api("/api/overview", nil)) != 2 {
+			t.Fatal("initial ordinary person does not have exactly two linked devices")
+		}
+	}
+	for i, p := range people {
+		body := p.name + " sent from browser"
+		p.browser.api("/api/dm/send", map[string]any{"conv": conv, "body": body})
+		other := people[1-i]
+		waitFor(t, p.name+" browser message reaches native and peer", func() bool {
+			return goHas(p.native, conv, body, func(m client.ConvMessage) bool { return m.Dir == "out" && m.Via != "" })() && goHas(other.native, conv, body, func(m client.ConvMessage) bool { return m.Dir == "in" && m.Key != "" })() && dmMessage(other.browser, conv, body) != nil
+		})
+	}
+	allControls := func(lid string, check func(client.Controls) bool, browserCheck func(map[string]any) bool) bool {
+		for _, p := range people {
+			if !check(goTurn(p, lid).Controls) || !browserCheck(browserTurn(p.browser, lid)) {
+				return false
+			}
+			if p.later != nil && !browserCheck(browserTurn(p.later, lid)) {
+				return false
+			}
+		}
+		return true
+	}
+	for i, p := range people {
+		m := browserTurn(p.browser, p.incoming)
+		p.browser.api("/api/message/react", map[string]any{"conv": conv, "id": m["id"], "dir": "in", "emoji": "👍"})
+		waitFor(t, p.name+" reaction on all four devices", func() bool {
+			return allControls(p.incoming, func(c client.Controls) bool { return len(c.Reactions) == 1 }, func(m map[string]any) bool { r, _ := m["reactions"].([]any); return len(r) == 1 })
+		})
+		ref, err := p.native.RefOf(conv, goTurn(p, p.incoming).ID, "in")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = p.native.React(ctx, ref, "👍", true); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, p.name+" removed reaction on all devices", func() bool {
+			return allControls(p.incoming, func(c client.Controls) bool { return len(c.Reactions) == 0 }, func(m map[string]any) bool { r, _ := m["reactions"].([]any); return len(r) == 0 })
+		})
+		ownLID := []string{aLID, bLID}[i]
+		own := browserTurn(p.browser, ownLID)
+		p.browser.api("/api/message/edit", map[string]any{"conv": conv, "id": own["id"], "dir": "out", "text": p.name + " edited from browser"})
+		waitFor(t, p.name+" own-person edit on all devices", func() bool {
+			return allControls(ownLID, func(c client.Controls) bool { return c.Edited && c.Text == p.name+" edited from browser" }, func(m map[string]any) bool { return m["edited"] == true && m["text"] == p.name+" edited from browser" })
+		})
+	}
+	reminder := func(w *engineNode, lid string) map[string]any {
+		for _, row := range w.ok(map[string]any{"op": "reminderState"})["rows"].([]any) {
+			r := row.(map[string]any)
+			fact := r["fact"].(map[string]any)
+			if fact["lid"] == lid {
+				return r
+			}
+		}
+		return nil
+	}
+	markUnread := func(p *person, id string) {
+		t.Helper()
+		waitFor(t, p.name+" stable admitted attention snapshot", func() bool {
+			err := p.native.MarkUnread(id, []string{id})
+			if err != nil && !strings.Contains(err.Error(), "this chat changed; try again") {
+				t.Fatal(err)
+			}
+			return err == nil
+		})
+	}
+	for i, p := range people {
+		m := goTurn(p, p.incoming)
+		markUnread(p, m.ID)
+		p.browser.until(p.name+" exact signed unread", func() bool { return browserTurn(p.browser, p.incoming)["unread"] == true })
+		db, err := sql.Open("sqlite", "file:"+filepath.Join(p.home, "agent.db")+"?mode=ro")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		pub := p.browser.devicePublic(t)
+		defer func() {
+			if t.Failed() {
+				t.Logf("%s reminder projection/facts: %v", p.name, p.browser.ok(map[string]any{"op": "reminderState"}))
+				rows, err := db.Query(`SELECT sub,state,coalesce(error,'') FROM outbox WHERE recipient=? AND sub IN (?,?) ORDER BY rowid DESC LIMIT 6`, pub.Address, envelope.SubReadSync, envelope.SubReminderSync)
+				if err == nil {
+					defer rows.Close()
+					for rows.Next() {
+						var sub, state, reason string
+						if rows.Scan(&sub, &state, &reason) == nil {
+							t.Logf("%s own-state carrier: %s %s %s", p.name, sub, state, reason)
+						}
+					}
+				}
+			}
+		}()
+		var oldRead, oldReminder string
+		capture := func(sub string, dst *string) {
+			t.Helper()
+			waitFor(t, p.name+" signed "+sub+" carrier", func() bool {
+				var encoded string
+				err := db.QueryRow(`SELECT body,envelope FROM outbox WHERE recipient=? AND sub=? AND body LIKE ? ORDER BY rowid DESC LIMIT 1`, pub.Address, sub, "%"+p.incoming+"%").Scan(dst, &encoded)
+				if err != nil {
+					return false
+				}
+				var env envelope.Envelope
+				if json.Unmarshal([]byte(encoded), &env) != nil || env.VerifySig(p.native.Self().SignKey) != nil {
+					t.Fatal("native own-state carrier lacks its actual signature")
+				}
+				return true
+			})
+		}
+		capture(envelope.SubReadSync, &oldRead)
+		bm := browserTurn(p.browser, p.incoming)
+		p.browser.api("/api/act", map[string]any{"do": "read", "ids": []any{bm["id"]}, "attention": map[string]any{bm["id"].(string): bm["attention"]}})
+		waitFor(t, p.name+" browser read clears native attention", func() bool { return !goTurn(p, p.incoming).Unread })
+		if _, err := p.native.SetReminder(m.ID, time.Now().Add(2*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		capture(envelope.SubReminderSync, &oldReminder)
+		p.browser.until(p.name+" overdue reminder", func() bool { r := reminder(p.browser, p.incoming); return r != nil && r["overdue"] == true })
+		p.browser.api("/api/remind", map[string]any{"id": bm["id"], "due": time.Now().Add(time.Hour).Unix()})
+		waitFor(t, p.name+" snooze clears old native due attention", func() bool {
+			r, ok, _ := p.native.Reminder(m.ID)
+			return ok && !r.Overdue && r.Due > time.Now().Unix()+3000
+		})
+		p.browser.api("/api/remind/done", map[string]any{"id": bm["id"]})
+		waitFor(t, p.name+" completion clears native reminder", func() bool { r, ok, _ := p.native.Reminder(m.ID); return ok && r.State == client.ReminderDone })
+		// The other person's outbox copy is the same logical turn, but their
+		// personal read and reminder registers remain independent.
+		other := people[1-i]
+		if r := reminder(other.browser, p.incoming); r != nil {
+			t.Fatalf("%s's private reminder leaked to %s: %v", p.name, other.name, r)
+		}
+		p.browser.ok(map[string]any{"op": "offline", "on": true})
+		markUnread(p, m.ID)
+		marked := goTurn(p, p.incoming)
+		if err := p.native.MarkReadWithAttention([]string{m.ID}, map[string]protocol.AttentionGeneration{m.ID: *marked.Attention}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := p.native.SetReminder(m.ID, time.Now().Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+		if err := p.native.CancelReminder(m.ID); err != nil {
+			t.Fatal(err)
+		}
+		ownLID := []string{aLID, bLID}[i]
+		own := goTurn(p, ownLID)
+		ref, err := p.native.RefOf(conv, own.ID, "out")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := p.native.Revise(ctx, ref, p.name+" edited while browser offline"); err != nil {
+			t.Fatal(err)
+		}
+		newer := send(other, "newer unseen for "+p.name)
+		waitFor(t, p.name+" newer native arrival", func() bool { return goTurn(p, newer).Unread })
+		p.stop()
+		if err := p.native.Close(); err != nil {
+			t.Fatal(err)
+		}
+		p.native, err = client.Open(p.home)
+		if err != nil {
+			t.Fatal(err)
+		}
+		again := p.native
+		t.Cleanup(func() { again.Close() })
+		p.stop = runDaemon(t, again)
+		p.browser.ok(map[string]any{"op": "offline", "on": false})
+		p.browser.ok(map[string]any{"op": "reload", "base": base})
+		p.browser.until(p.name+" offline/restart catch-up", func() bool {
+			r := reminder(p.browser, p.incoming)
+			n := browserTurn(p.browser, newer)
+			return r != nil && r["state"] == client.ReminderCancelled && browserTurn(p.browser, p.incoming)["unread"] != true && n != nil && n["unread"] == true
+		})
+		waitFor(t, p.name+" offline native edit converges", func() bool {
+			return allControls(ownLID, func(c client.Controls) bool { return c.Text == p.name+" edited while browser offline" }, func(m map[string]any) bool { return m["text"] == p.name+" edited while browser offline" })
+		})
+		// Re-sign the actual older payload under the same fixture key with a
+		// fresh carrier ID: this exercises generation rejection, not just an
+		// already-seen envelope shortcut. Repeat it to cover duplicate delivery.
+		key, err := identity.Load(filepath.Join(p.home, "identity.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		recipient, err := pub.Recipient()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for sub, body := range map[string]string{envelope.SubReadSync: oldRead, envelope.SubReminderSync: oldReminder} {
+			in := envelope.Inner{V: 2, ID: protocol.NewID(), From: p.native.Address, To: pub.Address, TS: time.Now().Unix(), Kind: envelope.KindMessage, Sub: sub, Replica: true, Body: body}
+			env, err := envelope.Seal(in, key.Sign, recipient)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, _ := json.Marshal(env)
+			for range 2 {
+				result := p.browser.ok(map[string]any{"op": "replayOwnState", "envelope": string(raw)})
+				if result["held"] != nil || result["inbox"] != nil {
+					t.Fatalf("quiet own-state replay was quarantined or became a chat: %v", result)
+				}
+			}
+		}
+		if browserTurn(p.browser, p.incoming)["unread"] == true || reminder(p.browser, p.incoming)["state"] != client.ReminderCancelled || !goTurn(p, newer).Unread {
+			t.Fatal("old or duplicate signed state resurrected cleared attention or consumed newer work")
+		}
+		fresh := link(p, "later-browser")
+		fresh.until(p.name+" later link receives terminal shared state", func() bool {
+			r := reminder(fresh, p.incoming)
+			return r != nil && r["state"] == client.ReminderCancelled && browserTurn(fresh, p.incoming)["unread"] != true && browserTurn(fresh, ownLID)["text"] == p.name+" edited while browser offline"
+		})
+		p.later = fresh
+		if !goTurn(p, newer).Unread || goTurn(p, p.incoming).Unread {
+			t.Fatal("link history altered existing native attention")
+		}
+		for _, harness := range []string{"codex", "claude", "pi"} {
+			at, err := p.native.Attention(client.HookEvent{Harness: harness, Session: "after-shared-state", Event: "SessionStart"})
+			if err != nil || strings.Contains(at.Text, m.ID) || !strings.Contains(at.Text, goTurn(p, newer).ID) {
+				t.Fatalf("%s %s hook resurrected read attention or lost newer arrival: %v %s", p.name, harness, err, at.Text)
+			}
+			if err := at.Commit(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		t.Logf("%s: ordinary native/browser read, snooze/done/cancel, offline/restart, fresh+duplicate stale signed carriers, and later-link state converged", p.name)
+	}
+	for i, p := range people {
+		lid := []string{aLID, bLID}[i]
+		if i == 0 {
+			ref, err := p.native.RefOf(conv, goTurn(p, lid).ID, "out")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := p.native.Retract(ctx, ref, ""); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			m := browserTurn(p.browser, lid)
+			p.browser.api("/api/message/delete", map[string]any{"conv": conv, "id": m["id"], "dir": "out"})
+		}
+		waitFor(t, p.name+" deletion on all six current devices", func() bool {
+			return allControls(lid, func(c client.Controls) bool { return c.Deleted }, func(m map[string]any) bool { return m["deleted"] == true })
+		})
+	}
+}
+
 // The browser joins as a new device of a person with a Go device's link:
 // it waits for approval, doing nothing else; once approved it is that
 // person, has the chats from before as history (sent ones as yours),

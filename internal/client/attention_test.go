@@ -128,8 +128,8 @@ func TestConversationBothWays(t *testing.T) {
 	}
 }
 
-// Each session has its own cursor: reading, answering or another session
-// never hides an arrival, and an unshown batch is shown again.
+// Each session has its own cursor for unread arrivals. An unshown batch is
+// shown again, and ordinary read chat does not become another session's inbox.
 func TestAttentionPerSession(t *testing.T) {
 	w := newWorld(t, "")
 	runWith(t, w, w.alice, RunOptions{})
@@ -145,14 +145,15 @@ func TestAttentionPerSession(t *testing.T) {
 	if got := shown(t, w.alice, "A", "UserPromptSubmit"); got != "" {
 		t.Fatalf("nothing new, got %q", got)
 	}
+	if err := w.alice.MarkRead([]string{early.ID}); err != nil {
+		t.Fatal(err)
+	}
 
 	q, _ := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "status?", Kind: envelope.KindQuestion})
 	eventually(t, "q at bob", func() bool { return hasInbox(w.bob, "status?") })
 	r1, _ := w.bob.Reply(tctx(t), q.ID, "SECRET-BODY green")
 	r2, _ := w.bob.Send(tctx(t), w.alice.Address, "and another", q.ID)
 	eventually(t, "replies", func() bool { return hasInbox(w.alice, "SECRET-BODY green") && hasInbox(w.alice, "and another") })
-	w.alice.Inbox(false, true) // the human read everything: sessions must still be told
-
 	// An unshown batch is not consumed.
 	if at := attention(t, w.alice, "A", "PostToolUse"); !strings.Contains(at.Text, r1.ID) {
 		t.Fatalf("first try: %q", at.Text)
@@ -170,7 +171,7 @@ func TestAttentionPerSession(t *testing.T) {
 		t.Fatalf("shown twice: %q", again)
 	}
 	// Session B starts later: overview, then only newer arrivals.
-	if b := shown(t, w.alice, "B", "UserPromptSubmit"); !strings.Contains(b, "3 received message(s), 0 unread") {
+	if b := shown(t, w.alice, "B", "UserPromptSubmit"); !strings.Contains(b, "3 received message(s), 2 unread") || strings.Contains(b, early.ID) {
 		t.Fatalf("B overview: %s", b)
 	}
 
@@ -180,7 +181,7 @@ func TestAttentionPerSession(t *testing.T) {
 		m, _ := w.bob.Send(tctx(t), w.alice.Address, "burst", "")
 		burst = append(burst, m.ID)
 	}
-	eventually(t, "burst", func() bool { n, _ := w.alice.store.countArrivalsAfter(0); return n == 13 })
+	eventually(t, "burst", func() bool { n, _ := w.alice.store.countArrivalsAfter(0); return n == 12 })
 	a2 := shown(t, w.alice, "A", "UserPromptSubmit")
 	if strings.Count(a2, "\n- ") != attentionItems || !strings.Contains(a2, "(2 more arrived") {
 		t.Fatalf("A batch: %s", a2)
@@ -194,8 +195,8 @@ func TestAttentionPerSession(t *testing.T) {
 	}
 }
 
-// Stop asks once to check new arrivals; never while already continued, and
-// the same item does not stop the turn again.
+// Ordinary chat does not stop unrelated work or get consumed without being
+// shown. The next normal boundary still offers it once.
 func TestAttentionStopOnce(t *testing.T) {
 	w := newWorld(t, "")
 	runWith(t, w, w.alice, RunOptions{})
@@ -210,11 +211,14 @@ func TestAttentionStopOnce(t *testing.T) {
 		t.Fatalf("blocked while already continued: %q", at.Text)
 	}
 	stop := shown(t, w.alice, "S", "Stop")
-	if !strings.Contains(stop, m.ID) || !strings.Contains(stop, "Before finishing") {
-		t.Fatalf("stop: %q", stop)
+	if stop != "" {
+		t.Fatalf("ordinary arrival stopped unrelated work: %q", stop)
 	}
-	if again := shown(t, w.alice, "S", "Stop"); again != "" {
-		t.Fatalf("stopped twice for the same item: %q", again)
+	if next := shown(t, w.alice, "S", "UserPromptSubmit"); !strings.Contains(next, m.ID) {
+		t.Fatalf("unshown Stop arrival was consumed: %q", next)
+	}
+	if again := shown(t, w.alice, "S", "UserPromptSubmit"); again != "" {
+		t.Fatalf("arrival shown twice: %q", again)
 	}
 	// Codex sessions are separate even with the same id.
 	at, _ := w.alice.Attention(HookEvent{Harness: "codex", Session: "S", Event: "UserPromptSubmit"})

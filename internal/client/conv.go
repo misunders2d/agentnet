@@ -1103,9 +1103,9 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 			case err == nil:
 				cp.State, cp.Detail = res.State, res.Detail
 			case retryable(err):
-				cp.Detail = err.Error()
+				cp.Detail = sendErrorDetail(err)
 			default:
-				cp.State, cp.Detail = stateFailed, err.Error()
+				cp.State, cp.Detail = stateFailed, sendErrorDetail(err)
 			}
 		}
 		sent.Copies = append(sent.Copies, cp)

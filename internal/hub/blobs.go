@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/blobfile"
@@ -92,7 +93,7 @@ func (h *Hub) handleBlobReserve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Size > protocol.CiphertextBound(h.cfg.MaxFileSize) {
-		writeError(w, http.StatusRequestEntityTooLarge, "", "file exceeds the Hub's size limit")
+		writeError(w, http.StatusRequestEntityTooLarge, protocol.CodeFileTooLarge, "file exceeds the relay's size limit; choose a smaller file")
 		return
 	}
 	if rcpt, err := h.store.agent(req.Recipient); err != nil || rcpt.Revoked {
@@ -102,22 +103,22 @@ func (h *Hub) handleBlobReserve(w http.ResponseWriter, r *http.Request) {
 	h.blobMu.Lock()
 	defer h.blobMu.Unlock()
 	if err := h.reclaim(); err != nil {
-		writeError(w, http.StatusInternalServerError, "", "storage error")
+		writeBlobStorageError(w, err)
 		return
 	}
-	b, err := h.store.reserveBlob(caller, req, h.cfg.StorageQuota)
+	b, err := h.store.reserveBlob(caller, req, h.currentStorageQuota())
 	switch {
 	case errors.Is(err, errBlobBusy):
 		writeError(w, http.StatusServiceUnavailable, "", err.Error())
 		return
 	case errors.Is(err, errQuota):
-		writeError(w, http.StatusRequestEntityTooLarge, "", err.Error())
+		writeError(w, http.StatusRequestEntityTooLarge, protocol.CodeRelayQuota, "relay attachment quota is full; ask a server admin to raise the limit or clean up eligible files, then retry this message")
 		return
 	case errors.Is(err, errBlobConflict):
 		writeError(w, http.StatusConflict, "", err.Error())
 		return
 	case err != nil:
-		writeError(w, http.StatusInternalServerError, "", "storage error")
+		writeBlobStorageError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, blobStatus(req.ID, b))
@@ -168,7 +169,7 @@ func (h *Hub) handleBlobChunk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "", "storage error")
+		writeBlobStorageError(w, err)
 		return
 	}
 	b.Received = offset + int64(len(body))
@@ -222,11 +223,19 @@ func (h *Hub) handleBlobComplete(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		h.cfg.Logf("finalise %s: %v", id, err)
-		writeError(w, http.StatusInternalServerError, "", "storage error")
+		writeBlobStorageError(w, err)
 		return
 	}
 	b.State, b.Received = protocol.BlobStored, b.Size
 	writeJSON(w, http.StatusOK, blobStatus(id, b))
+}
+
+func writeBlobStorageError(w http.ResponseWriter, err error) {
+	if errors.Is(err, syscall.ENOSPC) {
+		writeError(w, http.StatusInsufficientStorage, protocol.CodeRelayDiskFull, "the relay disk is full; ask a server admin to free disk space, then retry this message")
+		return
+	}
+	writeError(w, http.StatusInternalServerError, "", "storage error")
 }
 
 // handleBlobData serves stored ciphertext, with Range support, only to the

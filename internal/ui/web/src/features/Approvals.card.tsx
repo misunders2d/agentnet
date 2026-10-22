@@ -247,7 +247,7 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
             {!can("decline") && <p className="px-1 pt-1 text-[13px] text-muted">If you don’t allow it, nothing runs.</p>}
           </>}
           {phase === "needs_human" && <>
-            <p className="text-[14px] text-text-2">This exact request still needs attention. A separate follow-up does not close it. If that follow-up finished the work, mark this request as handled. {m.continuation && "Reply supplies missing information. "}For a permission or environment problem, review the native agent on its host computer first. Asking again keeps the same permissions.</p>
+            <p className="text-[14px] text-text-2">For a native permission or required authorization, review the agent on its host computer. Reply in this chat and tag the same agent to continue this request under its existing permissions. When the host starts that verified linked reply, the earlier attention clears. Mark as handled dismisses this request without running it.</p>
             {m.continuation && <Button variant="act" size="lg" icon={<IconArrowBackUp size={20} />} disabled={!!busy} onClick={() => setAnswer({request: {...m.continuation!}, send: sendID(), question: said})}>Reply</Button>}
             {m.continuation?.host && <ResolveOwnRequest request={m.continuation} disabled={!!busy} />}
             {can("accept") && <Button variant="outline" size="lg" className="min-h-12!" icon={<IconRefresh size={19} />} disabled={!!busy} onClick={allow}>{busy === "accept" ? "Starting…" : "Ask again"}</Button>}

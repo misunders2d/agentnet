@@ -48,6 +48,7 @@ type Agent struct {
 	flushOnce        sync.Once
 	flushLock        chan struct{} // readable turns serialize independently of replication
 	syncFlushLock    chan struct{} // one background replication pass at a time
+	flushWake        chan struct{} // durable queued arrivals fill free delivery slots
 	archiveOnce      sync.Once
 	archiveLock      chan struct{}
 	archivePosting   backgroundPosts
@@ -785,10 +786,12 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 	case err == nil:
 		return a.handedOver(env, r.State, protocol.PathRelay)
 	case retryable(err):
-		return SendResult{ID: env.ID, State: stateQueued, Detail: err.Error()}, a.store.setOutboxState(env.ID, stateQueued, err.Error(), "")
+		detail := sendErrorDetail(err)
+		return SendResult{ID: env.ID, State: stateQueued, Detail: detail}, a.store.setOutboxState(env.ID, stateQueued, detail, "")
 	default:
-		a.store.setOutboxState(env.ID, stateFailed, err.Error(), "")
-		return SendResult{ID: env.ID, State: stateFailed}, err
+		detail := sendErrorDetail(err)
+		a.store.setOutboxState(env.ID, stateFailed, detail, "")
+		return SendResult{ID: env.ID, State: stateFailed, Detail: detail}, err
 	}
 }
 
@@ -823,10 +826,7 @@ func (a *Agent) flushOutbox(ctx context.Context, filesOnly bool) error {
 }
 
 func (a *Agent) flushLane(ctx context.Context, filesOnly, syncOnly bool) error {
-	a.flushOnce.Do(func() {
-		a.flushLock = make(chan struct{}, 1)
-		a.syncFlushLock = make(chan struct{}, 1)
-	})
+	a.initFlushLanes()
 	lock := a.flushLock
 	if syncOnly {
 		lock = a.syncFlushLock
@@ -840,10 +840,84 @@ func (a *Agent) flushLane(ctx context.Context, filesOnly, syncOnly bool) error {
 	if _, err := a.holdEndedOutputs(""); err != nil {
 		return err
 	}
+	if !syncOnly {
+		return a.flushRecipients(ctx, filesOnly)
+	}
 	envs, err := a.store.queuedLane(filesOnly, syncOnly)
 	if err != nil {
 		return err
 	}
+	return a.flushCopies(ctx, envs, syncOnly)
+}
+
+func (a *Agent) initFlushLanes() {
+	a.flushOnce.Do(func() {
+		a.flushLock = make(chan struct{}, 1)
+		a.syncFlushLock = make(chan struct{}, 1)
+		a.flushWake = make(chan struct{}, 1)
+	})
+}
+
+// A stalled device must not hold other recipients behind its upload timeout.
+// Each recipient retains its original FIFO and delivery gates; only independent
+// recipients share the four network slots. Wakes admit fresh messages into free
+// slots while another recipient is still uploading.
+func (a *Agent) flushRecipients(ctx context.Context, filesOnly bool) error {
+	type result struct {
+		to  string
+		err error
+	}
+	results := make(chan result, 4)
+	active, seen := map[string]bool{}, map[string]bool{}
+	var firstErr error
+	for {
+		if firstErr == nil && ctx.Err() == nil {
+			envs, err := a.store.queuedLane(filesOnly, false)
+			if err != nil {
+				firstErr = err
+			} else {
+				groups := map[string][]envelope.Envelope{}
+				var order []string
+				for _, env := range envs {
+					if seen[env.ID] || active[env.To] {
+						continue
+					}
+					if len(groups[env.To]) == 0 {
+						order = append(order, env.To)
+					}
+					groups[env.To] = append(groups[env.To], env)
+				}
+				for _, to := range order {
+					if len(active) == 4 {
+						break
+					}
+					copies := groups[to]
+					for _, env := range copies {
+						seen[env.ID] = true
+					}
+					active[to] = true
+					go func() { results <- result{to, a.flushCopies(ctx, copies, false)} }()
+				}
+			}
+		}
+		if len(active) == 0 {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return firstErr
+		}
+		select {
+		case r := <-results:
+			delete(active, r.to)
+			if firstErr == nil {
+				firstErr = r.err
+			}
+		case <-a.flushWake:
+		}
+	}
+}
+
+func (a *Agent) flushCopies(ctx context.Context, envs []envelope.Envelope, syncOnly bool) error {
 	blocked := map[string]bool{}
 	// Readable turns share a FIFO. Controls, history, context carriers and
 	// private receiver operations pass their existing gates independently.

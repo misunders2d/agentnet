@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/client"
@@ -685,6 +686,13 @@ func (l *Live) Act(x Action) (string, error) {
 // sentence turns a client error into text for the person. Client errors are
 // written for people already; this only makes the first letter upper case.
 func sentence(err error) string {
+	if errors.Is(err, syscall.ENOSPC) {
+		return "This device is out of storage. Free disk space, then try again."
+	}
+	var size *client.FileSizeError
+	if errors.As(err, &size) {
+		return "This file exceeds this device's file-size limit. Choose a smaller file."
+	}
 	var update *client.NeedsUpdateError
 	if errors.As(err, &update) {
 		return "This person's app needs an update first."

@@ -197,7 +197,7 @@ func TestContinueRequestGroupExactContext(t *testing.T) {
 		if _, e = w.alice.store.db.Exec(`UPDATE inbox SET state=?,attempts=2 WHERE id=?`, stateRunning, actual); e != nil {
 			t.Fatal(e)
 		}
-		prompt, e := w.alice.promptWith(context.Background(), job{ID: actual, From: w.alice.Address, Key: w.alice.Self().Fingerprint(), Kind: kind, Body: "bound group work", Conv: conv, PID: from.PID, Local: true}, &Responder{Harness: "stub", Dir: st.dir}, "")
+		prompt, e := w.alice.agentPrompt(job{ID: actual, From: w.alice.Address, Key: w.alice.Self().Fingerprint(), Kind: kind, Body: "bound group work", Conv: conv, PID: from.PID, Local: true}, &Responder{Harness: "stub", Dir: st.dir}, "", context.Background())
 		if e != nil || !strings.Contains(prompt, "Which branch?") || !strings.Contains(prompt, "release branch") {
 			t.Fatalf("%s %v", prompt, e)
 		}

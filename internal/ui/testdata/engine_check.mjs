@@ -297,6 +297,16 @@ async function handle(req) {
   }
   case "api":
     return { v: await engine.api(req.path, req.body) };
+  case "reminderState": // terminal facts as well as the page's pending reminders
+    return { rows: await engine.reminders(true), marks: await store.prefix("kv", "reminder-mark/" + engine.me.person + "/") };
+  case "replayOwnState": { // fresh, signed quiet carriers made by the test's own linked native key
+    const env = wire.parseEnvelope(req.envelope);
+    if (env.v !== 2 || env.kind !== "message" || env.attn || env.to !== engine.address) throw Error("Expected an exact quiet own-state fixture carrier.");
+    await engine.admit(req.envelope, env); // normal key, roster and generation admission
+    if (engine.readSyncRun) await engine.readSyncRun;
+    if (engine.reminderSyncRun) await engine.reminderSyncRun;
+    return { held: (await store.get("held", env.id)) || null, inbox: (await store.get("inbox", env.id)) || null };
+  }
   case "conflictSend":
     if (req.conv) conflictSend = req.conv;
     return { fired: sendConflicts };

@@ -152,6 +152,10 @@ export function api(host: Host) {
     changeTeam: (c: T.TeamChange) => post<T.TeamState>("/api/team", c),
     teamSnapshot: (teams: string[]) => post<T.TeamSnapshot>("/api/teams/snapshot", { teams }),
     storage: () => get<T.StorageSummary>("/api/storage"),
+    changeStorageQuota: (quota_bytes: number) => post<T.StorageSummary>("/api/storage/quota", {quota_bytes, confirm: true}),
+    storageCache: () => get<T.StorageCacheSelection>("/api/storage/cache"),
+    clearStorageCache: (selection: T.StorageCacheFile[]) => post<T.StorageCacheResult>("/api/storage/cache", {selection, confirm: true}),
+    retryStorageSend: (conv: string, id: string) => post<T.StorageSendRetried>("/api/storage/retry_send", {conv, id}),
 
     // The workspace's own name (its admin names it for everyone)
     workspace: () => get<T.WorkspaceInfoView>("/api/workspace"),

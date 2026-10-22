@@ -1,0 +1,89 @@
+name: Android candidate qualification
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Candidate version
+        type: string
+        required: true
+      previous_tag:
+        description: Published version to upgrade from
+        type: string
+        required: true
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        default: ''
+      previous_tag:
+        type: string
+        default: ''
+    secrets:
+      ANDROID_PREVIEW_KEYSTORE_BASE64:
+        required: true
+permissions:
+  contents: read
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v4
+        with:
+          log-accepted-android-sdk-licenses: false
+      - name: pinned Android toolchain
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'ndk;28.2.13676358'
+      - name: build, lint, unit tests and signed upgrade fixture
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          ANDROID_PREVIOUS_TAG: ${{ inputs.previous_tag }}
+          AGENTNET_PREVIEW_KEYSTORE_BASE64: ${{ secrets.ANDROID_PREVIEW_KEYSTORE_BASE64 }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ANDROID_PREVIOUS_TAG=${ANDROID_PREVIOUS_TAG:-$(git describe --tags --abbrev=0)}
+          [[ $ANDROID_PREVIOUS_TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          VERSION=${VERSION:-$(python3 -c 'import sys; major,minor,patch=map(int,sys.argv[1][1:].split(".")); print(f"v{major}.{minor}.{patch+1}")' "$ANDROID_PREVIOUS_TAG")}
+          [[ $VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          umask 077
+          export AGENTNET_PREVIEW_KEYSTORE="$RUNNER_TEMP/agentnet-preview.keystore"
+          trap 'rm -f "$AGENTNET_PREVIEW_KEYSTORE"' EXIT
+          test -n "$AGENTNET_PREVIEW_KEYSTORE_BASE64"
+          printf '%s' "$AGENTNET_PREVIEW_KEYSTORE_BASE64" | base64 --decode > "$AGENTNET_PREVIEW_KEYSTORE"
+          unset AGENTNET_PREVIEW_KEYSTORE_BASE64
+          mobile/android/scripts/build-release.sh
+          (cd mobile/android && ./gradlew --no-daemon --max-workers=2 :app:assembleDebugAndroidTest)
+          mkdir "$RUNNER_TEMP/previous-android"
+          gh release download "$ANDROID_PREVIOUS_TAG" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/previous-android" --pattern AgentNet-android.apk --pattern SHA256SUMS
+          (cd "$RUNNER_TEMP/previous-android" && sed -n '/  AgentNet-android.apk$/p' SHA256SUMS | sha256sum --check --strict)
+          mobile/android/scripts/verify-apk.sh "$RUNNER_TEMP/previous-android/AgentNet-android.apk" "$ANDROID_PREVIOUS_TAG"
+          previous_source=$(mktemp -d)
+          git archive "$ANDROID_PREVIOUS_TAG" | tar -x -C "$previous_source"
+          fixture_dir=$(mktemp -d)
+          (cd "$previous_source" && AGENTNET_ANDROID_FIXTURE_DIR="$fixture_dir" go test ./mobile/core -run '^TestExportAndroidOfflineFixture$' -count=1)
+          printf 'AGENTNET_ANDROID_FIXTURE_DIR=%s\n' "$fixture_dir" >> "$GITHUB_ENV"
+      - name: enable emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-agentnet-kvm.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: retained-data upgrade and Android notification boundaries
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          cores: 2
+          ram-size: 2048M
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          script: bash mobile/android/scripts/qualify-emulator.sh

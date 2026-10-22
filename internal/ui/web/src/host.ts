@@ -118,6 +118,8 @@ export interface Host {
   listen(fn: (e: HostEvent) => void): () => void;
   file(id: string, index: number, dir?: string): Promise<{ bytes: Uint8Array }>;
   stage(file: File): Promise<unknown>;
+  /** Optional authenticated local sender preparation; never a relay service. */
+  prepareVideo?(file: File, signal: AbortSignal): Promise<File>;
   /** Desktop shell only; actions on this computer, never membership APIs. */
   appStatus?(): Promise<AppStatus>;
   /** Explicit read-only published-release lookup; never installs or pauses work. */

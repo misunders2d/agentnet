@@ -29,3 +29,15 @@ export function useWide(): boolean {
   }, []);
   return wide;
 }
+
+/** A mouse/trackpad remains usable in a narrow window; width chooses layout. */
+export function useHoverPointer(): boolean {
+  const q = "(any-hover: hover) and (any-pointer: fine)";
+  const [hover, setHover] = useState(() => matchMedia(q).matches);
+  useEffect(() => {
+    const m = matchMedia(q), on = () => setHover(m.matches);
+    m.addEventListener("change", on);
+    return () => m.removeEventListener("change", on);
+  }, []);
+  return hover;
+}

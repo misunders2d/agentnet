@@ -17,10 +17,8 @@ export const controlRef = (m: AnyMsg, ctx: Ctx): T.ControlAction =>
 
 export function useReact(m: AnyMsg, ctx: Ctx) {
   const store = useApp();
-  return (emoji: string, remove = false) => void store.run(async (a) => {
-    const result = await a.react({ ...controlRef(m, ctx), emoji, remove });
-    if (!remove && !m.reactions?.some((r) => r.emoji === emoji && r.mine)) recordReaction(emoji);
-    return result;
+  return (emoji: string, remove = false) => void store.react({ ...controlRef(m, ctx), emoji, remove }).then(result => {
+    if (result && !remove && !m.reactions?.some((r) => r.emoji === emoji && r.mine)) recordReaction(emoji);
   });
 }
 

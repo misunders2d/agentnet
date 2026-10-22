@@ -581,6 +581,9 @@ func (h *Hub) runAttachmentDrive(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-d.wake:
+			if retry != nil {
+				continue // arrivals retain local custody without bypassing provider backoff
+			}
 		case <-retry:
 		}
 		if retryTimer != nil {
@@ -609,44 +612,7 @@ func (h *Hub) runAttachmentDrive(ctx context.Context) {
 		err = h.store.db.QueryRowContext(ctx, `SELECT count(*),coalesce(sum(b.size),0) FROM relay_drive_blobs d JOIN blobs b ON b.id=d.blob_id WHERE d.state='pending' OR (d.state='remote' AND d.local_present=1)`).Scan(&d.progress.TotalFiles, &d.progress.TotalBytes)
 		d.mu.Unlock()
 		if err == nil {
-			var transferErr error
-			for ctx.Err() == nil {
-				var id string
-				err = h.store.db.QueryRowContext(ctx, `SELECT blob_id FROM relay_drive_blobs WHERE state='pending' OR (state='remote' AND local_present=1) ORDER BY blob_id LIMIT 1`).Scan(&id)
-				if errors.Is(err, sql.ErrNoRows) {
-					err = nil
-					break
-				}
-				if err != nil {
-					break
-				}
-				size, copyErr := h.copyAttachmentDrive(ctx, id)
-				if copyErr != nil {
-					state := "failed"
-					if errors.Is(copyErr, gdrive.ErrOffline) {
-						state = "retry"
-					}
-					result, markErr := h.store.db.ExecContext(ctx, `UPDATE relay_drive_blobs SET state=? WHERE blob_id=? AND state!='remote'`, state, id)
-					if markErr != nil {
-						err = markErr
-						break
-					}
-					changed, markErr := result.RowsAffected()
-					transferErr = copyErr
-					if markErr != nil || changed == 0 || errors.Is(copyErr, gdrive.ErrOffline) || errors.Is(copyErr, gdrive.ErrStorageFull) || errors.Is(copyErr, gdrive.ErrConsent) || errors.Is(copyErr, gdrive.ErrDenied) {
-						err = copyErr
-						break // bound provider failures; other corrupt blobs do not starve independent uploads
-					}
-					continue
-				}
-				d.mu.Lock()
-				d.progress.Files++
-				d.progress.Bytes += size
-				d.mu.Unlock()
-			}
-			if err == nil {
-				err = transferErr
-			}
+			err = h.copyAttachmentQueue(ctx)
 		}
 		var failed int
 		if err == nil {
@@ -686,6 +652,112 @@ func (h *Hub) runAttachmentDrive(ctx context.Context) {
 			delay = time.Second
 		}
 	}
+}
+
+const attachmentDriveTransfers = 4
+
+// The existing durable queue owns retries and stable provider IDs. Keep only
+// the current bounded transfers in memory, alternating old backlog and fresh
+// arrivals so neither can starve the other.
+func (h *Hub) copyAttachmentQueue(ctx context.Context) error {
+	type result struct {
+		id   string
+		size int64
+		err  error
+	}
+	results := make(chan result, attachmentDriveTransfers)
+	inflight := make(map[string]bool, attachmentDriveTransfers)
+	newest, stopped := false, false
+	var transferErr error
+	for {
+		for !stopped && ctx.Err() == nil && len(inflight) < attachmentDriveTransfers {
+			id, err := h.nextAttachmentDrive(ctx, inflight, newest)
+			if errors.Is(err, sql.ErrNoRows) {
+				break
+			}
+			if err != nil {
+				transferErr, stopped = err, true
+				break
+			}
+			inflight[id], newest = true, !newest
+			go func() {
+				size, err := h.copyAttachmentDrive(ctx, id)
+				results <- result{id, size, err}
+			}()
+		}
+		if len(inflight) == 0 {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return transferErr
+		}
+		wake := h.attachmentDrive.wake
+		if stopped || len(inflight) == attachmentDriveTransfers {
+			wake = nil
+		}
+		var r result
+		select {
+		case r = <-results: // drain admitted transfers before status changes or shutdown
+		case <-wake:
+			continue // fill a free slot when an arrival wakes a partially full batch
+		}
+		delete(inflight, r.id)
+		if r.err == nil {
+			h.attachmentDrive.mu.Lock()
+			h.attachmentDrive.progress.Files++
+			h.attachmentDrive.progress.Bytes += r.size
+			h.attachmentDrive.mu.Unlock()
+			continue
+		}
+		state := "failed"
+		if errors.Is(r.err, gdrive.ErrOffline) {
+			state = "retry"
+		}
+		marked, err := h.store.db.ExecContext(ctx, `UPDATE relay_drive_blobs SET state=? WHERE blob_id=? AND state!='remote'`, state, r.id)
+		var changed int64
+		if err == nil {
+			changed, err = marked.RowsAffected()
+		}
+		pause := errors.Is(r.err, gdrive.ErrStorageFull) || errors.Is(r.err, gdrive.ErrConsent) || errors.Is(r.err, gdrive.ErrDenied)
+		provider := errors.Is(r.err, gdrive.ErrOffline) || pause
+		// A later corrupt blob must not hide the provider cause/backoff already
+		// observed. Other corrupt files still allow independent work to progress.
+		// An admitted transfer can report a permanent provider pause after a
+		// temporary failure. That known quota/consent refusal must win backoff.
+		if !stopped || pause {
+			transferErr = r.err
+			if err != nil {
+				transferErr = err
+			}
+		}
+		stopped = stopped || provider || err != nil || changed == 0
+	}
+}
+
+func (h *Hub) nextAttachmentDrive(ctx context.Context, inflight map[string]bool, newest bool) (string, error) {
+	order := "ASC"
+	if newest {
+		order = "DESC"
+	}
+	rows, err := h.store.db.QueryContext(ctx, `SELECT blob_id FROM relay_drive_blobs
+ WHERE state='pending' OR (state='remote' AND local_present=1) ORDER BY rowid `+order+` LIMIT ?`, attachmentDriveTransfers+1)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return "", err
+		}
+		if !inflight[id] {
+			return id, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	return "", sql.ErrNoRows
 }
 
 func copyVerifiedCiphertext(dst io.Writer, src io.Reader, size int64, sha string) error {

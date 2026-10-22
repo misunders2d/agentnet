@@ -35,6 +35,12 @@ var syncDir = secfile.SyncDir
 // MaxFileSize is the plaintext limit the client enforces before encrypting.
 var MaxFileSize int64 = protocol.DefaultMaxFileSize
 
+// FileSizeError identifies the local producer's size refusal without asking
+// API consumers to guess a cause from a filename or diagnostic sentence.
+type FileSizeError struct{ Message string }
+
+func (e *FileSizeError) Error() string { return e.Message }
+
 func (a *Agent) spoolPath(blobID string) string {
 	return filepath.Join(a.home, "spool", blobID+".age")
 }
@@ -100,7 +106,7 @@ func (a *Agent) spoolNamed(f OutgoingFile, recipient age.Recipient) (envelope.At
 	}
 	defer src.Close()
 	if info.Size() > MaxFileSize {
-		return att, fmt.Errorf("%s is larger than the %d byte limit", path, MaxFileSize)
+		return att, &FileSizeError{fmt.Sprintf("%s is larger than the %d byte limit", path, MaxFileSize)}
 	}
 	return a.spoolReader(name, src, recipient)
 }
@@ -131,7 +137,7 @@ func (a *Agent) spoolReader(name string, src io.Reader, recipient age.Recipient)
 		err = enc.Close()
 	}
 	if err == nil && pt.n > MaxFileSize {
-		err = fmt.Errorf("%s grew past the %d byte limit while reading", name, MaxFileSize)
+		err = &FileSizeError{fmt.Sprintf("%s grew past the %d byte limit while reading", name, MaxFileSize)}
 	}
 	if err == nil {
 		err = tmp.Sync()
@@ -703,7 +709,7 @@ func (a *Agent) StageUpload(name string, r io.Reader) (path string, cleanup func
 	cleanup = func() { os.Remove(f.Name()) }
 	n, err := io.Copy(f, io.LimitReader(r, MaxFileSize+1))
 	if err == nil && n > MaxFileSize {
-		err = fmt.Errorf("%q is larger than the %d byte limit", name, MaxFileSize)
+		err = &FileSizeError{fmt.Sprintf("%q is larger than the %d byte limit", name, MaxFileSize)}
 	}
 	if cerr := f.Close(); err == nil {
 		err = cerr

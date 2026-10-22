@@ -639,6 +639,7 @@ export interface HubStorage {
   quota_scope: string;
   own: BlobStorageUsage;
   global?: BlobStorageUsage;
+  can_change_quota?: boolean;
   quota_bytes: number;
   max_file_bytes: number;
   upload_idle_ttl_seconds: number;
@@ -1262,6 +1263,27 @@ export interface StorageBucket {
   files: number;
   reserved_bytes: number;
   recorded_received_bytes: number;
+}
+
+export interface StorageCacheFile {
+  id: string;
+  size: number;
+  sha256: string;
+}
+
+export interface StorageCacheResult {
+  removed: StorageAmount;
+  retained: StorageAmount;
+}
+
+export interface StorageCacheSelection {
+  files: StorageCacheFile[] | null;
+  usage: StorageAmount;
+}
+
+export interface StorageSendRetried {
+  id: string;
+  retried: number;
 }
 
 export interface StorageSummary {

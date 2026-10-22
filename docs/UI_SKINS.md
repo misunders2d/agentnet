@@ -352,6 +352,7 @@ still runs with the page's full trust.
 | `host.appUpdate()` | Optional desktop-app action, called from the person's Update choice. Resolves `{state, message}`: `restarting` after the desktop app prepared the update (the app restarts when ready); `complete` (with `version`) when the app already runs that release, or there the state an earlier update recorded (`pending`, `failed` or `partial`); `installer` on Android, whose package installer then asks the person. Otherwise it rejects with a user-readable error. Never treat any state as proof that the restart or installation completed. |
 | `host.appReplaceCommand()` | Optional desktop-app action, called only after explicit confirmation to replace a custom AgentNet command. Resolves the updated command fields `{cli_path, cli_state:"installed"\|"custom"\|"error", cli_problem?}`. Merge these fields into the previous app status, or read `appStatus()` for the complete status. Opening or canceling confirmation never calls this method. |
 | `host.stage(file)` | Prepares a File for sending; resolves an opaque attachment value for `files` in a send. Keep that value only until that send consumes it. Browser encrypts through its engine; daemon stages locally. |
+| `host.prepareVideo(file,signal)` | Optional sender-only native preparation, before `host.stage`. Resolves a new MP4 `File`; never changes the original, stages a send or sends bytes to the relay. Available through a captured daemon workspace binding only when local Linux tools support it; reject/unavailable preserves the original. Abort with the supplied `AbortSignal`. A skin may first use local browser codecs, then this fallback, and must retain an explicit exact-original choice. |
 | `host.file(messageID,index,dir)` | Opens an attachment this device holds: a received one, or a copy kept of one it sent. Pass the message's own `dir` (`in` or `out`): a received id is the sender's choice and can equal a sent one here. Resolves `{bytes:Uint8Array}` (browser may add name/size/image). Show Open only where the view says `openable: true`; a sent file without a kept copy says so in `note`. Validate magic bytes before inline display; never execute HTML or SVG. |
 | `host.drive` | Project-space provider bound to this host's membership, present on every host (presence says nothing about configuration): `drive({conv, action, ...})` resolves the existing Drive view/result; `driveUpload(conv, file, confirm)` uploads plaintext to Google only after explicit confirmation. It reuses the core's Drive actions, consent and permissions. Browser providers also expose `prepareGoogle()` and `beginGoogleConsent({conv, full?, confirm_account})`: prepare first, then call begin directly from the confirming click, with no intervening await, to retain the browser user gesture. Never stage this upload through `host.stage`; Google files are outside AgentNet encryption. Switching workspace never retargets a captured provider; retired/disconnected bindings reject new calls. No tokens or raw transport are exposed. Absence/configuration errors must be shown as unavailable. |
 | `host.skins` | The catalog: `{api, id, name, entry, style, document, files, agentnet?, digest?, local?, builtin?}` (browser-local entries add `package_id` and `size`) for Comic, the other built-in, installed and browser-local skins. `builtin` is the host's word (its fixed list), never a manifest's. The array is updated in place. |
@@ -948,6 +949,19 @@ types are the Go structs in `internal/ui/*.go`, generated into
   unavailable, `usage` the Hub's own-usage report (absent when unknown).
   Show unknown as unknown, never zero; the Hub's quota is the whole
   server's, never an allowance.
+- Storage management (v0.9.3): `remote.usage.can_change_quota` advertises the
+  confirmed admin-only `/api/storage/quota` action. `/api/storage/cache` reviews
+  received files and clears only the exact confirmed selection after local and
+  remote ciphertext verification; unavailable copies stay here. Outgoing spools,
+  staged files and the last recoverable copy are protected. Counts overlap:
+  relay logical usage includes local and Drive custody, while device cache is
+  this device's separate copy. Show unknown usage as unknown. Exact failed-send
+  retry uses `/api/storage/retry_send`, preserving existing ciphertext and IDs;
+  its `retried` count proves requeue only. The host excludes legacy or uncertain
+  handover, stopped and delivered copies. Show a producer `send_error:<code>:`
+  detail once, with the corresponding member/admin action; supported codes are
+  `relay_quota`, `file_too_large`, `relay_disk_full`, `local_disk_full` and
+  `network_unavailable`. Drive migration pause is separate from send failure.
 - Workspace attachments: GET `/api/storage/attachments` is where the relay
   keeps attachment ciphertext (`state`, `local`, `remote`, `pending`,
   `remote_only_files`, `migration`); one relay admin connects Google Drive

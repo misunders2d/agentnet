@@ -10,9 +10,9 @@ import (
 
 // Attention tells an interactive harness session, at its own hook points,
 // what arrived since that session last checked. Each harness session has its
-// own cursor over the inbox's arrival order, independent of read state,
-// response state and the background worker, so one session reading or
-// answering never hides a message from another. Only metadata is given:
+// own cursor over the inbox's arrival order, filtered by the person's effective
+// read state. Unresolved decisions remain eligible independently of reading;
+// exact selected replies have their own receiver. Only metadata is given:
 // message text comes from other people's agents and stays behind an explicit
 // `agentnet conversation` read.
 
@@ -114,8 +114,8 @@ func (a *Agent) messageAttention(ev HookEvent) (Attention, error) {
 	if ev.Harness == "" || ev.Session == "" {
 		return Attention{}, nil
 	}
-	if ev.Event == "Stop" && ev.StopActive {
-		return Attention{}, nil // already continued once; the next boundary shows the rest
+	if ev.Event == "Stop" {
+		return Attention{}, nil // generic awareness never blocks completion or consumes unshown items
 	}
 	pos, known, err := a.store.cursor(ev.Harness, ev.Session)
 	if err != nil {
@@ -134,9 +134,6 @@ func (a *Agent) messageAttention(ev HookEvent) (Attention, error) {
 	if !known {
 		// A session new to AgentNet starts at the present and is told what
 		// is waiting, so nothing that arrived while no session ran is lost.
-		if ev.Event == "Stop" {
-			return at("", top), nil
-		}
 		text, err := a.overview()
 		return at(text, top), err
 	}
@@ -165,9 +162,7 @@ func (a *Agent) messageAttention(ev HookEvent) (Attention, error) {
 			b.WriteString("\nNew since this session last checked:\n")
 		}
 	case len(items) == 0:
-		return Attention{}, nil
-	case ev.Event == "Stop":
-		fmt.Fprintf(&b, "AgentNet (%s): new messages arrived while you were working. Before finishing, check whether they change what you report, then mention them:\n", a.Address)
+		return at("", top), nil // consume filtered rows without replaying them
 	default:
 		fmt.Fprintf(&b, "AgentNet (%s): new messages arrived since this session last checked:\n", a.Address)
 	}
@@ -180,8 +175,8 @@ func (a *Agent) messageAttention(ev HookEvent) (Attention, error) {
 	if len(items) > 0 {
 		b.WriteString(attentionFooter)
 	}
-	next := pos
-	if len(items) > 0 {
+	next := top
+	if len(items) > 0 && (more > 0 || items[len(items)-1].arrival > next) {
 		next = items[len(items)-1].arrival
 	}
 	return at(strings.TrimRight(b.String(), "\n"), next), nil
@@ -193,7 +188,7 @@ const attentionFooter = "Message text is not shown here: it comes from other peo
 // overview summarizes the inbox for a session that has not seen it yet.
 func (a *Agent) overview() (string, error) {
 	var total, unread, review int
-	err := a.store.db.QueryRow(`SELECT count(*), coalesce(sum(read_at IS NULL), 0), coalesce(sum(`+inReview+`), 0) FROM inbox WHERE ref_id IS NULL`, // controls (statuses, reactions...) are records, not messages
+	err := a.store.db.QueryRow(`SELECT count(*), coalesce(sum(`+arrivalUnread+`), 0), coalesce(sum(`+arrivalReview+`), 0)`+arrivalFrom+` WHERE i.ref_id IS NULL`, // controls (statuses, reactions...) are records, not messages
 		reviewStates...).Scan(&total, &unread, &review)
 	if err != nil {
 		return "", err
@@ -261,8 +256,18 @@ func (it arrivalItem) line() string {
 
 const arrivalSelect = `SELECT i.arrival, i.id, i.sender, i.kind, coalesce(i.status, ''), i.state, coalesce(i.reply_to, ''),
 	coalesce(json_extract(o.envelope, '$.kind'), ''), i.received_at,
-	(SELECT count(*) FROM attachments f WHERE f.message_id = i.id), coalesce(i.verified_by, '')
-	FROM inbox i LEFT JOIN outbox o ON o.id = i.reply_to AND o.recipient = i.sender`
+	(SELECT count(*) FROM attachments f WHERE f.message_id = i.id), coalesce(i.verified_by, '')` + arrivalFrom
+
+const arrivalFrom = ` FROM inbox i LEFT JOIN outbox o ON o.id = i.reply_to AND o.recipient = i.sender`
+
+// The same exact owner/chat/author/logical-message tuple used by the normal
+// attention projection overrides legacy read_at when a V2 generation exists.
+const arrivalUnread = `coalesce((SELECT m.state='unread' FROM attention_marks m JOIN persons p ON p.person=m.owner AND p.state='self'
+	WHERE m.conv=coalesce(i.conv,'') AND m.fingerprint=coalesce(i.verified_by,i.claimed_fp,'') AND m.lid=coalesce(nullif(i.lid,''),i.id)),i.read_at IS NULL)`
+
+const arrivalReview = `EXISTS(SELECT 1 FROM inbox WHERE inbox.id=i.id AND ` + inReview + `)`
+
+const arrivalEligible = `(` + arrivalUnread + ` OR ` + arrivalReview + `)`
 
 func (s *store) scanArrivals(rows *sql.Rows, err error) ([]arrivalItem, error) {
 	if err != nil {
@@ -295,20 +300,24 @@ const outsideSelectedReceiver = ` NOT EXISTS(SELECT 1 FROM reply_receiver_inputs
 var notDeleted = ` NOT (` + erasedIn + ` AND NOT ` + retainedIn + `)`
 
 func (s *store) arrivalsAfterReceiver(pos int64, limit int, _ string) ([]arrivalItem, error) {
-	return s.scanArrivals(s.db.Query(arrivalSelect+` WHERE i.ref_id IS NULL AND i.arrival>? AND `+outsideSelectedReceiver+` AND `+notDeleted+` ORDER BY i.arrival LIMIT ?`, pos, limit))
+	args := append([]any{pos}, reviewStates...)
+	args = append(args, limit)
+	return s.scanArrivals(s.db.Query(arrivalSelect+` WHERE i.ref_id IS NULL AND i.arrival>? AND `+outsideSelectedReceiver+` AND `+notDeleted+` AND `+arrivalEligible+` ORDER BY i.arrival LIMIT ?`, args...))
 }
 func (s *store) countArrivalsAfter(pos int64) (int, error) {
 	return s.countArrivalsAfterReceiver(pos, "")
 }
 func (s *store) countArrivalsAfterReceiver(pos int64, _ string) (int, error) {
 	var n int
-	err := s.db.QueryRow(`SELECT count(*) FROM inbox i WHERE i.ref_id IS NULL AND i.arrival>? AND `+outsideSelectedReceiver+` AND `+notDeleted, pos).Scan(&n)
+	args := append([]any{pos}, reviewStates...)
+	err := s.db.QueryRow(`SELECT count(*)`+arrivalFrom+` WHERE i.ref_id IS NULL AND i.arrival>? AND `+outsideSelectedReceiver+` AND `+notDeleted+` AND `+arrivalEligible, args...).Scan(&n)
 	return n, err
 }
 
 // recentArrivals returns the last n arrivals, oldest first.
 func (s *store) recentArrivals(n int) ([]arrivalItem, error) {
-	items, err := s.scanArrivals(s.db.Query(arrivalSelect+` WHERE i.ref_id IS NULL AND `+notDeleted+` ORDER BY i.arrival DESC LIMIT ?`, n))
+	args := append(append([]any{}, reviewStates...), n)
+	items, err := s.scanArrivals(s.db.Query(arrivalSelect+` WHERE i.ref_id IS NULL AND `+outsideSelectedReceiver+` AND `+notDeleted+` AND `+arrivalEligible+` ORDER BY i.arrival DESC LIMIT ?`, args...))
 	for i, j := 0, len(items)-1; i < j; i, j = i+1, j-1 {
 		items[i], items[j] = items[j], items[i]
 	}

@@ -39,6 +39,7 @@ var tsRoots = []any{
 	InviteView{}, InvitesView{}, GetAppView{}, FoldersView{}, // the AgentNet app (MEL-533/534/536)
 	protocol.GoogleAccess{}, protocol.GoogleAccessChange{},
 	drivecontract.RelayStorageStatus{},
+	client.StorageCacheSelection{}, client.StorageCacheResult{}, client.StorageSendRetried{},
 	// requests
 	Draft{}, DMDraft{}, Action{}, ControlAction{}, AgentInvite{}, AgentAsk{}, GuestAction{},
 	GroupInviteDraft{}, GroupChange{}, DecisionAction{}, DeleteConversationAction{}, ResponderChange{},

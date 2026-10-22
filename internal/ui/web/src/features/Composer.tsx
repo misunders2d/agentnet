@@ -32,6 +32,7 @@ import { composerReplyFollowup, currentComposerFollowup, currentDirectComposerFo
 import type { Ctx } from "./Message.model";
 import { ScheduleDialogs, type SchedulePane } from "./Composer.schedule";
 import { scheduleReason } from "./Composer.schedule-model";
+import { mediaKind, prepareMedia } from "./Composer.media";
 
 const EMPTY: Draft = { text: "" };
 const mac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
@@ -72,6 +73,8 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   const emojiAfterMenu = useRef(false);
   const androidPreparing = useRef(new Set<string>());
   const answering = useRef(new Set<string>());                        // requests this person chose to answer by hand
+  const mediaJobs = useRef(new Map<string, { controller: AbortController; cancel: () => void }>());
+  useEffect(() => () => { for (const job of mediaJobs.current.values()) job.cancel(); mediaJobs.current.clear(); }, []);
 
   const [busy, setBusy] = useState<Record<string, string>>({});      // conv → progress words while sending
   const [notice, setNotice] = useState<{ conv: string; text: string; refresh?:boolean } | null>(null);
@@ -160,7 +163,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   const sending = store.host.platform === "android" && !!busy[conv]; // Android exposes pre-admission progress without a queued receipt
   const gone = target.kind === "agent" && !target.canAsk;
   const needsAgent = visitor && target.kind !== "agent";
-  const ready = !closed && !sending && !gone && !needsAgent && !handled && !missingReply && !missingTopic && !limit && (!!text.trim() || (files.length > 0 && target.kind !== "answer"));
+  const ready = !closed && !sending && !files.some(f => f.preparing) && !gone && !needsAgent && !handled && !missingReply && !missingTopic && !limit && (!!text.trim() || (files.length > 0 && target.kind !== "answer"));
 
   const typingScope = dm && !closed && !visitor && !(dm.kind === "group" && target.kind === "agent") ? { conv: dm.id } : null;
   const typing = useTypingSignal(store.api, typingScope, typingView);
@@ -268,11 +271,13 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     setNotice(null);
     const d = latest();
     write({ ...d, files: [...(d.files || []), ...add] });
+    if (d.mediaMode === "smaller") for (const f of add.slice(0, lim?.max_count || 0)) if (mediaKind(f.file)) chooseMedia(f.key, "smaller");
   }
   const dropped = useCallback((list: File[]) => addFiles(list), [conv, filesAllowed, closed?.title]);
   const dragRect = useFileDrop(zone, filesAllowed && !sending, dropped);
 
   function removeFile(key: string) {
+    mediaJobs.current.get(conv + ":" + key)?.cancel();
     const d = latest();
     const f = (d.files || []).find((x) => x.key === key);
     if (!f) return;
@@ -280,6 +285,46 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     if (typeof f.staged === "string") store.api.discard([f.staged]).catch(() => {}); // AgentNet also drops it on its own within the hour
     write({ ...d, files: (d.files || []).filter((x) => x.key !== key) });
     setNotice(null);
+  }
+
+  function chooseMedia(key: string, mode: "original" | "smaller") {
+    const c = conv, slot = c + ":" + key;
+    mediaJobs.current.get(slot)?.cancel();
+    const f = store.draft(c).files?.find(f => f.key === key);
+    if (!f) return;
+    const source = f.original || f.file;
+    const update = (patch: Partial<StagedFile>) => {
+      const d = store.draft(c);
+      if (!store.isActive() || !d.files?.some(f => f.key === key)) return;
+      store.setDraft(c, { ...d, mediaMode: mode, files: d.files.map(f => f.key === key ? { ...f, ...patch } : f) });
+    };
+    const replace = (file: File, note: string, preparing = false) => {
+      const current = store.draft(c).files?.find(f => f.key === key);
+      if (!current) return;
+      releaseFiles([current]);
+      if (typeof current.staged === "string") void store.api.discard([current.staged]).catch(() => {});
+      update({ file, name: file.name, size: file.size, type: file.type, original: source, staged: undefined,
+        url: /^image\/(png|jpeg|gif|webp)$/.test(file.type) || mediaKind(file) === "video" ? URL.createObjectURL(file) : undefined, mediaMode: mode, preparing, mediaProgress: undefined, mediaNote: note });
+    };
+    if (mode === "original") { replace(source, "Exact original file. Its bytes and metadata are unchanged."); return; }
+    const controller = new AbortController();
+    const cancel = () => {
+      controller.abort(); mediaJobs.current.delete(slot);
+      update({ preparing: false, mediaProgress: undefined, mediaNote: "Preparation cancelled. The original file is kept." });
+    };
+    mediaJobs.current.set(slot, { controller, cancel });
+    replace(source, "", true);
+    let previous = -1;
+    void prepareMedia(source, store.host, controller.signal, n => {
+      const progress = Math.floor(n * 100 / 5) * 5;
+      if (!controller.signal.aborted && progress !== previous) { previous = progress; update({ mediaProgress: progress }); }
+    }).then(result => {
+      if (!controller.signal.aborted) replace(result.file, result.note);
+    }).catch(e => {
+      if (!controller.signal.aborted) replace(source, errorText(e).replace(/\.?$/, ".") + " Using the original file.");
+    }).finally(() => {
+      if (mediaJobs.current.get(slot)?.controller === controller) mediaJobs.current.delete(slot);
+    });
   }
 
   const paste = (e: ClipboardEvent) => {
@@ -664,7 +709,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
         <ReplyChip title={"New topic" + ("name" in target ? " with " + target.name : "")} text="Your next message starts a separate conversation." cancel="Keep this conversation"
           onCancel={() => { write({ ...latest(), newTopic: false }); focusField(); }} />
       )}
-      <FilesTray files={files} lim={lim} busy={sending} onRemove={removeFile} />
+      <FilesTray files={files} lim={lim} busy={sending} onRemove={removeFile} onMedia={chooseMedia} />
       {(target.kind === "agent" || (target.kind === "device" && target.ask)) && !handled && (
         <IntentRow name={target.name} seed={target.seed}
           onStop={target.kind === "agent" ? () => { stopAsking(); focusField(); } : undefined}

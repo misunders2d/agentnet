@@ -68,7 +68,11 @@ func (a *Agent) beginHandover(env envelope.Envelope) (bool, error) {
 		return false, nil
 	}
 	if env.Kind != envelope.KindQuestion && env.Kind != envelope.KindTask || sub != "" {
-		return true, nil
+		_, err = tx.Exec(`UPDATE outbox SET handover_started=1 WHERE id=? AND send_stopped=0`, env.ID)
+		if err != nil {
+			return false, err
+		}
+		return true, a.store.done(tx.Commit())
 	}
 	ref := ControlRef{Conv: conv, ID: env.ID, Fingerprint: a.Self().Fingerprint()}
 	if conv != "" {

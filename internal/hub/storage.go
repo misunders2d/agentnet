@@ -33,7 +33,7 @@ func (h *Hub) handleStorage(w http.ResponseWriter, r *http.Request) {
 	}
 	view := protocol.HubStorage{
 		Scope: "caller-owned-ciphertext", QuotaScope: "hub-global", Own: own,
-		QuotaBytes: h.cfg.StorageQuota, MaxFileBytes: h.cfg.MaxFileSize,
+		QuotaBytes: h.currentStorageQuota(), MaxFileBytes: h.cfg.MaxFileSize,
 		UploadIdleTTLSeconds: h.cfg.UploadTTL.Seconds(), Location: "Hub data directory / blobs",
 		Policy: protocol.HubStoragePolicy{
 			DeliveredAttachments:              "Manual operator cleanup only; no automatic expiry. The age is chosen when cleanup is invoked.",
@@ -49,6 +49,7 @@ func (h *Hub) handleStorage(w http.ResponseWriter, r *http.Request) {
 		view.Location = "Relay-managed encrypted attachments: local spool and connected Google Drive"
 	}
 	if self.Admin {
+		view.CanChangeQuota = true
 		global, err := h.storageUsage(r.Context(), "")
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "", "storage summary unavailable")

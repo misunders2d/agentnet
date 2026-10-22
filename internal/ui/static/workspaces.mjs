@@ -64,6 +64,18 @@ export class WorkspaceShell {
   return Object.freeze({
    ...(provider ? { drive: boundDriveProvider(provider, check) } : {}),
    workspace:entry.binding, platform:entry.engine?"browser":"daemon",api:call,
+   ...(!entry.engine ? {async prepareVideo(file,signal){
+    check();signal.throwIfAborted();const capability=await thisShell.fetch(prefix+"/api/media/capabilities",{signal});
+    if(!capability.ok)throw new Error("Video preparation is unavailable on this device. Using the original file.");
+    const caps=await capability.json();check();signal.throwIfAborted();
+    if(!caps?.video)throw new Error("Video preparation is unavailable on this device. Using the original file.");
+    const r=await thisShell.fetch(prefix+"/api/media/video",{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:file,signal});
+    if(!r.ok){let detail=(await r.text()).trim();try{detail=JSON.parse(detail).error||detail;}catch(_){}throw new Error(detail||"Video preparation failed. The original file is kept.");}
+    if(r.headers.get("Content-Type")?.split(";")[0]!=="video/mp4")throw new Error("The prepared video is invalid. The original file is kept.");
+    const n=Number(r.headers.get("Content-Length"));if(n>32*1024*1024)throw new Error("Prepared video exceeds the size limit.");
+    const blob=await r.blob();check();signal.throwIfAborted();if(blob.size>32*1024*1024)throw new Error("Prepared video exceeds the size limit.");
+    return new File([blob],file.name.replace(/\.[^.]*$/,"")+".mp4",{type:"video/mp4",lastModified:file.lastModified});
+   }} : {}),
    listen:(fn)=>{check();if(entry.engine)return entry.engine.listen(seq=>{if(entry.connected)fn({type:"change",seq,workspace:id});});
     const es=this.eventSource(prefix+"/events");for(const kind of ["change","typing","presence"])es.addEventListener(kind,e=>{if(entry.connected)fn({type:"change",seq:Number(e.data),workspace:id,...(kind==="change"?{}:{hint:kind})});});
     es.addEventListener("restart",()=>{es.close();fn({type:"restart",workspace:id});});

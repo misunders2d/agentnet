@@ -19,6 +19,7 @@ import { GoogleMembers } from "./GoogleMembers";
 import { AppControls } from "./AppControls";
 import { DriveSettings } from "./Drive";
 import { HeldBack } from "./Approvals.held";
+import { DeviceCacheControls, RelayQuotaControls } from "./StorageManagement";
 
 // ---- Storage -----------------------------------------------------------------
 
@@ -41,7 +42,7 @@ export function StorageSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingE
       <div className="space-y-6">
         <div className="grid grid-cols-2 gap-2.5">
           <Total label={"On " + here} value={bytes(local.known.bytes)} sub={(local.complete ? "" : "at least ") + files(local.known.files)} />
-          <Total label="On your server" value={own ? bytes(own.reserved_bytes) : "Unknown"} sub={own ? files(own.files) + ", encrypted" : "It didn’t say"} />
+          <Total label="Your relay quota usage" value={own ? bytes(own.reserved_bytes) : "Unknown"} sub={own ? files(own.files) + ", encrypted" : "It didn’t say"} />
         </div>
 
         <section aria-labelledby="storage-here">
@@ -71,11 +72,12 @@ export function StorageSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingE
           </Details>
           {!local.complete && <Hint className="mt-2 px-1">Some of it couldn’t be looked at, so the total is a lower bound.</Hint>}
           {local.exclusions && <Hint className="mt-2 px-1">{local.exclusions}</Hint>}
+          <DeviceCacheControls onChange={r.reload} />
         </section>
 
         <section aria-labelledby="storage-server">
           <GroupLabel id="storage-server">On your server</GroupLabel>
-          <Remote r={remote} />
+          <Remote r={remote} onChange={r.reload} />
         </section>
         <Button variant="outline" icon={<IconRefresh size={18} />} disabled={r.loading} onClick={r.reload}>{r.loading ? "Reading…" : "Read again"}</Button>
       </div>
@@ -93,16 +95,20 @@ function Total({ label, value, sub }: { label: string; value: string; sub: strin
   );
 }
 
-function Remote({ r }: { r: T.RemoteStorage }) {
+function Remote({ r, onChange }: { r: T.RemoteStorage; onChange: () => void }) {
   if (r.status !== "available" || !r.usage) {
     return <Card className="p-4"><p>{r.reason || (r.status === "unsupported" ? "Your server doesn’t report storage." : "Not known right now: your server didn’t answer.")}</p></Card>;
   }
   const u = r.usage, inc = u.own.incomplete, pol = u.policy;
+  const charged = u.global ? u.global.stored.reserved_bytes + u.global.incomplete.reserved_bytes : null;
   return (
     <Card className="space-y-3 p-4">
       <p>Your encrypted files there: <strong className="tnum">{files(u.own.stored.files)} · {bytes(u.own.stored.reserved_bytes)}</strong>{inc.files > 0 && <>, plus {files(inc.files)} still uploading</>}. The server holds them encrypted.</p>
       <p>The server’s limit is <strong className="tnum">{bytes(u.quota_bytes)}</strong> for everyone together, so it isn’t your own allowance. Largest file: <span className="tnum">{bytes(u.max_file_bytes)}</span>.</p>
       {u.global && <p>Everyone on this server: <span className="tnum">{files(u.global.stored.files)} · {bytes(u.global.stored.reserved_bytes)}</span>. You see this because you’re an admin.</p>}
+      {charged !== null && charged >= u.quota_bytes * .9 && <p role="alert" className="text-approval-ink">{charged >= u.quota_bytes ? "The shared relay quota is full." : "The shared relay quota is nearly full."} New attachments need available quota, even when Drive has free space.</p>}
+      <p>Relay-local and Drive copies can overlap. Both remain charged to this shared quota; your device cache and unsent files have separate counts above.</p>
+      <RelayQuotaControls key={u.quota_bytes} usage={u} onChange={onChange} />
       <Details label="How long the server keeps things">
         <Fact name="Delivered files">{pol.delivered_attachments}</Fact>
         <Fact name="Undelivered">{pol.undelivered_attachments}</Fact>

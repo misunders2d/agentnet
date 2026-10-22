@@ -101,6 +101,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/dm/guest/end", s.changeHuman("end"))
 	mux.HandleFunc("POST /api/notify/{what}", s.notify)
 	mux.HandleFunc("POST /api/upload", s.upload)
+	mux.HandleFunc("GET /api/media/capabilities", s.mediaCapabilities)
+	mux.HandleFunc("POST /api/media/video", s.prepareVideo)
 	mux.HandleFunc("POST /api/upload/discard", s.discard)
 	mux.HandleFunc("GET /api/files/{id}/{i}", s.file)
 	mux.HandleFunc("POST /api/file/request", s.requestFile)
@@ -132,6 +134,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/typing", s.sendTyping)
 	mux.HandleFunc("POST /api/typing/preferences", s.typingPreferences)
 	mux.HandleFunc("GET /api/storage", s.storage) // livestorage.go: where this device's files live and how much, read-only
+	mux.HandleFunc("POST /api/storage/quota", s.storageQuota)
+	mux.HandleFunc("GET /api/storage/cache", s.storageCache)
+	mux.HandleFunc("POST /api/storage/cache", s.storageCache)
+	mux.HandleFunc("POST /api/storage/retry_send", s.storageRetry)
 	mux.HandleFunc("GET /api/storage/attachments", s.relayStorage)
 	mux.HandleFunc("POST /api/storage/attachments", s.relayStorage)
 	mux.HandleFunc("GET /sw.js", func(w http.ResponseWriter, r *http.Request) { r.SetPathValue("name", "sw.js"); s.asset(w, r) })
@@ -201,6 +207,8 @@ func (s *Server) guard(next http.Handler) http.Handler {
 				limit = 90 << 10
 			}
 			switch {
+			case r.URL.Path == "/api/media/video" && mt == "application/octet-stream":
+				limit = maxMediaInput
 			case (r.URL.Path == "/api/upload" || r.URL.Path == "/api/drive/upload") && mt == "application/octet-stream": // a file's bytes, handed to this computer's AgentNet (or its Drive space)
 				limit = maxUpload
 			case mt != "application/json":

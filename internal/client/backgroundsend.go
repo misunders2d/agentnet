@@ -47,6 +47,11 @@ type backgroundPosts struct {
 // Only a wake is in memory. The encrypted outbox is the queue, including on
 // crashes. Every pass uses the same retry path and durable insertion order.
 func (a *Agent) postOutboxBackground() {
+	a.initFlushLanes()
+	select {
+	case a.flushWake <- struct{}{}:
+	default:
+	}
 	p := &a.posting
 	p.Lock()
 	defer p.Unlock()

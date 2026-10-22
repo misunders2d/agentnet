@@ -29,6 +29,7 @@ echo "run cwd=$(pwd) args=$* bg=$AGENTNET_BACKGROUND req=$AGENTNET_REQUEST_ID pe
 cat > "$STUB_LOG.stdin"
 case "$*" in *--human*) printf 'AGENTNET: NEEDS-HUMAN\nwhich budget applies?\n'; exit 0 ;; esac
 case "$STUB_MODE" in
+clarify) printf 'AGENTNET: NEEDS-HUMAN\nWhich branch?\n' ;;
 askback) if grep -q "Riga" "$STUB_LOG.stdin"; then echo "Riga: bring a jacket"; else echo "Which city?"; fi ;;
 sleep) sleep 30 & echo $! > "$STUB_LOG.child"; wait ;;
 slow) sleep 1; echo "stub answer" ;;

@@ -327,7 +327,7 @@ CREATE TABLE reported(
 CREATE INDEX outbox_conv_lid ON outbox(conv, lid);
 `, historyReceiptSchema, deviceHistorySchema, proposalChoiceSchema, receiptGenerationSchema, requestFollowupSchema, answeredConversationStatusSchema, modelReportSchema, heldCopySchema, retainedConversationStatusSchema, heldLogicalSchema, waitingConversationStatusSchema, topicMarkSyncSchema, skippedCopySchema, historyArchiveSchema, `
 ALTER TABLE quarantine ADD COLUMN relay_ingress INTEGER NOT NULL DEFAULT 0;
-`, deviceHistoryOriginalPeerSchema, groupPublicationBindingSchema, agentActionSchema, nativeApprovalSchema, attentionMarkSchema, sharedTopicTitleSchema, scheduledSendSchema, conversationResourcesSchema, directTopicSchema, reminderSyncSchema}
+`, deviceHistoryOriginalPeerSchema, groupPublicationBindingSchema, agentActionSchema, nativeApprovalSchema, attentionMarkSchema, sharedTopicTitleSchema, scheduledSendSchema, conversationResourcesSchema, directTopicSchema, reminderSyncSchema, sendRetryProofSchema}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
 const (
@@ -1354,6 +1354,9 @@ func (s *store) claimJob(responder string, resolve ...func(dbq, job) (*ExecutorS
 			j.Executor = stamp
 		}
 		if err = tx.QueryRow(`SELECT count(*) FROM attachments WHERE message_id=?`, j.ID).Scan(&j.Attachments); err != nil {
+			return job{}, false, err
+		}
+		if err = settleRequestFollowupIn(tx, j); err != nil {
 			return job{}, false, err
 		}
 		if err = tx.Commit(); err != nil {

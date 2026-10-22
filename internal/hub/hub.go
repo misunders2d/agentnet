@@ -126,6 +126,7 @@ type Hub struct {
 	// workspaceMu (workspace.go).
 	workspace       atomic.Pointer[string]
 	workspaceMu     sync.Mutex
+	storageQuota    atomic.Int64 // saved override; zero uses the immutable Config
 	google          *googleauth.Validator
 	attachmentDrive *relayDrive
 }
@@ -230,6 +231,9 @@ func Open(cfg Config) (*Hub, error) {
 	}
 	if err == nil {
 		err = h.loadWorkspaceName()
+	}
+	if err == nil {
+		err = h.loadStorageQuota()
 	}
 	if err == nil {
 		err = h.prepareBlobs()

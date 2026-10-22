@@ -63,6 +63,24 @@ jobs:
           npm ci --ignore-scripts --no-audit --no-fund
           node -e "require('./node_modules/esbuild').transformSync('')"
       - run: go vet ./...
+      - name: message controls on macOS WebKit
+        if: ${{ runner.os == 'macOS' && (!inputs.test_packages || contains(inputs.test_packages, './...') || contains(inputs.test_packages, 'internal/ui')) }}
+        shell: bash
+        run: |
+          npm install --prefix "$RUNNER_TEMP/agentnet-webkit" --ignore-scripts --no-audit --no-fund playwright@1.63.0
+          "$RUNNER_TEMP/agentnet-webkit/node_modules/.bin/playwright" install webkit
+          export AGENTNET_PLAYWRIGHT="$RUNNER_TEMP/agentnet-webkit/node_modules/playwright"
+          export AGENTNET_INTERACTION_ENGINE=webkit
+          export AGENTNET_INTERACTION_HEADED=1
+          export INTERACTION_EVIDENCE="$RUNNER_TEMP/agentnet-macos-controls.png"
+          go test -count=1 -timeout 180s -run '^TestMessageInteractionRendered$' -v ./internal/ui
+      - name: retain macOS control evidence
+        if: ${{ always() && runner.os == 'macOS' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-message-controls
+          path: ${{ runner.temp }}/agentnet-macos-controls.png
+          if-no-files-found: ignore
       # Expanded suite needs time on slow CI disks; individual assertions stay bounded.
       - name: test (real binaries and processes on this OS)
         shell: bash
@@ -159,6 +177,14 @@ jobs:
         run: scripts/hub-container-test.sh
         env:
           AGENTNET_TEST_IMAGE: agentnet-hub:ci
+  # Manual complete candidate qualification also exercises the existing signed
+  # Android preview on an owned emulator. The reusable workflow accepts exact
+  # versions when invoked separately; here it derives the next patch from tags.
+  android-qualification:
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.windows_task_probe && !inputs.test_packages && !inputs.test_run && !inputs.race_shards && !inputs.native_os }}
+    uses: ./.github/workflows/android-qualification.yml
+    secrets:
+      ANDROID_PREVIEW_KEYSTORE_BASE64: ${{ secrets.ANDROID_PREVIEW_KEYSTORE_BASE64 }}
   windows-task-probe:
     if: ${{ inputs.windows_task_probe }}
     runs-on: windows-latest

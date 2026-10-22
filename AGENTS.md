@@ -11,6 +11,30 @@ program, `agentnet`, that is both the laptop client and the Hub.
 
 ## Product rules that code must keep
 
+- **Ordinary clarification belongs in tagged chat** (owner rule,
+  2026-10-22; MEL-497). Missing business information and ordinary choices are
+  normal questions tagging the intended person, requester by default. A fresh
+  authorized exact linked tagged reply continues with the recorded context and
+  clears only its corresponding stale clarification attention when claimed.
+  Untagged history never starts work. Reserve blocking requests for a concrete
+  native permission or required execution authorization; preserve those grants.
+- **Shared state follows each person across their devices** (owner rule,
+  2026-10-22; MEL-693). For every user, messages and granted history,
+  reactions, edits/deletions, read/unread state and personal reminders must
+  converge across all current verified linked devices, including desktop,
+  Android and browser. Reading a message or completing/canceling a reminder
+  anywhere clears its corresponding attention everywhere once synchronized;
+  snoozing/rescheduling clears the old due attention. Badges, native notices
+  and harness hooks must respect that state. A separate harness-session cursor
+  is not another unread inbox: already-read chats and completed reminders must
+  not return as new or block unrelated agent work (MEL-692). Offline/restart
+  catch-up and duplicate history must not resurrect cleared attention or run
+  work again. Preserve newer unseen messages, unresolved decisions, exact
+  selected-session replies and invited helpers' authorized context. Private
+  read/reminder state stays within the verified person; membership/history
+  grants and native execution permissions remain authoritative. Reuse existing
+  signed/encrypted synchronization and push updates. This records the required
+  behavior; the current implementation is not yet fully verified against it.
 - **One active agent per harness per device** (owner rule, 2026-10-21).
   Default is a setting on that concrete agent, never another chat identity.
   Active directories and chat lists show usable current agents; retired

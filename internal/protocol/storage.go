@@ -1,5 +1,10 @@
 package protocol
 
+type StorageQuotaChange struct {
+	QuotaBytes int64 `json:"quota_bytes"`
+	Confirm    bool  `json:"confirm"`
+}
+
 // StorageBucket counts ciphertext reservations from the Hub's existing blob
 // rows. ReservedBytes is the quota charge, not measured filesystem usage;
 // RecordedReceivedBytes is the last progress recorded for those reservations.
@@ -22,6 +27,7 @@ type HubStorage struct {
 	QuotaScope           string            `json:"quota_scope"` // hub-global
 	Own                  BlobStorageUsage  `json:"own"`
 	Global               *BlobStorageUsage `json:"global,omitempty"`
+	CanChangeQuota       bool              `json:"can_change_quota,omitempty"`
 	QuotaBytes           int64             `json:"quota_bytes"`
 	MaxFileBytes         int64             `json:"max_file_bytes"` // plaintext bytes
 	UploadIdleTTLSeconds float64           `json:"upload_idle_ttl_seconds"`
