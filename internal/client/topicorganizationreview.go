@@ -240,10 +240,7 @@ func (a *Agent) ApplyTopicOrganization(ctx context.Context, review TopicOrganiza
 		}
 		return nil
 	}
-	notice, err := a.TopicOrganizationNotice(review.Conv, review.Topic, review.Title)
-	if err != nil {
-		return ConvSent{}, err
-	}
+	notice := TopicOrganizationNotice(review.Topic, review.Title)
 	sent, err := a.SendConv(WithQueuedSend(ctx, review.Operation), review.Conv, ConvOutgoing{Body: notice, Topic: review.Topic, ReplyTo: review.Parent, TopicEvent: event, claim: claim})
 	if err != nil {
 		// A concurrent identical click may have committed between preview

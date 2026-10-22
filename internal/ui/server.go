@@ -132,6 +132,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/typing", s.sendTyping)
 	mux.HandleFunc("POST /api/typing/preferences", s.typingPreferences)
 	mux.HandleFunc("GET /api/storage", s.storage) // livestorage.go: where this device's files live and how much, read-only
+	mux.HandleFunc("GET /api/storage/attachments", s.relayStorage)
+	mux.HandleFunc("POST /api/storage/attachments", s.relayStorage)
 	mux.HandleFunc("GET /sw.js", func(w http.ResponseWriter, r *http.Request) { r.SetPathValue("name", "sw.js"); s.asset(w, r) })
 	mux.HandleFunc("GET /api/assistant-setup", s.setupAssistants)
 	mux.HandleFunc("POST /api/assistant-setup", s.setupAssistants)
@@ -639,6 +641,9 @@ func (s *Server) thread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t.Seq = seq
+	if current, _ := s.p.Changed(); current != seq {
+		t.PeerTopics = nil // concurrent mutation: keep the ordinary overview fallback
+	}
 	writeJSON(w, t)
 }
 

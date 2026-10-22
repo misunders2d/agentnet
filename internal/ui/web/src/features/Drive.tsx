@@ -1,30 +1,23 @@
 // Reuse the shared presentation widgets (skins/shared/drivespace*.mjs),
 // bundled by build.sh. They get only
 // this workspace's host provider, never a default transport or page global.
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { useApp } from "../context";
 import { useStore } from "../store";
 import { mountDriveSpace, saveAttachmentToDrive } from "../drive-space.mjs";
-import { mountFileStorageOptions } from "../drive-setup.mjs";
 import { Button } from "../ui/Button";
 import { Sheet } from "../ui/Sheet";
 import { Confirm } from "./Message.actions";
 import type { AnyMsg } from "./Message.model";
+import { RelayAttachmentStorage } from "./RelayAttachmentStorage";
 
 const colors = { "--panel": "var(--an-surface)", "--text": "var(--an-ink)", "--border": "var(--an-outline)" } as CSSProperties;
 const notice = "Google Drive files are outside AgentNet end-to-end encryption. Google permissions apply independently.";
 
 export function DriveSettings() {
   const store = useApp();
-  const root = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!root.current) return;
-    const widget = mountFileStorageOptions(root.current, { provider: {
-      storageSetup: (r) => store.host.api("/api/drive/setup", !r.action || r.action === "status" ? undefined : r),
-    } });
-    return () => widget.destroy();
-  }, [store]);
-  return <div ref={root} style={colors} className="mb-5 min-w-0" />;
+  const isActive = useCallback(() => store.isActive(), [store]);
+  return <RelayAttachmentStorage host={store.host} isActive={isActive} />;
 }
 
 export function ProjectSpaceSheet({ conv, open, onOpenChange }: { conv: string; open: boolean; onOpenChange: (v: boolean) => void }) {

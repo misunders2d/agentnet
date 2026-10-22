@@ -6,8 +6,8 @@
 // AgentNet runs here, even with this window closed (client/remind.go).
 // A browser device keeps no reminders (overview.remind is false there), so
 // nothing here is drawn on it.
-import { useMemo, useState } from "react";
-import { IconAlarm, IconAlarmSnooze, IconCheck } from "@tabler/icons-react";
+import { useId, useMemo, useRef, useState } from "react";
+import { IconAlarm, IconAlarmSnooze, IconCalendar, IconCheck } from "@tabler/icons-react";
 import type { T } from "../api";
 import { useAgentNames, useApp } from "../context";
 import { REMIND, agentName, dueText, firstLine, isMine, localInput, nameOf, personOf, reminderTimes, timeZone } from "../model";
@@ -50,14 +50,22 @@ export function RemindSheet({ open, onOpenChange, m, r }: { open: boolean; onOpe
   const times = useMemo(() => reminderTimes(), [open]);
   const [pick, setPick] = useState<number | "custom">(0);
   const [at, setAt] = useState(() => localInput(new Date(Date.now() + REMIND.customAhead * 60e3)));
+  const dateField = useRef<HTMLInputElement>(null);
+  const dateHint = useId();
+  const calendar = useRef<HTMLInputElement>(null);
+  const [showCalendar, setShowCalendar] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const zone = timeZone();
 
   const save = async () => {
+    if (pick === "custom" && !/^\d{4}-\d{2}-\d{2}$/.test(at.split("T")[0])) {
+      setError("Enter the date as YYYY-MM-DD."); dateField.current?.focus(); return;
+    }
     const due = pick === "custom" ? new Date(at) : times[pick].at;
     if (isNaN(due.getTime())) { setError("Choose a date and time."); return; }
     if (due.getTime() <= Date.now()) { setError("Choose a time in the future."); return; }
+    if (pick === "custom" && localInput(due) !== at) { setError("Choose a valid date and time."); dateField.current?.focus(); return; }
     setError("");
     setBusy(true);
     const ok = await store.changeReminder((a) => a.remind(m.id, due), (r ? "Reminder moved to " : "I’ll remind you ") + dueText(due));
@@ -68,7 +76,7 @@ export function RemindSheet({ open, onOpenChange, m, r }: { open: boolean; onOpe
   const choice = (key: number | "custom", label: string, sub?: string) => (
     <label key={String(key)} className={"flex min-h-12 cursor-pointer items-center gap-3 rounded-2xl border-[1.5px] px-3 py-2 has-[:focus-visible]:outline-3 has-[:focus-visible]:outline-agent-ink "
       + (pick === key ? "border-outline bg-surface shadow-pop-sm" : "border-transparent hover:bg-sunken")}>
-      <input type="radio" name="remind-when" checked={pick === key} onChange={() => setPick(key)} className="sr-only" />
+      <input type="radio" name="remind-when" checked={pick === key} onChange={() => { setPick(key); setError(""); }} className="sr-only" />
       <span aria-hidden="true" className={"grid size-[22px] shrink-0 place-items-center rounded-full border-[1.5px] border-outline " + (pick === key ? "bg-act text-act-ink" : "bg-surface")}>
         {pick === key && <IconCheck size={14} stroke={3} />}
       </span>
@@ -94,18 +102,31 @@ export function RemindSheet({ open, onOpenChange, m, r }: { open: boolean; onOpe
         {times.map((t, i) => choice(i, t.label, dueText(t.at)))}
         {choice("custom", "At a time I choose")}
         <div className="ml-9 mt-1 flex max-w-sm flex-col gap-3 sm:flex-row">
-          <label className="block min-w-0 flex-1">
+          <div className="min-w-0 flex-1">
+            <label className="block">
             <span className="mb-1 block text-[13px] font-semibold text-text-2">Date</span>
-            <input type="date" defaultValue={at.split("T")[0]} min={localInput(new Date()).split("T")[0]}
-              onChange={(e) => { setAt(e.target.value + "T" + (at.split("T")[1] || "")); setPick("custom"); }} onFocus={() => setPick("custom")}
+            <input ref={dateField} aria-describedby={dateHint} type="text" value={at.split("T")[0]} placeholder="YYYY-MM-DD" autoComplete="off" spellCheck={false}
+              onChange={(e) => { setAt(e.target.value + "T" + (at.split("T")[1] || "")); setPick("custom"); setError(""); }} onFocus={() => setPick("custom")}
               className="min-h-12 min-w-0 w-full rounded-xl stroke bg-surface px-3 text-[16px] text-ink outline-none focus-visible:outline-3 focus-visible:outline-agent-ink lg:text-[15px]" />
-          </label>
+            </label>
+            <span id={dateHint} className="mt-1 block text-[12px] text-text-2">Year-month-day · YYYY-MM-DD</span>
+          </div>
           <label className="block min-w-0 flex-1">
             <span className="mb-1 block text-[13px] font-semibold text-text-2">Time</span>
             <input type="time" defaultValue={at.split("T")[1] || ""}
-              onChange={(e) => { setAt((at.split("T")[0] || "") + "T" + e.target.value); setPick("custom"); }} onFocus={() => setPick("custom")}
+              onChange={(e) => { setAt((at.split("T")[0] || "") + "T" + e.target.value); setPick("custom"); setError(""); }} onFocus={() => setPick("custom")}
               className="min-h-12 min-w-0 w-full rounded-xl stroke bg-surface px-3 text-[16px] text-ink outline-none focus-visible:outline-3 focus-visible:outline-agent-ink lg:text-[15px]" />
           </label>
+        </div>
+        <div className="ml-9 mt-1">
+          <button type="button" className="flex min-h-11 items-center gap-2 text-sm font-semibold underline underline-offset-2" onClick={() => {
+            setPick("custom"); setShowCalendar(true); setError("");
+            try { calendar.current?.showPicker?.(); } catch { /* The visible native control remains available. */ }
+          }}><IconCalendar size={17} aria-hidden="true" />Choose from calendar</button>
+          <input ref={calendar} aria-label="Calendar date" aria-hidden={!showCalendar} type="date" tabIndex={showCalendar ? 0 : -1}
+            value={/^\d{4}-\d{2}-\d{2}$/.test(at.split("T")[0]) ? at.split("T")[0] : ""} min={localInput(new Date()).split("T")[0]}
+            onChange={e => { setAt(e.target.value + "T" + (at.split("T")[1] || "")); setPick("custom"); setError(""); }}
+            className={showCalendar ? "min-h-12 max-w-full rounded-xl stroke bg-surface px-3 text-[16px] text-ink" : "sr-only"} />
         </div>
       </fieldset>
       <p className="mt-3 text-[13px] leading-snug text-muted">

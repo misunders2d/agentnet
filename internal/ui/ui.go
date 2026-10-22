@@ -1156,6 +1156,8 @@ type Thread struct {
 	Messages         []Message   `json:"messages"`
 	// Topic is this thread as a topic, archived or not (Topics providers).
 	Topic *ThreadSummary `json:"topic,omitempty"`
+	// PeerTopics reuses this view's exact-agent metadata, including omitted archives.
+	PeerTopics *PeerTopics `json:"peer_topics,omitempty"`
 }
 
 // PeerKey is what this installation knows about the peer's key.

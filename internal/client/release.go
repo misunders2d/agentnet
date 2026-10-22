@@ -7,9 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/misunders2d/agentnet/internal/protocol"
+	"github.com/misunders2d/agentnet/internal/sqlitedb"
 )
 
 // The Hub's operator may recommend a client version (a release relay also
@@ -125,7 +125,11 @@ func LocalRelease(home string) (protocol.Release, bool) {
 	if _, err := os.Stat(dbPath); err != nil {
 		return protocol.Release{}, false
 	}
-	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(dbPath)+"?mode=ro&_pragma=busy_timeout(2000)")
+	dsn, err := sqlitedb.FileURI(dbPath, "mode=ro&_pragma=busy_timeout(2000)")
+	if err != nil {
+		return protocol.Release{}, false
+	}
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return protocol.Release{}, false
 	}

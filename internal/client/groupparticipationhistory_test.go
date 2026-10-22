@@ -353,6 +353,33 @@ func testGroupParticipationHistoryLinkedRestartReorder(t *testing.T, dismissed, 
 	})
 	t.Cleanup(func() {
 		if t.Failed() {
+			var saved string
+			if e := producer.store.db.QueryRow(`SELECT json_group_array(json_object('device',device,'state',state,'descriptor',json(group_descriptor))) FROM file_serves WHERE conv=?`, packet.State.Conv).Scan(&saved); e != nil {
+				t.Logf("file producer jobs: %v", e)
+			} else {
+				t.Logf("file producer jobs: %s", saved)
+				var jobs []struct {
+					Device     string          `json:"device"`
+					State      string          `json:"state"`
+					Descriptor json.RawMessage `json:"descriptor"`
+				}
+				current, contextErr := producer.GroupContext(packet.State.Conv)
+				if e := json.Unmarshal([]byte(saved), &jobs); e != nil {
+					t.Logf("file producer job decode: %v", e)
+				} else if contextErr != nil {
+					t.Logf("file producer current context: %v", contextErr)
+				} else {
+					for _, entry := range jobs {
+						var job groupFileServe
+						if e := decodeStrict(entry.Descriptor, &job); e != nil {
+							t.Logf("file producer descriptor state=%s: %v", entry.State, e)
+							continue
+						}
+						_, e := producer.groupFileAuthorizedSource(producer.store.db, current, entry.Device, job.Key, job.Message)
+						t.Logf("file producer source state=%s: %v", entry.State, e)
+					}
+				}
+			}
 			for _, a := range []*Agent{producer, phone} {
 				rows, e := a.store.db.Query(`SELECT sub,state,coalesce(error,''),coalesce(required_cap,'') FROM outbox WHERE conv=? AND sub='file'`, packet.State.Conv)
 				if e == nil {

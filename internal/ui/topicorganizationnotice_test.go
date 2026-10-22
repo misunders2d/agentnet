@@ -220,6 +220,15 @@ func TestLiveTopicOrganizationNoticeDestination(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			raw, err := agent.ConversationMessages(conv)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, m := range raw {
+				if m.LID == moved.LID && m.Body != client.TopicOrganizationNotice(topic, "") {
+					t.Fatalf("outgoing human notice copied an implicit private title: %q", m.Body)
+				}
+			}
 			check := func(want, title string, unread int) {
 				t.Helper()
 				view, err := live.DM(conv)

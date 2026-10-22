@@ -15,10 +15,10 @@ const drain=async()=>{for(let i=0;i<12;i++)await tick();};
 const gate=()=>{let release;const promise=new Promise(r=>release=r);return {promise,release};};
 const conv='a'.repeat(64),other='d'.repeat(64),topic='b'.repeat(32),sibling='c'.repeat(32),writer='1'.repeat(64),replacement='2'.repeat(64);
 function fixture(kind='dm') {
- let now=0,nextTimer=0,seq=1,readHold,overviewHold,viewHold,reminderHold,reminderError=false,readError=false,notify,decorateOverview=o=>o;
+ let now=0,nextTimer=0,seq=1,readHold,overviewHold,viewHold,reminderHold,reminderError=false,readError=false,notify,decorateOverview=o=>o,decorateView=v=>v;
  const timers=new Map(),calls=[],rows=[{id:'seen',topic,kind:'message',dir:'in',unread:true},{id:'sibling',topic:sibling,kind:'message',dir:'in',unread:true}];
  let reminders=[{message:'seen',conv,from:'peer/device',title:'Read this later',due:'2026-10-20T10:00:00Z',overdue:true}];
- const view=(id=conv)=>({id,seq,peer:kind==='dm'?{}:'peer/device',kind:'group',messages:id===conv?structuredClone(rows):[],agents:[],topics:[{id:topic,unread:rows.filter(m=>m.topic===topic&&m.unread).length},{id:sibling,unread:rows.filter(m=>m.topic===sibling&&m.unread).length}],main_topic:{id:'main',unread:0}});
+ const view=(id=conv)=>decorateView({id,seq,peer:kind==='dm'?{}:'peer/device',kind:'group',messages:id===conv?structuredClone(rows):[],agents:[],topics:[{id:topic,unread:rows.filter(m=>m.topic===topic&&m.unread).length},{id:sibling,unread:rows.filter(m=>m.topic===sibling&&m.unread).length}],main_topic:{id:'main',unread:0}});
  const summary=()=>({id:conv,peer:'peer/device',unread:rows.filter(m=>m.unread).length,state:'active'});
  const overview=()=>decorateOverview({version:'test',seq,me:{address:'self/device'},remind:true,reminders:structuredClone(reminders),dms:kind==='dm'?[summary(),{id:other,unread:0}]:[],threads:kind==='thread'?[summary()]:[],unread_total:summary().unread,alert_total:summary().unread});
  const env={document:{visibilityState:'visible',hasFocus:()=>true},localStorage:{getItem:()=>null,setItem:()=>{}},setTimeout:(fn,ms)=>{const id=++nextTimer;timers.set(id,{fn,at:now+ms});return id;},clearTimeout:id=>timers.delete(id)};
@@ -39,7 +39,7 @@ function fixture(kind='dm') {
   }
   if(path.startsWith('/api/agents'))return {agents:[]};return {};
  }};
- const Store=runInNewContext(scheduleSource+'\n'+source+'\nStore',{...env,api,errorText,pendingSends,share,messageTarget:model.messageTarget,currentCatalogAgents:model.currentCatalogAgents,mainPreferences,personRoots,brand:{storage:'test'}});
+ const Store=runInNewContext(scheduleSource+'\n'+source+'\nStore',{...env,api,errorText,pendingSends,share,messageTarget:model.messageTarget,currentCatalogAgents:model.currentCatalogAgents,directChatKey:model.directChatKey,mainPreferences,personRoots,brand:{storage:'test'}});
  const store=new Store(host);
  let queued=false;store.subscribe(()=>{if(!queued){queued=true;queueMicrotask(()=>{queued=false;const o=store.get().open;if(!o)return;const draft=store.draft(o.id),visit=store.readVisit(o,o.kind==='dm'?draft.topic||'':'',o.kind==='dm'&&!!draft.newTopic);if(visit)store.reportVisible(visit,(store.get().views[o.id]?.messages||[]).filter(m=>m.id==='seen'));});}});
  return {store,calls,rows,env,view,overview,now:()=>now,
@@ -48,11 +48,23 @@ function fixture(kind='dm') {
   holdRead(){return readHold=gate();},holdOverview(){return overviewHold=gate();},holdView(){return viewHold=gate();},holdReminder(){return reminderHold=gate();},
   failRead(){readError=true;},failReminder(){reminderError=true;},
   decorateOverview(fn){decorateOverview=fn;},
+  decorateView(fn){decorateView=fn;},passOverview(){overviewHold=null;},
   async advance(ms){now+=ms;for(const [id,t]of [...timers])if(t.at<=now){timers.delete(id);t.fn();}await drain();},
   releaseAt(g,ms=10000){env.setTimeout(g.release,ms);},
   bump(){seq++;},setReminder(value){reminders=[value];seq++;},push(){notify({type:'change'});},
   badge(){return (kind==='dm'?store.get().overview.dms:store.get().overview.threads).find(r=>r.id===conv).unread;},
  };
+}
+function archivedFixture(){
+ const f=fixture('thread'),cohort={active:2,archived:5},agent='e'.repeat(32),hidden='f'.repeat(32),peer='peer/device';
+ const binding={peer,agent_id:agent,agent_host:peer,agent_key:writer},hiddenBinding={...binding,agent_id:hidden};
+ const summary=(id,unread,state='active',identity=binding)=>({id,...identity,unread,state,title:id,last:'',last_at:'2026-10-21T12:00:00Z',count:unread,review:0,running:0,pending:false});
+ const own=()=>f.rows.filter(m=>m.unread).length;
+ const snapshot=()=>({peer,total:3,archived:2,archived_unread:own()+cohort.archived,latest:summary('latest',cohort.active)});
+ f.decorateView(v=>({...v,topic:summary(v.id,own(),'archived'),peer_topics:snapshot()}));
+ f.decorateOverview(o=>({...o,topic_list:true,threads:[summary('latest',cohort.active)],topics:[snapshot(),{peer,total:1,archived:1,archived_unread:7,latest:summary('hidden-agent-topic',7,'archived',hiddenBinding)}],unread_total:snapshot().archived_unread+cohort.active+7,alert_total:snapshot().archived_unread+cohort.active+7}));
+ const names={[agent]:'Codex',[agent+'#current']:'true',[agent+'#host']:peer,[agent+'#host_key']:writer};
+ return {...f,cohort,snapshot,binding,groupBadge:()=>model.chatList(f.store.get().overview,names).find(c=>c.key==='agent:'+model.directChatKey(binding))?.unread};
 }
 const failures=[];
 async function check(label,fn){try{await fn();console.log(label+' PASS');}catch(e){failures.push(label+': '+e.message);console.log('FAIL '+failures.at(-1));}}
@@ -147,5 +159,39 @@ for(const cached of [false,true])await check((cached?'cached':'fresh')+' exact R
  await f.store.open({kind:'dm',id:conv,focus:'seen'});await drain();const state=f.store.get(),draft=f.store.draft(conv);f.store.stop();read.release();await drain();
  assert.equal(state.tab,'chats','exact Review result displays the opened conversation');assert.equal(state.open.id,conv);assert.equal(state.open.focus,'seen');
  assert.equal(draft.text,'kept draft');assert.equal(draft.replyTo,'reply');assert.equal(draft.files[0].key,'file');
+});
+for(const mode of ['quiet','independent-arrival','replacement-generation','read-failure','newer-reminder'])await check('archived non-latest '+mode+' uses exact group totals',async()=>{
+ const f=archivedFixture(),read=f.holdRead();if(mode==='replacement-generation')f.rows[0].attention={rev:7,writer};if(mode==='read-failure')f.failRead();
+ await f.start();await f.open();await drain();const overview=f.holdOverview(),pending=f.store.refetch();await drain();
+ if(mode==='independent-arrival'){f.cohort.archived++;f.bump();}
+ if(mode==='replacement-generation'){f.rows[0].attention={rev:7,writer:replacement};f.bump();}
+ read.release();await drain();
+ if(mode==='newer-reminder')await f.store.changeReminder(a=>a.remind('seen',new Date('2030-10-21T12:00:00Z')));
+ const current=f.store.get().overview,prompt={archived:current.topics[0].archived_unread,unread:current.unread_total,alert:current.alert_total,badge:f.groupBadge()},want=f.snapshot();
+ assert.equal(current.topics[1].archived_unread,7,'same-device hidden agent remains independent');
+ assert.deepEqual(f.calls.filter(c=>c.path==='/api/act').flatMap(c=>c.body.ids),['seen'],'only actually visible row is read');
+ overview.release();await pending;await drain();const after=f.store.get().overview;f.store.stop();
+ assert.equal(prompt.archived,want.archived_unread,'omitted archived topic clears while overview is blocked');assert.equal(prompt.badge,want.archived_unread+f.cohort.active,'sidebar retains independent archived arrivals and active-topic counts');assert.equal(prompt.unread,want.archived_unread+f.cohort.active+7);assert.equal(prompt.alert,want.archived_unread+f.cohort.active+7);
+ assert.equal(after.topics[0].archived_unread,want.archived_unread);if(mode==='newer-reminder')assert.equal(after.reminders[0].overdue,false,'late overview/group snapshot cannot restore older reminder attention');
+});
+await check('archived non-latest older group snapshot preserves newer overview generation',async()=>{
+ const f=archivedFixture(),read=f.holdRead();await f.start();await f.open();await drain();const view=f.holdView();read.release();await drain();
+ f.rows[0].unread=true;f.rows[0].attention={rev:8,writer:replacement};f.cohort.active++;f.bump();await f.store.reload(false,false);const before=f.store.get().overview;
+ view.release();await drain();const after=f.store.get().overview;f.store.stop();assert.equal(after.unread_total,before.unread_total);assert.equal(after.topics[0].archived_unread,before.topics[0].archived_unread);assert.equal(f.rows[0].unread,true);
+});
+await check('archived snapshots order different topics by their shared exact group',async()=>{
+ const f=archivedFixture(),read=f.holdRead();await f.start();await f.open();await drain();const overview=f.holdOverview(),pending=f.store.refetch();await drain();read.release();await drain();
+ const older=f.view();f.rows[0].unread=true;f.rows[0].attention={rev:8,writer:replacement};f.cohort.archived++;f.bump();
+ await f.store.open({kind:'thread',id:other,peer:f.binding.peer});await drain();const before=f.store.get().overview;
+ f.store.confirmReadOverview({kind:'thread',id:conv},older);
+ assert.equal(f.store.get().overview.topics[0].archived_unread,8,'older different-topic completion cannot overwrite newer shared archive count');
+ overview.release();await pending;await drain();const after=f.store.get().overview;f.store.stop();
+ assert.equal(after.topics[0].archived_unread,8);assert.equal(after.unread_total,before.unread_total);assert.equal(after.topics[1].archived_unread,7);
+});
+for(const mode of ['old-provider','wrong-agent'])await check('archived '+mode+' snapshot uses truthful overview fallback',async()=>{
+ const f=archivedFixture(),read=f.holdRead();f.decorateView(v=>({...v,topic:{...f.snapshot().latest,id:v.id,state:'archived'},...(mode==='wrong-agent'?{peer_topics:{...f.snapshot(),latest:{...f.snapshot().latest,agent_id:'f'.repeat(32)}}}:{})}));
+ await f.start();await f.open();await drain();const overview=f.holdOverview(),pending=f.store.refetch();await drain();read.release();await drain();
+ assert.equal(f.store.get().overview.topics[0].archived_unread,7,'unavailable or wrong-agent aggregate cannot justify subtraction');assert.equal(f.store.get().overview.topics[1].archived_unread,7);
+ overview.release();await pending;await drain();f.passOverview();await f.store.refetch();assert.equal(f.store.get().overview.topics[0].archived_unread,6);f.store.stop();
 });
 assert.deepEqual(failures,[],'all prompt attention and generation guards');

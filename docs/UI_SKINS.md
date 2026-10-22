@@ -735,7 +735,22 @@ types are the Go structs in `internal/ui/*.go`, generated into
   `done_by` (agent, you), `conclusion` (the final reply's first line: the
   agent's words from an explicit close, labelled as theirs; a local
   Mark done carries no conclusion), `concluded_by`, `pending`, `renamed`,
-  `auto_title`, `quiet_since`; `/api/thread` adds `topic`. GET
+  `auto_title`, `quiet_since`; `/api/thread` adds `topic` and may add
+  `peer_topics` with the same per-peer count shape and exact original agent
+  group. When the assembly revision stays unchanged, its `archived_unread`
+  gives the absolute archived count even if the selected topic is omitted from
+  the overview. Replace that group's count until an overview at least as new
+  as the view's `seq` arrives; do not also apply a per-thread archived delta.
+  Missing metadata keeps the normal overview fallback. For an admitted agent
+  organization, an otherwise automatic topic name may use the exact canonical
+  explicit-new-topic name carried by its earliest signed move notice. The
+  pinned phrase is `Moved selected messages to new topic “<name>”.`; do not
+  reword/localize it without preserving its decoder. Generic legacy notices
+  never supply a name: they can contain another person's private label.
+  Explicit private/shared names keep their existing precedence. The fallback
+  also works for retained explicit-new notices; it changes no title register,
+  move or execution authority. Older hosts/generic history retain automatic names.
+  GET
   `/api/topics?peer=&state=&q=&before=&limit=` pages `{topics, next,
   matched}`, unread first with activity time, ID and peer tie breaks. Optional
   `agent_host`, `agent_key` and `agent_id` scope the immutable agent destination
@@ -933,6 +948,15 @@ types are the Go structs in `internal/ui/*.go`, generated into
   unavailable, `usage` the Hub's own-usage report (absent when unknown).
   Show unknown as unknown, never zero; the Hub's quota is the whole
   server's, never an allowance.
+- Workspace attachments: GET `/api/storage/attachments` is where the relay
+  keeps attachment ciphertext (`state`, `local`, `remote`, `pending`,
+  `remote_only_files`, `migration`); one relay admin connects Google Drive
+  and members never connect a Google account. Offer Connect, Move existing
+  and Disconnect only with `can_admin`, a display hint: the relay decides
+  and refuses others. POST `{action:"connect"}` returns `consent_url` once,
+  to open from that click; `move` and `disconnect` need `confirm:true`, and
+  disconnect is refused while `remote_only_files` is above 0. A read never
+  starts consent. 404 means this relay or platform does not offer it.
 - Messaging: DM/group messages carry `delivery`, `sent_at`, and `quote`;
   device-thread messages carry `sent_at` and `quote`. Use `delivery` for
   delivery ticks: each other person's best device copy, then the least

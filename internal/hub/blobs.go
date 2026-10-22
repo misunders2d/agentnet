@@ -218,7 +218,7 @@ func (h *Hub) handleBlobComplete(w http.ResponseWriter, r *http.Request) {
 		err = blobfile.Promote(src, final, h.syncDir)
 	}
 	if err == nil {
-		err = h.store.setBlobState(id, protocol.BlobStored)
+		err = h.storeCompleteAttachment(id)
 	}
 	if err != nil {
 		h.cfg.Logf("finalise %s: %v", id, err)
@@ -242,12 +242,12 @@ func (h *Hub) handleBlobData(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "", "unknown attachment")
 		return
 	}
-	f, err := os.Open(h.blobPath(id, true))
+	f, cleanup, err := h.openAttachmentCiphertext(r, id, b)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "", "storage error")
 		return
 	}
-	defer f.Close()
+	defer cleanup()
 	w.Header().Set("Content-Type", "application/octet-stream")
 	http.ServeContent(countingWriter{w, &h.stats.BlobBytesOut}, r, "", time.Time{}, f)
 }

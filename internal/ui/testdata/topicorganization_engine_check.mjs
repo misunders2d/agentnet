@@ -1,7 +1,7 @@
 // Real signed/encrypted browser turns over isolated stores, no live service.
 import assert from 'node:assert/strict';
 import * as wire from '../static/wire.mjs';
-import { Engine, memoryStore, chatTopicAssignments, chatTopicRedirects, summarizeChatTopics } from '../static/engine.mjs';
+import { Engine, memoryStore, chatTopicAssignments, chatTopicRedirects, summarizeChatTopics, topicOrganizationNoticeTitle } from '../static/engine.mjs';
 let checks=0;
 const check=(v,why)=>{assert.ok(v,why);checks++;};
 const same=(a,b,why)=>{assert.deepEqual(a,b,why);checks++;};
@@ -21,6 +21,40 @@ for(const e of users)for(const other of users){
  await e.store.write([{s:'persons',k:p.person,v:p},{s:'pins',k:other.address,v:{address:other.address,json:wire.marshalPublic(other.pub),fingerprint:other.fp,pending:null}}]);
 }
 const [a,b,outsider]=users,root=await wire.newRoot(a.keys,{person:a.me.person,roster:a.me.hash,address:a.address,fingerprint:a.fp},{person:b.me.person,roster:b.me.hash});
+// The stored-admission display seam does not grant any new metadata authority.
+// Its first canonical agent notice is automatic; explicit human names win.
+{
+ const conv='d'.repeat(64),topic=wire.newID(),notice=title=>'Moved selected messages to new topic “'+title+'”.';
+ same(notice('Fixture organization'),'Moved selected messages to new topic “Fixture organization”.','explicit new-topic phrase is pinned independently');
+ for(const title of ['Fixture organization','Розбір помилки','embedded” quote','界'.repeat(120)])same(topicOrganizationNoticeTitle(topic,notice(title)),title,'canonical notice round trip');
+ for(const body of ['Moved selected messages to Main flow.','Moved selected messages to topic '+topic+'.','Moved selected messages to “Legacy private name”.','arbitrary prose',notice(''),notice(' spaced '),notice('two  spaces'),notice('line\nbreak'),notice('bid\u202ei'),'Moved selected messages to new topic “broken suffix”',notice('界'.repeat(121)),notice('Name')+' more'])same(topicOrganizationNoticeTitle(topic,body),'','noncanonical or legacy notice cannot supply a name');
+ same(topicOrganizationNoticeTitle('',notice('Name')),'','Main stays unnamed');
+ const first={id:wire.newID(),lid:wire.newID(),conv,kind:'message',body:'Original automatic name',topic,ts:1,at:1000,to:b.address,state:'delivered'},
+  move={id:wire.newID(),lid:wire.newID(),conv,kind:'message',topic,ts:2,at:2000,to:b.address,pid:wire.newID(),origin:wire.OriginAgentOrganization,body:notice('Fixture organization'),topic_event:{action:'move',request:{lid:wire.newID()}}},
+  later={...move,id:wire.newID(),lid:wire.newID(),ts:3,at:3000,body:notice('Later move cannot rename')};
+ for(const msgs of [[first,move,later],[later,first,move]]){
+  const [t]=summarizeChatTopics(conv,msgs,new Map(),10);check(t.title==='Fixture organization'&&!t.renamed,'first stored notice wins regardless of arrival order');
+ }
+ for(const change of [{origin:'ui'},{pid:''},{topic_event:{action:'move'}},{topic_event:{action:'merge',request:move.topic_event.request}},{topic:wire.newID()},{body:'Arbitrary agent text'}])same(summarizeChatTopics(conv,[first,{...move,...change}],new Map(),10)[0].title,first.body,'unrelated/noncanonical event preserves automatic name');
+ // A creator inference from the current group would leak old private names
+ // when earlier destination content moved away or was never in this grant.
+ const author=a.fp,selected={...first,topic:'',key:author,ts:2,at:2000},existing={...first,id:wire.newID(),lid:wire.newID(),key:author,body:'Existing destination original',ts:1,at:1000},
+  legacy={...move,ts:4,at:4000,body:'Moved selected messages to “HOST PRIVATE LABEL”.',topic_event:{...move.topic_event,moves:[{lid:selected.lid,author}]}},
+  away={...move,id:wire.newID(),lid:wire.newID(),ts:3,at:3000,topic:wire.newID(),origin:'ui',topic_event:{action:'move',moves:[{lid:existing.lid,author,topic}]}};
+ for(const msgs of [[existing,selected,legacy],[existing,selected,away,legacy],[selected,legacy]]){
+  const t=summarizeChatTopics(conv,msgs,new Map(),10).find(t=>t.id===topic);check(t&&t.title!=='HOST PRIVATE LABEL'&&!t.renamed,'legacy notice cannot disclose private label with full, moved-away or absent earlier history');
+ }
+ const key='topic/'+conv+'/'+topic,msgs=[first,move,later];
+ await a.store.write([{s:'kv',k:key,v:{type:'topic-state',peer:conv,topic,title:'Private name'}}]);
+ let [t]=(await a.chatTopicSummaries(conv,msgs)).topics;
+ check(t.title==='Private name'&&t.auto_title==='Fixture organization'&&t.renamed,'private name wins over notice fallback');
+ for(const title of ['Shared name','']){
+  await a.store.write([{s:'kv',k:a.sharedTopicTitleKey(conv,topic),v:{conv,topic,title,rev:1,writer:a.fp}}]);
+  [t]=(await a.chatTopicSummaries(conv,msgs)).topics;
+  if(title)check(t.title===title&&t.auto_title==='Fixture organization'&&t.renamed,'shared name wins over private and automatic names');
+  else check(t.title==='Fixture organization'&&!t.renamed&&!t.auto_title,'shared reset restores notice automatic title');
+ }
+}
 const conv=await wire.rootID(root),c={id:conv,root:wire.rootJSON(root),peer:b.me.person,created:root.created,creator:a.address};
 await a.store.write([{s:'convs',k:conv,v:c}]);
 await b.store.write([{s:'convs',k:conv,v:{...c,peer:a.me.person}}]);
@@ -40,11 +74,14 @@ const sourceOther=await a.sendDM({conv,body:'Other selected source message',topi
 const fileBytes=new TextEncoder().encode('EXACT_SELECTED_BROWSER_FILE');
 const main=await a.sendDM({conv,body:'Selected main-flow message',files:[{name:'selected.txt',bytes:fileBytes}]});await deliver(main);
 const destination=await a.sendDM({conv,body:'Destination',topic:to});await deliver(destination);
+await a.store.write([{s:'kv',k:'topic/'+conv+'/'+to,v:{type:'topic-state',peer:conv,topic:to,title:'HUMAN PRIVATE LABEL'}}]);
 const before=await a.store.all('outbox');
 const review=await a.api('/api/topic/organization/preview',{conv,ids:[first.id,main.id],topic:to});
 same(review.moves.length,2,'exact noncontiguous cross-topic selection');
 check(wire.validHash(review.token)&&wire.validID(review.operation),'review has exact commitment and retry identity');
 const moved=await a.api('/api/topic/organization/apply',review);await deliver(moved);
+same((await a.store.all('outbox')).find(r=>r.lid===moved.lid).body,'Moved selected messages to topic '+to+'.','outgoing human move does not copy an implicit private label');
+same((await a.api('/api/dm?id='+conv)).messages.find(m=>m.lid===moved.lid).body,'Moved selected messages to “HUMAN PRIVATE LABEL”.','local human move still displays own private label');
 for(const e of [a,b]){
  const assigned=chatTopicAssignments(await rows(e));
  same([assigned.get(first.lid),assigned.get(main.lid),assigned.get(child.lid),assigned.get(sourceOther.lid)],[to,to,from,from],'only reviewed selection moves on both readers');

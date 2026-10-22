@@ -321,4 +321,37 @@ check(changes > writesBefore && network === 0, 'changes are announced; nothing t
  const overview=await e.topicOverview(false);same(overview.topics.length,2,'archived-only rows stay separate by agent');check(overview.topics.every(c=>c.total===TOPICS.pageMax+3&&c.archived===TOPICS.pageMax+3),'archived totals scoped to exact agents');await refuses(()=>e.topicList(new URLSearchParams({agent_id:ids[0]})),/not valid/,'partial identity refused');
 }
 
+// An omitted archived thread returns the same exact-agent metadata as the
+// overview. Current topics, other configured agents and reports stay separate.
+{
+ const s=memoryStore(),e=new Engine({store:s,base:'https://synthetic.invalid',fetch,now:()=>now});
+ e.address=me;e.fp=ownFP;
+ const agent='a'.repeat(32),hidden='b'.repeat(32),selected=wire.newID(),unseen=wire.newID(),latest=wire.newID();
+ const row=(id,agent_id,body,at,extra={})=>({s:'inbox',k:id,v:{v:1,id,from:bob,fp:bobFP,kind:agent_id?'answer':'message',agent_id,body,read:false,at,...extra}});
+ await s.write([row(selected,agent,'Selected archive',now-12*day),row(unseen,agent,'Unseen sibling',now-12*day+1000,{reply_to:selected}),
+  row(wire.newID(),agent,'Independent archive',now-11*day),row(latest,agent,'Current exact agent',now),
+  row(wire.newID(),hidden,'Hidden configured agent',now-12*day),row(wire.newID(),'','Ordinary human history',now-12*day),
+  row(wire.newID(),'','Internal report',now+1000,{status:'review_notice'})]);
+ const assertSnapshot=async(wantUnread)=>{
+  const overview=await e.topicOverview(false),view=await e.api('/api/thread?id='+selected),expected=overview.topics.find(c=>c.latest.agent_id===agent);
+  check(!overview.threads.some(t=>t.id===selected)&&view.topic.state==='archived','selected archive is absent from partial overview');
+  same(view.peer_topics,expected,'thread snapshot matches exact peer/agent overview metadata');
+  same([view.peer_topics.total,view.peer_topics.archived,view.peer_topics.archived_unread,view.peer_topics.latest.id,view.peer_topics.latest.title],[3,2,wantUnread,latest,'Current exact agent'],'snapshot excludes hidden agent, ordinary history and report');
+ };
+ await assertSnapshot(3);
+ await e.api('/api/act',{do:'read',ids:[selected]});await assertSnapshot(2);
+ check((await e.thread(selected)).messages.find(m=>m.id===unseen).unread,'unseen archived sibling stays unread');
+ // Capture an older overview before the view assembles a later arrival.
+ const oldSeq=e.seq,old=await e.topicOverview(false),thread=e.thread.bind(e);let included;
+ e.thread=async(id)=>{
+  await s.write([row(wire.newID(),agent,'Later archived arrival',now-10*day)]);e.changed();
+  const view=await thread(id);included=view.peer_topics.archived_unread;return view;
+ };
+ const raced=await e.api('/api/thread?id='+selected);
+ same([old.topics.find(c=>c.latest.agent_id===agent).archived_unread,included,raced.seq,e.seq],[2,3,oldSeq,oldSeq+1],'later arrival can enter a snapshot labeled with the earlier overview revision');
+ check(!('peer_topics'in raced),'mixed-revision archive count omitted so an equal-revision old overview cannot erase a newly confirmed count');
+ e.thread=thread;const stable=await e.api('/api/thread?id='+selected);
+ same([stable.seq,stable.peer_topics.archived_unread],[oldSeq+1,3],'next existing change/view supplies stable exact count');
+}
+
 console.log(JSON.stringify({ checks }));

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
+	"github.com/misunders2d/agentnet/internal/sqlitedb"
 )
 
 // This device suspended (owner policy "latest only", v0.8.17). A Hub that
@@ -445,7 +445,11 @@ func LocalUpdateRequired(home string) (UpdateRequired, bool) {
 	if _, err := os.Stat(dbPath); err != nil {
 		return UpdateRequired{}, false
 	}
-	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(dbPath)+"?mode=ro&_pragma=busy_timeout(2000)")
+	dsn, err := sqlitedb.FileURI(dbPath, "mode=ro&_pragma=busy_timeout(2000)")
+	if err != nil {
+		return UpdateRequired{}, false
+	}
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return UpdateRequired{}, false
 	}

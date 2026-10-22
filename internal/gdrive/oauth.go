@@ -175,6 +175,26 @@ func (o OAuthConfig) exchange(ctx context.Context, q url.Values) (Token, error) 
 	scope, _ := token.Extra("scope").(string)
 	return Token{Access: token.AccessToken, Refresh: token.RefreshToken, Scope: scope, Expiry: token.Expiry}, nil
 }
+
+// WebConsent prepares PKCE for a fixed server-owned HTTPS callback. It opens no
+// listener and returns no credentials. State belongs to the initiating admin.
+func (o OAuthConfig) WebConsent(redirect, state string) (link, verifier string, err error) {
+	u, err := url.Parse(redirect)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || o.ClientID == "" || state == "" {
+		return "", "", errors.New("configure the relay's fixed HTTPS Google OAuth callback first")
+	}
+	verifier = oauth2.GenerateVerifier()
+	cfg := oauth2.Config{ClientID: o.ClientID, ClientSecret: o.ClientSecret, RedirectURL: redirect, Scopes: []string{FileScope}, Endpoint: google.Endpoint}
+	return cfg.AuthCodeURL(state, oauth2.S256ChallengeOption(verifier), oauth2.AccessTypeOffline, oauth2.SetAuthURLParam("prompt", "consent select_account")), verifier, nil
+}
+
+func (o OAuthConfig) ExchangeWeb(ctx context.Context, redirect, code, verifier string) (Token, error) {
+	t, err := o.exchange(ctx, url.Values{"client_id": {o.ClientID}, "client_secret": {o.ClientSecret}, "code": {code}, "code_verifier": {verifier}, "redirect_uri": {redirect}, "grant_type": {"authorization_code"}})
+	if err == nil && !t.Has(FileScope) {
+		err = ErrConsent
+	}
+	return t, err
+}
 func (o OAuthConfig) Refresh(ctx context.Context, t Token) (Token, error) {
 	if t.Refresh == "" {
 		return Token{}, ErrConsent

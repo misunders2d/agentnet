@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"os"
 	"strings"
 	"testing"
@@ -21,10 +22,34 @@ func TestOwnPersonTasksDirectAndGroup(t *testing.T) {
 		setResponder(t, host, "stub", st.dir, time.Minute)
 		phone := linkedVia(t, host, "phone", approveLink(host))
 		publishGroupFixtureCaps(t, phone, true)
-		eventually(t, "phone current group", func() bool {
-			p, e := phone.GroupContext(group.State.Conv)
-			return e == nil && p.State.Hash() == group.State.Hash()
-		})
+		func() {
+			current := false
+			defer func() {
+				if current {
+					return
+				}
+				p, err := phone.GroupContext(group.State.Conv)
+				t.Logf("phone context snapshot host=%s want_seq=%d want_hash=%s got_seq=%d got_hash=%s error=%v", host.Address, group.State.Seq, group.State.Hash(), p.State.Seq, p.State.Hash(), err)
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				for side, a := range map[string]*Agent{"host": host, "phone": phone} {
+					var copies, quarantine, archives, history string
+					err := a.store.db.QueryRowContext(ctx, `SELECT
+ (SELECT json_group_array(json_object('sub',sub,'state',state,'count',n)) FROM
+  (SELECT coalesce(sub,'') sub,state,count(*) n FROM outbox WHERE recipient=? AND conv=? GROUP BY sub,state)),
+ (SELECT json_group_array(json_object('reason',reason,'count',n)) FROM
+  (SELECT reason,count(*) n FROM quarantine GROUP BY reason)),
+ (SELECT json_group_array(json_object('retained',retained,'done',done,'error_present',error<>'','position',pos)) FROM history_archive_jobs),
+ (SELECT json_group_array(json_object('state',state,'updated_at',updated_at)) FROM history_jobs WHERE device=?)`, phone.Address, group.State.Conv, phone.Address).Scan(&copies, &quarantine, &archives, &history)
+					t.Logf("phone context snapshot side=%s copies=%s quarantine=%s archives=%s history=%s upkeep_bits=%d reader_wait=%t error=%v", side, copies, quarantine, archives, history, a.convWork.bits.Load(), a.convWork.readerWait.Load(), err)
+				}
+			}()
+			eventually(t, "phone current group", func() bool {
+				p, e := phone.GroupContext(group.State.Conv)
+				return e == nil && p.State.Hash() == group.State.Hash()
+			})
+			current = true
+		}()
 		part, err := host.InviteAgent(tctx(t), group.State.Conv, host.Address, nil, nil, "own tasks without task keys")
 		if err != nil {
 			t.Fatal(err)

@@ -24,7 +24,7 @@ func TestComicReminderDateTimeRendered(t *testing.T) {
 	var server *Server
 	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { server.Handler().ServeHTTP(w, r) }))
 	t.Cleanup(ts.Close)
-	server = New(live, ts.Listener.Addr().String(), testToken)
+	server = New(live, ts.Listener.Addr().String(), testToken, os.Getenv("AGENTNET_REMINDER_SKINS"))
 	ts.Start()
 	cmd := exec.CommandContext(t.Context(), "node", "testdata/reminder_time_rendered.cjs")
 	cmd.Env = append(os.Environ(), "PARITY_URL="+ts.URL+"/?t="+testToken, "PARITY_FIRST="+sent.ID)

@@ -376,6 +376,55 @@ or were abandoned and direct uploads never attached to a message;
 `--saved` also removes directly received ciphertext of files you already
 saved.
 
+### Google Drive attachment backend (unreleased)
+
+One workspace administrator can connect one Google Drive account for the
+relay. All new attachments handled by that relay are then queued for Drive;
+ordinary members need no Google account. The relay uploads existing ciphertext
+with opaque names, preserving end-to-end encryption and chat references. This
+is separate from the explicit Project Space feature, which saves plaintext
+copies under Google permissions.
+
+Operator setup is done once on the relay:
+
+1. Enable the Drive API in the operator's Google Cloud project and create a
+   **Web application** OAuth client. Register the exact authorized redirect URI
+   `https://YOUR-RELAY/oauth/drive/attachments`, using the relay's public HTTPS
+   origin. A Desktop OAuth client or browser authorized origin is insufficient.
+2. Save the downloaded Web-client JSON as
+   `DATA/attachment-drive-oauth.json`, readable only by the operating-system
+   account running the relay (`0600` on Unix). Keep it outside this repository.
+   A different path can be supplied with `--attachment-drive-oauth-file` or
+   `AGENTNET_ATTACHMENT_DRIVE_OAUTH_FILE`. Never paste its secret into a chat,
+   browser Storage form, command argument or log.
+3. Start the candidate relay. Its administrator opens **Settings → Storage →
+   Connect Google Drive**, continues to Google in the system browser and
+   consents to the relay's account. AgentNet creates a private storage folder
+   with the narrow `drive.file` scope; members are not given Drive credentials
+   or direct Google sharing links.
+4. Existing local relay files remain until the administrator chooses **Move
+   existing attachments**. Transfers resume safely; local copies are removed
+   only after verified cloud storage and a saved mapping. A connection failure
+   leaves recoverable local ciphertext. Reconnect the same account if consent
+   expires while cloud-only attachments remain.
+
+Google's external OAuth applications left in **Testing** normally receive
+refresh tokens that expire after seven days for Drive access. Configure the
+consent application's production status and applicable Google requirements for
+durable use; Play developer-account verification is separate. See Google's
+[refresh-token rules](https://developers.google.com/identity/protocols/oauth2#expiration).
+
+Disconnect is refused while transfers or retained Drive attachment records
+still require that account. It does not erase Google files. Cleanup and full
+backup need the connected account, OAuth configuration and working Drive access
+for remote-only files. A full backup streams their verified ciphertext into
+the normal archive and fails rather than silently omitting unavailable data;
+restoring that complete archive requires no Google access. Keep the OAuth
+client file separately protected; it is not part of the portable archive.
+The archived Hub database still includes the connected Drive account and
+stored access/refresh-token records. Treat the whole archive as secret; the
+excluded OAuth client file does not make the backup public or credential-free.
+
 ## Backup and restore
 
 Stop the Hub, back up, start it again. The backup holds the database (after

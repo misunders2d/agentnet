@@ -9,7 +9,7 @@ import { pendingSends } from "./optimistic.mjs";
 import { useSyncExternalStore } from "react";
 import { api, errorText, type Api, type ReminderResult, type T } from "./api";
 import type { Host, HostEvent, OpenContext } from "./host";
-import { currentCatalogAgents, messageTarget } from "./model";
+import { currentCatalogAgents, directChatKey, messageTarget } from "./model";
 import { mainPreferences, personRoots } from "./person-topics.mjs";
 import { skin as brand } from "./skin/brand";
 import { share } from "./structural";
@@ -57,6 +57,7 @@ export type Tab = "chats" | "agents" | "oks" | "outbox" | "settings";
 
 /** A conversation as last loaded: a DM or group, or a device thread (one topic). */
 export type View = T.DMThread | T.Thread;
+type ConfirmedRead = { kind: "dm" | "thread"; id: string; seq: number; unread: number; group?: string; archived_unread?: number };
 const VIEWS_KEPT = 24; // conversations kept for an instant reopen (loaded again when opened)
 const OPEN_SLOW = 400; // ms a conversation may take to load before its placeholder shows
 
@@ -111,7 +112,7 @@ export class Store {
   private openRefresh: Promise<boolean> | null = null;
   private openAgain = false;
   private overviewRequest = 0;
-  private confirmedReads = new Map<string, { kind: "dm" | "thread"; id: string; seq: number; unread: number }>();
+  private confirmedReads = new Map<string, ConfirmedRead>();
   private confirmedReminders = new Map<string, { seq: number; reminder: T.ReminderView | null }>();
   private topicChanges = new Map<string, Promise<{ note: string } | undefined>>();
   private again = false;
@@ -348,7 +349,18 @@ export class Store {
     return o;
   }
 
-  private readOverview(o: T.Overview, read: { kind: "dm" | "thread"; id: string; unread: number }): T.Overview {
+  private readOverview(o: T.Overview, read: ConfirmedRead): T.Overview {
+    if (read.group && read.archived_unread !== undefined) {
+      const group = o.topics?.find(t => JSON.stringify([t.peer, directChatKey(t.latest)]) === read.group);
+      if (!group) return o;
+      const delta = read.archived_unread - group.archived_unread;
+      return { ...o,
+        ...(typeof o.unread_total === "number" ? { unread_total: Math.max(0, o.unread_total + delta) } : {}),
+        ...(typeof o.alert_total === "number" ? { alert_total: Math.max(0, o.alert_total + delta) } : {}),
+        topics: o.topics!.map(t => t === group ? { ...t, archived_unread: read.archived_unread!,
+          ...(t.latest.id === read.id ? { latest: { ...t.latest, unread: read.unread } } : {}) } : t),
+      };
+    }
     const summary = read.kind === "dm" ? o.dms?.find(d => d.id === read.id)
       : o.threads?.find(t => t.id === read.id) || o.topics?.find(t => t.latest.id === read.id)?.latest;
     if (!summary || summary.unread === read.unread) return o;
@@ -368,11 +380,19 @@ export class Store {
   private confirmReadOverview(o: NonNullable<Open>, view: View) {
     const overview = this.state.overview, seq = view.seq;
     if (!overview || typeof seq !== "number" || seq < overview.seq) return;
-    const read = { kind: o.kind, id: o.id, seq, unread: (view.messages || []).filter(m => m.unread).length };
-    const key = JSON.stringify([o.kind, o.id]);
+    const group = o.kind === "thread" && !overview.threads?.some(t => t.id === o.id) ? this.archivedRead(view) : undefined;
+    const read = { kind: o.kind, id: o.id, seq, unread: (view.messages || []).filter(m => m.unread).length, ...group };
+    const key = group ? "archived:" + group.group : JSON.stringify([o.kind, o.id]);
     if ((this.confirmedReads.get(key)?.seq || 0) > seq) return;
     this.confirmedReads.set(key, read);
     this.set({ overview: share(overview, this.readOverview(overview, read)) });
+  }
+
+  private archivedRead(view: View) {
+    const t = view as T.Thread, group = t.peer_topics;
+    if (t.topic?.state !== "archived" || t.topic.notice_only || !group || group.peer !== t.peer || t.topic.peer !== t.peer ||
+        directChatKey(group.latest) !== directChatKey(t.topic) || !Number.isSafeInteger(group.archived_unread) || group.archived_unread < 0) return undefined;
+    return { group: JSON.stringify([group.peer, directChatKey(group.latest)]), archived_unread: group.archived_unread };
   }
 
   private reminderOverview(o: T.Overview, message: string, reminder: T.ReminderView | null): T.Overview {
@@ -786,7 +806,8 @@ export class Store {
       this.set({ ...(first ? { open: o, pending: null } : {}), ...this.viewPatch(o, v, this.state.open?.id === o.id) });
       // A newer deliberate mark/arrival may follow a confirmed read while
       // its older overview is still blocked. Advance that exact snapshot too.
-      if (this.confirmedReads.has(JSON.stringify([o.kind, o.id]))) this.confirmReadOverview(o, v);
+      const group = o.kind === "thread" ? this.archivedRead(v) : undefined;
+      if (this.confirmedReads.has(group ? "archived:" + group.group : JSON.stringify([o.kind, o.id]))) this.confirmReadOverview(o, v);
       if (newHost) void this.loadAgentNames();
       this.markOpenRead();
       if (o.kind === "dm") void this.loadTyping();

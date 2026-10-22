@@ -83,6 +83,9 @@ type Config struct {
 	GoogleDesktopClientSecret string       // optional OAuth exchange setting; never public or logged
 	GoogleClientIDs           []string     // additional accepted audiences
 	GoogleHTTP                *http.Client // optional controlled transport (mock issuer tests); trust checks stay fixed
+
+	AttachmentDriveOAuthFile string       // owner-only Web OAuth configuration; default <DataDir>/attachment-drive-oauth.json
+	AttachmentDriveHTTP      *http.Client // controlled provider transport for tests; never selected by an API request
 }
 
 // Hub serves the AgentNet Hub API.
@@ -121,9 +124,10 @@ type Hub struct {
 
 	// workspace is the admin's workspace name ("" when none), changed under
 	// workspaceMu (workspace.go).
-	workspace   atomic.Pointer[string]
-	workspaceMu sync.Mutex
-	google      *googleauth.Validator
+	workspace       atomic.Pointer[string]
+	workspaceMu     sync.Mutex
+	google          *googleauth.Validator
+	attachmentDrive *relayDrive
 }
 
 // Open prepares the data directory, database, TLS certificate, and — for a
@@ -240,6 +244,10 @@ func Open(cfg Config) (*Hub, error) {
 	h.notifier = newNotifier(h)
 	h.notifier.send = webPusher(h.push, cfg.PublicURL, newPushClient())
 	if err := h.serveRelease(); err != nil { // after the notifier: a grace period's end wakes the member list
+		h.Close()
+		return nil, err
+	}
+	if err := h.initAttachmentDrive(); err != nil {
 		h.Close()
 		return nil, err
 	}
@@ -379,6 +387,7 @@ func (l *lateConns) state(c net.Conn, s http.ConnState) {
 
 // Close releases the database. Call after Serve returns.
 func (h *Hub) Close() error {
+	h.attachmentDrive.close()
 	h.presence.close()
 	h.updateMu.Lock()
 	h.update.Store(&updateState{}) // a grace end firing now plans no other

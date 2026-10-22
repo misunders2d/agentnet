@@ -214,8 +214,12 @@ func TestTopicOrganizationStaleVersionsAndMergeCutoff(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if _, e = w.alice.ApplyTopicOrganization(ctx, named); e != nil {
+	namedSent, e := w.alice.ApplyTopicOrganization(ctx, named)
+	if e != nil {
 		t.Fatal(e)
+	}
+	if raw := convMsgByID(t, w.alice, conv, namedSent.ID); raw.Body != TopicOrganizationNotice(newTopic, "Named destination") {
+		t.Fatalf("explicit human title changed in outgoing notice: %q", raw.Body)
 	}
 	topics, e = w.alice.ChatTopics(conv)
 	if e != nil {

@@ -78,7 +78,9 @@ func groupParticipationHistoryAfterReadmission(t *testing.T, sharedOriginal bool
 		for _, a := range []*Agent{approver, source, w.bob, executor} {
 			roomReader(t, a)
 		}
-		parent, e := w.bob.InviteHumanInScope(tctx(t), conv, executor.Address, nil, "", &topic)
+		inviteCtx, reportInvite := traceFixtureHTTP(t, tctx(t))
+		parent, e := w.bob.InviteHumanInScope(inviteCtx, conv, executor.Address, nil, "", &topic)
+		reportInvite(e)
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -334,7 +336,7 @@ func groupParticipationHistoryAfterReadmission(t *testing.T, sharedOriginal bool
 	func() {
 		accepted := false
 		defer func() {
-			if accepted || !derived {
+			if accepted {
 				return
 			}
 			// One post-wait snapshot, before daemon cleanup; identifiers stay in query parameters/results only.
@@ -361,6 +363,17 @@ SELECT (SELECT json_group_array(id) FROM copies),
 				return
 			}
 			t.Logf("history snapshot source_to_new_phone original_carriers=%d selected=%d possibly_capped=%t carriers=%s", originalCarriers, selected, selected == 32, carriers)
+			var producer string
+			e = source.store.db.QueryRowContext(ctx, `SELECT json_object(
+ 'jobs',(SELECT json_group_array(json_object('state',state,'updated_at',updated_at)) FROM history_jobs WHERE device=?),
+ 'export_errors',(SELECT json_group_array(substr(error,1,300)) FROM history_archive_export_errors WHERE recipient=?),
+ 'copies',(SELECT json_group_array(json_object('sub',sub,'state',state,'required',required_cap,'error',error,'count',n)) FROM
+ (SELECT coalesce(sub,'') sub,state,coalesce(required_cap,'') required_cap,coalesce(error,'') error,count(*) n FROM outbox WHERE recipient=? GROUP BY sub,state,required_cap,error)))`, phone.Address, phone.Address, phone.Address).Scan(&producer)
+			source.archivePosting.Lock()
+			active, again, closed := source.archivePosting.done != nil, source.archivePosting.again, source.archivePosting.closed
+			parentLive := source.archivePosting.archiveParent != nil && source.archivePosting.archiveParent.Err() == nil
+			source.archivePosting.Unlock()
+			t.Logf("history snapshot producer=%s error=%v archive_active=%t archive_again=%t archive_closed=%t archive_parent_live=%t archive_lock=%d upkeep_bits=%d reader_wait=%t", producer, e, active, again, closed, parentLive, len(source.archiveLock), source.convWork.bits.Load(), source.convWork.readerWait.Load())
 			var rows, held, archives string
 			var raw []byte
 			var historicalProof, currentProof, receipts int

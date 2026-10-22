@@ -67,6 +67,7 @@ a contract: AgentNet keeps them on the same elements, and
 | `composer-field` | Its text field's frame |
 | `send` | The send control |
 | `request` | A request card (`data-tone`: act, work, quiet) |
+| `relay-attachment-storage` | Relay-wide attachment storage status and admin controls |
 
 Prefer tokens over part styles, and part styles over new slots. Never hide a
 control or text with a part style: restyle it. Write part styles outside any

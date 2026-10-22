@@ -45,6 +45,9 @@ func (h *Hub) handleStorage(w http.ResponseWriter, r *http.Request) {
 			ManualUnattachedAgeDefaultSeconds: (24 * time.Hour).Seconds(),
 		},
 	}
+	if backend, err := h.store.relayDriveConnection(r.Context()); err == nil && backend.Token.Refresh != "" {
+		view.Location = "Relay-managed encrypted attachments: local spool and connected Google Drive"
+	}
 	if self.Admin {
 		global, err := h.storageUsage(r.Context(), "")
 		if err != nil {

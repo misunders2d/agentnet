@@ -130,7 +130,7 @@ func runHub(ctx context.Context, args []string) error {
 		}
 		defer m.Close()
 		r, err := m.Cleanup(*delivered, *unattached, 24*time.Hour)
-		if err == nil {
+		if err == nil || r.Files > 0 {
 			fmt.Printf("removed %d files, %d bytes; undelivered attachments are never removed\n", r.Files, r.Bytes)
 		}
 		return err
@@ -204,6 +204,7 @@ func hubServe(ctx context.Context, fs *flag.FlagSet, data *string, args []string
 	web := fs.Bool("web", env("WEB", "") == "1", "serve the browser messenger at this Hub's URL (env AGENTNET_WEB=1)")
 	googleWeb := fs.String("google-web-client-id", env("GOOGLE_WEB_CLIENT_ID", ""), "Google Web OAuth client ID for browser sign-in")
 	googleDesktop := fs.String("google-desktop-client-id", env("GOOGLE_DESKTOP_CLIENT_ID", ""), "Google Desktop OAuth client ID for app sign-in")
+	attachmentDriveOAuth := fs.String("attachment-drive-oauth-file", env("ATTACHMENT_DRIVE_OAUTH_FILE", ""), "owner-only Google Web OAuth JSON for relay ciphertext attachments (default DATA/attachment-drive-oauth.json)")
 	maxFile := fs.String("max-file", env("MAX_FILE", "100MiB"), "largest attachment (plaintext)")
 	quota := fs.String("quota", env("QUOTA", "1GiB"), "total attachment storage")
 	uploadTTL := fs.Duration("upload-ttl", mustDuration(env("UPLOAD_TTL", "24h")), "idle time before an unfinished upload is removed")
@@ -255,7 +256,8 @@ func hubServe(ctx context.Context, fs *flag.FlagSet, data *string, args []string
 	}
 	h, err := hub.Open(hub.Config{DataDir: *data, PublicURL: *public, AdminLabel: *adminLabel, PlatformTLS: *platformTLS, Web: *web,
 		GoogleWebClientID: *googleWeb, GoogleDesktopClientID: *googleDesktop, GoogleDesktopClientSecret: env("GOOGLE_DESKTOP_CLIENT_SECRET", ""),
-		MaxFileSize: maxBytes, StorageQuota: quotaBytes, UploadTTL: *uploadTTL, UpdateGrace: grace, PushHosts: extra, BrowserOrigins: []string(browserOrigins)})
+		AttachmentDriveOAuthFile: *attachmentDriveOAuth,
+		MaxFileSize:              maxBytes, StorageQuota: quotaBytes, UploadTTL: *uploadTTL, UpdateGrace: grace, PushHosts: extra, BrowserOrigins: []string(browserOrigins)})
 	if err != nil {
 		return err
 	}

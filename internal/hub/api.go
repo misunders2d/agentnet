@@ -58,7 +58,10 @@ func (h *Hub) routes() http.Handler {
 	mux.HandleFunc("GET /v1/storage", h.handleStorage)                     // hub/storage.go: the caller's own ciphertext usage, read-only
 	mux.HandleFunc("GET /v1/storage/drive", h.handleDriveStorageGet)       // hub/drivestorage.go: public Drive storage config (no tokens)
 	mux.HandleFunc("PUT /v1/admin/storage/drive", h.handleDriveStoragePut) // admin only, compare-and-swap
-	mux.HandleFunc("GET /v1/teams", h.handleTeams)                         // hub/teams.go: signed team directory
+	mux.HandleFunc("GET /v1/storage/attachments", h.handleAttachmentStorageGet)
+	mux.HandleFunc("POST /v1/admin/storage/attachments", h.handleAttachmentStorageAction)
+	mux.HandleFunc("GET "+attachmentDriveCallback, h.handleAttachmentDriveCallback)
+	mux.HandleFunc("GET /v1/teams", h.handleTeams) // hub/teams.go: signed team directory
 	mux.HandleFunc("PUT /v1/team", h.handlePutTeam)
 	mux.HandleFunc("DELETE /v1/teams/{id}", h.handleDeleteTeam)
 	mux.HandleFunc("GET /v1/teams/{id}/chain", h.handleTeamChain)

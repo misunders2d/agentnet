@@ -144,7 +144,7 @@ CREATE TABLE realm(
   CHECK ((initialized = 0 AND realm_id IS NULL) OR
          (initialized = 1 AND realm_id IS NOT NULL)));
 INSERT INTO realm(id, initialized) VALUES(1, 0);
-`, TeamSchema, driveStorageSchema, GroupHubSchema, agentCatalogSchema, receiptSchema, workspaceSchema, deviceAdminSchema, inviteHintsSchema, googleSchema, deviceAdminNoticeSchema, updateSchema, messageLaneSchema, revokedCustodyRepairSchema, groupInvitationFenceSchema}
+`, TeamSchema, driveStorageSchema, GroupHubSchema, agentCatalogSchema, receiptSchema, workspaceSchema, deviceAdminSchema, inviteHintsSchema, googleSchema, deviceAdminNoticeSchema, updateSchema, messageLaneSchema, revokedCustodyRepairSchema, groupInvitationFenceSchema, attachmentDriveSchema}
 
 const messageLaneSchema = `
 ALTER TABLE messages ADD COLUMN lane TEXT NOT NULL DEFAULT 'live' CHECK (lane IN ('live','sync'));

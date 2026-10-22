@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -23,9 +24,10 @@ import (
 // refuses to run while the Hub is up; stopping the Hub briefly is the
 // supported way to get a consistent copy.
 type Maintenance struct {
-	dir    string
-	store  *store
-	unlock func()
+	dir            string
+	store          *store
+	unlock         func()
+	attachmentHTTP *http.Client // controlled provider transport in faithful tests
 }
 
 // OpenMaintenance locks and opens a Hub data directory.
@@ -126,8 +128,17 @@ func (m *Maintenance) Cleanup(delivered, unattached, uploadTTL time.Duration) (A
 	}
 	rows.Close()
 	var removed Amount
+	var retained int
+	var remoteErr error
 	blobs := filepath.Join(m.dir, "blobs")
 	for _, v := range vs {
+		if err := m.cleanupRemoteAttachment(v.id); err != nil {
+			retained++
+			if remoteErr == nil {
+				remoteErr = err
+			}
+			continue // an unavailable Drive victim must not block local cleanup
+		}
 		if err := blobfile.RemoveIfExists(filepath.Join(blobs, v.id+".part"), filepath.Join(blobs, v.id+".blob")); err != nil {
 			return removed, err
 		}
@@ -140,12 +151,16 @@ func (m *Maintenance) Cleanup(delivered, unattached, uploadTTL time.Duration) (A
 		removed.Files++
 		removed.Bytes += v.size
 	}
+	if retained > 0 {
+		return removed, fmt.Errorf("retained %d Drive attachment(s) for retry; other eligible cleanup completed: %w", retained, remoteErr)
+	}
 	return removed, nil
 }
 
 // backupSkip lists files that are not part of a backup.
 func backupSkip(name string) bool {
 	return name == "hub.lock" || name == "hub.db.upgrade.lock" || strings.HasSuffix(name, "-wal") || strings.HasSuffix(name, "-shm") ||
+		name == AttachmentDriveOAuthFile ||
 		strings.Contains(name, ".v") && strings.HasSuffix(name, ".bak")
 }
 
@@ -158,9 +173,20 @@ func (m *Maintenance) Backup(w io.Writer) error {
 	}
 	gz := gzip.NewWriter(w)
 	tw := tar.NewWriter(gz)
-	err := filepath.WalkDir(m.dir, func(p string, d fs.DirEntry, err error) error {
+	oauthPath, err := m.attachmentOAuthPath()
+	if err != nil {
+		return err
+	}
+	err = filepath.WalkDir(m.dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || backupSkip(d.Name()) {
 			return err
+		}
+		absolute, pathErr := filepath.Abs(p)
+		if pathErr != nil {
+			return pathErr
+		}
+		if absolute == oauthPath {
+			return nil
 		}
 		if !d.Type().IsRegular() {
 			return fmt.Errorf("%s: not a regular file", p)
@@ -184,6 +210,9 @@ func (m *Maintenance) Backup(w io.Writer) error {
 		f.Close()
 		return err
 	})
+	if err == nil {
+		err = m.backupRemoteAttachments(tw)
+	}
 	if err == nil {
 		err = tw.Close()
 	}
@@ -291,7 +320,13 @@ func Restore(r io.Reader, dir string) (RestoreSummary, error) {
 		return sum, err
 	}
 	defer m.Close()
-	return m.verify()
+	sum, err = m.verify()
+	if err == nil {
+		// Every restored stored blob was just verified locally. Do not let an
+		// archived remote-proof flag delete it without checking Drive again.
+		_, err = m.store.db.Exec(`UPDATE relay_drive_blobs SET local_present=1,state='pending'`)
+	}
+	return sum, err
 }
 
 func (m *Maintenance) verify() (RestoreSummary, error) {

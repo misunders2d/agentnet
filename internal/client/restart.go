@@ -14,6 +14,7 @@ import (
 
 	"github.com/misunders2d/agentnet/internal/protocol"
 	"github.com/misunders2d/agentnet/internal/secfile"
+	"github.com/misunders2d/agentnet/internal/sqlitedb"
 )
 
 // Switching a running daemon to an updated program file (agentnet update).
@@ -307,7 +308,11 @@ func HomeSchema(home string) (version int, found bool, err error) {
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		return 0, false, nil
 	}
-	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro&_pragma=busy_timeout(5000)")
+	dsn, err := sqlitedb.FileURI(path, "mode=ro&_pragma=busy_timeout(5000)")
+	if err != nil {
+		return 0, true, err
+	}
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return 0, true, err
 	}

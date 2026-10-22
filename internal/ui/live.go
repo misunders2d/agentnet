@@ -356,12 +356,17 @@ func (l *Live) Thread(id string) (Thread, error) {
 		return t, err
 	}
 	t.Key = PeerKey{Pinned: k.Pinned, Pending: k.Pending}
-	topic, err := l.a.TopicOf(id)
+	var counts client.PeerTopics
+	topic, err := l.a.TopicOf(id, &counts)
 	if err != nil {
 		return t, err
 	}
 	ts := threadSummary(topic, k.Pending != "")
 	t.Topic = &ts
+	if !topic.NoticeOnly && counts.Total > 0 {
+		t.PeerTopics = &PeerTopics{Peer: counts.Peer, Total: counts.Total, Archived: counts.Archived, ArchivedUnread: counts.ArchivedUnread,
+			Latest: threadSummary(counts.Latest, k.Pending != "")}
+	}
 	if ts.AgentHost != "" && ts.AgentHost != c.Peer {
 		key, err := l.a.PeerKeyOf(ts.AgentHost)
 		if err != nil {

@@ -50,8 +50,8 @@ an AgentNet API path") and its errors are plain text with no `.status`.
 **Errors on B.** The engine switches on the pathname only and **ignores the
 HTTP method**. "GET" and "POST" differ only in whether `body` is passed.
 `/api/reply-sessions`, `/api/agents` and `/api/approvals` refuse a body;
-`/api/typing`, `/api/drive`, `/api/drive/setup` and `/api/google/access`
-treat a body as their write; other reads ignore one. An unknown path throws
+`/api/typing`, `/api/drive`, `/api/drive/setup`, `/api/storage/attachments`
+and `/api/google/access` treat a body as their write; other reads ignore one. An unknown path throws
 `Unknown request.`, and a refused route throws a sentence. Most body fields
 are not checked strictly. An error from a relay call carries `.status`, the
 **relay's** HTTP status (0 when the relay is unreachable), and `.code`.
@@ -77,7 +77,7 @@ and catch the error. Failures differ by platform.
 | Route | Platforms | Purpose | Request | Response |
 |---|---|---|---|---|
 | `GET /api/overview` | D B | Everything around the open chat. Read it again on every `change` event. With `topics=1`, archived agent topics are only counted in `topics` and are paged through `/api/topics` (Comic does this). Without it, every thread is listed. A read through `host.api` (with or without a query) records the identity that `host.reconnect()` needs. | `?topics=1` optional | `Overview` (see Overview fields) |
-| `GET /api/thread` | D B | One device thread, which is a chat with an agent's device. | `?id=<any message id or synthetic direct-topic id in it>` | `{id, seq?, peer, key:{pinned?, pending?}, approved, permission_person?, question_target?, task_target?, task_grant, messages:[Message], topic?}` |
+| `GET /api/thread` | D B | One device thread, which is a chat with an agent's device. | `?id=<any message id or synthetic direct-topic id in it>` | `{id, seq?, peer, key:{pinned?, pending?}, approved, permission_person?, question_target?, task_target?, task_grant, messages:[Message], topic?, peer_topics?}` |
 | `GET /api/dm` | D B | One conversation: a direct message or a group. | `?id=<conv>` | `{id, seq?, kind?, title?, peer, members?, role?, created, mine, frozen?, messages:[DMMessage], agents:[AgentView], guests?, main_topic?, topics?, audience_pending?, resources?:{links:[{name,url}],rev,writer,lid}}`; resources are present only for current human group members, never guests or DMs |
 | `GET /api/unread` | D B | Optional, read-only page of effective unread messages, including accessible Done/Archived topics and deliberately marked sent messages. Unsupported providers omit the overview totals and refuse this route. | Optional `after` (previous `next`) and `limit` (default 50, maximum 200) | `{rows:[{key,kind,conv?,peer?,thread?,topic?,topic_title?,id,lid,author,dir,at,label,preview}],total,next?,content,seq}` |
 
@@ -343,6 +343,14 @@ may return only `{note}` after a successful action. Skins may reconcile confirme
 attention immediately, retaining newer overview state and ignoring late older
 snapshots. A successful read action alone does not prove a generation CAS won.
 
+A thread may include `peer_topics`, using the overview's per-peer topic-count
+shape and exact original agent group. Its `archived_unread` is an absolute
+snapshot, including archived topics omitted from the paged overview. It is
+present only when the revision stays unchanged during thread assembly. A skin
+can replace that group's archived count until an overview at least as new as
+`seq` arrives; do not also subtract the selected thread's archived delta.
+Missing metadata retains the ordinary overview fallback.
+
 Reminder intent uses signed, encrypted quiet `reminder-sync` carriers, explicitly gated by
 `rem1`; it grants no execution or read authority. This allocation consumes the final
 reserved capability slot: producers may now advertise 32 names, matching the existing
@@ -428,6 +436,8 @@ foreign and historical claims never authorize it. Saved is not completed.
 | `GET /api/workspace` | D B | The workspace's own name, and whether this device may rename it for everyone. | — | `{name, server, can_rename}` |
 | `POST /api/workspace/name` | D B | Rename the workspace for everyone (admin only). `""` clears the name. | `{name}` | `{name, server, can_rename}` |
 | `GET /api/storage` | D B | Read-only: where this device's files are kept and how much space they use. | — | `{local, remote}` |
+| `GET /api/storage/attachments` | D B | Read-only: where this workspace's relay keeps attachment ciphertext, its own disk or the one Google Drive its admin connected. `state` is local, not_configured, connected, migrating, needs_reconnect or offline. `account` and `folder` come only to an admin; a read never starts consent and never carries `consent_url`. 404 when the relay or provider does not offer it. | — | `{can_admin, configured, connected, state, notice?, account?:{email, name}, folder?:{id, name}, local:{files, bytes}, remote:{files, bytes}, pending:{files, bytes}, remote_only_files, migration:{running, files, bytes, total_files, total_bytes}}` |
+| `POST /api/storage/attachments` | D B | Change it; the relay alone decides admin authority (`can_admin` is a display hint). `connect` answers with the initiating admin's `consent_url`; `move` moves existing relay ciphertext to that Drive; `disconnect` is refused while `remote_only_files` is above 0. Other actions and fields are refused before the relay. A non-admin gets "Only an admin of your server can change workspace attachment storage." D refusals are 409 with the relay's sentence; B errors carry the relay's `.status`. | `{action: "connect" or "move" or "disconnect", confirm?}`; `move` and `disconnect` need `confirm:true` | the same status; `consent_url` only for `connect` |
 | `GET /api/assistant-setup` | D | Connect coding sessions (hooks): which tools are detected and configured. Android and the demo answer `local:false` with a `note`. B: "Unknown request." | — | `{local, harnesses:[{id, label, detected, configured, registered, supported, state, note, change?, next?, target?}], review_id?, note?}` |
 | `POST /api/assistant-setup` | D | Review a change with `action:"review"`, then apply exactly that review with `action:"apply"`. Any other action gives 409 on a live program, Android included; the demo answers every POST with `local:false` and a note. B: "Unknown request." | `{action, harnesses?:[id], review_id?}` | same view |
 | `GET /api/folders` | D B† | One folder's subfolders, read-only, for Connect an agent's folder picker. Android refuses (409). B: "Folders are chosen in the AgentNet app on a computer: this browser cannot see that computer's folders." | `?path=` optional | `{path, parent?, home, roots?, dirs:[{name, path}], truncated?}` |

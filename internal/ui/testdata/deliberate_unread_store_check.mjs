@@ -39,7 +39,7 @@ function fixture(saved={}) {
     else throw Error('Unexpected action');return{};
    }throw Error('Unexpected route '+path);
   }};
- const Store=runInNewContext(scheduleSource+'\n'+source+'\nStore',{...env,api,errorText,pendingSends,share,messageTarget:model.messageTarget,currentCatalogAgents:model.currentCatalogAgents,mainPreferences,personRoots,brand:{storage:'agentnet.messenger'}});
+ const Store=runInNewContext(scheduleSource+'\n'+source+'\nStore',{...env,api,errorText,pendingSends,share,messageTarget:model.messageTarget,currentCatalogAgents:model.currentCatalogAgents,directChatKey:model.directChatKey,mainPreferences,personRoots,brand:{storage:'agentnet.messenger'}});
  f.store=new Store(host);f.host=host;
  // The original small fixture's rows all fit. Model presentation explicitly;
  // focused cases below restrict it without changing provider read semantics.

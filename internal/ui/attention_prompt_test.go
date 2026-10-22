@@ -14,9 +14,11 @@ func TestAttentionChangesDoNotWaitForOverview(t *testing.T) {
 
 type attentionResponseFixture struct {
 	*Fixture
-	seq         uint64
-	reminder    *ReminderView
-	snapshotErr error
+	seq          uint64
+	reminder     *ReminderView
+	snapshotErr  error
+	thread       *Thread
+	threadChange bool
 }
 
 func (f *attentionResponseFixture) Changed() (uint64, <-chan struct{}) { return f.seq, nil }
@@ -39,8 +41,42 @@ func (f *attentionResponseFixture) reminderSnapshot(string) (*ReminderView, erro
 	return f.reminder, f.snapshotErr
 }
 func (f *attentionResponseFixture) Thread(id string) (Thread, error) {
+	if f.thread != nil {
+		if f.threadChange {
+			f.seq++
+		}
+		return *f.thread, nil
+	}
 	f.seq++
 	return Thread{ID: id}, nil
+}
+
+func TestThreadAttentionSnapshotRequiresStableRevision(t *testing.T) {
+	for _, changed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "stable", true: "arrival_during_assembly"}[changed], func(t *testing.T) {
+			// The changed case includes a later archived arrival in its metadata.
+			// Labeling that count with 10 would let an older overview at 10
+			// retire it and erase the arrival. Omit only this optional fast path.
+			f := &attentionResponseFixture{Fixture: NewFixture(time.Now), seq: 10, threadChange: changed,
+				thread: &Thread{ID: "exact", PeerTopics: &PeerTopics{Peer: "peer/device", ArchivedUnread: 7}}}
+			ts := httptest.NewUnstartedServer(nil)
+			ts.Config.Handler = New(f, ts.Listener.Addr().String(), testToken).Handler()
+			ts.Start()
+			t.Cleanup(ts.Close)
+			response := do(t, ts, "GET", "/api/thread?id=exact", "", authed(ts, nil))
+			var view Thread
+			if err := json.NewDecoder(response.Body).Decode(&view); err != nil || response.StatusCode != 200 || view.Seq != 10 {
+				t.Fatalf("start-of-view revision: %+v %v", view, err)
+			}
+			if changed {
+				if view.PeerTopics != nil || f.seq != 11 {
+					t.Fatalf("mixed-revision aggregate was published: %+v", view)
+				}
+			} else if view.PeerTopics == nil || view.PeerTopics.ArchivedUnread != 7 {
+				t.Fatalf("stable exact metadata absent: %+v", view)
+			}
+		})
+	}
 }
 func (f *attentionResponseFixture) DM(id string) (DMThread, error) {
 	f.seq++

@@ -397,7 +397,24 @@ func TestProposalReplyKeepsLegacyAskerBinding(t *testing.T) {
 	w, conv, _, _ := agentWorld(t)
 	setResponder(t, w.bob, "agentstub", st.dir, time.Minute)
 	pid := participate(t, w, conv, nil, nil)
-	signCapsAfter(t, w.alice, without(ownCaps, protocol.CapOwnSyncV3))
+	// AskAgent wakes the current daemon, which republishes its real readers.
+	// Keep this exact session's old-reader fixture dominant for the legacy
+	// phase, using the same signed future record as the group fixtures.
+	for session, latest := range sessionRecords(t, w.alice) {
+		record := protocol.CapsRecord{Address: w.alice.Address, Session: session, Caps: without(ownCaps, protocol.CapOwnSyncV3), TS: max(latest.TS+1, time.Now().Unix()+200)}
+		record.Sign(w.alice.id.Sign)
+		if err := record.ValidateAdvertisement(); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.alice.hub.do(tctx(t), "PUT", "/v1/caps", record, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	key := w.alice.Self()
+	eventually(t, "executor observes verified legacy asker capabilities", func() bool {
+		profile, err := w.bob.peerProfile(tctx(t), w.alice.Address)
+		return err == nil && profile.Supports(w.alice.Address, key.SignKey, protocol.CapEnv2) && !profile.Supports(w.alice.Address, key.SignKey, protocol.CapOwnSyncV3)
+	})
 	st.mode("propose")
 	q, err := w.alice.AskAgent(tctx(t), pid, envelope.KindQuestion, "Legacy question")
 	if err != nil {
@@ -425,6 +442,10 @@ func TestProposalReplyKeepsLegacyAskerBinding(t *testing.T) {
 		t.Fatalf("legacy exact confirmation runs=%d", st.runs())
 	}
 	signCapsAfter(t, w.alice, ownCaps)
+	eventually(t, "executor observes verified current asker capabilities", func() bool {
+		profile, err := w.bob.peerProfile(tctx(t), w.alice.Address)
+		return err == nil && profile.Supports(w.alice.Address, key.SignKey, protocol.CapEnv2) && profile.Supports(w.alice.Address, key.SignKey, protocol.CapOwnSyncV3)
+	})
 	st.mode("propose")
 	newQ, err := w.alice.AskAgent(tctx(t), pid, envelope.KindQuestion, "Current question")
 	if err != nil {

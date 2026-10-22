@@ -726,21 +726,37 @@ const chatOrder=(a,b)=>chatSent(a)-chatSent(b)||(a.lid<b.lid?-1:a.lid>b.lid?1:0)
 export function summarizeChatTopics(conv,msgs,locals=new Map(),now=Math.floor(Date.now()/1000),assigned=null) {
  return summarizeChatTopicView(conv,msgs,locals,now,false,assigned);
 }
+// Display-only inverse of the canonical notice, after ordinary admission.
+// Human/shared title registers retain their existing precedence below.
+export function topicOrganizationNoticeTitle(topic,body) {
+ const prefix="Moved selected messages to new topic “",suffix="”.";
+ if(!topic||typeof body!=="string"||!body.startsWith(prefix)||!body.endsWith(suffix))return "";
+ const title=body.slice(prefix.length,-suffix.length);
+ return title&&[...title].length<=TOPICS.titleMax&&wire.normalizeSharedTopicTitle(title)===title&&prefix+title+suffix===body?title:"";
+}
+function formatTopicOrganizationNotice(topic,title="") {
+ if(!topic)return "Moved selected messages to Main flow.";
+ title=String(title||"").trim().replace(/\s+/g," ");
+ return title?"Moved selected messages to “"+title+"”.":"Moved selected messages to topic "+topic+".";
+}
 const MAIN_TOPIC_KEY="0".repeat(32);
 const mainTopicScope=async conv=>wire.hex(await wire.sha256(new TextEncoder().encode("agentnet/main-flow-preference/v1\0"+conv)));
 const mainChatMessages=msgs=>{const assigned=chatTopicAssignments(msgs);return msgs.filter(m=>!m.sub&&!m.topic_event&&!assigned.get(m.lid));};
 function summarizeChatTopicView(conv,msgs,locals,now,main,assigned=null) {
  assigned ||= chatTopicAssignments(msgs);const groups=new Map(),events=new Map(),out=[];
  for(const m of msgs){if(m.sub)continue;if(m.topic_event){if(!main)events.set(m.topic,[...(events.get(m.topic)||[]),m]);continue;}const id=assigned.get(m.lid)||"";if(main?!id:!!id)groups.set(id,[...(groups.get(id)||[]),m]);}
- for(const [id,g] of groups){sortChatTurns(g);const first=g[0],last=g.at(-1),local=locals.get(conv+"/"+id)||{};let shared={},by="";
+ for(const [id,g] of groups){sortChatTurns(g);const first=g[0],last=g.at(-1),local=locals.get(conv+"/"+id)||{};let shared={},by="",autoTitle=bodyPreview(first.body),namedBy=null;
   const aliases=new Map();for(const m of g){if(m.id)aliases.set(m.id,m.lid);for(const c of m.copies||[])if(c.id)aliases.set(c.id,m.lid);}
   const facts=g.map(m=>{const job=m.job||"",state=job||m.state||"";return {id:m.lid,reply_to:aliases.get(m.reply_to)||m.reply_to||"",at:chatSent(m),kind:m.kind,status:m.status||"",topic_done:!!m.topic_done,in:!!job&&!m.to||["answer","result"].includes(m.kind),state,localJob:!!job,execState:m.exec?.state||"",execStale:!!m.exec?.stale};});
-  for(const m of sortChatEvents(events.get(id)||[])){if(!["done","open"].includes(m.topic_event.action))continue;const seen=new Set(m.topic_event.seen||[]);if(g.every(r=>seen.has(r.lid))){shared={mark:m.topic_event.action,mark_at:chatSent(m),mark_count:g.length};by=m.from||"";}else{shared={};by="";}}
+  for(const m of sortChatEvents(events.get(id)||[])){
+   if(wire.agentTopicOrganization(m)&&(!namedBy||chatOrder(m,namedBy)<0)){const title=topicOrganizationNoticeTitle(id,m.body);if(title){autoTitle=title;namedBy=m;}}
+   if(!["done","open"].includes(m.topic_event.action))continue;const seen=new Set(m.topic_event.seen||[]);if(g.every(r=>seen.has(r.lid))){shared={mark:m.topic_event.action,mark_at:chatSent(m),mark_count:g.length};by=m.from||"";}else{shared={};by="";}
+  }
   const l=main?local:local.mark==="archived"&&local.mark_count>=g.length+(events.get(id)||[]).length&&local.mark_at>=(shared.mark_at||0)?local:shared,v=deriveTopic(facts,l,now);
   const activity=Math.max(chatSent(last),...(events.get(id)||[]).map(chatSent));
   v.quiet_since=Math.max(v.quiet_since,activity);
   if(v.state==="archived"&&l.mark!=="archived"&&now-v.quiet_since<TOPICS.archiveAfter)v.state=v.done_by?"done":"active";
-  const t={id,conv,peer:"",title:bodyPreview(first.body),last:bodyPreview(last.body),last_at:iso(activity*1000),count:g.length,state:v.state,pending:v.pending,quiet_since:iso(v.quiet_since*1000),review:g.filter(m=>["held","needs_human"].includes(m.job)).length,unread:0,running:g.filter(m=>m.job==="running").length,waiting:false,key_changed:false,notices:0,notice_only:false};
+  const t={id,conv,peer:"",title:autoTitle,last:bodyPreview(last.body),last_at:iso(activity*1000),count:g.length,state:v.state,pending:v.pending,quiet_since:iso(v.quiet_since*1000),review:g.filter(m=>["held","needs_human"].includes(m.job)).length,unread:0,running:g.filter(m=>m.job==="running").length,waiting:false,key_changed:false,notices:0,notice_only:false};
   const pending=pendingTopicRows(facts),work=topicWaiting(facts,pending); // Pending alone is no evidence anything waits
   t.waiting=work.waiting;if(work.unconfirmed)t.unconfirmed=work.unconfirmed;
   if(v.pending)t.pending_ids=pending.map(i=>g[i].id);
@@ -4698,13 +4714,13 @@ export class Engine {
     return out.sort(byNewest);
   }
 
-  topicSummary(g, locals, now, pin) {
+  topicSummary(g, locals, now, pin, includeText=true) {
     const first = g.find(m=>m.id===g[0].display_topic)||g[0], last = g[g.length - 1];
     // A review notice is a report from that machine (client.ThreadSummary):
     // counted while open, and a thread of nothing but reports is not a
     // conversation (the page lists it under reports).
     const notice = (m) => m.kind === "message" && m.status === "review_notice" && !m.reply_to && !(m.attachments || []).length;
-    const line = (m) => (notice(m) ? this.noticeLine({...m,from:m.from||this.address}) : m.preview_line ?? bodyPreview(m.body));
+    const line = (m) => !includeText ? "" : (notice(m) ? this.noticeLine({...m,from:m.from||this.address}) : m.preview_line ?? bodyPreview(m.body));
     const local = this.topicLocalOf(locals, first.peer, g);
     // A browser device runs no agent: a received request it answered
     // (replyV1: "answered") was answered by hand, the Go client's "manual".
@@ -4745,15 +4761,20 @@ export class Engine {
   // counts (client TopicOverview): archived topics only counted unless
   // listArchived (GET /api/overview without topics=1: a page that knows
   // nothing of topics still reaches every thread).
+  topicPeerKey(t) { return JSON.stringify(t.agent_id||t.agent_legacy?[t.agent_host||t.peer,t.agent_key||"",t.agent_id||""]:[t.peer,"","human"]); }
+  addPeerTopic(c,t) {
+    if(t.notice_only)return;
+    if(!c.total||byNewest(t,c.latest)<0)c.latest=t;
+    c.total++;
+    if(t.state==="archived"){c.archived++;c.archived_unread+=t.unread;}
+  }
   async topicOverview(listArchived, view = null) {
     const all = await this.threadSummaries(view), threads = [], counts = new Map();
     for (const t of all) {
       if (listArchived || t.state !== "archived" || t.notice_only) threads.push(t);
       if (t.notice_only) continue;
-      const c = counts.get(JSON.stringify(t.agent_id||t.agent_legacy?[t.agent_host||t.peer,t.agent_key||"",t.agent_id||""]:[t.peer,"","human"])) || { peer: t.peer, total: 0, archived: 0, archived_unread: 0, latest: t }; // all is newest first
-      c.total++;
-      if (t.state === "archived") { c.archived++; c.archived_unread += t.unread; }
-      counts.set(JSON.stringify(t.agent_id||t.agent_legacy?[t.agent_host||t.peer,t.agent_key||"",t.agent_id||""]:[t.peer,"","human"]), c);
+      const key=this.topicPeerKey(t),c = counts.get(key) || { peer: t.peer, total: 0, archived: 0, archived_unread: 0, latest: t };
+      this.addPeerTopic(c,t);counts.set(key,c);
     }
     return { threads, topics: [...counts.values()].sort((a, b) => (a.peer < b.peer ? -1 : 1)) };
   }
@@ -5059,8 +5080,7 @@ export class Engine {
 
   async topicOrganizationNotice(conv,topic,title="") {
     if(!topic)return "Moved selected messages to Main flow.";
-    title=String(title||(await this.store.get("kv","topic/"+conv+"/"+topic))?.title||"").trim().replace(/\s+/g," ");
-    return title?"Moved selected messages to “"+title+"”.":"Moved selected messages to topic "+topic+".";
+    return formatTopicOrganizationNotice(topic,title||(await this.store.get("kv","topic/"+conv+"/"+topic))?.title);
   }
   async applyTopicOrganization(review) {
     if(review?.peer)return this.applyDirectTopicOrganization(review);
@@ -5069,7 +5089,7 @@ export class Engine {
     if(kept)return kept;
     let current;try{current=await this.topicOrganizationPreview(review);}catch{throw Error("The selected messages, topic or audience changed; review the move again.");}
     if(current.review.token!==review.token||wire.topicEventJSON({action:"move",moves:current.review.moves})!==wire.topicEventJSON({action:"move",moves:review.moves})||(current.review.parent||"")!==(review.parent||""))throw Error("The selected messages, topic or audience changed; review the move again.");
-    const outgoing={id:review.operation,queued:true,kind:"message",body:await this.topicOrganizationNotice(review.conv,review.topic,review.title),topic:review.topic,topic_event:event,reply_to:review.parent||"",origin:"ui",organization_review:review};
+    const outgoing={id:review.operation,queued:true,kind:"message",body:formatTopicOrganizationNotice(review.topic,review.title),topic:review.topic,topic_event:event,reply_to:review.parent||"",origin:"ui",organization_review:review};
     try{const sent=current.c.kind==="group"?await this.sendGroupTurn(current.c,outgoing):await this.sendConv(current.c,outgoing);if(review.new&&review.title)this.syncTopicTitles().catch(()=>{});return sent;}
     catch(e){const saved=await this.keptTopicOrganization(review,event);if(saved)return saved;throw e;}
   }
@@ -8580,6 +8600,28 @@ export class Engine {
       else remote.reason = "Storage usage could not be verified with the server.";
     }
     return { local, remote };
+  }
+
+  // relayAttachmentStorage is where the relay keeps attachment ciphertext
+  // (drivecontract.RelayStorageStatus), only through this workspace's signed
+  // relay calls. The relay alone decides admin authority. A change is exactly
+  // connect, move or disconnect; only connect's answer keeps a consent link.
+  async relayAttachmentStorage(body) {
+    try {
+      let v;
+      if (body === undefined) v = await this.call("GET", "/v1/storage/attachments");
+      else {
+        if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some((k) => k !== "action" && k !== "confirm")
+          || !["connect", "move", "disconnect"].includes(body.action) || body.confirm != null && typeof body.confirm !== "boolean") throw new Error("Choose connect, move or disconnect.");
+        v = await this.call("POST", "/v1/admin/storage/attachments", body.confirm ? { action: body.action, confirm: true } : { action: body.action });
+      }
+      if (v && typeof v === "object" && body?.action !== "connect") delete v.consent_url;
+      return v;
+    } catch (e) {
+      if (e instanceof HubError && e.status === 404) throw new HubError(404, e.code, "Your server does not offer workspace attachment storage.");
+      if (e instanceof HubError && e.status === 403) throw new HubError(403, e.code, "Only an admin of your server can change workspace attachment storage.");
+      throw e;
+    }
   }
 
   // ---- controls: reactions, revisions and retractions (client/controls.go)
@@ -12272,7 +12314,7 @@ export class Engine {
       }
     }
     view.attentionTarget ||= id;
-    const g = (await this.v1Threads(view)).find((x) => x[0].display_topic===id||x.some((m) => m.id === id));
+    const groups=await this.v1Threads(view),g = groups.find((x) => x[0].display_topic===id||x.some((m) => m.id === id));
     if (!g) throw new Error("No message with that id.");
     const peer = g[0].peer;
     const pin = await this.store.get("pins", peer);
@@ -12295,11 +12337,20 @@ export class Engine {
     };
     const heldText = "Held for you: nothing runs in this browser. Answer it here if you want to.";
     const peerWords = (await this.peerWordsFn())(peer); // the sentences name a person and device, never the address
-    const topic = this.topicSummary(g, await this.topicLocals(), Math.floor(this.now() / 1000), pin);
+    const locals=await this.topicLocals(),now=Math.floor(this.now()/1000),topic = this.topicSummary(g, locals, now, pin);
+    const peer_topics={peer,total:0,archived:0,archived_unread:0,latest:topic},key=this.topicPeerKey(topic);
+    let latestGroup=g;
+    for(const group of topic.notice_only?[]:groups){
+      if(group[0].peer!==peer)continue;
+      const summary=group===g?topic:this.topicSummary(group,locals,now,pin,false);
+      if(this.topicPeerKey(summary)!==key)continue;
+      this.addPeerTopic(peer_topics,summary);if(peer_topics.latest===summary)latestGroup=group;
+    }
+    if(latestGroup!==g)peer_topics.latest=this.topicSummary(latestGroup,locals,now,pin);
     const permissionPerson=pin && !pin.pending ? [this.me,...await this.store.all("persons")].find(p=>p && ["self","pinned"].includes(p.state)&&p.devices.some(d=>d.address===peer&&d.fingerprint===pin.fingerprint)) : null;
     const agentHostPin=topic.agent_host&&topic.agent_host!==peer?(topic.agent_host===this.address?{fingerprint:this.fp}:await this.store.get("pins",topic.agent_host)):null;
     const agentHostKey=topic.agent_host&&topic.agent_host!==peer?{agent_host_key:{pinned:agentHostPin?.fingerprint||"",pending:agentHostPin?.pending?.fingerprint||""}}:{};
-    return { ...agentHostKey,...(permissionPerson?{permission_person:this.personView(permissionPerson)}:{}), id: topic.id, peer, topic, key: { pinned: pin ? pin.fingerprint : "", pending: pin && pin.pending ? pin.pending.fingerprint : "" }, approved: false, task_grant: "",
+    return { ...agentHostKey,...(peer_topics.total?{peer_topics}:{}),...(permissionPerson?{permission_person:this.personView(permissionPerson)}:{}), id: topic.id, peer, topic, key: { pinned: pin ? pin.fingerprint : "", pending: pin && pin.pending ? pin.pending.fingerprint : "" }, approved: false, task_grant: "",
       messages: await Promise.all(g.map(async (m) => {
         const inbound = m.dir === "in";
         return { id: m.id, dir: m.dir, from: m.stored_in ? m.from : this.address, to:m.device_history?.recipient||(m.stored_in?this.address:m.to), kind: m.kind, body: m.body,
@@ -12591,7 +12642,7 @@ export class Engine {
     case "/api/overview": return this.overview(u.searchParams.get("topics") !== "1");
     case "/api/unread": return this.unreadPage(u.searchParams);
     case "/api/dm": { const seq=this.seq,id=u.searchParams.get("id"),read=await this.readView(id);return {...await this.decorateChatTopics(await this.dm(id,read),read),seq}; }
-    case "/api/thread": { const seq=this.seq;return {...await this.thread(u.searchParams.get("id")),seq}; }
+    case "/api/thread": { const seq=this.seq,thread=await this.thread(u.searchParams.get("id"));if(this.seq!==seq)delete thread.peer_topics;return {...thread,seq}; }
     case "/api/dm/new": return { id: await this.newDM(body.address) };
     case "/api/dm/send": return this.sendDM(body);
     case "/api/dm/resources": if(body===undefined)throw Error("Resources mutation requires POST.");return this.setConversationResources(body);
@@ -12612,6 +12663,7 @@ export class Engine {
     case "/api/file/request": return this.requestFile(body.id, Number(body.index));
     case "/api/message/react": case "/api/message/edit": case "/api/message/delete": return this.messageControl(u.pathname.split("/").pop(), body || {});
     case "/api/storage": return this.storageSummary();
+    case "/api/storage/attachments": return this.relayAttachmentStorage(body);
     case "/api/workspace": return this.workspaceInfo();
     case "/api/workspace/name": return this.renameWorkspace(body);
     case "/api/drive": return this.driveService().drive(body === undefined ? { conv: u.searchParams.get("conv") || "", action: "status" } : body);

@@ -993,6 +993,50 @@ export interface Reactor {
   pid?: string;
 }
 
+export interface RelayAccount {
+  email: string;
+  name: string;
+}
+
+export interface RelayAmount {
+  files: number;
+  bytes: number;
+}
+
+export interface RelayFolder {
+  id: string;
+  name: string;
+}
+
+export interface RelayMigration {
+  running: boolean;
+  files: number;
+  bytes: number;
+  total_files: number;
+  total_bytes: number;
+}
+
+export interface RelayStorageAction {
+  action: string;
+  confirm?: boolean;
+}
+
+export interface RelayStorageStatus {
+  can_admin: boolean;
+  configured: boolean;
+  connected: boolean;
+  state: string;
+  notice?: string;
+  account?: RelayAccount;
+  folder?: RelayFolder;
+  local: RelayAmount;
+  remote: RelayAmount;
+  pending: RelayAmount;
+  remote_only_files: number;
+  migration: RelayMigration;
+  consent_url?: string;
+}
+
 export interface ReminderView {
   message: string;
   conv?: string;
@@ -1325,6 +1369,7 @@ export interface Thread {
   task_grant: string;
   messages: Message[] | null;
   topic?: ThreadSummary;
+  peer_topics?: PeerTopics;
 }
 
 export interface ThreadSummary {

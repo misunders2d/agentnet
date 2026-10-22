@@ -30,7 +30,10 @@ func Open(path string, steps []string) (*sql.DB, error) {
 		return nil, err
 	}
 	defer unlock()
-	dsn := "file:" + path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_txlock=immediate"
+	dsn, err := FileURI(path, "_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_txlock=immediate")
+	if err != nil {
+		return nil, err
+	}
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
@@ -142,17 +145,27 @@ func snapshotBeforeUpgrade(db *sql.DB, path string, target int) error {
 	return secfile.SyncDir(filepath.Dir(snap))
 }
 
-func validateSnapshot(path string, version int) error {
+// FileURI keeps filename characters out of SQLite's URI options and fragment.
+// Both writable stores and read-only snapshots must open the exact same path.
+func FileURI(path, query string) (string, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
-		return err
+		return "", err
 	}
 	uriPath := filepath.ToSlash(abs)
 	if filepath.VolumeName(abs) != "" {
 		uriPath = "/" + uriPath
 	}
-	u := url.URL{Scheme: "file", Path: uriPath, RawQuery: "mode=ro&immutable=1"}
-	db, err := sql.Open("sqlite", u.String())
+	u := url.URL{Scheme: "file", Path: uriPath, RawQuery: query}
+	return u.String(), nil
+}
+
+func validateSnapshot(path string, version int) error {
+	dsn, err := FileURI(path, "mode=ro&immutable=1")
+	if err != nil {
+		return err
+	}
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return err
 	}

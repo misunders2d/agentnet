@@ -4,6 +4,35 @@ Notable changes to AgentNet, newest first. Dates use `YYYY-MM-DD`.
 This record starts with v0.8.1; earlier releases remain on the
 [releases page](https://github.com/misunders2d/agentnet/releases).
 
+## [0.9.2] — 2026-10-22
+
+- Keep one usable agent identity per harness and device. Changing the default
+  reuses that identity; active chat choices omit retired/unready configurations
+  and unbound old chats. Keep their signed history searchable without internal
+  ID suffixes or ambiguous default-agent labels.
+- Sync personal reminders privately across linked human devices, preserving
+  offline catch-up, newer generations and completed reminders. Scheduled sends
+  retain their original scheduling device.
+- Update chat unread badges and reminder attention promptly from confirmed
+  saved results, retaining stale-response and newer-generation guards. Show
+  Outbox section counts from the same attention state as its navigation badge.
+- Give Agents and Review bounded workspace views, compact setup/list panels,
+  and readable native download controls across system themes.
+
+- Let the relay administrator connect one Google Drive for encrypted relay
+  attachments and explicitly move existing files, retaining verified custody,
+  resumable work and self-contained backups.
+- Reconcile archived-topic unread totals immediately after confirmed reads,
+  including topics omitted from the recent overview, without polling.
+- Show the explicitly supplied name of an agent's newly organized topic to its
+  requester. Keep private names local; outgoing moves no longer copy an implicit
+  private destination label into shared notices.
+- Keep SQLite filesystem paths literal when they contain `?`, `#` or `%`,
+  including upgrade snapshots and local read-only checks.
+- Make reminder dates directly editable as `YYYY-MM-DD`, with a calendar option,
+  so a stuck year can be replaced. Reject impossible dates and clear obsolete
+  validation feedback when editing.
+
 ## [0.9.1] — 2026-10-20
 
 - Identify configured agents by their actual harness and device. The default

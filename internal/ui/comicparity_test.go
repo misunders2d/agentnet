@@ -52,7 +52,11 @@ var comicParity = []struct {
 	// (agentnet-skins) keep them available.
 	{"12 reply receivers", "GET /api/reply-receivers", ""},
 	{"12 reply sessions", "GET /api/reply-sessions", ""},
-	{"13 drive setup", "/api/drive/setup", `mountFileStorageOptions\(`},
+	// Owner's October 21 correction: one administrator connects Drive for the
+	// relay's ciphertext attachments. Keep actual read/action entry points,
+	// rather than requiring the superseded per-person setup checklist here.
+	{"13 relay attachment storage", "GET /api/storage/attachments", `host\.api\(endpoint\)`},
+	{"13 relay attachment storage actions", "POST /api/storage/attachments", `host\.api\(endpoint, \{ action`},
 	{"13 project space", "host.drive", `mountDriveSpace\(`},
 	{"13 save to drive", "host.drive.driveUpload", `saveAttachmentToDrive\(`},
 }

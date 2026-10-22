@@ -238,7 +238,17 @@ func summarizeChatTopicView(conv string, msgs []ConvMessage, locals map[string]t
 		by := ""
 		ev := events[id]
 		sortChatEvents(ev)
+		autoTitle := BodyPreview(first.Body)
+		var namedBy ConvMessage
+		hasName := false
 		for _, m := range ev {
+			// These are stored admitted events, including retained history.
+			// Signed order, rather than arrival order, fixes the first name.
+			if envelope.AgentTopicOrganization(envelope.Inner{TopicEvent: m.TopicEvent, PID: m.PID, Origin: m.Origin}) && (!hasName || chatOrder(m, namedBy)) {
+				if title := topicOrganizationNoticeTitle(id, m.Body); title != "" {
+					autoTitle, namedBy, hasName = title, m, true
+				}
+			}
 			if m.TopicEvent.Action != "done" && m.TopicEvent.Action != "open" {
 				continue
 			}
@@ -285,7 +295,7 @@ func summarizeChatTopicView(conv string, msgs []ConvMessage, locals map[string]t
 			}
 		}
 
-		t := ThreadSummary{ID: id, Conv: conv, Title: BodyPreview(first.Body), Last: BodyPreview(last.Body), LastAt: time.Unix(activity, 0), Count: len(g), State: v.State, DoneBy: v.DoneBy, Pending: v.Pending, QuietSince: time.Unix(v.QuietSince, 0)}
+		t := ThreadSummary{ID: id, Conv: conv, Title: autoTitle, Last: BodyPreview(last.Body), LastAt: time.Unix(activity, 0), Count: len(g), State: v.State, DoneBy: v.DoneBy, Pending: v.Pending, QuietSince: time.Unix(v.QuietSince, 0)}
 		pending := pendingTopicRows(facts)
 		for _, i := range pending {
 			// The logical id matches replies; the stored copy id opens the

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/client"
+	"github.com/misunders2d/agentnet/internal/drivecontract"
 	"github.com/misunders2d/agentnet/internal/protocol"
 	"github.com/misunders2d/agentnet/internal/ui/static"
 )
@@ -37,11 +38,13 @@ var tsRoots = []any{
 	WorkspaceInfoView{}, UnreadPage{}, client.ScheduledSend{}, client.ScheduledAudience{},
 	InviteView{}, InvitesView{}, GetAppView{}, FoldersView{}, // the AgentNet app (MEL-533/534/536)
 	protocol.GoogleAccess{}, protocol.GoogleAccessChange{},
+	drivecontract.RelayStorageStatus{},
 	// requests
 	Draft{}, DMDraft{}, Action{}, ControlAction{}, AgentInvite{}, AgentAsk{}, GuestAction{},
 	GroupInviteDraft{}, GroupChange{}, DecisionAction{}, DeleteConversationAction{}, ResponderChange{},
 	AgentCatalogChange{}, WorkspaceJoin{}, client.TeamChange{}, protocol.TypingScope{}, AssistantSetupRequest{},
 	ScheduleDraft{}, ScheduleAction{}, ConversationResourcesChange{}, ReplyReceiverSelection{}, TopicChange{}, ApprovalRevoke{}, WorkspaceNameChange{}, InviteRequest{},
+	drivecontract.RelayStorageAction{},
 }
 
 func TestTypeScriptViewTypes(t *testing.T) {

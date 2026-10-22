@@ -34,6 +34,38 @@ func TestGroupHistoryLinkAfterAuthorLeaves(t *testing.T) {
 		t.Fatal(err)
 	}
 	var linked []*Agent
+	t.Cleanup(func() {
+		if !t.Failed() {
+			return
+		}
+		for _, device := range append([]*Agent{w.alice}, linked...) {
+			for _, check := range []struct{ name, query string }{
+				{"history jobs", `SELECT json_array(device,state,pos) FROM history_jobs ORDER BY device`},
+				{"archive imports", `SELECT json_array(id,retained,pos,done,error) FROM history_archive_jobs ORDER BY id`},
+				{"archive exports", `SELECT json_array(recipient,error) FROM history_archive_export_errors ORDER BY recipient`},
+				{"outbox", `SELECT json_array(recipient,coalesce(sub,''),state,count(*)) FROM outbox GROUP BY recipient,sub,state`},
+				{"held", `SELECT json_array(reason,count(*)) FROM quarantine GROUP BY reason`},
+			} {
+				rows, err := device.store.db.Query(check.query)
+				if err != nil {
+					t.Logf("%s %s: %v", device.Address, check.name, err)
+					continue
+				}
+				for rows.Next() {
+					var row string
+					if err := rows.Scan(&row); err != nil {
+						t.Logf("%s %s: %v", device.Address, check.name, err)
+						break
+					}
+					t.Logf("%s %s: %s", device.Address, check.name, row)
+				}
+				if err := rows.Err(); err != nil {
+					t.Logf("%s %s: %v", device.Address, check.name, err)
+				}
+				rows.Close()
+			}
+		}
+	})
 	stop := stops[w.alice]
 	for _, name := range []string{"after-departure-phone", "after-departure-laptop"} {
 		if len(linked) > 0 {

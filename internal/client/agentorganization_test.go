@@ -24,11 +24,40 @@ func TestAgentTopicOrganizationAdmittedRun(t *testing.T) {
 			if _, err := w.alice.ChangeChatTopic(tctx(t), conv, lids[1], "create", "Earlier named topic", 0); err != nil {
 				t.Fatal(err)
 			}
+			existingTopic := protocol.NewID()
+			if _, err := w.alice.SendConv(tctx(t), conv, ConvOutgoing{Body: "Existing automatic destination", Topic: existingTopic}); err != nil {
+				t.Fatal(err)
+			}
+			privateSource, err := w.alice.SendConv(tctx(t), conv, ConvOutgoing{Body: "Independent ordinary privacy regression source"})
+			if err != nil {
+				t.Fatal(err)
+			}
 			eventually(t, "host sees source topic", func() bool {
 				messages, e := w.bob.ConversationMessages(conv)
-				return e == nil && ChatTopicAssignments(messages)[lids[1]] == lids[1]
+				hasDestination, hasPrivateSource := false, false
+				for _, m := range messages {
+					hasDestination = hasDestination || m.Topic == existingTopic
+					hasPrivateSource = hasPrivateSource || m.LID == privateSource.LID
+				}
+				return e == nil && hasDestination && hasPrivateSource && ChatTopicAssignments(messages)[lids[1]] == lids[1]
 			})
-			pid := participate(t, w, conv, lids[:2], nil)
+			// Retained private names predate shared rename. They remain local
+			// and must never be copied into an agent's new move notice.
+			tx, err := w.bob.store.db.Begin()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = w.bob.recordTopicTitle(tx, conv, existingTopic, "HOST PRIVATE LABEL"); err != nil {
+				tx.Rollback()
+				t.Fatal(err)
+			}
+			if err = tx.Commit(); err != nil {
+				t.Fatal(err)
+			}
+			// The privacy case has its own exact grant. Bob is stopped before
+			// Alice's inverse events, so reuse of those moved originals would
+			// intentionally carry a stale source-topic CAS on the requester.
+			pid := participate(t, w, conv, []string{lids[0], lids[1], privateSource.LID}, nil)
 			for _, a := range []*Agent{w.alice, w.bob} {
 				addCapSuccessor(t, a, protocol.CapAgentOrganization)
 			}
@@ -94,7 +123,7 @@ func TestAgentTopicOrganizationAdmittedRun(t *testing.T) {
 			if organizationCount != 1 {
 				t.Fatalf("organization rows=%d", organizationCount)
 			}
-			if row.Body != "Moved selected messages to “Related discussion”." {
+			if row.Body != "Moved selected messages to new topic “Related discussion”." {
 				t.Fatalf("agent notice names wrong destination: %q", row.Body)
 			}
 			if row.TopicEvent == nil || row.TopicEvent.Request == nil || row.TopicEvent.Request.LID != q.LID {
@@ -184,6 +213,30 @@ func TestAgentTopicOrganizationAdmittedRun(t *testing.T) {
 			if count(t, w.alice, "outbox") != before {
 				t.Fatal("failed later source group stored a partial inverse")
 			}
+			privateMove, e := w.bob.OrganizeAgentTopic(tctx(t), j.ID, attempt, TopicOrganizationRequest{IDs: []string{privateSource.LID}, Topic: existingTopic})
+			if e != nil {
+				t.Fatal(e)
+			}
+			privateRow, _ := convMsg(t, w.bob, conv, func(m ConvMessage) bool { return m.LID == privateMove.LID })
+			if privateRow.Body != TopicOrganizationNotice(existingTopic, "") || strings.Contains(privateRow.Body, "HOST PRIVATE LABEL") {
+				t.Fatalf("existing agent move leaked a private name: %q", privateRow.Body)
+			}
+			eventually(t, "requester sees existing destination without host private name", func() bool {
+				messages, err := w.alice.ConversationMessages(conv)
+				if err != nil || ChatTopicAssignments(messages)[privateSource.LID] != existingTopic {
+					return false
+				}
+				topics, err := w.alice.ChatTopicsForMessages(conv, messages)
+				if err != nil {
+					return false
+				}
+				for _, topic := range topics {
+					if topic.ID == existingTopic {
+						return topic.Title != "HOST PRIVATE LABEL" && !topic.Renamed
+					}
+				}
+				return false
+			})
 			mainMove, e := w.bob.OrganizeAgentTopic(tctx(t), j.ID, attempt, TopicOrganizationRequest{IDs: []string{lids[0]}, Main: true})
 			if e != nil {
 				t.Fatal(e)

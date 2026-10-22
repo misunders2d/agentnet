@@ -446,6 +446,27 @@ type PeerTopics struct {
 	Latest         ThreadSummary `json:"latest"`          // the most recently active topic, whatever its state
 }
 
+func topicAgentKey(t ThreadSummary) string {
+	if t.AgentID == "" && !t.AgentLegacy {
+		return "human/" + t.Peer
+	}
+	return t.AgentHost + "/" + t.AgentKey + "/" + t.AgentID
+}
+
+func addPeerTopic(c *PeerTopics, t ThreadSummary) {
+	if t.NoticeOnly {
+		return
+	}
+	if c.Total == 0 || newer(t, c.Latest) {
+		c.Latest = t
+	}
+	c.Total++
+	if t.State == TopicArchived {
+		c.Archived++
+		c.ArchivedUnread += t.Unread
+	}
+}
+
 // TopicOverview is what the overview shows of device threads, newest
 // first, and each peer's topic counts. A page that lists topics itself
 // (the messenger: GET /api/overview?topics=1) asks without archived
@@ -505,23 +526,13 @@ func (a *Agent) topicOverview(listArchived bool, unread *[]DeviceUnreadRef) ([]T
 			if t.NoticeOnly {
 				continue
 			}
-			key := t.AgentHost + "/" + t.AgentKey + "/" + t.AgentID
-			if t.AgentID == "" && !t.AgentLegacy {
-				key = "human/" + t.Peer
-			}
+			key := topicAgentKey(t)
 			c := byAgent[key]
 			if c == nil {
 				c = &PeerTopics{Peer: peer, Latest: t}
 				byAgent[key] = c
 			}
-			c.Total++
-			if newer(t, c.Latest) {
-				c.Latest = t
-			}
-			if t.State == TopicArchived {
-				c.Archived++
-				c.ArchivedUnread += t.Unread
-			}
+			addPeerTopic(c, t)
 		}
 		text := shown
 		for _, c := range byAgent {
@@ -719,8 +730,9 @@ func topicMatches(t ThreadSummary, words []string) bool {
 	return true
 }
 
-// TopicOf is the topic that message id belongs to.
-func (a *Agent) TopicOf(id string) (ThreadSummary, error) {
+// TopicOf is the topic that message id belongs to. Optional counts reuse the
+// same peer metadata for its exact original agent; only selected/latest text loads.
+func (a *Agent) TopicOf(id string, counts ...*PeerTopics) (ThreadSummary, error) {
 	anchor, err := a.directTopicAnchor(id)
 	if err != nil {
 		return ThreadSummary{}, err
@@ -744,8 +756,24 @@ func (a *Agent) TopicOf(id string) (ThreadSummary, error) {
 				return ThreadSummary{}, err
 			}
 			l, _ := directTopicLocal(locals, g, rows)
-			t := summarize(a.Address, peer, g, rows, l, storeNow().Unix())
-			err = a.topicText(peer, []*ThreadSummary{&t})
+			now := storeNow().Unix()
+			t := summarize(a.Address, peer, g, rows, l, now)
+			text := []*ThreadSummary{&t}
+			var c *PeerTopics
+			if len(counts) > 0 && counts[0] != nil && !t.NoticeOnly {
+				c = counts[0]
+				*c = PeerTopics{Peer: peer, Latest: t}
+				for _, group := range groups {
+					local, _ := directTopicLocal(locals, group, rows)
+					other := summarize(a.Address, peer, group, rows, local, now)
+					if topicAgentKey(other) != topicAgentKey(t) {
+						continue
+					}
+					addPeerTopic(c, other)
+				}
+				text = append(text, &c.Latest)
+			}
+			err = a.topicText(peer, text)
 			return t, err
 		}
 	}

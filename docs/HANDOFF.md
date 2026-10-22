@@ -1,5 +1,91 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+## v0.9.2 regular release authorized — October 22, 2026
+
+The owner now explicitly requests release of the app, with Play Store later.
+The earlier regular-release hold is superseded. See
+[the release checklist](plans/V0_9_2_RELEASE.md). Root is integrating an isolated
+regular-app candidate while preserving the original Play source and owner drafts.
+Play consent/public pages/person-block compliance and SDK packaging work stay
+out of that candidate as complete dependency groups; approved Drive and other
+messenger fixes remain included.
+
+The seven local timing failures below are not established product defects.
+All seven passed the project's actual race CI run39577187806 on9133893b;
+root verified those exact PASS events independently. That run had unrelated
+failures, and is not qualification of the current candidate. Do not change
+timeouts, fixtures, daemons or SQL to fit the laptop's local lane. One full
+candidate CI run will qualify every race/native partition, alongside the
+required mixed-version, skin and artifact gates. Publication and existing-relay
+deployment proceed only on actual candidate evidence; neither has happened yet.
+
+## Messenger candidate tested; seven retained failures — October 22, 2026
+
+The current non-Play code batch and bounded verification are complete, with a
+**failed full race gate**. Nothing was released or deployed. Play Store
+packaging, compliance, reviewer provisioning and native push remain paused;
+no shared gateway was approved or implemented. Preserve the verified source
+checkpoint `.agentnet/checkpoints/2026-10-21T153550Z-play-store-paused/` and both
+owner-authored Android-notification and mark-unread drafts. The saved unsigned
+pre-D2 AAB is not a final corrected or signed upload.
+
+See [the active checklist and evidence](plans/OCT21_NON_PLAY.md). Local changes:
+
+- MEL-677: one admin-connected relay-wide Google Drive account, encrypted
+  attachment storage, explicit resumable Move, verified remote custody before
+  local eviction, and self-contained backups. Backend, API and rendered controls
+  pass focused checks; no live Google consent or migration occurred.
+- MEL-674: exact archived non-latest topic unread reconciliation using the
+  existing confirmed-read revision fences, without polling or a second total.
+- MEL-678: all five SQLite opens preserve literal URI characters in filenames;
+  writable/snapshot/read-only regressions pass on both SQLite adapters.
+- MEL-617/679: the requester's explicit new-topic name is displayed without
+  publishing an implicit private destination label. Native/report/link/Undo
+  plumbing passes; real-model semantic selection is not claimed.
+- MEL-680: a directly editable YYYY-MM-DD reminder date replaces the stuck
+  segmented editor, with native-calendar fallback and rendered invalid-date,
+  DST, recovery, reopen and cancel checks. Original physical GTK reproduction
+  remains unproven.
+
+Final local parent accounting (skips remain explicit, not passes):
+
+| Area | Pass | Skip | Fail | Missing |
+| --- | ---: | ---: | ---: | ---: |
+| Client | 1,377 | 25 | 7 | 0 |
+| UI | 369 | 137 | 0 | 0 |
+| Command | 205 | 2 | 0 | 0 |
+| Integration | 36 | 3 | 0 | 0 |
+
+`go vet ./...` passed after the final diagnostic-only fixture change. The real
+mixed-version journey passed in76.32s. Original failed/timeout invocations and
+all split-parent child proofs remain retained. Passing unchanged evidence was
+reused; no fixture bounds or assertions were weakened. No physical Mac,
+Windows or Android execution is claimed, and the release skins gate is not
+claimed.
+
+Seven client failures also reproduce on committed `e26c772c`: Google review
+retry, Google desktop admission, retired-device history, guest-derived history,
+own-person tasks, busy-ancestor callback, and nested-harness CLI. Their exact
+assertions, baseline commit and hashed logs are in the checklist and
+`.agentnet/oct21-non-play/qualification/baseline-proven-failures.json`. They remain
+open defects; baseline reproduction is not a pass and does not qualify release.
+AssistantReactionGroupLinkedHistory and AfterHostReadmission passed isolated
+candidate races after earlier failures; all earlier evidence is retained as
+resource-sensitive/unattributed, without a speculative product patch.
+
+The same existing Claude conversation was consulted through Herdr. Its final
+bounded diagnostic plan used two of at most three isolated races: readmission
+passed93.04s, guest-derived history failed108.88s at the baseline's old-inert-
+history assertion. The latter snapshot shows a source archive still uploading,
+with history staged/queued and no received history/archive job on the phone;
+it does not prove an admission or lost-wake defect. No additional product,
+SQL or framework change was made. Next qualification work must address the
+seven retained failures; no automatic retry, release or deployment is running.
+
+The Mac message-toolbar placement and half-width context-menu reports remain
+tracked in MEL-681, as requested; this batch does not claim a Mac fix. Installed
+v0.9.1 remains distinct from this local candidate.
+
 ## Unreleased corrections — October 21, 2026
 
 The owner requires one enabled agent per harness per device. Default is a
