@@ -18,12 +18,12 @@ export function RelayAttachmentStorage({ host, isActive = active }: { host: Host
   const scope = useRef(0), reads = useRef(0), acting = useRef(false), queuedRefresh = useRef(false);
   const known = useRef<RelayStorageStatus | null>(null);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (background = false) => {
     if (!isActive()) return;
     if (acting.current) { queuedRefresh.current = true; return; }
     const owner = scope.current, request = ++reads.current;
     const current = () => owner === scope.current && request === reads.current && isActive();
-    setLoading(true);
+    if (!background || !known.current) setLoading(true);
     try {
       const next = readRelayStorage(await host.api(endpoint));
       if (!current()) return;
@@ -37,8 +37,8 @@ export function RelayAttachmentStorage({ host, isActive = active }: { host: Host
     scope.current++; reads.current++; acting.current = false; queuedRefresh.current = false; known.current = null;
     setStatus(null); setBusy(null); setConfirm(null); setConsent(""); setError("");
     void refresh();
-    const stop = host.listen(e => { if (e.type === "change" || e.type === "restart") void refresh(); });
-    const visible = host.android?.onVisibility(() => { if (host.android?.visible()) void refresh(); });
+    const stop = host.listen(e => { if (e.type === "restart" || (e.type === "change" && !e.hint)) void refresh(true); });
+    const visible = host.android?.onVisibility(() => { if (host.android?.visible()) void refresh(true); });
     return () => { scope.current++; reads.current++; stop(); visible?.(); };
   }, [host, refresh]);
 
@@ -59,7 +59,7 @@ export function RelayAttachmentStorage({ host, isActive = active }: { host: Host
     finally {
       if (current()) {
         acting.current = false; setBusy(null);
-        if (queuedRefresh.current) { queuedRefresh.current = false; void refresh(); }
+        if (queuedRefresh.current) { queuedRefresh.current = false; void refresh(true); }
       }
     }
   };

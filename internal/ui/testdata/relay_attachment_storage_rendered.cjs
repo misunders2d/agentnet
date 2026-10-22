@@ -13,7 +13,7 @@ import {RelayAttachmentStorage} from './src/features/RelayAttachmentStorage';
 const base=()=>({can_admin:true,configured:true,connected:false,state:'local',local:{files:4,bytes:4096},remote:{files:0,bytes:0},pending:{files:4,bytes:4096},remote_only_files:0,migration:{running:false,files:0,bytes:0,total_files:0,total_bytes:0}});
 const root=document.getElementById('root'),app=document.getElementById('app'),portals=document.getElementById('portals');
 const react=createRoot(app),listeners=new Set();
-window.fixture={calls:[],status:base(),base,active:true,platform:'browser',deferGet:new URLSearchParams(location.search).has('loading'),deferAction:false,error:'',nextConsent:'',set(v){this.status=v;this.emit();},emit(){for(const fn of listeners)fn({type:'change',seq:1});}};
+window.fixture={calls:[],status:base(),base,active:true,platform:'browser',deferGet:new URLSearchParams(location.search).has('loading'),deferAction:false,error:'',nextConsent:'',set(v){this.status=v;this.emit();},emit(hint){for(const fn of listeners)fn({type:'change',seq:1,...(hint?{hint}:{})});}};
 const consent='https://accounts.google.com/o/oauth2/v2/auth?client_id=synthetic-public&state=synthetic';
 function makeHost(id){return {platform:fixture.platform,listen(fn){listeners.add(fn);return()=>listeners.delete(fn)},async api(url,body){
  fixture.calls.push({id,url,body});if(url!=='/api/storage/attachments')throw Error('Unexpected endpoint '+url);
@@ -80,6 +80,23 @@ function contrast(a, b) {
       assert.equal(await panel.getByRole('button').isDisabled(), true);
       await page.evaluate(() => fixture.resolveRead());
       await panel.getByText('Attachments stored on this relay', { exact: true }).waitFor();
+      // Background updates keep the existing controls steady and usable.
+      const refreshButton = panel.getByRole('button', { name: 'Refresh storage status', exact: true });
+      await page.evaluate(() => { fixture.resolveRead = null; fixture.deferGet = true; fixture.emit(); });
+      await page.waitForFunction(() => typeof fixture.resolveRead === 'function');
+      if (process.env.AGENTNET_SCREENSHOTS) await page.screenshot({ path: path.join(process.env.AGENTNET_SCREENSHOTS, `relay-storage-background-${width}-${theme}.png`) });
+      assert.equal(await refreshButton.count(), 1, 'background refresh does not change the button label');
+      assert.equal(await refreshButton.isDisabled(), false, 'background refresh does not disable the button');
+      await page.evaluate(() => fixture.resolveRead());
+      const beforeHints = await page.evaluate(() => fixture.calls.length);
+      await page.evaluate(() => { fixture.emit('typing'); fixture.emit('presence'); });
+      await page.evaluate(() => new Promise(requestAnimationFrame));
+      assert.equal(await page.evaluate(() => fixture.calls.length), beforeHints, 'typing and presence do not fetch attachment storage');
+      await page.evaluate(() => { fixture.resolveRead = null; fixture.deferGet = true; });
+      await refreshButton.click();
+      await panel.getByRole('button', { name: 'Refreshing…', exact: true }).waitFor();
+      await page.evaluate(() => fixture.resolveRead());
+      await refreshButton.waitFor();
       if (memberOnly) {
         for (const legacy of [true, false]) {
           await set({ can_admin: false, connected: true, state: 'connected', local: { files: legacy ? 123 : 0, bytes: legacy ? 125952 : 0 }, remote: { files: legacy ? 45 : 0, bytes: legacy ? 46080 : 0 }, pending: { files: legacy ? 78 : 0, bytes: legacy ? 79872 : 0 }, migration: { running: legacy, files: legacy ? 5 : 0, bytes: legacy ? 5120 : 0, total_files: legacy ? 78 : 0, total_bytes: legacy ? 79872 : 0 }, remote_only_files: legacy ? 45 : 0, account: { email: 'PRIVATE_ADMIN', name: 'PRIVATE_ADMIN' }, folder: { id: 'PRIVATE_FOLDER', name: 'PRIVATE_FOLDER' }, notice: 'PRIVATE_USAGE 123 files', consent_url: 'https://accounts.google.com/o/oauth2/v2/auth?client_id=private' });
