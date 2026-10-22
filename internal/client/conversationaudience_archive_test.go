@@ -23,7 +23,18 @@ func TestConversationAudienceLiveDelivery(t *testing.T) {
 	eventually(t, "current outside reader", func() bool { return stateAt(t, w.alice, p.PID).Claimable() })
 	stage := func(body string) (ConvSent, envelope.Envelope, string) {
 		t.Helper()
-		signCapsAfter(t, host, without(ownCaps, protocol.CapConversationAudience))
+		// Live delivery wakes the daemon to publish its actual readers. Keep
+		// the simulated older reader dominant until resume signs its successor.
+		for session, latest := range sessionRecords(t, host) {
+			record := protocol.CapsRecord{Address: host.Address, Session: session, Caps: without(ownCaps, protocol.CapConversationAudience), TS: max(latest.TS+1, time.Now().Unix()+200)}
+			record.Sign(host.id.Sign)
+			if err := record.ValidateAdvertisement(); err != nil {
+				t.Fatal(err)
+			}
+			if err := host.hub.do(tctx(t), "PUT", "/v1/caps", record, nil); err != nil {
+				t.Fatal(err)
+			}
+		}
 		eventually(t, "sender to observe the older live-audience reader", func() bool {
 			return errors.Is(w.alice.requireParticipationCaps(tctx(t), host.Self(), protocol.CapConversationAudience), errAgentIdentityUnsupported)
 		})

@@ -233,8 +233,8 @@ const journeys = {
     await page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: 'Chats' }).click();
     await listTitle.waitFor();
     // The demo has retained legacy threads, not a concrete agent catalog.
-    // Select the original Bob topic by its provider summary and prove its ID;
-    // a default setting or display name must not invent an executor for it.
+    // They stay out of current chats. An explicit host history link can still
+    // open the original topic; it must never invent an executor for it.
     const response = await fetch(new URL('/api/overview', daemon), { headers: { cookie } });
     assert.equal(response.status, 200);
     const overview = await response.json();
@@ -245,8 +245,8 @@ const journeys = {
     assert(!legacy.agent_id, 'The retained Bob fixture has no concrete executor binding');
     const row = topic => page.locator('[data-part="chat-row"]').filter({ has:
       page.locator('[data-part="chat-preview"]').filter({ hasText: topic.last.split('\n')[0].slice(0, 50) }) });
-    assert.equal(await row(legacy).count(), 1, 'One chat matches the original provider summary');
-    await row(legacy).click();
+    assert.equal(await row(legacy).count(), 0, 'Unbound agent history stays out of current chats');
+    await page.evaluate(id => window.__open(id), legacy.id);
     await page.getByRole('log').first().waitFor();
     await page.locator('[data-mid="' + legacy.id + '"]').waitFor();
     await page.getByRole('button', { name: 'More', exact: true }).click();

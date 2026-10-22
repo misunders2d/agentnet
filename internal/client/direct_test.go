@@ -280,7 +280,8 @@ func TestSessionAddressing(t *testing.T) {
 // With both daemons connected and nothing to send, the only traffic is the
 // Hub's pings on the already-open streams: no requests reach the Hub.
 func TestIdleDaemonsDoNotPoll(t *testing.T) {
-	t.Parallel()
+	// This measures idle streams. Parallel load can close and reconnect a
+	// stream, whose event-driven upkeep is not idle traffic.
 	dir := filepath.Join(t.TempDir(), "hub")
 	// A ping interval well above one signed request's round trip on slow CI
 	// disks (Windows): the Hub closes a stream whose ack is later than two

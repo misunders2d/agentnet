@@ -29,7 +29,11 @@ func TestDatabasePathRemainsLiteralThroughReopenAndUpgrade(t *testing.T) {
 				db.Close()
 				t.Fatal(err)
 			}
-			if filepath.Clean(opened) != path {
+			// SQLite resolves directory symlinks (including macOS /var ->
+			// /private/var); compare the files while preserving literal punctuation.
+			expectedInfo, statErr := os.Stat(path)
+			openedInfo, openedErr := os.Stat(opened)
+			if statErr != nil || openedErr != nil || !os.SameFile(expectedInfo, openedInfo) {
 				db.Close()
 				t.Fatalf("opened %q instead of literal database path %q", opened, path)
 			}

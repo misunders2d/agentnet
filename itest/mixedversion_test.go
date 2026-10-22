@@ -132,9 +132,13 @@ func buildTagCLI(t *testing.T, tag string) string {
 	}
 	src := t.TempDir()
 	tarball := filepath.Join(t.TempDir(), "src.tar")
+	// GNU tar interprets a Windows drive's colon in -f as a remote host.
+	// Keep the archive argument relative without changing the extracted source.
+	extract := exec.Command("tar", "-x", "-f", filepath.Base(tarball), "-C", src)
+	extract.Dir = filepath.Dir(tarball)
 	for _, cmd := range []*exec.Cmd{
 		exec.Command("git", "-C", repo, "archive", "-o", tarball, commit),
-		exec.Command("tar", "-x", "-f", tarball, "-C", src),
+		extract,
 	} {
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("extract %s: %v\n%s", tag, err, out)
