@@ -1,28 +1,32 @@
 #!/bin/bash
 # One shard of the race suite, for CI's parallel race jobs. "others" runs all
-# non-client packages, isolating internal/ui in two sequential test partitions.
-# "ui-0"/"ui-1" rerun only those UI partitions. "client-K" is every COUNT-th
-# client test starting at K (0-based). UI always uses two partitions; COUNT is
+# non-client packages, isolating internal/ui in three sequential test partitions.
+# "ui-0"/"ui-1"/"ui-2" rerun those UI partitions. "client-K" is every COUNT-th
+# client test starting at K (0-based). UI always uses three partitions; COUNT is
 # client-only. The full others and client shards run every test once, with each
 # race invocation bounded at 600 seconds per package.
-# Usage: scripts/race-shard.sh others|client-K|ui-0|ui-1 [COUNT]
+# Usage: scripts/race-shard.sh others|client-K|ui-0|ui-1|ui-2 [COUNT]
 set -euo pipefail
 cd "$(dirname "$0")/.."
 shard=${1:-}
 count=${2:-18}
 if ! [[ "$count" =~ ^[1-9][0-9]*$ ]] ||
    ! [[ "$shard" = others || "$shard" =~ ^(client|ui)-[0-9]+$ ]]; then
-	echo 'usage: race-shard.sh others|client-K|ui-0|ui-1 [positive client COUNT]' >&2
+	echo 'usage: race-shard.sh others|client-K|ui-0|ui-1|ui-2 [positive client COUNT]' >&2
 	exit 2
 fi
 
 run_partition() {
 	local package=$1 k=$2 n=$3 label=$4 tests
-	# Balance measured v32/v33 parent costs with literal fixture moves.
+	# Balance measured parent costs with literal fixture moves.
 	# Keep every test and the 600-second bound for the selected count.
 	tests=$(go test -list '.*' "$package" | awk -v k="$k" -v n="$n" -v client="$([[ $package = ./internal/client ]] && echo 1 || echo 0)" '
 		/^Test/ {
 			part=i++%n
+			if (client && n==18) {
+				if ($0=="TestDMLiveAgentContext") part=17
+				if ($0=="TestRoomReciprocalRootQuestions") part=1
+			}
 			if (client && n==12) {
 				if ($0=="TestGroupInteractionNamedMemberAndVisitor") part=1
 				if ($0=="TestGroupParticipationHistoryAfterHostReadmission") part=8
@@ -64,8 +68,9 @@ run_partition() {
 if [ "$shard" = others ]; then
 	packages=$(go list ./... | awk '!/\/internal\/(client|ui)$/')
 	go test -race -count=1 -timeout 600s $packages
-	run_partition ./internal/ui 0 2 ui-0
-	run_partition ./internal/ui 1 2 ui-1
+	run_partition ./internal/ui 0 3 ui-0
+	run_partition ./internal/ui 1 3 ui-1
+	run_partition ./internal/ui 2 3 ui-2
 	exit
 fi
 k=${shard#*-}
@@ -73,7 +78,7 @@ package=./internal/client
 partitions=$count
 if [[ "$shard" = ui-* ]]; then
 	package=./internal/ui
-	partitions=2
+	partitions=3
 fi
 if (( k >= partitions )); then
 	echo "shard $shard is outside count $partitions" >&2
