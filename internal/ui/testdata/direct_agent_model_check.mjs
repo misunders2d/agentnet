@@ -96,3 +96,20 @@ for(const [topic,want] of [['warehouse','warehouse'],['','main'],['new-topic','b
 }
 assert.equal(mentionView.guestAuthor({role:'human_guest',guests:[{pid:'wrong',host_here:true,can_send:true,topic:'other'},{pid:'right',host_here:true,can_send:true,topic:'warehouse'}]},'warehouse').pid,'right');
 console.log('Topic-bound composer targets and guest author PASS');
+
+// Participation type is a structured fact. Display text may be localized,
+// unusual or resemble a different event; it never changes that fact.
+const messageModelSource=stripTypeScriptTypes((await readFile(new URL('../web/src/features/Message.model.ts',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'')).replace(/^export /gm,'');
+const participation=runInNewContext(messageModelSource+'\n({eventKind,joinedBefore})',{...model});
+for(const [type,kind] of [['invite','invited'],['scope','invited'],['accept','joined'],['decline','declined'],['dismiss','left']]){
+ const event={id:type,pid:'human-guest',event:'Unusual localized event body: declined the invitation',event_type:type,event_by:'Carol'};
+ assert.equal(participation.eventKind(event)?.kind,kind,type+' follows structured event_type');assert.equal(participation.eventKind(event).by,'Carol');
+}
+for(const event_type of ['future_event','constructor','toString','__proto__'])assert.equal(participation.eventKind({event:'Carol accepted: the agent joins this DM.',event_type}),null,'unknown structured type never reinterprets English');
+assert.equal(participation.eventKind('Carol joined this DM.').kind,'joined','legacy text remains supported');
+assert.equal(participation.eventKind({event:'Carol joined this DM.'}).kind,'joined','legacy DTO remains supported');
+const guestEvents=[{id:'i',pid:'human-guest',event:'localized invite',event_type:'invite'},{id:'a',pid:'human-guest',event:'localized accept',event_type:'accept'},{id:'d',pid:'human-guest',event:'localized dismiss',event_type:'dismiss'}];
+assert.equal(participation.joinedBefore(guestEvents,'human-guest',2),true,'dismissed accepted person left');
+assert.equal(participation.joinedBefore([guestEvents[0],guestEvents[2]],'human-guest',1),false,'unjoined invitation cancellation remains distinct');
+assert.equal(participation.joinedBefore([{...guestEvents[1],pid:'different'}],'human-guest',1),null,'unrelated acceptance grants no joined history');
+console.log('Structured participation events, localized text, legacy fallback and exact-PID joined/cancelled history PASS');

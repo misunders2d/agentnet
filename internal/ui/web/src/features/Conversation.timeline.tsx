@@ -5,7 +5,7 @@ import { currentNativeActivity } from "./NativeActivity.model";
 // bottom (or at the message a notification or approval points to), stays
 // pinned there while you are at the bottom, and otherwise keeps your place
 // and counts what arrived below in a "new" pill.
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { IconArrowDown, IconMessageCircle } from "@tabler/icons-react";
 import { useApp } from "../context";
 import { useStore, type ReadVisit } from "../store";
@@ -15,6 +15,8 @@ import { groupedSends } from "../optimistic.mjs";
 import { localRunningDetail } from "../runningDetail";
 import type { T } from "../api";
 import { StopOwnRequest } from "./RequestResolution";
+import { useOwned } from "../owned";
+import { focusComposer } from "./Composer.focus";
 import { MessageView } from "./Message";
 import { agentLabel, agentOf, ev, isRequest, isThreadMsg, threadAgentName, whoWrote, working, terminalStopLabel, type AnyMsg, type Ctx } from "./Message.model";
 
@@ -25,7 +27,9 @@ type Item =
 
 const RUN = 5 * 60e3;
 const HISTORY_PAGE = 80; // message groups, keeping every target of one send together
+const INITIAL_PAGE = 24; // a few screens; explicit history reveals retain the 80-group batch
 const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+type ReadingAnchor = { row: HTMLElement; offset: number; scrollTop: number };
 
 export function Timeline({ ctx, messages, focus, focusSeq, unread, readVisit, selected, onSelect, empty, footer, start, end }: {
   ctx: Ctx; messages: AnyMsg[]; focus?: string; focusSeq?: number; selected: string[] | null; onSelect: (id: string) => void; empty: ReactNode;
@@ -34,9 +38,11 @@ export function Timeline({ ctx, messages, focus, focusSeq, unread, readVisit, se
   start?: ReactNode;       // before the first message (the skin's topic intro, skin/TopicIntro.tsx)
   end?: ReactNode;         // after the last message (a topic that is done or archived says so)
 }) {
+  const { root } = useOwned();
   const box = useRef<HTMLDivElement>(null);
   const inner = useRef<HTMLDivElement>(null);
   const foot = useRef<HTMLDivElement>(null);
+  const initialFocus = useRef(focus);
   const [reserve, setReserve] = useState(0);
   const atBottom = useRef(!focus && !unread);
   const seen = useRef<Set<string> | null>(null);
@@ -46,11 +52,13 @@ export function Timeline({ ctx, messages, focus, focusSeq, unread, readVisit, se
 
   const items = useMemo(() => build(messages, ctx, firstUnread), [messages, ctx, firstUnread]);
   const groups = useMemo(() => items.filter((it): it is Extract<Item, { type: "msg" }> => it.type === "msg"), [items]);
-  const [first, setFirst] = useState(() => groups[Math.max(0, groups.length - HISTORY_PAGE)]?.key);
+  const [first, setFirst] = useState(() => groups[Math.max(0, groups.length - INITIAL_PAGE)]?.key);
+  const [through, setThrough] = useState<string>();
   const retained = useRef<string[]>([]);
   const prependAnchor = useRef<{ row: HTMLElement; top: number; focus: boolean } | null>(null);
+  const readingAnchor = useRef<ReadingAnchor | null>(null);
   const [requested, setRequested] = useState<{ id: string; focus?: string; seq?: number; visit: ReadVisit | null }>();
-  const focused = messageTarget(messages, focus || (unread ? firstUnread : undefined))?.id;
+  const focused = messageTarget(messages, focus || firstUnread)?.id;
   const target = requested && requested.visit === readVisit && requested.focus === focus && requested.seq === focusSeq ? requested.id : focused;
   let from = groups.findIndex(it => it.key === first);
   if (from < 0) {
@@ -58,7 +66,7 @@ export function Timeline({ ctx, messages, focus, focusSeq, unread, readVisit, se
     // Keep the next surviving displayed group rather than dropping history.
     const keys = new Set(groups.map(it => it.key));
     const next = retained.current.find(key => keys.has(key));
-    from = next ? groups.findIndex(it => it.key === next) : Math.max(0, groups.length - HISTORY_PAGE);
+    from = next ? groups.findIndex(it => it.key === next) : Math.max(0, groups.length - INITIAL_PAGE);
   }
   const wanted = groups.findIndex(it => it.m.id === target || it.targets?.some(m => m.id === target));
   if (wanted >= 0 && wanted < from) {
@@ -66,10 +74,59 @@ export function Timeline({ ctx, messages, focus, focusSeq, unread, readVisit, se
     // A subsequent focus must not hide history the reader has already opened.
     from = wanted;
     setFirst(groups[wanted].key);
+    // An old entry target must not mount every newer row just to reveal it.
+    // Keep the existing page size, with explicit access to subsequent pages.
+    if (!seen.current && !requested && focus === initialFocus.current && wanted + INITIAL_PAGE < groups.length) setThrough(groups[wanted + INITIAL_PAGE - 1].key);
   }
+  let to = through ? groups.findIndex(it => it.key === through) + 1 : groups.length;
+  if (through && !to) {
+    const keys = new Set(groups.map(it => it.key));
+    const last = retained.current.filter(key => keys.has(key)).at(-1);
+    to = last ? groups.findIndex(it => it.key === last) + 1 : Math.min(groups.length, from + HISTORY_PAGE);
+  }
+  if (wanted >= to) { to = Math.min(groups.length, wanted + HISTORY_PAGE); setThrough(to < groups.length ? groups[to - 1].key : undefined); }
+  const hasLater = to < groups.length;
   let begin = groups.length ? items.indexOf(groups[from]) : 0;
   while (begin > 0 && items[begin - 1].type !== "msg") begin--;
-  const visible = items.slice(begin);
+  let finish = hasLater ? items.indexOf(groups[to]) : items.length;
+  while (hasLater && finish > begin && items[finish - 1].type !== "msg") finish--;
+  const visible = items.slice(begin, finish);
+  // Constructing a locale formatter per timestamp dominates large-page render
+  // time. Reuse one for this immutable message projection, including redraws.
+  const clock = useMemo(() => new Intl.DateTimeFormat([], { hour: "numeric", minute: "2-digit" }), [messages]);
+  const formatTime = useCallback((at: string) => { const date = new Date(at); return Number.isNaN(date.getTime()) ? timeOf(at) : clock.format(date); }, [clock]);
+  const [keyboardEntry, setKeyboardEntry] = useState<{ id: string; target?: string }>();
+  const entryID = keyboardEntry?.target === target ? keyboardEntry?.id : target;
+  const keyboardRow = visible.find(it => it.type === "msg" && (it.m.id === entryID || it.targets?.some(m => m.id === entryID)));
+  const keyboardID = keyboardRow?.key || visible.filter(it => it.type === "msg" && !ev(it.m)).at(-1)?.key;
+  const entryFocus = useCallback((id: string) => setKeyboardEntry(old => old?.id === id && old.target === target ? old : { id, target }), [target]);
+
+  const keyboard = (e: KeyboardEvent<HTMLDivElement>) => {
+    const log = inner.current, el = e.target as HTMLElement;
+    // Portalled menus and editors keep their own keys and composition.
+    if (!log?.contains(el) || e.nativeEvent.isComposing || e.altKey || e.ctrlKey || e.metaKey) return;
+    const row = el.closest<HTMLElement>("[data-mid]");
+    if (!row) return;
+    if (el.hasAttribute("data-message-bubble") && ["ArrowUp", "ArrowDown", "Home", "End"].includes(e.key)) {
+      const bubbles = [...log.querySelectorAll<HTMLElement>("[data-message-bubble][tabindex]")].filter(b => !b.closest("[hidden],[inert]") && b.getClientRects().length);
+      const index = bubbles.indexOf(el);
+      const next = e.key === "Home" ? 0 : e.key === "End" ? bubbles.length - 1 : Math.max(0, Math.min(bubbles.length - 1, index + (e.key === "ArrowUp" ? -1 : 1)));
+      if (bubbles[next]) { e.preventDefault(); bubbles[next].focus(); }
+      return;
+    }
+    if (e.key !== "Tab") return;
+    const focusable = (b: HTMLElement) => b.tabIndex >= 0 && !b.matches(":disabled") && !b.closest("[hidden],[inert]") && !!b.getClientRects().length && getComputedStyle(b).visibility !== "hidden";
+    const selector = "button,a[href],input,textarea,select,summary,[tabindex]";
+    const following = e.shiftKey ? Node.DOCUMENT_POSITION_PRECEDING : Node.DOCUMENT_POSITION_FOLLOWING;
+    // Tab may visit this message's actual controls and links. At its edge it
+    // leaves the log, rather than walking controls on every retained row.
+    if ([...row.querySelectorAll<HTMLElement>(selector)].some(b => b !== el && focusable(b) && !!(el.compareDocumentPosition(b) & following))) return;
+    const composer = root.querySelector<HTMLTextAreaElement>('form[data-conv="' + CSS.escape(ctx.conv) + '"] textarea');
+    if (!e.shiftKey && composer && !composer.disabled && !composer.closest("[inert]")) { e.preventDefault(); focusComposer(root, ctx.conv); return; }
+    const outside = [...root.querySelectorAll<HTMLElement>(selector)].filter(b => !log.contains(b) && focusable(b) && !!(el.compareDocumentPosition(b) & following));
+    const next = e.shiftKey ? outside.at(-1) : outside[0];
+    if (next) { e.preventDefault(); next.focus(); }
+  };
 
   const earlier = (event?: { detail: number }) => {
     if (!from || prependAnchor.current) return;
@@ -82,42 +139,52 @@ export function Timeline({ ctx, messages, focus, focusSeq, unread, readVisit, se
       focus: event?.detail === 0 && from <= HISTORY_PAGE };
     setFirst(groups[Math.max(0, from - HISTORY_PAGE)].key);
   };
+  const later = (event: { detail: number }) => {
+    if (!hasLater || prependAnchor.current) return;
+    const row = inner.current?.querySelector<HTMLElement>('[data-mid="' + CSS.escape(groups[to - 1].m.id) + '"]');
+    if (row) prependAnchor.current = { row, top: row.getBoundingClientRect().top, focus: event.detail === 0 && to + HISTORY_PAGE >= groups.length };
+    setThrough(to + HISTORY_PAGE < groups.length ? groups[to + HISTORY_PAGE - 1].key : undefined);
+  };
 
   // Open at the bottom or at the focused message; afterwards follow new
   // messages only while at the bottom (or when they are your own).
+  let placedOnEntry = false;
   useLayoutEffect(() => {
     const el = box.current;
     if (!el) return;
-    if (unread && !focus && !readVisit) return; // cached display cannot choose the entry's anchor
-    retained.current = groups.slice(from).map(it => it.key);
+    if (!focus && !readVisit) return; // cached display cannot choose the entry's anchor
+    retained.current = groups.slice(from, to).map(it => it.key);
     const saved = prependAnchor.current;
     prependAnchor.current = null;
     if (saved?.row.isConnected && el.contains(saved.row)) {
+      readingAnchor.current = null;
       el.scrollTop += saved.row.getBoundingClientRect().top - saved.top;
-      if (saved.focus && from === 0) {
+      if (saved.focus) {
         saved.row.tabIndex = -1;
         saved.row.focus({ preventScroll: true });
       }
     }
     if (!seen.current) {
       seen.current = new Set(messages.map((m) => m.id));
-      if (target && flash(el, target, false)) return;
+      if (target && flash(el, target, false)) { placedOnEntry = true; atBottom.current = false; return; }
       el.scrollTop = el.scrollHeight;
-      atBottom.current = true;
+      atBottom.current = !hasLater;
       return;
     }
     const added = messages.filter((m) => !seen.current!.has(m.id));
     for (const m of added) seen.current.add(m.id);
     if (!added.length) return;
     if (atBottom.current || added.some((m) => whoWrote(m, ctx).mine)) {
+      if (hasLater) { setFirst(groups[Math.max(0, groups.length - INITIAL_PAGE)].key); setThrough(undefined); setRequested({ id: messages.at(-1)!.id, focus, seq: focusSeq, visit: readVisit }); }
       atBottom.current = true;
       el.scrollTo({ top: el.scrollHeight, behavior: reduced() ? "auto" : "smooth" });
     }
     else setFresh((n) => n + added.filter((m) => !ev(m)).length);
-  }, [messages, items, first, target, readVisit, unread, focus]);
+  }, [messages, items, first, through, target, readVisit, unread, focus]);
 
   useLayoutEffect(() => {
-    if (target && seen.current && box.current) {
+    if (target && !placedOnEntry && seen.current && box.current) {
+      readingAnchor.current = null;
       atBottom.current = false;
       flash(box.current, target, false);
     }
@@ -129,8 +196,22 @@ export function Timeline({ ctx, messages, focus, focusSeq, unread, readVisit, se
   useEffect(() => {
     const el = box.current, content = inner.current;
     if (!el || !content) return;
+    const needsAnchor = !CSS.supports("overflow-anchor", "auto");
     const ro = new ResizeObserver(() => {
-      if (atBottom.current) el.scrollTop = el.scrollHeight;
+      if (atBottom.current) {
+        readingAnchor.current = null;
+        el.scrollTop = el.scrollHeight;
+      } else if (needsAnchor) {
+        const saved = readingAnchor.current;
+        // The visibility observer already measured this one reading row.
+        // A changed scrollTop means a user scroll or explicit target won;
+        // never pull it back while waiting for the next visibility frame.
+        if (saved?.row.isConnected && el.contains(saved.row) && Math.abs(el.scrollTop - saved.scrollTop) < .5) {
+          const offset = saved.row.getBoundingClientRect().top - el.getBoundingClientRect().top;
+          if (Math.abs(offset - saved.offset) > .5) el.scrollTop += offset - saved.offset;
+          saved.scrollTop = el.scrollTop;
+        }
+      }
       visibleRows.current();
     });
     ro.observe(content);
@@ -148,19 +229,20 @@ export function Timeline({ ctx, messages, focus, focusSeq, unread, readVisit, se
   }, [reserve]);
 
   const reportSeen = useSeen(ctx, messages, atBottom);
-  const visibleRows = useVisibleRows(box, inner, ctx, messages, readVisit, first, reserve);
+  const visibleRows = useVisibleRows(box, inner, ctx, messages, readVisit, first, through, reserve, readingAnchor, atBottom);
 
   const onScroll = () => {
     visibleRows.current();
     const el = box.current!;
     const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
-    atBottom.current = gap < 80;
+    atBottom.current = !hasLater && gap < 80;
     setFar(gap > 600);
     if (el.scrollTop < 80 && !atBottom.current) earlier();
     if (atBottom.current) { if (fresh) setFresh(0); reportSeen(); }
   };
-  const down = () => { box.current?.scrollTo({ top: box.current.scrollHeight, behavior: reduced() ? "auto" : "smooth" }); setFresh(0); };
+  const down = () => { if (hasLater) { setFirst(groups[Math.max(0, groups.length - INITIAL_PAGE)].key); setThrough(undefined); setRequested({ id: messages.at(-1)!.id, focus, seq: focusSeq, visit: readVisit }); } box.current?.scrollTo({ top: box.current.scrollHeight, behavior: reduced() ? "auto" : "smooth" }); setFresh(0); };
   const jump = useCallback((id: string) => {
+    readingAnchor.current = null;
     atBottom.current = false;
     setRequested({ id, focus, seq: focusSeq, visit: readVisit });
   }, [focus, focusSeq, readVisit]);
@@ -168,7 +250,7 @@ export function Timeline({ ctx, messages, focus, focusSeq, unread, readVisit, se
   return (
     <div className="relative min-h-0 flex-1">
       <div ref={box} onScroll={onScroll} className="dots h-full overflow-y-auto overscroll-contain">
-        <div ref={inner} role="log" aria-live="polite" aria-relevant="additions" aria-label="Messages" data-part="timeline" className="mx-auto flex min-h-full w-full max-w-[800px] flex-col justify-end pb-6 pt-3"
+        <div ref={inner} role="log" aria-live="polite" aria-relevant="additions" aria-label="Messages" data-part="timeline" onKeyDownCapture={keyboard} className="mx-auto flex min-h-full w-full max-w-[800px] flex-col justify-end pb-6 pt-3 [&>[data-mid]]:[contain:layout_style] [&>[data-send-group]]:[contain:layout_style]"
           style={reserve ? { paddingBottom: reserve + 24 } : undefined}>
           {items.length === 0 && empty}
           {from > 0 ? <button type="button" onClick={earlier} className="mx-auto min-h-11 px-4 text-sm font-semibold underline">Earlier messages</button> : items.length > 0 && start}
@@ -179,16 +261,17 @@ export function Timeline({ ctx, messages, focus, focusSeq, unread, readVisit, se
                 : it.targets ? <div key={it.key} data-send-group={isThreadMsg(it.m) ? undefined : it.m.send_group} className="mt-3 rounded-2xl border border-outline/20 py-2">
                     {it.targets.map((m, i) => <MessageView key={m.id} m={m} ctx={ctx} all={messages}
                       first={i === 0 && it.first} last={i === it.targets!.length - 1 && it.last}
-                      grouped compact={i > 0} onJump={jump}
+                      grouped compact={i > 0} onJump={jump} tabStop={it.key === keyboardID} onEntryFocus={entryFocus} formatTime={formatTime}
                       selecting={!!selected} selected={!!selected?.includes(m.id)} onSelect={onSelect} />)}
                   </div>
-                : <MessageView key={it.key} m={it.m} ctx={ctx} all={messages} first={it.first} last={it.last} status={it.status} compact={it.compact} onJump={jump}
+                : <MessageView key={it.key} m={it.m} ctx={ctx} all={messages} first={it.first} last={it.last} status={it.status} compact={it.compact} onJump={jump} tabStop={it.key === keyboardID} onEntryFocus={entryFocus} formatTime={formatTime}
                     selecting={!!selected} selected={!!selected?.includes(it.m.id)} onSelect={onSelect} />)}
-          {items.length > 0 && end}
+          {hasLater && <button type="button" onClick={later} className="mx-auto min-h-11 px-4 text-sm font-semibold underline">Later messages</button>}
+          {items.length > 0 && !hasLater && end}
           <Activity ctx={ctx} messages={messages} />
         </div>
       </div>
-      {(fresh > 0 || far) && (
+      {(fresh > 0 || far || hasLater) && (
         <button type="button" onClick={down} style={reserve ? { bottom: reserve + 12 } : undefined}
           className="pop-in absolute bottom-3 left-1/2 z-10 flex h-11 -translate-x-1/2 items-center gap-1.5 rounded-full bg-ink px-4 text-[14px] font-bold text-canvas shadow-pop-sm">
           <IconArrowDown size={18} />{fresh > 0 ? fresh + " new" : "Latest"}
@@ -201,7 +284,7 @@ export function Timeline({ ctx, messages, focus, focusSeq, unread, readVisit, se
 
 // One threshold-0 membership observer. A frame measures only its current
 // canonical members and root, so even arbitrarily tall rows can become seen.
-function useVisibleRows(box: RefObject<HTMLDivElement | null>, inner: RefObject<HTMLDivElement | null>, ctx: Ctx, messages: AnyMsg[], visit: ReadVisit | null, first?: string, reserve = 0) {
+function useVisibleRows(box: RefObject<HTMLDivElement | null>, inner: RefObject<HTMLDivElement | null>, ctx: Ctx, messages: AnyMsg[], visit: ReadVisit | null, first: string | undefined, through: string | undefined, reserve: number, anchor: RefObject<ReadingAnchor | null>, atBottom: RefObject<boolean>) {
   const store = useApp();
   const request = useRef<() => void>(() => {});
   const reserved = useRef(reserve);
@@ -209,6 +292,7 @@ function useVisibleRows(box: RefObject<HTMLDivElement | null>, inner: RefObject<
   useEffect(() => {
     if (!visit || !box.current || !inner.current) return;
     const root = box.current;
+    const needsAnchor = !CSS.supports("overflow-anchor", "auto");
     const byID = new Map(messages.map(m => [m.id, m]));
     const shown = new Map<Element, AnyMsg>();
     let observer: IntersectionObserver | undefined, epoch = 0, frame: number | undefined, alive = true;
@@ -230,12 +314,15 @@ function useVisibleRows(box: RefObject<HTMLDivElement | null>, inner: RefObject<
         if (!permitted() || !shown.size) { publish([]); return; }
         const viewport = root.getBoundingClientRect(), bottom = Math.max(viewport.top, viewport.bottom - reserved.current);
         const height = bottom - viewport.top, seen: AnyMsg[] = [];
+        let reading: ReadingAnchor | null = null;
         if (height > 0 && viewport.width > 0) for (const [row, m] of shown) {
           const r = row.getBoundingClientRect();
           const width = Math.min(r.right, viewport.right) - Math.max(r.left, viewport.left);
           const visible = Math.min(r.bottom, bottom) - Math.max(r.top, viewport.top);
+          if (needsAnchor && !atBottom.current && width > 0 && visible > 0 && (!reading || r.top - viewport.top < reading.offset)) reading = { row: row as HTMLElement, offset: r.top - viewport.top, scrollTop: root.scrollTop };
           if (r.height > 0 && width > 0 && visible > 0 && visible >= Math.min(r.height / 2, height / 2)) seen.push(m);
         }
+        if (needsAnchor) anchor.current = reading;
         publish(seen);
       });
     };
@@ -268,7 +355,7 @@ function useVisibleRows(box: RefObject<HTMLDivElement | null>, inner: RefObject<
       document.removeEventListener("visibilitychange", restart);
       off?.();
     };
-  }, [store, ctx.conv, messages, visit, first]);
+  }, [store, ctx.conv, messages, visit, first, through]);
   useEffect(() => { request.current(); }, [reserve]);
   return request;
 }

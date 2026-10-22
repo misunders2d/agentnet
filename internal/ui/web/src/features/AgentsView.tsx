@@ -311,7 +311,7 @@ function useEverJoined(rows: { conv: string; pid: string }[]): Record<string, bo
       const next: Record<string, boolean | undefined> = {};
       for (const r of rows) {
         const t = ts[convs.indexOf(r.conv)];
-        if (t) next[r.pid] = (t.messages || []).some((m) => m.pid === r.pid && !!m.event && eventKind(m.event)?.kind === "joined");
+        if (t) next[r.pid] = (t.messages || []).some((m) => m.pid === r.pid && !!m.event && eventKind(m)?.kind === "joined");
       }
       setJoined(next);
     });

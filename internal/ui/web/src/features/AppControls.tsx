@@ -1,6 +1,7 @@
 // Installed-app actions use the shell's host methods, never membership APIs.
 import { useEffect, useRef, useState } from "react";
 import { useApp } from "../context";
+import { useStore } from "../store";
 import { errorText } from "../api";
 import type { AppStatus, AppUpdateCheck } from "../host";
 import { Button } from "../ui/Button";
@@ -10,7 +11,8 @@ import { Confirm } from "./Message.actions";
 export function AppControls({ command = false }: { command?: boolean }) {
   const store = useApp(), host = store.host;
   const android = host.platform === "android";
-  const supportedHost = host.platform === "daemon" || android;
+  const app = useStore(store, s => s.overview?.app);
+  const supportedHost = (host.platform === "daemon" || android) && (host.appControlsAvailable !== false || app === true);
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState(""), [message, setMessage] = useState("");
   const [replace, setReplace] = useState(false);
@@ -46,7 +48,7 @@ export function AppControls({ command = false }: { command?: boolean }) {
       alive = false; generation++; checkGeneration.current++;
       off?.();
     };
-  }, [host, command]);
+  }, [host, command, supportedHost]);
   const check = async () => {
     if (checking || busy || !host.appCheckUpdate || !supportedHost) return;
     const generation = ++checkGeneration.current;
@@ -69,8 +71,7 @@ export function AppControls({ command = false }: { command?: boolean }) {
   if (!status) {
     if (unavailable) return <Card className="space-y-2 p-4">
       <h3 className="font-bold">{command ? "AgentNet command for your tools" : android ? "Update this phone" : "Update this computer"}</h3>
-      {!command && <Button variant="act" disabled>Update AgentNet</Button>}
-      <Hint>{android ? "This Android app does not expose update controls. Install the newer APK over this app to keep your chats and identity. Do not uninstall it." : "This page does not expose the app’s update controls. If a separately managed daemon owns this home, stop it when idle using its normal service manager, then reopen the installed AgentNet app to update."}</Hint>
+      <Hint>{android ? "This Android app does not expose update controls. Install the newer APK over this app to keep your chats and identity. Do not uninstall it." : "To update this computer, open the installed AgentNet app. Your chats and identity stay on this computer."}</Hint>
     </Card>;
     return error ? <p role="alert" className="text-danger">{error}</p> : null;
   }

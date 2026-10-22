@@ -8,12 +8,15 @@ const {chromium}=require(process.env.AGENTNET_PLAYWRIGHT);
   const context=await browser.newContext({viewport:{width,height:900},isMobile:width<500,hasTouch:width<500});
   const page=await context.newPage(),errors=[];
   page.on('pageerror',e=>errors.push(String(e)));
-  const url=new URL(process.env.P23_URL);await page.goto(url.href);await page.goto(url.origin+'/?skin='+skin);
+  const url=new URL(process.env.P23_URL);await page.goto(url.href);
+  // An unbound original device conversation stays history, instead of being
+  // guessed to belong to today's agent. Its exact notification still opens it.
+  await page.goto(url.origin+'/?skin='+skin+(process.env.P23_THREAD?'#msg='+process.env.P23_THREAD:''));
   const root=page.locator('#skin');
   // Comic starts on its list, or has already opened the one available
   // conversation.
   const doit=root.getByRole('button',{name:'Do it',exact:true});
-  if(!await doit.isVisible().catch(()=>false)) {
+  if(!process.env.P23_THREAD&&!await doit.isVisible().catch(()=>false)) {
    const chat=root.getByRole('button').filter({hasText:new RegExp(process.env.P23_PEER.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'|CHANGELOG|Not linked to a person|Laptop')}).first();
    try { await chat.click({timeout:5000}); } catch(e) {
     if(shots){fs.mkdirSync(shots,{recursive:true,mode:0o700});await page.screenshot({path:path.join(shots,'p23-'+mode+'-'+skin+'-'+width+'-error.png')});}

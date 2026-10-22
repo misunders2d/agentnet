@@ -186,6 +186,33 @@ func topicAssignmentMap(msgs []ConvMessage, precomputed []map[string]string) map
 
 func summarizeChatTopicView(conv string, msgs []ConvMessage, locals map[string]topicLocal, now int64, main bool, precomputed ...map[string]string) []ThreadSummary {
 	assigned := topicAssignmentMap(msgs, precomputed)
+	// A display move keeps each existing destination's original title anchor.
+	// Derive it from signed original placement, never another person's private
+	// label or the earlier source messages now displayed in the destination.
+	originals := msgs
+	if !main {
+		originals = make([]ConvMessage, 0, len(msgs))
+		for _, m := range msgs {
+			if !envelope.TopicOrganization(m.TopicEvent) {
+				originals = append(originals, m)
+			}
+		}
+	}
+	var anchors map[string]ConvMessage
+	if !main && len(originals) != len(msgs) {
+		anchors = map[string]ConvMessage{}
+		originalAssigned := ChatTopicAssignments(originals)
+		originalGroups := map[string][]ConvMessage{}
+		for _, m := range originals {
+			if topic := originalAssigned[m.LID]; topic != "" && m.Sub == "" && m.TopicEvent == nil {
+				originalGroups[topic] = append(originalGroups[topic], m)
+			}
+		}
+		for topic, g := range originalGroups {
+			sortChatTurns(g)
+			anchors[topic] = g[0]
+		}
+	}
 	groups := map[string][]ConvMessage{}
 	events := map[string][]ConvMessage{}
 	for _, m := range msgs {
@@ -206,6 +233,9 @@ func summarizeChatTopicView(conv string, msgs []ConvMessage, locals map[string]t
 	for id, g := range groups {
 		sortChatTurns(g)
 		first, last := g[0], g[len(g)-1]
+		if anchor, ok := anchors[id]; ok {
+			first = anchor
+		}
 		aliases := map[string]string{}
 		for _, m := range g {
 			if m.ID != "" {
@@ -327,12 +357,6 @@ func summarizeChatTopicView(conv string, msgs []ConvMessage, locals map[string]t
 		out = append(out, t)
 	}
 	if !main {
-		originals := make([]ConvMessage, 0, len(msgs))
-		for _, m := range msgs {
-			if !envelope.TopicOrganization(m.TopicEvent) {
-				originals = append(originals, m)
-			}
-		}
 		var previous []ThreadSummary
 		for source, destination := range ChatTopicRedirects(msgs) {
 			if previous == nil {

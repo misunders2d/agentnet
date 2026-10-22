@@ -92,7 +92,7 @@ export function CandidateRow({ c, busy, disabled, onPick }: { c: Candidate; busy
     : c.chat ? [seen, "you already chat"].filter(Boolean).join(" · ")
     : c.online === false ? "Offline · gets your message later" : seen;
   return (
-    <button type="button" onClick={onPick} disabled={disabled || c.conflict}
+    <button type="button" data-new-chat-choice onClick={onPick} disabled={disabled || c.conflict}
       className="flex min-h-14 w-full items-center gap-3 rounded-2xl px-2 py-2 text-left hover:bg-sunken disabled:opacity-60 disabled:hover:bg-transparent">
       <PersonAvatar name={c.name} seed={c.seed} size={40} online={c.online} />
       <span className="min-w-0 flex-1">
@@ -112,7 +112,7 @@ export function CandidateRow({ c, busy, disabled, onPick }: { c: Candidate; busy
 
 function AgentRow({ item, onPick }: { item: ListItem; onPick: () => void }) {
   return (
-    <button type="button" onClick={onPick} className="flex min-h-14 w-full items-center gap-3 rounded-2xl px-2 py-2 text-left hover:bg-sunken">
+    <button type="button" data-new-chat-choice onClick={onPick} className="flex min-h-14 w-full items-center gap-3 rounded-2xl px-2 py-2 text-left hover:bg-sunken">
       <AgentAvatar seed={item.avatarSeed} size={40} device={deviceKind(item.avatarSeed)} />
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-2"><span className="truncate font-bold">{item.title}</span><Tag tone="agent" className="shrink-0">Agent</Tag></span>
@@ -178,7 +178,17 @@ function PickPeople({ overview, onGroup, onDone }: { overview: T.Overview; onGro
   const agentNames = useAgentNames();
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState("");
+  // Bound the first render without limiting directory search or access.
+  const pageSize = 40;
+  const [peopleLimit, setPeopleLimit] = useState(pageSize);
+  const [serverLimit, setServerLimit] = useState(pageSize);
+  const [agentLimit, setAgentLimit] = useState(pageSize);
+  const search = (value: string) => {
+    setQuery(value);
+    setPeopleLimit(pageSize); setServerLimit(pageSize); setAgentLimit(pageSize);
+  };
   const input = useRef<HTMLInputElement>(null);
+  const choices = useRef<HTMLDivElement>(null);
   // On a phone the keyboard would cover most of the sheet: focus only on desktop.
   useEffect(() => { if (wide) input.current?.focus(); }, [wide]);
 
@@ -199,13 +209,26 @@ function PickPeople({ overview, onGroup, onDone }: { overview: T.Overview; onGro
   const nothing = !shownPeople.length && !shownServer.length && !shownAgents.length;
 
   return (
-    <div className="pb-2">
+    <div ref={choices} className="pb-2" onKeyDown={e => {
+      if (e.defaultPrevented || !["ArrowUp", "ArrowDown"].includes(e.key)) return;
+      const rows = [...e.currentTarget.querySelectorAll<HTMLButtonElement>('[data-new-chat-choice]:not(:disabled)')];
+      const index = rows.indexOf(e.target as HTMLButtonElement);
+      if (index < 0) return;
+      e.preventDefault();
+      const next = index + (e.key === "ArrowDown" ? 1 : -1);
+      if (next < 0) input.current?.focus(); else rows[Math.min(next, rows.length - 1)]?.focus();
+    }}>
       <label className="mt-1 flex h-12 items-center gap-2 rounded-xl bg-surface px-3 stroke has-[input:focus-visible]:outline-3 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-agent-ink">
         <IconSearch size={19} aria-hidden="true" className="shrink-0" />
         <span className="sr-only">Search people</span>
-        <input ref={input} type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search people"
+        <input ref={input} type="search" value={query} onChange={(e) => search(e.target.value)} placeholder="Search people"
+          onKeyDown={e => {
+            if (!q || busy || e.nativeEvent.isComposing || !["Enter", "ArrowDown"].includes(e.key)) return;
+            const first = choices.current?.querySelector<HTMLButtonElement>('[data-new-chat-choice]:not(:disabled)');
+            if (first) { e.preventDefault(); if (e.key === "Enter") first.click(); else first.focus(); }
+          }}
           className="min-w-0 flex-1 bg-transparent text-[16px] outline-none placeholder:text-muted focus-visible:outline-none [&::-webkit-search-cancel-button]:hidden" />
-        {query && <IconButton label="Clear search" onClick={() => { setQuery(""); input.current?.focus(); }} className="-mr-2"><IconX size={18} /></IconButton>}
+        {query && <IconButton label="Clear search" onClick={() => { search(""); input.current?.focus(); }} className="-mr-2"><IconX size={18} /></IconButton>}
       </label>
 
       {onGroup && !q && (
@@ -224,16 +247,19 @@ function PickPeople({ overview, onGroup, onDone }: { overview: T.Overview; onGro
 
       {shownPeople.length > 0 && <>
         <h3 className={heading}>People</h3>
-        <ul>{shownPeople.map((c) => <li key={c.key}><CandidateRow c={c} busy={busy === c.key} disabled={!!busy} onPick={() => pick(c)} /></li>)}</ul>
+        <ul>{shownPeople.slice(0, peopleLimit).map((c) => <li key={c.key}><CandidateRow c={c} busy={busy === c.key} disabled={!!busy} onPick={() => pick(c)} /></li>)}</ul>
+        {shownPeople.length > peopleLimit && <Button size="sm" variant="outline" onClick={() => setPeopleLimit(n => n + pageSize)}>Show more people ({shownPeople.length - peopleLimit})</Button>}
       </>}
       {shownServer.length > 0 && <>
         <h3 className={heading}>Also on this server</h3>
         <p className="px-2 pb-1 text-[13px] text-muted">Not checked here yet. Starting a chat checks who they are first.</p>
-        <ul>{shownServer.map((c) => <li key={c.key}><CandidateRow c={c} busy={busy === c.key} disabled={!!busy} onPick={() => pick(c)} /></li>)}</ul>
+        <ul>{shownServer.slice(0, serverLimit).map((c) => <li key={c.key}><CandidateRow c={c} busy={busy === c.key} disabled={!!busy} onPick={() => pick(c)} /></li>)}</ul>
+        {shownServer.length > serverLimit && <Button size="sm" variant="outline" onClick={() => setServerLimit(n => n + pageSize)}>Show more server members ({shownServer.length - serverLimit})</Button>}
       </>}
       {shownAgents.length > 0 && <>
         <h3 className={heading}>Agents you talk to</h3>
-        <ul>{shownAgents.map((i) => <li key={i.key}><AgentRow item={i} onPick={() => { onDone(); void store.open(i.open); }} /></li>)}</ul>
+        <ul>{shownAgents.slice(0, agentLimit).map((i) => <li key={i.key}><AgentRow item={i} onPick={() => { onDone(); void store.open(i.open); }} /></li>)}</ul>
+        {shownAgents.length > agentLimit && <Button size="sm" variant="outline" onClick={() => setAgentLimit(n => n + pageSize)}>Show more agents ({shownAgents.length - agentLimit})</Button>}
       </>}
 
       {nothing && (q

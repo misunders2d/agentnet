@@ -71,9 +71,17 @@ export async function mount(root: HTMLElement, host: Host): Promise<void> {
     if (state.tab !== "chats") { store.showTab("chats"); return true; }
     return false;
   });
+  const dismissPanel = (event: KeyboardEvent) => {
+    if (event.key !== "Escape" || event.defaultPrevented || !store.isActive() || !root.isConnected || !store.get().panel) return;
+    const popup = [...portals.querySelectorAll<HTMLElement>('[role="dialog"],[role="alertdialog"],[role="menu"],[role="listbox"]')]
+      .some(el => el.getClientRects().length && !el.hasAttribute('data-ending-style') && !el.closest('[inert]'));
+    if (!popup) { event.preventDefault(); store.setPanel(false); }
+  };
+  window.addEventListener("keydown", dismissPanel);
+  const stopNavigation = () => { stopBack?.(); window.removeEventListener("keydown", dismissPanel); };
   live++;
   const r = createRoot(app);
-  mounted.set(root, { root: r, store, stopTheme, parts: [app, portals], stopBack });
+  mounted.set(root, { root: r, store, stopTheme, parts: [app, portals], stopBack: stopNavigation });
   r.render(
     <CSPProvider disableStyleElements>
       <OwnedContext.Provider value={{ root, app, portals }}>

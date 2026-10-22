@@ -24,7 +24,7 @@ func TestOwnModelStatusBundledSkinsRendered(t *testing.T) {
 		t.Skip("opt-in: AGENTNET_PLAYWRIGHT")
 	}
 	cmd := exec.CommandContext(t.Context(), "node", "testdata/modelstatus_rendered.cjs")
-	cmd.Env = append(os.Environ(), "AGENTNET_SCREENSHOTS="+t.TempDir())
+	cmd.Env = append(os.Environ(), "AGENTNET_SCREENSHOTS="+privateScreenshots(t))
 	out, e := cmd.CombinedOutput()
 	if e != nil || !strings.Contains(string(out), `"ok":true`) {
 		t.Fatalf("%v\n%s", e, out)

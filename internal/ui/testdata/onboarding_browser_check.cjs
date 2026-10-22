@@ -26,7 +26,7 @@ const width = Number(widthText), errors = [], external = [], requests = [], apiR
     const open = async (browserMode = false) => {
       await page.goto(origin + '/fixture' + (browserMode ? '?browser=1' : ''));
       await page.locator('#profile-btn').click();
-      await page.getByRole('tab', { name: 'Agent', exact: true }).click();
+      await page.getByRole('tab', { name: 'Assistants', exact: true }).click();
       const text = browserMode ? /This browser runs nothing/ : phase === 'fresh' ? /Nothing chosen yet/ : phase === 'manual' ? /No automatic responder/ : /codex answers approved questions/;
       await page.locator('#responder').getByText(text).waitFor();
     };
@@ -95,7 +95,7 @@ const width = Number(widthText), errors = [], external = [], requests = [], apiR
       assert.deepEqual(await read(), before);
       await page.locator('#settings-close').click();
       await page.locator('#profile-btn').click();
-      await page.getByRole('tab', { name: 'Agent', exact: true }).click();
+      await page.getByRole('tab', { name: 'Assistants', exact: true }).click();
       await page.locator('#responder').getByText(/codex answers approved questions/).waitFor();
       assert.equal(await page.locator('#responder input[value="codex"]').isChecked(), true);
       await capture('missing-refused');

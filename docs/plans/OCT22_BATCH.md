@@ -17,7 +17,7 @@ Failures, unavailable evidence and skips remain explicit.
 
 | ID | Target outcome | Acceptance check | Implementer | Verifier | State | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
-| S1 | Every person's messages/history, reactions, edits/deletions, reads and reminders converge without stale attention or work replay | Existing fixtures plus two ordinary-user native/browser journeys; online, offline, duplicate/reordered history, restart and new-device backfill; all attention consumers | oct22-state | Root / Claude | agreed | Real-Hub two ordinary-person journey passes on six native/browser devices, including offline/restart/stale/duplicate/backfill and deletion. Missing actual browser rem1 ad reproduced and fixed; five-parent race149.243s plus final six-device assertion14.032s; IndexedDB285 checks pass |
+| S1 | Every person's messages/history, reactions, edits/deletions, reads and reminders converge without stale attention or work replay | Existing fixtures plus two ordinary-user native/browser journeys; online, offline, duplicate/reordered history, restart and new-device backfill; all attention consumers | oct22-state | Root / Claude | implemented | Real-Hub two ordinary-person journey passes on six native/browser devices, including offline/restart/stale/duplicate/backfill and deletion. Missing actual browser rem1 ad reproduced and fixed; five-parent race149.243s plus final six-device assertion14.032s; IndexedDB285 checks pass |
 | H1 | Read chat is not replayed to native sessions and unrelated backlog does not block Stop | Read sync across linked devices; existing/new/resumed Codex/Claude/Pi sessions; >8 arrivals, filtered cursor progress; preserve decisions, exact-session replies and helper context | oct22-state | Root / Claude | implemented | Read-generation filtering, captured-top cursor progress and unconditional generic Stop suppression; exact selected receivers preserved. Final H1/Q1 35-parent races pass (client262.647s, command22.334s); own-linked task settlement race16.464s |
 | R1 | Linux reactions appear without reported delay | Before/after selection, durable API, event and paint timings; add/remove/failure/offline/sync | oct22-interaction | Root / Claude | implemented | Synthetic 24/400-row stale-history reproduction: durable 260/286ms, paint 1567/1245ms before; durable 262/269ms, paint 299/363ms after. Field timing remains open |
 | F1 | Group-picture Sending latency is corrected at measured stage | Enqueue/preparation/upload/fanout/custody/delivery/paint timings on representative group/office hardware; offline recipients, retries and concurrent messaging | oct22-storage | Root / Claude | implemented | Faithful 641KiB group fixture: blocked recipient reproduced serial stall; four recipient FIFO lanes yield final enqueue30.1ms and healthy custody69.5ms. Historical device incident not causally proven |
@@ -30,13 +30,16 @@ Failures, unavailable evidence and skips remain explicit.
 | A1 | Upgraded Pixel 6 connection status does not create false unread attention | Actual registered channel/recovery, real arrivals/read clearing and reliable delivery; preserve preferences and foreground service | oct22-state verifies existing source | Root / Claude / device operator | agreed | Existing registered-channel inspection, recovery and instrumentation source inventoried. Physical upgraded Pixel access/result remains open |
 | Q1 / MEL-497 | Ordinary clarification uses tagged chat and a valid tagged reply continues without a sticky decision gate | Actual group-worker saved-answer/repeated-round regression; ask/tagged-answer/same-context continuation and stale-attention clearing; thirty-minute delay split into queue/start/run/response; true native permission/authorization boundaries preserved | oct22-state backend / oct22-interaction UI | Root / Claude | implemented | Actual group prompt now includes saved continuation rounds; tagged follow-up claim settles only exact matching stale needs_human under normal authority. Actual repeated group-worker, tagged/authority boundaries and own-human linked task claim regressions pass; original attempts1/no duplicate rerun; Linear comment 8f7d6f61-f0c8-4b54-a286-3f30bec024ba |
 
+| G1 | Claude reviews every GUI area and interaction; all demonstrated gaps corrected for smooth direct chat UX | Complete reachable control/state/role inventory; rendered wide/narrow/light/dark, keyboard/pointer/touch/Back/focus/loading/offline/error/recovery and every gallery skin; independent recheck of corrections | Root integrates / existing helpers | Existing Claude tab 2 | in progress | Comprehensive review oct22-gui-review active; private shared GUI checklist, prior source reviews do not replace rendered coverage |
+| P1 | Every interaction responds promptly on every supported system | Visible-feedback, durable API, projection/paint and frame measurements for all reachable interaction families on real Linux/macOS/Windows shells, Android WebView and browsers; fix demonstrated delays, retain raw timings and distinguish emulator/physical | oct22-interaction fixtures / Root CI | Root / Claude | in progress | Static654-handler/75-file inventory and existing fixture map collected; complete measured system cells remain open |
+
 ## Reviews
 
 | Checkpoint | Required result | Reviewer | State | Revision / findings / root disposition |
 | --- | --- | --- | --- | --- |
 | Review 1 | Minimal state/hook approach, bounded Drive change and practical complete video path | Claude 2f109062-e9c2-4dde-ad01-4c3f9f9221dc | collected; root decisions recorded | Reviewed d196537c; complete marker 69c31ae7; private review/dispositions in .agentnet/oct22-run and .agentnet/herdr |
 | Review 1 Q1/H1 addendum | Tagged-chat correction and read-reply exception challenge | Same Claude session | collected; accepted | Complete marker 70c4db19; broad read-reply exception withdrawn, generic Stop never blocks; exact selected receivers preserved |
-| Review 2 | Significant implementations reviewed with focused before/after evidence | Existing Claude tab 2 | collected; refinements in progress | Marker 3f9a41d6; duration budget and own-human settle coverage accepted; uploader-only status shortcut declined after API inspection; dispositions in private review2 record |
+| Review 2 | Significant implementations reviewed with focused before/after evidence | Existing Claude tab 2 | collected; refinements completed | Marker 3f9a41d6; duration budget and own-human settle coverage accepted; uploader-only status shortcut declined after API inspection; dispositions in private review2 record |
 | Review 3 | Frozen integrated candidate independently reviewed before costly gates | Existing Claude tab 2 | collected; accepted with CI portability fix | Frozen57806d62; marker c6138f2a; grep replaces an unnecessary CI rg dependency; stable enough for integrated qualification; physical/platform/release gates remain open |
 
 ## Integrated qualification
@@ -46,19 +49,20 @@ affected selections after a correction. Never weaken assertions or bounds.
 
 | Gate | State | Exact evidence |
 | --- | --- | --- |
-| go vet ./... | pending | Not run for this batch |
-| Client race shards 0–17, count 18, existing 600s package bound | pending | Not run for this batch |
-| Other race packages and three sequential UI partitions | pending | Not run for this batch |
-| Required native Linux/macOS/Windows; six Windows client runners at 1800s | pending | No batch native run |
-| Android unit/lint/build/affected instrumentation and preserved upgrade | pending | No batch run; physical Pixel access unknown |
-| Actual Mac window cases and physical Pixel acceptance | pending | Need device access and candidate delivery route |
-| Representative office-hardware latency and CPU-only media behavior | pending | No batch measurement |
-| Required real MixedVersion with published tag | pending | No batch run |
-| Complete skin collection pinned to exact candidate | pending | No batch run |
-| Immutable app release and matching gallery publication | pending | Target v0.9.3; verify next free version before tagging; no publication yet |
+| go vet ./... | verified on frozen9b | All three native jobs pass vet in [39827811802](https://github.com/misunders2d/agentnet/actions/runs/39827811802) |
+| Client race shards 0–17, count18, existing600s package bound | 14 passed;4 corrections open | Same run retains0–3,5,7–10,12–15,17;4/6/11/16 fail known queued-output/prompt/error assertions.11/16 focused regular+race pass after correction;4/6 investigation in progress |
+| Other race packages and three sequential UI partitions | partial; affected replacement pending | Non-UI others fails two obsolete hook tests; all other package results retained. Script stops before three UI partitions, which remain unexecuted |
+| Required native Linux/macOS/Windows; six Windows client runners at1800s | partial; failures batched | Same run: Windows client1/2/3/5 and all three desktop builds pass. Native jobs and Windows client0/4 fail collected assertions; Windows Drive backoff fixture also assumes slow uploads finish within1s |
+| Android unit/lint/build/affected instrumentation and preserved upgrade | build verified; instrumentation correction open | Same run signed build, lint, unit tests, prior checksum/signer checks pass. Emulator snapshot expects203 against exported200; correction in progress. Later instrumentation has not run |
+| Actual Mac window cases and physical Pixel acceptance | Mac rendered check passed; physical open | Same run actual macOS headed WebKit TestMessageInteractionRendered17.67s passes normal/fullscreen/half-width controls. Native shell/full interaction timings remain open; owner has no Mac. Physical upgraded Pixel remains open |
+| Representative office-hardware latency and CPU-only media behavior | selective checks passed; P1 open | ZenBook i7-1165G7 CPU-only actual photo/video/frame measurements retained; complete all-interaction/native-system timing coverage in progress |
+| Required real MixedVersion with published tag | exact result accounting pending | Linux native run requires compatibility, but aggregate itest fails hooks; collect named result/replacement without reporting skips as passes |
+| Complete skin collection pinned to exact candidate | in progress | Isolated gallery pinned9b; GE1 focused8/8 passes and all five rebuilt. Full collection/previews/published synchronization waits for GUI source stability |
+| Immutable app release and matching gallery publication | pending | User explicitly requires public v0.9.3 by morning; next free version recheck before immutable tag; no publication yet |
 | Independent public artifact/checksum/signer/gallery verification | pending | No public batch artifacts |
-| Existing relay stopped full backup, old/new restore proof and preserved-data rollout | pending | Not started; preserve connected remote-only Drive, realm, volume, config and neighboring service |
-| Documentation, collected reviews and owned-resource cleanup | in progress | All three helper final packets and source hashes collected; canonical assets/types/API docs pass; Review3 then qualification and owned-pane cleanup |
+| Existing relay stopped full backup, old/new restore proof and preserved-data rollout | pending | Preserve connected remote-only Drive, realm, volume, config and neighboring service; no live change yet |
+| Documentation, collected reviews and owned-resource cleanup | in progress | Review1/2/3 and original helper packets collected; new G1/P1 and CI followups active. Root retains owned panes until current outputs collected |
+
 
 ## Authority and preservation
 
@@ -68,3 +72,69 @@ diagnostics. Unrelated live resets/configuration/infrastructure and Play/push
 work remain excluded. Prepare concrete device candidates/procedures before
 requesting genuinely missing install authority. Ignore unrelated AgentNet
 backlog. Keep operational details private.
+
+## GUI review corrections after the initial qualification
+
+The original9b qualification is retained by exact result; no new expensive full
+run is accepted while the demonstrated GUI corrections are still in progress.
+Claude pass1 and continued remaining review found real input/state defects:
+long-press release activating the sheet, Escape/composer modes, unread entry
+and WebKit late-height anchoring, delayed reaction feedback, search/Back/focus,
+confirmed batch cancellation on close, schedule navigation, moved destination
+names, coarse unread burst ordering, guest event wording and short-window menus.
+Focused actual component/native/browser regressions precede the next stable gate.
+The private root GUI checklist records each finding/disposition/evidence; the
+accessibility-name finding was withdrawn after real AX inspection and its changes
+removed. Existing own-agent invite closure is proven, with no invented repair.
+
+Collected new packets: Q1 UI91c64b0e (actual desktop/Android ordinary Attempt0 plus
+16 rendered cases/32 sends); reaction27b0c39e (16 boundaries, race14.457s,7–32ms local
+pending while API is held); topic destinationc719f2b8 (native/browser original
+anchor, both directions/reload/inverse/replay and race); schedulea710e45c (existing
+journal intact, chat stays visible, exact-ID/file/audience recovery and race).
+Root actual navigation keys/panel Escape320/390/1280 pass15.023s; browser Back and
+three standalone registered handlers pass, with full gallery requalification open.
+Unread subsecond native/provider correction retains a173.82s parent race pass from
+an aggregate180s timeout, then executes only remaining parents in50.834s. The
+aggregate timeout remains recorded; it is not represented as a passing command.
+
+Complete all-interaction speed remains open: the old400-row unread mount is a
+measured0.6–1.2s defect. Initial24-group rendering, explicit80-group paging, real-height containment and
+shared timestamp formatting are integrated. Raw native/browser feedback above200ms cannot be
+called smooth merely because a2s catastrophic guard passes. Root prepared actual
+Linux/macOS/Windows shell and named browser runners plus owned Android WebView
+staging, not yet dispatched. Physical upgraded Pixel acceptance remains open.
+
+Release preparation read-only preflight confirms currentv0.9.2/same realm and
+connected remote-only Drive. A subsequent metadata count is8343files/1.085GB.
+Automatic approval rejected optional backup prefetch that could copy OAuth config;
+that approach is abandoned. Use the existing native full stopped backup in its
+original volume, which excludes OAuth configuration, for the authorized rollout.
+No live app change, public tag or release has been made yet.
+
+The final GUI asset refresh passes strict TypeScript; Comic entry SHA256 is
+`3847a12ec2d89a188dae389ef959d90b646dd138fde7b7c4a05a00715c234e30`.
+Integrated `go vet ./...` passes. Four previously failing opt-in GUI parents pass
+together in54.156s, with exact public notification routing for unbound historical
+requests and the pending-invitation prerequisite preserved. P7 person grants pass
+1280/390. Four additional trust/model/onboarding/gallery parents pass together
+in54.896s, including exact keys/harnesses, retired-model exclusion and fresh
+consent for changed gallery code. Workspace reconnect normal passes7.949s; a
+subsequent aggregate race retains six parent passes but times out in that fixture,
+so its cleanup/race acceptance remains under investigation. The failure is retained.
+
+Claude remaining-review marker603ed19a is collected. It disclosed that its main
+interactive worlds used dirty main rather than the candidate. All those coverage
+rows and timings are excluded from candidate acceptance; clean-candidate fixtures
+and explicit9b reproductions remain distinct. Final exact-frozen-source review
+must rebuild/fingerprint and re-establish every GUI row. Its original New-topic/
+Reply finding did not reproduce on9b; the independent actual Composer regression
+and current hidden-mode/escape protections retain their own evidence.
+
+Guest event packetf02a48d6 proves human group/name/room and structured lifecycle
+semantics, including final native Overview preview (six final races89.019s),
+browser712checks and four rendered native/browser×wide/narrow cases. P1 packet
+21c5a94e freezes product changes but does not close performance acceptance: its
+174 raw action observations and above200ms results are retained. The same portable
+runner is being extended test-only to the remaining reachable interaction families.
+See [release qualification record](V0_9_3_RELEASE.md) for still-open gates.

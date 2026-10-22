@@ -48,6 +48,19 @@ print('PASS signed Android upgrade: original identity, 200 saved messages, origi
 PY
 instrument notifications "$RUNNER_TEMP/android-notifications.txt"
 instrument indicators-video "$RUNNER_TEMP/android-indicators-video.txt"
+# Every invocation consumes its private test JS/seed in finally; restage both.
+for suite in history navigation settings unread actions; do
+  for file in latency-fixture.mjs latency-input.json; do
+    adb -s "$serial" push "$RUNNER_TEMP/android-latency/$file" "$app_data/cache/$file"
+    adb -s "$serial" shell chown "$app_uid:$app_uid" "$app_data/cache/$file"
+    adb -s "$serial" shell chmod 600 "$app_data/cache/$file"
+  done
+  output="$RUNNER_TEMP/android-latency-$suite.txt"
+  adb -s "$serial" shell am instrument -w -r -e mode latency -e ownedFixture 1 -e latencySuite "$suite" "$runner" > "$output"
+  cat "$output"
+  grep -Eq '^INSTRUMENTATION_CODE: -1[[:space:]]*$' "$output"
+  grep -q 'LATENCY_JSON=' "$output"
+done
 adb -s "$serial" shell pm revoke "$package" android.permission.POST_NOTIFICATIONS
 instrument notifications-denied "$RUNNER_TEMP/android-notifications-denied.txt"
 printf '%s\n' 'Emulator evidence only; physical Pixel launcher and live delivery are separate checks.'

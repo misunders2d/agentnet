@@ -73,10 +73,10 @@ func unreadKey(r UnreadRow) string {
 	return strings.Join([]string{r.Kind, scope, r.Author, lid}, ":")
 }
 func unreadAfter(r UnreadRow, c unreadCursor) bool {
-	return r.At.Unix() < c.At || r.At.Unix() == c.At && r.Key > c.Key
+	return r.At.UnixMilli() < c.At || r.At.UnixMilli() == c.At && r.Key > c.Key
 }
 func encodeUnreadCursor(r UnreadRow) string {
-	b, _ := json.Marshal(unreadCursor{1, r.At.Unix(), r.Key})
+	b, _ := json.Marshal(unreadCursor{2, r.At.UnixMilli(), r.Key})
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 func parseUnreadCursor(s string) (unreadCursor, error) {
@@ -100,7 +100,7 @@ func parseUnreadCursor(s string) (unreadCursor, error) {
 		return c, bad
 	}
 	c = unreadCursor{*fields.V, *fields.At, *fields.Key}
-	if c.V != 1 || c.At < 0 || c.At > 9007199254740991 || c.Key == "" || len(c.Key) > 512 {
+	if c.V != 2 || c.At < 0 || c.At > 9007199254740991 || c.Key == "" || len(c.Key) > 512 {
 		return c, bad
 	}
 	if d.Decode(new(any)) != io.EOF {
@@ -136,8 +136,8 @@ func (l *Live) UnreadPage(q UnreadQuery) (UnreadPage, error) {
 	if !index.sorted {
 		sort.Slice(index.rows, func(i, j int) bool {
 			a, b := index.rows[i], index.rows[j]
-			if a.At.Unix() != b.At.Unix() {
-				return a.At.Unix() > b.At.Unix()
+			if a.At.UnixMilli() != b.At.UnixMilli() {
+				return a.At.UnixMilli() > b.At.UnixMilli()
 			}
 			return a.Key < b.Key
 		})

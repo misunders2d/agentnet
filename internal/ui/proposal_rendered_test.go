@@ -65,7 +65,7 @@ func testProposalConfirmationRendered(t *testing.T, revised bool) {
 				server = New(live, ts.Listener.Addr().String(), testToken)
 				ts.Start()
 				cmd := exec.Command("node", "testdata/proposal_rendered_check.cjs")
-				cmd.Env = append(os.Environ(), "P23_URL="+ts.URL+"/?t="+testToken, "P23_SKIN="+skin, "P23_WIDTH="+width, "P23_PEER="+alice.Address)
+				cmd.Env = append(os.Environ(), "P23_URL="+ts.URL+"/?t="+testToken, "P23_SKIN="+skin, "P23_WIDTH="+width, "P23_PEER="+alice.Address, "P23_THREAD="+q.ID)
 				if revised {
 					cmd.Env = append(cmd.Env, "P23_REVISED=1")
 					body = "Write release notes in English.\n" + strings.Repeat("Keep all report details.\n", 200)

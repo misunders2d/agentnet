@@ -20,10 +20,10 @@ import { AppControls } from "./AppControls";
 import { DriveSettings } from "./Drive";
 import { HeldBack } from "./Approvals.held";
 import { DeviceCacheControls, RelayQuotaControls } from "./StorageManagement";
+import { storageBytes as bytes } from "./RelayAttachmentStorage.model";
 
 // ---- Storage -----------------------------------------------------------------
 
-const bytes = (n: number) => n < 1024 ? n + " B" : n < 1 << 20 ? (n / 1024).toFixed(1) + " KB" : n < 1 << 30 ? (n / (1 << 20)).toFixed(1) + " MB" : (n / (1 << 30)).toFixed(2) + " GB";
 const files = (n: number) => n === 1 ? "1 file" : n + " files";
 const days = (sec: number) => { const d = Math.round(sec / 86400); return d === 1 ? "1 day" : d + " days"; };
 

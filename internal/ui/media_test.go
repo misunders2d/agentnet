@@ -312,6 +312,24 @@ func TestMessageInteractionRendered(t *testing.T) {
 	t.Log(browserCheck(t, "testdata/interaction_rendered.cjs"))
 }
 
+func TestMessageReviewInteractionsRendered(t *testing.T) {
+	if engine := os.Getenv("AGENTNET_INTERACTION_ENGINE"); engine != "" && engine != "chromium" {
+		t.Skip("real CDP touch input requires Chromium; engine-neutral controls run separately")
+	}
+	t.Setenv("AGENTNET_INTERACTION_REVIEW", "1")
+	t.Log(browserCheck(t, "testdata/interaction_rendered.cjs"))
+}
+
+func TestFirstUnreadTimelineRendered(t *testing.T) {
+	t.Setenv("AGENTNET_INTERACTION_UNREAD_CONTRACT", "1")
+	t.Log(browserCheck(t, "testdata/interaction_rendered.cjs"))
+}
+
+func TestTimelineKeyboardRendered(t *testing.T) {
+	t.Setenv("AGENTNET_INTERACTION_KEYBOARD", "1")
+	t.Log(browserCheck(t, "testdata/interaction_rendered.cjs"))
+}
+
 func TestMediaBitrateBudget(t *testing.T) {
 	for _, tc := range []struct {
 		duration  float64

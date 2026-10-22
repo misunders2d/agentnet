@@ -53,7 +53,7 @@ func TestWorkspaceReconnectRendered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := exec.Command(node, "testdata/workspace_reconnect_browser_check.cjs").CombinedOutput()
+	out, err := exec.CommandContext(t.Context(), node, "testdata/workspace_reconnect_browser_check.cjs").CombinedOutput()
 	if err != nil || !strings.Contains(string(out), "workspace reconnect check PASS") {
 		t.Fatalf("%v\n%s", err, out)
 	}

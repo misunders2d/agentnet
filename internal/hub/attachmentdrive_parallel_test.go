@@ -194,14 +194,20 @@ func TestRelayAttachmentDriveArrivalsRespectProviderBackoff(t *testing.T) {
 	for range 6 {
 		ids = append(ids, a.upload(t, h, b.addr, []byte("new attachment keeps local custody during backoff")))
 	}
-	time.Sleep(100 * time.Millisecond)
-	p.mu.Lock()
-	after := p.uploadCalls
-	p.mu.Unlock()
-	if after != before {
-		t.Fatalf("arrivals bypassed provider backoff: %d -> %d requests", before, after)
-	}
 	for _, id := range ids {
 		awaitAttachmentState(t, h, id, "remote")
 	}
+	p.mu.Lock()
+	starts := append([]time.Time(nil), p.uploadStarts...)
+	p.mu.Unlock()
+	// Arrival uploads can take longer than the backoff on a slow disk. Check
+	// the actual provider dispatch interval rather than requiring the timer
+	// to remain active until this test finishes creating all six arrivals.
+	if before != 1 || len(starts) < 2 {
+		t.Fatalf("missing initial failure and subsequent retry: before=%d starts=%d", before, len(starts))
+	}
+	if interval := starts[1].Sub(starts[0]); interval < time.Second {
+		t.Fatalf("arrivals bypassed one-second provider backoff: retry after %s", interval)
+	}
+	t.Logf("provider retry began %s after the initial failed dispatch", starts[1].Sub(starts[0]))
 }

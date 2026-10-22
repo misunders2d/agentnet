@@ -196,14 +196,15 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   useEffect(() => { if (wide && conv && !coarse()) field.current?.focus({ preventScroll: true }); }, [conv]);
 
   // A reply chosen here (from a message, an approval card) puts the cursor
-  // here, on a phone too. An exact running-work reply retains its tagged
-  // agent; other replies return to the ordinary conversation.
+  // here, on a phone too. Reply replaces an armed New topic and keeps the
+  // selected agent; the send path verifies its exact request ancestry.
   const lastReply = useRef({ conv, replyTo: draft.replyTo });
   useEffect(() => {
     const prev = lastReply.current;
     lastReply.current = { conv, replyTo: draft.replyTo };
     if (prev.conv !== conv || !draft.replyTo || draft.replyTo === prev.replyTo) return;
-    if (draft.agent && dm && !selectedPIDs.some(pid => composerReplyFollowup(dm,pid,draft.topic || "",followupContext,draft.replyTo))) stopAsking();
+    const reply = dm?.messages?.find(m => m.id === draft.replyTo || m.lid === draft.replyTo);
+    if (reply || thread?.messages?.some(m => m.id === draft.replyTo)) store.setDraft(conv, { ...latest(), newTopic: false, ...(dm ? {topic: reply?.topic || undefined} : {}) });
     focusField(true);
   }, [conv, draft.replyTo]);
 
@@ -236,8 +237,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     const {kept}=shift(spans,text,cur,trig.start+token.length);
     const added:Span=c.kind==='collective'?{start:trig.start+prefix.length,name:c.name,kind:'collective',id:'',refs:selected.map(p=>({kind:p.kind,id:p.id}))}:{start:trig.start+prefix.length,name:c.name,kind:c.kind,id:c.id};
     const agent=agentTargets(cur,[...kept,added],d.agent)[0];
-    const bound = agent && d.replyTo && composerReplyFollowup(dm,agent,d.topic || "",followupContext,d.replyTo);
-    write({...d,text:encode(cur,[...kept,added]),agent, ...(agent && !bound ? {replyTo:undefined} : {})},trig.start+token.length);
+    write({...d,text:encode(cur,[...kept,added]),agent},trig.start+token.length);
     if(c.kind==='collective')announce('@'+c.name+' selects '+selected.length+' exact recipients.');
     else if(agent)announce('Asking '+c.name+'.');
   }
@@ -452,8 +452,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       releaseFiles(sent);
 
       if (!r) { /* answered: the request's own card shows what happened */ }
-      else if (followup) store.toast("Steering sent. Waiting for native acceptance on the current work.");
-      else if (r.state === "queued") store.toast("Sending…");
+      else if (followup) store.toast(followup.attempt === 0 ? "Reply queued in the original request context." : "Steering sent. Waiting for native acceptance on the current work.");
       else if (r.state === "waiting") store.toast("Kept here, not sent yet: " + (r.detail || "they can’t receive messages right now."));
       else if (r.state === "receiver_waiting" && r.detail) store.toast(r.detail);
       void store.refetch();
@@ -632,6 +631,11 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
         pick(offered[Math.min(active, offered.length - 1)]);
         return;
       }
+    }
+    if (e.key === "Escape" && (draft.replyTo || draft.newTopic)) {
+      e.preventDefault(); e.stopPropagation();
+      store.setDraft(conv, { ...latest(), replyTo: undefined, newTopic: false });
+      return;
     }
     // Backspace right after a mention takes the whole mention away.
     if (e.key === "Backspace" && !e.altKey && !e.ctrlKey && !e.metaKey && e.currentTarget.selectionStart === e.currentTarget.selectionEnd) {

@@ -3,6 +3,7 @@ import type { T } from "../api";
 import { useApp } from "../context";
 import { useStore, type Draft } from "../store";
 import type { ScheduleSave } from "../schedule-saves";
+import { dueText } from "../model";
 import { Button } from "../ui/Button";
 import { Sheet } from "../ui/Sheet";
 import { sendID } from "../optimistic.mjs";
@@ -74,7 +75,7 @@ export function ScheduleDialogs({pane,onPane,conv,dm,capture,reason,page=false,r
     try {
       await submitSchedule(store.api,attempt);
       store.settleScheduleSave(conv,attempt.payload.id!,"confirmed");
-      if(mounted.current&&store.isActive()){setNotice("Scheduled on this device. It has not been sent yet.");onPane("list");}
+      if(mounted.current&&store.isActive()){onPane(null);store.toast("Scheduled for "+dueText(attempt.payload.due)+" · Outbox → Scheduled", "ok");}
     } catch (error) {
       const refused=scheduleRefused(error);
       store.settleScheduleSave(conv,attempt.payload.id!,refused?"refused":"uncertain",refused?"Save refused. Your draft is kept. Review the chat, audience, time and attachments before a changed save.":"Save not confirmed. Retry this original same-ID save; it may already be scheduled.");

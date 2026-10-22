@@ -184,8 +184,9 @@ another supersedes it. A stale allocation is refused for explicit retry. Topic
 IDs, membership, read state and messages are unchanged by renaming.
 
 Both topic and unread cursors describe positions, not retained row identities.
-Pass them unchanged. A topic cursor from the older chronological format is
-refused; reload from the first page. During live changes, refill the already
+Pass them unchanged. Unread order retains the stored millisecond arrival time,
+with the scoped key breaking exact ties. Older second-resolution unread cursors
+and older chronological topic cursors are refused; reload from the first page. During live changes, refill the already
 loaded prefix and deduplicate scoped identities. This is a moving list, not a
 snapshot: a representative can change position. Preserve displayed order under
 pointer/focus/selection while updating counts, and make vanished rows inactive

@@ -6,11 +6,15 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/misunders2d/agentnet/internal/lockfile"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
@@ -183,5 +187,121 @@ func TestLocalAgentIdentityMappingsAndImmutableSelection(t *testing.T) {
 	raw, _ := w.bob.store.config(agentCatalogConfig)
 	if strings.Contains(raw, "session_id") || strings.Contains(raw, "native_session") {
 		t.Fatal("catalog contains native session mapping")
+	}
+}
+
+// A full catalog read before an edit must not arrive after the explicit
+// post-edit publication and replace it. Cover separate Open handles as used
+// by a daemon and CLI, as well as two callers of the same Agent.
+func TestAgentCatalogPublicationKeepsLatestAcrossHandles(t *testing.T) {
+	for _, separate := range []bool{false, true} {
+		name := "same-handle"
+		if separate {
+			name = "separate-open-handles"
+		}
+		t.Run(name, func(t *testing.T) {
+			stub := installStub(t, "answer")
+			w, conv, _, stopBob := agentWorld(t)
+			stopBob()
+			w.bob.stopBackgroundPosts()
+			newer := w.bob
+			if separate {
+				var err error
+				newer, err = Open(w.bob.home)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer newer.Close()
+			}
+			old, err := w.bob.CreateLocalAgent("Retired builder", Responder{Harness: "stub", Dir: stub.dir})
+			if err != nil {
+				t.Fatal(err)
+			}
+			entered, releaseOld := make(chan struct{}), make(chan struct{})
+			var releaseOnce sync.Once
+			release := func() { releaseOnce.Do(func() { close(releaseOld) }) }
+			defer release()
+			base := w.bob.hub.http.Transport
+			var first atomic.Bool
+			w.bob.hub.http.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if r.Method == "PUT" && r.URL.Path == "/v1/agent-catalog" && first.CompareAndSwap(false, true) {
+					close(entered) // old snapshot is signed and serialized, before the relay stores it
+					select {
+					case <-releaseOld:
+					case <-r.Context().Done():
+						return nil, r.Context().Err()
+					}
+				}
+				return base.RoundTrip(r)
+			})
+			defer func() { w.bob.hub.http.Transport = base }()
+			oldDone := make(chan error, 1)
+			go func() { oldDone <- w.bob.PublishAgentCatalog(tctx(t)) }()
+			select {
+			case <-entered:
+			case <-tctx(t).Done():
+				t.Fatal("old catalog snapshot did not reach the relay barrier")
+			}
+			if err := newer.SetLocalAgentResponder(old.ID, nil); err != nil {
+				t.Fatal(err)
+			}
+			current, err := newer.CreateLocalAgent("Current builder", Responder{Harness: "stub", Dir: stub.dir})
+			if err != nil {
+				t.Fatal(err)
+			}
+			newDone := make(chan error, 1)
+			// The existing OS-lock abstraction lets the fixture distinguish a
+			// serialized publication from an unfenced one without sleeps. In
+			// the unfenced RED case, force the newer PUT to finish first. When
+			// fenced, release the older holder so the waiting publisher can
+			// build its snapshot after that holder finishes.
+			probe, fenceErr := lockfile.Acquire(filepath.Join(w.bob.home, "agent-catalog.lock"))
+			if fenceErr == nil {
+				probe()
+				newDone <- newer.PublishAgentCatalog(tctx(t))
+				release()
+			} else if errors.Is(fenceErr, lockfile.ErrLocked) {
+				go func() { newDone <- newer.PublishAgentCatalog(tctx(t)) }()
+				release()
+			} else {
+				t.Fatal(fenceErr)
+			}
+			if err := <-oldDone; err != nil {
+				t.Fatal(err)
+			}
+			if err := <-newDone; err != nil {
+				t.Fatal(err)
+			}
+			label, device, _ := protocol.SplitAddress(w.bob.Address)
+			var actual []protocol.AgentRecord
+			if err := w.alice.hub.do(tctx(t), "GET", "/v1/agents/"+label+"/"+device+"/agent-catalog", nil, &actual); err != nil {
+				t.Fatal(err)
+			}
+			if len(actual) != 1 || actual[0].ID != current.ID || actual[0].Verify(w.bob.Self()) != nil {
+				t.Fatalf("stale completed snapshot replaced current catalog: got %+v; want only %s (disabled %s absent)", actual, current.ID, old.ID)
+			}
+			// Restore only the host's capability session after proving the
+			// relay already has the correct catalog. Invitation is attempted
+			// once against the actual signed reader, never retried or guessed.
+			stopRestarted := runAgent(t, w.bob)
+			defer stopRestarted()
+			waitNamedAgentCaps(t, w.bob)
+			// A fresh CLI handle reads the restarted session directly, rather
+			// than racing the old reader's next availability-cache push.
+			reader, err := Open(w.alice.home)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reader.Close()
+			catalog, err := reader.AgentCatalog(tctx(t), w.bob.Address)
+			if err != nil || len(catalog) != 1 || catalog[0].ID != current.ID {
+				t.Fatalf("current verified catalog %+v %v", catalog, err)
+			}
+			invited, err := reader.InviteNamedAgent(tctx(t), conv, w.bob.Address, current.ID, nil, nil, "one exact current identity")
+			if err != nil || invited.AgentID != current.ID {
+				t.Fatalf("single exact named invitation: %+v %v", invited, err)
+			}
+			t.Log("new enabled identity retained, disabled identity absent; one signed-catalog invitation succeeded")
+		})
 	}
 }

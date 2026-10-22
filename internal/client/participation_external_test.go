@@ -1,12 +1,15 @@
 package client
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -236,7 +239,8 @@ func TestExternalAgentProofReplayAndQueuedGates(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "pending external host", func() bool { return stateAt(t, host, p.PID).State == PartInvited })
-	stopHost() // all subsequent native admission/claim/output is deterministic
+	stopHost()                 // all subsequent native admission/claim/output is deterministic
+	host.stopBackgroundPosts() // join its independent sender before reopening the same outbox
 	_, raw, _, _ := host.store.conversation(conv)
 	badDecision := protocol.ParticipationEvent{V: 1, Conv: conv, PID: p.PID, Type: protocol.EventAccept, Prev: strings.Repeat("fe", 32), Author: stateAuthor(t, host), TS: time.Now().Unix()}
 	for _, signer := range []*Agent{host, w.alice} {
@@ -335,21 +339,42 @@ func TestExternalAgentProofReplayAndQueuedGates(t *testing.T) {
 	if _, err := host.store.db.Exec(`UPDATE persons SET state=? WHERE person=?`, personSelf, p.Host.Person); err != nil {
 		t.Fatal(err)
 	}
-	// Queue both recipient-encrypted outputs: one immutable job owns both.
-	injected := injectFaults(reopened)
-	injected.add("POST", "/v1/messages", 2, false)
-	reopened.finishAgent(tctx(t), j, &j.Executor.Responder, envelope.StatusDone, "bounded answer\nemotion: calm")
+	// Queue without an initial handover attempt. The receive stream was
+	// stopped above; also close the independent sender before taking exact
+	// control of these two recipient lanes.
+	reopened.stopBackgroundPosts()
+	reopened.finishAgent(WithQueuedSend(tctx(t), ""), j, &j.Executor.Responder, envelope.StatusDone, "bounded answer\nemotion: calm")
 	var queued int
 	if err := host.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE pid=? AND origin LIKE 'agent:%' AND state=?`, p.PID, stateQueued).Scan(&queued); err != nil || queued != 2 {
 		t.Fatalf("queued output fan %d %v", queued, err)
 	}
-	var delivered int
+	// postHook runs after the HTTP response: independent recipients can both
+	// have begun handover by then. Hold one exact copy before deliver's
+	// admission checks, instead of assuming globally serial recipient lanes.
+	var heldID string
+	if err := reopened.store.db.QueryRow(`SELECT id FROM outbox WHERE pid=? AND origin LIKE 'agent:%' AND state=? ORDER BY rowid DESC LIMIT 1`, p.PID, stateQueued).Scan(&heldID); err != nil {
+		t.Fatal(err)
+	}
+	var untouched int
+	if err := reopened.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE pid=? AND origin LIKE 'agent:%' AND state=? AND handover_started=0`, p.PID, stateQueued).Scan(&untouched); err != nil || untouched != 2 {
+		t.Fatalf("outputs already attempted before explicit flush: %d %v", untouched, err)
+	}
+	unlock, err := reopened.deliveryLocks.acquire(tctx(t), heldID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(unlock) }
+	defer release()
+	var delivered atomic.Int32
 	reopened.hub.http.Transport = postHook{reopened.hub.http.Transport, func(env envelope.Envelope) {
 		if env.Kind != envelope.KindAnswer {
 			return
 		}
-		delivered++
-		if delivered == 1 {
+		if env.ID == heldID {
+			t.Error("the held output began a new dispatch after dismissal")
+		}
+		if delivered.Add(1) == 1 {
 			info := stateAt(t, host, p.PID)
 			ev := protocol.ParticipationEvent{V: 1, Conv: conv, PID: p.PID, Type: protocol.EventDismiss, Prev: info.Decision, Author: stateAuthor(t, w.alice), TS: time.Now().Unix()}
 			ev.Sign(w.alice.id.Sign)
@@ -358,14 +383,29 @@ func TestExternalAgentProofReplayAndQueuedGates(t *testing.T) {
 			if err := host.accept(tctx(t), end); err != nil {
 				t.Error(err)
 			}
+			if info := stateAt(t, host, p.PID); info.State != PartDismissed {
+				t.Errorf("held lane released before exact dismissal persisted: %s", info.State)
+			}
+			release()
 		}
 	}}
-	if err := reopened.FlushOutbox(tctx(t)); err != nil {
+	flushCtx, cancelFlush := context.WithTimeout(tctx(t), 10*time.Second)
+	defer cancelFlush()
+	if err := reopened.FlushOutbox(flushCtx); err != nil {
 		t.Fatal(err)
 	}
-	if delivered != 1 {
-		t.Fatalf("post-dismiss output copies delivered %d", delivered)
+	if delivered.Load() != 1 {
+		t.Fatalf("post-dismiss output copies dispatched %d", delivered.Load())
 	}
+	var heldState string
+	var handoverStarted int
+	if err := reopened.store.db.QueryRow(`SELECT state,handover_started FROM outbox WHERE id=?`, heldID).Scan(&heldState, &handoverStarted); err != nil || heldState != stateNotDelivered || handoverStarted != 0 {
+		t.Fatalf("post-dismiss held copy state=%s handover_started=%d err=%v", heldState, handoverStarted, err)
+	}
+	if err := reopened.FlushOutbox(flushCtx); err != nil || delivered.Load() != 1 {
+		t.Fatalf("repeated flush dispatched held output: copies=%d err=%v", delivered.Load(), err)
+	}
+	t.Log("independent recipient progressed; dismissed copy retained handover_started=0 and no dispatch on either flush")
 	var blocked int
 	host.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE pid=? AND origin LIKE 'agent:%' AND state=?`, p.PID, stateNotDelivered).Scan(&blocked)
 	if blocked != 1 {

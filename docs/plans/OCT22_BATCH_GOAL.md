@@ -1,6 +1,8 @@
 # AgentNet v0.9.3 — complete October 22 batch and verified public release
 
-**ACTIVE — authorized by Sergey on October 22, 2026.** The owner instructed:
+**ACTIVE — authorized by Sergey on October 22, 2026.** The owner requires the
+complete new release published by morning, with Claude reviewing every GUI
+area and measured speed for every interaction on every supported system. The owner instructed:
 “okay, activate the goal and start working,” then required the tagged-chat
 correction in Linear and the next release: “make sure ‘release’ is in your goal.”
 **GPT-6.1-sol/xhigh Codex helpers
@@ -177,6 +179,35 @@ prepared fixes, hypotheses and verified corrections.
     test that calls the direct builder. Repeated rounds must retain each prior
     question/answer exactly once under the correct request/attempt.
 
+13. **G1 — mandatory Claude review of the entire GUI.** Claude must review all
+    GUI areas and their interactions, including existing screens and every
+    release skin, using rendered desktop/phone light/dark evidence and actual
+    control flows. Build an explicit screen/control/state inventory so unvisited
+    parts remain visible. Remove demonstrated gaps and introduce coherent
+    improvements before publication. Use smooth Telegram-style UX as the
+    reference: direct chat, clear hierarchy, predictable controls, short paths,
+    sensible keyboard/touch/focus/Back behavior and recoverable errors. Avoid
+    unnecessary forms, blocking gates, decorative motion or implementation
+    jargon in ordinary product flows. This is a complete interaction review,
+    not a source-only review or a blanket visual redesign. Claude verifies the
+    resulting fixes and records coverage, findings and exact rendered evidence.
+
+14. **P1 — every interaction measured on every supported system.** Inventory
+    and measure all user interactions on Linux, macOS, Windows, Android and
+    browser, including navigation/search, message actions, composing/sending/
+    media/retry, topics and groups, agents/invitations/dismissal, Review/Outbox/
+    schedules/reminders, setup/trust and all Settings/admin controls. Separate
+    input feedback, durable action/API completion, push/projection and visible
+    paint; include repeated actions, long history, offline/error/recovery,
+    background refresh, narrow/wide layouts and keyboard/touch/pointer paths.
+    Reuse existing responsiveness fixtures and native shell/Android boundaries;
+    extend demonstrated coverage gaps without a replacement testing framework.
+    Fix observed lag and remove avoidable blocking before publication. Do not
+    hide latency with optimistic success or inflate deadlines. Report the exact
+    hardware/engine/platform, workload and timings, and keep native execution,
+    browser emulation and physical devices distinct. No interaction or system
+    may be silently omitted or called verified from compilation alone.
+
 Preserve signatures, exact pinned keys/current rosters, revocation/freeze checks,
 membership and history grants, recipient consent, native execution permissions,
 one active agent per harness/device, invited helpers' live context and
@@ -314,7 +345,7 @@ when required; never edit shipped migrations.
 
 ## Completion
 
-Complete only when every S1–A1 and Q1 requirement has artifact evidence, its
+Complete only when every S1–A1, Q1, G1 and P1 requirement has artifact evidence, its
 corresponding journey and focused regressions pass, Claude's three completed
 reviews and root dispositions are collected, the integrated required gates pass
 with exact case accounting, v0.9.3 and its matching gallery are public and

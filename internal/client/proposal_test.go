@@ -39,10 +39,12 @@ func TestRunJobProposal(t *testing.T) {
 	if row := inboxRow(t, w.bob, q.ID); row.State != stateAnswered || row.Detail != "" {
 		t.Fatalf("the question on the host: %+v", row)
 	}
-	// The question's run was asked to propose, and to keep needs-human for
-	// decisions only the person makes.
+	// The question's run may propose. Ordinary clarification uses tagged chat;
+	// needs-human stays reserved for concrete native permission/authorization.
 	data := mustRead(t, st.log+".stdin")
-	if !strings.Contains(data, proposeMarker) || !strings.Contains(data, "decide something only they can") {
+	if !strings.Contains(data, proposeMarker) || !strings.Contains(data, "concrete native permission or required sender/task authorization") ||
+		!strings.Contains(data, "ask a normal question in this authorized chat, tagging the intended person") ||
+		!strings.Contains(data, "Do not use this marker for ordinary clarification or business choices.") {
 		t.Fatalf("prompt:\n%s", data)
 	}
 	// The asker's execution view settles on it: the proposal is its last word.

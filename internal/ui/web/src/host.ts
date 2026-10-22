@@ -113,6 +113,8 @@ export interface Host {
     /** Calls fn on every foreground/background change; returns unsubscribe. */
     onVisibility(fn: (visible: boolean) => void): () => void;
   };
+  /** False when this page has no native app controls; overview.app can identify a locally owned app. */
+  appControlsAvailable?: boolean;
   onBack?(fn: () => boolean): () => void;
   api<T = unknown>(path: string, body?: unknown): Promise<T>;
   listen(fn: (e: HostEvent) => void): () => void;

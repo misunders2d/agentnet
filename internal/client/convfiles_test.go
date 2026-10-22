@@ -241,7 +241,7 @@ func TestDMFilesQueuedAcrossRestart(t *testing.T) {
 	injectFaults(w.alice).add("POST", "/v1/blobs", 1, false)
 	path, data := writeFile(t, t.TempDir(), "report.pdf", 70000)
 	sent, err := w.alice.SendConv(tctx(t), conv, ConvOutgoing{Body: "report", Files: []OutgoingFile{{Path: path}}})
-	if err != nil || sent.State != stateQueued || !strings.Contains(sent.Detail, "attachment upload") {
+	if err != nil || sent.State != stateQueued || !strings.HasPrefix(sent.Detail, SendErrorPrefix+"network_unavailable:") {
 		t.Fatalf("send while the upload fails: %+v %v", sent, err)
 	}
 	os.Remove(path) // the spool holds what is sent

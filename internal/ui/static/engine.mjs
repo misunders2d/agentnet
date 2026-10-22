@@ -641,14 +641,14 @@ const bodyPreview = (s) => firstLine(String(s || "").split("\n")[0].replace(/\[@
 }));
 const unreadKey = r => [r.kind,r.kind==="device"?r.peer:r.conv,r.author,r.lid||r.id].join(":");
 const unreadPreview = m => m.edited ? bodyPreview(m.text||"") : !m.body&&(m.attachments||[]).length ? firstLine("📎 "+m.attachments.map(a=>wire.safeName(a.name)).join(", ")) : bodyPreview(m.body);
-const unreadAt = r => Math.floor(Date.parse(r.at)/1000);
+const unreadAt = r => Date.parse(r.at);
 const unreadOrder = (a,b) => unreadAt(b)-unreadAt(a) || (a.key<b.key?-1:a.key>b.key?1:0);
-const unreadCursor = r => btoa(JSON.stringify({v:1,at:unreadAt(r),key:r.key})).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+const unreadCursor = r => btoa(JSON.stringify({v:2,at:unreadAt(r),key:r.key})).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
 const parseUnreadCursor = value => {
   try {
     if(value.length>2048||!/^[A-Za-z0-9_-]+$/.test(value))throw Error();
     const c=JSON.parse(atob(value.replace(/-/g,"+").replace(/_/g,"/")));
-    if(!c||Object.keys(c).some(k=>!["v","at","key"].includes(k))||c.v!==1||!Number.isSafeInteger(c.at)||c.at<0||typeof c.key!=="string"||!c.key||c.key.length>512)throw Error();
+    if(!c||Object.keys(c).some(k=>!["v","at","key"].includes(k))||c.v!==2||!Number.isSafeInteger(c.at)||c.at<0||typeof c.key!=="string"||!c.key||c.key.length>512)throw Error();
     return c;
   }catch{throw Error("That unread list request is not valid.");}
 };
@@ -754,8 +754,12 @@ const mainTopicScope=async conv=>wire.hex(await wire.sha256(new TextEncoder().en
 const mainChatMessages=msgs=>{const assigned=chatTopicAssignments(msgs);return msgs.filter(m=>!m.sub&&!m.topic_event&&!assigned.get(m.lid));};
 function summarizeChatTopicView(conv,msgs,locals,now,main,assigned=null) {
  assigned ||= chatTopicAssignments(msgs);const groups=new Map(),events=new Map(),out=[];
+ // Keep the existing destination's original anchor across display moves,
+ // including promoted reply chains; private labels never enter shared events.
+ const originals=main?msgs:msgs.filter(m=>!wire.topicOrganization(m.topic_event)),anchors=new Map();
+ if(!main&&originals.length!==msgs.length){const originalAssigned=chatTopicAssignments(originals),originalGroups=new Map();for(const m of originals){const id=originalAssigned.get(m.lid);if(id&&!m.sub&&!m.topic_event){if(!originalGroups.has(id))originalGroups.set(id,[]);originalGroups.get(id).push(m);}}for(const [id,g]of originalGroups)anchors.set(id,sortChatTurns(g)[0]);}
  for(const m of msgs){if(m.sub)continue;if(m.topic_event){if(!main)events.set(m.topic,[...(events.get(m.topic)||[]),m]);continue;}const id=assigned.get(m.lid)||"";if(main?!id:!!id)groups.set(id,[...(groups.get(id)||[]),m]);}
- for(const [id,g] of groups){sortChatTurns(g);const first=g[0],last=g.at(-1),local=locals.get(conv+"/"+id)||{};let shared={},by="",autoTitle=bodyPreview(first.body),namedBy=null;
+ for(const [id,g] of groups){sortChatTurns(g);const first=anchors.get(id)||g[0],last=g.at(-1),local=locals.get(conv+"/"+id)||{};let shared={},by="",autoTitle=bodyPreview(first.body),namedBy=null;
   const aliases=new Map();for(const m of g){if(m.id)aliases.set(m.id,m.lid);for(const c of m.copies||[])if(c.id)aliases.set(c.id,m.lid);}
   const facts=g.map(m=>{const job=m.job||"",state=job||m.state||"";return {id:m.lid,reply_to:aliases.get(m.reply_to)||m.reply_to||"",at:chatSent(m),kind:m.kind,status:m.status||"",topic_done:!!m.topic_done,in:!!job&&!m.to||["answer","result"].includes(m.kind),state,localJob:!!job,execState:m.exec?.state||"",execStale:!!m.exec?.stale};});
   for(const m of sortChatEvents(events.get(id)||[])){
@@ -777,7 +781,7 @@ function summarizeChatTopicView(conv,msgs,locals,now,main,assigned=null) {
  if(!main&&msgs.some(m=>m.topic_event?.merge)) {
   let previous=null;
   for(const [source,destination]of chatTopicRedirects(msgs)) {
-   previous||=summarizeChatTopics(conv,msgs.filter(m=>!wire.topicOrganization(m.topic_event)),locals,now);
+   previous||=summarizeChatTopics(conv,originals,locals,now);
    const existing=out.find(t=>t.id===source);
    if(existing){existing.redirect=destination;const old=previous.find(t=>t.id===source);if(old)Object.assign(existing,{title:old.title,auto_title:old.auto_title,renamed:old.renamed});continue;}
    const old=previous.find(t=>t.id===source);if(old){const{unconfirmed,...rest}=old;void unconfirmed;out.push({...rest,redirect:destination,state:"done",count:0,review:0,running:0,unread:0,pending:false,waiting:false,pending_ids:[]});}
@@ -5219,9 +5223,10 @@ export class Engine {
       const grants=new Map(infos.filter(i=>card.pids.includes(i.pid)).flatMap(i=>i.grant).map(r=>[r.fingerprint+"/"+r.lid,r]));
       card.missing=[...grants.values()].filter(ref=>!messages.some(m=>!m.sub&&m.lid===ref.lid&&(m.fp===ref.fingerprint&&!m.replica || !m.fp&&!m.history&&this.fp===ref.fingerprint || card.pids.includes(m.excerpt_pid)&&m.claimed_key===ref.fingerprint&&m.history))).length;
     }
+    const humans=new Map(infos.filter(i=>i.role==="human").map(i=>[i.pid,i])),humanHosts=[...humans.values()].map(i=>i.host);
     const resources=role==="member"&&!frozen?await this.conversationResources(conv):undefined;
     return {id:conv,kind:"group",title:packet.state.title,peer:{label:packet.state.title,address:"",state:""},role,members,frozen,...(resources?{resources}:{}),created:iso(packet.root.created*1000),mine:packet.root.creator.address===this.address,agents:[...agentCards.values()],guests:infos.filter(i=>i.role==="human").map(i=>this.guestView(i,role==="member")),audience_pending:infos.some(i=>i.role==="human"&&i.state==="active"&&i.held),messages:await Promise.all(messages.map(async m=>{
-      const here=!m.fp&&!m.history,out=here||!!m.own,event=m.sub==="event"?this.eventText(m.body,null,members):"",fp=m.fp||m.claimed_key||this.fp,ev=event?this.eventFields(m.body,members):null;
+      const here=!m.fp&&!m.history,out=here||!!m.own,event=m.sub==="event"?this.eventText(m.body,null,members,humans.get(m.pid)||false,{originals:members,member:role==="member"}):"",fp=m.fp||m.claimed_key||this.fp,ev=event?this.eventFields(m.body,members,humanHosts):null;
       const targetPerson=await this.personOfFp(fp,read),rel=ctls.filter(x=>x.ref?.id===m.lid&&x.ref.fingerprint===fp&&x.sub!==wire.SubStatus&&x.sub!==wire.SubDecision);
       const view=event||m.excerpt_pid?{can:[],reactions:[]}:this.controlsOn(rel,targetPerson,x=>x.person||"",personLabel,p=>p===this.me.person,undefined,pid=>infos.find(i=>i.pid===pid)?.host?.label||"");
       view.can=view.deleted||event||m.excerpt_pid||frozen||role!=="member"?[]:["react",...(targetPerson===this.me.person?["edit","delete"]:[])];
@@ -12359,13 +12364,14 @@ export class Engine {
     const room=people?"this group":"this DM";
     if (human || e.role === "human") { // liveagent.go humanEventText: people are invited, join, decline, leave or are removed
       const info = typeof human === "object" ? human : null, originals = view?.originals || [];
-      const author = e.author.person === me ? "You" : [peer, ...originals].filter(Boolean).find(p => p.person === e.author.person)?.label || (view && !view.member ? "A DM member" : "Someone not in this DM");
-      const name = (subject) => info?.host?.person && info.host.person === me ? (subject ? "You" : "you") : info?.host ? info.host.label || info.host.address : e.host ? e.host.address : subject ? "A person" : "a person";
+      const author = e.author.person === me ? "You" : [peer, ...(people||[]), ...originals, info?.host].filter(Boolean).find(p => p.person === e.author.person)?.label || (people ? "Someone outside this group" : view && !view.member ? "A DM member" : "Someone not in this DM");
+      const host=info?.host || (e.host && [this.me,peer,...(people||[]),...originals].filter(Boolean).find(p=>p.person===e.host.person)) || e.host;
+      const name = (subject) => host?.person && host.person === me ? (subject ? "You" : "you") : host ? host.label || host.address : subject ? "A person" : "a person";
       switch (e.type) {
-      case "invite": case "scope": return author + " invited " + name(false) + " into this DM.";
-      case "accept": return name(true) + " joined this DM.";
+      case "invite": case "scope": return author + " invited " + name(false) + " into " + room + ".";
+      case "accept": return name(true) + " joined " + room + ".";
       case "decline": return name(true) + " declined the invitation.";
-      case "dismiss": return info?.host && e.author.person === info.host.person && e.author.address === info.host.address ? name(true) + " left this DM." : author + " removed " + name(false) + " from this DM.";
+      case "dismiss": return info?.host && e.author.person === info.host.person && e.author.address === info.host.address ? name(true) + " left " + room + "." : author + " removed " + name(false) + " from " + room + ".";
       }
       return "A participation record (" + e.type + ").";
     }

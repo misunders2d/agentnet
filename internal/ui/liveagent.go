@@ -29,7 +29,7 @@ type dmPeople struct {
 	group    bool
 	admins   map[string]bool
 	members  []PersonView
-	humans   map[string]client.ParticipationInfo // human participations of the DM, by PID
+	humans   map[string]client.ParticipationInfo // human participations of the conversation, by PID
 	known    map[string]PersonView               // other persons pinned here, by id: names for outside hosts, nothing more (marked: outsider)
 }
 
@@ -207,10 +207,7 @@ func (l *Live) people(peer client.PersonInfo) dmPeople {
 }
 
 func (l *Live) conversationPeople(c client.ConversationInfo) dmPeople {
-	var infos []client.ParticipationInfo
-	if c.Kind != protocol.ConvKindGroup {
-		infos, _ = l.a.Participations(c.ID)
-	}
+	infos, _ := l.a.Participations(c.ID)
 	return l.conversationPeopleForParticipations(c, infos)
 }
 
@@ -234,15 +231,15 @@ func (l *Live) conversationPeopleForParticipations(c client.ConversationInfo, in
 			}
 		}
 	}
-	if !p.group {
-		for _, info := range infos {
-			if info.Role == protocol.RoleHuman {
-				if p.humans == nil {
-					p.humans = map[string]client.ParticipationInfo{}
-				}
-				p.humans[info.PID] = info
+	for _, info := range infos {
+		if info.Role == protocol.RoleHuman {
+			if p.humans == nil {
+				p.humans = map[string]client.ParticipationInfo{}
 			}
+			p.humans[info.PID] = info
 		}
+	}
+	if !p.group {
 		if len(infos) > 0 { // records may name an outside host or author
 			if known, err := l.a.KnownPersons(); err == nil {
 				p.known = map[string]PersonView{}
@@ -317,6 +314,8 @@ func eventFields(body string, p dmPeople) (kind, pid, by string) {
 	by = ev.Author.Address
 	if v, ok := p.byPerson(ev.Author.Person); ok && v.Label != "" {
 		by = v.Label
+	} else if info, human := p.humans[ev.PID]; human && info.Host.Person == ev.Author.Person && info.Host.Label != "" {
+		by = info.Host.Label
 	}
 	return ev.Type, ev.PID, by
 }
@@ -349,19 +348,29 @@ func humanEventText(ev protocol.ParticipationEvent, info client.ParticipationInf
 		guest, Guest = p.humanName(info, false), p.humanName(info, true)
 	} else if ev.Host != nil {
 		guest, Guest = ev.Host.Address, ev.Host.Address
+		if host, ok := p.byPerson(ev.Host.Person); ok && host.Label != "" {
+			guest, Guest = host.Label, host.Label
+			if host.Person == p.me.Person {
+				guest, Guest = "you", "You"
+			}
+		}
+	}
+	room := "this DM"
+	if p.group {
+		room = "this group"
 	}
 	switch ev.Type {
 	case protocol.EventInvite, protocol.EventScope:
-		return who + " invited " + guest + " into this DM."
+		return who + " invited " + guest + " into " + room + "."
 	case protocol.EventAccept:
-		return Guest + " joined this DM."
+		return Guest + " joined " + room + "."
 	case protocol.EventDecline:
 		return Guest + " declined the invitation."
 	case protocol.EventDismiss:
 		if known && ev.Author.Person == info.Host.Person && ev.Author.Address == info.Host.Address {
-			return Guest + " left this DM."
+			return Guest + " left " + room + "."
 		}
-		return who + " removed " + guest + " from this DM."
+		return who + " removed " + guest + " from " + room + "."
 	}
 	return "A participation record (" + ev.Type + ")."
 }

@@ -48,6 +48,9 @@ export interface MessageProps {
   selecting?: boolean;
   selected?: boolean;
   onSelect?: (id: string) => void;   // toggles in selection mode; starts it otherwise
+  tabStop?: boolean;         // the timeline's current keyboard entry
+  onEntryFocus?: (id: string) => void;
+  formatTime?: (at: string) => string;
 }
 
 export const MessageView = memo(function MessageView(p: MessageProps) {
@@ -55,7 +58,7 @@ export const MessageView = memo(function MessageView(p: MessageProps) {
   return <Bubble {...p} />;
 });
 
-function Bubble({ m, ctx, all, first = true, last = true, status, compact, grouped, readOnly, onJump, selecting, selected, onSelect }: MessageProps) {
+function Bubble({ m, ctx, all, first = true, last = true, status, compact, grouped, readOnly, onJump, selecting, selected, onSelect, tabStop, onEntryFocus, formatTime = timeOf }: MessageProps) {
   const store = useApp();
   const wide = useWide();
   const hoverPointer = useHoverPointer();
@@ -107,7 +110,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
 
   const text = useMemo(() => grouped ? shownText(m) : askChip(shownText(m), m, ctx), [m, ctx, grouped]);
   const answer = answerTo(m, all, ctx);
-  const time = useMemo(() => <Meta m={m} who={who} shared={grouped} answered={!!answer} />, [m, who.mine, who.agent, grouped, !!answer]);
+  const time = useMemo(() => <Meta m={m} who={who} shared={grouped} answered={!!answer} formatTime={formatTime} />, [m, who.mine, who.agent, grouped, !!answer, formatTime]);
   const parent = referenceParent(all,m.quote);
   const quote=!!m.quote;
   const request=referenceParent(all,m.reply_to);
@@ -124,7 +127,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
 
   const terminal = !selecting && !readOnly && !grouped && phaseOf(m) === "stopped";
   const body = (
-    <div data-message-bubble data-part="bubble" tabIndex={wide && (live || attention) && !selecting ? 0 : undefined} role={wide && (live || attention) ? "group" : undefined} aria-label={wide && (live || attention) ? who.name + ", " + timeOf(m.at) : undefined}
+    <div data-message-bubble data-part="bubble" tabIndex={(wide || tabStop !== undefined) && (live || attention) && !selecting ? tabStop === false ? -1 : 0 : undefined} role={(wide || tabStop !== undefined) && (live || attention) ? "group" : undefined} aria-label={(wide || tabStop !== undefined) && (live || attention) ? who.name + ", " + formatTime(m.at) : undefined}
       className={"relative min-w-0 max-w-full stroke px-3.5 py-2 focus-visible:outline-offset-2 " + shape + (selected ? " ring-[3px] ring-agent-ink ring-offset-2 ring-offset-canvas" : "")}>
       {wide && hot && (live || attention) && !selecting && !editing && <Toolbar m={m} ctx={ctx} can={can} acts={acts} mine={who.mine} />}
       {last && !who.mine && (
@@ -160,7 +163,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
     <div data-mid={m.id} data-part="message" data-from={who.mine ? "me" : who.agent ? "agent" : "person"} data-send-target={grouped && !isThreadMsg(m) ? m.pid : undefined} className={"min-w-0 [overflow-wrap:anywhere] " + (first && !compact ? "mt-3.5" : "mt-1")}>
       <div hidden={terminal} className={"group/msg relative flex px-3 sm:px-4 [touch-action:pan-y] " + (who.mine ? "justify-end" : "justify-start") + (selecting ? " cursor-pointer" : "")}
         onClick={selecting && can.select ? (e) => { if (inside(e)) onSelect?.(m.id); } : undefined}
-        onPointerEnter={wide ? () => setHot(true) : undefined} onFocus={wide ? () => setHot(true) : undefined}
+        onPointerEnter={wide ? () => setHot(true) : undefined} onFocus={() => { if (wide) setHot(true); onEntryFocus?.(m.id); }}
         onPointerLeave={wide ? (e) => { if (!e.currentTarget.querySelector("[data-popup-open]")) setHot(false); } : undefined}
         {...(readOnly || selecting ? {} : touch.handlers)}
         onPointerMove={e => { if (wide && !hot) setHot(true); if (!readOnly && !selecting) touch.handlers.onPointerMove(e); }}
@@ -248,7 +251,7 @@ function NameLine({ m, who }: { m: AnyMsg; who: Who }) {
 }
 
 /** Meta: the time (and for your messages a delivery tick) at the end of the text. */
-function Meta({ m, who, shared, answered }: { m: AnyMsg; who: Who; shared?: boolean; answered?: boolean }) {
+function Meta({ m, who, shared, answered, formatTime }: { m: AnyMsg; who: Who; shared?: boolean; answered?: boolean; formatTime: (at: string) => string }) {
   const s = ("delivery" in m ? m.delivery : undefined) ?? m.state ?? "";
   const tick = shared || !who.mine || who.agent || excerpt(m) ? null
     : m.delivery_uncertain ? <IconAlertTriangle size={15} className="text-approval-ink" />
@@ -260,7 +263,7 @@ function Meta({ m, who, shared, answered }: { m: AnyMsg; who: Who; shared?: bool
   return (
     <span className="float-right ml-2.5 mt-[0.5em] inline-flex items-center gap-1 text-[12px] leading-none text-muted tnum">
       {m.edited && !m.deleted && <span>edited</span>}
-      <time dateTime={m.sent_at || m.at}>{new Date(m.sent_at || m.at).toDateString()!==new Date(m.at).toDateString()?new Date(m.sent_at || m.at).toLocaleDateString([], {month:"short",day:"numeric"})+" · ":""}{timeOf(m.sent_at || m.at)}</time>
+      <time dateTime={m.sent_at || m.at}>{new Date(m.sent_at || m.at).toDateString()!==new Date(m.at).toDateString()?new Date(m.sent_at || m.at).toLocaleDateString([], {month:"short",day:"numeric"})+" · ":""}{formatTime(m.sent_at || m.at)}</time>
       {tick && <span aria-hidden="true" className="-mr-0.5">{tick}</span>}
       {tick && <span className="sr-only">{m.delivery_uncertain ? "Delivery unconfirmed" : deliveryWord(s)}</span>}
     </span>
@@ -360,7 +363,7 @@ function UndoTopicMove({m,conv}:{m:T.DMMessage;conv:string}){
 function EventDivider({ m, ctx, all }: { m: T.DMMessage; ctx: Ctx; all: AnyMsg[] }) {
   const [saw, setSaw] = useState<boolean | null>(null);
   const text = m.event || "";
-  const k = eventKind(text);
+  const k = eventKind(m);
   const a = agentOf(ctx, m.pid);
   const g = guestOf(ctx, m.pid);
   const me = ctx.overview?.person;

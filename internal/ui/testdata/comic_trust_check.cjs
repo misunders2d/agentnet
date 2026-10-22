@@ -16,10 +16,20 @@ const address = /\b[a-z0-9._-]+\/[a-z0-9._-]+\b/;
     const ctx = await browser.newContext({ viewport: { width: w, height: h }, colorScheme: scheme, ...(w < 1024 ? { isMobile: true, hasTouch: true } : {}) });
     const p = await ctx.newPage();
     const errors = [];
+    const trustPosts = [];
     p.on('pageerror', (e) => errors.push(String(e)));
+    p.on('request', r => { if (r.method() === 'POST' && new URL(r.url()).pathname === '/api/act' && r.postDataJSON().do === 'trust') trustPosts.push(r.postDataJSON()); });
     const snap = async (what) => { if (shots) { await p.waitForTimeout(400); await p.screenshot({ path: shots + '/trust-' + name + '-' + what + '.png' }); } };
     await p.goto(url);
     await p.waitForSelector('section[aria-label="Chats"]', T);
+
+    const readThread = () => p.evaluate(async id => (await fetch('/api/thread?id=' + encodeURIComponent(id))).json(), process.env.PARITY_THREAD);
+    const original = await readThread();
+    assert.equal(original.topic.agent_id, process.env.PARITY_AGENT);
+    assert.equal(original.topic.agent_host, original.peer);
+    assert.equal(original.topic.agent_key, process.env.PARITY_OLD_KEY);
+    assert.equal(original.key.pinned, process.env.PARITY_OLD_KEY);
+    assert.equal(original.key.pending, process.env.PARITY_NEW_KEY);
 
     // The chat row says so; the paused composer offers the check.
     const row = p.getByRole('button', { name: /Identity changed/ });
@@ -34,11 +44,18 @@ const address = /\b[a-z0-9._-]+\/[a-z0-9._-]+\b/;
     assert.match(text, /Settings → Your devices/, name + ': it says where the owner finds their code');
     const trust = sheet.getByRole('button', { name: 'Trust the new identity' });
     assert.equal(await trust.isDisabled(), true, name + ': Trust waits for the codes to be compared');
+    assert(text.includes(original.key.pinned) && text.includes(original.key.pending), 'both exact fingerprint values are shown');
+    assert.deepEqual(trustPosts, [], 'opening and inspecting the sheet never trusts a key');
     await snap('sheet');
     await sheet.locator('label', { hasText: 'The new code matches what they told me' }).click();
     await trust.click();
     await sheet.waitFor({ state: 'hidden', ...T });
     await p.getByText('Sending is paused').waitFor({ state: 'detached', ...T });
+    const trusted = await readThread();
+    assert.equal(trusted.key.pinned, process.env.PARITY_NEW_KEY);
+    assert(!trusted.key.pending);
+    assert.equal(trusted.topic.agent_key, original.topic.agent_key, 'trust never rebinds historical signed agent placement');
+    assert.deepEqual(trustPosts, [{do:'trust',id:original.peer,key:original.key.pending}], 'one trust names exactly the compared device/key');
 
     // OKs holds only decisions this device can make. The demo's unverified
     // message is no decision (a0f3a1c7, e2bebdb2): it stays out of OKs and is

@@ -72,6 +72,10 @@ jobs:
           fixture_dir=$(mktemp -d)
           (cd "$previous_source" && AGENTNET_ANDROID_FIXTURE_DIR="$fixture_dir" go test ./mobile/core -run '^TestExportAndroidOfflineFixture$' -count=1)
           printf 'AGENTNET_ANDROID_FIXTURE_DIR=%s\n' "$fixture_dir" >> "$GITHUB_ENV"
+      - name: export identical shared UI timing workloads
+        run: |
+          export AGENTNET_LATENCY_EXPORT="$RUNNER_TEMP/android-latency"
+          go test ./internal/ui -run '^TestUIResponsivenessRendered$' -count=1 -timeout 180s -v
       - name: enable emulator acceleration
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-agentnet-kvm.rules
@@ -87,3 +91,10 @@ jobs:
           ram-size: 2048M
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
           script: bash mobile/android/scripts/qualify-emulator.sh
+      - name: retain Android qualification and interaction evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-qualification-evidence
+          path: ${{ runner.temp }}/android-*.txt
+          if-no-files-found: error

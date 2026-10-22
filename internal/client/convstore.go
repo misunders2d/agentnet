@@ -755,6 +755,7 @@ type ConvMessage struct {
 	Detail            string                        `json:"detail,omitempty"`
 	SendStopped       bool                          `json:"send_stopped,omitempty"`
 	DeliveryUncertain bool                          `json:"delivery_uncertain,omitempty"`
+	AtMS              int64                         `json:"-"`  // local ordering precision; not a signed or portable timestamp
 	At                int64                         `json:"at"` // received or created here, unix seconds (listed in that order, to the millisecond)
 	liveContext       bool                          // exact retained DM proof, derived while selecting; never a clock comparison
 
@@ -894,6 +895,10 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool, sel
 		if err := rows.Scan(&m.ID, &m.LID, &m.Dir, &m.From, &m.Key, &m.Kind, &m.Body, &m.ReplyTo, &m.Sub, &m.Replica, &m.Origin,
 			&m.Emotion, &target, &m.State, &m.Detail, &m.At, &ms, &m.PID, &m.Job, &m.JobDetail, &m.JobAttempt, &to, &m.Claimed, &m.AgentID, &m.status, &m.Quote, &m.Sent, &person, &m.Topic, &topicEvent, &m.TopicDone, &m.SendStopped, &m.DeliveryUncertain, &m.SendGroup, &m.Unread, &m.liveContext); err != nil {
 			return nil, err
+		}
+		m.AtMS = ms
+		if m.AtMS == 0 {
+			m.AtMS = m.At * 1000
 		}
 		if topicEvent != "" {
 			json.Unmarshal([]byte(topicEvent), &m.TopicEvent)

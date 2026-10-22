@@ -256,7 +256,7 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 		w.Write(static.AppIcon(size))
 		return
 	}
-	types := map[string]string{"conversation-links.mjs": "text/javascript; charset=utf-8", "core.css": "text/css; charset=utf-8", "loader.js": "text/javascript; charset=utf-8",
+	types := map[string]string{"browser-back.mjs": "text/javascript; charset=utf-8", "conversation-links.mjs": "text/javascript; charset=utf-8", "core.css": "text/css; charset=utf-8", "loader.js": "text/javascript; charset=utf-8",
 		"android.js":    "text/javascript; charset=utf-8",
 		"skin-base.css": "text/css; charset=utf-8", "skinbar.mjs": "text/javascript; charset=utf-8", "skinbar.css": "text/css; charset=utf-8", "skin-choice.mjs": "text/javascript; charset=utf-8",
 		"setup.mjs":            "text/javascript; charset=utf-8", // the AgentNet app's first-run page (setup.go)

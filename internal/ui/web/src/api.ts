@@ -167,6 +167,8 @@ export type Api = ReturnType<typeof api>;
 
 // errorText is what a failed call says, for the person.
 export function errorText(e: unknown): string {
+  if (e instanceof TypeError && /^(Failed to fetch|NetworkError when attempting to fetch resource\.?|Load failed|fetch failed)$/i.test(e.message))
+    return "AgentNet is not reachable. Check the connection and try again.";
   if (e instanceof Error) return e.message || "Something went wrong.";
   return String(e || "Something went wrong.");
 }

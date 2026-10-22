@@ -147,13 +147,17 @@
   // The release serving this page, as its overviews say (host.api below), and
   // the gallery's release comparison once its module has loaded.
   let runningVersion = "", newerRelease = null;
+  const { browserBackNavigation } = await import("/assets/browser-back.mjs");
+  const onBack = window.__agentnetPlatform === "android" ? window.__agentnetOnBack : !nativeAppJSON ? browserBackNavigation() : undefined;
   const common = {
     version: 1,
+    ...(onBack ? { onBack } : {}),
     openLink: (value) => openPortable(value),
     ...(window.__agentnetPlatform === "android" ? { platform: "android", android: window.__agentnetAndroid, onBack: window.__agentnetOnBack } : {}),
     ...(typeof window.__agentnetNativeClipboardImage === "function" ? { clipboardImage: () => window.__agentnetNativeClipboardImage() } : {}),
     // Computer-wide app actions stay on this loopback origin; switching a
     // workspace never sends an updater request to a remote membership.
+    appControlsAvailable: !!nativeAppJSON,
     appStatus: () => appJSON("/api/app/status"),
     appCheckUpdate: () => appJSON("/api/app/check"),
     appUpdate: () => appJSON("/api/app/update", {}),

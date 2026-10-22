@@ -7,6 +7,7 @@ import { Dialog } from "@base-ui/react/dialog";
 import { IconMoodPlus } from "@tabler/icons-react";
 import type { T } from "../api";
 import { useApp } from "../context";
+import { reactionScope, useStore } from "../store";
 import { EmojiPicker, QuickReactions } from "./Emoji";
 import { agentLabel, agentOf, isThreadMsg, type AnyMsg, type Ctx } from "./Message.model";
 import { useModal, usePortal } from "../owned";
@@ -14,6 +15,22 @@ import { humanReactionOrder, recordReaction } from "../reaction-preferences.mjs"
 
 export const controlRef = (m: AnyMsg, ctx: Ctx): T.ControlAction =>
   isThreadMsg(m) ? { id: m.id, dir: m.dir } : { conv: ctx.conv, id: m.id, dir: m.dir };
+
+function useReactionView(m: AnyMsg, ctx: Ctx) {
+  const store = useApp(), ref = controlRef(m, ctx);
+  const slots = useStore(store, s => s.reactionPending[reactionScope(ref)]);
+  const pending = Object.values(slots || {}).filter(p => store.reactionIsCurrent(p));
+  let list = m.reactions || [];
+  for (const p of pending) {
+    const r = list.find(r => r.emoji === p.change.emoji);
+    const by = (r?.by || []).filter(b => b.assistant || b.id !== p.self.id);
+    if (!p.change.remove) by.push((r?.by || []).find(b => !b.assistant && b.id === p.self.id) || p.self);
+    const next = { emoji: p.change.emoji!, by, mine: !p.change.remove };
+    if (r) list = by.length ? list.map(row => row === r ? next : row) : list.filter(row => row !== r);
+    else if (by.length) list = [...list, next];
+  }
+  return { list, pending };
+}
 
 export function useReact(m: AnyMsg, ctx: Ctx) {
   const store = useApp();
@@ -30,10 +47,11 @@ const reactor = (b: T.Reactor, ctx: Ctx) => {
 
 export function Reactions({ m, ctx, can, wide }: { m: AnyMsg; ctx: Ctx; can: boolean; wide: boolean }) {
   const react = useReact(m, ctx);
-  const list = humanReactionOrder(m.reactions || []);
-  if (!list.length || m.deleted) return null;
+  const projected = useReactionView(m, ctx);
+  const list = humanReactionOrder(projected.list);
+  if ((!list.length && !projected.pending.length) || m.deleted) return null;
   return (
-    <div className={"flex flex-wrap items-center gap-x-1.5 " + (wide ? "-mb-1" : "-mb-1.5")}>
+    <div data-reaction-pending={projected.pending.length ? "true" : undefined} aria-busy={projected.pending.length ? true : undefined} className={"flex flex-wrap items-center gap-x-1.5 " + (wide ? "-mb-1" : "-mb-1.5")}>
       {list.map((r) => {
         const people = (r.by || []).filter((b) => !b.assistant);
         const agents = (r.by || []).filter((b) => b.assistant);
@@ -55,6 +73,7 @@ export function Reactions({ m, ctx, can, wide }: { m: AnyMsg; ctx: Ctx; can: boo
           )),
         ];
       })}
+      {projected.pending.length > 0 && <span role="status" className="text-xs text-text-2">Updating your reaction…</span>}
       {can && <AddReaction m={m} ctx={ctx} wide={wide} />}
     </div>
   );
@@ -88,7 +107,7 @@ export function ReactPopover({ m, ctx, trigger, wide, onDone }: { m: AnyMsg; ctx
   const [open, setOpen] = useState(false);
   const [more, setMore] = useState(false);
   const react = useReact(m, ctx);
-  const mine = (m.reactions || []).filter((r) => r.mine).map((r) => r.emoji);
+  const mine = useReactionView(m, ctx).list.filter((r) => r.mine).map((r) => r.emoji);
   const pick = (e: string) => { react(e, mine.includes(e)); setOpen(false); onDone?.(); };
   return (
     <Popover.Root open={open} onOpenChange={(o) => { setOpen(o); if (!o) setMore(false); }}>
@@ -112,7 +131,7 @@ export function EmojiDialog({ open, onOpenChange, m, ctx }: { open: boolean; onO
   const portal = usePortal();
   const modal = useModal(open);
   const react = useReact(m, ctx);
-  const mine = (m.reactions || []).filter((r) => r.mine).map((r) => r.emoji);
+  const mine = useReactionView(m, ctx).list.filter((r) => r.mine).map((r) => r.emoji);
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange} modal="trap-focus">
       <Dialog.Portal container={portal}>

@@ -43,6 +43,20 @@ func TestHumanTimelineWordingAndInertProof(t *testing.T) {
 		if got := eventText(marshal(t, *e), member); got != want {
 			t.Fatalf("member: %q, want %q", got, want)
 		}
+		group := member
+		group.group = true
+		if got := eventText(marshal(t, *e), group); got != strings.ReplaceAll(want, "this DM", "this group") {
+			t.Fatalf("group member: %q", got)
+		}
+	}
+	// An invite/scope can precede its resolved participation. A pinned
+	// current human name is still available; it is never an agent or address.
+	known := dmPeople{me: alice, peer: bob, group: true, role: "member", known: map[string]PersonView{carol.Host.Person: {Person: carol.Host.Person, Label: "Carol", Address: carol.Host.Address}}}
+	for _, e := range []protocol.ParticipationEvent{ev(protocol.EventInvite, bob), protocol.ScopeOf(ev(protocol.EventInvite, bob), 1790000001)} {
+		e.Sign(key)
+		if got := eventText(marshal(t, e), known); got != "Bob invited Carol into this group." {
+			t.Fatalf("known human invite/scope: %q", got)
+		}
 	}
 	self := carol
 	self.HostHere = true

@@ -67,6 +67,16 @@ type ConfirmedRead = { kind: "dm" | "thread"; id: string; seq: number; unread: n
 const VIEWS_KEPT = 24; // conversations kept for an instant reopen (loaded again when opened)
 const OPEN_SLOW = 400; // ms a conversation may take to load before its placeholder shows
 
+export interface PendingReaction {
+  change: T.ControlAction;
+  selected: NonNullable<Open>;
+  self: T.Reactor;
+  token: number;
+  confirmed?: boolean; // durable desired remove/add; projection still pending
+  priorRead?: Promise<View>; // latest read before the durable acknowledgement
+}
+export const reactionScope = (c: T.ControlAction) => JSON.stringify([c.conv || "", c.id, c.dir]);
+
 export interface State {
   tab: Tab;
   overview: T.Overview | null;
@@ -90,6 +100,7 @@ export interface State {
   section: string;                                        // the open settings section, when chosen from elsewhere
   agentNames: Record<string, string>;                     // agent ids → the names their owners gave them
   topicBusy: Record<string, string>;
+  reactionPending: Record<string, Record<string, PendingReaction>>;
   panel: boolean;                                         // "In this chat" (desktop panel, phone sheet)
   readVisit: ReadVisit | null;
   contentRevision: number; // successful content loads; typing/presence do not advance choice lists
@@ -120,6 +131,8 @@ export class Store {
   private overviewRequest = 0;
   private confirmedReads = new Map<string, ConfirmedRead>();
   private confirmedReminders = new Map<string, { seq: number; reminder: T.ReminderView | null }>();
+  private reactionSequence = 0;
+  private reacting = new Map<string, { pending: PendingReaction; work: Promise<{ note: string } | undefined> }>();
   private topicChanges = new Map<string, Promise<{ note: string } | undefined>>();
   private again = false;
   private catalogsAgain = false;
@@ -157,7 +170,7 @@ export class Store {
       this.set({ ...(o ? this.viewPatch(o, this.state.views[o.id] ?? null, true) : {}), unsent: this.sends.unsent() });
     });
     this.state = {
-      tab: "chats", overview: null, open: null, pending: null, views: {}, dm: null, thread: null, typing: null, invitations: [],
+      tab: "chats", overview: null, open: null, pending: null, views: {}, dm: null, thread: null, typing: null, invitations: [], reactionPending: {},
       conn: "loading", version: "", newVersion: "", unsent: false, drafts: this.loadDrafts(), scheduleSaves:{}, toasts: [], messageLanding: null, loadError: "", invite: null, topicBusy: {}, panel: false, section: "", agentNames: {}, readVisit: null, contentRevision: 0,
     };
     const saved=host.workspaces?.state?.(host.workspace.id)?.comicDrafts as {handle?:string;open:Open;dm:T.DMThread|null;thread:T.Thread|null;tab:State['tab']}|undefined;
@@ -207,6 +220,7 @@ export class Store {
       this.offNativeVisibility?.(); this.offNativeVisibility = undefined;
       window.removeEventListener("focus", this.mobileVisible);
     }
+    this.reacting.clear();
     this.sends.dispose();
     this.scheduled.dispose();
     this.stopListen?.();
@@ -810,6 +824,7 @@ export class Store {
         visit.entering = null;
       }
       this.set({ ...(first ? { open: o, pending: null } : {}), ...this.viewPatch(o, v, this.state.open?.id === o.id) });
+      this.settleReactions(o, v, ahead);
       // A newer deliberate mark/arrival may follow a confirmed read while
       // its older overview is still blocked. Advance that exact snapshot too.
       const group = o.kind === "thread" ? this.archivedRead(v) : undefined;
@@ -1070,25 +1085,98 @@ export class Store {
     }
   }
 
-  // A control is already durable when its API returns. A history fetch that
-  // started before that commit must not hold its projection behind old work.
-  // loadOpen's existing latest-fetch fence keeps that older response from
-  // replacing the new authoritative view when it eventually finishes.
-  async react(change: T.ControlAction): Promise<{ note: string } | undefined> {
+  // Pending feedback is local to this exact view and verified human actor.
+  // The authoritative DTO is never edited; peer and assistant marks stay intact.
+  reactionIsCurrent(p: PendingReaction): boolean {
     const selected = this.state.open;
-    try {
-      const result = await this.api.react(change);
-      if (!this.alive) return undefined;
-      if (selected && this.state.open === selected && (change.conv ? selected.id === change.conv : selected.kind === "thread")) {
-        await this.loadOpen(selected, true);
-      }
-      void this.load(false);
-      return result;
-    } catch (e) {
-      if (this.alive && errorText(e) !== "stale or disconnected workspace") this.toast(errorText(e), "error");
-      return undefined;
+    const self = p.change.conv ? this.state.overview?.person?.person : this.state.overview?.me.address;
+    const view = selected?.kind === "dm" ? this.state.dm : this.state.thread;
+    return this.alive && this.state.tab === "chats" && selected === p.selected && !this.state.pending && self === p.self.id &&
+      !!view?.messages?.some(m => m.id === p.change.id && m.dir === p.change.dir && !m.deleted);
+  }
+
+  private pendingReaction(p: PendingReaction, clear = false) {
+    const scope = reactionScope(p.change), emoji = p.change.emoji!;
+    const prior = this.state.reactionPending[scope] || {};
+    if (clear && prior[emoji]?.token !== p.token) return;
+    const slots = { ...prior };
+    if (clear) delete slots[emoji]; else slots[emoji] = p;
+    const all = { ...this.state.reactionPending };
+    if (Object.keys(slots).length) all[scope] = slots; else delete all[scope];
+    this.set({ reactionPending: all });
+  }
+
+  private settleReactions(o: NonNullable<Open>, view: View, request?: Promise<View>) {
+    for (const slots of Object.values(this.state.reactionPending)) for (const p of Object.values(slots)) {
+      if (p.selected !== o || p.confirmed === undefined) continue;
+      const m = view.messages?.find(m => m.id === p.change.id && m.dir === p.change.dir);
+      // A newer authoritative linked-device change may disagree with this
+      // write. A post-ack current read wins; a preexisting stale read does not.
+      const currentRead = !!request && request !== p.priorRead && this.latestFetch.get(o.id) === request;
+      if (currentRead || !m || m.deleted || !!m.reactions?.some(r => r.emoji === p.change.emoji && r.mine) === !p.confirmed) this.pendingReaction(p, true);
     }
   }
+
+  react(change: T.ControlAction): Promise<{ note: string } | undefined> {
+    const selected = this.state.open;
+    const self = change.conv ? this.state.overview?.person?.person : this.state.overview?.me.address;
+    if (!selected || !self || !change.emoji || (change.conv ? selected.kind !== "dm" || selected.id !== change.conv : selected.kind !== "thread")) return Promise.resolve(undefined);
+    const scope = reactionScope(change), key = JSON.stringify([scope, change.emoji]);
+    const prior = this.reacting.get(key);
+    if (prior && this.reactionIsCurrent(prior.pending)) {
+      if (!!prior.pending.change.remove !== !!change.remove) {
+        prior.pending = { ...prior.pending, change: { ...change, remove: !!change.remove }, confirmed: undefined };
+        this.pendingReaction(prior.pending);
+      }
+      return prior.work;
+    }
+    const p: PendingReaction = { change: { ...change, remove: !!change.remove }, selected,
+      self: { id: self, label: this.state.overview?.person?.label || "You" }, token: ++this.reactionSequence };
+    if (!this.reactionIsCurrent(p)) return Promise.resolve(undefined);
+    const slot = { pending: p, work: Promise.resolve(undefined) as Promise<{ note: string } | undefined> };
+    // A revisit gets its own local feedback, but an older exact control
+    // still in flight must finish before this newer intent is dispatched.
+    const work = Promise.resolve(prior?.work).then(async () => {
+      try {
+        while (this.reactionIsCurrent(slot.pending)) {
+          const sent = { ...slot.pending.change };
+          const result = await this.api.react(sent);
+          if (!this.reactionIsCurrent(slot.pending)) return undefined;
+          if (!!slot.pending.change.remove === !!sent.remove) {
+            slot.pending = { ...slot.pending, confirmed: !!sent.remove, priorRead: this.latestFetch.get(selected.id) };
+            this.pendingReaction(slot.pending);
+          }
+          // R1: a pre-commit history request must not hold this fresh load.
+          // Keep the existing latest-fetch fence and the pending overlay until
+          // a current authoritative projection confirms the desired mark.
+          const projected = await this.loadOpen(selected, true);
+          if (!this.reactionIsCurrent(slot.pending)) return undefined;
+          if (!!slot.pending.change.remove !== !!sent.remove) continue;
+          if (slot.pending.confirmed !== !!sent.remove) {
+            slot.pending = { ...slot.pending, confirmed: !!sent.remove };
+            this.pendingReaction(slot.pending);
+          }
+          const view = selected.kind === "dm" ? this.state.dm : this.state.thread;
+          if (projected) this.pendingReaction(slot.pending, true);
+          else if (view) this.settleReactions(selected, view);
+          void this.load(false);
+          return result;
+        }
+      } catch (e) {
+        if (this.reactionIsCurrent(slot.pending) && errorText(e) !== "stale or disconnected workspace") this.toast(errorText(e), "error");
+        this.pendingReaction(slot.pending, true);
+      } finally {
+        if (this.reacting.get(key) === slot) this.reacting.delete(key);
+        if (!this.reactionIsCurrent(slot.pending)) this.pendingReaction(slot.pending, true);
+      }
+      return undefined;
+    });
+    slot.work = work;
+    this.reacting.set(key, slot);
+    this.pendingReaction(p);
+    return work;
+  }
+
 }
 
 export function useStore<S>(store: Store, select: (s: State) => S): S {

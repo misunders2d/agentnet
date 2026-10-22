@@ -4,10 +4,12 @@ const {chromium}=require(process.env.AGENTNET_PLAYWRIGHT);
  const browser=await chromium.launch({executablePath:process.env.AGENTNET_CHROMIUM,headless:true,args:['--no-sandbox']});
  try {for(const width of [390,1280]){
   const context=await browser.newContext({reducedMotion:'reduce',viewport:{width,height:1000}}),p=await context.newPage(),errors=[],decisions=[];
+  p.setDefaultTimeout(10000);
   p.on('pageerror',e=>errors.push(String(e)));p.on('console',m=>{if(m.type()==='error')console.error(m.text());});p.on('response',r=>{if(r.status()>=400)console.error(r.status(),r.url());});
   await p.route('**/api/operator/decide',async route=>{decisions.push(route.request().postDataJSON());await route.fulfill({json:{id:'saved-decision',state:'custody',note:'Decision queued.'}});});
-  await p.goto(process.argv[2]);
-  try { await p.getByRole('button',{name:/Bezos/}).first().click({timeout:7000}); } catch(e) { console.error(await p.evaluate(()=>document.querySelector('#skin')?.shadowRoot?.querySelector('.skin-root')?.innerText||document.body.innerText)); console.error(await p.content()); console.error(errors); if(process.env.AGENTNET_SCREENSHOTS){fs.mkdirSync(process.env.AGENTNET_SCREENSHOTS,{recursive:true});await p.screenshot({path:path.join(process.env.AGENTNET_SCREENSHOTS,'remote-needs-human-initial.png')});} throw e; }
+  // A legacy request has no concrete current agent binding. Exercise its
+  // public notification route without inventing an active device-agent row.
+  await p.goto(process.argv[2]+'#msg='+'1'.repeat(32));
   const card=p.locator('section[aria-labelledby]').filter({has:p.locator('[data-agent-needs-you]')});
   await card.getByText('Professional memory unavailable; provide Bernard’s surname.',{exact:true}).waitFor();
   assert.ok((await card.innerText()).includes('On Bezos'),'remote executor retains its host');

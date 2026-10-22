@@ -20,7 +20,7 @@ registerHooks({load(url,context,next){
  return next(specifier,context);
 }});
 const {Store}=await import(new URL('web/src/store.ts',root));
-const {currentComposerFollowup}=await import(new URL('web/src/features/Composer.followup.ts',root));
+const {currentComposerFollowup,composerReplyFollowup}=await import(new URL('web/src/features/Composer.followup.ts',root));
 const saved=new Map();globalThis.localStorage={getItem:k=>saved.get(k)||null,setItem:(k,v)=>saved.set(k,v)};
 const fixture=JSON.parse(await new Promise(resolve=>{let raw='';process.stdin.setEncoding('utf8');process.stdin.on('data',s=>raw+=s);process.stdin.on('end',()=>resolve(raw));}));
 for(const c of fixture.cases){
@@ -53,6 +53,38 @@ for(const c of fixture.cases){
  else assert.equal(currentComposerFollowup(dm,fixture.pid,'',ctx),undefined,c.label+' never re-labels old running status');
  assert.equal(store.draft(dm.id).text,draft);assert.equal(sends,0,'model never queues a fallback');store.stop();
  console.log(c.label+' exact attempt/state through Store and Composer PASS');
+}
+
+// Use the actual mention picker on a real public DTO: selecting an agent after
+// choosing standard Reply must keep the exact ancestry, without supplied refs.
+const clarify=fixture.cases.find(c=>c.state==='needs_human');
+if(clarify){
+ const source=readFileSync(new URL('web/src/features/Composer.tsx',root),'utf8');
+ const pickSource=source.match(/^  function pick\([\s\S]*?^  }/m)?.[0];
+ assert.ok(pickSource,'actual Composer mention picker');
+ const original=clarify.thread.messages.find(m=>m.lid===fixture.original),dm=clarify.thread;
+ let draft={text:'@Pi',replyTo:original.id,files:[{key:'kept',name:'answer.md',file:{}}]};
+ const {runInNewContext:runTag}=await import('node:vm');
+ const env={trig:{start:0},caret:3,mentionRange:null,text:draft.text,spans:[],dm,latest:()=>draft,
+  followupContext:{conv:dm.id,dm,thread:null,overview:clarify.overview,names:{},canReply:true},composerReplyFollowup,
+  shift:()=>({kept:[]}),agentTargets:(_text,spans,fallback)=>spans.filter(s=>s.kind==='agent').map(s=>s.id).concat(fallback||[]).slice(0,1),
+  setMentionRange:()=>{},write:next=>draft=next,encode:text=>text,announce:()=>{},collectiveHref:()=>''};
+ const pick=runTag('('+stripTypeScriptTypes(pickSource)+')',env);
+ pick({kind:'agent',id:fixture.pid,name:'Your Pi'});
+ assert.equal(draft.replyTo,original.id,'actual Reply then tag must retain needs_human ancestry');
+ assert.equal(draft.agent,fixture.pid,'actual tag keeps selected PID');
+ assert.equal(draft.files.length,1,'tag keeps the draft files');
+ console.log('actual needs_human Reply then tag preserves exact ancestry PASS');
+ // Execute the real Reply-change effect against an armed, tagged draft.
+ // A selected message in a named topic restores that exact topic.
+ const start=source.indexOf('  const lastReply ='),end=source.indexOf('  }, [conv, draft.replyTo]);',start)+ '  }, [conv, draft.replyTo]);'.length;
+ assert.ok(start>=0&&end>start,'actual Reply effect');
+ const named=structuredClone(dm),selected=named.messages.find(m=>m.id===original.id);selected.topic='7'.repeat(32);
+ draft={...draft,newTopic:true,topic:'6'.repeat(32)};
+ const replyEffect={conv:dm.id,draft,dm:named,thread:null,latest:()=>draft,focusField:()=>{},useRef:()=>({current:{conv:dm.id,replyTo:undefined}}),useEffect:f=>f(),store:{setDraft:(_id,d)=>draft=d}};
+ runTag(stripTypeScriptTypes(source.slice(start,end)),replyEffect);
+ assert.equal(draft.newTopic,false);assert.equal(draft.topic,selected.topic);assert.equal(draft.agent,fixture.pid);assert.equal(draft.files.length,1);
+ console.log('actual tag then Reply cancels New topic, restores exact named topic and retains draft/files PASS');
 }
 
 // Direct device threads have no participation or conversation hash.
@@ -90,7 +122,64 @@ const desktopSource=sendSource.match(/^  async function send\([\s\S]*?^  }/m)?.[
 const androidSource=sendSource.match(/^  async function sendAndroid\([\s\S]*?^  }/m)?.[0];
 const selectorSource=composerSource.match(/^  const selectedTargetFollowup = [\s\S]*?;$/m)?.[0];
 assert.ok(desktopSource&&androidSource&&selectorSource,'actual send paths and shared destination selector');
-async function directSend(platform,{named=false,fail=false,newTopic=false,ended=false,invalid=false,projection,refusal,refreshState,refreshFails=false,otherStale=false}={}) {
+// Normal group Reply/tag -> actual desktop and Android send. No caller
+// constructs a FollowupRef; the real selector derives it from the stored DTO.
+async function ordinaryGroupSend(platform,c,{tagged=true,reply=true,newTopic=false,invalid,fail=false,round=1}={}) {
+ const dm=structuredClone(c.thread),original=dm.messages.find(m=>m.lid===(c.original||fixture.original)),topic=original.topic,calls=[],notices=[],rows=new Map();
+ if(invalid)invalid(original,dm);
+ const answer={id:'9'.repeat(32),lid:'9'.repeat(32),dir:'in',kind:'answer',body:'Which budget and folder?',reply_to:original.lid,pid:original.pid,topic:original.topic,from:original.target.address,verified_agent:true};
+ dm.messages.push(answer);
+ const draft={text:tagged?'@Your Pi Use the approved budget':'Use the approved budget',agent:tagged?fixture.pid:undefined,replyTo:reply?answer.id:undefined,newTopic,topic,files:[{key:'answer',name:'answer.md',size:1,file:{}}]};
+ const state={open:'selected-view',overview:c.overview,drafts:{[dm.id]:draft}};
+ let serial=round*10,cleared=0,retry;
+ const storage={getItem:k=>rows.get(k)||null,setItem:(k,v)=>rows.set(k,v)};
+ const api=async(endpoint,request)=>{calls.push({endpoint,request:JSON.parse(JSON.stringify(request))});if(fail)throw Error('offline');return {id:request.id,state:'queued',note:'Reply queued in the original request context.'};};
+ const ctx={conv:dm.id,dm,thread:null,overview:c.overview,names:{},canReply:true};
+ const store={host:{platform,workspace:{id:'ordinary-'+platform},api},get:()=>state,isActive:()=>true,draft:()=>state.drafts[dm.id],setDraft:(_,d)=>state.drafts[dm.id]=d,
+  api:{stage:async()=> 'staged-answer',askAgent:r=>api('/api/dm/agent/ask',r),sendDM:r=>api('/api/dm/send',r),discard:async()=>{}},toast:()=>{},refetch:async()=>{},
+  sends:{begin:(_c,_m,r)=>{retry=r;},ready:async()=>{},finish:()=>{},remove:()=>{},has:()=>true,fail:()=>{},move:()=>{}}};
+ const env={store,dm,thread:undefined,conv:dm.id,ready:true,latest:()=>draft,target:tagged?{kind:'agent',pid:fixture.pid}:{kind:'conversation'},overview:c.overview,names:{},words:{},visible:{current:dm.id},EMPTY:{text:''},
+  followupContext:ctx,currentDirectComposerFollowup:directModule.currentDirectComposerFollowup,
+  selectedFollowup:(pid,d)=>d.newTopic?undefined:currentComposerFollowup(dm,pid,d.topic||'',ctx,d.replyTo),
+  setNotice:n=>{if(n)notices.push(n.text);},setBusy:()=>{},clearSent:()=>{cleared++;state.drafts[dm.id]={text:''};},typing:{stop:()=>{}},
+  sendID:()=> (++serial).toString(16).padStart(32,'0'),decode:text=>({text,spans:[]}),encode:text=>text,agentTargets:(_t,_s,selected)=>selected?[selected]:[],
+  releaseFiles:()=>{},keepStaged:()=>{},forgetStaged:()=>{},announce:()=>{},errorText:e=>e.message,
+  messageOf:id=>dm.messages.find(m=>m.id===id||m.lid===id),guestAuthor:()=>null,
+  androidPreparing:{current:new Set()},saveBatch:journal.saveBatch,acknowledge:journal.acknowledge,recordFailure:journal.recordFailure,localStorage:storage};
+ runInNewContext(stripTypeScriptTypes(selectorSource)+'; globalThis.boundSelector=selectedTargetFollowup;',env);env.selectedTargetFollowup=env.boundSelector;
+ const send=runInNewContext('('+stripTypeScriptTypes(desktopSource)+')',env);env.sendAndroid=runInNewContext('('+stripTypeScriptTypes(androidSource)+')',env);
+ await send();
+ if(invalid){assert.equal(calls.length,0,'invalid exact ancestry has no send');assert.equal(cleared,0);assert.equal(state.drafts[dm.id].files.length,1);assert.ok(notices.length);return;}
+ assert.equal(calls.length,1,platform+' one exact logical send');
+ const expected=!tagged?'/api/dm/send':reply&&!newTopic?'/api/request/followup':'/api/dm/agent/ask';
+ assert.equal(calls[0].endpoint,expected,platform+' ordinary Reply routing for '+c.state);
+ if(expected==='/api/request/followup'){
+  assert.equal(calls[0].request.attempt,0,'ordinary answer queues normally, never obsolete steering');
+  assert.equal(calls[0].request.ref.id,original.lid);assert.equal(calls[0].request.ref.fingerprint,c.author||fixture.author);assert.equal(calls[0].request.conv,dm.id);
+  assert.deepEqual(calls[0].request.files,['staged-answer']);
+ }else assert.equal(calls[0].request.ref,undefined,'no tag/Reply/new-topic invents no continuation');
+ if(fail&&platform==='android')assert.deepEqual(journal.readPending(storage,'ordinary-'+platform)[0].request,calls[0].request,'Android journal retains exact ordinary continuation');
+ else if(fail){assert.equal(typeof retry,'function');retry();await new Promise(r=>setTimeout(r,0));assert.deepEqual(calls[1],calls[0],'ordinary retry keeps logical ID/ref/Attempt0/files');}
+ return calls[0];
+}
+const ordinaryCases=fixture.cases.filter(c=>['needs_human','answered','resolved'].includes(c.state));
+for(const platform of ['daemon','android'])for(const c of ordinaryCases){
+ await ordinaryGroupSend(platform,c);
+ await ordinaryGroupSend(platform,c,{tagged:false});
+ await ordinaryGroupSend(platform,c,{reply:false});
+ await ordinaryGroupSend(platform,c,{newTopic:true});
+ await ordinaryGroupSend(platform,c,{fail:true});
+ for(const change of [m=>m.target.fingerprint='0'.repeat(8)+'-'+('0'.repeat(8)+'-').repeat(2)+'0'.repeat(8),m=>m.pid='f'.repeat(32),m=>m.topic='f'.repeat(32),m=>m.deleted=true,m=>m.origin='agent:pi',m=>m.exec.state='failed',m=>m.exec.state='interrupted',m=>m.history=true])await ordinaryGroupSend(platform,c,{invalid:change});
+ // A second ordinary question/answer round has a new exact human request;
+ // QueueRequestFollowup canonicalizes its verified root chain at the backend.
+ const first=await ordinaryGroupSend(platform,c,{round:2}),next=structuredClone(c),request=next.thread.messages.find(m=>m.lid===fixture.original);
+ request.body=first.request.body;request.reply_to=request.lid;request.id=request.lid=next.original=first.request.id;request.exec.state='answered';
+ request.from=next.overview.me.address;request.send_group_author=next.author=next.overview.me.fingerprint;
+ await ordinaryGroupSend(platform,next,{round:3});
+}
+if(ordinaryCases.length)console.log('actual desktop/Android ordinary tagged Reply sends: two rounds, Attempt0, no-tag/no-Reply/new-topic, exact retry/journal and native identity/failed/history refusals PASS');
+
+async function directSend(platform,{named=false,fail=false,newTopic=false,ended=false,invalid=false,projection,refusal,refreshState,refreshFails=false,otherStale=false,ordinaryReply=false}={}) {
  const calls=[],previews=[],notices=[],savedRows=new Map();let cleared=0,serial=0,retry,refreshes=0,stages=0;
  const storage={getItem:k=>savedRows.get(k)||null,setItem:(k,v)=>savedRows.set(k,v)};
  const target={kind:'device',ask:true,name:'Selected agent',seed:directPeer};
@@ -104,7 +193,7 @@ async function directSend(platform,{named=false,fail=false,newTopic=false,ended=
  if(refusal==='stale'||refreshState||refreshFails)message.exec={...message.exec,stale:true};
  if(otherStale){thread.topic={agent_host:directPeer,agent_key:directHostKey,agent_id:namedTarget?.agent_id||''};thread.messages.push({...secondDirect,target:{address:directPeer,fingerprint:directHostKey,agent_id:'e'.repeat(32)},exec:{...secondDirect.exec,stale:true}});}
  const overview=projection?.overview||directOverview;
- const draft={text:'Use English instead',newTopic,files:[{key:'terms',name:'terms.md',size:1,file:{}}]};
+ const draft={text:'Use English instead',newTopic,replyTo:ordinaryReply?message.id:undefined,files:[{key:'terms',name:'terms.md',size:1,file:{}}]};
  const state={open:'selected-view',overview,drafts:{[thread.id]:draft}};
  const api=async(endpoint,request)=>{calls.push({endpoint,request:JSON.parse(JSON.stringify(request))});if(fail)throw Error('offline');return {id:request.id,state:'queued',note:'accepted for transport'};};
  const store={host:{platform,workspace:{id:platform},api},get:()=>state,isActive:()=>true,draft:()=>state.drafts[thread.id],setDraft:(_,d)=>state.drafts[thread.id]=d,
@@ -122,10 +211,10 @@ async function directSend(platform,{named=false,fail=false,newTopic=false,ended=
  await send();
  if(!message.target?.agent_id&&(newTopic||ended||refreshState==='done')){assert.equal(calls.length,0,'legacy terminal/new work has no send');assert.equal(cleared,0);assert.equal(stages,0,'legacy recovery stages no files');assert.equal(journal.readPending(storage,platform).length,0,'legacy recovery freezes no send journal');assert.match(notices.join(' '),/concrete agent binding/);return;}
  if(refreshFails){assert.equal(calls.length,0);assert.equal(cleared,0);assert.equal(refreshes,1);assert.match(notices.join(' '),/offline/);return;}
- if((invalid||refusal)&&!newTopic){assert.equal(calls.length,0);assert.equal(cleared,0);assert.match(notices.join(' '),/cannot be verified/);return;}
+ if((invalid||refusal)&&!newTopic){assert.equal(calls.length,0);assert.equal(cleared,0);assert.match(notices.join(' '),/cannot be (verified|continued)/);return;}
  assert.equal(calls.length,1,platform+' submits one request');
  assert.equal(calls[0].endpoint,newTopic||ended||refreshState==='done'?'/api/send':'/api/request/followup',platform+' routes ordinary direct send');
- if(!newTopic&&!ended&&refreshState!=='done'){assert.equal(calls[0].request.conv,'');assert.equal(calls[0].request.ref.id,projection?.original||directID);assert.equal(calls[0].request.ref.fingerprint,projection?.author||directAuthor);assert.equal(calls[0].request.attempt,refreshState?2:original.exec.attempt);assert.deepEqual(calls[0].request.files,['staged-terms']);}
+ if(!newTopic&&!ended&&refreshState!=='done'){assert.equal(calls[0].request.conv,'');assert.equal(calls[0].request.ref.id,projection?.original||directID);assert.equal(calls[0].request.ref.fingerprint,projection?.author||directAuthor);assert.equal(calls[0].request.attempt,ordinaryReply&&message.exec.state!=='running'?0:refreshState?2:original.exec.attempt);assert.deepEqual(calls[0].request.files,['staged-terms']);}
  if(fail&&platform==='android'){
   const entries=journal.readPending(storage,platform);assert.equal(entries.length,1);assert.deepEqual(entries[0].request,calls[0].request,'journal freezes exact intent and stages');
   assert.equal(entries[0].endpoint,'/api/request/followup');
@@ -146,6 +235,7 @@ for(const projection of fixture.linked||[]){
  assert.equal(projection.thread.key.pinned,projection.host_key,'B independently pins the current selected host');
  for(const platform of ['daemon','android']){
   try{
+   if(m.exec.state!=='running'){await directSend(platform,{projection,ordinaryReply:true});await directSend(platform,{projection,ordinaryReply:true,fail:true});console.log(projection.label+' '+platform+' actual ordinary linked Reply Attempt0 PASS');continue;}
    for(const opts of [{},{fail:true},{refusal:'pending'},{refusal:'key'},{refusal:'stale'},{invalid:true},{ended:true}])await directSend(platform,{projection,...opts});
    console.log(projection.label+' '+platform+' actual linked DTO routing, exact intent and refusal/no-active controls PASS');
   }catch(e){failures.push(projection.label+' '+platform+': '+e.message);console.log('FAIL '+failures.at(-1));}

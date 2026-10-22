@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"time"
 
+	"github.com/misunders2d/agentnet/internal/lockfile"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
@@ -238,6 +240,20 @@ func (a *Agent) PublicAgentCatalog() ([]protocol.AgentRecord, error) {
 	return records, nil
 }
 func (a *Agent) PublishAgentCatalog(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// Read the snapshot only after older publishers finish. The daemon and
+	// a CLI can use separate Open handles or processes for the same home;
+	// an Agent-local mutex would let an older full snapshot arrive last.
+	release, err := lockfile.Wait(filepath.Join(a.home, "agent-catalog.lock"))
+	if err != nil {
+		return err
+	}
+	defer release()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	records, err := a.PublicAgentCatalog()
 	if err != nil {
 		return err

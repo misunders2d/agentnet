@@ -70,6 +70,7 @@ type ThreadSummary struct {
 // threadRow is what a summary needs to know about one message.
 type threadRow struct {
 	link
+	atMS        int64 // local arrival precision used by the compact unread projection
 	destination DirectDestination
 	topic       string // personal display placement; never an execution binding
 	organized   bool
@@ -270,7 +271,7 @@ func (s *store) threadRows(peer, self, selfFP string) (map[string]threadRow, err
 	// A review notice is exactly the shape the store files as one (see
 	// receivedNotice); a reply or a message with files never is.
 	rows, err := s.db.Query(`SELECT id, kind, state, read_at IS NULL, coalesce(reply_to, ''), coalesce(status, ''), (`+receivedNotice+`), EXISTS(SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id),
-		CASE WHEN kind IN ('`+envelope.KindQuestion+`', '`+envelope.KindTask+`') THEN coalesce(json_extract(target, '$.agent_id'), '') ELSE coalesce(agent_id, '') END,topic_done,l.thread_key,l.thread_dir,coalesce(json_extract(target,'$.address'),CASE WHEN kind IN ('question','task') OR (kind='message' AND reply_to IS NULL) THEN (SELECT recipient FROM device_history_rows WHERE storage='in' AND id=inbox.id) END,''),coalesce(json_extract(target,'$.fingerprint'),(SELECT recipient_fp FROM device_history_rows WHERE storage='in' AND id=inbox.id),'')
+		CASE WHEN kind IN ('`+envelope.KindQuestion+`', '`+envelope.KindTask+`') THEN coalesce(json_extract(target, '$.agent_id'), '') ELSE coalesce(agent_id, '') END,topic_done,l.thread_key,l.thread_dir,coalesce(json_extract(target,'$.address'),CASE WHEN kind IN ('question','task') OR (kind='message' AND reply_to IS NULL) THEN (SELECT recipient FROM device_history_rows WHERE storage='in' AND id=inbox.id) END,''),coalesce(json_extract(target,'$.fingerprint'),(SELECT recipient_fp FROM device_history_rows WHERE storage='in' AND id=inbox.id),''),coalesce(received_ms,received_at*1000)
 		FROM inbox JOIN (SELECT id AS thread_id,direction AS thread_dir,author_fp AS thread_key FROM device_thread_links WHERE peer=? AND storage='in') l ON l.thread_id=inbox.id WHERE conv IS NULL AND ref_id IS NULL AND coalesce(sub,'') NOT IN `+recordSubs+` AND NOT `+erasedInFor("inbox"),
 		envelope.KindMessage, envelope.StatusReviewNotice, peer)
 	if err != nil {
@@ -282,7 +283,7 @@ func (s *store) threadRows(peer, self, selfFP string) (map[string]threadRow, err
 		var status string
 		var direction string
 		var host, hostKey string
-		if err := rows.Scan(&r.id, &r.kind, &r.state, &r.unread, &r.replyTo, &status, &r.notice, &r.selected, &r.agent, &r.topicDone, &r.key, &direction, &host, &hostKey); err != nil {
+		if err := rows.Scan(&r.id, &r.kind, &r.state, &r.unread, &r.replyTo, &status, &r.notice, &r.selected, &r.agent, &r.topicDone, &r.key, &direction, &host, &hostKey, &r.atMS); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -316,7 +317,7 @@ func (s *store) threadRows(peer, self, selfFP string) (map[string]threadRow, err
 	}
 	rows, err = s.db.Query(`SELECT id, coalesce(json_extract(envelope, '$.kind'), ''), state, coalesce(status, ''), coalesce(json_extract(target, '$.agent_id'), agent_id, ''),topic_done,
 		(coalesce(json_extract(envelope,'$.kind'),'')='message' AND coalesce(status,'')='review_notice' AND reply_to IS NULL AND NOT EXISTS(SELECT 1 FROM sent_attachments a WHERE a.message_id=o.id)),
-		l.thread_dir,coalesce(reply_to,''),l.thread_key,coalesce(json_extract(target,'$.address'),''),coalesce(json_extract(target,'$.fingerprint'),recipient_fp,'')
+		l.thread_dir,coalesce(reply_to,''),l.thread_key,coalesce(json_extract(target,'$.address'),''),coalesce(json_extract(target,'$.fingerprint'),recipient_fp,''),coalesce(created_ms,created_at*1000)
 		FROM outbox o JOIN (SELECT id AS thread_id,direction AS thread_dir,author_fp AS thread_key FROM device_thread_links WHERE peer=? AND storage='out') l ON l.thread_id=o.id WHERE conv IS NULL AND ref_id IS NULL AND coalesce(sub,'') NOT IN `+recordSubs+` AND NOT `+erasedOut, peer, selfFP)
 	if err != nil {
 		return nil, err
@@ -326,7 +327,7 @@ func (s *store) threadRows(peer, self, selfFP string) (map[string]threadRow, err
 		var r threadRow
 		var direction string
 		var host, hostKey string
-		if err := rows.Scan(&r.id, &r.kind, &r.state, &r.status, &r.agent, &r.topicDone, &r.notice, &direction, &r.replyTo, &r.key, &host, &hostKey); err != nil {
+		if err := rows.Scan(&r.id, &r.kind, &r.state, &r.status, &r.agent, &r.topicDone, &r.notice, &direction, &r.replyTo, &r.key, &host, &hostKey, &r.atMS); err != nil {
 			return nil, err
 		}
 		r.in = direction == "in"

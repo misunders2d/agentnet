@@ -57,18 +57,24 @@ export function AllTopics({ open, onOpenChange, peer,conv, binding, agent, curre
   const [undo,setUndo]=useState(false);
   const [busy,setBusy]=useState(false);
   const timer=useRef<ReturnType<typeof setTimeout>|null>(null);
-  const cancel=()=>{if(timer.current)clearTimeout(timer.current);timer.current=null;setUndo(false);setAction(null);};
-  useEffect(()=>()=>{if(timer.current)clearTimeout(timer.current);},[]);
-  useEffect(()=>{if(!open){cancel();setSelected([]);}},[open]);
+  const pending=useRef<(() => void)|null>(null), alive=useRef(true);
+  const finish=()=>{if(timer.current)clearTimeout(timer.current);timer.current=null;const apply=pending.current;pending.current=null;apply?.();};
+  const cancel=()=>{if(timer.current)clearTimeout(timer.current);timer.current=null;pending.current=null;setUndo(false);setAction(null);};
+  // Confirmed changes retain their captured target when this panel closes.
+  // Explicit Undo cancels; leaving the panel applies the reviewed change now.
+  useEffect(()=>{alive.current=true;return()=>{alive.current=false;finish();};},[]);
+  useEffect(()=>{if(!open){finish();cancel();setSelected([]);}},[open]);
   const commit=()=>{
+    if(pending.current||busy)return;
     setUndo(true);const ids=[...selected],covered={...counts},what=action!;
-    timer.current=setTimeout(()=>{
-      timer.current=null;setUndo(false);setBusy(true);
-      void (flat?flat.change(what,ids,covered):store.run(a=>a.changeTopic(what,{conv,peer,id:"",ids,counts:covered}))).then(r=>{if(r){if(what==="delete"&&conv&&ids.includes(store.draft(conv).topic||""))store.setDraft(conv,{...store.draft(conv),topic:undefined,newTopic:false,replyTo:undefined});setSelected([]);setAction(null);store.toast(r.note,"ok");}setBusy(false);});
-    },TOPICS.undoDelay);
+    pending.current=()=>{
+      if(alive.current){setUndo(false);setBusy(true);}
+      void (flat?flat.change(what,ids,covered):store.run(a=>a.changeTopic(what,{conv,peer,id:"",ids,counts:covered}))).then(r=>{if(r){if(what==="delete"&&conv&&ids.includes(store.draft(conv).topic||""))store.setDraft(conv,{...store.draft(conv),topic:undefined,newTopic:false,replyTo:undefined});if(alive.current){setSelected([]);setAction(null);}store.toast(r.note,"ok");}if(alive.current)setBusy(false);});
+    };
+    timer.current=setTimeout(finish,TOPICS.undoDelay);
   };
   const toggle=(id:string)=>{setCounts(had=>({...had,[id]:items.find(t=>t.id===id)?.count||1}));setSelected(had=>had.includes(id)?had.filter(x=>x!==id):[...had,id]);};
-  useEffect(()=>{cancel();setSelected([]);setCounts({});stable.release();},[scope]);
+  useEffect(()=>{finish();cancel();setSelected([]);setCounts({});stable.release();},[scope]);
   const search = useRef<HTMLInputElement>(null);
   const portal = usePortal();
   const modal = useModal(open);
@@ -126,7 +132,7 @@ export function AllTopics({ open, onOpenChange, peer,conv, binding, agent, curre
             <p className="text-[14px] font-semibold">{selected.length} selected</p>
             {!action ? <div className="mt-2 flex flex-wrap gap-2">{(["delete","done","archive"] as const).map(what=><Button key={what} size="sm" disabled={busy || what==="done"&&items.some(t=>selected.includes(t.id)&&t.root)} onClick={()=>setAction(what)}>{what==="delete"?"Delete for me":what==="done"?"Mark done":"Archive"}</Button>)}<Button size="sm" onClick={()=>setSelected([])}>Cancel selection</Button></div>
               : <><p className="mt-1 text-[14px]">{action==="delete"?"Delete these topics for you? Others keep their copies. People chats: your devices; agent chats: this device.":action==="done"?conv?"Mark these topics done for everyone?":"Mark these topics done on your linked devices?":"Archive these topics on your linked devices? Nothing deleted."}</p>
-                <div className="mt-2 flex gap-2">{undo?<><span className="text-[14px]">Will apply in six seconds.</span><Button size="sm" onClick={cancel}>Undo</Button></>:<><Button size="sm" disabled={busy} onClick={commit}>Confirm</Button><Button size="sm" disabled={busy} onClick={cancel}>Cancel</Button></>}</div></>}
+                <div className="mt-2 flex gap-2">{undo?<><span className="text-[14px]">Will apply in six seconds. Closing applies now.</span><Button size="sm" onClick={cancel}>Undo</Button></>:<><Button size="sm" disabled={busy} onClick={commit}>Confirm</Button><Button size="sm" disabled={busy} onClick={cancel}>Cancel</Button></>}</div></>}
           </div>}
           <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-3 pt-2 lg:px-3" aria-busy={loading}>
             <p role="status" className={q && !loading && !failed && items.length ? "px-3 pb-1 text-[13px] font-semibold text-text-2" : "sr-only"}>

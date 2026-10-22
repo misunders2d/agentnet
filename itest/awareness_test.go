@@ -24,6 +24,16 @@ func (c *cli) hook(home, harness, event string) string {
 	return string(out)
 }
 
+// Delivery waits must not consume the effective unread state under test.
+func (c *cli) peekInbox(home string) []inboxEntry {
+	c.t.Helper()
+	var out []inboxEntry
+	if err := json.Unmarshal([]byte(c.run("--home", home, "inbox", "--peek", "--json")), &out); err != nil {
+		c.t.Fatal(err)
+	}
+	return out
+}
+
 // TestCLIConversationAndHooks: a two-way conversation with files survives
 // every process exiting; hook calls from two sessions each learn of the
 // replies once, from the local database alone (Hub stopped), without the
@@ -44,12 +54,12 @@ func TestCLIConversationAndHooks(t *testing.T) {
 	os.WriteFile(filepath.Join(c.dir, "spec.txt"), []byte("spec v1"), 0o600)
 	q := strings.Fields(c.run("--home", "alice", "ask", "--answer-wait", "0", "--file", "spec.txt", "bob/desk", "SECRET-Q which port?"))[0]
 	ids := []string{q}
-	waitFor(t, "question at bob", func() bool { return len(c.inbox("bob")) == 1 })
+	waitFor(t, "question at bob", func() bool { return len(c.peekInbox("bob")) == 1 })
 	for i, turn := range []struct{ home, peer string }{{"bob", "alice"}, {"alice", "bob"}, {"bob", "alice"}, {"alice", "bob"}, {"bob", "alice"}} {
 		id := strings.Fields(c.run("--home", turn.home, "reply", ids[len(ids)-1], "SECRET-R"+string(rune('1'+i))))[0]
 		ids = append(ids, id)
 		waitFor(t, "reply at "+turn.peer, func() bool {
-			for _, m := range c.inbox(turn.peer) {
+			for _, m := range c.peekInbox(turn.peer) {
 				if m.ID == id {
 					return true
 				}
@@ -60,6 +70,29 @@ func TestCLIConversationAndHooks(t *testing.T) {
 	stopAlice()
 	stopBob()
 	stopHub()
+
+	// Hub stopped: hooks read only the local database. Stop stays silent
+	// without consuming arrivals that the next ordinary boundary must show.
+	for _, s := range []struct{ harness, id string }{{"claude", "S1"}, {"codex", "S2"}} {
+		if raw := c.hook("alice", s.harness, session(s.id, "Stop")); raw != "" {
+			t.Fatalf("%s Stop blocked on ordinary replies: %s", s.harness, raw)
+		}
+		var out struct {
+			HookSpecificOutput struct{ HookEventName, AdditionalContext string }
+		}
+		raw := c.hook("alice", s.harness, session(s.id, "UserPromptSubmit"))
+		if err := json.Unmarshal([]byte(raw), &out); err != nil {
+			t.Fatalf("%s: %v %q", s.harness, err, raw)
+		}
+		ctx := out.HookSpecificOutput.AdditionalContext
+		if out.HookSpecificOutput.HookEventName != "UserPromptSubmit" || !strings.Contains(ctx, ids[1]) || !strings.Contains(ctx, ids[3]) ||
+			!strings.Contains(ctx, ids[5]) || strings.Contains(ctx, "SECRET") {
+			t.Fatalf("%s context: %s", s.harness, ctx)
+		}
+		if again := c.hook("alice", s.harness, session(s.id, "UserPromptSubmit")); again != "" {
+			t.Fatalf("%s told twice: %s", s.harness, again)
+		}
+	}
 
 	var conv struct {
 		Peer     string
@@ -88,22 +121,24 @@ func TestCLIConversationAndHooks(t *testing.T) {
 		t.Fatalf("bob's page: %s", text)
 	}
 
-	// Hub stopped: hooks read only the local database.
-	for _, s := range []struct{ harness, id string }{{"claude", "S1"}, {"codex", "S2"}} {
-		var out struct {
-			HookSpecificOutput struct{ HookEventName, AdditionalContext string }
+	// Displaying the inbox marks these replies read for the person.
+	// A new native session must not treat that history as another unread inbox.
+	if rows := c.inbox("alice"); len(rows) != 3 {
+		t.Fatalf("displaying all three received replies: %+v", rows)
+	}
+	for _, harness := range []string{"claude", "codex"} {
+		id := "after-read-" + harness
+		raw := c.hook("alice", harness, session(id, "SessionStart"))
+		for _, received := range []string{ids[1], ids[3], ids[5]} {
+			if strings.Contains(raw, received) {
+				t.Fatalf("%s replayed displayed reply %s: %s", harness, received, raw)
+			}
 		}
-		raw := c.hook("alice", s.harness, session(s.id, "UserPromptSubmit"))
-		if err := json.Unmarshal([]byte(raw), &out); err != nil {
-			t.Fatalf("%s: %v %q", s.harness, err, raw)
+		if again := c.hook("alice", harness, session(id, "UserPromptSubmit")); again != "" {
+			t.Fatalf("%s replayed read arrivals after SessionStart: %s", harness, again)
 		}
-		ctx := out.HookSpecificOutput.AdditionalContext
-		if out.HookSpecificOutput.HookEventName != "UserPromptSubmit" || !strings.Contains(ctx, ids[1]) || !strings.Contains(ctx, ids[3]) ||
-			!strings.Contains(ctx, ids[5]) || strings.Contains(ctx, "SECRET") {
-			t.Fatalf("%s context: %s", s.harness, ctx)
-		}
-		if again := c.hook("alice", s.harness, session(s.id, "UserPromptSubmit")); again != "" {
-			t.Fatalf("%s told twice: %s", s.harness, again)
+		if stopped := c.hook("alice", harness, session(id, "Stop")); stopped != "" {
+			t.Fatalf("%s read history blocked Stop: %s", harness, stopped)
 		}
 	}
 	if out := c.hook("alice", "claude", session("S1", "Stop")); out != "" {

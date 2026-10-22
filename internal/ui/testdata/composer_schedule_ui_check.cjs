@@ -20,8 +20,8 @@ const drain=async()=>{for(let i=0;i<8;i++)await new Promise(r=>setImmediate(r));
  const host={platform:'daemon',workspace:{id:'ui',handle:'h'}},holder=load('schedule-saves.ts',{brand:{storage:'test'},localStorage});
  let slots={},ledger;const changed=()=>{for(const slot of ledger.takeConfirmed()){saved.push(slot.attempt);draft=model.clearScheduledDraft(draft,slot.attempt);}slots=ledger.snapshot();h.render();};
  ledger=holder.scheduleSaves(host,changed);
- const store={api,host,isActive:()=>true,beginScheduleSave:(c,a)=>ledger.begin(c,a),settleScheduleSave:(c,id,status,note)=>ledger.settle(c,id,status,note),forgetScheduleSave:(c,id)=>ledger.forget(c,id)};let props={pane,onPane:p=>{pane=p;props.pane=p;h.render();},conv:'a'.repeat(64),dm:{members:[],agents:[],guests:[],topics:[]},capture:()=>{captures++;return {draft:{...draft,files:[...draft.files]},body:draft.text};},reason:'',onSaved:a=>saved.push(a)};
- const component=load('features/Composer.schedule.tsx',{...h.react,...model,useApp:()=>store,useStore:(_s,select)=>select({scheduleSaves:slots,contentRevision:revision,overview:{person:{person:'person',label:'Verified Casey',state:'self'},people:[]}}),Button:'Button',Sheet:'Sheet',sendID:()=>String(++sequence).padStart(32,'0')});
+ const notices=[];const store={api,host,toast:(text,tone)=>notices.push({text,tone}),isActive:()=>true,beginScheduleSave:(c,a)=>ledger.begin(c,a),settleScheduleSave:(c,id,status,note)=>ledger.settle(c,id,status,note),forgetScheduleSave:(c,id)=>ledger.forget(c,id)};let props={pane,onPane:p=>{pane=p;props.pane=p;h.render();},conv:'a'.repeat(64),dm:{members:[],agents:[],guests:[],topics:[]},capture:()=>{captures++;return {draft:{...draft,files:[...draft.files]},body:draft.text};},reason:'',onSaved:a=>saved.push(a)};
+ const component=load('features/Composer.schedule.tsx',{...h.react,...model,dueText:d=>new Date(d).toISOString(),useApp:()=>store,useStore:(_s,select)=>select({scheduleSaves:slots,contentRevision:revision,overview:{person:{person:'person',label:'Verified Casey',state:'self'},people:[]}}),Button:'Button',Sheet:'Sheet',sendID:()=>String(++sequence).padStart(32,'0')});
  const find=(tag,label)=>{const n=nodes(h.get()).find(n=>n.tag===tag&&(n.props['aria-label']===label||words(n).trim()===label));assert(n,tag+' '+label+' not found');return n;};
  const click=async label=>{const b=find('Button',label);assert(!b.props.disabled,label+' disabled');b.props.onClick();await drain();};
  h.start(()=>component.ScheduleDialogs(props));await drain();assert.equal(calls.filter(c=>c[0]==='audience').length,1);assert.equal(calls.filter(c=>c[0]==='create').length,0);
@@ -32,6 +32,8 @@ const drain=async()=>{for(let i=0;i<8;i++)await new Promise(r=>setImmediate(r));
  draft={...draft,text:'New typing stays',files:[...draft.files,{key:'new',file:new File(['new'],'new.txt')}]};
  await click('Check saved state');assert.equal(saved.length,0,'GET descriptors never clear draft');assert(words(h.get()).includes('confirm with same-ID save'));
  await click('Retry same save');assert.equal(stages,2);assert.equal(rows.length,1);assert.equal(saved.length,1);assert.equal(saved[0].draft.text,'Captured exact encoded body');assert.equal(draft.text,'New typing stays');assert.equal(draft.files.length,1);
+ assert.equal(pane,null,'confirmed save closes scheduling form and keeps the chat visible');assert.match(notices.at(-1).text,/Scheduled for .*Outbox → Scheduled/);assert.equal(notices.at(-1).tone,'ok');
+ props.pane='list';pane='list';h.render();await drain(); // Only explicit management opens the list.
  const creates=calls.filter(c=>c[0]==='create');assert.equal(creates[0][1].id,creates[1][1].id);assert.notEqual(creates[0][1].files[0],creates[1][1].files[0]);
  // The confirmed-save transition may release its slot before the create pane closes.
  // List/history interactions must not capture another draft after that transition.

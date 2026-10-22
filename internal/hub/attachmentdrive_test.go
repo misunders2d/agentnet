@@ -42,6 +42,7 @@ type relayDriveProvider struct {
 	files                               map[string]relayFakeFile
 	next, creates, deletes, tokenCalls  int
 	uploadCalls                         int
+	uploadStarts                        []time.Time
 	metadataCalls                       int
 	mediaBytes                          int64
 	account, challenge                  string
@@ -169,6 +170,7 @@ func newRelayDriveProvider(t *testing.T) *relayDriveProvider {
 			fmt.Fprintf(w, `{"ids":["drive-id-%d"]}`, p.next)
 		case path == "/files" && r.Method == "POST":
 			p.uploadCalls++
+			p.uploadStarts = append(p.uploadStarts, time.Now())
 			if p.uploadReason != "" {
 				w.WriteHeader(403)
 				fmt.Fprintf(w, `{"error":{"code":403,"errors":[{"reason":%q}],"message":"PRIVATE_PROVIDER_BODY"}}`, p.uploadReason)

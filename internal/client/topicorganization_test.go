@@ -47,6 +47,87 @@ func TestTopicOrganizationMovesOnlyReviewedMessages(t *testing.T) {
 	}
 }
 
+func TestTopicOrganizationDestinationTitle(t *testing.T) {
+	id := func(c string) string { return strings.Repeat(c, 32) }
+	key := "11111111-22222222-33333333-44444444"
+	conv, from, to := strings.Repeat("c", 64), id("a"), id("b")
+	source := ConvMessage{ID: id("1"), LID: id("1"), Key: key, Topic: from, Body: "Group note to edit", Sent: 1}
+	destination := ConvMessage{ID: id("2"), LID: id("2"), Key: key, Topic: to, Body: "Stock count topic start", Sent: 2}
+	move := ConvMessage{ID: id("3"), LID: id("3"), Key: key, Topic: to, Sent: 3, TopicEvent: &envelope.TopicEvent{Action: "move", Moves: []envelope.TopicMove{{LID: source.LID, Author: key, Topic: from}}}}
+	for _, merge := range []bool{false, true} {
+		event := move
+		if merge {
+			e := *move.TopicEvent
+			e.Action, e.Merge = "merge", from
+			event.TopicEvent = &e
+		}
+		for _, promoted := range []bool{false, true} {
+			msgs := []ConvMessage{source, destination, event}
+			if promoted {
+				msgs[1].Topic = ""
+				msgs[1].LID, msgs[1].ID = to, to
+				msgs = append(msgs, ConvMessage{ID: id("4"), LID: id("4"), Topic: to, Sent: 2, TopicEvent: &envelope.TopicEvent{Action: "create"}})
+			}
+			original, _ := json.Marshal(msgs)
+			for _, private := range []string{"", "Private destination name"} {
+				locals := map[string]topicLocal{to: {Title: private}}
+				for replay := 0; replay < 2; replay++ {
+					var retained []ConvMessage
+					if err := json.Unmarshal(original, &retained); err != nil {
+						t.Fatal(err)
+					}
+					if replay == 1 {
+						for i, j := 0, len(retained)-1; i < j; i, j = i+1, j-1 {
+							retained[i], retained[j] = retained[j], retained[i]
+						}
+					}
+					found := false
+					for _, topic := range summarizeChatTopics(conv, retained, locals, 10) {
+						if topic.ID != to {
+							continue
+						}
+						found = true
+						want := destination.Body
+						if private != "" {
+							want = private
+						}
+						if topic.Title != want || private != "" && topic.AutoTitle != destination.Body {
+							t.Errorf("merge=%v promoted=%v replay=%d private=%q: destination title=%q auto=%q, want %q", merge, promoted, replay, private, topic.Title, topic.AutoTitle, want)
+						}
+					}
+					if !found {
+						t.Fatal("destination disappeared")
+					}
+					if ChatTopicAssignments(retained)[source.LID] != to {
+						t.Fatal("title preservation changed selected placement")
+					}
+				}
+			}
+			after, _ := json.Marshal(msgs)
+			if string(after) != string(original) {
+				t.Fatal("projection rewrote original bytes or audience")
+			}
+		}
+	}
+	// An empty/new destination has no original anchor; its selected first
+	// message still supplies the automatic title. Main retains its own rules.
+	for _, topic := range []string{to, ""} {
+		empty := move
+		empty.Topic = topic
+		msgs := []ConvMessage{source, empty}
+		ts := summarizeChatTopicView(conv, msgs, nil, 10, topic == "")
+		if len(ts) != 1 || ts[0].Title != source.Body || ts[0].ID != topic {
+			t.Fatalf("empty/Main destination fallback changed: %+v", ts)
+		}
+	}
+	back := ConvMessage{ID: id("5"), LID: id("5"), Key: key, Topic: from, Sent: 4, ReplyTo: move.LID, TopicEvent: &envelope.TopicEvent{Action: "move", Moves: []envelope.TopicMove{{LID: source.LID, Author: key, Topic: to}}}}
+	for _, topic := range summarizeChatTopics(conv, []ConvMessage{back, move, destination, source}, nil, 10) {
+		if topic.ID == to && (topic.Title != destination.Body || topic.Count != 1) {
+			t.Fatalf("inverse move changed destination title: %+v", topic)
+		}
+	}
+}
+
 func TestTopicOrganizationCiphertextOnlyHistoryCopy(t *testing.T) {
 	organization, err := topicOrganizationCopy(nil, "", envelope.SubHistory, "")
 	if err != nil || organization {

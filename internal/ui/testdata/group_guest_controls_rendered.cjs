@@ -23,11 +23,21 @@ const thread={id:conv,kind:'group',title:'orchard_dispatch',peer:{label:'orchard
  {id:'private',lid:'private',from:me.address,dir:'out',kind:'message',body:'Unselected earlier history',at,group_ref:{lid:'private',author:me.fingerprint,hash:'b'.repeat(64)}}]};
 const overview={version:'fixture',seq:1,me:{address:me.address,fingerprint:me.fingerprint,responder:'fixture'},person:me,persons:true,agents:true,groups:true,files:{max_file:1048576,max_message:2097152,max_count:8},controls:true,role:'person',people:[outside,cora],review:[],links:[],reminders:[],threads:[],dms:[{id:conv,kind:'group',title:thread.title,peer:thread.peer,count:2,unread:0}],directory:{current:true,members:[me,brin,outside,cora].map(p=>({address:p.address,label:p.label,fingerprint:p.fingerprint,presence:'connected'}))},quarantine:[],group_invitations:[{id:'invite-1',conv,direction:'out',status:'pending',title:thread.title,inviter:me.person,target:cora.person,history:[],can_cancel:true,can_refresh:true}]};
 const completion=process.env.AGENTNET_COMPLETION_PROJECTION?JSON.parse(fs.readFileSync(process.env.AGENTNET_COMPLETION_PROJECTION,'utf8')):null;
+const guestEventSources=process.env.AGENTNET_GUEST_EVENT_RENDER_DATA?JSON.parse(fs.readFileSync(process.env.AGENTNET_GUEST_EVENT_RENDER_DATA,'utf8')):null;
 if(completion){Object.assign(overview,completion.overview);Object.assign(thread,completion.thread);}
 const presentationResult="**Choose the destination.**\n\nKeep the complete original result. Keep the complete original result. Keep the complete original result. Keep the complete original result. Keep the complete original result. Keep the complete original result. Keep the complete original result. Keep the complete original result. Keep the complete original result. Keep the complete original result. Keep the complete original result. Keep the complete original result. Keep the complete original result. Keep the complete original result. Keep the complete original result. Keep the complete original result. Keep the complete original result. Keep the complete original result. Keep the complete original result. Keep the complete original result. Keep the complete original result. Keep the complete original result. Keep the complete original result. Keep the complete original result. Keep the complete original result. Keep the complete original result. Keep the complete original result. Keep the complete original result. Keep the complete original result. Keep the complete original result. Keep the complete original result. Keep the complete original result. Keep the complete original result. Keep the complete original result. Keep the complete original result. \n\nFULL_RESULT_END\nreaction: \ud83d\udc4d\ntopic: done\nemotion: curious";
 const boot=`
 const seed=${JSON.stringify({overview,thread})};window.fixture={...seed,requests:[]};
 const variant=new URL(location.href).searchParams.get('case')||'admin';
+const guestEventSources=${JSON.stringify(guestEventSources)};
+if(variant.startsWith('guest-events-')){
+ const snapshots=guestEventSources[variant.slice('guest-events-'.length)];
+ fixture.overview=structuredClone(snapshots[0].overview);fixture.thread=structuredClone(snapshots[0].thread);
+ // A localized presentation sentence must not change the signed event type.
+ const joined=fixture.thread.messages.find(m=>m.event_type==='accept'&&fixture.thread.guests.some(g=>g.pid===m.pid));
+ fixture.guestEventPID=joined.pid;joined.event='Повідомлення про участь';
+ window.endGuestEvents=()=>{fixture.overview=structuredClone(snapshots[1].overview);fixture.thread=structuredClone(snapshots[1].thread);changed({type:'change',seq:++fixture.overview.seq});};
+}
 if(variant==='completion')fixture.overview.group_invitations=[];
 if(variant==='member')fixture.thread.members[0].admin=false;
 if(variant==='topic-invite'||variant==='topic-invite-dm'){
@@ -88,8 +98,22 @@ if(variant==='followup'||variant.startsWith('composer-followup')){
    {...root,id:'4'.repeat(32),lid:'4'.repeat(32),origin:'agent:codex',body:'Peer-authored work'});
  }
 }
+if(variant.startsWith('composer-followup-q1')){
+ for(const agent of fixture.thread.agents){agent.tasks_from=[];agent.missing=0;}
+ const original=fixture.thread.messages.find(m=>m.id==='1'.repeat(32));
+ original.exec.state='needs_human';
+ fixture.thread.messages.find(m=>m.id==='2'.repeat(32)).exec.state='answered';
+ fixture.thread.messages.push({id:'8'.repeat(32),lid:'8'.repeat(32),from:'brin/desktop',dir:'in',kind:'answer',body:'Which budget and folder should I use?',reply_to:original.lid,pid:original.pid,verified_agent:true,at:'2026-10-05T10:02:00Z'});
+ fixture.followupFailed=true;
+ if(variant.endsWith('-dm')){fixture.thread.kind='dm';fixture.thread.peer=fixture.thread.members[1];fixture.thread.members=[];Object.assign(fixture.overview.dms[0],{kind:'dm',peer:fixture.thread.peer});}
+}
 if(variant==='browser-app'){
  fixture.overview.device={browser:true};fixture.overview.me.browser=true;
+}
+if(variant==='gui-invite-labels'){
+ fixture.overview.group_invitations=[];fixture.thread.guests=[];fixture.thread.agents=[];fixture.thread.messages[0].attachments=[];
+ fixture.overview.agent_devices=['aster/laptop','brin/desktop'];fixture.overview.remind=true;
+ fixture.guiCatalog={id:'a'.repeat(32),label:'Codex',harness:'codex',host:fixture.overview.me.address,host_key:fixture.overview.me.fingerprint,default:true};
 }
 if(variant==='guest-active'||variant==='guest-invited'){
  fixture.thread.role='human_guest';fixture.overview.person={...fixture.thread.guests[0].host,state:'self'};fixture.overview.me.address=fixture.overview.person.address;
@@ -312,6 +336,14 @@ let open;
 const changeListeners=new Set(),changed=event=>{for(const fn of [...changeListeners])fn(event);};
 const host={version:1,platform:(variant==='composer-followup-android'||variant.endsWith('-android'))?'android':'daemon',android:(variant==='composer-followup-android'||variant.endsWith('-android'))?{legacyDrafts:async()=>({drafts:[]}),visible:()=>true,onVisibility:()=>()=>{}}:undefined,workspace:{id:'default',name:'P6 fixture',endpoint:location.origin,address:seed.overview.me.address,realm:'',state:'enrolled'},workspaces:null,skins:[],onSkinsChange(){return()=>{};},onOpen(fn){open=fn;},listen(fn){changeListeners.add(fn);return()=>changeListeners.delete(fn);},stage:async f=>{if(variant==='followup'||variant.startsWith('composer-followup')){if(fixture.followupStageFailure&&f.name==='fail-second.md'){fixture.followupStageFailure=false;throw Error('Synthetic second stage failure');}const id='followup-staged-'+(fixture.followupStages.length+1);fixture.followupStages.push({id,name:f.name,size:f.size,text:await f.text()});if(fixture.followupStagePause){fixture.followupStagePause=false;await new Promise(resolve=>{window.finishFollowupStage=resolve;});}return id;}if(variant==='multi-agent'){const id='multi-stage-'+(fixture.stages.length+1);fixture.stages.push({id,name:f.name,size:f.size});return {id};}if(variant==='oks'){fixture.staged={name:f.name,size:f.size};return {id:'staged-1'};}throw Error('fixture accepts no files');},file:async(id,index,dir)=>{if(variant==='direct-files'){fixture.download={id,index,dir};return {bytes:new TextEncoder().encode('hello')};}throw Error('fixture contains no files');},api:async(p,body)=>{
 fixture.requests.push({path:p,body});
+if(variant==='gui-invite-labels'&&p.startsWith('/api/agents')){
+ const selected=new URL(p,location.origin).searchParams.get('host')||fixture.overview.me.address;
+ return {host:selected,local:selected===fixture.overview.me.address,agents:[{record:selected===fixture.overview.me.address?fixture.guiCatalog:{...fixture.guiCatalog,id:'b'.repeat(32),label:'Claude',harness:'claude',host:selected},enabled:true,responder:{ready:true}}],sessions:[]};
+}
+if(variant==='gui-invite-labels'&&p==='/api/dm/agent/invite'){
+ const agent={pid:'gui-own-agent',host:fixture.overview.person,agent_id:body.agent_id,state:'active',state_text:'Active',invited:'2026-10-05T10:00:00Z',host_here:true,can_ask:true,can_decide:false,owner_invited:true,inviter:fixture.overview.person,shared:body.share,tasks_from:body.tasks_from,topic:body.topic,missing:0};
+ fixture.thread.agents.push(agent);return structuredClone(agent);
+}
 
 if(variant.startsWith('v32-direct-')&&p.startsWith('/api/thread?'))return structuredClone(fixture.deviceThread);
 if(variant.startsWith('v32-direct-')&&p==='/api/request/followup'){
@@ -334,7 +366,7 @@ if((variant==='v32-attention'||variant==='v32-landing')&&p==='/api/act'){
 if((variant==='followup'||variant.startsWith('composer-followup'))&&p==='/api/upload/discard')return {};
 if((variant==='followup'||variant.startsWith('composer-followup'))&&p==='/api/request/followup'){
  if(fixture.rejectEndedSteering)throw Error('The selected current work ended; steering was not applied.');
- if(variant.startsWith('composer-followup') && body.attempt!==fixture.thread.messages.find(m=>(m.lid||m.id)===body.ref.id)?.exec?.attempt)throw Error('Steering must retain the exact host attempt');
+ if(variant.startsWith('composer-followup')){const source=fixture.thread.messages.find(m=>(m.lid||m.id)===body.ref.id);if(body.attempt!==(source?.exec?.state==='running'?source.exec.attempt:0))throw Error('Follow-up must retain the exact running or ordinary mode');}
  if(!fixture.followupFailed){fixture.followupFailed=true;throw Error('Synthetic uncertain response; retry the same follow-up');}
  fixture.followupSent=true;return {note:'Correction sent; pending native acceptance.'};
 }
@@ -440,12 +472,13 @@ if(p==='/api/groups/refresh'){fixture.overview.group_invitations[0]={...fixture.
 if(p.includes('/groups/invitations'))return variant.startsWith('decline-invite-')?structuredClone(fixture.overview.group_invitations):[];if(p.startsWith('/api/typing/status'))return {send:false,scopes:[]};if(p.includes('/topics'))return {topics:[],placements:[]};return {};
 }};
 if(variant==='browser-app')host.platform='browser';
+if(variant==='guest-events-browser')host.platform='browser';
 const skin=new URL(location.href).searchParams.get('skin'),base='/assets/skins/'+skin+'/';
 const manifest=await(await fetch(base+'skin.json')).json();
 if(manifest.document){const css=new CSSStyleSheet();css.replaceSync((await(await fetch(base+manifest.document)).text()).replaceAll('url(m/','url('+base+'m/'));document.adoptedStyleSheets=[css];}
 const shadow=document.querySelector('#skin').attachShadow({mode:'open'}),css=new CSSStyleSheet();css.replaceSync(await(await fetch(base+manifest.style)).text());shadow.adoptedStyleSheets=[css];
 const skinRoot=document.createElement('div');skinRoot.className='skin-root';shadow.append(skinRoot);const module=await import(base+manifest.entry);await module.mount(skinRoot,host);
-window.openGroup=()=>open(seed.thread.id,'conversation');window.v32Open=(id,kind,context)=>open(id,kind,context);window.v32Close=()=>open('');window.openFixtureMessage=id=>open(id,'message');window.reloadFixture=()=>changed?.({type:'change',seq:++fixture.overview.seq});
+window.openGroup=()=>open(variant.startsWith('guest-events-')?fixture.thread.id:seed.thread.id,'conversation');window.v32Open=(id,kind,context)=>open(id,kind,context);window.v32Close=()=>open('');window.openFixtureMessage=id=>open(id,'message');window.reloadFixture=()=>changed?.({type:'change',seq:++fixture.overview.seq});
 window.disableInvite=()=>{Object.assign(fixture.overview.group_invitations[0],{can_cancel:false,can_refresh:false});changed?.({type:'change',seq:++fixture.overview.seq});};window.ready=true;
 if(new URL(location.href).searchParams.get('native')==='1'){
  const frame=()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))),sleep=ms=>new Promise(r=>setTimeout(r,ms));
@@ -485,7 +518,7 @@ const server=http.createServer((req,res)=>{if(req.url==='/native-result'&&req.me
   }
 
   for(const skin of (process.env.AGENTNET_TEST_SKINS||'comic').split(','))for(const width of (process.env.AGENTNET_GUEST_INLINE==='1'?[1024,1279,390]:[1280,390])){
-   const openCase=async (variant,platform)=>{const context=await browser.newContext({viewport:{width,height:900},reducedMotion:'reduce'});await context.route('**/*',r=>new URL(r.request().url()).origin===origin?r.continue():r.abort());if(platform)await context.addInitScript(p=>Object.defineProperty(navigator,'platform',{get:()=>p}),platform);const page=await context.newPage();page.setDefaultTimeout(8000);page.on('pageerror',e=>errors.push(skin+': '+e.stack));if(process.env.AGENTNET_V32_RENDERED==='1')page.on('console',m=>{if(m.type()==='error')errors.push(skin+': '+m.text());});if(process.env.AGENTNET_V32_RENDERED==='1'){page.on('response',r=>{if(r.status()>=400)errors.push(skin+': HTTP '+r.status()+' '+r.url());});page.on('requestfailed',r=>errors.push(skin+': '+r.url()+' '+r.failure()?.errorText));}await page.goto(origin+'/?skin='+skin+'&case='+variant);try{await page.waitForFunction(()=>window.ready);}catch(e){console.error(JSON.stringify({skin,width,variant,errors,text:await page.locator('body').innerText()}));throw e;}if(variant.startsWith('v32-direct-')||variant==='completion'||variant==='direct-files'||variant==='device-oks'||variant.startsWith('delivery-')||variant.startsWith('decline-invite-'))return {page,context};await page.evaluate(()=>openGroup());try{await page.getByText(variant==='oks'?'Main flow conversation':'Selected warehouse context',{exact:false}).first().waitFor();}catch(e){console.error(JSON.stringify({errors,text:await page.locator('#skin').evaluate(e=>e.shadowRoot.innerText||e.shadowRoot.textContent)}));throw e;}return {page,context};};
+   const openCase=async (variant,platform)=>{const context=await browser.newContext({viewport:{width,height:900},reducedMotion:process.env.AGENTNET_GUI_INVITE_LABELS==='1'?'no-preference':'reduce'});await context.route('**/*',r=>new URL(r.request().url()).origin===origin?r.continue():r.abort());if(platform)await context.addInitScript(p=>Object.defineProperty(navigator,'platform',{get:()=>p}),platform);const page=await context.newPage();page.setDefaultTimeout(8000);page.on('pageerror',e=>errors.push(skin+': '+e.stack));if(process.env.AGENTNET_V32_RENDERED==='1'||(process.env.AGENTNET_GUI_INVITE_LABELS==='1'||process.env.AGENTNET_GUEST_EVENTS==='1'))page.on('console',m=>{if(m.type()==='error')errors.push(skin+': '+m.text());});if(process.env.AGENTNET_V32_RENDERED==='1'||(process.env.AGENTNET_GUI_INVITE_LABELS==='1'||process.env.AGENTNET_GUEST_EVENTS==='1')){page.on('response',r=>{if(r.status()>=400)errors.push(skin+': HTTP '+r.status()+' '+r.url());});page.on('requestfailed',r=>errors.push(skin+': '+r.url()+' '+r.failure()?.errorText));}await page.goto(origin+'/?skin='+skin+'&case='+variant);try{await page.waitForFunction(()=>window.ready);}catch(e){console.error(JSON.stringify({skin,width,variant,errors,text:await page.locator('body').innerText()}));throw e;}if(variant.startsWith('v32-direct-')||variant==='completion'||variant==='direct-files'||variant==='device-oks'||variant.startsWith('delivery-')||variant.startsWith('decline-invite-'))return {page,context};await page.evaluate(()=>openGroup());if(variant.startsWith('guest-events-')){await page.getByRole('log',{name:'Messages',exact:true}).waitFor();return {page,context};}try{await page.getByText(variant==='oks'?'Main flow conversation':'Selected warehouse context',{exact:false}).first().waitFor();}catch(e){console.error(JSON.stringify({errors,text:await page.locator('#skin').evaluate(e=>e.shadowRoot.innerText||e.shadowRoot.textContent)}));throw e;}return {page,context};};
 
 if(process.env.AGENTNET_V32_RENDERED==='1'){
  const findings=[];const fonts=await browser.newContext().then(async context=>{try{const page=await context.newPage();const urls=[];page.on('response',r=>{if(r.url().endsWith('.woff2'))urls.push({url:r.url(),status:r.status()});});await page.goto(origin+'/?skin=comic&case=v32-attention');await page.waitForFunction(()=>window.ready);await page.evaluate(()=>openGroup());await settle(page);const loaded=await page.evaluate(()=>[...document.fonts].filter(f=>f.status==='loaded').map(f=>f.family));assert(loaded.length>=2,'both unchanged font families load through the corrected fixture routes');return{urls,loaded};}finally{await context.close();}});fs.writeFileSync(path.join(evidence,'v32-fonts-'+width+'.json'),JSON.stringify(fonts,null,2));
@@ -817,7 +850,8 @@ if(process.env.AGENTNET_REPORT_HISTORY_REGRESSION==='1'){
  const {page,context}=await openCase('report-history');
  try{
   const original=page.locator('[data-mid="'+'3'.repeat(32)+'"]');
-  await original.getByText(/A separate follow-up does not close it/).waitFor();
+  await original.getByText(/For a native permission or required authorization/).waitFor();
+  await original.getByText(/Reply in this chat and tag the same agent/).waitFor();
   await original.getByRole('button',{name:'Mark as handled',exact:true}).waitFor();
   assert.equal(await page.evaluate(()=>fixture.thread.messages.find(m=>m.id==='3'.repeat(32)).exec.state),'needs_human','same-outcome follow-up success cannot invent an exact resolution');
   if(width===390)await page.getByRole('button',{name:'Back to chats',exact:true}).click();
@@ -1222,6 +1256,159 @@ if(process.env.AGENTNET_HELD_FLOOD_REGRESSION==='1'){
   assert(!await page.evaluate(()=>fixture.requests.some(r=>r.body?.do&&r.body.do!=='archive_held_batch')),'bulk archive never admits/trusts/runs');
   const shot=path.join(evidence,'comic-held-flood-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
  }finally{await context.close();}
+ continue;
+}
+if(process.env.AGENTNET_GUEST_EVENTS==='1'){
+ for(const source of ['native','browser']){
+  const {page,context}=await openCase('guest-events-'+source);
+  try{
+   const data=await page.evaluate(()=>{const pid=fixture.guestEventPID,g=fixture.thread.guests.find(g=>g.pid===pid);return {pid,name:g.host.label,accept:fixture.thread.messages.find(m=>m.pid===pid&&m.event_type==='accept').id};});
+   const joined=page.locator('[data-mid="'+data.accept+'"]');await joined.waitFor();assert((await joined.innerText()).includes(data.name+' joined to help'));
+   assert(!/won’t join|invite cancelled/.test(await joined.innerText()),source+' localized accepted sentence follows structured type');
+   await settle(page);const accepted=path.join(evidence,'guest-events-'+source+'-accepted-'+width+'.png');await page.screenshot({path:accepted});shots.push(accepted);
+   await page.evaluate(()=>endGuestEvents());
+   const ended=await page.evaluate(()=>fixture.thread.messages.find(m=>m.pid===fixture.guestEventPID&&m.event_type==='dismiss'));
+   const departure=page.locator('[data-mid="'+ended.id+'"]');await departure.getByText(new RegExp(data.name+' left')).waitFor();
+   const text=await departure.innerText();assert(!/won’t join|invite cancelled/.test(text),'accepted guest left, never cancelled');assert(text.includes('dismissed by '+ended.event_by),'structured known author retained');
+   const reply=await page.evaluate(()=>fixture.thread.messages.find(m=>['Guest replies in the group','new group guest turn'].includes(m.body)));assert(reply,'actual exchange is retained');
+   const replyRow=page.locator('[data-mid="'+reply.id+'"]');let earlierLoaded=false;
+   // The browser world deliberately gives every record one timestamp. Its
+   // later snapshot can insert tied records before the retained reading edge.
+   // Reveal those records by scrolling into history, preserving the
+   // renderer's reading position rather than changing the captured DTO order.
+   if(!await replyRow.count()){
+    await page.getByRole('button',{name:'Earlier messages',exact:true}).waitFor();
+    await page.getByRole('log',{name:'Messages',exact:true}).locator('..').hover();await page.mouse.wheel(0,-10000);earlierLoaded=true;
+   }
+   await replyRow.waitFor();assert((await replyRow.innerText()).includes(reply.body));
+   const raw=await page.evaluate(()=>fixture.thread.messages.filter(m=>m.pid===fixture.guestEventPID&&m.event_type).map(m=>({type:m.event_type,by:m.event_by,text:m.event})));
+   assert(raw.some(e=>e.type==='invite')&&raw.some(e=>e.type==='accept')&&raw.some(e=>e.type==='dismiss'));
+   assert(raw.every(e=>!e.text.includes('agent')&&!e.text.includes('this DM')),'actual person/group projection is truthful');
+   assert(!await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth));
+   assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.body&&/invite|accept|dismiss|decide|request\/followup|dm\/agent\/ask/.test(r.path)).length),0,'rendering never changes participation or starts work');
+   await settle(page);const dismissed=path.join(evidence,'guest-events-'+source+'-dismissed-'+width+'.png');await page.screenshot({path:dismissed});shots.push(dismissed);
+   fs.writeFileSync(path.join(evidence,'guest-events-'+source+'-'+width+'.json'),JSON.stringify({source,width,raw,departure:text,earlierLoaded,accepted,dismissed},null,2));
+   console.log('guest events '+source+' '+width+' PASS: actual signed lifecycle DTO, localized structured accept, accepted+exchanged then left, no cancellation/agent/DM wording or action');
+  }catch(error){fs.writeFileSync(path.join(evidence,'guest-events-failure-'+source+'-'+width+'.txt'),await page.locator('#skin').evaluate(e=>e.shadowRoot.innerHTML));throw error;}finally{await context.close();}
+ }
+ continue;
+}
+if(process.env.AGENTNET_GUI_INVITE_LABELS==='1'){
+ const {page,context}=await openCase('gui-invite-labels');
+ try{
+  const dialog=()=>page.getByRole('dialog',{name:'Bring someone in',exact:true}),radios=[];
+  const bring=async()=>{await page.getByRole('button',{name:width===1280?'Bring in':'Bring someone in',exact:true}).first().click();await dialog().waitFor();};
+  const names=async(scope,group)=>{
+   const rows=scope.locator('input[type=radio][name="'+group+'"]'),count=await rows.count();assert(count>0,group+' is present');
+   for(let i=0;i<count;i++){const snapshot=await rows.nth(i).ariaSnapshot();assert.match(snapshot,/radio "[^"]+"/,group+' has a computed name');assert.doesNotMatch(snapshot,/radio "(?:on|[pa]:[^"]*)"/,group+' never uses raw values as names');radios.push({group,snapshot});}
+  };
+  await bring();await names(dialog(),'invite-scope');
+  await dialog().getByRole('radio',{name:/^Whole chat/}).locator('..').click();await names(dialog(),'human-invite-mode');await names(dialog(),'invite-who');
+  // Permanent-member invitation is intentionally a batch; ordinary own-agent
+  // invitation below closes, including when the catalog reports active now.
+  await dialog().getByRole('radio',{name:/^Add as a permanent member/}).locator('..').click();
+  await dialog().getByRole('radio',{name:/Cora/}).locator('..').click();
+  await dialog().getByRole('button',{name:'Invite Cora as a member',exact:true}).click();
+  await dialog().getByRole('button',{name:'Done',exact:true}).waitFor();assert(await dialog().isVisible(),'member batch stays open for next person');
+  await dialog().getByRole('button',{name:'Done',exact:true}).click();await dialog().waitFor({state:'hidden'});
+  await bring();await dialog().getByRole('radio',{name:/Codex/}).locator('..').click();await names(dialog(),'invite-who');await names(dialog(),'invite-context');
+  await dialog().getByRole('radio',{name:'Selected messages',exact:true}).locator('..').click();
+  await dialog().getByRole('radio',{name:'Recent messages',exact:true}).locator('..').click();
+  const fewer=dialog().getByRole('button',{name:'Fewer messages',exact:true});while(!await fewer.isDisabled())await fewer.click();
+  await dialog().getByRole('button',{name:'Bring Codex in now',exact:true}).click();
+  await page.waitForFunction(()=>fixture.requests.some(r=>r.path==='/api/dm/agent/invite'));
+  await dialog().waitFor({state:'hidden'});assert.equal(await page.getByRole('dialog').count(),0,'own-agent success has no visible sheet');
+  await page.locator('form[aria-label="Write a message"] textarea').fill('Chat is usable after own-agent invitation');
+  assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/dm/agent/decide').length),0,'own invite does not manufacture another approval');
+  const invite=await page.evaluate(()=>fixture.requests.find(r=>r.path==='/api/dm/agent/invite').body);assert.equal(invite.host,'aster/laptop');assert.equal(invite.agent_id,'a'.repeat(32));assert.equal(invite.topic,'');assert.deepEqual(invite.share,[]);
+  // Reminder presets use their visible title and still respond to label clicks.
+  const row=page.locator('[data-mid="context"]');await row.scrollIntoViewIfNeeded();
+  if(width===1280){await row.hover();await row.getByRole('button',{name:'More actions',exact:true}).click();await page.getByRole('menuitem',{name:'Remind me…',exact:true}).click();}
+  else{await row.getByRole('button',{name:/^(More|Message) actions$/}).click();await page.getByRole('dialog').getByRole('button',{name:'Remind me…',exact:true}).click();}
+  const reminder=page.getByRole('dialog',{name:'Remind me later',exact:true});await reminder.waitFor();await names(reminder,'remind-when');
+  await reminder.getByRole('radio',{name:'At a time I choose',exact:true}).locator('..').click();assert(await reminder.getByRole('radio',{name:'At a time I choose',exact:true}).isChecked());
+  await settle(page);const screenshot=path.join(evidence,'gui-invite-reminder-'+width+'.png');await page.screenshot({path:screenshot});shots.push(screenshot);
+  await reminder.getByRole('button',{name:'Close',exact:true}).click();assert(!await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth));
+  fs.writeFileSync(path.join(evidence,'gui-invite-labels-'+width+'.json'),JSON.stringify({radios,invite,visibleDialogCount:await page.getByRole('dialog').count(),ownAgentClosed:true,memberBatchStayedOpen:true},null,2));
+  console.log('gui invite/labels '+width+' PASS: exact own agent, sheet closed, no second approval, member batch retained, existing computed radio names/label clicks');
+ }finally{await context.close();}
+ continue;
+}
+if(process.env.AGENTNET_Q1_CLARIFICATION_REGRESSION==='1'){
+ const results=[];
+ for(const room of ['group','dm']){
+  const {page,context}=await openCase('composer-followup-q1'+(room==='dm'?'-dm':''));
+  const consoleErrors=[];page.on('console',m=>{if(m.type()==='error')consoleErrors.push(m.text());});
+  try{
+   const composer=()=>skin==='comic'?page.locator('form[aria-label="Write a message"]'):page.locator('#compose');
+   const field=()=>skin==='comic'?composer().locator('textarea'):page.locator(skin==='zoom'?'#write-body':'#body');
+   const reply=async id=>{
+    if(skin==='comic'){
+     const row=page.locator('[data-mid="'+id+'"]');await row.scrollIntoViewIfNeeded();
+     if(width===390){await row.getByRole('button',{name:/^(Message|More) actions$/}).click();await page.getByRole('dialog').getByRole('button',{name:'Reply',exact:true}).click();}
+     else{await row.hover();await row.getByRole('button',{name:'Reply',exact:true}).click();}
+    }else if(skin==='zoom'){
+     await page.locator('#m-'+id).locator('.mc-bubble').click();await page.locator('.zoom-message').getByRole('button',{name:'Reply',exact:true}).click();
+    }else await page.locator('#m-'+id).getByRole('button',{name:'Reply',exact:true}).click();
+    await field().waitFor();await field().focus();
+   };
+   const tag=async text=>{
+    await field().fill('');await field().fill('@');
+    if(skin==='comic')await page.getByRole('option').filter({hasText:'Analyst'}).first().click();
+    else await page.locator(skin==='zoom'?'#write-mentions':'#mentions').locator('button[title$="participation followup-agent"]').click();
+    await field().pressSequentially(text);
+   };
+   const send=async()=>{
+    if(skin==='comic')await composer().locator('[data-part="send"]').click();
+    else await page.locator(skin==='zoom'?'#dialog-ok':'#send').click();
+   };
+   if(skin==='comic'){
+    await field().fill('Draft stays before Reply');
+    await composer().locator('input[type=file]').setInputFiles({name:'clarification.md',mimeType:'text/markdown',buffer:Buffer.from('verified budget')});
+    await page.getByRole('button',{name:'New topic',exact:true}).click();
+   }
+   await reply('8'.repeat(32));
+   if(skin==='comic'){
+    assert.equal(await field().inputValue(),'Draft stays before Reply');
+    assert.equal(await page.getByRole('button',{name:'New topic',exact:true}).getAttribute('aria-pressed'),'false','explicit Reply cancels New topic');
+    assert.equal(await composer().getByText('clarification.md',{exact:true}).count(),1,'Reply keeps files');
+    await field().press('Escape');assert.equal(await composer().getByRole('button',{name:'Cancel reply',exact:true}).count(),0,'Escape cancels Reply');
+    assert.equal(await field().inputValue(),'Draft stays before Reply');
+    await page.getByRole('button',{name:'New topic',exact:true}).click();await field().press('Escape');
+    assert.equal(await page.getByRole('button',{name:'New topic',exact:true}).getAttribute('aria-pressed'),'false','Escape cancels New topic');
+    await reply('8'.repeat(32));await field().fill('@');await page.getByRole('option').first().waitFor();await field().press('Escape');
+    assert.equal(await composer().getByRole('button',{name:'Cancel reply',exact:true}).count(),1,'mention Escape keeps Reply');
+   }
+   await tag(' Use the verified budget');
+   assert.equal(await field().evaluate(e=>e.getRootNode().activeElement===e),true,'tag returns focus to visible draft');
+   await send();await page.waitForFunction(()=>fixture.requests.filter(r=>r.path==='/api/request/followup').length===1);
+   const first=await page.evaluate(()=>fixture.requests.find(r=>r.path==='/api/request/followup').body);
+   assert.equal(first.attempt,0);assert.equal(first.ref.id,'1'.repeat(32));assert.equal(first.ref.fingerprint,'eeeeeeee-eeeeeeee-eeeeeeee-eeeeeeee');assert.equal(first.topic||'','');
+   if(skin==='comic')assert.equal(first.files.length,1);
+   assert.equal(await page.locator('div[aria-live=polite].fixed').getByText('Sending…',{exact:true}).count(),0,'queued bubble owns sending status');
+   // Simulate the recorded ordinary response to this exact correction, using
+   // the actual generated message ID as the next stored ancestry.
+   await page.evaluate(first=>{
+    const root=fixture.thread.messages.find(m=>m.id==='1'.repeat(32));root.exec.state='answered';
+    fixture.thread.messages.push({...root,id:first.id,lid:first.id,reply_to:root.lid,body:first.body,from:fixture.overview.me.address,send_group_author:fixture.overview.me.fingerprint,via:undefined,exec:{...root.exec,state:'answered'}},
+     {id:'a'.repeat(32),lid:'a'.repeat(32),dir:'in',from:'brin/desktop',kind:'answer',body:'Which folder should hold the result?',reply_to:first.id,pid:root.pid,verified_agent:true,at:'2026-10-05T10:03:00Z'});reloadFixture();
+   },first);
+   if(skin==='zoom'&&!await field().isVisible())await page.getByRole('button',{name:/Write in this (group|DM)…/}).click();
+   await tag(' Use the approved folder');
+   // Select Reply after tagging; neither order loses the selected agent.
+   if(skin==='zoom')await page.locator('#dialog-cancel').click();
+   await reply('a'.repeat(32));assert.match(await field().inputValue(),/Use the approved folder/);
+   await send();await page.waitForFunction(()=>fixture.requests.filter(r=>r.path==='/api/request/followup').length===2);
+   const calls=await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/request/followup').map(r=>r.body));
+   assert.equal(calls[1].attempt,0);assert.equal(calls[1].ref.id,first.id);assert.equal(calls[1].ref.fingerprint,'aaaaaaaa-aaaaaaaa-aaaaaaaa-aaaaaaaa');assert.notEqual(calls[1].id,first.id);
+   assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/dm/agent/ask').length),0,'two ordinary rounds never launch unrelated work');
+   assert.deepEqual(consoleErrors,[]);assert(!await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth));
+   const screenshot=path.join(evidence,'q1-'+skin+'-'+room+'-'+width+'.png');await settle(page);await page.screenshot({path:screenshot});shots.push(screenshot);
+   results.push({skin,room,width,ok:true,followups:calls.map(c=>({id:c.id,ref:c.ref,attempt:c.attempt,pid:c.pid})),screenshot});
+  }catch(e){fs.writeFileSync(path.join(evidence,'q1-failure-'+skin+'-'+room+'-'+width+'.txt'),await page.locator('#skin').evaluate(e=>e.shadowRoot.innerHTML));throw e;}
+  finally{await context.close();}
+ }
+ fs.writeFileSync(path.join(evidence,'q1-'+skin+'-'+width+'.json'),JSON.stringify(results,null,2));console.log(JSON.stringify({q1:results}));
  continue;
 }
 if(process.env.AGENTNET_COMPOSER_FOLLOWUP_REGRESSION==='1'){
@@ -1894,7 +2081,11 @@ if(process.env.AGENTNET_DELIVERY_STOP_REGRESSION==='1'){
     };
     const room=async page=>{if(!await page.getByRole('list',{name:'Invited people',exact:true}).isVisible())await page.getByRole('button',{name:'orchard_dispatch. Who’s in this chat',exact:true}).click();};
     for(const variant of ['admin','member']){
-     const {page,context}=await openCase(variant);await bring(page);
+     const {page,context}=await openCase(variant);
+     // The default seed also covers a pending permanent invitation below.
+     // This separate new-guest journey starts after that invitation was retracted.
+     await page.evaluate(()=>{fixture.overview.group_invitations=[];reloadFixture();});
+     await bring(page);
      const guestMode=page.locator('input[name=human-invite-mode][value=guest]'),memberMode=page.locator('input[name=human-invite-mode][value=member]');
      try{assert(await guestMode.isChecked(),'Default human invitation is a guest');}catch(e){console.error(await page.getByRole('dialog').innerText());throw e;};assert.equal(await memberMode.isDisabled(),variant==='member','Permanent membership is admin-only');
      if(variant==='admin'){await memberMode.locator('..').click();assert(await memberMode.isChecked());await guestMode.locator('..').click();}
@@ -1922,6 +2113,6 @@ if(process.env.AGENTNET_DELIVERY_STOP_REGRESSION==='1'){
    }
   }
   if(process.env.AGENTNET_RENDERED_RETAIN){const keep=path.resolve(process.env.AGENTNET_RENDERED_RETAIN);assert(keep.startsWith('/tmp/'),'retained synthetic evidence must stay in /tmp');fs.mkdirSync(keep,{recursive:true,mode:0o700});for(const shot of shots)fs.copyFileSync(shot,path.join(keep,path.basename(shot)));}
-  assert.deepEqual(errors,[]);console.log(JSON.stringify({ok:true,checks:process.env.AGENTNET_V32_RENDERED==='1'?'Bounded v32 rendered journey results are in v32-results-WIDTH.json; inspect each finding':process.env.AGENTNET_MENTION_SHORTCUT==='1'?'Physical Ctrl/Cmd+Digit2 reuses permitted DM/group/topic picker; layout/IME guards; caret/draft/hints/no-send; desktop/phone':process.env.AGENTNET_ATTENTION_LABELS==='1'?'Neutral aggregate attention wording; real consent retains OK/actions; unchanged counts, requests and authority; desktop/phone':process.env.AGENTNET_PRESENTATION_REGRESSION==='1'?'Comic short/long needs-human closure: exact agent/request, compact status, full projected result, immutable original, no action dispatch; desktop/mobile':process.env.AGENTNET_COMPOSER_FOLLOWUP_REGRESSION==='1'?'Comic natural tagged steering: no extra UI; running-only exact attempt; ordinary new request without a run; concrete ambiguity and existing Reply binding; strict completion race/retry; Android journal; desktop1280/mobile390':process.env.AGENTNET_LEGACY_LIST_REGRESSION==='1'?'Comic retained legacy list: exact identity/manager, add person, preserved leave, no agent catalog/control/grants; desktop/mobile':process.env.AGENTNET_AGENT_CHILD_REGRESSION==='1'?'Comic verified Codex author to Claude recipient, exact stopped-parent reason, no retry or replay, retained handling; desktop/mobile':process.env.AGENTNET_TOPIC_INVITE_REGRESSION==="1"?"Comic DM/group Main/named topic: Recent/Selected/Since, private files excluded, stable scope after rename/archive/arrival, broad grant disclosure; desktop/mobile":process.env.AGENTNET_REPORT_HISTORY_REGRESSION==="1"?"Comic exact blocker history: arbitrary follow-up success stays separate; confirmed/refused/new attempt and newest empty snapshots; desktop/mobile":completion?'Comic signed exact completion, queued secondary copies/details unchanged; inert/different-target/quote/unrelated negatives desktop1280/mobile390':process.env.AGENTNET_FOLLOWUP_REGRESSION==='1'?'Comic natural tagged composer replaces follow-up sheet/action: stage failure retains files, exact uncertain retry/newer draft, navigation abandons unused stages, deleted source refuses; desktop1280/mobile390':process.env.AGENTNET_REACTION_REGRESSION==='1'?'Comic: first-use/persisted frequency, success/failure/removal, human-count ordering and separate agent chips, desktop/mobile':process.env.AGENTNET_PHONE_REJOIN_REGRESSION==='1'?'Comic phone: active/pending rejoin, stale click/navigation, genuine return, exact key/agent/host identity and fresh-read error':process.env.AGENTNET_DIRECT_REVIEW_REGRESSION==='1'?'Direct review[]: held/running/stopping/complete; decision badge/list vs Working; exact request/Stop; desktop/mobile':process.env.AGENTNET_OKS_REGRESSION==='1'?'Comic: working excluded from OK count, exact topic/repeat focus, unsent draft/files preserved, full reason, future approve separate from held accept, exact Stop':process.env.AGENTNET_NOTIFY_REGRESSION==='1'?'Comic: one person grant across duplicate roots and separate conversation mute':(process.env.AGENTNET_TEST_SKINS||'comic')+': guest/member distinction, exact targets, retract/refresh, rights, desktop/mobile',shots}));
+  assert.deepEqual(errors,[]);console.log(JSON.stringify({ok:true,checks:process.env.AGENTNET_GUI_INVITE_LABELS==='1'?'Normal-motion own-agent invitation closes wide/narrow; no extra approval; member batch stays open; existing computed scope/human/candidate/context/reminder names and label clicks':process.env.AGENTNET_Q1_CLARIFICATION_REGRESSION==='1'?'Exact ordinary tagged Reply: two rounds, linked/current authors, needs_human/answered, DM/group, four skins, wide/narrow; Comic New topic/Reply/Escape/files/focus/status':process.env.AGENTNET_V32_RENDERED==='1'?'Bounded v32 rendered journey results are in v32-results-WIDTH.json; inspect each finding':process.env.AGENTNET_MENTION_SHORTCUT==='1'?'Physical Ctrl/Cmd+Digit2 reuses permitted DM/group/topic picker; layout/IME guards; caret/draft/hints/no-send; desktop/phone':process.env.AGENTNET_ATTENTION_LABELS==='1'?'Neutral aggregate attention wording; real consent retains OK/actions; unchanged counts, requests and authority; desktop/phone':process.env.AGENTNET_PRESENTATION_REGRESSION==='1'?'Comic short/long needs-human closure: exact agent/request, compact status, full projected result, immutable original, no action dispatch; desktop/mobile':process.env.AGENTNET_COMPOSER_FOLLOWUP_REGRESSION==='1'?'Comic natural tagged steering: no extra UI; running-only exact attempt; ordinary new request without a run; concrete ambiguity and existing Reply binding; strict completion race/retry; Android journal; desktop1280/mobile390':process.env.AGENTNET_LEGACY_LIST_REGRESSION==='1'?'Comic retained legacy list: exact identity/manager, add person, preserved leave, no agent catalog/control/grants; desktop/mobile':process.env.AGENTNET_AGENT_CHILD_REGRESSION==='1'?'Comic verified Codex author to Claude recipient, exact stopped-parent reason, no retry or replay, retained handling; desktop/mobile':process.env.AGENTNET_TOPIC_INVITE_REGRESSION==="1"?"Comic DM/group Main/named topic: Recent/Selected/Since, private files excluded, stable scope after rename/archive/arrival, broad grant disclosure; desktop/mobile":process.env.AGENTNET_REPORT_HISTORY_REGRESSION==="1"?"Comic exact blocker history: arbitrary follow-up success stays separate; confirmed/refused/new attempt and newest empty snapshots; desktop/mobile":completion?'Comic signed exact completion, queued secondary copies/details unchanged; inert/different-target/quote/unrelated negatives desktop1280/mobile390':process.env.AGENTNET_FOLLOWUP_REGRESSION==='1'?'Comic natural tagged composer replaces follow-up sheet/action: stage failure retains files, exact uncertain retry/newer draft, navigation abandons unused stages, deleted source refuses; desktop1280/mobile390':process.env.AGENTNET_REACTION_REGRESSION==='1'?'Comic: first-use/persisted frequency, success/failure/removal, human-count ordering and separate agent chips, desktop/mobile':process.env.AGENTNET_PHONE_REJOIN_REGRESSION==='1'?'Comic phone: active/pending rejoin, stale click/navigation, genuine return, exact key/agent/host identity and fresh-read error':process.env.AGENTNET_DIRECT_REVIEW_REGRESSION==='1'?'Direct review[]: held/running/stopping/complete; decision badge/list vs Working; exact request/Stop; desktop/mobile':process.env.AGENTNET_OKS_REGRESSION==='1'?'Comic: working excluded from OK count, exact topic/repeat focus, unsent draft/files preserved, full reason, future approve separate from held accept, exact Stop':process.env.AGENTNET_NOTIFY_REGRESSION==='1'?'Comic: one person grant across duplicate roots and separate conversation mute':(process.env.AGENTNET_TEST_SKINS||'comic')+': guest/member distinction, exact targets, retract/refresh, rights, desktop/mobile',shots}));
  }finally{await browser?.close();server.close();}
 })().catch(e=>{console.error(e.stack);process.exitCode=1;});

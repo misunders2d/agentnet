@@ -157,6 +157,10 @@ func TestComposerOwnGroupCurrentAttempt(t *testing.T) {
 	if _, err = live.RequestFollowup(RequestFollowupDraft{Conv: conv, Ref: ref, ID: protocol.NewID(), Attempt: 2, Body: "And what is weather tomorrow?"}); err != nil {
 		t.Fatalf("exact attempt2 route: %v", err)
 	}
+	for _, state := range []string{"needs_human", "answered", "resolved"} {
+		stage(state, 2, false)
+		capture("own-clarification-"+state, state, 0)
+	}
 	stage("cancelled", 2, false)
 	capture("own-ended-status-1", "cancelled", 0)
 	if _, err = live.RequestFollowup(RequestFollowupDraft{Conv: conv, Ref: ref, ID: protocol.NewID(), Attempt: 2, Body: "Ended work"}); err == nil {
@@ -321,6 +325,36 @@ func TestComposerLinkedDirectCurrentAttempt(t *testing.T) {
 				t.Logf("%s original=%s dir=%s from_key=%s history=%v exec=%+v pin=%s target=%+v", c.Label, m.ID, m.Dir, m.FromKey, m.History, m.Exec, c.Thread.Key.Pinned, m.Target)
 			}
 		}
+	}
+	running := append([]projection(nil), linked...)
+	// One signed transition per existing request proves both ordinary modes
+	// without multiplying daemon restarts inside this focused fixture.
+	states := []string{"needs_human", "answered"}
+	stopHost()
+	for i, old := range running {
+		if _, err = db.Exec(`UPDATE inbox SET state=?,status_due=status_due+1 WHERE id=?`, states[i], old.Original); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stopHost = runHuman()
+	defer stopHost()
+	for i, old := range running {
+		c, state := old, states[i]
+		c.Label += "-" + state
+		waitFor(t, c.Label+" exact signed clarification status", func() bool {
+			v, e := live.Thread(c.Original)
+			if e != nil {
+				return false
+			}
+			for _, m := range v.Messages {
+				if m.ID == c.Original && m.Exec != nil && m.Exec.State == state {
+					c.Thread = v
+					return true
+				}
+			}
+			return false
+		})
+		linked = append(linked, c)
 	}
 	payload, err := json.Marshal(map[string]any{"cases": []any{}, "linked": linked})
 	if err != nil {

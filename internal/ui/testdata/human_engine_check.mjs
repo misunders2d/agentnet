@@ -517,6 +517,17 @@ for (const ending of ['original', 'self']) {
  await b.recoverHumanExcerpts();await w.drain(g);
  const view=await g.groupThread(conv);
  check(view.role==='human_guest'&&!view.members.some(m=>m.person===g.me.person),'guest has no membership');
+ const lifecycle=[];
+ const eventProjection=async(phase,types)=>{
+  const thread=await b.groupThread(conv),events=thread.messages.filter(m=>m.pid===p.pid&&m.event_type);
+  for(const type of types){const event=events.find(m=>m.event_type===type);check(!!event,'group human signed '+type+' projected');check(!/agent|this DM/.test(event.event)&&!event.event.includes(g.address),'group human role/name/room '+type+': '+event.event);}
+  check(events.find(m=>m.event_type==='accept')?.event===g.me.label+' joined this group.','group human accepted text');
+  check(events.find(m=>m.event_type==='accept')?.event_by===g.me.label,'group human actor keeps known label');
+  lifecycle.push({phase,overview:await b.overview(),thread});return events;
+ };
+ await eventProjection('accepted',['invite','accept']);
+ check(view.messages.some(m=>m.pid===p.pid&&m.event_type==='accept'&&m.event==='You joined this group.'),'group guest self view says joined without agent/DM');
+
 
  check(view.messages.some(m=>m.body==='chosen old group context')&&!view.messages.some(m=>m.body==='unshared old group context'),'only selected history disclosed');
  // Ordinary agent messages share the accepted guest audience, without
@@ -590,11 +601,16 @@ for (const ending of ['original', 'self']) {
  const queued=(await b.store.all('outbox')).find(r=>r.to===g.address&&r.body==='captured before offline end');
  await b.changeHuman('end',{pid:p.pid});await w.drain(g);await w.drain(a);await w.drain(other);
  check((await other.groupThread(conv)).guests.find(x=>x.pid===p.pid)?.state==='dismissed','other guest learns ended scope');
+ const endedEvents=await eventProjection('dismissed',['invite','accept','dismiss']);
+ check(endedEvents.find(m=>m.event_type==='dismiss')?.event==='You removed '+g.me.label+' from this group.','group person dismissal after ordinary exchange');
+ if(typeof process!=='undefined'&&process.env.AGENTNET_BROWSER_GUEST_EVENT_PROJECTION){const {writeFile}=await import('node:fs/promises');await writeFile(process.env.AGENTNET_BROWSER_GUEST_EVENT_PROJECTION,JSON.stringify(lifecycle),{mode:0o600});}
+
  check(!!(await b.gate(await b.groupRecord(conv),queued)).why,'offline captured pre-end copy is fenced after dismiss');
  await refuses(()=>g.sendDM({conv,pid:p.pid,body:'after end'}),/active|guest/i);
  const leave=await b.changeHuman('invite',{conv,host:g.address});await w.drain(g);await w.drain(a);await g.changeHuman('decide',{pid:leave.pid,accept:true});await w.drain(b);await w.drain(a);
  await g.changeHuman('leave',{pid:leave.pid});await w.drain(b);await w.drain(a);
  check((await b.groupThread(conv)).guests.find(x=>x.pid===leave.pid).state==='dismissed','guest may leave without member rights');
+ check((await b.groupThread(conv)).messages.some(m=>m.pid===leave.pid&&m.event_type==='dismiss'&&m.event===g.me.label+' left this group.'),'self departure retains person/group wording');
 }
 // Pre-upgrade forwarded lifecycle copies used the transport member as author.
 // Repair a completed own-human job without resetting history or hiding holds.

@@ -1,0 +1,27 @@
+name: Interaction qualification
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Candidate version
+        type: string
+        default: v0.9.3
+      previous_tag:
+        description: Published Android version to upgrade from
+        type: string
+        default: v0.9.2
+permissions:
+  contents: read
+jobs:
+  desktop:
+    uses: ./.github/workflows/desktop.yml
+    with:
+      version: ${{ inputs.version }}
+      interaction_qualification: true
+  android:
+    uses: ./.github/workflows/android-qualification.yml
+    with:
+      version: ${{ inputs.version }}
+      previous_tag: ${{ inputs.previous_tag }}
+    secrets:
+      ANDROID_PREVIEW_KEYSTORE_BASE64: ${{ secrets.ANDROID_PREVIEW_KEYSTORE_BASE64 }}

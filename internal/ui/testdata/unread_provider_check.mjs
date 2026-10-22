@@ -32,6 +32,14 @@ const collisions=[...first.rows,...second.rows].filter(r=>r.lid===sameLID);asser
 for(const r of first.rows)rows.get(r.conv).find(m=>m.id===r.id).unread=false;e.changed();
 const remaining=await e.api('/api/unread?after='+encodeURIComponent(first.next)+'&limit=200');assert.deepEqual(remaining.rows.map(r=>r.key),expected,'cursor survives first-page reads');assert.equal(remaining.total,16);
 for(const query of ['limit=-1','limit=201','limit=no','limit=%2B1','after=bogus','after='+btoa(JSON.stringify({v:1,key:'row'})).replace(/=+$/,'')])await assert.rejects(()=>e.api('/api/unread?'+query));
+// Actual provider order and cursor retain milliseconds inside a same-second burst.
+{
+ const stamp=1792700000000;
+ e.unreadIndex={seq:e.seq,sorted:false,rows:[['a',10],['b',90],['c',50]].map(([key,ms])=>({key,at:new Date(stamp+ms).toISOString()}))};
+ const first=await e.api('/api/unread?limit=2');assert.deepEqual(first.rows.map(r=>r.key),['b','c'],'same-second arrivals must keep their real subsecond order');
+ const next=await e.api('/api/unread?limit=2&after='+encodeURIComponent(first.next));assert.deepEqual(next.rows.map(r=>r.key),['a']);
+ e.changed();
+}
 // Overlapping first builds deduplicate without retaining a full overview.
 e.changed();const before=reads;await Promise.all([e.api('/api/unread'),e.api('/api/unread')]);assert.equal(reads,before+1);assert.equal(e.unreadBuild,null);assert(!('readView' in e.unreadIndex));
 // A write during construction must remain labelled with the captured older seq.

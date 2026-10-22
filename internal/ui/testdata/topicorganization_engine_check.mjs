@@ -21,6 +21,28 @@ for(const e of users)for(const other of users){
  await e.store.write([{s:'persons',k:p.person,v:p},{s:'pins',k:other.address,v:{address:other.address,json:wire.marshalPublic(other.pub),fingerprint:other.fp,pending:null}}]);
 }
 const [a,b,outsider]=users,root=await wire.newRoot(a.keys,{person:a.me.person,roster:a.me.hash,address:a.address,fingerprint:a.fp},{person:b.me.person,roster:b.me.hash});
+// Stable automatic destination anchors, including promoted chains, are
+// independent of moved-in timestamps and retained-history arrival order.
+{
+ const conv='c'.repeat(64),from=wire.newID(),to=wire.newID(),author=a.fp;
+ const source={id:wire.newID(),lid:wire.newID(),key:author,topic:from,body:'Group note to edit',ts:1},destination={id:to,lid:to,key:author,topic:to,body:'Stock count topic start',ts:2};
+ const move={id:wire.newID(),lid:wire.newID(),key:author,topic:to,ts:3,topic_event:{action:'move',moves:[{lid:source.lid,author,topic:from}]}};
+ for(const merge of [false,true])for(const promoted of [false,true]){
+  const event={...move,topic_event:{...move.topic_event,...(merge?{action:'merge',merge:from}:{})}},msgs=[source,{...destination,...(promoted?{topic:''}:{})},event];
+  if(promoted)msgs.push({id:wire.newID(),lid:wire.newID(),topic:to,ts:2,topic_event:{action:'create'}});
+  const before=JSON.stringify(msgs);
+  for(const retained of [msgs,JSON.parse(before).reverse()]){
+   same(summarizeChatTopics(conv,retained,new Map(),10).find(t=>t.id===to)?.title,destination.body,'move/merge preserves direct/promoted destination after retained-history replay');
+   const named=summarizeChatTopics(conv,retained,new Map([[conv+'/'+to,{title:'Private destination'}]]),10).find(t=>t.id===to);
+   check(named?.title==='Private destination'&&named.auto_title===destination.body,'private title and original automatic fallback retain precedence');
+  }
+  same(JSON.stringify(msgs),before,'title projection preserves original bytes and audience');
+ }
+ same(summarizeChatTopics(conv,[source,move],new Map(),10)[0].title,source.body,'empty/new destination uses its selected original');
+ const back={id:wire.newID(),lid:wire.newID(),key:author,topic:from,ts:4,reply_to:move.lid,topic_event:{action:'move',moves:[{lid:source.lid,author,topic:to}]}};
+ const restored=summarizeChatTopics(conv,[back,move,destination,source],new Map(),10).find(t=>t.id===to);
+ check(restored?.title===destination.body&&restored.count===1,'inverse move restores placement without destination title drift');
+}
 // The stored-admission display seam does not grant any new metadata authority.
 // Its first canonical agent notice is automatic; explicit human names win.
 {
@@ -68,18 +90,22 @@ const deliver=async sent=>{
  }
 };
 const from=wire.newID(),to=wire.newID();
-const first=await a.sendDM({conv,body:'Selected parent',topic:from});await deliver(first);
+const first=await a.sendDM({conv,id:'1'.repeat(32),body:'Selected parent',topic:from});await deliver(first);
 const child=await a.sendDM({conv,body:'Unselected child',reply_to:first.lid});await deliver(child);
 const sourceOther=await a.sendDM({conv,body:'Other selected source message',topic:from});await deliver(sourceOther);
 const fileBytes=new TextEncoder().encode('EXACT_SELECTED_BROWSER_FILE');
 const main=await a.sendDM({conv,body:'Selected main-flow message',files:[{name:'selected.txt',bytes:fileBytes}]});await deliver(main);
-const destination=await a.sendDM({conv,body:'Destination',topic:to});await deliver(destination);
+const destination=await a.sendDM({conv,id:'f'.repeat(32),body:'Destination',topic:to});await deliver(destination);
 await a.store.write([{s:'kv',k:'topic/'+conv+'/'+to,v:{type:'topic-state',peer:conv,topic:to,title:'HUMAN PRIVATE LABEL'}}]);
 const before=await a.store.all('outbox');
 const review=await a.api('/api/topic/organization/preview',{conv,ids:[first.id,main.id],topic:to});
 same(review.moves.length,2,'exact noncontiguous cross-topic selection');
 check(wire.validHash(review.token)&&wire.validID(review.operation),'review has exact commitment and retry identity');
 const moved=await a.api('/api/topic/organization/apply',review);await deliver(moved);
+for(const e of [a,b]){
+ const t=(await e.chatTopics(conv)).find(t=>t.id===to);
+ same(t?.auto_title||t?.title,'Destination','existing automatic destination title survives earlier selected originals');
+}
 same((await a.store.all('outbox')).find(r=>r.lid===moved.lid).body,'Moved selected messages to topic '+to+'.','outgoing human move does not copy an implicit private label');
 same((await a.api('/api/dm?id='+conv)).messages.find(m=>m.lid===moved.lid).body,'Moved selected messages to “HUMAN PRIVATE LABEL”.','local human move still displays own private label');
 for(const e of [a,b]){
@@ -190,6 +216,7 @@ const merge=await a.previewTopicOrganization({conv,ids:[child.id,sourceOther.id]
 const merged=await a.applyTopicOrganization(merge);await deliver(merged);
 const topics=await a.chatTopics(conv),source=topics.find(t=>t.id===from);
 check(source?.redirect===to&&source.count===0&&source.title==='Selected parent','source label and explicit destination survive an empty merge');
+for(const e of [a,b]){const t=(await e.chatTopics(conv)).find(t=>t.id===to);same(t?.auto_title||t?.title,'Destination','merge retains destination automatic title on both people');}
 const future=await a.sendDM({conv,body:'Future source post',reply_to:child.lid});await deliver(future);
 same(chatTopicAssignments(await rows(a)).get(future.lid),from,'future source post is outside the reviewed merge');
 check((await a.chatTopics(conv)).find(t=>t.id===from)?.count===1,'source remains openable after new activity');
@@ -214,6 +241,7 @@ same(chatTopicAssignments(await rows(a)).get(first.lid),to,'merge cycle cannot m
 const reversed=(await rows(a)).reverse();
 same(Object.fromEntries(chatTopicRedirects(reversed)),Object.fromEntries(chatTopicRedirects(await rows(a))),'redirects converge regardless of arrival order');
 same(Object.fromEntries(chatTopicAssignments(reversed)),Object.fromEntries(chatTopicAssignments(await rows(a))),'assignments converge regardless of arrival order');
+same(summarizeChatTopics(conv,reversed).find(t=>t.id===to)?.title,'Destination','reversed retained organization history keeps original destination anchor');
 await refuses(()=>a.previewTopicOrganization({conv,ids:Array.from({length:201},()=>wire.newID()),topic:to}),/200/);
 // A received organization by no current human device of a full member is
 // held invalid, as the core holds it: never an unexpected failure that

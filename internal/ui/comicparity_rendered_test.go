@@ -186,8 +186,9 @@ func comicGroupParity(t *testing.T, rendered bool) {
 // over the demo installation (testdata/comic_trust_check.cjs), where one
 // device's key changed and one message did not verify: the chat row says
 // "Identity changed", the paused composer offers "Check and trust…", whose
-// Trust stays off until the codes are said to match and then lets writing
-// resume. The unverified message is no decision: OKs leaves it out, and
+// Trust stays off until the codes are said to match and then clears that
+// key pause without rebinding historical agent identity. The unverified
+// message is no decision: OKs leaves it out, and
 // Settings → About → Technical details keeps it with a plain reason, saying
 // only who it claims to be from. At 1440x900 light and 390x844 dark. Opt-in
 // as TestComicParityRendered.
@@ -200,12 +201,31 @@ func TestComicTrustRendered(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, size := range []string{"1440x900-light", "390x844-dark"} {
+		fixture := NewFixture(time.Now)
+		if _, _, err := fixture.CreatePerson("Alice"); err != nil {
+			t.Fatal(err)
+		}
+		// The active list needs an exact current agent, not an unbound legacy
+		// conversation inferred from a device's current default.
+		peer := "erin/lab"
+		original := fixture.peers[peer].key
+		current := &comicTrustFixture{Fixture: fixture, record: protocol.AgentRecord{V: 1, ID: strings.Repeat("e", 32), Host: peer, HostKey: original.Pinned, Label: "Identity check agent", Harness: "claude", TS: 1}}
+		threadID := ""
+		for _, thread := range fixture.threads {
+			if thread.peer == peer && len(thread.msgs) > 0 {
+				threadID = thread.msgs[0].ID
+				break
+			}
+		}
+		if threadID == "" {
+			t.Fatal("missing exact changed-key history in trust fixture")
+		}
 		var s *Server
 		ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { s.Handler().ServeHTTP(w, r) }))
-		s = New(NewFixture(time.Now), ts.Listener.Addr().String(), testToken) // a fresh demo each time: trusting changes it
+		s = New(current, ts.Listener.Addr().String(), testToken) // a fresh demo each time: trusting changes it
 		ts.Start()
 		cmd := exec.Command(node, "testdata/comic_trust_check.cjs")
-		cmd.Env = append(os.Environ(), "PARITY_URL="+ts.URL+"/?t="+testToken, "PARITY_SIZE="+size)
+		cmd.Env = append(os.Environ(), "PARITY_URL="+ts.URL+"/?t="+testToken, "PARITY_SIZE="+size, "PARITY_THREAD="+threadID, "PARITY_AGENT="+current.record.ID, "PARITY_OLD_KEY="+original.Pinned, "PARITY_NEW_KEY="+original.Pending)
 		out, err := cmd.CombinedOutput()
 		ts.Close()
 		if err != nil || !strings.Contains(string(out), "comic trust check PASS") {
@@ -213,4 +233,52 @@ func TestComicTrustRendered(t *testing.T) {
 		}
 		t.Logf("%s", out)
 	}
+}
+
+// Read-only catalog/placement evidence for this one invented current agent.
+// Its old signed binding is immutable after trusting the replacement key.
+type comicTrustFixture struct {
+	*Fixture
+	record protocol.AgentRecord
+}
+
+func (f *comicTrustFixture) Overview() (Overview, error) {
+	o, err := f.Fixture.Overview()
+	for i := range o.Threads {
+		if o.Threads[i].Peer == f.record.Host {
+			o.Threads[i].AgentID, o.Threads[i].AgentHost, o.Threads[i].AgentKey = f.record.ID, f.record.Host, f.record.HostKey
+		}
+	}
+	return o, err
+}
+
+func (f *comicTrustFixture) Thread(id string) (Thread, error) {
+	v, err := f.Fixture.Thread(id)
+	if err == nil && v.Peer == f.record.Host {
+		o, e := f.Overview()
+		if e != nil {
+			return v, e
+		}
+		for _, topic := range o.Threads {
+			if topic.ID == id && topic.Peer == v.Peer {
+				v.Topic = &topic
+				break
+			}
+		}
+	}
+	return v, err
+}
+
+func (f *comicTrustFixture) AgentCatalog(_ context.Context, host string) (AgentCatalogView, error) {
+	v := AgentCatalogView{Host: host, Agents: []CatalogAgent{}}
+	if host == "" {
+		v.Host, v.Local = f.me.Address, true
+	} else if host == f.record.Host {
+		v.Agents = []CatalogAgent{{Record: f.record, Enabled: true}}
+	}
+	return v, nil
+}
+
+func (*comicTrustFixture) ChangeAgent(context.Context, AgentCatalogChange) (AgentCatalogChangeResult, error) {
+	return AgentCatalogChangeResult{}, Refuse("the trust fixture cannot change agent configuration")
 }

@@ -16,10 +16,12 @@ const assert=require('node:assert/strict'),path=require('node:path');
   page.on('pageerror',e=>errors.push(String(e)));
   await context.request.post(origin+'/p7/reset');
   await page.goto(process.env.P7_URL);
-  await page.goto(origin+'/?skin='+skin);
+  // Permission controls belong to this exact stored request. Unbound agent
+  // history is not promoted to a current agent in the ordinary chat list.
+  await page.goto(origin+'/?skin='+skin+'#msg='+process.env.P7_THREAD);
   if(skin==='comic'){
    await page.locator('section[aria-label="Chats"]').waitFor();
-   await page.getByRole('button',{name:/P7 person permission question/}).first().click();
+   await page.locator('[data-mid="'+process.env.P7_THREAD+'"]').waitFor();
   }
   if(skin==='comic')await page.getByText(/answers with your native tools, skills and permissions unchanged/).filter({visible:true}).waitFor();
   assert.equal(await page.getByText(/minus editing tools|without editing tools/).filter({visible:true}).count(),0,skin+width+': question card claims no tool exclusion');

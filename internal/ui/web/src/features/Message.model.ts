@@ -245,18 +245,24 @@ export const copyText = (state: string) => copyWord[state] || deliveryWord(state
 
 type EventKind = "invited" | "joined" | "declined" | "left";
 
-/** eventKind reads which participation record a divider stands for (the
- *  server's sentence for it, liveagent.go eventText/humanEventText). Ending
+/** eventKind reads the structured participation record, with a text fallback
+ *  for older projections (liveagent.go eventText/humanEventText). Ending
  *  someone's part reads one way for people and agents: they left, dismissed
  *  by whoever ended it ("by" is empty when they left on their own). */
-export function eventKind(text: string): { kind: EventKind; by: string } | null {
+export function eventKind(event: string | Pick<T.DMMessage,"event"|"event_type"|"event_by">): { kind: EventKind; by: string } | null {
+  if (typeof event !== "string" && event.event_type) {
+    const kinds: Record<string,EventKind> = {invite:"invited",scope:"invited",accept:"joined",decline:"declined",dismiss:"left"};
+    const kind = Object.hasOwn(kinds,event.event_type) ? kinds[event.event_type] : undefined;
+    return kind ? {kind,by:event.event_by || ""} : null;
+  }
+  const text = typeof event === "string" ? event : event.event || "";
   const by = (re: RegExp) => (re.exec(text)?.[1] || "").trim();
   if (/ invited .+ into this (DM|group)\.$/.test(text)) return { kind: "invited", by: by(/^(.+?) invited /) };
-  if (/accepted: the agent (joins|participates)|accepted participation| joined this DM\.$/.test(text)) return { kind: "joined", by: by(/^(.+?) accepted/) };
+  if (/accepted: the agent (joins|participates)|accepted participation| joined this (DM|group)\.$/.test(text)) return { kind: "joined", by: by(/^(.+?) accepted/) };
   if (/declined the invitation/.test(text)) return { kind: "declined", by: by(/^(.+?) declined/) };
   if (/ dismissed the agent/.test(text)) return { kind: "left", by: by(/^(.+?) dismissed /) };
-  if (/ removed .+ from this DM\.$/.test(text)) return { kind: "left", by: by(/^(.+?) removed /) };
-  if (/ left this DM\.$/.test(text)) return { kind: "left", by: "" };
+  if (/ removed .+ from this (DM|group)\.$/.test(text)) return { kind: "left", by: by(/^(.+?) removed /) };
+  if (/ left this (DM|group)\.$/.test(text)) return { kind: "left", by: "" };
   return null;
 }
 
@@ -267,7 +273,7 @@ export function joinedBefore(all: AnyMsg[], pid: string, i: number): boolean | n
   for (let j = 0; j < i; j++) {
     const m = all[j];
     if (isThreadMsg(m) || m.pid !== pid || !m.event) continue;
-    const k = eventKind(m.event)?.kind;
+    const k = eventKind(m)?.kind;
     if (k === "joined") return true;
     if (k === "invited") invited = true;
   }

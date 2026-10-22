@@ -153,7 +153,7 @@ func (l *Live) dmOverview(o *Overview, unread *[]UnreadRow, mutes map[string]boo
 						}
 						preview = firstLine("📎 " + strings.Join(names, ", "))
 					}
-					row := UnreadRow{Kind: "chat", Conv: c.ID, Topic: assigned[m.LID], TopicTitle: titles[assigned[m.LID]], ID: m.ID, LID: m.LID, Author: cmp.Or(m.Key, m.Claimed), Dir: m.Dir, At: time.Unix(m.At, 0), Label: firstLine(m.From), Preview: preview, ready: true}
+					row := UnreadRow{Kind: "chat", Conv: c.ID, Topic: assigned[m.LID], TopicTitle: titles[assigned[m.LID]], ID: m.ID, LID: m.LID, Author: cmp.Or(m.Key, m.Claimed), Dir: m.Dir, At: time.UnixMilli(m.AtMS), Label: firstLine(m.From), Preview: preview, ready: true}
 					row.Key = unreadKey(row)
 					*unread = append(*unread, row)
 				}

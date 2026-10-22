@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
@@ -287,5 +288,35 @@ func TestUnreadKeyUsesLogicalAuthor(t *testing.T) {
 	selected.Author = "other-author"
 	if unreadKey(original) == unreadKey(selected) {
 		t.Fatal("same LID merged different authors")
+	}
+}
+
+// Same-second arrivals keep their actual subsecond order across page boundaries.
+func TestUnreadSubsecondOrder(t *testing.T) {
+	alice, _, _, _, _, stops := liveGuestWorld(t)
+	for _, stop := range stops {
+		stop()
+	}
+	revision, _ := alice.ViewChanges()
+	live := NewLive(alice)
+	stamp := time.Unix(1792700000, 0)
+	live.unread = &unreadIndex{content: revision.Content, seq: revision.Seq, rows: []UnreadRow{
+		{Key: "a", At: stamp.Add(10 * time.Millisecond)},
+		{Key: "b", At: stamp.Add(90 * time.Millisecond)},
+		{Key: "c", At: stamp.Add(50 * time.Millisecond)},
+	}}
+	first, err := live.UnreadPage(UnreadQuery{Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Rows) != 2 || first.Rows[0].Key != "b" || first.Rows[1].Key != "c" {
+		t.Fatalf("same-second arrival order: %+v", first.Rows)
+	}
+	next, err := live.UnreadPage(UnreadQuery{Limit: 2, After: first.Next})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(next.Rows) != 1 || next.Rows[0].Key != "a" {
+		t.Fatalf("subsecond cursor lost or repeated rows: %+v", next.Rows)
 	}
 }

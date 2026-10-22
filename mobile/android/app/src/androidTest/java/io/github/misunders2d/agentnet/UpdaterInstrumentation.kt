@@ -15,15 +15,20 @@ import java.util.concurrent.TimeUnit
 /** Test APK only: the owned emulator fixture, never a production bridge or source override. */
 class UpdaterInstrumentation : Instrumentation() {
     private var mode = "install"
+    private var latencySuite = "history"
+    private var ownedLatencyFixture = false
     override fun onCreate(arguments: Bundle?) {
         super.onCreate(arguments)
         mode = arguments?.getString("mode") ?: "install"
+        latencySuite = arguments?.getString("latencySuite") ?: "history"
+        ownedLatencyFixture = arguments?.getString("ownedFixture") == "1"
         start()
     }
     override fun onStart() {
         val result = Bundle()
         try {
-            check(mode in setOf("install", "snapshot", "network", "cleanup", "interrupt", "notifications", "notifications-denied", "indicators-video")) { "Unknown fixture operation." }
+            check(mode in setOf("install", "snapshot", "network", "cleanup", "interrupt", "notifications", "notifications-denied", "indicators-video", "latency")) { "Unknown fixture operation." }
+            check(mode != "latency" || ownedLatencyFixture) { "Latency mode requires the explicitly owned disposable fixture runner." }
             if (mode == "cleanup") {
                 val preferences=targetContext.applicationContext.getSharedPreferences("native-update",0)
                 val id=preferences.getInt("session",-1)
@@ -37,6 +42,10 @@ class UpdaterInstrumentation : Instrumentation() {
             }
             val activity = startActivitySync(Intent(targetContext, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
             waitForIdleSync()
+            if (mode == "latency") {
+                checkLatency(activity, result)
+                finish(Activity.RESULT_OK, result); return
+            }
             if (mode == "indicators-video") {
                 checkIndicatorsVideo(activity, result)
                 finish(Activity.RESULT_OK, result); return
@@ -390,6 +399,78 @@ class UpdaterInstrumentation : Instrumentation() {
         runOnMainSync { check(last.parent == null && destroyedHidden == 1); client.onHideCustomView(); check(destroyedHidden == 1) }
         result.putString("stream", "PASS owned Android component boundary: eligible active notifications, quiet recovered content/intent/public redaction, one aggregate/remaining/unknown/empty; custom view decor/Back/duplicate/reentry/pause/destroy and bars restoration. Physical launcher and media playback remain separate.\n")
     }
+    /** Same synthetic host and canonical UI as desktop, in the actual WebView.
+     * The runner stages these two test-only files in the owned app's cache;
+     * no production URL, permission or bridge is added or overridden. */
+    private fun checkLatency(activity: MainActivity, result: Bundle) {
+        check(latencySuite in setOf("history", "navigation", "settings", "unread", "actions")) { "Unknown timing workload." }
+        val scriptFile = File(targetContext.cacheDir, "latency-fixture.mjs")
+        val inputFile = File(targetContext.cacheDir, "latency-input.json")
+        check(scriptFile.isFile && scriptFile.length() in 1L..262144L) { "Stage the bounded latency fixture in this owned app's private cache." }
+        check(inputFile.isFile && inputFile.length() in 1L..1048576L) { "Stage the synthetic latency input in this owned app's private cache." }
+        val source = scriptFile.readText()
+        val input = JSONObject(inputFile.readText())
+        check(input.has("overview") && input.has("view")) { "Invalid synthetic latency input." }
+        val field = MainActivity::class.java.getDeclaredField("web").apply { isAccessible = true }
+        val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
+        var page: WebView? = null
+        while (page == null && System.nanoTime() < end) {
+            runOnMainSync { page = field.get(activity) as? WebView }
+            if (page == null) Thread.sleep(100)
+        }
+        val web = checkNotNull(page) { "The native WebView did not open." }
+        var ready = false
+        while (!ready && System.nanoTime() < end) {
+            ready = javascript(web, "Boolean(window.__agentnetAndroid && document.readyState === 'complete')") == "true"
+            if (!ready) Thread.sleep(100)
+        }
+        check(ready) { "The current authenticated local Go-host assets did not load." }
+        try {
+            javascript(web, """
+                (() => {
+                  if (document.getElementById('fixture')) throw Error('Latency fixture already exists');
+                  window.__agentnetLatencyPrevious = [...document.body.children].map(el => ({el,display:el.style.display,inert:el.inert}));
+                  for (const {el} of window.__agentnetLatencyPrevious) {el.style.display='none';el.inert=true;}
+                  const fixture=document.createElement('div');fixture.id='fixture';
+                  fixture.style.cssText='position:fixed;inset:0;width:100%;height:100%;z-index:2147483647';
+                  document.body.append(fixture);
+                  window.__agentnetLatencyInput=$input;
+                  window.__agentnetLatencyPlatform='android';
+                  window.__agentnetLatencySuite=${JSONObject.quote(latencySuite)};
+                  window.latencyReport=null;
+                  const script=document.createElement('script');script.type='module';script.id='latency-test-script';
+                  script.textContent=${JSONObject.quote(source)};document.body.append(script);
+                  return true;
+                })()
+            """.trimIndent())
+            val runEnd = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
+            var report: JSONObject? = null
+            while (report == null && System.nanoTime() < runEnd) {
+                val raw = javascript(web, "window.latencyReport")
+                if (raw != "null") report = JSONObject(raw)
+                if (report == null) Thread.sleep(100)
+            }
+            val measured = checkNotNull(report) { "Native Android responsiveness fixture exceeded its existing 30-second bound." }
+            measured.put("nativeOS", "Android").put("engine", "MainActivity WebView")
+                .put("engineVersion", WebView.getCurrentWebViewPackage()?.versionName ?: "unknown")
+                .put("sdk", android.os.Build.VERSION.SDK_INT).put("device", android.os.Build.MODEL)
+            check(measured.toString().toByteArray().size <= 1048576) { "Latency result exceeds its bound." }
+            result.putString("stream", "LATENCY_JSON=${measured}\n")
+            check(measured.optBoolean("ok")) { measured.optString("error", "Native Android latency fixture failed") }
+        } finally {
+            javascript(web, """
+                (() => {
+                  window.__agentnetLatencyDispose?.();
+                  document.getElementById('fixture')?.remove();document.getElementById('latency-test-script')?.remove();
+                  for (const {el,display,inert} of window.__agentnetLatencyPrevious||[]) {el.style.display=display;el.inert=inert;}
+                  delete window.__agentnetLatencyInput;delete window.__agentnetLatencyPlatform;delete window.__agentnetLatencySuite;delete window.__agentnetLatencyPrevious;
+                  return true;
+                })()
+            """.trimIndent())
+            scriptFile.delete(); inputFile.delete()
+        }
+    }
+
     private fun javascript(page: WebView, script: String): String {
         val complete = CountDownLatch(1)
         var value = "null"
@@ -436,7 +517,8 @@ class UpdaterInstrumentation : Instrumentation() {
                 val decoded = JSONObject("{\"value\":$encoded}").getString("value")
                 val value = JSONObject(decoded)
                 check(!value.has("error")) { value.optString("error") }
-                check(value.getJSONObject("preserved").getJSONArray("messages").length() == 203) { "The owned 203-message fixture changed." }
+                val messageCount = value.getJSONObject("preserved").getJSONArray("messages").length()
+                check(messageCount == 200) { "The owned 200-message fixture changed: actual=$messageCount." }
                 return decoded
             }
             Thread.sleep(100)

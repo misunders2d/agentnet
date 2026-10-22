@@ -327,6 +327,9 @@ func (a *Agent) peerTopics(peer string, now int64, unread ...*[]DeviceUnreadRef)
 					continue
 				}
 				ref := DeviceUnreadRef{Peer: peer, Thread: directTopicID(g, rows), ID: id, Author: r.key, Dir: "out", At: time.Unix(r.at, 0)}
+				if r.atMS != 0 {
+					ref.At = time.UnixMilli(r.atMS)
+				}
 				if r.in {
 					ref.Dir = "in"
 				}

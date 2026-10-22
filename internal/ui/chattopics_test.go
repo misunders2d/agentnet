@@ -12,6 +12,136 @@ import (
 	"github.com/misunders2d/agentnet/internal/testhub"
 )
 
+func TestBrowserNativeTopicDestinationTitle(t *testing.T) {
+	t.Setenv("AGENTNET_NOTIFY", "off")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	dir := filepath.Join(t.TempDir(), "hub")
+	hub := testhub.Start(t, dir, "127.0.0.1:0", "")
+	a, err := client.Join(ctx, filepath.Join(t.TempDir(), "alice"), testhub.BootstrapCode(t, dir), "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { a.Close() })
+	runDaemon(t, a)
+	if _, err = a.CreatePerson(ctx, "Alice"); err != nil {
+		t.Fatal(err)
+	}
+	w := startEngineNode(t, dir)
+	w.ok(map[string]any{"op": "init", "base": "https://" + hub.Addr})
+	code, err := a.Invite(ctx, "bob", time.Hour, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.ok(map[string]any{"op": "join", "code": browserCode(t, code), "name": "phone"})
+	w.api("/api/person", map[string]any{"label": "Bob"})
+	w.ok(map[string]any{"op": "start"})
+	conv := w.api("/api/dm/new", map[string]any{"address": a.Address})["id"].(string)
+	wait := func(what string, pred func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(15 * time.Second)
+		for time.Now().Before(deadline) {
+			if pred() {
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		t.Fatal(what)
+	}
+	for _, browser := range []bool{true, false} {
+		from, to := protocol.NewID(), protocol.NewID()
+		// At equal signed seconds these IDs still put the source first.
+		sourceID, destinationID := strings.Repeat("1", 31)+"1", strings.Repeat("f", 31)+"1"
+		if !browser {
+			sourceID, destinationID = strings.Repeat("1", 31)+"2", strings.Repeat("f", 31)+"2"
+		}
+		send := func(id, body, topic string) {
+			t.Helper()
+			if browser {
+				w.api("/api/dm/send", map[string]any{"conv": conv, "id": id, "body": body, "topic": topic})
+			} else if _, err := a.SendConv(client.WithQueuedSend(ctx, id), conv, client.ConvOutgoing{Body: body, Topic: topic}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		send(sourceID, "Group note to edit", from)
+		send(destinationID, "Stock count topic start", to)
+		checkTitle := func(title string, count int) bool {
+			ts, err := a.ChatTopics(conv)
+			if err != nil {
+				t.Fatal(err)
+			}
+			native := false
+			for _, topic := range ts {
+				if topic.ID == to {
+					native = topic.Title == title && topic.Count == count
+				}
+			}
+			page := w.api("/api/topics?conv="+conv, nil)
+			for _, raw := range page["topics"].([]any) {
+				topic := raw.(map[string]any)
+				if topic["id"] == to {
+					return native && topic["title"] == title && topic["count"] == float64(count)
+				}
+			}
+			return false
+		}
+		wait("both engines hold the original destination", func() bool { return checkTitle("Stock count topic start", 1) })
+		if browser {
+			// Review/apply is deliberately offline so unrelated receipt writes
+			// cannot invalidate the exact reviewed browser storage snapshot.
+			w.ok(map[string]any{"op": "stopStream"})
+			w.api("/api/topic/rename", map[string]any{"conv": conv, "id": from, "title": "Freight quote"})
+			review := w.api("/api/topic/organization/preview", map[string]any{"conv": conv, "ids": []string{sourceID}, "topic": to, "merge": from})
+			moved := w.api("/api/topic/organization/apply", review)
+			if again := w.api("/api/topic/organization/apply", review); again["lid"] != moved["lid"] {
+				t.Fatal("exact browser replay changed operation")
+			}
+			w.ok(map[string]any{"op": "start"})
+		} else {
+			review, err := a.PreviewTopicOrganization(client.TopicOrganizationRequest{Conv: conv, IDs: []string{sourceID}, Topic: to})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = a.ApplyTopicOrganization(ctx, review); err != nil {
+				t.Fatal(err)
+			}
+		}
+		wait("native/browser destination retains its exact automatic title", func() bool { return checkTitle("Stock count topic start", 2) })
+		w.ok(map[string]any{"op": "reload", "base": "https://" + hub.Addr})
+		w.until("browser reconnects after reload", func() bool { return w.ok(map[string]any{"op": "status"})["connected"] == true })
+		wait("browser reload retains destination title", func() bool { return checkTitle("Stock count topic start", 2) })
+		if !browser {
+			back, err := a.PreviewTopicOrganization(client.TopicOrganizationRequest{Conv: conv, IDs: []string{sourceID}, Topic: from})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = a.ApplyTopicOrganization(ctx, back); err != nil {
+				t.Fatal(err)
+			}
+			wait("inverse move restores placement without title drift", func() bool { return checkTitle("Stock count topic start", 1) })
+		}
+		w.api("/api/topic/rename", map[string]any{"conv": conv, "id": to, "title": "Named destination"})
+		count := 2
+		if !browser {
+			count = 1
+		}
+		wait("explicit shared destination name still wins", func() bool { return checkTitle("Named destination", count) })
+		msgs, err := a.ConversationMessages(conv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, m := range msgs {
+			if m.LID == sourceID {
+				found = m.Topic == from && m.Body == "Group note to edit" && m.Key != ""
+			}
+		}
+		if !found {
+			t.Fatal("display organization changed the signed original")
+		}
+	}
+}
+
 // Real signed/E2E turns between the browser engine and native installation,
 // including persisted shared marks, pagination, bulk operations and local erase.
 func TestBrowserChatTopicJourney(t *testing.T) {

@@ -48,7 +48,7 @@ export function chatItems(o: T.Overview | null, names: Record<string, string>): 
       else {
         const topic = threads.get(i.open.id);
         const first = firstLine(topic?.title, 80, topic?.renamed);
-        if (first && first !== i.last) i.note = "“" + first + "”";
+        i.note = "Device conversation" + (first && first !== i.last ? " · “" + first + "”" : "");
       }
     }
   }

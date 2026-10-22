@@ -139,8 +139,40 @@ export const inside = (e: { currentTarget: Element; target: EventTarget }) => e.
 /** useTouchGestures: long-press opens the sheet; swiping right past 64px replies.
  *  Vertical scrolling stays native (touch-action: pan-y on the row). */
 export function useTouchGestures(onLongPress: () => void, onSwipe: (() => void) | null) {
+  const { root } = useOwned();
   const [dx, setDx] = useState(0);
   const g = useRef<{ x: number; y: number; timer: number; moved: boolean; id: number } | null>(null);
+  const releaseGuard = useRef<(() => void) | null>(null);
+  useEffect(() => () => { if (g.current) clearTimeout(g.current.timer); releaseGuard.current?.(); }, [root]);
+  const guardOpeningClick = (id: number) => {
+    releaseGuard.current?.();
+    let timer: number | undefined;
+    const clear = () => {
+      window.clearTimeout(timer);
+      root.removeEventListener("click", click, true);
+      root.removeEventListener("pointerdown", next, true);
+      window.removeEventListener("pointerup", up, true);
+      window.removeEventListener("pointercancel", cancel, true);
+      if (releaseGuard.current === clear) releaseGuard.current = null;
+    };
+    const click = (e: globalThis.MouseEvent) => {
+      const pointer = e as globalThis.PointerEvent;
+      if (e.detail === 0 || pointer.pointerType && (pointer.pointerType !== "touch" || pointer.pointerId !== id)) return;
+      e.preventDefault(); e.stopImmediatePropagation(); clear();
+    };
+    // A new primary press is an intentional gesture, even inside the short
+    // compatibility-click window. It must never be swallowed by this guard.
+    const next = (e: globalThis.PointerEvent) => { if (e.isPrimary) clear(); };
+    const up = (e: globalThis.PointerEvent) => { if (e.pointerId === id) timer = window.setTimeout(clear, 400); };
+    const cancel = (e: globalThis.PointerEvent) => { if (e.pointerId === id) clear(); };
+    root.addEventListener("click", click, true);
+    root.addEventListener("pointerdown", next, true);
+    // Only the initiating pointer's end is observed outside the owned root;
+    // the finger may leave it. Click interception stays in this skin's root.
+    window.addEventListener("pointerup", up, true);
+    window.addEventListener("pointercancel", cancel, true);
+    releaseGuard.current = clear;
+  };
   const end = () => {
     const s = g.current;
     if (!s) return;
@@ -155,6 +187,7 @@ export function useTouchGestures(onLongPress: () => void, onSwipe: (() => void) 
         if (e.pointerType !== "touch" || !inside(e) || (e.target as Element).closest("a[href]")) return;
         const timer = window.setTimeout(() => {
           if (!g.current || g.current.moved) return;
+          guardOpeningClick(g.current.id);
           g.current = null;
           navigator.vibrate?.(8);
           onLongPress();
@@ -249,7 +282,7 @@ export function EditBox({ m, ctx, onDone }: { m: AnyMsg; ctx: Ctx; onDone: () =>
       <textarea ref={area} value={text} onChange={(e) => change(e.target.value)} rows={2} aria-label="New text"
         onKeyDown={(e) => {
           if (e.key === "Escape") { e.preventDefault(); onDone(); }
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void save(); }
+          if (e.key === "Enter" && !e.nativeEvent.isComposing && (e.metaKey || e.ctrlKey || !e.shiftKey && !e.altKey)) { e.preventDefault(); void save(); }
         }}
         className="w-full resize-none rounded-xl bg-surface px-3 py-2 text-ink outline-none stroke focus-visible:outline-none" />
       {isRequest(m) && <p className="text-[13px] text-text-2">The agent keeps what it already got; nothing runs again.</p>}

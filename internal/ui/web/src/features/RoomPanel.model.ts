@@ -135,7 +135,7 @@ export function room(t: T.DMThread, o: T.Overview | null, names: Record<string, 
   const times = (pid: string, state: string, invited?: string) => {
     const ev = events(pid);
     const last = ev.length > 1 ? ev[ev.length - 1].at : undefined;
-    const kinds = ev.map((m) => eventKind(m.event || ""));
+    const kinds = ev.map((m) => eventKind(m));
     const end = ENDED.has(state) ? kinds[kinds.length - 1] : null;
     return {
       invitedAt: ev[0]?.at || invited, sinceAt: member && LIVE.has(state) ? last : undefined, endedAt: ENDED.has(state) ? last : undefined,

@@ -15,6 +15,14 @@ async function releaseChecks(browser) {
     page.on('request', r => { if (r.method() === 'POST' && new URL(r.url()).pathname.startsWith('/api/app/')) actions.push(r.url()); });
     const origin = new URL(process.argv[2]).origin, other = 'b'.repeat(32);
     const bindings = ['default',other].map((id,i) => ({id,handle:String(i+1).repeat(32),endpoint:origin,address:'alice/laptop',realm:'a'.repeat(32),name:i?'Other fixture':'First fixture',state:'enrolled'}));
+    // Exercise the installed-app bridge, exactly as Tauri supplies it. The
+    // generic workspace route below deliberately bypasses unrelated handlers.
+    await page.addInitScript(() => { window.__agentnetNativeAppJSON=async(action,body)=>{
+      const path={status:'status',check:'check',update:'update',cli:'cli'}[action];
+      const response=await fetch('/api/app/'+path,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      if(!response.ok)throw Error((await response.text()).trim()||response.statusText);
+      return response.json();
+    }; });
     await page.route('**/api/workspaces', r => r.fulfill({json:bindings}));
     await page.route('**/api/workspaces/all', r => r.fulfill({json:bindings}));
     await page.route('**/workspaces/*/*/**', r => {
@@ -154,20 +162,20 @@ async function releaseChecks(browser) {
   try {
     if(process.argv.includes('--release-check')){await releaseChecks(browser);return;}
     const page = await browser.newPage({viewport:{width:1280,height:900}});
-    const errors = [], actions = [];
+    const errors = [], actions = [], appReads = [];
     page.on('pageerror', e => errors.push(e.message));
     page.on('request', r => { if (r.method() === 'POST' && new URL(r.url()).pathname.startsWith('/api/app/')) actions.push(r.url()); });
-    await page.route('**/api/app/status', r => r.fulfill({status:404, contentType:'text/plain', body:'404 page not found'}));
+    await page.route('**/api/app/status', r => { appReads.push(r.request().url()); return r.fulfill({status:404, contentType:'text/plain', body:'404 page not found'}); });
     await page.goto(process.argv[2]);
     await page.getByRole('button', {name:'Settings',exact:true}).click();
     await page.getByRole('button', {name:/^About/}).click();
-    const update = page.getByRole('button',{name:'Update AgentNet',exact:true});
-    await update.waitFor();
-    assert.equal(await update.isDisabled(),true,'unavailable updater must never enable an action');
-    await page.getByText('This page does not expose the app’s update controls.',{exact:false}).waitFor();
+    await page.getByRole('heading',{name:/About/,exact:false}).first().waitFor();
+    await settle(page);
+    assert.equal(await page.getByRole('button',{name:'Update AgentNet',exact:true}).count(),0,'a page without app controls offers no unusable updater');
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth > innerWidth),false,'About must not overflow');
     if (process.env.AGENTNET_SCREENSHOTS) await page.screenshot({path:path.join(process.env.AGENTNET_SCREENSHOTS,'attached-updater-about.png')});
     assert.deepEqual(actions,[],'no update or command replacement requested');
+    assert.deepEqual(appReads,[],'known headless page never probes unsupported app routes');
     assert.deepEqual(errors,[],'no browser exceptions');
     console.log('attached updater check PASS');
   } finally { await browser.close(); }

@@ -13,6 +13,10 @@ on:
         description: "Exact source ref; empty: caller's commit"
         type: string
         default: ""
+      interaction_qualification:
+        description: "Measure shared interactions in real native shells and browsers"
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -56,6 +60,46 @@ jobs:
         if: runner.os == 'Linux'
         timeout-minutes: 10
         run: dbus-run-session -- xvfb-run -a -s '-screen 0 1280x800x24 -nolisten tcp' python3 scripts/test-appimage-update.py
+      - name: native shell and browser interaction qualification
+        if: inputs.interaction_qualification
+        shell: bash
+        env:
+          AGENTNET_LATENCY_DISPOSABLE_GUI: '1'
+          AGENTNET_LATENCY_SUITES: history,navigation,settings,unread,actions
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/agentnet-interactions"
+          mkdir -p "$evidence"
+          npm install --prefix "$RUNNER_TEMP/agentnet-browsers" --ignore-scripts --no-audit --no-fund playwright@1.63.0
+          tooling="$RUNNER_TEMP/agentnet-browsers/node_modules"
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            "$tooling/.bin/playwright" install --with-deps chromium firefox webkit
+            export AGENTNET_NATIVE_SHELL="$GITHUB_WORKSPACE/desktop/src-tauri/target/release/agentnet-app"
+            dbus-run-session -- xvfb-run -a -s '-screen 0 1440x960x24 -nolisten tcp' \
+              go test ./internal/ui -run '^TestUIResponsivenessRendered$' -count=1 -timeout 180s -v 2>&1 | tee "$evidence/native.log"
+          else
+            "$tooling/.bin/playwright" install chromium firefox webkit
+            if [[ "$RUNNER_OS" == macOS ]]; then
+              export AGENTNET_NATIVE_SHELL="$GITHUB_WORKSPACE/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/AgentNet.app/Contents/MacOS/agentnet-app"
+            else
+              export AGENTNET_NATIVE_SHELL="$GITHUB_WORKSPACE/desktop/src-tauri/target/release/agentnet-app.exe"
+            fi
+            go test ./internal/ui -run '^TestUIResponsivenessRendered$' -count=1 -timeout 180s -v 2>&1 | tee "$evidence/native.log"
+          fi
+          unset AGENTNET_NATIVE_SHELL
+          export AGENTNET_PLAYWRIGHT="$tooling/playwright"
+          export AGENTNET_LATENCY_ENGINES=chromium,firefox,webkit
+          export AGENTNET_LATENCY_VIEWPORTS=1440x960,390x844
+          export AGENTNET_LATENCY_EVIDENCE="$evidence/browser.png"
+          export AGENTNET_LATENCY_HOST_PLATFORM=browser
+          go test ./internal/ui -run '^TestUIResponsivenessRendered$' -count=1 -timeout 600s -v 2>&1 | tee "$evidence/browser.log"
+      - name: retain interaction timings and screenshots
+        if: always() && inputs.interaction_qualification
+        uses: actions/upload-artifact@v4
+        with:
+          name: interactions-${{ runner.os }}
+          path: ${{ runner.temp }}/agentnet-interactions
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: agentnet-app-${{ runner.os }}

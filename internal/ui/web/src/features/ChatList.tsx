@@ -55,6 +55,7 @@ export function ChatList() {
   const [searching, setSearching] = useState(false);
   const [topicHits, setTopicHits] = useState(0); // topics the search found (ChatList.topics.tsx)
   const search = useRef<HTMLInputElement>(null);
+  const results = useRef<HTMLUListElement>(null);
 
   const items = useMemo(() => chatItems(overview, agentNames), [overview, agentNames]);
   const threads = useMemo(() => new Map((overview?.threads || []).map((t) => [t.id, t])), [overview]);
@@ -111,7 +112,16 @@ export function ChatList() {
             <IconSearch size={18} stroke={2.2} aria-hidden="true" className="shrink-0" />
             <span className="sr-only">Search chats</span>
             <input ref={search} type="search" value={query} onChange={(e) => setQuery(e.target.value)} enterKeyHint="search"
-              onKeyDown={(e) => { if (e.key === "Escape") { if (query) setQuery(""); else if (!wide) closeSearch(); } }}
+              onKeyDown={(e) => {
+                if (e.nativeEvent.isComposing) return;
+                if (e.key === "Escape") { if (query) setQuery(""); else if (!wide) closeSearch(); }
+                else if (q && e.key === "Enter" && shown[0]) { e.preventDefault(); void store.openChat(shown[0].open); }
+                else if (q && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+                  const rows = results.current?.querySelectorAll<HTMLButtonElement>('[data-part="chat-row"]');
+                  const row = e.key === "ArrowDown" ? rows?.[0] : rows?.[rows.length - 1];
+                  if (row) { e.preventDefault(); row.focus(); }
+                }
+              }}
               placeholder="Search people, agents, groups" autoComplete="off"
               className="min-w-0 flex-1 bg-transparent text-[16px] outline-none placeholder:text-muted focus-visible:outline-none lg:text-[15px] [&::-webkit-search-cancel-button]:hidden" />
             {query ? <IconButton label="Clear search" onClick={() => { setQuery(""); search.current?.focus(); }} className="shrink-0"><IconX size={18} /></IconButton>
@@ -140,7 +150,16 @@ export function ChatList() {
             </div>
           )}
           {shown.length > 0 && (
-            <ul className={"pt-2 " + (wide ? "flex flex-col gap-0.5 px-2" : "")} aria-label={q ? "Matching chats" : "Chats"}>
+            <ul ref={results} className={"pt-2 " + (wide ? "flex flex-col gap-0.5 px-2" : "")} aria-label={q ? "Matching chats" : "Chats"}
+              onKeyDown={e => {
+                if (!q || e.defaultPrevented || !["ArrowUp", "ArrowDown"].includes(e.key)) return;
+                const rows = [...e.currentTarget.querySelectorAll<HTMLButtonElement>('[data-part="chat-row"]')];
+                const index = rows.indexOf(e.target as HTMLButtonElement);
+                if (index < 0) return;
+                e.preventDefault();
+                const next = index + (e.key === "ArrowDown" ? 1 : -1);
+                if (next < 0) search.current?.focus(); else rows[Math.min(next, rows.length - 1)]?.focus();
+              }}>
               {shown.map((i) => (
                 <li key={i.key} onPointerDown={(e) => ahead(i.open, e)} onPointerEnter={(e) => ahead(i.open, e)} onPointerLeave={() => clearTimeout(hover.current)} className={wide ? "" : "relative [&+&]:before:absolute [&+&]:before:top-0 [&+&]:before:right-4 [&+&]:before:left-[76px] [&+&]:before:border-t [&+&]:before:border-hairline"}>
                   <ChatRow item={i} summary={summaries.get(i.open.id)} overview={overview} wide={wide}

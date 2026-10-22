@@ -93,6 +93,21 @@ nodes(c.host.get()).find(n=>n.tag==='input'&&n.props.type==='search').props.onCh
 nodes(c.host.get()).find(n=>n.tag==='IconButton'&&n.props.label==='Clear search').props.onClick();await c.advance(1);assert.equal(nodes(c.host.get()).filter(n=>n.tag==='li').length,1,'clear preserves selected Done');
 nodes(c.host.get()).find(n=>n.tag==='input'&&n.props.type==='search').props.onChange({target:{value:'undefined'}});await c.advance(1);assert.equal(nodes(c.host.get()).filter(n=>n.tag==='li').length,0,'missing autoTitle cannot add a false search match');
 c.host.stop();
+// A confirmed batch survives closing/scope departure; only explicit Undo cancels it.
+for(const leave of ['close','scope','unmount','undo']){
+ const f=component(),calls=[];let p={...props,open:true,flat:{...props.flat,topics:[row('exact')],change:async(...args)=>{calls.push(args);return {note:'Archived exact topic'};}}};
+ f.host.start(()=>f.exports.AllTopics(p));await drain();
+ const button=label=>nodes(f.host.get()).find(n=>n.tag==='Button'&&n.props.children[0]===label);
+ nodes(f.host.get()).find(n=>n.tag==='input'&&n.props.type==='checkbox').props.onChange();await drain();
+ button('Archive').props.onClick();await drain();button('Confirm').props.onClick();await drain();
+ if(leave==='undo')button('Undo').props.onClick();
+ else if(leave==='unmount')f.host.stop();
+ else{p={...p,...(leave==='close'?{open:false}:{conv:'other-chat'})};f.host.render();}
+ await f.advance(1);
+ assert.equal(calls.length,leave==='undo'?0:1,'confirmed batch '+leave+' must not silently disappear or repeat');
+ if(calls.length){assert.equal(calls[0][0],'archive');assert.deepEqual(Array.from(calls[0][1]),['exact']);assert.equal(calls[0][2].exact,1);}
+ f.host.stop();await f.advance(1);assert.equal(calls.length,leave==='undo'?0:1,'cleanup must not repeat a settled operation');
+}
 // Keep existing non-flat query/filter/Show more scope assertions on actual TSX.
 for(const filter of ['Active','Done','Archived']){
  const f=component(),calls=[],rows=Array.from({length:120},(_,i)=>row(String(i)));

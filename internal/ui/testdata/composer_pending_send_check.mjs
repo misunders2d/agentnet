@@ -6,6 +6,11 @@ import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import {pendingSends} from '../static/optimistic.mjs';
 
+const {errorText}=await import('../web/src/api.ts');
+for(const message of ['Failed to fetch','NetworkError when attempting to fetch resource.','Load failed','fetch failed'])assert.equal(errorText(new TypeError(message)),'AgentNet is not reachable. Check the connection and try again.');
+for(const message of ['Permission denied','Failed to fetch a native permission','Relay quota reached'])assert.equal(errorText(new Error(message)),message);
+assert.equal(errorText(new DOMException('The operation was aborted.','AbortError')),'The operation was aborted.');
+
 const root = new URL('../', import.meta.url);
 registerHooks({
   load(url, context, next) {

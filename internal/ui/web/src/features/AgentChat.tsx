@@ -87,7 +87,7 @@ export async function checkAgentChatTarget(api: Api, target: AgentChatTarget, pl
 export function AgentChatButton({target, onStarted}: {target: AgentChatTarget; onStarted?: () => void}) {
   const [open, setOpen] = useState(false);
   return <>
-    <Button size="sm" variant="act" disabled={!!target.unavailable} title={target.unavailable} onClick={() => setOpen(true)}>
+    <Button data-new-chat-choice size="sm" variant="act" disabled={!!target.unavailable} title={target.unavailable} onClick={() => setOpen(true)}>
       Chat with {target.label}
     </Button>
     <Sheet open={open} onOpenChange={setOpen} title={"Chat with " + target.label} description={"On " + niceDevice(target.host)}>

@@ -27,6 +27,9 @@ func TestCLIHookPi(t *testing.T) {
 		if len(strings.TrimSpace(string(out))) == 0 {
 			return "", nil
 		}
+		if strings.Contains(input, `"hook_event_name":"Stop"`) {
+			t.Fatalf("ordinary Pi Stop must be silent, including continuation/ack: %s", out)
+		}
 		var r struct {
 			Text string         `json:"text"`
 			Ack  map[string]any `json:"ack"`
@@ -37,24 +40,27 @@ func TestCLIHookPi(t *testing.T) {
 		return r.Text, r.Ack
 	}
 	ev := func(name string) string { return `{"session_id":"PI1","hook_event_name":"` + name + `"}` }
-	ackInput := func(a map[string]any) string {
-		a["session_id"], a["hook_event_name"] = "PI1", "Ack"
+	ackInput := func(a map[string]any, session string) string {
+		a["session_id"], a["hook_event_name"] = session, "Ack"
 		data, _ := json.Marshal(a)
 		return string(data)
 	}
 
 	if _, a := hook(nil, ev("SessionStart")); a != nil {
-		hook(nil, ackInput(a))
+		hook(nil, ackInput(a, "PI1"))
 	}
 	id := strings.Fields(c.run("--home", "alice", "send", "bob/desk", "hello pi"))[0]
 	waitFor(t, "bob stored it", func() bool {
-		for _, m := range c.inbox("bob") {
+		for _, m := range c.peekInbox("bob") {
 			if m.ID == id {
 				return true
 			}
 		}
 		return false
 	})
+	if stopped, a := hook(nil, ev("Stop")); stopped != "" || a != nil {
+		t.Fatalf("ordinary unread arrival blocked Stop: %q %v", stopped, a)
+	}
 	text, a := hook(nil, ev("Idle"))
 	if !strings.Contains(text, id) || strings.Contains(text, "hello pi") || a == nil || a["has_pos"] != true {
 		t.Fatalf("idle notice %q ack %v", text, a)
@@ -62,9 +68,26 @@ func TestCLIHookPi(t *testing.T) {
 	if again, _ := hook(nil, ev("UserPromptSubmit")); !strings.Contains(again, id) {
 		t.Fatalf("unacknowledged notice not offered again: %q", again)
 	}
-	hook(nil, ackInput(a))
+	hook(nil, ackInput(a, "PI1"))
 	if after, _ := hook(nil, ev("Idle")); after != "" {
 		t.Fatalf("acknowledged notice shown again: %q", after)
+	}
+	if rows := c.inbox("bob"); len(rows) != 1 || rows[0].ID != id {
+		t.Fatalf("displaying exact received message: %+v", rows)
+	}
+	newSession := func(name string) string { return strings.Replace(ev(name), "PI1", "PI2", 1) }
+	read, overviewAck := hook(nil, newSession("SessionStart"))
+	if strings.Contains(read, id) || strings.Contains(read, "hello pi") {
+		t.Fatalf("new Pi session replayed a displayed message: %q", read)
+	}
+	if overviewAck != nil {
+		hook(nil, ackInput(overviewAck, "PI2"))
+	}
+	if read, _ := hook(nil, newSession("Idle")); read != "" {
+		t.Fatalf("read arrival reappeared after overview ack: %q", read)
+	}
+	if stopped, a := hook(nil, newSession("Stop")); stopped != "" || a != nil {
+		t.Fatalf("read history blocked Stop: %q %v", stopped, a)
 	}
 	if bg, _ := hook([]string{"AGENTNET_BACKGROUND=1"}, ev("SessionStart")); bg != "" {
 		t.Fatal("background session got a notice")

@@ -25,6 +25,23 @@ sync consumes that last slot; do not add another name without revisiting the
 wire contract. Media preparation is an explicit sender choice: files retain
 their original bytes until Smaller photo or Smaller video is selected.
 
+The integrated GUI corrections now include the actual Reply/tag continuation
+producer, pending reactions with authoritative reconciliation, touch-release
+protection, first-unread entry with bounded history pages, native reading-anchor
+preservation, keyboard/search/Back navigation, short-window menus, confirmed topic
+operations, destination titles, millisecond unread ordering, schedule completion
+and structured human-guest lifecycle text. The canonical build and strict types
+pass. Focused current-source regressions pass; complete platform and interaction
+qualification remains open. Native Linux still has measured routine controls
+above 200 ms, so this is not a no-lag acceptance claim.
+
+Claude disclosed that its exploratory interactive GUI world used the dirty main
+checkout instead of the cited candidate. Those interactions are excluded from
+candidate evidence. Clean-candidate fixtures and explicit candidate reproductions
+remain valid; the final review must rebuild from the frozen candidate, fingerprint
+the binary/assets and re-establish every GUI coverage row. See the active batch
+checklist and [release qualification record](plans/V0_9_3_RELEASE.md).
+
 ## v0.9.2 released and relay updated — October22, 2026
 
 [App v0.9.2](https://github.com/misunders2d/agentnet/releases/tag/v0.9.2) is public
