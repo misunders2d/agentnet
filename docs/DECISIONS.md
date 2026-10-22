@@ -1,5 +1,49 @@
 # AgentNet Revival — Architectural Decision Records & Linear Roadmap
 
+## 2026-10-23 — confirmed topic changes and terminal group removal context
+
+Comic bulk topic changes call the existing host mutation immediately after one
+explicit confirmation. The review names the exact count and scope; Delete for
+me states that it cannot be undone. Cancel before confirmation sends nothing,
+and a pending action never claims success before its host result. A local
+six-second panel timer is not a durable Undo and is removed. The separate
+server-backed move/merge Undo remains. The skin contract requires confirmation
+and truthful host-result presentation without prescribing a timer for other
+skins.
+
+Group removal must reach the removed person's existing verified human devices
+without granting access to later group content. A narrow terminal recipient
+class may receive an encrypted original signed removal state and the bounded
+original proof needed to verify it. This is separate from ordinary current-member
+fanout: the state must match its successful signed journal commit, omit that
+exact prior admission, retain the previous title and every other effective
+member unchanged, and account for any folded independently signed withdrawals.
+The packet excludes participation/guest payloads and introduces no new people,
+history grant or group content. It is sealed anew to each exact current pinned
+human key; frozen or changed identities fail closed. Publication stores those
+copies atomically with the existing outbox, and retries reuse their stored
+logical identities and ciphertext.
+
+The receiver verifies its existing root, realm, admission and the original
+admin-authorized chain. A signed complete state, rather than an opaque head or
+refusal message, proves removal. Older/duplicate notices cannot override newer
+readmission. A terminal notice grants no ordinary-message, history-import or
+execution exception. Missing or oversized proof stays an explicit verification
+wait; it must not be truncated or interpreted as removal. No new wire format,
+capability or second membership store is authorized by this design. Native and
+browser producers, delivery/ingress gates and read-only presentation require
+matching focused tests, independent review and mixed-version qualification.
+This is the candidate design decision, not a claim of implementation or release.
+
+The review also considered a new chronological group-governance timeline.
+That is not needed to correct the demonstrated stale roster and removed-member
+bugs: the current verified title, roles and read-only removal explanation cover
+those outcomes. Existing signed records do not supply a complete displayable
+timestamped history on every device. This batch does not invent that history
+or a new audit protocol. Retiring an agent clears its folder setting today;
+the UI must say so and explain the concrete default-agent consequence, without
+silently restoring a default or granting execution permission.
+
 ## 2026-10-22 — tagged clarification and one effective attention state
 
 Ordinary missing information and business choices use normal chat questions

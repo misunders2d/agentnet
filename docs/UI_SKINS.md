@@ -650,6 +650,15 @@ types are the Go structs in `internal/ui/*.go`, generated into
   member's `person`), `leave` (nothing else; `queued` until the others
   confirm). Show admin actions only to an admin of a group that is not
   frozen; anyone in it may leave. A removal recalls nothing already saved.
+  A group read that throws `code: "group_context_pending"` (native HTTP503,
+  or the same engine error code) is a temporary verification wait. Keep the
+  last complete verified view, text and files, pause sends, and show that group
+  details are updating. Do not announce an ordinary failure, infer removal or
+  acknowledge cached messages as a fresh read. A cold load has no view yet.
+  The existing change feed and a fresh successful response clear the pause;
+  stale requests or another workspace cannot change the current state. Do not
+  poll. A successfully returned frozen former-member view remains readable
+  and cannot send; it is separate from this temporary wait.
   `/api/groups/invite` `history` takes `{last}`, `{since}` or exact `{refs}`.
 - Trust and standing answers for a device: `/api/act` `{do: "trust", id:
   address, key}` trusts exactly the compared key (`thread.key.pending`) and
@@ -776,8 +785,8 @@ types are the Go structs in `internal/ui/*.go`, generated into
   may reopen. Send/ask accepts `topic` (`new` starts a topic), and
   `/api/topic/create` `{conv,id}` promotes a held logical message and replies.
   Topic changes use `{conv,id,count?,title?}`; bulk Done/Archive/Delete uses
-  `{conv|peer,id:"",ids:[...],counts?:{id:shownCount}}`. Offer one confirmation and a six-second
-  pending Undo before calling the host. Delete for me in people chats
+  `{conv|peer,id:"",ids:[...],counts?:{id:shownCount}}`. Offer one confirmation before calling the host; never claim the change
+  before the host result. Delete for me in people chats
   affects only this person's devices; others keep their copies. Archive
   follows this person's own linked devices only; new messages/shared actions
   clear an archive. A named people-topic rename is shared with everyone who

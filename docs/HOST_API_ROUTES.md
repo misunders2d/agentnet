@@ -21,8 +21,8 @@ typed calls are in `internal/ui/web/src/api.ts`, and the view types in
   Android refusals are named in Purpose.
 
 **Errors on D.** `host.api` rejects with an `Error` whose message is the JSON
-`error` field, else the trimmed text body, else the status text. `.status` is
-the HTTP status.
+`message` or `error` field, else the trimmed text body, else the status text.
+`.status` is the HTTP status; a JSON `code` is preserved as `.code`.
 
 - 400 `bad request`: unknown body field (`DisallowUnknownFields`), malformed
   JSON, trailing data, empty body, or a body over 64 KiB.
@@ -33,6 +33,13 @@ the HTTP status.
 - 409 `stale or disconnected workspace`: the handle was retired. Call
   `host.reconnect()`.
 - 415 `JSON only`.
+- 503 with `.code === "group_context_pending"`: a group view is waiting for
+  verified signed context. Keep the last complete verified view and its draft,
+  pause sending and show an updating state. A cold load stays a loading state;
+  this response contains no conversation DTO. Resume on the existing change
+  feed and a fresh successful view, without polling. Ignore stale completions
+  from an earlier request, visit or workspace. A cached fallback does not
+  establish a fresh read baseline. Other errors retain their ordinary meaning.
 - 500 `internal error`.
 
 The host itself throws before sending:

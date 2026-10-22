@@ -12,6 +12,7 @@ import {
   IconChecks, IconCheck, IconClock, IconAlertTriangle, IconChevronDown, IconAlarm,
 } from "@tabler/icons-react";
 import { useApp } from "../context";
+import { useRetainedText } from "../retained-text";
 import { MESSAGES, deviceName, plain, timeOf } from "../model";
 import { Sheet } from "../ui/Sheet";
 import { Button } from "../ui/Button";
@@ -224,8 +225,8 @@ export function Confirm({ open, onOpenChange, title, children, ok, onOk, danger 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange} modal="trap-focus" disablePointerDismissal>
       <Dialog.Portal container={portal}>
-        <Dialog.Backdrop className="fixed inset-0 z-40 bg-scrim/40 transition-opacity duration-200 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0" />
-        <Dialog.Popup {...modal} role="alertdialog" className="fixed left-1/2 top-1/2 z-50 w-[min(440px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded-3xl bg-canvas p-5 text-ink outline-none stroke shadow-pop transition-[opacity,scale] duration-200 ease-out-soft data-[starting-style]:scale-95 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 motion-reduce:transition-opacity">
+        <Dialog.Backdrop className="fixed inset-0 z-40 bg-scrim/40 transition-opacity duration-[120ms] data-[starting-style]:opacity-0 data-[ending-style]:opacity-0" />
+        <Dialog.Popup {...modal} role="alertdialog" className="fixed left-1/2 top-1/2 z-50 w-[min(440px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded-3xl bg-canvas p-5 text-ink outline-none stroke shadow-pop transition-[opacity,scale] duration-[140ms] ease-out-soft data-[starting-style]:scale-95 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 motion-reduce:transition-opacity">
           <Dialog.Title className="font-display text-[22px] font-extrabold leading-tight">{title}</Dialog.Title>
           <Dialog.Description render={<div />} className="mt-2 space-y-2 text-[15px] text-text-2">{children}</Dialog.Description>
           <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
@@ -255,9 +256,9 @@ export function DeleteMessage({ open, onOpenChange, m, ctx }: { open: boolean; o
 export function EditBox({ m, ctx, onDone }: { m: AnyMsg; ctx: Ctx; onDone: () => void }) {
   const store = useApp();
   // Shown as @Name; a mention left untouched keeps its exact reference when saved, an edited one becomes text.
-  const start = useRef(decode(shownText(m)));
-  const [text, setText] = useState(start.current.text);
-  const spans = useRef(start.current.spans);
+  const [draft, setDraft, retained] = useRetainedText(JSON.stringify(["edit", controlRef(m, ctx), m.revision, shownText(m)]), shownText(m));
+  const { text, spans } = decode(draft);
+  const cancel = () => { retained.discard(); onDone(); };
   const area = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     const el = area.current;
@@ -269,25 +270,26 @@ export function EditBox({ m, ctx, onDone }: { m: AnyMsg; ctx: Ctx; onDone: () =>
     const el = area.current;
     if (el) { el.style.height = "auto"; el.style.height = Math.min(el.scrollHeight, 240) + "px"; }
   }, [text]);
-  const change = (v: string) => { spans.current = shift(spans.current, text, v).kept; setText(v); };
+  const change = (v: string) => setDraft(encode(v, shift(spans, text, v).kept));
   const save = async () => {
-    const body = encode(text, spans.current).trim();
+    const body = draft.trim();
     if (!body) return;
-    if (body === shownText(m)) { onDone(); return; }
+    if (body === shownText(m)) { cancel(); return; }
+    const confirmed = retained.capture();
     const r = await store.run((a) => a.edit({ ...controlRef(m, ctx), text: body }), "Edited");
-    if (r) onDone();
+    if (r) { confirmed(); onDone(); }
   };
   return (
     <div className="flex flex-col gap-2">
       <textarea ref={area} value={text} onChange={(e) => change(e.target.value)} rows={2} aria-label="New text"
         onKeyDown={(e) => {
-          if (e.key === "Escape") { e.preventDefault(); onDone(); }
+          if (e.key === "Escape") { e.preventDefault(); cancel(); }
           if (e.key === "Enter" && !e.nativeEvent.isComposing && (e.metaKey || e.ctrlKey || !e.shiftKey && !e.altKey)) { e.preventDefault(); void save(); }
         }}
         className="w-full resize-none rounded-xl bg-surface px-3 py-2 text-ink outline-none stroke focus-visible:outline-none" />
       {isRequest(m) && <p className="text-[13px] text-text-2">The agent keeps what it already got; nothing runs again.</p>}
       <div className="flex justify-end gap-2">
-        <Button size="sm" variant="ghost" onClick={onDone}>Cancel</Button>
+        <Button size="sm" variant="ghost" onClick={cancel}>Cancel</Button>
         <Button size="sm" variant="act" onClick={() => void save()} disabled={!text.trim()}>Save</Button>
       </div>
     </div>

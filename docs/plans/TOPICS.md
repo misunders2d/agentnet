@@ -140,11 +140,15 @@ was set on it here.
   ones too, through the same paged route; "Show more topics" pages on.
 
 All topics in Comic, Classic and Zoom offers checkboxes on desktop and phone.
-Select several topics, then Delete for me, Mark done or Archive. One
-confirmation starts a six-second Undo interval; no mutation is sent until
-that interval ends. Undo or closing the view cancels the pending action.
-Bulk Done carries each selected topic's displayed count, keeping messages
-that arrived during Undo active. In people chats it emits one shared event
+Select several topics, then Delete for me, Mark done or Archive. Review the
+exact count and scope, then confirm once. Comic calls the existing host API
+immediately and keeps the confirmation busy until the result; Cancel before
+Confirm sends nothing. Closing the panel does not cancel an already dispatched
+change. Archive is available in Archived, and Done can be reopened. Delete for
+me is irreversible and says so before Confirm. Other skins may offer a pending
+Undo before dispatch, but must never claim a change before the host result.
+The separate server-backed move/merge Undo remains available.
+Bulk Done carries each selected topic's displayed count, keeping newer messages active. In people chats it emits one shared event
 per topic. Each topic
 retains its normal archive/deletion scope. A partial failure reports how
 many topics changed and leaves the remaining topics unchanged.

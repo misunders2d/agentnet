@@ -937,10 +937,18 @@ func writeJSON(w http.ResponseWriter, v any) {
 	}
 }
 
-// writeErr answers with the provider's message for expected refusals and a
-// generic one otherwise.
+// writeErr distinguishes incomplete verified context from a failed request.
+// Pending readers keep their last view and resume on the existing change feed;
+// a response never supplies partial conversation data or grants send authority.
 func writeErr(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, client.ErrGroupContextPending):
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		writeJSON(w, map[string]string{
+			"code":    "group_context_pending",
+			"message": "Updating verified group details. Sending is paused until verification finishes.",
+		})
 	case errors.Is(err, ErrNotFound):
 		http.Error(w, strings.TrimSpace(err.Error()), http.StatusNotFound)
 	case errors.Is(err, ErrRefused):

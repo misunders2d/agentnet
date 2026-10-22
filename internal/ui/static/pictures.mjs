@@ -87,8 +87,9 @@ export function openPictureEditor({into, save, src="", current=""}) {
   return new Promise(resolve=>{
     const make=(tag,text)=>{const e=document.createElement(tag);if(text)e.textContent=text;return e;};
     const dialog=make("dialog"); dialog.setAttribute("aria-label","Your profile picture");
-    Object.assign(dialog.style,{boxSizing:"border-box",maxWidth:"calc(100vw - 24px)",width:"420px",maxHeight:"calc(100dvh - 24px)",overflowY:"auto",borderRadius:"16px",padding:"24px",background:"var(--an-surface, Canvas)",color:"var(--an-ink, CanvasText)",border:"2px solid currentColor",boxShadow:"5px 5px 0 var(--an-outline, currentColor)",font:"inherit"});
+    Object.assign(dialog.style,{boxSizing:"border-box",margin:"auto",maxWidth:"calc(100vw - 24px)",width:"420px",maxHeight:"calc(100dvh - 24px)",overflowY:"auto",borderRadius:"16px",padding:"24px",background:"var(--an-surface, Canvas)",color:"var(--an-ink, CanvasText)",border:"2px solid currentColor",boxShadow:"5px 5px 0 var(--an-outline, currentColor)",font:"inherit"});
     const heading=make("h2","Your profile picture"), note=make("p","Your picture is public on your workspace’s server. It does not prove who you are."), error=make("p");error.setAttribute("role","alert");
+    Object.assign(heading.style,{fontSize:"20px",fontWeight:"700",lineHeight:"1.3",margin:"0 0 12px"});
     const input=make("input");input.type="file";input.hidden=true;input.accept="image/png,image/jpeg,image/webp,image/gif";input.setAttribute("aria-label","Choose picture");
     const choose=make("button","Choose photo");choose.type="button";choose.onclick=()=>input.click();
     const canvas=make("canvas");canvas.width=canvas.height=256;canvas.tabIndex=0;Object.assign(canvas.style,{width:"min(256px, 100%)",height:"auto",display:"block",margin:"20px auto 12px",borderRadius:"50%",border:"2px solid currentColor",boxSizing:"border-box",touchAction:"none",cursor:"grab",background:"var(--an-sunken, #eee)"});canvas.setAttribute("aria-label","Picture crop preview");canvas.setAttribute("aria-description","Drag or use arrow keys to move. Scroll, pinch, or use plus and minus to zoom. Home resets.");

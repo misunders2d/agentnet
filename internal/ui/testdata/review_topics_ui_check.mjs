@@ -93,20 +93,44 @@ nodes(c.host.get()).find(n=>n.tag==='input'&&n.props.type==='search').props.onCh
 nodes(c.host.get()).find(n=>n.tag==='IconButton'&&n.props.label==='Clear search').props.onClick();await c.advance(1);assert.equal(nodes(c.host.get()).filter(n=>n.tag==='li').length,1,'clear preserves selected Done');
 nodes(c.host.get()).find(n=>n.tag==='input'&&n.props.type==='search').props.onChange({target:{value:'undefined'}});await c.advance(1);assert.equal(nodes(c.host.get()).filter(n=>n.tag==='li').length,0,'missing autoTitle cannot add a false search match');
 c.host.stop();
-// A confirmed batch survives closing/scope departure; only explicit Undo cancels it.
-for(const leave of ['close','scope','unmount','undo']){
- const f=component(),calls=[];let p={...props,open:true,flat:{...props.flat,topics:[row('exact')],change:async(...args)=>{calls.push(args);return {note:'Archived exact topic'};}}};
+// An explicit bulk confirmation dispatches immediately with its captured IDs.
+// Panel lifetime and repeated input cannot cancel or repeat that request.
+for(const what of ['archive','done','delete'])for(const leave of ['stay','close','scope','unmount','cancel']){
+ const f=component(),calls=[],notices=[],gate=deferred();
+ let p={...props,open:true,flat:{...props.flat,topics:[row('exact',2),{...row('second'),count:3}],change:(...args)=>{calls.push(args);return gate.promise;}}};
+ f.store.toast=(...args)=>notices.push(args);
  f.host.start(()=>f.exports.AllTopics(p));await drain();
  const button=label=>nodes(f.host.get()).find(n=>n.tag==='Button'&&n.props.children[0]===label);
- nodes(f.host.get()).find(n=>n.tag==='input'&&n.props.type==='checkbox').props.onChange();await drain();
- button('Archive').props.onClick();await drain();button('Confirm').props.onClick();await drain();
- if(leave==='undo')button('Undo').props.onClick();
- else if(leave==='unmount')f.host.stop();
- else{p={...p,...(leave==='close'?{open:false}:{conv:'other-chat'})};f.host.render();}
- await f.advance(1);
- assert.equal(calls.length,leave==='undo'?0:1,'confirmed batch '+leave+' must not silently disappear or repeat');
- if(calls.length){assert.equal(calls[0][0],'archive');assert.deepEqual(Array.from(calls[0][1]),['exact']);assert.equal(calls[0][2].exact,1);}
- f.host.stop();await f.advance(1);assert.equal(calls.length,leave==='undo'?0:1,'cleanup must not repeat a settled operation');
+ for(const id of ['exact','second']){nodes(f.host.get()).find(n=>n.tag==='input'&&n.props['aria-label']==='Select needle '+id).props.onChange();await drain();}
+ button(what==='delete'?'Delete for me':what==='done'?'Mark done':'Archive').props.onClick();await drain();
+ assert.equal(calls.length,0,'review alone makes no change');
+ if(what==='delete')assert(nodes(f.host.get()).some(n=>n.tag==='p'&&n.props.children.join('').includes("can't be undone")),'delete review states irreversibility');
+ if(leave==='cancel'){
+  button('Cancel').props.onClick();await drain();assert.equal(calls.length,0,'Cancel before confirmation makes no change');f.host.stop();continue;
+ }
+ const confirm=button('Confirm');confirm.props.onClick();confirm.props.onClick();await drain();
+ assert.equal(calls.length,1,'Confirm must dispatch once immediately, before any timer or navigation');
+ assert.equal(calls[0][0],what);assert.deepEqual(Array.from(calls[0][1]),['exact','second']);assert.deepEqual({...calls[0][2]},{exact:1,second:3});
+ assert.equal(notices.length,0,'no success before the host result');
+ const pending=nodes(f.host.get()).find(n=>n.tag==='Button'&&/^(Archiving|Marking|Deleting) 2/.test(String(n.props.children[0])));
+ assert(pending?.props.disabled,'pending confirmation stays visible and disabled');
+ assert(!button('Undo'),'no local timer is presented as a durable Undo');
+ if(leave==='unmount')f.host.stop();else if(leave!=='stay'){p={...p,...(leave==='close'?{open:false}:{conv:'other-chat'})};f.host.render();}
+ gate.resolve({note:'2 topics updated'});await drain();await f.advance(10000);
+ assert.equal(calls.length,1,'departure/result/timers never repeat a captured operation');
+ assert.deepEqual(notices,[['2 topics updated','ok']],'confirmed result survives panel departure');
+ f.host.stop();
+}
+// Partial results use the host report; refused/unknown actions never claim success.
+for(const result of [{note:'1 of 2 archived; 1 unchanged'},undefined,new Error('Permission changed')]){
+ const f=component(),notices=[];f.store.toast=(...args)=>notices.push(args);
+ f.host.start(()=>f.exports.AllTopics({...props,flat:{...props.flat,topics:[row('exact')],change:async()=>{if(result instanceof Error)throw result;return result;}}}));await drain();
+ const button=label=>nodes(f.host.get()).find(n=>n.tag==='Button'&&n.props.children[0]===label);
+ nodes(f.host.get()).find(n=>n.tag==='input'&&n.props.type==='checkbox').props.onChange();await drain();button('Archive').props.onClick();await drain();button('Confirm').props.onClick();await drain();
+ assert.deepEqual(notices,result&&!(result instanceof Error)?[[result.note,'ok']]:[],'only actual host success is announced; current modal errors stay local');
+ if(!result||result instanceof Error)assert(nodes(f.host.get()).some(n=>n.props.role==='alert'&&n.props.children.join('').includes(result instanceof Error?'Permission changed':"wasn't confirmed")),'failed confirmation is readable inside the active panel');
+ if(!result||result instanceof Error)assert(button('Confirm')&&!button('Confirm').props.disabled,'failure retains review for explicit retry');
+ f.host.stop();
 }
 // Keep existing non-flat query/filter/Show more scope assertions on actual TSX.
 for(const filter of ['Active','Done','Archived']){
@@ -152,6 +176,31 @@ const values=new Map(),listeners=new Set(),requests=[],conv='c'.repeat(64),topic
 const dm={id:conv,messages:[{id:mid,lid,dir:'out',topic,send_group_author:fp,kind:'message',body:'selected',unread:true,attention:{rev:4,writer:fp}}],topics:[{id:topic}],agents:[]};
 const host={platform:'daemon',workspace:{id:'test',handle:'h'},listen:fn=>{listeners.add(fn);return()=>listeners.delete(fn);},async api(path,body){requests.push({path,body});if(path.startsWith('/api/overview'))return {seq:requests.length,version:'test',me:{fingerprint:fp},dms:[],threads:[]};if(path.startsWith('/api/agents'))return{agents:[]};if(path.startsWith('/api/dm?')){if(loadGate)await loadGate.promise;return structuredClone(dm);}if(path.startsWith('/api/thread?'))return{id:'thread',peer:'peer/host',key:{pinned:fp},messages:[{id:mid,dir:'in',kind:'message',body:'device',unread:true}]};if(path.startsWith('/api/typing'))return{};if(path==='/api/act'&&body.do==='read')return{note:'Recorded exact read'};throw Error('Unexpected '+path);}};
 const Store=runInNewContext(scheduleSource+'\n'+storeSource+'\nStore',{api,errorText,pendingSends,share,messageTarget:model.messageTarget,currentCatalogAgents:model.currentCatalogAgents,directChatKey:model.directChatKey,mainPreferences,personRoots,brand:{storage:'test'},document:{visibilityState:'visible',hasFocus:()=>true},window:{},localStorage:{getItem:k=>values.get(k)||null,setItem:(k,v)=>values.set(k,v)},setTimeout:(f,ms)=>{const t=setTimeout(f,ms);t.unref();return t;},clearTimeout});
+// A typed verification wait retains the exact last view and draft without
+// claiming new membership or polling. Only a fresh successful view clears it.
+{
+ let mode='ready',held=null;
+ const h={...host,api:async(path,body)=>{
+  if(path.startsWith('/api/dm?')){
+   if(held){const g=held;held=null;return g.promise;}
+   if(mode==='pending')throw Object.assign(new Error('Updating verified group details.'),{code:'group_context_pending',status:503});
+   if(mode==='denied')throw new Error('Permission denied');
+   return {...structuredClone(dm),kind:'group',title:'Verified group'};
+  }
+  return host.api(path,body);
+ }};
+ const active=new Store(h);await active.start();await active.open({kind:'dm',id:conv});active.setDraft(conv,{text:'kept group draft'});
+ const before=active.get().views[conv];mode='pending';assert.equal(await active.refreshOpen(),false);
+ assert.equal(active.get().groupContextPending,conv,'typed pending group is visible as a verification wait');
+ assert.equal(active.get().views[conv],before,'pending does not replace a verified DTO with partial context');
+ assert.equal(active.draft(conv).text,'kept group draft');assert.equal(active.get().toasts.length,0,'verification wait is not a red error toast');
+ mode='ready';assert.equal(await active.refreshOpen(),true);assert.equal(active.get().groupContextPending,'');
+ const stale=deferred();held=stale;const old=active.loadOpen(active.get().open,true);await drain();
+ await active.loadOpen(active.get().open,true);stale.resolve(Promise.reject(Object.assign(new Error('old pending'),{code:'group_context_pending'})));await old;
+ assert.equal(active.get().groupContextPending,'','old wait cannot refreeze a newer successful projection');
+ mode='denied';await active.refreshOpen();assert(active.get().toasts.some(t=>t.text==='Permission denied'&&t.tone==='error'),'actual refusal remains an error');
+ active.close();assert.equal(active.get().groupContextPending,'');active.stop();
+}
 // F1: rows can already be reported while Review fences acknowledgement.
 // Returning to Chats must use that unchanged visible set, with entry/CAS intact.
 {

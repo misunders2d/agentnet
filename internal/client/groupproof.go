@@ -366,6 +366,13 @@ func (a *Agent) AcceptGroupContext(ctx context.Context, packet GroupContext) err
 // A forwarded state has authority of its original publisher. Its extra room
 // memberships require the exact authenticated carrier sender to vouch for them.
 func (a *Agent) acceptGroupContextFrom(ctx context.Context, packet GroupContext, sender identity.Public) error {
+	if len(packet.Proof) > 0 {
+		if m, e := terminalGroupMember(packet); e == nil {
+			if me, ok, e := a.store.selfPerson(a.Address); e == nil && ok && m.Person == me.roster.Person {
+				return a.acceptGroupTerminal(ctx, packet, sender)
+			}
+		}
+	}
 	if len(packet.Proof) != 0 {
 		return errors.New("group: forwarded context must contain only current state")
 	}
@@ -518,6 +525,13 @@ func (a *Agent) acceptGroupContext(ctx context.Context, packet GroupContext, for
 		return err
 	}
 	defer tx.Rollback()
+	terminal, older, err := a.terminalInstallCheck(tx, packet)
+	if err != nil {
+		return err
+	}
+	if older {
+		return nil
+	}
 	if forwarded {
 		if err = a.forwardedGroupTarget(tx, packet, withdrawals); err != nil {
 			return err
@@ -529,8 +543,23 @@ func (a *Agent) acceptGroupContext(ctx context.Context, packet GroupContext, for
 	} else if !allowed {
 		packet.Memberships = nil
 	}
-	if err = installGroupMembership(tx, packet, withdrawals); err != nil {
+	installWithdrawals := withdrawals
+	if terminal {
+		installWithdrawals = nil
+	}
+	if err = installGroupMembership(tx, packet, installWithdrawals); err != nil {
 		return err
+	}
+	if terminal {
+		me, ok, e := scanPersonIn(tx, "state = ?", personSelf)
+		if e != nil {
+			return e
+		}
+		if ok {
+			if e = stopRemovedGroupSends(tx, packet.State.Conv, groupRemovalNotice(tx, packet, me.roster.Person)); e != nil {
+				return e
+			}
+		}
 	}
 	if err = admitRoomMembershipProof(tx, packet); err != nil {
 		return err

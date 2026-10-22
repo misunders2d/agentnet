@@ -49,7 +49,7 @@ export function AgentSetupManager({catalog,onSaved}:{catalog:T.AgentCatalogView|
       <h4 className="font-semibold">{h?harnessName(h):"Program not recorded"}</h4>
       {agents.map(a=><div key={a.record.id} data-agent-setup={a.record.id} className="rounded-xl border border-outline p-3 [overflow-wrap:anywhere]">
         <p className="font-semibold">{a.record.label}{a.enabled&&a.default?" · Current":""}</p>
-        <p>{a.responder?.dir||"Folder not available; choose it when enabling."}</p>
+        <p>{a.responder?.dir||(a.enabled?"The folder could not be read on this device.":"Turned off. Its folder setting was cleared; choose the folder to turn it on again.")}</p>
         <p>{a.enabled?a.responder?.ready?"Enabled · Ready":"Enabled · Needs attention":"Disabled"}</p>
         {a.responder?.problem&&<p className="text-danger">{a.responder.problem}</p>}
         <div className="mt-2 flex flex-wrap gap-2">

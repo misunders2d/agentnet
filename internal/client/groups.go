@@ -292,6 +292,10 @@ func (a *Agent) decodeGroupCommit(ctx context.Context, c protocol.GroupCommit, p
 // PublishGroup persists the exact ciphertext before attempting CAS. A lost
 // response retries those same bytes; it never creates a replacement admission.
 func (a *Agent) PublishGroup(ctx context.Context, c protocol.GroupCommit, packet GroupContext, invitationID ...string) (protocol.GroupJournalResult, error) {
+	return a.publishGroup(ctx, c, packet, nil, invitationID...)
+}
+
+func (a *Agent) publishGroup(ctx context.Context, c protocol.GroupCommit, packet GroupContext, terminal *groupTerminalPublication, invitationID ...string) (protocol.GroupJournalResult, error) {
 	var result protocol.GroupJournalResult
 	// Completed exact attempts are receipts, never a second fan-out or an
 	// opportunity to reinstall an older current snapshot.
@@ -302,6 +306,11 @@ func (a *Agent) PublishGroup(ctx context.Context, c protocol.GroupCommit, packet
 	var completed int
 	var record, payload []byte
 	if err := a.store.db.QueryRow(`SELECT published,record,payload FROM group_publications WHERE conv=? AND bootstrap=? AND seq=?`, c.Conv, c.Bootstrap, c.Seq).Scan(&completed, &record, &payload); err == nil && completed == 1 {
+		var stored groupPublicationPayload
+		if err = json.Unmarshal(payload, &stored); err != nil {
+			return result, err
+		}
+		payload, _ = json.Marshal(stored.GroupContext)
 		raw, _ := json.Marshal(packet)
 		if !bytes.Equal(raw, payload) {
 			// Current-only producers accept the caller's locally supplied
@@ -368,17 +377,27 @@ func (a *Agent) PublishGroup(ctx context.Context, c protocol.GroupCommit, packet
 	if len(invitationID) > 0 && invitationID[0] != invitation {
 		return result, errors.New("group: pending publication invitation differs")
 	}
-	_, err = a.store.db.Exec("INSERT INTO group_publications(conv,bootstrap,seq,record,payload,invitation)VALUES(?,?,?,?,?,?) ON CONFLICT(conv,bootstrap,seq) DO NOTHING", c.Conv, c.Bootstrap, c.Seq, raw, want, invitation)
+	localPayload, _ := json.Marshal(groupPublicationPayload{GroupContext: packet, Terminal: terminal})
+	_, err = a.store.db.Exec("INSERT INTO group_publications(conv,bootstrap,seq,record,payload,invitation)VALUES(?,?,?,?,?,?) ON CONFLICT(conv,bootstrap,seq) DO NOTHING", c.Conv, c.Bootstrap, c.Seq, raw, localPayload, invitation)
 	if err != nil {
 		return result, err
 	}
 	var saved []byte
-	if err = a.store.db.QueryRow("SELECT record FROM group_publications WHERE conv=? AND bootstrap=? AND seq=?", c.Conv, c.Bootstrap, c.Seq).Scan(&saved); err != nil {
+	if err = a.store.db.QueryRow("SELECT record,payload FROM group_publications WHERE conv=? AND bootstrap=? AND seq=?", c.Conv, c.Bootstrap, c.Seq).Scan(&saved, &payload); err != nil {
 		return result, err
 	}
 	if !bytes.Equal(saved, raw) {
 		return result, errors.New("group: another publication is pending at this sequence")
 	}
+	var retained groupPublicationPayload
+	if err = json.Unmarshal(payload, &retained); err != nil {
+		return result, err
+	}
+	retainedContext, _ := json.Marshal(retained.GroupContext)
+	if !bytes.Equal(retainedContext, want) {
+		return result, errors.New("group: pending publication context changed")
+	}
+	terminal = retained.Terminal
 	// Binding metadata may be added to a legacy attempt; its original signed
 	// bytes and ciphertext never change. The new relay refuses all legacy appends.
 	if !bound.Valid {
@@ -421,19 +440,32 @@ func (a *Agent) PublishGroup(ctx context.Context, c protocol.GroupCommit, packet
 	if err = a.ensureGroupProof(ctx, packet.Root, c); err != nil {
 		return result, err
 	}
-	if completed, err := a.completeSupersededGroupPublication(c, exact, want); err != nil || completed {
-		return result, err
+	if terminal == nil {
+		if completed, err := a.completeSupersededGroupPublication(c, exact, want); err != nil || completed {
+			return result, err
+		}
 	}
 	release, err := lockfile.Wait(a.spoolLockPath())
 	if err != nil {
 		return result, err
 	}
 	defer release()
+	if current, e := a.GroupContext(c.Conv); e == nil && current.State.Seq > c.Seq && terminal != nil {
+		if completed, err := a.finishSupersededGroupTerminal(ctx, c, packet, terminal, exact); err != nil || completed {
+			return result, err
+		}
+	}
 	copies, err := a.groupDeliveryCopies(ctx, delivery)
 	if err != nil {
 		return result, err
 	}
 	contextCopies := copies
+	terminalCopies, err := a.groupTerminalCopies(ctx, terminal, delivery)
+	if err != nil {
+		a.releaseGroupCopies(copies)
+		return result, err
+	}
+	copies = append(copies, terminalCopies...)
 	resourceCopies, resourceCheck, err := a.groupResourcesPublicationCopies(ctx, delivery, invitation, contextCopies)
 	if err != nil {
 		a.releaseGroupCopies(copies)
@@ -469,6 +501,11 @@ func (a *Agent) PublishGroup(ctx context.Context, c protocol.GroupCommit, packet
 			}
 			if published == 1 {
 				return errGroupPublished
+			}
+			for _, copy := range terminalCopies {
+				if err := groupTerminalRecipient(tx, terminal, copy.env.To, copy.recipientFP); err != nil {
+					return err
+				}
 			}
 			for _, copy := range contextCopies {
 				var desc protocol.GroupCarrier
@@ -569,8 +606,9 @@ func (a *Agent) RecoverGroupPublications(ctx context.Context) error {
 		return err
 	}
 	type pending struct {
-		c protocol.GroupCommit
-		p GroupContext
+		c        protocol.GroupCommit
+		p        GroupContext
+		terminal *groupTerminalPublication
 	}
 	list := []pending{}
 	var failures []error
@@ -585,10 +623,12 @@ func (a *Agent) RecoverGroupPublications(ctx context.Context) error {
 			failures = append(failures, fmt.Errorf("group: invalid pending record retained: %w", err))
 			continue
 		}
-		if err = json.Unmarshal(payload, &v.p); err != nil {
+		var stored groupPublicationPayload
+		if err = json.Unmarshal(payload, &stored); err != nil {
 			failures = append(failures, fmt.Errorf("group %s: invalid pending context retained: %w", v.c.Conv, err))
 			continue
 		}
+		v.p, v.terminal = stored.GroupContext, stored.Terminal
 		list = append(list, v)
 	}
 	err = rows.Err()
@@ -597,7 +637,7 @@ func (a *Agent) RecoverGroupPublications(ctx context.Context) error {
 		return err
 	}
 	for _, v := range list {
-		if _, err = a.PublishGroup(ctx, v.c, v.p); err != nil {
+		if _, err = a.publishGroup(ctx, v.c, v.p, v.terminal); err != nil {
 			failures = append(failures, fmt.Errorf("recovering group %s sequence %d: %w", v.c.Conv, v.c.Seq, err))
 		}
 	}

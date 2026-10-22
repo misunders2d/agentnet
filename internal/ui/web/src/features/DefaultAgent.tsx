@@ -8,9 +8,10 @@
 import { Radio } from "@base-ui/react/radio";
 import { RadioGroup } from "@base-ui/react/radio-group";
 import { IconCheck } from "@tabler/icons-react";
-import { useEffect, useId, useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import type { T } from "../api";
 import { useApp } from "../context";
+import { useRetainedText } from "../retained-text";
 import { useStore } from "../store";
 import { AgentAvatar, PersonAvatar } from "../ui/Avatar";
 import { Button } from "../ui/Button";
@@ -34,22 +35,23 @@ export function DefaultAgentChoice({ view, saved, extra, inline = false, onCance
   const me = useStore(store, (s) => s.overview?.person);
   const id = useId();
   const current = !view.chosen ? "" : view.manual ? MANUAL : view.harness || "";
-  const [choice, setChoice] = useState(current);
-  const [dir, setDir] = useState(view.dir || "");
+  const signature = JSON.stringify(["default", view.agent_id, view.chosen, view.manual, view.harness, view.dir, view.timeout_seconds, view.context]);
+  const [choice, setChoice, retainedChoice] = useRetainedText(signature + ":choice", current);
+  const [dir, setDir, retainedDir] = useRetainedText(signature + ":dir", view.dir || "");
   const [busy, setBusy] = useState(false);
-  useEffect(() => { setChoice(current); setDir(view.dir || ""); }, [current, view.dir]);
   const harnesses = view.harnesses || [];
   const dirty = choice !== current || (choice !== MANUAL && dir.trim() !== (view.dir || ""));
   const canSave = dirty && !!choice && (choice === MANUAL || !!dir.trim());
-  const undo = () => { setChoice(current); setDir(view.dir || ""); };
+  const undo = () => { retainedChoice.discard(); retainedDir.discard(); };
   const ask = !canSave && choice !== MANUAL ? "Choose the folder it works in" : choice === MANUAL ? "Answer yourself?" : "Use " + harnessName(choice) + "?";
 
   const save = async () => {
+    const confirmedChoice = retainedChoice.capture(), confirmedDir = retainedDir.capture();
     setBusy(true);
     const change: T.ResponderChange = choice === MANUAL ? { manual: true, harness: "", dir: "" } : { manual: false, harness: choice, dir: dir.trim() };
     const r = await store.run((a) => a.setResponder(change));
     setBusy(false);
-    if (r) { store.toast(choice === MANUAL ? "Questions and tasks now wait for you." : harnessName(choice) + " answers for you from now on.", "ok"); saved(); }
+    if (r) { confirmedChoice(); confirmedDir(); store.toast(choice === MANUAL ? "Questions and tasks now wait for you." : harnessName(choice) + " answers for you from now on.", "ok"); saved(); }
   };
 
   return (
@@ -77,7 +79,7 @@ export function DefaultAgentChoice({ view, saved, extra, inline = false, onCance
 
       {inline ? (
         <div className="flex flex-wrap items-center justify-end gap-2">
-          {dirty && <p className="min-w-0 flex-1 text-[15px] font-semibold">{ask}</p>}
+          <p className="min-w-0 flex-1 text-[15px] font-semibold">{dirty?ask:"No changes to save."}</p>
           <Button variant="ghost" disabled={busy} onClick={() => { undo(); onCancel?.(); }}>Cancel</Button>
           <Button variant="act" disabled={!canSave || busy} onClick={save}>{busy ? "Saving…" : "Save"}</Button>
         </div>

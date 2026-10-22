@@ -20,7 +20,7 @@ export type Conn = "loading" | "live" | "lost" | "updating" | "gone";
 // A thread names its agent's device (peer) whenever that is known: an
 // agent's topics are one conversation on screen, and what is on screen must
 // not change identity when the messages arrive (store.open fills it in).
-export type Open = null | { kind: "dm"; id: string; focus?: string; focusSeq?: number; unread?: boolean } | { kind: "thread"; id: string; focus?: string; focusSeq?: number; unread?: boolean; peer?: string };
+export type Open = null | { kind: "dm"; id: string; focus?: string; preview?: string; focusSeq?: number; unread?: boolean } | { kind: "thread"; id: string; focus?: string; focusSeq?: number; unread?: boolean; peer?: string };
 
 // One ephemeral entry, never a second unread source. Its identity fences late
 // viewport callbacks; the first unread is frozen before any acknowledgement.
@@ -96,6 +96,7 @@ export interface State {
   toasts: Toast[];
   messageLanding: MessageLanding | null; // one exact notification, only for this mounted workspace
   loadError: string;
+  groupContextPending: string; // selected group keeps its last verified view while its new context arrives
   invite: null | { conv: string; selected?: string[]; who?: string; label?: string; topic?: string };  // the "Bring someone in" sheet
   section: string;                                        // the open settings section, when chosen from elsewhere
   agentNames: Record<string, string>;                     // agent ids → the names their owners gave them
@@ -171,7 +172,7 @@ export class Store {
     });
     this.state = {
       tab: "chats", overview: null, open: null, pending: null, views: {}, dm: null, thread: null, typing: null, invitations: [], reactionPending: {},
-      conn: "loading", version: "", newVersion: "", unsent: false, drafts: this.loadDrafts(), scheduleSaves:{}, toasts: [], messageLanding: null, loadError: "", invite: null, topicBusy: {}, panel: false, section: "", agentNames: {}, readVisit: null, contentRevision: 0,
+      conn: "loading", version: "", newVersion: "", unsent: false, drafts: this.loadDrafts(), scheduleSaves:{}, toasts: [], messageLanding: null, loadError: "", groupContextPending: "", invite: null, topicBusy: {}, panel: false, section: "", agentNames: {}, readVisit: null, contentRevision: 0,
     };
     const saved=host.workspaces?.state?.(host.workspace.id)?.comicDrafts as {handle?:string;open:Open;dm:T.DMThread|null;thread:T.Thread|null;tab:State['tab']}|undefined;
     if(saved&&saved.handle===host.workspace.handle)Object.assign(this.state,{open:saved.open,dm:saved.dm,thread:saved.thread,tab:saved.tab});
@@ -485,6 +486,9 @@ export class Store {
   }
 
   async openChat(o: Open) {
+    // A row's last_id identifies its actual root/topic, not an exact jump
+    // past older unread. Quotes and notifications use open/openMessage.
+    if (o?.kind === "dm" && o.focus) return this.open({ ...o, focus: undefined, preview: o.focus });
     if (o?.kind !== "dm" || o.focus) return this.open(o);
     const dm = this.state.overview?.dms?.find(d => d.id === o.id);
     const main = dm && this.personMain(dm);
@@ -502,7 +506,7 @@ export class Store {
     this.dismissMessageLanding();
     if (!o) { this.close(); return; }
     if (!o.focus) o = { ...o, unread: true };
-    if (o.focus) o = { ...o, focusSeq: ++this.focusSeq };
+    if (o.focus || o.kind === "dm" && o.preview) o = { ...o, focusSeq: ++this.focusSeq };
     if (o.kind === "thread" && !o.peer) {
       const id = o.id;
       const peer = (this.state.views[id] as T.Thread | undefined)?.peer || (this.state.overview?.threads || []).find((t) => t.id === id)?.peer;
@@ -590,7 +594,10 @@ export class Store {
     if (v) v = share(this.state.views[o.id], { ...v, messages: this.sends.merge<T.DMMessage | T.Message>(o.id, v.messages || []) } as View);
     // A request arrow chooses its actual topic, including Main flow. Keep
     // unsent text, staged files and reply intact; only the displayed topic changes.
-    const target = o.kind === "dm" && o.focus && o.focusSeq !== this.topicFocusSeq && v ? messageTarget((v as T.DMThread).messages || [], o.focus) : undefined;
+    // Resolve an ordinary preview only on the fresh entry. A prefetched
+    // copy may still name the message's previous topic.
+    const focus = o.kind === "dm" ? o.focus || (!this.readAcknowledged.entering ? o.preview : undefined) : undefined;
+    const target = o.kind === "dm" && focus && o.focusSeq !== this.topicFocusSeq && v ? messageTarget((v as T.DMThread).messages || [], focus) : undefined;
     if (target) this.topicFocusSeq = o.focusSeq || 0;
     const draft = this.draft(o.id);
     const drafts = target ? { drafts: { ...this.state.drafts, [o.id]: { ...draft, topic: target.topic || "", newTopic: false } } } : {};
@@ -788,7 +795,7 @@ export class Store {
     this.dismissMessageLanding();
     if (this.state.open) this.refreshed.delete(this.state.open.id);
     this.beginReadVisit();
-    this.set({ open: null, pending: null, dm: null, thread: null, typing: null, readVisit: null, ...(review?{tab:"oks" as const}:{}) });
+    this.set({ open: null, pending: null, dm: null, thread: null, typing: null, readVisit: null, groupContextPending: "", ...(review?{tab:"oks" as const}:{}) });
   }
 
   // loadOpen loads o (the open conversation, or the one being opened) and
@@ -798,6 +805,7 @@ export class Store {
     if (!o) return false;
     const visit = this.readAcknowledged;
     const wanted = () => this.alive && (this.state.open === o || this.state.pending === o);
+    let request: Promise<View> | undefined;
     try {
       // Being opened: a prefetch already under way for it is that load.
       let ahead = fresh ? undefined : this.fetching.get(o.id);
@@ -808,6 +816,7 @@ export class Store {
         const loading = ahead;
         void ahead.finally(() => { if (this.fetching.get(o.id) === loading) this.fetching.delete(o.id); }).catch(() => {});
       }
+      request = ahead;
       const loaded: View = await ahead;
       if (!this.alive) return false;
       if (this.latestFetch.get(o.id) === ahead) this.keep(o.id, loaded);
@@ -823,7 +832,9 @@ export class Store {
         visit.entry = new Map((v.messages || []).filter(m => m.attention).map(m => [m.id, this.readKey(m)]));
         visit.entering = null;
       }
-      this.set({ ...(first ? { open: o, pending: null } : {}), ...this.viewPatch(o, v, this.state.open?.id === o.id) });
+      this.set({ ...(first ? { open: o, pending: null } : {}),
+        ...(this.state.groupContextPending === o.id && this.latestFetch.get(o.id) === ahead ? {groupContextPending: ""} : {}),
+        ...this.viewPatch(o, v, this.state.open?.id === o.id) });
       this.settleReactions(o, v, ahead);
       // A newer deliberate mark/arrival may follow a confirmed read while
       // its older overview is still blocked. Advance that exact snapshot too.
@@ -834,10 +845,13 @@ export class Store {
       if (o.kind === "dm") void this.loadTyping();
       return true;
     } catch (e) {
+      const groupPending = o.kind === "dm" && e !== null && typeof e === "object" && "code" in e && e.code === "group_context_pending";
+      if (groupPending && this.latestFetch.get(o.id) !== request) return false;
       if (!this.fetching.has(o.id) && !this.state.views[o.id]) this.latestFetch.delete(o.id);
       if (!wanted()) return false;
       // Its placeholder then says it is still opening, with Try again.
       if (this.state.pending === o) this.set({ open: o, pending: null, dm: null, thread: null, typing: null });
+      if (groupPending) { this.set({groupContextPending: o.id}); return false; }
       this.toast(errorText(e), "error");
       return false;
     }
@@ -1055,7 +1069,7 @@ export class Store {
     }
     const o = this.state.open, view = this.state.views[conv];
     this.set({ drafts, ...(selected && o && view ? { readVisit: this.prepareReadScope(o, view, d) } : {}),
-      ...(selected && topicSelected && o && !this.readAcknowledged.entering ? { open: { ...o, focus: undefined, focusSeq: undefined, unread: true } } : {}) });
+      ...(selected && topicSelected && o && !this.readAcknowledged.entering ? { open: { ...o, focus: undefined, ...(o.kind === "dm" ? { preview: undefined } : {}), focusSeq: undefined, unread: true } } : {}) });
     this.saveDrafts(drafts);
     if (selected) this.markOpenRead();
   }

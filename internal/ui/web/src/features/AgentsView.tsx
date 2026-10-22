@@ -174,7 +174,7 @@ function NamedAgents({ o, catalog }: { o: T.Overview; catalog: Load<T.AgentCatal
       </div>
       {(sheet?.agent||available.length>0)&&<AgentSheet open={!!sheet} onOpenChange={(v) => !v && setSheet(null)} harnesses={sheet?.agent?editable:available} agent={sheet?.agent} onSave={save} />}
       <ConfirmSheet open={!!off} onOpenChange={(v) => !v && setOff(null)} title={"Turn off " + (off?.record.label || "") + "?"}
-        body="It stops taking questions and tasks on this computer. Earlier messages stay. You can turn it on again."
+        body={"It stops taking questions and tasks on this computer. Earlier messages stay. You can turn it on again."+(off?.default?" Requests that don't name an agent will wait for you. Turning it on again won't restore the default; choose this agent as the default again when you want it to answer those requests.":"")}
         confirm="Turn off" tone="danger" onConfirm={() => void change({ action: "disable", id: off!.record.id }, (off?.record.label || "It") + " is off.")} />
     </>
   );

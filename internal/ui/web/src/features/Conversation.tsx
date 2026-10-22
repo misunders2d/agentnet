@@ -54,6 +54,7 @@ function OpenView({ open }: { open: NonNullable<Open> }) {
   const wide = useWide();
   const leaving = useLeaving();
   const view = useStore(store, (s) => s.views[open.id]);
+  const groupPending = useStore(store, (s) => s.groupContextPending === open.id);
   const overview = useStore(store, (s) => s.overview);
   const names = useAgentNames();
   const [selected, setSelected] = useState<string[] | null>(null);
@@ -61,7 +62,9 @@ function OpenView({ open }: { open: NonNullable<Open> }) {
   const [contribute, setContribute] = useState(false);
   const [left, setLeft] = useState<Helper | null>(null);
 
-  const t = open.kind === "dm" && view && view.id === open.id ? view as T.DMThread : null;
+  const t = useMemo(() => open.kind === "dm" && view && view.id === open.id
+    ? groupPending ? {...view, frozen: "Updating verified group details. Sending is paused until verification finishes."} as T.DMThread : view as T.DMThread
+    : null, [open.kind, open.id, view, groupPending]);
   const th = open.kind === "thread" && view ? view as T.Thread : null;
   const ctx: Ctx = useMemo(() => ({
     conv: t?.id ?? th?.id ?? open.id, dm: t, thread: th, overview, names, // the Composer's draft key
@@ -142,6 +145,7 @@ function Loading({ o }: { o: NonNullable<Open> }) {
   const store = useApp();
   const wide = useWide();
   const overview = useStore(store, (s) => s.overview);
+  const groupPending = useStore(store, (s) => s.groupContextPending === o.id);
   const names = useAgentNames();
   const [slow, setSlow] = useState(false);
   useEffect(() => { const x = setTimeout(() => setSlow(true), 6000); return () => clearTimeout(x); }, []);
@@ -178,7 +182,8 @@ function Loading({ o }: { o: NonNullable<Open> }) {
           <span key={i} data-skeleton style={{ animationDelay: i * 90 + "ms" }}
             className={"an-sketch h-10 rounded-[20px] border-[1.5px] border-outline/30 shadow-[2px_2px_0_0_rgb(27_21_48/.08)] " + w + (mine ? " self-end rounded-br-md bg-mine" : " rounded-bl-md bg-surface")} />
         ))}
-        {slow && (
+        {groupPending && <p role="status" className="mt-2 self-center text-[14px] text-text-2">Updating verified group details. Sending is paused until verification finishes.</p>}
+        {slow && !groupPending && (
           <p className="mt-2 self-center text-[14px] text-text-2">
             Still opening…{" "}
             <button type="button" onClick={() => { const c = store.get().open; if (c) void store.open({ ...c }); }} className="min-h-11 font-semibold text-agent-ink underline underline-offset-2">Try again</button>

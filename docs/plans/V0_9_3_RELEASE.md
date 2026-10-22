@@ -38,12 +38,29 @@ hashes, platform distinctions and timing limitations are in the batch checklist
 and private evidence inventory. A focused pass does not replace the gates below.
 
 The corrective canonical build and vet pass with entry SHA256
-`b97e4b62ce084678205c048f630c643e4d7ae951f10cf05c01fdcd8ebe6c24cc`.
+`2a4dbec983068d4f465234ee8102a6b8ba8a1ba6748cff5cafca289ec4eacdfe`.
 Current fixes also bound group/list roster rendering without losing search,
 selection or consent, and expose setup refusal/Back return context. Rejected
 page-size/presence/focus proposals remain out of production. Seventeen timing
 workloads are wired into the existing desktop builds and Android qualification;
 the remaining named timing branches and complete platform runs remain open.
+
+The final canonical focused selection passes nine existing model/rendered
+parents in44.448s, including nonempty key/quarantine review, picture controls,
+topic selection, host routes and package/workspace contracts. Responsive draft
+retention passes its focused parent29.916s, using a full-App Edit journey plus
+seven real forms and a captured-entry confirmation fence. Standalone typed
+group-pending adapters pass24 focused tests48.687s with GE1/Q1/Back behavior
+preserved. Final gallery pin/build and independent review remain required.
+
+Canonical affected timing checks verify870 actions across normal/reduced motion
+and1440/390 widths. Measured fixed waits were corrected: Sheet close about297ms
+to161–170ms completed visibility; topic search about267ms to135–157ms. Every API,
+projection and paint stage remains separate. Other chat-open/menu observations
+above200ms remain recorded; one existing-trace review did not reproduce those
+spikes or establish another minimal corrective seam. This is not complete P1
+acceptance. Actual isolated platform qualification and the final GUI review
+remain open.
 
 ## Required gates still open
 

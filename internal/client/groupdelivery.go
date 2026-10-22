@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"strings"
 	"time"
 
 	"filippo.io/age"
@@ -29,46 +30,63 @@ var errGroupRecipientNotCurrent = errors.New("group: recipient exact key is not 
 func (a *Agent) completeSupersededGroupPublication(c protocol.GroupCommit, exact, payload []byte) (bool, error) {
 	completed := false
 	err := a.store.addConvOutbox(nil, envelope.Inner{}, func(tx *sql.Tx, _ string) error {
-		var oldRecord, oldPayload, currentRaw []byte
+		var oldRecord, oldPayload []byte
 		if err := tx.QueryRow(`SELECT record,payload FROM group_publications WHERE conv=? AND bootstrap=? AND seq=?`, c.Conv, c.Bootstrap, c.Seq).Scan(&oldRecord, &oldPayload); err != nil {
 			return err
 		}
 		if !bytes.Equal(oldRecord, exact) || !bytes.Equal(oldPayload, payload) {
-			return errors.New("group: superseded publication bytes changed")
+			var saved groupPublicationPayload
+			if json.Unmarshal(oldPayload, &saved) != nil {
+				return errors.New("group: superseded publication bytes changed")
+			}
+			base, _ := json.Marshal(saved.GroupContext)
+			if !bytes.Equal(oldRecord, exact) || !bytes.Equal(base, payload) {
+				return errors.New("group: superseded publication bytes changed")
+			}
 		}
-		if err := tx.QueryRow(`SELECT payload FROM group_context WHERE conv=?`, c.Conv).Scan(&currentRaw); errors.Is(err, sql.ErrNoRows) {
+		if eligible, e := groupSupersedingPublication(tx, c); e != nil {
+			return e
+		} else if !eligible {
 			return nil
-		} else if err != nil {
-			return err
 		}
-		var current GroupContext
-		if err := json.Unmarshal(currentRaw, &current); err != nil {
-			return err
-		}
-		if current.State.Seq <= c.Seq || current.Root.ID() != c.Conv || current.Root.Creator.Fingerprint != c.Bootstrap {
-			return nil
-		}
-		var newerRecord []byte
-		if err := tx.QueryRow(`SELECT record FROM group_publications WHERE conv=? AND bootstrap=? AND seq=? AND published=1`, c.Conv, c.Bootstrap, current.State.Seq).Scan(&newerRecord); errors.Is(err, sql.ErrNoRows) {
-			return nil
-		} else if err != nil {
-			return err
-		}
-		original, err := groupProofRecord(tx, c.Conv, c.Bootstrap, current.State.Seq)
-		if err != nil {
-			return err
-		}
-		raw, _ := json.Marshal(original)
-		if !bytes.Equal(raw, newerRecord) || !original.Matches(current.State) {
-			return errors.New("group: superseding publication differs from verified installed state")
-		}
-		if _, err = tx.Exec(`UPDATE group_publications SET published=1 WHERE conv=? AND bootstrap=? AND seq=?`, c.Conv, c.Bootstrap, c.Seq); err != nil {
+		if _, err := tx.Exec(`UPDATE group_publications SET published=1 WHERE conv=? AND bootstrap=? AND seq=?`, c.Conv, c.Bootstrap, c.Seq); err != nil {
 			return err
 		}
 		completed = true
 		return nil
 	}, "")
 	return completed, err
+}
+
+func groupSupersedingPublication(q dbq, c protocol.GroupCommit) (bool, error) {
+	var currentRaw []byte
+	if err := q.QueryRow(`SELECT payload FROM group_context WHERE conv=?`, c.Conv).Scan(&currentRaw); errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	var current GroupContext
+	if err := json.Unmarshal(currentRaw, &current); err != nil {
+		return false, err
+	}
+	if current.State.Seq <= c.Seq || current.Root.ID() != c.Conv || current.Root.Creator.Fingerprint != c.Bootstrap {
+		return false, nil
+	}
+	var newerRecord []byte
+	if err := q.QueryRow(`SELECT record FROM group_publications WHERE conv=? AND bootstrap=? AND seq=? AND published=1`, c.Conv, c.Bootstrap, current.State.Seq).Scan(&newerRecord); errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	original, err := groupProofRecord(q, c.Conv, c.Bootstrap, current.State.Seq)
+	if err != nil {
+		return false, err
+	}
+	raw, _ := json.Marshal(original)
+	if !bytes.Equal(raw, newerRecord) || !original.Matches(current.State) {
+		return false, errors.New("group: superseding publication differs from verified installed state")
+	}
+	return true, nil
 }
 
 // groupDeliveryRecipient checks the candidate committed snapshot and latest
@@ -337,13 +355,16 @@ func (a *Agent) releaseGroupCopies(copies []outCopy) {
 }
 
 func (a *Agent) mayDeliverGroup(env envelope.Envelope) (bool, bool, error) {
-	var sub, state, body, conv, pid string
-	err := a.store.db.QueryRow(`SELECT coalesce(sub,''),state,body,conv,coalesce(pid,'') FROM outbox WHERE id=?`, env.ID).Scan(&sub, &state, &body, &conv, &pid)
+	var sub, state, body, conv, pid, grant string
+	err := a.store.db.QueryRow(`SELECT coalesce(sub,''),state,body,conv,coalesce(pid,''),coalesce(group_admission,'') FROM outbox WHERE id=?`, env.ID).Scan(&sub, &state, &body, &conv, &pid, &grant)
 	if err != nil || sub != envelope.SubGroupProof && sub != envelope.SubGroupContext {
 		return false, false, nil
 	}
 	if state != stateQueued {
 		return true, false, nil
+	}
+	if strings.HasPrefix(grant, "terminal:") {
+		return a.mayDeliverGroupTerminal(env, sub, body, grant)
 	}
 	var descriptor protocol.GroupCarrier
 	if err = decodeStrict([]byte(body), &descriptor); err == nil {
@@ -461,7 +482,7 @@ func (a *Agent) admitGroupCarrier(ctx context.Context, env envelope.Envelope, in
 		if err = decodeGroupCarrierJSON(data, &packet); err == nil {
 			x, _ := json.Marshal(root)
 			y, _ := json.Marshal(packet.Root)
-			if !bytes.Equal(x, y) || packet.State.Seq != descriptor.Seq || packet.State.Hash() != descriptor.Hash || len(packet.Proof) != 0 {
+			if !bytes.Equal(x, y) || packet.State.Seq != descriptor.Seq || packet.State.Hash() != descriptor.Hash {
 				err = errors.New("group: context descriptor/root differs")
 			}
 		}

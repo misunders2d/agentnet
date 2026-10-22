@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { errorText, type Api, type T } from "../api";
 import { useApp } from "../context";
+import { useRetainedText } from "../retained-text";
 import { niceDevice } from "../model";
 import { sendID } from "../optimistic.mjs";
 import { Button } from "../ui/Button";
@@ -60,14 +61,21 @@ async function keptAssignment(api: Api, draft: T.Draft, owner: string, hostKey: 
 
 export function AssignMessage({ m, ctx, open, onOpenChange }: {m: AnyMsg; ctx: Ctx; open: boolean; onOpenChange: (open: boolean) => void}) {
   const [sending, setSending] = useState(false);
-  return <Sheet open={open} onOpenChange={value => { if (!sending) onOpenChange(value); }} title="Assign to your agent">
-    {open && <AssignmentForm m={m} ctx={ctx} onSending={setSending} onDone={() => onOpenChange(false)} />}
+  const [targetKey, setTargetKey] = useState("");
+  const host = targetKey.split("#")[0], o = ctx.overview;
+  const key = host === o?.me.address ? o.me.fingerprint : o?.person?.devices?.find(d => d.address === host)?.fingerprint;
+  const [instruction, setInstruction, retainedText] = useRetainedText(JSON.stringify(["assign", ctx.conv, m.dir, assignmentSnapshot(m), targetKey, key]), "Handle the request in this message.");
+  return <Sheet open={open} onOpenChange={value => { if (!sending) { if (!value) retainedText.discard(); onOpenChange(value); } }} title="Assign to your agent">
+    {open && <AssignmentForm m={m} ctx={ctx} targetKey={targetKey} setTargetKey={setTargetKey} instruction={instruction} setInstruction={setInstruction}
+      captureText={retainedText.capture} onSending={setSending} onDone={() => onOpenChange(false)} />}
   </Sheet>;
 }
 
-function AssignmentForm({ m, ctx, onDone, onSending }: {m: AnyMsg; ctx: Ctx; onDone: () => void; onSending: (busy: boolean) => void}) {
+function AssignmentForm({ m, ctx, onDone, onSending, targetKey, setTargetKey, instruction, setInstruction, captureText }: {
+  m: AnyMsg; ctx: Ctx; onDone: () => void; onSending: (busy: boolean) => void;
+  targetKey: string; setTargetKey: (value: string) => void; instruction: string; setInstruction: (value: string) => void; captureText: () => () => void;
+}) {
   const store = useApp(), [targets, setTargets] = useState<AgentChatTarget[] | null>(null), [problems, setProblems] = useState<string[]>([]);
-  const [targetKey, setTargetKey] = useState(""), [instruction, setInstruction] = useState("Handle the request in this message.");
   const files = assignmentFiles(m), available = files.filter(f => f.openable);
   const [chosen, setChosen] = useState(() => new Set(available.map(f => f.index)));
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
@@ -90,9 +98,11 @@ function AssignmentForm({ m, ctx, onDone, onSending }: {m: AnyMsg; ctx: Ctx; onD
     e.preventDefault();
     const target = targets?.find(t => targetID(t) === targetKey);
     if (sending.current || !target || target.unavailable || !instruction.trim() || problem || !current()) return;
+    const confirmedText = captureText();
     sending.current = true; setBusy(true); onSending(true); setError("");
     const staged: unknown[] = [];
     const complete = async (result: T.Sent) => {
+      confirmedText();
       if (!current()) return;
       store.toast("Task kept for " + target.label, "ok"); onDone();
       void store.refetch();

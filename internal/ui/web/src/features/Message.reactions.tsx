@@ -135,8 +135,8 @@ export function EmojiDialog({ open, onOpenChange, m, ctx }: { open: boolean; onO
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange} modal="trap-focus">
       <Dialog.Portal container={portal}>
-        <Dialog.Backdrop className="fixed inset-0 z-40 bg-scrim/40 transition-opacity duration-200 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0" />
-        <Dialog.Popup {...modal} className="fixed bottom-[calc(var(--an-keyboard,0px)_+_12px)] left-1/2 z-50 -translate-x-1/2 outline-none transition-[opacity,translate] duration-[280ms] ease-out-soft data-[starting-style]:translate-y-8 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 motion-reduce:transition-opacity">
+        <Dialog.Backdrop className="fixed inset-0 z-40 bg-scrim/40 transition-opacity duration-[120ms] data-[starting-style]:opacity-0 data-[ending-style]:opacity-0" />
+        <Dialog.Popup {...modal} className="fixed bottom-[calc(var(--an-keyboard,0px)_+_12px)] left-1/2 z-50 -translate-x-1/2 outline-none transition-[opacity,translate] duration-[140ms] ease-out-soft data-[starting-style]:translate-y-8 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 motion-reduce:transition-opacity">
           <Dialog.Title className="sr-only">Choose a reaction</Dialog.Title>
           <EmojiPicker onPick={(e) => { react(e, mine.includes(e)); onOpenChange(false); }} onClose={() => onOpenChange(false)} />
         </Dialog.Popup>

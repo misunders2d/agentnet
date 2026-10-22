@@ -60,6 +60,7 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
   const [error, setError] = useState("");
   const alive = useRef(true);
   const heading = useRef<HTMLHeadingElement>(null);
+  const errorBox = useRef<HTMLParagraphElement>(null);
   const moved = useRef(false);
   const statusRead = useRef(false);
   const statusGeneration = useRef(0);
@@ -79,7 +80,7 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
     });
   }, [browser, calls, store]);
   // A new step moves focus to its title, as the old setup did (not on first show).
-  useEffect(() => { if (moved.current) heading.current?.focus({ preventScroll: true }); moved.current = true; }, [stage]);
+  useEffect(() => { if (moved.current) heading.current?.focus(); moved.current = true; }, [stage]);
 
   const fail = (e: unknown) => { if (alive.current) { setBusy(""); setError(errorText(e)); } };
 
@@ -115,7 +116,7 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
 
   const toReview = async () => {
     if (busy) return;
-    if (missing) { setError(missing); return; }
+    if (missing) { setError(missing); requestAnimationFrame(() => { if (alive.current && store.isActive()) errorBox.current?.focus(); }); return; }
     statusGeneration.current++;
     setBusy("review"); setError("");
     try {
@@ -183,7 +184,7 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
     <Card className="p-4">
       <section aria-label={CARD_TITLE} aria-busy={!!busy} className="space-y-4">
         {head(TITLE[stage])}
-        {error && <p role="alert" className="rounded-2xl bg-danger-bg px-3.5 py-2.5 text-[15px] font-semibold text-danger">{error}</p>}
+        {error && <p ref={errorBox} tabIndex={-1} role="alert" className="rounded-2xl bg-danger-bg px-3.5 py-2.5 text-[15px] font-semibold text-danger">{error}</p>}
 
         {stage === "home" && <>
           <p className="text-[15px] text-text-2">Set up a Claude Code, Codex, Pi or OMP agent for chats, questions and approved tasks. It uses your own settings, skills, plugins and sign-in.</p>

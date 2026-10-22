@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/misunders2d/agentnet/internal/client"
 	"github.com/misunders2d/agentnet/internal/envelope"
@@ -15,6 +18,34 @@ import (
 
 func TestComicDeliberateUnreadStore(t *testing.T) {
 	runNodeCheck(t, "testdata/deliberate_unread_store_check.mjs")
+}
+
+// Seed the ordinary ChatList/Store producer with the public Go DTOs. The
+// rendered fixture supplies last_id and unread rows; it never supplies an
+// entry state or a firstUnread hint to the component.
+func TestNormalRowUnreadRendered(t *testing.T) {
+	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
+		t.Skip("opt-in: set AGENTNET_PLAYWRIGHT")
+	}
+	f := NewFixture(time.Now)
+	if _, _, err := f.CreatePerson("Alice"); err != nil {
+		t.Fatal(err)
+	}
+	conv, err := f.NewDM("vitalii/laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	overview, _ := f.Overview()
+	view, _ := f.DM(conv)
+	seed, err := json.Marshal(map[string]any{"overview": overview, "view": view})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(t.TempDir(), "seed.json")
+	if err := os.WriteFile(file, seed, 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Log(browserCheck(t, "testdata/normal_row_unread_rendered.cjs", file))
 }
 
 func TestComicVisibleUnreadRows(t *testing.T) {

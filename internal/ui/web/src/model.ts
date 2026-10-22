@@ -90,7 +90,7 @@ export const TOPICS = {
   barTitle: 40,       // characters of a topic's name in a bar chip (the chip truncates further)
   listTitle: 90,      // characters of a topic's name in the All topics list
   pageSize: 30,       // topics fetched per page of the All topics list
-  searchDelay: 250,   // ms after the last keystroke before a topic search is sent
+  searchDelay: 120,   // coalesce typing without delaying results beyond an ordinary interaction
   searchMin: 2,       // characters before the chat list also searches older topics
   chatSearchMax: 8,   // topics the chat list's search shows
   // The server's limits, pinned to client/topics.go by internal/ui topics_browser_test.go:

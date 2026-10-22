@@ -5189,7 +5189,7 @@ export class Engine {
     return { id:conv, kind:"group", root:g.root, created:p.root.created, creator:p.root.creator.address };
   }
 
-  async groupThread(conv, read = null) {
+  async groupThread(conv, read = null, requireCurrent = false) {
     read ||= await this.readView(conv);
     const g=await this.store.get("kv","group/"+conv), packet=wire.parseGroupContext(g.context);
     let frozen="",members=[],infos=[],role="";
@@ -5197,11 +5197,15 @@ export class Engine {
       if(members.some(p=>p.person===this.me.person))role="member";
       else if(infos.some(i=>i.external&&i.host?.address===this.address&&i.host.fingerprint===this.fp&&["invited","active","dismissed"].includes(i.state)&&!i.held))role=infos.some(i=>i.role==="human"&&i.host?.address===this.address&&i.host.fingerprint===this.fp)?"human_guest":"visitor";
       else throw Error("Group current admission or visitor invitation is unavailable.");
-    }catch(e){frozen=e.message;members=await this.groupPeople(packet).catch(()=>[]);}
+    }catch(e){
+      if(requireCurrent&&e?.reason==="proof_pending")throw Object.assign(new Error("Updating verified group details. Sending is paused until verification finishes."),{code:"group_context_pending"});
+      frozen=e.message;members=await this.groupPeople(packet).catch(()=>[]);
+      const removal=await this.groupTerminalNotice(packet);if(removal){frozen=removal;role="former_member";}
+    }
     const inbox=read.inbox,outbox=read.outbox,ctls=[...inbox,...outbox].filter(r=>r.control&&r.conv===conv);
     const privateReports = await this.ownNeedsYouReports(inbox, outbox);
     const visitorPIDs=new Set(infos.filter(i=>i.external&&i.host?.address===this.address&&i.host.fingerprint===this.fp).map(i=>i.pid));
-    const messages=(await this.convMessages(conv,inbox,outbox,read)).filter(m=>role==="member"||visitorPIDs.has(m.pid||m.excerpt_pid)||m.human?.audience.some(s=>visitorPIDs.has(s.pid))),shownReply=linkReplies(messages,this.fp);
+    const messages=(await this.convMessages(conv,inbox,outbox,read)).filter(m=>role==="member"||role==="former_member"||visitorPIDs.has(m.pid||m.excerpt_pid)||m.human?.audience.some(s=>visitorPIDs.has(s.pid))),shownReply=linkReplies(messages,this.fp);
     const personLabel=pid=>pid===this.me.person?"You":members.find(p=>p.person===pid)?.label||"Someone", words=await this.peerWordsFn(read);
     const agentCards=new Map();
     for(const i of infos) {
@@ -5247,6 +5251,7 @@ export class Engine {
   }
 
   async groupSendGate(c, rec) {
+    if(rec?.group_terminal)return this.groupTerminalGate(rec);
     if(rec?.forwarded)return this.disclosureGate(c,rec);
     if(rec?.group_withdrawal)return this.groupWithdrawalGate(rec);
     if(rec?.control && [wire.SubReaction,wire.SubRevision,wire.SubRetraction].includes(rec.sub)) {
@@ -5350,7 +5355,7 @@ export class Engine {
     const key = await this.pubOf(pin), bytes = new TextEncoder().encode(typeof value === "string" ? value : JSON.stringify(value));
     const limit = [wire.SubGroupContext,wire.SubGroupInvite,wire.SubGroupConsent].includes(sub) ? wire.MaxGroupState : wire.MaxBody-1024;
     if (!bytes.length || bytes.length > limit) throw Error("Group carrier exceeds bound.");
-    const sealed = await wire.encryptFile(bytes,sub + ".json",key), id = wire.newID(), lid = wire.newID();
+    const sealed = await wire.encryptFile(bytes,sub + ".json",key), id = extra.terminal_id || wire.newID(), lid = extra.terminal_id || wire.newID();
     const body = wire.groupCarrierJSON({...descriptor,to_key:pin.fingerprint});
     const envelope = await wire.seal({v:wire.Version2,id,from:this.address,to:device.address,ts:Math.floor(this.now()/1000),kind:"message",body,conv:await wire.rootID(root),lid,root:wire.rootJSON(root),sub,...(extra.pid?{pid:extra.pid}:{}),attachments:[sealed.attachment]},this.keys,key);
     const needsSnapshots=sub===wire.SubGroupContext&&wire.parseGroupContext(typeof value==="string"?JSON.parse(value):value).memberships?.some(e=>e.snapshots?.length);
@@ -5379,13 +5384,144 @@ export class Engine {
     return conv;
   }
 
+  // Original signed terminal states disclose only the end of this exact
+  // admission. This separate recipient class never authorizes ordinary traffic.
+  async groupTerminalMember(packet) {
+    const proof=packet.proof||[],next=packet.state,prev=proof.at(-1);
+    if(!prev||proof.length>4096||packet.memberships?.length||next.v!==prev.v||next.conv!==prev.conv||next.realm!==prev.realm||next.seq!==prev.seq+1||next.prev!==await wire.groupStateHash(prev)||next.title!==prev.title)throw Error("Terminal context changed more than membership.");
+    const effective=await wire.effectiveGroupMembers(prev,packet.withdrawals||[]),same=(a,b)=>wire.groupStateJSON({...prev,members:[a]})===wire.groupStateJSON({...prev,members:[b]});
+    let removed=null,i=0;
+    for(const m of effective){if(i<next.members.length&&same(m,next.members[i])){i++;continue;}if(removed)throw Error("Terminal context has unexplained membership/role/admission change.");removed=m;}
+    if(!removed||i!==next.members.length||effective.length!==next.members.length+1||next.actor===removed.person)throw Error("Terminal context is not another administrator's exact removal.");
+    const hash=await wire.groupAdmissionHash(removed.admission),admin=wire.groupMember(prev,next.actor);
+    if((packet.withdrawals||[]).some(w=>w.person===removed.person&&w.admission===hash)||!admin?.admin||await wire.groupWithdrawn(prev,admin,packet.withdrawals||[]))throw Error("Terminal actor or exact prior admission differs.");
+    return removed;
+  }
+
+  async prepareGroupTerminal(prior,next,person,g,checks,withdrawals) {
+    const member=wire.groupMember(prior.state,person);if(!member||person===next.state.actor)return null;
+    const pins=[];for(const w of withdrawals||[]){const m=wire.groupMember(prior.state,w.person);if(m&&!m.admin&&await wire.groupAdmissionHash(m.admission)===w.admission&&!pins.some(x=>wire.groupWithdrawalJSON(x)===wire.groupWithdrawalJSON(w)))pins.push(w);}
+    const packet={root:next.root,state:next.state,proof:[prior.state],withdrawals:pins};let removed;
+    try{removed=await this.groupTerminalMember(packet);}catch(_){return null;}
+    if(removed.person!==person)return null;
+    const terminal={person,admission:await wire.groupAdmissionHash(member.admission),context:"",pending:""};
+    const states=[],records=g.records.map(wire.parseGroupCommit),copy=structuredClone(g);
+    for(let seq=member.admission.seq;seq<=prior.state.seq;seq++){
+      if(states.length>=4096){terminal.pending="Terminal entitled proof exceeds 4096 states.";break;}
+      let state=prior.state;
+      if(seq!==prior.state.seq){const record=records[seq];if(!record){terminal.pending="Terminal original proof unavailable.";break;}try{const decoded=await this.groupOriginalContext(record,next.root,copy,checks);if(!decoded){terminal.pending="Terminal entitled plaintext unavailable.";break;}state=decoded.packet.state;}catch(e){if(retryable(e)||e instanceof StoreConflict)throw e;terminal.pending="Terminal entitled plaintext unavailable.";break;}}
+      const own=wire.groupMember(state,person);if(!own||await wire.groupAdmissionHash(own.admission)!==terminal.admission)return null;
+      states.push(state);try{wire.parseGroupContext(wire.groupContextJSON({...packet,proof:states}));}catch(e){terminal.pending="Terminal entitled proof exceeds current context bound.";break;}
+    }
+    if(!terminal.pending)packet.proof=states;
+    terminal.context=wire.groupContextJSON(packet);return terminal;
+  }
+
+  async verifyGroupTerminal(packet,g,resolve) {
+    wire.parseGroupContext(wire.groupContextJSON(packet));
+    const removed=await this.groupTerminalMember(packet),hash=await wire.groupAdmissionHash(removed.admission),records=g.records.map(wire.parseGroupCommit);
+    if(packet.proof[0].seq!==removed.admission.seq)throw Error("Terminal proof does not begin at exact admission.");
+    for(const w of packet.withdrawals||[]){let valid=false;for(const s of packet.proof){try{await wire.verifyGroupWithdrawal(w,s,resolve);valid=true;break;}catch(_){}}if(!valid)throw Error("Terminal folded withdrawal lacks signed ordinary admission.");}
+    let previous=null;
+    for(const state of [...packet.proof,packet.state]){
+      const record=records[state.seq];if(!record)throw new Hold("proof_pending","Terminal original prefix missing.");
+      if(!await wire.groupCommitMatches(record,state))throw Error("Terminal state differs from original committed slot.");
+      if(previous)await wire.verifyGroupState(state,packet.root,previous,resolve,packet.withdrawals||[]);
+      await wire.verifyGroupCurrent(state,packet.root,record,resolve,seq=>records[seq],packet.withdrawals||[]);
+      if(state!==packet.state){const own=wire.groupMember(state,removed.person);if(!own||await wire.groupAdmissionHash(own.admission)!==hash||await wire.groupWithdrawn(state,own,packet.withdrawals||[]))throw Error("Terminal proof crosses departed admission.");}
+      previous=state;
+    }
+    return removed;
+  }
+
+  async groupTerminalRecipient(terminal,device,checks=[],records=null) {
+    const packet=this.groupTerminalPacket(terminal),removed=await this.groupTerminalMember(packet);
+    if(removed.person!==terminal.person||await wire.groupAdmissionHash(removed.admission)!==terminal.admission)throw Error("Terminal prior admission differs.");
+    const g=await this.groupRead(checks,"kv","group/"+packet.state.conv),record=(records||g.records.map(wire.parseGroupCommit))[packet.state.seq];
+    if(!record||!await wire.groupCommitMatches(record,packet.state))throw Error("Terminal removal has no exact committed custody.");
+    const actor=await this.groupRead(checks,packet.state.actor===this.me.person?"kv":"persons",packet.state.actor===this.me.person?"person":packet.state.actor);
+    if(actor?.state==="conflict")throw new Hold("identity_conflict","Terminal original sender is temporarily frozen.");
+    if(!actor||!actor.human_keys?.includes(packet.state.by)||!actor.devices.some(d=>d.address===record.writer&&d.fingerprint===packet.state.by))throw Object.assign(Error("Terminal original sender is no longer a pinned human."),{code:"group_terminal_recipient"});
+    const person=await this.groupRead(checks,terminal.person===this.me.person?"kv":"persons",terminal.person===this.me.person?"person":terminal.person),pin=await this.groupRead(checks,"pins",device.address);
+    if(person?.state==="conflict"||pin?.pending)throw new Hold("identity_conflict","Terminal recipient or exact pinned key is temporarily frozen.");
+    if(!person||!person.devices.some(d=>d.address===device.address&&d.fingerprint===device.fingerprint)||!person.human_keys?.includes(device.fingerprint)||!pin||pin.fingerprint!==device.fingerprint)throw Object.assign(Error("Terminal recipient is not an exact pinned human device."),{code:"group_terminal_recipient"});
+    const current=g.context?wire.parseGroupContext(g.context):null;
+    if(current&&current.state.seq>=packet.state.seq&&wire.groupMember(current.state,terminal.person))throw Object.assign(Error("Later readmission supersedes terminal removal."),{code:"group_terminal_recipient"});
+    return pin;
+  }
+
+  async groupTerminalCopies(terminal,records,checks) {
+    if(!terminal)return [];
+    const packet=this.groupTerminalPacket(terminal),person=await this.groupRead(checks,"persons",terminal.person),copies=[];
+    if(!person||person.state==="conflict")return copies;
+    const payloads=this.groupProofPages(records.filter(r=>r.seq<=packet.state.seq)).map(page=>({sub:wire.SubGroupProof,seq:page.at(-1).seq,hash:page.at(-1).hash,value:wire.groupJournalJSON({records:page,more:false})}));
+    if(!terminal.pending)payloads.push({sub:wire.SubGroupContext,seq:packet.state.seq,hash:await wire.groupStateHash(packet.state),value:terminal.context});
+    for(const device of person.devices){if(!person.human_keys?.includes(device.fingerprint))continue;try{await this.groupTerminalRecipient(terminal,device,checks,records);}catch(e){if(e.code==="group_terminal_recipient"||e.reason==="identity_conflict")continue;throw e;}
+      const revoked=await this.groupRead(checks,"kv","revoked-device/"+device.address+"/"+device.fingerprint);if(revoked?.fingerprint===device.fingerprint)continue;
+      const deviceCopies=[];try{
+      for(const p of payloads){const id=wire.hex(await wire.sha256(new TextEncoder().encode("agentnet-group-terminal-v1\n"+packet.state.conv+"\n"+await wire.groupStateHash(packet.state)+"\n"+device.fingerprint+"\n"+p.sub+"\n"+p.seq))).slice(0,32);
+        deviceCopies.push(await this.groupCarrierCopy(packet.root,p.sub,{v:1,seq:p.seq,hash:p.hash},p.value,device,{terminal_id:id,group_terminal:{seq:packet.state.seq,person:terminal.person,admission:terminal.admission}},false,true));}
+      }catch(e){if(e instanceof HubError&&[404,410].includes(e.status))continue;throw e;}
+      copies.push(...deviceCopies);
+    }
+    return copies;
+  }
+
+  async groupTerminalGate(rec) {
+    try{const meta=rec.group_terminal,row=await this.store.get("kv","group-publication/"+rec.conv+"/"+meta.seq);if(!row?.published||!row.terminal||row.terminal.person!==meta.person||row.terminal.admission!==meta.admission)throw Error("Terminal retained publication differs.");
+      const pin=await this.groupTerminalRecipient(row.terminal,{address:rec.to,fingerprint:rec.recipient_fp});return {why:"",pin};
+    }catch(e){return {why:e.message};}
+  }
+
+  async groupTerminalNotice(packet) {
+    if(wire.groupMember(packet.state,this.me?.person))return "";
+    let removed;try{removed=await this.groupTerminalMember(packet);}catch(_){return "";}
+    if(removed.person!==this.me?.person)return "";
+    const actor=await this.store.get("persons",packet.state.actor);
+    return (actor?.label||"An administrator")+" removed you from this group. You can read earlier messages; you can't send.";
+  }
+
+  groupTerminalPacket(terminal) {
+    if(!terminal.pending)return wire.parseGroupContext(terminal.context);
+    // Local pending-publication witness only. A proof over the wire bound is
+    // never sent; retain its individually bounded parent/child for proof-only
+    // delivery and restart validation without relaxing any wire parser.
+    const p=JSON.parse(terminal.context);
+    return {root:wire.parseGroupRoot(p.root),state:wire.parseGroupState(p.state),proof:(p.proof||[]).map(wire.parseGroupState),withdrawals:(p.withdrawals||[]).map(wire.parseGroupWithdrawal)};
+  }
+
+  async admitGroupTerminal(packet,g,resolved,env,pin,checks,admission) {
+    const removed=await this.verifyGroupTerminal(packet,g,resolved.resolve),me=await this.groupRead(checks,"kv","person");
+    if(!me||me.state!=="self"||me.person!==removed.person||!me.human_keys?.includes(this.fp)||!me.devices.some(d=>d.address===this.address&&d.fingerprint===this.fp))throw Error("Terminal target is not this exact admitted human.");
+    const actor=await this.personOf(env.from,pin,admission);await this.groupRead(checks,"persons",actor.person);
+    if(actor.state==="conflict"||actor.person!==packet.state.actor||pin.fingerprint!==packet.state.by||!actor.human_keys?.includes(pin.fingerprint)||!actor.devices.some(d=>d.address===env.from&&d.fingerprint===pin.fingerprint))throw Error("Terminal sender is not its pinned original removing administrator.");
+    const held=g.context?wire.parseGroupContext(g.context):null;
+    if(!held)throw new Hold("proof_pending","Terminal previous admitted context unavailable.");
+    if(held.state.seq>=packet.state.seq)return {older:true,ops:[]};
+    const ownHash=await wire.groupAdmissionHash(removed.admission);
+    if((g.withdrawals||[]).map(wire.parseGroupWithdrawal).some(w=>w.person===removed.person&&w.admission===ownHash))throw Error("Own departure supersedes administrator removal notice.");
+    const own=wire.groupMember(held.state,me.person);
+    if(!own||await wire.groupAdmissionHash(own.admission)!==await wire.groupAdmissionHash(removed.admission))throw Error("Terminal context differs from held own admission.");
+    let anchor=false;for(const state of packet.proof)if(state.seq===held.state.seq&&await wire.groupStateHash(state)===await wire.groupStateHash(held.state))anchor=true;
+    if(!anchor)throw new Hold("proof_pending","Terminal held admitted anchor missing.");
+    const notice=(actor.label||"An administrator")+" removed you from this group. You can read earlier messages; you can't send.",ops=[];
+    for(const row of await this.store.all("outbox")){
+      if(row.conv!==packet.state.conv||row.sub||!retainedOut(row)||row.delivery_cancelled)continue;
+      const current=await this.groupRead(checks,"outbox",row.id);if(!current||current.envelope!==row.envelope||!retainedOut(current))continue;
+      const notSent=current.handover_proven===true&&current.handover_started===false;
+      // An old false without the upgrade proof means unknown, never "not sent".
+      ops.push({s:"outbox",k:row.id,v:{...current,handover_started:notSent?false:current.handover_started||null,delivery_cancelled:true,state:notSent?"not_delivered":"failed",detail:(notSent?"Not sent: ":"Sending stopped; previous delivery unconfirmed. ")+notice}});
+    }
+    return {older:false,ops};
+  }
+
   async manageGroup(change) {
     if(!change||typeof change!=="object"||Array.isArray(change)||Object.keys(change).some(k=>!["conv","action","title","person"].includes(k))||!["rename","promote","demote","remove","leave"].includes(change.action))throw Error("Unknown group action.");
     if(change.action==="rename"?change.person:change.action==="leave"?change.person||change.title:change.title||!change.person)throw Error("Group action has unexpected target fields.");
     if(change.action==="leave")return this.leaveGroup(change.conv);
-    const checks=[],{packet}=await this.groupTurnEvidence(change.conv,checks), me=await this.groupRead(checks,"kv","person"), member=wire.groupMember(packet.state,me.person);
+    const checks=[],{packet,g}=await this.groupTurnEvidence(change.conv,checks), me=await this.groupRead(checks,"kv","person"), member=wire.groupMember(packet.state,me.person);
     if(!member?.admin)throw Error("Current person administrator required.");
-    const state=structuredClone(packet.state);
+    const state=structuredClone(packet.state);state.members=await wire.effectiveGroupMembers(packet.state,packet.withdrawals||[]);
     if(change.action==="rename") {state.title=change.title;if(state.title===packet.state.title)return {queued:false};}
     else {
       const target=wire.groupMember(state,change.person);if(!target)throw Error("Choose an exact current group member.");
@@ -5395,7 +5531,10 @@ export class Engine {
       if(!wire.groupAdmins(state).length)throw Error("The last administrator must appoint a successor first.");
     }
     state.seq++;state.prev=await wire.groupStateHash(packet.state);state.actor=me.person;state.actor_roster=me.hash;state.by=this.fp;
-    await this.publishGroupPacket({root:packet.root,proof:null,state:await wire.signGroupState(this.keys,state),withdrawals:packet.withdrawals || null},null,checks);return {queued:false};
+    const withdrawals=[];for(const w of packet.withdrawals||[]){const m=wire.groupMember(state,w.person);if(m&&!m.admin&&await wire.groupAdmissionHash(m.admission)===w.admission)withdrawals.push(w);}
+    const next={root:packet.root,proof:null,state:await wire.signGroupState(this.keys,state),withdrawals};
+    const terminal=change.action==="remove"&&change.person!==me.person?await this.prepareGroupTerminal(packet,next,change.person,g,checks,packet.withdrawals):null;
+    await this.publishGroupPacket(next,null,checks,terminal);return {queued:false};
   }
 
   async leaveGroup(conv) {
@@ -5607,24 +5746,29 @@ export class Engine {
     } catch(e) {return {why:e.message};}
   }
 
-  async publishGroupPacket(packet, invitation=null, initialChecks=[]) {
+  async publishGroupPacket(packet, invitation=null, initialChecks=[],terminal=null) {
     for(let attempt=0;attempt<4;attempt++) {
-      try {return await this.publishGroupPacketAttempt(packet,invitation,attempt?[]:initialChecks);}
+      try {return await this.publishGroupPacketAttempt(packet,invitation,attempt?[]:initialChecks,terminal);}
       catch(e) {if(!(e instanceof StoreConflict)||attempt===3)throw e;}
     }
   }
 
-  async publishGroupPacketAttempt(packet, invitation=null, initialChecks=[]) {
+  async publishGroupPacketAttempt(packet, invitation=null, initialChecks=[],terminal=null) {
     const checks=[...initialChecks], conv=packet.state.conv, key="group/"+conv, before=await this.groupRead(checks,"kv",key);
     const g=before ? structuredClone(before) : {root:wire.rootJSON(packet.root),records:[],context:"",withdrawals:[],pending:[],rosters:{}};
     if(g.root!==wire.rootJSON(packet.root)) throw Error("Group root differs.");
+    const pendingKey="group-publication/"+conv+"/"+packet.state.seq, pending=await this.groupRead(checks,"kv",pendingKey);
+    terminal=pending?.terminal||terminal;
+    if(pending?.published){if(pending.context!==wire.groupContextJSON(packet))throw Error("Completed publication differs.");return packet;}
     const resolved=await this.groupResolver(packet.root,[],packet,g,checks);
     const withdrawals=await this.groupContextWithdrawals(packet,g,resolved.resolve,resolved.people,checks);
-    const old=g.context ? wire.parseGroupContext(g.context) : null;
-    const visitorTargets=old?await this.groupVisitorTargets(conv,{...old,withdrawals:[...g.withdrawals,...g.pending].map(wire.parseGroupWithdrawal)},checks):[];
+    const held=g.context ? wire.parseGroupContext(g.context) : null,superseded=!!terminal&&held&&held.state.seq>packet.state.seq;
+    if(superseded){const newer=g.records[held.state.seq];if(!newer||g.published!==newer||wire.parseGroupCommit(newer).writer!==this.address||!await wire.groupCommitMatches(wire.parseGroupCommit(newer),held.state))throw new Hold("proof_pending","A remote newer context alone cannot complete an unpublished local fanout.");}
+    const old=terminal&&held&&held.state.seq>=packet.state.seq?{root:packet.root,state:this.groupTerminalPacket(terminal).proof.at(-1)}:held;
+    const visitorTargets=old&&!superseded?await this.groupVisitorTargets(conv,{...old,withdrawals:[...g.withdrawals,...g.pending].map(wire.parseGroupWithdrawal)},checks):[];
     await wire.verifyGroupState(packet.state,packet.root,old?.state || null,resolved.resolve,withdrawals);
     const me=await this.groupRead(checks,"kv","person");
-    if(packet.state.actor!==me.person || packet.state.actor_roster!==me.hash || packet.state.by!==this.fp) throw Error("Current local administrator signature required.");
+    if(packet.state.actor!==me.person || packet.state.actor_roster!==me.hash&&!pending?.terminal || packet.state.by!==this.fp || !me.human_keys?.includes(this.fp)) throw Error("Current local administrator signature required.");
     let historyItems=[];
     if(invitation) {
       const intent=await this.groupRead(checks,"kv","group-invitation/out/"+invitation);
@@ -5635,7 +5779,6 @@ export class Engine {
     }
     // Keep exact original encrypted publication before requesting custody. A
     // response-loss retry reuses these bytes, never a re-encrypted slot.
-    const pendingKey="group-publication/"+conv+"/"+packet.state.seq, pending=await this.groupRead(checks,"kv",pendingKey);
     let record;
     if(pending) {
       if(pending.context!==wire.groupContextJSON(packet)) throw Error("Another group publication is pending at this exact sequence.");
@@ -5651,7 +5794,7 @@ export class Engine {
       }
       const ciphertext=await encryption.encrypt(new TextEncoder().encode(wire.groupContextJSON(packet)));
       record=await wire.signGroupCommit(this.keys,{v:1,conv,realm:packet.state.realm,bootstrap:packet.root.creator.fingerprint,seq:packet.state.seq,prev:packet.state.prev,hash:await wire.groupStateHash(packet.state),admins:wire.groupAdmins(packet.state),writer:this.address,actor:me.person,actor_roster:me.hash,ciphertext});
-      await this.store.write([{s:"kv",k:pendingKey,v:{type:"group-publication",conv,seq:packet.state.seq,record:wire.groupCommitJSON(record),context:wire.groupContextJSON(packet),invitation}}],checks);
+      await this.store.write([{s:"kv",k:pendingKey,v:{type:"group-publication",conv,seq:packet.state.seq,record:wire.groupCommitJSON(record),context:wire.groupContextJSON(packet),invitation,...(terminal?{terminal}:{})}}],checks);
     }
     let result;
     try {result=await this.call("POST","/v1/groups/"+conv+"/publish?creator="+record.bootstrap,{v:1,commit:JSON.parse(wire.groupCommitJSON(record)),invitation:invitation||""});}
@@ -5667,7 +5810,8 @@ export class Engine {
     const publication=await this.groupRead(finalChecks,"kv",pendingKey);
     if(!publication || publication.record!==wire.groupCommitJSON(record))throw new StoreConflict();
     const latest=await this.groupRead(finalChecks,"kv","group-head/"+conv);
-    if(latest && (latest.conflict || latest.seq>record.seq || latest.seq===record.seq&&latest.hash!==record.hash))throw new Hold("proof_pending","Group custody is behind the latest known head.");
+    const expectedHead=superseded?held.state:packet.state;
+    if(latest && (latest.conflict || latest.seq>expectedHead.seq || latest.seq===expectedHead.seq&&latest.hash!==await wire.groupStateHash(expectedHead)))throw new Hold("proof_pending","Group custody is behind the latest known head.");
     const finalResolved=await this.groupResolver(packet.root,[record],packet,g,finalChecks);
     const finalPins=await this.groupContextWithdrawals(packet,g,finalResolved.resolve,finalResolved.people,finalChecks);
     const records=g.records.map(wire.parseGroupCommit), previous=records.at(-1)||null;
@@ -5680,7 +5824,7 @@ export class Engine {
       historyItems=await this.groupSelectedItems(conv,row.proposal.history || [],finalChecks);
     }
     const roomEvents=await this.convEvents(conv,finalChecks),roomMembers=await this.dmMembers({id:conv,kind:"group",root:g.root},roomEvents,finalChecks,packet),deliveryPacket={...packet,memberships:await this.roomMemberships({id:conv},roomEvents,roomMembers)};
-    g.records=records.map(wire.groupCommitJSON);g.context=wire.groupContextJSON(packet);g.rosters=finalResolved.raw;
+    g.records=records.map(wire.groupCommitJSON);if(!superseded){g.context=wire.groupContextJSON(packet);g.published=wire.groupCommitJSON(record);}g.rosters={...g.rosters,...finalResolved.raw};
     const copies=[];
     // The completing publisher carries the current register into the new
     // membership as a fresh ordinary turn, not unsigned selected history.
@@ -5692,7 +5836,7 @@ export class Engine {
       if(!Number.isSafeInteger(rev))throw Error("Resources revision limit reached.");
       resourceTurn={conv,lid:wire.newID(),kind:"message",body:"",topic:"",topic_event:{action:"resources",resources:resources.resources||[],rev},origin:"ui",from:this.address,at:this.now(),group_admission:await wire.groupAdmissionHash(wire.groupMember(packet.state,publisher.person).admission)};
     }
-    for(const member of await wire.effectiveGroupMembers(packet.state,finalPins)) {
+    for(const member of superseded?[]:await wire.effectiveGroupMembers(packet.state,finalPins)) {
       const p=finalResolved.people.get(member.person);
       for(const device of p.devices) {
         if(device.address===this.address) continue;
@@ -5720,7 +5864,8 @@ export class Engine {
       for(const page of this.groupProofPages(records)){const last=page.at(-1);copies.push(await this.groupCarrierCopy(packet.root,wire.SubGroupProof,{v:1,seq:last.seq,hash:last.hash},wire.groupJournalJSON({records:page,more:false}),target.device,{pid:target.pid},false,true));}
       copies.push(await this.groupCarrierCopy(packet.root,wire.SubGroupContext,{v:1,seq:packet.state.seq,hash:record.hash},wire.groupContextJSON(packet),target.device,{pid:target.pid},false,true));
     }
-    const ops=[{s:"kv",k:key,v:g},{s:"kv",k:pendingKey,v:undefined},...copies.map(v=>({s:"outbox",k:v.id,v}))];
+    copies.push(...await this.groupTerminalCopies(terminal,records,finalChecks));
+    const ops=[{s:"kv",k:key,v:g},{s:"kv",k:pendingKey,v:terminal?{...publication,terminal,published:true}:undefined},...copies.map(v=>({s:"outbox",k:v.id,v}))];
     if(resourceTurn)ops.push(...await this.sharedTopicTitleOps(resourceTurn,this.fp,finalChecks));
     if(invitation) {const k="group-invitation/out/"+invitation,row=await this.groupRead(finalChecks,"kv",k);if(!row || row.status!=="accepted") throw Error("Exact accepted invitation missing.");const {last_error,...done}=row;void last_error;ops.push({s:"kv",k,v:{...done,status:"published"}});}
     await this.store.write(ops,finalChecks);this.changed();this.syncInvitations().catch(()=>{});
@@ -5748,7 +5893,7 @@ export class Engine {
   }
 
   async recoverGroupIntents() {
-    const pending=[...await this.store.prefix("kv","group-invitation/out/"), ...await this.store.prefix("kv","group-publication/")].filter(row=>row?.type==="group-publication" || row?.type==="group-invitation"&&row.direction==="out"&&row.status==="accepted");
+    const pending=[...await this.store.prefix("kv","group-invitation/out/"), ...await this.store.prefix("kv","group-publication/")].filter(row=>row?.type==="group-publication"&&!row.published || row?.type==="group-invitation"&&row.direction==="out"&&row.status==="accepted");
     for(const saved of pending) {
       const key=saved.type==="group-publication"?"group-publication/"+saved.conv+"/"+saved.seq:"group-invitation/out/"+saved.id;
       const row=await this.store.get("kv",key);if(!row)continue;
@@ -6589,7 +6734,7 @@ export class Engine {
         if(!oldMember||await wire.groupWithdrawn(prior.state,oldMember,[...g.withdrawals,...g.pending].map(wire.parseGroupWithdrawal)))throw new Hold("invalid","Visitor carrier sender is not prior verified disclosure audience.");
       }
     }
-    let page, packet;
+    let page, packet,terminalOps=[];
     try {
       if (n.sub === wire.SubGroupProof) {
         page = wire.parseGroupJournal(body);
@@ -6597,12 +6742,13 @@ export class Engine {
         if (!last || last.seq !== desc.seq || last.hash !== desc.hash) throw Error("group proof descriptor differs");
       } else {
         packet = wire.parseGroupContext(body);
-        if (wire.rootJSON(packet.root) !== g.root || packet.proof?.length || packet.state.seq !== desc.seq || await wire.groupStateHash(packet.state) !== desc.hash) throw Error("group context descriptor/root differs");
+        if (wire.rootJSON(packet.root) !== g.root || packet.state.seq !== desc.seq || await wire.groupStateHash(packet.state) !== desc.hash) throw Error("group context descriptor/root differs");
       }
     } catch (e) { throw new Hold("invalid", e.message); }
     const records = g.records.map(wire.parseGroupCommit), previous = records.at(-1) || null;
     let resolved;
-    try { resolved = await this.groupResolver(root, page?.records || [], packet, g, checks, [], admission); }
+    const terminalRefs=packet?.proof?.length&&!wire.groupMember(packet.state,this.me?.person)?packet.proof.flatMap(s=>[{person:s.actor,roster:s.actor_roster},...s.members]):[];
+    try { resolved = await this.groupResolver(root, page?.records || [], packet, g, checks, terminalRefs, admission); }
     catch (e) { if (e instanceof Hold || e instanceof StoreConflict || retryable(e)) throw e; throw new Hold("invalid", e.message); }
     const { resolve, raw, people } = resolved;
     g.rosters = raw;
@@ -6620,6 +6766,11 @@ export class Engine {
     } else {
       const authority = records[packet.state.seq];
       if (!authority) throw new Hold("proof_pending", "group original authority missing");
+      if(packet.proof?.length&&!wire.groupMember(packet.state,this.me?.person)&&!visitor){
+        let result;try{result=await this.admitGroupTerminal(packet,g,resolved,env,pin,checks,admission);}catch(e){if(e instanceof Hold||e instanceof StoreConflict||retryable(e)||e instanceof HubError)throw e;throw new Hold("invalid",e.message);}terminalOps=result.ops;
+        if(!result.older)g.context=wire.groupContextJSON(packet);
+      } else {
+      if(packet.proof?.length)throw new Hold("invalid","Forwarded member context must contain only current state.");
       const hint = await this.groupRead(checks, "kv", "group-head/" + n.conv);
       if (records.length - 1 !== packet.state.seq || hint && (hint.conflict || hint.seq > packet.state.seq || hint.seq === packet.state.seq && hint.hash !== desc.hash)) throw new Hold("proof_pending", "group context behind latest head");
       let old = g.context ? wire.parseGroupContext(g.context) : null;
@@ -6661,10 +6812,11 @@ export class Engine {
       }
       g.context = wire.groupContextJSON(packet);
       for (const w of pins) { const text = wire.groupWithdrawalJSON(w); if (!g.withdrawals.includes(text)) g.withdrawals.push(text); g.pending = g.pending.filter((x) => x !== text); }
+      }
     }
     // Logical quiet dedup survives receipt flushing. Original bytes are retained
     // in verified group state; no plaintext carrier is copied into held/files.
-    const ops = [{ s: "kv", k, v: g }, { s: "kv", k: "group-realm", v: root.realm }, { s: "kv", k: seenKey, v: hash }, { s: "kv", k: "group-carrier/" + env.id, v: true }];
+    const ops = [{ s: "kv", k, v: g }, { s: "kv", k: "group-realm", v: root.realm }, { s: "kv", k: seenKey, v: hash }, { s: "kv", k: "group-carrier/" + env.id, v: true },...terminalOps];
     if(packet?.memberships?.length)ops.push(...await this.roomMembershipOps(packet,checks, admission));
     ops.checks = checks; ops.groupCarrier = true;
     return ops;
@@ -10089,7 +10241,7 @@ export class Engine {
 
   async dm(id, read = null) {
     read ||= await this.readView(id);
-    if(await this.groupRecord(id))return this.groupThread(id,read);
+    if(await this.groupRecord(id))return this.groupThread(id,read,true);
     const c = read.convs.find(c=>c.id===id);
     if (!c) throw new Error("No conversation with that id.");
     const peer = read.persons.find(p=>p.person===c.peer);

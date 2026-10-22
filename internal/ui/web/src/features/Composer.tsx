@@ -58,6 +58,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   const conn = useStore(store, (s) => s.conn);
   const typingView = useStore(store, (s) => s.typing);
   const conv = dm?.id ?? thread?.id ?? "";
+  const groupPending = useStore(store, (s) => !!conv && s.groupContextPending === conv);
   const draft = useStore(store, (s) => s.drafts[conv]) ?? EMPTY;
   const lim = overview?.files;
   const words: Words = { overview, names };
@@ -148,7 +149,8 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   // Why nothing can be written here now, in words.
   const mine = humanGuest && !author ? (dm?.guests || []).find((g) => g.host_here && scopeMatches(g, draft.newTopic ? "__new__" : draft.topic || "")) : undefined;
   const closed: { title: string; detail?: string } | null =
-    humanGuest && !author ? (mine?.state === "invited" ? { title: "Join to write here", detail: "You’re invited as a guest. Accept the invitation to write; your draft stays." }
+    groupPending ? { title: "Updating group details", detail: "Sending is paused until verification finishes. Your draft stays here." }
+    : humanGuest && !author ? (mine?.state === "invited" ? { title: "Join to write here", detail: "You’re invited as a guest. Accept the invitation to write; your draft stays." }
       : mine && (mine.state === "dismissed" || mine.state === "left") ? { title: "You’re no longer a guest here", detail: "New messages don’t reach you. What was already shared stays with you." }
       : { title: "You can read this chat but not write in it", detail: dm?.frozen || "Choose the topic you were invited to." })
     : dm?.frozen ? { title: "Nothing more can be sent here", detail: dm.frozen }

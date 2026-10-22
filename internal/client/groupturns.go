@@ -72,6 +72,12 @@ func (a *Agent) projectGroupConversations(rows []ConversationInfo) ([]Conversati
 		}
 		if err = groupDeliveryRecipient(a.store.db, packet, a.Address, a.Self().Fingerprint()); err != nil {
 			view.Frozen = err.Error()
+			if me, ok, e := a.store.selfPerson(a.Address); e == nil && ok {
+				if reason := groupRemovalNotice(a.store.db, packet, me.roster.Person); reason != "" {
+					view.Frozen = reason
+					view.Role = "former_member"
+				}
+			}
 			ids, e := a.store.participationIDs(conv)
 			if e != nil {
 				return nil, e

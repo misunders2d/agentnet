@@ -5,15 +5,22 @@ const {chromium}=require(process.env.AGENTNET_PLAYWRIGHT);
  const browser=await chromium.launch({headless:true,executablePath:process.env.AGENTNET_CHROMIUM||'/usr/bin/chromium',args:['--no-sandbox','--disable-dev-shm-usage']});
  try {
   if(process.env.AGENTNET_PICTURE_EDITOR_ONLY) {
-   const ctx=await browser.newContext({viewport:{width:390,height:844},hasTouch:true}),p=await ctx.newPage();
+   for(const [name,width,height] of [['desktop',1280,900],['phone',390,844]]) {
+   const ctx=await browser.newContext({viewport:{width,height},hasTouch:true}),p=await ctx.newPage();
    const errors=[];p.on('pageerror',e=>errors.push(String(e)));await p.goto(process.argv[2]);
+   await p.waitForFunction(()=>document.querySelector('#skin')?.shadowRoot?.querySelector('.an-root'));
    await p.evaluate(async()=>{const {openPictureEditor}=await import('/assets/pictures.mjs');
-    void openPictureEditor({into:document.body,src:'/api/files/picture-message/0?dir=in',save:async png=>{
+    void openPictureEditor({into:document.querySelector('#skin').shadowRoot.querySelector('.an-root'),src:'/api/files/picture-message/0?dir=in',save:async png=>{
      const r=await fetch('/api/person/picture',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({png})});if(!r.ok)throw Error(await r.text());
     }});
    });
    const dialog=p.getByRole('dialog',{name:'Your profile picture'}),canvas=dialog.locator('canvas');
    await dialog.getByRole('button',{name:'Save picture'}).click({trial:true});
+   const geometry=await dialog.evaluate(d=>{const b=d.getBoundingClientRect(),h=getComputedStyle(d.querySelector('h2'));return{left:b.left,right:b.right,top:b.top,bottom:b.bottom,width:innerWidth,height:innerHeight,fontSize:h.fontSize,fontWeight:h.fontWeight};});
+   assert(Math.abs(geometry.left-(geometry.width-geometry.right))<=2,name+': profile editor centered horizontally '+JSON.stringify(geometry));
+   assert(Math.abs(geometry.top-(geometry.height-geometry.bottom))<=2,name+': profile editor centered vertically '+JSON.stringify(geometry));
+   assert(geometry.left>=11&&geometry.right<=geometry.width-11&&geometry.top>=11&&geometry.bottom<=geometry.height-11,name+': profile editor fits viewport');
+   assert(parseFloat(geometry.fontSize)>=20&&Number(geometry.fontWeight)>=700,name+': readable editor heading');
    assert.equal(await dialog.locator('input[type=range]').count(),0);
    await dialog.getByRole('button',{name:'Zoom in'}).click();await canvas.press('ArrowRight');
    const before=await canvas.evaluate(c=>c.toDataURL());const b=await canvas.boundingBox();
@@ -28,10 +35,12 @@ const {chromium}=require(process.env.AGENTNET_PLAYWRIGHT);
    await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
    assert(Number((await dialog.getByLabel('Zoom level').textContent()).replace('%',''))>100,'pinch zooms');
    assert(await dialog.evaluate(d=>d.getBoundingClientRect().left>=0&&d.getBoundingClientRect().right<=innerWidth),'phone dialog fits');
-   if(process.env.AGENTNET_SCREENSHOTS){fs.mkdirSync(process.env.AGENTNET_SCREENSHOTS,{recursive:true});await p.screenshot({path:process.env.AGENTNET_SCREENSHOTS+'/p22-shared-crop-phone.png'});}
+   if(process.env.AGENTNET_SCREENSHOTS){fs.mkdirSync(process.env.AGENTNET_SCREENSHOTS,{recursive:true});await p.screenshot({path:process.env.AGENTNET_SCREENSHOTS+'/p22-shared-crop-'+name+'.png'});}
    await dialog.getByRole('button',{name:'Save picture'}).click();await dialog.waitFor({state:'hidden'});
    const saved=await(await ctx.request.get(new URL(process.argv[2]).origin+'/api/overview')).json();assert(saved.person.picture,'strict server accepted edited picture');
-   assert.deepEqual(errors,[]);await ctx.close();console.log('P22 shared crop editor PASS');return;
+   assert.deepEqual(errors,[]);await ctx.close();console.log('P22 shared crop editor '+name+' PASS');
+   }
+   console.log('P22 shared crop editor PASS');return;
   }
   for(const phone of [false,true])for(const skin of ['comic']){
    const ctx=await browser.newContext({viewport:phone?{width:390,height:844}:{width:1440,height:900},isMobile:phone,hasTouch:phone});

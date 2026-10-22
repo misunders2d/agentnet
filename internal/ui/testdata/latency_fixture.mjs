@@ -1,13 +1,15 @@
 import {mount,unmount} from '/assets/skins/comic/entry.mjs';
+const fixtureStarted=performance.now();
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 const frame=()=>new Promise(r=>requestAnimationFrame(r));
 const assert=(v,m)=>{if(!v)throw Error(m);};
 const until=async(f,label,ms=5000)=>{const end=performance.now()+ms;while(!f()){if(performance.now()>end)throw Error('Timed out: '+label);await pause(10);}};
-const reports={actions:[],apiCalls:[],seenControls:[],pageErrors:[],feedbackFailures:[],inputDispatch:'synthetic DOM events (excludes OS input dispatch)',viewport:{width:innerWidth,height:innerHeight,dpr:devicePixelRatio},userAgent:navigator.userAgent,hardwareConcurrency:navigator.hardwareConcurrency,nativeScrollAnchoring:CSS.supports('overflow-anchor','auto')};window.latencyReport=null;
+async function runVector(p1=''){
+const reports={actions:[],apiCalls:[],seenControls:[],pageErrors:[],feedbackFailures:[],inputDispatch:'synthetic DOM events (excludes OS input dispatch)',viewport:{width:innerWidth,height:innerHeight,dpr:devicePixelRatio},userAgent:navigator.userAgent,hardwareConcurrency:navigator.hardwareConcurrency,nativeScrollAnchoring:CSS.supports('overflow-anchor','auto'),reducedMotion:matchMedia('(prefers-reduced-motion: reduce)').matches};
 const pageError=e=>reports.pageErrors.push(String(e.message||e.reason||e).slice(0,1000));window.addEventListener('error',pageError);window.addEventListener('unhandledrejection',pageError);
 try {
  const query=new URL(location.href).searchParams,token=query.get('token');
- const suite=window.__agentnetLatencySuite||query.get('suite')||'history';reports.suite=suite;const extraSuites=['topics','groups','compose','media','review','outbox','agents','teams','profile','storage','workspaces','permissions'];const extended=extraSuites.includes(suite);assert(['history','navigation','settings','unread','actions',...extraSuites].includes(suite),'Unknown timing workload');
+ const suite=window.__agentnetLatencySuite||query.get('suite')||'history';reports.suite=suite;reports.portableVector=p1;const extraSuites=['topics','groups','compose','media','review','outbox','agents','teams','profile','storage','workspaces','permissions'];const extended=extraSuites.includes(suite);assert(['history','navigation','settings','unread','actions',...extraSuites].includes(suite),'Unknown timing workload');
  if(token)await fetch('/?t='+encodeURIComponent(token));
  const read=async path=>{const r=await fetch(path);if(!r.ok)throw Error('Fixture read HTTP '+r.status);return r.json();};
  const seed=window.__agentnetLatencyInput||await read('/latency-input.json');
@@ -43,6 +45,9 @@ try {
  const cacheFiles=[{id:'1'.repeat(32),sha256:'2'.repeat(64),size:1024},{id:'3'.repeat(32),sha256:'4'.repeat(64),size:2048}];
  const bucket={files:2,reserved_bytes:3072,recorded_received_bytes:3072};
  const storage={local:{scope:'daemon',complete:true,known:{files:2,bytes:3072},areas:[],files:[]},remote:{status:'available',usage:{quota_bytes:1073741824,max_file_bytes:104857600,upload_idle_ttl_seconds:3600,location:'fixture relay',policy:{delivered_attachments:'retained',undelivered_attachments:'retained',unattached_attachments:'retained',message_envelopes:'retained',incomplete_uploads:'bounded',manual_delivered_age_default_seconds:86400,manual_unattached_age_default_seconds:86400},can_change_quota:true,own:{stored:bucket,incomplete:{...bucket,files:0,reserved_bytes:0}},global:{stored:bucket,incomplete:{...bucket,files:0,reserved_bytes:0}}}}};
+ const presentationFiles=new Map();reports.fileCalls=[];reports.assignmentAttempts=[];
+ reports.proposalAttempts=[];reports.ownerDecisionAttempts=[];reports.presentationFailures=[];
+ let simulatedSetup=false,setupReceipt=false,setupPublishes=0,missingFolderMode=false;
  let reviewedSetup;
  let nativeFailure=false,notificationFailure=false,storageOffline=false,cacheOffline=false,cacheHold=false,releaseCache,workspaceInfo={name:'Fixture workspace',server:'Fixture server',can_rename:true};
  const relayStorage={can_admin:true,configured:true,connected:true,state:'connected',local:{files:2,bytes:3072},remote:{files:0,bytes:0},pending:{files:2,bytes:3072},remote_only_files:0,migration:{running:false,files:0,bytes:0,total_files:0,total_bytes:0}};
@@ -67,6 +72,8 @@ try {
    me.devices=[{address:overview.me.address,name:'Fixture laptop',fingerprint:overview.me.fingerprint,this:true},{address:'fixture/phone',name:'Fixture phone',fingerprint:'7'.repeat(64),this:false}];
    overview.links=[{id:'6'.repeat(32),name:'Fixture incoming phone',address:'fixture/new-phone',fingerprint:'8'.repeat(64),state:'pending',requested_at:now,expires:future}];
   }
+  if(suite==='media'){overview.agent_devices=[me.devices.find(d=>d.address!==overview.me.address).address];}
+  if(suite==='agents')overview.model_reports=[{host:overview.me.address,host_key:overview.me.fingerprint,agent_id:'1'.repeat(32),model:'Fixture reported model',reasoning:'fixture reasoning',harness:'codex',executor:'a'.repeat(64),at:9007199254740991,revision:1},{host:overview.me.address,host_key:overview.me.fingerprint,agent_id:'',model:'RETIRED_MODEL_MUST_STAY_HIDDEN',harness:'codex',executor:'b'.repeat(64),at:1,revision:1}];
   if(suite==='permissions'){grants.questions=[{person:peer.person,label:peer.label,address:peer.address,status:'active'}];overview.threads=[{id:'7'.repeat(32),peer:peer.address,title:'Fixture saved conversation',last:'Fixture context',last_at:now,count:1}];}
   if(suite==='review'){
    const native={token:'3'.repeat(32),harness:'codex',host:overview.me.address,request:'1'.repeat(32),key:overview.me.fingerprint,attempt:1,method:'item/commandExecution/requestApproval',thread:'fixture-thread',turn:'fixture-turn',item:'fixture-item',operation:'printf fixture',cwd:'/fixture',choices:['allow','deny','cancel'],expires:0};
@@ -76,21 +83,79 @@ try {
    reports.nativeAuthority='presentation + invented response only; no native tool executed';
   }
  }
+ // Private portable vectors; protocol-shaped invented records only.
+ const portable={ops:new Map(),topicReads:[],dmReads:[],scheduleCreates:[],scheduleLost:false,bulk:[]};
+ const secondConv='d'.repeat(64),sourceID='4'.repeat(32),destinationID='5'.repeat(32);
+ let secondView;
+ const binding={agent_host:peer.address,agent_key:'22222222-22222222-22222222-22222222',agent_id:'5'.repeat(32)};
+ const foreignBinding={...binding,agent_id:'6'.repeat(32)};
+ let directTopics=[],directMessages=[];
+ const updateDirect=()=>{for(const t of directTopics)t.count=directMessages.filter(m=>m.placement===t.id).length;overview.threads=directTopics.filter(t=>t.count>0);for(const s of overview.topics)s.total=overview.threads.filter(t=>t.agent_id===s.agent_id).length;};
+ if(p1==='direct'){
+  peer.fingerprint=binding.agent_key;peer.devices=[{address:peer.address,fingerprint:peer.fingerprint,human:true}];overview.people=overview.people.map(p=>p.person===peer.person?peer:p);overview.agent_devices=[peer.address];overview.dms=[];
+  directTopics=[1,2,9].map((n,i)=>({id:String(n).repeat(32),peer:peer.address,...(i===2?foreignBinding:binding),title:i===2?'Other agent topic':'Portable Pi '+(i+1),renamed:true,last:'Portable direct '+(i+1),last_at:now,count:1,unread:0,review:0,running:0,waiting:false,pending:false,state:'active',quiet_since:now}));
+  directMessages=directTopics.map((t,i)=>({id:t.id,lid:t.id,from:peer.address,from_key:peer.fingerprint,to:me.address,agent_id:t.agent_id,dir:'in',body:'Portable direct original '+(i+1),kind:'message',at:now,state:'stored',actions:[],can:[],placement:t.id,author:{label:peer.label}}));
+  overview.topics=[{peer:peer.address,...foreignBinding,total:1,archived:0,latest:directTopics[2]},{peer:peer.address,...binding,total:2,archived:0,latest:directTopics[0]}];updateDirect();
+ }
+ if(p1==='personal'){
+  view.kind='dm';view.title='';Object.assign(overview.dms[0],{kind:'dm',peer,role:'member',created:'2026-01-01T00:00:00Z',count:view.messages.length});
+  secondView={...clone(view),id:secondConv,created:'2026-02-01T00:00:00Z',topics:[sourceID,destinationID].map((id,i)=>({id,conv:secondConv,title:i?'Portable second destination':'Portable second source',renamed:true,last:'Second root '+i,last_at:now,count:1,unread:0,state:'active'})),messages:[sourceID,destinationID].map((id,i)=>({id,lid:id,dir:'in',from:peer.address,body:'Portable personal original '+i,topic:id,kind:'message',at:now,can:[],actions:[]}))};
+  overview.dms.push({...overview.dms[0],id:secondConv,created:secondView.created,count:2});
+ }
+ if(p1==='schedule'){
+  view.kind='group';view.title=overview.dms[0].title='Vitalii portable schedule group';overview.dms[0].kind='group';
+  view.topics=[{id:'1'.repeat(32),conv:view.id,title:'Portable schedule scope',renamed:true,state:'active',count:1,last_at:now}];
+  const original=view.messages.at(-1);original.topic='1'.repeat(32);original.body='Portable scheduled reply source';
+  portable.scheduleLost=true;
+ }
+ if(p1==='bulk')for(const [i,t]of view.topics.entries())Object.assign(t,{state:'active',title:'Portable bulk '+(i+1),renamed:true,count:1});
+
  let held,release,typing=false,seq=100,reactionFailure=false;
  let typingPreferences={send:false,show:true};
  const counts={overview:0,dm:0,typing:0,catalogs:0},listeners=new Set();
  const emit=hint=>{seq++;for(const fn of listeners)fn({type:'change',seq,...(hint?{hint}:{})});};
  let openTarget;
- const host={version:1,platform:window.__agentnetLatencyPlatform||query.get('platform')||'daemon',workspace:{id:'latency',name:'Fixture',state:'enrolled'},skins:[{id:'comic',name:'Comic',api:1}],onSkinsChange:()=>()=>{},onOpen:fn=>{openTarget=fn;},listen:fn=>{listeners.add(fn);return()=>listeners.delete(fn);},
+ const host={version:1,platform:window.__agentnetLatencyPlatform||query.get('platform')||'daemon',workspace:{id:'latency'+(p1?'-'+p1:''),name:'Fixture',state:'enrolled'},skins:[{id:'comic',name:'Comic',api:1}],onSkinsChange:()=>()=>{},onOpen:fn=>{openTarget=fn;},listen:fn=>{listeners.add(fn);return()=>listeners.delete(fn);},
   async api(path,body){
    if(extended){
     const u=new URL(path,location.href),p=u.pathname;
-    if(p==='/api/agents'){if(body){await pause(25);const a=catalog.agents.find(a=>a.record.id===body.id);if(body.action==='disable')a.enabled=false;else if(body.action==='update'){a.enabled=true;a.responder={...a.responder,harness:body.harness,dir:body.dir};}else if(body.action==='create')catalog.agents.push({record:{v:1,id:'5'.repeat(32),host:overview.me.address,host_key:overview.me.fingerprint,label:body.label,harness:body.harness,ts:2},enabled:true,responder:{...responder,harness:body.harness,dir:body.dir}});emit();return{saved:true,published:true,agent:a,note:'Fixture catalog saved'};}const remote=u.searchParams.get('host');return remote&&remote!==overview.me.address?{host:remote,local:false,agents:suite==='groups'&&overview.agent_devices.includes(remote)?[{record:{v:1,id:((overview.agent_devices.indexOf(remote)+100).toString(16).padStart(32,'0')),host:remote,host_key:'7'.repeat(64),label:'Fixture remote '+overview.agent_devices.indexOf(remote),harness:'codex',ts:1},enabled:true}]:[],harnesses:[]}:clone(catalog);}
+    if(p1==='direct'&&p==='/api/agents'&&u.searchParams.get('host')===peer.address)return{host:peer.address,local:false,harnesses:[],agents:[{record:{id:binding.agent_id,host:peer.address,host_key:binding.agent_key,label:'Portable Pi',harness:'pi'},enabled:true},{record:{id:foreignBinding.agent_id,host:peer.address,host_key:binding.agent_key,label:'Other Claude',harness:'claude'},enabled:true}]};
+    if(p1==='direct'&&p==='/api/thread'){const id=u.searchParams.get('id'),original=directMessages.find(m=>m.id===id),topic=directTopics.find(t=>t.id===(original?.placement||id));assert(topic,'exact direct topic');portable.topicReads.push({route:path,topic:topic.id});return{id,peer:peer.address,key:{pinned:peer.fingerprint},approved:false,task_grant:'',topic:clone(topic),messages:clone(directMessages.filter(m=>m.placement===topic.id).map(({placement,...m})=>m))};}
+    if(p1==='direct'&&p==='/api/topics'){assert(u.searchParams.get('peer')===binding.agent_host,'direct peer');for(const k of ['agent_host','agent_key','agent_id'])assert(u.searchParams.get(k)===binding[k],'direct full tuple '+k);const rows=directTopics.filter(t=>t.count&&t.agent_id===binding.agent_id&&(!u.searchParams.get('state')||t.state===u.searchParams.get('state')));portable.topicReads.push({route:path,ids:rows.map(t=>t.id)});return{topics:clone(rows),matched:rows.length};}
+    if(p1==='direct'&&p==='/api/act'&&body?.do==='read')return{};
+    if(p1==='personal'&&p==='/api/dm'){const id=u.searchParams.get('id');assert([view.id,secondConv].includes(id),'exact personal root');portable.dmReads.push({conv:id,at:performance.now()});counts.dm++;return clone(id===secondConv?secondView:view);}
+    if(['direct','personal'].includes(p1)&&p==='/api/topic/organization/preview'){
+     await pause(25);const rows=p1==='direct'?directMessages:(body.conv===secondConv?secondView:view).messages;
+     assert(body.conv===(p1==='direct'?'':secondConv),'organization exact conv');assert((body.peer||'')===(p1==='direct'?peer.address:''),'organization exact peer');assert(body.ids.length===1&&body.ids[0]===(p1==='direct'?'1'.repeat(32):sourceID),'organization exact original');
+     const review={...clone(body),operation:String(portable.ops.size+7).repeat(32),token:'7'.repeat(64),moves:body.ids.map(id=>{const m=rows.find(m=>m.id===id);assert(m,'review existing original');return{lid:m.lid,author:'11111111-22222222-33333333-44444444',hash:'8'.repeat(64),topic:p1==='direct'?m.placement:m.topic||''};})};portable.ops.set(review.operation,{review});return review;
+    }
+    if(['direct','personal'].includes(p1)&&p==='/api/topic/organization/apply'){
+     await pause(25);const op=portable.ops.get(body.operation);assert(op&&JSON.stringify(body)===JSON.stringify(op.review),'apply exact immutable review');const rows=p1==='direct'?directMessages:secondView.messages;
+     for(const id of body.ids){const m=rows.find(m=>m.id===id);if(p1==='direct')m.placement=body.topic;else m.topic=body.topic;}op.applied=true;
+     if(p1==='direct')updateDirect();else for(const t of secondView.topics)t.count=rows.filter(m=>m.topic===t.id).length;
+     emit();return{ID:body.operation,LID:body.operation,State:'stored'};
+    }
+    if(p1==='direct'&&p==='/api/topic/organization/undo'){
+     await pause(25);assert(body.conv===''&&body.peer===peer.address,'undo exact direct route');const op=portable.ops.get(body.lid);assert(op?.applied,'undo exact operation');for(const m of op.review.moves)directMessages.find(r=>r.lid===m.lid).placement=m.topic;op.undone=true;updateDirect();emit();return[{ID:body.id,LID:body.id,State:'stored'}];
+    }
+    if(p1==='bulk'&&p.startsWith('/api/topic/')&&body?.ids){await pause(25);assert(body.conv===view.id&&body.peer===''&&body.id==='','bulk exact root');assert(JSON.stringify(body.ids)===JSON.stringify(['1'.repeat(32),'2'.repeat(32)]),'bulk exact reviewed IDs');for(const id of body.ids)assert(body.counts[id]===1,'bulk reviewed count');portable.bulk.push({path,body:clone(body)});if(p.endsWith('/archive'))for(const t of view.topics.filter(t=>body.ids.includes(t.id)))t.state='archived';else if(p.endsWith('/delete'))view.topics=view.topics.filter(t=>!body.ids.includes(t.id));else throw Error('Unexpected portable bulk mutation');emit();return{note:'Portable exact bulk change stored'};}
+    if(p1==='schedule'&&p==='/api/schedule/create'){
+     await pause(25);assert(body.conv===view.id&&body.topic==='1'.repeat(32),'schedule exact root/topic');const metadata=(body.files||[]).map(handle=>{const item=staged[Number(handle.split('-').at(-1))-1];assert(item,'actual staged file');return{name:item.name,size:item.size,sha256:item.sha256};});
+     const normalized={...clone(body),files:metadata};portable.scheduleCreates.push(normalized);let row=schedules.find(s=>s.id===body.id);
+     if(row){assert(JSON.stringify(row.captured)===JSON.stringify(normalized),'same-ID retry immutable payload/files');}else{row={...normalized,captured:clone(normalized),rev:1,state:'pending'};schedules.push(row);}
+     if(portable.scheduleLost){portable.scheduleLost=false;throw Error('Synthetic saved request response was lost; result unknown');}emit();return clone(row);
+    }
+
+    if(p==='/api/act'&&['do_it','change_proposal'].includes(body?.do)){await pause(50);reports.proposalAttempts.push(clone(body));throw Error('Synthetic proposal refused; normal task authority required');}
+    if(p==='/api/act'&&body?.do==='accept'){await pause(50);reports.ownerDecisionAttempts.push(clone(body));throw Error('Synthetic one-time authorization refused; no native work started');}
+    if(p==='/api/file/open-image'){await pause(50);assert(body.id&&body.index===1&&body.dir,'exact original native image request');throw Error('Synthetic native image open refused; no external app launched');}
+    if(p==='/api/send'){await pause(50);reports.assignmentAttempts.push(clone(body));throw Error('Synthetic assignment refused; no task or native work started');}
+    if(p==='/api/agents'){if(body){await pause(25);if(body.action==='publish'&&simulatedSetup){setupPublishes++;return{saved:true,published:setupPublishes>1,note:'Invented setup publication receipt; no signed catalog published'};}const a=catalog.agents.find(a=>a.record.id===body.id);if(body.action==='disable')a.enabled=false;else if(body.action==='update'){a.enabled=true;a.responder={...a.responder,harness:body.harness,dir:body.dir};}else if(body.action==='create')catalog.agents.push({record:{v:1,id:'5'.repeat(32),host:overview.me.address,host_key:overview.me.fingerprint,label:body.label,harness:body.harness,ts:2},enabled:true,responder:{...responder,harness:body.harness,dir:body.dir}});emit();return{saved:true,published:true,agent:a,note:'Fixture catalog saved'};}const remote=u.searchParams.get('host');if(suite==='media'&&overview.agent_devices.includes(remote))return{host:remote,local:false,agents:[{record:{v:1,id:'7'.repeat(32),host:remote,host_key:me.devices.find(d=>d.address===remote).fingerprint,label:'Fixture own remote',harness:'codex',ts:1},enabled:true}],harnesses:[]};return remote&&remote!==overview.me.address?{host:remote,local:false,agents:suite==='groups'&&overview.agent_devices.includes(remote)?[{record:{v:1,id:((overview.agent_devices.indexOf(remote)+100).toString(16).padStart(32,'0')),host:remote,host_key:'7'.repeat(64),label:'Fixture remote '+overview.agent_devices.indexOf(remote),harness:'codex',ts:1},enabled:true}]:[],harnesses:[]}:clone(catalog);}
     if(p==='/api/dm/guest/check')return{ready:true,needs_update:[],offline:[],text:''};
     if(p==='/api/responder'){if(body){await pause(25);const selected=body.agent_id&&catalog.agents.find(a=>a.record.id===body.agent_id);responder=selected?{...selected.responder,agent_id:selected.record.id,manual:false}:{...responder,...body};for(const a of catalog.agents)a.default=a.record.id===responder.agent_id;emit();}return clone(responder);}
     if(p==='/api/approvals')return clone(grants);
     if(p==='/api/folders')return{path:u.searchParams.get('path')||'/fixture',home:'/fixture',roots:['/'],dirs:[{name:'work',path:'/fixture/work'}],parent:'/',entries:[{name:'work',path:'/fixture/work',directory:true}],folders:[{name:'work',path:'/fixture/work'}]};
-    if(p==='/api/assistant-setup'){if(body?.action==='review')reviewedSetup=clone(body);if(body?.action==='apply'){assert(reviewedSetup&&body.review_id==='fixture-review'&&JSON.stringify(body.harnesses)===JSON.stringify(reviewedSetup.harnesses),'setup Apply must match the exact reviewed token and harnesses');reports.setupApplyReview={review_id:body.review_id,harnesses:clone(body.harnesses),reviewMatched:true,nativeEffects:false};throw Error('Synthetic native setup refused; real harness configuration required');}return{local:true,review_id:body?.action==='review'?'fixture-review':'',harnesses:[{id:'codex',label:'Codex',detected:true,configured:false,registered:false,supported:true,state:'needs_setup',note:'Invented native setup presentation',change:'Update fixture hooks',target:'/fixture/settings'},{id:'pi',label:'Pi',detected:true,configured:true,registered:false,supported:true,state:'needs_activation',note:'Invented setup status'}]};}
+    if(p==='/api/assistant-setup'){await pause(25);if(body?.action==='review')reviewedSetup=clone(body);if(body?.action==='apply'){assert(reviewedSetup&&body.review_id==='fixture-review'&&JSON.stringify(body.harnesses)===JSON.stringify(reviewedSetup.harnesses),'setup Apply must match the exact reviewed token and harnesses');reports.setupApplyReview={review_id:body.review_id,harnesses:clone(body.harnesses),reviewMatched:true,nativeEffects:false};if(!simulatedSetup)throw Error('Synthetic native setup refused; real harness configuration required');setupReceipt=true;}return{local:true,review_id:body?.action==='review'?'fixture-review':'',harnesses:[{id:'codex',label:'Codex',detected:true,configured:setupReceipt,registered:setupReceipt,supported:true,state:setupReceipt?'connected':'needs_setup',note:'Invented native setup presentation',change:'Update fixture hooks',target:'/fixture/settings'},{id:'pi',label:'Pi',detected:true,configured:true,registered:setupReceipt,supported:true,state:setupReceipt?'connected':'needs_activation',note:'Invented setup status'},...(missingFolderMode?[{id:'claude',label:'Claude',detected:true,configured:false,registered:false,supported:true,state:'needs_setup',note:'Invented detected Claude without chosen folder'}]:[])]};}
     if(p==='/api/schedules')return body?{}:u.searchParams.has('id')?clone(schedules.find(s=>s.id===u.searchParams.get('id'))):clone(u.searchParams.get('all')==='1'?[...schedules,historySchedule]:schedules);
     if(p==='/api/schedule/audience')return{persons:[me.person,peer.person],pids:[]};
     if(p.startsWith('/api/schedule/')){await pause(25);let row=schedules.find(s=>s.id===body.id);if(p.endsWith('/create')){row={...body,rev:1,state:'pending',files:body.files||[]};schedules.push(row);}else{assert(row&&row.rev===body.rev,'schedule exact revision');if(p.endsWith('/edit'))Object.assign(row,body,{rev:row.rev+1});if(p.endsWith('/cancel'))row.state='cancelled';if(p.endsWith('/send_now'))row.state='sent';}emit();return clone(row);}
@@ -102,6 +167,7 @@ try {
     if(p==='/api/operator/decide'){await pause(25);if(nativeFailure){nativeFailure=false;throw Error('Synthetic native callback response unavailable');}return{note:'Fixture response saved; native result unknown'};}
     if(p==='/api/groups/decide'){await pause(25);overview.group_invitations=overview.group_invitations.filter(g=>g.id!==body.id);emit();return{recorded:true};}
     if(p==='/api/person/label'){await pause(25);me.label=body.label;emit();return clone(me);}
+    if(p==='/api/get-app')return{detected:'linux',platforms:[{id:'linux',label:'Linux',url:'https://fixture.invalid/linux'},{id:'macos',label:'macOS',url:'https://fixture.invalid/mac'},{id:'windows',label:'Windows',url:'https://fixture.invalid/windows'}]};
     if(p==='/api/device/link'){await pause(25);return{url:'https://fixture.invalid/one-use-only',expires:future};}
     if(p==='/api/device/decide'){await pause(25);overview.links=overview.links.filter(l=>l.id!==body.id);emit();return{note:'Fixture device decision stored'};}
     if(p==='/api/device/remove'){await pause(25);me.devices=me.devices.filter(d=>d.address!==body.address);emit();return{note:'Fixture device removed'};}
@@ -147,6 +213,7 @@ try {
    if(body!==undefined)return {};
    return {};
   }};
+ if(extended)host.file=async(id,index,dir)=>{const call={id,index,dir,start:performance.now()};reports.fileCalls.push(call);await pause(50);const bytes=presentationFiles.get(id+':'+index);assert(bytes,'unknown invented attachment');call.result=performance.now();call.sha256=await fileHash(new Blob([bytes]));return{bytes:bytes.slice()};};
  if(extended)host.stage=async file=>{const item={name:file.name,type:file.type,size:file.size,sha256:await fileHash(file)};staged.push(item);return 'fixture-staged-'+staged.length;};
  if(suite==='workspaces'){
   const memberships=[{...host.workspace,endpoint:location.origin,address:overview.me.address,handle:'fixture-active'},{id:'other',name:'Fixture other',state:'enrolled',endpoint:'https://fixture.invalid',address:'fixture/other',handle:'fixture-other'}],disconnected=[{id:'closed',name:'Fixture closed',state:'disconnected',endpoint:'https://fixture.invalid',address:'fixture/closed'}],subscribers=new Set(),bags={};let selectedWorkspace=host.workspace.id;
@@ -157,6 +224,7 @@ try {
    disconnect:id=>owned('workspace.disconnect',{id},async()=>{await pause(25);const w=memberships.find(w=>w.id===id);assert(id!==host.workspace.id,'cannot disconnect active fixture in this vector');memberships.splice(memberships.indexOf(w),1);disconnected.push({...w,state:'disconnected'});changed();}),
    disconnected:async()=>disconnected,join:body=>owned('workspace.join',body,async()=>{await pause(25);throw Error('Synthetic join refused; real server invitation verification required');}),reconnect:id=>owned('workspace.reconnect',{id},async()=>{await pause(25);throw Error('Synthetic reconnect unavailable; saved identity retained');})};
  }
+ const clipboardDescriptor=Object.getOwnPropertyDescriptor(navigator,'clipboard');reports.copyAttempts=[];Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>{reports.copyAttempts.push({text,nativeEffect:false});throw Error('Synthetic clipboard refusal');}}});
  const originalAPI=host.api;
  host.api=async(path,body)=>{
   const call={path,method:body===undefined?'read':'write',start:performance.now()};if(extended&&body!==undefined)call.request=clone(body);reports.apiCalls.push(call);
@@ -165,7 +233,7 @@ try {
  };
  const shadow=document.querySelector('#fixture').attachShadow({mode:'open'}),link=document.createElement('link');link.rel='stylesheet';link.href='/assets/skins/comic/style.css';shadow.append(link);
  const root=document.createElement('div');root.style.height='100%';shadow.append(root);await mount(root,host);
- window.__agentnetLatencyDispose=()=>{window.removeEventListener('error',pageError);window.removeEventListener('unhandledrejection',pageError);unmount(root);};
+ window.__agentnetLatencyDispose=()=>{if(clipboardDescriptor)Object.defineProperty(navigator,'clipboard',clipboardDescriptor);else delete navigator.clipboard;window.removeEventListener('error',pageError);window.removeEventListener('unhandledrejection',pageError);unmount(root);};
  const scope=()=>shadow;
  const shown=el=>{if(!el||el.closest('[inert]')||el.getAttribute('aria-hidden')==='true'||!el.getClientRects().length)return false;for(let p=el;p&&p.nodeType===1;p=p.parentElement){const s=getComputedStyle(p);if(s.visibility==='hidden'||s.display==='none'||s.opacity==='0')return false;}return true;};
  const onScreen=el=>{if(!shown(el))return false;const r=el.getBoundingClientRect();return r.bottom>0&&r.top<innerHeight&&r.right>0&&r.left<innerWidth;};
@@ -181,7 +249,7 @@ try {
    await until(complete,id+' completed visible state',3000);record.visibleMs=performance.now()-record.start;await frame();await frame();assert(complete(),id+' state lost before paint opportunity');record.paintMs=performance.now()-record.start;
    if(reports.hostCalls)record.hostResults=reports.hostCalls.slice(record.hostStart).map(c=>({...c,startMs:c.start-record.start,resultMs:c.result===undefined?null:c.result-record.start}));
    record.api=reports.apiCalls.slice(record.apiStart).map(c=>({path:c.path,method:c.method,startMs:c.start-record.start,resultMs:c.result===undefined?null:c.result-record.start,ok:c.ok??null}));
-   const writes=record.api.filter(c=>c.method==='write'&&c.resultMs!==null&&c.ok===true),failed=record.api.filter(c=>c.method==='write'&&c.resultMs!==null&&c.ok===false),projections=record.api.filter(c=>c.path.startsWith('/api/dm?')&&c.resultMs!==null&&c.ok===true);
+   const writes=record.api.filter(c=>c.method==='write'&&c.resultMs!==null&&c.ok===true),failed=record.api.filter(c=>c.method==='write'&&c.resultMs!==null&&c.ok===false),projections=record.api.filter(c=>(c.path.startsWith('/api/dm?')||p1&&c.path.startsWith('/api/thread?'))&&c.resultMs!==null&&c.ok===true);
    record.durableResultMs=writes.length?Math.max(...writes.map(c=>c.resultMs)):null;record.durableSource=writes.length?'synthetic host API result (not database persistence)':null;
    record.failedResultMs=failed.length?Math.max(...failed.map(c=>c.resultMs)):null;
    record.projectionResultMs=projections.length?Math.max(...projections.map(c=>c.resultMs)):null;
@@ -189,7 +257,7 @@ try {
    record.stateVerified=true;record.feedbackBoundPassed=record.feedbackMs<2000;record.ok=record.feedbackBoundPassed;if(!record.feedbackBoundPassed)reports.feedbackFailures.push(id+' feedback exceeds existing optimistic-feedback bound');census();
   }finally{running=false;delete record.apiStart;delete record.hostStart;reports.actions.push(record);}
  };
- const initialChat=()=>[...root.querySelectorAll('[data-part="chat-row"]')].find(b=>b.textContent.includes('Vitalii')&&onScreen(b));
+ const initialChat=()=>[...root.querySelectorAll('[data-part="chat-row"]')].find(b=>b.textContent.includes(p1==='direct'?'Portable Pi':'Vitalii')&&onScreen(b));
  await until(initialChat,'visible initial chat row');await frame();await frame();assert(initialChat(),'initial chat control disappeared before input');reports.initialControl={visible:true,paintOpportunityFrames:2,readyAtMs:performance.now(),fonts:document.fonts.status};
  if(suite==='actions'){
   const message=view.messages.at(-1),row=()=>root.querySelector('[data-mid="'+message.id+'"]'),pending=()=>row()?.querySelector('[data-reaction-pending="true"]');
@@ -206,7 +274,7 @@ try {
   await measure('message.edit-text',()=>{set.call(edit,'Edited exact action target');edit.dispatchEvent(new Event('input',{bubbles:true}));},()=>edit.value==='Edited exact action target','edited text visible');await measure('message.edit-save',()=>[...row().querySelectorAll('button')].find(b=>label(b)==='Save').click(),()=>!row().querySelector('textarea')&&row().textContent.includes('Edited exact action target'),'authoritative edited text replaces editor',()=>message.body==='Edited exact action target'&&!row().querySelector('textarea'));
   await menu();await measure('message.details-open',()=>item('Details').click(),()=>visibleText('Message details'),'exact message details visible');await settled();const detail=[...scope().querySelectorAll('[role="dialog"]')].find(d=>d.textContent.includes('Message details'));assert(detail.textContent.includes(message.id),'details wrong ID');await measure('message.details-close',()=>detail.querySelector('button[aria-label="Close"]').click(),()=>detail.hasAttribute('data-ending-style')||!detail.isConnected,'details closing feedback',()=>!detail.isConnected);
   for(const admin of [false,true]){overview.role=admin?'admin':'member';Object.assign(message,{state:'failed',delivery:'failed',detail:'send_error:relay_quota: Synthetic producer reason.',state_text:'Not sent'});emit();await until(()=>row().querySelector('[data-send-error="relay_quota"]'),'producer error projection');const error=row().querySelector('[data-send-error="relay_quota"]');assert(!![...error.querySelectorAll('button')].find(b=>label(b)==='Open Storage')===admin,'admin/member storage action mismatch');await measure('retry.exact-'+(admin?'admin':'member'),()=>[...error.querySelectorAll('button')].find(b=>label(b)==='Retry this message').click(),()=>!!error.querySelector('button:disabled'),'retry visibly pending',()=>!row().querySelector('[data-send-error]')&&message.state==='queued');}
-  await menu();await measure('message.copy-feedback',()=>item('Copy text').click(),()=>visibleText('Copied')||visibleText('Couldn’t copy here'),'clipboard outcome visible; OS clipboard persistence is separate');reports.clipboardOutcome=visibleText('Copied')?'browser clipboard accepted':'clipboard unavailable here';await settled();
+  await menu();await measure('message.copy-feedback',()=>item('Copy text').click(),()=>visibleText('Copied')||visibleText('Couldn’t copy here'),'clipboard outcome visible; OS clipboard persistence is separate');assert(visibleText('Couldn’t copy here')&&reports.copyAttempts.at(-1).text===message.body,'copy presentation must preserve exact original and surface synthetic refusal');reports.clipboardOutcome='synthetic refusal; OS clipboard untouched';await settled();
   await menu();await measure('message.select',()=>item('Select').click(),()=>visibleText('1 message selected')&&!!item('Stop selecting'),'exact message selected with explicit exit');await settled();
   const move=item('Move to topic');if(move){await measure('message.organize-open',()=>move.click(),()=>visibleText('Move selected messages'),'organization review for selected original visible');await settled();const organize=[...scope().querySelectorAll('[role="dialog"]')].find(d=>d.textContent.includes('Move selected messages'));assert(organize.textContent.includes('Edited exact action target'),'organization lost exact original');await measure('message.organize-cancel',()=>[...organize.querySelectorAll('button')].find(b=>label(b)==='Cancel').click(),()=>organize.hasAttribute('data-ending-style')||!organize.isConnected,'organization cancelled without applying move',()=>!organize.isConnected);await settled();}
   await measure('message.selection-stop',()=>item('Stop selecting').click(),()=>!item('Stop selecting')&&!!root.querySelector('[data-part="composer"]'),'selection exits to original composer');
@@ -382,17 +450,120 @@ try {
   const text=()=>active('[data-part="composer-field"] textarea');
   const more=()=>control('Add to message');
   const plus=async id=>{await retire();await tap(id,more(),()=>!!control(/^Photo or file/),'composer menu choices visible');};
-  if(suite==='topics'){
+  if(suite==='topics'&&['direct','personal','bulk'].includes(p1)){
+   await chat();
+   const all=()=>sheet('All topics'),openAll=async(id,complete=()=>!!all())=>tap(id,control(/^All topics/),()=>!!all(),'All topics dialog visible',complete);
+   if(p1==='bulk'){
+    await openAll('topics.portable-bulk-open');
+    const choose=async(id)=>{const box=all().querySelector('input[aria-label="Select Portable bulk '+id+'"]');await tap('topics.bulk-select-'+id,box,()=>box.checked,'exact topic selected');};
+    await choose(1);await choose(2);
+    await tap('topics.bulk-archive-review',control('Archive',all()),()=>!!control('Confirm',all()),'bulk archive exact two IDs/counts reviewed');
+    assert(portable.bulk.length===0,'review must not dispatch the batch');
+    await tap('topics.bulk-archive-cancel',control('Cancel',all()),()=>!control('Confirm',all())&&!!control('Archive',all()),'Cancel leaves selection and dispatches nothing');
+    assert(portable.bulk.length===0&&view.topics.every(t=>t.state==='active'),'cancel changed topic state or dispatched a batch');
+    await tap('topics.bulk-archive-review-again',control('Archive',all()),()=>!!control('Confirm',all()),'same exact reviewed selection offered again');
+    const archive=control('Confirm',all());archive.scrollIntoView({block:'nearest'});await frame();await measure('topics.bulk-archive-confirm',()=>{archive.click();archive.click();},()=>archive.disabled&&label(archive)==='Archiving 2…','immediate captured batch pending; duplicate activation dispatches once',()=>portable.bulk.length===1&&!control('Confirm',all())&&!all().textContent.includes('2 selected')&&view.topics.filter(t=>['1'.repeat(32),'2'.repeat(32)].includes(t.id)).every(t=>t.state==='archived'));
+    assert(!control('Undo',all()),'All topics must not offer pseudo-Undo after dispatch');
+    await closeSheet('topics.bulk-after-confirm-close','All topics');assert(portable.bulk.length===1,'closing dispatched the already confirmed batch again');
+    await openAll('topics.bulk-reopen');await tap('topics.bulk-archived-filter',control(/^Archived/,all()),()=>!!all().querySelector('ul[aria-label="Archived topics"]'),'exact archived batch visible after host result');await choose(1);await choose(2);
+    await tap('topics.bulk-delete-review',control('Delete for me',all()),()=>!!control('Confirm',all()),'delete exact reviewed batch for this person');
+    const remove=control('Confirm',all());remove.scrollIntoView({block:'nearest'});await frame();await measure('topics.bulk-delete-confirm',()=>{remove.click();remove.click();},()=>remove.disabled&&label(remove)==='Deleting 2…','immediate exact delete pending; no pseudo-success before host result',()=>portable.bulk.length===2&&!control('Confirm',all())&&!all().textContent.includes('2 selected')&&!view.topics.some(t=>['1'.repeat(32),'2'.repeat(32)].includes(t.id)));
+    assert(!control('Undo',all()),'bulk deletion must not offer pseudo-Undo');
+    assert(view.topics.length===1&&view.topics[0].id==='3'.repeat(32)&&view.topics[0].state==='active','unselected newer topic survives');reports.portableBulk=clone(portable.bulk);
+    await closeSheet('topics.bulk-final-close','All topics');assert(portable.bulk.length===2,'close duplicated confirmed delete');
+   }else{
+    const title=p1==='direct'?'Portable Pi 1':'Portable second source';
+    await openAll('topics.'+p1+'-all-open',()=>!!all()&&!!control(new RegExp('^'+title+','),all()));
+    assert(!all().textContent.includes('Other agent topic'),'foreign full agent tuple absent');
+    const sourceChoice=control(new RegExp('^'+title+','),all());sourceChoice.scrollIntoView({block:'nearest'});await frame();await measure('topics.'+p1+'-source-open',()=>{sourceChoice.focus({preventScroll:true});sourceChoice.click();},()=>!all()&&!!control(new RegExp('^'+title+'.*open topic, menu')),'exact normal source topic opened with its current menu; explicit focused-button synthetic activation');await retire();
+    const original=p1==='direct'?'1'.repeat(32):sourceID,rows=p1==='direct'?directMessages:secondView.messages;
+    const originals=JSON.stringify(rows.map(({placement,topic,...m})=>m));
+    if(p1==='direct'){
+     const bubble=root.querySelector('[data-mid="'+original+'"] [data-message-bubble]');assert(bubble,'actual direct original visible');
+     await measure('topics.direct-actions',()=>bubble.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true})),()=>!!control('Select'),'direct original actions visible');
+     await tap('topics.direct-select',control('Select'),()=>!!control('Move to topic'),'direct original selected');await retire();
+     await tap('topics.direct-organize-open',control('Move to topic'),()=>!!sheet('Move selected messages'),'direct move sheet visible');
+     let d=()=>sheet('Move selected messages'),select=d().querySelector('select');await fill('topics.direct-destination',select,'2'.repeat(32),()=>select.value==='2'.repeat(32),'same concrete agent destination selected');
+     assert(!d().textContent.includes('Other agent topic'),'different agent cannot become destination');
+     await tap('topics.direct-review',control('Review move',d()),()=>label(control(/Checking|Review move/,d())).includes('Checking'),'review request busy',()=>d().textContent.includes('Move 1 message to “Portable Pi 2”?'));
+     let apply=control('Move 1 message',d());await tap('topics.direct-apply',apply,()=>apply.disabled&&label(apply)==='Moving…','move submission visible',()=>!!control('Undo move',d()));
+     const op=[...portable.ops.values()].find(o=>o.applied);assert(op&&op.review.peer===peer.address&&op.review.conv==='','direct apply route retained');
+     let undo=control('Undo move',d());await tap('topics.direct-undo-complete',undo,()=>undo.disabled,'Undo submission visible',()=>!d()&&op.undone&&directMessages.find(m=>m.id===original).placement===original);await retire();
+    }
+    await tap('topics.'+p1+'-menu',control(new RegExp('^'+title+'.*open topic, menu')),()=>!!control('Merge into another topic…'),'merge action offered for exact source');
+    await tap('topics.'+p1+'-merge-open',control('Merge into another topic…'),()=>!!sheet('Merge this topic'),'normal merge sheet visible');await retire();
+    const merge=()=>sheet('Merge this topic'),select=merge().querySelector('select'),target=p1==='direct'?'2'.repeat(32):destinationID;
+    await fill('topics.'+p1+'-merge-destination',select,target,()=>select.value===target,'exact existing destination selected');
+    const check=control('Review move',merge());await tap('topics.'+p1+'-merge-review',check,()=>check.disabled,'merge review pending',()=>!!control('Move 1 message',merge()));
+    const move=control('Move 1 message',merge());await tap('topics.'+p1+'-merge-complete',move,()=>move.disabled,'merge submission pending',()=>p1==='direct'?!!control('Undo move',merge()):!merge());
+    if(p1==='direct')await tap('topics.direct-merge-done',control('Done',merge()),()=>!merge(),'confirmed merge sheet closed');await retire();
+    const applied=[...portable.ops.values()].filter(o=>o.applied).at(-1);assert(applied.review.merge===original&&applied.review.topic===target,'merge retains exact source/destination');
+    assert(JSON.stringify(rows.map(({placement,topic,...m})=>m))===originals,'organization preserves every original message field');
+    if(p1==='direct')assert(directMessages.find(m=>m.id==='9'.repeat(32)).placement==='9'.repeat(32),'other concrete agent context remains separate');
+    else{await openAll('topics.personal-destination-list');await tap('topics.personal-destination-open',control(/^Portable second destination,/,all()),()=>!all()&&!!root.querySelector('[data-mid="'+sourceID+'"]'),'moved original rendered in exact second-root destination');assert(root.querySelector('form[data-conv="'+secondConv+'"]'),'personal route remains original second root');}
+    reports.portableOrganization={kind:p1,operations:[...portable.ops.values()].map(x=>clone(x)),topicReads:clone(portable.topicReads),dmReads:clone(portable.dmReads),originalsPreserved:true};
+   }
+   reports.portableWrites=reports.apiCalls.filter(c=>c.method==='write').map(c=>({path:c.path,request:c.request,ok:c.ok,result:c.result}));assert(!reports.portableWrites.some(c=>['/api/send','/api/dm/send','/api/operator/decide'].includes(c.path)),'organization never resends originals or grants execution');
+  }
+
+  if(suite==='compose'&&p1==='schedule'){
+   await chat();
+   await tap('compose.portable-topic-list',control(/^All topics/),()=>!!sheet('All topics'),'normal scoped topic chooser visible');
+   await tap('compose.portable-topic-select',control(/^Portable schedule scope,/,sheet('All topics')),()=>!sheet('All topics')&&!!root.querySelector('[data-topic="'+ '1'.repeat(32)+'"][aria-current="true"]'),'exact existing schedule topic selected');await retire();
+   const source=view.messages.at(-1),bubble=root.querySelector('[data-mid="'+source.id+'"] [data-message-bubble]');
+   await measure('compose.portable-reply-actions',()=>bubble.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true})),()=>!!control('Reply'),'normal exact source actions visible');
+   await tap('compose.portable-reply',control('Reply'),()=>!!control('Cancel reply'),'exact source reply chip retained');await retire();
+   const retainedField=()=>root.querySelector('[data-part="composer-field"] textarea');
+   const body='Portable uncertain same-ID schedule';await fill('compose.portable-schedule-draft',text(),body);
+   const file=new File(['portable same file bytes'],'portable-proof.txt',{type:'text/plain'}),fileDigest=await fileHash(file);
+   await measure('compose.portable-file',()=>{const el=root.querySelector('input[type=file]'),transfer=new DataTransfer();transfer.items.add(file);Object.defineProperty(el,'files',{configurable:true,value:transfer.files});el.dispatchEvent(new Event('change',{bubbles:true}));},()=>!!root.querySelector('[aria-label="Remove portable-proof.txt"]'),'real invented File retained in normal composer');
+   await plus('compose.portable-schedule-menu');await tap('compose.portable-schedule-open',control(/^Schedule…/),()=>!!sheet('Schedule message'),'schedule review for captured draft visible');await retire();
+   const d=()=>sheet('Schedule message'),sendDate=d().querySelector('input[aria-label="Send date"]'),sendTime=d().querySelector('input[aria-label="Send time"]'),date=(new Date().getFullYear()+1)+'-04-03';
+   await fill('compose.portable-send-date',sendDate,date,()=>sendDate.value===date,'exposed date value selected without OS picker');await fill('compose.portable-send-time',sendTime,'10:30',()=>sendTime.value==='10:30','exposed time value selected without OS picker');
+   await until(()=>control('Save schedule',d())&&!control('Save schedule',d()).disabled,'captured audience ready');
+   let save=control('Save schedule',d());await tap('compose.portable-save-unknown',save,()=>onScreen(d()?.querySelector('[aria-label="Unconfirmed schedule save"]')),'captured original save state visible',()=>!!control('Retry same save',d())&&d().textContent.includes('Save not confirmed'));
+   assert(portable.scheduleCreates.length===1&&retainedField().value===body&&!!root.querySelector('[aria-label="Remove portable-proof.txt"]'),'unknown result retains draft/file');assert(!visibleText('Scheduled for'),'lost response does not claim confirmation');
+   const first=portable.scheduleCreates[0],saved=schedules.find(s=>s.id===first.id);assert(saved&&saved.rev===1,'invented provider stored exactly one pending schedule before lost response');assert(first.reply_to===source.id&&first.quote===source.id,'captured exact reply');assert(first.files.length===1&&first.files[0].sha256===fileDigest,'actual staged file bytes captured');
+   await tap('compose.portable-check-saved',control('Check saved state',d()),()=>d().textContent.includes('Saved state found; confirm with same-ID save'),'lookup result visible while save remains unconfirmed',()=>d().textContent.includes('Saved state found; confirm with same-ID save'));
+   assert(retainedField().value===body&&!!root.querySelector('[aria-label="Remove portable-proof.txt"]')&&!!control('Retry same save',d()),'lookup does not clear or confirm draft');
+   const retry=control('Retry same save',d());await tap('compose.portable-retry-same-id',retry,()=>retry.disabled,'same save retry in flight',()=>!d()&&visibleText('Scheduled for')&&onScreen(retainedField()));
+   assert(portable.scheduleCreates.length===2&&JSON.stringify(portable.scheduleCreates[0])===JSON.stringify(portable.scheduleCreates[1]),'same-ID retry preserves full normalized immutable payload');
+   assert(schedules.filter(s=>s.id===first.id).length===1&&saved.rev===1,'retry is idempotent, not a second new schedule');assert(staged.length===2&&staged.every(f=>f.sha256===fileDigest),'retry restages identical File bytes');
+   assert(text().value===''&&!!root.querySelector('[data-topic="'+ '1'.repeat(32)+'"][aria-current="true"]')&&!root.querySelector('[aria-label="Remove portable-proof.txt"]')&&!control('Cancel reply'),'only confirmed save clears unchanged captured draft/file/reply');
+   const writes=reports.apiCalls.filter(c=>c.method==='write'&&c.path.startsWith('/api/schedule/'));assert(!reports.apiCalls.some(c=>c.method==='write'&&['/api/send','/api/dm/send'].includes(c.path)),'schedule path never uses ordinary Send');
+   reports.portableSchedule={creates:clone(portable.scheduleCreates),rawWrites:writes.map(c=>({path:c.path,request:c.request,ok:c.ok,error:c.error})),fileDigest,storedIDs:schedules.filter(s=>s.id===first.id).map(s=>({id:s.id,rev:s.rev,state:s.state})),lookupIsNotConfirmation:true,nativePickerExecuted:false};
+  }
+
+  if(suite==='outbox'&&p1==='reminder'){
+   await tap('outbox.portable-open',button(/^Outbox\b/),()=>!!active('section[aria-label="Outbox"]'),'Outbox visible');
+   await tap('outbox.portable-reminders-tab',control(/^Reminders/),()=>!!control(/^Reminder done:/),'reminder list selected through normal Outbox tab');
+   await tap('outbox.portable-reminder-details',control('Details'),()=>!!sheet('Reminder'),'exact reminder details visible');
+   await tap('outbox.portable-custom-open',control('Later…',sheet('Reminder'))||control('Change…',sheet('Reminder')),()=>!!sheet('Move the reminder'),'normal custom reschedule sheet visible');await retire();
+   const d=()=>sheet('Move the reminder'),date=d().querySelector('input[placeholder="YYYY-MM-DD"]'),time=d().querySelector('input[type=time]'),custom=[...d().querySelectorAll('label')].find(l=>l.textContent.includes('At a time I choose'))?.querySelector('input');
+   await tap('outbox.portable-custom-choice',custom,()=>custom.checked,'custom reminder date mode selected');
+   await fill('outbox.portable-invalid-date',date,'202',()=>date.value==='202','editable incomplete date retained');
+   const before=reports.apiCalls.filter(c=>c.path==='/api/remind'&&c.method==='write').length;
+   await tap('outbox.portable-invalid-save',control('Move it',d()),()=>!!d().querySelector('[role=alert]')&&d().textContent.includes('YYYY-MM-DD'),'invalid date rejected with inline error');assert(date===shadow.activeElement,'invalid date returns field focus');assert(reports.apiCalls.filter(c=>c.path==='/api/remind'&&c.method==='write').length===before,'invalid date writes nothing');
+   const day=(new Date().getFullYear()+1)+'-04-03';await fill('outbox.portable-valid-date',date,day,()=>date.value===day&&!d().querySelector('[role=alert]'),'four-digit shared text date replaces invalid value');await fill('outbox.portable-custom-time',time,'10:30',()=>time.value==='10:30','portable time value retained');
+   const calendar=d().querySelector('input[aria-label="Calendar date"]');await tap('outbox.portable-calendar-show',control('Choose from calendar',d()),()=>calendar.getAttribute('aria-hidden')==='false'&&onScreen(calendar),'exposed date control visible; OS popup result unclaimed');
+   const calendarDay=(new Date().getFullYear()+1)+'-04-04';await fill('outbox.portable-calendar-date',calendar,calendarDay,()=>calendar.value===calendarDay&&date.value===calendarDay,'normal exposed calendar change updates shared text date');
+   const target=overview.reminders[0].message,expected=Math.floor(new Date(calendarDay+'T10:30').getTime()/1000),save=control('Move it',d());await tap('outbox.portable-custom-save',save,()=>save.disabled,'custom reminder save in flight',()=>!d()&&overview.reminders[0].message===target&&!overview.reminders[0].overdue&&Date.parse(overview.reminders[0].due)===expected*1000);
+   const request=reports.apiCalls.filter(c=>c.path==='/api/remind'&&c.method==='write').at(-1);assert(request.request.id===target&&request.request.due===expected,'exact original reminder and local-time due');
+   reports.portableReminder={request:clone(request.request),localDate:calendarDay,localTime:'10:30',timezone:Intl.DateTimeFormat().resolvedOptions().timeZone,invalidProducedNoWrite:true,nativePopup:'not executed/proven; requires real platform date UI and trusted input',portableDateControl:true};
+  }
+
+  if(suite==='topics'&&!p1){
    await chat();await tap('topics.all-open',control(/^All topics/),()=>!!sheet('All topics'),'all topics dialog visible');
    const d=()=>sheet('All topics');
    for(const filter of ['Done','Archived','Active'])await tap('topics.filter-'+filter.toLowerCase(),control(new RegExp('^'+filter),d()),()=>!!d().querySelector('ul[aria-label="'+filter+' topics"]'),'exact '+filter+' topic list visible');
    const q=d().querySelector('input[type="search"]');await fill('topics.search-all-states',q,'Fixture',()=>q.value==='Fixture'&&onScreen(q)&&onScreen(control('Clear search',d())),'controlled query and matching Clear search control visible',()=>!!d().querySelector('ul[aria-label="Matching topics"]')&&d().querySelectorAll('li').length===3);
-   await tap('topics.search-clear',control('Clear search',d()),()=>q.value===''&&onScreen(q)&&!control('Clear search',d()),'controlled query cleared and Clear search control removed',()=>q.value===''&&!!d().querySelector('ul[aria-label="Active topics"]'));
+   await tap('topics.search-clear',control('Clear search',d()),()=>q.value===''&&onScreen(q)&&shadow.activeElement===q&&!control('Clear search',d()),'controlled query cleared and Clear search control removed',()=>q.value===''&&!!d().querySelector('ul[aria-label="Active topics"]'));
    reports.topicSearchStages={feedback:'controlled query plus matching Clear search presence/absence',complete:'all-status matching list or restored Active list after background debounce',configuredSearchDelayMs:250,source:'model.ts TOPICS.searchDelay; Conversation.alltopics.tsx query->q timer',limit:'250ms is the inspected product debounce, not a new test bound; earlier completion-only observations remain unchanged in retained logs'};
    const checkbox=d().querySelector('input[type="checkbox"]');await tap('topics.select',checkbox,()=>checkbox.checked&&d().textContent.includes('1 selected'),'exact topic selection visible');
    await tap('topics.selection-archive-review',control('Archive',d()),()=>!!control('Confirm',d()),'explicit archive review appears');
-   await tap('topics.selection-confirm',control('Confirm',d()),()=>!!control('Undo',d()),'pending change with Undo visible');
-   await tap('topics.selection-undo',control('Undo',d()),()=>!control('Undo',d()),'pending topic archive cancelled');
+   const beforeCancelWrites=reports.apiCalls.filter(c=>c.method==='write'&&['/api/topic/archive','/api/topic/delete','/api/topic/done'].includes(c.path)).length;
+   await tap('topics.selection-cancel-before-confirm',control('Cancel',d()),()=>!control('Confirm',d())&&!!control('Archive',d()),'review cancelled before confirmation; selected topic unchanged');
+   assert(reports.apiCalls.filter(c=>c.method==='write'&&['/api/topic/archive','/api/topic/delete','/api/topic/done'].includes(c.path)).length===beforeCancelWrites&&view.topics[0].state==='active','cancel-before-confirm wrote a bulk operation');
    if(control('Cancel selection',d()))await tap('topics.selection-clear',control('Cancel selection',d()),()=>!d().textContent.includes('1 selected'),'selected state cleared');
    await closeSheet('topics.all-close','All topics');
    await tap('topics.new-intent',control('New topic'),()=>control('New topic')?.getAttribute('aria-pressed')==='true','new-topic intent selected');
@@ -445,7 +616,7 @@ try {
    await closeSheet('groups.member-invite-cancel','Bring someone in');
 
   }
-  if(suite==='compose'){
+  if(suite==='compose'&&!p1){
    await chat();await fill('compose.draft-text',text(),'Fixture draft');
    await tap('compose.mention-open',control('Mention someone'),()=>!!active('[role="listbox"]'),'mention choices visible');
    const option=active('[role="option"]');if(option)await tap('compose.mention-pick',option,()=>text().value.includes('@'),'selected mention inserted in draft');
@@ -481,7 +652,7 @@ try {
    reports.taggedReply={parent:original,answer,pid,attempt:0,authority:'invented host shape assertion; signed claim/native execution requires provider journey'};
 
   }
-  if(suite==='outbox'){
+  if(suite==='outbox'&&!p1){
    await tap('outbox.open',button(/^Outbox\b/),()=>!!active('section[aria-label="Outbox"]'),'outbox page visible');
    await until(()=>control('Show history'),'schedules loaded');
    await tap('outbox.history-show',control('Show history'),()=>!!active('[aria-label="Scheduled message history"]'),'scheduled history visible');
@@ -502,6 +673,10 @@ try {
    await tap('outbox.reminders-tab',control(/^Reminders/),()=>!!control(/^Reminder done:/),'due reminder list visible');
    const find=active('input[placeholder="Message or sender"]');await fill('outbox.reminder-search',find,'absent fixture',()=>visibleText('No reminders match your search.'),'reminder no-results state');await fill('outbox.reminder-search-clear',find,'',()=>!!control(/^Reminder done:/),'reminder rows restored');
    await tap('outbox.reminder-details',control('Details'),()=>!!sheet('Reminder'),'exact reminder details visible');
+   const originalReminder=overview.reminders[0],originalReminderID=originalReminder.message;await tap('outbox.open-original',control('Open original message',sheet('Reminder')),()=>!sheet('Reminder')&&onScreen(root.querySelector('[data-mid="'+originalReminderID+'"]')),'exact reminder original message is visible in its bound conversation');assert(root.querySelector('form[data-conv="'+originalReminder.conv+'"]'),'reminder opened a different conversation');reports.reminderOriginal={message:originalReminderID,conv:originalReminder.conv,actualText:root.querySelector('[data-mid="'+originalReminderID+'"]').textContent};await retire();
+   if(innerWidth<1024)await tap('outbox.original-back-to-chats',control('Back to chats'),()=>!!initialChat(),'normal phone Back restores chat list before Outbox');
+   await tap('outbox.return-from-original',button(/^Outbox\b/),()=>!!active('section[aria-label="Outbox"]'),'Outbox restored after exact original');await tap('outbox.reminders-return',control(/^Reminders/),()=>!!control(/^Reminder done:/),'same reminder list restored');await tap('outbox.reminder-details-return',control('Details'),()=>!!sheet('Reminder'),'same exact reminder details reopened');
+
    await tap('outbox.reminder-move-open',control('Later…',sheet('Reminder'))||control('Change…',sheet('Reminder')),()=>!!sheet('Move the reminder'),'reminder reschedule sheet visible');
    await tap('outbox.reminder-preset',[...sheet('Move the reminder').querySelectorAll('label')].find(l=>l.textContent.includes('In 2 hours'))?.querySelector('input'),()=>[...sheet('Move the reminder').querySelectorAll('label')].find(l=>l.textContent.includes('In 2 hours'))?.querySelector('input')?.checked,'future reminder preset selected');
    await tap('outbox.reminder-move-save',control('Move it'),()=>!sheet('Move the reminder')&&!overview.reminders[0].overdue,'rescheduled reminder clears old attention');await retire();
@@ -534,7 +709,18 @@ try {
   }
   if(suite==='agents'){
    await tap('agents.open',button(/^Agents\b/),()=>visibleText('Your agents'),'agents page visible');
+   if(host.platform!=='daemon'){
+    assert(visibleText('This browser doesn’t run agents')&&!control('Change default setting')&&!control('New agent'),'non-daemon host must not offer local agent configuration');
+    await tap('agents.portable-setup-open',control('Connect an agent on your computer'),()=>!!active('section[aria-label="Connect an agent on your computer"]'),'remote setup instructions visible; native configuration is not offered here');
+    const instruction=active('section[aria-label="Connect an agent on your computer"]');await until(()=>instruction.querySelector('details'),'invented published platform choices loaded');
+    const systems=instruction.querySelector('details');await tap('agents.portable-systems',systems.querySelector('summary'),()=>systems.open,'other published installer link choices disclosed without navigation');
+    assert([...instruction.querySelectorAll('a')].every(a=>new URL(a.href).hostname==='fixture.invalid'),'installer fixture links must remain invented');
+    const link=control('Link the installed app to me',instruction);await tap('agents.portable-link',link,()=>!!control('Making a link…',instruction),'one-use app-link creation pending',()=>!!control('Make a new app link',instruction)&&instruction.textContent.includes('Return here to approve the new computer'));
+    const manual=[...instruction.querySelectorAll('details')].find(d=>d.querySelector('summary')?.textContent==='App opened without the link?');await tap('agents.portable-link-details',manual.querySelector('summary'),()=>manual.open&&manual.textContent.includes('https://fixture.invalid/one-use-only'),'exact one-use link manual presentation visible');
+    reports.agentPlatformVariant={host:host.platform,localConfigurationOffered:false,oneUseLinkIsApproval:false,installerNavigation:false,nativeEffects:false};
+   }else{
    await until(()=>control('Change default setting'),'agent data loaded');
+   const model=active('[data-agent-model="'+overview.me.address+'#'+catalog.agents[0].record.id+'"]');assert(model&&model.textContent.includes('Fixture reported model')&&model.textContent.includes('Timestamp unavailable')&&!root.textContent.includes('RETIRED_MODEL_MUST_STAY_HIDDEN'),'read-only model exact host/key/agent or unknown-time handling wrong');assert(![...root.querySelectorAll('select')].some(e=>/model/i.test(e.getAttribute('aria-label')||'')),'invented model chooser');reports.modelPresentation={host:overview.me.address,key:overview.me.fingerprint,agent:catalog.agents[0].record.id,readOnly:true,noModelChooser:true,timestampUnavailable:true};
    await tap('agents.default-open',control('Change default setting'),()=>!!active('[role="radiogroup"]'),'default choices visible');
    const manual=active('[role="radiogroup"]')?.querySelector('[role="radio"]');await tap('agents.default-manual-choice',manual,()=>manual.getAttribute('aria-checked')==='true','manual default selected locally');
    await tap('agents.default-cancel',control('Cancel'),()=>!!control('Change default setting'),'default edit cancelled');assert(!responder.manual,'cancel changed saved responder');
@@ -559,6 +745,14 @@ try {
    const saved=()=>root.querySelector('[data-agent-setup="'+catalog.agents[1].record.id+'"]');await tap('agents.repair-open',control('Repair or enable',saved()),()=>!!sheet('Turn on Fixture Pi'),'exact disabled setup repair editor visible');
    await tap('agents.repair-enable',control('Turn on',sheet('Turn on Fixture Pi')),()=>catalog.agents[1].enabled&&!sheet('Turn on Fixture Pi')&&saved()?.textContent.includes('Enabled · Ready'),'same retained agent ID enabled');await retire();
    await tap('agents.make-current',control('Use as current',saved()),()=>responder.agent_id===catalog.agents[1].record.id&&saved()?.textContent.includes('Current'),'exact retained setup becomes current');
+   const nativeDetails=control('Native sessions');await tap('agents.native-details-open',nativeDetails,()=>nativeDetails.getAttribute('aria-expanded')==='true','exact native setup status details expanded');
+   await tap('agents.native-details-close',nativeDetails,()=>nativeDetails.getAttribute('aria-expanded')==='false','native setup status details collapsed');
+   const allLabel=[...root.querySelectorAll('label')].find(l=>l.textContent.includes('Choose all 2 found')),allBox=allLabel?.querySelector('input');assert(allBox,'two installed tools need exact choose-all control');
+   if(allBox.checked)await tap('agents.setup-clear-all',allBox,()=>!allBox.checked&&control('Review changes').disabled,'clearing every tool disables native review');
+   else {await tap('agents.setup-choose-all',allBox,()=>allBox.checked,'all exact found tools selected');await tap('agents.setup-clear-all',allBox,()=>!allBox.checked&&control('Review changes').disabled,'clearing every tool disables native review');}
+   await tap('agents.setup-choose-all-again',allBox,()=>allBox.checked&&!control('Review changes').disabled,'same installed tools explicitly reselected');
+   const beforeCheck=reports.apiCalls.filter(c=>c.path==='/api/assistant-setup').length;await tap('agents.setup-check-again',control('Check again'),()=>!!control('Looking…'),'native setup read progress visible',()=>!!control('Review changes')&&!control('Review changes').disabled);assert(!reports.apiCalls.slice(-8).some(c=>c.path==='/api/assistant-setup'&&c.request?.action==='apply'),'read/check must not apply setup');
+
    const checkbox=active('input[aria-label="Set up Codex"]');if(!checkbox.checked)await tap('agents.setup-choose',checkbox,()=>checkbox.checked,'installed program selected for native setup review');
    reports.setupReviewInput={dispatch:'synthetic DOM click; does not perform trusted pointer focus',activeTag:shadow.activeElement?.tagName,activeText:shadow.activeElement?.textContent,activeHeading:shadow.activeElement?.matches('h3')||false};
    const reviewButton=control('Review changes');reviewButton.scrollIntoView({block:'nearest'});await frame();
@@ -571,15 +765,110 @@ try {
    await tap('agents.setup-back',control('Back'),()=>!wizard()&&onScreen(control('Connect an agent'))&&shadow.activeElement===control('Connect an agent')&&restoredNamed(),'wizard exits to its exact focused visible Connect opener and original named-agent rows');
    const namedAfterBack=catalog.agents.filter(a=>a.enabled).map(a=>({id:a.record.id,label:a.record.label,harness:a.record.harness}));assert(JSON.stringify(namedAfterBack)===JSON.stringify(namedBeforeBack)&&responder.agent_id===defaultBeforeBack,'Back changed original named agent IDs, harnesses or exact default');
    const returnedHeading=[...root.querySelectorAll('h2')].find(h=>h.textContent==='Your agents');reports.setupReturnContext={namedBefore:namedBeforeBack,namedAfter:namedAfterBack,defaultAgent:responder.agent_id,openerFocused:shadow.activeElement===control('Connect an agent'),opener:control('Connect an agent').getBoundingClientRect().toJSON(),wizardAbsent:!wizard(),pageHeadingObservation:returnedHeading?.getBoundingClientRect().toJSON(),targetCorrection:'actual caller opener focus/visibility and exact restored IDs; page-top heading is an observation, not the Back target'};
+   // Exercise the returned-result presentation with an explicitly simulated
+   // host receipt. No program settings, harness or signed catalog is changed.
+   simulatedSetup=true;
+   await tap('agents.simulated-result-open',control('Connect an agent'),()=>!!active('section[aria-label="Set up your agents"]'),'same local setup chooser reopened for invented result presentation');await until(()=>control('Review changes'),'simulated result chooser ready');
+   const nextReview=control('Review changes');nextReview.scrollIntoView({block:'nearest'});await frame();await measure('agents.simulated-review',()=>{nextReview.focus({preventScroll:true});nextReview.click();},()=>onScreen(control('Apply changes')),'exact reviewed simulated result ready for explicit Apply');
+   const apply=control('Apply changes');await tap('agents.simulated-apply',apply,()=>!!control('Applying…'),'native-setup request pending; result host is explicitly invented',()=>visibleText('Agent setup saved')&&!!control('Share again'));
+   const savedHeading=[...root.querySelectorAll('h3')].find(h=>h.textContent==='Agent setup saved');assert(onScreen(savedHeading)&&shadow.activeElement===savedHeading,'saved result must focus its exact visible heading');reports.setupSavedScreen={heading:savedHeading.getBoundingClientRect().toJSON(),focused:true,receiptInvented:true};
+   assert(setupPublishes===1&&catalog.agents.map(a=>a.record.id).join(',')===['1'.repeat(32),'5'.repeat(32)].join(','),'simulated setup must reuse exact original agent IDs');
+   await tap('agents.simulated-share-again',control('Share again'),()=>!!control('Sharing…'),'publication retry pending in invented host',()=>setupPublishes===2&&!control('Share again')&&!root.textContent.includes('Saved here, but others can’t see'));
+   await tap('agents.simulated-done',control('Done'),()=>!active('section[aria-label="Set up your agents"]')&&onScreen(control('Connect an agent'))&&shadow.activeElement===control('Connect an agent'),'result Done returns to exact setup opener');
+   reports.setupResultPresentation={simulatedHostReceipt:true,nativeConfigurationWritten:false,signedCatalogPublished:false,originalAgentIDs:catalog.agents.map(a=>a.record.id),publicationAttempts:setupPublishes};
+   // Same-stage validation: a detected third tool has no chosen folder.
+   missingFolderMode=true;catalog.harnesses.find(h=>h.name==='claude').found=true;
+   await tap('agents.missing-folder-open',control('Connect an agent'),()=>!!active('section[aria-label="Set up your agents"]'),'normal setup chooser reopened with detected unconfigured Claude');await until(()=>active('input[aria-label="Set up Claude"]'),'detected Claude choice ready');
+   const claude=active('input[aria-label="Set up Claude"]');assert(!claude.checked,'new unconfigured Claude must not be silently selected');await tap('agents.missing-folder-choose',claude,()=>claude.checked,'exact Claude tool selected without a folder');
+   const name=active('#setup-agent-claude');await fill('agents.missing-folder-draft',name,'Fixture Claude draft retained');
+   const selections=()=>[...root.querySelectorAll('input[aria-label^="Set up "]')].map(e=>({label:e.getAttribute('aria-label'),checked:e.checked})),selectedBefore=JSON.stringify(selections()),catalogBefore=JSON.stringify(catalog.agents),responderBefore=JSON.stringify(responder),reviewBefore=JSON.stringify(reviewedSetup),writesBefore=reports.apiCalls.filter(c=>c.method==='write').length;
+   const invalidReview=control('Review changes');invalidReview.scrollIntoView({block:'nearest'});await frame();await measure('agents.missing-folder-refused',()=>{invalidReview.focus({preventScroll:true});invalidReview.click();},()=>{const error=active('section[aria-label="Set up your agents"] [role=alert]');return onScreen(error)&&error.textContent==='Choose the folder the agent for Claude works in.'&&shadow.activeElement===error;},'same-stage missing-folder validation focuses its exact visible inline error; no review or config write');
+   assert(name.value==='Fixture Claude draft retained'&&JSON.stringify(selections())===selectedBefore&&JSON.stringify(catalog.agents)===catalogBefore&&JSON.stringify(responder)===responderBefore&&JSON.stringify(reviewedSetup)===reviewBefore&&reports.apiCalls.filter(c=>c.method==='write').length===writesBefore,'missing folder validation changed choices/draft/token or wrote data/config');
+   const invalid=active('section[aria-label="Set up your agents"] [role=alert]');reports.setupMissingFolder={error:invalid.textContent,rect:invalid.getBoundingClientRect().toJSON(),focused:shadow.activeElement===invalid,choicesPreserved:true,draftPreserved:true,reviewTokenPreserved:true,writes:0,nativeEffects:false};
+   await tap('agents.missing-folder-back',control('Back'),()=>!active('section[aria-label="Set up your agents"]')&&shadow.activeElement===control('Connect an agent')&&onScreen(control('Connect an agent')),'validation form exits to exact setup opener');
 
+
+
+   }
   }
   if(suite==='teams'){
    await settings('People lists','People & agent lists');
    const fields=()=>[...root.querySelectorAll('input')].filter(shown);await fill('teams.create-name',fields()[0],'Fixture new list');
    await tap('teams.create',control('Create list'),()=>!!sheet('Fixture new list'),'new list opens after API result');
    const d=()=>sheet('Fixture new list')||sheet('Fixture renamed list');
+   const nativeChoices=label=>[...d().querySelector('select[aria-label="'+label+'"]').options].map(o=>[o.value,o.label]);
+   // Independent expected original order from the invented seed, before the
+   // current bounded picker is read. Includes prompts and all eligible rows.
+   const reference={people:[['','Choose a person'],[peer.person,peer.label],...peers.map(p=>[p.person,p.label])],devices:[['','This device'],...(me.devices||[]).filter(d=>d.address!==overview.me.address).map(d=>[d.address,me.label+' · '+(d.name||d.address)]),...(peer.devices||[]).map(d=>[d.address,peer.label+' · '+(d.name||d.address)]),...peers.map(p=>[p.address,p.label+' · Laptop'])]};
+   const pendingField=d().querySelector('select[aria-label="Person"]').closest('fieldset');
+   reports.rosterProof={initialPersonOptions:nativeChoices('Person').length,initialDeviceOptions:nativeChoices('Agent’s device').length};
+   assert(reports.rosterProof.initialPersonOptions<=41&&reports.rosterProof.initialDeviceOptions<=41,'initial roster render must be bounded');
+   const testRoster=async(label,noun,tail,expected)=>{
+    const select=()=>d().querySelector('select[aria-label="'+label+'"]');
+    const searchToggle=control('Search all '+noun,d());
+    await tap('teams.proof-search-'+noun,searchToggle,()=>!!d().querySelector('input[type="search"]'),'full-roster search input visible');
+    const search=d().querySelector('input[type="search"]');
+    await fill('teams.proof-tail-query-'+noun,search,tail,()=>[...select().options].some(o=>o.value===tail),'exact tail ID/address beyond first page searchable');
+    assert(select().options.length===2,'exact full ID/address query must return one original choice');
+    if(noun==='people'){
+     await fill('teams.proof-tail-label-'+noun,search,peers.at(-1).label,()=>search.value===peers.at(-1).label&&select().options.length===2&&select().options[1].value===tail,'same tail person found by full label');
+     await fill('teams.proof-tail-address-'+noun,search,peers.at(-1).address,()=>search.value===peers.at(-1).address&&select().options.length===2&&select().options[1].value===tail,'same tail person found by device address');
+    }
+    await fill('teams.proof-tail-select-'+noun,select(),tail);
+    await fill('teams.proof-keep-selected-'+noun,search,'no matching fixture identity',()=>search.value==='no matching fixture identity'&&select().value===tail&&select().options.length===2,'selected exact identity survives a different query');
+    assert(select().selectedOptions[0].value===tail,'query changed selected exact identity');
+
+    await tap('teams.proof-close-'+noun,control('Close '+noun+' search',d()),()=>!d().querySelector('input[type="search"]')&&shadow.activeElement===control('Search all '+noun,d()),'search closes to its exact focused opener and keeps selected identity');
+    assert(select().value===tail,'closing search changed selection');
+    let pages=0;
+    while(control(new RegExp('^Show more '+noun),d())){
+     const n=select().options.length,reveal=control(new RegExp('^Show more '+noun),d()),previousText=reveal.textContent;
+     await tap('teams.roster-reveal-'+noun+'-'+pages,reveal,()=>!reveal.isConnected||reveal.textContent!==previousText,'next native option page changes remaining count');assert(select().options.length-n<=40,'native option reveal exceeded40');pages++;
+     assert(pages<=30,'unbounded page loop');
+    }
+    const actual=nativeChoices(label);assert(JSON.stringify(actual)===JSON.stringify(expected),'complete original '+noun+' choices/order/labels changed');
+    reports.rosterProof[noun]={tail,selected:select().value,pages,totalOptions:actual.length,exactOriginalChoices:true,sameSearchToggle:control('Search all '+noun,d())===searchToggle};
+    await fill('teams.roster-reset-'+noun,select(),'');
+   };
+   await testRoster('Person','people',peers.at(-1).person,reference.people);
+   await testRoster('Agent’s device','devices',peers.at(-1).address,reference.devices);
+   await until(()=>!d().querySelector('select[aria-label="Agent"]').disabled&&[...d().querySelector('select[aria-label="Agent"]').options].some(o=>o.value===catalog.agents[0].record.id),'local exact catalog restored after remote choice');
+   reports.rosterProof.remoteCatalog=reports.apiCalls.filter(c=>c.path.startsWith('/api/agents')).map(c=>c.path);
+   assert(reports.rosterProof.remoteCatalog.some(p=>new URL(p,location.href).searchParams.get('host')===peers.at(-1).address),'tail device catalog lookup used a different address');
+   const editedTeam=teams.teams[1],canEdit=()=>!!d().querySelector('select[aria-label="Person"]');
+   reports.rosterProof.roles=[];
+   for(const key of ['manager','archived','conflict']){
+    const saved=editedTeam[key];editedTeam[key]=key!=='manager';emit();await until(()=>!canEdit(),'editing hidden for '+key);
+    reports.rosterProof.roles.push(key);editedTeam[key]=saved;emit();await until(canEdit,'editing restored after '+key);
+   }
+   editedTeam.version=1;teams.legacy_add=false;emit();await until(()=>!canEdit(),'legacy editing requires legacy_add');
+   teams.legacy_add=true;emit();await until(()=>canEdit()&&!d().querySelector('select[aria-label="Agent’s device"]'),'legacy list keeps people only');
+   editedTeam.version=2;emit();await until(()=>!!d().querySelector('select[aria-label="Agent’s device"]'),'mixed list restored');
+   reports.rosterProof.legacy=true;
+   await tap('teams.proof-pending-search',control('Search all people',d()),()=>!!d().querySelector('input[type="search"]'),'search stays open for pending-state proof');
+   const activePendingField=d().querySelector('select[aria-label="Person"]').closest('fieldset');
+   reports.rosterProof.previousFieldReplaced=!pendingField.isConnected;
+   const disabledObserver=new MutationObserver(()=>{if(activePendingField.disabled){reports.rosterProof.pendingControls=[...activePendingField.querySelectorAll('input,select,button')].map(e=>({tag:e.tagName,label:e.getAttribute('aria-label')||e.textContent.slice(0,60),disabled:e.matches(':disabled')}));reports.rosterProof.pendingAllDisabled=reports.rosterProof.pendingControls.every(e=>e.disabled);}});
+   disabledObserver.observe(activePendingField,{attributes:true,attributeFilter:['disabled']});
+
    const person=d().querySelector('select[aria-label="Person"]');await fill('teams.add-person-choice',person,peer.person);
    await tap('teams.add-person',control('Add person',d()),()=>teams.teams[1].members.includes(peer.person)&&d().textContent.includes('Vitalii'),'selected verified person added');
+   assert(reports.rosterProof.pendingAllDisabled,'new search/select/more controls not disabled with pending API');disabledObserver.disconnect();
+   await tap('teams.proof-close-pending-search',control('Close people search',d()),()=>!d().querySelector('input[type="search"]')&&shadow.activeElement===control('Search all people',d()),'search closed after pending result to exact focused opener');
+   // An incoming roster update can remove the need for a search toggle.
+   // Closing then returns to the unchanged, useful native chooser.
+   const membersBeforeShrink=[...editedTeam.members],shrinkPerson=peers[0].person,writesBeforeShrink=reports.apiCalls.filter(c=>c.method==='write').length;
+   await tap('teams.shrink-search-open',control('Search all people',d()),()=>!!d().querySelector('input[type="search"]'),'search open before invented incoming roster shrinks');
+   const shrinkSelect=d().querySelector('select[aria-label="Person"]');await fill('teams.shrink-selection',shrinkSelect,shrinkPerson);
+   editedTeam.members=[...membersBeforeShrink,...peers.slice(39).map(p=>p.person)];emit();
+   await until(()=>shrinkSelect.options.length===40&&!control(/^Show more people/,d())&&!!control('Close people search',d()),'incoming host roster leaves39 exact candidates while search stays open');
+   assert(shrinkSelect.value===shrinkPerson,'incoming roster changed the still-eligible exact selection');
+   await tap('teams.shrink-search-close',control('Close people search',d()),()=>!d().querySelector('input[type="search"]')&&!control('Search all people',d())&&shadow.activeElement===shrinkSelect&&onScreen(shrinkSelect),'search below40 closes to exact focused native chooser without a placeholder toggle');
+   assert(shrinkSelect.isConnected&&shrinkSelect.value===shrinkPerson&&shrinkSelect.options.length===40,'shrinking search replaced chooser or changed exact selection');
+   reports.rosterShrink={candidateCount:39,nativeOptions:40,nativeChooserPreserved:true,focused:true,visible:onScreen(shrinkSelect),rect:shrinkSelect.getBoundingClientRect().toJSON(),toggleAbsent:true,selected:shrinkSelect.value,hostUpdateInvented:true};
+   editedTeam.members=membersBeforeShrink;emit();await until(()=>!!control('Search all people',d()),'original host roster restored');
+   assert(JSON.stringify(editedTeam.members)===JSON.stringify(membersBeforeShrink)&&shrinkSelect.value===shrinkPerson&&reports.apiCalls.filter(c=>c.method==='write').length===writesBeforeShrink,'shrink proof changed original members/selection or issued a write');
+   await fill('teams.shrink-selection-reset',shrinkSelect,'');
    const member=()=>[...d().querySelectorAll('ul[aria-label="Members"] li')].find(e=>e.textContent.includes('Vitalii'));
    await tap('teams.manager-review',control('Make manager',member()),()=>!!control('Confirm change'),'exact person manager-role confirmation');
    await tap('teams.manager-add',control('Confirm change'),()=>teams.teams[1].managers.includes(peer.person)&&member().textContent.includes('Manager'),'manager role reflected after API result');await retire();
@@ -588,7 +877,45 @@ try {
    await until(()=>!d().querySelector('select[aria-label="Agent"]').disabled,'current agent catalog for list');await fill('teams.agent-choice',d().querySelector('select[aria-label="Agent"]'),catalog.agents[0].record.id);
    await tap('teams.agent-add',control('Add agent',d()),()=>teams.teams[1].agents.length===1&&d().textContent.includes('Fixture Codex'),'exact published agent added without granting execution');
    await tap('teams.use-for-group',control('Select for a conversation…',d()),()=>!!sheet('New group'),'list snapshot opens selected people in new-group review');await retire();
-   assert(sheet('New group').textContent.includes('Vitalii'),'list group draft lost exact selected person');await closeSheet('teams.group-cancel','New group');
+   const group=sheet('New group');
+   const roster=()=>[...group.querySelectorAll('fieldset')].find(f=>f.querySelector('legend')?.textContent==='People');
+   const rows=()=>[...roster().querySelectorAll('label')].filter(l=>l.querySelector('input[type="checkbox"]'));
+   const chips=()=>group.querySelector('[aria-label="Selected people"]');
+   const preselected=rows().find(l=>l.textContent.includes('Vitalii'));
+   reports.groupRosterProof={initialRows:rows().length,initialPeopleChip:chips().textContent,preselected:!!preselected?.querySelector('input').checked};
+   assert(rows().length<=40,'new-group initial checkbox roster unbounded: '+rows().length);
+   assert(reports.groupRosterProof.preselected&&chips().textContent.includes('Vitalii'),'initial signed snapshot selection lost');
+   const initial=rows().length;
+   await tap('teams.group-proof-reveal',control(/^Show more people/,group),()=>rows().length>initial,'next full-roster checkbox page rendered');
+   assert(rows().length-initial===40,'reveal must add exactly40 rows while more than40 remain');
+   reports.groupRosterProof.revealedRows=rows().length;
+   const search=roster().querySelector('input[type="search"]'),tail=peers.at(-1);
+   await fill('teams.group-proof-last-name',search,tail.label,()=>rows().length===1&&rows()[0].textContent.includes(tail.label),'last person beyond first page found by full name');
+   assert(!rows()[0].querySelector('input').checked,'unselected tail was implicitly selected');
+   await tap('teams.group-proof-select-tail',rows()[0].querySelector('input'),()=>rows()[0].querySelector('input').checked&&chips().textContent.includes(tail.label),'tail selection added without replacing initial person');
+   assert(chips().textContent.includes('Vitalii'),'selecting tail replaced preselected person');
+
+   await fill('teams.group-proof-filter-empty',search,'no matching fixture person',()=>rows().length===0&&roster().textContent.includes('No matching people.'),'empty search keeps selected chips');
+   assert(chips().textContent.includes('Vitalii')&&chips().textContent.includes(tail.label),'filtering changed selected identities');
+   await tap('teams.group-proof-clear',control('Clear search',roster()),()=>search.value===''&&rows().length===40&&shadow.activeElement===search,'clear resets query and page without changing selections');
+   assert(chips().textContent.includes('Vitalii')&&chips().textContent.includes(tail.label),'clear changed selected identities');
+   await fill('teams.group-proof-last-device',search,tail.address,()=>rows().length===1&&rows()[0].textContent.includes(tail.label),'same last person found by device address');
+   assert(rows()[0].querySelector('input').checked,'selected tail identity lost on device search');
+   reports.groupRosterProof.tail={person:tail.person,label:tail.label,address:tail.address,checked:true};
+
+   await tap('teams.group-proof-clear-again',control('Clear search',roster()),()=>search.value===''&&rows().length===40&&shadow.activeElement===search,'second reset returns first page and focus to Search people');
+   let pages=0;
+   while(control(/^Show more people/,group)){
+    const n=rows().length;await tap('teams.group-reveal-'+pages,control(/^Show more people/,group),()=>rows().length>n,'next exact eligible group roster page visible');
+    assert(rows().length-n<=40,'later reveal exceeded page size');pages++;assert(pages<=30,'unbounded group page loop');
+   }
+   reports.groupRosterProof.fullRows=rows().length;reports.groupRosterProof.remainingRevealPages=pages;
+   assert(rows().length===overview.people.filter(p=>p.state==='pinned'&&p.person&&p.person!==overview.person.person).length,'eligible results silently capped');
+   assert(chips().textContent.includes('Vitalii')&&chips().textContent.includes(tail.label),'full reveal changed selected identities');
+   reports.groupRosterProof.complete=true;
+
+   assert(!reports.apiCalls.some(c=>c.method==='write'&&['/api/groups/create','/api/groups/invite'].includes(c.path)),'roster search/reveal/chips must not submit a group or invitation');
+   await closeSheet('teams.group-cancel','New group');
    await tap('teams.list-reopen',control(/^Fixture new list/),()=>!!d(),'same managed list reopened');
    await tap('teams.person-remove-review',control('Remove',member()),()=>!!control('Confirm change'),'exact person removal confirmation');
    await tap('teams.person-remove',control('Confirm change'),()=>!teams.teams[1].members.includes(peer.person)&&!member(),'person removed from list only');await retire();
@@ -627,6 +954,48 @@ try {
    const broken=new File([new Uint8Array([1,2,3,4])],'fixture-unsupported.mp4',{type:'video/mp4'});await measure('media.unsupported-select',()=>pick(broken),()=>!!tray(),'unsupported real File retained in tray');
    const beforeUnsupported=row().querySelector('[role="status"]').textContent;await tap('media.unsupported-prepare',control('Smaller video',row()),()=>busy()||row()?.querySelector('[role="status"]')?.textContent!==beforeUnsupported,'unsupported processing progress or explicit fallback visible',()=>!busy()&&row()?.querySelector('[role="status"]')?.textContent!==beforeUnsupported&&row()?.textContent.toLowerCase().includes('original'));
    const unsupported=await(await fetch(row().querySelector('video').src)).blob();assert(await fileHash(unsupported)===await fileHash(broken),'unsupported fallback original changed');await tap('media.unsupported-remove',control('Remove fixture-unsupported.mp4'),()=>!tray(),'unsupported selection removed');
+   // Incoming/readable file presentation uses real bytes through Host.file.
+   // Capture owned download links before default handling; no OS save dialog.
+   const downloadCapture=e=>{const a=e.composedPath().find(n=>n instanceof HTMLAnchorElement&&n.hasAttribute('download'));if(!a)return;e.preventDefault();reports.downloadIntents.push({name:a.download,url:a.href,at:performance.now(),nativeEffect:false});};
+   reports.downloadIntents=[];shadow.addEventListener('click',downloadCapture,true);
+   const fileMessage=view.messages.at(-1),fileID=fileMessage.id,md=new TextEncoder().encode('# Fixture text preview\n\nExact private **original** text.'),binary=new Uint8Array([0,255,0,1]);
+   presentationFiles.set(fileID+':0',md);presentationFiles.set(fileID+':1',new Uint8Array(await photo.arrayBuffer()));presentationFiles.set(fileID+':2',binary);
+   fileMessage.attachments=[{index:0,name:'fixture-preview.md',size:md.length,openable:true},{index:1,name:'fixture-picture.png',size:photo.size,openable:true},{index:2,name:'fixture-binary.txt',size:binary.length,openable:true}];emit();
+   const textPreview=()=>sheet('fixture-preview.md'),textOpen=()=>control('Preview fixture-preview.md');await until(textOpen,'actual attachment preview offered');
+   let open=textOpen();await tap('files.text-preview',open,()=>open.disabled,'text preview read pending',()=>!!textPreview()&&textPreview().textContent.includes('Exact private original text.'));
+   assert(textPreview().querySelector('strong')?.textContent==='original','Markdown preview must render exact received text');
+   await closeSheet('files.text-close','fixture-preview.md');
+   const download=control('Download fixture-preview.md');await tap('files.download-intent',download,()=>download.disabled,'download decrypt/read pending',()=>!download.disabled&&reports.downloadIntents.some(d=>d.name==='fixture-preview.md'));
+   const handed=reports.downloadIntents.find(d=>d.name==='fixture-preview.md'),handedBytes=new Uint8Array(await(await fetch(handed.url)).arrayBuffer());assert(handedBytes.length===md.length&&handedBytes.every((v,i)=>v===md[i]),'download intent changed exact original bytes');reports.downloadOriginal={id:fileID,index:0,dir:fileMessage.dir,name:handed.name,sha256:await fileHash(new Blob([handedBytes])),exactBytes:true,claim:'owned download-link intent captured; no OS save dialog or persisted-file claim'};
+   let brokenPreview=control('Preview fixture-binary.txt');await tap('files.binary-preview-refused',brokenPreview,()=>brokenPreview.disabled,'binary preview read pending',()=>!brokenPreview.disabled&&visibleText('Couldn’t preview fixture-binary.txt:'));
+   assert(!sheet('fixture-binary.txt'),'invalid text bytes must not open as text');
+   const picture=control('Open picture fixture-picture.png');await until(()=>picture?.querySelector('img')?.complete&&picture.querySelector('img').naturalWidth>0,'real picture thumbnail decoded');
+   await tap('files.picture-open',picture,()=>!!active('[role="region"][aria-label="Image: drag to pan, pinch or scroll to zoom"]'),'exact original picture viewer visible');
+   const zoom=()=>active('output[aria-label="Zoom level"]'),z=zoom().textContent;await tap('files.picture-zoom-in',control('Zoom in'),()=>zoom()?.textContent!==z,'viewer zoom level changed');
+   const enlarged=zoom().textContent;await tap('files.picture-fit',control('Fit'),()=>zoom()?.textContent!==enlarged,'viewer fit restored');
+   const crop=()=>active('dialog[aria-label="Your profile picture"][open]');await tap('files.picture-use-as-profile',control('Use as my picture'),()=>!!crop(),'real received picture crop editor visible',()=>!!crop()?.querySelector('canvas[aria-label="Picture crop preview"]')&&!control('Save picture',crop()).disabled);
+   const cropZoom=crop().querySelector('output[aria-label="Zoom level"]'),beforeCrop=cropZoom.textContent;await tap('files.crop-zoom',control('Zoom in',crop()),()=>cropZoom.textContent!==beforeCrop,'real crop zoom level changed');await tap('files.crop-reset',control('Reset',crop()),()=>cropZoom.textContent===beforeCrop,'exact original crop framing restored');
+   await tap('files.crop-cancel',control('Cancel',crop()),()=>!crop(),'profile crop cancelled; original picture viewer retained');assert(active('[role="region"][aria-label="Image: drag to pan, pinch or scroll to zoom"]')&&!reports.apiCalls.some(c=>c.method==='write'&&c.path==='/api/person/picture'),'crop cancel must not save a profile picture');
+   if(host.platform==='daemon')await tap('files.picture-native-open-refused',control('Open in default app'),()=>!!control('Opening…'),'native open trigger pending',()=>visibleText('Synthetic native image open refused; no external app launched'));
+   const viewer=[...scope().querySelectorAll('[role="dialog"]')].find(d=>d.querySelector('output[aria-label="Zoom level"]'));await tap('files.picture-close',control('Close',viewer),()=>!active('[role="region"][aria-label="Image: drag to pan, pinch or scroll to zoom"]'),'exact picture viewer closed');await retire();
+   const bubble=root.querySelector('[data-mid="'+fileID+'"] [data-message-bubble]');
+   await measure('assign.actions-open',()=>bubble.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true})),()=>!!control('Assign to your agent…'),'exact source actions visible');
+   await tap('assign.preview-open',control('Assign to your agent…'),()=>!!sheet('Assign to your agent'),'assignment preview names source and exact target choice');await retire();
+   const assign=()=>sheet('Assign to your agent');await until(()=>assign().querySelector('select')?.options.length>1,'exact own agent options');
+   assert(assign().textContent.includes(fileMessage.body)&&assign().textContent.includes('fixture-preview.md'),'assignment source text/files missing');
+   const assignmentHost=host.platform==='daemon'?overview.me.address:overview.agent_devices[0],assignmentAgent=host.platform==='daemon'?catalog.agents[0].record.id:'7'.repeat(32);await fill('assign.target',assign().querySelector('select'),assignmentHost+'#'+assignmentAgent);
+   const instruction=assign().querySelector('textarea');await fill('assign.blank',instruction,'',()=>instruction.value===''&&control('Send task',assign()).disabled,'blank assignment cannot submit');
+   await fill('assign.instruction',instruction,'Review this exact selected original.');
+   const chosen=[...assign().querySelectorAll('input[type=checkbox]')];assert(chosen.length===3&&chosen.every(c=>c.checked),'all available original files initially selected');
+   for(const [i,c] of chosen.entries())if(i>0)await tap('assign.exclude-file-'+i,c,()=>!c.checked,'explicit original attachment excluded from new task');
+   const beforeSends=reports.assignmentAttempts.length,send=control('Send task',assign());await tap('assign.refused',send,()=>!!control('Sending task…',assign()),'exact assignment submission pending',()=>visibleText('Synthetic assignment refused; no task or native work started'));
+   assert(reports.assignmentAttempts.length===beforeSends+1,'one exact assignment attempt');const firstAttempt=reports.assignmentAttempts.at(-1);assert(firstAttempt.to===assignmentHost&&firstAttempt.agent_id===assignmentAgent&&firstAttempt.kind==='task'&&firstAttempt.body.includes('agentnet:message/'+fileID+'?conv='+view.id)&&firstAttempt.body.includes('> '+fileMessage.body),'assignment exact host/agent/original provenance lost');
+   assert(staged.at(-1).sha256===reports.downloadOriginal.sha256,'assignment staged bytes differ from reviewed original');
+   const retry=control('Retry this task',assign());await tap('assign.retry-refused',retry,()=>!!control('Sending task…',assign()),'same prepared assignment retry pending',()=>visibleText('Synthetic assignment refused; no task or native work started')&&!control('Sending task…',assign()));
+   assert(reports.assignmentAttempts.at(-1).id===firstAttempt.id&&reports.assignmentAttempts.at(-1).body===firstAttempt.body,'retry changed prepared task ID/body');
+   await closeSheet('assign.close','Assign to your agent');shadow.removeEventListener('click',downloadCapture,true);
+   reports.filePresentation={fileID,fileCalls:reports.fileCalls,assignmentNativeEffects:false,downloadNativeEffect:false,originalBytesVerified:true};
+
    reports.mediaProcessing='Photo conversion is actual CPU work and reported separately; video cancellation/unsupported choice measures UI. Actual codec output/audio/orientation/deadline qualification remains earlier media evidence.';
   }
   if(suite==='review'){
@@ -647,6 +1016,37 @@ try {
    const collapse=control(/^Requests from your agents/);await tap('review.report-collapse',collapse,()=>collapse.getAttribute('aria-expanded')==='false','native request reports collapsed');
    await tap('review.report-expand',collapse,()=>collapse.getAttribute('aria-expanded')==='true'&&!!active('section[aria-label="Codex native request"]'),'native request report restored');
    const details=active('details');if(details)await tap('review.report-details',details.querySelector('summary'),()=>details.open,'report details expanded');
+   await tap('review.return-chats',button('Chats'),()=>!!initialChat(),'normal chat list restored for exact proposed-task review');await chat();
+   const proposal={...clone(view.messages[0]),id:'a'.repeat(32),lid:'a'.repeat(32),dir:'in',from:peer.address,kind:'answer',body:'Review the exact fixture release notes.\nKeep original provenance.',state:'proposal',can:[],actions:['do_it'],at:now};view.messages.push(proposal);emit();
+   const proposalRow=()=>root.querySelector('[data-mid="'+proposal.id+'"]');await until(()=>proposalRow()&&control('Do it',proposalRow()),'exact suggested task offered');
+   await tap('proposal.change-open',control('Change…',proposalRow()),()=>!!sheet('Change suggested task'),'exact suggestion editor visible');
+   const change=()=>sheet('Change suggested task'),edit=change().querySelector('textarea');assert(edit.value===proposal.body,'proposal editor rebound original');
+   await fill('proposal.blank',edit,'',()=>edit.value===''&&control('Send revised task',change()).disabled,'blank revised task disabled');
+   await fill('proposal.edit',edit,'Review only this exact private fixture.');
+   const original=change().querySelector('details');await tap('proposal.original-disclosure',original.querySelector('summary'),()=>original.open&&original.textContent.includes(proposal.body),'exact original suggestion disclosed');
+   const noWrite=reports.proposalAttempts.length;await closeSheet('proposal.change-cancel','Change suggested task');assert(reports.proposalAttempts.length===noWrite,'editing/cancel sent a task');
+   await tap('proposal.change-reopen',control('Change…',proposalRow()),()=>!!change(),'same exact proposal reopened');assert(change().querySelector('textarea').value===proposal.body,'cancelled draft changed original suggestion');
+   await fill('proposal.revised-text',change().querySelector('textarea'),'Review only this exact private fixture.');
+   const submit=control('Send revised task',change());try{await tap('proposal.revised-refused',submit,()=>!!control('Sending…',change()),'revised task submission pending',()=>onScreen(change()?.querySelector('[role=alert]'))&&change().querySelector('[role=alert]').textContent==='Synthetic proposal refused; normal task authority required'&&!control('Sending…',change()));}catch(e){reports.presentationFailures.push({id:'proposal.revised-refused',error:String(e),alerts:[...scope().querySelectorAll('[role=alert]')].map(el=>({text:el.textContent,inert:!!el.closest('[inert]'),shown:shown(el),onScreen:onScreen(el),rect:el.getBoundingClientRect().toJSON()}))});}
+   assert(change().querySelector('textarea').value==='Review only this exact private fixture.','refusal lost revised draft');assert(reports.proposalAttempts.at(-1).id===proposal.id&&reports.proposalAttempts.at(-1).body==='Review only this exact private fixture.','revised submission changed exact proposal/body');
+   const refusal='Synthetic proposal refused; normal task authority required',inline=change().querySelector('[role=alert]');assert(onScreen(inline)&&!inline.closest('[inert]'),'refusal must be readable inside active modal');assert([...scope().querySelectorAll('[role=alert]')].filter(el=>el.textContent===refusal).length===1,'revised refusal must not duplicate a global toast');
+   const firstRevision=clone(reports.proposalAttempts.at(-1)),attempts=reports.proposalAttempts.length,retryRevision=control('Send revised task',change());await tap('proposal.revised-retry-refused',retryRevision,()=>!!control('Sending…',change()),'explicit revised retry pending',()=>reports.proposalAttempts.length===attempts+1&&onScreen(change()?.querySelector('[role=alert]'))&&!control('Sending…',change()));assert(JSON.stringify(reports.proposalAttempts.at(-1))===JSON.stringify(firstRevision)&&change().querySelector('textarea').value===firstRevision.body,'explicit retry changed original ID/body or lost retained revision');
+   reports.proposalInlineRefusal={id:firstRevision.id,body:firstRevision.body,attempts:2,singleActiveInlineError:true,globalErrorDuplicated:false,rect:change().querySelector('[role=alert]').getBoundingClientRect().toJSON()};
+   await closeSheet('proposal.refused-close','Change suggested task');
+   const doIt=control('Do it',proposalRow());await tap('proposal.exact-refused',doIt,()=>doIt.disabled,'original suggestion submission pending',()=>!doIt.disabled&&visibleText('Synthetic proposal refused; normal task authority required'));
+   assert(reports.proposalAttempts.at(-1).do==='do_it'&&reports.proposalAttempts.at(-1).id===proposal.id&&!reports.proposalAttempts.at(-1).body,'Do it must preserve exact stored proposal identity');
+   // Native/standing permissions stay concrete. Review and cancel their exact
+   // forms, and demonstrate a refused one-time native authorization only.
+   const request={...clone(view.messages[0]),id:'b'.repeat(32),lid:'b'.repeat(32),dir:'in',from:peer.address,kind:'task',body:'Fixture task requiring one exact owner decision',state:'awaiting',actions:['accept','accept_always','decline','approve','reply'],can:[],at:now};view.messages.push(request);emit();
+   const requestRow=()=>root.querySelector('[data-mid="'+request.id+'"]');await until(()=>requestRow()&&control('Allow once',requestRow()),'exact current owner decision offered');
+   await tap('review.decline-open',control('Decline',requestRow()),()=>!!sheet('Decline this task?'),'decline review names exact task');await fill('review.decline-reason',sheet('Decline this task?').querySelector('textarea'),'Keep this private fixture pending.');await closeSheet('review.decline-cancel','Decline this task?');
+   const always=control(/^Always allow/,requestRow());await tap('review.standing-open',always,()=>!![...scope().querySelectorAll('[role="dialog"]')].find(d=>shown(d)&&d.querySelector('h2')?.textContent.startsWith('Always allow')),'concrete standing-permission review visible');
+   const standing=[...scope().querySelectorAll('[role="dialog"]')].find(d=>shown(d)&&d.querySelector('h2')?.textContent.startsWith('Always allow'));assert(standing.textContent.includes('current and future verified devices')||standing.textContent.includes('exact device key'),'permission principal scope missing');
+   const turnOff=control('Or turn it off in a terminal',standing);await tap('review.standing-terminal-details',turnOff,()=>turnOff.getAttribute('aria-expanded')==='true','existing terminal revocation command disclosed without running it');await closeSheet('review.standing-cancel',standing.querySelector('h2').textContent);
+   const once=control('Allow once',requestRow());await tap('review.allow-once-refused',once,()=>once.disabled,'one-time exact decision pending',()=>!once.disabled&&visibleText('Synthetic one-time authorization refused; no native work started'));
+   assert(reports.ownerDecisionAttempts.at(-1).id===request.id&&request.state==='awaiting','refusal must leave exact request awaiting');
+   reports.proposalPresentation={attempts:clone(reports.proposalAttempts),nativeEffects:false,refusedOnly:true};reports.ownerDecisionPresentation={attempts:clone(reports.ownerDecisionAttempts),nativeEffects:false,standingGrantWrites:0};
+
   }
   if(suite==='storage'){
    await settings('Storage');await until(()=>control('Review received cache…'),'storage loaded');
@@ -705,6 +1105,7 @@ try {
 
   }
  }
+ assert(reports.presentationFailures.length===0,'Presentation failures: '+reports.presentationFailures.map(x=>x.id+': '+x.error).join('; '));
  if(extended)assert(reports.actions.length>0,'extended workload has no measured actions');
  reports.hostPlatform=host.platform;reports.coverageClaim='Only named actions and seen-control census; unvisited source/role/state cells remain open';
  reports.people=peers.length;reports.retainedMessages=extended?view.messages.length:400;reports.counts=counts;
@@ -713,6 +1114,20 @@ try {
  reports.routineOver200ms=reports.actions.filter(a=>(a.ok||a.stateVerified)&&a.feedbackMs>200&&!a.id.startsWith('presence.')&&!a.id.startsWith('sync.')).map(({id,feedbackMs,visibleMs,paintMs,frameMaxMs})=>({id,feedbackMs,visibleMs,paintMs,frameMaxMs}));
  reports.smooth=reports.routineOver200ms.length===0;reports.timingMeaning='family percentiles pool different named controls in one pass; not repeated per-control statistical confidence. 2000ms is catastrophic bound only, routine feedback above200ms remains an open smoothness finding.';
  assert(reports.feedbackFailures.length===0,reports.feedbackFailures.join('; '));
- assert(reports.pageErrors.length===0,'Runtime errors: '+reports.pageErrors.join('; '));window.latencyReport={ok:true,...reports};
-}catch(e){window.latencyReport={ok:false,error:String(e.message||e)+'\n'+String(e.stack||''),...reports};}
+ assert(reports.pageErrors.length===0,'Runtime errors: '+reports.pageErrors.join('; '));return {ok:true,...reports};
+ }catch(e){reports.failureSnapshot={html:document.querySelector('#fixture')?.shadowRoot?.innerHTML.slice(-32000),controls:[...(document.querySelector('#fixture')?.shadowRoot?.querySelectorAll('button,[role=alert]')||[])].filter(el=>el.getClientRects().length).map(el=>({label:el.getAttribute('aria-label')||el.textContent,ariaHidden:el.getAttribute('aria-hidden'),inert:!!el.closest('[inert]'),rect:el.getBoundingClientRect().toJSON()}))};return {ok:false,error:String(e.message||e)+'\n'+String(e.stack||''),...reports};}
+}
+
+window.latencyReport=null;
+const selectedSuite=window.__agentnetLatencySuite||new URL(location.href).searchParams.get('suite')||'history';
+const vectors=selectedSuite==='topics'?['','direct','personal','bulk']:selectedSuite==='compose'?['','schedule']:selectedSuite==='outbox'?['','reminder']:[''];
+const completed=[];
+for(const vector of vectors){
+ if(completed.length){window.__agentnetLatencyDispose?.();delete window.__agentnetLatencyDispose;}
+ const old=document.querySelector('#fixture');old.replaceWith(old.cloneNode(false));
+ const report=await runVector(vector);for(const action of report.actions)action.vector=vector||'baseline';completed.push(report);
+}
+const actions=completed.flatMap(r=>r.actions),percentile=(values,p)=>{const a=[...values].sort((x,y)=>x-y);return a.length?a[Math.min(a.length-1,Math.ceil(a.length*p)-1)]:null;},families={};
+for(const name of new Set(actions.map(a=>a.id.split('.')[0]))){const a=actions.filter(a=>a.id.split('.')[0]===name&&a.stateVerified),values=a.map(a=>a.feedbackMs);families[name]={samples:a.length,p50:percentile(values,.5),p95:percentile(values,.95),max:values.length?Math.max(...values):null};}
+window.latencyReport={...completed[0],ok:completed.every(r=>r.ok),error:completed.filter(r=>!r.ok).map(r=>(r.portableVector||'baseline')+': '+r.error).join('\n')||undefined,actions,families,apiCalls:completed.flatMap(r=>r.apiCalls),seenControls:[...new Set(completed.flatMap(r=>r.seenControls))],pageErrors:completed.flatMap(r=>r.pageErrors),feedbackFailures:completed.flatMap(r=>r.feedbackFailures),routineOver200ms:completed.flatMap(r=>r.routineOver200ms||[]),smooth:completed.every(r=>r.smooth),variants:completed.map(({actions,apiCalls,...r})=>r),suiteVectors:vectors.map(v=>v||'baseline'),wholeWorkloadMs:performance.now()-fixtureStarted};
 if(!window.__agentnetLatencyInput)fetch('/latency-report?run='+encodeURIComponent(new URL(location.href).searchParams.get('run')||''),{method:'POST',body:JSON.stringify(window.latencyReport)}).catch(()=>{});

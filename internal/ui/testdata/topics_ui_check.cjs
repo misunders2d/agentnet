@@ -19,13 +19,28 @@ if(process.env.AGENTNET_TOPIC_COMPACT_CHECK==='1'){
    chatList:()=>[],newestFirst:(a,b)=>b.lastAt.localeCompare(a.lastAt),topicOf:t=>t,topicMark:()=>null,firstLine:t=>t,dayLabel:()=>'day',timeOf:()=>'time',
    TOPICS:{barMax:6,chipMinWidth:104,chipMaxWidth:'16rem',barTitle:40},AllTopics:'AllTopics',Menu:{Trigger:'Menu.Trigger'},
    IconPlus:'Icon',IconListSearch:'Icon',IconAlertCircle:'Icon',IconArchive:'Icon',IconCircleCheck:'Icon',IconClock:'Icon',IconClockQuestion:'Icon',IconChevronDown:'Icon'};
+  if(cfg.switchTo){
+   const choiceModule={exports:{}},choiceGlobals={...globals,module:choiceModule,exports:choiceModule.exports};
+   const choiceSource=fs.readFileSync(require('node:path').join(__dirname,'../web/src/features/Conversation.choices.ts'),'utf8').replace(/^import[\s\S]*?from[^;]+;/gm,'');
+   vm.runInNewContext(esbuild.transformSync(choiceSource,{loader:'ts',format:'cjs'}).code,choiceGlobals);
+   globals.useSteadyChoices=choiceModule.exports.useSteadyChoices;
+  }
   globals.exports=globals.module.exports;
   const code=esbuild.transformSync(text.replace(/^import[\s\S]*?from[^;]+;/gm,''),{loader:'tsx',jsxFactory:'jsx',jsxFragment:'Fragment',format:'cjs'}).code;
   vm.runInNewContext(code,globals);
   let tree;for(let i=0;i<2;i++){cursor=0;refCursor=0;tree=globals.module.exports.TopicBar({dm:{id:'chat',peer:{label:'Fixture'},main_topic:{unread:2},topics}});}
+  if(cfg.switchTo){
+   nodes(tree).find(n=>n.tag==='nav').props.onFocusCapture();
+   state.drafts.chat.topic=cfg.switchTo;
+   for(let i=0;i<2;i++){cursor=0;refCursor=0;tree=globals.module.exports.TopicBar({dm:{id:'chat',peer:{label:'Fixture'},main_topic:{unread:2},topics}});}
+  }
   const menus=nodes(tree).filter(n=>n.tag?.name==='TopicMenu'),all=nodes(tree).find(n=>n.tag==='button'&&n.props['aria-label']?.startsWith('All topics'));
   return {tree,menus,all,buttons:nodes(tree).filter(n=>n.tag==='button')};
  }
+ // Holding the bar's old focus must not hide the explicitly selected topic.
+ const switched=render({width:361,switchTo:'other'});
+ assert.equal(switched.menus.length,1,'one-slot focused bar keeps current topic menu after All topics selection');
+ assert.equal(switched.menus[0].props.topic.id,'other','current exact selected topic replaces previous held chip');
  // Existing fixed controls cost249px in this isolated geometry: free=width-249.
  for(const state of ['active','done','archived']){
   const view=render({state});assert.equal(view.menus.length,1);const trigger=view.menus[0].props.trigger;assert.equal(view.menus[0].props.topic.state,state);

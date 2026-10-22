@@ -53,9 +53,10 @@ function useAct() {
   const [busy, setBusy] = useState("");
   const run = async (key: string, fn: (api: Api) => Promise<unknown>, ok: string) => {
     setBusy(key);
-    await store.run(fn, ok);
+    const result = await store.run(fn, ok);
     setBusy("");
     land();
+    return !!result;
   };
   return { busy, run };
 }
@@ -111,7 +112,7 @@ function RequestRow({ c, o }: Props) {
       <ConfirmSheet open={sheet === "stop"} onOpenChange={(v) => setSheet(v ? "stop" : "")}
         title="Stop this request?" body="It stops working on this now. Whatever it already did stays done." confirm="Stop" tone="danger"
         onConfirm={() => run("cancel", (api) => api.act({ do: "cancel", id: c.id }), "Stopping.")} />
-      <DeclineSheet open={sheet === "decline"} onOpenChange={(v) => setSheet(v ? "decline" : "")} who={who === "You" ? "Your other device" : who} kind={kind}
+      <DeclineSheet draftKey={JSON.stringify(["decline", c.conv, c.id, c.peer, c.continuation?.host, c.continuation?.key, c.continuation?.attempt, c.target])} open={sheet === "decline"} onOpenChange={(v) => setSheet(v ? "decline" : "")} who={who === "You" ? "Your other device" : who} kind={kind}
         onDecline={(reason) => run("decline", (api) => api.act({ do: "decline", id: c.id, reason }), "Declined. " + (who === "You" ? "Your other device" : who) + " is told.")} />
       <ConfirmSheet open={sheet === "close"} onOpenChange={(v) => setSheet(v ? "close" : "")}
         title="Mark as handled?" body={"Nothing is sent" + (who === "You" ? "." : " to " + who + ". You can still write to them in the chat.")}

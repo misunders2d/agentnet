@@ -9,7 +9,8 @@ const json = async (fetcher, path, body) => {
  if (!r.ok) {
   const text=(await r.text()).trim();let detail;
   try{detail=JSON.parse(text);}catch(_){}
-  const error=new Error(detail?.error||text||r.statusText);error.status=r.status;
+  const error=new Error(detail?.error||detail?.message||text||r.statusText);error.status=r.status;
+  if(typeof detail?.code==="string")error.code=detail.code;
   if(detail?.retry_id)error.retryID=detail.retry_id;
   throw error;
  }

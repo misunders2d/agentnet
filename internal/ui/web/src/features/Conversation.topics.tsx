@@ -159,7 +159,9 @@ export function TopicBar({ thread,dm }: { thread?: T.Thread;dm?:T.DMThread }) {
   if ((open?.id || "") !== shown.current.open) shown.current = { ...shown.current, open: open?.id || "", left: shown.current.open };
   const ranked=steadyBar(shown.current.ids, topics, open, shown.current.left, room).sort(unreadTopicOrder);
   const [menuHeld,setMenuHeld]=useState(false);
-  const choices=useSteadyChoices(ranked,t=>t.id,dm?.id||thread?.peer||"",menuHeld);
+  // Explicit navigation changes the current menu even when the old bar
+  // retains focus. Ordinary pushes still keep the other chips in place.
+  const choices=useSteadyChoices(ranked,t=>t.id,JSON.stringify([dm?.id||thread?.peer||"",open?.id||""]),menuHeld);
   const compact = room === 0 && open && !fresh && listed && menuFits;
   const pick=compact&&open?[open]:choices.choices.slice(0,room).map(c=>c.row),present=new Set(topics.map(t=>t.id));
   if(open)present.add(open.id);

@@ -25,8 +25,8 @@ export function Sheet({ open, onOpenChange, title, description, children, footer
   return (
     <Dialog.Root open={shown} onOpenChange={onOpenChange} modal="trap-focus">
       <Dialog.Portal container={portal}>
-        <Dialog.Backdrop className="fixed inset-0 z-40 bg-scrim/40 transition-opacity duration-200 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0" />
-        <Dialog.Popup {...modal} finalFocus={finalFocus} className={"an-sheet fixed z-50 flex flex-col bg-canvas text-ink outline-none stroke shadow-pop transition-all duration-[280ms] ease-out-soft "
+        <Dialog.Backdrop className="fixed inset-0 z-40 bg-scrim/40 transition-opacity duration-[120ms] data-[starting-style]:opacity-0 data-[ending-style]:opacity-0" />
+        <Dialog.Popup {...modal} finalFocus={finalFocus} className={"an-sheet fixed z-50 flex flex-col bg-canvas text-ink outline-none stroke shadow-pop transition-all duration-[140ms] ease-out-soft "
           + "inset-x-0 bottom-[var(--an-keyboard,0px)] max-h-[calc(85dvh_-_var(--an-keyboard,0px))] rounded-t-3xl data-[starting-style]:translate-y-full data-[ending-style]:translate-y-full "
           + "lg:inset-auto lg:left-1/2 lg:top-1/2 lg:-translate-x-1/2 lg:-translate-y-1/2 lg:rounded-3xl lg:max-h-[86dvh] lg:data-[starting-style]:translate-y-[-46%] lg:data-[ending-style]:translate-y-[-46%] lg:data-[starting-style]:opacity-0 lg:data-[ending-style]:opacity-0 "
           + (wide ? "lg:w-[640px]" : "lg:w-[520px]")}>

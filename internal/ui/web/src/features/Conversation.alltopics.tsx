@@ -54,27 +54,42 @@ export function AllTopics({ open, onOpenChange, peer,conv, binding, agent, curre
   const items=stable.choices.map(c=>c.row),present=new Set(latest.map(topicIdentity));
   const [counts,setCounts]=useState<Record<string,number>>({});
   const [action,setAction]=useState<"delete"|"done"|"archive"|null>(null);
-  const [undo,setUndo]=useState(false);
   const [busy,setBusy]=useState(false);
-  const timer=useRef<ReturnType<typeof setTimeout>|null>(null);
-  const pending=useRef<(() => void)|null>(null), alive=useRef(true);
-  const finish=()=>{if(timer.current)clearTimeout(timer.current);timer.current=null;const apply=pending.current;pending.current=null;apply?.();};
-  const cancel=()=>{if(timer.current)clearTimeout(timer.current);timer.current=null;pending.current=null;setUndo(false);setAction(null);};
-  // Confirmed changes retain their captured target when this panel closes.
-  // Explicit Undo cancels; leaving the panel applies the reviewed change now.
-  useEffect(()=>{alive.current=true;return()=>{alive.current=false;finish();};},[]);
-  useEffect(()=>{if(!open){finish();cancel();setSelected([]);}},[open]);
-  const commit=()=>{
-    if(pending.current||busy)return;
-    setUndo(true);const ids=[...selected],covered={...counts},what=action!;
-    pending.current=()=>{
-      if(alive.current){setUndo(false);setBusy(true);}
-      void (flat?flat.change(what,ids,covered):store.run(a=>a.changeTopic(what,{conv,peer,id:"",ids,counts:covered}))).then(r=>{if(r){if(what==="delete"&&conv&&ids.includes(store.draft(conv).topic||""))store.setDraft(conv,{...store.draft(conv),topic:undefined,newTopic:false,replyTo:undefined});if(alive.current){setSelected([]);setAction(null);}store.toast(r.note,"ok");}if(alive.current)setBusy(false);});
-    };
-    timer.current=setTimeout(finish,TOPICS.undoDelay);
+  const [actionError,setActionError]=useState("");
+  const [actionNote,setActionNote]=useState("");
+  const inFlight=useRef(false),alive=useRef(true),currentScope=useRef(scope);
+  currentScope.current=open?scope:"";
+  const confirm=useRef<HTMLButtonElement>(null);
+  useEffect(()=>{alive.current=true;return()=>{alive.current=false;};},[]);
+  const cancel=()=>{if(!inFlight.current){setAction(null);setActionError("");}};
+  // Confirm calls the host while this scope is still current. A panel timer
+  // cannot retain a confirmed change across navigation or a page reload.
+  const commit=async()=>{
+    if(inFlight.current||!action||!selected.length)return;
+    const ids=[...selected],covered={...counts},what=action,capturedScope=scope;
+    inFlight.current=true;setBusy(true);setActionError("");setActionNote("");
+    try {
+      const r=await(flat?flat.change(what,ids,covered):store.api.changeTopic(what,{conv,peer,id:"",ids,counts:covered}));
+      if(r){
+        if(!flat)void store.refetch();
+        if(what==="delete"&&conv&&ids.includes(store.draft(conv).topic||""))store.setDraft(conv,{...store.draft(conv),topic:undefined,newTopic:false,replyTo:undefined});
+        if(alive.current&&currentScope.current===capturedScope){
+          if(confirm.current?.matches(":focus"))search.current?.closest<HTMLElement>('[role="dialog"]')?.focus({preventScroll:true});
+          setSelected([]);setAction(null);setActionNote(r.note);
+        }
+        store.toast(r.note,"ok");
+      }else if(alive.current&&currentScope.current===capturedScope)setActionError("This change wasn't confirmed. Your selection stays here. Check the connection or your access, then try again.");
+    }catch(error){
+      if(errorText(error)!=="stale or disconnected workspace"){
+        if(alive.current&&currentScope.current===capturedScope)setActionError(errorText(error));
+        else store.toast(errorText(error),"error");
+      }
+    }
+    finally{inFlight.current=false;if(alive.current)setBusy(false);}
   };
   const toggle=(id:string)=>{setCounts(had=>({...had,[id]:items.find(t=>t.id===id)?.count||1}));setSelected(had=>had.includes(id)?had.filter(x=>x!==id):[...had,id]);};
-  useEffect(()=>{finish();cancel();setSelected([]);setCounts({});stable.release();},[scope]);
+  useEffect(()=>{if(!open){setAction(null);setSelected([]);setCounts({});setActionError("");setActionNote("");}},[open]);
+  useEffect(()=>{setAction(null);setSelected([]);setCounts({});setActionError("");setActionNote("");stable.release();},[scope]);
   const search = useRef<HTMLInputElement>(null);
   const portal = usePortal();
   const modal = useModal(open);
@@ -95,9 +110,9 @@ export function AllTopics({ open, onOpenChange, peer,conv, binding, agent, curre
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange} onOpenChangeComplete={(o) => { if (!o && !open) reset(); }} modal="trap-focus">
       <Dialog.Portal container={portal}>
-        <Dialog.Backdrop className="fixed inset-0 z-40 bg-scrim/30 transition-opacity duration-200 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 motion-reduce:transition-none" />
+        <Dialog.Backdrop className="fixed inset-0 z-40 bg-scrim/30 transition-opacity duration-[120ms] data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 motion-reduce:transition-none" />
         {/* Focus starts in the search box, except on touch, where that would cover the list with the keyboard. */}
-        <Dialog.Popup {...modal} initialFocus={(how) => (how === "touch" ? true : search.current)} className={"fixed z-50 flex flex-col bg-canvas text-ink outline-none transition-transform duration-[280ms] ease-out-soft motion-reduce:transition-none "
+        <Dialog.Popup {...modal} initialFocus={(how) => (how === "touch" ? true : search.current)} className={"fixed z-50 flex flex-col bg-canvas text-ink outline-none transition-transform duration-[140ms] ease-out-soft motion-reduce:transition-none "
           + (wide ? "inset-y-0 right-0 w-[440px] border-l-[1.5px] border-outline shadow-pop data-[starting-style]:translate-x-full data-[ending-style]:translate-x-full"
             : "inset-0 data-[starting-style]:translate-y-full data-[ending-style]:translate-y-full")}>
           <div className={"flex shrink-0 items-center gap-2 border-b-[1.5px] border-outline bg-surface " + (wide ? "h-[76px] px-5" : "h-16 pl-1 pr-3")}>
@@ -115,7 +130,7 @@ export function AllTopics({ open, onOpenChange, peer,conv, binding, agent, curre
               <span className="sr-only">Search topics</span>
               <input ref={search} type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search names and last messages" autoComplete="off" enterKeyHint="search"
                 className="min-w-0 flex-1 bg-transparent text-[16px] outline-none placeholder:text-muted focus-visible:outline-none lg:text-[15px] [&::-webkit-search-cancel-button]:hidden" />
-              {query && <IconButton label="Clear search" onClick={() => setQuery("")} className="shrink-0"><IconX size={18} /></IconButton>}
+              {query && <IconButton label="Clear search" onClick={() => {setQuery("");search.current?.focus({preventScroll:true});}} className="shrink-0"><IconX size={18} /></IconButton>}
             </label>
             <div role="group" aria-label="Show" className="mt-3 flex gap-2">
               {filters.map((x) => (
@@ -128,11 +143,17 @@ export function AllTopics({ open, onOpenChange, peer,conv, binding, agent, curre
             </div>
           </div>
 
+          {actionError && <p role="alert" className="px-4 pt-3 text-[14px] font-semibold text-danger">{actionError}</p>}
+          {actionNote && <p role="status" className="px-4 pt-3 text-[14px] font-semibold text-text-2">{actionNote}</p>}
           {selected.length>0 && <div className="shrink-0 border-b border-hairline px-4 py-2" aria-live="polite">
             <p className="text-[14px] font-semibold">{selected.length} selected</p>
-            {!action ? <div className="mt-2 flex flex-wrap gap-2">{(["delete","done","archive"] as const).map(what=><Button key={what} size="sm" disabled={busy || what==="done"&&items.some(t=>selected.includes(t.id)&&t.root)} onClick={()=>setAction(what)}>{what==="delete"?"Delete for me":what==="done"?"Mark done":"Archive"}</Button>)}<Button size="sm" onClick={()=>setSelected([])}>Cancel selection</Button></div>
-              : <><p className="mt-1 text-[14px]">{action==="delete"?"Delete these topics for you? Others keep their copies. People chats: your devices; agent chats: this device.":action==="done"?conv?"Mark these topics done for everyone?":"Mark these topics done on your linked devices?":"Archive these topics on your linked devices? Nothing deleted."}</p>
-                <div className="mt-2 flex gap-2">{undo?<><span className="text-[14px]">Will apply in six seconds. Closing applies now.</span><Button size="sm" onClick={cancel}>Undo</Button></>:<><Button size="sm" disabled={busy} onClick={commit}>Confirm</Button><Button size="sm" disabled={busy} onClick={cancel}>Cancel</Button></>}</div></>}
+            {!action ? <div className="mt-2 flex flex-wrap gap-2">{(["delete","done","archive"] as const).map(what=><Button key={what} size="sm" disabled={busy || what==="done"&&items.some(t=>selected.includes(t.id)&&t.root)} onClick={()=>setAction(what)}>{what==="delete"?"Delete for me":what==="done"?"Mark done":"Archive"}</Button>)}<Button size="sm" disabled={busy} onClick={()=>setSelected([])}>Cancel selection</Button></div>
+              : <><p className="mt-1 text-[14px]">{action==="delete"
+                  ? `Delete ${selected.length} ${selected.length===1?"topic":"topics"} for ${conv?"you on your linked devices; others keep their copies":"you on this device only"}? This can't be undone.`
+                  : action==="done"
+                    ? `Mark ${selected.length} ${selected.length===1?"topic":"topics"} done ${conv?"for everyone in this chat":"on your linked devices"}? You can reopen from Done.`
+                    : `Archive ${selected.length} ${selected.length===1?"topic":"topics"} on your linked devices? Nothing is deleted. Find them in Archived.`}</p>
+                <div className="mt-2 flex gap-2" aria-live="polite"><Button ref={confirm} size="sm" variant={action==="delete"?"danger":"act"} disabled={busy} onClick={commit}>{busy?`${action==="delete"?"Deleting":action==="done"?"Marking":"Archiving"} ${selected.length}…`:"Confirm"}</Button><Button size="sm" disabled={busy} onClick={cancel}>Cancel</Button></div></>}
           </div>}
           <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-3 pt-2 lg:px-3" aria-busy={loading}>
             <p role="status" className={q && !loading && !failed && items.length ? "px-3 pb-1 text-[13px] font-semibold text-text-2" : "sr-only"}>
@@ -151,7 +172,7 @@ export function AllTopics({ open, onOpenChange, peer,conv, binding, agent, curre
               <ul {...stable.bind} aria-label={q ? "Matching topics" : f.label + " topics"} className="flex flex-col gap-0.5">
                 {items.map((t) => (
                   <li key={topicIdentity(t)} className="flex items-center">
-                    <input type="checkbox" aria-label={"Select "+(t.title||"Untitled topic")} checked={selected.includes(t.id)} disabled={!present.has(topicIdentity(t))||undo||busy||!!flat&&!flat.canSelect(t.id)} onChange={()=>toggle(t.id)} className="m-3 size-5 shrink-0"/>
+                    <input type="checkbox" aria-label={"Select "+(t.title||"Untitled topic")} checked={selected.includes(t.id)} disabled={!present.has(topicIdentity(t))||busy||!!flat&&!flat.canSelect(t.id)} onChange={()=>toggle(t.id)} className="m-3 size-5 shrink-0"/>
                     <button type="button" onClick={() => go(t)} aria-disabled={!present.has(topicIdentity(t))} aria-current={t.id === current ? "true" : undefined} aria-label={topicLabel(t) + ", " + when(t.lastAt)}
                       className={"flex min-w-0 flex-1 flex-col gap-1 rounded-2xl border px-3 py-2.5 text-left transition-colors duration-200 "
                         + (t.id === current ? "border-outline bg-surface shadow-pop-sm" : "border-transparent hover:bg-sunken")}>

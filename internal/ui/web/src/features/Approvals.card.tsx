@@ -4,7 +4,7 @@
 // A request you sent that waits on someone else's OK gets a compact line.
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { IconBolt, IconCheck, IconClock, IconFileText, IconLock, IconPlayerStop, IconRefresh, IconShieldCheck, IconUser, IconEye, IconSparkles, IconArrowBackUp } from "@tabler/icons-react";
-import type { T } from "../api";
+import { errorText, type T } from "../api";
 import { useAgentNames, useApp } from "../context";
 import { deliveryWord, deviceKind, firstLine, personName, timeOf } from "../model";
 import { useOwned } from "../owned";
@@ -69,15 +69,19 @@ export function ApprovalCard({ message, dm, thread, compact, content }: { messag
 function ProposalConfirmation({m}: {m: Req}) {
  const store=useApp(), pending=useRef(false);
  const [busy,setBusy]=useState(false);
+ const [error,setError]=useState("");
  const [edit,setEdit]=useState<{id:string; original:string; body:string}|null>(null);
  const choice=edit?.id===m.id ? edit : null;
  const confirm=async (changed=false) => {
   if (pending.current || changed && (!choice || !choice.body.trim())) return;
   const id=m.id, body=choice?.body;
-  pending.current=true; setBusy(true);
+  pending.current=true; setBusy(true); setError("");
   try {
-   const result=await store.run(a=>a.act(changed ? {do:"change_proposal",id,body:body!} : {do:"do_it",id}));
+   const result=changed ? await store.api.act({do:"change_proposal",id,body:body!}) : await store.run(a=>a.act({do:"do_it",id}));
+   if (changed) void store.refetch();
    if (result) { setEdit(null); store.toast(result.note || "Task saved; the agent’s normal task permissions apply."); }
+  } catch (e) {
+   if (errorText(e)!=="stale or disconnected workspace") setError(errorText(e));
   } finally { pending.current=false; setBusy(false); }
  };
  return <>
@@ -86,11 +90,12 @@ function ProposalConfirmation({m}: {m: Req}) {
   <p className="pt-1 text-[13px]">Send this exact suggestion to the same agent, or change it first. Its owner’s task permissions apply.</p>
   <div className="mt-3 flex flex-wrap gap-2">
    <Button variant="act" disabled={busy} onClick={()=>void confirm()}>{busy ? "Sending…" : "Do it"}</Button>
-   <Button variant="ghost" disabled={busy} onClick={()=>setEdit({id:m.id,original:m.body,body:m.body})}>Change…</Button>
+   <Button variant="ghost" disabled={busy} onClick={()=>{setError("");setEdit({id:m.id,original:m.body,body:m.body});}}>Change…</Button>
   </div>
  </div>
  <Sheet open={!!choice} onOpenChange={open=>{if(!open&&!busy)setEdit(null);}} title="Change suggested task" description="Nothing runs until you send this task. It stays with the same agent and conversation."
   footer={<div className="flex flex-wrap justify-end gap-2"><Button variant="ghost" disabled={busy} onClick={()=>setEdit(null)}>Cancel</Button><Button disabled={busy||!choice?.body.trim()} onClick={()=>void confirm(true)}>{busy?"Sending…":"Send revised task"}</Button></div>}>
+  {error && <p role="alert" className="mb-3 text-danger">{error}</p>}
   <label className="mt-3 block font-semibold" htmlFor={"proposal-edit-"+m.id}>Task to send</label>
   <textarea id={"proposal-edit-"+m.id} autoFocus rows={10} className="mt-2 w-full resize-y rounded-xl border border-hairline bg-surface p-3 text-ink" value={choice?.body||""} disabled={busy} onChange={e=>setEdit(old=>old?{...old,body:e.target.value}:old)} />
   <p className="mt-2 text-[13px] text-muted">Revised tasks use the agent’s normal task permissions and may need approval.</p>
@@ -147,8 +152,9 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
   const permissionTarget = permissionPerson?.person || m.from;
   const act = async (a: T.Action, ok: string) => {
     setBusy(a.do);
-    await store.run((api) => api.act(a), ok);
+    const result = await store.run((api) => api.act(a), ok);
     setBusy("");
+    return !!result;
   };
   const allow = () => act({ do: "accept", id: m.id }, phase === "decide" ? "Allowed once." : "Running it again.");
   const reply = () => {
@@ -270,7 +276,7 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
         )}
       </RequestFrame>
 
-      {answer && <AnswerSheet question={answer.question} onClose={() => setAnswer(null)} onSend={async (text) => {
+      {answer && <AnswerSheet draftKey={JSON.stringify(["answer", conv, answer.request.host, answer.request.id, answer.request.key, answer.request.attempt])} question={answer.question} onClose={() => setAnswer(null)} onSend={async (text) => {
         const c = answer.request;
         const result = await store.run(api => c.host
           ? api.decide({host:c.host,id:c.id,key:c.key,action:"continue",expect:"needs_human",attempt:c.attempt,text,send_id:answer.send,report:""})
@@ -292,7 +298,7 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
         other="Just this one" onOther={allow}>
         <TurnOff cmd={"agentnet unapprove " + permissionTarget} what="Turns it off. Their questions wait for you again." />
       </ConfirmSheet>
-      <DeclineSheet open={sheet === "decline"} onOpenChange={(v) => setSheet(v ? "decline" : null)} who={asker.person} kind={kind}
+      <DeclineSheet draftKey={JSON.stringify(["decline", conv, m.id, m.dir, m.from, m.continuation?.host, m.continuation?.key, m.continuation?.attempt, m.revision])} open={sheet === "decline"} onOpenChange={(v) => setSheet(v ? "decline" : null)} who={asker.person} kind={kind}
         onDecline={(reason) => act({ do: "decline", id: m.id, reason }, "Declined. " + asker.person + " is told.")} />
       <ConfirmSheet open={sheet === "stop"} onOpenChange={(v) => setSheet(v ? "stop" : null)}
         title={"Stop " + agent + "?"} body="It stops working on this now. Whatever it already did stays done."

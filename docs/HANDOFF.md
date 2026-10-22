@@ -42,6 +42,22 @@ remain valid; the final review must rebuild from the frozen candidate, fingerpri
 the binary/assets and re-establish every GUI coverage row. See the active batch
 checklist and [release qualification record](plans/V0_9_3_RELEASE.md).
 
+The current corrective batch also separates normal chat-row preview IDs from
+exact message jumps, dispatches confirmed bulk topic changes immediately, and
+keeps temporary group-context verification waits out of red error toasts.
+The shared profile picture editor is centered within the actual skin reset.
+Typed text in secondary editors survives the desktop/phone layout swap within
+the captured workspace; cancel and confirmed submission clear only the matching
+draft. A focused full-App Edit journey and seven real form components pass,
+including late-response and target/revision/workspace fences. Shorter dialog
+transitions and topic-search coalescing remove measured fixed waits; they do not
+turn API acknowledgements into proof of delivery or completion.
+An independently reviewed terminal group-removal recipient class is being
+implemented using original signed context/proof only; ordinary recipient and
+execution boundaries stay current-member scoped. See the October23 entry in
+[DECISIONS](DECISIONS.md) and the batch checklist for exact evidence and open
+gates. No v0.9.3 artifact or live rollout is implied by these candidate notes.
+
 ## v0.9.2 released and relay updated — October22, 2026
 
 [App v0.9.2](https://github.com/misunders2d/agentnet/releases/tag/v0.9.2) is public
@@ -3283,7 +3299,9 @@ The current behavior is:
   are not converted; joining afresh is the recorded choice for this rollout.
 - Every chat has topics. Done and Reopen are shared in people chats and
   groups; later unseen messages reopen a topic. Bulk actions offer a
-  confirmation and Undo. Archive stays local. Delete for me in people
+  confirmation before calling the host. Comic dispatches immediately; its
+  panel has no delayed Undo. Move/merge keeps its real server-backed Undo.
+  Archive follows the person's linked devices. Delete for me in people
   chats reaches the person's linked devices; an agent-chat deletion stays
   on the deleting device.
 - New accepted group agents are members that anyone in the group can ask.

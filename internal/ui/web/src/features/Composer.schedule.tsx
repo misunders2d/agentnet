@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { T } from "../api";
 import { useApp } from "../context";
+import { useRetainedText } from "../retained-text";
 import { useStore, type Draft } from "../store";
 import type { ScheduleSave } from "../schedule-saves";
 import { dueText } from "../model";
@@ -31,7 +32,8 @@ export function ScheduleDialogs({pane,onPane,conv,dm,capture,reason,page=false,r
   const [historyOpen,setHistoryOpen] = useState(false);
   const [editOrder,setEditOrder] = useState<string[]>([]);
   const [query,setQuery] = useState("");
-  const [body,setBody] = useState(""), [editTime,setEditTime] = useState("");
+  const [body,setBody,retainedBody] = useRetainedText(JSON.stringify(["schedule-edit", conv, selected?.conv, selected?.id, selected?.rev, selected?.body]), selected?.body || "");
+  const [editTime,setEditTime] = useState("");
   const [removeFiles,setRemoveFiles] = useState(false), [review,setReview] = useState<T.ScheduledAudience | null>(null), [approved,setApproved] = useState<T.ScheduledAudience | undefined>();
   const [loading,setLoading] = useState(false), [busy,setBusy] = useState(false), busyRef = useRef(false);
   const epoch = useRef(0), mounted = useRef(true);
@@ -96,7 +98,7 @@ export function ScheduleDialogs({pane,onPane,conv,dm,capture,reason,page=false,r
     } catch {store.settleScheduleSave(conv,p.id,"uncertain","Saved state could not be confirmed. It may still be saved by an earlier request. This original intent is kept; no new ID was allocated.");}
     finally {busyRef.current=false;setBusy(false);}
   }
-  function edit(row:T.ScheduledSend) {setEditOrder(activeRows.map(r=>r.id));setSelected(row);setBody(row.body);setEditTime(localScheduleTime(new Date(row.due)));setRemoveFiles(false);setReview(null);setApproved(undefined);setNotice("");}
+  function edit(row:T.ScheduledSend) {setEditOrder(activeRows.map(r=>r.id));setSelected(row);setEditTime(localScheduleTime(new Date(row.due)));setRemoveFiles(false);setReview(null);setApproved(undefined);setNotice("");}
   async function reviewAudience(row:T.ScheduledSend) {
     if(busyRef.current)return;busyRef.current=true;setBusy(true);setNotice("");
     try {const fresh=await store.api.scheduleAudience(row.conv,row.topic);if(mounted.current&&store.isActive())setReview(fresh);}
@@ -123,7 +125,7 @@ export function ScheduleDialogs({pane,onPane,conv,dm,capture,reason,page=false,r
     : store.host.platform === "android"
     ? "Sends while AgentNet is running and online. Background limits can delay sending."
     : "Sends from this device while AgentNet is running and online.";
-  const close = () => {if(!busyRef.current){onPane(null);setNotice("");setSelected(null);setReview(null);setApproved(undefined);}};
+  const close = () => {if(!busyRef.current){retainedBody.discard();onPane(null);setNotice("");setSelected(null);setReview(null);setApproved(undefined);}};
 
   const renderRow = (current:T.ScheduledSend) => {
     const expanded = selected?.id===current.id;
@@ -136,7 +138,7 @@ export function ScheduleDialogs({pane,onPane,conv,dm,capture,reason,page=false,r
         <p className="mt-1 truncate text-sm">{row.body.slice(0,180) || (row.files?.length ? row.files.length+" attachment"+(row.files.length===1?"":"s") : "Message")}</p>
         <p className="mt-1 flex flex-wrap gap-x-2 text-[13px] text-text-2"><time className="whitespace-nowrap" dateTime={row.due}>{new Date(row.due).toLocaleString([], {dateStyle:"medium",timeStyle:"short"})}</time><span className="whitespace-nowrap">{states[row.state] || "Unavailable"}</span>{!!row.files?.length&&<span className="whitespace-nowrap">{row.files.length+" file"+(row.files.length===1?"":"s")}</span>}</p>
       </div>
-      <Button size="sm" variant="ghost" disabled={busy} aria-expanded={expanded} onClick={()=>expanded?setSelected(null):edit(current)}>{expanded?"Close details":mutable(row)?"Edit schedule":"View schedule"}</Button>
+      <Button size="sm" variant="ghost" disabled={busy} aria-expanded={expanded} onClick={()=>{if(expanded){retainedBody.discard();setSelected(null);}else edit(current);}}>{expanded?"Close details":mutable(row)?"Edit schedule":"View schedule"}</Button>
     </div>
     {expanded&&<div className="mt-3 rounded-xl bg-surface p-3 stroke">
     <p className="font-semibold"><time dateTime={row.due}>{new Date(row.due).toLocaleString([], {dateStyle:"medium",timeStyle:"short"})}</time></p>
@@ -164,7 +166,7 @@ export function ScheduleDialogs({pane,onPane,conv,dm,capture,reason,page=false,r
       <p className="text-sm text-text-2">{approved?"New audience explicitly confirmed: "+audienceText(approved):"Editing text or time keeps the saved audience ceiling and attachments unless explicitly removed."}</p>
       <Button size="sm" disabled={busy} onClick={()=>void reviewAudience(row)}>Review audience</Button>
       {review&&<div className="rounded-xl bg-sunken p-3 text-sm"><p>{audienceText(review)}</p><Button size="sm" disabled={busy} onClick={()=>{setApproved(review);setReview(null);}}>Confirm reviewed audience</Button></div>}
-      <div className="flex flex-wrap gap-2"><Button variant="act" size="sm" disabled={busy} onClick={()=>{try {const change=scheduleEdit(selected,body,scheduleDue(editTime),timezone(),removeFiles,approved);void action(()=>store.api.editSchedule(change));}catch{setNotice("Choose a date and time in the future. No change was saved.");}}}>Save schedule changes</Button><Button variant="ghost" size="sm" disabled={busy} onClick={()=>{setSelected(null);setReview(null);setApproved(undefined);}}>Keep saved schedule</Button></div>
+      <div className="flex flex-wrap gap-2"><Button variant="act" size="sm" disabled={busy} onClick={()=>{try {const change=scheduleEdit(selected,body,scheduleDue(editTime),timezone(),removeFiles,approved),confirmed=retainedBody.capture();void action(async()=>{await store.api.editSchedule(change);confirmed();});}catch{setNotice("Choose a date and time in the future. No change was saved.");}}}>Save schedule changes</Button><Button variant="ghost" size="sm" disabled={busy} onClick={()=>{retainedBody.discard();setSelected(null);setReview(null);setApproved(undefined);}}>Keep saved schedule</Button></div>
     </div>}
     </div>}
   </article>;

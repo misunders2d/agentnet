@@ -179,3 +179,32 @@ visible refusal and exact returned agent-ID checks, with17–24ms feedback.
 Topic typing/Clear feedback is5–11ms; results still complete after the existing
 250ms debounce (262–270ms), separately recorded. These focused proofs do not
 replace remaining all-system/platform/GUI and full qualification gates.
+
+
+## Corrective checkpoint after d12df327 — October23
+
+The d12 child passes strict canonical build/vet and Claude's cheap source gate;
+its matching five gallery packages and twenty previews are built and visually
+inspected. Full qualification is held for newly reproduced GUI defects. Normal
+chat-row `last_id` was mistakenly treated as an exact latest-message jump;
+ordinary preview/topic selection is now separated from exact quote/notification
+focus, with focused verification in progress. No read-entry guard was broadened.
+
+Bulk Confirm now calls the existing API immediately with captured IDs/counts,
+disables repeated input and reports only the host result. Cancel before Confirm
+sends nothing. The delayed panel Undo is removed; move/merge keeps its real
+server-backed Undo. Delete states exact count/scope and irreversibility. Claude
+reviewed this simplification and all three shipped contract descriptions are
+updated. Focused component action/lifetime/partial/error cases pass.
+
+The shared picture editor reproduces actual skin-reset placement at(0,0) and a
+15px body-weight heading. `margin:auto` and a20px bold heading pass desktop/phone
+centering, crop/pinch/wheel/strict-save checks3.619s; both screenshots inspected.
+Group verification waits use typed `group_context_pending` and retain the last
+verified view/draft, with a temporary send pause rather than red internal error.
+Native barrier and browser/Store/transport/rendered proofs remain distinct;
+root's two model parents pass1.963s, actual browser engine812checks35.333s and
+full-App1280/390 pending/recovery rendering pass. A removed member's authenticated
+terminal notice remains a separate concrete design/implementation gate; generic
+refusals or opaque head hashes are not removal proof. No publicv0.9.3 or relay
+change has occurred.

@@ -281,6 +281,7 @@ export function NewGroupForm({ onBack, onCreated, initialPeople = [], navigate =
   const pageSize = 40;
   const [query, setQuery] = useState("");
   const [peopleLimit, setPeopleLimit] = useState(pageSize);
+  const peopleSearch = useRef<HTMLInputElement>(null);
   const eligible = useMemo(() => (overview?.people || []).filter(p => p.state === "pinned" && p.person && p.person !== overview?.person?.person), [overview?.people, overview?.person?.person]);
   const matching = useMemo(() => eligible.filter(p => matches(query, personName(p), p.address, ...(p.devices || []).flatMap(d => [d.name, d.address]))), [eligible, query]);
 
@@ -328,8 +329,8 @@ export function NewGroupForm({ onBack, onCreated, initialPeople = [], navigate =
       <fieldset disabled={busy} className="space-y-2">
         <legend className="font-semibold">People</legend>
         <div className="flex items-end gap-2">
-          <label className="min-w-0 flex-1 text-sm">Search people<input type="search" value={query} onChange={e => { setQuery(e.target.value); setPeopleLimit(pageSize); }} placeholder="Name or device" autoComplete="off" className="mt-1 block h-11 w-full rounded-xl bg-surface px-3 text-[16px] stroke" /></label>
-          {query && <Button type="button" size="sm" variant="outline" onClick={() => { setQuery(""); setPeopleLimit(pageSize); }}>Clear search</Button>}
+          <label className="min-w-0 flex-1 text-sm">Search people<input ref={peopleSearch} type="search" value={query} onChange={e => { setQuery(e.target.value); setPeopleLimit(pageSize); }} placeholder="Name or device" autoComplete="off" className="mt-1 block h-11 w-full rounded-xl bg-surface px-3 text-[16px] stroke" /></label>
+          {query && <Button type="button" size="sm" variant="outline" onClick={() => { setQuery(""); setPeopleLimit(pageSize); peopleSearch.current?.focus({preventScroll:true}); }}>Clear search</Button>}
         </div>
         <div className="max-h-48 overflow-y-auto">{matching.slice(0, peopleLimit).map(p =>
           <label key={p.person} className="flex min-h-11 cursor-pointer items-center gap-3 px-1">

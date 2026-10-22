@@ -5,11 +5,12 @@
 // decision goes to that device, which applies it only if nothing changed.
 // Any other device is told how many wait and who decides them from their
 // own devices (MEL-532): never "go to that machine".
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Collapsible } from "@base-ui/react/collapsible";
 import { IconChevronDown, IconDevices } from "@tabler/icons-react";
 import type { T } from "../api";
 import { useApp } from "../context";
+import { useRetainedText } from "../retained-text";
 import { latestReviewReport, ownReportResolution, when } from "../model";
 import { Button } from "../ui/Button";
 import { Sheet } from "../ui/Sheet";
@@ -155,30 +156,31 @@ function ReportRow({ x, host, report, o }: { x: Item; host: string; report: T.Re
         </div>
       ) : ownResolution ? <ResolveOwnRequest request={ownResolution} /> : !decided && <p className="pt-1 text-[13px] text-muted">{x.actionable ? "Nothing to decide on it right now." : "This device can’t decide it."}</p>}
       <OperatorSheet open={!!pick} decision={pick} x={x} where={deviceWords(host, o)} again={again}
+        draftKey={JSON.stringify(["operator", host, report.id, x.id, x.key, x.attempt, x.state, pick])}
         onOpenChange={(v) => { if (!v) setPick(null); }}
         onSend={(text) => store.run((api) => api.decide({ host, id: x.id, key: x.key, action: pick!, expect: x.state, attempt: x.attempt, text, report: report.id }), "Sent to " + deviceWords(host, o) + ".")} />
     </li>
   );
 }
 
-function OperatorSheet({ open, decision, x, where, again, onOpenChange, onSend }: {
-  open: boolean; decision: Decision | null; x: Item; where: string; again: boolean; onOpenChange: (v: boolean) => void; onSend: (text: string) => void;
+function OperatorSheet({ open, decision, x, where, again, onOpenChange, onSend, draftKey }: {
+  open: boolean; decision: Decision | null; x: Item; where: string; again: boolean; draftKey: string; onOpenChange: (v: boolean) => void; onSend: (text: string) => Promise<unknown>;
 }) {
-  const [text, setText] = useState("");
-  useEffect(() => { if (open) setText(""); }, [open]);
+  const [text, setText, retained] = useRetainedText(draftKey, "");
+  const cancel = () => { retained.discard(); onOpenChange(false); };
   if (!decision) return null;
   const needText = decision === "reply" || decision === "decline";
   const what = { accept: again ? "It starts fresh there, with that device’s usual permissions." : "It runs there, with that device’s usual permissions.",
     decline: "Nothing runs. The sender is told why.", reply: "Your answer goes to the sender from that device.",
     resolve: "It closes this request there without running it again. The host confirms the result here.", cancel: "It stops there. Whatever it already did stays done." }[decision];
   return (
-    <Sheet open={open} onOpenChange={onOpenChange} title={label(decision, again) + "?"}
+    <Sheet open={open} onOpenChange={value => { if (value) onOpenChange(true); else cancel(); }} title={label(decision, again) + "?"}
       description={"On " + where + ". It applies this only if the request still " + (stateWords[x.state] || "is as reported") + "."}
       footer={
         <div className="flex flex-col gap-2">
           <Button variant={decision === "decline" || decision === "cancel" ? "danger" : "act"} size="lg" disabled={needText && !text.trim()}
-            onClick={() => { onOpenChange(false); onSend(text.trim()); }}>{label(decision, again)}</Button>
-          <Button variant="ghost" size="lg" onClick={() => onOpenChange(false)}>Cancel</Button>
+            onClick={() => { const confirmed = retained.capture(); onOpenChange(false); void onSend(text.trim()).then(result => { if (result) confirmed(); }); }}>{label(decision, again)}</Button>
+          <Button variant="ghost" size="lg" onClick={cancel}>Cancel</Button>
         </div>
       }>
       {x.excerpt && <p className="rounded-xl bg-sunken px-3.5 py-2.5 text-text-2 [overflow-wrap:anywhere]">“{x.excerpt}”</p>}

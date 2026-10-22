@@ -2,7 +2,7 @@ import {dismissalCanonical} from './dismissal_canonical_check.mjs';
 // Native-produced sealed carrier vectors through actual Engine. Synthetic
 // signed-request fetch only; Chrome mode uses real IndexedDB, Node memory is unit-only.
 import * as wire from '../static/wire.mjs';
-import { Engine, memoryStore, openIDB } from '../static/engine.mjs';
+import { Engine, HubError, memoryStore, openIDB } from '../static/engine.mjs';
 import { checkControlHistory } from './group_control_history_check.mjs';
 import {receiverProfile} from './group_receiver_profile.mjs';
 import {carrierReceiptRepair} from './carrier_receipt_repair_check.mjs';
@@ -20,7 +20,7 @@ export async function consent(challenge) {
  const a = await wire.signGroupAdmission(keys,{conv:await wire.rootID(root),realm:root.realm,person:roster.person,roster:await wire.rosterHash(roster),seq:0,prev:'',history:null,by:await wire.fingerprint(pub)});
  return wire.groupAdmissionJSON(a);
 }
-export async function checks(v, realIDB=false, requireWarmRecovery=false, controlHistoryOnly=false, backgroundOnly=false,receiverOnly=false,receiptRepairOnly=false,topicOnly=false,statusReorderOnly=false,receivePriorityOnly=false,dismissalCanonicalOnly=false) {
+export async function checks(v, realIDB=false, requireWarmRecovery=false, controlHistoryOnly=false, backgroundOnly=false,receiverOnly=false,receiptRepairOnly=false,topicOnly=false,statusReorderOnly=false,receivePriorityOnly=false,dismissalCanonicalOnly=false,terminalOnly=false) {
  if(receiptRepairOnly)return carrierReceiptRepair(realIDB);
  const labels=[], check=(ok,label)=>{assert(ok,label);labels.push(label);};
  const root=wire.parseGroupRoot(v.challenge.root), conv=await wire.rootID(root), states=v.states.map(wire.parseGroupState), records=v.commits.map(wire.parseGroupCommit), c=v.carriers;
@@ -70,6 +70,136 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false, contro
    async reload(){await drain();st.close();st=realIDB?await openIDB(name):st;e=new Engine({store:st,base:'http://127.0.0.1:1',fetch});track(e);await e.load();e.realm=root.realm;this.st=st;},
    async close(){await drain();st.close();if(realIDB)await new Promise((res,rej)=>{const r=indexedDB.deleteDatabase(name);r.onsuccess=res;r.onerror=()=>rej(r.error);/* close is pending until active read transactions finish; onsuccess proves deletion. */});}};
  };
+ const terminalCases=async()=>{
+  const parent=states[0],parentHash=await wire.groupStateHash(parent),subject=roster.person;
+  const child=async(folded=false)=>{
+   const withdrawals=folded?[wire.parseGroupWithdrawal(v.withdrawal)]:[];
+   const state=await wire.signGroupState(aliceKeys,{...parent,seq:1,prev:parentHash,members:(await wire.effectiveGroupMembers(parent,withdrawals)).filter(m=>m.person!==subject)});
+   const plaintext=wire.groupContextJSON({root,state,withdrawals}),encrypted=await wire.encryptFile(new TextEncoder().encode(plaintext),'terminal-original.json',alicePub);
+   const record=await wire.signGroupCommit(aliceKeys,{...records[0],seq:1,prev:parentHash,hash:await wire.groupStateHash(state),admins:wire.groupAdmins(state),ciphertext:encrypted.ct});
+   return {packet:{root,proof:[parent],state,withdrawals},record};
+  };
+  for(const folded of [false,true]){
+   const w=await world();try{
+    await w.receive(c.proof);await w.receive(c.context);await w.receive(v.participations.ordinary);
+    const before=await w.e.groupThread(conv),{packet,record}=await child(folded);
+    const admit=w.e.admitGroupCarrier.bind(w.e);let lastAdmissionError;
+    w.e.admitGroupCarrier=async(...args)=>{try{return await admit(...args);}catch(e){lastAdmissionError={reason:e.reason,message:e.message};throw e;}};
+    const id=wire.newID(),envelope=await wire.seal({v:2,id,from:address,to:alicePub.address,ts:1700000001,kind:'message',body:'queued before removal',conv,lid:id,root:wire.rootJSON(root),attachments:[]},keys,alicePub);
+    const queuedRow={id,lid:id,conv,to:alicePub.address,kind:'message',body:'queued before removal',envelope,at:1700000001000,state:'queued',handover_started:false,handover_proven:true,files:[{privateFixture:'retained ciphertext'}]};
+    const uncertain=[];for(const flags of [{handover_started:true,handover_proven:true},{handover_started:null,handover_proven:true},{handover_started:false,handover_proven:false},{state:'receiver_waiting',handover_started:false,handover_proven:false}]){const key=wire.newID();uncertain.push(key);await w.st.write([{s:'outbox',k:key,v:{...queuedRow,...flags,id:key,lid:key}}]);}
+    const delivered=wire.newID();await w.st.write([{s:'outbox',k:id,v:queuedRow},{s:'outbox',k:delivered,v:{...queuedRow,id:delivered,lid:delivered,state:'delivered'}}]);
+    await w.receive(await w.make(wire.SubGroupProof,JSON.parse(wire.groupJournalJSON({records:[record],more:false})),1,record.hash));
+    check((await w.st.get('kv','group/'+conv)).records.length===2,'terminal original child proof admitted '+JSON.stringify(lastAdmissionError));
+    const terminal=await w.make(wire.SubGroupContext,JSON.parse(wire.groupContextJSON(packet)),1,record.hash);await w.receive(terminal);
+    const stored=wire.parseGroupContext((await w.st.get('kv','group/'+conv)).context),view=await w.e.groupThread(conv),queued=await w.st.get('outbox',id);
+    const held=await w.st.get('held',wire.parseEnvelope(terminal.envelope).id);
+    check(await wire.groupStateHash(stored.state)===record.hash&&!held,'terminal '+folded+' actual original signed state admitted '+JSON.stringify({seq:stored.state.seq,reason:held?.reason,error:lastAdmissionError}));
+    check(view.role==='former_member'&&view.frozen.includes('Alice removed you')&&view.messages.some(m=>before.messages.some(old=>old.id===m.id)),'terminal '+folded+' literal removal is read-only and retains earlier messages');
+    check(queued.state==='not_delivered'&&queued.delivery_cancelled&&queued.detail.includes('removed you')&&queued.files[0].privateFixture==='retained ciphertext','terminal '+folded+' unsent ordinary copy stops visibly with retained files');
+    for(const key of uncertain){const row=await w.st.get('outbox',key);check(row.state==='failed'&&row.delivery_cancelled&&row.detail.includes('previous delivery unconfirmed')&&row.files.length===1&&w.e.cancellationView(row).delivery_uncertain,'terminal '+folded+' attempted/unknown/legacy-zero handover remains visibly unconfirmed');}
+    check((await w.st.get('outbox',delivered)).state==='delivered'&&!(await w.st.get('outbox',delivered)).delivery_cancelled,'terminal '+folded+' proven delivered receipt is unchanged');
+    let refused=false;try{await w.e.groupCurrent(conv);}catch(_){refused=true;}check(refused,'terminal '+folded+' no ordinary membership grant');
+    const raw=(await w.st.get('kv','group/'+conv)).context;await w.receive(terminal);check((await w.st.get('kv','group/'+conv)).context===raw,'terminal '+folded+' exact duplicate is inert');
+    await w.reload();check((await w.e.groupThread(conv)).frozen.includes('removed you')&&(await w.st.get('outbox',id)).files.length===1,'terminal '+folded+' reload keeps removal and ciphertext');
+    if(!folded){
+     const admission=await wire.signGroupAdmission(keys,{...wire.groupMember(parent,subject).admission,seq:2,prev:record.hash});
+     const rejoined=await wire.signGroupState(aliceKeys,{...packet.state,seq:2,prev:record.hash,members:[...packet.state.members,{...wire.groupMember(parent,subject),admission}].sort((a,b)=>a.person.localeCompare(b.person))});
+     const sealed=await wire.encryptFile(new TextEncoder().encode(wire.groupContextJSON({root,state:rejoined,withdrawals:[]})),'rejoined-original.json',pub),commit=await wire.signGroupCommit(aliceKeys,{...record,seq:2,prev:record.hash,hash:await wire.groupStateHash(rejoined),admins:wire.groupAdmins(rejoined),ciphertext:sealed.ct});
+     await w.receive(await w.make(wire.SubGroupProof,JSON.parse(wire.groupJournalJSON({records:[commit],more:false})),2,commit.hash));await w.receive(await w.make(wire.SubGroupContext,JSON.parse(wire.groupContextJSON({root,state:rejoined,withdrawals:[]})),2,commit.hash));
+     await w.receive(await w.make(wire.SubGroupContext,JSON.parse(wire.groupContextJSON(packet)),1,record.hash));
+     check((await w.e.groupThread(conv)).role==='member'&&(await w.e.groupThread(conv)).frozen===''&&await wire.groupAdmissionHash(wire.groupMember((await w.e.groupCurrent(conv)).state,subject).admission)===await wire.groupAdmissionHash(admission),'late old terminal never revokes exact new readmission');
+    }
+   }finally{await w.close();}
+  }
+  {
+   const w=await world();try{
+    await w.receive(c.proof);await w.receive(c.context);const {packet,record}=await child();
+    await w.receive(await w.make(wire.SubGroupProof,JSON.parse(wire.groupJournalJSON({records:[record],more:false})),1,record.hash));
+    const g=await w.st.get('kv','group/'+conv),resolved=await w.e.groupResolver(root,[],packet,g,[]);
+    for(const kind of ['rename','role','admission','extra-member','bad-signature','missing-proof','oversized-proof','own-withdrawal','guest-payload']){
+     const bad=structuredClone(packet);
+     if(kind==='rename')bad.state.title+=' changed';
+     if(kind==='role')bad.state.members[0].admin=!bad.state.members[0].admin;
+     if(kind==='admission')bad.state.members[0].admission.history=[{lid:'1'.repeat(32),author:w.e.fp,hash:'e'.repeat(64)}];
+     if(kind==='extra-member')bad.state.members=[];
+     if(kind==='bad-signature')bad.proof[0].sig[0]^=1;
+     if(kind==='missing-proof')bad.proof=[];
+     if(kind==='oversized-proof')bad.proof=Array(4097).fill(parent);
+     if(kind==='own-withdrawal')bad.withdrawals=[await wire.signGroupWithdrawal(keys,{conv,realm:root.realm,person:subject,admission:await wire.groupAdmissionHash(wire.groupMember(parent,subject).admission),roster:await wire.rosterHash(roster),by:w.e.fp})];
+     if(kind==='guest-payload')bad.memberships=[{}];
+     let refused=false;try{await w.e.verifyGroupTerminal(bad,g,resolved.resolve);}catch(_){refused=true;}check(refused,'terminal negative '+kind+' refused without changing held context');
+    }
+    const bad=structuredClone(packet);bad.proof[0].sig[0]^=1;
+    const badWire=await w.make(wire.SubGroupContext,JSON.parse(wire.groupContextJSON(bad)),1,record.hash);await w.receive(badWire);
+    check((await w.st.get('held',wire.parseEnvelope(badWire.envelope).id))?.reason==='invalid'&&wire.parseGroupContext((await w.st.get('kv','group/'+conv)).context).state.seq===0,'bad terminal original signature is held without changing readable state');
+    await w.receive(await w.make(wire.SubGroupContext,JSON.parse(wire.groupContextJSON(packet)),1,record.hash));check((await w.e.groupThread(conv)).role==='former_member','valid terminal progresses after invalid proof without a receive loop');
+   }finally{await w.close();}
+  }
+  {
+   const w=await world();try{
+    await w.receive(c.proof);await w.receive(c.context);const g=await w.st.get('kv','group/'+conv),originals=[records[0]],history=[parent];
+    for(let seq=1;seq<=120;seq++){
+     const prev=history.at(-1),state=await wire.signGroupState(aliceKeys,{...prev,seq,prev:await wire.groupStateHash(prev)}),sealed=await wire.encryptFile(new TextEncoder().encode(wire.groupContextJSON({root,state,withdrawals:[]})),'entitled-original.json',pub);
+     originals.push(await wire.signGroupCommit(aliceKeys,{...records[0],seq,prev:state.prev,hash:await wire.groupStateHash(state),ciphertext:sealed.ct}));history.push(state);
+    }
+    const person=v.challenge.rosters[1].person,prior={root,state:history.at(-1)},state=await wire.signGroupState(aliceKeys,{...prior.state,seq:121,prev:await wire.groupStateHash(prior.state),members:prior.state.members.filter(m=>m.person!==person)}),copy={...g,records:originals.map(wire.groupCommitJSON)};
+    const pending=await w.e.prepareGroupTerminal(prior,{root,state},person,copy,[],[]);
+    check(pending.pending.includes('bound')&&JSON.parse(pending.context).proof.length===1,'terminal proof over existing payload bound stays explicit pending without truncated wire context');
+    const encrypted=await wire.encryptFile(new TextEncoder().encode(wire.groupContextJSON({root,state:parent,withdrawals:[]})),'unreadable-original.json',alicePub),unreadable=await wire.signGroupCommit(aliceKeys,{...records[0],ciphertext:encrypted.ct});
+    const one={root,state:history[1]},next=await wire.signGroupState(aliceKeys,{...history[1],seq:2,prev:await wire.groupStateHash(history[1]),members:history[1].members.filter(m=>m.person!==person)});
+    const unavailable=await w.e.prepareGroupTerminal(one,{root,state:next},person,{...g,records:[unreadable,originals[1]].map(wire.groupCommitJSON)},[],[]);
+    check(unavailable.pending.includes('unavailable')&&JSON.parse(unavailable.context).proof.length===1,'terminal original ciphertext excluding publisher stays truthful pending without invented past plaintext');
+   }finally{await w.close();}
+  }
+  {
+   const w=await world();try{
+    const requests=[],call=w.e.call.bind(w.e);w.e.groupSupport=async()=>{};w.e.post=async()=>{};
+    const capture=async(method,path,body,options)=>{if(method==='POST'&&path.startsWith('/v1/groups/')){requests.push(body.commit);return {seq:body.commit.seq,hash:body.commit.hash};}return call(method,path,body,options);};w.e.call=capture;
+    const created=await w.e.createGroup('Terminal publisher'),initial=await w.e.groupCurrent(created),alice=await wire.parseRoster(v.challenge.rosters[0]),hash=await wire.groupStateHash(initial.state),admission=await wire.signGroupAdmission(aliceKeys,{conv:created,realm:root.realm,person:alice.person,roster:await wire.rosterHash(alice),seq:1,prev:hash,history:null,by:await wire.fingerprint(alicePub)});
+    const joined=await wire.signGroupState(keys,{...initial.state,seq:1,prev:hash,members:[...initial.state.members,{person:alice.person,roster:await wire.rosterHash(alice),admin:false,admission}].sort((a,b)=>a.person.localeCompare(b.person))});
+    await w.e.publishGroupPacket({root:initial.root,state:joined,proof:null,withdrawals:[]});
+    const priorPhoneKeys=await wire.newKeys(),priorPhone=await wire.publicEntry(priorPhoneKeys,'alice/terminal-phone'),priorPhoneFP=await wire.fingerprint(priorPhone);
+    const aliceNext={...alice,seq:1,prev:await wire.rosterHash(alice),devices:[...alice.devices,priorPhone],human_keys:[...await wire.rosterHumans(alice),priorPhoneFP],by:await wire.fingerprint(alicePub),sig:null,join:await wire.joinConsent(priorPhoneKeys,priorPhone.address,alice.person,1,await wire.rosterHash(alice))},unsignedAlice=JSON.parse(wire.rosterJSON(aliceNext));delete unsignedAlice.sig;delete unsignedAlice.join;aliceNext.sig=new Uint8Array(await crypto.subtle.sign('Ed25519',aliceKeys.sign,new TextEncoder().encode('agentnet-person-v2\n'+JSON.stringify(unsignedAlice))));await wire.verifyNext(aliceNext,alice);
+    const alicePerson=await w.e.personRecord([alice,aliceNext],'pinned',await w.st.get('persons',alice.person));w.extraChains.set(alice.person,[alice,aliceNext].map(r=>JSON.parse(wire.rosterJSON(r))));await w.st.write([{s:'persons',k:alice.person,v:alicePerson}]);await w.e.pinDevices(alicePerson);
+    const support=async to=>{if(to===priorPhone.address)throw new HubError(404,'not_found','synthetic missing prior human device');};w.e.groupSupport=support;
+    const ownPhoneKeys=await wire.newKeys(),ownPhone=await wire.publicEntry(ownPhoneKeys,'browser/terminal-phone'),ownPhoneFP=await wire.fingerprint(ownPhone);
+    const ownNext=await wire.nextRoster(keys,address,roster,[...roster.devices,ownPhone],await wire.joinConsent(ownPhoneKeys,ownPhone.address,roster.person,1,await wire.rosterHash(roster)),roster.label,[...await wire.rosterHumans(roster),ownPhoneFP]);await wire.verifyNext(ownNext,roster);
+    const ownPerson=await w.e.personRecord([roster,ownNext],'self',w.e.me);w.extraChains.set(roster.person,[roster,ownNext].map(r=>JSON.parse(wire.rosterJSON(r))));await w.st.write([{s:'kv',k:'person',v:ownPerson}]);w.e.me=ownPerson;await w.e.pinDevices(ownPerson);
+    const priorPhonePin=await w.st.get('pins',priorPhone.address);await w.st.write([{s:'pins',k:priorPhone.address,v:{...priorPhonePin,pending:{fingerprint:'ffffffff-ffffffff-ffffffff-ffffffff'}}}]);
+    const write=w.st.write.bind(w.st);let interrupted=false;w.st.write=async(ops,checks)=>{if(!interrupted&&ops.some(o=>o.s==='outbox'&&o.v?.group_terminal)){interrupted=true;throw Error('synthetic terminal interruption after custody');}return write(ops,checks);};
+    let failed=false;try{await w.e.manageGroup({conv:created,action:'remove',person:alice.person});}catch(e){failed=e.message.includes('synthetic terminal interruption');}
+    const pendingKey='group-publication/'+created+'/2',saved=await w.st.get('kv',pendingKey);check(failed&&!!saved?.terminal&&!(await w.st.all('outbox')).some(r=>r.group_terminal),'terminal custody interruption keeps immutable witness with no partial copies');
+    await w.st.write([{s:'pins',k:priorPhone.address,v:priorPhonePin}]);
+    w.st.write=write;await w.reload();w.e.call=capture;w.e.groupSupport=support;w.e.post=async()=>{};
+    const committed=wire.parseGroupCommit(saved.record),removed=wire.parseGroupContext(saved.context),remoteState=await wire.signGroupState(ownPhoneKeys,{...removed.state,seq:3,prev:await wire.groupStateHash(removed.state),title:'Remote newer verified state',actor:roster.person,actor_roster:await wire.rosterHash(ownNext),by:ownPhoneFP});
+    const remoteFile=await wire.encryptFile(new TextEncoder().encode(wire.groupContextJSON({root:initial.root,state:remoteState,withdrawals:[]})),'remote-current.json',pub),remoteCommit=await wire.signGroupCommit(ownPhoneKeys,{...committed,seq:3,prev:remoteState.prev,hash:await wire.groupStateHash(remoteState),admins:wire.groupAdmins(remoteState),writer:ownPhone.address,actor:roster.person,actor_roster:await wire.rosterHash(ownNext),ciphertext:remoteFile.ct});
+    const receiveRemote=async(sub,value)=>{const file=await wire.encryptFile(new TextEncoder().encode(value),sub+'.json',pub);w.blobs.set(file.attachment.blob.id,file.ct);const inner={v:2,id:wire.newID(),lid:wire.newID(),from:ownPhone.address,to:address,ts:1700000002,kind:'message',conv:created,root:wire.rootJSON(initial.root),sub,body:wire.groupCarrierJSON({v:1,seq:3,hash:remoteCommit.hash,to_key:w.e.fp}),attachments:[file.attachment]};await w.receive({envelope:await wire.seal(inner,ownPhoneKeys,pub)});};
+    await receiveRemote(wire.SubGroupProof,wire.groupJournalJSON({records:[committed,remoteCommit],more:false}));await receiveRemote(wire.SubGroupContext,wire.groupContextJSON({root:initial.root,state:remoteState,withdrawals:[]}));
+    check((await w.e.groupCurrent(created)).state.seq===3,'actual remote newer current context arrives after committed terminal interruption');
+    await w.e.recoverGroupIntents();check(!(await w.st.get('kv',pendingKey)).published&&!(await w.st.all('outbox')).some(r=>r.group_terminal),'remote newer context cannot complete the older remaining-member fanout');
+    await w.e.manageGroup({conv:created,action:'rename',title:'Own newer atomically published context'});await w.e.recoverGroupIntents();
+    const copies=(await w.st.all('outbox')).filter(r=>r.group_terminal),exact=JSON.stringify(copies);check(copies.length===2&&(await w.st.get('kv',pendingKey)).published,'terminal publication recovery atomically stores separate original proof/context copies');
+    check(wire.groupCommitJSON(wire.parseGroupCommit(requests.at(-1)))===saved.record&&(await w.e.groupCurrent(created)).state.seq===4,'own newer published batch permits terminal-only recovery with exact original ciphertext and no rollback');
+    check(copies.every(r=>r.to!==priorPhone.address),'one404 prior human device does not block the other prior human or own newer fanout');
+    const read=w.e.groupRead.bind(w.e);w.e.groupRead=async(checks,s,key)=>{if(s==='pins'&&key===alicePub.address)throw Error('synthetic terminal store read failure');return read(checks,s,key);};let storageFailed=false;try{await w.e.groupTerminalCopies(saved.terminal,(await w.st.get('kv','group/'+created)).records.map(wire.parseGroupCommit),[]);}catch(e){storageFailed=e.message==='synthetic terminal store read failure';}finally{w.e.groupRead=read;}check(storageFailed,'terminal per-device skipping never swallows an unrelated store failure');
+    await w.e.recoverGroupIntents();check(JSON.stringify((await w.st.all('outbox')).filter(r=>r.group_terminal))===exact,'terminal recovery duplicate retains exact sealed IDs/ciphertext');
+    const fp=await wire.fingerprint(alicePub);check(copies.every(r=>r.to===alicePub.address&&r.recipient_fp===fp),'terminal only exact prior pinned human recipient');
+    check(!(await w.e.groupTerminalGate(copies[0])).why,'terminal retained copy is eligible after restart');
+    const pin=await w.st.get('pins',alicePub.address);await w.st.write([{s:'pins',k:alicePub.address,v:{...pin,pending:{fingerprint:'ffffffff-ffffffff-ffffffff-ffffffff'}}}]);check(!!(await w.e.groupTerminalGate(copies[0])).why,'terminal changed exact recipient key blocks final handover');await w.st.write([{s:'pins',k:alicePub.address,v:pin}]);
+    const person=await w.st.get('persons',alice.person);await w.st.write([{s:'persons',k:alice.person,v:{...person,state:'conflict'}}]);check(!!(await w.e.groupTerminalGate(copies[0])).why,'terminal frozen recipient blocks final handover');await w.st.write([{s:'persons',k:alice.person,v:person}]);
+    check(!(await w.e.groupTerminalGate(copies[0])).why&&JSON.stringify((await w.st.all('outbox')).filter(r=>r.group_terminal))===exact,'same exact key resumes after temporary conflict with sealed bytes unchanged');
+    await w.st.write([{s:'persons',k:alice.person,v:{...person,human_keys:[]}}]);check(!!(await w.e.groupTerminalGate(copies[0])).why,'terminal recipient without current human authority gets no former-member copy');await w.st.write([{s:'persons',k:alice.person,v:person}]);
+    w.e.groupSupport=async()=>{};const current=await w.e.groupCurrent(created),prev=await wire.groupStateHash(current.state),fresh=await wire.signGroupAdmission(aliceKeys,{...admission,seq:current.state.seq+1,prev});
+    const readmitted=await wire.signGroupState(keys,{...current.state,seq:fresh.seq,prev,members:[...current.state.members,{person:alice.person,roster:await wire.rosterHash(alice),admin:false,admission:fresh}].sort((a,b)=>a.person.localeCompare(b.person))});await w.e.publishGroupPacket({root:initial.root,state:readmitted,proof:null,withdrawals:[]});
+    check((await w.e.groupTerminalGate(copies[0])).why.includes('readmission')&&JSON.stringify((await w.st.all('outbox')).filter(r=>r.group_terminal))===exact,'later readmission cancels terminal without changing retained ciphertext or future context');
+    const final={root:initial.root,state:await wire.signGroupState(keys,{...readmitted,seq:readmitted.seq+1,prev:await wire.groupStateHash(readmitted),title:'Ordinary authorized removal with title change',members:readmitted.members.filter(m=>m.person!==alice.person)})},notice=await w.e.prepareGroupTerminal({root:initial.root,state:readmitted},final,alice.person,await w.st.get('kv','group/'+created),[],[]);
+    check(notice===null,'optional terminal disclosure fence withholds a changed-title removal notice');await w.e.publishGroupPacket(final,null,[],notice);
+    check(!wire.groupMember((await w.e.groupCurrent(created)).state,alice.person)&&(await w.st.all('outbox')).filter(r=>r.group_terminal).length===copies.length,'withheld notice leaves ordinary removal publication intact');
+   }finally{await w.close();}
+  }
+ };
+ if(terminalOnly){await terminalCases();return {ok:true,storage:realIDB?'real IndexedDB':'memory unit only',checks:labels.length,labels};}
  if(dismissalCanonicalOnly){await dismissalCanonical({world,check,c,root,conv,keys,address,roster,pub,alicePub,aliceKeys,v});return {ok:true,storage:realIDB?"real IndexedDB":"memory unit only",checks:labels.length,labels};}
  const quiet=async(w)=>{for(const s of ['inbox','outbox','convs','lids'])check((await w.st.all(s)).length===0,'quiet '+s);check((await w.e.overview()).threads.length===0,'no visible threads');for(const x of await w.st.all('held'))check(!('body'in x)&&!('plaintext'in x),'held has ciphertext only');for(const x of await w.st.all('files'))check(x.ct instanceof Uint8Array&&!('body'in x),'files ciphertext only');};
  if(receiverOnly){const profile=await receiverProfile({world,check,realIDB,c,root,conv,keys,address,roster,pub});return {ok:true,storage:profile.storage,checks:labels.length,labels,profile};}
@@ -1472,7 +1602,7 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false, contro
   w=await world();for(let i=0;i<=5;i++)await w.receive(c['proof'+'x'.repeat(i)]);await w.receive(c.contextxxxxx);check(!(await w.st.get('kv','group/'+conv)).context,'removed recipient is refused despite founding root');await w.close();
   for(const mode of ['short','offline','empty','stream-error','corrupt','oversize']){w=await world();w.mode(mode);let thrown=false;try{await w.receive(c.proof);}catch(_){thrown=true;}const id=wire.parseEnvelope(c.proof.envelope).id;if(mode==='corrupt'||mode==='oversize'){check(!thrown&&(await w.st.get('held',id)).reason==='invalid','permanent signed digest corruption quarantined');}else{check(thrown&&!await w.st.get('receipts',id)&&!await w.st.get('held',id)&&!await w.st.get('kv','group/'+conv),'interrupted transfer no acknowledgment '+mode);w.mode('');await w.receive(c.proof);check(!!await w.st.get('kv','group/'+conv),'interrupted transfer retries '+mode);}await w.close();}
   w=await world();await w.receive(c.proof);const wrong=await w.make(wire.SubGroupContext,{root:JSON.parse(wire.rootJSON(root)),state:JSON.parse(wire.groupStateJSON(states[0])),withdrawals:null},0,records[0].hash,{body:wire.groupCarrierJSON({v:1,seq:0,hash:records[0].hash,to_key:'ffffffff-ffffffff-ffffffff-ffffffff'})});await w.receive(wrong);check((await w.st.get('held',wire.parseEnvelope(wrong.envelope).id)).reason==='invalid','wrong exact recipient key');await w.close();
-  w=await world();await w.receive(c.proof);await w.receive(c.context);await w.e.dispatch('groups',JSON.stringify([{conv,bootstrap:root.creator.fingerprint,seq:1,hash:records[1].hash}]));await w.e.dispatch('groups','[]');let pending=false;try{await w.e.groupCurrent(conv);}catch(_){pending=true;}check(pending&&(await w.st.get('kv','group-head/'+conv)).seq===1,'head batches merge and empty batch does not clear');await w.reload();pending=false;try{await w.e.groupCurrent(conv);}catch(_){pending=true;}check(pending,'latest known head durable');await w.e.noteGroupHead({conv,bootstrap:root.creator.fingerprint,seq:0,hash:records[0].hash});check((await w.st.get('kv','group-head/'+conv)).seq===1,'lower head cannot rewind');await w.close();
+  w=await world();await w.receive(c.proof);await w.receive(c.context);await w.e.dispatch('groups',JSON.stringify([{conv,bootstrap:root.creator.fingerprint,seq:1,hash:records[1].hash}]));await w.e.dispatch('groups','[]');let pending=false;try{await w.e.groupCurrent(conv);}catch(_){pending=true;}check(pending&&(await w.st.get('kv','group-head/'+conv)).seq===1,'head batches merge and empty batch does not clear');await w.reload();pending=false;try{await w.e.groupCurrent(conv);}catch(_){pending=true;}check(pending,'latest known head durable');let viewPending=null;try{await w.e.dm(conv);}catch(e){viewPending=e;}check(viewPending?.code==='group_context_pending'&&viewPending.message==='Updating verified group details. Sending is paused until verification finishes.','actual browser DM projection exposes typed wait instead of partial current membership');await w.e.noteGroupHead({conv,bootstrap:root.creator.fingerprint,seq:0,hash:records[0].hash});check((await w.st.get('kv','group-head/'+conv)).seq===1,'lower head cannot rewind');await w.close();
   // Real IDB race: second connection changes latest head after signature
   // verification but before conditional install. Retry must hold, never install.
   w=await world();await w.receive(c.proof);const original=w.st.write.bind(w.st);let raced=false;
@@ -1584,8 +1714,9 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false, contro
    await w.reload();check(!(await w.e.groupThread(conv)).messages.some(m=>m.id===pv.ordinary.inner.id),'group deletion survives durable reload');
    await w.close();
   }
+  await terminalCases();
   check(!(await wire.newCaps(keys,address,wire.newID())).caps.includes(wire.CapGroup),'grp1 stays off');
   return {ok:true,storage:realIDB?'real IndexedDB':'memory unit only',checks:labels.length,labels};
  }catch(e){if(w)await w.close().catch(()=>{});throw e;}
 }
-if(globalThis.process?.versions?.node){const {createInterface}=await import('node:readline');for await(const line of createInterface({input:process.stdin})){let out;try{const r=JSON.parse(line);out=r.op==='setup'?await setup():r.op==='consent'?{consent:await consent(r.challenge)}:await checks(r.vectors,false,r.op==='warm-regression',r.op==='control-history',r.op==='background-regression',r.op==='receiver-regression',r.op==='receipt-repair',r.op==='topic-participation',r.op==='status-reorder',r.op==='receive-priority',r.op==='dismiss-canonical');}catch(e){out={error:e.stack};}process.stdout.write(JSON.stringify(out)+'\n');}}
+if(globalThis.process?.versions?.node){const {createInterface}=await import('node:readline');for await(const line of createInterface({input:process.stdin})){let out;try{const r=JSON.parse(line);out=r.op==='setup'?await setup():r.op==='consent'?{consent:await consent(r.challenge)}:await checks(r.vectors,false,r.op==='warm-regression',r.op==='control-history',r.op==='background-regression',r.op==='receiver-regression',r.op==='receipt-repair',r.op==='topic-participation',r.op==='status-reorder',r.op==='receive-priority',r.op==='dismiss-canonical',r.op==='terminal-removal');}catch(e){out={error:e.stack};}process.stdout.write(JSON.stringify(out)+'\n');}}

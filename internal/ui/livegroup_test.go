@@ -3,7 +3,11 @@ package ui
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +15,97 @@ import (
 	"github.com/misunders2d/agentnet/internal/protocol"
 	"github.com/misunders2d/agentnet/internal/testhub"
 )
+
+func TestLiveGroupTerminalRemovalReadOnlyHTTP(t *testing.T) {
+	t.Setenv("AGENTNET_NOTIFY", "off")
+	ctx, cancel := context.WithTimeout(t.Context(), 45*time.Second)
+	defer cancel()
+	dir := t.TempDir()
+	testhub.Start(t, dir, "127.0.0.1:0", "")
+	alice, err := client.Join(ctx, t.TempDir(), testhub.BootstrapCode(t, dir), "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { alice.Close() })
+	code, err := alice.Invite(ctx, "bob", time.Hour, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob, err := client.Join(ctx, t.TempDir(), code, "desk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { bob.Close() })
+	for _, a := range []*client.Agent{alice, bob} {
+		if _, err = a.CreatePerson(ctx, a.Address); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stopBob := runDaemon(t, bob)
+	defer stopBob()
+	live := NewLive(bob)
+	waitDirectory(t, live, "synthetic peer connected", func(d Directory) bool { return d.Status == DirectoryListed && d.Current })
+	conv := liveTwoMemberGroup(t, alice, bob)
+	await := func(label string, match func(DMThread) bool) {
+		t.Helper()
+		for {
+			_, changed := bob.Changed()
+			view, e := live.DM(conv)
+			if e == nil && match(view) {
+				return
+			}
+			select {
+			case <-changed:
+			case <-ctx.Done():
+				t.Fatalf("%s: last native view error %v", label, e)
+			}
+		}
+	}
+	if err = alice.FlushOutbox(ctx); err != nil {
+		t.Fatal(err)
+	}
+	await("verified original member", func(v DMThread) bool { return v.Role == "member" && len(v.Members) == 2 })
+	if _, err = alice.SendConv(ctx, conv, client.ConvOutgoing{Body: "Earlier authorized group message"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = alice.FlushOutbox(ctx); err != nil {
+		t.Fatal(err)
+	}
+	await("retained earlier message", func(v DMThread) bool {
+		for _, m := range v.Messages {
+			if m.Body == "Earlier authorized group message" {
+				return true
+			}
+		}
+		return false
+	})
+	person, _, err := bob.Person()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = alice.RemoveGroupMember(ctx, conv, person.Person); err != nil {
+		t.Fatal(err)
+	}
+	if err = alice.FlushOutbox(ctx); err != nil {
+		t.Fatal(err)
+	}
+	await("verified terminal read-only", func(v DMThread) bool { return v.Role == "former_member" && strings.Contains(v.Frozen, "removed you") })
+	var server *Server
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { server.Handler().ServeHTTP(w, r) }))
+	t.Cleanup(ts.Close)
+	server = New(live, strings.TrimPrefix(ts.URL, "http://"), testToken)
+	resp := do(t, ts, "GET", "/api/dm?id="+conv, "", authed(ts, nil))
+	var view DMThread
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(resp.Body).Decode(&view) != nil || view.ID != conv || view.Messages == nil || view.Role != "former_member" || !strings.Contains(view.Frozen, "removed you") {
+		t.Fatalf("terminal HTTP view: %d %+v", resp.StatusCode, view)
+	}
+	if len(view.Members) != 1 || len(view.Messages) != 1 || view.Messages[0].Body != "Earlier authorized group message" {
+		t.Fatalf("terminal lost readable authorized history: %+v", view)
+	}
+	if _, err = live.SendDM(DMDraft{Conv: conv, Body: "must not send"}); err == nil {
+		t.Fatal("read-only terminal HTTP provider permitted sending")
+	}
+}
 
 func TestLiveGroupManageRefusesUnrelatedAuthorityBeforeClient(t *testing.T) {
 	l := &Live{timeout: time.Second}

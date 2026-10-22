@@ -41,6 +41,13 @@ const views={
  [ids.guest]:{id:ids.guest,created:'2024-01-01T00:00:00Z',role:'human_guest',messages:[msg('guest-turn','Separate guest audience')],topics:[],guests:[]}
 };
 for(const view of Object.values(views))Object.assign(view,{peer,kind:'dm',mine:true,role:view.role||'member',members:[me,peer],agents:[],frozen:''});
+// Only this protocol-destination vector needs these exact public IDs; other
+// fixture modes retain their original IDs and matching selectors.
+if (${process.env.AGENTNET_PREVIEW_ROUTE==='1'}) {
+ const publicIDs={"main-turn":"00000000000000000000000000000064","waiting-turn":"00000000000000000000000000000065","main-native":"00000000000000000000000000000066","other-turn":"00000000000000000000000000000067","other-native":"00000000000000000000000000000068","removed":"00000000000000000000000000000069","late-turn":"0000000000000000000000000000006a","guest-turn":"0000000000000000000000000000006b","canonical-native":"0000000000000000000000000000006c","delayed-native":"0000000000000000000000000000006d","cancelled-native":"0000000000000000000000000000006e"};
+ for(const view of Object.values(views))for(const m of view.messages){m.id=publicIDs[m.id]||m.id;m.lid=publicIDs[m.lid]||m.lid;}
+}
+
 if (${process.env.AGENTNET_UNREAD_FIRST==='1'}) {
  const v=views[ids.main],anchor='6'.repeat(32),done='7'.repeat(32);
  v.messages=[msg('main-turn','Main planning',{unread:true}),msg('main-second','Second Main unread',{unread:true}),
@@ -370,45 +377,45 @@ const server=http.createServer((req,res)=>{
    }
    if(process.env.AGENTNET_PREVIEW_ROUTE==='1'){
     const exact=(id,text)=>page.locator('[data-mid="'+id+'"]');
-    await exact('other-native','Archived detail').waitFor();
+    await exact('00000000000000000000000000000068','Archived detail').waitFor();
     if(process.env.AGENTNET_TOPIC_UNREAD==='1'){
-     await page.waitForFunction(()=>fixture.requests.some(r=>r.path==='/api/act'&&r.body?.ids?.includes('other-native')));
-     assert.deepEqual(await page.evaluate(()=>[...new Set(fixture.requests.filter(r=>r.path==='/api/act'&&r.body?.do==='read').flatMap(r=>r.body.ids))]),['other-native'],'preview reads only its selected topic; unseen Main/other topics stay unread');
+     await page.waitForFunction(()=>fixture.requests.some(r=>r.path==='/api/act'&&r.body?.ids?.includes('00000000000000000000000000000068')));
+     assert.deepEqual(await page.evaluate(()=>[...new Set(fixture.requests.filter(r=>r.path==='/api/act'&&r.body?.do==='read').flatMap(r=>r.body.ids))]),['00000000000000000000000000000068'],'preview reads only its selected topic; unseen Main/other topics stay unread');
     }
     assert.equal(await page.getByRole('navigation',{name:'Topics',exact:true}).getByRole('button',{name:'Main',exact:true}).getAttribute('aria-pressed'),'false','preview opens its archived topic, not Main');
     await shot('preview-target');
     await page.getByRole('navigation',{name:'Topics',exact:true}).getByRole('button',{name:'Main',exact:true}).click();
     await shown('Main planning').waitFor();
     await edit('Draft survives exact preview navigation');
-    await page.evaluate(()=>{const m=fixture.views[fixture.ids.main].messages.find(m=>m.id==='main-native');m.id='canonical-native';m.lid='main-native';fixture.open('main-native','message',{conv:fixture.ids.main});});
-    await exact('canonical-native','Invoice message').waitFor();
+    await page.evaluate(()=>{const m=fixture.views[fixture.ids.main].messages.find(m=>m.id==='00000000000000000000000000000066');m.id='0000000000000000000000000000006c';m.lid='00000000000000000000000000000066';fixture.open('00000000000000000000000000000066','message',{conv:fixture.ids.main});});
+    await exact('0000000000000000000000000000006c','Invoice message').waitFor();
     assert.equal(await field().inputValue(),'Draft survives exact preview navigation','exact focus keeps unsent text');
     // A missing target does not invent a topic or trigger an action. When
     // its history later arrives, the existing change feed resolves it.
-    await page.evaluate(()=>fixture.open('delayed-native','message',{conv:fixture.ids.main}));
+    await page.evaluate(()=>fixture.open('0000000000000000000000000000006d','message',{conv:fixture.ids.main}));
     await page.waitForTimeout(150);
-    await page.evaluate(()=>{fixture.views[fixture.ids.main].messages.push({id:'delayed-native',lid:'delayed-native',topic:fixture.native,dir:'in',from:'casey/desktop',kind:'message',body:'History arrived later',at:'2026-10-06T12:00:00Z',state:'stored',actions:[]});fixture.tick();});
-    await exact('delayed-native','History arrived later').waitFor();
+    await page.evaluate(()=>{fixture.views[fixture.ids.main].messages.push({id:'0000000000000000000000000000006d',lid:'0000000000000000000000000000006d',topic:fixture.native,dir:'in',from:'casey/desktop',kind:'message',body:'History arrived later',at:'2026-10-06T12:00:00Z',state:'stored',actions:[]});fixture.tick();});
+    await exact('0000000000000000000000000000006d','History arrived later').waitFor();
     await page.getByRole('navigation',{name:'Topics',exact:true}).getByRole('button',{name:'Main',exact:true}).click();
     await shown('Main planning').waitFor();
-    await page.evaluate(()=>fixture.open('cancelled-native','message',{conv:fixture.ids.main}));
+    await page.evaluate(()=>fixture.open('0000000000000000000000000000006e','message',{conv:fixture.ids.main}));
     await page.waitForTimeout(150);
     await page.getByRole('navigation',{name:'Topics',exact:true}).getByRole('button',{name:'Main',exact:true}).click();
-    await page.evaluate(()=>{fixture.views[fixture.ids.main].messages.push({id:'cancelled-native',lid:'cancelled-native',topic:fixture.native,dir:'in',from:'casey/desktop',kind:'message',body:'Cancelled pending focus',at:'2026-10-06T12:00:00Z',state:'stored',actions:[]});fixture.tick();});
+    await page.evaluate(()=>{fixture.views[fixture.ids.main].messages.push({id:'0000000000000000000000000000006e',lid:'0000000000000000000000000000006e',topic:fixture.native,dir:'in',from:'casey/desktop',kind:'message',body:'Cancelled pending focus',at:'2026-10-06T12:00:00Z',state:'stored',actions:[]});fixture.tick();});
     await page.waitForTimeout(180);await shown('Main planning').waitFor();
     assert.equal(await page.getByRole('navigation',{name:'Topics',exact:true}).getByRole('button',{name:'Main',exact:true}).getAttribute('aria-pressed'),'true','explicit same-Main navigation cancels pending exact target');
-    await page.evaluate(()=>{fixture.delay=fixture.ids.main;fixture.open('main-native','message',{conv:fixture.ids.main});});
+    await page.evaluate(()=>{const original=fixture.views[fixture.ids.main].messages.find(m=>m.id==='0000000000000000000000000000006c'),id='a1'.repeat(16);fixture.views[fixture.ids.main].messages.push({...original,id,lid:id,body:'Pending uncached exact target'});fixture.delay=fixture.ids.main;fixture.open(id,'message',{conv:fixture.ids.main});});
     await page.waitForFunction(()=>fixture.delay==='');
-    await page.evaluate(()=>fixture.open('main-turn','message',{conv:fixture.ids.main}));
-    await exact('main-turn','Main planning').waitFor();
+    await page.evaluate(()=>fixture.open('00000000000000000000000000000064','message',{conv:fixture.ids.main}));
+    await exact('00000000000000000000000000000064','Main planning').waitFor();
     await page.evaluate(()=>fixture.release());await page.waitForTimeout(150);
-    await exact('main-turn','Main planning').waitFor();
-    await page.evaluate(()=>{fixture.delay=fixture.ids.other;fixture.open('other-native','message',{conv:fixture.ids.other});});
+    await exact('00000000000000000000000000000064','Main planning').waitFor();
+    await page.evaluate(()=>{const original=fixture.views[fixture.ids.other].messages.find(m=>m.id==='00000000000000000000000000000068'),id='a2'.repeat(16);fixture.views[fixture.ids.other].messages.push({...original,id,lid:id,body:'Pending other-root exact target'});fixture.delay=fixture.ids.other;fixture.open(id,'message',{conv:fixture.ids.other});});
     await page.waitForFunction(()=>fixture.delay==='');
-    await page.evaluate(()=>fixture.open('main-turn','message',{conv:fixture.ids.main}));
-    await exact('main-turn','Main planning').waitFor();
+    await page.evaluate(()=>fixture.open('00000000000000000000000000000064','message',{conv:fixture.ids.main}));
+    await exact('00000000000000000000000000000064','Main planning').waitFor();
     await page.evaluate(()=>fixture.release());await page.waitForTimeout(180);
-    await exact('main-turn','Main planning').waitFor();
+    await exact('00000000000000000000000000000064','Main planning').waitFor();
     assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.body&&['/api/dm/send','/api/operator/decide','/api/topic/done'].includes(r.path)).length),0,'preview navigation executes no message or permission action');
     await shot('preview-stale-load');assert.deepEqual(errors,[]);console.log('preview route '+skin+' '+width+' PASS: exact latest/archived/Main/copy alias/delayed/repeated/stale-load/draft');await context.close();continue;
    }

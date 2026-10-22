@@ -11,6 +11,9 @@ class Events {
  removeEventListener(k,f){this.listeners.get(k)?.delete(f);}
  fire(k){for(const f of this.listeners.get(k)||[])f();}
 }
+// This VM models the native scroll-anchoring branch used by Chromium. Its
+// fixture IDs are already valid CSS identifiers.
+const CSS={supports:(property,value)=>property==='overflow-anchor'&&value==='auto',escape:value=>String(value)};
 const window=new Events(),document=new Events(),observers=[],reports=[],native=new Set(),frames=new Map();
 document.visibilityState='visible';let focused=true,nativeVisible=true,frameID=0,cursor=0,pending=[],cells=[],rects=0,rootRects=0,rootHeight=1000;
 document.hasFocus=()=>focused;
@@ -28,11 +31,11 @@ const rows=[row('short',999,100),row('tall',999,5000),...messages.slice(2).map(m
 const box={current:{getBoundingClientRect(){rootRects++;return rectangle(0,rootHeight);}}},inner={current:{querySelectorAll:()=>rows}};
 let visit={scope:'exact-entry'},reserve=0;
 const store={host:{platform:'android',android:{visible:()=>nativeVisible,onVisibility:f=>{native.add(f);return()=>native.delete(f);}}},reportVisible:(v,ms)=>reports.push({visit:v,ids:Array.from(ms,m=>m.id)})};
-const useVisibleRows=runInNewContext(hook+'\nuseVisibleRows',{window,document,IntersectionObserver:Observer,requestAnimationFrame:raf,cancelAnimationFrame:id=>frames.delete(id),useApp:()=>store,
+const useVisibleRows=runInNewContext(hook+'\nuseVisibleRows',{window,document,CSS,IntersectionObserver:Observer,requestAnimationFrame:raf,cancelAnimationFrame:id=>frames.delete(id),useApp:()=>store,
  useRef:init=>{const i=cursor++;return cells[i]||(cells[i]={current:init});},
  useEffect:(fn,deps)=>{const i=cursor++,had=cells[i];if(!had||deps.some((d,j)=>d!==had.deps[j]))pending.push(()=>{had?.cleanup?.();cells[i]={deps,cleanup:fn()};});}});
 let schedule;
-const render=()=>{cursor=0;pending=[];schedule=useVisibleRows(box,inner,{conv:'chat'},messages,visit,'short',reserve);pending.forEach(fn=>fn());};
+const render=()=>{cursor=0;pending=[];schedule=useVisibleRows(box,inner,{conv:'chat'},messages,visit,'short',undefined,reserve,{current:null},{current:false});pending.forEach(fn=>fn());};
 render();
 const ids=()=>reports.at(-1)?.ids||[];
 assert.equal(observers.length,1,'one timeline observer');assert.equal(observers[0].options.root,box.current);
@@ -64,7 +67,7 @@ assert.equal(native.size,0);assert.equal([...window.listeners.values()].reduce((
 const entryStart=source.indexOf('  useLayoutEffect(() => {'),entryEnd=source.indexOf('\n  useLayoutEffect(() => {',entryStart+1);
 const el={scrollHeight:50,scrollTop:0,clientHeight:100,scrollTo({top}){this.scrollTop=top;}};
 const bottom={current:false},seen={current:null};let scheduled=0,resize;
-const globals={box:{current:el},inner:{current:{}},unread:true,focus:undefined,readVisit:{},retained:{current:[]},groups:[],from:0,prependAnchor:{current:null},seen,messages:[{id:'read'}],target:undefined,atBottom:bottom,items:[],first:undefined,ctx:{},flash:()=>false,whoWrote:()=>({mine:false}),ev:()=>false,setFresh(){},reduced:()=>true,useLayoutEffect:fn=>fn(),visibleRows:{current:()=>scheduled++}};
+const globals={CSS,hasLater:false,to:0,through:undefined,readingAnchor:{current:null},box:{current:el},inner:{current:{}},unread:true,focus:undefined,readVisit:{},retained:{current:[]},groups:[],from:0,prependAnchor:{current:null},seen,messages:[{id:'read'}],target:undefined,atBottom:bottom,items:[],first:undefined,ctx:{},flash:()=>false,whoWrote:()=>({mine:false}),ev:()=>false,setFresh(){},reduced:()=>true,useLayoutEffect:fn=>fn(),visibleRows:{current:()=>scheduled++}};
 runInNewContext(stripTypeScriptTypes(source.slice(entryStart,entryEnd)),globals);assert.equal(bottom.current,true,'no-target unread entry follows bottom even before a scroll event');
 const scrollStart=source.indexOf('  const onScroll ='),scrollEnd=source.indexOf('  const down =',scrollStart);
 const onScroll=runInNewContext(stripTypeScriptTypes(source.slice(scrollStart,scrollEnd))+'\nonScroll',{...globals,setFar(){},fresh:0,earlier(){},reportSeen(){}});onScroll();assert.equal(scheduled,1,'existing scroll schedules current member evaluation');

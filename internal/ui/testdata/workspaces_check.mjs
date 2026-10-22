@@ -27,6 +27,14 @@ await assert.rejects(bh.api("/api/send",{}),/Stale/);
 assert.equal(shell.active,a.id);
 console.log("workspace transport, drafts, staged files, endpoints and stale handles PASS");
 
+// Structured native verification waits retain their code across the host transport.
+{
+ const words='Updating verified group details. Sending is paused until verification finishes.';
+ let pending=true;
+ const h=new WorkspaceShell({fetch:async()=>new Response(pending?JSON.stringify({code:'group_context_pending',message:words}):'Permission denied',{status:pending?503:403})}).register(a);
+ await assert.rejects(h.api('/api/dm?id=group'),e=>e.status===503&&e.code==='group_context_pending'&&e.message===words);
+ pending=false;await assert.rejects(h.api('/api/groups/manage',{}),e=>e.status===403&&!e.code&&e.message==='Permission denied');
+}
 // Raw media stays bound to the authenticated native membership. A browser
 // engine has no native transcoder; cancellation covers both probe and upload.
 const mediaCalls=[];let finishMedia;

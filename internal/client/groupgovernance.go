@@ -112,7 +112,13 @@ func (a *Agent) governGroup(ctx context.Context, conv, action, target string) (G
 	}
 	commit, err := a.BuildGroupCommit(ctx, next)
 	if err == nil {
-		_, err = a.PublishGroup(ctx, commit, next)
+		var terminal *groupTerminalPublication
+		if action == "remove" && target != next.State.Actor {
+			terminal, err = a.prepareGroupTerminal(ctx, packet, next, target, withdrawals)
+		}
+		if err == nil {
+			_, err = a.publishGroup(ctx, commit, next, terminal)
+		}
 	}
 	return next, err
 }

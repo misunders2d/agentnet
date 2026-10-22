@@ -878,7 +878,7 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool, sel
 		UNION ALL
 		SELECT o.id, o.lid, 'out', ?, ?, o.kind, o.body, coalesce(o.reply_to, ''), coalesce(o.sub, ''), 0, coalesce(o.origin, ''),
 		       coalesce(o.emotion, ''), coalesce(o.target, ''), o.state, coalesce(o.error, ''), o.created_at, o.created_ms, coalesce(o.pid, ''),
-		       coalesce(j.state, ''), coalesce(j.detail, ''), coalesce(j.attempts, 0), o.recipient, '', coalesce(o.agent_id, ''), coalesce(o.status, ''),coalesce(o.quote,''),json_extract(o.envelope,'$.ts'),coalesce(o.recipient_person,''),coalesce(o.topic,''),coalesce(o.topic_event,''),o.topic_done,o.send_stopped,o.send_stopped=1 AND o.state='not_delivered' AND coalesce(o.handover_started,1)=1,o.send_group,0,`+liveOut+`
+		       coalesce(j.state, ''), coalesce(j.detail, ''), coalesce(j.attempts, 0), o.recipient, '', coalesce(o.agent_id, ''), coalesce(o.status, ''),coalesce(o.quote,''),json_extract(o.envelope,'$.ts'),coalesce(o.recipient_person,''),coalesce(o.topic,''),coalesce(o.topic_event,''),o.topic_done,o.send_stopped,o.send_stopped=1 AND o.state IN ('not_delivered','failed') AND NOT (o.handover_proven=1 AND coalesce(o.handover_started,1)=0),o.send_group,0,`+liveOut+`
 		  FROM outbox o LEFT JOIN inbox j ON j.id = o.id AND j.local = 1`+join+` WHERE o.conv = ? AND coalesce(o.sub, '') NOT IN ('read-sync', 'root-sync', 'history', 'file', 'drive-space', 'group-proof', 'group-context','group-invite','group-consent','group-withdrawal') AND o.ref_id IS NULL
 		   AND NOT `+erasedOut+cursorOut+`
 		ORDER BY ms, 1`, args...)

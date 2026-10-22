@@ -371,7 +371,7 @@ func (s *store) peerMessages(peer string, ids []string, own ...identity.Public) 
 		if err := rows.Err(); err != nil {
 			return nil, err
 		}
-		rows, err = s.db.Query(`SELECT o.id, envelope, coalesce(status, ''), body, coalesce(o.reply_to, ''), created_at, state, coalesce(path, ''), coalesce(error, ''), coalesce(agent_id, ''), coalesce(target, ''),coalesce(quote,''),send_stopped,send_stopped=1 AND state='not_delivered' AND coalesce(handover_started,1)=1,l.direction,l.recipient,l.author_fp,EXISTS(SELECT 1 FROM device_history_rows h WHERE h.storage='out' AND h.id=o.id),coalesce(o.sub,'')
+		rows, err = s.db.Query(`SELECT o.id, envelope, coalesce(status, ''), body, coalesce(o.reply_to, ''), created_at, state, coalesce(path, ''), coalesce(error, ''), coalesce(agent_id, ''), coalesce(target, ''),coalesce(quote,''),send_stopped,send_stopped=1 AND state IN ('not_delivered','failed') AND NOT (handover_proven=1 AND coalesce(handover_started,1)=0),l.direction,l.recipient,l.author_fp,EXISTS(SELECT 1 FROM device_history_rows h WHERE h.storage='out' AND h.id=o.id),coalesce(o.sub,'')
 			FROM outbox o JOIN device_thread_links l ON l.id=o.id AND l.storage='out' WHERE l.peer=? AND conv IS NULL AND ref_id IS NULL AND o.id IN (`+marks+`)`, args...)
 		if err != nil {
 			return nil, err

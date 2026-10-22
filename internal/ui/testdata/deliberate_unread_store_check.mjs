@@ -255,5 +255,53 @@ await checkFresh('return to displayed topic cancels a different pending open and
   assert.equal(f.store.get().open.id,conv,'late other load cannot replace the explicit return');
  }finally{held?.resolve({id:'f'.repeat(64),messages:[],topics:[],agents:[]});f.store.stop();}
 });
+// Public summaries carry last_id. The real ChatList model turns it into a
+// preview target; ordinary row entry must use its scope, not exact-message
+// scrolling. Explicit quote/notification opens still retain exact focus.
+const normalRow=(f,kind='dm',last=f.rows.at(-1).lid||f.rows.at(-1).id)=>model.chatList({dms:[{
+ id:conv,kind,peer:{person:'peer-person',address:'peer',label:'Peer'},role:'member',
+ count:f.rows.length,last:'Normal unread preview',last_at:'2026-10-23T00:00:00Z',last_id:last,unread:f.rows.filter(m=>m.unread).length,
+}]},{})[0].open;
+for(const kind of ['dm','group'])await checkFresh('normal '+kind+' row uses preview scope and oldest eligible unread',async()=>{
+ const f=fixture();try{
+  f.visibleIDs=[];f.rows.splice(2);for(const m of f.rows){m.unread=true;m.attention={rev:4,writer:fp};}
+  await f.store.start();const row=normalRow(f,kind);assert.equal(row.focus,next,'actual summary/model preview producer exercised');
+  await f.store.openChat(row);await drain();const o=f.store.get().open,visit=f.store.readVisit(o);
+  assert.equal(o.focus,undefined,'ordinary last_id preview must not remain an exact message focus');
+  assert.equal(visit.firstUnread,mid,'oldest eligible unread frozen before any visible acknowledgement');
+  assert.equal(f.reads().length,0,'entry alone does not read an unseen row');
+  f.visibleIDs=[mid];f.present();await drain();assert.deepEqual(f.reads().flatMap(r=>r.body.ids),[mid]);
+  assert.equal(f.rows[1].unread,true,'later unseen row survives');
+  f.rows[0].unread=true;f.rows[0].attention={rev:5,writer:otherFP};await f.change();
+  await f.store.openChat(normalRow(f,kind));await drain();
+  assert.equal(f.reads().length,1,'same normal row does not rearm a generation learned during this visit');
+  assert.equal(f.rows[0].unread,true,'new deliberate mark survives normal row reselection');
+  await f.store.open({kind:'dm',id:conv,focus:next});assert.equal(f.store.get().open.focus,next,'explicit exact target wins');
+ }finally{f.store.stop();}
+});
+await checkFresh('cached row preview resolves fresh copy/topic once, explicit Main cancels hint',async()=>{
+ const f=fixture();let held;try{
+  f.visibleIDs=[];f.rows[1].lid='preview-alias';await f.store.start();await f.store.prefetch({kind:'dm',id:conv});
+  f.rows[1].topic=topic;f.rows[2].unread=true;f.rows[2].attention={rev:4,writer:fp};held=f.holdDM();
+  const opening=f.store.openChat(normalRow(f,'dm','preview-alias'));await drain();
+  assert.equal(f.store.get().readVisit,null,'cached display cannot choose unread anchor');assert.equal(f.reads().length,0);
+  held.resolve(f.view());await opening;await drain();assert.equal(f.store.draft(conv).topic,topic,'fresh canonical copy chooses its actual scope');
+  assert.equal(f.store.readVisit(f.store.get().open,topic).firstUnread,sibling);
+  f.store.setDraft(conv,{text:'kept draft'},true);await f.store.refetch();await drain();
+  assert.equal(f.store.draft(conv).topic,undefined,'routine refresh never replays cancelled preview scope');
+  assert.equal(f.store.draft(conv).text,'kept draft');assert.equal(f.rows[2].unread,true);
+ }finally{held?.resolve(f.view());f.store.stop();}
+});
+await checkFresh('superseded row preview cannot replace exact same-ID notification entry',async()=>{
+ const f=fixture();let old,newer;try{
+  f.visibleIDs=[];f.rows[0].unread=true;f.rows[0].attention={rev:4,writer:fp};await f.store.start();
+  old=f.holdDM();const first=f.store.openChat(normalRow(f));f.store.close();
+  newer=f.holdDM();const second=f.store.open({kind:'dm',id:conv,focus:sibling});
+  const oldView=f.view();old.resolve(oldView);await first;await drain();assert.equal(f.reads().length,0);
+  newer.resolve(f.view());await second;await drain();assert.equal(f.store.get().open.focus,sibling);
+  assert.equal(f.store.draft(conv).topic,topic,'selected exact notification topic retained');
+  assert.equal(f.rows[0].unread,true,'unseen old scope stays unread');
+ }finally{old?.resolve(f.view());newer?.resolve(f.view());f.store.stop();}
+});
 assert.deepEqual(freshFailures,[],'all fresh-entry and visible-topic discriminators pass');
 console.log('PASS deliberate unread Store: current visit, remote/local mark, exact single/from-here/siblings/sent/files, explicit entry, bootstrap/remount, full-generation delayed CAS, ordinary-read cost, uncapped atomic snapshot and fresh-entry/scope fencing');

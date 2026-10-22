@@ -170,6 +170,8 @@ function RosterSelect({ label, noun, placeholder, options, value, onChange }: {
   const pageSize = 40;
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
+  const chooser = useRef<HTMLSelectElement>(null);
+  const searchToggle = useRef<HTMLButtonElement>(null);
   const [limit, setLimit] = useState(pageSize);
   const matches = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -179,15 +181,18 @@ function RosterSelect({ label, noun, placeholder, options, value, onChange }: {
   const chosen = options.find(o => o.value === value);
   if (chosen && !shown.some(o => o.value === value)) shown.push(chosen);
   return <div className="space-y-2">
-    <label className="block">{label}<select aria-label={label} className={input} value={value} onChange={e => onChange(e.target.value)}>
+    <label className="block">{label}<select ref={chooser} aria-label={label} className={input} value={value} onChange={e => onChange(e.target.value)}>
       <option value="">{placeholder}</option>{shown.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
     </select></label>
     {(options.length > pageSize || searching) && <Hint>Search all {options.length} {noun} by name{noun === "people" ? ", person ID or device address" : " or address"}.</Hint>}
-    {searching ? <>
-      <label className="block text-sm">Search all {noun}<input type="search" autoFocus className={input} value={query} onChange={e => { setQuery(e.target.value); setLimit(pageSize); }} /></label>
-      <Button size="sm" variant="outline" onClick={() => { setSearching(false); setQuery(""); setLimit(pageSize); }}>Close {noun} search</Button>
-      {!matches.length && <Hint>No matching {noun}.</Hint>}
-    </> : options.length > pageSize && <Button size="sm" variant="outline" onClick={() => setSearching(true)}>Search all {noun}</Button>}
+    {searching && <label className="block text-sm">Search all {noun}<input type="search" autoFocus className={input} value={query} onChange={e => { setQuery(e.target.value); setLimit(pageSize); }} /></label>}
+    {(searching || options.length > pageSize) && <Button ref={searchToggle} size="sm" variant="outline" onClick={() => {
+      if (!searching) { setSearching(true); return; }
+      // Move focus before removing the input, so the modal needn't restore it.
+      (options.length > pageSize ? searchToggle.current : chooser.current)?.focus({preventScroll:true});
+      setSearching(false); setQuery(""); setLimit(pageSize);
+    }}>{searching ? <>Close {noun} search</> : <>Search all {noun}</>}</Button>}
+    {searching && !matches.length && <Hint>No matching {noun}.</Hint>}
     {matches.length > limit && <Button size="sm" variant="outline" onClick={() => setLimit(n => n + pageSize)}>Show more {noun} ({matches.length - limit})</Button>}
   </div>;
 }
