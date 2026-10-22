@@ -151,7 +151,7 @@ window.__unmount = async () => {
   if (!window.__pageSheetsKept()) report.outside.push('document.adoptedStyleSheets changed');
   return left;
 };
-window.__open = (conv) => openHandler && openHandler(conv, 'conversation');
+window.__open = (target, kind = 'conversation') => openHandler && openHandler(target, kind);
 await window.__mount();
 window.__ready = true;
 `;
@@ -246,7 +246,7 @@ const journeys = {
     const row = topic => page.locator('[data-part="chat-row"]').filter({ has:
       page.locator('[data-part="chat-preview"]').filter({ hasText: topic.last.split('\n')[0].slice(0, 50) }) });
     assert.equal(await row(legacy).count(), 0, 'Unbound agent history stays out of current chats');
-    await page.evaluate(id => window.__open(id), legacy.id);
+    await page.evaluate(id => window.__open(id, 'message'), legacy.id);
     await page.getByRole('log').first().waitFor();
     await page.locator('[data-mid="' + legacy.id + '"]').waitFor();
     await page.getByRole('button', { name: 'More', exact: true }).click();
