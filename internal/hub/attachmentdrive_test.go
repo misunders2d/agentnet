@@ -90,7 +90,7 @@ func TestRelayAttachmentDriveOAuthConfiguration(t *testing.T) {
 				t.Fatal(err)
 			}
 			u, _ := url.Parse(link)
-			if u.Scheme != "https" || u.Host != "accounts.google.com" || u.Query().Get("redirect_uri") != "https://relay.example.test"+attachmentDriveCallback {
+			if u.Scheme != "https" || u.Host != "accounts.google.com" || u.Path != "/o/oauth2/v2/auth" || u.Query().Get("redirect_uri") != "https://relay.example.test"+attachmentDriveCallback {
 				t.Fatal("downloaded endpoints or redirect URI overrode fixed relay consent")
 			}
 		})

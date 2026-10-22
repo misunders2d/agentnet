@@ -24,7 +24,7 @@ assert.equal(canUseStorageAction({ ...status, connected: false, configured: fals
 assert.equal(canUseStorageAction(readRelayStorage({ ...base(), remote: { files: 0, bytes: 0 }, pending: { files: 0, bytes: 0 } }), 'move'), true, 'existing local attachments can move before any queue rows exist');
 assert.equal(canUseStorageAction({ ...status, local: { files: 0, bytes: 0 }, pending: { files: 0, bytes: 0 } }, 'move'), false);
 for (const malformed of [null, [], {}, { ...base(), connected: 'yes' }, { ...base(), state: 'guess' }, { ...base(), local: { files: -1, bytes: 1 } }, { ...base(), pending: { files: 1.5, bytes: 1 } }, { ...base(), remote_only_files: NaN }, { ...base(), remote: { files: 1, bytes: Number.MAX_SAFE_INTEGER + 1 } }]) assert.throws(() => readRelayStorage(malformed));
-const consent = 'https://accounts.google.com/o/oauth2/v2/auth?client_id=public&state=synthetic';
+const consent = process.env.AGENTNET_RELAY_CONSENT_URL || 'https://accounts.google.com/o/oauth2/v2/auth?client_id=public&state=synthetic';
 assert.equal(googleConsentURL(consent), consent);
 for (const bad of ['http://accounts.google.com/o/oauth2/v2/auth', 'https://accounts.google.com.evil.test/o/oauth2/v2/auth', 'https://user@accounts.google.com/o/oauth2/v2/auth', 'https://accounts.google.com:444/o/oauth2/v2/auth', 'https://accounts.google.com/o/oauth2/v2/auth#token', 'https://accounts.google.com/o/oauth2/v2/auth?client_secret=secret', 'https://accounts.google.com/o/oauth2/v2/auth?access_token=secret', 'javascript:alert(1)', 'mailto:a@b.test', '//accounts.google.com/o/oauth2/v2/auth']) assert.equal(googleConsentURL(bad), '');
 assert.equal(readRelayStorage({ ...base(), consent_url: consent }).consent_url, undefined, 'GET never grants a consent link');

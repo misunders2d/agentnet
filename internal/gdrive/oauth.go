@@ -185,6 +185,8 @@ func (o OAuthConfig) WebConsent(redirect, state string) (link, verifier string, 
 	}
 	verifier = oauth2.GenerateVerifier()
 	cfg := oauth2.Config{ClientID: o.ClientID, ClientSecret: o.ClientSecret, RedirectURL: redirect, Scopes: []string{FileScope}, Endpoint: google.Endpoint}
+	// The SDK default is the legacy path; the app accepts Google's current Web endpoint.
+	cfg.Endpoint.AuthURL = "https://accounts.google.com/o/oauth2/v2/auth"
 	return cfg.AuthCodeURL(state, oauth2.S256ChallengeOption(verifier), oauth2.AccessTypeOffline, oauth2.SetAuthURLParam("prompt", "consent select_account")), verifier, nil
 }
 
