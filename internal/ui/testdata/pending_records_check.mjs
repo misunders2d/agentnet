@@ -26,4 +26,6 @@ const incoming=[
 ];
 assert.deepEqual(Array.from(incomingGroupInvites(incoming),i=>i.id),['new','other-inviter','other-room'],'current proposal supersedes only its own room and inviter; Review and chat cards share the same set');
 assert.equal(incomingGroupInvites([incoming[0]]).length,1,'a lone stale invitation remains actionable');
+assert.equal(incomingGroupInvites([incoming[0],{...incoming[1],status:'accepted'}]).length,0,'accepted current invitation keeps its own superseded stale card out of both chat and Review');
+assert.equal(incomingGroupInvites([incoming[0],{...incoming[1],inviter:'other/desk',status:'accepted'}]).length,1,'another inviter accepted proposal cannot suppress this stale card');
 console.log('PASS incomplete context distinct from valid invited agent; no invented authority');

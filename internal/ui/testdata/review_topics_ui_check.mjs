@@ -165,8 +165,9 @@ h.start(()=>review.UnreadReview());await drain();tree=h.get();const button=nodes
   x.start(()=>part.UnreadReview());const b=nodes(x.get()).find(n=>n.tag==='button');assert(b.props['aria-label'].includes(r.topic_title),'literal title without cached Store view');assert(b.props['aria-label'].includes(r.label),'author remains separate');x.stop();
  }
 }
-const approvals=load('features/Approvals.tsx',{...hooks().react,decidable:o=>o.needs_you||[],heldDecisionPeers:()=>new Set(),isWorkingReview:()=>false});
+const approvals=load('features/Approvals.tsx',{...hooks().react,decidable:o=>o.needs_you||[],heldDecisionPeers:()=>new Set(),isWorkingReview:()=>false,incomingGroupInvites:load('features/RoomPanel.model.ts',{}).incomingGroupInvites});
 assert.equal(approvals.needsYouCount({review:[],needs_you:[],unread_total:9}),0);assert.equal(approvals.needsYouCount({review:[],needs_you:[{}],unread_total:0}),1);
+{const old={conv:'joined-room',inviter:'inviter/desk',direction:'in',status:'stale'};const accepted={...old,status:'accepted'};assert.equal(approvals.needsYouCount({group_invitations:[old,accepted]}),0,'accepted current invitation leaves no stale Review badge');assert.equal(approvals.needsYouCount({group_invitations:[old,{...accepted,inviter:'another/desk'}]}),1,'another inviter does not erase the stale decision');}
 // Actual Store bound navigation: exact one GET, current author/LID/scope, draft
 // preservation, no action or history search, Back, and stale navigation fence.
 const rawStore=source('store.ts').replace(/^import .*;$/gm,'').replace('constructor(readonly host: Host) {','constructor(host: Host) { this.host=host;').replace(/^export /gm,'');
