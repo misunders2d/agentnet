@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -516,7 +517,7 @@ func testBrowserGroupCarrierIndexedDB(t *testing.T, controlOnly bool, background
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer func() {
+	stop := sync.OnceFunc(func() {
 		syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
 		waited := make(chan struct{})
 		go func() { cmd.Wait(); close(waited) }()
@@ -532,7 +533,8 @@ func testBrowserGroupCarrierIndexedDB(t *testing.T, controlOnly bool, background
 		if err := syscall.Kill(-cmd.Process.Pid, 0); err == nil {
 			t.Error("owned Chrome process group remains")
 		}
-	}()
+	})
+	defer stop()
 	select {
 	case result := <-done:
 		if result["ok"] != true {
@@ -540,6 +542,9 @@ func testBrowserGroupCarrierIndexedDB(t *testing.T, controlOnly bool, background
 		}
 		t.Logf("%v checks (%v); profile: %v", result["checks"], result["storage"], result["profile"])
 	case <-time.After(90 * time.Second):
+		// Wait joins the stderr copier before String reads its buffer. Keep
+		// the same disposal path for timeout, successful result and failure.
+		stop()
 		t.Fatalf("real IDB timeout: %s", stderr.String())
 	}
 }
