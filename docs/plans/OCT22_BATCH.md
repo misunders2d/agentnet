@@ -62,7 +62,7 @@ affected selections after a correction. Never weaken assertions or bounds.
 | Immutable app and matching gallery | published | v0.9.3 source3f5 public07:49:58UTC; galleryv2026.10.23.1 source5a12224 public07:50:19UTC; both Latest |
 | Independent draft/public verification | verified | Claude independent draft review9e2c716b; public12/12 payload checksums/provenance/signer/media match draft; publicgallery5packages/129files/20previews,151HTTPSrequests pass |
 | Existing relay full stopped backup, old/new restores and rollout | verified | Healthy v0.9.3 from 08:54:05 UTC; archive1,264,958,640 bytes/8,388 files verifies all 8,380 stored ciphertexts; old/new restores preserve rows/files/Drive binding; schema24→25quota-only, exact public binary and normal publicHTTPS pass; original config/realm/volume/neighbor preserved |
-| Docs/reviews/owned cleanup | verified; post-rollout review finalizing | All outputs/markers captured, three finished owned helper panes closed, user-owned Claude preserved; public/rollout docs record actual results and owner-approved open limits |
+| Docs/reviews/owned cleanup | verified | Final actual rollout and documentation review accepted by Claude, markerc901eb47; all outputs captured, three finished owned helper panes closed, user-owned Claude preserved; public/rollout docs record actual results and owner-approved open limits |
 
 ## Authority and preservation
 
