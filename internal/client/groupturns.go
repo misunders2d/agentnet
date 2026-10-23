@@ -71,7 +71,12 @@ func (a *Agent) projectGroupConversations(rows []ConversationInfo) ([]Conversati
 			}
 		}
 		if err = groupDeliveryRecipient(a.store.db, packet, a.Address, a.Self().Fingerprint()); err != nil {
-			view.Frozen = err.Error()
+			// A newer verified head can precede its decryptable context. It is
+			// a temporary wait, not proof that this conversation was closed.
+			// Exact thread reads and sends still enforce the current-head fence.
+			if !errors.Is(err, ErrGroupContextPending) {
+				view.Frozen = err.Error()
+			}
 			if me, ok, e := a.store.selfPerson(a.Address); e == nil && ok {
 				if reason := groupRemovalNotice(a.store.db, packet, me.roster.Person); reason != "" {
 					view.Frozen = reason

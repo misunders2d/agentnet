@@ -70,7 +70,9 @@ export async function catalog() {
 }
 export async function prepare(files) {
   files=[...files];
-  if(!files.length || files.length>33) fail('Choose skin.json and at most 32 package files.');
+  // Gallery folders also contain up to six previews, outside the package.
+  // Only the manifest's at-most32 declared assets are read, hashed or stored.
+  if(!files.length || files.length>39) fail('Choose skin.json, up to 32 package files and up to 6 gallery previews.');
   const named=new Map();
   for(const f of files) { const name=f.webkitRelativePath || f.name; if(!pathOK(name)||named.has(name))fail('Package paths must be distinct local relative paths.');named.set(name,f); }
   const manifests=[...named.keys()].filter(x=>x==='skin.json'||x.endsWith('/skin.json'));

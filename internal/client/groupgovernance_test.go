@@ -619,11 +619,21 @@ func TestGroupGovernanceTerminalSupersededInvariant(t *testing.T) {
 
 func groupGovernanceAwait(t *testing.T, packet GroupContext, agents ...*Agent) {
 	t.Helper()
+	var waiting *Agent
+	var observed GroupContext
+	var observedErr error
+	defer func() {
+		if waiting != nil {
+			t.Logf("governance context device=%s wanted_seq=%d wanted_hash=%s observed_seq=%d observed_hash=%s error=%v", waiting.Address, packet.State.Seq, packet.State.Hash(), observed.State.Seq, observed.State.Hash(), observedErr)
+		}
+	}()
 	for _, a := range agents {
+		waiting = a
 		eventually(t, "exact governance context", func() bool {
-			p, e := a.GroupContext(packet.State.Conv)
-			return e == nil && p.State.Hash() == packet.State.Hash()
+			observed, observedErr = a.GroupContext(packet.State.Conv)
+			return observedErr == nil && observed.State.Hash() == packet.State.Hash()
 		})
+		waiting = nil
 	}
 }
 func groupGovernanceDeparture(t *testing.T, from, to *Agent) envelope.Envelope {

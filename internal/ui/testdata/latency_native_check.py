@@ -127,9 +127,17 @@ finally:
                 proc.wait(timeout=max(.01, teardown_end-time.monotonic()))
         # WebView2 children release their profile handles asynchronously after
         # taskkill returns. Join that resource lifetime within the same deadline.
+        def removed_owned_child(_function, path, error_info):
+            error = error_info[1]
+            child = pathlib.Path(path)
+            # WebView2 can remove one of its lockfiles during this walk. Only
+            # an already-absent descendant of this exact owned root is benign.
+            if isinstance(error, FileNotFoundError) and child != root and root in child.parents:
+                return
+            raise error
         while True:
             try:
-                shutil.rmtree(root)
+                shutil.rmtree(root, onerror=removed_owned_child)
                 break
             except PermissionError:
                 if system != 'Windows' or time.monotonic() >= teardown_end:

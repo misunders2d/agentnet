@@ -137,7 +137,7 @@ export function firstPicks(v: T.AssistantSetupView | null | undefined, c: T.Agen
  *  list. Ready is the server's own check (installed here, folder exists). */
 export function defaultAgentState(v: T.ResponderView | null | undefined, program: (h: string) => string) {
   if (!v || !v.chosen) return { word: "Not set", tone: "act" as const, line: "None yet, so questions and tasks wait for you." };
-  if (v.manual) return { word: "You answer", tone: "muted" as const, line: "None: you chose to answer questions and tasks yourself." };
+  if (v.manual) return { word: "You answer", tone: "muted" as const, line: "No default agent: questions and tasks wait for you." };
   return { word: v.ready ? "Ready" : "Can’t start", tone: v.ready ? ("ok" as const) : ("danger" as const), line: program(v.harness || "") };
 }
 

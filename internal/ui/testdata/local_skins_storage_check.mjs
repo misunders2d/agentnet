@@ -12,6 +12,16 @@ Object.defineProperty(globalThis, 'navigator', { value: { serviceWorker: {}, loc
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const pkg = (id, version = 1) => [new File([JSON.stringify({ api: 1, id, name: id, entry: 'entry.mjs', files: ['entry.mjs', 'style.css'], style: 'style.css' })], 'skin.json'),
   new File(['export const version = ' + version + ';'], 'entry.mjs'), new File(['h1 { color: black; }'], 'style.css')];
+{ // A published folder may include gallery previews outside its 32 assets.
+  const names=['entry.mjs',...Array.from({length:31},(_,i)=>'asset'+i+'.css')];
+  const manifest={api:1,id:'folder-limit',name:'Folder limit',entry:'entry.mjs',files:names};
+  const files=[new File([JSON.stringify(manifest)],'skin.json'),...names.map(name=>new File([''],name))];
+  const expected=await local.prepare(files);
+  const previews=Array.from({length:6},(_,i)=>{const f=new File(['preview'],'preview'+i+'.png');Object.defineProperty(f,'webkitRelativePath',{value:'previews/'+f.name});f.arrayBuffer=async()=>{throw Error('undeclared preview bytes must never be read');};return f;});
+  assert.equal((await local.prepare([...files,...previews])).item.digest,expected.item.digest,'gallery previews do not change the declared package digest');
+  await assert.rejects(local.prepare([...files,...previews,new File([''],'extra.png')]),/at most|up to/,'selected directory metadata stays bounded');
+  await assert.rejects(local.prepare([new File([JSON.stringify({...manifest,files:[...names,'extra.css']})],'skin.json'),...files.slice(1),new File([''],'extra.css')]),/Invalid AgentNet skin manifest/,'declared asset limit stays32');
+}
 const key = request => typeof request === 'string' ? request : request.url || request.href;
 class Cache {
   responses = new Map(); damaged = false; writes = 0;

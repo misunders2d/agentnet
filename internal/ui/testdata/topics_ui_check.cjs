@@ -6,14 +6,16 @@ if(process.env.AGENTNET_TOPIC_COMPACT_CHECK==='1'){
  const nodes=t=>t&&typeof t==='object'?[t,...(t.props?.children||[]).flatMap(nodes)]:[];
  const source=fs.readFileSync(require('node:path').join(__dirname,'../web/src/features/Conversation.topics.tsx'),'utf8');
  function render(options={},text=source){
-  const cfg={width:320,open:'named',listed:true,fresh:false,state:'active',...options};
+  const cfg={width:320,mainWidth:77,allWidth:80,newWidth:44,open:'named',listed:true,fresh:false,state:'active',...options};
   const topics=[{id:'named',conv:'chat',title:'Named topic',state:cfg.state,unread:5,lastAt:'2026-10-16T00:00:00Z',count:1,needsYou:0},{id:'other',conv:'chat',title:'Other',state:'active',unread:7,lastAt:'2026-10-15T00:00:00Z',count:1,needsYou:0},{id:'closed',conv:'chat',title:'Closed',state:'archived',unread:3,lastAt:'2026-10-14T00:00:00Z',count:1,needsYou:0}];
   const state={overview:{topic_list:cfg.listed},drafts:{chat:{topic:cfg.open||undefined,newTopic:cfg.fresh}},pending:null};
-  let cells=[],refs=[],cursor=0,refCursor=0;
-  const globals={module:{exports:{}},jsx,Fragment:'Fragment',
+  let cells=[],refs=[],effects=[],pending=[],observers=[],reads=[],cursor=0,refCursor=0,effectCursor=0;
+  const controls=Object.fromEntries(['nav','main','all','new'].map(key=>[key,{key,get clientWidth(){return cfg.width;},querySelector:()=>null,get offsetWidth(){return Math.round(cfg[key+'Width']);},getBoundingClientRect(){reads.push(key);return {width:cfg[key+'Width']};}}]));
+  const globals={module:{exports:{}},jsx:(tag,props,...children)=>{const node=jsx(tag,props,...children);if(props?.ref){const label=props['aria-label']||'';props.ref.current=tag==='nav'?controls.nav:label.startsWith('Main')?controls.main:label.startsWith('All topics')?controls.all:controls.new;}return node;},Fragment:'Fragment',
    useState:init=>{const i=cursor++;if(!(i in cells))cells[i]=init;return[cells[i],v=>{cells[i]=typeof v==='function'?v(cells[i]):v;}];},
-   useRef:init=>{const i=refCursor++;return refs[i]??(refs[i]={current:i===0?{clientWidth:cfg.width,querySelector:()=>null}:i===1?{offsetWidth:80}:i===2?{offsetWidth:44}:init});},
-   useLayoutEffect:fn=>fn(),ResizeObserver:class{observe(){}disconnect(){}},getComputedStyle:()=>({columnGap:'8',paddingLeft:'12',paddingRight:'12'}),CSS:{escape:s=>s},
+   useRef:init=>{const i=refCursor++;return refs[i]??(refs[i]={current:init});},
+   useLayoutEffect:(fn,deps)=>{const i=effectCursor++,old=effects[i];if(!old||deps.some((d,j)=>!Object.is(d,old.deps[j])))pending.push(()=>{old?.cleanup?.();effects[i]={deps,cleanup:fn()};});},
+   ResizeObserver:class{constructor(fn){this.fn=fn;this.observed=[];this.disconnected=false;observers.push(this);}observe(el){this.observed.push(el);}disconnect(){this.disconnected=true;}},getComputedStyle:()=>({columnGap:'8',paddingLeft:'12',paddingRight:'12'}),CSS:{escape:s=>s},
    useApp:()=>({}),useWide:()=>false,useAgentNames:()=>({}),useStore:(_s,f)=>f(state),
    useSteadyChoices:rows=>({choices:rows.map(row=>({row,present:true})),bind:{},release(){}}),unreadTopicOrder:()=>0,
    chatList:()=>[],newestFirst:(a,b)=>b.lastAt.localeCompare(a.lastAt),topicOf:t=>t,topicMark:()=>null,firstLine:t=>t,dayLabel:()=>'day',timeOf:()=>'time',
@@ -28,14 +30,16 @@ if(process.env.AGENTNET_TOPIC_COMPACT_CHECK==='1'){
   globals.exports=globals.module.exports;
   const code=esbuild.transformSync(text.replace(/^import[\s\S]*?from[^;]+;/gm,''),{loader:'tsx',jsxFactory:'jsx',jsxFragment:'Fragment',format:'cjs'}).code;
   vm.runInNewContext(code,globals);
-  let tree;for(let i=0;i<2;i++){cursor=0;refCursor=0;tree=globals.module.exports.TopicBar({dm:{id:'chat',peer:{label:'Fixture'},main_topic:{unread:2},topics}});}
+  let tree;
+  const rerender=()=>{for(let i=0;i<2;i++){cursor=0;refCursor=0;effectCursor=0;pending=[];for(const ref of refs)if(Object.values(controls).includes(ref.current))ref.current=null;tree=globals.module.exports.TopicBar({dm:{id:'chat',peer:{label:'Fixture'},main_topic:{unread:2},topics,frozen:cfg.frozen,role:cfg.role}});for(const effect of pending)effect();}};
+  rerender();
   if(cfg.switchTo){
    nodes(tree).find(n=>n.tag==='nav').props.onFocusCapture();
    state.drafts.chat.topic=cfg.switchTo;
-   for(let i=0;i<2;i++){cursor=0;refCursor=0;tree=globals.module.exports.TopicBar({dm:{id:'chat',peer:{label:'Fixture'},main_topic:{unread:2},topics}});}
+   rerender();
   }
   const menus=nodes(tree).filter(n=>n.tag?.name==='TopicMenu'),all=nodes(tree).find(n=>n.tag==='button'&&n.props['aria-label']?.startsWith('All topics'));
-  return {tree,menus,all,buttons:nodes(tree).filter(n=>n.tag==='button')};
+  return {tree,menus,all,buttons:nodes(tree).filter(n=>n.tag==='button'),cfg,controls,observers,reads,resize:()=>{observers.filter(o=>!o.disconnected).forEach(o=>o.fn());rerender();return nodes(tree).filter(n=>n.tag?.name==='TopicMenu');},change:changes=>{Object.assign(cfg,changes);rerender();return nodes(tree).filter(n=>n.tag?.name==='TopicMenu');},unmount:()=>effects.forEach(e=>e.cleanup?.())};
  }
  // Holding the bar's old focus must not hide the explicitly selected topic.
  const switched=render({width:361,switchTo:'other'});
@@ -47,21 +51,47 @@ if(process.env.AGENTNET_TOPIC_COMPACT_CHECK==='1'){
   assert.equal(trigger.props.style.minWidth,44);assert.equal(trigger.props['aria-current'],'true');assert.equal(trigger.props.title,'Named topic');assert.match(trigger.props['aria-label'],/^Named topic, 5 unread, open topic, menu$/);
   assert(view.buttons.some(n=>n.props['aria-label']==='Main, 2 unread'));assert(view.buttons.some(n=>n.props['aria-label']==='New topic'));assert.match(view.all.props['aria-label'],/10 unread in other topics$/,'open unread excluded exactly once, archived unread remains');
  }
- for(const options of [{open:''},{fresh:true},{listed:false},{width:300}]){
+ for(const options of [{open:''},{fresh:true},{listed:false,width:220},{width:300}]){
   const view=render(options);assert.equal(view.menus.length,0,JSON.stringify(options));
   assert.equal(nodes(view.tree).filter(n=>n.props['data-topic']).length,0,'no dead fallback plain chip');
   if(options.listed===false)assert.equal(view.all,undefined,'unlisted host has no All control');else assert.match(view.all.props['aria-label'],/15 unread in other topics$/);
  }
  assert.equal(render({width:301}).menus.length,1,'free52 equals44+gap, fits');
  assert.equal(render({width:300}).menus.length,0,'free51 must not clip fixed controls');
+ const ci={mainWidth:68.15625,allWidth:89.0625,newWidth:130.453125};
+ assert.equal(render({...ci,width:390}).menus.length,1,'actual CI fractional controls leave54.328125px for current menu+gap');
+ assert.equal(render({...ci,width:382}).menus.length,0,'Main introduces its own gap: free46.328125 must not falsely fit');
+ assert.equal(render({...ci,width:388}).menus.length,1,'nearby integer width leaves52.328125px, fits');
+ assert.equal(render({...ci,width:387}).menus.length,0,'nearby integer width leaves51.328125px, does not fit');
+ // Fractional controls must stay fractional: rounding All/New would cross these exact boundaries.
+ const fractional={mainWidth:68.15625,allWidth:89.125,newWidth:130.71875};
+ assert.equal(render({...fractional,width:388}).menus.length,1,'fractional control sum leaves exactly52px');
+ assert.equal(render({...fractional,width:387}).menus.length,0,'fractional control sum leaves exactly51px');
+ const observed=render({...ci,width:390});
+ assert.deepEqual(observed.observers[0].observed.map(el=>el.key).sort(),['all','main','nav','new'],'observe all three known controls and nav');
+ assert.deepEqual(observed.reads.sort(),['all','main','new'],'one rect each per fit; no history geometry');
+ observed.cfg.mainWidth+=3;assert.equal(observed.resize().length,0,'Main badge/font width change removes menu that no longer fits');
+ observed.cfg.mainWidth-=3;assert.equal(observed.resize().length,1,'Main width shrink restores current menu');
+ observed.cfg.newWidth+=3;assert.equal(observed.resize().length,0,'New font width change updates fit');
+ observed.cfg.newWidth-=3;assert.equal(observed.resize().length,1,'New width shrink restores current menu');
+ observed.cfg.allWidth+=3;assert.equal(observed.resize().length,0,'All count width change updates fit');
+ observed.cfg.allWidth-=3;assert.equal(observed.resize().length,1,'All width shrink restores current menu');
+ for(const status of [{frozen:true},{role:'former_member'}]){
+  const view=render({...ci,width:382});assert.equal(view.change(status).length,1,'removing New frees room without nav width change');
+  assert(view.observers[0].disconnected,'old observer cleaned up on control removal');
+  assert.deepEqual(view.observers.at(-1).observed.map(el=>el.key).sort(),['all','main','nav'],'removed New is not observed');
+  view.unmount();assert(view.observers.every(o=>o.disconnected),'all observers disconnect on unmount');
+ }
+ observed.unmount();assert(observed.observers.every(o=>o.disconnected),'ordinary fit observer disconnects on unmount');
  for(const width of [361,473,1000]){
   const current=render({width});assert.equal(current.menus.length,1);assert.equal(current.menus[0].props.trigger.props.style.minWidth,104,'normal room path retains chip minimum');
   if(process.env.AGENTNET_TOPIC_BASE_SOURCE){
    const before=render({width},fs.readFileSync(process.env.AGENTNET_TOPIC_BASE_SOURCE,'utf8'));
-   assert.equal(JSON.stringify(current.tree).replaceAll('tnum max-[359px]:hidden','tnum'),JSON.stringify(before.tree),'normal tree unchanged except approved narrow All label CSS');
+   const visibleTree=tree=>JSON.stringify(tree,(key,value)=>key==='ref'?undefined:value);
+   assert.equal(visibleTree(current.tree).replaceAll('tnum max-[359px]:hidden','tnum'),visibleTree(before.tree).replaceAll('tnum max-[359px]:hidden','tnum'),'normal tree unchanged except approved narrow All label CSS and measurement refs');
   }
  }
- console.log('PASS actual TopicBar: room0 current/state/menu44; Main/fresh/unlisted/no-fit guards; exact52/51 boundary; unread excluded once; room>=1 unchanged');
+ console.log('PASS actual TopicBar: room0 current/state/menu44; Main/fresh/unlisted/no-fit guards; actual CI fractional widths and exact52/51 boundary; Main/All/New resize and frozen/former cleanup; unread excluded once; room>=1 unchanged');
 }else // Cheap actual AllTopics component check; JSX is transformed by installed esbuild.
 if(process.env.AGENTNET_TOPIC_SOURCE_CHECK==='1'){
  const {spawnSync}=require('node:child_process'),path=require('node:path');

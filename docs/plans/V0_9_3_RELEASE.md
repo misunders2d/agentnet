@@ -7,6 +7,31 @@ The [active goal](OCT22_BATCH_GOAL.md) and [batch checklist](OCT22_BATCH.md)
 retain every original acceptance item, ordinary tagged clarification, Claude's
 complete GUI review and all-system/all-interaction speed requirements.
 
+## Current residual qualification
+
+Run39888155855 passed actual macOS installer/native17 and all three browser
+engines at both widths. Linux native17 passed, including the packaged media
+playback correction. The affected follow-up retains those results and selects
+Linux/Windows Topics, Compose, Media and Outbox plus the Android instrumentation.
+The narrow TopicBar now measures the three mounted controls' fractional widths;
+its exact-CI-geometry regression and106 rendered actions pass. A255ms composer
+transition remains a recorded smoothness finding.
+
+Windows partition4 retained183 parent passes and50 explicit skips; two actual
+group-context parents remain unresolved. Initial stale-session causation was
+not established, and no speculative readiness change was made. Failure-only
+context/proof/profile diagnostics prepare an exact two-parent Windows rerun.
+Run39889553253 passed the two corrected UI models on Linux, macOS and Windows,
+closing the sole remaining UI0/macOS fixture failure while retaining other passes.
+
+Android's prior upgrade/notification checks passed. Its17 timing cases never
+started because test instrumentation inserted an inline module refused by the
+unchanged product CSP. The test-only correction uses the existing JavaScript
+injection seam and same-origin module import, checks launch/setup results and
+preserves the17-case coverage,30-second bound, private-fixture limits and cleanup.
+Actual Android re-execution remains required. Matching-gallery navigation races
+are being corrected before the collection gate; no publication is claimed.
+
 ## Source and focused verification
 
 The isolated `fix/oct22-complete-batch` candidate preserves the dirty main
@@ -37,8 +62,8 @@ ordering, schedules and human guest events. Their exact commands, retained REDs,
 hashes, platform distinctions and timing limitations are in the batch checklist
 and private evidence inventory. A focused pass does not replace the gates below.
 
-The corrective canonical build and vet pass with entry SHA256
-`2a4dbec983068d4f465234ee8102a6b8ba8a1ba6748cff5cafca289ec4eacdfe`.
+The latest corrective canonical build and vet pass with entry SHA256
+`c18ae6d053bc407182c75304b305dd24754a86a257d9d915e93cd919528b8e47`.
 Current fixes also bound group/list roster rendering without losing search,
 selection or consent, and expose setup refusal/Back return context. Rejected
 page-size/presence/focus proposals remain out of production. Seventeen timing

@@ -13,6 +13,14 @@ on:
         description: "Exact source ref; empty: caller's commit"
         type: string
         default: ""
+      os:
+        description: 'Optional exact desktop runner matrix as JSON'
+        type: string
+        default: ''
+      interaction_suites:
+        description: 'Optional comma-separated affected workloads; empty retains all seventeen'
+        type: string
+        default: ''
       interaction_qualification:
         description: "Measure shared interactions in real native shells and browsers"
         type: boolean
@@ -26,7 +34,7 @@ jobs:
       matrix:
         # Linux on the oldest supported Ubuntu, so the AppImage runs on
         # older systems too.
-        os: [ubuntu-22.04, windows-latest, macos-latest]
+        os: ${{ fromJSON(inputs.os || '["ubuntu-22.04","windows-latest","macos-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -66,6 +74,7 @@ jobs:
         shell: bash
         env:
           AGENTNET_LATENCY_DISPOSABLE_GUI: '1'
+          REQUESTED_INTERACTION_SUITES: ${{ inputs.interaction_suites }}
         run: |
           set -euo pipefail
           evidence="$RUNNER_TEMP/agentnet-interactions"
@@ -90,6 +99,15 @@ jobs:
           fi
           # Split added workloads rather than increasing any existing bound.
           groups=(history,navigation,settings,unread,actions topics,groups,compose,media review,outbox,agents,teams profile,storage,workspaces,permissions)
+          if [[ -n "$REQUESTED_INTERACTION_SUITES" ]]; then
+            IFS=, read -r -a groups <<< "$REQUESTED_INTERACTION_SUITES"
+            for suites in "${groups[@]}"; do
+              case "$suites" in
+                history|navigation|settings|unread|actions|topics|groups|compose|media|review|outbox|agents|teams|profile|storage|workspaces|permissions) ;;
+                *) echo "Unknown interaction workload: $suites" >&2; exit 1 ;;
+              esac
+            done
+          fi
           failed=0
           for suites in "${groups[@]}"; do
             export AGENTNET_LATENCY_SUITES="$suites"

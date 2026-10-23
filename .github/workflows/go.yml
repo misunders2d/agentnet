@@ -29,6 +29,18 @@ on:
         description: 'Rerun only these failed native Windows client partitions (JSON array); empty keeps all six'
         type: string
         default: ''
+      desktop_os:
+        description: 'Optional exact desktop runner matrix as JSON; selects desktop qualification without repeating Android'
+        type: string
+        default: ''
+      include_android:
+        description: 'Also run Android qualification with an explicit desktop runner selection'
+        type: boolean
+        default: false
+      interaction_suites:
+        description: 'Optional comma-separated affected desktop workloads; empty retains all seventeen'
+        type: string
+        default: ''
       platform_only:
         description: 'Run only desktop and Android qualification, retaining completed native/race jobs'
         type: boolean
@@ -184,6 +196,8 @@ jobs:
     uses: ./.github/workflows/desktop.yml
     with:
       version: ${{ inputs.candidate_version || '' }}
+      os: ${{ inputs.desktop_os || '' }}
+      interaction_suites: ${{ inputs.interaction_suites || '' }}
       interaction_qualification: ${{ inputs.interaction_qualification || false }}
   container:
     if: ${{ !inputs.windows_task_probe && !inputs.platform_only && !inputs.test_packages && !inputs.test_run && !inputs.race_shards && !inputs.windows_client_partitions }}
@@ -200,7 +214,7 @@ jobs:
   # Android preview on an owned emulator. The reusable workflow accepts exact
   # versions when invoked separately; here it derives the next patch from tags.
   android-qualification:
-    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.windows_task_probe && !inputs.test_packages && !inputs.test_run && !inputs.race_shards && !inputs.native_os && !inputs.windows_client_partitions }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (!inputs.desktop_os || inputs.include_android) && !inputs.windows_task_probe && !inputs.test_packages && !inputs.test_run && !inputs.race_shards && !inputs.native_os && !inputs.windows_client_partitions }}
     uses: ./.github/workflows/android-qualification.yml
     with:
       version: ${{ inputs.candidate_version || '' }}

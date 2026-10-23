@@ -117,7 +117,7 @@ assert.equal(browserDevice('daemon', { me: {} }), false);
   const name = (h) => ({ codex: 'Codex' })[h] || h;
   assert.deepEqual(defaultAgentState(null, name), { word: 'Not set', tone: 'act', line: 'None yet, so questions and tasks wait for you.' });
   assert.deepEqual(defaultAgentState({ chosen: false, manual: false, ready: false, harnesses: null }, name).word, 'Not set');
-  assert.deepEqual(defaultAgentState({ chosen: true, manual: true, ready: false, harnesses: null }, name), { word: 'You answer', tone: 'muted', line: 'None: you chose to answer questions and tasks yourself.' });
+  assert.deepEqual(defaultAgentState({ chosen: true, manual: true, ready: false, harnesses: null }, name), { word: 'You answer', tone: 'muted', line: 'No default agent: questions and tasks wait for you.' });
   assert.deepEqual(defaultAgentState({ chosen: true, manual: false, harness: 'codex', dir: '/w', ready: true, harnesses: null }, name), { word: 'Ready', tone: 'ok', line: 'Codex' });
   assert.deepEqual(defaultAgentState({ chosen: true, manual: false, harness: 'codex', dir: '/gone', ready: false, harnesses: null }, name), { word: 'Can’t start', tone: 'danger', line: 'Codex' });
 }

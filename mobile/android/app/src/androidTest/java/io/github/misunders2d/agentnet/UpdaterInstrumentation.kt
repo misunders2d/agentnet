@@ -409,6 +409,12 @@ class UpdaterInstrumentation : Instrumentation() {
         check(scriptFile.isFile && scriptFile.length() in 1L..262144L) { "Stage the bounded latency fixture in this owned app's private cache." }
         check(inputFile.isFile && inputFile.length() in 1L..1048576L) { "Stage the synthetic latency input in this owned app's private cache." }
         val source = scriptFile.readText()
+        val entryImport = "import {mount,unmount} from '/assets/skins/comic/entry.mjs';"
+        check(source.lineSequence().first() == entryImport) { "Unexpected latency fixture entry import." }
+        val fixtureBody = source.substring(entryImport.length)
+        check(!Regex("""(?m)^\s*(?:import|export)\b|\bimport\s*\.\s*meta\b""").containsMatchIn(fixtureBody)) {
+            "The owned latency fixture contains another module-only construct."
+        }
         val input = JSONObject(inputFile.readText())
         check(input.has("overview") && input.has("view")) { "Invalid synthetic latency input." }
         val field = MainActivity::class.java.getDeclaredField("web").apply { isAccessible = true }
@@ -426,7 +432,7 @@ class UpdaterInstrumentation : Instrumentation() {
         }
         check(ready) { "The current authenticated local Go-host assets did not load." }
         try {
-            javascript(web, """
+            check(javascript(web, """
                 (() => {
                   if (document.getElementById('fixture')) throw Error('Latency fixture already exists');
                   window.__agentnetLatencyPrevious = [...document.body.children].map(el => ({el,display:el.style.display,inert:el.inert}));
@@ -438,11 +444,19 @@ class UpdaterInstrumentation : Instrumentation() {
                   window.__agentnetLatencyPlatform='android';
                   window.__agentnetLatencySuite=${JSONObject.quote(latencySuite)};
                   window.latencyReport=null;
-                  const script=document.createElement('script');script.type='module';script.id='latency-test-script';
-                  script.textContent=${JSONObject.quote(source)};document.body.append(script);
                   return true;
                 })()
-            """.trimIndent())
+            """.trimIndent()) == "true") { "The latency fixture setup did not start." }
+            // evaluateJavascript is the existing test-only injection seam.
+            // An inline module element would be refused by the product CSP.
+            check(javascript(web, """
+                (async () => {
+                  'use strict';
+                  const {mount,unmount}=await import('/assets/skins/comic/entry.mjs');
+                  $fixtureBody
+                })().catch(e=>{window.latencyReport={ok:false,error:'launch: '+String(e&&e.stack||e)}});
+                true;
+            """.trimIndent()) == "true") { "The latency fixture did not start (parse error)." }
             val runEnd = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
             var report: JSONObject? = null
             while (report == null && System.nanoTime() < runEnd) {

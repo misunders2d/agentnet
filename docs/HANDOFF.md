@@ -34,6 +34,27 @@ playback exposed missing GStreamer plugins. New installer playback and affected
 platform qualification must pass before publication. Routine latency findings
 above 200 ms remain recorded; correctness guards are not smoothness evidence.
 
+The complete platform run39888155855 qualified the actual macOS installer,
+all17 native interaction workloads and the three browser engines at both widths.
+Linux also passed all17 native workloads, including playback from the shipped
+AppImage with its bundled GStreamer plugins. Its remaining narrow-browser
+TopicBar failure has a measured-width correction and focused regression.
+Windows passed the native interaction bodies; its owned-profile cleanup and
+WebKit media-fixture failures have focused test corrections awaiting actual
+Windows re-execution. Android upgrade continuity and notification checks passed;
+its17 timing fixtures were blocked by test-only inline-module injection under the
+existing CSP. The corrected instrumentation preserves that CSP and awaits an
+actual emulator run. These pending selections are not passes.
+
+The two remaining native Windows client parents remain unresolved after183
+other parent passes in partition4. A proposed startup cause was disproved for
+the initial fixture, so only failure diagnostics were added for the next exact
+two-parent run. All18 Linux client partitions, the other five Windows partitions,
+UI partitions1/2 and the container gate retain their passing evidence. The only
+failed UI0/macOS fixture was repaired and passed on all three native systems in
+run39889553253. Temporary group-context waits no longer claim the chat is frozen;
+exact thread reads and sends still enforce the current signed-context fence.
+
 Preserve the dirty main checkout and parked Play work; use the isolated
 `.agentnet/oct22-batch` candidate. The existing relay's connected Google Drive
 and completed migration are state to preserve. Do not disconnect or remigrate

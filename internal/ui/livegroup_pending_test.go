@@ -131,6 +131,15 @@ func TestLiveGroupMutationPendingHTTP(t *testing.T) {
 			if _, e = bob.GroupMembers(conv); !errors.Is(e, client.ErrGroupContextPending) {
 				t.Fatalf("proof barrier did not pause membership: %v", e)
 			}
+			views, e := bob.Conversations()
+			if e != nil {
+				t.Fatal(e)
+			}
+			for _, view := range views {
+				if view.ID == conv && (view.Frozen != "" || view.Role == "former_member") {
+					t.Fatalf("pending head fence invented a closed conversation: frozen=%q role=%q", view.Frozen, view.Role)
+				}
+			}
 			if _, e = bob.SendConv(ctx, conv, client.ConvOutgoing{Body: "Must not send with pending authority"}); !errors.Is(e, client.ErrGroupContextPending) {
 				t.Fatalf("proof barrier did not refuse send: %v", e)
 			}

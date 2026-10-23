@@ -113,9 +113,10 @@ export function TopicBar({ thread,dm }: { thread?: T.Thread;dm?:T.DMThread }) {
   const listed = !!overview?.topic_list;
   const fresh = !!draft?.newTopic;
   const agent = dm ? dm.title||dm.peer.label : item?.title || "this agent";
+  const canStartTopic = !dm?.frozen && dm?.role !== "former_member";
 
   // As many chips as fit: the rest are under All topics, never in a scroll.
-  const nav = useRef<HTMLElement>(null), allRef = useRef<HTMLButtonElement>(null), newRef = useRef<HTMLButtonElement>(null);
+  const nav = useRef<HTMLElement>(null), mainRef = useRef<HTMLButtonElement>(null), allRef = useRef<HTMLButtonElement>(null), newRef = useRef<HTMLButtonElement>(null);
   const [room, setRoom] = useState<number>(TOPICS.barMax - 1);
   const [menuFits, setMenuFits] = useState(false);
   useLayoutEffect(() => {
@@ -123,18 +124,20 @@ export function TopicBar({ thread,dm }: { thread?: T.Thread;dm?:T.DMThread }) {
     if (!el) return;
     const fit = () => {
       const cs = getComputedStyle(el), gap = parseFloat(cs.columnGap) || 8;
-      // Every chip brings one gap: the next item is the spacer, which has one gap to
-      // All topics (when listed) and one to New topic.
-      const free = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - (allRef.current?.offsetWidth || 0) - (newRef.current?.offsetWidth || 0) - (listed ? 2 : 1) * gap - (dm ? 85 : 0);
+      // Each fixed control contributes its actual width and one gap around the
+      // spacer/chips. Keep fractional widths so a compact menu fits exactly.
+      const controls = [mainRef.current, allRef.current, newRef.current];
+      const fixed = controls.reduce((width, control) => width + (control ? control.getBoundingClientRect().width + gap : 0), 0);
+      const free = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - fixed;
       setRoom(Math.max(dm?0:1, Math.min(TOPICS.barMax - (listed ? 1 : 0), Math.floor(free / (TOPICS.chipMinWidth + gap)))));
       setMenuFits(free >= 44 + gap);
     };
     fit();
     const ro = new ResizeObserver(fit);
     ro.observe(el);
-    if (allRef.current) ro.observe(allRef.current); // its count and unread mark change its width
+    for (const control of [mainRef.current, allRef.current, newRef.current]) if (control) ro.observe(control);
     return () => ro.disconnect();
-  }, [total, listed, wide]);
+  }, [total, listed, wide, !!dm, canStartTopic]);
 
   // The topic being opened (its messages are on their way): its chip lights up at once.
   const pending = useStore(store, (s) => s.pending);
@@ -175,7 +178,7 @@ export function TopicBar({ thread,dm }: { thread?: T.Thread;dm?:T.DMThread }) {
 
   return (
     <nav {...choices.bind} ref={nav} aria-label={"Topics with " + agent} data-part="topic-bar" className="flex shrink-0 items-center gap-2 overflow-hidden border-b border-hairline bg-canvas px-3 py-1.5 lg:px-5">
-      {dm && <button type="button" aria-pressed={!draft?.topic&&!fresh} aria-label={(wide?"Main flow":"Main")+(dm.main_topic?.unread?", "+dm.main_topic.unread+" unread":"")} className={chip+"shrink-0 "+(!draft?.topic&&!fresh?"bg-ink text-canvas":"bg-surface stroke")} onClick={()=>void store.openUnread({kind:"dm",id:dm.id})}>{wide?"Main flow":"Main"}{!!dm.main_topic?.unread && <span aria-hidden="true" className="grid h-5 min-w-5 place-items-center rounded-full bg-danger px-1 text-[11px] font-bold text-white tnum">{dm.main_topic.unread}</span>}</button>}
+      {dm && <button ref={mainRef} type="button" aria-pressed={!draft?.topic&&!fresh} aria-label={(wide?"Main flow":"Main")+(dm.main_topic?.unread?", "+dm.main_topic.unread+" unread":"")} className={chip+"shrink-0 "+(!draft?.topic&&!fresh?"bg-ink text-canvas":"bg-surface stroke")} onClick={()=>void store.openUnread({kind:"dm",id:dm.id})}>{wide?"Main flow":"Main"}{!!dm.main_topic?.unread && <span aria-hidden="true" className="grid h-5 min-w-5 place-items-center rounded-full bg-danger px-1 text-[11px] font-bold text-white tnum">{dm.main_topic.unread}</span>}</button>}
       {pick.map((t) => {
         const current = !!open && t.id === open.id && !fresh;
         const lit = going ? t.id === going : current;
@@ -222,7 +225,7 @@ export function TopicBar({ thread,dm }: { thread?: T.Thread;dm?:T.DMThread }) {
             : <span aria-hidden="true" className="size-2.5 shrink-0 rounded-full bg-danger" />)}
         </button>
       )}
-      {!dm?.frozen && dm?.role !== "former_member" && <button ref={newRef} type="button" aria-pressed={fresh} aria-label={wide ? undefined : "New topic"} title="New topic: your next message starts a separate conversation"
+      {canStartTopic && <button ref={newRef} type="button" aria-pressed={fresh} aria-label={wide ? undefined : "New topic"} title="New topic: your next message starts a separate conversation"
         onClick={() => store.setDraft(dm?.id||thread!.id, { ...store.draft(dm?.id||thread!.id), newTopic: !fresh, replyTo: undefined })}
         className={chip + "shrink-0 " + (wide ? "" : "min-w-11 justify-center px-2 ") + (fresh ? "bg-act text-act-ink stroke" : "text-agent-ink hover:bg-sunken")}>
         <IconPlus size={18} stroke={2.2} aria-hidden="true" />New topic

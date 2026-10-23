@@ -118,8 +118,18 @@ func groupTurnsFixture(t *testing.T, beforeRun ...func(*Agent)) (*world, *Agent,
 		if !t.Failed() {
 			return
 		}
-		t.Logf("fixture context wanted seq=%d hash=%s; observations=%v", next.State.Seq, next.State.Hash(), last)
+		t.Logf("initial fixture context wanted seq=%d hash=%s; initial observations=%v", next.State.Seq, next.State.Hash(), last)
 		for _, a := range []*Agent{w.alice, w.bob, carol} {
+			current, contextErr := a.GroupContext(next.State.Conv)
+			var proofHead sql.NullInt64
+			var proofCount, held int
+			proofErr := a.store.db.QueryRow(`SELECT max(seq), count(*) FROM group_proof_records WHERE conv=?`, next.State.Conv).Scan(&proofHead, &proofCount)
+			heldErr := a.store.db.QueryRow(`SELECT count(*) FROM quarantine WHERE reason=?`, reasonProof).Scan(&held)
+			t.Logf("context failure snapshot at=%s device=%s seq=%d hash=%s context_error=%v proof_head=%v proof_count=%d proof_error=%v held_proof=%d held_error=%v", time.Now().UTC().Format(time.RFC3339Nano), a.Address, current.State.Seq, current.State.Hash(), contextErr, proofHead, proofCount, proofErr, held, heldErr)
+			label, name, _ := protocol.SplitAddress(a.Address)
+			var profile protocol.Profile
+			profileErr := a.hub.do(tctx(t), "GET", "/v1/agents/"+label+"/"+name+"/profile", nil, &profile)
+			t.Logf("context failure profile device=%s live=%t sessions=%v signed_identity=%t signed_group=%t error=%v", a.Address, profile.Live, profile.Sessions, profile.Supports(a.Address, a.Self().SignKey, protocol.CapAgentIdentity), profile.Supports(a.Address, a.Self().SignKey, protocol.CapGroup), profileErr)
 			rows, err := a.store.db.Query(`SELECT recipient, coalesce(sub,''), state, count(*) FROM outbox WHERE conv=? GROUP BY recipient, sub, state`, next.State.Conv)
 			if err != nil {
 				t.Logf("%s outbox diagnostic: %v", a.Address, err)
