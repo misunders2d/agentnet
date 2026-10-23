@@ -18,13 +18,19 @@ class UpdaterInstrumentation : Instrumentation() {
     private var latencySuite = "history"
     private var ownedLatencyFixture = false
     override fun onCreate(arguments: Bundle?) {
+        phase("create-before")
         super.onCreate(arguments)
         mode = arguments?.getString("mode") ?: "install"
         latencySuite = arguments?.getString("latencySuite") ?: "history"
         ownedLatencyFixture = arguments?.getString("ownedFixture") == "1"
+        phase("instrumentation-thread-before")
         start()
+        phase("instrumentation-thread-after")
     }
+    // Static labels only: no URLs, identities, input JSON or JavaScript source.
+    private fun phase(value: String) = sendStatus(1, Bundle().apply { putString("phase", value) })
     override fun onStart() {
+        phase("on-start-before")
         val result = Bundle()
         try {
             check(mode in setOf("install", "snapshot", "network", "cleanup", "interrupt", "notifications", "notifications-denied", "indicators-video", "latency")) { "Unknown fixture operation." }
@@ -38,20 +44,34 @@ class UpdaterInstrumentation : Instrumentation() {
                 installer.abandonSession(id)
                 preferences.edit().remove("session").remove("result").commit()
                 result.putString("stream","Discarded test-owned session blocked by harness teardown; this is setup cleanup, not cancellation evidence.\n")
+                phase("finish-before")
                 finish(Activity.RESULT_OK,result); return
             }
+            phase("activity-start-before")
             val activity = startActivitySync(Intent(targetContext, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
+            phase("activity-start-after")
+            phase("idle-before")
             waitForIdleSync()
+            phase("idle-after")
             if (mode == "latency") {
+                phase("latency-before")
                 checkLatency(activity, result)
+                phase("latency-after")
+                phase("finish-before")
                 finish(Activity.RESULT_OK, result); return
             }
             if (mode == "indicators-video") {
+                phase("indicators-before")
                 checkIndicatorsVideo(activity, result)
+                phase("indicators-after")
+                phase("finish-before")
                 finish(Activity.RESULT_OK, result); return
             }
             if (mode.startsWith("notifications")) {
+                phase("notifications-before")
                 checkNotifications(activity, mode == "notifications-denied", result)
+                phase("notifications-after")
+                phase("finish-before")
                 finish(Activity.RESULT_OK, result); return
             }
             if (mode == "snapshot" || mode == "network") {
@@ -111,6 +131,7 @@ class UpdaterInstrumentation : Instrumentation() {
                     val info=targetContext.packageManager.packageInstaller.getSessionInfo(id)
                     check(info != null && !info.isActive) { "The fixture is not waiting for confirmation." }
                     result.putString("stream","Interrupted real inactive confirmation session=$id; explicit visible retry must replace only this owned session.\n")
+                    phase("finish-before")
                     finish(Activity.RESULT_OK,result); return
                 }
                 // Finishing instrumentation kills the target process. Keep it visible
@@ -119,9 +140,11 @@ class UpdaterInstrumentation : Instrumentation() {
                 preferences.unregisterOnSharedPreferenceChangeListener(listener)
                 result.putString("stream", "Real installer callback: ${preferences.getString("result", "")}\n")
             }
+            phase("finish-before")
             finish(Activity.RESULT_OK, result)
         } catch (e: Exception) {
-            result.putString("stream", "Updater fixture failed: ${e.message}\n")
+            result.putString("stream", result.getString("stream").orEmpty() + "Updater fixture failed: ${e.message}\n")
+            phase("finish-failed-before")
             finish(Activity.RESULT_CANCELED, result)
         }
     }
@@ -315,12 +338,52 @@ class UpdaterInstrumentation : Instrumentation() {
             check(manager.getNotificationChannel(CONNECTION_CHANNEL).canShowBadge() == badging)
         }
         app.host.prepareNotificationChannel()
+        val indicatorTotalField = NativeHost::class.java.getDeclaredField("unreadTotal").apply { isAccessible = true }
+        val indicatorPartialField = NativeHost::class.java.getDeclaredField("unreadPartial").apply { isAccessible = true }
+        var indicatorExpectedTotal = 0L; var indicatorExpectedPartial = true
+        var indicatorSavedTotal = 0L; var indicatorSavedPartial = true
+        fun eligible() = manager.activeNotifications.filter { it.notification.channelId == ACTIVITY_CHANNEL && activityBadgeTag(it.tag) }
+        var lastIndicatorProjection = 0L
+        fun projectIndicatorBadge(total: Long, partial: Boolean) {
+            // This direct-helper matrix bypasses the core's coalescing producer.
+            // Keep distinct test inputs below Android's notification update rate.
+            val spacing = 1000L - (android.os.SystemClock.elapsedRealtime() - lastIndicatorProjection)
+            if (spacing > 0) Thread.sleep(spacing)
+            lastIndicatorProjection = android.os.SystemClock.elapsedRealtime()
+            indicatorExpectedTotal = total; indicatorExpectedPartial = partial
+            runOnMainSync {
+                // Match the cached scalar projection used by the real UnreadSink.
+                indicatorTotalField.setLong(app.host, total)
+                indicatorPartialField.setBoolean(app.host, partial)
+                updateActivityBadges(app, total, partial)
+            }
+        }
         fun waitFor(label: String, predicate: () -> Boolean) {
             val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
             while (!predicate() && System.nanoTime() < end) Thread.sleep(25)
-            check(predicate()) { label }
+            check(predicate()) {
+                // Scalars and fixture numeric IDs only; never notification content or routes.
+                val diagnostic = JSONObject().put("expectedTotal", indicatorExpectedTotal)
+                    .put("expectedPartial", indicatorExpectedPartial)
+                runOnMainSync {
+                    diagnostic.put("hostTotal", indicatorTotalField.getLong(app.host))
+                        .put("hostPartial", indicatorPartialField.getBoolean(app.host))
+                }
+                val counts = org.json.JSONArray()
+                eligible().forEach { counts.put(JSONObject().put("id", it.id).put("number", it.notification.number)) }
+                diagnostic.put("eligibleCounts", counts)
+                "$label INDICATOR_FAILURE_JSON=$diagnostic"
+            }
         }
-        fun eligible() = manager.activeNotifications.filter { it.notification.channelId == ACTIVITY_CHANNEL && activityBadgeTag(it.tag) }
+        val field = MainActivity::class.java.getDeclaredField("web").apply { isAccessible = true }
+        var page: WebView? = null
+        waitFor("Native WebView not ready") { runOnMainSync { page = field.get(activity) as? WebView }; page != null }
+        val web = checkNotNull(page)
+        waitFor("Native WebView not loaded") { var ready = false; runOnMainSync { ready = web.url?.startsWith(app.host.state.origin) == true }; ready }
+        runOnMainSync {
+            indicatorSavedTotal = indicatorTotalField.getLong(app.host)
+            indicatorSavedPartial = indicatorPartialField.getBoolean(app.host)
+        }
         check(eligible().isEmpty()) { "Use the isolated fixture without pre-existing activity notifications." }
         val tags = listOf("1".repeat(32), "2".repeat(32)).map { WebPolicy.notificationTag("default", "msg=$it&dir=in")!! }
         val click = android.app.PendingIntent.getActivity(app, 71, Intent(app, MainActivity::class.java).setAction("fixture-indicator"), android.app.PendingIntent.FLAG_IMMUTABLE)
@@ -332,14 +395,14 @@ class UpdaterInstrumentation : Instrumentation() {
             .setContentIntent(click).setAutoCancel(true).setVisibility(android.app.Notification.VISIBILITY_PRIVATE)
             .setPublicVersion(redacted).build()
         try {
-            runOnMainSync { updateActivityBadges(app, 9, false) }
+            projectIndicatorBadge(9, false)
             check(eligible().isEmpty()) { "Badge-only notification appeared" }
             tags.forEachIndexed { index, tag -> manager.notify(tag, index + 71, note()) }
             manager.notify("unrelated-tag", 73, note())
             waitFor("Fixture notifications not active") { eligible().size == 2 && manager.activeNotifications.any { it.tag == "unrelated-tag" } }
             val before = eligible().associateBy { it.tag }
             val newestKey = before.values.sortedWith(compareByDescending<android.service.notification.StatusBarNotification> { it.notification.`when` }.thenBy { it.key }).first().key
-            runOnMainSync { updateActivityBadges(app, 7, false) }
+            projectIndicatorBadge(7, false)
             waitFor("Aggregate not assigned to exactly one active notification") { eligible().count { it.notification.number == 7 } == 1 && eligible().count { it.notification.number == 0 } == 1 }
             check(eligible().single { it.notification.number == 7 }.key == newestKey)
             for (entry in eligible()) {
@@ -353,22 +416,26 @@ class UpdaterInstrumentation : Instrumentation() {
                 if (now.number == 7) check(now.flags and android.app.Notification.FLAG_ONLY_ALERT_ONCE != 0)
             }
             check(manager.activeNotifications.single { it.tag == "unrelated-tag" }.notification.number == 0)
-            runOnMainSync { updateActivityBadges(app, 5, true) }
+            projectIndicatorBadge(5, true)
             waitFor("Partial positive estimate did not clear numeric badge") { eligible().all { it.notification.number == 0 } }
-            runOnMainSync { updateActivityBadges(app, 0, true) }
+            projectIndicatorBadge(0, true)
             check(eligible().all { it.notification.number == 0 })
-            runOnMainSync { updateActivityBadges(app, 5, false) }
+            projectIndicatorBadge(5, false)
             waitFor("Exact aggregate not restored") { eligible().count { it.notification.number == 5 } == 1 }
             val numbered = eligible().single { it.notification.number == 5 }
             manager.cancel(numbered.tag, numbered.id)
             waitFor("Exact dismissal missing") { eligible().size == 1 }
-            runOnMainSync { updateActivityBadges(app, 2, false) }
+            projectIndicatorBadge(2, false)
             waitFor("Remaining notification count missing") { eligible().single().notification.number == 2 }
-            runOnMainSync { updateActivityBadges(app, 0, true) }
+            projectIndicatorBadge(0, true)
             waitFor("Unknown numeric badge not cleared") { eligible().all { it.notification.number == 0 } }
         } finally {
             tags.forEachIndexed { index, tag -> manager.cancel(tag, index + 71) }
             manager.cancel("unrelated-tag", 73)
+            runOnMainSync {
+                indicatorTotalField.setLong(app.host, indicatorSavedTotal)
+                indicatorPartialField.setBoolean(app.host, indicatorSavedPartial)
+            }
         }
         waitFor("Fixture badge cleanup") { eligible().isEmpty() }
         runOnMainSync { updateActivityBadges(app, 12, false) }
@@ -400,11 +467,6 @@ class UpdaterInstrumentation : Instrumentation() {
         }
         waitFor("Fresh activity cleanup") { eligible().isEmpty() }
 
-        val field = MainActivity::class.java.getDeclaredField("web").apply { isAccessible = true }
-        var page: WebView? = null
-        waitFor("Native WebView not ready") { runOnMainSync { page = field.get(activity) as? WebView }; page != null }
-        val web = checkNotNull(page)
-        waitFor("Native WebView not loaded") { var ready = false; runOnMainSync { ready = web.url?.startsWith(app.host.state.origin) == true }; ready }
         javascript(web, "window.__fullscreenBackCalls=0;window.agentnetNativeBack=()=>{window.__fullscreenBackCalls++;return false}")
         var chrome: android.webkit.WebChromeClient? = null
         runOnMainSync { chrome = web.webChromeClient }
@@ -493,6 +555,7 @@ class UpdaterInstrumentation : Instrumentation() {
         val input = JSONObject(inputFile.readText())
         check(input.has("overview") && input.has("view")) { "Invalid synthetic latency input." }
         val field = MainActivity::class.java.getDeclaredField("web").apply { isAccessible = true }
+        phase("latency-webview-before")
         val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
         var page: WebView? = null
         while (page == null && System.nanoTime() < end) {
@@ -500,13 +563,36 @@ class UpdaterInstrumentation : Instrumentation() {
             if (page == null) Thread.sleep(100)
         }
         val web = checkNotNull(page) { "The native WebView did not open." }
+        fun failureState(): JSONObject {
+            val state = JSONObject()
+            try {
+                state.put("page", JSONObject(javascript(web, """
+                    ({focused:document.hasFocus(),visibility:document.visibilityState,
+                      nativeVisible:window.__agentnetAndroid?.visible?.()??null,
+                      active:String(window.latencyProgress?.active||'').slice(0,160)})
+                """.trimIndent())))
+                phase("latency-native-focus-before")
+                runOnMainSync {
+                    state.put("activityWindowFocus", activity.hasWindowFocus())
+                        .put("webViewFocus", web.hasFocus())
+                }
+                phase("latency-native-focus-after")
+            } catch (e: Exception) {
+                state.put("diagnosticUnavailable", e.javaClass.simpleName)
+            }
+            return state
+        }
+        phase("latency-webview-after")
+        phase("latency-ready-before")
         var ready = false
         while (!ready && System.nanoTime() < end) {
             ready = javascript(web, "Boolean(window.__agentnetAndroid && document.readyState === 'complete')") == "true"
             if (!ready) Thread.sleep(100)
         }
         check(ready) { "The current authenticated local Go-host assets did not load." }
+        phase("latency-ready-after")
         try {
+            phase("latency-setup-before")
             check(javascript(web, """
                 (() => {
                   if (document.getElementById('fixture')) throw Error('Latency fixture already exists');
@@ -522,6 +608,8 @@ class UpdaterInstrumentation : Instrumentation() {
                   return true;
                 })()
             """.trimIndent()) == "true") { "The latency fixture setup did not start." }
+            phase("latency-setup-after")
+            phase("latency-launch-before")
             // evaluateJavascript is the existing test-only injection seam.
             // An inline module element would be refused by the product CSP.
             check(javascript(web, """
@@ -532,6 +620,8 @@ class UpdaterInstrumentation : Instrumentation() {
                 })().catch(e=>{window.latencyReport={ok:false,error:'launch: '+String(e&&e.stack||e)}});
                 true;
             """.trimIndent()) == "true") { "The latency fixture did not start (parse error)." }
+            phase("latency-launch-after")
+            phase("latency-report-before")
             val runEnd = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
             var report: JSONObject? = null
             while (report == null && System.nanoTime() < runEnd) {
@@ -539,14 +629,18 @@ class UpdaterInstrumentation : Instrumentation() {
                 if (raw != "null") report = JSONObject(raw)
                 if (report == null) Thread.sleep(100)
             }
+            if (report == null) result.putString("stream", "LATENCY_STATE_JSON=${failureState()}\n")
             val measured = checkNotNull(report) { "Native Android responsiveness fixture exceeded its existing 30-second bound." }
+            if (!measured.optBoolean("ok")) measured.put("androidFailureState", failureState())
             measured.put("nativeOS", "Android").put("engine", "MainActivity WebView")
                 .put("engineVersion", WebView.getCurrentWebViewPackage()?.versionName ?: "unknown")
                 .put("sdk", android.os.Build.VERSION.SDK_INT).put("device", android.os.Build.MODEL)
             check(measured.toString().toByteArray().size <= 1048576) { "Latency result exceeds its bound." }
             result.putString("stream", "LATENCY_JSON=${measured}\n")
+            phase("latency-report-after")
             check(measured.optBoolean("ok")) { measured.optString("error", "Native Android latency fixture failed") }
         } finally {
+            phase("latency-finally-before")
             javascript(web, """
                 (() => {
                   window.__agentnetLatencyDispose?.();
@@ -557,18 +651,24 @@ class UpdaterInstrumentation : Instrumentation() {
                 })()
             """.trimIndent())
             scriptFile.delete(); inputFile.delete()
+            phase("latency-finally-after")
         }
     }
 
     private fun javascript(page: WebView, script: String): String {
         val complete = CountDownLatch(1)
         var value = "null"
+        phase("javascript-main-before")
         runOnMainSync { page.evaluateJavascript(script) { value = it; complete.countDown() } }
+        phase("javascript-main-after")
+        phase("javascript-result-before")
         check(complete.await(5, TimeUnit.SECONDS)) { "The owned WebView did not respond." }
+        phase("javascript-result-after")
         return value
     }
     private fun snapshot(activity: MainActivity): String {
         val field = MainActivity::class.java.getDeclaredField("web").apply { isAccessible = true }
+        phase("snapshot-webview-before")
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
         var page: WebView? = null
         while (page == null && System.nanoTime() < deadline) {
@@ -576,12 +676,16 @@ class UpdaterInstrumentation : Instrumentation() {
             if (page == null) Thread.sleep(100)
         }
         val view = checkNotNull(page) { "The native host did not open." }
+        phase("snapshot-webview-after")
+        phase("snapshot-ready-before")
         var ready = false
         while (!ready && System.nanoTime() < deadline) {
             ready = javascript(view, "Boolean(window.__agentnetAndroid && document.readyState === 'complete')") == "true"
             if (!ready) Thread.sleep(100)
         }
         check(ready) { "The authenticated local page did not become ready." }
+        phase("snapshot-ready-after")
+        phase("snapshot-launch-before")
         javascript(view, """
             (function() {
               window.__agentnetUpdaterSnapshot = null;
@@ -600,6 +704,8 @@ class UpdaterInstrumentation : Instrumentation() {
               return true;
             })()
         """.trimIndent())
+        phase("snapshot-launch-after")
+        phase("snapshot-report-before")
         while (System.nanoTime() < deadline) {
             val encoded = javascript(view, "JSON.stringify(window.__agentnetUpdaterSnapshot)")
             if (encoded != "null" && encoded != "\"null\"") {
@@ -608,6 +714,7 @@ class UpdaterInstrumentation : Instrumentation() {
                 check(!value.has("error")) { value.optString("error") }
                 val messageCount = value.getJSONObject("preserved").getJSONArray("messages").length()
                 check(messageCount == 200) { "The owned 200-message fixture changed: actual=$messageCount." }
+                phase("snapshot-report-after")
                 return decoded
             }
             Thread.sleep(100)

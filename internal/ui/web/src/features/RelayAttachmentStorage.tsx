@@ -104,6 +104,7 @@ export function RelayAttachmentStorage({ host, isActive = active }: { host: Host
             className="inline-flex min-h-11 items-center rounded-full stroke bg-surface px-4 font-semibold underline hover:bg-sunken focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink">Continue to Google</a>
           <Button size="sm" variant="ghost" disabled={locked || !canUseStorageAction(status, "connect")} onClick={() => void run("connect")}>Start again</Button>
         </div>}
+        {error && <p role="alert" className="text-[15px] text-danger">{error}</p>}
         {status.can_admin && <div className="flex flex-wrap gap-2">
           {(!status.connected || status.state === "needs_reconnect") && <Button disabled={locked || !!consent || !canUseStorageAction(status, "connect")} onClick={() => void run("connect")}>{busy === "connect" ? "Starting connection…" : status.state === "needs_reconnect" ? "Reconnect Google Drive" : "Connect Google Drive"}</Button>}
           {status.connected && <>
@@ -117,7 +118,7 @@ export function RelayAttachmentStorage({ host, isActive = active }: { host: Host
             ? `Disconnect is unavailable: ${storageFiles(status.remote_only_files)} ${status.remote_only_files === 1 ? "has its" : "have their"} only relay copy in Drive. Keep the account connected so ${status.remote_only_files === 1 ? "it stays" : "they stay"} accessible.`
             : `Disconnect is unavailable: ${storageFiles(status.remote.files)} retained in Drive still need this account for access or cleanup, even when local copies exist.`}</p>}
       </> : loading ? <p role="status" className="text-text-2">Reading attachment storage…</p> : null}
-      {error && <p role="alert" className="text-[15px] text-danger">{error}</p>}
+      {!status && error && <p role="alert" className="text-[15px] text-danger">{error}</p>}
       <Button size="sm" variant="ghost" disabled={locked} onClick={() => void refresh()}>{loading ? "Refreshing…" : "Refresh storage status"}</Button>
       <Sheet open={confirm !== null} onOpenChange={open => { if (!open) setConfirm(null); }}
         title={confirm === "disconnect" ? "Disconnect this relay’s Drive?" : "Move existing relay attachments?"}

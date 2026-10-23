@@ -8,7 +8,11 @@ const {isWindowsMediaCandidate,classifyWindowsMedia,runMediaProbe}=require('./la
   const executablePath=process.env.AGENTNET_CHROMIUM||(!process.env.AGENTNET_LATENCY_CHANNEL&&process.platform==='linux'&&fs.existsSync('/usr/bin/chromium')?'/usr/bin/chromium':undefined);
   const browser=await engines[name].launch(name==='chromium'?{executablePath,channel:process.env.AGENTNET_LATENCY_CHANNEL,headless:true,args:['--no-sandbox']}:{headless:true});
   let mediaProbe; // One independent control pair per failing engine, reused across widths.
-  try{for(const suite of (process.env.AGENTNET_LATENCY_SUITES||'history,navigation,settings,unread,actions').split(',')){for(const size of (process.env.AGENTNET_LATENCY_VIEWPORTS||'1440x960').split(',')){
+  try{for(const suite of (process.env.AGENTNET_LATENCY_SUITES||'history,navigation,settings,unread,actions').split(',')){
+   const sizes=(process.env.AGENTNET_LATENCY_VIEWPORTS||'1440x960').split(',');
+   if(['topics','compose','storage'].includes(suite))sizes.push('320x592');
+   if(['topics','compose'].includes(suite))sizes.push('360x640');
+   for(const size of new Set(sizes)){
    for(const teamsPart of suite==='teams'?['list','group']:['']){
    const [width,height]=size.split('x').map(Number);if(!(width>0&&height>0))throw Error('Invalid fixture viewport');
    const touch=process.env.AGENTNET_LATENCY_TOUCH==='1';

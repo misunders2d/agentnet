@@ -250,9 +250,9 @@ mixed-version v0.9.2/current passed86.024s. None of the opt-in skips are counted
 
 | Remaining gate | Current result | Required completion |
 | --- | --- | --- |
-| Android exact notification cancellation | Causal async OS cancellation and repeated badge refresh identified; native correction and regression in progress | Actual signed-upgrade/emulator notification checks and all17 workloads, preserving physical Pixel as separate unverified field check |
-| Windows extra WebKit media port | Original blob metadata error4 retained; actual Windows WebView2 and tested Chromium/Firefox media passed | Same-byte independent blob/HTTP discriminator; explicitly separate unsupported unexecuted test-port cells from playback passes |
-| Matching gallery | Final6 focused real navigation/provider/touch checks pass; all20 current previews inspected; full gate running | Exact candidate pin, full matching collection acceptance and published gallery verification |
+| Android exact notification cancellation | On0370, run39901217115 passes signed upgrade, native notification read/dismiss/new-arrival regression and history/navigation/actions/groups. Indicators fails restoring exact5; settings/unread/topics/compose fail assertions; media exceeds30s; Review then hangs until reviewed35min cap and cancellation. Remaining modes unexecuted | Batch the collected failures, bound and diagnose native invocations, then complete affected actual emulator checks. Physical Pixel stays separately unverified |
+| Windows extra WebKit media port | On0370, actual WebView2 and Chromium/Firefox media pass. Independent same-byte Blob and HTTP controls both fail to complete on the extra hosted Windows WebKit port; exact source/transport/cleanup checks pass | Two precisely guarded extra-port cells are not-executed, retaining original failures and partial actions. This is neither playback proof nor a proven Blob-only cause |
+| Matching gallery | Gallery3a92986 pins0370. All305 Node cases and all applicable runtime/provider/overlay gates are accounted for with retained unchanged passes and exact affected Zoom reruns. All20 previews inspected; five packages unchanged from reviewed CBAD bytes | Public matching-gallery publication and independent public verification remain pending; no claim that the original failed full invocation exited0 |
 | Public release and existing relay | Prepared, no v0.9.3 public release or live change yet | Draft/public artifact checks, matching gallery, full stopped backup and old/new restore, preserved-data rollout and post-check |
 
 The Android native and diagnostic-only changes leave the frozen Go/UI/gallery
@@ -261,3 +261,34 @@ repeat affected checks when their code or a demonstrated failure changes. Final
 source and release IDs belong in V0_9_3_RELEASE.md. Known timing observations
 above200ms and the unavailable physical Pixel remain honest open acceptance,
 not a silently waived or simulated pass.
+
+
+### Integrated Android corrective child — October23
+
+The capped0370 attempt remains failed. Its signed upgrade/native notification
+checks and four successful timing families are retained without counting the
+unexecuted modes. The corrective batch keeps the original native30s/5s guards,
+bounds each host invocation, retains failed reports and adds safe phase/focus/
+stack diagnostics. Direct synthetic badge inputs now update the cached host
+scalar, wait for the existing WebView-ready condition and respect Android's
+notification update rate. Denied-notification evidence precedes decoder work;
+media runs last. Neither the native hang nor the old indicator failure is
+attributed without the next native evidence.
+
+Three minimal GUI changes are independently accepted by Claude: a compact
+New-topic caption below389px, visible storage failure feedback before its action
+buttons, and an existing scheduling refusal displayed on the disabled menu item
+instead of navigating silently to Outbox. The full-file schedule coverage stays
+on supporting hosts; Android separately proves selected-file refusal with zero
+writes and exact draft retention, then text-only same-ID uncertain-save recovery.
+The corrected fixture preserves every original supported-host file assertion.
+
+Seven affected model/rendered parents pass, retaining six original passes and
+rerunning only the screenshot-directory configuration failure. Final canonical
+Chromium Android-contract checks pass all15 reports across settings/topics/
+compose/storage/permissions at320x592,360x640 and390x844,44.596s. A genuine360px
+RED was retained before extending the caption breakpoint. These are synthetic
+host-contract checks; routine timings above200ms remain visible and are not a
+native or smoothness pass. Strict canonical TypeScript/build, package checksums,
+JavaScript/Bash syntax, diff checks and go vet pass. Actual affected native and
+Android qualification follows once this integrated child is committed.

@@ -82,6 +82,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
       - name: retained-data upgrade and Android notification boundaries
+        timeout-minutes: 75
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35

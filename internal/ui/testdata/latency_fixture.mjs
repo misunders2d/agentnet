@@ -413,7 +413,7 @@ try {
   const b=button(new RegExp('^'+name));assert(b,'Missing settings row '+name);
   await measure('settings.open.'+name.toLowerCase().replaceAll(' ','-'),()=>b.click(),()=>visibleText(title),title+' heading visible');
   if(name==='Notifications'){
-   for(const name of ['Share when I’m typing','Show when people are typing']){const toggle=scope().querySelector('[role="switch"][aria-label="'+name+'"]');if(toggle){await until(()=>!toggle.disabled,'typing setting loaded');const before=toggle.getAttribute('aria-checked');await measure('settings.typing.'+name,()=>toggle.click(),()=>toggle.getAttribute('aria-checked')!==before,'switch checked value changes',()=>visibleText('Saved on this device.'));}}
+   for(const name of ['Share when I’m typing','Show when people are typing']){const toggle=scope().querySelector('[role="switch"][aria-label="'+name+'"]');if(toggle){await until(()=>!toggle.disabled,'typing setting loaded');const before=toggle.getAttribute('aria-checked');toggle.scrollIntoView({block:'center'});await frame();await measure('settings.typing.'+name,()=>toggle.click(),()=>toggle.getAttribute('aria-checked')!==before,'switch checked value changes',()=>visibleText('Saved on this device.'));}}
   }
   if(name==='Appearance'){
    for(const choice of ['dark','light','system']){const radio=scope().querySelector('[role="radio"][value="'+choice+'"],input[type="radio"][value="'+choice+'"]');if(radio)await measure('appearance.'+choice,()=>radio.click(),()=>radio.getAttribute('aria-checked')==='true'||radio.checked,'selected '+choice+' radio is checked');}
@@ -525,21 +525,36 @@ try {
    const body='Portable uncertain same-ID schedule';await fill('compose.portable-schedule-draft',text(),body);
    const file=new File(['portable same file bytes'],'portable-proof.txt',{type:'text/plain'}),fileDigest=await fileHash(file);
    await measure('compose.portable-file',()=>{const el=root.querySelector('input[type=file]'),transfer=new DataTransfer();transfer.items.add(file);Object.defineProperty(el,'files',{configurable:true,value:transfer.files});el.dispatchEvent(new Event('change',{bubbles:true}));},()=>!!root.querySelector('[aria-label="Remove portable-proof.txt"]'),'real invented File retained in normal composer');
+   const mobile=host.platform==='android',scheduleWrites=()=>reports.apiCalls.filter(c=>c.method==='write'&&c.path.startsWith('/api/schedule/')),ordinarySends=()=>reports.apiCalls.filter(c=>c.method==='write'&&['/api/send','/api/dm/send'].includes(c.path));
+   if(mobile){
+    const reason='File scheduling is unavailable in this mobile interface. Remove the files to schedule text.';
+    await retire();await tap('compose.portable-file-schedule-denial',more(),()=>{const item=control(/^Schedule…/),note=item&&[...item.querySelectorAll('span')].find(s=>s.textContent===reason);return onScreen(item)&&item.getAttribute('aria-disabled')==='true'&&onScreen(note);},'selected-file scheduling reason visible and menu action disabled');
+    const denied=control(/^Schedule…/);denied.click();await frame();await frame();
+    assert(!sheet('Schedule message')&&!active('section[aria-label="Outbox"]')&&scheduleWrites().length===0&&ordinarySends().length===0&&staged.length===0&&portable.scheduleCreates.length===0,'disabled mobile file schedule must not dispatch, stage, navigate or create a save');
+    assert(retainedField().value===body&&!!root.querySelector('[aria-label="Remove portable-proof.txt"]')&&!!control('Cancel reply')&&!!root.querySelector('[data-topic="'+ '1'.repeat(32)+'"][aria-current="true"]'),'mobile denial retains exact topic, reply, draft and selected file');
+    assert(await fileHash(file)===fileDigest,'denied original selected File bytes changed');
+    reports.portableMobileFileScheduleDenial={reason,disabled:true,fileDigest,selectedFile:file.name,draftFileReplyTopicRetained:true,scheduleWrites:0,ordinarySends:0,stages:0,fileSchedulingExecuted:false};
+    await tap('compose.portable-file-denial-close',more(),()=>!control(/^Schedule…/),'disabled file scheduling menu closes normally');await retire();
+    await tap('compose.portable-file-remove-for-text',control('Remove portable-proof.txt'),()=>!root.querySelector('[aria-label="Remove portable-proof.txt"]')&&retainedField().value===body&&!!control('Cancel reply'),'only the selected file is explicitly removed; captured text/reply retained');
+   }
+   const expectedFileRetained=()=>!!root.querySelector('[aria-label="Remove portable-proof.txt"]')===!mobile;
    await plus('compose.portable-schedule-menu');await tap('compose.portable-schedule-open',control(/^Schedule…/),()=>!!sheet('Schedule message'),'schedule review for captured draft visible');await retire();
    const d=()=>sheet('Schedule message'),sendDate=d().querySelector('input[aria-label="Send date"]'),sendTime=d().querySelector('input[aria-label="Send time"]'),date=(new Date().getFullYear()+1)+'-04-03';
    await fill('compose.portable-send-date',sendDate,date,()=>sendDate.value===date,'exposed date value selected without OS picker');await fill('compose.portable-send-time',sendTime,'10:30',()=>sendTime.value==='10:30','exposed time value selected without OS picker');
    await until(()=>control('Save schedule',d())&&!control('Save schedule',d()).disabled,'captured audience ready');
    let save=control('Save schedule',d());await tap('compose.portable-save-unknown',save,()=>onScreen(d()?.querySelector('[aria-label="Unconfirmed schedule save"]')),'captured original save state visible',()=>!!control('Retry same save',d())&&d().textContent.includes('Save not confirmed'));
-   assert(portable.scheduleCreates.length===1&&retainedField().value===body&&!!root.querySelector('[aria-label="Remove portable-proof.txt"]'),'unknown result retains draft/file');assert(!visibleText('Scheduled for'),'lost response does not claim confirmation');
-   const first=portable.scheduleCreates[0],saved=schedules.find(s=>s.id===first.id);assert(saved&&saved.rev===1,'invented provider stored exactly one pending schedule before lost response');assert(first.reply_to===source.id&&first.quote===source.id,'captured exact reply');assert(first.files.length===1&&first.files[0].sha256===fileDigest,'actual staged file bytes captured');
+   assert(portable.scheduleCreates.length===1&&retainedField().value===body&&expectedFileRetained()&&!!root.querySelector('[aria-label="Cancel reply"]'),'unknown result retains captured draft/reply and expected files');assert(!visibleText('Scheduled for'),'lost response does not claim confirmation');
+   const first=portable.scheduleCreates[0],saved=schedules.find(s=>s.id===first.id);assert(saved&&saved.rev===1,'invented provider stored exactly one pending schedule before lost response');assert(first.reply_to===source.id&&first.quote===source.id&&first.body===body,'captured exact reply and text');
+   if(mobile)assert(first.files.length===0&&staged.length===0,'mobile text schedule captures no removed file or staged bytes');else assert(first.files.length===1&&first.files[0].sha256===fileDigest,'actual staged file bytes captured');
    await tap('compose.portable-check-saved',control('Check saved state',d()),()=>d().textContent.includes('Saved state found; confirm with same-ID save'),'lookup result visible while save remains unconfirmed',()=>d().textContent.includes('Saved state found; confirm with same-ID save'));
-   assert(retainedField().value===body&&!!root.querySelector('[aria-label="Remove portable-proof.txt"]')&&!!control('Retry same save',d()),'lookup does not clear or confirm draft');
+   assert(retainedField().value===body&&expectedFileRetained()&&!!root.querySelector('[aria-label="Cancel reply"]')&&!!control('Retry same save',d()),'lookup does not clear or confirm captured draft/reply/files');
    const retry=control('Retry same save',d());await tap('compose.portable-retry-same-id',retry,()=>retry.disabled,'same save retry in flight',()=>!d()&&visibleText('Scheduled for')&&onScreen(retainedField()));
    assert(portable.scheduleCreates.length===2&&JSON.stringify(portable.scheduleCreates[0])===JSON.stringify(portable.scheduleCreates[1]),'same-ID retry preserves full normalized immutable payload');
-   assert(schedules.filter(s=>s.id===first.id).length===1&&saved.rev===1,'retry is idempotent, not a second new schedule');assert(staged.length===2&&staged.every(f=>f.sha256===fileDigest),'retry restages identical File bytes');
+   assert(schedules.filter(s=>s.id===first.id).length===1&&saved.rev===1,'retry is idempotent, not a second new schedule');
+   if(mobile)assert(staged.length===0&&portable.scheduleCreates.every(s=>s.files.length===0),'mobile text retry never stages or resends the removed file');else assert(staged.length===2&&staged.every(f=>f.sha256===fileDigest),'retry restages identical File bytes');
    assert(text().value===''&&!!root.querySelector('[data-topic="'+ '1'.repeat(32)+'"][aria-current="true"]')&&!root.querySelector('[aria-label="Remove portable-proof.txt"]')&&!control('Cancel reply'),'only confirmed save clears unchanged captured draft/file/reply');
    const writes=reports.apiCalls.filter(c=>c.method==='write'&&c.path.startsWith('/api/schedule/'));assert(!reports.apiCalls.some(c=>c.method==='write'&&['/api/send','/api/dm/send'].includes(c.path)),'schedule path never uses ordinary Send');
-   reports.portableSchedule={creates:clone(portable.scheduleCreates),rawWrites:writes.map(c=>({path:c.path,request:c.request,ok:c.ok,error:c.error})),fileDigest,storedIDs:schedules.filter(s=>s.id===first.id).map(s=>({id:s.id,rev:s.rev,state:s.state})),lookupIsNotConfirmation:true,nativePickerExecuted:false};
+   reports.portableSchedule={mode:mobile?'android_text_retry':'full_file_retry',creates:clone(portable.scheduleCreates),rawWrites:writes.map(c=>({path:c.path,request:c.request,ok:c.ok,error:c.error})),fileDigest:mobile?null:fileDigest,storedIDs:schedules.filter(s=>s.id===first.id).map(s=>({id:s.id,rev:s.rev,state:s.state})),lookupIsNotConfirmation:true,nativePickerExecuted:false,fileSchedulingExecuted:!mobile};
   }
 
   if(suite==='outbox'&&p1==='reminder'){
@@ -713,6 +728,7 @@ try {
    await settings('Permissions');
    if(host.platform!=='daemon'){
     const before=clone(grants),grantWrites=()=>reports.apiCalls.filter(c=>c.method==='write'&&(c.path==='/api/approve'||c.path==='/api/act'&&['approve','unapprove','grant_tasks','revoke_tasks'].includes(c.request?.do))).length,writes=grantWrites();
+    const ownership=[...scope().querySelectorAll('p')].find(p=>p.textContent==='This browser runs nothing. Permissions belong to the computer that runs your agent.');assert(ownership,'exact permission ownership explanation exists');ownership.scrollIntoView({block:'center'});await frame();
     assert(visibleText('This browser runs nothing. Permissions belong to the computer that runs your agent.'),'browser permission ownership explanation must be visible');
     assert(!control(/^Turn (on|off) (automatic answers|tasks without asking)/)&&!control('Stop automatic answers')&&!control('Allow future tasks'),'browser must not offer local execution grants');
     assert(JSON.stringify(grants)===JSON.stringify(before)&&grantWrites()===writes,'browser permission presentation mutated native grants');

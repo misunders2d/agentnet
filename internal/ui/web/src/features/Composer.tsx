@@ -679,7 +679,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   const actions: MenuAction[] = [
     ...(dm && !humanGuest && !visitor ? [{ label: "Bring someone in", sub: "They see only what you share", icon: menuIcons.invite, tone: "bg-guest-bg text-guest-ink", run: () => store.openInvite(dm.id) }] : []),
     { label: "Photo or file", sub: filesAllowed && lim ? "Up to " + lim.max_count + " at once, " + bytes(lim.max_file) + " each" : target.kind === "answer" ? "Files can’t go with an answer" : "Files can’t be sent here", icon: menuIcons.file, tone: "bg-agent text-agent-ink", disabled: !filesAllowed, run: () => picker.current?.click() },
-    { label: "Schedule…", disabled:!overview?.schedules || !dm, icon:menuIcons.clock, tone:"bg-agent text-agent-ink", run:()=>showSchedule(!scheduleWhy && (text.trim() || files.length) ? "create" : "list") },
+    { label: "Schedule…", sub:scheduleWhy || undefined, disabled:!!scheduleWhy, icon:menuIcons.clock, tone:"bg-agent text-agent-ink", run:()=>showSchedule(text.trim() || files.length ? "create" : "list") },
     { label: "Emoji", icon: menuIcons.emoji, tone: "bg-act text-act-ink", run: () => { emojiAfterMenu.current = true; setEmojiOpen(true); } }, // opens as the menu leaves: no gap between them
   ];
 
