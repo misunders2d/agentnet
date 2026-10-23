@@ -411,6 +411,35 @@ func TestAttentionOwnDeviceChatCopyIsNotUnread(t *testing.T) {
 		defer exec(`UPDATE inbox SET state='' WHERE id=?`, own)
 		check(t, true, true, 1)
 	})
+	// A removed device: no current device row, while the person's signed
+	// chain still holds its exact key (the laptop's row, October 23).
+	t.Run("removed own device", func(t *testing.T) {
+		var person, key string
+		var added int64
+		if err := w.alice.store.db.QueryRow(`SELECT person, fingerprint, added FROM person_devices WHERE address=?`, phone.Address).Scan(&person, &key, &added); err != nil {
+			t.Fatal(err)
+		}
+		exec(`DELETE FROM person_devices WHERE address=?`, phone.Address)
+		defer exec(`INSERT INTO person_devices(address, person, fingerprint, added) VALUES(?, ?, ?, ?)`, phone.Address, person, key, added)
+		shown, err := w.alice.ConversationMessages(conv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if shown[1].Dir != "out" || shown[1].Unread {
+			t.Fatalf("chat projection of the removed device's turn: %s, unread %v", shown[1].Dir, shown[1].Unread)
+		}
+		check(t, true, false, 1)
+		t.Run("changed key", func(t *testing.T) {
+			exec(`UPDATE inbox SET verified_by=? WHERE id=? AND verified_by=?`, w.bob.Self().Fingerprint(), own, key)
+			defer exec(`UPDATE inbox SET verified_by=? WHERE id=?`, key, own)
+			check(t, true, true, 2)
+		})
+		t.Run("unverified claim", func(t *testing.T) {
+			exec(`UPDATE inbox SET claimed_fp=verified_by, verified_by=NULL WHERE id=?`, own)
+			defer exec(`UPDATE inbox SET verified_by=claimed_fp, claimed_fp=NULL WHERE id=?`, own)
+			check(t, true, true, 2)
+		})
+	})
 	// The peer turn as history another device of this person imported here.
 	history := func() func() {
 		exec(`UPDATE inbox SET replica=1, via=? WHERE id=? AND replica=0 AND via IS NULL`, phone.Address, peer)

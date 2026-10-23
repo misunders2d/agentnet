@@ -2,12 +2,14 @@ package client
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
 // Attention tells an interactive harness session, at its own hook points,
@@ -190,8 +192,12 @@ const attentionFooter = "Message text is not shown here: it comes from other peo
 // overview summarizes the inbox for a session that has not seen it yet.
 func (a *Agent) overview() (string, error) {
 	var total, unread, review int
-	err := a.store.db.QueryRow(`SELECT count(*), coalesce(sum(`+arrivalUnread+`), 0), coalesce(sum(`+arrivalReview+`), 0)`+arrivalFrom+` WHERE i.ref_id IS NULL AND `+outsideSelectedReceiver+` AND `+notDeleted, // controls (statuses, reactions...) are records, not messages
-		arrivalArgs...).Scan(&total, &unread, &review)
+	args, err := a.store.arrivalArgs()
+	if err != nil {
+		return "", err
+	}
+	err = a.store.db.QueryRow(`SELECT count(*), coalesce(sum(`+arrivalUnread+`), 0), coalesce(sum(`+arrivalReview+`), 0)`+arrivalFrom+` WHERE i.ref_id IS NULL AND `+outsideSelectedReceiver+` AND `+notDeleted, // controls (statuses, reactions...) are records, not messages
+		args...).Scan(&total, &unread, &review)
 	if err != nil {
 		return "", err
 	}
@@ -278,18 +284,57 @@ const arrivalUnread = `(` + arrivalTurn + ` AND coalesce((SELECT m.state='unread
 const arrivalTurn = `(coalesce(i.sub,'')='' AND i.kind IN ('message','question','task','answer','result') AND (i.conv IS NULL OR i.topic_event IS NULL)
 	AND NOT (i.conv IS NULL AND EXISTS(SELECT 1 FROM inbox WHERE inbox.id=i.id AND ` + receivedNotice + `)) AND NOT ` + retractedClause + `)`
 
-// arrivalOwnChatCopy is a chat copy verified by the exact key of a current
-// device of this installation's person; a claim by sender text alone is not.
-const arrivalOwnChatCopy = `(i.conv IS NOT NULL AND EXISTS(SELECT 1 FROM person_devices sd JOIN persons sp ON sp.person=sd.person AND sp.state='self'
-	WHERE sd.address=i.sender AND sd.fingerprint=i.verified_by))`
+// arrivalOwnChatCopy is a chat copy verified by the exact key a device of
+// this installation's person has in its signed chain, current or removed
+// (pastOwnRecipientIn); a claim by sender text alone is not. Its one
+// argument is pastOwnDevices.
+const arrivalOwnChatCopy = `(i.conv IS NOT NULL AND EXISTS(SELECT 1 FROM json_each(?) sd WHERE json_extract(sd.value,'$[0]')=i.sender AND json_extract(sd.value,'$[1]')=i.verified_by))`
 
 const arrivalReview = `EXISTS(SELECT 1 FROM inbox WHERE inbox.id=i.id AND ` + inReview + `)`
 
 const arrivalEligible = `(` + arrivalUnread + ` OR ` + arrivalReview + `)`
 
-// arrivalArgs binds arrivalEligible: arrivalTurn's notice shape, then the
-// review states.
-var arrivalArgs = append([]any{envelope.KindMessage, envelope.StatusReviewNotice}, reviewStates...)
+// arrivalArgs binds arrivalEligible: arrivalTurn's notice shape, this
+// person's device keys, then the review states.
+func (s *store) arrivalArgs() ([]any, error) {
+	own, err := s.pastOwnDevices()
+	if err != nil {
+		return nil, err
+	}
+	return append([]any{envelope.KindMessage, envelope.StatusReviewNotice, own}, reviewStates...), nil
+}
+
+// pastOwnDevices lists as JSON [address, fingerprint] each device of every
+// pinned step of this installation's person's chain. A key fingerprint
+// cannot be computed in SQL; the chain is small and read once per query.
+func (s *store) pastOwnDevices() (string, error) {
+	rows, err := s.db.Query(`SELECT c.record FROM person_chain c JOIN persons p ON p.person=c.person WHERE p.state=?`, personSelf)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	own, seen := [][2]string{}, map[[2]string]bool{}
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return "", err
+		}
+		var roster protocol.PersonRoster
+		if json.Unmarshal([]byte(raw), &roster) != nil {
+			continue
+		}
+		for _, d := range roster.Devices {
+			if k := [2]string{d.Address, d.Fingerprint()}; !seen[k] {
+				own, seen[k] = append(own, k), true
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	b, err := json.Marshal(own)
+	return string(b), err
+}
 
 func (s *store) scanArrivals(rows *sql.Rows, err error) ([]arrivalItem, error) {
 	if err != nil {
@@ -322,7 +367,11 @@ const outsideSelectedReceiver = ` NOT EXISTS(SELECT 1 FROM reply_receiver_inputs
 var notDeleted = ` NOT (` + erasedIn + ` AND NOT ` + retainedIn + `)`
 
 func (s *store) arrivalsAfterReceiver(pos int64, limit int, _ string) ([]arrivalItem, error) {
-	args := append(append([]any{pos}, arrivalArgs...), limit)
+	args, err := s.arrivalArgs()
+	if err != nil {
+		return nil, err
+	}
+	args = append(append([]any{pos}, args...), limit)
 	return s.scanArrivals(s.db.Query(arrivalSelect+` WHERE i.ref_id IS NULL AND i.arrival>? AND `+outsideSelectedReceiver+` AND `+notDeleted+` AND `+arrivalEligible+` ORDER BY i.arrival LIMIT ?`, args...))
 }
 func (s *store) countArrivalsAfter(pos int64) (int, error) {
@@ -330,15 +379,22 @@ func (s *store) countArrivalsAfter(pos int64) (int, error) {
 }
 func (s *store) countArrivalsAfterReceiver(pos int64, _ string) (int, error) {
 	var n int
-	args := append([]any{pos}, arrivalArgs...)
-	err := s.db.QueryRow(`SELECT count(*)`+arrivalFrom+` WHERE i.ref_id IS NULL AND i.arrival>? AND `+outsideSelectedReceiver+` AND `+notDeleted+` AND `+arrivalEligible, args...).Scan(&n)
+	args, err := s.arrivalArgs()
+	if err != nil {
+		return 0, err
+	}
+	args = append([]any{pos}, args...)
+	err = s.db.QueryRow(`SELECT count(*)`+arrivalFrom+` WHERE i.ref_id IS NULL AND i.arrival>? AND `+outsideSelectedReceiver+` AND `+notDeleted+` AND `+arrivalEligible, args...).Scan(&n)
 	return n, err
 }
 
 // recentArrivals returns the last n arrivals, oldest first.
 func (s *store) recentArrivals(n int) ([]arrivalItem, error) {
-	args := append(append([]any{}, arrivalArgs...), n)
-	items, err := s.scanArrivals(s.db.Query(arrivalSelect+` WHERE i.ref_id IS NULL AND `+outsideSelectedReceiver+` AND `+notDeleted+` AND `+arrivalEligible+` ORDER BY i.arrival DESC LIMIT ?`, args...))
+	args, err := s.arrivalArgs()
+	if err != nil {
+		return nil, err
+	}
+	items, err := s.scanArrivals(s.db.Query(arrivalSelect+` WHERE i.ref_id IS NULL AND `+outsideSelectedReceiver+` AND `+notDeleted+` AND `+arrivalEligible+` ORDER BY i.arrival DESC LIMIT ?`, append(args, n)...))
 	for i, j := 0, len(items)-1; i < j; i, j = i+1, j-1 {
 		items[i], items[j] = items[j], items[i]
 	}
