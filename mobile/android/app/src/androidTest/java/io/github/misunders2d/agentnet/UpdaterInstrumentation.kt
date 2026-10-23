@@ -591,6 +591,51 @@ class UpdaterInstrumentation : Instrumentation() {
         }
         check(ready) { "The current authenticated local Go-host assets did not load." }
         phase("latency-ready-after")
+        val startupFocus = JSONObject()
+        if (latencySuite == "unread") {
+            // Observe real startup ownership before any fixture DOM or click;
+            // never request native or document focus from the instrumentation.
+            var nativeFocused = false
+            while (!nativeFocused && System.nanoTime() < end) {
+                runOnMainSync { nativeFocused = activity.hasWindowFocus() && web.hasFocus() }
+                if (!nativeFocused) Thread.sleep(25)
+            }
+            check(nativeFocused) { "Visible Activity did not give its document native focus" }
+            check(javascript(web, "document.hasFocus() && document.visibilityState === 'visible' && window.__agentnetAndroid.visible()") == "true") {
+                "Native document is not focused and visible before the unread journey"
+            }
+            if (android.os.Build.VERSION.SDK_INT >= 30) {
+                var imeVisible: Boolean? = null
+                runOnMainSync { imeVisible = activity.window.decorView.rootWindowInsets?.isVisible(android.view.WindowInsets.Type.ime()) }
+                check(imeVisible == false) { "Initial native focus unexpectedly opened the keyboard or lacked insets" }
+                startupFocus.put("imeVisible", imeVisible)
+            }
+            startupFocus.put("document", JSONObject(javascript(web, "({focused:document.hasFocus(),activeTag:document.activeElement?.tagName||''})")))
+        }
+        val saveAttempts = java.util.concurrent.atomic.AtomicInteger()
+        val saveProof = java.util.concurrent.atomic.AtomicReference<JSONObject>()
+        val stagedExport = java.util.concurrent.atomic.AtomicReference<File>()
+        val savingField = MainActivity::class.java.getDeclaredField("saving").apply { isAccessible = true }
+        val saveMonitor = if (latencySuite == "media") object : Instrumentation.ActivityMonitor() {
+            override fun onStartActivity(intent: Intent): Instrumentation.ActivityResult? {
+                if (intent.action != Intent.ACTION_CREATE_DOCUMENT) return null
+                saveAttempts.incrementAndGet()
+                val proof = JSONObject().put("action", intent.action)
+                    .put("name", intent.getStringExtra(Intent.EXTRA_TITLE)).put("mime", intent.type)
+                    .put("openable", intent.hasCategory(Intent.CATEGORY_OPENABLE))
+                    .put("providerWrite", "not_executed")
+                try {
+                    val ready = checkNotNull(savingField.get(activity) as? ExportTransfer.Ready)
+                    stagedExport.set(ready.file)
+                    val expected = "# Fixture text preview\n\nExact private **original** text.".toByteArray(Charsets.UTF_8)
+                    proof.put("stagedExactBytes", ready.file.length() == expected.size.toLong() && ready.file.readBytes().contentEquals(expected))
+                        .put("stagedName", ready.name).put("stagedMime", ready.mime)
+                } catch (e: Exception) { proof.put("captureError", e.javaClass.simpleName) }
+                saveProof.set(proof)
+                // Exercise the real native cancellation without opening a provider.
+                return Instrumentation.ActivityResult(Activity.RESULT_CANCELED, null)
+            }
+        }.also { addMonitor(it) } else null
         try {
             phase("latency-setup-before")
             check(javascript(web, """
@@ -631,7 +676,30 @@ class UpdaterInstrumentation : Instrumentation() {
             }
             if (report == null) result.putString("stream", "LATENCY_STATE_JSON=${failureState()}\n")
             val measured = checkNotNull(report) { "Native Android responsiveness fixture exceeded its existing 30-second bound." }
+            if (latencySuite == "unread") measured.put("nativeStartupFocus", startupFocus)
             if (!measured.optBoolean("ok")) measured.put("androidFailureState", failureState())
+            var nativeSaveValid = true
+            if (saveMonitor != null) {
+                var saveFinished = false
+                while (!saveFinished && System.nanoTime() < runEnd) {
+                    runOnMainSync { saveFinished = saveAttempts.get() == 1 && savingField.get(activity) == null }
+                    saveFinished = saveFinished && stagedExport.get()?.exists() == false
+                    if (!saveFinished) Thread.sleep(25)
+                }
+                val proof = saveProof.get() ?: JSONObject()
+                nativeSaveValid = saveFinished && saveMonitor.hits == 1 && saveAttempts.get() == 1 &&
+                    !proof.has("captureError") && proof.optBoolean("stagedExactBytes") &&
+                    proof.optString("action") == Intent.ACTION_CREATE_DOCUMENT &&
+                    proof.optString("name") == "fixture-preview.md" && proof.optBoolean("openable") &&
+                    proof.optString("mime") == "application/octet-stream" &&
+                    proof.optString("stagedName") == "fixture-preview.md" &&
+                    proof.optString("stagedMime") == "application/octet-stream"
+                measured.put("androidDownloadCancellation", proof.put("attempts", saveAttempts.get())
+                    .put("monitorHits", saveMonitor.hits).put("cancelledAndTemporaryRemoved", saveFinished)
+                    .put("ok", nativeSaveValid))
+                if (!nativeSaveValid && measured.optBoolean("ok")) measured.put("ok", false)
+                    .put("error", "Native download cancellation or original staged bytes were not proven")
+            }
             measured.put("nativeOS", "Android").put("engine", "MainActivity WebView")
                 .put("engineVersion", WebView.getCurrentWebViewPackage()?.versionName ?: "unknown")
                 .put("sdk", android.os.Build.VERSION.SDK_INT).put("device", android.os.Build.MODEL)
@@ -639,7 +707,9 @@ class UpdaterInstrumentation : Instrumentation() {
             result.putString("stream", "LATENCY_JSON=${measured}\n")
             phase("latency-report-after")
             check(measured.optBoolean("ok")) { measured.optString("error", "Native Android latency fixture failed") }
+            check(nativeSaveValid) { "Native download cancellation or original staged bytes were not proven" }
         } finally {
+            saveMonitor?.let { removeMonitor(it) }
             phase("latency-finally-before")
             javascript(web, """
                 (() => {

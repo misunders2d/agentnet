@@ -250,6 +250,10 @@ try {
  const census=()=>{for(const el of [...scope().querySelectorAll('button,input,textarea,select,[role="switch"],[role="radio"],[role="menuitem"]')].filter(shown)){const key=el.tagName.toLowerCase()+':'+(el.getAttribute('type')||el.getAttribute('role')||'')+':'+label(el);if(!reports.seenControls.includes(key))reports.seenControls.push(key);}};
  const measure=async(id,action,expected,description,complete=expected)=>{
   window.latencyProgress={active:id,reports};census();assert(!expected(),id+' expected visible state already true before input');const record={id,expected:description,input:'synthetic DOM',start:performance.now(),apiStart:reports.apiCalls.length,hostStart:reports.hostCalls?.length||0},gaps=[];performance.mark('latency:'+id+':input');let running=true,last=record.start;
+  const menuFrames=[];
+  const rememberFrames=entries=>{for(const e of entries){if(menuFrames.length>=12)break;menuFrames.push({start:e.startTime,duration:e.duration,blockingDuration:e.blockingDuration,renderStart:e.renderStart,styleAndLayoutStart:e.styleAndLayoutStart,scripts:Array.from(e.scripts||[]).slice(0,8).map(s=>({duration:s.duration,executionStart:s.executionStart,forcedStyleAndLayoutDuration:s.forcedStyleAndLayoutDuration,invokerType:s.invokerType,source:new URL(s.sourceURL||'',location.href).pathname.slice(0,180),function:String(s.sourceFunctionName||'').slice(0,120),position:s.sourceCharPosition}))});}};
+  const menuObserver=id==='message.menu-open-0'&&typeof PerformanceObserver!=='undefined'&&PerformanceObserver.supportedEntryTypes.includes('long-animation-frame')?new PerformanceObserver(list=>rememberFrames(list.getEntries())):null;
+  menuObserver?.observe({type:'long-animation-frame'});
   const watch=()=>{if(!running)return;const now=performance.now();gaps.push(now-last);last=now;requestAnimationFrame(watch);};requestAnimationFrame(watch);
   try{action();await until(expected,id+' visible feedback',3000);record.feedbackMs=performance.now()-record.start;performance.mark('latency:'+id+':feedback');
    await until(complete,id+' completed visible state',3000);record.visibleMs=performance.now()-record.start;await frame();await frame();assert(complete(),id+' state lost before paint opportunity');record.paintMs=performance.now()-record.start;
@@ -261,7 +265,7 @@ try {
    record.projectionResultMs=projections.length?Math.max(...projections.map(c=>c.resultMs)):null;
    record.frameMaxMs=Math.max(0,...gaps);record.frameP95Ms=gaps.sort((a,b)=>a-b)[Math.min(gaps.length-1,Math.floor(gaps.length*.95))]||0;
    record.stateVerified=true;record.feedbackBoundPassed=record.feedbackMs<2000;record.ok=record.feedbackBoundPassed;if(!record.feedbackBoundPassed)reports.feedbackFailures.push(id+' feedback exceeds existing optimistic-feedback bound');census();
-  }finally{running=false;delete record.apiStart;delete record.hostStart;reports.actions.push(record);}
+  }finally{running=false;if(id==='message.menu-open-0'){if(menuObserver){rememberFrames(menuObserver.takeRecords());menuObserver.disconnect();}reports.firstMenuPerformance={longAnimationFrameSupported:!!menuObserver,inputStart:record.start,frames:menuFrames,chunkResources:performance.getEntriesByType('resource').filter(r=>r.name.includes('/m/chunks/')).slice(-12).map(r=>({path:new URL(r.name).pathname,start:r.startTime,duration:r.duration,bytes:r.decodedBodySize}))};}delete record.apiStart;delete record.hostStart;reports.actions.push(record);}
  };
  const initialChat=()=>[...root.querySelectorAll('[data-part="chat-row"]')].find(b=>b.textContent.includes(p1==='direct'?'Portable Pi':'Vitalii')&&onScreen(b));
  await until(initialChat,'visible initial chat row');await frame();await frame();assert(initialChat(),'initial chat control disappeared before input');reports.initialControl={visible:true,paintOpportunityFrames:2,readyAtMs:performance.now(),fonts:document.fonts.status};
@@ -1011,8 +1015,9 @@ try {
    const beforeUnsupported=row().querySelector('[role="status"]').textContent;await tap('media.unsupported-prepare',control('Smaller video',row()),()=>busy()||row()?.querySelector('[role="status"]')?.textContent!==beforeUnsupported,'unsupported processing progress or explicit fallback visible',()=>!busy()&&row()?.querySelector('[role="status"]')?.textContent!==beforeUnsupported&&row()?.textContent.toLowerCase().includes('original'));
    const unsupported=await(await fetch(row().querySelector('video').src)).blob();assert(await fileHash(unsupported)===await fileHash(broken),'unsupported fallback original changed');await tap('media.unsupported-remove',control('Remove fixture-unsupported.mp4'),()=>!tray(),'unsupported selection removed');
    // Incoming/readable file presentation uses real bytes through Host.file.
-   // Capture owned download links before default handling; no OS save dialog.
-   const downloadCapture=e=>{const a=e.composedPath().find(n=>n instanceof HTMLAnchorElement&&n.hasAttribute('download'));if(!a)return;e.preventDefault();reports.downloadIntents.push({name:a.download,url:a.href,at:performance.now(),nativeEffect:false});};
+   // Android's earlier document handler exercises native export, cancelled by
+   // the owned instrumentation monitor; other hosts capture only the link.
+   const downloadCapture=e=>{const a=e.composedPath().find(n=>n instanceof HTMLAnchorElement&&n.hasAttribute('download'));if(!a)return;e.preventDefault();reports.downloadIntents.push({name:a.download,url:a.href,at:performance.now(),nativeEffect:host.platform==='android'?'native export; provider cancelled by test monitor':false});};
    reports.downloadIntents=[];shadow.addEventListener('click',downloadCapture,true);
    const fileMessage=view.messages.at(-1),fileID=fileMessage.id,md=new TextEncoder().encode('# Fixture text preview\n\nExact private **original** text.'),binary=new Uint8Array([0,255,0,1]);
    presentationFiles.set(fileID+':0',md);presentationFiles.set(fileID+':1',new Uint8Array(await photo.arrayBuffer()));presentationFiles.set(fileID+':2',binary);
@@ -1022,7 +1027,7 @@ try {
    assert(textPreview().querySelector('strong')?.textContent==='original','Markdown preview must render exact received text');
    await closeSheet('files.text-close','fixture-preview.md');
    const download=control('Download fixture-preview.md');await tap('files.download-intent',download,()=>download.disabled,'download decrypt/read pending',()=>!download.disabled&&reports.downloadIntents.some(d=>d.name==='fixture-preview.md'));
-   const handed=reports.downloadIntents.find(d=>d.name==='fixture-preview.md'),handedBytes=new Uint8Array(await(await fetch(handed.url)).arrayBuffer());assert(handedBytes.length===md.length&&handedBytes.every((v,i)=>v===md[i]),'download intent changed exact original bytes');reports.downloadOriginal={id:fileID,index:0,dir:fileMessage.dir,name:handed.name,sha256:await fileHash(new Blob([handedBytes])),exactBytes:true,claim:'owned download-link intent captured; no OS save dialog or persisted-file claim'};
+   const handed=reports.downloadIntents.find(d=>d.name==='fixture-preview.md'),handedBytes=new Uint8Array(await(await fetch(handed.url)).arrayBuffer());assert(handedBytes.length===md.length&&handedBytes.every((v,i)=>v===md[i]),'download intent changed exact original bytes');reports.downloadOriginal={id:fileID,index:0,dir:fileMessage.dir,name:handed.name,sha256:await fileHash(new Blob([handedBytes])),exactBytes:true,providerWrite:'not_executed',claim:host.platform==='android'?'link bytes verified; native export and cancellation require instrumentation proof':'owned download-link intent captured; no OS save dialog or persisted-file claim'};
    let brokenPreview=control('Preview fixture-binary.txt');await tap('files.binary-preview-refused',brokenPreview,()=>brokenPreview.disabled,'binary preview read pending',()=>!brokenPreview.disabled&&visibleText('Couldn’t preview fixture-binary.txt:'));
    assert(!sheet('fixture-binary.txt'),'invalid text bytes must not open as text');
    const picture=control('Open picture fixture-picture.png');await until(()=>picture?.querySelector('img')?.complete&&picture.querySelector('img').naturalWidth>0,'real picture thumbnail decoded');
@@ -1050,7 +1055,7 @@ try {
    const retry=control('Retry this task',assign());await tap('assign.retry-refused',retry,()=>!!control('Sending task…',assign()),'same prepared assignment retry pending',()=>visibleText('Synthetic assignment refused; no task or native work started')&&!control('Sending task…',assign()));
    assert(reports.assignmentAttempts.at(-1).id===firstAttempt.id&&reports.assignmentAttempts.at(-1).body===firstAttempt.body,'retry changed prepared task ID/body');
    await closeSheet('assign.close','Assign to your agent');shadow.removeEventListener('click',downloadCapture,true);
-   reports.filePresentation={fileID,fileCalls:reports.fileCalls,assignmentNativeEffects:false,downloadNativeEffect:false,originalBytesVerified:true};
+   reports.filePresentation={fileID,fileCalls:reports.fileCalls,assignmentNativeEffects:false,downloadNativeEffect:host.platform==='android'?'native export; provider cancelled by test monitor':false,providerWrite:'not_executed',originalBytesVerified:true};
 
    reports.mediaProcessing='Photo conversion is actual CPU work and reported separately; video cancellation/unsupported choice measures UI. Actual codec output/audio/orientation/deadline qualification remains earlier media evidence.';
   }

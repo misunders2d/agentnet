@@ -292,3 +292,23 @@ host-contract checks; routine timings above200ms remain visible and are not a
 native or smoothness pass. Strict canonical TypeScript/build, package checksums,
 JavaScript/Bash syntax, diff checks and go vet pass. Actual affected native and
 Android qualification follows once this integrated child is committed.
+
+
+### Native Android focus and download checkpoint
+
+On76da, all three affected desktop jobs passed, including each native shell and
+45 browser reports per system. Android passed all native upgrade/notification/
+indicator/denied checks and14 workloads. Its remaining failures now have retained
+focused evidence: an unfocused WebView prevented visible reads; the media fixture
+opened the real native document picker; the first action sheet took2333ms.
+
+Claude reviewed the native focus ownership fix and passive startup regression,
+the native save-picker cancellation monitor with exact staged-byte verification,
+and bounded first-menu long-frame diagnostics. No timing limit is raised. The
+focus change affects all Android sessions, so repeat the full default17-workload
+Android matrix and its native modes; retain unchanged desktop/gallery results.
+The optional workload-selector experiment is omitted. The menu cause remains
+unresolved until native attribution is collected. Provider writes are explicitly
+not executed by the cancellation fixture; link bytes and native staged bytes
+are separate assertions. Source and local functional checks do not count as a
+native repair pass, and public release/rollout remain pending.

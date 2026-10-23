@@ -92,7 +92,11 @@ class MainActivity : Activity() {
     }
     override fun onResume() {
         super.onResume(); resumed = true; showHost(host.state)
-        web?.visibility = View.VISIBLE; web?.onResume(); applyVisibility()
+        web?.visibility = View.VISIBLE; web?.onResume(); focusPageIfUnowned(); applyVisibility()
+    }
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) focusPageIfUnowned()
     }
     override fun onPause() { resumed = false; hideCustomView(); applyVisibility(); web?.onPause(); super.onPause() }
     override fun onStop() { resumed = false; applyVisibility(); web?.visibility = View.INVISIBLE; host.foreground(false); super.onStop() }
@@ -130,8 +134,11 @@ class MainActivity : Activity() {
         }
         val guard = WebPolicy(state.origin); policy = guard
         val page = WebView(this); web = page
+        page.isFocusableInTouchMode = true
         page.setBackgroundColor(Color.rgb(242, 239, 255))
         page.settings.apply {
+            // Native document focus must not choose an HTML node or move its caret.
+            setNeedInitialFocus(false)
             javaScriptEnabled = true; domStorageEnabled = true
             allowFileAccess = false; allowContentAccess = false
             @Suppress("DEPRECATION")
@@ -201,6 +208,16 @@ class MainActivity : Activity() {
         }
         setContentView(frame); frame.requestApplyInsets()
         loaded = true; page.loadUrl(state.url) // authenticated URL stays in memory, never logs
+        focusPageIfUnowned()
+    }
+    private fun focusPageIfUnowned() {
+        val page = web ?: return
+        if (destroyed || !resumed || fullscreen != null || !page.isAttachedToWindow ||
+            !page.isShown || !page.hasWindowFocus() || page.hasFocus()) return
+        val owner = window.decorView.findFocus()
+        // Give the visible document initial native focus without replacing an
+        // existing editor, custom view, dialog or other native focus owner.
+        if (owner == null || owner === window.decorView || owner === contentFrame) page.requestFocus()
     }
     private fun applyVisibility() {
         val page = web ?: return
