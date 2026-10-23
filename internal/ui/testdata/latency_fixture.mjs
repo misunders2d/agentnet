@@ -249,12 +249,24 @@ try {
  const visibleText=text=>[...scope().querySelectorAll('h1,h2,h3,p,[role="heading"],[role="dialog"],[role="alert"],[role="status"]')].some(el=>onScreen(el)&&el.textContent.includes(text));
  const census=()=>{for(const el of [...scope().querySelectorAll('button,input,textarea,select,[role="switch"],[role="radio"],[role="menuitem"]')].filter(shown)){const key=el.tagName.toLowerCase()+':'+(el.getAttribute('type')||el.getAttribute('role')||'')+':'+label(el);if(!reports.seenControls.includes(key))reports.seenControls.push(key);}};
  const measure=async(id,action,expected,description,complete=expected)=>{
-  window.latencyProgress={active:id,reports};census();assert(!expected(),id+' expected visible state already true before input');const record={id,expected:description,input:'synthetic DOM',start:performance.now(),apiStart:reports.apiCalls.length,hostStart:reports.hostCalls?.length||0},gaps=[];performance.mark('latency:'+id+':input');let running=true,last=record.start;
-  const menuFrames=[];
+  window.latencyProgress={active:id,reports};census();assert(!expected(),id+' expected visible state already true before input');const record={id,expected:description,input:'synthetic DOM',start:performance.now(),apiStart:reports.apiCalls.length,hostStart:reports.hostCalls?.length||0},gaps=[];performance.mark('latency:'+id+':input');let running=true,last=record.start,rafCount=0;
+  const menuFrames=[],menuSamples=[];
+  const menuDiagnostic=id==='message.menu-open-0';
+  const firstHiddenAncestor=el=>{
+   if(!el)return{reason:'missing'};
+   if(el.closest('[inert]'))return{reason:'inert'};
+   if(el.getAttribute('aria-hidden')==='true')return{reason:'aria-hidden'};
+   if(!el.getClientRects().length)return{reason:'no rect'};
+   for(let p=el;p&&p.nodeType===1;p=p.parentElement){const s=getComputedStyle(p);if(s.visibility==='hidden'||s.display==='none'||s.opacity==='0')return{reason:'style',tag:p.tagName,class:String(p.className).slice(0,100),opacity:s.opacity,visibility:s.visibility,display:s.display,starting:p.hasAttribute('data-starting-style'),ending:p.hasAttribute('data-ending-style')};}
+   return null;
+  };
+  const sampleMenu=()=>{if(menuSamples.length>=40)return;const details=[...scope().querySelectorAll('button,[role="menuitem"]')].find(b=>label(b)==='Details'),sheet=scope().querySelector('.an-sheet[data-open]');menuSamples.push({t:performance.now()-record.start,timeline:document.timeline?.currentTime??null,rafCount,sheet:!!sheet,starting:sheet?.hasAttribute('data-starting-style')??null,ending:sheet?.hasAttribute('data-ending-style')??null,opacity:sheet?getComputedStyle(sheet).opacity:null,detailsHidden:firstHiddenAncestor(details)});};
+  const menuTimer=menuDiagnostic?setInterval(sampleMenu,80):null;
+  if(menuDiagnostic)sampleMenu();
   const rememberFrames=entries=>{for(const e of entries){if(menuFrames.length>=12)break;menuFrames.push({start:e.startTime,duration:e.duration,blockingDuration:e.blockingDuration,renderStart:e.renderStart,styleAndLayoutStart:e.styleAndLayoutStart,scripts:Array.from(e.scripts||[]).slice(0,8).map(s=>({duration:s.duration,executionStart:s.executionStart,forcedStyleAndLayoutDuration:s.forcedStyleAndLayoutDuration,invokerType:s.invokerType,source:new URL(s.sourceURL||'',location.href).pathname.slice(0,180),function:String(s.sourceFunctionName||'').slice(0,120),position:s.sourceCharPosition}))});}};
   const menuObserver=id==='message.menu-open-0'&&typeof PerformanceObserver!=='undefined'&&PerformanceObserver.supportedEntryTypes.includes('long-animation-frame')?new PerformanceObserver(list=>rememberFrames(list.getEntries())):null;
   menuObserver?.observe({type:'long-animation-frame'});
-  const watch=()=>{if(!running)return;const now=performance.now();gaps.push(now-last);last=now;requestAnimationFrame(watch);};requestAnimationFrame(watch);
+  const watch=()=>{if(!running)return;const now=performance.now();rafCount++;gaps.push(now-last);last=now;requestAnimationFrame(watch);};requestAnimationFrame(watch);
   try{action();await until(expected,id+' visible feedback',3000);record.feedbackMs=performance.now()-record.start;performance.mark('latency:'+id+':feedback');
    await until(complete,id+' completed visible state',3000);record.visibleMs=performance.now()-record.start;await frame();await frame();assert(complete(),id+' state lost before paint opportunity');record.paintMs=performance.now()-record.start;
    if(reports.hostCalls)record.hostResults=reports.hostCalls.slice(record.hostStart).map(c=>({...c,startMs:c.start-record.start,resultMs:c.result===undefined?null:c.result-record.start}));
@@ -265,7 +277,7 @@ try {
    record.projectionResultMs=projections.length?Math.max(...projections.map(c=>c.resultMs)):null;
    record.frameMaxMs=Math.max(0,...gaps);record.frameP95Ms=gaps.sort((a,b)=>a-b)[Math.min(gaps.length-1,Math.floor(gaps.length*.95))]||0;
    record.stateVerified=true;record.feedbackBoundPassed=record.feedbackMs<2000;record.ok=record.feedbackBoundPassed;if(!record.feedbackBoundPassed)reports.feedbackFailures.push(id+' feedback exceeds existing optimistic-feedback bound');census();
-  }finally{running=false;if(id==='message.menu-open-0'){if(menuObserver){rememberFrames(menuObserver.takeRecords());menuObserver.disconnect();}reports.firstMenuPerformance={longAnimationFrameSupported:!!menuObserver,inputStart:record.start,frames:menuFrames,chunkResources:performance.getEntriesByType('resource').filter(r=>r.name.includes('/m/chunks/')).slice(-12).map(r=>({path:new URL(r.name).pathname,start:r.startTime,duration:r.duration,bytes:r.decodedBodySize}))};}delete record.apiStart;delete record.hostStart;reports.actions.push(record);}
+  }finally{running=false;if(menuDiagnostic){clearInterval(menuTimer);sampleMenu();record.frameMaxMs=Math.max(0,...gaps);const sorted=[...gaps].sort((a,b)=>a-b);record.frameP95Ms=sorted[Math.min(sorted.length-1,Math.floor(sorted.length*.95))]||0;record.rafCount=rafCount;reports.firstMenuVisibility={samples:menuSamples,finalTimeline:document.timeline?.currentTime??null,rafCount,visibility:document.visibilityState};}if(id==='message.menu-open-0'){if(menuObserver){rememberFrames(menuObserver.takeRecords());menuObserver.disconnect();}reports.firstMenuPerformance={longAnimationFrameSupported:!!menuObserver,inputStart:record.start,frames:menuFrames,chunkResources:performance.getEntriesByType('resource').filter(r=>r.name.includes('/m/chunks/')).slice(-12).map(r=>({path:new URL(r.name).pathname,start:r.startTime,duration:r.duration,bytes:r.decodedBodySize}))};}delete record.apiStart;delete record.hostStart;reports.actions.push(record);}
  };
  const initialChat=()=>[...root.querySelectorAll('[data-part="chat-row"]')].find(b=>b.textContent.includes(p1==='direct'?'Portable Pi':'Vitalii')&&onScreen(b));
  await until(initialChat,'visible initial chat row');await frame();await frame();assert(initialChat(),'initial chat control disappeared before input');reports.initialControl={visible:true,paintOpportunityFrames:2,readyAtMs:performance.now(),fonts:document.fonts.status};

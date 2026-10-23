@@ -10,12 +10,19 @@ on:
         description: Published version to upgrade from
         type: string
         required: true
+      latency_suites:
+        description: Optional comma-separated affected workloads; empty keeps all seventeen
+        type: string
+        default: ''
   workflow_call:
     inputs:
       version:
         type: string
         default: ''
       previous_tag:
+        type: string
+        default: ''
+      latency_suites:
         type: string
         default: ''
     secrets:
@@ -83,6 +90,8 @@ jobs:
           sudo udevadm trigger --name-match=kvm
       - name: retained-data upgrade and Android notification boundaries
         timeout-minutes: 75
+        env:
+          AGENTNET_ANDROID_LATENCY_SUITES: ${{ inputs.latency_suites }}
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35

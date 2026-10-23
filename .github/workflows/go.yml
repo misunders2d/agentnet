@@ -41,6 +41,10 @@ on:
         description: 'Optional comma-separated affected desktop workloads; empty retains all seventeen'
         type: string
         default: ''
+      android_suites:
+        description: 'Optional comma-separated affected Android workloads; empty keeps all seventeen'
+        type: string
+        default: ''
       platform_only:
         description: 'Run only desktop and Android qualification, retaining completed native/race jobs'
         type: boolean
@@ -218,6 +222,7 @@ jobs:
     uses: ./.github/workflows/android-qualification.yml
     with:
       version: ${{ inputs.candidate_version || '' }}
+      latency_suites: ${{ inputs.android_suites || '' }}
     secrets:
       ANDROID_PREVIEW_KEYSTORE_BASE64: ${{ secrets.ANDROID_PREVIEW_KEYSTORE_BASE64 }}
   windows-task-probe:

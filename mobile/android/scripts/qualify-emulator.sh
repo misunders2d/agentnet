@@ -5,6 +5,25 @@ set -euo pipefail
 [[ ${CI:-} == true && ${GITHUB_ACTIONS:-} == true ]]
 : "${RUNNER_TEMP:?}"
 : "${AGENTNET_ANDROID_FIXTURE_DIR:?}"
+# Optional affected-workload reruns retain the complete default qualification.
+all_suites=(history navigation settings unread actions topics groups compose review outbox agents teams profile storage workspaces permissions media)
+suites=("${all_suites[@]}")
+if [[ -n ${AGENTNET_ANDROID_LATENCY_SUITES:-} ]]; then
+  selection=$AGENTNET_ANDROID_LATENCY_SUITES
+  if [[ ! $selection =~ ^[a-z,]+$ || $selection == ,* || $selection == *, || $selection == *,,* ]]; then
+    printf '%s\n' 'Invalid empty Android workload' >&2; exit 2
+  fi
+  IFS=, read -r -a suites <<< "$selection"
+  seen=,
+  for suite in "${suites[@]}"; do
+    valid=false
+    for known in "${all_suites[@]}"; do [[ $suite != "$known" ]] || valid=true; done
+    if [[ $valid != true || $seen == *",$suite,"* ]]; then
+      printf 'Invalid or duplicate Android workload: %s\n' "$suite" >&2; exit 2
+    fi
+    seen+="$suite,"
+  done
+fi
 serial="emulator-${EMULATOR_PORT:-5554}"
 adb -s "$serial" get-state
 test "$(adb -s "$serial" shell getprop ro.kernel.qemu | tr -d '\r')" = 1
@@ -114,7 +133,7 @@ if ! instrument notifications-denied "$RUNNER_TEMP/android-notifications-denied.
 stop_fixture
 adb -s "$serial" shell pm grant "$package" android.permission.POST_NOTIFICATIONS
 # Every invocation consumes its private test JS/seed in finally; restage both.
-for suite in history navigation settings unread actions topics groups compose review outbox agents teams profile storage workspaces permissions media; do
+for suite in "${suites[@]}"; do
   stop_fixture
   for file in latency-fixture.mjs latency-input.json; do
     adb -s "$serial" push "$RUNNER_TEMP/android-latency/$file" "$app_data/cache/$file"

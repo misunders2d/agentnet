@@ -312,3 +312,23 @@ unresolved until native attribution is collected. Provider writes are explicitly
 not executed by the cancellation fixture; link bytes and native staged bytes
 are separate assertions. Source and local functional checks do not count as a
 native repair pass, and public release/rollout remain pending.
+
+
+### Final Android Actions discriminator
+
+ExactAA228 full Android run39912731615 completed: signed retained-data upgrade,
+notifications, indicators, denied-notification mode and16/17 portable workloads
+passed. Passive document focus/read behavior and exact staged native export
+cancellation/cleanup are now native passes. Provider writes remain unexecuted.
+Actions alone failed: the first sheet did not satisfy the unchanged visible
+feedback predicate within3s. Its prior2333ms failure and this timeout remain
+retained; off-screen Details geometry does not explain either failure.
+
+Claude and the interaction helper independently rejected a predicate repair.
+The next child changes only tests/CI: bounded first-menu timeline/rAF/ancestor
+visibility samples, failed-record frame statistics, and a whitelisted affected
+Android workload selector. Default qualification still runs all17 workloads.
+The next native check selects Actions only; keep allAA228 native/16-workload
+passes and unchanged desktop/gallery evidence. All27 action assertions and the
+existing2000ms feedback/3000ms wait bounds stay unchanged. No product repair or
+smoothness result is inferred from local synthetic passes.
