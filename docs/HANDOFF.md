@@ -1,109 +1,83 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
-## Active October 22 batch — v0.9.3 candidate
+## v0.9.3 published and relay updated — October 23, 2026
 
-The complete [batch handoff](plans/OCT22_BATCH_HANDOFF.md),
-[active release goal](plans/OCT22_BATCH_GOAL.md) and
-[acceptance checklist](plans/OCT22_BATCH.md) cover all eleven original areas
-plus the owner's tagged-chat clarification correction (MEL-497). The candidate
-includes focused fixes for effective-read hooks, saved group clarification
-rounds, reaction projection, independent recipient fanout, bounded Drive work,
-storage controls/errors/retry, media preparation and mouse controls. A real-Hub
-ordinary-user journey also reproduced the browser's omitted reminder capability.
-Qualification, publication and existing-relay rollout remain in progress;
-candidate source and focused tests are not a released or deployed result.
+[App v0.9.3](https://github.com/misunders2d/agentnet/releases/tag/v0.9.3)
+was published at07:49:58UTC from immutable
+`3f5bbc4362e1ee6345c676e9000ee742668c64ad`. The matching
+[gallery v2026.10.23.1](https://github.com/misunders2d/agentnet-skins/releases/tag/v2026.10.23.1)
+was published at07:50:19UTC from
+`5a12224bbc212db800459a40b8d16d6312f5d618`, pinned to that exact core source.
+Both are public Latest releases. All12 public payloads match the independently
+qualified draft; all5 public skin packages,129 package files and20 previews
+verify through the actual gallery parser. Checksums, clean Go provenance,
+original Android preview signer/ABIs/alignment and AppImage media plugins pass.
 
-The integrated qualification retained all18 Linux client race partitions, the
-container gate, all three UI partitions and all six native Windows client
-partitions. The last two Windows parents passed three exact repetitions in
-[run39895055440](https://github.com/misunders2d/agentnet/actions/runs/39895055440);
-183 unchanged parents and the other five partitions retain their earlier passes.
-The complete macOS client and UI selections passed, including the repaired UI
-model on all three operating systems in
-[run39889553253](https://github.com/misunders2d/agentnet/actions/runs/39889553253).
-The actual mixed-version journey against published v0.9.2 passed86.024s.
+The complete [batch scope](plans/OCT22_BATCH_HANDOFF.md),
+[goal](plans/OCT22_BATCH_GOAL.md), [checklist](plans/OCT22_BATCH.md) and
+[current release record](plans/V0_9_3_RELEASE.md) distinguish implementation,
+qualification, publication and rollout. The existing relay is healthy on v0.9.3 from 08:54:05 UTC after its full stopped
+Drive-backed backup and both old/new offline restore checks. All 8,380 stored
+ciphertexts verify in the 8,388-file archive; both restores preserve existing
+rows/files and Drive binding. Schema24→25, realm, volume, environment, effective
+configuration and neighboring service checks pass. The running binary equals
+the verified public download; normal public HTTPS confirms v0.9.3.
 
-The complete platform run39888155855 qualified the actual macOS installer,
-all17 native interaction workloads and three browser engines at both widths.
-Linux passed all17 native workloads, including real playback from the shipped
-AppImage with its GStreamer plugins. The affected Linux follow-up in
-[run39895057632](https://github.com/misunders2d/agentnet/actions/runs/39895057632)
-passed the measured-width TopicBar correction and four affected workloads across
-the native shell and all three browser engines. Windows WebView2 and the tested
-Playwright Chromium/Firefox media paths also passed. Windows Playwright WebKit
-still fails local blob-video metadata; this is a separate nonshipping test port,
-not the Windows app engine. An independent same-byte blob/HTTP discriminator and
-an explicitly unexecuted unsupported cell are being prepared; the failed raw
-result must never become a playback pass.
+The batch delivers ordinary tagged clarifications with actual Reply/tag ancestry
+and saved group-worker rounds, read-aware harness notices, shared linked state,
+pending reactions reconciled to the authoritative result, independent recipient
+fanout, fair bounded Drive transfers, safe storage controls and exact retained-send
+retry, explicit photo/video preparation and exact originals. GUI corrections cover
+touch release, Mac/narrow controls, first unread, native reading anchors, keyboard
+navigation, topic organization/titles, schedules, responsive editors, short menus,
+current invitations and structured human guest events. Native execution permissions,
+verified identity and granted history remain authoritative.
 
-Android signed-upgrade checks preserve identity,200 messages, origin and drafts.
-Its timing fixture now preserves the existing CSP and resolves the module from
-an absolute app URL. The latest run stopped earlier on a real notification race:
-Android queues cancellation, while a following badge refresh can still see and
-repost the old notification. The candidate correction excludes pending cancelled
-tags on every host badge refresh and orders by the notification's original
-creation time. Native regression and all17 Android workloads must still execute
-before publication; host models and authored instrumentation are not OS passes.
+Qualification retains all18 Linux client race partitions, remaining race packages,
+three UI partitions and six native Windows client partitions, with only affected
+selections repeated. The original aggregate failures stay recorded. Both historical
+hook failures have named focused regular/race passes and later full-itest passes;
+the final-source required mixed-version journey against published v0.9.2 passed
+72.564s. Actual Linux/macOS/Windows shells and applicable browser workloads passed
+their composed full/affected gates. Final desktop production/contract bytes equal
+76da; final Android app bytes equal the fully exercisedAA228 app.
 
-Claude's final GUI rechecks used exact archived candidate binaries and served
-asset hashes, superseding its earlier exploratory wrong-checkout observations.
-The accepted corrections include current invitation supersession, former-member
-read-only context, actual Reply/tag continuation, first-unread landing, touch
-release, responsive editors, topic operations, menus, setup and local-skin
-activation. The matching gallery's final focused navigation, exact signed
-browser-provider enrollment and five-device Zoom touch checks pass. Its final
-integrated gate is running. Publication, public artifact verification, preserved-
-data relay rollout and the physical Pixel field check remain unfinished.
+Android signed retained-data upgrade, notifications, read-dismissal, indicators,
+denied-notification behavior, passive document focus and native exact export
+cancellation/cleanup pass. Sixteen of17 portable workloads pass. The first Actions
+sheet still fails its timing check on the API35 CI emulator: rendering frames and
+the animation timeline freeze for at least2.84s while scripts continue, leaving
+the sheet at opacity0. The cause is unknown and v0.9.3 does not fix it. Removing
+the fade would mask this evidence. Later opens were60–80ms in earlier runs.
+Native save cancellation verifies staged bytes; provider writes were not executed.
 
-Routine measurements above200ms remain recorded; passing correctness deadlines
-and immediate optimistic feedback are not evidence that every interaction is
-smooth. Keep native, browser, synthetic API, durable result and physical-device
-claims separate.
+**The owner explicitly approved publication with these limits open:** the Android
+first-menu failure, routine interaction timings above200ms, and the unverified
+upgraded physical Pixel check. The extra Windows Playwright WebKit media port
+also remains unexecuted; the shipped Windows WebView2 path passed. Never convert
+these into passes or claim universal no-lag acceptance. A cold first-menu phone
+screen recording is the next bounded comparator. Broader timing/field work remains
+open. Claude independently reviewed exact candidate GUI/source corrections and
+downloaded draft artifacts; exploratory dirty-main interactions are excluded.
 
-Preserve the dirty main checkout and parked Play work; use the isolated
-`.agentnet/oct22-batch` candidate. The existing relay's connected Google Drive
-and completed migration are state to preserve. Do not disconnect or remigrate
-it for tests. Physical Pixel and actual macOS results remain separate from
-source, emulator and rendered evidence.
+Keep the existing Drive connection, remote IDs, account/folder and completed
+migration intact. The completed rollout used the reviewed stopped-backup/restore process,
+preserves the original realm/volume/configuration/neighbor, and appends only
+the schema24→25 quota column. On failure, stop and verify the candidate before
+reading its final schema; never run the old image against migrated data or
+restore a stale backup over possible new writes.
 
-The actual browser signed capability list now has 31 entries without typing
-signals and 32 with them, at the existing `MaxAdvertisedCaps=32` bound. Reminder
-sync consumes that last slot; do not add another name without revisiting the
-wire contract. Media preparation is an explicit sender choice: files retain
-their original bytes until Smaller photo or Smaller video is selected.
+Media preparation is opt-in; exact originals stay the default. The browser advertises
+31 capabilities without typing and32 with typing at the existing max32. Play Store
+and shared push work remain paused; the owner confirms enrolled phones use preview
+APKs only. The dirty main checkout and parked Play/owner drafts are preserved.
+Release qualification limits and physical-device claims must remain separate.
 
-The integrated GUI corrections now include the actual Reply/tag continuation
-producer, pending reactions with authoritative reconciliation, touch-release
-protection, first-unread entry with bounded history pages, native reading-anchor
-preservation, keyboard/search/Back navigation, short-window menus, confirmed topic
-operations, destination titles, millisecond unread ordering, schedule completion
-and structured human-guest lifecycle text. The canonical build and strict types
-pass. Focused current-source regressions pass; complete platform and interaction
-qualification remains open. Native Linux still has measured routine controls
-above 200 ms, so this is not a no-lag acceptance claim.
-
-Claude disclosed that its exploratory interactive GUI world used the dirty main
-checkout instead of the cited candidate. Those interactions are excluded from
-candidate evidence. Clean-candidate fixtures and explicit candidate reproductions
-remain valid; the final review must rebuild from the frozen candidate, fingerprint
-the binary/assets and re-establish every GUI coverage row. See the active batch
-checklist and [release qualification record](plans/V0_9_3_RELEASE.md).
-
-The current corrective batch also separates normal chat-row preview IDs from
-exact message jumps, dispatches confirmed bulk topic changes immediately, and
-keeps temporary group-context verification waits out of red error toasts.
-The shared profile picture editor is centered within the actual skin reset.
-Typed text in secondary editors survives the desktop/phone layout swap within
-the captured workspace; cancel and confirmed submission clear only the matching
-draft. A focused full-App Edit journey and seven real form components pass,
-including late-response and target/revision/workspace fences. Shorter dialog
-transitions and topic-search coalescing remove measured fixed waits; they do not
-turn API acknowledgements into proof of delivery or completion.
-An independently reviewed terminal group-removal recipient class is being
-implemented using original signed context/proof only; ordinary recipient and
-execution boundaries stay current-member scoped. See the October23 entry in
-[DECISIONS](DECISIONS.md) and the batch checklist for exact evidence and open
-gates. No v0.9.3 artifact or live rollout is implied by these candidate notes.
+The original 30-minute update grace ends at 09:24:08 UTC. Zenbook and Bezos
+report v0.9.3; the phone and second laptop last reported v0.9.2 and must update
+to continue after grace. Their queued copies remain in custody. This is an
+availability observation, not new authority. All three task-owned helpers are
+closed after results were captured; the user-owned Claude pane is preserved.
 
 ## v0.9.2 released and relay updated — October22, 2026
 

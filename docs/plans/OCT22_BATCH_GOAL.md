@@ -26,6 +26,23 @@ Linear descriptions/comments as the acceptance inventory. Recheck the baseline
 and concurrent checkout state before mutations. Distinguish released behavior,
 prepared fixes, hypotheses and verified corrections.
 
+## Owner publication disposition — October 23, 2026
+
+Sergey explicitly chose **Publish with these limits open** after being told that
+the Android CI emulator first-menu check still failed beyond3s, some measured
+interactions exceeded200ms and the upgraded physical Pixel check was unverified.
+This permits v0.9.3 publication and the already-authorized backed-up relay rollout
+without relabeling those findings as passes. They remain follow-up work. The
+additional nonshipping Windows WebKit media cells remain unexecuted; actual
+Windows WebView2 passed. The owner also confirms enrolled phones use preview
+APKs only, so no enrolled Play-variant availability conflict applies.
+
+The release and matching gallery are now public from immutable3f5bbc43/5a12224.
+Actual public bytes, original Android signer and gallery packages/previews are
+verified. The full stopped Drive backup and both old/new restore checks passed; the
+existing relay is healthy on v0.9.3 from 08:54:05 UTC with preserved data and binding. See [the release record](V0_9_3_RELEASE.md) for current completion and
+honest limits; publication alone does not close the remaining field/timing work.
+
 ## Complete included scope
 
 1. **S1 — MEL-693: shared state for every person.** Messages and granted history,
