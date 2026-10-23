@@ -1,10 +1,12 @@
 // agentnet-pi-extension v1: installed by `agentnet hooks install pi`; `agentnet hooks remove pi` removes it.
 //
 // Tells this Pi session, as metadata only, what arrived in AgentNet since the
-// session last checked: when the session starts, when a prompt starts, once
-// at the end of a run (one extra model request, like Claude's Stop hook), and
-// while Pi is idle (a visible notice kept in the session for the next turn;
-// no model turn is started). Passive notices grant no authority. An explicit
+// session last checked: when a prompt starts (and once at the end of a run,
+// one extra model request, like Claude's Stop hook). When the session starts
+// and while Pi is idle it shows a notice to the person only: it is not
+// recorded as seen, so the next prompt's check tells the run what is still
+// unread then, and no model turn is started. A model request sees only the
+// notices of its own run. Passive notices grant no authority. An explicit
 // local reply receiver additionally accepts its verified correlated return
 // as native follow-up data under the original locally authored request.
 import { spawn } from "node:child_process";
@@ -208,7 +210,11 @@ export default function (pi: any) {
 	}
 
 	// One metadata read at a time; acknowledgements wait for native persistence.
-	function transaction(event: string, extra: Record<string, unknown>, show: (text: string, details: object) => "later" | false): Promise<void> {
+	// A notice shown to the person only (display) is never acknowledged: what
+	// it named stays for the next prompt's check, which leaves out whatever
+	// was read meanwhile. The same text is not shown twice in a row.
+	let shown = "";
+	function transaction(event: string, extra: Record<string, unknown>, show: (text: string, details: object) => "later" | false, display = false): Promise<void> {
 		const gen = generation;
 		const sid = session;
 		const run = lock.then(async () => {
@@ -219,9 +225,14 @@ export default function (pi: any) {
 			}
 			const r = await hook({ session_id: sid, hook_event_name: event, reply_session: owner?.handle, ...extra });
 			if (!r?.text || gen !== generation) return; // replaced or shut down meanwhile: not shown, not acknowledged
+			if (display && r.text === shown) return;
 			const token = randomUUID();
 			const how = show(r.text, { token });
 			if (!how || !r.ack) return;
+			if (display) {
+				shown = r.text;
+				return;
+			}
 			pending.set(token, r.ack); reconcile(ctxRef, false);
 		});
 		lock = run.catch(() => {});
@@ -276,7 +287,7 @@ export default function (pi: any) {
 			const lines = text.split("\n").filter((l) => l.startsWith("- ")).length;
 			ctx.ui?.notify?.(lines > 0 ? `AgentNet: ${lines} new` : "AgentNet: new activity", "info");
 			return note(ctx, text, details);
-		});
+		}, true);
 	}
 
 	pi.on("session_start", async (_event: unknown, ctx: any) => {
@@ -288,10 +299,11 @@ export default function (pi: any) {
 		ctxRef = ctx;
 		session = ctx.sessionManager.getSessionId();
 		continued = false;
+		shown = "";
 		await registerNative(ctx);
         watch();
         selectedInput();
-		await transaction("SessionStart", {}, (text, details) => note(ctx, text, details));
+		await transaction("SessionStart", {}, (text, details) => note(ctx, text, details), true);
         await lock;
 	});
 
@@ -304,6 +316,24 @@ export default function (pi: any) {
 			return "later"; // acknowledged at message_end, once Pi has added it
 		});
 		return message ? { message } : undefined;
+	});
+
+	// A notice is for its own run. Pi keeps notices in the session and resends
+	// them with every later model request, where an old one would read as new,
+	// and an idle notice may name what was read before the next prompt (whose
+	// own check tells the run what is still unread). So a request leaves out
+	// every notice before its run's start: the prompt, or a receiver input that
+	// started it. Only this request's copy changes; the session keeps every
+	// notice, and receiver inputs and the conversation are never left out.
+	pi.on("context", (event: any) => {
+		const messages: any[] = event?.messages ?? [];
+		let start = -1;
+		for (let i = messages.length - 1; i >= 0 && start < 0; i--) {
+			const m = messages[i];
+			if ((m?.role === "user" && !m?.customType) || m?.customType === RECEIVER) start = i;
+		}
+		const kept = messages.filter((m: any, i: number) => i >= start || m?.customType !== KIND);
+		return kept.length === messages.length ? undefined : { messages: kept };
 	});
 
 	pi.on("message_end", async (_event: any, ctx: any) => { reconcile(ctx ?? ctxRef, false); selectedInput(); });

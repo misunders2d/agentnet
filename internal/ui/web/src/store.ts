@@ -32,6 +32,7 @@ export interface Draft {
   agent?: string;            // legacy/single-button fallback; exact multi-target PIDs live in text mention references
   topic?: string;
   newTopic?: boolean;        // in an agent's conversation: start a separate one with the next send
+  plainReply?: boolean;      // this Reply stays an ordinary message instead of continuing the replied agent's request
   files?: StagedFile[];
   mediaMode?: "original" | "smaller";
 }
@@ -1029,6 +1030,7 @@ export class Store {
         text: v.text, replyTo: typeof v.replyTo === "string" ? v.replyTo : undefined,
         agent: typeof v.agent === "string" ? v.agent : undefined,
         topic: typeof v.topic === "string" ? v.topic : undefined, newTopic: v.newTopic === true,
+        plainReply: v.plainReply === true || undefined,
         mediaMode: v.mediaMode === "smaller" ? "smaller" : v.mediaMode === "original" ? "original" : undefined,
       };
       return out;
@@ -1038,7 +1040,7 @@ export class Store {
   private saveDrafts(drafts: Record<string, Draft>) {
     try {
       const keep: Record<string, Draft> = {};
-      for (const [k, d] of Object.entries(drafts)) if (d.text || d.replyTo || d.agent || d.topic || d.newTopic || d.mediaMode) keep[k] = { text: d.text, replyTo: d.replyTo, agent: d.agent, topic: d.topic, newTopic: d.newTopic, mediaMode: d.mediaMode };
+      for (const [k, d] of Object.entries(drafts)) if (d.text || d.replyTo || d.agent || d.topic || d.newTopic || d.mediaMode) keep[k] = { text: d.text, replyTo: d.replyTo, agent: d.agent, topic: d.topic, newTopic: d.newTopic, plainReply: d.plainReply, mediaMode: d.mediaMode };
       localStorage.setItem(draftsKey(this.host.workspace.id), JSON.stringify(keep));
     } catch { /* a convenience only */ }
   }

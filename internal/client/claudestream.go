@@ -28,6 +28,7 @@ type claudeStreamBridge struct {
 	buf                  []byte
 	active, done, failed bool
 	prompt, session      string
+	failure              string
 	closed               chan struct{}
 	answer               string
 	pending              map[string]*piSteer
@@ -55,7 +56,7 @@ func newClaudeStreamBridge(ctx context.Context, cmd *exec.Cmd, prompt string, ou
 	go func() {
 		defer b.writes.Done()
 		if b.send(ctx, "", nil, map[string]any{"type": "user", "message": map[string]string{"role": "user", "content": prompt}}) != nil {
-			b.fail("Claude native input failed; review this request before continuing")
+			b.fail("Claude did not accept the request input")
 		}
 	}()
 	go func() {
@@ -121,17 +122,35 @@ func (b *claudeStreamBridge) close() {
 	})
 }
 func (b *claudeStreamBridge) fail(why string) { b.mu.Lock(); defer b.mu.Unlock(); b.failLocked(why) }
-func (b *claudeStreamBridge) failLocked(why string) {
+
+// failLocked ends the request with a technical failure: the run is reported
+// failed with this reason, never as a human decision.
+func (b *claudeStreamBridge) failLocked(why string) { b.stopLocked(why, false) }
+
+// humanLocked ends the request with a genuine native approval or input wait.
+func (b *claudeStreamBridge) humanLocked(why string) { b.stopLocked(why, true) }
+func (b *claudeStreamBridge) stopLocked(why string, human bool) {
 	if b.done && !b.failed {
 		return
 	}
 	if !b.failed {
 		b.failed = true
-		fmt.Fprintln(b.output, needsHumanMarker)
-		fmt.Fprintln(b.output, why)
+		if human {
+			fmt.Fprintln(b.output, needsHumanMarker)
+			fmt.Fprintln(b.output, nativeStatusPrefix+why)
+		} else {
+			b.failure = why
+		}
 	}
 	b.endLocked()
 	_ = b.input.Close()
+}
+
+// failureText is the technical reason the request failed, or "".
+func (b *claudeStreamBridge) failureText() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.failure
 }
 func (b *claudeStreamBridge) endLocked() {
 	b.done = true
@@ -146,7 +165,7 @@ func (b *claudeStreamBridge) finish() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !b.done {
-		b.failLocked("Claude ended before its request settled; review before continuing")
+		b.failLocked("Claude ended before its request settled")
 	}
 }
 func (b *claudeStreamBridge) Write(data []byte) (int, error) {
@@ -160,7 +179,7 @@ func (b *claudeStreamBridge) Write(data []byte) (int, error) {
 		}
 		if len(b.buf)+n > codexLineMax {
 			b.buf = nil
-			b.fail("Native event framing exceeded its bound")
+			b.fail("Claude sent a protocol line over the size bound")
 			return len(data), nil
 		}
 		b.buf = append(b.buf, rest[:n]...)
@@ -195,7 +214,7 @@ func (b *claudeStreamBridge) event(raw []byte) {
 		Denials []json.RawMessage `json:"permission_denials"`
 	}
 	if json.Unmarshal(raw, &e) != nil {
-		b.fail("Claude emitted invalid native protocol; no answer was used")
+		b.fail("Claude sent an unreadable protocol line; no answer was used")
 		return
 	}
 	b.mu.Lock()
@@ -217,7 +236,7 @@ func (b *claudeStreamBridge) event(raw []byte) {
 	}
 	if e.Session != "" {
 		if b.session != "" && b.session != e.Session {
-			b.failLocked("Claude changed the owned native session")
+			b.failLocked("Claude switched to another session; no answer was used")
 			return
 		}
 		b.session = e.Session
@@ -296,8 +315,21 @@ func (b *claudeStreamBridge) event(raw []byte) {
 			}
 		}
 	case "result":
-		if e.Session == "" || e.Session != b.session || e.IsError || len(e.Denials) > 0 {
-			b.failLocked("Claude's native provider or permission setup stopped this request; review locally before continuing")
+		switch {
+		case e.Session == "" || e.Session != b.session:
+			b.failLocked("Claude reported a result for another session; no answer was used")
+			return
+		case len(e.Denials) > 0:
+			b.humanLocked("Your Claude permission setup denied an action this request needed; review locally before continuing")
+			return
+		case e.IsError:
+			why := "Claude reported an error"
+			if msg := clip([]byte(e.Result)); msg != "" {
+				why += ": " + msg
+			} else if e.Subtype != "" {
+				why += " (" + clip([]byte(e.Subtype)) + ")"
+			}
+			b.failLocked(why)
 			return
 		}
 		if len(e.Result) > maxOutput+1 {
@@ -306,10 +338,10 @@ func (b *claudeStreamBridge) event(raw []byte) {
 		b.answer = e.Result
 		b.publishLocked()
 	case "control_request":
-		b.failLocked("Claude needs native approval or input; no response or permission override was invented")
+		b.humanLocked("Claude needs native approval or input; no response or permission override was invented")
 	case "system":
 		if e.Subtype == "permission_denied" {
-			b.failLocked("Claude could not obtain native permission; review locally before continuing")
+			b.humanLocked("Claude could not obtain native permission; review locally before continuing")
 		}
 	}
 }
@@ -379,7 +411,7 @@ func (b *claudeStreamBridge) thinkingEvent(raw json.RawMessage) {
 
 func (b *claudeStreamBridge) publishLocked() {
 	if strings.TrimSpace(b.answer) == "" {
-		b.failLocked("Native request settled without an assistant answer")
+		b.failLocked("Claude finished without an answer")
 		return
 	}
 	fmt.Fprintln(b.output, b.answer)

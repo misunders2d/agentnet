@@ -11,6 +11,7 @@ import (
 	"io"
 	"os/exec"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -167,7 +168,9 @@ func (a *Agent) codexRoomTool(ctx context.Context, cause string, raw json.RawMes
 	}
 }
 
-const codexRoomUnavailable = "Codex native transport unavailable. Use a Codex version supporting app-server. AgentNet did not change your native permissions. Review completed work before an explicit continuation."
+// nativeStatusPrefix marks text AgentNet itself wrote into a run's output,
+// so it is never presented as the agent's own words.
+const nativeStatusPrefix = "AgentNet: "
 
 const codexLineMax = 4 << 20
 
@@ -205,6 +208,9 @@ type codexRoomBridge struct {
 	thread, turn, answer string
 	calls                map[string]bool
 	done                 bool
+	// failure is the exact technical reason the run ended without a native
+	// outcome; it is reported as a failed run, never as a human decision.
+	failure string
 }
 
 func newCodexRoomBridge(ctx context.Context, cmd *exec.Cmd, prompt string, output io.Writer, call func(context.Context, json.RawMessage) (string, error), plans ...sessionPlan) (*codexRoomBridge, error) {
@@ -245,13 +251,47 @@ func (b *codexRoomBridge) send(v any) {
 	defer b.writeMu.Unlock()
 	_ = json.NewEncoder(b.input).Encode(v)
 }
-func (b *codexRoomBridge) failLocked() {
+func (b *codexRoomBridge) failLocked(why string) {
+	if !b.done {
+		b.done = true
+		b.failure = why
+	}
+	b.close()
+}
+
+// humanLocked ends the run with a genuine native permission or input wait.
+func (b *codexRoomBridge) humanLocked(why string) {
 	if !b.done {
 		b.done = true
 		fmt.Fprintln(b.output, needsHumanMarker)
-		fmt.Fprintln(b.output, codexRoomUnavailable)
+		fmt.Fprintln(b.output, nativeStatusPrefix+why)
 	}
 	b.close()
+}
+
+// failureText is the technical reason the run failed, or "".
+func (b *codexRoomBridge) failureText() string {
+	b.stateMu.Lock()
+	defer b.stateMu.Unlock()
+	return b.failure
+}
+
+// codexRPCError words a JSON-RPC error response to one of the bridge's own
+// requests.
+func codexRPCError(id, raw json.RawMessage) string {
+	method := map[string]string{"1": "initialize", "2": "thread start", "3": "turn start"}[string(id)]
+	if method == "" {
+		method = "request " + clip(id)
+	}
+	var e struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}
+	_ = json.Unmarshal(raw, &e)
+	if e.Message == "" {
+		e.Message = "no message"
+	}
+	return fmt.Sprintf("Codex refused %s: %s (code %d)", method, clip([]byte(e.Message)), e.Code)
 }
 func (b *codexRoomBridge) finish() {
 	b.stateMu.Lock()
@@ -261,7 +301,11 @@ func (b *codexRoomBridge) finish() {
 		delete(b.steering, id)
 	}
 	if !b.done {
-		b.failLocked()
+		if b.thread == "" {
+			b.failLocked("Codex exited before starting a session")
+		} else {
+			b.failLocked("Codex ended before the turn completed")
+		}
 	}
 	b.close()
 }
@@ -273,14 +317,14 @@ func (b *codexRoomBridge) Write(p []byte) (int, error) {
 		i := bytes.IndexByte(p, '\n')
 		if i < 0 {
 			if len(b.buf)+len(p) > codexLineMax {
-				b.fail()
+				b.fail("Codex sent a protocol line over the size bound")
 				return n, nil
 			}
 			b.buf = append(b.buf, p...)
 			break
 		}
 		if len(b.buf)+i > codexLineMax {
-			b.fail()
+			b.fail("Codex sent a protocol line over the size bound")
 			return n, nil
 		}
 		b.buf = append(b.buf, p[:i]...)
@@ -301,7 +345,7 @@ func (b *codexRoomBridge) event(raw []byte) {
 		Error  json.RawMessage `json:"error"`
 	}
 	if json.Unmarshal(raw, &m) != nil {
-		b.failLocked()
+		b.failLocked("Codex sent an unreadable protocol line")
 		return
 	}
 	if ch, ok := b.steering[string(m.ID)]; ok && m.Method == "" {
@@ -325,7 +369,7 @@ func (b *codexRoomBridge) event(raw []byte) {
 		return
 	}
 	if len(m.Error) > 0 && string(m.Error) != "null" {
-		b.failLocked()
+		b.failLocked(codexRPCError(m.ID, m.Error))
 		return
 	}
 	if m.Method == "" {
@@ -353,13 +397,12 @@ func (b *codexRoomBridge) event(raw []byte) {
 				} `json:"thread"`
 			}
 			if json.Unmarshal(m.Result, &r) != nil || r.Thread.ID == "" || b.resume != "" && r.Thread.ID != b.resume {
-				b.failLocked()
+				b.failLocked("Codex returned no usable session")
 				return
 			}
 			b.thread = r.Thread.ID
 			if b.threadAvailable != nil && !b.threadAvailable(b.thread) {
-				fmt.Fprintln(b.output, needsHumanMarker+"\nThe native session is already owned by another active request, or its reservation could not be confirmed. No turn input was sent; check the existing work before explicitly continuing.")
-				b.failLocked()
+				b.humanLocked("The native session is already owned by another active request, or its reservation could not be confirmed. No turn input was sent; check the existing work before explicitly continuing.")
 				return
 			}
 			_ = json.Unmarshal(r.ApprovalPolicy, &b.nativePolicy)
@@ -374,7 +417,7 @@ func (b *codexRoomBridge) event(raw []byte) {
 				} `json:"turn"`
 			}
 			if json.Unmarshal(m.Result, &r) != nil || r.Turn.ID == "" || b.turn != "" && b.turn != r.Turn.ID {
-				b.failLocked()
+				b.failLocked("Codex returned an unexpected turn")
 				return
 			}
 			b.turn = r.Turn.ID
@@ -392,6 +435,9 @@ func (b *codexRoomBridge) event(raw []byte) {
 		Turn      struct {
 			ID     string `json:"id"`
 			Status string `json:"status"`
+			Error  *struct {
+				Message string `json:"message"`
+			} `json:"error"`
 		} `json:"turn"`
 		Item struct {
 			ID   string `json:"id"`
@@ -513,7 +559,7 @@ func (b *codexRoomBridge) event(raw []byte) {
 	case "turn/started":
 		if p.ThreadID == b.thread {
 			if b.turn != "" && b.turn != p.Turn.ID {
-				b.failLocked()
+				b.failLocked("Codex started an unexpected turn")
 				return
 			}
 			b.turn = p.Turn.ID
@@ -521,7 +567,7 @@ func (b *codexRoomBridge) event(raw []byte) {
 		}
 	case "item/tool/call":
 		if b.call == nil || p.ThreadID != b.thread || b.turn == "" || p.TurnID != b.turn || p.Tool != "agentnet_room" || p.Namespace != nil || p.CallID == "" || len(m.ID) == 0 {
-			b.failLocked()
+			b.failLocked("Codex sent an unexpected tool call " + strconv.Quote(clip([]byte(p.Tool))))
 			return
 		}
 		if b.calls[p.CallID] {
@@ -563,8 +609,16 @@ func (b *codexRoomBridge) event(raw []byte) {
 		}
 	case "turn/completed":
 		if p.ThreadID == b.thread && p.Turn.ID == b.turn {
-			if p.Turn.Status != "completed" || strings.TrimSpace(b.answer) == "" {
-				b.failLocked()
+			if p.Turn.Status != "completed" {
+				why := "Codex ended the turn as " + strconv.Quote(clip([]byte(p.Turn.Status)))
+				if p.Turn.Error != nil && p.Turn.Error.Message != "" {
+					why += ": " + clip([]byte(p.Turn.Error.Message))
+				}
+				b.failLocked(why)
+				return
+			}
+			if strings.TrimSpace(b.answer) == "" {
+				b.failLocked("Codex completed the turn without an answer")
 				return
 			}
 			b.done = true
@@ -574,7 +628,7 @@ func (b *codexRoomBridge) event(raw []byte) {
 	case "item/commandExecution/requestApproval", "item/fileChange/requestApproval", "item/permissions/requestApproval", "item/tool/requestUserInput", "tool/requestUserInput", "mcpServer/elicitation/request":
 		if len(m.ID) > 0 {
 			if b.thread == "" || p.ThreadID != b.thread || b.turn == "" || (p.TurnID != b.turn && !(m.Method == "mcpServer/elicitation/request" && p.TurnID == "")) {
-				b.failLocked()
+				b.failLocked("Codex sent " + m.Method + " for another turn; nothing was approved")
 				return
 			}
 			if b.native != nil {
@@ -583,7 +637,7 @@ func (b *codexRoomBridge) event(raw []byte) {
 			}
 			b.done = true
 			fmt.Fprintln(b.output, needsHumanMarker)
-			fmt.Fprintln(b.output, "Your Codex setup requires a native approval or input for this action. This background session cannot collect it. Continue in your native Codex session with the specific permission; retrying unchanged will ask again. AgentNet did not approve or bypass it.")
+			fmt.Fprintln(b.output, nativeStatusPrefix+"Your Codex setup requires a native approval or input for this action. This background session cannot collect it. Continue in your native Codex session with the specific permission; retrying unchanged will ask again. AgentNet did not approve or bypass it.")
 			var why struct{ Reason, Message string }
 			if json.Unmarshal(m.Params, &why) == nil {
 				for _, text := range []string{why.Reason, why.Message} {
@@ -596,7 +650,7 @@ func (b *codexRoomBridge) event(raw []byte) {
 		}
 	default:
 		if len(m.ID) > 0 {
-			b.failLocked()
+			b.failLocked("Codex sent an unsupported request " + strconv.Quote(clip([]byte(m.Method))) + "; nothing was approved")
 		} // new approval or unsupported client action: never approve it
 	}
 }
@@ -615,7 +669,7 @@ func (b *codexRoomBridge) beginNativeLocked(method string, id, params json.RawMe
 	identity := method + "\x00" + string(canonicalParams)
 	if seen := b.nativeSeen[key]; seen != "" {
 		if seen != identity {
-			b.failLocked()
+			b.failLocked("Codex changed a pending native request")
 		}
 		return
 	}
@@ -625,7 +679,7 @@ func (b *codexRoomBridge) beginNativeLocked(method string, id, params json.RawMe
 	_ = json.Unmarshal(params, &p)
 	callback, e := codexNativeCallback(method, id, params, b.nativeItems[p.ItemID], b.cwd, b.thread, b.turn)
 	if e != nil {
-		b.failLocked()
+		b.failLocked("Codex sent an unreadable native request: " + e.Error())
 		return
 	}
 	if b.nativePolicy == "never" && strings.HasSuffix(method, "/requestApproval") {
@@ -667,7 +721,7 @@ func (b *codexRoomBridge) beginNativeLocked(method string, id, params json.RawMe
 		if e != nil || b.nativeCheck != nil && !b.nativeCheck(callback) || b.nativePolicy == "never" && nativePermissionGrant(callback.View.Method, result) {
 			b.done = true
 			fmt.Fprintln(b.output, needsHumanMarker)
-			fmt.Fprintln(b.output, "The native request could not be continued with current authority. No approval was sent. Review the existing work before explicitly continuing.")
+			fmt.Fprintln(b.output, nativeStatusPrefix+"The native request could not be continued with current authority. No approval was sent. Review the existing work before explicitly continuing.")
 			b.close()
 			return
 		}
@@ -675,7 +729,7 @@ func (b *codexRoomBridge) beginNativeLocked(method string, id, params json.RawMe
 		err := json.NewEncoder(b.input).Encode(map[string]any{"id": callback.ID, "result": result})
 		b.writeMu.Unlock()
 		if err != nil {
-			b.failLocked()
+			b.failLocked("the native response could not be handed to Codex")
 		} // uncertain handover is never retried
 	}()
 }
@@ -691,7 +745,11 @@ const (
 	steerUnknown     = "unknown"
 )
 
-func (b *codexRoomBridge) fail() { b.stateMu.Lock(); defer b.stateMu.Unlock(); b.failLocked() }
+func (b *codexRoomBridge) fail(why string) {
+	b.stateMu.Lock()
+	defer b.stateMu.Unlock()
+	b.failLocked(why)
+}
 func (b *codexRoomBridge) markReady() {
 	if b.ready != nil {
 		b.readyOnce.Do(func() { close(b.ready) })

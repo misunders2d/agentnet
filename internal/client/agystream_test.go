@@ -59,7 +59,7 @@ func TestAgyTerminalResults(t *testing.T) {
 			}
 			body, status, attention := s.result(tc.err, &d)
 			if tc.attention != "" {
-				if !strings.Contains(attention, tc.attention) || body != "" {
+				if !strings.HasPrefix(attention, nativeStatusPrefix) || !strings.Contains(attention, tc.attention) || body != "" {
 					t.Fatalf("attention=%q body=%q", attention, body)
 				}
 			} else if status != tc.want || attention != "" || tc.want == envelope.StatusDone && body != "final answer" {

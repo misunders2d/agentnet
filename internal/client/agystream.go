@@ -134,18 +134,19 @@ func (d *agyDiagnostics) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// result returns either a terminal answer/status or a local needs-human reason.
+// result returns either a terminal answer/status or a local needs-human reason,
+// which is AgentNet's own text and says so.
 // Vendor approval advice and tool diagnostics stay out of the peer's answer.
 func (s *agyStream) result(runErr error, d *agyDiagnostics) (body, status, attention string) {
 	status = envelope.StatusFailed
 	detail := strings.ToLower(s.detail)
 	switch {
 	case d.permission:
-		return "", status, "Antigravity could not obtain a native tool approval. Review the request in your native setup; AgentNet did not change permissions or retry it."
+		return "", status, nativeStatusPrefix + "Antigravity could not obtain a native tool approval. Review the request in your native setup; AgentNet did not change permissions or retry it."
 	case d.auth || strings.Contains(detail, "authentication required") || strings.Contains(detail, "unauthenticated"):
-		return "", status, "Antigravity requires sign-in. Open agy in its configured directory and sign in, then explicitly retry this request."
+		return "", status, nativeStatusPrefix + "Antigravity requires sign-in. Open agy in its configured directory and sign in, then explicitly retry this request."
 	case s.status == "WAITING" && s.complete && !s.damaged:
-		return "", status, "Antigravity is waiting for native input. Open agy in its configured directory to review what it needs; this request was not retried."
+		return "", status, nativeStatusPrefix + "Antigravity is waiting for native input. Open agy in its configured directory to review what it needs; this request was not retried."
 	case s.damaged:
 		return "Antigravity's result or conversation identity could not be verified; no partial answer was used.", status, ""
 	case s.complete && s.status == "CANCELED":

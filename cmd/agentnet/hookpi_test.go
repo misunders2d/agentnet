@@ -112,7 +112,8 @@ slow) : > "$d/inflight"; sleep 0.3 ;;
 esac
 pos=7
 case "$in" in *'"after":'[1-9]*) pos=8 ;; esac
-printf '%s%s%s\n' '{"text":"AgentNet (me): new messages arrived since this session last checked:\n- m1 message from bob/desk","ack":{"pos":' "$pos" ',"has_pos":true,"release":""}}'
+n=$(wc -l < "$d/calls.log") # each check names a newer arrival
+printf '%s%s%s%s%s\n' '{"text":"AgentNet (me): new messages arrived since this session last checked:\n- m' "$n" ' message from bob/desk","ack":{"pos":' "$pos" ',"has_pos":true,"release":""}}'
 `
 
 // piHarness loads the extension in Node with a stand-in for Pi's extension
@@ -283,26 +284,26 @@ func TestPiExtensionWithStandInAPI(t *testing.T) {
 			t.Errorf("%s.%s = %v, want %v (all: %v)", step, key, got, want, s[step])
 		}
 	}
-	check("start", "acks", 1) // in the session at once
+	check("start", "acks", 0) // shown to the person only: never recorded as seen
 	check("start", "triggerTurn", false)
 	check("prompt", "message", true)
-	check("prompt", "acks", 1) // not yet: Pi adds it after the handler returns
+	check("prompt", "acks", 0) // not yet: Pi adds it after the handler returns
 	check("prompt-pending", "message", false)
 	check("prompt-pending", "reads", 0) // deferred while one is pending
 	check("settle-pending", "reads", 0)
 	check("settle-pending", "entries", false)
-	check("settle-pending", "acks", 1)
+	check("settle-pending", "acks", 0)
 	check("settle-pending", "pos8", false) // never acknowledged over the pending 7
-	check("admitted", "acks", 2)
-	check("idle", "acks", 3)
+	check("admitted", "acks", 1)
+	check("idle", "acks", 1) // shown to the person only
 	check("idle", "notes", "[AgentNet: 1 new]")
 	check("delayed-idle", "inflight", true)
 	check("delayed-idle", "notes", 1) // no notice once a run has started
 	check("delayed-idle", "sent", 0)
-	check("delayed-idle", "acks", 3) // and nothing acknowledged
+	check("delayed-idle", "acks", 1) // and nothing acknowledged
 	check("settle", "continue", true)
-	check("settle", "acks", 3)
-	check("settle-admitted", "acks", 4)
+	check("settle", "acks", 1)
+	check("settle-admitted", "acks", 2)
 	check("dropped", "first", true)
 	check("dropped", "recheck", 1) // the deferred check, once idle
 	check("dropped", "recheckNotes", 1)
@@ -322,5 +323,126 @@ func TestPiExtensionWithStandInAPI(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(filepath.Join(dir, "calls.log")); len(data) != 0 {
 		t.Fatal("background session called agentnet")
+	}
+}
+
+// piRunStub answers every check with one unread arrival, or with nothing
+// once mode is "read" (the person read it in AgentNet meanwhile).
+const piRunStub = `#!/bin/sh
+d="$STUB_DIR"
+in=$(cat)
+printf '%s\n' "$in" >> "$d/calls.log"
+case "$in" in *'"Ack"'*) exit 0 ;; esac
+[ "$(cat "$d/mode" 2>/dev/null)" = read ] && exit 0
+printf '%s\n' '{"text":"AgentNet (me): new messages arrived since this session last checked:\n- m1 message from bob/desk","ack":{"pos":7,"has_pos":true,"release":""}}'
+`
+
+const piRunHarness = `
+import * as fs from "node:fs";
+const [ext, home, dir] = process.argv.slice(2);
+const h = {};
+const sent = [];
+let branch = [];
+const file = dir + "/native.jsonl";
+const persist = () => fs.writeFileSync(file, JSON.stringify({type:"session",id:"S1"}) + "\n" + branch.map(e=>JSON.stringify(e)).join("\n") + "\n");
+const pi = { on: (ev, fn) => { h[ev] = fn; }, sendMessage: (m) => { sent.push(m); branch.push({id:"m"+sent.length,type:"custom_message",customType:m.customType,details:m.details}); persist(); } };
+(await import(ext)).default(pi);
+const out = (x) => console.log(JSON.stringify(x));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const mode = (m) => fs.writeFileSync(dir + "/mode", m);
+const acks = () => fs.readFileSync(dir + "/calls.log", "utf8").split("\n").filter((l) => l.includes('"Ack"')).length;
+let idle = true;
+const ctx = { hasUI: true, isIdle: () => idle, ui: { notify: () => {} },
+  sessionManager: { getSessionId: () => "S1", getSessionFile: () => file, getBranch: () => branch } };
+const notice = (name, details) => ({ role: "custom", customType: "agentnet", content: name, display: true, details });
+const user = (t) => ({ role: "user", content: [{ type: "text", text: t }] });
+const asst = (t) => ({ role: "assistant", content: [{ type: "text", text: t }] });
+const names = (r, msgs) => (r?.messages ?? msgs).map((m) => m.customType ? m.customType + ":" + m.content : m.role + ":" + (m.content?.[0]?.text ?? ""));
+const context = async (msgs) => h.context ? names(await h.context({ type: "context", messages: msgs }), msgs) : "no context handler";
+mode("unread");
+await h.session_start({}, ctx);
+await sleep(100);
+out({ step: "start", shown: sent.length, acks: acks() });
+fs.writeFileSync(home + "/agent.db-wal", "x");
+await sleep(900);
+out({ step: "idle-again", shown: sent.length, acks: acks() });
+// Read before the next prompt: the prompt's check has nothing, and the idle
+// notice of the earlier wait is not this run's.
+mode("read");
+idle = false;
+const r1 = await h.before_agent_start({});
+out({ step: "prompt-read", message: !!r1?.message });
+out({ step: "context-read", kept: await context([user("p0"), notice("old", { token: "t0" }), asst("a0"), notice("idle", sent[0]?.details), user("p1")]) });
+await h.agent_settled({}, ctx);
+// Still unread at the next prompt: its own check tells the run.
+mode("unread");
+const r2 = await h.before_agent_start({});
+out({ step: "prompt-unread", message: !!r2?.message });
+out({ step: "context-unread", kept: await context([user("p0"), notice("old", { token: "t0" }), asst("a0"), notice("idle", sent[0]?.details), user("p1"), notice("prompt", r2?.message?.details), asst("a1"), { role: "toolResult", content: [{ type: "text", text: "r1" }] }]) });
+out({ step: "context-receiver", kept: await context([user("p0"), notice("old", { token: "t0" }), asst("a0"), { role: "custom", customType: "agentnet-receiver", content: "reply" }, notice("now", { token: "t1" })]) });
+out({ step: "context-same", kept: await context([user("p1"), notice("now", { token: "t2" }), asst("a1")]) });
+out({ step: "context-idle-then-input", kept: await context([asst("a0"), notice("idle", { token: "t3" }), user("p1"), { role: "custom", customType: "agentnet-receiver", content: "reply" }]) });
+await h.session_shutdown({}); // stops the idle watcher
+process.exit(0);
+`
+
+// A model request sees only the notices of its own run (oct23 T7): an
+// earlier run's notice persisted in the session is not replayed as new, and
+// a notice shown while idle is the person's only, never recorded as seen, so
+// the next prompt's check says what is still unread then and a chat read
+// meanwhile does not come back. Receiver inputs and the conversation stay.
+func TestPiExtensionNoticesOnlyInTheirRun(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("stand-in agentnet is a shell script")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed")
+	}
+	if out, err := exec.Command(node, "-e", "process.exit(Number(process.versions.node.split('.')[0]) >= 23 ? 0 : 1)").CombinedOutput(); err != nil {
+		t.Skipf("node too old to load TypeScript directly: %s", out)
+	}
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	os.MkdirAll(home, 0o700)
+	stub := filepath.Join(dir, "agentnet")
+	os.WriteFile(stub, []byte(piRunStub), 0o700)
+	os.WriteFile(filepath.Join(dir, "calls.log"), nil, 0o600)
+	bin, _ := json.Marshal(stub)
+	h, _ := json.Marshal(home)
+	ext := bytes.Replace(piExtension, []byte(`"__AGENTNET_BIN__"`), bin, 1)
+	ext = bytes.Replace(ext, []byte(`"__AGENTNET_HOME__"`), h, 1)
+	os.WriteFile(filepath.Join(dir, "agentnet.ts"), ext, 0o600)
+	os.WriteFile(filepath.Join(dir, "harness.mjs"), []byte(piRunHarness), 0o600)
+	cmd := exec.Command(node, filepath.Join(dir, "harness.mjs"), filepath.Join(dir, "agentnet.ts"), home, dir)
+	cmd.Env = append(os.Environ(), "STUB_DIR="+dir, "AGENTNET_BACKGROUND=")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("node: %v\n%s", err, out)
+	}
+	steps := map[string]string{}
+	for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		var m map[string]any
+		if json.Unmarshal([]byte(l), &m) == nil {
+			name, _ := m["step"].(string)
+			delete(m, "step")
+			raw, _ := json.Marshal(m)
+			steps[name] = string(raw)
+		}
+	}
+	for step, want := range map[string]string{
+		"start":                   `{"acks":0,"shown":1}`, // shown, never recorded as seen
+		"idle-again":              `{"acks":0,"shown":1}`, // the same text is not shown twice
+		"prompt-read":             `{"message":false}`,
+		"context-read":            `{"kept":["user:p0","assistant:a0","user:p1"]}`,
+		"prompt-unread":           `{"message":true}`,
+		"context-unread":          `{"kept":["user:p0","assistant:a0","user:p1","agentnet:prompt","assistant:a1","toolResult:r1"]}`,
+		"context-receiver":        `{"kept":["user:p0","assistant:a0","agentnet-receiver:reply","agentnet:now"]}`,
+		"context-same":            `{"kept":["user:p1","agentnet:now","assistant:a1"]}`,
+		"context-idle-then-input": `{"kept":["assistant:a0","user:p1","agentnet-receiver:reply"]}`,
+	} {
+		if steps[step] != want {
+			t.Errorf("%s = %s, want %s", step, steps[step], want)
+		}
 	}
 }

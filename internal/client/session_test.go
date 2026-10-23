@@ -428,7 +428,14 @@ func TestCodexAnswerFromEvents(t *testing.T) {
 	if m.Body != "codex native answer" || sessionOf(t, w.bob, q).ID != "thread-1" {
 		t.Fatalf("answer %+v", m)
 	}
-	for _, mode := range []string{"fail", "cut", "empty", "approval"} {
+	// Each technical end fails the request with its exact reason and is never
+	// presented as a human decision (oct23 T2).
+	for mode, want := range map[string]string{
+		"fail":     `xstyle failed: Codex ended the turn as "failed": fixture provider error`,
+		"cut":      "xstyle failed: Codex ended before the turn completed",
+		"empty":    "xstyle failed: Codex completed the turn without an answer",
+		"approval": "xstyle failed: Codex sent an unreadable native request",
+	} {
 		t.Setenv("STUB_TURN", mode)
 		// Each unrelated request starts a genuinely new native thread. Reusing
 		// thread-1 would test the saved-thread fence before reaching this mode.
@@ -437,9 +444,11 @@ func TestCodexAnswerFromEvents(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		waitState(t, w.bob, sent.ID, stateNeedHuman)
-		if _, ok := findReply(w.alice, sent.ID); ok {
-			t.Fatal("partial or unapproved turn answered")
+		waitState(t, w.bob, sent.ID, stateJobFailed)
+		var reply Message
+		eventually(t, mode+" failure reply", func() bool { var ok bool; reply, ok = findReply(w.alice, sent.ID); return ok })
+		if reply.Status != envelope.StatusFailed || !strings.HasPrefix(reply.Body, want) || strings.Contains(reply.Body, "partial commentary") || strings.Contains(reply.Body, needsHumanMarker) {
+			t.Fatalf("%s: %s %q", mode, reply.Status, reply.Body)
 		}
 		row, _ := w.bob.store.inboxMessage(sent.ID)
 		if strings.Contains(row.Detail, "partial commentary") {
@@ -448,8 +457,8 @@ func TestCodexAnswerFromEvents(t *testing.T) {
 		if mode == "approval" {
 			// This legacy stub omits itemId: it is a malformed approval,
 			// not a supported callback. Its private Reason must not leak.
-			if row.Detail != codexRoomUnavailable {
-				t.Fatalf("malformed native approval was not refused: %s", row.Detail)
+			if strings.Contains(row.Detail+reply.Body, "fixture native permission") {
+				t.Fatalf("malformed native approval leaked its reason: %s", row.Detail)
 			}
 			var callbacks int
 			if err := w.bob.store.db.QueryRow(`SELECT count(*) FROM native_requests WHERE request=?`, sent.ID).Scan(&callbacks); err != nil || callbacks != 0 {

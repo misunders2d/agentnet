@@ -178,6 +178,7 @@ export interface ContinuationAction {
   key: string;
   host?: string;
   attempt: number;
+  handled?: DecisionResult;
 }
 
 export interface ControlAction {
@@ -1240,6 +1241,7 @@ export interface StopAction {
   key: string;
   host?: string;
   attempt: number;
+  handled?: DecisionResult;
   pending?: boolean;
   result?: DecisionResult;
 }

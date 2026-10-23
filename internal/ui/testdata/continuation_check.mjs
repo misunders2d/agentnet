@@ -54,6 +54,25 @@ console.log('continuation checks passed');
 }
 console.log('own-human resolution checks passed');
 {
+ // The host's refusal of a handled decision shows on the control, as the
+ // daemon's ContinuationFor reports it; another decision's answer never does.
+ const {e,store,pin}=await fixture(),x={host:'owner/desk',id:'6'.repeat(32),key:e.fp,action:'resolve',expect:'needs_human',attempt:2,send_id:'7'.repeat(32)};
+ const m={id:x.id,kind:'question',target:{address:x.host,fingerprint:pin.fingerprint}},exec={host:x.host,state:'needs_human',attempt:2};
+ e.ctlSupport=async()=>[true,''];
+ const request=e.continuationOf(m,e.fp,exec);
+ assert.deepEqual(await e.handledOf(request),request,'no decision: nothing handled');
+ await e.decide(x);
+ assert.deepEqual(await e.handledOf(request),request,'a sent decision claims no outcome');
+ const body={state:'running',n:1,at:1700000000,decision:'0'.repeat(32),report:'',attempt:2,refused:'stop refused'};
+ await store.write([{s:'inbox',k:'a1'.repeat(16),v:{v:3,id:'a1'.repeat(16),control:true,sub:wire.SubStatus,from:x.host,ref:{id:x.id,fingerprint:e.fp},body:JSON.stringify(body)}}]);
+ assert.equal((await e.handledOf(request)).handled,undefined,'another decision is not this one');
+ await store.write([{s:'inbox',k:'a2'.repeat(16),v:{v:3,id:'a2'.repeat(16),control:true,sub:wire.SubStatus,from:x.host,ref:{id:x.id,fingerprint:e.fp},body:JSON.stringify({...body,n:2,decision:x.send_id,refused:'state is answered, not needs_human'})}}]);
+ assert.equal((await e.handledOf(request)).handled.refused,'state is answered, not needs_human');
+ assert.equal(await e.handledOf(null),null);
+ e.stop();
+}
+console.log('own-human handled refusal checks passed');
+{
  const {e,store,posts,pin}=await fixture(),x={host:'owner/desk',id:'c'.repeat(32),key:e.fp,action:'resolve',expect:'needs_human',attempt:2,send_id:'d'.repeat(32)};
  const fetch=e.fetch;e.fetch=async()=>{throw Error('synthetic offline');};
  e.ctlSupport=async()=>[true,''];await e.decide(x);

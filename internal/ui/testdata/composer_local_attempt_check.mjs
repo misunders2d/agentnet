@@ -122,14 +122,26 @@ const desktopSource=sendSource.match(/^  async function send\([\s\S]*?^  }/m)?.[
 const androidSource=sendSource.match(/^  async function sendAndroid\([\s\S]*?^  }/m)?.[0];
 const selectorSource=composerSource.match(/^  const selectedTargetFollowup = [\s\S]*?;$/m)?.[0];
 assert.ok(desktopSource&&androidSource&&selectorSource,'actual send paths and shared destination selector');
+// The actual Composer destination block: a standard Reply with no tag derives
+// its agent only from stored reply ancestry (MEL-692, oct23 T3).
+const targetStart=composerSource.indexOf('  const followupContext: Ctx ='),targetEnd=composerSource.indexOf('  const latest = (): Draft =>',targetStart);
+assert.ok(targetStart>=0&&targetEnd>targetStart,'actual Composer destination block');
+const targetSource=stripTypeScriptTypes(composerSource.slice(targetStart,targetEnd))+'; globalThis.derived={target,replyAgent};';
+const mentionsModule=await import(new URL('web/src/features/Composer.mentions.ts',root)),modelModule=await import(new URL('web/src/model.ts',root));
+function composerTarget(dm,draft,overview){
+ const env={conv:dm.id,dm,thread:undefined,overview,names:{},draft,text:draft.text,spans:[],answerable:undefined,useMemo:f=>f(),
+  agentTargets:mentionsModule.agentTargets,replyFollowupAgent:directModule.replyFollowupAgent,participants:modelModule.participants,scopeMatches:modelModule.scopeMatches};
+ runInNewContext(targetSource,env);return env.derived;
+}
 // Normal group Reply/tag -> actual desktop and Android send. No caller
 // constructs a FollowupRef; the real selector derives it from the stored DTO.
-async function ordinaryGroupSend(platform,c,{tagged=true,reply=true,newTopic=false,invalid,fail=false,round=1}={}) {
+async function ordinaryGroupSend(platform,c,{tagged=true,reply=true,newTopic=false,invalid,fail=false,round=1,plainReply=false,replyHuman=false}={}) {
  const dm=structuredClone(c.thread),original=dm.messages.find(m=>m.lid===(c.original||fixture.original)),topic=original.topic,calls=[],notices=[],rows=new Map();
  if(invalid)invalid(original,dm);
  const answer={id:'9'.repeat(32),lid:'9'.repeat(32),dir:'in',kind:'answer',body:'Which budget and folder?',reply_to:original.lid,pid:original.pid,topic:original.topic,from:original.target.address,verified_agent:true};
- dm.messages.push(answer);
- const draft={text:tagged?'@Your Pi Use the approved budget':'Use the approved budget',agent:tagged?fixture.pid:undefined,replyTo:reply?answer.id:undefined,newTopic,topic,files:[{key:'answer',name:'answer.md',size:1,file:{}}]};
+ const human={id:'8'.repeat(32),lid:'8'.repeat(32),dir:'in',kind:'message',body:'Sounds good',topic:original.topic,from:'admin/other'};
+ dm.messages.push(answer,human);
+ const draft={text:tagged?'@Your Pi Use the approved budget':'Use the approved budget',agent:tagged?fixture.pid:undefined,replyTo:reply?(replyHuman?human.id:answer.id):undefined,newTopic,topic,plainReply:plainReply||undefined,files:[{key:'answer',name:'answer.md',size:1,file:{}}]};
  const state={open:'selected-view',overview:c.overview,drafts:{[dm.id]:draft}};
  let serial=round*10,cleared=0,retry;
  const storage={getItem:k=>rows.get(k)||null,setItem:(k,v)=>rows.set(k,v)};
@@ -138,7 +150,9 @@ async function ordinaryGroupSend(platform,c,{tagged=true,reply=true,newTopic=fal
  const store={host:{platform,workspace:{id:'ordinary-'+platform},api},get:()=>state,isActive:()=>true,draft:()=>state.drafts[dm.id],setDraft:(_,d)=>state.drafts[dm.id]=d,
   api:{stage:async()=> 'staged-answer',askAgent:r=>api('/api/dm/agent/ask',r),sendDM:r=>api('/api/dm/send',r),discard:async()=>{}},toast:()=>{},refetch:async()=>{},
   sends:{begin:(_c,_m,r)=>{retry=r;},ready:async()=>{},finish:()=>{},remove:()=>{},has:()=>true,fail:()=>{},move:()=>{}}};
- const env={store,dm,thread:undefined,conv:dm.id,ready:true,latest:()=>draft,target:tagged?{kind:'agent',pid:fixture.pid}:{kind:'conversation'},overview:c.overview,names:{},words:{},visible:{current:dm.id},EMPTY:{text:''},
+ const derived=composerTarget(dm,draft,c.overview);
+ if(tagged)assert.equal(derived.replyAgent,undefined,'an explicit tag is never replaced by Reply ancestry');
+ const env={store,dm,thread:undefined,conv:dm.id,ready:true,latest:()=>draft,target:tagged?{kind:'agent',pid:fixture.pid}:derived.target,overview:c.overview,names:{},words:{},visible:{current:dm.id},EMPTY:{text:''},
   followupContext:ctx,currentDirectComposerFollowup:directModule.currentDirectComposerFollowup,
   selectedFollowup:(pid,d)=>d.newTopic?undefined:currentComposerFollowup(dm,pid,d.topic||'',ctx,d.replyTo),
   setNotice:n=>{if(n)notices.push(n.text);},setBusy:()=>{},clearSent:()=>{cleared++;state.drafts[dm.id]={text:''};},typing:{stop:()=>{}},
@@ -149,15 +163,17 @@ async function ordinaryGroupSend(platform,c,{tagged=true,reply=true,newTopic=fal
  runInNewContext(stripTypeScriptTypes(selectorSource)+'; globalThis.boundSelector=selectedTargetFollowup;',env);env.selectedTargetFollowup=env.boundSelector;
  const send=runInNewContext('('+stripTypeScriptTypes(desktopSource)+')',env);env.sendAndroid=runInNewContext('('+stripTypeScriptTypes(androidSource)+')',env);
  await send();
- if(invalid){assert.equal(calls.length,0,'invalid exact ancestry has no send');assert.equal(cleared,0);assert.equal(state.drafts[dm.id].files.length,1);assert.ok(notices.length);return;}
+ if(invalid&&tagged){assert.equal(calls.length,0,'invalid exact ancestry has no send');assert.equal(cleared,0);assert.equal(state.drafts[dm.id].files.length,1);assert.ok(notices.length);return;}
  assert.equal(calls.length,1,platform+' one exact logical send');
- const expected=!tagged?'/api/dm/send':reply&&!newTopic?'/api/request/followup':'/api/dm/agent/ask';
+ const continues=reply&&!newTopic&&(tagged||!invalid&&!plainReply&&!replyHuman);
+ assert.equal(derived.replyAgent,!tagged&&continues?fixture.pid:undefined,platform+' Reply derives only the bound agent');
+ const expected=continues?'/api/request/followup':tagged?'/api/dm/agent/ask':'/api/dm/send';
  assert.equal(calls[0].endpoint,expected,platform+' ordinary Reply routing for '+c.state);
  if(expected==='/api/request/followup'){
   assert.equal(calls[0].request.attempt,0,'ordinary answer queues normally, never obsolete steering');
   assert.equal(calls[0].request.ref.id,original.lid);assert.equal(calls[0].request.ref.fingerprint,c.author||fixture.author);assert.equal(calls[0].request.conv,dm.id);
   assert.deepEqual(calls[0].request.files,['staged-answer']);
- }else assert.equal(calls[0].request.ref,undefined,'no tag/Reply/new-topic invents no continuation');
+ }else{assert.equal(calls[0].request.ref,undefined,'no tag/Reply/new-topic invents no continuation');if(expected==='/api/dm/send')assert.equal(calls[0].request.reply_to,draft.replyTo,'an ordinary Reply keeps its reply');}
  if(fail&&platform==='android')assert.deepEqual(journal.readPending(storage,'ordinary-'+platform)[0].request,calls[0].request,'Android journal retains exact ordinary continuation');
  else if(fail){assert.equal(typeof retry,'function');retry();await new Promise(r=>setTimeout(r,0));assert.deepEqual(calls[1],calls[0],'ordinary retry keeps logical ID/ref/Attempt0/files');}
  return calls[0];
@@ -166,6 +182,11 @@ const ordinaryCases=fixture.cases.filter(c=>['needs_human','answered','resolved'
 for(const platform of ['daemon','android'])for(const c of ordinaryCases){
  await ordinaryGroupSend(platform,c);
  await ordinaryGroupSend(platform,c,{tagged:false});
+ await ordinaryGroupSend(platform,c,{tagged:false,fail:true});
+ await ordinaryGroupSend(platform,c,{tagged:false,plainReply:true});
+ await ordinaryGroupSend(platform,c,{tagged:false,replyHuman:true});
+ await ordinaryGroupSend(platform,c,{tagged:false,reply:false});
+ for(const change of [m=>m.exec.state='failed',m=>m.pid='f'.repeat(32),m=>m.deleted=true])await ordinaryGroupSend(platform,c,{tagged:false,invalid:change});
  await ordinaryGroupSend(platform,c,{reply:false});
  await ordinaryGroupSend(platform,c,{newTopic:true});
  await ordinaryGroupSend(platform,c,{fail:true});
@@ -177,7 +198,7 @@ for(const platform of ['daemon','android'])for(const c of ordinaryCases){
  request.from=next.overview.me.address;request.send_group_author=next.author=next.overview.me.fingerprint;
  await ordinaryGroupSend(platform,next,{round:3});
 }
-if(ordinaryCases.length)console.log('actual desktop/Android ordinary tagged Reply sends: two rounds, Attempt0, no-tag/no-Reply/new-topic, exact retry/journal and native identity/failed/history refusals PASS');
+if(ordinaryCases.length)console.log('actual desktop/Android ordinary tagged and plain Reply sends: two rounds, Attempt0, plain-Reply continuation, Stop/human/unbound stay ordinary, no-Reply/new-topic, exact retry/journal and native identity/failed/history refusals PASS');
 
 async function directSend(platform,{named=false,fail=false,newTopic=false,ended=false,invalid=false,projection,refusal,refreshState,refreshFails=false,otherStale=false,ordinaryReply=false}={}) {
  const calls=[],previews=[],notices=[],savedRows=new Map();let cleared=0,serial=0,retry,refreshes=0,stages=0;

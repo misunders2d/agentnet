@@ -81,6 +81,18 @@ export function composerReplyFollowup(dm: T.DMThread | undefined, pid: string, t
   if (next && strict) throw Error("The selected reply has cyclic ancestry. Nothing was sent; your draft is kept.");
 }
 
+// A standard Reply on an agent's message continues that agent's exact request
+// only when stored reply ancestry binds it; any other Reply stays an ordinary
+// message. A display name or quote never chooses the agent.
+export function replyFollowupAgent(dm: T.DMThread | undefined, topic: string, ctx: Ctx, replyTo?: string): string | undefined {
+  if (!dm || !replyTo) return;
+  const exact = (dm.messages || []).filter(m => m.id === replyTo);
+  const rows = exact.length ? exact : (dm.messages || []).filter(m => m.lid === replyTo);
+  const pid = rows[0]?.pid;
+  if (!pid || rows.some(m => m.pid !== pid) || !dm.agents?.some(a => a.pid === pid)) return;
+  return composerReplyFollowup(dm, pid, topic, ctx, replyTo) ? pid : undefined;
+}
+
 export function currentComposerFollowup(dm: T.DMThread | undefined, pid: string, topic: string, ctx: Ctx, replyTo?: string): ComposerFollowup | undefined {
   if (replyTo) {
     const bound = composerReplyFollowup(dm,pid,topic,ctx,replyTo,true);

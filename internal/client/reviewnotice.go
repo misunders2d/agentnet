@@ -630,7 +630,12 @@ func (a *Agent) reportBodyFor(items []ReportItem, agentText map[string]string, f
 		it.Actionable = actionable
 		if full && it.State == stateNeedHuman && agentText[it.ID] != "" {
 			if it.Excerpt != "" {
-				it.Excerpt = "Request: " + it.Excerpt + "\n\nAgent response:\n" + agentText[it.ID]
+				// AgentNet's own native-wait notices are never the agent's words.
+				label := "Agent response:\n"
+				if strings.HasPrefix(agentText[it.ID], nativeStatusPrefix) {
+					label = ""
+				}
+				it.Excerpt = "Request: " + it.Excerpt + "\n\n" + label + agentText[it.ID]
 			} else {
 				it.Excerpt = agentText[it.ID]
 			}

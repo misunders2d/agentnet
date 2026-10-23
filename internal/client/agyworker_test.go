@@ -231,7 +231,7 @@ func TestAgyNamedGroupResponder(t *testing.T) {
 		t.Fatal(err)
 	}
 	reply := replyAt(t, producer, packet.State.Conv, q.ID)
-	if reply.Body != "agy fixture answer" || reply.AgentID != record.ID || reply.PID != p.PID {
+	if reply.Body != taggedAnswer(t, producer, "agy fixture answer") || reply.AgentID != record.ID || reply.PID != p.PID {
 		t.Fatalf("wrong responder or answer: %+v", reply)
 	}
 	runs := agyRuns(t, log)

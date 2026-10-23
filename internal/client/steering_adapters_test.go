@@ -98,24 +98,52 @@ func TestClaudeStreamRejectsUnprovenReplay(t *testing.T) {
 		})
 	}
 }
+
+// Technical stream failures fail the run with their exact reason; only a
+// native approval, input or permission denial asks the owner (oct23 T2).
 func TestClaudeStreamIdentityPermissionAndIncomplete(t *testing.T) {
-	for _, mode := range []string{"foreign-session", "approval", "denied-result", "incomplete", "malformed"} {
-		t.Run(mode, func(t *testing.T) {
+	for _, c := range []struct{ mode, failure string }{
+		{"foreign-session", "Claude switched to another session; no answer was used"},
+		{"foreign-result", "Claude reported a result for another session; no answer was used"},
+		{"error-result", "Claude reported an error: API Error: 529 overloaded"},
+		{"error-subtype", "Claude reported an error (error_max_turns)"},
+		{"empty-result", "Claude finished without an answer"},
+		{"incomplete", "Claude ended before its request settled"},
+		{"malformed", "Claude sent an unreadable protocol line; no answer was used"},
+		{"approval", ""},
+		{"denied-result", ""},
+		{"permission-denied", ""},
+	} {
+		t.Run(c.mode, func(t *testing.T) {
 			b, _, out := claudeAdapterFixture(t)
-			switch mode {
+			switch c.mode {
 			case "foreign-session":
 				claudeAdapterEvent(b, map[string]any{"type": "system", "subtype": "init", "session_id": "foreign"})
+			case "foreign-result":
+				claudeAdapterEvent(b, map[string]any{"type": "result", "result": "partial"})
+			case "error-result":
+				claudeAdapterEvent(b, map[string]any{"type": "result", "subtype": "success", "session_id": "owned", "is_error": true, "result": "API Error: 529 overloaded"})
+			case "error-subtype":
+				claudeAdapterEvent(b, map[string]any{"type": "result", "subtype": "error_max_turns", "session_id": "owned", "is_error": true})
+			case "empty-result":
+				claudeAdapterEvent(b, map[string]any{"type": "result", "subtype": "success", "session_id": "owned", "result": " "})
 			case "approval":
 				claudeAdapterEvent(b, map[string]any{"type": "control_request"})
 			case "denied-result":
 				claudeAdapterEvent(b, map[string]any{"type": "result", "session_id": "owned", "result": "partial", "permission_denials": []any{map[string]string{"tool_name": "Bash"}}})
+			case "permission-denied":
+				claudeAdapterEvent(b, map[string]any{"type": "system", "subtype": "permission_denied"})
 			case "incomplete":
 				b.finish()
 			case "malformed":
 				b.event([]byte("{"))
 			}
-			if !strings.HasPrefix(out.String(), needsHumanMarker) || strings.Contains(out.String(), "partial") {
-				t.Fatal(out.String())
+			b.finish()
+			if strings.Contains(out.String(), "partial") || b.failureText() != c.failure {
+				t.Fatalf("output %q failure %q", out.String(), b.failureText())
+			}
+			if human := strings.HasPrefix(out.String(), needsHumanMarker+"\n"+nativeStatusPrefix); human != (c.failure == "") || !human && out.Len() != 0 {
+				t.Fatalf("output %q failure %q", out.String(), b.failureText())
 			}
 		})
 	}
@@ -172,8 +200,8 @@ func TestOMPRPCRejectsReceiptAndUnsettledCompletion(t *testing.T) {
 		b.omp = true
 		b.answer = "partial"
 		b.event([]byte(row))
-		if !strings.HasPrefix(out.String(), needsHumanMarker) || strings.Contains(out.String(), "partial") {
-			t.Fatal(out.String())
+		if out.Len() != 0 || !strings.HasPrefix(b.failureText(), "OMP ") {
+			t.Fatalf("output %q failure %q", out.String(), b.failureText())
 		}
 	}
 }
@@ -347,7 +375,7 @@ func TestNativeAdapterFramingAndAnswerLimits(t *testing.T) {
 	b, _, out := claudeAdapterFixture(t)
 	data := []byte(strings.Repeat("x", codexLineMax+1))
 	b.Write(data)
-	if len(b.buf) != 0 || !strings.HasPrefix(out.String(), needsHumanMarker) {
+	if len(b.buf) != 0 || out.Len() != 0 || b.failureText() != "Claude sent a protocol line over the size bound" {
 		t.Fatal("unbounded native frame")
 	}
 	ctx, cancel := context.WithCancel(t.Context())

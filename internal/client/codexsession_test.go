@@ -127,11 +127,11 @@ func TestCodexSessionFixtureProcess(t *testing.T) {
 				}
 				os.Exit(0)
 			}
-			status := "completed"
+			turn := map[string]any{"id": "turn", "status": "completed"}
 			if mode == "fail" {
-				status = "failed"
+				turn = map[string]any{"id": "turn", "status": "failed", "error": map[string]string{"message": "fixture provider error"}}
 			}
-			enc.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": thread, "turn": map[string]string{"id": "turn", "status": status}}})
+			enc.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": thread, "turn": turn}})
 		}
 	}
 }

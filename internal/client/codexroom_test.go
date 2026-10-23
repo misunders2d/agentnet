@@ -120,20 +120,58 @@ func TestCodexRoomBridgeBoundTransport(t *testing.T) {
 	}
 }
 
+// Every technical bridge failure fails the run with its exact reason and no
+// NEEDS-HUMAN marker; only a genuine native wait asks the owner (oct23 T2).
 func TestCodexRoomBridgeFailsClosed(t *testing.T) {
-	for _, event := range []string{`{"id":2,"result":{"thread":{}}}`, `{"id":4,"method":"item/tool/call","params":{"threadId":"foreign","turnId":"turn","tool":"agentnet_room","callId":"call"}}`, `{"id":5,"method":"item/commandExecution/requestApproval","params":{}}`, `{"id":6,"method":"item/tool/call","params":{"threadId":"thread","turnId":"turn","tool":"other_tool","callId":"call"}}`, `{"id":1,"error":{"message":"unsupported"}}`} {
-		t.Run(event, func(t *testing.T) {
+	for _, c := range []struct{ event, want string }{
+		{`{"id":2,"result":{"thread":{}}}`, "Codex returned no usable session"},
+		{`{"id":4,"method":"item/tool/call","params":{"threadId":"foreign","turnId":"turn","tool":"agentnet_room","callId":"call"}}`, `unexpected tool call "agentnet_room"`},
+		{`{"id":5,"method":"item/commandExecution/requestApproval","params":{}}`, "item/commandExecution/requestApproval for another turn; nothing was approved"},
+		{`{"id":6,"method":"item/tool/call","params":{"threadId":"thread","turnId":"turn","tool":"other_tool","callId":"call"}}`, `unexpected tool call "other_tool"`},
+		{`{"id":1,"error":{"code":-32601,"message":"unsupported"}}`, "Codex refused initialize: unsupported (code -32601)"},
+		{`{"id":2,"error":{"code":-32600,"message":"no rollout found for thread"}}`, "Codex refused thread start: no rollout found for thread (code -32600)"},
+		{`{"method":"turn/completed","params":{"threadId":"thread","turn":{"id":"turn","status":"failed","error":{"message":"stream disconnected before completion"}}}}`, `Codex ended the turn as "failed": stream disconnected before completion`},
+		{`{"method":"turn/completed","params":{"threadId":"thread","turn":{"id":"turn","status":"completed"}}}`, "Codex completed the turn without an answer"},
+		{`{"id":7,"method":"account/chatgptAuthTokens/refresh","params":{}}`, `unsupported request "account/chatgptAuthTokens/refresh"; nothing was approved`},
+		{`{`, "Codex sent an unreadable protocol line"},
+	} {
+		t.Run(c.event, func(t *testing.T) {
 			in, out := io.Pipe()
 			defer in.Close()
+			go io.Copy(io.Discard, in)
 			var output bytes.Buffer
 			b := &codexRoomBridge{input: out, output: &output, thread: "thread", turn: "turn", calls: map[string]bool{}, call: func(context.Context, json.RawMessage) (string, error) { t.Error("unauthorized call"); return "", nil }}
-			b.event([]byte(event))
+			b.event([]byte(c.event))
 			b.finish()
-			if !strings.HasPrefix(output.String(), needsHumanMarker+"\n") || !strings.Contains(output.String(), codexRoomUnavailable) {
-				t.Fatal(output.String())
+			if output.Len() != 0 || !strings.Contains(b.failureText(), c.want) {
+				t.Fatalf("output %q failure %q", output.String(), b.failureText())
 			}
 		})
 	}
+	t.Run("eof", func(t *testing.T) {
+		for thread, want := range map[string]string{"": "Codex exited before starting a session", "thread": "Codex ended before the turn completed"} {
+			in, out := io.Pipe()
+			in.Close()
+			var output bytes.Buffer
+			b := &codexRoomBridge{input: out, output: &output, thread: thread, calls: map[string]bool{}}
+			b.finish()
+			if output.Len() != 0 || b.failureText() != want {
+				t.Fatalf("output %q failure %q", output.String(), b.failureText())
+			}
+		}
+	})
+	t.Run("session-owned-needs-human", func(t *testing.T) {
+		in, out := io.Pipe()
+		defer in.Close()
+		go io.Copy(io.Discard, in)
+		var output bytes.Buffer
+		b := &codexRoomBridge{input: out, output: &output, calls: map[string]bool{}, threadAvailable: func(string) bool { return false }}
+		b.event([]byte(`{"id":2,"result":{"thread":{"id":"owned"}}}`))
+		b.finish()
+		if b.failureText() != "" || !strings.HasPrefix(output.String(), needsHumanMarker+"\n"+nativeStatusPrefix+"The native session is already owned") {
+			t.Fatalf("output %q failure %q", output.String(), b.failureText())
+		}
+	})
 }
 
 func TestCodexRoomToolQuestionAndCancellation(t *testing.T) {
@@ -373,8 +411,12 @@ func TestCodexRoomExecutableLifecycle(t *testing.T) {
 				if output.String() != "NATIVE_REPLY" {
 					t.Fatal(output.String())
 				}
-			} else if !strings.HasPrefix(output.String(), needsHumanMarker+"\n") {
-				t.Fatal(output.String())
+			} else if mode == "unsupported" {
+				if output.Len() != 0 || !strings.Contains(b.failureText(), "Codex refused initialize: unsupported (code -32601)") {
+					t.Fatalf("output %q failure %q", output.String(), b.failureText())
+				}
+			} else if output.Len() != 0 || b.failureText() == "" {
+				t.Fatalf("output %q failure %q", output.String(), b.failureText())
 			}
 		})
 	}
@@ -395,7 +437,7 @@ func TestCodexRoomBridgeNativeApprovalNeedsHuman(t *testing.T) {
 			raw, _ := json.Marshal(map[string]any{"id": "approval", "method": method, "params": map[string]any{"threadId": "thread", "turnId": "turn", "itemId": "item"}})
 			b.event(raw)
 			b.finish()
-			if !strings.HasPrefix(output.String(), needsHumanMarker+"\n") || strings.Contains(output.String(), codexRoomUnavailable) || !strings.Contains(output.String(), "native approval") {
+			if !strings.HasPrefix(output.String(), needsHumanMarker+"\n"+nativeStatusPrefix) || b.failureText() != "" || !strings.Contains(output.String(), "native approval") {
 				t.Fatal(output.String())
 			}
 			select {

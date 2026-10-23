@@ -48,6 +48,7 @@ export function ResolveOwnRequest({ request, disabled }: { request: T.Continuati
   return <>
     <Button size="sm" variant="ghost" disabled={disabled || busy} onClick={() => void prepare()}>{busy && !choice ? "Checking host…" : problem ? "Check host again" : "Mark as handled"}</Button>
     {problem && <p role="status" className="pt-1 text-[13px] text-text-2">{problem} You can open the original request on {niceDevice(request.host)}.</p>}
+    {!problem && request.handled?.refused && <p role="status" className="pt-1 text-[13px] text-danger">Not applied: {request.handled.refused}</p>}
     <Sheet open={!!choice} onOpenChange={open => { if (!open && !busy) setChoice(null); }} title={"Mark as handled on " + niceDevice(choice?.request.host || request.host) + "?"}
       footer={<Button size="lg" disabled={busy} onClick={() => void submit()}>{busy ? "Sending…" : "Mark as handled"}</Button>}>
       <p>If a separate follow-up finished the work, you can close this exact waiting request on its host. It keeps the messages and does not run the task again or mark the topic done. The request stays pending here until the host confirms.</p>

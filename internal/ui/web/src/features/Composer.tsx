@@ -28,7 +28,7 @@ import { coarse, useFieldFocus } from "./Composer.focus";
 import { usePortal } from "../owned";
 import { TrustNotice } from "./Trust";
 import { AgentModelReport } from "./AgentModelReport";
-import { composerReplyFollowup, currentComposerFollowup, currentDirectComposerFollowup, type ComposerFollowup } from "./Composer.followup";
+import { composerReplyFollowup, currentComposerFollowup, currentDirectComposerFollowup, replyFollowupAgent, type ComposerFollowup } from "./Composer.followup";
 import type { Ctx } from "./Message.model";
 import { ScheduleDialogs, type SchedulePane } from "./Composer.schedule";
 import { scheduleReason } from "./Composer.schedule-model";
@@ -118,7 +118,12 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   const missingTopic = !!dm && !draft.newTopic && !!draft.topic && !(dm.topics || []).some(t => t.id === draft.topic);
 
 
-  const selectedPIDs = agentTargets(text, spans, draft.agent);
+  const followupContext: Ctx = {conv,dm:dm || null,thread:thread || null,overview:overview || null,names,canReply:true};
+  const mentioned = agentTargets(text, spans, draft.agent);
+  // Reply on an agent's clarification answers that same request (MEL-692);
+  // Stop keeps it an ordinary message.
+  const replyAgent = !mentioned.length && !draft.plainReply && !draft.newTopic ? replyFollowupAgent(dm, draft.topic || "", followupContext, draft.replyTo) : undefined;
+  const selectedPIDs = replyAgent ? [replyAgent] : mentioned;
   const target: Target = useMemo(() => {
     if (thread) {
       if (answerable) return { kind: "answer", id: answerable.id, task: answerable.kind === "task" };
@@ -137,9 +142,8 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       return { kind: "agent", pid: selectedPIDs[0], name: selectedPIDs.length > 1 ? selectedPIDs.length + " agents" : name, seed: p?.seed || selectedPIDs[0], canAsk: selectedPIDs.some(pid => dm.agents?.some(x => x.pid === pid && x.can_ask && scopeMatches(x, draft.newTopic ? "__new__" : draft.topic || ""))), why: a ? scopeMatches(a, draft.newTopic ? "__new__" : draft.topic || "") ? a.state_text : "It is invited to a different topic." : "It is no longer in this chat." };
     }
     return { kind: "conversation" };
-  }, [dm, thread, draft.agent, draft.text, draft.topic, draft.newTopic, answerable?.id, answerable?.kind, overview, names]);
+  }, [dm, thread, draft.agent, draft.text, draft.topic, draft.newTopic, replyAgent, answerable?.id, answerable?.kind, overview, names]);
   const latest = (): Draft => store.get().drafts[conv] ?? EMPTY;
-  const followupContext: Ctx = {conv,dm:dm || null,thread:thread || null,overview:overview || null,names,canReply:true};
   const selectedFollowup = (pid:string, d: Draft): ComposerFollowup | undefined =>
     d.newTopic ? undefined : currentComposerFollowup(dm,pid,d.topic || "",followupContext,d.replyTo);
   const selectedTargetFollowup = (to: Target, d: Draft): ComposerFollowup | undefined =>
@@ -206,7 +210,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     lastReply.current = { conv, replyTo: draft.replyTo };
     if (prev.conv !== conv || !draft.replyTo || draft.replyTo === prev.replyTo) return;
     const reply = dm?.messages?.find(m => m.id === draft.replyTo || m.lid === draft.replyTo);
-    if (reply || thread?.messages?.some(m => m.id === draft.replyTo)) store.setDraft(conv, { ...latest(), newTopic: false, ...(dm ? {topic: reply?.topic || undefined} : {}) });
+    if (reply || thread?.messages?.some(m => m.id === draft.replyTo)) store.setDraft(conv, { ...latest(), newTopic: false, plainReply: undefined, ...(dm ? {topic: reply?.topic || undefined} : {}) });
     focusField(true);
   }, [conv, draft.replyTo]);
 
@@ -255,7 +259,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   function stopAsking() {
     const d = latest();
     const was = decode(d.text);
-    write({ ...d, text: encode(was.text, withoutAgents(was.spans)), agent: undefined });
+    write({ ...d, text: encode(was.text, withoutAgents(was.spans)), agent: undefined, ...(d.replyTo ? { plainReply: true } : {}) });
   }
 
 
@@ -652,7 +656,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   if (!dm && !thread) return null;
 
   // ---- what the composer says
-  const replyMsg = draft.replyTo && target.kind !== "agent" ? messageOf(draft.replyTo, words, dm, thread) : undefined;
+  const replyMsg = draft.replyTo && (target.kind !== "agent" || replyAgent) ? messageOf(draft.replyTo, words, dm, thread) : undefined;
   const placeholder = target.kind === "answer" ? (target.task ? "Write your reply" : "Write your answer")
     : target.kind === "device" && !target.ask ? "Message " + target.name
     : target.kind === "agent" || target.kind === "device" ? "Ask " + target.name

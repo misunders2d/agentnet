@@ -32,9 +32,30 @@ type reactionChoice struct {
 // The optional reaction, offered to an eligible run: as the reply's last
 // line (device requests) or just before its emotion line (conversations).
 const (
-	reactionPromptText     = "You may also react to this request with one emoji, if you want to: put a line at the end of your reply `reaction: EMOJI` (or `reaction: -EMOJI` to take your earlier reaction off). It is optional; nothing else is sent for it.\n"
-	reactionConvPromptText = "You may also react to this request with one emoji, if you want to: put a line `reaction: EMOJI` (or `reaction: -EMOJI` to take your earlier reaction off) just before the emotion line. It is optional; nothing else is sent for it.\n"
+	reactionPromptText     = "You may also react to this request with one emoji, if you want to: put a line at the end of your reply `reaction: EMOJI` (or `reaction: -EMOJI` to take your earlier reaction off). It is optional; nothing else is sent for it. When a reaction is all the request needs, such as thanks or praise, that line alone may be your whole reply: it is attached to the request and no text message is posted.\n"
+	reactionConvOfferText  = "You may also react to this request with one emoji, if you want to: put a line `reaction: EMOJI` (or `reaction: -EMOJI` to take your earlier reaction off) just before the emotion line. It is optional; nothing else is sent for it."
+	reactionConvPromptText = reactionConvOfferText + " When a reaction is all the request needs, such as thanks or praise, that line and the emotion line may be your whole reply: it is attached to the request and no text message is posted.\n"
+	// An asking agent waits for a reply it can read: a reaction-only reply
+	// is attached and the agent is told just that (reactionAnswerText).
+	reactionConvAgentPromptText = reactionConvOfferText + " When a reaction is all the request needs, that line and the emotion line may be your whole reply: it is attached to the request and the asking agent is told only that you reacted.\n"
 )
+
+// reactionAnswerText is the whole text reply to an asking agent whose request
+// was answered only with a reaction: what the assistant chose, written by
+// AgentNet, never a claim that the reaction was delivered.
+func reactionAnswerText(choice *reactionChoice) string {
+	if choice.remove {
+		return nativeStatusPrefix + "answered by taking its reaction " + choice.emoji + " off (no text reply)."
+	}
+	return nativeStatusPrefix + "answered with the reaction " + choice.emoji + " (no text reply)."
+}
+
+// agentAsked reports whether request id was asked by a group agent (its
+// captured audience is an agent author's): that agent waits for a text reply.
+func (a *Agent) agentAsked(id string) bool {
+	h, err := storedHuman(a.store.db, "in", id)
+	return err == nil && h != nil && h.AgentAuthor()
+}
 
 // splitReaction takes an optional reaction line from the end of text. A
 // malformed line is left in the text, never turned into a reaction; a
@@ -58,6 +79,89 @@ func splitReaction(text string) (string, *reactionChoice) {
 	return rest, choice
 }
 
+// reactionOnly is the choice of a reply that is nothing but its optional
+// reaction line: the assistant answered with the reaction itself.
+func reactionOnly(text string) *reactionChoice {
+	text = strings.TrimSpace(text)
+	name, value, found := strings.Cut(text, ":")
+	if !found || strings.Contains(text, "\n") || !strings.EqualFold(strings.TrimSpace(name), "reaction") {
+		return nil
+	}
+	value = strings.TrimSpace(value)
+	choice := &reactionChoice{emoji: strings.TrimPrefix(value, "-"), remove: strings.HasPrefix(value, "-")}
+	if !envelope.OneEmoji(choice.emoji) {
+		return nil
+	}
+	return choice
+}
+
+// answerWithReaction settles a request whose reply is only its reaction:
+// the signed reaction goes to the request, then the request is answered
+// without a text reply. An error changes nothing: errNotOwned when the
+// attempt no longer runs (a stop that arrived meanwhile wins), a heldBack
+// when its participation may no longer give output, otherwise why the
+// reaction cannot go. A sent reaction is never sent again.
+func (a *Agent) answerWithReaction(ctx context.Context, j job, harness string, choice *reactionChoice) error {
+	if state, err := a.store.jobState(j.ID); err != nil {
+		return err
+	} else if state != stateRunning {
+		return errNotOwned
+	}
+	if j.PID != "" {
+		tx, err := a.store.db.Begin()
+		if err != nil {
+			return err
+		}
+		v, why, err := agentVerdict(tx, j.agentReq(stateRunning), a.Address, a.id.Public(a.Address).Fingerprint(), true, map[string]*partView{})
+		tx.Rollback()
+		if err != nil {
+			return err
+		}
+		if v != verdictRun {
+			return &heldBack{why}
+		}
+	}
+	if _, err := a.reactAsAssistant(ctx, j.ID, harness, choice.emoji, choice.remove); err != nil {
+		a.Logf("%s %s: reaction-only reply not sent as a reaction: %v", j.Kind, j.ID, err)
+		return err
+	}
+	res, err := a.store.db.Exec(`UPDATE inbox SET state=?,detail=NULL,notified=0,review_sent=0 WHERE id=? AND state=?`, stateAnswered, j.ID, stateRunning)
+	if err != nil {
+		a.Logf("%s %s: answered with a reaction, not recorded: %v", j.Kind, j.ID, err)
+		return nil
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		a.endJob(j.ID, stateCancelled, "stopped; its reaction was already sent")
+		a.Logf("%s %s: stopped after its reaction was sent", j.Kind, j.ID)
+		return nil
+	}
+	_, _ = a.store.db.Exec(`DELETE FROM reported WHERE item = ?`, j.ID)
+	a.noteStatus(j.ID)
+	a.Logf("%s %s: answered with a reaction", j.Kind, j.ID)
+	return nil
+}
+
+// finishWithReaction ends a request whose reply is only its reaction. The
+// reaction is the answer: when it cannot be attached the request ends not
+// sent, saying why, and no text reply stands in for it.
+func (a *Agent) finishWithReaction(ctx context.Context, j job, harness string, choice *reactionChoice) {
+	err := a.answerWithReaction(ctx, j, harness, choice)
+	reply := "reaction: " + choice.emoji
+	if choice.remove {
+		reply = "reaction: -" + choice.emoji
+	}
+	var hb *heldBack
+	switch {
+	case err == nil:
+	case errors.Is(err, errNotOwned):
+		a.endJob(j.ID, stateCancelled, "cancelled; its reply was not sent:\n"+reply)
+	case errors.As(err, &hb):
+		a.endJob(j.ID, stateNotDelivered, "not sent: "+hb.why+". The reply:\n"+reply)
+	default:
+		a.endJob(j.ID, stateNotDelivered, "not sent: the reaction could not be attached to the request: "+err.Error()+". The reply:\n"+reply)
+	}
+}
+
 // reactionTarget is the stored request an assistant may react to.
 type reactionTarget struct {
 	ref                      ControlRef
@@ -67,7 +171,10 @@ type reactionTarget struct {
 	local, replica, answered bool
 }
 
-func reactionTargetIn(q dbq, id string) (reactionTarget, error) {
+// A local row is this device's own exact request to its own assistant, as
+// AskAgent stored it here (convstore.go): only with this device's address and
+// key, in a conversation. Received rows are never local.
+func reactionTargetIn(q dbq, id, self, selfFP string) (reactionTarget, error) {
 	var t reactionTarget
 	var conv, pid, lid, target sql.NullString
 	err := q.QueryRow(`SELECT sender, coalesce(verified_by,''), kind, conv, pid, lid, target, local, replica FROM inbox WHERE id=? AND ref_id IS NULL`, id).
@@ -86,11 +193,19 @@ func reactionTargetIn(q dbq, id string) (reactionTarget, error) {
 	if t.conv != "" {
 		t.ref = ControlRef{Conv: t.conv, ID: t.lid, Fingerprint: t.key}
 	}
-	if t.kind != envelope.KindQuestion && t.kind != envelope.KindTask || t.local || t.replica || t.key == "" || t.conv != "" && (t.pid == "" || t.lid == "") {
+	if t.local && (t.conv == "" || t.sender != self || t.key != selfFP) {
+		return t, errors.New("a local request is only this device's own")
+	}
+	if t.kind != envelope.KindQuestion && t.kind != envelope.KindTask || t.replica || t.key == "" || t.conv != "" && (t.pid == "" || t.lid == "") {
 		return t, errors.New("only a question or task sent to this device's assistant takes its reaction")
 	}
 	return t, nil
 }
+
+// requestHeldQuery finds the copy of a conversation request held here by its
+// key and logical id: a received one, or this device's own local request
+// (reactionTargetIn decides whether either is this assistant's).
+const requestHeldQuery = `SELECT id FROM inbox WHERE conv=? AND lid=? AND verified_by=? AND ref_id IS NULL AND replica=0 ORDER BY local LIMIT 1`
 
 // reactorOf is the assistant a reaction from this device names for job j,
 // as wire fields: agent_id, pid and the default responder's origin.
@@ -127,11 +242,11 @@ func (a *Agent) reactAsAssistant(ctx context.Context, id, harness, emoji string,
 	if !envelope.OneEmoji(emoji) {
 		return ControlSent{}, errors.New("a reaction is one emoji")
 	}
-	t, err := reactionTargetIn(a.store.db, id)
+	self, selfFP := a.Address, a.Self().Fingerprint()
+	t, err := reactionTargetIn(a.store.db, id, self, selfFP)
 	if err != nil {
 		return ControlSent{}, err
 	}
-	self, selfFP := a.Address, a.Self().Fingerprint()
 	agentID, pid, origin, err := reactorOf(t, self, selfFP, harness)
 	if err != nil {
 		return ControlSent{}, err
@@ -392,13 +507,14 @@ func (a *Agent) assistantReactionCurrent(q dbq, t reactionTarget, in envelope.In
 	if in.Origin == envelope.OriginMentionReaction {
 		return a.mentionReactionCurrent(q, in)
 	}
-	now, err := reactionTargetIn(q, t.ref.ID)
+	self, selfFP := a.Address, a.Self().Fingerprint()
+	now, err := reactionTargetIn(q, t.ref.ID, self, selfFP)
 	if t.conv != "" {
 		var id string
-		if e := q.QueryRow(`SELECT id FROM inbox WHERE conv=? AND lid=? AND verified_by=? AND ref_id IS NULL AND local=0 AND replica=0`, t.conv, t.lid, t.key).Scan(&id); e != nil {
+		if e := q.QueryRow(requestHeldQuery, t.conv, t.lid, t.key).Scan(&id); e != nil {
 			return e
 		}
-		now, err = reactionTargetIn(q, id)
+		now, err = reactionTargetIn(q, id, self, selfFP)
 	}
 	if err != nil {
 		return err
@@ -411,7 +527,7 @@ func (a *Agent) assistantReactionCurrent(q dbq, t reactionTarget, in envelope.In
 		return nil
 	}
 	req := agentReq{ID: now.ref.ID, Sender: now.sender, Key: now.key, Kind: now.kind, Conv: now.conv, PID: now.pid, Target: now.target}
-	if e := q.QueryRow(`SELECT id FROM inbox WHERE conv=? AND lid=? AND verified_by=? AND ref_id IS NULL AND local=0 AND replica=0`, now.conv, now.lid, now.key).Scan(&req.ID); e != nil {
+	if e := q.QueryRow(requestHeldQuery, now.conv, now.lid, now.key).Scan(&req.ID); e != nil {
 		return e
 	}
 	v, why, err := agentVerdict(q, req, a.Address, a.Self().Fingerprint(), true, map[string]*partView{})
@@ -515,11 +631,11 @@ func (a *Agent) mayDeliverAssistantReaction(env envelope.Envelope) (handled, all
 	}
 	id := refID
 	if conv != "" {
-		if e := a.store.db.QueryRow(`SELECT id FROM inbox WHERE conv=? AND lid=? AND verified_by=? AND ref_id IS NULL AND local=0 AND replica=0`, conv, refID, refFP).Scan(&id); e != nil {
+		if e := a.store.db.QueryRow(requestHeldQuery, conv, refID, refFP).Scan(&id); e != nil {
 			return stop("its request is not held here")
 		}
 	}
-	t, err := reactionTargetIn(a.store.db, id)
+	t, err := reactionTargetIn(a.store.db, id, a.Address, a.Self().Fingerprint())
 	if err != nil {
 		return stop(err.Error())
 	}

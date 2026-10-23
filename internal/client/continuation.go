@@ -157,6 +157,9 @@ type ContinuationAction struct {
 	Key     string `json:"key"`
 	Host    string `json:"host,omitempty"`
 	Attempt int64  `json:"attempt"`
+	// Handled is the host's answer to this device's latest handled decision
+	// on this exact remote attempt, including a refusal.
+	Handled *DecisionResult `json:"handled,omitempty"`
 }
 
 func (a *Agent) ContinuationFor(id, key string, exec *ExecView) (*ContinuationAction, error) {
@@ -169,7 +172,14 @@ func (a *Agent) ContinuationFor(id, key string, exec *ExecView) (*ContinuationAc
 	if !errors.Is(e, sql.ErrNoRows) {
 		return nil, e
 	}
-	return a.remoteRequestFor(id, key, exec, stateNeedHuman)
+	r, e := a.remoteRequestFor(id, key, exec, stateNeedHuman)
+	if e != nil || r == nil {
+		return r, e
+	}
+	if _, r.Handled, e = a.decisionOutcome(*r, "resolve"); e != nil {
+		return nil, e
+	}
+	return r, nil
 }
 
 // remoteRequestFor projects an exact own-host request; the host rechecks all
@@ -237,14 +247,18 @@ func (a *Agent) remoteRequestFor(id, key string, exec *ExecView, state string) (
 	if denied, err := revokedDeviceKnown(a.store.db, exec.Host, hostKey.Fingerprint()); err != nil || denied {
 		return nil, err
 	}
+	// A conversation request is held by its host under the shared logical id;
+	// each device displays its own transport copy. Name the request the host
+	// holds, taken only from the exact rows validated here.
 	var n int
-	e = a.store.db.QueryRow(`SELECT count(*) FROM (SELECT id FROM inbox WHERE (id=? OR lid=?) AND verified_by=? AND kind IN (?,?) AND (conv IS NULL AND sender=? OR json_extract(target,'$.address')=?)
-	 UNION ALL SELECT id FROM outbox WHERE (id=? OR lid=?) AND ?=? AND coalesce(kind,json_extract(envelope,'$.kind')) IN (?,?) AND (conv IS NULL AND recipient=? OR json_extract(target,'$.address')=?)
-	 UNION ALL SELECT i.id FROM device_history_rows h JOIN inbox i ON h.storage='in' AND h.id=i.id WHERE i.id=? AND h.author_fp=? AND h.recipient=? AND h.recipient_fp=? AND i.conv IS NULL AND i.replica=1 AND i.kind IN (?,?))`, id, id, key, envelope.KindQuestion, envelope.KindTask, exec.Host, exec.Host, id, id, key, a.Self().Fingerprint(), envelope.KindQuestion, envelope.KindTask, exec.Host, exec.Host, id, key, exec.Host, fp, envelope.KindQuestion, envelope.KindTask).Scan(&n)
-	if e != nil || n == 0 {
+	var shared string
+	e = a.store.db.QueryRow(`SELECT count(DISTINCT shared),coalesce(min(shared),'') FROM (SELECT CASE WHEN conv IS NOT NULL AND coalesce(lid,'')<>'' THEN lid ELSE id END AS shared FROM inbox WHERE (id=? OR lid=?) AND verified_by=? AND kind IN (?,?) AND (conv IS NULL AND sender=? OR json_extract(target,'$.address')=?)
+	 UNION ALL SELECT CASE WHEN conv IS NOT NULL AND coalesce(lid,'')<>'' THEN lid ELSE id END FROM outbox WHERE (id=? OR lid=?) AND ?=? AND coalesce(kind,json_extract(envelope,'$.kind')) IN (?,?) AND (conv IS NULL AND recipient=? OR json_extract(target,'$.address')=?)
+	 UNION ALL SELECT i.id FROM device_history_rows h JOIN inbox i ON h.storage='in' AND h.id=i.id WHERE i.id=? AND h.author_fp=? AND h.recipient=? AND h.recipient_fp=? AND i.conv IS NULL AND i.replica=1 AND i.kind IN (?,?))`, id, id, key, envelope.KindQuestion, envelope.KindTask, exec.Host, exec.Host, id, id, key, a.Self().Fingerprint(), envelope.KindQuestion, envelope.KindTask, exec.Host, exec.Host, id, key, exec.Host, fp, envelope.KindQuestion, envelope.KindTask).Scan(&n, &shared)
+	if e != nil || n != 1 {
 		return nil, e
 	}
-	return &ContinuationAction{ID: id, Key: key, Host: exec.Host, Attempt: exec.Attempt}, nil
+	return &ContinuationAction{ID: shared, Key: key, Host: exec.Host, Attempt: exec.Attempt}, nil
 }
 
 func (s *store) addContinuationOutbox(env envelope.Envelope, in envelope.Inner, recipientFP string, capabilities ...string) error {

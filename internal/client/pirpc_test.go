@@ -122,7 +122,7 @@ func TestPiRPCExtensionDialogNeedsHumanAndCancelOrder(t *testing.T) {
 	t.Run("native-dialog", func(t *testing.T) {
 		b, _, out := piBridgeFixture(t)
 		b.event([]byte(`{"type":"extension_ui_request","method":"confirm","id":"approval"}`))
-		if !strings.HasPrefix(out.String(), needsHumanMarker) {
+		if !strings.HasPrefix(out.String(), needsHumanMarker+"\n"+nativeStatusPrefix) || b.failureText() != "" {
 			t.Fatal(out.String())
 		}
 	})
@@ -196,5 +196,37 @@ func TestPiRPCLongToolUsesOwnedContext(t *testing.T) {
 	piEvent(b, map[string]any{"type": "message_start", "message": map[string]string{"role": "user", "content": "Use English"}})
 	if r := <-done; r != steerAccepted {
 		t.Fatal(r)
+	}
+}
+
+// Pi and OMP technical ends fail the run with their exact native reason, not
+// a human decision (oct23 T2).
+func TestPiRPCTechnicalFailuresAreExact(t *testing.T) {
+	for _, c := range []struct {
+		events  []string
+		omp     bool
+		failure string
+	}{
+		{[]string{`{"type":"response","id":"agentnet-initial","command":"prompt","success":false,"error":"No API key found for provider"}`}, false, "Pi refused the request: No API key found for provider"},
+		{[]string{`{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"error","errorMessage":"429 rate limited"}}`}, false, `Pi stopped with "error": 429 rate limited`},
+		{[]string{`{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"aborted"}}`}, false, `Pi stopped with "aborted"`},
+		{[]string{`{"type":"agent_settled","aborted":true}`}, false, "Pi was aborted before a completed answer"},
+		{[]string{`{"type":"agent_settled","aborted":false}`}, false, "Pi finished without an answer"},
+		{[]string{`{"type":"prompt_result","id":"agentnet-initial","status":"error","sessionSettled":true}`}, true, `OMP ended the prompt as "error"`},
+		{[]string{`{"type":"prompt_result","id":"agentnet-initial","status":"completed","sessionSettled":false}`}, true, "OMP completed the prompt without settling its session"},
+		{[]string{`{`}, false, "Pi sent an unreadable protocol line; no answer was used"},
+		{nil, false, "Pi ended before its request settled"},
+	} {
+		t.Run(c.failure, func(t *testing.T) {
+			b, _, out := piBridgeFixture(t)
+			b.omp = c.omp
+			for _, e := range c.events {
+				b.event([]byte(e))
+			}
+			b.finish()
+			if out.Len() != 0 || b.failureText() != c.failure {
+				t.Fatalf("output %q failure %q", out.String(), b.failureText())
+			}
+		})
 	}
 }

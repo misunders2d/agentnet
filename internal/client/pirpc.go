@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -28,6 +29,7 @@ type piRPCBridge struct {
 	buf                  []byte
 	active, done, failed bool
 	omp, ended           bool
+	failure              string
 	closed               chan struct{}
 	answer               string
 	pending              map[string]*piSteer
@@ -53,7 +55,7 @@ func newPiRPCBridge(ctx context.Context, cmd *exec.Cmd, prompt string, output io
 	go func() {
 		defer b.writes.Done()
 		if b.send(ctx, "", nil, map[string]any{"id": "agentnet-initial", "type": "prompt", "message": prompt}) != nil {
-			b.fail(b.nativeName() + " native input failed; review this request before continuing")
+			b.fail(b.nativeName() + " did not accept the request input")
 		}
 	}()
 	go func() {
@@ -92,17 +94,35 @@ func (b *piRPCBridge) close() {
 	})
 }
 func (b *piRPCBridge) fail(why string) { b.mu.Lock(); defer b.mu.Unlock(); b.failLocked(why) }
-func (b *piRPCBridge) failLocked(why string) {
+
+// failLocked ends the request with a technical failure: the run is reported
+// failed with this reason, never as a human decision.
+func (b *piRPCBridge) failLocked(why string) { b.stopLocked(why, false) }
+
+// humanLocked ends the request with a genuine native approval or input wait.
+func (b *piRPCBridge) humanLocked(why string) { b.stopLocked(why, true) }
+func (b *piRPCBridge) stopLocked(why string, human bool) {
 	if b.done && !b.failed {
 		return
 	}
 	if !b.failed {
 		b.failed = true
-		fmt.Fprintln(b.output, needsHumanMarker)
-		fmt.Fprintln(b.output, why)
+		if human {
+			fmt.Fprintln(b.output, needsHumanMarker)
+			fmt.Fprintln(b.output, nativeStatusPrefix+why)
+		} else {
+			b.failure = why
+		}
 	}
 	b.endLocked()
 	_ = b.input.Close()
+}
+
+// failureText is the technical reason the request failed, or "".
+func (b *piRPCBridge) failureText() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.failure
 }
 func (b *piRPCBridge) endLocked() {
 	b.done = true
@@ -118,7 +138,7 @@ func (b *piRPCBridge) finish() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !b.done {
-		b.failLocked(b.nativeName() + " ended before its request settled; review before continuing")
+		b.failLocked(b.nativeName() + " ended before its request settled")
 	}
 }
 func (b *piRPCBridge) Write(data []byte) (int, error) {
@@ -132,7 +152,7 @@ func (b *piRPCBridge) Write(data []byte) (int, error) {
 		}
 		if len(b.buf)+n > codexLineMax {
 			b.buf = nil
-			b.fail("Native event framing exceeded its bound")
+			b.fail(b.nativeName() + " sent a protocol line over the size bound")
 			return len(data), nil
 		}
 		b.buf = append(b.buf, rest[:n]...)
@@ -189,13 +209,14 @@ func (b *piRPCBridge) event(raw []byte) {
 		Data                  struct {
 			Disposition string `json:"disposition"`
 		} `json:"data"`
+		Error     string `json:"error"`
 		Aborted   bool   `json:"aborted"`
 		MessageID string `json:"messageId"`
 		Status    string `json:"status"`
 		Settled   bool   `json:"sessionSettled"`
 	}
 	if json.Unmarshal(raw, &e) != nil {
-		b.fail(b.nativeName() + " emitted invalid native protocol; no answer was used")
+		b.fail(b.nativeName() + " sent an unreadable protocol line; no answer was used")
 		return
 	}
 	b.mu.Lock()
@@ -258,7 +279,11 @@ func (b *piRPCBridge) event(raw []byte) {
 		}
 	case "response":
 		if e.ID == "agentnet-initial" && !e.Success {
-			b.failLocked(b.nativeName() + " refused the initial request; native setup remains unchanged")
+			why := b.nativeName() + " refused the request"
+			if msg := clip([]byte(e.Error)); msg != "" {
+				why += ": " + msg
+			}
+			b.failLocked(why)
 			return
 		}
 		if p, ok := b.pending[e.ID]; ok {
@@ -308,7 +333,14 @@ func (b *piRPCBridge) event(raw []byte) {
 		role, text, stop, tool := piMessageText(e.Message)
 		if role == "assistant" && !tool {
 			if stop == "error" || stop == "aborted" {
-				b.failLocked(b.nativeName() + "'s native provider or permission setup stopped this request; review locally before continuing")
+				why := b.nativeName() + " stopped with " + strconv.Quote(stop)
+				var m struct {
+					Error string `json:"errorMessage"`
+				}
+				if json.Unmarshal(e.Message, &m) == nil && m.Error != "" {
+					why += ": " + clip([]byte(m.Error))
+				}
+				b.failLocked(why)
 				return
 			}
 			if len(text) > maxOutput+1 {
@@ -320,14 +352,18 @@ func (b *piRPCBridge) event(raw []byte) {
 		switch e.Method {
 		case "notify", "setStatus", "setWidget", "setTitle", "set_editor_text", "setWorkingMessage", "setFooter", "setHeader":
 		default:
-			b.failLocked("A native " + b.nativeName() + " extension needs interactive input; no approval or response was invented")
+			b.humanLocked("A native " + b.nativeName() + " extension needs interactive input; no approval or response was invented")
 		}
 	case "prompt_result":
 		if !b.omp || e.ID != "agentnet-initial" {
 			return
 		}
-		if e.Status != "completed" || !e.Settled {
-			b.failLocked("OMP ended without a settled completed prompt")
+		if e.Status != "completed" {
+			b.failLocked("OMP ended the prompt as " + strconv.Quote(clip([]byte(e.Status))))
+			return
+		}
+		if !e.Settled {
+			b.failLocked("OMP completed the prompt without settling its session")
 			return
 		}
 		b.publishLocked()
@@ -394,7 +430,7 @@ func (b *piRPCBridge) thinkingEvent(raw json.RawMessage) {
 
 func (b *piRPCBridge) publishLocked() {
 	if strings.TrimSpace(b.answer) == "" {
-		b.failLocked("Native request settled without an assistant answer")
+		b.failLocked(b.nativeName() + " finished without an answer")
 		return
 	}
 	fmt.Fprintln(b.output, b.answer)

@@ -113,6 +113,11 @@ func TestNeedsYouPrivateReportScope(t *testing.T) {
 			t.Fatalf("%s: %+v", tc.name, parsed)
 		}
 	}
+	// AgentNet's own native-wait notice is never labelled as the agent's words.
+	notice := nativeStatusPrefix + "Your Codex setup requires a native approval or input for this action."
+	if parsed, ok := ParseReport(a.reportBodyFor(items, map[string]string{items[0].ID: notice}, true, false)); !ok || len(parsed.Items) != 1 || parsed.Items[0].Excerpt != "Request: Original request\n\n"+notice {
+		t.Fatalf("AgentNet notice labelled as agent text: %+v", parsed)
+	}
 	public, detail, ok := statusOf(stateNeedHuman)
 	if !ok || public != "needs_human" || detail != BlockerNeedsHuman || strings.Contains(detail, text) {
 		t.Fatalf("private output entered public status: %s %s", public, detail)

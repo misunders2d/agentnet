@@ -5236,7 +5236,7 @@ export class Engine {
       view.can=view.deleted||event||m.excerpt_pid||frozen||role!=="member"?[]:["react",...(targetPerson===this.me.person?["edit","delete"]:[])];
       const answered=messages.some(r=>r.pid===m.pid&&(r.reply_to===m.lid||shownReply(r.reply_to)===m.id)&&["answer","result"].includes(r.kind));
       const exec=m.target&&["question","task"].includes(m.kind)?this.execOn(ctls.filter(x=>x.sub===wire.SubStatus&&x.ref?.id===m.lid&&x.ref.fingerprint===fp&&x.from===m.target.address),m.target.address,answered):null;
-      return {id:m.id,lid:m.lid,dir:out?"out":"in",from:here?this.address:m.from,kind:m.kind,status:m.status||"",actions:await this.proposalActions(m),proposal:await this.proposalProvenance(m,read),body:event?"":m.body,event,...(ev&&ev.type?{event_type:ev.type,event_by:ev.by}:{}),pid:m.pid||"",...(m.human?.author_pid?{agent_author_pid:m.human.author_pid}:{}),...(m.target?{target:m.target,to:m.target.address}:{}),...(m.agent_id?{agent_id:m.agent_id}:{}),...(m.excerpt_pid?{excerpt_pid:m.excerpt_pid}:{}),reply_to:shownReply(m.reply_to),quote:shownReply(m.quote),sent_at:sentAt(m),delivery:m.delivery||"",at:iso(m.at),send_group:m.send_group_conflict?"":m.send_group||"",send_group_author:here?this.fp:m.fp||m.claimed_key||"",origin:m.origin||"",verified_agent:verifiedAgent(m,infos.find(i=>i.pid===(m.human&&wire.agentAuthor(m.human)?m.human.author_pid:m.pid)),here?this.address:m.from,fp),job_detail:this.needsYouText(m,privateReports),state:m.state||"",...this.cancellationView(m),state_text:event?"":here?this.outStateText(m,m.state==="not_delivered"&&m.lagging?words(m.lagging):"the group"):"",detail:m.detail||"",...this.attentionFields(m,read,out),replica:!!m.replica,synced_from:m.history?m.synced_from:"",claimed_key:m.claimed_key||"",via:m.own&&!m.history?m.from:"",copies:here?await this.shownCopies(m.copies):undefined,group_ref:!frozen&&role==="member"&&m.kind==="message"&&!m.sub&&!m.pid&&!m.excerpt_pid?{lid:m.lid,author:m.claimed_key||m.fp||this.fp,hash:await wire.groupHistoryContentHash(conv,m)}:undefined,...view,...(exec?{exec,stop:await this.stopOf(m,fp,exec),...(this.continuationOf(m,fp,exec)?{continuation:this.continuationOf(m,fp,exec),actions:["continue"]}:{})}:{}),attachments:await Promise.all((m.attachments||[]).map(async(a,i)=>({index:i,name:wire.safeName(a.name),size:a.size,...(here?await this.sentState(a):this.fileState(a))}))) };
+      return {id:m.id,lid:m.lid,dir:out?"out":"in",from:here?this.address:m.from,kind:m.kind,status:m.status||"",actions:await this.proposalActions(m),proposal:await this.proposalProvenance(m,read),body:event?"":m.body,event,...(ev&&ev.type?{event_type:ev.type,event_by:ev.by}:{}),pid:m.pid||"",...(m.human?.author_pid?{agent_author_pid:m.human.author_pid}:{}),...(m.target?{target:m.target,to:m.target.address}:{}),...(m.agent_id?{agent_id:m.agent_id}:{}),...(m.excerpt_pid?{excerpt_pid:m.excerpt_pid}:{}),reply_to:shownReply(m.reply_to),quote:shownReply(m.quote),sent_at:sentAt(m),delivery:m.delivery||"",at:iso(m.at),send_group:m.send_group_conflict?"":m.send_group||"",send_group_author:here?this.fp:m.fp||m.claimed_key||"",origin:m.origin||"",verified_agent:verifiedAgent(m,infos.find(i=>i.pid===(m.human&&wire.agentAuthor(m.human)?m.human.author_pid:m.pid)),here?this.address:m.from,fp),job_detail:this.needsYouText(m,privateReports),state:m.state||"",...this.cancellationView(m),state_text:event?"":here?this.outStateText(m,m.state==="not_delivered"&&m.lagging?words(m.lagging):"the group"):"",detail:m.detail||"",...this.attentionFields(m,read,out),replica:!!m.replica,synced_from:m.history?m.synced_from:"",claimed_key:m.claimed_key||"",via:m.own&&!m.history?m.from:"",copies:here?await this.shownCopies(m.copies):undefined,group_ref:!frozen&&role==="member"&&m.kind==="message"&&!m.sub&&!m.pid&&!m.excerpt_pid?{lid:m.lid,author:m.claimed_key||m.fp||this.fp,hash:await wire.groupHistoryContentHash(conv,m)}:undefined,...view,...(exec?{exec,stop:await this.stopOf(m,fp,exec),...(this.continuationOf(m,fp,exec)?{continuation:await this.handledOf(this.continuationOf(m,fp,exec)),actions:["continue"]}:{})}:{}),attachments:await Promise.all((m.attachments||[]).map(async(a,i)=>({index:i,name:wire.safeName(a.name),size:a.size,...(here?await this.sentState(a):this.fileState(a))}))) };
     }))};
   }
 
@@ -9469,15 +9469,27 @@ export class Engine {
     return {id:m.lid||m.id,key,host:exec.host,attempt:exec.attempt};
   }
 
+  // The latest own decision of this action for the exact attempt and the
+  // host's status answering it (client decisionOutcome).
+  async decisionOutcome(request,action) {
+    const decisions=await this.store.byThreadPeer("outbox",request.host);
+    const last=decisions.filter(r=>r.sub===wire.SubDecision&&r.to===request.host&&r.ref?.id===request.id&&r.ref?.fingerprint===request.key).map(r=>{try{return {r,d:JSON.parse(r.body)};}catch{return null;}}).filter(x=>x&&x.d.action===action&&!x.d.report&&x.d.attempt===request.attempt).sort((a,b)=>(b.r.at-a.r.at)||b.r.id.localeCompare(a.r.id))[0];
+    if(!last)return {};
+    const statuses=await this.store.byThreadPeer("inbox",request.host);
+    const result=statuses.filter(r=>r.sub===wire.SubStatus&&r.from===request.host&&r.ref?.id===request.id&&r.ref?.fingerprint===request.key).map(r=>{try{return JSON.parse(r.body);}catch{return null;}}).filter(s=>s?.decision===last.r.id).sort((a,b)=>b.n-a.n)[0];
+    return result?{result}:{pending:last.r.state!=="failed"};
+  }
+
   async stopOf(m,key,exec) {
     const request=this.continuationOf(m,key,exec,"running");
-    if(!request)return null;
-    const decisions=await this.store.byThreadPeer("outbox",request.host);
-    const last=decisions.filter(r=>r.sub===wire.SubDecision&&r.to===request.host&&r.ref?.id===request.id&&r.ref?.fingerprint===key).map(r=>{try{return {r,d:JSON.parse(r.body)};}catch{return null;}}).filter(x=>x&&x.d.action==="cancel"&&!x.d.report&&x.d.attempt===request.attempt).sort((a,b)=>(b.r.at-a.r.at)||b.r.id.localeCompare(a.r.id))[0];
-    if(!last)return request;
-    const statuses=await this.store.byThreadPeer("inbox",request.host);
-    const result=statuses.filter(r=>r.sub===wire.SubStatus&&r.from===request.host&&r.ref?.id===request.id&&r.ref?.fingerprint===key).map(r=>{try{return JSON.parse(r.body);}catch{return null;}}).filter(s=>s?.decision===last.r.id).sort((a,b)=>b.n-a.n)[0];
-    return {...request,...(result?{result}:{pending:last.r.state!=="failed"})};
+    return request&&{...request,...await this.decisionOutcome(request,"cancel")};
+  }
+
+  // A refused "handled" decision shows on its control (client ContinuationFor).
+  async handledOf(request) {
+    if(!request)return request;
+    const {result}=await this.decisionOutcome(request,"resolve");
+    return result?{...request,handled:result}:request;
   }
 
   // execOn resolves a request's host-asserted state from status controls
@@ -10158,6 +10170,7 @@ export class Engine {
       dms.push({id:conv,kind:"group",title:packet.state.title,peer:{label:packet.state.title,address:"",state:""},members:view.members,role:view.role,frozen:view.frozen,created:iso(packet.root.created*1000),mine:packet.root.creator.address===this.address,count:visible.length,last:previewText,...(latestView?{last_id:previewMessageID(view.messages,latestView)}:{}),last_at:iso(visible.length?visible.at(-1).at:packet.root.created*1000),unread:view.messages.filter(m=>m.unread&&!m.deleted).length,held:0,waiting:visible.filter(m=>!!m.to&&["waiting","queued"].includes(m.delivery||m.state)).length,
         guests:parts.filter(p=>p.state==="active").length,decide:0,...(last?{last_event:last}:{})});
     }
+    for (const x of needsYou) if (x.continuation) x.continuation = await this.handledOf(x.continuation);
     // decide: a conversation's requests this person decides here (live.go
     // countDecisions); a browser runs no agent, so its items carry none.
     for (const d of dms) d.decide = needsYou.filter((x) => x.conv === d.id && x.id && (x.actions || []).length).length;
@@ -10259,7 +10272,7 @@ export class Engine {
       if (!m.target || (m.kind !== "question" && m.kind !== "task")) return {};
       const answered = msgs.some((r) => r.fp && shownReply(r.reply_to) === m.id && (r.kind === "answer" || r.kind === "result"));
       const e = this.execOn(ctls.filter((x) => x.sub === wire.SubStatus && x.ref && x.ref.id === m.lid && x.ref.fingerprint === (here ? this.fp : m.fp) && x.from === m.target.address), m.target.address, answered);
-      const continuation=this.continuationOf(m,here?this.fp:m.fp,e);
+      const continuation=await this.handledOf(this.continuationOf(m,here?this.fp:m.fp,e));
       return e ? { exec: e, stop:await this.stopOf(m,here?this.fp:m.fp,e), ...(continuation?{continuation,actions:["continue"]}:{}) } : {};
     };
     const hostLabels = new Map(rel0(ctls) ? (await this.participationsOf(c, read)).map((p) => [p.pid, p.host?.label || ""]) : []); // client: the participation host's label
@@ -12556,7 +12569,7 @@ export class Engine {
     const execView = async (m) => {
       if (m.dir !== "out" || (m.kind !== "question" && m.kind !== "task")) return {};
       const e = m.exec;
-      const continuation=this.continuationOf(m,m.author_fp,e);
+      const continuation=await this.handledOf(this.continuationOf(m,m.author_fp,e));
       return e ? { exec: e, stop:await this.stopOf(m,m.author_fp,e), ...(continuation?{continuation,actions:["continue"]}:{}) } : {};
     };
     const ctlView = (m) => {

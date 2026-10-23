@@ -195,10 +195,10 @@ func TestGroupNativeFollowupResultBeforeConsumption(t *testing.T) {
 		t.Fatalf("parent lacks committed result identity: %q %v", resultID, err)
 	}
 	var results int
-	if err = a.store.db.QueryRow(`SELECT count(DISTINCT lid) FROM outbox WHERE conv=? AND pid=? AND reply_to=? AND kind=? AND body=?`, parent.Conv, parent.PID, parent.ID, envelope.KindAnswer, answer).Scan(&results); err != nil || results != 1 {
+	if err = a.store.db.QueryRow(`SELECT count(DISTINCT lid) FROM outbox WHERE conv=? AND pid=? AND reply_to=? AND kind=? AND body=?`, parent.Conv, parent.PID, parent.ID, envelope.KindAnswer, taggedAnswer(t, a, answer)).Scan(&results); err != nil || results != 1 {
 		t.Fatalf("parent result duplicated or lost: %d %v", results, err)
 	}
-	if err = a.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE id=? AND conv=? AND pid=? AND reply_to=? AND kind=? AND body=?`, resultID, parent.Conv, parent.PID, parent.ID, envelope.KindAnswer, answer).Scan(&results); err != nil || results != 1 {
+	if err = a.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE id=? AND conv=? AND pid=? AND reply_to=? AND kind=? AND body=?`, resultID, parent.Conv, parent.PID, parent.ID, envelope.KindAnswer, taggedAnswer(t, a, answer)).Scan(&results); err != nil || results != 1 {
 		t.Fatalf("parent result_id differs from its committed reply: %d %v", results, err)
 	}
 	if _, err = a.QueueRequestFollowup(tctx(t), correction); err != nil {
@@ -394,7 +394,7 @@ func TestNativeRequestFollowupOwnedWorkerProcess(t *testing.T) {
 	waitState(t, a, id, stateSteered)
 	waitState(t, a, parent.ID, stateAnswered)
 	var count int
-	if err = a.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE conv=? AND reply_to=? AND kind=? AND body=?`, parent.Conv, parent.ID, envelope.KindAnswer, "OWNED_CORRECTION_ACCEPTED").Scan(&count); err != nil || count == 0 {
+	if err = a.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE conv=? AND reply_to=? AND kind=? AND body=?`, parent.Conv, parent.ID, envelope.KindAnswer, taggedAnswer(t, a, "OWNED_CORRECTION_ACCEPTED")).Scan(&count); err != nil || count == 0 {
 		t.Fatalf("owned process did not send the correlated original answer: %d %v", count, err)
 	}
 	if _, found, err := a.claimNativeFollowup(parent); err != nil || found {

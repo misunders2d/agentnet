@@ -1,5 +1,33 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+## Urgent October 23 chat recovery hotfix in progress
+
+Live use after v0.9.3 exposed defects that the earlier qualification missed.
+Follow [the focused hotfix checklist](plans/CHAT_RECOVERY_HOTFIX.md).
+Sergey assigned the existing Claude in Herdr tab 2 to implement the complete
+batch; Codex coordinates evidence, independent verification and release. No new
+goal or helpers. The isolated branch is `fix/oct23-chat-recovery`; preserve the
+dirty main checkout and paused Play work.
+
+Proven: remote native conversation decisions use a recipient-local physical ID
+instead of the shared logical request ID. Four real handle/continue decisions
+reached the executor, were refused as `no such request here`, and their refusal
+statuses were delivered back. The UI did not explain this failure clearly.
+AgentNet also explicitly injects plain-text output instructions; reaction-only
+output is retained as an ordinary answer bubble; generic Codex bridge errors
+are mislabeled needs-human with an unsupported version hint. The historical
+native failure trigger is still unproven; native startup and model execution
+did succeed, and fresh isolated basic/tool protocol probes complete normally.
+
+Three exact failed host requests were manually resolved through the normal CLI
+at the owner's request, without rerun or deletion; all nine resolved status
+copies are delivered. This is temporary relief, not verification of the fix.
+Test all five supported responders (agy, Claude, Codex, OMP and Pi), real UI
+producers, handling/refusal, permissions/input, Reply/tag followups, active
+steering/races/files/replay, Markdown/mentions and genuine attached reactions.
+No hotfix has been published yet. Keep earlier release evidence and open limits
+below distinct from this new incident.
+
 ## v0.9.3 published and relay updated — October 23, 2026
 
 [App v0.9.3](https://github.com/misunders2d/agentnet/releases/tag/v0.9.3)

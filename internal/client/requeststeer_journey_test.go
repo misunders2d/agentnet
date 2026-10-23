@@ -87,7 +87,7 @@ func TestGroupStrictSteeringDeliveryConsumptionAndRestart(t *testing.T) {
 	waitState(t, a, id, stateSteered)
 	waitState(t, a, parent.ID, stateAnswered)
 	var results, attempts int
-	if err = a.store.db.QueryRow(`SELECT count(DISTINCT lid) FROM outbox WHERE conv=? AND reply_to=? AND kind=? AND body=?`, packet.State.Conv, parent.ID, envelope.KindAnswer, "OWNED_CORRECTION_ACCEPTED").Scan(&results); err != nil || results != 1 {
+	if err = a.store.db.QueryRow(`SELECT count(DISTINCT lid) FROM outbox WHERE conv=? AND reply_to=? AND kind=? AND body=?`, packet.State.Conv, parent.ID, envelope.KindAnswer, taggedAnswer(t, a, "OWNED_CORRECTION_ACCEPTED")).Scan(&results); err != nil || results != 1 {
 		t.Fatalf("exact corrected result: count=%d err=%v", results, err)
 	}
 	if err = a.store.db.QueryRow(`SELECT attempts FROM inbox WHERE id=?`, parent.ID).Scan(&attempts); err != nil || attempts != 1 {
@@ -121,7 +121,7 @@ func TestGroupStrictSteeringDeliveryConsumptionAndRestart(t *testing.T) {
 	for _, reader := range []*Agent{w.bob, carol} {
 		eventually(t, "one signed corrected answer reaches each reader", func() bool {
 			var n int
-			err := reader.store.db.QueryRow(`SELECT count(*) FROM inbox WHERE conv=? AND reply_to=? AND kind=? AND body=? AND verified_by=?`, packet.State.Conv, parent.ID, envelope.KindAnswer, "OWNED_CORRECTION_ACCEPTED", a.Self().Fingerprint()).Scan(&n)
+			err := reader.store.db.QueryRow(`SELECT count(*) FROM inbox WHERE conv=? AND reply_to=? AND kind=? AND body=? AND verified_by=?`, packet.State.Conv, parent.ID, envelope.KindAnswer, taggedAnswer(t, a, "OWNED_CORRECTION_ACCEPTED"), a.Self().Fingerprint()).Scan(&n)
 			return err == nil && n == 1
 		})
 	}
