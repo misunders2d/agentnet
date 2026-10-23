@@ -737,6 +737,12 @@ types are the Go structs in `internal/ui/*.go`, generated into
   one exact fresh view; if it remains uncertain, show the request and Refresh
   recovery while retaining text and files. Do not guess an attempt or send new
   work to escape a blocked follow-up.
+  A normal Reply to a verified agent answer or clarification can select that
+  agent through its exact stored ancestry, without a manual tag. Settled
+  ordinary continuations use `attempt:0`; active steering retains its positive
+  exact attempt. Preserve the quoted message, draft and files, and allow the
+  person to remove the addressed agent to send an ordinary reply. The route
+  and authority checks are specified in `HOST_API_ROUTES.md`.
 - Topics (every chat, docs/plans/TOPICS.md): `overview.threads`
   lists every thread, archived topics too; a skin that pages topics itself
   asks `/api/overview?topics=1` and gets them without archived topics.
@@ -849,6 +855,9 @@ types are the Go structs in `internal/ui/*.go`, generated into
   The host applies a decision only on a report it sent that operator and still
   holds: once the host has deleted its chat with the operator, decisions on the
   reports in it are refused.
+  An own-request `continuation.handled` may carry the exact host's resolve
+  decision result. Show `handled.refused` as a visible refusal; a queued send
+  is not proof of handling. Retain the item until its signed host state clears.
   A report naming requests (items) went to a device that decides them (a
   steward's or an operator's): its card says this device decides them. A
   report to a device that may not decide has no items, only `count` and

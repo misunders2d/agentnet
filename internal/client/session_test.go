@@ -261,9 +261,15 @@ func TestCodexStyleSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitState(t, w.bob, q.ID, stateNeedHuman)
+	waitState(t, w.bob, q.ID, stateJobFailed)
+	if m, _ := w.bob.store.inboxMessage(q.ID); m == nil || !strings.Contains(m.Detail, "Codex returned no usable session") {
+		t.Fatalf("missing identity reason %+v", m)
+	}
 	if ref := sessionOf(t, w.bob, q.ID); ref != nil {
 		t.Fatalf("recorded without ID: %+v", ref)
+	}
+	if runs := st.runs(); len(runs) != 3 || runs[2] != "run app-server" {
+		t.Fatalf("missing identity runs %v", runs)
 	}
 }
 

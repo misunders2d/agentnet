@@ -675,20 +675,20 @@ try {
    await tap('compose.returning-preselected',control('Invite again'),()=>!!sheet('Bring someone in'),'returning guest invitation visible');
    const returning=sheet('Bring someone in'),who=returning.querySelector('input[name="invite-who"]:checked');assert(who?.value==='p:'+peers.at(-1).person,'returning out-of-page person rebound');assert(returning.querySelectorAll('input[name="invite-who"][value^="p:"]').length<=41,'preselected appended beyond bounded people page');reports.preselectedOutOfPage={key:who.value,checked:who.checked,count:returning.querySelectorAll('input[name="invite-who"][value^="p:"]').length};
    await closeSheet('compose.returning-cancel','Bring someone in');
-   // Normal Reply + actual mention choice derives the stored exact parent;
-   // the invented host verifies the request shape, never harness authority.
+   // A normal Reply on the agent's clarification binds its exact stored
+   // parent and agent with no manual tag (MEL-692); the invented host
+   // verifies the request shape, never harness authority.
    const pid='b'.repeat(32),original='a'.repeat(32),answer='d'.repeat(32);
    view.agents=[{pid,agent_id:catalog.agents[0].record.id,host:{...me,address:overview.me.address,fingerprint:overview.me.fingerprint},state:'active',state_text:'Active',can_ask:true,can_decide:false,can_dismiss:true,host_here:true,inviter:me,invited:now,tasks_from:[],shared:[],missing:0,held:0}];
    view.messages.push({id:original,lid:original,dir:'out',from:overview.me.address,kind:'question',body:'Fixture original budget request',pid,target:{address:overview.me.address,fingerprint:overview.me.fingerprint,agent_id:catalog.agents[0].record.id},exec:{state:'answered',host:overview.me.address,attempt:1},at:now,can:[],actions:[],reactions:[]},{id:answer,lid:answer,dir:'in',from:overview.me.address,kind:'answer',verified_agent:true,body:'Fixture which approved budget?',reply_to:original,pid,at:now,can:[],actions:[],reactions:[]});emit();
    const answerRow=()=>root.querySelector('[data-mid="'+answer+'"]');await until(answerRow,'exact ordinary clarification row');await fill('compose.clear-before-reply',text(),'');
    await measure('compose.clarification-actions',()=>answerRow().querySelector('[data-message-bubble]').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true})),()=>!!control('Reply'),'exact clarification reply action visible');
-   await tap('compose.clarification-reply',control('Reply'),()=>!!control('Cancel reply'),'reply chip binds exact clarification');await retire();
-   await tap('compose.clarification-mention-open',control('Mention someone'),()=>!!active('[role="listbox"]'),'current participants picker visible');
-   const agentChoice=[...scope().querySelectorAll('[role="option"]')].find(e=>shown(e)&&e.textContent.includes('Ask'));await tap('compose.clarification-agent',agentChoice,()=>!!control(/^Don’t ask /),'exact live agent mention selected');
-   const tagged=text().value;await fill('compose.clarification-answer',text(),tagged+' Use the approved budget');
-   const followups=reports.apiCalls.filter(c=>c.path==='/api/request/followup').length;
-   await tap('compose.clarification-send',control(/^Ask /),()=>text().value===''&&!!root.querySelector('[data-part="timeline"]')?.textContent.includes('Use the approved budget'),'captured reply leaves composer and exact followup row appears',()=>reports.apiCalls.filter(c=>c.path==='/api/request/followup'&&c.ok===true).length===followups+1&&visibleText('Reply queued in the original request context.'));
-   reports.taggedReply={parent:original,answer,pid,attempt:0,authority:'invented host shape assertion; signed claim/native execution requires provider journey'};
+   await tap('compose.clarification-reply',control('Reply'),()=>!!control('Cancel reply')&&!!control(/^Don’t ask /)&&!!control(/^Ask /),'reply chip binds exact clarification and its agent');await retire();
+   assert(text().value==='','Reply selects the agent without a manual tag in the draft');
+   await fill('compose.clarification-answer',text(),'Use the approved budget');
+   const followups=reports.apiCalls.filter(c=>c.path==='/api/request/followup').length,fresh=()=>reports.apiCalls.filter(c=>c.path==='/api/dm/send'||c.path==='/api/dm/agent/ask').length,newWork=fresh();
+   await tap('compose.clarification-send',control(/^Ask /),()=>text().value===''&&!!root.querySelector('[data-part="timeline"]')?.textContent.includes('Use the approved budget'),'captured reply leaves composer and exact followup row appears',()=>reports.apiCalls.filter(c=>c.path==='/api/request/followup'&&c.ok===true).length===followups+1&&fresh()===newWork&&visibleText('Reply queued in the original request context.'));
+   reports.taggedReply={parent:original,answer,pid,attempt:0,binding:'Reply ancestry, no manual tag',authority:'invented host shape assertion; signed claim/native execution requires provider journey'};
 
   }
   if(suite==='outbox'&&!p1){

@@ -252,6 +252,12 @@ Only the host's `steered` status proves native consumption; the POST note does
 not. Exact uncertain retries retain their original ID/ref/attempt/body/files.
 Omitted or zero `attempt` preserves the legacy API's queued-followup semantics;
 the ordinary tagged composer always binds a positive attempt for active work.
+An explicit Reply to an agent's answer or clarification may instead bind its
+exact stored request at `attempt:0` after `answered`, `needs_human`, `resolved`
+or `done`. The ancestry, current executor, author key and topic must still match.
+Reply itself selects that agent; no manually typed tag is required. Removing
+the addressed agent keeps an ordinary quoted message. This grants no native
+permission and never replays failed, interrupted or cancelled work.
 
 ### `/api/act` verbs
 
@@ -580,6 +586,12 @@ current word. `ReviewItem.reason` is absent for most items. On D it may be
 `held`, `agent_running`, `self_consented` or `device_admin`; B sets only
 `device_admin`. `self_consented` and `device_admin` are notices, dismissed
 with `resolve`.
+
+An own-request `continuation` uses the shared request ID, not a recipient's
+transport-copy ID. Its optional `handled` is the exact resolve decision's
+`DecisionResult` (`decision`, `state`, `at`, optional `refused`). When `refused`
+is present, show the reason beside the handling control. Sending or queueing a
+decision does not close the request; only the host's signed status does.
 
 **Comic's agent status (derived, not API values).** These come from
 `features/Approvals.words.ts` `phaseOf` and the `Mood` of Comic's
