@@ -29,6 +29,14 @@ on:
         description: 'Rerun only these failed native Windows client partitions (JSON array); empty keeps all six'
         type: string
         default: ''
+      platform_only:
+        description: 'Run only desktop and Android qualification, retaining completed native/race jobs'
+        type: boolean
+        default: false
+      candidate_version:
+        description: 'Optional exact candidate version for desktop and Android qualification'
+        type: string
+        default: ''
       interaction_qualification:
         description: 'Also measure all shared GUI workloads in the desktop builds'
         type: boolean
@@ -41,7 +49,7 @@ permissions:
   contents: read
 jobs:
   native:
-    if: ${{ !inputs.windows_task_probe && !inputs.race_shards && !inputs.windows_client_partitions }}
+    if: ${{ !inputs.windows_task_probe && !inputs.platform_only && !inputs.race_shards && !inputs.windows_client_partitions }}
     strategy:
       fail-fast: false
       matrix:
@@ -109,7 +117,7 @@ jobs:
   # Each Windows client partition owns a runner: simultaneous test binaries on
   # one Windows disk exhausted 1800s even before the responsiveness changes.
   windows-client:
-    if: ${{ !inputs.windows_task_probe && !inputs.race_shards && !inputs.test_packages && !inputs.test_run && (!inputs.native_os || contains(fromJSON(inputs.native_os), 'windows-latest')) }}
+    if: ${{ !inputs.windows_task_probe && !inputs.platform_only && !inputs.race_shards && !inputs.test_packages && !inputs.test_run && (!inputs.native_os || contains(fromJSON(inputs.native_os), 'windows-latest')) }}
     strategy:
       fail-fast: false
       matrix:
@@ -134,7 +142,7 @@ jobs:
   # tests in bounded client shards, every other package in one. Focused
   # dispatch retains passing evidence when only some shards need a rerun.
   race:
-    if: ${{ !inputs.windows_task_probe && !inputs.windows_client_partitions && (inputs.race_shards || (!inputs.test_packages && !inputs.test_run)) }}
+    if: ${{ !inputs.windows_task_probe && !inputs.platform_only && !inputs.windows_client_partitions && (inputs.race_shards || (!inputs.test_packages && !inputs.test_run)) }}
     strategy:
       fail-fast: false
       matrix:
@@ -175,9 +183,10 @@ jobs:
     if: ${{ !inputs.windows_task_probe && !inputs.test_packages && !inputs.test_run && !inputs.race_shards && !inputs.windows_client_partitions }}
     uses: ./.github/workflows/desktop.yml
     with:
+      version: ${{ inputs.candidate_version || '' }}
       interaction_qualification: ${{ inputs.interaction_qualification || false }}
   container:
-    if: ${{ !inputs.windows_task_probe && !inputs.test_packages && !inputs.test_run && !inputs.race_shards && !inputs.windows_client_partitions }}
+    if: ${{ !inputs.windows_task_probe && !inputs.platform_only && !inputs.test_packages && !inputs.test_run && !inputs.race_shards && !inputs.windows_client_partitions }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -193,6 +202,8 @@ jobs:
   android-qualification:
     if: ${{ github.event_name == 'workflow_dispatch' && !inputs.windows_task_probe && !inputs.test_packages && !inputs.test_run && !inputs.race_shards && !inputs.native_os && !inputs.windows_client_partitions }}
     uses: ./.github/workflows/android-qualification.yml
+    with:
+      version: ${{ inputs.candidate_version || '' }}
     secrets:
       ANDROID_PREVIEW_KEYSTORE_BASE64: ${{ secrets.ANDROID_PREVIEW_KEYSTORE_BASE64 }}
   windows-task-probe:
