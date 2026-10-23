@@ -49,3 +49,22 @@ No new schema or native permission policy is planned. Preserve the current relay
 realm, Drive binding, remote IDs, ciphertexts and existing client data. Preview
 APKs only; Play work remains paused. Never rerun the three manually resolved
 failed requests or restore a stale backup over current writes.
+
+## Final T7 native correction
+
+Production is frozen at02a935c1 (attention.go cd8d1b74…). Final vet and required
+mixed-version passed on those exact production bytes. The41-parent focused
+race selection passed; native Linux/macOS affected selections passed
+run39971671528. Windows failed only the new fixture's MarkUnread stale-view CAS
+while background daemons processed hand-mutated rows. The test now joins its
+owned daemons/background senders before synthetic mutations and restarts only
+for actual peer retraction. No product guard, retry, assertion or deadline was
+changed. Its regular/race repeats pass; only the failed Windows parent is rerun.
+The original Windows failure and an earlier sandbox socket denial remain
+recorded. No auxiliary probe is retained in source.
+
+Gallery:306 checks and all unaffected full runtime cells pass; the sole Zoom
+provider readiness failure has focused deterministic and real-world closure.
+Final-pin UI/protocol/skin-contract trees are byte-identical to the qualified
+pin. All five rebuilt packages have identical published hashes; static checks
+and33 final-pin packaging/scaffold checks pass with zero skips.

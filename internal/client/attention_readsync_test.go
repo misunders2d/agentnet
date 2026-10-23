@@ -318,10 +318,17 @@ func TestAttentionReadSelectedReplyKeepsExactReceiver(t *testing.T) {
 // report, October 23, 2026).
 func TestAttentionOwnDeviceChatCopyIsNotUnread(t *testing.T) {
 	w := newWorld(t, "")
-	runAgent(t, w.alice)
-	runAgent(t, w.bob)
+	stopAlice := runAgent(t, w.alice)
+	stopBob := runAgent(t, w.bob)
 	persons(t, w.alice, w.bob)
-	phone := linked(t, w.alice)
+	phone, awaited, _ := linkPhone(t, w.alice, "phone") // linked, keeping its daemon's stop
+	if err := w.alice.DecideLink(tctx(t), pendingLink(t, w.alice).ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if out := <-awaited; out.err != nil {
+		t.Fatal(out.err)
+	}
+	stopPhone := runAgent(t, phone)
 	conv := newDM(t, w.bob, w.alice)
 	harnesses := []string{"codex", "claude", "pi", "omp", "agy"}
 	for _, harness := range harnesses {
@@ -353,6 +360,17 @@ func TestAttentionOwnDeviceChatCopyIsNotUnread(t *testing.T) {
 	}
 	own, _ := readState(t, w.alice, conv, "typed on my phone")
 	peer, _ := readState(t, w.alice, conv, "peer turn")
+	// The signed journey made the rows. The shapes below are changed by hand,
+	// so no daemon or background flush may act on them (a synthetic deletion
+	// would be shared) or commit while MarkUnread checks its snapshot.
+	quiet := func() {
+		stopPhone()
+		stopBob()
+		stopAlice()
+		w.alice.stopBackgroundPosts()
+		w.alice.stopArchivePosts()
+	}
+	quiet()
 	// check reads every harness without moving its cursor.
 	check := func(t *testing.T, peerListed, ownListed bool, unread int) {
 		t.Helper()
@@ -431,10 +449,14 @@ func TestAttentionOwnDeviceChatCopyIsNotUnread(t *testing.T) {
 		check(t, true, true, 2)
 	})
 	t.Run("deleted by its sender", func(t *testing.T) {
+		// Only this phase needs delivery: the real retraction, then quiet again.
+		stopAlice, stopBob = runAgent(t, w.alice), runAgent(t, w.bob)
 		if _, err := w.bob.Retract(tctx(t), ControlRef{Conv: conv, ID: msgs[0].LID, Fingerprint: w.bob.Self().Fingerprint()}, ""); err != nil {
 			t.Fatal(err)
 		}
 		eventually(t, "the retraction here", func() bool { ok, _ := w.alice.store.retracted(peer); return ok })
+		stopBob()
+		stopAlice()
 		check(t, false, true, 1)
 	})
 }
