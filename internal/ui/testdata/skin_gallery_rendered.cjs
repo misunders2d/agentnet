@@ -109,8 +109,12 @@ function digest(files) {
       await use.click();
       const trust = page.getByRole('button', { name: 'Use this skin' });
       await trust.waitFor({ timeout: 20000 });
+      const card = await page.locator('.skin-card').boundingBox(), launcher = await page.getByRole('button', { name: 'AgentNet controls', exact: true }).boundingBox();
+      assert(card && launcher && (Math.min(card.x+card.width,launcher.x+launcher.width)<=Math.max(card.x,launcher.x)||Math.min(card.y+card.height,launcher.y+launcher.height)<=Math.max(card.y,launcher.y)), 'host launcher must not cover the trust card');
       await snap('trust');
+      await trust.evaluate(button => button.addEventListener('click', () => queueMicrotask(() => { window.skinTrustFeedback = { disabled: button.disabled, label: button.textContent }; }), { once: true }));
       await trust.click();
+      assert.deepEqual(await page.evaluate(() => window.skinTrustFeedback), { disabled: true, label: 'Opening Pulp…' }, 'explicit trust gives immediate accurate opening feedback');
       await page.waitForFunction(() => { const sr = document.getElementById('skin').shadowRoot; return !!sr && /Pulp gallery skin/.test(sr.textContent); }, null, { timeout: 20000 });
 
       // Back to Comic: the gallery knows it is in this browser.

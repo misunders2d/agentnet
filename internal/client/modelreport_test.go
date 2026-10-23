@@ -230,7 +230,20 @@ func TestModelReportOlderReaderFIFOAndRestart(t *testing.T) {
 	stop := runAgent(t, w.alice)
 	runAgent(t, w.bob)
 	persons(t, w.alice, w.bob)
-	phone := linked(t, w.alice)
+	phone, awaited, _ := linkPhone(t, w.alice, "phone")
+	if err := w.alice.DecideLink(tctx(t), pendingLink(t, w.alice).ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if out := <-awaited; out.err != nil {
+		t.Fatal(out.err)
+	}
+	label, device, _ := protocol.SplitAddress(phone.Address)
+	var previous protocol.Profile
+	if err := phone.hub.do(tctx(t), "GET", "/v1/agents/"+label+"/"+device+"/profile", nil, &previous); err != nil {
+		t.Fatal(err)
+	}
+	runAgent(t, phone)
+	session := waitFreshNamedAgentSession(t, phone, previous)
 	stop()
 	me := phonePerson(t, w.alice)
 	m := protocol.AgentModel{Model: "reported fixture", Reasoning: "xhigh", Harness: "codex", Executor: strings.Repeat("a", 64), At: 1, Revision: 1}
@@ -246,15 +259,10 @@ func TestModelReportOlderReaderFIFOAndRestart(t *testing.T) {
 	w.alice.store.db.QueryRow(`SELECT envelope FROM outbox WHERE sub=? AND recipient=?`, envelope.SubModelSync, phone.Address).Scan(&encoded)
 	var env envelope.Envelope
 	json.Unmarshal([]byte(encoded), &env)
-	var profile protocol.Profile
-	label, device, _ := protocol.SplitAddress(phone.Address)
-	if e := w.alice.hub.do(tctx(t), "GET", "/v1/agents/"+label+"/"+device+"/profile", nil, &profile); e != nil {
-		t.Fatal(e)
-	}
 	publish := func(ts int64, caps []string) {
 		t.Helper()
 		slices.Sort(caps)
-		r := protocol.CapsRecord{Address: phone.Address, Session: profile.Sessions[0], TS: ts, Caps: caps}
+		r := protocol.CapsRecord{Address: phone.Address, Session: session, TS: ts, Caps: caps}
 		r.Sign(phone.id.Sign)
 		if e := phone.hub.do(tctx(t), "PUT", "/v1/caps", r, nil); e != nil {
 			t.Fatal(e)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -83,6 +84,19 @@ func TestLiveGroupTerminalRemovalReadOnlyHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	conversations, err := bob.Conversations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var beforeRemoval client.ConversationInfo
+	for _, row := range conversations {
+		if row.ID == conv {
+			beforeRemoval = row
+		}
+	}
+	if len(beforeRemoval.Members) != 2 {
+		t.Fatalf("missing actual two-member projection: %+v", beforeRemoval)
+	}
 	if _, err = alice.RemoveGroupMember(ctx, conv, person.Person); err != nil {
 		t.Fatal(err)
 	}
@@ -90,6 +104,11 @@ func TestLiveGroupTerminalRemovalReadOnlyHTTP(t *testing.T) {
 		t.Fatal(err)
 	}
 	await("verified terminal read-only", func(v DMThread) bool { return v.Role == "former_member" && strings.Contains(v.Frozen, "removed you") })
+	// An overview may have read the conversation immediately before the signed
+	// removal lands. Its newer context must produce the existing typed wait.
+	if _, err = live.groupMembers(beforeRemoval); !errors.Is(err, client.ErrGroupContextPending) {
+		t.Fatalf("stale membership overview must wait for verified projection: %v", err)
+	}
 	var server *Server
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { server.Handler().ServeHTTP(w, r) }))
 	t.Cleanup(ts.Close)

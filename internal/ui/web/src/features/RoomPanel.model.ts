@@ -97,6 +97,13 @@ export interface Waiting { id: string; text: string; asker: string; agent: strin
 
 export interface GroupInvite { id: string; target: string; name: string; state: string; canCancel: boolean; canRefresh: boolean; error?: string }
 
+/** A reissued invitation replaces only its own inviter's stale proposal. */
+export function incomingGroupInvites(invitations: readonly T.GroupInvitationView[] = []): T.GroupInvitationView[] {
+  const incoming = invitations.filter(i => i.direction === "in" && ["pending", "stale"].includes(i.status));
+  const current = new Set(incoming.filter(i => i.status === "pending").map(i => JSON.stringify([i.conv, i.inviter])));
+  return incoming.filter(i => i.status !== "stale" || !current.has(JSON.stringify([i.conv, i.inviter])));
+}
+
 /** Outbound proposals are invitations, never members before publication. */
 export function pendingGroupInvites(t: T.DMThread, o: T.Overview | null): GroupInvite[] {
   if (t.kind !== "group") return [];

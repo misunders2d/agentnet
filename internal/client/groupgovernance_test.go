@@ -652,7 +652,7 @@ func groupGovernanceDeliver(t *testing.T, from, to *Agent, env envelope.Envelope
 }
 
 func TestGroupGovernanceLinkedAdminAndTransfer(t *testing.T) {
-	t.Parallel()
+	// This mesh runs its own concurrent daemons; avoid competing fixture meshes.
 	w, carol, p, stops := groupTurnsFixture(t)
 	phone, await, _ := linkPhone(t, w.alice, "governance-phone")
 	if err := w.alice.DecideLink(tctx(t), pendingLink(t, w.alice).ID, true); err != nil {
@@ -671,9 +671,9 @@ func TestGroupGovernanceLinkedAdminAndTransfer(t *testing.T) {
 	if err = w.alice.store.addConvOutbox(copies, envelope.Inner{}, nil, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err = w.alice.FlushOutbox(tctx(t)); err != nil {
-		t.Fatal(err)
-	}
+	// Match publication's enqueue wake; readiness is the exact signed context
+	// below, not a synchronous drain of every unrelated outbox lane.
+	w.alice.kickNow()
 	groupGovernanceAwait(t, p, phone)
 	alice, _, _ := w.alice.store.selfPerson(w.alice.Address)
 	bob, _, _ := w.bob.store.selfPerson(w.bob.Address)

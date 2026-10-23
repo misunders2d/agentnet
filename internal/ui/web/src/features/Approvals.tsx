@@ -1,5 +1,6 @@
 import { UnreadReview } from "./Approvals.unread";
 import { NativeActivity } from "./NativeActivity";
+import { incomingGroupInvites } from "./RoomPanel.model";
 // Review: unresolved work and decisions needing this person, newest first,
 // each naming who and what, straight from the overview: requests to your
 // agent and invitations for it decided here (needs_you), review decisions,
@@ -29,7 +30,7 @@ import { capital, decidable, inSentence, isSelfConsent, nameOf, whyWords } from 
 
 export { ApprovalCard } from "./Approvals.card";
 
-const groupInvites = (o: T.Overview) => (o.group_invitations || []).filter((i) => i.direction === "in" && ["pending", "stale"].includes(i.status));
+const groupInvites = (o: T.Overview) => incomingGroupInvites(o.group_invitations);
 const deviceAsks = (o: T.Overview) => (o.links || []).filter((l) => l.state === "pending");
 const reviewAsks = (o: T.Overview) => (o.review || []).filter((r) => !r.notice && !isWorkingReview(r));
 

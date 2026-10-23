@@ -45,11 +45,12 @@ export function AgentSetupManager({catalog,onSaved}:{catalog:T.AgentCatalogView|
   };
   return <Details label="Manage saved setups">
     <p>These are retained configurations on this computer. They are not additional agent chats. Choosing an exact current setup resolves older duplicates without changing their history.</p>
+    <p>Disabling a setup clears its folder setting. If it is the default, requests that do not name an agent wait for you until you choose a default again.</p>
     {[...groups].sort(([a],[b])=>a?b?a.localeCompare(b):-1:1).map(([h,agents])=><section key={h||"unknown"} aria-label={(h?harnessName(h):"Program not recorded")+" saved setups"} className="space-y-2 pt-2">
       <h4 className="font-semibold">{h?harnessName(h):"Program not recorded"}</h4>
       {agents.map(a=><div key={a.record.id} data-agent-setup={a.record.id} className="rounded-xl border border-outline p-3 [overflow-wrap:anywhere]">
         <p className="font-semibold">{a.record.label}{a.enabled&&a.default?" · Current":""}</p>
-        <p>{a.responder?.dir||(a.enabled?"The folder could not be read on this device.":"Turned off. Its folder setting was cleared; choose the folder to turn it on again.")}</p>
+        <p>{a.responder?.dir||(a.enabled?"The folder could not be read on this device.":"No folder saved. Choose the folder to turn this setup on.")}</p>
         <p>{a.enabled?a.responder?.ready?"Enabled · Ready":"Enabled · Needs attention":"Disabled"}</p>
         {a.responder?.problem&&<p className="text-danger">{a.responder.problem}</p>}
         <div className="mt-2 flex flex-wrap gap-2">

@@ -396,7 +396,11 @@
           digest,
         ],
         actions: [
-          button("Use this skin", () => { try { localStorage.setItem("agentnet.skin.trusted." + selected.id, selected.digest); } catch (_) {} resolve(); }, "primary"),
+          button("Use this skin", (event) => {
+            event.currentTarget.disabled = true;
+            event.currentTarget.textContent = "Opening " + selected.name + "…";
+            try { localStorage.setItem("agentnet.skin.trusted." + selected.id, selected.digest); } catch (_) {} resolve();
+          }, "primary"),
           button("Use " + homeName, () => go(HOME)),
         ],
       });

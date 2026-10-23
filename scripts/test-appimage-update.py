@@ -52,6 +52,19 @@ def checksum(path):
     return digest.hexdigest()
 
 
+def require_media_bundle(appdir):
+    """Playback must not depend on unbundled plugins from the build machine."""
+    plugin_dir = appdir / "usr/lib/gstreamer-1.0"
+    for name in ("libgstcoreelements.so", "libgstautodetect.so", "libgstvpx.so", "libgstvorbis.so"):
+        plugin = plugin_dir / name
+        require(plugin.is_file() and plugin.stat().st_size > 0 and
+                plugin.resolve().is_relative_to(appdir.resolve()),
+                "candidate AppImage lacks bundled media plugin: " + name)
+    scanner = appdir / "usr/lib/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner"
+    require(scanner.is_file() and os.access(scanner, os.X_OK),
+            "candidate AppImage lacks its media plugin scanner")
+
+
 def download(name, destination, limit):
     request = urllib.request.Request(RELEASE + name, headers={"User-Agent": "AgentNet-package-lifecycle-CI"})
     opener = urllib.request.build_opener(HTTPSRedirectOnly())
@@ -190,6 +203,7 @@ def smoke(candidate):
                 candidate_sum = checksum(package)
                 subprocess.run([str(package), "--appimage-extract"], cwd=extract, env=env,
                                stdout=log, stderr=log, timeout=90, check=True)
+                require_media_bundle(extract / "squashfs-root")
                 bundle = extract / "squashfs-root/usr/bin/agentnet"
                 require(bundle.is_file(), "candidate AppImage lacks its bundled backend")
                 candidate_version, bundle_sum = version(bundle, env), checksum(bundle)

@@ -692,8 +692,8 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
         <p className="font-semibold">{closed.title}</p>
         {closed.detail && <p className="text-[13px] text-text-2">{closed.detail}</p>}
       </div>
-      <PlusMenu actions={actions.filter(a=>a.label === "Schedule…")} onOpenChange={setMenuOpen} finalFocus={()=>!schedulePane} />
-    </div>{scheduleDialogs}</>
+      {!dm?.frozen && <PlusMenu actions={actions.filter(a=>a.label === "Schedule…")} onOpenChange={setMenuOpen} finalFocus={()=>!schedulePane} />}
+    </div>{!dm?.frozen && scheduleDialogs}</>
   );
 
   return (

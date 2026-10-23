@@ -50,7 +50,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf xvfb
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf xvfb \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav
       - name: build the app
         shell: bash
         run: desktop/build.sh "${{ inputs.version }}"
@@ -73,7 +74,12 @@ jobs:
           tooling="$RUNNER_TEMP/agentnet-browsers/node_modules"
           if [[ "$RUNNER_OS" == Linux ]]; then
             "$tooling/.bin/playwright" install --with-deps chromium firefox webkit
-            export AGENTNET_NATIVE_SHELL="$GITHUB_WORKSPACE/desktop/src-tauri/target/release/agentnet-app"
+            # Qualify the shipped runtime, including its bundled media plugins.
+            image="$GITHUB_WORKSPACE/desktop/out/AgentNet-linux-x86_64.AppImage"
+            extraction="$RUNNER_TEMP/agentnet-interaction-appimage"
+            mkdir -p "$extraction"
+            (cd "$extraction" && "$image" --appimage-extract > "$evidence/appimage-extraction.log")
+            export AGENTNET_NATIVE_SHELL="$extraction/squashfs-root/usr/bin/agentnet-app"
           else
             "$tooling/.bin/playwright" install chromium firefox webkit
             if [[ "$RUNNER_OS" == macOS ]]; then
@@ -113,6 +119,7 @@ jobs:
           path: ${{ runner.temp }}/agentnet-interactions
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
+        if: ${{ success() || (failure() && inputs.interaction_qualification) }}
         with:
           name: agentnet-app-${{ runner.os }}
           path: desktop/out/AgentNet-*

@@ -188,7 +188,24 @@ export async function activate() {
   const worker=reg.active;if(!worker)fail('The skin worker is unavailable.');
   // Called only after explicit interface selection/trust. Claiming never
   // reloads tabs, fetches chats or changes their selected interface.
-  await new Promise((resolve,reject)=>{const channel=new MessageChannel(),timer=setTimeout(()=>reject(new Error('Reload AgentNet to use stored skins.')),5000);channel.port1.onmessage=e=>{clearTimeout(timer);channel.port1.close();e.data?.ready?resolve():reject(new Error('The skin worker was refused.'));};worker.postMessage({type:'agentnet-local-skins-claim'},[channel.port2]);});
+  await new Promise((resolve,reject)=>{
+    const channel=new MessageChannel();let ready=false,settled=false;
+    const finish=error=>{
+      if(settled)return;settled=true;
+      clearTimeout(timer);navigator.serviceWorker.removeEventListener('controllerchange',controlled);
+      channel.port1.onmessage=null;channel.port1.close();channel.port2.close();
+      error?reject(error):resolve();
+    };
+    // A ready reply can arrive before this page sees its new controller.
+    // Script URL equality is insufficient: the previous push-only worker
+    // can have the same URL as the selected updated asset worker.
+    const controlled=()=>{if(ready&&navigator.serviceWorker.controller===worker)finish();};
+    const timer=setTimeout(()=>finish(new Error('Reload AgentNet to use stored skins.')),5000);
+    navigator.serviceWorker.addEventListener('controllerchange',controlled);
+    channel.port1.onmessage=e=>{if(!e.data?.ready){finish(new Error('The skin worker was refused.'));return;}ready=true;controlled();};
+    try{worker.postMessage({type:'agentnet-local-skins-claim'},[channel.port2]);controlled();}
+    catch(e){finish(e);}
+  });
 }
 // manager draws the browser-local skin manager into root (host.manageLocalSkins):
 // import a package (its files or its folder), the skins stored here and

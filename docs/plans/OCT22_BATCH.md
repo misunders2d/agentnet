@@ -185,7 +185,8 @@ replace remaining all-system/platform/GUI and full qualification gates.
 
 The d12 child passes strict canonical build/vet and Claude's cheap source gate;
 its matching five gallery packages and twenty previews are built and visually
-inspected. Full qualification is held for newly reproduced GUI defects. Normal
+inspected. The integrated25e qualification has now run; its failures are being
+corrected together while unchanged passing jobs remain valid. Normal
 chat-row `last_id` was mistakenly treated as an exact latest-message jump;
 ordinary preview/topic selection is now separated from exact quote/notification
 focus, with focused verification in progress. No read-entry guard was broadened.
@@ -208,3 +209,31 @@ full-App1280/390 pending/recovery rendering pass. A removed member's authenticat
 terminal notice remains a separate concrete design/implementation gate; generic
 refusals or opaque head hashes are not removal proof. No publicv0.9.3 or relay
 change has occurred.
+
+### Integrated25e correction batch
+
+The single full run39877403457 completed24 passing jobs, nine failing jobs and
+the optional Windows probe skipped. All18 client race partitions, five of six
+native Windows client partitions and the container gate passed. Failures are
+retained with exact source/job logs; a skipped optional probe is not a pass.
+Affected native/platform selections and the three UI race partitions will be
+qualified after the corrections stabilize, without repeating passed client
+partitions.
+
+| Follow-up | Required result | Owner | State / evidence |
+| --- | --- | --- | --- |
+| G1 final removal/invite presentation | Typed overview wait; exact current member names; no unusable former-member New topic/Schedule; current invitation replaces only its inviter's stale card; neutral legacy setup folder copy | Root / Claude | Implemented; actual old canonical header RED, current-source two-width rendered GREEN, native signed projection/error checks PASS1.672s |
+| Gallery exact read observation | Assert read authorization at dispatch, retain geometry/tokens/scope and never-visible unread proof | Interaction / Root | Fixture-only fix; causal actual refetch retirement reproduced;11 focused checks pass, full collection remains open |
+| Native client CI regressions | Current-session fixture readiness, exact catalog/identity/order and group convergence under unchanged deadlines | Storage / Root | Five fixture corrections collected; exact catalog/model and three group parents pass focused regular/race checks, platform reruns pending |
+| UI/Android fixture prerequisites | Actual draft-hook/preview contract and neutral wording; notification/updater isolation without altering product permissions | State / Root | Three UI fixtures pass; existing emulator-only mode isolation corrected, actual Android rerun pending |
+| P1 actual platform interactions | Faithful supported-codec media, native cleanup/anchor behavior, correct native/browser permission states and controls; every retained slow interaction remains visible | Interaction / Root | Native ordered-anchor regression fixed with exact zero-drift proof; isolated suite storage, portable media, bounded Windows disposal and permission vectors pass locally; actual platform reruns pending |
+
+The25e gallery collection failed one Zoom390 child and its parent out of302
+test nodes. Its cumulative ACK comparison used a later watcher snapshot after
+the legitimate ACK refetch retired that watcher. Synchronous dispatch evidence
+now proves the actual canonical geometry, exact rev/writer, scope and current
+visit for every ACK;48 never-visible armed rows remain unread. No gallery
+production change was required. Publication, public artifact verification,
+matching gallery qualification and relay rollout remain unfinished.
+
+The final corrective child also includes Claude’s current-invitation and local-skin first-use findings, phone trust-card geometry and immediate opening feedback. All collected helper source is frozen. The exact canonical package and focused setup/skin-loading tests pass; the final canonical entry SHA256 is `370046e6d8d1a5aada7c4356428dd007d6aeceb9b1bd277994383d458ec4357f`. AppImage media bundling is implemented, with actual new-installer playback still required. The qualification follow-up retains all 24 unchanged successful jobs and reruns affected native packages, Windows partition 4, all three UI partitions and the existing complete interaction/Android workflow. No public release or relay change is claimed.

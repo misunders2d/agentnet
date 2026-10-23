@@ -8,7 +8,8 @@
 #   Windows  AgentNet-windows-x64-setup.exe  (per user, no admin rights)
 #   macOS    AgentNet-macos-universal.dmg    (Intel and Apple silicon)
 # Needs Go, Rust (stable) and Node; Linux also needs WebKitGTK 4.1 and
-# libayatana-appindicator development files. The Tauri bundler downloads
+# libayatana-appindicator development files and GStreamer base/good/bad/libav
+# plugins for the bundled audio/video runtime. The Tauri bundler downloads
 # linuxdeploy for the AppImage. Builds are not signed.
 # Usage: desktop/build.sh [VERSION]
 set -eu

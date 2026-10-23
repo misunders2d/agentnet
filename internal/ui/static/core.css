@@ -108,7 +108,7 @@ body > #skin > p:only-child { margin: auto; padding: 24px; color: var(--muted); 
 
 /* The host's own page in front of a skin: asking to trust a skin from
    someone else, or saying what could not open. */
-.skin-gate { flex: 1; display: grid; place-items: start center; padding: 56px 16px; background: var(--an-canvas); color: var(--an-ink); }
+.skin-gate { flex: 1; min-height: 0; overflow-y: auto; display: grid; place-items: start center; padding: 56px 16px; background: var(--an-canvas); color: var(--an-ink); }
 .skin-card { width: min(31rem, 100%); padding: 26px 24px 22px; background: var(--an-surface); border: 1.5px solid var(--an-outline); border-radius: 24px; box-shadow: 3px 3px 0 0 var(--an-shadow); display: grid; gap: 12px; }
 .skin-card h1 { font-size: 1.5rem; line-height: 1.2; font-weight: 800; letter-spacing: -.01em; }
 .skin-card p { line-height: 1.5; overflow-wrap: anywhere; }
@@ -119,5 +119,5 @@ body > #skin > p:only-child { margin: auto; padding: 24px; color: var(--muted); 
 .skin-card .btn:hover { background: var(--an-sunken); }
 .skin-card .btn.primary { background: var(--an-act); color: var(--an-act-ink); box-shadow: 2px 2px 0 0 var(--an-shadow); }
 .skin-card :focus-visible { outline: 3px solid var(--an-agent-ink); outline-offset: 2px; }
-@media (max-width: 480px) { .skin-gate { padding: 24px 16px; } .skin-card-actions .btn { flex: 1 1 100%; } }
+@media (max-width: 480px) { .skin-gate { padding: 64px 16px 24px; } .skin-card-actions .btn { flex: 1 1 100%; } }
 

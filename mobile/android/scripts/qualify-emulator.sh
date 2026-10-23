@@ -47,6 +47,9 @@ assert len(after['preserved']['messages']) == 200
 print('PASS signed Android upgrade: original identity, 200 saved messages, origin and drafts retained')
 PY
 instrument notifications "$RUNNER_TEMP/android-notifications.txt"
+# NotificationManager state outlives an instrumentation invocation. Isolate
+# the next matrix on this CI/qemu-only fixture without changing saved data.
+adb -s "$serial" shell am force-stop "$package"
 instrument indicators-video "$RUNNER_TEMP/android-indicators-video.txt"
 # Every invocation consumes its private test JS/seed in finally; restage both.
 failed=0

@@ -322,7 +322,13 @@ function useVisibleRows(box: RefObject<HTMLDivElement | null>, inner: RefObject<
           if (needsAnchor && !atBottom.current && width > 0 && visible > 0 && (!reading || r.top - viewport.top < reading.offset)) reading = { row: row as HTMLElement, offset: r.top - viewport.top, scrollTop: root.scrollTop };
           if (r.height > 0 && width > 0 && visible > 0 && visible >= Math.min(r.height / 2, height / 2)) seen.push(m);
         }
-        if (needsAnchor) anchor.current = reading;
+        if (needsAnchor) {
+          const saved = anchor.current;
+          // A visibility frame can run after late row growth but before the
+          // resize callback. Keep its pre-growth offset until resize reconciles
+          // it; a changed scrollTop means the user's newer reading place wins.
+          if (!saved?.row.isConnected || !root.contains(saved.row) || Math.abs(root.scrollTop - saved.scrollTop) >= .5) anchor.current = reading;
+        }
         publish(seen);
       });
     };

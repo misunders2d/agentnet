@@ -22,8 +22,11 @@ const button=(tree,label)=>nodes(tree).find(n=>n.tag==='Button'&&words(n)===labe
 const flush=()=>new Promise(setImmediate);
 (async()=>{
  let tree=render();assert.equal(tree.tag,'Details');assert.equal(tree.props.label,'Manage saved setups');assert.equal(tree.props.open,undefined,'global manager stays collapsed by the existing Details control');
+ assert(words(tree).includes('Disabling a setup clears its folder setting.')&&words(tree).includes('requests that do not name an agent wait for you'),'the immediate Disable path explains folder and default consequences before acting');
  assert(!nodes(tree).some(n=>/Chat/.test(String(n.tag))),'management never offers chat recipients');
- assert(words(tree).includes('Folder unavailable'));assert(words(tree).includes('Program not recorded'));assert(words(tree).includes('Folder not available; choose it when enabling.'));
+ assert(words(tree).includes('Folder unavailable'));assert(words(tree).includes('Program not recorded'));
+ const missingFolder=record=>{const text=words(record);assert.match(text,/No folder saved/);assert.match(text,/Choose the folder to turn this setup on/);assert(!/was cleared|was deleted|was lost/.test(text),'missing legacy configuration does not prove how it went missing');};
+ missingFolder(row(tree,unknown));assert(words(row(tree,unknown)).includes('Disabled'));assert(button(row(tree,unknown),'Repair or enable'));assert.equal(calls.length,0,'opening retained legacy setup never enables it');
  button(row(tree,b),'Use as current').props.onClick();await flush();
  assert.equal(pointer,b,'the clicked exact record wins over the first same-program setup');
  assert.deepEqual(calls,[['current',{agent_id:b,manual:false,harness:'',dir:''}],['change',{action:'publish'}]]);
@@ -31,7 +34,7 @@ const flush=()=>new Promise(setImmediate);
  assert.equal(catalog.agents.find(x=>x.record.id===a).enabled,false);
  tree=render();assert(words(row(tree,b)).includes('Current'));button(row(tree,b),'Disable').props.onClick();await flush();
  assert.deepEqual(calls.at(-1),['change',{action:'disable',id:b}]);assert.equal(catalog.agents.find(x=>x.record.id===b).responder,null);
- tree=render();button(row(tree,b),'Repair or enable').props.onClick();tree=render();
+ tree=render();missingFolder(row(tree,b));assert(words(row(tree,b)).includes('Disabled'));assert.equal(pointer,b,'disabling never selects a replacement default');button(row(tree,b),'Repair or enable').props.onClick();tree=render();
  let form=nodes(tree).find(n=>n.tag==='AgentSheet');assert.equal(form.props.agent.record.id,b);assert.equal(form.props.agent.responder,null,'missing native responder is never cloned');
  assert.deepEqual(Array.from(form.props.harnesses.map(h=>h.name)),['codex'],'other enabled and uninstalled programs are not offered');
  const before=calls.length;assert.equal(await form.props.onSave({harness:'codex',dir:'',label:''}),false);assert.equal(calls.length,before,'blank missing folder cannot re-enable a setup');

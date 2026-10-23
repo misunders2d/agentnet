@@ -147,7 +147,33 @@ for (const bound of [false,true]) {
 
 // Back, deliberate navigation, topic selection and unmount cancel stale work.
 const main = await readFile(new URL('../web/src/main.tsx',import.meta.url),'utf8');
-const backSource=stripTypeScriptTypes(main.slice(main.indexOf('const stopBack = host.onBack?.(() => {')+'const stopBack = host.onBack?.('.length,main.indexOf('\n  live++;')).trim().replace(/\);$/,''));
+const backStart=main.indexOf('const stopBack = host.onBack?.(() => {');
+assert(backStart>=0,'actual native Back callback remains registered');
+const backEnd=main.indexOf('\n  });',backStart);
+assert(backEnd>backStart,'extract only the registered callback, before later mount setup');
+const backSource=stripTypeScriptTypes(main.slice(backStart+'const stopBack = host.onBack?.('.length,backEnd)+'\n  }');
+// A normal row carries last_id as a topic preview, never an exact jump past
+// the first unread. A native tap still binds its original message exactly.
+{
+  const f=fixture();
+  f.overview.dms[0].last_id=next;
+  f.views.set(conv,{id:conv,messages:[mid,next].map(id=>({id,dir:'in',kind:'message',unread:true,topic})),topics:[{id:topic}]});
+  await f.store.start();await f.store.prefetch({kind:'dm',id:conv});
+  const file={key:'preview-file',file:{name:'unsent.txt'}};
+  f.store.setDraft(conv,{text:'Unsent preview draft',files:[file],replyTo:mid,topic:'old-topic'});
+  await f.store.openChat({kind:'dm',id:conv,focus:f.overview.dms[0].last_id});
+  assert.equal(f.store.get().open.focus,undefined,'normal last_id is not an exact notification focus');
+  assert.equal(f.store.get().open.preview,next);
+  assert.equal(f.store.get().readVisit.firstUnread,mid,'normal preview starts at first unread in its actual topic');
+  assert.equal(f.store.draft(conv).topic,topic);
+  assert.deepEqual(f.calls.filter(c=>c.body).map(c=>c.path),['/api/refresh'],'normal entry only requests its existing history refresh, never acknowledges unseen rows');
+  const beforeTap=f.calls.length;
+  await f.store.openMessage(mid,{conv,dir:'in'});
+  assert.equal(f.store.get().open.focus,mid,'native notification keeps the original exact message, not the row preview');
+  assert.equal(f.store.draft(conv).text,'Unsent preview draft');assert.equal(f.store.draft(conv).replyTo,mid);assert.equal(f.store.draft(conv).files[0],file);
+  assert(f.calls.slice(beforeTap).every(c=>!c.body),'exact cached notification adds no writes or read acknowledgements');
+  f.store.stop();
+}
 for (const cancel of ['back','chat','tab','topic','stop']) {
   const f=fixture(); await f.store.start(); const gate=deferred(); f.dmGates.set(conv,gate);
   const landing=f.store.openMessage(mid,{conv}); await tick();

@@ -130,7 +130,8 @@ export function Header({ ctx, wide, helpers: hs, canInvite }: { ctx: Ctx; wide: 
     const others = (t.members || []).filter((m) => !(me && m.person === me.person)).map((m) => m.label);
     title = t.title || "Group";
     const n = (t.members || []).length;
-    sub = n + (n === 1 ? " member" : " members") + " · " + (others.length ? "you, " + others.join(", ") : "just you");
+    const labels = (t.members || []).some(m => me && m.person === me.person) ? ["you", ...others] : others;
+    sub = n + (n === 1 ? " member" : " members") + (labels.length ? " · " + labels.join(", ") : "");
     const pending = pendingGroupInvites(t, overview).length;
     if (pending) sub += " · " + pending + " invited";
     avatar = <GroupAvatar names={others.length ? others : [title]} seed={t.id} size={wide ? 48 : 40} />;

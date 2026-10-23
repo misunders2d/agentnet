@@ -13,6 +13,27 @@ ordinary-user journey also reproduced the browser's omitted reminder capability.
 Qualification, publication and existing-relay rollout remain in progress;
 candidate source and focused tests are not a released or deployed result.
 
+The integrated qualification of25e66082 completed24 passing jobs and nine
+failing jobs in [run39877403457](https://github.com/misunders2d/agentnet/actions/runs/39877403457).
+All18 client race partitions, five native Windows client partitions and the
+container gate passed. The failed native/client/UI/platform selections have
+focused corrections collected as one batch; their logs and unchanged passing evidence are
+retained. The matching gallery's read-ACK failure was a comparison across two
+different watcher lifetimes; dispatch-time scope, visibility and attention-token
+proof now passes11 focused checks. Full gallery and affected platform
+qualification remain open, alongside the physical Pixel field check.
+
+Claude’s exact-candidate GUI review covered all five gallery skins, wide and
+phone layouts, ordinary chat, unread landing, group changes, composer, settings
+and storage interactions. Its remaining findings now have focused corrections:
+current invitations replace only their own stale proposal; former members see
+read-only controls and current membership; initial local-skin activation waits
+for actual service-worker control; setup consequences and skin-opening feedback
+are visible. Linux AppImages now request Tauri’s media bundle after native
+playback exposed missing GStreamer plugins. New installer playback and affected
+platform qualification must pass before publication. Routine latency findings
+above 200 ms remain recorded; correctness guards are not smoothness evidence.
+
 Preserve the dirty main checkout and parked Play work; use the isolated
 `.agentnet/oct22-batch` candidate. The existing relay's connected Google Drive
 and completed migration are state to preserve. Do not disconnect or remigrate

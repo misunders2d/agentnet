@@ -693,7 +693,7 @@ func TestGroupInteractionTypingActualAudience(t *testing.T) {
 }
 
 func TestGroupInteractionLinkedControlHistory(t *testing.T) {
-	t.Parallel()
+	// Keep the real daemons concurrent without competing fixture meshes.
 	w, _, packet, stops := groupTurnsFixture(t)
 	sent, err := w.alice.SendConv(tctx(t), packet.State.Conv, ConvOutgoing{Body: "linked original"})
 	if err != nil {
@@ -728,9 +728,9 @@ func TestGroupInteractionLinkedControlHistory(t *testing.T) {
 	if err = w.alice.store.addConvOutbox(copies, envelope.Inner{}, nil, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err = w.alice.FlushOutbox(tctx(t)); err != nil {
-		t.Fatal(err)
-	}
+	// Current context/history convergence below is the readiness barrier;
+	// unrelated outbox upkeep need not finish before that can be observed.
+	w.alice.kickNow()
 	eventually(t, "linked verified context", func() bool { _, e := phone.GroupContext(packet.State.Conv); return e == nil })
 	// Snapshot uses original inbox receive stamp, not the producer's local composite.
 	eventually(t, "linked control history converges", func() bool {

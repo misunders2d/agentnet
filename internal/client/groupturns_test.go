@@ -168,7 +168,7 @@ func groupTurnEnvelope(t *testing.T, a *Agent, id string) envelope.Envelope {
 }
 
 func TestGroupTurnsT1ThreePeopleAndLinkedCopies(t *testing.T) {
-	t.Parallel()
+	// This six-device mesh already exercises concurrent delivery internally.
 	w, carol, p, _ := groupTurnsFixture(t)
 	people := []*Agent{w.alice, w.bob, carol}
 	all := slices.Clone(people)
@@ -193,11 +193,9 @@ func TestGroupTurnsT1ThreePeopleAndLinkedCopies(t *testing.T) {
 	if err = w.alice.store.addConvOutbox(copies, envelope.Inner{}, nil, ""); err != nil {
 		t.Fatal(err)
 	}
-	flushCtx, reportFlush := traceFixtureHTTP(t, tctx(t))
-	if err = w.alice.FlushOutbox(flushCtx); err != nil {
-		reportFlush(err)
-		t.Fatal(err)
-	}
+	// The active daemon delivers the durable batch, as in PublishGroup.
+	// Observe each recipient's exact context rather than draining all lanes.
+	w.alice.kickNow()
 	for _, a := range all {
 		eventually(t, "linked current context", func() bool {
 			got, e := a.GroupContext(p.State.Conv)

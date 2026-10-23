@@ -113,8 +113,8 @@ function OpenView({ open }: { open: NonNullable<Open> }) {
             }}>Bring back</Button>}
           </div>
         )}
-        empty={<EmptyTimeline title={th ? "Nothing here yet" : "Say hello"}
-          to={t ? "What you write here goes to " + (t.kind === "group" ? "the members of " + title : title) + " only." : "Messages with " + title + " show up here."} />} />
+        empty={<EmptyTimeline title={t?.role === "former_member" ? "No saved messages" : th ? "Nothing here yet" : "Say hello"}
+          to={t?.role === "former_member" ? "This group is read only here." : t ? "What you write here goes to " + (t.kind === "group" ? "the members of " + title : title) + " only." : "Messages with " + title + " show up here."} />} />
       </Swap>
       {selected
         ? <SelectBar count={selected.length} onCancel={() => setSelected(null)} onMove={canInvite || th && !th.key?.pending ? () => setOrganize(true) : undefined}

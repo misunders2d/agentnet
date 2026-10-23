@@ -8,6 +8,7 @@ import { useStore } from "../store";
 import type { T } from "../api";
 import { personName } from "../model";
 import { Button } from "../ui/Button";
+import { incomingGroupInvites } from "./RoomPanel.model";
 
 /** inviterName turns the inviting device's address into its person's name. */
 function inviterName(o: T.Overview | null, address: string): string {
@@ -20,7 +21,7 @@ export function GroupInvitations() {
   const invitations = useStore(store, (s) => s.invitations);
   const overview = useStore(store, (s) => s.overview);
   const rooms = new Set((overview?.dms || []).map((d) => d.id));
-  const pending = invitations.filter((i) => i.direction === "in" && ["pending", "stale"].includes(i.status));
+  const pending = incomingGroupInvites(invitations);
   const accepted = invitations.filter((i) => i.direction === "in" && i.status === "accepted" && !rooms.has(i.conv)
     && !pending.some((p) => p.conv === i.conv));
   const [all, setAll] = useState(false);

@@ -364,4 +364,66 @@ async function currentGallery(files) {
     assert.deepEqual(w.deleted,[cat]);assert.equal(w.store.get(prefix+w.damaged.digest),c);
   }
 }
+// Claim acknowledgement and controller visibility are separate browser events.
+// Exercise their ordering without sleeping or spending the five-second bound.
+async function activationCase(options, check) {
+  const saved = { navigator, MessageChannel, setTimeout, clearTimeout }, timers = new Map(), channels = [], listeners = new Set();
+  let claimListeners;
+  const worker = { state:'activated', scriptURL:origin+'/sw.js', postMessage(message) {
+    if(message.type==='agentnet-local-skins-activate'){reg.active=worker;reg.waiting=null;worker.state='activated';return;}
+    assert.equal(message.type,'agentnet-local-skins-claim');calls.claim++;
+    claimListeners=listeners.size;
+    if(options.throwClaim)throw Error('claim failed');
+    if(options.controlInClaim)control(worker);
+    if(options.ackInClaim!==undefined)ack(options.ackInClaim);
+  } };
+  const old = { state:'activated', scriptURL:worker.scriptURL, postMessage(){assert.fail('the old push-only worker must not receive the claim');} };
+  const calls = {register:0,update:0,claim:0};
+  const reg = { active:options.waiting?old:options.noActive?null:worker, waiting:options.waiting?worker:null,
+    async update(){calls.update++;if(options.offline)throw Error('offline');} };
+  if(options.waiting)worker.state='installed';
+  const container = { controller:options.oldControl?old:options.controlled?worker:null,
+    async register(path){calls.register++;assert.equal(path,'/sw.js');return reg;},
+    addEventListener(type,fn){assert.equal(type,'controllerchange');listeners.add(fn);},
+    removeEventListener(type,fn){assert.equal(type,'controllerchange');listeners.delete(fn);} };
+  const control = next => {container.controller=next;for(const fn of [...listeners])fn();};
+  const ack = ready => channels.at(-1).port1.onmessage?.({data:{ready}});
+  globalThis.MessageChannel = class {
+    constructor(){this.port1={onmessage:null,closed:0,close(){this.closed++;}};this.port2={closed:0,close(){this.closed++;}};channels.push(this);}
+  };
+  globalThis.setTimeout = (fn,ms) => {const id={};timers.set(id,{fn,ms});return id;};
+  globalThis.clearTimeout = id => timers.delete(id);
+  Object.defineProperty(globalThis,'navigator',{value:{...navigator,serviceWorker:container},configurable:true});
+  let settled=false,error;
+  const result=local.activate().then(()=>{settled=true;},e=>{settled=true;error=e;});
+  const turn=()=>new Promise(setImmediate);
+  const clean=()=>{assert.equal(timers.size,0,'claim timer removed');assert.equal(listeners.size,0,'controller listener removed');if(calls.claim)assert.equal(claimListeners,1,'listen before requesting claim');for(const c of channels){assert.equal(c.port1.closed,1);assert.equal(c.port2.closed,1);assert.equal(c.port1.onmessage,null);}};
+  try {
+    await turn();
+    await check({worker,old,reg,calls,channels,control,ack,turn,result,clean,settled:()=>settled,error:()=>error,
+      timeout(){assert.deepEqual([...timers.values()].map(t=>t.ms),[5000],'existing five-second claim/control bound');const [id,timer]=timers.entries().next().value;timers.delete(id);timer.fn();}});
+  }finally{Object.defineProperty(globalThis,'navigator',{value:saved.navigator,configurable:true});Object.assign(globalThis,{MessageChannel:saved.MessageChannel,setTimeout:saved.setTimeout,clearTimeout:saved.clearTimeout});}
+}
+await activationCase({ackInClaim:true},async w=>{
+  assert.equal(w.settled(),false,'ready acknowledgement cannot load assets before control');
+  w.control(w.old);await w.turn();assert.equal(w.settled(),false,'same script URL is not the selected worker instance');
+  w.control(w.worker);await w.result;assert.equal(w.error(),undefined);w.clean();
+});
+await activationCase({},async w=>{
+  w.control(w.worker);await w.turn();assert.equal(w.settled(),false,'control alone does not prove asset-worker readiness');
+  w.ack(true);await w.result;assert.equal(w.error(),undefined);w.clean();
+});
+for(const options of [{controlled:true,ackInClaim:true},{controlInClaim:true,ackInClaim:true},{waiting:true,oldControl:true,ackInClaim:true}])await activationCase(options,async w=>{
+  if(options.waiting){assert.equal(w.reg.active,w.worker);assert.equal(w.settled(),false);w.control(w.worker);}
+  await w.result;assert.equal(w.error(),undefined);assert.deepEqual(w.calls,{register:1,update:1,claim:1});w.clean();
+});
+await activationCase({controlled:true,ackInClaim:false},async w=>{await w.result;assert.match(w.error().message,/refused/);w.clean();});
+for(const options of [{controlled:true},{ackInClaim:true,oldControl:true}])await activationCase(options,async w=>{
+  assert.equal(w.settled(),false);w.timeout();await w.result;assert.match(w.error().message,/Reload AgentNet/);w.clean();
+});
+await activationCase({throwClaim:true},async w=>{await w.result;assert.match(w.error().message,/claim failed/);w.clean();});
+await activationCase({offline:true,controlled:true,ackInClaim:true},async w=>{await w.result;assert.equal(w.error(),undefined);w.clean();});
+await activationCase({offline:true,noActive:true},async w=>{await w.result;assert.match(w.error().message,/offline/);assert.equal(w.calls.claim,0);w.clean();});
+await activationCase({noActive:true},async w=>{await w.result;assert.match(w.error().message,/unavailable/);assert.equal(w.calls.claim,0);w.clean();});
+console.log('local skin activation check PASS: exact controller, both event orders, update/offline/refusal, five-second bound, all resources cleaned');
 console.log('local skin storage check PASS: exact-cache repair, verified bytes, rollback, bounded failures, healthy packages, narrow catalog repair');

@@ -76,7 +76,7 @@ func TestUIResponsivenessRendered(t *testing.T) {
 			http.SetCookie(w, &http.Cookie{Name: cookieName, Value: testToken, Path: "/", HttpOnly: true})
 		}
 		w.Header().Set("Content-Type", "text/html")
-		w.Write([]byte(`<!doctype html><meta charset="utf-8"><title>AgentNet responsiveness fixture</title><style>html,body,#fixture{margin:0;width:100%;height:100%}</style><div id="fixture"></div><script type="module" src="/latency-check.js"></script>`))
+		w.Write([]byte(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AgentNet responsiveness fixture</title><style>html,body,#fixture{margin:0;width:100%;height:100%}</style><div id="fixture"></div><script type="module" src="/latency-check.js"></script>`))
 	})
 	mux.HandleFunc("GET /latency-check.js", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/javascript")

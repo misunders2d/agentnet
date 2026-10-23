@@ -2,7 +2,6 @@ package ui
 
 import (
 	"context"
-	"errors"
 	"net/http"
 
 	"github.com/misunders2d/agentnet/internal/client"
@@ -188,7 +187,7 @@ func (l *Live) groupMembers(c client.ConversationInfo) ([]GroupMemberView, error
 	for _, p := range c.Members {
 		m, ok := packet.State.Member(p.Person)
 		if !ok {
-			return nil, errors.New("group member projection differs from verified context")
+			return nil, client.ErrGroupContextPending
 		}
 		result = append(result, GroupMemberView{PersonView: personView(p), Admin: m.Admin})
 	}

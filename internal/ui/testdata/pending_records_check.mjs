@@ -5,7 +5,7 @@ import {runInNewContext} from 'node:vm';
 let source=await readFile(new URL('../web/src/features/RoomPanel.model.ts',import.meta.url),'utf8');
 source=source.replace(/^import .*;$/gm,'');
 source=stripTypeScriptTypes(source).replace(/\bexport /g,'');
-const room=runInNewContext(source+'\nroom',{agentName:(id,names,host)=>names[id]||host.label+'’s agent',agentWhere:()=>'',deviceKind:()=>undefined,firstLine:s=>s,niceDevice:()=>'',personName:p=>p?.label||'Someone',eventKind:()=>null});
+const {room,incomingGroupInvites}=runInNewContext(source+'\n({room,incomingGroupInvites})',{agentName:(id,names,host)=>names[id]||host.label+'’s agent',agentWhere:()=>'',deviceKind:()=>undefined,firstLine:s=>s,niceDevice:()=>'',personName:p=>p?.label||'Someone',eventKind:()=>null});
 const me={person:'me',label:'Self',address:'self/desk'},host={person:'host',label:'Nora',address:'nora/desk'};
 const base={kind:'group',id:'conversation',role:'member',members:[me,host],peer:{},messages:[{id:'held-task',pid:'held-only',kind:'task',state:'held',body:'held record'}],guests:[]};
 const incomplete={pid:'held-only',state:'pending',state_text:'Its invitation is not here yet: nothing counts until it is. Some of its records do not count here yet.',host:{},inviter:{},member:true,shared:[],missing:0,can_ask:false,can_decide:false,can_dismiss:false};
@@ -17,4 +17,13 @@ assert.equal(view.guests.length,0);assert.equal(view.waiting.length,0);
 assert.equal(view.invited[0].can.dismiss,true,'real invitation cancellation remains');
 const only=room({...base,agents:[incomplete]},{person:me,me},{});
 assert.equal(only.invited.length+only.guests.length+only.waiting.length,0,'incomplete records do not create invitation or attention counts');
+const incoming=[
+ {id:'old',conv:'room',inviter:'alice/desk',direction:'in',status:'stale'},
+ {id:'new',conv:'room',inviter:'alice/desk',direction:'in',status:'pending'},
+ {id:'other-inviter',conv:'room',inviter:'bob/desk',direction:'in',status:'stale'},
+ {id:'other-room',conv:'elsewhere',inviter:'alice/desk',direction:'in',status:'stale'},
+ {id:'outgoing',conv:'room',inviter:'alice/desk',direction:'out',status:'pending'},
+];
+assert.deepEqual(Array.from(incomingGroupInvites(incoming),i=>i.id),['new','other-inviter','other-room'],'current proposal supersedes only its own room and inviter; Review and chat cards share the same set');
+assert.equal(incomingGroupInvites([incoming[0]]).length,1,'a lone stale invitation remains actionable');
 console.log('PASS incomplete context distinct from valid invited agent; no invented authority');

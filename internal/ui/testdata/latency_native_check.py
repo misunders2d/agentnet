@@ -56,6 +56,15 @@ if system == 'Linux' and (source.parent.parent/'lib/x86_64-linux-gnu/webkit2gtk-
     # artifact's AppRun launcher arranges. Child helpers need its library path.
     fixture_cwd = source.parent.parent
     artifact_environment = ['LD_LIBRARY_PATH='+str(fixture_cwd/'lib'), 'WEBKIT_INJECTED_BUNDLE_PATH='+str(fixture_cwd/'lib/x86_64-linux-gnu/webkit2gtk-4.1/injected-bundle/libwebkit2gtkinjectedbundle.so')]
+    plugins = fixture_cwd/'lib/gstreamer-1.0'
+    if plugins.is_dir():
+        # Match the bundled linuxdeploy GStreamer AppRun hook, rather than
+        # mixing these libraries with the runner's system plugin/scanner ABI.
+        scanner = fixture_cwd/'lib/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner'
+        assert scanner.is_file(), 'Bundled GStreamer scanner is missing'
+        artifact_environment += ['GST_REGISTRY_REUSE_PLUGIN_SCANNER=no',
+            'GST_PLUGIN_SYSTEM_PATH_1_0='+str(plugins), 'GST_PLUGIN_PATH_1_0='+str(plugins),
+            'GST_PLUGIN_SCANNER_1_0='+str(scanner)]
 for name in ('home', 'config', 'data', 'cache', 'agentnet-home', 'appdata', 'localappdata'):
     (root/name).mkdir(mode=0o700)
 query = dict(parse_qsl(urlsplit(url).query)); query.update(token=token)
@@ -101,16 +110,33 @@ try:
         if not report.get('ok'):
             raise RuntimeError('Native responsiveness fixture failed')
 finally:
-    # Only terminate the owned process tree, never an image name/other instance.
-    if proc is not None and proc.poll() is None:
-        if system == 'Windows':
-            subprocess.run(['taskkill', '/PID', str(proc.pid), '/T', '/F'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-        else:
-            os.killpg(proc.pid, signal.SIGTERM)
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            if system != 'Windows':
-                os.killpg(proc.pid, signal.SIGKILL)
-            proc.wait(timeout=5)
-    shutil.rmtree(root)
+    body_error = sys.exc_info()[1]
+    teardown_end = time.monotonic() + 5
+    try:
+        # Only terminate the owned process tree, never an image name/other instance.
+        if proc is not None and proc.poll() is None:
+            if system == 'Windows':
+                subprocess.run(['taskkill', '/PID', str(proc.pid), '/T', '/F'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=max(.01, teardown_end-time.monotonic()))
+            else:
+                os.killpg(proc.pid, signal.SIGTERM)
+            try:
+                proc.wait(timeout=min(1, max(.01, teardown_end-time.monotonic())))
+            except subprocess.TimeoutExpired:
+                if system != 'Windows':
+                    os.killpg(proc.pid, signal.SIGKILL)
+                proc.wait(timeout=max(.01, teardown_end-time.monotonic()))
+        # WebView2 children release their profile handles asynchronously after
+        # taskkill returns. Join that resource lifetime within the same deadline.
+        while True:
+            try:
+                shutil.rmtree(root)
+                break
+            except PermissionError:
+                if system != 'Windows' or time.monotonic() >= teardown_end:
+                    raise
+                time.sleep(min(.05, max(0, teardown_end-time.monotonic())))
+    except Exception as cleanup_error:
+        if body_error is None:
+            raise
+        body_error.add_note('Owned native fixture cleanup also failed: '+repr(cleanup_error))
+        print('Secondary cleanup failure: '+repr(cleanup_error), file=sys.stderr)

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,6 +18,30 @@ import (
 	"github.com/misunders2d/agentnet/internal/lockfile"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
+
+// A stopped session can still advertise signed capabilities. Wait for the
+// newly started daemon, rather than accepting that last offline profile.
+func waitFreshNamedAgentSession(t *testing.T, host *Agent, previous protocol.Profile) string {
+	t.Helper()
+	label, device, _ := protocol.SplitAddress(host.Address)
+	var session string
+	eventually(t, "new live signed session for "+host.Address, func() bool {
+		var profile protocol.Profile
+		if host.hub.do(tctx(t), "GET", "/v1/agents/"+label+"/"+device+"/profile", nil, &profile) != nil ||
+			!profile.Live || !profile.Supports(host.Address, host.Self().SignKey, protocol.CapAgentIdentity) {
+			return false
+		}
+		for _, id := range profile.Sessions {
+			if !slices.Contains(previous.Sessions, id) {
+				session = id
+				return true
+			}
+		}
+		return false
+	})
+	t.Logf("new live signed session observed; previous_sessions=%d", len(previous.Sessions))
+	return session
+}
 
 func TestAgentCatalogOldRelayPublicationFallback(t *testing.T) {
 	stub := installStub(t, "answer")
@@ -283,9 +308,13 @@ func TestAgentCatalogPublicationKeepsLatestAcrossHandles(t *testing.T) {
 			// Restore only the host's capability session after proving the
 			// relay already has the correct catalog. Invitation is attempted
 			// once against the actual signed reader, never retried or guessed.
+			var previous protocol.Profile
+			if err := w.bob.hub.do(tctx(t), "GET", "/v1/agents/"+label+"/"+device+"/profile", nil, &previous); err != nil {
+				t.Fatal(err)
+			}
 			stopRestarted := runAgent(t, w.bob)
 			defer stopRestarted()
-			waitNamedAgentCaps(t, w.bob)
+			waitFreshNamedAgentSession(t, w.bob, previous)
 			// A fresh CLI handle reads the restarted session directly, rather
 			// than racing the old reader's next availability-cache push.
 			reader, err := Open(w.alice.home)
