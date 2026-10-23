@@ -59,22 +59,22 @@ assert.equal(mediaResponse(bytes,'POST').status,405);checks++;
 
 async function driverCase(options={}){
  const log=[],errors=[];let probeCalls=0,closed=0,browserClosed=0;
- const engine=options.engine||'webkit',suite=options.suite||'media',platform=options.platform||'win32';
+ const engine=options.engine||'webkit',suite=options.suite||'media',platform=options.platform||'win32',widths=({topics:4,compose:4,storage:3})[suite]||2;
  const args=sample();options.mutate?.(args);
  const browser={version:()=> 'synthetic',close:async()=>{browserClosed++;},newContext:async config=>({close:async()=>{closed++;},newPage:async()=>({on:(name,fn)=>{if(options.driverError&&name==='pageerror')fn(Error('unrelated page error'));},goto:async()=>{},waitForFunction:async()=>{},evaluate:async fn=>{
   const text=String(fn);if(text.includes('window.latencyReport'))return{...clone(args.report),viewport:config.viewport};if(text.includes('innerHTML'))return 'raw original failure DOM';if(text.includes('querySelectorAll'))return[];return{};
  }})})};
  const fakeProcess={platform,env:{AGENTNET_PLAYWRIGHT:'fake-engines',AGENTNET_LATENCY_ENGINES:engine,AGENTNET_LATENCY_SUITES:suite,AGENTNET_LATENCY_VIEWPORTS:'1440x960,390x844',LATENCY_URL:'http://127.0.0.1/latency'}};
  await vm.runInNewContext(fs.readFileSync(path.join(__dirname,'latency_rendered_check.cjs'),'utf8'),{URL,process:fakeProcess,require:name=>name==='fake-engines'?{[engine]:{launch:async()=>browser}}:name==='./latency_media_probe.cjs'?{isWindowsMediaCandidate,classifyWindowsMedia,runMediaProbe:async()=>{probeCalls++;return clone(args.probe);}}:require(name),console:{log:s=>log.push(JSON.parse(s)),error:s=>errors.push(s)}});
- assert.equal(closed,2,'each original UI context closed');assert.equal(browserClosed,1,'original browser closed');
+ assert.equal(closed,widths,'each original UI context closed');assert.equal(browserClosed,1,'original browser closed');
  const reports=log.filter(r=>r.suite),counts=log.find(r=>r.qualificationSummary).qualificationSummary;
- assert.equal(reports.length,2);for(const r of reports){assert.equal(r.ok,false,'never skip-as-pass');assert.equal(r.error,args.report.error,'raw error preserved');assert.deepEqual(r.actions,args.report.actions,'partial original actions preserved');}
- return{reports,counts,probeCalls,exitCode:fakeProcess.exitCode,errors};
+ assert.equal(reports.length,widths);for(const r of reports){assert.equal(r.ok,false,'never skip-as-pass');assert.equal(r.error,args.report.error,'raw error preserved');assert.deepEqual(r.actions,args.report.actions,'partial original actions preserved');}
+ return{reports,counts,probeCalls,widths,exitCode:fakeProcess.exitCode,errors};
 }
 (async()=>{
  const allowed=await driverCase();assert.deepEqual(allowed.counts,{executed_pass:0,failed:0,not_executed:2});assert.equal(allowed.probeCalls,1,'same independent result reused across widths');assert.equal(allowed.exitCode,undefined);assert(allowed.reports.every(r=>r.execution==='not_executed'&&r.unsupportedTestPort.smoothnessQualified===false));checks++;
  for(const options of [{platform:'linux'},{platform:'darwin'},{engine:'chromium'},{engine:'firefox'},{suite:'topics'},{suite:'compose'},{suite:'outbox'},{driverError:true},{mutate:a=>a.report.pageErrors.push('fixture runtime error')},{mutate:a=>a.probe.blob.metadataOk=true},{mutate:a=>a.report.videoMetadataFailure.errorCode=3}]){
-  const result=await driverCase(options);assert.equal(result.counts.failed,2);assert.equal(result.counts.not_executed,0);assert.equal(result.exitCode,1,'all other UI failures remain fatal');checks++;
+  const result=await driverCase(options);assert.equal(result.counts.failed,result.widths);assert.equal(result.counts.not_executed,0);assert.equal(result.exitCode,1,'all other UI failures remain fatal');checks++;
  }
  console.log('PASS '+checks+' media probe identity/transport/guard/driver checks; raw failures retained, one probe reused, no skip-as-pass');
 })().catch(e=>{console.error(e.stack);process.exitCode=1;});

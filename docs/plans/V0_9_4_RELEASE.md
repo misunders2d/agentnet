@@ -1,6 +1,6 @@
 # v0.9.4 focused chat recovery release
 
-Status: source implementation/focused verification in progress; not published.
+Status: production source frozen; final affected qualification and gallery gate running. Not published.
 Parent release: v0.9.3, source3f5bbc4362e1ee6345c676e9000ee742668c64ad.
 Authoritative scope and evidence: [chat recovery checklist](CHAT_RECOVERY_HOTFIX.md).
 Claude implements source; Codex coordinates independent verification and release.
@@ -19,13 +19,21 @@ cleared attention through native model context.
 
 - Focused regressions and independently checked canonical UI: in progress;
   commands, source hashes, failures and executed/skipped accounting in checklist.
-- Stable integrated source commit: pending.
-- Go vet,18client race partitions, remaining race packages/3UI partitions: pending.
+- Stable production source: b192a6f6. fed5fade and the final media-guard correction
+  change tests/docs only; production and canonical assets are identical.
+- Go vet passed. Initial integrated run39952907831:17client race shards and
+  remaining non-UI race packages plus UI0 passed. Client10 had one obsolete
+  session-state assertion; UI1 had one fake-driver viewport-count assertion;
+  UI2 was not reached. Focused correction checks pass; affected shard and native
+  reruns are pending. Original failures and platform skips remain recorded.
 - Required mixed-version journey against publishedv0.9.3: PASS67.000s, no skip;
   production bytes unchanged during run. Go vet passed14.440s; final hash
   equivalence must be retained after source freeze.
-- Affected native OS/app/Android qualification: pending; preserve valid unchanged
-  evidence and report the exact source/artifact equivalence.
+- Affected native OS/app/Android qualification: initial run39952907831 retained.
+  The corrected Compose fixture passes on Linux, macOS, Windows and Android in
+  run39957726105 (fed5fade); unchanged groups/review/actions evidence retained.
+  Native Windows history and direct-file parents each passed count3 reruns
+  (39954993032 /39955743622), with original failures retained.
 - Complete matching gallery gate, standalone and overlays at exact core pin: pending.
 - Checksummed clean-source artifacts, original Android preview signer: pending.
 - Publication, public download verification and relay/device rollout: pending.

@@ -228,3 +228,35 @@ Independent native-failure matrix passes: nine adapter parents/69 hierarchical
 pass records,0skips,2.519s; worker native-exit21 modes across Claude/Pi/OMP,
 26 hierarchical pass records,0skips,4.824s. These are owned protocol/process
 fixtures, distinct from the earlier five installed-native positive runs.
+
+## Final source and qualification checkpoint — October23
+
+This checkpoint supersedes the earlier open implementation notes above.
+Claude's bounded handoff is frozen (HERDR_TASK_COMPLETE_a2e4916b). Core
+production is b192a6f6; subsequent changes correct only test expectations and
+contract documentation. The three standalone gallery Reply gestures now retain
+text/files typed before Reply, clear New topic deliberately, and send once.
+Their full matching build/gallery gate remains required.
+
+Signed T1 sender convergence passed race47.2s, preserving unrelated pending
+work and attempt counts. T2 protocol/worker fixtures distinguish native requests
+for input from technical errors across supported adapters. Canonical T3/T4
+rendering passed DM/group at1280/360/320, with exact Reply ancestry, requester
+chip and Markdown elements. T5 same-host human and peer attached reactions pass;
+peer waits receive a readable result, not a reaction text bubble. Native positive
+tool/result checks executed all five installed harnesses, zero skips.
+
+T7 also passed actual installed OMP18.12.6 provider-request capture: base retains
+the old notice; fixed drops it while retaining fresh notice and native history.
+Together with actual Pi1.4.0 capture and lifecycle/ack regressions, this verifies
+the shared extension correction. The exact frozen extension was installed on
+the Linux laptop with preserved constants and binary, backed up outside its
+autoload directory. Existing Pi requires /reload; activation is not yet observed.
+No native permission or session-history file was changed.
+
+Run39957726105 passes corrected Compose on all three desktop systems and native
+Android. Retain initial run39952907831's unaffected passes; only failed/missing
+race shards and exact native parent selections are being rerun. The media-guard
+fix preserves unsupported-port classification and raw failures; its assertion
+now counts the driver's actual320/360 viewport contexts. Independent focused
+race passes. No test deadline or product threshold was raised.
