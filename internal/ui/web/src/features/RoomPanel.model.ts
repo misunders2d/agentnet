@@ -100,7 +100,7 @@ export interface GroupInvite { id: string; target: string; name: string; state: 
 /** A reissued invitation replaces only its own inviter's stale proposal. */
 export function incomingGroupInvites(invitations: readonly T.GroupInvitationView[] = []): T.GroupInvitationView[] {
   const incoming = invitations.filter(i => i.direction === "in" && ["pending", "stale"].includes(i.status));
-  const current = new Set(invitations.filter(i => i.direction === "in" && ["pending", "accepted"].includes(i.status)).map(i => JSON.stringify([i.conv, i.inviter])));
+  const current = new Set(invitations.filter(i => i.direction === "in" && ["pending", "accepted", "declined"].includes(i.status)).map(i => JSON.stringify([i.conv, i.inviter])));
   return incoming.filter(i => i.status !== "stale" || !current.has(JSON.stringify([i.conv, i.inviter])));
 }
 

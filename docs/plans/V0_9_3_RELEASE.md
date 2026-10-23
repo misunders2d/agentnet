@@ -63,7 +63,7 @@ hashes, platform distinctions and timing limitations are in the batch checklist
 and private evidence inventory. A focused pass does not replace the gates below.
 
 The latest corrective canonical build and vet pass with entry SHA256
-`c18ae6d053bc407182c75304b305dd24754a86a257d9d915e93cd919528b8e47`.
+`65068b6ddb2fc9a672b19a1f09fcb4aacca02d9a40cd9509db91bc7afa081f60`.
 Current fixes also bound group/list roster rendering without losing search,
 selection or consent, and expose setup refusal/Back return context. Rejected
 page-size/presence/focus proposals remain out of production. Seventeen timing
