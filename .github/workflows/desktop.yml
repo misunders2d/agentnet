@@ -90,7 +90,12 @@ jobs:
             (cd "$extraction" && "$image" --appimage-extract > "$evidence/appimage-extraction.log")
             export AGENTNET_NATIVE_SHELL="$extraction/squashfs-root/usr/bin/agentnet-app"
           else
-            "$tooling/.bin/playwright" install chromium firefox webkit
+            if [[ "$RUNNER_OS" == Windows ]]; then
+              # The disposable Server runner needs Playwright's media pack.
+              "$tooling/.bin/playwright" install --with-deps chromium firefox webkit
+            else
+              "$tooling/.bin/playwright" install chromium firefox webkit
+            fi
             if [[ "$RUNNER_OS" == macOS ]]; then
               export AGENTNET_NATIVE_SHELL="$GITHUB_WORKSPACE/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/AgentNet.app/Contents/MacOS/agentnet-app"
             else

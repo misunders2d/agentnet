@@ -452,7 +452,7 @@ class UpdaterInstrumentation : Instrumentation() {
             check(javascript(web, """
                 (async () => {
                   'use strict';
-                  const {mount,unmount}=await import('/assets/skins/comic/entry.mjs');
+                  const {mount,unmount}=await import(new URL('/assets/skins/comic/entry.mjs',location.href).href);
                   $fixtureBody
                 })().catch(e=>{window.latencyReport={ok:false,error:'launch: '+String(e&&e.stack||e)}});
                 true;

@@ -976,7 +976,12 @@ try {
    const restored=await(await fetch(row().querySelector('img').src)).blob();assert(await fileHash(restored)===reports.mediaInputs[0].sha256,'photo original bytes changed');
    await tap('media.photo-remove',control('Remove fixture-photo.png'),()=>!tray(),'selected photo removed');
    await measure('media.video-select',()=>pick(video),()=>!!row()?.querySelector('video'),'real selected video preview visible');
-   const preview=row().querySelector('video');await until(()=>preview.readyState>=1,'actual video metadata');reports.videoOriginalMetadata={duration:preview.duration,width:preview.videoWidth,height:preview.videoHeight};assert(Math.abs(preview.duration-selectedSource.duration)<.1&&preview.videoWidth===selectedSource.width&&preview.videoHeight===selectedSource.height,'capability-selected video original metadata changed');
+   const preview=row().querySelector('video');
+   try{await until(()=>preview.readyState>=1,'actual video metadata');}catch(e){
+    reports.videoMetadataFailure={readyState:preview.readyState,networkState:preview.networkState,errorCode:preview.error?.code??null,errorMessage:(preview.error?.message||'').slice(0,500),currentSrcScheme:preview.currentSrc.match(/^([a-z][a-z0-9+.-]*):/i)?.[1]||'',duration:Number.isFinite(preview.duration)?preview.duration:String(preview.duration),width:preview.videoWidth,height:preview.videoHeight};
+    throw e;
+   }
+   reports.videoOriginalMetadata={duration:preview.duration,width:preview.videoWidth,height:preview.videoHeight};assert(Math.abs(preview.duration-selectedSource.duration)<.1&&preview.videoWidth===selectedSource.width&&preview.videoHeight===selectedSource.height,'capability-selected video original metadata changed');
    preview.muted=true;let playbackError;void preview.play().catch(e=>{playbackError=String(e.message||e);});
    try{await until(()=>preview.currentTime>0||playbackError,'actual portable video playback');assert(!playbackError,playbackError);}catch(e){reports.presentationFailures.push({id:'media.actual-playback',error:String(e.message||e)});}finally{preview.pause();}
    reports.videoOriginalPlayback={played:preview.currentTime>0,currentTime:preview.currentTime,error:playbackError,container:selectedSource.container,videoCodec:selectedSource.videoCodec,audioCodec:selectedSource.audioCodec};
