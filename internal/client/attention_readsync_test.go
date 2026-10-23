@@ -309,3 +309,132 @@ func TestAttentionReadSelectedReplyKeepsExactReceiver(t *testing.T) {
 		t.Fatalf("reading hid exact selected reply: %+v %v", delivery, err)
 	}
 }
+
+// A chat copy received from another device of this person is that person's
+// own sent turn here: ConversationMessages shows it as sent and never unread.
+// No harness hook may advertise it as an unread arrival; a peer's turn in the
+// same chat still is one, and so are an unverified claim of that device, the
+// person's own turn awaiting a decision and a deliberately unread one (owner
+// report, October 23, 2026).
+func TestAttentionOwnDeviceChatCopyIsNotUnread(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.alice)
+	runAgent(t, w.bob)
+	persons(t, w.alice, w.bob)
+	phone := linked(t, w.alice)
+	conv := newDM(t, w.bob, w.alice)
+	harnesses := []string{"codex", "claude", "pi", "omp", "agy"}
+	for _, harness := range harnesses {
+		at, err := w.alice.Attention(HookEvent{Harness: harness, Session: "existing", Event: "SessionStart"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := at.Commit(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := w.bob.SendConv(tctx(t), conv, ConvOutgoing{Body: "peer turn"}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the peer turn on the phone", func() bool { return len(convBodies(t, phone, conv)) == 1 })
+	if _, err := phone.SendConv(tctx(t), conv, ConvOutgoing{Body: "typed on my phone"}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the laptop shows the phone turn as its person's own", func() bool {
+		msgs, _ := w.alice.ConversationMessages(conv)
+		return len(msgs) == 2 && msgs[1].Dir == "out" && msgs[1].Via == phone.Address && msgs[1].Body == "typed on my phone"
+	})
+	msgs, err := w.alice.ConversationMessages(conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !msgs[0].Unread || msgs[1].Unread {
+		t.Fatalf("chat projection: peer unread %v, own copy unread %v", msgs[0].Unread, msgs[1].Unread)
+	}
+	own, _ := readState(t, w.alice, conv, "typed on my phone")
+	peer, _ := readState(t, w.alice, conv, "peer turn")
+	// check reads every harness without moving its cursor.
+	check := func(t *testing.T, peerListed, ownListed bool, unread int) {
+		t.Helper()
+		for _, harness := range harnesses {
+			at, err := w.alice.Attention(HookEvent{Harness: harness, Session: "existing", Event: "UserPromptSubmit"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(at.Text, peer) != peerListed {
+				t.Errorf("%s: peer turn %s listed %v, want %v: %s", harness, peer, !peerListed, peerListed, at.Text)
+			}
+			if strings.Contains(at.Text, own) != ownListed {
+				t.Errorf("%s: own device copy %s listed %v, want %v: %s", harness, own, !ownListed, ownListed, at.Text)
+			}
+			start, err := w.alice.Attention(HookEvent{Harness: harness, Session: "started", Event: "SessionStart"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(start.Text, fmt.Sprintf(" %d unread,", unread)) || strings.Contains(start.Text, own) != ownListed || strings.Contains(start.Text, peer) != peerListed {
+				t.Errorf("%s: overview, want %d unread, peer listed %v and own copy listed %v: %s", harness, unread, peerListed, ownListed, start.Text)
+			}
+		}
+	}
+	exec := func(query string, args ...any) {
+		t.Helper()
+		if _, err := w.alice.store.db.Exec(query, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Run("own device copy", func(t *testing.T) { check(t, true, false, 1) })
+	t.Run("unverified claim of the device", func(t *testing.T) {
+		exec(`UPDATE inbox SET claimed_fp=verified_by, verified_by=NULL WHERE id=?`, own)
+		defer exec(`UPDATE inbox SET verified_by=claimed_fp, claimed_fp=NULL WHERE id=?`, own)
+		check(t, true, true, 2)
+	})
+	t.Run("own turn awaiting a decision", func(t *testing.T) {
+		exec(`UPDATE inbox SET state=? WHERE id=?`, stateNeedHuman, own)
+		defer exec(`UPDATE inbox SET state='' WHERE id=?`, own)
+		check(t, true, true, 1)
+	})
+	// The peer turn as history another device of this person imported here.
+	history := func() func() {
+		exec(`UPDATE inbox SET replica=1, via=? WHERE id=? AND replica=0 AND via IS NULL`, phone.Address, peer)
+		return func() { exec(`UPDATE inbox SET replica=0, via=NULL WHERE id=?`, peer) }
+	}
+	t.Run("imported history", func(t *testing.T) {
+		defer history()()
+		check(t, false, false, 0)
+	})
+	t.Run("plain review notice in a device thread", func(t *testing.T) {
+		exec(`UPDATE inbox SET conv=NULL, status=? WHERE id=?`, envelope.StatusReviewNotice, peer)
+		defer exec(`UPDATE inbox SET conv=?, status=NULL WHERE id=?`, conv, peer)
+		check(t, false, false, 0)
+	})
+	t.Run("erased here", func(t *testing.T) {
+		exec(`INSERT INTO conv_erased(conv, key, lid, deletion, shared) VALUES(?, ?, ?, 'test', 0)`, conv, w.bob.Self().Fingerprint(), msgs[0].LID)
+		defer exec(`DELETE FROM conv_erased WHERE deletion='test'`)
+		check(t, false, false, 0)
+	})
+	if err := w.alice.MarkUnread(msgs[0].ID, []string{msgs[0].ID}); err != nil {
+		t.Fatal(err)
+	}
+	t.Run("imported history marked unread", func(t *testing.T) {
+		defer history()()
+		check(t, true, false, 1)
+	})
+	t.Run("chat topic metadata marked unread", func(t *testing.T) {
+		exec(`UPDATE inbox SET topic_event='{}' WHERE id=?`, peer)
+		defer exec(`UPDATE inbox SET topic_event=NULL WHERE id=?`, peer)
+		check(t, false, false, 0)
+	})
+	t.Run("deliberately unread", func(t *testing.T) {
+		if err := w.alice.MarkUnread(msgs[1].ID, []string{msgs[1].ID}); err != nil {
+			t.Fatal(err)
+		}
+		check(t, true, true, 2)
+	})
+	t.Run("deleted by its sender", func(t *testing.T) {
+		if _, err := w.bob.Retract(tctx(t), ControlRef{Conv: conv, ID: msgs[0].LID, Fingerprint: w.bob.Self().Fingerprint()}, ""); err != nil {
+			t.Fatal(err)
+		}
+		eventually(t, "the retraction here", func() bool { ok, _ := w.alice.store.retracted(peer); return ok })
+		check(t, false, true, 1)
+	})
+}

@@ -1,6 +1,6 @@
 # v0.9.4 focused chat recovery release
 
-Status: production source frozen; final affected qualification and gallery gate running. Not published.
+Status: final T7 source frozen and focused race/vet/mixed-version checks pass; affected native qualification and publication pending.
 Parent release: v0.9.3, source3f5bbc4362e1ee6345c676e9000ee742668c64ad.
 Authoritative scope and evidence: [chat recovery checklist](CHAT_RECOVERY_HOTFIX.md).
 Claude implements source; Codex coordinates independent verification and release.

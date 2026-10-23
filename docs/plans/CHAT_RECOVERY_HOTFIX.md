@@ -260,3 +260,72 @@ race shards and exact native parent selections are being rerun. The media-guard
 fix preserves unsupported-port classification and raw failures; its assertion
 now counts the driver's actual320/360 viewport contexts. Independent focused
 race passes. No test deadline or product threshold was raised.
+
+## Fresh T7 discrepancy — owner confirmed October23
+
+The owner supplied a new Pi screenshot and confirmed the displayed messages were
+already read in AgentNet, with no unread chats since morning. The extension fix
+above handles retained native context; it did not cover this separate hook
+projection defect. T7 is reopened and publication remains pending.
+
+Read-only checks of the actual laptop app and its hook-bound home establish:
+
+- Same default workspace, person/device address and data home; no stale extension
+  or alternate-workspace explanation. The deployed extension hash is unchanged.
+- App unread page has three private-device progress/result/answer rows. The hook
+  reports913. The old group answer from the screenshot is projected as outgoing
+  by ConversationMessages but was counted as an unread incoming copy by the hook.
+- The first narrow own-device correction removes244 false entries but leaves669;
+  that is not a complete fix. Anonymous metadata breakdown found540 history
+  replicas,47 membership/event records and70 resolved reports, plus ordinary
+  records including seven already-erased turns. No inbox or read state was changed.
+
+Claude is extending the same two-file correction (attention.go and its existing
+read-sync fixture) to reuse existing message visibility rules. Explicit V2 unread
+generations, real pending review and exact selected replies must be preserved.
+The all-five-harness table covers Codex, Claude, Pi, OMP and agy. Current passing
+release evidence remains retained; affected final-source checks are required
+before tagging. A later laptop SSH timeout is retained, not reported as a pass.
+
+Gallery gate at corec29 passed306 unit checks with zero skips and every built
+package/overlay contract. One real-world Zoom provider readiness check failed
+when both navigation layers coexisted. Claude's one-line fixture correction
+uses the sole active layer; focused browser proof is collected separately.
+Retain every unaffected world cell; no second full-gallery run is justified by
+that readiness-only fixture change. Final core pin/equivalence remains pending.
+
+Relay backup preparation passed: native archive contains8,600 verified stored
+ciphertexts, with fresh database snapshot and successful v0.9.3 offline restore.
+Only the same existing Hub was stopped/restarted for12.599s; exit0. It is healthy
+on v0.9.3, schema25. Candidate restore and public artifact verification are still
+required before activation. No data restore into the live volume occurred.
+
+## T7 final source freeze and affected verification
+
+Claude's final correction is frozen at attention.go SHA256cd8d1b74… and its
+read-sync fixture0b36c695…. It uses existing eligibility, history-origin,
+verified own-device direction, retraction and erased-row rules. All four queries
+bind the existing notice arguments before review states. No schema, cursor,
+inbox or native permission change is introduced.
+
+The new regression has causal RED against both the old source and the first
+own-copy-only draft. It preserves real pending review, foreign/unverified
+claims, deliberate unread and exact receiver state. All five harness names run
+the same checks. The41-parent focused selection passed regular12.8s and race
+294s; original REDs remain retained. Root's final full vet passed10.030s and
+required mixed-version vs publishedv0.9.3 passed75.49s(parent)/82.352s(outer),
+with all production hashes unchanged during both. Native affected reruns remain
+required before publication.
+
+Read-only evaluation of the exact final query on the laptop removes the old
+screenshot entries and the inert backlog, returning the prior three actual
+private-device rows plus a later chat arrival. This is actual-data predicate
+proof; a simultaneous live app comparison was unavailable after its ui-url
+closed, and is not claimed. No user data was marked read to produce the result.
+
+The sole gallery failure is closed by the frozen one-line readiness fix,
+SHA256ad56c8d5…, with deterministic RED/GREEN and a fresh real Zoom browser
+provider journey. Retain306 passing unit checks and every other full-gate cell.
+Imported backlog without a deliberate unread mark stays quiet by the existing
+notification rule; native generic notices remain passive. Unexecuted physical
+platform scenarios are not counted as passes.
