@@ -1,32 +1,53 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
-## Urgent October 23 chat recovery hotfix in progress
+## v0.9.4 chat recovery published and rolled out — October 23, 2026
 
-Live use after v0.9.3 exposed defects that the earlier qualification missed.
-Follow [the focused hotfix checklist](plans/CHAT_RECOVERY_HOTFIX.md).
-Sergey assigned the existing Claude in Herdr tab 2 to implement the complete
-batch; Codex coordinates evidence, independent verification and release. No new
-goal or helpers. The isolated branch is `fix/oct23-chat-recovery`; preserve the
-dirty main checkout and paused Play work.
+[App v0.9.4](https://github.com/misunders2d/agentnet/releases/tag/v0.9.4)
+is public from tag `83376cbc9b70d71ee2c78047a660dab930b3a1f7` (not retagged);
+[matching gallery v2026.10.23.2](https://github.com/misunders2d/agentnet-skins/releases/tag/v2026.10.23.2)
+is from `135ab451a49476c7e51079d4dae2ae4f9ccfa9b8`, pinned to that source.
+Both are Latest. All12 public payloads match the independently qualified draft;
+all5 gallery packages,129 files and20 previews verify through the actual parser.
+Original Android preview signer, clean source provenance and AppImage media
+contents pass. Claude implemented and independently reviewed the concrete artifacts;
+Codex coordinated verification and publication. No new helpers or native goal.
 
-Proven: remote native conversation decisions use a recipient-local physical ID
-instead of the shared logical request ID. Four real handle/continue decisions
-reached the executor, were refused as `no such request here`, and their refusal
-statuses were delivered back. The UI did not explain this failure clearly.
-AgentNet also explicitly injects plain-text output instructions; reaction-only
-output is retained as an ordinary answer bubble; generic Codex bridge errors
-are mislabeled needs-human with an unsupported version hint. The historical
-native failure trigger is still unproven; native startup and model execution
-did succeed, and fresh isolated basic/tool protocol probes complete normally.
+The hotfix repairs shared-ID handling/continuation and shows signed refusals as
+“Not applied”; ordinary Reply retains exact agent ancestry without manual tagging.
+Active steering retains its exact attempt. Native technical failures expose the
+actual system reason; genuine permissions stay native. Group answers use canonical
+requester mentions and readable Markdown. Reaction-only output attaches a reaction
+instead of a text bubble. All five harness hooks exclude inert history/events,
+resolved reports, erased chats and linked-device outgoing copies from ordinary
+unread notices. Pi/OMP filter historical metadata from later model context while
+preserving fresh attention, exact receiver replies and native session history.
 
-Three exact failed host requests were manually resolved through the normal CLI
-at the owner's request, without rerun or deletion; all nine resolved status
-copies are delivered. This is temporary relief, not verification of the fix.
-Test all five supported responders (agy, Claude, Codex, OMP and Pi), real UI
-producers, handling/refusal, permissions/input, Reply/tag followups, active
-steering/races/files/replay, Markdown/mentions and genuine attached reactions.
-No hotfix has been published yet. Keep earlier release evidence and open limits
-below distinct from this new incident.
+See [scope and evidence](plans/CHAT_RECOVERY_HOTFIX.md) and the
+[completed publication record](plans/V0_9_4_RELEASE.md). Qualification retains
+unchanged integrated race/native/platform evidence and repeats affected selections;
+final vet, real mixed-version againstv0.9.3 and full matching gallery CI pass.
+The final Windows correction only joins synthetic-fixture writers; product guards,
+assertions and deadlines remain intact. Historical failures/skips stay recorded.
+
+The relay is healthy onv0.9.4 from15:31:07UTC; its running binary equals the public
+download. Both offline restores preserve the8,600-blob native backup, existing
+rows/files and Drive binding. Schema25, realm, volume, environment and neighboring
+service stay unchanged; zero restarts and public HTTPS checks pass. Live data was
+never restored from backup. Post-grace observation remains pending.
+Contabo's separate client, Zenbook and the Linux laptop report cleanv0.9.4.
+The live laptop Pi hook now reports4 unread versus913 and omits both old screenshot
+IDs. One remaining chat copy is from a removed linked phone: the app uses its
+historical roster for outgoing direction, while the hook checks current keys only.
+That historical-key parity case remains open and Claude is implementing a focused
+follow-up; the lower count is not a complete read-state repair. A paired current
+app-API response and full live-user-session turn are not claimed. Existing Pi sessions need `/reload`; the phone APK installation is unverified.
+
+The three earlier failed requests were resolved without rerun/deletion. Their
+historical native terminal triggers remain unknown; the fabricated upgrade hint
+and agent attribution are repaired. Owner-approved old limits remain open:
+API35 CI-emulator first Actions-menu frame stall, measured interactions above200ms,
+physical Pixel qualification and nonshipping Windows WebKit media execution.
+Play work and the owner's dirty main checkout remain preserved and paused.
 
 ## v0.9.3 published and relay updated — October 23, 2026
 
