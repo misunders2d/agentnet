@@ -1,13 +1,52 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
-## v0.9.4 chat recovery published and rolled out — October 23, 2026
+## v0.9.5 historical-device hook correction published — October 23, 2026
+
+[App v0.9.5](https://github.com/misunders2d/agentnet/releases/tag/v0.9.5)
+is public from tag `aaa4ff1d4963509c3ee12b8f46c931d21498ec87`;
+[matching gallery v2026.10.23.3](https://github.com/misunders2d/agentnet-skins/releases/tag/v2026.10.23.3)
+is from `c3a82940f1821f17aea8d09d048dc405bc6a51c3`, pinned to that source.
+Both are Latest. The published v0.9.4 tag was not retagged or rebuilt.
+
+The final v0.9.4 rollout check found one residual T7 case: a chat copy from a removed
+own phone was outgoing in the app but still unread in the hook. v0.9.5 matches exact
+address/fingerprint pairs across the person's pinned historical roster steps,
+preserving changed/unverified-key, genuine Review, deliberate-unread and selected
+reply boundaries. No native policy, schema, read marker or user session is changed.
+All five harnesses are covered. This completes the known T7 edge alongside the
+v0.9.4 handling, ordinary Reply/steering, truthful-error, Markdown/mention, attached
+reaction and Pi/OMP metadata-context corrections below.
+
+The installed Linux laptop's Pi hook now returns exactly the same three IDs as
+its live app Unread API; the removed-phone copy and both reported old IDs are absent.
+Focused regular/race, native Linux/macOS/Windows count 3, vet, real mixed-version
+against v0.9.4 and the complete final-pin gallery CI pass. All 12 public payloads
+match the independently reviewed draft; original APK signer, source stamps and
+AppImage media checks pass. All 5 public packages, 129 files and 20 previews verify.
+See [the completed release record](plans/V0_9_5_RELEASE.md) and
+[scope checklist](plans/CHAT_RECOVERY_HOTFIX.md) for exact evidence and preserved skips.
+
+The relay is healthy on v0.9.5 from 16:30:35UTC: running binary equals the public
+download, zero restarts, schema 25 and realm/volume/configuration/Drive/neighbor
+preserved. Both native offline restores preserve the 8,606-ciphertext fresh backup;
+no older snapshot was restored over live writes. Zenbook, Linux laptop and Contabo's
+running headless client report clean v0.9.5. Post-grace observation and phone APK
+installation remain unverified. Existing Pi sessions need `/reload`.
+
+The owner's existing accepted limits remain open: API35 emulator first Actions
+frame stall, timings above 200 ms, physical Pixel and nonshipping Windows WebKit
+media execution. The historical native-error trigger remains unknown; truthful
+failure classification is repaired. Play work and dirty owner checkouts are preserved.
+
+
+## Historical v0.9.4 chat recovery published and rolled out — October 23, 2026
 
 [App v0.9.4](https://github.com/misunders2d/agentnet/releases/tag/v0.9.4)
 is public from tag `83376cbc9b70d71ee2c78047a660dab930b3a1f7` (not retagged);
 [matching gallery v2026.10.23.2](https://github.com/misunders2d/agentnet-skins/releases/tag/v2026.10.23.2)
 is from `135ab451a49476c7e51079d4dae2ae4f9ccfa9b8`, pinned to that source.
-Both are Latest. All12 public payloads match the independently qualified draft;
-all5 gallery packages,129 files and20 previews verify through the actual parser.
+Both are Latest. All 12 public payloads match the independently qualified draft;
+all5 gallery packages, 129 files and 20 previews verify through the actual parser.
 Original Android preview signer, clean source provenance and AppImage media
 contents pass. Claude implemented and independently reviewed the concrete artifacts;
 Codex coordinated verification and publication. No new helpers or native goal.
@@ -45,7 +84,7 @@ app-API response and full live-user-session turn are not claimed. Existing Pi se
 The three earlier failed requests were resolved without rerun/deletion. Their
 historical native terminal triggers remain unknown; the fabricated upgrade hint
 and agent attribution are repaired. Owner-approved old limits remain open:
-API35 CI-emulator first Actions-menu frame stall, measured interactions above200ms,
+API35 CI-emulator first Actions-menu frame stall, measured interactions above 200 ms,
 physical Pixel qualification and nonshipping Windows WebKit media execution.
 Play work and the owner's dirty main checkout remain preserved and paused.
 
@@ -57,8 +96,8 @@ was published at07:49:58UTC from immutable
 [gallery v2026.10.23.1](https://github.com/misunders2d/agentnet-skins/releases/tag/v2026.10.23.1)
 was published at07:50:19UTC from
 `5a12224bbc212db800459a40b8d16d6312f5d618`, pinned to that exact core source.
-Both are public Latest releases. All12 public payloads match the independently
-qualified draft; all5 public skin packages,129 package files and20 previews
+Both are public Latest releases. All 12 public payloads match the independently
+qualified draft; all5 public skin packages, 129 package files and 20 previews
 verify through the actual gallery parser. Checksums, clean Go provenance,
 original Android preview signer/ABIs/alignment and AppImage media plugins pass.
 
@@ -101,7 +140,7 @@ the fade would mask this evidence. Later opens were60–80ms in earlier runs.
 Native save cancellation verifies staged bytes; provider writes were not executed.
 
 **The owner explicitly approved publication with these limits open:** the Android
-first-menu failure, routine interaction timings above200ms, and the unverified
+first-menu failure, routine interaction timings above 200 ms, and the unverified
 upgraded physical Pixel check. The extra Windows Playwright WebKit media port
 also remains unexecuted; the shipped Windows WebView2 path passed. Never convert
 these into passes or claim universal no-lag acceptance. A cold first-menu phone
@@ -1266,12 +1305,12 @@ fixture evidence is retained; no production latency/capacity guarantee is made.
 
 [Gallery v2026.10.15.1](https://github.com/misunders2d/agentnet-skins/releases/tag/v2026.10.15.1),
 commit `272342b7aa55d3292b25932fead4ff294fdbf3fa`, publishes Classic/Holonet/Zoom/Pulp1.4.0
-and Office1.2.0 at the exact v29 pin. All121 remote files match local package,
+and Office1.2.0 at the exact v29 pin. All 121 remote files match local package,
 catalog and20-preview evidence. All real-skin applicable full-run suites pass;
 one QA scaffold mute check failed and passed the unchanged focused journey.
 Its intermittent cause is unproven; no single clean full npm-test run is invented.
 
-All12 client race selections, both UI partitions, other race packages, whole
+All 12 client race selections, both UI partitions, other race packages, whole
 vet, affected Linux/macOS/Windows and exact published-v28 mixed-version104.753s
 pass with unchanged evidence retained. Final native fixture CWD correction is
 test-only. The original-key df370e65 APK passes same-VM-boot v28→v29 preservation,
@@ -1324,7 +1363,7 @@ HTTPS and binary report v0.8.28; realm `4bd7c66953ccf5496fad8eadbab945bd`,
 remain exact. Configuration/data volume and the neighboring service are unchanged;
 Hub restarts0. No live identity/history/grants/requests were reset or replayed.
 
-All12 client race selections and both UI partitions retain600s bounds; native
+All 12 client race selections and both UI partitions retain600s bounds; native
 Linux/macOS/Windows, whole vet, exact published-v0.8.27 mixed-version57.701s
 and actual IndexedDB race1.701s pass. Actual retained-DM Codex and
 Codex/Claude/Pi owner journeys pass174.412s with native setup unchanged.

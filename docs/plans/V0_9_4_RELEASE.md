@@ -1,5 +1,7 @@
 # v0.9.4 focused chat recovery release
 
+Follow-up: [v0.9.5](V0_9_5_RELEASE.md) closes the residual historical-device T7 case recorded below. This page preserves the v0.9.4 qualification and rollout history.
+
 Status: published and relay, Zenbook and Linux laptop updated; phone update and existing limits remain explicit.
 Published tag (not retagged): `83376cbc9b70d71ee2c78047a660dab930b3a1f7`.
 Parent release: v0.9.3, source `3f5bbc4362e1ee6345c676e9000ee742668c64ad`.
