@@ -9,28 +9,44 @@ complete GUI review and all-system/all-interaction speed requirements.
 
 ## Current residual qualification
 
-Run39888155855 passed actual macOS installer/native17 and all three browser
-engines at both widths. Linux native17 passed, including the packaged media
-playback correction. The affected follow-up retains those results and selects
-Linux/Windows Topics, Compose, Media and Outbox plus the Android instrumentation.
-The narrow TopicBar now measures the three mounted controls' fractional widths;
-its exact-CI-geometry regression and106 rendered actions pass. A255ms composer
-transition remains a recorded smoothness finding.
+The full integrated run39877403457 and its bounded affected reruns now
+account for all18 Linux client race partitions, remaining non-UI packages,
+container, UI0/1/2, native macOS client/UI and all six native Windows client
+partitions. Windows partition4 retains183 earlier parent passes and50 explicit
+skips; its last two parents passed three exact repetitions in run39895055440
+(96.451s). The original setup hypothesis was disproved; no speculative startup
+fix or invitation retry was introduced. Run39889553253 passed the repaired UI
+models on all three operating systems. Actual mixed-version candidate/v0.9.2
+programs passed86.024s with compatibility required.
 
-Windows partition4 retained183 parent passes and50 explicit skips; two actual
-group-context parents remain unresolved. Initial stale-session causation was
-not established, and no speculative readiness change was made. Failure-only
-context/proof/profile diagnostics prepare an exact two-parent Windows rerun.
-Run39889553253 passed the two corrected UI models on Linux, macOS and Windows,
-closing the sole remaining UI0/macOS fixture failure while retaining other passes.
+Run39888155855 passed the actual macOS installer/native17 and all three browser
+engines at both widths. Linux native17 passed, including shipped AppImage media.
+Run39895057632 passed the remaining affected Linux native/browser Topics,
+Compose, Media and Outbox checks. Its corresponding Windows native bodies and
+Topics/Compose/Outbox browser checks passed. Run39896984117 passed actual
+Windows WebView2 and Playwright Chromium/Firefox media playback, but Windows
+Playwright WebKit still failed blob metadata (readyState0/networkState3/error4).
+Installing the official Media Foundation prerequisite did not resolve it. The
+Windows app uses WebView2; Windows WebKit is an additional nonshipping test
+port. An independent same-MP4 blob/HTTP diagnostic will retain that failure and
+classify any unsupported cell explicitly as unexecuted, never as playback.
 
-Android's prior upgrade/notification checks passed. Its17 timing cases never
-started because test instrumentation inserted an inline module refused by the
-unchanged product CSP. The test-only correction uses the existing JavaScript
-injection seam and same-origin module import, checks launch/setup results and
-preserves the17-case coverage,30-second bound, private-fixture limits and cleanup.
-Actual Android re-execution remains required. Matching-gallery navigation races
-are being corrected before the collection gate; no publication is claimed.
+Android signed upgrade preserves identity,200 messages, origin and drafts. Its
+latency injection now keeps the product CSP and uses an absolute same-origin
+module URL. The latest run instead stopped at the existing OS read-dismissal
+assertion. Android asynchronously cancels notifications; another host badge
+update can repost a still-listed cancelled notification. The bounded native
+correction keeps pending cancellation tags through every host badge refresh,
+clears them on a genuine new arrival and sorts by original notification time.
+Actual notification regression and all17 Android workloads remain required.
+Independent instrumentation failures now accumulate after successful upgrade so
+one failure cannot hide the remaining cases. Physical Pixel remains separate.
+
+The final matching-gallery focused controls pass all six entry/provider/touch
+checks, including native signed roster growth3→4→5 and all28 Zoom touch actions.
+All20 current previews were visually inspected. The integrated collection gate
+is running against frozen Go/UI/gallery bytes; later native-only and diagnostic
+changes require explicit hash equivalence and the final candidate pin.
 
 ## Source and focused verification
 
@@ -87,25 +103,26 @@ spikes or establish another minimal corrective seam. This is not complete P1
 acceptance. Actual isolated platform qualification and the final GUI review
 remain open.
 
-## Required gates still open
+## Qualification ledger
 
 | Gate | Required evidence |
 | --- | --- |
-| Integrated race/native tests | Every current parent accounted for across18client shards, others/three UI groups and six separate native Windows runners; retain valid unchanged evidence; no timeout inflation or skip-as-pass |
+| Integrated race/native tests | PASS retained integrated run and affected reruns above; explicit opt-in/platform skips remain unexecuted |
 | Actual platform interactions | Linux/macOS/Windows native shells, Android WebView and named browsers; exact canonical asset hash, visible feedback, completed state, API/projection and frame timings |
 | Complete GUI review | Claude rebuilds exact frozen source and re-establishes every reachable control/state/role coverage row, then rechecks all demonstrated corrections |
 | Complete interaction speed | Seventeen portable workloads and explicit family/state mapping; measured routine >200ms findings remain open, including native Linux unread/open/exact targets |
 | Android upgrade/notification/device acceptance | Signed-preview continuity, retained-data upgrade and actual instrumentation; physical upgraded Pixel remains separate and open |
-| Mixed-version | Actual candidate/latest-published-release programs, latest-only suspension without blocking healthy senders and backlog after update; missing tag is not a pass |
+| Mixed-version | PASS86.024s actual candidate/v0.9.2 programs, required compatibility; healthy senders and updated backlog verified |
 | Matching gallery | Pin exact candidate, rebuild every standalone/overlay skin, inspect refreshed previews and pass complete collection tests, including Zoom touch |
 | Release artifacts | Immutable tag; independently download all payloads/checksums, verify exact source provenance and original Android signer; repeat unauthenticated public verification after publication |
 | Existing relay | Verified usual native full stopped backup, all remote-only ciphertext size/hash checked, old/new offline restores, unchanged realm/volume/account/folder/configuration, expected schema24→25 quota column and verified public health |
 | Documentation and cleanup | Record actual gate/release/rollout evidence and honest limits; collect outputs and remove only owned temporary resources |
 
-Claude's original GUI interactive world was built from dirty main. Those rows
-are explicitly invalid candidate evidence. Its clean9b fixture results and
-fresh9b reproductions are distinct. Final rechecks must use `git archive` of the
-frozen candidate and record binary plus served-asset provenance.
+Claude's original exploratory dirty-main interactions are excluded. Later final
+rechecks used archived frozen candidates, exact binary and served-asset hashes.
+The a53 interactive recheck passed; the d4 declined-invitation and final gallery
+source gates were accepted. Retain the exact scope/provenance of each review
+rather than presenting earlier exploratory rows as candidate evidence.
 
 ## Release and rollout notes to preserve
 

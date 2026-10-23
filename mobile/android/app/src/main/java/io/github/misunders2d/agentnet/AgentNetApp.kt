@@ -66,6 +66,7 @@ class NativeHost(private val application: Application) {
     private val networkQueued = AtomicBoolean(false)
     private var unreadTotal = 0L // main thread; partial includes last-known contributions
     private var unreadPartial = true
+    private val dismissedActivityTags = mutableSetOf<String>() // main thread; only OS cancels still in flight
     private val networkMonitor = NetworkMonitor(application, main) { networkChanged() }
     var state = HostState(); private set
     fun observe(observer: (HostState) -> Unit) { observers.add(observer); observer(state); open() }
@@ -96,7 +97,7 @@ class NativeHost(private val application: Application) {
                 app.setUnreadSink(object : UnreadSink {
                     override fun unread(total: Long, partial: Boolean) { main.post {
                         unreadTotal = total.coerceAtLeast(0); unreadPartial = partial
-                        updateActivityBadges(application, unreadTotal, unreadPartial)
+                        updateActivityBadges(application, unreadTotal, unreadPartial, dismissedActivityTags)
                     } }
                 })
                 core = app
@@ -140,8 +141,9 @@ class NativeHost(private val application: Application) {
     }
     private fun dismissActivity(workspace: String, fragment: String) {
         WebPolicy.notificationTag(workspace, fragment)?.let { tag ->
+            dismissedActivityTags.add(tag)
             application.getSystemService(NotificationManager::class.java).cancel(tag, 0)
-            updateActivityBadges(application, unreadTotal, unreadPartial)
+            updateActivityBadges(application, unreadTotal, unreadPartial, dismissedActivityTags)
         }
     }
     private fun notifyActivity(workspace: String, fragment: String, title: String, body: String) {
@@ -164,19 +166,25 @@ class NativeHost(private val application: Application) {
             .setVisibility(Notification.VISIBILITY_PRIVATE).setPublicVersion(redacted)
             .setContentIntent(pending).setAutoCancel(true)
             .setNumber(activityBadgeNumber(unreadTotal, unreadPartial)).build()
+        dismissedActivityTags.remove(tag) // a new arrival for the same destination is eligible again
         manager.notify(tag, 0, note)
-        updateActivityBadges(application, unreadTotal, unreadPartial)
+        updateActivityBadges(application, unreadTotal, unreadPartial, dismissedActivityTags)
     }
 }
 
 // Android owns launcher appearance. Never create a notification just for a dot.
 // Recovering the OS object preserves its private content, exact click intent,
 // auto-cancel and public redaction without retaining a second plaintext body map.
-internal fun updateActivityBadges(application: Application, total: Long, partial: Boolean) {
+internal fun updateActivityBadges(application: Application, total: Long, partial: Boolean,
+    dismissedTags: MutableSet<String> = mutableSetOf()) {
     val manager = application.getSystemService(NotificationManager::class.java)
-    val active = manager.activeNotifications.filter {
-        it.notification.channelId == ACTIVITY_CHANNEL && activityBadgeTag(it.tag)
-    }.sortedWith(compareByDescending<android.service.notification.StatusBarNotification> { it.postTime }.thenBy { it.key })
+    val snapshot = manager.activeNotifications
+    // cancel() is queued by Android. Every host refresh excludes its tag until
+    // the OS no longer lists it, without keeping notification content or history.
+    dismissedTags.retainAll(snapshot.mapNotNull { it.tag }.toSet())
+    val active = snapshot.filter {
+        it.notification.channelId == ACTIVITY_CHANNEL && activityBadgeTag(it.tag, dismissedTags)
+    }.sortedWith(compareByDescending<android.service.notification.StatusBarNotification> { it.notification.`when` }.thenBy { it.key })
     val number = activityBadgeNumber(total, partial)
     active.forEachIndexed { index, entry ->
         val desired = if (index == 0) number else 0
@@ -188,8 +196,8 @@ internal fun updateActivityBadges(application: Application, total: Long, partial
     }
 }
 
-internal fun activityBadgeTag(tag: String?): Boolean {
-    if (tag == null || tag.length > 2048) return false
+internal fun activityBadgeTag(tag: String?, excludedTags: Set<String> = emptySet()): Boolean {
+    if (tag == null || tag in excludedTags || tag.length > 2048) return false
     val workspace = tag.split('&').firstOrNull { it.startsWith("workspace=") }?.substringAfter('=') ?: return false
     return WebPolicy.notificationTag(workspace, tag) == tag
 }

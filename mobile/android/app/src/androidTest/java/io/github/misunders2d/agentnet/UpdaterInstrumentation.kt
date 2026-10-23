@@ -128,7 +128,8 @@ class UpdaterInstrumentation : Instrumentation() {
 
     /** OS-boundary test on the owned emulator; never grants or changes permissions. */
     private fun checkNotifications(activity: MainActivity, denied: Boolean, result: Bundle) {
-        val host = (targetContext.applicationContext as AgentNetApp).host
+        val app = targetContext.applicationContext as AgentNetApp
+        val host = app.host
         // Disposable preferences exercise the actual consent implementation,
         // without changing an Android permission or starting a live service.
         val consentPreferences = targetContext.getSharedPreferences("notification-consent-fixture", 0)
@@ -184,6 +185,14 @@ class UpdaterInstrumentation : Instrumentation() {
             while (!predicate() && System.nanoTime() < end) Thread.sleep(50)
             check(predicate()) { label }
         }
+        val totalField = NativeHost::class.java.getDeclaredField("unreadTotal").apply { isAccessible = true }
+        val partialField = NativeHost::class.java.getDeclaredField("unreadPartial").apply { isAccessible = true }
+        val dismissedField = NativeHost::class.java.getDeclaredField("dismissedActivityTags").apply { isAccessible = true }
+        @Suppress("UNCHECKED_CAST")
+        fun pendingTags() = dismissedField.get(host) as MutableSet<String> // main-thread calls only
+        var savedTotal = 0L; var savedPartial = true; var restoreBadges = false
+        val barrierTag = "fixture-badge-barrier"
+        var barrier = 0
         try {
             check(host.notificationsPermitted() != denied) { "Expected Android permission ${if (denied) "denied" else "granted"}; this test never changes it." }
             routes.forEach { route -> runOnMainSync { dismiss.invoke(host, workspace, route) } }
@@ -192,6 +201,11 @@ class UpdaterInstrumentation : Instrumentation() {
                 waitFor("Denied notifications appeared") { active().isEmpty() }
                 result.putString("stream", "PASS Android denied permission: no notification posted; permissions unchanged.\n")
                 return
+            }
+            runOnMainSync {
+                savedTotal = totalField.getLong(host); savedPartial = partialField.getBoolean(host)
+                restoreBadges = true
+                totalField.setLong(host, 7L); partialField.setBoolean(host, false)
             }
             // Foreground, then background, then screen-off arrival use the same
             // actual NotificationManager surface. Core event producers are tested in Go.
@@ -219,10 +233,71 @@ class UpdaterInstrumentation : Instrumentation() {
             runOnMainSync { dismiss.invoke(host, workspace, routes[0]) }
             waitFor("Reading exact chat did not dismiss its notification") { active().none { it.tag == WebPolicy.notificationDestination(workspace, routes[0]) } }
             check(active().any { it.tag == WebPolicy.notificationDestination(workspace, routes[1]) }) { "Reading another chat cleared an OK" }
-            result.putString("stream", "PASS Android OS notification boundary: foreground/dedup, background OK, screen-off message/reminder route, private content, exact tap and read dismissal. No physical-phone or relay delivery claim.\n")
+            // Reuse this mode's real NativeHost/NotificationManager with positive
+            // counts. The private set models a cancel still visible in an OS
+            // snapshot; it is not a substitute for the actual cancel below.
+            emit(routes[1]); emit(routes[2]); emit(routes[0])
+            waitFor("Positive badge fixture notices missing") { active().size == 3 }
+            fun refreshUnread(total: Long) = runOnMainSync {
+                totalField.setLong(host, total); partialField.setBoolean(host, false)
+                updateActivityBadges(app, total, false, pendingTags()) // same projection as UnreadSink
+            }
+            fun settleBadgePosts() {
+                val number = ++barrier
+                val template = active().first().notification
+                runOnMainSync { manager.notify("$barrierTag-$number", 83, android.app.Notification.Builder.recoverBuilder(app, template)
+                    .setNumber(number).setOnlyAlertOnce(true).build()) }
+                // An unrelated, ineligible tag queued after the badge writes
+                // fences their OS processing, without sleeping or longer waits.
+                waitFor("Queued badge writes did not reach Android") {
+                    manager.activeNotifications.any { it.tag == "$barrierTag-$number" && it.notification.number == number }
+                }
+            }
+            fun exactCount(total: Int) = active().count { it.notification.number == total } == 1 &&
+                active().all { it.notification.number == 0 || it.notification.number == total }
+            refreshUnread(7); settleBadgePosts()
+            waitFor("Positive aggregate badge missing") { exactCount(7) }
+            val settled = active().associate { it.key to (it.postTime to it.notification.number) }
+            refreshUnread(7); settleBadgePosts()
+            check(active().associate { it.key to (it.postTime to it.notification.number) } == settled) {
+                "Same unread total unnecessarily reposted notifications"
+            }
+            val cancelledTag = WebPolicy.notificationTag(workspace, routes[0])!!
+            val beforeExcluded = active().single { it.tag == cancelledTag }
+            runOnMainSync { pendingTags().add(cancelledTag) }
+            refreshUnread(5); settleBadgePosts()
+            waitFor("Healthy notice lost its count during pending cancellation") {
+                active().count { it.tag != cancelledTag && it.notification.number == 5 } == 1
+            }
+            val excluded = active().single { it.tag == cancelledTag }
+            check(excluded.postTime == beforeExcluded.postTime && excluded.notification.number == beforeExcluded.notification.number) {
+                "Still-active cancelled tag was reposted by unread update"
+            }
+            runOnMainSync {
+                dismiss.invoke(host, workspace, routes[0])
+                totalField.setLong(host, 4L); updateActivityBadges(app, 4, false, pendingTags())
+                dismiss.invoke(host, workspace, routes[1])
+                totalField.setLong(host, 3L); updateActivityBadges(app, 3, false, pendingTags())
+            }
+            settleBadgePosts()
+            val survivorTag = WebPolicy.notificationTag(workspace, routes[2])!!
+            waitFor("Unread or second cancel resurrected a read notification") {
+                active().singleOrNull()?.let { it.tag == survivorTag && it.notification.number == 3 } == true
+            }
+            runOnMainSync { post.invoke(host, workspace, routes[0], "Fresh fixture sender", "New unseen fixture preview") }
+            waitFor("New activity for a read chat was suppressed") {
+                active().any { it.tag == cancelledTag && it.notification.extras.getCharSequence(android.app.Notification.EXTRA_TEXT).toString() == "New unseen fixture preview" }
+            }
+            runOnMainSync { check(cancelledTag !in pendingTags()) { "New arrival retained pending cancellation" } }
+            result.putString("stream", "PASS Android OS notification boundary: foreground/dedup, background OK, screen-off message/reminder route, private content, exact tap/read dismissal, positive pending-cancel/unread/second-cancel/new-arrival and settled same-total badge checks. No physical-phone or relay delivery claim.\n")
         } finally {
             uiAutomation.executeShellCommand("input keyevent 224").close()
             routes.forEach { route -> runOnMainSync { dismiss.invoke(host, workspace, route) } }
+            (1..barrier).forEach { manager.cancel("$barrierTag-$it", 83) }
+            if (restoreBadges) runOnMainSync {
+                totalField.setLong(host, savedTotal); partialField.setBoolean(host, savedPartial)
+                updateActivityBadges(app, savedTotal, savedPartial, pendingTags())
+            }
         }
     }
     /** Authored OS-boundary matrix; run only on the owned isolated Android fixture. */
@@ -263,7 +338,7 @@ class UpdaterInstrumentation : Instrumentation() {
             manager.notify("unrelated-tag", 73, note())
             waitFor("Fixture notifications not active") { eligible().size == 2 && manager.activeNotifications.any { it.tag == "unrelated-tag" } }
             val before = eligible().associateBy { it.tag }
-            val newestKey = before.values.sortedWith(compareByDescending<android.service.notification.StatusBarNotification> { it.postTime }.thenBy { it.key }).first().key
+            val newestKey = before.values.sortedWith(compareByDescending<android.service.notification.StatusBarNotification> { it.notification.`when` }.thenBy { it.key }).first().key
             runOnMainSync { updateActivityBadges(app, 7, false) }
             waitFor("Aggregate not assigned to exactly one active notification") { eligible().count { it.notification.number == 7 } == 1 && eligible().count { it.notification.number == 0 } == 1 }
             check(eligible().single { it.notification.number == 7 }.key == newestKey)

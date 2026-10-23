@@ -32,4 +32,20 @@ class ActivityBadgeTagTest {
             assertFalse(tag, activityBadgeTag(tag))
         }
     }
+    @Test fun pendingCancellationsExcludeOnlyTheirExactTags() {
+        val route = "conv=" + "a".repeat(64)
+        val cancelled = WebPolicy.notificationTag("default", route)!!
+        val secondCancelled = WebPolicy.notificationTag("default", "msg=" + "b".repeat(32) + "&dir=in")!!
+        val healthy = WebPolicy.notificationTag("default", "review")!!
+        val otherWorkspace = WebPolicy.notificationTag("c".repeat(32), route)!!
+        val staleSnapshot = listOf(cancelled, secondCancelled, healthy, otherWorkspace, "unrelated-tag")
+        val pending = mutableSetOf(cancelled)
+        assertEquals(listOf(secondCancelled, healthy, otherWorkspace), staleSnapshot.filter { activityBadgeTag(it, pending) })
+        pending.add(secondCancelled)
+        assertEquals(listOf(healthy, otherWorkspace), staleSnapshot.filter { activityBadgeTag(it, pending) })
+        // A genuine new notification clears just its tag, retaining the other cancel.
+        pending.remove(cancelled)
+        assertEquals(listOf(cancelled, healthy, otherWorkspace), staleSnapshot.filter { activityBadgeTag(it, pending) })
+        assertTrue(activityBadgeTag(cancelled))
+    }
 }

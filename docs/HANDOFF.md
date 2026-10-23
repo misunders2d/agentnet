@@ -13,47 +13,52 @@ ordinary-user journey also reproduced the browser's omitted reminder capability.
 Qualification, publication and existing-relay rollout remain in progress;
 candidate source and focused tests are not a released or deployed result.
 
-The integrated qualification of25e66082 completed24 passing jobs and nine
-failing jobs in [run39877403457](https://github.com/misunders2d/agentnet/actions/runs/39877403457).
-All18 client race partitions, five native Windows client partitions and the
-container gate passed. The failed native/client/UI/platform selections have
-focused corrections collected as one batch; their logs and unchanged passing evidence are
-retained. The matching gallery's read-ACK failure was a comparison across two
-different watcher lifetimes; dispatch-time scope, visibility and attention-token
-proof now passes11 focused checks. Full gallery and affected platform
-qualification remain open, alongside the physical Pixel field check.
-
-Claude’s exact-candidate GUI review covered all five gallery skins, wide and
-phone layouts, ordinary chat, unread landing, group changes, composer, settings
-and storage interactions. Its remaining findings now have focused corrections:
-current invitations replace only their own stale proposal; former members see
-read-only controls and current membership; initial local-skin activation waits
-for actual service-worker control; setup consequences and skin-opening feedback
-are visible. Linux AppImages now request Tauri’s media bundle after native
-playback exposed missing GStreamer plugins. New installer playback and affected
-platform qualification must pass before publication. Routine latency findings
-above 200 ms remain recorded; correctness guards are not smoothness evidence.
+The integrated qualification retained all18 Linux client race partitions, the
+container gate, all three UI partitions and all six native Windows client
+partitions. The last two Windows parents passed three exact repetitions in
+[run39895055440](https://github.com/misunders2d/agentnet/actions/runs/39895055440);
+183 unchanged parents and the other five partitions retain their earlier passes.
+The complete macOS client and UI selections passed, including the repaired UI
+model on all three operating systems in
+[run39889553253](https://github.com/misunders2d/agentnet/actions/runs/39889553253).
+The actual mixed-version journey against published v0.9.2 passed86.024s.
 
 The complete platform run39888155855 qualified the actual macOS installer,
-all17 native interaction workloads and the three browser engines at both widths.
-Linux also passed all17 native workloads, including playback from the shipped
-AppImage with its bundled GStreamer plugins. Its remaining narrow-browser
-TopicBar failure has a measured-width correction and focused regression.
-Windows passed the native interaction bodies; its owned-profile cleanup and
-WebKit media-fixture failures have focused test corrections awaiting actual
-Windows re-execution. Android upgrade continuity and notification checks passed;
-its17 timing fixtures were blocked by test-only inline-module injection under the
-existing CSP. The corrected instrumentation preserves that CSP and awaits an
-actual emulator run. These pending selections are not passes.
+all17 native interaction workloads and three browser engines at both widths.
+Linux passed all17 native workloads, including real playback from the shipped
+AppImage with its GStreamer plugins. The affected Linux follow-up in
+[run39895057632](https://github.com/misunders2d/agentnet/actions/runs/39895057632)
+passed the measured-width TopicBar correction and four affected workloads across
+the native shell and all three browser engines. Windows WebView2 and the tested
+Playwright Chromium/Firefox media paths also passed. Windows Playwright WebKit
+still fails local blob-video metadata; this is a separate nonshipping test port,
+not the Windows app engine. An independent same-byte blob/HTTP discriminator and
+an explicitly unexecuted unsupported cell are being prepared; the failed raw
+result must never become a playback pass.
 
-The two remaining native Windows client parents remain unresolved after183
-other parent passes in partition4. A proposed startup cause was disproved for
-the initial fixture, so only failure diagnostics were added for the next exact
-two-parent run. All18 Linux client partitions, the other five Windows partitions,
-UI partitions1/2 and the container gate retain their passing evidence. The only
-failed UI0/macOS fixture was repaired and passed on all three native systems in
-run39889553253. Temporary group-context waits no longer claim the chat is frozen;
-exact thread reads and sends still enforce the current signed-context fence.
+Android signed-upgrade checks preserve identity,200 messages, origin and drafts.
+Its timing fixture now preserves the existing CSP and resolves the module from
+an absolute app URL. The latest run stopped earlier on a real notification race:
+Android queues cancellation, while a following badge refresh can still see and
+repost the old notification. The candidate correction excludes pending cancelled
+tags on every host badge refresh and orders by the notification's original
+creation time. Native regression and all17 Android workloads must still execute
+before publication; host models and authored instrumentation are not OS passes.
+
+Claude's final GUI rechecks used exact archived candidate binaries and served
+asset hashes, superseding its earlier exploratory wrong-checkout observations.
+The accepted corrections include current invitation supersession, former-member
+read-only context, actual Reply/tag continuation, first-unread landing, touch
+release, responsive editors, topic operations, menus, setup and local-skin
+activation. The matching gallery's final focused navigation, exact signed
+browser-provider enrollment and five-device Zoom touch checks pass. Its final
+integrated gate is running. Publication, public artifact verification, preserved-
+data relay rollout and the physical Pixel field check remain unfinished.
+
+Routine measurements above200ms remain recorded; passing correctness deadlines
+and immediate optimistic feedback are not evidence that every interaction is
+smooth. Keep native, browser, synthetic API, durable result and physical-device
+claims separate.
 
 Preserve the dirty main checkout and parked Play work; use the isolated
 `.agentnet/oct22-batch` candidate. The existing relay's connected Google Drive

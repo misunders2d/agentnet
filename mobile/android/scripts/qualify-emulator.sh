@@ -26,9 +26,10 @@ adb -s "$serial" shell chown -R "$app_uid:$app_uid" "$app_data/no_backup"
 adb -s "$serial" shell chmod -R go-rwx "$app_data/no_backup"
 adb -s "$serial" shell pm grant "$package" android.permission.POST_NOTIFICATIONS
 instrument() {
-  local mode=$1 output=$2
-  adb -s "$serial" shell am instrument -w -r -e mode "$mode" "$runner" > "$output"
+  local mode=$1 output=$2 status=0
+  adb -s "$serial" shell am instrument -w -r -e mode "$mode" "$runner" > "$output" || status=$?
   cat "$output"
+  if (( status != 0 )); then return "$status"; fi
   grep -Eq '^INSTRUMENTATION_CODE: -1[[:space:]]*$' "$output"
 }
 instrument snapshot "$RUNNER_TEMP/android-before-upgrade.txt"
@@ -46,14 +47,19 @@ assert before['preserved'] == after['preserved'], 'Upgrade changed saved fixture
 assert len(after['preserved']['messages']) == 200
 print('PASS signed Android upgrade: original identity, 200 saved messages, origin and drafts retained')
 PY
-instrument notifications "$RUNNER_TEMP/android-notifications.txt"
+failed=0
+# Keep only Android's rate-limit diagnostic from this owned fixture. Preserve
+# the qualifier's exit status and never upload a full application log.
+trap 'adb -s "$serial" logcat -d -v brief -s NotificationService:W "*:S" 2>/dev/null | grep -F "Package enqueue rate" > "$RUNNER_TEMP/android-notification-rate.txt" || true' EXIT
+adb -s "$serial" shell am force-stop "$package"
+if ! instrument notifications "$RUNNER_TEMP/android-notifications.txt"; then failed=1; fi
 # NotificationManager state outlives an instrumentation invocation. Isolate
 # the next matrix on this CI/qemu-only fixture without changing saved data.
 adb -s "$serial" shell am force-stop "$package"
-instrument indicators-video "$RUNNER_TEMP/android-indicators-video.txt"
+if ! instrument indicators-video "$RUNNER_TEMP/android-indicators-video.txt"; then failed=1; fi
 # Every invocation consumes its private test JS/seed in finally; restage both.
-failed=0
 for suite in history navigation settings unread actions topics groups compose media review outbox agents teams profile storage workspaces permissions; do
+  adb -s "$serial" shell am force-stop "$package"
   for file in latency-fixture.mjs latency-input.json; do
     adb -s "$serial" push "$RUNNER_TEMP/android-latency/$file" "$app_data/cache/$file"
     adb -s "$serial" shell chown "$app_uid:$app_uid" "$app_data/cache/$file"
@@ -64,6 +70,7 @@ for suite in history navigation settings unread actions topics groups compose me
   cat "$output"
   if ! grep -Eq '^INSTRUMENTATION_CODE: -1[[:space:]]*$' "$output" || ! grep -q 'LATENCY_JSON=' "$output"; then failed=1; fi
 done
+adb -s "$serial" shell am force-stop "$package"
 adb -s "$serial" shell pm revoke "$package" android.permission.POST_NOTIFICATIONS
 if ! instrument notifications-denied "$RUNNER_TEMP/android-notifications-denied.txt"; then failed=1; fi
 printf '%s\n' 'Emulator evidence only; physical Pixel launcher and live delivery are separate checks.'

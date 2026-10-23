@@ -237,3 +237,27 @@ production change was required. Publication, public artifact verification,
 matching gallery qualification and relay rollout remain unfinished.
 
 The final corrective child also includes Claude’s current-invitation and local-skin first-use findings, phone trust-card geometry and immediate opening feedback. All collected helper source is frozen. The exact canonical package and focused setup/skin-loading tests pass; the final canonical entry SHA256 is `370046e6d8d1a5aada7c4356428dd007d6aeceb9b1bd277994383d458ec4357f`. AppImage media bundling is implemented, with actual new-installer playback still required. The qualification follow-up retains all 24 unchanged successful jobs and reruns affected native packages, Windows partition 4, all three UI partitions and the existing complete interaction/Android workflow. No public release or relay change is claimed.
+
+
+### Final affected qualification checkpoint — October23
+
+The required Linux18/client, remaining packages/container, UI0/1/2, native
+Windows6 partitions and macOS client/UI results are retained with affected
+reruns. Windows' last two parents passed count3 in run39895055440. The full
+macOS native17/browser matrix passed in run39888155855; Linux native17 and its
+remaining affected browser/native controls passed in run39895057632. Actual
+mixed-version v0.9.2/current passed86.024s. None of the opt-in skips are counted.
+
+| Remaining gate | Current result | Required completion |
+| --- | --- | --- |
+| Android exact notification cancellation | Causal async OS cancellation and repeated badge refresh identified; native correction and regression in progress | Actual signed-upgrade/emulator notification checks and all17 workloads, preserving physical Pixel as separate unverified field check |
+| Windows extra WebKit media port | Original blob metadata error4 retained; actual Windows WebView2 and tested Chromium/Firefox media passed | Same-byte independent blob/HTTP discriminator; explicitly separate unsupported unexecuted test-port cells from playback passes |
+| Matching gallery | Final6 focused real navigation/provider/touch checks pass; all20 current previews inspected; full gate running | Exact candidate pin, full matching collection acceptance and published gallery verification |
+| Public release and existing relay | Prepared, no v0.9.3 public release or live change yet | Draft/public artifact checks, matching gallery, full stopped backup and old/new restore, preserved-data rollout and post-check |
+
+The Android native and diagnostic-only changes leave the frozen Go/UI/gallery
+contract bytes unchanged. Retain passing results by exact file/hash equivalence;
+repeat affected checks when their code or a demonstrated failure changes. Final
+source and release IDs belong in V0_9_3_RELEASE.md. Known timing observations
+above200ms and the unavailable physical Pixel remain honest open acceptance,
+not a silently waived or simulated pass.
