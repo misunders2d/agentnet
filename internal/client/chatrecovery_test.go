@@ -608,9 +608,16 @@ func TestGroupAnswerTagsAskingAgent(t *testing.T) {
 	if _, e = w.alice.store.db.Exec(`UPDATE inbox SET state=? WHERE id=?`, stateRunning, root.LID); e != nil {
 		t.Fatal(e)
 	}
-	raw, _ := json.Marshal(map[string]string{"action": "ask", "pid": to.PID, "text": "agent question"})
+	child, e := w.alice.SendRoomAsk(tctx(t), root.LID, to.PID, envelope.KindQuestion, "agent question")
+	if e != nil {
+		t.Fatal(e)
+	}
+	// Check the answer's tagging independently of the tool's synchronous
+	// send-and-wait budget; its ask path has separate coverage.
+	body := agentAnswerBody(t, w.bob, conv, child.LID)
+	raw, _ := json.Marshal(map[string]string{"action": "wait", "id": child.LID})
 	reply, e := w.alice.codexRoomTool(tctx(t), root.LID, raw)
-	if e != nil || !strings.Contains(reply, "from agent participation "+to.PID) {
+	if e != nil || !strings.Contains(reply, "reply "+child.LID+" from agent participation "+to.PID) {
 		t.Fatalf("%s %v", reply, e)
 	}
 	source, e := w.bob.Participation(from.PID)
@@ -618,10 +625,6 @@ func TestGroupAnswerTagsAskingAgent(t *testing.T) {
 		t.Fatal(e)
 	}
 	anchor := mentionAnchor("agent", from.PID, agentMentionLabel(source.Host.Label))
-	var body string
-	eventually(t, "agent answer", func() bool {
-		return w.bob.store.db.QueryRow(`SELECT body FROM outbox WHERE conv=? AND pid=? AND kind=?`, conv, to.PID, envelope.KindAnswer).Scan(&body) == nil
-	})
 	if body != anchor+"\n\nthe deploy failed at step 3" || !strings.Contains(stub.last(), anchor) {
 		t.Fatalf("agent-origin answer %q; prompt names %q: %v", body, anchor, strings.Contains(stub.last(), anchor))
 	}

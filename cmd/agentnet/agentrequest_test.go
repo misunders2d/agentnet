@@ -65,13 +65,17 @@ func TestCLIQueuedNamedAgentJourney(t *testing.T) {
 		}
 	}
 	dmCommand := func(args ...string) (string, error) {
+		commandCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
 		var out bytes.Buffer
-		err := runDM(ctx, a, args, &out)
+		err := runDM(commandCtx, a, args, &out)
 		return out.String(), err
 	}
 	groupCommand := func(args ...string) (string, error) {
+		commandCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
 		var out bytes.Buffer
-		err := runGroup(ctx, a, args, &out, io.Discard)
+		err := runGroup(commandCtx, a, args, &out, io.Discard)
 		return out.String(), err
 	}
 	var catalog []protocol.AgentRecord
