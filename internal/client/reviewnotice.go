@@ -253,7 +253,9 @@ func (a *Agent) sendReviewNoticeInPass(ctx context.Context) {
 		list       []ReportItem
 		ids, stale []string
 		left       string // reviewTried key of the settled snapshot
+		nativeKey  string // private receiver cards require this exact owner-human key
 	}
+	receiverNative := a.receiverNativeReportItems()
 	var plans []plan
 	for _, to := range recipients {
 		list := items
@@ -267,10 +269,21 @@ func (a *Agent) sendReviewNoticeInPass(ctx context.Context) {
 			// updated, they are not told of those (review here lists them).
 			list = slices.DeleteFunc(slices.Clone(items), func(it ReportItem) bool { return it.State == stateInterrupt })
 		}
+		// Filter before counts, coverage and plan creation: stripping Native
+		// later would still disclose the receiver's existence and peer metadata.
+		nativeKey := ""
+		if len(receiverNative) > 0 && isOwner[to] {
+			if key, found, err := pinnedKey(a.store.db, to); err == nil && found {
+				if owner, err := a.nativeOwnerHumanIn(a.store.db, to, key.Fingerprint()); err == nil && owner {
+					nativeKey = key.Fingerprint()
+					list = append(slices.Clone(list), receiverNative...)
+				}
+			}
+		}
 		// Each recipient is told once per item (reported): a recipient
 		// added later gets what waits now, and one that could not be told
 		// keeps its items pending, whatever happened with the others.
-		p := plan{to: to, list: list}
+		p := plan{to: to, list: list, nativeKey: nativeKey}
 		listed := map[string]bool{}
 		for _, it := range list {
 			listed[it.ID] = true
@@ -371,6 +384,9 @@ func (a *Agent) sendReviewNoticeInPass(ctx context.Context) {
 				a.wakeWorker()
 			}
 			continue
+		}
+		if p.nativeKey != "" && (!nativeOwner || reportKey != p.nativeKey) {
+			continue // owner authority changed while the private snapshot was prepared
 		}
 		claim := func(tx *sql.Tx, _ string) error {
 			// A grant may have changed while this snapshot was prepared. A

@@ -210,7 +210,12 @@ func TestBrowserGroupWireMatchesGo(t *testing.T) {
 	s2.By = browser.Fingerprint()
 	s2.Title = "Browser <&> Ю"
 	signed = w.ok(map[string]any{"op": "sign", "type": "state", "json": marshal(t, s2)})
+	previousState := marshal(t, s1)
+	s2.Sig = nil // decoding the new signature must not reuse the predecessor's backing array
 	json.Unmarshal([]byte(signed["json"].(string)), &s2)
+	if marshal(t, s1) != previousState {
+		t.Fatal("browser signing changed the previous state")
+	}
 	if signed["canonical"] != string(s2.Canonical()) {
 		t.Fatal("browser state canonical differs")
 	}
@@ -231,7 +236,12 @@ func TestBrowserGroupWireMatchesGo(t *testing.T) {
 	browserRoot.Creator = protocol.ConvCreator{Person: browserRoster.Person, Roster: browserRoster.Hash(), Address: browser.Address, Fingerprint: browser.Fingerprint()}
 	browserRoot.Admins = []string{browserRoster.Person}
 	signed = w.ok(map[string]any{"op": "sign", "type": "root", "json": marshal(t, browserRoot)})
+	previousRoot := marshal(t, root)
+	browserRoot.Sig = nil
 	json.Unmarshal([]byte(signed["json"].(string)), &browserRoot)
+	if marshal(t, root) != previousRoot {
+		t.Fatal("browser signing changed the original root")
+	}
 	if err := browserRoot.Verify(browser.SignKey); err != nil {
 		t.Fatal(err)
 	}

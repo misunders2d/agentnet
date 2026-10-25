@@ -186,7 +186,7 @@ func (a *Agent) SetAlertPrefs(p AlertPrefs) error {
 // AlertPresented records that the local page presented these messages of
 // conv (visible, focused, that conversation, its newest message in view):
 // the pending alert whose newest message is among them is cancelled.
-// Nothing else cancels an alert.
+// Effective read/attention state is checked again when the alert is due.
 func (a *Agent) AlertPresented(conv string, ids []string) error {
 	if (!protocol.ValidHash(conv) && !protocol.ValidID(conv)) || len(ids) == 0 || len(ids) > protocol.MaxNotifySeenIDs {
 		return fmt.Errorf("alerts: a conversation and 1-%d message ids", protocol.MaxNotifySeenIDs)
@@ -301,6 +301,10 @@ func (a *Agent) alertLoop(ctx context.Context, wake <-chan struct{}) {
 // eligible, and returns the next deadline (zero: none). The alerts are
 // removed before the notification is asked for.
 func (a *Agent) showDueAlerts(now time.Time) (time.Time, error) {
+	attentionArgs, err := a.store.arrivalArgs()
+	if err != nil {
+		return time.Time{}, err
+	}
 	tx, err := a.store.db.Begin()
 	if err != nil {
 		return time.Time{}, err
@@ -310,7 +314,8 @@ func (a *Agent) showDueAlerts(now time.Time) (time.Time, error) {
 		EXISTS (SELECT 1 FROM config WHERE k = 'alerts' AND v = 'on')
 		AND l.conv NOT IN (`+mutedChatConvs+`)
 		AND (EXISTS (SELECT 1 FROM group_context WHERE conv=l.conv) OR EXISTS (SELECT 1 FROM person_devices d JOIN persons p ON p.person = d.person WHERE d.address = l.sender AND p.state = ?) OR (l.conv=l.sender AND EXISTS(SELECT 1 FROM inbox i JOIN peers p ON p.address=i.sender WHERE i.id=l.last_id AND p.pending IS NULL)))
-		FROM alerts l WHERE l.due_ms <= ?`, personPinned, now.UnixMilli())
+		AND EXISTS (SELECT 1 FROM inbox i WHERE i.id=l.last_id AND `+arrivalEligible+`)
+		FROM alerts l WHERE l.due_ms <= ?`, append(append([]any{personPinned}, attentionArgs...), now.UnixMilli())...)
 	if err != nil {
 		return time.Time{}, err
 	}

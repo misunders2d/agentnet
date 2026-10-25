@@ -305,7 +305,10 @@ function PendingTopic({ open, onOpenChange, topic }: { open: boolean; onOpenChan
         const m = view?.messages?.find(m => m.id === id);
         return <Button key={id} variant="ghost" className="h-auto min-h-12 justify-start whitespace-normal text-left" onClick={() => {
           onOpenChange(false);
-          void store.openMessage(id, topic.conv ? { conv: topic.conv } : undefined);
+          // The loaded direct topic already proves this request's scope. Its
+          // child ID is not a conversation root and needs no global lookup.
+          if (!topic.conv && view?.id === topic.id && m && !m.deleted) void store.open({ kind: "thread", id: topic.id, peer: topic.peer, focus: id });
+          else void store.openMessage(id, topic.conv ? { conv: topic.conv } : undefined);
         }}>
           <span><span className="block text-[12px] text-text-2">Open pending {m?.kind === "task" ? "task" : m?.kind === "question" ? "question" : "item"} {i + 1}</span>
             <span>{m ? firstLine(shownText(m)) || "Message without text" : "Open request"}</span>

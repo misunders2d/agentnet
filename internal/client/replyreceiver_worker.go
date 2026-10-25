@@ -213,18 +213,30 @@ func (a *Agent) claimReplyReceiverJob(available ...func(dbq, *ExecutorStamp) (bo
 }
 
 func (a *Agent) receiverStop(j job) string {
-	b, err := replyReceiverIn(a.store.db, j.Receiver.ID)
-	if err == nil {
-		err = groupReceiverInput(a.store.db, b, j.ID)
+	return a.receiverStopIn(a.store.db, j)
+}
+
+// The same current local delegation must hold while a native callback is
+// claimed in its transaction. Private group/remote authority is reloaded here.
+func (a *Agent) receiverStopIn(q dbq, j job) string {
+	if j.Receiver == nil {
+		return "selected reply binding is unavailable"
+	}
+	b, err := replyReceiverIn(q, j.Receiver.ID)
+	if err == nil && (b.Conv != j.Conv || b.Conv != j.Receiver.Conv || b.RequestRef != j.Receiver.RequestRef || j.Kind != b.Receiver.Mode || !reflect.DeepEqual(b.Receiver, j.Receiver.Receiver) || !reflect.DeepEqual(b.Executor, j.Receiver.Executor)) {
+		err = errors.New("selected reply delegation changed; original run retained")
 	}
 	if err == nil {
-		err = a.receiverSnapshot(a.store.db, b)
+		err = groupReceiverInput(q, b, j.ID)
 	}
 	if err == nil {
-		key, ok, e := pinnedKey(a.store.db, j.From)
+		err = a.receiverSnapshot(q, b)
+	}
+	if err == nil {
+		key, ok, e := pinnedKey(q, j.From)
 		var pending sql.NullString
 		if e == nil {
-			e = a.store.db.QueryRow(`SELECT pending FROM peers WHERE address=?`, j.From).Scan(&pending)
+			e = q.QueryRow(`SELECT pending FROM peers WHERE address=?`, j.From).Scan(&pending)
 		}
 		err = e
 		if err == nil && (!ok || key.Fingerprint() != j.Key || pending.Valid) {

@@ -50,8 +50,19 @@ func (a *Agent) nativeOwnerHumanIn(q dbq, address, key string) (bool, error) {
 }
 
 func (a *Agent) nativeJobCurrentIn(q dbq, j job, attempt int64) bool {
+	if j.nativeAttempt != 0 && j.nativeAttempt != attempt {
+		return false
+	}
 	var current bool
-	if q.QueryRow(`SELECT state=? AND attempts=? AND replica=0 AND receiver_route IS NULL
+	if j.Receiver != nil {
+		// The wire turn remains the peer's signed answer/result. Execution
+		// authority comes only from this exact accepted local receiver binding.
+		if q.QueryRow(`SELECT state=? AND attempts=? AND replica=0 AND verified_by=? AND sender=?
+ AND EXISTS(SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id AND x.binding=? AND x.state='accepted')
+ FROM inbox WHERE id=?`, stateRunning, attempt, j.Key, j.From, j.Receiver.ID, j.ID).Scan(&current) != nil || !current || a.receiverStopIn(q, j) != "" {
+			return false
+		}
+	} else if q.QueryRow(`SELECT state=? AND attempts=? AND replica=0 AND receiver_route IS NULL
  AND kind IN ('question','task') AND verified_by=? AND sender=? AND coalesce(conv,'')=? AND coalesce(pid,'')=?
  AND NOT EXISTS(SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id)
  FROM inbox WHERE id=?`, stateRunning, attempt, j.Key, j.From, j.Conv, j.PID, j.ID).Scan(&current) != nil || !current {
@@ -125,10 +136,15 @@ func (a *Agent) awaitNativeRequest(ctx context.Context, j job, c nativeCallback)
 	c.View.Attempt = attempt
 	if j.Target != nil {
 		c.View.AgentID = j.Target.AgentID
+	} else if j.Receiver != nil && j.Receiver.Executor != nil {
+		c.View.AgentID = j.Receiver.Executor.AgentID
 	}
 	view, _ := json.Marshal(c.View)
 	// Capture only existing authority fields, never another copy of the body/files.
 	bound := job{ID: j.ID, From: j.From, Key: j.Key, Kind: j.Kind, Conv: j.Conv, PID: j.PID, Local: j.Local, Target: j.Target, PermissionPerson: j.PermissionPerson, OwnHumanRequest: j.OwnHumanRequest}
+	if j.Receiver != nil {
+		bound.Receiver = &ReplyReceiverBinding{ID: j.Receiver.ID, Conv: j.Receiver.Conv, RequestRef: j.Receiver.RequestRef, Receiver: j.Receiver.Receiver, Executor: j.Receiver.Executor}
+	}
 	boundJSON, _ := json.Marshal(bound)
 	if _, e := a.store.db.Exec(`INSERT INTO native_requests(token,request,attempt,deadline,rpc,method,params,job,view,state) VALUES(?,?,?,?,?,?,?,?,?, 'pending')`, c.View.Token, j.ID, attempt, c.View.Expires, string(c.ID), c.View.Method, string(c.Params), string(boundJSON), string(view)); e != nil {
 		return nil, e
@@ -215,8 +231,13 @@ func (a *Agent) nativeHandoverCurrent(j job, c nativeCallback) bool {
 }
 
 func (a *Agent) nativeRequestFor(request string) *NativeRequest {
-	var body string
-	if a.store.db.QueryRow(`SELECT n.view FROM native_requests n JOIN inbox i ON i.id=n.request WHERE n.request=? AND n.state='pending' AND (n.deadline=0 OR n.deadline>?) AND i.state='running' AND i.attempts=n.attempt ORDER BY n.rowid DESC LIMIT 1`, request, time.Now().UnixMilli()).Scan(&body) != nil {
+	var body, bound string
+	var attempt int64
+	if a.store.db.QueryRow(`SELECT n.view,n.job,n.attempt FROM native_requests n JOIN inbox i ON i.id=n.request WHERE n.request=? AND n.state='pending' AND (n.deadline=0 OR n.deadline>?) AND i.state='running' AND i.attempts=n.attempt ORDER BY n.rowid DESC LIMIT 1`, request, time.Now().UnixMilli()).Scan(&body, &bound, &attempt) != nil {
+		return nil
+	}
+	var j job
+	if json.Unmarshal([]byte(bound), &j) != nil || j.ID != request || !a.nativeJobCurrentIn(a.store.db, j, attempt) {
 		return nil
 	}
 	var v NativeRequest
@@ -224,6 +245,32 @@ func (a *Agent) nativeRequestFor(request string) *NativeRequest {
 		return nil
 	}
 	return &v
+}
+
+// These rows are deliberately absent from ordinary Review and operator
+// reports. Only a current owner-human recipient may receive the whole card.
+func (a *Agent) receiverNativeReportItems() []ReportItem {
+	rows, err := a.store.db.Query(`SELECT i.id,i.sender,coalesce(i.verified_by,''),json_extract(b.receiver,'$.mode'),i.last_attempt_at,i.attempts,b.conv!=''
+ FROM inbox i JOIN reply_receiver_inputs x ON x.inbox_id=i.id JOIN reply_receivers b ON b.id=x.binding
+ WHERE i.state='running' AND x.state='accepted' AND EXISTS(SELECT 1 FROM native_requests n WHERE n.request=i.id AND n.attempt=i.attempts AND n.state='pending' AND (n.deadline=0 OR n.deadline>?))`, time.Now().UnixMilli())
+	if err != nil {
+		return nil
+	}
+	var items []ReportItem
+	for rows.Next() {
+		it := ReportItem{State: stateRunning, Blocker: BlockerNeedsHuman}
+		if rows.Scan(&it.ID, &it.From, &it.Key, &it.Kind, &it.Since, &it.Attempt, &it.Conv) == nil {
+			items = append(items, it)
+		}
+	}
+	rows.Close()
+	var current []ReportItem
+	for _, it := range items {
+		if it.Native = a.nativeRequestFor(it.ID); it.Native != nil {
+			current = append(current, it)
+		}
+	}
+	return current
 }
 
 // Local native cards use the same report DTO and decision validator, scoped to

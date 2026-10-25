@@ -34,6 +34,9 @@ if(pendingMode){topics[0].pending=true;topics[0].waiting=false;topics[0].unconfi
 const overview={version:'fixture',topic_list:true,seq:1,me:{address:me.address,fingerprint:me.fingerprint},person:me,persons:true,agents:true,files:false,controls:false,role:'person',people:[peer],review:[],links:[],reminders:[],threads:kind==='agent'?topics:[],topics:kind==='agent'?[{peer:peer.address,total:4,archived:searchMode?1:0,archived_unread:0,latest:topics[0]}]:[],dms:kind==='agent'?[]:[{id:conv,kind:thread.kind,title:thread.title,peer:thread.peer,count:5,unread:0}],directory:{current:true,members:[{address:me.address,presence:'connected'},{address:peer.address,presence:'connected'}]},quarantine:[]};
 if(directMode){overview.agent_devices=[peer.address];Object.assign(overview.topics[0],piBinding);overview.topics.unshift({peer:peer.address,...claudeBinding,total:1,archived:3,archived_unread:0,latest:topics[4]});}
 if(pendingMode)overview.directory.members[1].presence='offline';
+// A loaded direct topic must keep its binding when opening a child request,
+// even while another admitted chat is unavailable.
+if(pendingMode&&kind==='agent')overview.dms=[{id:conv,kind:'dm',peer,count:1,unread:0}];
 if(stopMode){
  const pid='9'.repeat(32),m=asked({...message(0),kind:'question',body:'Exact remote running request',topic:'',pid,target:{address:peer.address,fingerprint:peer.fingerprint},exec:{host:peer.address,state:'running',attempt:2,at:Math.floor(Date.now()/1000)},stop:{host:peer.address,id:topics[0].id,key:me.fingerprint,attempt:2,pending:sessionStorage.getItem('stopQueued')==='1'}});
  thread.messages=[m];if(kind!=='agent')thread.agents=[{pid,host:{...me,address:peer.address},name:'Own agent',state:'active',state_text:'Active',host_here:false,inviter:me,shared:[],tasks_from:[],held:0,missing:0,invited:at,can_ask:true,can_decide:false,can_dismiss:false}];
@@ -61,7 +64,7 @@ const host={version:1,platform:'daemon',workspace:{id:'default',name:'P11 local 
  if(stopMode&&p==='/api/operator/decide'){sessionStorage.setItem('stopQueued','1');if(stopResultMode){sessionStorage.setItem('stopDecision',body.send_id);sessionStorage.setItem('stopDecisionCount',String(Number(sessionStorage.getItem('stopDecisionCount')||0)+1));}thread.messages[0].stop.pending=true;changed?.({type:'change',seq:++overview.seq});return {note:'Stop queued; host offline.'};}
  if(p.startsWith('/api/overview'))return structuredClone(overview);
  if(draftsMode&&p.startsWith('/api/dm?')&&url.searchParams.get('id')==='d'.repeat(64))return {...thread,id:'d'.repeat(64),messages:[],topics:[]};
- if(p.startsWith('/api/dm?'))return structuredClone(importMode&&url.searchParams.get('id')===destination.id?destination:thread);
+ if(p.startsWith('/api/dm?')){if(pendingMode&&kind==='agent'&&fixture.holdUnrelatedDM)await new Promise(resolve=>fixture.releaseUnrelatedDM=resolve);return structuredClone(importMode&&url.searchParams.get('id')===destination.id?destination:thread);}
  if(directMode&&p.startsWith('/api/thread?')){const id=url.searchParams.get('id'),m=fixture.directMessages.find(m=>m.id===id),topic=topics.find(t=>t.id===(m?.placement||id));return {...thread,id,topic:structuredClone(topic),messages:structuredClone(fixture.directMessages.filter(m=>m.placement===topic.id))};}
  if(directMode&&p.startsWith('/api/topics?')){const fields=['agent_host','agent_key','agent_id'],rows=topics.filter(t=>t.count>0&&t.peer===url.searchParams.get('peer')&&fields.every(key=>!url.searchParams.has(key)||(t[key]||'')===url.searchParams.get(key)));return {topics:structuredClone(rows),matched:rows.length};}
  if(p.startsWith('/api/thread?')){if(pendingMode||stopMode)return structuredClone(thread);const t=topics.find(t=>t.id===url.searchParams.get('id'))||topics[0];return {id:t.id,peer:peer.address,key:{pinned:'peer-key'},approved:false,task_grant:'',topic:structuredClone(t),messages:[t.id==='f'.repeat(32)?window.freshMessage:{...message(topics.indexOf(t))}]};}
@@ -445,6 +448,8 @@ const server = http.createServer((req, res) => {
           const current=()=>page.locator('[data-topic="'+ '1'.repeat(32)+'"][aria-current="true"]');
           const label=String(await current().getAttribute('aria-label'));
           assert(label.includes('No result')&&!label.includes('Waiting'),tag+': pending with no current executor word is not shown as Waiting: '+label);
+          const composer=page.locator('[data-part="composer"]').getByRole('textbox');
+          await composer.fill('Draft survives pending request navigation');
           await current().click();
           await page.getByRole('menuitem',{name:'Show pending requests (2)',exact:true}).click();
           const pending=page.getByRole('dialog',{name:'Pending requests',exact:true});
@@ -458,9 +463,22 @@ const server = http.createServer((req, res) => {
           assert.match(text,/last known · on [^\n]* · not connected now/,tag+': the relay lists the executor offline');
           assert(!String(await pending.innerText()).includes('vitalii/desktop'),tag+': friendly host replaces raw address footer');
           await shot('pending-list');
+          const before=await page.evaluate(()=>{fixture.holdUnrelatedDM=true;return fixture.requests.length;});
           await pending.getByRole('button',{name:/Open pending question 2 Second pending question/}).click();
           await pending.waitFor({state:'hidden'});
+          if(kind==='agent'){
+            await page.waitForFunction(before=>{const root=document.querySelector('#skin').shadowRoot;return root.querySelector('[data-mid="'+ 'b'.repeat(32)+'"]')?.getAnimations().length>0||fixture.requests.slice(before).some(r=>r.path.startsWith('/api/dm?'));},before);
+            const requests=await page.evaluate(before=>fixture.requests.slice(before),before);
+            assert(!requests.some(r=>r.path.startsWith('/api/dm?')),tag+': known direct request must not read an unrelated DM');
+            const threads=requests.filter(r=>r.path.startsWith('/api/thread?'));
+            assert.equal(threads.length,1,tag+': refresh only the bound direct topic once');
+            assert.equal(new URL(threads[0].path,'http://fixture').searchParams.get('id'),'1'.repeat(32),tag+': child request never substitutes its ID for the direct topic root');
+          }
           await page.waitForFunction(()=>document.querySelector('#skin').shadowRoot.querySelector('[data-mid="'+ 'b'.repeat(32)+'"]')?.getAnimations().length>0);
+          assert.equal(await current().count(),1,tag+': original exact topic remains selected');
+          assert.equal(await page.locator('[data-mid="'+ 'b'.repeat(32)+'"]').getAttribute('data-from'),'me',tag+': selected outgoing request keeps its author and direction');
+          assert.equal(await composer.inputValue(),'Draft survives pending request navigation',tag+': draft remains in the bound conversation');
+          await shot('pending-focused');
           assert.equal((await page.evaluate(()=>fixture.requests.filter(r=>r.body&&r.path!='/api/refresh'&&!(r.path==='/api/act'&&r.body.do==='read')))).length,0,tag+': navigation sends no grants/retries/cancel/topic decisions');
           await page.evaluate(()=>resolvePending());
           await page.waitForTimeout(100);

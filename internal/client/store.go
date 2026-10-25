@@ -1399,7 +1399,8 @@ func (s *store) finishJob(id, state, detail string) error {
 // waiting here.
 func (s *store) unnotified() (ids []string, total int, err error) {
 	args := append(append([]any{}, alertReviewStates...), envelope.KindMessage, envelope.StatusReviewNotice)
-	rows, err := s.db.Query(`SELECT id, notified FROM inbox WHERE `+inAlertReview+` AND NOT (`+receivedNotice+`) AND (state != 'running' OR detail LIKE 'Seems stuck:%' OR EXISTS(SELECT 1 FROM native_requests n WHERE n.request=inbox.id AND n.attempt=inbox.attempts AND n.state='pending' AND (n.deadline=0 OR n.deadline>unixepoch('subsec')*1000)))`, args...)
+	rows, err := s.db.Query(`SELECT id, notified FROM inbox WHERE (`+inAlertReview+` AND NOT (`+receivedNotice+`) AND (state != 'running' OR detail LIKE 'Seems stuck:%' OR EXISTS(SELECT 1 FROM native_requests n WHERE n.request=inbox.id AND n.attempt=inbox.attempts AND n.state='pending' AND (n.deadline=0 OR n.deadline>unixepoch('subsec')*1000))))
+ OR (state='running' AND replica=0 AND EXISTS(SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id AND x.state='accepted') AND EXISTS(SELECT 1 FROM native_requests n WHERE n.request=inbox.id AND n.attempt=inbox.attempts AND n.state='pending' AND (n.deadline=0 OR n.deadline>unixepoch('subsec')*1000)))`, args...)
 	if err != nil {
 		return nil, 0, err
 	}

@@ -1,10 +1,66 @@
 package client
 
 import (
+	"fmt"
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"testing"
 	"time"
 )
+
+func TestNativeChatAlertUsesCurrentReadState(t *testing.T) {
+	for _, linkedRead := range []bool{false, true} {
+		for _, laterUnread := range []bool{false, true} {
+			t.Run(fmt.Sprintf("linked=%t/later-unread=%t", linkedRead, laterUnread), func(t *testing.T) {
+				w, conv, n, stop := alertWorld(t, time.Hour)
+				reader := w.bob
+				if linkedRead {
+					reader = linked(t, w.bob)
+				}
+				allowAliceAt(t, w)
+				const body = "read before the native alert is due"
+				sendAt(t, w.alice, w.bob, conv, ConvOutgoing{Body: body})
+				eventually(t, "reader receives original", func() bool {
+					messages, err := reader.ConversationMessages(conv)
+					if err != nil {
+						return false
+					}
+					for _, m := range messages {
+						if m.Body == body {
+							return true
+						}
+					}
+					return false
+				})
+				id, _ := readState(t, reader, conv, body)
+				if err := reader.MarkRead([]string{id}); err != nil {
+					t.Fatal(err)
+				}
+				eventually(t, "read state reaches notifier", func() bool {
+					_, read := readState(t, w.bob, conv, body)
+					return read
+				})
+				if laterUnread {
+					sendAt(t, w.alice, w.bob, conv, ConvOutgoing{Body: "newer unseen message"})
+				}
+				stop()
+				before := n.count()
+				if before != 0 {
+					t.Fatal("notification appeared before controlled due processing")
+				}
+				if _, err := w.bob.showDueAlerts(time.Now().Add(2 * time.Hour)); err != nil {
+					t.Fatal(err)
+				}
+				want := before
+				if laterUnread {
+					want++
+				}
+				if got := n.count(); got != want {
+					t.Fatalf("notifications=%d, want %d", got, want)
+				}
+			})
+		}
+	}
+}
 
 func TestNativeChatAlertPreservesSuppression(t *testing.T) {
 	w, conv, n, stop := alertWorld(t, 30*time.Second)
