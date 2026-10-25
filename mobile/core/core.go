@@ -29,6 +29,9 @@ type Session struct {
 	content           func(uint64, uint64)
 	contentGeneration uint64
 	notify            func(client.NativeNotification)
+	notifications     []client.NativeNotification
+	restoredNotices   []phoneNotice
+	notices           map[string]phoneNotice // existing event lane only; no preview content
 	cancel            context.CancelFunc
 	done              chan struct{}
 	closed            bool
@@ -110,11 +113,11 @@ func newSession(a *client.Agent) (*Session, error) {
 	s.run = func(ctx context.Context) error {
 		return a.Run(ctx, client.RunOptions{HumanOnly: true, NotifyContent: func(notification client.NativeNotification) {
 			s.mu.Lock()
-			fn := s.notify
-			s.mu.Unlock()
-			if fn != nil {
-				fn(notification)
+			if !s.closed && s.notify != nil {
+				s.notifications = append(s.notifications, notification)
 			}
+			s.mu.Unlock()
+			s.signal()
 		}})
 	}
 	go s.events(ctx)
@@ -137,10 +140,28 @@ func (s *Session) events(ctx context.Context) {
 		}
 		revision, changed := s.a.ViewChanges()
 		hook, currentGeneration := s.content, s.contentGeneration
+		notify, notifications := s.notify, s.notifications
+		restored := s.restoredNotices
+		s.notifications = nil
+		s.restoredNotices = nil
 		s.mu.Unlock()
+		// Startup imports precede new displays; they never replace a notice
+		// already emitted by this Session, or recreate a user-dismissed note.
+		s.importNotices(restored)
+		if hook != nil && len(restored) > 0 {
+			content, generation = revision.Content, currentGeneration
+			hook(content, generation)
+		}
+		// Native display and exact dismissals share this lane. An obsolete
+		// snapshot cannot cancel a newer notification for the same OS tag.
+		if notify != nil {
+			for _, notification := range notifications {
+				notify(notification)
+			}
+		}
 		// This one existing event lane serializes overview reads. Recheck before
 		// waiting so a change during a slow hook is never lost or labelled current.
-		if hook != nil && (generation != currentGeneration || content != revision.Content) {
+		if hook != nil && (generation != currentGeneration || content != revision.Content || len(notifications) > 0) {
 			content, generation = revision.Content, currentGeneration
 			hook(content, generation)
 		}

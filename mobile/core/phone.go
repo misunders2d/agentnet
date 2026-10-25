@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"github.com/misunders2d/agentnet/internal/protocol"
 	"github.com/misunders2d/agentnet/internal/ui"
 )
 
@@ -11,7 +10,6 @@ import (
 type phoneProvider struct {
 	*ui.Live
 	available func() bool
-	dismiss   func(string)
 	address   string
 	session   *Session
 }
@@ -24,13 +22,9 @@ func (p *phoneProvider) Act(x ui.Action) (string, error) {
 	case ui.DoAccept, ui.DoAcceptAlways, ui.DoApprove, ui.DoGrantTasks, ui.DoContinue, ui.DoCancel:
 		return "", phoneUnsupported()
 	}
-	note, err := p.Live.Act(x)
-	if err == nil && x.Do == ui.DoRead && p.dismiss != nil {
-		for _, id := range x.IDs {
-			p.dismiss("msg=" + id + "&dir=in")
-		}
-	}
-	return note, err
+	// Only the resulting current state can clear a native notice. A successful
+	// stale read may leave deliberate unread or a pending decision intact.
+	return p.Live.Act(x)
 }
 func (p *phoneProvider) SetResponder(ui.ResponderChange) (string, error) {
 	return "", phoneUnsupported()
@@ -111,21 +105,4 @@ func (p *phoneProvider) linkDiagnostics(v *ui.Overview) {
 		}
 		v.Link.Detail += "The connection stopped: " + failure
 	}
-}
-
-// A notification already displayed by Android disappears once the exact
-// conversation/message is actually presented, not merely selected.
-func (p *phoneProvider) NotifySeen(conv string, ids []string) error {
-	if err := p.Live.NotifySeen(conv, ids); err != nil {
-		return err
-	}
-	if p.dismiss != nil && len(ids) > 0 {
-		if protocol.ValidHash(conv) {
-			p.dismiss("conv=" + conv)
-		}
-		for _, id := range ids {
-			p.dismiss("msg=" + id + "&dir=in")
-		}
-	}
-	return nil
 }

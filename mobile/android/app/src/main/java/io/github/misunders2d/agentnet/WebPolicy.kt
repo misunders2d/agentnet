@@ -1,6 +1,8 @@
 package io.github.misunders2d.agentnet
 
 import java.net.URI
+import org.json.JSONArray
+import org.json.JSONObject
 
 /** Only the assigned loopback origin may run inside the app or call native code. */
 class WebPolicy(val origin: String) {
@@ -84,3 +86,71 @@ class WebPolicy(val origin: String) {
         }.getOrNull()
     }
 }
+
+internal const val NOTICE_METADATA_EXTRA = "io.github.misunders2d.agentnet.notice.v1"
+internal const val NOTICE_METADATA_MAX = 32768
+internal const val NOTICE_RESTORE_CHUNK = 32
+
+// Content-free host metadata only. Go remains the unread/reminder/Review engine.
+internal data class ActivityNoticeRecord(val workspace: String, val tag: String, val metadata: String, val instance: String)
+
+internal fun activityNoticeRecord(ownPackage: String, packageName: String, channel: String, id: Int,
+    tag: String?, metadata: String?): ActivityNoticeRecord? = runCatching {
+    require(packageName == ownPackage && channel == ACTIVITY_CHANNEL && id == 0)
+    require(tag != null && tag.length <= 2048)
+    val workspace = tag.split('&').single { it.startsWith("workspace=") }.substringAfter('=')
+    require(WebPolicy.notificationTag(workspace, tag) == tag)
+    if (metadata == null) return@runCatching ActivityNoticeRecord(workspace, tag, "", "")
+    require(metadata.toByteArray(Charsets.UTF_8).size <= NOTICE_METADATA_MAX)
+    val value = JSONObject(metadata)
+    require(value.keys().asSequence().toSet().all { it in setOf("v", "workspace", "tag", "instance", "category", "ref", "reminders") })
+    require(value.get("v") == 1 && value.get("workspace") == workspace && value.get("tag") == tag)
+    val hexID = Regex("[0-9a-f]{32}")
+    val hash = Regex("[0-9a-f]{64}")
+    val fingerprint = Regex("[0-9a-f]{8}(-[0-9a-f]{8}){3}")
+    val instance = value.get("instance") as String
+    require(instance.matches(hexID))
+    val category = value.get("category") as String
+    val ref = if (value.has("ref")) value.getJSONObject("ref") else null
+    if (ref != null) {
+        require(ref.keys().asSequence().toSet() == setOf("conv", "fingerprint", "lid"))
+        require((ref.get("conv") as String).let { it.isEmpty() || it.matches(hash) })
+        require((ref.get("fingerprint") as String).matches(fingerprint) && (ref.get("lid") as String).matches(hexID))
+    }
+    val reminders = if (value.has("reminders")) value.getJSONArray("reminders") else JSONArray()
+    require(reminders.length() <= 256)
+    val seen = mutableSetOf<String>()
+    for (index in 0 until reminders.length()) {
+        val reminder = reminders.getJSONObject(index)
+        require(reminder.keys().asSequence().toSet() == setOf("message", "revision"))
+        val message = reminder.get("message") as String
+        val revision = reminder.get("revision")
+        require(message.matches(hexID) && seen.add(message) && (revision is Int || revision is Long))
+        require((revision as Number).toLong() in 1..9007199254740991L)
+    }
+    require(when(category) {
+        "activity" -> ref != null && reminders.length() == 0
+        "reminder" -> reminders.length() > 0
+        "reminder-summary" -> ref == null && reminders.length() == 0
+        "decision", "security", "unknown" -> reminders.length() == 0
+        else -> false
+    })
+    ActivityNoticeRecord(workspace, tag, metadata, instance)
+}.getOrNull()
+
+internal fun activityRestoreChunks(records: List<ActivityNoticeRecord>, unknown: Int, known: Boolean = true): List<String> {
+    require(unknown in 0..1000000 && (known || records.isEmpty()))
+    val chunks = if (records.isEmpty()) listOf(emptyList()) else records.chunked(NOTICE_RESTORE_CHUNK)
+    return chunks.mapIndexed { index, chunk -> JSONObject().put("v", 1).put("known", known)
+        .put("unknown", if(index == 0) unknown else 0).put("entries", JSONArray().apply {
+            chunk.forEach { record -> put(JSONObject().put("workspace", record.workspace).put("tag", record.tag).put("metadata", record.metadata)) }
+        }).toString() }
+}
+
+// The main lane's latest emission also fences an OS snapshot still showing the
+// older object after notify(). Never cancel/repost that stale snapshot.
+internal fun activityInstanceMatches(record: ActivityNoticeRecord, expected: String, latest: Map<String, String>): Boolean =
+    record.instance == expected && (!latest.containsKey(record.tag) || latest[record.tag] == expected)
+
+internal fun activityBadgeEligible(record: ActivityNoticeRecord, dismissed: Map<String, String>, latest: Map<String, String>): Boolean =
+    dismissed[record.tag] != record.instance && activityInstanceMatches(record, record.instance, latest)

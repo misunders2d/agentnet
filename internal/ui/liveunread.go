@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/client"
+	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
 // UnreadProvider is optional: absent support means unknown, not zero unread.
@@ -59,6 +60,35 @@ type unreadCursor struct {
 	V   int    `json:"v"`
 	At  int64  `json:"at"`
 	Key string `json:"key"`
+}
+
+// UnreadNotificationRefs checks only currently displayed native notice targets
+// against the overview's compact index. It neither builds a view nor hydrates
+// previews. The caller retries on its existing content event if the view moved.
+func (l *Live) UnreadNotificationRefs(content uint64, refs []protocol.ReadRef) (map[protocol.ReadRef]bool, error) {
+	if len(refs) > protocol.MaxNotifySeenIDs {
+		return nil, Refuse("Too many notification targets.")
+	}
+	wanted := make(map[protocol.ReadRef]bool, len(refs))
+	for _, ref := range refs {
+		if ref.Conv != "" && !protocol.ValidHash(ref.Conv) || !protocol.ValidFingerprint(ref.Fingerprint) || !protocol.ValidID(ref.LID) {
+			return nil, Refuse("That notification target is not valid.")
+		}
+		wanted[ref] = false
+	}
+	l.overviewMu.Lock()
+	defer l.overviewMu.Unlock()
+	revision, _ := l.a.ViewChanges()
+	if revision.Content != content || l.unread == nil || l.unread.content != content {
+		return nil, Refuse("Notification state changed.")
+	}
+	for _, row := range l.unread.rows {
+		ref := protocol.ReadRef{Conv: row.Conv, Fingerprint: row.Author, LID: row.LID}
+		if _, selected := wanted[ref]; selected {
+			wanted[ref] = true
+		}
+	}
+	return wanted, nil
 }
 
 func unreadKey(r UnreadRow) string {

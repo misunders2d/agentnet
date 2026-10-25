@@ -76,10 +76,10 @@ adb -s "$serial" shell chmod -R go-rwx "$app_data/no_backup"
 adb -s "$serial" shell pm grant "$package" android.permission.POST_NOTIFICATIONS
 instrument() {
   local mode=$1 output=$2 suite=${3:-} status=0 seconds=240
-  local -a args=(-e mode "$mode")
+  local -a args=(-e mode "$mode" -e ownedFixture 1)
   if [[ $mode == latency ]]; then
     seconds=150
-    args+=(-e ownedFixture 1 -e latencySuite "$suite")
+    args+=(-e latencySuite "$suite")
   fi
   timeout --kill-after=5s "${seconds}s" adb -s "$serial" shell am instrument -w -r "${args[@]}" "$runner" > "$output" 2>&1 || status=$?
   if (( status == 124 || status == 137 )); then

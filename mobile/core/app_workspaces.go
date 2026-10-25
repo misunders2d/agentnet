@@ -25,27 +25,25 @@ func (a *App) phone(id string, s *Session) *phoneProvider {
 		s.live.SetApp(true)
 	}
 	s.contentGeneration++
-	s.content = func(content, generation uint64) { a.refreshUnread(id, s, content, generation, s.unreadOverview) }
+	generation := s.contentGeneration
+	s.content = func(content, generation uint64) {
+		if view, current := a.refreshUnread(id, s, content, generation, s.unreadOverview); current {
+			a.refreshNotices(id, s, content, generation, view)
+		}
+	}
 	s.notify = func(notification client.NativeNotification) {
 		a.mu.Lock()
 		n := a.notifier
-		closed := a.closed
+		current := a.phoneCurrentLocked(id, s, generation)
 		a.mu.Unlock()
-		if n != nil && !closed {
-			n.Notify(id, notification.Fragment, notification.Title, notification.Body)
+		if n != nil && current {
+			metadata := s.trackNotice(id, notification)
+			n.Notify(id, notification.Fragment, notification.Title, notification.Body, metadata)
 		}
 	}
 	s.mu.Unlock()
 	s.signal()
-	return &phoneProvider{Live: s.live, available: a.notificationsAvailable, address: s.a.Address, session: s,
-		dismiss: func(fragment string) {
-			a.mu.Lock()
-			n, closed := a.notifier, a.closed
-			a.mu.Unlock()
-			if n != nil && !closed {
-				n.Dismiss(id, fragment)
-			}
-		}}
+	return &phoneProvider{Live: s.live, available: a.notificationsAvailable, address: s.a.Address, session: s}
 }
 func (a *App) messenger(defaultSession *Session) (handler http.Handler, failure error) {
 	defer func() {

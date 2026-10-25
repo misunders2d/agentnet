@@ -1,7 +1,9 @@
 package client
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"strings"
 	"unicode"
 
@@ -11,7 +13,38 @@ import (
 
 // NativeNotification is locally decrypted display data. It never goes to the
 // relay or a push provider. The platform owns lock-screen privacy and consent.
-type NativeNotification struct{ Fragment, Title, Body string }
+type NativeNotification struct {
+	Fragment, Title, Body string
+	// Process-local notice identity, never preview text or a wire contract.
+	Category  string           `json:"-"`
+	ReadRef   protocol.ReadRef `json:"-"`
+	Reminders []NativeReminder `json:"-"`
+}
+
+// NativeReminder names the existing local generation actually emitted.
+type NativeReminder struct {
+	Message  string `json:"message"`
+	Revision int64  `json:"revision"`
+}
+
+// NativeNotificationRef resolves only an exact stored message and direction.
+// Legacy OS tags have no cause/generation; this supplies identity, never one.
+func (a *Agent) NativeNotificationRef(id, direction string) (protocol.ReadRef, error) {
+	var ref protocol.ReadRef
+	if !protocol.ValidID(id) || direction != "in" && direction != "out" {
+		return ref, ErrNoMessage
+	}
+	var err error
+	if direction == "in" {
+		err = a.store.db.QueryRow(`SELECT coalesce(conv,''),coalesce(verified_by,''),coalesce(nullif(lid,''),id) FROM inbox WHERE id=? AND ref_id IS NULL AND local=0`, id).Scan(&ref.Conv, &ref.Fingerprint, &ref.LID)
+	} else {
+		err = a.store.db.QueryRow(`SELECT coalesce(conv,''),?,coalesce(nullif(lid,''),id) FROM outbox WHERE id=? AND ref_id IS NULL`, a.Self().Fingerprint(), id).Scan(&ref.Conv, &ref.Fingerprint, &ref.LID)
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		err = ErrNoMessage
+	}
+	return ref, err
+}
 
 func (a *Agent) hasNativeNotifier() bool {
 	return a.nativeNotify != nil || a.nativeNotifyContent != nil
@@ -32,14 +65,16 @@ func notificationText(s string, limit int) string {
 	return s
 }
 
-func (a *Agent) nativeNotification(fragment, id, title, body string) {
+func (a *Agent) nativeNotification(fragment, id, title, body string, reminders ...NativeReminder) {
 	if a.nativeNotifyContent == nil {
 		if a.nativeNotify != nil {
 			a.nativeNotify(fragment)
 		}
 		return
 	}
-	a.nativeNotifyContent(a.nativeDisplay(fragment, id, title, body, false))
+	n := a.nativeDisplay(fragment, id, title, body, false)
+	n.Reminders = reminders
+	a.nativeNotifyContent(n)
 }
 
 // NativeNotificationPreviewDefault describes the actual message-display host.
@@ -71,7 +106,7 @@ func (a *Agent) publishNativePreviewHost(opts RunOptions) {
 // One exact local lookup and one final mask, shared by desktop and callbacks.
 func (a *Agent) nativeDisplay(fragment, id, title, body string, builtin bool) NativeNotification {
 	category := notificationCategory(title) // classify only the original trusted product title
-	n := NativeNotification{Fragment: fragment, Title: title, Body: body}
+	n := NativeNotification{Fragment: fragment, Title: title, Body: body, Category: category}
 	author := ""
 	if protocol.ValidID(id) {
 		n.Body = "New activity" // no stale caller text when the exact lookup fails
@@ -94,6 +129,8 @@ func notificationCategory(title string) string {
 	switch title {
 	case "Reminder":
 		return "reminder"
+	case "Reminders":
+		return "reminder-summary"
 	case "Decision needed":
 		return "decision"
 	case "AgentNet — company settings access":
@@ -134,6 +171,8 @@ func (a *Agent) maskNativeNotificationDefault(n NativeNotification, author strin
 	switch category {
 	case "reminder":
 		n.Body = "A reminder is due"
+	case "reminder-summary":
+		n.Body = "Reminders are due"
 	case "decision":
 		n.Body = "A request needs your decision"
 	case "security":
@@ -170,6 +209,10 @@ func (a *Agent) notificationMessage(n *NativeNotification, id string) (author st
 		return
 	}
 	found = true
+	if lid == "" {
+		lid = id
+	}
+	n.ReadRef = protocol.ReadRef{Conv: conv, Fingerprint: key, LID: lid}
 	// The exact stored conversation is already known here. Carry it in the
 	// existing route so a tap needs one local view, not every conversation.
 	if supplied, ok := strings.CutPrefix(n.Fragment, "msg="+id+"&dir="); ok && (supplied == "in" || supplied == "out") {

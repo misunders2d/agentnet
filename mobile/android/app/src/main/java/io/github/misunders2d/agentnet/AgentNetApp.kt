@@ -9,6 +9,7 @@ import android.app.PendingIntent
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import io.github.misunders2d.agentnet.core.core.App as CoreApp
@@ -17,6 +18,8 @@ import io.github.misunders2d.agentnet.core.core.Notifier
 import io.github.misunders2d.agentnet.core.core.UnreadSink
 import java.io.File
 import java.util.concurrent.Executors
+import java.util.concurrent.FutureTask
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import org.json.JSONObject
 
@@ -66,7 +69,8 @@ class NativeHost(private val application: Application) {
     private val networkQueued = AtomicBoolean(false)
     private var unreadTotal = 0L // main thread; partial includes last-known contributions
     private var unreadPartial = true
-    private val dismissedActivityTags = mutableSetOf<String>() // main thread; only OS cancels still in flight
+    private val dismissedActivityTags = mutableMapOf<String, String>() // main thread; exact canceled instances
+    private val latestActivityInstances = mutableMapOf<String, String>() // main thread; fences stale OS snapshots
     private val networkMonitor = NetworkMonitor(application, main) { networkChanged() }
     var state = HostState(); private set
     fun observe(observer: (HostState) -> Unit) { observers.add(observer); observer(state); open() }
@@ -90,14 +94,21 @@ class NativeHost(private val application: Application) {
                 if (!options.edit().putInt("web-port", app.port().toInt()).commit()) {
                     app.close(); throw IllegalStateException("Cannot preserve this app's local web address.")
                 }
+                // Capture on the OS lane before installing delivery or starting
+                // transport. Failure is unknown, never an invented empty list.
+                val snapshot = FutureTask { snapshotActivityNotices() }
+                main.post(snapshot)
+                val restored = try { snapshot.get(10, TimeUnit.SECONDS) }
+                    catch (_: Exception) { snapshot.cancel(false); activityRestoreChunks(emptyList(), 0, false) }
                 app.setNotifier(object : Notifier {
-                    override fun notify(workspace: String, fragment: String, title: String, body: String) { main.post { notifyActivity(workspace, fragment, title, body) } }
-                    override fun dismiss(workspace: String, fragment: String) { main.post { dismissActivity(workspace, fragment) } }
+                    override fun notify(workspace: String, fragment: String, title: String, body: String, metadata: String) { main.post { notifyActivity(workspace, fragment, title, body, metadata) } }
+                    override fun dismiss(workspace: String, fragment: String, expectedInstance: String) { main.post { dismissActivity(workspace, fragment, expectedInstance) } }
                 })
+                restored.forEach { app.restoreNotificationsJSON(it) }
                 app.setUnreadSink(object : UnreadSink {
                     override fun unread(total: Long, partial: Boolean) { main.post {
                         unreadTotal = total.coerceAtLeast(0); unreadPartial = partial
-                        updateActivityBadges(application, unreadTotal, unreadPartial, dismissedActivityTags)
+                        updateActivityBadges(application, unreadTotal, unreadPartial, dismissedActivityTags, latestActivityInstances)
                     } }
                 })
                 core = app
@@ -139,16 +150,38 @@ class NativeHost(private val application: Application) {
     fun prepareNotificationChannel() {
         application.getSystemService(NotificationManager::class.java).createNotificationChannel(activityNotificationChannel())
     }
-    private fun dismissActivity(workspace: String, fragment: String) {
+    private fun snapshotActivityNotices(): List<String> {
+        val manager = application.getSystemService(NotificationManager::class.java)
+        val snapshot = try { manager.activeNotifications }
+            catch (_: Exception) { return activityRestoreChunks(emptyList(), 0, false) }
+        val records = mutableListOf<ActivityNoticeRecord>()
+        var unknown = 0
+        snapshot.forEach { entry ->
+            if (entry.packageName == application.packageName && entry.notification.channelId == ACTIVITY_CHANNEL) {
+                val record = activityRecord(application, entry)
+                if (record == null) unknown++ else {
+                    records.add(record)
+                    latestActivityInstances.putIfAbsent(record.tag, record.instance)
+                }
+            }
+        }
+        return activityRestoreChunks(records, unknown)
+    }
+    private fun dismissActivity(workspace: String, fragment: String, expectedInstance: String) {
         WebPolicy.notificationTag(workspace, fragment)?.let { tag ->
-            dismissedActivityTags.add(tag)
-            application.getSystemService(NotificationManager::class.java).cancel(tag, 0)
-            updateActivityBadges(application, unreadTotal, unreadPartial, dismissedActivityTags)
+            val manager = application.getSystemService(NotificationManager::class.java)
+            val snapshot = try { manager.activeNotifications } catch (_: Exception) { return }
+            val current = snapshot.firstOrNull { it.tag == tag && it.id == 0 }?.let { activityRecord(application, it) } ?: return
+            if (!activityInstanceMatches(current, expectedInstance, latestActivityInstances)) return
+            dismissedActivityTags[tag] = expectedInstance
+            manager.cancel(tag, 0)
+            updateActivityBadges(application, unreadTotal, unreadPartial, dismissedActivityTags, latestActivityInstances)
         }
     }
-    private fun notifyActivity(workspace: String, fragment: String, title: String, body: String) {
+    private fun notifyActivity(workspace: String, fragment: String, title: String, body: String, metadata: String) {
         if (!notificationsPermitted()) return
         val tag = WebPolicy.notificationTag(workspace, fragment) ?: return
+        val record = activityNoticeRecord(application.packageName, application.packageName, ACTIVITY_CHANNEL, 0, tag, metadata) ?: return
         val manager = application.getSystemService(NotificationManager::class.java)
         // Defaults apply to a newly created channel only. Reusing its id leaves
         // existing sound/vibration/mute/DND choices under Android's authority.
@@ -165,10 +198,12 @@ class NativeHost(private val application: Application) {
             .setStyle(Notification.BigTextStyle().bigText(body)).setCategory(Notification.CATEGORY_MESSAGE)
             .setVisibility(Notification.VISIBILITY_PRIVATE).setPublicVersion(redacted)
             .setContentIntent(pending).setAutoCancel(true)
+            .addExtras(Bundle().apply { putString(NOTICE_METADATA_EXTRA, record.metadata) })
             .setNumber(activityBadgeNumber(unreadTotal, unreadPartial)).build()
         dismissedActivityTags.remove(tag) // a new arrival for the same destination is eligible again
+        latestActivityInstances[tag] = record.instance
         manager.notify(tag, 0, note)
-        updateActivityBadges(application, unreadTotal, unreadPartial, dismissedActivityTags)
+        updateActivityBadges(application, unreadTotal, unreadPartial, dismissedActivityTags, latestActivityInstances)
     }
 }
 
@@ -176,24 +211,33 @@ class NativeHost(private val application: Application) {
 // Recovering the OS object preserves its private content, exact click intent,
 // auto-cancel and public redaction without retaining a second plaintext body map.
 internal fun updateActivityBadges(application: Application, total: Long, partial: Boolean,
-    dismissedTags: MutableSet<String> = mutableSetOf()) {
+    dismissedTags: MutableMap<String, String> = mutableMapOf(), latestInstances: Map<String, String> = emptyMap()) {
     val manager = application.getSystemService(NotificationManager::class.java)
-    val snapshot = manager.activeNotifications
+    val snapshot = try { manager.activeNotifications } catch (_: Exception) { return }
     // cancel() is queued by Android. Every host refresh excludes its tag until
     // the OS no longer lists it, without keeping notification content or history.
-    dismissedTags.retainAll(snapshot.mapNotNull { it.tag }.toSet())
-    val active = snapshot.filter {
-        it.notification.channelId == ACTIVITY_CHANNEL && activityBadgeTag(it.tag, dismissedTags)
-    }.sortedWith(compareByDescending<android.service.notification.StatusBarNotification> { it.notification.`when` }.thenBy { it.key })
+    val records = snapshot.mapNotNull { entry -> activityRecord(application, entry)?.let { entry to it } }
+    dismissedTags.entries.removeAll { (tag, instance) -> records.none { it.second.tag == tag && it.second.instance == instance } }
+    val active = records.filter { (_, record) ->
+        activityBadgeEligible(record, dismissedTags, latestInstances)
+    }.map { it.first }.sortedWith(compareByDescending<android.service.notification.StatusBarNotification> { it.notification.`when` }.thenBy { it.key })
     val number = activityBadgeNumber(total, partial)
     active.forEachIndexed { index, entry ->
         val desired = if (index == 0) number else 0
         if (entry.notification.number != desired) {
+            val extras = entry.notification.extras?.let { Bundle(it) } ?: Bundle()
             val note = Notification.Builder.recoverBuilder(application, entry.notification)
+                .addExtras(extras)
                 .setNumber(desired).setOnlyAlertOnce(true).build()
             manager.notify(entry.tag, entry.id, note)
         }
     }
+}
+
+private fun activityRecord(application: Application, entry: android.service.notification.StatusBarNotification): ActivityNoticeRecord? {
+    val extras = entry.notification.extras
+    val metadata = if (extras != null && extras.containsKey(NOTICE_METADATA_EXTRA)) extras.get(NOTICE_METADATA_EXTRA) as? String ?: return null else null
+    return activityNoticeRecord(application.packageName, entry.packageName, entry.notification.channelId, entry.id, entry.tag, metadata)
 }
 
 internal fun activityBadgeTag(tag: String?, excludedTags: Set<String> = emptySet()): Boolean {

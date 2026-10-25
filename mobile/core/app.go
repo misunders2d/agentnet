@@ -316,8 +316,8 @@ func (a *appSetup) SetupJoin(j ui.SetupJoin) (ui.SetupResult, error) {
 // The native implementation must redact the public lock-screen presentation.
 // Implementations must return promptly and marshal OS work onto their own lane.
 type Notifier interface {
-	Notify(workspace, fragment, title, body string)
-	Dismiss(workspace, fragment string)
+	Notify(workspace, fragment, title, body, metadata string)
+	Dismiss(workspace, fragment, expectedInstance string)
 }
 
 func (a *App) SetNotifier(n Notifier) { a.mu.Lock(); a.notifier = n; a.mu.Unlock() }
@@ -419,28 +419,28 @@ func (a *App) bindUnreadLocked(id string) {
 	a.markUnreadDirtyLocked()
 }
 
-func (a *App) refreshUnread(id string, s *Session, content, generation uint64, read func() (ui.Overview, error)) {
+func (a *App) refreshUnread(id string, s *Session, content, generation uint64, read func() (ui.Overview, error)) (ui.Overview, bool) {
 	current := func() bool {
-		if a.closed || !a.active[id] || a.sessions[id] != s {
+		if !a.phoneCurrentLocked(id, s, generation) {
 			return false
 		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		revision, _ := s.a.ViewChanges()
-		return !s.closed && s.contentGeneration == generation && revision.Content == content
+		return revision.Content == content
 	}
 	a.mu.Lock()
 	valid := current()
 	a.mu.Unlock()
 	if !valid {
-		return
+		return ui.Overview{}, false
 	}
 	// Use exactly the page's Live and cache; no second unread scan or transport.
 	view, err := read()
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if !current() {
-		return
+		return ui.Overview{}, false
 	}
 	v := a.unread[id]
 	v.known = err == nil && view.AlertTotal != nil && *view.AlertTotal >= 0
@@ -449,6 +449,7 @@ func (a *App) refreshUnread(id string, s *Session, content, generation uint64, r
 	}
 	a.unread[id] = v
 	a.markUnreadDirtyLocked()
+	return view, err == nil
 }
 func (a *App) notificationsAvailable() bool {
 	a.mu.Lock()
@@ -461,7 +462,8 @@ func (a *App) deliverNotification(fragment string) {
 	closed := a.closed
 	a.mu.Unlock()
 	if n != nil && !closed {
-		n.Notify(client.DefaultWorkspace, fragment, "AgentNet", "New activity")
+		_, metadata := newNoticeMetadata(client.DefaultWorkspace, client.NativeNotification{Fragment: fragment})
+		n.Notify(client.DefaultWorkspace, fragment, "AgentNet", "New activity", metadata)
 	}
 }
 

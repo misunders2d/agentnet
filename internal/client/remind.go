@@ -47,6 +47,8 @@ type Reminder struct {
 	State   string `json:"state"`
 	Overdue bool   `json:"overdue"` // pending and past its time
 	Alerted bool   `json:"alerted"` // attention was asked for at its current time
+	// Revision is the existing local rev/notified_rev generation, not sync authority.
+	Revision int64 `json:"-"`
 }
 
 // ErrNoReminder means there is no pending reminder on that message.
@@ -140,11 +142,11 @@ func replyEndsReminder(tx *sql.Tx, conv, replyTo, status string) error {
 	return err
 }
 
-const reminderCols = `r.message, coalesce(r.conv, ''), coalesce(i.sender, CASE WHEN o.id IS NOT NULL THEN ? END, ''), r.due_at, r.state, r.notified_rev = r.rev`
+const reminderCols = `r.message, coalesce(r.conv, ''), coalesce(i.sender, CASE WHEN o.id IS NOT NULL THEN ? END, ''), r.due_at, r.state, r.notified_rev = r.rev, r.rev`
 
 func scanReminder(row interface{ Scan(...any) error }, now time.Time) (Reminder, error) {
 	var r Reminder
-	err := row.Scan(&r.Message, &r.Conv, &r.From, &r.Due, &r.State, &r.Alerted)
+	err := row.Scan(&r.Message, &r.Conv, &r.From, &r.Due, &r.State, &r.Alerted, &r.Revision)
 	r.Overdue = r.State == ReminderPending && r.Due <= now.Unix()
 	return r, err
 }
@@ -186,6 +188,20 @@ func (a *Agent) Reminders(all bool) ([]Reminder, error) {
 	}
 	return out, rows.Err()
 }
+
+// HasAlertedDueReminders is the current meaning of a generic native reminder
+// summary. Reuse the existing pending/due index and local notification ledger;
+// an unrelated currently alerted overdue reminder intentionally retains it.
+func (a *Agent) HasAlertedDueReminders() (bool, error) {
+	if err := a.reconcileReminders(); err != nil {
+		return false, err
+	}
+	var due bool
+	err := a.store.db.QueryRow(alertedDueReminderSQL, time.Now().Unix()).Scan(&due)
+	return due, err
+}
+
+const alertedDueReminderSQL = `SELECT EXISTS(SELECT 1 FROM reminders WHERE state='pending' AND due_at<=? AND notified_rev=rev)`
 
 // remindLoop asks for attention when reminders come due, until ctx ends:
 // one wall timer on the earliest reminder not yet alerted, re-armed after
@@ -232,16 +248,19 @@ func (a *Agent) remindDue(now time.Time) (time.Time, error) {
 		return time.Time{}, err
 	}
 	defer tx.Rollback()
-	rows, err := tx.Query(`SELECT message, coalesce(conv, '') FROM reminders WHERE state = ? AND due_at <= ? AND notified_rev < rev
+	rows, err := tx.Query(`SELECT message, coalesce(conv, ''), rev FROM reminders WHERE state = ? AND due_at <= ? AND notified_rev < rev
 		ORDER BY due_at, message`, ReminderPending, now.Unix())
 	if err != nil {
 		return time.Time{}, err
 	}
-	type due struct{ message, conv string }
+	type due struct {
+		message, conv string
+		revision      int64
+	}
 	var dues []due
 	for rows.Next() {
 		var d due
-		if err := rows.Scan(&d.message, &d.conv); err != nil {
+		if err := rows.Scan(&d.message, &d.conv, &d.revision); err != nil {
 			rows.Close()
 			return time.Time{}, err
 		}
@@ -262,9 +281,9 @@ func (a *Agent) remindDue(now time.Time) (time.Time, error) {
 		if err := a.store.done(tx.Commit()); err != nil {
 			return time.Time{}, err
 		}
-		body := "A reminder is due"
+		title, body := "Reminder", "A reminder is due"
 		if len(dues) > 1 {
-			body = fmt.Sprintf("%d reminders are due", len(dues))
+			title, body = "Reminders", "Reminders are due"
 		}
 		if a.hasNativeNotifier() {
 			fragment := ""
@@ -282,14 +301,19 @@ func (a *Agent) remindDue(now time.Time) (time.Time, error) {
 					fragment = a.nativeReviewFragment(id)
 				}
 			}
-			a.nativeNotification(fragment, id, "Reminder", body)
+			var reminders []NativeReminder
+			if len(dues) == 1 {
+				d := dues[0]
+				reminders = []NativeReminder{{Message: d.message, Revision: d.revision}}
+			}
+			a.nativeNotification(fragment, id, title, body, reminders...)
 		} else {
 			id, fragment := "", "review"
 			if len(dues) == 1 {
 				id = dues[0].message
 				fragment = a.nativeReviewFragment(id)
 			}
-			display := a.nativeDisplay(fragment, id, "Reminder", body, true)
+			display := a.nativeDisplay(fragment, id, title, body, true)
 			argv, onClick := a.notificationClick(id, display.Fragment)
 			if err := a.notify(display.Title, display.Body, argv, onClick); err != nil {
 				a.Logf("reminder notification not shown (%v); see agentnet remind list", err)

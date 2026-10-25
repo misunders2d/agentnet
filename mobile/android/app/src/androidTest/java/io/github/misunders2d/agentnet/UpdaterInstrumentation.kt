@@ -16,13 +16,13 @@ import java.util.concurrent.TimeUnit
 class UpdaterInstrumentation : Instrumentation() {
     private var mode = "install"
     private var latencySuite = "history"
-    private var ownedLatencyFixture = false
+    private var ownedFixture = false
     override fun onCreate(arguments: Bundle?) {
         phase("create-before")
         super.onCreate(arguments)
         mode = arguments?.getString("mode") ?: "install"
         latencySuite = arguments?.getString("latencySuite") ?: "history"
-        ownedLatencyFixture = arguments?.getString("ownedFixture") == "1"
+        ownedFixture = arguments?.getString("ownedFixture") == "1"
         phase("instrumentation-thread-before")
         start()
         phase("instrumentation-thread-after")
@@ -34,7 +34,9 @@ class UpdaterInstrumentation : Instrumentation() {
         val result = Bundle()
         try {
             check(mode in setOf("install", "snapshot", "network", "cleanup", "interrupt", "notifications", "notifications-denied", "indicators-video", "latency")) { "Unknown fixture operation." }
-            check(mode != "latency" || ownedLatencyFixture) { "Latency mode requires the explicitly owned disposable fixture runner." }
+            check((mode != "latency" && !mode.startsWith("notifications") && mode != "indicators-video") || ownedFixture) {
+                "This mode requires the explicitly owned disposable fixture runner."
+            }
             if (mode == "cleanup") {
                 val preferences=targetContext.applicationContext.getSharedPreferences("native-update",0)
                 val id=preferences.getInt("session",-1)
@@ -149,6 +151,20 @@ class UpdaterInstrumentation : Instrumentation() {
         }
     }
 
+    private fun fixtureNoticeMetadata(workspace: String, fragment: String, category: String = if (fragment == "review") "decision" else "activity"): String {
+        val fields = fragment.split('&').associate { it.substringBefore('=') to it.substringAfter('=', "") }
+        val message = fields["msg"] ?: "4".repeat(32)
+        return JSONObject().put("v", 1).put("workspace", workspace)
+            .put("tag", checkNotNull(WebPolicy.notificationTag(workspace, fragment)))
+            .put("instance", java.util.UUID.randomUUID().toString().replace("-", ""))
+            .put("category", category).apply {
+                if (category == "activity" || category == "reminder") put("ref", JSONObject()
+                    .put("conv", fields["conv"].orEmpty()).put("lid", message)
+                    .put("fingerprint", List(4) { "5".repeat(8) }.joinToString("-")))
+                if (category == "reminder") put("reminders", org.json.JSONArray().put(JSONObject().put("message", message).put("revision", 7)))
+            }.toString()
+    }
+
     /** OS-boundary test on the owned emulator; never grants or changes permissions. */
     private fun checkNotifications(activity: MainActivity, denied: Boolean, result: Bundle) {
         val app = targetContext.applicationContext as AgentNetApp
@@ -196,13 +212,23 @@ class UpdaterInstrumentation : Instrumentation() {
         check(connectionSettings.getStringExtra(android.provider.Settings.EXTRA_CHANNEL_ID) == CONNECTION_CHANNEL)
         check(settings.getStringExtra(android.provider.Settings.EXTRA_CHANNEL_ID) == ACTIVITY_CHANNEL)
         val manager = targetContext.getSystemService(android.app.NotificationManager::class.java)
-        val post = NativeHost::class.java.getDeclaredMethod("notifyActivity", String::class.java, String::class.java, String::class.java, String::class.java).apply { isAccessible = true }
-        val dismiss = NativeHost::class.java.getDeclaredMethod("dismissActivity", String::class.java, String::class.java).apply { isAccessible = true }
+        val post = NativeHost::class.java.getDeclaredMethod("notifyActivity", String::class.java, String::class.java, String::class.java, String::class.java, String::class.java).apply { isAccessible = true }
+        val dismiss = NativeHost::class.java.getDeclaredMethod("dismissActivity", String::class.java, String::class.java, String::class.java).apply { isAccessible = true }
+        val startup = NativeHost::class.java.getDeclaredMethod("snapshotActivityNotices").apply { isAccessible = true }
         val workspace = "default"
         val routes = listOf("conv=" + "a".repeat(64), "review", "msg=" + "b".repeat(32) + "&dir=in")
-        val tags = routes.map { WebPolicy.notificationDestination(workspace, it)!! }.toSet()
-        fun active() = manager.activeNotifications.filter { it.tag in tags }
-        fun emit(fragment: String) = runOnMainSync { post.invoke(host, workspace, fragment, "Fixture sender", "Locally decrypted fixture preview") }
+        val tags = routes.map { WebPolicy.notificationTag(workspace, it)!! }.toSet()
+        val emitted = mutableMapOf<String, String>()
+        fun active() = manager.activeNotifications.filter { it.packageName == targetContext.packageName && it.id == 0 && it.notification.channelId == ACTIVITY_CHANNEL && it.tag in tags }
+        fun instance(fragment: String) = JSONObject(active().single { it.tag == WebPolicy.notificationTag(workspace, fragment) }
+            .notification.extras.getString(NOTICE_METADATA_EXTRA)!!).getString("instance")
+        fun emit(fragment: String, title: String = "Fixture sender", body: String = "Locally decrypted fixture preview") {
+            val metadata = fixtureNoticeMetadata(workspace, fragment, if (fragment == routes[2]) "reminder" else if (fragment == "review") "decision" else "activity")
+            emitted[WebPolicy.notificationTag(workspace, fragment)!!] = metadata
+            runOnMainSync { post.invoke(host, workspace, fragment, title, body, metadata) }
+        }
+        fun currentEmissions() = active().all { it.notification.extras.getString(NOTICE_METADATA_EXTRA) == emitted[it.tag] }
+        fun dismissCurrent(fragment: String) = runOnMainSync { dismiss.invoke(host, workspace, fragment, instance(fragment)) }
         fun waitFor(label: String, predicate: () -> Boolean) {
             val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
             while (!predicate() && System.nanoTime() < end) Thread.sleep(50)
@@ -211,16 +237,19 @@ class UpdaterInstrumentation : Instrumentation() {
         val totalField = NativeHost::class.java.getDeclaredField("unreadTotal").apply { isAccessible = true }
         val partialField = NativeHost::class.java.getDeclaredField("unreadPartial").apply { isAccessible = true }
         val dismissedField = NativeHost::class.java.getDeclaredField("dismissedActivityTags").apply { isAccessible = true }
+        val latestField = NativeHost::class.java.getDeclaredField("latestActivityInstances").apply { isAccessible = true }
         @Suppress("UNCHECKED_CAST")
-        fun pendingTags() = dismissedField.get(host) as MutableSet<String> // main-thread calls only
+        fun pendingTags() = dismissedField.get(host) as MutableMap<String, String> // main-thread calls only
+        @Suppress("UNCHECKED_CAST")
+        fun latestInstances() = latestField.get(host) as MutableMap<String, String> // main-thread calls only
         var savedTotal = 0L; var savedPartial = true; var restoreBadges = false
         val barrierTag = "fixture-badge-barrier"
         var barrier = 0
         try {
             check(host.notificationsPermitted() != denied) { "Expected Android permission ${if (denied) "denied" else "granted"}; this test never changes it." }
-            routes.forEach { route -> runOnMainSync { dismiss.invoke(host, workspace, route) } }
+            runOnMainSync { tags.forEach { tag -> manager.cancel(tag, 0); pendingTags().remove(tag); latestInstances().remove(tag) } }
             if (denied) {
-                routes.forEach(::emit)
+                routes.forEach { emit(it) }
                 waitFor("Denied notifications appeared") { active().isEmpty() }
                 result.putString("stream", "PASS Android denied permission: no notification posted; permissions unchanged.\n")
                 return
@@ -233,13 +262,18 @@ class UpdaterInstrumentation : Instrumentation() {
             // Foreground, then background, then screen-off arrival use the same
             // actual NotificationManager surface. Core event producers are tested in Go.
             emit(routes[0]); emit(routes[0])
-            waitFor("Foreground notification/dedup failed") { active().size == 1 }
+            waitFor("Foreground notification/dedup failed") { active().size == 1 && currentEmissions() }
             runOnMainSync { activity.moveTaskToBack(true) }
             emit(routes[1])
-            waitFor("Background OK notification missing") { active().size == 2 }
+            waitFor("Background OK notification missing") { active().size == 2 && currentEmissions() }
             uiAutomation.executeShellCommand("input keyevent 223").close()
             emit(routes[2])
-            waitFor("Screen-off message/reminder route missing") { active().size == 3 }
+            waitFor("Screen-off message/reminder route missing") { active().size == 3 && currentEmissions() }
+            check(active().all { entry ->
+                val metadata = checkNotNull(entry.notification.extras.getString(NOTICE_METADATA_EXTRA))
+                !metadata.contains("Fixture sender") && !metadata.contains("preview") &&
+                    activityNoticeRecord(targetContext.packageName, entry.packageName, entry.notification.channelId, entry.id, entry.tag, metadata) != null
+            }) { "Android did not retain the bound content-free notice metadata" }
             check(active().all { it.notification.extras.getCharSequence(android.app.Notification.EXTRA_TITLE).toString() == "Fixture sender" })
             check(active().all { it.notification.extras.getCharSequence(android.app.Notification.EXTRA_TEXT).toString() == "Locally decrypted fixture preview" })
             check(active().all { it.notification.publicVersion.extras.getCharSequence(android.app.Notification.EXTRA_TITLE).toString() == "AgentNet" })
@@ -253,17 +287,18 @@ class UpdaterInstrumentation : Instrumentation() {
                 runOnMainSync { matches = activity.intent.getStringExtra("workspace") == workspace && activity.intent.getStringExtra("destination") == routes[2] }
                 matches
             }
-            runOnMainSync { dismiss.invoke(host, workspace, routes[0]) }
+            dismissCurrent(routes[0])
             waitFor("Reading exact chat did not dismiss its notification") { active().none { it.tag == WebPolicy.notificationDestination(workspace, routes[0]) } }
             check(active().any { it.tag == WebPolicy.notificationDestination(workspace, routes[1]) }) { "Reading another chat cleared an OK" }
             // Reuse this mode's real NativeHost/NotificationManager with positive
-            // counts. The private set models a cancel still visible in an OS
+            // counts. The private map models a cancel still visible in an OS
             // snapshot; it is not a substitute for the actual cancel below.
             emit(routes[1]); emit(routes[2]); emit(routes[0])
-            waitFor("Positive badge fixture notices missing") { active().size == 3 }
+            waitFor("Positive badge fixture notices missing") { active().size == 3 && currentEmissions() }
+            val retainedMetadata = active().associate { it.tag to it.notification.extras.getString(NOTICE_METADATA_EXTRA) }
             fun refreshUnread(total: Long) = runOnMainSync {
                 totalField.setLong(host, total); partialField.setBoolean(host, false)
-                updateActivityBadges(app, total, false, pendingTags()) // same projection as UnreadSink
+                updateActivityBadges(app, total, false, pendingTags(), latestInstances()) // same projection as UnreadSink
             }
             fun settleBadgePosts() {
                 val number = ++barrier
@@ -280,6 +315,9 @@ class UpdaterInstrumentation : Instrumentation() {
                 active().all { it.notification.number == 0 || it.notification.number == total }
             refreshUnread(7); settleBadgePosts()
             waitFor("Positive aggregate badge missing") { exactCount(7) }
+            check(active().all { it.notification.extras.getString(NOTICE_METADATA_EXTRA) == retainedMetadata[it.tag] }) {
+                "Badge recovery changed native notice metadata/instance"
+            }
             val settled = active().associate { it.key to (it.postTime to it.notification.number) }
             refreshUnread(7); settleBadgePosts()
             check(active().associate { it.key to (it.postTime to it.notification.number) } == settled) {
@@ -287,7 +325,7 @@ class UpdaterInstrumentation : Instrumentation() {
             }
             val cancelledTag = WebPolicy.notificationTag(workspace, routes[0])!!
             val beforeExcluded = active().single { it.tag == cancelledTag }
-            runOnMainSync { pendingTags().add(cancelledTag) }
+            runOnMainSync { pendingTags()[cancelledTag] = instance(routes[0]) }
             refreshUnread(5); settleBadgePosts()
             waitFor("Healthy notice lost its count during pending cancellation") {
                 active().count { it.tag != cancelledTag && it.notification.number == 5 } == 1
@@ -297,29 +335,91 @@ class UpdaterInstrumentation : Instrumentation() {
                 "Still-active cancelled tag was reposted by unread update"
             }
             runOnMainSync {
-                dismiss.invoke(host, workspace, routes[0])
-                totalField.setLong(host, 4L); updateActivityBadges(app, 4, false, pendingTags())
-                dismiss.invoke(host, workspace, routes[1])
-                totalField.setLong(host, 3L); updateActivityBadges(app, 3, false, pendingTags())
+                dismiss.invoke(host, workspace, routes[0], instance(routes[0]))
+                totalField.setLong(host, 4L); updateActivityBadges(app, 4, false, pendingTags(), latestInstances())
+                dismiss.invoke(host, workspace, routes[1], instance(routes[1]))
+                totalField.setLong(host, 3L); updateActivityBadges(app, 3, false, pendingTags(), latestInstances())
             }
             settleBadgePosts()
             val survivorTag = WebPolicy.notificationTag(workspace, routes[2])!!
             waitFor("Unread or second cancel resurrected a read notification") {
                 active().singleOrNull()?.let { it.tag == survivorTag && it.notification.number == 3 } == true
             }
-            runOnMainSync { post.invoke(host, workspace, routes[0], "Fresh fixture sender", "New unseen fixture preview") }
+            emit(routes[0], "Fresh fixture sender", "New unseen fixture preview")
             waitFor("New activity for a read chat was suppressed") {
-                active().any { it.tag == cancelledTag && it.notification.extras.getCharSequence(android.app.Notification.EXTRA_TEXT).toString() == "New unseen fixture preview" }
+                active().any { it.tag == cancelledTag && it.notification.extras.getCharSequence(android.app.Notification.EXTRA_TEXT).toString() == "New unseen fixture preview" } && currentEmissions()
             }
             runOnMainSync { check(cancelledTag !in pendingTags()) { "New arrival retained pending cancellation" } }
-            result.putString("stream", "PASS Android OS notification boundary: foreground/dedup, background OK, screen-off message/reminder route, private content, exact tap/read dismissal, positive pending-cancel/unread/second-cancel/new-arrival and settled same-total badge checks. No physical-phone or relay delivery claim.\n")
+            val oldInstance = instance(routes[0])
+            emit(routes[0], "Replacement fixture sender", "Replacement fixture preview")
+            waitFor("Same-tag replacement instance missing") { currentEmissions() && instance(routes[0]) != oldInstance }
+            val replacement = active().single { it.tag == cancelledTag }
+            val replacementMetadata = replacement.notification.extras.getString(NOTICE_METADATA_EXTRA)
+            val replacementInstance = instance(routes[0])
+            runOnMainSync { dismiss.invoke(host, workspace, routes[0], oldInstance) }
+            settleBadgePosts()
+            val afterStale = active().single { it.tag == cancelledTag }
+            check(afterStale.postTime == replacement.postTime && afterStale.notification.extras.getString(NOTICE_METADATA_EXTRA) == replacementMetadata) {
+                "Queued stale cancellation erased or reposted a newer instance"
+            }
+
+            fun nativeSnapshot(): Map<String, String> {
+                var chunks = emptyList<String>()
+                runOnMainSync {
+                    @Suppress("UNCHECKED_CAST")
+                    val captured = startup.invoke(host) as List<String>
+                    chunks = captured
+                }
+                check(chunks.isNotEmpty()) { "Native startup snapshot silently omitted its known/unknown state" }
+                val records = linkedMapOf<String, String>()
+                for (chunk in chunks) {
+                    val value = JSONObject(chunk)
+                    check(value.getInt("v") == 1 && value.getBoolean("known")) { "Owned OS snapshot was not known" }
+                    val entries = value.getJSONArray("entries")
+                    check(entries.length() <= NOTICE_RESTORE_CHUNK)
+                    for (index in 0 until entries.length()) {
+                        val entry = entries.getJSONObject(index)
+                        val tag = entry.getString("tag")
+                        check(records.put(tag, entry.getString("metadata")) == null) { "OS snapshot duplicated a canonical activity tag" }
+                    }
+                }
+                return records
+            }
+            val beforeSnapshot = active().associate { it.tag to (it.postTime to it.notification.extras.getString(NOTICE_METADATA_EXTRA)) }
+            // Model only fresh native memory. The actual OS objects survive;
+            // Go close/reopen and state decisions have separate real-core tests.
+            runOnMainSync { tags.forEach { latestInstances().remove(it); pendingTags().remove(it) } }
+            val recovered = nativeSnapshot()
+            check(beforeSnapshot.all { (tag, value) -> recovered[tag] == value.second }) { "Startup snapshot lost active metadata" }
+            runOnMainSync {
+                beforeSnapshot.forEach { (tag, value) -> check(latestInstances()[tag] == JSONObject(checkNotNull(value.second)).getString("instance")) }
+            }
+            check(active().associate { it.tag to (it.postTime to it.notification.extras.getString(NOTICE_METADATA_EXTRA)) } == beforeSnapshot) {
+                "Snapshot reconstruction reannounced an existing OS notification"
+            }
+            // OS cancellation is the same absence surface as a user swipe.
+            // Snapshot/number refresh must never reconstruct the absent object.
+            runOnMainSync { manager.cancel(survivorTag, 0) }
+            waitFor("Fixture user-dismissal absence missing") { active().none { it.tag == survivorTag } }
+            check(survivorTag !in nativeSnapshot()) { "Snapshot restored a user-dismissed notification" }
+            refreshUnread(3); settleBadgePosts()
+            check(active().none { it.tag == survivorTag }) { "Badge refresh recreated a user-dismissed notification" }
+            runOnMainSync { dismiss.invoke(host, workspace, routes[0], replacementInstance) }
+            waitFor("Current exact instance did not cancel") { active().isEmpty() }
+            check(nativeSnapshot().keys.none { it in tags }) { "Empty fixture snapshot re-created a notification" }
+            refreshUnread(12)
+            check(active().isEmpty()) { "Empty snapshot or badge projection reannounced fixture activity" }
+            result.putString("stream", "PASS Android OS notification boundary: foreground/dedup, background OK, screen-off message/reminder route, private content, exact tap/read dismissal, positive pending-cancel/unread/second-cancel/new-arrival, settled same-total badges, retained metadata, stale/current exact-instance controls, fresh-memory startup snapshot and dismissed/empty no-reannouncement checks. Snapshot seam only; real-core reopen is tested separately. No physical-phone or relay delivery claim.\n")
         } finally {
             uiAutomation.executeShellCommand("input keyevent 224").close()
-            routes.forEach { route -> runOnMainSync { dismiss.invoke(host, workspace, route) } }
-            (1..barrier).forEach { manager.cancel("$barrierTag-$it", 83) }
-            if (restoreBadges) runOnMainSync {
-                totalField.setLong(host, savedTotal); partialField.setBoolean(host, savedPartial)
-                updateActivityBadges(app, savedTotal, savedPartial, pendingTags())
+            runOnMainSync {
+                // Exact fixture cleanup is not conditional-cancel evidence.
+                tags.forEach { tag -> manager.cancel(tag, 0); pendingTags().remove(tag); latestInstances().remove(tag) }
+                (1..barrier).forEach { manager.cancel("$barrierTag-$it", 83) }
+                if (restoreBadges) {
+                    totalField.setLong(host, savedTotal); partialField.setBoolean(host, savedPartial)
+                    updateActivityBadges(app, savedTotal, savedPartial, pendingTags(), latestInstances())
+                }
             }
         }
     }
@@ -340,9 +440,15 @@ class UpdaterInstrumentation : Instrumentation() {
         app.host.prepareNotificationChannel()
         val indicatorTotalField = NativeHost::class.java.getDeclaredField("unreadTotal").apply { isAccessible = true }
         val indicatorPartialField = NativeHost::class.java.getDeclaredField("unreadPartial").apply { isAccessible = true }
+        val indicatorDismissedField = NativeHost::class.java.getDeclaredField("dismissedActivityTags").apply { isAccessible = true }
+        val indicatorLatestField = NativeHost::class.java.getDeclaredField("latestActivityInstances").apply { isAccessible = true }
+        @Suppress("UNCHECKED_CAST")
+        fun pendingTags() = indicatorDismissedField.get(app.host) as MutableMap<String, String> // main-thread calls only
+        @Suppress("UNCHECKED_CAST")
+        fun latestInstances() = indicatorLatestField.get(app.host) as MutableMap<String, String> // main-thread calls only
         var indicatorExpectedTotal = 0L; var indicatorExpectedPartial = true
         var indicatorSavedTotal = 0L; var indicatorSavedPartial = true
-        fun eligible() = manager.activeNotifications.filter { it.notification.channelId == ACTIVITY_CHANNEL && activityBadgeTag(it.tag) }
+        fun eligible() = manager.activeNotifications.filter { it.packageName == targetContext.packageName && it.id == 0 && it.notification.channelId == ACTIVITY_CHANNEL && activityBadgeTag(it.tag) }
         var lastIndicatorProjection = 0L
         fun projectIndicatorBadge(total: Long, partial: Boolean) {
             // This direct-helper matrix bypasses the core's coalescing producer.
@@ -355,7 +461,7 @@ class UpdaterInstrumentation : Instrumentation() {
                 // Match the cached scalar projection used by the real UnreadSink.
                 indicatorTotalField.setLong(app.host, total)
                 indicatorPartialField.setBoolean(app.host, partial)
-                updateActivityBadges(app, total, partial)
+                updateActivityBadges(app, total, partial, pendingTags(), latestInstances())
             }
         }
         fun waitFor(label: String, predicate: () -> Boolean) {
@@ -389,16 +495,18 @@ class UpdaterInstrumentation : Instrumentation() {
         val click = android.app.PendingIntent.getActivity(app, 71, Intent(app, MainActivity::class.java).setAction("fixture-indicator"), android.app.PendingIntent.FLAG_IMMUTABLE)
         val redacted = android.app.Notification.Builder(app, ACTIVITY_CHANNEL).setSmallIcon(R.drawable.ic_agentnet)
             .setContentTitle("AgentNet").setContentText("New activity").build()
-        fun note() = android.app.Notification.Builder(app, ACTIVITY_CHANNEL).setSmallIcon(R.drawable.ic_agentnet)
+        fun note(metadata: String? = null) = android.app.Notification.Builder(app, ACTIVITY_CHANNEL).setSmallIcon(R.drawable.ic_agentnet)
             .setContentTitle("Fixture sender").setContentText("Private retained preview")
             .setStyle(android.app.Notification.BigTextStyle().bigText("Private retained preview"))
             .setContentIntent(click).setAutoCancel(true).setVisibility(android.app.Notification.VISIBILITY_PRIVATE)
-            .setPublicVersion(redacted).build()
+            .setPublicVersion(redacted).apply { if (metadata != null) addExtras(Bundle().apply { putString(NOTICE_METADATA_EXTRA, metadata) }) }.build()
         try {
             projectIndicatorBadge(9, false)
             check(eligible().isEmpty()) { "Badge-only notification appeared" }
-            tags.forEachIndexed { index, tag -> manager.notify(tag, index + 71, note()) }
-            manager.notify("unrelated-tag", 73, note())
+            runOnMainSync {
+                tags.forEach { tag -> manager.notify(tag, 0, note(fixtureNoticeMetadata("default", tag))) }
+                manager.notify("unrelated-tag", 73, note())
+            }
             waitFor("Fixture notifications not active") { eligible().size == 2 && manager.activeNotifications.any { it.tag == "unrelated-tag" } }
             val before = eligible().associateBy { it.tag }
             val newestKey = before.values.sortedWith(compareByDescending<android.service.notification.StatusBarNotification> { it.notification.`when` }.thenBy { it.key }).first().key
@@ -413,6 +521,11 @@ class UpdaterInstrumentation : Instrumentation() {
                 check(now.extras.getCharSequence(android.app.Notification.EXTRA_TEXT).toString() == "Private retained preview")
                 check(now.extras.getCharSequence(android.app.Notification.EXTRA_BIG_TEXT).toString() == "Private retained preview")
                 check(now.publicVersion.extras.getCharSequence(android.app.Notification.EXTRA_TEXT).toString() == "New activity")
+                check(now.extras.getString(NOTICE_METADATA_EXTRA) == prior.extras.getString(NOTICE_METADATA_EXTRA)) {
+                    "Quiet badge recovery changed retained metadata/instance"
+                }
+                check(JSONObject(checkNotNull(now.extras.getString(NOTICE_METADATA_EXTRA))).getString("instance") ==
+                    JSONObject(checkNotNull(prior.extras.getString(NOTICE_METADATA_EXTRA))).getString("instance"))
                 if (now.number == 7) check(now.flags and android.app.Notification.FLAG_ONLY_ALERT_ONCE != 0)
             }
             check(manager.activeNotifications.single { it.tag == "unrelated-tag" }.notification.number == 0)
@@ -423,45 +536,47 @@ class UpdaterInstrumentation : Instrumentation() {
             projectIndicatorBadge(5, false)
             waitFor("Exact aggregate not restored") { eligible().count { it.notification.number == 5 } == 1 }
             val numbered = eligible().single { it.notification.number == 5 }
-            manager.cancel(numbered.tag, numbered.id)
+            runOnMainSync { manager.cancel(numbered.tag, numbered.id) }
             waitFor("Exact dismissal missing") { eligible().size == 1 }
             projectIndicatorBadge(2, false)
             waitFor("Remaining notification count missing") { eligible().single().notification.number == 2 }
             projectIndicatorBadge(0, true)
             waitFor("Unknown numeric badge not cleared") { eligible().all { it.notification.number == 0 } }
         } finally {
-            tags.forEachIndexed { index, tag -> manager.cancel(tag, index + 71) }
-            manager.cancel("unrelated-tag", 73)
             runOnMainSync {
+                tags.forEach { tag -> manager.cancel(tag, 0); pendingTags().remove(tag); latestInstances().remove(tag) }
+                manager.cancel("unrelated-tag", 73)
                 indicatorTotalField.setLong(app.host, indicatorSavedTotal)
                 indicatorPartialField.setBoolean(app.host, indicatorSavedPartial)
             }
         }
         waitFor("Fixture badge cleanup") { eligible().isEmpty() }
-        runOnMainSync { updateActivityBadges(app, 12, false) }
+        runOnMainSync { updateActivityBadges(app, 12, false, pendingTags(), latestInstances()) }
         check(eligible().isEmpty())
         // A newly posted ordinary activity notification uses the latest scalar.
         val totalField = NativeHost::class.java.getDeclaredField("unreadTotal").apply { isAccessible = true }
         val partialField = NativeHost::class.java.getDeclaredField("unreadPartial").apply { isAccessible = true }
-        val post = NativeHost::class.java.getDeclaredMethod("notifyActivity", String::class.java, String::class.java, String::class.java, String::class.java).apply { isAccessible = true }
-        val dismiss = NativeHost::class.java.getDeclaredMethod("dismissActivity", String::class.java, String::class.java).apply { isAccessible = true }
+        val post = NativeHost::class.java.getDeclaredMethod("notifyActivity", String::class.java, String::class.java, String::class.java, String::class.java, String::class.java).apply { isAccessible = true }
+        val dismiss = NativeHost::class.java.getDeclaredMethod("dismissActivity", String::class.java, String::class.java, String::class.java).apply { isAccessible = true }
         val freshRoute = "msg=" + "3".repeat(32) + "&dir=in"
         var savedTotal = 0L; var savedPartial = true
         try {
             runOnMainSync {
                 savedTotal = totalField.getLong(app.host); savedPartial = partialField.getBoolean(app.host)
                 totalField.setLong(app.host, 6L); partialField.setBoolean(app.host, false)
-                post.invoke(app.host, "default", freshRoute, "Fresh fixture sender", "Fresh private body")
+                post.invoke(app.host, "default", freshRoute, "Fresh fixture sender", "Fresh private body", fixtureNoticeMetadata("default", freshRoute))
             }
             waitFor("New activity did not use latest aggregate") { eligible().singleOrNull()?.notification?.number == 6 }
             runOnMainSync {
                 partialField.setBoolean(app.host, true)
-                post.invoke(app.host, "default", freshRoute, "Fresh fixture sender", "Fresh private body")
+                post.invoke(app.host, "default", freshRoute, "Fresh fixture sender", "Fresh private body", fixtureNoticeMetadata("default", freshRoute))
             }
             waitFor("New activity exposed partial positive estimate as an exact number") { eligible().singleOrNull()?.notification?.number == 0 }
         } finally {
             runOnMainSync {
-                dismiss.invoke(app.host, "default", freshRoute)
+                val metadata = eligible().singleOrNull()?.notification?.extras?.getString(NOTICE_METADATA_EXTRA)
+                val expected = metadata?.let { JSONObject(it).getString("instance") }.orEmpty()
+                dismiss.invoke(app.host, "default", freshRoute, expected)
                 totalField.setLong(app.host, savedTotal); partialField.setBoolean(app.host, savedPartial)
             }
         }
