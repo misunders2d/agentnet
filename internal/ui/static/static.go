@@ -56,6 +56,7 @@ var relayFiles = map[string]string{
 	"/assets/historyarchive.mjs":      "historyarchive.mjs",
 	"/assets/historywindow.mjs":       "historywindow.mjs",
 	"/assets/historycontribution.mjs": "historycontribution.mjs",
+	"/assets/topictransfer.mjs":       "topictransfer.mjs",
 	"/assets/wire.mjs":                "wire.mjs",
 	"/assets/vendor/age.mjs":          "vendor/age.mjs",
 	"/assets/vendor/qr.mjs":           "vendor/qr.mjs",  // loaded only to show a new device's link
