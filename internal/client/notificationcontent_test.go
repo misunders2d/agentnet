@@ -187,7 +187,7 @@ func TestBuiltinReminderSentDirectionAndMultiple(t *testing.T) {
 	n.mu.Lock()
 	args := append([]string{}, n.argvs[before]...)
 	n.mu.Unlock()
-	if n.count() != before+1 || n.last() != "Reminder: 2 reminders are due" || len(args) != 2 || args[1] != protocol.AppOpenURL("review&workspace=default") {
+	if n.count() != before+1 || n.last() != "Reminders: Reminders are due" || len(args) != 2 || args[1] != protocol.AppOpenURL("review&workspace=default") {
 		t.Fatalf("multi reminder %q %v", n.last(), args)
 	}
 }
@@ -619,6 +619,10 @@ func TestNativeNotificationOwnReminderPreviewMatrix(t *testing.T) {
 		if n.Title != v.title || n.Body != v.body || n.Fragment != "msg="+id+"&conv="+conv+"&dir=out" {
 			t.Fatal("wrong own reminder mask/target", v.mode, n)
 		}
+		current, found, err := w.alice.Reminder(id)
+		if err != nil || !found || len(n.Reminders) != 1 || n.Reminders[0].Message != id || n.Reminders[0].Revision != current.Revision {
+			t.Fatal("single reminder lost its exact captured generation", n, current, err)
+		}
 	}
 }
 
@@ -658,6 +662,7 @@ func TestNativeNotificationFixedSignalPrivacy(t *testing.T) {
 		for _, v := range []struct{ title, wantTitle, wantBody string }{
 			{"AgentNet", "AgentNet", "New activity"},
 			{"Reminder", "AgentNet", "A reminder is due"},
+			{"Reminders", "AgentNet", "Reminders are due"},
 			{"Decision needed", "AgentNet", "A request needs your decision"},
 			{"AgentNet — company settings access", "AgentNet — company settings access", "Open AgentNet to review"},
 			{"Reminder · " + private, "AgentNet", "New activity"},
