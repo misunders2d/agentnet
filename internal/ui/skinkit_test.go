@@ -34,8 +34,12 @@ func TestSkinKitPartsDocumented(t *testing.T) {
 			return err
 		}
 		src, err := os.ReadFile(path)
-		for _, m := range regexp.MustCompile(`data-part="([a-z-]+)"`).FindAllSubmatch(src, -1) {
-			used = append(used, string(m[1]))
+		for _, m := range regexp.MustCompile(`data-part=(?:"([a-z-]+)"|\{\s*\w+\s*\?\s*undefined\s*:\s*"([a-z-]+)"\s*\})`).FindAllSubmatch(src, -1) {
+			part := m[1]
+			if len(part) == 0 {
+				part = m[2]
+			}
+			used = append(used, string(part))
 		}
 		return err
 	})
