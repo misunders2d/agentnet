@@ -41,7 +41,7 @@ export const CapOwnSyncV3 = "own3", CapDeviceHistory = CapOwnSyncV3, SubDeviceHi
 export const SubTopicSync = "topic-sync";
 export const CapDirectTopicSync="dts1", SubDirectTopicSync="direct-topic-sync";
 export const CapReminderSync = "rem1", SubReminderSync = "reminder-sync";
-export const CapTopicStateSync = "tss1", SubTopicStateSync = "topic-state-sync"; // private topic marks between current own-human devices; NOT implied by rm1
+export const CapTopicStateSync = "tss1", CapTopicStateSyncV2 = "tss2", SubTopicStateSync = "topic-state-sync"; // tss2 also reads tss1; neither is implied by rm1
 export const CapReadSync = "rd1", CapReadSyncV2 = "rd2", SubReadSync = "read-sync";
 export const CapModelSync = "mdl1", CapModelSyncV2 = "mdl2", SubModelSync = "model-sync";
 export const CapRootSync = "crs1", SubRootSync = "root-sync"; // explicit quiet DM-root copies, current own-human devices; NOT implied by rm1
@@ -782,7 +782,7 @@ async function checkV2(n) {
     if(n.sub===SubDeviceHistory||n.sub===SubDeviceFile){if(n.send_group||n.session||n.fallback)throw Error("device history: quiet carrier required");parseDeviceHistory(n.body,n.sub===SubDeviceFile);return;}
     if(n.sub===SubDirectTopicSync){if(n.send_group||n.session||n.fallback)throw Error("direct topic sync: quiet carrier required");parseDirectTopicSync(n.body);return;}
     if(n.sub===SubReminderSync){if(n.send_group||n.session||n.fallback)throw Error("reminder sync: quiet rootless carrier required");parseReminderSync(n.body);return;}
-    if(n.sub===SubTopicStateSync){if(n.send_group||n.session||n.fallback)throw Error("topic state sync: quiet rootless mark carrier required");parseTopicStateSync(n.body);return;}
+    if(n.sub===SubTopicStateSync){if(n.send_group||n.session||n.fallback)throw Error("topic state sync: quiet rootless mark carrier required");(JSON.parse(n.body).v===2?parseTopicLocationSync:parseTopicStateSync)(n.body);return;}
     if(n.sub===SubTopicSync){if(n.session||n.fallback)throw Error("topic sync: quiet rootless title carrier required");parseTopicSync(n.body);}else if(n.sub===SubInvitationSync)await validateInvitationSync(parseInvitationSync(n.body));else parseReadSync(n.body);return;
   }
   if (!validHash(n.conv) || !validID(n.lid)) throw new Error("invalid conversation or logical id");
@@ -1152,6 +1152,13 @@ export function parseTopicStateSync(json) {
   if(!validTopicMark(x)||seen.has(key))throw Error("topic state sync: invalid or duplicate mark");
   seen.add(key);return x;
  });return r;
+}
+export const topicLocationNewer=(a,b)=>!b||(a.revision!==b.revision?a.revision>b.revision:a.at!==b.at?a.at>b.at:a.writer!==b.writer?a.writer>b.writer:a.operation!==b.operation?a.operation>b.operation:a.destination!==b.destination?a.destination>b.destination:a.destination_topic>b.destination_topic);
+export function parseTopicLocationSync(json){
+ const r=strictRecord(json,65536,"topic location sync",{v:"int",person:"string",roster:"string",locations:"array"});
+ if(r.v!==2||!validID(r.person)||!validHash(r.roster)||!r.locations?.length||r.locations.length>64)throw Error("topic location sync: invalid owner or locations");
+ const fields={scope:"string",topic:"string",destination:"string",destination_topic:"string",operation:"string",at:"int",writer:"string",revision:"int"},seen=new Set();
+ r.locations=r.locations.map(x=>{if(!x||Object.keys(fields).some(k=>x[k]==null))throw Error("topic location sync: incomplete location");const p=strict(x,"topic location",fields),key=p.scope+'|'+p.topic;if(!(validHash(p.scope)||validAddress(p.scope))||!validID(p.topic)||!validHash(p.destination)||p.destination_topic&&!validID(p.destination_topic)||!validID(p.operation)||!validFingerprint(p.writer)||!Number.isSafeInteger(p.at)||p.at<1||!Number.isSafeInteger(p.revision)||p.revision<1||seen.has(key))throw Error("topic location sync: invalid or duplicate location");seen.add(key);return p;});return r;
 }
 
 // Private reminder intent. Alert delivery is a separate local generation ledger.
@@ -1994,7 +2001,7 @@ export async function verifyCaps(c, signKey) {
 // capsReads is protocol.CapsRecord.Reads: a record lists name, or rm1 when
 // rm1 implies it.
 export const RoomImplies = [CapExternalParticipation, CapAgentIdentity, CapHumanParticipation, CapAgentReaction, CapProgress, CapGroup, CapReplyReceiver, CapConvClear];
-export const capsReads = (c, name) => (c.caps || []).includes(name) || name===CapReadSync&&(c.caps||[]).includes(CapReadSyncV2) || name===CapTopicContext&&(c.caps||[]).includes(CapGuestAgent) || name===CapRequestFollowup&&(c.caps||[]).includes(CapRequestSteer) || name===CapModelSync&&(c.caps||[]).includes(CapModelSyncV2) || name===CapGroupInvitationControl&&(c.caps||[]).includes(CapGroupInvitationManage) || (c.caps || []).includes(CapRoom) && RoomImplies.includes(name);
+export const capsReads = (c, name) => (c.caps || []).includes(name) || name===CapReadSync&&(c.caps||[]).includes(CapReadSyncV2) || name===CapTopicStateSync&&(c.caps||[]).includes(CapTopicStateSyncV2) || name===CapTopicContext&&(c.caps||[]).includes(CapGuestAgent) || name===CapRequestFollowup&&(c.caps||[]).includes(CapRequestSteer) || name===CapModelSync&&(c.caps||[]).includes(CapModelSyncV2) || name===CapGroupInvitationControl&&(c.caps||[]).includes(CapGroupInvitationManage) || (c.caps || []).includes(CapRoom) && RoomImplies.includes(name);
 
 // profileSupports is protocol.Profile.Supports for a profile as the relay
 // sends it ({person, sessions, live, caps}): there are sessions, and each

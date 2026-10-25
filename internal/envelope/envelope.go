@@ -822,8 +822,7 @@ func checkVersion2(in Inner) error {
 			if in.SendGroup != "" {
 				return errors.New("topic state sync carries no message grouping")
 			}
-			_, err := protocol.ParseTopicStateSync([]byte(in.Body))
-			return err
+			return protocol.CheckTopicStateCarrier([]byte(in.Body))
 		}
 		if in.Sub == SubInvitationSync {
 			_, err := protocol.ParseInvitationSync([]byte(in.Body))

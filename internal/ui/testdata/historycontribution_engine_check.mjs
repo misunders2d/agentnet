@@ -47,7 +47,7 @@ same(review.items.map(m=>m.id),[selected.id,child.id],'selected parents precede 
 check(review.body.includes('parent not shared')&&!review.body.includes('Unselected secret parent'),'omitted parent never disclosed');
 check(review.body.includes('agentnet:message/'+selected.id+'?conv='+conv),'authorized original deep link retained');
 check(review.items[1].selected_parent===1&&review.audience.length===3,'selected relations and full current audience reviewed');
-const sent=await a.api('/api/history/contribution/apply',review);await deliver(sent);
+const sent=await a.api('/api/history/contribution/apply',review);await deliver(sent);check(!(await a.store.all('outbox')).some(r=>r.contribution_review),'guarded contribution commit retains no preview plaintext');
 for(const e of [b,outsider]){const m=(await e.convMessages(destination,await e.store.all('inbox'),await e.store.all('outbox'))).find(m=>m.lid===sent.lid);check(m?.kind==='message'&&m.body===review.body&&!m.pid&&!m.target&&!m.followup&&!m.reply_to,'signed ordinary snapshot inert at both group recipients');}
 for(const [id,envelope] of original)same((await a.store.get('outbox',id)).envelope,envelope,'source originals remain byte-identical');
 same((await a.applyHistoryContribution(review)).lid,sent.lid,'exact contribution retry deduplicated');
@@ -75,6 +75,7 @@ await a.sendGroupTurn(await a.groupRecord(destination),{id:keptReview.operation,
 await refuses(()=>a.applyHistoryContribution(keptReview),/changed/);
 const sha=review.items[0].files[0].sha256;await a.store.write([{s:'files',k:'kept/'+sha}]);await refuses(()=>a.previewHistoryContribution({source:conv,ids:[file.id],destination,files:[{id:file.id,index:0}]}),/unavailable/);
 await refuses(()=>a.previewHistoryContribution({source:conv,ids:Array.from({length:65},()=>wire.newID()),destination}),/64/);
+const legacy=(await a.store.all('outbox')).find(r=>r.conv===destination&&r.lid===sent.lid),legacyID=wire.newID(),legacyRow={...legacy,id:legacyID,state:'delivered',body:'',contribution_review:{body:'Old preview plaintext'}};a.erased.add(destination+'|'+a.fp+'|'+sent.lid);const scrub=await a.eraseOps(destination,await a.store.all('inbox'),[...await a.store.all('outbox'),legacyRow]);const scrubbed=scrub.find(o=>o.s==='outbox'&&o.k===legacyID);check(scrubbed&&!scrubbed.v.contribution_review&&!scrubbed.v.body,'erasure also scrubs old preview data on an already blank row');
 console.log(JSON.stringify({checks}));
 if(typeof window!=='undefined'){
  for(const e of [...users,restarted]){e.stop();await Promise.all([e.topicSyncRun,e.historyRun,e.readSyncRun,e.rootSyncRun,e.invitationSyncRun].filter(Boolean));e.store.close();}

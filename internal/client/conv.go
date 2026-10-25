@@ -209,6 +209,11 @@ func (a *Agent) convSync(ctx context.Context) {
 			a.Logf("copying topic titles: %v", titleErr)
 			a.convWork.due(convHistory)
 		}
+		locations, locationErr := a.syncTopicLocations()
+		if locationErr != nil {
+			a.Logf("copying topic locations: %v", locationErr)
+			a.convWork.due(convHistory)
+		}
 		marks, markErr := a.syncTopicMarks()
 		if markErr != nil {
 			a.Logf("copying topic marks: %v", markErr)
@@ -234,7 +239,7 @@ func (a *Agent) convSync(ctx context.Context) {
 		if directErr != nil {
 			a.Logf("copying direct history: %v", directErr)
 		}
-		if roots || reads || invites || titles || marks || reminders || placements || models || more || direct {
+		if roots || reads || invites || titles || locations || marks || reminders || placements || models || more || direct {
 			a.convWork.due(convHistory) // one page per sync; the next follows at once
 			a.kickNow()
 		}
@@ -260,7 +265,7 @@ func (a *Agent) relayFeatures(ctx context.Context) ([]string, error) {
 // hint (advertisedCaps) it is at most protocol.MaxAdvertisedCaps long;
 // rm1 (protocol.CapRoom) says this program enforces every room reader rule
 // (ROOM_V1 §2.1), so what rm1 implies (rcv1 among them) is not listed.
-var ownCaps = []string{protocol.CapMentionReaction, protocol.CapProactiveAgent, protocol.CapAgentOrganization, protocol.CapConversationAudience, protocol.CapContinuation, protocol.CapRootSync, protocol.CapControl, protocol.CapDriveSpace, protocol.CapDirectTopicSync, protocol.CapEnv2, protocol.CapRequestSteer, protocol.CapGroupInvitationManage, protocol.CapGuestAgent, protocol.CapHistoryArchive, protocol.CapHeadless, protocol.CapGroupHumanParticipation, protocol.CapModelSyncV2, protocol.CapNotify, protocol.CapTopicOrganization, protocol.CapOwnSyncV2, protocol.CapOwnSyncV3, protocol.CapPerson, protocol.CapReadSyncV2, protocol.CapReminderSync, protocol.CapConversationResources, protocol.CapRoom, protocol.CapSendGroup, protocol.CapTopicParticipation, protocol.CapTopicStateSync, protocol.CapSharedTopicTitle, protocol.CapTyping} // apx1 and aid1 are already implied by rm1.
+var ownCaps = []string{protocol.CapMentionReaction, protocol.CapProactiveAgent, protocol.CapAgentOrganization, protocol.CapConversationAudience, protocol.CapContinuation, protocol.CapRootSync, protocol.CapControl, protocol.CapDriveSpace, protocol.CapDirectTopicSync, protocol.CapEnv2, protocol.CapRequestSteer, protocol.CapGroupInvitationManage, protocol.CapGuestAgent, protocol.CapHistoryArchive, protocol.CapHeadless, protocol.CapGroupHumanParticipation, protocol.CapModelSyncV2, protocol.CapNotify, protocol.CapTopicOrganization, protocol.CapOwnSyncV2, protocol.CapOwnSyncV3, protocol.CapPerson, protocol.CapReadSyncV2, protocol.CapReminderSync, protocol.CapConversationResources, protocol.CapRoom, protocol.CapSendGroup, protocol.CapTopicParticipation, protocol.CapTopicStateSyncV2, protocol.CapSharedTopicTitle, protocol.CapTyping} // apx1 and aid1 are already implied by rm1.
 
 // capsPublisher is the one publisher of this run's capability records:
 // the daemon's and link.go's waiting session share the session id, and the
@@ -680,7 +685,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 	if err := a.prepareTopicOrganization(ctx, conv, &m); err != nil {
 		return ConvSent{}, err
 	}
-	if m.Topic != "" && m.ReplyTo == "" && m.TopicEvent == nil && m.sub == "" && (m.Kind == "" || m.Kind == envelope.KindMessage || m.Kind == envelope.KindQuestion || m.Kind == envelope.KindTask) && !envelope.AgentOrigin(m.Origin) {
+	if m.Topic != "" && m.ReplyTo == "" && m.TopicEvent == nil && m.sub == "" && !m.contribution && (m.Kind == "" || m.Kind == envelope.KindMessage || m.Kind == envelope.KindQuestion || m.Kind == envelope.KindTask) && !envelope.AgentOrigin(m.Origin) {
 		// Addressed questions/tasks continue the same causal topic chain as chat.
 		m.ReplyTo, err = a.chatTopicHead(conv, m.Topic)
 		if err != nil {
@@ -881,7 +886,9 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 			Conv: conv, Kind: m.Kind, Sub: m.sub, Status: m.status,
 			ReplyTo: m.ReplyTo, Target: m.Target, PID: m.PID, Origin: m.Origin,
 		})
-		if m.sub != "" || (m.claim != nil || (m.PID != "" || m.selfJob) && !addressed) && !proactive {
+		// Reviewed inert quotations use this same native disclosure claim for
+		// files, as group sends already do; the flag is never received on wire.
+		if m.sub != "" || (m.claim != nil && !m.contribution || (m.PID != "" || m.selfJob) && !addressed) && !proactive {
 			return ConvSent{}, errors.New("files go only with a message, question or task a person sends")
 		}
 		if len(m.Files) > envelope.MaxAttachments {
@@ -1193,7 +1200,7 @@ func (a *Agent) releaseConv(ctx context.Context, feats []string) {
 			// reactions, version 1 progress, deletions) have no person gate:
 			// only what the reader's signed capabilities read.
 			case w.conv == "",
-				w.required == protocol.CapModelSync || w.required == protocol.CapModelSyncV2 || w.required == protocol.CapReadSync || w.required == protocol.CapReadSyncV2 || w.required == protocol.CapOwnSyncV2 || w.required == protocol.CapOwnSyncV3 || w.required == protocol.CapDirectTopicSync || w.required == protocol.CapTopicStateSync || w.required == protocol.CapReminderSync,
+				w.required == protocol.CapModelSync || w.required == protocol.CapModelSyncV2 || w.required == protocol.CapReadSync || w.required == protocol.CapReadSyncV2 || w.required == protocol.CapOwnSyncV2 || w.required == protocol.CapOwnSyncV3 || w.required == protocol.CapDirectTopicSync || w.required == protocol.CapTopicStateSync || w.required == protocol.CapTopicStateSyncV2 || w.required == protocol.CapReminderSync,
 				w.required == protocol.CapProgress:
 				ok = a.readerCheck(ctx, to, key, n) == nil
 			default:

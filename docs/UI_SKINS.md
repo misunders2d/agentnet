@@ -767,6 +767,21 @@ types are the Go structs in `internal/ui/*.go`, generated into
   Explicit private/shared names keep their existing precedence. The fallback
   also works for retained explicit-new notices; it changes no title register,
   move or execution authority. Older hosts/generic history retain automatic names.
+  Whole-topic continuation uses `/api/topic/transfer/{preview,page,apply,status,cancel,location}`
+  (exact fields in `HOST_API_ROUTES.md`). Preview freezes the entire authorized
+  source topic or concrete legacy peer/thread; it does not trust the visible
+  message page. Show source counts, current destination audience, bounded paged
+  quoted content, and file availability before explicit confirmation. Apply one
+  bounded part at its expected cursor; retry that cursor after response loss.
+  Closing pauses unqueued parts; status resumes the same local snapshot after
+  restart. `queued` is not delivery. Partial/canceled snapshots leave already
+  queued quotations intact and create no completed source location. Source
+  edits/deletion or authority changes refuse remaining disclosure. Later posts
+  and running outputs stay at source; imports are inert importer-attributed
+  quotations, never independently signed original authorship or helper invites.
+  A completed location is private to the verified person, synchronized to their
+  human devices. Offer its destination link only when `available` is true;
+  preserve source navigation and do not make a shared notice that reveals it.
   GET
   `/api/topics?peer=&state=&q=&before=&limit=` pages `{topics, next,
   matched}`, unread first with activity time, ID and peer tie breaks. Optional

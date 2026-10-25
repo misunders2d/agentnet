@@ -81,6 +81,12 @@ type HistoryContributionReview struct {
 
 var ErrHistoryContributionChanged = errors.New("the selected history or destination audience changed; review the contribution again")
 
+type historyRecipientMissing struct{ Address, Fingerprint string }
+
+func (e *historyRecipientMissing) Error() string {
+	return "destination recipient key is not known here yet: " + e.Address
+}
+
 func contributionOperation(r HistoryContributionReview) string {
 	r.Operation = ""
 	b, _ := json.Marshal(r)
@@ -109,7 +115,7 @@ func historyContributionEvents(q dbq, conv string) ([]protocol.ParticipationEven
 	return out, rows.Err()
 }
 
-func (a *Agent) historyContributionAudience(q dbq, conv, topic string) ([]HistoryContributionAudience, bool, error) {
+func (a *Agent) historyContributionAudience(q dbq, conv, topic string, allowDM ...bool) ([]HistoryContributionAudience, bool, error) {
 	if err := topicOrganizationAuthor(q, conv, a.Address, a.Self().Fingerprint()); err != nil {
 		return nil, false, err
 	}
@@ -117,8 +123,8 @@ func (a *Agent) historyContributionAudience(q dbq, conv, topic string) ([]Histor
 	if err != nil {
 		return nil, false, err
 	}
-	if m.root.Kind != protocol.ConvKindGroup {
-		return nil, false, errors.New("choose an existing group in this workspace")
+	if m.root.Kind != protocol.ConvKindGroup && !(len(allowDM) > 0 && allowDM[0] && m.root.Kind == protocol.ConvKindDM) {
+		return nil, false, errors.New("choose an existing chat or group in this workspace")
 	}
 	events, err := historyContributionEvents(q, conv)
 	if err != nil {
@@ -188,7 +194,10 @@ func (a *Agent) historyContributionAudience(q dbq, conv, topic string) ([]Histor
 		if e = q.QueryRow(`SELECT count(*) FROM peers WHERE address=? AND pending IS NOT NULL`, p.Address).Scan(&pending); e != nil {
 			return nil, false, e
 		}
-		if !ok || pending != 0 || key.Fingerprint() != p.Fingerprint {
+		if !ok {
+			return nil, false, &historyRecipientMissing{Address: p.Address, Fingerprint: p.Fingerprint}
+		}
+		if pending != 0 || key.Fingerprint() != p.Fingerprint {
 			return nil, false, errors.New("destination recipient key changed")
 		}
 	}

@@ -18,6 +18,7 @@ import { Header, GuestBar, helpers, type Helper } from "./Conversation.header";
 import { TopicBar, TopicEnd, TopicStart } from "./Conversation.topics";
 import { OrganizeMessages } from "./Conversation.organize";
 import { ContributeHistory } from "./Conversation.import";
+import { TopicContinuation } from "./Conversation.transfer";
 import { PersonTopics } from "./PersonTopics";
 import { EmptyTimeline, Timeline } from "./Conversation.timeline";
 import { roomTitle, threadAgentName, type AnyMsg, type Ctx } from "./Message.model";
@@ -100,6 +101,7 @@ function OpenView({ open }: { open: NonNullable<Open> }) {
       {t&&personMain ? <PersonTopics dm={t} main={personMain} onMain={()=>{
         void store.openUnread({kind:"dm",id:personMain});
       }}/> : <TopicBar thread={ctx.thread||undefined} dm={ctx.dm||undefined} />}
+      <TopicContinuation dm={t ?? undefined} thread={th ?? undefined} topic={topic || ""} fresh={!!newTopic} />
       {/* Another topic swaps only the messages: header, topic bar and composer stay. */}
       <Swap id={open.id} className="flex min-h-0 flex-1 flex-col" side="flex min-h-0 flex-1 flex-col" enter="an-topic-in" leave="an-topic-out" ms={MOTION.topic} label="timeline">
       <Timeline key={open.id + ":" + (newTopic ? "new" : topic || "main")} ctx={ctx} messages={messages} focus={open.focus} focusSeq={open.focusSeq} unread={open.unread} readVisit={readVisit} selected={selected} onSelect={toggle} start={<TopicStart ctx={ctx} messages={messages} />} end={<TopicEnd ctx={ctx} />}

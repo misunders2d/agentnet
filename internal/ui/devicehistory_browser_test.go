@@ -61,7 +61,7 @@ func testOwnDeviceModuleIndexedDB(t *testing.T, module, resultField string) {
 				done <- result
 			}
 		default:
-			if !strings.HasPrefix(r.URL.Path, "/static/") && r.URL.Path != "/testdata/"+module && r.URL.Path != "/testdata/human_engine_check.mjs" {
+			if !strings.HasPrefix(r.URL.Path, "/static/") && r.URL.Path != "/testdata/"+module && r.URL.Path != "/testdata/human_engine_check.mjs" && r.URL.Path != "/testdata/topictransfer_engine_check.mjs" {
 				http.NotFound(w, r)
 				return
 			}

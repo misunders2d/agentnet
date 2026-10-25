@@ -11,6 +11,11 @@ Standalone skins implement that optional field on the same Host API contract.
 Overlays also inherit Outbox's Scheduled, Drafts and Reminders views and its due
 count. Restyle those controls without hiding them or returning reminder lists
 to the top of Chats. The existing Host API supplies these views.
+Whole-topic continuation also stays visible: its audience and paged snapshot
+review, pause/resume/cancel status, and private completed source-location link.
+Original records and running work stay at source. Queued quotations do not mean
+delivered, and unavailable destination links stay disabled. Standalone skins use
+the same `/api/topic/transfer/*` contract in `docs/HOST_API_ROUTES.md`.
 
 
 A skin that needs a different interface altogether is a **standalone skin**

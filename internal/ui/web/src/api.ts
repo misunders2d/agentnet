@@ -27,8 +27,24 @@ export interface HistoryContributionRequest {
 export interface HistoryContributionReview extends HistoryContributionRequest {
   operation: string; token: string; body: string; imported_at: string; audience_pending?: boolean;
   items: { id: string; lid: string; author: string; hash: string; from: string; label?: string; sent_at: string; body: string; reply_to?: string; selected_parent?: number;
-    files: { index: number; name: string; size: number; sha256: string; available: boolean; selected: boolean }[] }[];
+    files: { index: number; name: string; size: number; sha256: string; available: boolean; selected: boolean; unsupported?: string }[] }[];
   audience: { person: string; address: string; fingerprint: string; label: string; role: "member" | "guest" | "agent"; topic?: string; pid?: string; agent_id?: string }[];
+}
+
+export interface TopicTransferRequest {
+  source?: string; topic?: string; peer?: string; thread?: string; destination: string; destination_topic?: string; new_topic?: boolean; title?: string;
+}
+export type TopicTransferScope = Pick<TopicTransferRequest, "source" | "topic" | "peer" | "thread">;
+export interface TopicTransferReview extends TopicTransferRequest {
+  id: string; token: string; created_at: string; cutoff: number; total_items: number; total_batches: number; total_files: number; total_bytes: number;
+  cursor: number; state: "review" | "partial" | "queued" | "canceled"; audience: HistoryContributionReview["audience"]; audience_pending: boolean; audience_total: number; audience_next: number;
+}
+export interface TopicTransferPage {
+  id: string; token: string; after: number; next: number; done: boolean; items: HistoryContributionReview["items"]; body: string;
+  audience?: HistoryContributionReview["audience"]; audience_total?: number; audience_next?: number;
+}
+export interface TopicTransferLocation {
+  scope: string; topic: string; destination: string; destination_topic: string; operation: string; at: number; writer: string; revision: number; available: boolean;
 }
 
 // Read-only folder listings use the daemon's generated contract.
@@ -109,6 +125,12 @@ export function api(host: Host) {
 	undoTopicOrganization:(d:{conv:string;peer?:string;lid:string;author:string;id:string})=>post<T.Sent[]>("/api/topic/organization/undo",d),
     previewHistoryContribution: (d: HistoryContributionRequest) => post<HistoryContributionReview>("/api/history/contribution/preview", d),
     applyHistoryContribution: (d: HistoryContributionReview) => post<T.Sent>("/api/history/contribution/apply", d),
+    previewTopicTransfer: (d: TopicTransferRequest) => post<TopicTransferReview>("/api/topic/transfer/preview", d),
+    topicTransferPage: (d: {id: string; token: string; after?: number; audience_after?: number}) => post<TopicTransferPage>("/api/topic/transfer/page", d),
+    applyTopicTransfer: (d: {id: string; token: string; cursor: number}) => post<TopicTransferReview>("/api/topic/transfer/apply", d),
+    topicTransferStatus: (d: TopicTransferScope & {id?: string}) => post<TopicTransferReview | null>("/api/topic/transfer/status", d),
+    cancelTopicTransfer: (d: {id: string; token: string}) => post<TopicTransferReview>("/api/topic/transfer/cancel", d),
+    topicTransferLocation: (d: TopicTransferScope) => post<TopicTransferLocation | null>("/api/topic/transfer/location", d),
 
     // Files
     stage: (file: File) => host.stage(file),

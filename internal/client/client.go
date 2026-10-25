@@ -359,6 +359,10 @@ func sameKeys(a, b identity.Public) bool {
 // When the Hub is unreachable a previously pinned key is used so the message
 // can be queued; the Hub still refuses it later if the recipient is revoked.
 func (a *Agent) sendKey(ctx context.Context, address string) (identity.Public, error) {
+	return a.sendKeyExpected(ctx, address, "")
+}
+
+func (a *Agent) sendKeyExpected(ctx context.Context, address, expected string) (identity.Public, error) {
 	pinned, _, found, err := a.store.peer(address)
 	if err != nil {
 		return identity.Public{}, err
@@ -374,6 +378,9 @@ func (a *Agent) sendKey(ctx context.Context, address string) (identity.Public, e
 		return identity.Public{}, ErrPeerRevoked
 	}
 	if !found {
+		if expected != "" && e.Public.Fingerprint() != expected {
+			return identity.Public{}, fmt.Errorf("%s's directory key does not match its current verified recipient key", address)
+		}
 		return e.Public, a.store.pin(e.Public)
 	}
 	if sameKeys(pinned, e.Public) {
@@ -718,7 +725,7 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 			}
 			// Waiting copies release when the recipient's signed capabilities
 			// change; progress is never sent unmarked to an older session.
-			if (n.steer || n.proposal || conv != "" || sub == envelope.SubHistoryArchive || required == protocol.CapHistoryArchive || required == protocol.CapModelSync || required == protocol.CapModelSyncV2 || required == protocol.CapOwnSyncV2 || required == protocol.CapOwnSyncV3 || required == protocol.CapReadSync || required == protocol.CapReadSyncV2 || required == protocol.CapDirectTopicSync || required == protocol.CapTopicStateSync || required == protocol.CapReminderSync || required == protocol.CapProgress || required == protocol.CapAgentReaction) && errors.Is(err, errAgentIdentityUnsupported) {
+			if (n.steer || n.proposal || conv != "" || sub == envelope.SubHistoryArchive || required == protocol.CapHistoryArchive || required == protocol.CapModelSync || required == protocol.CapModelSyncV2 || required == protocol.CapOwnSyncV2 || required == protocol.CapOwnSyncV3 || required == protocol.CapReadSync || required == protocol.CapReadSyncV2 || required == protocol.CapDirectTopicSync || required == protocol.CapTopicStateSync || required == protocol.CapTopicStateSyncV2 || required == protocol.CapReminderSync || required == protocol.CapProgress || required == protocol.CapAgentReaction) && errors.Is(err, errAgentIdentityUnsupported) {
 				return SendResult{ID: env.ID, State: stateConvWaiting, Detail: WaitPeerUpdate + err.Error()}, a.store.setOutboxState(env.ID, stateConvWaiting, WaitPeerUpdate+err.Error(), "")
 			}
 			if retryable(err) {

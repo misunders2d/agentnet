@@ -208,7 +208,7 @@ func TestTopicMarkSyncOldReaderRestartAndSeed(t *testing.T) {
 		}
 	}
 	// The phone runs a release that reads names (own2) but not marks.
-	publish(time.Now().Unix()+100, slices.DeleteFunc(slices.Clone(ownCaps), func(c string) bool { return c == protocol.CapTopicStateSync }))
+	publish(time.Now().Unix()+100, slices.DeleteFunc(slices.Clone(ownCaps), func(c string) bool { return c == protocol.CapTopicStateSync || c == protocol.CapTopicStateSyncV2 }))
 	if _, err := w.alice.syncTopicMarks(); err != nil {
 		t.Fatal(err)
 	}

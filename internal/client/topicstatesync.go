@@ -201,7 +201,7 @@ func (a *Agent) syncTopicMarks() (bool, error) {
 		// later marks stay unsealed here until it reads them, so nothing
 		// piles up for an older program.
 		var waiting int
-		if err = tx.QueryRow(`SELECT count(*) FROM outbox WHERE recipient=? AND recipient_fp=? AND sub=? AND state=?`, dev.Address, dev.Fingerprint(), envelope.SubTopicStateSync, stateConvWaiting).Scan(&waiting); err != nil {
+		if err = tx.QueryRow(`SELECT count(*) FROM outbox WHERE recipient=? AND recipient_fp=? AND sub=? AND required_cap=? AND state=?`, dev.Address, dev.Fingerprint(), envelope.SubTopicStateSync, protocol.CapTopicStateSync, stateConvWaiting).Scan(&waiting); err != nil {
 			return false, err
 		}
 		if waiting > 0 {
@@ -266,6 +266,9 @@ func (a *Agent) syncTopicMarks() (bool, error) {
 }
 
 func (a *Agent) admitTopicStateSync(ctx context.Context, env envelope.Envelope, in envelope.Inner, sender identity.Public, held bool, hold func(string, string) error) error {
+	if topicStateV2(in.Body) {
+		return a.admitTopicLocationSync(ctx, env, in, sender, held, hold)
+	}
 	r, err := protocol.ParseTopicStateSync([]byte(in.Body))
 	if err != nil {
 		return hold(reasonInvalid, err.Error())
@@ -335,6 +338,9 @@ func (a *Agent) mayDeliverTopicStateSync(env envelope.Envelope) (bool, bool, err
 	}
 	if state != stateQueued {
 		return true, false, nil
+	}
+	if topicStateV2(body) {
+		return a.mayDeliverTopicLocationSync(env, body, fp)
 	}
 	if err = a.refreshRecipientPerson(context.Background(), env.To, map[string]error{}); err != nil {
 		return true, false, err

@@ -17,6 +17,7 @@ import { threadIndexed, readThreadRows, projectDeviceThreads, readChatView } fro
 import { contributionPreview, contributionApply, contributionRecheck } from "./historycontribution.mjs";
 import {deviceHistory,deviceHistoryDirection,deviceHistoryPeer,directHistoryRow} from "./devicehistory.mjs";
 import {directTopics} from "./directtopics.mjs";
+import {topicTransfers} from "./topictransfer.mjs";
 import { backgroundCopy, historyWindow, stateWindow } from "./historywindow.mjs";
 import { historyArchive } from "./historyarchive.mjs";
 import { Decrypter, Encrypter } from "./vendor/age.mjs";
@@ -105,6 +106,10 @@ const historyIndexed = (row,arrival) => {
   return value;
 };
 
+// Derived selectors let a transfer recheck one original and source organization
+// metadata without projecting or hashing every topic body on each batch.
+const transferIndexed=row=>{const value={...row};delete value.contribution_review;value.transfer_lid=[row.conv||"",row.lid||row.id];if(row.conv&&row.topic)value.transfer_topic=[row.conv,row.topic];else delete value.transfer_topic;if(row.topic_event||row.control&&[wire.SubRevision,wire.SubRetraction].includes(row.sub))value.transfer_meta=row.conv||row.thread_peer||"";else delete value.transfer_meta;return value;};
+
 // ---- storage -------------------------------------------------------------------------------
 
 // openIDB opens this device's database (idb: promises over IndexedDB).
@@ -117,7 +122,7 @@ const historyIndexed = (row,arrival) => {
 export async function openIDB(name = "agentnet") {
   let onBlocked, refused = false;
   const blocked = new Promise((_, rej) => { onBlocked = () => { refused = true; rej(new Error("storage is blocked by another tab")); }; });
-  const opening = openDB(name, 9, { // 9: direct-thread peer projection; 5: continuous direct-thread source journal; 6: rows by conversation; 7: pending outbox state indexes; 8: unstarted inbox state and active report status indexes
+  const opening = openDB(name, 10, { // 10: exact transfer originals and source metadata; 9: direct-thread peer projection; 5: continuous direct-thread source journal; 6: rows by conversation; 7: pending outbox state indexes; 8: unstarted inbox state and active report status indexes
     async upgrade(d,oldVersion,newVersion,tx) {
       for (const s of stores) if (!d.objectStoreNames.contains(s)) d.createObjectStore(s);
       if(oldVersion<4) {
@@ -137,6 +142,7 @@ export async function openIDB(name = "agentnet") {
       if(oldVersion<7){const outbox=tx.objectStore("outbox");outbox.createIndex("sub","sub");outbox.createIndex("state","state");outbox.createIndex("recipient_state",["to","state"]);outbox.createIndex("lane_demote","lane_demote");}
       if(oldVersion<8){const inbox=tx.objectStore("inbox");inbox.createIndex("state","state");inbox.createIndex("status","status");}
       if(oldVersion<9)for(const name of ["inbox","outbox"]){const store=tx.objectStore(name);store.createIndex("thread_peer","thread_peer");for(let c=await store.openCursor();c;c=await c.continue())await c.update(threadIndexed(c.value,name));}
+      if(oldVersion<10)for(const name of ["inbox","outbox"]){const store=tx.objectStore(name);store.createIndex("transfer_lid","transfer_lid");store.createIndex("transfer_topic","transfer_topic");store.createIndex("transfer_meta","transfer_meta");for(let c=await store.openCursor();c;c=await c.continue())await c.update(transferIndexed(c.value));}
 
     },
     blocked: onBlocked,
@@ -149,6 +155,7 @@ export async function openIDB(name = "agentnet") {
     // retractions held (Engine.retractions keeps them between such writes).
     retractionMark: () => retractionMark,
     get: (s, k) => db.get(s, k),
+    has: async(s,k)=>(await db.getKey(s,k))!==undefined,
     async getMany(s, keys) {
       const tx=db.transaction(s),values=await Promise.all(keys.map(key=>tx.store.get(key)));await tx.done;return values;
     },
@@ -173,6 +180,9 @@ export async function openIDB(name = "agentnet") {
     demotionRows:()=>db.getAllFromIndex("outbox","lane_demote","sync"),
     // byConv returns the inbox or outbox rows of one conversation, in key order.
     byConv: (s, conv) => db.getAllFromIndex(s, "conv", conv),
+    transferOriginal: (s,conv,lid) => db.getAllFromIndex(s,"transfer_lid",[conv,lid]),
+    transferTopic: (s,conv,topic) => db.getAllFromIndex(s,"transfer_topic",[conv,topic]),
+    transferMeta: (s,scope) => db.getAllFromIndex(s,"transfer_meta",scope),
     byThreadPeer: (s, peer) => db.getAllFromIndex(s, "thread_peer", peer),
     async directRows({after=0,ceiling=Number.MAX_SAFE_INTEGER,reverse=false,limit=historyPage}={}){
       if(after>=ceiling)return [];const rows=[],tx=db.transaction(["inbox","outbox"]),range=IDBKeyRange.bound(after,ceiling,true,false);
@@ -198,7 +208,7 @@ export async function openIDB(name = "agentnet") {
             // its index range holds exactly those, in the same key order.
             // Two bulk reads in this transaction (keys, then values, in that
             // one order) instead of a request per row.
-            const store = tx.objectStore(c.s), index=typeof c.scope.conv==="string"?"conv":typeof c.scope.thread_peer==="string"?"thread_peer":"", source=index?store.index(index):store, range=index?IDBKeyRange.only(c.scope[index]):undefined;
+            const store = tx.objectStore(c.s), index=c.scope.transfer_topic?"transfer_topic":c.scope.transfer_lid?"transfer_lid":c.scope.transfer_meta?"transfer_meta":typeof c.scope.conv==="string"?"conv":typeof c.scope.thread_peer==="string"?"thread_peer":"", source=index?store.index(index):store, range=index?IDBKeyRange.only(c.scope[index]):undefined;
             const [keys, values] = await Promise.all([source.getAllKeys(range), source.getAll(range)]), rows = [];
             values.forEach((v, i) => { if (scopeRow(v, c.scope)) rows.push(authorityJSON(c.s, keys[i], v)); });
             if ("[" + rows.join(",") + "]" !== JSON.stringify(c.rows)) throw new StoreConflict();
@@ -215,7 +225,7 @@ export async function openIDB(name = "agentnet") {
               arrival=(await tx.objectStore("inbox").get(o.k))?.history_arrival||0;
               if(!arrival) {arrival=(await tx.objectStore("kv").get("history-arrival")||0)+1;await tx.objectStore("kv").put(arrival,"history-arrival");}
             }
-            value=threadIndexed(historyIndexed(value,arrival),o.s);
+            value=transferIndexed(threadIndexed(historyIndexed(value,arrival),o.s));
             if(directHistoryRow(value)){let seq=(await tx.objectStore(o.s).get(o.k))?.device_arrival||0;if(!seq){seq=(await tx.objectStore("kv").get("device-history-arrival")||0)+1;await tx.objectStore("kv").put(seq,"device-history-arrival");}value.device_arrival=seq;}else delete value.device_arrival;
           }
           // Each request's own rejection is the transaction's (tx.done); it is not awaited one by one.
@@ -242,6 +252,7 @@ export function memoryStore() {
   let retractionMark = 0;
   return {
     retractionMark: () => retractionMark,
+    has:async(s,k)=>data[s].has(k),
     get: async (s, k) => (data[s].has(k) ? structuredClone(data[s].get(k)) : undefined),
     getMany: async (s, keys) => keys.map(key=>data[s].has(key)?structuredClone(data[s].get(key)):undefined),
     all: async (s) => [...data[s].values()].map((v) => structuredClone(v)),
@@ -253,6 +264,9 @@ export function memoryStore() {
     inboxStatus:async status=>[...data.inbox.values()].filter(r=>r.status===status).map(r=>structuredClone(r)),
     outboxSub:async sub=>[...data.outbox.values()].filter(r=>r.sub===sub).map(r=>structuredClone(r)),
     demotionRows:async()=>[...data.outbox.values()].filter(r=>r.lane_demote==="sync").map(r=>structuredClone(r)),
+    transferTopic:async(s,conv,topic)=>[...data[s].values()].filter(r=>r.transfer_topic?.[0]===conv&&r.transfer_topic?.[1]===topic).map(r=>structuredClone(r)),
+    transferOriginal:async(s,conv,lid)=>[...data[s].values()].filter(r=>r.transfer_lid?.[0]===conv&&r.transfer_lid?.[1]===lid).map(r=>structuredClone(r)),
+    transferMeta:async(s,scope)=>[...data[s].values()].filter(r=>r.transfer_meta===scope).map(r=>structuredClone(r)),
     byConv: async (s, conv) => [...data[s].keys()].filter((x) => data[s].get(x).conv === conv).sort().map((x) => structuredClone(data[s].get(x))),
     byThreadPeer: async (s, peer) => [...data[s].keys()].filter(k => data[s].get(k).thread_peer === peer).sort().map(k => structuredClone(data[s].get(k))),
     directRows:async({after=0,ceiling=Number.MAX_SAFE_INTEGER,reverse=false,limit=historyPage}={})=>[...[...data.inbox.values()].map(row=>({row,here:false})),...[...data.outbox.values()].map(row=>({row,here:true}))].filter(x=>x.row.device_arrival>after&&x.row.device_arrival<=ceiling).sort((a,b)=>(a.row.device_arrival-b.row.device_arrival)*(reverse?-1:1)).slice(0,limit).map(x=>structuredClone(x)),
@@ -272,7 +286,7 @@ export function memoryStore() {
               arrival=data.inbox.get(o.k)?.history_arrival||0;
               if(!arrival) {arrival=(data.kv.get("history-arrival")||0)+1;data.kv.set("history-arrival",arrival);}
             }
-            value=threadIndexed(historyIndexed(value,arrival),o.s);
+            value=transferIndexed(threadIndexed(historyIndexed(value,arrival),o.s));
             if(directHistoryRow(value)){let seq=data[o.s].get(o.k)?.device_arrival||0;if(!seq){seq=(data.kv.get("device-history-arrival")||0)+1;data.kv.set("device-history-arrival",seq);}value.device_arrival=seq;}else delete value.device_arrival;
           }
           data[o.s].set(o.k,value);
@@ -309,7 +323,7 @@ const authorityValue = (store, row) => structuredClone(authorityFields(store, ro
 // authorityJSON is one captured {k, v} entry as JSON. The write-time check
 // only reads its rows, so it compares them without copying each one first.
 const authorityJSON = (store, k, row) => JSON.stringify({ k, v: authorityFields(store, row) });
-const scopeRow = (row, scope) => !row.forwarded && ["conv", "pid", "sub", "lid", "thread_peer"].every((k) => scope[k] === undefined || row[k] === scope[k]) && (!scope.organization || !!row.topic_event || scope.ids.includes(row.id) || scope.ids.includes(row.lid) || [wire.SubRevision,wire.SubRetraction].includes(row.sub) && scope.ids.includes(row.ref?.id));
+const scopeRow = (row, scope) => !row.forwarded && (!scope.transfer_topic||row.transfer_topic?.[0]===scope.transfer_topic[0]&&row.transfer_topic?.[1]===scope.transfer_topic[1]) && (!scope.transfer_lid||row.transfer_lid?.[0]===scope.transfer_lid[0]&&row.transfer_lid?.[1]===scope.transfer_lid[1]) && (!scope.transfer_meta||row.transfer_meta===scope.transfer_meta) && ["conv", "pid", "sub", "lid", "thread_peer"].every((k) => scope[k] === undefined || row[k] === scope[k]) && (!scope.organization || !!row.topic_event || scope.ids.includes(row.id) || scope.ids.includes(row.lid) || [wire.SubRevision,wire.SubRetraction].includes(row.sub) && scope.ids.includes(row.ref?.id));
 
 const put = (st, s, k, v) => st.write([{ s, k, v }]);
 
@@ -1738,6 +1752,14 @@ export class Engine {
   // page must be open for it to run).
 
   directHistory() { return this.directHistoryModule ||= deviceHistory(this,Hold); }
+  topicTransfers() { return this.topicTransfersModule ||= topicTransfers(this,Hold,StoreConflict); }
+  previewTopicTransfer(input) { return this.topicTransfers().preview(input); }
+  topicTransferPage(input) { return this.topicTransfers().page(input); }
+  applyTopicTransfer(input) { return this.topicTransfers().apply(input); }
+  topicTransferStatus(input) { return this.topicTransfers().status(input); }
+  cancelTopicTransfer(input) { return this.topicTransfers().cancel(input); }
+  topicTransferLocation(input) { return this.topicTransfers().location(input); }
+  syncTopicLocations() { return this.topicTransfers().sync(); }
   directTopics() { return this.directTopicsModule ||= directTopics(this,Hold,StoreConflict); }
   directPlacements(view) { return this.directTopics().placements(view); }
   directTopicPreview(request) { return this.directTopics().preview(request); }
@@ -2185,6 +2207,7 @@ export class Engine {
   }
   syncTopicTitles() {
     this.syncDirectTopics().catch(()=>{});
+    this.syncTopicLocations().catch(()=>{});
     this.syncReminders().catch(()=>{});
     this.syncTopicMarks().catch(()=>{}); // marks follow every wake names do (connect, own roster, admission)
     this.topicSyncAgain=true;
@@ -2458,13 +2481,14 @@ export class Engine {
     }
   }
   async topicStateSyncGate(rec) {
-    await this.refreshPerson(this.me);const r=wire.parseTopicStateSync(rec.body);
+    await this.refreshPerson(this.me);const location=JSON.parse(rec.body).v===2,r=(location?wire.parseTopicLocationSync:wire.parseTopicStateSync)(rec.body);
     await this.readSyncAuthority(r,this.address,this.fp,rec.to,rec.recipient_fp);
     const pin=await this.store.get("pins",rec.to),features=await this.features(),profile=await this.profile(rec.to);
-    if(!features.includes("env2")||!features.includes("caps")||!await wire.profileSupports(profile,rec.to,(await this.pubOf(pin)).sign_key,wire.CapTopicStateSync))throw Object.assign(Error("This device needs to update AgentNet to synchronize topic Done, Reopen and Archive marks."),{code:"topic_sync_unsupported"});
+    if(!features.includes("env2")||!features.includes("caps")||!await wire.profileSupports(profile,rec.to,(await this.pubOf(pin)).sign_key,location?wire.CapTopicStateSyncV2:wire.CapTopicStateSync))throw Object.assign(Error("This device needs to update AgentNet to synchronize topic Done, Reopen and Archive marks."),{code:"topic_sync_unsupported"});
     await this.readSyncAuthority(r,this.address,this.fp,rec.to,rec.recipient_fp);return {why:"",pin};
   }
   async admitTopicStateSync(n,env,pin, admission = null) {
+    if(JSON.parse(n.body).v===2)return this.topicTransfers().admit(n,env,pin,admission);
     const r=wire.parseTopicStateSync(n.body),checks=[],ops=[];
     if(!this.me||this.me.person!==r.person)throw new Hold("invalid","Topic marks belong to another person.");
     await this.refreshPerson(this.me, admission ? {...admission,roster:r.roster} : null);try{await this.readSyncAuthority(r,env.from,pin.fingerprint,this.address,this.fp,checks);}catch(e){throw new Hold("invalid",e.message);}
@@ -4476,6 +4500,7 @@ export class Engine {
       const organizationRow=rows.find(r=>wire.topicOrganization(r.topic_event));
       const contribution=rows.find(r=>r.contribution_review);
       if(contribution){const {checks:guard}=await contributionRecheck(this,contribution.contribution_review);checks.push(...guard);const r=contribution.contribution_review;if(r.new_topic){const key="topic/"+r.destination+"/"+r.topic,l={...(await this.groupRead(checks,"kv",key)||{}),type:"topic-state",peer:r.destination,topic:r.topic,title:r.title};extraOps.push({s:"kv",k:key,v:l},...await this.topicTitleOps(r.destination,r.topic,r.title,checks));}}
+      for(const row of rows)delete row.contribution_review; // review plaintext is transient; guard above already consumed it
       if(organizationRow){try{const c=await this.groupRead(checks,"convs",organizationRow.conv)||await this.groupRecord(organizationRow.conv);await this.topicOrganizationAuthor(c,this.address,this.fp,checks);}catch(error){if(organizationRow.organization_review)throw Error("The selected messages, topic or audience changed; review the move again.");throw error;}}
       const organizations=[...new Map(rows.filter(r=>r.organization_review).map(r=>[r.lid,r])).values()];
       for(const organization of organizations){let refreshed;try{refreshed=await this.topicOrganizationPreview(organization.organization_review);}catch{throw Error("The selected messages, topic or audience changed; review the move again.");}const {review,checks:guard}=refreshed;if(review.token!==organization.organization_review.token||wire.topicEventJSON({action:"move",moves:review.moves})!==wire.topicEventJSON({action:"move",moves:organization.organization_review.moves})||review.parent!==organization.organization_review.parent)throw Error("The selected messages, topic or audience changed; review the move again.");checks.push(...guard);if(review.new&&review.title){const key="topic/"+review.conv+"/"+review.topic,l={...(await this.groupRead(checks,"kv",key)||{}),type:"topic-state",peer:review.conv,topic:review.topic,title:review.title};extraOps.push({s:"kv",k:key,v:l},...await this.topicTitleOps(review.conv,review.topic,review.title,checks));}}
@@ -8327,7 +8352,7 @@ export class Engine {
       if (teams) teams.connected(f.includes("teams1"));
       // This device reads conversations and the attention hint (it never
       // alerts from the stream: its service worker shows the relay's pushes).
-      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapConversationResources, wire.CapSharedTopicTitle, wire.CapConversationAudience, wire.CapEnv2, "notify1", wire.CapPerson, wire.CapControl, wire.CapHeadless, wire.CapDrive, wire.CapAgentIdentity, wire.CapGroupHumanParticipation, wire.CapGroup, wire.CapSendGroup, wire.CapRootSync, wire.CapGroupInvitationManage, wire.CapReadSyncV2, wire.CapOwnSyncV2, wire.CapOwnSyncV3, wire.CapHistoryArchive, wire.CapGuestAgent, wire.CapTopicParticipation, wire.CapRoom, wire.CapProactiveAgent, wire.CapMentionReaction, wire.CapAgentOrganization, wire.CapRequestSteer, wire.CapTopicOrganization, wire.CapModelSyncV2, wire.CapDirectTopicSync, wire.CapTopicStateSync, wire.CapReminderSync, ...(f.includes("signals1") ? [wire.CapTyping] : [])])));
+      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapConversationResources, wire.CapSharedTopicTitle, wire.CapConversationAudience, wire.CapEnv2, "notify1", wire.CapPerson, wire.CapControl, wire.CapHeadless, wire.CapDrive, wire.CapAgentIdentity, wire.CapGroupHumanParticipation, wire.CapGroup, wire.CapSendGroup, wire.CapRootSync, wire.CapGroupInvitationManage, wire.CapReadSyncV2, wire.CapOwnSyncV2, wire.CapOwnSyncV3, wire.CapHistoryArchive, wire.CapGuestAgent, wire.CapTopicParticipation, wire.CapRoom, wire.CapProactiveAgent, wire.CapMentionReaction, wire.CapAgentOrganization, wire.CapRequestSteer, wire.CapTopicOrganization, wire.CapModelSyncV2, wire.CapDirectTopicSync, wire.CapTopicStateSyncV2, wire.CapReminderSync, ...(f.includes("signals1") ? [wire.CapTyping] : [])])));
       await this.publishPerson().catch(() => {});
       // These existing, coalesced recovery jobs can wait for old proofs or
       // network replies. They must not delay the current user's durable send.
@@ -9209,9 +9234,9 @@ export class Engine {
     for (const { r, s } of rows) {
       const inScope = (r.conv || "") === conv;
       if (!r.control && !r.aside && inScope && (r.conv ? r.lid === key : r.id === key) && (s === "outbox" ? this.fp : r.fp || this.fp) === fp && r.body) {
-        ops.push({ s, k: r.id, v: { ...r, body: "" } });
+        ops.push({ s, k: r.id, v: (()=>{const value={...r,body:""};delete value.contribution_review;return value;})() });
       } else if (r.control && r.sub === wire.SubRevision && r.ref && r.ref.id === key && r.ref.fingerprint === fp && inScope && r.body) {
-        ops.push({ s, k: r.id, v: { ...r, body: "" } }); // its revision texts go with it
+        ops.push({ s, k: r.id, v: (()=>{const value={...r,body:""};delete value.contribution_review;return value;})() }); // its revision texts go with it
       }
     }
     // The private delegate wrapper is also a stored copy of this ordinary
@@ -9619,13 +9644,13 @@ export class Engine {
   async eraseOps(conv, inbox, outbox, checks=[]) {
     const ops = [], blanked = new Set();
     for (const r of [...inbox, ...outbox]) {
-      if ((r.conv || "") !== conv || !r.body || !this.erasedRow(r) || (r.to ? retainedOut(r) : retainedIn(r))) continue;
-      ops.push({ s: r.to ? "outbox" : "inbox", k: r.id, v: { ...r, body: "" } }); blanked.add(r);
+      if ((r.conv || "") !== conv || (!r.body&&!r.contribution_review) || !this.erasedRow(r) || (r.to ? retainedOut(r) : retainedIn(r))) continue;
+      ops.push({ s: r.to ? "outbox" : "inbox", k: r.id, v: (()=>{const value={...r,body:""};delete value.contribution_review;return value;})() }); blanked.add(r);
     }
     for (const r of outbox) { // history copies of an erased turn queued or sent from here
       if (!conv || r.conv !== conv || r.sub !== "history" || !r.body || retainedOut(r)) continue;
       let h; try { h = wire.parseHistory(r.body); } catch (e) { continue; }
-      if (this.erased.has(erasedKey(conv, h.from_key, h.lid))) ops.push({ s: "outbox", k: r.id, v: { ...r, body: "" } });
+      if (this.erased.has(erasedKey(conv, h.from_key, h.lid))) ops.push({ s: "outbox", k: r.id, v: (()=>{const value={...r,body:""};delete value.contribution_review;return value;})() });
     }
     const live = [...inbox, ...outbox].filter((r) => (r.attachments || []).length && !blanked.has(r) && !this.erasedRow(r));
     const shown = (test) => live.some((r) => r.attachments.some(test));
@@ -11717,7 +11742,7 @@ export class Engine {
   async authorityRows(scope, checks, view = null) {
     const rows = [];
     for (const s of ["inbox", "outbox"]) {
-      const matching = (view?(scope.conv!==undefined?view.byConv[s].get(scope.conv)||[]:view[s]):typeof scope.conv==="string"?await this.store.byConv(s,scope.conv):await this.store.all(s)).filter((r) => scopeRow(r, scope));
+      const matching = (scope.transfer_topic?await this.store.transferTopic(s,...scope.transfer_topic):scope.transfer_lid?await this.store.transferOriginal(s,...scope.transfer_lid):scope.transfer_meta?await this.store.transferMeta(s,scope.transfer_meta):view?(scope.conv!==undefined?view.byConv[s].get(scope.conv)||[]:view[s]):typeof scope.conv==="string"?await this.store.byConv(s,scope.conv):await this.store.all(s)).filter((r) => scopeRow(r, scope));
       if (checks) checks.push({ s, scope, rows: matching.map((v) => ({ k: v.id, v: authorityValue(s, v) })).sort((a, b) => a.k < b.k ? -1 : a.k > b.k ? 1 : 0) });
       rows.push(...matching);
     }
@@ -12897,6 +12922,12 @@ export class Engine {
     case "/api/topic/organization/preview": return this.previewTopicOrganization(body);
     case "/api/topic/organization/apply": return this.applyTopicOrganization(body);
     case "/api/topic/organization/undo":return this.undoTopicOrganization(body);
+    case "/api/topic/transfer/preview": return this.previewTopicTransfer(body);
+    case "/api/topic/transfer/page": return this.topicTransferPage(body);
+    case "/api/topic/transfer/apply": return this.applyTopicTransfer(body);
+    case "/api/topic/transfer/status": return this.topicTransferStatus(body);
+    case "/api/topic/transfer/cancel": return this.cancelTopicTransfer(body);
+    case "/api/topic/transfer/location": return this.topicTransferLocation(body);
     case "/api/history/contribution/preview": return this.previewHistoryContribution(body);
     case "/api/history/contribution/apply": return this.applyHistoryContribution(body);
     case "/api/topic/create": case "/api/topic/archive": case "/api/topic/delete": case "/api/topic/rename": case "/api/topic/done": case "/api/topic/reopen": return this.changeTopic(u.pathname.split("/").pop(), body);
