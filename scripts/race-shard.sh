@@ -25,6 +25,7 @@ run_partition() {
 			part=i++%n
 			if (client && n==18) {
 				if ($0=="TestDMLiveAgentContext") part=17
+				if ($0=="TestOwnPersonTasksDirectAndGroup") part=4
 				if ($0=="TestRoomReciprocalRootQuestions") part=1
 			}
 			if (client && n==12) {

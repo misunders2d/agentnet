@@ -40,7 +40,7 @@ async function fixture(linked=false) {
   check(lookups===looked&&writes===0,'cached revoked key is not looked up or rewritten; unchanged generation retains unproven key memo');
   e.store.write=originalWrite;
   for(const id of ['q','w','rw','staged']) { const r=await e.store.get('outbox',id);check(r.state==='not_delivered'&&r.envelope==='sealed-'+id&&r.body==='original-'+id,'only unsent transport ends, immutable original bytes kept: '+id); }
-  for(const r of [source,done,custody,rows.at(-1)])check(JSON.stringify(await e.store.get('outbox',r.id))===JSON.stringify(r),'delivered/custody/other target untouched: '+r.id);
+  for(const r of [source,done,custody,rows.at(-1)])check(JSON.stringify(await e.store.get('outbox',r.id))===JSON.stringify({...r,transfer_lid:['',r.id]}),'delivered/custody/other target untouched: '+r.id);
   check((await e.store.get('kv','history-archive/out/chunk')).state==='ended','outgoing prepared archive stops');
   check((await e.store.get('kv','history'))[pub.address].pos==='cursor','cursor retained');
   check((await e.store.get('kv','history-archive/in/incoming')).state==='saved','import job untouched');

@@ -570,7 +570,7 @@ const restarted=new Engine({store:a.store,base:a.base,fetch});Object.assign(rest
  const progress={s:'kv',k:'cap-retry-cursor',v:50},support=source.ctlSupport.bind(source);
  source.ctlSupport=async()=>{throw new HubError(503,'unavailable');};
  const ops=await source.archives().prepare([copy],[progress],[],dev);await source.store.write(ops);
- check(JSON.stringify(await source.store.get('outbox',id))===JSON.stringify(copy)&&await source.store.get('kv',progress.k)===50,'offline capability discovery preserves exact durable copy and atomic source cursor');
+ check(JSON.stringify(await source.store.get('outbox',id))===JSON.stringify({...copy,transfer_lid:['',id]})&&await source.store.get('kv',progress.k)===50,'offline capability discovery preserves exact durable copy and atomic source cursor');
  check((await source.store.outboxSub(wire.SubDeviceHistory)).length===1,'offline discovery creates one copy, no archive flood');
  source.ctlSupport=async()=>{throw Error('invalid signed profile');};
  await assert.rejects(()=>source.archives().prepare([copy],[{...progress,v:100}],[],dev),/invalid signed profile/);
