@@ -504,6 +504,9 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		cmd.Stdout = activityWriter{Writer: roomBridge, activity: activity, first: first}
 		roomBridge.onActivity = activity.report
 		roomBridge.onThinking = activity.reportThinking
+		roomBridge.onDiagnostic = func(format string, args ...any) {
+			a.Logf("%s %s: codex bridge: %s", j.Kind, j.ID, fmt.Sprintf(format, args...))
+		}
 		roomBridge.native = func(ctx context.Context, c nativeCallback) (json.RawMessage, error) {
 			return a.awaitNativeRequest(ctx, j, c)
 		}

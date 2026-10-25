@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"net"
 	"time"
@@ -60,7 +61,10 @@ type ReplyWait struct {
 // waitStops are the host statuses after which no answer comes soon: a task
 // waiting for its OK (or a question not approved), a person's decision, a
 // request the host will not run, or one whose reply the host held back.
-var waitStops = map[string]bool{"awaiting": true, "needs_human": true, "not_run": true, "stopped": true}
+var waitStops = map[string]bool{
+	"awaiting": true, "needs_human": true, "not_run": true, "stopped": true, "failed": true,
+	"cancelled": true, "interrupted": true, "declined": true, "resolved": true,
+}
 
 // AwaitReply waits up to wait for the answer to request id, sent from here
 // (a device message, or a conversation request by its first copy's id).
@@ -71,6 +75,11 @@ var waitStops = map[string]bool{"awaiting": true, "needs_human": true, "not_run"
 func (a *Agent) AwaitReply(ctx context.Context, id string, wait time.Duration, onStatus func(ExecView)) (ReplyWait, error) {
 	var to, conv, lid, host string
 	err := a.store.db.QueryRow(`SELECT recipient, coalesce(conv, ''), coalesce(lid, ''), coalesce(json_extract(target, '$.address'), '') FROM outbox WHERE id = ? AND ref_id IS NULL AND coalesce(sub, '') = ''`, id).Scan(&to, &conv, &lid, &host)
+	if errors.Is(err, sql.ErrNoRows) {
+		// An own-host request in a one-person group can have no remote
+		// envelopes. Its exact locally authored job uses this same push wait.
+		err = a.store.db.QueryRow(`SELECT sender,conv,lid,coalesce(json_extract(target,'$.address'),'') FROM inbox WHERE id=? AND sender=? AND local=1 AND conv IS NOT NULL AND ref_id IS NULL AND coalesce(sub,'')=''`, id, a.Address).Scan(&to, &conv, &lid, &host)
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return ReplyWait{}, ErrNoMessage
 	}
@@ -198,7 +207,27 @@ func (a *Agent) convReply(conv, lid string) (*AwaitedAnswer, *ExecView, error) {
 		}
 	}
 	if request == nil {
-		return nil, nil, ErrNoMessage
+		// The local job is authoritative even without a remote envelope.
+		// Chat projection omits local inbox rows to avoid showing the job
+		// twice; a retained wait must still observe that exact own request.
+		var m ConvMessage
+		var target string
+		err := a.store.db.QueryRow(`SELECT id,lid,coalesce(pid,''),coalesce(target,''),state FROM inbox i
+			WHERE conv=? AND lid=? AND sender=? AND verified_by=? AND local=1
+			AND kind IN (?,?) AND ref_id IS NULL AND coalesce(sub,'')='' AND NOT `+erasedIn,
+			conv, lid, a.Address, a.Self().Fingerprint(), envelope.KindQuestion, envelope.KindTask).Scan(&m.ID, &m.LID, &m.PID, &target, &m.Job)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil, ErrNoMessage
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		if target != "" {
+			if err := json.Unmarshal([]byte(target), &m.Target); err != nil {
+				return nil, nil, err
+			}
+		}
+		request = &m
 	}
 	ids := map[string]bool{request.ID: true, request.LID: true}
 	for _, c := range request.Copies {

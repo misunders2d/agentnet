@@ -500,11 +500,13 @@ migrated. All devices in new DMs need the person2-capable version.`,
 	"dm": `Usage: agentnet dm new ADDRESS
        agentnet dm list
        agentnet dm show ID
+       agentnet dm catalog [--json] [HOST]
        agentnet dm send [--question|--task] [--answer-wait D] [--file PATH]... ID [TEXT]
-       agentnet dm invite [--grant LID,...] [--tasks FINGERPRINT,...] [--note TEXT] ID HOST
+       agentnet dm invite [--agent AGENT_ID] [--grant LID,...] [--tasks FINGERPRINT,...] [--note TEXT] ID HOST
        agentnet dm agents ID
        agentnet dm accept-agent|decline-agent|dismiss-agent PID
-       agentnet dm ask-agent [--task] [--answer-wait D] PID TEXT
+       agentnet dm ask-agent [--id SEND_ID] [--task] [--answer-wait D] PID TEXT
+       agentnet dm wait [--answer-wait D] REQUEST_ID
        agentnet dm invite-guest [--share LID,...] [--note TEXT] ID HOST
        agentnet dm accept-guest|decline-guest|end-guest PID
 
@@ -527,6 +529,12 @@ cannot read conversations right now, dm send keeps the message as waiting
 and sends it when it can; it is never sent in the older format. dm show
 lists the messages and their states; an origin shown (ui, agent:NAME) is
 what the sending installation says, not proof.
+
+dm catalog lists enabled signed public identities here, or verifies HOST's
+public catalog, including exact agent ID, harness, host and host key. --json
+prints only public signed records, never private folders or native setup.
+dm invite --agent AGENT_ID selects that exact catalog identity; an unknown
+or retired ID is refused. Omitting --agent keeps the existing default route.
 
 An agent joins a DM only when invited: dm invite names the device it runs
 on (a member's own installation, whose person accepts or declines with
@@ -576,7 +584,34 @@ not_run, not_delivered, …).
 
 dm ask-agent and dm send --question wait for the answer and print it, as
 agentnet ask does (--answer-wait D, default 90s; 0 for --task, and always 0
-inside a run).`,
+inside a run). With --id SEND_ID, dm ask-agent instead stores the queued
+request and returns promptly by default. SEND_ID is one retained 32-character
+lowercase hexadecimal logical ID; retry exactly the same PID, kind, text and
+reply receiver to recover its original physical and logical IDs, without a
+second send. Changed inputs and file-bearing retained IDs are refused.
+
+dm wait REQUEST_ID observes an existing request by physical or logical ID
+through the daemon's existing change stream. It never sends or reruns work.
+A timeout or interrupted wait leaves the request pending; resume the same
+wait later. Already-stored answers remain readable with the daemon stopped.
+
+Groups use these same participation/request paths, with group-only aliases:
+  agentnet group create check-in
+  agentnet dm catalog --json HOST
+  agentnet group invite-agent --agent AGENT_ID CONV HOST
+  agentnet group agents CONV
+  agentnet group ask-agent PID "Introduce yourself in one or two sentences."
+  agentnet group wait REQUEST_ID
+
+Repeat catalog/invite for each exact host and agent. Submit every intended
+participation before waiting for any one answer; group ask-agent queues and
+returns both IDs by default. Keep those IDs, or supply --id SEND_ID for an
+exact retry. group wait accepts the retained physical or logical ID. An
+offline target's queued work does not make another agent wait. Invitations,
+active participation, delivery, native running/approval/failure and actual
+answers are distinct; agentnet members shows current host availability.
+No GUI or custom HTTP/SSE client is required. These human CLI waits do not
+replace authority-bound room ask/wait inside an admitted agent's work.`,
 
 	"members": `Usage: agentnet members
 
@@ -802,7 +837,15 @@ Trust ADDRESS's current keys after you verified the fingerprint with its
 owner. Needed after a key change: sending is blocked and their messages are
 held until you do.`,
 
-	"daemon": `Usage: agentnet daemon [--listen ADDR] [--advertise https://HOST:PORT] [--ui 127.0.0.1:0]
+	"daemon": `Usage: agentnet daemon [start] [--listen ADDR] [--advertise https://HOST:PORT] [--ui 127.0.0.1:0]
+       agentnet daemon status [--agent ID] [--json]
+
+status is read-only: it reports the daemon's actual transport and named-agent
+launch prerequisites, separately from this caller's PATH. Available does not
+prove authentication or successful execution. Older daemons may report unknown.
+start is the existing foreground launch; it does not enable/start a service,
+open a GUI, or restart a daemon already holding this home's lock. For an
+existing installed service, see agentnet help startup.
 
 Stay connected to the Hub: receive messages as they arrive, run your
 responder, and retry queued sends. Each run is one session. There is no
@@ -1122,6 +1165,28 @@ Cross-building for other systems: scripts/build.sh (POSIX shell).`,
 
 	"startup": `Start agentnet daemon at login
 
+Inspect readiness without opening a GUI or starting anything:
+  agentnet daemon status [--agent ID] [--json]
+The daemon reports its own transport and exact configured-agent launch
+prerequisites. Caller-shell executability is shown separately. Available
+does not prove model login or a successful answer. An older daemon may
+have unknown readiness; that is not a missing-responder diagnosis.
+
+To receive messages now without a GUI:
+  agentnet daemon start
+This is the existing foreground daemon; it stays in this terminal until
+stopped, refuses a second daemon for the same home, and accepts the normal
+--listen, --advertise and --ui flags. It never enables a service or restarts
+an existing daemon. Use the installed executable's absolute path in a
+noninteractive shell if agentnet is not on PATH.
+
+If an existing service owns this home, start that service instead:
+  Linux:   systemctl --user start agentnet.service
+  macOS:   launchctl kickstart gui/UID/net.agentnet.daemon
+  Windows: schtasks /run /tn agentnet
+Use the actual user ID for UID. Inspect the service's executable/home first;
+these examples target the default installation and do not change enablement.
+
 People do not need this: the AgentNet app starts with the computer by itself
 (tray: Start when I log in). These recipes are for servers, coding agents and
 advanced setups without the app. A computer runs one of the two for a home:
@@ -1173,7 +1238,8 @@ must name stable directories, not temporary or version-specific installs.
 Keep that setting when replacing the unit. A clean re-enrollment has new
 local settings: reapply the person's chosen responder and permissions.
 
-Doctor checks this CLI process's PATH, not a separate daemon's environment.
+Doctor reports the running daemon's launch checks when its read-only local
+readiness endpoint is available; caller-only checks are explicitly labeled.
 After service setup/restart, verify an actual reply to an approved question.
 Do not silently retry failed questions or accepted tasks.`,
 

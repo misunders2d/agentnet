@@ -1,7 +1,7 @@
 // Reactions: sticker chips under a message, inside its column. People's
-// marks share one chip per emoji (tap toggles yours); each agent's own mark
-// is its own chip with its name, so it never reads as a person's.
-import { useState, type ReactElement, type ReactNode } from "react";
+// marks share one chip per emoji (tap toggles yours). Agent marks stay
+// distinct from people's; a shared send can disclose their exact authors.
+import { createContext, useContext, useState, type ReactElement, type ReactNode } from "react";
 import { Popover } from "@base-ui/react/popover";
 import { Dialog } from "@base-ui/react/dialog";
 import { IconMoodPlus } from "@tabler/icons-react";
@@ -12,31 +12,52 @@ import { EmojiPicker, QuickReactions } from "./Emoji";
 import { agentLabel, agentOf, isThreadMsg, type AnyMsg, type Ctx } from "./Message.model";
 import { useModal, usePortal } from "../owned";
 import { humanReactionOrder, recordReaction } from "../reaction-preferences.mjs";
+import { deviceWords } from "./Approvals.words";
 
 export const controlRef = (m: AnyMsg, ctx: Ctx): T.ControlAction =>
   isThreadMsg(m) ? { id: m.id, dir: m.dir } : { conv: ctx.conv, id: m.id, dir: m.dir };
 
-function useReactionView(m: AnyMsg, ctx: Ctx) {
-  const store = useApp(), ref = controlRef(m, ctx);
-  const slots = useStore(store, s => s.reactionPending[reactionScope(ref)]);
-  const pending = Object.values(slots || {}).filter(p => store.reactionIsCurrent(p));
-  let list = m.reactions || [];
-  for (const p of pending) {
+// A signed shared send has one reaction area, but every mutation still names
+// the original exact message. Outcome rows override this context.
+export const ReactionTargets = createContext<AnyMsg[] | undefined>(undefined);
+
+export function useReactionView(m: AnyMsg, ctx: Ctx) {
+  const store = useApp(), targets = useContext(ReactionTargets) || [m];
+  const slots = useStore(store, s => s.reactionPending);
+  const sources = targets.map(message => {
+   const pending = Object.values(slots[reactionScope(controlRef(message, ctx))] || {}).filter(p => store.reactionIsCurrent(p));
+   let list = message.reactions || [];
+   for (const p of pending) {
     const r = list.find(r => r.emoji === p.change.emoji);
     const by = (r?.by || []).filter(b => b.assistant || b.id !== p.self.id);
     if (!p.change.remove) by.push((r?.by || []).find(b => !b.assistant && b.id === p.self.id) || p.self);
     const next = { emoji: p.change.emoji!, by, mine: !p.change.remove };
     if (r) list = by.length ? list.map(row => row === r ? next : row) : list.filter(row => row !== r);
     else if (by.length) list = [...list, next];
+   }
+   return { message, list, pending };
+  });
+  const merged = new Map<string, T.ReactionView>();
+  for (const source of sources) for (const reaction of source.list) {
+    const row = merged.get(reaction.emoji) || { emoji: reaction.emoji, by: [], mine: false };
+    const key = (by: T.Reactor) => JSON.stringify([!!by.assistant, by.id, by.assistant ? by.pid : "", by.assistant ? by.host : "", by.assistant ? by.agent_id : ""]);
+    const seen = new Set((row.by || []).map(key));
+    for (const by of reaction.by || []) if (!seen.has(key(by))) { row.by!.push(by); seen.add(key(by)); }
+    row.mine ||= !!reaction.mine;
+    merged.set(row.emoji, row);
   }
-  return { list, pending };
+  return { list: [...merged.values()], pending: sources.flatMap(source => source.pending), sources };
 }
 
 export function useReact(m: AnyMsg, ctx: Ctx) {
   const store = useApp();
-  return (emoji: string, remove = false) => void store.react({ ...controlRef(m, ctx), emoji, remove }).then(result => {
-    if (result && !remove && !m.reactions?.some((r) => r.emoji === emoji && r.mine)) recordReaction(emoji);
-  });
+  const { sources } = useReactionView(m, ctx);
+  return (emoji: string, remove = false) => {
+    const selected = remove ? sources.filter(source => source.list.some(r => r.emoji === emoji && r.mine)) : sources.slice(0, 1);
+    for (const source of selected) void store.react({ ...controlRef(source.message, ctx), emoji, remove }).then(result => {
+      if (result && !remove && !source.list.some(r => r.emoji === emoji && r.mine)) recordReaction(emoji);
+    });
+  };
 }
 
 const reactor = (b: T.Reactor, ctx: Ctx) => {
@@ -51,7 +72,7 @@ export function Reactions({ m, ctx, can, wide }: { m: AnyMsg; ctx: Ctx; can: boo
   const list = humanReactionOrder(projected.list);
   if ((!list.length && !projected.pending.length) || m.deleted) return null;
   return (
-    <div data-reaction-pending={projected.pending.length ? "true" : undefined} aria-busy={projected.pending.length ? true : undefined} className={"flex flex-wrap items-center gap-x-1.5 " + (wide ? "-mb-1" : "-mb-1.5")}>
+    <div data-reactions data-reaction-pending={projected.pending.length ? "true" : undefined} aria-busy={projected.pending.length ? true : undefined} className={"flex flex-wrap items-center gap-x-1.5 " + (wide ? "-mb-1" : "-mb-1.5")}>
       {list.map((r) => {
         const people = (r.by || []).filter((b) => !b.assistant);
         const agents = (r.by || []).filter((b) => b.assistant);
@@ -65,12 +86,12 @@ export function Reactions({ m, ctx, can, wide }: { m: AnyMsg; ctx: Ctx; can: boo
               <span className="tnum">{people.length}</span>
             </Chip>
           ),
-          ...agents.map((b) => (
+          ...(projected.sources.length > 1 && agents.length > 1 ? [<AgentReactionChip key={r.emoji + "agents"} emoji={r.emoji} agents={agents} ctx={ctx} />] : agents.map((b) => (
             <Chip key={r.emoji + (b.pid || b.id)} agent disabled label={r.emoji + " from " + reactor(b, ctx) + ", an agent"}>
               <span className="text-[17px] leading-none">{r.emoji}</span>
               <span className="max-w-28 truncate">{reactor(b, ctx)}</span>
             </Chip>
-          )),
+          ))),
         ];
       })}
       {projected.pending.length > 0 && <span role="status" className="text-xs text-text-2">Updating your reaction…</span>}
@@ -79,11 +100,28 @@ export function Reactions({ m, ctx, can, wide }: { m: AnyMsg; ctx: Ctx; can: boo
   );
 }
 
+function AgentReactionChip({ emoji, agents, ctx }: { emoji: string; agents: T.Reactor[]; ctx: Ctx }) {
+  const portal = usePortal();
+  return <Popover.Root>
+    <Popover.Trigger data-agent-reaction className="inline-flex h-11 items-center" aria-label={emoji + " from " + agents.length + " agents. Show authors"}>
+      <span className="inline-flex h-8 items-center gap-1 rounded-full border-[1.5px] border-agent-ink/40 bg-agent px-2.5 text-[13px] font-bold text-agent-ink"><span className="text-[17px] leading-none">{emoji}</span>{agents.length} agents</span>
+    </Popover.Trigger>
+    <Popover.Portal container={portal}>
+      <Popover.Positioner side="top" sideOffset={6} collisionPadding={12} className="z-50">
+        <Popover.Popup className="w-64 max-w-[calc(100vw-24px)] rounded-xl bg-surface p-3 text-ink outline-none stroke shadow-pop">
+          <Popover.Title className="font-bold">{emoji} · {agents.length} agents</Popover.Title>
+          <ul className="mt-2 max-h-56 overflow-y-auto overscroll-contain" aria-label="Agent reaction authors">{agents.map(by => <li key={by.pid || by.id} className="py-1 text-[13px]" data-reactor={by.id} title={by.agent_id || by.id}><span className="font-semibold">{reactor(by, ctx)}</span><span className="block text-xs text-text-2">{deviceWords(by.host || "", ctx.overview)}</span></li>)}</ul>
+        </Popover.Popup>
+      </Popover.Positioner>
+    </Popover.Portal>
+  </Popover.Root>;
+}
+
 // Chip: a 32px sticker inside a 44px-tall target.
 function Chip({ children, mine, agent, disabled, label, onClick }: { children: ReactNode; mine?: boolean; agent?: boolean; disabled?: boolean; label: string; onClick?: () => void }) {
   const face = "inline-flex h-8 items-center gap-1 rounded-full border-[1.5px] px-2.5 text-[13px] font-bold transition-transform duration-200 ease-out-soft "
     + (mine ? "border-outline bg-act text-act-ink" : agent ? "border-agent-ink/40 bg-agent text-agent-ink" : "border-outline/70 bg-surface text-ink");
-  if (disabled) return <span className="inline-flex h-11 items-center" title={label} aria-label={label} role="img"><span className={face}>{children}</span></span>;
+  if (disabled) return <span data-agent-reaction={agent ? "" : undefined} className="inline-flex h-11 items-center" title={label} aria-label={label} role="img"><span className={face}>{children}</span></span>;
   return (
     <button type="button" onClick={onClick} title={label} aria-label={label} aria-pressed={mine}
       className="group/chip inline-flex h-11 items-center">

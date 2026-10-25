@@ -13,6 +13,8 @@ import (
 type queuedSendKey struct{}
 type scheduledDispatchKey struct{}
 
+var ErrSendAlreadyKept = errors.New("this send is already kept here")
+
 // WithQueuedSend is a local caller's choice to return after durable storage.
 // id correlates that caller's optimistic turn; it grants no received authority.
 // Existing CLI sends retain their immediate delivery/receipt behavior.
@@ -137,12 +139,12 @@ func (a *Agent) queuedClaim(ctx context.Context, conv string, claim func(*sql.Tx
 	id, _ := sendID(ctx)
 	return func(tx *sql.Tx, first string) error {
 		var n int
-		err := tx.QueryRow(`SELECT count(*) FROM (SELECT id FROM outbox WHERE conv=? AND lid=? UNION ALL SELECT id FROM inbox WHERE conv=? AND lid=? AND sender=? AND local=1)`, conv, id, conv, id, a.Address).Scan(&n)
+		err := tx.QueryRow(`SELECT count(*) FROM (SELECT id FROM outbox WHERE id=? OR lid=? UNION ALL SELECT id FROM inbox WHERE (id=? OR lid=?) AND sender=? AND local=1)`, id, id, id, id, a.Address).Scan(&n)
 		if err != nil {
 			return err
 		}
 		if n > 0 {
-			return errors.New("this send is already kept here")
+			return ErrSendAlreadyKept
 		}
 		if dispatchID, _ := ctx.Value(scheduledDispatchKey{}).(string); dispatchID != id {
 			var reserved bool

@@ -92,6 +92,10 @@ func run(args []string) error {
 		return runUI(ctx, *home, rest, os.Stdout)
 	case "app": // the AgentNet app's own program (app.go); it opens the home itself
 		return runApp(ctx, *home, rest, os.Stdin, os.Stdout)
+	case "daemon":
+		if len(rest) > 0 && rest[0] == "status" {
+			return runDaemonStatus(ctx, *home, rest[1:], os.Stdout)
+		}
 	}
 	if _, known := topics[cmd]; !known {
 		return fmt.Errorf("unknown command %q (see agentnet --help)", cmd)
@@ -237,6 +241,9 @@ func run(args []string) error {
 		updateRequiredNotice(a, os.Stderr)
 		return runStatus(ctx, a, rest, os.Stdout)
 	case "daemon":
+		if len(rest) > 0 && rest[0] == "start" {
+			rest = rest[1:] // the existing foreground launch, with all its normal flags
+		}
 		fs := flag.NewFlagSet("daemon", flag.ContinueOnError)
 		var opts client.RunOptions
 		fs.StringVar(&opts.Listen, "listen", "", "accept direct deliveries on this address (e.g. :7443); off by default")
@@ -244,6 +251,9 @@ func run(args []string) error {
 		uiAddr := fs.String("ui", "", "serve the messenger page on this loopback address (e.g. 127.0.0.1:0); off by default")
 		if err := fs.Parse(rest); err != nil {
 			return err
+		}
+		if fs.NArg() != 0 {
+			return errors.New("usage: daemon [start] [--listen ADDR] [--advertise URL] [--ui ADDR] | daemon status [--agent ID] [--json]")
 		}
 		a.Logf = log.Printf
 		// The program file as started: an update replaces it, and only an

@@ -259,10 +259,9 @@ export function Timeline({ ctx, messages, focus, focusSeq, unread, readVisit, se
             it.type === "day" ? <DayChip key={it.key} label={it.label} />
               : it.type === "new" ? <NewLine key={it.key} />
                 : it.targets ? <div key={it.key} data-send-group={isThreadMsg(it.m) ? undefined : it.m.send_group} className="mt-3 rounded-2xl border border-outline/20 py-2">
-                    {it.targets.map((m, i) => <MessageView key={m.id} m={m} ctx={ctx} all={messages}
-                      first={i === 0 && it.first} last={i === it.targets!.length - 1 && it.last}
-                      grouped compact={i > 0} onJump={jump} tabStop={it.key === keyboardID} onEntryFocus={entryFocus} formatTime={formatTime}
-                      selecting={!!selected} selected={!!selected?.includes(m.id)} onSelect={onSelect} />)}
+                    <MessageView m={it.m} targets={it.targets} ctx={ctx} all={messages}
+                      first={it.first} last={it.last} grouped onJump={jump} tabStop={it.key === keyboardID} onEntryFocus={entryFocus} formatTime={formatTime}
+                      selecting={!!selected} selected={!!selected?.includes(it.m.id)} selectedIds={selected || undefined} onSelect={onSelect} />
                   </div>
                 : <MessageView key={it.key} m={it.m} ctx={ctx} all={messages} first={it.first} last={it.last} status={it.status} compact={it.compact} onJump={jump} tabStop={it.key === keyboardID} onEntryFocus={entryFocus} formatTime={formatTime}
                     selecting={!!selected} selected={!!selected?.includes(it.m.id)} onSelect={onSelect} />)}
@@ -294,7 +293,7 @@ function useVisibleRows(box: RefObject<HTMLDivElement | null>, inner: RefObject<
     const root = box.current;
     const needsAnchor = !CSS.supports("overflow-anchor", "auto");
     const byID = new Map(messages.map(m => [m.id, m]));
-    const shown = new Map<Element, AnyMsg>();
+    const shown = new Map<Element, AnyMsg[]>();
     let observer: IntersectionObserver | undefined, epoch = 0, frame: number | undefined, alive = true;
     let reported = new Set<string>();
     const publish = (rows: AnyMsg[]) => {
@@ -313,14 +312,14 @@ function useVisibleRows(box: RefObject<HTMLDivElement | null>, inner: RefObject<
         frame = undefined;
         if (!permitted() || !shown.size) { publish([]); return; }
         const viewport = root.getBoundingClientRect(), bottom = Math.max(viewport.top, viewport.bottom - reserved.current);
-        const height = bottom - viewport.top, seen: AnyMsg[] = [];
+        const height = bottom - viewport.top, seen = new Map<string, AnyMsg>();
         let reading: ReadingAnchor | null = null;
-        if (height > 0 && viewport.width > 0) for (const [row, m] of shown) {
+        if (height > 0 && viewport.width > 0) for (const [row, represented] of shown) {
           const r = row.getBoundingClientRect();
           const width = Math.min(r.right, viewport.right) - Math.max(r.left, viewport.left);
           const visible = Math.min(r.bottom, bottom) - Math.max(r.top, viewport.top);
           if (needsAnchor && !atBottom.current && width > 0 && visible > 0 && (!reading || r.top - viewport.top < reading.offset)) reading = { row: row as HTMLElement, offset: r.top - viewport.top, scrollTop: root.scrollTop };
-          if (r.height > 0 && width > 0 && visible > 0 && visible >= Math.min(r.height / 2, height / 2)) seen.push(m);
+          if (r.height > 0 && width > 0 && visible > 0 && visible >= Math.min(r.height / 2, height / 2)) for (const m of represented) seen.set(m.id, m);
         }
         if (needsAnchor) {
           const saved = anchor.current;
@@ -329,7 +328,7 @@ function useVisibleRows(box: RefObject<HTMLDivElement | null>, inner: RefObject<
           // it; a changed scrollTop means the user's newer reading place wins.
           if (!saved?.row.isConnected || !root.contains(saved.row) || Math.abs(root.scrollTop - saved.scrollTop) >= .5) anchor.current = reading;
         }
-        publish(seen);
+        publish([...seen.values()]);
       });
     };
     request.current = schedule;
@@ -340,8 +339,9 @@ function useVisibleRows(box: RefObject<HTMLDivElement | null>, inner: RefObject<
       observer = new IntersectionObserver(entries => {
         if (!alive || current !== epoch) return;
         for (const e of entries) {
-          const m = byID.get((e.target as HTMLElement).dataset.mid || "");
-          if (m && e.isIntersecting && e.intersectionRect.width > 0 && e.intersectionRect.height > 0) shown.set(e.target, m);
+          const row = e.target as HTMLElement;
+          const represented = (row.dataset.messageIds || row.dataset.mid || "").split(" ").map(id => byID.get(id)).filter((m): m is AnyMsg => !!m);
+          if (represented.length && e.isIntersecting && e.intersectionRect.width > 0 && e.intersectionRect.height > 0) shown.set(e.target, represented);
           else shown.delete(e.target);
         }
         schedule();
@@ -390,7 +390,7 @@ function build(messages: AnyMsg[], ctx: Ctx, firstUnread?: string): Item[] {
 }
 
 function flash(box: HTMLElement, id: string, smooth: boolean) {
-  const el = box.querySelector<HTMLElement>("[data-mid=\"" + CSS.escape(id) + "\"]");
+  const el = box.querySelector<HTMLElement>("[data-message-ids~=\"" + CSS.escape(id) + "\"]") || box.querySelector<HTMLElement>("[data-mid=\"" + CSS.escape(id) + "\"]");
   if (!el) return false;
   const target = el.querySelector<HTMLElement>("[data-agent-needs-you]") || el;
   target.scrollIntoView({ block: target === el ? "center" : "start", behavior: smooth && !reduced() ? "smooth" : "auto" });

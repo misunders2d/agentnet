@@ -127,11 +127,24 @@ func (a *Agent) Doctor(ctx context.Context) []Check {
 	} else {
 		add("keys", true, "owner-only")
 	}
-	if release, err := lockfile.Acquire(filepath.Join(a.home, "daemon.lock")); err == nil {
-		release()
+	var daemon *DaemonReadiness
+	if running, err := daemonRunning(a.home); err != nil {
+		add("daemon", false, "cannot inspect daemon ownership: %v", err)
+	} else if !running {
 		add("daemon", false, "not running: messages arrive only while `agentnet daemon` runs")
 	} else {
-		add("daemon", true, "running")
+		v, err := a.ReadDaemonReadiness(ctx)
+		if err != nil {
+			add("daemon", true, "running (lock held); daemon environment and transport are unverified: %v", err)
+		} else {
+			daemon = &v
+			add("daemon", true, "running (process %d); reports its own launch environment", v.PID)
+			if v.Connected {
+				add("transport", true, "daemon holds an accepted Hub push stream")
+			} else {
+				add("transport", false, "daemon is not connected to the Hub push stream; queued messages wait for reconnection")
+			}
+		}
 	}
 	var v protocol.VersionInfo
 	if err := a.hub.do(ctx, "GET", "/v1/version", nil, &v); err != nil {
@@ -181,14 +194,30 @@ func (a *Agent) Doctor(ctx context.Context) []Check {
 			add("responder", true, "not chosen yet: this computer has no default agent, so questions and tasks wait for you; set one: %s (agentnet responder list shows the programs found)", DefaultAgentFix(a.suggestedHarness()))
 		}
 	default:
-		if _, err := resolveNativeLaunch(Harnesses[r.Harness].bin); err != nil {
-			add("responder", false, "%s selected but %q is not on PATH", r.Harness, Harnesses[r.Harness].bin)
+		_, callerErr := resolveNativeLaunch(Harnesses[r.Harness].bin)
+		ready, source, problem := callerErr == nil, "caller-only launch check; daemon environment unverified", "harness is not on this caller's PATH"
+		if daemon != nil {
+			ready, source, problem = false, "daemon launch check; model authentication is unverified", "default agent was not reported by the daemon"
+			for _, agent := range daemon.Agents {
+				if agent.Default && agent.Harness == r.Harness {
+					ready, problem = agent.Available, agent.Problem
+					break
+				}
+			}
+			caller := "available in this caller's launch environment"
+			if callerErr != nil {
+				caller = "not found in this caller's PATH; this does not describe the running daemon"
+			}
+			add("caller-harness", true, "%s: %s", r.Harness, caller)
+		}
+		if !ready {
+			add("responder", false, "%s: %s (%s)", r.Harness, problem, source)
 		} else if n, err := a.Approvals(); err != nil {
 			add("responder", false, "%v", err)
 		} else if n == 0 {
-			add("responder", true, "%s in %s; %s", r.Harness, r.Dir, NoApprovals)
+			add("responder", true, "%s in %s (%s); %s", r.Harness, r.Dir, source, NoApprovals)
 		} else {
-			add("responder", true, "%s in %s; answers questions from %d approved agent(s)", r.Harness, r.Dir, n)
+			add("responder", true, "%s in %s (%s); answers questions from %d approved agent(s)", r.Harness, r.Dir, source, n)
 		}
 	}
 	// Held questions, tasks awaiting acceptance and needs_human items wait

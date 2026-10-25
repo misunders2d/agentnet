@@ -88,7 +88,9 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [schedulePane, setSchedulePane] = useState<SchedulePane>(null);
+  const [audienceOpen, setAudienceOpen] = useState(false);
   useEffect(() => setSchedulePane(null), [conv]);
+  useEffect(() => setAudienceOpen(false), [conv]);
   const [zone, setZone] = useState<HTMLElement | null>(null);
   useEmojiPreload(menuOpen);
 
@@ -124,6 +126,11 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   // Stop keeps it an ordinary message.
   const replyAgent = !mentioned.length && !draft.plainReply && !draft.newTopic ? replyFollowupAgent(dm, draft.topic || "", followupContext, draft.replyTo) : undefined;
   const selectedPIDs = replyAgent ? [replyAgent] : mentioned;
+  const audience = useMemo(() => {
+    const refs = spans.flatMap(span => span.kind === "collective" ? span.refs || [] : [{ kind: span.kind, id: span.id }]);
+    if (!refs.length) refs.push(...selectedPIDs.map(id => ({ kind: "agent" as const, id })));
+    return [...new Map(refs.map(ref => [ref.kind + ":" + ref.id, ref])).values()];
+  }, [spans, selectedPIDs.join(" ")]);
   const target: Target = useMemo(() => {
     if (thread) {
       if (answerable) return { kind: "answer", id: answerable.id, task: answerable.kind === "task" };
@@ -183,16 +190,32 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
 
   // ---- keeping the field in shape: caret after programmatic edits, height, mirror scroll
   useLayoutEffect(() => {
-    const ta = field.current;
-    if (!ta) return;
-    ta.style.height = "auto";
-    ta.style.height = Math.min(ta.scrollHeight, wide ? 240 : 140) + "px";
+    const ta = field.current, composer = form.current, container = composer?.parentElement;
+    if (!ta || !composer || !container) return;
+    // Leave room for the actual header, files, reply and audience controls.
+    // Their height changes with the keyboard and attachments; viewport-only
+    // limits can still put Send below the available conversation.
+    const resize = () => {
+      ta.style.height = "auto";
+      const fixed = [...container.children].reduce((height, node) => {
+        if (node === composer || !(node instanceof HTMLElement)) return height;
+        const style = getComputedStyle(node);
+        return style.position !== "absolute" && style.position !== "fixed" && Number(style.flexGrow) === 0 ? height + node.offsetHeight : height;
+      }, 0);
+      const remaining = container.clientHeight - fixed - (composer.offsetHeight - ta.offsetHeight);
+      ta.style.height = Math.max(44, Math.min(ta.scrollHeight, wide ? 240 : 140, remaining)) + "px";
+      if (mirror.current) mirror.current.scrollTop = ta.scrollTop;
+    };
+    resize();
+    const observer = new ResizeObserver(resize);
+    observer.observe(container);
+    observer.observe(composer);
     if (caretNext.current != null) {
       ta.setSelectionRange(caretNext.current, caretNext.current);
       setCaret(caretNext.current);
       caretNext.current = null;
     }
-    if (mirror.current) mirror.current.scrollTop = ta.scrollTop;
+    return () => observer.disconnect();
   }, [text, wide, conv]);
 
   useLayoutEffect(() => { setZone(form.current?.parentElement ?? null); }, [conv, !!closed]);
@@ -726,14 +749,21 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
           note={gone && target.kind === "agent" ? target.name + " can’t be asked now" + (target.why ? " (" + target.why.replace(/\.$/, "") + ")" : "") + ". Remove the mention to write to everyone instead."
             : undefined} />
       )}
-      {dm && overview && target.kind === "agent" && !handled && selectedPIDs.map(pid => {
-        const a = dm.agents?.find(a => a.pid === pid);
-        const own = overview.person?.state === "self" && overview.person.devices?.some(d => d.address === a?.host.address && d.fingerprint === a.host.fingerprint);
-        return a && own ? <div key={pid} data-part="agent-runtime" className="pt-1">
-          <p className="text-[13px] font-semibold">{agentName(a.agent_id, names, a.host, overview.person)}</p>
-          <AgentModelReport overview={overview} host={a.host.address} agentId={a.agent_id} />
-        </div> : null;
-      })}
+      {dm && overview && audience.length > 0 && !handled && <details data-composer-audience open={audienceOpen} onToggle={event => setAudienceOpen(event.currentTarget.open)}>
+        <summary className="min-h-11 cursor-pointer py-2.5 text-[13px] font-semibold text-text-2" onMouseDown={event => event.preventDefault()}>Recipients and details ({audience.length})</summary>
+        {audienceOpen && <div className="absolute inset-x-3 bottom-full z-30 mb-2 max-h-[min(12rem,20dvh)] overflow-y-auto overscroll-contain rounded-xl bg-surface px-3 py-2 stroke shadow-pop" data-composer-recipient-list>
+          {audience.map(ref => {
+            const a = ref.kind === "agent" ? dm.agents?.find(a => a.pid === ref.id) : undefined;
+            const candidate = people.find(person => person.kind === ref.kind && person.id === ref.id);
+            const own = overview.person?.state === "self" && overview.person.devices?.some(d => d.address === a?.host.address && d.fingerprint === a.host.fingerprint);
+            return <div key={ref.kind + ":" + ref.id} className="py-1" data-recipient={ref.id} title={ref.kind + " " + ref.id}>
+              <p className="text-[13px] font-semibold">{a ? agentName(a.agent_id, names, a.host, overview.person) : candidate?.name || "Unavailable " + ref.kind}</p>
+              <p className="text-xs text-text-2">{a ? niceDevice(a.host.address) : candidate?.sub || "No longer available in this chat"}</p>
+              {a && own && <div data-part="agent-runtime"><AgentModelReport overview={overview} host={a.host.address} agentId={a.agent_id} /></div>}
+            </div>;
+          })}
+        </div>}
+      </details>}
       {status && <StatusLine status={status} />}
       {notice?.conv===conv&&notice.refresh&&<Button size="sm" variant="outline" onClick={()=>void store.refreshOpen().then(ok=>{if(ok)setNotice(null);},e=>setNotice({conv,text:errorText(e),refresh:true}))}>Refresh work status</Button>}
 

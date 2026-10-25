@@ -16,8 +16,10 @@ import (
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
-const groupHelp = `group create TITLE | invite [--history-last N | --history-since RFC3339 | --history-refs FILE] CONV PERSON | invitations | accept ID | decline ID | retry ID | request-file CONV MESSAGE_ID INDEX | rename CONV TITLE | promote CONV PERSON | demote CONV PERSON | remove CONV PERSON | leave CONV
+const groupHelp = `group create TITLE | agents CONV | invite-agent --agent ID [--grant LID,...] [--tasks FINGERPRINT,...] CONV HOST | ask-agent [--id ID] [--task] [--answer-wait D] PID TEXT | wait [--answer-wait D] REQUEST_ID | invite [--history-last N | --history-since RFC3339 | --history-refs FILE] CONV PERSON | invitations | accept ID | decline ID | retry ID | request-file CONV MESSAGE_ID INDEX | rename CONV TITLE | promote CONV PERSON | demote CONV PERSON | remove CONV PERSON | leave CONV
 create starts a group with only this person as member and administrator.
+agents lists exact invited agent identities. Use agentnet dm catalog [--json] [HOST] for signed named-agent IDs, then invite-agent --agent ID CONV HOST. Same-person consent and other-person task grants remain unchanged.
+ask-agent returns promptly after durable queued storage by default, with physical and logical IDs. Submit each target before waiting; an offline host does not serialize the others' execution. --id retains an exact request across retries and refuses changed inputs; it never reruns successful work. wait observes the retained physical or logical ID through daemon push, never sends, and can resume after timeout or cancellation. Actual answers, running, queued, native permission waits and failures remain separate. The authority-bound room ask/wait commands remain for an admitted agent's own collaboration.
 invite records a local intent; its verified proposal grants no membership or execution. Earlier history defaults to nothing. Select at most 64 actual visible turns with --history-last, --history-since, or exact {lid,author,hash} --history-refs. Their text and file manifests are delivered only after consent and membership publication; selected files are requested from the forwarding device. Changed/deleted selection refuses fresh publication; already committed membership can report history unavailable. Nothing substitutes other content.
 invitations shows verified pending proposals and their exact history refs. accept/decline is an explicit human decision. Accepted exact consent is published automatically by the inviter; stale membership requires a fresh invitation and fresh consent. When the group changed before an invitation was published (for example someone else joined first), the inviter's daemon sends it once more at the current state, to the same person with the same history (never after a decline): the older one shows stale, and the newer one needs a fresh accept. retry recovers an already accepted local intent without changing its signature.
 request-file explicitly queues one selected history file (zero-based INDEX) from its forwarding device; it does not claim download. After its offer arrives, agentnet download saves and checks the returned bytes. A file no source holds is unavailable.
@@ -34,6 +36,20 @@ func runGroup(ctx context.Context, a *client.Agent, args []string, stdout, stder
 		return json.NewEncoder(stdout).Encode(value)
 	}
 	switch args[0] {
+	case "agents":
+		if len(args) != 2 {
+			return errors.New("usage: group agents CONV")
+		}
+		if _, err := a.GroupContext(args[1]); err != nil {
+			return err
+		}
+		return runDM(ctx, a, []string{"agents", args[1]}, stdout)
+	case "invite-agent":
+		return runAgentInvite(ctx, a, args[1:], stdout, true)
+	case "ask-agent":
+		return runAgentAsk(ctx, a, args[1:], stdout, true)
+	case "wait":
+		return runAgentWait(ctx, a, args[1:], stdout, true)
 	case "rename", "promote", "demote", "remove":
 		if len(args) < 3 || args[0] != "rename" && len(args) != 3 {
 			return fmt.Errorf("usage: group %s CONV %s", args[0], map[bool]string{true: "TITLE", false: "PERSON"}[args[0] == "rename"])

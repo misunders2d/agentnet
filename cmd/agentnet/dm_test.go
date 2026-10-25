@@ -96,7 +96,7 @@ func TestDMHelpSaysReplyWithoutEmotionIsNeutral(t *testing.T) {
 
 // dmWorld: alice (laptop), bob (desk) and carol (box) on one server, each
 // with a person and a running daemon; a DM between alice and bob.
-func dmWorld(t *testing.T) (alice, bob, carol *client.Agent, conv string, eventually func(string, func() bool)) {
+func dmWorld(t *testing.T, runStops ...map[*client.Agent]func()) (alice, bob, carol *client.Agent, conv string, eventually func(string, func() bool)) {
 	t.Helper()
 	t.Setenv("AGENTNET_NOTIFY", "off")
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -111,7 +111,11 @@ func dmWorld(t *testing.T) (alice, bob, carol *client.Agent, conv string, eventu
 		run, stop := context.WithCancel(context.Background())
 		done := make(chan struct{})
 		go func() { a.Run(run, client.RunOptions{}); close(done) }()
-		t.Cleanup(func() { stop(); <-done; a.Close() })
+		stopRun := func() { stop(); <-done }
+		for _, stops := range runStops {
+			stops[a] = stopRun
+		}
+		t.Cleanup(func() { stopRun(); a.Close() })
 		return a
 	}
 	alice = join(testhub.BootstrapCode(t, dir), "laptop")

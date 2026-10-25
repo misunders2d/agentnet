@@ -172,7 +172,10 @@ func (a *Agent) codexRoomTool(ctx context.Context, cause string, raw json.RawMes
 // so it is never presented as the agent's own words.
 const nativeStatusPrefix = "AgentNet: "
 
-const codexLineMax = 4 << 20
+const (
+	codexLineMax       = 4 << 20
+	codexDiagnosticMax = 16
+)
 
 type codexRoomBridge struct {
 	ctx                  context.Context
@@ -211,6 +214,12 @@ type codexRoomBridge struct {
 	// failure is the exact technical reason the run ended without a native
 	// outcome; it is reported as a failed run, never as a human decision.
 	failure string
+
+	onDiagnostic                           func(string, ...any)
+	answerID, answerPhase                  string
+	diagnosticEvents, diagnosticSuppressed int
+	messageDeltas                          int
+	diagnosticEnded                        bool
 }
 
 func newCodexRoomBridge(ctx context.Context, cmd *exec.Cmd, prompt string, output io.Writer, call func(context.Context, json.RawMessage) (string, error), plans ...sessionPlan) (*codexRoomBridge, error) {
@@ -255,6 +264,7 @@ func (b *codexRoomBridge) failLocked(why string) {
 	if !b.done {
 		b.done = true
 		b.failure = why
+		b.diagnosticEnd("failed")
 	}
 	b.close()
 }
@@ -263,6 +273,7 @@ func (b *codexRoomBridge) failLocked(why string) {
 func (b *codexRoomBridge) humanLocked(why string) {
 	if !b.done {
 		b.done = true
+		b.diagnosticEnd("needs_human")
 		fmt.Fprintln(b.output, needsHumanMarker)
 		fmt.Fprintln(b.output, nativeStatusPrefix+why)
 	}
@@ -274,6 +285,37 @@ func (b *codexRoomBridge) failureText() string {
 	b.stateMu.Lock()
 	defer b.stateMu.Unlock()
 	return b.failure
+}
+
+// Diagnostics retain only bounded item metadata. Native text and raw payloads
+// never reach the log; a terminal summary remains even after the event cap.
+func (b *codexRoomBridge) diagnosticEvent(method, thread, turn, item, phase string, size int, decision string) {
+	if b.onDiagnostic == nil {
+		return
+	}
+	if b.diagnosticEvents >= codexDiagnosticMax {
+		b.diagnosticSuppressed++
+		return
+	}
+	b.diagnosticEvents++
+	b.onDiagnostic("event=%s thread=%q turn=%q item=%q phase=%s text_bytes=%d selection=%s", method, codexDiagnosticID(thread), codexDiagnosticID(turn), codexDiagnosticID(item), phase, size, decision)
+}
+
+func (b *codexRoomBridge) diagnosticEnd(status string) {
+	if b.diagnosticEnded {
+		return
+	}
+	b.diagnosticEnded = true
+	if b.onDiagnostic != nil {
+		b.onDiagnostic("terminal=%s thread=%q turn=%q answer_item=%q answer_phase=%q answer_bytes=%d message_deltas=%d events_suppressed=%d", status, codexDiagnosticID(b.thread), codexDiagnosticID(b.turn), codexDiagnosticID(b.answerID), b.answerPhase, len(b.answer), b.messageDeltas, b.diagnosticSuppressed)
+	}
+}
+
+func codexDiagnosticID(id string) string {
+	if len(id) > 128 {
+		return id[:128]
+	}
+	return id
 }
 
 // codexRPCError words a JSON-RPC error response to one of the bridge's own
@@ -440,15 +482,23 @@ func (b *codexRoomBridge) event(raw []byte) {
 			} `json:"error"`
 		} `json:"turn"`
 		Item struct {
-			ID   string `json:"id"`
-			Type string `json:"type"`
-			Text string `json:"text"`
+			ID    string  `json:"id"`
+			Type  string  `json:"type"`
+			Text  string  `json:"text"`
+			Phase *string `json:"phase"`
 		} `json:"item"`
 	}
 	if json.Unmarshal(m.Params, &p) != nil {
+		if m.Method == "item/completed" || m.Method == "turn/completed" {
+			b.diagnosticEvent(m.Method, "", "", "", "unknown", 0, "invalid-params")
+		}
 		return
 	}
 	switch m.Method {
+	case "item/agentMessage/delta":
+		if b.thread != "" && b.turn != "" && p.ThreadID == b.thread && p.TurnID == b.turn {
+			b.messageDeltas++ // Streaming is diagnostic evidence, never a completed answer.
+		}
 	case "serverRequest/resolved":
 		var resolved struct {
 			ThreadID  string          `json:"threadId"`
@@ -604,12 +654,38 @@ func (b *codexRoomBridge) event(raw []byte) {
 				delete(b.nativeItems, n.Item.ID)
 			}
 		}
-		if p.ThreadID == b.thread && p.TurnID == b.turn && p.Item.Type == "agentMessage" {
-			b.answer = p.Item.Text
+		if p.Item.Type == "agentMessage" {
+			phase, decision := "legacy", "selected"
+			if p.Item.Phase != nil {
+				phase = *p.Item.Phase
+				if phase != "commentary" && phase != "partial_answer" && phase != "final_answer" {
+					phase = "unknown"
+				}
+			}
+			switch {
+			case b.thread == "" || b.turn == "" || p.ThreadID != b.thread || p.TurnID != b.turn:
+				decision = "foreign-or-inactive"
+			case strings.TrimSpace(p.Item.Text) == "":
+				decision = "empty"
+			case p.Item.Phase != nil && phase != "final_answer":
+				decision = "not-final"
+			case phase == "legacy" && b.answerPhase == "final_answer":
+				decision = "final-retained"
+			default:
+				// Completed items are authoritative. A legacy model may omit
+				// phase, but that fallback never replaces an explicit final.
+				b.answer, b.answerID, b.answerPhase = p.Item.Text, p.Item.ID, phase
+			}
+			b.diagnosticEvent(m.Method, p.ThreadID, p.TurnID, p.Item.ID, phase, len(p.Item.Text), decision)
 		}
 	case "turn/completed":
-		if p.ThreadID == b.thread && p.Turn.ID == b.turn {
+		if b.thread != "" && b.turn != "" && p.ThreadID == b.thread && p.Turn.ID == b.turn {
 			if p.Turn.Status != "completed" {
+				status := p.Turn.Status
+				if status != "failed" && status != "interrupted" {
+					status = "unknown"
+				}
+				b.diagnosticEnd(status)
 				why := "Codex ended the turn as " + strconv.Quote(clip([]byte(p.Turn.Status)))
 				if p.Turn.Error != nil && p.Turn.Error.Message != "" {
 					why += ": " + clip([]byte(p.Turn.Error.Message))
@@ -618,12 +694,16 @@ func (b *codexRoomBridge) event(raw []byte) {
 				return
 			}
 			if strings.TrimSpace(b.answer) == "" {
+				b.diagnosticEnd("completed-no-answer")
 				b.failLocked("Codex completed the turn without an answer")
 				return
 			}
 			b.done = true
+			b.diagnosticEnd("completed")
 			fmt.Fprint(b.output, b.answer)
 			b.close()
+		} else {
+			b.diagnosticEvent(m.Method, p.ThreadID, p.Turn.ID, "", "unknown", 0, "foreign-or-inactive")
 		}
 	case "item/commandExecution/requestApproval", "item/fileChange/requestApproval", "item/permissions/requestApproval", "item/tool/requestUserInput", "tool/requestUserInput", "mcpServer/elicitation/request":
 		if len(m.ID) > 0 {
@@ -636,6 +716,7 @@ func (b *codexRoomBridge) event(raw []byte) {
 				return
 			}
 			b.done = true
+			b.diagnosticEnd("needs_human")
 			fmt.Fprintln(b.output, needsHumanMarker)
 			fmt.Fprintln(b.output, nativeStatusPrefix+"Your Codex setup requires a native approval or input for this action. This background session cannot collect it. Continue in your native Codex session with the specific permission; retrying unchanged will ask again. AgentNet did not approve or bypass it.")
 			var why struct{ Reason, Message string }
@@ -719,10 +800,7 @@ func (b *codexRoomBridge) beginNativeLocked(method string, id, params json.RawMe
 		}
 		delete(b.nativePending, key)
 		if e != nil || b.nativeCheck != nil && !b.nativeCheck(callback) || b.nativePolicy == "never" && nativePermissionGrant(callback.View.Method, result) {
-			b.done = true
-			fmt.Fprintln(b.output, needsHumanMarker)
-			fmt.Fprintln(b.output, nativeStatusPrefix+"The native request could not be continued with current authority. No approval was sent. Review the existing work before explicitly continuing.")
-			b.close()
+			b.humanLocked("The native request could not be continued with current authority. No approval was sent. Review the existing work before explicitly continuing.")
 			return
 		}
 		b.writeMu.Lock()

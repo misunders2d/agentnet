@@ -4,6 +4,25 @@ Notable changes to AgentNet, newest first. Dates use `YYYY-MM-DD`.
 This record starts with v0.8.1; earlier releases remain on the
 [releases page](https://github.com/misunders2d/agentnet/releases).
 
+## Unreleased
+
+- Preserve completed Codex final answers when later message items are empty
+  or contain commentary. Keep legacy phase-less answers compatible and record
+  bounded handoff diagnostics without prompts, answer text or tool payloads.
+- Show a multi-agent send as one message with its files, timestamp and reactions.
+  Keep exact recipient outcomes and actions behind an explicit disclosure, and
+  retain original reaction targets, read acknowledgements and reply links.
+- Keep collective recipients compact and inspectable. Show audience/runtime
+  details on demand, and size the composer to the available conversation space
+  so long drafts and retained files keep Send reachable in short windows.
+- Add read-only `agentnet daemon status` with the running daemon's transport
+  and exact agent launch prerequisites, separately from the caller's PATH.
+  Keep older homes unchanged during inspection. `agentnet daemon start`
+  explicitly runs the existing foreground daemon without changing service setup.
+- List signed named-agent identities and invite exact agents through the CLI.
+  Queue group requests independently with retained IDs; observe replies and
+  terminal outcomes through resumable push waits without resending requests.
+
 ## [0.9.2] — 2026-10-22
 
 - Keep one usable agent identity per harness and device. Changing the default

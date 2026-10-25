@@ -253,6 +253,14 @@ if(variant==='multi-agent'&&${JSON.stringify(process.env.AGENTNET_COLLECTIVE_TAG
 }
 
 }
+if(variant.startsWith('compact-audience-')){
+ const count=Number(variant.split('-')[2]);fixture.thread.guests=[];fixture.overview.group_invitations=[];fixture.thread.members=[fixture.thread.members[0]];
+ fixture.thread.agents=Array.from({length:count},(_,i)=>{
+  const address='aster/device-'+i,fingerprint='own-key-'+i,host={...fixture.overview.person,address,fingerprint};
+  fixture.overview.person.devices.push({address,fingerprint});
+  return {pid:'audience-'+i,host,agent_id:(i+1).toString(16).padStart(32,'0'),state:'active',state_text:'Active',host_here:false,shared:[],can_ask:true,inviter:fixture.overview.person,invited:'2026-10-05T10:00:00Z',tasks_from:[]};
+ });
+}
 if(variant==='phone-rejoin'){
  fixture.thread.guests=[];fixture.overview.group_invitations=[];
  fixture.overview.agent_devices=[fixture.thread.members[1].address];
@@ -382,6 +390,17 @@ if(variant==='reactions'&&p==='/api/message/react'){
  else if(!r.mine){r.by.push({id:'me',label:'Aster'});r.mine=true;}
  return {note:'Reaction saved'};
 }
+if(variant==='multi-agent'&&p==='/api/message/react'){
+ const m=fixture.thread.messages.find(m=>m.id===body.id);if(!m||body.conv!==fixture.thread.id||body.dir!=='out')throw Error('Unexpected grouped reaction target');
+ if(fixture.holdGroupedReactions)await new Promise(resolve=>{(fixture.finishGroupedReactions||=[]).push(resolve);});
+ let r=m.reactions.find(r=>r.emoji===body.emoji);if(!r){r={emoji:body.emoji,by:[]};m.reactions.push(r);}
+ const self=fixture.overview.person.person;r.by=r.by.filter(b=>b.assistant||b.id!==self);if(!body.remove)r.by.push({id:self,label:'Aster'});r.mine=!body.remove;
+ return {note:'Reaction saved'};
+}
+if(variant==='multi-agent'&&p==='/api/act'&&body.do==='read'){
+ for(const message of fixture.thread.messages)if(body.ids.includes(message.id))message.unread=false;
+ return {note:'Read state saved'};
+}
 if(variant.startsWith('continuation-')&&['/api/act','/api/operator/decide'].includes(p)){
  const c=fixture.thread.messages.find(m=>m.id==='needs-answer-exact').continuation;
  if(variant==='continuation-resolve'&&body.check){
@@ -509,7 +528,7 @@ const server=http.createServer((req,res)=>{if(req.url==='/native-result'&&req.me
    fs.writeFileSync(path.join(evidence,'native-url'),origin+'/?skin=comic&case=render-perf&native=1');
    await new Promise(resolve=>{nativeFinish=resolve;});return;
   }
-  browser=await chromium.launch({headless:true,executablePath:process.env.AGENTNET_CHROMIUM||undefined});
+  browser=await chromium.launch({headless:true,executablePath:process.env.AGENTNET_CHROMIUM||undefined,args:process.env.AGENTNET_CPU_ONLY==='1'?['--disable-gpu']:undefined});
 
   if(process.env.AGENTNET_V32_ASSET_PROBE==='1'){
    const context=await browser.newContext({viewport:{width:1280,height:900}}),page=await context.newPage(),requests=[],consoleErrors=[];
@@ -1750,6 +1769,48 @@ if(process.env.AGENTNET_RENDER_PERF==='1'){
  }finally{await context.close();}
  continue;
 }
+if(process.env.AGENTNET_COMPACT_AUDIENCE==='1'){
+ for(const count of [1,8,100]){
+  const {page,context}=await openCase('compact-audience-'+count);
+  try{
+   const resource=process.env.AGENTNET_CPU_ONLY==='1'?await context.newCDPSession(page):null;
+   if(resource)await resource.send('Emulation.setCPUThrottlingRate',{rate:4});
+   const form=page.getByRole('form',{name:'Write a message',exact:true}),field=form.locator('textarea');
+   await field.pressSequentially('@everyone');await page.getByRole('option').filter({hasText:'everyone'}).click();
+   const draft='@everyone '+('Long draft remains editable while recipients are inspected. '.repeat(12));
+   if(resource)await field.evaluate(el=>el.addEventListener('input',()=>{const start=performance.now();requestAnimationFrame(()=>requestAnimationFrame(()=>{fixture.inputTwoFrameMs=performance.now()-start;}));},{once:true}));
+   await field.fill(draft);
+   await form.locator('input[type=file]').setInputFiles({name:'retained-audience.txt',mimeType:'text/plain',buffer:Buffer.from('Retained unsent attachment')});
+   await form.getByText('retained-audience.txt',{exact:true}).waitFor();
+   const details=form.locator('[data-composer-audience]'),summary=details.locator('summary');
+   await settle(page);assert.equal(await details.getAttribute('open'),null);assert.equal(await form.locator('[data-recipient]').count(),0,'Closed audience mounts no recipient/runtime panels');
+   assert.match(await summary.innerText(),new RegExp('\\('+count+'\\)'));
+   for(const height of [900,420]){
+    await page.setViewportSize({width,height});await settle(page);
+    const geometry=await form.evaluate(form=>{const field=form.querySelector('textarea').getBoundingClientRect(),send=form.querySelector('button[type=submit]').getBoundingClientRect();return {field:field.toJSON(),send:send.toJSON(),height:innerHeight,overflow:document.documentElement.scrollWidth>innerWidth};});
+    assert(geometry.field.top>=0&&geometry.field.bottom<=height&&geometry.send.top>=0&&geometry.send.bottom<=height&&!geometry.overflow,'Composer and Send stay in the short viewport for '+count+' recipients: '+JSON.stringify(geometry));
+    await field.focus();const openStart=resource?await page.evaluate(()=>performance.now()):0;await summary.click();await form.locator('[data-composer-recipient-list]').waitFor();
+    assert.equal(await form.locator('[data-recipient]').count(),count,'The optional audience exposes every exact frozen target');
+    assert.equal(await form.locator('[data-part="agent-runtime"]').count(),count,'Own runtime details mount only in the explicit audience');
+    const list=await form.locator('[data-composer-recipient-list]').evaluate(el=>({height:el.getBoundingClientRect().height,scroll:el.scrollHeight,client:el.clientHeight,overflow:getComputedStyle(el).overflowY}));
+    assert(list.height<=Math.min(192,height*.2)+1&&list.overflow==='auto','Audience has a bounded scrolling disclosure');
+    const openGeometry=await form.evaluate(form=>{const field=form.querySelector('textarea').getBoundingClientRect(),send=form.querySelector('button[type=submit]').getBoundingClientRect();return {field:field.toJSON(),send:send.toJSON()};});
+    assert(openGeometry.field.top>=0&&openGeometry.field.bottom<=height&&openGeometry.send.top>=0&&openGeometry.send.bottom<=height,'Inspecting recipients does not displace the field or Send');
+    assert.equal(await field.inputValue(),draft);assert(await field.evaluate(el=>el.getRootNode().activeElement===el),'Opening recipient details preserves typing focus');
+    if(resource)console.log(JSON.stringify({kind:'compact-audience-resource',count,width,height,gpuDisabled:true,cpuThrottle:4,inputTwoFrameMs:await page.evaluate(()=>fixture.inputTwoFrameMs),openWorkflowMs:await page.evaluate(start=>performance.now()-start,openStart),jsHeapUsed:(await resource.send('Runtime.getHeapUsage')).usedSize,openRecipientRows:count}));
+    await summary.click();await settle(page);assert.equal(await form.locator('[data-recipient]').count(),0);assert.equal(await field.inputValue(),draft);
+    assert.equal(await form.getByText('retained-audience.txt',{exact:true}).count(),1,'Audience disclosure retains the original unsent attachment');
+   }
+   const shot=path.join(evidence,'compact-audience-'+count+'-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
+   assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/dm/agent/ask'||r.path==='/api/dm/send').length),0,'Inspecting recipients never sends');
+  }catch(error){
+   await page.screenshot({path:path.join(evidence,'compact-audience-failure-'+count+'-'+width+'.png')});
+   const geometry=await page.getByRole('form',{name:'Write a message',exact:true}).evaluate(form=>{const rows=[];for(let node=form;node;node=node.parentElement){const style=getComputedStyle(node);rows.push({tag:node.tagName,cls:node.className,box:node.getBoundingClientRect().toJSON(),minHeight:style.minHeight,flexShrink:style.flexShrink});}return rows;});
+   fs.writeFileSync(path.join(evidence,'compact-audience-failure-'+count+'-'+width+'.json'),JSON.stringify(geometry,null,2));throw error;
+  }finally{await context.close();}
+ }
+ continue;
+}
 if(process.env.AGENTNET_MULTI_AGENT_REGRESSION==='1'){
  const {page,context}=await openCase('multi-agent');
  try{
@@ -1834,7 +1895,8 @@ if(process.env.AGENTNET_MULTI_AGENT_REGRESSION==='1'){
   const first=await asks();assert.deepEqual(first.map(a=>a.pid).sort(),['agent-a','agent-b']);
   assert.notEqual(first[0].id,first[1].id,'one id per exact participation');
   assert.match(first[0].send_group,/^[a-f0-9]{32}$/);assert.equal(first[0].send_group,first[1].send_group,'one durable composer group');
-  await page.waitForFunction(()=>document.querySelector('#skin').shadowRoot.innerHTML.includes('Retry'));
+  if(skin==='comic')await page.locator('[data-agent-outcomes] summary').click();
+  await page.getByRole('button',{name:'Retry',exact:true}).waitFor();
   const visibleCopies=()=>page.locator('#skin').evaluate(e=>(e.shadowRoot.innerText||e.shadowRoot.textContent).split('Compare warehouse inventory').length-1);
   assert.equal(await visibleCopies(),1,'one human body with two independently retryable targets');
   assert(first.every(a=>a.kind==='question'&&a.body.includes('Compare warehouse inventory')));
@@ -1865,7 +1927,8 @@ if(process.env.AGENTNET_MULTI_AGENT_REGRESSION==='1'){
   assert((await page.evaluate(()=>fixture.stages.length))<=3,'at most the failed request file restaged');
   await page.evaluate(()=>{
    const asks=fixture.requests.filter(r=>r.path==='/api/dm/agent/ask').slice(0,2).map(r=>r.body);
-   for(const [i,a] of asks.entries())fixture.thread.messages.push({id:a.id,lid:a.id,from:fixture.overview.me.address,dir:'out',origin:'ui',kind:a.kind,body:a.body,topic:a.topic,pid:a.pid,send_group:a.send_group,send_group_author:fixture.overview.me.fingerprint,at:'2026-10-05T10:02:00Z',target:{address:'brin/desktop',agent_id:String(i+1).repeat(32)},attachments:[{name:'inventory.txt',size:19,openable:false}],delivery:'delivered',exec:{state:i===0?'running':'done',host:'brin/desktop',attempt:1,at:1791194520}});
+   for(const [i,a] of asks.entries())fixture.thread.messages.push({id:a.id,lid:a.id,from:fixture.overview.me.address,dir:'out',origin:'ui',kind:a.kind,body:a.body,topic:a.topic,pid:a.pid,send_group:a.send_group,send_group_author:fixture.overview.me.fingerprint,at:'2026-10-05T10:02:00Z',target:{address:'brin/desktop',agent_id:String(i+1).repeat(32)},attachments:[{name:'inventory.txt',size:19,openable:false}],delivery:'delivered',unread:true,can:['react'],reactions:[{emoji:'👍',mine:true,by:[{id:fixture.overview.person.person,label:'Aster'},{id:'agent-reactor-'+i,pid:a.pid,assistant:true,host:'brin/desktop',agent_id:String(i+1).repeat(32)}]}],exec:{state:i===0?'running':'done',host:'brin/desktop',attempt:1,at:1791194520}});
+   const shared=fixture.thread.messages.filter(m=>m.send_group===asks[0].send_group);shared[1].reactions[0].by.push({...shared[0].reactions[0].by[1]});for(const m of shared)m.can=['react','edit','delete'];
    reloadFixture();
   });
   await settle(page);assert.equal(await visibleCopies(),1,'durable projection replaces previews without duplicating body');
@@ -1876,12 +1939,79 @@ if(process.env.AGENTNET_MULTI_AGENT_REGRESSION==='1'){
   }
   if(skin==='comic'){
    const group=page.locator('[data-send-group]');assert.equal(await group.count(),1);
+   await page.waitForFunction(()=>{
+    const ids=fixture.requests.filter(r=>r.path==='/api/dm/agent/ask').slice(0,2).map(r=>r.body.id);
+    const read=new Set(fixture.requests.filter(r=>r.path==='/api/act'&&r.body?.do==='read').flatMap(r=>r.body.ids));return ids.every(id=>read.has(id));
+   });
    assert.equal(await group.locator('[data-message-bubble]').count(),1,'No empty second bubble');
-   assert.equal(await group.locator('[data-send-target]').count(),2,'Each exact target retains its own state');
+   assert.equal(await group.locator('[data-reactions]').count(),1,'All reactions share the original message area');
+   assert.equal(await group.locator('[data-agent-reaction]').count(),1,'Same-emoji agent marks share one compact chip');
+   await group.getByRole('button',{name:'👍 from 2 agents. Show authors',exact:true}).click();
+   assert.equal(await page.getByRole('list',{name:'Agent reaction authors',exact:true}).locator('[data-reactor]').count(),2,'Same-label agents retain distinct verified authorship in the disclosure');
+   await page.keyboard.press('Escape');
    assert.equal((await group.innerText()).split('inventory.txt').length-1,1,'Shared attachment shown once');
+   const outcomes=group.locator('[data-agent-outcomes]');
+   if(await outcomes.getAttribute('open')!==null)await outcomes.locator('summary').click();
+   await settle(page);assert.equal(await group.locator('[data-send-target]').count(),0,'Closed default message mounts no per-target runtime cards');
+   await group.locator('[data-message-bubble]').click({button:'right'});
+   const commonActions=page.getByRole('dialog',{name:'Your message',exact:true});await commonActions.waitFor();
+   for(const name of ['Reply','Edit','Delete…','Select','Mark unread','Mark unread from here','Make a topic','Assign to your agent…','Details'])assert.equal(await commonActions.getByRole('button',{name,exact:true}).count(),0,'Shared controls never silently apply '+name+' to the first child');
+   await commonActions.getByRole('button',{name:'Agent outcomes',exact:true}).click();
+   await group.locator('[data-send-target]').first().waitFor();
+   await group.locator('[data-send-target]').first().getByRole('button',{name:/^Actions for /}).click();
+   const exactActions=page.getByRole('dialog',{name:/^Asked /});await exactActions.waitFor();
+   assert.equal(await exactActions.getByRole('button',{name:'Edit',exact:true}).count(),1);assert.equal(await exactActions.getByRole('button',{name:'Delete…',exact:true}).count(),1,'Exact target controls preserve server-granted mutations');
+   await page.keyboard.press('Escape');await outcomes.locator('summary').click();
+   await outcomes.locator('summary').click();await group.locator('[data-send-target]').first().waitFor();
+   assert.equal(await group.locator('[data-send-target]').count(),2,'Disclosure retains each exact target state');
    assert.match(await group.innerText(),/Working/);assert.match(await group.innerText(),/Done/);
+   await outcomes.locator('summary').click();await settle(page);
+   await page.evaluate(()=>{fixture.holdGroupedReactions=true;});
+   await group.getByRole('button',{name:/^👍 from Aster/}).click();
+   await page.waitForFunction(()=>fixture.finishGroupedReactions?.length===2);
+   assert.equal(await group.locator('[data-reaction-pending="true"]').count(),1,'Pending removal is one shared reaction area');
+   assert.equal(await group.getByRole('button',{name:/^👍 from Aster/}).count(),0,'Pending removals hide only the person’s own marks');
+   assert.equal(await group.locator('[data-agent-reaction]').count(),1,'Pending human removal preserves the agent marks');
+   const removed=await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/message/react').map(r=>r.body));
+   assert.deepEqual(removed.map(r=>r.id).sort(),first.map(r=>r.id).sort(),'Removal reaches both original signed targets, never a fake representative');
+   assert(removed.every(r=>r.remove&&r.emoji==='👍'&&r.conv===conv));
+   await page.evaluate(()=>{fixture.holdGroupedReactions=false;for(const finish of fixture.finishGroupedReactions)finish();});await settle(page);
+   await page.waitForFunction(()=>!document.querySelector('#skin').shadowRoot.querySelector('[data-reaction-pending="true"]'));
+   assert.equal(await group.locator('[data-reactions]').count(),1);assert.equal(await group.locator('[data-agent-reaction]').count(),1);
+   await page.evaluate(()=>{
+    const shared=fixture.thread.messages.filter(m=>m.send_group);shared[1].reactions[0].by.push({id:fixture.overview.person.person,label:'Aster'});shared[1].reactions[0].mine=true;reloadFixture();
+   });await group.getByRole('button',{name:/^👍 from Aster/}).waitFor();
+   const beforeQuick=await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/message/react').length);
+   await group.locator('[data-message-bubble]').click({button:'right'});await commonActions.waitFor();
+   const quick=commonActions.getByRole('button',{name:'React 👍',exact:true});assert.equal(await quick.getAttribute('aria-pressed'),'true','Shared quick picker sees a human reaction on a nonprimary target');await quick.click();
+   await page.waitForFunction(before=>fixture.requests.filter(r=>r.path==='/api/message/react').length>before,beforeQuick);
+   const quickChange=await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/message/react').at(-1).body);assert(quickChange.remove,'Shared quick picker removes instead of adding');assert.equal(quickChange.id,first[1].id,'Quick removal keeps the nonprimary original target');
+   await page.evaluate(()=>{
+    const request=fixture.requests.filter(r=>r.path==='/api/dm/agent/ask').slice(0,2)[1].body;
+    fixture.thread.messages.push({id:'reply-separator',from:'brin/desktop',dir:'in',kind:'message',body:'An intervening normal message',at:'2026-10-05T10:02:30Z'},{id:'shared-second-answer',lid:'shared-second-answer',from:'brin/desktop',dir:'in',kind:'answer',body:'Exact second target answer',reply_to:request.id,pid:request.pid,verified_agent:true,at:'2026-10-05T10:03:00Z'});
+    const animate=Element.prototype.animate;Element.prototype.animate=function(...args){if(this.hasAttribute('data-message-ids'))fixture.flashedSharedIds=this.getAttribute('data-message-ids');return Reflect.apply(animate,this,args);};reloadFixture();
+   });
+   await page.getByText('Exact second target answer',{exact:false}).waitFor();
+   const answer=page.locator('[data-mid="shared-second-answer"]');await answer.getByRole('button',{name:/^↳ answer to /}).click();
+   await page.waitForFunction(()=>fixture.flashedSharedIds?.includes(fixture.requests.filter(r=>r.path==='/api/dm/agent/ask')[1].body.id));
+   assert.equal(await outcomes.getAttribute('open'),null,'Exact child jump resolves the shared message without forcing outcomes open');
+   if(process.env.AGENTNET_COLLECTIVE_TAGS==='1'){
+    await group.getByRole('button',{name:'Recipients of @everyone',exact:true}).click();
+    const audience=page.getByRole('list',{name:'Frozen recipients of @everyone',exact:true});await audience.waitFor();
+    assert.equal(await audience.locator('li').count(),1001,'Sent collective retains its complete frozen human/agent audience');
+    assert.equal(await audience.locator('[data-recipient="agent-a"]').count(),1);assert.equal(await audience.locator('[data-recipient="agent-b"]').count(),1);
+    await page.keyboard.press('Escape');
+   }
+   await page.evaluate(()=>{
+    const shared=fixture.thread.messages.filter(m=>m.send_group);for(const m of shared)m.reactions[0].by=m.reactions[0].by.filter(b=>b.id!=='agent-reactor-0');
+    shared[1].reactions.push({emoji:'👀',by:[{id:'agent-reactor-0',pid:shared[0].pid,assistant:true,host:'brin/desktop',agent_id:'1'.repeat(32)}]});
+    fixture.thread.messages.reverse();reloadFixture();
+   });await settle(page);
+   assert.equal(await group.locator('[data-reactions]').count(),1,'Reordered projections keep one reaction area');
+   assert.equal(await group.locator('[data-reactions] [role="img"]').count(),2,'Agent removal and another emoji reconcile to their current source targets');
+   assert.match(await group.locator('[data-reactions]').innerText(),/👀/);
   }
-  await page.evaluate(()=>reloadFixture());await settle(page);assert.equal(await visibleCopies(),1,'reloading server projection preserves grouping');
+  await page.evaluate(()=>reloadFixture());await settle(page);assert.equal(skin==='comic'?await page.locator('[data-send-group] [data-message-bubble]').count():await visibleCopies(),1,'reloading server projection preserves grouping');
   await page.evaluate(()=>{fixture.thread.messages.push({id:'incoming-ref',lid:'incoming-ref',from:'brin/desktop',dir:'in',kind:'message',body:'[@Analyst](agentnet:agent/agent-a) [@Analyst](agentnet:agent/agent-b) INERT_INCOMING_MARKER',at:'2026-10-05T10:03:00Z'});reloadFixture();});
   await page.getByText(/INERT_INCOMING_MARKER/).first().waitFor();await settle(page);
   assert.equal((await asks()).length,3,'incoming text never originates fanout');

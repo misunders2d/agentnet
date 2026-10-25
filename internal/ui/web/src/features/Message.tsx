@@ -5,6 +5,8 @@
 // executor or an answer proves), and the approval card when the server
 // lists actions for it. Delivery says only what receipts prove.
 import { memo, useMemo, useRef, useState, type ReactNode } from "react";
+import { Popover } from "@base-ui/react/popover";
+import { parseCollective } from "../collective-mentions.mjs";
 import { sendID } from "../optimistic.mjs";
 import { localRunningDetail } from "../runningDetail";
 import { previewText } from "../linkText";
@@ -22,7 +24,7 @@ import { deviceWords, phaseOf } from "./Approvals.words";
 import { Markdown, MessageLinks, type RenderMention } from "./Markdown";
 import { AssignMessage } from "./Message.assign";
 import { MessageFiles } from "./Message.files";
-import { EmojiDialog, Reactions } from "./Message.reactions";
+import { EmojiDialog, Reactions, ReactionTargets } from "./Message.reactions";
 import { ActionSheet, DeleteMessage, DetailsSheet, EditBox, Toolbar, inside, useTouchGestures, type Acts, type Can } from "./Message.actions";
 import {
   agentLabel, agentOf, answerTo, eventKind, ev, excerpt, guestOf, historicalTargetLabel, isReply, isRequest, isThreadMsg, joinedBefore, lower, problem, requestLabel, requestState, shownText, whoWrote, working,
@@ -33,6 +35,7 @@ import { WhatTheySaw } from "./RoomPanel.cards";
 import { room } from "./RoomPanel.model";
 import { copyText } from "./Settings.parts";
 import { sendFailure } from "./Message.send-error";
+import { usePortal } from "../owned";
 
 export interface MessageProps {
   m: AnyMsg;
@@ -43,6 +46,9 @@ export interface MessageProps {
   status?: boolean;          // say this message's delivery in words under it
   compact?: boolean;          // another target of the same explicit human send
   grouped?: boolean;          // one bubble, with an exact outcome row per target
+  targets?: AnyMsg[];         // verified children represented by one authored message
+  selectedIds?: string[];
+  outcomeOnly?: boolean;     // exact target controls inside the shared message's disclosure
   readOnly?: boolean;        // shown for reading only ("What Zen saw")
   onJump?: (id: string) => void;
   selecting?: boolean;
@@ -55,10 +61,10 @@ export interface MessageProps {
 
 export const MessageView = memo(function MessageView(p: MessageProps) {
   if (ev(p.m)) return <EventDivider m={p.m as T.DMMessage} ctx={p.ctx} all={p.all} />;
-  return <Bubble {...p} />;
+  return <ReactionTargets.Provider value={p.targets}><Bubble {...p} /></ReactionTargets.Provider>;
 });
 
-function Bubble({ m, ctx, all, first = true, last = true, status, compact, grouped, readOnly, onJump, selecting, selected, onSelect, tabStop, onEntryFocus, formatTime = timeOf }: MessageProps) {
+function Bubble({ m, ctx, all, first = true, last = true, status, compact, grouped, targets, selectedIds, outcomeOnly, readOnly, onJump, selecting, selected, onSelect, tabStop, onEntryFocus, formatTime = timeOf }: MessageProps) {
   const store = useApp();
   const wide = useWide();
   const hoverPointer = useHoverPointer();
@@ -72,33 +78,35 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
   const [editing, setEditing] = useState(false);
   const [remind, setRemind] = useState<boolean | null>(null);
   const [assign, setAssign] = useState<boolean | null>(null);
+  const [outcomesOpen, setOutcomesOpen] = useState(false);
 
   const live = !m._local && !readOnly && !m.deleted && !excerpt(m);
-  const attention = !readOnly && store.canMarkUnread(m);
+  const attention = !targets && !readOnly && store.canMarkUnread(m);
   // A reminder on a stored message, where this device keeps reminders (a computer).
   const reminder = live ? reminderOf(ctx.overview, m.id) : undefined;
   const remindable = { id: m.id, text: reminder || remind !== null ? firstLine(shownText(m), 90) : "" };
   const has = (what: string) => live && (m.can || []).includes(what);
   const can: Can = {
     react: has("react"),
-    reply: live && ctx.canReply,
-    edit: has("edit"),
-    del: has("delete"),
-    select: live && ctx.canReply && !!onSelect && (ctx.thread || ctx.dm && (ctx.dm.role || "member") === "member") ? true : false,
-    remind: live && !!ctx.overview?.remind,
+    reply: !targets && live && ctx.canReply,
+    edit: !targets && has("edit"),
+    del: !targets && has("delete"),
+    select: !targets && live && ctx.canReply && !!onSelect && (ctx.thread || ctx.dm && (ctx.dm.role || "member") === "member") ? true : false,
+    remind: !targets && live && !!ctx.overview?.remind,
   };
   const acts: Acts = {
     unread: attention ? () => { void store.markUnread(m.id); } : undefined,
     unreadFrom: attention ? () => { void store.markUnread(m.id, true); } : undefined,
-    assign: live && ctx.overview?.person?.state === "self" ? () => setAssign(true) : undefined,
-    topic:live&&ctx.dm&&ctx.canReply&&!isThreadMsg(m)&&!m.topic&&!m.topic_event?()=>{void store.run(a=>a.changeTopic("create",{conv:ctx.dm!.id,peer:"",id:m.lid||m.id})).then(r=>{if(r)store.setDraft(ctx.conv,{...store.draft(ctx.conv),topic:m.lid||m.id,newTopic:false});});}:undefined,
+    assign: !targets && live && ctx.overview?.person?.state === "self" ? () => setAssign(true) : undefined,
+    topic:!targets&&live&&ctx.dm&&ctx.canReply&&!isThreadMsg(m)&&!m.topic&&!m.topic_event?()=>{void store.run(a=>a.changeTopic("create",{conv:ctx.dm!.id,peer:"",id:m.lid||m.id})).then(r=>{if(r)store.setDraft(ctx.conv,{...store.draft(ctx.conv),topic:m.lid||m.id,newTopic:false});});}:undefined,
     reply: () => store.setDraft(ctx.conv, { ...store.draft(ctx.conv), replyTo: m.id }),
     copy: () => {
       void copyText(plain(shownText(m)), store.host.android).then(ok => store.toast(ok ? "Copied" : "Couldn’t copy here", ok ? "ok" : "error"));
     },
     edit: () => setEditing(true),
     del: () => setConfirm(true),
-    details: () => setDetails(true),
+    details: () => targets ? setOutcomesOpen(true) : setDetails(true),
+    detailsLabel: targets ? "Agent outcomes" : undefined,
     select: onSelect && (() => onSelect(m.id)),
     remind: () => setRemind(true),
     reminded: !!reminder,
@@ -160,7 +168,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
 
   return (
     <MessageLinks.Provider value={(id, conv) => { void store.openMessage(id, {conv}); }}>
-    <div data-mid={m.id} data-part="message" data-from={who.mine ? "me" : who.agent ? "agent" : "person"} data-send-target={grouped && !isThreadMsg(m) ? m.pid : undefined} className={"min-w-0 [overflow-wrap:anywhere] " + (first && !compact ? "mt-3.5" : "mt-1")}>
+    <div data-mid={outcomeOnly ? undefined : m.id} data-message-ids={targets?.map(target => target.id).join(" ")} data-part={outcomeOnly ? undefined : "message"} data-agent-outcome={outcomeOnly ? m.id : undefined} data-from={who.mine ? "me" : who.agent ? "agent" : "person"} data-send-target={outcomeOnly && !isThreadMsg(m) ? m.pid : undefined} className={"min-w-0 [overflow-wrap:anywhere] " + (first && !compact ? "mt-3.5" : "mt-1")}>
       <div hidden={terminal} className={"group/msg relative flex px-3 sm:px-4 [touch-action:pan-y] " + (who.mine ? "justify-end" : "justify-start") + (selecting ? " cursor-pointer" : "")}
         onClick={selecting && can.select ? (e) => { if (inside(e)) onSelect?.(m.id); } : undefined}
         onPointerEnter={wide ? () => setHot(true) : undefined} onFocus={() => { if (wide) setHot(true); onEntryFocus?.(m.id); }}
@@ -187,33 +195,37 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
           {first && who.mine && excerpt(m) && <span className="mb-1 text-[13px] text-muted">From before you joined</span>}
           {first && who.mine && !excerpt(m) && who.sub && <span className="mb-1 pr-1 text-[13px] text-muted">You · {who.sub}</span>}
           {!compact && !terminal && body}
-          {grouped && m._local && <p className="mt-1 text-[13px] text-muted" role="status">
+          {grouped && !targets && m._local && <p className="mt-1 text-[13px] text-muted" role="status">
             {requestLabel(m, ctx)} · {sendFailure(m.state_text, ctx.overview?.role === "admin")?.reason || m.state_text}
             {m._failed && <button type="button" className="ml-2 min-h-11 underline" onClick={m._retry}>Retry</button>}
           </p>}
-          <Reactions m={m} ctx={ctx} can={can.react} wide={wide} />
-          {!m._local && <Under m={m} ctx={ctx} all={all} who={who} status={!!status} answer={answer} onDetails={acts.details} onJump={onJump} />}
+          {!outcomeOnly && <Reactions m={m} ctx={ctx} can={can.react} wide={wide} />}
+          {!targets && !m._local && <Under m={m} ctx={ctx} all={all} who={who} status={!!status} answer={answer} onDetails={acts.details} onJump={onJump} />}
           {compact && live && !selecting && <button type="button" className="min-h-11 px-1 text-[13px] underline"
             aria-label={"Actions for " + requestLabel(m, ctx)} onClick={() => setSheet(true)}>Actions</button>}
           {reminder && !selecting && <ReminderLine r={reminder} m={remindable} />}
         </div>
-        {!wide && (live || attention) && !selecting && (
+        {!outcomeOnly && !wide && (live || attention) && !selecting && (
           <button type="button" aria-label={hoverPointer ? "More actions" : "Message actions"} onClick={() => setSheet(true)} className={hoverPointer
             ? "ml-1 inline-flex min-h-11 shrink-0 self-end items-center rounded-full bg-surface px-2 stroke"
             : "sr-only focus:not-sr-only focus:absolute focus:right-2 focus:top-0 focus:inline-flex focus:min-h-11 focus:items-center focus:rounded-full focus:bg-surface focus:px-3 focus:stroke"}>
             {hoverPointer ? "•••" : "Message actions"}
           </button>
         )}
-        {sheet !== null && <ActionSheet open={sheet} onOpenChange={setSheet} m={m} ctx={ctx} can={can} acts={acts} who={who.name} onMoreEmoji={() => setEmoji(true)} />}
+        {sheet !== null && <ActionSheet open={sheet} onOpenChange={setSheet} m={m} ctx={ctx} can={can} acts={acts} who={who.name} onMoreEmoji={() => setEmoji(true)} title={outcomeOnly ? exactRequestLabel(m, ctx) : undefined} />}
         {emoji !== null && <EmojiDialog open={emoji} onOpenChange={setEmoji} m={m} ctx={ctx} />}
         {details !== null && <DetailsSheet open={details} onOpenChange={setDetails} m={m} ctx={ctx} who={who.name} />}
         {confirm !== null && <DeleteMessage open={confirm} onOpenChange={setConfirm} m={m} ctx={ctx} />}
         {remind !== null && <RemindSheet open={remind} onOpenChange={setRemind} m={remindable} r={reminder} />}
         {assign !== null && <AssignMessage open={assign} onOpenChange={setAssign} m={m} ctx={ctx} />}
       </div>
-      {!readOnly && !isThreadMsg(m) && needsHumanDetail && m.exec?.state === "needs_human" && !(m.actions || []).length && <AgentNeedsHumanTurn m={m} ctx={ctx} detail={needsHumanDetail} />}
+      {targets && <details data-agent-outcomes open={outcomesOpen} className="mx-3 mt-1 rounded-xl bg-surface/60 px-3 sm:mx-4" onToggle={event => setOutcomesOpen(event.currentTarget.open)}>
+        <summary className="min-h-11 cursor-pointer py-2.5 text-[13px] font-semibold text-text-2">{targets.length} agent outcomes{targets.some(target => target._failed || ["decide", "needs_human"].includes(phaseOf(target) || "")) ? " · needs attention" : ""}</summary>
+        {outcomesOpen && <div className="max-h-64 overflow-y-auto overscroll-contain pb-2">{targets.map(target => <MessageView key={target.id} m={target} ctx={ctx} all={all} compact grouped outcomeOnly readOnly={readOnly} onJump={onJump} selecting={selecting} selected={selectedIds?.includes(target.id)} onSelect={onSelect} formatTime={formatTime} />)}</div>}
+      </details>}
+      {!targets && !readOnly && !isThreadMsg(m) && needsHumanDetail && m.exec?.state === "needs_human" && !(m.actions || []).length && <AgentNeedsHumanTurn m={m} ctx={ctx} detail={needsHumanDetail} />}
       {/* The approval card is a system card across the timeline, never part of the bubble. */}
-      {!readOnly && (isRequest(m) || (m.actions || []).length > 0) && (
+      {!targets && !readOnly && (isRequest(m) || (m.actions || []).length > 0) && (
         <div className="mx-auto mt-2.5 w-full max-w-[600px] px-3 empty:hidden sm:px-4">
           <ApprovalCard message={m} dm={ctx.dm} thread={ctx.thread} compact={grouped} content={terminal ? <div className="mb-3">{body}{live && <button className="min-h-11 text-[13px] underline" type="button" onClick={()=>setSheet(true)}>Message actions</button>}</div> : undefined} />
         </div>
@@ -288,9 +300,7 @@ function ReplyQuote({ parent, ctx, onJump }: { parent?: AnyMsg; ctx: Ctx; onJump
 function Under({ m, ctx, all, who, status, answer, onDetails, onJump }: { m: AnyMsg; ctx: Ctx; all: AnyMsg[]; who: Who; status: boolean; answer?: AnyMsg; onDetails: () => void; onJump?: (id: string) => void }) {
   const failure = sendFailure(m.detail, ctx.overview?.role === "admin") || sendFailure(m.state_text, ctx.overview?.role === "admin");
   if (failure && who.mine && !m.deleted) return <SendFailure m={m} ctx={ctx} failure={failure} onDetails={onDetails} />;
-  const target = !isThreadMsg(m) ? agentOf(ctx, m.pid) : undefined;
-  const duplicateName = target && (ctx.dm?.agents || []).some(a => a.pid !== target.pid && agentLabel(a, ctx) === agentLabel(target, ctx));
-  const label = requestLabel(m, ctx) + (duplicateName ? " · " + deviceWords(target.host.address, ctx.overview) + " · " + (target.agent_id || target.pid).slice(0, 8) : "");
+  const label = exactRequestLabel(m, ctx);
   const rawDetail = isThreadMsg(m) ? m.detail : m.job_detail || m.detail;
   const detail = localRunningDetail(rawDetail || "", working(m, all, ctx));
   if (label) {
@@ -323,6 +333,12 @@ function Under({ m, ctx, all, who, status, answer, onDetails, onJump }: { m: Any
       {word}{bad && m.state_text ? " · " + m.state_text : ""}{pausedText}
     </button>
   );
+}
+
+function exactRequestLabel(m: AnyMsg, ctx: Ctx) {
+  const target = !isThreadMsg(m) ? agentOf(ctx, m.pid) : undefined;
+  const duplicateName = target && (ctx.dm?.agents || []).some(a => a.pid !== target.pid && agentLabel(a, ctx) === agentLabel(target, ctx));
+  return requestLabel(m, ctx) + (duplicateName ? " · " + deviceWords(target.host.address, ctx.overview) + " · " + (target.agent_id || target.pid).slice(0, 8) : "");
 }
 
 function SendFailure({m,ctx,failure,onDetails}: {m:AnyMsg;ctx:Ctx;failure:NonNullable<ReturnType<typeof sendFailure>>;onDetails:()=>void}) {
@@ -469,7 +485,7 @@ function askChip(text: string, m: AnyMsg, ctx: Ctx): string {
 
 function mentionFor(ctx: Ctx): RenderMention {
   return (kind, id, name) => {
-    if(kind==='collective')return <span className="rounded-md px-1 py-px font-semibold bg-ink/[.08] text-ink">@{name}</span>;
+    if(kind==='collective')return <CollectiveMention href={id} name={name} ctx={ctx} />;
     const me = ctx.overview?.person;
     let label = "", agent = false, guest = false, self = false;
     if (kind === "guest") {
@@ -486,6 +502,29 @@ function mentionFor(ctx: Ctx): RenderMention {
     const look = agent ? "bg-agent-fill/35 text-agent-ink" : guest ? "bg-guest-bg text-guest-ink" : self ? "bg-mine text-mine-ink ring-1 ring-outline/30" : "bg-ink/[.08] text-ink";
     return <span className={"rounded-md px-1 py-px font-semibold " + look} title={label + (agent ? " · agent" : guest ? " · guest" : "")}>@{label}</span>;
   };
+}
+
+function CollectiveMention({ href, name, ctx }: { href: string; name: string; ctx: Ctx }) {
+  const portal = usePortal();
+  const [open, setOpen] = useState(false);
+  const refs = useMemo(() => parseCollective(href) || [], [href]);
+  return <Popover.Root open={open} onOpenChange={setOpen}>
+    <Popover.Trigger aria-label={"Recipients of @" + name} className="rounded-md bg-ink/[.08] px-1 py-px font-semibold text-ink underline decoration-dotted underline-offset-2">@{name}</Popover.Trigger>
+    <Popover.Portal container={portal}>
+      <Popover.Positioner side="top" sideOffset={6} collisionPadding={12} className="z-50">
+        <Popover.Popup className="w-72 max-w-[calc(100vw-24px)] rounded-xl bg-surface p-3 text-ink outline-none stroke shadow-pop">
+          <Popover.Title className="font-bold">@{name} · {refs.length} recipients</Popover.Title>
+          {open && <ul className="mt-2 max-h-56 overflow-y-auto overscroll-contain" aria-label={"Frozen recipients of @" + name}>{refs.map(ref => {
+            const agent = ref.kind === "agent" ? agentOf(ctx, ref.id) : undefined;
+            const guest = ref.kind === "guest" ? ctx.dm?.guests?.find(g => g.pid === ref.id) : undefined;
+            const person = ref.kind === "person" ? [ctx.overview?.person, ctx.dm?.peer, ...(ctx.dm?.members || [])].find(p => p?.person === ref.id) : undefined;
+            const label = agent ? agentLabel(agent, ctx) : guest ? personName(guest.host) : person ? personName(person) : "Unavailable " + ref.kind;
+            return <li key={ref.kind + ":" + ref.id} className="py-1 text-[13px]" title={ref.kind + " " + ref.id} data-recipient={ref.id}><span className="font-semibold">{label}</span><span className="block text-xs text-text-2">{agent ? deviceWords(agent.host.address, ctx.overview) : guest ? "Guest" : person ? "Person" : "No longer available in this chat"}</span></li>;
+          })}</ul>}
+        </Popover.Popup>
+      </Popover.Positioner>
+    </Popover.Portal>
+  </Popover.Root>;
 }
 
 

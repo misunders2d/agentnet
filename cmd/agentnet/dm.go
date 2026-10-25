@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -179,6 +180,32 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 		return errors.New("usage: dm new ADDRESS | dm list | dm show ID | dm send [--question|--task] ID TEXT | dm invite ID HOST | dm agents ID | dm accept-agent PID | dm decline-agent PID | dm dismiss-agent PID | dm ask-agent [--task] PID TEXT | dm invite-guest ID HOST | dm accept-guest PID | dm decline-guest PID | dm end-guest PID (see agentnet help dm)")
 	}
 	switch args[0] {
+	case "catalog":
+		fs := flag.NewFlagSet("dm catalog", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		asJSON := fs.Bool("json", false, "print signed public agent records")
+		if err := fs.Parse(args[1:]); err != nil || fs.NArg() > 1 {
+			return errors.New("usage: dm catalog [--json] [HOST]")
+		}
+		var records []protocol.AgentRecord
+		var err error
+		if fs.NArg() == 0 || fs.Arg(0) == a.Address {
+			records, err = a.PublicAgentCatalog()
+		} else {
+			records, err = a.AgentCatalog(ctx, fs.Arg(0))
+		}
+		if err != nil {
+			return err
+		}
+		if *asJSON {
+			return json.NewEncoder(stdout).Encode(records)
+		}
+		for _, r := range records {
+			fmt.Fprintf(stdout, "%s host=%s key=%s harness=%s label=%q\n", r.ID, r.Host, r.HostKey, r.Harness, r.Label)
+		}
+		return nil
+	case "wait":
+		return runAgentWait(ctx, a, args[1:], stdout, false)
 	case "react-agent":
 		return runRoom(ctx, a, append([]string{"react"}, args[1:]...), stdout)
 	case "new":
@@ -270,20 +297,7 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 		}
 		return awaitAnswer(ctx, a, sent.ID, "agentnet dm show "+fs.Arg(0), answerWait(answerFor), receiver, stdout, os.Stderr)
 	case "invite":
-		fs := flag.NewFlagSet("dm invite", flag.ContinueOnError)
-		fs.SetOutput(io.Discard)
-		grant := fs.String("grant", "", "comma-separated logical ids of earlier messages the agent may be given")
-		tasks := fs.String("tasks", "", "comma-separated member key fingerprints allowed follow-up tasks")
-		note := fs.String("note", "", "a note for the host's person")
-		if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 2 {
-			return errors.New("usage: dm invite [--grant LID,...] [--tasks FINGERPRINT,...] [--note TEXT] ID HOST")
-		}
-		p, err := a.InviteAgent(ctx, fs.Arg(0), fs.Arg(1), splitList(*grant), splitList(*tasks), *note)
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(stdout, "%s %s\n", p.PID, p.State)
-		return nil
+		return runAgentInvite(ctx, a, args[1:], stdout, false)
 	case "agents":
 		if len(args) != 2 {
 			return errors.New("usage: dm agents ID")
@@ -295,6 +309,9 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 		for _, p := range parts {
 			line := fmt.Sprintf("%s  %s  agent on %s (%q's), invited by %q, %d earlier messages shared", p.PID, p.State, p.Host.Address,
 				p.Host.Label, p.Inviter.Label, len(p.Grant))
+			if p.Role != protocol.RoleHuman {
+				line += fmt.Sprintf("; agent_id=%s host_key=%s", p.AgentID, p.Host.Fingerprint)
+			}
 			if p.Role == protocol.RoleHuman {
 				line = fmt.Sprintf("%s  %s  guest on %s (%q), invited by %q, %d earlier messages shared", p.PID, p.State, p.Host.Address,
 					p.Host.Label, p.Inviter.Label, len(p.Grant))
@@ -372,40 +389,172 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 		fmt.Fprintf(stdout, "%s %s\n", p.PID, p.State)
 		return nil
 	case "ask-agent":
-		fs := flag.NewFlagSet("dm ask-agent", flag.ContinueOnError)
-		fs.SetOutput(io.Discard)
-		task := fs.Bool("task", false, "a task instead of a question")
-		returnSelection := receiverFlags(fs)
-		answerFor := answerWaitFlag(fs, -1) // -1: the kind's default, below
-		if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 2 {
-			return errors.New("usage: dm ask-agent [--task] [--answer-wait D] PID TEXT")
-		}
-		kind := envelope.KindQuestion
-		if *task {
-			kind = envelope.KindTask
-		} else if *answerFor < 0 {
-			*answerFor = client.AskAnswerWait
-		}
-		receiver, err := returnSelection.selected(a, true)
-		if err != nil {
-			return err
-		}
-		sent, err := a.AskAgentWithReceiver(ctx, fs.Arg(0), kind, fs.Arg(1), receiver)
-		if err != nil {
-			return err
-		}
-		line := sent.ID + " " + sent.State
-		if sent.Detail != "" {
-			line += " (" + sent.Detail + ")"
-		}
-		fmt.Fprintln(stdout, line)
-		show := "agentnet dm agents (then dm show) for participation " + fs.Arg(0)
-		if p, e := a.Participation(fs.Arg(0)); e == nil {
-			show = "agentnet dm show " + p.Conv
-		}
-		return awaitAnswer(ctx, a, sent.ID, show, answerWait(answerFor), receiver, stdout, os.Stderr)
+		return runAgentAsk(ctx, a, args[1:], stdout, false)
 	}
 	return fmt.Errorf("unknown dm command %q (see agentnet help dm)", args[0])
+}
+
+func runAgentInvite(ctx context.Context, a *client.Agent, args []string, out io.Writer, group bool) error {
+	fs := flag.NewFlagSet("invite-agent", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	agent := fs.String("agent", "", "exact signed agent ID from dm catalog")
+	grant := fs.String("grant", "", "comma-separated earlier logical message IDs")
+	tasks := fs.String("tasks", "", "comma-separated allowed task key fingerprints")
+	note := fs.String("note", "", "a note for the host's person")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 2 {
+		return errors.New("usage: dm invite [--agent ID] [--grant LID,...] [--tasks FINGERPRINT,...] [--note TEXT] CONV HOST")
+	}
+	if group {
+		if _, err := a.GroupContext(fs.Arg(0)); err != nil {
+			return err
+		}
+	}
+	named := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "agent" {
+			named = true
+		}
+	})
+	var p client.ParticipationInfo
+	var err error
+	if named {
+		p, err = a.InviteNamedAgent(ctx, fs.Arg(0), fs.Arg(1), *agent, splitList(*grant), splitList(*tasks), *note)
+	} else {
+		p, err = a.InviteAgent(ctx, fs.Arg(0), fs.Arg(1), splitList(*grant), splitList(*tasks), *note)
+	}
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "%s %s agent_id=%s host=%s host_key=%s\n", p.PID, p.State, p.AgentID, p.Host.Address, p.Host.Fingerprint)
+	return nil
+}
+
+func runAgentAsk(ctx context.Context, a *client.Agent, args []string, out io.Writer, group bool) error {
+	if err := receiverCommandGuard("dm", []string{"ask-agent"}); err != nil {
+		return err
+	}
+	fs := flag.NewFlagSet("ask-agent", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	task := fs.Bool("task", false, "a task instead of a question")
+	id := fs.String("id", "", "retain this logical send ID; an exact retry never resends")
+	returnSelection := receiverFlags(fs)
+	answerFor := answerWaitFlag(fs, -1)
+	if err := fs.Parse(args); err != nil || fs.NArg() != 2 {
+		return errors.New("usage: dm ask-agent [--id ID] [--task] [--answer-wait D] PID TEXT")
+	}
+	queued, explicitWait := group, false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "id" {
+			queued = true
+		}
+		if f.Name == "answer-wait" {
+			explicitWait = true
+		}
+	})
+	if queued && !explicitWait {
+		*answerFor = 0
+	}
+	if queued && *id == "" {
+		explicitID := false
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name == "id" {
+				explicitID = true
+			}
+		})
+		if explicitID {
+			return errors.New("invalid local send id")
+		}
+		*id = protocol.NewID()
+	}
+	if group {
+		p, err := a.Participation(fs.Arg(0))
+		if err != nil {
+			return err
+		}
+		if _, err = a.GroupContext(p.Conv); err != nil {
+			return err
+		}
+	}
+	kind := envelope.KindQuestion
+	if *task {
+		kind = envelope.KindTask
+	} else if *answerFor < 0 {
+		*answerFor = client.AskAnswerWait
+	}
+	receiver, err := returnSelection.selected(a, true)
+	if err != nil {
+		return err
+	}
+	var sent client.ConvSent
+	if queued {
+		sent, err = a.QueueAgentRequest(ctx, *id, fs.Arg(0), kind, fs.Arg(1), receiver)
+	} else {
+		sent, err = a.AskAgentWithReceiver(ctx, fs.Arg(0), kind, fs.Arg(1), receiver)
+	}
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "%s %s logical=%s participation=%s\n", sent.ID, sent.State, sent.LID, fs.Arg(0))
+	if sent.Detail != "" {
+		fmt.Fprintln(out, termText(sent.Detail, ""))
+	}
+	if queued {
+		if wait := answerWait(answerFor); wait > 0 {
+			return awaitStoredAgentRequest(ctx, a, sent.ID, wait, out)
+		}
+		return nil
+	}
+	show := "agentnet dm wait " + sent.ID
+	return awaitAnswer(ctx, a, sent.ID, show, answerWait(answerFor), receiver, out, os.Stderr)
+}
+
+func runAgentWait(ctx context.Context, a *client.Agent, args []string, out io.Writer, group bool) error {
+	fs := flag.NewFlagSet("wait", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	wait := fs.Duration("answer-wait", client.AskAnswerWait, "observe the retained request for this long; never resend")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 1 || *wait < 0 {
+		return errors.New("usage: dm wait [--answer-wait D] REQUEST_ID")
+	}
+	if err := receiverGuard(a, "dm wait", "", fs.Arg(0)); err != nil {
+		return err
+	}
+	r, err := a.AgentRequest(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	if group {
+		if _, err = a.GroupContext(r.Conv); err != nil {
+			return err
+		}
+	}
+	fmt.Fprintf(out, "%s %s logical=%s participation=%s\n", r.Sent.ID, r.Sent.State, r.Sent.LID, r.PID)
+	return awaitStoredAgentRequest(ctx, a, r.Sent.ID, *wait, out)
+}
+
+func awaitStoredAgentRequest(ctx context.Context, a *client.Agent, id string, wait time.Duration, out io.Writer) error {
+	result, err := a.AwaitAgentRequest(ctx, id, wait, func(v client.ExecView) {
+		if line := statusLine(v); line != "" {
+			fmt.Fprintln(out, line)
+		}
+	})
+	show := "agentnet dm wait " + id
+	switch {
+	case errors.Is(err, client.ErrDaemonNotRunning):
+		fmt.Fprintf(out, "pending: %v; resume with %s\n", err, show)
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		fmt.Fprintf(out, "stopped waiting; request retained; resume with %s\n", show)
+	case err != nil:
+		return err
+	case result.Answer != nil:
+		printAnswer(out, result.Answer)
+	case result.Stopped != nil:
+		fmt.Fprintln(out, stopLine(*result.Stopped, show))
+	case result.Suspended != "":
+		fmt.Fprintf(out, "%s; request retained\n", client.SuspendedText(result.Suspended))
+	default:
+		fmt.Fprintf(out, "pending: no answer yet; resume with %s\n", show)
+	}
+	return nil
 }
 
 // convLine is one conversation in dm list: a group by its title and

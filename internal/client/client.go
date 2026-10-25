@@ -74,6 +74,7 @@ type Agent struct {
 	kick             func()                     // wakes the current stream's retry worker
 	kickMu           sync.Mutex                 // guards kick for kickNow
 	kicksLive        atomic.Bool                // this Agent's daemon serves the local wake-up socket (startWorker)
+	streamConnected  atomic.Bool                // the daemon currently holds an accepted Hub push stream
 	selfKicks        atomic.Int64               // wakes in flight that this daemon sent itself (notifyOwnWork)
 	receiveFails     receiveFailures            // transient admission failures per pushed envelope (daemon.go)
 	prefetchFailed   map[string]bool            // conversation files that could not be kept this run (historyfiles.go; the stream worker only)

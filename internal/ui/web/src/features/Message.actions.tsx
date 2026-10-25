@@ -17,7 +17,7 @@ import { MESSAGES, deviceName, plain, timeOf } from "../model";
 import { Sheet } from "../ui/Sheet";
 import { Button } from "../ui/Button";
 import { Markdown } from "./Markdown";
-import { ReactPopover, controlRef, useReact } from "./Message.reactions";
+import { ReactPopover, controlRef, useReact, useReactionView } from "./Message.reactions";
 import { QuickReactions } from "./Emoji";
 import { decode, encode, shift } from "./Composer.mentions";
 import { focusComposer } from "./Composer.focus";
@@ -32,6 +32,7 @@ export interface Acts {
   edit: () => void;
   del: () => void;
   details: () => void;
+  detailsLabel?: string;
   select?: () => void;
   remind?: () => void;        // "Remind me…" (or "Change reminder…" when it has one)
   unread?: () => void;
@@ -85,7 +86,7 @@ function Items({ can, acts, m, render }: { can: Can; acts: Acts; m: AnyMsg; rend
       {can.select && acts.select && render(<IconSquareCheck size={20} />, "Select", acts.select)}
       {can.remind && acts.remind && render(<IconAlarm size={20} />, acts.reminded ? "Change reminder…" : "Remind me…", acts.remind)}
       {can.edit && render(<IconPencil size={20} />, "Edit", acts.edit)}
-      {render(<IconInfoCircle size={20} />, "Details", acts.details)}
+      {render(<IconInfoCircle size={20} />, acts.detailsLabel || "Details", acts.details)}
       {can.del && render(<IconTrash size={20} />, "Delete…", acts.del, true)}
     </>
   );
@@ -93,8 +94,8 @@ function Items({ can, acts, m, render }: { can: Can; acts: Acts; m: AnyMsg; rend
 
 // ---- phones: the long-press sheet ----------------------------------------------------
 
-export function ActionSheet({ open, onOpenChange, m, ctx, can, acts, who, onMoreEmoji }: {
-  open: boolean; onOpenChange: (o: boolean) => void; m: AnyMsg; ctx: Ctx; can: Can; acts: Acts; who: string; onMoreEmoji: () => void;
+export function ActionSheet({ open, onOpenChange, m, ctx, can, acts, who, onMoreEmoji, title }: {
+  open: boolean; onOpenChange: (o: boolean) => void; m: AnyMsg; ctx: Ctx; can: Can; acts: Acts; who: string; onMoreEmoji: () => void; title?: string;
 }) {
   const { root } = useOwned();
   const close = (fn: () => void) => () => { onOpenChange(false); fn(); };
@@ -103,10 +104,10 @@ export function ActionSheet({ open, onOpenChange, m, ctx, can, acts, who, onMore
   // lets go of the app first, then the field takes the focus.
   const reply = () => { flushSync(() => onOpenChange(false)); acts.reply(); focusComposer(root, ctx.conv); };
   const react = useReact(m, ctx);
-  const mine = (m.reactions || []).filter((r) => r.mine).map((r) => r.emoji);
+  const mine = useReactionView(m, ctx).list.filter((r) => r.mine).map((r) => r.emoji);
   const snippet = plain(shownText(m)).split("\n")[0];
   return (
-    <Sheet open={open} onOpenChange={onOpenChange} title={who === "You" ? "Your message" : who + "’s message"}
+    <Sheet open={open} onOpenChange={onOpenChange} title={title || (who === "You" ? "Your message" : who + "’s message")}
       description={snippet ? <span className="line-clamp-2">{snippet}</span> : undefined}>
       {can.react && (
         <div className="mb-3 flex justify-center">

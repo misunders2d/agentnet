@@ -59,6 +59,11 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 		return err
 	}
 	defer release()
+	if stop, err := a.listenReadiness(opts.HumanOnly); err != nil {
+		a.Logf("local daemon readiness unavailable: %v", err)
+	} else {
+		defer stop()
+	}
 	if err := a.CleanOpened(); err != nil { // this process alone writes there; nothing is open yet
 		a.Logf("plaintext left by an earlier run: %v", err)
 	}
@@ -225,6 +230,8 @@ func (a *Agent) streamOnce(ctx context.Context) (healthy bool, err error) {
 		return false, err
 	}
 	a.Logf("connected to hub as %s", a.Address)
+	a.streamConnected.Store(true)
+	defer a.streamConnected.Store(false)
 	a.membersConnected(resp.Header)
 	defer a.membersDisconnected()
 	a.teamsConnected(resp.Header) // teams.go: whether this relay pushes the team directory
