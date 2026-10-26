@@ -32,7 +32,11 @@ import { currentNativeActivity } from "./NativeActivity.model";
 export function ApprovalCard({ message, dm, thread, compact, content }: { message: Req; dm?: T.DMThread | null; thread?: T.Thread | null; compact?: boolean; content?: ReactNode }) {
   const store = useApp();
   const o = useStore(store, (s) => s.overview);
+  const dismiss = useStore(store, () => store.pendingDismiss(message, dm || thread));
   const names = useAgentNames();
+  if (dismiss) return <p role="status" data-dismiss-pending className="mx-auto py-2 text-center text-[13px] text-muted">
+    {dismiss.saved ? "Marked as handled. No reply was sent." : "Marking as handled…"}
+  </p>;
   if ((message.actions || []).includes("do_it")) return <ProposalConfirmation m={message}/>;
   const phase = phaseOf(message);
   if (phase) {

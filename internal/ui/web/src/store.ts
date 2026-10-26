@@ -1,6 +1,6 @@
 // The messenger's state: what the server says (overview and the open
 // conversation), how the connection stands, and the person's unsent drafts.
-// The server decides everything; this only loads, remembers and asks.
+// Local intent appears immediately; the server confirms it or supplies failure.
 //
 // One store serves one membership's host: the UI host mounts the interface
 // again with a new host when the person switches workspace, so nothing here
@@ -78,6 +78,20 @@ export interface PendingReaction {
 }
 export const reactionScope = (c: T.ControlAction) => JSON.stringify([c.conv || "", c.id, c.dir]);
 
+interface PendingDismiss {
+  token: number;
+  seq: number;
+  rows: string[];
+  views: Record<string, { seq: number; message: string }>;
+  saved?: boolean;
+}
+
+const dismissMessageKey = (m: T.DMMessage | T.Message) => JSON.stringify([
+  m.id, m.dir, m.from, m.target, "pid" in m ? m.pid : undefined, m.state,
+  m.detail, "job_detail" in m ? m.job_detail : undefined, m.exec,
+  m.continuation, m.attention, m.actions, m.deleted,
+]);
+
 export interface State {
   tab: Tab;
   overview: T.Overview | null;
@@ -103,6 +117,7 @@ export interface State {
   agentNames: Record<string, string>;                     // agent ids → the names their owners gave them
   topicBusy: Record<string, string>;
   reactionPending: Record<string, Record<string, PendingReaction>>;
+  dismissPending: Record<string, PendingDismiss>;
   panel: boolean;                                         // "In this chat" (desktop panel, phone sheet)
   readVisit: ReadVisit | null;
   contentRevision: number; // successful content loads; typing/presence do not advance choice lists
@@ -135,6 +150,10 @@ export class Store {
   private confirmedReminders = new Map<string, { seq: number; reminder: T.ReminderView | null }>();
   private reactionSequence = 0;
   private reacting = new Map<string, { pending: PendingReaction; work: Promise<{ note: string } | undefined> }>();
+  private dismissSequence = 0;
+  private dismissing = new Map<string, { intent: string; token: number; work: Promise<{ note: string }> }>();
+  private dismissOverview?: { source: T.Overview; pending: State["dismissPending"]; value: T.Overview };
+  private dismissState?: { source: State; value: State };
   private topicChanges = new Map<string, Promise<{ note: string } | undefined>>();
   private again = false;
   private catalogsAgain = false;
@@ -164,7 +183,8 @@ export class Store {
 
   constructor(readonly host: Host) {
     this.chooseMain = mainPreferences(host.workspace.id, () => localStorage);
-    this.api = api(host);
+    const calls = api(host);
+    this.api = { ...calls, act: action => action.do === "resolve" ? this.dismiss(action, calls) : calls.act(action) };
     this.sends = pendingSends(host, () => {
       const o = this.state?.open;
       // A send clears its draft as it begins: until it is stored, a reload
@@ -172,7 +192,7 @@ export class Store {
       this.set({ ...(o ? this.viewPatch(o, this.state.views[o.id] ?? null, true) : {}), unsent: this.sends.unsent() });
     });
     this.state = {
-      tab: "chats", overview: null, open: null, pending: null, views: {}, dm: null, thread: null, typing: null, invitations: [], reactionPending: {},
+      tab: "chats", overview: null, open: null, pending: null, views: {}, dm: null, thread: null, typing: null, invitations: [], reactionPending: {}, dismissPending: {},
       conn: "loading", version: "", newVersion: "", unsent: false, drafts: this.loadDrafts(), scheduleSaves:{}, toasts: [], messageLanding: null, loadError: "", groupContextPending: "", invite: null, topicBusy: {}, panel: false, section: "", agentNames: {}, readVisit: null, contentRevision: 0,
     };
     const saved=host.workspaces?.state?.(host.workspace.id)?.comicDrafts as {handle?:string;open:Open;dm:T.DMThread|null;thread:T.Thread|null;tab:State['tab']}|undefined;
@@ -182,7 +202,17 @@ export class Store {
   }
 
   // ---- subscription
-  get = () => this.state;
+  get = () => {
+    const s = this.state;
+    if (!s.overview || !Object.keys(s.dismissPending).length) return s;
+    if (this.dismissState?.source === s) return this.dismissState.value;
+    if (this.dismissOverview?.source !== s.overview || this.dismissOverview.pending !== s.dismissPending) {
+      this.dismissOverview = { source: s.overview, pending: s.dismissPending, value: this.dismissedOverview(s.overview) };
+    }
+    const value = this.dismissOverview.value === s.overview ? s : { ...s, overview: this.dismissOverview.value };
+    this.dismissState = { source: s, value };
+    return value;
+  };
   get returningToReview() { return !!this.state.open && this.unreadReturn === this.state.open; }
   subscribe = (fn: () => void) => { this.subs.add(fn); return () => this.subs.delete(fn); };
   private set(patch: Partial<State>) {
@@ -223,6 +253,7 @@ export class Store {
       window.removeEventListener("focus", this.mobileVisible);
     }
     this.reacting.clear();
+    this.dismissing.clear();
     this.sends.dispose();
     this.scheduled.dispose();
     this.stopListen?.();
@@ -353,6 +384,7 @@ export class Store {
     if (first || !this.state.version) patch.version = o.version;
     else if (o.version && o.version !== this.state.version) patch.newVersion = o.version;
     this.set(patch);
+    this.pruneDismissals();
     if (o.groups) this.set({ invitations: share(this.state.invitations, o.group_invitations || []) });
     if (catalogs) void this.loadAgentNames();
   }
@@ -837,6 +869,7 @@ export class Store {
         ...(this.state.groupContextPending === o.id && this.latestFetch.get(o.id) === ahead ? {groupContextPending: ""} : {}),
         ...this.viewPatch(o, v, this.state.open?.id === o.id) });
       this.settleReactions(o, v, ahead);
+      this.pruneDismissals();
       // A newer deliberate mark/arrival may follow a confirmed read while
       // its older overview is still blocked. Advance that exact snapshot too.
       const group = o.kind === "thread" ? this.archivedRead(v) : undefined;
@@ -1079,6 +1112,102 @@ export class Store {
   hasUnsent(): boolean { return unsentIn(this.state); }
 
   // ---- feedback
+  // Telegram Web A's local-change -> async request -> reconciliation pattern
+  // (f67a408, actions/api/reactions.ts:234-272). Only presentation changes here;
+  // the existing resolve operation and native authority remain unchanged.
+  private captureDismiss(id: string): Omit<PendingDismiss, "token"> {
+    const o = this.state.overview;
+    const rows = [...(o?.needs_you || []), ...(o?.held || []), ...(o?.review || [])]
+      .filter(r => r.id === id).map(r => JSON.stringify(r));
+    const views: PendingDismiss["views"] = {};
+    for (const [key, v] of Object.entries(this.state.views)) {
+      const m = v.messages?.find(m => m.id === id && m.actions?.includes("resolve"));
+      if (m) views[key] = { seq: v.seq || 0, message: dismissMessageKey(m) };
+    }
+    return { seq: o?.seq || 0, rows, views };
+  }
+
+  private dismissedOverview(o: T.Overview): T.Overview {
+    const hidden = new Set(Object.values(this.state.dismissPending).filter(p => o.seq <= p.seq).flatMap(p => p.rows));
+    const needs = (o.needs_you || []).filter(r => !hidden.has(JSON.stringify(r)));
+    const held = (o.held || []).filter(r => !hidden.has(JSON.stringify(r)));
+    const review = (o.review || []).filter(r => !hidden.has(JSON.stringify(r)));
+    if (needs.length === (o.needs_you || []).length && held.length === (o.held || []).length && review.length === (o.review || []).length) return o;
+    const closedNeeds = (o.needs_you || []).filter(r => hidden.has(JSON.stringify(r)));
+    const closedHeld = (o.held || []).filter(r => hidden.has(JSON.stringify(r)));
+    const closedReview = (o.review || []).filter(r => !r.notice && hidden.has(JSON.stringify(r)));
+    const summary = (t: T.ThreadSummary): T.ThreadSummary => {
+      const n = closedReview.filter(r => r.id === t.id || Object.values(this.state.dismissPending).some(p => p.views[t.id] && p.rows.includes(JSON.stringify(r)))).length;
+      return n ? { ...t, review: Math.max(0, t.review - n) } : t;
+    };
+    return { ...o, needs_you: needs, held, review,
+      // Resolving a decision never marks a chat read or completes reminders.
+      dms: o.dms?.map(d => {
+        const n = closedNeeds.filter(r => r.conv === d.id && !r.decide_on).length;
+        const h = closedHeld.filter(r => r.conv === d.id && !r.decide_on).length;
+        return n || h ? { ...d, decide: Math.max(0, d.decide - n), held: Math.max(0, d.held - h) } : d;
+      }) || null,
+      threads: o.threads?.map(summary) || null,
+      topics: o.topics?.map(t => { const latest = summary(t.latest); return latest === t.latest ? t : { ...t, latest }; }),
+    };
+  }
+
+  pendingDismiss(m: T.DMMessage | T.Message, view: View | null | undefined): PendingDismiss | undefined {
+    const p = this.state.dismissPending[m.id], captured = view && p?.views[view.id];
+    return captured && (view?.seq || 0) <= captured.seq && captured.message === dismissMessageKey(m) ? p : undefined;
+  }
+
+  private pruneDismissals() {
+    const current = this.state.dismissPending, pending = { ...current };
+    for (const [id, p] of Object.entries(current)) {
+      if (!p.saved) continue;
+      const now = this.captureDismiss(id);
+      const oldOverview = now.seq <= p.seq && now.rows.some(r => p.rows.includes(r));
+      const oldView = Object.entries(now.views).some(([key, v]) => p.views[key] && v.seq <= p.views[key].seq && v.message === p.views[key].message);
+      if (!oldOverview && !oldView) delete pending[id];
+    }
+    if (Object.keys(pending).length !== Object.keys(current).length) this.set({ dismissPending: pending });
+  }
+
+  private dismiss(action: T.Action, calls: Api): Promise<{ note: string }> {
+    if (!this.alive) return Promise.reject(Error("stale or disconnected workspace"));
+    const id = action.id;
+    if (!id) return calls.act(action);
+    const captured = this.captureDismiss(id), intent = JSON.stringify(captured);
+    const prior = this.dismissing.get(id);
+    if (prior?.intent === intent) return prior.work;
+    const p = { ...captured, token: ++this.dismissSequence };
+    const current = () => this.alive && this.state.dismissPending[id]?.token === p.token;
+    this.set({ dismissPending: { ...this.state.dismissPending, [id]: p } });
+    const work = Promise.resolve().then(async () => {
+      try {
+        const result = await calls.act(action);
+        if (current()) {
+          this.set({ dismissPending: { ...this.state.dismissPending, [id]: { ...p, saved: true } } });
+          // A pre-commit GET must not occupy the exact confirmation lane.
+          if (this.state.open && p.views[this.state.open.id]) void this.loadOpen(this.state.open, true);
+          // The caller's existing run/refetch owns the overview lane.
+          this.pruneDismissals();
+        }
+        return result;
+      } catch (error) {
+        if (current()) {
+          const pending = { ...this.state.dismissPending }; delete pending[id];
+          this.set({ dismissPending: pending }); // reveal current DTO, never a captured stale copy
+          // The response can be lost after a successful write. Fetch current
+          // truth as well as displaying the error; never repeat the operation.
+          if (this.state.open && p.views[this.state.open.id]) void this.loadOpen(this.state.open, true);
+          void this.load(false);
+        }
+        throw errorText(error) === "stale or disconnected workspace" ? error : Error("Couldn’t confirm this item was marked as handled. " + errorText(error));
+      } finally {
+        if (this.dismissing.get(id)?.token === p.token) this.dismissing.delete(id);
+      }
+    });
+    this.dismissing.set(id, { intent, token: p.token, work });
+    return work;
+  }
+
   toast(text: string, tone?: Toast["tone"]) {
     const id = ++this.toastSeq;
     this.set({ toasts: [...this.state.toasts, { id, text, tone }] });
@@ -1090,13 +1219,13 @@ export class Store {
   async run<R>(fn: (a: Api) => Promise<R>, ok?: string): Promise<R | undefined> {
     try {
       const r = await fn(this.api);
-      if (ok) this.toast(ok, "ok");
-      void this.refetch();
+      if (this.alive && ok) this.toast(ok, "ok");
+      if (this.alive) void this.refetch();
       return r;
     } catch (e) {
       // A workspace being left or replaced answers its old view this way:
       // the host remounts the interface, so there is nothing to tell.
-      if (errorText(e) !== "stale or disconnected workspace") this.toast(errorText(e), "error");
+      if (this.alive && errorText(e) !== "stale or disconnected workspace") this.toast(errorText(e), "error");
       return undefined;
     }
   }

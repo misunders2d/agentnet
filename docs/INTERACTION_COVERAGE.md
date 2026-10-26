@@ -83,9 +83,10 @@ this document records the test contract and coverage gaps.
 | --- | --- | --- | --- | --- |
 | C1 | Complete source and rendered control/state inventory | inventory owner | source candidates collected; reconciliation open | 293 files scanned; 6,317 provisional control candidates and 314 unresolved input bindings; no rendered or executed coverage inferred |
 | C2 | Every inventory entry maps to an executed case and timing result | harness owner | validator reviewed; execution open | Offline validator rejects incomplete or synthetic evidence; its unit fixtures establish validator behavior only |
-| P1 | Dismissal mutation, refresh and visible result are timed separately | root | backend stages measured; rendered result open | Owned mixed fixture: exact Resolve committed in 1.070ms; invalidated overview took 936.180ms; no destructive live test performed |
+| P1 | Dismissal mutation, refresh and visible result are timed separately | root | real rendered baseline and controlled candidate exercised; full timing matrix open | Owned mixed fixture and trusted browser input separate local display, request, commit and refresh. The candidate clears the card while the request is held before the real backend; normal/10x, sync and comparator qualification remain open |
 | P2 | Shared slow refresh cause is reproduced and profiled | root | investigating | Installed v0.9.5 compact overview measured 25.645s and later 3.398s; selected read-only store methods completed in 0.844s, so those queries alone do not explain the delay |
 | P3 | Measured bottlenecks fixed and normal/10x cases pass | root | scoped candidate; broader qualification open | Per-build participation reuse has adversarial review and focused signed-membership/unread regressions; no general responsiveness fix or 10x pass is claimed |
+| P4 | Local dismissal changes UI before asynchronous processing | root | implemented; focused checks pass; release qualification open | Telegram local mutation/reconciliation flow reused. Real blocked-request card/count removal, usable menu/navigation, Review pending state and failure restoration exercised; stale/new-attempt/lost-response/workspace tests pass. Source candidate is not an installed repair |
 | U1 | Update version checks do not depend on chat projection | root | verified source only | Existing lightweight endpoint; real blocked-chat regression, native three-OS/race tests and live patched check at 1.089ms; installed app still v0.9.5 |
 | X1 | Confusing history/review screen explains state and next action accurately | UX reviewer/root | investigating | Owner screenshot mixes saved history, unknown original agent and contradictory continuation/approval instructions |
 | H1 | Pi/OMP idle notices do not repeat remaining items as new | root | candidate tested; installed activation open | Passive activity uses one native status slot. Pi/OMP focused regressions and isolated real Pi rendering pass; prompt acknowledgement remains tied to native persistence. Existing sessions not reloaded |
@@ -114,6 +115,29 @@ without repetitions, 10x history, synchronization load or comparator evidence.
 The initial dialog and final Review captures include transitions and do not prove
 those screens had visually settled. None of these results qualifies the release.
 
+The local-dismissal candidate reuses the inspected flow in Telegram Web A
+[`f67a408`, `toggleReaction`](https://github.com/Ajaxy/telegram-tt/blob/f67a40879a7d78c2683ec5a296cf55bc22417d56/src/global/actions/api/reactions.ts#L234-L272):
+apply the local visual change before awaiting the operation, then reconcile or
+restore on failure. AgentNet adapts that behavioral pattern through the existing
+Store and resolve operation. A transient presentation removes exact active
+attention and decision counts; original message data remains authoritative.
+Pending status remains visible in the history and Review. Newer authoritative
+state wins; a lost acknowledgement triggers fresh reads without replaying work.
+
+Eight controlled Store behavior cases pass, including duplicate input, delayed
+reads, byte-identical overview rows from a newer attempt, rollback, committed
+write followed by response loss, and workspace departure. Five affected race
+test parents pass; the existing wide/narrow history/Review browser regression
+also passes. The directly affected link-store test needed its two pre-existing
+schedule-module imports copied into its temporary bundle; assertions remain.
+Real Go/SQLite browser checks hold the resolve request before forwarding it:
+the exact card leaves immediately, another menu and Review navigation remain
+usable, and Review displays pending instead of AllClear. A controlled refusal
+restores the current card and badge with an explicit error. Screenshots of the
+major chat/menu/Review/pending/recovery states were inspected. These establish
+the scoped behavior, not comparative latency, Android performance, exhaustive
+control coverage, cross-device convergence or release readiness.
+
 ## Reported failures that remain open
 
 This register preserves the owner's reports, including cases that have a source
@@ -123,7 +147,7 @@ installed repair is claimed by this register.
 | ID | Failure | Current evidence and status | Required closing test |
 | --- | --- | --- | --- |
 | F01 | Interactions leave the user waiting without a clear result | Owner reports delays above 10 seconds across the app; installed compact overview measured 25.645s and 3.398s. Unresolved. | Every inventoried control: trusted input to visible feedback and confirmed result, under the complete required workload/platform/skin matrix and measured comparators. |
-| F02 | Mark as handled takes many seconds to disappear | Owner report unresolved on installed devices. One owned normal/idle case committed locally by 0.991ms but its confirmed capture completed by 886ms. | Exact task disappears promptly on the initiating and linked devices; preserve unrelated attention and show refusals/failures truthfully. Include normal/10x and concurrent sync. |
+| F02 | Mark as handled takes many seconds to disappear | Local-first source candidate clears exact active attention before the request reaches the backend, retains pending status and restores current state on failure. Controlled real-backend browser and focused regressions pass; installed-device and full timing qualification remain open. | Exact task disappears promptly on the initiating and linked devices; preserve unrelated attention and show refusals/failures truthfully. Include normal/10x and concurrent sync. |
 | F03 | About cannot update the app | Source fix verified; installed v0.9.5 remains unchanged. Its version check waits for the slow chat overview. | Actual installed old-to-new update, including app, command and running background process; no dependence on slow chat reads and no interruption of admitted work. |
 | F04 | Saved agent history, unknown agent and contradictory Reply instructions are confusing | Copy candidate and combined wide/narrow regression exist; not installed. The wider history/composer workflow remains unqualified. | Same history thread with a waiting request: clear available actions, exact Reply routing, retained draft/files and no misleading permission text. |
 | F05 | A read-only preflight becomes a human-action blocker | Exact inspected request says "Do not start or modify anything yet." Its report is needs_human, attempt 2, without a native permission prompt. A related answer reports the worker is outside Herdr. The worker's proposal prompt also incorrectly groups environment failures with native permissions. Original phone-to-worker routing remains unverified. | Trace the original phone instruction through delegation and the selected harness. Ordinary clarification/environment reports return to the requester; only a real required authorization becomes a permission decision. |

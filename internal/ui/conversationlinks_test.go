@@ -35,7 +35,7 @@ func TestConversationLinkStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	for _, pair := range [][2]string{{"web/src/store.ts", "store.ts"}, {"web/src/structural.ts", "structural.ts"}, {"web/src/api.ts", "api.ts"}, {"web/src/model.ts", "model.ts"}, {"web/src/linkText.ts", "linkText.ts"}, {"web/src/runningDetail.ts", "runningDetail.ts"}, {"web/src/requestResult.ts", "requestResult.ts"}, {"web/src/skin/brand.tsx", "skin/brand.tsx"}, {"static/optimistic.mjs", "optimistic.mjs"}, {"skins/shared/person-topics.mjs", "person-topics.mjs"}, {"skins/shared/collective-mentions.mjs", "collective-mentions.mjs"}} {
+	for _, pair := range [][2]string{{"web/src/store.ts", "store.ts"}, {"web/src/schedule-saves.ts", "schedule-saves.ts"}, {"web/src/features/Composer.schedule-model.ts", "features/Composer.schedule-model.ts"}, {"web/src/structural.ts", "structural.ts"}, {"web/src/api.ts", "api.ts"}, {"web/src/model.ts", "model.ts"}, {"web/src/linkText.ts", "linkText.ts"}, {"web/src/runningDetail.ts", "runningDetail.ts"}, {"web/src/requestResult.ts", "requestResult.ts"}, {"web/src/skin/brand.tsx", "skin/brand.tsx"}, {"static/optimistic.mjs", "optimistic.mjs"}, {"skins/shared/person-topics.mjs", "person-topics.mjs"}, {"skins/shared/collective-mentions.mjs", "collective-mentions.mjs"}} {
 		b, err := os.ReadFile(pair[0])
 		if err != nil {
 			t.Fatal(err)

@@ -100,6 +100,7 @@ export function OksView() {
   const store = useApp();
   const o = useStore(store, (s) => s.overview);
   const loadError = useStore(store, (s) => s.loadError);
+  const dismissing = useStore(store, (s) => Object.values(s.dismissPending).filter(p => !p.saved).length);
   const names = useAgentNames();
   const count = needsYouCount(o, store.host.platform === "daemon");
 
@@ -139,13 +140,16 @@ export function OksView() {
         {count > 0 && <p className="pt-2 text-[15px] font-semibold text-text-2 tnum">{count === 1 ? "1 needs attention" : count + " need attention"}</p>}
       </header>
       <UnreadReview />
+      {dismissing > 0 && <p role="status" data-dismiss-pending className="px-4 pt-3 text-[14px] text-text-2">
+        {dismissing === 1 ? "Marking one item as handled…" : "Marking " + dismissing + " items as handled…"}
+      </p>}
       {items.length ? (
         <div className="px-4 pt-3">
           <ul className="flex flex-col gap-3" aria-label="Waiting for you">
             {items.map((i) => <Listed key={i.key} k={i.key} land={land}>{i.node}</Listed>)}
           </ul>
         </div>
-      ) : !held.length && !elsewhere.length && !unreported.length && !working.length && !workingReviews.length && <AllClear />}
+      ) : !dismissing && !held.length && !elsewhere.length && !unreported.length && !working.length && !workingReviews.length && <AllClear />}
       {(working.length > 0 || workingReviews.length > 0) && (
         <section className="px-4 pt-6" aria-labelledby="oks-working">
           <h2 id="oks-working" className="text-[12px] font-extrabold uppercase tracking-[.08em] text-muted">Working</h2>
