@@ -73,8 +73,8 @@ func TestDaemonStatusUsesRunningProcessAndDoesNotChangeCallerPath(t *testing.T) 
 		t.Fatal("status changed the caller launch environment")
 	}
 	var unused bytes.Buffer
-	if err := runDaemonStatus(context.Background(), home, []string{"--agent", "missing"}, &unused); err == nil {
-		t.Fatal("unknown exact named agent was accepted")
+	if err := runDaemonStatus(context.Background(), home, []string{"--agent", "missing", "--json"}, &unused); err == nil {
+		t.Fatalf("unknown exact named agent was accepted: %s", unused.String())
 	}
 }
 

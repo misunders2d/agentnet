@@ -353,10 +353,15 @@ func TestPhoneLinkedStateDismissesExactNotices(t *testing.T) {
 	if err = app.session.a.SetAlertPrefs(client.AlertPrefs{Enabled: true, Preview: client.NotificationPreviewHidden}); err != nil {
 		t.Fatal(err)
 	}
-	conv, err := app.session.a.CreateDM(ctx, peer.Address)
-	if err != nil {
-		t.Fatal(err)
-	}
+	var conv string
+	waitMobile(t, "peer conversation capabilities", func() bool {
+		var createErr error
+		conv, createErr = app.session.a.CreateDM(ctx, peer.Address)
+		if createErr != nil && !strings.HasPrefix(createErr.Error(), client.WaitPeerUpdate) {
+			t.Fatal(createErr)
+		}
+		return createErr == nil
+	})
 	take := func() recordedNativeNotice {
 		t.Helper()
 		select {

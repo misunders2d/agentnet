@@ -18,7 +18,7 @@ import (
 func TestBrowserUnreadProvider(t *testing.T) { runNodeCheck(t, "testdata/unread_provider_check.mjs") }
 
 func TestLiveUnreadProvider(t *testing.T) {
-	alice, bob, _, conv, _, stops := liveGuestWorld(t)
+	alice, bob, _, conv, eventually, stops := liveGuestWorld(t)
 	group := liveTwoMemberGroup(t, alice, bob)
 	for _, stop := range stops {
 		stop()
@@ -92,20 +92,31 @@ func TestLiveUnreadProvider(t *testing.T) {
 			t.Fatalf("Main flow label: %+v", row)
 		}
 	}
-	index := live.unread
-	p, err := live.UnreadPage(UnreadQuery{Limit: 2})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p.Total != 10 || len(p.Rows) != 2 || p.Next == "" {
-		t.Fatalf("page: %+v", p)
-	}
-	if _, err := live.UnreadPage(UnreadQuery{Limit: 2}); err != nil {
-		t.Fatal(err)
-	}
-	if live.unread != index {
-		t.Fatal("unchanged page rebuilt shared compact index")
-	}
+	var index *unreadIndex
+	eventually("same-revision shared unread index", func() bool {
+		before, _ := alice.ViewChanges()
+		if _, err := live.UnreadPage(UnreadQuery{Limit: 200}); err != nil {
+			t.Fatal(err)
+		}
+		candidate := live.unread
+		p, err := live.UnreadPage(UnreadQuery{Limit: 2})
+		if err != nil {
+			t.Fatal(err)
+		}
+		after, _ := alice.ViewChanges()
+		if before.Content != after.Content {
+			t.Logf("content changed during cache check: %d -> %d", before.Content, after.Content)
+			return false
+		}
+		if p.Total != 10 || len(p.Rows) != 2 || p.Next == "" {
+			t.Fatalf("page: %+v", p)
+		}
+		if live.unread != candidate {
+			t.Fatalf("unchanged page rebuilt shared compact index at content %d", before.Content)
+		}
+		index = candidate
+		return true
+	})
 	prefs.Mutes = nil
 	if err := alice.SetAlertPrefs(prefs); err != nil {
 		t.Fatal(err)

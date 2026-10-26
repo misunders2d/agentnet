@@ -33,7 +33,7 @@ func TestOwnGroupRequestDecisionNamesSharedRequest(t *testing.T) {
 	}
 	eventually(t, "phone active agent", func() bool {
 		p, e := phone.Participation(part.PID)
-		return e == nil && p.Claimable()
+		return e == nil && p.Claimable() && p.Scope != ""
 	})
 	q, err := phone.AskAgent(tctx(t), part.PID, envelope.KindQuestion, "which release branch?")
 	if err != nil {
