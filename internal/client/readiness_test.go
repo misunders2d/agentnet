@@ -164,7 +164,11 @@ func TestDaemonReadinessLifecycle(t *testing.T) {
 	if _, err := a.ReadDaemonReadiness(tctx(t)); !errors.Is(err, ErrDaemonNotRunning) {
 		t.Fatalf("stopped daemon remained ready: %v", err)
 	}
-	if running, err := daemonRunning(filepath.Join(a.home, "identity.json")); running || err == nil {
+	badHome := t.TempDir()
+	if err := os.Mkdir(filepath.Join(badHome, "daemon.lock"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if running, err := daemonRunning(badHome); running || err == nil {
 		t.Fatalf("lock I/O failure was labeled running: %v %v", running, err)
 	}
 }
