@@ -448,7 +448,7 @@ func TestAppAttachedNeverOpensTheHome(t *testing.T) {
 				http.NotFound(w, r)
 				return
 			}
-			if r.URL.Path != "/api/overview" {
+			if r.URL.Path != "/api/get-app" {
 				t.Error("unexpected attached route")
 				w.WriteHeader(404)
 				return

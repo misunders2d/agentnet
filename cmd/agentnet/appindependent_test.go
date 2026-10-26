@@ -35,7 +35,7 @@ func TestIndependentQualificationRequiresExactSameVersionProof(t *testing.T) {
 	version := "v0.8.2"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie("agentnet_ui")
-		if err != nil || cookie.Value != "private" || r.URL.Path != "/api/overview" {
+		if err != nil || cookie.Value != "private" || r.URL.Path != "/api/get-app" {
 			t.Error("incorrect daemon identity request")
 		}
 		json.NewEncoder(w).Encode(map[string]string{"version": version})
@@ -152,7 +152,7 @@ func TestIndependentAppRestartFailureResumesVerifiedSwitchOnce(t *testing.T) {
 	}
 	page := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie("agentnet_ui")
-		if err != nil || cookie.Value != "private" || r.URL.Path != "/api/overview" {
+		if err != nil || cookie.Value != "private" || r.URL.Path != "/api/get-app" {
 			t.Error("reattachment did not authenticate daemon readiness")
 		}
 		json.NewEncoder(w).Encode(map[string]string{"version": protocol.Version})

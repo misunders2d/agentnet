@@ -59,7 +59,7 @@ func (h *unreadTestHost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no local cookie", 401)
 		return
 	}
-	if r.URL.Path == "/api/overview" {
+	if r.URL.Path == "/api/get-app" {
 		json.NewEncoder(w).Encode(map[string]string{"version": "dev"})
 		return
 	}

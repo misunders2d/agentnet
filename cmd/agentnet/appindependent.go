@@ -28,7 +28,7 @@ type appIndependentDaemon struct {
 	PID  int    `json:"pid"`
 }
 
-// The home's owner-only UI endpoint authenticates a fresh local Overview.
+// The home's owner-only UI endpoint authenticates a fresh local version.
 // No redirects, proxy or other origin receives its cookie.
 func attachedVersion(ctx context.Context, home string) (version, endpoint string, err error) {
 	version, endpoint, err = attachedOverview(ctx, home)
@@ -54,7 +54,9 @@ func attachedOverview(ctx context.Context, home string) (version, endpoint strin
 		return "", "", errors.New("The attached daemon has no valid local page.")
 	}
 	token := u.Query().Get("t")
-	u.Path = "/api/overview"
+	// This existing endpoint reads the running build without projecting chats
+	// or waiting for Overview's lock. A busy history must not block updates.
+	u.Path = "/api/get-app"
 	u.RawQuery = ""
 	u.Fragment = ""
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
@@ -68,7 +70,7 @@ func attachedOverview(ctx context.Context, home string) (version, endpoint strin
 	c := &http.Client{Transport: transport, Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, err := c.Do(req)
 	if err != nil {
-		return "", "", errors.New("The attached daemon's page is unavailable.")
+		return "", "", errors.New("AgentNet did not respond to the update check. Try again.")
 	}
 	defer resp.Body.Close()
 	var status struct {

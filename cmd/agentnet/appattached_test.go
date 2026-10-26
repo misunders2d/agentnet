@@ -12,8 +12,71 @@ import (
 	"testing"
 	"time"
 
+	"github.com/misunders2d/agentnet/internal/protocol"
 	"github.com/misunders2d/agentnet/internal/secfile"
+	"github.com/misunders2d/agentnet/internal/ui"
 )
+
+type attachedBlockedOverview struct {
+	ui.Provider
+	entered chan struct{}
+	release chan struct{}
+	calls   atomic.Int32
+}
+
+func (p *attachedBlockedOverview) Overview() (ui.Overview, error) {
+	if p.calls.Add(1) == 1 {
+		close(p.entered)
+	}
+	<-p.release
+	return ui.Overview{Version: protocol.Version}, nil
+}
+
+func TestAttachedOverviewVersionWhileChatIsBlocked(t *testing.T) {
+	home := t.TempDir()
+	p := &attachedBlockedOverview{entered: make(chan struct{}), release: make(chan struct{})}
+	var page *ui.Server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		page.Handler().ServeHTTP(w, r)
+	}))
+	defer server.Close()
+	defer close(p.release)
+	page = ui.New(p, strings.TrimPrefix(server.URL, "http://"), "private")
+	endpoint := server.URL + "/?t=private"
+	if err := secfile.Write(filepath.Join(home, uiURLFile), []byte(endpoint)); err != nil {
+		t.Fatal(err)
+	}
+	finished := make(chan error, 1)
+	go func() {
+		req, err := http.NewRequest(http.MethodGet, server.URL+"/api/overview", nil)
+		if err != nil {
+			finished <- err
+			return
+		}
+		req.AddCookie(&http.Cookie{Name: "agentnet_ui", Value: "private"})
+		resp, err := server.Client().Do(req)
+		if err == nil {
+			resp.Body.Close()
+		}
+		finished <- err
+	}()
+	select {
+	case <-p.entered:
+	case err := <-finished:
+		t.Fatalf("chat overview did not block: %v", err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("chat overview did not start")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	version, gotEndpoint, err := attachedOverview(ctx, home)
+	if err != nil || version != protocol.Version || gotEndpoint != endpoint {
+		t.Fatalf("version check depends on blocked chat: version=%q endpoint_matches=%v err=%v", version, gotEndpoint == endpoint, err)
+	}
+	if p.calls.Load() != 1 {
+		t.Fatal("version check requested another chat projection")
+	}
+}
 
 func TestAttachedOverviewKeepsLocalTokenAndReleaseGuards(t *testing.T) {
 	home := t.TempDir()
@@ -33,7 +96,7 @@ func TestAttachedOverviewKeepsLocalTokenAndReleaseGuards(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
 		cookie, err := r.Cookie("agentnet_ui")
-		if err != nil || cookie.Value != "private" || r.URL.Path != "/api/overview" || r.URL.RawQuery != "" {
+		if err != nil || cookie.Value != "private" || r.URL.Path != "/api/get-app" || r.URL.RawQuery != "" {
 			t.Error("readiness lost local authentication")
 		}
 		json.NewEncoder(w).Encode(map[string]string{"version": "dev"})
