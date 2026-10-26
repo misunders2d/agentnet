@@ -91,6 +91,28 @@ the repair. Sergey needs to do nothing while owned fixtures are being tested.
 
 ### October 27 continuation: the 500 ms target
 
+Candidate `d70235ad` integrated qualification `40409823579` exposes real failures
+at the new bound: Android history has seven actions at 589–1,134 ms; its composer
+plus menu takes 527 ms. Windows WebView2's same menu takes 587 ms and Firefox's
+concurrent history update takes 944 ms. Android's foreground/background notification
+fixture also fails; physical execution remains unavailable. Linux/macOS integrated
+jobs are still running. No publication or deployment is qualified.
+
+The composer plus menu reproduces the sheet's animation dependency: holding
+animation callbacks keeps its starting-style opacity at zero past 500 ms. Removing
+that initial transparent/scale state makes its real menu visible and selectable
+while callbacks remain held. Eight sheet and four plus-menu width/motion cases pass;
+menu DOM feedback is 64–141 ms in this isolated run. Background animation scheduling
+is not paint evidence. Other required native/platform checks remain open.
+
+All three UI race partitions now pass through retained `ui-0`/`ui-1` and corrected
+`ui-2` run `40409836064`. Native Linux/Windows focused UI repetitions and three
+Windows offline-leave repetitions pass. Original failures remain recorded below.
+A temporary AST inventory finds 627 interactive JSX candidates across 77 of 126
+TypeScript source files. This is a narrower candidate extraction than the earlier
+text search; reachability, non-JSX/native/skin controls and rendered reconciliation
+remain unresolved, so it is not an exhaustive executed inventory.
+
 The broad rendered runner now fails local feedback at 500 ms rather than the
 historical 2,000 ms emergency bound. Background completion remains separate.
 Local Chromium's five baseline workloads pass 74 actions (maximum 278 ms).
@@ -113,7 +135,10 @@ macOS's repeated touch regression at `914acf57` shows the 450 ms recognized
 long press sometimes does not commit its sheet before the 470 ms held-touch
 observation; release subsequently opens it. The timer now synchronously commits
 that existing sheet, preserving the exact initiating-pointer release guard.
-Local touch/edit/recovery coverage passes; native macOS rerun is still required.
+Local touch/edit/recovery coverage passes. Native macOS still fails after the
+synchronous commit change: the held observation is 473–705 ms after the actual
+browser pointerdown and still has no sheet. Timer scheduling is now instrumented;
+the previous React-scheduling explanation is unproven.
 
 The visible-row source harness now extracts the intended entry-layout effect,
 instead of the earlier navigation-ref effect added by the render optimization.
@@ -389,8 +414,9 @@ The previous final-pin skin run passed functional compatibility: 306 browser/sta
 checks and 37 applicable runtime groups, with five explicitly inapplicable entries.
 That run does not establish exhaustive interaction timing or acceptable performance.
 
-The existing latency runner also cannot establish this gate: its functional pass
-allows feedback below 2,000ms, its 200ms smoothness result is informational, and
+The broad latency runner now enforces the owner's 500 ms local-feedback bound
+(the historical bound was 2,000 ms). It still cannot establish the complete gate:
+its 200 ms smoothness result is informational, and
 some journeys use fixed-latency synthetic responses. Cold page startup is outside
 those action timers. These results remain functional evidence only. Required
 performance evidence must identify the actual backend, trusted input, rendered
