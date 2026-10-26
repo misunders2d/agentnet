@@ -86,7 +86,10 @@ const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://local
    const writes=await page.evaluate(()=>fixture.calls.filter(c=>c.b!==undefined));const open=await page.getByRole('dialog').count();
    reports.push({lateTimer,holdRequested:hold,holdActual:released-started,motion,point,overlap,held,releaseWrites:writes,openAfterRelease:open,events:await page.evaluate(()=>fixture.touch),timers:await page.evaluate(()=>fixture.gestureTimers)});console.log(JSON.stringify({touchCase:reports.at(-1)}));
    if(!process.env.INTERACTION_BASELINE){assert(held.dialog);assert(held.feedbackMs<500,'long press local feedback exceeds owner 500 ms bound: '+held.feedbackMs);assert.match(held.under||'',motion==='reduce'?/^Mark unread from here$/:/^Mark unread(?: from here)?$/,'release is aimed at an actual sheet action (normal sheet may still be sliding)');assert.equal(writes.length,0,'opening finger release invoked an action');assert.equal(open,1,'opening finger release dismissed sheet');
-    const intentional=await target.boundingBox(),tap={x:intentional.x+intentional.width/2,y:intentional.y+intentional.height/2};await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[tap]});await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await page.waitForFunction(()=>fixture.calls.some(c=>c.p==='/api/act'&&c.b?.do==='unread'));assert(Date.now()-released<400,'intentional tap should exercise active compatibility-click window');
+    const intentional=held.target,tap={x:intentional.x+intentional.width/2,y:intentional.y+intentional.height/2};await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[tap]});await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await page.waitForFunction(()=>fixture.calls.some(c=>c.p==='/api/act'&&c.b?.do==='unread'));
+    // The guard's window runs on browser input time, not the driver's later
+    // API-result observation (which may itself wait for another frame).
+    const gap=await page.evaluate(()=>{const end=fixture.touch.find(e=>e.type==='pointerup'),next=fixture.touch.find(e=>e.type==='pointerdown'&&e.at>end.at);return next.at-end.at;});console.log(JSON.stringify({intentionalTapGapMs:gap}));assert(gap<400,'intentional tap should exercise active compatibility-click window: '+gap);
    }
    await context.close();
   }
