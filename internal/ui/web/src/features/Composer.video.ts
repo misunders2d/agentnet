@@ -27,9 +27,12 @@ export async function compressVideo(file: File, signal: AbortSignal, progress: (
     const frameRate = Math.min(30, stats.averagePacketRate || 30);
     const scale = Math.min(1, 1280 / Math.max(video.displayWidth, video.displayHeight));
     const width = Math.max(2, Math.floor(video.displayWidth * scale / 2) * 2), height = Math.max(2, Math.floor(video.displayHeight * scale / 2) * 2);
+    // Keep mono recordings mono. Besides adding no information, upmixing them
+    // to stereo crashes the bundled Linux WebKit audio conversion path.
+    const numberOfChannels = audio ? Math.min(2, audio.numberOfChannels) : 2;
     const supported = async (v: "avc" | "vp9", a: "aac" | "opus") => (await Promise.all([
       canEncodeVideo(v, { width, height, frameRate, bitrate }),
-      audio ? canEncodeAudio(a, { numberOfChannels: 2, sampleRate: 48000, bitrate: 128_000 }) : true,
+      audio ? canEncodeAudio(a, { numberOfChannels, sampleRate: 48000, bitrate: 128_000 }) : true,
     ])).every(Boolean);
     const mp4 = await supported("avc", "aac");
     if (!mp4 && !await supported("vp9", "opus")) throw Error("This device has no supported video/audio encoder. Send the original file.");
@@ -43,7 +46,7 @@ export async function compressVideo(file: File, signal: AbortSignal, progress: (
     }), { chunked: true, chunkSize: 1024 * 1024 }) });
     conversion = await Conversion.init({ input, output, tracks: "primary", tags: {}, showWarnings: false,
       video: { codec: mp4 ? "avc" : "vp9", width, height, fit: "contain", frameRate, bitrate, forceTranscode: true, allowTransformationMetadata: false },
-      audio: { codec: mp4 ? "aac" : "opus", bitrate: 128_000, numberOfChannels: 2, sampleRate: 48000, forceTranscode: true },
+      audio: { codec: mp4 ? "aac" : "opus", bitrate: 128_000, numberOfChannels, sampleRate: 48000, forceTranscode: true },
     });
     // A missing audio encoder must not quietly turn an audible clip silent.
     if (!conversion.isValid || conversion.discardedTracks.some(t => t.track === video || audio && t.track === audio)) throw Error("This device cannot encode this video and its audio. Send the original file.");

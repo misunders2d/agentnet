@@ -91,6 +91,39 @@ the repair. Sergey needs to do nothing while owned fixtures are being tested.
 
 ### October 27 continuation: the 500 ms target
 
+Native focused touch/Sheet/navigation checks pass three repetitions on Linux,
+macOS and Windows in [40417133967](https://github.com/misunders2d/agentnet/actions/runs/40417133967)
+at `8385362d`. Android startup, notification boundaries, denied permission and
+retained-data upgrade pass in [40417137751](https://github.com/misunders2d/agentnet/actions/runs/40417137751);
+its three unread actions peak at 171 ms. Retain the other 16 unchanged Android
+workloads from `54abbf4c`. This is API35 emulator evidence, not a physical phone.
+
+The Linux media crash was reproduced with the actual AppImage runtime in an
+isolated virtual display. Normal conversion also crashes, so cancellation is not
+required. Identical video packets succeed without audio; retaining the source's
+mono channel also succeeds with its audio. Forcing stereo is unnecessary and is
+now removed for mono sources. The original real 36-action media workload then
+passes, maximum local feedback 244 ms; the real encoded-file regression verifies
+audio remains mono and audible, plus cancellation/original bytes. The precise
+native memory-corruption function remains unidentified. New candidate platform
+media execution is still required.
+
+The `54abbf4c` complete skin run has 36 passing applicable runtime groups and one
+Zoom browser-provider fixture failure: its empty `<ol>` has no box, while the
+screenshot shows the correct empty DM and enabled Write action. The fixture now
+requires that visible usable action and an attached timeline. The affected real
+browser-provider enrollment/send/file/reload journey passes separately. Five
+inapplicable groups remain excluded; this is compatibility evidence, not complete
+interaction timing coverage or a final candidate pin.
+
+Broader macOS qualification remains failing. Diagnostic run
+[40417813390](https://github.com/misunders2d/agentnet/actions/runs/40417813390)
+separates fixture-query cost (0–2 ms) from 586–942 ms observed feedback delays.
+Several first DOM mutations occur in 4–10 ms, followed by a delayed first frame;
+the initial menu also waits while transparent. Optional sampling of newly launched
+renderer processes is confined to the disposable macOS fixture; sampled timings
+are diagnostic only and cannot qualify the release.
+
 The 450 ms hold still left one macOS result at 553 ms when both callback queues
 were delayed. The actual message-menu counterpart was then inspected at the same
 pinned Telegram revision:

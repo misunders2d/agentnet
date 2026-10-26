@@ -41,6 +41,10 @@ on:
         description: 'Optional comma-separated affected desktop workloads; empty retains all seventeen'
         type: string
         default: ''
+      native_profile:
+        description: 'Collect macOS renderer stacks for diagnosis; profiled runs are not release timing evidence'
+        type: boolean
+        default: false
       android_suites:
         description: 'Optional comma-separated affected Android workloads; empty keeps all seventeen'
         type: string
@@ -215,6 +219,7 @@ jobs:
       version: ${{ inputs.candidate_version || '' }}
       os: ${{ inputs.desktop_os || '' }}
       interaction_suites: ${{ inputs.interaction_suites || '' }}
+      native_profile: ${{ inputs.native_profile || false }}
       interaction_qualification: ${{ inputs.interaction_qualification || false }}
   container:
     if: ${{ !inputs.windows_task_probe && !inputs.platform_only && !inputs.test_packages && !inputs.test_run && !inputs.race_shards && !inputs.windows_client_partitions }}

@@ -21,6 +21,10 @@ on:
         description: 'Optional comma-separated affected workloads; empty retains all seventeen'
         type: string
         default: ''
+      native_profile:
+        description: 'Collect owned macOS renderer stacks for diagnosis only'
+        type: boolean
+        default: false
       interaction_qualification:
         description: "Measure shared interactions in real native shells and browsers"
         type: boolean
@@ -74,11 +78,15 @@ jobs:
         shell: bash
         env:
           AGENTNET_LATENCY_DISPOSABLE_GUI: '1'
+          AGENTNET_NATIVE_PROFILE: ${{ inputs.native_profile && '1' || '' }}
           REQUESTED_INTERACTION_SUITES: ${{ inputs.interaction_suites }}
         run: |
           set -euo pipefail
           evidence="$RUNNER_TEMP/agentnet-interactions"
           mkdir -p "$evidence"
+          if [[ "$AGENTNET_NATIVE_PROFILE" == 1 && "$RUNNER_OS" == macOS ]]; then
+            export AGENTNET_NATIVE_PROFILE_DIR="$evidence/native-profile"
+          fi
           npm install --prefix "$RUNNER_TEMP/agentnet-browsers" --ignore-scripts --no-audit --no-fund playwright@1.63.0
           tooling="$RUNNER_TEMP/agentnet-browsers/node_modules"
           if [[ "$RUNNER_OS" == Linux ]]; then

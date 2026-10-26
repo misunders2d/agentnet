@@ -85,6 +85,15 @@ config.mkdir(parents=True, exist_ok=True)
 (config/'autostart-chosen').touch()  # suppress first-run login changes
 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 proc = None
+profile_dir = os.environ.get('AGENTNET_NATIVE_PROFILE_DIR') if system == 'Darwin' else None
+def webcontent_pids():
+    rows = subprocess.check_output(['ps', '-axo', 'pid=,comm='], text=True).splitlines()
+    return {int(row.split(None, 1)[0]) for row in rows if row.strip().endswith('com.apple.WebKit.WebContent')}
+prior_renderers = webcontent_pids() if profile_dir else set()
+sampled_renderers = set()
+samplers = []
+if profile_dir:
+    pathlib.Path(profile_dir).mkdir(parents=True, exist_ok=True)
 try:
     with (root/'shell.log').open('w') as log:
         # System D-Bus must use its system libdbus; apply bundled libraries
@@ -94,8 +103,15 @@ try:
         proc = subprocess.Popen(command, cwd=fixture_cwd, env=env, stdout=log, stderr=log, **kwargs)
         report = None
         end = time.monotonic() + 30  # existing fixture bound
+        next_profile_check = 0
         result_url = urlunsplit((parts.scheme, parts.netloc, '/latency-result', urlencode({'run':query['run']}), ''))
         while time.monotonic() < end:
+            if profile_dir and time.monotonic() >= next_profile_check:
+                next_profile_check = time.monotonic() + .5
+                for pid in webcontent_pids() - prior_renderers - sampled_renderers:
+                    sampled_renderers.add(pid)
+                    destination = pathlib.Path(profile_dir) / (query.get('suite', 'fixture')+'-'+str(pid)+'.txt')
+                    samplers.append(subprocess.Popen(['sample', str(pid), '5', '1', '-file', str(destination)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
             if proc.poll() is not None:
                 raise RuntimeError('Owned fixture shell exited: '+(root/'shell.log').read_text(errors='replace')[-3000:])
             with opener.open(result_url, timeout=2) as response:
@@ -106,13 +122,17 @@ try:
         if report is None:
             raise RuntimeError('Native fixture timeout: '+(root/'shell.log').read_text(errors='replace')[-3000:])
         print(json.dumps({'engine': {'Linux':'Tauri WebKitGTK','Darwin':'Tauri WKWebView','Windows':'Tauri WebView2'}[system],
-                          'nativeOS': system, 'machine': platform.machine(), **report}))
+                          'nativeOS': system, 'machine': platform.machine(), 'profiled': bool(profile_dir), **report}))
         if not report.get('ok'):
             raise RuntimeError('Native responsiveness fixture failed')
 finally:
     body_error = sys.exc_info()[1]
     teardown_end = time.monotonic() + 5
     try:
+        for sampler in samplers:
+            if sampler.poll() is None:
+                sampler.terminate()
+            sampler.wait(timeout=1)
         # Only terminate the owned process tree, never an image name/other instance.
         if proc is not None and proc.poll() is None:
             if system == 'Windows':
