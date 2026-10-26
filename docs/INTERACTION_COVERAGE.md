@@ -91,6 +91,12 @@ the repair. Sergey needs to do nothing while owned fixtures are being tested.
 
 ### October 27 continuation: the 500 ms target
 
+Linux CI dependency setup previously spent over 30 minutes on the runner's
+Azure Ubuntu mirror before cancellation, including the 27.3 MB WebKit package.
+The next disposable runner uses Ubuntu's main HTTPS archive instead, preserving
+the selected Ubuntu suites and package-signature verification. This is a CI
+download recovery, not a passed app test; its effect requires the next run.
+
 The remaining Base UI popup entrances used transparent or fully offscreen
 starting states. Real message-menu/reaction/delete and All Topics regressions
 first fail with animation callbacks held, then pass after those initial states
