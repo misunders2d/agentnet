@@ -42,10 +42,10 @@ this document records the test contract and coverage gaps.
 
 | ID | Required outcome | Owner | State | Evidence or next check |
 | --- | --- | --- | --- | --- |
-| C1 | Complete source and rendered control/state inventory | inventory owner | unexecuted | Existing representative suites are insufficient proof |
-| C2 | Every inventory entry maps to an executed case and timing result | harness owner | unexecuted | Audit existing interaction runners and missing instrumentation |
-| P1 | Dismissal mutation, refresh and visible result are timed separately | root | investigating | Owner reports dozens of seconds; no destructive live test performed |
-| P2 | Shared slow refresh cause is reproduced and profiled | root | investigating | Installed v0.9.5 compact overview took 25.645s; this is not a causal SQL profile |
+| C1 | Complete source and rendered control/state inventory | inventory owner | source candidates collected; reconciliation open | 293 files scanned; 6,317 provisional control candidates and 314 unresolved input bindings; no rendered or executed coverage inferred |
+| C2 | Every inventory entry maps to an executed case and timing result | harness owner | validator reviewed; execution open | Offline validator rejects incomplete or synthetic evidence; its unit fixtures establish validator behavior only |
+| P1 | Dismissal mutation, refresh and visible result are timed separately | root | backend stages measured; rendered result open | Owned mixed fixture: exact Resolve committed in 1.070ms; invalidated overview took 936.180ms; no destructive live test performed |
+| P2 | Shared slow refresh cause is reproduced and profiled | root | investigating | Installed v0.9.5 compact overview measured 25.645s and later 3.398s; selected read-only store methods completed in 0.844s, so those queries alone do not explain the delay |
 | P3 | Measured bottlenecks fixed and normal/10x cases pass | root | unexecuted | No general responsiveness fix is claimed |
 | U1 | Update version checks do not depend on chat projection | root | verified source only | Existing lightweight endpoint; real blocked-chat regression, native three-OS/race tests and live patched check at 1.089ms; installed app still v0.9.5 |
 | X1 | Confusing history/review screen explains state and next action accurately | UX reviewer/root | investigating | Owner screenshot mixes saved history, unknown original agent and contradictory continuation/approval instructions |
@@ -55,3 +55,12 @@ this document records the test contract and coverage gaps.
 The previous final-pin skin run passed functional compatibility: 306 browser/static
 checks and 37 applicable runtime groups, with five explicitly inapplicable entries.
 That run does not establish exhaustive interaction timing or acceptable performance.
+
+The existing latency runner also cannot establish this gate: its functional pass
+allows feedback below 2,000ms, its 200ms smoothness result is informational, and
+some journeys use fixed-latency synthetic responses. Cold page startup is outside
+those action timers. These results remain functional evidence only. Required
+performance evidence must identify the actual backend, trusted input, rendered
+control, presented result, exact operation and target, with separate confirmed
+commit and remote receipt where applicable. Raw source candidates and matching
+test names remain unexecuted until their rendered cases are reconciled and run.
