@@ -12,6 +12,48 @@ func TestAttentionChangesDoNotWaitForOverview(t *testing.T) {
 	runNodeCheck(t, "testdata/attention_prompt_check.mjs")
 }
 
+type guardedReminderRouteFixture struct {
+	*attentionResponseFixture
+	selected reminderGeneration
+	action   string
+	id       string
+	due      time.Time
+}
+
+func (f *guardedReminderRouteFixture) changeReminder(id string, due time.Time, action string, expected reminderGeneration) error {
+	f.selected, f.action, f.id, f.due = expected, action, id, due
+	return Refuse("that reminder changed; refresh and try again")
+}
+
+func TestReminderRoutesPreserveConditionalWriteGuard(t *testing.T) {
+	for _, supported := range []bool{false, true} {
+		f := &attentionResponseFixture{Fixture: NewFixture(time.Now), seq: 10}
+		guarded := &guardedReminderRouteFixture{attentionResponseFixture: f}
+		ts := httptest.NewUnstartedServer(nil)
+		provider := Provider(f)
+		if supported {
+			provider = guarded
+		}
+		ts.Config.Handler = New(provider, ts.Listener.Addr().String(), testToken).Handler()
+		ts.Start()
+		t.Cleanup(ts.Close)
+		for _, action := range []string{"", "done", "cancel"} {
+			path := "/api/remind"
+			if action != "" {
+				path += "/" + action
+			}
+			response := do(t, ts, "POST", path, `{"id":"exact","due":2000000000,"expected":{"revision":7}}`, post(ts))
+			response.Body.Close()
+			if response.StatusCode < 400 || f.seq != 10 {
+				t.Fatalf("conditional %s fell through to unguarded write: status=%d seq=%d", action, response.StatusCode, f.seq)
+			}
+			if supported && (guarded.action != action || guarded.id != "exact" || guarded.selected.Revision != 7 || guarded.due.Unix() != 2000000000) {
+				t.Fatalf("lost selected generation: %+v", guarded)
+			}
+		}
+	}
+}
+
 type attentionResponseFixture struct {
 	*Fixture
 	seq          uint64

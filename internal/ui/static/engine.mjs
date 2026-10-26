@@ -2320,16 +2320,21 @@ export class Engine {
     for(const m of await this.store.prefix("kv","reminder-mark/"+own.person+"/")){
       if(!all&&m.state!=="pending")continue;
       const original=await this.reminderOriginal(m);if(!original)continue;
-      rows.push({message:original.id,conv:m.conv||undefined,from:original.to?this.address:original.from,title:bodyPreview(original.body||""),due:iso(m.due*1000),overdue:m.state==="pending"&&m.due*1000<=this.now(),state:m.state,fact:m});
+      rows.push({message:original.id,conv:m.conv||undefined,from:original.to?this.address:original.from,title:bodyPreview(original.body||""),due:iso(m.due*1000),overdue:m.state==="pending"&&m.due*1000<=this.now(),revision:m.revision,writer:m.writer,state:m.state,fact:m});
     }
     return rows.sort((a,b)=>Date.parse(a.due)-Date.parse(b.due)||a.message.localeCompare(b.message));
   }
   async reminderChange(input,state="pending"){
-    if(!input||typeof input!=="object"||Array.isArray(input)||Object.keys(input).some(k=>!["id","due"].includes(k))||!wire.validID(input.id))throw Error("Choose an exact stored message.");
+    if(!input||typeof input!=="object"||Array.isArray(input)||Object.keys(input).some(k=>!["id","due","expected"].includes(k))||!wire.validID(input.id))throw Error("Choose an exact stored message.");
     const checks=[],own=await this.groupRead(checks,"kv","person");if(!this.ownTopicWriter(own))throw Error("Reminders require your current human device.");
     const row=await this.groupRead(checks,"inbox",input.id)||await this.groupRead(checks,"outbox",input.id);
     if(!row||row.aside||row.control||row.local||row.sub||row.deleted)throw Error("Choose an existing message.");
     const item=this.itemOf(row,!!row.to),ref={conv:row.conv||"",fingerprint:item.from_key,lid:item.lid||item.id},key=this.reminderMarkKey(own.person,ref),old=await this.groupRead(checks,"kv",key);
+    if(input.expected!==undefined){
+      const e=input.expected;
+      if(!e||typeof e!=="object"||Array.isArray(e)||Object.keys(e).some(k=>!["revision","writer"].includes(k))||!Number.isSafeInteger(e.revision)||e.revision<0||e.writer!==undefined&&typeof e.writer!=="string")throw Error("Invalid reminder generation.");
+      if(e.revision===0?old?.state==="pending":old?.state!=="pending"||e.revision!==old.revision||e.writer!==old.writer)throw Error("That reminder changed; refresh and try again.");
+    }
     if(state!=="pending"&&old?.state!=="pending")throw Error("That message has no pending reminder.");
     const due=state==="pending"?input.due:old.due;
     if(!Number.isSafeInteger(due)||state==="pending"&&(due*1000<=this.now()||due*1000-this.now()>3650*86400000))throw Error("Choose a future time within ten years.");
@@ -2340,7 +2345,7 @@ export class Engine {
     const result={note:state==="pending"?"Reminder set.":state==="done"?"Reminder done.":"Reminder cancelled."};
     try {
       const seq=this.seq,current=await this.store.get("kv",key),original=current?.state==="pending"&&await this.reminderOriginal(current);
-      const reminder=original?{message:original.id,conv:current.conv||undefined,from:original.to?this.address:original.from,title:bodyPreview(original.body||""),due:iso(current.due*1000),overdue:current.due*1000<=this.now()}:null;
+      const reminder=original?{message:original.id,conv:current.conv||undefined,from:original.to?this.address:original.from,title:bodyPreview(original.body||""),due:iso(current.due*1000),overdue:current.due*1000<=this.now(),revision:current.revision,writer:current.writer}:null;
       return {...result,seq,message:input.id,reminder};
     }catch{return result;} // Readback failure cannot fail an already saved action.
   }

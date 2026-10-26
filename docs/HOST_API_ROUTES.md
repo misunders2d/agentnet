@@ -351,9 +351,9 @@ operation grants conversation or task access.
 | `GET /api/typing` | D B | Who is typing in a scope, and this device's preferences. | `?conv=&peer=&thread=` | `{scope, preferences:{send, show}, supported, current, entries:[{person?, address, label, expires}]}` |
 | `POST /api/typing` | D B | Report that this person is typing. It carries no content. | `{scope:{conv?, peer?, thread?}, active}` | `{submitted, skipped, throttled}` |
 | `POST /api/typing/preferences` | D B | This device's own choices: share my typing, show others'. | `{send, show}` | `{send, show}` |
-| `POST /api/remind` | DB | Set or move a personal reminder on a stored received or own-sent message. | `{id, due: unix seconds}` | `{note, seq?, message?, reminder?: ReminderView or null}` |
-| `POST /api/remind/done` | DB | Mark a reminder done across current linked own-human devices. | `{id}` | `{note, seq?, message?, reminder?: ReminderView or null}` |
-| `POST /api/remind/cancel` | DB | Cancel a reminder across current linked own-human devices. | `{id}` | `{note, seq?, message?, reminder?: ReminderView or null}` |
+| `POST /api/remind` | DB | Set or move a personal reminder on a stored received or own-sent message. | `{id, due: unix seconds, expected?: {revision, writer?}}` | `{note, seq?, message?, reminder?: ReminderView or null}` |
+| `POST /api/remind/done` | DB | Mark a reminder done across current linked own-human devices. | `{id, expected?: {revision, writer?}}` | `{note, seq?, message?, reminder?: ReminderView or null}` |
+| `POST /api/remind/cancel` | DB | Cancel a reminder across current linked own-human devices. | `{id, expected?: {revision, writer?}}` | `{note, seq?, message?, reminder?: ReminderView or null}` |
 
 The optional view/result `seq` is captured before loading the local snapshot,
 using the overview's revision sequence. A reminder result reads back only its

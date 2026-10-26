@@ -705,12 +705,14 @@ type HistoryFiles interface {
 // ReminderView is a pending reminder on a stored message (received or own sent): it only
 // asks for the person's attention, and nobody else sees it.
 type ReminderView struct {
-	Message string    `json:"message"`
-	Conv    string    `json:"conv,omitempty"` // its DM; "" for a device conversation
-	From    string    `json:"from"`
-	Title   string    `json:"title"` // the message's first line
-	Due     time.Time `json:"due"`
-	Overdue bool      `json:"overdue"` // past its time, until it ends
+	Message  string    `json:"message"`
+	Conv     string    `json:"conv,omitempty"` // its DM; "" for a device conversation
+	From     string    `json:"from"`
+	Title    string    `json:"title"` // the message's first line
+	Due      time.Time `json:"due"`
+	Overdue  bool      `json:"overdue"`            // past its time, until it ends
+	Revision int64     `json:"revision,omitempty"` // opaque host generation; optional conditional-write guard
+	Writer   string    `json:"writer,omitempty"`   // browser generation tie-breaker; no authority
 }
 
 // Reminders is implemented by providers where received messages can take

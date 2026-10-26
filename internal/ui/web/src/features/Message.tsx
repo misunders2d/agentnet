@@ -30,7 +30,7 @@ import {
   agentLabel, agentOf, answerTo, eventKind, ev, excerpt, guestOf, historicalTargetLabel, isReply, isRequest, isThreadMsg, joinedBefore, lower, problem, requestLabel, requestState, shownText, whoWrote, working,
   type AnyMsg, type Ctx, type Who,
 } from "./Message.model";
-import { RemindSheet, ReminderLine } from "./Reminders";
+import { RemindSheet, ReminderLine, ReminderChangeStatus } from "./Reminders";
 import { WhatTheySaw } from "./RoomPanel.cards";
 import { room } from "./RoomPanel.model";
 import { copyText } from "./Settings.parts";
@@ -210,6 +210,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
           {compact && live && !selecting && <button type="button" className="min-h-11 px-1 text-[13px] underline"
             aria-label={"Actions for " + requestLabel(m, ctx)} onClick={() => setSheet(true)}>Actions</button>}
           {reminder && !selecting && <ReminderLine r={reminder} m={remindable} />}
+          {live && !selecting && <ReminderChangeStatus message={m.id} />}
         </div>
         {!outcomeOnly && !wide && (live || attention) && !selecting && (
           <button type="button" aria-label={hoverPointer ? "More actions" : "Message actions"} onClick={() => setSheet(true)} className={hoverPointer

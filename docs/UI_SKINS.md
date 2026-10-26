@@ -631,7 +631,12 @@ types are the Go structs in `internal/ui/*.go`, generated into
   and files and recalls nothing already read, saved or given to an agent.
 - Reminders: `overview.remind` says this device keeps personal reminders,
   including current browser devices, and `overview.reminders[]` lists the pending ones
-  (`{message, conv?, from, title, due, overdue}`, soonest first). POST
+  (`{message, conv?, from, title, due, overdue, revision?, writer?}`, soonest first).
+  The optional `revision` and `writer` identify the host's generation for reconciling immediate
+  presentation: an older local preview must yield to a newer generation, even
+  with the same due time. Treat this pair as opaque; it grants no authority.
+  Older hosts without it require conservative reconciliation against the
+  overview sequence. POST
   `/api/remind` `{id, due}` (unix seconds, in the future) sets or moves the
   reminder on a message stored here, received or sent; `/api/remind/done`
   and `/api/remind/cancel` `{id}` end it. Their existing `{note}` result may add
@@ -640,6 +645,12 @@ types are the Go structs in `internal/ui/*.go`, generated into
   overview and the optional `seq` on DM/thread views. Reconcile confirmed
   attention promptly and preserve newer snapshots when older loads finish.
   A read action's success alone does not prove its generation CAS won.
+  Each reminder write accepts optional `expected:{revision,writer?}` copied from
+  the selected reminder. The host atomically rejects a changed generation;
+  it never applies an older selection to a newer reminder. `revision:0` means
+  no pending reminder and is used for explicit creation. Omit the guard only
+  for older providers without generation metadata. Keep failed intent for
+  explicit retry against refreshed state; never retry a stale mutation silently.
   Only the person is reminded, on this
   computer (a notification while AgentNet runs, window open or not): nothing
   is sent and the message is unchanged; a reply to it ends it, but an

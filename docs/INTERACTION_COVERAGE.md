@@ -5,6 +5,12 @@ Slack/Telegram performance. Every interaction a user can click must be tested.
 Publication is blocked until this is demonstrated. The updater-only candidate
 `3f9797f641a9707f3f945d35d6de6d5d810165de` is a baseline, not a qualified release.
 
+Release authorization, October 26, 2026: Sergey explicitly authorized driving
+the next fully responsive release, including generated assets, commit, push,
+deployment and publication, without further approval requests. The earlier
+runtime-artifact approval question is resolved. This authorization does not
+waive the responsiveness, recovery, platform, skin or release verification gates.
+
 ## Hard gate: reuse the working messenger implementation
 
 Owner correction, October 26, 2026: copy what already works in Telegram/Slack.
@@ -161,8 +167,47 @@ Touch injection now waits for actual hit-test readiness after a closing modal;
 it no longer dispatches through the departing backdrop. Original failed runs
 remain in temporary evidence. These fixture repairs are not product fixes.
 
-Outstanding scope includes reminder local intent/generation handling, remaining
-settings/participation/bulk flows, real-backend large-history startup/catch-up,
+Reminder local intent now uses the same inspected Telegram mutation/recovery
+pattern. Set and Move close their sheet and show the chosen reminder immediately;
+Done and Cancel remove its due attention immediately. A separate pending status
+names the affected reminder. Failure restores current canonical state and retains
+the chosen time for explicit retry. Duplicate actions share one write; conflicting
+actions cannot reuse its result. A removed Details sheet stays closed when a
+newer linked reminder arrives. Unconfirmed older-provider readback retries reads
+only, without replaying the write. Pending/failed intent prevents automatic reload.
+
+The existing native reminder revision and browser revision/writer are exposed as
+optional view fields. The existing reminder routes accept an optional expected
+generation. Native SQL updates and browser checked IndexedDB writes reject stale
+Move/Done/Cancel and duplicate create operations, including a newer generation
+with the same due time; an old move cannot resurrect a completed reminder.
+No schema, transport, execution permission or native notification authority changes.
+Older skins keep their existing unguarded route behavior; complete skin update
+and qualification remain necessary before release.
+
+`TestReminderChangesRendered` executes actual Store/Reminders/RemindSheet controls
+with trusted mouse input at 1440/390 pixels and 100/1,000 loaded messages. Done,
+Cancel, Move, Set, Retry, Dismiss error and read-only confirmation recovery pass
+with held/refused writes, newer same-due synchronization, duplicate input and
+unrelated typing/navigation. The focused race run observes 4.2–11.1 ms from the
+click event to the intended DOM change for measured Done/Move/Set and 18.4–27.9 ms
+to a two-frame presentation opportunity. These are individual synthetic-host
+observations, not p95, physical paint, touch execution or comparator evidence.
+Pending and recovered wide/narrow screenshots were inspected. Native conditional
+storage tests, browser generation tests, exact response/readback checks and live
+generation projection tests pass; the preceding local edit/delete/topic and
+editor-draft regressions also pass under the race detector.
+The rebuilt shipping bundle passes its checksum/type contract and the 44-action
+Outbox functional journey. Real live-host reminder controls pass New York/Kyiv
+date/DST cases at desktop and narrow widths, including Cancel/Create/Done and
+separate pending-versus-confirmed completion. Conflicting reminder controls are
+disabled until their existing write is confirmed; unrelated input stays usable.
+The browser guard executes 42 checks against both memory storage and Chromium
+IndexedDB. `go vet ./...` passes. The Outbox diagnostic still observes 123.1 ms
+for opening an original message; complete responsiveness qualification is open.
+
+Outstanding scope includes remaining settings/participation/bulk flows,
+real-backend large-history startup/catch-up,
 complete rendered inventory reconciliation, all skins and native platforms,
 and measured comparable messenger baselines. Existing successful representative
 suites do not close those gaps. Source/build validation is not installation.
@@ -188,6 +233,7 @@ this document records the test contract and coverage gaps.
 | P9 | A later reaction removal survives returning to its chat | root | source candidate; rendered regression passes | Reproduced the existing revisit failure on unchanged `edec2bab`; keep the exact actor/target/emoji write lane when returning, so removal queues behind an unfinished addition. DM/group/thread and stale-response/workspace cases pass |
 | P10 | Timeline day/run comparisons avoid repeated timestamp parsing | root | source candidate; focused regressions pass | CPU profile identified repeated `sameDay` conversions; one conversion per message now supplies adjacent run/day comparisons. Four device zones, DST, midnight, invalid input, unread boundaries and 10,000-message conversion count checked |
 | P11 | Large invite directories avoid repeated presence and mention scans | root | source candidate; source parity/cost checks pass | Profiled 1,000-person dialog openings improve from 333/256 ms to 154/120 ms in one diagnostic pair; remaining latency and comparative qualification stay open |
+| P12 | Reminder actions change local attention immediately and preserve newer generations | root | native storage, browser/IndexedDB and rendered checks pass; full skin/platform qualification open | Set/Move/Done/Cancel, duplicate input, held/refused writes, newer same-due state, retained retry, stale-dialog closure and read-only confirmation recovery exercised. Optional conditional writes use existing generations; no schema or authority changes |
 | U1 | Update version checks do not depend on chat projection | root | verified source only | Existing lightweight endpoint; real blocked-chat regression, native three-OS/race tests and live patched check at 1.089ms; installed app still v0.9.5 |
 | X1 | Confusing history/review screen explains state and next action accurately | UX reviewer/root | investigating | Owner screenshot mixes saved history, unknown original agent and contradictory continuation/approval instructions |
 | H1 | Pi/OMP idle notices do not repeat remaining items as new | root | candidate tested; installed activation open | Passive activity uses one native status slot. Pi/OMP focused regressions and isolated real Pi rendering pass; prompt acknowledgement remains tied to native persistence. Existing sessions not reloaded |

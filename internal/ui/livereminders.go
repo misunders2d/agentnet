@@ -20,7 +20,7 @@ func (l *Live) reminders() ([]ReminderView, error) {
 	}
 	out := make([]ReminderView, 0, len(rs))
 	for _, r := range rs {
-		out = append(out, ReminderView{Message: r.Message, Conv: r.Conv, From: r.From, Title: l.firstLineOf(r), Due: time.Unix(r.Due, 0), Overdue: r.Overdue})
+		out = append(out, ReminderView{Message: r.Message, Conv: r.Conv, From: r.From, Title: l.firstLineOf(r), Due: time.Unix(r.Due, 0), Overdue: r.Overdue, Revision: r.Revision})
 	}
 	return out, nil
 }
@@ -71,6 +71,24 @@ func (l *Live) DoneReminder(id string) error { return l.reminderResult(l.a.DoneR
 // CancelReminder implements Reminders.
 func (l *Live) CancelReminder(id string) error { return l.reminderResult(l.a.CancelReminder(id)) }
 
+func (l *Live) changeReminder(id string, due time.Time, action string, expected reminderGeneration) error {
+	if expected.Revision < 0 || expected.Writer != "" {
+		return Refuse("invalid reminder generation")
+	}
+	var err error
+	switch action {
+	case "":
+		_, err = l.a.SetReminder(id, due, expected.Revision)
+	case "done":
+		err = l.a.DoneReminder(id, expected.Revision)
+	case "cancel":
+		err = l.a.CancelReminder(id, expected.Revision)
+	default:
+		return NotFound("no such reminder control")
+	}
+	return l.reminderResult(err)
+}
+
 // Read back the exact original after a successful action. A concurrent newer
 // pending generation stays pending; an action's requested due time is no proof.
 func (l *Live) reminderSnapshot(id string) (*ReminderView, error) {
@@ -78,5 +96,5 @@ func (l *Live) reminderSnapshot(id string) (*ReminderView, error) {
 	if err != nil || !found || r.State != client.ReminderPending {
 		return nil, err
 	}
-	return &ReminderView{Message: r.Message, Conv: r.Conv, From: r.From, Title: l.firstLineOf(r), Due: time.Unix(r.Due, 0), Overdue: r.Overdue}, nil
+	return &ReminderView{Message: r.Message, Conv: r.Conv, From: r.From, Title: l.firstLineOf(r), Due: time.Unix(r.Due, 0), Overdue: r.Overdue, Revision: r.Revision}, nil
 }

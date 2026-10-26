@@ -1,17 +1,14 @@
 // Reminders ("Remind me later", MEL-528): a personal reminder on a received
-// or sent message, kept on this computer. It only asks for this person's attention
-// at the time they chose: nothing is sent, nobody else sees it, and the
-// message stays as it is. A reply to the message ends it; so do Done and
-// Cancel. When it comes due, this computer shows a notification while
-// AgentNet runs here, even with this window closed (client/remind.go).
-// A browser device keeps no reminders (overview.remind is false there), so
-// nothing here is drawn on it.
-import { useId, useMemo, useRef, useState } from "react";
+// or sent message, shared with this person's verified devices. It only asks
+// for their attention; the original message stays unchanged. Done, Cancel and
+// a reply end it. The host's remind capability controls availability.
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { IconAlarm, IconAlarmSnooze, IconCalendar, IconCheck } from "@tabler/icons-react";
 import type { T } from "../api";
 import { useAgentNames, useApp } from "../context";
 import { REMIND, agentName, dueText, firstLine, isMine, localInput, nameOf, personOf, reminderTimes, timeZone } from "../model";
 import { useStore, type Store } from "../store";
+import { useRetainedText } from "../retained-text";
 import { AgentAvatar, PersonAvatar } from "../ui/Avatar";
 import { Button } from "../ui/Button";
 import { Sheet } from "../ui/Sheet";
@@ -48,17 +45,21 @@ export function RemindSheet({ open, onOpenChange, m, r }: { open: boolean; onOpe
   const store = useApp();
   // The quick times are counted from when the sheet opened.
   const times = useMemo(() => reminderTimes(), [open]);
-  const [pick, setPick] = useState<number | "custom">(0);
-  const [at, setAt] = useState(() => localInput(new Date(Date.now() + REMIND.customAhead * 60e3)));
+  const [picked, setPicked, pickedDraft] = useRetainedText("reminder-choice:" + m.id, "0");
+  const pick = picked === "custom" ? "custom" : Number(picked);
+  const setPick = (value: number | "custom") => setPicked(String(value));
+  const initialAt = useMemo(() => localInput(new Date(Date.now() + REMIND.customAhead * 60e3)), []);
+  const [at, setAt, dateDraft] = useRetainedText("reminder-date:" + m.id, initialAt);
   const dateField = useRef<HTMLInputElement>(null);
   const dateHint = useId();
   const calendar = useRef<HTMLInputElement>(null);
   const [showCalendar, setShowCalendar] = useState(false);
   const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
+  const change = useStore(store, s => s.reminderChanges[m.id]);
+  const busy = !!change && change.status !== "failed";
   const zone = timeZone();
 
-  const save = async () => {
+  const save = () => {
     if (pick === "custom" && !/^\d{4}-\d{2}-\d{2}$/.test(at.split("T")[0])) {
       setError("Enter the date as YYYY-MM-DD."); dateField.current?.focus(); return;
     }
@@ -67,10 +68,10 @@ export function RemindSheet({ open, onOpenChange, m, r }: { open: boolean; onOpe
     if (due.getTime() <= Date.now()) { setError("Choose a time in the future."); return; }
     if (pick === "custom" && localInput(due) !== at) { setError("Choose a valid date and time."); dateField.current?.focus(); return; }
     setError("");
-    setBusy(true);
-    const ok = await store.changeReminder((a) => a.remind(m.id, due), (r ? "Reminder moved to " : "I’ll remind you ") + dueText(due));
-    setBusy(false);
-    if (ok !== undefined) onOpenChange(false);
+    const clearChoice = pickedDraft.capture(), clearDate = dateDraft.capture();
+    const work = store.changeReminder({ action: "set", message: m.id, due: due.toISOString(), title: m.text }, "Reminder change saved");
+    onOpenChange(false);
+    void work.then(result => { if (result !== undefined) { clearChoice(); clearDate(); } });
   };
 
   const choice = (key: number | "custom", label: string, sub?: string) => (
@@ -143,6 +144,7 @@ export function RemindSheet({ open, onOpenChange, m, r }: { open: boolean; onOpe
  *  once it is due), Done and Cancel. */
 export function ReminderLine({ r, m, right }: { r: T.ReminderView; m: Remindable; right?: boolean }) {
   const store = useApp();
+  const busy = useStore(store, s => !!s.reminderChanges[m.id] && s.reminderChanges[m.id].status !== "failed");
   const [move, setMove] = useState<boolean | null>(null);
   const link = "relative font-bold underline decoration-current/30 underline-offset-2 before:absolute before:-inset-x-1 before:top-1/2 before:h-11 before:-translate-y-1/2 before:content-[''] hover:decoration-current";
   return (
@@ -150,11 +152,11 @@ export function ReminderLine({ r, m, right }: { r: T.ReminderView; m: Remindable
       {r.overdue ? <IconAlarmSnooze size={15} aria-hidden="true" /> : <IconAlarm size={15} aria-hidden="true" />}
       <span>{r.overdue ? "Reminder due since " : "Reminder "}{dueText(r.due)}</span>
       <span aria-hidden="true" className="text-muted">·</span>
-      <button type="button" className={link} onClick={() => setMove(true)}>{r.overdue ? "Later…" : "Change…"}</button>
+      <button type="button" className={link} disabled={busy} onClick={() => setMove(true)}>{r.overdue ? "Later…" : "Change…"}</button>
       <span aria-hidden="true" className="text-muted">·</span>
-      <button type="button" className={link} onClick={() => void store.changeReminder((a) => a.remindDone(m.id), "Reminder done")}>Done</button>
+      <button type="button" className={link} disabled={busy} onClick={() => void store.changeReminder({ action: "done", message: m.id }, "Reminder change saved")}>Done</button>
       <span aria-hidden="true" className="text-muted">·</span>
-      <button type="button" className={link} onClick={() => void store.changeReminder((a) => a.remindCancel(m.id), "Reminder cancelled")}>Cancel</button>
+      <button type="button" className={link} disabled={busy} onClick={() => void store.changeReminder({ action: "cancel", message: m.id }, "Reminder change saved")}>Cancel</button>
       {move !== null && <RemindSheet open={move} onOpenChange={setMove} m={m} r={r} />}
     </div>
   );
@@ -167,10 +169,14 @@ export function ReminderLine({ r, m, right }: { r: T.ReminderView; m: Remindable
 export function Reminders() {
   const store = useApp();
   const o = useStore(store, (s) => s.overview);
+  const changes = useStore(store, s => s.reminderChanges);
   const names = useAgentNames();
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<T.ReminderView | null>(null);
   const rs = o?.remind ? o.reminders || [] : [];
+  useEffect(() => {
+    if (selected && !rs.some(r => r.message === selected.message)) setSelected(null);
+  }, [rs, selected]);
   if (!o?.remind) return <p className="py-5 text-text-2">Personal reminders are unavailable on this host.</p>;
   const sorted = [...rs].sort((a, b) => Number(b.overdue) - Number(a.overdue) || a.due.localeCompare(b.due));
   const due = rs.filter((r) => r.overdue).length;
@@ -182,6 +188,7 @@ export function Reminders() {
         {due > 0 && <span className="rounded-full bg-act px-2 py-px text-[11px] tracking-normal text-act-ink stroke tnum">{due} due</span>}
       </h2>
       <p className="mb-3 text-sm text-text-2">Only you are reminded. Nothing is sent. Open a reminder to see its original message.</p>
+      {Object.keys(changes).map(message => <ReminderChangeStatus key={message} message={message} />)}
       {!!rs.length&&<label className="block text-sm font-semibold">Find reminders<input type="search" value={query} onChange={e=>setQuery(e.target.value)} placeholder="Message or sender" className="my-2 block min-h-11 w-full rounded-xl border border-outline bg-surface px-3 text-[16px] outline-none focus-visible:outline-3 focus-visible:outline-agent-ink"/></label>}
       {!rs.length&&<p className="py-5">No reminders pending on this device.</p>}
       {!!rs.length&&!shown.length&&<p className="py-5">No reminders match your search.</p>}
@@ -198,6 +205,7 @@ export function Reminders() {
 
 function ReminderRow({ r, o, names, onChange }: { r: T.ReminderView; o: T.Overview | null; names: Record<string, string>; onChange:()=>void }) {
   const store = useApp();
+  const busy = useStore(store, s => !!s.reminderChanges[r.message] && s.reminderChanges[r.message].status !== "failed");
   const from = reminderFrom(r, o, names);
   const p = personOf(r.from, o);
   const face = r.conv ? <PersonAvatar name={from} seed={p?.person || r.from} size={36} /> : <AgentAvatar seed={r.from} size={36} mood={r.overdue ? "waiting" : "neutral"} />;
@@ -216,11 +224,24 @@ function ReminderRow({ r, o, names, onChange }: { r: T.ReminderView; o: T.Overvi
         </span>
       </button>
       <Button size="sm" variant="ghost" onClick={onChange}>Details</Button>
-      <button type="button" aria-label={"Reminder done: " + (firstLine(r.title, 40) || "a message")} title="Done"
-        onClick={() => void store.changeReminder((a) => a.remindDone(r.message), "Reminder done")}
+      <button type="button" disabled={busy} aria-label={"Reminder done: " + (firstLine(r.title, 40) || "a message")} title="Done"
+        onClick={() => void store.changeReminder({ action: "done", message: r.message }, "Reminder change saved")}
         className="grid size-11 shrink-0 place-items-center rounded-full text-text-2 hover:bg-sunken hover:text-ink"><IconCheck size={20} /></button>
     </li>
   );
+}
+
+/** Pending presentation is separate from both saved reminders and due attention. */
+export function ReminderChangeStatus({ message }: { message: string }) {
+  const store = useApp();
+  const p = useStore(store, s => s.reminderChanges[message]);
+  if (!p) return null;
+  return <div data-reminder-change={message} role={p.status === "failed" ? "alert" : "status"} className="my-2 flex flex-wrap items-center gap-2 text-sm text-text-2">
+    {p.intent.title && <span className="max-w-full truncate font-semibold">{firstLine(p.intent.title, REMIND.titleMax)}</span>}
+    <span>{p.status === "failed" ? "Reminder change failed: " + p.error : p.status === "confirming" ? "Reminder change saved; checking current state…" : p.intent.action === "set" ? "Saving reminder…" : "Removing reminder…"}</span>
+    {p.status === "failed" && <><Button size="sm" onClick={() => void store.changeReminder(p.intent, "Reminder change saved")}>Retry reminder</Button><Button size="sm" variant="ghost" onClick={() => store.discardReminderError(message)}>Dismiss error</Button></>}
+    {p.status === "confirming" && <><span>{p.error}</span><Button size="sm" onClick={() => void store.confirmReminder(message)}>Check reminder</Button></>}
+  </div>;
 }
 
 /** latestReceived: the newest message in a conversation that can take a

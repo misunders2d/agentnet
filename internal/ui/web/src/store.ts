@@ -77,6 +77,21 @@ export interface PendingReaction {
   confirmed?: boolean; // durable desired remove/add; projection still pending
   priorRead?: Promise<View>; // latest read before the durable acknowledgement
 }
+export interface ReminderIntent {
+  message: string;
+  action: "set" | "done" | "cancel";
+  due?: string;
+  title?: string;
+}
+export interface ReminderChange {
+  intent: ReminderIntent;
+  original: string;
+  seq: number;
+  reminder: T.ReminderView | null;
+  status: "saving" | "confirming" | "failed";
+  error?: string;
+}
+const reminderVersion = (r?: T.ReminderView) => JSON.stringify(r ? [r.message, r.conv, r.from, r.due, r.revision, r.writer] : null);
 export const reactionScope = (c: T.ControlAction) => JSON.stringify([c.conv || "", c.id, c.dir]);
 
 interface PendingDismiss {
@@ -121,6 +136,7 @@ export interface State {
   reactionPending: Record<string, Record<string, PendingReaction>>;
   dismissPending: Record<string, PendingDismiss>;
   messageChanges: Record<string, MessageChange>;
+  reminderChanges: Record<string, ReminderChange>;
   panel: boolean;                                         // "In this chat" (desktop panel, phone sheet)
   readVisit: ReadVisit | null;
   contentRevision: number; // successful content loads; typing/presence do not advance choice lists
@@ -132,7 +148,7 @@ const draftsKey = (ws: string) => brand.storage + ".drafts." + ws;
 
 // unsentIn: what a reload would lose: a draft's text or files, or a send
 // not yet stored.
-export const unsentIn = (s: Pick<State, "drafts" | "unsent"> & Partial<Pick<State,"scheduleSaves" | "messageChanges">>) => s.unsent || Object.values(s.messageChanges || {}).some(p => p.status === "pending" || p.status === "failed" && p.action === "edit") || Object.values(s.scheduleSaves || {}).some(slot=>!!slot.attempt && (slot.status==="saving" || slot.status==="uncertain")) || Object.values(s.drafts).some((d) => d.text || (d.files && d.files.length));
+export const unsentIn = (s: Pick<State, "drafts" | "unsent"> & Partial<Pick<State,"scheduleSaves" | "messageChanges" | "reminderChanges">>) => s.unsent || Object.keys(s.reminderChanges || {}).length > 0 || Object.values(s.messageChanges || {}).some(p => p.status === "pending" || p.status === "failed" && p.action === "edit") || Object.values(s.scheduleSaves || {}).some(slot=>!!slot.attempt && (slot.status==="saving" || slot.status==="uncertain")) || Object.values(s.drafts).some((d) => d.text || (d.files && d.files.length));
 
 const recovery = { update: [500, 1000, 2000, 4000, 8000, 15000, 30000], missed: [1000, 3000, 8000] };
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -151,6 +167,9 @@ export class Store {
   private overviewRequest = 0;
   private confirmedReads = new Map<string, ConfirmedRead>();
   private confirmedReminders = new Map<string, { seq: number; reminder: T.ReminderView | null }>();
+  private reminderWork = new Map<string, { intent: string; work: Promise<ReminderResult | undefined> }>();
+  private reminderState?: { source: State; value: State };
+  private reminderOverviewCache?: { source: T.Overview; changes: State["reminderChanges"]; value: T.Overview };
   private reactionSequence = 0;
   private reacting = new Map<string, { pending: PendingReaction; work: Promise<{ note: string } | undefined> }>();
   private dismissSequence = 0;
@@ -201,7 +220,7 @@ export class Store {
       this.set({ ...(o ? this.viewPatch(o, this.state.views[o.id] ?? null, true) : {}), unsent: this.sends.unsent() });
     });
     this.state = {
-      tab: "chats", overview: null, open: null, pending: null, views: {}, dm: null, thread: null, typing: null, invitations: [], reactionPending: {}, dismissPending: {}, messageChanges: {},
+      tab: "chats", overview: null, open: null, pending: null, views: {}, dm: null, thread: null, typing: null, invitations: [], reactionPending: {}, dismissPending: {}, messageChanges: {}, reminderChanges: {},
       conn: "loading", version: "", newVersion: "", unsent: false, drafts: this.loadDrafts(), scheduleSaves:{}, toasts: [], messageLanding: null, loadError: "", groupContextPending: "", invite: null, topicBusy: {}, topicPreviews: {}, panel: false, section: "", agentNames: {}, readVisit: null, contentRevision: 0,
     };
     const saved=host.workspaces?.state?.(host.workspace.id)?.comicDrafts as {handle?:string;open:Open;dm:T.DMThread|null;thread:T.Thread|null;tab:State['tab']}|undefined;
@@ -212,7 +231,7 @@ export class Store {
 
   // ---- subscription
   get = () => {
-    const s = this.presentMessages(this.presentTopics());
+    const s = this.presentReminders(this.presentMessages(this.presentTopics()));
     if (!s.overview || !Object.keys(s.dismissPending).length) return s;
     if (this.dismissState?.source === s) return this.dismissState.value;
     if (this.dismissOverview?.source !== s.overview || this.dismissOverview.pending !== s.dismissPending) {
@@ -222,6 +241,28 @@ export class Store {
     this.dismissState = { source: s, value };
     return value;
   };
+
+  private presentReminders(s: State): State {
+    if (!s.overview || !Object.keys(s.reminderChanges).length) return s;
+    if (this.reminderState?.source === s) return this.reminderState.value;
+    const cached = this.reminderOverviewCache;
+    let overview = s.overview;
+    if (cached?.source === overview && cached.changes === s.reminderChanges) overview = cached.value;
+    else {
+      for (const p of Object.values(s.reminderChanges)) {
+        const current = overview.reminders?.find(r => r.message === p.intent.message);
+        // A newer generation wins even when another device chose the same time.
+        // Hosts without generation metadata use the more conservative sequence.
+        if (p.status === "failed" || reminderVersion(current) !== p.original ||
+            (!current?.revision && overview.seq !== p.seq)) continue;
+        overview = this.reminderOverview(overview, p.intent.message, p.reminder);
+      }
+      this.reminderOverviewCache = { source: s.overview, changes: s.reminderChanges, value: overview };
+    }
+    const value = overview === s.overview ? s : { ...s, overview };
+    this.reminderState = { source: s, value };
+    return value;
+  }
 
   private presentTopics(): State {
     const s = this.state;
@@ -490,7 +531,7 @@ export class Store {
   private async reload(first: boolean, catalogs = true) {
     const request = ++this.overviewRequest;
     const o = await this.api.overview();
-    if (!this.alive || request !== this.overviewRequest) return;
+    if (!this.alive || request !== this.overviewRequest) return false;
     const patch: Partial<State> = { ...(catalogs ? {contentRevision:this.state.contentRevision+1}:{}), overview: share(this.state.overview, this.attentionOverview(o)), loadError: "", conn: "live" };
     if (first || !this.state.version) patch.version = o.version;
     else if (o.version && o.version !== this.state.version) patch.newVersion = o.version;
@@ -498,6 +539,7 @@ export class Store {
     this.pruneDismissals();
     if (o.groups) this.set({ invitations: share(this.state.invitations, o.group_invitations || []) });
     if (catalogs) void this.loadAgentNames();
+    return true;
   }
 
   // A small committed result can arrive before an older workspace build.
@@ -567,24 +609,82 @@ export class Store {
     return { ...o, reminders };
   }
 
-  async changeReminder(fn: (a: Api) => Promise<ReminderResult>, ok?: string): Promise<ReminderResult | undefined> {
-    if (!this.alive) return undefined;
-    try {
-      const result = await fn(this.api);
-      if (!this.alive) return undefined;
-      const o = this.state.overview;
-      if (o && typeof result.seq === "number" && result.message && result.reminder !== undefined &&
-          result.seq >= o.seq && result.seq >= (this.confirmedReminders.get(result.message)?.seq || 0)) {
-        this.confirmedReminders.set(result.message, { seq: result.seq, reminder: result.reminder });
-        this.set({ overview: share(o, this.reminderOverview(o, result.message, result.reminder)) });
-      }
-      if (ok) this.toast(ok, "ok");
-      void this.refetch();
-      return result;
-    } catch (e) {
-      if (this.alive && errorText(e) !== "stale or disconnected workspace") this.toast(errorText(e), "error");
-      return undefined;
+  changeReminder(intent: ReminderIntent, ok?: string): Promise<ReminderResult | undefined> {
+    if (!this.alive) return Promise.resolve(undefined);
+    const key = intent.message, identity = JSON.stringify([intent.action, intent.due]);
+    const running = this.reminderWork.get(key);
+    if (running) {
+      if (running.intent === identity) return running.work;
+      this.toast("Wait for this reminder change to finish.", "error");
+      return Promise.resolve(undefined);
     }
+    if (this.state.reminderChanges[key]?.status === "confirming") {
+      this.toast("Check the saved reminder before changing it again.", "error");
+      return Promise.resolve(undefined);
+    }
+    const o = this.state.overview, original = o?.reminders?.find(r => r.message === key);
+    const expected = original?.revision !== undefined ? { revision: original.revision, writer: original.writer } : original ? undefined : { revision: 0 };
+    const view = this.state.open && this.state.views[this.state.open.id];
+    const message = view?.messages?.find(m => m.id === key);
+    const reminder = intent.action === "set" ? { ...original, message: key, due: intent.due!, overdue: false,
+      title: original?.title || intent.title || "A message", from: original?.from || message?.from || o?.me.address || "",
+      conv: original?.conv || (message && this.state.open?.kind === "dm" ? this.state.open.id : undefined) } : null;
+    this.set({ reminderChanges: { ...this.state.reminderChanges, [key]: {
+      intent: { ...intent, title: intent.title || original?.title }, original: reminderVersion(original), seq: o?.seq || 0, reminder, status: "saving",
+    } } });
+    const work = (async () => {
+      try {
+        const result = await (intent.action === "set" ? this.api.remind(key, new Date(intent.due!), expected) :
+          intent.action === "done" ? this.api.remindDone(key, expected) : this.api.remindCancel(key, expected));
+        if (!this.alive) return undefined;
+        const o = this.state.overview;
+        if (typeof result.seq === "number" && result.message === key && result.reminder !== undefined) {
+          const reminderChanges = { ...this.state.reminderChanges }; delete reminderChanges[key];
+          let overview = o;
+          if (o && result.seq >= o.seq && result.seq >= (this.confirmedReminders.get(key)?.seq || 0)) {
+            this.confirmedReminders.set(key, { seq: result.seq, reminder: result.reminder });
+            overview = share(o, this.reminderOverview(o, key, result.reminder));
+          }
+          this.set({ overview, reminderChanges });
+          void this.refetch();
+        } else {
+          this.set({ reminderChanges: { ...this.state.reminderChanges, [key]: { ...this.state.reminderChanges[key], status: "confirming" } } });
+          void this.confirmReminder(key);
+        }
+        if (ok) this.toast("Reminder change saved", "ok");
+        return result;
+      } catch (e) {
+        if (this.alive) this.set({ reminderChanges: { ...this.state.reminderChanges, [key]: {
+          ...this.state.reminderChanges[key], status: "failed", error: errorText(e),
+        } } });
+        if (this.alive) void this.refetch();
+        return undefined;
+      } finally { this.reminderWork.delete(key); }
+    })();
+    this.reminderWork.set(key, { intent: identity, work });
+    return work;
+  }
+
+  async confirmReminder(message: string) {
+    const change = this.state.reminderChanges[message];
+    if (change?.status !== "confirming") return;
+    try {
+      const applied = await this.reload(false, false);
+      if (applied && this.state.reminderChanges[message] === change) {
+        const reminderChanges = { ...this.state.reminderChanges }; delete reminderChanges[message];
+        this.set({ reminderChanges });
+      }
+    } catch (e) {
+      if (this.state.reminderChanges[message] === change) this.set({ reminderChanges: {
+        ...this.state.reminderChanges, [message]: { ...change, error: errorText(e) },
+      } });
+    }
+  }
+
+  discardReminderError(message: string) {
+    if (this.state.reminderChanges[message]?.status !== "failed") return;
+    const reminderChanges = { ...this.state.reminderChanges }; delete reminderChanges[message];
+    this.set({ reminderChanges });
   }
 
   private async recover(schedule: number[]) {

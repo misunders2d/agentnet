@@ -634,6 +634,13 @@ func TestLiveReminders(t *testing.T) {
 		o.Reminders[0].From != alice.Address || o.Reminders[1].Message != dev.ID || o.Reminders[1].Conv != "" || o.Reminders[1].Title != "a device message" {
 		t.Fatalf("reminders: %+v", o.Reminders)
 	}
+	for _, shown := range o.Reminders {
+		stored, found, err := bob.Reminder(shown.Message)
+		snapshot, snapshotErr := pb.reminderSnapshot(shown.Message)
+		if err != nil || !found || shown.Revision < 1 || shown.Revision != stored.Revision || snapshotErr != nil || snapshot == nil || snapshot.Revision != shown.Revision {
+			t.Fatalf("reminder generation differs from stored source: view=%+v stored=%+v snapshot=%+v err=%v/%v", shown, stored, snapshot, err, snapshotErr)
+		}
+	}
 	eventually("the DM reminder overdue", func() bool { o, _ = pb.Overview(); return o.Reminders[0].Overdue })
 	if d, _ := pb.DM(conv); d.Messages[0].State != before.Messages[0].State || before.Messages[0].State != "manual" {
 		t.Fatalf("the reminded question changed: %+v (was %s)", d.Messages[0], before.Messages[0].State)

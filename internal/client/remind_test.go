@@ -1,6 +1,7 @@
 package client
 
 import (
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -9,6 +10,59 @@ import (
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
+
+func TestReminderConditionalChangesPreserveNewerGeneration(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.alice)
+	runAgent(t, w.bob)
+	id := receiveAt(t, w, envelope.KindMessage, "conditional reminder")
+	due := time.Now().Add(time.Hour)
+	first, err := w.bob.SetReminder(id, due, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.bob.SetReminder(id, due, 0); !errors.Is(err, ErrReminderChanged) {
+		t.Fatalf("duplicate create: %v", err)
+	}
+	newer, err := w.bob.SetReminder(id, due, first.Revision)
+	if err != nil || newer.Revision <= first.Revision {
+		t.Fatalf("same-due new generation: %+v %v", newer, err)
+	}
+	for _, action := range []string{"move", "done", "cancel"} {
+		var err error
+		switch action {
+		case "move":
+			_, err = w.bob.SetReminder(id, due.Add(time.Hour), first.Revision)
+		case "done":
+			err = w.bob.DoneReminder(id, first.Revision)
+		case "cancel":
+			err = w.bob.CancelReminder(id, first.Revision)
+		}
+		if !errors.Is(err, ErrReminderChanged) {
+			t.Fatalf("stale %s: %v", action, err)
+		}
+		after := reminderOf(t, w.bob, id)
+		if after.State != ReminderPending || after.Revision != newer.Revision || after.Due != newer.Due {
+			t.Fatalf("stale %s changed newer reminder: %+v", action, after)
+		}
+	}
+	if err := w.bob.DoneReminder(id, newer.Revision); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.bob.SetReminder(id, due, newer.Revision); !errors.Is(err, ErrReminderChanged) {
+		t.Fatalf("old move resurrected completion: %v", err)
+	}
+	recreated, err := w.bob.SetReminder(id, due, 0)
+	if err != nil || recreated.State != ReminderPending {
+		t.Fatalf("explicit create after completion: %+v %v", recreated, err)
+	}
+	if err := w.bob.CancelReminder(id, recreated.Revision); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.bob.DoneReminder(id, -1); err == nil {
+		t.Fatal("negative generation must not disable the guard")
+	}
+}
 
 // remindWorld: alice and bob; bob's daemon runs with its notifications
 // recorded and clicks that open the thread or the page. The thread's click

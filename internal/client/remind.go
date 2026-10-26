@@ -54,6 +54,20 @@ type Reminder struct {
 // ErrNoReminder means there is no pending reminder on that message.
 var ErrNoReminder = errors.New("no pending reminder on that message")
 
+// ErrReminderChanged rejects an action selected before a newer local or synced
+// generation arrived. It never modifies that newer reminder.
+var ErrReminderChanged = errors.New("that reminder changed; refresh and try again")
+
+func reminderExpectation(expected []int64) (int64, error) {
+	if len(expected) == 0 {
+		return -1, nil
+	}
+	if len(expected) != 1 || expected[0] < 0 {
+		return 0, errors.New("invalid reminder generation")
+	}
+	return expected[0], nil
+}
+
 // maxReminderAhead bounds how far ahead a reminder may be set.
 const maxReminderAhead = 10 * 365 * 24 * time.Hour
 
@@ -61,7 +75,13 @@ const maxReminderAhead = 10 * 365 * 24 * time.Hour
 // existing one (a new revision: its attention is asked for again at the new
 // time). due must be in the future, and the message not one its sender
 // deleted.
-func (a *Agent) SetReminder(id string, due time.Time) (Reminder, error) {
+// Optional expected is the selected local generation; zero requires no pending
+// reminder. Omission preserves the CLI's explicit unconditional operation.
+func (a *Agent) SetReminder(id string, due time.Time, expected ...int64) (Reminder, error) {
+	revision, err := reminderExpectation(expected)
+	if err != nil {
+		return Reminder{}, err
+	}
 	now := time.Now()
 	if !due.After(now) {
 		return Reminder{}, errors.New("choose a time in the future")
@@ -74,7 +94,7 @@ func (a *Agent) SetReminder(id string, due time.Time) (Reminder, error) {
 	}
 	var conv sql.NullString
 	var ref, key string
-	err := a.store.db.QueryRow(`SELECT conv, coalesce(nullif(lid, ''), id), coalesce(verified_by, claimed_fp, '') FROM inbox WHERE id = ?
+	err = a.store.db.QueryRow(`SELECT conv, coalesce(nullif(lid, ''), id), coalesce(verified_by, claimed_fp, '') FROM inbox WHERE id = ?
 		UNION ALL SELECT conv, coalesce(nullif(lid, ''), id), ? FROM outbox WHERE id = ? LIMIT 1`, id, a.Self().Fingerprint(), id).Scan(&conv, &ref, &key)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Reminder{}, fmt.Errorf("no locally stored message %s", id)
@@ -87,10 +107,25 @@ func (a *Agent) SetReminder(id string, due time.Time) (Reminder, error) {
 	} else if retracted || retractedRef(a.store.db, conv.String, ref, key) {
 		return Reminder{}, errors.New("its sender deleted this message: there is nothing to be reminded of")
 	}
-	_, err = a.store.db.Exec(`INSERT INTO reminders(message, conv, due_at, state, rev, notified_rev, created_at, updated_at, sync_dirty)
+	var result sql.Result
+	if revision > 0 {
+		result, err = a.store.db.Exec(`UPDATE reminders SET due_at=?, rev=rev+1, updated_at=?, sync_dirty=1 WHERE message=? AND state=? AND rev=?`, due.Unix(), now.Unix(), id, ReminderPending, revision)
+	} else {
+		query := `INSERT INTO reminders(message, conv, due_at, state, rev, notified_rev, created_at, updated_at, sync_dirty)
 		VALUES(?, ?, ?, ?, 1, 0, ?, ?, 1)
-		ON CONFLICT(message) DO UPDATE SET due_at = excluded.due_at, state = excluded.state, rev = rev + 1, updated_at = excluded.updated_at, sync_dirty=1`,
-		id, conv, due.Unix(), ReminderPending, now.Unix(), now.Unix())
+		ON CONFLICT(message) DO UPDATE SET due_at = excluded.due_at, state = excluded.state, rev = rev + 1, updated_at = excluded.updated_at, sync_dirty=1`
+		if revision == 0 {
+			query += ` WHERE reminders.state != 'pending'`
+		}
+		result, err = a.store.db.Exec(query, id, conv, due.Unix(), ReminderPending, now.Unix(), now.Unix())
+	}
+	if err == nil && revision >= 0 {
+		if n, rowsErr := result.RowsAffected(); rowsErr != nil {
+			err = rowsErr
+		} else if n != 1 {
+			return Reminder{}, ErrReminderChanged
+		}
+	}
 	if err := a.store.done(err); err != nil {
 		return Reminder{}, err
 	}
@@ -105,19 +140,30 @@ func (a *Agent) SetReminder(id string, due time.Time) (Reminder, error) {
 
 // DoneReminder marks the pending reminder on id done; CancelReminder
 // cancels it. Neither touches the message.
-func (a *Agent) DoneReminder(id string) error { return a.endReminder(id, ReminderDone) }
+func (a *Agent) DoneReminder(id string, expected ...int64) error {
+	return a.endReminder(id, ReminderDone, expected...)
+}
 
 // CancelReminder cancels the pending reminder on id.
-func (a *Agent) CancelReminder(id string) error { return a.endReminder(id, ReminderCancelled) }
+func (a *Agent) CancelReminder(id string, expected ...int64) error {
+	return a.endReminder(id, ReminderCancelled, expected...)
+}
 
-func (a *Agent) endReminder(id, state string) error {
+func (a *Agent) endReminder(id, state string, expected ...int64) error {
+	revision, err := reminderExpectation(expected)
+	if err != nil {
+		return err
+	}
 	id = a.reminderLocalID(id)
-	res, err := a.store.db.Exec(`UPDATE reminders SET state = ?, updated_at = ?, sync_dirty=1 WHERE message = ? AND state = ?`,
-		state, time.Now().Unix(), id, ReminderPending)
+	res, err := a.store.db.Exec(`UPDATE reminders SET state = ?, updated_at = ?, sync_dirty=1 WHERE message = ? AND state = ? AND (? < 0 OR rev = ?)`,
+		state, time.Now().Unix(), id, ReminderPending, revision, revision)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n != 1 {
+		if revision >= 0 {
+			return ErrReminderChanged
+		}
 		return ErrNoReminder
 	}
 	a.store.changed()

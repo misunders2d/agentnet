@@ -118,6 +118,19 @@ check((await reopenedStore.get('inbox',id)).read===false&&(await reopenedStore.g
 const originalLookup=a.reminderOriginal;a.reminderOriginal=async()=>{throw Error('readback unavailable');};
 const noteOnly=await a.api('/api/remind',{id,due:due+120});a.reminderOriginal=originalLookup;
 check(noteOnly.note==='Reminder set.'&&!('reminder'in noteOnly)&&Date.parse((await pending(a)).find(r=>r.message===id).due)===(due+120)*1000,'readback failure returns note-only success without replaying or losing the saved reminder');
+const prior=(await pending(a)).find(r=>r.message===id),expected={revision:prior.revision,writer:prior.writer};
+check(expected.revision===prior.fact.revision&&expected.writer===prior.fact.writer,'browser exposes exact revision and writer for conditional UI changes');
+const advanced=await a.api('/api/remind',{id,due:due+120,expected});
+check(advanced.reminder.revision>expected.revision&&advanced.reminder.writer===a.fp,'same-due move advances the guarded generation');
+for(const action of ['', '/done', '/cancel']){
+ let refused=false;try{await a.api('/api/remind'+action,{id,due:due+240,expected});}catch(e){refused=/changed/.test(e.message);}
+ check(refused,'stale '+(action||'move')+' rejects before storage');
+ const current=(await pending(a)).find(r=>r.message===id);check(current.revision===advanced.reminder.revision&&current.due===advanced.reminder.due,'stale action preserves newer pending generation');
+}
+let wrongWriter=false;try{await a.api('/api/remind/done',{id,expected:{revision:advanced.reminder.revision,writer:b.fp}});}catch(e){wrongWriter=/changed/.test(e.message);}check(wrongWriter,'same numeric revision with different writer is not the selected generation');
+await a.api('/api/remind/done',{id,expected:{revision:advanced.reminder.revision,writer:advanced.reminder.writer}});
+const recreated=await a.api('/api/remind',{id,due:due+120,expected:{revision:0}});check(recreated.reminder?.message===id,'explicit absent-generation create may follow completion');
+let duplicate=false;try{await a.api('/api/remind',{id,due:due+240,expected:{revision:0}});}catch(e){duplicate=/changed/.test(e.message);}check(duplicate,'absent-generation create cannot overwrite a newer pending reminder');
 for(const e of engines)e.stop();
 if(typeof window!=='undefined'){reopenedStore.close();for(const e of engines){e.store.close();await new Promise((resolve,reject)=>{const req=indexedDB.deleteDatabase(e.fixtureStoreName);req.onsuccess=resolve;req.onerror=()=>reject(req.error);});}window.reminderSyncResult={ok:true,checks};}
 console.log('remindersync Engine checks: '+checks+' PASS');

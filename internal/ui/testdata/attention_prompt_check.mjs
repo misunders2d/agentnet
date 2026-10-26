@@ -17,7 +17,7 @@ const conv='a'.repeat(64),other='d'.repeat(64),topic='b'.repeat(32),sibling='c'.
 function fixture(kind='dm') {
  let now=0,nextTimer=0,seq=1,readHold,overviewHold,viewHold,reminderHold,reminderError=false,readError=false,notify,decorateOverview=o=>o,decorateView=v=>v;
  const timers=new Map(),calls=[],rows=[{id:'seen',topic,kind:'message',dir:'in',unread:true},{id:'sibling',topic:sibling,kind:'message',dir:'in',unread:true}];
- let reminders=[{message:'seen',conv,from:'peer/device',title:'Read this later',due:'2026-10-20T10:00:00Z',overdue:true}];
+ let reminders=[{message:'seen',conv,from:'peer/device',title:'Read this later',due:'2026-10-20T10:00:00Z',overdue:true,revision:1}];
  const view=(id=conv)=>decorateView({id,seq,peer:kind==='dm'?{}:'peer/device',kind:'group',messages:id===conv?structuredClone(rows):[],agents:[],topics:[{id:topic,unread:rows.filter(m=>m.topic===topic&&m.unread).length},{id:sibling,unread:rows.filter(m=>m.topic===sibling&&m.unread).length}],main_topic:{id:'main',unread:0}});
  const summary=()=>({id:conv,peer:'peer/device',unread:rows.filter(m=>m.unread).length,state:'active'});
  const overview=()=>decorateOverview({version:'test',seq,me:{address:'self/device'},remind:true,reminders:structuredClone(reminders),dms:kind==='dm'?[summary(),{id:other,unread:0}]:[],threads:kind==='thread'?[summary()]:[],unread_total:summary().unread,alert_total:summary().unread});
@@ -82,8 +82,8 @@ for(const kind of ['dm','thread'])for(const lane of ['overview','open-view'])awa
 });
 for(const action of ['move','done','cancel'])await check('reminder '+action+' prompt',async()=>{
  const f=fixture();await f.start();const blocked=f.holdOverview();f.releaseAt(blocked);const pending=f.store.refetch();await drain();
- const run=f.store.changeReminder?.bind(f.store)||f.store.run.bind(f.store);
- await run(a=>action==='move'?a.remind('seen',new Date('2026-10-21T12:00:00Z')):action==='done'?a.remindDone('seen'):a.remindCancel('seen'));
+ const run=f.store.changeReminder.bind(f.store);
+ await run({message:'seen',action:action==='move'?'set':action,due:action==='move'?'2026-10-21T12:00:00Z':undefined});
  await drain();const prompt=f.store.get().overview.reminders.filter(r=>r.overdue).length;
  await f.advance(9999);const beforeDeadline=f.store.get().overview.reminders.filter(r=>r.overdue).length,lateBadges=[];f.store.subscribe(()=>lateBadges.push(f.store.get().overview.reminders.filter(r=>r.overdue).length));
  await f.advance(1);await pending;await drain();const after=f.store.get().overview.reminders.filter(r=>r.overdue).length;f.store.stop();
@@ -113,12 +113,12 @@ for(const kind of ['dm','thread'])await check(kind+' newer visible unread surviv
  assert.equal(current,2,'authoritative newer unread updates the exact badge while overview is blocked');assert.equal(after,2,'old overview cannot overwrite newer view generation');
 });
 await check('newer reminder response, failure and stopped workspace guards',async()=>{
- const f=fixture();await f.start();const held=f.holdReminder();const run=f.store.changeReminder?.bind(f.store)||f.store.run.bind(f.store);
- const pending=run(a=>a.remind('seen',new Date('2026-10-21T12:00:00Z')));
+ const f=fixture();await f.start();const held=f.holdReminder();const run=f.store.changeReminder.bind(f.store);
+ const pending=run({message:'seen',action:'set',due:'2026-10-21T12:00:00Z'});
  await drain();f.setReminder({...f.overview().reminders[0],due:'2026-10-20T12:00:00Z',overdue:true});await f.store.refetch();held.release();await pending;await drain();
  assert.equal(f.store.get().overview.reminders[0].overdue,true,'older move response cannot clear a newer reminder');f.store.stop();
- const failed=fixture();await failed.start();failed.failReminder();await (failed.store.changeReminder?.bind(failed.store)||failed.store.run.bind(failed.store))(a=>a.remindDone('seen'));assert.equal(failed.store.get().overview.reminders[0].overdue,true);failed.store.stop();
- const stopped=fixture();await stopped.start();const late=stopped.holdReminder(),work=(stopped.store.changeReminder?.bind(stopped.store)||stopped.store.run.bind(stopped.store))(a=>a.remindDone('seen'));await drain();stopped.store.stop();const state=stopped.store.get(),calls=stopped.calls.length;late.release();await work;await drain();assert.equal(stopped.store.get(),state);assert.equal(stopped.calls.length,calls,'late completion never refreshes a stopped workspace');
+ const failed=fixture();await failed.start();failed.failReminder();await failed.store.changeReminder({message:'seen',action:'done'});assert.equal(failed.store.get().overview.reminders[0].overdue,true);failed.store.stop();
+ const stopped=fixture();await stopped.start();const late=stopped.holdReminder(),work=stopped.store.changeReminder({message:'seen',action:'done'});await drain();stopped.store.stop();const state=stopped.store.get(),calls=stopped.calls.length;late.release();await work;await drain();assert.equal(stopped.store.get(),state);assert.equal(stopped.calls.length,calls,'late completion never refreshes a stopped workspace');
 });
 for(const mode of ['muted-dm','active-device-topics','archived-latest'])await check(mode+' totals retain unrelated attention',async()=>{
  const kind=mode==='muted-dm'?'dm':'thread',f=fixture(kind),read=f.holdRead();
@@ -166,7 +166,7 @@ for(const mode of ['quiet','independent-arrival','replacement-generation','read-
  if(mode==='independent-arrival'){f.cohort.archived++;f.bump();}
  if(mode==='replacement-generation'){f.rows[0].attention={rev:7,writer:replacement};f.bump();}
  read.release();await drain();
- if(mode==='newer-reminder')await f.store.changeReminder(a=>a.remind('seen',new Date('2030-10-21T12:00:00Z')));
+ if(mode==='newer-reminder')await f.store.changeReminder({message:'seen',action:'set',due:'2030-10-21T12:00:00Z'});
  const current=f.store.get().overview,prompt={archived:current.topics[0].archived_unread,unread:current.unread_total,alert:current.alert_total,badge:f.groupBadge()},want=f.snapshot();
  assert.equal(current.topics[1].archived_unread,7,'same-device hidden agent remains independent');
  assert.deepEqual(f.calls.filter(c=>c.path==='/api/act').flatMap(c=>c.body.ids),['seen'],'only actually visible row is read');

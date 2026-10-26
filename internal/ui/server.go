@@ -595,6 +595,11 @@ func (s *Server) requestFile(w http.ResponseWriter, r *http.Request) {
 }
 
 // remind sets (or moves) a reminder, or marks it done or cancels it.
+type reminderGeneration struct {
+	Revision int64  `json:"revision"`
+	Writer   string `json:"writer,omitempty"`
+}
+
 func (s *Server) remind(w http.ResponseWriter, r *http.Request) {
 	p, ok := s.p.(Reminders)
 	if !ok {
@@ -602,23 +607,35 @@ func (s *Server) remind(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var v struct {
-		ID  string `json:"id"`
-		Due int64  `json:"due"` // unix seconds
+		ID       string              `json:"id"`
+		Due      int64               `json:"due"` // unix seconds
+		Expected *reminderGeneration `json:"expected,omitempty"`
 	}
 	if !readJSON(w, r, &v) {
 		return
 	}
 	var err error
 	note := ""
-	switch r.PathValue("what") {
-	case "":
-		err, note = p.SetReminder(v.ID, time.Unix(v.Due, 0)), "Reminder set."
-	case "done":
-		err, note = p.DoneReminder(v.ID), "Reminder done."
-	case "cancel":
-		err, note = p.CancelReminder(v.ID), "Reminder cancelled."
-	default:
-		err = NotFound("no such reminder control")
+	if v.Expected != nil {
+		if guarded, ok := s.p.(interface {
+			changeReminder(string, time.Time, string, reminderGeneration) error
+		}); ok {
+			err = guarded.changeReminder(v.ID, time.Unix(v.Due, 0), r.PathValue("what"), *v.Expected)
+			note = "Reminder change saved."
+		} else {
+			err = Refuse("this host cannot check reminder generations; reload before changing it")
+		}
+	} else {
+		switch r.PathValue("what") {
+		case "":
+			err, note = p.SetReminder(v.ID, time.Unix(v.Due, 0)), "Reminder set."
+		case "done":
+			err, note = p.DoneReminder(v.ID), "Reminder done."
+		case "cancel":
+			err, note = p.CancelReminder(v.ID), "Reminder cancelled."
+		default:
+			err = NotFound("no such reminder control")
+		}
 	}
 	result := map[string]any{"note": note}
 	if p, ok := s.p.(interface {

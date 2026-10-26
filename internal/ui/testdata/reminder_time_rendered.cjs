@@ -2,10 +2,12 @@
 const {chromium}=require(process.env.AGENTNET_PLAYWRIGHT),assert=require('node:assert/strict'),path=require('node:path'),fs=require('node:fs');
 (async()=>{
  const browser=await chromium.launch({headless:true,executablePath:process.env.AGENTNET_CHROMIUM||'/usr/bin/chromium'});
- let desktopKeyboardSequences=0,touchPickerSequences=0;
+ let desktopKeyboardSequences=0,touchPickerSequences=0,lastPage;
  try {
   for(const [width,zone] of [[1280,'America/New_York'],[1100,'Europe/Kyiv'],[390,'America/New_York'],[390,'Europe/Kyiv']]){
    const context=await browser.newContext({viewport:{width,height:900},timezoneId:zone,colorScheme:width===390?'dark':'light',isMobile:width===390,hasTouch:width===390}),page=await context.newPage(),errors=[],requests=[];
+   lastPage=page;
+   console.log(JSON.stringify({width,zone,stage:'start'}));
    page.setDefaultTimeout(10000);page.on('pageerror',e=>errors.push(String(e)));
    page.on('request',r=>{if(new URL(r.url()).pathname==='/api/remind')requests.push(r.postDataJSON());});
    const target=new URL(process.env.PARITY_URL);
@@ -23,6 +25,8 @@ const {chromium}=require(process.env.AGENTNET_PLAYWRIGHT),assert=require('node:a
    let sheet=page.getByRole('dialog',{name:'Remind me later'});await sheet.waitFor();
    const year=new Date().getFullYear()+1;
    for(const [index,month,day,hour,minute] of [[0,3,1,9,45],[1,4,1,17,20]]){
+    const prior=(await (await page.request.get(new URL('/api/overview?topics=1',target).href)).json()).reminders?.find(r=>r.message===process.env.PARITY_FIRST);
+    const generation=prior?{revision:prior.revision,...(prior.writer?{writer:prior.writer}:{})}:{revision:0};
     if(index){await msg.getByRole('button',{name:'Change…'}).click();sheet=page.getByRole('dialog',{name:'Move the reminder'});await sheet.waitFor();}
     const date=sheet.getByLabel('Date',{exact:true}),time=sheet.getByLabel('Time',{exact:true});
     await date.waitFor();await time.waitFor();assert.equal(await date.getAttribute('type'),'text');assert.equal(await time.getAttribute('type'),'time');
@@ -88,8 +92,9 @@ const {chromium}=require(process.env.AGENTNET_PLAYWRIGHT),assert=require('node:a
     await sheet.getByRole('button',{name:index?'Move it':'Remind me',exact:true}).click();await sheet.waitFor({state:'hidden'});
     const offset=zone==='America/New_York'?(index?4:5):(index?-3:-2);
     const expected=Math.floor(Date.UTC(year,month-1,day,hour+offset,minute)/1000);
-    assert.deepEqual(requests.at(-1),{id:process.env.PARITY_FIRST,due:expected},'exact selected local date/time converts across DST');
+    assert.deepEqual(requests.at(-1),{id:process.env.PARITY_FIRST,due:expected,expected:generation},'exact selected local date/time and original generation cross DST intact');
     await msg.getByRole('button',{name:'Change…'}).waitFor();
+    await msg.locator('[data-reminder-change]').waitFor({state:'detached'});
    }
    if(width>=1024){
     const bubble=msg.locator('[data-message-bubble]');await bubble.hover();
@@ -99,6 +104,7 @@ const {chromium}=require(process.env.AGENTNET_PLAYWRIGHT),assert=require('node:a
     await more.focus();await more.press('Enter');await page.getByRole('menuitem',{name:'Details',exact:true}).waitFor();await page.keyboard.press('Escape');
    }
    await msg.getByRole('button',{name:'Cancel',exact:true}).click();await msg.getByRole('button',{name:'Change…'}).waitFor({state:'detached'});
+   await msg.locator('[data-reminder-change]').waitFor({state:'detached'});
    // Ordinary pointer actions, never forced: changing, cancelling and
    // finishing a reminder must coexist with hover/focus message tools.
    if(width===390){await msg.getByRole('button',{name:'Message actions'}).focus();await page.keyboard.press('Enter');await page.getByRole('button',{name:'Remind me…',exact:true}).click();}
@@ -106,9 +112,10 @@ const {chromium}=require(process.env.AGENTNET_PLAYWRIGHT),assert=require('node:a
    const again=page.getByRole('dialog',{name:'Remind me later',exact:true});await again.waitFor();await again.getByRole('button',{name:'Remind me',exact:true}).click();await again.waitFor({state:'hidden'});
    await msg.getByRole('button',{name:'Change…',exact:true}).waitFor();
    await msg.getByRole('button',{name:'Done',exact:true}).click();await msg.getByRole('button',{name:'Change…'}).waitFor({state:'detached'});
-   assert.deepEqual(errors,[]);await context.close();
+   await msg.locator('[data-reminder-change]').waitFor({state:'detached'});
+   assert.deepEqual(errors,[]);console.log(JSON.stringify({width,zone,stage:'complete'}));await context.close();
   }
   assert.deepEqual({desktopKeyboardSequences,touchPickerSequences},{desktopKeyboardSequences:4,touchPickerSequences:4},'both desktop keyboard and native touch-picker coverage ran');
   console.log('reminder date/time PASS: editable year0012 recovery, calendar fallback, labelled desktop/touch controls, incomplete/invalid-date validation, no implicit send, NY/Kyiv DST timestamps; keyboard hour/minute desktop-only ('+desktopKeyboardSequences+' sequences), not executed on native touch pickers ('+touchPickerSequences+' sequences)');
- }finally{await browser.close();}
+ }catch(error){if(lastPage&&!lastPage.isClosed())console.error('reminder failure screen',await lastPage.locator('body').innerText());throw error;}finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

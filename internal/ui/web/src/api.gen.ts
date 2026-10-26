@@ -1046,6 +1046,8 @@ export interface ReminderView {
   title: string;
   due: string;
   overdue: boolean;
+  revision?: number;
+  writer?: string;
 }
 
 export interface RemoteStorage {
