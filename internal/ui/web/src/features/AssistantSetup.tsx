@@ -103,10 +103,12 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
 
   // A default change may select a newly saved configuration. Refresh both
   // views so the exact responder ID is not compared with an older catalog.
-  const rereadDefault = () => {
+  const rereadDefault = (confirmed: T.ResponderView) => {
+    setResponder({ v: confirmed });
+    const generation = ++statusGeneration.current;
     Promise.all([store.api.responder(), store.api.agents()]).then(([v, c]) => {
-      if (alive.current) { setResponder({ v }); setCatalog(c); }
-    }, (e) => { if (alive.current) setResponder((r) => ({ ...r, error: errorText(e) })); });
+      if (alive.current && generation === statusGeneration.current) { setResponder({ v }); setCatalog(c); }
+    }, (e) => { if (alive.current && generation === statusGeneration.current) setResponder((r) => ({ ...r, error: errorText(e) })); });
   };
 
   const list = tools(view);

@@ -64,7 +64,7 @@ const current=observers.at(-1);current.emit(rows[0]);flush();assert.equal(report
 assert.equal(native.size,0);assert.equal([...window.listeners.values()].reduce((n,s)=>n+s.size,0),0);assert.equal([...document.listeners.values()].reduce((n,s)=>n+s.size,0),0);
 
 // Execute the existing no-target entry, scroll and resize callbacks themselves.
-const entryStart=source.indexOf('  useLayoutEffect(() => {'),entryEnd=source.indexOf('\n  useLayoutEffect(() => {',entryStart+1);
+const entryStart=source.indexOf('  useLayoutEffect(() => {',source.indexOf('  // Open at the bottom')),entryEnd=source.indexOf('\n  useLayoutEffect(() => {',entryStart+1);
 const el={scrollHeight:50,scrollTop:0,clientHeight:100,scrollTo({top}){this.scrollTop=top;}};
 const bottom={current:false},seen={current:null};let scheduled=0,resize;
 const globals={CSS,hasLater:false,to:0,through:undefined,readingAnchor:{current:null},box:{current:el},inner:{current:{}},unread:true,focus:undefined,readVisit:{},retained:{current:[]},groups:[],from:0,prependAnchor:{current:null},seen,messages:[{id:'read'}],target:undefined,atBottom:bottom,items:[],first:undefined,ctx:{},flash:()=>false,whoWrote:()=>({mine:false}),ev:()=>false,setFresh(){},reduced:()=>true,useLayoutEffect:fn=>fn(),visibleRows:{current:()=>scheduled++}};

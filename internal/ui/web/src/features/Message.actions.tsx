@@ -192,7 +192,9 @@ export function useTouchGestures(onLongPress: () => void, onSwipe: (() => void) 
           guardOpeningClick(g.current.id);
           g.current = null;
           navigator.vibrate?.(8);
-          onLongPress();
+          // This timer has already recognized the gesture. Commit its sheet
+          // now; concurrent rendering must not defer it until finger release.
+          flushSync(onLongPress);
         }, 450);
         g.current = { x: e.clientX, y: e.clientY, timer, moved: false, id: e.pointerId };
       },

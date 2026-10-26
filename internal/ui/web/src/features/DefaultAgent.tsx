@@ -29,7 +29,7 @@ export const harnessName = (h: string) => ({ claude: "Claude", codex: "Codex", p
  *  (Settings: what it may do). inline: Cancel and Save always sit under it
  *  (inside a card) instead of a bar kept in view; onCancel closes it. */
 export function DefaultAgentChoice({ view, saved, extra, inline = false, onCancel }: {
-  view: T.ResponderView; saved: () => void; extra?: (choice: string) => ReactNode; inline?: boolean; onCancel?: () => void;
+  view: T.ResponderView; saved: (view: T.ResponderView) => void; extra?: (choice: string) => ReactNode; inline?: boolean; onCancel?: () => void;
 }) {
   const store = useApp();
   const me = useStore(store, (s) => s.overview?.person);
@@ -51,8 +51,14 @@ export function DefaultAgentChoice({ view, saved, extra, inline = false, onCance
     const change: T.ResponderChange = choice === MANUAL ? { manual: true, harness: "", dir: "" } : { manual: false, harness: choice, dir: dir.trim() };
     const r = await store.run((a) => a.setResponder(change));
     setBusy(false);
-    if (r) { confirmedChoice(); confirmedDir(); store.toast(choice === MANUAL ? "Questions and tasks now wait for you." : harnessName(choice) + " answers for you from now on.", "ok"); saved(); }
+    if (r) { confirmedChoice(); confirmedDir(); store.toast(choice === MANUAL ? "Questions and tasks now wait for you." : harnessName(choice) + " answers for you from now on.", "ok"); saved(r); }
   };
+
+  if (busy) return <div role="status" className="rounded-xl bg-sunken p-4">
+    <p className="font-semibold">{choice === MANUAL ? "No default agent selected" : harnessName(choice) + " selected as default"}</p>
+    {choice !== MANUAL && <p className="break-words font-mono text-sm">{dir}</p>}
+    <p className="text-sm text-text-2">Saving this choice… Current requests keep their existing settings until it is confirmed.</p>
+  </div>;
 
   return (
     <div className={inline ? "space-y-4" : "space-y-6"}>
@@ -98,7 +104,7 @@ export function DefaultAgentChoice({ view, saved, extra, inline = false, onCance
 /** DefaultAgentPanel: the default agent at the top of "Choose your agents":
  *  its program, its folder and whether it can start, with Change right
  *  there. view null: not read (yet, or error says why). */
-export function DefaultAgentPanel({ view, error, disabled, onSaved }: { view: T.ResponderView | null; error?: string; disabled?: boolean; onSaved: () => void }) {
+export function DefaultAgentPanel({ view, error, disabled, onSaved }: { view: T.ResponderView | null; error?: string; disabled?: boolean; onSaved: (view: T.ResponderView) => void }) {
   const [open, setOpen] = useState(false);
   const s = defaultAgentState(view, harnessName);
   const set = !!view?.chosen && !view.manual;
@@ -117,7 +123,7 @@ export function DefaultAgentPanel({ view, error, disabled, onSaved }: { view: T.
       )}
       {view && open && (
         <div className="mt-2 border-t border-hairline pt-3">
-          <DefaultAgentChoice view={view} inline saved={() => { setOpen(false); onSaved(); }} onCancel={() => setOpen(false)} />
+          <DefaultAgentChoice view={view} inline saved={(value) => { onSaved(value); setOpen(false); }} onCancel={() => setOpen(false)} />
         </div>
       )}
     </section>

@@ -49,17 +49,20 @@ function useAgentData(o: T.Overview | null) {
   const last = lastData.get(store);
   const [responder, setResponder] = useState<Load<T.ResponderView>>(last?.responder ?? {});
   const [catalog, setCatalog] = useState<Load<T.AgentCatalogView>>(last?.catalog ?? {});
+  const responderRead = useRef(0);
   useEffect(() => { lastData.set(store, { responder, catalog }); }, [responder, catalog]);
   const seq = o?.seq;
   useEffect(() => {
     if (browser || !o) return;
     let alive = true;
-    store.api.responder().then((v) => alive && setResponder({ v }), (e) => alive && setResponder({ error: errorText(e) }));
+    const request = ++responderRead.current;
+    store.api.responder().then((v) => alive && request === responderRead.current && setResponder({ v }), (e) => alive && request === responderRead.current && setResponder({ error: errorText(e) }));
     store.api.agents().then((v) => alive && setCatalog({ v }), (e) => alive && setCatalog({ error: errorText(e) }));
     return () => { alive = false; };
   }, [seq, browser]);
-  // After the default agent is changed here: its own view, read again.
-  const rereadResponder = () => { store.api.responder().then((v) => setResponder({ v }), (e) => setResponder({ error: errorText(e) })); };
+  // The write returns its confirmed view. Reopening must not use the old
+  // default while a redundant read catches up, or discard the next choice.
+  const rereadResponder = (v: T.ResponderView) => { ++responderRead.current; setResponder({ v }); };
   return { browser, responder, catalog, rereadResponder };
 }
 
@@ -101,7 +104,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 
 // ---- this computer's agent ----------------------------------------------------
 
-function MyAgent({ o, r, onSaved }: { o: T.Overview; r: Load<T.ResponderView>; onSaved: () => void }) {
+function MyAgent({ o, r, onSaved }: { o: T.Overview; r: Load<T.ResponderView>; onSaved: (view: T.ResponderView) => void }) {
   const [editing,setEditing]=useState(false),v=r.v;
   return <div className="space-y-2 rounded-xl bg-surface p-3 stroke">
     <p className="font-semibold">Default for requests without an agent</p>
@@ -109,7 +112,7 @@ function MyAgent({ o, r, onSaved }: { o: T.Overview; r: Load<T.ResponderView>; o
     {v?.problem&&<p className="text-[13px] text-muted">{v.problem}</p>}
     {r.error&&<p role="alert">{r.error}</p>}
     {v&&!editing&&<Button size="sm" variant="outline" onClick={()=>setEditing(true)}>Change default setting</Button>}
-    {v&&editing&&<DefaultAgentChoice view={v} inline saved={()=>{setEditing(false);onSaved();}} onCancel={()=>setEditing(false)}/>}
+    {v&&editing&&<DefaultAgentChoice view={v} inline saved={value=>{onSaved(value);setEditing(false);}} onCancel={()=>setEditing(false)}/>}
   </div>;
 }
 

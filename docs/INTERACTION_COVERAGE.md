@@ -89,6 +89,36 @@ the repair. Sergey needs to do nothing while owned fixtures are being tested.
 
 ## October 26 local interaction candidate
 
+### October 27 continuation: the 500 ms target
+
+The broad rendered runner now fails local feedback at 500 ms rather than the
+historical 2,000 ms emergency bound. Background completion remains separate.
+Local Chromium's five baseline workloads pass 74 actions (maximum 278 ms).
+The extended 390/1440 run passes 30 of 31 screen/viewport cells, 1,182 recorded
+actions overall and maximum recorded feedback 350 ms. The remaining Agents
+case clicked a disabled Save before the folder field's entrance animation
+made its required picker visible; no second write occurred. The fixture now
+includes that picker in the selected-program visible predicate. Both Agents
+widths then pass 43 actions each, maximum 145 ms, at the unchanged 500 ms bound.
+These use synthetic DOM input and invented backend data; they do not establish
+physical-device, exhaustive-control or real-backend completion qualification.
+
+Default-agent Save replaces its editor immediately with the chosen program
+and folder plus truthful saving status. Failure restores the retained editor.
+A confirmed write's returned view feeds the Agents tab before reopening, and
+older in-flight reads cannot replace that response. Existing editor retention,
+resize, exact target and failed-save tests pass under the race detector.
+
+macOS's repeated touch regression at `914acf57` shows the 450 ms recognized
+long press sometimes does not commit its sheet before the 470 ms held-touch
+observation; release subsequently opens it. The timer now synchronously commits
+that existing sheet, preserving the exact initiating-pointer release guard.
+Local touch/edit/recovery coverage passes; native macOS rerun is still required.
+
+The visible-row source harness now extracts the intended entry-layout effect,
+instead of the earlier navigation-ref effect added by the render optimization.
+Its complete visibility/epoch/scroll/resize assertions pass unchanged.
+
 ### Sheet visibility and narrow topic labels
 
 Android emulator qualification `40402621499` reproduced the first Actions sheet
