@@ -91,6 +91,26 @@ the repair. Sergey needs to do nothing while owned fixtures are being tested.
 
 ### October 27 continuation: the 500 ms target
 
+The 450 ms hold still left one macOS result at 553 ms when both callback queues
+were delayed. The actual message-menu counterpart was then inspected at the same
+pinned Telegram revision:
+[`useContextMenuHandlers.ts`](https://github.com/Ajaxy/telegram-tt/blob/f67a40879a7d78c2683ec5a296cf55bc22417d56/src/hooks/useContextMenuHandlers.ts)
+uses a 200 ms long tap (its generic `useLongPress.ts` defaults to 250 ms).
+AgentNet now reuses that 200 ms message-context threshold, retaining its exact
+pointer release guard, move/cancel cleanup and native link behavior. Ordinary-tap
+and native-scroll negatives accompany the delayed-timer test. This is an inspected
+interaction pattern, not a measured Telegram responsiveness comparison.
+
+Android `54abbf4c` qualification executes 16 workloads with every recorded action
+under 500 ms (history maximum 393 ms, composer 92 ms). Unread startup is unexecuted:
+its native document focus check fails. The Activity may gain focus before its
+asynchronously created WebView attaches; the existing ownership-preserving focus
+helper now also runs at internal document readiness. The notification fixture's
+invented notices can enter the still-running core startup restore; it now waits
+for the existing host-ready boundary before posting them. Both corrections require
+new Android execution. Prior notification failures and absence of physical-device
+evidence remain open.
+
 The native macOS timer diagnostic separates gesture recognition from rendering:
 one 450 ms callback fired at 479 ms just after the 478 ms observation, and another
 at 524 ms. Recognition now checks the same 450 ms deadline on available animation

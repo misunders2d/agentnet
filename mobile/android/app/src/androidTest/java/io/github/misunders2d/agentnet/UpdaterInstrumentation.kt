@@ -249,6 +249,14 @@ class UpdaterInstrumentation : Instrumentation() {
         val barrierTag = "fixture-badge-barrier"
         var barrier = 0
         try {
+            // These invented OS notices must not enter the real core's startup
+            // restore snapshot: their IDs deliberately have no stored message.
+            // Wait for that existing startup boundary before posting the fixture.
+            waitFor("Owned native host did not finish startup before notification fixture") {
+                var ready = false
+                runOnMainSync { ready = host.state.url.isNotEmpty() }
+                ready
+            }
             check(host.notificationsPermitted() != denied) { "Expected Android permission ${if (denied) "denied" else "granted"}; this test never changes it." }
             runOnMainSync { tags.forEach { tag -> manager.cancel(tag, 0); pendingTags().remove(tag); latestInstances().remove(tag) } }
             if (denied) {

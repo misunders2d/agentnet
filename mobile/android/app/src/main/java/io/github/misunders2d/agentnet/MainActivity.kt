@@ -167,7 +167,14 @@ class MainActivity : Activity() {
                 return WebResourceResponse("text/plain", "UTF-8", 403, "Blocked", emptyMap(), ByteArrayInputStream(ByteArray(0)))
             }
             override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) { handler.cancel() }
-            override fun onPageFinished(view: WebView, url: String) { if (guard.internal(url)) { applyVisibility(); routeNotification() } }
+            override fun onPageFinished(view: WebView, url: String) {
+                if (guard.internal(url)) {
+                    // The Activity may gain focus before the asynchronous host
+                    // creates/attaches its WebView. Recheck at document readiness;
+                    // the existing ownership guard preserves editors and dialogs.
+                    focusPageIfUnowned(); applyVisibility(); routeNotification()
+                }
+            }
         }
         page.webChromeClient = object : WebChromeClient() {
             override fun onShowCustomView(view: View, callback: CustomViewCallback) {

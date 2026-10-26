@@ -189,7 +189,10 @@ export function useTouchGestures(onLongPress: () => void, onSwipe: (() => void) 
         if (e.pointerType !== "touch" || !inside(e) || (e.target as Element).closest("a[href]")) return;
         if (g.current) { clearTimeout(g.current.timer); cancelAnimationFrame(g.current.frame); }
         const gesture = { x: e.clientX, y: e.clientY, timer: 0, frame: 0, moved: false, id: e.pointerId };
-        const deadline = performance.now() + 450;
+        // Match the inspected Telegram Web A message-context gesture. The
+        // former 450 ms hold left almost no room in the 500 ms feedback budget.
+        const delay = 200;
+        const deadline = performance.now() + delay;
         const open = () => {
           if (g.current !== gesture || gesture.moved) return;
           clearTimeout(gesture.timer); cancelAnimationFrame(gesture.frame);
@@ -207,7 +210,7 @@ export function useTouchGestures(onLongPress: () => void, onSwipe: (() => void) 
           else gesture.frame = requestAnimationFrame(frame);
         };
         g.current = gesture;
-        gesture.timer = window.setTimeout(open, 450);
+        gesture.timer = window.setTimeout(open, delay);
         gesture.frame = requestAnimationFrame(frame);
       },
       onPointerMove: (e: PointerEvent) => {
