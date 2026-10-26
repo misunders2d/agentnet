@@ -1,8 +1,16 @@
 # Next-release interaction coverage and responsiveness
 
-Owner requirement, October 26, 2026: the next release must meet or exceed
-Slack/Telegram performance. Every interaction a user can click must be tested.
-Publication is blocked until this is demonstrated. The updater-only candidate
+Owner correction, October 26, 2026: "no need" to log in to Telegram;
+"both slack and telegram are sub-0.5 second, I'll settle for that."
+The acceptance target is now **under 500 ms from input to the intended local
+visual change**, with real work continuing asynchronously and truthful pending,
+confirmed and failure states. This supersedes the earlier 100 ms local-feedback
+target and the requirement to measure matching Slack/Telegram accounts. No
+comparative performance claim is made. Sergey also confirmed that no physical
+Android test device is available; emulator evidence must remain labelled as such.
+Every reachable interaction still needs executed evidence and error/recovery
+coverage. Publication is blocked until the applicable gate is demonstrated.
+The updater-only candidate
 `3f9797f641a9707f3f945d35d6de6d5d810165de` is a baseline, not a qualified release.
 
 Release authorization, October 26, 2026: Sergey explicitly authorized driving
@@ -40,7 +48,7 @@ This is an implementation acceptance gate as well as a publication gate.
   local effect happens while the request remains blocked and other controls
   still work. Verify failure/restoration/retry, duplicate input, workspace
   changes, newer synchronization and stale responses. Preserve drafts, files,
-  exact targets and native authority. Keep the all-interaction comparative timing
+  exact targets and native authority. Keep the all-interaction timing
   requirements below; immediate presentation alone does not qualify the app.
 - Missing reuse evidence, a backend-dependent local effect, frozen controls,
   silent failure, or failed recovery blocks acceptance and publication. Existing
@@ -67,9 +75,9 @@ the repair. Sergey needs to do nothing while owned fixtures are being tested.
   repeated input, offline/error/recovery and permission/capability boundaries.
   Record repetitions, distributions and worst observed delays; averages cannot
   conceal stalls.
-- Record matching Slack/Telegram actions, versions, hardware, data and network
-  conditions before claiming comparative performance. Incomparable or missing
-  comparator evidence is unverified, not a pass.
+- Verify the owner's under-500-ms local-feedback target on recorded hardware,
+  data and network conditions. Live Slack/Telegram benchmarking is no longer
+  required; do not present the owner's target as a measured comparison.
 - Report every required case as passed, failed, blocked or unexecuted with its
   exact candidate/platform/fixture and evidence. Unsupported controls must be
   accounted for through their actual unavailable/disabled behavior. Missing
@@ -80,6 +88,41 @@ the repair. Sergey needs to do nothing while owned fixtures are being tested.
   merely to collect timings.
 
 ## October 26 local interaction candidate
+
+### Sheet visibility and narrow topic labels
+
+Android emulator qualification `40402621499` reproduced the first Actions sheet
+remaining transparent: `data-starting-style` stayed set while animation-frame
+callbacks stopped. The sheet now follows its controlled `open` value directly;
+opening no longer needs a second React commit or animation callback, and closing
+hides its retained portal immediately. Reduced-motion CSS no longer overrides
+that visibility. Base UI still owns its dialog, Escape and focus behavior;
+AgentNet's existing root-local modal handling still isolates background input.
+
+Counterpart: Telegram Web A, the same pinned revision above,
+[`Modal.tsx`](https://github.com/Ajaxy/telegram-tt/blob/f67a40879a7d78c2683ec5a296cf55bc22417d56/src/components/ui/Modal.tsx),
+uses controlled open/close state, a portal, focus trapping and Escape dismissal.
+AgentNet retains that established flow through its existing Base UI component.
+Removing the animation-dependent visibility is the adaptation to the observed
+WebView stall; no Telegram latency measurement or identical animation is claimed.
+
+The committed pre-fix Sheet fails the new rendered regression's 500 ms bound.
+The fixed component passes eight first/repeated-open cases at 390/1440 widths,
+normal/reduced motion, with animation callbacks deliberately held: 5–74 ms
+input-to-visible DOM state in local Chromium. Close removes the blocking layer
+and restores unrelated draft input before callbacks resume. Desktop and mobile
+screenshots were inspected. These are controlled browser measurements, not a
+physical Android result. The emulator must rerun the integrated candidate.
+
+At 390 px, New topic's words previously consumed the selected topic label's
+remaining width, hiding a successful rename. The icon retains its accessible
+label below 640 px; the renamed topic stays visible. All four rendered
+edit/delete/topic cases (100/1,000 messages, 390/1440 widths) pass.
+
+The message-toolbar regression now accepts an unmounted inactive toolbar as
+absent, as required by the existing lazy toolbar implementation; the former
+test waited for an absent button in order to inspect its opacity. The rendered
+exact-target, keyboard, narrow controls and reaction assertions remain.
 
 This continuation starts from clean `edec2bab` on
 `codex/oct25-agent-conversations`. It does not qualify the app-wide requirement.
@@ -309,7 +352,7 @@ this document records the test contract and coverage gaps.
 | U1 | Update version checks do not depend on chat projection | root | verified source only | Existing lightweight endpoint; real blocked-chat regression, native three-OS/race tests and live patched check at 1.089ms; installed app still v0.9.5 |
 | X1 | Confusing history/review screen explains state and next action accurately | UX reviewer/root | investigating | Owner screenshot mixes saved history, unknown original agent and contradictory continuation/approval instructions |
 | H1 | Pi/OMP idle notices do not repeat remaining items as new | root | candidate tested; installed activation open | Passive activity uses one native status slot. Pi/OMP focused regressions and isolated real Pi rendering pass; prompt acknowledgement remains tied to native persistence. Existing sessions not reloaded |
-| B1 | Slack/Telegram baseline measured under comparable conditions | root | unexecuted | No parity claim or benchmark numbers yet |
+| B1 | Every intended local change appears under 500 ms | root | owner target updated; full execution open | Live Slack/Telegram benchmarking explicitly removed by owner; measure AgentNet directly and keep background completion separate |
 | R1 | Every required interaction passes on final candidate | root/verifier | blocked | No v0.9.7 tag, draft or publication is authorized past this gate |
 
 The previous final-pin skin run passed functional compatibility: 306 browser/static
@@ -433,7 +476,7 @@ installed repair is claimed by this register.
 
 | ID | Failure | Current evidence and status | Required closing test |
 | --- | --- | --- | --- |
-| F01 | Interactions leave the user waiting without a clear result | Owner reports delays above 10 seconds across the app; installed compact overview measured 25.645s and 3.398s. Unresolved. | Every inventoried control: trusted input to visible feedback and confirmed result, under the complete required workload/platform/skin matrix and measured comparators. |
+| F01 | Interactions leave the user waiting without a clear result | Owner reports delays above 10 seconds across the app; installed compact overview measured 25.645s and 3.398s. Unresolved. | Every inventoried control: trusted input to visible feedback and confirmed result, under the complete required workload/platform/skin matrix and the owner’s under-500-ms local-feedback target. |
 | F02 | Mark as handled takes many seconds to disappear | Local-first source candidate clears exact active attention before the request reaches the backend, retains pending status and restores current state on failure. Controlled real-backend browser and focused regressions pass; installed-device and full timing qualification remain open. | Exact task disappears promptly on the initiating and linked devices; preserve unrelated attention and show refusals/failures truthfully. Include normal/10x and concurrent sync. |
 | F03 | About cannot update the app | Source fix verified; installed v0.9.5 remains unchanged. Its version check waits for the slow chat overview. | Actual installed old-to-new update, including app, command and running background process; no dependence on slow chat reads and no interruption of admitted work. |
 | F04 | Saved agent history, unknown agent and contradictory Reply instructions are confusing | Copy candidate and combined wide/narrow regression exist; not installed. The wider history/composer workflow remains unqualified. | Same history thread with a waiting request: clear available actions, exact Reply routing, retained draft/files and no misleading permission text. |

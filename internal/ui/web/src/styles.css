@@ -86,16 +86,6 @@
   }
 }
 
-/* Sheets (ui/Sheet.tsx) slide up and back down; with reduced motion they
-   fade in place. Unlayered, so it wins over the sheet's own utilities. */
-@media (prefers-reduced-motion: reduce) {
-  .an-sheet { transition-property: opacity; }
-  .an-sheet[data-starting-style], .an-sheet[data-ending-style] { opacity: 0; --tw-translate-y: 0px; }
-}
-@media (prefers-reduced-motion: reduce) and (min-width: 1024px) {
-  .an-sheet[data-starting-style], .an-sheet[data-ending-style] { --tw-translate-y: -50%; }
-}
-
 @keyframes an-sketch { 50% { opacity: .6; } }
 @keyframes an-nudge-in { from { transform: translateX(14px); } }
 @keyframes an-rise-in { from { transform: translateY(10px); } }

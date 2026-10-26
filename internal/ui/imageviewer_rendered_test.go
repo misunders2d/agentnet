@@ -244,3 +244,14 @@ func TestPaneEntranceRendered(t *testing.T) {
 	}
 	t.Log(string(out))
 }
+
+func TestSheetImmediateRendered(t *testing.T) {
+	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
+		t.Skip("opt-in: installed Playwright required")
+	}
+	out, err := exec.CommandContext(t.Context(), "node", "testdata/sheet_immediate_rendered.cjs").CombinedOutput()
+	if err != nil {
+		t.Fatalf("immediate sheet: %v\n%s", err, out)
+	}
+	t.Log(string(out))
+}

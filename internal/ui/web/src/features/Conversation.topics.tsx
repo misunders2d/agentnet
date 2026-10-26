@@ -229,7 +229,7 @@ export function TopicBar({ thread,dm }: { thread?: T.Thread;dm?:T.DMThread }) {
       {canStartTopic && <button ref={newRef} type="button" aria-pressed={fresh} aria-label={wide ? undefined : "New topic"} title="New topic: your next message starts a separate conversation"
         onClick={() => store.setDraft(dm?.id||thread!.id, { ...store.draft(dm?.id||thread!.id), newTopic: !fresh, replyTo: undefined })}
         className={chip + "shrink-0 " + (wide ? "" : "min-w-11 justify-center px-2 ") + (fresh ? "bg-act text-act-ink stroke" : "text-agent-ink hover:bg-sunken")}>
-        <IconPlus size={18} stroke={2.2} aria-hidden="true" /><span className="max-[389px]:hidden">New topic</span>
+          <IconPlus size={18} stroke={2.2} aria-hidden="true" /><span className="max-[639px]:hidden">New topic</span>
       </button>}
       {listed && <AllTopics open={all} onOpenChange={setAll} peer={thread?.peer||""} binding={thread?.topic?.agent_id||thread?.topic?.agent_legacy?thread.topic:undefined} conv={dm?.id} agent={agent} current={open?.id} />}
       {directMerge&&<OrganizeMessages thread={directMerge.thread} ids={directMerge.ids} merge={directMerge.source} onClose={()=>setDirectMerge(null)} onDone={()=>setDirectMerge(null)} />}

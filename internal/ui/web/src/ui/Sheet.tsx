@@ -6,7 +6,7 @@
 // labelling and focus return; useModal keeps focus inside it and the app
 // behind it inert.
 import { Dialog } from "@base-ui/react/dialog";
-import { useLayoutEffect, useState, type ReactNode, type RefObject } from "react";
+import { type ReactNode, type RefObject } from "react";
 import { IconX } from "@tabler/icons-react";
 import { useModal, usePortal } from "../owned";
 
@@ -14,21 +14,17 @@ export function Sheet({ open, onOpenChange, title, description, children, footer
   open: boolean; onOpenChange: (open: boolean) => void; title: ReactNode; description?: ReactNode; children: ReactNode; footer?: ReactNode; wide?: boolean; finalFocus?: RefObject<HTMLElement | null>;
 }) {
   const portal = usePortal();
-  // A sheet mounted already open (InviteSheet draws itself when asked for)
-  // opens in a second commit before the first paint, so it slides up
-  // exactly as it slides down when closed (Base UI only animates a change
-  // of open), starting in the same frame as the click.
-  const [armed, setArmed] = useState(false);
-  useLayoutEffect(() => setArmed(true), []);
-  const shown = open && armed;
-  const modal = useModal(shown);
+  // Visibility follows the click in this commit. A paused renderer can leave
+  // Base UI's starting/ending flags waiting for an animation frame; neither
+  // flag may keep an opened sheet transparent or a closed sheet over the app.
+  const modal = useModal(open);
   return (
-    <Dialog.Root open={shown} onOpenChange={onOpenChange} modal="trap-focus">
+    <Dialog.Root open={open} onOpenChange={onOpenChange} modal="trap-focus">
       <Dialog.Portal container={portal}>
-        <Dialog.Backdrop className="fixed inset-0 z-40 bg-scrim/40 transition-opacity duration-[120ms] data-[starting-style]:opacity-0 data-[ending-style]:opacity-0" />
-        <Dialog.Popup {...modal} finalFocus={finalFocus} className={"an-sheet fixed z-50 flex flex-col bg-canvas text-ink outline-none stroke shadow-pop transition-all duration-[140ms] ease-out-soft "
-          + "inset-x-0 bottom-[var(--an-keyboard,0px)] max-h-[calc(85dvh_-_var(--an-keyboard,0px))] rounded-t-3xl data-[starting-style]:translate-y-full data-[ending-style]:translate-y-full "
-          + "lg:inset-auto lg:left-1/2 lg:top-1/2 lg:-translate-x-1/2 lg:-translate-y-1/2 lg:rounded-3xl lg:max-h-[86dvh] lg:data-[starting-style]:translate-y-[-46%] lg:data-[ending-style]:translate-y-[-46%] lg:data-[starting-style]:opacity-0 lg:data-[ending-style]:opacity-0 "
+        <Dialog.Backdrop className={open ? "fixed inset-0 z-40 bg-scrim/40" : "hidden"} />
+        <Dialog.Popup {...modal} finalFocus={finalFocus} className={!open ? "hidden" : "an-sheet fixed z-50 flex flex-col bg-canvas text-ink outline-none stroke shadow-pop "
+          + "inset-x-0 bottom-[var(--an-keyboard,0px)] max-h-[calc(85dvh_-_var(--an-keyboard,0px))] rounded-t-3xl "
+          + "lg:inset-auto lg:left-1/2 lg:top-1/2 lg:-translate-x-1/2 lg:-translate-y-1/2 lg:rounded-3xl lg:max-h-[86dvh] "
           + (wide ? "lg:w-[640px]" : "lg:w-[520px]")}>
           <div className="mx-auto mt-2 h-1.5 w-11 rounded-full bg-hairline lg:hidden" aria-hidden="true" />
           <div className="flex items-start gap-3 px-5 pt-3 pb-2 lg:pt-5">
