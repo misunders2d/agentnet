@@ -156,3 +156,49 @@ func TestLiveDMProjectionFreshGroupHead(t *testing.T) {
 		t.Fatalf("later GET reused successful projection after a newer head froze current context: %s", body)
 	}
 }
+
+// Membership reuse is confined to one overview build. A later signed dismissal
+// must change the chat count while keeping the same admitted unread message.
+func TestLiveOverviewParticipationFreshAfterDismissal(t *testing.T) {
+	live, alice, _, packet, _ := dmProjectionFixture(t)
+	conv := packet.State.Conv
+	summary := func() DMSummary {
+		t.Helper()
+		o := Overview{UnreadTotal: new(int), AlertTotal: new(int)}
+		if err := live.dmOverview(&o, nil, nil); err != nil {
+			t.Fatal(err)
+		}
+		for _, dm := range o.DMs {
+			if dm.ID == conv {
+				return dm
+			}
+		}
+		t.Fatal("group missing from overview")
+		return DMSummary{}
+	}
+	before := summary()
+	if before.Guests != 4 || before.Unread != 1 {
+		t.Fatalf("initial signed participants/unread: guests=%d unread=%d", before.Guests, before.Unread)
+	}
+	infos, err := alice.Participations(conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pid string
+	for _, info := range infos {
+		if info.State == client.PartActive {
+			pid = info.PID
+			break
+		}
+	}
+	if pid == "" {
+		t.Fatal("missing active participant")
+	}
+	if _, err := alice.DismissParticipation(t.Context(), pid); err != nil {
+		t.Fatal(err)
+	}
+	after := summary()
+	if after.Guests != 3 || after.Unread != before.Unread || after.ID != before.ID {
+		t.Fatalf("later build retained old membership or lost unread state: guests=%d unread=%d", after.Guests, after.Unread)
+	}
+}

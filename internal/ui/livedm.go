@@ -67,11 +67,26 @@ func (l *Live) dmOverview(o *Overview, unread *[]UnreadRow, mutes map[string]boo
 	// The agents each person's device runs in DMs here, from the
 	// participations as resolved (the host's person and device).
 	links := map[string][]AgentLink{}
+	// Resolve each conversation once for this build. People, event labels and
+	// the guest count use the same evidence; the next build reads it afresh.
+	type participationView struct {
+		infos []client.ParticipationInfo
+		err   error
+	}
+	parts := map[string]participationView{}
+	participations := func(conv string) ([]client.ParticipationInfo, error) {
+		if view, ok := parts[conv]; ok {
+			return view.infos, view.err
+		}
+		infos, err := l.a.Participations(conv)
+		parts[conv] = participationView{infos, err}
+		return infos, err
+	}
 	for _, c := range convs {
 		if c.Kind == protocol.ConvKindGroup {
 			continue
 		}
-		infos, err := l.a.Participations(c.ID)
+		infos, err := participations(c.ID)
 		if err != nil {
 			return err
 		}
@@ -120,7 +135,8 @@ func (l *Live) dmOverview(o *Overview, unread *[]UnreadRow, mutes map[string]boo
 			}
 			return nil
 		}
-		people := l.conversationPeople(c)
+		infos, partsErr := participations(c.ID)
+		people := l.conversationPeopleForParticipations(c, infos)
 		shown := shownRows(msgs, people) // its rows as the conversation shows them (DM)
 		s := DMSummary{ID: c.ID, Role: c.Role, Peer: personView(c.Peer), Created: time.Unix(c.Created, 0), Mine: c.Creator == l.a.Address,
 			Count: len(shown), LastAt: time.Unix(c.Created, 0)}
@@ -184,7 +200,7 @@ func (l *Live) dmOverview(o *Overview, unread *[]UnreadRow, mutes map[string]boo
 		}
 		// Who is present to help: a conversation whose participations
 		// cannot be resolved here now (a group's pending context) counts none.
-		if infos, err := l.a.Participations(c.ID); err == nil {
+		if partsErr == nil {
 			for _, info := range infos {
 				if info.State == client.PartActive {
 					s.Guests++
