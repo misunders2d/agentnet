@@ -105,7 +105,7 @@ export function AgentHistoryRecovery({thread,overview}:{thread:T.Thread;overview
   const host=threadAgentHost(thread),own=host===overview.me.address||overview.person?.devices?.some(d=>d.address===host);
   const targets:AgentChatTarget[]=own?Object.keys(names).filter(id=>/^[a-f0-9]{32}$/.test(id)&&names[id+"#current"]==="true"&&names[id+"#host"]===host&&names[id+"#host_key"]===ownKey(overview,host)).map(id=>({host,agentId:id,hostKey:names[id+"#host_key"],harness:names[id+"#harness"],label:concreteAgentName(id,names),local:host===overview.me.address})).filter(t=>!t.local||store.host.platform==="daemon"):[];
   return <section aria-label="Agent history" className="shrink-0 border-b border-outline bg-surface px-4 py-3">
-    <p className="text-[13px] text-muted">This is saved agent history. Its original messages, draft and files stay here. Start a new conversation with a configured agent on {niceDevice(host)}.</p>
+    <p className="text-[13px] text-muted">This is saved agent history. Its messages, draft and files stay here. For new work, choose a configured agent below.</p>
     <div className="mt-2 flex flex-wrap gap-2">{targets.length?targets.map(target=><AgentChatButton key={target.agentId} target={target}/>):<Button size="sm" variant="outline" onClick={()=>store.showTab("agents")}>Open Agents</Button>}</div>
   </section>;
 }

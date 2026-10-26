@@ -31,6 +31,7 @@ const host={version:1,platform:'daemon',workspace,workspaces:{list:()=>[workspac
 fixture.requests.push({path:p,body});
 if(p.startsWith('/api/overview'))return structuredClone(fixture.overview);
 if(p==='/api/responder')return structuredClone(fixture.responder);
+if(p==='/api/operator/decide'&&fixture.reviewHistory)return {id:'queued-history-answer',state:'custody',note:'Answer queued. Waiting for the host.'};
 if(p.startsWith('/api/agents')){const h=new URL(p,location.origin).searchParams.get('host'),remote=!!h;return {host:remote?(fixture.badRemote?'wrong/computer':h):seed.local,local:!remote,harnesses:seed.responder.harnesses,agents:remote?[{record:${JSON.stringify(record(remote,remoteID,'Zenbook agent'))},enabled:true}]:[{record:{...${JSON.stringify(record(local,defaultID,'Codex'))},label:fixture.defaultLabel||'Codex'},default:true,enabled:true,responder:fixture.responder},{record:${JSON.stringify(record(local,localID,'Pi','pi'))},enabled:!fixture.disabled,responder:{...fixture.responder,agent_id:seed.localID,harness:'pi'}},{record:${JSON.stringify(record(local,'c'.repeat(32),'Sleeping agent','omp'))},enabled:true,responder:{...fixture.responder,harness:'omp',ready:false,problem:'Not ready in fixture'}},{record:${JSON.stringify(record(local,disabledID,'Codex'))},enabled:false,responder:fixture.responder}]};}
 if(seed.panelMode&&p==='/api/assistant-setup'){if(body!==undefined)throw Error('Panel navigation must not apply setup');return {local:true,harnesses:[['codex','Codex'],['pi','Pi'],['omp','OMP']].map(([id,label])=>({id,label,detected:true,configured:true,registered:true,supported:true,state:'connected',note:'Inert layout fixture native setup.'}))};}
 if(p==='/api/upload/discard'){for(const id of body.ids){fixture.discarded.push(id);delete fixture.uploads[id];}return {};}
@@ -45,6 +46,67 @@ if(manifest.document){const css=new CSSStyleSheet();css.replaceSync(await(await 
 const shadow=document.querySelector('#skin').attachShadow({mode:'open'}),css=new CSSStyleSheet();css.replaceSync(await(await fetch(base+manifest.style)).text());shadow.adoptedStyleSheets=[css];
 const skinRoot=document.createElement('div');skinRoot.className='skin-root';shadow.append(skinRoot);const module=await import(base+manifest.entry);await module.mount(skinRoot,host);fixture.unmount=()=>module.unmount(skinRoot);window.ready=true;
 `;
+async function checkReviewHistory(page,width,nav,shots){
+ await page.evaluate(()=>{
+  const id=fixture.legacyHistory,host=fixture.remote;
+  const summary={id,peer:host,agent_host:host,agent_key:'remote-key',agent_id:'',agent_legacy:true,title:'Retained waiting request',last:'Original retained question',last_at:'2026-10-06T10:00:00Z',count:1,review:1,unread:0,running:0,state:'needs_human',quiet_since:'2026-10-06T10:00:00Z'};
+  const continuation={host,id,key:'original-request-key',attempt:7};
+  const message={id,dir:'out',from:fixture.local,to:host,kind:'question',body:'Original retained question',at:'2026-10-06T10:00:00Z',state:'delivered',history:true,author:{label:'You'},detail:'Exact original clarification for the retained request.',exec:{host,state:'needs_human',attempt:7},continuation,actions:['continue']};
+  fixture.threads[id]={id,peer:host,key:{pinned:'remote-key'},approved:true,messages:[message],topic:summary};
+  fixture.overview.threads.push(summary);
+  fixture.overview.review=[{id,peer:host,kind:'question',reason:'needs_human',why:message.detail,at:message.at}];
+  fixture.reviewHistory=continuation;fixture.change();
+ });
+ await nav.getByRole('button',{name:/^Review/}).click();
+ await page.getByRole('button',{name:/\. Review it\.$/}).click();
+ const conversation=page.locator('[data-part="conversation"]');
+ const recovery=conversation.getByRole('region',{name:'Agent history',exact:true});await recovery.waitFor();
+ assert.equal(await recovery.locator('p').innerText(),'This is saved agent history. Its messages, draft and files stay here. For new work, choose a configured agent below.');
+ await recovery.getByRole('button',{name:'Chat with Zenbook agent · Claude',exact:true}).waitFor();
+ const row=conversation.locator('[data-mid="'+legacyHistory+'"]');
+ const card=row.locator('section[aria-labelledby]').filter({has:page.locator('[data-agent-needs-you]')});
+ await card.getByText('Exact original clarification for the retained request.',{exact:true}).waitFor();
+ const guidance=card.locator('p').filter({hasText:'For a native permission or required authorization'});
+ assert.match(await guidance.innerText(),/Use Reply/);
+ assert.match(await guidance.innerText(),/Mark as handled/);
+ assert.doesNotMatch(await guidance.innerText(),/Ask again|tag the same agent|attention clears/);
+ await card.getByText('A reply supplies information; it does not grant new permissions.',{exact:true}).waitFor();
+ assert.doesNotMatch(await card.innerText(),/Chat messages don’t approve or restart it/);
+ await card.getByRole('button',{name:'Reply',exact:true}).waitFor();
+ await card.getByRole('button',{name:'Mark as handled',exact:true}).waitFor();
+ assert.equal(await card.getByRole('button',{name:'Ask again',exact:true}).count(),0);
+ await settle(page);const combined=path.join(evidence,'comic-review-history-'+width+'.png');await page.screenshot({path:combined});shots.push(combined);
+ await card.getByRole('button',{name:'Reply',exact:true}).click();
+ const answer=page.getByRole('dialog',{name:'Answer your agent',exact:true});await answer.waitFor();
+ await answer.getByRole('textbox',{name:'Your answer',exact:true}).fill('Use the recorded delivery date.');
+ await settle(page);const answering=path.join(evidence,'comic-review-history-answer-'+width+'.png');await page.screenshot({path:answering});shots.push(answering);
+ await answer.getByRole('button',{name:'Send answer',exact:true}).click();await answer.waitFor({state:'hidden'});
+ await page.getByText('Answer queued. Waiting for the host.',{exact:true}).waitFor();
+ const decisions=await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/operator/decide'));
+ assert.equal(decisions.length,1,'Reply uses only the exact request continuation route');
+ const expected=await page.evaluate(()=>fixture.reviewHistory),body=decisions[0].body;
+ assert.match(body.send_id,/^[a-f0-9]{32}$/);
+ assert.deepEqual(body,{host:expected.host,id:expected.id,key:expected.key,attempt:expected.attempt,action:'continue',expect:'needs_human',text:'Use the recorded delivery date.',send_id:body.send_id,report:''});
+ assert.equal(await page.evaluate(()=>fixture.threads[fixture.legacyHistory].messages[0].exec.state),'needs_human','queueing an answer does not claim the host completed it');
+ // Guidance follows each actually offered action, with no new authorization.
+ for(const variant of [{actions:['resolve']},{actions:['accept']},{actions:['continue'],continuation:{id:legacyHistory,key:'original-request-key',attempt:7}}]){
+  await page.evaluate(variant=>{const m=fixture.threads[fixture.legacyHistory].messages[0];delete m.continuation;if(variant.continuation)m.continuation=variant.continuation;m.actions=variant.actions;fixture.change();},variant);
+  await card.getByRole('button',{name:'Reply',exact:true}).waitFor({state:variant.continuation?'visible':'hidden'});
+  if(variant.actions[0]!=='continue')await card.getByRole('button',{name:variant.actions[0]==='resolve'?'Mark as handled':'Ask again',exact:true}).waitFor();
+  if(!variant.actions.includes('resolve'))await card.getByRole('button',{name:'Mark as handled',exact:true}).waitFor({state:'hidden'});
+  if(!variant.actions.includes('accept'))await card.getByRole('button',{name:'Ask again',exact:true}).waitFor({state:'hidden'});
+  const text=await guidance.innerText();assert.doesNotMatch(text,/tag the same agent/);
+  assert.equal(text.includes('Use Reply'),!!variant.continuation);
+  assert.equal(text.includes('Ask again'),variant.actions.includes('accept'));
+  assert.equal(text.includes('Mark as handled'),variant.actions.includes('resolve'));
+  await card.getByText(variant.continuation?'A reply supplies information; it does not grant new permissions.':'This request still needs attention. Native permissions stay unchanged.',{exact:true}).waitFor();
+ }
+ assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/send').length),0,'history and exact continuation never start a replacement conversation');
+ assert.equal(await page.evaluate(()=>fixture.staged.length),0,'original history File is never staged for a continuation');
+ assert(!await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),'combined history request fits viewport');
+ await page.evaluate(()=>fixture.unmount());
+ assert.deepEqual(await page.evaluate(async()=>{const d=fixture.bag.comicDrafts.drafts[fixture.legacyHistory];return {text:d.text,sameFile:d.files[0].file===fixture.historyFile,bytes:await d.files[0].file.text()};}),{text:'Keep this original history draft',sameFile:true,bytes:'Original retained draft bytes'},'exact request Reply preserves the original history draft and File object');
+}
 async function checkPanelLayout(page,width,nav,shots){
  const fit=async()=>{
   assert(!await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),'panel document fits viewport');
@@ -149,6 +211,7 @@ const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://127.0
    await page.goto(origin);await page.waitForFunction(()=>window.ready);
    const nav=page.getByRole('navigation',{name:'Main'}),sent=()=>page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/send').map(r=>r.body));
    await nav.getByRole('button',{name:'Agents',exact:true}).click();
+   if(process.env.AGENTNET_REVIEW_HISTORY){await checkReviewHistory(page,width,nav,shots);assert.deepEqual(errors,[]);await context.close();continue;}
    if(process.env.AGENTNET_REMOVED_PERMISSIONS){
     for(let attempt=0;attempt<2;attempt++){
      if(attempt){await page.reload();await page.waitForFunction(()=>window.ready);await page.getByRole('navigation',{name:'Main'}).getByRole('button',{name:'Agents',exact:true}).click();}
@@ -309,6 +372,6 @@ const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://127.0
    await page.evaluate(()=>fixture.unmount());assert.deepEqual(await page.evaluate(async()=>{const d=fixture.bag.comicDrafts.drafts[fixture.legacyHistory];return {text:d.text,sameFile:d.files[0].file===fixture.historyFile,bytes:await d.files[0].file.text()};}),{text:'Keep this original history draft',sameFile:true,bytes:'Original retained draft bytes'},'opening current-agent recovery preserves the original draft and exact File object');await context.close();
   }
   if(process.env.AGENTNET_RENDERED_RETAIN){const keep=path.resolve(process.env.AGENTNET_RENDERED_RETAIN);assert(keep.startsWith('/tmp/'));fs.mkdirSync(keep,{recursive:true,mode:0o700});for(const shot of shots)fs.copyFileSync(shot,path.join(keep,path.basename(shot)));}
-  console.log(JSON.stringify({ok:true,checks:panelMode?'Readable Agents/Review workspaces; setup Back; Settings details and phone Back focus; Chats search/New/empty; 64-character default name; exact conversation/draft/File retained without sends or staging; desktop/phone':process.env.AGENTNET_REMOVED_PERMISSIONS?'Removed phone has no active permission action before/after reload; replacement and Bob remain; history retained; no writes; desktop/phone':'Current-only agent discovery; retained disabled/unready catalog records, legacy/retired searchable history and exact recovery preserving draft/File; local default and exact local/remote named question; fresh readiness/catalog refusal keeps draft, no default substitution; no human DM/group; desktop/phone',shots}));
+  console.log(JSON.stringify({ok:true,checks:process.env.AGENTNET_REVIEW_HISTORY?'Same saved-history request and current catalog; exact continuation Reply, original draft/File, capability-bound guidance; desktop/phone':panelMode?'Readable Agents/Review workspaces; setup Back; Settings details and phone Back focus; Chats search/New/empty; 64-character default name; exact conversation/draft/File retained without sends or staging; desktop/phone':process.env.AGENTNET_REMOVED_PERMISSIONS?'Removed phone has no active permission action before/after reload; replacement and Bob remain; history retained; no writes; desktop/phone':'Current-only agent discovery; retained disabled/unready catalog records, legacy/retired searchable history and exact recovery preserving draft/File; local default and exact local/remote named question; fresh readiness/catalog refusal keeps draft, no default substitution; no human DM/group; desktop/phone',shots}));
  }finally{if(browser)await browser.close();server.close();}
 })().catch(e=>{console.error(e);process.exitCode=1});

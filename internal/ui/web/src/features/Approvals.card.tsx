@@ -253,7 +253,11 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
             {!can("decline") && <p className="px-1 pt-1 text-[13px] text-muted">If you don’t allow it, nothing runs.</p>}
           </>}
           {phase === "needs_human" && <>
-            <p className="text-[14px] text-text-2">For a native permission or required authorization, review the agent on its host computer. Reply in this chat and tag the same agent to continue this request under its existing permissions. When the host starts that verified linked reply, the earlier attention clears. Mark as handled dismisses this request without running it.</p>
+            <p className="text-[14px] text-text-2">For a native permission or required authorization, review the agent on its host computer.
+              {m.continuation && " Use Reply to supply information for this exact waiting request. The host checks it before continuing under its existing permissions."}
+              {can("accept") && " Ask again requests another attempt with the agent’s existing permissions."}
+              {(m.continuation?.host || can("resolve")) && " Mark as handled asks to close this request without running it again."}
+            </p>
             {m.continuation && <Button variant="act" size="lg" icon={<IconArrowBackUp size={20} />} disabled={!!busy} onClick={() => setAnswer({request: {...m.continuation!}, send: sendID(), question: said})}>Reply</Button>}
             {m.continuation?.host && <ResolveOwnRequest request={m.continuation} disabled={!!busy} />}
             {can("accept") && <Button variant="outline" size="lg" className="min-h-12!" icon={<IconRefresh size={19} />} disabled={!!busy} onClick={allow}>{busy === "accept" ? "Starting…" : "Ask again"}</Button>}
@@ -271,7 +275,7 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
 
         {(phase === "decide" || phase === "needs_human") && (
           <p className="flex items-center gap-2 border-t-[1.5px] border-ink/10 px-4 py-2.5 text-[13px] font-medium text-text-2">
-            <IconLock size={16} className="shrink-0 text-ink" aria-hidden="true" />{phase === "needs_human" ? "This request still needs attention. Chat messages don’t approve or restart it." : "Only you can approve this. Typing in chat can’t approve it."}
+            <IconLock size={16} className="shrink-0 text-ink" aria-hidden="true" />{phase === "needs_human" ? m.continuation ? "A reply supplies information; it does not grant new permissions." : "This request still needs attention. Native permissions stay unchanged." : "Only you can approve this. Typing in chat can’t approve it."}
           </p>
         )}
       </RequestFrame>
