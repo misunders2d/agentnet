@@ -1,5 +1,36 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+## v0.9.6 published — October 26, 2026
+
+[App v0.9.6](https://github.com/misunders2d/agentnet/releases/tag/v0.9.6)
+is public from immutable tag `f887e2613ab05a0090a7beda6dde123dee5bd6cd`;
+[gallery v2026.10.26.1](https://github.com/misunders2d/agentnet-skins/releases/tag/v2026.10.26.1)
+is from `537c2b8b9e8712a93273e82e6edbbbdc8edb8edf`, pinned to that core.
+Both are Latest. All 12 unauthenticated public payloads match the independently
+reviewed draft. Original Android preview signer, version/ABIs/alignment, clean Go
+source stamps and AppImage media contents verify. The actual public gallery parser
+verifies all five packages, 129 files and 20 previews.
+
+This release includes complete Codex replies, agent mentions/reactions/composer
+fixes, receiver-bound native approvals and continuations, linked-device notification
+recovery, direct Pending navigation, daemon readiness diagnostics and reviewed
+whole-topic continuation. The new topic controls are in Comic/Pulp/Office;
+Classic/Holonet/Zoom retain their existing controls and pass compatibility checks.
+Retained Linux race/native evidence and affected native reruns qualify the source;
+final real mixed-version testing against v0.9.5 passes. The final-pin local skin
+gate passes 306 browser/static checks and 37 applicable runtime groups, with five
+explicitly inapplicable entries. Duplicate gallery CI was cancelled during browser
+installation; it is not passing CI evidence. Earlier intermittent fixture failures
+remain recorded; successful reruns do not establish their causes.
+
+The initial roughly 13-second phone loading delay remains unresolved. The API35
+first-Actions-frame stall and physical candidate timing remain unqualified. Phone
+testing ended with normal display settings restored; relay rollout is separate.
+Zenbook's copied Pi/OMP extensions now contain the already-shipped notice-context
+filter. Owner activation remains unverified: Pi uses `/reload`, OMP uses
+`/reload-plugins`. Binary updates do not replace copied extensions; automatic
+loaded-hook revision notices remain a follow-up.
+
 ## v0.9.5 historical-device hook correction published — October 23, 2026
 
 [App v0.9.5](https://github.com/misunders2d/agentnet/releases/tag/v0.9.5)
