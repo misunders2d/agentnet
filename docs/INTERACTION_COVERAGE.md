@@ -87,6 +87,8 @@ this document records the test contract and coverage gaps.
 | P2 | Shared slow refresh cause is reproduced and profiled | root | investigating | Installed v0.9.5 compact overview measured 25.645s and later 3.398s; selected read-only store methods completed in 0.844s, so those queries alone do not explain the delay |
 | P3 | Measured bottlenecks fixed and normal/10x cases pass | root | scoped candidate; broader qualification open | Per-build participation reuse has adversarial review and focused signed-membership/unread regressions; no general responsiveness fix or 10x pass is claimed |
 | P4 | Local dismissal changes UI before asynchronous processing | root | implemented; focused checks pass; release qualification open | Telegram local mutation/reconciliation flow reused. Real blocked-request card/count removal, usable menu/navigation, Review pending state and failure restoration exercised; stale/new-attempt/lost-response/workspace tests pass. Source candidate is not an installed repair |
+| P5 | Composer sizing avoids repeated forced layout while typing | root | implemented; rendered regression and affected checks pass; stress journey still fails | Reused Telegram's separate natural-height measurement and batched conditional writes. Old skin writes height 32 times for ten single-line characters; new desktop/narrow regression permits at most two. Four affected race test parents pass; the complete 6x renderer journey still hits its unchanged watchdog |
+| P6 | Typing does not rebuild unrelated topic/chat lists | root | next measured repair | CPU samples identify TopicBar's whole-draft subscription and unconditional workspace chat-list construction, including human DMs; no implementation or pass claimed yet |
 | U1 | Update version checks do not depend on chat projection | root | verified source only | Existing lightweight endpoint; real blocked-chat regression, native three-OS/race tests and live patched check at 1.089ms; installed app still v0.9.5 |
 | X1 | Confusing history/review screen explains state and next action accurately | UX reviewer/root | investigating | Owner screenshot mixes saved history, unknown original agent and contradictory continuation/approval instructions |
 | H1 | Pi/OMP idle notices do not repeat remaining items as new | root | candidate tested; installed activation open | Passive activity uses one native status slot. Pi/OMP focused regressions and isolated real Pi rendering pass; prompt acknowledgement remains tied to native persistence. Existing sessions not reloaded |
@@ -137,6 +139,27 @@ restores the current card and badge with an explicit error. Screenshots of the
 major chat/menu/Review/pending/recovery states were inspected. These establish
 the scoped behavior, not comparative latency, Android performance, exhaustive
 control coverage, cross-device convergence or release readiness.
+
+Composer sizing follows the inspected Telegram Web A
+[`MessageInput.tsx`, same pinned revision](https://github.com/Ajaxy/telegram-tt/blob/f67a40879a7d78c2683ec5a296cf55bc22417d56/src/components/middle/composer/MessageInput.tsx#L276-L350):
+measure a separate natural-height copy, batch geometry reads, and write only a
+changed height. AgentNet uses the existing mention mirror with one unconstrained
+inner element; its textarea and input handlers remain the same. One stable
+observer schedules one animation frame, and departure cancels it. The focused
+rendered regression covers growth, shrink, trailing newline, capped scrolling,
+composition events, attachment space, reduced available height and same-chat
+read-only/reopen at desktop and narrow widths. Screenshots were inspected.
+Resize and multi-agent Composer race checks pass; panel and schedule checks pass
+after two bounded harness repairs: allowing only the exact read-only topic-location
+lookup already observed on clean HEAD, and providing a temporary screenshot
+directory required by the schedule runner. Other write guards remain intact.
+
+The unchanged 20-second stress-driver watchdog still expires in both 6x CPU
+renderer runs. Sampled resize work drops from approximately 1,320ms to 42ms in
+that one before/after pair, while opening still has an approximately 1,138ms long
+task. This is renderer simulation with owned data, not a physical-phone result
+or a qualified latency distribution. Full-history payloads, full timeline
+preprocessing, topic layout and unrelated list rebuilding remain open.
 
 ## Reported failures that remain open
 

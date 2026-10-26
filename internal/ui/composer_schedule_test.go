@@ -36,7 +36,7 @@ func TestComposerScheduleRendered(t *testing.T) {
 		t.Skip("opt-in: installed Playwright required")
 	}
 	cmd := exec.CommandContext(t.Context(), "node", "testdata/person_topics_rendered.cjs")
-	cmd.Env = append(os.Environ(), "AGENTNET_COMPOSER_SCHEDULE=1")
+	cmd.Env = append(os.Environ(), "AGENTNET_COMPOSER_SCHEDULE=1", "AGENTNET_SCREENSHOTS="+t.TempDir())
 	out, err := cmd.CombinedOutput()
 	if err != nil || !strings.Contains(string(out), "schedule comic 1280 PASS") || !strings.Contains(string(out), "schedule comic 390 PASS") {
 		t.Fatalf("%v\n%s", err, out)

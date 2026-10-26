@@ -109,7 +109,9 @@ export const Field = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTML
   parts.push(text.slice(last) + "​"); // a trailing newline still gets its line
   return (
     <div data-part="composer-field" className={"relative min-w-0 flex-1 overflow-hidden rounded-[23px] bg-canvas stroke transition-shadow duration-200 focus-within:[box-shadow:0_0_0_3px_color-mix(in_srgb,var(--an-agent-ink)_30%,transparent)] lg:rounded-2xl " + className}>
-      <div ref={mirror} aria-hidden="true" className={"pointer-events-none absolute inset-0 overflow-hidden text-ink " + box} style={metrics}>{parts}</div>
+      <div ref={mirror} aria-hidden="true" className={"pointer-events-none absolute inset-0 overflow-hidden text-ink " + box} style={metrics}>
+        <div data-composer-measure>{parts}</div>
+      </div>
       <textarea ref={ref} rows={1} {...rest} style={{ ...metrics, color: "transparent", outline: "none" }}
         className={"relative block w-full resize-none bg-transparent caret-ink [scrollbar-width:none] placeholder:text-muted selection:bg-act/40 selection:text-transparent disabled:cursor-not-allowed " + box} />
     </div>

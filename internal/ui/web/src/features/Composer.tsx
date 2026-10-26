@@ -188,35 +188,52 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   const listId = "mentions-" + conv.slice(0, 12);
   useEffect(() => setActive(0), [trig?.query, open]);
 
-  // ---- keeping the field in shape: caret after programmatic edits, height, mirror scroll
+  // ---- keeping the field in shape
   useLayoutEffect(() => {
     const ta = field.current, composer = form.current, container = composer?.parentElement;
-    if (!ta || !composer || !container) return;
+    const mirrored = mirror.current, content = mirrored?.firstElementChild;
+    if (!ta || !composer || !container || !mirrored || !(content instanceof HTMLElement)) return;
+    let frame = 0;
     // Leave room for the actual header, files, reply and audience controls.
-    // Their height changes with the keyboard and attachments; viewport-only
-    // limits can still put Send below the available conversation.
+    // Like Telegram's MessageInput (f67a408:276-350), measure a natural-height
+    // copy, read geometry together, then write only a changed height. Resetting
+    // the live textarea to auto forces the whole conversation to lay out again.
     const resize = () => {
-      ta.style.height = "auto";
+      frame = 0;
+      if (!ta.isConnected || !content.isConnected) return;
+      const padding = getComputedStyle(mirrored);
+      const natural = content.offsetHeight + parseFloat(padding.paddingTop) + parseFloat(padding.paddingBottom);
       const fixed = [...container.children].reduce((height, node) => {
         if (node === composer || !(node instanceof HTMLElement)) return height;
         const style = getComputedStyle(node);
         return style.position !== "absolute" && style.position !== "fixed" && Number(style.flexGrow) === 0 ? height + node.offsetHeight : height;
       }, 0);
       const remaining = container.clientHeight - fixed - (composer.offsetHeight - ta.offsetHeight);
-      ta.style.height = Math.max(44, Math.min(ta.scrollHeight, wide ? 240 : 140, remaining)) + "px";
-      if (mirror.current) mirror.current.scrollTop = ta.scrollTop;
+      const height = Math.max(44, Math.min(natural, wide ? 240 : 140, remaining)) + "px";
+      const scroll = ta.scrollTop;
+      if (ta.style.height !== height) ta.style.height = height;
+      mirrored.scrollTop = scroll;
     };
-    resize();
-    const observer = new ResizeObserver(resize);
+    const schedule = () => { if (!frame) frame = requestAnimationFrame(resize); };
+    const observer = new ResizeObserver(schedule);
     observer.observe(container);
     observer.observe(composer);
-    if (caretNext.current != null) {
+    observer.observe(content);
+    // Fixed controls and the remaining timeline report changes when a reply,
+    // files or a header changes the space available to the field.
+    for (const node of container.children) if (node instanceof HTMLElement) observer.observe(node);
+    schedule();
+    return () => { observer.disconnect(); cancelAnimationFrame(frame); };
+  }, [wide, conv, !!closed]);
+
+  useLayoutEffect(() => {
+    const ta = field.current;
+    if (ta && caretNext.current != null) {
       ta.setSelectionRange(caretNext.current, caretNext.current);
       setCaret(caretNext.current);
       caretNext.current = null;
     }
-    return () => observer.disconnect();
-  }, [text, wide, conv]);
+  }, [text, conv, !!closed]);
 
   useLayoutEffect(() => { setZone(form.current?.parentElement ?? null); }, [conv, !!closed]);
 

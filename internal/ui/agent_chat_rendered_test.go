@@ -11,6 +11,11 @@ func TestAgentChatStarterRendered(t *testing.T) {
 	testAgentChatRendered(t, false)
 }
 
+func TestComposerResizeRendered(t *testing.T) {
+	t.Setenv("AGENTNET_COMPOSER_RESIZE", "1")
+	testAgentChatRendered(t, false)
+}
+
 func TestComicReviewHistoryRendered(t *testing.T) {
 	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
 		t.Skip("opt-in: set AGENTNET_PLAYWRIGHT to an installed playwright-core")
