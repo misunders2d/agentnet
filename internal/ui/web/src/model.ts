@@ -552,7 +552,7 @@ export function jobWord(state: string | undefined): string {
 
 export const sameDay = (a: string, b: string) => new Date(a).toDateString() === new Date(b).toDateString();
 
-export const timeOf = (s: string) => new Date(s).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+export const timeOf = (s: string) => clock(new Date(s));
 
 export const when = (s: string) => {
   if (!s) return "";
@@ -678,7 +678,16 @@ export const reminderOf = (o: T.Overview | null, id: string) =>
   (o?.remind && (o.reminders || []).find((r) => r.message === id)) || undefined;
 
 /** clock says a time of day as this device writes it: "9:00 AM", "15:00". */
-export const clock = (d: Date) => d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+let clockFormat: Intl.DateTimeFormat | undefined;
+export const clock = (d: Date) => {
+  if (!Number.isFinite(d.getTime())) return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (!clockFormat) {
+    clockFormat = new Intl.DateTimeFormat([], { hour: "numeric", minute: "2-digit" });
+    // Reuse within a render batch; later work sees the device's current zone.
+    queueMicrotask(() => { clockFormat = undefined; });
+  }
+  return clockFormat.format(d);
+};
 
 /** dueText says when, on this device's clock: "today 15:00", "tomorrow 9:00", "Tue 7 Oct 9:00". */
 export function dueText(when: string | Date, now = new Date()): string {

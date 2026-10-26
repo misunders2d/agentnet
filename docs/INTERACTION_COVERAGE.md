@@ -89,6 +89,7 @@ this document records the test contract and coverage gaps.
 | P4 | Local dismissal changes UI before asynchronous processing | root | implemented; focused checks pass; release qualification open | Telegram local mutation/reconciliation flow reused. Real blocked-request card/count removal, usable menu/navigation, Review pending state and failure restoration exercised; stale/new-attempt/lost-response/workspace tests pass. Source candidate is not an installed repair |
 | P5 | Composer sizing avoids repeated forced layout while typing | root | implemented; rendered regression and affected checks pass; stress journey still fails | Reused Telegram's separate natural-height measurement and batched conditional writes. Old skin writes height 32 times for ten single-line characters; new desktop/narrow regression permits at most two. Four affected race test parents pass; the complete 6x renderer journey still hits its unchanged watchdog |
 | P6 | Typing does not rebuild unrelated topic/chat lists | root | implemented; focused checks pass; stress remains failed | TopicBar subscribes only to selected topic/new-topic state and skips workspace chat-list construction for human DMs. Actual-component regression and six rendered chat/layout combinations pass; owned normal real-backend journey passes. The 6x renderer run fails during startup before typing, so no stress improvement is claimed |
+| P7 | Repeated message times avoid per-row locale formatter setup | root | implemented; output/cost regressions pass; stress remains failed | Reuses a fixed clock formatter within one synchronous batch, then clears it before later work. Actual model and Chromium parity checks preserve locale, invalid dates, DST and changing device zones; five focused race parents pass. Full 6x journey still reaches its unchanged watchdog |
 | U1 | Update version checks do not depend on chat projection | root | verified source only | Existing lightweight endpoint; real blocked-chat regression, native three-OS/race tests and live patched check at 1.089ms; installed app still v0.9.5 |
 | X1 | Confusing history/review screen explains state and next action accurately | UX reviewer/root | investigating | Owner screenshot mixes saved history, unknown original agent and contradictory continuation/approval instructions |
 | H1 | Pi/OMP idle notices do not repeat remaining items as new | root | candidate tested; installed activation open | Passive activity uses one native status slot. Pi/OMP focused regressions and isolated real Pi rendering pass; prompt acknowledgement remains tied to native persistence. Existing sessions not reloaded |
@@ -179,6 +180,25 @@ Review, confirmation and the cleared item were inspected. The same candidate's
 6x renderer run fails at the initial Chats click's unchanged five-second limit,
 before the modern-chat phases; its startup profile includes 772/760ms long
 tasks. Neither a stress pass nor a causal before/after speedup is established.
+
+Clock formatting follows Telegram Web A's inspected
+[`formatter reuse`, same pinned revision](https://github.com/Ajaxy/telegram-tt/blob/f67a40879a7d78c2683ec5a296cf55bc22417d56/src/util/localization/dateFormat.ts#L364-L387).
+The startup profile identified repeated `timeOf`/`toLocaleTimeString` work.
+AgentNet shares one fixed hour/minute formatter between message and reminder
+clocks within a synchronous batch, then discards it in a microtask so later work
+uses the device's current default zone. Invalid dates retain their previous
+output. There is no formatted-result cache or timezone listener.
+
+The actual-model regression fails on the old source with 1,016 per-row locale
+calls in its batch. The candidate uses that path only for four invalid inputs
+and creates one formatter for the valid rows. Matching output and later-batch
+recreation pass across five changing zones and DST boundaries, in default,
+Ukrainian and Arabic Node locales. Chromium checks also pass all 15 locale/zone
+combinations, including live timezone overrides. Five affected race parents
+pass, including rendered reminder and saved-history controls. The complete
+6x renderer journey still fails its original 20-second watchdog after seven
+captures. Its exact owned request was committed once, but final UI freshness
+verification did not complete; that run is a failure, not a performance pass.
 
 The real 48-topic regression exposed a separate binding defect. All 48 topics
 remain stored: 40 ordinary human-device topics and eight legacy agent-history
