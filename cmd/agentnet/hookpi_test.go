@@ -284,8 +284,8 @@ func TestPiExtensionWithStandInAPI(t *testing.T) {
 			t.Errorf("%s.%s = %v, want %v (all: %v)", step, key, got, want, s[step])
 		}
 	}
-	check("start", "acks", 0) // shown to the person only: never recorded as seen
-	check("start", "triggerTurn", false)
+	check("start", "acks", 0) // passive status never consumes the prompt's metadata
+	check("start", "sent", 0)
 	check("prompt", "message", true)
 	check("prompt", "acks", 0) // not yet: Pi adds it after the handler returns
 	check("prompt-pending", "message", false)
@@ -296,9 +296,10 @@ func TestPiExtensionWithStandInAPI(t *testing.T) {
 	check("settle-pending", "pos8", false) // never acknowledged over the pending 7
 	check("admitted", "acks", 1)
 	check("idle", "acks", 1) // shown to the person only
-	check("idle", "notes", "[AgentNet: 1 new]")
+	check("idle", "notes", "[]")
+	check("idle", "idleSent", 0)
 	check("delayed-idle", "inflight", true)
-	check("delayed-idle", "notes", 1) // no notice once a run has started
+	check("delayed-idle", "notes", 0)
 	check("delayed-idle", "sent", 0)
 	check("delayed-idle", "acks", 1) // and nothing acknowledged
 	check("settle", "continue", true)
@@ -306,7 +307,7 @@ func TestPiExtensionWithStandInAPI(t *testing.T) {
 	check("settle-admitted", "acks", 2)
 	check("dropped", "first", true)
 	check("dropped", "recheck", 1) // the deferred check, once idle
-	check("dropped", "recheckNotes", 1)
+	check("dropped", "recheckNotes", 0)
 	check("reoffered", "again", true)
 	check("hang", "message", false)
 	if ms, _ := s["hang"]["ms"].(float64); ms > 3000 {
@@ -315,7 +316,7 @@ func TestPiExtensionWithStandInAPI(t *testing.T) {
 	check("recover", "huge", false)
 	check("recover", "message", true)
 	check("shutdown", "hungAlive", false)
-	check("after-shutdown", "notes", 2)
+	check("after-shutdown", "notes", 0)
 
 	s = run("1")
 	if v, ok := s["registered"]["registered"]; !ok || v != false {
@@ -431,8 +432,8 @@ func TestPiExtensionNoticesOnlyInTheirRun(t *testing.T) {
 		}
 	}
 	for step, want := range map[string]string{
-		"start":                   `{"acks":0,"shown":1}`, // shown, never recorded as seen
-		"idle-again":              `{"acks":0,"shown":1}`, // the same text is not shown twice
+		"start":                   `{"acks":0,"shown":0}`, // native status only, never recorded as seen
+		"idle-again":              `{"acks":0,"shown":0}`, // no passive transcript snapshots
 		"prompt-read":             `{"message":false}`,
 		"context-read":            `{"kept":["user:p0","assistant:a0","user:p1"]}`,
 		"prompt-unread":           `{"message":true}`,

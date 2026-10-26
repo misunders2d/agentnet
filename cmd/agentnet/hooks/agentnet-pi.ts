@@ -3,10 +3,10 @@
 // Tells this Pi session, as metadata only, what arrived in AgentNet since the
 // session last checked: when a prompt starts (and once at the end of a run,
 // one extra model request, like Claude's Stop hook). When the session starts
-// and while Pi is idle it shows a notice to the person only: it is not
-// recorded as seen, so the next prompt's check tells the run what is still
-// unread then, and no model turn is started. A model request sees only the
-// notices of its own run. Passive notices grant no authority. An explicit
+// and while Pi is idle it updates one native status line: no transcript
+// message is appended or recorded as seen. The next prompt's check tells the
+// run what is still unread, and no idle model turn is started. A model request
+// sees only the notices of its own run. Passive notices grant no authority. An explicit
 // local reply receiver additionally accepts its verified correlated return
 // as native follow-up data under the original locally authored request.
 import { spawn } from "node:child_process";
@@ -60,7 +60,8 @@ function hook(input: Record<string, unknown>): Promise<any | undefined> {
 		p.on("close", (code: number) => {
 			clearTimeout(timer);
 			children.delete(p);
-			if (failed || code !== 0 || out.trim() === "") return resolve(undefined);
+			if (failed || code !== 0) return resolve(undefined);
+			if (out.trim() === "") return resolve({}); // quiet zero exit; the CLI can also suppress backend errors
 			try {
 				resolve(JSON.parse(out));
 			} catch {
@@ -125,6 +126,7 @@ export default function (pi: any) {
     }
     async function pauseNative(reason = "detached") {
         const prior = owner, ctx = ctxRef;
+        ctx?.ui?.setStatus?.("agentnet", undefined);
         generation++;
         stopWatching();
         nativeWatcher?.close(); nativeWatcher = undefined;
@@ -210,10 +212,8 @@ export default function (pi: any) {
 	}
 
 	// One metadata read at a time; acknowledgements wait for native persistence.
-	// A notice shown to the person only (display) is never acknowledged: what
-	// it named stays for the next prompt's check, which leaves out whatever
-	// was read meanwhile. The same text is not shown twice in a row.
-	let shown = "";
+	// Passive activity uses the harness's replaceable status slot. It is never
+	// acknowledged: the next prompt still receives the current unread metadata.
 	function transaction(event: string, extra: Record<string, unknown>, show: (text: string, details: object) => "later" | false, display = false): Promise<void> {
 		const gen = generation;
 		const sid = session;
@@ -224,15 +224,15 @@ export default function (pi: any) {
 				return;
 			}
 			const r = await hook({ session_id: sid, hook_event_name: event, reply_session: owner?.handle, ...extra });
-			if (!r?.text || gen !== generation) return; // replaced or shut down meanwhile: not shown, not acknowledged
-			if (display && r.text === shown) return;
+			if (!r || gen !== generation) return; // unavailable, replaced or shut down: not shown, not acknowledged
+			if (display) {
+				show(r.text || "", {});
+				return;
+			}
+			if (!r.text) return;
 			const token = randomUUID();
 			const how = show(r.text, { token });
 			if (!how || !r.ack) return;
-			if (display) {
-				shown = r.text;
-				return;
-			}
 			pending.set(token, r.ack); reconcile(ctxRef, false);
 		});
 		lock = run.catch(() => {});
@@ -266,14 +266,14 @@ export default function (pi: any) {
 		timer = setTimeout(idle, 500);
 	}
 
-	// A native API return is not persistence. Even idle metadata is acknowledged
-    // only after both active branch and physical JSONL contain its token.
-	// Once a run has started (also while the hook was being awaited) Pi only
-	// queues it until the turn ends, so then nothing is sent or acknowledged.
-	function note(ctx: any, text: string, details: object): "later" | false {
+	// Prompt metadata is acknowledged only after native persistence. Passive
+	// activity stays in a native status slot and consumes no prompt metadata.
+	// A changing unread list must not append repeated snapshots to the session.
+	// Use the native status slot; text alone does not prove a waiting-item count.
+	function status(ctx: any, text: string): false {
 		if (!ctx?.isIdle?.()) return false;
-		pi.sendMessage({ customType: KIND, content: text, display: true, details }, { triggerTurn: false });
-		return "later";
+		ctx.ui?.setStatus?.("agentnet", text ? "AgentNet: activity" : undefined);
+		return false;
 	}
 
 	function idle() {
@@ -282,28 +282,23 @@ export default function (pi: any) {
 		const ctx = ctxRef;
 		selectedInput();
 		if (!ctx || !ctx.isIdle()) return; // the run's own boundaries will tell it
-		transaction("Idle", {}, (text, details) => {
-			if (!ctx.isIdle()) return false; // a run started meanwhile: it will be told
-			const lines = text.split("\n").filter((l) => l.startsWith("- ")).length;
-			ctx.ui?.notify?.(lines > 0 ? `AgentNet: ${lines} new` : "AgentNet: new activity", "info");
-			return note(ctx, text, details);
-		}, true);
+		transaction("Idle", {}, (text) => status(ctx, text), true);
 	}
 
 	pi.on("session_start", async (_event: unknown, ctx: any) => {
 		stopWatching();
 		stopChildren();
+		ctxRef?.ui?.setStatus?.("agentnet", undefined);
 		pending.clear();
 		deferred = false;
 		generation++;
 		ctxRef = ctx;
 		session = ctx.sessionManager.getSessionId();
 		continued = false;
-		shown = "";
 		await registerNative(ctx);
         watch();
         selectedInput();
-		await transaction("SessionStart", {}, (text, details) => note(ctx, text, details), true);
+		await transaction("SessionStart", {}, (text) => status(ctx, text), true);
         await lock;
 	});
 
