@@ -812,7 +812,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
         <Popover.Portal container={portal}>
           <Popover.Positioner anchor={row} side="top" align="start" sideOffset={8} collisionPadding={12} className="z-40">
             <Popover.Popup finalFocus={field} aria-label="Emoji"
-              className="origin-[var(--transform-origin)] outline-none transition-[transform,opacity] duration-200 ease-out-soft data-[ending-style]:scale-95 data-[ending-style]:opacity-0 data-[starting-style]:scale-95 data-[starting-style]:opacity-0 motion-reduce:transition-opacity">
+              className="origin-[var(--transform-origin)] outline-none transition-[transform,opacity] duration-200 ease-out-soft data-[ending-style]:scale-95 data-[ending-style]:opacity-0 motion-reduce:transition-opacity">
               <EmojiPicker onPick={(e) => { insert(e); setEmojiOpen(false); }} onClose={() => setEmojiOpen(false)} />
             </Popover.Popup>
           </Popover.Positioner>

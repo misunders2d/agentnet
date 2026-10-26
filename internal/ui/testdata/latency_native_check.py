@@ -89,7 +89,6 @@ profile_dir = os.environ.get('AGENTNET_NATIVE_PROFILE_DIR') if system == 'Darwin
 def webcontent_pids():
     rows = subprocess.check_output(['ps', '-axo', 'pid=,comm='], text=True).splitlines()
     return {int(row.split(None, 1)[0]) for row in rows if row.strip().endswith('com.apple.WebKit.WebContent')}
-prior_renderers = webcontent_pids() if profile_dir else set()
 sampled_renderers = set()
 samplers = []
 if profile_dir:
@@ -108,10 +107,12 @@ try:
         while time.monotonic() < end:
             if profile_dir and time.monotonic() >= next_profile_check:
                 next_profile_check = time.monotonic() + .5
-                for pid in webcontent_pids() - prior_renderers - sampled_renderers:
+                # WebKit may assign an already-prewarmed process to this page.
+                # The explicit disposable-GUI guard excludes personal sessions.
+                for pid in webcontent_pids() - sampled_renderers:
                     sampled_renderers.add(pid)
                     destination = pathlib.Path(profile_dir) / (query.get('suite', 'fixture')+'-'+str(pid)+'.txt')
-                    samplers.append(subprocess.Popen(['sample', str(pid), '5', '1', '-file', str(destination)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+                    samplers.append(subprocess.Popen(['sample', str(pid), '5', '10', '-file', str(destination)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
             if proc.poll() is not None:
                 raise RuntimeError('Owned fixture shell exited: '+(root/'shell.log').read_text(errors='replace')[-3000:])
             with opener.open(result_url, timeout=2) as response:

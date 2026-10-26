@@ -108,7 +108,7 @@ export function MemberMenu({ t, member, me, onPick }: { t: T.DMThread; member: T
       </Menu.Trigger>
       <Menu.Portal container={portal}>
         <Menu.Positioner side="bottom" align="end" sideOffset={6} collisionPadding={12} className="z-50">
-          <Menu.Popup className="min-w-56 rounded-2xl bg-surface p-1.5 text-ink outline-none stroke shadow-pop transition-[opacity,scale] duration-150 data-[starting-style]:scale-95 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 motion-reduce:transition-opacity">
+          <Menu.Popup className="min-w-56 rounded-2xl bg-surface p-1.5 text-ink outline-none stroke shadow-pop transition-[opacity,scale] duration-150 data-[ending-style]:opacity-0 motion-reduce:transition-opacity">
             {member.admin
               ? <Menu.Item className={item} onClick={() => onPick("demote", member)}><IconCrown size={20} />Remove admin role…</Menu.Item>
               : <Menu.Item className={item} onClick={() => onPick("promote", member)}><IconCrown size={20} />Make admin…</Menu.Item>}

@@ -1028,8 +1028,18 @@ try {
    preview.muted=true;let playbackError;void preview.play().catch(e=>{playbackError=String(e.message||e);});
    try{await until(()=>preview.currentTime>0||playbackError,'actual portable video playback');assert(!playbackError,playbackError);}catch(e){reports.presentationFailures.push({id:'media.actual-playback',error:String(e.message||e)});}finally{preview.pause();}
    reports.videoOriginalPlayback={played:preview.currentTime>0,currentTime:preview.currentTime,error:playbackError,container:selectedSource.container,videoCodec:selectedSource.videoCodec,audioCodec:selectedSource.audioCodec};
-   await tap('media.video-prepare-start',control('Smaller video',row()),()=>busy(),'accurate video preparation progress visible');
-   await tap('media.video-prepare-cancel',control('Cancel preparation',row()),()=>!busy()&&control('Original file',row())?.getAttribute('aria-pressed')==='true','cancel leaves original selected');
+   // Hold the real codec's capability check so this cancellation case cannot
+   // accidentally finish the tiny clip between input and its paint opportunity.
+   // Normal encoding/audio preservation has its own real-file rendered test.
+   const encoder=globalThis.VideoEncoder,check=encoder?.isConfigSupported;let releaseCodec,codecReached=false;
+   const codecGate=new Promise(resolve=>{releaseCodec=resolve;});
+   if(check)encoder.isConfigSupported=async function(...args){codecReached=true;await codecGate;return check.apply(this,args);};
+   try{
+    await tap('media.video-prepare-start',control('Smaller video',row()),()=>busy(),'accurate video preparation progress visible');
+    if(check)await until(()=>codecReached,'real video codec capability check');
+    await tap('media.video-prepare-cancel',control('Cancel preparation',row()),()=>!busy()&&control('Original file',row())?.getAttribute('aria-pressed')==='true','cancel leaves original selected');
+    reports.mediaCancellation={codecCheckHeld:!!check,codecCheckReached:codecReached,originalRestored:true};
+   }finally{if(check)encoder.isConfigSupported=check;releaseCodec();}
    const videoRestored=await(await fetch(row().querySelector('video').src)).blob();assert(await fileHash(videoRestored)===reports.mediaInputs[1].sha256,'cancelled video original bytes changed');
    await fill('media.original-send-text',text(),'Exact original video');
    await tap('media.original-send',control('Send'),()=>!tray(),'composer hands off exact original',()=>staged.length===1&&view.messages.some(m=>m.body==='Exact original video'));

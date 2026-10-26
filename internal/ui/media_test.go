@@ -312,6 +312,11 @@ func TestMessageInteractionRendered(t *testing.T) {
 	t.Log(browserCheck(t, "testdata/interaction_rendered.cjs"))
 }
 
+func TestMessagePopupsImmediateRendered(t *testing.T) {
+	t.Setenv("AGENTNET_INTERACTION_POPUPS", "1")
+	t.Log(browserCheck(t, "testdata/interaction_rendered.cjs"))
+}
+
 func TestMessageReviewInteractionsRendered(t *testing.T) {
 	if engine := os.Getenv("AGENTNET_INTERACTION_ENGINE"); engine != "" && engine != "chromium" {
 		t.Skip("real CDP touch input requires Chromium; engine-neutral controls run separately")

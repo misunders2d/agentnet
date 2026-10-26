@@ -158,7 +158,7 @@ function WorkspaceControl({ variant }: { variant: "coin" | "pill" }) {
           </Popover.Trigger>
           <Popover.Portal container={portal}>
             <Popover.Positioner side="right" align="start" sideOffset={14} collisionPadding={12} className="z-40">
-              <Popover.Popup className="w-[340px] origin-[var(--transform-origin)] rounded-3xl bg-canvas p-3 text-ink outline-none stroke shadow-pop transition-[opacity,scale] duration-200 ease-out-soft data-[ending-style]:scale-95 data-[ending-style]:opacity-0 data-[starting-style]:scale-95 data-[starting-style]:opacity-0 motion-reduce:duration-100 motion-reduce:data-[ending-style]:scale-100 motion-reduce:data-[starting-style]:scale-100">
+              <Popover.Popup className="w-[340px] origin-[var(--transform-origin)] rounded-3xl bg-canvas p-3 text-ink outline-none stroke shadow-pop transition-[opacity,scale] duration-200 ease-out-soft data-[ending-style]:scale-95 data-[ending-style]:opacity-0 motion-reduce:duration-100 motion-reduce:data-[ending-style]:scale-100 motion-reduce:data-[starting-style]:scale-100">
                 <Popover.Title className="px-2 pt-1 pb-2 font-display text-[22px] font-extrabold leading-tight">Workspaces</Popover.Title>
                 {menuBody}
               </Popover.Popup>

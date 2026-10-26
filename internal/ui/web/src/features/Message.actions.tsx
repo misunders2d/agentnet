@@ -59,7 +59,7 @@ export function Toolbar({ m, ctx, can, acts, mine }: { m: AnyMsg; ctx: Ctx; can:
         <Menu.Trigger aria-label="More actions" title="More actions" className={btn + " data-[popup-open]:bg-sunken"}><IconDots size={20} /></Menu.Trigger>
         <Menu.Portal container={portal}>
           <Menu.Positioner side="bottom" align={mine ? "end" : "start"} sideOffset={6} collisionPadding={12} className="z-50">
-            <Menu.Popup className="min-w-52 rounded-2xl bg-surface p-1.5 text-ink outline-none stroke shadow-pop transition-[opacity,scale] duration-150 data-[starting-style]:scale-95 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 motion-reduce:transition-opacity">
+            <Menu.Popup className="min-w-52 rounded-2xl bg-surface p-1.5 text-ink outline-none stroke shadow-pop transition-[opacity,scale] duration-150 data-[ending-style]:opacity-0 motion-reduce:transition-opacity">
               <Items can={can} acts={acts} m={m} render={(icon, label, onClick, danger) => (
                 <Menu.Item key={label} onClick={onClick}
                   className={"flex min-h-11 cursor-pointer items-center gap-3 rounded-xl px-3 text-[15px] font-medium outline-none data-[highlighted]:bg-sunken " + (danger ? "text-danger" : "")}>
@@ -243,8 +243,8 @@ export function Confirm({ open, onOpenChange, title, children, ok, onOk, danger 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange} modal="trap-focus" disablePointerDismissal>
       <Dialog.Portal container={portal}>
-        <Dialog.Backdrop className="fixed inset-0 z-40 bg-scrim/40 transition-opacity duration-[120ms] data-[starting-style]:opacity-0 data-[ending-style]:opacity-0" />
-        <Dialog.Popup {...modal} role="alertdialog" className="fixed left-1/2 top-1/2 z-50 w-[min(440px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded-3xl bg-canvas p-5 text-ink outline-none stroke shadow-pop transition-[opacity,scale] duration-[140ms] ease-out-soft data-[starting-style]:scale-95 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 motion-reduce:transition-opacity">
+        <Dialog.Backdrop className="fixed inset-0 z-40 bg-scrim/40 transition-opacity duration-[120ms] data-[ending-style]:opacity-0" />
+        <Dialog.Popup {...modal} role="alertdialog" className="fixed left-1/2 top-1/2 z-50 w-[min(440px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded-3xl bg-canvas p-5 text-ink outline-none stroke shadow-pop transition-[opacity,scale] duration-[140ms] ease-out-soft data-[ending-style]:opacity-0 motion-reduce:transition-opacity">
           <Dialog.Title className="font-display text-[22px] font-extrabold leading-tight">{title}</Dialog.Title>
           <Dialog.Description render={<div />} className="mt-2 space-y-2 text-[15px] text-text-2">{children}</Dialog.Description>
           <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">

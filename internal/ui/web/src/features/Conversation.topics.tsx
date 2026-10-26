@@ -254,7 +254,7 @@ export function TopicMenu({ topic, trigger, onAll, onHeldChange,onDirectMerge }:
         {trigger}
         <Menu.Portal container={portal}>
           <Menu.Positioner side="bottom" align="start" sideOffset={6} collisionPadding={12} className="z-50">
-            <Menu.Popup className="min-w-60 rounded-2xl bg-surface p-1.5 text-ink outline-none stroke shadow-pop transition-[opacity,scale] duration-150 data-[starting-style]:scale-95 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 motion-reduce:transition-opacity">
+            <Menu.Popup className="min-w-60 rounded-2xl bg-surface p-1.5 text-ink outline-none stroke shadow-pop transition-[opacity,scale] duration-150 data-[ending-style]:opacity-0 motion-reduce:transition-opacity">
               {!!topic.pendingIDs?.length && <Menu.Item className={item} onClick={() => setPending(true)}><IconClock size={20} aria-hidden="true" />Show pending requests ({topic.pendingIDs.length})</Menu.Item>}
               <Menu.Item disabled={!!busy} className={item} onClick={() => setRename(true)}><IconPencil size={20} aria-hidden="true" />Rename…</Menu.Item>
               {dm && !dm.frozen && (!dm.role || dm.role === "member") && <Menu.Item className={item} onClick={() => setMerge((dm.messages || []).filter(m => m.topic === topic.id && !m.topic_event && !m.event && !m.deleted && !m.excerpt_pid).map(m => m.id))}>Merge into another topic…</Menu.Item>}

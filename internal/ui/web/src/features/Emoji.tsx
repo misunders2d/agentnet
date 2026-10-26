@@ -227,7 +227,7 @@ function CategoryTabs({ parts, current, onJump }: { parts: Section[]; current: n
           </Menu.Trigger>
           <Menu.Portal container={portal}>
             <Menu.Positioner side="bottom" align="end" sideOffset={4} collisionPadding={12} className="z-[60] outline-none">
-              <Menu.Popup className="min-w-52 origin-[var(--transform-origin)] rounded-2xl bg-surface p-1.5 text-ink outline-none stroke shadow-pop transition-[transform,opacity] duration-200 ease-out-soft data-[ending-style]:scale-95 data-[ending-style]:opacity-0 data-[starting-style]:scale-95 data-[starting-style]:opacity-0 motion-reduce:transition-opacity">
+              <Menu.Popup className="min-w-52 origin-[var(--transform-origin)] rounded-2xl bg-surface p-1.5 text-ink outline-none stroke shadow-pop transition-[transform,opacity] duration-200 ease-out-soft data-[ending-style]:scale-95 data-[ending-style]:opacity-0 motion-reduce:transition-opacity">
                 {rest.map((p, j) => (
                   <Menu.Item key={p.label} onClick={() => onJump(shown + j)}
                     className="flex min-h-11 cursor-pointer items-center gap-3 rounded-xl px-2.5 outline-none select-none data-[highlighted]:bg-sunken">

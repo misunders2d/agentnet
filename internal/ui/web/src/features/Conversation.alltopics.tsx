@@ -110,11 +110,11 @@ export function AllTopics({ open, onOpenChange, peer,conv, binding, agent, curre
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange} onOpenChangeComplete={(o) => { if (!o && !open) reset(); }} modal="trap-focus">
       <Dialog.Portal container={portal}>
-        <Dialog.Backdrop className="fixed inset-0 z-40 bg-scrim/30 transition-opacity duration-[120ms] data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 motion-reduce:transition-none" />
+        <Dialog.Backdrop className="fixed inset-0 z-40 bg-scrim/30 transition-opacity duration-[120ms] data-[ending-style]:opacity-0 motion-reduce:transition-none" />
         {/* Focus starts in the search box, except on touch, where that would cover the list with the keyboard. */}
         <Dialog.Popup {...modal} initialFocus={(how) => (how === "touch" ? true : search.current)} className={"fixed z-50 flex flex-col bg-canvas text-ink outline-none transition-transform duration-[140ms] ease-out-soft motion-reduce:transition-none "
-          + (wide ? "inset-y-0 right-0 w-[440px] border-l-[1.5px] border-outline shadow-pop data-[starting-style]:translate-x-full data-[ending-style]:translate-x-full"
-            : "inset-0 data-[starting-style]:translate-y-full data-[ending-style]:translate-y-full")}>
+          + (wide ? "inset-y-0 right-0 w-[440px] border-l-[1.5px] border-outline shadow-pop data-[ending-style]:translate-x-full"
+            : "inset-0 data-[ending-style]:translate-y-full")}>
           <div className={"flex shrink-0 items-center gap-2 border-b-[1.5px] border-outline bg-surface " + (wide ? "h-[76px] px-5" : "h-16 pl-1 pr-3")}>
             {!wide && <Dialog.Close aria-label="Back to the conversation" className="grid size-11 shrink-0 place-items-center rounded-full hover:bg-sunken"><IconChevronLeft size={26} stroke={2.2} /></Dialog.Close>}
             <div className="min-w-0 flex-1">

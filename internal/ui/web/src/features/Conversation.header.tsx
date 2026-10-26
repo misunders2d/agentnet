@@ -214,7 +214,7 @@ export function Header({ ctx, wide, helpers: hs, canInvite }: { ctx: Ctx; wide: 
         </Menu.Trigger>
         <Menu.Portal container={portal}>
           <Menu.Positioner side="bottom" align="end" sideOffset={6} collisionPadding={12} className="z-50">
-            <Menu.Popup className="max-h-[var(--available-height,calc(100dvh_-_24px))] overflow-y-auto overscroll-contain min-w-60 rounded-2xl bg-surface p-1.5 text-ink outline-none stroke shadow-pop transition-[opacity,scale] duration-150 data-[starting-style]:scale-95 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 motion-reduce:transition-opacity">
+            <Menu.Popup className="max-h-[var(--available-height,calc(100dvh_-_24px))] overflow-y-auto overscroll-contain min-w-60 rounded-2xl bg-surface p-1.5 text-ink outline-none stroke shadow-pop transition-[opacity,scale] duration-150 data-[ending-style]:opacity-0 motion-reduce:transition-opacity">
               {t && <Menu.Item className={item} onClick={() => store.setPanel(true)}><IconUsers size={20} />In this chat</Menu.Item>}
               {store.host.linkTo && <>
                 <Menu.Item className={item} onClick={()=>void copyLink('main')}>Copy chat link</Menu.Item>

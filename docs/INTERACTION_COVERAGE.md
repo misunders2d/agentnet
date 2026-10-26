@@ -91,6 +91,26 @@ the repair. Sergey needs to do nothing while owned fixtures are being tested.
 
 ### October 27 continuation: the 500 ms target
 
+The remaining Base UI popup entrances used transparent or fully offscreen
+starting states. Real message-menu/reaction/delete and All Topics regressions
+first fail with animation callbacks held, then pass after those initial states
+are removed. All ten tested combinations (desktop menu/reaction/delete and
+desktop/phone topics, normal/reduced motion) become visible within 500 ms while
+the callback canary remains held. Closing behavior and native permission checks
+are unchanged. The complete existing local Chromium workload run passes 41
+cells / 1,372 synthetic actions, maximum feedback 226 ms. Affected Topics and
+media cancellation cells pass after the final fixture/panel corrections. These
+counts do not establish exhaustive control coverage or native-platform timing.
+
+Media qualification at `37461c9e` passes Android and Windows, and native macOS
+media also passes. macOS browser WebKit still delays opening a chat; Chromium
+also exposed a fixture race where the tiny clip finishes before the test's two
+paint opportunities. Cancellation now holds the real encoder capability check,
+proves that work reached it and restores the original bytes on cancel. Normal
+real-file encoding/audio remains separately tested. The first macOS sampling
+attempt captured a newly spawned prewarm process, missing the active renderer;
+diagnostic sampling now includes that disposable runner's existing WebKit pool.
+
 Native focused touch/Sheet/navigation checks pass three repetitions on Linux,
 macOS and Windows in [40417133967](https://github.com/misunders2d/agentnet/actions/runs/40417133967)
 at `8385362d`. Android startup, notification boundaries, denied permission and
@@ -120,8 +140,7 @@ Broader macOS qualification remains failing. Diagnostic run
 [40417813390](https://github.com/misunders2d/agentnet/actions/runs/40417813390)
 separates fixture-query cost (0–2 ms) from 586–942 ms observed feedback delays.
 Several first DOM mutations occur in 4–10 ms, followed by a delayed first frame;
-the initial menu also waits while transparent. Optional sampling of newly launched
-renderer processes is confined to the disposable macOS fixture; sampled timings
+the initial menu also waits while transparent. Optional sampling of the renderer process pool is confined to the disposable macOS fixture; sampled timings
 are diagnostic only and cannot qualify the release.
 
 The 450 ms hold still left one macOS result at 553 ms when both callback queues
@@ -470,9 +489,9 @@ this document records the test contract and coverage gaps.
 
 | ID | Required outcome | Owner | State | Evidence or next check |
 | --- | --- | --- | --- | --- |
-| C1 | Complete source and rendered control/state inventory | inventory owner | source candidates collected; reconciliation open | 293 files scanned; 6,317 provisional control candidates and 314 unresolved input bindings; no rendered or executed coverage inferred |
-| C2 | Every inventory entry maps to an executed case and timing result | harness owner | validator reviewed; execution open | Offline validator rejects incomplete or synthetic evidence; its unit fixtures establish validator behavior only |
-| P1 | Dismissal mutation, refresh and visible result are timed separately | root | real rendered baseline and controlled candidate exercised; full timing matrix open | Owned mixed fixture and trusted browser input separate local display, request, commit and refresh. The candidate clears the card while the request is held before the real backend; normal/10x, sync and comparator qualification remain open |
+| C1 | Complete source and rendered control/state inventory | root | source candidates collected; reconciliation open | AST inspection finds 627 interactive JSX candidates across 126 core TS files; dynamic reachability, native/standalone-skin controls and executed-case reconciliation remain open. The earlier text scan is not a control inventory. |
+| C2 | Every inventory entry maps to an executed case and timing result | root | validator reviewed; execution open | Offline validator rejects incomplete or synthetic evidence; its unit fixtures establish validator behavior only |
+| P1 | Dismissal mutation, refresh and visible result are timed separately | root | real rendered baseline and controlled candidate exercised; full timing matrix open | Owned mixed fixture and trusted browser input separate local display, request, commit and refresh. The candidate clears the card while the request is held before the real backend; complete normal/10x and synchronization qualification remain open |
 | P2 | Shared slow refresh cause is reproduced and profiled | root | investigating | Installed v0.9.5 compact overview measured 25.645s and later 3.398s; selected read-only store methods completed in 0.844s, so those queries alone do not explain the delay |
 | P3 | Measured bottlenecks fixed and normal/10x cases pass | root | scoped candidate; broader qualification open | Per-build participation reuse has adversarial review and focused signed-membership/unread regressions; no general responsiveness fix or 10x pass is claimed |
 | P4 | Local dismissal changes UI before asynchronous processing | root | implemented; focused checks pass; release qualification open | Telegram local mutation/reconciliation flow reused. Real blocked-request card/count removal, usable menu/navigation, Review pending state and failure restoration exercised; stale/new-attempt/lost-response/workspace tests pass. Source candidate is not an installed repair |
