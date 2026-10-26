@@ -99,7 +99,15 @@ export function Timeline({ ctx, messages, focus, focusSeq, unread, readVisit, se
   const entryID = keyboardEntry?.target === target ? keyboardEntry?.id : target;
   const keyboardRow = visible.find(it => it.type === "msg" && (it.m.id === entryID || it.targets?.some(m => m.id === entryID)));
   const keyboardID = keyboardRow?.key || visible.filter(it => it.type === "msg" && !ev(it.m)).at(-1)?.key;
-  const entryFocus = useCallback((id: string) => setKeyboardEntry(old => old?.id === id && old.target === target ? old : { id, target }), [target]);
+  // Navigation changes only the two keyboard stops. Keep row callbacks stable
+  // so a quote/notification does not redraw every retained message. Read the
+  // committed navigation context, including the current unread visit.
+  const navigation = useRef({ target, focus, focusSeq, readVisit });
+  useLayoutEffect(() => { navigation.current = { target, focus, focusSeq, readVisit }; }, [target, focus, focusSeq, readVisit]);
+  const entryFocus = useCallback((id: string) => {
+    const target = navigation.current.target;
+    setKeyboardEntry(old => old?.id === id && old.target === target ? old : { id, target });
+  }, []);
 
   const keyboard = (e: KeyboardEvent<HTMLDivElement>) => {
     const log = inner.current, el = e.target as HTMLElement;
@@ -244,8 +252,9 @@ export function Timeline({ ctx, messages, focus, focusSeq, unread, readVisit, se
   const jump = useCallback((id: string) => {
     readingAnchor.current = null;
     atBottom.current = false;
+    const { focus, focusSeq, readVisit } = navigation.current;
     setRequested({ id, focus, seq: focusSeq, visit: readVisit });
-  }, [focus, focusSeq, readVisit]);
+  }, []);
 
   return (
     <div className="relative min-h-0 flex-1">

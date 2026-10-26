@@ -95,6 +95,16 @@ jobs:
           npm ci --ignore-scripts --no-audit --no-fund
           node -e "require('./node_modules/esbuild').transformSync('')"
       - run: go vet ./...
+      - name: rendered interaction recovery
+        if: ${{ !inputs.test_run && (!inputs.test_packages || contains(inputs.test_packages, './...') || contains(inputs.test_packages, 'internal/ui')) }}
+        shell: bash
+        run: |
+          tooling="$RUNNER_TEMP/agentnet-interaction-regressions"
+          npm install --prefix "$tooling" --ignore-scripts --no-audit --no-fund playwright@1.63.0
+          "$tooling/node_modules/.bin/playwright" install --with-deps chromium
+          export AGENTNET_PLAYWRIGHT="$tooling/node_modules/playwright"
+          export AGENTNET_CHROMIUM="$(node -p 'require(process.env.AGENTNET_PLAYWRIGHT).chromium.executablePath()')"
+          go test -count=1 -timeout 600s -v ./internal/ui -run '^(TestLocalChangesRendered|TestReminderChangesRendered|TestResponsiveEditorDraftsRendered|TestReactionPendingRendered|TestPaneEntranceRendered|TestTimelineNavigationRendered|TestTimelineKeyboardRendered|TestFirstUnreadTimelineRendered)$'
       - name: message controls on macOS WebKit
         if: ${{ runner.os == 'macOS' && (!inputs.test_packages || contains(inputs.test_packages, './...') || contains(inputs.test_packages, 'internal/ui')) }}
         shell: bash

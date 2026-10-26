@@ -246,6 +246,24 @@ diagnostics support removing the measured scan, not a claim of app-wide speed
 or release qualification. Exact history targets, retained rows and scroll-anchor
 assertions remain unchanged. Raw profiles/logs stay in temporary local storage.
 
+History navigation also recreated every row's focus/jump callbacks when its
+target or visit changed. Stable callbacks now read the last committed navigation
+context. The actual Timeline/MessageView regression first fails on the previous
+source: a notification redraws all 100 retained bubbles. The corrected source
+redraws two for notification/visit changes and two to four for quote jumps, with
+100/1,000 messages at 1440/390 pixels and 100–344 mounted rows. Exact visibility,
+keyboard stop, retained history, a quote after a newer visit and unrelated typing
+are verified with trusted mouse input. The existing rendered history, keyboard
+and first-unread regressions pass under the race detector. Shipping type/hash
+checks pass. The synthetic history timing still exceeds the target; this is
+bounded rendering-cost evidence, not complete latency qualification.
+
+The native CI workflow now explicitly installs the pinned browser and executes
+eight rendered mutation/recovery/navigation parents on each selected OS. Normal
+native runs previously skipped these opt-in tests. This adds execution to the
+gate; it does not convert prior skips into passes or substitute Chromium for a
+native shell or physical phone.
+
 ## Current evidence and work
 
 Checklist editor: root. Contributors link evidence and request state changes.
