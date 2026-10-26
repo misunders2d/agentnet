@@ -212,6 +212,27 @@ complete rendered inventory reconciliation, all skins and native platforms,
 and measured comparable messenger baselines. Existing successful representative
 suites do not close those gaps. Source/build validation is not installation.
 
+History follow-up after `b8928ab4`: profiling finds full-directory allocation in
+every avatar and message-author lookup, before checking an exact first peer.
+These lookups now stop at the exact match without copying unrelated people.
+Identity precedence remains guest, chat peer/member, own person, then directory;
+avatar label ambiguity and exact picture removal retain their existing behavior.
+Source regressions verify 10,000-person directories require zero unrelated reads
+for the own/chat peer and one read for the first directory match. No stale cache,
+history-window change or authority decision is introduced. Three affected model
+and picture race parents plus the 14-action rendered history journey pass.
+One isolated profiled before/after pair does **not** establish an overall latency
+improvement: exact notification/quote feedback is 122.3/153.2 ms before and
+162.8/186.9 ms after. Geometry/layout, message rendering and pane animation work
+remain material, and those interactions still exceed the feedback target.
+
+Release verification at `b8928ab4`: the real-binary `TestMixedVersion` passes
+against the newest published lower release, with required compatibility enabled
+(97.24 seconds; not skipped). All 18 client race partitions are running in
+[CI run 40397384917](https://github.com/misunders2d/agentnet/actions/runs/40397384917).
+The later lookup-only delta does not change client source. No publication or
+deployment is claimed while the interaction/platform/skin gates remain open.
+
 ## Current evidence and work
 
 Checklist editor: root. Contributors link evidence and request state changes.

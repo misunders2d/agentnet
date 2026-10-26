@@ -143,7 +143,17 @@ console.log('Topic-bound composer targets and guest author PASS');
 // Participation type is a structured fact. Display text may be localized,
 // unusual or resemble a different event; it never changes that fact.
 const messageModelSource=stripTypeScriptTypes((await readFile(new URL('../web/src/features/Message.model.ts',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'')).replace(/^export /gm,'');
-const participation=runInNewContext(messageModelSource+'\n({eventKind,joinedBefore})',{...model});
+const participation=runInNewContext(messageModelSource+'\n({eventKind,joinedBefore,whoWrote})',{...model});
+{
+ let reads=0;const people=new Proxy(Array.from({length:10000},(_,i)=>({person:'directory-'+i,address:'directory-'+i+'/device',label:'Directory '+i})),{get(target,key,receiver){if(typeof key==='string'&&/^\d+$/.test(key))reads++;return Reflect.get(target,key,receiver);}});
+ const peer={person:'peer-person',address:'peer/device',label:'Peer',devices:[{address:'peer/phone'}]},member={...peer,person:'member-person',label:'Member'};
+ const context={overview:{person:{person:'self',address:'self/device'},people},dm:{peer,members:[member],guests:[]},thread:null,names:{}};
+ const message={id:'plain',kind:'message',dir:'in',from:'peer/phone'};
+ assert.equal(participation.whoWrote(message,context).key,'p:peer-person');assert.equal(reads,0,'known peer does not copy the global directory for every message');
+ context.dm.peer=null;assert.equal(participation.whoWrote(message,context).key,'p:member-person');assert.equal(reads,0,'known group member keeps precedence without a global copy');
+ context.dm.members=[];assert.equal(participation.whoWrote({...message,from:'directory-0/device'},context).key,'p:directory-0');assert.equal(reads,1,'global fallback stops at the first exact owner');
+ context.dm.guests=[{pid:'invited',host:peer}];assert.equal(participation.whoWrote(message,context).key,'g:invited','verified guest remains ahead of ordinary person matching');
+}
 for(const [type,kind] of [['invite','invited'],['scope','invited'],['accept','joined'],['decline','declined'],['dismiss','left']]){
  const event={id:type,pid:'human-guest',event:'Unusual localized event body: declined the invitation',event_type:type,event_by:'Carol'};
  assert.equal(participation.eventKind(event)?.kind,kind,type+' follows structured event_type');assert.equal(participation.eventKind(event).by,'Carol');

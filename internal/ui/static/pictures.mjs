@@ -72,10 +72,13 @@ export function validatePicture(b) {
   }
 }
 export function avatarPicture(overview, seed, name="") {
-  const people = [overview?.person,...(overview?.people||[])].filter(Boolean);
-  const exact = people.find(p=>p.person===seed || p.address===seed || (p.devices||[]).some(d=>d.address===seed));
+  // Most rows name this person or the first chat peer. Do not copy/filter the
+  // entire directory before that exact lookup can stop at its first match.
+  const matches = p=>p&&(p.person===seed || p.address===seed || (p.devices||[]).some(d=>d.address===seed));
+  const exact = matches(overview?.person)?overview.person:(overview?.people||[]).find(matches);
   if (exact) return exact.picture_url || "";
   // Legacy surfaces hand the avatar a label. Duplicate labels never guess.
+  const people = [overview?.person,...(overview?.people||[])].filter(Boolean);
   const labels = people.filter(p=>p.label===(name||seed));
   const unique = [...new Map(labels.map(p=>[p.person||p.address,p])).values()];
   return unique.length===1 ? unique[0].picture_url||"" : "";

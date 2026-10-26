@@ -6,7 +6,7 @@ import { historicalAgentName, concreteAgentLabel } from "../model";
 // server's, actions come from its can[] and actions[] lists.
 import type { T } from "../api";
 import type { MessageChange } from "../message-changes";
-import { agentName, agentWhere, deliveryWord, deviceKind, deviceWho, jobWord, niceDevice, owner, personName, threadAuthor, threadRow, whoName, type DeviceKind } from "../model";
+import { agentName, agentWhere, deliveryWord, deviceKind, deviceOwner, deviceWho, jobWord, niceDevice, owner, personName, threadAuthor, threadRow, whoName, type DeviceKind } from "../model";
 
 export type AnyMsg = (T.DMMessage | T.Message) & { _local?: boolean; _failed?: boolean; _retry?: () => void; _change?: MessageChange };
 
@@ -116,8 +116,8 @@ export function whoWrote(m: AnyMsg, ctx: Ctx): Who {
   }
   const guest = (t?.guests || []).find((g) => g.host.address === m.from || (g.host.devices || []).some((d) => d.address === m.from));
   if (guest) return { key: "g:" + guest.pid, name: personName(guest.host), agent: false, mine: false, guest: true, seed: guest.host.person || guest.host.address };
-  const p = [t?.peer, ...(t?.members || []), me, ...(o?.people || [])]
-    .find((x) => x && (x.address === m.from || (x.devices || []).some((d) => d.address === m.from)));
+  const owns = (x?: T.PersonView | null) => !!x && (x.address === m.from || (x.devices || []).some(d => d.address === m.from));
+  const p = (owns(t?.peer) ? t?.peer : undefined) || t?.members?.find(owns) || deviceOwner(m.from, o);
   if (p) return { key: "p:" + (p.person || p.address), name: isMe(p, o) ? "You" : personName(p), agent: false, mine: false, guest: false, seed: p.person || p.address };
   return { key: "p:" + m.from, name: niceDevice(m.from) || "Someone", agent: false, mine: false, guest: false, seed: m.from };
 }
