@@ -13,7 +13,7 @@ fs.symlinkSync(path.join(web,'node_modules'),path.join(work,'node_modules'),'dir
 const entry=`import {Store} from './src/store';export {mount} from './src/main';export {mountEditorHarness} from './harness';
 const open=Store.prototype.openChat;Store.prototype.openChat=function(...args){window.fixture.store=this;return open.apply(this,args);};`;
 const bundle=require(path.join(web,'node_modules/esbuild')).buildSync({stdin:{contents:entry,resolveDir:work,loader:'tsx'},bundle:true,format:'esm',target:'es2022',jsx:'automatic',define:{'process.env.NODE_ENV':'"production"'},write:false,logLevel:'silent'}).outputFiles[0].text;
-execFileSync(path.join(web,'node_modules/.bin/tailwindcss'),['-i',path.join(work,'src/styles.css'),'-o',path.join(work,'style.css'),'--minify'],{cwd:work,stdio:'pipe'});
+execFileSync(process.execPath,[path.join(web,'node_modules/@tailwindcss/cli/dist/index.mjs'),'-i',path.join(work,'src/styles.css'),'-o',path.join(work,'style.css'),'--minify'],{cwd:work,stdio:'pipe'});
 const css=fs.readFileSync(path.join(work,'style.css'));
 const boot=`
 import {mount,mountEditorHarness} from '/entry.mjs';

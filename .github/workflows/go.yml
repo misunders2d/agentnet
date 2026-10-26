@@ -96,15 +96,18 @@ jobs:
           node -e "require('./node_modules/esbuild').transformSync('')"
       - run: go vet ./...
       - name: rendered interaction recovery
-        if: ${{ !inputs.test_run && (!inputs.test_packages || contains(inputs.test_packages, './...') || contains(inputs.test_packages, 'internal/ui')) }}
+        if: ${{ (!inputs.test_run || contains(inputs.test_run, 'Rendered')) && (!inputs.test_packages || contains(inputs.test_packages, './...') || contains(inputs.test_packages, 'internal/ui')) }}
         shell: bash
+        env:
+          AGENTNET_RENDERED_RUN: ${{ inputs.test_run || '^(TestLocalChangesRendered|TestReminderChangesRendered|TestResponsiveEditorDraftsRendered|TestReactionPendingRendered|TestPaneEntranceRendered|TestTimelineNavigationRendered|TestTimelineKeyboardRendered|TestFirstUnreadTimelineRendered)$' }}
+          AGENTNET_RENDERED_COUNT: ${{ inputs.test_count || '1' }}
         run: |
           tooling="$RUNNER_TEMP/agentnet-interaction-regressions"
           npm install --prefix "$tooling" --ignore-scripts --no-audit --no-fund playwright@1.63.0
           "$tooling/node_modules/.bin/playwright" install --with-deps chromium
           export AGENTNET_PLAYWRIGHT="$tooling/node_modules/playwright"
           export AGENTNET_CHROMIUM="$(node -p 'require(process.env.AGENTNET_PLAYWRIGHT).chromium.executablePath()')"
-          go test -count=1 -timeout 600s -v ./internal/ui -run '^(TestLocalChangesRendered|TestReminderChangesRendered|TestResponsiveEditorDraftsRendered|TestReactionPendingRendered|TestPaneEntranceRendered|TestTimelineNavigationRendered|TestTimelineKeyboardRendered|TestFirstUnreadTimelineRendered)$'
+          go test -count="$AGENTNET_RENDERED_COUNT" -timeout 600s -v ./internal/ui -run "$AGENTNET_RENDERED_RUN"
       - name: message controls on macOS WebKit
         if: ${{ runner.os == 'macOS' && (!inputs.test_packages || contains(inputs.test_packages, './...') || contains(inputs.test_packages, 'internal/ui')) }}
         shell: bash

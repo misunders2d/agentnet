@@ -30,7 +30,13 @@ const server=http.createServer((q,r)=>{if(q.url==='/entry.mjs'){r.setHeader('Con
   await page.goto('http://127.0.0.1:'+server.address().port+'/?count='+count);
   const row=n=>page.locator('[data-mid="'+String(n).padStart(32,'0')+'"]');await row(count).waitFor();
   // Keep several pages mounted; navigation must not redraw any unchanged row.
-  for(let i=0;i<3&&await page.getByRole('button',{name:'Earlier messages',exact:true}).count();i++)await page.getByRole('button',{name:'Earlier messages',exact:true}).click();
+  // Preparation reaches the top; automatic prepend may remove Earlier before
+  // a click becomes actionable. Measured navigation below still uses real input.
+  for(let i=0;i<3;i++){
+   const before=await page.locator('[data-mid]').count();if(before===count)break;
+   await page.locator('[data-part="timeline"]').evaluate(el=>{el.parentElement.scrollTop=0;});
+   await page.waitForFunction(before=>document.querySelectorAll('[data-mid]').length>before,before);
+  }
   const retained=await page.locator('[data-mid]').count();assert(retained>=Math.min(count,200));
   const visible=async n=>{await page.waitForFunction(id=>{const row=document.querySelector('[data-mid="'+id+'"]'),box=document.querySelector('[data-part="timeline"]').parentElement,r=row?.getBoundingClientRect(),b=box.getBoundingClientRect();return r&&r.bottom>b.top&&r.top<b.bottom;},String(n).padStart(32,'0'));};
   const measure=async(label,action,target,max)=>{await page.evaluate(()=>fixture.renders=[]);await action();await visible(target);const renders=await page.evaluate(()=>fixture.renders.length);assert(renders<=max,label+' redrew '+renders+' of '+retained+' retained bubbles');assert.equal(await row(target).locator('[data-message-bubble]').getAttribute('tabindex'),'0');assert.equal(await page.locator('[data-mid]').count(),retained);console.log(JSON.stringify({width,count,label,retained,renders}));};

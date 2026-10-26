@@ -264,6 +264,26 @@ native runs previously skipped these opt-in tests. This adds execution to the
 gate; it does not convert prior skips into passes or substitute Chromium for a
 native shell or physical phone.
 
+The first expanded native run exposes harness portability gaps: six Windows
+parents cannot execute the Unix Tailwind wrapper; a macOS history-preparation
+click races the timeline's automatic prepend/removal of the Earlier control.
+The harness now invokes Tailwind's pinned JavaScript entry through Node and
+prepares retained pages by scrolling before the measured trusted navigation.
+Seven affected rendered parents pass together locally with unchanged functional
+assertions. The native source suite also finds a missing retained-editor import
+in the topic-copy harness; it now evaluates the real retained-text hook and topic
+key function. Its original scope/copy assertions pass under the race detector.
+These are test repairs, not product improvements. A macOS reaction measurement
+still reaches its original 100 ms wait bound; additional diagnostics retain the
+browser timing/state on failure. The latency assertion and bound are unchanged.
+
+Five native Windows client partitions pass. Partition 2 fails while setting up
+verified group context, before its outgoing-history-control assertions. The
+exact parent then passes three isolated native Windows repetitions in
+[run 40402846764](https://github.com/misunders2d/agentnet/actions/runs/40402846764).
+Only that failed full partition is rerunning; the unexplained initial setup
+failure remains recorded, not silently treated as a clean first pass.
+
 ## Current evidence and work
 
 Checklist editor: root. Contributors link evidence and request state changes.
