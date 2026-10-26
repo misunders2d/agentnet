@@ -141,6 +141,34 @@ program, `agentnet`, that is both the laptop client and the Hub.
 
 ## Working rules
 
+- **Reuse proven messenger behavior — implementation and release gate** (owner,
+  October 26, 2026). AgentNet adds communication with native harnesses to a
+  proven messenger design. Inspect and reuse the relevant working Telegram/Slack
+  implementation and interaction flow before changing messenger behavior;
+  familiar-looking styling or a bespoke design described as similar is not
+  compliance. Prefer compatible existing code/components and established state,
+  queue, acknowledgement, retry, synchronization and history-loading patterns.
+  Record the inspected source revision and exact flow, what is reused, and any
+  AgentNet-specific adaptation in the existing task evidence. Reuse an already
+  inspected reference when it applies; do not create a new research exercise for
+  every small edit. For closed-source behavior, record the observed counterpart
+  and authoritative documentation, and identify what remains unverified.
+  Introducing a new messenger architecture requires concrete evidence that the
+  existing approach cannot meet the requirement and Sergey's explicit approval.
+- **Immediate local interaction — hard acceptance gate** (same owner correction).
+  Apply the action's intended local visual change immediately, before waiting for
+  background processing: a sent message appears pending, a reaction changes, a
+  dismissed item leaves active attention, and navigation responds on input.
+  A spinner beside unchanged state is not sufficient. Reconcile asynchronously;
+  show an explicit failure and restore the affected current state or offer retry
+  when processing fails. Keep pending/sent/confirmed/failed distinct; a local
+  visual change never grants native permission or proves remote execution.
+  Delayed, blocked and failing backend tests must demonstrate that local changes
+  and unrelated controls remain responsive. Verify duplicate input, newer synced
+  state and stale responses cannot lose work or resurrect cleared attention.
+  Missing counterpart/reuse evidence or failing immediate/error/recovery behavior
+  blocks acceptance of the interaction change and publication. Record evidence
+  in [docs/INTERACTION_COVERAGE.md](docs/INTERACTION_COVERAGE.md).
 - **Next-release responsiveness gate** (owner, October 26, 2026): the next
   release must meet or exceed Slack/Telegram responsiveness. Every reachable
   user interaction must have an explicit inventory entry and an executed

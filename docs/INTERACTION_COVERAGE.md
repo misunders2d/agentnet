@@ -5,6 +5,45 @@ Slack/Telegram performance. Every interaction a user can click must be tested.
 Publication is blocked until this is demonstrated. The updater-only candidate
 `3f9797f641a9707f3f945d35d6de6d5d810165de` is a baseline, not a qualified release.
 
+## Hard gate: reuse the working messenger implementation
+
+Owner correction, October 26, 2026: copy what already works in Telegram/Slack.
+AgentNet supplies the new way to communicate with native harnesses; messenger
+architecture and interaction behavior must come from inspected proven designs.
+This is an implementation acceptance gate as well as a publication gate.
+
+- Before changing a messenger flow, inspect its working counterpart. Record the
+  pinned source revision and exact functions/flow, what existing code/components
+  or pattern is reused, and the necessary AgentNet-specific adaptation. Existing
+  applicable reference evidence can be reused. Closed-source counterparts need
+  observed behavior and authoritative documentation with unverified parts named.
+- Prefer reuse for local state, background operations, acknowledgements, retry,
+  synchronization and bounded history loading. Similar styling or an invented
+  architecture described as Telegram-like does not satisfy the requirement.
+  A new messenger architecture requires evidence that reuse cannot meet the
+  requirement and Sergey's explicit approval before implementation.
+- Apply the intended local visual change on input, before the backend finishes.
+  Sending immediately adds a pending message; reacting changes the reaction;
+  dismissing immediately removes active attention; navigation immediately shows
+  the chosen destination or its loading state. A spinner beside the unchanged
+  old state does not satisfy this gate. Background work reconciles the result;
+  failures explicitly identify the action and restore affected current state or
+  provide retry. Local presentation never implies an execution permission or
+  unproven remote completion.
+- Execute rendered delayed/blocked/failing-backend cases. Prove the intended
+  local effect happens while the request remains blocked and other controls
+  still work. Verify failure/restoration/retry, duplicate input, workspace
+  changes, newer synchronization and stale responses. Preserve drafts, files,
+  exact targets and native authority. Keep the all-interaction comparative timing
+  requirements below; immediate presentation alone does not qualify the app.
+- Missing reuse evidence, a backend-dependent local effect, frozen controls,
+  silent failure, or failed recovery blocks acceptance and publication. Existing
+  functionality tests, a pending indicator, or an implementation claim cannot
+  waive this gate.
+
+The gate is recorded; implementation compliance remains unverified. Root owns
+the repair. Sergey needs to do nothing while owned fixtures are being tested.
+
 ## Acceptance
 
 - Enumerate controls by screen, placement, action, meaningful state, role and
