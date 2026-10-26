@@ -130,6 +130,29 @@ exact old quote parent (218.7 ms), invite open (304.5 ms), member invite open
 (248.3 ms) and team creation (209.6 ms). Their original timings remain evidence
 of unfinished responsiveness, not waived exceptions.
 
+Follow-up to source commit `753a4795`: profiling the two invite openings finds
+repeated full-directory presence lookups and per-person parsing of the same
+recent messages. The candidate now indexes presence once per pool build,
+parses collective mentions once per recent message, and skips name-regex
+construction when both ASCII strings prove there is no match. Non-ASCII names
+or text keep the existing Unicode matcher. First-record duplicate semantics,
+unknown/stale presence, exact references, Unicode/overlapping boundaries,
+latest mentioned recipient, pending invitations and native permissions are
+unchanged in the source regression. For 1,000 people and four recent messages,
+the test permits only a linear directory pass, four collective parses and no
+unnecessary ASCII name matchers.
+
+One comparable profiled groups pair falls from 333.2 to 154.4 ms for opening
+the guest invite and from 256.4 to 119.5 ms for member invite. Two-frame
+presentation opportunities fall from 376.9/307.9 to 182.1/146.8 ms. This is
+one synthetic-host diagnostic pair, still above the 100 ms feedback target;
+it does not establish a distribution or close the release gate. The race
+detector also exposed the existing latency fixture starting its HTTP server
+before assigning the handler's server pointer. It now initializes the provider
+before listening; this is a harness repair, not a production concurrency fix.
+The corrected race run passes the source-model check, the groups journey and
+composer journeys at 1440, 320 and 360 pixels without a race report.
+
 Harness corrections preserve original semantic assertions: the history journey
 opens the existing collapsed outcome disclosure and checks both exact target
 IDs; complete-history counts include every grouped message ID rather than one
@@ -164,6 +187,7 @@ this document records the test contract and coverage gaps.
 | P8 | Edit/delete, navigation and topic changes show local intent before I/O | root | source candidate; focused rendered checks pass | Actual Store/Timeline at 1440 and 390 pixels, 100 and 1,000 messages; writes held and refused, drafts/retry/discard, newer linked edits, unrelated typing/navigation and topic rename/done/reopen exercised. Uncached navigation selects its loading destination synchronously. Complete control/platform coverage remains open |
 | P9 | A later reaction removal survives returning to its chat | root | source candidate; rendered regression passes | Reproduced the existing revisit failure on unchanged `edec2bab`; keep the exact actor/target/emoji write lane when returning, so removal queues behind an unfinished addition. DM/group/thread and stale-response/workspace cases pass |
 | P10 | Timeline day/run comparisons avoid repeated timestamp parsing | root | source candidate; focused regressions pass | CPU profile identified repeated `sameDay` conversions; one conversion per message now supplies adjacent run/day comparisons. Four device zones, DST, midnight, invalid input, unread boundaries and 10,000-message conversion count checked |
+| P11 | Large invite directories avoid repeated presence and mention scans | root | source candidate; source parity/cost checks pass | Profiled 1,000-person dialog openings improve from 333/256 ms to 154/120 ms in one diagnostic pair; remaining latency and comparative qualification stay open |
 | U1 | Update version checks do not depend on chat projection | root | verified source only | Existing lightweight endpoint; real blocked-chat regression, native three-OS/race tests and live patched check at 1.089ms; installed app still v0.9.5 |
 | X1 | Confusing history/review screen explains state and next action accurately | UX reviewer/root | investigating | Owner screenshot mixes saved history, unknown original agent and contradictory continuation/approval instructions |
 | H1 | Pi/OMP idle notices do not repeat remaining items as new | root | candidate tested; installed activation open | Passive activity uses one native status slot. Pi/OMP focused regressions and isolated real Pi rendering pass; prompt acknowledgement remains tied to native persistence. Existing sessions not reloaded |

@@ -102,9 +102,10 @@ func TestUIResponsivenessRendered(t *testing.T) {
 		})
 	}
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { server.Handler().ServeHTTP(w, r) }))
-	ts := httptest.NewServer(mux)
+	ts := httptest.NewUnstartedServer(mux)
 	t.Cleanup(ts.Close)
-	server = New(f, strings.TrimPrefix(ts.URL, "http://"), testToken)
+	server = New(f, ts.Listener.Addr().String(), testToken)
+	ts.Start()
 	if os.Getenv("AGENTNET_PLAYWRIGHT") != "" {
 		cmd := exec.CommandContext(t.Context(), "node", "testdata/latency_rendered_check.cjs")
 		evidence := os.Getenv("AGENTNET_LATENCY_EVIDENCE")

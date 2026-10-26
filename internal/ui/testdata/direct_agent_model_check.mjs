@@ -93,15 +93,25 @@ for(const label of ['Anna',' Åsa ','ſam','Ken','Σς','I\u0345','e\u0301','�
  for(const text of [undefined,'','[@tag](agentnet:person/target)','[@all](agentnet:collective/v1/p.target,a.other)','[@bad](agentnet:collective/v1/p.target,broken)','xa-a-a',...['','x','٧','𐐀','\u0345',' ','😁'].flatMap(left=>['','x','٧','𐐀','\u0345',' ','😁'].flatMap(right=>[left+label.trim()+right,left+label.trim().toUpperCase()+right]))])
   assert.equal(mentioned(text),priorMention(text,p),JSON.stringify({label,text}));
 }
-let inviteRegexCount=0;
-const boundedInvite=runInNewContext(inviteSource+'\npool',{...model,...inviteRights,collectiveRef,parseCollective,RegExp:new Proxy(RegExp,{construct(target,args){inviteRegexCount++;return Reflect.construct(target,args);}})});
+let inviteRegexCount=0,collectiveScans=0,directoryReads=0;
+const measuredCollective={ [Symbol.matchAll](text){collectiveScans++;return text.matchAll(collectiveRef);} };
+const boundedInvite=runInNewContext(inviteSource+'\npool',{...model,...inviteRights,collectiveRef:measuredCollective,parseCollective,RegExp:new Proxy(RegExp,{construct(target,args){inviteRegexCount++;return Reflect.construct(target,args);}})});
 const invitePeople=Array.from({length:1000},(_,i)=>({person:'invite-person-'+i,label:'Person '+i,address:'fixture-'+i+'/laptop',state:'pinned'}));
 const inviteThread={...roomThread,id:'invite-cost',messages:Array.from({length:4},(_,i)=>({id:'recent-'+i,kind:'message',body:'Retained message '+i,at:'2026-10-22T10:00:00Z'}))};
 const inviteCatalog={loading:true,local:null,remote:{}};
-const fullInvite=boundedInvite(inviteThread,{...o,people:invitePeople},inviteCatalog,{});
+const inviteDirectory={current:true,members:invitePeople.map((p,i)=>({get address(){directoryReads++;return p.address;},presence:i%2?'connected':'disconnected'}))};
+const fullInvite=boundedInvite(inviteThread,{...o,people:invitePeople,directory:inviteDirectory},inviteCatalog,{});
 assert.equal(fullInvite.candidates.length,1000,'the full pinned directory remains available');
 assert.equal(fullInvite.pick,'');
-assert(inviteRegexCount<=invitePeople.length,'one directory opening must not recompile each name for every message');
+assert.equal(inviteRegexCount,0,'unmentioned ASCII names must not compile 1,000 unnecessary matchers');
+assert.equal(collectiveScans,inviteThread.messages.length,'each recent message parses collective references once per candidate build');
+assert(directoryReads<=invitePeople.length*3,'candidate presence must not repeatedly scan the entire directory');
+assert(fullInvite.candidates.every((c,i)=>c.online===!!(i%2)),'indexed presence preserves each exact address');
+const duplicateDirectory={current:true,members:[{address:invitePeople[0].address,presence:'disconnected'},{address:invitePeople[0].address,presence:'connected'}]};
+const duplicatePool=candidateModel.pool(inviteThread,{...o,people:invitePeople.slice(0,2),directory:duplicateDirectory},inviteCatalog,{});
+assert.equal(duplicatePool.candidates[0].online,false,'duplicate address retains first-record semantics');
+assert.equal(duplicatePool.candidates[1].online,null,'unlisted presence stays unknown');
+assert.equal(candidateModel.pool(inviteThread,{...o,people:invitePeople.slice(0,1),directory:{...duplicateDirectory,current:false}},inviteCatalog,{}).candidates[0].online,null,'stale directory cannot claim presence');
 inviteThread.messages=[{id:'older',dir:'out',from:host,body:'[@person](agentnet:person/invite-person-998)',at:'2026-10-22T10:00:00Z'},{id:'newer',dir:'out',from:host,body:'[@person](agentnet:person/invite-person-999)',at:'2026-10-22T11:00:00Z'}];
 const inviteOverview={...o,people:invitePeople};
 assert.equal(candidateModel.pool(inviteThread,inviteOverview,inviteCatalog,{}).pick,'p:invite-person-999','latest mentioned person beyond first page remains exact');

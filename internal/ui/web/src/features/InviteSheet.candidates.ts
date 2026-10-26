@@ -6,7 +6,7 @@ import { collectiveRef, parseCollective } from '../collective-mentions.mjs';
 import { useEffect, useState } from "react";
 import type { Api, T } from "../api";
 import { concreteAgentLabel, agentName, agentWhere, bringInDevices, deviceKind, personName, runsAgent, timeOf, type DeviceKind } from "../model";
-import { isMine, online, speaker } from "./RoomPanel.model";
+import { isMine, speaker } from "./RoomPanel.model";
 
 export type Route = "agent" | "guest" | "group";
 export type HumanInviteMode = "guest" | "member";
@@ -80,6 +80,11 @@ export interface Pool { candidates: Candidate[]; peopleNote: string; pick: strin
  *  would do. invitations are this computer's group invitations (for "already
  *  invited"); platform is the host's ("browser": no agent of its own to offer). */
 export function pool(t: T.DMThread, o: T.Overview, cat: Catalogs, names: Record<string, string>, invitations: T.GroupInvitationView[] = [], platform = "daemon", mode: HumanInviteMode = "guest", topic?: string): Pool {
+  // This immutable directory is shared by every candidate. Preserve the first
+  // listed record (the existing online() semantics) without rescanning it per row.
+  const presence = new Map<string, boolean>();
+  if (o.directory?.current) for (const d of o.directory.members || []) if (!presence.has(d.address)) presence.set(d.address, d.presence === "connected");
+  const online = (address: string) => address === o.me.address ? true : presence.get(address) ?? null;
   const me = o.person;
   const group = t.kind === "group";
   const admin = group && (t.members || []).some((m) => m.person && m.person === me?.person && m.admin);
@@ -97,7 +102,7 @@ export function pool(t: T.DMThread, o: T.Overview, cat: Catalogs, names: Record<
   else {
     for (const p of o.people || []) {
       if (p.state !== "pinned" || !p.person || inside.has(p.person)) continue;
-      const on = online(o, p.address);
+      const on = online(p.address);
       const was = asked.get(p.person);
       out.push({
         key: "p:" + p.person, kind: "person", name: personName(p), seed: p.person, online: on, person: p,
@@ -133,7 +138,7 @@ export function pool(t: T.DMThread, o: T.Overview, cat: Catalogs, names: Record<
       if (!p) continue;
       for (const r of records.filter(r=>!!r.harness)) add({
         key: "a:" + address + "#" + r.id, kind: "agent", name: concreteAgentLabel(r,records.map(record=>({record}))), seed: r.id,
-        subtitle: agentLine(p, me, address, online(o, address)), online: online(o, address), device: deviceKind(address), host: address, agentId: r.id, ownerName: personName(p), mine: isMine(o, address),
+        subtitle: agentLine(p, me, address, online(address)), online: online(address), device: deviceKind(address), host: address, agentId: r.id, ownerName: personName(p), mine: isMine(o, address),
       });
     }
 
@@ -141,11 +146,12 @@ export function pool(t: T.DMThread, o: T.Overview, cat: Catalogs, names: Record<
 
   // A stated local reason: a person named in the last messages here.
   const recent = (t.messages || []).filter((m) => !m.event && !m.deleted).slice(-20).reverse();
+  const scanned = new Map(recent.map(m => [m, scanMentionText(m.text ?? m.body)]));
   let pick = "";
   for (const c of out) {
     if (c.kind !== "person" || !c.person) continue;
     const mentioned = mentions(c.person);
-    const m = recent.find((m) => mentioned(m.text ?? m.body));
+    const m = recent.find((m) => mentioned(m.text ?? m.body, scanned.get(m)));
     if (!m) continue;
     const who = speaker(m, t, o, names);
     c.reason = "Mentioned by " + (who.me ? "you" : who.name) + " · " + timeOf(m.at);
@@ -163,18 +169,33 @@ const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // The boundary is independent of the person's name. Compile its Unicode
 // classes once, rather than compiling them for every name/message pair.
 const wordCharacter = /[\p{L}\p{N}]/iu;
+const ascii = /^[\x00-\x7f]*$/;
+interface MentionText { people: Set<string>; lower?: string }
+function scanMentionText(text: string | undefined): MentionText {
+  const people = new Set<string>();
+  for (const match of (text || "").matchAll(collectiveRef)) {
+    for (const ref of parseCollective(match[2]) || []) if (ref.kind === "person") people.add(ref.id);
+  }
+  return { people, lower: text && ascii.test(text) ? text.toLowerCase() : undefined };
+}
 
 /** mentions: an exact @mention of this person, or their name as a whole word. */
-function mentions(p: T.PersonView): (text: string | undefined) => boolean {
+function mentions(p: T.PersonView): (text: string | undefined, scanned?: MentionText) => boolean {
   const name = (p.label || "").trim();
+  const lower = ascii.test(name) ? name.toLowerCase() : undefined;
   // A lookahead retains overlapping occurrences; an earlier occurrence can
   // fail its boundary while a later overlapping occurrence is a whole name.
-  const atName = name.length >= 2 ? new RegExp("(?=(" + escape(name) + "))", "giu") : null;
-  return (text) => {
+  let atName: RegExp | undefined;
+  return (text, scanned) => {
     if (!text) return false;
     if (text.includes("agentnet:person/" + p.person + ")")) return true;
-    if([...text.matchAll(collectiveRef)].some(m=>parseCollective(m[2])?.some(r=>r.kind==='person'&&r.id===p.person)))return true;
-    if (atName) for (const match of text.matchAll(atName)) {
+    const words = scanned || scanMentionText(text);
+    if (words.people.has(p.person || "")) return true;
+    if (name.length < 2 || lower !== undefined && words.lower !== undefined && !words.lower.includes(lower)) return false;
+    // ASCII rejection is safe only when both sides are ASCII. Unicode case
+    // folds (for example long-s and Kelvin sign) retain the original matcher.
+    atName ??= new RegExp("(?=(" + escape(name) + "))", "giu");
+    for (const match of text.matchAll(atName)) {
       const previous = [...text.slice(Math.max(0, match.index - 2), match.index)].at(-1) || "";
       const next = text.codePointAt(match.index + match[1].length);
       if (!wordCharacter.test(previous) && (next === undefined || !wordCharacter.test(String.fromCodePoint(next)))) return true;
