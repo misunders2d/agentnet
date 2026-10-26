@@ -228,10 +228,23 @@ remain material, and those interactions still exceed the feedback target.
 
 Release verification at `b8928ab4`: the real-binary `TestMixedVersion` passes
 against the newest published lower release, with required compatibility enabled
-(97.24 seconds; not skipped). All 18 client race partitions are running in
+(97.24 seconds; not skipped). All 18 client race partitions passed in
 [CI run 40397384917](https://github.com/misunders2d/agentnet/actions/runs/40397384917).
 The later lookup-only delta does not change client source. No publication or
 deployment is claimed while the interaction/platform/skin gates remain open.
+
+The next pane-change delta replaces a synchronous computed-animation scan of
+the whole incoming pane with DOM matching of its existing entrance nodes. Their
+entrances settle through CSS; later arrivals and continuous working indicators
+keep animating. Actual-component Chromium checks cover wide/narrow layouts,
+both motion preferences, inert leaving content and later class updates. Eight
+alternating history runs (four per build, identical binary/backend fixture,
+Chromium 155 on this Linux laptop) pass the existing 14 functional actions.
+Median notification/quote feedback changes from 221.4/239.6 to 185.4/198.6 ms;
+ranges overlap, host load varies, and sending does not improve. These synthetic
+diagnostics support removing the measured scan, not a claim of app-wide speed
+or release qualification. Exact history targets, retained rows and scroll-anchor
+assertions remain unchanged. Raw profiles/logs stay in temporary local storage.
 
 ## Current evidence and work
 

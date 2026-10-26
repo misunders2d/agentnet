@@ -233,3 +233,14 @@ func TestVideoNestedLeavingContext(t *testing.T) {
 	}
 	t.Log(string(out))
 }
+
+func TestPaneEntranceRendered(t *testing.T) {
+	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
+		t.Skip("opt-in: installed Playwright required")
+	}
+	out, err := exec.CommandContext(t.Context(), "node", "testdata/motion_enter_rendered.cjs").CombinedOutput()
+	if err != nil {
+		t.Fatalf("pane entrance: %v\n%s", err, out)
+	}
+	t.Log(string(out))
+}

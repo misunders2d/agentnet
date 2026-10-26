@@ -13,7 +13,6 @@ export const Leaving = createContext(false);
 export const useLeaving = () => useContext(Leaving);
 
 type Gone = { id: string; node: ReactNode };
-const SETTLE = new Set(["fade-in", "pop-in"]); // entrance animations (styles.css)
 
 /** Swap shows children, keyed by id. When id changes, the previous
  *  children stay mounted (same DOM, same scroll) above the new ones and
@@ -37,10 +36,11 @@ export function Swap({ id, children, className = "", side = "", enter, leave, ms
   // shows faded under what leaves. Parts added later animate as usual.
   const cur = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
-    if (!gone || !cur.current?.getAnimations || typeof CSSAnimation === "undefined") return;
-    for (const a of cur.current.getAnimations({ subtree: true })) {
-      if (a instanceof CSSAnimation && SETTLE.has(a.animationName)) a.finish();
-    }
+    if (!gone || !cur.current) return;
+    // DOM matching needs no computed animation/style flush across a long
+    // conversation. Settle only the entrance nodes already here; later arrivals
+    // and ongoing activity retain their own animation.
+    for (const node of cur.current.querySelectorAll(".fade-in, .pop-in")) node.setAttribute("data-swap-entered", "");
   }, [gone]);
   useEffect(() => {
     if (!gone) return;

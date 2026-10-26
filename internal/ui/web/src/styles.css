@@ -31,6 +31,7 @@
   .press:active { transform: translate(2px, 2px); box-shadow: none; }
   .pop-in { animation: pop-in 320ms var(--ease-pop) both; }
   .fade-in { animation: fade-in 200ms var(--ease-out-soft) both; }
+  [data-swap-entered].pop-in, [data-swap-entered].fade-in { animation-duration: 0s; }
   .working-dot { animation: working 1.2s infinite ease-in-out; }
   .working-dot:nth-child(2) { animation-delay: .15s; }
   .working-dot:nth-child(3) { animation-delay: .3s; }
