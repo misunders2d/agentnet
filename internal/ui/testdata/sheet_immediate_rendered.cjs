@@ -11,7 +11,7 @@ const entry=`
 import React,{useState} from 'react';import{createRoot}from'react-dom/client';import{Sheet}from'./src/ui/Sheet';import{PlusMenu}from'./src/ui/PlusMenu';import{OwnedContext}from'./src/owned';
 const root=document.getElementById('root'),app=document.getElementById('app'),portals=document.getElementById('portals');
 const raf=window.requestAnimationFrame,cancel=window.cancelAnimationFrame,pending=new Map();let seq=1000000,frozen=false;
-const f=window.fixture={opened:0,visible:0,pending:()=>pending.size,freeze(){if(frozen)return;frozen=true;window.requestAnimationFrame=fn=>{const id=++seq;pending.set(id,fn);return id;};window.cancelAnimationFrame=id=>pending.delete(id);},resume(){window.requestAnimationFrame=raf;window.cancelAnimationFrame=cancel;frozen=false;for(const fn of pending.values())raf(fn);pending.clear();}};
+const f=window.fixture={opened:0,visible:0,pending:()=>pending.size,freeze(){if(frozen)return;frozen=true;window.requestAnimationFrame=fn=>{const id=++seq;pending.set(id,fn);return id;};window.cancelAnimationFrame=id=>pending.delete(id);f.framePassed=false;window.requestAnimationFrame(()=>f.framePassed=true);},resume(){window.requestAnimationFrame=raf;window.cancelAnimationFrame=cancel;frozen=false;for(const fn of pending.values())raf(fn);pending.clear();}};
 new MutationObserver(()=>{const dialog=portals.querySelector('[role=dialog],[role=menu]');if(f.opened&&!f.visible&&dialog&&getComputedStyle(dialog).display!=='none'&&getComputedStyle(dialog).opacity==='1'&&dialog.getBoundingClientRect().width)f.visible=performance.now();}).observe(portals,{childList:true,subtree:true,attributes:true});
 function App(){const[open,setOpen]=useState(false);return <><button onClick={()=>{f.opened=performance.now();f.visible=0;f.freeze();setOpen(true);}}>Open sheet</button><input aria-label="Unrelated draft"/><PlusMenu onOpenChange={open=>{if(open){f.opened=performance.now();f.visible=0;f.freeze();}}} actions={[{label:'Emoji',tone:'',icon:null,run:()=>{window.fixture.picked=true;}}]}/><Sheet open={open} onOpenChange={setOpen} title="Immediate actions" description="Actions stay visible while animation callbacks wait."><button>Details</button></Sheet></>}
 createRoot(app).render(<OwnedContext.Provider value={{root,app,portals}}><App/></OwnedContext.Provider>);
@@ -34,9 +34,10 @@ const server=http.createServer((q,r)=>{if(q.url==='/entry.mjs'){r.setHeader('Con
    console.log(JSON.stringify({width,reducedMotion,attempt,...result,closedBeforeAnimationFrames:true}));
   }
   await page.evaluate(()=>fixture.resume());
+  await page.evaluate(()=>{fixture.opened=0;fixture.visible=0;});
   await press(page.getByRole('button',{name:'Add to message',exact:true}));
   await page.waitForFunction(()=>fixture.visible>0,null,{polling:10,timeout:500});
-  const menuResult=await page.evaluate(()=>({domMs:fixture.visible-fixture.opened,heldCallbacks:fixture.pending()}));assert(menuResult.domMs<500);assert(menuResult.heldCallbacks>0);
+  const menuResult=await page.evaluate(()=>({domMs:fixture.visible-fixture.opened,heldCallbacks:fixture.pending()}));assert(menuResult.domMs<500);assert(menuResult.heldCallbacks>0);assert.equal(await page.evaluate(()=>fixture.framePassed),false);
   await press(page.getByRole('menuitem',{name:'Emoji',exact:true}));assert(await page.evaluate(()=>fixture.picked),'visible menu accepts intentional selection');
   console.log(JSON.stringify({width,reducedMotion,menu:'composer-plus',...menuResult}));
   await page.evaluate(()=>fixture.resume());assert.deepEqual(errors,[]);await page.close();

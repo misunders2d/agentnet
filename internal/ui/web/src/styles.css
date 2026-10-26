@@ -36,7 +36,7 @@
   .working-dot:nth-child(2) { animation-delay: .15s; }
   .working-dot:nth-child(3) { animation-delay: .3s; }
   @media (prefers-reduced-motion: reduce) {
-    .pop-in, .fade-in { animation: fade-in 120ms linear both; }
+    .pop-in, .fade-in { animation: none; }
     .working-dot { animation: none; opacity: .7; }
     .press:active { transform: none; }
   }
@@ -48,17 +48,18 @@
    the pane that changes moves: the new one slides in a few pixels while
    the old one, laid over it, fades away; a topic swaps only its messages,
    rising a little. Durations match MOTION in ui/Motion.tsx. With reduced
-   motion everything is a short crossfade. Nothing here delays content. */
+   motion entrance movement is disabled. Selected content is visible before
+   animation frames or departing-layer cleanup. */
 @layer components {
-  .an-swap-gone { position: absolute; inset: 0; z-index: 1; pointer-events: none; background: var(--an-canvas); }
+  .an-swap-gone { visibility: hidden; position: absolute; inset: 0; z-index: 1; pointer-events: none; background: var(--an-canvas); }
   .an-pane-in { animation: an-nudge-in 220ms var(--ease-out-soft) both; }
   /* What leaves is gone quickly (90-100 ms) so the two never sit muddled
      over each other; what arrives keeps moving a little longer. */
   .an-pane-out { animation: an-fade-left 100ms cubic-bezier(.4, 0, 1, 1) both; }
   .an-tab-in { animation: an-rise-in 220ms var(--ease-out-soft) both; }
   .an-tab-out { animation: an-fade 150ms cubic-bezier(0, 0, .2, 1) both; }
-  /* Tabs are pages side by side: the next one slides in from the side of
-     its tab while the last one slides away, edge to edge (no overlap). */
+  /* Direction stays legible, but the selected page starts on screen.
+     Delayed animation frames must never hide the requested destination. */
   .an-page-in-next { animation: an-from-right 240ms var(--ease-out-soft) both; }
   .an-page-out-next { animation: an-to-left 240ms var(--ease-out-soft) both; }
   .an-page-in-prev { animation: an-from-left 240ms var(--ease-out-soft) both; }
@@ -70,7 +71,7 @@
   /* The sketch of messages while a conversation opens: a slow breath, never gone. */
   .an-sketch { animation: an-sketch 1.4s ease-in-out infinite both; }
   /* Words that only matter when waiting is long (Loading emoji…) appear late. */
-  .an-late { animation: fade-in 160ms linear 350ms both; }
+  .an-late { animation: an-late-in 160ms linear 350ms both; }
   .an-push-in { animation: an-push-in 280ms cubic-bezier(.22, .9, .3, 1) both; }
   .an-push-out { animation: an-push-out 240ms cubic-bezier(.4, 0, .2, 1) both; }
   .an-under-in { animation: an-under-in 280ms cubic-bezier(.22, .9, .3, 1) both; }
@@ -80,7 +81,7 @@
   @media (prefers-reduced-motion: reduce) {
     .an-pane-in, .an-tab-in, .an-topic-in, .an-under-in, .an-under-out, .an-page-in-next, .an-page-in-prev { animation: none; }
     .an-pane-out, .an-tab-out, .an-topic-out, .an-page-out-next, .an-page-out-prev, .an-ready-out { animation: an-fade 140ms linear both; }
-    .an-push-in { animation: fade-in 140ms linear both; }
+    .an-push-in { animation: none; }
     .an-sketch { animation: none; }
     .an-push-out { animation: an-fade 140ms linear both; }
   }
@@ -92,17 +93,18 @@
 @keyframes an-fade { to { opacity: 0; } }
 @keyframes an-fade-left { to { opacity: 0; transform: translateX(-10px); } }
 @keyframes an-fade-up { to { opacity: 0; transform: translateY(-8px); } }
-@keyframes an-from-right { from { transform: translateX(100%); } }
-@keyframes an-from-left { from { transform: translateX(-100%); } }
+@keyframes an-from-right { from { transform: translateX(14px); } }
+@keyframes an-from-left { from { transform: translateX(-14px); } }
 @keyframes an-to-left { to { transform: translateX(-100%); } }
 @keyframes an-to-right { to { transform: translateX(100%); } }
-@keyframes an-push-in { from { transform: translateX(100%); } }
+@keyframes an-push-in { from { transform: translateX(14px); } }
 @keyframes an-push-out { to { transform: translateX(100%); } }
 @keyframes an-under-in { to { transform: translateX(-24%); filter: brightness(.86); } }
 @keyframes an-under-out { from { transform: translateX(-24%); filter: brightness(.86); } }
 
-@keyframes pop-in { from { opacity: 0; transform: scale(.85); } to { opacity: 1; transform: scale(1); } }
-@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes pop-in { from { transform: scale(.98); } to { transform: scale(1); } }
+@keyframes an-late-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes fade-in { from { transform: translateY(2px); } to { transform: translateY(0); } }
 @keyframes working { 0%, 80%, 100% { opacity: .25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-2px); } }
 
 @keyframes robot-scan { 0%, 100% { transform: translateX(0); } 30% { transform: translateX(-1.2px); } 70% { transform: translateX(1.2px); } }

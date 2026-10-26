@@ -143,9 +143,9 @@ export const inside = (e: { currentTarget: Element; target: EventTarget }) => e.
 export function useTouchGestures(onLongPress: () => void, onSwipe: (() => void) | null) {
   const { root } = useOwned();
   const [dx, setDx] = useState(0);
-  const g = useRef<{ x: number; y: number; timer: number; moved: boolean; id: number } | null>(null);
+  const g = useRef<{ x: number; y: number; timer: number; frame: number; moved: boolean; id: number } | null>(null);
   const releaseGuard = useRef<(() => void) | null>(null);
-  useEffect(() => () => { if (g.current) clearTimeout(g.current.timer); releaseGuard.current?.(); }, [root]);
+  useEffect(() => () => { if (g.current) { clearTimeout(g.current.timer); cancelAnimationFrame(g.current.frame); } releaseGuard.current?.(); }, [root]);
   const guardOpeningClick = (id: number) => {
     releaseGuard.current?.();
     let timer: number | undefined;
@@ -178,7 +178,7 @@ export function useTouchGestures(onLongPress: () => void, onSwipe: (() => void) 
   const end = () => {
     const s = g.current;
     if (!s) return;
-    clearTimeout(s.timer);
+    clearTimeout(s.timer); cancelAnimationFrame(s.frame);
     g.current = null;
     setDx((d) => { if (d > 64 && onSwipe) onSwipe(); return 0; });
   };
@@ -187,27 +187,39 @@ export function useTouchGestures(onLongPress: () => void, onSwipe: (() => void) 
     handlers: {
       onPointerDown: (e: PointerEvent) => {
         if (e.pointerType !== "touch" || !inside(e) || (e.target as Element).closest("a[href]")) return;
-        const timer = window.setTimeout(() => {
-          if (!g.current || g.current.moved) return;
-          guardOpeningClick(g.current.id);
+        if (g.current) { clearTimeout(g.current.timer); cancelAnimationFrame(g.current.frame); }
+        const gesture = { x: e.clientX, y: e.clientY, timer: 0, frame: 0, moved: false, id: e.pointerId };
+        const deadline = performance.now() + 450;
+        const open = () => {
+          if (g.current !== gesture || gesture.moved) return;
+          clearTimeout(gesture.timer); cancelAnimationFrame(gesture.frame);
+          guardOpeningClick(gesture.id);
           g.current = null;
           navigator.vibrate?.(8);
-          // This timer has already recognized the gesture. Commit its sheet
-          // now; concurrent rendering must not defer it until finger release.
           flushSync(onLongPress);
-        }, 450);
-        g.current = { x: e.clientX, y: e.clientY, timer, moved: false, id: e.pointerId };
+        };
+        // Browsers may defer timer tasks during touch handling. Use an available
+        // animation frame at the same deadline, retaining the timer when frames
+        // are held. Both paths recognize this one gesture and cancel each other.
+        const frame = () => {
+          if (g.current !== gesture || gesture.moved) return;
+          if (performance.now() >= deadline) open();
+          else gesture.frame = requestAnimationFrame(frame);
+        };
+        g.current = gesture;
+        gesture.timer = window.setTimeout(open, 450);
+        gesture.frame = requestAnimationFrame(frame);
       },
       onPointerMove: (e: PointerEvent) => {
         const s = g.current;
         if (!s || e.pointerId !== s.id) return;
         const x = e.clientX - s.x, y = e.clientY - s.y;
-        if (!s.moved && Math.hypot(x, y) > 8) { s.moved = true; clearTimeout(s.timer); }
+        if (!s.moved && Math.hypot(x, y) > 8) { s.moved = true; clearTimeout(s.timer); cancelAnimationFrame(s.frame); }
         if (onSwipe && s.moved && x > 0 && Math.abs(y) < 24) setDx(Math.min(x, 88));
         else if (Math.abs(y) >= 24) setDx(0);
       },
       onPointerUp: end,
-      onPointerCancel: () => { if (g.current) clearTimeout(g.current.timer); g.current = null; setDx(0); },
+      onPointerCancel: () => { if (g.current) { clearTimeout(g.current.timer); cancelAnimationFrame(g.current.frame); } g.current = null; setDx(0); },
       onContextMenu: (e: MouseEvent) => {
         // Keep the browser's full-target inspection/copy menu on links.
         if ((e.target as Element).closest("a[href]")) return;

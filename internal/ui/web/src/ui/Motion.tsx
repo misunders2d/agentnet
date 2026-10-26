@@ -1,10 +1,6 @@
-// Comic's motion: what changes on screen never goes through a blank frame.
-// Swap keeps what was shown on top of what replaces it while it fades away
-// (the new content is there, complete, underneath from the first frame);
-// usePresence keeps a closing layer drawn while it slides out. The motion
-// itself is CSS (styles.css, "motion"): with reduced motion it is opacity
-// only. Nothing waits for an animation: content that is ready shows at
-// once, and what is leaving is inert, so input is never blocked.
+// Navigation presents the selected content immediately. Departing content
+// stays mounted briefly to preserve cleanup and scroll state, but is hidden
+// and inert. Entrance motion starts on screen and never gates visibility.
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 /** Leaving is true inside content that is on its way out (a Swap's old
@@ -15,8 +11,8 @@ export const useLeaving = () => useContext(Leaving);
 type Gone = { id: string; node: ReactNode };
 
 /** Swap shows children, keyed by id. When id changes, the previous
- *  children stay mounted (same DOM, same scroll) above the new ones and
- *  leave with the `leave` animation, while the new ones enter with
+ *  children stay mounted (same DOM, same scroll), hidden and inert, while
+ *  the new ones enter with
  *  `enter`. The first render does not animate. */
 export function Swap({ id, children, className = "", side = "", enter, leave, ms, label }: {
   id: string; children: ReactNode;
@@ -55,7 +51,7 @@ export function Swap({ id, children, className = "", side = "", enter, leave, ms
           leaves keeps its mounted content, it is not drawn again from scratch. */}
       <div key={id} ref={cur} className={side + " " + (gone ? enter : "")} data-swap-side="current"><Leaving.Provider value={parentLeaving}>{children}</Leaving.Provider></div>
       {gone && (
-        // Opaque, over the new side, which is complete under it from the first frame.
+        // Retained for lifecycle cleanup only; the selected side is visible now.
         <div key={gone.id} inert aria-hidden="true" className={side + " an-swap-gone " + leave} data-swap-side="leaving">
           <Leaving.Provider value={true}>{gone.node}</Leaving.Provider>
         </div>

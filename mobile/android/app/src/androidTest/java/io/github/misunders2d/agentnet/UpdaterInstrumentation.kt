@@ -232,7 +232,10 @@ class UpdaterInstrumentation : Instrumentation() {
         fun waitFor(label: String, predicate: () -> Boolean) {
             val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
             while (!predicate() && System.nanoTime() < end) Thread.sleep(50)
-            check(predicate()) { label }
+            check(predicate()) {
+                val observed = active().map { entry -> "${tags.indexOf(entry.tag)}:current=${entry.notification.extras.getString(NOTICE_METADATA_EXTRA) == emitted[entry.tag]}" }
+                "$label; owned active routes=$observed; expected count=${emitted.size}"
+            }
         }
         val totalField = NativeHost::class.java.getDeclaredField("unreadTotal").apply { isAccessible = true }
         val partialField = NativeHost::class.java.getDeclaredField("unreadPartial").apply { isAccessible = true }

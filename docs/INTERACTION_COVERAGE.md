@@ -91,6 +91,33 @@ the repair. Sergey needs to do nothing while owned fixtures are being tested.
 
 ### October 27 continuation: the 500 ms target
 
+The native macOS timer diagnostic separates gesture recognition from rendering:
+one 450 ms callback fired at 479 ms just after the 478 ms observation, and another
+at 524 ms. Recognition now checks the same 450 ms deadline on available animation
+frames as well as the timer; either path cancels both for that exact gesture.
+A delayed-timer regression (1,500 ms) opens through the frame path in 495 ms locally;
+normal local cases measure 461–478 ms. Move/cancel/release and deliberate next-tap
+assertions remain. This is a local result; native qualification is still open.
+Chromium's historical scheduler explanation supports the scheduling hypothesis,
+not proof of today's exact browser cause:
+[Chromium issue 41227744](https://issues.chromium.org/issues/41227744), inspected
+October 27, 2026. React's earlier forced commit alone did not resolve the failure.
+
+Paused page entrances and delayed old-pane cleanup also reproduce hidden navigation.
+The selected pane now starts on screen, with the departing pane hidden and inert.
+Optional entrance motion no longer begins transparent/offscreen; reduced motion
+removes entrance movement. Existing late-loading notices retain their delay.
+Four width/motion paused-navigation regressions and ten baseline browser cells pass;
+maximum local feedback is 219 ms. Existing DOM/scroll retention and cleanup remain.
+These reuse the already inspected local-navigation-first pattern, without a new
+state store or history architecture. Native macOS/browser timing must be rerun.
+
+The full gallery run on `d70235ad` passes 307 static/Node checks but fails Zoom's
+Device conversations center-hit check (covered by the bottom Activity tab) and
+the disposable qa-orbit mount (20-second bound). Remaining summary groups pass.
+Both failures remain open; a successful lifecycle check is not the mount check.
+The owned company was removed and raw screenshots/logs remain private temporary data.
+
 Candidate `d70235ad` integrated qualification `40409823579` exposes real failures
 at the new bound: Android history has seven actions at 589–1,134 ms; its composer
 plus menu takes 527 ms. Windows WebView2's same menu takes 587 ms and Firefox's
