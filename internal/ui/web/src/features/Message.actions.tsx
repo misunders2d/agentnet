@@ -12,7 +12,7 @@ import {
   IconChecks, IconCheck, IconClock, IconAlertTriangle, IconChevronDown, IconAlarm,
 } from "@tabler/icons-react";
 import { useApp } from "../context";
-import { useRetainedText } from "../retained-text";
+import { discardRetainedText, useRetainedText } from "../retained-text";
 import { MESSAGES, deviceName, plain, timeOf } from "../model";
 import { Sheet } from "../ui/Sheet";
 import { Button } from "../ui/Button";
@@ -254,12 +254,19 @@ export function DeleteMessage({ open, onOpenChange, m, ctx }: { open: boolean; o
 
 // ---- edit in place ------------------------------------------------------------------------
 
+const editDraftKey = (m: AnyMsg, ctx: Ctx) => JSON.stringify(["edit", controlRef(m, ctx), m.revision, shownText(m)]);
+export function discardEditDraft(store: ReturnType<typeof useApp>, m: AnyMsg, ctx: Ctx) {
+  discardRetainedText(store, editDraftKey(m, ctx));
+  store.discardFailedEdit(controlRef(m, ctx));
+}
+
 export function EditBox({ m, ctx, onDone }: { m: AnyMsg; ctx: Ctx; onDone: () => void }) {
   const store = useApp();
   // Shown as @Name; a mention left untouched keeps its exact reference when saved, an edited one becomes text.
-  const [draft, setDraft, retained] = useRetainedText(JSON.stringify(["edit", controlRef(m, ctx), m.revision, shownText(m)]), shownText(m));
+  const attempted = m._change?.action === "edit" && m._change.status === "failed" ? m._change.control.text : undefined;
+  const [draft, setDraft, retained] = useRetainedText(editDraftKey(m, ctx), attempted ?? shownText(m));
   const { text, spans } = decode(draft);
-  const cancel = () => { retained.discard(); onDone(); };
+  const cancel = () => { retained.discard(); store.discardFailedEdit(controlRef(m, ctx)); onDone(); };
   const area = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     const el = area.current;
@@ -277,8 +284,9 @@ export function EditBox({ m, ctx, onDone }: { m: AnyMsg; ctx: Ctx; onDone: () =>
     if (!body) return;
     if (body === shownText(m)) { cancel(); return; }
     const confirmed = retained.capture();
-    const r = await store.run((a) => a.edit({ ...controlRef(m, ctx), text: body }), "Edited");
-    if (r) { confirmed(); onDone(); }
+    const work = store.run((a) => a.edit({ ...controlRef(m, ctx), text: body }), "Edited");
+    onDone();
+    if (await work) confirmed();
   };
   return (
     <div className="flex flex-col gap-2">

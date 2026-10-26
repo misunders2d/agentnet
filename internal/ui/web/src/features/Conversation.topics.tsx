@@ -24,6 +24,7 @@ import { OrganizeMessages } from "./Conversation.organize";
 import { deviceWords, isThreadMsg, requestState, shownText, threadAgentName, type AnyMsg, type Ctx } from "./Message.model";
 import { online } from "./RoomPanel.model";
 import { TopicIntro } from "../skin/TopicIntro";
+import { useRetainedText } from "../retained-text";
 
 /** barTopics picks the bar's chips: what needs you, then unread, then the
  *  open topic, then the most recent active ones; the open topic always gets
@@ -334,14 +335,15 @@ export function changeTopic(store: ReturnType<typeof useApp>, what: "rename" | "
 function RenameTopic({ open, onOpenChange, topic }: { open: boolean; onOpenChange: (o: boolean) => void; topic: Topic }) {
   const store = useApp();
   const shared = !!topic.conv && !!topic.id && !topic.root;
-  const [title, setTitle] = useState(topic.title);
+  const [title, setTitle, retained] = useRetainedText(JSON.stringify(["rename-topic", topicChangeKey(topic), topic.title]), topic.title);
   const [busy, setBusy] = useState(false);
-  useLayoutEffect(() => { if (open) setTitle(topic.title); }, [open]);
   const save = async (name: string) => {
     setBusy(true);
-    const ok = await changeTopic(store, "rename", topic, name);
+    const confirmed = retained.capture();
+    const work = changeTopic(store, "rename", topic, name);
+    onOpenChange(false);
+    if (await work) confirmed();
     setBusy(false);
-    if (ok) onOpenChange(false);
   };
   return (
     <Sheet open={open} onOpenChange={onOpenChange} title="Rename topic"
@@ -394,7 +396,8 @@ export function TopicEnd({ ctx }: { ctx: Ctx }) {
   const current=ctx.dm?.topics?.find(t=>t.id===draft?.topic);
   const t = current?topicOf(current):ctx.thread?.topic ? topicOf(ctx.thread.topic) : null;
   const busy = useStore(store, s => t ? s.topicBusy[topicChangeKey(t)] : undefined);
-  if (!t || t.state === "active" && !t.redirect || !ctx.overview?.topic_list) return null;
+  if (!t || !ctx.overview?.topic_list) return null;
+  if (t.state === "active" && !t.redirect) return busy ? <p role="status" className="mx-3 mt-4 text-[13px] text-text-2 lg:mx-5">Saving change…</p> : null;
   if (t.redirect && ctx.dm) return <section aria-label="Merged topic" className="mx-3 mt-4 rounded-2xl bg-surface p-4 stroke lg:mx-5">
     <p className="text-[14px]">Selected messages moved to another topic. Later posts stay here.</p>
     <Button className="mt-2" onClick={() => store.setDraft(ctx.conv, { ...store.draft(ctx.conv), topic: t.redirect, newTopic: false, replyTo: undefined }, true)}>Open {ctx.dm.topics?.find(x => x.id === t.redirect)?.title || "destination topic"}</Button>
@@ -405,6 +408,7 @@ export function TopicEnd({ ctx }: { ctx: Ctx }) {
     <section aria-label="Topic state" className="mx-3 mt-4 rounded-2xl bg-surface p-4 stroke lg:mx-5">
       <div className="flex flex-wrap items-center gap-2">
         {archived ? <Tag tone="muted"><IconArchive size={12} stroke={2.6} aria-hidden="true" />Archived</Tag> : <Tag tone="ok"><IconCircleCheck size={12} stroke={2.6} aria-hidden="true" />Done</Tag>}
+        {busy && <span role="status" className="text-[13px] text-text-2">Saving change…</span>}
         {t.doneBy === "you" && !t.conclusion && <span className="text-[13px] text-text-2">You marked it done.</span>}
         {t.doneBy === "person" && <span className="text-[13px] text-text-2">{t.concludedBy===ctx.overview?.me.address?"You":ctx.overview?.people?.find(p=>p.address===t.concludedBy||p.devices?.some(d=>d.address===t.concludedBy))?.label||"A participant"} marked this done for everyone.</span>}
         {t.doneBy === "agent" && !archived && <span className="text-[13px] text-text-2">{agent} closed this topic.</span>}

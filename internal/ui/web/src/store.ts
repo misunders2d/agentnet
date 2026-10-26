@@ -15,6 +15,8 @@ import { skin as brand } from "./skin/brand";
 import { share } from "./structural";
 import { scheduleSaves, type ScheduleSave } from "./schedule-saves";
 import { clearScheduledDraft, type ScheduleAttempt } from "./features/Composer.schedule-model";
+import { messageChangeKey, messageVersion, messageMatches, changeConfirmed, presentMessage, type MessageChange } from "./message-changes";
+import { presentTopic, topicVersion, type TopicPreview } from "./topic-changes";
 
 export type Conn = "loading" | "live" | "lost" | "updating" | "gone";
 // A thread names its agent's device (peer) whenever that is known: an
@@ -66,7 +68,6 @@ export type Tab = "chats" | "agents" | "oks" | "outbox" | "settings";
 export type View = T.DMThread | T.Thread;
 type ConfirmedRead = { kind: "dm" | "thread"; id: string; seq: number; unread: number; group?: string; archived_unread?: number };
 const VIEWS_KEPT = 24; // conversations kept for an instant reopen (loaded again when opened)
-const OPEN_SLOW = 400; // ms a conversation may take to load before its placeholder shows
 
 export interface PendingReaction {
   change: T.ControlAction;
@@ -96,7 +97,7 @@ export interface State {
   tab: Tab;
   overview: T.Overview | null;
   open: Open;
-  pending: Open;               // being opened: shown once its messages are here (what is shown stays until then)
+  pending: Open;               // selected destination whose messages are still loading
   views: Record<string, View>; // the last loaded view of recently opened conversations, by id
   dm: T.DMThread | null;
   thread: T.Thread | null;
@@ -116,8 +117,10 @@ export interface State {
   section: string;                                        // the open settings section, when chosen from elsewhere
   agentNames: Record<string, string>;                     // agent ids → the names their owners gave them
   topicBusy: Record<string, string>;
+  topicPreviews: Record<string, TopicPreview>;
   reactionPending: Record<string, Record<string, PendingReaction>>;
   dismissPending: Record<string, PendingDismiss>;
+  messageChanges: Record<string, MessageChange>;
   panel: boolean;                                         // "In this chat" (desktop panel, phone sheet)
   readVisit: ReadVisit | null;
   contentRevision: number; // successful content loads; typing/presence do not advance choice lists
@@ -129,7 +132,7 @@ const draftsKey = (ws: string) => brand.storage + ".drafts." + ws;
 
 // unsentIn: what a reload would lose: a draft's text or files, or a send
 // not yet stored.
-export const unsentIn = (s: Pick<State, "drafts" | "unsent"> & Partial<Pick<State,"scheduleSaves">>) => s.unsent || Object.values(s.scheduleSaves || {}).some(slot=>!!slot.attempt && (slot.status==="saving" || slot.status==="uncertain")) || Object.values(s.drafts).some((d) => d.text || (d.files && d.files.length));
+export const unsentIn = (s: Pick<State, "drafts" | "unsent"> & Partial<Pick<State,"scheduleSaves" | "messageChanges">>) => s.unsent || Object.values(s.messageChanges || {}).some(p => p.status === "pending" || p.status === "failed" && p.action === "edit") || Object.values(s.scheduleSaves || {}).some(slot=>!!slot.attempt && (slot.status==="saving" || slot.status==="uncertain")) || Object.values(s.drafts).some((d) => d.text || (d.files && d.files.length));
 
 const recovery = { update: [500, 1000, 2000, 4000, 8000, 15000, 30000], missed: [1000, 3000, 8000] };
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -154,6 +157,11 @@ export class Store {
   private dismissing = new Map<string, { intent: string; token: number; work: Promise<{ note: string }> }>();
   private dismissOverview?: { source: T.Overview; pending: State["dismissPending"]; value: T.Overview };
   private dismissState?: { source: State; value: State };
+  private messageState?: { source: State; value: State };
+  private topicState?: { source: State; value: State };
+  private messageViews?: { source: State["views"]; changes: State["messageChanges"]; value: State["views"] };
+  private topicViews?: { source: State["views"]; overview: State["overview"]; previews: State["topicPreviews"]; views: State["views"]; shownOverview: State["overview"] };
+  private messageWork = new Map<string, { action: MessageChange["action"]; text?: string; work: Promise<{ note: string }> }>();
   private topicChanges = new Map<string, Promise<{ note: string } | undefined>>();
   private again = false;
   private catalogsAgain = false;
@@ -184,7 +192,8 @@ export class Store {
   constructor(readonly host: Host) {
     this.chooseMain = mainPreferences(host.workspace.id, () => localStorage);
     const calls = api(host);
-    this.api = { ...calls, act: action => action.do === "resolve" ? this.dismiss(action, calls) : calls.act(action) };
+    this.api = { ...calls, act: action => action.do === "resolve" ? this.dismiss(action, calls) : calls.act(action),
+      edit: c => this.changeMessage("edit", c, calls), retract: c => this.changeMessage("delete", c, calls) };
     this.sends = pendingSends(host, () => {
       const o = this.state?.open;
       // A send clears its draft as it begins: until it is stored, a reload
@@ -192,8 +201,8 @@ export class Store {
       this.set({ ...(o ? this.viewPatch(o, this.state.views[o.id] ?? null, true) : {}), unsent: this.sends.unsent() });
     });
     this.state = {
-      tab: "chats", overview: null, open: null, pending: null, views: {}, dm: null, thread: null, typing: null, invitations: [], reactionPending: {}, dismissPending: {},
-      conn: "loading", version: "", newVersion: "", unsent: false, drafts: this.loadDrafts(), scheduleSaves:{}, toasts: [], messageLanding: null, loadError: "", groupContextPending: "", invite: null, topicBusy: {}, panel: false, section: "", agentNames: {}, readVisit: null, contentRevision: 0,
+      tab: "chats", overview: null, open: null, pending: null, views: {}, dm: null, thread: null, typing: null, invitations: [], reactionPending: {}, dismissPending: {}, messageChanges: {},
+      conn: "loading", version: "", newVersion: "", unsent: false, drafts: this.loadDrafts(), scheduleSaves:{}, toasts: [], messageLanding: null, loadError: "", groupContextPending: "", invite: null, topicBusy: {}, topicPreviews: {}, panel: false, section: "", agentNames: {}, readVisit: null, contentRevision: 0,
     };
     const saved=host.workspaces?.state?.(host.workspace.id)?.comicDrafts as {handle?:string;open:Open;dm:T.DMThread|null;thread:T.Thread|null;tab:State['tab']}|undefined;
     if(saved&&saved.handle===host.workspace.handle)Object.assign(this.state,{open:saved.open,dm:saved.dm,thread:saved.thread,tab:saved.tab});
@@ -203,7 +212,7 @@ export class Store {
 
   // ---- subscription
   get = () => {
-    const s = this.state;
+    const s = this.presentMessages(this.presentTopics());
     if (!s.overview || !Object.keys(s.dismissPending).length) return s;
     if (this.dismissState?.source === s) return this.dismissState.value;
     if (this.dismissOverview?.source !== s.overview || this.dismissOverview.pending !== s.dismissPending) {
@@ -213,6 +222,104 @@ export class Store {
     this.dismissState = { source: s, value };
     return value;
   };
+
+  private presentTopics(): State {
+    const s = this.state;
+    if (!Object.keys(s.topicPreviews).length) return s;
+    if (this.topicState?.source === s) return this.topicState.value;
+    let views = s.views, overview = s.overview;
+    const cached = this.topicViews;
+    if (cached?.source === s.views && cached.overview === s.overview && cached.previews === s.topicPreviews) {
+      views = cached.views; overview = cached.shownOverview;
+    } else {
+      for (const p of Object.values(s.topicPreviews)) {
+        const c = p.change;
+        if (c.conv) {
+          const v = views[c.conv] as T.DMThread | undefined;
+          if (v?.topics) views = { ...views, [c.conv]: { ...v, topics: v.topics.map(t => t.id === c.id ? presentTopic(t, p) : t) } };
+        } else {
+          const v = views[c.id] as T.Thread | undefined;
+          if (v?.topic) views = { ...views, [c.id]: { ...v, topic: presentTopic(v.topic, p) } };
+          if (overview) overview = { ...overview,
+            threads: overview.threads?.map(t => t.id === c.id ? presentTopic(t, p) : t) || null,
+            topics: overview.topics?.map(t => t.latest.id === c.id ? { ...t, latest: presentTopic(t.latest, p) } : t) };
+        }
+      }
+      this.topicViews = { source: s.views, overview: s.overview, previews: s.topicPreviews, views, shownOverview: overview };
+    }
+    const value = { ...s, views, overview, dm: s.dm ? views[s.dm.id] as T.DMThread ?? s.dm : null, thread: s.thread ? views[s.thread.id] as T.Thread ?? s.thread : null };
+    this.topicState = { source: s, value };
+    return value;
+  }
+
+  private presentMessages(s: State): State {
+    if (!Object.keys(s.messageChanges).length) return s;
+    if (this.messageState?.source === s) return this.messageState.value;
+    let views = s.views;
+    const cached = this.messageViews;
+    if (cached?.source === s.views && cached.changes === s.messageChanges) views = cached.value;
+    else {
+      for (const p of Object.values(s.messageChanges)) {
+        const v = views[p.view];
+        if (!v?.messages) continue;
+        const at = v.messages.findIndex(m => messageMatches(m, p.control));
+        if (at < 0) continue;
+        const m = v.messages[at], shown = presentMessage(m, p);
+        if (shown === m) continue;
+        const messages = [...v.messages]; messages[at] = shown;
+        views = { ...views, [v.id]: { ...v, messages } as View };
+      }
+      this.messageViews = { source: s.views, changes: s.messageChanges, value: views };
+    }
+    const value = views === s.views ? s : { ...s, views,
+      dm: s.dm ? views[s.dm.id] as T.DMThread ?? s.dm : null,
+      thread: s.thread ? views[s.thread.id] as T.Thread ?? s.thread : null };
+    this.messageState = { source: s, value };
+    return value;
+  }
+
+  private changeMessage(action: MessageChange["action"], control: T.ControlAction, calls: Api): Promise<{ note: string }> {
+    if (!this.alive) return Promise.reject(Error("stale or disconnected workspace"));
+    const key = messageChangeKey(control), prior = this.messageWork.get(key);
+    if (prior) {
+      if (prior.action !== action || prior.text !== control.text) return Promise.reject(Error("The previous message change is still pending. Your edit is kept; try again after it finishes."));
+      return prior.work;
+    }
+    const selected = this.state.open;
+    const view = control.conv || (selected?.kind === "thread" ? selected.id : "");
+    const original = this.state.views[view]?.messages?.find(m => messageMatches(m, control));
+    const call = () => action === "edit" ? calls.edit(control) : calls.retract(control);
+    // The server still validates every action. Never manufacture local authority.
+    if (!original || !original.can?.includes(action)) return call();
+    const p: MessageChange = { action, control: { ...control }, view, original: messageVersion(original), status: "pending" };
+    this.set({ messageChanges: { ...this.state.messageChanges, [key]: p } });
+    const work = Promise.resolve().then(async () => {
+      try {
+        const result = await call();
+        if (this.alive) this.set({ messageChanges: { ...this.state.messageChanges, [key]: { ...p, status: "saved" } } });
+        return result;
+      } catch (error) {
+        if (this.alive) this.set({ messageChanges: { ...this.state.messageChanges, [key]: { ...p, status: "failed", error: errorText(error) } } });
+        throw error;
+      } finally {
+        this.messageWork.delete(key);
+        // Read current truth even after a lost write response. Never replay work.
+        if (this.alive) {
+          void this.loadOpen(this.state.open?.id === view ? this.state.open : { kind: control.conv ? "dm" : "thread", id: view }, true);
+          void this.load(false);
+        }
+      }
+    });
+    this.messageWork.set(key, { action, text: control.text, work });
+    return work;
+  }
+
+  discardFailedEdit(control: T.ControlAction) {
+    const key = messageChangeKey(control), p = this.state.messageChanges[key];
+    if (p?.action !== "edit" || p.status !== "failed" || this.messageWork.has(key)) return;
+    const messageChanges = { ...this.state.messageChanges }; delete messageChanges[key];
+    this.set({ messageChanges });
+  }
   get returningToReview() { return !!this.state.open && this.unreadReturn === this.state.open; }
   subscribe = (fn: () => void) => { this.subs.add(fn); return () => this.subs.delete(fn); };
   private set(patch: Partial<State>) {
@@ -344,7 +451,10 @@ export class Store {
     const key = topicChangeKey(c);
     const pending = this.topicChanges.get(key);
     if (pending) return pending;
-    this.set({ topicBusy: { ...this.state.topicBusy, [key]: what } });
+    const source = c.conv ? (this.state.views[c.conv] as T.DMThread | undefined)?.topics?.find(t => t.id === c.id)
+      : (this.state.views[c.id] as T.Thread | undefined)?.topic || this.state.overview?.threads?.find(t => t.id === c.id);
+    this.set({ topicBusy: { ...this.state.topicBusy, [key]: what },
+      ...(source && !c.root ? { topicPreviews: { ...this.state.topicPreviews, [key]: { action: what, change: { ...c }, original: topicVersion(source) } } } : {}) });
     const selected = this.state.open;
     const selectedTarget = selected && (c.conv
       ? selected.kind === "dm" && selected.id === c.conv
@@ -369,7 +479,8 @@ export class Store {
       } finally {
         this.topicChanges.delete(key);
         const topicBusy = { ...this.state.topicBusy }; delete topicBusy[key];
-        this.set({ topicBusy });
+        const topicPreviews = { ...this.state.topicPreviews }; delete topicPreviews[key];
+        this.set({ topicBusy, topicPreviews });
       }
     })();
     this.topicChanges.set(key, work);
@@ -529,11 +640,8 @@ export class Store {
     return this.open({ kind: "dm", id: main });
   }
 
-  // open shows a conversation without a blank in between: one loaded
-  // before shows at once (and is loaded again behind it); otherwise what is
-  // on screen stays until the new one's messages are here, and only a slow
-  // load (OPEN_SLOW) shows the opening placeholder. Switching topics with
-  // one agent never shows it: the open topic stays until the next is ready.
+  // A new destination appears on input; cached content is shown immediately,
+  // otherwise its header/loading view appears while the exact request runs.
   async open(o: Open) {
     ++this.unreadLanding;this.unreadReturn=null;
     this.dismissMessageLanding();
@@ -554,13 +662,8 @@ export class Store {
       this.set({ tab: "chats", open: o, pending: null, ...this.viewPatch(o, cached ?? null, cur?.id === o.id) });
       await this.loadOpen(o);
     } else {
-      this.set({ tab: "chats", pending: o });
-      const topicSwitch = cur?.kind === "thread" && o.kind === "thread";
-      const slow = topicSwitch ? undefined : setTimeout(() => {
-        if (this.state.pending === o) this.set({ open: o, pending: null, dm: null, thread: null, typing: null });
-      }, OPEN_SLOW);
+      this.set({ tab: "chats", open: o, pending: o, dm: null, thread: null, typing: null });
       await this.loadOpen(o);
-      clearTimeout(slow);
     }
     if (this.state.open === o && !this.refreshed.has(o.id)) { // once per open: receipts the server still holds
       this.refreshed.add(o.id);
@@ -853,6 +956,15 @@ export class Store {
       const loaded: View = await ahead;
       if (!this.alive) return false;
       if (this.latestFetch.get(o.id) === ahead) this.keep(o.id, loaded);
+      if (this.latestFetch.get(o.id) === ahead) {
+        const changes = { ...this.state.messageChanges };
+        for (const [key, p] of Object.entries(changes)) {
+          if (p.view !== o.id) continue;
+          const m = this.state.views[o.id]?.messages?.find(m => messageMatches(m, p.control));
+          if (m && (changeConfirmed(m, p) || p.status === "saved" && messageVersion(m) !== p.original)) delete changes[key];
+        }
+        if (Object.keys(changes).length !== Object.keys(this.state.messageChanges).length) this.set({ messageChanges: changes });
+      }
       // A newer same-ID load may already be kept. It still completes this
       // exact pending open; returning early would strand its focus/entry.
       const v = this.state.views[o.id] || loaded;
@@ -1238,6 +1350,15 @@ export class Store {
     const view = selected?.kind === "dm" ? this.state.dm : this.state.thread;
     return this.alive && this.state.tab === "chats" && selected === p.selected && !this.state.pending && self === p.self.id &&
       !!view?.messages?.some(m => m.id === p.change.id && m.dir === p.change.dir && !m.deleted);
+  }
+
+  // A previous visit may still be storing this exact human's add. A remove
+  // chosen after returning must queue behind it even before the add is read.
+  reactionInFlight(change: T.ControlAction): boolean {
+    const p = this.reacting.get(JSON.stringify([reactionScope(change), change.emoji]))?.pending;
+    const selected = this.state.open;
+    const self = change.conv ? this.state.overview?.person?.person : this.state.overview?.me.address;
+    return !!p && this.alive && p.self.id === self && p.selected.id === selected?.id && p.selected.kind === selected.kind;
   }
 
   private pendingReaction(p: PendingReaction, clear = false) {

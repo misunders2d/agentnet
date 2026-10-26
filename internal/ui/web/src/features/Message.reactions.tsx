@@ -53,7 +53,8 @@ export function useReact(m: AnyMsg, ctx: Ctx) {
   const store = useApp();
   const { sources } = useReactionView(m, ctx);
   return (emoji: string, remove = false) => {
-    const selected = remove ? sources.filter(source => source.list.some(r => r.emoji === emoji && r.mine)) : sources.slice(0, 1);
+    const selected = remove ? sources.filter(source => source.list.some(r => r.emoji === emoji && r.mine)
+      || store.reactionInFlight({ ...controlRef(source.message, ctx), emoji })) : sources.slice(0, 1);
     for (const source of selected) void store.react({ ...controlRef(source.message, ctx), emoji, remove }).then(result => {
       if (result && !remove && !source.list.some(r => r.emoji === emoji && r.mine)) recordReaction(emoji);
     });

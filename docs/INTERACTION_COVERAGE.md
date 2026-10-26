@@ -73,6 +73,77 @@ the repair. Sergey needs to do nothing while owned fixtures are being tested.
   fixtures for destructive actions; never dismiss the owner's real requests
   merely to collect timings.
 
+## October 26 local interaction candidate
+
+This continuation starts from clean `edec2bab` on
+`codex/oct25-agent-conversations`. It does not qualify the app-wide requirement.
+No release, installed application update, physical-phone pass or Slack/Telegram
+latency parity is claimed.
+
+Reuse evidence: Telegram Web A revision
+`f67a40879a7d78c2683ec5a296cf55bc22417d56`,
+[`messages.ts`](https://github.com/Ajaxy/telegram-tt/blob/f67a40879a7d78c2683ec5a296cf55bc22417d56/src/global/actions/api/messages.ts):
+`editMessage` clears the editor before its API call (lines 825–869);
+`deleteMessages`/ephemeral deletion project locally and recover after failure
+(1203–1268); viewport loading uses a local slice before deferred fetching
+(222–327). The previously inspected `reactions.ts` reference below remains
+applicable. AgentNet reuses these interaction patterns through its existing
+Store, API calls and retained editor text. No new transport, worker service,
+permission grant or durable success is inferred from a local preview.
+
+Edits/deletions retain canonical message bodies and execution input, with a
+separate presentation recording pending, saved or failed. A changed canonical
+revision takes precedence. A failed edit keeps its attempted text even after
+newer linked-device content arrives; Retry uses an explicit editor, and Cancel
+or Discard releases the draft. Pending writes and failed edit drafts block
+automatic reload. Duplicate exact mutations share a flight; different edits
+cannot silently inherit an older write's success. Topic previews retain their
+original version guard and the existing confirmation boundary. The projections
+reuse their message arrays when unrelated draft text changes.
+
+Evidence on the source candidate: `go vet ./...` passes. Focused Go race runs
+cover Store action refresh, local changes rendered, responsive editor drafts,
+reaction pending/revisit, message interactions, first unread entry, keyboard
+timeline, topic-bar selection, clock formatting and timeline projection.
+The new rendered fixture uses trusted mouse/touch input and held synthetic
+host writes, not real persistence or remote execution. Its four width/history
+combinations pass edit/delete/topic local changes, refusal/restoration,
+retained edit/rename text, retry/discard, newer synced text and unrelated input.
+One final sample has event-to-DOM updates of 8.9–64.4 ms and two-frame presentation
+opportunities of 26.5–127.8 ms for edit/delete. These are individual observations,
+not a p95 distribution, physical display timing or comparative qualification.
+
+The reaction regression was first reproduced with the unchanged base Store.
+The corrected run shows local reaction changes at 7.6–11.7 ms while controlled
+writes take 617–645 ms, and passes failure, repeated intent, revisit, independent
+emoji responses, newer linked intent, hidden tabs and stopped workspaces.
+The draft fixture covers eight existing editor types. Temporary screenshots of
+wide/narrow pending and recovered message views were inspected.
+
+The temporary final build also passes 391 functional action observations in
+12 suite/viewport partitions: history, groups, media, outbox, agents, teams
+(list/group), profile, storage (wide/narrow), workspaces and permissions.
+Earlier navigation/settings/unread/actions/compose/review checks and the
+corrected three-width topic check pass. These remain synthetic-host functional
+checks. Four final-build observations exceed the informational 200 ms budget:
+exact old quote parent (218.7 ms), invite open (304.5 ms), member invite open
+(248.3 ms) and team creation (209.6 ms). Their original timings remain evidence
+of unfinished responsiveness, not waived exceptions.
+
+Harness corrections preserve original semantic assertions: the history journey
+opens the existing collapsed outcome disclosure and checks both exact target
+IDs; complete-history counts include every grouped message ID rather than one
+DOM row per send. Topic Reopen waits for confirmation to enable its control.
+Touch injection now waits for actual hit-test readiness after a closing modal;
+it no longer dispatches through the departing backdrop. Original failed runs
+remain in temporary evidence. These fixture repairs are not product fixes.
+
+Outstanding scope includes reminder local intent/generation handling, remaining
+settings/participation/bulk flows, real-backend large-history startup/catch-up,
+complete rendered inventory reconciliation, all skins and native platforms,
+and measured comparable messenger baselines. Existing successful representative
+suites do not close those gaps. Source/build validation is not installation.
+
 ## Current evidence and work
 
 Checklist editor: root. Contributors link evidence and request state changes.
@@ -90,6 +161,9 @@ this document records the test contract and coverage gaps.
 | P5 | Composer sizing avoids repeated forced layout while typing | root | implemented; rendered regression and affected checks pass; stress journey still fails | Reused Telegram's separate natural-height measurement and batched conditional writes. Old skin writes height 32 times for ten single-line characters; new desktop/narrow regression permits at most two. Four affected race test parents pass; the complete 6x renderer journey still hits its unchanged watchdog |
 | P6 | Typing does not rebuild unrelated topic/chat lists | root | implemented; focused checks pass; stress remains failed | TopicBar subscribes only to selected topic/new-topic state and skips workspace chat-list construction for human DMs. Actual-component regression and six rendered chat/layout combinations pass; owned normal real-backend journey passes. The 6x renderer run fails during startup before typing, so no stress improvement is claimed |
 | P7 | Repeated message times avoid per-row locale formatter setup | root | implemented; output/cost regressions pass; stress remains failed | Reuses a fixed clock formatter within one synchronous batch, then clears it before later work. Actual model and Chromium parity checks preserve locale, invalid dates, DST and changing device zones; five focused race parents pass. Full 6x journey still reaches its unchanged watchdog |
+| P8 | Edit/delete, navigation and topic changes show local intent before I/O | root | source candidate; focused rendered checks pass | Actual Store/Timeline at 1440 and 390 pixels, 100 and 1,000 messages; writes held and refused, drafts/retry/discard, newer linked edits, unrelated typing/navigation and topic rename/done/reopen exercised. Uncached navigation selects its loading destination synchronously. Complete control/platform coverage remains open |
+| P9 | A later reaction removal survives returning to its chat | root | source candidate; rendered regression passes | Reproduced the existing revisit failure on unchanged `edec2bab`; keep the exact actor/target/emoji write lane when returning, so removal queues behind an unfinished addition. DM/group/thread and stale-response/workspace cases pass |
+| P10 | Timeline day/run comparisons avoid repeated timestamp parsing | root | source candidate; focused regressions pass | CPU profile identified repeated `sameDay` conversions; one conversion per message now supplies adjacent run/day comparisons. Four device zones, DST, midnight, invalid input, unread boundaries and 10,000-message conversion count checked |
 | U1 | Update version checks do not depend on chat projection | root | verified source only | Existing lightweight endpoint; real blocked-chat regression, native three-OS/race tests and live patched check at 1.089ms; installed app still v0.9.5 |
 | X1 | Confusing history/review screen explains state and next action accurately | UX reviewer/root | investigating | Owner screenshot mixes saved history, unknown original agent and contradictory continuation/approval instructions |
 | H1 | Pi/OMP idle notices do not repeat remaining items as new | root | candidate tested; installed activation open | Passive activity uses one native status slot. Pi/OMP focused regressions and isolated real Pi rendering pass; prompt acknowledgement remains tied to native persistence. Existing sessions not reloaded |

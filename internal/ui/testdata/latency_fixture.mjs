@@ -309,10 +309,16 @@ try {
  const timeline=()=>[...root.querySelectorAll('[data-part="timeline"]')].find(el=>!el.closest('[inert]')),scroll=()=>timeline().parentElement;
  const findRow=id=>timeline()?.querySelector('[data-mid="'+id+'"]');
  const rows=()=>[...(timeline()?.querySelectorAll('[data-mid]')||[])];
+ const represented=()=>rows().flatMap(row=>(row.dataset.messageIds||row.dataset.mid).split(' '));
  const groupCount=()=>timeline().querySelectorAll('[data-part="message"]:not([data-send-target]),[data-send-group]').length;
  reports.initialMounted=rows().length;reports.initialGroups=groupCount();
  assert(groupCount()<=80,'initial history must mount at most 80 complete groups');
- assert(timeline().querySelectorAll('[data-send-group] [data-send-target]').length===2,'window split one explicit send');
+ const grouped=timeline().querySelector('[data-send-group]');
+ assert(grouped?.querySelector('[data-message-ids]')?.getAttribute('data-message-ids')===view.messages.slice(375,377).map(m=>m.id).join(' '),'window split one explicit send');
+ const outcomes=grouped.querySelector('[data-agent-outcomes]');
+ await measure('history.group-outcomes-open',()=>outcomes.querySelector('summary').click(),()=>outcomes.querySelectorAll('[data-send-target]').length===2,'both exact outcomes available in the grouped message');
+ assert([...outcomes.querySelectorAll('[data-send-target]')].map(el=>el.getAttribute('data-send-target')).join(' ')===view.messages.slice(375,377).map(m=>m.pid).join(' '),'grouped outcomes changed target identity');
+ await measure('history.group-outcomes-close',()=>outcomes.querySelector('summary').click(),()=>!outcomes.open,'outcome details close without dropping grouped targets');
  assert(!findRow(view.messages[0].id),'old history mounted eagerly');
  // Ordinary backward scrolling prepends history without counting own old
  // rows as arrivals or moving the visible anchor.
@@ -344,8 +350,8 @@ try {
  await measure('history.earlier-without-native-anchoring',()=>[...root.querySelectorAll('button')].find(b=>b.textContent==='Earlier messages').click(),()=>rows().length>n,'older rows appear without native scroll anchoring');
  reports.prependFallbackDrift=Math.abs(fallbackRow.getBoundingClientRect().top-fallbackTop);assert(reports.prependFallbackDrift<2,'prepend fallback moved anchor');scroller.style.removeProperty('overflow-anchor');
  let reveals=2;
- while(rows().length<view.messages.length){const n=rows().length;await measure('history.earlier-'+reveals,()=>[...root.querySelectorAll('button')].find(b=>b.textContent==='Earlier messages').click(),()=>rows().length>n,'additional retained rows appear');reveals++;}
- assert(new Set(rows().map(r=>r.dataset.mid)).size===view.messages.length,'history gap or duplicate');reports.olderReveals=reveals;
+ while(represented().length<view.messages.length){const n=represented().length;await measure('history.earlier-'+reveals,()=>[...root.querySelectorAll('button')].find(b=>b.textContent==='Earlier messages').click(),()=>represented().length>n,'additional retained rows appear');reveals++;}
+ assert(represented().length===view.messages.length&&new Set(represented()).size===view.messages.length,'history gap or duplicate');reports.olderReveals=reveals;
  // A normal scroll must not measure every already revealed row.
  scroller.scrollTop=Math.max(100,scroller.scrollHeight-scroller.clientHeight-200);await frame();await frame();
  const rectMethod=Element.prototype.getBoundingClientRect;let scrollGeometryReads=0;
@@ -615,7 +621,7 @@ try {
    await fill('topics.rename-text',sheet('Rename topic').querySelector('input'),'Fixture renamed');
    await tap('topics.rename-save',control('Save',sheet('Rename topic')),()=>!sheet('Rename topic')&&label(chip()).includes('Fixture renamed'),'exact title updated after API result');await retire();
    await tap('topics.menu-done',chip(),()=>!!control('Mark done'),'done action visible');
-   await tap('topics.mark-done',control('Mark done'),()=>!!control('Reopen')&&view.topics[0].state==='done','topic done with concrete Reopen control');await retire();
+   await tap('topics.mark-done',control('Mark done'),()=>!!control('Reopen')&&!control('Reopen').disabled&&view.topics[0].state==='done','topic done with confirmed, usable Reopen control');await retire();
    await tap('topics.reopen',control('Reopen'),()=>view.topics[0].state==='active'&&!control('Reopen'),'topic active after authoritative projection');
   }
   if(suite==='groups'){

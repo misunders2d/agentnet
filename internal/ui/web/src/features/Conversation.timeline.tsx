@@ -9,7 +9,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { IconArrowDown, IconMessageCircle } from "@tabler/icons-react";
 import { useApp } from "../context";
 import { useStore, type ReadVisit } from "../store";
-import { agentName, dayLabel, messageTarget, sameDay, timeOf } from "../model";
+import { agentName, dayLabel, messageTarget, timeOf } from "../model";
 import { AgentAvatar, PersonAvatar } from "../ui/Avatar";
 import { groupedSends } from "../optimistic.mjs";
 import { localRunningDetail } from "../runningDetail";
@@ -371,9 +371,15 @@ function build(messages: AnyMsg[], ctx: Ctx, firstUnread?: string): Item[] {
   const rows = groupedSends(messages);
   messages = rows.map(row => row.m);
   const who = messages.map((m) => (ev(m) ? null : whoWrote(m, ctx)));
+  // Compare adjacent runs using one local-day conversion per message. Parsing
+  // the same timestamps in both neighbours and the day divider blocked input
+  // on larger retained histories. Keep local timezone/DST semantics unchanged.
+  const dates = messages.map(m => new Date(m.at));
+  const days = dates.map(d => d.toDateString());
+  const times = dates.map(d => d.getTime());
   const together = (i: number, j: number) => {
     const a = messages[i], b = messages[j], wa = who[i], wb = who[j];
-    return !!wa && !!wb && wa.key === wb.key && sameDay(a.at, b.at) && Math.abs(+new Date(b.at) - +new Date(a.at)) < RUN && !(a.actions || []).length && b.id !== firstUnread;
+    return !!wa && !!wb && wa.key === wb.key && days[i] === days[j] && Math.abs(times[j] - times[i]) < RUN && !(a.actions || []).length && b.id !== firstUnread;
   };
   let lastMine = -1;
   messages.forEach((m, i) => { if (who[i]?.mine && !isRequest(m) && !m.deleted) lastMine = i; });
@@ -381,7 +387,7 @@ function build(messages: AnyMsg[], ctx: Ctx, firstUnread?: string): Item[] {
     if (rows[i].compact) return;
     const targets: AnyMsg[] = [m];
     for (let j = i + 1; j < rows.length && rows[j].compact; j++) targets.push(rows[j].m);
-    if (i === 0 || !sameDay(messages[i - 1].at, m.at)) out.push({ type: "day", key: "d:" + m.at.slice(0, 10) + i, label: dayLabel(m.at) });
+    if (i === 0 || days[i - 1] !== days[i]) out.push({ type: "day", key: "d:" + m.at.slice(0, 10) + i, label: dayLabel(m.at) });
     if (targets.some(target => target.id === firstUnread)) out.push({ type: "new", key: "new" });
     const end = i + targets.length - 1;
     out.push({ type: "msg", key: m.id, m, first: !(i > 0 && together(i - 1, i)), last: !(end + 1 < messages.length && together(end, end + 1)), status: i === lastMine, compact: false, ...(targets.length > 1 ? {targets} : {}) });

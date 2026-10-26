@@ -6,14 +6,21 @@ import type { Store } from "./store";
 
 type Entry = { value: string };
 const drafts = new WeakMap<Store, Map<string, Entry>>();
+const scopeOf = (store: Store, key: string) => {
+  const me = store.get().overview?.me;
+  return JSON.stringify([store.host.workspace.id, me?.address, me?.fingerprint, key]);
+};
+
+export function discardRetainedText(store: Store, key: string) {
+  drafts.get(store)?.delete(scopeOf(store, key));
+}
 
 export function useRetainedText(key: string, initial: string) {
   const store = useApp();
   let entries = drafts.get(store);
   if (!entries) { entries = new Map(); drafts.set(store, entries); }
   const map = entries;
-  const me = store.get().overview?.me;
-  const scope = JSON.stringify([store.host.workspace.id, me?.address, me?.fingerprint, key]);
+  const scope = scopeOf(store, key);
   const [, render] = useState(0);
   const value = map.get(scope)?.value ?? initial;
   const set: Dispatch<SetStateAction<string>> = next => {

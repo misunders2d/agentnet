@@ -19,7 +19,7 @@ registerHooks({load(url,context,next){
  }
  return next(specifier,context);
 }});
-const {Store}=await import(new URL('web/src/store.ts',root));
+const {Store,unsentIn}=await import(new URL('web/src/store.ts',root));
 const saved=new Map();globalThis.localStorage={getItem:k=>saved.get(k)||null,setItem:(k,v)=>saved.set(k,v)};
 globalThis.document={visibilityState:'visible',hasFocus:()=>true,addEventListener(){},removeEventListener(){}};
 
@@ -81,7 +81,7 @@ for(const target of ['current-thread','same-peer-other-thread']){
  if(target==='same-peer-other-thread'){
   assert.equal(before.complete,false,'A cannot complete B action before B overview state arrives');
   assert.equal(before.duplicate,true,'duplicate B action stays in the same flight until B state arrives');
-  assert.equal(before.busy,'done','B duplicate guard stays through B summary refresh');assert.equal(before.topic,'active');
+  assert.equal(before.busy,'done','B duplicate guard stays through B summary refresh');assert.equal(before.topic,'done','local topic intent appears before the blocked overview');
   assert.deepEqual(threadCalls,[a,a],'only explicit final refetch reloads unrelated A');
  }else{
   assert.equal(before.complete,true,'current thread completes on its own authoritative refresh while overview is held');
@@ -118,4 +118,60 @@ for(const target of ['current-thread','same-peer-other-thread']){
  const retry=action.act(g,'dismiss');await pause(0);await action.act(g,'dismiss');assert.equal(calls,3,'pending guard survives selected refresh and rejects duplicate');
  dm.release(true);await retry;assert.equal(states.at(-1),'');assert.equal(snacks,1,'retry succeeds after failure cleared guard');
  console.log('RoomPanel failure cleanup and duplicate guard PASS');
+}
+
+// The intended visible mutation precedes backend acceptance. A read containing
+// a newer revision, failure, or navigation must not overwrite another target.
+for (const action of ['edit','delete']) {
+ const id='8'.repeat(32),control={conv,id,dir:'out'},write=gate(),read=gate();let fail=false,holdRead=false,calls=0;
+ let m={id,dir:'out',from:'fixture/laptop',body:'Original',revision:1,can:['edit','delete']};
+ const host={platform:'daemon',workspace:{id:'messages-'+action},listen:()=>()=>{},api:async(path,body)=>{
+  if(path.startsWith('/api/overview'))return {version:'fixture',me,dms:[],threads:[],people:[]};
+  if(path.startsWith('/api/dm?')){if(holdRead)await read.promise;return {id:conv,kind:'dm',peer:{},messages:[structuredClone(m)]};}
+  if(path.startsWith('/api/message/')){calls++;await write.promise;if(fail)throw Error('Refused');m={...m,revision:2,...(action==='edit'?{edited:true,text:body.text}:{deleted:true})};return {note:'Stored'};}
+  if(path.startsWith('/api/agents'))return {agents:[]};return {};
+ }};
+ const store=new Store(host);await store.start();await store.open({kind:'dm',id:conv});holdRead=true;
+ const run=()=>action==='edit'?store.api.edit({...control,text:'Changed'}):store.api.retract(control);
+ const work=run();assert.equal(run(),work,'same exact pending action shares one write');
+ const shown=store.get().dm.messages[0];assert.equal(action==='edit'?shown.text:shown.deleted,action==='edit'?'Changed':true);
+ assert.equal(shown._change.status,'pending');assert.equal(m.body,'Original');assert.equal(m.revision,1,'local display is not persistence');
+ const messages=store.get().dm.messages;
+ store.setDraft(conv,{text:'Typing while pending'});
+ assert.equal(store.get().dm.messages,messages,'draft input must not rebuild the pending timeline');
+ write.release();await work;assert.equal(calls,1);assert.equal(store.get().dm.messages[0]._change.status,'saved');
+ read.release();await store.refreshOpen();assert.equal(store.get().dm.messages[0]._change,undefined);assert.equal(store.get().dm.messages[0].revision,2);
+ store.stop();console.log(action+' local feedback before blocked write/read; exact single persistence PASS');
+}
+for(const changed of [false,true]){
+ const id='9'.repeat(32),write=gate();let m={id,dir:'out',from:'fixture/laptop',body:'Original',revision:1,can:['edit']};
+ const host={platform:'daemon',workspace:{id:'failure-'+changed},listen:()=>()=>{},api:async(path)=>{
+  if(path.startsWith('/api/overview'))return {version:'fixture',me,dms:[],threads:[],people:[]};
+  if(path.startsWith('/api/dm?'))return {id:conv,kind:'dm',peer:{},messages:[structuredClone(m)]};
+  if(path==='/api/message/edit'){await write.promise;throw Error('Refused');}
+  if(path.startsWith('/api/agents'))return {agents:[]};return {};
+ }};
+ const store=new Store(host);await store.start();await store.open({kind:'dm',id:conv});
+ const work=store.api.edit({conv,id,dir:'out',text:'Attempted'});const failure=assert.rejects(work,/Refused/);
+ if(changed){m={...m,body:'Newer linked edit',revision:3};await store.refreshOpen();assert.equal(store.get().dm.messages[0].body,m.body);
+  await assert.rejects(store.api.edit({conv,id,dir:'out',text:'Another edit'}),/previous message change is still pending/,'newer sync must not turn a different pending edit into success');
+ }
+ write.release();await failure;await store.refreshOpen();
+ assert.equal(store.get().dm.messages[0].body,changed?'Newer linked edit':'Original');
+ {assert.equal(store.get().dm.messages[0]._change.status,'failed');assert.equal(store.get().dm.messages[0]._change.control.text,'Attempted','failed edit text survives newer canonical content');
+  assert.equal(unsentIn(store.get()),true,'automatic reload must retain an unsuccessful edit');
+  store.discardFailedEdit({conv,id,dir:'out'});assert.equal(unsentIn(store.get()),false,'explicit editor cancel releases the failed draft');
+ }
+ store.stop();console.log('message failure preserves '+(changed?'newer linked state':'original and attempted text')+' PASS');
+}
+{
+ const read=gate();const host={platform:'daemon',workspace:{id:'navigation'},listen:()=>()=>{},api:async(path)=>{
+  if(path.startsWith('/api/dm?')){await read.promise;return view(conv);}
+  if(path.startsWith('/api/overview'))return {version:'fixture',me,dms:[],threads:[],people:[]};
+  if(path.startsWith('/api/agents'))return {agents:[]};return {};
+ }};
+ const store=new Store(host);await store.start();const opening=store.open({kind:'dm',id:conv});
+ assert.equal(store.get().open.id,conv,'first uncached destination selected synchronously');assert.equal(store.get().pending.id,conv);assert.equal(store.get().dm,null);
+ store.showTab('settings');assert.equal(store.get().tab,'settings','unrelated controls remain available');
+ read.release();await opening;assert.equal(store.get().tab,'settings','late load cannot navigate back');store.stop();console.log('uncached navigation immediate; late load preserves newer tab PASS');
 }

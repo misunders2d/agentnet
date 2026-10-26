@@ -25,7 +25,7 @@ import { Markdown, MessageLinks, type RenderMention } from "./Markdown";
 import { AssignMessage } from "./Message.assign";
 import { MessageFiles } from "./Message.files";
 import { EmojiDialog, Reactions, ReactionTargets } from "./Message.reactions";
-import { ActionSheet, DeleteMessage, DetailsSheet, EditBox, Toolbar, inside, useTouchGestures, type Acts, type Can } from "./Message.actions";
+import { ActionSheet, DeleteMessage, DetailsSheet, EditBox, Toolbar, inside, useTouchGestures, discardEditDraft, type Acts, type Can } from "./Message.actions";
 import {
   agentLabel, agentOf, answerTo, eventKind, ev, excerpt, guestOf, historicalTargetLabel, isReply, isRequest, isThreadMsg, joinedBefore, lower, problem, requestLabel, requestState, shownText, whoWrote, working,
   type AnyMsg, type Ctx, type Who,
@@ -89,8 +89,8 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
   const can: Can = {
     react: has("react"),
     reply: !targets && live && ctx.canReply,
-    edit: !targets && has("edit"),
-    del: !targets && has("delete"),
+    edit: !targets && has("edit") && (!m._change || m._change.status === "failed"),
+    del: !targets && has("delete") && (!m._change || m._change.status === "failed"),
     select: !targets && live && ctx.canReply && !!onSelect && (ctx.thread || ctx.dm && (ctx.dm.role || "member") === "member") ? true : false,
     remind: !targets && live && !!ctx.overview?.remind,
   };
@@ -149,7 +149,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
       {!m.deleted && approved && <p className="mb-1 text-[13px] text-muted" data-proposal-provenance>{m.proposal?.edited ? (who.mine ? "You edited and sent this task" : "Edited and sent this task") : (who.mine ? "You approved this task" : "Approved this task")} · suggested by {!isThreadMsg(m) && agentOf(ctx, m.pid) ? agentLabel(agentOf(ctx, m.pid)!, ctx) : "the agent"}</p>}
       {!compact && quote && <ReplyQuote parent={parent} ctx={ctx} onJump={onJump} />}
       {editing ? <EditBox m={m} ctx={ctx} onDone={() => setEditing(false)} />
-        : m.deleted ? <p className="flow-root italic text-muted">Message deleted{time}</p>
+        : m.deleted ? <p className="flow-root italic text-muted">{m._change?.status === "pending" ? "Deleting message…" : "Message deleted"}{time}</p>
           : approved ? <>
             {proposal && !proposal.deleted && onJump && <button type="button" className="block min-h-11 text-left text-[13px] underline" onClick={() => onJump(proposal.id)}>View proposal</button>}
             <details data-approved-task-text>
@@ -161,6 +161,12 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
           </> : !compact && text ? <Markdown text={text} mention={mention} tail={time} />
             : null}
       {!m.deleted && !editing && <MessageFiles m={m} />}
+      {m._change && <p role="status" className="mt-1 text-xs text-muted" data-message-change={m._change.status}>
+        {m._change.status === "failed" ? <>{m._change.action === "edit" ? "Edit" : "Deletion"} couldn’t be confirmed. {m._change.error}
+          {m._change.action === "edit" && can.edit && <button type="button" className="ml-2 min-h-11 underline" onClick={() => setEditing(true)}>Edit again</button>}
+          {m._change.action === "edit" && <button type="button" className="ml-2 min-h-11 underline" onClick={() => discardEditDraft(store, m, ctx)}>Discard edit</button>}</>
+          : m._change.status === "saved" ? "Saved here · updating view…" : m._change.action === "edit" ? "Saving edit…" : "Deletion pending…"}
+      </p>}
 	  {!readOnly&&!isThreadMsg(m)&&m.verified_agent&&m.topic_event?.request&&m.origin==="agent:organization"&&ctx.dm&&(ctx.dm.role||"member")==="member"&&ctx.canReply&&<UndoTopicMove m={m} conv={ctx.dm.id} />}
       {(!text || compact) && !m.deleted && !editing && <div className="flow-root">{time}</div>}
     </div>

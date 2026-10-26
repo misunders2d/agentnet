@@ -5,9 +5,10 @@ import { historicalAgentName, concreteAgentLabel } from "../model";
 // shape; everything here reads both. Nothing decides: states are the
 // server's, actions come from its can[] and actions[] lists.
 import type { T } from "../api";
+import type { MessageChange } from "../message-changes";
 import { agentName, agentWhere, deliveryWord, deviceKind, deviceWho, jobWord, niceDevice, owner, personName, threadAuthor, threadRow, whoName, type DeviceKind } from "../model";
 
-export type AnyMsg = (T.DMMessage | T.Message) & { _local?: boolean; _failed?: boolean; _retry?: () => void };
+export type AnyMsg = (T.DMMessage | T.Message) & { _local?: boolean; _failed?: boolean; _retry?: () => void; _change?: MessageChange };
 
 /** Everything a message needs to know about the conversation it is in. */
 export interface Ctx {
