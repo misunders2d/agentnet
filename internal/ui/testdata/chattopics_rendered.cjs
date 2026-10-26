@@ -94,6 +94,7 @@ const host={version:1,platform:'daemon',workspace:{id:'default',name:'P11 local 
   if(kind==='agent'){window.freshMessage=m;overview.threads=topics;}else{thread.messages.push(m);thread.topics=topics;}
   changed?.({type:'change',seq:++overview.seq});return {id:m.id,lid:m.lid,state:'delivered'};
  }
+ if(p==='/api/topic/transfer/location')return null; // read-only lookup; never announce a change
  if(p.startsWith('/api/topic/')){const what=url.pathname.split('/').at(-1),ids=body.ids||[body.id];for(const id of ids){const t=topics.find(t=>t.id===id);if(what==='create'){topics.push({id,conv,title:'Quick main flow message',last:'Quick main flow message',last_at:at,count:1,unread:0,state:'active',pending:false});for(const m of thread.messages)if(m.lid===id)m.topic=id;}else if(t){if(what==='delete'){topics.splice(topics.indexOf(t),1);if(kind!=='agent')thread.messages=thread.messages.filter(m=>m.topic!==id);}else t.state=what==='done'?'done':what==='archive'?'archived':'active';}}if(kind==='agent')overview.threads=topics;else thread.topics=topics;changed?.({type:'change',seq:++overview.seq});return {note:ids.length+' topics changed.'};}
  if(p.includes('/groups/invitations'))return [];if(p.startsWith('/api/typing/status'))return {send:false,scopes:[]};if(p.startsWith('/api/agents'))return {host:peer.address,agents:directMode?[{record:{id:piBinding.agent_id,host:peer.address,host_key:peer.fingerprint,label:'Pi',harness:'pi'},enabled:true},{record:{id:claudeBinding.agent_id,host:peer.address,host_key:peer.fingerprint,label:'Claude',harness:'claude'},enabled:true}]:[],sessions:[],local:false};return {};
 }};
@@ -131,7 +132,7 @@ const server = http.createServer((req, res) => {
       const page = await ctx.newPage(); page.setDefaultTimeout(10000);
       page.on('pageerror', e => errors.push(tag + ': ' + e.stack));if(process.env.AGENTNET_ALL_STATUS_SEARCH==='1'){page.on('console',m=>{if(m.type()==='error')errors.push(tag+': '+m.text());});page.on('response',r=>{if(r.status()>=400)errors.push(tag+': HTTP '+r.status()+' '+r.url());});}
       const shot = async name => { await page.waitForTimeout(400); await page.screenshot({ path: path.join(evidence, tag + '-' + name + '.png') }); };
-      const changed = () => page.evaluate(() => fixture.requests.filter(r => r.path.startsWith('/api/topic/')));
+      const changed = () => page.evaluate(() => fixture.requests.filter(r => r.path.startsWith('/api/topic/') && r.path !== '/api/topic/transfer/location'));
       const all = () => page.getByRole('button', { name: process.env.P11_HISTORY_IMPORT_ONLY ? /^All topics/ : /^All(?: topics| \d|$)/ }).first();
       try {
         await page.goto(origin + '/?skin=' + skin + '&kind=' + kind);
@@ -524,13 +525,12 @@ const server = http.createServer((req, res) => {
         await dialog.getByRole('checkbox', { name: 'Select Topic 2', exact: true }).check();
         await dialog.getByRole('button', { name: 'Mark done', exact: true }).click();
         assert.equal(await dialog.getByRole('button', { name: 'Confirm', exact: true }).count(), 1, tag + ': one confirmation');
-        await dialog.getByRole('button', { name: 'Confirm', exact: true }).click();
-        await dialog.getByRole('button', { name: 'Undo', exact: true }).click();
-        assert.equal((await changed()).length, 0, tag + ': Undo stops mutations');
+        await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+        assert.equal((await changed()).length, 0, tag + ': cancellation before confirmation sends no mutation');
         await dialog.getByRole('button', { name: 'Mark done', exact: true }).click();
         // Owner (v0.8.17): the confirmation says where Done applies, like the footer.
         const doneAsk = await dialog.innerText();
-        assert.match(doneAsk, kind === 'agent' ? /Mark these topics done on your linked devices\?|Mark done 2 topics\? On your linked devices\./ : /Mark these topics done for everyone\?|Mark done 2 topics\? Shared with everyone\./, tag + ': Mark done says where it applies');
+        assert.match(doneAsk, kind === 'agent' ? /Mark 2 topics done on your linked devices\?/ : /Mark 2 topics done for everyone in this chat\?/, tag + ': Mark done says exact count and audience');
         assert.doesNotMatch(doneAsk, /on this device/i, tag + ': Mark done is not called this device\'s');
         await shot('bulk-confirm');
         await dialog.getByRole('button', { name: 'Confirm', exact: true }).click();
@@ -549,7 +549,7 @@ const server = http.createServer((req, res) => {
         await dialog.getByRole('checkbox', { name: 'Select Topic 4', exact: true }).check();
         await dialog.getByRole('button', { name: 'Archive', exact: true }).click();
         const archiveAsk = await dialog.innerText();
-        assert.match(archiveAsk, /Archive these topics on your linked devices\? Nothing deleted\.|Archive 2 topics\? On your linked devices\./, tag + ': Archive says where it applies');
+        assert.match(archiveAsk, /Archive 2 topics on your linked devices\? Nothing is deleted\./, tag + ': Archive says exact count and audience');
         assert.doesNotMatch(archiveAsk, /on this device/i, tag + ': Archive is not called this device\'s');
         await dialog.getByRole('button', { name: 'Confirm', exact: true }).click();
         await page.waitForFunction(() => fixture.requests.some(r => r.path === '/api/topic/archive'), null, { timeout: 12000 });
@@ -558,7 +558,9 @@ const server = http.createServer((req, res) => {
         await dialog.getByRole('checkbox', { name: 'Select Topic 3', exact: true }).check();
         await dialog.getByRole('checkbox', { name: 'Select Topic 4', exact: true }).check();
         await dialog.getByRole('button', { name: 'Delete for me', exact: true }).click();
-        assert.match(await dialog.innerText(), /Others keep their copies|Other people keep their copies/);
+        assert.match(await dialog.innerText(), kind === 'agent'
+          ? /Delete 2 topics for you on this device only\? This can't be undone\./
+          : /Delete 2 topics for you on your linked devices; others keep their copies\? This can't be undone\./, tag + ': exact deletion scope and irreversibility');
         await dialog.getByRole('button', { name: 'Confirm', exact: true }).click();
         await page.waitForFunction(() => fixture.requests.some(r => r.path === '/api/topic/delete'), null, { timeout: 12000 });
         assert.deepEqual(await page.evaluate(() => fixture.topics.map(t => t.title)), ['Topic 1', 'Topic 2'], tag + ': batch delete');

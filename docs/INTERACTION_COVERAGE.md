@@ -88,7 +88,7 @@ this document records the test contract and coverage gaps.
 | P3 | Measured bottlenecks fixed and normal/10x cases pass | root | scoped candidate; broader qualification open | Per-build participation reuse has adversarial review and focused signed-membership/unread regressions; no general responsiveness fix or 10x pass is claimed |
 | P4 | Local dismissal changes UI before asynchronous processing | root | implemented; focused checks pass; release qualification open | Telegram local mutation/reconciliation flow reused. Real blocked-request card/count removal, usable menu/navigation, Review pending state and failure restoration exercised; stale/new-attempt/lost-response/workspace tests pass. Source candidate is not an installed repair |
 | P5 | Composer sizing avoids repeated forced layout while typing | root | implemented; rendered regression and affected checks pass; stress journey still fails | Reused Telegram's separate natural-height measurement and batched conditional writes. Old skin writes height 32 times for ten single-line characters; new desktop/narrow regression permits at most two. Four affected race test parents pass; the complete 6x renderer journey still hits its unchanged watchdog |
-| P6 | Typing does not rebuild unrelated topic/chat lists | root | next measured repair | CPU samples identify TopicBar's whole-draft subscription and unconditional workspace chat-list construction, including human DMs; no implementation or pass claimed yet |
+| P6 | Typing does not rebuild unrelated topic/chat lists | root | implemented; focused checks pass; stress remains failed | TopicBar subscribes only to selected topic/new-topic state and skips workspace chat-list construction for human DMs. Actual-component regression and six rendered chat/layout combinations pass; owned normal real-backend journey passes. The 6x renderer run fails during startup before typing, so no stress improvement is claimed |
 | U1 | Update version checks do not depend on chat projection | root | verified source only | Existing lightweight endpoint; real blocked-chat regression, native three-OS/race tests and live patched check at 1.089ms; installed app still v0.9.5 |
 | X1 | Confusing history/review screen explains state and next action accurately | UX reviewer/root | investigating | Owner screenshot mixes saved history, unknown original agent and contradictory continuation/approval instructions |
 | H1 | Pi/OMP idle notices do not repeat remaining items as new | root | candidate tested; installed activation open | Passive activity uses one native status slot. Pi/OMP focused regressions and isolated real Pi rendering pass; prompt acknowledgement remains tied to native persistence. Existing sessions not reloaded |
@@ -160,6 +160,34 @@ that one before/after pair, while opening still has an approximately 1,138ms lon
 task. This is renderer simulation with owned data, not a physical-phone result
 or a qualified latency distribution. Full-history payloads, full timeline
 preprocessing, topic layout and unrelated list rebuilding remain open.
+
+The narrower TopicBar candidate removes its whole-draft subscription and skips
+the unused workspace chat-list construction for human DMs. Its actual-component
+check verifies stable selected values when only draft text changes and zero DM
+chat-list calls, retaining the existing compact/layout/state checks. Six mocked
+desktop/phone combinations across direct chats, groups and agents pass under
+the race detector. The harness needed an exact read-only topic-location lookup
+instead of incorrectly emitting a content change, plus Cancel-before-Confirm
+and precise confirmation wording matching the already recorded owner contract.
+The complete request ledger and mutation/result/scope assertions remain.
+
+One owned normal Go/SQLite/Chromium journey passes in 18.07s. Chat opening took
+1.548s, the typing phase 342ms, first/repeated Actions 127/69ms, Review navigation
+91ms and cached reopening 89ms. These are single driver intervals, not latency
+distributions or first physical-frame measurements. Screenshots of chat, menu,
+Review, confirmation and the cleared item were inspected. The same candidate's
+6x renderer run fails at the initial Chats click's unchanged five-second limit,
+before the modern-chat phases; its startup profile includes 772/760ms long
+tasks. Neither a stress pass nor a causal before/after speedup is established.
+
+The real 48-topic regression exposed a separate binding defect. All 48 topics
+remain stored: 40 ordinary human-device topics and eight legacy agent-history
+topics. An explicitly opened legacy question shows All topics (0), despite
+eight exact-binding overview rows. Its bar incorrectly uses the active-agent
+directory projection. The paged list also lacks a way to distinguish those two
+bindings when host/key/empty agent ID coincide. This failure remains open;
+changing the test's 48 expectation to 40 would hide it. Current-agent directory
+filtering and original stored identities must remain intact when repairing it.
 
 ## Reported failures that remain open
 

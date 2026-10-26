@@ -102,16 +102,16 @@ export function TopicBar({ thread,dm }: { thread?: T.Thread;dm?:T.DMThread }) {
   const wide = useWide();
   const overview = useStore(store, (s) => s.overview);
   const names = useAgentNames();
-  const draft = useStore(store, (s) => s.drafts[dm?.id||thread!.id]);
+  const topic = useStore(store, (s) => s.drafts[dm?.id||thread!.id]?.topic);
+  const fresh = useStore(store, (s) => !!s.drafts[dm?.id||thread!.id]?.newTopic);
   const [all, setAll] = useState(false);
   const [directMerge,setDirectMerge]=useState<{thread:T.Thread;source:string;ids:string[]}|null>(null);
-  const item = chatList(overview, names).find((i) => i.open.kind === "thread" && (thread?.topic?i.key==="agent:"+directChatKey(thread.topic):i.peer===thread?.peer));
-  const current=dm?.topics?.find(t=>t.id===draft?.topic);
+  const item = dm ? undefined : chatList(overview, names).find((i) => i.open.kind === "thread" && (thread?.topic?i.key==="agent:"+directChatKey(thread.topic):i.peer===thread?.peer));
+  const current=dm?.topics?.find(t=>t.id===topic);
   const open = dm ? current?topicOf(current):null : thread?.topic ? topicOf(thread.topic) : null;
   const topics = dm ? (dm.topics||[]).filter(t=>t.state!=="archived").map(topicOf) : item?.topics || [];
   const total = dm ? dm.topics?.length||0 : item?.topicTotal ?? topics.length;
   const listed = !!overview?.topic_list;
-  const fresh = !!draft?.newTopic;
   const agent = dm ? dm.title||dm.peer.label : item?.title || "this agent";
   const canStartTopic = !dm?.frozen && dm?.role !== "former_member";
 
@@ -178,7 +178,7 @@ export function TopicBar({ thread,dm }: { thread?: T.Thread;dm?:T.DMThread }) {
 
   return (
     <nav {...choices.bind} ref={nav} aria-label={"Topics with " + agent} data-part="topic-bar" className="flex shrink-0 items-center gap-2 overflow-hidden border-b border-hairline bg-canvas px-3 py-1.5 lg:px-5">
-      {dm && <button ref={mainRef} type="button" aria-pressed={!draft?.topic&&!fresh} aria-label={(wide?"Main flow":"Main")+(dm.main_topic?.unread?", "+dm.main_topic.unread+" unread":"")} className={chip+"shrink-0 "+(!draft?.topic&&!fresh?"bg-ink text-canvas":"bg-surface stroke")} onClick={()=>void store.openUnread({kind:"dm",id:dm.id})}>{wide?"Main flow":"Main"}{!!dm.main_topic?.unread && <span aria-hidden="true" className="grid h-5 min-w-5 place-items-center rounded-full bg-danger px-1 text-[11px] font-bold text-white tnum">{dm.main_topic.unread}</span>}</button>}
+      {dm && <button ref={mainRef} type="button" aria-pressed={!topic&&!fresh} aria-label={(wide?"Main flow":"Main")+(dm.main_topic?.unread?", "+dm.main_topic.unread+" unread":"")} className={chip+"shrink-0 "+(!topic&&!fresh?"bg-ink text-canvas":"bg-surface stroke")} onClick={()=>void store.openUnread({kind:"dm",id:dm.id})}>{wide?"Main flow":"Main"}{!!dm.main_topic?.unread && <span aria-hidden="true" className="grid h-5 min-w-5 place-items-center rounded-full bg-danger px-1 text-[11px] font-bold text-white tnum">{dm.main_topic.unread}</span>}</button>}
       {pick.map((t) => {
         const current = !!open && t.id === open.id && !fresh;
         const lit = going ? t.id === going : current;

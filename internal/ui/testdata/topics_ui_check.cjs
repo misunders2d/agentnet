@@ -9,16 +9,16 @@ if(process.env.AGENTNET_TOPIC_COMPACT_CHECK==='1'){
   const cfg={width:320,mainWidth:77,allWidth:80,newWidth:44,open:'named',listed:true,fresh:false,state:'active',...options};
   const topics=[{id:'named',conv:'chat',title:'Named topic',state:cfg.state,unread:5,lastAt:'2026-10-16T00:00:00Z',count:1,needsYou:0},{id:'other',conv:'chat',title:'Other',state:'active',unread:7,lastAt:'2026-10-15T00:00:00Z',count:1,needsYou:0},{id:'closed',conv:'chat',title:'Closed',state:'archived',unread:3,lastAt:'2026-10-14T00:00:00Z',count:1,needsYou:0}];
   const state={overview:{topic_list:cfg.listed},drafts:{chat:{topic:cfg.open||undefined,newTopic:cfg.fresh}},pending:null};
-  let cells=[],refs=[],effects=[],pending=[],observers=[],reads=[],cursor=0,refCursor=0,effectCursor=0;
+  let cells=[],refs=[],effects=[],pending=[],observers=[],reads=[],selections=[],chatListCalls=0,cursor=0,refCursor=0,effectCursor=0;
   const controls=Object.fromEntries(['nav','main','all','new'].map(key=>[key,{key,get clientWidth(){return cfg.width;},querySelector:()=>null,get offsetWidth(){return Math.round(cfg[key+'Width']);},getBoundingClientRect(){reads.push(key);return {width:cfg[key+'Width']};}}]));
   const globals={module:{exports:{}},jsx:(tag,props,...children)=>{const node=jsx(tag,props,...children);if(props?.ref){const label=props['aria-label']||'';props.ref.current=tag==='nav'?controls.nav:label.startsWith('Main')?controls.main:label.startsWith('All topics')?controls.all:controls.new;}return node;},Fragment:'Fragment',
    useState:init=>{const i=cursor++;if(!(i in cells))cells[i]=init;return[cells[i],v=>{cells[i]=typeof v==='function'?v(cells[i]):v;}];},
    useRef:init=>{const i=refCursor++;return refs[i]??(refs[i]={current:init});},
    useLayoutEffect:(fn,deps)=>{const i=effectCursor++,old=effects[i];if(!old||deps.some((d,j)=>!Object.is(d,old.deps[j])))pending.push(()=>{old?.cleanup?.();effects[i]={deps,cleanup:fn()};});},
    ResizeObserver:class{constructor(fn){this.fn=fn;this.observed=[];this.disconnected=false;observers.push(this);}observe(el){this.observed.push(el);}disconnect(){this.disconnected=true;}},getComputedStyle:()=>({columnGap:'8',paddingLeft:'12',paddingRight:'12'}),CSS:{escape:s=>s},
-   useApp:()=>({}),useWide:()=>false,useAgentNames:()=>({}),useStore:(_s,f)=>f(state),
+   useApp:()=>({}),useWide:()=>false,useAgentNames:()=>({}),useStore:(_s,f)=>{const value=f(state);selections.push(value);return value;},
    useSteadyChoices:rows=>({choices:rows.map(row=>({row,present:true})),bind:{},release(){}}),unreadTopicOrder:()=>0,
-   chatList:()=>[],newestFirst:(a,b)=>b.lastAt.localeCompare(a.lastAt),topicOf:t=>t,topicMark:()=>null,firstLine:t=>t,dayLabel:()=>'day',timeOf:()=>'time',
+   chatList:()=>{chatListCalls++;return [];},newestFirst:(a,b)=>b.lastAt.localeCompare(a.lastAt),topicOf:t=>t,topicMark:()=>null,firstLine:t=>t,dayLabel:()=>'day',timeOf:()=>'time',
    TOPICS:{barMax:6,chipMinWidth:104,chipMaxWidth:'16rem',barTitle:40},AllTopics:'AllTopics',Menu:{Trigger:'Menu.Trigger'},
    IconPlus:'Icon',IconListSearch:'Icon',IconAlertCircle:'Icon',IconArchive:'Icon',IconCircleCheck:'Icon',IconClock:'Icon',IconClockQuestion:'Icon',IconChevronDown:'Icon'};
   if(cfg.switchTo){
@@ -31,7 +31,7 @@ if(process.env.AGENTNET_TOPIC_COMPACT_CHECK==='1'){
   const code=esbuild.transformSync(text.replace(/^import[\s\S]*?from[^;]+;/gm,''),{loader:'tsx',jsxFactory:'jsx',jsxFragment:'Fragment',format:'cjs'}).code;
   vm.runInNewContext(code,globals);
   let tree;
-  const rerender=()=>{for(let i=0;i<2;i++){cursor=0;refCursor=0;effectCursor=0;pending=[];for(const ref of refs)if(Object.values(controls).includes(ref.current))ref.current=null;tree=globals.module.exports.TopicBar({dm:{id:'chat',peer:{label:'Fixture'},main_topic:{unread:2},topics,frozen:cfg.frozen,role:cfg.role}});for(const effect of pending)effect();}};
+  const rerender=()=>{for(let i=0;i<2;i++){cursor=0;refCursor=0;effectCursor=0;pending=[];selections=[];for(const ref of refs)if(Object.values(controls).includes(ref.current))ref.current=null;tree=globals.module.exports.TopicBar({dm:{id:'chat',peer:{label:'Fixture'},main_topic:{unread:2},topics,frozen:cfg.frozen,role:cfg.role}});for(const effect of pending)effect();}};
   rerender();
   if(cfg.switchTo){
    nodes(tree).find(n=>n.tag==='nav').props.onFocusCapture();
@@ -39,8 +39,11 @@ if(process.env.AGENTNET_TOPIC_COMPACT_CHECK==='1'){
    rerender();
   }
   const menus=nodes(tree).filter(n=>n.tag?.name==='TopicMenu'),all=nodes(tree).find(n=>n.tag==='button'&&n.props['aria-label']?.startsWith('All topics'));
-  return {tree,menus,all,buttons:nodes(tree).filter(n=>n.tag==='button'),cfg,controls,observers,reads,resize:()=>{observers.filter(o=>!o.disconnected).forEach(o=>o.fn());rerender();return nodes(tree).filter(n=>n.tag?.name==='TopicMenu');},change:changes=>{Object.assign(cfg,changes);rerender();return nodes(tree).filter(n=>n.tag?.name==='TopicMenu');},unmount:()=>effects.forEach(e=>e.cleanup?.())};
+  return {get chatListCalls(){return chatListCalls;},type:text=>{const before=selections;state.drafts.chat={...state.drafts.chat,text};rerender();return before.length===selections.length&&before.every((value,i)=>Object.is(value,selections[i]));},tree,menus,all,buttons:nodes(tree).filter(n=>n.tag==='button'),cfg,controls,observers,reads,resize:()=>{observers.filter(o=>!o.disconnected).forEach(o=>o.fn());rerender();return nodes(tree).filter(n=>n.tag?.name==='TopicMenu');},change:changes=>{Object.assign(cfg,changes);rerender();return nodes(tree).filter(n=>n.tag?.name==='TopicMenu');},unmount:()=>effects.forEach(e=>e.cleanup?.())};
  }
+ const typing=render();
+ assert(typing.type('Unrelated draft typing'),'topic bar subscriptions must stay unchanged when only draft text changes');
+ assert.equal(typing.chatListCalls,0,'human DM topic bar never rebuilds the workspace chat list');
  // Holding the bar's old focus must not hide the explicitly selected topic.
  const switched=render({width:361,switchTo:'other'});
  assert.equal(switched.menus.length,1,'one-slot focused bar keeps current topic menu after All topics selection');
