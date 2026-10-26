@@ -141,6 +141,21 @@ program, `agentnet`, that is both the laptop client and the Hub.
 
 ## Working rules
 
+- **Next-release responsiveness gate** (owner, October 26, 2026): the next
+  release must meet or exceed Slack/Telegram responsiveness. Every reachable
+  user interaction must have an explicit inventory entry and an executed
+  rendered test: every clickable control, menu option, dialog action and
+  meaningful state across supported platforms and skins. Shared-handler tests
+  and representative workload counts do not establish complete control coverage.
+  Measure input-to-visible-feedback and input-to-confirmed-result separately,
+  with normal and 10x history, cold/warm views and concurrent synchronization.
+  Compare equivalent actions under recorded comparable conditions; do not claim
+  parity from unmeasured references. Slow, failing, skipped or untested required
+  interactions block publication. Earlier accepted latency/physical-device
+  limits do not waive this next-release gate. Preserve truthful pending,
+  delivery, permission and failure states; optimistic success must not hide
+  delays. [docs/INTERACTION_COVERAGE.md](docs/INTERACTION_COVERAGE.md) records the
+  inventory, acceptance and outstanding evidence.
 - **Batch verification before expensive runs.** Reproduce and fix known issues
   with cheap, focused checks first. Collect failures from an existing full run,
   address them together, and start another full/platform suite only when the
