@@ -91,6 +91,26 @@ function blocked(name, mutate, code) {
 }
 
 blocked('raw unreconciled inventory', f => { f.manifest.reconciliation.complete = false; }, 'inventory_not_reconciled');
+const ownerTarget = f => {
+  f.manifest.acceptance = { kind: 'local-feedback', max_ms: 500, owner_reference: 'October 26 owner correction; unit fixture only' };
+  delete f.c.comparators; f.report.comparators = [];
+};
+{
+  const f = fixture();
+  try {
+    ownerTarget(f);
+    f.update('AgentNet', 0, r => { r.feedback.at_ms = 499; r.confirmed.at_ms = 5000; });
+    const result = f.run();
+    assert.equal(result.performance_status, 'qualified', JSON.stringify(result.errors));
+    assert.equal(result.cases[0].measured.confirmed.maxMs, 5000, 'background duration stays visible');
+    assert.deepEqual(result.cases[0].comparators, []);
+    checks++;
+  } finally { f.close(); }
+}
+blocked('owner target excludes 500 ms', f => { ownerTarget(f); f.update('AgentNet', 0, r => { r.feedback.at_ms = 500; r.confirmed.at_ms = 700; }); }, 'over_owner_feedback_budget');
+blocked('owner target cannot be silently raised', f => { ownerTarget(f); f.manifest.acceptance.max_ms = 2000; }, 'invalid_owner_target');
+blocked('owner target still needs complete control coverage', f => { ownerTarget(f); f.report.observations.pop(); }, 'missing_required_observation');
+blocked('owner target still requires actual backend evidence', f => { ownerTarget(f); f.update('AgentNet', 0, r => { r.provenance.backend = 'synthetic'; }); });
 blocked('unresolved user input listener', f => { f.manifest.reconciliation.unresolved_bindings.push('unmapped-click'); }, 'inventory_not_reconciled');
 blocked('unreviewed source candidates', f => { f.manifest.review.complete = false; }, 'manifest_not_reviewed');
 blocked('empty inventory', f => { f.manifest.controls = []; f.manifest.cases = []; }, 'missing_inventory_or_observations');
