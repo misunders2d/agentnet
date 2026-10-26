@@ -61,7 +61,9 @@ func StartConfig(t *testing.T, cfg hub.Config, addr string) *Proc {
 		if err := h.Serve(ctx, ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			t.Errorf("hub serve: %v", err)
 		}
-		h.Close()
+		if err := h.Close(); err != nil {
+			t.Errorf("hub close: %v", err)
+		}
 	}()
 	t.Cleanup(p.Stop)
 	return p

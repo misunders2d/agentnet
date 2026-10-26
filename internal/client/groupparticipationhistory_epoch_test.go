@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -88,8 +89,13 @@ func groupParticipationHistoryAfterReadmission(t *testing.T, sharedOriginal bool
 		if _, e = executor.AcceptParticipation(tctx(t), parent.PID); e != nil {
 			t.Fatal(e)
 		}
-		part, err = executor.InviteAgentInScope(tctx(t), conv, executor.Address, "", nil, nil, "", &topic)
+		inviteCtx, reportInvite = traceFixtureHTTP(t, tctx(t))
+		part, err = executor.InviteAgentInScope(inviteCtx, conv, executor.Address, "", nil, nil, "", &topic)
+		reportInvite(err)
 		if err != nil {
+			stack := make([]byte, 1<<20)
+			n := runtime.Stack(stack, true)
+			t.Logf("fixture goroutines on invite failure (truncated=%t):\n%s", n == len(stack), stack[:n])
 			t.Fatal(err)
 		}
 		if stateAt(t, executor, part.PID).State == PartInvited {
