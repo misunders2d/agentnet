@@ -27,9 +27,10 @@ export async function compressVideo(file: File, signal: AbortSignal, progress: (
     const frameRate = Math.min(30, stats.averagePacketRate || 30);
     const scale = Math.min(1, 1280 / Math.max(video.displayWidth, video.displayHeight));
     const width = Math.max(2, Math.floor(video.displayWidth * scale / 2) * 2), height = Math.max(2, Math.floor(video.displayHeight * scale / 2) * 2);
-    // Keep mono recordings mono. Besides adding no information, upmixing them
-    // to stereo crashes the bundled Linux WebKit audio conversion path.
-    const numberOfChannels = audio ? Math.min(2, audio.numberOfChannels) : 2;
+    // Preserve the recording's channels. Both mono upmix and surround downmix
+    // crash the bundled Linux WebKit conversion path. An unsupported encoder
+    // can fail normally into the existing native/original-file recovery.
+    const numberOfChannels = audio ? audio.numberOfChannels : 2;
     const supported = async (v: "avc" | "vp9", a: "aac" | "opus") => (await Promise.all([
       canEncodeVideo(v, { width, height, frameRate, bitrate }),
       audio ? canEncodeAudio(a, { numberOfChannels, sampleRate: 48000, bitrate: 128_000 }) : true,

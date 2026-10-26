@@ -95,7 +95,8 @@ Linux CI dependency setup previously spent over 30 minutes on the runner's
 Azure Ubuntu mirror before cancellation, including the 27.3 MB WebKit package.
 The next disposable runner uses Ubuntu's main HTTPS archive instead, preserving
 the selected Ubuntu suites and package-signature verification. This is a CI
-download recovery, not a passed app test; its effect requires the next run.
+download recovery, not a passed app test. The next run, `40421371994`, completes
+dependency setup in 43 seconds; full Linux interaction qualification is running.
 
 The remaining Base UI popup entrances used transparent or fully offscreen
 starting states. Real message-menu/reaction/delete and All Topics regressions
@@ -107,6 +108,10 @@ are unchanged. The complete existing local Chromium workload run passes 41
 cells / 1,372 synthetic actions, maximum feedback 226 ms. Affected Topics and
 media cancellation cells pass after the final fixture/panel corrections. These
 counts do not establish exhaustive control coverage or native-platform timing.
+The five focused rendered parents (popup, message interaction, review, Sheet,
+pane entrance) pass three repetitions on all three native operating systems in
+`40421276122`. These execute browser regressions on those runners; they do not
+replace the native shell's full interaction matrix.
 
 Media qualification at `37461c9e` passes Android and Windows, and native macOS
 media also passes. macOS browser WebKit still delays opening a chat; Chromium
@@ -133,6 +138,16 @@ passes, maximum local feedback 244 ms; the real encoded-file regression verifies
 audio remains mono and audible, plus cancellation/original bytes. The precise
 native memory-corruption function remains unidentified. New candidate platform
 media execution is still required.
+
+The same native probe then confirms stereo-to-stereo succeeds, while forcing
+six-channel audio into stereo also corrupts memory. Browser preparation now
+preserves the source channel count. A six-channel encoder refusal returns a
+normal `EncodingError` instead of crashing the bundled runtime. The rendered
+real-file regression verifies six channels survive encoding or the exact
+original bytes remain with an explicit fallback notice; local Chromium takes
+that original-file path. Native FFmpeg recovery retains its existing conversion
+policy. The rebuilt bundle, media budget/deadline, authenticated preparation,
+native FFmpeg cancellation/cleanup and real-file rendered checks pass locally.
 
 The `54abbf4c` complete skin run has 36 passing applicable runtime groups and one
 Zoom browser-provider fixture failure: its empty `<ol>` has no box, while the
