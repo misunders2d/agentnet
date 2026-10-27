@@ -2,9 +2,12 @@
 
 Owner correction, October 26, 2026: "no need" to log in to Telegram;
 "both slack and telegram are sub-0.5 second, I'll settle for that."
-The acceptance target is now **under 500 ms from input to the intended local
+Owner clarification, October 27, 2026: "under a second is also bearable", with
+"unless that's a real interface bug and the code can be faster, of course".
+The acceptance ceiling is now **under 1000 ms from input to the intended local
 visual change**, with real work continuing asynchronously and truthful pending,
-confirmed and failure states. This supersedes the earlier 100 ms local-feedback
+confirmed and failure states. Keep fixing proven interface bugs and avoidable
+blocking; aim for immediate local feedback. This supersedes the earlier 100/500 ms local-feedback
 target and the requirement to measure matching Slack/Telegram accounts. No
 comparative performance claim is made. Sergey also confirmed that no physical
 Android test device is available; emulator evidence must remain labelled as such.
@@ -75,7 +78,7 @@ the repair. Sergey needs to do nothing while owned fixtures are being tested.
   repeated input, offline/error/recovery and permission/capability boundaries.
   Record repetitions, distributions and worst observed delays; averages cannot
   conceal stalls.
-- Verify the owner's under-500-ms local-feedback target on recorded hardware,
+- Verify the owner's under-1000-ms local-feedback ceiling on recorded hardware,
   data and network conditions. Live Slack/Telegram benchmarking is no longer
   required; do not present the owner's target as a measured comparison.
 - Report every required case as passed, failed, blocked or unexecuted with its
@@ -89,7 +92,31 @@ the repair. Sergey needs to do nothing while owned fixtures are being tested.
 
 ## October 26 local interaction candidate
 
-### October 27 continuation: the 500 ms target
+### October 27 continuation: immediate feedback, under one second
+
+The owner raised the acceptance ceiling to under one second without waiving
+interface defects or avoidable blocking. The release validator and broad latency
+runner now use that exact ceiling; existing focused 500 ms regressions retain
+their stronger bounds. Historical failures below one second remain recorded as
+failures against their then-current target, with no rerun or speedup implied.
+The 790 ms Android sample meets the revised timing ceiling; synthetic workloads
+still do not establish exhaustive real-backend control qualification.
+
+Invitation opening now commits the named dialog and usable Close control before
+preparing directory/history choices or starting catalog reads. It reuses the
+existing frame-then-task scheduling pattern and inspected loading-destination
+behavior; membership, history grants and native consent remain authoritative.
+Closing cancels pending preparation and ignores its old conversation read.
+The identical actual-component regression fails on the previous implementation
+because a catalog read precedes the first visible frame. The candidate passes
+at 1440/390 pixels with cached and unread conversations, held reads, failure,
+exact retry, Close/reopen, late results and preserved unrelated drafts. Initial
+trusted-input feedback is 41–58 ms; all ten settled pending/error/ready captures
+were inspected. Five affected race parents pass: invitation opening, recipient
+selection, groups workload, release-gate guards and canonical bundle. The groups
+workload records 11 ms opening feedback separately from 28–38 ms prepared
+contents. This is local synthetic-host evidence; Android and native-platform
+improvement remain unproven until the integrated platform rerun.
 
 Starting a new person chat now replaces the picker/search result with its named
 destination before native checks and creation finish. Back leaves admitted work
@@ -116,8 +143,12 @@ and recipient selection three times on Linux, macOS and Windows. Platform run
 `40450793270` fails Android's groups workload at `groups.member-invite-open`:
 790 ms feedback, 800 ms through the paint check, first mutation 163 ms and first
 frame 612 ms. Forty-six synthetic catalog reads finish at roughly 163 ms; their
-presence is not yet causal proof. The failure is retained and blocks that
-qualification; the concurrent desktop results are still pending here.
+presence is not yet causal proof. That historical 500 ms failure is retained.
+Linux passes. Native macOS WKWebView and Windows WebView2 groups/teams pass;
+headless Playwright WebKit fails macOS group opening (915 ms) and two teams
+actions (1020/1030 ms), and Windows invite opening/choice (674/548 ms).
+The two macOS samples above one second still fail the revised ceiling; earlier
+native macOS quick-reaction stalls above one second also remain unresolved.
 
 Add list’s people now inserts a named pending selection and clears the chooser
 before its verified snapshot read. Cancel immediately removes that selection;
@@ -964,14 +995,14 @@ this document records the test contract and coverage gaps.
 | U1 | Update version checks do not depend on chat projection | root | verified source only | Existing lightweight endpoint; real blocked-chat regression, native three-OS/race tests and live patched check at 1.089ms; installed app still v0.9.5 |
 | X1 | Confusing history/review screen explains state and next action accurately | UX reviewer/root | investigating | Owner screenshot mixes saved history, unknown original agent and contradictory continuation/approval instructions |
 | H1 | Pi/OMP idle notices do not repeat remaining items as new | root | candidate tested; installed activation open | Passive activity uses one native status slot. Pi/OMP focused regressions and isolated real Pi rendering pass; prompt acknowledgement remains tied to native persistence. Existing sessions not reloaded |
-| B1 | Every intended local change appears under 500 ms | root | owner target updated; full execution open | Live Slack/Telegram benchmarking explicitly removed by owner; measure AgentNet directly and keep background completion separate |
+| B1 | Every intended local change appears under 1000 ms | root | owner target updated; full execution open | Live Slack/Telegram benchmarking explicitly removed by owner; measure AgentNet directly and keep background completion separate |
 | R1 | Every required interaction passes on final candidate | root/verifier | blocked | No v0.9.7 tag, draft or publication is authorized past this gate |
 
 The previous final-pin skin run passed functional compatibility: 306 browser/static
 checks and 37 applicable runtime groups, with five explicitly inapplicable entries.
 That run does not establish exhaustive interaction timing or acceptable performance.
 
-The broad latency runner now enforces the owner's 500 ms local-feedback bound
+The broad latency runner now enforces the owner's under-1000-ms local-feedback ceiling
 (the historical bound was 2,000 ms). It still cannot establish the complete gate:
 its 200 ms smoothness result is informational, and
 some journeys use fixed-latency synthetic responses. Cold page startup is outside
@@ -1089,7 +1120,7 @@ installed repair is claimed by this register.
 
 | ID | Failure | Current evidence and status | Required closing test |
 | --- | --- | --- | --- |
-| F01 | Interactions leave the user waiting without a clear result | Owner reports delays above 10 seconds across the app; installed compact overview measured 25.645s and 3.398s. Unresolved. | Every inventoried control: trusted input to visible feedback and confirmed result, under the complete required workload/platform/skin matrix and the owner’s under-500-ms local-feedback target. |
+| F01 | Interactions leave the user waiting without a clear result | Owner reports delays above 10 seconds across the app; installed compact overview measured 25.645s and 3.398s. Unresolved. | Every inventoried control: trusted input to visible feedback and confirmed result, under the complete required workload/platform/skin matrix and the owner’s under-1000-ms local-feedback ceiling. |
 | F02 | Mark as handled takes many seconds to disappear | Local-first source candidate clears exact active attention before the request reaches the backend, retains pending status and restores current state on failure. Controlled real-backend browser and focused regressions pass; installed-device and full timing qualification remain open. | Exact task disappears promptly on the initiating and linked devices; preserve unrelated attention and show refusals/failures truthfully. Include normal/10x and concurrent sync. |
 | F03 | About cannot update the app | Source fix verified; installed v0.9.5 remains unchanged. Its version check waits for the slow chat overview. | Actual installed old-to-new update, including app, command and running background process; no dependence on slow chat reads and no interruption of admitted work. |
 | F04 | Saved agent history, unknown agent and contradictory Reply instructions are confusing | Copy candidate and combined wide/narrow regression exist; not installed. The wider history/composer workflow remains unqualified. | Same history thread with a waiting request: clear available actions, exact Reply routing, retained draft/files and no misleading permission text. |

@@ -169,9 +169,10 @@ program, `agentnet`, that is both the laptop client and the Hub.
   Missing counterpart/reuse evidence or failing immediate/error/recovery behavior
   blocks acceptance of the interaction change and publication. Record evidence
   in [docs/INTERACTION_COVERAGE.md](docs/INTERACTION_COVERAGE.md).
-- **Next-release responsiveness gate** (owner, October 26, 2026; later owner
+- **Next-release responsiveness gate** (owner, October 26–27, 2026; later owner
   clarification): the next release must show intended local feedback in under
-  500 ms. Sergey explicitly removed Telegram login and live Slack/Telegram
+  one second. This is a ceiling: still fix proven interface bugs and avoidable
+  blocking, and aim for immediate local updates. Sergey explicitly removed Telegram login and live Slack/Telegram
   comparisons; this is an acceptance target, not measured parity. Every reachable
   user interaction must have an explicit inventory entry and an executed
   rendered test: every clickable control, menu option, dialog action and
@@ -179,7 +180,7 @@ program, `agentnet`, that is both the laptop client and the Hub.
   and representative workload counts do not establish complete control coverage.
   Measure input-to-visible-feedback and input-to-confirmed-result separately,
   with normal and 10x history, cold/warm views and concurrent synchronization.
-  Record the measured conditions and enforce the 500 ms local-feedback bound.
+  Record the measured conditions and enforce the under-1000-ms local-feedback bound.
   Slow, failing, skipped or untested required
   interactions block publication. Earlier accepted latency/physical-device
   limits do not waive this next-release gate. Preserve truthful pending,

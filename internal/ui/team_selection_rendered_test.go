@@ -32,3 +32,10 @@ func TestTeamPeopleRendered(t *testing.T) {
 	}
 	t.Log(browserCheck(t, "testdata/team_people_rendered.cjs"))
 }
+
+func TestInviteOpenRendered(t *testing.T) {
+	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
+		t.Skip("set AGENTNET_PLAYWRIGHT for rendered invitation opening")
+	}
+	t.Log(browserCheck(t, "testdata/invite_open_rendered.cjs"))
+}

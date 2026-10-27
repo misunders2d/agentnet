@@ -35,6 +35,15 @@ type Invite = { conv: string; selected?: string[]; who?: string; label?: string;
 
 function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
   const store = useApp();
+  const [contentReady, setContentReady] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    // Commit the destination and its Close control before directory matching,
+    // catalog replies and the full picker compete for its first frame.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const frame = requestAnimationFrame(() => { timer = setTimeout(() => setContentReady(true), 0); });
+    return () => { cancelAnimationFrame(frame); if (timer !== undefined) clearTimeout(timer); };
+  }, [open]);
   const o = useStore(store, (s) => s.overview);
   const openDM = useStore(store, (s) => s.dm);
   const conn = useStore(store, (s) => s.conn);
@@ -47,17 +56,18 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
   const [attempt, setAttempt] = useState(0);
   const t = openDM?.id === invite.conv ? openDM : loaded;
   useEffect(() => {
+    if (!contentReady || !open) return;
     if (openDM?.id === invite.conv) return;
     let alive = true;
     setLoadError("");
     store.api.dm(invite.conv).then((d) => { if (alive) setLoaded(d); }).catch((e) => { if (alive) setLoadError(errorText(e)); });
     return () => { alive = false; };
-  }, [invite.conv, attempt]);
+  }, [invite.conv, attempt, contentReady, open]);
 
   const guest = t?.role === "human_guest";
   const allowed = canBringIn(t, invite.topic || "");
-  const hosts = useMemo(() => (t && o ? catalogHosts(t, o) : []), [t?.id, o?.seq]);
-  const catalogs = useCatalogs(store.api, hosts, open && allowed && !!o?.agents);
+  const hosts = useMemo(() => (contentReady && t && o ? catalogHosts(t, o) : []), [t?.id, o?.seq, contentReady]);
+  const catalogs = useCatalogs(store.api, hosts, contentReady && open && allowed && !!o?.agents);
   const [humanMode, setHumanMode] = useState<HumanInviteMode>("guest");
   const [scope, setScope] = useState<"topic" | "chat">(invite.topic !== undefined ? "topic" : "chat");
   const selectedTopic = invite.topic || "";
@@ -66,12 +76,12 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
   const admin = t?.kind === "group" && !!t.members?.some(m => m.person === o?.person?.person && m.admin);
   const [sent, setSent] = useState<{ key: string; name: string }[]>([]); // people invited to a group from this sheet
   const p = useMemo(() => {
-    if (!t || !o) return null;
+    if (!contentReady || !t || !o) return null;
     const x = pool(t, o, catalogs, names, invitations, store.host.platform, humanMode, topic);
     // Until the invitation list catches up, someone just invited stays marked here.
     const asked = new Set(sent.map((s) => s.key));
     return { ...x, candidates: x.candidates.map((c) => (asked.has(c.key) && !c.unavailable ? { ...c, unavailable: "Invited · waiting for them to accept" } : c)) };
-  }, [t, o, catalogs, names, invitations, sent, humanMode, topic]);
+  }, [t, o, catalogs, names, invitations, sent, humanMode, topic, contentReady]);
 
   // Who to preselect ("Bring back") and what the selection is ("Since they left").
   const preset = { who: invite.who || "", label: invite.label || "" };
@@ -102,7 +112,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
   const [guestCheck,setGuestCheck]=useState<T.GuestCheck|null>(null);
   const [checkError,setCheckError]=useState("");
   useEffect(()=>{let alive=true;setGuestCheck(null);setCheckError("");if(route==="guest"&&c?.person?.address&&t)store.api.checkGuest({conv:t.id,host:c.person.address}).then(v=>{if(alive)setGuestCheck(v);}).catch(e=>{if(alive)setCheckError(errorText(e));});return()=>{alive=false;};},[route,c?.key,t?.id]);
-  const list = useMemo(() => (t ? shareable(t).filter((m) => (topic === undefined || (m.topic || "") === topic) && (!guest && (route === "group" || t.kind === "group") ? !!m.group_ref : true)) : []), [t, route, topic, guest]);
+  const list = useMemo(() => (contentReady && t ? shareable(t).filter((m) => (topic === undefined || (m.topic || "") === topic) && (!guest && (route === "group" || t.kind === "group") ? !!m.group_ref : true)) : []), [t, route, topic, guest, contentReady]);
   const cap = t?.kind === "group" && teamPeople.length > 0 && teamHistory ? capFor("group") : route ? capFor(route) : 200;
   const max = Math.min(cap, list.length);
   const count = Math.min(recent, max);
@@ -121,7 +131,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
   const offline = conn !== "live";
   const now = route === "agent" && !!c?.mine && !c.alreadyHere; // your own agent joins in this one step
 
-  const people = useMemo(() => (t && o && !guest ? taskPeople(t, o) : []), [t, o, guest]);
+  const people = useMemo(() => (contentReady && t && o && !guest ? taskPeople(t, o) : []), [t, o, guest, contentReady]);
   const chosenTasks = c && tasksFor?.cand === c.key ? tasksFor.chosen : new Set(c?.mine ? people.filter((x) => x.me).map((x) => x.key) : []);
   const tasksFrom = route === "agent" ? taskKeys(people, chosenTasks) : [];
   const tooManyKeys = tasksFrom.length > TASK_KEYS_MAX;
@@ -205,7 +215,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
     finally { setBusy(false); void store.refetch(); }
   }
 
-  const body = !t ? (
+  const body = !contentReady ? <Quiet>Opening the invitation picker…</Quiet> : !t ? (
     loadError ? <Problem text={loadError} onRetry={() => setAttempt((n) => n + 1)} /> : <Quiet>Opening this chat…</Quiet>
   ) : !allowed ? (
     <Quiet>{t.frozen ? "This chat can’t change right now, so no one can be brought in." : guest ? "Open your accepted topic to bring in your own agent." : "Only the people in this chat can bring someone in."}</Quiet>
@@ -319,7 +329,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
 
   const groupGuestBlocked = route === "guest" && t?.kind === "group" && guestCheck && !guestCheck.ready;
   const ready = !!c && !c.unavailable && !tooMany && !tooManyKeys && !needFiles && !offline && !busy && (route !== "guest" || !!guestCheck) && !groupGuestBlocked;
-  const footer = t && allowed ? (
+  const footer = contentReady && t && allowed ? (
     <div>
       {sent.length > 0 && !error && (
         <p role="status" className="mb-2 flex items-start gap-2 rounded-xl bg-ok-bg px-3 py-2 text-[14px] font-semibold text-ok-ink">

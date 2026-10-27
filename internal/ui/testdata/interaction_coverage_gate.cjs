@@ -51,10 +51,10 @@ function validateCoverage(manifest, report, readEvidence) {
     timing_origin: 'Driver input request to presented frame, including dispatch/actionability; event-to-frame intervals also retained.', cases, errors });
   if (!require(object(manifest) && object(report) && manifest.schema_version === 1 && report.schema_version === 1, 'invalid_schema')) return answer();
   require(report.type === 'interaction-coverage-evidence' && !['ok', 'smooth', 'actions', 'families'].some(k => Object.hasOwn(report, k)), 'legacy_presentation_report');
-  // Owner's October 26 correction replaces live messenger comparisons with
+  // Owner's October 26–27 corrections replace live messenger comparisons with
   // a fixed local-feedback bound. Completion remains measured, not budgeted.
   const fixedTarget = manifest.acceptance?.kind === 'local-feedback';
-  if (manifest.acceptance !== undefined) require(fixedTarget && manifest.acceptance.max_ms === 500 && text(manifest.acceptance.owner_reference), 'invalid_owner_target');
+  if (manifest.acceptance !== undefined) require(fixedTarget && manifest.acceptance.max_ms === 1000 && text(manifest.acceptance.owner_reference), 'invalid_owner_target');
   require(manifest.review?.complete === true && text(manifest.review?.reference), 'manifest_not_reviewed');
   require(manifest.reconciliation?.complete === true && Array.isArray(manifest.reconciliation?.unresolved_bindings) && manifest.reconciliation.unresolved_bindings.length === 0 && Array.isArray(manifest.reconciliation?.unresolved_controls) && manifest.reconciliation.unresolved_controls.length === 0, 'inventory_not_reconciled');
   require(/^[a-f0-9]{40}$/.test(manifest.source_revision || '') && sha(manifest.artifact_sha256) && sha(manifest.runner_sha256), 'missing_candidate_identity');
@@ -176,7 +176,7 @@ function validateCoverage(manifest, report, readEvidence) {
     const measured = { feedback: summary(rows.map(r => r.feedback)), confirmed: summary(rows.map(r => r.confirmed)),
       input_event_feedback: summary(rows.map(r => r.eventFeedback)), input_event_confirmed: summary(rows.map(r => r.eventConfirmed)), dispatch: summary(rows.map(r => r.dispatch)) };
     const compared = [];
-    if (fixedTarget) require(time(measured.feedback.maxMs) && measured.feedback.maxMs < 500, 'over_owner_feedback_budget', c.case_id);
+    if (fixedTarget) require(time(measured.feedback.maxMs) && measured.feedback.maxMs < 1000, 'over_owner_feedback_budget', c.case_id);
     for (const product of c.comparators?.products || []) {
       const group = references.get(product + ':' + c.case_id);
       if (!require(group?.size === c.repetitions && [...group.keys()].every(i => Number.isInteger(i) && i >= 0 && i < c.repetitions), 'missing_required_comparator', product + ':' + c.case_id)) continue;

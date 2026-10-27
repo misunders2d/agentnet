@@ -92,14 +92,14 @@ function blocked(name, mutate, code) {
 
 blocked('raw unreconciled inventory', f => { f.manifest.reconciliation.complete = false; }, 'inventory_not_reconciled');
 const ownerTarget = f => {
-  f.manifest.acceptance = { kind: 'local-feedback', max_ms: 500, owner_reference: 'October 26 owner correction; unit fixture only' };
+  f.manifest.acceptance = { kind: 'local-feedback', max_ms: 1000, owner_reference: 'October 27 owner correction; unit fixture only' };
   delete f.c.comparators; f.report.comparators = [];
 };
 {
   const f = fixture();
   try {
     ownerTarget(f);
-    f.update('AgentNet', 0, r => { r.feedback.at_ms = 499; r.confirmed.at_ms = 5000; });
+    f.update('AgentNet', 0, r => { r.feedback.at_ms = 999; r.confirmed.at_ms = 5000; });
     const result = f.run();
     assert.equal(result.performance_status, 'qualified', JSON.stringify(result.errors));
     assert.equal(result.cases[0].measured.confirmed.maxMs, 5000, 'background duration stays visible');
@@ -107,7 +107,7 @@ const ownerTarget = f => {
     checks++;
   } finally { f.close(); }
 }
-blocked('owner target excludes 500 ms', f => { ownerTarget(f); f.update('AgentNet', 0, r => { r.feedback.at_ms = 500; r.confirmed.at_ms = 700; }); }, 'over_owner_feedback_budget');
+blocked('owner target excludes 1000 ms', f => { ownerTarget(f); f.update('AgentNet', 0, r => { r.feedback.at_ms = 1000; r.confirmed.at_ms = 1200; }); }, 'over_owner_feedback_budget');
 blocked('owner target cannot be silently raised', f => { ownerTarget(f); f.manifest.acceptance.max_ms = 2000; }, 'invalid_owner_target');
 blocked('owner target still needs complete control coverage', f => { ownerTarget(f); f.report.observations.pop(); }, 'missing_required_observation');
 blocked('owner target still requires actual backend evidence', f => { ownerTarget(f); f.update('AgentNet', 0, r => { r.provenance.backend = 'synthetic'; }); });
