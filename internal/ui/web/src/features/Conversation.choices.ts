@@ -1,5 +1,5 @@
 // Ephemeral presentation for the three paged choice lists: topics, search,
-// and Review. No persistence, polling, provider cache or execution actions.
+// and Review. No persistence, polling or execution actions.
 import { useEffect, useRef, useState } from "react";
 import type { FocusEvent } from "react";
 import type { Topic } from "../model";
@@ -29,11 +29,13 @@ export function useSteadyChoices<R>(rows:R[],key:(row:R)=>string,scope:string,se
  return {choices,release,bind:{onPointerEnter:()=>hold("pointer",true),onPointerOver:()=>hold("pointer",true),onPointerMove:()=>hold("pointer",true),onPointerLeave:()=>hold("pointer",false),onFocusCapture:()=>hold("focus",true),onBlurCapture:(e:FocusEvent<HTMLElement>)=>{if(!e.currentTarget.contains(e.relatedTarget as Node|null))hold("focus",false);}}};
 }
 
+export interface ChoiceSnapshot<R>{scope:string;rows:R[];total:number;next:string;loading:boolean;error:string;loaded:boolean;seq?:number}
+export interface ChoiceCache<R>{value?:ChoiceSnapshot<R>}
 interface Page<R>{rows:R[];total:number;next?:string;content?:number;seq?:number}
-export function usePagedChoices<R>(enabled:boolean,scope:string,revision:number,pageSize:number,key:(row:R)=>string,load:(after:string,limit:number)=>Promise<Page<R>>,initialTarget=pageSize){
- const [state,setState]=useState<{scope:string;rows:R[];total:number;next:string;loading:boolean;error:string}>({scope,rows:[],total:0,next:"",loading:enabled,error:""});
+export function usePagedChoices<R>(enabled:boolean,scope:string,revision:number,pageSize:number,key:(row:R)=>string,load:(after:string,limit:number)=>Promise<Page<R>>,initialTarget=pageSize,cache?:ChoiceCache<R>){
+ const [state,setState]=useState<ChoiceSnapshot<R>>(()=>cache?.value?.scope===scope?{...cache.value,loading:enabled,error:""}:{scope,rows:[],total:0,next:"",loading:enabled,error:"",loaded:false});
  const current=useRef({enabled,scope,revision,key,load});current.current={enabled,scope,revision,key,load};
- const live=useRef(true),epoch=useRef(0),running=useRef(false),pending=useRef<{epoch:number;scope:string;target:number;more:boolean}|null>(null),saved=useRef(state);saved.current=state;
+ const live=useRef(true),epoch=useRef(0),running=useRef(false),pending=useRef<{epoch:number;scope:string;target:number;more:boolean}|null>(null),saved=useRef(state);saved.current=cache?.value?.scope===scope&&(cache.value.seq||0)>(state.seq||0)?{...cache.value,loading:state.loading,error:state.error}:state;
  const pump=async()=>{
   if(running.current)return;
   running.current=true;
@@ -45,21 +47,25 @@ export function usePagedChoices<R>(enabled:boolean,scope:string,revision:number,
    try{
     const prior=saved.current.scope===request.scope?saved.current:null;
     const rows=request.more?[...(prior?.rows||[])]:[],seen=new Set(rows.map(config.key)),cursors=new Set<string>();
-    let after=request.more?prior?.next||"":"",total=prior?.total||0,next="",content:number|undefined;
+    let after=request.more?prior?.next||"":"",total=prior?.total||0,next="",content:number|undefined,seq:number|undefined;
     const bound=Math.ceil(request.target/Math.min(pageSize,200))+1;
     for(let n=0;n<bound;n++){
      const page=await config.load(after,Math.min(200,Math.max(pageSize,request.target-rows.length)));
      if(!valid())break;
      const stamp=page.content??page.seq;
      if(content!==undefined&&stamp!==content)throw Error("The list changed while loading. Try again.");
-     content=stamp;total=page.total;next=page.next||"";
+     content=stamp;seq=page.seq;total=page.total;next=page.next||"";
      for(const row of page.rows)if(!seen.has(config.key(row))){seen.add(config.key(row));rows.push(row);}
      if(!next||rows.length>=request.target)break;
      if(cursors.has(next)||next===after)throw Error("The list changed while loading. Try again.");
      cursors.add(next);after=next;
      if(n===bound-1)throw Error("The list changed while loading. Try again.");
     }
-    if(valid())setState({scope:request.scope,rows,total,next,loading:false,error:""});
+    if(valid()){
+     const value={scope:request.scope,rows,total,next,loading:false,error:"",loaded:true,seq};
+     if(cache)cache.value=value;
+     setState(value);
+    }
    }catch(error){if(valid())setState(s=>({...s,loading:false,error:error instanceof Error?error.message:String(error)}));}
   }}finally{running.current=false;}
  };
@@ -71,11 +77,11 @@ export function usePagedChoices<R>(enabled:boolean,scope:string,revision:number,
  };
  useEffect(()=>{live.current=true;return()=>{live.current=false;epoch.current++;pending.current=null;};},[]);
  useEffect(()=>{
-  if(!enabled){epoch.current++;pending.current=null;setState({scope,rows:[],total:0,next:"",loading:false,error:""});return;}
-  if(saved.current.scope!==scope)setState({scope,rows:[],total:0,next:"",loading:true,error:""});
+  if(!enabled){epoch.current++;pending.current=null;setState({scope,rows:[],total:0,next:"",loading:false,error:"",loaded:false});return;}
+  if(saved.current.scope!==scope)setState({scope,rows:[],total:0,next:"",loading:true,error:"",loaded:false});
   request();
   return()=>{epoch.current++;pending.current=null;};
  },[enabled,scope,revision]);
- const shown=state.scope===scope?state:{scope,rows:[] as R[],total:0,next:"",loading:enabled,error:""};
+ const shown=saved.current.scope===scope?saved.current:{scope,rows:[] as R[],total:0,next:"",loading:enabled,error:"",loaded:false};
  return {...shown,retry:()=>request(),more:()=>{if(!running.current&&shown.next)request(true);}};
 }

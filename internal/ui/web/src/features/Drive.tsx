@@ -43,15 +43,45 @@ function ProjectSpace({ conv, onSettings }: { conv: string; onSettings: () => vo
   </div>;
 }
 
+interface DriveAvailability { enabled?: boolean; configured?: boolean; connected?: boolean; requires_reconnect?: boolean; space?: unknown; pending?: unknown }
+// Attachment rows share one in-flight status read per conversation. This is a
+// capability check only; the provider still enforces membership and consent.
+const driveChecks = new WeakMap<object, Map<string, Promise<DriveAvailability>>>();
+function checkDrive(store: ReturnType<typeof useApp>, conv: string, revision: number): Promise<DriveAvailability> {
+  let checks = driveChecks.get(store);
+  if (!checks) driveChecks.set(store, checks = new Map());
+  const key = JSON.stringify([conv, revision]);
+  const prior = checks.get(key);
+  if (prior) return prior;
+  const work = store.host.drive!.drive<DriveAvailability>({conv, action: "status"});
+  checks.set(key, work);
+  void work.finally(() => { if (checks!.get(key) === work) checks!.delete(key); }).catch(() => {});
+  return work;
+}
+
 export function SaveToDrive({ m, index }: { m: AnyMsg; index: number }) {
   const store = useApp();
   const dm = useStore(store, (s) => s.dm);
   const [open, setOpen] = useState(false);
+  const revision = useStore(store, s => s.contentRevision);
+  const conv = dm?.peer.person ? dm.id : "";
+  const [availability, setAvailability] = useState<{conv:string; revision:number; value?:DriveAvailability; failed?:boolean}>();
+  useEffect(() => {
+    let active = true;
+    if (conv && store.host.drive) void checkDrive(store, conv, revision).then(value => {
+      if (active) setAvailability({conv, revision, value});
+    }, () => { if (active) setAvailability({conv, revision, failed:true}); });
+    return () => { active = false; };
+  }, [store, conv, revision]);
+  const status = availability?.conv === conv ? availability : undefined;
+  const view = status?.value;
+  const ready = !!(view?.enabled && view.configured && view.connected && !view.requires_reconnect && view.space && !view.pending);
+  useEffect(() => { if (!ready) setOpen(false); }, [ready, conv]);
   if (!dm?.peer.person) return null;
-  const conv = dm.id;
+  const unavailable = !store.host.drive ? "Google Drive unavailable" : status?.failed ? "Google Drive status unavailable" : !view ? "Checking Google Drive…" : !view.enabled ? "Google Drive off" : !ready ? "Set up Google Drive in Project space" : "";
   return <>
-    <button type="button" className="min-h-11 rounded-lg px-2 text-left text-[13px] text-text-2 underline hover:bg-sunken" onClick={() => setOpen(true)}>Save to project space</button>
-    <Confirm open={open} onOpenChange={setOpen} title="Save to Google Drive?" ok="Save to Google Drive" danger={false}
+    <button type="button" className="min-h-11 rounded-lg px-2 text-left text-[13px] text-text-2 underline hover:bg-sunken" disabled={!ready} onClick={() => setOpen(true)}>{ready ? "Save a readable copy to Google Drive" : unavailable}</button>
+    <Confirm open={open && ready} onOpenChange={setOpen} title="Save to Google Drive?" ok="Save to Google Drive" danger={false}
       onOk={() => store.run(async () => {
         const provider = store.host.drive;
         if (!provider) throw new Error("Google Drive is unavailable on this device.");

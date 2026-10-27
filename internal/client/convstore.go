@@ -724,6 +724,7 @@ func (s *store) releaseWaiting(id string) error {
 // ConvMessage is one message of a conversation as this installation holds
 // it, sent or received.
 type ConvMessage struct {
+	humanRaw          string                        // selected physical copy; decoded after logical-copy selection
 	Unread            bool                          `json:"unread,omitempty"`
 	Attention         *protocol.AttentionGeneration `json:"attention,omitempty"`
 	SendGroup         string                        `json:"send_group,omitempty"`
@@ -872,13 +873,13 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool, sel
 		       coalesce(emotion, ''), coalesce(target, ''), state, coalesce(detail, ''), received_at, received_ms AS ms, coalesce(pid, ''),
 		       CASE WHEN pid IS NOT NULL AND state != '' THEN state ELSE '' END, CASE WHEN pid IS NOT NULL AND state != '' THEN coalesce(detail, '') ELSE '' END, CASE WHEN pid IS NOT NULL AND state != '' THEN attempts ELSE 0 END, coalesce(via, ''),
 		       CASE WHEN verified_by IS NULL THEN coalesce(claimed_fp, '') ELSE '' END,
-		       CASE WHEN kind IN ('question', 'task') THEN '' ELSE coalesce(agent_id, '') END, coalesce(status, ''), coalesce(quote,''), ts, '', coalesce(topic,''),coalesce(topic_event,''),topic_done,0,0,send_group,i.read_at IS NULL,`+liveIn+`
+		       CASE WHEN kind IN ('question', 'task') THEN '' ELSE coalesce(agent_id, '') END, coalesce(status, ''), coalesce(quote,''), ts, '', coalesce(topic,''),coalesce(topic_event,''),topic_done,0,0,send_group,i.read_at IS NULL,coalesce(i.human,''),`+liveIn+`
 		  FROM inbox i`+join+` WHERE conv = ? AND local = 0 AND ref_id IS NULL AND coalesce(sub, '') NOT IN `+recordSubs+`
 		   AND NOT `+erasedIn+cursorIn+`
 		UNION ALL
 		SELECT o.id, o.lid, 'out', ?, ?, o.kind, o.body, coalesce(o.reply_to, ''), coalesce(o.sub, ''), 0, coalesce(o.origin, ''),
 		       coalesce(o.emotion, ''), coalesce(o.target, ''), o.state, coalesce(o.error, ''), o.created_at, o.created_ms, coalesce(o.pid, ''),
-		       coalesce(j.state, ''), coalesce(j.detail, ''), coalesce(j.attempts, 0), o.recipient, '', coalesce(o.agent_id, ''), coalesce(o.status, ''),coalesce(o.quote,''),json_extract(o.envelope,'$.ts'),coalesce(o.recipient_person,''),coalesce(o.topic,''),coalesce(o.topic_event,''),o.topic_done,o.send_stopped,o.send_stopped=1 AND o.state IN ('not_delivered','failed') AND NOT (o.handover_proven=1 AND coalesce(o.handover_started,1)=0),o.send_group,0,`+liveOut+`
+		       coalesce(j.state, ''), coalesce(j.detail, ''), coalesce(j.attempts, 0), o.recipient, '', coalesce(o.agent_id, ''), coalesce(o.status, ''),coalesce(o.quote,''),json_extract(o.envelope,'$.ts'),coalesce(o.recipient_person,''),coalesce(o.topic,''),coalesce(o.topic_event,''),o.topic_done,o.send_stopped,o.send_stopped=1 AND o.state IN ('not_delivered','failed') AND NOT (o.handover_proven=1 AND coalesce(o.handover_started,1)=0),o.send_group,0,coalesce(o.human,''),`+liveOut+`
 		  FROM outbox o LEFT JOIN inbox j ON j.id = o.id AND j.local = 1`+join+` WHERE o.conv = ? AND coalesce(o.sub, '') NOT IN ('read-sync', 'root-sync', 'history', 'file', 'drive-space', 'group-proof', 'group-context','group-invite','group-consent','group-withdrawal') AND o.ref_id IS NULL
 		   AND NOT `+erasedOut+cursorOut+`
 		ORDER BY ms, 1`, args...)
@@ -893,7 +894,7 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool, sel
 		var target, to, person, topicEvent string
 		var ms int64
 		if err := rows.Scan(&m.ID, &m.LID, &m.Dir, &m.From, &m.Key, &m.Kind, &m.Body, &m.ReplyTo, &m.Sub, &m.Replica, &m.Origin,
-			&m.Emotion, &target, &m.State, &m.Detail, &m.At, &ms, &m.PID, &m.Job, &m.JobDetail, &m.JobAttempt, &to, &m.Claimed, &m.AgentID, &m.status, &m.Quote, &m.Sent, &person, &m.Topic, &topicEvent, &m.TopicDone, &m.SendStopped, &m.DeliveryUncertain, &m.SendGroup, &m.Unread, &m.liveContext); err != nil {
+			&m.Emotion, &target, &m.State, &m.Detail, &m.At, &ms, &m.PID, &m.Job, &m.JobDetail, &m.JobAttempt, &to, &m.Claimed, &m.AgentID, &m.status, &m.Quote, &m.Sent, &person, &m.Topic, &topicEvent, &m.TopicDone, &m.SendStopped, &m.DeliveryUncertain, &m.SendGroup, &m.Unread, &m.humanRaw, &m.liveContext); err != nil {
 			return nil, err
 		}
 		m.AtMS = ms
@@ -924,6 +925,7 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool, sel
 				// actionable id even when another copy sorted first.
 				if m.Job != "" {
 					out[i].ID, out[i].Job, out[i].JobDetail, out[i].JobAttempt = m.ID, m.Job, m.JobDetail, m.JobAttempt
+					out[i].humanRaw = m.humanRaw
 				}
 				if rank(c.State) < rank(out[i].State) {
 					out[i].State, out[i].Detail = c.State, c.Detail
@@ -933,6 +935,7 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool, sel
 				// this person's own devices.
 				if out[i].Job == "" && !c.Own && out[i].Copies[0].Own && out[i].ID == out[i].Copies[0].ID {
 					out[i].ID = c.ID
+					out[i].humanRaw = m.humanRaw
 				}
 				continue
 			}
@@ -981,6 +984,16 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool, sel
 		}
 	}
 	for i := range out {
+		// Preserve the exact chosen physical copy, including own-device inbox
+		// history and job/counterparty ID selection. Discarded copies never
+		// supply authority or introduce a new decoding failure.
+		if out[i].humanRaw != "" {
+			out[i].Human = &envelope.HumanTurn{}
+			if err := json.Unmarshal([]byte(out[i].humanRaw), out[i].Human); err != nil {
+				return nil, err
+			}
+			out[i].humanRaw = ""
+		}
 		if partial {
 			if out[i].Dir == "out" && out[i].Via == "" {
 				out[i].Attachments, err = s.sentAttachments(out[i].ID)

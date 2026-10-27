@@ -506,17 +506,6 @@ func (a *Agent) conversationMessages(conv, reply string, selection ...*contextMe
 	if err != nil {
 		return nil, err
 	}
-	for i := range msgs {
-		dir := msgs[i].Dir
-		if dir == "out" && msgs[i].Via != "" {
-			dir = "in"
-		}
-		h, e := storedHuman(a.store.db, dir, msgs[i].ID)
-		if e != nil {
-			return nil, e
-		}
-		msgs[i].Human = h
-	}
 	msgs = a.showExcerpts(msgs)
 	if reply != "" {
 		refs := map[string]bool{reply: true}

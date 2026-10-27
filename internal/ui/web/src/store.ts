@@ -184,7 +184,9 @@ const recovery = { update: [500, 1000, 2000, 4000, 8000, 15000, 30000], missed: 
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export class Store {
-  unreadReviewSize = 50; // prefix size only; Review rows stay in its mounted list
+  unreadReviewSize = 50;
+  // Workspace-owned presentation only. Refresh reconciles authoritative unread.
+  unreadReview: import("./features/Conversation.choices").ChoiceCache<T.UnreadRow> = {};
   readonly api: Api;
   readonly sends: ReturnType<typeof pendingSends>;
   private readonly scheduled: ReturnType<typeof scheduleSaves>;
@@ -1344,6 +1346,30 @@ export class Store {
     };
   }
 
+  // A fresh exact view proves personal read state, including failed CAS and
+  // newer deliberate unread. Never infer a read from the action response.
+  unreadReviewRows(rows: T.UnreadRow[], seq = 0, fresh?: View): T.UnreadRow[] {
+    return rows.filter(row => {
+      const id = row.kind === "chat" ? row.conv : row.thread;
+      const view = id && (fresh?.id === id ? fresh : this.state.views[id]);
+      if (!view || typeof view.seq !== "number" || view.seq < seq || row.kind === "device" && (view as T.Thread).peer !== row.peer) return true;
+      const message = view.messages?.find(m => m.id === row.id && m.dir === row.dir);
+      // Native message JSON omits unread when false.
+      if (!message || message.unread || ((message as T.DMMessage).lid || message.id) !== row.lid) return true;
+      const author = row.kind === "chat" ? (message as T.DMMessage).send_group_author || (message as T.DMMessage).claimed_key : (message as T.Message).from_key;
+      if (author && author !== row.author || row.kind === "chat" && ((message as T.DMMessage).topic || "") !== (row.topic || "")) return true;
+      return false;
+    });
+  }
+
+  private reconcileUnreadReview(view: View) {
+    const cached = this.unreadReview.value, seq = view.seq;
+    if (!cached || typeof seq !== "number" || seq < (cached.seq || 0)) return;
+    const rows = this.unreadReviewRows(cached.rows, cached.seq, view);
+    if (rows.length === cached.rows.length) return;
+    this.unreadReview.value = { ...cached, rows, total: Math.max(0, cached.total - (cached.rows.length - rows.length)), seq };
+  }
+
   private confirmReadOverview(o: NonNullable<Open>, view: View) {
     const overview = this.state.overview, seq = view.seq;
     if (!overview || typeof seq !== "number" || seq < overview.seq) return;
@@ -1352,6 +1378,7 @@ export class Store {
     const key = group ? "archived:" + group.group : JSON.stringify([o.kind, o.id]);
     if ((this.confirmedReads.get(key)?.seq || 0) > seq) return;
     this.confirmedReads.set(key, read);
+    this.reconcileUnreadReview(view);
     this.set({ overview: share(overview, this.readOverview(overview, read)) });
   }
 
@@ -1638,6 +1665,7 @@ export class Store {
       delete views[old];
       if (!this.fetching.has(old)) this.latestFetch.delete(old);
     }
+    this.reconcileUnreadReview(v);
     this.set({ views });
   }
 

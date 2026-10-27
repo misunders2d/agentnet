@@ -335,7 +335,7 @@ function AllClear() {
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
         </span>
       </div>
-      <h2 className="pt-6 font-display text-[22px] font-bold">Nothing needs you</h2>
+      <h2 className="pt-6 font-display text-[22px] font-bold">No decisions waiting</h2>
       <p className="pt-2 max-w-[300px] text-[15px] text-text-2">When someone asks your agent for something only you can allow, or invites you somewhere, it waits here.</p>
     </div>
   );

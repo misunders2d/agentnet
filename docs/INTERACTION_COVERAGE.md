@@ -1482,3 +1482,39 @@ installed repair is claimed by this register.
 | F11 | Screenshots can capture unfinished transitions while assertions pass | Owned diagnostic's initial dialog and final Review captures show transitional content. Original captures retained. | Verify the intended screen has visibly settled; include transitions in completion timing instead of disabling them for measurement. |
 | F12 | Connected harnesses can keep old copied hooks without a clear refresh notice | Runtime source and loaded-session revision are distinct; automatic revision/refresh notice remains unimplemented. | Update hook files, detect an older loaded integration, give the correct native refresh action and verify new-session activation without closing the user's sessions. |
 | F13 | Agent/device labels disagree in the request card | Combined history regression still shows an existing Laptop/Zenbook label mismatch. Not repaired by the copy candidate. | Original signed/admitted identity and host labels agree across header, card and action target; never infer a historical agent from today's default. |
+
+### Review unread and optional Drive export candidate — October 27 (MEL-701/MEL-702)
+
+Unreleased candidate reuses the already inspected Telegram Web A
+[`f67a408` local-state/background reconciliation flow](https://github.com/Ajaxy/telegram-tt/blob/f67a40879a7d78c2683ec5a296cf55bc22417d56/src/global/actions/api/reactions.ts#L234-L272)
+through the existing Store. Review retains its workspace's last confirmed list,
+including an empty result, while refreshing. A fresh exact message view prunes
+confirmed read rows; sequence guards prevent an older unread response restoring
+them. Author, physical/logical identity, topic and newer unread generations stay
+bound. Saved agent history is labelled without creating a current agent binding;
+empty decision copy now says “No decisions waiting.”
+
+Focused actual-Store/React tests cover confirmed reads, wrong authors, newer
+unread, late replies, navigation, duplicate rows and workspace/scope isolation.
+Owned fictional Chromium checks at 1280×850 and 390×850 cover retained nonempty
+and empty Review, repeated content pushes, failures/retry and exact history
+routing. Navigation feedback measured 79/86 ms (desktop/narrow) in the final timing run;
+actual Store acknowledgement → fresh view → return measured 40/47 ms with the
+unread endpoint held indefinitely. Native omitted-false unread JSON is covered. Screenshots of history, failure/retry, empty state,
+Drive export and its confirmation were inspected at both widths.
+
+Drive readable-copy export checks the existing provider status, sharing in-flight
+checks per conversation/revision. Disabled or unavailable Drive cannot open its
+confirmation. A background status check retains a usable confirmation; actual
+disable closes it and reenabling does not reopen it. Rendered checks execute
+those transitions. This changes no encrypted relay attachment backing store,
+workspace setting, Google consent or provider enforcement.
+
+The backend bulk message query now carries the selected physical copy's stored
+human scope, removing the subsequent per-message query. Focused cases preserve
+inbox, outbox, own-device history, job/counterparty copy selection, empty scope,
+and selected-versus-discarded malformed scope behavior. Readonly baseline provider measurements were 1.509 s cold and 34 ms warm.
+The N+1 candidate speedup and owned normal/10× backend benchmark were not
+measured. Initial cold backend loading is not qualified under one second;
+MEL-701 remains open for that performance work. No installed application update,
+native platform qualification or release is claimed.

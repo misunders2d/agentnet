@@ -70,6 +70,23 @@ const before=calls.length;data=[row('new'),...data.slice(1)];revision++;h.render
 gate=deferred();const old=gate;revision++;h.render();await tick();revision++;h.render();revision++;h.render();old.resolve();await drain();assert.equal(max,1);assert.equal(h.get().rows.length,300);
 const currentCalls=calls.length;h.render();await drain();assert.equal(calls.length,currentCalls,'unchanged content does not refetch');
 gate=deferred();const closing=gate;revision++;h.render();await tick();enabled=false;h.render();closing.resolve();await drain();assert.equal(h.get().rows.length,0,'closed list drops late replies');h.stop();
+// Review snapshots survive navigation, including confirmed empty results. Late
+// replies from the old mount cannot replace a newer snapshot or another scope.
+for(const rows of [[],[row('cached')]]){
+ const cache={};let rev=1,gate=deferred(),calls=0;
+ let x=hooks(),actual=load('features/Conversation.choices.ts',x.react);
+ const fetch=async()=>{calls++;return {rows,total:rows.length};};
+ x.start(()=>actual.usePagedChoices(true,'review',rev,50,r=>r.id,fetch,50,cache));await drain();
+ assert.equal(cache.value.loaded,true);x.stop();
+ x=hooks();actual=load('features/Conversation.choices.ts',x.react);
+ const delayed=async()=>{await gate.promise;return {rows:[row('fresh')],total:1};};
+ x.start(()=>actual.usePagedChoices(true,'review',++rev,50,r=>r.id,delayed,50,cache));
+ assert.equal(x.get().loaded,true);assert.deepEqual(Array.from(x.get().rows,r=>r.id),rows.map(r=>r.id));
+ rev++;x.render();assert.equal(x.get().loaded,true,'push retains known empty/nonempty presentation');
+ x.stop();gate.resolve();await drain();assert.deepEqual(Array.from(cache.value.rows,r=>r.id),rows.map(r=>r.id),'unmounted reply cannot poison cache');
+ const isolated=hooks(),other=load('features/Conversation.choices.ts',isolated.react),hold=deferred();
+ isolated.start(()=>other.usePagedChoices(true,'other-workspace',1,50,r=>r.id,async()=>{await hold.promise;return{rows:[],total:0};},50,cache));assert.equal(isolated.get().rows.length,0);assert.equal(isolated.get().loaded,false);isolated.stop();hold.resolve();
+}
 // A repeating cursor cannot create an infinite duplicate-only loop.
 h=hooks();choice=load('features/Conversation.choices.ts',h.react);let repeatCalls=0;
 h.start(()=>choice.usePagedChoices(true,'repeat',1,50,r=>r.id,async()=>{repeatCalls++;return {rows:[row('one')],total:500,next:'same'};}));await drain();assert.equal(repeatCalls,2);assert.match(h.get().error,/changed/);h.stop();
@@ -156,14 +173,37 @@ for(const filter of ['Active','Done','Archived']){
  assert(all);assert.match(all.props['aria-label'],/3 unread in other topics/);
 }
 // Review's actual source keeps display/navigation apart from approval counts.
-h=hooks();const st={unreadReviewSize:50,get:()=>({views:{}}),openUnreadRow:r=>opened.push(r),api:{}};let opened=[],page={rows:[{key:'stable',kind:'chat',conv:'chat',topic:'',id:'selected',lid:'logical',author:'author',dir:'out',at:'2026-10-16T00:00:00Z',label:'You',preview:'Review preview'}],total:1,next:'',loading:false,error:'',retry(){},more(){}};
-const reviewHelpers=load('features/Conversation.choices.ts',h.react);const review=load('features/Approvals.unread.tsx',{...h.react,useApp:()=>st,useStore:(_s,f)=>f({overview:{unread_total:1,dms:[{id:'chat',peer:{label:'Casey'}}]},contentRevision:1}),...reviewHelpers,usePagedChoices:()=>page,when:()=>'',Button:'Button'});
+h=hooks();const st={unreadReviewRows:rows=>rows,unreadReviewSize:50,get:()=>({views:{}}),openUnreadRow:r=>opened.push(r),api:{}};let opened=[],page={rows:[{key:'stable',kind:'chat',conv:'chat',topic:'',id:'selected',lid:'logical',author:'author',dir:'out',at:'2026-10-16T00:00:00Z',label:'You',preview:'Review preview'}],total:1,next:'',loading:false,loaded:true,error:'',retry(){},more(){}};
+const reviewHelpers=load('features/Conversation.choices.ts',h.react);const review=load('features/Approvals.unread.tsx',{...h.react,useApp:()=>st,useAgentNames:()=>({}),currentAgentTarget:()=>false,useStore:(_s,f)=>f({overview:{unread_total:1,dms:[{id:'chat',peer:{label:'Casey'}}]},contentRevision:1}),...reviewHelpers,usePagedChoices:()=>page,when:()=>'',Button:'Button'});
 h.start(()=>review.UnreadReview());await drain();tree=h.get();const button=nodes(tree).find(n=>n.tag==='button');assert.match(button.props['aria-label'],/Casey.*Main flow/);assert.equal(opened.length,0);button.props.onClick();assert.equal(opened[0],page.rows[0]);page={...page,loading:true};h.render();assert(nodes(h.get()).some(n=>n.props.role==='status'&&n.props.className==='sr-only'),'refresh status cannot move rows under the pointer');page={...page,rows:[],total:0,loading:false};h.render();assert(nodes(h.get()).some(n=>n.props.role==='status'&&n.props.children.includes('No unread messages.')));h.stop();
 { const state={overview:{unread_total:1,dms:[{id:'chat',peer:{label:'Casey'}}]},contentRevision:1};
  for(const r of [{...page.rows[0],key:'named',kind:'chat',conv:'chat',topic:'named',topic_title:'Never opened literal name',label:'Author'},{key:'device',kind:'device',peer:'agent/host',topic_title:'Device literal title',label:'Agent',preview:'Device preview'}]) {
-  const x=hooks(),part=load('features/Approvals.unread.tsx',{...x.react,useApp:()=>st,useStore:(_s,f)=>f(state),...reviewHelpers,useSteadyChoices:rows=>({choices:rows.map(row=>({row,present:true})),bind:{},release(){}}),usePagedChoices:()=>({...page,rows:[r],total:1}),when:()=>'',Button:'Button'});
+  const x=hooks(),part=load('features/Approvals.unread.tsx',{...x.react,useApp:()=>st,useAgentNames:()=>({}),currentAgentTarget:()=>false,useStore:(_s,f)=>f(state),...reviewHelpers,useSteadyChoices:rows=>({choices:rows.map(row=>({row,present:true})),bind:{},release(){}}),usePagedChoices:()=>({...page,rows:[r],total:1}),when:()=>'',Button:'Button'});
   x.start(()=>part.UnreadReview());const b=nodes(x.get()).find(n=>n.tag==='button');assert(b.props['aria-label'].includes(r.topic_title),'literal title without cached Store view');assert(b.props['aria-label'].includes(r.label),'author remains separate');x.stop();
  }
+}
+// Historical device rows remain reachable with truthful saved identity labels.
+for(const [binding,names,history] of [
+ [{agent_legacy:true},{},true],
+ [{agent_id:'known',agent_key:'key'},{},false],
+ [{agent_id:'retired',agent_key:'key'},{'agent/host#catalog':'current'},true],
+]){
+ const x=hooks(),r={key:'saved',kind:'device',peer:'agent/host',thread:'original',id:'exact',author:'author',lid:'lid',dir:'in',label:'Original',preview:'Saved reply'};
+ const component=load('features/Approvals.unread.tsx',{...x.react,useApp:()=>st,useAgentNames:()=>names,currentAgentTarget:()=>false,useStore:(_s,f)=>f({overview:{unread_total:1,threads:[{id:r.thread,peer:r.peer,...binding}]},contentRevision:1}),...reviewHelpers,useSteadyChoices:rows=>({choices:rows.map(row=>({row,present:true})),bind:{},release(){}}),usePagedChoices:()=>({...page,loaded:true,rows:[r],total:1}),when:()=>'',Button:'Button'});
+ x.start(()=>component.UnreadReview());const button=nodes(x.get()).find(n=>n.tag==='button');assert.equal(button.props['aria-label'].includes('Saved agent history'),history);button.props.onClick();assert.equal(opened.at(-1),r,'history route keeps exact selected identity');x.stop();
+}
+// Optional Drive export never offers an operation before capability is known.
+for(const mode of ['off','ready','disconnected','error']){
+ const x=hooks(),hold=deferred();let statusCalls=0,state={dm:{id:'chat',peer:{person:'person'}},contentRevision:1},nextStatus;
+ const store={host:{drive:{drive:async()=>{statusCalls++;await hold.promise;if(nextStatus)return nextStatus;if(mode==='error')throw Error('status failed');return{enabled:mode!=='off',configured:true,connected:mode!=='disconnected',space:{}};}}}};
+ const component=load('features/Drive.tsx',{...x.react,useCallback:f=>f,useApp:()=>store,useStore:(_s,f)=>f(state),Confirm:'Confirm',Button:'Button',Sheet:'Sheet'});
+ x.start(()=>component.SaveToDrive({m:{id:'message'},index:0}));assert.equal(nodes(x.get()).find(n=>n.tag==='button').props.disabled,true);hold.resolve();await drain();
+ const button=nodes(x.get()).find(n=>n.tag==='button');assert.equal(button.props.disabled,mode!=='ready');assert.equal(statusCalls,1);assert.equal(nodes(x.get()).find(n=>n.tag==='Confirm').props.open,false);if(mode==='ready'){
+  assert(button.props.children.includes('Save a readable copy to Google Drive'));button.props.onClick();await drain();assert.equal(nodes(x.get()).find(n=>n.tag==='Confirm').props.open,true);
+  state={...state,contentRevision:2};x.render();assert.equal(nodes(x.get()).find(n=>n.tag==='Confirm').props.open,true,'background status check retains confirmation');await drain();
+  nextStatus={enabled:false};state={...state,contentRevision:3};x.render();await drain();assert.equal(nodes(x.get()).find(n=>n.tag==='Confirm').props.open,false,'actual disable closes confirmation');
+  nextStatus={enabled:true,configured:true,connected:true,space:{}};state={...state,contentRevision:4};x.render();await drain();assert.equal(nodes(x.get()).find(n=>n.tag==='Confirm').props.open,false,'reenabling cannot reopen stale confirmation');
+ }x.stop();
 }
 const approvals=load('features/Approvals.tsx',{...hooks().react,decidable:o=>o.needs_you||[],heldDecisionPeers:()=>new Set(),isWorkingReview:()=>false,incomingGroupInvites:load('features/RoomPanel.model.ts',{}).incomingGroupInvites});
 assert.equal(approvals.needsYouCount({review:[],needs_you:[],unread_total:9}),0);assert.equal(approvals.needsYouCount({review:[],needs_you:[{}],unread_total:0}),1);
@@ -173,9 +213,9 @@ assert.equal(approvals.needsYouCount({review:[],needs_you:[],unread_total:9}),0)
 const rawStore=source('store.ts').replace(/^import .*;$/gm,'').replace('constructor(readonly host: Host) {','constructor(host: Host) { this.host=host;').replace(/^export /gm,'');
 const storeSource=stripTypeScriptTypes(rawStore);
 const scheduleSource=stripTypeScriptTypes(source('schedule-saves.ts').replace(/^import .*;$/gm,'')).replace(/^export /gm,'');
-const values=new Map(),listeners=new Set(),requests=[],conv='c'.repeat(64),topic='b'.repeat(32),mid='a'.repeat(32),lid='e'.repeat(32),fp='11111111-11111111-11111111-11111111';let loadGate=null;
+const values=new Map(),listeners=new Set(),requests=[],conv='c'.repeat(64),topic='b'.repeat(32),mid='a'.repeat(32),lid='e'.repeat(32),fp='11111111-11111111-11111111-11111111';let loadGate=null,commitReads=false;
 const dm={id:conv,messages:[{id:mid,lid,dir:'out',topic,send_group_author:fp,kind:'message',body:'selected',unread:true,attention:{rev:4,writer:fp}}],topics:[{id:topic}],agents:[]};
-const host={platform:'daemon',workspace:{id:'test',handle:'h'},listen:fn=>{listeners.add(fn);return()=>listeners.delete(fn);},async api(path,body){requests.push({path,body});if(path.startsWith('/api/overview'))return {seq:requests.length,version:'test',me:{fingerprint:fp},dms:[],threads:[]};if(path.startsWith('/api/agents'))return{agents:[]};if(path.startsWith('/api/dm?')){if(loadGate)await loadGate.promise;return structuredClone(dm);}if(path.startsWith('/api/thread?'))return{id:'thread',peer:'peer/host',key:{pinned:fp},messages:[{id:mid,dir:'in',kind:'message',body:'device',unread:true}]};if(path.startsWith('/api/typing'))return{};if(path==='/api/act'&&body.do==='read')return{note:'Recorded exact read'};throw Error('Unexpected '+path);}};
+const host={platform:'daemon',workspace:{id:'test',handle:'h'},listen:fn=>{listeners.add(fn);return()=>listeners.delete(fn);},async api(path,body){requests.push({path,body});if(path.startsWith('/api/overview'))return {seq:requests.length,version:'test',me:{fingerprint:fp},dms:[],threads:[]};if(path.startsWith('/api/agents'))return{agents:[]};if(path.startsWith('/api/dm?')){if(loadGate)await loadGate.promise;return structuredClone(dm);}if(path.startsWith('/api/thread?'))return{id:'thread',peer:'peer/host',key:{pinned:fp},messages:[{id:mid,dir:'in',kind:'message',body:'device',unread:true}]};if(path.startsWith('/api/typing'))return{};if(path==='/api/act'&&body.do==='read'){if(commitReads){for(const m of dm.messages)if(body.ids.includes(m.id))delete m.unread;dm.seq++;}return{note:'Recorded exact read'};}throw Error('Unexpected '+path);}};
 const {Store,topicChangeKey}=runInNewContext(scheduleSource+'\n'+storeSource+'\n({Store,topicChangeKey})',{api,errorText,pendingSends,share,messageTarget:model.messageTarget,currentCatalogAgents:model.currentCatalogAgents,directChatKey:model.directChatKey,mainPreferences,personRoots,brand:{storage:'test'},document:{visibilityState:'visible',hasFocus:()=>true},window:{},localStorage:{getItem:k=>values.get(k)||null,setItem:(k,v)=>values.set(k,v)},setTimeout:(f,ms)=>{const t=setTimeout(f,ms);t.unref();return t;},clearTimeout});
 // A typed verification wait retains the exact last view and draft without
 // claiming new membership or polling. Only a fresh successful view clears it.
@@ -220,6 +260,24 @@ const {Store,topicChangeKey}=runInNewContext(scheduleSource+'\n'+storeSource+'\n
 }
 const store=new Store(host);await store.start();store.showTab('oks');const files=[{key:'staged'}];store.setDraft(conv,{text:'kept',replyTo:'reply',files,newTopic:true});
 const bound={key:'chat',kind:'chat',conv,topic,id:mid,lid,author:fp,dir:'out',at:'',label:'You',preview:'selected'};
+// Real acknowledgement + fresh view proof removes exactly read cached rows.
+// Failed CAS/new unread, wrong author, and stale generations must remain.
+{
+ commitReads=true;dm.seq=1000000;
+ const active=new Store(host);await active.start();
+ const saved={...bound,key:'saved'},other={...bound,key:'other-author',author:'other'};
+ active.unreadReview.value={scope:'review-unread',rows:[saved,other],total:2,next:'',loaded:true,loading:false,error:'',seq:1};
+ await active.openUnreadRow(saved);const current=active.get().views[conv],visit=active.readVisit(active.get().open,topic);active.reportVisible(visit,current.messages);await drain();
+ assert.deepEqual(Array.from(active.unreadReview.value.rows,r=>r.key),['other-author'],'confirmed exact read prunes cache, other original author retained');
+ assert.equal(active.unreadReview.value.total,1);assert.equal(active.unreadReview.value.seq,dm.seq);
+ active.close();assert.equal(active.get().tab,'oks');assert.equal(active.unreadReview.value.rows.length,1,'Back immediately uses pruned cache');
+ const newer={...structuredClone(dm),seq:dm.seq+1,messages:dm.messages.map(m=>({...m,unread:true,attention:{rev:7,writer:fp}}))};active.keep(conv,newer);active.confirmReadOverview({kind:'dm',id:conv},newer);
+ assert.equal(active.unreadReviewRows([saved],1).length,1,'newer deliberate unread is never suppressed by an older acknowledgement');
+ const x=hooks();let readPage;const oldPage=deferred();active.api.unread=()=>oldPage.promise;
+ const component=load('features/Approvals.unread.tsx',{...x.react,useApp:()=>active,useAgentNames:()=>({}),currentAgentTarget:()=>false,useStore:(_s,f)=>f(active.get()),...reviewHelpers,usePagedChoices:(_enabled,_scope,_revision,_size,_key,load)=>{readPage=load;return {...page,loaded:true,rows:[],total:0};},when:()=>'',Button:'Button'});
+ x.start(()=>component.UnreadReview());const late=readPage('',50);oldPage.resolve({seq:1,rows:[saved],total:1});await assert.rejects(late,/changed while loading/,'late unread GET cannot resurrect confirmed read');x.stop();
+ active.stop();commitReads=false;dm.messages[0].unread=true;delete dm.seq;requests.length=0;
+}
 const publications=[];const off=store.subscribe(()=>{if(store.get().open)publications.push(store.returningToReview);});
 const start=requests.length;assert.equal(await store.openUnreadRow(bound),true);assert.equal(publications.at(-1),true,'synchronous open subscriber sees Review return before publication');off();assert.equal(requests.length-start,1);assert.equal(store.get().open.focus,mid);assert.equal(store.draft(conv).topic,topic);assert.equal(store.draft(conv).text,'kept');assert.equal(store.draft(conv).files,files);assert.equal(store.draft(conv).replyTo,'reply');assert.equal(requests.some(r=>r.path==='/api/act'),false);store.close();assert.equal(store.get().tab,'oks');
 assert.equal(await store.openUnreadRow({...bound,author:'wrong'}),false);assert.equal(store.get().open,null);
