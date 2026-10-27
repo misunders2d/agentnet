@@ -139,6 +139,7 @@ export interface State {
   reminderChanges: Record<string, ReminderChange>;
   pictureChange?: { person: T.PersonView; seq: number; png: string; saved?: T.PersonView };
   deviceDecisions?: Record<string, { link: T.LinkRequest; person: string; accept: boolean; saved?: boolean }>;
+  deviceRemovals?: Record<string, { device: T.DeviceView; person: string; saved?: boolean }>;
   panel: boolean;                                         // "In this chat" (desktop panel, phone sheet)
   readVisit: ReadVisit | null;
   contentRevision: number; // successful content loads; typing/presence do not advance choice lists
@@ -150,7 +151,7 @@ const draftsKey = (ws: string) => brand.storage + ".drafts." + ws;
 
 // unsentIn: what a reload would lose: a draft's text or files, or a send
 // not yet stored.
-export const unsentIn = (s: Pick<State, "drafts" | "unsent"> & Partial<Pick<State,"scheduleSaves" | "messageChanges" | "reminderChanges" | "pictureChange" | "deviceDecisions">>) => s.unsent || Object.values(s.deviceDecisions || {}).some(p => !p.saved) || !!s.pictureChange && !s.pictureChange.saved || Object.keys(s.reminderChanges || {}).length > 0 || Object.values(s.messageChanges || {}).some(p => p.status === "pending" || p.status === "failed" && p.action === "edit") || Object.values(s.scheduleSaves || {}).some(slot=>!!slot.attempt && (slot.status==="saving" || slot.status==="uncertain")) || Object.values(s.drafts).some((d) => d.text || (d.files && d.files.length));
+export const unsentIn = (s: Pick<State, "drafts" | "unsent"> & Partial<Pick<State,"scheduleSaves" | "messageChanges" | "reminderChanges" | "pictureChange" | "deviceDecisions" | "deviceRemovals">>) => s.unsent || Object.values(s.deviceDecisions || {}).some(p => !p.saved) || Object.values(s.deviceRemovals || {}).some(p => !p.saved) || !!s.pictureChange && !s.pictureChange.saved || Object.keys(s.reminderChanges || {}).length > 0 || Object.values(s.messageChanges || {}).some(p => p.status === "pending" || p.status === "failed" && p.action === "edit") || Object.values(s.scheduleSaves || {}).some(slot=>!!slot.attempt && (slot.status==="saving" || slot.status==="uncertain")) || Object.values(s.drafts).some((d) => d.text || (d.files && d.files.length));
 
 const recovery = { update: [500, 1000, 2000, 4000, 8000, 15000, 30000], missed: [1000, 3000, 8000] };
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -175,6 +176,7 @@ export class Store {
   private pictureWork?: { png: string; work: Promise<T.PersonView> };
   private deviceDecisionWork = new Map<string, { accept: boolean; work: Promise<{ note: string }> }>();
   private deviceDecisionState?: { source: State; value: State };
+  private deviceRemovalWork = new Map<string, Promise<{ note: string }>>();
   private reminderOverviewCache?: { source: T.Overview; changes: State["reminderChanges"]; value: T.Overview };
   private reactionSequence = 0;
   private reacting = new Map<string, { pending: PendingReaction; work: Promise<{ note: string } | undefined> }>();
@@ -220,7 +222,8 @@ export class Store {
     this.api = { ...calls, act: action => action.do === "resolve" ? this.dismiss(action, calls) : calls.act(action),
       edit: c => this.changeMessage("edit", c, calls), retract: c => this.changeMessage("delete", c, calls),
       setPersonPicture: png => this.changePicture(png, calls),
-      decideDevice: (id, accept) => this.decideDevice(id, accept, calls) };
+      decideDevice: (id, accept) => this.decideDevice(id, accept, calls),
+      removeDevice: address => this.removeDevice(address, calls) };
     this.sends = pendingSends(host, () => {
       const o = this.state?.open;
       // A send clears its draft as it begins: until it is stored, a reload
@@ -347,6 +350,50 @@ export class Store {
       }
     });
     this.deviceDecisionWork.set(id, { accept, work });
+    return work;
+  }
+
+  private pruneDeviceRemovals() {
+    const o = this.state.overview, changes = this.state.deviceRemovals;
+    if (!o || !changes) return;
+    const pending = Object.entries(changes).filter(([, p]) => o.person?.person === p.person &&
+      o.person.devices?.some(d => d.address === p.device.address && d.fingerprint === p.device.fingerprint));
+    if (pending.length !== Object.keys(changes).length) this.set({ deviceRemovals: Object.fromEntries(pending) });
+  }
+
+  private removeDevice(address: string, calls: Api): Promise<{ note: string }> {
+    if (!this.alive) return Promise.reject(Error("stale or disconnected workspace"));
+    const prior = this.deviceRemovalWork.get(address);
+    if (prior) return prior;
+    if (this.state.deviceRemovals?.[address]) return Promise.reject(Error("Check the pending device removal before trying again."));
+    const person = this.state.overview?.person, device = person?.devices?.find(d => d.address === address);
+    if (!device || !person?.person) return calls.removeDevice(address);
+    const change = { device, person: person.person };
+    const current = () => this.alive && this.state.deviceRemovals?.[address]?.device === device;
+    // Presentation only. Never remove the device from the authoritative roster
+    // used by permission, routing, and identity selectors before confirmation.
+    this.set({ deviceRemovals: { ...this.state.deviceRemovals, [address]: change } });
+    const work = Promise.resolve().then(async () => {
+      try {
+        const result = await calls.removeDevice(address);
+        if (current()) {
+          this.set({ deviceRemovals: { ...this.state.deviceRemovals, [address]: { ...change, saved: true } } });
+          this.pruneDeviceRemovals();
+          void this.refetch();
+        }
+        return result;
+      } catch (error) {
+        if (current()) {
+          const pending = { ...this.state.deviceRemovals }; delete pending[address];
+          this.set({ deviceRemovals: pending });
+          void this.refetch();
+        }
+        throw error;
+      } finally {
+        if (this.deviceRemovalWork.get(address) === work) this.deviceRemovalWork.delete(address);
+      }
+    });
+    this.deviceRemovalWork.set(address, work);
     return work;
   }
 
@@ -512,6 +559,7 @@ export class Store {
     this.dismissing.clear();
     this.pictureWork = undefined;
     this.deviceDecisionWork.clear();
+    this.deviceRemovalWork.clear();
     this.sends.dispose();
     this.scheduled.dispose();
     this.stopListen?.();
@@ -649,6 +697,7 @@ export class Store {
     const picture = this.state.pictureChange;
     if (picture?.saved && (o.seq > picture.seq || o.person?.picture === picture.saved.picture)) this.set({ pictureChange: undefined });
     this.pruneDeviceDecisions();
+    this.pruneDeviceRemovals();
     this.pruneDismissals();
     if (o.groups) this.set({ invitations: share(this.state.invitations, o.group_invitations || []) });
     if (catalogs) void this.loadAgentNames();

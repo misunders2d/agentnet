@@ -760,7 +760,7 @@ try {
    await tap('devices.remove-review',control('Remove Fixture phone'),()=>!!sheet('Remove Fixture phone?'),'specific other device removal confirmation');
    await tap('devices.remove-cancel',control('Keep it'),()=>!sheet('Remove Fixture phone?'),'device removal cancelled');assert(me.devices.length===2,'cancel removed device');await retire();
    await tap('devices.remove-review-again',control('Remove Fixture phone'),()=>!!sheet('Remove Fixture phone?'),'specific removal reviewed again');
-   await tap('devices.remove',control('Remove Fixture phone'),()=>me.devices.length===1&&!sheet('Remove Fixture phone?'),'exact other device removed after API result');
+   await tap('devices.remove',control('Remove Fixture phone'),()=>!sheet('Remove Fixture phone?')&&(onScreen(active('[role="status"][aria-label="Removing Fixture phone"]'))||me.devices.length===1),'exact device removal pending locally or confirmed; dialog closes immediately',()=>me.devices.length===1&&!sheet('Remove Fixture phone?'));
   }
   if(suite==='permissions'){
    await settings('Permissions');

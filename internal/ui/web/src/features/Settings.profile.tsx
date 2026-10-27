@@ -173,6 +173,7 @@ function CreatePerson() {
 export function DevicesSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingElement> }) {
   const store = useApp();
   const o = useStore(store, (s) => s.overview);
+  const removals = useStore(store, (s) => s.deviceRemovals);
   const [removing, setRemoving] = useState<T.DeviceView | null>(null);
   if (!o) return <><PageHead title="Your devices" titleRef={titleRef} /><Skeleton /></>;
   const p = o.person;
@@ -192,6 +193,14 @@ export function DevicesSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingE
       <GroupLabel>{devices.length === 1 ? "1 device" : devices.length + " devices"}</GroupLabel>
       <ul className="space-y-3">
         {devices.map((d) => {
+          const removal = removals?.[d.address];
+          if (removal && removal.person === p.person && removal.device.fingerprint === d.fingerprint) return (
+            <li key={d.address} role="status" aria-label={"Removing " + niceDevice(d.name)} className="rounded-xl border border-hairline bg-surface p-3 text-sm">
+              <p>{removal.saved ? "Removal saved; checking current device state…" : "Removing " + niceDevice(d.name) + "…"}</p>
+              <p className="mt-1 text-muted">Access changes after removal is confirmed.</p>
+              {removal.saved && <Button variant="ghost" size="sm" onClick={() => void store.refetch()}>Check removal status</Button>}
+            </li>
+          );
           const copy = (o.history || []).find((h) => h.device === d.address);
           const canRemove = !d.this && devices.length > 1;
           return (
@@ -373,18 +382,15 @@ function Step({ n, children }: { n: number; children: React.ReactNode }) {
 
 function RemoveDevice({ device, onClose }: { device: T.DeviceView | null; onClose: () => void }) {
   const store = useApp();
-  const [busy, setBusy] = useState(false);
   const name = device ? niceDevice(device.name) : "";
-  const remove = async () => {
+  const remove = () => {
     if (!device) return;
-    setBusy(true);
-    const r = await store.run((a) => a.removeDevice(device.address));
-    setBusy(false);
-    if (r) { store.toast(name + " is no longer one of your devices.", "ok"); onClose(); }
+    void store.run((a) => a.removeDevice(device.address));
+    onClose();
   };
   return (
     <Sheet open={!!device} onOpenChange={(open) => { if (!open) onClose(); }} title={"Remove " + name + "?"}
-      footer={<div className="flex flex-col gap-2 sm:flex-row-reverse"><Button variant="danger" className="sm:flex-1" disabled={busy} onClick={remove}>{busy ? "Removing…" : "Remove " + name}</Button><Button variant="outline" className="sm:flex-1" onClick={onClose}>Keep it</Button></div>}>
+      footer={<div className="flex flex-col gap-2 sm:flex-row-reverse"><Button variant="danger" className="sm:flex-1" onClick={remove}>{"Remove " + name}</Button><Button variant="outline" className="sm:flex-1" onClick={onClose}>Keep it</Button></div>}>
       <p>{name} stops being you: new chats no longer reach it. If you added it with a link, your server stops letting it in too.</p>
       <Hint className="mt-2">What it already has stays on it. Removing can’t erase that.</Hint>
     </Sheet>

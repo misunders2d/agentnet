@@ -119,6 +119,21 @@ status, Check notification status, and Check picture status controls are also
 executed with delayed confirmation, without repeating their writes. This is
 focused coverage, not completion of the control inventory or release gate.
 
+Device removal had the same backend-dependent interaction: the new regression
+fails on `e72d5cbd` while the confirmation stays open and the device card remains
+unchanged. The selected card now becomes an explicit pending removal and the
+dialog closes immediately. The actual roster remains unchanged until readback;
+identity, routing and permission selectors never consume a guessed removal.
+Pending state follows leaving/reopening Settings. Failure reveals current state,
+newer removal or changed keys defeat old replies, repeated input shares one
+write, and delayed readback offers a read-only Check removal status action.
+Both trusted-input widths pass at 60–62 ms, and all four pending/error images
+were inspected. The seven-parent integration selection passes, including the
+existing removed-device permission-target regression, selected-view completion,
+device decisions/link controls, profile/review workloads and bundle parity.
+Reuse is the same inspected local choice/background reconciliation pattern.
+Final platform and skin qualification for this correction remains open.
+
 Linux CI dependency setup previously spent over 30 minutes on the runner's
 Azure Ubuntu mirror before cancellation, including the 27.3 MB WebKit package.
 The next disposable runner uses Ubuntu's main HTTPS archive instead, preserving
