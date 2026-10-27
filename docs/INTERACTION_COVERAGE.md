@@ -100,6 +100,13 @@ dependency setup in 43 seconds. Its full Linux native-shell/browser matrix passe
 140 cells, 4,394 synthetic actions, maximum feedback 258 ms. This is the existing
 workload matrix at `aed2cb53`, not exhaustive source/control reconciliation.
 
+The later `54018a9a` Linux runner uses `mirror+file` with
+`/etc/apt/apt-mirrors.txt`, so changing only the conventional source files missed
+its Azure endpoint. Its still-running dependency download was cancelled after
+23 minutes; completed macOS/Windows results are retained. The correction also
+rewrites the observed mirror list, preserving Ubuntu package signatures and
+suites. A new Linux execution remains required.
+
 Profile picture removal also waited for storage. The actual profile/shared-avatar
 regression fails against `0b81b58d` with the avatar still visible after five
 seconds of held storage. Applying the existing local-projection / background
@@ -172,6 +179,17 @@ is reused without changing the native bridge or permission. Local trusted-input
 checks pass at both widths, 27–31 ms including two frame opportunities. Pending
 and error screenshots at 390 and 1440 pixels were inspected. Native bridge
 responses in this regression are simulated; emulator verification remains open.
+
+Creating a device link previously left the settings page unchanged until the
+API replied. The actual Add a device regression fails against `5c45c075` with
+no dialog after 500 ms. The dialog now opens immediately with pending content,
+then displays only the returned real link. Closing while generation runs never
+reopens it on a late reply; deliberate reopening retains that result and repeated
+input never creates duplicate links. Failure offers retry without changing any
+device membership. Both widths pass locally (65–96 ms driver-to-visible dialog),
+with pending/error screenshots inspected. This reuses the already inspected
+Telegram modal/local-state pattern; AgentNet's signed link and native approval
+remain authoritative. Native and gallery qualification are pending.
 
 The remaining Base UI popup entrances used transparent or fully offscreen
 starting states. Real message-menu/reaction/delete and All Topics regressions

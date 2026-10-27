@@ -3,7 +3,7 @@
 // and addresses stay behind Details; a device becomes you only when you
 // approve it here.
 import { IconCheck, IconCopy, IconDeviceLaptop, IconDeviceMobile, IconLink, IconPlus, IconServer, IconTrash } from "@tabler/icons-react";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { T } from "../api";
 import { useApp } from "../context";
 import { deviceKind, niceDevice, timeOf } from "../model";
@@ -284,22 +284,37 @@ function DeviceRequest({ link }: { link: T.LinkRequest }) {
 function AddDevice() {
   const store = useApp();
   const [link, setLink] = useState<T.DeviceLink | null>(null);
+  const [open, setOpen] = useState(false), [error, setError] = useState(false);
   const [busy, setBusy] = useState(false);
+  const working = useRef(false);
   const make = async () => {
+    setOpen(true);
+    if (working.current || (link && Date.parse(link.expires) > Date.now())) return;
+    working.current = true;
+    setLink(null); setError(false);
     setBusy(true);
-    const l = await store.run((a) => a.deviceLink());
-    if (l) setLink(l);
-    setBusy(false);
+    try {
+      const l = await store.run((a) => a.deviceLink());
+      if (l) setLink(l); else setError(true);
+    } finally { working.current = false; setBusy(false); }
+  };
+  const close = () => {
+    setOpen(false);
+    // Closing during creation does not cancel the native operation. Retain its
+    // result for an intentional reopening; completion never opens a dialog.
+    if (!busy) setLink(null);
   };
   return (
     <div className="mt-5">
-      <Button variant="act" size="lg" disabled={busy} icon={<IconPlus size={20} />} onClick={make}>{busy ? "Making a link…" : "Add a device"}</Button>
-      <LinkSheet link={link} onClose={() => setLink(null)} />
+      <Button variant="act" size="lg" icon={<IconPlus size={20} />} onClick={make}>Add a device</Button>
+      <LinkSheet open={open} link={link} error={error} onRetry={make} onClose={close} />
     </div>
   );
 }
 
-function LinkSheet({ link, onClose }: { link: T.DeviceLink | null; onClose: () => void }) {
+function LinkSheet({ open, link, error, onRetry, onClose }: {
+  open: boolean; link: T.DeviceLink | null; error: boolean; onRetry: () => void; onClose: () => void;
+}) {
   const store = useApp();
   const [copied, setCopied] = useState(false);
   useEffect(() => setCopied(false), [link?.url]);
@@ -311,9 +326,10 @@ function LinkSheet({ link, onClose }: { link: T.DeviceLink | null; onClose: () =
     if (!ok) store.toast("Copy didn’t work here. Select the link and copy it by hand.", "error");
   };
   return (
-    <Sheet open={!!link} onOpenChange={(open) => { if (!open) onClose(); }} title="Add a device"
+    <Sheet open={open} onOpenChange={(open) => { if (!open) onClose(); }} title="Add a device"
       description="It joins as you only after you approve it here."
-      footer={<div className="flex gap-2"><Button variant="act" className="flex-1" icon={copied ? <IconCheck size={18} /> : <IconCopy size={18} />} onClick={copy}>{copied ? "Copied" : page ? "Copy link" : "Copy code"}</Button><Button variant="outline" onClick={onClose}>Done</Button></div>}>
+      footer={<div className="flex gap-2">{link && <Button variant="act" className="flex-1" icon={copied ? <IconCheck size={18} /> : <IconCopy size={18} />} onClick={copy}>{copied ? "Copied" : page ? "Copy link" : "Copy code"}</Button>}{!link && error && <Button variant="act" onClick={onRetry}>Try again</Button>}<Button variant="outline" onClick={onClose}>Done</Button></div>}>
+      {!link && <p role={error ? "alert" : "status"}>{error ? "Could not make a link. Try again." : "Making a one-use link…"}</p>}
       {link && (
         <div className="space-y-4">
           <ol className="space-y-3">

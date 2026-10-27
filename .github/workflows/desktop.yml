@@ -63,9 +63,10 @@ jobs:
         run: |
           # The runner's Azure mirror stalled repeated candidate downloads.
           # Use Ubuntu's main signed archive; keep suites and package checks.
-          for source in /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources; do
+          # Some hosted images resolve a mirror+file source through this list.
+          for source in /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources /etc/apt/apt-mirrors.txt; do
             if [ -f "$source" ]; then
-              sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' "$source"
+              sudo sed -E -i 's|https?://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' "$source"
             fi
           done
           sudo apt-get update
