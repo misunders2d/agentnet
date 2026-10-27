@@ -172,7 +172,7 @@ and picker failures in that run remain unresolved and are different actions.
 The next diagnostic isolates only background images or only box shadows against
 the same candidate baseline. Diagnostic variants never count as release passes;
 shipping styles are unchanged. The local no-background diagnostic executes all
-28 action checks successfully; this does not predict the Mac result.
+27 action checks successfully; this does not predict the Mac result.
 
 Group creation now replaces the form with its named pending destination before
 the native write. The existing Store retains the real creation result and exact
