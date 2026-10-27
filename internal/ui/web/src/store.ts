@@ -140,6 +140,7 @@ export interface State {
   reminderChanges: Record<string, ReminderChange>;
   pictureChange?: { person: T.PersonView; seq: number; png: string; saved?: T.PersonView };
   personRename?: { request: { person: string; original: string; label: string }; saved?: T.PersonView; error?: string };
+  personCreation?: { request: { address: string; fingerprint: string; label: string }; saved?: { person: T.PersonView; note: string }; error?: string };
   deviceDecisions?: Record<string, { link: T.LinkRequest; person: string; accept: boolean; saved?: boolean }>;
   deviceRemovals?: Record<string, { device: T.DeviceView; person: string; saved?: boolean }>;
   groupDecisions?: Record<string, { invitation: T.GroupInvitationView; person: string; accept: boolean; saved?: boolean }>;
@@ -175,7 +176,7 @@ const draftsKey = (ws: string) => brand.storage + ".drafts." + ws;
 
 // unsentIn: what a reload would lose: a draft's text or files, or a send
 // not yet stored.
-export const unsentIn = (s: Pick<State, "drafts" | "unsent"> & Partial<Pick<State,"scheduleSaves" | "messageChanges" | "reminderChanges" | "pictureChange" | "personRename" | "deviceDecisions" | "deviceRemovals" | "groupDecisions" | "groupChanges" | "groupCreation" | "invitationSends" | "teamCreation" | "teamChanges">>) => s.unsent || !!s.personRename && !s.personRename.saved && !s.personRename.error || Object.values(s.invitationSends || {}).some(p => !p.done && !p.error) || !!s.groupCreation && !s.groupCreation.done && !s.groupCreation.error || Object.values(s.teamChanges || {}).some(p => !p.saved && !p.error) || !!s.teamCreation && !s.teamCreation.saved && !s.teamCreation.error || Object.values(s.groupChanges || {}).some(p => !p.saved && !p.error) || Object.values(s.groupDecisions || {}).some(p => !p.saved) || Object.values(s.deviceDecisions || {}).some(p => !p.saved) || Object.values(s.deviceRemovals || {}).some(p => !p.saved) || !!s.pictureChange && !s.pictureChange.saved || Object.keys(s.reminderChanges || {}).length > 0 || Object.values(s.messageChanges || {}).some(p => p.status === "pending" || p.status === "failed" && p.action === "edit") || Object.values(s.scheduleSaves || {}).some(slot=>!!slot.attempt && (slot.status==="saving" || slot.status==="uncertain")) || Object.values(s.drafts).some((d) => d.text || (d.files && d.files.length));
+export const unsentIn = (s: Pick<State, "drafts" | "unsent"> & Partial<Pick<State,"scheduleSaves" | "messageChanges" | "reminderChanges" | "pictureChange" | "personRename" | "personCreation" | "deviceDecisions" | "deviceRemovals" | "groupDecisions" | "groupChanges" | "groupCreation" | "invitationSends" | "teamCreation" | "teamChanges">>) => s.unsent || !!s.personCreation && !s.personCreation.saved && !s.personCreation.error || !!s.personRename && !s.personRename.saved && !s.personRename.error || Object.values(s.invitationSends || {}).some(p => !p.done && !p.error) || !!s.groupCreation && !s.groupCreation.done && !s.groupCreation.error || Object.values(s.teamChanges || {}).some(p => !p.saved && !p.error) || !!s.teamCreation && !s.teamCreation.saved && !s.teamCreation.error || Object.values(s.groupChanges || {}).some(p => !p.saved && !p.error) || Object.values(s.groupDecisions || {}).some(p => !p.saved) || Object.values(s.deviceDecisions || {}).some(p => !p.saved) || Object.values(s.deviceRemovals || {}).some(p => !p.saved) || !!s.pictureChange && !s.pictureChange.saved || Object.keys(s.reminderChanges || {}).length > 0 || Object.values(s.messageChanges || {}).some(p => p.status === "pending" || p.status === "failed" && p.action === "edit") || Object.values(s.scheduleSaves || {}).some(slot=>!!slot.attempt && (slot.status==="saving" || slot.status==="uncertain")) || Object.values(s.drafts).some((d) => d.text || (d.files && d.files.length));
 
 const recovery = { update: [500, 1000, 2000, 4000, 8000, 15000, 30000], missed: [1000, 3000, 8000] };
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -211,6 +212,7 @@ export class Store {
   private groupCreationWork?: Promise<string>;
   private invitationWork = new Map<string, Promise<InvitationSend>>();
   private personRenameWork?: Promise<T.PersonView>;
+  private personCreationWork?: Promise<{ person: T.PersonView; note: string }>;
   private personRenameState?: { source: State; value: State };
   private reminderOverviewCache?: { source: T.Overview; changes: State["reminderChanges"]; value: T.Overview };
   private reactionSequence = 0;
@@ -258,6 +260,7 @@ export class Store {
       edit: c => this.changeMessage("edit", c, calls), retract: c => this.changeMessage("delete", c, calls),
       setPersonPicture: png => this.changePicture(png, calls),
       renamePerson: label => this.renamePerson(label, calls),
+      createPerson: label => this.createPerson(label, calls),
       decideDevice: (id, accept) => this.decideDevice(id, accept, calls),
       removeDevice: address => this.removeDevice(address, calls),
       decideGroup: (id, accept) => this.decideGroup(id, accept, calls),
@@ -345,6 +348,40 @@ export class Store {
 
   clearPersonRename(request: NonNullable<State["personRename"]>["request"]) {
     if (!this.personRenameWork && this.state.personRename?.request === request && this.state.personRename.error) this.set({ personRename: undefined });
+  }
+
+  private createPerson(label: string, calls: Api): ReturnType<Api["createPerson"]> {
+    const o = this.state.overview;
+    if (!this.alive || !o?.persons || o.person || o.role !== "unset" || o.link?.state === "pending") return Promise.reject(Error("Person setup is no longer available on this device."));
+    if (this.personCreationWork) return this.state.personCreation?.request.label === label ? this.personCreationWork : Promise.reject(Error("Wait for the current person setup to finish."));
+    const old = this.state.personCreation;
+    if (old?.saved) return old.request.label === label ? Promise.resolve(old.saved) : Promise.reject(Error("Check the saved person before trying setup again."));
+    const request = { address: o.me.address, fingerprint: o.me.fingerprint, label };
+    const current = () => this.alive && this.state.personCreation?.request === request;
+    this.set({ personCreation: { request } });
+    const work = Promise.resolve().then(async () => {
+      try {
+        if (!current()) throw Error("This person setup's workspace or device changed.");
+        const saved = await calls.createPerson(label);
+        if (current()) this.set({ personCreation: { request, saved } });
+        return saved;
+      } catch (error) {
+        if (current()) {
+          this.set({ personCreation: { request, error: errorText(error) } });
+          this.toast("Person setup not confirmed. Open Profile to check its status or retry.", "error");
+        }
+        throw error;
+      } finally {
+        if (this.personCreationWork === work) this.personCreationWork = undefined;
+        if (current()) void this.refetch();
+      }
+    });
+    this.personCreationWork = work;
+    return work;
+  }
+
+  clearPersonCreation(request: NonNullable<State["personCreation"]>["request"]) {
+    if (!this.personCreationWork && this.state.personCreation?.request === request && this.state.personCreation.error) this.set({ personCreation: undefined });
   }
 
   private changePicture(png: string, calls: Api): Promise<T.PersonView> {
@@ -937,6 +974,12 @@ export class Store {
     if (this.state.personRename && patch.overview && this.state.personRename.request.person !== patch.overview.person?.person) {
       this.state = { ...this.state, personRename: undefined }; this.personRenameWork = undefined;
     }
+    if (this.state.personCreation && patch.overview) {
+      const { request } = this.state.personCreation, o = patch.overview;
+      if (o.person || !o.persons || o.role !== "unset" || o.link?.state === "pending" || o.me.address !== request.address || o.me.fingerprint !== request.fingerprint) {
+        this.state = { ...this.state, personCreation: undefined }; this.personCreationWork = undefined;
+      }
+    }
     if (this.state.teamCreation && patch.overview && patch.overview.person?.person !== this.state.teamCreation.person) this.state = { ...this.state, teamCreation: undefined };
     if (this.state.teamChanges && patch.overview) {
       const entries = Object.entries(this.state.teamChanges), keep = entries.filter(([, p]) => p.person === patch.overview?.person?.person);
@@ -999,6 +1042,7 @@ export class Store {
     this.groupCreationWork = undefined;
     this.invitationWork.clear();
     this.personRenameWork = undefined;
+    this.personCreationWork = undefined;
     this.sends.dispose();
     this.scheduled.dispose();
     this.stopListen?.();

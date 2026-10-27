@@ -45,6 +45,7 @@ export function DeviceGlyph({ name, size = 20 }: { name: string; size?: number }
 export function ProfileSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingElement> }) {
   const store = useApp();
   const o = useStore(store, (s) => s.overview);
+  const creation = useStore(store, s => s.personCreation);
   if (!o) return <><PageHead title="Profile" titleRef={titleRef} /><Skeleton /></>;
   const p = o.person;
   if (p) return <><PageHead title="Profile" titleRef={titleRef} lead="How you appear to people in your chats." /><Rename key={p.person} person={p} /></>;
@@ -66,11 +67,11 @@ export function ProfileSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingE
       ) : o.role === "service" ? (
         <Card className="p-4"><p>This computer is a service or bot, so it has no person. Its own agent conversations are under Agents.</p></Card>
       ) : o.role === "unset" ? (
-        <CreatePerson />
+        <CreatePerson key={o.me.address + "|" + o.me.fingerprint} />
       ) : (
         <Card className="p-4"><p>This computer has no person yet.</p></Card>
       )}
-      {o.persons && o.role === "unset" && o.link?.state !== "pending" && store.host.platform === "daemon" && <ServiceRole />}
+      {!creation && o.persons && o.role === "unset" && o.link?.state !== "pending" && store.host.platform === "daemon" && <ServiceRole />}
     </>
   );
 }
@@ -160,25 +161,36 @@ function Rename({ person }: { person: T.PersonView }) {
 
 function CreatePerson() {
   const store = useApp();
+  const pending = useStore(store, s => s.personCreation);
+  const offline = useStore(store, s => s.conn !== "live");
   const [name, setName] = useState("");
-  const [busy, setBusy] = useState(false);
-  const create = async (e: FormEvent) => {
+  const [checking, setChecking] = useState(false);
+  const progress = useRef<HTMLElement>(null);
+  useLayoutEffect(() => { if (pending) progress.current?.scrollIntoView({ block: "nearest", behavior: "instant" }); }, [pending?.request, pending?.error]);
+  const submit = (label: string) => { void store.api.createPerson(label).catch(() => {}); };
+  const create = (e: FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) return;
-    setBusy(true);
-    const r = await store.run((a) => a.createPerson(name.trim()));
-    if (r) store.toast(r.note || "You’re set up as " + r.person.label + ".", "ok");
-    setBusy(false);
+    if (!name.trim() || pending || offline) return;
+    submit(name.trim());
   };
   return (
     <div className="space-y-4">
       <Card className="p-4">
-        <form onSubmit={create} className="space-y-3">
+        {pending ? <section ref={progress} aria-label="Person setup" className="space-y-3">
+          <p className="font-semibold">{pending.error ? "Person setup needs review" : pending.saved ? "Setup saved; checking current profile" : "Setting up your person"}</p>
+          <p className="break-words"><b>{pending.request.label}</b></p>
+          <p role={pending.error ? "alert" : "status"}>{pending.error ? "Could not confirm setup. " + pending.error : pending.saved?.note || "You can leave this page while setup finishes. Your person is available after setup is confirmed."}</p>
+          {pending.error && <Hint>A response can be lost after saving. Check current status before retrying this name; AgentNet checks whether this device is already set up.</Hint>}
+          <div className="flex flex-wrap gap-2">
+            {(pending.saved || pending.error) && <Button variant="outline" disabled={checking} onClick={() => { setChecking(true); void store.refetch().finally(() => setChecking(false)); }}>{checking ? "Checking setup…" : "Check setup status"}</Button>}
+            {pending.error && <><Button variant="act" disabled={offline || checking} onClick={() => submit(pending.request.label)}>Retry person setup</Button><Button variant="ghost" onClick={() => { setName(pending.request.label); store.clearPersonCreation(pending.request); }}>Edit setup name</Button></>}
+          </div>
+        </section> : <form onSubmit={create} className="space-y-3">
           <label htmlFor="settings-new-name" className="block font-semibold">Your name</label>
           <input id="settings-new-name" className={input} value={name} maxLength={64} autoComplete="name" placeholder="What people call you" onChange={(e) => setName(e.target.value)} />
           <Hint>It’s the name people see. It isn’t checked, so it proves nothing on its own.</Hint>
-          <Button type="submit" variant="act" size="lg" disabled={!name.trim() || busy}>{busy ? "Setting up…" : "Set up my person"}</Button>
-        </form>
+          <Button type="submit" variant="act" size="lg" disabled={!name.trim() || offline}>Set up my person</Button>
+        </form>}
       </Card>
       <Hint className="px-1">Already use AgentNet on another device? Add this one from there instead (You → Your devices → Add a device), so you’re one person everywhere.</Hint>
     </div>

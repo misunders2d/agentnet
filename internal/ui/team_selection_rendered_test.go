@@ -60,3 +60,10 @@ func TestPersonRenameRendered(t *testing.T) {
 	}
 	t.Log(browserCheck(t, "testdata/person_rename_rendered.cjs"))
 }
+
+func TestPersonCreationRendered(t *testing.T) {
+	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
+		t.Skip("set AGENTNET_PLAYWRIGHT for rendered person setup")
+	}
+	t.Log(browserCheck(t, "testdata/person_creation_rendered.cjs"))
+}

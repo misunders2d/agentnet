@@ -216,7 +216,29 @@ newer linked names/drafts, navigation, owner change and stopped work. Five affec
 race parents pass: name changes, pictures, device decisions, both profile workload
 sizes and bundle integrity. The final background-failure announcement regression
 also passes. Build/type checking passes after requiring the exact verified person
-ID. Native profile qualification and exhaustive interaction coverage remain open.
+ID. Native profile qualification `40459845703` at `0449610b` passes rename,
+picture/device controls and bundle checks three times on Linux, macOS and Windows.
+Exhaustive interaction coverage remains open.
+
+Person setup now replaces its form immediately with the exact pending name and
+retains that attempt across navigation. This reuses the same inspected local
+intent/reconciliation flow in the existing Store. It does not fabricate a person
+ID, role or permission. Native `client.CreatePerson` and browser `Engine.createPerson`
+continue to own identity creation and already-existing/link checks; local creation
+and server publication remain distinct. Duplicate input shares work, a saved
+response only triggers readback, and failure keeps the name for explicit retry or
+editing. A linked person, changed device key/address, service role, pending link
+or stopped workspace supersedes the old local attempt without applying its late
+result. A lost response followed by verified profile readback does not replay setup.
+
+The previous form fails the held-request rendered regression. Current desktop and
+390-pixel cases pass at 53–55 ms in the first local run. Both widths exercise
+navigation, background failure announcement, exact retry, held status reads and
+the unpublished-profile notice. All six pending/error/checking screenshots were
+inspected. Five integrated race parents pass (setup, rename, device links, both
+profile workload widths and bundle integrity), with build/type checks passing.
+These are synthetic-host recovery checks; broader platform/control qualification
+remains open.
 
 Group creation now replaces the form with its named pending destination before
 the native write. The existing Store retains the real creation result and exact
