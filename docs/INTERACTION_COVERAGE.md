@@ -91,6 +91,18 @@ the repair. Sergey needs to do nothing while owned fixtures are being tested.
 
 ### October 27 continuation: the 500 ms target
 
+At `4645ead6`, run `40442190118` passes the group-administration and
+pending-people regressions three times on Linux, macOS and Windows. Affected
+platform run `40442193425` passes Linux and Windows groups/teams. Android
+fails Create list at 697 ms; native macOS fails the same action at 724 ms.
+Browser WebKit also delays opening a group (984 ms) and people-list settings
+(870 ms). Create list still waits for the backend before showing the new list;
+that is a remaining implementation gap, not a waived result. UI race partitions
+1 and 2 pass in `40442196954`; partition 0 has one failed parent, the media-probe
+guard's obsolete expected summary omitted the new zero-valued diagnostic count.
+The corrected guard passes under `-race`; its original failed partition and all
+other unchanged parent results are retained. No data race was reported.
+
 Run `40439149014` at `21a88b26` passes the people-list selection and group
 invitation-decision regressions three times on each of Linux, macOS and Windows.
 The prior macOS driver-timing failure remains in its original record; this run

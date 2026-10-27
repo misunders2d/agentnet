@@ -72,7 +72,7 @@ async function driverCase(options={}){
  return{reports,counts,probeCalls,widths,exitCode:fakeProcess.exitCode,errors};
 }
 (async()=>{
- const allowed=await driverCase();assert.deepEqual(allowed.counts,{executed_pass:0,failed:0,not_executed:2});assert.equal(allowed.probeCalls,1,'same independent result reused across widths');assert.equal(allowed.exitCode,undefined);assert(allowed.reports.every(r=>r.execution==='not_executed'&&r.unsupportedTestPort.smoothnessQualified===false));checks++;
+ const allowed=await driverCase();assert.deepEqual(allowed.counts,{executed_pass:0,failed:0,not_executed:2,diagnostic:0});assert.equal(allowed.probeCalls,1,'same independent result reused across widths');assert.equal(allowed.exitCode,undefined);assert(allowed.reports.every(r=>r.execution==='not_executed'&&r.unsupportedTestPort.smoothnessQualified===false));checks++;
  for(const options of [{platform:'linux'},{platform:'darwin'},{engine:'chromium'},{engine:'firefox'},{suite:'topics'},{suite:'compose'},{suite:'outbox'},{driverError:true},{mutate:a=>a.report.pageErrors.push('fixture runtime error')},{mutate:a=>a.probe.blob.metadataOk=true},{mutate:a=>a.report.videoMetadataFailure.errorCode=3}]){
   const result=await driverCase(options);assert.equal(result.counts.failed,result.widths);assert.equal(result.counts.not_executed,0);assert.equal(result.exitCode,1,'all other UI failures remain fatal');checks++;
  }
