@@ -26,7 +26,9 @@
   /* Sticker outline: 1.5px on phones, 1px on desktop. */
   .stroke { border: 1.5px solid var(--an-outline); }
   @media (min-width: 1024px) { .stroke { border-width: 1px; } }
-  .dots { background-image: radial-gradient(var(--an-dots) 1.2px, transparent 1.4px); background-size: 18px 18px; }
+  /* Repeated gradient texture stalls WebKit's first narrow chat paint.
+     Keep the existing surface colour; decoration must not delay navigation. */
+  .dots { background-image: none; }
   .press { transition: transform 120ms var(--ease-out-soft), box-shadow 120ms var(--ease-out-soft); }
   .press:active { transform: translate(2px, 2px); box-shadow: none; }
   .pop-in { animation: pop-in 320ms var(--ease-pop) both; }

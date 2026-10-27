@@ -183,6 +183,20 @@ accidentally selected unrelated full jobs and was cancelled; replacement
 `40458569453` selects only the Mac platform diagnostic. Cancelled work is not
 passing qualification evidence.
 
+The isolated Mac diagnostic `40458569453` reproduces narrow WebKit chat opening
+at 1002 ms (first mutation 9 ms, first frame 1104 ms). Removing background images
+reduces that action to 21 ms; removing shadows alone leaves 742 ms. The first
+menu with backgrounds removed still takes 784 ms, so this does not explain every
+renderer delay. Native WKWebView's actions pass in all three diagnostic modes.
+The shipping candidate removes only the repeated radial-gradient paper texture
+from `.dots`, preserving surface colours and all interaction behavior. Existing
+controlled navigation and pending/reconciliation flows remain unchanged. The
+integrated Chromium actions/topics workload passes all six width/suite cells,
+alongside the pane entrance regression and bundle integrity under the race
+detector; all six screenshots were inspected. Build/type checks pass. Mac
+qualification of this shipping change remains pending; diagnostic passes do not
+qualify publication.
+
 Profile rename now projects the requested display label immediately and replaces
 the form with named pending work. This reuses the existing Store projection and
 inspected Telegram local-change/reconciliation pattern. The native signed-roster
