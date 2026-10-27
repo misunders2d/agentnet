@@ -115,6 +115,8 @@ failed=0
 # the qualifier's exit status and never upload a full application log.
 capture_rate() {
   timeout --signal=KILL 20s adb -s "$serial" logcat -d -v brief -s NotificationService:W "*:S" 2>/dev/null | grep -F "Package enqueue rate" > "$RUNNER_TEMP/android-notification-rate-$1.txt" || true
+  timeout --signal=KILL 20s adb -s "$serial" logcat -d -b events -v threadtime -s notification_cancel:I notification_cancel_all:I notification_canceled:I "*:S" 2>/dev/null |
+    python3 mobile/android/scripts/notification-cancellations.py > "$RUNNER_TEMP/android-notification-cancellations-$1.txt" || true
 }
 trap 'capture_rate final' EXIT
 stop_fixture

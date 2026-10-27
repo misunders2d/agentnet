@@ -489,6 +489,9 @@ class UpdaterInstrumentation : Instrumentation() {
                 val counts = org.json.JSONArray()
                 eligible().forEach { counts.put(JSONObject().put("id", it.id).put("number", it.notification.number)) }
                 diagnostic.put("eligibleCounts", counts)
+                    .put("allActiveCount", manager.activeNotifications.count { it.packageName == targetContext.packageName })
+                    .put("permission", app.host.notificationsPermitted())
+                    .put("elapsedRealtime", android.os.SystemClock.elapsedRealtime())
                 "$label INDICATOR_FAILURE_JSON=$diagnostic"
             }
         }
@@ -541,9 +544,9 @@ class UpdaterInstrumentation : Instrumentation() {
             }
             check(manager.activeNotifications.single { it.tag == "unrelated-tag" }.notification.number == 0)
             projectIndicatorBadge(5, true)
-            waitFor("Partial positive estimate did not clear numeric badge") { eligible().all { it.notification.number == 0 } }
+            waitFor("Partial positive estimate did not preserve notices and clear numeric badge") { eligible().let { it.size == 2 && it.all { entry -> entry.notification.number == 0 } } }
             projectIndicatorBadge(0, true)
-            check(eligible().all { it.notification.number == 0 })
+            waitFor("Partial zero estimate did not preserve notices") { eligible().let { it.size == 2 && it.all { entry -> entry.notification.number == 0 } } }
             projectIndicatorBadge(5, false)
             waitFor("Exact aggregate not restored") { eligible().count { it.notification.number == 5 } == 1 }
             val numbered = eligible().single { it.notification.number == 5 }

@@ -138,6 +138,16 @@ results qualifies publication. The focused `40455045216` run passes invitation
 opening, new chat/group and history/topic regressions three times on all three
 desktop OSes.
 
+Android follow-up adds content-free cancellation diagnostics for the owned
+emulator, using AOSP's `notification_cancel`, `notification_cancel_all` and
+`notification_canceled` event schemas. Only the exact preview package's numeric
+reason/notification ID and timestamp survive filtering; keys, routes, bodies and
+listeners are discarded. A local parser check rejects unrelated/malformed events
+and verifies redaction. The indicator matrix now requires both notices to remain
+present while clearing a partial count, preventing an empty list from satisfying
+`all`. The prior disappearance is not yet explained; production behavior and
+qualification deadlines remain unchanged.
+
 Group creation now replaces the form with its named pending destination before
 the native write. The existing Store retains the real creation result and exact
 remaining recipients across Back, Close and remount; retries cannot recreate a
