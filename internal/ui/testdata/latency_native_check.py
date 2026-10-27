@@ -113,11 +113,11 @@ try:
                 for pid, command_name in webcontent_pids().items():
                     if pid in active_samples and active_samples[pid].poll() is None:
                         continue
-                    # A short fixture can finish before a five-second sample
-                    # writes its output. Repeat short captures across startup
-                    # and actual interactions, joining the last one at teardown.
+                    # Capture startup and the first interactions together. The
+                    # one-second probe mostly sampled process initialization.
+                    # Join this diagnostic before stopping its owned target.
                     destination = pathlib.Path(profile_dir) / (query.get('suite', 'fixture')+'-'+str(pid)+'-'+str(len(samplers))+'.txt')
-                    sampler = subprocess.Popen(['sample', str(pid), '1', '10', '-file', str(destination)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    sampler = subprocess.Popen(['sample', str(pid), '5', '10', '-file', str(destination)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     active_samples[pid] = sampler
                     samplers.append(sampler)
                     profile_records.append({'pid': pid, 'command': command_name, 'elapsedMs': round((time.monotonic()-(end-30))*1000), 'file': destination.name})
@@ -136,12 +136,12 @@ try:
             raise RuntimeError('Native responsiveness fixture failed')
 finally:
     body_error = sys.exc_info()[1]
-    teardown_end = time.monotonic() + 5
     try:
+        profile_end = time.monotonic() + 6
         for sampler in samplers:
             if sampler.poll() is None:
                 try:
-                    sampler.wait(timeout=min(1.5, max(.01, teardown_end-time.monotonic())))
+                    sampler.wait(timeout=max(.01, profile_end-time.monotonic()))
                 except subprocess.TimeoutExpired:
                     sampler.terminate()
                     sampler.wait(timeout=1)
@@ -149,6 +149,7 @@ finally:
             for record, sampler in zip(profile_records, samplers):
                 record['returncode'] = sampler.returncode
             (pathlib.Path(profile_dir)/(query.get('suite', 'fixture')+'-samples.json')).write_text(json.dumps(profile_records, indent=2))
+        teardown_end = time.monotonic() + 5
         # Only terminate the owned process tree, never an image name/other instance.
         if proc is not None and proc.poll() is None:
             if system == 'Windows':
