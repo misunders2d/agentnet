@@ -1,6 +1,7 @@
 // Inert public-host fixture; production skins, no Hub, credentials or harness.
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),assert=require('node:assert/strict');
 const {chromium}=require(process.env.AGENTNET_PLAYWRIGHT||'playwright-core');
+const harmlessRead=r=>r.body===undefined||r.path==="/api/refresh"||(r.path==="/api/topic/transfer/location"&&Object.keys(r.body).sort().join(",")==="source,topic"&&r.body.source===conv&&r.body.topic==="");
 const settle=async page=>{await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));await page.evaluate(async()=>{await document.fonts.ready;await Promise.all(document.querySelector('#skin').shadowRoot.querySelector('.skin-root').getAnimations({subtree:true}).filter(a=>a.effect.getComputedTiming().iterations!==Infinity).map(a=>a.finished.catch(()=>{})));});};
 const root=path.resolve(process.env.AGENTNET_GROUP_STATIC||path.join(__dirname,'../static')),evidence=process.env.AGENTNET_SCREENSHOTS;
 assert(evidence,'private screenshot directory required');fs.mkdirSync(evidence,{recursive:true,mode:0o700});
@@ -77,7 +78,8 @@ try {
    await page.getByText(/1 (?:current )?member/).and(page.locator(':visible')).first().waitFor();
   }
   assert(!await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),skin+' document overflow');
-  assert(!await page.evaluate(()=>fixture.requests.some(r=>r.body!==undefined && r.path!=="/api/refresh")),skin+' rendering must send no decisions or invites: '+JSON.stringify(await page.evaluate(()=>fixture.requests.filter(r=>r.body!==undefined && r.path!=="/api/refresh").map(r=>r.path))));
+  const writes=(await page.evaluate(()=>fixture.requests)).filter(r=>!harmlessRead(r));
+  assert.deepEqual(writes,[],skin+' rendering must send no decisions or invites');
   await page.keyboard.press('Escape');
   await page.evaluate(()=>setRemoved());
   await page.getByText(/Nothing more can be sent here/).waitFor();
@@ -98,6 +100,6 @@ try {
   await incoming.close();
  }
  assert.deepEqual(errors,[]);
- console.log(JSON.stringify({ok:true,checks:'Pending person discoverable in room/header; accepted not joined; joined, declined, revoked transitions; no decisions or invites (refresh allowed); desktop/phone, Comic',shots}));
+ console.log(JSON.stringify({ok:true,checks:'Pending person discoverable in room/header; accepted not joined; joined, declined, revoked transitions; no decisions or invites (refresh and exact read-only topic location allowed); desktop/phone, Comic',shots}));
 } finally { if(browser) await browser.close(); server.close(); }
 })().catch(e=>{console.error(e);process.exitCode=1;});

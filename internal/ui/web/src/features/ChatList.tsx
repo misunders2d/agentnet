@@ -11,6 +11,7 @@ import { useNeedsYou } from "./Approvals";
 import { ChatRow } from "./ChatList.row";
 import { chatItems, personAt } from "./ChatList.words";
 import { GroupInvitations } from "./ChatList.invites";
+import { GroupChanges } from "./GroupAdmin";
 import { warmPictures } from "./Message.files";
 import { TopicResults } from "./ChatList.topics";
 import { CandidateRow, NewChatButton, candidates, matches, startChat } from "./NewChat";
@@ -135,6 +136,7 @@ export function ChatList() {
         <>
           {!q && <NeedsYouBanner overview={overview} agentNames={agentNames} />}
           {!q && <GroupInvitations />}
+          {!q && <GroupChanges />}
           {!q&&savedAgentHistory&&<p className="px-4 pt-3 text-[13px] text-muted">Saved agent history is available in Search chats.</p>}
           {overview.persons && !overview.person && <NoName />}
           {shownFilters.length > 0 && (

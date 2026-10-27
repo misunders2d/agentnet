@@ -3,11 +3,12 @@
 // /api/groups/manage); the server checks who may make it, and these
 // controls only show where it would. Nothing here recalls what anyone
 // already saved, and no role grants anyone tasks for an agent.
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Menu } from "@base-ui/react/menu";
 import { IconCrown, IconDoorExit, IconDotsVertical, IconPencil, IconUserMinus } from "@tabler/icons-react";
 import { errorText, type T } from "../api";
 import { useApp } from "../context";
+import { useStore, type PendingGroupChange } from "../store";
 import { personName } from "../model";
 import { usePortal } from "../owned";
 import { Button } from "../ui/Button";
@@ -33,7 +34,8 @@ export function GroupChangeSheet({ open, onOpenChange, t, action, member }: {
 }) {
   const store = useApp();
   const [title, setTitle] = useState(t.title || "");
-  const [busy, setBusy] = useState(false);
+  const pending = useStore(store, s => s.groupChanges?.[t.id]);
+  const busy = !!pending && !pending.error;
   const [error, setError] = useState("");
   useEffect(() => { if (open) { setTitle(t.title || ""); setError(""); } }, [open]);
   const who = member ? personName(member) : "";
@@ -50,26 +52,22 @@ export function GroupChangeSheet({ open, onOpenChange, t, action, member }: {
   };
   const w = words[action];
 
-  const run = async () => {
+  const run = () => {
+    if (busy) return;
     const name = title.trim();
     if (action === "rename" && !name) { setError("Give the group a name."); return; }
-    setBusy(true);
     setError("");
-    try {
-      const r = await store.api.manageGroup({ conv: t.id, action, ...(member?.person ? { person: member.person } : {}), ...(action === "rename" ? { title: name } : {}) });
-      onOpenChange(false);
-      if (action === "leave") {
-        store.setPanel(false);
-        store.close();
-        store.toast(r.queued ? "You left. The others are told when it reaches them; they haven’t confirmed yet." : "You left the group.", "ok");
-      } else {
-        store.toast({ rename: "Renamed to “" + name + "”", promote: who + " is now an admin", demote: who + " is no longer an admin", remove: who + " was removed from the group" }[action], "ok");
-      }
-      void store.refetch();
-    } catch (e) {
-      setError(errorText(e));
+    const work = store.api.manageGroup({ conv: t.id, action, ...(member?.person ? { person: member.person } : {}), ...(action === "rename" ? { title: name } : {}) });
+    if (!store.get().groupChanges?.[t.id]) {
+      // A newer group can retire the old preview while its write still runs.
+      // Keep this editor and explain an unadmitted replacement operation.
+      void work.catch(e => { if (store.isActive()) setError(errorText(e)); });
+      return;
     }
-    setBusy(false);
+    onOpenChange(false);
+    // Shared pending/error state survives this sheet and navigation. Do not
+    // turn a write acknowledgement into a confirmed role or membership.
+    void work.catch(() => {});
   };
 
   return (
@@ -92,6 +90,45 @@ export function GroupChangeSheet({ open, onOpenChange, t, action, member }: {
       <p className="text-[16px] leading-relaxed text-text-2">{w.body}</p>
     </Sheet>
   );
+}
+
+function groupChangeLabel(p: PendingGroupChange) {
+  const who = p.original.members?.find(m => m.person === p.change.person);
+  const name = who ? personName(who) : "Member";
+  return ({ rename: "Name: “" + p.change.title + "”", promote: name + ": admin requested",
+    demote: name + ": member role requested", remove: name + ": removal requested",
+    leave: "You chose to leave “" + (p.original.title || "this group") + "”" })[p.change.action] || "Group change requested";
+}
+
+function GroupChangeCard({ p }: { p: PendingGroupChange }) {
+  const store = useApp();
+  const [checking, setChecking] = useState(false), [error, setError] = useState("");
+  const current = useRef(p); current.current = p;
+  useEffect(() => { setChecking(false); setError(""); }, [p]);
+  const check = async () => {
+    if (checking) return;
+    setChecking(true); setError("");
+    try { await store.checkGroupChange(p.change.conv); }
+    catch (e) { if (store.isActive() && current.current === p) setError(errorText(e)); }
+    finally { if (current.current === p) setChecking(false); }
+  };
+  return <div role={p.error ? "alert" : "status"} className="rounded-xl border border-hairline bg-surface p-3 text-sm">
+    {p.change.action !== "leave" && <p className="text-muted">{p.original.title || "Group"}</p>}
+    <p className="font-semibold">{groupChangeLabel(p)}</p>
+    <p className="mt-1 text-muted">{p.error ? "Could not confirm this change. " + p.error : p.saved
+      ? (p.queued ? "Saved locally; delivery is pending. " : "Saved. ") + "Checking the current group…"
+      : "Saving this change… Roles and membership are not confirmed yet."}</p>
+    {error && <p role="alert" className="text-danger">{error}</p>}
+    {(p.saved || p.error) && <Button size="sm" variant="ghost" disabled={checking} onClick={() => void check()}>{checking ? "Checking group…" : "Check group change"}</Button>}
+    {p.error && <Button size="sm" variant="ghost" onClick={() => void store.api.manageGroup(p.change).catch(() => {})}>Try group change again</Button>}
+  </div>;
+}
+
+export function GroupChanges({ conv }: { conv?: string }) {
+  const store = useApp(), changes = useStore(store, s => s.groupChanges);
+  const shown = Object.values(changes || {}).filter(p => !conv || p.change.conv === conv);
+  if (!shown.length) return null;
+  return <section aria-label="Group changes" className="space-y-2 p-3">{shown.map(p => <GroupChangeCard key={p.change.conv} p={p} />)}</section>;
 }
 
 /** MemberMenu: an admin's changes for one member (make or remove admin, remove). */

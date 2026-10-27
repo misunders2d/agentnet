@@ -91,6 +91,43 @@ the repair. Sergey needs to do nothing while owned fixtures are being tested.
 
 ### October 27 continuation: the 500 ms target
 
+Run `40439149014` at `21a88b26` passes the people-list selection and group
+invitation-decision regressions three times on each of Linux, macOS and Windows.
+The prior macOS driver-timing failure remains in its original record; this run
+uses the trusted-input timestamp and frame checks described below.
+
+Group rename, promote, demote, remove and leave previously awaited the signed
+write before changing their local presentation. They now close confirmation
+immediately: the requested name is displayed, role/removal rows show the exact
+pending choice, and leaving closes only the originally selected chat. Shared
+pending/error cards follow navigation. Verified cached membership and admin
+rights are unchanged; a write acknowledgement still shows saved/checking state.
+Failure reveals current state with explicit uncertainty, read-only confirmation
+and an exact-target retry. Repeated pending input shares one write. A newer
+group snapshot or changed person defeats old replies; stopped workspaces cannot
+change. This reuses the already inspected local projection/background
+reconciliation pattern; there is no new permission or transport mechanism.
+
+The actual group controls pass ten trusted-input held-write cases (five actions,
+1440/390 pixels), with local feedback 61–111 ms. They execute failure, retry,
+read-only confirmation, duplicate input, another selected chat, retained drafts,
+newer group state and teardown. All twenty pending/error images were inspected.
+The affected group workload, canonical bundle and existing Comic guest controls
+also pass. The existing pending-people fixture failed on both the old `21a88b26`
+bundle and the candidate because it classified the read-only topic-location
+POST as a mutation. Inspection of `TopicTransferLocation` confirms it only reads;
+the fixture now permits only that exact source/empty-topic request, retaining the
+no-invitation/no-decision assertion. Both desktop/phone journeys pass. Final
+platform/skin qualification of the group-admin change remains outstanding.
+
+The f7355154 skin compatibility run retains 308 passing unique Node checks after
+normal package generation and the affected catalog rerun. Its runtime run fails
+Zoom phone touch while opening Anna's chat; the other applicable runtime groups
+pass. A focused isolated run subsequently fails the mute-chip change after a
+trusted complete click. Neither failure is dismissed as flaky. Mac native and
+WebKit stalls, the exhaustive control inventory and final skin qualification
+still block release. No tag, deployment or release is claimed.
+
 The complete macOS run `40430293982` at `557e82e6` fails. Native feedback
 includes Permissions 574 ms, the first message menu 582 ms, composer menu
 776 ms, default-agent dialog 719 ms, and storage review 844 ms. Browser WebKit

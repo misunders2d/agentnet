@@ -14,7 +14,7 @@ import { Tag } from "../ui/Tag";
 import { GuestCard, PastRow, PendingCard, WaitingRow, type Act } from "./RoomPanel.cards";
 import { agentRejoinState, callName, canBringIn, room, shareable, type Guest, type GroupInvite } from "./RoomPanel.model";
 import { BringBackSnack, type Snack } from "./RoomPanel.snack";
-import { GroupFooter, MemberMenu, groupRights, useGroupChange } from "./GroupAdmin";
+import { GroupChanges, GroupFooter, MemberMenu, groupRights, useGroupChange } from "./GroupAdmin";
 
 /** RoomPanel is the desktop side panel, opened explicitly from the chat. */
 export function RoomPanel() {
@@ -198,27 +198,32 @@ function RoomBody({ t, onDismissed }: { t: T.DMThread; onDismissed: (s: Snack) =
   const invitable = canBringIn(t, currentTopic);
   const rights = groupRights(t, o);
   const change = useGroupChange(t);
+  const pendingChange = useStore(store, s => s.groupChanges?.[t.id]);
+  const pendingMember = pendingChange && !pendingChange.error ? pendingChange.change : null;
   const [diagnostics, setDiagnostics] = useState(false);
   const unresolved = [...(t.agents || []), ...(t.guests || [])].filter(p => p.state === "pending");
   const memberOf = (person?: string) => (person ? (t.members || []).find((x) => x.person === person) : undefined);
   return (
     <div className="relative flex flex-col pb-2">
+      <GroupChanges conv={t.id} />
       <Label n={r.members.length}>Members</Label>
       <ul className="flex flex-col">
         {r.members.map((m) => (
           <li key={m.key} className="flex min-h-12 items-center gap-3 py-1">
+            {pendingMember?.action === "remove" && pendingMember.person === m.person ? <p role="status" className="text-sm text-muted">{m.name} · Removal pending</p> : <>
             <PersonAvatar name={m.name} seed={m.seed} size={36} online={m.online} />
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-1.5"><b className="truncate text-[15px] font-bold">{m.name}{m.me && " (you)"}</b>{m.admin && <Tag>Admin</Tag>}</div>
+              <div className="flex items-center gap-1.5"><b className="truncate text-[15px] font-bold">{m.name}{m.me && " (you)"}</b>{pendingMember && pendingMember.person === m.person && ["promote", "demote"].includes(pendingMember.action) ? <Tag>{pendingMember.action === "promote" ? "Admin pending" : "Member role pending"}</Tag> : m.admin && <Tag>Admin</Tag>}</div>
               {m.email && <div className="truncate text-sm text-muted">{m.email} · verified by this workspace</div>}
               {(m.note || m.online != null) && <div className="truncate text-[13px] font-semibold text-text-2">{m.note || (m.online ? "Online" : "Offline")}</div>}
             </div>
-            {rights.admin && memberOf(m.person) && <MemberMenu t={t} member={memberOf(m.person)!} me={m.me} onPick={change.pick} />}
+            {rights.admin && (!pendingChange || pendingChange.error) && memberOf(m.person) && <MemberMenu t={t} member={memberOf(m.person)!} me={m.me} onPick={change.pick} />}
+            </>}
           </li>
         ))}
       </ul>
       {t.kind === "group" && t.frozen && <p className="mt-1 text-[13px] text-muted">The last members this computer could confirm.</p>}
-      {rights.member && <GroupFooter admin={rights.admin} onPick={(a) => change.pick(a)} />}
+      {rights.member && (!pendingChange || pendingChange.error) && <GroupFooter admin={rights.admin} onPick={(a) => change.pick(a)} />}
       {change.sheet}
 
       {r.guests.some(g => g.member) && <><Label n={r.guests.filter(g => g.member).length}>Agents</Label><div className="flex flex-col gap-2.5">{r.guests.filter(g => g.member).map(g => <GuestCard key={g.key} g={g} t={t} busy={busy === g.key} onAct={act} />)}</div></>}

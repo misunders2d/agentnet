@@ -141,10 +141,27 @@ export interface State {
   deviceDecisions?: Record<string, { link: T.LinkRequest; person: string; accept: boolean; saved?: boolean }>;
   deviceRemovals?: Record<string, { device: T.DeviceView; person: string; saved?: boolean }>;
   groupDecisions?: Record<string, { invitation: T.GroupInvitationView; person: string; accept: boolean; saved?: boolean }>;
+  groupChanges?: Record<string, PendingGroupChange>;
   panel: boolean;                                         // "In this chat" (desktop panel, phone sheet)
   readVisit: ReadVisit | null;
   contentRevision: number; // successful content loads; typing/presence do not advance choice lists
 }
+
+export interface PendingGroupChange {
+  change: T.GroupChange;
+  person: string;
+  original: T.DMThread;
+  summary?: string;
+  saved?: boolean;
+  queued?: boolean;
+  error?: string;
+}
+
+// Message arrival/reads do not replace a group mutation. A newer group name,
+// membership, role or freeze does. These are comparison keys, never authority.
+const groupVersion = (t: T.DMThread | T.DMSummary) => JSON.stringify([
+  t.title, t.role, t.frozen, t.members?.map(m => [m.person, m.admin]).sort(),
+]);
 
 export const topicChangeKey = (c: Pick<T.TopicChange, "conv" | "peer" | "id" | "root">) => JSON.stringify([c.conv || "", c.peer || "", c.root ? "root" : c.id || ""]);
 
@@ -152,7 +169,7 @@ const draftsKey = (ws: string) => brand.storage + ".drafts." + ws;
 
 // unsentIn: what a reload would lose: a draft's text or files, or a send
 // not yet stored.
-export const unsentIn = (s: Pick<State, "drafts" | "unsent"> & Partial<Pick<State,"scheduleSaves" | "messageChanges" | "reminderChanges" | "pictureChange" | "deviceDecisions" | "deviceRemovals" | "groupDecisions">>) => s.unsent || Object.values(s.groupDecisions || {}).some(p => !p.saved) || Object.values(s.deviceDecisions || {}).some(p => !p.saved) || Object.values(s.deviceRemovals || {}).some(p => !p.saved) || !!s.pictureChange && !s.pictureChange.saved || Object.keys(s.reminderChanges || {}).length > 0 || Object.values(s.messageChanges || {}).some(p => p.status === "pending" || p.status === "failed" && p.action === "edit") || Object.values(s.scheduleSaves || {}).some(slot=>!!slot.attempt && (slot.status==="saving" || slot.status==="uncertain")) || Object.values(s.drafts).some((d) => d.text || (d.files && d.files.length));
+export const unsentIn = (s: Pick<State, "drafts" | "unsent"> & Partial<Pick<State,"scheduleSaves" | "messageChanges" | "reminderChanges" | "pictureChange" | "deviceDecisions" | "deviceRemovals" | "groupDecisions" | "groupChanges">>) => s.unsent || Object.values(s.groupChanges || {}).some(p => !p.saved && !p.error) || Object.values(s.groupDecisions || {}).some(p => !p.saved) || Object.values(s.deviceDecisions || {}).some(p => !p.saved) || Object.values(s.deviceRemovals || {}).some(p => !p.saved) || !!s.pictureChange && !s.pictureChange.saved || Object.keys(s.reminderChanges || {}).length > 0 || Object.values(s.messageChanges || {}).some(p => p.status === "pending" || p.status === "failed" && p.action === "edit") || Object.values(s.scheduleSaves || {}).some(slot=>!!slot.attempt && (slot.status==="saving" || slot.status==="uncertain")) || Object.values(s.drafts).some((d) => d.text || (d.files && d.files.length));
 
 const recovery = { update: [500, 1000, 2000, 4000, 8000, 15000, 30000], missed: [1000, 3000, 8000] };
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -180,6 +197,8 @@ export class Store {
   private deviceRemovalWork = new Map<string, Promise<{ note: string }>>();
   private groupDecisionWork = new Map<string, { accept: boolean; work: Promise<{ recorded: boolean }> }>();
   private groupDecisionState?: { source: State; value: State };
+  private groupChangeWork = new Map<string, { change: T.GroupChange; work: Promise<T.GroupChangeResult> }>();
+  private groupChangeState?: { source: State; value: State };
   private reminderOverviewCache?: { source: T.Overview; changes: State["reminderChanges"]; value: T.Overview };
   private reactionSequence = 0;
   private reacting = new Map<string, { pending: PendingReaction; work: Promise<{ note: string } | undefined> }>();
@@ -227,7 +246,8 @@ export class Store {
       setPersonPicture: png => this.changePicture(png, calls),
       decideDevice: (id, accept) => this.decideDevice(id, accept, calls),
       removeDevice: address => this.removeDevice(address, calls),
-      decideGroup: (id, accept) => this.decideGroup(id, accept, calls) };
+      decideGroup: (id, accept) => this.decideGroup(id, accept, calls),
+      manageGroup: change => this.changeGroup(change, calls) };
     this.sends = pendingSends(host, () => {
       const o = this.state?.open;
       // A send clears its draft as it begins: until it is stored, a reload
@@ -246,7 +266,7 @@ export class Store {
 
   // ---- subscription
   get = () => {
-    const s = this.presentGroupDecisions(this.presentDeviceDecisions(this.presentPicture(this.presentReminders(this.presentMessages(this.presentTopics())))));
+    const s = this.presentGroupChanges(this.presentGroupDecisions(this.presentDeviceDecisions(this.presentPicture(this.presentReminders(this.presentMessages(this.presentTopics()))))));
     if (!s.overview || !Object.keys(s.dismissPending).length) return s;
     if (this.dismissState?.source === s) return this.dismissState.value;
     if (this.dismissOverview?.source !== s.overview || this.dismissOverview.pending !== s.dismissPending) {
@@ -399,6 +419,68 @@ export class Store {
     });
     this.deviceRemovalWork.set(address, work);
     return work;
+  }
+
+  private presentGroupChanges(s: State): State {
+    const renames = Object.values(s.groupChanges || {}).filter(p => p.change.action === "rename" && !p.error);
+    if (!renames.length) return s;
+    if (this.groupChangeState?.source === s) return this.groupChangeState.value;
+    // Only the displayed name changes. Membership and roles stay verified.
+    const names = new Map(renames.map(p => [p.change.conv, p.change.title]));
+    const show = <V extends T.DMThread | T.DMSummary>(t: V): V => names.has(t.id) ? { ...t, title: names.get(t.id) } : t;
+    const value = { ...s, dm: s.dm ? show(s.dm) : null,
+      overview: s.overview ? { ...s.overview, dms: s.overview.dms?.map(show) || null } : null };
+    this.groupChangeState = { source: s, value };
+    return value;
+  }
+
+  private changeGroup(input: T.GroupChange, calls: Api): Promise<T.GroupChangeResult> {
+    if (!this.alive) return Promise.reject(Error("stale or disconnected workspace"));
+    const prior = this.groupChangeWork.get(input.conv);
+    if (prior) return this.state.groupChanges?.[input.conv] && JSON.stringify(prior.change) === JSON.stringify(input) ? prior.work : Promise.reject(Error("Wait for this group change to finish."));
+    const old = this.state.groupChanges?.[input.conv];
+    if (old && !old.error) return Promise.reject(Error("Check the pending group change before trying again."));
+    const original = this.state.views[input.conv] as T.DMThread | undefined || old?.original, person = this.state.overview?.person?.person;
+    if (!original || original.kind !== "group" || !person) return calls.manageGroup(input);
+    const change = { ...input }, summary = this.state.overview?.dms?.find(d => d.id === input.conv);
+    const pending: PendingGroupChange = { change, original, person, summary: summary && groupVersion(summary) };
+    const current = () => this.alive && this.state.groupChanges?.[input.conv]?.change === change;
+    this.set({ groupChanges: { ...this.state.groupChanges, [input.conv]: pending } });
+    // Leaving navigates now. A later reply never closes another selected chat.
+    if (input.action === "leave" && this.state.open?.kind === "dm" && this.state.open.id === input.conv) {
+      this.setPanel(false); this.close();
+    }
+    const work = Promise.resolve().then(async () => {
+      try {
+        const result = await calls.manageGroup(change);
+        if (current()) {
+          this.set({ groupChanges: { ...this.state.groupChanges, [input.conv]: { ...pending, saved: true, queued: result.queued } } });
+          void this.refetch();
+        }
+        return result;
+      } catch (error) {
+        if (current()) {
+          this.set({ groupChanges: { ...this.state.groupChanges, [input.conv]: { ...pending, error: errorText(error) } } });
+          void this.refetch();
+        }
+        throw error;
+      } finally {
+        if (this.groupChangeWork.get(input.conv)?.work === work) this.groupChangeWork.delete(input.conv);
+      }
+    });
+    this.groupChangeWork.set(input.conv, { change: input, work });
+    return work;
+  }
+
+  async checkGroupChange(id: string) {
+    const pending = this.state.groupChanges?.[id], before = this.state.views[id];
+    if (!pending || !this.alive) return;
+    const view = await this.api.dm(id);
+    if (!this.alive || this.state.groupChanges?.[id] !== pending || this.state.views[id] !== before) return;
+    if (view.id !== id) throw Error("The exact group could not be confirmed.");
+    this.keep(id, view);
+    if (this.state.open?.kind === "dm" && this.state.open.id === id && this.state.dm === before) this.set({ dm: this.state.views[id] as T.DMThread });
+    void this.refetch();
   }
 
   private groupDecisionMatches(p: NonNullable<State["groupDecisions"]>[string], o: T.Overview): boolean {
@@ -589,6 +671,17 @@ export class Store {
     if (!this.alive) return;
     if (Object.keys(patch).every(key => Object.is(this.state[key as keyof State], patch[key as keyof State]))) return;
     this.state = { ...this.state, ...patch };
+    if (this.state.groupChanges && (patch.views || patch.overview)) {
+      const entries = Object.entries(this.state.groupChanges);
+      const keep = entries.filter(([id, p]) => {
+        const view = this.state.views[id] as T.DMThread | undefined;
+        const summary = this.state.overview?.dms?.find(d => d.id === id);
+        return this.state.overview?.person?.person === p.person &&
+          (!view || groupVersion(view) === groupVersion(p.original)) &&
+          (p.summary === undefined || !!summary && groupVersion(summary) === p.summary);
+      });
+      if (keep.length !== entries.length) this.state = { ...this.state, groupChanges: Object.fromEntries(keep) };
+    }
     for (const fn of this.subs) fn();
   }
 
@@ -628,6 +721,7 @@ export class Store {
     this.deviceDecisionWork.clear();
     this.deviceRemovalWork.clear();
     this.groupDecisionWork.clear();
+    this.groupChangeWork.clear();
     this.sends.dispose();
     this.scheduled.dispose();
     this.stopListen?.();

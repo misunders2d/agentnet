@@ -646,12 +646,12 @@ try {
    await chat();await tap('groups.members-open',control(/Who’s in this chat/),()=>!!sheet('In this chat')||!!active('aside[aria-label="In this chat"]'),'group member panel or sheet visible');
    await tap('groups.rename-open',control('Rename group…'),()=>!!sheet('Rename the group'),'rename group editor visible');
    await fill('groups.rename-text',sheet('Rename the group').querySelector('input'),'Fixture renamed group');
-   await tap('groups.rename-save',control('Rename',sheet('Rename the group')),()=>view.title==='Fixture renamed group'&&!sheet('Rename the group'),'group name updated after exact group change');await retire();
+   await tap('groups.rename-save',control('Rename',sheet('Rename the group')),()=>!sheet('Rename the group')&&root.textContent.includes('Fixture renamed group'),'pending group name visible',()=>view.title==='Fixture renamed group');await retire();
    const memberMenu=()=>control(/^Change Vitalii in/);
    for(const [action,item,confirm]of [['promote','Make admin…','Make admin'],['demote','Remove admin role…','Remove admin role']]){
     await tap('groups.member-menu-'+action,memberMenu(),()=>!!control(item),'member role menu visible');
     await tap('groups.role-review-'+action,control(item),()=>!!sheet(action==='promote'?'Make Vitalii an admin?':'Remove Vitalii’s admin role?'),'specific role confirmation visible');await retire();
-    await tap('groups.role-'+action,control(confirm),()=>view.members[1].admin===(action==='promote')&&!control(confirm),'specific role changed after API result');await retire();
+    await tap('groups.role-'+action,control(confirm),()=>!control(confirm)&&(root.textContent.includes(action==='promote'?'Admin pending':'Member role pending')||(view.members[1].admin===(action==='promote')&&!!memberMenu()&&memberMenu().closest('li').textContent.includes('Admin')===(action==='promote'))),'requested role visible without granting it',()=>view.members[1].admin===(action==='promote'));await retire();
    }
    await tap('groups.leave-review',control('Leave group…'),()=>!!control('Leave group'),'leave confirmation visible');
    await tap('groups.leave-cancel',control('Cancel',sheet('Leave “Fixture renamed group”?')),()=>!sheet('Leave “Fixture renamed group”?'),'leave cancelled and membership retained');assert(view.role==='member','leave cancel changed membership');await retire();
