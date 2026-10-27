@@ -204,6 +204,10 @@ message menu still takes 1060 ms and group member panel 1038 ms; their first DOM
 mutations take 13/10 ms and frame callbacks are delayed. These failures block
 publication. The controls open during the phone card transition; a separate
 paint diagnostic will isolate remaining shadows, rounding, filters and dimming.
+The diagnostic runner now has independent no-shadow, no-radius, no-filter and
+no-scrim variants alongside baseline; none changes shipping CSS or qualifies a
+release. Its local no-filter workload passes all 27 action checks; JavaScript and
+native Python syntax checks pass. Actual Mac comparison remains pending.
 
 Profile rename now projects the requested display label immediately and replaces
 the form with named pending work. This reuses the existing Store projection and
@@ -247,6 +251,8 @@ inspected. Five integrated race parents pass (setup, rename, device links, both
 profile workload widths and bundle integrity), with build/type checks passing.
 These are synthetic-host recovery checks; broader platform/control qualification
 remains open.
+Native run `40461091811` at `fa50d0d5` passes person setup, rename, device links and
+bundle integrity three times on Linux, macOS and Windows.
 
 Workspace name Save/Clear now projects the requested local label and replaces the
 form with retained pending work before the native call. Exact duplicate input

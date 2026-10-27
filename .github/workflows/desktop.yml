@@ -26,7 +26,7 @@ on:
         type: boolean
         default: false
       paint_diagnostic:
-        description: 'Isolate backgrounds and shadows on the same app; never qualification evidence'
+        description: 'Isolate remaining renderer decorations on the same app; never qualification evidence'
         type: boolean
         default: false
       interaction_qualification:
@@ -139,7 +139,7 @@ jobs:
           modes=(qualification)
           if [[ "$AGENTNET_PAINT_DIAGNOSTIC" == 1 ]]; then
             [[ "$RUNNER_OS" == macOS ]]
-            modes=(baseline no-background no-shadow)
+            modes=(baseline no-shadow no-radius no-filter no-scrim)
           fi
           for mode in "${modes[@]}"; do
             export AGENTNET_NATIVE_SHELL="$native_shell"
