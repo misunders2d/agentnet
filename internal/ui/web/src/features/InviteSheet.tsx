@@ -2,15 +2,16 @@
 // may see, and explicitly choose guest or permanent group membership.
 // Nothing joins until the
 // right person says yes; the sheet says who that is.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { IconAt, IconInfoCircle, IconLock, IconPaperclip, IconSearch, IconCheck } from "@tabler/icons-react";
 import { errorText, type T } from "../api";
 import { useAgentNames, useApp } from "../context";
 import { useStore } from "../store";
+import { invitationResult, type InvitationSend, type InvitationTarget } from "../invitation-sends";
 import { AgentAvatar, PersonAvatar } from "../ui/Avatar";
 import { Button } from "../ui/Button";
 import { Sheet } from "../ui/Sheet";
-import { TASK_KEYS_MAX, capFor, catalogHosts, pool, readCatalog, routeFor, taskKeys, taskPeople, useCatalogs, type Candidate, type HumanInviteMode, type Route, type TaskPerson } from "./InviteSheet.candidates";
+import { TASK_KEYS_MAX, capFor, catalogHosts, pool, routeFor, taskKeys, taskPeople, useCatalogs, type Candidate, type HumanInviteMode, type Route, type TaskPerson } from "./InviteSheet.candidates";
 import { Checklist, ContextChoice, Preview, sinceShared, type Mode } from "./InviteSheet.context";
 import { dueText, localInput } from "../model";
 import { callName, canBringIn, plural, shareable } from "./RoomPanel.model";
@@ -44,6 +45,8 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
     const frame = requestAnimationFrame(() => { timer = setTimeout(() => setContentReady(true), 0); });
     return () => { cancelAnimationFrame(frame); if (timer !== undefined) clearTimeout(timer); };
   }, [open]);
+  const submission = useStore(store, s => s.invitationSends?.[invite.conv]);
+  const busy = !!submission && !submission.done && !submission.error;
   const o = useStore(store, (s) => s.overview);
   const openDM = useStore(store, (s) => s.dm);
   const conn = useStore(store, (s) => s.conn);
@@ -67,7 +70,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
   const guest = t?.role === "human_guest";
   const allowed = canBringIn(t, invite.topic || "");
   const hosts = useMemo(() => (contentReady && t && o ? catalogHosts(t, o) : []), [t?.id, o?.seq, contentReady]);
-  const catalogs = useCatalogs(store.api, hosts, contentReady && open && allowed && !!o?.agents);
+  const catalogs = useCatalogs(store.api, hosts, !submission && contentReady && open && allowed && !!o?.agents);
   const [humanMode, setHumanMode] = useState<HumanInviteMode>("guest");
   const [scope, setScope] = useState<"topic" | "chat">(invite.topic !== undefined ? "topic" : "chat");
   const selectedTopic = invite.topic || "";
@@ -76,12 +79,12 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
   const admin = t?.kind === "group" && !!t.members?.some(m => m.person === o?.person?.person && m.admin);
   const [sent, setSent] = useState<{ key: string; name: string }[]>([]); // people invited to a group from this sheet
   const p = useMemo(() => {
-    if (!contentReady || !t || !o) return null;
+    if (submission || !contentReady || !t || !o) return null;
     const x = pool(t, o, catalogs, names, invitations, store.host.platform, humanMode, topic);
     // Until the invitation list catches up, someone just invited stays marked here.
     const asked = new Set(sent.map((s) => s.key));
     return { ...x, candidates: x.candidates.map((c) => (asked.has(c.key) && !c.unavailable ? { ...c, unavailable: "Invited · waiting for them to accept" } : c)) };
-  }, [t, o, catalogs, names, invitations, sent, humanMode, topic, contentReady]);
+  }, [t, o, catalogs, names, invitations, sent, humanMode, topic, contentReady, submission]);
 
   // Who to preselect ("Bring back") and what the selection is ("Since they left").
   const preset = { who: invite.who || "", label: invite.label || "" };
@@ -102,7 +105,6 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
   const [selection, setSelection] = useState(invite.selected?.length ? preset.label : ""); // what the selection is, until changed
   const [note, setNote] = useState("");
   const [filesOk, setFilesOk] = useState("");
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [teamPeople, setTeamPeople] = useState<Pick<T.PersonRef, "id">[]>([]);
   const [teamPeoplePending, setTeamPeoplePending] = useState(false);
@@ -147,75 +149,46 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
     return (p?.candidates || []).filter((x) => !q || (x.name + " " + x.subtitle).toLowerCase().includes(q));
   }, [p, query]);
 
-  async function bring() {
-    if (!c || !t || !route || busy || route==="guest"&&!guestCheck) return;
-    setBusy(true);
+  async function submit(targets: InvitationTarget[]) {
+    if (!open || store.get().invite !== invite || !store.isActive() || busy) return;
     setError("");
-    let v: T.AgentView | undefined;
+    const person = store.get().overview?.person?.person;
     try {
-      if (route === "agent") {
-        if (c.agentId && !c.mine) {
-          // A named agent is invited only while its owner still offers it.
-          const fresh = await readCatalog(store.api, c.host!);
-          if (!fresh.some((r) => r.id === c.agentId)) throw new Error(c.name + " is no longer offered on that computer. Nothing was sent.");
-        }
-        v = await store.api.inviteAgent({ conv: t.id, ...(topic !== undefined ? { topic } : {}), host: c.host!, ...(c.agentId ? { agent_id: c.agentId } : {}), share: shared.map((m) => m.id), tasks_from: tasksFrom, note: note.trim() });
-      } else if (route === "guest") {
-        await store.api.inviteGuest({ conv: t.id, ...(topic !== undefined ? { topic } : {}), host: c.person!.address, share: shared.map((m) => m.lid || m.id), note: note.trim() });
-      } else {
-        await store.api.inviteToGroup({ conv: t.id, person: c.person!.person!, history: shared.length ? { refs: shared.map((m) => m.group_ref!) } : {} });
+      const result = await store.sendInvitations(invite.conv, targets);
+      // A finished old dialog cannot close a newly opened invitation. The
+      // retained result remains available after Close or workspace navigation.
+      if (store.isActive() && store.get().overview?.person?.person === person && store.get().invite === invite && targets.length === 1 && targets[0].route !== "group") {
+        store.clearInvitationSend(invite.conv, result.targets);
+        store.closeInvite();
       }
     } catch (e) {
-      setError(errorText(e));
-      setBusy(false);
-      return;
+      if (store.isActive() && store.get().invite === invite && !store.get().invitationSends?.[invite.conv]) setError(errorText(e));
     }
-    if (route === "group") {
-      // A new group usually needs several people: stay open for the next one.
-      setSent((s) => [...s, { key: c.key, name: c.name }]);
-      setChoice("-"); // nothing chosen until the next pick
-      setNote("");
-      setBusy(false);
-      void store.refetch();
-      return;
-    }
-    store.closeInvite();
-    if (c.alreadyHere) store.toast("Shared more messages with " + shownName, "ok");
-    else if (now && v) {
-      // "Bring Ledger in now" is the owner's own OK: let it join unless the
-      // invitation already made it active.
-      let joined = v.state === "active";
-      if (!joined && !v.owner_invited && v.can_decide) {
-        try { joined = (await store.api.decideAgent(v.pid, true)).state === "active"; } catch (e) {
-          store.toast(upper(shownName) + " is invited but didn’t join: " + errorText(e) + " Let it join from “In this chat”.", "error");
-          store.setPanel(true);
-          void store.refetch();
-          return;
-        }
-      }
-      if (joined) store.toast(upper(shownName) + " joined — it sees only " + (shared.length ? "what you shared" : "what someone asks it here"), "ok");
-      else { store.toast("Invited " + shownName + " — “In this chat” shows when it’s in", "ok"); store.setPanel(true); }
-    } else store.toast(doneText(c, route), "ok");
-    void store.refetch();
   }
-
-  async function bringTeamPeople() {
+  function bring() {
+    if (!c || !t || !route || busy || offline || route === "guest" && !guestCheck) return;
+    const who = { key: c.key, name: shownName };
+    if (route === "agent") void submit([{ ...who, route, joinOwn: now, more: !!c.alreadyHere,
+      input: { conv: t.id, ...(topic !== undefined ? { topic } : {}), host: c.host!, ...(c.agentId ? { agent_id: c.agentId } : {}), share: shared.map(m => m.id), tasks_from: tasksFrom, note: note.trim() } }]);
+    else if (route === "guest") void submit([{ ...who, route,
+      input: { conv: t.id, ...(topic !== undefined ? { topic } : {}), host: c.person!.address, share: shared.map(m => m.lid || m.id), note: note.trim() } }]);
+    else void submit([{ ...who, route, input: { conv: t.id, person: c.person!.person!, history: shared.length ? { refs: shared.map(m => m.group_ref!) } : {} } }]);
+  }
+  function bringTeamPeople() {
     if (topic !== undefined || !t || t.kind !== "group" || !allowed || busy || offline || teamPeoplePending || !teamPeople.length || teamHistory && (tooMany || needFiles)) return;
-    setBusy(true); setError("");
-    try {
-      for (const who of teamPeople) {
-        if (!store.isActive()) return;
-        await store.api.inviteToGroup({ conv: t.id, person: who.id, history: teamHistory && shared.length ? { refs: shared.map((m) => m.group_ref!) } : {} });
-        if (!store.isActive()) return;
-        setTeamPeople((ps) => ps.filter((x) => x.id !== who.id));
-        setSent((xs) => [...xs, { key: "p:" + who.id, name: o?.people?.find((p) => p.person === who.id)?.label || "Person " + who.id.slice(0, 8) }]);
-      }
-      store.toast("Invitations sent. Each person decides whether to join.", "ok");
-    } catch (e) { if (store.isActive()) setError(errorText(e) + " Only the remaining people will be invited when you retry."); }
-    finally { setBusy(false); void store.refetch(); }
+    void submit(teamPeople.map(who => ({ key: "p:" + who.id, name: o?.people?.find(p => p.person === who.id)?.label || "Person " + who.id.slice(0, 8), route: "group",
+      input: { conv: t.id, person: who.id, history: teamHistory && shared.length ? { refs: shared.map(m => m.group_ref!) } : {} } })));
+  }
+  function finishSubmission() {
+    if (!submission) return;
+    const confirmed = submission.targets.slice(0, submission.next).filter(t => t.route === "group");
+    setSent(xs => [...xs, ...confirmed.map(t => ({ key: t.key, name: t.name }))]);
+    setTeamPeople(ps => ps.filter(p => !confirmed.some(t => t.key === "p:" + p.id)));
+    setChoice("-"); setNote("");
+    store.clearInvitationSend(invite.conv, submission.targets);
   }
 
-  const body = !contentReady ? <Quiet>Opening the invitation picker…</Quiet> : !t ? (
+  const body = submission ? <InvitationProgress pending={submission} reveal={open} offline={offline} retry={() => void submit(submission.targets)} finish={finishSubmission} close={() => store.closeInvite()} /> : !contentReady ? <Quiet>Opening the invitation picker…</Quiet> : !t ? (
     loadError ? <Problem text={loadError} onRetry={() => setAttempt((n) => n + 1)} /> : <Quiet>Opening this chat…</Quiet>
   ) : !allowed ? (
     <Quiet>{t.frozen ? "This chat can’t change right now, so no one can be brought in." : guest ? "Open your accepted topic to bring in your own agent." : "Only the people in this chat can bring someone in."}</Quiet>
@@ -329,7 +302,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
 
   const groupGuestBlocked = route === "guest" && t?.kind === "group" && guestCheck && !guestCheck.ready;
   const ready = !!c && !c.unavailable && !tooMany && !tooManyKeys && !needFiles && !offline && !busy && (route !== "guest" || !!guestCheck) && !groupGuestBlocked;
-  const footer = contentReady && t && allowed ? (
+  const footer = !submission && contentReady && t && allowed ? (
     <div>
       {sent.length > 0 && !error && (
         <p role="status" className="mb-2 flex items-start gap-2 rounded-xl bg-ok-bg px-3 py-2 text-[14px] font-semibold text-ok-ink">
@@ -361,6 +334,23 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
       {body}
     </Sheet>
   );
+}
+
+function InvitationProgress({ pending: p, reveal, offline, retry, finish, close }: { pending: InvitationSend; reveal: boolean; offline: boolean; retry: () => void; finish: () => void; close: () => void }) {
+  const region = useRef<HTMLElement>(null);
+  useLayoutEffect(() => { if (reveal) region.current?.scrollIntoView({ block: "nearest", behavior: "instant" }); }, [p.targets, p.error, reveal]);
+  return <section ref={region} aria-label="Pending invitations" className="space-y-3 rounded-2xl bg-surface p-4 stroke">
+    <h3 className="font-display text-xl font-bold">{p.done ? "Invitations submitted" : p.error ? "Invitations need review" : "Sending invitations"}</h3>
+    <ul className="max-h-48 overflow-y-auto space-y-1">{p.targets.map((t, i) => <li key={t.key} className="break-words"><b>{t.name}</b> · {i < p.next ? "Submitted" : p.agents[i] ? "Invited; completing your choice" : i === p.next ? p.error ? "Needs review" : "Sending…" : "Waiting to send"}</li>)}</ul>
+    <p role={p.error ? "alert" : "status"}>{p.error ? "Could not confirm this step. " + p.error : p.done ? invitationResult(p) : "The exact people, history and permissions you reviewed are being submitted. You can close this dialog while it finishes."}</p>
+    {p.error && <p className="text-sm text-muted">An invitation may already exist. Check “In this chat” before retrying. Confirmed steps will not be sent again; retry keeps the exact reviewed selection.</p>}
+    {!p.done && <p className="text-sm text-muted">Reopen Bring in to check this work. Joining still waits for the required acceptance.</p>}
+    <div className="flex flex-wrap gap-2">
+      <Button variant="outline" onClick={close}>Close invitation progress</Button>
+      {p.error && <Button variant="act" disabled={offline} onClick={retry}>{p.targets.length > 1 ? "Retry remaining invitations" : "Retry this invitation"}</Button>}
+      {(p.done || p.error) && <Button variant="ghost" onClick={finish}>{p.done ? "Choose someone else" : "Stop remaining invitations"}</Button>}
+    </div>
+  </section>;
 }
 
 function HintForTeams({ count }: { count: number }) {
@@ -489,13 +479,6 @@ function consentText(c: Candidate, r: Route): string {
   if (r === "agent") return c.mine ? "It’s yours, so this is your OK: it joins right away." : "It joins only if " + (c.ownerName || "its owner") + " says yes.";
   return r === "group" ? "They become a member only if they accept." : "They join only if they accept.";
 }
-
-function doneText(c: Candidate, r: Route): string {
-  if (r === "agent") return "Invited " + c.name + " — waiting for " + (c.ownerName ? c.ownerName + "’s" : "its owner’s") + " OK";
-  return "Invited " + c.name + " — waiting for them to join";
-}
-
-const upper = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /** "Anna", "Anna and Bohdan", "Anna, Bohdan and Vitalii". */
 const joinNames = (n: string[]) => (n.length < 2 ? n.join("") : n.slice(0, -1).join(", ") + " and " + n[n.length - 1]);

@@ -17,6 +17,7 @@ import { scheduleSaves, type ScheduleSave } from "./schedule-saves";
 import { clearScheduledDraft, type ScheduleAttempt } from "./features/Composer.schedule-model";
 import { messageChangeKey, messageVersion, messageMatches, changeConfirmed, presentMessage, type MessageChange } from "./message-changes";
 import { presentTopic, topicVersion, type TopicPreview } from "./topic-changes";
+import { invitationResult, type InvitationSend, type InvitationTarget } from "./invitation-sends";
 
 export type Conn = "loading" | "live" | "lost" | "updating" | "gone";
 // A thread names its agent's device (peer) whenever that is known: an
@@ -143,6 +144,7 @@ export interface State {
   groupDecisions?: Record<string, { invitation: T.GroupInvitationView; person: string; accept: boolean; saved?: boolean }>;
   groupChanges?: Record<string, PendingGroupChange>;
   groupCreation?: { request: { title: string; people: string[] }; person: string; remaining: string[]; id?: string; done?: boolean; error?: string };
+  invitationSends?: Record<string, InvitationSend>;
   teamCreation?: { change: T.TeamChange; person: string; saved?: T.TeamState; error?: string };
   teamChanges?: Record<string, { change: T.TeamChange; person: string; original: T.TeamView; saved?: T.TeamState; error?: string }>;
   panel: boolean;                                         // "In this chat" (desktop panel, phone sheet)
@@ -172,7 +174,7 @@ const draftsKey = (ws: string) => brand.storage + ".drafts." + ws;
 
 // unsentIn: what a reload would lose: a draft's text or files, or a send
 // not yet stored.
-export const unsentIn = (s: Pick<State, "drafts" | "unsent"> & Partial<Pick<State,"scheduleSaves" | "messageChanges" | "reminderChanges" | "pictureChange" | "deviceDecisions" | "deviceRemovals" | "groupDecisions" | "groupChanges" | "groupCreation" | "teamCreation" | "teamChanges">>) => s.unsent || !!s.groupCreation && !s.groupCreation.done && !s.groupCreation.error || Object.values(s.teamChanges || {}).some(p => !p.saved && !p.error) || !!s.teamCreation && !s.teamCreation.saved && !s.teamCreation.error || Object.values(s.groupChanges || {}).some(p => !p.saved && !p.error) || Object.values(s.groupDecisions || {}).some(p => !p.saved) || Object.values(s.deviceDecisions || {}).some(p => !p.saved) || Object.values(s.deviceRemovals || {}).some(p => !p.saved) || !!s.pictureChange && !s.pictureChange.saved || Object.keys(s.reminderChanges || {}).length > 0 || Object.values(s.messageChanges || {}).some(p => p.status === "pending" || p.status === "failed" && p.action === "edit") || Object.values(s.scheduleSaves || {}).some(slot=>!!slot.attempt && (slot.status==="saving" || slot.status==="uncertain")) || Object.values(s.drafts).some((d) => d.text || (d.files && d.files.length));
+export const unsentIn = (s: Pick<State, "drafts" | "unsent"> & Partial<Pick<State,"scheduleSaves" | "messageChanges" | "reminderChanges" | "pictureChange" | "deviceDecisions" | "deviceRemovals" | "groupDecisions" | "groupChanges" | "groupCreation" | "invitationSends" | "teamCreation" | "teamChanges">>) => s.unsent || Object.values(s.invitationSends || {}).some(p => !p.done && !p.error) || !!s.groupCreation && !s.groupCreation.done && !s.groupCreation.error || Object.values(s.teamChanges || {}).some(p => !p.saved && !p.error) || !!s.teamCreation && !s.teamCreation.saved && !s.teamCreation.error || Object.values(s.groupChanges || {}).some(p => !p.saved && !p.error) || Object.values(s.groupDecisions || {}).some(p => !p.saved) || Object.values(s.deviceDecisions || {}).some(p => !p.saved) || Object.values(s.deviceRemovals || {}).some(p => !p.saved) || !!s.pictureChange && !s.pictureChange.saved || Object.keys(s.reminderChanges || {}).length > 0 || Object.values(s.messageChanges || {}).some(p => p.status === "pending" || p.status === "failed" && p.action === "edit") || Object.values(s.scheduleSaves || {}).some(slot=>!!slot.attempt && (slot.status==="saving" || slot.status==="uncertain")) || Object.values(s.drafts).some((d) => d.text || (d.files && d.files.length));
 
 const recovery = { update: [500, 1000, 2000, 4000, 8000, 15000, 30000], missed: [1000, 3000, 8000] };
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -206,6 +208,7 @@ export class Store {
   private teamChangeWork = new Map<string, { change: T.TeamChange; work: Promise<T.TeamState> }>();
   private dmStartWork = new Map<string, Promise<{ id: string }>>();
   private groupCreationWork?: Promise<string>;
+  private invitationWork = new Map<string, Promise<InvitationSend>>();
   private reminderOverviewCache?: { source: T.Overview; changes: State["reminderChanges"]; value: T.Overview };
   private reactionSequence = 0;
   private reacting = new Map<string, { pending: PendingReaction; work: Promise<{ note: string } | undefined> }>();
@@ -389,6 +392,61 @@ export class Store {
   clearGroupCreation(request: NonNullable<State["groupCreation"]>["request"]) {
     const pending = this.state.groupCreation;
     if (!this.groupCreationWork && pending?.request === request && (pending.done || pending.error)) this.set({ groupCreation: undefined });
+  }
+
+  sendInvitations(conv: string, targets: InvitationTarget[]): Promise<InvitationSend> {
+    const person = this.state.overview?.person?.person, old = this.state.invitationSends?.[conv];
+    if (!this.alive || !person || !targets.length || targets.some(t => t.input.conv !== conv)) return Promise.reject(Error("This invitation's verified conversation or person is unavailable."));
+    if (old && JSON.stringify(old.targets) !== JSON.stringify(targets)) return Promise.reject(Error("Review this chat's pending invitations before sending another."));
+    const running = this.invitationWork.get(conv);
+    if (running) return running;
+    if (old?.done) return Promise.resolve(old);
+    const captured = old?.targets || structuredClone(targets);
+    let pending: InvitationSend = old ? { ...old, error: undefined } : { targets: captured, person, next: 0, agents: {} };
+    const current = () => this.alive && this.state.overview?.person?.person === person && this.state.invitationSends?.[conv]?.targets === captured;
+    const update = () => this.set({ invitationSends: { ...this.state.invitationSends, [conv]: pending } });
+    update();
+    const work = Promise.resolve().then(async () => {
+      try {
+        for (let i = pending.next; i < captured.length; i++) {
+          if (!current()) throw Error("This workspace or person changed before the next invitation.");
+          const target = captured[i];
+          if (target.route === "agent") {
+            // Native and browser APIs both verify the named host catalog and
+            // exact history/permission scope before admitting this invitation.
+            let value = pending.agents[i] || await this.api.inviteAgent(target.input);
+            if (!current()) throw Error("This invitation's workspace or person changed.");
+            pending = { ...pending, agents: { ...pending.agents, [i]: value } }; update();
+            if (target.joinOwn && value.state !== "active" && !value.owner_invited && value.can_decide) {
+              value = await this.api.decideAgent(value.pid, true);
+              if (!current()) throw Error("This invitation's workspace or person changed.");
+              pending = { ...pending, agents: { ...pending.agents, [i]: value } };
+            }
+          } else if (target.route === "guest") await this.api.inviteGuest(target.input);
+          else await this.api.inviteToGroup(target.input);
+          if (!current()) throw Error("This invitation's workspace or person changed.");
+          pending = { ...pending, next: i + 1 }; update();
+        }
+        pending = { ...pending, done: true }; update();
+        this.toast(invitationResult(pending), "ok");
+        return pending;
+      } catch (error) {
+        if (current()) { pending = { ...pending, error: errorText(error) }; update(); this.toast("Invitation not confirmed. Reopen Bring in to review or retry the exact selection.", "error"); }
+        throw error;
+      } finally {
+        if (this.invitationWork.get(conv) === work) this.invitationWork.delete(conv);
+        if (current()) void this.refetch();
+      }
+    });
+    this.invitationWork.set(conv, work);
+    return work;
+  }
+
+  clearInvitationSend(conv: string, targets: InvitationTarget[]) {
+    const pending = this.state.invitationSends?.[conv];
+    if (this.invitationWork.has(conv) || pending?.targets !== targets || !pending.done && !pending.error) return;
+    const invitationSends = { ...this.state.invitationSends }; delete invitationSends[conv];
+    this.set({ invitationSends });
   }
 
   private deviceDecisionMatches(p: NonNullable<State["deviceDecisions"]>[string], o: T.Overview): boolean {
@@ -821,6 +879,14 @@ export class Store {
       this.state = { ...this.state, groupCreation: undefined };
       this.groupCreationWork = undefined;
     }
+    if (this.state.invitationSends && patch.overview) {
+      const entries = Object.entries(this.state.invitationSends), keep = entries.filter(([, p]) => p.person === patch.overview?.person?.person);
+      if (keep.length !== entries.length) {
+        const kept = new Set(keep.map(([id]) => id));
+        for (const [id] of entries) if (!kept.has(id)) this.invitationWork.delete(id);
+        this.state = { ...this.state, invitationSends: Object.fromEntries(keep) };
+      }
+    }
     if (this.state.teamCreation && patch.overview && patch.overview.person?.person !== this.state.teamCreation.person) this.state = { ...this.state, teamCreation: undefined };
     if (this.state.teamChanges && patch.overview) {
       const entries = Object.entries(this.state.teamChanges), keep = entries.filter(([, p]) => p.person === patch.overview?.person?.person);
@@ -881,6 +947,7 @@ export class Store {
     this.teamChangeWork.clear();
     this.dmStartWork.clear();
     this.groupCreationWork = undefined;
+    this.invitationWork.clear();
     this.sends.dispose();
     this.scheduled.dispose();
     this.stopListen?.();

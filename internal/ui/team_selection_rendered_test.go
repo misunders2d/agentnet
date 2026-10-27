@@ -46,3 +46,10 @@ func TestNewGroupRendered(t *testing.T) {
 	}
 	t.Log(browserCheck(t, "testdata/new_group_rendered.cjs"))
 }
+
+func TestInvitationSendRendered(t *testing.T) {
+	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
+		t.Skip("set AGENTNET_PLAYWRIGHT for rendered invitation submission")
+	}
+	t.Log(browserCheck(t, "testdata/invitation_send_rendered.cjs"))
+}

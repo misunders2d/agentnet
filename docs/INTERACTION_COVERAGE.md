@@ -102,6 +102,42 @@ failures against their then-current target, with no rerun or speedup implied.
 The 790 ms Android sample meets the revised timing ceiling; synthetic workloads
 still do not establish exhaustive real-backend control qualification.
 
+Invitation submission now replaces the editor with the exact pending recipients
+before the native write. The existing Store retains that reviewed batch across
+Close/reopen, shares duplicate work, and retries only unconfirmed steps. An
+already-admitted own-agent invitation retains its participation ID when joining
+fails; retry cannot create another invitation. Late completion cannot close a
+newer dialog, and owner change or teardown stops subsequent unadmitted work.
+Pending, submitted, joined and uncertain results remain distinct; canonical
+membership and native permission checks are unchanged. This reuses the inspected
+Telegram local-change/reconciliation pattern recorded below, through AgentNet's
+existing Store, invitation APIs and native consent flow. Native
+`InviteAgentInScope`/`AgentCatalog` and browser `inviteAgent`/`namedTarget` already
+check the current signed named-agent catalog; their verified checks replace the
+redundant UI preflight, not the authority check.
+
+The old editor fails the held-write regression. Ten actual-component cases at
+1440/390 pixels pass for local/remote agents, guests, group members and list
+batches, including duplicate input, exact history/task scope, errors, retries,
+Close/reopen, unrelated drafts, owner/stop and newer-dialog boundaries. Local
+feedback measures 27–44 ms in the first controlled run. All 24 pending/error/done
+captures were inspected; the final error heading was checked at both widths.
+The final build/type check and affected race parents pass: invitation submission,
+opening, recipient selection, group changes, groups workload and bundle integrity.
+These are focused synthetic-host checks; native submission qualification and the
+complete real-backend/platform inventory remain open.
+
+The `35c3e71b` platform run `40455284338` passes Linux and Windows. All five native
+macOS workloads pass; browser WebKit chat opening reaches 1055/1076 ms, and Firefox
+misses a group-member menu and topic-completion feedback. Android emulator timing
+passes all five workloads: invitation opening is 38/26 ms. Its separate indicator
+matrix fails because the synthetic active notifications disappear before exact
+badge restoration. Ordinary notification boundaries and retained-data upgrade
+pass; the disappearing-notice cause remains unproven. None of these partial
+results qualifies publication. The focused `40455045216` run passes invitation
+opening, new chat/group and history/topic regressions three times on all three
+desktop OSes.
+
 Group creation now replaces the form with its named pending destination before
 the native write. The existing Store retains the real creation result and exact
 remaining recipients across Back, Close and remount; retries cannot recreate a
@@ -146,8 +182,8 @@ trusted-input feedback is 41–58 ms; all ten settled pending/error/ready captur
 were inspected. Five affected race parents pass: invitation opening, recipient
 selection, groups workload, release-gate guards and canonical bundle. The groups
 workload records 11 ms opening feedback separately from 28–38 ms prepared
-contents. This is local synthetic-host evidence; Android and native-platform
-improvement remain unproven until the integrated platform rerun.
+contents. The subsequent emulator/platform results are recorded above; they do
+not establish complete interaction coverage or physical-device performance.
 The retained four-times-slower Chromium diagnostic measures the two openings at
 290/227 ms before and 43/45 ms afterward, with prepared content at 178/113 ms in
 the changed run. This single local comparison supports the ordering change;
