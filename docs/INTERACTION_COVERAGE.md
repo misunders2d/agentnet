@@ -134,6 +134,34 @@ device decisions/link controls, profile/review workloads and bundle parity.
 Reuse is the same inspected local choice/background reconciliation pattern.
 Final platform and skin qualification for this correction remains open.
 
+Group invitation decisions also waited for backend completion in both Chats and
+Review. The new actual-component regression fails on `74851142` with no local
+pending decision within 500 ms. The shared Store now projects only the exact
+decided invitation out of attention and both placements display the local choice
+while it is saved. It never creates membership or history access. Failure
+reveals current state; newer decisions and changed invitation scope defeat old
+responses. Duplicate choices share one request; stale invitations still cannot
+be accepted. The explicit read-only Check group status action covers delayed
+confirmation. Four trusted-input combinations pass (254–390 ms from the driver
+call, including its wait for the initial card animation), with all eight
+pending/error images inspected. Review now captures focus landing before the
+card disappears for both group and device decisions; rendered checks prove the
+heading receives focus before the held backend reply. Six integrated parents
+pass, including the profile/review workloads and bundle parity. The same
+inspected local mutation/reconciliation pattern is reused; final platform and
+skin qualification remains open. The existing message-review interaction test
+also passes. A real signed relay/browser group journey with twelve queued
+messages passes with its opt-in explicitly enabled; it is a functional check,
+not the full history stress or per-control latency qualification.
+
+Candidate `e72d5cbd` passes the focused four-parent rendered selection three
+times on Linux/macOS/Windows (`40433702568`), all three UI race partitions
+(`40433705153`), and Android emulator profile/review/topics/groups/compose
+qualification (`40433710886`). These results predate the device-removal and
+group-decision corrections. The Apple Silicon leg of comparison run
+`40433708162` still fails the unchanged 500 ms bound; an Intel comparison is
+pending. No release or deployment has been made.
+
 Linux CI dependency setup previously spent over 30 minutes on the runner's
 Azure Ubuntu mirror before cancellation, including the 27.3 MB WebKit package.
 The next disposable runner uses Ubuntu's main HTTPS archive instead, preserving

@@ -39,6 +39,7 @@ const server=http.createServer((req,res)=>{if(req.url==='/entry.mjs'){res.setHea
   await page.goto('http://127.0.0.1:'+server.address().port+'/?view='+view);
   const refuse=()=>page.getByRole('button',{name:/^(No, refuse it|Refuse)$/});await refuse().waitFor();
   const started=Date.now();await refuse().click();await page.getByRole('region',{name:'Pending device decisions'}).waitFor({timeout:500});const feedbackMs=Date.now()-started;assert(feedbackMs<500);
+  if(view==='review')assert.equal(await page.getByRole('heading',{name:'Review',exact:true}).evaluate(e=>e===document.activeElement),true,'immediate decision lands keyboard focus before the reply');
   if(process.env.AGENTNET_DEVICE_DECISION_EVIDENCE)await page.screenshot({path:process.env.AGENTNET_DEVICE_DECISION_EVIDENCE+'-pending-'+view+'-'+width+'.png',fullPage:true});
   assert.equal(await refuse().count(),0,'request leaves active attention before the held decision reply');assert.equal(await page.getByLabel('Needs attention').textContent(),'0');
   assert.equal(await page.evaluate(()=>fixture.store.get().overview.person.devices.length),1,'local choice never grants device membership');assert.equal(await page.evaluate(()=>fixture.store.hasUnsent()),true);

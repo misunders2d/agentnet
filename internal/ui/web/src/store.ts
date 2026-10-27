@@ -140,6 +140,7 @@ export interface State {
   pictureChange?: { person: T.PersonView; seq: number; png: string; saved?: T.PersonView };
   deviceDecisions?: Record<string, { link: T.LinkRequest; person: string; accept: boolean; saved?: boolean }>;
   deviceRemovals?: Record<string, { device: T.DeviceView; person: string; saved?: boolean }>;
+  groupDecisions?: Record<string, { invitation: T.GroupInvitationView; person: string; accept: boolean; saved?: boolean }>;
   panel: boolean;                                         // "In this chat" (desktop panel, phone sheet)
   readVisit: ReadVisit | null;
   contentRevision: number; // successful content loads; typing/presence do not advance choice lists
@@ -151,7 +152,7 @@ const draftsKey = (ws: string) => brand.storage + ".drafts." + ws;
 
 // unsentIn: what a reload would lose: a draft's text or files, or a send
 // not yet stored.
-export const unsentIn = (s: Pick<State, "drafts" | "unsent"> & Partial<Pick<State,"scheduleSaves" | "messageChanges" | "reminderChanges" | "pictureChange" | "deviceDecisions" | "deviceRemovals">>) => s.unsent || Object.values(s.deviceDecisions || {}).some(p => !p.saved) || Object.values(s.deviceRemovals || {}).some(p => !p.saved) || !!s.pictureChange && !s.pictureChange.saved || Object.keys(s.reminderChanges || {}).length > 0 || Object.values(s.messageChanges || {}).some(p => p.status === "pending" || p.status === "failed" && p.action === "edit") || Object.values(s.scheduleSaves || {}).some(slot=>!!slot.attempt && (slot.status==="saving" || slot.status==="uncertain")) || Object.values(s.drafts).some((d) => d.text || (d.files && d.files.length));
+export const unsentIn = (s: Pick<State, "drafts" | "unsent"> & Partial<Pick<State,"scheduleSaves" | "messageChanges" | "reminderChanges" | "pictureChange" | "deviceDecisions" | "deviceRemovals" | "groupDecisions">>) => s.unsent || Object.values(s.groupDecisions || {}).some(p => !p.saved) || Object.values(s.deviceDecisions || {}).some(p => !p.saved) || Object.values(s.deviceRemovals || {}).some(p => !p.saved) || !!s.pictureChange && !s.pictureChange.saved || Object.keys(s.reminderChanges || {}).length > 0 || Object.values(s.messageChanges || {}).some(p => p.status === "pending" || p.status === "failed" && p.action === "edit") || Object.values(s.scheduleSaves || {}).some(slot=>!!slot.attempt && (slot.status==="saving" || slot.status==="uncertain")) || Object.values(s.drafts).some((d) => d.text || (d.files && d.files.length));
 
 const recovery = { update: [500, 1000, 2000, 4000, 8000, 15000, 30000], missed: [1000, 3000, 8000] };
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -177,6 +178,8 @@ export class Store {
   private deviceDecisionWork = new Map<string, { accept: boolean; work: Promise<{ note: string }> }>();
   private deviceDecisionState?: { source: State; value: State };
   private deviceRemovalWork = new Map<string, Promise<{ note: string }>>();
+  private groupDecisionWork = new Map<string, { accept: boolean; work: Promise<{ recorded: boolean }> }>();
+  private groupDecisionState?: { source: State; value: State };
   private reminderOverviewCache?: { source: T.Overview; changes: State["reminderChanges"]; value: T.Overview };
   private reactionSequence = 0;
   private reacting = new Map<string, { pending: PendingReaction; work: Promise<{ note: string } | undefined> }>();
@@ -223,7 +226,8 @@ export class Store {
       edit: c => this.changeMessage("edit", c, calls), retract: c => this.changeMessage("delete", c, calls),
       setPersonPicture: png => this.changePicture(png, calls),
       decideDevice: (id, accept) => this.decideDevice(id, accept, calls),
-      removeDevice: address => this.removeDevice(address, calls) };
+      removeDevice: address => this.removeDevice(address, calls),
+      decideGroup: (id, accept) => this.decideGroup(id, accept, calls) };
     this.sends = pendingSends(host, () => {
       const o = this.state?.open;
       // A send clears its draft as it begins: until it is stored, a reload
@@ -242,7 +246,7 @@ export class Store {
 
   // ---- subscription
   get = () => {
-    const s = this.presentDeviceDecisions(this.presentPicture(this.presentReminders(this.presentMessages(this.presentTopics()))));
+    const s = this.presentGroupDecisions(this.presentDeviceDecisions(this.presentPicture(this.presentReminders(this.presentMessages(this.presentTopics())))));
     if (!s.overview || !Object.keys(s.dismissPending).length) return s;
     if (this.dismissState?.source === s) return this.dismissState.value;
     if (this.dismissOverview?.source !== s.overview || this.dismissOverview.pending !== s.dismissPending) {
@@ -394,6 +398,69 @@ export class Store {
       }
     });
     this.deviceRemovalWork.set(address, work);
+    return work;
+  }
+
+  private groupDecisionMatches(p: NonNullable<State["groupDecisions"]>[string], o: T.Overview): boolean {
+    const i = o.group_invitations?.find(i => i.id === p.invitation.id), original = p.invitation;
+    return o.person?.person === p.person && !!i && i.direction === "in" &&
+      i.status === original.status && i.conv === original.conv && i.inviter === original.inviter &&
+      i.target === original.target && i.title === original.title && JSON.stringify(i.history) === JSON.stringify(original.history);
+  }
+
+  private presentGroupDecisions(s: State): State {
+    if (!s.overview || !Object.keys(s.groupDecisions || {}).length) return s;
+    if (this.groupDecisionState?.source === s) return this.groupDecisionState.value;
+    const keep = (i: T.GroupInvitationView) => {
+      const p = s.groupDecisions?.[i.id];
+      return !p || !this.groupDecisionMatches(p, s.overview!);
+    };
+    // Remove only decided attention. Acceptance is never group membership or
+    // a history grant; the signed current group remains the sole authority.
+    const value = { ...s, invitations: s.invitations.filter(keep),
+      overview: { ...s.overview, group_invitations: s.overview.group_invitations?.filter(keep) } };
+    this.groupDecisionState = { source: s, value };
+    return value;
+  }
+
+  private pruneGroupDecisions() {
+    const o = this.state.overview, changes = this.state.groupDecisions;
+    if (!o || !changes) return;
+    const pending = Object.entries(changes).filter(([, p]) => this.groupDecisionMatches(p, o));
+    if (pending.length !== Object.keys(changes).length) this.set({ groupDecisions: Object.fromEntries(pending) });
+  }
+
+  private decideGroup(id: string, accept: boolean, calls: Api): Promise<{ recorded: boolean }> {
+    if (!this.alive) return Promise.reject(Error("stale or disconnected workspace"));
+    const prior = this.groupDecisionWork.get(id);
+    if (prior) return prior.accept === accept ? prior.work : Promise.reject(Error("Wait for this group decision to finish."));
+    if (this.state.groupDecisions?.[id]) return Promise.reject(Error("Check the pending group decision before trying again."));
+    const o = this.state.overview, invitation = o?.group_invitations?.find(i => i.id === id && i.direction === "in" && ["pending", "stale"].includes(i.status));
+    if (!invitation || !o?.person?.person) return calls.decideGroup(id, accept);
+    const change = { invitation, person: o.person.person, accept };
+    const current = () => this.alive && this.state.groupDecisions?.[id]?.invitation === invitation;
+    this.set({ groupDecisions: { ...this.state.groupDecisions, [id]: change } });
+    const work = Promise.resolve().then(async () => {
+      try {
+        const result = await calls.decideGroup(id, accept);
+        if (current()) {
+          this.set({ groupDecisions: { ...this.state.groupDecisions, [id]: { ...change, saved: true } } });
+          this.pruneGroupDecisions();
+          void this.refetch();
+        }
+        return result;
+      } catch (error) {
+        if (current()) {
+          const pending = { ...this.state.groupDecisions }; delete pending[id];
+          this.set({ groupDecisions: pending });
+          void this.refetch();
+        }
+        throw error;
+      } finally {
+        if (this.groupDecisionWork.get(id)?.work === work) this.groupDecisionWork.delete(id);
+      }
+    });
+    this.groupDecisionWork.set(id, { accept, work });
     return work;
   }
 
@@ -560,6 +627,7 @@ export class Store {
     this.pictureWork = undefined;
     this.deviceDecisionWork.clear();
     this.deviceRemovalWork.clear();
+    this.groupDecisionWork.clear();
     this.sends.dispose();
     this.scheduled.dispose();
     this.stopListen?.();
@@ -698,6 +766,7 @@ export class Store {
     if (picture?.saved && (o.seq > picture.seq || o.person?.picture === picture.saved.picture)) this.set({ pictureChange: undefined });
     this.pruneDeviceDecisions();
     this.pruneDeviceRemovals();
+    this.pruneGroupDecisions();
     this.pruneDismissals();
     if (o.groups) this.set({ invitations: share(this.state.invitations, o.group_invitations || []) });
     if (catalogs) void this.loadAgentNames();

@@ -28,6 +28,7 @@ import { ConvRow, SelfConsentRow } from "./Approvals.conv";
 import { HeldBack, heldDecisionPeers } from "./Approvals.held";
 import { capital, decidable, inSentence, isSelfConsent, nameOf, whyWords } from "./Approvals.words";
 import { DeviceDecisions } from "./DeviceDecisions";
+import { GroupDecisions } from "./GroupDecisions";
 
 export { ApprovalCard } from "./Approvals.card";
 
@@ -103,6 +104,7 @@ export function OksView() {
   const loadError = useStore(store, (s) => s.loadError);
   const dismissing = useStore(store, (s) => Object.values(s.dismissPending).filter(p => !p.saved).length);
   const deviceDecisions = useStore(store, s => Object.keys(s.deviceDecisions || {}).length);
+  const groupDecisions = useStore(store, s => Object.keys(s.groupDecisions || {}).length);
   const names = useAgentNames();
   const count = needsYouCount(o, store.host.platform === "daemon");
 
@@ -143,6 +145,7 @@ export function OksView() {
       </header>
       <UnreadReview />
       {deviceDecisions > 0 && <div className="px-4 pt-3"><DeviceDecisions /></div>}
+      {groupDecisions > 0 && <div className="px-4 pt-3"><GroupDecisions /></div>}
       {dismissing > 0 && <p role="status" data-dismiss-pending className="px-4 pt-3 text-[14px] text-text-2">
         {dismissing === 1 ? "Marking one item as handled…" : "Marking " + dismissing + " items as handled…"}
       </p>}
@@ -152,7 +155,7 @@ export function OksView() {
             {items.map((i) => <Listed key={i.key} k={i.key} land={land}>{i.node}</Listed>)}
           </ul>
         </div>
-      ) : !dismissing && !deviceDecisions && !held.length && !elsewhere.length && !unreported.length && !working.length && !workingReviews.length && <AllClear />}
+      ) : !dismissing && !deviceDecisions && !groupDecisions && !held.length && !elsewhere.length && !unreported.length && !working.length && !workingReviews.length && <AllClear />}
       {(working.length > 0 || workingReviews.length > 0) && (
         <section className="px-4 pt-6" aria-labelledby="oks-working">
           <h2 id="oks-working" className="text-[12px] font-extrabold uppercase tracking-[.08em] text-muted">Working</h2>
@@ -266,9 +269,9 @@ function GroupRow({ g, o }: { g: T.GroupInvitationView; o: T.Overview }) {
   const shared = (g.history || []).length;
   const decide = async (accept: boolean) => {
     setBusy(true);
+    land();
     await store.run((api) => api.decideGroup(g.id, accept), accept ? "Accepted. You’re in once the group’s admin confirms." : "Declined.");
     setBusy(false);
-    land();
   };
   return (
     <Card>
@@ -291,9 +294,9 @@ function DeviceRow({ l }: { l: T.LinkRequest }) {
   const [busy, setBusy] = useState(false);
   const decide = async (accept: boolean) => {
     setBusy(true);
+    land();
     await store.run((api) => api.decideDevice(l.id, accept), accept ? "“" + l.name + "” is now one of your devices." : "Refused. It didn’t join as you.");
     setBusy(false);
-    land();
   };
   return (
     <Card>

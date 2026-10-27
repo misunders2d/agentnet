@@ -9,6 +9,7 @@ import type { T } from "../api";
 import { personName } from "../model";
 import { Button } from "../ui/Button";
 import { incomingGroupInvites } from "./RoomPanel.model";
+import { GroupDecisions } from "./GroupDecisions";
 
 /** inviterName turns the inviting device's address into its person's name. */
 function inviterName(o: T.Overview | null, address: string): string {
@@ -20,17 +21,19 @@ export function GroupInvitations() {
   const store = useApp();
   const invitations = useStore(store, (s) => s.invitations);
   const overview = useStore(store, (s) => s.overview);
+  const decisions = useStore(store, s => Object.keys(s.groupDecisions || {}).length);
   const rooms = new Set((overview?.dms || []).map((d) => d.id));
   const pending = incomingGroupInvites(invitations);
   const accepted = invitations.filter((i) => i.direction === "in" && i.status === "accepted" && !rooms.has(i.conv)
     && !pending.some((p) => p.conv === i.conv));
   const [all, setAll] = useState(false);
-  if (!pending.length && !accepted.length) return null;
+  if (!pending.length && !accepted.length && !decisions) return null;
   // One invitation is shown whole; more wait behind one line, so the chats stay in view.
   const shown = all ? pending : pending.slice(0, 1);
   const hidden = pending.length - shown.length;
   return (
     <section aria-label="Group invitations" className="flex flex-col gap-3 px-4 pt-4 lg:px-3">
+      <GroupDecisions />
       {shown.map((i) => <InvitationCard key={i.id} invitation={i} from={inviterName(overview, i.inviter)} />)}
       {hidden > 0 && (
         <button type="button" onClick={() => setAll(true)}
