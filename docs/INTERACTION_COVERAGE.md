@@ -91,6 +91,31 @@ the repair. Sergey needs to do nothing while owned fixtures are being tested.
 
 ### October 27 continuation: the 500 ms target
 
+All ten people-list mutations now show their exact local intent before the
+signed write: rename, add/remove person or agent, grant/remove manager role,
+join, leave and delete. Leaving closes only that selected list; deletion hides
+only its row. Pending display never changes canonical membership, roles or
+permissions. A saved receipt remains pending until a current verified list read
+confirms or supersedes it. Failure restores the current display with exact retry
+and read-only checking. Duplicate input shares one write; newer signed state,
+owner replacement, navigation and teardown cannot revive old feedback. This
+reuses the inspected Telegram local-update/reconciliation pattern and the
+existing group/creation pending records, without a new backend contract.
+
+The actual TeamsSection/Store regression exercises all ten controls at 1440 and
+390 pixels with held writes/reads, failure, retry, duplicate input, navigation,
+another selected list and preserved unrelated drafts. Visual inspection caught
+rename feedback and its failure above the phone scrollport; the active list now
+reveals its action/error once, and the test checks both viewport and ancestor
+clipping. Saved replies and cards behind another selected list do not scroll it.
+The final 20-case run records 39–60 ms trusted-input feedback. Phone action and
+representative desktop/recovery layouts were inspected; captures wait for actual
+finite animations after timing, so the outgoing confirmation is not mistaken for
+a settled screen. All five affected race parents pass: list mutation, creation,
+selection, the two-part teams workload and the canonical bundle (mutation
+feedback 37–60 ms). These are focused synthetic-host checks, not exhaustive
+control, native-platform or final skin qualification.
+
 Skins commit `9d9bab5` gives Classic, Holonet and Zoom immediate per-chat mute
 presentation, reusing their existing reminder-intent and targeted control-update
 patterns. Canonical mute state and native notification permission are unchanged.

@@ -1,9 +1,9 @@
 // A team grants no conversation access. Expand a verified snapshot, review
 // the people, then send independent invitations (each still needs consent).
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { errorText, type T } from "../api";
 import { useApp } from "../context";
-import { useStore } from "../store";
+import { useStore, type State } from "../store";
 import { Button } from "../ui/Button";
 import { Sheet } from "../ui/Sheet";
 import { Tag } from "../ui/Tag";
@@ -18,7 +18,7 @@ export function useTeams(enabled = true) {
   const seq = useRef(0);
   const reload = async () => {
     const n = ++seq.current;
-    try { const v = await store.api.teams(); if (n === seq.current && store.isActive()) { setView(v); setError(""); store.confirmTeamCreation(v); } }
+    try { const v = await store.api.teams(); if (n === seq.current && store.isActive()) { setView(v); setError(""); store.confirmTeamCreation(v); store.confirmTeamChanges(v); } }
     catch (e) {
       if (n !== seq.current || !store.isActive()) return;
       const detail = errorText(e), unsupported = /not found|404/i.test(detail);
@@ -52,8 +52,10 @@ export function TeamsSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingEle
   const { view, error, reload } = useTeams();
   const [query, setQuery] = useState("");
   const [name, setName] = useState("");
-  const [busy, setBusy] = useState(false);
   const [chosen, setChosen] = useState<string | null>(null);
+  const changes = useStore(store, s => s.teamChanges);
+  const pending = chosen ? changes?.[chosen] : undefined;
+  const busy = !!pending && !pending.error;
   const creation = useStore(store, s => s.teamCreation);
   const creating = !!creation && !creation.error;
   const navigation = useRef(0), mounted = useRef(true);
@@ -63,7 +65,8 @@ export function TeamsSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingEle
   const [selection, setSelection] = useState<{ id: string; name: string; error?: string } | null>(null);
   const selectionRequest = useRef(0);
   const [change, setChange] = useState<{ c: T.TeamChange; title: string; hint: string } | null>(null);
-  const team = view?.teams?.find((t) => t.id === chosen);
+  const canonical = view?.teams?.find((t) => t.id === chosen);
+  const team = canonical && pending?.change.op === "rename" && !pending.error ? { ...canonical, name: pending.change.name || canonical.name } : canonical;
   const act = async (c: T.TeamChange) => {
     if (busy) return;
     if (c.op === "create") {
@@ -77,10 +80,18 @@ export function TeamsSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingEle
       } catch { /* shared creation error retains the exact name across navigation */ }
       return;
     }
-    setBusy(true);
-    const r = await store.run((a) => a.changeTeam(c), "People list changed.");
-    if (r && store.isActive()) { if (c.op === "delete") setChosen(id => id === c.team ? null : id); await reload(); }
-    setBusy(false);
+    const original = view?.teams?.find(t => t.id === c.team);
+    if (!original) { store.toast("This list is no longer in the current view.", "error"); return; }
+    const work = store.changePeopleList(c, original), started = store.get().teamChanges?.[original.id];
+    if (started && started.change !== changes?.[original.id]?.change) {
+      setChange(null);
+      if ((c.op === "delete" || c.op === "leave") && chosen === c.team) choose(null);
+      if (c.op === "rename") setName(value => value.trim() === c.name ? "" : value);
+    }
+    try { await work; if (mounted.current && store.isActive()) void reload(); }
+    catch (error) {
+      if (store.isActive() && (!started || store.get().teamChanges?.[original.id]?.change === started.change)) store.toast(errorText(error), "error");
+    }
   };
   const create = (e: FormEvent) => { e.preventDefault(); if (name.trim() && !creating && !busy) { void act({ op: "create", v: view?.tags ? 2 : 1, name: name.trim() }); setName(""); } };
   const select = async (source: { id: string; name: string }) => {
@@ -105,6 +116,7 @@ export function TeamsSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingEle
     <div className="space-y-3">
       <TeamStatus view={view} />
       {error && <p role="alert" className="text-danger">{error}</p>}
+      {Object.entries(changes || {}).filter(([id]) => id !== team?.id).map(([id, p]) => <TeamChangeCard key={id} pending={p} reveal={!team} check={reload} retry={() => act(p.change)} />)}
       {creation && <section aria-label="Pending people list"><Card className="p-3">
         <p className="break-words font-bold">{creation.change.name}</p>
         <p role={creation.error ? "alert" : "status"} className="mt-1 text-sm text-muted">{creation.error ? "Could not confirm this list. " + creation.error : creation.saved ? "List saved; checking the current list…" : "Creating this list…"}</p>
@@ -118,11 +130,11 @@ export function TeamsSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingEle
         <Button type="submit" disabled={busy || creating || !name.trim()}>Create list</Button>
       </form>}
       <label className="block font-semibold">Search people lists<input className={input} value={query} onChange={(e) => setQuery(e.target.value)} /></label>
-      {(view?.teams || []).filter((t) => t.name.toLowerCase().includes(query.toLowerCase())).sort((a, b) => Number(a.archived) - Number(b.archived) || a.name.localeCompare(b.name)).map((t) => <Card key={t.id} className="p-3">
+      {(view?.teams || []).filter(t => changes?.[t.id]?.change.op !== "delete" || changes[t.id].error).map(t => changes?.[t.id]?.change.op === "rename" && !changes[t.id].error ? { ...t, name: changes[t.id].change.name || t.name } : t).filter((t) => t.name.toLowerCase().includes(query.toLowerCase())).sort((a, b) => Number(a.archived) - Number(b.archived) || a.name.localeCompare(b.name)).map((t) => <Card key={t.id} className="p-3">
         <button type="button" className="w-full min-w-0 text-left" onClick={() => { choose(t.id); setName(""); }}>
           <span className="block break-words font-bold">{t.name}</span>
           <span className="text-sm">{t.members?.length || 0} people · {t.agents?.length || 0} agents</span>
-          <span className="ml-2 inline-flex flex-wrap gap-1">{t.archived && <Tag>Archived</Tag>}{t.conflict && <Tag>Frozen</Tag>}{t.manager ? <Tag>You manage</Tag> : t.member && <Tag>Member</Tag>}</span>
+          <span className="ml-2 inline-flex flex-wrap gap-1">{t.archived && <Tag>Archived</Tag>}{t.conflict && <Tag>Frozen</Tag>}{changes?.[t.id] && !changes[t.id].error && ["join", "leave"].includes(changes[t.id].change.op) ? <Tag>{changes[t.id].change.op === "join" ? "Joining…" : "Leaving…"}</Tag> : t.manager ? <Tag>You manage</Tag> : t.member && <Tag>Member</Tag>}</span>
         </button>
       </Card>)}
       {view && !view.teams?.length && view.status !== "unsupported" && <Hint>No people lists yet.</Hint>}
@@ -131,10 +143,14 @@ export function TeamsSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingEle
     <Sheet open={!!team} onOpenChange={(v) => { if (!v) choose(null); }} title={team?.name || "People list"}>
       {team && <div className="space-y-3">
         <TeamStatus view={view} />
+        {pending && <TeamChangeCard pending={pending} check={reload} retry={() => act(pending.change)} />}
         {team.conflict && <Hint>Frozen: nothing changes until the conflicting signed record is resolved on the server.</Hint>}
-        <TeamTargets team={team} legacyAdd={!!view?.legacy_add} busy={busy} act={act} />
-        <ul aria-label="Members" className="space-y-3">{(team.members || []).map((id) => <li key={id} className="min-w-0 rounded-xl bg-sunken p-3">
-          <p className="break-words font-semibold">{personLabel(o, id)} {(team.managers || []).includes(id) && <Tag>Manager</Tag>}</p>
+        <TeamTargets team={team} legacyAdd={!!view?.legacy_add} busy={busy} pending={pending} act={act} />
+        <ul aria-label="Members" className="space-y-3">
+        {pending?.change.op === "add" && !pending.error && <li className="rounded-xl bg-sunken p-3"><p>{personLabel(o, pending.change.target || "")} <Tag>Adding…</Tag></p></li>}
+        {pending?.change.op === "join" && !pending.error && <li className="rounded-xl bg-sunken p-3"><p>{personLabel(o, pending.person)} <Tag>Joining…</Tag></p></li>}
+        {(team.members || []).filter(id => pending?.change.op !== "remove" || pending.error || pending.change.target !== id).map((id) => <li key={id} className="min-w-0 rounded-xl bg-sunken p-3">
+          <p className="break-words font-semibold">{personLabel(o, id)} {pending && !pending.error && pending.change.target === id && pending.change.op.startsWith("manager-") ? <Tag>{pending.change.op === "manager-add" ? "Adding manager role…" : "Removing manager role…"}</Tag> : (team.managers || []).includes(id) && <Tag>Manager</Tag>}</p>
           {team.manager && !team.archived && !team.conflict && (team.version === 2 || id !== o?.person?.person) && <div className="mt-2 flex flex-wrap gap-2">
             <Button size="sm" variant="outline" disabled={busy} onClick={() => confirm({ team: team.id, op: (team.managers || []).includes(id) ? "manager-remove" : "manager-add", target: id }, "Change the manager role?", "Managers rename, delete and manage members. The server refuses removal of the last manager.")}>{(team.managers || []).includes(id) ? "Take manager role" : "Make manager"}</Button>
             <Button size="sm" variant="outline" disabled={busy} onClick={() => confirm({ team: team.id, op: "remove", target: id }, "Remove " + personLabel(o, id) + "?", "Removes them from this list. Their chat membership and permissions stay the same.")}>Remove</Button>
@@ -142,7 +158,7 @@ export function TeamsSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingEle
         </li>)}</ul>
         {team.version !== 2 && team.member && team.manager && team.managers?.length === 1 && <Hint>You are the only manager: the server refuses your leaving or losing the role until another manager exists.</Hint>}
         <div className="flex flex-wrap gap-2">
-          {team.version !== 2 && o?.person && !team.archived && !team.conflict && <Button disabled={busy} onClick={() => void act({ team: team.id, op: team.member ? "leave" : "join" })}>{team.member ? "Leave list" : "Join list"}</Button>}
+          {team.version !== 2 && o?.person && !team.archived && !team.conflict && <Button disabled={busy} onClick={() => void act({ team: team.id, op: team.member ? "leave" : "join" })}>{pending && !pending.error && ["join", "leave"].includes(pending.change.op) ? pending.change.op === "join" ? "Joining…" : "Leaving…" : team.member ? "Leave list" : "Join list"}</Button>}
           {(team.manager || permissions.data?.can_rename) && !team.conflict && <Button variant="outline" disabled={busy} onClick={() => confirm({ team: team.id, op: "delete" }, "Delete this people list?", "Only the list is deleted. Chats, messages and group membership stay as they are.")}>Delete list</Button>}
           {!team.archived && !team.conflict && !!team.members?.length && <Button variant="act" disabled={busy || !o?.groups} onClick={() => void select(team)}>Select for a conversation…</Button>}
         </div>
@@ -164,7 +180,30 @@ export function TeamsSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingEle
   </>;
 }
 
-function TeamTargets({team,legacyAdd,busy,act}: {team:T.TeamView;legacyAdd:boolean;busy:boolean;act:(c:T.TeamChange)=>Promise<void>}) {
+type PendingTeamChange = NonNullable<State["teamChanges"]>[string];
+function TeamChangeCard({ pending: p, reveal = true, check, retry }: { pending: PendingTeamChange; reveal?: boolean; check: () => Promise<void>; retry: () => Promise<void> }) {
+  const store = useApp(), o = useStore(store, s => s.overview), c = p.change;
+  const region = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    // Rename and lower member controls can be below a scrolled sheet's top.
+    // Reveal this action/error once; saved replies never move the reader.
+    // A card behind another selected list must not scroll that list or page.
+    if (reveal) region.current?.scrollIntoView({ block: "nearest", behavior: "instant" });
+  }, [c, p.error, reveal]);
+  const person = personLabel(o, c.target || ""), agent = c.agent ? store.get().agentNames[c.agent.id] || "Agent " + c.agent.id.slice(0, 8) : "";
+  const action: Record<string, string> = { rename: "Rename to “" + c.name + "”", add: "Add " + person, remove: "Remove " + person,
+    "manager-add": "Give " + person + " the manager role", "manager-remove": "Remove " + person + "’s manager role",
+    "agent-add": "Add " + agent, "agent-remove": "Remove " + agent, join: "Join list", leave: "Leave list", delete: "Delete list" };
+  return <section ref={region} aria-label={"Pending change to " + p.original.name}><Card className="p-3">
+    <p className="font-bold">{action[c.op] || "Change list"} · {p.original.name}</p>
+    <p role={p.error ? "alert" : "status"} className="mt-1 text-sm text-muted">{p.error ? "Could not confirm this list change. " + p.error : p.saved ? "List change saved; checking current state…" : "Saving list change…"}</p>
+    <Hint>List membership and permissions change after verification.</Hint>
+    {(p.saved || p.error) && <Button variant="ghost" size="sm" onClick={() => void check()}>Check list change</Button>}
+    {p.error && <Button variant="ghost" size="sm" onClick={() => void retry()}>Retry list change</Button>}
+  </Card></section>;
+}
+
+function TeamTargets({team,legacyAdd,busy,pending,act}: {team:T.TeamView;legacyAdd:boolean;busy:boolean;pending?:PendingTeamChange;act:(c:T.TeamChange)=>Promise<void>}) {
   const store=useApp(),o=useStore(store,s=>s.overview);
   const people=useMemo(()=>[...(o?.person?[o.person]:[]),...(o?.people||[])].filter(p=>p.person && (p.state==="self"||p.state==="pinned")),[o?.person,o?.people]);
   const persons=useMemo(()=>[...new Map(people.map(p=>[p.person,p])).values()],[people]);
@@ -180,7 +219,9 @@ function TeamTargets({team,legacyAdd,busy,act}: {team:T.TeamView;legacyAdd:boole
   const label=(a:T.TeamAgent)=>catalog.data?.agents?.find(x=>x.record.id===a.id&&x.record.host_key===a.host_key)?.record.label || store.get().agentNames[a.id] || "Agent "+a.id.slice(0,8);
   return <>
     <Hint>Everyone can use @{team.name}. It addresses only selected people{team.version===2?" and agents":""} already in that chat. Managed by {(team.managers||[]).map(id=>personLabel(o,id)).join(", ")}.</Hint>
-    {team.version===2&&<ul aria-label="Agents in this list" className="space-y-2">{(team.agents||[]).map(a=><li key={a.host+"/"+a.host_key+"/"+a.id} className="rounded-xl bg-sunken p-3">
+    {team.version===2&&<ul aria-label="Agents in this list" className="space-y-2">
+    {pending?.change.op==="agent-add"&&!pending.error&&pending.change.agent&&<li className="rounded-xl bg-sunken p-3">{label(pending.change.agent)} <Tag>Adding…</Tag></li>}
+    {(team.agents||[]).filter(a=>pending?.change.op!=="agent-remove"||pending.error||pending.change.agent?.id!==a.id||pending.change.agent?.host!==a.host||pending.change.agent?.host_key!==a.host_key).map(a=><li key={a.host+"/"+a.host_key+"/"+a.id} className="rounded-xl bg-sunken p-3">
       <p className="break-words font-semibold">{label(a)}</p><p className="text-sm text-muted">{a.host}</p>
       {canEdit&&<Button size="sm" variant="outline" disabled={busy} onClick={()=>void act({team:team.id,op:"agent-remove",agent:a})}>Remove agent</Button>}
     </li>)}</ul>}
@@ -190,12 +231,12 @@ function TeamTargets({team,legacyAdd,busy,act}: {team:T.TeamView;legacyAdd:boole
     {canEdit&&<fieldset disabled={busy} className="space-y-2 rounded-xl border border-hairline p-3">
       <legend className="px-1 font-semibold">Add to this {team.version===2?"tag":"list"}</legend>
       <RosterSelect label="Person" noun="people" placeholder="Choose a person" options={personOptions} value={person} onChange={setPerson} />
-      <Button size="sm" disabled={!person||busy} onClick={()=>void act({team:team.id,op:"add",target:person}).then(()=>setPerson(""))}>Add person</Button>
+      <Button size="sm" disabled={!person||busy} onClick={()=>{void act({team:team.id,op:"add",target:person});setPerson("");}}>Add person</Button>
       {team.version===2&&<>
       <RosterSelect label="Agent’s device" noun="devices" placeholder="This device" options={hostOptions} value={host} onChange={value=>{setHost(value);setAgent("");}} />
       <label className="block">Agent<select aria-label="Agent" className={input} value={agent} disabled={!catalogCurrent} onChange={e=>setAgent(e.target.value)}><option value="">{catalog.loading ? "Reading agents…" : "Choose an agent"}</option>{available.filter(a=>a.enabled&&!team.agents?.some(x=>x.id===a.record.id&&x.host===a.record.host&&x.host_key===a.record.host_key)).map(a=><option key={a.record.id} value={a.record.id}>{a.record.label}</option>)}</select></label>
       {catalog.error&&<p role="alert" className="text-sm text-danger">{catalog.error}</p>}
-      <Button size="sm" disabled={!record||busy} onClick={()=>record&&void act({team:team.id,op:"agent-add",agent:{id:record.id,host:record.host,host_key:record.host_key}}).then(()=>setAgent(""))}>Add agent</Button>
+      <Button size="sm" disabled={!record||busy} onClick={()=>{if(record){void act({team:team.id,op:"agent-add",agent:{id:record.id,host:record.host,host_key:record.host_key}});setAgent("");}}}>Add agent</Button>
       </>}
     </fieldset>}
   </>;

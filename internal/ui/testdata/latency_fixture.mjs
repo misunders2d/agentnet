@@ -927,7 +927,7 @@ try {
    disabledObserver.observe(activePendingField,{attributes:true,attributeFilter:['disabled']});
 
    const person=d().querySelector('select[aria-label="Person"]');await fill('teams.add-person-choice',person,peer.person);
-   await tap('teams.add-person',control('Add person',d()),()=>teams.teams[1].members.includes(peer.person)&&d().textContent.includes('Vitalii'),'selected verified person added');
+   await tap('teams.add-person',control('Add person',d()),()=>!!d()?.querySelector('section[aria-label^="Pending change to "]')||teams.teams[1].members.includes(peer.person),'selected person appears pending before the list write',()=>teams.teams[1].members.includes(peer.person)&&d().textContent.includes('Vitalii'));
    assert(reports.rosterProof.pendingAllDisabled,'new search/select/more controls not disabled with pending API');disabledObserver.disconnect();
    await tap('teams.proof-close-pending-search',control('Close people search',d()),()=>!d().querySelector('input[type="search"]')&&shadow.activeElement===control('Search all people',d()),'search closed after pending result to exact focused opener');
    // An incoming roster update can remove the need for a search toggle.
@@ -945,11 +945,11 @@ try {
    assert(JSON.stringify(editedTeam.members)===JSON.stringify(membersBeforeShrink)&&shrinkSelect.value===shrinkPerson&&reports.apiCalls.filter(c=>c.method==='write').length===writesBeforeShrink,'shrink proof changed original members/selection or issued a write');
    await fill('teams.shrink-selection-reset',shrinkSelect,'');
    await tap('teams.manager-review',control('Make manager',member()),()=>!!control('Confirm change'),'exact person manager-role confirmation');
-   await tap('teams.manager-add',control('Confirm change'),()=>teams.teams[1].managers.includes(peer.person)&&member().textContent.includes('Manager'),'manager role reflected after API result');await retire();
+   await tap('teams.manager-add',control('Confirm change'),()=>!!d()?.querySelector('section[aria-label^="Pending change to "]')||teams.teams[1].managers.includes(peer.person),'requested manager role appears pending',()=>teams.teams[1].managers.includes(peer.person)&&member().textContent.includes('Manager'));await retire();
    await tap('teams.manager-remove-review',control('Take manager role',member()),()=>!!control('Confirm change'),'exact manager removal confirmation');
-   await tap('teams.manager-remove',control('Confirm change'),()=>!teams.teams[1].managers.includes(peer.person)&&!!control('Make manager',member()),'other manager removed, own manager remains');await retire();
+   await tap('teams.manager-remove',control('Confirm change'),()=>!!d()?.querySelector('section[aria-label^="Pending change to "]')||!teams.teams[1].managers.includes(peer.person),'manager removal appears pending',()=>!teams.teams[1].managers.includes(peer.person)&&!!control('Make manager',member()));await retire();
    await until(()=>!d().querySelector('select[aria-label="Agent"]').disabled,'current agent catalog for list');await fill('teams.agent-choice',d().querySelector('select[aria-label="Agent"]'),catalog.agents[0].record.id);
-   await tap('teams.agent-add',control('Add agent',d()),()=>teams.teams[1].agents.length===1&&d().textContent.includes('Fixture Codex'),'exact published agent added without granting execution');
+   await tap('teams.agent-add',control('Add agent',d()),()=>!!d()?.querySelector('section[aria-label^="Pending change to "]')||teams.teams[1].agents.length===1,'exact agent appears pending without granting execution',()=>teams.teams[1].agents.length===1&&d().textContent.includes('Fixture Codex'));
    }
    if(teamsPart!=='list'){
    await tap('teams.use-for-group',control('Select for a conversation…',d()),()=>!!sheet('New group'),'new-group review opens before reading the verified list',()=>!!sheet('New group')?.querySelector('[aria-label="Selected people"]')?.textContent.includes('Vitalii'));await retire();
@@ -997,12 +997,12 @@ try {
    if(teamsPart==='list')await closeSheet('teams.list-page-close','Fixture new list');
    await tap('teams.list-reopen',control(/^Fixture new list/),()=>!!d(),'same managed list reopened');
    await tap('teams.person-remove-review',control('Remove',member()),()=>!!control('Confirm change'),'exact person removal confirmation');
-   await tap('teams.person-remove',control('Confirm change'),()=>!teams.teams[1].members.includes(peer.person)&&!member(),'person removed from list only');await retire();
+   await tap('teams.person-remove',control('Confirm change'),()=>!member(),'person leaves the displayed list pending verification',()=>!teams.teams[1].members.includes(peer.person)&&!member());await retire();
    reports.peopleListDOM={personOptions:d().querySelector('select[aria-label="Person"]').options.length,agentOptions:d().querySelector('select[aria-label="Agent"]').options.length,claim:'actual rendered native select rows; count is not isolated cost attribution'};
    const rename=[...d().querySelectorAll('input')].find(e=>e.type!=='checkbox');await fill('teams.rename-text',rename,'Fixture renamed list');
-   await tap('teams.rename',control('Rename list',d()),()=>!!sheet('Fixture renamed list')&&teams.teams[1].name==='Fixture renamed list','same list renamed after API result');
+   await tap('teams.rename',control('Rename list',d()),()=>!!sheet('Fixture renamed list'),'requested name appears before the list write',()=>!!sheet('Fixture renamed list')&&teams.teams[1].name==='Fixture renamed list');
    await tap('teams.delete-review',control('Delete list',d()),()=>!!control('Confirm change'),'delete list confirmation visible');
-   await tap('teams.delete',control('Confirm change'),()=>teams.teams.length===1&&!sheet('Fixture renamed list'),'exact list removed without changing chats');await retire();
+   await tap('teams.delete',control('Confirm change'),()=>!sheet('Fixture renamed list'),'exact list closes and leaves the local list before background deletion',()=>teams.teams.length===1&&!sheet('Fixture renamed list'));await retire();
    const q=fields().at(-1);await fill('teams.search',q,'missing list',()=>!control(/^Fixture list/),'list search removes unmatched row');await fill('teams.search-clear',q,'',()=>!!control(/^Fixture list/),'original list restored');
    }
   }

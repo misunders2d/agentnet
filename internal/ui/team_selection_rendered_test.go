@@ -18,3 +18,10 @@ func TestTeamCreationRendered(t *testing.T) {
 	}
 	t.Log(browserCheck(t, "testdata/team_creation_rendered.cjs"))
 }
+
+func TestTeamChangesRendered(t *testing.T) {
+	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
+		t.Skip("set AGENTNET_PLAYWRIGHT for rendered people-list changes")
+	}
+	t.Log(browserCheck(t, "testdata/team_changes_rendered.cjs"))
+}
