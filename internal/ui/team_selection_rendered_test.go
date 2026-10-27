@@ -74,3 +74,10 @@ func TestWorkspaceNameRendered(t *testing.T) {
 	}
 	t.Log(browserCheck(t, "testdata/workspace_name_rendered.cjs"))
 }
+
+func TestGoogleAccessRendered(t *testing.T) {
+	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
+		t.Skip("set AGENTNET_PLAYWRIGHT for rendered workspace access changes")
+	}
+	t.Log(browserCheck(t, "testdata/google_access_rendered.cjs"))
+}

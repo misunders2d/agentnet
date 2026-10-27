@@ -142,6 +142,7 @@ export interface State {
   personRename?: { request: { person: string; original: string; label: string }; saved?: T.PersonView; error?: string };
   personCreation?: { request: { address: string; fingerprint: string; label: string }; saved?: { person: T.PersonView; note: string }; error?: string };
   workspaceRename?: { request: { address: string; fingerprint: string; person?: string; original: string; name: string }; saved?: T.WorkspaceInfoView; error?: string };
+  googleAccessChange?: { request: { address: string; fingerprint: string; person?: string; change: T.GoogleAccessChange }; saved?: boolean; error?: string };
   deviceDecisions?: Record<string, { link: T.LinkRequest; person: string; accept: boolean; saved?: boolean }>;
   deviceRemovals?: Record<string, { device: T.DeviceView; person: string; saved?: boolean }>;
   groupDecisions?: Record<string, { invitation: T.GroupInvitationView; person: string; accept: boolean; saved?: boolean }>;
@@ -177,7 +178,7 @@ const draftsKey = (ws: string) => brand.storage + ".drafts." + ws;
 
 // unsentIn: what a reload would lose: a draft's text or files, or a send
 // not yet stored.
-export const unsentIn = (s: Pick<State, "drafts" | "unsent"> & Partial<Pick<State,"scheduleSaves" | "messageChanges" | "reminderChanges" | "pictureChange" | "personRename" | "personCreation" | "workspaceRename" | "deviceDecisions" | "deviceRemovals" | "groupDecisions" | "groupChanges" | "groupCreation" | "invitationSends" | "teamCreation" | "teamChanges">>) => s.unsent || !!s.workspaceRename && !s.workspaceRename.saved && !s.workspaceRename.error || !!s.personCreation && !s.personCreation.saved && !s.personCreation.error || !!s.personRename && !s.personRename.saved && !s.personRename.error || Object.values(s.invitationSends || {}).some(p => !p.done && !p.error) || !!s.groupCreation && !s.groupCreation.done && !s.groupCreation.error || Object.values(s.teamChanges || {}).some(p => !p.saved && !p.error) || !!s.teamCreation && !s.teamCreation.saved && !s.teamCreation.error || Object.values(s.groupChanges || {}).some(p => !p.saved && !p.error) || Object.values(s.groupDecisions || {}).some(p => !p.saved) || Object.values(s.deviceDecisions || {}).some(p => !p.saved) || Object.values(s.deviceRemovals || {}).some(p => !p.saved) || !!s.pictureChange && !s.pictureChange.saved || Object.keys(s.reminderChanges || {}).length > 0 || Object.values(s.messageChanges || {}).some(p => p.status === "pending" || p.status === "failed" && p.action === "edit") || Object.values(s.scheduleSaves || {}).some(slot=>!!slot.attempt && (slot.status==="saving" || slot.status==="uncertain")) || Object.values(s.drafts).some((d) => d.text || (d.files && d.files.length));
+export const unsentIn = (s: Pick<State, "drafts" | "unsent"> & Partial<Pick<State,"scheduleSaves" | "messageChanges" | "reminderChanges" | "pictureChange" | "personRename" | "personCreation" | "workspaceRename" | "googleAccessChange" | "deviceDecisions" | "deviceRemovals" | "groupDecisions" | "groupChanges" | "groupCreation" | "invitationSends" | "teamCreation" | "teamChanges">>) => s.unsent || !!s.googleAccessChange && !s.googleAccessChange.saved && !s.googleAccessChange.error || !!s.workspaceRename && !s.workspaceRename.saved && !s.workspaceRename.error || !!s.personCreation && !s.personCreation.saved && !s.personCreation.error || !!s.personRename && !s.personRename.saved && !s.personRename.error || Object.values(s.invitationSends || {}).some(p => !p.done && !p.error) || !!s.groupCreation && !s.groupCreation.done && !s.groupCreation.error || Object.values(s.teamChanges || {}).some(p => !p.saved && !p.error) || !!s.teamCreation && !s.teamCreation.saved && !s.teamCreation.error || Object.values(s.groupChanges || {}).some(p => !p.saved && !p.error) || Object.values(s.groupDecisions || {}).some(p => !p.saved) || Object.values(s.deviceDecisions || {}).some(p => !p.saved) || Object.values(s.deviceRemovals || {}).some(p => !p.saved) || !!s.pictureChange && !s.pictureChange.saved || Object.keys(s.reminderChanges || {}).length > 0 || Object.values(s.messageChanges || {}).some(p => p.status === "pending" || p.status === "failed" && p.action === "edit") || Object.values(s.scheduleSaves || {}).some(slot=>!!slot.attempt && (slot.status==="saving" || slot.status==="uncertain")) || Object.values(s.drafts).some((d) => d.text || (d.files && d.files.length));
 
 const recovery = { update: [500, 1000, 2000, 4000, 8000, 15000, 30000], missed: [1000, 3000, 8000] };
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -216,6 +217,7 @@ export class Store {
   private personCreationWork?: Promise<{ person: T.PersonView; note: string }>;
   private workspaceRenameWork?: Promise<T.WorkspaceInfoView>;
   private workspaceRenameState?: { source: State; value: State };
+  private googleAccessWork?: Promise<unknown>;
   private personRenameState?: { source: State; value: State };
   private reminderOverviewCache?: { source: T.Overview; changes: State["reminderChanges"]; value: T.Overview };
   private reactionSequence = 0;
@@ -265,6 +267,7 @@ export class Store {
       renamePerson: label => this.renamePerson(label, calls),
       createPerson: label => this.createPerson(label, calls),
       renameWorkspaceForEveryone: name => this.renameWorkspace(name, calls),
+      changeGoogleAccess: change => this.changeGoogleAccess(change, calls),
       decideDevice: (id, accept) => this.decideDevice(id, accept, calls),
       removeDevice: address => this.removeDevice(address, calls),
       decideGroup: (id, accept) => this.decideGroup(id, accept, calls),
@@ -429,6 +432,50 @@ export class Store {
 
   clearWorkspaceRename(request: NonNullable<State["workspaceRename"]>["request"]) {
     if (!this.workspaceRenameWork && this.state.workspaceRename?.request === request && this.state.workspaceRename.error) this.set({ workspaceRename: undefined });
+  }
+
+  private changeGoogleAccess(change: T.GoogleAccessChange, calls: Api): Promise<unknown> {
+    const o = this.state.overview;
+    if (!this.alive || !o) return Promise.reject(Error("This workspace is no longer available."));
+    const key = (c: T.GoogleAccessChange) => JSON.stringify([c.email || "", c.domain || "", c.remove, c.admin ?? null]);
+    const old = this.state.googleAccessChange, same = old && key(old.request.change) === key(change);
+    if (this.googleAccessWork) return same ? this.googleAccessWork : Promise.reject(Error("Wait for the current access change to finish."));
+    if (old?.saved) return same ? Promise.resolve(undefined) : Promise.reject(Error("Check the saved access change before changing it again."));
+    if (old && !same) return Promise.reject(Error("Review the previous access change before starting another."));
+    const request = { address: o.me.address, fingerprint: o.me.fingerprint, person: o.person?.person, change: structuredClone(change) };
+    const current = () => this.alive && this.state.googleAccessChange?.request === request;
+    this.set({ googleAccessChange: { request } });
+    const work = Promise.resolve().then(async () => {
+      try {
+        if (!current()) throw Error("This access change's workspace or device changed.");
+        const result = await calls.changeGoogleAccess(request.change);
+        if (current()) this.set({ googleAccessChange: { request, saved: true } });
+        return result;
+      } catch (error) {
+        if (current()) {
+          this.set({ googleAccessChange: { request, error: errorText(error) } });
+          this.toast("Access change not confirmed. Open Workspaces to check current access or retry.", "error");
+        }
+        throw error;
+      } finally {
+        if (this.googleAccessWork === work) this.googleAccessWork = undefined;
+      }
+    });
+    this.googleAccessWork = work;
+    return work;
+  }
+
+  confirmGoogleAccess(request: NonNullable<State["googleAccessChange"]>["request"], value: T.GoogleAccess) {
+    const p = this.state.googleAccessChange;
+    if (!this.alive || this.googleAccessWork || p?.request !== request || !value.can_admin) return;
+    // Only confirmed writes retire automatically after a fresh read. An
+    // uncertain access change stays available for the person's review.
+    if (p.saved) this.set({ googleAccessChange: undefined });
+  }
+
+  clearGoogleAccess(request: NonNullable<State["googleAccessChange"]>["request"]) {
+    const p = this.state.googleAccessChange;
+    if (!this.googleAccessWork && p?.request === request && (p.error || p.saved)) this.set({ googleAccessChange: undefined });
   }
 
   private changePicture(png: string, calls: Api): Promise<T.PersonView> {
@@ -1033,6 +1080,12 @@ export class Store {
         this.state = { ...this.state, workspaceRename: undefined }; this.workspaceRenameWork = undefined;
       }
     }
+    if (this.state.googleAccessChange && patch.overview) {
+      const { request } = this.state.googleAccessChange, o = patch.overview;
+      if (o.me.address !== request.address || o.me.fingerprint !== request.fingerprint || o.person?.person !== request.person) {
+        this.state = { ...this.state, googleAccessChange: undefined }; this.googleAccessWork = undefined;
+      }
+    }
     if (this.state.teamCreation && patch.overview && patch.overview.person?.person !== this.state.teamCreation.person) this.state = { ...this.state, teamCreation: undefined };
     if (this.state.teamChanges && patch.overview) {
       const entries = Object.entries(this.state.teamChanges), keep = entries.filter(([, p]) => p.person === patch.overview?.person?.person);
@@ -1097,6 +1150,7 @@ export class Store {
     this.personRenameWork = undefined;
     this.personCreationWork = undefined;
     this.workspaceRenameWork = undefined;
+    this.googleAccessWork = undefined;
     this.sends.dispose();
     this.scheduled.dispose();
     this.stopListen?.();

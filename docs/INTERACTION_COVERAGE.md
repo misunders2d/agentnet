@@ -13,6 +13,13 @@ comparative performance claim is made. Sergey also confirmed that no physical
 Android test device is available; emulator evidence must remain labelled as such.
 Every reachable interaction still needs executed evidence and error/recovery
 coverage. Publication is blocked until the applicable gate is demonstrated.
+Owner clarification, October 27: "don't overcomplicate/overthink this. if initial
+startup lag is a hardware/software limitation - it's ok". Stop expanding startup
+diagnostics. Accept an evidenced initial device/browser warm-up limit separately
+from normal interaction latency; keep fixing concrete application blocking and
+recovery defects. An unexplained slow ordinary action is not automatically a
+startup exception. Use the already-running Mac isolation experiment to distinguish
+those cases, then proceed with integrated release checks.
 The updater-only candidate
 `3f9797f641a9707f3f945d35d6de6d5d810165de` is a baseline, not a qualified release.
 
@@ -209,6 +216,17 @@ no-scrim variants alongside baseline; none changes shipping CSS or qualifies a
 release. Its local no-filter workload passes all 27 action checks; JavaScript and
 native Python syntax checks pass. Actual Mac comparison remains pending.
 
+The completed experiment `40462586726` keeps every native WKWebView mode within
+one second. On narrow browser WebKit, the unmodified shipping baseline's first
+menu takes 946 ms; subsequent menus take 23–56 ms and all other actions at most
+56 ms. Removing shadows, rounding, filters or dimming leaves the first menu at
+822–1036 ms, with subsequent actions at most 86 ms. No backend call is involved
+in that first menu. This isolates an observed cold first-use rendering cost;
+the precise WebKit/OS mechanism is unproven. Under the owner's latest startup
+guidance it is retained as a disclosed initial renderer limitation, without
+further diagnostic expansion. Historical failures remain recorded and diagnostic
+variants are not release passes. Ordinary-action failures still require repair.
+
 Profile rename now projects the requested display label immediately and replaces
 the form with named pending work. This reuses the existing Store projection and
 inspected Telegram local-change/reconciliation pattern. The native signed-roster
@@ -276,6 +294,29 @@ reaches Workspaces: it expects unnamed historical agent threads in active Chats.
 The same failure reproduces on committed `fa50d0d5`, before this change. Its demo
 fixture has no topic-search provider; that historical-fixture qualification is
 still open, not a passing test or evidence of a new workspace-name regression.
+Native run `40462590815` at `247e6686` passes workspace name recovery, browser
+identity, real live admin enforcement, route validation and bundle integrity
+three times on Linux, macOS and Windows.
+
+The five Google workspace access controls now replace their form/list with the
+exact pending invitation or removal before the request. The existing Store and
+retained-text mechanism keep the attempt and drafts across navigation, deduplicate
+input and retain exact retry after failure. Access itself is never projected:
+the relay's existing `requireAdmin`, normalization and transaction remain the
+authority. Saved responses trigger read-only confirmation; uncertain responses
+remain available for review, Check or Dismiss and never replay automatically.
+Current access reads control whether Retry is available after permission loss.
+Changed owner/device or teardown discards stale local completion. This uses the
+same previously inspected local-intent/reconciliation flow, without a new API,
+permission mechanism or service.
+
+The original controls fail the held-request regression. All five controls at
+1440/390 pixels pass with 26–42 ms feedback in the first local run, including
+errors, exact retry, saved readback, retained drafts, lost response, revoked
+permission, owner change and stopped work. Six screenshots were inspected;
+readback is labelled last-checked until confirmed. Build/type checks and four
+integrated race parents (access, workspace names, person setup and bundle) pass.
+These are focused synthetic-host UI checks, not changes to any real membership.
 
 Group creation now replaces the form with its named pending destination before
 the native write. The existing Store retains the real creation result and exact
