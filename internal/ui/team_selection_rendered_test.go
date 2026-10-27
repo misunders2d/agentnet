@@ -67,3 +67,10 @@ func TestPersonCreationRendered(t *testing.T) {
 	}
 	t.Log(browserCheck(t, "testdata/person_creation_rendered.cjs"))
 }
+
+func TestWorkspaceNameRendered(t *testing.T) {
+	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
+		t.Skip("set AGENTNET_PLAYWRIGHT for rendered workspace name changes")
+	}
+	t.Log(browserCheck(t, "testdata/workspace_name_rendered.cjs"))
+}

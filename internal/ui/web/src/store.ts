@@ -141,6 +141,7 @@ export interface State {
   pictureChange?: { person: T.PersonView; seq: number; png: string; saved?: T.PersonView };
   personRename?: { request: { person: string; original: string; label: string }; saved?: T.PersonView; error?: string };
   personCreation?: { request: { address: string; fingerprint: string; label: string }; saved?: { person: T.PersonView; note: string }; error?: string };
+  workspaceRename?: { request: { address: string; fingerprint: string; person?: string; original: string; name: string }; saved?: T.WorkspaceInfoView; error?: string };
   deviceDecisions?: Record<string, { link: T.LinkRequest; person: string; accept: boolean; saved?: boolean }>;
   deviceRemovals?: Record<string, { device: T.DeviceView; person: string; saved?: boolean }>;
   groupDecisions?: Record<string, { invitation: T.GroupInvitationView; person: string; accept: boolean; saved?: boolean }>;
@@ -176,7 +177,7 @@ const draftsKey = (ws: string) => brand.storage + ".drafts." + ws;
 
 // unsentIn: what a reload would lose: a draft's text or files, or a send
 // not yet stored.
-export const unsentIn = (s: Pick<State, "drafts" | "unsent"> & Partial<Pick<State,"scheduleSaves" | "messageChanges" | "reminderChanges" | "pictureChange" | "personRename" | "personCreation" | "deviceDecisions" | "deviceRemovals" | "groupDecisions" | "groupChanges" | "groupCreation" | "invitationSends" | "teamCreation" | "teamChanges">>) => s.unsent || !!s.personCreation && !s.personCreation.saved && !s.personCreation.error || !!s.personRename && !s.personRename.saved && !s.personRename.error || Object.values(s.invitationSends || {}).some(p => !p.done && !p.error) || !!s.groupCreation && !s.groupCreation.done && !s.groupCreation.error || Object.values(s.teamChanges || {}).some(p => !p.saved && !p.error) || !!s.teamCreation && !s.teamCreation.saved && !s.teamCreation.error || Object.values(s.groupChanges || {}).some(p => !p.saved && !p.error) || Object.values(s.groupDecisions || {}).some(p => !p.saved) || Object.values(s.deviceDecisions || {}).some(p => !p.saved) || Object.values(s.deviceRemovals || {}).some(p => !p.saved) || !!s.pictureChange && !s.pictureChange.saved || Object.keys(s.reminderChanges || {}).length > 0 || Object.values(s.messageChanges || {}).some(p => p.status === "pending" || p.status === "failed" && p.action === "edit") || Object.values(s.scheduleSaves || {}).some(slot=>!!slot.attempt && (slot.status==="saving" || slot.status==="uncertain")) || Object.values(s.drafts).some((d) => d.text || (d.files && d.files.length));
+export const unsentIn = (s: Pick<State, "drafts" | "unsent"> & Partial<Pick<State,"scheduleSaves" | "messageChanges" | "reminderChanges" | "pictureChange" | "personRename" | "personCreation" | "workspaceRename" | "deviceDecisions" | "deviceRemovals" | "groupDecisions" | "groupChanges" | "groupCreation" | "invitationSends" | "teamCreation" | "teamChanges">>) => s.unsent || !!s.workspaceRename && !s.workspaceRename.saved && !s.workspaceRename.error || !!s.personCreation && !s.personCreation.saved && !s.personCreation.error || !!s.personRename && !s.personRename.saved && !s.personRename.error || Object.values(s.invitationSends || {}).some(p => !p.done && !p.error) || !!s.groupCreation && !s.groupCreation.done && !s.groupCreation.error || Object.values(s.teamChanges || {}).some(p => !p.saved && !p.error) || !!s.teamCreation && !s.teamCreation.saved && !s.teamCreation.error || Object.values(s.groupChanges || {}).some(p => !p.saved && !p.error) || Object.values(s.groupDecisions || {}).some(p => !p.saved) || Object.values(s.deviceDecisions || {}).some(p => !p.saved) || Object.values(s.deviceRemovals || {}).some(p => !p.saved) || !!s.pictureChange && !s.pictureChange.saved || Object.keys(s.reminderChanges || {}).length > 0 || Object.values(s.messageChanges || {}).some(p => p.status === "pending" || p.status === "failed" && p.action === "edit") || Object.values(s.scheduleSaves || {}).some(slot=>!!slot.attempt && (slot.status==="saving" || slot.status==="uncertain")) || Object.values(s.drafts).some((d) => d.text || (d.files && d.files.length));
 
 const recovery = { update: [500, 1000, 2000, 4000, 8000, 15000, 30000], missed: [1000, 3000, 8000] };
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -213,6 +214,8 @@ export class Store {
   private invitationWork = new Map<string, Promise<InvitationSend>>();
   private personRenameWork?: Promise<T.PersonView>;
   private personCreationWork?: Promise<{ person: T.PersonView; note: string }>;
+  private workspaceRenameWork?: Promise<T.WorkspaceInfoView>;
+  private workspaceRenameState?: { source: State; value: State };
   private personRenameState?: { source: State; value: State };
   private reminderOverviewCache?: { source: T.Overview; changes: State["reminderChanges"]; value: T.Overview };
   private reactionSequence = 0;
@@ -261,6 +264,7 @@ export class Store {
       setPersonPicture: png => this.changePicture(png, calls),
       renamePerson: label => this.renamePerson(label, calls),
       createPerson: label => this.createPerson(label, calls),
+      renameWorkspaceForEveryone: name => this.renameWorkspace(name, calls),
       decideDevice: (id, accept) => this.decideDevice(id, accept, calls),
       removeDevice: address => this.removeDevice(address, calls),
       decideGroup: (id, accept) => this.decideGroup(id, accept, calls),
@@ -285,7 +289,7 @@ export class Store {
 
   // ---- subscription
   get = () => {
-    const s = this.presentPersonRename(this.presentGroupChanges(this.presentGroupDecisions(this.presentDeviceDecisions(this.presentPicture(this.presentReminders(this.presentMessages(this.presentTopics())))))));
+    const s = this.presentWorkspaceRename(this.presentPersonRename(this.presentGroupChanges(this.presentGroupDecisions(this.presentDeviceDecisions(this.presentPicture(this.presentReminders(this.presentMessages(this.presentTopics()))))))));
     if (!s.overview || !Object.keys(s.dismissPending).length) return s;
     if (this.dismissState?.source === s) return this.dismissState.value;
     if (this.dismissOverview?.source !== s.overview || this.dismissOverview.pending !== s.dismissPending) {
@@ -382,6 +386,49 @@ export class Store {
 
   clearPersonCreation(request: NonNullable<State["personCreation"]>["request"]) {
     if (!this.personCreationWork && this.state.personCreation?.request === request && this.state.personCreation.error) this.set({ personCreation: undefined });
+  }
+
+  private presentWorkspaceRename(s: State): State {
+    const p = s.workspaceRename, o = s.overview;
+    if (!p || p.error || !o?.workspace || o.workspace.name !== p.request.original) return s;
+    if (this.workspaceRenameState?.source === s) return this.workspaceRenameState.value;
+    const value = { ...s, overview: { ...o, workspace: { ...o.workspace, name: p.request.name } } };
+    this.workspaceRenameState = { source: s, value };
+    return value;
+  }
+
+  private renameWorkspace(name: string, calls: Api): Promise<T.WorkspaceInfoView> {
+    const o = this.state.overview;
+    if (!this.alive || !o) return Promise.reject(Error("This workspace is no longer available."));
+    if (this.workspaceRenameWork) return this.state.workspaceRename?.request.name === name ? this.workspaceRenameWork : Promise.reject(Error("Wait for the current workspace name change to finish."));
+    const old = this.state.workspaceRename;
+    if (old?.saved) return old.request.name === name ? Promise.resolve(old.saved) : Promise.reject(Error("Check the saved workspace name before changing it again."));
+    const request = { address: o.me.address, fingerprint: o.me.fingerprint, person: o.person?.person, original: o.workspace?.name || "", name };
+    const current = () => this.alive && this.state.workspaceRename?.request === request;
+    this.set({ workspaceRename: { request } });
+    const work = Promise.resolve().then(async () => {
+      try {
+        if (!current()) throw Error("This name change's workspace or device changed.");
+        const saved = await calls.renameWorkspaceForEveryone(name);
+        if (current()) this.set({ workspaceRename: { request, saved } });
+        return saved;
+      } catch (error) {
+        if (current()) {
+          this.set({ workspaceRename: { request, error: errorText(error) } });
+          this.toast("Workspace name change not confirmed. Open Workspaces to review or retry.", "error");
+        }
+        throw error;
+      } finally {
+        if (this.workspaceRenameWork === work) this.workspaceRenameWork = undefined;
+        if (current()) void this.refetch();
+      }
+    });
+    this.workspaceRenameWork = work;
+    return work;
+  }
+
+  clearWorkspaceRename(request: NonNullable<State["workspaceRename"]>["request"]) {
+    if (!this.workspaceRenameWork && this.state.workspaceRename?.request === request && this.state.workspaceRename.error) this.set({ workspaceRename: undefined });
   }
 
   private changePicture(png: string, calls: Api): Promise<T.PersonView> {
@@ -980,6 +1027,12 @@ export class Store {
         this.state = { ...this.state, personCreation: undefined }; this.personCreationWork = undefined;
       }
     }
+    if (this.state.workspaceRename && patch.overview) {
+      const { request } = this.state.workspaceRename, o = patch.overview;
+      if (o.me.address !== request.address || o.me.fingerprint !== request.fingerprint || o.person?.person !== request.person) {
+        this.state = { ...this.state, workspaceRename: undefined }; this.workspaceRenameWork = undefined;
+      }
+    }
     if (this.state.teamCreation && patch.overview && patch.overview.person?.person !== this.state.teamCreation.person) this.state = { ...this.state, teamCreation: undefined };
     if (this.state.teamChanges && patch.overview) {
       const entries = Object.entries(this.state.teamChanges), keep = entries.filter(([, p]) => p.person === patch.overview?.person?.person);
@@ -1043,6 +1096,7 @@ export class Store {
     this.invitationWork.clear();
     this.personRenameWork = undefined;
     this.personCreationWork = undefined;
+    this.workspaceRenameWork = undefined;
     this.sends.dispose();
     this.scheduled.dispose();
     this.stopListen?.();
@@ -1182,6 +1236,9 @@ export class Store {
     const rename = this.state.personRename;
     if (rename && !this.personRenameWork && o.person?.person === rename.request.person &&
       (o.person.label === rename.request.label || rename.saved && o.person.label !== rename.request.original)) this.set({ personRename: undefined });
+    const workspaceRename = this.state.workspaceRename;
+    if (workspaceRename && !this.workspaceRenameWork && o.workspace &&
+      (o.workspace.name === workspaceRename.request.name || workspaceRename.saved && o.workspace.name !== workspaceRename.request.original)) this.set({ workspaceRename: undefined });
     this.pruneDeviceDecisions();
     this.pruneDeviceRemovals();
     this.pruneGroupDecisions();

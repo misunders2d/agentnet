@@ -2,7 +2,7 @@
 // reports it: unknown stays unknown), workspaces (the memberships this
 // computer holds) and About (version, updates, technical details).
 import { IconArrowUpRight, IconPlugConnected, IconPlus, IconRefresh } from "@tabler/icons-react";
-import { useEffect, useReducer, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 import type { T } from "../api";
 import { useApp } from "../context";
 import type { Workspace } from "../host";
@@ -142,29 +142,44 @@ function Coin({ ws, label }: { ws: Workspace; label?: string }) {
  *  server's name). */
 function NameForEveryone() {
   const store = useApp();
+  const own = useStore(store, s => s.overview?.workspace);
+  const pending = useStore(store, s => s.workspaceRename);
+  const offline = useStore(store, s => s.conn !== "live");
   const r = useLoad(() => store.api.workspace(), []);
   const [name, setName] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  if (!r.data) return null;
-  const v = r.data, value = name ?? v.name;
-  if (!v.can_rename) return v.name ? <Hint className="mb-3">Its admin named this workspace “{v.name}” for everyone.</Hint> : null;
-  const save = async (next: string) => {
+  const progress = useRef<HTMLElement>(null);
+  const previous = useRef(pending);
+  useEffect(() => {
+    if (pending?.saved || pending?.error || previous.current && !pending) r.reload();
+    previous.current = pending;
+  }, [pending?.saved, pending?.error, !!pending]);
+  useLayoutEffect(() => { if (pending) progress.current?.scrollIntoView({ block: "nearest", behavior: "instant" }); }, [pending?.request, pending?.error]);
+  const v = r.data, currentName = own?.name ?? v?.name ?? "", value = name ?? currentName;
+  const submit = (next: string) => { void store.api.renameWorkspaceForEveryone(next).catch(() => {}); };
+  const save = (next: string) => {
+    if (pending || offline || !v?.can_rename) return;
     const n = next.trim();
     if (n && ([...n].length > 120 || /[\u0000-\u001f\u007f-\u009f]/.test(n))) { setError("Use 1–120 readable characters."); return; }
-    setBusy(true); setError("");
-    try {
-      const done = await store.api.renameWorkspaceForEveryone(n);
-      setName(null); r.reload();
-      store.toast(done.name ? "Everyone now sees “" + done.name + "”." : "The name is cleared: everyone sees " + (done.server || "the server’s name") + ".", "ok");
-      void store.refetch();
-    } catch (e) { setError(errorText(e)); }
-    setBusy(false);
+    setName(null); setError(""); submit(n);
   };
+  if (pending) return <Card className="mb-4 p-4"><section ref={progress} aria-label="Workspace name change" className="space-y-3">
+    <p className="font-semibold">{pending.error ? "Workspace name change needs review" : pending.saved ? "Name saved; checking current workspace" : pending.request.name ? "Changing the name for everyone" : "Clearing the name for everyone"}</p>
+    <p className="break-words"><b>{pending.request.name || "Use the server name: " + (own?.server || v?.server || "AgentNet")}</b></p>
+    <p role={pending.error ? "alert" : "status"}>{pending.error ? "Could not confirm the change. " + pending.error : "You can leave this page. Other members see the change after the server confirms it."}</p>
+    {pending.error && <Hint>Current name: {currentName || own?.server || v?.server || "AgentNet"}. A response can be lost after saving. Check current status before retrying the exact change.</Hint>}
+    {r.error && <p role="alert">Could not check workspace access: {r.error}</p>}
+    <div className="flex flex-wrap gap-2">
+      {(pending.saved || pending.error) && <Button variant="outline" disabled={r.loading} onClick={() => { r.reload(); void store.refetch(); }}>{r.loading ? "Checking workspace name…" : "Check workspace name"}</Button>}
+      {pending.error && <><Button variant="act" disabled={offline || r.loading || !v?.can_rename} onClick={() => submit(pending.request.name)}>Retry workspace name</Button><Button variant="ghost" onClick={() => { setName(pending.request.name); store.clearWorkspaceRename(pending.request); }}>Edit workspace name</Button></>}
+    </div>
+  </section></Card>;
+  if (!v) return null;
+  if (!v.can_rename) return currentName ? <Hint className="mb-3">Its admin named this workspace “{currentName}” for everyone.</Hint> : null;
   const field = "mt-1.5 block h-12 w-full rounded-xl bg-surface px-3 text-[16px] text-ink stroke placeholder:text-muted";
   return (
     <Card className="mb-4 p-4">
-      <form onSubmit={(e) => { e.preventDefault(); void save(value); }}>
+      <form onSubmit={(e) => { e.preventDefault(); save(value); }}>
         <label className="block font-semibold">
           Name for everyone
           <input value={value} onChange={(e) => { setName(e.target.value); setError(""); }} maxLength={120} placeholder={v.server || "Workspace name"}
@@ -173,8 +188,8 @@ function NameForEveryone() {
         <Hint className="mt-1">Every member sees it, on every device. You can change it for everyone because you’re an admin here; people can still use their own name for it.</Hint>
         {error && <p role="alert" className="mt-2 text-[14px] font-semibold text-danger">{error}</p>}
         <div className="mt-3 flex flex-wrap gap-2">
-          <Button size="sm" type="submit" disabled={busy || value.trim() === v.name}>{busy ? "Saving…" : "Save for everyone"}</Button>
-          {v.name && <Button size="sm" variant="ghost" disabled={busy} onClick={() => void save("")}>Clear</Button>}
+          <Button size="sm" type="submit" disabled={offline || value.trim() === currentName}>Save for everyone</Button>
+          {currentName && <Button size="sm" variant="ghost" disabled={offline} onClick={() => save("")}>Clear</Button>}
         </div>
       </form>
     </Card>
@@ -183,6 +198,7 @@ function NameForEveryone() {
 
 export function WorkspacesSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingElement> }) {
   const store = useApp();
+  const identity = useStore(store, s => JSON.stringify([s.overview?.me.address, s.overview?.me.fingerprint, s.overview?.person?.person]));
   const ws = store.host.workspaces;
   const [revision, refresh] = useReducer((n: number) => n + 1, 0);
   const [joining, setJoining] = useState(false);
@@ -207,7 +223,7 @@ export function WorkspacesSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadi
   const head = <><PageHead title="Workspaces" titleRef={titleRef} lead="Each workspace is its own server, with its own people and chats. You switch between them here." /><GoogleMembers /></>;
   if (!ws) return (
     <>{head}
-      <NameForEveryone />
+      <NameForEveryone key={identity} />
       <Card className="flex items-center gap-3 p-4"><Coin ws={store.host.workspace} label={labelOf()} /><div><p className="font-semibold">{labelOf()}</p><Hint>The only workspace on this {store.host.platform === "browser" ? "browser" : store.host.platform === "android" ? "phone" : "computer"}.</Hint></div></Card>
     </>
   );
@@ -220,7 +236,7 @@ export function WorkspacesSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadi
   return (
     <div ref={box}>
       {head}
-      <NameForEveryone />
+      <NameForEveryone key={identity} />
       <ul className="space-y-3">
         {list.map((w) => (
           <li key={w.id} data-ws={done === w.id ? w.id : undefined} tabIndex={done === w.id ? -1 : undefined} className="rounded-2xl">

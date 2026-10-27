@@ -94,6 +94,7 @@ assert.equal(bar.workspaceLabel({ name: "This server", endpoint: "https://agentn
 assert.equal(bar.workspaceLabel({ name: "", endpoint: "http://127.0.0.1:17443/" }, { name: "", server: "agentnet.bezosapp.uk" }), "agentnet.bezosapp.uk", "the laptop shows the relay, not AgentNet");
 assert.equal(bar.workspaceLabel({ name: "", endpoint: "http://127.0.0.1:17443/" }, { name: "Mellanni", server: "agentnet.bezosapp.uk" }), "Mellanni");
 assert.equal(bar.workspaceLabel({ name: "", hub_name: "Mellanni", endpoint: "https://x.example/" }), "Mellanni");
+assert.equal(bar.workspaceLabel({ name: "", hub_name: "Old shared name", endpoint: "https://x.example/" }, { name: "", server: "x.example" }), "x.example", "an explicitly cleared current name supersedes a cached name");
 assert.equal(bar.workspaceLabel({ name: "Mine", endpoint: "https://x.example/" }, { name: "Mellanni" }), "Mine", "a local label wins");
 assert.equal(bar.workspaceLabel({ name: "", endpoint: "http://127.0.0.1:1/" }), "AgentNet", "AgentNet only with no host known");
 assert.equal(bar.whoText({ me: { address: "admin/pixel" }, person: { label: "Sergey" } }, "Mellanni"), "You are Sergey on Pixel in Mellanni.");

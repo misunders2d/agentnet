@@ -46,7 +46,7 @@ const serverName = (endpoint) => {
 export const workspaceLabel = (w, ws) => {
   const n = (w.name || "").trim();
   if (!generic.has(n.toLowerCase())) return n;
-  const own = ((ws && ws.name) || w.hub_name || "").trim();
+  const own = (ws?.name !== undefined ? ws.name : w.hub_name || "").trim();
   return own || hostName(ws && ws.server) || serverName(w.endpoint) || "AgentNet";
 };
 // deviceWords is a device address in words (client.DeviceWords; vectors:

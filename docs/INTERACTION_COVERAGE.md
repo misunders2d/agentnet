@@ -197,6 +197,14 @@ detector; all six screenshots were inspected. Build/type checks pass. Mac
 qualification of this shipping change remains pending; diagnostic passes do not
 qualify publication.
 
+Shipping candidate `ce211ffa` in `40460377048` passes all three native macOS
+workloads (actions, topics, groups), and browser Chromium/Firefox pass all cells.
+WebKit chat opening now takes 26–55 ms on narrow layouts. WebKit's first narrow
+message menu still takes 1060 ms and group member panel 1038 ms; their first DOM
+mutations take 13/10 ms and frame callbacks are delayed. These failures block
+publication. The controls open during the phone card transition; a separate
+paint diagnostic will isolate remaining shadows, rounding, filters and dimming.
+
 Profile rename now projects the requested display label immediately and replaces
 the form with named pending work. This reuses the existing Store projection and
 inspected Telegram local-change/reconciliation pattern. The native signed-roster
@@ -239,6 +247,29 @@ inspected. Five integrated race parents pass (setup, rename, device links, both
 profile workload widths and bundle integrity), with build/type checks passing.
 These are synthetic-host recovery checks; broader platform/control qualification
 remains open.
+
+Workspace name Save/Clear now projects the requested local label and replaces the
+form with retained pending work before the native call. Exact duplicate input
+shares work; navigation keeps the attempt, failures retain explicit retry/edit,
+and newer shared names or unsaved edits survive old responses. Checking status
+does not repeat a write. Revoked admin access disables retry after the fresh
+read; native `SetWorkspaceName` and browser `renameWorkspace` still enforce the
+relay's admin boundary. This reuses the same inspected Store projection and
+reconciliation pattern. Clearing an explicit current name now also supersedes
+the old cached `hub_name` in Comic and the shared skin bar, so the server name
+appears instead of resurrecting the old label. Device-local aliases keep priority.
+
+The old workspace editor fails the held-request regression. Four save/clear
+cases at 1440/390 pixels pass with 41–54 ms local feedback; all 12 captures were
+inspected. Held/refused writes, remount, exact retry, lost responses, newer state,
+changed owner, stopped work, permission loss and read-only status checks pass.
+Build/type checks, the workspace workload at both widths, native live admin and
+route checks, browser engine/cached-name checks and bundle integrity pass under
+the race detector. The adjacent old `TestComicPeopleRendered` fails before it
+reaches Workspaces: it expects unnamed historical agent threads in active Chats.
+The same failure reproduces on committed `fa50d0d5`, before this change. Its demo
+fixture has no topic-search provider; that historical-fixture qualification is
+still open, not a passing test or evidence of a new workspace-name regression.
 
 Group creation now replaces the form with its named pending destination before
 the native write. The existing Store retains the real creation result and exact

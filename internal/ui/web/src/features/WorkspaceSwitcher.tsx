@@ -31,7 +31,7 @@ export type OwnName = { name?: string; server?: string } | null | undefined;
 export function workspaceLabel(w: Workspace, own?: OwnName): string {
   const name = (w.name || "").trim();
   if (!generic.has(name.toLowerCase())) return name;
-  const hub = ((own && own.name) || w.hub_name || "").trim();
+  const hub = (own?.name !== undefined ? own.name : w.hub_name || "").trim();
   return hub || hostName(own?.server) || serverName(w.endpoint) || "AgentNet";
 }
 

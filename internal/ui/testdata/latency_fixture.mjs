@@ -53,6 +53,7 @@ try {
  let simulatedSetup=false,setupReceipt=false,setupPublishes=0,missingFolderMode=false;
  let reviewedSetup;
  let nativeFailure=false,notificationFailure=false,storageOffline=false,cacheOffline=false,cacheHold=false,releaseCache,workspaceInfo={name:'Fixture workspace',server:'Fixture server',can_rename:true};
+ if(suite==='workspaces')overview.workspace={name:workspaceInfo.name,server:workspaceInfo.server};
  const relayStorage={can_admin:true,configured:true,connected:true,state:'connected',local:{files:2,bytes:3072},remote:{files:0,bytes:0},pending:{files:2,bytes:3072},remote_only_files:0,migration:{running:false,files:0,bytes:0,total_files:0,total_bytes:0}};
  const staged=[];reports.files=staged;
  const fileHash=async f=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',await Blob.prototype.arrayBuffer.call(f)))).map(b=>b.toString(16).padStart(2,'0')).join('');
@@ -176,7 +177,7 @@ try {
     if(p==='/api/device/remove'){await pause(25);me.devices=me.devices.filter(d=>d.address!==body.address);emit();return{note:'Fixture device removed'};}
     if(p.startsWith('/api/notify/')){await pause(25);if(notificationFailure)throw Error('Synthetic notification preference unavailable');if(p.endsWith('/enable'))overview.notify.enabled=true;if(p.endsWith('/disable'))overview.notify.enabled=false;if(p.endsWith('/preview'))overview.notify.preview=body.preview;emit();return{note:'Fixture notification preference saved'};}
     if(p==='/api/workspace')return clone(workspaceInfo);
-    if(p==='/api/workspace/name'){await pause(25);workspaceInfo.name=body.name;emit();return clone(workspaceInfo);}
+    if(p==='/api/workspace/name'){await pause(25);workspaceInfo.name=body.name;overview.workspace={name:workspaceInfo.name,server:workspaceInfo.server};emit();return clone(workspaceInfo);}
     if(p==='/api/storage/attachments'){await pause(25);if(body){assert(body.action==='connect'||body.confirm===true,'Drive exact explicit confirmation');throw Error('Synthetic Drive '+body.action+' unavailable; real relay/Google authorization required');}return clone(relayStorage);}
     if(p==='/api/storage'){await pause(25);if(storageOffline)throw Error('Synthetic storage unavailable; Retry is safe.');return clone(storage);}
     if(p==='/api/storage/cache'){if(body){assert(body.selection?.length===1,'clear captured one-file selection');if(cacheHold){cacheHold=false;await new Promise(r=>releaseCache=r);}return{removed:{files:cacheOffline?0:1,bytes:cacheOffline?0:body.selection[0].size},retained:{files:cacheOffline?1:0,bytes:cacheOffline?body.selection[0].size:0}};}return{files:cacheFiles,usage:{files:2,bytes:3072}};}
@@ -1198,8 +1199,9 @@ try {
    await settings('Workspaces');await until(()=>control('Save for everyone'),'workspace information loaded');
    const field=[...scope().querySelectorAll('label')].find(l=>l.textContent.includes('Name for everyone'))?.querySelector('input');
    await fill('workspaces.shared-name-edit',field,'Fixture renamed workspace');
-   await tap('workspaces.shared-name-save',control('Save for everyone'),()=>workspaceInfo.name==='Fixture renamed workspace'&&visibleText('Everyone now sees “Fixture renamed workspace”.'),'workspace admin name saved after API result');
-   await tap('workspaces.shared-name-clear',control('Clear'),()=>workspaceInfo.name===''&&visibleText('The name is cleared:'),'workspace shared name cleared');
+   const namePending=()=>root.querySelector('[aria-label="Workspace name change"]'),nameField=()=>[...scope().querySelectorAll('label')].find(l=>l.textContent.includes('Name for everyone'))?.querySelector('input');
+   await tap('workspaces.shared-name-save',control('Save for everyone'),()=>onScreen(namePending())&&namePending().textContent.includes('Fixture renamed workspace'),'exact workspace name pending',()=>workspaceInfo.name==='Fixture renamed workspace'&&!namePending()&&nameField()?.value===workspaceInfo.name);
+   await tap('workspaces.shared-name-clear',control('Clear'),()=>onScreen(namePending())&&namePending().textContent.includes('Clearing the name'),'workspace name clearing locally',()=>workspaceInfo.name===''&&!namePending()&&nameField()?.value==='');
    const other=()=>host.workspaces.list().find(w=>w.id==='other');
    const membershipRow=name=>[...root.querySelectorAll('li')].find(li=>li.textContent.includes(name)&&li.querySelector('button'));
    await tap('workspaces.switch-selection',control('Switch'),()=>host.workspaces.active()==='other'&&membershipRow('Fixture other')?.textContent.includes('In use'),'captured membership selection visible; actual transport remount separate');
