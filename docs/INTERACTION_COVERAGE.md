@@ -96,7 +96,22 @@ Azure Ubuntu mirror before cancellation, including the 27.3 MB WebKit package.
 The next disposable runner uses Ubuntu's main HTTPS archive instead, preserving
 the selected Ubuntu suites and package-signature verification. This is a CI
 download recovery, not a passed app test. The next run, `40421371994`, completes
-dependency setup in 43 seconds; full Linux interaction qualification is running.
+dependency setup in 43 seconds. Its full Linux native-shell/browser matrix passes:
+140 cells, 4,394 synthetic actions, maximum feedback 258 ms. This is the existing
+workload matrix at `aed2cb53`, not exhaustive source/control reconciliation.
+
+Profile picture removal also waited for storage. The actual profile/shared-avatar
+regression fails against `0b81b58d` with the avatar still visible after five
+seconds of held storage. Applying the existing local-projection / background
+request / reconciliation pattern now changes all own avatars immediately. Local
+trusted-input checks at 1440 and 390 pixels take 26–27 ms including two frame
+opportunities; physical paint is not measured. Held writes, duplicate clicks,
+refusal/retry, newer synchronized pictures, stale successful replies, delayed
+confirmation reads, and stopped-workspace completion are covered. Current state
+is revealed on failure; an old snapshot is never restored. Pending picture work
+also guards automatic reload. This reuses the inspected Telegram local-update
+pattern already cited below; API permissions and public picture storage remain
+unchanged. Native platform and overlay qualification for this delta is pending.
 
 The remaining Base UI popup entrances used transparent or fully offscreen
 starting states. Real message-menu/reaction/delete and All Topics regressions

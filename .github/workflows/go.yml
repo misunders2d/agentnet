@@ -103,7 +103,7 @@ jobs:
         if: ${{ (!inputs.test_run || contains(inputs.test_run, 'Rendered')) && (!inputs.test_packages || contains(inputs.test_packages, './...') || contains(inputs.test_packages, 'internal/ui')) }}
         shell: bash
         env:
-          AGENTNET_RENDERED_RUN: ${{ inputs.test_run || '^(TestLocalChangesRendered|TestReminderChangesRendered|TestResponsiveEditorDraftsRendered|TestReactionPendingRendered|TestPaneEntranceRendered|TestSheetImmediateRendered|TestMessagePopupsImmediateRendered|TestTimelineNavigationRendered|TestTimelineKeyboardRendered|TestFirstUnreadTimelineRendered)$' }}
+          AGENTNET_RENDERED_RUN: ${{ inputs.test_run || '^(TestLocalChangesRendered|TestPictureChangesRendered|TestReminderChangesRendered|TestResponsiveEditorDraftsRendered|TestReactionPendingRendered|TestPaneEntranceRendered|TestSheetImmediateRendered|TestMessagePopupsImmediateRendered|TestTimelineNavigationRendered|TestTimelineKeyboardRendered|TestFirstUnreadTimelineRendered)$' }}
           AGENTNET_RENDERED_COUNT: ${{ inputs.test_count || '1' }}
         run: |
           tooling="$RUNNER_TEMP/agentnet-interaction-regressions"

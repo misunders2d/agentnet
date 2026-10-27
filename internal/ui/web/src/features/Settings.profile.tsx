@@ -90,6 +90,7 @@ function ServiceRole() {
 function Rename({ person }: { person: T.PersonView }) {
   const store = useApp();
   const portal = usePortal();
+  const picture = useStore(store, s => s.pictureChange);
   const [name, setName] = useState(person.label);
   const [busy, setBusy] = useState(false);
   useEffect(() => setName(person.label), [person.label]); // a rename from another device shows here
@@ -120,8 +121,10 @@ function Rename({ person }: { person: T.PersonView }) {
         </div>
       </div>
       {person.state === "self" && <div className="flex flex-wrap gap-2 p-4">
-        <Button onClick={async () => { if (await openPictureEditor({ into: portal, current: person.picture_url, save: png => store.api.setPersonPicture(png) })) await store.refetch(); }}>Choose picture</Button>
-        {person.picture && <Button disabled={busy} onClick={async () => { setBusy(true); await store.run(a => a.setPersonPicture(""), "Picture removed."); setBusy(false); }}>Remove picture</Button>}
+        <Button disabled={!!picture} onClick={async () => { if (await openPictureEditor({ into: portal, current: person.picture_url, save: png => store.api.setPersonPicture(png) })) await store.refetch(); }}>Choose picture</Button>
+        {person.picture && <Button disabled={!!picture} onClick={() => { void store.run(a => a.setPersonPicture(""), "Picture removed."); }}>Remove picture</Button>}
+        {picture && <p role="status" className="w-full text-sm text-muted">{picture.saved ? "Picture change saved; checking current state…" : picture.png ? "Saving picture…" : "Removing picture…"}</p>}
+        {picture?.saved && <Button variant="ghost" onClick={() => { void store.refetch(); }}>Check picture status</Button>}
       </div>}
       {person.state === "self" && (
         <form onSubmit={save} className="space-y-2.5 p-4">

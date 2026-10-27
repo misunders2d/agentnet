@@ -137,6 +137,7 @@ export interface State {
   dismissPending: Record<string, PendingDismiss>;
   messageChanges: Record<string, MessageChange>;
   reminderChanges: Record<string, ReminderChange>;
+  pictureChange?: { person: T.PersonView; seq: number; png: string; saved?: T.PersonView };
   panel: boolean;                                         // "In this chat" (desktop panel, phone sheet)
   readVisit: ReadVisit | null;
   contentRevision: number; // successful content loads; typing/presence do not advance choice lists
@@ -148,7 +149,7 @@ const draftsKey = (ws: string) => brand.storage + ".drafts." + ws;
 
 // unsentIn: what a reload would lose: a draft's text or files, or a send
 // not yet stored.
-export const unsentIn = (s: Pick<State, "drafts" | "unsent"> & Partial<Pick<State,"scheduleSaves" | "messageChanges" | "reminderChanges">>) => s.unsent || Object.keys(s.reminderChanges || {}).length > 0 || Object.values(s.messageChanges || {}).some(p => p.status === "pending" || p.status === "failed" && p.action === "edit") || Object.values(s.scheduleSaves || {}).some(slot=>!!slot.attempt && (slot.status==="saving" || slot.status==="uncertain")) || Object.values(s.drafts).some((d) => d.text || (d.files && d.files.length));
+export const unsentIn = (s: Pick<State, "drafts" | "unsent"> & Partial<Pick<State,"scheduleSaves" | "messageChanges" | "reminderChanges" | "pictureChange">>) => s.unsent || !!s.pictureChange && !s.pictureChange.saved || Object.keys(s.reminderChanges || {}).length > 0 || Object.values(s.messageChanges || {}).some(p => p.status === "pending" || p.status === "failed" && p.action === "edit") || Object.values(s.scheduleSaves || {}).some(slot=>!!slot.attempt && (slot.status==="saving" || slot.status==="uncertain")) || Object.values(s.drafts).some((d) => d.text || (d.files && d.files.length));
 
 const recovery = { update: [500, 1000, 2000, 4000, 8000, 15000, 30000], missed: [1000, 3000, 8000] };
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -169,6 +170,8 @@ export class Store {
   private confirmedReminders = new Map<string, { seq: number; reminder: T.ReminderView | null }>();
   private reminderWork = new Map<string, { intent: string; work: Promise<ReminderResult | undefined> }>();
   private reminderState?: { source: State; value: State };
+  private pictureState?: { source: State; value: State };
+  private pictureWork?: { png: string; work: Promise<T.PersonView> };
   private reminderOverviewCache?: { source: T.Overview; changes: State["reminderChanges"]; value: T.Overview };
   private reactionSequence = 0;
   private reacting = new Map<string, { pending: PendingReaction; work: Promise<{ note: string } | undefined> }>();
@@ -212,7 +215,8 @@ export class Store {
     this.chooseMain = mainPreferences(host.workspace.id, () => localStorage);
     const calls = api(host);
     this.api = { ...calls, act: action => action.do === "resolve" ? this.dismiss(action, calls) : calls.act(action),
-      edit: c => this.changeMessage("edit", c, calls), retract: c => this.changeMessage("delete", c, calls) };
+      edit: c => this.changeMessage("edit", c, calls), retract: c => this.changeMessage("delete", c, calls),
+      setPersonPicture: png => this.changePicture(png, calls) };
     this.sends = pendingSends(host, () => {
       const o = this.state?.open;
       // A send clears its draft as it begins: until it is stored, a reload
@@ -231,7 +235,7 @@ export class Store {
 
   // ---- subscription
   get = () => {
-    const s = this.presentReminders(this.presentMessages(this.presentTopics()));
+    const s = this.presentPicture(this.presentReminders(this.presentMessages(this.presentTopics())));
     if (!s.overview || !Object.keys(s.dismissPending).length) return s;
     if (this.dismissState?.source === s) return this.dismissState.value;
     if (this.dismissOverview?.source !== s.overview || this.dismissOverview.pending !== s.dismissPending) {
@@ -241,6 +245,44 @@ export class Store {
     this.dismissState = { source: s, value };
     return value;
   };
+
+  private presentPicture(s: State): State {
+    const p = s.pictureChange, o = s.overview;
+    if (!p || !o?.person || o.seq !== p.seq || o.person.person !== p.person.person) return s;
+    if (this.pictureState?.source === s) return this.pictureState.value;
+    const person = { ...o.person, picture: p.png ? "pending" : undefined,
+      picture_url: p.png ? "data:image/png;base64," + p.png : undefined };
+    const value = { ...s, overview: { ...o, person } };
+    this.pictureState = { source: s, value };
+    return value;
+  }
+
+  private changePicture(png: string, calls: Api): Promise<T.PersonView> {
+    if (!this.alive) return Promise.reject(Error("stale or disconnected workspace"));
+    if (this.pictureWork) return this.pictureWork.png === png ? this.pictureWork.work : Promise.reject(Error("Wait for the current picture change to finish."));
+    const o = this.state.overview;
+    if (!o?.person) return calls.setPersonPicture(png);
+    const change = { person: o.person, seq: o.seq, png };
+    const current = () => this.alive && this.state.pictureChange?.person === change.person;
+    this.set({ pictureChange: change });
+    const work = Promise.resolve().then(async () => {
+      try {
+        const saved = await calls.setPersonPicture(png);
+        if (current()) this.set({ pictureChange: { ...change, saved } });
+        return saved;
+      } catch (error) {
+        if (current()) {
+          this.set({ pictureChange: undefined }); // reveal current state, never restore an old snapshot
+          void this.refetch(); // a lost reply may follow a successful save
+        }
+        throw error;
+      } finally {
+        if (this.pictureWork?.work === work) this.pictureWork = undefined;
+      }
+    });
+    this.pictureWork = { png, work };
+    return work;
+  }
 
   private presentReminders(s: State): State {
     if (!s.overview || !Object.keys(s.reminderChanges).length) return s;
@@ -402,6 +444,7 @@ export class Store {
     }
     this.reacting.clear();
     this.dismissing.clear();
+    this.pictureWork = undefined;
     this.sends.dispose();
     this.scheduled.dispose();
     this.stopListen?.();
@@ -536,6 +579,8 @@ export class Store {
     if (first || !this.state.version) patch.version = o.version;
     else if (o.version && o.version !== this.state.version) patch.newVersion = o.version;
     this.set(patch);
+    const picture = this.state.pictureChange;
+    if (picture?.saved && (o.seq > picture.seq || o.person?.picture === picture.saved.picture)) this.set({ pictureChange: undefined });
     this.pruneDismissals();
     if (o.groups) this.set({ invitations: share(this.state.invitations, o.group_invitations || []) });
     if (catalogs) void this.loadAgentNames();
