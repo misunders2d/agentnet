@@ -1,4 +1,4 @@
-// Real notification controls and native consent, trusted input, held/refused storage.
+// Real device-link controls, trusted input, held/refused link and clipboard work.
 const assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path'),http=require('node:http');
 const {execFileSync}=require('node:child_process'),{chromium}=require(process.env.AGENTNET_PLAYWRIGHT);
 const web=path.resolve(__dirname,'../web'),work=fs.mkdtempSync(path.join(os.tmpdir(),'agentnet-device-link-'));
@@ -8,12 +8,13 @@ import {Store,useStore} from './src/store';import {StoreContext} from './src/con
 import {DevicesSection} from './src/features/Settings.profile';
 const root=document.getElementById('root'),app=document.getElementById('app'),portals=document.getElementById('portals');
 const overview={seq:1,version:'fixture',role:'person',me:{address:'self/laptop'},person:{person:'self',label:'Fixture person',state:'self',address:'self/laptop',devices:[{address:'self/laptop',name:'Fixture laptop',this:true,fingerprint:'one'}]},people:[],dms:[],threads:[],needs_you:[]};
-const f=window.fixture={writes:[],timings:[]};
+const f=window.fixture={writes:[],timings:[],copies:[],clipboardFail:true};
 const host={platform:'daemon',workspace:{id:'device-link',state:'enrolled'},listen(){return()=>{}},async api(p,b){
  if(p.startsWith('/api/overview'))return structuredClone(overview);
  if(p==='/api/device/link')return new Promise((resolve,reject)=>f.writes.push({resolve,reject}));
  if(p.startsWith('/api/agents'))return {agents:[]};return {};
 }};
+Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>{f.copies.push(text);if(f.clipboardHold)await new Promise(resolve=>{f.clipboardRelease=resolve});if(f.clipboardFail)throw Error('Invented clipboard refusal')}}});
 const store=new Store(host);f.store=store;
 f.finish=(index,fail=false)=>{const w=f.writes[index];if(fail)w.reject(Error('Invented link refusal'));else w.resolve({url:'https://fixture.invalid/one-use-'+index,expires:'2099-01-01T00:00:00Z'})};
 function App(){const s=useStore(store,s=>s);return <><button onClick={()=>store.showTab(s.tab==='settings'?'chats':'settings')}>Toggle view</button><output>{s.tab}</output><DevicesSection/><textarea aria-label="Unrelated draft"/><div role="alert">{s.toasts.map(t=>t.text).join(' ')}</div></>}
@@ -39,16 +40,30 @@ const server=http.createServer((req,res)=>{if(req.url==='/entry.mjs'){res.setHea
   if(process.env.AGENTNET_DEVICE_LINK_EVIDENCE)await page.screenshot({path:process.env.AGENTNET_DEVICE_LINK_EVIDENCE+'-pending-'+width+'.png',fullPage:true});
   await dialog.getByRole('button',{name:'Done',exact:true}).click();await dialog.waitFor({state:'hidden'});
   await add.click();await dialog.waitFor();assert.equal(await page.evaluate(()=>fixture.writes.length),1,'reopening pending work cannot create another link');
-  await dialog.getByRole('button',{name:'Done',exact:true}).click();await dialog.waitFor({state:'hidden'});
+  await dialog.getByRole('button',{name:'Close',exact:true}).click();await dialog.waitFor({state:'hidden'});
   await page.getByRole('textbox',{name:'Unrelated draft'}).fill('Retain while link generation is held');await page.getByRole('button',{name:'Toggle view'}).click();
   await page.evaluate(()=>fixture.finish(0));await page.waitForTimeout(50);assert.equal(await dialog.count(),0,'late completion cannot reopen a dismissed dialog');
   await add.click();await dialog.locator('code[aria-label="Link"]').waitFor();assert.equal(await page.evaluate(()=>fixture.writes.length),1,'completed pending link remains available on deliberate reopening');
-  assert.equal(await dialog.locator('code').textContent(),'https://fixture.invalid/one-use-0');await dialog.getByRole('button',{name:'Done',exact:true}).click();await dialog.waitFor({state:'hidden'});
+  assert.equal(await dialog.locator('code').textContent(),'https://fixture.invalid/one-use-0');
+  await page.evaluate(()=>{fixture.clipboardHold=true});const copyStarted=Date.now();
+  await dialog.getByRole('button',{name:'Copy link',exact:true}).click();await dialog.getByRole('button',{name:'Copying…',exact:true}).waitFor({timeout:500});
+  const copyMs=Date.now()-copyStarted;assert(copyMs<500,'held clipboard work needs immediate visible feedback');
+  assert.equal(await dialog.getByRole('button',{name:'Copied',exact:true}).count(),0,'pending clipboard work cannot claim copied');
+  await dialog.getByRole('button',{name:'Copying…',exact:true}).evaluate(b=>b.click());assert.equal(await page.evaluate(()=>fixture.copies.length),1,'duplicate input cannot repeat pending copy');
+  await page.evaluate(()=>{fixture.clipboardHold=false;fixture.clipboardRelease()});
+  const copyError=dialog.getByRole('alert');await copyError.waitFor();assert.match(await copyError.textContent(),/Copy didn’t work here/);assert.equal(await copyError.evaluate(e=>!!e.closest('[inert]')),false,'clipboard refusal must remain accessible inside the active dialog');
+  if(process.env.AGENTNET_DEVICE_LINK_EVIDENCE)await page.screenshot({path:process.env.AGENTNET_DEVICE_LINK_EVIDENCE+'-copy-error-'+width+'.png',fullPage:true});
+  await page.evaluate(()=>{fixture.clipboardFail=false});await dialog.getByRole('button',{name:'Copy link',exact:true}).click();await dialog.getByRole('button',{name:'Copied',exact:true}).waitFor();assert.equal(await dialog.getByRole('alert').count(),0,'retry clears the old refusal');assert.deepEqual(await page.evaluate(()=>fixture.copies),['https://fixture.invalid/one-use-0','https://fixture.invalid/one-use-0']);await dialog.getByRole('button',{name:'Done',exact:true}).click();await dialog.waitFor({state:'hidden'});
   await add.click();await dialog.waitFor();await page.evaluate(()=>fixture.finish(1,true));await dialog.getByText('Could not make a link. Try again.',{exact:true}).waitFor();
   if(process.env.AGENTNET_DEVICE_LINK_EVIDENCE)await page.screenshot({path:process.env.AGENTNET_DEVICE_LINK_EVIDENCE+'-error-'+width+'.png',fullPage:true});
   await dialog.getByRole('button',{name:'Try again',exact:true}).click();await dialog.getByText('Making a one-use link…',{exact:true}).waitFor();await page.evaluate(()=>fixture.finish(2));await dialog.locator('code[aria-label="Link"]').waitFor();assert.equal(await dialog.locator('code').textContent(),'https://fixture.invalid/one-use-2');
+  await page.evaluate(()=>{fixture.clipboardHold=true});await dialog.getByRole('button',{name:'Copy link',exact:true}).click();await dialog.getByRole('button',{name:'Copying…',exact:true}).waitFor();
   await dialog.getByRole('button',{name:'Done',exact:true}).click();await dialog.waitFor({state:'hidden'});
-  assert.equal(await page.getByRole('textbox',{name:'Unrelated draft'}).inputValue(),'Retain while link generation is held');assert.equal(await page.evaluate(()=>fixture.store.get().overview.person.devices.length),1,'creating links grants no device membership');assert.deepEqual(errors,[]);reports.push({width,openMs,writes:await page.evaluate(()=>fixture.writes.length)});await page.close();
+  await add.click();await dialog.waitFor();await page.evaluate(()=>fixture.finish(3));await dialog.locator('code[aria-label="Link"]').waitFor();
+  await page.evaluate(()=>{fixture.clipboardHold=false;fixture.clipboardRelease()});await page.waitForTimeout(50);
+  assert.equal(await dialog.locator('code').textContent(),'https://fixture.invalid/one-use-3');assert.equal(await dialog.getByRole('button',{name:'Copied',exact:true}).count(),0,'old clipboard success cannot claim the new link was copied');
+  await dialog.getByRole('button',{name:'Done',exact:true}).click();await dialog.waitFor({state:'hidden'});
+  assert.equal(await page.getByRole('textbox',{name:'Unrelated draft'}).inputValue(),'Retain while link generation is held');assert.equal(await page.evaluate(()=>fixture.store.get().overview.person.devices.length),1,'creating links grants no device membership');assert.deepEqual(errors,[]);reports.push({width,openMs,copyMs,writes:await page.evaluate(()=>fixture.writes.length)});await page.close();
  }
  console.log(JSON.stringify({ok:true,reports,scope:'actual device dialog, trusted input and held synthetic link generation; no native device enrolled'}));
  }finally{await browser?.close();await new Promise(r=>server.close(r));fs.rmSync(work,{recursive:true,force:true})}

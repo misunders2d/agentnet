@@ -483,7 +483,7 @@ try {
    if(!visibleText(title)){const b=name==='Profile'?buttons().find(b=>!b.closest('nav')&&[...b.querySelectorAll('span')].some(s=>s.textContent===me.label)):control(new RegExp('^'+name));await tap('settings.section-'+name.toLowerCase().replaceAll(' ','-'),b,()=>visibleText(title),'exact '+title+' heading visible');}
   };
   const chat=async()=>{
-   const title=p1==='direct'?'Portable Pi':peer.label;
+   const title=p1==='direct'?'Portable Pi · Pi':view.kind==='group'?view.title:peer.label;
    const ready=()=>[...root.querySelectorAll('[data-part="conversation"]')].some(section=>section.getAttribute('aria-label')===title&&onScreen(section.querySelector('[data-part="timeline"]')));
    const opening=()=>[...root.querySelectorAll('section[aria-busy="true"]')].some(section=>section.getAttribute('aria-label')==='Opening '+title&&onScreen(section));
    // Navigation commits to the selected destination before history arrives.
@@ -753,7 +753,8 @@ try {
    if(innerWidth<1024)await tap('profile.back',active('[data-settings-back]'),()=>!!control(/^Your devices/),'settings list visible again');
    await settings('Your devices');
    const details=control('Details');await tap('devices.details',details,()=>details.getAttribute('aria-expanded')==='true','exact device details expanded');
-   await tap('devices.link-create',control('Add a device'),()=>!!sheet('Add a device')&&!!active('code[aria-label="Link"]'),'one-use fixture link with QR visible');
+   await tap('devices.link-create',control('Add a device'),()=>!!sheet('Add a device'),'device-link dialog visible before link generation',()=>!!sheet('Add a device')&&!!active('code[aria-label="Link"]'));
+   await tap('devices.link-copy',control('Copy link',sheet('Add a device')),()=>visibleText('Copy didn’t work here'),'explicit failed clipboard outcome; link remains available for manual copy');
    await closeSheet('devices.link-close','Add a device');
    await tap('devices.request-refuse',control('No, refuse it'),()=>!control('No, refuse it')&&overview.links.length===0,'exact pending device request removed after refusal');
    await tap('devices.remove-review',control('Remove Fixture phone'),()=>!!sheet('Remove Fixture phone?'),'specific other device removal confirmation');

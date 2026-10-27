@@ -318,22 +318,34 @@ function LinkSheet({ open, link, error, onRetry, onClose }: {
   open: boolean; link: T.DeviceLink | null; error: boolean; onRetry: () => void; onClose: () => void;
 }) {
   const store = useApp();
-  const [copied, setCopied] = useState(false);
-  useEffect(() => setCopied(false), [link?.url]);
+  const [copyState, setCopyState] = useState<"idle" | "copying" | "copied" | "failed">("idle");
+  const copyRequest = useRef(0);
+  const copying = useRef(false);
+  useEffect(() => {
+    copyRequest.current++;
+    copying.current = false;
+    setCopyState("idle");
+    return () => { copyRequest.current++; };
+  }, [open, link?.url]);
   const page = !!link && /^https:\/\//.test(link.url);
   const copy = async () => {
-    if (!link) return;
+    if (!link || copying.current) return;
+    copying.current = true;
+    const request = ++copyRequest.current;
+    setCopyState("copying");
     const ok = await copyText(link.url, store.host.android);
-    setCopied(ok);
-    if (!ok) store.toast("Copy didn’t work here. Select the link and copy it by hand.", "error");
+    if (request !== copyRequest.current) return;
+    copying.current = false;
+    setCopyState(ok ? "copied" : "failed");
   };
   return (
     <Sheet open={open} onOpenChange={(open) => { if (!open) onClose(); }} title="Add a device"
       description="It joins as you only after you approve it here."
-      footer={<div className="flex gap-2">{link && <Button variant="act" className="flex-1" icon={copied ? <IconCheck size={18} /> : <IconCopy size={18} />} onClick={copy}>{copied ? "Copied" : page ? "Copy link" : "Copy code"}</Button>}{!link && error && <Button variant="act" onClick={onRetry}>Try again</Button>}<Button variant="outline" onClick={onClose}>Done</Button></div>}>
+      footer={<div className="flex gap-2">{link && <Button variant="act" className="flex-1" disabled={copyState === "copying"} icon={copyState === "copied" ? <IconCheck size={18} /> : <IconCopy size={18} />} onClick={copy}>{copyState === "copied" ? "Copied" : copyState === "copying" ? "Copying…" : page ? "Copy link" : "Copy code"}</Button>}{!link && error && <Button variant="act" onClick={onRetry}>Try again</Button>}<Button variant="outline" onClick={onClose}>Done</Button></div>}>
       {!link && <p role={error ? "alert" : "status"}>{error ? "Could not make a link. Try again." : "Making a one-use link…"}</p>}
       {link && (
         <div className="space-y-4">
+          {copyState === "failed" && <p role="alert">Copy didn’t work here. Select the link and copy it by hand.</p>}
           <ol className="space-y-3">
             <Step n={1}>{page ? "On your new device, scan this code with its camera, or open the link below in its browser." : "On your new device, run AgentNet’s join with this code."}</Step>
             <Step n={2}>Come back here: it shows up under Your devices. Approve it.</Step>

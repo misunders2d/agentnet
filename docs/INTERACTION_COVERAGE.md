@@ -91,6 +91,34 @@ the repair. Sergey needs to do nothing while owned fixtures are being tested.
 
 ### October 27 continuation: the 500 ms target
 
+The complete macOS run `40430293982` at `557e82e6` fails. Native feedback
+includes Permissions 574 ms, the first message menu 582 ms, composer menu
+776 ms, default-agent dialog 719 ms, and storage review 844 ms. Browser WebKit
+also exceeds the bound. These are unresolved failures, not waived runner noise.
+Separately, the new exact-chat assertion incorrectly expected a person's label
+for named groups and omitted the harness suffix of a direct agent. The fixture
+now expects the actual exact group/agent title while keeping both the immediate
+navigation and completed-history requirements. This repairs test expectations,
+not application speed. Desktop target setup now recognizes any macOS runner,
+allowing a recorded Intel comparison of the same candidate and workload.
+
+Additional control coverage exposed clipboard refusal behind the device-link
+modal's inert background. Copy now shows pending state immediately and reports
+failure inside the active dialog, retaining the exact link and a usable retry.
+Only a successful clipboard reply displays Copied. Repeated pending input is
+deduplicated; closing or replacing the link invalidates old replies. This uses
+the same inspected local-state/modal recovery pattern cited below, with the
+existing browser/native clipboard authority unchanged. Trusted-input tests at
+1440 and 390 pixels show held clipboard feedback in 38–44 ms; both error
+screenshots were inspected. The profile workload now clicks Copy link and
+measures opening the link dialog separately from completed link generation.
+The focused integrated run passes all six parents: device link, shared device
+decisions, notification changes, picture changes, affected profile/topics/groups/
+compose workloads, and canonical bundle verification. Explicit Check device
+status, Check notification status, and Check picture status controls are also
+executed with delayed confirmation, without repeating their writes. This is
+focused coverage, not completion of the control inventory or release gate.
+
 Linux CI dependency setup previously spent over 30 minutes on the runner's
 Azure Ubuntu mirror before cancellation, including the 27.3 MB WebKit package.
 The next disposable runner uses Ubuntu's main HTTPS archive instead, preserving
@@ -105,7 +133,9 @@ The later `54018a9a` Linux runner uses `mirror+file` with
 its Azure endpoint. Its still-running dependency download was cancelled after
 23 minutes; completed macOS/Windows results are retained. The correction also
 rewrites the observed mirror list, preserving Ubuntu package signatures and
-suites. A new Linux execution remains required.
+suites. The corrected affected Linux run passes in `40430290954`; its Android
+profile job also passes. Device-link and notification rendered regressions pass
+three times on all three desktop systems in `40430297380`.
 
 Profile picture removal also waited for storage. The actual profile/shared-avatar
 regression fails against `0b81b58d` with the avatar still visible after five
