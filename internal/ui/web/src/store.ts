@@ -139,6 +139,7 @@ export interface State {
   messageChanges: Record<string, MessageChange>;
   reminderChanges: Record<string, ReminderChange>;
   pictureChange?: { person: T.PersonView; seq: number; png: string; saved?: T.PersonView };
+  personRename?: { request: { person: string; original: string; label: string }; saved?: T.PersonView; error?: string };
   deviceDecisions?: Record<string, { link: T.LinkRequest; person: string; accept: boolean; saved?: boolean }>;
   deviceRemovals?: Record<string, { device: T.DeviceView; person: string; saved?: boolean }>;
   groupDecisions?: Record<string, { invitation: T.GroupInvitationView; person: string; accept: boolean; saved?: boolean }>;
@@ -174,7 +175,7 @@ const draftsKey = (ws: string) => brand.storage + ".drafts." + ws;
 
 // unsentIn: what a reload would lose: a draft's text or files, or a send
 // not yet stored.
-export const unsentIn = (s: Pick<State, "drafts" | "unsent"> & Partial<Pick<State,"scheduleSaves" | "messageChanges" | "reminderChanges" | "pictureChange" | "deviceDecisions" | "deviceRemovals" | "groupDecisions" | "groupChanges" | "groupCreation" | "invitationSends" | "teamCreation" | "teamChanges">>) => s.unsent || Object.values(s.invitationSends || {}).some(p => !p.done && !p.error) || !!s.groupCreation && !s.groupCreation.done && !s.groupCreation.error || Object.values(s.teamChanges || {}).some(p => !p.saved && !p.error) || !!s.teamCreation && !s.teamCreation.saved && !s.teamCreation.error || Object.values(s.groupChanges || {}).some(p => !p.saved && !p.error) || Object.values(s.groupDecisions || {}).some(p => !p.saved) || Object.values(s.deviceDecisions || {}).some(p => !p.saved) || Object.values(s.deviceRemovals || {}).some(p => !p.saved) || !!s.pictureChange && !s.pictureChange.saved || Object.keys(s.reminderChanges || {}).length > 0 || Object.values(s.messageChanges || {}).some(p => p.status === "pending" || p.status === "failed" && p.action === "edit") || Object.values(s.scheduleSaves || {}).some(slot=>!!slot.attempt && (slot.status==="saving" || slot.status==="uncertain")) || Object.values(s.drafts).some((d) => d.text || (d.files && d.files.length));
+export const unsentIn = (s: Pick<State, "drafts" | "unsent"> & Partial<Pick<State,"scheduleSaves" | "messageChanges" | "reminderChanges" | "pictureChange" | "personRename" | "deviceDecisions" | "deviceRemovals" | "groupDecisions" | "groupChanges" | "groupCreation" | "invitationSends" | "teamCreation" | "teamChanges">>) => s.unsent || !!s.personRename && !s.personRename.saved && !s.personRename.error || Object.values(s.invitationSends || {}).some(p => !p.done && !p.error) || !!s.groupCreation && !s.groupCreation.done && !s.groupCreation.error || Object.values(s.teamChanges || {}).some(p => !p.saved && !p.error) || !!s.teamCreation && !s.teamCreation.saved && !s.teamCreation.error || Object.values(s.groupChanges || {}).some(p => !p.saved && !p.error) || Object.values(s.groupDecisions || {}).some(p => !p.saved) || Object.values(s.deviceDecisions || {}).some(p => !p.saved) || Object.values(s.deviceRemovals || {}).some(p => !p.saved) || !!s.pictureChange && !s.pictureChange.saved || Object.keys(s.reminderChanges || {}).length > 0 || Object.values(s.messageChanges || {}).some(p => p.status === "pending" || p.status === "failed" && p.action === "edit") || Object.values(s.scheduleSaves || {}).some(slot=>!!slot.attempt && (slot.status==="saving" || slot.status==="uncertain")) || Object.values(s.drafts).some((d) => d.text || (d.files && d.files.length));
 
 const recovery = { update: [500, 1000, 2000, 4000, 8000, 15000, 30000], missed: [1000, 3000, 8000] };
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -209,6 +210,8 @@ export class Store {
   private dmStartWork = new Map<string, Promise<{ id: string }>>();
   private groupCreationWork?: Promise<string>;
   private invitationWork = new Map<string, Promise<InvitationSend>>();
+  private personRenameWork?: Promise<T.PersonView>;
+  private personRenameState?: { source: State; value: State };
   private reminderOverviewCache?: { source: T.Overview; changes: State["reminderChanges"]; value: T.Overview };
   private reactionSequence = 0;
   private reacting = new Map<string, { pending: PendingReaction; work: Promise<{ note: string } | undefined> }>();
@@ -254,6 +257,7 @@ export class Store {
     this.api = { ...calls, act: action => action.do === "resolve" ? this.dismiss(action, calls) : calls.act(action),
       edit: c => this.changeMessage("edit", c, calls), retract: c => this.changeMessage("delete", c, calls),
       setPersonPicture: png => this.changePicture(png, calls),
+      renamePerson: label => this.renamePerson(label, calls),
       decideDevice: (id, accept) => this.decideDevice(id, accept, calls),
       removeDevice: address => this.removeDevice(address, calls),
       decideGroup: (id, accept) => this.decideGroup(id, accept, calls),
@@ -278,7 +282,7 @@ export class Store {
 
   // ---- subscription
   get = () => {
-    const s = this.presentGroupChanges(this.presentGroupDecisions(this.presentDeviceDecisions(this.presentPicture(this.presentReminders(this.presentMessages(this.presentTopics()))))));
+    const s = this.presentPersonRename(this.presentGroupChanges(this.presentGroupDecisions(this.presentDeviceDecisions(this.presentPicture(this.presentReminders(this.presentMessages(this.presentTopics())))))));
     if (!s.overview || !Object.keys(s.dismissPending).length) return s;
     if (this.dismissState?.source === s) return this.dismissState.value;
     if (this.dismissOverview?.source !== s.overview || this.dismissOverview.pending !== s.dismissPending) {
@@ -298,6 +302,49 @@ export class Store {
     const value = { ...s, overview: { ...o, person } };
     this.pictureState = { source: s, value };
     return value;
+  }
+
+  private presentPersonRename(s: State): State {
+    const p = s.personRename, o = s.overview;
+    if (!p || p.error || !o?.person || o.person.person !== p.request.person || o.person.label !== p.request.original) return s;
+    if (this.personRenameState?.source === s) return this.personRenameState.value;
+    const value = { ...s, overview: { ...o, person: { ...o.person, label: p.request.label } } };
+    this.personRenameState = { source: s, value };
+    return value;
+  }
+
+  private renamePerson(label: string, calls: Api): Promise<T.PersonView> {
+    const person = this.state.overview?.person;
+    if (!this.alive || !person?.person) return Promise.reject(Error("This verified person is no longer available."));
+    if (this.personRenameWork) return this.state.personRename?.request.label === label ? this.personRenameWork : Promise.reject(Error("Wait for the current name change to finish."));
+    const old = this.state.personRename;
+    if (old?.saved) return old.request.label === label ? Promise.resolve(old.saved) : Promise.reject(Error("Check the saved name before changing it again."));
+    const request = { person: person.person, original: person.label, label };
+    const current = () => this.alive && this.state.overview?.person?.person === request.person && this.state.personRename?.request === request;
+    this.set({ personRename: { request } });
+    const work = Promise.resolve().then(async () => {
+      try {
+        if (!current()) throw Error("This name change's workspace or person changed.");
+        const saved = await calls.renamePerson(label);
+        if (current()) this.set({ personRename: { request, saved } });
+        return saved;
+      } catch (error) {
+        if (current()) {
+          this.set({ personRename: { request, error: errorText(error) } });
+          this.toast("Name change not confirmed. Open Profile to review or retry the exact name.", "error");
+        }
+        throw error;
+      } finally {
+        if (this.personRenameWork === work) this.personRenameWork = undefined;
+        if (current()) void this.refetch();
+      }
+    });
+    this.personRenameWork = work;
+    return work;
+  }
+
+  clearPersonRename(request: NonNullable<State["personRename"]>["request"]) {
+    if (!this.personRenameWork && this.state.personRename?.request === request && this.state.personRename.error) this.set({ personRename: undefined });
   }
 
   private changePicture(png: string, calls: Api): Promise<T.PersonView> {
@@ -887,6 +934,9 @@ export class Store {
         this.state = { ...this.state, invitationSends: Object.fromEntries(keep) };
       }
     }
+    if (this.state.personRename && patch.overview && this.state.personRename.request.person !== patch.overview.person?.person) {
+      this.state = { ...this.state, personRename: undefined }; this.personRenameWork = undefined;
+    }
     if (this.state.teamCreation && patch.overview && patch.overview.person?.person !== this.state.teamCreation.person) this.state = { ...this.state, teamCreation: undefined };
     if (this.state.teamChanges && patch.overview) {
       const entries = Object.entries(this.state.teamChanges), keep = entries.filter(([, p]) => p.person === patch.overview?.person?.person);
@@ -948,6 +998,7 @@ export class Store {
     this.dmStartWork.clear();
     this.groupCreationWork = undefined;
     this.invitationWork.clear();
+    this.personRenameWork = undefined;
     this.sends.dispose();
     this.scheduled.dispose();
     this.stopListen?.();
@@ -1084,6 +1135,9 @@ export class Store {
     this.set(patch);
     const picture = this.state.pictureChange;
     if (picture?.saved && (o.seq > picture.seq || o.person?.picture === picture.saved.picture)) this.set({ pictureChange: undefined });
+    const rename = this.state.personRename;
+    if (rename && !this.personRenameWork && o.person?.person === rename.request.person &&
+      (o.person.label === rename.request.label || rename.saved && o.person.label !== rename.request.original)) this.set({ personRename: undefined });
     this.pruneDeviceDecisions();
     this.pruneDeviceRemovals();
     this.pruneGroupDecisions();

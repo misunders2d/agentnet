@@ -3,7 +3,7 @@
 // and addresses stay behind Details; a device becomes you only when you
 // approve it here.
 import { IconCheck, IconCopy, IconDeviceLaptop, IconDeviceMobile, IconLink, IconPlus, IconServer, IconTrash } from "@tabler/icons-react";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import type { T } from "../api";
 import { useApp } from "../context";
 import { deviceKind, niceDevice, timeOf } from "../model";
@@ -47,7 +47,7 @@ export function ProfileSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingE
   const o = useStore(store, (s) => s.overview);
   if (!o) return <><PageHead title="Profile" titleRef={titleRef} /><Skeleton /></>;
   const p = o.person;
-  if (p) return <><PageHead title="Profile" titleRef={titleRef} lead="How you appear to people in your chats." /><Rename person={p} /></>;
+  if (p) return <><PageHead title="Profile" titleRef={titleRef} lead="How you appear to people in your chats." /><Rename key={p.person} person={p} /></>;
 
   const own = o.role !== "service" && o.link && ownLinkText[o.link.state];
   const approver = o.link?.state === "pending" && o.link.approver;
@@ -92,17 +92,23 @@ function Rename({ person }: { person: T.PersonView }) {
   const store = useApp();
   const portal = usePortal();
   const picture = useStore(store, s => s.pictureChange);
+  const pending = useStore(store, s => s.personRename);
+  const offline = useStore(store, s => s.conn !== "live");
   const [name, setName] = useState(person.label);
-  const [busy, setBusy] = useState(false);
-  useEffect(() => setName(person.label), [person.label]); // a rename from another device shows here
+  const previousName = useRef(person.label);
+  const progress = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const before = previousName.current; previousName.current = person.label;
+    setName(value => value === before ? person.label : value); // keep a newer edit
+  }, [person.label]);
+  useLayoutEffect(() => { if (pending) progress.current?.scrollIntoView({ block: "nearest", behavior: "instant" }); }, [pending?.request, pending?.error]);
   const devices = devicesOf(person);
   const changed = name.trim() !== person.label && !!name.trim();
-  const save = async (e: FormEvent) => {
+  const submit = (label: string) => { void store.api.renamePerson(label).catch(() => {}); };
+  const save = (e: FormEvent) => {
     e.preventDefault();
-    if (!changed) return;
-    setBusy(true);
-    await store.run((a) => a.renamePerson(name.trim()), "Your name is now " + name.trim() + ".");
-    setBusy(false);
+    if (!changed || pending || offline) return;
+    submit(name.trim());
   };
   return (
     <Card className="overflow-hidden">
@@ -127,12 +133,23 @@ function Rename({ person }: { person: T.PersonView }) {
         {picture && <p role="status" className="w-full text-sm text-muted">{picture.saved ? "Picture change saved; checking current state…" : picture.png ? "Saving picture…" : "Removing picture…"}</p>}
         {picture?.saved && <Button variant="ghost" onClick={() => { void store.refetch(); }}>Check picture status</Button>}
       </div>}
-      {person.state === "self" && (
+      {person.state === "self" && pending ? (
+        <section ref={progress} aria-label="Name change" className="space-y-3 border-t border-hairline p-4">
+          <p className="font-semibold">{pending.error ? "Name change needs review" : pending.saved ? "Name saved; checking current profile" : "Saving your name"}</p>
+          <p className="break-words"><b>{pending.request.label}</b></p>
+          <p role={pending.error ? "alert" : "status"}>{pending.error ? "Could not confirm this name. " + pending.error : "You can leave this page while the change finishes."}</p>
+          {pending.error && <p className="text-sm text-muted">Current name: {person.label}. A response can be lost after saving. Check current status before retrying the exact name.</p>}
+          <div className="flex flex-wrap gap-2">
+            {(pending.saved || pending.error) && <Button variant="outline" onClick={() => void store.refetch()}>Check name status</Button>}
+            {pending.error && <><Button variant="act" disabled={offline} onClick={() => submit(pending.request.label)}>Retry name change</Button><Button variant="ghost" onClick={() => { setName(pending.request.label); store.clearPersonRename(pending.request); }}>Edit name again</Button></>}
+          </div>
+        </section>
+      ) : person.state === "self" && (
         <form onSubmit={save} className="space-y-2.5 p-4">
           <label htmlFor="settings-name" className="block font-semibold">Your name</label>
           <div className="flex gap-2">
             <input id="settings-name" className={input} value={name} maxLength={64} autoComplete="off" onChange={(e) => setName(e.target.value)} />
-            {changed && <Button type="submit" variant="act" className="fade-in shrink-0" disabled={busy}>{busy ? "Saving…" : "Save"}</Button>}
+            {changed && <Button type="submit" variant="act" className="fade-in shrink-0" disabled={offline}>Save</Button>}
           </div>
           <Hint>This is what people see in chats. Your chats, devices and permissions stay the same. Names aren’t checked, so someone else can pick the same one.</Hint>
         </form>

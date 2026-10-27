@@ -174,6 +174,36 @@ the same candidate baseline. Diagnostic variants never count as release passes;
 shipping styles are unchanged. The local no-background diagnostic executes all
 27 action checks successfully; this does not predict the Mac result.
 
+Android diagnostic rerun `40457456395` at `3e67440a` passes retained-data upgrade,
+ordinary notification boundaries, the strengthened indicator/video matrix and
+all 33 group workload actions (maximum local feedback 404 ms). The earlier
+disappearance does not recur; its cause remains unproven. These are emulator
+results, not physical-phone evidence. Mac diagnostic dispatch `40458264774`
+accidentally selected unrelated full jobs and was cancelled; replacement
+`40458569453` selects only the Mac platform diagnostic. Cancelled work is not
+passing qualification evidence.
+
+Profile rename now projects the requested display label immediately and replaces
+the form with named pending work. This reuses the existing Store projection and
+inspected Telegram local-change/reconciliation pattern. The native signed-roster
+change, device keys and permissions are unchanged; newer linked-device names
+win over the pending projection. Exact duplicate input shares work, a saved
+response waits for readback, and Check name status never repeats the mutation.
+Failure restores the current observed label, retains the requested name for
+explicit retry/edit, and announces a background failure even after leaving
+Profile. Owner change and teardown stop stale local completion or unadmitted
+work; a newer unsaved name draft survives incoming profile updates.
+
+The previous editor fails the new held-write regression. The actual ProfileSection
+and Store pass at 1440/390 pixels with 27–40 ms local feedback; all six pending,
+error and checking captures were inspected. Tests cover failure, exact retry,
+lost response after commit, delayed readback, duplicate submission/status checks,
+newer linked names/drafts, navigation, owner change and stopped work. Five affected
+race parents pass: name changes, pictures, device decisions, both profile workload
+sizes and bundle integrity. The final background-failure announcement regression
+also passes. Build/type checking passes after requiring the exact verified person
+ID. Native profile qualification and exhaustive interaction coverage remain open.
+
 Group creation now replaces the form with its named pending destination before
 the native write. The existing Store retains the real creation result and exact
 remaining recipients across Back, Close and remount; retries cannot recreate a

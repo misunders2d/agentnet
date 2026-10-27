@@ -761,8 +761,8 @@ try {
   }
   if(suite==='profile'){
    await settings('Profile');const field=active('#settings-name');await fill('profile.name-edit',field,'Fixture Alice');
-   const profileForm=field.closest('form'),profileSave=()=>profileForm.querySelector('button[type="submit"]');await until(()=>profileSave()&&label(profileSave())==='Save'&&!profileSave().disabled,'exact profile form Save control ready');
-   await tap('profile.name-save',profileSave(),()=>me.label==='Fixture Alice'&&!profileSave(),'profile label saved and exact editor clean');
+   const profileSave=()=>active('#settings-name')?.closest('form')?.querySelector('button[type="submit"]');await until(()=>profileSave()&&label(profileSave())==='Save'&&!profileSave().disabled,'exact profile form Save control ready');
+   await tap('profile.name-save',profileSave(),()=>!!active('section[aria-label="Name change"]')&&!active('#settings-name'),'exact name submitted with local pending profile',()=>me.label==='Fixture Alice'&&active('#settings-name')?.value==='Fixture Alice'&&!profileSave()&&!active('section[aria-label="Name change"]'));
    if(innerWidth<1024)await tap('profile.back',active('[data-settings-back]'),()=>!!control(/^Your devices/),'settings list visible again');
    await settings('Your devices');
    const details=control('Details');await tap('devices.details',details,()=>details.getAttribute('aria-expanded')==='true','exact device details expanded');

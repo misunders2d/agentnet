@@ -53,3 +53,10 @@ func TestInvitationSendRendered(t *testing.T) {
 	}
 	t.Log(browserCheck(t, "testdata/invitation_send_rendered.cjs"))
 }
+
+func TestPersonRenameRendered(t *testing.T) {
+	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
+		t.Skip("set AGENTNET_PLAYWRIGHT for rendered profile name changes")
+	}
+	t.Log(browserCheck(t, "testdata/person_rename_rendered.cjs"))
+}
