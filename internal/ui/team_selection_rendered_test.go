@@ -39,3 +39,10 @@ func TestInviteOpenRendered(t *testing.T) {
 	}
 	t.Log(browserCheck(t, "testdata/invite_open_rendered.cjs"))
 }
+
+func TestNewGroupRendered(t *testing.T) {
+	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
+		t.Skip("set AGENTNET_PLAYWRIGHT for rendered group creation")
+	}
+	t.Log(browserCheck(t, "testdata/new_group_rendered.cjs"))
+}

@@ -84,7 +84,7 @@ export function ContributeHistory({ dm, ids, names, onClose, onDone }: {
       {review ? <Button variant="act" disabled={busy} onClick={() => void apply()}>{busy ? "Sharing…" : locked ? "Retry this share" : "Share selected history"}</Button>
         : <Button variant="act" disabled={busy || !target || !ids.length || !!problem || topic === "new" && !title.trim()} onClick={() => void prepare()}>{busy ? "Checking…" : "Review history and audience"}</Button>}
     </div>}>
-    {creating ? <NewGroupForm navigate={false} onBusy={setBusy} onBack={() => setCreating(false)} onCreated={id => { setCreating(false); void selectGroup(id); }} /> : <div className="space-y-4">
+    {creating ? <NewGroupForm navigate={false} onBack={() => setCreating(false)} onCreated={id => { setCreating(false); void selectGroup(id); }} /> : <div className="space-y-4">
       <p className="text-[13px] text-muted">Share a copy attributed to its original speakers. The original chat stays intact. Old questions and tasks are shared as context and do not run.</p>
       {review ? <>
         <p className="font-semibold">Share with “{target?.title || "Selected group"}”</p>

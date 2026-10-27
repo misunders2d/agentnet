@@ -142,6 +142,7 @@ export interface State {
   deviceRemovals?: Record<string, { device: T.DeviceView; person: string; saved?: boolean }>;
   groupDecisions?: Record<string, { invitation: T.GroupInvitationView; person: string; accept: boolean; saved?: boolean }>;
   groupChanges?: Record<string, PendingGroupChange>;
+  groupCreation?: { request: { title: string; people: string[] }; person: string; remaining: string[]; id?: string; done?: boolean; error?: string };
   teamCreation?: { change: T.TeamChange; person: string; saved?: T.TeamState; error?: string };
   teamChanges?: Record<string, { change: T.TeamChange; person: string; original: T.TeamView; saved?: T.TeamState; error?: string }>;
   panel: boolean;                                         // "In this chat" (desktop panel, phone sheet)
@@ -171,7 +172,7 @@ const draftsKey = (ws: string) => brand.storage + ".drafts." + ws;
 
 // unsentIn: what a reload would lose: a draft's text or files, or a send
 // not yet stored.
-export const unsentIn = (s: Pick<State, "drafts" | "unsent"> & Partial<Pick<State,"scheduleSaves" | "messageChanges" | "reminderChanges" | "pictureChange" | "deviceDecisions" | "deviceRemovals" | "groupDecisions" | "groupChanges" | "teamCreation" | "teamChanges">>) => s.unsent || Object.values(s.teamChanges || {}).some(p => !p.saved && !p.error) || !!s.teamCreation && !s.teamCreation.saved && !s.teamCreation.error || Object.values(s.groupChanges || {}).some(p => !p.saved && !p.error) || Object.values(s.groupDecisions || {}).some(p => !p.saved) || Object.values(s.deviceDecisions || {}).some(p => !p.saved) || Object.values(s.deviceRemovals || {}).some(p => !p.saved) || !!s.pictureChange && !s.pictureChange.saved || Object.keys(s.reminderChanges || {}).length > 0 || Object.values(s.messageChanges || {}).some(p => p.status === "pending" || p.status === "failed" && p.action === "edit") || Object.values(s.scheduleSaves || {}).some(slot=>!!slot.attempt && (slot.status==="saving" || slot.status==="uncertain")) || Object.values(s.drafts).some((d) => d.text || (d.files && d.files.length));
+export const unsentIn = (s: Pick<State, "drafts" | "unsent"> & Partial<Pick<State,"scheduleSaves" | "messageChanges" | "reminderChanges" | "pictureChange" | "deviceDecisions" | "deviceRemovals" | "groupDecisions" | "groupChanges" | "groupCreation" | "teamCreation" | "teamChanges">>) => s.unsent || !!s.groupCreation && !s.groupCreation.done && !s.groupCreation.error || Object.values(s.teamChanges || {}).some(p => !p.saved && !p.error) || !!s.teamCreation && !s.teamCreation.saved && !s.teamCreation.error || Object.values(s.groupChanges || {}).some(p => !p.saved && !p.error) || Object.values(s.groupDecisions || {}).some(p => !p.saved) || Object.values(s.deviceDecisions || {}).some(p => !p.saved) || Object.values(s.deviceRemovals || {}).some(p => !p.saved) || !!s.pictureChange && !s.pictureChange.saved || Object.keys(s.reminderChanges || {}).length > 0 || Object.values(s.messageChanges || {}).some(p => p.status === "pending" || p.status === "failed" && p.action === "edit") || Object.values(s.scheduleSaves || {}).some(slot=>!!slot.attempt && (slot.status==="saving" || slot.status==="uncertain")) || Object.values(s.drafts).some((d) => d.text || (d.files && d.files.length));
 
 const recovery = { update: [500, 1000, 2000, 4000, 8000, 15000, 30000], missed: [1000, 3000, 8000] };
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -204,6 +205,7 @@ export class Store {
   private teamCreationWork?: { change: T.TeamChange; work: Promise<T.TeamState> };
   private teamChangeWork = new Map<string, { change: T.TeamChange; work: Promise<T.TeamState> }>();
   private dmStartWork = new Map<string, Promise<{ id: string }>>();
+  private groupCreationWork?: Promise<string>;
   private reminderOverviewCache?: { source: T.Overview; changes: State["reminderChanges"]; value: T.Overview };
   private reactionSequence = 0;
   private reacting = new Map<string, { pending: PendingReaction; work: Promise<{ note: string } | undefined> }>();
@@ -337,6 +339,56 @@ export class Store {
     });
     this.dmStartWork.set(key, work);
     return work;
+  }
+
+  createGroup(title: string, people: string[]): Promise<string> {
+    const person = this.state.overview?.person?.person;
+    if (!this.alive || !person) return Promise.reject(Error("Your verified person is not available in this workspace."));
+    const old = this.state.groupCreation;
+    const same = old?.person === person && old.request.title === title && JSON.stringify(old.request.people) === JSON.stringify(people);
+    if (old && !same) return Promise.reject(Error("Review the group already being created before starting another."));
+    if (this.groupCreationWork) return this.groupCreationWork;
+    if (old?.done && old.id) return Promise.resolve(old.id);
+    const request = old?.request || { title, people: [...people] };
+    let pending: NonNullable<State["groupCreation"]> = old ? { ...old, error: undefined } : { request, person, remaining: [...people] };
+    const current = () => this.alive && this.state.overview?.person?.person === person && this.state.groupCreation?.request === request;
+    this.set({ groupCreation: pending });
+    const work = Promise.resolve().then(async () => {
+      try {
+        if (!current()) throw Error("This workspace or person changed before the group could start.");
+        // Creation is not replayed automatically after an uncertain response.
+        // Once its real ID is known, retry only the remaining invitations.
+        if (!pending.id) {
+          const { id } = await this.api.newGroup(title);
+          if (!current()) throw Error("This workspace or person changed while the group was being created.");
+          pending = { ...pending, id }; this.set({ groupCreation: pending });
+        }
+        const id = pending.id;
+        if (!id) throw Error("The group response did not include its conversation ID.");
+        for (const target of pending.remaining) {
+          if (!current()) throw Error("This workspace or person changed before the next invitation.");
+          await this.api.inviteToGroup({ conv: id, person: target, history: {} });
+          if (!current()) throw Error("This workspace or person changed while inviting people.");
+          pending = { ...pending, remaining: pending.remaining.filter(p => p !== target) };
+          this.set({ groupCreation: pending });
+        }
+        pending = { ...pending, done: true }; this.set({ groupCreation: pending });
+        return id;
+      } catch (error) {
+        if (current()) this.set({ groupCreation: { ...pending, error: errorText(error) } });
+        throw error;
+      } finally {
+        if (this.groupCreationWork === work) this.groupCreationWork = undefined;
+        if (current()) void this.refetch();
+      }
+    });
+    this.groupCreationWork = work;
+    return work;
+  }
+
+  clearGroupCreation(request: NonNullable<State["groupCreation"]>["request"]) {
+    const pending = this.state.groupCreation;
+    if (!this.groupCreationWork && pending?.request === request && (pending.done || pending.error)) this.set({ groupCreation: undefined });
   }
 
   private deviceDecisionMatches(p: NonNullable<State["deviceDecisions"]>[string], o: T.Overview): boolean {
@@ -765,6 +817,10 @@ export class Store {
     if (!this.alive) return;
     if (Object.keys(patch).every(key => Object.is(this.state[key as keyof State], patch[key as keyof State]))) return;
     this.state = { ...this.state, ...patch };
+    if (this.state.groupCreation && patch.overview && patch.overview.person?.person !== this.state.groupCreation.person) {
+      this.state = { ...this.state, groupCreation: undefined };
+      this.groupCreationWork = undefined;
+    }
     if (this.state.teamCreation && patch.overview && patch.overview.person?.person !== this.state.teamCreation.person) this.state = { ...this.state, teamCreation: undefined };
     if (this.state.teamChanges && patch.overview) {
       const entries = Object.entries(this.state.teamChanges), keep = entries.filter(([, p]) => p.person === patch.overview?.person?.person);
@@ -824,6 +880,7 @@ export class Store {
     this.teamCreationWork = undefined;
     this.teamChangeWork.clear();
     this.dmStartWork.clear();
+    this.groupCreationWork = undefined;
     this.sends.dispose();
     this.scheduled.dispose();
     this.stopListen?.();
@@ -1748,7 +1805,7 @@ export class Store {
     if (selected) this.markOpenRead();
   }
 
-  hasUnsent(): boolean { return this.dmStartWork.size > 0 || unsentIn(this.state); }
+  hasUnsent(): boolean { return !!this.groupCreationWork || this.dmStartWork.size > 0 || unsentIn(this.state); }
 
   // ---- feedback
   // Telegram Web A's local-change -> async request -> reconciliation pattern

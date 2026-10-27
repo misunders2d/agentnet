@@ -301,15 +301,18 @@ function PickPeople({ overview, active, onGroup, onDone }: { overview: T.Overvie
   );
 }
 
-export function NewGroupForm({ onBack, onCreated, initialPeople = [], navigate = true, onBusy }: { onBack: () => void; onCreated: (id: string) => void; initialPeople?: Pick<T.PersonRef, "id">[]; navigate?: boolean; onBusy?: (busy: boolean) => void }) {
+export function NewGroupForm({ onBack, onCreated, initialPeople = [], navigate = true }: { onBack: () => void; onCreated: (id: string) => void; initialPeople?: Pick<T.PersonRef, "id">[]; navigate?: boolean }) {
   const store = useApp();
   const overview = useStore(store, (s) => s.overview);
   const [title, setTitle] = useState("");
-  const [busy, setBusy] = useState(false);
+  const creation = useStore(store, s => s.groupCreation);
+  const busy = !!creation && !creation.done && !creation.error;
+  const mounted = useRef(true), attempt = useRef(0), region = useRef<HTMLElement>(null);
+  useLayoutEffect(() => { mounted.current = true; return () => { mounted.current = false; attempt.current++; }; }, []);
+  useLayoutEffect(() => { region.current?.scrollIntoView({ block: "nearest", behavior: "instant" }); }, [creation?.request, creation?.error]);
   const [error, setError] = useState("");
   const [people, setPeople] = useState<Pick<T.PersonRef, "id">[]>(initialPeople);
   const [peoplePending, setPeoplePending] = useState(false);
-  const [created, setCreated] = useState("");
   const pageSize = 40;
   const [query, setQuery] = useState("");
   const [peopleLimit, setPeopleLimit] = useState(pageSize);
@@ -317,38 +320,58 @@ export function NewGroupForm({ onBack, onCreated, initialPeople = [], navigate =
   const eligible = useMemo(() => (overview?.people || []).filter(p => p.state === "pinned" && p.person && p.person !== overview?.person?.person), [overview?.people, overview?.person?.person]);
   const matching = useMemo(() => eligible.filter(p => matches(query, personName(p), p.address, ...(p.devices || []).flatMap(d => [d.name, d.address]))), [eligible, query]);
 
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    const t = title.trim();
-    if (!t && !created) { setError("Give the group a name."); return; }
-    if (busy || peoplePending) return;
-    setBusy(true); onBusy?.(true); setError("");
-    let id = created;
-    try {
-      if (!id) { id = (await store.api.newGroup(t)).id; if (!store.isActive()) return; setCreated(id); }
-      for (const p of people) {
-        if (!store.isActive()) return;
-        await store.api.inviteToGroup({ conv: id, person: p.id, history: {} });
-        setPeople((ps) => ps.filter((x) => x.id !== p.id));
-      }
-      if (!store.isActive()) return;
-      onCreated(id);
-      if (navigate) {
-        await store.open({ kind: "dm", id });
-        store.showTab("chats");
-        store.openInvite(id);
-      }
-    } catch (e) { if (store.isActive()) setError(errorText(e) + (id ? " The group is already created; retry only the remaining invitations." : "")); }
-    finally { setBusy(false); onBusy?.(false); void store.refetch(); }
+  const finishCreated = (id: string) => {
+    const pending = store.get().groupCreation;
+    if (!mounted.current || !store.isActive() || !pending || pending.id !== id || pending.person !== store.get().overview?.person?.person) return;
+    store.clearGroupCreation(pending.request);
+    onCreated(id);
+    if (navigate) {
+      store.showTab("chats");
+      const opening = store.open({ kind: "dm", id });
+      const destination = store.get().open;
+      void opening.then(() => {
+        const now = store.get();
+        if (store.isActive() && now.overview?.person?.person === pending.person && now.open === destination && now.tab === "chats") store.openInvite(id);
+      });
+    }
   };
+  const run = async (name: string, recipients: string[]) => {
+    const before = store.get(), owner = before.overview?.person?.person, token = ++attempt.current;
+    const current = () => mounted.current && attempt.current === token && store.isActive() && store.get().overview?.person?.person === owner && store.get().open === before.open && store.get().tab === before.tab;
+    try {
+      const id = await store.createGroup(name, recipients);
+      if (current()) finishCreated(id);
+    } catch (e) { if (current() && !store.get().groupCreation) setError(errorText(e)); }
+  };
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    const name = title.trim();
+    if (!name) { setError("Give the group a name."); return; }
+    if (busy || peoplePending) return;
+    setError("");
+    void run(name, people.map(p => p.id));
+  };
+  const back = () => { attempt.current++; onBack(); };
+  if (creation) return <section ref={region} aria-label={"Creating group “" + creation.request.title + "”"} className="space-y-3 rounded-2xl bg-surface p-4 stroke">
+    <h3 className="break-words font-display text-xl font-bold">{creation.request.title}</h3>
+    <p role={creation.error ? "alert" : "status"}>{creation.error ? "Could not confirm this step. " + creation.error : creation.done ? "Group created. Invitations sent; each person decides whether to join." : creation.id ? "Group created. Sending invitations…" : "Creating the group…"}</p>
+    {!!creation.remaining.length && <div><p className="font-semibold">{creation.id ? "Invitations remaining" : "People to invite"}</p><ul className="max-h-48 overflow-y-auto">{creation.remaining.map(id => <li key={id} className="break-words">{overview?.people?.find(p => p.person === id)?.label || "Person " + id.slice(0, 8)}</li>)}</ul></div>}
+    <p className="text-sm text-muted">{creation.error ? creation.id ? "The group already exists. Retry sends only the remaining invitations." : "A group may already exist. Check Chats before trying creation again." : creation.done ? "No membership is granted until each person accepts." : "You can go back while this finishes. Reopen New group to check its progress."}</p>
+    <div className="flex flex-wrap gap-2">
+      <Button variant="outline" onClick={back}>Back to people</Button>
+      {creation.error && <Button variant="act" onClick={() => void run(creation.request.title, creation.request.people)}>{creation.id ? "Retry remaining invitations" : "Try creating this group again"}</Button>}
+      {creation.id && (creation.done || creation.error) && <Button variant="act" onClick={() => finishCreated(creation.id!)}>{creation.error ? "Use group without remaining invitations" : "Open created group"}</Button>}
+      {!busy && <Button variant="ghost" onClick={() => { attempt.current++; setTitle(creation.request.title); setPeople(creation.remaining.map(id => ({id}))); setError(creation.id ? "" : "The previous creation could not be confirmed. Check Chats before starting another group."); store.clearGroupCreation(creation.request); }}>{creation.id ? "Start another group" : "Back to group details"}</Button>}
+    </div>
+  </section>;
   return (
     <form onSubmit={submit} className="flex flex-col gap-3 pt-1 pb-2">
-      <button type="button" disabled={busy} onClick={onBack} className="-ml-2 flex min-h-11 items-center gap-1.5 self-start rounded-full px-2 text-[15px] font-semibold text-text-2 hover:bg-sunken">
+      <button type="button" disabled={busy} onClick={back} className="-ml-2 flex min-h-11 items-center gap-1.5 self-start rounded-full px-2 text-[15px] font-semibold text-text-2 hover:bg-sunken">
         <IconArrowLeft size={18} aria-hidden="true" />Back to people
       </button>
       <label className="block font-semibold">
         Group name
-        <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={64} autoFocus autoComplete="off" disabled={busy || !!created}
+        <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={64} autoFocus autoComplete="off" disabled={busy}
           placeholder="For example, Savannah rush order"
           className="mt-1.5 block h-12 w-full rounded-xl bg-surface px-3 text-[16px] stroke placeholder:text-muted" />
       </label>
@@ -374,9 +397,8 @@ export function NewGroupForm({ onBack, onCreated, initialPeople = [], navigate =
         {!matching.length && <p className="text-sm text-muted">No matching people.</p>}
       </fieldset>
       <TeamPeople selected={people} onChange={setPeople} disabled={busy} showSelected={false} onPendingChange={setPeoplePending} />
-      {created && <p role="status">The group is already created. Only the remaining people below will be invited when you retry.</p>}
       {error && <p role="alert" className="rounded-xl bg-danger-bg px-3 py-2.5 font-semibold text-danger">{error}</p>}
-      <Button variant="act" size="lg" type="submit" disabled={busy || peoplePending || (!created && !title.trim())} className="mt-1">{busy ? "Sending…" : created ? "Retry remaining invitations" : "Create group"}</Button>
+      <Button variant="act" size="lg" type="submit" disabled={busy || peoplePending || !title.trim()} className="mt-1">Create group</Button>
     </form>
   );
 }

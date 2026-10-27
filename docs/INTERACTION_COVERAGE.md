@@ -102,6 +102,37 @@ failures against their then-current target, with no rerun or speedup implied.
 The 790 ms Android sample meets the revised timing ceiling; synthetic workloads
 still do not establish exhaustive real-backend control qualification.
 
+Group creation now replaces the form with its named pending destination before
+the native write. The existing Store retains the real creation result and exact
+remaining recipients across Back, Close and remount; retries cannot recreate a
+known group or resend already-confirmed invitations. Duplicate input shares the
+same work. Completion cannot navigate or invoke a callback from a closed or
+replaced view, and a later history load cannot open invitations over newer
+navigation. Owner change or teardown stops subsequent unadmitted invitations.
+The history-sharing parent permits closing this background creation. This reuses
+the current pending-operation and guarded-destination patterns; native group
+creation, signed state, invitation reuse and acceptance remain unchanged.
+An uncertain creation response is never automatically retried and explicitly
+warns that the group may already exist.
+
+The old form fails the same held-create feedback regression. The candidate
+passes at 1440/390 pixels in ordinary and history-destination modes, with held
+creation/invitations, Back/Close/reopen, duplicate input, partial failures,
+explicit retries, using a partially invited group, starting another group,
+owner/navigation/stop boundaries and preserved unrelated input. Initial feedback
+is 42–58 ms; all twelve settled pending/error/ready captures were inspected.
+The integrated run passes new group, new person chat, recipient and list
+selection, groups/teams workloads and bundle checks. Its history-sharing test
+also exposes a pre-existing selection regression, reproduced on committed
+`3a190c87`: changing topics clears the selected originals before sharing begins.
+Restoring conversation-wide selection matches the documented MEL-592 flow;
+another conversation still clears it, and review/permission checks remain.
+The failed history-sharing parent, adjacent topic-organization parent, final
+group-creation parent and bundle all pass after that repair. Both history flows
+exercise DM/group at wide/narrow sizes with exact IDs, cancel, stale review and
+lost-response recovery. These remain focused synthetic-host checks, not final
+platform or exhaustive release qualification.
+
 Invitation opening now commits the named dialog and usable Close control before
 preparing directory/history choices or starting catalog reads. It reuses the
 existing frame-then-task scheduling pattern and inspected loading-destination
@@ -117,6 +148,10 @@ selection, groups workload, release-gate guards and canonical bundle. The groups
 workload records 11 ms opening feedback separately from 28–38 ms prepared
 contents. This is local synthetic-host evidence; Android and native-platform
 improvement remain unproven until the integrated platform rerun.
+The retained four-times-slower Chromium diagnostic measures the two openings at
+290/227 ms before and 43/45 ms afterward, with prepared content at 178/113 ms in
+the changed run. This single local comparison supports the ordering change;
+it does not establish a native Android/macOS improvement or a distribution.
 
 Starting a new person chat now replaces the picker/search result with its named
 destination before native checks and creation finish. Back leaves admitted work

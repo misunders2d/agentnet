@@ -87,7 +87,9 @@ function OpenView({ open }: { open: NonNullable<Open> }) {
     return () => removeEventListener("keydown", esc);
   }, [!!selected]);
   useEffect(() => { if (!left) return; const x = setTimeout(() => setLeft(null), 9000); return () => clearTimeout(x); }, [left]);
-  useEffect(() => setSelected(null), [open.id, topic, newTopic]); // another topic: nothing chosen in it yet
+  // Selection belongs to this conversation. Browsing another topic must retain
+  // the exact originals for reviewed cross-topic moves and history sharing.
+  useEffect(() => setSelected(null), [open.id]);
 
   if (!t && !th) return <Loading o={open} />;
 
