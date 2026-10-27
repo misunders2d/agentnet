@@ -91,6 +91,38 @@ the repair. Sergey needs to do nothing while owned fixtures are being tested.
 
 ### October 27 continuation: the 500 ms target
 
+At `18789c85`, run `40445110427` passes the actual people-list creation and
+selection regressions three times on Linux, macOS and Windows. Affected platform
+run `40445112905` passes the teams workload on Linux, macOS, Windows and the
+Android emulator. Native macOS Create list records 14 ms local feedback,
+57 ms verified visible result and 372 ms through the paint check; Android records
+18.6, 151 and 169.1 ms respectively. These are the existing synthetic-host
+workloads, not native database durability or exhaustive control qualification.
+Earlier unrelated macOS failures remain open.
+
+The skins candidate repairs Zoom's no-op device-thread renderer: a confirmed
+read now invokes the existing guarded refresh before the unrelated typing
+lookup completes. Its regression fails on the old source and passes with exact
+thread, host, visit and unmount guards. Zoom navigation also replaces the prior
+screen before waiting for history, with a named loading destination, Back and
+exact retry. Pending navigation hides stale topic controls. Focused actual-method
+tests cover four DM/thread and phone/desktop combinations at 40–99 ms; the old
+source fails. The mounted-package fixture measures its in-viewport destination
+at 46–90 ms with held/error/retry/cancel cases, and all four final screenshots
+were inspected. Its first attempt reopened an already cached DM, correctly
+restoring the cache after read failure; the uncached case now resets that fixture
+state explicitly. Visual inspection also caught the earlier media probe above
+the destination; the final fixture hides that probe and asserts viewport bounds.
+Neither invalid measurement is counted as a pass. The 51-check affected suite
+passes, followed by 31 passing mounted/read checks after hiding stale topic
+controls; shipping package generation and its seven catalog checks also pass.
+
+The real disposable Zoom touch journey still fails at Mute chat: its POST remains
+pending for more than 15 seconds and the chip waits for completion. The bounded
+trace records the exact trusted click and no page error. The renderer repair does
+not resolve that separate feedback defect. Complete skin/runtime qualification
+and the exhaustive interaction gate remain open; nothing is released or deployed.
+
 Create list now inserts its named pending card and clears the submitted name
 before the native write. Its shared state follows navigation; only a current
 verified list read supplies the real ID and manager/member controls. A saved
@@ -108,8 +140,8 @@ race run records 66–77 ms. All four pending/error screenshots were inspected.
 The same race run passes existing list selection, the affected two-part teams
 workload and canonical bundle checks (four parents, 62.384 seconds). Workload
 feedback and completed list opening are now measured separately. This is local
-focused evidence; macOS, Windows, Android and final skin qualification of this
-candidate remain outstanding.
+focused evidence; the later platform results above retain this evidence, while
+final skin qualification remains outstanding.
 
 At `4645ead6`, run `40442190118` passes the group-administration and
 pending-people regressions three times on Linux, macOS and Windows. Affected
