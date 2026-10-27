@@ -952,7 +952,7 @@ try {
    await tap('teams.agent-add',control('Add agent',d()),()=>teams.teams[1].agents.length===1&&d().textContent.includes('Fixture Codex'),'exact published agent added without granting execution');
    }
    if(teamsPart!=='list'){
-   await tap('teams.use-for-group',control('Select for a conversation…',d()),()=>!!sheet('New group'),'list snapshot opens selected people in new-group review');await retire();
+   await tap('teams.use-for-group',control('Select for a conversation…',d()),()=>!!sheet('New group'),'new-group review opens before reading the verified list',()=>!!sheet('New group')?.querySelector('[aria-label="Selected people"]')?.textContent.includes('Vitalii'));await retire();
    const group=sheet('New group');
    const roster=()=>[...group.querySelectorAll('fieldset')].find(f=>f.querySelector('legend')?.textContent==='People');
    const rows=()=>[...roster().querySelectorAll('label')].filter(l=>l.querySelector('input[type="checkbox"]'));

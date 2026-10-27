@@ -175,6 +175,36 @@ modes and their classification. These temporary fixture styles are never
 applied to the shipping interface. Explicit runner matrices now give each
 runner unique artifact names, preserving the release workflow's default names.
 
+The Intel leg of `40433708162` passes all 24 browser cells across Chromium,
+Firefox and WebKit (maximum feedback 198 ms), plus three of four native
+workloads. Its native quick-reaction picker takes 1,861 ms, so the leg fails.
+The same-build paint experiment `40436529466` also fails in every mode:
+native Permissions takes 762 ms at baseline, 641 ms without motion, and
+769 ms with flat paint. Removing those effects is not a demonstrated fix;
+no such style change is applied to the product. Native reaction-opening
+profiling is the next diagnostic.
+
+The new group-choice regression passes three times on Linux and Windows in
+`40435704231`, but one macOS repetition fails its total driver-call bound.
+That test's original locator click waits for the initial card animation before
+dispatching input; the failed run did not record the event timestamp, so its
+cause remains unconfirmed. The test now sends a trusted mouse click to the
+visible card during that animation, records the exact event, and retains the
+under-500-ms driver-call bound through two frame opportunities. All four local
+cases pass at 55–70 ms, with 47–55 ms from the trusted event. This is a more
+explicit input observation, not a claimed repair of the Mac renderer stalls.
+
+Selecting a people list for a conversation also used to wait for its verified
+snapshot before opening New group. The regression fails against `26aed84b`;
+the dialog now opens before that read and displays recipients only after the
+captured list is verified. Failure offers retry for the same list. A closed,
+unmounted or superseded request cannot reopen the form or populate another
+list's recipients. The new group and invitation operations remain untouched.
+Both trusted-input widths pass at 63–107 ms, all four pending/error images were
+inspected, and the focused people-list workload, recovery and bundle checks
+pass. The same previously inspected immediate-modal/background-read pattern
+is reused. Final platform and skin qualification remains outstanding.
+
 Linux CI dependency setup previously spent over 30 minutes on the runner's
 Azure Ubuntu mirror before cancellation, including the 27.3 MB WebKit package.
 The next disposable runner uses Ubuntu's main HTTPS archive instead, preserving

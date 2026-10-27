@@ -55,6 +55,8 @@ export function TeamsSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingEle
   const [busy, setBusy] = useState(false);
   const [chosen, setChosen] = useState<string | null>(null);
   const [draft, setDraft] = useState<T.PersonRef[] | null>(null);
+  const [selection, setSelection] = useState<{ id: string; name: string; error?: string } | null>(null);
+  const selectionRequest = useRef(0);
   const [change, setChange] = useState<{ c: T.TeamChange; title: string; hint: string } | null>(null);
   const team = view?.teams?.find((t) => t.id === chosen);
   const act = async (c: T.TeamChange) => {
@@ -65,11 +67,22 @@ export function TeamsSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingEle
     setBusy(false);
   };
   const create = (e: FormEvent) => { e.preventDefault(); if (name.trim()) void act({ op: "create", v: view?.tags ? 2 : 1, name: name.trim() }); };
-  const select = async () => {
-    if (!team) return;
-    const snapshot = await store.run((a) => a.teamSnapshot([team.id]));
-    if (snapshot && store.isActive()) { setChosen(null); setDraft((snapshot.persons || []).filter((p) => p.id !== o?.person?.person)); }
+  const select = async (source: { id: string; name: string }) => {
+    const request = ++selectionRequest.current, self = o?.person?.person;
+    setChosen(null);
+    setDraft(null);
+    setSelection({ id: source.id, name: source.name });
+    try {
+      const snapshot = await store.api.teamSnapshot([source.id]);
+      if (request !== selectionRequest.current || !store.isActive()) return;
+      setDraft((snapshot.persons || []).filter((p) => p.id !== self));
+      setSelection(null);
+    } catch (error) {
+      if (request === selectionRequest.current && store.isActive()) setSelection({ id: source.id, name: source.name, error: errorText(error) });
+    }
   };
+  const closeDraft = () => { ++selectionRequest.current; setDraft(null); setSelection(null); };
+  useEffect(() => () => { ++selectionRequest.current; }, []);
   const confirm = (c: T.TeamChange, title: string, hint: string) => setChange({ c, title, hint });
   return <>
     <PageHead title="People & agent lists" titleRef={titleRef} lead="Shared named sets. Everyone can use a list’s @tag to address its people and agents already in a chat." />
@@ -108,7 +121,7 @@ export function TeamsSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingEle
         <div className="flex flex-wrap gap-2">
           {team.version !== 2 && o?.person && !team.archived && !team.conflict && <Button disabled={busy} onClick={() => void act({ team: team.id, op: team.member ? "leave" : "join" })}>{team.member ? "Leave list" : "Join list"}</Button>}
           {(team.manager || permissions.data?.can_rename) && !team.conflict && <Button variant="outline" disabled={busy} onClick={() => confirm({ team: team.id, op: "delete" }, "Delete this people list?", "Only the list is deleted. Chats, messages and group membership stay as they are.")}>Delete list</Button>}
-          {!team.archived && !team.conflict && !!team.members?.length && <Button variant="act" disabled={busy || !o?.groups} onClick={() => void select()}>Select for a conversation…</Button>}
+          {!team.archived && !team.conflict && !!team.members?.length && <Button variant="act" disabled={busy || !o?.groups} onClick={() => void select(team)}>Select for a conversation…</Button>}
         </div>
         {team.manager && !team.archived && !team.conflict && <form onSubmit={(e) => { e.preventDefault(); if (name.trim()) void act({ team: team.id, op: "rename", name: name.trim() }); }} className="space-y-2">
           <label className="block font-semibold">New name<input className={input} value={name} maxLength={64} onChange={(e) => setName(e.target.value)} /></label><Button type="submit" disabled={busy || !name.trim()}>Rename list</Button>
@@ -118,8 +131,12 @@ export function TeamsSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingEle
     <Confirm open={!!change} onOpenChange={(v) => { if (!v) setChange(null); }} title={change?.title || "Change people list?"} ok="Confirm change" onOk={() => { if (change) void act(change.c); }}>
       <p>{change?.hint}</p>
     </Confirm>
-    <Sheet open={draft !== null} onOpenChange={(v) => { if (!v) setDraft(null); }} title="New group" description="Choose who to invite. Each person decides whether to join.">
-      {draft && <NewGroupForm initialPeople={draft} onBack={() => setDraft(null)} onCreated={() => { setDraft(null); setChosen(null); }} />}
+    <Sheet open={draft !== null || !!selection} onOpenChange={(v) => { if (!v) closeDraft(); }} title="New group" description="Choose who to invite. Each person decides whether to join.">
+      {selection && <div className="space-y-3">
+        <p role={selection.error ? "alert" : "status"}>{selection.error || "Reading the verified people in “" + selection.name + "”…"}</p>
+        {selection.error && <Button variant="act" onClick={() => void select(selection)}>Try again</Button>}
+      </div>}
+      {draft && <NewGroupForm initialPeople={draft} onBack={closeDraft} onCreated={() => { closeDraft(); setChosen(null); }} />}
     </Sheet>
   </>;
 }

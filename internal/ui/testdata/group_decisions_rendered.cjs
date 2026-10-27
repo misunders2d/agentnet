@@ -38,7 +38,12 @@ const server=http.createServer((req,res)=>{if(req.url==='/entry.mjs'){res.setHea
   const page=await browser.newPage({viewport:{width,height:900}}),errors=[];page.on('pageerror',e=>errors.push(String(e)));page.setDefaultTimeout(5000);
   await page.goto('http://127.0.0.1:'+server.address().port+'/?view='+view);
   const refuse=()=>page.getByRole('button',{name:'No thanks',exact:true}),pending=page.getByRole('region',{name:'Pending group decisions'});await refuse().waitFor();
-  const started=Date.now();await refuse().click();await pending.waitFor({timeout:500});const feedbackMs=Date.now()-started;assert(feedbackMs<500);
+  // Click the visible moving card as a person can; locator.click() waits for
+  // its entrance animation to finish before it even dispatches the input.
+  const point=await refuse().evaluate(button=>{button.addEventListener('click',e=>{fixture.input={at:performance.now(),trusted:e.isTrusted}},{once:true,capture:true});const r=button.getBoundingClientRect();return{x:r.left+r.width/2,y:r.top+r.height/2}});
+  const started=Date.now();await page.mouse.click(point.x,point.y);await pending.waitFor({timeout:500});
+  const input=await page.evaluate(async()=>{await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));return{...fixture.input,feedbackAt:performance.now()}});
+  const feedbackMs=Date.now()-started;assert(input.trusted,'the exact invitation receives trusted input');assert(feedbackMs<500,JSON.stringify({width,view,feedbackMs,input}));
   if(view==='review')assert.equal(await page.getByRole('heading',{name:'Review',exact:true}).evaluate(e=>e===document.activeElement),true,'immediate removal lands keyboard focus before the reply');
   if(process.env.AGENTNET_GROUP_DECISION_EVIDENCE)await page.screenshot({path:process.env.AGENTNET_GROUP_DECISION_EVIDENCE+'-pending-'+view+'-'+width+'.png',fullPage:true});
   assert.equal(await refuse().count(),0);assert.equal(await page.getByLabel('Needs attention').textContent(),'0');assert.equal(await page.evaluate(()=>fixture.store.get().overview.dms.length),0,'local choice grants no group membership');assert.equal(await page.evaluate(()=>fixture.store.hasUnsent()),true);
@@ -53,7 +58,7 @@ const server=http.createServer((req,res)=>{if(req.url==='/entry.mjs'){res.setHea
   assert.equal(await page.evaluate(()=>fixture.store.get().overview.dms.length),0,'recorded acceptance still needs group confirmation');if(view==='chats')await page.getByRole('button',{name:'Toggle view'}).click();await page.getByText('You said yes to',{exact:false}).waitFor();
   await page.evaluate(()=>fixture.newer('stale'));await refuse().waitFor();assert.equal(await page.getByRole('button',{name:'Join',exact:true}).count(),0,'stale invitation cannot join');await refuse().click();await pending.waitFor();await page.evaluate(()=>fixture.finish(4));await pending.waitFor({state:'hidden'});
   await page.evaluate(()=>fixture.newer());await refuse().waitFor();await refuse().click();assert.equal(await page.evaluate(async()=>{fixture.store.stop();const before=fixture.store.get();fixture.finish(5);await new Promise(r=>setTimeout(r,30));return fixture.store.get()===before}),true);
-  assert.equal(await page.getByRole('textbox',{name:'Unrelated draft'}).inputValue(),'Preserve group decision draft');assert.deepEqual(errors,[]);reports.push({width,view,feedbackMs,writes:await page.evaluate(()=>fixture.writes.length)});await page.close();
+  assert.equal(await page.getByRole('textbox',{name:'Unrelated draft'}).inputValue(),'Preserve group decision draft');assert.deepEqual(errors,[]);reports.push({width,view,feedbackMs,eventToFeedbackMs:input.feedbackAt-input.at,trustedInput:input.trusted,writes:await page.evaluate(()=>fixture.writes.length)});await page.close();
  }
  console.log(JSON.stringify({ok:true,reports,scope:'actual Chats/Review and badge controls, trusted input with held synthetic group decisions; no native invitation accepted'}));
  }finally{await browser?.close();await new Promise(r=>server.close(r));fs.rmSync(work,{recursive:true,force:true})}
