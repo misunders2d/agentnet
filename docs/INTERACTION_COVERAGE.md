@@ -91,6 +91,30 @@ the repair. Sergey needs to do nothing while owned fixtures are being tested.
 
 ### October 27 continuation: the 500 ms target
 
+Skins commit `9d9bab5` gives Classic, Holonet and Zoom immediate per-chat mute
+presentation, reusing their existing reminder-intent and targeted control-update
+patterns. Canonical mute state and native notification permission are unchanged.
+Headers and already-open details dialogs stay current through pending, saved,
+confirmed and failed states. Errors restore current synchronized state, retain
+exact retry, announce failure even after phone details close, and offer read-only
+confirmation for acknowledged writes. Duplicate input, another selected chat,
+newer synchronized state, workspace replacement and teardown are covered.
+The previous source fails the held-write regression for all three skins. Final
+feedback is 31–41 ms across their six desktop/phone cases. All 34 affected
+mounted/mute/read checks pass. The existing real phone-details control test
+passes with a 1400 ms write delay; missing and wrong-target confirmation still
+fail its original 15-second bound. Static package validation and all seven
+generated catalog checks pass.
+
+The disposable signed Zoom touch journey now passes all 28 taps at this skin
+candidate against the retained `f7355154` core pin, including mute/unmute,
+navigation, project space, 200-message DM and device histories, send, media
+details and Activity navigation. Its five final screenshots were inspected.
+Activity's captured unread content is still loading; that image proves its
+navigation response, not completed history. The prior failing journeys remain
+recorded; this focused pass does not constitute final core pin compatibility
+or exhaustive interaction qualification.
+
 At `18789c85`, run `40445110427` passes the actual people-list creation and
 selection regressions three times on Linux, macOS and Windows. Affected platform
 run `40445112905` passes the teams workload on Linux, macOS, Windows and the
@@ -117,10 +141,11 @@ Neither invalid measurement is counted as a pass. The 51-check affected suite
 passes, followed by 31 passing mounted/read checks after hiding stale topic
 controls; shipping package generation and its seven catalog checks also pass.
 
-The real disposable Zoom touch journey still fails at Mute chat: its POST remains
+The earlier disposable Zoom touch journey fails at Mute chat: its POST remains
 pending for more than 15 seconds and the chip waits for completion. The bounded
 trace records the exact trusted click and no page error. The renderer repair does
-not resolve that separate feedback defect. Complete skin/runtime qualification
+not resolve that separate feedback defect; the later mute repair and touch pass
+are recorded above. Complete skin/runtime qualification
 and the exhaustive interaction gate remain open; nothing is released or deployed.
 
 Create list now inserts its named pending card and clears the submitted name
