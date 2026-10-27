@@ -14,6 +14,13 @@ import (
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
+func TestNotificationChangesRendered(t *testing.T) {
+	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
+		t.Skip("set AGENTNET_PLAYWRIGHT for rendered notification preference recovery")
+	}
+	t.Log(browserCheck(t, "testdata/notification_changes_rendered.cjs"))
+}
+
 // The actual HTTP control changes privacy alone, including while alerts are off.
 func TestNotificationPreviewControlPreservesConsent(t *testing.T) {
 	alice, bob, live := liveWorld(t)

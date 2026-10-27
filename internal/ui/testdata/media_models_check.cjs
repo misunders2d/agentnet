@@ -14,9 +14,15 @@ console.log('media budget: short/120s/300s, audio reservation, 650kbps floor and
 // two-minute sleep, and no permission/provider boundary is mocked away.
 const wrapperSource=fs.readFileSync(path.resolve(__dirname,'../web/src/features/Composer.media.ts'),'utf8').replace('import("./Composer.video")','loadVideo()');
 const wrapperCode=web('esbuild').transformSync(wrapperSource,{loader:'ts',format:'cjs',target:'es2022'}).code;
-function wrapper(loadVideo){const m={exports:{}},timers=[];new Function('module','exports','loadVideo','setTimeout','clearTimeout',wrapperCode)(m,m.exports,loadVideo,(f,ms)=>{timers.push({f,ms,cleared:false});return timers.length-1;},i=>{timers[i].cleared=true;});return{...m.exports,timers};}
+function wrapper(loadVideo){const m={exports:{}},timers=[],frames=[];new Function('module','exports','loadVideo','setTimeout','clearTimeout','requestAnimationFrame','cancelAnimationFrame',wrapperCode)(m,m.exports,loadVideo,(f,ms)=>{timers.push({f,ms,cleared:false});return timers.length-1;},i=>{timers[i].cleared=true;},f=>{frames.push({f,cancelled:false});return frames.length;},i=>{frames[i-1].cancelled=true;});return{...m.exports,timers,frames};}
 const tick=()=>new Promise(setImmediate),file=new File(['source'],'source.mp4',{type:'video/mp4'});
 (async()=>{
+ let encoded=0;
+ const queued=wrapper(async()=>({compressVideo:async()=>{encoded++;return new File(['x'],'small.mp4',{type:'video/mp4'});}}));
+ const cancelled=new AbortController(),cancelledWork=queued.prepareMedia(file,{},cancelled.signal,()=>{});await tick();assert.equal(encoded,0,'codec cannot precede the pending-state frame');cancelled.abort();await assert.rejects(cancelledWork,e=>e.name==='AbortError');
+ const next=queued.prepareMedia(file,{},new AbortController().signal,()=>{});await tick();assert.equal(queued.frames.length,2,'cancelled frame wait must release the shared queue');assert.equal(encoded,0);queued.frames[1].f();assert.equal(encoded,0,'frame callback still precedes rendering');queued.timers.at(-1).f();await next;assert.equal(encoded,1);
+ const hidden=queued.prepareMedia(file,{},new AbortController().signal,()=>{});await tick();const fallbackTimer=queued.timers.at(-1);assert.equal(fallbackTimer.ms,50);fallbackTimer.f();await hidden;assert.equal(encoded,2,'a throttled frame must not stop background preparation');
+ console.log('media scheduling: feedback frame precedes codecs, cancelled wait releases queue, throttled frames retain progress PASS');
  let native=0,entered=false;
  const browser=wrapper(async()=>({compressVideo:async(_f,signal)=>{entered=true;return new Promise((_r,j)=>signal.addEventListener('abort',()=>j(signal.reason),{once:true}));}}));
  const first=browser.prepareVideo(file,{prepareVideo:async()=>{native++;throw Error('unexpected native fallback');}},new AbortController().signal,()=>{});await tick();assert(entered);assert.equal(browser.timers[0].ms,120000);browser.timers[0].f();await assert.rejects(first,e=>e.name==='TimeoutError');assert.equal(native,0,'deadline must not start a fresh native work budget');assert(browser.timers[0].cleared);

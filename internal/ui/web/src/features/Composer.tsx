@@ -347,10 +347,15 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     const replace = (file: File, note: string, preparing = false) => {
       const current = store.draft(c).files?.find(f => f.key === key);
       if (!current) return;
-      releaseFiles([current]);
-      if (typeof current.staged === "string") void store.api.discard([current.staged]).catch(() => {});
-      update({ file, name: file.name, size: file.size, type: file.type, original: source, staged: undefined,
-        url: /^image\/(png|jpeg|gif|webp)$/.test(file.type) || mediaKind(file) === "video" ? URL.createObjectURL(file) : undefined, mediaMode: mode, preparing, mediaProgress: undefined, mediaNote: note });
+      const changed = current.file !== file;
+      // Pending/cancel/fallback retain the same bytes. Replacing their URL
+      // would restart the native video preview on every status change.
+      if (changed) {
+        releaseFiles([current]);
+        if (typeof current.staged === "string") void store.api.discard([current.staged]).catch(() => {});
+      }
+      update({ file, name: file.name, size: file.size, type: file.type, original: source, staged: changed ? undefined : current.staged,
+        url: !changed ? current.url : /^image\/(png|jpeg|gif|webp)$/.test(file.type) || mediaKind(file) === "video" ? URL.createObjectURL(file) : undefined, mediaMode: mode, preparing, mediaProgress: undefined, mediaNote: note });
     };
     if (mode === "original") { replace(source, "Exact original file. Its bytes and metadata are unchanged."); return; }
     const controller = new AbortController();

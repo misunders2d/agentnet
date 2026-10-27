@@ -21,6 +21,16 @@ let queue: Promise<unknown> = Promise.resolve();
 export function prepareMedia(file: File, host: Host, signal: AbortSignal, progress: (n: number) => void): Promise<PreparedMedia> {
   const work = queue.then(async () => {
     aborted(signal);
+    // The pending choice must get a paint opportunity before cached codec
+    // imports or image decoding start. A microtask alone cannot yield a frame.
+    // Hidden/throttled views still progress; cancellation releases this lane.
+    await abortable(new Promise<void>(resolve => {
+      let frame = 0;
+      const finish = () => { clearTimeout(timer); if (frame) cancelAnimationFrame(frame); resolve(); };
+      const timer = setTimeout(finish, 50);
+      if (typeof requestAnimationFrame === "function") frame = requestAnimationFrame(() => setTimeout(finish, 0));
+    }), signal);
+    aborted(signal);
     return mediaKind(file) === "photo" ? preparePhoto(file, signal) : prepareVideo(file, host, signal, progress);
   });
   queue = work.catch(() => {});

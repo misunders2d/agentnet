@@ -111,7 +111,40 @@ confirmation reads, and stopped-workspace completion are covered. Current state
 is revealed on failure; an old snapshot is never restored. Pending picture work
 also guards automatic reload. This reuses the inspected Telegram local-update
 pattern already cited below; API permissions and public picture storage remain
-unchanged. Native platform and overlay qualification for this delta is pending.
+unchanged. The picture regression and affected state models pass three times on
+Linux, macOS and Windows in `40424291595`. The affected native/browser profile
+and media run `40424295626` passes Linux and Windows. Native macOS passes both;
+browser WebKit still fails first-view timing. Android's unsupported-video action
+takes 593 ms, so that candidate is not qualified. Overlay qualification remains
+open.
+
+Notification preferences had the same storage-dependent local state: the new
+rendered test fails against `997a3b98` while Off still displays On. The selected
+toggle/preview now changes locally with explicit pending/confirmation feedback.
+Denied or failed OS permission requests never call the enable API or display a
+grant; newer authoritative preferences win over older replies. Six local
+daemon/Android/browser fixture combinations pass at both widths, maximum 32 ms
+including frame opportunities. Android permission calls in this focused fixture
+are simulated; the real HTTP consent/privacy tests pass separately. Pending and
+failure screenshots were visually checked at 390 and 1440 pixels.
+
+The media audit reproduced unnecessary native-preview restarts: entering
+preparation and keeping the original file revoked and recreated its unchanged
+blob URL. The real-file regression fails against the earlier Composer and passes
+when unchanged bytes retain their preview URL and staging handle. Media work
+also yields a paint opportunity before cached codecs run, with bounded progress
+in hidden views and abortable queue waits. Real codecs, original-file recovery,
+queue cancellation and the existing two-minute deadline pass locally. Eight
+affected local Chromium workload cells (settings/profile/media/permissions) pass,
+157 synthetic actions, maximum 282 ms. Native reruns remain required.
+
+The complete macOS sample in `40424815338` captures main-thread QuartzCore/Metal
+flush waits and shader compilation, but its native timing passes; browser WebKit
+still fails at 763–780 ms. This identifies renderer work, not a proven app-level
+cause for each failure. Apple documents first-use pipeline compilation and the
+resulting hitching risk in [Optimize GPU renderers with Metal](https://developer.apple.com/videos/play/wwdc2023/10127/)
+(checked October 27, 2026). The candidate removes the small Settings entrance
+translation to test a simpler rendering path; its macOS effect is unverified.
 
 The remaining Base UI popup entrances used transparent or fully offscreen
 starting states. Real message-menu/reaction/delete and All Topics regressions

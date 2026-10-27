@@ -104,6 +104,12 @@ function Typing() {
 function NotifyBody({ n }: { n: T.NotifyView }) {
   const store = useApp();
   const [busy, setBusy] = useState(false);
+  const saving = useRef(false);
+  const [intent, setIntent] = useState<{ source: T.NotifyView; patch: Partial<T.NotifyView>; phase: "permission" | "saving" | "checking" } | null>(null);
+  // A new authoritative preference wins. Unrelated overview refreshes retain
+  // this exact shared DTO, so they cannot undo an unfinished local choice.
+  const shown = intent?.source === n && intent.phase !== "permission" ? { ...n, ...intent.patch } : n;
+  useEffect(() => { if (intent?.phase === "checking" && intent.source !== n) setIntent(null); }, [n, intent]);
   const iphone = !n.native && /iPhone|iPad/.test(navigator.userAgent) && !matchMedia("(display-mode: standalone)").matches;
   const android = store.host.android;
   const [nativeStatus, setNativeStatus] = useNativeNotificationStatus();
@@ -120,30 +126,43 @@ function NotifyBody({ n }: { n: T.NotifyView }) {
   // Turning on asks the browser first, from this click: its own question
   // needs one. A computer's own alerts ask nothing.
   const turn = async (on: boolean) => {
+    if (saving.current || intent) return;
+    saving.current = true;
     setBusy(true);
-    if (on && store.host.android) {
-      try {
-        const status = await store.host.android.requestNotifications();
-        setNativeStatus(status);
-        const { granted } = status;
-        if (!granted) {
-          store.toast("Allow notifications in Android settings to receive alerts.", "error");
-          setBusy(false); return;
-        }
-      } catch { store.toast("Android could not enable notifications. Try again.", "error"); setBusy(false); return; }
-    }
-    if (on && !n.native) {
-      const p = typeof Notification === "undefined" ? "denied" : await Notification.requestPermission();
-      if (p !== "granted") { store.toast("The browser didn’t allow notifications. Everything else works without them.", "error"); setBusy(false); return; }
-    }
-    await store.run((a) => a.notify(on ? "enable" : "disable"), on ? "Notifications are on." : "Notifications are off.");
-    setBusy(false);
+    setIntent({ source: n, patch: { enabled: on }, phase: on && (android || !n.native) ? "permission" : "saving" });
+    try {
+      if (on && android) {
+        try {
+          const status = await android.requestNotifications();
+          setNativeStatus(status);
+          const { granted } = status;
+          if (!granted) {
+            store.toast("Allow notifications in Android settings to receive alerts.", "error");
+            setIntent(null); return;
+          }
+        } catch { store.toast("Android could not enable notifications. Try again.", "error"); setIntent(null); return; }
+      }
+      if (on && !n.native) {
+        const p = typeof Notification === "undefined" ? "denied" : await Notification.requestPermission();
+        if (p !== "granted") { store.toast("The browser didn’t allow notifications. Everything else works without them.", "error"); setIntent(null); return; }
+      }
+      setIntent({ source: n, patch: { enabled: on }, phase: "saving" });
+      const result = await store.run((a) => a.notify(on ? "enable" : "disable"), on ? "Notifications are on." : "Notifications are off.");
+      setIntent(result ? { source: n, patch: { enabled: on }, phase: "checking" } : null);
+    } catch {
+      setIntent(null); store.toast("Could not request notification permission. Try again.", "error");
+    } finally { saving.current = false; setBusy(false); }
   };
 
   const preview = async (value: "" | "full" | "sender" | "hidden") => {
+    if (saving.current || intent) return;
+    saving.current = true;
     setBusy(true);
-    await store.run((a) => a.notify("preview", { preview: value }), "Message preview preference saved.");
-    setBusy(false);
+    setIntent({ source: n, patch: { preview: value }, phase: "saving" });
+    try {
+      const result = await store.run((a) => a.notify("preview", { preview: value }), "Message preview preference saved.");
+      setIntent(result ? { source: n, patch: { preview: value }, phase: "checking" } : null);
+    } finally { saving.current = false; setBusy(false); }
   };
 
   if (!n.available) return <Card className="p-4"><p>{iphone ? "On iPhone, add AgentNet to your Home Screen first, then turn them on there." : n.reason || "Notifications aren’t available here."}</p></Card>;
@@ -156,7 +175,7 @@ function NotifyBody({ n }: { n: T.NotifyView }) {
             <p className="font-semibold">{n.native && !store.host.android ? "Alerts on this computer" : "Notifications on this device"}</p>
             <Hint>{store.host.android ? "Android shows alerts while AgentNet is connected. The first time you allow notifications, it also keeps AgentNet connected in the background. Your saved connection choice is respected." : n.native ? "Shown while AgentNet runs here, even with this page closed." : "Your browser shows them, even with this page closed."}</Hint>
           </div>
-          <Toggle label="Notifications" checked={n.enabled && !blocked} disabled={busy || (!!android && nativeGranted === null) || (!android && blocked && !n.enabled)} onChange={turn} />
+          <Toggle label="Notifications" checked={shown.enabled && !blocked} disabled={busy || !!intent || (!!android && nativeGranted === null) || (!android && blocked && !n.enabled)} onChange={turn} />
         </div>
         {blocked && <Hint className="mt-3">{android && nativeStatus?.app_granted && channel?.importance === 0 ? "Chat activity notifications are blocked in Android settings." : `Notifications are blocked in ${android ? "Android settings" : "this browser’s settings"}.`} Everything else works without them.</Hint>}
         {android && channelQuiet && <Hint className="mt-3">
@@ -166,8 +185,10 @@ function NotifyBody({ n }: { n: T.NotifyView }) {
         </Hint>}
         {android?.notificationSettings && <button type="button" className="mt-3 rounded-lg border border-hairline px-3 py-2 font-semibold" onClick={() => void openAndroidSettings()}>Android notification settings</button>}
         {n.pending && <Hint className="mt-3">Your server is told about this change when this page reconnects.</Hint>}
+        {intent && <p role="status" className="mt-3 text-sm text-muted">{intent.phase === "permission" ? "Waiting for notification permission…" : intent.phase === "checking" ? "Notification preference saved; checking current state…" : "Saving notification preference…"}</p>}
+        {intent?.phase === "checking" && <button type="button" className="mt-2 underline" onClick={() => void store.refetch()}>Check notification status</button>}
       </Card>
-      <NotificationPreviewControl n={n} busy={busy} onChange={value => void preview(value)} />
+      <NotificationPreviewControl n={shown} busy={busy || !!intent} onChange={value => void preview(value)} />
       <Hint className="px-1">Chats notify you unless muted. Use Mute in the chat’s menu to keep it quiet.</Hint>
     </div>
   );
