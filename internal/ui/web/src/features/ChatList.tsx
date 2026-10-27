@@ -14,7 +14,7 @@ import { GroupInvitations } from "./ChatList.invites";
 import { GroupChanges } from "./GroupAdmin";
 import { warmPictures } from "./Message.files";
 import { TopicResults } from "./ChatList.topics";
-import { CandidateRow, NewChatButton, candidates, matches, startChat } from "./NewChat";
+import { CandidateRow, NewChatButton, StartingChat, candidates, matches, useStartChat } from "./NewChat";
 import { WorkspacePill } from "./WorkspaceSwitcher";
 import { AgentAvatar, PersonAvatar } from "../ui/Avatar";
 import { Button, IconButton } from "../ui/Button";
@@ -246,10 +246,10 @@ function NeedsYouBanner({ overview: o, agentNames }: { overview: T.Overview; age
 
 /** SearchExtras: people with no chat yet who match, so a search can start one. */
 function SearchExtras({ query, overview, none }: { query: string; overview: T.Overview; none: boolean }) {
-  const store = useApp();
-  const [busy, setBusy] = useState("");
+  const starting = useStartChat();
   const { people, server } = candidates(overview);
   const fresh = people.concat(server).filter((c) => !c.chat && matches(query, c.name));
+  if (starting.pending) return <div className="p-3"><StartingChat flow={starting} /></div>;
   if (!fresh.length) return none ? (
     <div className="px-6 py-8 text-center">
       <p className="font-display text-[20px] font-bold [overflow-wrap:anywhere]">Nothing matches “{query}”</p>
@@ -261,8 +261,8 @@ function SearchExtras({ query, overview, none }: { query: string; overview: T.Ov
       <h2 className="px-4 pb-1 text-[12px] font-extrabold uppercase tracking-[.08em] text-muted lg:px-3">Start a new chat</h2>
       <ul className="px-2">
         {fresh.map((c) => (
-          <li key={c.key}><CandidateRow c={c} busy={busy === c.key} disabled={!!busy}
-            onPick={async () => { setBusy(c.key); await startChat(store, c); setBusy(""); }} /></li>
+          <li key={c.key}><CandidateRow c={c} busy={false} disabled={false}
+            onPick={() => void starting.start(c)} /></li>
         ))}
       </ul>
     </div>

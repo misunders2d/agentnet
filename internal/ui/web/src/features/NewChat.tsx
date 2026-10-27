@@ -2,10 +2,10 @@
 // here come first; others the server lists are offered too, said plainly
 // to be unchecked (starting a chat checks who they are). A group starts
 // with a name; its creator then brings people in, and each one accepts.
-import { useEffect, useMemo, useRef, useState, type FormEvent, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type RefObject } from "react";
 import { IconArrowLeft, IconMessagePlus, IconPencil, IconSearch, IconUsersPlus, IconX } from "@tabler/icons-react";
 import { useAgentNames, useApp, useWide } from "../context";
-import { useStore, type Store } from "../store";
+import { useStore } from "../store";
 import { errorText, type T } from "../api";
 import { deviceKind, niceDevice, personName } from "../model";
 import { Sheet } from "../ui/Sheet";
@@ -75,13 +75,48 @@ export const matches = (q: string, ...words: (string | undefined)[]) => {
   return !n || words.some((w) => (w || "").toLowerCase().includes(n));
 };
 
-/** startChat opens the chat with someone, starting one when there is none. */
-export async function startChat(store: Store, c: Candidate): Promise<boolean> {
-  if (c.chat) { void store.open({ kind: "dm", id: c.chat }); return true; }
-  const r = await store.run((a) => a.newDM(c.address));
-  if (!r) return false;
-  void store.open({ kind: "dm", id: r.id });
-  return true;
+/** Show the exact destination before native identity checks/create complete. */
+export function useStartChat(active = true, onStarted?: () => void) {
+  const store = useApp();
+  const [pending, setPending] = useState<{ candidate: Candidate; error?: string } | null>(null);
+  const request = useRef<{ candidate: Candidate; current: () => boolean; failed?: boolean } | null>(null);
+  const cancel = () => { request.current = null; setPending(null); };
+  useLayoutEffect(() => {
+    if (!active) cancel();
+    const stop = store.subscribe(() => { if (request.current && !request.current.current()) cancel(); });
+    return () => { request.current = null; stop(); };
+  }, [store, active]);
+  const start = async (candidate: Candidate) => {
+    if (!active || !store.isActive() || request.current && !request.current.failed) return;
+    if (candidate.chat) { onStarted?.(); void store.open({ kind: "dm", id: candidate.chat }); return; }
+    const before = store.get(), owner = before.overview?.person?.person;
+    const flight = { candidate, current: () => {
+      const now = store.get();
+      return store.isActive() && now.overview?.person?.person === owner && now.open === before.open && now.tab === before.tab && now.messageLanding?.target === before.messageLanding?.target;
+    } };
+    request.current = flight; setPending({ candidate });
+    try {
+      const result = await store.api.newDM(candidate.address);
+      if (request.current !== flight || !flight.current()) return;
+      request.current = null; setPending(null); onStarted?.();
+      void store.open({ kind: "dm", id: result.id });
+    } catch (error) {
+      if (request.current === flight && flight.current()) { request.current.failed = true; setPending({ candidate, error: errorText(error) }); }
+    } finally { if (store.isActive()) void store.refetch(); }
+  };
+  return { pending, start, cancel };
+}
+
+export function StartingChat({ flow }: { flow: ReturnType<typeof useStartChat> }) {
+  const p = flow.pending, region = useRef<HTMLElement>(null);
+  useLayoutEffect(() => { region.current?.scrollIntoView({ block: "nearest", behavior: "instant" }); }, [p]);
+  if (!p) return null;
+  return <section ref={region} aria-label={"Starting chat with " + p.candidate.name} className="space-y-3 rounded-2xl bg-surface p-4 stroke">
+    <div className="flex items-center gap-3"><PersonAvatar name={p.candidate.name} seed={p.candidate.seed} size={40} /><h3 className="min-w-0 break-words font-display text-xl font-bold">{p.candidate.name}</h3></div>
+    <p role={p.error ? "alert" : "status"}>{p.error ? "Could not confirm this chat. " + p.error : "Starting this chat…"}</p>
+    <p className="text-sm text-muted">{p.error ? "A chat may already exist. Go back and check before trying again." : "Checking the person and creating the conversation. Going back leaves that work running."}</p>
+    <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={flow.cancel}>Back to people</Button>{p.error && <Button variant="act" onClick={() => void flow.start(p.candidate)}>Try starting chat again</Button>}</div>
+  </section>;
 }
 
 /** CandidateRow: one person (or server member) to start a chat with. */
@@ -157,7 +192,7 @@ function NewChatSheet({ open, onOpenChange, finalFocus }: { open: boolean; onOpe
       {!overview ? <p className="py-6 text-muted">Loading…</p>
         : !overview.persons ? <p className="py-4 text-text-2">This AgentNet can’t hold chats between people yet.</p>
         : !overview.person ? <NeedsName onDone={() => close(false)} />
-        : <PickPeople overview={overview} onGroup={overview.groups ? () => setStep("group") : undefined} onDone={() => close(false)} />}
+        : <PickPeople overview={overview} active={open} onGroup={overview.groups ? () => setStep("group") : undefined} onDone={() => close(false)} />}
     </Sheet>
   );
 }
@@ -172,12 +207,12 @@ function NeedsName({ onDone }: { onDone: () => void }) {
   );
 }
 
-function PickPeople({ overview, onGroup, onDone }: { overview: T.Overview; onGroup?: () => void; onDone: () => void }) {
+function PickPeople({ overview, active, onGroup, onDone }: { overview: T.Overview; active: boolean; onGroup?: () => void; onDone: () => void }) {
   const store = useApp();
   const wide = useWide();
   const agentNames = useAgentNames();
   const [query, setQuery] = useState("");
-  const [busy, setBusy] = useState("");
+  const starting = useStartChat(active, onDone);
   // Bound the first render without limiting directory search or access.
   const pageSize = 40;
   const [peopleLimit, setPeopleLimit] = useState(pageSize);
@@ -200,13 +235,9 @@ function PickPeople({ overview, onGroup, onDone }: { overview: T.Overview; onGro
   const shownAgents = q ? agents.filter((i) => matches(q, i.title, i.subtitle, i.note)) : [];
   const note = directoryNote(overview);
 
-  const pick = async (c: Candidate) => {
-    setBusy(c.key);
-    const ok = await startChat(store, c);
-    setBusy("");
-    if (ok) onDone();
-  };
   const nothing = !shownPeople.length && !shownServer.length && !shownAgents.length;
+
+  if (starting.pending) return <StartingChat flow={starting} />;
 
   return (
     <div ref={choices} className="pb-2" onKeyDown={e => {
@@ -223,7 +254,7 @@ function PickPeople({ overview, onGroup, onDone }: { overview: T.Overview; onGro
         <span className="sr-only">Search people</span>
         <input ref={input} type="search" value={query} onChange={(e) => search(e.target.value)} placeholder="Search people"
           onKeyDown={e => {
-            if (!q || busy || e.nativeEvent.isComposing || !["Enter", "ArrowDown"].includes(e.key)) return;
+            if (!q || e.nativeEvent.isComposing || !["Enter", "ArrowDown"].includes(e.key)) return;
             const first = choices.current?.querySelector<HTMLButtonElement>('[data-new-chat-choice]:not(:disabled)');
             if (first) { e.preventDefault(); if (e.key === "Enter") first.click(); else first.focus(); }
           }}
@@ -247,13 +278,13 @@ function PickPeople({ overview, onGroup, onDone }: { overview: T.Overview; onGro
 
       {shownPeople.length > 0 && <>
         <h3 className={heading}>People</h3>
-        <ul>{shownPeople.slice(0, peopleLimit).map((c) => <li key={c.key}><CandidateRow c={c} busy={busy === c.key} disabled={!!busy} onPick={() => pick(c)} /></li>)}</ul>
+        <ul>{shownPeople.slice(0, peopleLimit).map((c) => <li key={c.key}><CandidateRow c={c} busy={false} disabled={false} onPick={() => void starting.start(c)} /></li>)}</ul>
         {shownPeople.length > peopleLimit && <Button size="sm" variant="outline" onClick={() => setPeopleLimit(n => n + pageSize)}>Show more people ({shownPeople.length - peopleLimit})</Button>}
       </>}
       {shownServer.length > 0 && <>
         <h3 className={heading}>Also on this server</h3>
         <p className="px-2 pb-1 text-[13px] text-muted">Not checked here yet. Starting a chat checks who they are first.</p>
-        <ul>{shownServer.slice(0, serverLimit).map((c) => <li key={c.key}><CandidateRow c={c} busy={busy === c.key} disabled={!!busy} onPick={() => pick(c)} /></li>)}</ul>
+        <ul>{shownServer.slice(0, serverLimit).map((c) => <li key={c.key}><CandidateRow c={c} busy={false} disabled={false} onPick={() => void starting.start(c)} /></li>)}</ul>
         {shownServer.length > serverLimit && <Button size="sm" variant="outline" onClick={() => setServerLimit(n => n + pageSize)}>Show more server members ({shownServer.length - serverLimit})</Button>}
       </>}
       {shownAgents.length > 0 && <>

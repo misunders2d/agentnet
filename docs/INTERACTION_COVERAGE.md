@@ -91,6 +91,34 @@ the repair. Sergey needs to do nothing while owned fixtures are being tested.
 
 ### October 27 continuation: the 500 ms target
 
+Starting a new person chat now replaces the picker/search result with its named
+destination before native checks and creation finish. Back leaves admitted work
+running without allowing its late reply to reopen a dismissed or replaced view.
+Failure keeps the exact target, an explicit retry and a warning to check for an
+already-created chat. Store-level deduplication shares concurrent requests for
+the same verified owner/address and guards automatic reload while they run.
+This is necessary because the inspected native `CreateDM` deliberately creates
+a separate signed conversation on every call; there is no automatic retry or
+invented conversation ID. Existing chats retain immediate ordinary navigation.
+The flow reuses the inspected loading-destination/recovery pattern and current
+Store/API; identity checks and native creation are unchanged.
+
+Actual New picker and chat-search controls pass at 1440/390 pixels with held
+creation, failure/exact retry, Back/re-entry deduplication, another target,
+owner/navigation/close/unmount/stop guards and preserved unrelated drafts.
+The old components fail the same 500 ms feedback assertion. Final feedback is
+27–42 ms, all eight settled pending/error screenshots were inspected, and the
+three affected race parents (new chat, navigation workload, bundle) pass.
+These are focused synthetic-host checks, not complete real-backend qualification.
+
+At `b3ca13b3`, native run `40450789724` passes selection, all ten list mutations
+and recipient selection three times on Linux, macOS and Windows. Platform run
+`40450793270` fails Android's groups workload at `groups.member-invite-open`:
+790 ms feedback, 800 ms through the paint check, first mutation 163 ms and first
+frame 612 ms. Forty-six synthetic catalog reads finish at roughly 163 ms; their
+presence is not yet causal proof. The failure is retained and blocks that
+qualification; the concurrent desktop results are still pending here.
+
 Add list’s people now inserts a named pending selection and clears the chooser
 before its verified snapshot read. Cancel immediately removes that selection;
 failure keeps exact retry and cancel. Other recipient edits stay usable. Snapshot

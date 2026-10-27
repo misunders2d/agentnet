@@ -203,6 +203,7 @@ export class Store {
   private groupChangeState?: { source: State; value: State };
   private teamCreationWork?: { change: T.TeamChange; work: Promise<T.TeamState> };
   private teamChangeWork = new Map<string, { change: T.TeamChange; work: Promise<T.TeamState> }>();
+  private dmStartWork = new Map<string, Promise<{ id: string }>>();
   private reminderOverviewCache?: { source: T.Overview; changes: State["reminderChanges"]; value: T.Overview };
   private reactionSequence = 0;
   private reacting = new Map<string, { pending: PendingReaction; work: Promise<{ note: string } | undefined> }>();
@@ -252,6 +253,7 @@ export class Store {
       removeDevice: address => this.removeDevice(address, calls),
       decideGroup: (id, accept) => this.decideGroup(id, accept, calls),
       manageGroup: change => this.changeGroup(change, calls),
+      newDM: address => this.startDM(address, calls),
       changeTeam: change => change.op === "create" ? this.createTeam(change, calls) : calls.changeTeam(change) };
     this.sends = pendingSends(host, () => {
       const o = this.state?.open;
@@ -317,6 +319,23 @@ export class Store {
       }
     });
     this.pictureWork = { png, work };
+    return work;
+  }
+
+  private startDM(address: string, calls: Api): Promise<{ id: string }> {
+    const person = this.state.overview?.person?.person;
+    if (!this.alive || !person) return Promise.reject(Error("Your verified person is not available in this workspace."));
+    const key = person + ":" + address, prior = this.dmStartWork.get(key);
+    if (prior) return prior;
+    // Each native create starts a separate signed conversation. Share only
+    // concurrent identical input; never replay a creation after a lost reply.
+    const work = Promise.resolve().then(() => {
+      if (!this.alive || this.state.overview?.person?.person !== person) throw Error("This workspace or person changed before the chat could start.");
+      return calls.newDM(address);
+    }).finally(() => {
+      if (this.dmStartWork.get(key) === work) this.dmStartWork.delete(key);
+    });
+    this.dmStartWork.set(key, work);
     return work;
   }
 
@@ -804,6 +823,7 @@ export class Store {
     this.groupChangeWork.clear();
     this.teamCreationWork = undefined;
     this.teamChangeWork.clear();
+    this.dmStartWork.clear();
     this.sends.dispose();
     this.scheduled.dispose();
     this.stopListen?.();
@@ -1728,7 +1748,7 @@ export class Store {
     if (selected) this.markOpenRead();
   }
 
-  hasUnsent(): boolean { return unsentIn(this.state); }
+  hasUnsent(): boolean { return this.dmStartWork.size > 0 || unsentIn(this.state); }
 
   // ---- feedback
   // Telegram Web A's local-change -> async request -> reconciliation pattern
