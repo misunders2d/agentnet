@@ -91,13 +91,33 @@ the repair. Sergey needs to do nothing while owned fixtures are being tested.
 
 ### October 27 continuation: the 500 ms target
 
+Create list now inserts its named pending card and clears the submitted name
+before the native write. Its shared state follows navigation; only a current
+verified list read supplies the real ID and manager/member controls. A saved
+receipt remains visibly unconfirmed until that read arrives. Failure keeps the
+exact name, explains the uncertain outcome, and offers read-only checking and
+an explicit retry. Duplicate pending input shares one write. Retry preserves
+newer input, and completion cannot replace a subsequently selected list, reopen
+an unmounted view or update a changed owner/stopped workspace. This reuses the
+already inspected Telegram local-state/background reconciliation pattern and
+AgentNet's existing Store/API, without creating a new authority mechanism.
+
+The actual TeamsSection/Store held-write and held-read regression passes at
+1440/390 pixels: initial trusted-input feedback is 51–105 ms, and the integrated
+race run records 66–77 ms. All four pending/error screenshots were inspected.
+The same race run passes existing list selection, the affected two-part teams
+workload and canonical bundle checks (four parents, 62.384 seconds). Workload
+feedback and completed list opening are now measured separately. This is local
+focused evidence; macOS, Windows, Android and final skin qualification of this
+candidate remain outstanding.
+
 At `4645ead6`, run `40442190118` passes the group-administration and
 pending-people regressions three times on Linux, macOS and Windows. Affected
 platform run `40442193425` passes Linux and Windows groups/teams. Android
 fails Create list at 697 ms; native macOS fails the same action at 724 ms.
 Browser WebKit also delays opening a group (984 ms) and people-list settings
-(870 ms). Create list still waits for the backend before showing the new list;
-that is a remaining implementation gap, not a waived result. UI race partitions
+(870 ms). That candidate's Create list waits for the backend before showing the
+new list; the repair above does not waive those original failures. UI race partitions
 1 and 2 pass in `40442196954`; partition 0 has one failed parent, the media-probe
 guard's obsolete expected summary omitted the new zero-valued diagnostic count.
 The corrected guard passes under `-race`; its original failed partition and all

@@ -18,7 +18,7 @@ export function useTeams(enabled = true) {
   const seq = useRef(0);
   const reload = async () => {
     const n = ++seq.current;
-    try { const v = await store.api.teams(); if (n === seq.current && store.isActive()) { setView(v); setError(""); } }
+    try { const v = await store.api.teams(); if (n === seq.current && store.isActive()) { setView(v); setError(""); store.confirmTeamCreation(v); } }
     catch (e) {
       if (n !== seq.current || !store.isActive()) return;
       const detail = errorText(e), unsupported = /not found|404/i.test(detail);
@@ -54,6 +54,11 @@ export function TeamsSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingEle
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [chosen, setChosen] = useState<string | null>(null);
+  const creation = useStore(store, s => s.teamCreation);
+  const creating = !!creation && !creation.error;
+  const navigation = useRef(0), mounted = useRef(true);
+  const choose = (id: string | null) => { ++navigation.current; setChosen(id); };
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; ++navigation.current; }; }, []);
   const [draft, setDraft] = useState<T.PersonRef[] | null>(null);
   const [selection, setSelection] = useState<{ id: string; name: string; error?: string } | null>(null);
   const selectionRequest = useRef(0);
@@ -61,15 +66,26 @@ export function TeamsSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingEle
   const team = view?.teams?.find((t) => t.id === chosen);
   const act = async (c: T.TeamChange) => {
     if (busy) return;
+    if (c.op === "create") {
+      const selection = navigation.current, work = store.api.changeTeam(c);
+      const pending = store.get().teamCreation?.change;
+      try {
+        const saved = await work;
+        if (!mounted.current || !store.isActive() || !pending || store.get().teamCreation?.change !== pending) return;
+        if (selection === navigation.current) setChosen(saved.id);
+        void reload();
+      } catch { /* shared creation error retains the exact name across navigation */ }
+      return;
+    }
     setBusy(true);
     const r = await store.run((a) => a.changeTeam(c), "People list changed.");
-    if (r && store.isActive()) { if (c.op === "create") { setName(""); setChosen(r.id); } if (c.op === "delete") setChosen(null); await reload(); }
+    if (r && store.isActive()) { if (c.op === "delete") setChosen(id => id === c.team ? null : id); await reload(); }
     setBusy(false);
   };
-  const create = (e: FormEvent) => { e.preventDefault(); if (name.trim()) void act({ op: "create", v: view?.tags ? 2 : 1, name: name.trim() }); };
+  const create = (e: FormEvent) => { e.preventDefault(); if (name.trim() && !creating && !busy) { void act({ op: "create", v: view?.tags ? 2 : 1, name: name.trim() }); setName(""); } };
   const select = async (source: { id: string; name: string }) => {
     const request = ++selectionRequest.current, self = o?.person?.person;
-    setChosen(null);
+    choose(null);
     setDraft(null);
     setSelection({ id: source.id, name: source.name });
     try {
@@ -89,14 +105,21 @@ export function TeamsSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingEle
     <div className="space-y-3">
       <TeamStatus view={view} />
       {error && <p role="alert" className="text-danger">{error}</p>}
+      {creation && <section aria-label="Pending people list"><Card className="p-3">
+        <p className="break-words font-bold">{creation.change.name}</p>
+        <p role={creation.error ? "alert" : "status"} className="mt-1 text-sm text-muted">{creation.error ? "Could not confirm this list. " + creation.error : creation.saved ? "List saved; checking the current list…" : "Creating this list…"}</p>
+        {creation.error && <Hint>Check the current lists before retrying; the first attempt may have saved.</Hint>}
+        {(creation.saved || creation.error) && <Button size="sm" variant="ghost" onClick={() => void reload()}>Check people lists</Button>}
+        {creation.error && <Button size="sm" variant="ghost" onClick={() => void act(creation.change)}>Try creating list again</Button>}
+      </Card></section>}
       {o?.person && view && view.status !== "unsupported" && <form onSubmit={create} className="space-y-2">
         <label className="block font-semibold">New list name<input className={input} value={name} maxLength={64} onChange={(e) => setName(e.target.value)} /></label>
         <Hint>{view.tags ? "Choose its people and agents after creating it. You manage this list; everyone can use it." : "This server supports people lists. Update it to create mixed people and agent tags."}</Hint>
-        <Button type="submit" disabled={busy || !name.trim()}>Create list</Button>
+        <Button type="submit" disabled={busy || creating || !name.trim()}>Create list</Button>
       </form>}
       <label className="block font-semibold">Search people lists<input className={input} value={query} onChange={(e) => setQuery(e.target.value)} /></label>
       {(view?.teams || []).filter((t) => t.name.toLowerCase().includes(query.toLowerCase())).sort((a, b) => Number(a.archived) - Number(b.archived) || a.name.localeCompare(b.name)).map((t) => <Card key={t.id} className="p-3">
-        <button type="button" className="w-full min-w-0 text-left" onClick={() => { setChosen(t.id); setName(""); }}>
+        <button type="button" className="w-full min-w-0 text-left" onClick={() => { choose(t.id); setName(""); }}>
           <span className="block break-words font-bold">{t.name}</span>
           <span className="text-sm">{t.members?.length || 0} people · {t.agents?.length || 0} agents</span>
           <span className="ml-2 inline-flex flex-wrap gap-1">{t.archived && <Tag>Archived</Tag>}{t.conflict && <Tag>Frozen</Tag>}{t.manager ? <Tag>You manage</Tag> : t.member && <Tag>Member</Tag>}</span>
@@ -105,7 +128,7 @@ export function TeamsSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingEle
       {view && !view.teams?.length && view.status !== "unsupported" && <Hint>No people lists yet.</Hint>}
       <Button variant="outline" onClick={() => void reload()}>Read lists again</Button>
     </div>
-    <Sheet open={!!team} onOpenChange={(v) => { if (!v) setChosen(null); }} title={team?.name || "People list"}>
+    <Sheet open={!!team} onOpenChange={(v) => { if (!v) choose(null); }} title={team?.name || "People list"}>
       {team && <div className="space-y-3">
         <TeamStatus view={view} />
         {team.conflict && <Hint>Frozen: nothing changes until the conflicting signed record is resolved on the server.</Hint>}
@@ -136,7 +159,7 @@ export function TeamsSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingEle
         <p role={selection.error ? "alert" : "status"}>{selection.error || "Reading the verified people in “" + selection.name + "”…"}</p>
         {selection.error && <Button variant="act" onClick={() => void select(selection)}>Try again</Button>}
       </div>}
-      {draft && <NewGroupForm initialPeople={draft} onBack={closeDraft} onCreated={() => { closeDraft(); setChosen(null); }} />}
+      {draft && <NewGroupForm initialPeople={draft} onBack={closeDraft} onCreated={() => { closeDraft(); choose(null); }} />}
     </Sheet>
   </>;
 }

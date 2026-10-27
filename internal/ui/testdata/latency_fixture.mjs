@@ -870,7 +870,7 @@ try {
    if(teamsPart==='group')await tap('teams.group-page-open',control(/^Fixture new list/),()=>!!d(),'invented exact post-add list snapshot opened for independent group-roster page');
    if(teamsPart!=='group'){
    await fill('teams.create-name',fields()[0],'Fixture new list');
-   await tap('teams.create',control('Create list'),()=>!!sheet('Fixture new list'),'new list opens after API result');
+   await tap('teams.create',control('Create list'),()=>onScreen(active('section[aria-label="Pending people list"]'))||!!sheet('Fixture new list'),'named pending list appears before its background creation completes',()=>!!sheet('Fixture new list'));
    const nativeChoices=label=>[...d().querySelector('select[aria-label="'+label+'"]').options].map(o=>[o.value,o.label]);
    // Independent expected original order from the invented seed, before the
    // current bounded picker is read. Includes prompts and all eligible rows.

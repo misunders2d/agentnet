@@ -142,6 +142,7 @@ export interface State {
   deviceRemovals?: Record<string, { device: T.DeviceView; person: string; saved?: boolean }>;
   groupDecisions?: Record<string, { invitation: T.GroupInvitationView; person: string; accept: boolean; saved?: boolean }>;
   groupChanges?: Record<string, PendingGroupChange>;
+  teamCreation?: { change: T.TeamChange; person: string; saved?: T.TeamState; error?: string };
   panel: boolean;                                         // "In this chat" (desktop panel, phone sheet)
   readVisit: ReadVisit | null;
   contentRevision: number; // successful content loads; typing/presence do not advance choice lists
@@ -169,7 +170,7 @@ const draftsKey = (ws: string) => brand.storage + ".drafts." + ws;
 
 // unsentIn: what a reload would lose: a draft's text or files, or a send
 // not yet stored.
-export const unsentIn = (s: Pick<State, "drafts" | "unsent"> & Partial<Pick<State,"scheduleSaves" | "messageChanges" | "reminderChanges" | "pictureChange" | "deviceDecisions" | "deviceRemovals" | "groupDecisions" | "groupChanges">>) => s.unsent || Object.values(s.groupChanges || {}).some(p => !p.saved && !p.error) || Object.values(s.groupDecisions || {}).some(p => !p.saved) || Object.values(s.deviceDecisions || {}).some(p => !p.saved) || Object.values(s.deviceRemovals || {}).some(p => !p.saved) || !!s.pictureChange && !s.pictureChange.saved || Object.keys(s.reminderChanges || {}).length > 0 || Object.values(s.messageChanges || {}).some(p => p.status === "pending" || p.status === "failed" && p.action === "edit") || Object.values(s.scheduleSaves || {}).some(slot=>!!slot.attempt && (slot.status==="saving" || slot.status==="uncertain")) || Object.values(s.drafts).some((d) => d.text || (d.files && d.files.length));
+export const unsentIn = (s: Pick<State, "drafts" | "unsent"> & Partial<Pick<State,"scheduleSaves" | "messageChanges" | "reminderChanges" | "pictureChange" | "deviceDecisions" | "deviceRemovals" | "groupDecisions" | "groupChanges" | "teamCreation">>) => s.unsent || !!s.teamCreation && !s.teamCreation.saved && !s.teamCreation.error || Object.values(s.groupChanges || {}).some(p => !p.saved && !p.error) || Object.values(s.groupDecisions || {}).some(p => !p.saved) || Object.values(s.deviceDecisions || {}).some(p => !p.saved) || Object.values(s.deviceRemovals || {}).some(p => !p.saved) || !!s.pictureChange && !s.pictureChange.saved || Object.keys(s.reminderChanges || {}).length > 0 || Object.values(s.messageChanges || {}).some(p => p.status === "pending" || p.status === "failed" && p.action === "edit") || Object.values(s.scheduleSaves || {}).some(slot=>!!slot.attempt && (slot.status==="saving" || slot.status==="uncertain")) || Object.values(s.drafts).some((d) => d.text || (d.files && d.files.length));
 
 const recovery = { update: [500, 1000, 2000, 4000, 8000, 15000, 30000], missed: [1000, 3000, 8000] };
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -199,6 +200,7 @@ export class Store {
   private groupDecisionState?: { source: State; value: State };
   private groupChangeWork = new Map<string, { change: T.GroupChange; work: Promise<T.GroupChangeResult> }>();
   private groupChangeState?: { source: State; value: State };
+  private teamCreationWork?: { change: T.TeamChange; work: Promise<T.TeamState> };
   private reminderOverviewCache?: { source: T.Overview; changes: State["reminderChanges"]; value: T.Overview };
   private reactionSequence = 0;
   private reacting = new Map<string, { pending: PendingReaction; work: Promise<{ note: string } | undefined> }>();
@@ -247,7 +249,8 @@ export class Store {
       decideDevice: (id, accept) => this.decideDevice(id, accept, calls),
       removeDevice: address => this.removeDevice(address, calls),
       decideGroup: (id, accept) => this.decideGroup(id, accept, calls),
-      manageGroup: change => this.changeGroup(change, calls) };
+      manageGroup: change => this.changeGroup(change, calls),
+      changeTeam: change => change.op === "create" ? this.createTeam(change, calls) : calls.changeTeam(change) };
     this.sends = pendingSends(host, () => {
       const o = this.state?.open;
       // A send clears its draft as it begins: until it is stored, a reload
@@ -432,6 +435,40 @@ export class Store {
       overview: s.overview ? { ...s.overview, dms: s.overview.dms?.map(show) || null } : null };
     this.groupChangeState = { source: s, value };
     return value;
+  }
+
+  private createTeam(input: T.TeamChange, calls: Api): Promise<T.TeamState> {
+    if (!this.alive) return Promise.reject(Error("stale or disconnected workspace"));
+    const prior = this.teamCreationWork;
+    if (prior) return this.state.teamCreation && JSON.stringify(prior.change) === JSON.stringify(input)
+      ? prior.work : Promise.reject(Error("Wait for this people list to finish saving."));
+    if (this.state.teamCreation && !this.state.teamCreation.error) return Promise.reject(Error("Check the pending people list before creating another."));
+    const person = this.state.overview?.person?.person;
+    if (!person) return Promise.reject(Error("Your verified person is not available in this workspace."));
+    const change = { ...input }, pending = { change, person };
+    const current = () => this.alive && this.state.teamCreation?.change === change;
+    this.set({ teamCreation: pending });
+    const work = Promise.resolve().then(async () => {
+      try {
+        const saved = await calls.changeTeam(change);
+        if (current()) this.set({ teamCreation: { ...pending, saved } });
+        return saved;
+      } catch (error) {
+        if (current()) this.set({ teamCreation: { ...pending, error: errorText(error) } });
+        throw error;
+      } finally {
+        if (this.teamCreationWork?.work === work) this.teamCreationWork = undefined;
+      }
+    });
+    this.teamCreationWork = { change, work };
+    return work;
+  }
+
+  confirmTeamCreation(view: T.TeamsView) {
+    const pending = this.state.teamCreation;
+    if (!pending?.saved || !view.current || view.status !== "available") return;
+    const saved = pending.saved, current = view.teams?.find(t => t.id === saved.id);
+    if (current && !current.conflict && current.seq >= saved.seq) this.set({ teamCreation: undefined });
   }
 
   private changeGroup(input: T.GroupChange, calls: Api): Promise<T.GroupChangeResult> {
@@ -671,6 +708,7 @@ export class Store {
     if (!this.alive) return;
     if (Object.keys(patch).every(key => Object.is(this.state[key as keyof State], patch[key as keyof State]))) return;
     this.state = { ...this.state, ...patch };
+    if (this.state.teamCreation && patch.overview && patch.overview.person?.person !== this.state.teamCreation.person) this.state = { ...this.state, teamCreation: undefined };
     if (this.state.groupChanges && (patch.views || patch.overview)) {
       const entries = Object.entries(this.state.groupChanges);
       const keep = entries.filter(([id, p]) => {
@@ -722,6 +760,7 @@ export class Store {
     this.deviceRemovalWork.clear();
     this.groupDecisionWork.clear();
     this.groupChangeWork.clear();
+    this.teamCreationWork = undefined;
     this.sends.dispose();
     this.scheduled.dispose();
     this.stopListen?.();
