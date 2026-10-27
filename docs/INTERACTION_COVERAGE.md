@@ -41,7 +41,62 @@ The workload runner uses synthetic host responses in some cases; these results
 do not establish exhaustive real-backend control coverage, physical-phone timing
 or measured Slack/Telegram parity. C1/C2/B1 remain coverage follow-ups; R1 is now
 dispositioned for this verified-fixes release by the explicit owner decision.
-Publication, artifact verification and rollout are separate next steps.
+### Published artifacts and final touch qualification
+
+[App v0.9.7](https://github.com/misunders2d/agentnet/releases/tag/v0.9.7)
+was published October 27, 2026 at 08:12:00 UTC from the frozen source above;
+[gallery v2026.10.27.1](https://github.com/misunders2d/agentnet-skins/releases/tag/v2026.10.27.1)
+followed at 08:12:05 UTC from immutable `0371b53`. Both are Latest.
+All six release-build jobs pass in run 40467853141. All twelve public payloads
+and SHA256SUMS match the reviewed draft sizes and digests. Six Go programs carry
+the exact clean source stamp; Android retains its original preview signer and
+passes version/ABI/alignment checks. AppImage sidecar source/version and bundled
+media libraries verify. The actual public gallery parser verifies five packages,
+129 package files and all twenty previews across 151 unauthenticated HTTPS requests.
+The first download-check attempt used stale draft URLs and returned 404; refreshing
+only those URLs from the published release preserves the original digest checks.
+
+Duplicate gallery CI 40467335202 failed one Zoom touch-center check; its original
+cause remains unproven. Unchanged production passes the isolated journey in both
+local Chromium 155 and CI-matching Chromium 145. A deterministic regression then
+reproduced a separate driver defect: measuring the center before scroll-triggered
+layout can leave the tap outside the resized button. Gallery QA commit `37168bf`
+settles native scrolling before measurement, retaining the original deadline,
+center-hit, minimum-size and real-tap checks. The regression fails before and
+passes after; genuinely covered controls still fail. Both affected geometry/mute
+checks and all three actual standalone touch journeys pass in CI's browser
+(Classic 26 taps, Holonet 26, Zoom 28; 200 DM and 200 device-history messages).
+No published package, preview or application bytes change. Retain the complete
+exact-pin gate for unaffected groups and the original failed CI evidence.
+
+The final complete [gallery CI run 40471792362](https://github.com/misunders2d/agentnet-skins/actions/runs/40471792362)
+passes on `37168bf`: 172 Node checks pass, 24 opt-in checks skip, zero failures;
+all applicable package, gallery, lifecycle, production browser/provider, touch,
+motion and overlay/scaffold groups pass. Its skips are not executed passes;
+the separately recorded local browser and geometry runs provide their own evidence.
+
+### Production rollout
+
+Hub v0.9.7 started October 27 at 08:27:31 UTC from the exact reviewed Linux binary
+SHA-256 `6d05f5d09b8f85bd837b954ff44b1c6ad7305068cca8e985c35db042002fe8cb`.
+Public HTTPS reports v0.9.7 and the unchanged realm. Running source is clean
+`3374c1c8`; the existing data volume, environment/command/ports/restart policy
+and neighboring Telegram container identity/start time are preserved. The new
+Hub has zero restarts. Hub, schema and Dockerfile sources are unchanged since
+the previously deployed v0.9.5.
+
+The native portable backup was interrupted because fetching 8,872 remote Drive
+attachments prolonged the outage; its partial archive was removed after local
+recovery verification. The old Hub was restarted before the replacement snapshot.
+The consistent local volume copy took a 15-second capture/restart window and
+matches every source file's bytes, permissions and ownership. An isolated copy
+opens with the new image's native maintenance command, passes SQLite integrity
+and schema 25 checks, and retains 13 agents, 79,789 messages and 8,872 remote
+attachment references. There are no local stored attachment payloads to verify;
+remote ciphertext was not copied or reverified. This is a local recovery snapshot,
+not a full portable backup. Private snapshot, manifest, previous configuration
+and deployment evidence stay in the owner-only server release directory. Image
+rollback preserves live data; no backup was restored over the production volume.
 
 Owner correction, October 26, 2026: "no need" to log in to Telegram;
 "both slack and telegram are sub-0.5 second, I'll settle for that."

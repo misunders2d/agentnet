@@ -1,6 +1,6 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
-## v0.9.7 verified responsiveness fixes — packaging October 27
+## v0.9.7 published and Hub deployed — October 27
 
 Frozen source `3374c1c812499100d3cc9b8dedfdda1bb40892b8`; matching gallery
 `0371b53` pins that exact source. Local actions now present their pending change
@@ -20,9 +20,30 @@ Sergey chose **"Ship verified fixes; disclose coverage limits"**, explicitly
 replacing the exhaustive every-control matrix as this release's publication gate.
 No physical phone, exhaustive real-backend timing or measured messenger parity is
 claimed. See [interaction evidence](INTERACTION_COVERAGE.md) for exact runs and
-the accepted startup limitation. Artifact verification/publication and backed-up
-Hub rollout remain pending. The inspected production Hub still runs v0.9.5;
-its volume, configuration and neighboring Telegram container must be preserved.
+the accepted startup limitation.
+
+[App v0.9.7](https://github.com/misunders2d/agentnet/releases/tag/v0.9.7) and
+[gallery v2026.10.27.1](https://github.com/misunders2d/agentnet-skins/releases/tag/v2026.10.27.1)
+are public and Latest (08:12:00/08:12:05 UTC). All twelve public payloads plus
+SHA256SUMS match the reviewed artifacts. The actual public gallery parser verifies
+five packages, 129 files and twenty previews. Final gallery CI 40471792362 passes
+on QA commit `37168bf`; published package and preview bytes remain unchanged.
+Its 24 optional Node skips remain explicit; separate local browser checks executed.
+
+Production Hub switched from v0.9.5 to v0.9.7 at 08:27:31 UTC. Public HTTPS,
+exact running binary hash/source, realm, volume, settings and neighboring Telegram
+container verify; zero container restarts. Native portable backup was stopped
+after its retrieval of 8,872 Drive attachments prolonged the outage; service was
+restored before a short consistent local snapshot. That snapshot is byte-verified,
+passes SQLite integrity/schema checks and opens with the new image in isolated
+native maintenance. All stored attachments remain remote Drive references: this
+is a local recovery copy, not a complete portable attachment backup. Hub/schema
+code is unchanged from v0.9.5. Private recovery files stay under
+`/opt/agentnet-revived/releases/v0.9.7-3374c1c8`; rollback changes only the image,
+never replaces live data. No user desktop or native harness session was restarted.
+The connected local daemon still reports v0.9.5: its automatic update reports
+that this home's AgentNet app is closed. Published/deployed does not mean every
+installed client has activated the release; that app update remains pending.
 
 ## v0.9.6 published — October 26, 2026
 
