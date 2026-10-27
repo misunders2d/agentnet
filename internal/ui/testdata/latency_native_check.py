@@ -71,7 +71,7 @@ query = dict(parse_qsl(urlsplit(url).query)); query.update(token=token)
 query.setdefault('run', 'native')
 paint_diagnostic = os.environ.get('AGENTNET_LATENCY_PAINT_DIAGNOSTIC', '')
 if paint_diagnostic:
-    if paint_diagnostic not in ('baseline', 'motion', 'flat'):
+    if paint_diagnostic not in ('baseline', 'motion', 'flat', 'no-background', 'no-shadow'):
         raise ValueError('Invalid paint diagnostic')
     query['paintDiagnostic'] = paint_diagnostic
 parts = urlsplit(url)

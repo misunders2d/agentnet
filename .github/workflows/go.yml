@@ -46,7 +46,7 @@ on:
         type: boolean
         default: false
       paint_diagnostic:
-        description: 'Compare baseline, motion-free and flat paint on the same built Mac app; diagnostic only'
+        description: 'Compare baseline, backgrounds and shadows on the same built Mac app; diagnostic only'
         type: boolean
         default: false
       android_suites:

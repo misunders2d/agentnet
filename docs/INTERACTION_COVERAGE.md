@@ -148,6 +148,32 @@ present while clearing a partial count, preventing an empty list from satisfying
 `all`. The prior disappearance is not yet explained; production behavior and
 qualification deadlines remain unchanged.
 
+Invitation submission and adjacent opening/recipient/group regressions pass
+three repetitions on Linux, macOS and Windows in `40457239915`, at `7f1c8080`.
+
+The two Firefox sequencing failures reproduce in Chromium with 800 ms history
+reads. The workload treated backend state as a finished UI projection and clicked
+a disabled next topic action. It now retains immediate feedback measurements,
+then requires the confirmed role controls or enabled topic action before using
+them. Role-change setup opens the member panel to verify the changed role instead
+of inspecting an already-closed panel. Direct/personal history routes now honor
+the same configured read delay. A moved original before the preserved reading
+anchor is verified through the actual Earlier messages control. No production
+behavior or deadline changed. Groups and all topic variants pass with the 800 ms
+read delay at 390 pixels and additional 320/360-pixel topic layouts; six standard
+desktop/narrow cells also pass under the race detector. Topic done appears in
+12 ms while confirmed usable controls take about 1.65 seconds in that delayed
+fixture; these are separately recorded milestones.
+
+Inspection of retained `40436529466` paint evidence finds a narrower clue than
+its overall failures: browser WebKit phone chat opening is 1618 ms baseline,
+1169 ms without motion and 44 ms with all tested decoration removed. Native menu
+and picker failures in that run remain unresolved and are different actions.
+The next diagnostic isolates only background images or only box shadows against
+the same candidate baseline. Diagnostic variants never count as release passes;
+shipping styles are unchanged. The local no-background diagnostic executes all
+28 action checks successfully; this does not predict the Mac result.
+
 Group creation now replaces the form with its named pending destination before
 the native write. The existing Store retains the real creation result and exact
 remaining recipients across Back, Close and remount; retries cannot recreate a

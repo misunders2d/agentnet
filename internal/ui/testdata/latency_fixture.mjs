@@ -9,7 +9,7 @@ const reports={actions:[],apiCalls:[],seenControls:[],pageErrors:[],feedbackFail
 const pageError=e=>reports.pageErrors.push(String(e.message||e.reason||e).slice(0,1000));window.addEventListener('error',pageError);window.addEventListener('unhandledrejection',pageError);
 try {
  const query=new URL(location.href).searchParams,token=query.get('token');
- const paintDiagnostic=query.get('paintDiagnostic')||'';assert(['','baseline','motion','flat'].includes(paintDiagnostic),'Invalid paint diagnostic');if(paintDiagnostic)reports.paintDiagnostic=paintDiagnostic;
+ const paintDiagnostic=query.get('paintDiagnostic')||'';assert(['','baseline','motion','flat','no-background','no-shadow'].includes(paintDiagnostic),'Invalid paint diagnostic');if(paintDiagnostic)reports.paintDiagnostic=paintDiagnostic;
  const suite=window.__agentnetLatencySuite||query.get('suite')||'history',teamsPart=query.get('teamsPart')||'';assert(!teamsPart||suite==='teams'&&['list','group'].includes(teamsPart),'Invalid Teams page partition');reports.suite=suite;if(teamsPart)reports.teamsPart=teamsPart;reports.portableVector=p1;const extraSuites=['topics','groups','compose','media','review','outbox','agents','teams','profile','storage','workspaces','permissions'];const extended=extraSuites.includes(suite);assert(['history','navigation','settings','unread','actions',...extraSuites].includes(suite),'Unknown timing workload');
  if(token)await fetch('/?t='+encodeURIComponent(token));
  const read=async path=>{const r=await fetch(path);if(!r.ok)throw Error('Fixture read HTTP '+r.status);return r.json();};
@@ -123,10 +123,10 @@ try {
    if(extended){
     const u=new URL(path,location.href),p=u.pathname;
     if(p1==='direct'&&p==='/api/agents'&&u.searchParams.get('host')===peer.address)return{host:peer.address,local:false,harnesses:[],agents:[{record:{id:binding.agent_id,host:peer.address,host_key:binding.agent_key,label:'Portable Pi',harness:'pi'},enabled:true},{record:{id:foreignBinding.agent_id,host:peer.address,host_key:binding.agent_key,label:'Other Claude',harness:'claude'},enabled:true}]};
-    if(p1==='direct'&&p==='/api/thread'){const id=u.searchParams.get('id'),original=directMessages.find(m=>m.id===id),topic=directTopics.find(t=>t.id===(original?.placement||id));assert(topic,'exact direct topic');portable.topicReads.push({route:path,topic:topic.id});return{id,peer:peer.address,key:{pinned:peer.fingerprint},approved:false,task_grant:'',topic:clone(topic),messages:clone(directMessages.filter(m=>m.placement===topic.id).map(({placement,...m})=>m))};}
+    if(p1==='direct'&&p==='/api/thread'){await pause(chatLoadDelay);const id=u.searchParams.get('id'),original=directMessages.find(m=>m.id===id),topic=directTopics.find(t=>t.id===(original?.placement||id));assert(topic,'exact direct topic');portable.topicReads.push({route:path,topic:topic.id});return{id,peer:peer.address,key:{pinned:peer.fingerprint},approved:false,task_grant:'',topic:clone(topic),messages:clone(directMessages.filter(m=>m.placement===topic.id).map(({placement,...m})=>m))};}
     if(p1==='direct'&&p==='/api/topics'){assert(u.searchParams.get('peer')===binding.agent_host,'direct peer');for(const k of ['agent_host','agent_key','agent_id'])assert(u.searchParams.get(k)===binding[k],'direct full tuple '+k);const rows=directTopics.filter(t=>t.count&&t.agent_id===binding.agent_id&&(!u.searchParams.get('state')||t.state===u.searchParams.get('state')));portable.topicReads.push({route:path,ids:rows.map(t=>t.id)});return{topics:clone(rows),matched:rows.length};}
     if(p1==='direct'&&p==='/api/act'&&body?.do==='read')return{};
-    if(p1==='personal'&&p==='/api/dm'){const id=u.searchParams.get('id');assert([view.id,secondConv].includes(id),'exact personal root');portable.dmReads.push({conv:id,at:performance.now()});counts.dm++;return clone(id===secondConv?secondView:view);}
+    if(p1==='personal'&&p==='/api/dm'){await pause(chatLoadDelay);const id=u.searchParams.get('id');assert([view.id,secondConv].includes(id),'exact personal root');portable.dmReads.push({conv:id,at:performance.now()});counts.dm++;return clone(id===secondConv?secondView:view);}
     if(['direct','personal'].includes(p1)&&p==='/api/topic/organization/preview'){
      await pause(25);const rows=p1==='direct'?directMessages:(body.conv===secondConv?secondView:view).messages;
      assert(body.conv===(p1==='direct'?'':secondConv),'organization exact conv');assert((body.peer||'')===(p1==='direct'?peer.address:''),'organization exact peer');assert(body.ids.length===1&&body.ids[0]===(p1==='direct'?'1'.repeat(32):sourceID),'organization exact original');
@@ -242,6 +242,7 @@ try {
  const shadow=document.querySelector('#fixture').attachShadow({mode:'open'}),link=document.createElement('link');link.rel='stylesheet';link.href='/assets/skins/comic/style.css';shadow.append(link);
  // Diagnostic paint subtraction isolates renderer cost; it never qualifies the shipping UI.
  if(paintDiagnostic==='motion'||paintDiagnostic==='flat'){const style=document.createElement('style');style.textContent='*,*::before,*::after{animation:none!important;transition:none!important}'+(paintDiagnostic==='flat'?'*,*::before,*::after{box-shadow:none!important;filter:none!important;backdrop-filter:none!important;background-image:none!important;border-radius:0!important}':'');shadow.append(style);}
+ if(paintDiagnostic==='no-background'||paintDiagnostic==='no-shadow'){const style=document.createElement('style');style.textContent=paintDiagnostic==='no-background'?'*,*::before,*::after{background-image:none!important}':'*,*::before,*::after{box-shadow:none!important}';shadow.append(style);}
  const root=document.createElement('div');root.style.height='100%';shadow.append(root);await mount(root,host);
  window.__agentnetLatencyDispose=()=>{if(clipboardDescriptor)Object.defineProperty(navigator,'clipboard',clipboardDescriptor);else delete navigator.clipboard;window.removeEventListener('error',pageError);window.removeEventListener('unhandledrejection',pageError);unmount(root);window.ResizeObserver=ResizeObserverBefore;if(isolateDrafts){if(legacyDraftBefore===null)localStorage.removeItem(legacyDraftKey);else localStorage.setItem(legacyDraftKey,legacyDraftBefore);}};
  const scope=()=>shadow;
@@ -548,7 +549,14 @@ try {
     const applied=[...portable.ops.values()].filter(o=>o.applied).at(-1);assert(applied.review.merge===original&&applied.review.topic===target,'merge retains exact source/destination');
     assert(JSON.stringify(rows.map(({placement,topic,...m})=>m))===originals,'organization preserves every original message field');
     if(p1==='direct')assert(directMessages.find(m=>m.id==='9'.repeat(32)).placement==='9'.repeat(32),'other concrete agent context remains separate');
-    else{await openAll('topics.personal-destination-list');await tap('topics.personal-destination-open',control(/^Portable second destination,/,all()),()=>!all()&&!!root.querySelector('[data-mid="'+sourceID+'"]'),'moved original rendered in exact second-root destination');assert(root.querySelector('form[data-conv="'+secondConv+'"]'),'personal route remains original second root');}
+    else{
+     await openAll('topics.personal-destination-list');
+     await tap('topics.personal-destination-open',control(/^Portable second destination,/,all()),()=>!all()&&!!control(/^Portable second destination, open topic/),'exact second-root destination selected',()=>!!root.querySelector('form[data-conv="'+secondConv+'"]')&&(!!root.querySelector('[data-mid="'+sourceID+'"]')||!!control('Earlier messages')));
+     // A refreshed moved original can precede the retained reading anchor.
+     // Exercise the actual history control instead of assuming all rows mount.
+     if(!root.querySelector('[data-mid="'+sourceID+'"]'))await tap('topics.personal-moved-earlier',control('Earlier messages'),()=>!!root.querySelector('[data-mid="'+sourceID+'"]'),'moved original revealed above the retained reading anchor');
+     assert(root.querySelector('form[data-conv="'+secondConv+'"]'),'personal route remains original second root');
+    }
     reports.portableOrganization={kind:p1,operations:[...portable.ops.values()].map(x=>clone(x)),topicReads:clone(portable.topicReads),dmReads:clone(portable.dmReads),originalsPreserved:true};
    }
    reports.portableWrites=reports.apiCalls.filter(c=>c.method==='write').map(c=>({path:c.path,request:c.request,ok:c.ok,result:c.result}));assert(!reports.portableWrites.some(c=>['/api/send','/api/dm/send','/api/operator/decide'].includes(c.path)),'organization never resends originals or grants execution');
@@ -638,20 +646,20 @@ try {
    await tap('topics.rename-open',control('Rename…'),()=>!!sheet('Rename topic'),'rename topic editor visible');await retire();
    await fill('topics.rename-text',sheet('Rename topic').querySelector('input'),'Fixture renamed');
    await tap('topics.rename-save',control('Save',sheet('Rename topic')),()=>!sheet('Rename topic')&&label(chip()).includes('Fixture renamed'),'exact title updated after API result');await retire();
-   await tap('topics.menu-done',chip(),()=>!!control('Mark done'),'done action visible');
-   await tap('topics.mark-done',control('Mark done'),()=>!!control('Reopen')&&!control('Reopen').disabled&&view.topics[0].state==='done','topic done with confirmed, usable Reopen control');await retire();
+   await tap('topics.menu-done',chip(),()=>!!control('Mark done'),'done action visible',()=>{const item=control('Mark done');return !!item&&!item.hasAttribute('data-disabled')&&item.getAttribute('aria-disabled')!=='true';});
+   await tap('topics.mark-done',control('Mark done'),()=>!!control('Reopen'),'requested done state visible',()=>!!control('Reopen')&&!control('Reopen').disabled&&view.topics[0].state==='done');await retire();
    await tap('topics.reopen',control('Reopen'),()=>view.topics[0].state==='active'&&!control('Reopen'),'topic active after authoritative projection');
   }
   if(suite==='groups'){
    await chat();await tap('groups.members-open',control(/Who’s in this chat/),()=>!!sheet('In this chat')||!!active('aside[aria-label="In this chat"]'),'group member panel or sheet visible');
    await tap('groups.rename-open',control('Rename group…'),()=>!!sheet('Rename the group'),'rename group editor visible');
    await fill('groups.rename-text',sheet('Rename the group').querySelector('input'),'Fixture renamed group');
-   await tap('groups.rename-save',control('Rename',sheet('Rename the group')),()=>!sheet('Rename the group')&&root.textContent.includes('Fixture renamed group'),'pending group name visible',()=>view.title==='Fixture renamed group');await retire();
+   await tap('groups.rename-save',control('Rename',sheet('Rename the group')),()=>!sheet('Rename the group')&&root.textContent.includes('Fixture renamed group'),'pending group name visible',()=>view.title==='Fixture renamed group'&&!active('section[aria-label="Group changes"]')&&!!control('Rename group…'));await retire();
    const memberMenu=()=>control(/^Change Vitalii in/);
    for(const [action,item,confirm]of [['promote','Make admin…','Make admin'],['demote','Remove admin role…','Remove admin role']]){
     await tap('groups.member-menu-'+action,memberMenu(),()=>!!control(item),'member role menu visible');
     await tap('groups.role-review-'+action,control(item),()=>!!sheet(action==='promote'?'Make Vitalii an admin?':'Remove Vitalii’s admin role?'),'specific role confirmation visible');await retire();
-    await tap('groups.role-'+action,control(confirm),()=>!control(confirm)&&(root.textContent.includes(action==='promote'?'Admin pending':'Member role pending')||(view.members[1].admin===(action==='promote')&&!!memberMenu()&&memberMenu().closest('li').textContent.includes('Admin')===(action==='promote'))),'requested role visible without granting it',()=>view.members[1].admin===(action==='promote'));await retire();
+    await tap('groups.role-'+action,control(confirm),()=>!control(confirm)&&(root.textContent.includes(action==='promote'?'Admin pending':'Member role pending')||(view.members[1].admin===(action==='promote')&&!!memberMenu()&&memberMenu().closest('li').textContent.includes('Admin')===(action==='promote'))),'requested role visible without granting it',()=>view.members[1].admin===(action==='promote')&&!active('section[aria-label="Group changes"]')&&!!memberMenu()&&memberMenu().closest('li').textContent.includes('Admin')===(action==='promote'));await retire();
    }
    await tap('groups.leave-review',control('Leave group…'),()=>!!control('Leave group'),'leave confirmation visible');
    await tap('groups.leave-cancel',control('Cancel',sheet('Leave “Fixture renamed group”?')),()=>!sheet('Leave “Fixture renamed group”?'),'leave cancelled and membership retained');assert(view.role==='member','leave cancel changed membership');await retire();
@@ -674,7 +682,9 @@ try {
    const scoped=[...invite().querySelectorAll('label')].find(l=>l.textContent.includes('Only this topic:'));await tap('groups.invite-topic-scope',scoped.querySelector('input'),()=>scoped.querySelector('input').checked&&invite().textContent.includes('Other topics stay outside this invitation.'),'selected topic scope remains explicit');
    assert(options('p').length<=41&&options('a').length<=41,'scope change did not reset bounded candidates');
    await closeSheet('groups.invite-cancel','Bring someone in');
-   view.members.find(m=>m.person===me.person).admin=false;emit();await until(()=>!control('Rename group…'),'member role projection');
+   view.members.find(m=>m.person===me.person).admin=false;emit();
+   await tap('groups.member-role-panel',control(/Who’s in this chat/),()=>!!sheet('In this chat')||!!active('aside[aria-label="In this chat"]'),'member panel visible',()=>!control('Rename group…')&&!memberMenu());
+   if(sheet('In this chat'))await closeSheet('groups.member-role-close','In this chat');else await tap('groups.member-role-close',control('Close panel'),()=>!active('aside[aria-label="In this chat"]'),'confirmed member panel closed');
    await tap('groups.member-invite-open',control('Bring in')||control('Bring someone in'),()=>!!sheet('Bring someone in'),'member invitation destination visible',()=>!!sheet('Bring someone in')?.querySelector('input[type="search"]'));const memberWhole=[...sheet('Bring someone in').querySelectorAll('label')].find(l=>l.textContent.includes('Whole chat'));if(!memberWhole.querySelector('input').checked)await tap('groups.member-whole-chat',memberWhole.querySelector('input'),()=>memberWhole.querySelector('input').checked,'member whole-chat guest scope explicit');const memberOnly=sheet('Bring someone in').querySelector('input[name="human-invite-mode"][value="member"]');assert(memberOnly?.disabled,'member could add permanent group member');assert(sheet('Bring someone in').querySelector('input[name="human-invite-mode"][value="guest"]')?.checked,'member guest mode changed');
    await closeSheet('groups.member-invite-cancel','Bring someone in');
 
