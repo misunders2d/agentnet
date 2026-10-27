@@ -95,6 +95,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [teamPeople, setTeamPeople] = useState<Pick<T.PersonRef, "id">[]>([]);
+  const [teamPeoplePending, setTeamPeoplePending] = useState(false);
   const [teamHistory, setTeamHistory] = useState(false);
 
   const route: Route | null = c && t ? routeFor(c, t, humanMode) : null;
@@ -189,7 +190,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
   }
 
   async function bringTeamPeople() {
-    if (topic !== undefined || !t || t.kind !== "group" || !allowed || busy || offline || !teamPeople.length || teamHistory && (tooMany || needFiles)) return;
+    if (topic !== undefined || !t || t.kind !== "group" || !allowed || busy || offline || teamPeoplePending || !teamPeople.length || teamHistory && (tooMany || needFiles)) return;
     setBusy(true); setError("");
     try {
       for (const who of teamPeople) {
@@ -235,7 +236,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
         <p className="text-sm text-muted">Agents join as group members; their owners decide what runs.</p>
       </fieldset>}
       {t.kind === "group" && humanMode === "member" && admin && <section aria-label="Invite team people" className="mb-4 space-y-2">
-        <TeamPeople selected={teamPeople} onChange={setTeamPeople} disabled={busy || offline}
+        <TeamPeople key={t.id} selected={teamPeople} onChange={setTeamPeople} disabled={!open || busy || offline} onPendingChange={setTeamPeoplePending}
           excluded={[...(t.members || []).map((p) => p.person!), ...sent.map((p) => p.key.slice(2)), ...(invitations || []).filter((i) => i.conv === t.id && i.direction === "out" && i.status === "pending").map((i) => i.target)]} />
         {!!teamPeople.length && <>
           <label className="flex min-h-11 items-center gap-2 font-semibold"><input type="checkbox" checked={teamHistory} onChange={(e) => setTeamHistory(e.target.checked)} />Share reviewed history with these people</label>
@@ -249,7 +250,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
           </>}
           <HintForTeams count={teamPeople.length} />
           {teamHistory && tooMany && <p role="alert" className="text-sm text-danger">Choose at most {cap} history messages for each invitation.</p>}
-          <Button variant="act" disabled={busy || offline || teamHistory && (tooMany || needFiles)} onClick={() => void bringTeamPeople()}>Invite selected team people</Button>
+          <Button variant="act" disabled={busy || offline || teamPeoplePending || teamHistory && (tooMany || needFiles)} onClick={() => void bringTeamPeople()}>Invite selected team people</Button>
         </>}
       </section>}
       <label className="relative mt-1 block">

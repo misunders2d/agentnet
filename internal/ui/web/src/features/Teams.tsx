@@ -278,41 +278,72 @@ function RosterSelect({ label, noun, placeholder, options, value, onChange }: {
   </div>;
 }
 
-export function TeamPeople({ selected, onChange, excluded = [], disabled = false, showSelected = true }: {
-  selected: Pick<T.PersonRef, "id">[]; onChange: (p: Pick<T.PersonRef, "id">[]) => void; excluded?: string[]; disabled?: boolean; showSelected?: boolean;
+export function TeamPeople({ selected, onChange, excluded = [], disabled = false, showSelected = true, onPendingChange }: {
+  selected: Pick<T.PersonRef, "id">[]; onChange: (p: Pick<T.PersonRef, "id">[]) => void; excluded?: string[]; disabled?: boolean; showSelected?: boolean; onPendingChange?: (pending: boolean) => void;
 }) {
   const store = useApp();
   const o = useStore(store, (s) => s.overview);
   const { view, error } = useTeams();
   const [team, setTeam] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [detail, setDetail] = useState("");
+  type Selection = { id: string; name: string; owner: string; omitted: Set<string>; error?: string };
+  const [selection, setSelection] = useState<Selection | null>(null);
+  const request = useRef<Selection | null>(null), selectionRef = useRef<Selection | null>(null);
+  const busy = !!selection && !selection.error;
   const [at, setAt] = useState(0);
-  const stopped = useRef(false);
-  useEffect(() => { stopped.current = false; return () => { stopped.current = true; }; }, []);
-  const add = async () => {
-    if (!team || busy || disabled || !view?.current) return;
-    setBusy(true); setDetail("");
+  const selectionRegion = useRef<HTMLElement>(null);
+  useLayoutEffect(() => { selectionRegion.current?.scrollIntoView({ block: "nearest", behavior: "instant" }); }, [selection]);
+  const latest = useRef({ selected, excluded, disabled, onChange });
+  useLayoutEffect(() => {
+    const pending = selectionRef.current;
+    if (pending) {
+      const chosen = new Set(selected.map(p => p.id));
+      for (const p of latest.current.selected) if (!chosen.has(p.id)) pending.omitted.add(p.id);
+      for (const p of selected) pending.omitted.delete(p.id);
+    }
+    latest.current = { selected, excluded, disabled, onChange };
+  }, [selected, excluded, disabled, onChange]);
+  const clear = () => { request.current = null; selectionRef.current = null; setSelection(null); onPendingChange?.(false); };
+  useLayoutEffect(() => {
+    clear(); setAt(0);
+    return () => { request.current = null; selectionRef.current = null; onPendingChange?.(false); };
+  }, [store, o?.person?.person]);
+  useLayoutEffect(() => { if (disabled) clear(); }, [disabled]);
+  const add = async (retry?: Selection) => {
+    const source = view?.teams?.find(t => t.id === team), owner = store.get().overview?.person?.person;
+    if (request.current || disabled || !view?.current || !owner || !store.isActive() || (retry && retry.owner !== owner) || (!retry && !source)) return;
+    const pending = { id: retry?.id || source!.id, name: retry?.name || source!.name, owner, omitted: retry?.omitted || new Set<string>() };
+    request.current = pending; selectionRef.current = pending; setSelection(pending); setTeam(""); setAt(0); onPendingChange?.(true);
+    const current = () => request.current === pending && store.isActive() && store.get().overview?.person?.person === owner && !latest.current.disabled;
     try {
-      const snap = await store.api.teamSnapshot([team]);
-      if (stopped.current || !store.isActive()) return;
-      const all = new Map(selected.map((p) => [p.id, p]));
-      for (const p of snap.persons || []) if (p.id !== o?.person?.person && !excluded.includes(p.id)) all.set(p.id, p);
-      onChange([...all.values()]); setAt(snap.at);
-    } catch (e) { if (!stopped.current && store.isActive()) setDetail(errorText(e)); }
-    finally { if (!stopped.current) setBusy(false); }
+      const snap = await store.api.teamSnapshot([pending.id]);
+      if (!current()) return;
+      const props = latest.current, all = new Map(props.selected.map(p => [p.id, p]));
+      for (const p of snap.persons || []) if (p.id !== owner && !props.excluded.includes(p.id) && !pending.omitted.has(p.id)) all.set(p.id, p);
+      props.onChange([...all.values()]); clear(); setAt(snap.at);
+    } catch (e) {
+      if (current()) { request.current = null; const failed = { ...pending, error: errorText(e) }; selectionRef.current = failed; setSelection(failed); }
+    }
   };
-  return <fieldset disabled={disabled || busy} className="space-y-2 rounded-xl border border-hairline p-3">
+  return <fieldset disabled={disabled} className="space-y-2 rounded-xl border border-hairline p-3">
     <legend className="px-1 font-semibold">Add people from a list</legend>
     <TeamStatus view={view} />
-    <label className="block text-sm">People list<select className={input} value={team} onChange={(e) => setTeam(e.target.value)}>
+    <label className="block text-sm">People list<select className={input} disabled={busy} value={team} onChange={(e) => setTeam(e.target.value)}>
       <option value="">Choose a people list</option>{(view?.teams || []).filter((t) => t.listed && !t.archived && !t.conflict).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
     </select></label>
-    <Button size="sm" type="button" disabled={!team || !view?.current || busy || disabled} onClick={() => void add()}>{busy ? "Reading people…" : "Add list’s people"}</Button>
-    {error || detail ? <p role="alert" className="text-sm text-danger">{detail || error}</p> : null}
+    <Button size="sm" type="button" disabled={!team || !view?.current || busy || disabled} onClick={() => void add()}>Add list’s people</Button>
+    {selection && <section ref={selectionRegion} aria-label={"Pending selection from " + selection.name} className="space-y-2 rounded-xl bg-sunken p-3">
+      <p className="font-semibold">{selection.name}</p>
+      <p role={selection.error ? "alert" : "status"}>{selection.error ? "Could not select this list’s people. " + selection.error : "Checking this list’s current people…"}</p>
+      <Hint>Review the selected people before sending invitations.</Hint>
+      <div className="flex flex-wrap gap-2">
+        {selection.error && <Button size="sm" variant="outline" onClick={() => void add(selection)}>Retry list selection</Button>}
+        <Button size="sm" variant="outline" onClick={clear}>Cancel list selection</Button>
+      </div>
+    </section>}
+    {error && <p role="alert" className="text-sm text-danger">{error}</p>}
     {at > 0 && <Hint>People added from this list on {new Date(at * 1000).toLocaleString()}. Later list edits won’t change your choices.</Hint>}
     {showSelected && <ul aria-label="Selected people" className="flex flex-wrap gap-2">{selected.map((p) => <li key={p.id} className="flex min-w-0 items-center gap-2">
-      <span className="min-w-0 flex-1 break-words">{personLabel(o, p.id)}</span><Button variant="outline" size="sm" disabled={disabled || busy} onClick={() => onChange(selected.filter((x) => x.id !== p.id))}>Remove {personLabel(o, p.id)}</Button>
+      <span className="min-w-0 flex-1 break-words">{personLabel(o, p.id)}</span><Button variant="outline" size="sm" disabled={disabled} onClick={() => onChange(selected.filter((x) => x.id !== p.id))}>Remove {personLabel(o, p.id)}</Button>
     </li>)}</ul>}
     {showSelected && <Hint>Only selected people will receive an invitation. They decide whether to join.</Hint>}
   </fieldset>;

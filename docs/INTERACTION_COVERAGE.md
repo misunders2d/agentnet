@@ -91,6 +91,29 @@ the repair. Sergey needs to do nothing while owned fixtures are being tested.
 
 ### October 27 continuation: the 500 ms target
 
+Add list’s people now inserts a named pending selection and clears the chooser
+before its verified snapshot read. Cancel immediately removes that selection;
+failure keeps exact retry and cancel. Other recipient edits stay usable. Snapshot
+completion merges the latest choices and exclusions, preserves deliberate
+removals across retry, and ignores cancelled/replaced reads, changed owners,
+disabled/closed invitation flows and teardown. Group creation and batch invitation
+wait for the pending selection to resolve or be cancelled, avoiding a silently
+partial recipient list. No invitation is sent by selection or retry. This reuses
+the existing verified snapshot API and inspected local-selection/background-read
+pattern; permissions and signed records are unchanged.
+
+The old component fails the held-read feedback regression. The final actual
+TeamPeople, NewGroupForm and InviteSheet cases pass at 1440/390 pixels, including
+held/error/retry/cancel, current choices/exclusions, close/reopen and no mutation.
+All twelve pending/error screenshots were inspected. Feedback is 25–40 ms in
+that run and 25–41 ms in the final affected race run. Six integrated parents
+passed; after the last invitation-close guard and rebuilt bundle, the three
+affected parents (selection, teams workload and bundle) passed again. Two initial
+fixture failures injected a response before React committed the simulated parent
+update/unmount; the corrected checks wait for the newer props or use the real
+Close control. Original logs remain private. Native/platform and final skin
+qualification remain open.
+
 All ten people-list mutations now show their exact local intent before the
 signed write: rename, add/remove person or agent, grant/remove manager role,
 join, leave and delete. Leaving closes only that selected list; deletion hides

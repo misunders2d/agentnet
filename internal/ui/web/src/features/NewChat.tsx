@@ -277,6 +277,7 @@ export function NewGroupForm({ onBack, onCreated, initialPeople = [], navigate =
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [people, setPeople] = useState<Pick<T.PersonRef, "id">[]>(initialPeople);
+  const [peoplePending, setPeoplePending] = useState(false);
   const [created, setCreated] = useState("");
   const pageSize = 40;
   const [query, setQuery] = useState("");
@@ -289,7 +290,7 @@ export function NewGroupForm({ onBack, onCreated, initialPeople = [], navigate =
     e.preventDefault();
     const t = title.trim();
     if (!t && !created) { setError("Give the group a name."); return; }
-    if (busy) return;
+    if (busy || peoplePending) return;
     setBusy(true); onBusy?.(true); setError("");
     let id = created;
     try {
@@ -341,10 +342,10 @@ export function NewGroupForm({ onBack, onCreated, initialPeople = [], navigate =
         {matching.length > peopleLimit && <Button type="button" size="sm" variant="outline" onClick={() => setPeopleLimit(n => n + pageSize)}>Show more people ({matching.length - peopleLimit})</Button>}
         {!matching.length && <p className="text-sm text-muted">No matching people.</p>}
       </fieldset>
-      <TeamPeople selected={people} onChange={setPeople} disabled={busy} showSelected={false} />
+      <TeamPeople selected={people} onChange={setPeople} disabled={busy} showSelected={false} onPendingChange={setPeoplePending} />
       {created && <p role="status">The group is already created. Only the remaining people below will be invited when you retry.</p>}
       {error && <p role="alert" className="rounded-xl bg-danger-bg px-3 py-2.5 font-semibold text-danger">{error}</p>}
-      <Button variant="act" size="lg" type="submit" disabled={busy || (!created && !title.trim())} className="mt-1">{busy ? "Sending…" : created ? "Retry remaining invitations" : "Create group"}</Button>
+      <Button variant="act" size="lg" type="submit" disabled={busy || peoplePending || (!created && !title.trim())} className="mt-1">{busy ? "Sending…" : created ? "Retry remaining invitations" : "Create group"}</Button>
     </form>
   );
 }
