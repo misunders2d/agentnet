@@ -17,6 +17,7 @@ import { usePortal } from "../owned";
 import { openPictureEditor } from "../pictures.mjs";
 import { QrCode } from "./Settings.qr";
 import { Confirm } from "./Message.actions";
+import { DeviceDecisions } from "./DeviceDecisions";
 
 /** The words for this device's own request to join a person (Overview.link). */
 const ownLinkText: Record<string, string> = {
@@ -186,6 +187,7 @@ export function DevicesSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingE
   return (
     <>
       <PageHead title="Your devices" titleRef={titleRef} lead="You’re one person on each of these. A new one joins with a link from here, and becomes you only when you approve it." />
+      <DeviceDecisions />
       {requests.length > 0 && <div className="mb-5 space-y-3">{requests.map((l) => <DeviceRequest key={l.id} link={l} />)}</div>}
       <GroupLabel>{devices.length === 1 ? "1 device" : devices.length + " devices"}</GroupLabel>
       <ul className="space-y-3">

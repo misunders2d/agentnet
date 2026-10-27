@@ -11,3 +11,10 @@ func TestDeviceLinkRendered(t *testing.T) {
 	}
 	t.Log(browserCheck(t, "testdata/device_link_rendered.cjs"))
 }
+
+func TestDeviceDecisionsRendered(t *testing.T) {
+	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
+		t.Skip("set AGENTNET_PLAYWRIGHT for rendered device decision recovery")
+	}
+	t.Log(browserCheck(t, "testdata/device_decisions_rendered.cjs"))
+}

@@ -191,6 +191,32 @@ with pending/error screenshots inspected. This reuses the already inspected
 Telegram modal/local-state pattern; AgentNet's signed link and native approval
 remain authoritative. Native and gallery qualification are pending.
 
+The shared device-decision regression fails against `557e82e6`: Settings and
+Review leave the request active while the API is held. The Store now projects
+only that exact request out of attention and shows a shared pending decision;
+it never adds a device or grants membership. Duplicate input shares one write.
+Failure reveals the current authoritative request, while newer resolved requests,
+changed device keys and stopped workspaces defeat stale completion. A saved
+reply with held readback remains explicitly unconfirmed with a read-only check.
+Four local Settings/Review and wide/phone cases pass (42–259 ms in the first
+run); eight pending/error views were visually inspected. The real signed Hub
+browser-approval and local-issuer Google enrollment tests pass separately.
+Affected local profile/review workloads pass 88 synthetic actions, maximum
+228 ms; native and exact final-pin overlay qualification remain open. This
+reuses the inspected local intent/reconciliation pattern, preserving native
+permission and roster authority.
+
+The updated connection/device-dialog regressions pass three repetitions on
+Linux/macOS/Windows in `40430297380`. Linux affected workloads and Android
+profile pass in `40430290954` at `557e82e6`. Android media/permissions pass at
+`5c45c075` in job `121943512970`; its parent run `40429518057` is not a passing
+workflow because an empty desktop matrix was invalid. No skipped desktop job
+is counted as executed. The skin pin `54018a9a` completes 308 Node checks with
+zero failures/skips and every applicable runtime group, including the previously
+failing Zoom provider. All 20 shipping previews are refreshed and visually
+inspected. This predates subsequent core changes and is not final release
+qualification.
+
 The remaining Base UI popup entrances used transparent or fully offscreen
 starting states. Real message-menu/reaction/delete and All Topics regressions
 first fail with animation callbacks held, then pass after those initial states

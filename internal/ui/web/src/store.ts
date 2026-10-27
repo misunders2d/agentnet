@@ -138,6 +138,7 @@ export interface State {
   messageChanges: Record<string, MessageChange>;
   reminderChanges: Record<string, ReminderChange>;
   pictureChange?: { person: T.PersonView; seq: number; png: string; saved?: T.PersonView };
+  deviceDecisions?: Record<string, { link: T.LinkRequest; person: string; accept: boolean; saved?: boolean }>;
   panel: boolean;                                         // "In this chat" (desktop panel, phone sheet)
   readVisit: ReadVisit | null;
   contentRevision: number; // successful content loads; typing/presence do not advance choice lists
@@ -149,7 +150,7 @@ const draftsKey = (ws: string) => brand.storage + ".drafts." + ws;
 
 // unsentIn: what a reload would lose: a draft's text or files, or a send
 // not yet stored.
-export const unsentIn = (s: Pick<State, "drafts" | "unsent"> & Partial<Pick<State,"scheduleSaves" | "messageChanges" | "reminderChanges" | "pictureChange">>) => s.unsent || !!s.pictureChange && !s.pictureChange.saved || Object.keys(s.reminderChanges || {}).length > 0 || Object.values(s.messageChanges || {}).some(p => p.status === "pending" || p.status === "failed" && p.action === "edit") || Object.values(s.scheduleSaves || {}).some(slot=>!!slot.attempt && (slot.status==="saving" || slot.status==="uncertain")) || Object.values(s.drafts).some((d) => d.text || (d.files && d.files.length));
+export const unsentIn = (s: Pick<State, "drafts" | "unsent"> & Partial<Pick<State,"scheduleSaves" | "messageChanges" | "reminderChanges" | "pictureChange" | "deviceDecisions">>) => s.unsent || Object.values(s.deviceDecisions || {}).some(p => !p.saved) || !!s.pictureChange && !s.pictureChange.saved || Object.keys(s.reminderChanges || {}).length > 0 || Object.values(s.messageChanges || {}).some(p => p.status === "pending" || p.status === "failed" && p.action === "edit") || Object.values(s.scheduleSaves || {}).some(slot=>!!slot.attempt && (slot.status==="saving" || slot.status==="uncertain")) || Object.values(s.drafts).some((d) => d.text || (d.files && d.files.length));
 
 const recovery = { update: [500, 1000, 2000, 4000, 8000, 15000, 30000], missed: [1000, 3000, 8000] };
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -172,6 +173,8 @@ export class Store {
   private reminderState?: { source: State; value: State };
   private pictureState?: { source: State; value: State };
   private pictureWork?: { png: string; work: Promise<T.PersonView> };
+  private deviceDecisionWork = new Map<string, { accept: boolean; work: Promise<{ note: string }> }>();
+  private deviceDecisionState?: { source: State; value: State };
   private reminderOverviewCache?: { source: T.Overview; changes: State["reminderChanges"]; value: T.Overview };
   private reactionSequence = 0;
   private reacting = new Map<string, { pending: PendingReaction; work: Promise<{ note: string } | undefined> }>();
@@ -216,7 +219,8 @@ export class Store {
     const calls = api(host);
     this.api = { ...calls, act: action => action.do === "resolve" ? this.dismiss(action, calls) : calls.act(action),
       edit: c => this.changeMessage("edit", c, calls), retract: c => this.changeMessage("delete", c, calls),
-      setPersonPicture: png => this.changePicture(png, calls) };
+      setPersonPicture: png => this.changePicture(png, calls),
+      decideDevice: (id, accept) => this.decideDevice(id, accept, calls) };
     this.sends = pendingSends(host, () => {
       const o = this.state?.open;
       // A send clears its draft as it begins: until it is stored, a reload
@@ -235,7 +239,7 @@ export class Store {
 
   // ---- subscription
   get = () => {
-    const s = this.presentPicture(this.presentReminders(this.presentMessages(this.presentTopics())));
+    const s = this.presentDeviceDecisions(this.presentPicture(this.presentReminders(this.presentMessages(this.presentTopics()))));
     if (!s.overview || !Object.keys(s.dismissPending).length) return s;
     if (this.dismissState?.source === s) return this.dismissState.value;
     if (this.dismissOverview?.source !== s.overview || this.dismissOverview.pending !== s.dismissPending) {
@@ -281,6 +285,68 @@ export class Store {
       }
     });
     this.pictureWork = { png, work };
+    return work;
+  }
+
+  private deviceDecisionMatches(p: NonNullable<State["deviceDecisions"]>[string], o: T.Overview): boolean {
+    const l = o.links?.find(l => l.id === p.link.id);
+    return o.person?.person === p.person && !!l && l.state === "pending" &&
+      l.address === p.link.address && l.fingerprint === p.link.fingerprint &&
+      l.expires === p.link.expires && l.requested_at === p.link.requested_at;
+  }
+
+  private presentDeviceDecisions(s: State): State {
+    if (!s.overview || !Object.keys(s.deviceDecisions || {}).length) return s;
+    if (this.deviceDecisionState?.source === s) return this.deviceDecisionState.value;
+    const links = s.overview.links?.filter(l => {
+      const p = s.deviceDecisions?.[l.id];
+      return !p || !this.deviceDecisionMatches(p, s.overview!);
+    });
+    // This removes an already-made local choice from attention, never adds a
+    // device or grants membership. Only the authoritative roster does that.
+    const value = { ...s, overview: { ...s.overview, links } };
+    this.deviceDecisionState = { source: s, value };
+    return value;
+  }
+
+  private pruneDeviceDecisions() {
+    const o = this.state.overview;
+    if (!o || !this.state.deviceDecisions) return;
+    const pending = Object.entries(this.state.deviceDecisions).filter(([, p]) => this.deviceDecisionMatches(p, o));
+    if (pending.length !== Object.keys(this.state.deviceDecisions).length) this.set({ deviceDecisions: Object.fromEntries(pending) });
+  }
+
+  private decideDevice(id: string, accept: boolean, calls: Api): Promise<{ note: string }> {
+    if (!this.alive) return Promise.reject(Error("stale or disconnected workspace"));
+    const prior = this.deviceDecisionWork.get(id);
+    if (prior) return prior.accept === accept ? prior.work : Promise.reject(Error("Wait for this device decision to finish."));
+    if (this.state.deviceDecisions?.[id]) return Promise.reject(Error("Check the pending device decision before trying again."));
+    const o = this.state.overview, link = o?.links?.find(l => l.id === id && l.state === "pending");
+    if (!link || !o?.person?.person) return calls.decideDevice(id, accept);
+    const change = { link, person: o.person.person, accept };
+    const current = () => this.alive && this.state.deviceDecisions?.[id]?.link === link;
+    this.set({ deviceDecisions: { ...this.state.deviceDecisions, [id]: change } });
+    const work = Promise.resolve().then(async () => {
+      try {
+        const result = await calls.decideDevice(id, accept);
+        if (current()) {
+          this.set({ deviceDecisions: { ...this.state.deviceDecisions, [id]: { ...change, saved: true } } });
+          this.pruneDeviceDecisions();
+          void this.refetch();
+        }
+        return result;
+      } catch (error) {
+        if (current()) {
+          const pending = { ...this.state.deviceDecisions }; delete pending[id];
+          this.set({ deviceDecisions: pending }); // reveal current state, never replay an old snapshot
+          void this.refetch(); // a lost reply may follow a stored decision
+        }
+        throw error;
+      } finally {
+        if (this.deviceDecisionWork.get(id)?.work === work) this.deviceDecisionWork.delete(id);
+      }
+    });
+    this.deviceDecisionWork.set(id, { accept, work });
     return work;
   }
 
@@ -445,6 +511,7 @@ export class Store {
     this.reacting.clear();
     this.dismissing.clear();
     this.pictureWork = undefined;
+    this.deviceDecisionWork.clear();
     this.sends.dispose();
     this.scheduled.dispose();
     this.stopListen?.();
@@ -581,6 +648,7 @@ export class Store {
     this.set(patch);
     const picture = this.state.pictureChange;
     if (picture?.saved && (o.seq > picture.seq || o.person?.picture === picture.saved.picture)) this.set({ pictureChange: undefined });
+    this.pruneDeviceDecisions();
     this.pruneDismissals();
     if (o.groups) this.set({ invitations: share(this.state.invitations, o.group_invitations || []) });
     if (catalogs) void this.loadAgentNames();

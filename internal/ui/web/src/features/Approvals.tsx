@@ -27,6 +27,7 @@ import { Body, Card, OpenCard, Landing, kindTag, useLand, useOpen } from "./Appr
 import { ConvRow, SelfConsentRow } from "./Approvals.conv";
 import { HeldBack, heldDecisionPeers } from "./Approvals.held";
 import { capital, decidable, inSentence, isSelfConsent, nameOf, whyWords } from "./Approvals.words";
+import { DeviceDecisions } from "./DeviceDecisions";
 
 export { ApprovalCard } from "./Approvals.card";
 
@@ -101,6 +102,7 @@ export function OksView() {
   const o = useStore(store, (s) => s.overview);
   const loadError = useStore(store, (s) => s.loadError);
   const dismissing = useStore(store, (s) => Object.values(s.dismissPending).filter(p => !p.saved).length);
+  const deviceDecisions = useStore(store, s => Object.keys(s.deviceDecisions || {}).length);
   const names = useAgentNames();
   const count = needsYouCount(o, store.host.platform === "daemon");
 
@@ -140,6 +142,7 @@ export function OksView() {
         {count > 0 && <p className="pt-2 text-[15px] font-semibold text-text-2 tnum">{count === 1 ? "1 needs attention" : count + " need attention"}</p>}
       </header>
       <UnreadReview />
+      {deviceDecisions > 0 && <div className="px-4 pt-3"><DeviceDecisions /></div>}
       {dismissing > 0 && <p role="status" data-dismiss-pending className="px-4 pt-3 text-[14px] text-text-2">
         {dismissing === 1 ? "Marking one item as handled…" : "Marking " + dismissing + " items as handled…"}
       </p>}
@@ -149,7 +152,7 @@ export function OksView() {
             {items.map((i) => <Listed key={i.key} k={i.key} land={land}>{i.node}</Listed>)}
           </ul>
         </div>
-      ) : !dismissing && !held.length && !elsewhere.length && !unreported.length && !working.length && !workingReviews.length && <AllClear />}
+      ) : !dismissing && !deviceDecisions && !held.length && !elsewhere.length && !unreported.length && !working.length && !workingReviews.length && <AllClear />}
       {(working.length > 0 || workingReviews.length > 0) && (
         <section className="px-4 pt-6" aria-labelledby="oks-working">
           <h2 id="oks-working" className="text-[12px] font-extrabold uppercase tracking-[.08em] text-muted">Working</h2>
