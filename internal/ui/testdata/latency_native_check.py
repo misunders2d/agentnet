@@ -69,6 +69,11 @@ for name in ('home', 'config', 'data', 'cache', 'agentnet-home', 'appdata', 'loc
     (root/name).mkdir(mode=0o700)
 query = dict(parse_qsl(urlsplit(url).query)); query.update(token=token)
 query.setdefault('run', 'native')
+paint_diagnostic = os.environ.get('AGENTNET_LATENCY_PAINT_DIAGNOSTIC', '')
+if paint_diagnostic:
+    if paint_diagnostic not in ('baseline', 'motion', 'flat'):
+        raise ValueError('Invalid paint diagnostic')
+    query['paintDiagnostic'] = paint_diagnostic
 parts = urlsplit(url)
 fixture_url = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), ''))
 env.update(HOME=str(root/'home'), XDG_CONFIG_HOME=str(root/'config'),
@@ -131,7 +136,7 @@ try:
         if report is None:
             raise RuntimeError('Native fixture timeout: '+(root/'shell.log').read_text(errors='replace')[-3000:])
         print(json.dumps({'engine': {'Linux':'Tauri WebKitGTK','Darwin':'Tauri WKWebView','Windows':'Tauri WebView2'}[system],
-                          'nativeOS': system, 'machine': platform.machine(), 'profiled': bool(profile_dir), **report}))
+                          'nativeOS': system, 'machine': platform.machine(), 'profiled': bool(profile_dir), 'diagnostic': bool(profile_dir or paint_diagnostic), **report}))
         if not report.get('ok'):
             raise RuntimeError('Native responsiveness fixture failed')
 finally:

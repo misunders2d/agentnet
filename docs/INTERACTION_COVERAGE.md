@@ -162,6 +162,19 @@ group-decision corrections. The Apple Silicon leg of comparison run
 `40433708162` still fails the unchanged 500 ms bound; an Intel comparison is
 pending. No release or deployment has been made.
 
+The later Apple Silicon observation includes a 933 ms Permissions response:
+the first DOM mutation occurs at 6 ms, but its first animation frame is at
+943 ms. Browser WebKit similarly delays Coding agents to 800 ms despite a
+7 ms first mutation. Paint cost remains a hypothesis, not a diagnosed cause.
+An opt-in diagnostic now compares baseline, animation/transition removal and
+flat paint (also removing shadows, filters, gradients and rounding) using the
+same built app and unchanged timing assertions. Every such observation is
+explicitly marked diagnostic, including its baseline; browser summaries never
+count it as an executed qualification pass. Local checks exercise all three
+modes and their classification. These temporary fixture styles are never
+applied to the shipping interface. Explicit runner matrices now give each
+runner unique artifact names, preserving the release workflow's default names.
+
 Linux CI dependency setup previously spent over 30 minutes on the runner's
 Azure Ubuntu mirror before cancellation, including the 27.3 MB WebKit package.
 The next disposable runner uses Ubuntu's main HTTPS archive instead, preserving

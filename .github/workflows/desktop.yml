@@ -25,6 +25,10 @@ on:
         description: 'Collect owned macOS renderer stacks for diagnosis only'
         type: boolean
         default: false
+      paint_diagnostic:
+        description: 'Compare three paint variants on the same app; never qualification evidence'
+        type: boolean
+        default: false
       interaction_qualification:
         description: "Measure shared interactions in real native shells and browsers"
         type: boolean
@@ -87,6 +91,7 @@ jobs:
         env:
           AGENTNET_LATENCY_DISPOSABLE_GUI: '1'
           AGENTNET_NATIVE_PROFILE: ${{ inputs.native_profile && '1' || '' }}
+          AGENTNET_PAINT_DIAGNOSTIC: ${{ inputs.paint_diagnostic && '1' || '' }}
           REQUESTED_INTERACTION_SUITES: ${{ inputs.interaction_suites }}
         run: |
           set -euo pipefail
@@ -130,37 +135,48 @@ jobs:
             done
           fi
           failed=0
-          for suites in "${groups[@]}"; do
-            export AGENTNET_LATENCY_SUITES="$suites"
-            if [[ "$RUNNER_OS" == Linux ]]; then
-              if ! dbus-run-session -- xvfb-run -a -s '-screen 0 1440x960x24 -nolisten tcp' \
-                go test ./internal/ui -run '^TestUIResponsivenessRendered$' -count=1 -timeout 180s -v 2>&1 | tee "$evidence/native-$suites.log"; then failed=1; fi
-            else
-              if ! go test ./internal/ui -run '^TestUIResponsivenessRendered$' -count=1 -timeout 180s -v 2>&1 | tee "$evidence/native-$suites.log"; then failed=1; fi
-            fi
-          done
-          unset AGENTNET_NATIVE_SHELL
-          export AGENTNET_PLAYWRIGHT="$tooling/playwright"
-          export AGENTNET_LATENCY_HOST_PLATFORM=browser
-          for suites in "${groups[@]}"; do
-            export AGENTNET_LATENCY_SUITES="$suites"
-            export AGENTNET_LATENCY_EVIDENCE="$evidence/browser-$suites.png"
-            export AGENTNET_LATENCY_ENGINES=chromium,firefox,webkit
-            export AGENTNET_LATENCY_VIEWPORTS=1440x960,390x844
-            if ! go test ./internal/ui -run '^TestUIResponsivenessRendered$' -count=1 -timeout 600s -v 2>&1 | tee "$evidence/browser-$suites.log"; then failed=1; fi
+          native_shell="$AGENTNET_NATIVE_SHELL"
+          modes=(qualification)
+          if [[ "$AGENTNET_PAINT_DIAGNOSTIC" == 1 ]]; then
+            [[ "$RUNNER_OS" == macOS ]]
+            modes=(baseline motion flat)
+          fi
+          for mode in "${modes[@]}"; do
+            export AGENTNET_NATIVE_SHELL="$native_shell"
+            unset AGENTNET_PLAYWRIGHT AGENTNET_LATENCY_HOST_PLATFORM AGENTNET_LATENCY_PAINT_DIAGNOSTIC
+            if [[ "$mode" != qualification ]]; then export AGENTNET_LATENCY_PAINT_DIAGNOSTIC="$mode"; fi
+            for suites in "${groups[@]}"; do
+              export AGENTNET_LATENCY_SUITES="$suites"
+              if [[ "$RUNNER_OS" == Linux ]]; then
+                if ! dbus-run-session -- xvfb-run -a -s '-screen 0 1440x960x24 -nolisten tcp' \
+                  go test ./internal/ui -run '^TestUIResponsivenessRendered$' -count=1 -timeout 180s -v 2>&1 | tee "$evidence/native-$mode-$suites.log"; then failed=1; fi
+              else
+                if ! go test ./internal/ui -run '^TestUIResponsivenessRendered$' -count=1 -timeout 180s -v 2>&1 | tee "$evidence/native-$mode-$suites.log"; then failed=1; fi
+              fi
+            done
+            unset AGENTNET_NATIVE_SHELL
+            export AGENTNET_PLAYWRIGHT="$tooling/playwright"
+            export AGENTNET_LATENCY_HOST_PLATFORM=browser
+            for suites in "${groups[@]}"; do
+              export AGENTNET_LATENCY_SUITES="$suites"
+              export AGENTNET_LATENCY_EVIDENCE="$evidence/browser-$mode-$suites.png"
+              export AGENTNET_LATENCY_ENGINES=chromium,firefox,webkit
+              export AGENTNET_LATENCY_VIEWPORTS=1440x960,390x844
+              if ! go test ./internal/ui -run '^TestUIResponsivenessRendered$' -count=1 -timeout 600s -v 2>&1 | tee "$evidence/browser-$mode-$suites.log"; then failed=1; fi
+            done
           done
           exit "$failed"
       - name: retain interaction timings and screenshots
         if: always() && inputs.interaction_qualification
         uses: actions/upload-artifact@v4
         with:
-          name: interactions-${{ runner.os }}
+          name: interactions-${{ inputs.os && matrix.os || runner.os }}
           path: ${{ runner.temp }}/agentnet-interactions
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: ${{ success() || (failure() && inputs.interaction_qualification) }}
         with:
-          name: agentnet-app-${{ runner.os }}
+          name: agentnet-app-${{ inputs.os && matrix.os || runner.os }}
           path: desktop/out/AgentNet-*
           if-no-files-found: error
           retention-days: 7

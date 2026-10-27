@@ -9,6 +9,7 @@ const reports={actions:[],apiCalls:[],seenControls:[],pageErrors:[],feedbackFail
 const pageError=e=>reports.pageErrors.push(String(e.message||e.reason||e).slice(0,1000));window.addEventListener('error',pageError);window.addEventListener('unhandledrejection',pageError);
 try {
  const query=new URL(location.href).searchParams,token=query.get('token');
+ const paintDiagnostic=query.get('paintDiagnostic')||'';assert(['','baseline','motion','flat'].includes(paintDiagnostic),'Invalid paint diagnostic');if(paintDiagnostic)reports.paintDiagnostic=paintDiagnostic;
  const suite=window.__agentnetLatencySuite||query.get('suite')||'history',teamsPart=query.get('teamsPart')||'';assert(!teamsPart||suite==='teams'&&['list','group'].includes(teamsPart),'Invalid Teams page partition');reports.suite=suite;if(teamsPart)reports.teamsPart=teamsPart;reports.portableVector=p1;const extraSuites=['topics','groups','compose','media','review','outbox','agents','teams','profile','storage','workspaces','permissions'];const extended=extraSuites.includes(suite);assert(['history','navigation','settings','unread','actions',...extraSuites].includes(suite),'Unknown timing workload');
  if(token)await fetch('/?t='+encodeURIComponent(token));
  const read=async path=>{const r=await fetch(path);if(!r.ok)throw Error('Fixture read HTTP '+r.status);return r.json();};
@@ -239,6 +240,8 @@ try {
  const ResizeObserverBefore=window.ResizeObserver;let historySnapshot;
  if(suite==='history')window.ResizeObserver=class extends ResizeObserverBefore{constructor(callback){super((entries,observer)=>{const before=historySnapshot?.();callback(entries,observer);if(before)(reports.historyResizeLog||=[]).push({at:performance.now(),before,after:historySnapshot(),targets:entries.map(e=>({part:e.target.dataset.part,height:e.contentRect.height}))});});}};
  const shadow=document.querySelector('#fixture').attachShadow({mode:'open'}),link=document.createElement('link');link.rel='stylesheet';link.href='/assets/skins/comic/style.css';shadow.append(link);
+ // Diagnostic paint subtraction isolates renderer cost; it never qualifies the shipping UI.
+ if(paintDiagnostic==='motion'||paintDiagnostic==='flat'){const style=document.createElement('style');style.textContent='*,*::before,*::after{animation:none!important;transition:none!important}'+(paintDiagnostic==='flat'?'*,*::before,*::after{box-shadow:none!important;filter:none!important;backdrop-filter:none!important;background-image:none!important;border-radius:0!important}':'');shadow.append(style);}
  const root=document.createElement('div');root.style.height='100%';shadow.append(root);await mount(root,host);
  window.__agentnetLatencyDispose=()=>{if(clipboardDescriptor)Object.defineProperty(navigator,'clipboard',clipboardDescriptor);else delete navigator.clipboard;window.removeEventListener('error',pageError);window.removeEventListener('unhandledrejection',pageError);unmount(root);window.ResizeObserver=ResizeObserverBefore;if(isolateDrafts){if(legacyDraftBefore===null)localStorage.removeItem(legacyDraftKey);else localStorage.setItem(legacyDraftKey,legacyDraftBefore);}};
  const scope=()=>shadow;
