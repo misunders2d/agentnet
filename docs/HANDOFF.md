@@ -1,5 +1,29 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+## v0.9.7 verified responsiveness fixes — packaging October 27
+
+Frozen source `3374c1c812499100d3cc9b8dedfdda1bb40892b8`; matching gallery
+`0371b53` pins that exact source. Local actions now present their pending change
+before background work, with retained drafts, duplicate guards, exact retries
+and truthful failure/readback across messages, reminders, device/group decisions,
+invitations, people lists, profile and workspace setup. Avoidable rendering work
+and the repeating background paint cost were removed. Native authority is unchanged.
+
+Three-OS rendered recovery/vet, all UI race partitions, real mixed-version testing
+against v0.9.6, Linux/Windows desktop and Android emulator qualification pass.
+The full exact-pin gallery gate passes 318 source/browser checks and 37 applicable
+runtime groups; all 20 refreshed previews were inspected. Mac retains three
+first-use paint samples of 1.03–1.07s, with 15–24ms DOM updates and quick repeats;
+all Mac browser reports pass. Keep those raw failures and the unproven engine cause.
+
+Sergey chose **"Ship verified fixes; disclose coverage limits"**, explicitly
+replacing the exhaustive every-control matrix as this release's publication gate.
+No physical phone, exhaustive real-backend timing or measured messenger parity is
+claimed. See [interaction evidence](INTERACTION_COVERAGE.md) for exact runs and
+the accepted startup limitation. Artifact verification/publication and backed-up
+Hub rollout remain pending. The inspected production Hub still runs v0.9.5;
+its volume, configuration and neighboring Telegram container must be preserved.
+
 ## v0.9.6 published — October 26, 2026
 
 [App v0.9.6](https://github.com/misunders2d/agentnet/releases/tag/v0.9.6)

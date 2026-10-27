@@ -1,5 +1,48 @@
 # Next-release interaction coverage and responsiveness
 
+## October 27 release disposition — current
+
+Sergey explicitly chose **"Ship verified fixes; disclose coverage limits"** after
+being told that the exhaustive every-control/platform/history matrix is incomplete.
+For v0.9.7 this supersedes the exhaustive publication blocker below; it does not
+turn missing evidence or historical failures into passes. Existing authorization
+covers commit, push, artifacts, publication and deployment without another approval.
+The initial device/browser warm-up exception remains separate from ordinary actions.
+
+Frozen application source: `3374c1c812499100d3cc9b8dedfdda1bb40892b8`.
+Matching gallery: `0371b53`, pinned to that exact source. Both are committed/pushed.
+Final qualification:
+
+- All affected rendered recovery checks and `go vet ./...` pass natively on
+  Linux, Windows and macOS in run 40465293617. All three UI race partitions pass
+  in 40465290633; unchanged client/native evidence below is retained.
+- Required real mixed-version testing against public v0.9.6 passes in 70.025s.
+- Integrated run 40465287640 passes Linux and Windows desktop qualification and
+  Android emulator qualification. All 17 Android workloads execute 534 checks;
+  maximum measured local feedback is 619.9ms. Signed upgrade preserves identity,
+  200 messages, origin and drafts; notification/denied-permission checks pass.
+- Linux's 140 native/browser reports pass; maximum local feedback is 271ms.
+  Windows qualification passes, maximum 210ms. Two nonshipping Windows WebKit
+  media-port metadata timeouts remain explicitly unsupported, not passes.
+- Mac's 140 reports include three native first-use timing failures: default-agent
+  dialog 1058ms, Your devices section 1035ms and Drive move review 1074ms. Each
+  occurs within roughly 1.2s of fresh-view startup, changes DOM in 15–24ms and
+  issues no backend request. Reopening the same agent dialog/Drive review takes
+  18/25ms; subsequent controls remain responsive. Every browser report passes.
+  These are retained under the owner's startup limitation, not called passing
+  timings; the exact WebKit/OS mechanism remains unproven. No further startup
+  diagnostics or threshold changes were made.
+- Exact-pin gallery `npm test` passes 318 source/browser checks with zero skips
+  and all 37 applicable runtime groups; five inapplicable groups stay explicit.
+  All 20 desktop/phone light/dark previews were regenerated and visually inspected.
+  Private evidence: `/tmp/agentnet-skins-DfffGm`; disposable company removed.
+
+The workload runner uses synthetic host responses in some cases; these results
+do not establish exhaustive real-backend control coverage, physical-phone timing
+or measured Slack/Telegram parity. C1/C2/B1 remain coverage follow-ups; R1 is now
+dispositioned for this verified-fixes release by the explicit owner decision.
+Publication, artifact verification and rollout are separate next steps.
+
 Owner correction, October 26, 2026: "no need" to log in to Telegram;
 "both slack and telegram are sub-0.5 second, I'll settle for that."
 Owner clarification, October 27, 2026: "under a second is also bearable", with
