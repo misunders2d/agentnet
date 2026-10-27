@@ -9,20 +9,21 @@ import {NotificationsSection} from './src/features/Settings.notify';
 const root=document.getElementById('root'),app=document.getElementById('app'),portals=document.getElementById('portals');
 const mode=new URL(location).searchParams.get('mode')||'daemon';
 const overview={seq:1,version:'fixture',me:{address:'self/laptop'},people:[],dms:[],threads:[],needs_you:[],notify:{available:true,native:mode!=='browser',enabled:mode==='daemon',pending:false,preview:'',preview_default:'full'}};
-const f=window.fixture={writes:[],reads:[],holdReads:false,timings:[],permissions:[],granted:false};
+const f=window.fixture={writes:[],reads:[],holdReads:false,timings:[],permissions:[],granted:false,connectionWrites:[],connectionReads:[],connectionTimings:[],connection:{enabled:false,badging:false},visibility:[],holdConnectionReads:false};
 const status=()=>({granted:f.granted,app_granted:f.granted});
 const host={platform:mode,workspace:{id:'notify-changes-'+mode,state:'enrolled'},listen(){return()=>{}},async api(p,b){
  if(p.startsWith('/api/overview')){const snapshot=structuredClone(overview);if(f.holdReads)await new Promise(resolve=>f.reads.push(resolve));return snapshot;}
  if(p.startsWith('/api/notify/'))return new Promise((resolve,reject)=>f.writes.push({p,b,resolve,reject}));
  if(p.startsWith('/api/typing'))return {preferences:{send:false,show:false},entries:[]};if(p.startsWith('/api/agents'))return {agents:[]};return {};
 }};
-if(mode==='android')host.android={notificationStatus:async()=>status(),requestNotifications:()=>new Promise(resolve=>f.permissions.push(granted=>{f.granted=granted;resolve(status())})),onVisibility:()=>()=>{},connection:async()=>({enabled:false,badging:false})};
+if(mode==='android')host.android={visible:()=>true,notificationStatus:async()=>status(),requestNotifications:()=>new Promise(resolve=>f.permissions.push(granted=>{f.granted=granted;resolve(status())})),onVisibility:fn=>{f.visibility.push(fn);return()=>{f.visibility=f.visibility.filter(x=>x!==fn)}},connection:async()=>{const value={...f.connection};if(f.holdConnectionReads)await new Promise(resolve=>f.connectionReads.push(resolve));return value},setConnection:enabled=>new Promise((resolve,reject)=>f.connectionWrites.push({enabled,resolve,reject}))};
 if(mode==='browser')Object.defineProperty(window,'Notification',{configurable:true,value:{permission:'default',requestPermission:()=>new Promise((resolve,reject)=>f.permissions.push(value=>{if(value==='error')reject(Error('Invented permission request failure'));else resolve(value?'granted':'denied')}))}});
 const store=new Store(host);f.store=store;
 f.finish=(index,fail=false,stale=false)=>{const w=f.writes[index];if(fail){w.reject(Error('Invented notification refusal'));return;}
  if(!stale){overview.notify={...overview.notify,...(w.p.endsWith('preview')?{preview:w.b.preview}:{enabled:w.p.endsWith('enable')})};overview.seq++;}w.resolve({note:'Saved'});
 };
 f.newer=async(preview='sender')=>{overview.notify={...overview.notify,preview};overview.seq++;await store.refetch()};
+f.finishConnection=(index,fail=false)=>{const w=f.connectionWrites[index];if(fail)w.reject(Error('Invented connection refusal'));else {f.connection={...f.connection,enabled:w.enabled};w.resolve({...f.connection})}};
 f.release=()=>{f.holdReads=false;for(const resolve of f.reads.splice(0))resolve()};
 function App(){const s=useStore(store,s=>s);return <><button onClick={()=>store.showTab(s.tab==='settings'?'chats':'settings')}>Toggle view</button><output>{s.tab}</output><NotificationsSection/><textarea aria-label="Unrelated draft"/><div role="alert">{s.toasts.map(t=>t.text).join(' ')}</div></>}
 await store.start();createRoot(app).render(<OwnedContext.Provider value={{root,app,portals}}><StoreContext.Provider value={store}><App/></StoreContext.Provider></OwnedContext.Provider>);
@@ -56,7 +57,31 @@ const server=http.createServer((req,res)=>{if(req.url==='/entry.mjs'){res.setHea
    const next=await page.evaluate(()=>fixture.writes.length);await select.selectOption('hidden');await page.evaluate(i=>fixture.finish(i,true),next);await page.waitForFunction(()=>!document.querySelector('#notification-preview').disabled);assert.equal(await select.inputValue(),'sender','failure reveals current preference');
   }
   const last=await page.evaluate(()=>fixture.writes.length);await toggle.click();await page.evaluate(i=>{fixture.holdReads=true;fixture.finish(i)},last);await page.getByText('Notification preference saved; checking current state…',{exact:true}).waitFor();assert.equal(await toggle.getAttribute('aria-checked'),'false');await page.evaluate(()=>fixture.release());await page.waitForFunction(()=>!document.querySelector('[role="switch"][aria-label="Notifications"]').hasAttribute('data-disabled'));assert.equal(await toggle.getAttribute('aria-checked'),'false');
-  assert.equal(await page.getByRole('textbox',{name:'Unrelated draft'}).inputValue(),'Retained while notification storage is blocked');await page.waitForFunction(()=>fixture.timings.length===1);const times=await page.evaluate(()=>fixture.timings);assert(times.every(t=>t<500),JSON.stringify(times));assert.deepEqual(errors,[]);reports.push({width,mode,feedbackMs:times});await page.close();
+  if(mode==='android'){
+   const connection=page.getByRole('switch',{name:'Background connection',exact:true});
+   await page.waitForFunction(()=>!document.querySelector('[aria-label="Background connection"]').hasAttribute('data-disabled'));
+   await page.evaluate(()=>{fixture.holdConnectionReads=true;for(const fn of fixture.visibility)fn()});
+   await page.waitForFunction(()=>fixture.connectionReads.length===1);
+   await page.evaluate(()=>document.addEventListener('click',()=>{const start=performance.now(),observer=new MutationObserver(()=>{if(document.querySelector('[aria-label="Background connection"]').getAttribute('aria-checked')!=='true')return;observer.disconnect();requestAnimationFrame(()=>requestAnimationFrame(()=>fixture.connectionTimings.push(performance.now()-start)))});observer.observe(document.body,{subtree:true,attributes:true})},{once:true,capture:true}));
+   await connection.click();assert.equal(await connection.getAttribute('aria-checked'),'true','background connection updates before native reply');
+   await page.getByText('Changing background connection…',{exact:true}).waitFor();
+   if(process.env.AGENTNET_NOTIFICATION_EVIDENCE)await page.screenshot({path:process.env.AGENTNET_NOTIFICATION_EVIDENCE+'-connection-pending-'+width+'.png',fullPage:true});
+   await page.evaluate(()=>{const b=document.querySelector('[aria-label="Background connection"]');b.dispatchEvent(new MouseEvent('click',{bubbles:true}));b.dispatchEvent(new MouseEvent('click',{bubbles:true}))});
+   assert.equal(await page.evaluate(()=>fixture.connectionWrites.length),1,'duplicate connection input cannot enqueue another native operation');
+   await page.evaluate(()=>{fixture.holdConnectionReads=false;for(const resolve of fixture.connectionReads.splice(0))resolve()});
+   assert.equal(await connection.getAttribute('aria-checked'),'true','stale pre-click read cannot erase pending choice');
+   await page.getByRole('textbox',{name:'Unrelated draft'}).fill('Retained while notification storage is blocked');await page.getByRole('button',{name:'Toggle view'}).click();
+   await page.evaluate(()=>fixture.finishConnection(0,true));await page.getByText('Invented connection refusal',{exact:true}).waitFor();
+   await page.waitForFunction(()=>!document.querySelector('[aria-label="Background connection"]').hasAttribute('data-disabled'));
+   assert.equal(await connection.getAttribute('aria-checked'),'false','refused native change restores current setting');
+   if(process.env.AGENTNET_NOTIFICATION_EVIDENCE)await page.screenshot({path:process.env.AGENTNET_NOTIFICATION_EVIDENCE+'-connection-error-'+width+'.png',fullPage:true});
+   await connection.click();assert.equal(await connection.getAttribute('aria-checked'),'true');await page.evaluate(()=>fixture.finishConnection(1));
+   await page.waitForFunction(()=>!document.querySelector('[aria-label="Background connection"]').hasAttribute('data-disabled'));assert.equal(await connection.getAttribute('aria-checked'),'true');
+   // A newer native Stop is authoritative after the completed request.
+   await page.evaluate(()=>{fixture.connection={enabled:false,badging:false};for(const fn of fixture.visibility)fn()});
+   await page.waitForFunction(()=>document.querySelector('[aria-label="Background connection"]').getAttribute('aria-checked')==='false');
+  }
+  assert.equal(await page.getByRole('textbox',{name:'Unrelated draft'}).inputValue(),'Retained while notification storage is blocked');await page.waitForFunction(()=>fixture.timings.length===1);const times=await page.evaluate(()=>fixture.timings);assert(times.every(t=>t<500),JSON.stringify(times));assert.deepEqual(errors,[]);const connectionTimes=await page.evaluate(()=>fixture.connectionTimings);if(mode==='android')assert(connectionTimes.length===1&&connectionTimes.every(t=>t<500),JSON.stringify(connectionTimes));reports.push({width,mode,feedbackMs:times,connectionFeedbackMs:connectionTimes});await page.close();
  }
  console.log(JSON.stringify({ok:true,reports,scope:'trusted browser input and held synthetic storage; Android permission bridge simulated, no OS consent claimed'}));
  }finally{await browser?.close();await new Promise(r=>server.close(r));fs.rmSync(work,{recursive:true,force:true})}

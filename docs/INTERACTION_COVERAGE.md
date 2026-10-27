@@ -146,6 +146,33 @@ resulting hitching risk in [Optimize GPU renderers with Metal](https://developer
 (checked October 27, 2026). The candidate removes the small Settings entrance
 translation to test a simpler rendering path; its macOS effect is unverified.
 
+The `54018a9a` affected macOS native/browser run passes all four workloads
+(settings/profile/media/permissions): 28 cells, 490 synthetic actions, maximum
+local feedback 144 ms. Windows also passes those workloads. All three UI race
+partitions pass in `40427508307`; notification/media/pane focused tests pass
+three repetitions on Linux, macOS and Windows in `40427505506`. These are
+retained scoped checks, not complete control qualification. Android in
+`40427502669` still fails `media.open-chat` at 614 ms, while its first DOM
+mutation is 37 ms. The old measure required loaded history for navigation
+feedback. It now requires the exact selected chat's visible header/loading view
+or ready timeline, while separately requiring and recording the completed
+history. An imposed 800 ms history delay produces 32–35 ms navigation and
+919–922 ms confirmed history locally at both widths; completion is not relabelled
+as fast. Existing 500 ms feedback and completion-correctness assertions remain.
+Long-frame diagnostics now cover every measured action. Android execution of
+this corrected measurement remains required; the old failure remains recorded.
+
+The Android background-connection control also failed the actual rendered
+held-bridge regression: the switch stayed Off until the native reply. Its
+selected setting now appears immediately with an explicit pending message.
+Duplicate input sends one operation; reads begun before the change cannot erase
+it, refusal restores the current setting, and subsequent native Stop changes
+remain authoritative. The existing inspected local-intent/reconciliation pattern
+is reused without changing the native bridge or permission. Local trusted-input
+checks pass at both widths, 27–31 ms including two frame opportunities. Pending
+and error screenshots at 390 and 1440 pixels were inspected. Native bridge
+responses in this regression are simulated; emulator verification remains open.
+
 The remaining Base UI popup entrances used transparent or fully offscreen
 starting states. Real message-menu/reaction/delete and All Topics regressions
 first fail with animation callbacks held, then pass after those initial states

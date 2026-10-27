@@ -221,21 +221,39 @@ function AndroidConnection() {
   const notificationsEnabled = useStore(store, s => s.overview?.notify?.enabled);
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [badging, setBadging] = useState(false);
-  const [busy, setBusy] = useState(false), [error, setError] = useState("");
+  const [pending, setPending] = useState<boolean | null>(null), [error, setError] = useState("");
+  const write = useRef<object | null>(null), read = useRef(0);
+  const refreshCurrent = useRef<(() => void) | null>(null);
   useEffect(() => {
     if (!android) return;
     let alive = true;
-    const refresh = () => { void android.connection().then(v => { if (alive) { setEnabled(v.enabled); setBadging(!!v.badging); setError(""); } }, () => { if (alive) setError("Could not read Android connection settings."); }); };
+    const refresh = () => {
+      if (write.current) return;
+      const ticket = ++read.current;
+      void android.connection().then(v => {
+        if (alive && ticket === read.current) { setEnabled(v.enabled); setBadging(!!v.badging); }
+      }, () => { if (alive && ticket === read.current) setError("Could not read Android connection settings."); });
+    };
+    refreshCurrent.current = refresh;
     refresh();
     const off = android.onVisibility(refresh);
-    return () => { alive = false; off(); };
-  }, [android, notificationsEnabled]);
+    return () => { alive = false; read.current++; write.current = null; refreshCurrent.current = null; off(); };
+  }, [android]);
+  useEffect(() => { refreshCurrent.current?.(); }, [notificationsEnabled]);
   if (!android) return null;
   const turn = async (on: boolean) => {
-    setBusy(true); setError("");
-    try { setEnabled((await android.setConnection(on)).enabled); }
-    catch (e) { setError(e instanceof Error ? e.message : "Could not change the background connection."); }
-    finally { setBusy(false); }
+    if (write.current || enabled === null) return;
+    const work = {};
+    write.current = work; read.current++;
+    setPending(on); setError("");
+    try {
+      const result = await android.setConnection(on);
+      if (write.current === work) setEnabled(result.enabled);
+    } catch (e) {
+      if (write.current === work) setError(e instanceof Error ? e.message : "Could not change the background connection.");
+    } finally {
+      if (write.current === work) { write.current = null; setPending(null); refreshCurrent.current?.(); }
+    }
   };
   const settings = async () => {
     try { await android.connectionSettings?.(); }
@@ -245,7 +263,8 @@ function AndroidConnection() {
     <div className="flex items-center gap-3"><div className="min-w-0 flex-1">
       <p className="font-semibold">Stay connected in the background</p>
       <Hint>Keep receiving while you use other apps. Android requires a connection notification with a Stop button. It does not mean unread messages.</Hint>
-    </div><Toggle label="Background connection" checked={!!enabled} disabled={busy || enabled === null} onChange={turn} /></div>
+    </div><Toggle label="Background connection" checked={pending ?? !!enabled} disabled={pending !== null || enabled === null} onChange={turn} /></div>
+    {pending !== null && <p role="status" className="mt-2 text-sm text-muted">Changing background connection…</p>}
     {badging && <div className="mt-3">
       <Hint>Android allows the background connection to show a notification dot. Change this category’s dot or visibility in Android settings; keep Chat activity enabled for message alerts.</Hint>
       {android.connectionSettings && <button type="button" className="mt-2 rounded-lg border border-hairline px-3 py-2 font-semibold" onClick={() => void settings()}>Background notification settings</button>}

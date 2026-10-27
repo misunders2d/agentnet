@@ -19,6 +19,7 @@ try {
  // notification routing; the toy provider's dm0001 is not a valid target.
  overview.dms[0].id=view.id='c'.repeat(64);
  overview.demo=false;overview.review=[];overview.needs_you=[];overview.quarantine=[];overview.held=[];overview.threads=[];overview.topics=[];
+ const chatLoadDelay=Number(query.get('chatLoadDelay')||15);assert(Number.isInteger(chatLoadDelay)&&chatLoadDelay>=15&&chatLoadDelay<=1500,'Invalid bounded chat load delay');reports.chatLoadDelayMs=chatLoadDelay;
  const peopleCount=Number(query.get('people')||1000);assert(Number.isInteger(peopleCount)&&peopleCount>=1&&peopleCount<=1000,'Invalid bounded fixture roster');
  const peers=Array.from({length:peopleCount},(_,i)=>({person:'fixture-person-'+i,label:'Person '+i,address:'fixture-'+i+'/laptop',state:'pinned',devices:[{address:'fixture-'+i+'/laptop',name:'Laptop',human:true}]}));
  overview.people=[...overview.people,...peers];overview.directory={status:'listed',members:peers.map(p=>({address:p.address,presence:'connected',joined:1}))};
@@ -189,7 +190,7 @@ try {
     }
    }
    if(path.startsWith('/api/overview')){counts.overview++;const result=structuredClone({...overview,seq});if(held)await held;return result;}
-   if(path.startsWith('/api/dm?')){counts.dm++;await pause(15);return structuredClone(view);}
+   if(path.startsWith('/api/dm?')){counts.dm++;await pause(chatLoadDelay);return structuredClone(view);}
    if(path.startsWith('/api/typing/preferences')){await pause(25);typingPreferences={...body};return typingPreferences;}
    if(path.startsWith('/api/typing')){counts.typing++;return {scope:{conv:view.id},preferences:typingPreferences,supported:true,current:true,entries:typing?[{person:view.peer.person,address:view.peer.address,label:'Vitalii',expires:new Date(Date.now()+3000).toISOString()}]:[]};}
    if(path==='/api/dm/send'){
@@ -264,7 +265,7 @@ try {
   const menuTimer=menuDiagnostic?setInterval(sampleMenu,80):null;
   if(menuDiagnostic)sampleMenu();
   const rememberFrames=entries=>{for(const e of entries){if(menuFrames.length>=12)break;menuFrames.push({start:e.startTime,duration:e.duration,blockingDuration:e.blockingDuration,renderStart:e.renderStart,styleAndLayoutStart:e.styleAndLayoutStart,scripts:Array.from(e.scripts||[]).slice(0,8).map(s=>({duration:s.duration,executionStart:s.executionStart,forcedStyleAndLayoutDuration:s.forcedStyleAndLayoutDuration,invokerType:s.invokerType,source:new URL(s.sourceURL||'',location.href).pathname.slice(0,180),function:String(s.sourceFunctionName||'').slice(0,120),position:s.sourceCharPosition}))});}};
-  const menuObserver=id==='message.menu-open-0'&&typeof PerformanceObserver!=='undefined'&&PerformanceObserver.supportedEntryTypes.includes('long-animation-frame')?new PerformanceObserver(list=>rememberFrames(list.getEntries())):null;
+  const menuObserver=typeof PerformanceObserver!=='undefined'&&PerformanceObserver.supportedEntryTypes.includes('long-animation-frame')?new PerformanceObserver(list=>rememberFrames(list.getEntries())):null;
   menuObserver?.observe({type:'long-animation-frame'});
   const watch=()=>{if(!running)return;const now=performance.now();rafCount++;if(record.firstFrameMs===undefined)record.firstFrameMs=now-record.start;gaps.push(now-last);last=now;requestAnimationFrame(watch);};requestAnimationFrame(watch);
   // Separate app/renderer delay from the fixture's own visibility-query cost.
@@ -282,7 +283,7 @@ try {
    record.projectionResultMs=projections.length?Math.max(...projections.map(c=>c.resultMs)):null;
    record.frameMaxMs=Math.max(0,...gaps);record.frameP95Ms=gaps.sort((a,b)=>a-b)[Math.min(gaps.length-1,Math.floor(gaps.length*.95))]||0;
    record.stateVerified=true;record.feedbackBoundPassed=record.feedbackMs<500;record.ok=record.feedbackBoundPassed;if(!record.feedbackBoundPassed)reports.feedbackFailures.push(id+' local feedback exceeds owner’s 500 ms bound');census();
-  }finally{running=false;mutations.disconnect();if(menuDiagnostic){clearInterval(menuTimer);sampleMenu();record.frameMaxMs=Math.max(0,...gaps);const sorted=[...gaps].sort((a,b)=>a-b);record.frameP95Ms=sorted[Math.min(sorted.length-1,Math.floor(sorted.length*.95))]||0;record.rafCount=rafCount;reports.firstMenuVisibility={samples:menuSamples,finalTimeline:document.timeline?.currentTime??null,rafCount,visibility:document.visibilityState};}if(id==='message.menu-open-0'){if(menuObserver){rememberFrames(menuObserver.takeRecords());menuObserver.disconnect();}reports.firstMenuPerformance={longAnimationFrameSupported:!!menuObserver,inputStart:record.start,frames:menuFrames,chunkResources:performance.getEntriesByType('resource').filter(r=>r.name.includes('/m/chunks/')).slice(-12).map(r=>({path:new URL(r.name).pathname,start:r.startTime,duration:r.duration,bytes:r.decodedBodySize}))};}delete record.apiStart;delete record.hostStart;reports.actions.push(record);}
+  }finally{running=false;mutations.disconnect();if(menuDiagnostic){clearInterval(menuTimer);sampleMenu();record.frameMaxMs=Math.max(0,...gaps);const sorted=[...gaps].sort((a,b)=>a-b);record.frameP95Ms=sorted[Math.min(sorted.length-1,Math.floor(sorted.length*.95))]||0;record.rafCount=rafCount;reports.firstMenuVisibility={samples:menuSamples,finalTimeline:document.timeline?.currentTime??null,rafCount,visibility:document.visibilityState};}if(menuObserver){rememberFrames(menuObserver.takeRecords());menuObserver.disconnect();}if(record.feedbackMs>=200||record.visibleMs>=500)record.longAnimationFrames=menuFrames;if(id==='message.menu-open-0'){reports.firstMenuPerformance={longAnimationFrameSupported:!!menuObserver,inputStart:record.start,frames:menuFrames,chunkResources:performance.getEntriesByType('resource').filter(r=>r.name.includes('/m/chunks/')).slice(-12).map(r=>({path:new URL(r.name).pathname,start:r.startTime,duration:r.duration,bytes:r.decodedBodySize}))};}delete record.apiStart;delete record.hostStart;reports.actions.push(record);}
  };
  const initialChat=()=>[...root.querySelectorAll('[data-part="chat-row"]')].find(b=>b.textContent.includes(p1==='direct'?'Portable Pi':'Vitalii')&&onScreen(b));
  await until(initialChat,'visible initial chat row');await frame();await frame();assert(initialChat(),'initial chat control disappeared before input');reports.initialControl={visible:true,paintOpportunityFrames:2,readyAtMs:performance.now(),fonts:document.fonts.status};
@@ -481,7 +482,16 @@ try {
    if(!control(/^Your devices/))await tap('settings.enter-'+suite,button(innerWidth>=1024?'Settings':/You$/),()=>!!control(/^Your devices/),'settings section list visible');
    if(!visibleText(title)){const b=name==='Profile'?buttons().find(b=>!b.closest('nav')&&[...b.querySelectorAll('span')].some(s=>s.textContent===me.label)):control(new RegExp('^'+name));await tap('settings.section-'+name.toLowerCase().replaceAll(' ','-'),b,()=>visibleText(title),'exact '+title+' heading visible');}
   };
-  const chat=async()=>{await tap(suite+'.open-chat',initialChat(),()=>onScreen(root.querySelector('[data-part="timeline"]')),'exact conversation timeline visible');if(isolateDrafts){const field=active('[data-part="composer-field"] textarea');assert(field?.value===''&&!root.textContent.includes('Topic unavailable'),'other synthetic workspace draft contaminated this fresh mount');reports.workspaceIsolation.cleanComposerVerified=true;}};
+  const chat=async()=>{
+   const title=p1==='direct'?'Portable Pi':peer.label;
+   const ready=()=>[...root.querySelectorAll('[data-part="conversation"]')].some(section=>section.getAttribute('aria-label')===title&&onScreen(section.querySelector('[data-part="timeline"]')));
+   const opening=()=>[...root.querySelectorAll('section[aria-busy="true"]')].some(section=>section.getAttribute('aria-label')==='Opening '+title&&onScreen(section));
+   // Navigation commits to the selected destination before history arrives.
+   // Preserve the full timeline requirement as a separate confirmed milestone.
+   await tap(suite+'.open-chat',initialChat(),()=>opening()||ready(),'exact selected conversation header/loading state or ready timeline visible',ready);
+   if(chatLoadDelay>=500){const sample=reports.actions.at(-1);assert(sample.feedbackMs<500&&sample.visibleMs>=chatLoadDelay,'slow history must retain distinct immediate navigation and confirmed history milestones');}
+   if(isolateDrafts){const field=active('[data-part="composer-field"] textarea');assert(field?.value===''&&!root.textContent.includes('Topic unavailable'),'other synthetic workspace draft contaminated this fresh mount');reports.workspaceIsolation.cleanComposerVerified=true;}
+  };
   const text=()=>active('[data-part="composer-field"] textarea');
   const more=()=>control('Add to message');
   const plus=async id=>{await retire();await tap(id,more(),()=>!!control(/^Photo or file/),'composer menu choices visible');};
