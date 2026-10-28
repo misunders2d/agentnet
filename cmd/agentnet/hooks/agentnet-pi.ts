@@ -94,6 +94,20 @@ export default function (pi: any) {
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let lock: Promise<unknown> = Promise.resolve();
 	let owner: any;
+    const currentNotices = new Set<string>();
+    // Native history stays intact and expandable. Only this process/session's
+    // newly supplied metadata gets the normal full card on first display.
+    // Returning undefined uses the harness's existing Markdown renderer.
+    pi.registerMessageRenderer?.(KIND, (message: any, options: any, theme: any) => {
+        if (options?.expanded || currentNotices.has(message?.details?.token)) return undefined;
+        return {
+            render(width: number) {
+                const text = "Earlier AgentNet activity (expand to view)".slice(0, Math.max(0, width));
+                return [theme?.fg ? theme.fg("dim", text) : text];
+            },
+            invalidate() {},
+        };
+    });
     let nativeWatcher: fs.FSWatcher | undefined;
     let delivery: any;
     let liveLock: Promise<unknown> = Promise.resolve();
@@ -128,6 +142,7 @@ export default function (pi: any) {
         const prior = owner, ctx = ctxRef;
         ctx?.ui?.setStatus?.("agentnet", undefined);
         generation++;
+        currentNotices.clear();
         stopWatching();
         nativeWatcher?.close(); nativeWatcher = undefined;
         clearInheritance(); owner = undefined; delivery = undefined;
@@ -232,6 +247,7 @@ export default function (pi: any) {
 			if (!r.text) return;
 			const token = randomUUID();
 			const how = show(r.text, { token });
+			if (how) currentNotices.add(token);
 			if (!how || !r.ack) return;
 			pending.set(token, r.ack); reconcile(ctxRef, false);
 		});
@@ -290,6 +306,7 @@ export default function (pi: any) {
 		stopChildren();
 		ctxRef?.ui?.setStatus?.("agentnet", undefined);
 		pending.clear();
+		currentNotices.clear();
 		deferred = false;
 		generation++;
 		ctxRef = ctx;
