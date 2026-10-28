@@ -695,13 +695,15 @@ class UpdaterInstrumentation : Instrumentation() {
         check(input.has("overview") && input.has("view")) { "Invalid synthetic latency input." }
         val field = MainActivity::class.java.getDeclaredField("web").apply { isAccessible = true }
         phase("latency-webview-before")
-        val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
+        val readinessStarted = System.nanoTime()
+        val end = readinessStarted + TimeUnit.SECONDS.toNanos(30)
         var page: WebView? = null
         while (page == null && System.nanoTime() < end) {
             runOnMainSync { page = field.get(activity) as? WebView }
             if (page == null) Thread.sleep(100)
         }
         val web = checkNotNull(page) { "The native WebView did not open." }
+        val webViewReadyAt = System.nanoTime()
         fun failureState(): JSONObject {
             val state = JSONObject()
             try {
@@ -729,15 +731,42 @@ class UpdaterInstrumentation : Instrumentation() {
             if (!ready) Thread.sleep(100)
         }
         check(ready) { "The current authenticated local Go-host assets did not load." }
+        val assetsReadyAt = System.nanoTime()
         phase("latency-ready-after")
         val startupFocus = JSONObject()
         if (latencySuite == "unread") {
             // Observe real startup ownership before any fixture DOM or click;
             // never request native or document focus from the instrumentation.
             var nativeFocused = false
+            val focusStarted = System.nanoTime()
+            var focusPolls = 0
             while (!nativeFocused && System.nanoTime() < end) {
+                focusPolls++
                 runOnMainSync { nativeFocused = activity.hasWindowFocus() && web.hasFocus() }
                 if (!nativeFocused) Thread.sleep(25)
+            }
+            if (!nativeFocused) {
+                val failedAt = System.nanoTime()
+                val diagnostic = JSONObject().put("suite", latencySuite)
+                    .put("webViewReadyMs", TimeUnit.NANOSECONDS.toMillis(webViewReadyAt - readinessStarted))
+                    .put("assetsReadyMs", TimeUnit.NANOSECONDS.toMillis(assetsReadyAt - readinessStarted))
+                    .put("focusStartedMs", TimeUnit.NANOSECONDS.toMillis(focusStarted - readinessStarted))
+                    .put("focusWaitMs", TimeUnit.NANOSECONDS.toMillis(failedAt - focusStarted))
+                    .put("focusPolls", focusPolls)
+                    .put("deadlineRemainingMs", TimeUnit.NANOSECONDS.toMillis(end - failedAt))
+                runOnMainSync {
+                    val owner = activity.currentFocus
+                    diagnostic.put("native", JSONObject()
+                        .put("activityWindowFocus", activity.hasWindowFocus())
+                        .put("webViewFocus", web.hasFocus())
+                        .put("webViewAttached", web.isAttachedToWindow)
+                        .put("webViewShown", web.isShown)
+                        .put("focusOwnerClass", owner?.javaClass?.name ?: JSONObject.NULL)
+                        .put("focusOwnerId", owner?.id ?: JSONObject.NULL)
+                        .put("focusOwnerIsWebView", owner === web))
+                }
+                diagnostic.put("state", failureState())
+                result.putString("stream", result.getString("stream").orEmpty() + "LATENCY_STARTUP_FOCUS_JSON=$diagnostic\n")
             }
             check(nativeFocused) { "Visible Activity did not give its document native focus" }
             check(javascript(web, "document.hasFocus() && document.visibilityState === 'visible' && window.__agentnetAndroid.visible()") == "true") {

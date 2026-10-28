@@ -656,9 +656,20 @@ func TestBrowserEngineLinksAsNewDevice(t *testing.T) {
 	if m.ID == "" || m.LID == "" || m.Key != bob.Self().Fingerprint() {
 		t.Fatal("exact signed logical reference missing")
 	}
-	if err = laptop.MarkUnread(m.ID, []string{m.ID}); err != nil {
+	// Background history/read-sync commits can legitimately invalidate all
+	// three scope snapshots. That refusal precedes any write; retry the exact
+	// selected message, stopping after the first accepted operation.
+	waitFor(t, "the exact unread gesture after concurrent synchronization", func() bool {
+		err := laptop.MarkUnread(m.ID, []string{m.ID})
+		if err == nil {
+			return true
+		}
+		if err.Error() == "attention: this chat changed; try again" {
+			return false
+		}
 		t.Fatal(err)
-	}
+		return false
+	})
 	marked := goMessage(laptop, conv, "bob after")
 	if !marked.Unread || marked.Attention == nil || marked.Attention.Writer != laptop.Self().Fingerprint() {
 		t.Fatal("Go unread generation missing")
