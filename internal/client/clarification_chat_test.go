@@ -91,7 +91,53 @@ func TestClarificationPromptReservesNeedsHumanForPermission(t *testing.T) {
 			if !strings.Contains(prompt, "tag") || !strings.Contains(prompt, "ordinary") {
 				t.Error("ordinary clarification has no tagged-chat instruction")
 			}
+			if strings.Contains(prompt, "environment failure is needs-human") || strings.Contains(prompt, "needs its usual OK here") {
+				t.Error("another prompt section invents environment/task authorization")
+			}
+			for _, want := range []string{"Missing checkout or session context is not a permission denial", "within the requested scope and native policy", "exact failed operation and evidence", "who can fix it", "do not repeat unexplained environment jargon"} {
+				if !strings.Contains(prompt, want) {
+					t.Errorf("missing context-reporting requirement %q", want)
+				}
+			}
 		})
+	}
+}
+
+// Missing working/session context can be reported to the same owner on their
+// other device. It neither invents an approval nor restarts the original work.
+// The stub supplies a factual environment result; this checks routing, not a
+// claim that a real model always follows the prompt correctly.
+func TestOwnLinkedHumanEnvironmentReport(t *testing.T) {
+	st := installStub(t, "environment")
+	t.Setenv("HERDR_ENV", "")
+	w := newWorld(t, "")
+	persons(t, w.alice)
+	runAgent(t, w.alice)
+	phone := linked(t, w.alice)
+	setResponder(t, w.alice, "stub", st.dir, time.Minute)
+	for _, kind := range []string{envelope.KindQuestion, envelope.KindTask} {
+		q, err := phone.SendMessage(tctx(t), Outgoing{To: w.alice.Address, Kind: kind, Body: "Read-only preflight: inspect available checkout and session capabilities; do not start or modify work."})
+		if err != nil {
+			t.Fatal(err)
+		}
+		waitState(t, w.alice, q.ID, stateAnswered)
+		eventually(t, "correlated environment report reaches own device", func() bool {
+			m, ok := findReply(phone, q.ID)
+			return ok && m.Kind == replyKind(kind) && m.Status == envelope.StatusDone && strings.Contains(m.Body, "No changes made")
+		})
+		prompt := mustRead(t, st.log+".stdin")
+		for _, want := range []string{"your owner's own", "Missing checkout or session context is not a permission denial", "do not start or modify work"} {
+			if !strings.Contains(prompt, want) {
+				t.Errorf("own-device preflight omitted %q", want)
+			}
+		}
+		items, err := w.alice.Review()
+		if err != nil || len(items) != 0 {
+			t.Fatalf("ordinary environment result became attention: %d %v", len(items), err)
+		}
+	}
+	if st.count() != 2 {
+		t.Fatalf("own question/task ran %d times", st.count())
 	}
 }
 

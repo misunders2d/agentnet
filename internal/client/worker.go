@@ -1163,6 +1163,7 @@ func clarificationPrompt(owner string, mention ...string) string {
 		tag = "tagging the intended person: the requester's exact mention is " + mention[0] + " (in a group AgentNet starts your reply with it), and anyone else is tagged with their own exact mention"
 	}
 	return "For ordinary missing information or business choices, ask a normal question in this authorized chat, " + tag + ". Their answer, tagged or sent with Reply on your question, continues the same requested outcome and context; other untagged messages are background context and do not start work. Do not use a separate blocking decision or require a manual Mark as handled step for an ordinary clarification.\n" +
+		"Missing checkout or session context is not a permission denial. Inspect available capabilities within the requested scope and native policy; if context is still unavailable, report the exact failed operation and evidence in the chat, who can fix it and their supported next action (or nothing). Ask only for missing information; do not repeat unexplained environment jargon or replay completed work.\n" +
 		fmt.Sprintf("Only when a concrete native permission or required sender/task authorization prevents progress, make your first line exactly %q and describe the exact blocked operation and required authorization for %s; nothing will be sent back. Do not use this marker for ordinary clarification or business choices.\n", needsHumanMarker, owner)
 }
 
@@ -1213,7 +1214,7 @@ const requestIntentPromptText = "The question/task label is transport metadata, 
 func proposePrompt(asker string) string {
 	return fmt.Sprintf("If the requester must explicitly choose additional work beyond their request, do not assume that choice: "+
 		"make your first line exactly %q and write below it only the exact, self-contained task that would do it, as you would give it to an agent that sees nothing else. "+
-		"This only proposes that additional work: %s may confirm it as a task, which then needs its usual OK here. A native permission or environment failure is needs-human; proposing the unchanged work cannot fix it.\n", proposeMarker, asker)
+		"This only proposes that additional work: %s may confirm it as a task under the recipient's existing task policy and native permissions. Proposing unchanged work cannot fix a native permission denial or unavailable environment; use the clarification and permission rules below.\n", proposeMarker, asker)
 }
 
 // PauseForAppUpdate refuses active work and fences new claims until resumed.

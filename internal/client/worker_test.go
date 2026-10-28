@@ -31,6 +31,7 @@ case "$*" in *--human*) printf 'AGENTNET: NEEDS-HUMAN\nwhich budget applies?\n';
 case "$STUB_MODE" in
 clarify) printf 'AGENTNET: NEEDS-HUMAN\nWhich branch?\n' ;;
 askback) if grep -q "Riga" "$STUB_LOG.stdin"; then echo "Riga: bring a jacket"; else echo "Which city?"; fi ;;
+environment) echo "Preflight: this directory is not a checkout and no target session is selected. No changes made. Requester: which checkout should be inspected?" ;;
 sleep) sleep 30 & echo $! > "$STUB_LOG.child"; wait ;;
 slow) sleep 1; echo "stub answer" ;;
 propose) printf 'AGENTNET: PROPOSE-TASK\nUpdate CHANGELOG.md: add the 0.8.0 entry.\n' ;;
