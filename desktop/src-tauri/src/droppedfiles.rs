@@ -89,8 +89,10 @@ pub async fn agentnet_dropped_file(window: WebviewWindow, id: String, discard: b
 #[cfg(target_os = "linux")]
 pub fn install(window: &WebviewWindow) {
     let target = window.clone();
-    window.on_webview_event(move |event| {
-        let tauri::WebviewEvent::DragDrop(tauri::DragDropEvent::Drop { paths, position }) = event else { return };
+    // The locked Tauri runtime routes a WindowContent webview's OS drops
+    // to WindowEvent; WebviewEvent is only for child webviews.
+    window.on_window_event(move |event| {
+        let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, position }) = event else { return };
         let Ok(page) = check_page(&target) else { return };
         let position = position.to_logical::<f64>(target.scale_factor().unwrap_or(1.0));
         let result = target.state::<crate::Shell>().drops.lock().unwrap().register(paths, &page);

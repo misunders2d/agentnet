@@ -55,10 +55,22 @@ const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://local
    const row=page.locator('[data-mid]').last();await row.scrollIntoViewIfNeeded();await row.hover();
    let trigger=kind==='topics'?page.getByRole('button',{name:'Open all topics fixture',exact:true}):row.getByRole('button',{name:kind==='reactions'?'React':'More actions',exact:true});await trigger.scrollIntoViewIfNeeded();
    if(kind==='delete'){await trigger.click();trigger=page.getByRole('menuitem',{name:'Delete…',exact:true});}
-   await trigger.evaluate(el=>el.addEventListener('click',()=>{fixture.popupStart=performance.now();const raf=requestAnimationFrame,cancel=cancelAnimationFrame,pending=new Map();let seq=1000000;window.requestAnimationFrame=f=>{const id=++seq;pending.set(id,f);return id;};window.cancelAnimationFrame=id=>pending.delete(id);fixture.popupFrame=false;requestAnimationFrame(()=>fixture.popupFrame=true);fixture.resumePopup=()=>{window.requestAnimationFrame=raf;window.cancelAnimationFrame=cancel;for(const f of pending.values())raf(f);pending.clear();};},{capture:true,once:true}));
+   await trigger.evaluate(el=>{
+    fixture.popupTrigger=el;fixture.popupInput=[];
+    for(const type of ['pointerdown','pointerup','click'])document.addEventListener(type,e=>fixture.popupInput.push({type,at:performance.now(),trusted:e.isTrusted,expected:e.composedPath().includes(el),target:{tag:e.target.tagName,role:e.target.getAttribute('role'),label:e.target.getAttribute('aria-label'),id:e.target.id}}),true);
+    el.addEventListener('click',()=>{fixture.popupStart=performance.now();const raf=requestAnimationFrame,cancel=cancelAnimationFrame,pending=new Map();let seq=1000000;window.requestAnimationFrame=f=>{const id=++seq;pending.set(id,f);return id;};window.cancelAnimationFrame=id=>pending.delete(id);fixture.popupFrame=false;requestAnimationFrame(()=>fixture.popupFrame=true);fixture.resumePopup=()=>{window.requestAnimationFrame=raf;window.cancelAnimationFrame=cancel;for(const f of pending.values())raf(f);pending.clear();};},{capture:true,once:true});
+   });
    const rect=await trigger.boundingBox();await page.mouse.click(rect.x+rect.width/2,rect.y+rect.height/2);
    const selector=kind==='menu'?'[role=menu]':kind==='delete'?'[role=alertdialog]':'[role=dialog]';
-   await page.waitForFunction(selector=>{const el=document.querySelector('#portals '+selector);if(!el?.getClientRects().length)return false;const rect=el.getBoundingClientRect();if(rect.right<=0||rect.left>=innerWidth||rect.bottom<=0||rect.top>=innerHeight)return false;for(let p=el;p&&p.nodeType===1;p=p.parentElement){const s=getComputedStyle(p);if(s.opacity==='0'||s.visibility==='hidden'||s.display==='none')return false;}fixture.popupVisible=performance.now();return true;},selector,{polling:10,timeout:500});
+   try{
+    await page.waitForFunction(selector=>{const el=document.querySelector('#portals '+selector);if(!el?.getClientRects().length)return false;const rect=el.getBoundingClientRect();if(rect.right<=0||rect.left>=innerWidth||rect.bottom<=0||rect.top>=innerHeight)return false;for(let p=el;p&&p.nodeType===1;p=p.parentElement){const s=getComputedStyle(p);if(s.opacity==='0'||s.visibility==='hidden'||s.display==='none')return false;}fixture.popupVisible=performance.now();return true;},selector,{polling:10,timeout:500});
+   }catch(error){
+    const diagnostic=await page.evaluate(selector=>{
+     const describe=el=>{const s=getComputedStyle(el);return{tag:el.tagName,id:el.id,role:el.getAttribute('role'),label:el.getAttribute('aria-label'),connected:el.isConnected,expanded:el.getAttribute('aria-expanded'),rect:el.getBoundingClientRect().toJSON(),opacity:s.opacity,visibility:s.visibility,display:s.display,transform:s.transform};};
+     return{at:performance.now(),input:fixture.popupInput,start:fixture.popupStart??null,framePassed:fixture.popupFrame??null,expectedTrigger:describe(fixture.popupTrigger),popups:[...document.querySelectorAll('#portals '+selector)].map(el=>{const ancestors=[];for(let p=el;p&&p.nodeType===1;p=p.parentElement)ancestors.push(describe(p));return ancestors;})};
+    },selector);
+    console.error(JSON.stringify({popupFailure:{engine,kind,width,reducedMotion,clickPoint:{x:rect.x+rect.width/2,y:rect.y+rect.height/2},pageErrors:errors,...diagnostic}}));throw error;
+   }
    const result=await page.evaluate(()=>({feedbackMs:fixture.popupVisible-fixture.popupStart,framePassed:fixture.popupFrame}));assert(result.feedbackMs<500);assert.equal(result.framePassed,false,'animation callbacks must remain held');
    if(kind==='topics')await page.getByRole('dialog',{name:'All topics',exact:true}).getByRole('button',{name:/^Done\b/}).waitFor();
    if(kind==='menu')await page.getByRole('menuitem',{name:'Details',exact:true}).waitFor();
