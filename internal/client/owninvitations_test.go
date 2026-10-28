@@ -2,6 +2,7 @@ package client
 
 import (
 	"encoding/json"
+	"fmt"
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
 	"net/http"
@@ -13,7 +14,15 @@ import (
 func TestOwnInvitationVisibleOnLinkedDevice(t *testing.T) {
 	w, p := groupLifecycleFixture(t, false)
 	stop := runAgent(t, w.alice)
-	phone := linked(t, w.alice)
+	phone, awaited, _ := linkPhone(t, w.alice, "phone")
+	req := pendingLink(t, w.alice)
+	if err := w.alice.DecideLink(tctx(t), req.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if out := <-awaited; out.err != nil {
+		t.Fatal(out.err)
+	}
+	stopPhone := runAgent(t, phone)
 	stop()
 	inv := groupLifecycleInvite(t, w, p, nil)
 	w.alice.convWork.due(convHistory)
@@ -54,14 +63,14 @@ func TestOwnInvitationVisibleOnLinkedDevice(t *testing.T) {
 			if n != 0 {
 				t.Fatal("mirror became executable invitation intent")
 			}
-			testOwnInvitationUpdates(t, w, phone, inv, carriers[0])
+			testOwnInvitationUpdates(t, w, phone, inv, carriers[0], stopPhone)
 			return
 		}
 	}
 	t.Fatalf("own pending invitation absent on linked device: got %d rows", len(got))
 }
 
-func testOwnInvitationUpdates(t *testing.T, w *world, phone *Agent, inv GroupInvitationInfo, first envelope.Envelope) {
+func testOwnInvitationUpdates(t *testing.T, w *world, phone *Agent, inv GroupInvitationInfo, first envelope.Envelope, stopPhone func()) {
 	t.Helper()
 	if first.Attn {
 		t.Fatal("inert view requested notification")
@@ -140,9 +149,23 @@ func testOwnInvitationUpdates(t *testing.T, w *world, phone *Agent, inv GroupInv
 	if err != nil || key.Fingerprint() != phone.Self().Fingerprint() {
 		t.Fatal("invitation reader key", key.Fingerprint(), err)
 	}
+	// The live phone was needed for linking and the positive sync checks.
+	// Join its owned daemon before simulating another reader version: its
+	// real capability publisher must not overwrite these fixture records.
+	waitNamedAgentCaps(t, phone)
+	stopPhone()
 	signCapsAfter(t, phone, []string{protocol.CapEnv2, protocol.CapPerson, protocol.CapRoom})
 	if handled, allowed, err := again.mayDeliverInvitationSync(latest); err != nil || !handled || allowed {
-		t.Fatalf("old reader allowed %v %v %v", handled, allowed, err)
+		label, device, _ := protocol.SplitAddress(phone.Address)
+		var profile protocol.Profile
+		profileErr := again.hub.do(tctx(t), "GET", "/v1/agents/"+label+"/"+device+"/profile", nil, &profile)
+		var records []string
+		for _, raw := range profile.Caps {
+			if rec, e := protocol.ParseCapsRecord(raw); e == nil {
+				records = append(records, fmt.Sprintf("ts=%d own2=%v", rec.TS, rec.Reads(protocol.CapOwnSyncV2)))
+			}
+		}
+		t.Fatalf("old reader allowed %v %v %v; sessions=%d caps=%v profileErr=%v", handled, allowed, err, len(profile.Sessions), records, profileErr)
 	}
 	var state, why string
 	if err := again.store.db.QueryRow(`SELECT state,coalesce(error,'') FROM outbox WHERE id=?`, latest.ID).Scan(&state, &why); err != nil || state != stateConvWaiting || !strings.HasPrefix(why, WaitPeerUpdate) {

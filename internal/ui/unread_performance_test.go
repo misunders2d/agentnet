@@ -181,6 +181,20 @@ func unreadHistoryFixture(t *testing.T) (*client.Agent, *sql.DB, string, string,
 	})
 	stopA()
 	stopB()
+	// Run has ended, but its independent outbox sender can still commit.
+	// Close joins that sender; reopen the same enrolled database so seeding
+	// and scope measurements have no leftover fixture writer.
+	if err := alice.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := bob.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := client.Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alice = reopened // the registered cleanup closes the reopened instance
 	return alice, db, dm.ID, direct.ID, bob.Self().Fingerprint()
 }
 

@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.Instrumentation
 import android.content.Intent
 import android.os.Bundle
+import android.os.Parcel
 import android.webkit.WebView
 import org.json.JSONObject
 import java.io.File
@@ -59,6 +60,15 @@ class UpdaterInstrumentation : Instrumentation() {
                 phase("latency-before")
                 checkLatency(activity, result)
                 phase("latency-after")
+                // Counts only: distinguish a result-transport failure from a
+                // workload assertion without exposing the retained report.
+                val parcel = Parcel.obtain()
+                val parcelBytes = try { parcel.writeBundle(result); parcel.dataSize() } finally { parcel.recycle() }
+                sendStatus(1, Bundle().apply {
+                    putString("phase", "latency-finish-result-size")
+                    putInt("parcelBytes", parcelBytes)
+                    putInt("streamUtf8Bytes", result.getString("stream").orEmpty().toByteArray(Charsets.UTF_8).size)
+                })
                 phase("finish-before")
                 finish(Activity.RESULT_OK, result); return
             }

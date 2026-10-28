@@ -91,6 +91,11 @@ instrument() {
     stop_fixture || printf 'FIXTURE_STOP_FAILED mode=%s suite=%s\n' "$mode" "${suite:-none}" >> "$output"
   fi
   cat "$output"
+  if [[ $mode == latency ]] && { ! grep -Eq '^INSTRUMENTATION_CODE: -1[[:space:]]*$' "$output" || ! grep -q 'LATENCY_JSON=' "$output"; }; then
+    # A completed workload can lose its final Binder result. Preserve only
+    # relevant system failure tags from this disposable emulator, not all logs.
+    timeout --signal=KILL 20s adb -s "$serial" logcat -d -v brief -s AndroidRuntime:E ActivityManager:W Binder:W JavaBinder:W "*:S" > "$RUNNER_TEMP/android-incomplete-latency-$suite.txt" 2>&1 || true
+  fi
   if (( status != 0 )); then return "$status"; fi
   grep -Eq '^INSTRUMENTATION_CODE: -1[[:space:]]*$' "$output" || return 1
   if [[ $mode == latency ]]; then grep -q 'LATENCY_JSON=' "$output"; fi
