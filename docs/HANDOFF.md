@@ -1,6 +1,6 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
-## October 28 batch — implemented, unreleased
+## v0.9.8 published — October 28
 
 MEL-701 unread projection/retained Review, MEL-700 scoped environment clarification,
 MEL-692 compact historical Pi notices, MEL-702 readable-Drive export gating,
@@ -10,16 +10,37 @@ and native-grant cases cover all four composer implementations at desktop/narrow
 widths. Files stay in the draft until explicit Send. Existing execution authority
 and signed/encrypted transport remain unchanged.
 
-MEL-642 tracks remaining integrated acceptance. Retain passing unchanged checks;
-see [interaction evidence](INTERACTION_COVERAGE.md) and Linear for exact run/source
-records, unresolved test causes and coverage limits. All seventeen Android workload
-families have retained evidence, but no exhaustive every-control matrix, physical
-phone or installed-client activation is claimed. Latest published/deployed release
-remains v0.9.7. Matching gallery candidate targets v0.9.8 and requires final exact-pin
-qualification before publication. The frozen product/gallery pair and retained
-plus targeted results are recorded in the final checkpoint in
-[interaction evidence](INTERACTION_COVERAGE.md). Actual native file feedback is31ms;
-the complete control matrix remains open, so this batch is not released.
+[App v0.9.8](https://github.com/misunders2d/agentnet/releases/tag/v0.9.8) and
+[gallery v2026.10.28.1](https://github.com/misunders2d/agentnet-skins/releases/tag/v2026.10.28.1)
+are public and Latest at 18:35:03/04 UTC, from immutable `f23d0416` / `e0a3a92`.
+Sergey explicitly said "okay, proceed to release" after the unpublished state and
+coverage limits were explained. This release-specific authorization does not
+complete the exhaustive matrix or change standing policy.
+
+Retained native/race checks and affected reruns qualify the frozen source;
+exact-tag mixed-version against v0.9.7 passes in 73.22 s. All seventeen Android workload
+families have retained emulator evidence. Final identical-product gallery CI
+40744449492 passes 173 Node checks with 25 optional skips and all 37 applicable
+runtime groups. Separate local browser-enabled checks pass 321 with zero skips.
+Classic/Holonet also preserve open pickers through same-chat refreshes. Actual
+native Linux drop feedback is 31 ms; no universal latency, exhaustive control matrix,
+physical phone or installed-client activation is claimed. Earlier transient causes
+remain unproven. MEL-642, [interaction evidence](INTERACTION_COVERAGE.md) and
+[the release record](plans/V0_9_8_RELEASE.md) retain exact results and limits.
+
+All twelve public payloads plus SHA256SUMS match the independently qualified draft;
+clean source stamps, original APK signer/ABIs/alignment and AppImage contents pass.
+The actual public gallery parser verifies five packages, 129 files and twenty
+previews across 151 unauthenticated HTTPS requests. Both immutable tags/pin verify.
+
+Hub v0.9.8 starts at 18:47:18 UTC, using the exact public Linux binary. Public HTTPS,
+realm, volume, runtime settings and neighboring service verify; zero restarts.
+A consistent local recovery copy passes byte/ownership/mode equality, schema 25
+integrity and isolated native maintenance. Its 8,940 attachments remain remote
+Drive references; this is not a full portable attachment backup. Recovery stays
+private under `/opt/agentnet-revived/releases/v0.9.8-f23d0416`; rollback changes
+the image only and preserves live data. No user desktop/harness session restarted.
+Publication/deployment does not prove activation on every installed client.
 
 ## v0.9.7 published and Hub deployed — October 27
 

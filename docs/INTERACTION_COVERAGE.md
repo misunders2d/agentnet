@@ -1,6 +1,35 @@
 # Next-release interaction coverage and responsiveness
 
-## October 27 release disposition — current
+## October 28 release disposition — current
+
+Sergey said **"okay, proceed to release"** after being told that the pushed
+implementation was unpublished, exhaustive coverage remained incomplete and
+gallery CI needed review. This authorizes shipping this verified v0.9.8 candidate
+with those limits disclosed; it does not complete the matrix or change policy.
+
+[App v0.9.8](https://github.com/misunders2d/agentnet/releases/tag/v0.9.8) and
+[gallery v2026.10.28.1](https://github.com/misunders2d/agentnet-skins/releases/tag/v2026.10.28.1)
+are public and Latest at 18:35:03/04 UTC, from immutable `f23d0416` and
+`e0a3a92`. The final gallery gate passes on QA-only `cc330d7`, whose product
+trees are identical to the gallery tag: 173 Node checks passed, 25 optional
+skipped, zero failures and all 37 applicable runtime groups passed. Separate
+local browser-enabled checks pass 321 with zero skips. Earlier raw failures
+remain evidence; the unchanged successful Zoom rerun does not establish cause.
+
+All twelve draft payloads and SHA256SUMS pass independent qualification, including
+clean source stamps, original APK signer/ABIs/alignment and AppImage contents.
+Exact-tag mixed-version testing against v0.9.7 passes in 73.22s. All twelve public
+payloads plus SHA256SUMS match the qualified draft. The actual public gallery
+parser verifies five packages, 129 files and twenty previews across 151 requests.
+Hub v0.9.8 starts at 18:47:18 UTC: public HTTPS/exact binary, realm/volume/settings and
+neighbor preservation verify, with zero restarts. The consistent local recovery
+copy is verified; remote Drive references remain in place, so it is not a full
+portable attachment backup. Detailed verification is recorded in
+[the release record](plans/V0_9_8_RELEASE.md).
+No exhaustive control/platform/history matrix, physical-phone qualification or
+activation on every installed client is claimed.
+
+## October 27 release disposition
 
 Sergey explicitly chose **"Ship verified fixes; disclose coverage limits"** after
 being told that the exhaustive every-control/platform/history matrix is incomplete.
@@ -1695,9 +1724,9 @@ matrix is claimed.
 ### Frozen batch qualification checkpoint — October 28
 
 Product candidate is `f23d04169b5ce6e855cdd053441fbd723c9f39be`, paired with
-`agentnet-skins` commit `5a4b26d3acb1fc3bfbe1ef086e1e3e2e7091e445`.
+`agentnet-skins` commit `e0a3a92f8ef2dbebf0204a42525af5dc1d4f89bd`.
 Later core documentation does not change that frozen product or gallery pin.
-Neither candidate is published or installed by this work.
+Publication disposition appears above; installed-client activation is separate.
 
 The real Linux file drop measured 31ms from OS mouse release to the named
 visible attachment, enforcing under1000ms. Conditions: native c5136a68 shell,
@@ -1727,7 +1756,7 @@ unrelated focus alone. The regression fails before the repair and passes after
 at both widths; real Zoom trusted Escape/Write/send/A-B-A also passes without
 forced test focus. No reminder generation or native permission changes.
 
-The exact-pin final npm run passes320 source/browser checks with zero skips and
+The preceding exact-pin npm run passes320 source/browser checks with zero skips and
 36 applicable runtime groups, then fails Zoom touch restoration: the saved device
 conversation remained at Loading after reload. A fresh focused Zoom-touch run
 passes all28 taps, unchanged15s reload assertion, exact root/write checks and
@@ -1739,6 +1768,6 @@ inapplicable entries are excluded, not passes. Previews remain byte-unchanged.
 Full0d run40724329375 completes all18 client race partitions, remaining/UI race,
 six Windows client partitions and native packages. Its original Mac popup and
 Windows installer failures remain visible; focused40727076713 and40728289265 pass.
-No timeout or assertion was weakened. The required complete control/platform/
-history inventory is still incomplete and blocks publication under AGENTS.md.
-Latest public app/gallery remain v0.9.7/v2026.10.27.1.
+No timeout or assertion was weakened. The complete control/platform/history
+inventory remains incomplete. The later explicit release authorization and
+final passing gallery gate are recorded in the current disposition above.
