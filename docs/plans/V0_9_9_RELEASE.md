@@ -1,6 +1,6 @@
 # v0.9.9 corrective release — MEL-709 / MEL-701
 
-Status: implemented; first full qualification found six failures; affected requalification pending. Root owns this checklist,
+Status: frozen product and qualified draft; final macOS native job still running. Publication and Hub switch pending. Root owns this checklist,
 integration, publication, deployment and clean handoff. review_patch alone writes
 MEL-709's internal/client Go changes; review_history alone writes MEL-701's
 disjoint Store and focused UI regressions. Neither edits the other's files.
@@ -110,3 +110,81 @@ The first candidate's exact-pin gallery gate passes 321 Node/browser tests, zero
 skips/failures, and all 37 applicable runtime groups. Android changes require a
 new core source pin and another matching-gallery qualification before publication.
 No user app, desktop or native session has been closed or restarted.
+
+## Frozen product, corrected qualification and draft
+
+Immutable application tag `v0.9.9` points to
+`7f15d4578b0bf6dd71fc13c837297914da0a891d`. Gallery tag
+`v2026.10.29.1` points to `04b5f08d8792de5e49a7954cb5e0bc102a5a853d`
+and pins that exact application source. Both tags are pushed; neither release
+is public at this checkpoint. The original native client production code remains
+identical to the eighteen passing race partitions on `bc514a24`.
+
+QA-only commits `be7735b6`, `c9295f49` and `617f9af3` change just three test
+files: the Android-host rendered fixture, browser-engine test and Android
+instrumentation. All other 2,200 tracked files are identical to the frozen
+candidate (comparison SHA256
+`1e506da5cd66087b351592bace770fc42d5a5fcd252ac0028c1a246646084b38`).
+
+- Windows could not invoke the Unix `.bin/tailwindcss` launcher. Calling the
+  installed JavaScript CLI through Node fixes this portability failure. The
+  actual Android/reaction fixtures pass on Windows, 8.58/6.02 s.
+- The first macOS Android-host fixture timed the driver before click
+  actionability and through three sequential IPC waits. The original actual
+  renderer latency is unknown. A controlled 1,100 ms Node-only delay yields
+  1,236 ms driver observation while real browser feedback/frame are 33/35 ms.
+  Measure trusted browser input, visible exact Sending row/empty draft and
+  frame opportunity separately; both renderer bounds remain strictly below
+  1,000 ms. All fourteen cases pass on Linux, macOS and Windows in
+  [40779722977](https://github.com/misunders2d/agentnet/actions/runs/40779722977).
+  Successful wrapper output does not expose numerical remote maxima; do not
+  invent them. Local corrected-clock feedback is 28.6–46.5 ms.
+- UI race 0's browser-engine fixture assumes MarkUnread cannot return its
+  documented prewrite scope-conflict refusal during concurrent history/read
+  commits. The guard and original fixture are byte-identical to v0.9.8;
+  existing deterministic guard tests prove three refused snapshots and no write.
+  Retry only that exact refusal, the same captured selected ID, and the existing
+  30 s/50 ms wait. All guards/assertions remain. The exact race passes locally
+  in 31.94 s; full UI race 0 passes in
+  [40779995816](https://github.com/misunders2d/agentnet/actions/runs/40779995816),
+  including the formerly failing case (10.17 s). Both CLI and all three UI race
+  partitions now pass; all eighteen client race partitions remain retained.
+- Android's full run passes sixteen workloads but fails unread startup native
+  focus before DOM/input/timing. Add failure-only phase/deadline/poll/native/DOM
+  diagnostics, preserving its shared 30 s deadline and focus assertion. The exact
+  unread workload passes in
+  [40779999648](https://github.com/misunders2d/agentnet/actions/runs/40779999648):
+  three actions, maximum 207.1 ms. The earlier focus cause remains unproved.
+  Together all seventeen workloads execute 534 measured actions, every feedback
+  bound passes, maximum 503.6 ms. This is synthetic DOM input in actual
+  MainActivity WebView 124 on an owned SDK 35 x86_64 emulator, CSS 320×592/DPR 1,
+  reduced motion and 1,000 people; it excludes OS dispatch and physical devices.
+
+The final exact-pin gallery `npm test` passes 321 Node/browser checks with zero
+failures/skips and all 37 applicable runtime groups; five inapplicable groups
+remain excluded. Five packages/129 files and all twenty unchanged previews
+verify. The disposable company is removed; raw evidence remains private.
+
+Real mixed-version testing on the clean frozen product against published v0.9.8
+passes 92.784 s with no skip. Windows' exact three-parent recovery batch passes
+33.115 s; earlier published baseline passes 40.962 s without establishing the
+original candidate failure's cause. All three desktop qualifications and Linux/
+Windows native checks remain retained for unchanged paths. Mac WebKit passes;
+its independent full native Go suite is still running in
+[40779298515](https://github.com/misunders2d/agentnet/actions/runs/40779298515).
+
+Draft build [40780502512](https://github.com/misunders2d/agentnet/actions/runs/40780502512)
+passes all program, three installer and Android jobs. Each build checks out the
+immutable tag, independently of dispatch's QA-only HEAD. Independent draft
+qualification passes all twelve payload hashes plus SHA256SUMS, metadata digests,
+six clean Go source/architecture stamps, Linux executable and AppImage sidecar/
+media contents, and Android's original signer, version code 9009, two ABIs and
+16 KiB alignment. No installation or publication follows merely from this pass.
+
+Publication follows the owner's direction to ship verified fixes with coverage
+limits disclosed. The exhaustive every-control/platform/history matrix and
+physical-device evidence remain incomplete and are not passing claims. The
+original MEL-701 thirteen-message recurrence remains causally unproved. Four
+live MEL-709 records await safe new-daemon activation; only connected v0.9.9
+proves startup recovery has run. An app-managed home has no supported daemon-only
+update override, so no user GUI/harness session may be closed for verification.

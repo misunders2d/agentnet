@@ -59,6 +59,15 @@ feedback; baseline held-POST case fails. Native Android qualification is pending
 Reaction fixture reset now awaits its exact rendered generation; sixteen cases
 pass without changing the product assertion, timing bound or input method.
 
+Final product freeze `7f15d457`: corrected rendered timing executes fourteen
+Android-host cases on all three OSes, enforcing both visible feedback and frame
+opportunity below 1,000 ms from trusted browser input. Driver overhead is recorded
+separately. Android emulator's seventeen workloads collectively pass 534 measured
+synthetic-input actions, maximum 503.6 ms; OS dispatch is excluded. All race
+partitions and exact-pin skins (321 Node/browser checks, 37 runtime groups) pass.
+Original setup/timing/CAS failures and QA corrections remain in the release record.
+Mac WebKit passes; full native macOS is pending. The verified draft is unpublished.
+
 Full control/platform/history inventory and physical-device coverage remain
 incomplete. This is candidate evidence, not a published repair.
 

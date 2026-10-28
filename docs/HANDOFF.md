@@ -31,6 +31,13 @@ CLI races split the complete list without raising 600 s. Windows three-case
 candidate diagnosis, skipped macOS native/WebKit, remaining non-client/UI races,
 native Android and the new exact gallery pin remain required. No new tag,
 publication, deployment or live-state recovery is claimed.
+Frozen tag v0.9.9 is `7f15d457`; matching gallery v2026.10.29.1 is `04b5f08`
+and passes 321 checks plus all 37 applicable runtime groups. QA-only commits
+through `617f9af3` preserve the product. All race partitions and Android's
+seventeen workloads pass (534 measured synthetic-input actions, max 503.6 ms).
+Corrected pending-feedback fixtures pass all three OSes; all draft assets verify.
+Only macOS's independent full native job remains before publication; WebKit passes.
+No release is public and no Hub switch or live four-record recovery is claimed.
 See [release checklist](plans/V0_9_9_RELEASE.md) and [interaction evidence](INTERACTION_COVERAGE.md).
 
 ## v0.9.8 published — October 28
