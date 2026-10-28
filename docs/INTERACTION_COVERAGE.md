@@ -1690,3 +1690,55 @@ These are candidate verification records, not publication or installed-client
 activation. Final gallery qualification and the exhaustive interaction inventory
 remain separate acceptance requirements. No complete control/platform/history
 matrix is claimed.
+
+
+### Frozen batch qualification checkpoint — October 28
+
+Product candidate is `f23d04169b5ce6e855cdd053441fbd723c9f39be`, paired with
+`agentnet-skins` commit `5a4b26d3acb1fc3bfbe1ef086e1e3e2e7091e445`.
+Later core documentation does not change that frozen product or gallery pin.
+Neither candidate is published or installed by this work.
+
+The real Linux file drop measured 31ms from OS mouse release to the named
+visible attachment, enforcing under1000ms. Conditions: native c5136a68 shell,
+current Comic, GTK3.24.52/WebKit2.54.1, fresh1440x900 Xvfb display,1200x800 window,
+normal animation and the full gallery suite running concurrently. A timestamp
+immediately before trusted mouseup and a MutationObserver/frame visibility check
+measured local feedback; draft remained intact and upload/send counts were zero.
+Explicit Send preserved exact34bytes and one request, held pending deliberately.
+All owned processes stopped; no owner's display/session was used.
+
+File-drop counterpart inspection reused Telegram Web A revision
+`f67a40879a7d78c2683ec5a296cf55bc22417d56`:
+[DropArea.handleFilesDrop](https://github.com/Ajaxy/telegram-tt/blob/f67a40879a7d78c2683ec5a296cf55bc22417d56/src/components/middle/composer/DropArea.tsx)
+selects FileList/item files for the composer;
+[useAttachmentModal](https://github.com/Ajaxy/telegram-tt/blob/f67a40879a7d78c2683ec5a296cf55bc22417d56/src/components/middle/composer/hooks/useAttachmentModal.ts)
+retains uniquely identified preparing items and ignores removed-item completions;
+[Composer.canSendAttachments](https://github.com/Ajaxy/telegram-tt/blob/f67a40879a7d78c2683ec5a296cf55bc22417d56/src/components/common/Composer.tsx)
+separates preparation from explicit Send. AgentNet adapts that flow through its
+existing draft, attachment and staging components. The bounded native grant is
+required only because the actual Linux WebKit drop supplied no File objects;
+no Telegram dependency, new transport or background service was introduced.
+
+Gallery qualification exposed a separate focus bug: background reminder repaint
+removed the focused control, so Zoom Escape reached the page body. All three
+standalone reminder renderers preserve the same row's owned focus and leave
+unrelated focus alone. The regression fails before the repair and passes after
+at both widths; real Zoom trusted Escape/Write/send/A-B-A also passes without
+forced test focus. No reminder generation or native permission changes.
+
+The exact-pin final npm run passes320 source/browser checks with zero skips and
+36 applicable runtime groups, then fails Zoom touch restoration: the saved device
+conversation remained at Loading after reload. A fresh focused Zoom-touch run
+passes all28 taps, unchanged15s reload assertion, exact root/write checks and
+zero page errors. Redacted request diagnostics remain; original transient cause
+is unproven. This is retained plus targeted evidence for37 applicable runtime
+groups, not a claim that the original full command exited successfully. Five
+inapplicable entries are excluded, not passes. Previews remain byte-unchanged.
+
+Full0d run40724329375 completes all18 client race partitions, remaining/UI race,
+six Windows client partitions and native packages. Its original Mac popup and
+Windows installer failures remain visible; focused40727076713 and40728289265 pass.
+No timeout or assertion was weakened. The required complete control/platform/
+history inventory is still incomplete and blocks publication under AGENTS.md.
+Latest public app/gallery remain v0.9.7/v2026.10.27.1.

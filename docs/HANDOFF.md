@@ -16,7 +16,10 @@ records, unresolved test causes and coverage limits. All seventeen Android workl
 families have retained evidence, but no exhaustive every-control matrix, physical
 phone or installed-client activation is claimed. Latest published/deployed release
 remains v0.9.7. Matching gallery candidate targets v0.9.8 and requires final exact-pin
-qualification before publication.
+qualification before publication. The frozen product/gallery pair and retained
+plus targeted results are recorded in the final checkpoint in
+[interaction evidence](INTERACTION_COVERAGE.md). Actual native file feedback is31ms;
+the complete control matrix remains open, so this batch is not released.
 
 ## v0.9.7 published and Hub deployed — October 27
 
