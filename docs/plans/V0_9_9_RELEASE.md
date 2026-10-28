@@ -1,6 +1,6 @@
 # v0.9.9 corrective release — MEL-709 / MEL-701
 
-Status: frozen product and qualified draft; final macOS native job still running. Publication and Hub switch pending. Root owns this checklist,
+Status: published, Hub deployed, affected client automatically activated and four stuck records recovered. Final clean audit recorded below. Root owns this checklist,
 integration, publication, deployment and clean handoff. review_patch alone writes
 MEL-709's internal/client Go changes; review_history alone writes MEL-701's
 disjoint Store and focused UI regressions. Neither edits the other's files.
@@ -13,13 +13,13 @@ Latest inspected published app is v0.9.8; verify again before choosing the tag.
 
 | ID | Required outcome | Acceptance evidence | Owner | State | Evidence |
 |---|---|---|---|---|---|
-| T1 | Exact native steering reaches and changes the active admitted run once | Owned native Codex consumption plus focused direct/group and completion/cancellation race regressions | review_patch + verifier | implemented | Native Codex53.46s and focused direct/group checks pass; full qualification pending |
-| T2 | Absorbed corrections acquire truthful terminal/result linkage | Success, cancellation, failure, uncertain acceptance and interruption; no blanket answered state or cross-attempt completion | review_patch | implemented | RED cancellation regression; terminal/reaction/manual/attempt cases and corrective review pass |
-| T3 | Stuck shipped records have safe supported recovery | Exact legacy fixtures; no replay/manual SQL rewrite; truthful disposition of four identified live records when safe | review_patch + root | implemented | Exact legacy fixtures and conservative recovery pass; four live records inspected read-only, recovery awaits activation |
-| T4 | Linked Pending/status/attention converge and stay cleared | Existing signed updates, duplicate/reconnect/restart/stale-status regressions; newer work preserved | review_patch + verifier | implemented | Pending/attention projection and linked reader restart/stale/duplicate checks pass 2.662 s |
-| U1 | Confirmed old reads stay cleared; unconfirmed reads report failure and recover | Actual Store rejected/timed-out read, scoped warning/retry and no false clearing; real read/restart/import/read-sync with unseen/newer unread preserved; retained latency/Review evidence | review_history | implemented | Actual Store 12 modes and React/Chromium1280/390 plus canonical build/typecheck pass; original Zenbook 13 recurrence cause remains unverified |
-| R1 | Qualified integrated candidate | Required applicable race/native, exact-pin skins, real mixed-version against latest older tag; retained evidence and skips explicit | root + verifier | agreed | Pending |
-| R2 | Publish, deploy and leave clean | Immutable tags/checksums/public-byte checks, safe existing Hub rollout, Linear/handoff, clean synced repos/no stray worktrees | root + verifier | agreed | Pending |
+| T1 | Exact native steering reaches and changes the active admitted run once | Owned native Codex consumption plus focused direct/group and completion/cancellation race regressions | review_patch + verifier | verified | Real Codex 53.46 s, direct/group regressions and eighteen client race partitions pass |
+| T2 | Absorbed corrections acquire truthful terminal/result linkage | Success, cancellation, failure, uncertain acceptance and interruption; no blanket answered state or cross-attempt completion | review_patch | verified | Exact terminal/result, reaction/manual and attempt/race regressions pass |
+| T3 | Stuck shipped records have safe supported recovery | Exact legacy fixtures; no replay/manual SQL rewrite; truthful disposition of four identified live records when safe | review_patch + root | verified live locally | Connected v0.9.9 automatically recovers four live records: one answered, three cancelled; exact links/read flags verified |
+| T4 | Linked Pending/status/attention converge and stay cleared | Existing signed updates, duplicate/reconnect/restart/stale-status regressions; newer work preserved | review_patch + verifier | verified | Linked reader restart/stale/duplicate/Pending fixture checks pass 2.662 s; no physical-phone visual claim |
+| U1 | Confirmed old reads stay cleared; unconfirmed reads report failure and recover | Actual Store rejected/timed-out read, scoped warning/retry and no false clearing; real read/restart/import/read-sync with unseen/newer unread preserved; retained latency/Review evidence | review_history | verified reproduced failure; historical incident open | Store twelve-mode and rendered recovery pass; warning shipped, original thirteen-message cause unproved |
+| R1 | Qualified integrated candidate | Required applicable race/native, exact-pin skins, real mixed-version against latest older tag; retained evidence and skips explicit | root + verifier | passed with explicit limits | Required standard gates pass with retained/corrected evidence; full matrix/physical limits explicit |
+| R2 | Publish, deploy and leave clean | Immutable tags/checksums/public-byte checks, safe existing Hub rollout, Linear/handoff, clean synced repos/no stray worktrees | root + verifier | published and deployed | Both releases public/Latest, public bytes verified, Hub deployed, affected client recovered; final clean audit |
 
 ## Current evidence
 
@@ -188,3 +188,59 @@ original MEL-701 thirteen-message recurrence remains causally unproved. Four
 live MEL-709 records await safe new-daemon activation; only connected v0.9.9
 proves startup recovery has run. An app-managed home has no supported daemon-only
 update override, so no user GUI/harness session may be closed for verification.
+
+## Publication, deployment and live recovery — complete
+
+The final macOS full native run passes client (1,071.020 s), UI (438.575 s),
+integration (377.692 s) and every other package except one existing CLI fixture.
+That fixture's own status probe can win its daemon's startup lock; a controlled
+private reproduction confirms this source race. The fixture now establishes its
+running-owner precondition through existing RunOptions.Owned, with one original
+10 s total deadline and all process/PATH assertions preserved. Three local race
+repeats pass (14.519 s). Unchanged isolated macOS passes 0.381 s; corrected final
+[40782914579](https://github.com/misunders2d/agentnet/actions/runs/40782914579)
+passes 0.150 s on QA `cb9847a3`. The broader unchanged production startup/status
+probe race remains tracked in MEL-698; it is not repaired by this fixture change.
+No hardware/noise explanation is claimed.
+
+Final QA/evidence HEAD `cb9847a3cdf69c96711089109080294e2f152ec2` differs from
+frozen product `7f15d457` only in four test files and three evidence documents.
+The other 2,196 tracked files are identical (comparison SHA256
+`7982b5a31a1252603a8c7242bd54c8bfb965879354186f9e12568021c089a2ae`).
+All required standard gates now have retained or corrected passing evidence.
+Optional Windows Task Scheduler and physical/exhaustive coverage are not passes.
+The owner-directed verified-fix release retains those disclosed limits.
+
+[App v0.9.9](https://github.com/misunders2d/agentnet/releases/tag/v0.9.9) and
+[gallery v2026.10.29.1](https://github.com/misunders2d/agentnet-skins/releases/tag/v2026.10.29.1)
+are public and Latest at 22:54:50/51 UTC, October 28 (October 29 locally).
+All thirteen public files (twelve payloads plus SHA256SUMS, 511.8 MiB) match the
+independently qualified draft byte-for-byte. Public verification again checks
+clean source/architecture, Linux version, AppImage contents and original Android
+signer/version/ABIs/alignment. The actual frozen-core gallery parser verifies all
+five packages, 129 files and twenty previews across 151 unauthenticated HTTPS
+requests. No private verification artifacts or screenshots are published.
+
+Hub v0.9.9 starts at 23:01:06.92623013 UTC from the exact public Linux binary,
+SHA256 `816a732e407ef1c2a0693f4c3ec9914bfeb214afe9e0383ec3d1209366a1c738`.
+Public HTTPS, realm/volume/settings, running binary/source and neighboring service
+preservation verify; zero restarts. A consistent local volume snapshot passes
+byte/ownership/mode equality, schema 25 integrity and isolated native maintenance.
+Remote Drive attachments remain references; this is not a full portable backup.
+The original upload timed out without touching the service; fetching the same
+public asset directly on the same server and verifying its exact hash recovered
+staging. Rollback retains the old image and preserves live writes.
+
+The affected Zenbook app and daemon automatically activate v0.9.9; supported
+updater check reports the app running that version and read-only daemon status
+reports connected v0.9.9. The operator did not apply a GUI update or close/restart
+any desktop/native harness session. Only then do exact metadata-only inbox peeks
+verify all four formerly steered corrections: one answered with parent/attempt 1
+and stored result linkage, three cancelled with their exact parent/attempt 1.
+All four remain read. No manual SQL, reply, read clearing or re-execution is used.
+This verifies local live recovery; it is not physical-phone visual evidence.
+
+MEL-709 is complete within this recorded scope. MEL-701 includes the shipped
+unconfirmed-read warning/recovery, while its original thirteen-message recurrence
+remains causally unproved and stays open. Final handoff verifies both repositories
+committed/pushed, no divergent main, one worktree and only main in each checkout.

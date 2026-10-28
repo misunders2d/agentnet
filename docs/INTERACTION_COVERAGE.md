@@ -1,6 +1,6 @@
 # Next-release interaction coverage and responsiveness
 
-## v0.9.9 corrective candidate — October 28
+## v0.9.9 published corrective release — October 29
 
 MEL-709 uses the existing native handover and signed status path. A durable local
 parent/attempt binding precedes input; only exact native acceptance becomes
@@ -69,9 +69,21 @@ Original setup/timing/CAS failures and QA corrections remain in the release reco
 Mac WebKit passes; full native macOS is pending. The verified draft is unpublished.
 
 Full control/platform/history inventory and physical-device coverage remain
-incomplete. This is candidate evidence, not a published repair.
+incomplete. The owner-directed verified-fix release discloses these limits;
+missing matrix entries are not passes.
 
-## October 28 release disposition — current
+App v0.9.9 and matching gallery are public/Latest at 22:54:50/51 UTC October 28.
+The final corrected macOS CLI ownership fixture passes 0.150 s; all other native
+packages/WebKit pass. All public payloads match the qualified draft; the actual
+public gallery verifies 129 files/twenty previews. Hub v0.9.9 starts at 23:01:06 UTC
+with exact binary/source and preserved settings/neighbor. The affected Zenbook
+client automatically activates and connects; four exact stuck corrections now
+show one answered/three cancelled with original read flags and exact attempt links.
+No operator GUI/harness restart or manual record repair occurs. The original
+MEL-701 recurrence and broader MEL-698 startup/status race remain separate/open.
+See the release record for the original failed checks and corrected QA provenance.
+
+## October 28 release disposition — v0.9.8
 
 Sergey said **"okay, proceed to release"** after being told that the pushed
 implementation was unpublished, exhaustive coverage remained incomplete and

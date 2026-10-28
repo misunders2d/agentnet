@@ -1,44 +1,43 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
-## v0.9.9 corrective candidate — in qualification
+## v0.9.9 published and Hub deployed — October 29
 
-Owner requests a new release for MEL-709 steering and MEL-701 unread recovery.
-Code records accepted corrections against the exact native parent attempt,
-settles truthful terminal/result links, preserves manual/unknown outcomes,
-reconciles safely proven shipped records after owned survivors stop, and reuses
-existing signed status synchronization. Native reaction results retain their
-exact signed control proof. Native authority, no replay and original identity
-remain unchanged; migrations append local provenance only.
+[App v0.9.9](https://github.com/misunders2d/agentnet/releases/tag/v0.9.9) and
+[matching gallery](https://github.com/misunders2d/agentnet-skins/releases/tag/v2026.10.29.1)
+are public and Latest, 22:54:50/51 UTC October 28. Immutable sources are
+`7f15d4578b0bf6dd71fc13c837297914da0a891d` and `04b5f08d8792de5e49a7954cb5e0bc102a5a853d`.
+Later QA/documentation commits preserve that product; tags never moved.
 
-MEL-701 now warns when a read-save request is unconfirmed, including after Back,
-and retries through existing navigation/visibility. Newer confirmed views,
-deliberate unread and stale/disconnected workspaces retain their existing fences.
-No legacy history is blanket-cleared. The original Zenbook 13 recurrence's exact
-historical cause remains unproved; the swallowed read-write failure is reproduced
-and fixed. Do not turn the later zero after owner read-all into contrary evidence.
+MEL-709 binds accepted steering to its exact native parent attempt and settles
+truthful terminal/result linkage. Safe legacy recovery never invents completion
+or replays work. The affected Zenbook automatically updates and connects on v0.9.9;
+metadata-only checks prove all four stuck corrections recovered: one answered,
+three cancelled, exact parent/attempt links and unchanged read flags. No operator
+GUI/harness restart, manual SQL, reply or read clearing occurred.
 
-Owned real Codex steering passes 53.46 s with two ordered corrections in the same
-process/attempt and exact result plus signed terminal links. Store 12-case and
-rendered 1280/390 unread checks, canonical build/typecheck and vet pass. T4 linked
-restart/stale/duplicate status and Pending/attention projections pass. Earlier
-reaction-history race failure is retained; current single-case race passes.
-Integrated run 40772710015 passes all eighteen client race partitions, Linux/
-Windows native, all three desktop jobs and the container. Six failures require
-affected requalification. Android's proven POST-gated preview now shows local
-Sending after durable journaling and before native admission; fourteen focused
-rendered cases and canonical build pass. Reaction QA reset is generation-bound;
-CLI races split the complete list without raising 600 s. Windows three-case
-candidate diagnosis, skipped macOS native/WebKit, remaining non-client/UI races,
-native Android and the new exact gallery pin remain required. No new tag,
-publication, deployment or live-state recovery is claimed.
-Frozen tag v0.9.9 is `7f15d457`; matching gallery v2026.10.29.1 is `04b5f08`
-and passes 321 checks plus all 37 applicable runtime groups. QA-only commits
-through `617f9af3` preserve the product. All race partitions and Android's
-seventeen workloads pass (534 measured synthetic-input actions, max 503.6 ms).
-Corrected pending-feedback fixtures pass all three OSes; all draft assets verify.
-Only macOS's independent full native job remains before publication; WebKit passes.
-No release is public and no Hub switch or live four-record recovery is claimed.
-See [release checklist](plans/V0_9_9_RELEASE.md) and [interaction evidence](INTERACTION_COVERAGE.md).
+MEL-701 now warns when a read-save write is unconfirmed, including after Back,
+and reuses navigation/visibility recovery. Newer reads/unread and stale workspace
+fences remain. Its original Zenbook thirteen-message recurrence is causally
+unproved and stays open; later zero followed the owner's manual read-all.
+
+All required standard race/native/mixed-version/skin checks pass using retained
+and corrected exact-product evidence. Real Codex steering passes 53.46 s;
+Android's seventeen workloads execute 534 measured synthetic-input actions,
+maximum 503.6 ms, excluding OS dispatch. Three-OS pending-feedback fixtures retain
+strict visible/frame bounds below 1,000 ms. Exact-pin skins pass 321 checks and
+37 applicable runtime groups. Full control/platform/history and physical-device
+coverage remain incomplete under the owner's verified-fix/disclosed-limit direction.
+The existing startup/status lock-probe race is tracked separately in MEL-698;
+its running-status fixture now establishes ownership without changing production.
+
+All twelve public payloads plus SHA256SUMS match the reviewed draft. The public
+real gallery parser verifies five packages, 129 files and twenty previews.
+Hub starts v0.9.9 at 23:01:06.92623013 UTC using the exact public Linux binary;
+public HTTPS, source/hash, realm/volume/settings and neighboring service verify,
+zero restarts. Consistent local recovery is verified; remote Drive references
+make it a local copy rather than a full portable attachment backup.
+See [release record](plans/V0_9_9_RELEASE.md) and [interaction evidence](INTERACTION_COVERAGE.md)
+for retained failures, corrections, exact sources and limits.
 
 ## v0.9.8 published — October 28
 
