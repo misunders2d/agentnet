@@ -155,25 +155,7 @@ func (l *Live) dmOverview(o *Overview, unread *[]UnreadRow, mutes map[string]boo
 			if err := projectTitles(); err != nil {
 				return err
 			}
-			for _, m := range shown {
-				if m.Unread {
-					text := m.Body
-					if m.Edited {
-						text = m.Text
-					}
-					preview := client.BodyPreview(text)
-					if !m.Edited && m.Body == "" && len(m.Attachments) > 0 {
-						names := make([]string, 0, len(m.Attachments))
-						for _, f := range m.Attachments {
-							names = append(names, client.SafeName(f.Name))
-						}
-						preview = firstLine("📎 " + strings.Join(names, ", "))
-					}
-					row := UnreadRow{Kind: "chat", Conv: c.ID, Topic: assigned[m.LID], TopicTitle: titles[assigned[m.LID]], ID: m.ID, LID: m.LID, Author: cmp.Or(m.Key, m.Claimed), Dir: m.Dir, At: time.UnixMilli(m.AtMS), Label: firstLine(m.From), Preview: preview, ready: true}
-					row.Key = unreadKey(row)
-					*unread = append(*unread, row)
-				}
-			}
+			appendChatUnread(unread, c.ID, shown, assigned, titles)
 		}
 		s.Kind, s.Frozen = c.Kind, c.Frozen
 		if c.Role == "visitor" {
@@ -256,6 +238,29 @@ func (l *Live) dmOverview(o *Overview, unread *[]UnreadRow, mutes map[string]boo
 	}
 	sort.SliceStable(o.DMs, func(i, j int) bool { return o.DMs[i].LastAt.After(o.DMs[j].LastAt) })
 	return nil
+}
+
+func appendChatUnread(unread *[]UnreadRow, conv string, msgs []client.ConvMessage, assigned, titles map[string]string) {
+	for _, m := range msgs {
+		if !m.Unread {
+			continue
+		}
+		text := m.Body
+		if m.Edited {
+			text = m.Text
+		}
+		preview := client.BodyPreview(text)
+		if !m.Edited && m.Body == "" && len(m.Attachments) > 0 {
+			names := make([]string, 0, len(m.Attachments))
+			for _, f := range m.Attachments {
+				names = append(names, client.SafeName(f.Name))
+			}
+			preview = firstLine("📎 " + strings.Join(names, ", "))
+		}
+		row := UnreadRow{Kind: "chat", Conv: conv, Topic: assigned[m.LID], TopicTitle: titles[assigned[m.LID]], ID: m.ID, LID: m.LID, Author: cmp.Or(m.Key, m.Claimed), Dir: m.Dir, At: time.UnixMilli(m.AtMS), Label: firstLine(m.From), Preview: preview, ready: true}
+		row.Key = unreadKey(row)
+		*unread = append(*unread, row)
+	}
 }
 
 // Prefer the stable logical reference only when it identifies this exact row.

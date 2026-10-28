@@ -1518,3 +1518,37 @@ The N+1 candidate speedup and owned normal/10× backend benchmark were not
 measured. Initial cold backend loading is not qualified under one second;
 MEL-701 remains open for that performance work. No installed application update,
 native platform qualification or release is claimed.
+
+### Dedicated unread projection — October 28 (MEL-701)
+
+The cold unread endpoint now skips complete overview cards, people and decisions,
+and no longer waits for the overview mutex. It retains the existing canonical
+message, topic, author and effective-read projections; a conservative conversation
+prefilter includes selected-history excerpts and deliberate unread marks. Both
+paths share row conversion and one revision-guarded unread index. An older
+overview cannot replace a newer unread snapshot. This is an AgentNet query/lock
+adaptation of the retained local-state/background-refresh flow cited above,
+without a new read policy, public API, schema or messenger architecture.
+
+The blocked-overview regression fails on `53c5da19` and passes on this candidate:
+holding complete overview work blocked cannot delay Review's exact unread rows.
+Cold-vs-full projection parity covers exact identities, direction, previews,
+archived topics and deliberate unread of sent turns. The excerpt prefilter has
+its own regression. Focused UI race checks (six parents, 189.834s), client read
+generation/candidate race checks (five parents, 57.337s), and client/UI vet pass.
+
+Owned real Go/SQLite fixtures use two people, one chat and one device thread,
+with two unread messages and 500/5,000 already-read history rows. Candidate
+cold/warm/read-return/new-unread timings were 32/2/15/38ms and 227/6/107/239ms.
+The corresponding old-source cold timings were 34/200ms: this lean fixture does
+not establish a cold speedup. A separate read-only projection of the owner's
+local database, with no daemon startup, network calls or writes, returned the
+same 18 rows in 1.208s cold/29ms warm before and 461ms cold/34ms warm after.
+The owner's reported 40-second installed-app delay remains unreproduced.
+
+The actual Store/React Chromium retained-list, confirmed-read return,
+empty-refresh, stale-push, failure/retry, exact-history and Drive transitions
+pass again at 1280 and 390 pixels. The first attempt could not load a missing
+temporary Playwright installation; rerunning with the existing skin checkout's
+installed tooling passes. No installed-client activation, complete platform
+matrix or publication is claimed. Those remain integrated release verification.

@@ -66,6 +66,13 @@ func TestLiveUnreadProvider(t *testing.T) {
 	}
 	check := func(want, alert int) {
 		t.Helper()
+		// Review's independent cold path must agree with the complete canonical
+		// overview, including sent unread generations and archived scopes.
+		cold := NewLive(alice)
+		page, err := cold.UnreadPage(UnreadQuery{Limit: 200})
+		if err != nil || page.Total != want {
+			t.Fatalf("cold unread: %d want %d: %v", page.Total, want, err)
+		}
 		for _, archived := range []bool{true, false} {
 			o, err := live.overview(archived)
 			if err != nil {
@@ -73,6 +80,19 @@ func TestLiveUnreadProvider(t *testing.T) {
 			}
 			if o.UnreadTotal == nil || o.AlertTotal == nil || *o.UnreadTotal != want || *o.AlertTotal != alert {
 				t.Fatalf("totals archived=%v: unread=%d alert=%d want %d/%d", archived, *o.UnreadTotal, *o.AlertTotal, want, alert)
+			}
+		}
+		current, err := live.UnreadPage(UnreadQuery{Limit: 200})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(page.Rows) != len(current.Rows) {
+			t.Fatalf("cold/full unread rows: %d != %d", len(page.Rows), len(current.Rows))
+		}
+		for i, row := range page.Rows {
+			other := current.Rows[i]
+			if row.Key != other.Key || row.ID != other.ID || row.Dir != other.Dir || row.Topic != other.Topic || row.Thread != other.Thread || row.TopicTitle != other.TopicTitle || row.Preview != other.Preview {
+				t.Fatalf("cold/full unread mismatch: %+v != %+v", row, other)
 			}
 		}
 	}

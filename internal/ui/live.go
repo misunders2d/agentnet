@@ -26,7 +26,8 @@ type Live struct {
 	app        bool   // served by the AgentNet app (SetApp)
 	overviewMu sync.Mutex
 	overviews  map[bool]cachedOverview
-	unread     *unreadIndex // one compact index, shared by both overview modes
+	unreadMu   sync.Mutex
+	unread     *unreadIndex // guarded separately: unread never waits for complete overview cards
 }
 
 type cachedOverview struct {
@@ -84,9 +85,11 @@ func (l *Live) overviewLocked(listArchived bool) (Overview, error) {
 	}
 	var rows []UnreadRow
 	var collect *[]UnreadRow
+	l.unreadMu.Lock()
 	if l.unread == nil || l.unread.content != revision.Content {
 		collect = &rows
 	}
+	l.unreadMu.Unlock()
 	o, err := l.buildOverview(listArchived, collect)
 	if err == nil {
 		o.Seq = revision.Seq // never label a concurrent build with a later revision
@@ -95,7 +98,11 @@ func (l *Live) overviewLocked(listArchived bool) (Overview, error) {
 		}
 		l.overviews[listArchived] = cachedOverview{revision.Content, o}
 		if collect != nil {
-			l.unread = &unreadIndex{content: revision.Content, seq: revision.Seq, rows: rows}
+			l.unreadMu.Lock()
+			if l.unread == nil || l.unread.content < revision.Content {
+				l.unread = &unreadIndex{content: revision.Content, seq: revision.Seq, rows: rows}
+			}
+			l.unreadMu.Unlock()
 		}
 	}
 	return o, err
@@ -179,14 +186,7 @@ func (l *Live) buildOverview(listArchived bool, unread *[]UnreadRow) (Overview, 
 		o.Topics = append(o.Topics, PeerTopics{Peer: p.Peer, Total: p.Total, Archived: p.Archived, ArchivedUnread: p.ArchivedUnread, Latest: threadSummary(p.Latest, kc)})
 	}
 	if unread != nil {
-		for _, r := range device {
-			row := UnreadRow{Kind: "device", Peer: r.Peer, Thread: r.Thread, TopicTitle: r.TopicTitle, ID: r.ID, LID: r.ID, Author: r.Author, Dir: r.Dir, At: r.At, Label: r.Peer, Preview: r.Preview, ready: r.Ready}
-			if r.Dir == "out" {
-				row.Label = "You"
-			}
-			row.Key = unreadKey(row)
-			*unread = append(*unread, row)
-		}
+		appendDeviceUnread(unread, device)
 	}
 	review, err := l.a.PageReview()
 	if err != nil {

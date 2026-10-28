@@ -76,8 +76,8 @@ func (l *Live) UnreadNotificationRefs(content uint64, refs []protocol.ReadRef) (
 		}
 		wanted[ref] = false
 	}
-	l.overviewMu.Lock()
-	defer l.overviewMu.Unlock()
+	l.unreadMu.Lock()
+	defer l.unreadMu.Unlock()
 	revision, _ := l.a.ViewChanges()
 	if revision.Content != content || l.unread == nil || l.unread.content != content {
 		return nil, Refuse("Notification state changed.")
@@ -154,13 +154,15 @@ func (l *Live) UnreadPage(q UnreadQuery) (UnreadPage, error) {
 			return UnreadPage{}, err
 		}
 	}
-	l.overviewMu.Lock()
-	defer l.overviewMu.Unlock()
+	l.unreadMu.Lock()
+	defer l.unreadMu.Unlock()
 	revision, _ := l.a.ViewChanges()
 	if l.unread == nil || l.unread.content != revision.Content {
-		if _, err = l.overviewLocked(false); err != nil {
+		rows, err := l.unreadRows()
+		if err != nil {
 			return UnreadPage{}, err
 		}
+		l.unread = &unreadIndex{content: revision.Content, seq: revision.Seq, rows: rows}
 	}
 	index := l.unread
 	if !index.sorted {
@@ -204,6 +206,69 @@ func (l *Live) UnreadPage(q UnreadQuery) (UnreadPage, error) {
 		}
 	}
 	return page, nil
+}
+
+// unreadRows builds only Review's navigation data. Conversation and device
+// rows still use the same admitted messages, controls, topic placement and
+// effective read generations as the complete overview; people/cards, native
+// decisions and read-only chats do not delay the first unread page.
+func (l *Live) unreadRows() ([]UnreadRow, error) {
+	candidates, err := l.a.UnreadConversationCandidates()
+	if err != nil {
+		return nil, err
+	}
+	var rows []UnreadRow
+	if len(candidates) > 0 {
+		convs, err := l.a.Conversations()
+		if err != nil {
+			return nil, err
+		}
+		for _, c := range convs {
+			if c.Deleted || !candidates[c.ID] {
+				continue
+			}
+			msgs, err := l.a.ConversationMessages(c.ID)
+			if err != nil {
+				return nil, err
+			}
+			var selected []client.ConvMessage
+			for _, m := range msgs {
+				if m.Unread {
+					selected = append(selected, m)
+				}
+			}
+			if len(selected) == 0 {
+				continue
+			}
+			assigned := client.ChatTopicAssignments(msgs)
+			topics, err := l.a.ChatTopicsForMessages(c.ID, msgs, assigned)
+			if err != nil {
+				return nil, err
+			}
+			titles := make(map[string]string, len(topics))
+			for _, topic := range topics {
+				titles[topic.ID] = topic.Title
+			}
+			appendChatUnread(&rows, c.ID, selected, assigned, titles)
+		}
+	}
+	device, err := l.a.UnreadDeviceRefs()
+	if err != nil {
+		return nil, err
+	}
+	appendDeviceUnread(&rows, device)
+	return rows, nil
+}
+
+func appendDeviceUnread(unread *[]UnreadRow, device []client.DeviceUnreadRef) {
+	for _, r := range device {
+		row := UnreadRow{Kind: "device", Peer: r.Peer, Thread: r.Thread, TopicTitle: r.TopicTitle, ID: r.ID, LID: r.ID, Author: r.Author, Dir: r.Dir, At: r.At, Label: r.Peer, Preview: r.Preview, ready: r.Ready}
+		if r.Dir == "out" {
+			row.Label = "You"
+		}
+		row.Key = unreadKey(row)
+		*unread = append(*unread, row)
+	}
 }
 
 func (s *Server) unread(w http.ResponseWriter, r *http.Request) {
