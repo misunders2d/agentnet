@@ -48,6 +48,17 @@ remains unexplained and recorded; broader qualification is pending. Earlier
 obsolete post-run steered expectations were updated to exact answered/result
 assertions while retaining consumption/restart/no-replay checks.
 
+Integrated run 40772710015 passes all eighteen client race partitions and all
+three desktop qualification jobs. Six failures are retained in the release
+record. Android send exceeds the ceiling at 1023.7 ms: a held native POST proves
+its local preview waits for admission. The existing Android durable journal now
+precedes an immediate local Sending row, before POST; only the native result
+proves admission. Uncertain responses retain exact journal/stage IDs for retry.
+Fourteen actual Composer/MessageView cases at 1280/390 pass with 75–140 ms local
+feedback; baseline held-POST case fails. Native Android qualification is pending.
+Reaction fixture reset now awaits its exact rendered generation; sixteen cases
+pass without changing the product assertion, timing bound or input method.
+
 Full control/platform/history inventory and physical-device coverage remain
 incomplete. This is candidate evidence, not a published repair.
 

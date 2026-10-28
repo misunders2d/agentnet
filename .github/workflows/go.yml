@@ -107,7 +107,7 @@ jobs:
         if: ${{ (!inputs.test_run || contains(inputs.test_run, 'Rendered')) && (!inputs.test_packages || contains(inputs.test_packages, './...') || contains(inputs.test_packages, 'internal/ui')) }}
         shell: bash
         env:
-          AGENTNET_RENDERED_RUN: ${{ inputs.test_run || '^(TestLocalChangesRendered|TestPictureChangesRendered|TestPersonRenameRendered|TestPersonCreationRendered|TestWorkspaceNameRendered|TestGoogleAccessRendered|TestNotificationChangesRendered|TestDeviceLinkRendered|TestDeviceDecisionsRendered|TestDeviceRemovalRendered|TestGroupDecisionsRendered|TestGroupChangesRendered|TestTeamSelectionRendered|TestTeamCreationRendered|TestTeamChangesRendered|TestTeamPeopleRendered|TestInviteOpenRendered|TestInvitationSendRendered|TestNewGroupRendered|TestHistoryContributionComicRendered|TestTopicOrganizationComicRendered|TestNewChatRendered|TestReminderChangesRendered|TestResponsiveEditorDraftsRendered|TestReactionPendingRendered|TestPaneEntranceRendered|TestSheetImmediateRendered|TestMessagePopupsImmediateRendered|TestTimelineNavigationRendered|TestTimelineKeyboardRendered|TestFirstUnreadTimelineRendered|TestFileDropRendered|TestReviewUnreadRetainsPresentationRendered)$' }}
+          AGENTNET_RENDERED_RUN: ${{ inputs.test_run || '^(TestLocalChangesRendered|TestPictureChangesRendered|TestPersonRenameRendered|TestPersonCreationRendered|TestWorkspaceNameRendered|TestGoogleAccessRendered|TestNotificationChangesRendered|TestDeviceLinkRendered|TestDeviceDecisionsRendered|TestDeviceRemovalRendered|TestGroupDecisionsRendered|TestGroupChangesRendered|TestTeamSelectionRendered|TestTeamCreationRendered|TestTeamChangesRendered|TestTeamPeopleRendered|TestInviteOpenRendered|TestInvitationSendRendered|TestNewGroupRendered|TestHistoryContributionComicRendered|TestTopicOrganizationComicRendered|TestNewChatRendered|TestReminderChangesRendered|TestResponsiveEditorDraftsRendered|TestReactionPendingRendered|TestPaneEntranceRendered|TestSheetImmediateRendered|TestMessagePopupsImmediateRendered|TestTimelineNavigationRendered|TestTimelineKeyboardRendered|TestFirstUnreadTimelineRendered|TestFileDropRendered|TestReviewUnreadRetainsPresentationRendered|TestAndroidSendPendingRendered)$' }}
           AGENTNET_RENDERED_COUNT: ${{ inputs.test_count || '1' }}
         run: |
           tooling="$RUNNER_TEMP/agentnet-interaction-regressions"
@@ -189,7 +189,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           # UI wire compatibility runs the actual published browser parser.
-          fetch-depth: ${{ (matrix.shard == 'others' || startsWith(matrix.shard, 'ui-')) && '0' || '1' }}
+          fetch-depth: ${{ (matrix.shard == 'others' || startsWith(matrix.shard, 'cmd-') || startsWith(matrix.shard, 'ui-')) && '0' || '1' }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -198,7 +198,7 @@ jobs:
           node-version: '26'
           package-manager-cache: false
       - name: pinned UI test tooling
-        if: matrix.shard == 'others' || startsWith(matrix.shard, 'ui-')
+        if: matrix.shard == 'others' || startsWith(matrix.shard, 'cmd-') || startsWith(matrix.shard, 'ui-')
         working-directory: internal/ui/web
         shell: bash
         run: |

@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
@@ -140,7 +141,14 @@ func TestRoomDismissalReachesLateJoiner(t *testing.T) {
 	runAgent(t, erin)
 	publishGroupFixtureCaps(t, erin, true)
 	groupInteractionRejoin(t, w.alice, erin, next)
-	if err := w.alice.FlushOutbox(tctx(t)); err != nil {
+	logFixtureOutbox(t, w.alice, "late-member-before-flush")
+	flushCtx, traceFlush := traceFixtureHTTP(t, tctx(t))
+	flushStarted := time.Now()
+	flushErr := w.alice.FlushOutbox(flushCtx)
+	traceFlush(flushErr)
+	t.Logf("fixture late-member flush elapsed_ms=%d context_error=%v", time.Since(flushStarted).Milliseconds(), flushCtx.Err())
+	logFixtureOutbox(t, w.alice, "late-member-after-flush")
+	if err := flushErr; err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "new member imports already dismissed membership", func() bool {

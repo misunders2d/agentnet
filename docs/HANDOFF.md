@@ -22,8 +22,15 @@ process/attempt and exact result plus signed terminal links. Store 12-case and
 rendered 1280/390 unread checks, canonical build/typecheck and vet pass. T4 linked
 restart/stale/duplicate status and Pending/attention projections pass. Earlier
 reaction-history race failure is retained; current single-case race passes.
-Required full race/native/platform, mixed-version and exact-pin skin gates are
-next. No new tag, publication, deployment or live-state recovery is claimed.
+Integrated run 40772710015 passes all eighteen client race partitions, Linux/
+Windows native, all three desktop jobs and the container. Six failures require
+affected requalification. Android's proven POST-gated preview now shows local
+Sending after durable journaling and before native admission; fourteen focused
+rendered cases and canonical build pass. Reaction QA reset is generation-bound;
+CLI races split the complete list without raising 600 s. Windows three-case
+candidate diagnosis, skipped macOS native/WebKit, remaining non-client/UI races,
+native Android and the new exact gallery pin remain required. No new tag,
+publication, deployment or live-state recovery is claimed.
 See [release checklist](plans/V0_9_9_RELEASE.md) and [interaction evidence](INTERACTION_COVERAGE.md).
 
 ## v0.9.8 published — October 28

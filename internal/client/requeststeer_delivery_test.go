@@ -10,6 +10,30 @@ import (
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
+// Aggregate fixture diagnostics only: never log bodies, keys or recipients.
+func logFixtureOutbox(t *testing.T, a *Agent, phase string) {
+	t.Helper()
+	t.Logf("fixture outbox phase=%s normal_lock=%d sync_lock=%d", phase, len(a.flushLock), len(a.syncFlushLock))
+	rows, err := a.store.db.Query(`SELECT CASE WHEN coalesce(sub,'') IN `+syncSubs+` AND replication_live=0 THEN 'sync' ELSE 'normal' END,coalesce(sub,''),state,count(*) FROM outbox WHERE state IN (?,?,?,?) GROUP BY 1,2,3 ORDER BY 1,2,3`, stateQueued, stateConvWaiting, stateReceiverWaiting, protocol.StateQuarantined)
+	if err != nil {
+		t.Logf("fixture outbox phase=%s snapshot_error=%v", phase, err)
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var lane, sub, state string
+		var count int
+		if err := rows.Scan(&lane, &sub, &state, &count); err != nil {
+			t.Logf("fixture outbox phase=%s snapshot_error=%v", phase, err)
+			return
+		}
+		t.Logf("fixture outbox phase=%s lane=%s sub=%q state=%s count=%d", phase, lane, sub, state, count)
+	}
+	if err := rows.Err(); err != nil {
+		t.Logf("fixture outbox phase=%s snapshot_error=%v", phase, err)
+	}
+}
+
 // Keep a strict correction and the following ordinary turns in the real
 // durable queue. Reader requirements must not make an authorized PID turn
 // disappear between the group delivery guards and block the per-reader FIFO.
@@ -97,7 +121,14 @@ func TestGroupSteeringDoesNotBlockFollowingMessages(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { a.Close() })
-	if err = a.FlushOutbox(tctx(t)); err != nil {
+	logFixtureOutbox(t, a, "steering-before-flush")
+	flushCtx, traceFlush := traceFixtureHTTP(t, tctx(t))
+	flushStarted := time.Now()
+	err = a.FlushOutbox(flushCtx)
+	traceFlush(err)
+	t.Logf("fixture steering flush elapsed_ms=%d context_error=%v", time.Since(flushStarted).Milliseconds(), flushCtx.Err())
+	logFixtureOutbox(t, a, "steering-after-flush")
+	if err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range copies {

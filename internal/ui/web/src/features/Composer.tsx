@@ -174,7 +174,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   const filesAllowed = !!lim && !closed && target.kind !== "answer" && (!visitor || (target.kind === "agent" && target.canAsk));
   const limit = !files.length ? "" : filesAllowed ? overLimit(files, lim)
     : target.kind === "answer" ? "Files can’t go with an answer. Remove them to send." : "Files can’t be sent here. Remove them to send.";
-  const sending = store.host.platform === "android" && !!busy[conv]; // Android exposes pre-admission progress without a queued receipt
+  const sending = store.host.platform === "android" && !!busy[conv]; // Local preparation/submission never proves native admission
   const gone = target.kind === "agent" && !target.canAsk;
   const needsAgent = visitor && target.kind !== "agent";
   const ready = !closed && !sending && !files.some(f => f.preparing || f.nativeReading || f.nativeError) && !gone && !needsAgent && !handled && !missingReply && !missingTopic && !limit && (!!text.trim() || (files.length > 0 && target.kind !== "answer"));
@@ -640,12 +640,15 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       let result: T.Sent & {note?:string};
       try {
         // Busy and the per-conversation preparation guard serialize this
-        // composer's gestures. There is no ledger row before admission.
+        // composer's gestures. The local Sending… preview is not native admission.
         result = await host.api<T.Sent & {note?:string}>(entry.endpoint,entry.request);
       } catch(e) {
         const why=errorText(e);
         try {recordFailure(localStorage,workspace,entry.id,why);} catch(_) { /* original exact request stays retained */ }
-        store.toast("Message saved on this phone. Open Saved messages at the top to retry.","error");
+        // The native write may have committed before its response was lost.
+        // Retire only our local preview; the exact journal offers explicit retry.
+        store.sends.remove(entry.id);
+        store.toast("Send not confirmed. Saved on this phone; open Saved messages at the top to retry.","error");
         return;
       }
       // The successful native result proves admission. Presentation/storage
@@ -654,7 +657,6 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
         store.toast("Saved by AgentNet, but the recovery record could not be cleared: "+errorText(e),"error");
       }
       try {
-        preview(entry,plans.find(p=>p.entry.id===entry.id)!.to);
         if (entry.endpoint === "/api/act" || entry.endpoint === "/api/request/followup") {store.sends.finish(entry.id,undefined);announce(result.note || (entry.endpoint === "/api/request/followup" ? "Steering sent; waiting for native acceptance." : "Reply sent."));}
         else {store.sends.finish(entry.id,result);
           if (device && captured.newTopic && store.isActive()) void store.open({kind:"thread",id:result.id}).catch(e=>store.toast("Saved by AgentNet; could not open the conversation: "+errorText(e),"error"));
@@ -664,6 +666,10 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
         store.toast("Saved by AgentNet; could not update the view: "+errorText(e),"error");
       }
     };
+    // The complete exact request is already journaled locally. Show its
+    // _local Sending… row before waiting for native admission, just as the
+    // other composers do; only the native result finishes its delivery state.
+    if (store.isActive()) for (const plan of plans) preview(plan.entry, plan.to);
     await Promise.all(plans.map(p=>submit(p.entry)));
     // Each request retains its original stage IDs even after failure. A missing
     // stage is a visible retry refusal, never a newly staged replacement intent.

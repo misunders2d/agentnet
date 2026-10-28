@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
@@ -179,7 +180,13 @@ func TestGroupHistoryLinkOutgoingControlAfterReaderLeaves(t *testing.T) {
 			if err = reopened.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE recipient=? AND sub='history'`, phone.Address).Scan(&before); err != nil {
 				t.Fatal(err)
 			}
-			reopened.historyStep(tctx(t))
+			logFixtureOutbox(t, reopened, "history-before-step")
+			historyCtx, traceHistory := traceFixtureHTTP(t, tctx(t))
+			historyStarted := time.Now()
+			reopened.historyStep(historyCtx)
+			traceHistory(historyCtx.Err())
+			t.Logf("fixture history step elapsed_ms=%d context_error=%v", time.Since(historyStarted).Milliseconds(), historyCtx.Err())
+			logFixtureOutbox(t, reopened, "history-after-step")
 			if err = reopened.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE recipient=? AND sub='history'`, phone.Address).Scan(&after); err != nil {
 				t.Fatal(err)
 			}
@@ -188,6 +195,23 @@ func TestGroupHistoryLinkOutgoingControlAfterReaderLeaves(t *testing.T) {
 			}
 			runAgent(t, phone)
 			runAgent(t, reopened)
+			waitStarted := time.Now()
+			t.Cleanup(func() {
+				if !t.Failed() {
+					return
+				}
+				logFixtureOutbox(t, reopened, "history-revision-wait-failed-publisher")
+				logFixtureOutbox(t, phone, "history-revision-wait-failed-reader")
+				context, contextErr := phone.GroupContext(packet.State.Conv)
+				messages, viewErr := phone.ConversationMessages(packet.State.Conv)
+				var original, edited, revised bool
+				for _, m := range messages {
+					if m.LID == sent.LID {
+						original, edited, revised = m.Body == "original", m.Edited, m.Shown(m.Body) == "revised"
+					}
+				}
+				t.Logf("fixture revision wait elapsed_ms=%d reader_seq=%d context_error=%v visible_rows=%d view_error=%v original=%t edited=%t revised=%t", time.Since(waitStarted).Milliseconds(), context.State.Seq, contextErr, len(messages), viewErr, original, edited, revised)
+			})
 			eventually(t, "linked history retains original plus visible revision after restart", func() bool {
 				rows := groupTurns(t, phone, packet.State.Conv)
 				return len(rows) == 1 && rows[0].Dir == "out" && rows[0].Body == "original" && rows[0].Edited && rows[0].Shown(rows[0].Body) == "revised"

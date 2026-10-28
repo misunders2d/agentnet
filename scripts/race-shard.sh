@@ -1,18 +1,20 @@
 #!/bin/bash
 # One shard of the race suite, for CI's parallel race jobs. "others" runs all
-# non-client packages, isolating internal/ui in three sequential test partitions.
+# non-client packages, splitting cmd/agentnet in two and internal/ui in three
+# sequential partitions so each invocation keeps the existing 600-second bound.
 # "ui-0"/"ui-1"/"ui-2" rerun those UI partitions. "client-K" is every COUNT-th
-# client test starting at K (0-based). UI always uses three partitions; COUNT is
+# client test starting at K (0-based). cmd-0/cmd-1 select CLI partitions.
+# UI always uses three partitions and cmd always two; COUNT is
 # client-only. The full others and client shards run every test once, with each
 # race invocation bounded at 600 seconds per package.
-# Usage: scripts/race-shard.sh others|client-K|ui-0|ui-1|ui-2 [COUNT]
+# Usage: scripts/race-shard.sh others|client-K|cmd-0|cmd-1|ui-0|ui-1|ui-2 [COUNT]
 set -euo pipefail
 cd "$(dirname "$0")/.."
 shard=${1:-}
 count=${2:-18}
 if ! [[ "$count" =~ ^[1-9][0-9]*$ ]] ||
-   ! [[ "$shard" = others || "$shard" =~ ^(client|ui)-[0-9]+$ ]]; then
-	echo 'usage: race-shard.sh others|client-K|ui-0|ui-1|ui-2 [positive client COUNT]' >&2
+   ! [[ "$shard" = others || "$shard" =~ ^(client|cmd|ui)-[0-9]+$ ]]; then
+	echo 'usage: race-shard.sh others|client-K|cmd-0|cmd-1|ui-0|ui-1|ui-2 [positive client COUNT]' >&2
 	exit 2
 fi
 
@@ -70,8 +72,10 @@ run_partition() {
 }
 
 if [ "$shard" = others ]; then
-	packages=$(go list ./... | awk '!/\/internal\/(client|ui)$/')
+	packages=$(go list ./... | awk '!/\/internal\/(client|ui)$/ && !/\/cmd\/agentnet$/')
 	go test -race -count=1 -timeout 600s $packages
+	run_partition ./cmd/agentnet 0 2 cmd-0
+	run_partition ./cmd/agentnet 1 2 cmd-1
 	run_partition ./internal/ui 0 3 ui-0
 	run_partition ./internal/ui 1 3 ui-1
 	run_partition ./internal/ui 2 3 ui-2
@@ -80,7 +84,10 @@ fi
 k=${shard#*-}
 package=./internal/client
 partitions=$count
-if [[ "$shard" = ui-* ]]; then
+if [[ "$shard" = cmd-* ]]; then
+	package=./cmd/agentnet
+	partitions=2
+elif [[ "$shard" = ui-* ]]; then
 	package=./internal/ui
 	partitions=3
 fi
