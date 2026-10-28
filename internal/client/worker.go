@@ -179,7 +179,7 @@ func (a *Agent) runNextWith(ctx context.Context, wake <-chan struct{}, dispatch 
 		r = &j.Executor.Responder
 	}
 	if r == nil {
-		a.endJob(j.ID, stateNotRun, "no selected executor")
+		a.endJob(j.ID, stateNotRun, "no selected executor", j.nativeAttempt)
 		return true
 	}
 	if j.Receiver == nil {
@@ -281,13 +281,13 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	var prompt string
 	var err error
 	if err = a.store.db.QueryRow(`SELECT attempts FROM inbox WHERE id=? AND state=?`, j.ID, stateRunning).Scan(&j.nativeAttempt); err != nil {
-		a.endJob(j.ID, stateNotRun, "the selected attempt is no longer current")
+		a.endJob(j.ID, stateNotRun, "the selected attempt is no longer current", j.nativeAttempt)
 		return
 	}
 	var lookup questionLookup // a receiver continuation keeps its delegation; no lookups
 	followupContext, followupErr := a.requestFollowupPrompt(j)
 	if followupErr != nil {
-		a.endJob(j.ID, stateNeedHuman, followupErr.Error())
+		a.endJob(j.ID, stateNeedHuman, followupErr.Error(), j.nativeAttempt)
 		return
 	}
 	h := Harnesses[r.Harness]
@@ -305,13 +305,13 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	if j.Receiver != nil {
 		defer a.clearAgentFiles(j.ID)
 		if why := a.receiverStop(j); why != "" {
-			a.endJob(j.ID, stateNotRun, why)
+			a.endJob(j.ID, stateNotRun, why, j.nativeAttempt)
 			return
 		}
 		prompt, err = a.receiverPrompt(ctx, j, r)
 	} else if j.PID != "" {
 		if why := a.agentStop(j); why != "" {
-			a.endJob(j.ID, stateNotRun, "not run: "+why)
+			a.endJob(j.ID, stateNotRun, "not run: "+why, j.nativeAttempt)
 			return
 		}
 		lookup = a.questionSetup(j, r.Harness)
@@ -330,11 +330,11 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		}
 	}
 	if err != nil {
-		a.endJob(j.ID, stateJobFailed, err.Error())
+		a.endJob(j.ID, stateJobFailed, err.Error(), j.nativeAttempt)
 		return
 	}
 	if planErr != nil {
-		a.endJob(j.ID, stateJobFailed, "background session: "+planErr.Error())
+		a.endJob(j.ID, stateJobFailed, "background session: "+planErr.Error(), j.nativeAttempt)
 		return
 	}
 	if plan.note != "" {
@@ -344,7 +344,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	if plan.ref != nil && plan.ref.ID != "" {
 		// Known before the run (claude, or any resume): record it first.
 		if err := a.store.setSessionRef(j.ID, *plan.ref); err != nil {
-			a.endJob(j.ID, stateJobFailed, "background session not recorded, so nothing was run: "+err.Error())
+			a.endJob(j.ID, stateJobFailed, "background session not recorded, so nothing was run: "+err.Error(), j.nativeAttempt)
 			return
 		}
 	}
@@ -406,7 +406,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	if h.out != "" && !nativeCodex {
 		f, err := os.CreateTemp(a.home, outFilePrefix+"*")
 		if err != nil {
-			a.endJob(j.ID, stateJobFailed, err.Error())
+			a.endJob(j.ID, stateJobFailed, err.Error(), j.nativeAttempt)
 			return
 		}
 		f.Close()
@@ -442,7 +442,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	if j.Receiver == nil && j.PID != "" {
 		info, e := a.Participation(j.PID)
 		if e != nil {
-			a.endJob(j.ID, stateNotRun, e.Error())
+			a.endJob(j.ID, stateNotRun, e.Error(), j.nativeAttempt)
 			return
 		}
 		if info.Member && info.HostHere && info.Claimable() {
@@ -451,7 +451,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		if info.HostHere && info.Claimable() {
 			var attempt int
 			if err := a.store.db.QueryRow(`SELECT attempts FROM inbox WHERE id=? AND state=? AND replica=0`, j.ID, stateRunning).Scan(&attempt); err != nil {
-				a.endJob(j.ID, stateNotRun, "the admitted request is no longer running")
+				a.endJob(j.ID, stateNotRun, "the admitted request is no longer running", j.nativeAttempt)
 				return
 			}
 			cmd.Env = append(cmd.Env, AgentRequestEnv+"="+j.ID, AgentAttemptEnv+"="+strconv.Itoa(attempt))
@@ -498,7 +498,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		}
 		roomBridge, err = newCodexRoomBridge(runCtx, cmd, prompt, cmd.Stdout, roomCall, plan)
 		if err != nil {
-			a.endJob(j.ID, stateJobFailed, "native transport unavailable: "+err.Error())
+			a.endJob(j.ID, stateJobFailed, "native transport unavailable: "+err.Error(), j.nativeAttempt)
 			return
 		}
 		cmd.Stdout = activityWriter{Writer: roomBridge, activity: activity, first: first}
@@ -534,7 +534,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	if (r.Harness == "pi" || r.Harness == "omp") && launchErr == nil {
 		piBridge, err = newPiRPCBridge(runCtx, cmd, prompt, cmd.Stdout, r.Harness)
 		if err != nil {
-			a.endJob(j.ID, stateJobFailed, "native "+r.Harness+" transport unavailable: "+err.Error())
+			a.endJob(j.ID, stateJobFailed, "native "+r.Harness+" transport unavailable: "+err.Error(), j.nativeAttempt)
 			return
 		}
 		cmd.Stdout = activityWriter{Writer: piBridge, activity: activity, first: first}
@@ -550,7 +550,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		}
 		claudeBridge, err = newClaudeStreamBridge(runCtx, cmd, prompt, cmd.Stdout, expected)
 		if err != nil {
-			a.endJob(j.ID, stateJobFailed, "native Claude transport unavailable: "+err.Error())
+			a.endJob(j.ID, stateJobFailed, "native Claude transport unavailable: "+err.Error(), j.nativeAttempt)
 			return
 		}
 		cmd.Stdout = activityWriter{Writer: claudeBridge, activity: activity, first: first}
@@ -656,7 +656,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		if plan.ref != nil && plan.ref.ID == "" && agy.complete && !agy.damaged && ctx.Err() == nil {
 			plan.ref.ID = agy.conversation
 			if err := a.store.setSessionRef(j.ID, *plan.ref); err != nil {
-				a.endJob(j.ID, stateJobFailed, "Antigravity ran, but its background session could not be recorded; its result was not used and it was not retried")
+				a.endJob(j.ID, stateJobFailed, "Antigravity ran, but its background session could not be recorded; its result was not used and it was not retried", j.nativeAttempt)
 				return
 			}
 		}
@@ -667,7 +667,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		if plan.ref.ID = roomBridge.thread; plan.ref.ID == "" {
 			a.Logf("%s %s: %s reported no session id; the next job of this conversation starts a new session", j.Kind, j.ID, r.Harness)
 		} else if err := a.store.setSessionRef(j.ID, *plan.ref); err != nil {
-			a.endJob(j.ID, stateJobFailed, fmt.Sprintf("%s ran, but its background session could not be recorded (%v); its result was not used and it is not run again", r.Harness, err))
+			a.endJob(j.ID, stateJobFailed, fmt.Sprintf("%s ran, but its background session could not be recorded (%v); its result was not used and it is not run again", r.Harness, err), j.nativeAttempt)
 			return
 		}
 	}
@@ -685,7 +685,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	switch {
 	case ctx.Err() != nil:
 		// The daemon is stopping; the job's outcome is unknown.
-		a.endJob(j.ID, stateInterrupt, "the daemon stopped while this was running")
+		a.endJob(j.ID, stateInterrupt, "the daemon stopped while this was running", j.nativeAttempt)
 		return
 	case stopWhy != "":
 		detail := "stopped and not sent: " + stopWhy
@@ -696,7 +696,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		if out := strings.TrimSpace(stdout.String()); out != "" {
 			detail += ". Its output so far:\n" + out
 		}
-		a.endJob(j.ID, endState, detail)
+		a.endJob(j.ID, endState, detail, j.nativeAttempt)
 		a.Logf("%s %s: stopped: %s", j.Kind, j.ID, stopWhy)
 		return
 	case cancelled.Load():
@@ -707,7 +707,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		var attention string
 		body, status, attention = agy.result(runErr, &agyErr)
 		if attention != "" {
-			a.endJob(j.ID, stateNeedHuman, attention)
+			a.endJob(j.ID, stateNeedHuman, attention, j.nativeAttempt)
 			return
 		}
 		output = body
@@ -767,7 +767,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		if rest == "" {
 			rest = r.Harness + " said this needs your decision but gave no reason"
 		}
-		a.endJob(j.ID, stateNeedHuman, rest)
+		a.endJob(j.ID, stateNeedHuman, rest, j.nativeAttempt)
 		if state, _ := a.store.jobState(j.ID); state == stateNeedHuman {
 			a.Logf("%s %s: needs your decision", j.Kind, j.ID)
 		}
@@ -787,7 +787,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 			why = r.Harness + " proposed an action but wrote no task"
 		}
 		if why != "" {
-			a.endJob(j.ID, stateNeedHuman, why)
+			a.endJob(j.ID, stateNeedHuman, why, j.nativeAttempt)
 			if state, _ := a.store.jobState(j.ID); state == stateNeedHuman {
 				a.Logf("%s %s: a proposal needs your decision", j.Kind, j.ID)
 			}
@@ -828,7 +828,7 @@ func (a *Agent) finishFollowUp(j job, status, body string) {
 	case envelope.StatusFailed, envelope.StatusTimeout:
 		state = stateJobFailed
 	}
-	a.endJob(j.ID, state, body)
+	a.endJob(j.ID, state, body, j.nativeAttempt)
 	a.Logf("follow-up of %s: %s", j.ID, state)
 }
 
@@ -974,7 +974,7 @@ func (a *Agent) finish(ctx context.Context, j job, status, body string) {
 	}
 	if j.Kind == envelope.KindQuestion && status == envelope.StatusCancelled {
 		// Nothing is sent; the recipient may now reply by hand.
-		a.endJob(j.ID, state, body)
+		a.endJob(j.ID, state, body, j.nativeAttempt)
 		return
 	}
 	detail := ""
@@ -992,8 +992,8 @@ func (a *Agent) finish(ctx context.Context, j job, status, body string) {
 		}
 	}
 	claim := func(tx *sql.Tx, replyID string) error {
-		res, err := tx.Exec(`UPDATE inbox SET state = ?, detail = nullif(?, ''), result_id = ? WHERE id = ? AND state IN (?, ?)`,
-			state, detail, replyID, j.ID, stateRunning, stateCancelReq)
+		res, err := tx.Exec(`UPDATE inbox SET state = ?, detail = nullif(?, ''), result_id = ? WHERE id = ? AND state IN (?, ?) AND (?<=0 OR attempts=?)`,
+			state, detail, replyID, j.ID, stateRunning, stateCancelReq, j.nativeAttempt, j.nativeAttempt)
 		if err != nil {
 			return err
 		}
@@ -1012,12 +1012,13 @@ func (a *Agent) finish(ctx context.Context, j job, status, body string) {
 	}
 	if err != nil && res.ID == "" {
 		// The reply could not even be stored (e.g. the sender was revoked).
-		a.endJob(j.ID, stateJobFailed, "reply not sent: "+err.Error())
+		a.endJob(j.ID, stateJobFailed, "reply not sent: "+err.Error(), j.nativeAttempt)
 		return
 	}
 	if status != envelope.StatusDone && status != envelope.StatusDeclined && status != envelope.StatusProposal {
 		a.noteStatus(j.ID) // a failure or cancellation the reply itself reports: the state stands beside it
 	}
+	a.wakeStatus() // absorbed corrections settled with the stored result
 	a.Logf("%s %s: %s (reply %s %s)", j.Kind, j.ID, status, res.ID, res.State)
 }
 

@@ -1983,9 +1983,11 @@ export class Store {
     const keys = pending.map(m => this.readKey(m));
     const attention = Object.fromEntries(pending.filter(m => m.attention).map(m => [m.id, m.attention!]));
     keys.forEach(key => this.reading.add(key));
+    let readAccepted = false;
     // The change stream brings the committed read state. Keep exact successful
     // acknowledgements so refreshing a sent device-thread row cannot loop.
     void this.api.markRead(ids, Object.keys(attention).length ? attention : undefined).then(async () => {
+      readAccepted = true;
       keys.forEach(key => { acknowledged.add(key); this.reading.delete(key); });
       // The native action also writes legacy read state. A cleared sent row
       // returns to its plain ID; keep that acknowledgement within this visit.
@@ -2002,7 +2004,20 @@ export class Store {
       const summary = o.kind === "dm" ? this.state.overview?.dms?.find(d => d.id === o.id) : this.state.overview?.threads?.find(t => t.id === o.id);
       if (this.state.open?.id === o.id && current && !stale() && summary?.unread === (current.messages || []).filter(m => m.unread).length) return;
       void this.load(false, false);
-    }).catch(() => {}).finally(() => keys.forEach(key => this.reading.delete(key)));
+    }).catch(error => {
+      // A timed-out write may have committed. Keep unread truthful until a
+      // fresh view proves otherwise, and warn even after returning to Review.
+      // A departed workspace or superseding read/generation owns no warning.
+      if (readAccepted || !this.alive || this.state.conn !== "live" || errorText(error) === "stale or disconnected workspace") return;
+      const identity = (m: T.DMMessage | T.Message) => JSON.stringify([m.id, m.dir,
+        (m as T.DMMessage).lid || m.id, (m as T.DMMessage).topic || "",
+        o.kind === "dm" ? (m as T.DMMessage).send_group_author || (m as T.DMMessage).claimed_key : (m as T.Message).from_key,
+        this.readKey(m)]);
+      const failed = new Set(pending.filter(m => m.unread).map(identity));
+      if (!this.state.views[o.id]?.messages?.some(m => m.unread && failed.has(identity(m)))) return;
+      const text = "Read status not confirmed. Reopen this chat to retry.";
+      if (!this.state.toasts.some(t => t.tone === "error" && t.text === text)) this.toast(text, "error");
+    }).finally(() => keys.forEach(key => this.reading.delete(key)));
   }
 
   private typingLoading = false;

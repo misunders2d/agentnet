@@ -35,7 +35,7 @@ func (a *Agent) claimNativeFollowup(parent job) (nativeFollowupClaim, bool, erro
 	if err = tx.QueryRow(`SELECT state,coalesce(lid,id),coalesce(verified_by,''),attempts FROM inbox WHERE id=? AND replica=0`, parent.ID).Scan(&state, &rootID, &rootKey, &parentAttempt); err != nil {
 		return nativeFollowupClaim{}, false, err
 	}
-	if state != stateRunning || parent.Conv != "" && !a.nativeFollowupExecutor(tx, parent) {
+	if state != stateRunning || parent.nativeAttempt > 0 && parentAttempt != parent.nativeAttempt || parent.Conv != "" && !a.nativeFollowupExecutor(tx, parent) {
 		return nativeFollowupClaim{}, false, nil
 	}
 	root, err := storedRequestFollowup(tx, "in", parent.ID)
@@ -133,13 +133,16 @@ func (a *Agent) claimNativeFollowup(parent job) (nativeFollowupClaim, bool, erro
 		}
 		c.j.Executor, c.j.AgentID = parent.Executor, parent.AgentID
 		stamp, _ := json.Marshal(parent.Executor)
-		res, e := tx.Exec(`UPDATE inbox SET state=?,detail='Native correction handover pending; do not replay automatically',responder=(SELECT responder FROM inbox WHERE id=?),executor=?,agent_id=?,attempts=attempts+1,last_attempt_at=unixepoch() WHERE id=? AND state=?`, stateRunning, parent.ID, string(stamp), parent.AgentID, c.j.ID, c.state)
+		res, e := tx.Exec(`UPDATE inbox SET state=?,detail='Native correction handover pending; do not replay automatically',responder=(SELECT responder FROM inbox WHERE id=?),executor=?,agent_id=?,steering_parent=?,steering_attempt=?,attempts=attempts+1,last_attempt_at=unixepoch() WHERE id=? AND state=?`, stateRunning, parent.ID, string(stamp), parent.AgentID, parent.ID, parentAttempt, c.j.ID, c.state)
 		if e != nil {
 			return nativeFollowupClaim{}, false, e
 		}
 		n, _ := res.RowsAffected()
 		if n != 1 {
 			continue
+		}
+		if e = tx.QueryRow(`SELECT attempts FROM inbox WHERE id=?`, c.j.ID).Scan(&c.j.nativeAttempt); e != nil {
+			return nativeFollowupClaim{}, false, e
 		}
 		table := "attachments"
 		if c.j.Local {
@@ -166,7 +169,9 @@ func (a *Agent) nativeFollowupCurrent(parent, correction job, accepted ...bool) 
 	}
 	defer tx.Rollback()
 	var current bool
-	if tx.QueryRow(`SELECT (SELECT state FROM inbox WHERE id=?)=? AND (SELECT state FROM inbox WHERE id=?)=?`, parent.ID, stateRunning, correction.ID, stateRunning).Scan(&current) != nil || !current {
+	if tx.QueryRow(`SELECT (SELECT state FROM inbox WHERE id=?)=? AND (SELECT state FROM inbox WHERE id=?)=?
+ AND (?<=0 OR (SELECT attempts FROM inbox WHERE id=?)=?) AND (?<=0 OR (SELECT attempts FROM inbox WHERE id=?)=?)`,
+		parent.ID, stateRunning, correction.ID, stateRunning, parent.nativeAttempt, parent.ID, parent.nativeAttempt, correction.nativeAttempt, correction.ID, correction.nativeAttempt).Scan(&current) != nil || !current {
 		return false
 	}
 	if parent.Conv != "" && !a.nativeFollowupExecutor(tx, parent) {
@@ -291,7 +296,7 @@ func (a *Agent) watchNativeFollowups(ctx context.Context, parent job, bridge nat
 					refresh, e = a.agentContextForRun(info, "", agentContextBytes, cursor, &parentRef, excluded)
 				}
 				if e != nil {
-					_ = a.endJob(correction.ID, stateNeedHuman, "Fresh authorized conversation evidence could not be selected; nothing was sent into the native run")
+					_ = a.endJob(correction.ID, stateNeedHuman, "Fresh authorized conversation evidence could not be selected; nothing was sent into the native run", correction.nativeAttempt)
 					continue
 				}
 				correction.run = a.newRun(correction.job, false)
@@ -310,17 +315,17 @@ func (a *Agent) watchNativeFollowups(ctx context.Context, parent job, bridge nat
 			}
 			if correction.run != nil {
 				if e := correction.run.seal(); e != nil {
-					_ = a.endJob(correction.ID, stateNeedHuman, "Correction files could not be prepared; nothing was sent into the native run")
+					_ = a.endJob(correction.ID, stateNeedHuman, "Correction files could not be prepared; nothing was sent into the native run", correction.nativeAttempt)
 					continue
 				}
 			}
 			saved, _ := json.Marshal(next)
 			if len(saved) > maxContext {
-				_ = a.endJob(correction.ID, stateNeedHuman, "The owned run's bounded evidence cursor is full; review the exact work before continuing")
+				_ = a.endJob(correction.ID, stateNeedHuman, "The owned run's bounded evidence cursor is full; review the exact work before continuing", correction.nativeAttempt)
 				return
 			}
 			if !a.nativeFollowupCurrent(parent, correction.job, correction.queuedState == stateAccepted) {
-				_ = a.endJob(correction.ID, stateNeedHuman, "The exact run or correction changed before native handover; review it before continuing")
+				_ = a.endJob(correction.ID, stateNeedHuman, "The exact run or correction changed before native handover; review it before continuing", correction.nativeAttempt)
 				continue
 			}
 			outcome := bridge.steer(ctx, correction.ID, text)
@@ -343,23 +348,23 @@ func (a *Agent) watchNativeFollowups(ctx context.Context, parent job, bridge nat
 					data, _ := json.Marshal(captured)
 					_, _ = a.store.db.Exec(`UPDATE inbox SET agent_context=? WHERE id=? AND state=? AND attempts=?`, string(data), parent.ID, stateRunning, captured.Attempt)
 				}
-				_ = a.endJob(correction.ID, stateSteered, "Accepted into the exact current native run; its work is not yet proven complete")
+				_ = a.endJob(correction.ID, stateSteered, "Accepted into the exact current native run; its work is not yet proven complete", correction.nativeAttempt)
 			case steerQueued, steerUnsupported:
 				selected, e := storedRequestFollowup(a.store.db, "in", correction.ID)
 				if e != nil || selected != nil && selected.Attempt > 0 {
-					_ = a.endJob(correction.ID, stateNeedHuman, "Not applied to the selected run; explicit steering cannot become queued work")
+					_ = a.endJob(correction.ID, stateNeedHuman, "Not applied to the selected run; explicit steering cannot become queued work", correction.nativeAttempt)
 					return
 				}
 				// Explicitly no handover: restore only our running claim. A concurrent
 				// cancellation is never undone, and ordinary admission still governs it.
-				_, err = a.store.db.Exec(`UPDATE inbox SET state=?,detail='Queued; not accepted into the native run' WHERE id=? AND state=?`, correction.queuedState, correction.ID, stateRunning)
+				_, err = a.store.db.Exec(`UPDATE inbox SET state=?,detail='Queued; not accepted into the native run' WHERE id=? AND state=? AND attempts=?`, correction.queuedState, correction.ID, stateRunning, correction.nativeAttempt)
 				if err == nil {
 					a.store.changed()
 					a.noteStatus(correction.ID)
 				}
 				return
 			default:
-				_ = a.endJob(correction.ID, stateNeedHuman, "Native correction acceptance is unknown. Check the original work before explicitly continuing; no automatic replay")
+				_ = a.endJob(correction.ID, stateNeedHuman, "Native correction acceptance is unknown. Check the original work before explicitly continuing; no automatic replay", correction.nativeAttempt)
 				return
 			}
 		}

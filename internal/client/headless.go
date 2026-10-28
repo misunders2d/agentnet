@@ -390,6 +390,10 @@ func (a *Agent) tellStatus(ctx context.Context, id string) bool {
 		}
 	}
 	public, detail, ok := statusOf(state)
+	var steeringDetail string
+	if a.store.db.QueryRow(`SELECT coalesce(detail,'') FROM inbox WHERE id=? AND steering_parent IS NOT NULL AND detail LIKE 'Accepted correction to request %'`, id).Scan(&steeringDetail) == nil {
+		detail = steeringDetail
+	}
 	if state == stateRunning {
 		var stored string
 		if a.store.db.QueryRow(`SELECT coalesce(detail,'') FROM inbox WHERE id=? AND state=? AND attempts=?`, id, stateRunning, attempt).Scan(&stored) == nil && (stored == roomWaitDetail || stored == nativeInputDetail || publicActivityDetail(stored)) {
@@ -458,8 +462,8 @@ func unreachableNow(err error) bool {
 }
 
 // endJob is finishJob with the requester told where the request stands.
-func (a *Agent) endJob(id, state, detail string) error {
-	err := a.store.finishJob(id, state, detail)
+func (a *Agent) endJob(id, state, detail string, attempt ...int64) error {
+	err := a.store.finishJob(id, state, detail, attempt...)
 	var selected int
 	if e := a.store.db.QueryRow(`SELECT count(*) FROM reply_receiver_inputs WHERE inbox_id=?`, id).Scan(&selected); e != nil || selected != 0 {
 		return err

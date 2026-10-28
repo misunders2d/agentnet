@@ -102,9 +102,11 @@ func reactionOnly(text string) *reactionChoice {
 // when its participation may no longer give output, otherwise why the
 // reaction cannot go. A sent reaction is never sent again.
 func (a *Agent) answerWithReaction(ctx context.Context, j job, harness string, choice *reactionChoice) error {
-	if state, err := a.store.jobState(j.ID); err != nil {
+	var state string
+	var attempt int64
+	if err := a.store.db.QueryRow(`SELECT state,attempts FROM inbox WHERE id=?`, j.ID).Scan(&state, &attempt); err != nil {
 		return err
-	} else if state != stateRunning {
+	} else if state != stateRunning || j.nativeAttempt > 0 && attempt != j.nativeAttempt {
 		return errNotOwned
 	}
 	if j.PID != "" {
@@ -121,19 +123,32 @@ func (a *Agent) answerWithReaction(ctx context.Context, j job, harness string, c
 			return &heldBack{why}
 		}
 	}
-	if _, err := a.reactAsAssistant(ctx, j.ID, harness, choice.emoji, choice.remove); err != nil {
+	sent, err := a.reactAsAssistant(ctx, j.ID, harness, choice.emoji, choice.remove)
+	if err != nil {
 		a.Logf("%s %s: reaction-only reply not sent as a reaction: %v", j.Kind, j.ID, err)
 		return err
 	}
-	res, err := a.store.db.Exec(`UPDATE inbox SET state=?,detail=NULL,notified=0,review_sent=0 WHERE id=? AND state=?`, stateAnswered, j.ID, stateRunning)
+	tx, err := a.store.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`UPDATE inbox SET state=?,result_id=?,detail=NULL,notified=0,review_sent=0 WHERE id=? AND state=? AND (?<=0 OR attempts=?)`, stateAnswered, sent.ID, j.ID, stateRunning, j.nativeAttempt, j.nativeAttempt)
 	if err != nil {
 		a.Logf("%s %s: answered with a reaction, not recorded: %v", j.Kind, j.ID, err)
 		return nil
 	}
 	if n, _ := res.RowsAffected(); n != 1 {
-		a.endJob(j.ID, stateCancelled, "stopped; its reaction was already sent")
+		tx.Rollback()
+		a.endJob(j.ID, stateCancelled, "stopped; its reaction was already sent", j.nativeAttempt)
 		a.Logf("%s %s: stopped after its reaction was sent", j.Kind, j.ID)
 		return nil
+	}
+	if err := settleSteeringIn(tx, j.ID); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
 	}
 	_, _ = a.store.db.Exec(`DELETE FROM reported WHERE item = ?`, j.ID)
 	a.noteStatus(j.ID)
@@ -154,11 +169,11 @@ func (a *Agent) finishWithReaction(ctx context.Context, j job, harness string, c
 	switch {
 	case err == nil:
 	case errors.Is(err, errNotOwned):
-		a.endJob(j.ID, stateCancelled, "cancelled; its reply was not sent:\n"+reply)
+		a.endJob(j.ID, stateCancelled, "cancelled; its reply was not sent:\n"+reply, j.nativeAttempt)
 	case errors.As(err, &hb):
-		a.endJob(j.ID, stateNotDelivered, "not sent: "+hb.why+". The reply:\n"+reply)
+		a.endJob(j.ID, stateNotDelivered, "not sent: "+hb.why+". The reply:\n"+reply, j.nativeAttempt)
 	default:
-		a.endJob(j.ID, stateNotDelivered, "not sent: the reaction could not be attached to the request: "+err.Error()+". The reply:\n"+reply)
+		a.endJob(j.ID, stateNotDelivered, "not sent: the reaction could not be attached to the request: "+err.Error()+". The reply:\n"+reply, j.nativeAttempt)
 	}
 }
 

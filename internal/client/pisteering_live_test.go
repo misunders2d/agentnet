@@ -384,24 +384,37 @@ func actualOwnedDirectSteering(t *testing.T, name, optIn string, named bool) {
 		t.Fatal("native process proof missing", err)
 	}
 	t.Logf("direct readiness harness=%s named=%t root=%s pgid_before=%d sender_current_attempt=1", name, named, root.ID, before)
-	correction := protocol.NewID()
-	body := "Correction to this same still-running request: replace the final answer with CORRECTED_ followed by the reverse of the original nonce. Do not run the command again; preserve original context."
-	if _, err = sender.QueueRequestFollowup(ctx, RequestFollowup{Conv: "", Ref: envelope.Ref{ID: root.ID, Fingerprint: parent.Key}, Attempt: 1, ID: correction, Body: body}); err != nil {
-		t.Fatal("real sender correction rejected", err)
+	corrections := []string{protocol.NewID(), protocol.NewID()}
+	secondMarker := "SECOND_" + protocol.NewID()[:8]
+	for i, correction := range corrections {
+		body := "Correction to this same still-running request: replace the final answer with CORRECTED_ followed by the reverse of the original nonce. Do not run the command again; preserve original context."
+		if i == 1 {
+			body = "Further correction to the same run: keep the previous correction's CORRECTED_ plus reversed original nonce, then append exactly |" + secondMarker + ". Both corrections must be reflected once, with no other text. Do not repeat the command or its effects."
+		}
+		if _, err = sender.QueueRequestFollowup(ctx, RequestFollowup{Conv: "", Ref: envelope.Ref{ID: root.ID, Fingerprint: parent.Key}, Attempt: 1, ID: correction, Body: body}); err != nil {
+			t.Fatal("real sender correction rejected", err)
+		}
+		var raw []byte
+		if err = sender.store.db.QueryRow(`SELECT envelope FROM outbox WHERE id=?`, correction).Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+		var carrier envelope.Envelope
+		if json.Unmarshal(raw, &carrier) != nil {
+			t.Fatal("correction carrier malformed")
+		}
+		correctionInner, err := envelope.Open(carrier, a.id, a.Address, sender.Self())
+		if err != nil || carrier.ID != correction || correctionInner.Conv != "" || correctionInner.Followup == nil || correctionInner.Followup.Attempt != 1 || correctionInner.Followup.Ref.ID != root.ID || correctionInner.Followup.Ref.Fingerprint != parent.Key || !sameFollowupTarget(correctionInner.Target, target) {
+			t.Fatal("exact signed sender correction carrier changed", err)
+		}
+		wait("native consumption", func() bool {
+			s, _ := a.store.jobState(correction)
+			return s == stateSteered || s == stateAnswered
+		})
+		if i == 0 && jobState(t, a, root.ID) != stateRunning {
+			t.Fatal("parent ended before second correction; no retry")
+		}
 	}
-	var raw []byte
-	if err = sender.store.db.QueryRow(`SELECT envelope FROM outbox WHERE id=?`, correction).Scan(&raw); err != nil {
-		t.Fatal(err)
-	}
-	var carrier envelope.Envelope
-	if json.Unmarshal(raw, &carrier) != nil {
-		t.Fatal("correction carrier malformed")
-	}
-	correctionInner, err := envelope.Open(carrier, a.id, a.Address, sender.Self())
-	if err != nil || carrier.ID != correction || correctionInner.Conv != "" || correctionInner.Followup == nil || correctionInner.Followup.Attempt != 1 || correctionInner.Followup.Ref.ID != root.ID || correctionInner.Followup.Ref.Fingerprint != parent.Key || !sameFollowupTarget(correctionInner.Target, target) {
-		t.Fatal("exact signed sender correction carrier changed", err)
-	}
-	wait("native consumption", func() bool { s, _ := a.store.jobState(correction); return s == stateSteered })
+
 	if err = a.store.db.QueryRow(`SELECT run_pgid FROM inbox WHERE id=?`, root.ID).Scan(&after); err != nil || after != before {
 		t.Fatal("original native process changed", err)
 	}
@@ -424,7 +437,7 @@ func actualOwnedDirectSteering(t *testing.T, name, optIn string, named bool) {
 	for i, j := 0, len(chars)-1; i < j; i, j = i+1, j-1 {
 		chars[i], chars[j] = chars[j], chars[i]
 	}
-	expected := "CORRECTED_" + string(chars)
+	expected := "CORRECTED_" + string(chars) + "|" + secondMarker
 	var count, attempts int
 	var answerID, result string
 	if err = a.store.db.QueryRow(`SELECT count(DISTINCT coalesce(lid,id)),coalesce(max(id),''),coalesce(max(body),'') FROM outbox WHERE reply_to=? AND json_extract(envelope,'$.kind')=?`, root.ID, envelope.KindAnswer).Scan(&count, &answerID, &result); err != nil || count != 1 || strings.TrimSpace(result) != expected {
@@ -447,10 +460,32 @@ func actualOwnedDirectSteering(t *testing.T, name, optIn string, named bool) {
 		case <-ticker.C:
 		}
 	}
+	for _, correction := range corrections {
+		var boundParent, resultID, state string
+		var boundAttempt, correctionAttempts int64
+		if err := a.store.db.QueryRow(`SELECT state,coalesce(steering_parent,''),coalesce(steering_attempt,0),coalesce(result_id,''),attempts FROM inbox WHERE id=?`, correction).Scan(&state, &boundParent, &boundAttempt, &resultID, &correctionAttempts); err != nil || state != stateAnswered || boundParent != root.ID || boundAttempt != 1 || resultID != answerID || correctionAttempts != 1 {
+			t.Fatalf("correction terminal provenance state=%s bound_attempt=%d correction_attempts=%d parent_matches=%t result_matches=%t error=%v", state, boundAttempt, correctionAttempts, boundParent == root.ID, resultID == answerID, err)
+		}
+		for {
+			h, e := sender.followupOriginal(sender.store.db, "", envelope.Ref{ID: correction, Fingerprint: parent.Key})
+			if e == nil {
+				v, e := sender.followupExecution(h.h, "")
+				if e == nil && v != nil && v.State == stateAnswered && v.Attempt == 1 && strings.Contains(v.Detail, root.ID) && strings.Contains(v.Detail, answerID) {
+					break
+				}
+			}
+			select {
+			case <-ctx.Done():
+				t.Fatal("sender did not admit correction's signed terminal/result status")
+			case <-ticker.C:
+			}
+		}
+	}
+
 	if _, found, e := a.claimNativeFollowup(parent); e != nil || found {
 		t.Fatal("finished correction replayed", found, e)
 	}
-	t.Logf("direct harness=%s named=%t root=%s correction=%s answer=%s pgid_before=%d pgid_after=%d attempts=1 signed_sender_admission=true exact_nonce_reversal=true no_replay=true executor=%s", name, named, root.ID, correction, answerID, before, after, parent.AgentID)
+	t.Logf("direct harness=%s named=%t root=%s corrections=%v answer=%s pgid_before=%d pgid_after=%d attempts=1 signed_sender_admission=true exact_nonce_reversal=true no_replay=true executor=%s", name, named, root.ID, corrections, answerID, before, after, parent.AgentID)
 }
 
 // Test-only public projection evidence. No raw native event, identifier or

@@ -877,10 +877,10 @@ var errNotOwned = errors.New("job is no longer owned by the worker")
 func (a *Agent) finishAgent(ctx context.Context, j job, r *Responder, status, body string) {
 	switch status {
 	case envelope.StatusCancelled:
-		a.endJob(j.ID, stateCancelled, body)
+		a.endJob(j.ID, stateCancelled, body, j.nativeAttempt)
 		return
 	case envelope.StatusFailed, envelope.StatusTimeout:
-		a.endJob(j.ID, stateJobFailed, body+"\n(nothing was sent to the conversation)")
+		a.endJob(j.ID, stateJobFailed, body+"\n(nothing was sent to the conversation)", j.nativeAttempt)
 		return
 	}
 	text, emotion, ok := splitEmotion(body)
@@ -895,7 +895,7 @@ func (a *Agent) finishAgent(ctx context.Context, j job, r *Responder, status, bo
 			text = ""
 		}
 		if text == "" {
-			a.endJob(j.ID, stateJobFailed, "the agent produced no reply text")
+			a.endJob(j.ID, stateJobFailed, "the agent produced no reply text", j.nativeAttempt)
 			return
 		}
 	}
@@ -924,7 +924,7 @@ func (a *Agent) finishAgent(ctx context.Context, j job, r *Responder, status, bo
 		if v != verdictRun {
 			return &heldBack{why}
 		}
-		res, err := tx.Exec(`UPDATE inbox SET state = ?, detail = NULL, result_id = ? WHERE id = ? AND state = ?`, stateAnswered, replyID, j.ID, stateRunning)
+		res, err := tx.Exec(`UPDATE inbox SET state = ?, detail = NULL, result_id = ? WHERE id = ? AND state = ? AND (?<=0 OR attempts=?)`, stateAnswered, replyID, j.ID, stateRunning, j.nativeAttempt, j.nativeAttempt)
 		if err != nil {
 			return err
 		}
@@ -938,11 +938,11 @@ func (a *Agent) finishAgent(ctx context.Context, j job, r *Responder, status, bo
 	var hb *heldBack
 	switch {
 	case errors.As(err, &hb):
-		a.endJob(j.ID, stateNotDelivered, "not sent: "+hb.why+". The reply:\n"+text)
+		a.endJob(j.ID, stateNotDelivered, "not sent: "+hb.why+". The reply:\n"+text, j.nativeAttempt)
 	case errors.Is(err, errNotOwned):
-		a.endJob(j.ID, stateCancelled, "cancelled; its reply was not sent:\n"+text)
+		a.endJob(j.ID, stateCancelled, "cancelled; its reply was not sent:\n"+text, j.nativeAttempt)
 	case err != nil && res.ID == "":
-		a.endJob(j.ID, stateNotDelivered, "not sent: "+err.Error()+". The reply:\n"+text)
+		a.endJob(j.ID, stateNotDelivered, "not sent: "+err.Error()+". The reply:\n"+text, j.nativeAttempt)
 	default:
 		a.Logf("%s %s: answered in its conversation (reply %s %s)", j.Kind, j.ID, res.ID, res.State)
 		a.noteStatus(j.ID)                                 // exact logical completion also reaches other own copies

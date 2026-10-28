@@ -55,7 +55,7 @@ func takeOver(id, kind, newState string) func(*sql.Tx, string) error {
 		if err := tx.QueryRow(`SELECT state FROM inbox WHERE id = ?`, id).Scan(&state); err != nil {
 			return err
 		}
-		if state == stateRunning || state == stateCancelReq {
+		if state == stateRunning || state == stateCancelReq || state == stateSteered {
 			return ErrBeingAnswered
 		}
 		return ErrAlreadyAnswered

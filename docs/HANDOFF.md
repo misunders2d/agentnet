@@ -1,5 +1,31 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+## v0.9.9 corrective candidate — in qualification
+
+Owner requests a new release for MEL-709 steering and MEL-701 unread recovery.
+Code records accepted corrections against the exact native parent attempt,
+settles truthful terminal/result links, preserves manual/unknown outcomes,
+reconciles safely proven shipped records after owned survivors stop, and reuses
+existing signed status synchronization. Native reaction results retain their
+exact signed control proof. Native authority, no replay and original identity
+remain unchanged; migrations append local provenance only.
+
+MEL-701 now warns when a read-save request is unconfirmed, including after Back,
+and retries through existing navigation/visibility. Newer confirmed views,
+deliberate unread and stale/disconnected workspaces retain their existing fences.
+No legacy history is blanket-cleared. The original Zenbook 13 recurrence's exact
+historical cause remains unproved; the swallowed read-write failure is reproduced
+and fixed. Do not turn the later zero after owner read-all into contrary evidence.
+
+Owned real Codex steering passes 53.46 s with two ordered corrections in the same
+process/attempt and exact result plus signed terminal links. Store 12-case and
+rendered 1280/390 unread checks, canonical build/typecheck and vet pass. T4 linked
+restart/stale/duplicate status and Pending/attention projections pass. Earlier
+reaction-history race failure is retained; current single-case race passes.
+Required full race/native/platform, mixed-version and exact-pin skin gates are
+next. No new tag, publication, deployment or live-state recovery is claimed.
+See [release checklist](plans/V0_9_9_RELEASE.md) and [interaction evidence](INTERACTION_COVERAGE.md).
+
 ## v0.9.8 published — October 28
 
 MEL-701 unread projection/retained Review, MEL-700 scoped environment clarification,

@@ -84,8 +84,12 @@ func TestGroupStrictSteeringDeliveryConsumptionAndRestart(t *testing.T) {
 		})
 	}
 	a.runJob(tctx(t), parent, &Responder{Harness: "codex", Dir: t.TempDir(), Timeout: 15 * time.Second}, nil)
-	waitState(t, a, id, stateSteered)
+	waitState(t, a, id, stateAnswered)
 	waitState(t, a, parent.ID, stateAnswered)
+	var linked bool
+	if err = a.store.db.QueryRow(`SELECT c.result_id=p.result_id AND c.result_id IS NOT NULL AND c.steering_parent=p.id AND c.steering_attempt=p.attempts FROM inbox c JOIN inbox p ON p.id=? WHERE c.id=?`, parent.ID, id).Scan(&linked); err != nil || !linked {
+		t.Fatal("accepted correction lost exact parent/result linkage", linked, err)
+	}
 	var results, attempts int
 	if err = a.store.db.QueryRow(`SELECT count(DISTINCT lid) FROM outbox WHERE conv=? AND reply_to=? AND kind=? AND body=?`, packet.State.Conv, parent.ID, envelope.KindAnswer, taggedAnswer(t, a, "OWNED_CORRECTION_ACCEPTED")).Scan(&results); err != nil || results != 1 {
 		t.Fatalf("exact corrected result: count=%d err=%v", results, err)
@@ -112,8 +116,8 @@ func TestGroupStrictSteeringDeliveryConsumptionAndRestart(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if state := jobState(t, a, id); state != stateSteered {
-		t.Fatalf("accepted correction changed after restart: %s", state)
+	if state := jobState(t, a, id); state != stateAnswered {
+		t.Fatalf("settled correction changed after restart: %s", state)
 	}
 	if _, found, err := a.claimNativeFollowup(parent); err != nil || found {
 		t.Fatalf("finished native correction replayed: %t %v", found, err)

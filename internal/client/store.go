@@ -327,7 +327,7 @@ CREATE TABLE reported(
 CREATE INDEX outbox_conv_lid ON outbox(conv, lid);
 `, historyReceiptSchema, deviceHistorySchema, proposalChoiceSchema, receiptGenerationSchema, requestFollowupSchema, answeredConversationStatusSchema, modelReportSchema, heldCopySchema, retainedConversationStatusSchema, heldLogicalSchema, waitingConversationStatusSchema, topicMarkSyncSchema, skippedCopySchema, historyArchiveSchema, `
 ALTER TABLE quarantine ADD COLUMN relay_ingress INTEGER NOT NULL DEFAULT 0;
-`, deviceHistoryOriginalPeerSchema, groupPublicationBindingSchema, agentActionSchema, nativeApprovalSchema, attentionMarkSchema, sharedTopicTitleSchema, scheduledSendSchema, conversationResourcesSchema, directTopicSchema, reminderSyncSchema, sendRetryProofSchema, topicTransferSchema}
+`, deviceHistoryOriginalPeerSchema, groupPublicationBindingSchema, agentActionSchema, nativeApprovalSchema, attentionMarkSchema, sharedTopicTitleSchema, scheduledSendSchema, conversationResourcesSchema, directTopicSchema, reminderSyncSchema, sendRetryProofSchema, topicTransferSchema, steeringLifecycleSchema}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
 const (
@@ -517,6 +517,9 @@ func (s *store) addOutbox(env envelope.Envelope, in envelope.Inner, followUp str
 		if _, err := tx.Exec(`INSERT INTO uploads(blob_id, message_id, state) VALUES(?, ?, ?)`, b.ID, env.ID, protocol.BlobUploading); err != nil {
 			return err
 		}
+	}
+	if err := settleSteeringResultIn(tx, env.ID); err != nil {
+		return err
 	}
 	return s.done(tx.Commit())
 }
@@ -1376,19 +1379,44 @@ func (s *store) jobState(id string) (string, error) {
 // finishJob records a job's end without a reply. A new needs_human
 // outcome is notified afresh. A Stop already stored at that commit wins over
 // completed NEEDS-HUMAN output; daemon interruption retains its unknown outcome.
-func (s *store) finishJob(id, state, detail string) error {
-	res, err := s.db.Exec(`UPDATE inbox
+func (s *store) finishJob(id, state, detail string, selected ...int64) error {
+	var attempt int64
+	if len(selected) > 0 {
+		attempt = selected[0]
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`UPDATE inbox
 		SET state = CASE WHEN state = ? AND ? = ? THEN ? ELSE ? END,
 		    detail = CASE WHEN state = ? AND ? = ? THEN 'cancelled by the recipient' ELSE nullif(?, '') END,
-		    notified = 0, review_sent = 0 WHERE id = ? AND state IN (?, ?)`,
+		    notified = 0, review_sent = 0 WHERE id = ? AND state IN (?, ?) AND (?<=0 OR attempts=?)`,
 		stateCancelReq, state, stateNeedHuman, stateCancelled, state,
-		stateCancelReq, state, stateNeedHuman, detail, id, stateRunning, stateCancelReq)
-	if err == nil {
-		if n, _ := res.RowsAffected(); n == 1 {
-			_, err = s.db.Exec(`DELETE FROM reported WHERE item = ?`, id) // back in review: reported afresh to each recipient
+		stateCancelReq, state, stateNeedHuman, detail, id, stateRunning, stateCancelReq, attempt, attempt)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 1 {
+		if _, err = tx.Exec(`DELETE FROM reported WHERE item = ?`, id); err != nil {
+			return err
+		}
+		if err = settleSteeringIn(tx, id); err != nil {
+			return err
+		}
+		// Acceptance may have returned after the parent already ended.
+		var parent sql.NullString
+		if err = tx.QueryRow(`SELECT steering_parent FROM inbox WHERE id=?`, id).Scan(&parent); err != nil {
+			return err
+		}
+		if state == stateSteered && parent.Valid {
+			if err = settleSteeringIn(tx, parent.String); err != nil {
+				return err
+			}
 		}
 	}
-	return s.done(err)
+	return s.done(tx.Commit())
 }
 
 // unnotified returns the ids of items waiting for this person's decision

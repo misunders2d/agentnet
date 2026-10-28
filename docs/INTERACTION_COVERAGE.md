@@ -1,5 +1,56 @@
 # Next-release interaction coverage and responsiveness
 
+## v0.9.9 corrective candidate — October 28
+
+MEL-709 uses the existing native handover and signed status path. A durable local
+parent/attempt binding precedes input; only exact native acceptance becomes
+steered. Matching owned terminal outcomes settle accepted corrections and share
+the exact stored answer/result or authorized reaction control. Manual replies
+cannot certify native completion; unknown outcomes stay explicit and never
+silently replay. Startup recovery follows owned-survivor shutdown and requires
+exact retained legacy provenance, never today's default agent or guessed names.
+
+MEL-701 reuses the already inspected Telegram Web A local/background/error
+reconciliation pattern (revision f67a40879a7d78c2683ec5a296cf55bc22417d56,
+messages.ts edit/delete flows recorded below), AgentNet's existing Store/Toasts
+and authoritative read generations. It adds truthful failure presentation for
+rejected/timed-out read saves and existing reopen/visibility recovery. Navigation
+and usable Review remain local; no pending read is presented as durable success.
+Native attempt/status provenance is the AgentNet-specific adaptation, not a new
+messenger transport or execution policy.
+
+Actual Store regression fails on 3ae19a68: read-save rejection leaves the backend
+unread and emits no failure. Candidate12-mode checks pass, including after-Back
+failure, retry, stopped/disconnected/stale workspaces, newer confirmed/unread and
+wrong-author controls, deduplication and post-ack refresh failure. Actual React/
+Store/Chromium controlled component fixtures at 1280/390 pass: error-after-Back
+feedback 34/10 ms; retained navigation 205/232 ms; confirmed read return 176/36 ms.
+Backend writes are controlled fixtures, not full installed-app timing. Canonical
+build/typecheck and exact Go wrappers pass without skips. This named rendered
+check is added to the existing native three-OS CI selection.
+
+Owned real Codex 0.165.0, inherited gpt-6.1-sol/xhigh configuration and permissions,
+consumes two ordered corrections in one native process/attempt and returns the
+exact final nonce/marker and parent/result links. Signed terminal statuses reach
+the requester; PASS 53.46 s, no retry or skip. Isolated linked-reader restart and
+terminal/stale/duplicate history proves the same canonical result. No physical
+phone or installed-client activation is claimed. Original13 legacy-message
+recurrence is not causally reproduced: later zero followed manual read-all.
+Successful real-Live 13-row read/reopen/restart/duplicate and history/read-sync
+checks pass separately; genuinely unseen/newer deliberate unread remain.
+
+New lifecycle cancellation regression is RED on the prior release and GREEN on
+the candidate. Focused cases cover terminal types, acceptance/completion race,
+manual reply, reaction proof, attempt fences and conservative legacy recovery.
+An affected 390.334 s race run passes changed cases but fails an existing linked
+reaction-history case; current isolated race passes 41.19 s. That original failure
+remains unexplained and recorded; broader qualification is pending. Earlier
+obsolete post-run steered expectations were updated to exact answered/result
+assertions while retaining consumption/restart/no-replay checks.
+
+Full control/platform/history inventory and physical-device coverage remain
+incomplete. This is candidate evidence, not a published repair.
+
 ## October 28 release disposition — current
 
 Sergey said **"okay, proceed to release"** after being told that the pushed

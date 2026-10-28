@@ -13,7 +13,8 @@ const scheduleSource=stripTypeScriptTypes((await readFile(new URL('../web/src/sc
  .replace(/^import .*;$/gm,'')).replace(/^export /gm,'');
 const source=stripTypeScriptTypes((await readFile(new URL('../web/src/store.ts',import.meta.url),'utf8'))
  .replace(/^import .*;$/gm,'').replace('constructor(readonly host: Host) {','constructor(host: Host) { this.host = host;')).replace(/^export /gm,'');
-const Store=runInNewContext(scheduleSource+'\n'+source+'\nStore',{api,errorText,pendingSends,share,messageTarget:model.messageTarget,currentCatalogAgents:model.currentCatalogAgents,directChatKey:model.directChatKey,mainPreferences,personRoots,brand:{storage:'test'},document:{visibilityState:'visible',hasFocus:()=>true},localStorage:{getItem:()=>null,setItem:()=>{}},setTimeout,clearTimeout});
+const visibilityListeners=new Map(),focusListeners=new Map();
+const Store=runInNewContext(scheduleSource+'\n'+source+'\nStore',{api,errorText,pendingSends,share,messageTarget:model.messageTarget,currentCatalogAgents:model.currentCatalogAgents,directChatKey:model.directChatKey,mainPreferences,personRoots,brand:{storage:'test'},document:{visibilityState:'visible',hasFocus:()=>true,addEventListener:(type,fn)=>visibilityListeners.set(type,fn),removeEventListener:type=>visibilityListeners.delete(type)},window:{addEventListener:(type,fn)=>focusListeners.set(type,fn),removeEventListener:type=>focusListeners.delete(type)},localStorage:{getItem:()=>null,setItem:()=>{}},setTimeout,clearTimeout});
 const tick=()=>new Promise(r=>setImmediate(r)),gate=()=>{let release;const promise=new Promise(r=>release=r);return{promise,release};};
 // These small fixtures present every row of the selected topic. The actual
 // timeline supplies this viewport input through its one observer.
@@ -75,4 +76,54 @@ for(const stop of [false,true]){
  if(stop){assert.equal(overviewCalls,1,'stopped provider does not refresh');assert.equal(dmCalls,1);}
  else{assert.equal(s.get().open.id,other);assert.equal(s.get().dm.id,other);assert.equal(s.get().overview.dms.find(d=>d.id===conv).unread,1);assert.equal(overviewCalls,2,'one committed overview after navigation');assert.equal(dmCalls,2,'no reload of the departed conversation');s.stop();}
  console.log(JSON.stringify({ok:true,mode:stop?'stopped':'navigation',overviewCalls,dmCalls,readBatches:reads.length}));
+}
+
+// A viewed row is not a durable read when its write rejects or times out.
+// Use the actual Store, then return to Review while the original write waits.
+for(const mode of ['reject-open','timeout-back','reopen-retry','visibility-retry','stopped','disconnected','stale-host','confirmed-newer','unread-newer','author-newer']){
+ let rejectRead,reads=0,fail=true,committed=false,currentAttention,currentAuthor='original-author',push;
+ const readGate=new Promise((_,reject)=>rejectRead=reject);
+ const android=mode==='visibility-retry';
+ const message=()=>({id:'failed-read',lid:'logical',claimed_key:currentAuthor,kind:'message',dir:'in',topic,unread:!committed,...(currentAttention?{attention:currentAttention}:{})});
+ const host={platform:android?'android':'daemon',workspace:{id:'failure-'+mode},listen:fn=>{push=fn;return()=>{};},async api(path,body){
+  if(path.startsWith('/api/overview'))return{version:'test',seq:2,me,dms:[{id:conv,unread:committed?0:1}],threads:[]};
+  if(path.startsWith('/api/dm?'))return{id:conv,seq:2,peer:{},kind:'group',agents:[],messages:[message()]};
+  if(path==='/api/act'){reads++;if(fail){if(reads===1)return readGate;throw Error('fictional read unavailable');}committed=true;return{};}
+  if(path.startsWith('/api/agents'))return{agents:[]};return{};
+ }};
+ const s=new Store(host);mount(s);await s.start();s.setDraft(conv,{text:'',topic});await s.open({kind:'dm',id:conv});assert.equal(reads,1);
+ const back=mode==='timeout-back'||mode==='reopen-retry';if(back)s.close();
+ if(mode==='stopped')s.stop();
+ if(mode==='disconnected')s.set({conn:'lost'});
+ if(mode==='confirmed-newer'){committed=true;await s.refetch();}
+ if(mode==='unread-newer'){currentAttention={rev:7,writer:'newer-writer'};await s.refetch();}
+ if(mode==='author-newer'){currentAuthor='different-author';await s.refetch();}
+ const error=Error(mode==='stale-host'?'stale or disconnected workspace':'fictional read request unconfirmed');if(mode==='timeout-back')error.name='TimeoutError';rejectRead(error);
+ for(let i=0;i<20;i++)await tick();
+ const suppressed=['stopped','disconnected','stale-host','confirmed-newer','unread-newer','author-newer'].includes(mode);
+ const warnings=()=>s.get().toasts.filter(t=>t.text==='Read status not confirmed. Reopen this chat to retry.');
+ assert.equal(warnings().length,suppressed?0:1,mode+': exact read failure warning scope');
+ if(!suppressed){assert.equal(committed,false);assert.equal(s.get().views[conv].messages[0].unread,true,'unconfirmed write never clears unread');}
+ if(mode==='reject-open'){
+  const visit=s.get().readVisit;s.reportVisible(visit,s.get().views[conv].messages);for(let i=0;i<20;i++)await tick();assert.equal(warnings().length,1,'repeated visible failures do not duplicate current warning');
+ }
+ if(mode==='reopen-retry'||mode==='visibility-retry'){
+  fail=false;
+  if(android){focusListeners.get('focus')();}else await s.open({kind:'dm',id:conv});
+  for(let i=0;i<20;i++)await tick();assert.equal(committed,true,mode+': existing retry commits');assert.equal(s.get().views[conv].messages[0].unread,false,'fresh retry view confirms read');
+ }
+ if(mode==='unread-newer')assert.equal(s.get().views[conv].messages[0].attention.rev,7,'newer deliberate unread survives old failure');
+ s.stop();console.log(JSON.stringify({ok:true,mode,readFailureWarning:!suppressed,reads,back}));
+}
+for(const blocked of [false,true]){
+ const heldView=gate();let committed=false,views=0,reads=0;
+ const host={platform:'daemon',workspace:{id:'read-refresh-'+blocked},listen:()=>()=>{},async api(path){
+  if(path.startsWith('/api/overview'))return{version:'test',me,dms:[{id:conv,unread:committed?0:1}],threads:[]};
+  if(path.startsWith('/api/dm?')){views++;if(views>1){if(blocked)await heldView.promise;else throw Error('Fictional read confirmation unavailable');}return{id:conv,peer:{},agents:[],messages:[{id:'confirmation',kind:'message',dir:'in',topic,unread:!committed}]};}
+  if(path==='/api/act'){reads++;committed=true;return{};}
+  if(path.startsWith('/api/agents'))return{agents:[]};return{};
+ }};
+ const s=new Store(host);mount(s);await s.start();s.setDraft(conv,{text:'',topic});await s.open({kind:'dm',id:conv});for(let i=0;i<20;i++)await tick();
+ assert.equal(reads,1);assert.equal(s.get().toasts.length,blocked?0:1,'confirmation failure uses existing load error only');assert(!s.get().toasts.some(t=>t.text==='Read status not confirmed. Reopen this chat to retry.'),'accepted write has no duplicate write warning');
+ s.close();assert.equal(s.get().open,null,'Back remains available during blocked confirmation');heldView.release();for(let i=0;i<20;i++)await tick();s.stop();console.log(JSON.stringify({ok:true,mode:blocked?'blocked-read-confirmation':'failed-read-confirmation',reads}));
 }

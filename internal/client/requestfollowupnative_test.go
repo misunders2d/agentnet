@@ -106,13 +106,16 @@ func TestNativeRequestFollowupAcceptanceOrderFilesAndNoReplay(t *testing.T) {
 	if _, found, err := a.claimNativeFollowup(parent); err != nil || found {
 		t.Fatalf("accepted correction repeated: %v %v", found, err)
 	}
-	// Restart recovery retains accepted terminal corrections; it must not turn
-	// them back into executable requests.
+	// Restart recovery settles accepted corrections as interrupted with their
+	// parent; it must not turn them back into executable requests.
 	if err := a.store.interruptRunning(); err != nil {
 		t.Fatal(err)
 	}
+	if err := a.reconcileSteeringAfterStop(); err != nil {
+		t.Fatal(err)
+	}
 	for _, id := range ids {
-		if state, err := a.store.jobState(id); err != nil || state != stateSteered {
+		if state, err := a.store.jobState(id); err != nil || state != stateInterrupt {
 			t.Fatal(state, err)
 		}
 	}
@@ -386,13 +389,21 @@ func TestNativeRequestFollowupOwnedWorkerProcess(t *testing.T) {
 	t.Setenv("AGENTNET_CODEX_FIXTURE_EXE", exe)
 	t.Setenv("AGENTNET_CODEX_ROOM_FIXTURE", "steer")
 	a, parent, ref := nativeFollowupFixture(t)
+	parent.nativeAttempt = 1
+	if _, err := a.store.db.Exec(`UPDATE inbox SET attempts=1,last_attempt_at=unixepoch() WHERE id=?`, parent.ID); err != nil {
+		t.Fatal(err)
+	}
 	id := protocol.NewID()
 	if _, err = a.QueueRequestFollowup(tctx(t), RequestFollowup{Conv: parent.Conv, Ref: ref, ID: id, Body: "Use English instead"}); err != nil {
 		t.Fatal(err)
 	}
 	a.runJob(tctx(t), parent, &Responder{Harness: "codex", Dir: t.TempDir(), Timeout: 15 * time.Second}, nil)
-	waitState(t, a, id, stateSteered)
+	waitState(t, a, id, stateAnswered)
 	waitState(t, a, parent.ID, stateAnswered)
+	var linked bool
+	if err := a.store.db.QueryRow(`SELECT c.steering_parent=p.id AND c.steering_attempt=p.attempts AND p.attempts=1 AND c.result_id=p.result_id AND c.result_id IS NOT NULL FROM inbox c JOIN inbox p ON p.id=? WHERE c.id=?`, parent.ID, id).Scan(&linked); err != nil || !linked {
+		t.Fatal("exact native correction parent/attempt/result lost", linked, err)
+	}
 	var count int
 	if err = a.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE conv=? AND reply_to=? AND kind=? AND body=?`, parent.Conv, parent.ID, envelope.KindAnswer, taggedAnswer(t, a, "OWNED_CORRECTION_ACCEPTED")).Scan(&count); err != nil || count == 0 {
 		t.Fatalf("owned process did not send the correlated original answer: %d %v", count, err)
@@ -468,6 +479,16 @@ func directNativeCorrection(t *testing.T, named bool, kind string) (*Agent, *Age
 	}
 	ref := &envelope.FollowupRef{Ref: envelope.Ref{ID: root.ID, Fingerprint: parent.Key}, Attempt: 1}
 	correction := sealTo(t, sender, a, envelope.Inner{Kind: kind, Body: "Use English instead", ReplyTo: root.ID, Target: target, Followup: ref})
+	correctionInner, err := envelope.Open(correction, a.id, a.Address, sender.Self())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = sender.store.addOutbox(correction, correctionInner, "", nil, boundOutgoing{fingerprint: a.Self().Fingerprint()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = sender.store.db.Exec(`UPDATE outbox SET state=? WHERE id=?`, protocol.StateCustody, correction.ID); err != nil {
+		t.Fatal(err)
+	}
 	if err := a.verifyAndStore(tctx(t), correction); err != nil {
 		t.Fatal(err)
 	}
@@ -686,7 +707,11 @@ func TestDirectNativeFollowupOwnedWorkerProcess(t *testing.T) {
 			defer stop()
 			eventually(t, "recipient named capability advertised", func() bool { return a.requireAgentIdentity(tctx(t), sender.Self()) == nil })
 			a.runJob(tctx(t), parent, &Responder{Harness: "codex", Dir: t.TempDir(), Timeout: 10 * time.Second}, nil)
-			waitState(t, a, id, stateSteered)
+			waitState(t, a, id, stateAnswered)
+			var linked bool
+			if err := a.store.db.QueryRow(`SELECT c.steering_parent=p.id AND c.steering_attempt=p.attempts AND p.attempts=1 AND c.result_id=p.result_id AND c.result_id IS NOT NULL FROM inbox c JOIN inbox p ON p.id=? WHERE c.id=?`, parent.ID, id).Scan(&linked); err != nil || !linked {
+				t.Fatal("exact direct correction parent/attempt/result lost", linked, err)
+			}
 			var parentState, parentDetail string
 			a.store.db.QueryRow(`SELECT state,coalesce(detail,'') FROM inbox WHERE id=?`, parent.ID).Scan(&parentState, &parentDetail)
 			t.Logf("owned direct result state=%s detail=%s", parentState, parentDetail)

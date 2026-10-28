@@ -657,6 +657,9 @@ func (s *store) addConvOutboxGuarded(copies []outCopy, local envelope.Inner, cla
 			return err
 		}
 	}
+	if err := settleSteeringResultIn(tx, first); err != nil {
+		return err
+	}
 	if err := s.done(tx.Commit()); err != nil {
 		return err
 	}
