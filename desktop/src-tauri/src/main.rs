@@ -8,6 +8,7 @@
 
 mod deeplink;
 mod clipboard;
+mod droppedfiles;
 mod skinfolder;
 mod download;
 mod appcontrols;
@@ -62,6 +63,7 @@ struct Shell {
     signals: Mutex<Option<Sender<Signal>>>,
     last_error: Mutex<Option<String>>,
     unread: Mutex<unread::State>,
+    drops: Mutex<droppedfiles::Drops>,
     quitting: AtomicBool,
 }
 
@@ -77,7 +79,7 @@ fn main() {
         .plugin(tauri_plugin_opener::Builder::new().open_js_links_on_click(false).build())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![clipboard::agentnet_clipboard_image, skinfolder::agentnet_skin_folder, download::agentnet_download_blob, download::agentnet_cancel_download, appcontrols::agentnet_app_controls])
+        .invoke_handler(tauri::generate_handler![clipboard::agentnet_clipboard_image, droppedfiles::agentnet_dropped_file, skinfolder::agentnet_skin_folder, download::agentnet_download_blob, download::agentnet_cancel_download, appcontrols::agentnet_app_controls])
         .manage(Shell::default())
         .setup(move |app| {
             #[cfg(target_os = "linux")]
@@ -88,15 +90,19 @@ fn main() {
                 return Ok(());
             }
             let handle = app.handle().clone();
-            let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+            let builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 .initialization_script(include_str!("clipboard.js"))
-                .initialization_script(if cfg!(target_os = "linux") { concat!("window.__agentnetLinuxDownloads=true;", include_str!("download.js")) } else { include_str!("download.js") })
+                .initialization_script(if cfg!(target_os = "linux") { include_str!("droppedfiles.js") } else { "" })
+                .initialization_script(if cfg!(target_os = "linux") { concat!("window.__agentnetLinuxDownloads=true;", include_str!("download.js")) } else { include_str!("download.js") });
+            // Windows needs HTML5 handling. Linux WebKit supplies URI strings
+            // instead of File objects, so use its trusted native OS drop.
+            #[cfg(not(target_os = "linux"))]
+            let builder = builder.disable_drag_drop_handler();
+            let window = builder
                 .title("AgentNet")
                 .inner_size(1200.0, 800.0)
                 .min_inner_size(380.0, 600.0)
                 .visible(!hidden)
-                // Skins (Comic and installed ones) take dropped files themselves.
-                .disable_drag_drop_handler()
                 // Copy link / Copy invitation on Linux and Windows.
                 .enable_clipboard_access()
                 .on_navigation({
@@ -150,6 +156,8 @@ fn main() {
                     }
                 })
                 .build()?;
+            #[cfg(target_os = "linux")]
+            droppedfiles::install(&window);
             *app.state::<Shell>().splash.lock().unwrap() = window.url().ok();
             #[cfg(target_os = "linux")]
             if let Ok(Some(previous)) = &installation {

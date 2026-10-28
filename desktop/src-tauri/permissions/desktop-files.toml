@@ -1,7 +1,7 @@
 [[permission]]
 identifier = "allow-agentnet-desktop-files"
-description = "Choose one bounded skin folder or download an explicit same-origin blob from the current main app page."
-commands.allow = ["agentnet_skin_folder", "agentnet_download_blob"]
+description = "Choose one bounded skin folder, consume exact OS-dropped file grants, or download an explicit same-origin blob from the current main app page."
+commands.allow = ["agentnet_skin_folder", "agentnet_download_blob", "agentnet_dropped_file"]
 
 [[permission]]
 identifier = "allow-agentnet-app-controls"

@@ -90,6 +90,7 @@
     return r.json();
   };
   const nativeAppJSON = typeof window.__agentnetNativeAppJSON === "function" ? window.__agentnetNativeAppJSON : null;
+  const nativeFileDrop = typeof window.__agentnetSubscribeFileDrop === "function" ? window.__agentnetSubscribeFileDrop : null;
   const appJSON = async (path, body) => {
     if (browser) throw new Error("Open the AgentNet app for this computer's settings.");
     if (nativeAppJSON) {
@@ -265,7 +266,7 @@
     };
     const controls = { open(trigger) { if (window.agentnet === host) bar?.open(trigger); },
       claim(root) { return window.agentnet === host && root === controlsRoot && root.isConnected ? bar.claim() : () => {}; } };
-    const host = Object.freeze(Object.assign({}, bound, common, { api, workspaces, linkTo: (target) => linkTo(workspaces?.list().find(w=>w.id===wid)?.realm || bound.workspace.realm, target) }, bar ? { controls } : {}, canRebind && bound.platform === "daemon" ? { reconnect: () => rebind(host) } : {}));
+    const host = Object.freeze(Object.assign({}, bound, common, { api, workspaces, linkTo: (target) => linkTo(workspaces?.list().find(w=>w.id===wid)?.realm || bound.workspace.realm, target) }, bar ? { controls } : {}, nativeFileDrop && bound.platform === "daemon" ? { onFileDrop: handler => nativeFileDrop(drop => window.agentnet === host && handler(drop)) } : {}, canRebind && bound.platform === "daemon" ? { reconnect: () => rebind(host) } : {}));
     return host;
   };
   // rebind: this computer's program restarted and retired the membership's

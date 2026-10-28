@@ -91,6 +91,9 @@ export interface AndroidNotificationStatus {
   channel?: { importance: number; sound: boolean; vibration: boolean };
 }
 
+export interface DroppedFile { name: string; read(): Promise<File>; discard(): void }
+export interface FileDrop { x: number; y: number; files: DroppedFile[]; error?: string }
+
 export interface Host {
   /** Native shell fallback, read only in response to paste; absent in browsers. */
   clipboardImage?(): Promise<File | null>;
@@ -120,6 +123,8 @@ export interface Host {
   listen(fn: (e: HostEvent) => void): () => void;
   file(id: string, index: number, dir?: string): Promise<{ bytes: Uint8Array }>;
   stage(file: File): Promise<unknown>;
+  /** Optional native OS file grants; return true only for this visible target. */
+  onFileDrop?(handler: (drop: FileDrop) => boolean): () => void;
   /** Optional authenticated local sender preparation; never a relay service. */
   prepareVideo?(file: File, signal: AbortSignal): Promise<File>;
   /** Desktop shell only; actions on this computer, never membership APIs. */

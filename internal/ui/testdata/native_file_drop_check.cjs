@@ -1,0 +1,20 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+(async()=>{
+ const source=fs.readFileSync('../../desktop/src-tauri/src/droppedfiles.js','utf8'),calls=[],window={__TAURI_INTERNALS__:{invoke:async(command,args)=>{calls.push({command,args});return new Uint8Array([7,8,9]).buffer}}};
+ vm.runInNewContext(source,{window,File,Uint8Array,ArrayBuffer,Promise});
+ let selected,count=0;
+ const stop=window.__agentnetSubscribeFileDrop(drop=>{count++;selected=drop.files[0];assert.equal(drop.x,12);assert.equal(drop.y,34);return true});
+ const drop={x:12,y:34,files:[{id:'1',name:'selected.txt'}]};
+ window.__agentnetNativeFileDrop(drop);
+ assert.equal(calls.length,0,'metadata alone performs no filesystem read');
+ assert.deepEqual(Object.keys(selected).sort(),['discard','name','read']);
+ const [first,second]=await Promise.all([selected.read(),selected.read()]);
+ assert.equal(first,second);assert.equal(first.name,'selected.txt');assert.deepEqual([...new Uint8Array(await first.arrayBuffer())],[7,8,9]);
+ assert.deepEqual(JSON.parse(JSON.stringify(calls)),[{command:'agentnet_dropped_file',args:{id:'1',discard:false}}]);
+ window.__agentnetNativeFileDrop(drop);assert.equal(count,1,'duplicate OS event cannot attach twice');
+ stop();window.__agentnetNativeFileDrop({x:12,y:34,files:[{id:'2',name:'unused.txt'}]});await new Promise(resolve=>setImmediate(resolve));
+ assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1))),{command:'agentnet_dropped_file',args:{id:'2',discard:true}});
+ assert(calls.every(call=>!('path' in call.args)),'page never chooses a filesystem path');
+ const ordinary={};vm.runInNewContext(source,{window:ordinary});assert.equal(ordinary.__agentnetSubscribeFileDrop,undefined);
+ console.log('native file-drop bridge PASS');
+})().catch(error=>{console.error(error);process.exitCode=1});

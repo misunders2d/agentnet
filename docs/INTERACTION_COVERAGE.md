@@ -1592,13 +1592,27 @@ Comic and Zoom draft screenshots were inspected; the retained page-logic suite
 also passes. The collection carries the same regression for its three standalone
 skins. These are controlled browser File events, not native OS drag evidence.
 
-The owner's Linux file-manager symptom remains unqualified: this host has GTK
-and WebKit bindings but no isolated X display/input runner or retained desktop
-test binary. No test used the owner's display. Tauri's documented disabled
-native drag handler supports HTML5 drops on Windows; that fact does not prove
-Linux exposes File objects. No general filesystem IPC, URI-to-path reader,
-new dependency or native-handler switch was added. An installed Linux drop
-still needs verification before claiming that reported route repaired.
+The initial browser check did not qualify the owner's Linux file-manager
+route. A subsequent isolated Xvfb/GTK drag into the real published v0.9.7
+shell with candidate UI reproduced it: WebKit supplied URI/string types with
+an empty FileList, and the pathname entered the existing draft. That shell's
+native source was unchanged through candidate 47f59d4b. Only owned test
+processes and a fresh display were used; no owner's session was touched.
+
+The Linux shell now uses Tauri 2.12.1's existing native OS-drop event. Its
+exact locked crate source was inspected. OS-selected files create short-lived,
+single-use, exact-page grants. JavaScript receives basenames and opaque IDs;
+there is no path-read command. Reads run off the UI thread and accept bounded,
+nonempty regular files only, refusing final symlinks. No dependency was added.
+Windows/macOS retain browser drops. Host.onFileDrop is optional for skins.
+
+Sixteen rendered browser/native-grant cases pass across Comic, Classic, Zoom
+and Holonet at 1280/390 pixels (14.46s), plus the native bridge test (0.06s).
+Named pending files appear before held reads finish. Tests retain later text
+edits, remove a file during reading, navigate away/back, refuse a failed read,
+remove the failed file, and send only exact remaining bytes on explicit Send.
+Leaving views cannot claim a new native drop. The shell still needs compilation,
+Rust tests and another actual OS drag before this route is qualified.
 
 ### Integrated verification repairs — October 28 (MEL-642)
 

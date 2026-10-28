@@ -51,6 +51,8 @@ export interface StagedFile {
   original?: File;           // untouched source for an explicit Original file choice
   mediaMode?: "original" | "smaller";
   preparing?: boolean;
+  nativeReading?: boolean;
+  nativeError?: string;
   mediaProgress?: number;
   mediaNote?: string;
 }
@@ -1129,6 +1131,11 @@ export class Store {
   stop() {
     ++this.unreadLanding;this.unreadReturn=null;
     this.dismissMessageLanding();
+    // A native grant belongs to this renderer. Keep an interrupted draft
+    // truthful on workspace/skin return; late reads cannot reactivate it.
+    for (const [conv, draft] of Object.entries(this.state.drafts)) {
+      if (draft.files?.some(file => file.nativeReading)) this.setDraft(conv, { ...draft, files: draft.files.map(file => file.nativeReading ? { ...file, nativeReading: false, nativeError: "Attachment interrupted. Remove it and drop it again." } : file) });
+    }
     const saved=this.host.workspaces?.state?.(this.host.workspace.id);
     if(saved)saved.comicDrafts={handle:this.host.workspace.handle,drafts:this.state.drafts,open:this.state.open,dm:this.state.dm,thread:this.state.thread,tab:this.state.tab};
     this.alive = false;

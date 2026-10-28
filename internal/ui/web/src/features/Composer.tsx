@@ -17,7 +17,8 @@ import { useAgentNames, useApp, useWide } from "../context";
 import { agentHistoryThread, agentName, deviceTarget, deviceWho, firstLine, niceDevice, participants, personName, scopeMatches, threadAgentHost, threadAgentKey, threadAgentID, threadAuthor, whoName } from "../model";
 import { useStore, type Draft, type StagedFile } from "../store";
 import { EmojiPicker, useEmojiPreload } from "./Emoji";
-import { DropTarget, FilesTray, bytes, draftFiles, overLimit, releaseFiles, useFileDrop } from "./Composer.files";
+import { DropTarget, FilesTray, bytes, draftFiles, droppedDrafts, overLimit, releaseFiles, useFileDrop } from "./Composer.files";
+import type { DroppedFile } from "../host";
 import { agentTargets, spanAgentTargets, withoutAgents, candidates, decode, encode, guestAuthor, matches, shift, trigger, type Candidate, type Span } from "./Composer.mentions";
 import { Field, IntentRow, PlusMenu, ReplyChip, SendButton, menuIcons, type MenuAction } from "./Composer.parts";
 import { MentionList, optionId } from "./Composer.picker";
@@ -176,7 +177,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   const sending = store.host.platform === "android" && !!busy[conv]; // Android exposes pre-admission progress without a queued receipt
   const gone = target.kind === "agent" && !target.canAsk;
   const needsAgent = visitor && target.kind !== "agent";
-  const ready = !closed && !sending && !files.some(f => f.preparing) && !gone && !needsAgent && !handled && !missingReply && !missingTopic && !limit && (!!text.trim() || (files.length > 0 && target.kind !== "answer"));
+  const ready = !closed && !sending && !files.some(f => f.preparing || f.nativeReading || f.nativeError) && !gone && !needsAgent && !handled && !missingReply && !missingTopic && !limit && (!!text.trim() || (files.length > 0 && target.kind !== "answer"));
 
   const typingScope = dm && !closed && !visitor && !(dm.kind === "group" && target.kind === "agent") ? { conv: dm.id } : null;
   const typing = useTypingSignal(store.api, typingScope, typingView);
@@ -321,13 +322,42 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   }
   const dropped = useCallback((list: File[]) => addFiles(list), [conv, filesAllowed, closed?.title]);
   const dropError = useCallback((text: string) => setNotice({ conv, text }), [conv]);
-  const dragRect = useFileDrop(zone, filesAllowed && !sending, dropped, dropError);
+  const nativeDropped = useCallback((selected: DroppedFile[]) => {
+    const draft = store.draft(conv);
+    if (lim && (draft.files?.length || 0) + selected.length > lim.max_count) {
+      selected.forEach(file => file.discard()); dropError("Remove files first: one message takes at most " + lim.max_count + " files."); return;
+    }
+    const pending = droppedDrafts(selected);
+    setNotice(null);
+    store.setDraft(conv, { ...draft, files: [...(draft.files || []), ...pending] });
+    void (async () => {
+      for (let i = 0; i < selected.length; i++) {
+        const key = pending[i].key;
+        if (!store.isActive() || !store.draft(conv).files?.some(file => file.key === key)) { selected[i].discard(); continue; }
+        try {
+          const actual = draftFiles([await selected[i].read()])[0];
+          if (!actual) throw Error("Empty files can’t be attached.");
+          const current = store.draft(conv);
+          if (!store.isActive() || !current.files?.some(file => file.key === key)) { releaseFiles([actual]); continue; }
+          store.setDraft(conv, { ...current, files: current.files.map(file => file.key === key ? { ...actual, key } : file) });
+        } catch (error) {
+          const current = store.draft(conv);
+          if (!store.isActive() || !current.files?.some(file => file.key === key)) continue;
+          store.setDraft(conv, { ...current, files: current.files.map(file => file.key === key ? { ...file, nativeReading: false, nativeError: error instanceof Error ? error.message : String(error) } : file) });
+          dropError("Couldn’t attach " + selected[i].name + ": " + (error instanceof Error ? error.message : String(error)));
+        }
+      }
+    })();
+  }, [store, conv, lim?.max_count, dropError]);
+  const nativeDropActive = useCallback(() => store.isActive() && store.get().open?.id === conv, [store, conv]);
+  const dragRect = useFileDrop(zone, filesAllowed && !sending, dropped, dropError, store.host.onFileDrop, nativeDropped, nativeDropActive);
 
   function removeFile(key: string) {
     mediaJobs.current.get(conv + ":" + key)?.cancel();
     const d = latest();
     const f = (d.files || []).find((x) => x.key === key);
     if (!f) return;
+    if (f.nativeError) setNotice(notice => notice?.conv === conv ? null : notice);
     releaseFiles([f]);
     if (typeof f.staged === "string") store.api.discard([f.staged]).catch(() => {}); // AgentNet also drops it on its own within the hour
     write({ ...d, files: (d.files || []).filter((x) => x.key !== key) });
@@ -712,6 +742,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     : "Message " + personName(dm?.peer);
   const status: Status | null = notice?.conv === conv ? { text: notice.text, kind: "error" }
     : handled ? { text: "This request was handled meanwhile, so it can’t be answered here now. Cancel the reply to send something new.", kind: "error" }
+    : files.some(file => file.nativeReading) ? { text: "Adding dropped files…", kind: "progress" }
     : limit ? { text: limit, kind: "error" }
     : sending && busy[conv] ? { text: busy[conv], kind: "progress" }
     : needsAgent ? { text: "You’re here because of your agent. Type @ to ask it something.", kind: "info" }

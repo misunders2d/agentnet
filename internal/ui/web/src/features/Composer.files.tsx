@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { IconFileUpload, IconX } from "@tabler/icons-react";
 import type { T } from "../api";
 import type { StagedFile } from "../store";
+import type { DroppedFile, Host } from "../host";
 import { size } from "../model";
 import { mediaKind } from "./Composer.media";
 
@@ -28,9 +29,15 @@ export function draftFiles(list: File[], pasted = false): StagedFile[] {
 
 export const releaseFiles = (files: StagedFile[]) => { for (const f of files) if (f.url) URL.revokeObjectURL(f.url); };
 
+export const droppedDrafts = (files: DroppedFile[]): StagedFile[] => files.map(file => ({
+  key: "f" + ++seq, name: file.name, size: 0, type: "", file: new File([], file.name), nativeReading: true,
+}));
+
 /** overLimit says why these files cannot go in one message ("" when they can). */
-export function overLimit(files: Pick<StagedFile, "name" | "size">[], lim: T.FileLimits | undefined): string {
+export function overLimit(files: Pick<StagedFile, "name" | "size" | "nativeReading" | "nativeError">[], lim: T.FileLimits | undefined): string {
   if (!files.length) return "";
+  if (files.some(file => file.nativeReading)) return "Adding dropped files…";
+  if (files.some(file => file.nativeError)) return "A dropped file could not be read. Remove it and drop it again.";
   if (!lim) return "Files can’t be sent from here.";
   if (files.length > lim.max_count) return "One message takes at most " + lim.max_count + " files. Remove " + (files.length - lim.max_count) + " to send.";
   const big = files.find((f) => f.size > lim.max_file);
@@ -49,7 +56,7 @@ export function FilesTray({ files, lim, onRemove, onMedia, busy }: { files: Stag
     <ul aria-label="Files to send" className="-mx-1 mb-2 flex gap-3 overflow-x-auto px-1 pt-3 pb-1 [scrollbar-width:thin]">
       {files.map((f) => {
         const tooBig = !!lim && f.size > lim.max_file;
-        const kind = mediaKind(f.original || f.file);
+        const kind = f.nativeReading || f.nativeError ? undefined : mediaKind(f.original || f.file);
         const remove = (
           <button type="button" disabled={busy} onClick={() => onRemove(f.key)} aria-label={"Remove " + f.name}
             className="absolute -top-4 -right-4 grid size-11 place-items-center rounded-full disabled:opacity-40">
@@ -83,7 +90,7 @@ export function FilesTray({ files, lim, onRemove, onMedia, busy }: { files: Stag
             <span aria-hidden="true" className="grid size-10 shrink-0 place-items-center rounded-lg bg-agent text-[11px] font-bold tracking-wide text-agent-ink">{ext(f.name)}</span>
             <span className="min-w-0">
               <span className="block truncate text-sm font-semibold">{f.name}</span>
-              <span className={"block text-[13px] tnum " + (tooBig ? "font-semibold text-danger" : "text-muted")}>{bytes(f.size)}{tooBig ? " · too big" : ""}</span>
+              <span className={"block text-[13px] tnum " + (tooBig || f.nativeError ? "font-semibold text-danger" : "text-muted")}>{f.nativeReading ? "Adding…" : f.nativeError ? "Couldn’t attach · remove and drop again" : bytes(f.size)}{tooBig ? " · too big" : ""}</span>
             </span>
             {remove}
           </li>
@@ -105,8 +112,20 @@ function droppedFiles(transfer: DataTransfer): File[] {
   return [...(transfer.items || [])].filter(item => item.kind === "file").map(item => item.getAsFile()).filter((file): file is File => !!file);
 }
 
-export function useFileDrop(zone: HTMLElement | null, enabled: boolean, onFiles: (files: File[]) => void, onError: (text: string) => void): DOMRect | null {
+export function useFileDrop(zone: HTMLElement | null, enabled: boolean, onFiles: (files: File[]) => void, onError: (text: string) => void, native?: Host["onFileDrop"], onNative?: (files: DroppedFile[]) => void, active?: () => boolean): DOMRect | null {
   const [rect, setRect] = useState<DOMRect | null>(null);
+  useEffect(() => native?.(drop => {
+    if (!zone?.isConnected || active && !active()) return false;
+    const bounds = zone.getBoundingClientRect();
+    if (!bounds.width || !bounds.height || drop.x < bounds.left || drop.x > bounds.right || drop.y < bounds.top || drop.y > bounds.bottom) return false;
+    const tree = zone.getRootNode() as Document | ShadowRoot;
+    const hit = tree.elementFromPoint(drop.x, drop.y);
+    if (!hit || !zone.contains(hit)) return false; // a leaving view or covering dialog is not this target
+    if (drop.error) { onError(drop.error); return true; }
+    if (!enabled || !onNative) { for (const file of drop.files) file.discard(); onError("Files can’t be attached here right now."); return true; }
+    onNative(drop.files);
+    return true;
+  }), [zone, enabled, onError, native, onNative, active]);
   useEffect(() => {
     if (!zone) { setRect(null); return; }
     if (!enabled) setRect(null);
@@ -122,11 +141,14 @@ export function useFileDrop(zone: HTMLElement | null, enabled: boolean, onFiles:
       const transfer = e.dataTransfer;
       // A local-file URL with no File object is not permission to read its
       // path. Refuse it instead of letting the textarea insert a pathname.
-      const localURL = transfer?.getData("text/uri-list").split(/\r?\n/).some(line => /^file:/i.test(line.trim()));
-      if (!carriesFiles(transfer) && !localURL) return;
+      const urls = transfer?.getData("text/uri-list") || "";
+      const localURL = urls.split(/\r?\n/).some(line => /^file:/i.test(line.trim()));
+      const unreadableURI = !!transfer && [...transfer.types].includes("text/uri-list") && !urls;
+      if (!carriesFiles(transfer) && !localURL && !unreadableURI) return;
       e.preventDefault();
       depth = 0;
       setRect(null);
+      if (native) return; // the native OS event owns this drop; never attach it twice
       if (!enabled) { onError("Files can’t be attached here right now."); return; }
       const files = transfer ? droppedFiles(transfer) : [];
       if (!files.length) { onError("This drop did not include readable files. Use Attach to choose them."); return; }
@@ -144,7 +166,7 @@ export function useFileDrop(zone: HTMLElement | null, enabled: boolean, onFiles:
       zone.removeEventListener("dragleave", leave);
       zone.removeEventListener("drop", drop);
     };
-  }, [zone, enabled, onFiles, onError]);
+  }, [zone, enabled, onFiles, onError, native]);
   return rect;
 }
 

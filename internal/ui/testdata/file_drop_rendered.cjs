@@ -9,16 +9,19 @@ const assets = path.resolve(__dirname, '../static');
 const collection = process.env.AGENTNET_DROP_SKINS;
 const skins = collection ? ['comic', 'classic', 'zoom', 'holonet'] : ['comic'];
 const boot = `
-const source='c'.repeat(64),other='d'.repeat(64),skin=new URL(location).searchParams.get('skin');
+const source='c'.repeat(64),other='d'.repeat(64),skin=new URL(location).searchParams.get('skin'),nativeMode=new URL(location).searchParams.has('native'),nativeListeners=new Set();
 const me={person:'a'.repeat(32),label:'Atlas',address:'atlas/laptop',fingerprint:'11111111-11111111-11111111-11111111',state:'self',devices:[]};
 const peer={person:'b'.repeat(32),label:'Briar',address:'briar/desk',fingerprint:'22222222-22222222-22222222-22222222',state:'pinned',devices:[]};
 const chat=id=>({id,kind:'group',title:id===source?'Drop fixture':'Other chat',peer,role:'member',members:[me,peer],agents:[],guests:[],topics:[],messages:[]});
 const threads={[source]:chat(source),[other]:chat(other)};
-let opened,changed;const f=window.fixture={uploads:[],writes:[],open:id=>opened(id,'conversation')};
+let opened,changed;const f=window.fixture={uploads:[],writes:[],reads:[],discards:[],open:id=>opened(id,'conversation')};
+f.nativeDrop=(names,point)=>{const files=names.map(name=>({name,read:()=>new Promise((resolve,reject)=>f.reads.push({name,resolve,reject})),discard:()=>f.discards.push(name)}));for(const fn of [...nativeListeners].reverse())if(fn({...point,files}))return true;return false};
+f.finishRead=(index,fail=false)=>{const read=f.reads[index];if(fail)read.reject(Error('Invented native read failure'));else read.resolve(new File([new Uint8Array([4,5,6])],read.name,{type:'text/plain'}))};
 const overview={version:'fixture',seq:1,topic_list:true,me,person:me,persons:true,groups:true,files:{max_file:1024,max_count:10},people:[peer],threads:[],topics:[],dms:[threads[source],threads[other]],directory:{current:true,members:[]},review:[],quarantine:[],links:[]};
 f.disable=()=>{overview.files=null;overview.seq++;changed({type:'change',seq:overview.seq})};
 f.enable=()=>{overview.files={max_file:1024,max_count:10};overview.seq++;changed({type:'change',seq:overview.seq})};
 const host={version:1,platform:'daemon',workspace:{id:'drop-fixture',name:'Drop fixture',state:'enrolled',address:me.address},skins:[],onSkinsChange(){return()=>{}},onOpen:fn=>opened=fn,listen(fn){changed=fn;return()=>{}},
+ onFileDrop:nativeMode?fn=>{nativeListeners.add(fn);return()=>nativeListeners.delete(fn)}:undefined,
  stage:async file=>{f.uploads.push({name:file.name,size:file.size,bytes:[...new Uint8Array(await file.arrayBuffer())]});return 'staged-'+f.uploads.length},
  api:async(p,b)=>{if(p.startsWith('/api/overview'))return structuredClone(overview);if(p.startsWith('/api/dm?'))return structuredClone(threads[new URL(p,location).searchParams.get('id')]);if(p==='/api/dm/send')return new Promise((resolve,reject)=>f.writes.push({body:b,resolve,reject}));if(p.startsWith('/api/agents'))return{agents:[]};if(p.includes('/groups/invitations'))return[];if(p.startsWith('/api/typing/status'))return{send:false,scopes:[]};return{};}};
 const base='/skin/'+skin+'/',manifest=await(await fetch(base+'skin.json')).json();
@@ -119,6 +122,52 @@ async function drop(field, mode, names = ['notes.txt']) {
       assert.equal(await page.evaluate(() => fixture.writes[0].body.files.length), 2);
       assert.deepEqual(errors, []);
       console.log('FILE DROP PASS ' + skin + ' ' + width);
+      await page.close();
+    }
+    for (const skin of skins) for (const width of [1280, 390]) {
+      const page = await browser.newPage({ viewport: { width, height: 850 }, reducedMotion: 'reduce' });
+      const errors = []; page.on('pageerror', error => errors.push(String(error)));
+      await page.goto('http://127.0.0.1:' + server.address().port + '/?native=1&skin=' + skin);
+      await page.waitForFunction(() => window.ready);
+      await page.evaluate(() => fixture.open('c'.repeat(64)));
+      const openWrite = async () => { if (skin === 'zoom') await page.getByRole('button', { name: 'Write in this group…', exact: true }).click(); };
+      await openWrite();
+      const field = skin === 'comic' ? page.locator('[data-part=conversation][aria-label="Drop fixture"] textarea') : skin === 'zoom' ? page.locator('#skin #write-body') : page.locator('#skin textarea').last();
+      await field.fill('Native draft');
+      const at = await field.boundingBox();
+      const point = { x: at.x + at.width / 2, y: at.y + at.height / 2 };
+      assert.equal(await page.evaluate(point => fixture.nativeDrop(['remove.txt', 'kept.txt'], point), point), true);
+      await page.getByRole('button', { name: 'Remove remove.txt', exact: true }).waitFor();
+      await page.getByRole('button', { name: 'Remove kept.txt', exact: true }).waitFor();
+      await page.waitForFunction(() => fixture.reads.length === 1);
+      assert.deepEqual(await page.evaluate(() => [fixture.uploads.length, fixture.writes.length]), [0, 0]);
+      await field.fill('Native draft edited while reading');
+      await page.getByRole('button', { name: 'Remove remove.txt', exact: true }).click();
+      if (skin === 'zoom') await page.locator('#skin #dialog-cancel').click();
+      await page.evaluate(() => fixture.open('d'.repeat(64)));
+      await page.evaluate(() => fixture.finishRead(0));
+      await page.waitForFunction(() => fixture.reads.length === 2);
+      await page.evaluate(() => fixture.finishRead(1));
+      await page.evaluate(() => fixture.open('c'.repeat(64)));
+      await openWrite();
+      await page.getByRole('button', { name: 'Remove kept.txt', exact: true }).waitFor();
+      assert.equal(await page.getByRole('button', { name: 'Remove remove.txt', exact: true }).count(), 0, 'late read cannot restore removed file');
+      assert.equal(await field.inputValue(), 'Native draft edited while reading');
+      await field.click({ trial: true });
+      const nextAt = await field.boundingBox();
+      const nextPoint = { x: nextAt.x + nextAt.width / 2, y: nextAt.y + nextAt.height / 2 };
+      assert.equal(await page.evaluate(point => fixture.nativeDrop(['failed.txt'], point), nextPoint), true);
+      await page.waitForFunction(() => fixture.reads.length === 3);
+      await page.evaluate(() => fixture.finishRead(2, true));
+      await page.getByText(/Couldn’t attach failed.txt: Invented native read failure/).waitFor();
+      await page.getByRole('button', { name: 'Remove failed.txt', exact: true }).click();
+      if (skin === 'zoom') await page.locator('#skin #dialog-ok').click();
+      else await page.locator('#skin form:has(textarea) button[type=submit]:visible').first().click();
+      await page.waitForFunction(() => fixture.writes.length === 1);
+      assert.deepEqual(await page.evaluate(() => fixture.uploads), [{ name: 'kept.txt', size: 3, bytes: [4, 5, 6] }]);
+      assert.equal(await page.evaluate(() => fixture.writes[0].body.body), 'Native draft edited while reading');
+      assert.deepEqual(errors, []);
+      console.log('NATIVE GRANT DROP PASS ' + skin + ' ' + width);
       await page.close();
     }
   } finally { await browser?.close(); await new Promise(resolve => server.close(resolve)); }
