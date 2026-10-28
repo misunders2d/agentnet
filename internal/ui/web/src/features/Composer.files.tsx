@@ -96,22 +96,43 @@ export function FilesTray({ files, lim, onRemove, onMedia, busy }: { files: Stag
 /** useFileDrop accepts files dropped anywhere on zone (the conversation the
  *  composer sits in) and reports where to draw the drop target while a drag
  *  carrying files is over it. */
-export function useFileDrop(zone: HTMLElement | null, enabled: boolean, onFiles: (files: File[]) => void): DOMRect | null {
+function carriesFiles(transfer: DataTransfer | null): boolean {
+  return !!transfer && (transfer.files.length > 0 || [...(transfer.items || [])].some(item => item.kind === "file") || [...transfer.types].includes("Files"));
+}
+
+function droppedFiles(transfer: DataTransfer): File[] {
+  if (transfer.files.length) return [...transfer.files];
+  return [...(transfer.items || [])].filter(item => item.kind === "file").map(item => item.getAsFile()).filter((file): file is File => !!file);
+}
+
+export function useFileDrop(zone: HTMLElement | null, enabled: boolean, onFiles: (files: File[]) => void, onError: (text: string) => void): DOMRect | null {
   const [rect, setRect] = useState<DOMRect | null>(null);
   useEffect(() => {
-    if (!zone || !enabled) { setRect(null); return; }
+    if (!zone) { setRect(null); return; }
+    if (!enabled) setRect(null);
     let depth = 0;
-    const carries = (e: DragEvent) => !!e.dataTransfer && [...e.dataTransfer.types].includes("Files");
-    const enter = (e: DragEvent) => { if (!carries(e)) return; e.preventDefault(); depth++; setRect(zone.getBoundingClientRect()); };
-    const over = (e: DragEvent) => { if (!carries(e)) return; e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = "copy"; };
-    const leave = (e: DragEvent) => { if (!carries(e)) return; depth = Math.max(0, depth - 1); if (!depth) setRect(null); };
+    const enter = (e: DragEvent) => { if (!carriesFiles(e.dataTransfer)) return; e.preventDefault(); depth++; if (enabled) setRect(zone.getBoundingClientRect()); };
+    const over = (e: DragEvent) => {
+      if (!carriesFiles(e.dataTransfer) && ![...(e.dataTransfer?.types || [])].includes("text/uri-list")) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = enabled ? "copy" : "none";
+    };
+    const leave = () => { depth = Math.max(0, depth - 1); if (!depth) setRect(null); };
     const drop = (e: DragEvent) => {
-      if (!carries(e)) return;
+      const transfer = e.dataTransfer;
+      // A local-file URL with no File object is not permission to read its
+      // path. Refuse it instead of letting the textarea insert a pathname.
+      const localURL = transfer?.getData("text/uri-list").split(/\r?\n/).some(line => /^file:/i.test(line.trim()));
+      if (!carriesFiles(transfer) && !localURL) return;
       e.preventDefault();
       depth = 0;
       setRect(null);
-      const files = [...(e.dataTransfer?.files || [])];
-      if (files.length) onFiles(files);
+      if (!enabled) { onError("Files can’t be attached here right now."); return; }
+      const files = transfer ? droppedFiles(transfer) : [];
+      if (!files.length) { onError("This drop did not include readable files. Use Attach to choose them."); return; }
+      const nonempty = files.filter(file => file.size > 0);
+      if (nonempty.length) onFiles(nonempty);
+      if (nonempty.length !== files.length) onError("Folders and empty files can’t be attached.");
     };
     zone.addEventListener("dragenter", enter);
     zone.addEventListener("dragover", over);
@@ -123,7 +144,7 @@ export function useFileDrop(zone: HTMLElement | null, enabled: boolean, onFiles:
       zone.removeEventListener("dragleave", leave);
       zone.removeEventListener("drop", drop);
     };
-  }, [zone, enabled, onFiles]);
+  }, [zone, enabled, onFiles, onError]);
   return rect;
 }
 

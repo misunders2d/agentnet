@@ -221,6 +221,27 @@ function overLimit(files) {
 
 // pushFiles puts chosen, pasted or dropped files in the open DM's draft (a
 // pasted picture gets a name of its own); addFiles does it from the composer.
+function bindFileDrop(zone, allowed, add, report) {
+  const carriesFiles = transfer => !!transfer && (transfer.files.length > 0 || [...(transfer.items || [])].some(item => item.kind === "file") || [...transfer.types].includes("Files"));
+  zone.addEventListener("dragover", (e) => {
+    if (!carriesFiles(e.dataTransfer) && ![...(e.dataTransfer?.types || [])].includes("text/uri-list")) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = allowed() ? "copy" : "none";
+  });
+  zone.addEventListener("drop", (e) => {
+    const transfer = e.dataTransfer;
+    // A URL/path is never authority to read a local file.
+    const localURL = transfer?.getData("text/uri-list").split(/\r?\n/).some(line => /^file:/i.test(line.trim()));
+    if (!carriesFiles(transfer) && !localURL) return;
+    e.preventDefault();
+    if (!allowed()) { report("Files can’t be attached here right now."); return; }
+    const files = transfer.files.length ? [...transfer.files] : [...(transfer.items || [])].filter(item => item.kind === "file").map(item => item.getAsFile()).filter(Boolean);
+    if (!files.length) { report("This drop did not include readable files. Use Attach to choose them."); return; }
+    add(files.filter(file => file.size > 0));
+    if (files.some(file => !file.size)) report("Folders and empty files can’t be attached.");
+  });
+}
+
 function pushFiles(list, pasted) {
   for (const f of list) {
     if (!f.size) continue; // a folder or an empty file
@@ -4856,12 +4877,7 @@ function start() {
     const files = pastedFiles(e);
     if (files.length) addFiles(files, true);
   });
-  $("composer").addEventListener("dragover", (e) => { if (filesAllowed() && e.dataTransfer && [...e.dataTransfer.types].includes("Files")) e.preventDefault(); });
-  $("composer").addEventListener("drop", (e) => {
-    if (!filesAllowed() || !e.dataTransfer || !e.dataTransfer.files.length) return;
-    e.preventDefault();
-    addFiles([...e.dataTransfer.files]);
-  });
+  bindFileDrop($("composer"), filesAllowed, addFiles, text => { $("compose-error").textContent = text; });
   $("review-btn").addEventListener("click", () => toggleReview());
   $("new-btn").addEventListener("click", () => newConversationDialog());
   $("search").addEventListener("input", () => { state.query = $("search").value; rerenderContacts(); });

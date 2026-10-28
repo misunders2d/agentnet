@@ -320,7 +320,8 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     if (d.mediaMode === "smaller") for (const f of add.slice(0, lim?.max_count || 0)) if (mediaKind(f.file)) chooseMedia(f.key, "smaller");
   }
   const dropped = useCallback((list: File[]) => addFiles(list), [conv, filesAllowed, closed?.title]);
-  const dragRect = useFileDrop(zone, filesAllowed && !sending, dropped);
+  const dropError = useCallback((text: string) => setNotice({ conv, text }), [conv]);
+  const dragRect = useFileDrop(zone, filesAllowed && !sending, dropped, dropError);
 
   function removeFile(key: string) {
     mediaJobs.current.get(conv + ":" + key)?.cancel();

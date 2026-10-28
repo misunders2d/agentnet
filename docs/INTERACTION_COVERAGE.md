@@ -1569,3 +1569,33 @@ lost-response reopen/resume, exactly two queued parts and destination/source
 navigation. Twelve menu-to-visible-dialog samples measured 55–90ms. Source,
 menu and review screenshots were inspected. Matching overlay skins and native
 platform qualification remain part of integrated release checks.
+
+### File drops into existing drafts — October 28 (MEL-708)
+
+Comic and the Classic/Zoom/Holonet composers accept browser-owned files from
+either FileList or file-kind DataTransfer items, instead of requiring only a
+particular advertised type. Zoom's visible write dialog now uses that same
+path; previously only its hidden composer handled drops. File drops are canceled
+before checking whether attachment is currently allowed, so a refused or empty
+file transfer cannot fall through into textarea text insertion. File-URL-only
+drops show an explicit unreadable-drop error; they never authorize native path
+reads. Ordinary text and web links keep their normal handling. The existing
+chosen/pasted-file draft, staging, explicit-send and encryption paths are reused.
+
+Actual bundled skin regressions pass eight cases at 1280/390 pixels: multiple
+files plus companion pathname text, item-only files without Files/FileList,
+removal, draft/file preservation across navigation, empty/unreadable drops,
+ordinary text/web links, oversize selection and a synchronized disable/reenable.
+Drops cause zero staging/send calls. Only explicit Send hands over the exact
+selected names, lengths and bytes; its backend acknowledgement stays held.
+Comic and Zoom draft screenshots were inspected; the retained page-logic suite
+also passes. The collection carries the same regression for its three standalone
+skins. These are controlled browser File events, not native OS drag evidence.
+
+The owner's Linux file-manager symptom remains unqualified: this host has GTK
+and WebKit bindings but no isolated X display/input runner or retained desktop
+test binary. No test used the owner's display. Tauri's documented disabled
+native drag handler supports HTML5 drops on Windows; that fact does not prove
+Linux exposes File objects. No general filesystem IPC, URI-to-path reader,
+new dependency or native-handler switch was added. An installed Linux drop
+still needs verification before claiming that reported route repaired.
