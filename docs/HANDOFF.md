@@ -1,5 +1,23 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+## October 28 batch — implemented, unreleased
+
+MEL-701 unread projection/retained Review, MEL-700 scoped environment clarification,
+MEL-692 compact historical Pi notices, MEL-702 readable-Drive export gating,
+MEL-583 secondary continuation placement and MEL-708 file drops are implemented.
+The actual Linux OS-drop path passes on native source c5136a68; ordinary FileList
+and native-grant cases cover all four composer implementations at desktop/narrow
+widths. Files stay in the draft until explicit Send. Existing execution authority
+and signed/encrypted transport remain unchanged.
+
+MEL-642 tracks remaining integrated acceptance. Retain passing unchanged checks;
+see [interaction evidence](INTERACTION_COVERAGE.md) and Linear for exact run/source
+records, unresolved test causes and coverage limits. All seventeen Android workload
+families have retained evidence, but no exhaustive every-control matrix, physical
+phone or installed-client activation is claimed. Latest published/deployed release
+remains v0.9.7. Matching gallery candidate targets v0.9.8 and requires final exact-pin
+qualification before publication.
+
 ## v0.9.7 published and Hub deployed — October 27
 
 Frozen source `3374c1c812499100d3cc9b8dedfdda1bb40892b8`; matching gallery

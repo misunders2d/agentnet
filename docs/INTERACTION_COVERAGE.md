@@ -1611,8 +1611,19 @@ and Holonet at 1280/390 pixels (14.46s), plus the native bridge test (0.06s).
 Named pending files appear before held reads finish. Tests retain later text
 edits, remove a file during reading, navigate away/back, refuse a failed read,
 remove the failed file, and send only exact remaining bytes on explicit Send.
-Leaving views cannot claim a new native drop. The shell still needs compilation,
-Rust tests and another actual OS drag before this route is qualified.
+Leaving views cannot claim a new native drop.
+
+The actual OS regression caught the first native candidate's wrong event hook.
+Locked tauri-runtime-wry 2.12.1 routes WindowContent drops as synthesized window
+events; webview events apply to child views. Candidate c5136a68 uses the window
+event. Linux build40727061851 passes all 34 Rust tests, including the three
+file-grant/authority/read-boundary tests, plus real AppImage replacement.
+The same isolated GTK drag now attaches the named 34-byte fictional file,
+retains trusted typed text, inserts no path and makes zero staging/send calls.
+Only trusted explicit Send stages byte-for-byte original content and issues
+one send request. The response remains deliberately held: the visible pending
+message is not delivery evidence. Attached/pending screenshots were inspected;
+all owned children stopped and no owner's desktop session was accessed.
 
 ### Integrated verification repairs — October 28 (MEL-642)
 
@@ -1646,3 +1657,36 @@ without message content. The local run completed its three sends and preview
 in 248ms, with 9.75s left before apply, then finished at 363ms. This does not
 reproduce the Windows timeout and is not a repair claim. Full CI, mixed-version,
 native platform and exact-pin skin gates remain required before publication.
+
+
+### Integrated candidate follow-up — October 28 (MEL-642)
+
+The invitation fixture's simulated old reader competed with a live phone's
+capability publisher. A controlled publication reproduced the exact assertion;
+the fixture now joins that phone after positive sync checks, before static
+reader-version cases. Existing authority assertions remain. The unread fixture
+also joins independent outbox senders with Close, then reopens the same enrolled
+database before static scope measurements. No scope guard, retry count or
+permission changes. Focused unread race checks pass in 114.837s; the original
+90-second diagnostic budget was insufficient. The original Windows scope-change
+actor is not proven. Windows40725933236 passes three focused repetitions.
+
+Android40725946362 passes seven affected/previously missing workloads, 270 actions,
+with zero feedback/presentation failures. Upgrade preserves identity, 200 messages,
+origin and drafts; notification and denied-permission boundaries pass. The native
+Teams result is 224,388 Parcel bytes, below its transport limit. The earlier lost
+terminal result remains unexplained. Together with unchanged successful workloads
+from40715517833 this covers all seventeen workload families, with compose repeated.
+It does not establish complete every-control coverage or physical-phone behavior.
+
+Mac40727076713 passes three repetitions of affected popup, file-drop, unread and
+invitation regressions. Original0d popup500ms failure remains unexplained; its
+failure-only input/geometry diagnostics retain the same timing bound and frozen
+frames. Local vet and real mixed-version against v0.9.7 pass (70.03s). Windows
+installer packaging retry follows a pinned NSIS download connection reset after
+successful Rust compilation; no source or timeout workaround was introduced.
+
+These are candidate verification records, not publication or installed-client
+activation. Final gallery qualification and the exhaustive interaction inventory
+remain separate acceptance requirements. No complete control/platform/history
+matrix is claimed.
