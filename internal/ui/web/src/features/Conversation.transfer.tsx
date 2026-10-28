@@ -8,26 +8,29 @@ import { Button } from "../ui/Button";
 import { Sheet } from "../ui/Sheet";
 import { Markdown } from "./Markdown";
 
-export function TopicContinuation({ dm, thread, topic = "", fresh = false }: { dm?: T.DMThread; thread?: T.Thread; topic?: string; fresh?: boolean }) {
+export function canContinueTopic(dm?: T.DMThread, thread?: T.Thread, fresh = false): boolean {
+  return !fresh && (dm ? !dm.frozen && (!dm.role || dm.role === "member") : !!thread && !thread.key?.pending);
+}
+
+export function TopicContinuation({ dm, thread, topic = "", fresh = false, open, onClose }: { dm?: T.DMThread; thread?: T.Thread; topic?: string; fresh?: boolean; open: boolean; onClose: () => void }) {
   const store = useApp();
   const seq = useStore(store, s => s.overview?.seq);
-  const [open, setOpen] = useState(false), [location, setLocation] = useState<TopicTransferLocation | null>(null);
+  const [location, setLocation] = useState<TopicTransferLocation | null>(null);
   const source = dm?.id || "", peer = thread?.peer || "", anchor = thread?.topic?.id || thread?.id || "";
   const scope: TopicTransferScope = source ? {source, topic} : {peer, thread: anchor};
-  const eligible = !fresh && (dm ? !dm.frozen && (!dm.role || dm.role === "member") : !!thread && !thread.key?.pending);
+  const eligible = canContinueTopic(dm, thread, fresh);
   useEffect(() => {
     let current = true; setLocation(null);
     if (eligible) store.api.topicTransferLocation(source ? {source, topic} : {peer, thread: anchor}).then(v => {if (current) setLocation(v?.operation ? v : null);}).catch(() => {});
     return () => {current = false;};
   }, [store, source, peer, anchor, topic, eligible, seq, open]);
   if (!eligible) return null;
-  return <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-hairline px-4 py-1 text-[13px]">
-    {location && <span className="min-w-0 flex-1" role="status">This topic’s snapshot continued in another chat. {location.available
+  return <>
+    {location && <div className="border-b border-hairline px-4 py-1 text-[13px]" role="status">This topic’s snapshot continued in another chat. {location.available
       ? <button className="font-semibold underline underline-offset-2" onClick={() => void store.openUnread({kind: "dm", id: location.destination}, location.destination_topic)}>Open destination</button>
-      : <span className="text-text-2">Destination is unavailable here.</span>} <span className="text-text-2">Only you see this location.</span></span>}
-    <Button variant="ghost" size="sm" onClick={() => setOpen(true)}>Continue topic elsewhere…</Button>
-    {open && <TransferTopic scope={scope} onClose={() => setOpen(false)} />}
-  </div>;
+      : <span className="text-text-2">Destination is unavailable here.</span>} <span className="text-text-2">Only you see this location.</span></div>}
+    {open && <TransferTopic scope={scope} onClose={onClose} />}
+  </>;
 }
 
 function TransferTopic({ scope, onClose }: { scope: TopicTransferScope; onClose: () => void }) {

@@ -1552,3 +1552,20 @@ pass again at 1280 and 390 pixels. The first attempt could not load a missing
 temporary Playwright installation; rerunning with the existing skin checkout's
 installed tooling passes. No installed-client activation, complete platform
 matrix or publication is claimed. Those remain integrated release verification.
+
+### Secondary topic continuation — October 28 (MEL-583)
+
+The existing whole-topic continuation opens from the conversation header's
+More menu. Ordinary chat views have no dedicated continuation action row.
+Existing eligibility, exact selected-topic scope, reviewed destination/audience,
+partial-queue recovery and private source-location hint remain unchanged.
+This placement reuses the existing Base UI overflow menu and transfer sheet;
+it changes no messenger state, disclosure or execution contract.
+
+The bundled Comic regression passes all six DM/group/agent-topic cases at
+1280 and 390 pixels. It asserts the absence of a standalone button, exact source
+and topic in preview, recipient and quotation paging, explicit confirmation,
+lost-response reopen/resume, exactly two queued parts and destination/source
+navigation. Twelve menu-to-visible-dialog samples measured 55–90ms. Source,
+menu and review screenshots were inspected. Matching overlay skins and native
+platform qualification remain part of integrated release checks.

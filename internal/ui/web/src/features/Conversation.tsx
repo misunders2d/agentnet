@@ -18,7 +18,7 @@ import { Header, GuestBar, helpers, type Helper } from "./Conversation.header";
 import { TopicBar, TopicEnd, TopicStart } from "./Conversation.topics";
 import { OrganizeMessages } from "./Conversation.organize";
 import { ContributeHistory } from "./Conversation.import";
-import { TopicContinuation } from "./Conversation.transfer";
+import { canContinueTopic, TopicContinuation } from "./Conversation.transfer";
 import { PersonTopics } from "./PersonTopics";
 import { EmptyTimeline, Timeline } from "./Conversation.timeline";
 import { roomTitle, threadAgentName, type AnyMsg, type Ctx } from "./Message.model";
@@ -61,6 +61,7 @@ function OpenView({ open }: { open: NonNullable<Open> }) {
   const [selected, setSelected] = useState<string[] | null>(null);
   const [organize, setOrganize] = useState(false);
   const [contribute, setContribute] = useState(false);
+  const [continueTopic, setContinueTopic] = useState(false);
   const [left, setLeft] = useState<Helper | null>(null);
 
   const t = useMemo(() => open.kind === "dm" && view && view.id === open.id
@@ -90,6 +91,7 @@ function OpenView({ open }: { open: NonNullable<Open> }) {
   // Selection belongs to this conversation. Browsing another topic must retain
   // the exact originals for reviewed cross-topic moves and history sharing.
   useEffect(() => setSelected(null), [open.id]);
+  useEffect(() => setContinueTopic(false), [open.id, topic, newTopic]);
 
   if (!t && !th) return <Loading o={open} />;
 
@@ -97,13 +99,13 @@ function OpenView({ open }: { open: NonNullable<Open> }) {
 
   return (
     <section aria-label={title} data-part="conversation" className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-canvas">
-      <Header ctx={ctx} wide={wide} helpers={hs} canInvite={canInvite} />
+      <Header ctx={ctx} wide={wide} helpers={hs} canInvite={canInvite} onContinue={canContinueTopic(t ?? undefined, th ?? undefined, !!newTopic) ? () => setContinueTopic(true) : undefined} />
       {t && <PendingInvitations t={t} />}
       {!wide && t && <GuestBar thread={t} helpers={hs} onDismissed={setLeft} />}
       {t&&personMain ? <PersonTopics dm={t} main={personMain} onMain={()=>{
         void store.openUnread({kind:"dm",id:personMain});
       }}/> : <TopicBar thread={ctx.thread||undefined} dm={ctx.dm||undefined} />}
-      <TopicContinuation dm={t ?? undefined} thread={th ?? undefined} topic={topic || ""} fresh={!!newTopic} />
+      <TopicContinuation dm={t ?? undefined} thread={th ?? undefined} topic={topic || ""} fresh={!!newTopic} open={continueTopic} onClose={() => setContinueTopic(false)} />
       {/* Another topic swaps only the messages: header, topic bar and composer stay. */}
       <Swap id={open.id} className="flex min-h-0 flex-1 flex-col" side="flex min-h-0 flex-1 flex-col" enter="an-topic-in" leave="an-topic-out" ms={MOTION.topic} label="timeline">
       <Timeline key={open.id + ":" + (newTopic ? "new" : topic || "main")} ctx={ctx} messages={messages} focus={open.focus} focusSeq={open.focusSeq} unread={open.unread} readVisit={readVisit} selected={selected} onSelect={toggle} start={<TopicStart ctx={ctx} messages={messages} />} end={<TopicEnd ctx={ctx} />}

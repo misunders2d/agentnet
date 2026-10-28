@@ -106,7 +106,7 @@ const presenceTitle = "Whether the server sees their AgentNet running now. It do
 
 // ---- header -------------------------------------------------------------------------------
 
-export function Header({ ctx, wide, helpers: hs, canInvite }: { ctx: Ctx; wide: boolean; helpers: Helper[]; canInvite: boolean }) {
+export function Header({ ctx, wide, helpers: hs, canInvite, onContinue }: { ctx: Ctx; wide: boolean; helpers: Helper[]; canInvite: boolean; onContinue?: () => void }) {
   const portal = usePortal();
   const store = useApp();
   const currentTopic=useStore(store,s=>s.drafts[ctx.conv]?.topic||'main');
@@ -221,6 +221,7 @@ export function Header({ ctx, wide, helpers: hs, canInvite }: { ctx: Ctx; wide: 
                 {t && <Menu.Item className={item} onClick={()=>void copyLink(currentTopic)}>Copy topic link</Menu.Item>}
               </>}
               {store.host.openLink && <Menu.Item className={item} onClick={()=>{const value=window.prompt('Paste an AgentNet link');if(value)void store.host.openLink!(value).catch(()=>{});}}>Open link…</Menu.Item>}
+              {onContinue && <Menu.Item className={item} onClick={onContinue}>Continue topic elsewhere…</Menu.Item>}
               {t?.peer.person && <Menu.Item className={item} onClick={() => setSpace(true)}><IconUsers size={20} />Project space</Menu.Item>}
               {t && notify?.available && (
                 <Menu.Item className={item} onClick={() => void store.run((a) => a.notify("mute", { conv: t.id, muted: !muted }), muted ? "Notifications on for this chat" : "This chat won’t notify you")}>
