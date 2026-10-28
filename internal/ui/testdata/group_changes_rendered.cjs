@@ -51,10 +51,23 @@ const server=http.createServer((req,res)=>{if(req.url==='/entry.mjs'){res.setHea
   const dialog=page.getByRole('dialog').filter({has:page.getByRole('button',{name:label,exact:true})}).last();
   if(action==='rename')await dialog.getByRole('textbox',{name:'Group name',exact:true}).fill('Requested group name');
   const button=dialog.getByRole('button',{name:label,exact:true});await button.waitFor();const box=await button.boundingBox();
-  await page.evaluate(()=>{window.inputTiming={};document.addEventListener('click',e=>{window.inputTiming={at:performance.now(),trusted:e.isTrusted,target:e.target.textContent?.slice(0,120)}},{capture:true,once:true})});
+  await page.evaluate(({width,action})=>{
+   window.inputTiming={};
+   document.addEventListener('click',e=>{
+    const timing=window.inputTiming={at:performance.now(),trusted:e.isTrusted,target:e.target.textContent?.slice(0,120)};
+    const text=action==='rename'?(width===390?'Name: “Requested group name”':'Requested group name'):action==='leave'?'Chats':action==='promote'?'Admin pending':action==='demote'?'Member role pending':'Fixture peer · Removal pending';
+    const selector=action==='leave'||action==='rename'&&width!==390?'h1,h2,h3,[role=heading]':'p,span,strong';
+    const frame=()=>{
+     const visible=[...document.querySelectorAll(selector)].some(node=>node.textContent===text&&node.getClientRects().length);
+     if(visible){timing.domAt=performance.now();requestAnimationFrame(()=>{timing.feedbackAt=performance.now()});}
+     else if(performance.now()-timing.at<1000)requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+   },{capture:true,once:true});
+  },{width,action});
   const start=Date.now();await page.mouse.click(box.x+box.width/2,box.y+box.height/2);
   const local=action==='rename'?(width===390?panel.getByText('Name: “Requested group name”',{exact:true}):page.getByRole('heading',{name:'Requested group name',exact:true})):action==='leave'?page.getByRole('heading',{name:'Chats',exact:true}):panel.getByText(action==='promote'?'Admin pending':action==='demote'?'Member role pending':'Fixture peer · Removal pending',{exact:true});
-  await local.waitFor({timeout:500}).catch(async e=>{console.error(JSON.stringify({width,action,...await page.evaluate(()=>({input:window.inputTiming,writes:fixture.writes.length,changes:fixture.store.get().groupChanges,title:fixture.store.get().dm?.title}))}));await page.screenshot({path:'/tmp/agentnet-group-change-failure.png'});throw e});const input=await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(()=>r({...window.inputTiming,feedbackAt:performance.now()})))));const feedbackMs=Date.now()-start;assert(feedbackMs<500,action+' feedback '+feedbackMs);assert(input.trusted);assert(input.feedbackAt-input.at<500);
+  await local.waitFor({timeout:500}).catch(async e=>{console.error(JSON.stringify({width,action,...await page.evaluate(()=>({input:window.inputTiming,writes:fixture.writes.length,changes:fixture.store.get().groupChanges,title:fixture.store.get().dm?.title}))}));await page.screenshot({path:'/tmp/agentnet-group-change-failure.png'});throw e});await page.waitForFunction(()=>Number.isFinite(window.inputTiming.feedbackAt),{},{timeout:500});const input=await page.evaluate(()=>window.inputTiming);const feedbackMs=Date.now()-start;assert(input.trusted);assert(input.feedbackAt-input.at<500,action+' event-to-feedback '+(input.feedbackAt-input.at));
   assert.equal(await page.evaluate(()=>fixture.writes.length),1);assert.equal(await page.evaluate(()=>fixture.unsent()),true);
   assert.equal(await page.evaluate(()=>fixture.store.get().views['group-one'].title),'Fixture group','local title is not authoritative cached group');
   assert.deepEqual(await page.evaluate(()=>fixture.store.get().views['group-one'].members.map(m=>[m.person,m.admin])),[['self',true],['peer',action==='demote']]);

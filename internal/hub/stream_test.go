@@ -221,6 +221,12 @@ func testMessageAcksKeepBusyStreamAlive(t *testing.T) {
 // answers the pings (and no message) keeps its stream. Before, the push sent
 // no ping at all, and the first tick after it closed the stream as silent.
 func TestPingsInterleaveLongBacklogPush(t *testing.T) {
+	// Keep disk and scheduler delays from spending the short lease, as in
+	// TestMessageAcksKeepBusyStreamAlive. The slow reader still advances time.
+	synctest.Test(t, testPingsInterleaveLongBacklogPush)
+}
+
+func testPingsInterleaveLongBacklogPush(t *testing.T) {
 	const hb = 200 * time.Millisecond
 	h, err := Open(Config{DataDir: filepath.Join(t.TempDir(), "hub"), PublicURL: "https://127.0.0.1:1", Logf: t.Logf, Heartbeat: hb})
 	if err != nil {

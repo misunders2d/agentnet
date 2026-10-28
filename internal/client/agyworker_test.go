@@ -89,15 +89,27 @@ func agyRuns(t *testing.T, log string) []agyTestRun {
 	if err != nil {
 		t.Fatal(err)
 	}
+	out, err := parseAgyRuns(string(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func parseAgyRuns(raw string) ([]agyTestRun, error) {
 	var out []agyTestRun
-	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+	// Encode appends a newline after each record. A concurrent read may see
+	// the newly created empty file or a partial trailing write; neither is a
+	// completed run yet. Complete malformed records must still fail.
+	lines := strings.Split(raw, "\n")
+	for _, line := range lines[:len(lines)-1] {
 		var r agyTestRun
 		if err := json.Unmarshal([]byte(line), &r); err != nil {
-			t.Fatal(err)
+			return nil, err
 		}
 		out = append(out, r)
 	}
-	return out
+	return out, nil
 }
 
 func TestAgyWorkerSessionsAndTaskApproval(t *testing.T) {
@@ -178,6 +190,27 @@ func TestAgyWorkerRefusesFalseSuccess(t *testing.T) {
 }
 
 func TestAgyWorkerCancellation(t *testing.T) {
+	t.Run("log records", func(t *testing.T) {
+		for _, tc := range []struct {
+			name, raw string
+			count     int
+			invalid   bool
+		}{
+			{name: "empty"},
+			{name: "partial", raw: `{"Args":`},
+			{name: "complete", raw: "{\"Input\":\"first\"}\n", count: 1},
+			{name: "complete and partial", raw: "{\"Input\":\"first\"}\n{\"Args\":", count: 1},
+			{name: "two complete", raw: "{}\n{}\n", count: 2},
+			{name: "malformed complete", raw: "{\"Args\":\n", invalid: true},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				runs, err := parseAgyRuns(tc.raw)
+				if (err != nil) != tc.invalid || len(runs) != tc.count {
+					t.Fatalf("runs=%d error=%v", len(runs), err)
+				}
+			})
+		}
+	})
 	log, dir := agyFixture(t, "block")
 	w := newWorld(t, "")
 	setResponder(t, w.bob, "agy", dir, time.Minute)

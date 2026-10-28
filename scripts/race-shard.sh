@@ -27,6 +27,9 @@ run_partition() {
 				if ($0=="TestDMLiveAgentContext") part=17
 				if ($0=="TestOwnPersonTasksDirectAndGroup") part=4
 				if ($0=="TestRoomReciprocalRootQuestions") part=1
+				if ($0=="TestTopicTransferWholeSnapshotCapacityAndRetry") part=2
+				if ($0=="TestRoomBusyAncestorCallback") part=3
+				if ($0=="TestHistoryArchiveImportedTailRemainsBounded") part=9
 			}
 			if (client && n==12) {
 				if ($0=="TestGroupInteractionNamedMemberAndVisitor") part=1

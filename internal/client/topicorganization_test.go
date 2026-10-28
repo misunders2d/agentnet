@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/identity"
@@ -658,26 +659,39 @@ func testTopicOrganizationAgentProducerHistory(t *testing.T) {
 func TestTopicOrganizationReviewedGroup(t *testing.T) {
 	w, carol, packet, _ := groupTurnsFixture(t)
 	ctx, conv := tctx(t), packet.State.Conv
+	started := time.Now()
+	phase := func(name string) {
+		remaining := time.Duration(0)
+		if deadline, ok := ctx.Deadline(); ok {
+			remaining = time.Until(deadline)
+		}
+		t.Logf("phase=%s elapsed=%s remaining=%s", name, time.Since(started), remaining)
+	}
+	defer phase("finished")
 	first, e := w.alice.SendConv(ctx, conv, ConvOutgoing{Body: "Group source", Topic: "new"})
 	if e != nil {
 		t.Fatal(e)
 	}
 	firstMsg, _ := convMsg(t, w.alice, conv, func(m ConvMessage) bool { return m.LID == first.LID })
 	from := firstMsg.Topic
+	phase("first sent")
 	child, e := w.alice.SendConv(ctx, conv, ConvOutgoing{Body: "Unselected group reply", ReplyTo: first.LID})
 	if e != nil {
 		t.Fatal(e)
 	}
+	phase("child sent")
 	destination, e := w.alice.SendConv(ctx, conv, ConvOutgoing{Body: "Group destination", Topic: "new"})
 	if e != nil {
 		t.Fatal(e)
 	}
 	destinationMsg, _ := convMsg(t, w.alice, conv, func(m ConvMessage) bool { return m.LID == destination.LID })
 	to := destinationMsg.Topic
+	phase("destination sent")
 	review, e := w.alice.PreviewTopicOrganization(TopicOrganizationRequest{Conv: conv, IDs: []string{first.LID}, Topic: to})
 	if e != nil {
 		t.Fatal(e)
 	}
+	phase("preview ready")
 	if _, e = w.alice.ApplyTopicOrganization(ctx, review); e != nil {
 		t.Fatal(e)
 	}

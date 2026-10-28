@@ -219,8 +219,7 @@ function overLimit(files) {
   return "";
 }
 
-// pushFiles puts chosen, pasted or dropped files in the open DM's draft (a
-// pasted picture gets a name of its own); addFiles does it from the composer.
+// Native browser File objects only; never read paths from dropped text.
 function bindFileDrop(zone, allowed, add, report) {
   const carriesFiles = transfer => !!transfer && (transfer.files.length > 0 || [...(transfer.items || [])].some(item => item.kind === "file") || [...transfer.types].includes("Files"));
   zone.addEventListener("dragover", (e) => {
@@ -242,6 +241,8 @@ function bindFileDrop(zone, allowed, add, report) {
   });
 }
 
+// pushFiles puts chosen, pasted or dropped files in the open DM's draft (a
+// pasted picture gets a name of its own); addFiles does it from the composer.
 function pushFiles(list, pasted) {
   for (const f of list) {
     if (!f.size) continue; // a folder or an empty file

@@ -1599,3 +1599,36 @@ native drag handler supports HTML5 drops on Windows; that fact does not prove
 Linux exposes File objects. No general filesystem IPC, URI-to-path reader,
 new dependency or native-handler switch was added. An installed Linux drop
 still needs verification before claiming that reported route repaired.
+
+### Integrated verification repairs — October 28 (MEL-642)
+
+The prior `53c5da19` run `40491847717` failed six checks. Its client race
+alarm exhausted the aggregate 600-second package budget after 70 completed
+parents; the named next test had just started. Three measured fixture moves
+rebalance the existing 18 partitions without dropping any of 1,479 current
+parents or changing the 600-second bound. Projected parent-time totals are
+estimates, with skipped/unknown costs; they are not a completed suite.
+
+The Windows Antigravity fixture read its concurrently appended JSON log before
+a complete record existed. It now waits for newline-terminated records and
+still rejects complete malformed JSON; six parser regressions and cancellation
+pass under the Linux race detector. The artificial 400ms heartbeat lease test
+uses the adjacent test's synctest setup, retaining 250 messages, ping/order
+assertions and the slow reader; both heartbeat race parents pass. Native
+Windows confirmation remains outstanding.
+
+Group-control feedback now records visible-state frame opportunities directly
+from the trusted input event, independently of later driver round trips. The
+existing 500ms event-to-feedback assertion stays; local samples are 17–30ms.
+The reaction handoff test waits for its required pending samples before
+confirming the held write and samples after confirmation, recording actual
+frame gaps. It retains the 600ms held write, chip-presence and 500ms local
+feedback assertions; local pending feedback measured 5–13ms. Both rendered
+parents pass locally. These repairs are not native macOS qualification.
+
+The Windows reviewed-group organization timeout is still unexplained. Its
+unchanged 10-second context now logs operation phase and remaining budget
+without message content. The local run completed its three sends and preview
+in 248ms, with 9.75s left before apply, then finished at 363ms. This does not
+reproduce the Windows timeout and is not a repair claim. Full CI, mixed-version,
+native platform and exact-pin skin gates remain required before publication.
