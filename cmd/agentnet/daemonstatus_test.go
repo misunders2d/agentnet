@@ -42,21 +42,47 @@ func TestDaemonStatusStoppedAndForegroundHelp(t *testing.T) {
 func TestDaemonStatusUsesRunningProcessAndDoesNotChangeCallerPath(t *testing.T) {
 	a, home := diagnosticAgent(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- a.Run(ctx, client.RunOptions{HumanOnly: true}) }()
+	readinessCtx, stopReadiness := context.WithTimeout(context.Background(), 10*time.Second)
+	defer stopReadiness()
+	owned := make(chan struct{})
+	done := make(chan struct{})
+	var runErr error
+	go func() {
+		runErr = a.Run(ctx, client.RunOptions{HumanOnly: true, Owned: func() (func(), error) {
+			close(owned)
+			return func() {}, nil
+		}})
+		close(done)
+	}()
 	defer func() {
 		cancel()
-		if err := <-done; err != nil {
-			t.Error(err)
+		<-done
+		if runErr != nil {
+			t.Error(runErr)
 		}
 	}()
-	deadline := time.Now().Add(10 * time.Second)
+	// Status probes take the daemon lock briefly. Establish this fixture's
+	// running-owner precondition before probing, so the probe cannot win the
+	// startup lock and make Run refuse to start. Both phases share ten seconds.
+	select {
+	case <-owned:
+	case <-done:
+		t.Fatalf("fixture daemon exited before ownership: %v", runErr)
+	case <-readinessCtx.Done():
+		t.Fatal("fixture daemon ownership did not start")
+	}
 	for {
-		if _, err := a.ReadDaemonReadiness(context.Background()); err == nil {
+		select {
+		case <-done:
+			t.Fatalf("fixture daemon exited before readiness: %v", runErr)
+		default:
+		}
+		_, err := a.ReadDaemonReadiness(readinessCtx)
+		if err == nil {
 			break
 		}
-		if time.Now().After(deadline) {
-			t.Fatal("daemon readiness did not start")
+		if readinessCtx.Err() != nil {
+			t.Fatalf("daemon readiness did not start: %v", err)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
