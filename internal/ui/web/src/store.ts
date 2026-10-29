@@ -5,11 +5,11 @@
 // One store serves one membership's host: the UI host mounts the interface
 // again with a new host when the person switches workspace, so nothing here
 // can act on another workspace by accident.
-import { pendingSends } from "./optimistic.mjs";
+import { pendingSends, sendID } from "./optimistic.mjs";
 import { useSyncExternalStore } from "react";
 import { api, errorText, type Api, type ReminderResult, type T } from "./api";
 import type { Host, HostEvent, OpenContext } from "./host";
-import { currentCatalogAgents, directChatKey, messageTarget } from "./model";
+import { currentCatalogAgents, directChatKey, messageTarget, latestReviewReport } from "./model";
 import { mainPreferences, personRoots } from "./person-topics.mjs";
 import { skin as brand } from "./skin/brand";
 import { share } from "./structural";
@@ -111,6 +111,16 @@ const dismissMessageKey = (m: T.DMMessage | T.Message) => JSON.stringify([
   m.continuation, m.attention, m.actions, m.deleted,
 ]);
 
+export type AttentionReplyTarget = Pick<T.DecisionAction, "host" | "id" | "key" | "attempt" | "action" | "expect" | "report">;
+export interface AttentionReply {
+  request: T.DecisionAction;
+  version: string;
+  actor: string;
+  refusal: string;
+  status: "pending" | "submitted" | "failed";
+  error?: string;
+}
+
 export interface State {
   tab: Tab;
   overview: T.Overview | null;
@@ -136,6 +146,7 @@ export interface State {
   agentNames: Record<string, string>;                     // agent ids → the names their owners gave them
   topicBusy: Record<string, string>;
   topicPreviews: Record<string, TopicPreview>;
+  attentionReplies: Record<string, AttentionReply>;
   reactionPending: Record<string, Record<string, PendingReaction>>;
   dismissPending: Record<string, PendingDismiss>;
   messageChanges: Record<string, MessageChange>;
@@ -285,7 +296,7 @@ export class Store {
       this.set({ ...(o ? this.viewPatch(o, this.state.views[o.id] ?? null, true) : {}), unsent: this.sends.unsent() });
     });
     this.state = {
-      tab: "chats", overview: null, open: null, pending: null, views: {}, dm: null, thread: null, typing: null, invitations: [], reactionPending: {}, dismissPending: {}, messageChanges: {}, reminderChanges: {},
+      tab: "chats", overview: null, open: null, pending: null, views: {}, dm: null, thread: null, typing: null, invitations: [], attentionReplies: {}, reactionPending: {}, dismissPending: {}, messageChanges: {}, reminderChanges: {},
       conn: "loading", version: "", newVersion: "", unsent: false, drafts: this.loadDrafts(), scheduleSaves:{}, toasts: [], messageLanding: null, loadError: "", groupContextPending: "", invite: null, topicBusy: {}, topicPreviews: {}, panel: false, section: "", agentNames: {}, readVisit: null, contentRevision: 0,
     };
     const saved=host.workspaces?.state?.(host.workspace.id)?.comicDrafts as {handle?:string;open:Open;dm:T.DMThread|null;thread:T.Thread|null;tab:State['tab']}|undefined;
@@ -2131,7 +2142,8 @@ export class Store {
     if (selected) this.markOpenRead();
   }
 
-  hasUnsent(): boolean { return !!this.groupCreationWork || this.dmStartWork.size > 0 || unsentIn(this.state); }
+  hasUnsent(): boolean { return !!this.groupCreationWork || this.dmStartWork.size > 0 ||
+    Object.values(this.state.attentionReplies).some(p => p.actor === this.attentionReplyActor() && p.status !== "submitted" && this.attentionReplyVersion(p.request) === p.version && this.attentionReplyRefusal(p.request) === p.refusal) || unsentIn(this.state); }
 
   // ---- feedback
   // Telegram Web A's local-change -> async request -> reconciliation pattern
@@ -2250,6 +2262,95 @@ export class Store {
       if (this.alive && errorText(e) !== "stale or disconnected workspace") this.toast(errorText(e), "error");
       return undefined;
     }
+  }
+
+  private attentionReplyWork = new Map<string, Promise<boolean>>();
+  attentionReplyKey(target: AttentionReplyTarget) {
+    return JSON.stringify([target.host || this.state.overview?.me.address, target.id, target.key, target.attempt]);
+  }
+  private attentionReplyActor() {
+    const me = this.state.overview?.me;
+    return JSON.stringify([this.host.workspace.id, me?.address, me?.fingerprint]);
+  }
+  attentionReplyVersion(target: AttentionReplyTarget): string {
+    const host = target.host || this.state.overview?.me.address;
+    if (target.action === "reply") {
+      const report = latestReviewReport((this.state.overview?.review || []).filter(r => r.peer === host));
+      const item = report?.report?.items?.find(x => x.id === target.id && x.key === target.key && x.attempt === target.attempt);
+      return item ? JSON.stringify([host,item.id,item.key,item.attempt,item.state,item.result]) : "";
+    }
+    for (const view of Object.values(this.state.views)) for (const message of view.messages || []) {
+      const c = message.continuation;
+      if (!c || (c.host || this.state.overview?.me.address) !== host || c.id !== target.id || c.key !== target.key || c.attempt !== target.attempt) continue;
+      return JSON.stringify([view.id,message.id,message.state,message.exec?.state,c,message.detail,(message as T.DMMessage).job_detail,
+        this.state.overview?.needs_you?.find(x => x.conv === view.id && x.id === message.id)?.why]);
+    }
+    return "";
+  }
+  private attentionReplyRefusal(target: AttentionReplyTarget): string {
+    const host = target.host || this.state.overview?.me.address;
+    const report = latestReviewReport((this.state.overview?.review || []).filter(r => r.peer === host));
+    const item = report?.report?.items?.find(x => x.id === target.id && x.key === target.key && x.attempt === target.attempt);
+    if (item?.result?.refused) return JSON.stringify(item.result);
+    return "";
+  }
+  attentionReply(target: AttentionReplyTarget | null, version: string): AttentionReply | undefined {
+    if (!target) return;
+    const pending = this.state.attentionReplies[this.attentionReplyKey(target)];
+    if (!pending || pending.request.expect !== target.expect || pending.actor !== this.attentionReplyActor()) return;
+    if (this.attentionReplyRefusal(target) !== pending.refusal || pending.request.action === target.action && pending.version !== version) return;
+    return pending;
+  }
+  submitAttentionReply(target: AttentionReplyTarget, version: string, text: string): Promise<boolean> {
+    if (!this.alive || !text.trim() || !version || this.attentionReplyVersion(target) !== version) return Promise.resolve(false);
+    const key = this.attentionReplyKey(target), actor = this.attentionReplyActor();
+    const running = this.attentionReplyWork.get(key);
+    const prior = this.state.attentionReplies[key];
+    const superseded = prior && (prior.actor !== actor || prior.request.expect !== target.expect ||
+      this.attentionReplyRefusal(target) !== prior.refusal || prior.request.action === target.action && prior.version !== version);
+    if (running && !superseded) return running;
+    // Only explicit Retry resubmits an unchanged frozen request. A newer
+    // authoritative refusal/attempt is a new choice, never an old callback.
+    if (prior && !superseded) return Promise.resolve(false);
+    const pending: AttentionReply = {request: {...target, text: text.trim(), send_id: sendID()}, version, actor, refusal: this.attentionReplyRefusal(target), status: "pending"};
+    return this.sendAttentionReply(key, pending);
+  }
+  retryAttentionReply(target: AttentionReplyTarget, version: string): Promise<boolean> {
+    const key = this.attentionReplyKey(target), running = this.attentionReplyWork.get(key);
+    const pending = this.attentionReply(target, version);
+    if (running && pending) return running;
+    if (!this.alive || pending?.status !== "failed") return Promise.resolve(false);
+    return this.sendAttentionReply(key, {...pending, status: "pending", error: undefined});
+  }
+  private sendAttentionReply(key: string, pending: AttentionReply): Promise<boolean> {
+    const request = pending.request;
+    // Publish the local answer synchronously, before scheduling any I/O. One
+    // Store owns the guard across sheets, navigation and responsive remounts.
+    this.set({attentionReplies: {...this.state.attentionReplies, [key]: pending}});
+    const current = () => this.alive && this.attentionReplyActor() === pending.actor && this.state.attentionReplies[key]?.request === request && this.attentionReplyRefusal(request) === pending.refusal && this.attentionReplyVersion(request) === pending.version;
+    const work = Promise.resolve().then(async () => {
+      try {
+        if (!current()) return false;
+        const result = request.host ? await this.api.decide(request)
+          : await this.api.act({do:"continue",id:request.id,key:request.key,attempt:request.attempt,body:request.text,send_id:request.send_id});
+        if (current()) {
+          this.set({attentionReplies: {...this.state.attentionReplies, [key]: {...pending, status: "submitted"}}});
+          this.toast(result.note || "Answer submitted.");
+          void this.refetch();
+        }
+        return current();
+      } catch (error) {
+        if (current()) {
+          this.set({attentionReplies: {...this.state.attentionReplies, [key]: {...pending, status: "failed", error: "Answer not confirmed. " + errorText(error)}}});
+          void this.refetch();
+        }
+        return false;
+      } finally {
+        if (this.attentionReplyWork.get(key) === work) this.attentionReplyWork.delete(key);
+      }
+    });
+    this.attentionReplyWork.set(key, work);
+    return work;
   }
 
   // Pending feedback is local to this exact view and verified human actor.

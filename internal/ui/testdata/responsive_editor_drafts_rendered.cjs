@@ -65,7 +65,7 @@ const server=http.createServer((q,r)=>{const u=new URL(q.url,'http://fixture');i
   const start=async()=>{await page.goto('http://127.0.0.1:'+server.address().port+'/?form='+form);await page.waitForFunction(()=>window.ready&&!!window.editorFixture);};
   const open=async()=>{
    await page.getByRole('button',{name:'Open editor',exact:true}).click();
-   if(form==='report'){const title=page.getByRole('button',{name:/Reports from other computers/});if(await title.getAttribute('aria-expanded')!=='true')await title.click();await page.getByRole('button',{name:'Answer there',exact:true}).click();}
+   if(form==='report'){const title=page.getByRole('button',{name:/Reports from other computers/});if(await title.getAttribute('aria-expanded')!=='true')await title.click();const answer=page.getByRole('button',{name:'Answer there',exact:true});if(await answer.count())await answer.click();}
    if(form==='schedule')await page.getByRole('button',{name:'Edit schedule',exact:true}).click();
    if(form==='assign'){await page.waitForFunction(()=>document.querySelector('select')?.options.length>1);await page.getByRole('combobox',{name:'Your agent',exact:true}).selectOption({index:1});}
   };
@@ -96,15 +96,23 @@ const server=http.createServer((q,r)=>{const u=new URL(q.url,'http://fixture');i
    }else{
     const submit=()=>page.getByRole('button',{name:{edit:'Save',answer:'Send answer',decline:'Decline',report:'Answer there',schedule:'Save schedule changes',assign:'Send task',default:'Save'}[form],exact:true});
     await page.evaluate(()=>editorFixture.mode='failure');await submit().click();await page.waitForFunction(()=>editorFixture.calls.length>0);
-    if(['answer','edit','assign','default'].includes(form)){await page.waitForFunction(()=>!document.querySelector('button:disabled')||!Array.from(document.querySelectorAll('button')).some(b=>/Sending|Saving/.test(b.textContent)));await resize(390);}else{await resize(390);}
-    await verify();await page.evaluate(()=>editorFixture.mode='success');await submit().click();
-    if(form==='schedule')await page.getByRole('button',{name:'Edit schedule',exact:true}).waitFor();
-    else if(['edit','answer','assign','default'].includes(form))await field().waitFor({state:'hidden'});
-    else await page.getByRole('dialog').waitFor({state:'hidden'});
-    await resize(1440);await verifyOriginal();
+    if(form==='report'){
+     await page.getByRole('dialog').waitFor({state:'hidden'});await page.locator('[data-attention-reply=failed]').getByText(draft,{exact:true}).waitFor();await resize(390);await page.locator('[data-attention-reply=failed]').getByText(draft,{exact:true}).waitFor();
+     assert.equal(await page.locator('#operator-text').count(),0,'uncertain exact answer is retried, not reopened as a different send');
+     const first=await page.evaluate(()=>editorFixture.calls[0]);await page.evaluate(()=>editorFixture.mode='success');await page.getByRole('button',{name:'Retry exact answer',exact:true}).click();await page.getByText('Answer submitted. Waiting for the updated request.',{exact:true}).waitFor();assert.deepEqual(await page.evaluate(()=>editorFixture.calls[1]),first,'responsive retry preserves exact target/text/send ID');assert.equal(await page.getByRole('button',{name:'Answer there',exact:true}).count(),0);
+     // A newly reported attempt is editable independently of the submitted one.
+     await page.evaluate(()=>editorFixture.change('attempt',2));await resize(1440);await verifyOriginal();
+    }else{
+     if(['answer','edit','assign','default'].includes(form)){await page.waitForFunction(()=>!document.querySelector('button:disabled')||!Array.from(document.querySelectorAll('button')).some(b=>/Sending|Saving/.test(b.textContent)));await resize(390);}else{await resize(390);}
+     await verify();await page.evaluate(()=>editorFixture.mode='success');await submit().click();
+     if(form==='schedule')await page.getByRole('button',{name:'Edit schedule',exact:true}).waitFor();
+     else if(['edit','answer','assign','default'].includes(form))await field().waitFor({state:'hidden'});
+     else await page.getByRole('dialog').waitFor({state:'hidden'});
+     await resize(1440);await verifyOriginal();
+    }
    }
    if(form==='edit')assert((await page.evaluate(()=>editorFixture.calls)).every(c=>c.b.text.endsWith('[@Alice](agentnet:person/alice)')),'unchanged mention retains exact reference');
-   assert.deepEqual(errors,[]);const report={form,restoredBothDirections:true,cancelClears:true,targetAttemptWorkspaceIsolated:true,failedRetained:form!=='primitive',confirmedClears:true,lateSameStringGuard:form==='primitive',pageErrors:errors,calls:await page.evaluate(()=>editorFixture.calls)};reports.push(report);console.log(JSON.stringify({ok:true,form}));
+   assert.deepEqual(errors,[]);const report={form,restoredBothDirections:true,cancelClears:true,targetAttemptWorkspaceIsolated:true,failedRetained:form!=='primitive',confirmedClears:form!=='report',submittedGuardAndNewAttemptEditor:form==='report',lateSameStringGuard:form==='primitive',pageErrors:errors,calls:await page.evaluate(()=>editorFixture.calls)};reports.push(report);console.log(JSON.stringify({ok:true,form}));
   }catch(error){if(evidence){await page.screenshot({path:path.join(evidence,'failure-'+form+'.png')});fs.writeFileSync(path.join(evidence,'failure-'+form+'.html'),await page.content());}throw error;}finally{await page.close();}
  }
  if(evidence)fs.writeFileSync(path.join(evidence,'results.json'),JSON.stringify(reports,null,2));

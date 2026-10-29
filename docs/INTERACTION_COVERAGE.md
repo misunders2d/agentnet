@@ -1,5 +1,72 @@
 # Next-release interaction coverage and responsiveness
 
+## MEL-710 — immediate request replies, unreleased October 29
+
+Owner reported approximately 20 seconds of unchanged Needs-attention UI and
+repeated Reply submissions. The new local transition closes the editor and
+shows the exact answer as pending before dispatch. A retained exact-target guard
+spans navigation, responsive remounts and chat/report surfaces. An uncertain or
+failed submission retains the original body, route and send ID for explicit
+retry. Newer attempts, signed refusals, terminal state and workspace changes
+fence stale completions. The visible state distinguishes pending/submitted from
+native execution. Unrelated controls and drafts remain usable.
+
+Reuse: the already inspected Telegram Web A revision
+`f67a40879a7d78c2683ec5a296cf55bc22417d56`,
+[`messages.ts` local-change/background/error reconciliation](https://github.com/Ajaxy/telegram-tt/blob/f67a40879a7d78c2683ec5a296cf55bc22417d56/src/global/actions/api/messages.ts),
+recorded below, and AgentNet's existing Store, send IDs and durable continuation
+outbox. AgentNet-specific exact host/key/attempt and native permission boundaries
+remain. The existing report-reply send ID was not forwarded to that idempotent
+path; two production-line changes reuse it without a schema/API change. Legacy
+no-ID requests retain their old behavior.
+
+Executed evidence:
+
+- Actual Comic Store/React/Chromium fixture: 30 cases at 1280/390, covering local
+  and remote continuation and report Reply, held backend, twenty alternate-surface
+  duplicate attempts, remount/navigation, retained draft, exact retry, unsent
+  guard, refusal/newer/terminal/workspace fences. Feedback 6.0–12.2 ms; frame
+  opportunity 8.4–18.6 ms, both enforced below 1000 ms. Baseline `034673a6`
+  fails the same held-request fixture: editor remains visible beyond 1000 ms.
+- Built Classic/Holonet/Zoom handler fixtures: 18 cases, desktop/narrow,
+  4.6–14.3 ms. Full mounted app: six report flows, 10.9–21.4 ms, and six remote
+  continuation flows, 17.4–81.2 ms. Real browser input opens Activity, the request
+  and Reply. Held POSTs show the pending card and closed editor; twenty reopen
+  attempts produce one POST, unrelated controls work, and a newer-attempt push
+  followed by old acknowledgement cannot relabel the new request. No page errors.
+  Full mounted continuation uncovered omitted `continue` entries in all three
+  direct-chat action lists; adding that existing authorized action repairs reachability.
+  Mounted screenshots at both widths were inspected. Local continuation has
+  handler coverage, not a separately mounted standalone journey.
+- Real-store report-reply retry regression: baseline RED with duplicate outbox
+  ID; focused race GREEN in 30.771 s with existing operator checks. The exact
+  sealed decision survives store reopen, changed text with the same ID is refused,
+  and two admissions yield one host answer. Legacy, stale-attempt, revocation and
+  replay authority checks pass. Canonical Comic build/typecheck and `go vet ./...`
+  pass. The new rendered regression is included in the existing native CI selector;
+  no CI platform execution is claimed for this candidate.
+
+An integrated affected-test run passes the new regression (45.67 s) but initially
+fails two existing editor/continuation fixtures. The continuation fixture expected
+resubmission inside the old editor; it now checks the closed editor, retained
+failed answer and exact retry. The responsive report fixture supplied only props,
+not the matching report in the canonical Store; it now seeds both from the same
+invented report. A subsequent narrow continuation failure exposed a pointer-label
+assumption: viewport width does not determine hover capability. Its same focused
+message-action/Enter path now accepts either existing accessible label. No product
+change or timing relaxation was needed for these fixture corrections.
+Affected reruns pass without skips: continuation 9.42 s (six local/remote/stale
+cases at 1280/390), responsive editors 26.37 s (all eight forms). The standalone
+root rerun passes all three browser tests, zero skips; package manifest/assets/
+syntax/static checks also pass. Their source commit is `0d694e62` in
+`agentnet-skins`; the gallery pin and published packages remain unchanged.
+Original failed runs are retained in private temporary logs.
+
+These are controlled Chromium/Linux source checks, not installed-app 20-second
+latency measurements, physical-device coverage or full platform/history/skin
+qualification. Screenshots/logs stay private in temporary storage. Owner says
+**do not release yet**: no tag, publication, deployment or installed-client update.
+
 ## v0.9.9 published corrective release — October 29
 
 MEL-709 uses the existing native handover and signed status path. A durable local

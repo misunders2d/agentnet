@@ -1599,7 +1599,7 @@ if(process.env.AGENTNET_CONTINUATION_REGRESSION==='1'){
    const request=page.locator('[data-mid="needs-answer-exact"]');await request.waitFor();
    const continuationReply=request.getByRole('button',{name:'Reply',exact:true});
    const note=page.locator('[data-mid="ordinary-quote"]');await note.waitFor();
-   if(width===390){const actions=note.getByRole('button',{name:'Message actions',exact:true});await actions.focus();await actions.press('Enter');await page.getByRole('dialog').getByRole('button',{name:'Reply',exact:true}).click();}else{await note.hover();await note.getByRole('button',{name:'Reply',exact:true}).click();}
+   if(width===390){const actions=note.getByRole('button',{name:/^(Message actions|More actions)$/});await actions.focus();await actions.press('Enter');await page.getByRole('dialog').getByRole('button',{name:'Reply',exact:true}).click();}else{await note.hover();await note.getByRole('button',{name:'Reply',exact:true}).click();}
    assert.equal(await page.getByRole('dialog',{name:'Answer your agent',exact:true}).count(),0,'Ordinary Reply only quotes a message');
    assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>(r.path==='/api/operator/decide'||r.path==='/api/act'&&r.body?.do!=='read')).length),0,'Ordinary initial quote never submits a continuation');
    assert(!await page.evaluate(()=>fixture.requests.some(r=>['/api/dm/send','/api/dm/agent/ask','/api/send'].includes(r.path))),'Clarification and quote never create another request/manual answer');
@@ -1613,12 +1613,12 @@ if(process.env.AGENTNET_CONTINUATION_REGRESSION==='1'){
     assert.match(await dialog.innerText(),/permission or environment problem/);assert.match(await dialog.innerText(),/Reply and retry keep the same permissions/);
     const send=dialog.getByRole('button',{name:'Send answer',exact:true});assert(await send.isDisabled(),'Empty answer cannot be submitted');
     await dialog.locator('#agent-answer').fill('Use the east warehouse');await send.click();
-    await page.waitForFunction(()=>fixture.continuationFailed);await send.waitFor();
-    await settle(page);await dialog.evaluate(async e=>{await Promise.all(e.getAnimations({subtree:true}).filter(a=>a.effect.getComputedTiming().iterations!==Infinity).map(a=>a.finished.catch(()=>{})));});
-    const sheetStyle=await dialog.evaluate(e=>{const c=getComputedStyle(e);return {background:c.backgroundColor,opacity:c.opacity,transform:c.transform,filter:c.filter,backdropFilter:c.backdropFilter,classes:e.className};});
+    await page.waitForFunction(()=>fixture.continuationFailed);await dialog.waitFor({state:'hidden'});const failed=request.locator('[data-attention-reply=failed]');await failed.waitFor();await failed.getByText('Use the east warehouse',{exact:true}).waitFor();const retry=failed.getByRole('button',{name:'Retry exact answer',exact:true});await retry.waitFor();
+    await settle(page);await failed.evaluate(async e=>{await Promise.all(e.getAnimations({subtree:true}).filter(a=>a.effect.getComputedTiming().iterations!==Infinity).map(a=>a.finished.catch(()=>{})));});
+    const sheetStyle=await failed.evaluate(e=>{const c=getComputedStyle(e);return {background:c.backgroundColor,opacity:c.opacity,transform:c.transform,filter:c.filter,backdropFilter:c.backdropFilter,classes:e.className};});
     const styleFile=path.join(evidence,skin+'-continuation-answer-'+mode+'-'+width+'.json');fs.writeFileSync(styleFile,JSON.stringify(sheetStyle,null,2),{mode:0o600});shots.push(styleFile);
     const answerShot=path.join(evidence,skin+'-continuation-answer-'+mode+'-'+width+'.png');await page.screenshot({path:answerShot});shots.push(answerShot);
-    await send.click();await page.waitForFunction(()=>fixture.thread.messages.find(m=>m.id==='needs-answer-exact').job_state==='running');
+    await retry.click();await page.waitForFunction(()=>fixture.thread.messages.find(m=>m.id==='needs-answer-exact').job_state==='running');
     await page.evaluate(()=>reloadFixture());await settle(page);
     const calls=await page.evaluate(()=>fixture.requests.filter(r=>['/api/act','/api/operator/decide'].includes(r.path)));
     assert.equal(calls.length,2,'One explicit retry after synthetic transport failure');assert.deepEqual(calls[0],calls[1],'Retry preserves exact request, attempt and send identity');

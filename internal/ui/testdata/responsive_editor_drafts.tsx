@@ -63,6 +63,9 @@ export function mountEditorHarness(seed: any, form: string) {
   let rerender: () => void;
   function Editor() {
     const [open,setOpen] = useState(false);
+    // Render the same invented authoritative report that the real Store uses
+    // for exact target/version validation, rather than a props-only report.
+    if (form === "report") o.review = [{id:"7".repeat(32),kind:"message",peer:o.me.address,why:"",excerpt:"",at:new Date().toISOString(),report:{v:1,at:1,host:o.me.address,items:[{id:f.target.repeat(32),key:"exact-key",attempt:f.attempt,from:dm.peer.address,kind:"question",state:"needs_human",blocker:"",since:1,excerpt:"Invented missing information",actionable:true}]}}];
     const store = getStore(f.workspace);
     const m = {...dm.messages[0],id:f.target.repeat(32),revision:f.attempt};
     const key = JSON.stringify([form,f.target,f.attempt]);
@@ -72,7 +75,7 @@ export function mountEditorHarness(seed: any, form: string) {
       {form==="edit" && open && <EditBox m={m} ctx={ctx} onDone={()=>setOpen(false)}/>}
       {form==="answer" && open && <AnswerSheet draftKey={key} question="Invented exact request" onClose={()=>setOpen(false)} onSend={respond}/>}
       {form==="decline" && <DeclineSheet draftKey={key} open={open} onOpenChange={setOpen} who="Alice" kind="task" onDecline={respond}/>}
-      {form==="report" && <Reports o={o} notices={[{id:"7".repeat(32),kind:"message",peer:o.me.address,why:"",excerpt:"",at:new Date().toISOString(),report:{v:1,at:1,host:o.me.address,items:[{id:f.target.repeat(32),key:"exact-key",attempt:f.attempt,from:dm.peer.address,kind:"question",state:"needs_human",blocker:"",since:1,excerpt:"Invented missing information",actionable:true}]}}]}/>}
+      {form==="report" && <Reports o={o} notices={o.review}/>}
       {form==="schedule" && <ScheduleDialogs pane="list" onPane={()=>{}} conv={dm.id} dm={dm} capture={()=>({body:"",draft:{text:""}})} reason="" page/>}
       {form==="assign" && <AssignMessage m={m} ctx={ctx} open={open} onOpenChange={setOpen}/>}
       {form==="default" && open && <DefaultAgentChoice view={{...responder,agent_id:f.target.repeat(32),context:[String(f.attempt)]}} inline saved={()=>setOpen(false)} onCancel={()=>setOpen(false)}/>}

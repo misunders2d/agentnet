@@ -16,9 +16,8 @@ import {
   askerOf, capital, deviceWords, headlineOf, inSentence, isMine, isThreadMsg, kindWord, longer, myAgent, myAgentSeed, nameOf,
   participationOf, phaseOf, placeOf, remoteNeedsHumanDetail, requestText, waitsElsewhere, type Asker, type Phase, type Req,
 } from "./Approvals.words";
-import { sendID } from "../optimistic.mjs";
 import { localRunningDetail } from "../runningDetail";
-import { AnswerSheet, ConfirmSheet, DeclineSheet } from "./Approvals.sheets";
+import { AnswerSheet, AttentionReplyStatus, ConfirmSheet, DeclineSheet } from "./Approvals.sheets";
 import { focusComposer } from "./Composer.focus";
 import { decidersWords } from "./Approvals.reports";
 import { Command, Details } from "./Settings.parts";
@@ -137,7 +136,7 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
   const { root } = useOwned();
   const [busy, setBusy] = useState("");
   const [sheet, setSheet] = useState<Sheet>(null);
-  const [answer, setAnswer] = useState<{request: NonNullable<Req["continuation"]>; send: string; question: string} | null>(null);
+  const [answer, setAnswer] = useState<{request: NonNullable<Req["continuation"]>; version: string; question: string} | null>(null);
   const acts = m.actions || [];
   const can = (a: string) => acts.includes(a);
   const asker = askerOf(m, o, names, dm);
@@ -149,6 +148,11 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
 	const runningDetail = (isThreadMsg(m) ? m.detail : m.job_detail) || (phase === "running" && m.exec?.state === "running" && !m.exec.stale ? m.exec.detail : "") || "";
 	const activity = currentNativeActivity(isThreadMsg(m) ? m.detail : m.job_detail, m.exec, phase === "running");
 	const said = requestResultText(localRunningDetail(runningDetail || (phase === "needs_human" ? remoteNeedsHumanDetail(m, o) : "") || (phase === "needs_human" ? (o?.needs_you || []).find(c => c.conv === conv && c.id === m.id)?.why : "") || "", phase === "running"));
+  const continuation = m.continuation;
+  const replyTarget = continuation ? {host:continuation.host || "",id:continuation.id,key:continuation.key,attempt:continuation.attempt,action:"continue",expect:"needs_human",report:""} : null;
+  const replyVersion = replyTarget ? store.attentionReplyVersion(replyTarget) : "";
+  const replySlot = useStore(store, () => store.attentionReply(replyTarget, replyVersion));
+  useEffect(() => { if (answer && (JSON.stringify(answer.request) !== JSON.stringify(m.continuation) || answer.version !== replyVersion)) setAnswer(null); }, [answer, m.continuation, replyVersion]);
 	const proposal = m.proposal;
 
   const permissionPerson = thread?.permission_person;
@@ -175,7 +179,7 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
             {notice ? capital(deviceWords(m.from, o)) + " has requests waiting for a person there" : capital(agent) + "’s follow-up needs a person"}
           </h3>
           <p className="pt-1.5 text-text-2">{notice ? decidersWords(o?.review?.find((r) => r.id === m.id)?.report, m.from, o) : said || requestText(m)}</p>
-          <Button className="mt-3.5" disabled={!!busy} onClick={() => setSheet("close")}>{notice ? "Dismiss report" : "Mark as handled"}</Button>
+          <Button className="mt-3.5" disabled={!!busy || !!replySlot} onClick={() => setSheet("close")}>{notice ? "Dismiss report" : "Mark as handled"}</Button>
         </div>
         <ConfirmSheet open={sheet === "close"} onOpenChange={(v) => setSheet(v ? "close" : null)}
           title={notice ? "Dismiss this report?" : "Mark as handled?"}
@@ -204,7 +208,7 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
         </p>
       )}
       <RequestFrame tone={phase === "running" ? "work" : phase === "stopped" ? "quiet" : "act"} at={m.at}
-        label={phase === "decide" ? "Needs your OK" : phase === "needs_human" ? "Needs attention" : phase === "running" ? "Working" : stoppedWord}>
+        label={replySlot ? replySlot.status === "failed" ? "Answer not confirmed" : "Answer pending" : phase === "decide" ? "Needs your OK" : phase === "needs_human" ? "Needs attention" : phase === "running" ? "Working" : stoppedWord}>
         <Duo asker={asker} agent={mine.name} sub={named ? mine.where : "On " + mine.where.replace(/^Your agent · /, "")} seed={myAgentSeed(m, o, dm)} device={deviceKind(mine.address)}
           mood={phase === "running" ? "working" : phase === "decide" || phase === "needs_human" ? "waiting" : "neutral"} live={phase === "decide"} />
 
@@ -249,31 +253,32 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
 
         <div className="flex flex-col gap-2 px-4 pt-4 pb-3">
           {phase === "decide" && <>
-            {can("accept") && <Button variant="act" size="lg" icon={<IconCheck size={20} stroke={2.5} />} disabled={!!busy} onClick={allow}>{busy === "accept" ? "Allowing…" : "Allow once"}</Button>}
-            {can("decline") && <Button variant="outline" size="lg" className="min-h-12!" disabled={!!busy} onClick={() => setSheet("decline")}>Decline</Button>}
+            {can("accept") && <Button variant="act" size="lg" icon={<IconCheck size={20} stroke={2.5} />} disabled={!!busy || !!replySlot} onClick={allow}>{busy === "accept" ? "Allowing…" : "Allow once"}</Button>}
+            {can("decline") && <Button variant="outline" size="lg" className="min-h-12!" disabled={!!busy || !!replySlot} onClick={() => setSheet("decline")}>Decline</Button>}
             {can("reply") && replyHere && <TextButton onClick={reply} icon={<IconArrowBackUp size={18} />}>Answer it yourself</TextButton>}
-            {can("accept_always") && <TextButton onClick={() => setSheet("always")} disabled={!!busy}>{named ? "Always allow " + asker.name + " → " + agent + "…" : "Always allow tasks from " + asker.name + "…"}</TextButton>}
-            {can("approve") && <TextButton onClick={() => setSheet("approve")} disabled={!!busy}>Approve {permissionName}…</TextButton>}
+            {can("accept_always") && <TextButton onClick={() => setSheet("always")} disabled={!!busy || !!replySlot}>{named ? "Always allow " + asker.name + " → " + agent + "…" : "Always allow tasks from " + asker.name + "…"}</TextButton>}
+            {can("approve") && <TextButton onClick={() => setSheet("approve")} disabled={!!busy || !!replySlot}>Approve {permissionName}…</TextButton>}
             {!can("decline") && <p className="px-1 pt-1 text-[13px] text-muted">If you don’t allow it, nothing runs.</p>}
           </>}
           {phase === "needs_human" && <>
+            {replySlot && replyTarget && <AttentionReplyStatus pending={replySlot} onRetry={() => store.retryAttentionReply(replyTarget, replyVersion)} />}
             <p className="text-[14px] text-text-2">For a native permission or required authorization, review the agent on its host computer.
               {m.continuation && " Use Reply to supply information for this exact waiting request. The host checks it before continuing under its existing permissions."}
               {can("accept") && " Ask again requests another attempt with the agent’s existing permissions."}
               {(m.continuation?.host || can("resolve")) && " Mark as handled asks to close this request without running it again."}
             </p>
-            {m.continuation && <Button variant="act" size="lg" icon={<IconArrowBackUp size={20} />} disabled={!!busy} onClick={() => setAnswer({request: {...m.continuation!}, send: sendID(), question: said})}>Reply</Button>}
-            {m.continuation?.host && <ResolveOwnRequest request={m.continuation} disabled={!!busy} />}
-            {can("accept") && <Button variant="outline" size="lg" className="min-h-12!" icon={<IconRefresh size={19} />} disabled={!!busy} onClick={allow}>{busy === "accept" ? "Starting…" : "Ask again"}</Button>}
-            {can("resolve") && <TextButton onClick={() => setSheet("close")} disabled={!!busy}>Mark as handled</TextButton>}
+            {m.continuation && !replySlot && <Button variant="act" size="lg" icon={<IconArrowBackUp size={20} />} disabled={!!busy || !!replySlot} onClick={() => setAnswer({request: {...m.continuation!}, version: replyVersion, question: said})}>Reply</Button>}
+            {m.continuation?.host && <ResolveOwnRequest request={m.continuation} disabled={!!busy || !!replySlot} />}
+            {can("accept") && <Button variant="outline" size="lg" className="min-h-12!" icon={<IconRefresh size={19} />} disabled={!!busy || !!replySlot} onClick={allow}>{busy === "accept" ? "Starting…" : "Ask again"}</Button>}
+            {can("resolve") && <TextButton onClick={() => setSheet("close")} disabled={!!busy || !!replySlot}>Mark as handled</TextButton>}
           </>}
           {phase === "stopped" && <>
-            {can("accept") && <Button variant="act" size="lg" icon={<IconRefresh size={20} />} disabled={!!busy} onClick={allow}>{busy === "accept" ? "Starting…" : "Run it again"}</Button>}
+            {can("accept") && <Button variant="act" size="lg" icon={<IconRefresh size={20} />} disabled={!!busy || !!replySlot} onClick={allow}>{busy === "accept" ? "Starting…" : "Run it again"}</Button>}
             {can("reply") && replyHere && <TextButton onClick={reply} icon={<IconArrowBackUp size={18} />}>Answer it yourself</TextButton>}
-            {can("resolve") && <TextButton onClick={() => setSheet("close")} disabled={!!busy}>Mark as handled</TextButton>}
+            {can("resolve") && <TextButton onClick={() => setSheet("close")} disabled={!!busy || !!replySlot}>Mark as handled</TextButton>}
           </>}
           {phase === "running" && (
-            <Button variant="danger" size="lg" className="min-h-12!" icon={<IconPlayerStop size={19} />} disabled={!!busy} onClick={() => setSheet("stop")}>{busy === "cancel" ? "Stopping…" : "Stop"}</Button>
+            <Button variant="danger" size="lg" className="min-h-12!" icon={<IconPlayerStop size={19} />} disabled={!!busy || !!replySlot} onClick={() => setSheet("stop")}>{busy === "cancel" ? "Stopping…" : "Stop"}</Button>
           )}
         </div>
 
@@ -286,11 +291,7 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
 
       {answer && <AnswerSheet draftKey={JSON.stringify(["answer", conv, answer.request.host, answer.request.id, answer.request.key, answer.request.attempt])} question={answer.question} onClose={() => setAnswer(null)} onSend={async (text) => {
         const c = answer.request;
-        const result = await store.run(api => c.host
-          ? api.decide({host:c.host,id:c.id,key:c.key,action:"continue",expect:"needs_human",attempt:c.attempt,text,send_id:answer.send,report:""})
-          : api.act({do:"continue",id:c.id,key:c.key,attempt:c.attempt,body:text,send_id:answer.send}));
-        if (result) store.toast(result.note || "Answer submitted.");
-        return !!result;
+        return store.submitAttentionReply({host:c.host || "",id:c.id,key:c.key,attempt:c.attempt,action:"continue",expect:"needs_human",report:""}, answer.version, text);
       }} />}
       <ConfirmSheet open={sheet === "always"} onOpenChange={(v) => setSheet(v ? "always" : null)}
         title={named ? "Always allow " + asker.name + " → " + agent + "?" : "Always allow tasks from " + asker.name + "?"}

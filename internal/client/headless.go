@@ -582,7 +582,7 @@ func (a *Agent) Decide(ctx context.Context, host, id, key, action, expect string
 	if err != nil {
 		return ControlSent{}, err
 	}
-	if action == "continue" || (action == "resolve" || action == "cancel") && report == "" {
+	if action == "reply" && queuedSend(ctx) || action == "continue" || (action == "resolve" || action == "cancel") && report == "" {
 		if err := a.store.addContinuationOutbox(env, in, hostKey.Fingerprint(), cap); err != nil {
 			return ControlSent{}, err
 		}

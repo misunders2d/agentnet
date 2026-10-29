@@ -1,5 +1,25 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+## MEL-710 reply feedback — unreleased, October 29
+
+Owner explicitly requested a fix without a release. Needs-attention Reply now
+closes its editor and shows the exact pending answer before I/O. A retained,
+request/host/key/attempt-bound guard prevents duplicate submissions across
+navigation, remounts and chat/report surfaces. Failed or uncertain submission
+keeps the answer and its send ID for explicit retry; newer authoritative state
+and workspace changes fence old callbacks. Pending/submitted does not certify
+native execution. Comic and Classic/Holonet/Zoom implement the same behavior.
+
+The existing optional report-reply send ID now reaches the existing durable
+idempotent decision path. No-ID legacy requests retain their behavior; no schema,
+public contract, permission or transport changes. Standalone direct-chat action
+lists also expose the already-authorized `continue` action they had omitted.
+
+Focused browser and backend evidence, retained failures and coverage limits are
+in [interaction coverage](INTERACTION_COVERAGE.md). This is source work only:
+v0.9.9 and its gallery remain the published versions. No tag, deployment,
+installed-client update or full release qualification is authorized here.
+
 ## v0.9.9 published and Hub deployed — October 29
 
 [App v0.9.9](https://github.com/misunders2d/agentnet/releases/tag/v0.9.9) and

@@ -27,7 +27,7 @@ func (l *Live) Decide(x DecisionAction) (string, error) {
 		}
 		return "The host can receive this decision. Nothing has been sent.", nil
 	}
-	if x.Action == "continue" || (x.Action == "resolve" || x.Action == "cancel") && x.Report == "" {
+	if x.Action == "reply" && x.SendID != "" || x.Action == "continue" || (x.Action == "resolve" || x.Action == "cancel") && x.Report == "" {
 		ctx = client.WithQueuedSend(ctx, x.SendID)
 	}
 	sent, err := l.a.Decide(ctx, x.Host, x.ID, x.Key, x.Action, x.Expect, x.Attempt, x.Text, x.Report)

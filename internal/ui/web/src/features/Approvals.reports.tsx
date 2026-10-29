@@ -5,7 +5,7 @@
 // decision goes to that device, which applies it only if nothing changed.
 // Any other device is told how many wait and who decides them from their
 // own devices (MEL-532): never "go to that machine".
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Collapsible } from "@base-ui/react/collapsible";
 import { IconChevronDown, IconDevices } from "@tabler/icons-react";
 import type { T } from "../api";
@@ -16,6 +16,8 @@ import { Button } from "../ui/Button";
 import { Sheet } from "../ui/Sheet";
 import { capital, deviceWords, kindWord } from "./Approvals.words";
 import { ResolveOwnRequest } from "./RequestResolution";
+import { AttentionReplyStatus } from "./Approvals.sheets";
+import { useStore, type AttentionReplyTarget } from "../store";
 import { NativeRequest } from "./NativeRequest";
 
 type Item = T.ReportItem;
@@ -123,6 +125,11 @@ function HostReport({ host, notices, o }: { host: string; notices: T.ReviewItem[
 function ReportRow({ x, host, report, o }: { x: Item; host: string; report: T.ReviewItem; o: T.Overview }) {
   const store = useApp();
   const [pick, setPick] = useState<Decision | null>(null);
+  const [replyChoice, setReplyChoice] = useState<{target: AttentionReplyTarget; version: string} | null>(null);
+  const replyTarget = {host,id:x.id,key:x.key,attempt:x.attempt,action:"reply",expect:x.state,report:report.id};
+  const replyVersion = store.attentionReplyVersion(replyTarget);
+  const replySlot = useStore(store, () => store.attentionReply(x.actionable && (!x.result || x.result.refused) ? replyTarget : null, replyVersion));
+  useEffect(() => { setPick(null); }, [host,report.id,x.key,x.attempt,x.state,replyVersion]);
   if (x.native) return <li><NativeRequest key={x.native.token} n={x.native} report={report.id} result={x.result} /></li>;
   const decided = x.result && !x.result.refused;
   const state = decided ? x.result!.state : x.state;
@@ -150,15 +157,15 @@ function ReportRow({ x, host, report, o }: { x: Item; host: string; report: T.Re
           {x.result.refused ? "Not applied: " + x.result.refused : "Sent from here. Now it " + (stateWords[x.result.state] || "is " + x.result.state) + " there."}
         </p>
       )}
-      {acts.length > 0 ? (
+      {replySlot ? <AttentionReplyStatus pending={replySlot} onRetry={() => store.retryAttentionReply(replyTarget, replyVersion)} /> : acts.length > 0 ? (
         <div className="mt-2 flex flex-wrap gap-2">
-          {acts.map((d, i) => <Button key={d} size="sm" variant={i === 0 ? "act" : "outline"} onClick={() => setPick(d)}>{label(d, again)}</Button>)}
+          {acts.map((d, i) => <Button key={d} size="sm" variant={i === 0 ? "act" : "outline"} onClick={() => { if(d === "reply") setReplyChoice({target:replyTarget,version:replyVersion}); setPick(d); }}>{label(d, again)}</Button>)}
         </div>
       ) : ownResolution ? <ResolveOwnRequest request={ownResolution} /> : !decided && <p className="pt-1 text-[13px] text-muted">{x.actionable ? "Nothing to decide on it right now." : "This device can’t decide it."}</p>}
       <OperatorSheet open={!!pick} decision={pick} x={x} where={deviceWords(host, o)} again={again}
         draftKey={JSON.stringify(["operator", host, report.id, x.id, x.key, x.attempt, x.state, pick])}
         onOpenChange={(v) => { if (!v) setPick(null); }}
-        onSend={(text) => store.run((api) => api.decide({ host, id: x.id, key: x.key, action: pick!, expect: x.state, attempt: x.attempt, text, report: report.id }), "Sent to " + deviceWords(host, o) + ".")} />
+        onSend={(text) => pick === "reply" ? replyChoice ? store.submitAttentionReply(replyChoice.target, replyChoice.version, text) : Promise.resolve(false) : store.run((api) => api.decide({ host, id: x.id, key: x.key, action: pick!, expect: x.state, attempt: x.attempt, text, report: report.id }), "Sent to " + deviceWords(host, o) + ".")} />
     </li>
   );
 }

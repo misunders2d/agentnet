@@ -1,6 +1,7 @@
 // Confirm steps for decisions: one sentence of what it means, the
 // consequential button first and labelled with the action, and a way out.
 import { useRef, useState, type ReactNode } from "react";
+import type { AttentionReply } from "../store";
 import { useRetainedText } from "../retained-text";
 import { Collapsible } from "@base-ui/react/collapsible";
 import { IconChevronDown } from "@tabler/icons-react";
@@ -55,7 +56,9 @@ export function AnswerSheet({ question, onClose, onSend, draftKey }: {
     if (pending.current || !text.trim()) return;
     pending.current = true; setBusy(true);
     const confirmed = retained.capture();
-    try { if (await onSend(text.trim())) { confirmed(); onClose(); } }
+    const work = onSend(text.trim());
+    onClose(); // The Store already owns its exact local pending answer.
+    try { if (await work) confirmed(); }
     finally { pending.current = false; setBusy(false); }
   };
   return <Sheet open onOpenChange={(open) => { if (!open) { retained.discard(); onClose(); } }} title="Answer your agent"
@@ -87,4 +90,14 @@ export function Row({ k, children }: { k: string; children: ReactNode }) {
       <dd className="text-[15px] [overflow-wrap:anywhere]">{children}</dd>
     </div>
   );
+}
+
+export function AttentionReplyStatus({ pending, onRetry }: {pending: AttentionReply; onRetry: () => unknown}) {
+  return <div className="rounded-xl bg-sunken px-3 py-2.5" data-attention-reply={pending.status}>
+    <p className="whitespace-pre-wrap text-[15px] [overflow-wrap:anywhere]">{pending.request.text}</p>
+    <p role={pending.status === "failed" ? "alert" : "status"} className="mt-1 text-[13px] font-semibold">
+      {pending.status === "failed" ? pending.error : pending.status === "submitted" ? "Answer submitted. Waiting for the updated request." : "Sending answer… Not yet confirmed."}
+    </p>
+    {pending.status === "failed" && <Button size="sm" variant="outline" onClick={() => void onRetry()}>Retry exact answer</Button>}
+  </div>;
 }
