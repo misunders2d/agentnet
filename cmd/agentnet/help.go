@@ -230,9 +230,9 @@ agentnet dm invite ID HOST, then agentnet dm ask-agent PID TEXT.
 
 Then ask waits for the answer and prints it: --answer-wait D, default 90s
 (0: return at once). It prints "sent; waiting..." first: if the command is
-stopped, the answer still arrives, so never ask again; read it with
-agentnet dm wait ID. The local daemon wakes the wait (nothing polls the
-Hub); without a running daemon it says so and returns. It stops early when
+stopped, the answer still arrives, so never send the question again; read
+it with agentnet dm wait ID. The local daemon wakes the wait (nothing polls
+the Hub); without a running daemon it says so and returns. It stops early when
 the request waits for someone's OK or a person's decision there. Inside a
 run, an answer that does not come in time is waited for by the run's
 request, which runs again with it once every such ask has finished; the run

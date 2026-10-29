@@ -32,6 +32,11 @@ run_partition() {
 				if ($0=="TestTopicTransferWholeSnapshotCapacityAndRetry") part=2
 				if ($0=="TestRoomBusyAncestorCallback") part=3
 				if ($0=="TestHistoryArchiveImportedTailRemainsBounded") part=9
+				if ($0=="TestTopicGuestInvitesOwnAgent") part=8
+				if ($0=="TestConversationResourcesDoNotConsumeSelectedHistorySlots") part=8
+				if ($0=="TestGroupParticipationFilesLateLinkedRequestAndNamedOutput") part=15
+				if ($0=="TestGroupInteractionNamedMemberAndVisitor") part=16
+				if ($0=="TestGoogleReviewIntentRetry") part=0
 			}
 			if (client && n==12) {
 				if ($0=="TestGroupInteractionNamedMemberAndVisitor") part=1
