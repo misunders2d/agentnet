@@ -67,6 +67,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   const form = useRef<HTMLFormElement>(null);
   const row = useRef<HTMLDivElement>(null);
   const field = useRef<HTMLTextAreaElement>(null);
+  const plainPaste = useRef(false); // the next paste came from Ctrl+Shift+V
   const mirror = useRef<HTMLDivElement>(null);
   const picker = useRef<HTMLInputElement>(null);
   const visible = useRef(conv);
@@ -410,6 +411,8 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   }
 
   const paste = (e: ClipboardEvent) => {
+    const plain = plainPaste.current;
+    plainPaste.current = false;
     if (!filesAllowed || sending) return;
     const ta = field.current;
     const host = store.host;
@@ -423,6 +426,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
         edit(value.slice(0, from) + s + value.slice(to), from + s.length);
       },
       error: (text) => { if (here()) setNotice({ conv, text }); },
+      plain,
     });
   };
 
@@ -702,6 +706,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
 
   // ---- keys
   function keys(e: KeyboardEvent<HTMLTextAreaElement>) {
+    plainPaste.current = (e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && (e.code === "KeyV" || e.key.toLowerCase() === "v");
     if (dm && !closed && !sending && e.code === "Digit2" && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && !e.nativeEvent.isComposing && e.nativeEvent.keyCode !== 229) {
       e.preventDefault();
       openMentions();

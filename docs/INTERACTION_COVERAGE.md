@@ -1921,3 +1921,27 @@ Windows installer failures remain visible; focused40727076713 and40728289265 pas
 No timeout or assertion was weakened. The complete control/platform/history
 inventory remains incomplete. The later explicit release authorization and
 final passing gallery gate are recorded in the current disposition above.
+
+### Plain-text paste of Excel cells — October 29 (MEL-714)
+
+Cause, from source: with no browser clipboard file, the desktop shell's
+`clipboardImage` is read first and a picture wins over text
+(`internal/ui/static/pictures.mjs`). Excel puts the cells on the clipboard as
+text and as a picture, so both Ctrl+V and Ctrl+Shift+V attached
+`pasted-picture.png` (`desktop/src-tauri/src/clipboard.js`). Picture-first stays
+for Ctrl+V: a browser image copy also carries its URL as text and must still
+attach the picture (existing check). Ctrl/Cmd+Shift+V, the platform
+paste-as-plain-text shortcut, now marks the next paste as plain; with text on
+the clipboard nothing is read or attached and the browser's own plain-text
+paste inserts it (tabs and line breaks kept). A picture with no text still
+attaches. No new paste path, permission or dependency; skins may pass the new
+optional `plain` option to `pastePictures`.
+
+Executed: `picture_crop_paste_check.mjs` (26 checks: plain paste with a
+clipboard file and with a native picture inserts no file and reads nothing;
+picture-only plain paste still attaches) and `composer_shortcut_check.mjs`
+against the actual composer key handler (Ctrl/Cmd+Shift+V on Latin and
+Cyrillic layouts marks plain; Ctrl+V, AltGr and other keys clear it). Not
+executed: the opt-in rendered Playwright composer run, a real Windows desktop
+paste from Excel, and agentnet-skins composers. Slack/Telegram were not
+compared live; Ctrl+Shift+V as plain-text paste is the Chromium/WebView2 default.

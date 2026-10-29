@@ -26,6 +26,12 @@ e=event([],"image URL");const pending=pastePictures(e,add,options);assert.equal(
 options.clipboardImage=async()=>null;e=event([],"plain text");await pastePictures(e,add,options);assert.deepEqual(inserted,["plain text"]);
 options.clipboardImage=async()=>{throw Error("private clipboard contents must never escape");};e=event();await pastePictures(e,add,options);assert.equal(errors.length,1);assert(!errors[0].includes("private"));
 e=event([],"text on native read error");await pastePictures(e,add,options);assert.deepEqual(inserted,["plain text","text on native read error"]);
+// MEL-714: Ctrl+Shift+V keeps text even when the clipboard also has a picture
+// (Excel cells); the browser's own plain-text paste inserts it.
+options.clipboardImage=async()=>{reads++;return file;};const before=attached.length,readsBefore=reads;
+e=event([file],"ASIN1\tB0TEST\nASIN2\tB0NEXT");await pastePictures(e,add,{...options,plain:true});assert.equal(e.prevented,false);assert.equal(attached.length,before);assert.equal(reads,readsBefore);
+e=event([],"cells");await pastePictures(e,add,{...options,plain:true});assert.equal(e.prevented,false);assert.equal(attached.length,before);assert.equal(reads,readsBefore);
+e=event([],"");await pastePictures(e,add,{...options,plain:true});assert.equal(attached.length,before+1,"a picture alone still pastes");
 delete options.clipboardImage;
 e=event([],"standalone browser text");await pastePictures(e,add,options);assert.equal(e.prevented,false);
-console.log(JSON.stringify({png:Buffer.from(clean).toString("base64"),metadata:metadata.toString("base64"),checks:19}));
+console.log(JSON.stringify({png:Buffer.from(clean).toString("base64"),metadata:metadata.toString("base64"),checks:26}));

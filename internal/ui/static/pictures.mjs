@@ -39,7 +39,10 @@ export function cleanPicturePNG(b) {
 
 // Native reads happen only in response to a paste, after browser files. Native
 // image + text pastes attach the image; text-only pastes keep their usual text.
-export function pastePictures(e, add, {clipboardImage:read, insertText=()=>{}, error=()=>{}}={}) {
+export function pastePictures(e, add, {clipboardImage:read, insertText=()=>{}, error=()=>{}, plain=false}={}) {
+  // Paste as plain text (Ctrl+Shift+V) keeps the clipboard's text, even when
+  // it also holds a picture, as Excel cells do (MEL-714).
+  if(plain&&e.clipboardData?.getData("text/plain"))return;
   const files=[...(e.clipboardData?.files||[])];
   if(files.length){e.preventDefault();add(files);return;}
   if(typeof read!=="function")return;
