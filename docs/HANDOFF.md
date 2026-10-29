@@ -1,5 +1,11 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+## MEL-713 planned — October 29
+
+Owner decided to remove legacy v1 device messaging and move agent-to-agent work
+into one "My agents" room with a topic per job. Plan only, nothing implemented:
+[plans/MEL_713.md](plans/MEL_713.md).
+
 ## MEL-710 reply feedback — unreleased, October 29
 
 Owner explicitly requested a fix without a release. Needs-attention Reply now
