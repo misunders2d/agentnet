@@ -475,6 +475,29 @@ func (a *Agent) CurrentReplySession(handle, home string, generation int64) (*Rep
 	}
 	return &ReplyReceiver{Kind: "live_session", SessionHandle: handle}, nil
 }
+
+// ReplySessionHarness names the harness and native session of the reply
+// session handle registered in this home (a Pi or OMP session's inherited
+// AGENTNET_REPLY_SESSION), so a terminal ask speaks as that harness's agent.
+// It says nothing about whether the session still receives answers.
+func (a *Agent) ReplySessionHarness(handle, home string) (harness, session string, err error) {
+	canonical, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		return "", "", err
+	}
+	own, err := filepath.EvalSymlinks(a.home)
+	if err != nil {
+		return "", "", err
+	}
+	if canonical != own {
+		return "", "", errors.New("inherited native session is for another AgentNet home")
+	}
+	r, err := replySessionIn(a.store.db, handle)
+	if err != nil {
+		return "", "", err
+	}
+	return r.Harness, r.SessionID, nil
+}
 func (a *Agent) liveReplyBinding(q dbq, b ReplyReceiverBinding) (replySessionRecord, error) {
 	if b.remote != nil && b.remote.Role == "origin" {
 		return replySessionRecord{}, errors.New("selected native receiver belongs to another linked host")

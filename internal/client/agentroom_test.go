@@ -92,6 +92,30 @@ func TestAgentRoomAskPostsAsAgentInSessionTopic(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitState(t, a, jobID(tsent.LID), stateAnswered)
+	// A plain message (`agentnet send` from the session) goes in the same
+	// topic as the agent and asks for nothing (MEL-713 step 1).
+	note := ask
+	note.Kind, note.Body = envelope.KindMessage, "the fix branch is rebased"
+	nsent, err := a.SendAgentRoomAsk(tctx(t), note)
+	if err != nil || nsent.Topic != sent.Topic {
+		t.Fatalf("plain message outside the session topic: %+v %v", nsent, err)
+	}
+	if msgs, err = a.ConversationMessages(room); err != nil {
+		t.Fatal(err)
+	}
+	got = nil
+	for i := range msgs {
+		if msgs[i].LID == nsent.LID {
+			got = &msgs[i]
+		}
+	}
+	if got == nil || got.Kind != envelope.KindMessage || got.PID != sent.From || got.Topic != sent.Topic || !strings.HasPrefix(got.Origin, envelope.OriginAgentPrefix) {
+		t.Fatalf("plain message not posted as the asking agent in its topic: %+v", got)
+	}
+	var jobs int
+	if err = a.store.db.QueryRow(`SELECT count(*) FROM inbox WHERE conv=? AND lid=? AND replica=0 AND kind!=?`, room, nsent.LID, envelope.KindMessage).Scan(&jobs); err != nil || jobs != 0 {
+		t.Fatalf("a plain message became a job: %d %v", jobs, err)
+	}
 
 	// Across the person's devices too: the ask leaves this device with no
 	// originating run and runs on the other device without a click.

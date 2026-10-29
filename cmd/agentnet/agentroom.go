@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/client"
+	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
@@ -16,8 +17,9 @@ import (
 // other agents in the "My agents" room, posting as itself: from a terminal
 // session, or from a background run serving a request (chain rule:
 // client.RunAgentRoomAsk). Another person's agent is invited into the job's
-// topic as a visitor. A person at a plain shell and a delegated reply
-// binding keep their paths for now.
+// topic as a visitor. Nothing starts a version 1 turn any more: a person at
+// a plain shell sends in a DM and asks in a chat; a delegated reply
+// binding's run keeps its binding's thread until version 1 is deleted.
 
 // roomAsk is where an ask/task to an own device comes from.
 type roomAsk struct {
@@ -44,6 +46,12 @@ func roomAskFrom(a *client.Agent, target, fromAgent string) (roomAsk, bool, erro
 		}
 	}
 	harness, session := client.SessionHarness(os.Getenv)
+	if handle := os.Getenv("AGENTNET_REPLY_SESSION"); cause == "" && harness == "" && handle != "" {
+		// A Pi or OMP session names itself by its registered reply session.
+		if h, sid, err := a.ReplySessionHarness(handle, os.Getenv("AGENTNET_REPLY_SESSION_HOME")); err == nil {
+			harness, session = h, sid
+		}
+	}
 	if cause == "" && harness == "" && fromAgent == "" {
 		return r, false, nil
 	}
@@ -62,6 +70,73 @@ func roomAskFrom(a *client.Agent, target, fromAgent string) (roomAsk, bool, erro
 		r.session = harness + "/" + session
 	}
 	return r, true, nil
+}
+
+// plainShellAsk is why a person's plain shell cannot ask or task an agent
+// directly: a terminal speaks as an agent, and a person asks in a chat.
+const plainShellAsk = "ask from your agent's session (Claude Code, Codex, Pi or OMP) or name the agent to speak as with --from-agent ID; as a person, ask in a chat: agentnet dm new ADDRESS, agentnet dm invite ID HOST, then agentnet dm ask-agent PID TEXT"
+
+// sendPlain is `agentnet send` (not --progress): from an agent's session or
+// run it is a plain message in that job's topic of the "My agents" room, as
+// that agent; from a person's plain shell it goes in their DM with the
+// person at target. It asks for nothing.
+func sendPlain(ctx context.Context, a *client.Agent, target, body, replyTo, fromAgent string, files []string, out io.Writer) error {
+	host, session, err := protocol.SplitTarget(target)
+	if err != nil {
+		return err
+	}
+	if session != "" {
+		return errors.New("ADDRESS#SESSION belonged to the old device messages; send to the device's agent or person")
+	}
+	var named []client.OutgoingFile
+	for _, p := range files {
+		named = append(named, client.OutgoingFile{Path: p})
+	}
+	via, room, err := roomAskFrom(a, target, fromAgent)
+	if err != nil {
+		return err
+	}
+	if room {
+		r := client.AgentRoomAsk{From: via.from, SessionKey: via.session, Host: host, Kind: envelope.KindMessage, Body: body, ReplyTo: replyTo, Files: named}
+		if r.AgentID, err = a.RoomTargetAgent(ctx, host, "", r.From.Record.ID); err != nil {
+			return err
+		}
+		var sent client.AgentRoomSent
+		if via.cause != "" {
+			sent, err = a.RunAgentRoomAsk(ctx, via.cause, r)
+		} else {
+			sent, err = a.SendAgentRoomAsk(ctx, r)
+		}
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "%s %s: sent in %q, topic %s\n", sent.ID, sent.State, client.MyAgentsRoomTitle, sent.Topic)
+		return nil
+	}
+	if inRun() {
+		return errors.New("this run serves no request here, so it has no agent to send as")
+	}
+	own, err := a.OwnAgentHost(host)
+	if err != nil {
+		return err
+	}
+	if own || host == a.Address {
+		return errors.New("your own devices' agents are reached in your My agents room: send from your agent's session or with --from-agent ID, or write in your chat with that agent in the app")
+	}
+	conv, err := a.DMWith(ctx, host)
+	if err != nil {
+		return err
+	}
+	sent, err := a.SendConv(ctx, conv, client.ConvOutgoing{Kind: envelope.KindMessage, Body: body, Files: named, ReplyTo: replyTo, Quote: replyTo})
+	if err != nil {
+		return err
+	}
+	line := sent.ID + " " + sent.State
+	if sent.Detail != "" {
+		line += " (" + sent.Detail + ")"
+	}
+	fmt.Fprintf(out, "%s: sent in your DM %s (agentnet dm show %s)\n", line, conv, conv)
+	return nil
 }
 
 // runRoomAsk posts the request in the room and waits for its answer here.

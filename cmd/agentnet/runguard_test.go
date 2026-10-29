@@ -50,9 +50,6 @@ func TestRunGuardLetsARunUpdateItsOwnRequest(t *testing.T) {
 		_, err := diagnosticOutput(t, func() error { return run(append([]string{"--home", bobHome, "send", "--wait", "30s"}, args...)) })
 		return err
 	}
-	if err := send(alice.Address, "outside a run"); err != nil {
-		t.Fatalf("send outside a run: %v", err)
-	}
 	asked, err := alice.SendMessage(ctx, client.Outgoing{To: bob.Address, Kind: envelope.KindQuestion, Body: "how far along?", Wait: 30 * time.Second})
 	if err != nil || asked.State != protocol.StateDelivered {
 		t.Fatalf("question: %+v %v", asked, err)
@@ -76,9 +73,6 @@ func TestRunGuardLetsARunUpdateItsOwnRequest(t *testing.T) {
 		if err == nil {
 			t.Errorf("%v: %v", args, err)
 		}
-	}
-	if err := send(alice.Address, "native permitted message"); err != nil {
-		t.Fatal(err)
 	}
 	got := map[string]string{}
 	msgs, err := alice.Inbox(false, false)
@@ -114,8 +108,10 @@ func TestRunGuardLetsARunUpdateItsOwnRequest(t *testing.T) {
 		sent = append(sent, body+"/"+status+"/"+state+why)
 	}
 	slices.Sort(sent)
-	// Both reached alice: the progress update and the clarification.
-	if strings.Join(sent, " | ") != "halfway/progress/delivered | native permitted message//delivered | outside a run//delivered | which branch?//delivered" {
+	// Both reached alice: the progress update and the clarification, in the
+	// old thread of her old-route request (a new plain send goes to the room
+	// or a DM instead: TestPlainSendGoesToTheDM).
+	if strings.Join(sent, " | ") != "halfway/progress/delivered | which branch?//delivered" {
 		t.Fatalf("bob sent %q", sent)
 	}
 }

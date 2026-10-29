@@ -194,11 +194,13 @@ type AgentRoomSent struct {
 }
 
 // SendAgentRoomAsk posts the request in the person's "My agents" room as
-// the asking agent, inviting both agents into the job's topic first.
+// the asking agent, inviting both agents into the job's topic first. A
+// plain message (KindMessage) is posted there the same way and asks for
+// nothing.
 func (a *Agent) SendAgentRoomAsk(ctx context.Context, r AgentRoomAsk) (AgentRoomSent, error) {
 	var out AgentRoomSent
-	if r.Kind != envelope.KindQuestion && r.Kind != envelope.KindTask {
-		return out, errors.New("choose question or task")
+	if r.Kind != envelope.KindQuestion && r.Kind != envelope.KindTask && r.Kind != envelope.KindMessage {
+		return out, errors.New("choose question, task or message")
 	}
 	if r.From.Record.ID == "" || r.From.Record.ID == r.AgentID && r.Host == a.Address {
 		return out, errors.New("an agent asks another agent, not itself")
@@ -251,6 +253,10 @@ func (a *Agent) SendAgentRoomAsk(ctx context.Context, r AgentRoomAsk) (AgentRoom
 		if !own && to.State == PartInvited {
 			return out, fmt.Errorf("%s's agent has not joined the topic yet: its person accepts the invitation there unless they approved you; ask again after it joins (%w)", r.Host, err)
 		}
+		return out, err
+	}
+	if r.Kind == envelope.KindMessage {
+		out.ConvSent, err = a.SendAgentMessage(ctx, from.PID, out.Topic, r.Body, r.Files...)
 		return out, err
 	}
 	harness := "room"

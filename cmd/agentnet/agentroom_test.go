@@ -3,21 +3,24 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/client"
 )
 
-// MEL-713: only an agent's terminal asking its own person's device goes to
-// the My agents room, as that agent. A person at a plain shell, a background
-// run and another person's device keep their paths; an agent terminal with
-// no registered agent is refused, never shown as the person.
+// MEL-713: an agent's terminal (Claude Code, Codex, or Pi/OMP by its reply
+// session) or a run serving a request goes to the My agents room, as that
+// agent. A person at a plain shell sends in a DM and asks in a chat
+// (TestPlainSendGoesToTheDM); an agent terminal with no registered agent is
+// refused, never shown as the person.
 func TestRoomAskFromChoosesAgentTerminals(t *testing.T) {
-	for _, k := range []string{"AGENTNET_BACKGROUND", "AGENTNET_REPLY_BINDING", client.ClaudeSessionEnv, "CODEX_THREAD_ID", client.AgentRequestEnv, client.RoomRequestEnv, client.ProgressRequestEnv} {
+	for _, k := range []string{"AGENTNET_BACKGROUND", "AGENTNET_REPLY_BINDING", client.ClaudeSessionEnv, "CODEX_THREAD_ID", client.AgentRequestEnv, client.RoomRequestEnv, client.ProgressRequestEnv, "AGENTNET_REPLY_SESSION", "AGENTNET_REPLY_SESSION_HOME"} {
 		t.Setenv(k, "")
 	}
-	a, _ := diagnosticAgent(t)
+	a, home := diagnosticAgent(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if _, err := a.CreatePerson(ctx, "Owner"); err != nil {
@@ -36,6 +39,26 @@ func TestRoomAskFromChoosesAgentTerminals(t *testing.T) {
 	if _, room, err := roomAskFrom(a, a.Address, ""); room || err != nil {
 		t.Fatalf("plain shell: room=%v %v", room, err)
 	}
+	// A Pi or OMP session names itself by its reply session registered in
+	// this home; one inherited from another home names nothing here.
+	file := filepath.Join(t.TempDir(), "native.jsonl")
+	if err := os.WriteFile(file, []byte(`{"type":"session","id":"s1"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := a.RegisterReplySession(client.ReplySessionRegistration{Harness: "pi", SessionID: "s1", File: file})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGENTNET_REPLY_SESSION", owner.Handle)
+	t.Setenv("AGENTNET_REPLY_SESSION_HOME", t.TempDir())
+	if _, room, err := roomAskFrom(a, a.Address, ""); room || err != nil {
+		t.Fatalf("Pi session of another home: room=%v %v", room, err)
+	}
+	t.Setenv("AGENTNET_REPLY_SESSION_HOME", home)
+	if _, room, err := roomAskFrom(a, a.Address, ""); !room || !errors.Is(err, client.ErrNoSessionAgent) {
+		t.Fatalf("Pi session without a Pi agent here must be refused as that agent: room=%v %v", room, err)
+	}
+	t.Setenv("AGENTNET_REPLY_SESSION", "")
 	t.Setenv(client.ClaudeSessionEnv, "synthetic-claude-session")
 	// Another person's agent visits the room (owner, October 29, 2026).
 	if _, room, err := roomAskFrom(a, peer.Address, ""); !room || !errors.Is(err, client.ErrNoSessionAgent) {

@@ -376,6 +376,34 @@ func asksAttention(in envelope.Inner) bool {
 	return false
 }
 
+// DMWith is the newest DM held here with the person that the device at
+// address speaks for, or a new one when there is none: where a plain
+// `agentnet send` from a person's shell goes (MEL-713).
+func (a *Agent) DMWith(ctx context.Context, address string) (string, error) {
+	key, err := a.sendKey(ctx, address)
+	if err != nil {
+		return "", err
+	}
+	them, err := a.personOfKey(ctx, address, key)
+	if err != nil {
+		return "", err
+	}
+	convs, err := a.Conversations()
+	if err != nil {
+		return "", err
+	}
+	id, created := "", int64(-1)
+	for _, c := range convs {
+		if c.Kind == protocol.ConvKindDM && !c.Deleted && c.Frozen == "" && c.Peer.Person == them.info.Person && c.Created > created {
+			id, created = c.ID, c.Created
+		}
+	}
+	if id != "" {
+		return id, nil
+	}
+	return a.CreateDM(ctx, address)
+}
+
 // CreateDM starts a new two-person conversation with the person that the
 // device at address speaks for. Each call starts a separate conversation.
 func (a *Agent) CreateDM(ctx context.Context, address string) (string, error) {

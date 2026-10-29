@@ -401,11 +401,12 @@ func runSend(ctx context.Context, a *client.Agent, args []string, reply bool) er
 	fs.Func("file", "attach a file (repeatable)", func(p string) error { files = append(files, p); return nil })
 	fallback := fs.Bool("fallback", false, "if ADDRESS#SESSION has ended, deliver to the agent's inbox instead")
 	wait := fs.Duration("wait", defaultWait, "wait up to this long for the recipient's receipt (0: return at once)")
-	var replyTo *string
+	var replyTo, fromAgent *string
 	var progress *bool
 	if !reply {
 		replyTo = fs.String("reply-to", "", "continue the conversation containing this message ID")
 		progress = fs.Bool("progress", false, "mark this correlated message as a nonterminal responder update")
+		fromAgent = fs.String("from-agent", "", "send as this agent hosted here, in your My agents room (default: this terminal's harness agent)")
 	}
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -420,6 +421,12 @@ func runSend(ctx context.Context, a *client.Agent, args []string, reply bool) er
 	if !reply && *progress && *replyTo == "" {
 		return errors.New("--progress requires --reply-to ID")
 	}
+	if !reply && !*progress && !receiverRun() && (*replyTo == "" || !a.InDeviceThread(*replyTo)) { // MEL-713: no new version 1 thread
+		if *fallback {
+			return errors.New("--fallback belonged to the old device messages")
+		}
+		return sendPlain(ctx, a, fs.Arg(0), fs.Arg(1), *replyTo, *fromAgent, files, os.Stdout)
+	}
 	if !reply && *replyTo != "" && !*progress { // progress binds its own exact stored request
 		if err := a.CheckReplyTo(*replyTo, fs.Arg(0)); err != nil {
 			return err
@@ -431,7 +438,7 @@ func runSend(ctx context.Context, a *client.Agent, args []string, reply bool) er
 		r, err = a.ReplyWait(ctx, fs.Arg(0), fs.Arg(1), *wait, files...)
 	} else if *progress {
 		r, err = a.SendProgress(ctx, fs.Arg(0), *replyTo, fs.Arg(1), *wait, *fallback, files...)
-	} else {
+	} else { // a reply in an old device thread, or a delegated reply binding's run (until v1 is deleted)
 		r, err = a.SendMessage(ctx, client.Outgoing{To: fs.Arg(0), Body: fs.Arg(1), ReplyTo: *replyTo, Files: files, Fallback: *fallback, Wait: *wait})
 	}
 	if err != nil {
@@ -888,6 +895,12 @@ func runSendKind(ctx context.Context, a *client.Agent, kind string, args []strin
 			}
 		}
 		return runRoomAsk(ctx, a, r, via.cause, fs.Arg(0), wait, os.Stdout)
+	}
+	if !receiverRun() { // MEL-713: no new version 1 turn
+		if inRun() {
+			return errors.New("this run serves no request here, so it has no agent to ask as")
+		}
+		return errors.New(plainShellAsk)
 	}
 	var target *envelope.Target
 	if *remoteAgent != "" {

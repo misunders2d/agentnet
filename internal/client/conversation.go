@@ -272,6 +272,14 @@ func (a *Agent) CheckReplyTo(id, to string) error {
 	return nil
 }
 
+// InDeviceThread reports whether message id belongs to a thread of the old
+// device messages (version 1), where a reply still goes the same way until
+// version 1 is deleted (MEL-713).
+func (a *Agent) InDeviceThread(id string) bool {
+	_, err := a.store.peerOf(id)
+	return err == nil
+}
+
 // peerOf returns the other party of a stored message. A conversation (DM)
 // message is not part of any reply thread: it is ErrConversationItem.
 func (s *store) peerOf(id string) (string, error) {
