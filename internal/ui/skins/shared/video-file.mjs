@@ -67,7 +67,10 @@ export function mountVideoFile({root, file, load, sniffVideo, download, allowed 
       // Classifier/host callbacks cannot revive a view that left during them.
       if (epoch !== visit || !current()) return;
       owned = window.URL.createObjectURL(blob);
-      media = make('video'); media.controls = true; media.playsInline = true; media.preload = 'none'; media.autoplay = false;
+      // The bytes are in memory already: 'auto' lets the engine read them all.
+      // With 'none' the Linux app's WebKitGTK streamed the source and froze a few
+      // seconds in (owner report, October 29, 2026; file index at its end).
+      media = make('video'); media.controls = true; media.playsInline = true; media.preload = 'auto'; media.autoplay = false;
       media.setAttribute('aria-label', name);
       media.className = 'an-video-player';
       const video = media;

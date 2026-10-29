@@ -56,7 +56,7 @@ try {
   for(const b of all(f.root).filter(n=>n.tagName==='BUTTON')){assert.equal(b.type,'button');assert.deepEqual(b.className.split(/\s+/),['btn','an-hit']);}
   f.button('Download received.webm').click();await tick();assert.equal(f.downloads.length,1);assert.equal(f.reads.length,0);
   const play=f.button('Play video received.webm');play.click();play.click();await tick();assert.deepEqual(f.reads,[{id:'exact-message',index:8,dir:'in'}]);assert.equal(f.created.length,1);assert.equal(f.created[0].blob.type,'video/webm');assert.equal(f.created[0].blob.size,bytes.length);assert.deepEqual(new Uint8Array(await f.created[0].blob.arrayBuffer()),bytes);
-  const media=f.video();assert(media);assert.equal(media.className,'an-video-player');assert.equal(media.controls,true);assert.equal(media.playsInline,true);assert.equal(media.preload,'none');assert.notEqual(media.autoplay,true);assert.equal(media.mediaOps.filter(x=>x.op==='play').length,1);
+  const media=f.video();assert(media);assert.equal(media.className,'an-video-player');assert.equal(media.controls,true);assert.equal(media.playsInline,true);assert.equal(media.preload,'auto');assert.notEqual(media.autoplay,true);assert.equal(media.mediaOps.filter(x=>x.op==='play').length,1);
   f.button('Close video received.webm').click();assert.equal(f.video(),undefined);assert.deepEqual(media.mediaOps.slice(-3).map(x=>x.op),['pause','remove-src','load']);assert.equal(media.src,'');assert.equal(media.paused,true);assert.deepEqual(f.revoked,[f.created[0].url]);
   f.controller.deactivate();f.stop();assert.equal(f.revoked.length,1);checks++;
  }

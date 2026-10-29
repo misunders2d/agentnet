@@ -296,7 +296,8 @@ function VideoFile({ m, f }: { m: AnyMsg; f: FileItem }) {
         {(phase === "loading" || phase === "ready") && <Button className="min-h-11" aria-label={"Close video " + f.name} onClick={() => release()}>Close video</Button>}
       </div> : <p className="text-[12px] text-muted">{f.size > INLINE_VIDEO_LIMIT ? "Videos up to 16 MiB can play here." : "This video’s size is unknown."} Download to play this file.</p>}
       {note && <p role="status" className="text-[13px] text-text-2">{note}</p>}
-      {url && <video ref={bindMedia} src={url} controls playsInline preload="none" aria-label={f.name}
+      {/* preload="auto": the bytes are in memory; "none" froze a few seconds in on the Linux app (October 29, 2026). */}
+      {url && <video ref={bindMedia} src={url} controls playsInline preload="auto" aria-label={f.name}
         className="block max-h-[min(60dvh,480px)] w-full rounded-xl bg-black object-contain"
         onError={() => { if (owned.current) failed("This video can’t be played here. Download to play it."); }} />}
     </div>

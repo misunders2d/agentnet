@@ -39,7 +39,7 @@ export async function compressVideo(file: File, signal: AbortSignal, progress: (
     if (!mp4 && !await supported("vp9", "opus")) throw Error("This device has no supported video/audio encoder. Send the original file.");
     signal.throwIfAborted();
     bytes = new Uint8Array(MAX_OUTPUT);
-    const output = new Output({ format: mp4 ? new Mp4OutputFormat({ fastStart: false }) : new WebMOutputFormat(), target: new StreamTarget(new WritableStream({
+    const output = new Output({ format: mp4 ? new Mp4OutputFormat({ fastStart: "in-memory" }) : new WebMOutputFormat(), target: new StreamTarget(new WritableStream({
       write(chunk) {
         if (!Number.isSafeInteger(chunk.position) || chunk.position < 0 || chunk.data.length > MAX_OUTPUT - chunk.position) throw Error("The prepared video exceeds the 32 MiB output limit.");
         bytes!.set(chunk.data, chunk.position); length = Math.max(length, chunk.position + chunk.data.length);
