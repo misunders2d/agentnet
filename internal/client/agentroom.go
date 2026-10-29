@@ -19,10 +19,7 @@ import (
 // MyAgentsRoomTitle names the person's own agent room.
 const MyAgentsRoomTitle = "My agents"
 
-const (
-	myAgentsRoomKey     = "my_agents_room"
-	myAgentsTopicPrefix = "my_agents_topic/"
-)
+const myAgentsTopicPrefix = "my_agents_topic/"
 
 // ErrNoSessionAgent: this terminal's harness has no agent on this computer,
 // so nothing here may post as it.
@@ -76,19 +73,39 @@ func (a *Agent) SessionAgent(harness, agentID string) (LocalAgentInfo, error) {
 	return match[0], nil
 }
 
-// MyAgentsRoom returns this person's "My agents" room, creating it once.
+// MyAgentsRoom returns this person's "My agents" room: the oldest current
+// group of theirs, with no other person, by that title, so every own device
+// converges on one room; created here when none has reached this device.
 func (a *Agent) MyAgentsRoom(ctx context.Context) (string, error) {
-	if conv, err := a.store.config(myAgentsRoomKey); err == nil && conv != "" {
-		if m, e := a.dmMembers(conv); e == nil && m.group != nil {
-			return conv, nil
+	me, found, err := a.Person()
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return "", errors.New("this device has no person yet")
+	}
+	convs, err := a.Conversations()
+	if err != nil {
+		return "", err
+	}
+	var room *ConversationInfo
+	for i, c := range convs {
+		if c.Kind != protocol.ConvKindGroup || c.Title != MyAgentsRoomTitle || c.Deleted || c.Frozen != "" ||
+			len(c.Members) != 1 || c.Members[0].Person != me.Person {
+			continue
 		}
+		if room == nil || c.Created < room.Created || c.Created == room.Created && c.ID < room.ID {
+			room = &convs[i]
+		}
+	}
+	if room != nil {
+		return room.ID, nil
 	}
 	packet, err := a.CreateGroup(ctx, MyAgentsRoomTitle)
 	if err != nil {
 		return "", err
 	}
-	conv := packet.State.Conv
-	return conv, a.store.setConfig(map[string]string{myAgentsRoomKey: conv})
+	return packet.State.Conv, nil
 }
 
 // agentRoomTopic is the job's topic: the replied-to message's topic, else

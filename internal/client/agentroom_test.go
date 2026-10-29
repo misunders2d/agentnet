@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
 )
@@ -111,6 +112,18 @@ func TestAgentRoomAskPostsAsAgentInSessionTopic(t *testing.T) {
 		return phone.store.db.QueryRow(`SELECT id FROM inbox WHERE conv=? AND lid=? AND replica=0`, room, rsent.LID).Scan(&rid) == nil
 	})
 	waitState(t, phone, rid, stateAnswered)
+
+	// The answers come back to the asking terminal, from the asked agent.
+	for _, req := range []AgentRoomSent{sent, rsent} {
+		r, err := a.AwaitReply(tctx(t), req.ID, 15*time.Second, nil)
+		if err != nil || r.Answer == nil || r.Answer.Conv != room {
+			t.Fatalf("answer to %s not returned to the asker: %+v %v", req.ID, r, err)
+		}
+	}
+	// Every own device converges on the one room, so an agent there joins it.
+	if other, err := phone.MyAgentsRoom(tctx(t)); err != nil || other != room {
+		t.Fatalf("the person's other device made or chose another room: %s vs %s %v", other, room, err)
+	}
 
 	// The same session continues its topic; another session starts its own.
 	again, err := a.SendAgentRoomAsk(tctx(t), ask)
