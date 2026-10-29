@@ -1945,3 +1945,18 @@ Cyrillic layouts marks plain; Ctrl+V, AltGr and other keys clear it). Not
 executed: the opt-in rendered Playwright composer run, a real Windows desktop
 paste from Excel, and agentnet-skins composers. Slack/Telegram were not
 compared live; Ctrl+Shift+V as plain-text paste is the Chromium/WebView2 default.
+
+Follow-up, same day (owner: "we'd prefer a table if it's a table"; Slack also
+attaches a picture unless Ctrl+Shift+V). Counterpart reused: GitHub's composer
+(`github/paste-markdown`, `src/paste-markdown-table.ts` on main, read October
+29) converts a pasted HTML table to a Markdown table, first row as header,
+`|` escaped and line breaks as spaces, and skips that for plain-text paste.
+`pasteTable` does the same when the clipboard holds an HTML table (Excel always
+adds one), reading the rows from the tab-separated text with Excel quoting, and
+runs before any picture or file. Adaptation: one column or one cell stays plain
+lines rather than a one-column table; it applies also where files are not
+allowed. Ctrl+Shift+V still inserts the raw text. Executed: 35 paste checks
+(table with quoted multi-line cell, quote and pipe; one column; plain paste;
+browser image copy is not a table), the same Markdown lexer the chat uses parses
+the output as that table, and `go test ./internal/ui` passes. Not executed: a
+rendered paste run and a real Windows paste from Excel.

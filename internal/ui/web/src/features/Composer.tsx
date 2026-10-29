@@ -1,7 +1,7 @@
 import { Button } from "../ui/Button";
 import { saveBatch, acknowledge, recordFailure, type JournalEntry } from "../send-journal.mjs";
 import { sendID } from "../optimistic.mjs";
-import { pastePictures } from "../pictures.mjs";
+import { pastePictures, pasteTable } from "../pictures.mjs";
 // The message composer: attachments, @ picker, text and send. Typing @ offers
 // the people and agents here; picking an agent asks it ("Zen should Answer |
 // Do it") instead of writing to everyone. In a device conversation, replying
@@ -413,18 +413,20 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   const paste = (e: ClipboardEvent) => {
     const plain = plainPaste.current;
     plainPaste.current = false;
-    if (!filesAllowed || sending) return;
+    if (sending) return;
     const ta = field.current;
     const host = store.host;
     const here = () => visible.current === conv && field.current === ta;
+    const insertText = (s: string) => {
+      if (!here() || !ta) return;
+      const value = decode(latest().text).text;
+      const from = ta.selectionStart, to = ta.selectionEnd;
+      edit(value.slice(0, from) + s + value.slice(to), from + s.length);
+    };
+    if (pasteTable(e, insertText, plain) || !filesAllowed) return;
     void pastePictures(e, (list) => { if (here()) addFiles(list, true); }, {
       clipboardImage: host.clipboardImage ? () => host.clipboardImage!() : undefined,
-      insertText: (s) => {
-        if (!here() || !ta) return;
-        const value = decode(latest().text).text;
-        const from = ta.selectionStart, to = ta.selectionEnd;
-        edit(value.slice(0, from) + s + value.slice(to), from + s.length);
-      },
+      insertText,
       error: (text) => { if (here()) setNotice({ conv, text }); },
       plain,
     });

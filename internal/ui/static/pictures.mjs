@@ -39,6 +39,41 @@ export function cleanPicturePNG(b) {
 
 // Native reads happen only in response to a paste, after browser files. Native
 // image + text pastes attach the image; text-only pastes keep their usual text.
+// Spreadsheet cells and HTML tables paste as a Markdown table, as GitHub's
+// composer does (github/paste-markdown): the clipboard holds an HTML table,
+// its tab-separated text becomes the rows, the first row the header. One
+// column or one cell stays plain lines. Paste as plain text keeps the
+// clipboard text as it is (MEL-714). Returns whether it pasted.
+export function pasteTable(e, insertText, plain=false) {
+  const data=e.clipboardData, text=data?.getData("text/plain")||"";
+  if(plain||!text||!/<table/i.test(data?.getData("text/html")||""))return false;
+  e.preventDefault();
+  insertText(tableMarkdown(text)||text.replace(/\r\n?/g,"\n").replace(/\n+$/,""));
+  return true;
+}
+
+// tableMarkdown reads tab-separated rows (Excel quotes a cell holding a tab,
+// line break or quote) as a Markdown table; "" for fewer than two rows or columns.
+export function tableMarkdown(text) {
+  const rows=[];let row=[],cell="",quoted=false,start=true;
+  for(let i=0;i<text.length;i++){
+    const c=text[i];
+    if(quoted){if(c==='"'&&text[i+1]==='"'){cell+='"';i++;}else if(c==='"')quoted=false;else cell+=c;continue;}
+    if(start&&c==='"'){quoted=true;start=false;continue;}
+    start=false;
+    if(c==="\t"){row.push(cell);cell="";start=true;}
+    else if(c==="\n"||c==="\r"){if(c==="\r"&&text[i+1]==="\n")i++;row.push(cell);rows.push(row);row=[];cell="";start=true;}
+    else cell+=c;
+  }
+  if(cell!==""||row.length){row.push(cell);rows.push(row);}
+  while(rows.length&&rows.at(-1).every(c=>c===""))rows.pop();
+  const cols=Math.max(0,...rows.map(r=>r.length));
+  if(rows.length<2||cols<2)return "";
+  const esc=s=>s.replace(/\r?\n|\r/g," ").replace(/\|/g,"\\|").trim()||"\u00a0";
+  const line=r=>"| "+Array.from({length:cols},(_,i)=>esc(r[i]??"")).join(" | ")+" |";
+  return [line(rows[0]),"|"+" --- |".repeat(cols),...rows.slice(1).map(line)].join("\n");
+}
+
 export function pastePictures(e, add, {clipboardImage:read, insertText=()=>{}, error=()=>{}, plain=false}={}) {
   // Paste as plain text (Ctrl+Shift+V) keeps the clipboard's text, even when
   // it also holds a picture, as Excel cells do (MEL-714).
