@@ -198,6 +198,16 @@ func TestParkedRequestRunsAgainWithHelperResults(t *testing.T) {
 // run ending (here it parks, MEL-540) no longer kills the helper as "the
 // daemon stopped": the helper finishes, and its result wakes the coordinator.
 func TestLocalHelperOutlivesItsCoordinatorsRun(t *testing.T) {
+	localHelperRun(t, `printf 'local part done\nemotion: calm\n'`, stateAnswered, "local part done", true)
+}
+
+// A helper that fails is finished too (owner, October 29, 2026: a failure
+// counts): the coordinator runs again with that outcome.
+func TestFailedLocalHelperWakesItsCoordinator(t *testing.T) {
+	localHelperRun(t, `echo boom >&2; exit 3`, stateJobFailed, "ended without an answer: failed", false)
+}
+
+func localHelperRun(t *testing.T, helperAnswer, helperEnd, inPrompt string, askBack bool) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell stub")
 	}
@@ -207,7 +217,7 @@ func TestLocalHelperOutlivesItsCoordinatorsRun(t *testing.T) {
 	dir := t.TempDir()
 	gatedHarness(t, dir, "bossstub", "bossgo",
 		`if grep -q "Results of the agents you asked" $d/bossstub.last; then printf 'final report\nemotion: calm\n'; else printf 'asked the helper\nemotion: calm\n'; fi`)
-	gatedHarness(t, dir, "help1stub", "h1go", `printf 'local part done\nemotion: calm\n'`)
+	gatedHarness(t, dir, "help1stub", "h1go", helperAnswer)
 	w := newWorld(t, "")
 	persons(t, w.alice)
 	a := w.alice
@@ -264,10 +274,23 @@ func TestLocalHelperOutlivesItsCoordinatorsRun(t *testing.T) {
 	if s, _ := a.store.jobState(child); s != stateRunning {
 		t.Fatalf("the coordinator's run ending stopped its local helper: %s", s)
 	}
+	runs := 2
+	if askBack {
+		// The helper needs the parked coordinator: answered now, on this device too.
+		back, err := a.RunAgentRoomAsk(tctx(t), child, AgentRoomAsk{Host: a.Address, AgentID: boss.ID, Kind: envelope.KindQuestion, Body: "which month?"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		waitState(t, a, jobAt(req.Conv, back.LID), stateAnswered)
+		if s, _ := a.store.jobState(cause); s != stateHelpersWaiting {
+			t.Fatalf("the helper's question woke the waiting request: %s", s)
+		}
+		runs = 3
+	}
 	gate("h1go")
-	waitState(t, a, child, stateAnswered)
+	waitState(t, a, child, helperEnd)
 	waitState(t, a, cause, stateAnswered)
-	if n, prompt := gateLog(t, dir, "bossstub"); n != 2 || !strings.Contains(prompt, "local part done") {
+	if n, prompt := gateLog(t, dir, "bossstub"); n != runs || !strings.Contains(prompt, inPrompt) {
 		t.Fatalf("coordinator runs %d; continuation prompt:\n%s", n, prompt)
 	}
 }
