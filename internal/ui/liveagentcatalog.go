@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/misunders2d/agentnet/internal/client"
-	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
@@ -170,32 +169,6 @@ func (l *Live) ChangeAgent(ctx context.Context, c AgentCatalogChange) (AgentCata
 	result.Published = true
 	result.Note = "Saved on this host and public catalog publication confirmed by the Hub."
 	return result, nil
-}
-func (l *Live) namedSendTarget(ctx context.Context, d Draft) (*envelope.Target, error) {
-	if d.AgentID == "" {
-		return nil, nil
-	}
-	if d.Kind != KindQuestion && d.Kind != KindTask {
-		return nil, Refuse("A named agent can receive a question or task.")
-	}
-	var records []protocol.AgentRecord
-	var err error
-	if d.To == l.a.Address {
-		// Local configuration is already authenticated by this host. Its
-		// publication may still be queued while the Hub is unavailable.
-		records, err = l.a.PublicAgentCatalog()
-	} else {
-		records, err = l.a.AgentCatalog(ctx, d.To)
-	}
-	if err != nil {
-		return nil, Refuse(sentence(err))
-	}
-	for _, record := range records {
-		if record.ID == d.AgentID {
-			return &envelope.Target{Address: record.Host, Fingerprint: record.HostKey, AgentID: record.ID}, nil
-		}
-	}
-	return nil, Refuse("That agent is not in this host's verified public catalog.")
 }
 func (l *Live) namedAgentReady(info client.ParticipationInfo) bool {
 	if info.AgentID == "" {

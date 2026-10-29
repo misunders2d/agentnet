@@ -266,9 +266,7 @@ func TestTaggedClarificationWorkerSettlesExactParent(t *testing.T) {
 	t.Setenv("STUB_MODE", "clarify")
 	x := RequestFollowup{Ref: envelope.Ref{ID: q.ID, Fingerprint: w.alice.Self().Fingerprint()}, ID: protocol.NewID(), Body: "Use the release budget and keep the existing research"}
 	queuedAt := time.Now()
-	if _, err := w.alice.QueueRequestFollowup(tctx(t), x); err != nil {
-		t.Fatal(err)
-	}
+	oldFollowup(t, w.alice, w.bob.Address, envelope.KindQuestion, x.Ref, x)
 	waitState(t, w.bob, x.ID, stateNeedHuman)
 	if got := jobState(t, w.bob, q.ID); got != stateResolved {
 		t.Errorf("matching stale parent remained %s", got)
@@ -287,9 +285,7 @@ func TestTaggedClarificationWorkerSettlesExactParent(t *testing.T) {
 	}
 	t.Setenv("STUB_MODE", "answer")
 	next := RequestFollowup{Ref: envelope.Ref{ID: x.ID, Fingerprint: w.alice.Self().Fingerprint()}, ID: protocol.NewID(), Body: "Use report.md in the approved folder"}
-	if _, err := w.alice.QueueRequestFollowup(tctx(t), next); err != nil {
-		t.Fatal(err)
-	}
+	oldFollowup(t, w.alice, w.bob.Address, envelope.KindQuestion, x.Ref, next)
 	waitState(t, w.bob, next.ID, stateAnswered)
 	if got := jobState(t, w.bob, x.ID); got != stateResolved {
 		t.Errorf("second tagged round left its exact earlier correction %s", got)
@@ -319,9 +315,6 @@ func TestTaggedClarificationWorkerSettlesExactParent(t *testing.T) {
 	at := attention(t, w.bob, "after-tagged-reply", "SessionStart")
 	if strings.Contains(at.Text, q.ID) || !strings.Contains(at.Text, other.ID) {
 		t.Errorf("corresponding attention did not settle exactly: %s", at.Text)
-	}
-	if _, err := w.alice.QueueRequestFollowup(tctx(t), next); err != nil {
-		t.Fatal("exact tagged retry", err)
 	}
 	if _, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Kind: envelope.KindMessage, ReplyTo: other.ID, Body: "untagged context only"}); err != nil {
 		t.Fatal(err)

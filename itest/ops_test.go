@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/misunders2d/agentnet/internal/client"
 	"github.com/misunders2d/agentnet/internal/protocol"
 	"github.com/misunders2d/agentnet/internal/tlscert"
 )
@@ -54,6 +55,7 @@ func (c *cli) downloadInto(home, dir, id string) []byte {
 func TestCLIBackupRestoreAndCleanup(t *testing.T) {
 	c := buildCLI(t)
 	addr, stopHub := c.setup(t, "hub")
+	c.dmReady()
 	first := c.writeRandom("first.bin", 2<<20)
 	id1 := strings.Fields(c.run("--home", "alice", "send", "--file", "first.bin", "bob/desk", "offline file"))[0]
 
@@ -147,6 +149,7 @@ func TestCLIPlatformTLS(t *testing.T) {
 	c.run("--home", "alice", "join", "--agent", "laptop", code)
 	c.run("--home", "bob", "join", "--agent", "desk", c.run("--home", "alice", "admin", "invite", "--raw", "bob"))
 	c.start("bob.log", "--home", "bob", "daemon")
+	c.dmWithBob()
 	c.run("--home", "alice", "send", "bob/desk", "through the platform")
 	waitFor(t, "message via platform TLS", func() bool { return len(c.inbox("bob")) == 1 })
 	if _, err := net.DialTimeout("tcp", backend, time.Second); err != nil {
@@ -162,9 +165,10 @@ cat > "$0.prompt"
 echo "automatic answer"
 `
 
-// TestCLIFullJourney: question answered automatically in the background,
-// task run only after the human accepts, direct delivery, offline wake-up
-// with a file, and a revoked agent. All parties are separate processes.
+// TestCLIFullJourney: a question from an older device answered automatically
+// in the background, its task run only after the human accepts, direct
+// delivery, offline wake-up with a file sent in the DM, and a revoked agent.
+// All parties are separate processes.
 func TestCLIFullJourney(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("stand-in responder is a shell script")
@@ -188,9 +192,8 @@ func TestCLIFullJourney(t *testing.T) {
 		return strings.Contains(c.run("--home", "alice", "sessions", "bob/desk"), "direct https://")
 	})
 
-	q := strings.Fields(c.run("--home", "alice", "ask", "--answer-wait", "0", "bob/desk", "status?"))
-	if len(q) != 3 || q[2] != "direct" {
-		t.Fatalf("ask: %v", q)
+	if q := c.oldSend("alice", client.Outgoing{To: "bob/desk", Kind: "question", Body: "status?"}); q.Path != "direct" {
+		t.Fatalf("ask: %+v", q)
 	}
 	waitFor(t, "automatic answer", func() bool {
 		for _, m := range c.inbox("alice") {
@@ -204,7 +207,7 @@ func TestCLIFullJourney(t *testing.T) {
 		t.Fatalf("responder ran in %q", cwd)
 	}
 
-	task := strings.Fields(c.run("--home", "alice", "task", "bob/desk", "tidy up"))[0]
+	task := c.oldSend("alice", client.Outgoing{To: "bob/desk", Kind: "task", Body: "tidy up"}).ID
 	waitFor(t, "task waiting", func() bool {
 		for _, m := range c.inbox("bob") {
 			if m.ID == task && m.State == "awaiting" {
@@ -223,6 +226,8 @@ func TestCLIFullJourney(t *testing.T) {
 		return false
 	})
 
+	c.dmWithBob()
+	c.persons("carol")
 	stopBob()
 	data := c.writeRandom("report.bin", 3<<20)
 	sent := strings.Fields(c.run("--home", "alice", "send", "--file", "report.bin", "bob/desk", "while you were away"))

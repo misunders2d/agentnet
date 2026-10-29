@@ -79,8 +79,9 @@ const plainShellAsk = "ask from your agent's session (Claude Code, Codex, Pi or 
 // sendPlain is `agentnet send` (not --progress): from an agent's session or
 // run it is a plain message in that job's topic of the "My agents" room, as
 // that agent; from a person's plain shell it goes in their DM with the
-// person at target. It asks for nothing.
-func sendPlain(ctx context.Context, a *client.Agent, target, body, replyTo, fromAgent string, files []string, out io.Writer) error {
+// person at target, reported as send always was: the copy for target's
+// device, waited for up to wait. It asks for nothing.
+func sendPlain(ctx context.Context, a *client.Agent, target, body, replyTo, fromAgent string, files []string, wait time.Duration, out, errw io.Writer) error {
 	host, session, err := protocol.SplitTarget(target)
 	if err != nil {
 		return err
@@ -131,11 +132,25 @@ func sendPlain(ctx context.Context, a *client.Agent, target, body, replyTo, from
 	if err != nil {
 		return err
 	}
-	line := sent.ID + " " + sent.State
-	if sent.Detail != "" {
-		line += " (" + sent.Detail + ")"
+	r := client.SendResult{ID: sent.ID, State: sent.State, Detail: sent.Detail}
+	for _, c := range sent.Copies {
+		if c.To != host || c.NotSent {
+			continue
+		}
+		r = client.SendResult{ID: c.ID, State: c.State, Detail: c.Detail}
+		if c.Suspended {
+			wait = 0 // nobody waits for a device the relay serves nothing until it updates
+		}
+		if got, err := a.Status(ctx, c.ID, wait); err == nil {
+			r = client.SendResult{ID: got.ID, State: got.State, Path: got.Path}
+		}
+		break
 	}
-	fmt.Fprintf(out, "%s: sent in your DM %s (agentnet dm show %s)\n", line, conv, conv)
+	fmt.Fprintf(out, "%s %s %s\n", r.ID, r.State, r.Path)
+	if note := resultNote(r, wait); note != "" {
+		fmt.Fprintln(errw, note)
+	}
+	fmt.Fprintf(errw, "sent in your DM %s (agentnet dm show %s)\n", conv, conv)
 	return nil
 }
 

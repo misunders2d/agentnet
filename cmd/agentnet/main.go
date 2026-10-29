@@ -425,7 +425,7 @@ func runSend(ctx context.Context, a *client.Agent, args []string, reply bool) er
 		if *fallback {
 			return errors.New("--fallback belonged to the old device messages")
 		}
-		return sendPlain(ctx, a, fs.Arg(0), fs.Arg(1), *replyTo, *fromAgent, files, os.Stdout)
+		return sendPlain(ctx, a, fs.Arg(0), fs.Arg(1), *replyTo, *fromAgent, files, *wait, os.Stdout, os.Stderr)
 	}
 	if !reply && *replyTo != "" && !*progress { // progress binds its own exact stored request
 		if err := a.CheckReplyTo(*replyTo, fs.Arg(0)); err != nil {

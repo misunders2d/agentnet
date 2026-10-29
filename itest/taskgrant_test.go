@@ -6,11 +6,14 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/misunders2d/agentnet/internal/client"
 )
 
-// TestCLITaskGrantJourney: separate processes and a stand-in responder. A
-// task waits; accept --always runs it and lets the next one run without
-// asking; approvals shows the key; unapprove --tasks makes tasks wait again.
+// TestCLITaskGrantJourney: separate processes and a stand-in responder.
+// Tasks come as an older device sends them (MEL-713 step 1). A task waits;
+// accept --always runs it and lets the next one run without asking;
+// approvals shows the key; unapprove --tasks makes tasks wait again.
 func TestCLITaskGrantJourney(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("stand-in responder is a shell script")
@@ -45,7 +48,9 @@ func TestCLITaskGrantJourney(t *testing.T) {
 		}
 		return n
 	}
-	task := func(text string) string { return strings.Fields(c.run("--home", "alice", "task", "bob/desk", text))[0] }
+	task := func(text string) string {
+		return c.oldSend("alice", client.Outgoing{To: "bob/desk", Kind: "task", Body: text}).ID
+	}
 
 	t1 := task("first")
 	waitFor(t, "first task waits", func() bool { return state(t1) == "awaiting" })

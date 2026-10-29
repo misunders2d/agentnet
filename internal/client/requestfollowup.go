@@ -149,6 +149,10 @@ func (a *Agent) QueueRequestFollowup(ctx context.Context, x RequestFollowup) (st
 	if x.Attempt < 0 || x.Attempt > 9007199254740991 || !protocol.ValidID(x.ID) || strings.TrimSpace(x.Body) == "" {
 		return "", errors.New("write a correction and retain its send ID")
 	}
+	if x.Conv == "" {
+		// A follow-up would be a new version 1 turn (MEL-713 step 1).
+		return "", errors.New("old device conversations are read only now: write to this agent in your My agents room or in a chat")
+	}
 	r, err := a.followupOriginal(a.store.db, x.Conv, x.Ref)
 	if err != nil {
 		return "", err

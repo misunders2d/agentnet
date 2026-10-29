@@ -19,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/misunders2d/agentnet/internal/client"
 )
 
 // releases stands in for the project's release page: /releases/latest
@@ -158,7 +160,7 @@ func TestUpdateSwitchesTheRunningDaemon(t *testing.T) {
 	bp := c.openPage(t, "bob")
 	urlBefore, _ := os.ReadFile(filepath.Join(c.dir, "bob", "ui-url"))
 	fpBefore := fingerprint(c, "bob")
-	c.run("--home", "alice", "send", "bob/desk", "history before the update")
+	c.oldSend("alice", client.Outgoing{To: "bob/desk", Body: "history before the update"}) // as an older device sends it
 	waitFor(t, "history", func() bool { return len(bp.overview().Threads) == 1 })
 
 	// A latest release equal to the one this development build was made
@@ -217,8 +219,8 @@ func TestUpdateSwitchesTheRunningDaemon(t *testing.T) {
 
 	// Busy: a task runs when the next release arrives; it finishes with its
 	// result on the old program, one accepted meanwhile runs on the new.
-	first := strings.Fields(c.run("--home", "alice", "task", "bob/desk", "first job"))[0]
-	second := strings.Fields(c.run("--home", "alice", "task", "bob/desk", "second job"))[0]
+	first := c.oldSend("alice", client.Outgoing{To: "bob/desk", Kind: "task", Body: "first job"}).ID
+	second := c.oldSend("alice", client.Outgoing{To: "bob/desk", Kind: "task", Body: "second job"}).ID
 	waitFor(t, "tasks arrive", func() bool { return len(c.inbox("bob")) >= 3 })
 	c.run("--home", "bob", "accept", first)
 	waitFor(t, "first job running", func() bool {

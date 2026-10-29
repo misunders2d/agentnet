@@ -41,6 +41,21 @@ func TestLiveClosedReplyReceiverPreflightAndProjection(t *testing.T) {
 	runDaemon(t, a)
 	runDaemon(t, b)
 	l := NewLive(a)
+	if _, _, e = l.CreatePerson("Alice"); e != nil {
+		t.Fatal(e)
+	}
+	if _, _, e = NewLive(b).CreatePerson("Bob"); e != nil {
+		t.Fatal(e)
+	}
+	var conv string
+	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if conv, e = l.NewDM(b.Address); e == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal(e)
+		}
+	}
 	config := client.Responder{Harness: "codex", Dir: t.TempDir()}
 	record, e := a.CreateLocalAgent("Chosen backup", config)
 	if e != nil {
@@ -117,7 +132,7 @@ func TestLiveClosedReplyReceiverPreflightAndProjection(t *testing.T) {
 		}
 	}
 	selection.OnClose = &client.ManagedReplyHandoff{AgentID: record.ID, Instructions: "original local backup instruction", Mode: "question"}
-	sent, e := l.Send(Draft{To: b.Address, Kind: "question", Body: "BACKUP ORIGINAL", Files: []string{staged}, ReplyReceiver: &selection})
+	sent, e := l.SendDM(DMDraft{Conv: conv, Body: "BACKUP ORIGINAL", Files: []string{staged}, ReplyReceiver: &selection})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -125,8 +140,12 @@ func TestLiveClosedReplyReceiverPreflightAndProjection(t *testing.T) {
 	if e != nil || len(rows) != 1 {
 		t.Fatalf("projection %+v %v", rows, e)
 	}
+	msgs, e := a.ConversationMessages(conv)
+	if e != nil || len(msgs) != 1 || msgs[0].ID != sent.ID {
+		t.Fatalf("original request %+v %v", msgs, e)
+	}
 	row := rows[0]
-	if row.RequestRef != sent.ID || row.HandoffState != "preauthorized" || row.HandoffLabel != record.Label || row.Receiver.OnClose == nil || *row.Receiver.OnClose != *selection.OnClose {
+	if row.RequestRef != msgs[0].LID || row.HandoffState != "preauthorized" || row.HandoffLabel != record.Label || row.Receiver.OnClose == nil || *row.Receiver.OnClose != *selection.OnClose {
 		t.Fatalf("preauthorization %+v", row)
 	}
 	// Native snapshot owns post-send changes. It holds the original selection,

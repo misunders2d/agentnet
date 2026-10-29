@@ -22,12 +22,12 @@ func TestPlainSendGoesToTheDM(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	for _, body := range []string{"hello from the shell", "and again"} {
-		var out bytes.Buffer
-		if err := sendPlain(ctx, alice, bob.Address, body, "", "", nil, &out); err != nil {
+		var out, note bytes.Buffer
+		if err := sendPlain(ctx, alice, bob.Address, body, "", "", nil, 5*time.Second, &out, &note); err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(out.String(), "sent in your DM "+conv) {
-			t.Fatalf("%q did not go in the DM %s: %s", body, conv, out.String())
+		if f := strings.Fields(out.String()); len(f) != 3 || f[1] != "delivered" || f[2] != "relay" || !strings.Contains(note.String(), "sent in your DM "+conv) {
+			t.Fatalf("%q did not go in the DM %s: %s / %s", body, conv, out.String(), note.String())
 		}
 		eventually("bob holds "+body, func() bool {
 			msgs, err := bob.ConversationMessages(conv)
@@ -49,7 +49,7 @@ func TestPlainSendGoesToTheDM(t *testing.T) {
 	if err := runSendKind(ctx, alice, "ask", []string{bob.Address, "which branch?"}); err == nil || err.Error() != plainShellAsk {
 		t.Fatalf("plain-shell ask: %v", err)
 	}
-	if err := sendPlain(ctx, alice, alice.Address, "to myself", "", "", nil, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "My agents room") {
+	if err := sendPlain(ctx, alice, alice.Address, "to myself", "", "", nil, 0, &bytes.Buffer{}, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "My agents room") {
 		t.Fatalf("plain-shell send to an own device: %v", err)
 	}
 }

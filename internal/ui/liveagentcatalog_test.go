@@ -6,7 +6,6 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -159,125 +158,15 @@ func TestLiveAgentCatalogGuardLocalSaveAndVerifiedSelection(t *testing.T) {
 	if err != nil || remote.Local || len(remote.Agents) != 2 || remote.Agents[0].Responder != nil || len(remote.Harnesses) != 0 {
 		t.Fatalf("public isolation %+v %v", remote, err)
 	}
-	target, err := l.namedSendTarget(ctx, Draft{To: a.Address, Kind: KindQuestion, AgentID: id})
-	if err != nil || target.AgentID != id || target.Address != a.Address || target.Fingerprint != a.Self().Fingerprint() {
-		t.Fatalf("verified target %+v %v", target, err)
-	}
-	if _, err = l.Send(Draft{To: a.Address, Kind: KindMessage, Body: "ordinary", AgentID: id}); !errors.Is(err, ErrRefused) {
-		t.Fatalf("ordinary named message %v", err)
-	}
-	if _, err = l.namedSendTarget(ctx, Draft{To: a.Address, Kind: KindTask, AgentID: protocol.NewID()}); !errors.Is(err, ErrRefused) {
-		t.Fatalf("unknown remote selection %v", err)
-	}
-
-	// Actual provider Send resolves a different host's signed record and the
-	// daemon receives the encrypted target. No approval means no program runs.
-	peerCode, err := a.Invite(ctx, "bob", time.Hour, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	peerHome := filepath.Join(t.TempDir(), "bob")
-	peer, err := client.Join(ctx, peerHome, peerCode, "desk")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { peer.Close() })
-	peerLive := NewLive(peer)
-	peerCreated, err := peerLive.ChangeAgent(ctx, AgentCatalogChange{Action: "create", Label: "Remote", Harness: "pi", Dir: work})
-	if err != nil {
-		t.Fatal(err)
-	}
-	runDaemon(t, peer)
-	peerKey, err := identity.Load(filepath.Join(peerHome, "identity.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	peerRaw := &rawAgent{t: t, id: peerKey, addr: peer.Address, hub: inv.Hub, http: raw.http}
-	var peerProfile protocol.Profile
-	for deadline := time.Now().Add(10 * time.Second); len(peerProfile.Sessions) != 1; {
-		status, data := peerRaw.do("GET", "/v1/agents/bob/desk/profile", nil, true)
-		if status != 200 || json.Unmarshal(data, &peerProfile) != nil {
-			t.Fatalf("peer profile %d %s", status, data)
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("peer session not published")
-		}
-		if len(peerProfile.Sessions) != 1 {
-			time.Sleep(10 * time.Millisecond)
-		}
-	}
-	peerCaps := protocol.CapsRecord{Address: peer.Address, Session: peerProfile.Sessions[0], Caps: []string{protocol.CapAgentIdentity}, TS: time.Now().Unix() + 100}
-	peerCaps.Sign(peerKey.Sign)
-	if status, data := peerRaw.do("PUT", "/v1/caps", marshalBytes(t, peerCaps), true); status != http.StatusNoContent {
-		t.Fatalf("peer caps %d %s", status, data)
-	}
-	sent, err := l.Send(Draft{To: peer.Address, Kind: KindQuestion, Body: "native selected request", AgentID: peerCreated.Agent.Record.ID})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var received client.Message
-	for deadline := time.Now().Add(10 * time.Second); received.ID == ""; {
-		messages, e := peer.Inbox(false, false)
-		if e != nil {
-			t.Fatal(e)
-		}
-		for _, m := range messages {
-			if m.ID == sent.ID {
-				received = m
-			}
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("native selected request not delivered")
-		}
-		if received.ID == "" {
-			time.Sleep(10 * time.Millisecond)
-		}
-	}
-	if received.Target == nil || received.Target.AgentID != peerCreated.Agent.Record.ID || received.Target.Address != peer.Address || received.Target.Fingerprint != peer.Self().Fingerprint() || received.State != "held" {
-		t.Fatalf("native received target %+v", received)
-	}
-	thread, err := l.Thread(sent.ID)
-	if err != nil || len(thread.Messages) != 1 || thread.Messages[0].Target == nil || thread.Messages[0].Target.AgentID != peerCreated.Agent.Record.ID {
-		t.Fatalf("native selected DTO %+v %v", thread, err)
-	}
-	// Assignment recovery relies on the actual public provider shape and the
-	// caller's preserved ID. A kept file must be checked as bytes, not labels.
-	taskID, taskBody, taskFile := protocol.NewID(), "explicit selected-message task", "exact retained selected file"
-	upload, err := l.StageFile("selected.txt", strings.NewReader(taskFile))
-	if err != nil {
-		t.Fatal(err)
-	}
-	taskSent, err := l.Send(Draft{ID: taskID, To: peer.Address, Kind: KindTask, Body: taskBody, AgentID: peerCreated.Agent.Record.ID, Files: []string{upload}})
-	if err != nil || taskSent.ID != taskID {
-		t.Fatalf("preserved assignment ID %+v %v", taskSent, err)
-	}
-	kept, err := l.Thread(taskID)
-	if err != nil || len(kept.Messages) != 1 {
-		t.Fatalf("kept assignment DTO %+v %v", kept, err)
-	}
-	selectedTask := kept.Messages[0]
-	if selectedTask.ID != taskID || selectedTask.Dir != "out" || selectedTask.From != a.Address || selectedTask.To != peer.Address || selectedTask.Kind != KindTask || selectedTask.Body != taskBody || selectedTask.Target == nil || selectedTask.Target.Address != peer.Address || selectedTask.Target.Fingerprint != peer.Self().Fingerprint() || selectedTask.Target.AgentID != peerCreated.Agent.Record.ID || kept.Key.Pinned != peer.Self().Fingerprint() {
-		t.Fatalf("assignment recovery identity contract %+v key=%+v", selectedTask, kept.Key)
-	}
-	if len(selectedTask.Files) != 1 || selectedTask.Files[0].Index != 0 || selectedTask.Files[0].Name != "selected.txt" || selectedTask.Files[0].Size != int64(len(taskFile)) || !selectedTask.Files[0].Openable {
-		t.Fatalf("assignment recovery file view %+v", selectedTask.Files)
-	}
-	reader, name, err := l.OpenFile(ctx, "out", taskID, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	bytes, err := io.ReadAll(reader)
-	reader.Close()
-	if err != nil || name != "selected.txt" || string(bytes) != taskFile {
-		t.Fatalf("assignment recovery exact bytes %q %q %v", name, bytes, err)
+	// A chosen agent is reached in a chat now, never by a new device
+	// conversation (MEL-713 step 1).
+	if _, err = l.Send(Draft{To: a.Address, Kind: KindQuestion, Body: "named", AgentID: id}); !errors.Is(err, ErrDeviceThreadReadOnly) {
+		t.Fatalf("named device request %v", err)
 	}
 
 	disabled, err := l.ChangeAgent(ctx, AgentCatalogChange{Action: "disable", ID: id})
 	if err != nil || disabled.Agent.Enabled || !disabled.Published {
 		t.Fatalf("disable %+v %v", disabled, err)
-	}
-	if _, err = l.namedSendTarget(ctx, Draft{To: a.Address, Kind: KindQuestion, AgentID: id}); !errors.Is(err, ErrRefused) {
-		t.Fatalf("removed selection fell back %v", err)
 	}
 	if _, err = os.Stat(invoked); !os.IsNotExist(err) {
 		t.Fatal("configuration executed harness", err)
@@ -292,15 +181,5 @@ func TestLiveAgentCatalogGuardLocalSaveAndVerifiedSelection(t *testing.T) {
 	entries, err := a.LocalAgents()
 	if err != nil || len(entries) != 3 {
 		t.Fatal("offline rollback", err)
-	}
-	// A concrete local choice does not depend on its public catalog having
-	// reached the Hub. Keep the exact selected identity in the queued request.
-	queued, err := l.Send(Draft{To: a.Address, Kind: KindQuestion, Body: "queued for this local agent", AgentID: offline.Agent.Record.ID})
-	if err != nil || queued.State != "queued" {
-		t.Fatalf("offline concrete local send %+v %v", queued, err)
-	}
-	offlineThread, err := l.Thread(queued.ID)
-	if err != nil || len(offlineThread.Messages) != 1 || offlineThread.Messages[0].Target == nil || offlineThread.Messages[0].Target.AgentID != offline.Agent.Record.ID || offlineThread.Messages[0].Target.Fingerprint != a.Self().Fingerprint() {
-		t.Fatalf("offline concrete local binding %+v %v", offlineThread, err)
 	}
 }

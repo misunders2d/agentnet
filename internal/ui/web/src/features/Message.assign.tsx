@@ -1,14 +1,14 @@
 // Explicit delegation of a reviewed message to an exact own agent. The quoted
 // source stays attributed; the selecting person sends a new ordinary task.
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { errorText, type Api, type T } from "../api";
+import { errorText, type T } from "../api";
 import { useApp } from "../context";
 import { useRetainedText } from "../retained-text";
 import { niceDevice } from "../model";
 import { sendID } from "../optimistic.mjs";
 import { Button } from "../ui/Button";
 import { Sheet } from "../ui/Sheet";
-import { checkAgentChatTarget, ownAgentChatTargets, type AgentChatTarget } from "./AgentChat";
+import { checkAgentChatTarget, MY_AGENTS, myAgentsRoom, ownAgentChatTargets, ownAgentTopic, type AgentChatTarget } from "./AgentChat";
 import { Markdown } from "./Markdown";
 import { overLimit } from "./Composer.files";
 import { isThreadMsg, shownText, whoWrote, type AnyMsg, type Ctx } from "./Message.model";
@@ -27,36 +27,6 @@ export function assignmentBody(m: AnyMsg, ctx: Ctx, instruction: string) {
   const link = "agentnet:message/" + (isThreadMsg(m) ? m.id : m.lid || m.id) + (ctx.dm ? "?conv=" + ctx.dm.id : "");
   return instruction.trim() + "\n\nSelected message from " + author + " · [View original](" + link + ")\n\n" +
     shownText(m).split("\n").map(line => "> " + line).join("\n");
-}
-
-// The public file view has no content hash. Recover only an exact kept
-// request, including decrypted bytes, rather than mistaking metadata for proof.
-async function keptAssignment(api: Api, draft: T.Draft, owner: string, hostKey: string, selected: File[], current: () => boolean): Promise<T.Sent | null> {
-  let thread: T.Thread;
-  try { thread = await api.thread(draft.id!); } catch { return null; }
-  if (!current()) return null;
-  const matches = thread?.messages?.filter(m => m.id === draft.id && m.dir === "out") || [];
-  if (!matches.length) return null;
-  const m = matches[0], target = m.target;
-  if (matches.length !== 1 || m.dir !== "out" || m.from !== owner || m.to !== draft.to || m.kind !== draft.kind || m.body !== draft.body ||
-      m.deleted || m.edited || m.reply_to || m.quote || (target?.agent_id || "") !== (draft.agent_id || "") ||
-      (target && (target.address !== draft.to || target.fingerprint !== hostKey)) || (!target && thread.key?.pinned !== hostKey))
-    throw Error("The retained task does not match this preview. Nothing else was sent.");
-  const files = m.files || [];
-  if (files.length !== selected.length) throw Error("The retained task’s files do not match this preview. Nothing else was sent.");
-  for (let i = 0; i < files.length; i++) {
-    const f = files[i], original = selected[i];
-    if (!f.openable || f.name !== original.name || f.size !== original.size)
-      throw Error("The retained task’s selected files cannot be verified here. Nothing else was sent.");
-    let bytes: Uint8Array;
-    try { ({ bytes } = await api.file(m.id, f.index ?? i, "out")); }
-    catch (error) { throw Error("The retained task’s selected files could not be verified here. Nothing else was sent. " + errorText(error)); }
-    if (!current()) return null;
-    const expected = new Uint8Array(await original.arrayBuffer());
-    if (bytes.length !== expected.length || bytes.some((value, index) => value !== expected[index]))
-      throw Error("The retained task’s selected file bytes differ. Nothing else was sent.");
-  }
-  return {id:m.id,state:m.state || "queued"};
 }
 
 export function AssignMessage({ m, ctx, open, onOpenChange }: {m: AnyMsg; ctx: Ctx; open: boolean; onOpenChange: (open: boolean) => void}) {
@@ -80,7 +50,8 @@ function AssignmentForm({ m, ctx, onDone, onSending, targetKey, setTargetKey, in
   const [chosen, setChosen] = useState(() => new Set(available.map(f => f.index)));
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
   const locked = useRef(false), sending = useRef(false), id = useRef(sendID()), prepared = useRef<T.Draft | null>(null);
-  const retained = useRef(new Map<number, File>()), alive = useRef(true), attempted = useRef(false), hostKey = useRef(""), sourceText = useRef("");
+  const retained = useRef(new Map<number, File>()), alive = useRef(true), hostKey = useRef(""), sourceText = useRef("");
+  const room = useRef(""), topic = useRef(sendID()); // a new topic of the My agents room (MEL-713)
   const originalOpen = useRef(store.get().open);
   const current = () => alive.current && store.isActive() && store.get().open === originalOpen.current && !store.get().pending;
   const problem = overLimit(files.filter(f => chosen.has(f.index)), ctx.overview?.files);
@@ -106,16 +77,16 @@ function AssignmentForm({ m, ctx, onDone, onSending, targetKey, setTargetKey, in
       if (!current()) return;
       store.toast("Task kept for " + target.label, "ok"); onDone();
       void store.refetch();
-      await store.open({kind:"thread", id:result.id, peer:target.host});
+      await store.openUnread({ kind: "dm", id: room.current }, topic.current);
     };
     try {
-      if (prepared.current && attempted.current) {
-        const kept = await keptAssignment(store.api, prepared.current, ctx.overview!.me.address, hostKey.current, [...chosen].map(i => retained.current.get(i)!), current);
-        if (!current()) return;
-        if (kept) { await complete(kept); return; }
-      }
       await checkAgentChatTarget(store.api, target, store.host.platform);
       if (!current()) return;
+      room.current ||= await myAgentsRoom(store.api);
+      if (!current()) return;
+      const agent = await ownAgentTopic(store.api, target, room.current, topic.current);
+      if (!current()) return;
+      if (agent.state !== "active") throw Error(target.label + " is joining your " + MY_AGENTS + " room. Assign again once it has joined; nothing was sent.");
       if (!prepared.current) {
         const overview = await store.api.overview();
         if (!current()) return;
@@ -145,8 +116,8 @@ function AssignmentForm({ m, ctx, onDone, onSending, targetKey, setTargetKey, in
         staged.push(await store.api.stage(retained.current.get(i)!));
         if (!current()) return;
       }
-      attempted.current = true;
-      const result = await store.api.send({...prepared.current, files:staged as string[]});
+      // The same send ID makes a retry the same task, never another.
+      const result = await store.api.askAgent({ id: id.current, pid: agent.pid, kind: "task", body: prepared.current.body, topic: topic.current, files: staged as string[] });
       await complete(result);
     } catch (err) { if (current()) setError(errorText(err)); }
     finally {
@@ -156,7 +127,7 @@ function AssignmentForm({ m, ctx, onDone, onSending, targetKey, setTargetKey, in
     }
   };
   return <form onSubmit={submit} className="space-y-4">
-    <p className="text-[13px] text-muted">You send a new task. Its reply appears in your private chat with the selected agent, using that computer’s usual permissions.</p>
+    <p className="text-[13px] text-muted">You send a new task in a new topic of your {MY_AGENTS} room. The selected agent replies there, using that computer’s usual permissions.</p>
     <details className="rounded-xl bg-surface p-3 stroke" open>
       <summary className="cursor-pointer font-semibold">Message from {whoWrote(m, ctx).name}</summary>
       <div className="mt-2 max-h-48 overflow-auto"><Markdown text={locked.current ? sourceText.current : shownText(m)} /></div>

@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/misunders2d/agentnet/internal/client"
 	"github.com/misunders2d/agentnet/internal/ui"
 )
 
@@ -206,8 +207,8 @@ func TestUIDaemonJourney(t *testing.T) {
 		t.Fatal("second daemon replaced the page address")
 	}
 
-	// A question from the command line reaches bob's page, held for him.
-	q := strings.Fields(c.run("--home", "alice", "ask", "--answer-wait", "0", bob, "which port does auth use?"))[0]
+	// A question from an older device reaches bob's page, held for him.
+	q := c.oldSend("alice", client.Outgoing{To: bob, Kind: "question", Body: "which port does auth use?"}).ID
 	seq = nextEvent(t, ev, seq, "question arrived")
 	var o ui.Overview
 	waitFor(t, "question on bob's page", func() bool { o = bp.overview(); _, ok := threadOf(o, q); return ok })
@@ -251,35 +252,17 @@ func TestUIDaemonJourney(t *testing.T) {
 		t.Fatal("answered question still waiting")
 	}
 
-	// A new conversation from bob's page is a separate thread; alice's reply
-	// from the command line joins it.
-	var sent ui.Sent
-	if code, body := bp.post("/api/send", ui.Draft{To: alice, Kind: "message", Body: "deploy is green"}, &sent); code != 200 {
+	// The page starts no new device conversation (MEL-713 step 1).
+	if code, body := bp.post("/api/send", ui.Draft{To: alice, Kind: "message", Body: "deploy is green"}, nil); code != http.StatusConflict || !strings.Contains(string(body), "read only") {
 		t.Fatalf("send: %d %s", code, body)
 	}
-	waitFor(t, "alice receives", func() bool {
-		for _, m := range c.inbox("alice") {
-			if m.ID == sent.ID {
-				return true
-			}
-		}
-		return false
-	})
-	// The page does not wait for the receipt; it arrives and is pushed.
-	waitFor(t, "page send delivered", func() bool { return bp.thread(sent.ID).Messages[0].State == "delivered" })
-	c.run("--home", "alice", "reply", sent.ID, "thanks")
-	waitFor(t, "reply joins bob's thread", func() bool { s, _ := threadOf(bp.overview(), sent.ID); return s.Count == 2 })
-	if o := bp.overview(); len(o.Threads) != 2 {
+	if o := bp.overview(); len(o.Threads) != 1 {
 		t.Fatalf("threads %+v", o.Threads)
-	}
-	// Linking to a message of another conversation is refused.
-	if code, _ := bp.post("/api/send", ui.Draft{To: "bob/elsewhere", Kind: "message", Body: "x", ReplyTo: q}, nil); code != http.StatusConflict {
-		t.Fatalf("cross link: %d", code)
 	}
 
 	// A task waits for bob's decision; accepting runs nothing without a
 	// responder, so bob declines it on the page.
-	task := strings.Fields(c.run("--home", "alice", "task", bob, "please tidy the repo"))[0]
+	task := c.oldSend("alice", client.Outgoing{To: bob, Kind: "task", Body: "please tidy the repo"}).ID
 	waitFor(t, "task waiting", func() bool { o = bp.overview(); return len(o.Review) == 1 && o.Review[0].ID == task })
 	if m := bp.thread(task).Messages[0]; m.State != "awaiting" || strings.Join(m.Actions, ",") != "accept,accept_always,reply,decline" {
 		t.Fatalf("task view %+v", m)
@@ -309,7 +292,7 @@ func TestUIDaemonJourney(t *testing.T) {
 	bp2 := c.openPage(t, "bob")
 	oldCookieRefused(t, bp, bp2)
 	o = bp2.overview()
-	if len(o.Threads) != 3 || len(o.Review) != 0 {
+	if len(o.Threads) != 2 || len(o.Review) != 0 {
 		t.Fatalf("after restart: %d threads, review %+v", len(o.Threads), o.Review)
 	}
 	if m := bp2.thread(q).Messages[0]; m.State != "manual" {
@@ -329,7 +312,7 @@ func TestUIDaemonJourney(t *testing.T) {
 	c.start("bob3.log", "--home", "bob", "daemon", "--ui", "127.0.0.1:0")
 	bp3 := c.openPage(t, "bob")
 	oldCookieRefused(t, bp2, bp3)
-	if o := bp3.overview(); len(o.Threads) != 3 {
+	if o := bp3.overview(); len(o.Threads) != 2 {
 		t.Fatalf("after a kill: %d threads", len(o.Threads))
 	}
 }

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/misunders2d/agentnet/internal/client"
 )
 
 // hook runs `agentnet hook HARNESS` for home with event on stdin.
@@ -52,7 +54,9 @@ func TestCLIConversationAndHooks(t *testing.T) {
 	c.hook("alice", "codex", session("S2", "SessionStart"))
 
 	os.WriteFile(filepath.Join(c.dir, "spec.txt"), []byte("spec v1"), 0o600)
-	q := strings.Fields(c.run("--home", "alice", "ask", "--answer-wait", "0", "--file", "spec.txt", "bob/desk", "SECRET-Q which port?"))[0]
+	// The question comes as an older device sends it (MEL-713 step 1);
+	// replies in its thread are still version 1.
+	q := c.oldSend("alice", client.Outgoing{To: "bob/desk", Kind: "question", Body: "SECRET-Q which port?", Files: []string{filepath.Join(c.dir, "spec.txt")}}).ID
 	ids := []string{q}
 	waitFor(t, "question at bob", func() bool { return len(c.peekInbox("bob")) == 1 })
 	for i, turn := range []struct{ home, peer string }{{"bob", "alice"}, {"alice", "bob"}, {"bob", "alice"}, {"alice", "bob"}, {"bob", "alice"}} {

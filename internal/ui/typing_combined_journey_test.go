@@ -91,6 +91,9 @@ func TestTypingCombinedRenderedLinkedEngineAndDaemon(t *testing.T) {
 	if err = bob.Approve(address); err != nil {
 		t.Fatal(err)
 	}
+	if err = bob.Approve(alice.Address); err != nil {
+		t.Fatal(err)
+	}
 
 	bin := t.TempDir()
 	started := filepath.Join(bin, "started")
@@ -177,8 +180,13 @@ window.ready=true;`, config)
 				mu.Unlock()
 				writeJSON(w, result)
 			case r.URL.Path == "/control/run-agent":
-				result := call("/api/send", map[string]any{"to": bob.Address, "kind": "question", "body": "synthetic background run"})
-				writeJSON(w, result)
+				// Only the client still starts a device question (MEL-713 step 1).
+				sent, e := alice.SendMessage(ctx, client.Outgoing{To: bob.Address, Kind: "question", Body: "synthetic background run"})
+				if e != nil {
+					http.Error(w, e.Error(), 500)
+					return
+				}
+				writeJSON(w, map[string]any{"id": sent.ID, "state": sent.State})
 			case r.URL.Path == "/control/agent-started":
 				_, e := os.Stat(started)
 				writeJSON(w, map[string]bool{"started": e == nil})

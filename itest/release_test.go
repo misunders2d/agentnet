@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/misunders2d/agentnet/internal/client"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
@@ -95,9 +96,10 @@ func readAll(r interface{ Read([]byte) (int, error) }) (string, error) {
 	}
 }
 
-// TestCLIReplyToResumesSession: `ask --reply-to` continues a conversation
-// from the CLI; the recipient's responder resumes its session after a
-// daemon restart. Unknown ids and ids with another agent are refused.
+// TestCLIReplyToResumesSession: a question continuing a conversation, as
+// an older device sends it, resumes the recipient responder's session after
+// a daemon restart. A person's plain shell no longer asks an agent directly
+// (MEL-713 step 1).
 func TestCLIReplyToResumesSession(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("stand-in responder is a shell script")
@@ -129,19 +131,16 @@ func TestCLIReplyToResumesSession(t *testing.T) {
 		})
 		return id
 	}
-	q1 := strings.Fields(c.run("--home", "alice", "ask", "--answer-wait", "0", "bob/desk", "first"))[0]
+	q1 := c.oldSend("alice", client.Outgoing{To: "bob/desk", Kind: "question", Body: "first"}).ID
 	a1 := answerTo(q1)
 	stopBob()
 	c.env = []string{"PATH=" + stub + string(os.PathListSeparator) + os.Getenv("PATH")}
 	c.start("bob2.log", "--home", "bob", "daemon")
 	c.env = nil
-	if out, err := c.try("--home", "alice", "ask", "--reply-to", "unknown-id", "bob/desk", "x"); err == nil || !strings.Contains(out, "no message unknown-id") {
-		t.Fatalf("unknown id: %v %s", err, out)
+	if out, err := c.try("--home", "alice", "ask", "--reply-to", a1, "bob/desk", "x"); err == nil || !strings.Contains(out, "dm ask-agent") {
+		t.Fatalf("plain-shell ask: %v %s", err, out)
 	}
-	if out, err := c.try("--home", "alice", "ask", "--reply-to", a1, "carol/desk", "x"); err == nil || !strings.Contains(out, "not carol/desk") {
-		t.Fatalf("other agent: %v %s", err, out)
-	}
-	q2 := strings.Fields(c.run("--home", "alice", "ask", "--answer-wait", "0", "--reply-to", a1, "bob/desk", "second"))[0]
+	q2 := c.oldSend("alice", client.Outgoing{To: "bob/desk", Kind: "question", Body: "second", ReplyTo: a1}).ID
 	answerTo(q2)
 	data, _ := os.ReadFile(filepath.Join(stub, "claude.args"))
 	runs := strings.Split(strings.TrimSpace(string(data)), "\n")

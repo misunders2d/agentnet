@@ -168,9 +168,10 @@ func TestLiveReplyReceiverAllowlistAndThreeSendPaths(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	direct, err := l.Send(Draft{To: b.Address, Kind: "question", Body: "direct", ReplyReceiver: selection})
-	if err != nil {
-		t.Fatal(err)
+	// A device conversation takes no new turn (MEL-713 step 1), even with a
+	// valid return selection; nothing is bound for it.
+	if _, err = l.Send(Draft{To: b.Address, Kind: "question", Body: "direct", ReplyReceiver: selection}); !errors.Is(err, ErrDeviceThreadReadOnly) {
+		t.Fatalf("device send with a receiver: %v", err)
 	}
 	dm, err := l.SendDM(DMDraft{Conv: conv, Body: "ordinary DM", ReplyReceiver: selection})
 	if err != nil {
@@ -199,10 +200,6 @@ func TestLiveReplyReceiverAllowlistAndThreeSendPaths(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	liveDirect, err := l.Send(Draft{To: b.Address, Kind: "question", Body: "native direct", ReplyReceiver: liveSelection})
-	if err != nil {
-		t.Fatal(err)
-	}
 	liveDM, err := l.SendDM(DMDraft{Conv: conv, Body: "native DM", ReplyReceiver: liveSelection})
 	if err != nil {
 		t.Fatal(err)
@@ -212,10 +209,10 @@ func TestLiveReplyReceiverAllowlistAndThreeSendPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	bindings, err := l.ReplyReceiverBindings()
-	if err != nil || len(bindings) != 6 {
+	if err != nil || len(bindings) != 4 {
 		t.Fatalf("bindings %+v %v", bindings, err)
 	}
-	refs := map[string]bool{direct.ID: true, liveDirect.ID: true}
+	refs := map[string]bool{}
 	thread, err := l.DM(conv)
 	if err != nil {
 		t.Fatal(err)
@@ -279,7 +276,7 @@ func TestLiveReplyReceiverAllowlistAndThreeSendPaths(t *testing.T) {
 			continue
 		}
 		var got []ReplyReceiverBindingView
-		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &got) != nil || len(got) != 6 || strings.Contains(w.Body.String(), "preset") || strings.Contains(w.Body.String(), "executor") {
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &got) != nil || len(got) != 4 || strings.Contains(w.Body.String(), "preset") || strings.Contains(w.Body.String(), "executor") {
 			t.Fatalf("read view %d %s", w.Code, w.Body)
 		}
 	}

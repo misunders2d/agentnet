@@ -746,13 +746,17 @@ func TestLiveFiles(t *testing.T) {
 	if _, err := pb.SendDM(DMDraft{Conv: conv, Files: []string{id}}); !errors.Is(err, ErrRefused) {
 		t.Fatalf("a file sent twice: %v", err)
 	}
-	// A device conversation (v1) takes files too, under the names chosen;
-	// the receiving page shows the name a received file is saved under.
+	// A device conversation (v1), which only an older device still starts
+	// (MEL-713 step 1), carries files under the names chosen; the receiving
+	// page shows the name a received file is saved under.
 	v1Name := "../budget <plan>.xlsx"
-	v1, _ := pb.StageFile(v1Name, strings.NewReader("cells"))
-	v1Sent, err := pb.Send(Draft{To: alice.Address, Kind: KindMessage, Files: []string{v1}})
-	if err != nil || len(pb.staged.files) != 0 {
-		t.Fatalf("a file in a device conversation: %v (staged %d)", err, len(pb.staged.files))
+	v1Path := filepath.Join(t.TempDir(), "plan.xlsx")
+	if err := os.WriteFile(v1Path, []byte("cells"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	v1Sent, err := bob.SendMessage(ctx, client.Outgoing{To: alice.Address, Kind: KindMessage, Named: []client.OutgoingFile{{Name: v1Name, Path: v1Path}}})
+	if err != nil {
+		t.Fatalf("a file in a device conversation: %v", err)
 	}
 	eventually("the v1 file at alice", func() bool {
 		o, _ := pa.Overview()

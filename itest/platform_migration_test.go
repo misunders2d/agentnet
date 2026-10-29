@@ -25,6 +25,7 @@ import (
 func TestCLIPinnedClientsSurvivePlatformTLSMigration(t *testing.T) {
 	c := buildCLI(t)
 	old, stop := c.setup(t, "hub")
+	c.dmReady()
 	content := c.writeRandom("before.bin", 1024)
 	id := strings.Fields(c.run("--home", "alice", "send", "--file", "before.bin", "bob/desk", "before migration"))[0]
 	stop()
@@ -89,6 +90,7 @@ func TestCLIPinnedClientsSurvivePlatformTLSMigration(t *testing.T) {
 		t.Fatal("browser invite did not use the new trusted endpoint")
 	}
 	c.run("--home", "newdevice", "join", "--agent", "phone", u.Fragment)
+	c.persons("newdevice")
 	c.run("--home", "newdevice", "send", "bob/desk", "from the new endpoint")
 	waitFor(t, "new and existing endpoints interoperate", func() bool { return len(c.inbox("bob")) == 3 })
 }

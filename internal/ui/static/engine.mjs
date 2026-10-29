@@ -4587,29 +4587,14 @@ export class Engine {
   }
 
   // ---- device conversations (version 1): messages, questions and tasks
-  // to one device, as agentnet send sends them, and replies by hand. The
+  // to one device, as older AgentNet sent them, and replies by hand. The
   // recipient's own approvals and acceptance decide what runs there;
   // nothing runs here.
 
-  // sendDirect sends a message, question or task to the device at to (a
-  // reply to reply_to, a device message with it), with files.
-  async sendDirect({ id: sendID = "", to, kind, body, quote="",reply_to: replyTo = "", files = [], agent_id = "", reply_receiver = null }) {
-    body = String(body || "").trim();
-    kind = kind || "message";
-    to = String(to || "").trim();
-    if (wire.blank(body) && !files.length) throw new Error("Write a message or add a file first.");
-    if (!["message", "question", "task"].includes(kind)) throw new Error("Choose message, question or task.");
-    if (!wire.validAddress(to)) throw new Error("That is not an AgentNet address.");
-    if (to === this.address) throw new Error("That is this browser.");
-    if (agent_id && !["question", "task"].includes(kind)) throw new Error("A named agent can receive a question or task.");
-    const target = agent_id ? await this.namedTarget(to, agent_id) : null;
-    checkFiles(files);
-    if (replyTo) {
-      const m = (await this.store.get("inbox", replyTo)) || (await this.store.get("outbox", replyTo));
-      if (!m || m.v !== 1 || (m.from || m.to) !== to) throw new Error("A reply stays in its conversation with that device.");
-    }
-    return this.sendV1({ id: sendID, queued: true, to, kind, body, quote,replyTo, files, status: "", target, receiver: reply_receiver });
-  }
+  // A new turn in a device conversation is refused (/api/send): nothing
+  // starts one any more (MEL-713 step 1); the conversations stay readable
+  // until version 1 is deleted. Replies to its requests (replyV1,
+  // proposals) still go back.
 
   // sendV1 seals one version 1 message to the key pinned for to (pinned
   // the first time), keeps it with its files before sending, and sends
@@ -12995,7 +12980,7 @@ export class Engine {
       if (body.do === "resolve") return await this.resolveHeldTurn(body.id) || await this.dismissDeviceAdminNotice(body.id) || this.dismissReport(body.id);
       throw new Error("Nothing runs in this browser: accept, approve and grants are made on a computer with AgentNet.");
     case "/api/request/followup": return {note:await this.queueRequestFollowup(body)};
-    case "/api/send": return this.sendDirect(body);
+    case "/api/send": throw new Error("Old device conversations are read only now. Write to this agent in your My agents room or in a chat.");
     case "/api/simulate": throw new Error("Not available here.");
     case "/api/google/access": return body === undefined ? this.call("GET", "/v1/google/access") : this.call("PUT", "/v1/google/access", body);
     case "/api/invite": return this.invite(body || {});

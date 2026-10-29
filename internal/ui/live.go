@@ -548,46 +548,14 @@ func (l *Live) presence(ctx context.Context, peer string) Presence {
 	return Presence{Text: "Their computer is offline", At: now}
 }
 
-// Send implements Provider.
+// ErrDeviceThreadReadOnly refuses a new turn in an old device thread
+// (version 1): nothing starts one any more (MEL-713 step 1). The thread stays
+// readable until version 1 is deleted.
+var ErrDeviceThreadReadOnly = Refuse("Old device conversations are read only now. Write to this agent in your My agents room or in a chat.")
+
+// Send implements Provider. It refuses: device threads are read only.
 func (l *Live) Send(d Draft) (Sent, error) {
-	body := strings.TrimSpace(d.Body)
-	if envelope.Blank(body) && len(d.Files) == 0 {
-		return Sent{}, Refuse("Write a message or add a file first.")
-	}
-	switch d.Kind {
-	case "", KindMessage, KindQuestion, KindTask:
-	default:
-		return Sent{}, Refuse("Choose message, question or task.")
-	}
-	if _, _, err := protocol.SplitAddress(d.To); err != nil {
-		return Sent{}, Refuse("That is not an AgentNet address.")
-	}
-	if d.ReplyTo != "" {
-		if err := l.a.CheckReplyTo(d.ReplyTo, d.To); err != nil {
-			return Sent{}, Refuse(sentence(err))
-		}
-	}
-	receiver, err := l.selectedReplyReceiver(d.ReplyReceiver)
-	if err != nil {
-		return Sent{}, err
-	}
-	files, cleanup, err := l.takeStaged(d.Files)
-	if err != nil {
-		return Sent{}, err
-	}
-	defer cleanup() // SendMessage encrypted them into the spool, or refused: either way the staged copies go
-	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
-	defer cancel()
-	ctx = client.WithQueuedSend(ctx, d.ID)
-	target, err := l.namedSendTarget(ctx, d)
-	if err != nil {
-		return Sent{}, err
-	}
-	res, err := l.a.SendMessage(ctx, client.Outgoing{To: d.To, Body: body, ReplyTo: d.ReplyTo, Quote: d.Quote, Kind: d.Kind, Named: files, Target: target, ReplyReceiver: receiver})
-	if err != nil {
-		return Sent{}, Refuse(sentence(err))
-	}
-	return Sent{ID: res.ID, State: res.State, Path: res.Path, Detail: res.Detail}, nil
+	return Sent{}, ErrDeviceThreadReadOnly
 }
 
 // Act implements Provider.

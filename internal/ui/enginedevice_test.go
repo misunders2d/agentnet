@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/client"
-	"github.com/misunders2d/agentnet/internal/identity"
 	"github.com/misunders2d/agentnet/internal/testhub"
 )
 
@@ -39,13 +38,11 @@ func goInbox(a *client.Agent, body string) client.Message {
 	return client.Message{}
 }
 
-// The browser writes to a device, as agentnet send does (version 1): a
-// question its owner approved it for is answered once by that computer's
-// responder; a task waits there until accepted, then its result comes
-// back; a plain message never runs. Answers join their question's
-// conversation here. A reply goes only to its own device's conversation;
-// a changed key sends nothing; a send refused before it is stored leaves
-// nothing behind. No model runs: the responder is a stub.
+// MEL-713 step 1: the browser starts no device conversation (version 1)
+// any more: /api/send is refused, nothing is kept and nothing runs. A
+// request an older device still sends it is held (nothing runs in a
+// browser) and answered by hand in that conversation, as before. No model
+// runs: the responder is a stub.
 func TestBrowserEngineDeviceChat(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell stub")
@@ -79,50 +76,19 @@ func TestBrowserEngineDeviceChat(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// A question: answered once, the answer in its conversation.
-	q := w.api("/api/send", map[string]any{"to": laptop.Address, "kind": "question", "body": "what time is it?"})
-	if q["id"] == nil || q["state"] == "failed" {
-		t.Fatalf("question: %v", q)
-	}
-	w.until("the answer", func() bool {
-		th := threadWith(w, "what time is it?")
-		return th != nil && len(th["messages"].([]any)) == 2
-	})
-	th := threadWith(w, "what time is it?")
-	ans := th["messages"].([]any)[1].(map[string]any)
-	if th["peer"] != laptop.Address || ans["kind"] != "answer" || ans["reply_to"] != q["id"] || ans["dir"] != "in" || !strings.Contains(ans["body"].(string), "four o clock") {
-		t.Fatalf("the answer: %v", th)
+	count := func() float64 { return w.ok(map[string]any{"op": "count", "store": "outbox"})["n"].(float64) }
+	before := count()
+	for _, kind := range []string{"question", "task", "message"} {
+		w.refuses("a new "+kind+" in a device conversation", w.call(map[string]any{"op": "api", "path": "/api/send",
+			"body": map[string]any{"to": laptop.Address, "kind": kind, "body": "what time is it?"}}), "read only")
 	}
 	time.Sleep(300 * time.Millisecond)
-	if ran() != 1 {
-		t.Fatalf("the responder ran %d times for one question", ran())
+	if count() != before || ran() != 0 || goInbox(laptop, "what time is it?").ID != "" {
+		t.Fatalf("a refused device send was kept or ran (%d runs)", ran())
 	}
 
-	// A plain message never runs; a task waits there until accepted.
-	w.api("/api/send", map[string]any{"to": laptop.Address, "kind": "message", "body": "hey!"})
-	waitFor(t, "the laptop has the message", func() bool { return goInbox(laptop, "hey!").ID != "" })
-	task := w.api("/api/send", map[string]any{"to": laptop.Address, "kind": "task", "body": "rotate the logs"})
-	waitFor(t, "the laptop has the task", func() bool { return goInbox(laptop, "rotate the logs").ID != "" })
-	time.Sleep(500 * time.Millisecond)
-	if ran() != 1 {
-		t.Fatalf("a message or an unaccepted task ran (%d runs)", ran())
-	}
-	if s := w.api("/api/overview", nil); !strings.Contains(stringsOf(s["threads"]), `"waiting":true`) {
-		t.Fatalf("a task waiting for its result: %v", s["threads"])
-	}
-	if err := laptop.Accept(goInbox(laptop, "rotate the logs").ID); err != nil {
-		t.Fatal(err)
-	}
-	w.until("the task's result", func() bool {
-		th := threadWith(w, "rotate the logs")
-		if th == nil || len(th["messages"].([]any)) != 2 {
-			return false
-		}
-		r := th["messages"].([]any)[1].(map[string]any)
-		return r["kind"] == "result" && r["reply_to"] == task["id"]
-	})
-
-	// The laptop asks the phone: held here (nothing runs), answered by hand.
+	// The laptop asks the phone the old way: held here (nothing runs),
+	// answered by hand.
 	asked, err := laptop.SendMessage(ctx, client.Outgoing{To: phone, Kind: "question", Body: "are you there?"})
 	if err != nil {
 		t.Fatal(err)
@@ -148,25 +114,6 @@ func TestBrowserEngineDeviceChat(t *testing.T) {
 	})
 	if a := threadWith(w, "are you there?")["messages"].([]any)[0].(map[string]any); a["state"] != "answered" || len(a["actions"].([]any)) != 0 {
 		t.Fatalf("after answering: %v", a)
-	}
-
-	// Replies stay with their device; a changed key or a bad address sends
-	// nothing and keeps nothing.
-	count := func() float64 { return w.ok(map[string]any{"op": "count", "store": "outbox"})["n"].(float64) }
-	before := count()
-	w.refuses("a reply to another device's message", w.call(map[string]any{"op": "api", "path": "/api/send",
-		"body": map[string]any{"to": "admin/elsewhere", "kind": "message", "body": "x", "reply_to": q["id"]}}), "stays in its conversation")
-	w.refuses("no address", w.call(map[string]any{"op": "api", "path": "/api/send", "body": map[string]any{"to": "nobody", "body": "x"}}), "not an AgentNet address")
-	w.refuses("a kind", w.call(map[string]any{"op": "api", "path": "/api/send", "body": map[string]any{"to": laptop.Address, "kind": "answer", "body": "x"}}), "Choose message")
-	other, _ := identity.Generate()
-	op := other.Public(laptop.Address)
-	w.ok(map[string]any{"op": "tamperPin", "address": laptop.Address, "json": string(marshalBytes(t, op)), "fingerprint": op.Fingerprint()})
-	w.refuses("a changed key", w.call(map[string]any{"op": "api", "path": "/api/send", "body": map[string]any{"to": laptop.Address, "body": "x"}}), "key changed")
-	if count() != before {
-		t.Fatal("a refused send was kept")
-	}
-	if th := threadWith(w, "what time is it?"); th["key"].(map[string]any)["pending"] == "" {
-		t.Fatalf("the changed key is not shown: %v", th["key"])
 	}
 }
 

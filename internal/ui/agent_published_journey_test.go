@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 	"time"
 
@@ -15,7 +14,8 @@ import (
 )
 
 // Both runtimes publish their normal signed session capabilities. No test-only
-// caps or fabricated inbox rows make the selected executor reachable.
+// caps or fabricated inbox rows make the selected executor reachable; the
+// browser discovers both named agents but asks them only in a chat.
 func TestBrowserNamedAgentPublishedJourney(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell stub")
@@ -69,42 +69,16 @@ func TestBrowserNamedAgentPublishedJourney(t *testing.T) {
 	if err := host.Approve(address); err != nil {
 		t.Fatal(err)
 	}
-	previous := ""
-	for i, agent := range []protocol.AgentRecord{agents[0], agents[1], agents[0]} {
-		body := "selected question " + string(rune('1'+i))
-		sent := w.api("/api/send", map[string]any{"to": host.Address, "kind": "question", "body": body, "agent_id": agent.ID, "reply_to": previous})
-		var answer map[string]any
-		w.until("selected answer in browser", func() bool {
-			thread := threadWith(w, body)
-			if thread == nil {
-				return false
-			}
-			for _, value := range thread["messages"].([]any) {
-				m := value.(map[string]any)
-				if m["kind"] == "answer" && m["reply_to"] == sent["id"] {
-					answer = m
-					return true
-				}
-			}
-			return false
-		})
-		if answer["agent_id"] != agent.ID || strings.TrimSpace(answer["body"].(string)) != agent.Label || answer["from"] != host.Address {
-			t.Fatalf("selected answer lost identity: %v", answer)
-		}
-		previous = answer["id"].(string)
+	// MEL-713 step 1: a named agent is no longer asked in a device
+	// conversation; the refusal runs nothing and changes no default.
+	for _, agent := range agents {
+		w.refuses("a device ask of a named agent", w.call(map[string]any{"op": "api", "path": "/api/send", "body": map[string]any{"to": host.Address, "kind": "question", "body": "selected question", "agent_id": agent.ID}}), "read only")
 	}
-	log, err := os.ReadFile(runs)
-	if err != nil || string(log) != "A\nB\nA\n" {
-		t.Fatalf("executor sequence %q: %v", log, err)
+	time.Sleep(300 * time.Millisecond)
+	if log, err := os.ReadFile(runs); err == nil && len(log) != 0 {
+		t.Fatalf("a refused device ask ran: %q", log)
 	}
 	if responder, err := host.Responder(); err != nil || responder != nil {
 		t.Fatalf("device default changed: %+v %v", responder, err)
 	}
-	if err := host.SetLocalAgentResponder(agents[0].ID, nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := host.PublishAgentCatalog(ctx); err != nil {
-		t.Fatal(err)
-	}
-	w.refuses("disabled selection has no fallback", w.call(map[string]any{"op": "api", "path": "/api/send", "body": map[string]any{"to": host.Address, "kind": "question", "body": "do not execute", "agent_id": agents[0].ID}}), "")
 }

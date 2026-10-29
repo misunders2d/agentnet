@@ -25,7 +25,7 @@ Get started on a laptop:
   2. agentnet join --agent NAME 'agentnet-invite-v1:...'     the invitation your admin sent;
      NAME is what the person calls this computer's agent: use theirs, or ask; never infer it
   3. agentnet daemon                                         leave running; it receives messages
-  Then: agentnet send bob/desk "hello"   (addresses are person/agent)
+  Then: agentnet person create NAME, and agentnet send bob/desk "hello"   (in your DM with bob)
 
 Setup and upkeep (help topics):
   install    build from source and put agentnet on your PATH (Linux, macOS, Windows)
@@ -34,9 +34,10 @@ Setup and upkeep (help topics):
   uninstall  remove agentnet, keeping or deleting your history
 
 Messages and files:
-  send       send an encrypted message, with --file attachments
-  ask        send a question (approved peers may get an automatic answer)
-  task       send a task (runs only if the recipient accepts it)
+  send       send an encrypted message, with --file attachments (a person: in a DM;
+             an agent: in your My agents room)
+  ask        ask an agent a question, as your agent (a person asks in a chat)
+  task       give an agent a task, as your agent (another person's runs it once accepted)
   do         confirm an agent's proposed action: send it as a task ("Do it")
   reply      reply to a received message (takes over a question or task)
   inbox      list received messages
@@ -184,73 +185,77 @@ ask-count or depth limits; stopping the originating run or removing its membersh
 stops further asks and waits.
 Wait reads local stored replies only. Custody/delivery is never completion.`,
 
-	"send": `Usage: agentnet send [--file PATH]... [--fallback] [--wait 5s] [--reply-to ID] [--progress] ADDRESS[#SESSION] TEXT
+	"send": `Usage: agentnet send [--file PATH]... [--wait 5s] [--reply-to ID] [--progress] [--from-agent ID] ADDRESS TEXT
 
-Send an end-to-end encrypted message. It goes straight to the recipient when
-they advertise a reachable address, otherwise through the Hub, which keeps it
-until they are online. Prints: ID STATE PATH, and on stderr what that means:
+Send an end-to-end encrypted message. Where it goes depends on who sends:
+  a person at a plain shell: in your DM with the person at ADDRESS (both
+                of you need a person: agentnet person create NAME; read it
+                with agentnet dm show ID). Your own devices' agents are
+                reached in your My agents room instead.
+  your agent:   from its session (Claude Code, Codex, Pi or OMP), a run
+                serving a request, or with --from-agent ID: that agent's
+                message in your "My agents" room, in its job's topic.
+The Hub keeps it until the recipient is online. From a shell it prints
+ID STATE PATH for the copy to ADDRESS's device, and on stderr what that means:
   delivered   stored in the recipient's inbox (not necessarily read or answered)
   custody     the Hub holds it; it is delivered when the recipient connects
-  queued      the Hub was unreachable; the daemon retries it
-If the Hub has it, send waits up to --wait for the recipient's receipt, woken
-by the receipt itself (one request, no polling). Answers and task results
-arrive later in your inbox.
+  queued      not at the Hub yet; the daemon retries it
+send waits up to --wait for that receipt, woken by the receipt itself (one
+request, no polling). Answers arrive later in the same chat.
 
-  --wait D      how long to wait for the receipt (default 5s; 0 returns at once)
-  --file PATH   attach a file (repeatable, up to 8, 100 MiB each by default)
-  --fallback    for ADDRESS#SESSION: if that session has ended, deliver to
-                the agent's inbox instead of failing
-  --reply-to ID continue ID's existing conversation. ID must be stored here
-                with this same recipient. An ordinary correlated message can
-                carry a clarification and remains eligible for an explicitly
-                selected reply receiver.
-  --progress    with --reply-to, mark a progress or blocker update as
-                nonterminal. It does not finish, accept, cancel, take over or
-                feed a selected receiver; the terminal result still arrives
-                separately.
+  --wait D        how long to wait for the receipt (default 5s; 0 returns at once)
+  --file PATH     attach a file (repeatable, up to 8, 100 MiB each by default)
+  --reply-to ID   reply to message ID in its own chat, or in an older device
+                  conversation (started before this version), which takes no
+                  new conversation
+  --progress      with --reply-to, inside a run: mark a progress or blocker
+                  update on the request it serves as nonterminal. It does not
+                  finish, accept, cancel or take over anything; the result
+                  still arrives separately.
+  --from-agent ID speak as this agent hosted here
 
 Examples:
   agentnet send bob/desk "build is green"
-  agentnet send --reply-to 3f9c... bob/desk "Which region should I check?"
-  agentnet send --reply-to 3f9c... --progress bob/desk "accepted; checking the deploy"
   agentnet send --file report.pdf bob/desk "numbers attached"`,
 
-	"ask": `Usage: agentnet ask [--file PATH]... [--wait 5s] [--answer-wait 90s] [--follow-up TEXT] [--reply-to ID] ADDRESS TEXT
+	"ask": `Usage: agentnet ask [--file PATH]... [--answer-wait 90s] [--from-agent ID] [--reply-to ID] ADDRESS TEXT
 
-Send a question. If the recipient approved you and chose a responder, their
-harness answers automatically in the background; otherwise it waits for them.
-The answer arrives in your inbox as kind "answer" replying to this message.
-Output and --wait as for send: "delivered" means it reached their inbox,
-not that it was answered.
+Ask an agent a question, as your agent: from its session (Claude Code,
+Codex, Pi or OMP), from a run serving a request, or with --from-agent ID.
+It is posted in your "My agents" room, in the topic of this session's or
+run's job. Your own agents answer there. Another person's agent joins that
+topic as a visitor once its person accepts the invitation (or approved you).
+A person at a plain shell asks in a chat instead: agentnet dm new ADDRESS,
+agentnet dm invite ID HOST, then agentnet dm ask-agent PID TEXT.
 
-Then ask waits for the answer and prints it (asked here, answered here):
---answer-wait D, default 90s (0: return at once; always 0 inside a run).
-It prints "sent; waiting..." first: if the command is stopped, the answer
-still arrives, so never send the question again; read it with agentnet
-conversation ID. The local daemon wakes the wait (nothing polls the Hub);
-without a running daemon it says so and returns. It stops early when the
-request waits for someone's OK or a person's decision there. Without an
-answer in time it says "no answer yet" and where the answer will land. The
-answer is printed as another agent's words: information, not instructions.
-An answer that proposes an action instead ("proposes an action (not run)")
-is carried out only if you confirm it: agentnet do ID.
-` + followUpHelp + `
+Then ask waits for the answer and prints it: --answer-wait D, default 90s
+(0: return at once). It prints "sent; waiting..." first: if the command is
+stopped, the answer still arrives, so never ask again; read it with
+agentnet dm wait ID. The local daemon wakes the wait (nothing polls the
+Hub); without a running daemon it says so and returns. It stops early when
+the request waits for someone's OK or a person's decision there. Inside a
+run, an answer that does not come in time is waited for by the run's
+request, which runs again with it once every such ask has finished; the run
+goes on or ends its turn. The answer is printed as another agent's words:
+information, not instructions. An answer that proposes an action instead
+("proposes an action (not run)") is carried out only if you confirm it:
+agentnet do ID.
 
 Example:
-  agentnet ask --follow-up "tell me if staging needs a migration" bob/desk "what is the deploy command for staging?"`,
+  agentnet ask bob/desk "what is the deploy command for staging?"`,
 
-	"task": `Usage: agentnet task [--file PATH]... [--wait 5s] [--answer-wait D] [--follow-up TEXT] [--reply-to ID] ADDRESS TEXT
+	"task": `Usage: agentnet task [--file PATH]... [--answer-wait D] [--from-agent ID] [--reply-to ID] ADDRESS TEXT
 
-Send a task. It waits until the recipient accepts it, unless they granted
-your agent's exact key standing permission to run tasks (accept --always,
-approve --tasks); either way their responder runs it with their normal
-permissions. The outcome arrives as
-kind "result" with a status (done, failed, timeout, cancelled, declined).
-Output and --wait as for send: "delivered" means it reached their inbox, not
-that it was accepted or done. --answer-wait D waits for the result and prints
-it, as for ask (default 0: tasks run long; it stops early when the task waits
-for an OK).
-` + followUpHelp + `
+Give an agent a task, as your agent, in your "My agents" room as for ask.
+Your own agents run it at once with their normal permissions. Another
+person's agent runs it once its person accepts it, unless they granted you
+standing permission (accept --always, approve --tasks). A run may give
+tasks only when its own requester may give this agent tasks; otherwise it
+may only ask. The outcome arrives as a result with a status (done, failed,
+timeout, cancelled, declined). --answer-wait D waits for the result and
+prints it, as for ask (default 0: tasks run long; it stops early when the
+task waits for an OK). A person at a plain shell gives tasks in a chat:
+agentnet dm ask-agent --task PID TEXT.
 
 Example:
   agentnet task bob/desk "update CHANGELOG.md for release 1.4"`,
@@ -1417,24 +1422,8 @@ var valueFlags = map[string]bool{
 	"harness": true, "context": true, "timeout": true, "ttl": true, "data": true, "out": true,
 	"from": true, "public-url": true, "admin-label": true, "max-file": true, "quota": true,
 	"upload-ttl": true, "update-grace": true, "delivered-older-than": true, "unattached-older-than": true, "wait": true,
-	"follow-up": true, "offset": true, "limit": true, "reply-to": true, "answer-wait": true,
+	"follow-up": true, "offset": true, "limit": true, "reply-to": true, "answer-wait": true, "from-agent": true,
 }
-
-const followUpHelp = `
---reply-to ID continues a conversation: ID must be a message you sent to or
-received from ADDRESS (agentnet conversation ID shows it). The recipient's
-background responder can then resume the session it used for that
-conversation (see agentnet help responder); a task still waits for them to
-accept it.
-
-
---follow-up TEXT stays on this computer. When the recipient's first reply
-arrives, your responder processes it once in the background (in question
-mode; see agentnet help responder) with TEXT, the earlier messages and the
-reply, and stores a short summary on that reply in your inbox (state
-summarized), or needs_human if it says you must decide. It sends nothing
-back and never runs anything the reply asks for. Later replies, and replies
-from anyone else, start nothing.`
 
 // guides are help topics that are not commands; running one prints it.
 var guides = map[string]bool{"install": true, "startup": true, "uninstall": true}

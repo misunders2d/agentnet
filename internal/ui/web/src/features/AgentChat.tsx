@@ -1,5 +1,6 @@
 import { AgentModelReport } from "./AgentModelReport";
-// Direct questions to an exact agent host. No person DM or participation is created.
+// Questions and tasks to an exact own agent, in a new topic of the person's
+// "My agents" room (MEL-713): the agent joins that topic only.
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { errorText, type Api, type T } from "../api";
 import { useAgentNames, useApp } from "../context";
@@ -61,6 +62,36 @@ export async function ownAgentChatTargets(api: Api, o: T.Overview, includeLocal:
   return {targets, problems};
 }
 
+/** The person's "My agents" room (MEL-713), chosen as client.MyAgentsRoom
+ *  chooses it so the app and terminals share one: the oldest current group
+ *  of theirs by that title with no other person; created when none has
+ *  reached this device. */
+export const MY_AGENTS = "My agents";
+export async function myAgentsRoom(api: Api, known?: T.Overview | null): Promise<string> {
+  const o = known?.person?.person ? known : await api.overview(), me = o.person?.person;
+  if (!me) throw Error("Set up your person first. Nothing sent.");
+  const at = (d: T.DMSummary) => Date.parse(d.created) || 0;
+  const room = (o.dms || []).filter(d => d.kind === "group" && d.title === MY_AGENTS && !d.frozen && d.members?.length === 1 && d.members[0].person === me)
+    .sort((a, b) => at(a) - at(b) || (a.id < b.id ? -1 : 1))[0];
+  return room ? room.id : (await api.newGroup(MY_AGENTS)).id;
+}
+
+/** ownAgentTopic brings the exact agent into topic of room, as a terminal's
+ *  room ask does: its earlier invitation there is reused. An own agent joins
+ *  without a click (on this computer at once); the person's own device keys
+ *  may give it tasks (owner rule: own agents are tasked freely). */
+export async function ownAgentTopic(api: Api, target: AgentChatTarget, room: string, topic: string): Promise<T.AgentView> {
+  const here = ((await api.dm(room)).agents || []).find(a => a.topic === topic && a.host.address === target.host && a.agent_id === target.agentId && (a.state === "active" || a.state === "invited"));
+  let v = here;
+  if (!v) {
+    const o = await api.overview();
+    const keys = [...new Set([o.me.fingerprint, ...(o.person?.devices || []).map(d => d.fingerprint)].filter((k): k is string => !!k))];
+    v = await api.inviteAgent({ conv: room, topic, host: target.host, agent_id: target.agentId, share: [], tasks_from: keys, note: "" });
+  }
+  if (v.state !== "active" && !v.owner_invited && v.can_decide) v = await api.decideAgent(v.pid, true);
+  return v;
+}
+
 /** Recheck the selected identity/capability before sending, never substitute a default. */
 export async function checkAgentChatTarget(api: Api, target: AgentChatTarget, platform: string) {
   if(!target.agentId)throw Error("Choose a configured agent on that computer. Your earlier conversation is kept.");
@@ -112,22 +143,37 @@ export function AgentHistoryRecovery({thread,overview}:{thread:T.Thread;overview
 
 function AgentChatForm({target, onStarted}: {target: AgentChatTarget; onStarted: () => void}) {
   const store = useApp(), [text, setText] = useState(""), [busy, setBusy] = useState(false), [error, setError] = useState("");
-  const id = useRef(sendID());
+  const id = useRef(sendID()), topic = useRef(sendID());
+  // The question shows at once as a pending message in its new topic, as the
+  // Composer's sends do; the agent's check, invitation and the ask itself
+  // follow in the background, and a failure keeps it there with Retry.
   const submit = async (e: FormEvent) => {
     e.preventDefault(); if (busy || !text.trim()) return;
     setBusy(true); setError("");
-    try {
-      await checkAgentChatTarget(store.api, target, store.host.platform);
-      const sent = await store.api.send({id:id.current, to:target.host, agent_id:target.agentId, kind:"question", body:text.trim()});
-      if (!store.isActive()) return;
-      onStarted(); store.showTab("chats");
-      void store.refetch();
-      await store.open({kind:"thread", id:sent.id, peer:target.host});
-    } catch (e) { if (store.isActive()) setError(errorText(e)); }
-    finally { if (store.isActive()) setBusy(false); }
+    const body = text.trim(), sid = id.current, t = topic.current;
+    let room: string;
+    try { room = await myAgentsRoom(store.api, store.get().overview); } // the room is known here once it exists
+    catch (e) { if (store.isActive()) { setError(errorText(e)); setBusy(false); } return; }
+    if (!store.isActive()) return;
+    const start = () => {
+      store.sends.begin(room, { id: sid, lid: sid, origin: "ui", pid: "", _topic: true, topic: t, dir: "out", from: store.get().overview?.me.address || "", kind: "question", body,
+        at: new Date().toISOString(), attachments: [], files: [] }, () => { store.sends.remove(sid); start(); });
+      void (async () => {
+        try {
+          await checkAgentChatTarget(store.api, target, store.host.platform);
+          const agent = await ownAgentTopic(store.api, target, room, t);
+          if (agent.state !== "active") throw Error(target.label + " joins your " + MY_AGENTS + " room when its computer connects. Retry then");
+          store.sends.finish(sid, await store.api.askAgent({ id: sid, pid: agent.pid, kind: "question", body, topic: t }));
+          void store.refetch();
+        } catch (e) { store.sends.fail(sid, errorText(e)); }
+      })();
+    };
+    start();
+    onStarted(); store.showTab("chats");
+    void store.openUnread({ kind: "dm", id: room }, t);
   };
   return <form onSubmit={submit} className="space-y-3">
-    <p className="text-[13px] text-muted">Ask this agent directly. It uses that computer’s normal setup and permissions.</p>
+    <p className="text-[13px] text-muted">Ask this agent in a new topic of your {MY_AGENTS} room. It uses that computer’s normal setup and permissions.</p>
     <label className="block font-semibold">Your message
       <textarea rows={4} value={text} disabled={busy} onChange={e => setText(e.target.value)}
         className="mt-1 block w-full rounded-xl bg-surface p-3 stroke" placeholder={"Ask " + target.label} />

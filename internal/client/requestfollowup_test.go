@@ -74,6 +74,20 @@ func TestRequestFollowupGuard(t *testing.T) {
 	}
 }
 
+// oldFollowup sends x as an older device sends a follow-up on its device
+// request root, of kind: nothing here starts one any more (MEL-713 step 1),
+// but such follow-ups are still taken in.
+func oldFollowup(t *testing.T, from *Agent, to, kind string, root envelope.Ref, x RequestFollowup, files ...string) {
+	t.Helper()
+	if _, err := from.QueueRequestFollowup(tctx(t), x); err == nil || !strings.Contains(err.Error(), "read only") {
+		t.Fatal("a device follow-up started a version 1 turn", err)
+	}
+	ctx := WithQueuedSend(tctx(t), x.ID)
+	if _, err := from.SendMessage(ctx, Outgoing{To: to, Kind: kind, Body: x.Body, ReplyTo: x.Ref.ID, RequestFollowup: &envelope.FollowupRef{Ref: root, Attempt: x.Attempt}, Files: files}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRequestFollowupWorkerQueue(t *testing.T) {
 	st := installStub(t, "slow")
 	w := newWorld(t, "")
@@ -92,11 +106,8 @@ func TestRequestFollowupWorkerQueue(t *testing.T) {
 	if err = os.WriteFile(file, []byte("English terminology"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	x := RequestFollowup{Ref: envelope.Ref{ID: original.ID, Fingerprint: w.alice.Self().Fingerprint()}, ID: protocol.NewID(), Body: "Use English instead", Files: []OutgoingFile{{Path: file}}}
-	note, err := w.alice.QueueRequestFollowup(tctx(t), x)
-	if err != nil || !strings.Contains(note, "queued") || !strings.Contains(note, "not proven native acceptance") {
-		t.Fatal(note, err)
-	}
+	x := RequestFollowup{Ref: envelope.Ref{ID: original.ID, Fingerprint: w.alice.Self().Fingerprint()}, ID: protocol.NewID(), Body: "Use English instead"}
+	oldFollowup(t, w.alice, w.bob.Address, envelope.KindQuestion, x.Ref, x, file)
 	waitState(t, w.bob, x.ID, stateAnswered)
 	if st.count() != 2 {
 		t.Fatalf("original and one correction should run once each, got %d", st.count())
@@ -109,16 +120,6 @@ func TestRequestFollowupWorkerQueue(t *testing.T) {
 		if !strings.Contains(string(prompt), want) {
 			t.Fatalf("missing %q in follow-up prompt", want)
 		}
-	}
-	if _, err = w.alice.QueueRequestFollowup(tctx(t), x); err != nil {
-		t.Fatal("same exact retry", err)
-	}
-	if st.count() != 2 {
-		t.Fatal("retry launched another request")
-	}
-	x.Body = "Different work"
-	if _, err = w.alice.QueueRequestFollowup(tctx(t), x); err == nil {
-		t.Fatal("send identity reused for different correction")
 	}
 }
 

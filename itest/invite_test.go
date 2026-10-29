@@ -86,6 +86,11 @@ func TestInvitationPacket(t *testing.T) {
 		t.Fatal("join overwrote an existing enrollment")
 	}
 	c.start("alice.log", "--home", "alice", "daemon")
+	c.persons("alice", "bob")
+	waitFor(t, "a DM with the inviter", func() bool {
+		_, err := c.try("--home", "bob", "dm", "new", "admin/laptop")
+		return err == nil
+	})
 	c.run("--home", "bob", "send", "admin/laptop", "bob/desk joined AgentNet")
 	waitFor(t, "confirmation in the inviter's inbox", func() bool {
 		for _, m := range c.inbox("alice") {

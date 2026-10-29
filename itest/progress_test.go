@@ -88,7 +88,9 @@ func TestCLIProgressThenResultJourney(t *testing.T) {
 	c.start("alice.log", "--home", "alice", "daemon")
 	c.env = nil
 
-	task := strings.Fields(c.run("--home", "alice", "task", "--follow-up", "summarize it", "bob/desk", "do the work"))[0]
+	// As an older device sends it (MEL-713 step 1): no command here starts
+	// a version 1 task, but such a task is still taken in and run.
+	task := c.oldSend("alice", client.Outgoing{To: "bob/desk", Kind: "task", Body: "do the work", FollowUp: "summarize it"}).ID
 	stateOf := func(id string) string {
 		for _, m := range c.entries("bob") {
 			if m.ID == id {

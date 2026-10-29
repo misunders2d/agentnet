@@ -48,6 +48,7 @@ type Target =
   | { kind: "agent"; pid: string; name: string; seed: string; canAsk: boolean; why?: string }
   | { kind: "device"; name: string; seed: string; ask: boolean }
   | { kind: "none"; note: string }
+  | { kind: "readonly"; note: string } // an old device conversation: the draft stays, Send says why not
   | { kind: "answer"; id: string; task: boolean };
 
 export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread }) {
@@ -132,16 +133,12 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     if (!refs.length) refs.push(...selectedPIDs.map(id => ({ kind: "agent" as const, id })));
     return [...new Map(refs.map(ref => [ref.kind + ":" + ref.id, ref])).values()];
   }, [spans, selectedPIDs.join(" ")]);
-  const target: Target = useMemo(() => {
+  const target = useMemo<Target>(() => { // "device" stays typed until version 1 is deleted (MEL-713 step 2)
     if (thread) {
+      // A received request is still answered here; nothing starts a new turn
+      // in an old device conversation (MEL-713 step 1).
       if (answerable) return { kind: "answer", id: answerable.id, task: answerable.kind === "task" };
-      if(thread.topic?.agent_key&&thread.topic.agent_key!==threadAgentKey(thread).pinned)return {kind:"none",note:"This conversation belongs to an earlier host key. Choose the current configured agent in Agents; its history is kept."};
-      if(agentHistoryThread(thread,names)&&!thread.messages?.some(m=>m.exec?.state==="running"&&m.dir==="out"&&(m.target?.agent_id||"")===(threadAgentID(thread)||"")))return {kind:"none",note:"This is saved agent history. Choose a configured agent above to start new work; your draft and files stay here."};
-      const to = deviceTarget(threadAgentHost(thread), overview); // a device that runs no agent cannot be asked
-      if (threadAgentID(thread) && to.kind !== "agent") return { kind: "none", note: "The selected agent is unavailable on that computer." };
-      return to.kind === "agent" ? { kind: "device", name: deviceAgent(threadAgentHost(thread), overview, names, threadAgentID(thread)), seed: thread.peer, ask: true }
-        : to.kind === "person" ? { kind: "device", name: to.name, seed: thread.peer, ask: false }
-        : { kind: "none", note: to.note };
+      return { kind: "readonly", note: "Old device conversations are read only now. Write to this agent in your My agents room or in a chat. Your draft and files stay here." };
     }
     if (dm && selectedPIDs.length) {
       const a = (dm.agents || []).find((x) => x.pid === selectedPIDs[0]);
@@ -428,6 +425,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
 
   // ---- sending
   async function send(retry?: { id: string; c: string; d: Draft; to: Target; here?: T.DMThread; device?: T.Thread; fanout?: boolean; group?: string; followup?: ComposerFollowup }) {
+    if (!retry && target.kind === "readonly") { setNotice({ conv, text: target.note }); return; }
     if (store.host.platform === "android") { if (!retry) await sendAndroid(); return; }
     if (!retry && (!ready || (!dm && !thread))) return;
     if (!retry && dm) {
@@ -471,7 +469,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     const sent = d.files || [];
     const progress = (s: string) => setBusy((b) => ({ ...b, [c]: s }));
     const title = here ? (here.kind === "group" ? here.title || "the group" : personName(here.peer)) : to.kind === "device" ? to.name : "that chat";
-    if (to.kind === "none") return;
+    if (to.kind === "none" || to.kind === "readonly") return;
     if (store.isActive()) {
       clearSent(c, d, sent);
       if (d.newTopic && !retry) store.setDraft(c, { ...store.draft(c), newTopic: false, ...(here ? { topic: d.topic } : {}) });
@@ -570,7 +568,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       return {kind:"agent",pid,name:person?.name || "Unavailable agent",seed:person?.seed || pid,
         canAsk:!!a?.can_ask && scopeMatches(a, captured.newTopic ? "__new__" : captured.topic || ""),why:a?.state_text};
     }) : [target];
-    if (destinations.every(to => to.kind === "none")) return;
+    if (destinations.every(to => to.kind === "none" || to.kind === "readonly")) return;
     const sent = captured.files || [];
     const plans: {entry: JournalEntry; to: Target; followup?: ComposerFollowup}[] = [];
     androidPreparing.current.add(c);
@@ -740,6 +738,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   // ---- what the composer says
   const replyMsg = draft.replyTo && (target.kind !== "agent" || replyAgent) ? messageOf(draft.replyTo, words, dm, thread) : undefined;
   const placeholder = target.kind === "answer" ? (target.task ? "Write your reply" : "Write your answer")
+    : target.kind === "readonly" ? "Read only: write in a chat"
     : target.kind === "device" && !target.ask ? "Message " + target.name
     : target.kind === "agent" || target.kind === "device" ? "Ask " + target.name
     : visitor ? "Type @ to ask an agent"
@@ -754,7 +753,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     : needsAgent ? { text: "You’re here because of your agent. Type @ to ask it something.", kind: "info" }
     : conn === "lost" || conn === "gone" ? { text: "You’re offline. What you send waits here and goes when you’re back online.", kind: "offline" }
     : null;
-  const sendLabel = target.kind === "conversation" || target.kind === "none" || (target.kind === "device" && !target.ask) ? "Send"
+  const sendLabel = target.kind === "conversation" || target.kind === "none" || target.kind === "readonly" || (target.kind === "device" && !target.ask) ? "Send"
     : target.kind === "answer" ? (target.task ? "Send your reply" : "Send your answer")
     : "Ask " + target.name;
   const scheduleWhy = scheduleReason({supported:overview?.schedules,conv,ordinary:!!dm && target.kind === "conversation",

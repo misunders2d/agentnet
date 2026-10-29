@@ -105,7 +105,7 @@ func TestWindowsUpdateSwitchThroughTask(t *testing.T) {
 	}
 	bp := c.openPage(t, "bob")
 	urlBefore, _ := os.ReadFile(url)
-	c.run("--home", "alice", "send", "bob/desk", "history before the update")
+	c.oldSend("alice", client.Outgoing{To: "bob/desk", Body: "history before the update"}) // as an older device sends it
 	waitFor(t, "history", func() bool { return len(bp.overview().Threads) == 1 })
 
 	// replace installs data as agentnet update does and asks for the switch.

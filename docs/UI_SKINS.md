@@ -451,7 +451,7 @@ types are the Go structs in `internal/ui/*.go`, generated into
   own-agent picker/details and active agent chat. Missing model/reasoning is
   not reported, never inferred from names/configuration; a report can be stale
   even while the host is online. No report grants access or controls a harness.
-- Device threads: `/api/send` `{to,kind,body,reply_to,files}`.
+- Device threads are read only since v0.10.0 (MEL-713): `/api/send` refuses. Show them, and decide their received requests with `/api/act`; write in a DM or chat instead.
   Conversations: `/api/dm/new`; `/api/dm/send` `{conv,body,reply_to,files}`.
 - Decisions: `/api/act`; returned message actions determine request-decision
   availability. Personal unread controls are separate: normal admitted message
@@ -1026,7 +1026,7 @@ types are the Go structs in `internal/ui/*.go`, generated into
   and device, without routing addresses. Show `sent_at`; keep timeline order
   and day dividers by `at` (arrival). Show an arrival note in Details when
   the gap is at least 60 seconds.
-  `POST /api/send` and `/api/dm/send` accept `quote`, independent of
+  `POST /api/dm/send` accepts `quote`, independent of
   `reply_to` (threading/session continuity). Only an explicit `quote` gets
   a quote card. Agent answers/results/progress have no quote card; a distant
   request gets a compact jump link, an adjacent request no reference.

@@ -14,9 +14,10 @@ func TestCLIRemind(t *testing.T) {
 	c.setup(t, "hub")
 	c.start("bob.log", "--home", "bob", "daemon")
 	c.start("alice.log", "--home", "alice", "daemon")
+	c.dmWithBob()
 	sent := strings.Fields(c.run("--home", "alice", "send", "bob/desk", "the budget, when you can"))[0]
 	waitFor(t, "bob to hold it", func() bool { return len(c.inbox("bob")) == 1 })
-	if out := c.run("--home", "bob", "remind", sent, "2h"); !regexp.MustCompile(`^` + sent + `  due \S+ \S+ \(in 2h0m0s\)  from admin/laptop$`).MatchString(out) {
+	if out := c.run("--home", "bob", "remind", sent, "2h"); !regexp.MustCompile(`^` + sent + `  due \S+ \S+ \(in 2h0m0s\)  from admin/laptop in DM [0-9a-f]{64}$`).MatchString(out) {
 		t.Fatalf("remind: %q", out)
 	}
 	if out := c.run("--home", "bob", "remind", "list"); !strings.Contains(out, sent+"  due ") {

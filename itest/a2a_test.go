@@ -17,6 +17,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/a2aproject/a2a-go/v2/a2aclient/agentcard"
+	"github.com/misunders2d/agentnet/internal/client"
 
 	"github.com/misunders2d/agentnet/internal/a2abind"
 )
@@ -174,7 +175,7 @@ func TestA2AStockClientJourney(t *testing.T) {
 	waitTask(t, cctx, cl, q.ID, a2a.TaskStateCompleted)
 
 	// Lookups outside this peer, cancellation and unsupported shapes.
-	toCarol := strings.Fields(c.run("--home", "alice", "send", "carol/desk", "private"))[0]
+	toCarol := c.oldSend("alice", client.Outgoing{To: "carol/desk", Body: "private", Wait: -1}).ID
 	for _, id := range []string{toCarol, "0123456789abcdef0123456789abcdef"} {
 		if _, err := cl.GetTask(cctx, &a2a.GetTaskRequest{ID: a2a.TaskID(id)}); !errors.Is(err, a2a.ErrTaskNotFound) {
 			t.Fatalf("foreign/unknown task %s: %v", id, err)

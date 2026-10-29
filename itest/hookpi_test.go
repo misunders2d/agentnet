@@ -49,6 +49,7 @@ func TestCLIHookPi(t *testing.T) {
 	if _, a := hook(nil, ev("SessionStart")); a != nil {
 		hook(nil, ackInput(a, "PI1"))
 	}
+	c.dmWithBob()
 	id := strings.Fields(c.run("--home", "alice", "send", "bob/desk", "hello pi"))[0]
 	waitFor(t, "bob stored it", func() bool {
 		for _, m := range c.peekInbox("bob") {

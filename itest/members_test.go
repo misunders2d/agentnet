@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/misunders2d/agentnet/internal/client"
 )
 
 // lastMembersLine is the daemon's latest "hub members: …" log line.
@@ -131,7 +133,9 @@ func TestCLIMembersCompat(t *testing.T) {
 		if out, err := c.try("--home", "b1", "members"); err == nil || !strings.Contains(out, "does not list its members") {
 			t.Fatalf("members on an older Hub: %v %s", err, out)
 		}
-		id := strings.Fields(c.run("--home", "a1", "send", "bob/desk", "still works"))[0]
+		// Device messages (as a device not yet updated sends them) pass an
+		// older Hub; a plain send's DM needs a newer one (below).
+		id := c.oldSend("a1", client.Outgoing{To: "bob/desk", Body: "still works"}).ID
 		waitFor(t, "delivery through the older Hub", received(c, "b1", id))
 		if l := lastMembersLine(c, "b1.log"); l != "" {
 			t.Fatalf("a member list from an older Hub: %s", l)
@@ -161,7 +165,7 @@ func TestCLIMembersCompat(t *testing.T) {
 		waitFor(t, "older daemon connected", func() bool { return connects() == 1 })
 		// A join pushes a new member list to the older daemon too.
 		c.run("--home", "c2", "join", "--agent", "desk", c.run("--home", "a2", "admin", "invite", "--raw", "carol"))
-		id := strings.Fields(c.run("--home", "a2", "send", "bob/desk", "after a member list"))[0]
+		id := c.oldSend("a2", client.Outgoing{To: "bob/desk", Body: "after a member list"}).ID
 		waitFor(t, "delivery to the older daemon", received(old, "b2", id))
 		if n := connects(); n != 1 {
 			t.Fatalf("the older daemon reconnected %d times", n)

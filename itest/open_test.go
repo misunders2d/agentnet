@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/misunders2d/agentnet/internal/client"
 )
 
 // TestCLIOpenReview: what a notification click runs. With a coding agent
@@ -20,7 +22,7 @@ func TestCLIOpenReview(t *testing.T) {
 	_, _ = c.setup(t, "hub")
 	c.start("alice.log", "--home", "alice", "daemon")
 	c.start("bob.log", "--home", "bob", "daemon")
-	task := strings.Fields(c.run("--home", "alice", "task", "bob/desk", "please tidy"))[0]
+	task := c.oldSend("alice", client.Outgoing{To: "bob/desk", Kind: "task", Body: "please tidy"}).ID // as an older device sends it
 	waitFor(t, "task waiting", func() bool {
 		for _, m := range c.inbox("bob") {
 			if m.ID == task && m.State == "awaiting" {

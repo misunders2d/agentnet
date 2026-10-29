@@ -245,7 +245,7 @@ export async function mount(root, host) {
         }
         return [el("h3", title), ul];
       };
-      toc.replaceChildren(...section("People", people), ...section("Devices and services", devices),
+      toc.replaceChildren(...section("People", people), ...section("Older device conversations (read only)", devices),
         !people.length && !devices.length ? el("p", "Nothing here yet.", "empty") : "");
       await load(); if (status.dataset.from === "load") say("");
     } catch (e) { say(e.message, "error", "load"); }
@@ -255,15 +255,14 @@ export async function mount(root, host) {
     event.preventDefault();
     const d = draft();
     if (!selected || view.sending || !d || (!body.value.trim() && !d.files.length)) return;
+    if (selected.type !== "dm") return say("Old device conversations are read only now. Write to this agent in your My agents room or in a chat.", "error");
     typing.stop();
     const text = body.value, target = { ...selected, peer: thread.peer, kind: kind.value, reply: (thread.messages || []).at(-1)?.id || "" }, files = d.files.slice();
     d.text = text; view.sending = true; send.disabled = true; updateLeaveWarning();
     try {
       const staged = [];
       for (const f of files) staged.push(await host.stage(f.file));
-      const result = await host.api(target.type === "dm" ? "/api/dm/send" : "/api/send", target.type === "dm"
-        ? { conv: target.id, body: text, files: staged }
-        : { to: target.peer, body: text, kind: target.kind, reply_to: target.reply, files: staged });
+      const result = await host.api("/api/dm/send", { conv: target.id, body: text, files: staged });
       if (["failed", "not_delivered"].includes(result.state)) throw new Error(result.detail || "Could not send this message.");
       if (d.text === text) d.text = "";
       d.files = d.files.filter((f) => !files.includes(f));

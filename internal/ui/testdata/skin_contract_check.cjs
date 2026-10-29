@@ -271,12 +271,17 @@ const journeys = {
     const text = 'Contract check message ' + (++sent);
     const form = page.getByRole('form', { name: 'Write a message' });
     await form.getByRole('textbox').fill(text);
-    const sending = page.waitForRequest(r => new URL(r.url()).pathname === '/api/send' && r.method() === 'POST' && r.postDataJSON().body === text);
+    // Old device conversations are read only (v0.10.0, MEL-713): Send says
+    // so, posts nothing and keeps the draft.
+    const posts = [];
+    const watch = r => { if (r.method() === 'POST' && ['/api/send', '/api/dm/send'].includes(new URL(r.url()).pathname)) posts.push(r.url()); };
+    page.on('request', watch);
     await form.locator('button[type=submit]').click(); // Enter is a new line on phones
-    const request = (await sending).postDataJSON();
-    assert.equal(request.to, human.peer);assert.equal(request.kind, 'message');assert(!('agent_id' in request));
-    assert(!request.reply_to, 'New ordinary topic keeps its original device and creates no reply binding');
-    await page.getByRole('log').first().getByText(text).first().waitFor({ timeout: 15000 });
+    await page.getByText(/Old device conversations are read only now/).first().waitFor();
+    await page.waitForTimeout(500);
+    page.off('request', watch);
+    assert.deepEqual(posts, [], 'a read-only device conversation sends nothing');
+    assert.equal(await form.getByRole('textbox').inputValue(), text, 'the draft is kept');
     const plus = page.getByRole('button', { name: 'Add to message' });
     await plus.waitFor();
     await plus.click();

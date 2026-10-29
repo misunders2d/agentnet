@@ -90,7 +90,9 @@ func TestLiveMessengerConversationFields(t *testing.T) {
 		t.Fatalf("bob's chat after declining: %+v", s)
 	}
 
-	// A device conversation names its agent: Alice asks Bob's named agent.
+	// A device conversation names its agent: Alice asked Bob's named agent
+	// there before the update (MEL-713 step 1: only the client still writes
+	// one; the app is read only there).
 	named, err := bob.CreateLocalAgent("Builder", client.Responder{Harness: "claude", Dir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
@@ -98,7 +100,8 @@ func TestLiveMessengerConversationFields(t *testing.T) {
 	if err := bob.PublishAgentCatalog(ctx); err != nil {
 		t.Fatal(err)
 	}
-	asked, err := pa.Send(Draft{To: bob.Address, Kind: KindQuestion, Body: "which build?", AgentID: named.ID})
+	asked, err := alice.SendMessage(ctx, client.Outgoing{To: bob.Address, Kind: KindQuestion, Body: "which build?",
+		Target: &envelope.Target{Address: bob.Address, Fingerprint: bob.Self().Fingerprint(), AgentID: named.ID}})
 	if err != nil {
 		t.Fatal(err)
 	}
