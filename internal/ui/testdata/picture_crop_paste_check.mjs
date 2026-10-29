@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { cleanPicturePNG, pictureCrop, pastePictures, validatePicture } from "../static/pictures.mjs";
+import { cleanPicturePNG, pictureCrop, pastePictures, pasteTable, tableMarkdown, validatePicture } from "../static/pictures.mjs";
 
 const png=Buffer.from("iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAGUlEQVR4nGNwS9nynxLMMGrAqAGjBgwXAwD2dV0fJCKNsQAAAABJRU5ErkJggg==","base64");
 function chunk(type,body) {
@@ -26,6 +26,24 @@ e=event([],"image URL");const pending=pastePictures(e,add,options);assert.equal(
 options.clipboardImage=async()=>null;e=event([],"plain text");await pastePictures(e,add,options);assert.deepEqual(inserted,["plain text"]);
 options.clipboardImage=async()=>{throw Error("private clipboard contents must never escape");};e=event();await pastePictures(e,add,options);assert.equal(errors.length,1);assert(!errors[0].includes("private"));
 e=event([],"text on native read error");await pastePictures(e,add,options);assert.deepEqual(inserted,["plain text","text on native read error"]);
+// MEL-714: Ctrl+Shift+V keeps text even when the clipboard also has a picture
+// (Excel cells); the browser's own plain-text paste inserts it.
+options.clipboardImage=async()=>{reads++;return file;};const before=attached.length,readsBefore=reads;
+e=event([file],"ASIN1\tB0TEST\nASIN2\tB0NEXT");await pastePictures(e,add,{...options,plain:true});assert.equal(e.prevented,false);assert.equal(attached.length,before);assert.equal(reads,readsBefore);
+e=event([],"cells");await pastePictures(e,add,{...options,plain:true});assert.equal(e.prevented,false);assert.equal(attached.length,before);assert.equal(reads,readsBefore);
+e=event([],"");await pastePictures(e,add,{...options,plain:true});assert.equal(attached.length,before+1,"a picture alone still pastes");
 delete options.clipboardImage;
 e=event([],"standalone browser text");await pastePictures(e,add,options);assert.equal(e.prevented,false);
-console.log(JSON.stringify({png:Buffer.from(clean).toString("base64"),metadata:metadata.toString("base64"),checks:19}));
+// MEL-714: spreadsheet cells (an HTML table on the clipboard) paste as a
+// Markdown table, as GitHub's composer does; one column stays plain lines;
+// Ctrl+Shift+V keeps the text as it is; a browser image copy is no table.
+const typed=(types,files=[])=>({clipboardData:{files,getData:t=>types[t]||""},prevented:false,preventDefault(){this.prevented=true;}});
+const excel='<html><body><table><tr><td>ASIN</td><td>Units</td></tr></table></body></html>';
+let got=[];e=typed({"text/plain":'ASIN\tUnits\r\nB0TEST\t12\r\n"two\nlines"\t"say ""hi"" | x"\r\n',"text/html":excel},[file]);
+assert.equal(pasteTable(e,s=>got.push(s)),true);assert.equal(e.prevented,true);
+assert.deepEqual(got,["| ASIN | Units |\n| --- | --- |\n| B0TEST | 12 |\n| two lines | say \"hi\" \\| x |"]);
+got=[];e=typed({"text/plain":"B0ONE\r\nB0TWO\r\n","text/html":excel});assert.equal(pasteTable(e,s=>got.push(s)),true);assert.deepEqual(got,["B0ONE\nB0TWO"],"one column stays lines");
+got=[];e=typed({"text/plain":"ASIN\tUnits\r\n","text/html":excel});assert.equal(pasteTable(e,s=>got.push(s),true),false);assert.equal(e.prevented,false,"plain-text paste untouched");
+e=typed({"text/plain":"https://example.com/cat.png","text/html":'<img src="https://example.com/cat.png">'},[file]);assert.equal(pasteTable(e,s=>got.push(s)),false);assert.equal(e.prevented,false,"image copy is not a table");
+assert.equal(tableMarkdown("a\tb\n\tc"),"| a | b |\n| --- | --- |\n| \u00a0 | c |");
+console.log(JSON.stringify({png:Buffer.from(clean).toString("base64"),metadata:metadata.toString("base64"),checks:35}));
