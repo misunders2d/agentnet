@@ -1105,6 +1105,92 @@ func (a *Agent) selfConsent(ctx context.Context, pid string) (bool, error) {
 	return err == nil || errors.As(err, &unsent), err // accepted, though maybe not sent yet
 }
 
+// grantConsent (owner rule, October 29, 2026; MEL-713) accepts another
+// person's invite of an agent hosted here to visit their room without a
+// click when this person already approved the exact inviting device, or its
+// person, for questions or tasks. Accepting only lets that room's requests
+// reach the agent; each still needs its own permission here (roomChain).
+// An invite naming task keys, a two-person chat's or a room this person
+// belongs to, a guest's invite or a pending key change waits for the click.
+func (a *Agent) grantConsent(ctx context.Context, pid string) (bool, error) {
+	info, err := a.Participation(pid)
+	if errors.Is(err, ErrNoParticipation) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if info.State != PartInvited || info.Held != 0 || !info.HostHere || info.Role != "" || len(info.TaskKeys) != 0 {
+		return false, nil
+	}
+	me, ok, err := a.store.selfPerson(a.Address)
+	if err != nil || !ok || me.info.State != personSelf || info.Host.Person != me.info.Person || info.Inviter.Person == me.info.Person {
+		return false, err
+	}
+	m, err := a.dmMembers(info.Conv)
+	if err != nil || m.group == nil || !info.External {
+		return false, err
+	}
+	events, err := a.store.participationEvents(info.Conv, pid)
+	if err != nil {
+		return false, err
+	}
+	if err := m.loadHosts(a.store.db, events); err != nil {
+		return false, err
+	}
+	self := a.Self().Fingerprint()
+	var inv protocol.ParticipationEvent
+	for _, ev := range events {
+		if ev.Author.Fingerprint == self && (ev.Type == protocol.EventAccept || ev.Type == protocol.EventDecline) {
+			return false, nil // decided here already: a retry is the person's
+		}
+		if ev.Type == protocol.EventInvite && ev.Hash() == info.Invite {
+			inv = ev
+		}
+	}
+	if inv.Type == "" || inv.Parent != "" || len(inv.TaskKeys) != 0 {
+		return false, nil
+	}
+	if author, member := m.author(inv.Author); !member || author.info.Person == me.info.Person {
+		return false, nil
+	}
+	granted := func(q querier) (bool, error) {
+		var pending int
+		if err := q.QueryRow(`SELECT count(*) FROM peers WHERE address=? AND pending IS NOT NULL`, inv.Author.Address).Scan(&pending); err != nil || pending != 0 {
+			return false, err
+		}
+		if ok, err := questionApproved(q, inv.Author.Address, inv.Author.Fingerprint); err != nil || ok {
+			return ok, err
+		}
+		return taskGranted(q, inv.Author.Address, inv.Author.Fingerprint)
+	}
+	if ok, err := granted(a.store.db); err != nil || !ok {
+		return false, err
+	}
+	if ok, err := a.agentEnabled(info.AgentID); err != nil || !ok {
+		return false, err
+	}
+	notice := SelfConsentNotice{PID: pid, Conv: info.Conv, AgentID: info.AgentID, Inviter: inv.Author.Address, At: time.Now().Unix(), Granted: true}
+	_, err = a.signWith(ctx, info, protocol.EventAccept, info.Invite, func(tx *sql.Tx) error {
+		if err := undecidedHere(info.Conv, pid, self)(tx); err != nil {
+			return err
+		}
+		// Recheck the grant in the accept transaction: a revoke or key change
+		// between projection and signing must not let the invite in.
+		if ok, err := granted(tx); err != nil {
+			return err
+		} else if !ok {
+			return errors.New("the inviter is no longer approved here")
+		}
+		return addSelfConsentNoticeIn(tx, notice)
+	})
+	if errors.Is(err, errDecidedHere) {
+		return false, nil
+	}
+	var unsent unsentError
+	return err == nil || errors.As(err, &unsent), err
+}
+
 // agentEnabled reports whether agentID names an agent this host runs: the
 // default responder ("") once one is selected, or a catalog agent with a
 // responder (a disabled one has none).
@@ -1124,6 +1210,9 @@ func (a *Agent) agentEnabled(agentID string) (bool, error) {
 // the next daemon start's sweep, or now by dm accept-agent PID.
 func (a *Agent) trySelfConsent(ctx context.Context, pid string) {
 	accepted, err := a.selfConsent(ctx, pid)
+	if err == nil && !accepted {
+		accepted, err = a.grantConsent(ctx, pid) // another person this one approved
+	}
 	switch {
 	case err == nil:
 	case accepted:

@@ -27,7 +27,11 @@ func (l *Live) selfConsentReview(o *Overview) error {
 				agent = "Your agent " + label
 			}
 		}
-		o.Review = append(o.Review, ReviewItem{ID: n.PID, Peer: n.Inviter, Why: "Joined without your accept: your own device " + n.Inviter + " invited it",
+		why := "Joined without your accept: your own device " + n.Inviter + " invited it"
+		if n.Granted {
+			why = "Joined without your accept: you approved " + n.Inviter + ", who invited it"
+		}
+		o.Review = append(o.Review, ReviewItem{ID: n.PID, Peer: n.Inviter, Why: why,
 			Excerpt: agent, At: time.Unix(n.At, 0), Notice: true, Reason: ReasonSelfConsented, Conv: n.Conv, AgentID: n.AgentID})
 	}
 	return nil

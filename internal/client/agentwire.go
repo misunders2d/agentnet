@@ -263,6 +263,12 @@ func agentTurn(sub, kind, status, replyTo, pid, origin string) bool {
 // outlive the participation. Missing participation evidence stays on the
 // existing proof retry path.
 func (a *Agent) checkConversationAgent(in envelope.Inner, sender identity.Public, historical bool) (string, error) {
+	return a.checkAgentTurn(in, sender, historical, false)
+}
+
+// checkAgentTurn is checkConversationAgent; verifiedProof says the caller
+// verified in's captured proof (verifyHumanProof) and stores it with in.
+func (a *Agent) checkAgentTurn(in envelope.Inner, sender identity.Public, historical, verifiedProof bool) (string, error) {
 	if envelope.AgentTopicOrganization(in) {
 		return a.topicOrganizationAdmission(a.store.db, in, sender.Address, sender.Fingerprint(), historical)
 	}
@@ -294,6 +300,12 @@ func (a *Agent) checkConversationAgent(in envelope.Inner, sender identity.Public
 	}
 	if in.Human != nil && in.Human.AgentAuthor() {
 		p, err = a.participation(in.Conv, in.Human.AuthorPID)
+		if errors.Is(err, ErrNoParticipation) && verifiedProof {
+			// A host that joined after the asking agent, such as another
+			// person's agent visiting the room (MEL-713), knows that agent
+			// only from this turn's verified proof, stored with the turn.
+			p, err = a.participationWithProof(in.Conv, in.Human.AuthorPID, in.Human)
+		}
 		if err != nil {
 			return reasonProof, err
 		}
@@ -329,6 +341,24 @@ func (a *Agent) checkConversationAgent(in envelope.Inner, sender identity.Public
 		return externalOutputRequest(a.store.db, in, p, m, a.Address, a.Self().Fingerprint())
 	}
 	return "", nil
+}
+
+// participationWithProof resolves pid as it reads once h's verified proof
+// is stored, without storing it.
+func (a *Agent) participationWithProof(conv, pid string, h *envelope.HumanTurn) (ParticipationInfo, error) {
+	tx, err := a.store.db.Begin()
+	if err != nil {
+		return ParticipationInfo{}, err
+	}
+	defer tx.Rollback()
+	if err = insertHumanProof(tx, h); err != nil {
+		return ParticipationInfo{}, err
+	}
+	m, err := membersIn(tx, conv)
+	if err != nil {
+		return ParticipationInfo{}, err
+	}
+	return participationIn(tx, conv, pid, m, a.Address)
 }
 
 // verifyAgents marks the agent's turns among msgs that their participation's

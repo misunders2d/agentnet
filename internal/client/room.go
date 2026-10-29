@@ -261,7 +261,11 @@ func roomChain(q dbq, r agentReq, m dmMembers, info ParticipationInfo, self, fp 
 			}
 			// MEL-713: an agent asking from its terminal has no upstream
 			// request. Its exact host device is the requester, checked as one.
-			if c.reply == "" {
+			// So is it at another person's host visiting the room (owner,
+			// October 29, 2026): that host never holds the room's history
+			// before its join, and the asking side already checked the chain
+			// (RunAgentRoomAsk); here that device needs this person's grant.
+			if c.reply == "" || info.External {
 				if !m.device(c.from, c.key) || !m.requestEpoch(c.from, c.key, c.target) {
 					return verdictStop, "asking agent's host group admission changed", nil
 				}
@@ -347,6 +351,9 @@ func roomLocalParent(q dbq, r agentReq, self, fp string) (string, error) {
 	seen := map[string]bool{c.id: true}
 	for c.human != nil && c.human.AgentAuthor() && c.reply != "" {
 		c, err = roomCauseIn(q, r.Conv, c.reply, self, fp)
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil // an upstream this host never held: a visitor joined later
+		}
 		if err != nil {
 			return "", err
 		}

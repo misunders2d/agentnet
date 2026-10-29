@@ -14,8 +14,9 @@ import (
 // Owner decision, October 29, 2026 (MEL-713): an agent asks its person's
 // other agents in the "My agents" room, posting as itself: from a terminal
 // session, or from a background run serving a request (chain rule:
-// client.RunAgentRoomAsk). A person at a plain shell, a delegated reply
-// binding and other people's agents keep their paths for now.
+// client.RunAgentRoomAsk). Another person's agent is invited into the job's
+// topic as a visitor. A person at a plain shell and a delegated reply
+// binding keep their paths for now.
 
 // roomAsk is where an ask/task to an own device comes from.
 type roomAsk struct {
@@ -45,17 +46,14 @@ func roomAskFrom(a *client.Agent, target, fromAgent string) (roomAsk, bool, erro
 	if cause == "" && harness == "" && fromAgent == "" {
 		return r, false, nil
 	}
-	host, _, err := protocol.SplitTarget(target)
-	if err != nil {
-		return r, false, err
-	}
-	if own, err := a.OwnAgentHost(host); err != nil || !own {
+	if _, _, err := protocol.SplitTarget(target); err != nil {
 		return r, false, err
 	}
 	if cause != "" {
 		r.cause = cause
 		return r, true, nil
 	}
+	var err error
 	if r.from, err = a.SessionAgent(harness, fromAgent); err != nil {
 		return r, true, err
 	}

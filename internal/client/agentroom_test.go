@@ -238,3 +238,125 @@ func TestRunMayTaskFollowsRequesterAuthority(t *testing.T) {
 		t.Fatalf("question-only requester's run tasked another agent: %v", err)
 	}
 }
+
+// MEL-713 (owner, October 29, 2026): another person's agent visits the "My
+// agents" room in the job's topic. Its person accepts the visit, or its host
+// joins without a click when its person approved the asker; questions run on
+// that approval, a task waits for a grant or a one-time accept there, and a
+// run's chained ask is judged there by the asking device, since that host
+// never holds the room's earlier history.
+func TestAgentRoomAskVisitsAnotherPersonsAgent(t *testing.T) {
+	stub := installAgentStub(t)
+	Harnesses["roomasker"] = Harnesses["agentstub"] // one enabled agent per harness per device
+	t.Cleanup(func() { delete(Harnesses, "roomasker") })
+	w := newWorld(t, "")
+	persons(t, w.alice, w.bob)
+	a, b := w.alice, w.bob
+	runAgent(t, a)
+	runAgent(t, b)
+	phone := linked(t, a) // a participation event needs another own device to carry it
+	for _, d := range []*Agent{a, phone, b} {
+		publishGroupFixtureCaps(t, d, true)
+	}
+	asker, err := a.CreateLocalAgent("asker", Responder{Harness: "roomasker", Dir: stub.dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	helper, err := a.CreateLocalAgent("helper", Responder{Harness: "agentstub", Dir: stub.dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	neel, err := b.CreateLocalAgent("neel", Responder{Harness: "agentstub", Dir: stub.dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []*Agent{a, b} {
+		if err = d.PublishAgentCatalog(tctx(t)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	from, err := a.SessionAgent("", asker.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inboxAt := func(d *Agent, conv, lid string) string {
+		var id string
+		eventually(t, "request stored at its host", func() bool {
+			return d.store.db.QueryRow(`SELECT id FROM inbox WHERE conv=? AND lid=? AND replica=0`, conv, lid).Scan(&id) == nil
+		})
+		return id
+	}
+
+	// Without an approval there, the visitor's person accepts the invite.
+	ask := AgentRoomAsk{From: from, SessionKey: "agentstub/visit", Host: b.Address, AgentID: neel.ID, Kind: envelope.KindQuestion, Body: "which fee rate applies?", Join: 2 * time.Second}
+	pending, err := a.SendAgentRoomAsk(tctx(t), ask)
+	if err == nil || !strings.Contains(err.Error(), "has not joined") || pending.To == "" {
+		t.Fatalf("an unapproved visit must wait for its person: %+v %v", pending, err)
+	}
+	eventually(t, "visit invitation at its host", func() bool {
+		p, e := b.Participation(pending.To)
+		return e == nil && p.State == PartInvited
+	})
+	if _, err = b.AcceptParticipation(tctx(t), pending.To); err != nil {
+		t.Fatal(err)
+	}
+	if err = b.Approve(a.Address); err != nil { // questions only
+		t.Fatal(err)
+	}
+	ask.Join = 0
+	sent, err := a.SendAgentRoomAsk(tctx(t), ask)
+	if err != nil || sent.To != pending.To {
+		t.Fatalf("the same session must reuse its accepted visit: %+v %v", sent, err)
+	}
+	room, err := a.MyAgentsRoom(tctx(t))
+	if err != nil || sent.Conv != room {
+		t.Fatalf("visit outside the My agents room: %s vs %s %v", sent.Conv, room, err)
+	}
+	if m, err := a.dmMembers(room); err != nil || len(m.persons) != 1 {
+		t.Fatalf("a visiting agent must not make its person a room member: %v", err)
+	}
+	visit := stateAt(t, a, sent.To)
+	if !visit.External || visit.Topic == nil || *visit.Topic != sent.Topic || len(visit.TaskKeys) != 0 || visit.Host.Address != b.Address {
+		t.Fatalf("not a topic-only visitor without task keys: %+v", visit)
+	}
+	waitState(t, b, inboxAt(b, room, sent.LID), stateAnswered)
+	if r, err := a.AwaitReply(tctx(t), sent.ID, 15*time.Second, nil); err != nil || r.Answer == nil || r.Answer.Conv != room {
+		t.Fatalf("visitor's answer not returned to the asker: %+v %v", r, err)
+	}
+
+	// A question approval never lets a task run: the visitor's person decides.
+	task := ask
+	task.Kind, task.Body = envelope.KindTask, "draft the fee table"
+	tsent, err := a.SendAgentRoomAsk(tctx(t), task)
+	if err != nil || tsent.To != sent.To {
+		t.Fatalf("same session must reuse the visit: %+v %v", tsent, err)
+	}
+	tid := inboxAt(b, room, tsent.LID)
+	waitState(t, b, tid, stateAwaiting)
+	if err = b.Accept(tid); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, b, tid, stateAnswered)
+
+	// A run of the person's own agent serving a request in the room asks the
+	// visitor on, in the cause's topic, which the visitor's host joined late;
+	// that host's question approval lets the new visit in without a click.
+	own := AgentRoomAsk{From: from, SessionKey: "agentstub/own", Host: a.Address, AgentID: helper.ID, Kind: envelope.KindQuestion, Body: "which month?"}
+	osent, err := a.SendAgentRoomAsk(tctx(t), own)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cause := inboxAt(a, room, osent.LID)
+	waitState(t, a, cause, stateAnswered)
+	if _, err = a.store.db.Exec(`UPDATE inbox SET state=? WHERE id=?`, stateRunning, cause); err != nil {
+		t.Fatal(err)
+	}
+	csent, err := a.RunAgentRoomAsk(tctx(t), cause, AgentRoomAsk{Host: b.Address, AgentID: neel.ID, Kind: envelope.KindQuestion, Body: "send the rate you used"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if csent.Topic != osent.Topic || csent.From != osent.To {
+		t.Fatalf("run did not ask as its own agent in its cause's topic: %+v vs %+v", csent, osent)
+	}
+	waitState(t, b, inboxAt(b, room, csent.LID), stateAnswered)
+}

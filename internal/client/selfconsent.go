@@ -37,8 +37,9 @@ type SelfConsentNotice struct {
 	PID     string `json:"pid"`
 	Conv    string `json:"conv"`
 	AgentID string `json:"agent_id,omitempty"`
-	Inviter string `json:"inviter"` // the inviting device
-	At      int64  `json:"at"`      // unix seconds
+	Inviter string `json:"inviter"`           // the inviting device
+	At      int64  `json:"at"`                // unix seconds
+	Granted bool   `json:"granted,omitempty"` // another person this one approved (grantConsent)
 }
 
 // OwnHumanDevices lists the current verified own human devices, host first.

@@ -873,9 +873,11 @@ func TestGroupInteractionNamedMemberAndVisitor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The host approved the inviter, so it may join without a click (MEL-713
+	// grantConsent); otherwise its person accepts below.
 	eventually(t, "visitor original proof/current context", func() bool {
 		view, e := host.Participation(v.PID)
-		return e == nil && view.State == PartInvited && view.External
+		return e == nil && (view.State == PartInvited || view.Claimable()) && view.External
 	})
 	if _, err = host.SendConv(tctx(t), packet.State.Conv, ConvOutgoing{Body: "ambient outsider"}); err == nil {
 		t.Fatal("visitor ordinary room send")
@@ -883,8 +885,10 @@ func TestGroupInteractionNamedMemberAndVisitor(t *testing.T) {
 	if _, err = host.GroupMembers(packet.State.Conv); err == nil {
 		t.Fatal("visitor gained member projection authority")
 	}
-	if _, err = host.AcceptParticipation(tctx(t), v.PID); err != nil {
-		t.Fatal(err)
+	if stateAt(t, host, v.PID).State == PartInvited {
+		if _, err = host.AcceptParticipation(tctx(t), v.PID); err != nil {
+			t.Fatal(err)
+		}
 	}
 	eventually(t, "visitor acceptance", func() bool { return stateAt(t, w.alice, v.PID).Claimable() })
 	// The sender must have the accepted audience before sealing its turn.

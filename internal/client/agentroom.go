@@ -171,8 +171,8 @@ func (a *Agent) awaitClaimable(ctx context.Context, pid string) (ParticipationIn
 	}
 }
 
-// AgentRoomAsk is a terminal agent's question or task to another of its
-// person's agents.
+// AgentRoomAsk is a terminal agent's question or task to another agent:
+// one of its person's own, or another person's visiting the room.
 type AgentRoomAsk struct {
 	From       LocalAgentInfo // the asking agent, hosted here
 	SessionKey string         // the asking native session; one topic per session
@@ -221,7 +221,19 @@ func (a *Agent) SendAgentRoomAsk(ctx context.Context, r AgentRoomAsk) (AgentRoom
 	if err != nil {
 		return out, err
 	}
-	to, err := a.topicParticipation(ctx, out.Conv, out.Topic, r.Host, r.AgentID, keys)
+	// Another person's agent joins the topic as a visitor (owner, October 29,
+	// 2026): its host decides by its own person's permissions, so this
+	// invite names no task keys and grants nothing there.
+	own, err := a.OwnAgentHost(r.Host)
+	if err != nil {
+		return out, err
+	}
+	own = own || r.Host == a.Address
+	toKeys := keys
+	if !own {
+		toKeys = nil
+	}
+	to, err := a.topicParticipation(ctx, out.Conv, out.Topic, r.Host, r.AgentID, toKeys)
 	if err != nil {
 		return out, err
 	}
@@ -236,6 +248,9 @@ func (a *Agent) SendAgentRoomAsk(ctx context.Context, r AgentRoomAsk) (AgentRoom
 		return out, err
 	}
 	if to, err = a.awaitClaimable(jctx, to.PID); err != nil {
+		if !own && to.State == PartInvited {
+			return out, fmt.Errorf("%s's agent has not joined the topic yet: its person accepts the invitation there unless they approved you; ask again after it joins (%w)", r.Host, err)
+		}
 		return out, err
 	}
 	harness := "room"

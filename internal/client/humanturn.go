@@ -429,7 +429,7 @@ func (a *Agent) admitHumanTurn(ctx context.Context, env envelope.Envelope, in en
 		}
 	}
 	if root.Kind == protocol.ConvKindGroup {
-		if reason, err := a.checkConversationAgent(in, sender, false); err != nil {
+		if reason, err := a.checkAgentTurn(in, sender, false, true); err != nil {
 			return hold(reason, err.Error())
 		}
 		m, err := a.dmMembers(in.Conv)
