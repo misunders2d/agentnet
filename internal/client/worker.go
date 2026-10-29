@@ -149,6 +149,7 @@ func (a *Agent) runNextWith(ctx context.Context, wake <-chan struct{}, dispatch 
 	if a.checkUpdateRequest(); a.updatePending() != nil {
 		return false // switching for an update: no new job starts
 	}
+	a.wakeParkedRequests()
 	r, err := a.Responder()
 	if err != nil {
 		return false
@@ -200,11 +201,15 @@ func (a *Agent) runNextWith(ctx context.Context, wake <-chan struct{}, dispatch 
 // runRoomChildren serves exact descendants caused by this still-running job,
 // including callbacks through remote hosts. Admission and output fences retain
 // the full parent chain authority; the local run owns context and lane cleanup.
-func (a *Agent) runRoomChildren(ctx context.Context, parent job) {
-	for ctx.Err() == nil {
+// It claims no more once stop (the parent's run) ends; a child already
+// running goes on under ctx, the worker's: the parent's run ending, by its
+// timeout too, is not the daemon stopping (MEL-627), and a parked parent
+// waits for its result (MEL-540).
+func (a *Agent) runRoomChildren(stop, ctx context.Context, parent job) {
+	for stop.Err() == nil {
 		_, changed := a.Changed()
 		pos := int64(0)
-		for ctx.Err() == nil {
+		for stop.Err() == nil {
 			if !a.appUpdateMu.TryRLock() {
 				break
 			}
@@ -264,7 +269,7 @@ func (a *Agent) runRoomChildren(ctx context.Context, parent job) {
 			}
 		}
 		select {
-		case <-ctx.Done():
+		case <-stop.Done():
 			return
 		case <-changed:
 		}
@@ -353,7 +358,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	defer cancel()
 	if j.PID != "" && j.Conv != "" {
 		nestedDone := make(chan struct{})
-		go func() { defer close(nestedDone); a.runRoomChildren(runCtx, j) }()
+		go func() { defer close(nestedDone); a.runRoomChildren(runCtx, ctx, j) }()
 		defer func() { cancel(); <-nestedDone }()
 	}
 	activity := newRunActivity()
@@ -795,6 +800,15 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		}
 		status, body = envelope.StatusProposal, rest
 	}
+	// Asks to other agents still out (MEL-540): the request waits for them
+	// and runs again with their results, instead of answering now.
+	if status == envelope.StatusDone && j.Receiver == nil {
+		if parked, err := a.parkForHelpers(j, body); err != nil {
+			a.Logf("%s %s: could not wait for other agents' results: %v", j.Kind, j.ID, err)
+		} else if parked {
+			return
+		}
+	}
 	switch {
 	case j.Receiver != nil:
 		a.finishReplyReceiver(j, status, body)
@@ -1082,6 +1096,11 @@ func (a *Agent) promptWith(ctx context.Context, j job, r *Responder, lookupText 
 		return "", err
 	}
 	b.WriteString(continuation)
+	results, err := a.helperResultsPrompt(j.ID)
+	if err != nil {
+		return "", err
+	}
+	b.WriteString(results)
 	if j.progressEligible() {
 		b.WriteString(reactionPromptText)
 		if j.Conv == "" {

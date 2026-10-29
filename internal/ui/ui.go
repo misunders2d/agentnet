@@ -539,7 +539,7 @@ func AgentActions(kind, state string) []string {
 		if kind == KindTask || kind == KindQuestion {
 			return []string{DoAccept, DoDecline}
 		}
-	case "running":
+	case "running", "helpers_waiting": // helpers_waiting: Stop ends its wait for the agents it asked
 		return []string{DoCancel}
 	case "needs_human":
 		return []string{DoAccept, DoResolve}
@@ -863,6 +863,8 @@ func DMStateText(dir, kind, state, peer, detail string) string {
 		return "Held for you: nothing runs it. Answer here if you want to."
 	case "part_waiting": // a request to this device's agent, not claimed yet
 		return "For your agent. It has not run yet: it runs here only with a responder chosen on this computer, while the invitation allows it."
+	case "helpers_waiting": // its run ended with asks to other agents still out (MEL-540)
+		return "Waiting for the agents it asked. It runs again with their results once all have finished; Stop ends it."
 	case "not_run":
 		if detail == "not run: originating local run stopped" {
 			return "Not run: the agent request that started this request finished or stopped first."
@@ -1473,7 +1475,7 @@ func ActionsFor(kind, state string) []string {
 		return []string{DoAccept, DoAcceptAlways, DoReply, DoDecline}
 	case "needs_human":
 		return []string{DoReply, DoAccept, DoResolve}
-	case "running":
+	case "running", "helpers_waiting": // helpers_waiting: Stop ends its wait for the agents it asked
 		return []string{DoCancel}
 	case "interrupted": // run again, answered by hand, or closed without running (client.Resolve)
 		return []string{DoAccept, DoReply, DoResolve}

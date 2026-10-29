@@ -200,8 +200,10 @@ const roomOriginStopped = "originating local run stopped"
 
 // Shared by the execution verifier and the narrow retry-card hint. The hint
 // cannot replace the verifier's current membership, target and grant checks.
+// A cause waiting for other agents' results (MEL-540) is still active: a
+// helper's ask back to its agent runs.
 func stoppedLocalRoomCause(c roomCause, request, self string, completedOutput bool) bool {
-	return c.target != nil && c.target.Address == self && c.state != stateRunning && c.id != request && !completedOutput
+	return c.target != nil && c.target.Address == self && c.state != stateRunning && c.state != stateHelpersWaiting && c.id != request && !completedOutput
 }
 
 // roomChain checks each cause before using local standing grants. Each
@@ -362,8 +364,11 @@ func roomLocalParent(q dbq, r agentReq, self, fp string) (string, error) {
 		}
 		seen[c.id] = true
 		if c.target != nil && c.target.Address == self && c.target.Fingerprint == fp {
-			var id string
-			err = q.QueryRow(`SELECT id FROM inbox WHERE conv=? AND lid=? AND replica=0 AND state='running'`, r.Conv, c.id).Scan(&id)
+			var id, state string
+			err = q.QueryRow(`SELECT id, state FROM inbox WHERE conv=? AND lid=? AND replica=0 AND state IN ('running',?)`, r.Conv, c.id, stateHelpersWaiting).Scan(&id, &state)
+			if err == nil && state == stateHelpersWaiting {
+				return "", nil // no process holds its lanes: the ask back runs on its own
+			}
 			return id, err
 		}
 	}

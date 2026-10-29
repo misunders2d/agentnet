@@ -214,7 +214,7 @@ func (a *Agent) mayDeliverGroupParticipation(env envelope.Envelope) (bool, bool,
 	if allowed && in.Human != nil && in.Human.AgentAuthor() && in.Target != nil && in.ReplyTo != "" {
 		var originState string
 		err = a.store.db.QueryRow(`SELECT state FROM inbox WHERE conv=? AND (id=? OR lid=?)`, in.Conv, in.ReplyTo, in.ReplyTo).Scan(&originState)
-		allowed = err == nil && originState == stateRunning
+		allowed = err == nil && (originState == stateRunning || originState == stateHelpersWaiting) // a parked origin still waits for it (MEL-540)
 	}
 	if allowed {
 		err = externalTurn(in, info, m, a.Address, a.Self().Fingerprint(), a.store.db)

@@ -54,7 +54,7 @@ const stores = ["kv", "pins", "persons", "convs", "inbox", "outbox", "held", "li
 // what unfinished work keeps until it ends.
 const erasableSubs = new Set(["", "excerpt", "reaction", "revision", "retraction"]);
 const erasedKey = (conv, key, lid) => conv + "|" + key + "|" + lid;
-const retainedIn = (r) => ["question", "task"].includes(r.kind) && ["pending", "accepted", "held", "awaiting", "running", "cancel_requested", "part_waiting", "needs_human"].includes(r.state);
+const retainedIn = (r) => ["question", "task"].includes(r.kind) && ["pending", "accepted", "held", "awaiting", "running", "cancel_requested", "part_waiting", "helpers_waiting", "needs_human"].includes(r.state);
 const retainedOut = (r) => ["queued", "waiting", "receiver_waiting"].includes(r.state);
 // deletionNote is what the page says after a deletion (ui livedelete.go).
 const deletionNote = (thisOnly, devices, kept) => (thisOnly ? "Deleted. This thread was stored on this device only; the other person keeps their copy."
@@ -680,7 +680,7 @@ export const TOPICS = Object.freeze({
 // a connected host's word is old news (client ExecRunningMaxAge, pinned by
 // internal/ui topics_browser_test.go).
 export const EXEC_RUNNING_MAX_AGE = 3600;
-const topicOpenIn = new Set(["held", "awaiting", "needs_human", "pending", "accepted", "running", "cancel_requested", "part_waiting"]);
+const topicOpenIn = new Set(["held", "awaiting", "needs_human", "pending", "accepted", "running", "cancel_requested", "part_waiting", "helpers_waiting"]);
 const topicUndelivered = new Set(["failed", "expired", "quarantined", "not_delivered"]);
 const topicExecutionClosed = new Set(["done", "answered", "failed", "timeout", "cancelled", "stopped", "declined", "resolved", "not_run", "proposal", "unavailable"]);
 const topicRequest = (k) => k === "question" || k === "task";
@@ -696,7 +696,7 @@ const pendingTopicRows = g => {
 // waiting when one has work under way here or its executor's current word
 // (not stale) says it waits or runs there; unconfirmed counts the requests
 // run elsewhere with no current word. Neither decides or hides anything.
-const topicWorkIn = new Set(["pending", "accepted", "part_waiting", "running", "cancel_requested"]);
+const topicWorkIn = new Set(["pending", "accepted", "part_waiting", "running", "cancel_requested", "helpers_waiting"]);
 const topicExecWaits = new Set(["queued", "running", "steered", "awaiting", "needs_human", "interrupted"]);
 const topicWaiting = (g, pending) => {
   let waiting = false, unconfirmed = 0;

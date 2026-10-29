@@ -75,7 +75,7 @@ const erasedOut = `EXISTS (SELECT 1 FROM conv_erased e WHERE e.conv = coalesce(o
 // a request the worker may still run or a person may still accept, decline
 // or resolve, and a reply a selected receiver has not taken. A question or
 // task for the person in a DM (conv_held) never runs: it is not kept.
-const retainedIn = `(i.kind IN ('question', 'task') AND i.state IN ('pending', 'accepted', 'held', 'awaiting', 'running', 'cancel_requested', 'part_waiting', 'needs_human')
+const retainedIn = `(i.kind IN ('question', 'task') AND i.state IN ('pending', 'accepted', 'held', 'awaiting', 'running', 'cancel_requested', 'part_waiting', 'helpers_waiting', 'needs_human')
 	OR EXISTS (SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id = i.id AND x.state = 'pending'))`
 
 // retainedOut matches outbox rows (alias o) not yet handed over.

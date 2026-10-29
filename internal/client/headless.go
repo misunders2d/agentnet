@@ -235,6 +235,8 @@ func statusOf(state string) (public, detail string, ok bool) {
 		return "awaiting", BlockerApproval, true
 	case stateRunning:
 		return "running", "", true
+	case stateHelpersWaiting:
+		return "running", helpersWaitingDetail, true
 	case stateAnswered:
 		return "answered", "", true
 	case stateSteered:

@@ -151,6 +151,7 @@ export function requestLabel(m: AnyMsg, ctx: Ctx): string {
 const localJob: Record<string, string> = {
   steered: "Accepted into current run", queued: "Queued", stopped: "Stopped", not_run: "Not run", resolved: "Closed", cancel_requested: "Stopping…",
   part_waiting: "Not started yet", not_delivered: "Reply kept here", manual: "Answered by hand", conv_held: "Held for you",
+  helpers_waiting: "Waiting for the agents it asked",
 };
 const word = (s?: string) => jobWord(s) || (s ? localJob[s] || "" : "");
 
@@ -219,7 +220,7 @@ export function requestState(m: AnyMsg, all: AnyMsg[], ctx?: Pick<Ctx, "overview
 function tone(state: string): "ok" | "work" | "wait" | "bad" | "muted" {
   if (state === "running") return "work";
   if (["answered", "done", "manual", "resolved"].includes(state)) return "ok";
-  if (["awaiting", "held", "needs_human", "part_waiting", "conv_held"].includes(state)) return "wait";
+  if (["awaiting", "held", "needs_human", "part_waiting", "conv_held", "helpers_waiting"].includes(state)) return "wait";
   if (["failed", "declined", "interrupted", "expired", "not_run", "not_delivered"].includes(state)) return "bad";
   return "muted";
 }

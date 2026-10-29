@@ -331,7 +331,17 @@ func (a *Agent) Cancel(id string) error {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n != 1 {
-		return errors.New("not running")
+		// A request waiting for other agents' results has no process: it
+		// stops here, and their late results wake nothing (helperwait.go).
+		res, err = a.store.db.Exec(`UPDATE inbox SET state = ?, detail = ? WHERE id = ? AND state = ?`, stateCancelled, "stopped while waiting for other agents' results", id, stateHelpersWaiting)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n != 1 {
+			return errors.New("not running")
+		}
+		a.NoteChange()
+		a.noteStatus(id)
 	}
 	notifyDaemon(a.home)
 	return nil

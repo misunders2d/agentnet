@@ -85,10 +85,11 @@ func TestCLIOriginSelection(t *testing.T) {
 	}
 }
 
-// Asking from a session that cannot take the answer itself sends the
-// question with no receiver bound: it is not refused, and the note says the
-// answer comes to this computer's inbox.
-func TestCLIOriginWithoutChannelUsesInbox(t *testing.T) {
+// Owner decision, October 29, 2026 (MEL-713): an agent session asks as its
+// AgentNet agent, never as the person over the old device route. A Claude
+// session on a computer with no Claude agent is refused with the fix, and
+// nothing is sent.
+func TestCLIOriginWithoutAgentIsRefused(t *testing.T) {
 	for _, k := range []string{"AGENTNET_REPLY_SESSION", "AGENTNET_BACKGROUND", "CODEX_THREAD_ID"} {
 		t.Setenv(k, "")
 	}
@@ -107,11 +108,8 @@ func TestCLIOriginWithoutChannelUsesInbox(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { peer.Close() })
-	if err := runSendKind(ctx, a, "ask", []string{"--wait", "0", "--answer-wait", "0", peer.Address, "where is the shipment?"}); err != nil {
-		t.Fatalf("ask from a Claude session without a channel: %v", err)
-	}
-	if !strings.Contains(notes.String(), "inbox") {
-		t.Fatalf("note %q", notes)
+	if err := runSendKind(ctx, a, "ask", []string{"--wait", "0", "--answer-wait", "0", peer.Address, "where is the shipment?"}); err == nil || !strings.Contains(err.Error(), "add one in the AgentNet app") {
+		t.Fatalf("ask from a Claude session without its agent: %v (notes %q)", err, notes)
 	}
 	db, err := sql.Open("sqlite", filepath.Join(home, "agent.db"))
 	if err != nil {
@@ -120,8 +118,8 @@ func TestCLIOriginWithoutChannelUsesInbox(t *testing.T) {
 	defer db.Close()
 	var sent, bound int
 	db.QueryRow(`SELECT count(*), count(reply_receiver) FROM outbox`).Scan(&sent, &bound)
-	if sent != 1 || bound != 0 {
-		t.Fatalf("outbox %d rows, %d bound", sent, bound)
+	if sent != 0 {
+		t.Fatalf("a refused ask was sent: outbox %d rows, %d bound", sent, bound)
 	}
 }
 

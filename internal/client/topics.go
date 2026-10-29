@@ -113,7 +113,7 @@ type topicVerdict struct {
 // topicOpenIn are the states of a received message that still has work in
 // it: a decision for the person, or a responder's run (or follow-up).
 var topicOpenIn = map[string]bool{stateHeld: true, stateAwaiting: true, stateNeedHuman: true, statePending: true,
-	stateAccepted: true, stateRunning: true, stateCancelReq: true, stateAgentWaiting: true}
+	stateAccepted: true, stateRunning: true, stateCancelReq: true, stateAgentWaiting: true, stateHelpersWaiting: true}
 
 // topicUndelivered are the sent states no reply can follow: such a request
 // waits on nobody, so it never keeps its topic from being archived.
@@ -142,8 +142,9 @@ func topicExecutionClosed(state string) bool {
 
 // topicWorkIn are the states of a request this device's agent runs that
 // have work under way here: queued for the worker, waiting until it may
-// run, running or stopping. A person's decision here is Review instead.
-var topicWorkIn = map[string]bool{statePending: true, stateAccepted: true, stateAgentWaiting: true, stateRunning: true, stateCancelReq: true}
+// run, running or stopping, or waiting for the agents its run asked. A
+// person's decision here is Review instead.
+var topicWorkIn = map[string]bool{statePending: true, stateAccepted: true, stateAgentWaiting: true, stateRunning: true, stateCancelReq: true, stateHelpersWaiting: true}
 
 // topicExecWaits are the executor's states saying a request waits or runs
 // there: queued, running, steered into a run, or held for its person

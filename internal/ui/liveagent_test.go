@@ -242,6 +242,7 @@ func TestAgentActions(t *testing.T) {
 		{"task", "awaiting", "accept,decline"},
 		{"question", "awaiting", "accept,decline"}, // a conversation guest's question: one-time acceptance, or not
 		{"task", "running", "cancel"},
+		{"task", "helpers_waiting", "cancel"},
 		{"question", "needs_human", "accept,resolve"},
 		{"task", "failed", "accept"},
 		{"task", "interrupted", "accept,resolve"}, // run it again, or close it without running it (review finding 3)
