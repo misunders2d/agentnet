@@ -59,7 +59,8 @@ async function fixture() {
   check(v.agents[0].record.id !== v.agents[1].record.id && v.agents[0].record.label === v.agents[1].record.label, "label grants no selection identity");
   await refuses(() => e.api("/api/agents"), /no local agents or responders/);
   await refuses(() => e.api("/api/agents", { action: "create", label: "local" }), /no local agents or responders/);
-  await refuses(() => e.api("/api/send", { to: f.peerAddress, kind: "question", body: "q", agent_id: id() }), /not in this host/);
+  await refuses(() => e.api("/api/send", { to: f.peerAddress, kind: "question", body: "q", agent_id: f.agentA.id }), /read only/); // MEL-713: no new device turn
+  await refuses(() => e.sendDirect({ to: f.peerAddress, kind: "question", body: "q", agent_id: id() }), /not in this host/);
   const good = f.catalogs.get(f.peerAddress);
   for (const bad of [[good[0], good[0]], [{ ...good[0], host: "other/desk" }], [{ ...good[0], id: "program" }], [{ ...good[0], program: "claude" }], Array(33).fill(good[0]), [{ ...good[0], sig: "AAAA" }]]) {
     f.catalogs.set(f.peerAddress, bad); await refuses(() => e.agentCatalog(f.peerAddress));
@@ -74,7 +75,7 @@ async function fixture() {
 // Named device request, exact answer/result binding, and current older-peer refusal.
 {
   const f = await fixture(), { e } = f;
-  const r = await e.api("/api/send", { to: f.peerAddress, kind: "question", body: "q", agent_id: f.agentA.id });
+  const r = await e.sendDirect({ to: f.peerAddress, kind: "question", body: "q", agent_id: f.agentA.id });
   const out = await f.store.get("outbox", r.id), opened = await wire.open(out.envelope, f.peerKeys, f.peerAddress, f.selfPub);
   check(opened.target.agent_id === f.agentA.id && opened.target.address === f.peerAddress && opened.target.fingerprint === f.peer.fingerprint && out.required_cap === wire.CapAgentIdentity, "device exact host/ID and durable capability");
   const progress = await f.receive(await f.fromPeer({ kind: "message", status: wire.StatusProgress, body: "checking", reply_to: r.id, agent_id: f.agentA.id }));
@@ -99,7 +100,7 @@ async function fixture() {
   check(originalAnswer.topic.agent_host === f.peerAddress && originalAnswer.topic.agent_key === f.peer.fingerprint && originalAnswer.messages.some((m) => m.id === answer && m.agent_id === f.agentA.id), "original named answer remains accessible under its exact host/key/agent history");
   await f.caps([wire.CapEnv2, wire.CapPerson]);
   const before = (await f.store.all("outbox")).length;
-  await refuses(() => e.api("/api/send", { to: f.peerAddress, kind: "task", body: "t", agent_id: f.agentB.id }), { code: "agent_identity_unsupported", message: "Peer’s app needs an update first." });
+  await refuses(() => e.sendDirect({ to: f.peerAddress, kind: "task", body: "t", agent_id: f.agentB.id }), { code: "agent_identity_unsupported" });
   check((await f.store.all("outbox")).length === before, "known older peer explicitly refused before persistence");
   e.stop();
 }
@@ -108,7 +109,7 @@ async function fixture() {
 for (const oldAfterReload of [false, true]) {
   const f = await fixture(), { e } = f;
   f.profileLimit(1); // catalog proof succeeds, subsequent preflight/post profile reads lose network
-  const r = await e.api("/api/send", { to: f.peerAddress, kind: "task", body: "offline", agent_id: f.agentB.id });
+  const r = await e.sendDirect({ to: f.peerAddress, kind: "task", body: "offline", agent_id: f.agentB.id });
   // MEL-547 saves before delivery. Finish that offline pass before making
   // the transport available and changing the peer's signed capabilities.
   await e.outboxPass;
@@ -376,7 +377,7 @@ for (const oldAfterReload of [false, true]) {
 // durable single task after concurrent taps or an engine reload (MEL-521).
 {
  const f=await fixture(), {e}=f;
- const asked=await e.api("/api/send",{to:f.peerAddress,kind:"question",body:"Should we restart?",agent_id:f.agentA.id});
+ const asked=await e.sendDirect({to:f.peerAddress,kind:"question",body:"Should we restart?",agent_id:f.agentA.id});
  const body="Restart the deploy.\nThen verify it.";
  const answer=await f.receive(await f.fromPeer({reply_to:asked.id,status:wire.StatusProposal,body,agent_id:f.agentA.id}));
  check((await e.thread(asked.id)).messages.find(m=>m.id===answer).actions.includes("do_it"),"original asker sees Do it in the device chat");
@@ -391,7 +392,7 @@ for (const oldAfterReload of [false, true]) {
 }
 for (const bad of ["edited","retracted","replica","history","other-key","other-agent","other-question"]) {
  const f=await fixture(), {e}=f;
- const q=await e.api("/api/send",{to:f.peerAddress,kind:"question",body:"q",agent_id:f.agentA.id});
+ const q=await e.sendDirect({to:f.peerAddress,kind:"question",body:"q",agent_id:f.agentA.id});
  const answer=await f.receive(await f.fromPeer({reply_to:q.id,status:wire.StatusProposal,body:"Exact task",agent_id:f.agentA.id}));
  const p=await f.store.get("inbox",answer), request=await f.store.get("outbox",q.id);
  if (bad==="edited" || bad==="retracted") await f.store.write([{s:"inbox",k:id(),v:{id:id(),control:true,from:p.from,fp:p.fp,sub:bad==="edited"?wire.SubRevision:wire.SubRetraction,ref:{id:answer,fingerprint:p.fp}}}]);
@@ -424,7 +425,7 @@ for (const bad of ["edited","retracted","replica","history","other-key","other-a
 // device. Agent-host keys and a removed/frozen own device cannot tap Do it.
 for (const state of ["agent-host","removed","frozen"]) {
  const f=await fixture(), {e}=f;
- const q=await e.api("/api/send",{to:f.peerAddress,kind:"question",body:"q",agent_id:f.agentA.id});
+ const q=await e.sendDirect({to:f.peerAddress,kind:"question",body:"q",agent_id:f.agentA.id});
  const answer=await f.receive(await f.fromPeer({reply_to:q.id,status:wire.StatusProposal,body:"Exact task",agent_id:f.agentA.id}));
  if(state==="agent-host") e.me={...e.me,human_keys:[]};
  else if(state==="removed") e.me={...e.me,devices:[]};
@@ -438,7 +439,7 @@ for (const state of ["agent-host","removed","frozen"]) {
 {
  const f=await fixture(),{e}=f;
  await f.caps([wire.CapEnv2,wire.CapPerson,wire.CapAgentIdentity,wire.CapOwnSyncV3]);
- const asked=await e.api("/api/send",{to:f.peerAddress,kind:"question",body:"Report language?",agent_id:f.agentA.id});
+ const asked=await e.sendDirect({to:f.peerAddress,kind:"question",body:"Report language?",agent_id:f.agentA.id});
  const original="Write the report in Russian.\n"+"Keep the full detail.\n".repeat(200), revised=original.replace("Russian","English");
  const answer=await f.receive(await f.fromPeer({reply_to:asked.id,status:wire.StatusProposal,body:original,agent_id:f.agentA.id}));
  const second=new Engine({store:f.store,now:()=>now,base:e.base,fetch:e.fetch});await second.load();
@@ -455,7 +456,7 @@ for (const state of ["agent-host","removed","frozen"]) {
  await refuses(()=>e.confirmProposal(answer),/different text/);
  await refuses(()=>e.confirmProposal(answer,"Another task"),/different text/);
  check((await f.store.all("outbox")).filter(r=>r.kind==="task").length===1,"stale editor and reload never replace the chosen bytes");
- const q2=await e.api("/api/send",{to:f.peerAddress,kind:"question",body:"Another report?",agent_id:f.agentA.id});
+ const q2=await e.sendDirect({to:f.peerAddress,kind:"question",body:"Another report?",agent_id:f.agentA.id});
  const a2=await f.receive(await f.fromPeer({reply_to:q2.id,status:wire.StatusProposal,body:"Original second task",agent_id:f.agentA.id}));
  const cross=await Promise.allSettled([e.confirmProposal(a2,"Edited second task"),second.confirmProposal(a2)]);
  check(cross.filter(r=>r.status==="fulfilled").length===1,"two engines cannot replace one another's original/revised choice");
@@ -468,7 +469,7 @@ for (const state of ["agent-host","removed","frozen"]) {
 // durable task waits and resumes; it is not downgraded to an ordinary legacy send.
 {
  const f=await fixture(),{e}=f;
- const q=await e.api("/api/send",{to:f.peerAddress,kind:"question",body:"q",agent_id:f.agentA.id});
+ const q=await e.sendDirect({to:f.peerAddress,kind:"question",body:"q",agent_id:f.agentA.id});
  const answer=await f.receive(await f.fromPeer({reply_to:q.id,status:wire.StatusProposal,body:"Original",agent_id:f.agentA.id}));
  await e.confirmProposal(answer,"Revised");await e.flushOutbox();
  const task=(await f.store.all("outbox")).find(r=>r.kind==="task");

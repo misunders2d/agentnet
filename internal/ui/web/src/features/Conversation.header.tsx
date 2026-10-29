@@ -163,6 +163,10 @@ export function Header({ ctx, wide, helpers: hs, canInvite, onContinue }: { ctx:
 
   const notify = overview?.notify;
   const ownAgentThread = !!th && !!overview && runsAgent(th.peer, overview) && overview.person?.state === "self" && overview.person.devices?.some(d => d.address === th.peer);
+  // A topic with one of your own agents (as Chat with and Assign start them
+  // in My agents, MEL-713) shows its model as a device chat with it did.
+  const topicAgents = t && overview?.person?.state === "self" ? (t.agents || []).filter(a => a.topic === currentTopic && a.state === "active" && !!a.agent_id
+    && overview.person!.devices?.some(d => d.address === a.host.address && d.fingerprint === a.host.fingerprint)) : [];
   const muted = !!t && !!notify && (notify.mutes || []).includes(t.id);
   const remove = () => void store.run((a) => a.deleteConversation(t ? { conv: t.id } : { peer: th!.peer, thread: th!.topic?.id || ctx.conv })).then((r) => {
     if (!r) return;
@@ -259,6 +263,9 @@ export function Header({ ctx, wide, helpers: hs, canInvite, onContinue }: { ctx:
     {th&&overview&&<AgentHistoryRecovery thread={th} overview={overview}/>}
     {ownAgentThread && overview && th && <div className="shrink-0 border-b border-outline bg-surface px-4 pb-2" data-part="agent-runtime">
       <AgentModelReport overview={overview} host={th.peer} agentId={th.topic?.agent_id} />
+    </div>}
+    {topicAgents.length === 1 && overview && <div className="shrink-0 border-b border-outline bg-surface px-4 pb-2" data-part="agent-runtime">
+      <AgentModelReport overview={overview} host={topicAgents[0].host.address} agentId={topicAgents[0].agent_id} />
     </div>}
     </>
   );

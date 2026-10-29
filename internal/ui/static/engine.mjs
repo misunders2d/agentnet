@@ -4596,6 +4596,27 @@ export class Engine {
   // until version 1 is deleted. Replies to its requests (replyV1,
   // proposals) still go back.
 
+  // sendDirect is how an older device sent a message, question or task to
+  // the device at to. No route reaches it: tests use it to stand in for a
+  // device that has not updated yet. It goes with version 1 (step 2).
+  async sendDirect({ id: sendID = "", to, kind, body, quote="",reply_to: replyTo = "", files = [], agent_id = "", reply_receiver = null }) {
+    body = String(body || "").trim();
+    kind = kind || "message";
+    to = String(to || "").trim();
+    if (wire.blank(body) && !files.length) throw new Error("Write a message or add a file first.");
+    if (!["message", "question", "task"].includes(kind)) throw new Error("Choose message, question or task.");
+    if (!wire.validAddress(to)) throw new Error("That is not an AgentNet address.");
+    if (to === this.address) throw new Error("That is this browser.");
+    if (agent_id && !["question", "task"].includes(kind)) throw new Error("A named agent can receive a question or task.");
+    const target = agent_id ? await this.namedTarget(to, agent_id) : null;
+    checkFiles(files);
+    if (replyTo) {
+      const m = (await this.store.get("inbox", replyTo)) || (await this.store.get("outbox", replyTo));
+      if (!m || m.v !== 1 || (m.from || m.to) !== to) throw new Error("A reply stays in its conversation with that device.");
+    }
+    return this.sendV1({ id: sendID, queued: true, to, kind, body, quote,replyTo, files, status: "", target, receiver: reply_receiver });
+  }
+
   // sendV1 seals one version 1 message to the key pinned for to (pinned
   // the first time), keeps it with its files before sending, and sends
   // that exact envelope, retried until the server takes it.

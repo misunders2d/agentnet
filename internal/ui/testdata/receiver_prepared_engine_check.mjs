@@ -32,7 +32,7 @@ async function caps(e,names=[wire.CapReplyReceiver,wire.CapEnv2,wire.CapPerson])
 for(const e of [phone,laptop,bob,mallory])await caps(e);
 const receiver={kind:'live_session',session_handle:'selected-Codex',host:{address:laptop.address,fingerprint:laptop.fp},on_close:{agent_id:'a'.repeat(32),instructions:'Exact local continuation',mode:'question'}};
 const file={name:'selected.txt',bytes:new TextEncoder().encode('SELECTED BYTES')};
-const sent=await phone.api('/api/send',{to:bob.address,kind:'question',body:'Frozen request <&>',files:[file],reply_receiver:receiver});
+const sent=await phone.sendDirect({to:bob.address,kind:'question',body:'Frozen request <&>',files:[file],reply_receiver:receiver});
 await phone.outboxPass;
 assert.equal(sent.state,'receiver_waiting');assert.equal(posts.length,1);
 const delegation=await phone.store.get('outbox',wire.parseEnvelope(posts[0]).id),original=await phone.store.get('outbox',sent.id);

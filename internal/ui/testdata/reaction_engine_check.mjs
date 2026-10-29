@@ -154,8 +154,8 @@ for (const mode of ['no-sessions', 'unknown', 'old', 'offline-supported']) {
 // Legacy device threads use the same delivery gate without relaxing decisions.
 {
   const w=await world(),{alice:a,bob:b}=w;a.queueOutbox=()=>{};
-  const original=await a.api('/api/send',{to:b.address,kind:'message',body:'device control target'});
-  const guarded=await a.api('/api/send',{to:b.address,kind:'message',body:'device key guard target'});
+  const original=await a.sendDirect({to:b.address,kind:'message',body:'device control target'});
+  const guarded=await a.sendDirect({to:b.address,kind:'message',body:'device key guard target'});
   await w.caps(b,[]);
   for(const [path,extra] of [['react',{emoji:'👍'}],['edit',{text:'queued device edit'}],['delete',{}]]){
     const sent=await a.api('/api/message/'+path,{id:original.id,dir:'out',...extra}),row=await a.store.get('outbox',sent.id);
@@ -184,8 +184,8 @@ for (const { name, inner } of vectors) {
 // binds to this browser's exact request to that device key; never its host.
 {
   const w = await world(), { alice: a, charlie: c, mallory: m } = w;
-  const named = await a.api('/api/send', { to: c.address, kind: 'question', body: 'named question', agent_id: w.agent.id });
-  const plain = await a.api('/api/send', { to: c.address, kind: 'question', body: 'default question' });
+  const named = await a.sendDirect({ to: c.address, kind: 'question', body: 'named question', agent_id: w.agent.id });
+  const plain = await a.sendDirect({ to: c.address, kind: 'question', body: 'default question' });
   const ok1 = await w.receive(await control(c, a, { ref: { id: named.id, fingerprint: a.fp }, agent_id: w.agent.id }), a);
   const ok2 = await w.receive(await control(c, a, { ref: { id: plain.id, fingerprint: a.fp }, origin: 'agent:claude' }), a);
   check(!!await a.store.get('inbox', ok1) && !!await a.store.get('inbox', ok2), 'named and default assistant reactions admitted');
@@ -206,7 +206,7 @@ for (const { name, inner } of vectors) {
     const rid = await w.receive(raw, a);
     check(await held(a, rid) === 'invalid' && !await a.store.get('inbox', rid), what + ' refused');
   }
-  const unrecorded = await a.api('/api/send', { to: c.address, kind: 'question', body: 'legacy row' });
+  const unrecorded = await a.sendDirect({ to: c.address, kind: 'question', body: 'legacy row' });
   await a.outboxPass;
   const row = await a.store.get('outbox', unrecorded.id);
   delete row.fp; await a.store.write([{ s: 'outbox', k: row.id, v: row }]);

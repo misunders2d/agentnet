@@ -63,18 +63,15 @@ func TestRequestFollowupAttemptLiveMapping(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { s.Handler().ServeHTTP(w, r) }))
 	defer ts.Close()
 	s = New(l, strings.TrimPrefix(ts.URL, "http://"), testToken)
-	d := RequestFollowupDraft{ID: protocol.NewID(), Ref: envelope.Ref{ID: original.ID, Fingerprint: alice.Self().Fingerprint()}, Body: "correct", Attempt: 1}
-	raw, _ := json.Marshal(d)
-	r := do(t, ts, "POST", "/api/request/followup", string(raw), post(ts))
-	failure, _ := io.ReadAll(r.Body)
-	if r.StatusCode != 409 || !strings.Contains(string(failure), "attempt") {
-		t.Fatal(r.StatusCode, string(failure))
-	}
-	d.Attempt = 0
-	d.ID = protocol.NewID()
-	raw, _ = json.Marshal(d)
-	r = do(t, ts, "POST", "/api/request/followup", string(raw), post(ts))
-	if r.StatusCode != 200 {
-		t.Fatal(r.StatusCode)
+	// An old device conversation takes no correction any more (MEL-713
+	// step 1), whatever its attempt: the refusal is a conflict, not a 500.
+	for _, attempt := range []int64{1, 0} {
+		d := RequestFollowupDraft{ID: protocol.NewID(), Ref: envelope.Ref{ID: original.ID, Fingerprint: alice.Self().Fingerprint()}, Body: "correct", Attempt: attempt}
+		raw, _ := json.Marshal(d)
+		r := do(t, ts, "POST", "/api/request/followup", string(raw), post(ts))
+		failure, _ := io.ReadAll(r.Body)
+		if r.StatusCode != 409 || !strings.Contains(string(failure), "read only") {
+			t.Fatal(attempt, r.StatusCode, string(failure))
+		}
 	}
 }

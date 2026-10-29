@@ -79,7 +79,7 @@ await a.api('/api/remind',{id,due});await settle(a);await deliver(a,p);
 const cancelled=await p.api('/api/remind/cancel',{id});check(cancelled.message===id&&cancelled.reminder===null&&Number.isSafeInteger(cancelled.seq),'cancel returns exact ended snapshot');await settle(p);await deliver(p,a);
 check(!(await pending(a)).length,'cancel follows linked devices');
 await a.api('/api/remind',{id,due});await settle(a);await deliver(a,p);
-await p.api('/api/send',{to:b.address,kind:'message',body:'reply ends exact reminder',reply_to:id});await settle(p);await deliver(p,a);
+await p.sendDirect({to:b.address,kind:'message',body:'reply ends exact reminder',reply_to:id});await settle(p);await deliver(p,a);
 check(!(await pending(a)).length&&(await a.reminders(true))[0].state==='replied','ordinary explicit reply ends reminder across devices');
 // Sender may forward a fact, but only a current own-human carrier authorizes it.
 const ref={conv:'',fingerprint:b.fp,lid:id,due,state:'pending',revision:Date.now()+100000,writer:b.fp};
