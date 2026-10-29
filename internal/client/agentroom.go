@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -180,6 +181,7 @@ type AgentRoomAsk struct {
 	Kind       string
 	Body       string
 	ReplyTo    string // only picks the topic: a terminal ask has no upstream request
+	Cause      string // a running request in the room this ask serves (RunAgentRoomAsk)
 	Files      []OutgoingFile
 	Receiver   *ReplyReceiver
 	Join       time.Duration // how long to wait for both agents to join the topic
@@ -208,7 +210,11 @@ func (a *Agent) SendAgentRoomAsk(ctx context.Context, r AgentRoomAsk) (AgentRoom
 	if out.Conv, err = a.MyAgentsRoom(ctx); err != nil {
 		return out, err
 	}
-	if out.Topic, err = a.agentRoomTopic(out.Conv, r.SessionKey, r.ReplyTo); err != nil {
+	topicRef := r.ReplyTo
+	if r.Cause != "" {
+		topicRef = r.Cause
+	}
+	if out.Topic, err = a.agentRoomTopic(out.Conv, r.SessionKey, topicRef); err != nil {
 		return out, err
 	}
 	from, err := a.topicParticipation(ctx, out.Conv, out.Topic, a.Address, r.From.Record.ID, keys)
@@ -236,14 +242,14 @@ func (a *Agent) SendAgentRoomAsk(ctx context.Context, r AgentRoomAsk) (AgentRoom
 	if r.From.Responder != nil && r.From.Responder.Harness != "" {
 		harness = r.From.Responder.Harness
 	}
-	out.ConvSent, err = a.postAgentAsk(ctx, out.Conv, out.Topic, from, to, r.Kind, r.Body, harness, r.Files, r.Receiver)
+	out.ConvSent, err = a.postAgentAsk(ctx, out.Conv, out.Topic, r.Cause, from, to, r.Kind, r.Body, harness, r.Files, r.Receiver)
 	return out, err
 }
 
-// postAgentAsk posts a request with no upstream request as agent from, a
-// participation hosted here, to agent to in conv. The receiving host checks
-// it as a request from this device (roomChain).
-func (a *Agent) postAgentAsk(ctx context.Context, conv, topic string, from, to ParticipationInfo, kind, body, harness string, files []OutgoingFile, receiver *ReplyReceiver) (ConvSent, error) {
+// postAgentAsk posts a request as agent from, a participation hosted here,
+// to agent to in conv. With no cause the receiving host checks it as a
+// request from this device; with one, through that cause (roomChain).
+func (a *Agent) postAgentAsk(ctx context.Context, conv, topic, cause string, from, to ParticipationInfo, kind, body, harness string, files []OutgoingFile, receiver *ReplyReceiver) (ConvSent, error) {
 	h, err := a.roomAudience(conv, from.PID, topic)
 	if err != nil {
 		return ConvSent{}, err
@@ -258,8 +264,59 @@ func (a *Agent) postAgentAsk(ctx context.Context, conv, topic string, from, to P
 		}
 		target.GroupAdmission = adm.Hash()
 	}
-	return a.SendConv(ctx, conv, ConvOutgoing{Kind: kind, PID: to.PID, Body: body, Topic: topic, Files: files,
+	return a.SendConv(ctx, conv, ConvOutgoing{Kind: kind, PID: to.PID, Body: body, Topic: topic, ReplyTo: cause, Files: files,
 		Origin: envelope.OriginAgentPrefix + strings.ToLower(harness), Emotion: "neutral", Target: target, human: h, selfJob: to.HostHere, ReplyReceiver: receiver})
+}
+
+// RunAgentRoomAsk is SendAgentRoomAsk from inside running request cause on
+// this device: as that run's own agent, one topic per cause. Chain rule
+// (owner, October 29, 2026): a run may task the person's other agents only
+// when its requester may task this agent (its own person, a task admitted
+// here, or a standing task grant); a requester who may only ask makes it
+// only ask. Receiving own devices cannot check this; this host does.
+func (a *Agent) RunAgentRoomAsk(ctx context.Context, cause string, r AgentRoomAsk) (AgentRoomSent, error) {
+	var sender, key, kind, state, conv, lid, agentID, responder string
+	err := a.store.db.QueryRow(`SELECT sender, coalesce(verified_by,''), kind, state, coalesce(conv,''), coalesce(lid,''),
+		coalesce(nullif(agent_id,''), json_extract(target,'$.agent_id'), ''), coalesce(responder,'') FROM inbox WHERE id=? AND replica=0`, cause).
+		Scan(&sender, &key, &kind, &state, &conv, &lid, &agentID, &responder)
+	if errors.Is(err, sql.ErrNoRows) || err == nil && state != stateRunning {
+		return AgentRoomSent{}, errors.New("this run's request is not running here")
+	}
+	if err != nil {
+		return AgentRoomSent{}, err
+	}
+	if r.Kind == envelope.KindTask {
+		if ok, err := a.runMayTask(sender, key, kind); err != nil {
+			return AgentRoomSent{}, err
+		} else if !ok {
+			return AgentRoomSent{}, fmt.Errorf("%s may only ask this agent questions, so this run may only ask other agents questions for them", sender)
+		}
+	}
+	if r.From, err = a.SessionAgent(responder, agentID); err != nil {
+		return AgentRoomSent{}, err
+	}
+	room, err := a.MyAgentsRoom(ctx)
+	if err != nil {
+		return AgentRoomSent{}, err
+	}
+	r.SessionKey = "run/" + cause
+	if conv == room && lid != "" {
+		r.Cause = lid // continues the cause's chain and topic
+	}
+	return a.SendAgentRoomAsk(ctx, r)
+}
+
+// runMayTask: may a run serving a kind request from sender's key task the
+// person's other agents? A running task was admitted as one here; otherwise
+// only for the person's own device or a standing task grant.
+func (a *Agent) runMayTask(sender, key, kind string) (bool, error) {
+	if kind == envelope.KindTask {
+		return true, nil
+	}
+	if own, err := a.ownHumanAuthor(a.store.db, sender, key); err != nil || own {
+		return own, err
+	}
+	return taskGranted(a.store.db, sender, key)
 }
 
 // OwnAgentHost reports whether host is one of this person's own current

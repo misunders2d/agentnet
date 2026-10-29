@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
 // MEL-713: a terminal agent's request lands in the person's "My agents"
@@ -120,6 +121,26 @@ func TestAgentRoomAskPostsAsAgentInSessionTopic(t *testing.T) {
 			t.Fatalf("answer to %s not returned to the asker: %+v %v", req.ID, r, err)
 		}
 	}
+	// A run serving a request in the room asks on through it, as the run's
+	// own agent, in the cause's topic; its chain is checked on the other device.
+	cause := jobID(sent.LID)
+	if _, err = a.store.db.Exec(`UPDATE inbox SET state=? WHERE id=?`, stateRunning, cause); err != nil {
+		t.Fatal(err)
+	}
+	chained := AgentRoomAsk{Host: phone.Address, AgentID: desk.ID, Kind: envelope.KindTask, Body: "check the fix on the other device"}
+	csent, err := a.RunAgentRoomAsk(tctx(t), cause, chained)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if csent.Conv != room || csent.Topic != sent.Topic || csent.From != sent.To {
+		t.Fatalf("run did not ask as its own agent in its cause's topic: %+v vs %+v", csent, sent)
+	}
+	var cid string
+	eventually(t, "chained task stored on the other device", func() bool {
+		return phone.store.db.QueryRow(`SELECT id FROM inbox WHERE conv=? AND lid=? AND replica=0`, room, csent.LID).Scan(&cid) == nil
+	})
+	waitState(t, phone, cid, stateAnswered)
+
 	// Every own device converges on the one room, so an agent there joins it.
 	if other, err := phone.MyAgentsRoom(tctx(t)); err != nil || other != room {
 		t.Fatalf("the person's other device made or chose another room: %s vs %s %v", other, room, err)
@@ -167,7 +188,7 @@ func TestAgentRoomRootAskFromAnotherPersonNeedsConsent(t *testing.T) {
 	to := p6Member(t, w.alice, w.bob, conv)
 	eventually(t, "asking agent known at target", func() bool { return stateAt(t, w.bob, from.PID).Claimable() })
 	for _, kind := range []string{envelope.KindQuestion, envelope.KindTask} {
-		sent, err := w.alice.postAgentAsk(tctx(t), conv, "", stateAt(t, w.alice, from.PID), stateAt(t, w.alice, to.PID), kind, "root "+kind, "agentstub", nil, nil)
+		sent, err := w.alice.postAgentAsk(tctx(t), conv, "", "", stateAt(t, w.alice, from.PID), stateAt(t, w.alice, to.PID), kind, "root "+kind, "agentstub", nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -179,5 +200,41 @@ func TestAgentRoomRootAskFromAnotherPersonNeedsConsent(t *testing.T) {
 	}
 	if n := stub.runs(); n != 0 {
 		t.Fatalf("another person's agent ran work here without consent: %d run(s)", n)
+	}
+}
+
+// Chain rule (owner, October 29, 2026): a run tasks the person's other
+// agents only when its requester may task this agent; a requester who may
+// only ask makes the run only ask.
+func TestRunMayTaskFollowsRequesterAuthority(t *testing.T) {
+	w := newWorld(t, "")
+	persons(t, w.alice, w.bob)
+	a, bob := w.alice, w.bob.Self()
+	for _, c := range []struct {
+		name, sender, key, kind string
+		want                    bool
+	}{
+		{"own question", a.Address, a.Self().Fingerprint(), envelope.KindQuestion, true},
+		{"admitted task", w.bob.Address, bob.Fingerprint(), envelope.KindTask, true},
+		{"question-only requester", w.bob.Address, bob.Fingerprint(), envelope.KindQuestion, false},
+	} {
+		if got, err := a.runMayTask(c.sender, c.key, c.kind); err != nil || got != c.want {
+			t.Fatalf("%s: %v %v", c.name, got, err)
+		}
+	}
+	if err := a.Approve(w.bob.Address); err != nil { // questions only
+		t.Fatal(err)
+	}
+	if got, err := a.runMayTask(w.bob.Address, bob.Fingerprint(), envelope.KindQuestion); err != nil || got {
+		t.Fatalf("a question approval let the run task: %v %v", got, err)
+	}
+	if _, err := a.store.db.Exec(`INSERT INTO inbox(id,sender,ts,kind,body,received_at,state,verified_by) VALUES(?,?,1,?,?,1,?,?)`,
+		protocol.NewID(), w.bob.Address, envelope.KindQuestion, "question from bob", stateRunning, bob.Fingerprint()); err != nil {
+		t.Fatal(err)
+	}
+	var cause string
+	a.store.db.QueryRow(`SELECT id FROM inbox WHERE sender=? AND state=?`, w.bob.Address, stateRunning).Scan(&cause)
+	if _, err := a.RunAgentRoomAsk(tctx(t), cause, AgentRoomAsk{Kind: envelope.KindTask, Body: "x"}); err == nil || !strings.Contains(err.Error(), "may only ask") {
+		t.Fatalf("question-only requester's run tasked another agent: %v", err)
 	}
 }

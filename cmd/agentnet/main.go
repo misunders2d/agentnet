@@ -859,7 +859,7 @@ func runSendKind(ctx context.Context, a *client.Agent, kind string, args []strin
 	if kind == "task" {
 		msgKind = envelope.KindTask
 	}
-	from, session, room, err := roomAskFrom(a, fs.Arg(0), *fromAgent)
+	via, room, err := roomAskFrom(a, fs.Arg(0), *fromAgent)
 	if err != nil {
 		return err
 	}
@@ -876,11 +876,18 @@ func runSendKind(ctx context.Context, a *client.Agent, kind string, args []strin
 		return err
 	}
 	if room {
-		r := client.AgentRoomAsk{From: from, SessionKey: session, AgentID: *remoteAgent, Kind: msgKind, Body: fs.Arg(1), ReplyTo: *replyTo, Receiver: receiver}
+		r := client.AgentRoomAsk{From: via.from, SessionKey: via.session, AgentID: *remoteAgent, Kind: msgKind, Body: fs.Arg(1), ReplyTo: *replyTo, Receiver: receiver}
 		for _, p := range files {
 			r.Files = append(r.Files, client.OutgoingFile{Path: p})
 		}
-		return runRoomAsk(ctx, a, r, fs.Arg(0), answerWait(answerFor), os.Stdout)
+		wait := answerWait(answerFor)
+		if via.cause != "" { // a run waits for its helper's answer here (MEL-713)
+			wait = client.AskAnswerWait
+			if *answerFor > 0 {
+				wait = *answerFor
+			}
+		}
+		return runRoomAsk(ctx, a, r, via.cause, fs.Arg(0), wait, os.Stdout)
 	}
 	var target *envelope.Target
 	if *remoteAgent != "" {

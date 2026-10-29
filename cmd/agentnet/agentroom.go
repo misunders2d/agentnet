@@ -11,41 +11,62 @@ import (
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
-// Owner decision, October 29, 2026 (MEL-713): an agent in a terminal asks
-// its person's other agents in the "My agents" room, posting as itself.
-// A person at a plain shell, background runs and other people's agents
-// keep their current paths for now (later MEL-713 phases).
+// Owner decision, October 29, 2026 (MEL-713): an agent asks its person's
+// other agents in the "My agents" room, posting as itself: from a terminal
+// session, or from a background run serving a request (chain rule:
+// client.RunAgentRoomAsk). A person at a plain shell, a delegated reply
+// binding and other people's agents keep their paths for now.
 
-// roomAskFrom reports whether ask/task to target goes to the room, and as
-// which agent hosted here.
-func roomAskFrom(a *client.Agent, target, fromAgent string) (client.LocalAgentInfo, string, bool, error) {
+// roomAsk is where an ask/task to an own device comes from.
+type roomAsk struct {
+	from    client.LocalAgentInfo // a terminal's agent
+	session string                // a terminal's native session
+	cause   string                // a run's request
+}
+
+// roomAskFrom reports whether ask/task to target goes to the room.
+func roomAskFrom(a *client.Agent, target, fromAgent string) (roomAsk, bool, error) {
+	var r roomAsk
+	cause := ""
 	if inRun() {
-		return client.LocalAgentInfo{}, "", false, nil
+		if receiverRun() {
+			return r, false, nil
+		}
+		for _, k := range []string{client.AgentRequestEnv, client.RoomRequestEnv, client.ProgressRequestEnv} {
+			if cause = os.Getenv(k); cause != "" {
+				break
+			}
+		}
+		if cause == "" {
+			return r, false, nil
+		}
 	}
 	harness, session := client.SessionHarness(os.Getenv)
-	if harness == "" && fromAgent == "" {
-		return client.LocalAgentInfo{}, "", false, nil
+	if cause == "" && harness == "" && fromAgent == "" {
+		return r, false, nil
 	}
 	host, _, err := protocol.SplitTarget(target)
 	if err != nil {
-		return client.LocalAgentInfo{}, "", false, err
+		return r, false, err
 	}
 	if own, err := a.OwnAgentHost(host); err != nil || !own {
-		return client.LocalAgentInfo{}, "", false, err
+		return r, false, err
 	}
-	from, err := a.SessionAgent(harness, fromAgent)
-	if err != nil {
-		return client.LocalAgentInfo{}, "", true, err
+	if cause != "" {
+		r.cause = cause
+		return r, true, nil
 	}
-	key := ""
+	if r.from, err = a.SessionAgent(harness, fromAgent); err != nil {
+		return r, true, err
+	}
 	if session != "" {
-		key = harness + "/" + session
+		r.session = harness + "/" + session
 	}
-	return from, key, true, nil
+	return r, true, nil
 }
 
 // runRoomAsk posts the request in the room and waits for its answer here.
-func runRoomAsk(ctx context.Context, a *client.Agent, r client.AgentRoomAsk, target string, wait time.Duration, out io.Writer) error {
+func runRoomAsk(ctx context.Context, a *client.Agent, r client.AgentRoomAsk, cause, target string, wait time.Duration, out io.Writer) error {
 	host, _, err := protocol.SplitTarget(target)
 	if err != nil {
 		return err
@@ -54,7 +75,12 @@ func runRoomAsk(ctx context.Context, a *client.Agent, r client.AgentRoomAsk, tar
 		return err
 	}
 	r.Host = host
-	sent, err := a.SendAgentRoomAsk(ctx, r)
+	var sent client.AgentRoomSent
+	if cause != "" {
+		sent, err = a.RunAgentRoomAsk(ctx, cause, r)
+	} else {
+		sent, err = a.SendAgentRoomAsk(ctx, r)
+	}
 	if err != nil {
 		return err
 	}
@@ -62,5 +88,5 @@ func runRoomAsk(ctx context.Context, a *client.Agent, r client.AgentRoomAsk, tar
 	if sent.Detail != "" {
 		fmt.Fprintln(out, termText(sent.Detail, ""))
 	}
-	return awaitAnswer(ctx, a, sent.ID, "agentnet dm show "+sent.Conv, wait, r.Receiver, out, os.Stderr)
+	return awaitAnswer(ctx, a, sent.ID, "agentnet dm wait "+sent.ID, wait, r.Receiver, out, os.Stderr)
 }

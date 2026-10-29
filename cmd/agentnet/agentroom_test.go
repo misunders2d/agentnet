@@ -14,7 +14,7 @@ import (
 // run and another person's device keep their paths; an agent terminal with
 // no registered agent is refused, never shown as the person.
 func TestRoomAskFromChoosesOnlyOwnAgentTerminals(t *testing.T) {
-	for _, k := range []string{"AGENTNET_BACKGROUND", "AGENTNET_REPLY_BINDING", client.ClaudeSessionEnv, "CODEX_THREAD_ID"} {
+	for _, k := range []string{"AGENTNET_BACKGROUND", "AGENTNET_REPLY_BINDING", client.ClaudeSessionEnv, "CODEX_THREAD_ID", client.AgentRequestEnv, client.RoomRequestEnv, client.ProgressRequestEnv} {
 		t.Setenv(k, "")
 	}
 	a, _ := diagnosticAgent(t)
@@ -33,18 +33,32 @@ func TestRoomAskFromChoosesOnlyOwnAgentTerminals(t *testing.T) {
 	}
 	t.Cleanup(func() { peer.Close() })
 
-	if _, _, room, err := roomAskFrom(a, a.Address, ""); room || err != nil {
+	if _, room, err := roomAskFrom(a, a.Address, ""); room || err != nil {
 		t.Fatalf("plain shell: room=%v %v", room, err)
 	}
 	t.Setenv(client.ClaudeSessionEnv, "synthetic-claude-session")
-	if _, _, room, err := roomAskFrom(a, peer.Address, ""); room || err != nil {
+	if _, room, err := roomAskFrom(a, peer.Address, ""); room || err != nil {
 		t.Fatalf("another person's device: room=%v %v", room, err)
 	}
-	if _, _, room, err := roomAskFrom(a, a.Address, ""); !room || !errors.Is(err, client.ErrNoSessionAgent) {
+	if _, room, err := roomAskFrom(a, a.Address, ""); !room || !errors.Is(err, client.ErrNoSessionAgent) {
 		t.Fatalf("own device from an unregistered agent terminal must be refused: room=%v %v", room, err)
 	}
 	t.Setenv("AGENTNET_BACKGROUND", "1")
-	if _, _, room, err := roomAskFrom(a, a.Address, ""); room || err != nil {
-		t.Fatalf("background run: room=%v %v", room, err)
+	if _, room, err := roomAskFrom(a, a.Address, ""); room || err != nil {
+		t.Fatalf("background run without its request: room=%v %v", room, err)
+	}
+	// A run serving a request reaches own agents through the room (chain
+	// rule checked in client.RunAgentRoomAsk); other people keep their path,
+	// and a delegated reply binding keeps its frozen routing.
+	t.Setenv(client.AgentRequestEnv, "11111111111111111111111111111111")
+	if via, room, err := roomAskFrom(a, a.Address, ""); !room || err != nil || via.cause == "" {
+		t.Fatalf("run to an own device: %+v room=%v %v", via, room, err)
+	}
+	if _, room, err := roomAskFrom(a, peer.Address, ""); room || err != nil {
+		t.Fatalf("run to another person's device: room=%v %v", room, err)
+	}
+	t.Setenv("AGENTNET_REPLY_BINDING", "binding")
+	if _, room, err := roomAskFrom(a, a.Address, ""); room || err != nil {
+		t.Fatalf("reply-binding run: room=%v %v", room, err)
 	}
 }
