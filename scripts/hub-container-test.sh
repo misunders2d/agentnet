@@ -88,6 +88,16 @@ agent alice join --agent laptop "$code"
 invite=$(agent alice admin invite --raw bob)
 agent bob join --agent desk "$invite"
 
+step "persons and a DM (a plain send goes in the DM since v0.10.0)"
+agent alice person create alice
+agent bob person create bob
+containers+=("$p-bob-first") # a device takes part in conversations once it has connected
+docker run -d --name "$p-bob-first" "${limits[@]}" --network "$net" -v "$p-bob:/data" "$img" --home /data/home daemon >/dev/null
+conv=
+for _ in $(seq 100); do conv=$(agent alice dm new bob/desk 2>/dev/null) && break; conv=; sleep 0.3; done
+[ -n "$conv" ] || { echo "timed out waiting for a DM with bob"; exit 1; }
+docker stop "$p-bob-first" >/dev/null
+
 step "send the image's own 15 MB binary while bob is offline"
 out=$(agent alice send --file /usr/local/bin/agentnet bob/desk "file while offline")
 msg=${out%% *}
@@ -100,7 +110,7 @@ hub hub2 hubdata
 step "bob comes online and downloads"
 containers+=("$p-bob")
 docker run -d --name "$p-bob" "${limits[@]}" --network "$net" -v "$p-bob:/data" "$img" --home /data/home daemon >/dev/null
-wait_for "delivery to bob" sh -c "docker exec $p-bob agentnet --home /data/home inbox --json | grep -q $msg"
+wait_for "delivery to bob" sh -c "docker exec $p-bob agentnet --home /data/home dm show $conv | grep -q 'file while offline'"
 docker exec "$p-bob" agentnet --home /data/home download --dir /data "$msg"
 copy_out bob /data/agentnet "$tmp/received"
 copy_out hubdata /usr/local/bin/agentnet "$tmp/original"
@@ -120,7 +130,7 @@ doc=$(agent alice doctor || true) # the alice daemon is not running here
 echo "$doc"
 grep -q "ok   hub" <<<"$doc" && grep -q "ok   membership" <<<"$doc"
 out=$(agent alice send bob/desk "after restore")
-wait_for "message after restore" sh -c "docker exec $p-bob agentnet --home /data/home inbox --json | grep -q '${out%% *}'"
+wait_for "message after restore" sh -c "docker exec $p-bob agentnet --home /data/home dm show $conv | grep -q 'after restore'"
 docker stop "$p-hub3" >/dev/null
 docker run --rm "${limits[@]}" -v "$p-restored:/data" "$img" hub storage
 

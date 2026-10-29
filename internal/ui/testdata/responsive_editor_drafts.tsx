@@ -31,6 +31,8 @@ export function mountEditorHarness(seed: any, form: string) {
     f.calls.push({p,b:structuredClone(b)});
     if (f.mode === "failure") throw Error("Invented refused response");
     if (f.mode === "hold") await new Promise<void>(r => f.pending.push(r));
+    // Assign brings the own agent into a topic of the My agents room; an own agent joins at once.
+    if (p === "/api/dm/agent/invite") return {pid:"8".repeat(32),conv:b.conv,topic:b.topic,host:{address:b.host},agent_id:b.agent_id,state:"active"};
     return {id:b?.id || "9".repeat(32),state:"stored",note:"Invented confirmed response"};
   };
   const stores = new Map<string, Store>();

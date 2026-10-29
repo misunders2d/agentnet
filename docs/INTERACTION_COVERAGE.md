@@ -1,5 +1,45 @@
 # Next-release interaction coverage and responsiveness
 
+## MEL-713 step 1 — v0.10.0 candidate, October 30
+
+Nothing starts a version 1 turn (docs/plans/MEL_713.md). Changed controls:
+
+- Device thread composer (Comic): Send shows "Old device conversations are
+  read only now…" at once and posts nothing; the typed draft and files stay.
+  Answering a received request there is unchanged. agentnet-skins Classic,
+  Holonet and Zoom do the same, and their new device-conversation dialog
+  refuses with the same note.
+- "Chat with" an own agent: the message appears pending at once in the agent's
+  topic of the "My agents" room; the check, invite and ask run in the
+  background; a failure shows in the conversation with Retry (same send ID).
+- Assign: a new task in a new room topic; retry keeps the same send ID.
+
+Reuse: AgentNet's existing group/topic view, `sends.begin` pending bubbles and
+send IDs, following the already inspected Telegram Web A revision
+`f67a40879a7d78c2683ec5a296cf55bc22417d56`
+[`messages.ts` local-change/background/error reconciliation](https://github.com/Ajaxy/telegram-tt/blob/f67a40879a7d78c2683ec5a296cf55bc22417d56/src/global/actions/api/messages.ts).
+No new messenger architecture. Not inspected: how Telegram presents a chat you
+can read but not write in; the read-only note is AgentNet's own wording.
+
+Executed:
+
+- Rendered Comic (Chromium): Chat with shows the pending bubble under 1000 ms,
+  failure plus Retry; Assign room flow with three attempts on one send ID (1280
+  locally; at 390 it stops at the same step as main with the local Chromium,
+  so CI judges it); starter makes one room and only own invites; responsive
+  editor drafts for Assign; skin contract device step (no post, draft
+  unchanged).
+- Latency fixtures: 17 suites, 796 actions, largest local feedback 197 ms
+  (`topics.select-active`).
+- `TestMixedVersion` against v0.9.9 built from its tag: pass (64 s, not
+  skipped). Hub container journey with the DM send: pass locally.
+- agentnet-skins: read-only cases in collection-steering, v091-standalone and
+  the contract; full gate result is recorded with the gallery release.
+
+Not executed: rendered tests that need Playwright's bundled browser, and 41
+rendered tests that also fail on main with the local Chromium 155, are left to
+CI; Android emulator and physical devices; the installed desktop app.
+
 ## MEL-710 — immediate request replies, unreleased October 29
 
 Owner reported approximately 20 seconds of unchanged Needs-attention UI and

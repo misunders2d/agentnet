@@ -79,7 +79,11 @@ func (l *mobileRouteListener) count() int {
 	return len(l.conns)
 }
 
-func TestAppNetworkRecoveryPreservesQueuedQuestionAndReceive(t *testing.T) {
+// TestAppNetworkRecoveryPreservesQueuedMessageAndReceive: a message the
+// stopped phone queued in its DM goes once after network recovery, and an
+// older device's message still arrives (MEL-713: a device conversation takes
+// no new turn from this app; a DM needs both persons and a connected peer).
+func TestAppNetworkRecoveryPreservesQueuedMessageAndReceive(t *testing.T) {
 	t.Setenv("AGENTNET_NOTIFY", "off")
 	ln, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
@@ -105,6 +109,9 @@ func TestAppNetworkRecoveryPreservesQueuedQuestionAndReceive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err = enrolled.CreatePerson(ctx, "Phone"); err != nil {
+		t.Fatal(err)
+	}
 	invite, err := enrolled.Invite(ctx, "peer", time.Hour, false)
 	if err != nil {
 		t.Fatal(err)
@@ -116,6 +123,9 @@ func TestAppNetworkRecoveryPreservesQueuedQuestionAndReceive(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer peer.Close()
+	if _, err = peer.CreatePerson(ctx, "Peer"); err != nil {
+		t.Fatal(err)
+	}
 	peerCtx, stopPeer := context.WithCancel(ctx)
 	peerDone := make(chan struct{})
 	go func() { defer close(peerDone); _ = peer.Run(peerCtx, client.RunOptions{HumanOnly: true}) }()
@@ -130,16 +140,40 @@ func TestAppNetworkRecoveryPreservesQueuedQuestionAndReceive(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitMobile(t, "real phone and peer streams", func() bool { return app.session.a.MemberView().Current && peer.MemberView().Current })
+	var conv string
+	waitMobile(t, "peer conversation capabilities", func() bool {
+		var createErr error
+		conv, createErr = app.session.a.CreateDM(ctx, peer.Address)
+		if createErr != nil && !strings.HasPrefix(createErr.Error(), client.WaitPeerUpdate) {
+			t.Fatal(createErr)
+		}
+		return createErr == nil
+	})
+	const original = "Original queued mobile message"
+	// rows are agent's copies of the original message in the DM.
+	rows := func(agent *client.Agent) []client.ConvMessage {
+		all, err := agent.ConversationMessages(conv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var found []client.ConvMessage
+		for _, m := range all {
+			if m.Body == original {
+				found = append(found, m)
+			}
+		}
+		return found
+	}
 	app.Stop()
 	id := protocol.NewID()
-	draft, _ := json.Marshal(ui.Draft{ID: id, To: peer.Address, Kind: "question", Body: "Original queued mobile question"})
-	raw, err := app.session.SendJSON(string(draft))
+	draft, _ := json.Marshal(ui.DMDraft{ID: id, Conv: conv, Body: original})
+	raw, err := app.session.SendDMJSON(string(draft))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var queued ui.Sent
-	if err = json.Unmarshal([]byte(raw), &queued); err != nil || queued.ID != id || queued.State != "queued" {
-		t.Fatal("original question was not durably queued", queued, err)
+	if err = json.Unmarshal([]byte(raw), &queued); err != nil || queued.LID != id || queued.State != "queued" {
+		t.Fatal("original message was not durably queued", raw, err)
 	}
 	old := route.breakExisting()
 	resumeStarted := time.Now()
@@ -150,11 +184,8 @@ func TestAppNetworkRecoveryPreservesQueuedQuestionAndReceive(t *testing.T) {
 	waitMobile(t, "new TLS route after stopped resume", func() bool {
 		return route.count() > old && app.session.a.MemberView().Current && peer.MemberView().Current
 	})
-	waitMobile(t, "original question at peer", func() bool {
-		thread, err := ui.NewLive(peer).Thread(id)
-		return err == nil && len(thread.Messages) == 1 && thread.Messages[0].ID == id && thread.Messages[0].Body == "Original queued mobile question" && thread.Messages[0].State == "held"
-	})
-	t.Logf("stopped resume to original question stored: %s", time.Since(resumeStarted))
+	waitMobile(t, "original message at peer", func() bool { return len(rows(peer)) == 1 })
+	t.Logf("stopped resume to original message stored: %s", time.Since(resumeStarted))
 	// Break the active push route too, then deliver in both directions using
 	// the public App lifecycle hook rather than replacing Session or its Run.
 	app.session.mu.Lock()
@@ -190,18 +221,17 @@ func TestAppNetworkRecoveryPreservesQueuedQuestionAndReceive(t *testing.T) {
 		t.Fatal("network recovery replaced the run, origin or identity")
 	}
 	// Repeated lifecycle wakes drain existing storage, not another UI send.
-	// The unrelated peer remains held: networking grants no permission.
+	// Networking grants no permission.
 	app.NetworkChanged()
 	if err = app.Start(); err != nil {
 		t.Fatal(err)
 	}
-	waitMobile(t, "original question proven delivered once", func() bool {
-		thread, err := app.session.live.Thread(id)
-		return err == nil && len(thread.Messages) == 1 && thread.Messages[0].ID == id && thread.Messages[0].Body == "Original queued mobile question" && thread.Messages[0].State == "delivered"
+	waitMobile(t, "original message proven delivered once", func() bool {
+		sent := rows(app.session.a)
+		return len(sent) == 1 && sent[0].LID == id && sent[0].State == "delivered"
 	})
-	thread, err := ui.NewLive(peer).Thread(id)
-	if err != nil || len(thread.Messages) != 1 || thread.Messages[0].ID != id || thread.Messages[0].State != "held" {
-		t.Fatal("lifecycle wake duplicated or admitted original question", thread, err)
+	if got := rows(peer); len(got) != 1 || got[0].LID != id {
+		t.Fatal("lifecycle wake duplicated the original message", got)
 	}
 	if agents, err := app.session.a.LocalAgents(); err != nil || len(agents) != 0 {
 		t.Fatal("recovery introduced a phone executor", err)
