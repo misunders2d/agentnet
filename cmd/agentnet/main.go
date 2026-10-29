@@ -833,6 +833,7 @@ func runSendKind(ctx context.Context, a *client.Agent, kind string, args []strin
 	followUp := fs.String("follow-up", "", "when the reply arrives, have your responder process it once with these instructions and keep a summary for you (nothing is sent back)")
 	returnSelection := receiverFlags(fs)
 	remoteAgent := fs.String("agent", "", "exact named remote executor AgentID, independent of reply receiver")
+	fromAgent := fs.String("from-agent", "", "ask as this agent hosted here, in your My agents room (default: this terminal's harness agent)")
 	replyTo := fs.String("reply-to", "", "continue a conversation: the id of a message you sent to or received from ADDRESS")
 	answerDefault := client.AskAnswerWait // asked here, answered here (MEL-537)
 	if kind == "task" {
@@ -854,18 +855,32 @@ func runSendKind(ctx context.Context, a *client.Agent, kind string, args []strin
 	if err := receiverGuard(a, kind, beyond, *replyTo); err != nil {
 		return err
 	}
-	if *replyTo != "" {
-		if err := a.CheckReplyTo(*replyTo, fs.Arg(0)); err != nil {
-			return err
-		}
-	}
 	msgKind := envelope.KindQuestion
 	if kind == "task" {
 		msgKind = envelope.KindTask
 	}
+	from, session, room, err := roomAskFrom(a, fs.Arg(0), *fromAgent)
+	if err != nil {
+		return err
+	}
+	if room && *followUp != "" {
+		return errors.New("--follow-up is not available for an agent's ask in the My agents room")
+	}
+	if !room && *replyTo != "" {
+		if err := a.CheckReplyTo(*replyTo, fs.Arg(0)); err != nil {
+			return err
+		}
+	}
 	receiver, err := returnSelection.selected(a, true)
 	if err != nil {
 		return err
+	}
+	if room {
+		r := client.AgentRoomAsk{From: from, SessionKey: session, AgentID: *remoteAgent, Kind: msgKind, Body: fs.Arg(1), ReplyTo: *replyTo, Receiver: receiver}
+		for _, p := range files {
+			r.Files = append(r.Files, client.OutgoingFile{Path: p})
+		}
+		return runRoomAsk(ctx, a, r, fs.Arg(0), answerWait(answerFor), os.Stdout)
 	}
 	var target *envelope.Target
 	if *remoteAgent != "" {

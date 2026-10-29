@@ -154,7 +154,7 @@ func TestAgentRoomRootAskFromAnotherPersonNeedsConsent(t *testing.T) {
 	to := p6Member(t, w.alice, w.bob, conv)
 	eventually(t, "asking agent known at target", func() bool { return stateAt(t, w.bob, from.PID).Claimable() })
 	for _, kind := range []string{envelope.KindQuestion, envelope.KindTask} {
-		sent, err := w.alice.postAgentAsk(tctx(t), conv, "", stateAt(t, w.alice, from.PID), stateAt(t, w.alice, to.PID), kind, "root "+kind, "agentstub", nil)
+		sent, err := w.alice.postAgentAsk(tctx(t), conv, "", stateAt(t, w.alice, from.PID), stateAt(t, w.alice, to.PID), kind, "root "+kind, "agentstub", nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

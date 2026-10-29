@@ -163,6 +163,7 @@ type AgentRoomAsk struct {
 	Kind       string
 	Body       string
 	ReplyTo    string // only picks the topic: a terminal ask has no upstream request
+	Files      []OutgoingFile
 	Receiver   *ReplyReceiver
 	Join       time.Duration // how long to wait for both agents to join the topic
 }
@@ -218,14 +219,14 @@ func (a *Agent) SendAgentRoomAsk(ctx context.Context, r AgentRoomAsk) (AgentRoom
 	if r.From.Responder != nil && r.From.Responder.Harness != "" {
 		harness = r.From.Responder.Harness
 	}
-	out.ConvSent, err = a.postAgentAsk(ctx, out.Conv, out.Topic, from, to, r.Kind, r.Body, harness, r.Receiver)
+	out.ConvSent, err = a.postAgentAsk(ctx, out.Conv, out.Topic, from, to, r.Kind, r.Body, harness, r.Files, r.Receiver)
 	return out, err
 }
 
 // postAgentAsk posts a request with no upstream request as agent from, a
 // participation hosted here, to agent to in conv. The receiving host checks
 // it as a request from this device (roomChain).
-func (a *Agent) postAgentAsk(ctx context.Context, conv, topic string, from, to ParticipationInfo, kind, body, harness string, receiver *ReplyReceiver) (ConvSent, error) {
+func (a *Agent) postAgentAsk(ctx context.Context, conv, topic string, from, to ParticipationInfo, kind, body, harness string, files []OutgoingFile, receiver *ReplyReceiver) (ConvSent, error) {
 	h, err := a.roomAudience(conv, from.PID, topic)
 	if err != nil {
 		return ConvSent{}, err
@@ -240,8 +241,73 @@ func (a *Agent) postAgentAsk(ctx context.Context, conv, topic string, from, to P
 		}
 		target.GroupAdmission = adm.Hash()
 	}
-	return a.SendConv(ctx, conv, ConvOutgoing{Kind: kind, PID: to.PID, Body: body, Topic: topic,
+	return a.SendConv(ctx, conv, ConvOutgoing{Kind: kind, PID: to.PID, Body: body, Topic: topic, Files: files,
 		Origin: envelope.OriginAgentPrefix + strings.ToLower(harness), Emotion: "neutral", Target: target, human: h, selfJob: to.HostHere, ReplyReceiver: receiver})
+}
+
+// OwnAgentHost reports whether host is one of this person's own current
+// verified human devices, whose agents a terminal agent reaches in the room.
+func (a *Agent) OwnAgentHost(host string) (bool, error) {
+	devices, err := a.OwnHumanDevices()
+	if err != nil {
+		return false, err
+	}
+	for _, d := range devices {
+		if d.Address == host {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// RoomTargetAgent picks the asked agent on host: agentID when given, else
+// host's only agent other than the asker. Several agents need --agent.
+func (a *Agent) RoomTargetAgent(ctx context.Context, host, agentID, asker string) (string, error) {
+	type choice struct{ id, label, harness string }
+	var all []choice
+	if host == a.Address {
+		agents, err := a.LocalAgents()
+		if err != nil {
+			return "", err
+		}
+		for _, e := range agents {
+			h := ""
+			if e.Responder != nil {
+				h = e.Responder.Harness
+			}
+			all = append(all, choice{e.Record.ID, e.Record.Label, h})
+		}
+	} else {
+		catalog, err := a.AgentCatalog(ctx, host)
+		if err != nil {
+			return "", err
+		}
+		for _, r := range catalog {
+			all = append(all, choice{r.ID, r.Label, r.Harness})
+		}
+	}
+	var left []choice
+	for _, c := range all {
+		if agentID != "" && c.id == agentID {
+			return c.id, nil
+		}
+		if c.id != asker {
+			left = append(left, c)
+		}
+	}
+	switch {
+	case agentID != "":
+		return "", ErrUnknownAgent
+	case len(left) == 0:
+		return "", fmt.Errorf("%s has no other agent to ask", host)
+	case len(left) > 1:
+		names := make([]string, len(left))
+		for i, c := range left {
+			names[i] = fmt.Sprintf("%s (%s %s)", c.id, c.label, c.harness)
+		}
+		return "", fmt.Errorf("%s has several agents; choose one with --agent ID: %s", host, strings.Join(names, ", "))
+	}
+	return left[0].id, nil
 }
 
 // ownHumanTaskKeys are this person's current verified human device keys.
