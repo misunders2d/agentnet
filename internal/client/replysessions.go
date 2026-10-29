@@ -415,6 +415,9 @@ func (a *Agent) CloseReplySession(in ReplySessionCall) error {
 		return err
 	}
 	if err = saveReplySession(tx, r); err == nil {
+		_, err = holdEndedSessionRequests(tx, "")
+	}
+	if err == nil {
 		err = tx.Commit()
 	}
 	if err == nil {
@@ -693,11 +696,11 @@ func (a *Agent) AckReplyReceiverInput(in ReplyReceiverAck) (bool, error) {
 // live claim leave their binding and get a fresh arrival number, so the
 // next session's hooks announce them as ordinary arrivals (attention.go).
 // They never enter review. A question or task sent in reply to the
-// session's request stays bound (released, it would become the person's OK
-// item or be answered automatically: MEL-537 says it never does), as do
-// claimed or accepted inputs: never redelivered silently, agentnet
-// receivers lists them. A binding with an explicit closed-session handoff
-// (--on-close-agent) keeps its inputs for it.
+// session's request is not released here: once the session has ended it
+// goes to the person's Review (holdEndedSessionRequests, MEL-580), never
+// answered automatically. Claimed or accepted answers stay bound: never
+// redelivered silently, agentnet receivers lists them. A binding with an
+// explicit closed-session handoff (--on-close-agent) keeps its inputs for it.
 func releaseEndedInputs(tx *sql.Tx, handle string) error {
 	rows, err := tx.Query(`SELECT x.binding, x.inbox_id FROM reply_receiver_inputs x JOIN reply_receivers b ON b.id=x.binding JOIN inbox i ON i.id=x.inbox_id
 		WHERE x.state='pending' AND x.live_claim IS NULL AND json_extract(b.receiver,'$.kind')='live_session' AND json_extract(b.receiver,'$.session_handle')=?
@@ -730,6 +733,75 @@ func releaseEndedInputs(tx *sql.Tx, handle string) error {
 			return err
 		}
 	}
+	return nil
+}
+
+// Owner decision, October 29, 2026 (MEL-580): a question or task sent in
+// reply to a request a native session asked, which that session can no
+// longer take because its registration ended, goes to the person's Review
+// with this reason, claimed by the ended session or not. Nothing runs it on
+// its own; the person answers it, runs it with an agent (Accept) or marks it
+// handled. Before, it stayed bound to the ended session: its topic said
+// Waiting for good and nobody could act on it.
+const endedSessionRequestDetail = "The terminal session that asked was closed before it handled this. Answer it, run it with your agent, or mark it handled."
+
+// holdEndedSessionRequests moves to Review the questions and tasks bound to
+// live sessions whose registration has ended (only binding's, when given),
+// unless the binding has an explicit closed-session handoff (on_close) or
+// belongs to another host. It reports how many it moved.
+func holdEndedSessionRequests(tx *sql.Tx, binding string) (int, error) {
+	rows, err := tx.Query(`SELECT x.binding, x.inbox_id FROM reply_receiver_inputs x JOIN reply_receivers b ON b.id=x.binding JOIN inbox i ON i.id=x.inbox_id
+		JOIN reply_sessions s ON s.handle=json_extract(b.receiver,'$.session_handle')
+		WHERE x.state IN ('pending','accepted') AND (?='' OR x.binding=?) AND json_extract(b.receiver,'$.kind')='live_session'
+		  AND coalesce(json_type(b.receiver,'$.on_close'),'')!='object' AND coalesce(json_extract(b.receiver,'$.remote.role'),'')!='origin'
+		  AND NOT coalesce(json_extract(s.record,'$.active'),0) AND i.kind IN (?, ?)
+		ORDER BY i.arrival`, binding, binding, envelope.KindQuestion, envelope.KindTask)
+	if err != nil {
+		return 0, err
+	}
+	type input struct{ binding, id string }
+	var inputs []input
+	for rows.Next() {
+		var in input
+		if err = rows.Scan(&in.binding, &in.id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		inputs = append(inputs, in)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return 0, err
+	}
+	for _, in := range inputs {
+		if _, err = tx.Exec(`DELETE FROM reply_receiver_inputs WHERE binding=? AND inbox_id=?`, in.binding, in.id); err != nil {
+			return 0, err
+		}
+		if _, err = tx.Exec(`UPDATE inbox SET state=?, detail=?, notified=0, review_sent=0, status_due=status_due+1 WHERE id=? AND state IN ('','pending','accepted','held','awaiting')`, stateNeedHuman, endedSessionRequestDetail, in.id); err != nil {
+			return 0, err
+		}
+	}
+	return len(inputs), nil
+}
+
+// reviewEndedSessionRequests applies holdEndedSessionRequests to what earlier
+// programs left bound to sessions that had already ended (daemon start).
+func (a *Agent) reviewEndedSessionRequests() error {
+	tx, err := a.store.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	n, err := holdEndedSessionRequests(tx, "")
+	if err != nil || n == 0 {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	a.Logf("%d question(s)/task(s) for terminal sessions that had ended moved to Review", n)
+	a.store.changed()
 	return nil
 }
 

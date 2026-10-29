@@ -27,8 +27,10 @@ func boundInputs(t *testing.T, a *Agent, id string) int {
 
 // When the asking session ends, what it left undelivered goes to this
 // computer's inbox as a new arrival, so the next session's hooks announce
-// it (MEL-537); it never becomes the person's OK item. An input already
-// claimed by the session stays bound and is never redelivered silently.
+// it (MEL-537); an answer never becomes the person's OK item. A question or
+// task sent back in reply goes to the person's Review instead, claimed by
+// the session or not, and nothing runs it (owner, October 29, 2026;
+// MEL-580): bound to the ended session, its topic said Waiting for good.
 func TestEndedSessionInputsReleasedToInbox(t *testing.T) {
 	w := newWorld(t, "")
 	r, call := nativeReceiverFixture(t, w.alice, "pi")
@@ -49,8 +51,7 @@ func TestEndedSessionInputsReleasedToInbox(t *testing.T) {
 	if boundInputs(t, w.alice, pending) != 1 {
 		t.Fatal("the answer is not bound to the active session")
 	}
-	// A question bob sends back in reply: bound too, and it stays bound
-	// when the session ends, never the person's OK item.
+	// A question bob sends back in reply: bound too while the session lives.
 	back := receiverDirect(t, w.bob, w.alice, envelope.Inner{Kind: envelope.KindQuestion, Body: "which branch?", ReplyTo: sent.ID})
 	if err = w.alice.verifyAndStore(tctx(t), back); err != nil {
 		t.Fatal(err)
@@ -66,8 +67,8 @@ func TestEndedSessionInputsReleasedToInbox(t *testing.T) {
 	if e := w.alice.CloseReplySession(call); e != nil {
 		t.Fatal(e)
 	}
-	if boundInputs(t, w.alice, pending) != 0 || boundInputs(t, w.alice, claimed) != 1 || boundInputs(t, w.alice, back.ID) != 1 {
-		t.Fatal("released the wrong inputs")
+	if boundInputs(t, w.alice, pending) != 0 || boundInputs(t, w.alice, claimed) != 0 || boundInputs(t, w.alice, back.ID) != 0 {
+		t.Fatal("inputs left bound to the ended session")
 	}
 	top, _ := w.alice.store.arrivalTop()
 	var items []arrivalItem
@@ -78,23 +79,67 @@ func TestEndedSessionInputsReleasedToInbox(t *testing.T) {
 	if err != nil || !slices.ContainsFunc(items, func(it arrivalItem) bool { return it.id == pending }) || slices.ContainsFunc(items, func(it arrivalItem) bool { return it.id == claimed }) {
 		t.Fatalf("hooks announce %+v %v", items, err)
 	}
-	for _, m := range mustReview(t, w.alice) {
-		if m.ID == pending || m.ID == back.ID {
-			t.Fatalf("an input of the ended session became an OK item: %+v", m)
+	inReview := func(id string) bool {
+		return slices.ContainsFunc(mustReview(t, w.alice), func(m Message) bool { return m.ID == id })
+	}
+	if inReview(pending) {
+		t.Fatal("an answer to the ended session became an OK item")
+	}
+	for _, id := range []string{back.ID, claimed} {
+		if !inReview(id) || jobDetail(t, w.alice, id) != endedSessionRequestDetail {
+			t.Fatalf("question %s for the ended session is not in Review with its reason: %q", id, jobDetail(t, w.alice, id))
 		}
 	}
-	// One arriving after the end is kept bound the same way.
+	// One arriving after the end goes to Review the same way; nothing runs it.
 	late := receiverDirect(t, w.bob, w.alice, envelope.Inner{Kind: envelope.KindTask, Body: "push the fix", ReplyTo: sent.ID})
 	if err = w.alice.verifyAndStore(tctx(t), late); err != nil {
 		t.Fatal(err)
 	}
-	if boundInputs(t, w.alice, late.ID) != 1 {
-		t.Fatal("a task in reply to an ended session's request was released")
+	if boundInputs(t, w.alice, late.ID) != 0 || !inReview(late.ID) {
+		t.Fatal("a task in reply to an ended session's request is not in Review")
 	}
-	for _, m := range mustReview(t, w.alice) {
-		if m.ID == late.ID {
-			t.Fatalf("a task in reply became an OK item: %+v", m)
-		}
+	if s, _ := w.alice.store.jobState(late.ID); s != stateNeedHuman {
+		t.Fatalf("a task for an ended session: %s", s)
+	}
+}
+
+func jobDetail(t *testing.T, a *Agent, id string) string {
+	t.Helper()
+	var d string
+	if err := a.store.db.QueryRow(`SELECT coalesce(detail,'') FROM inbox WHERE id=?`, id).Scan(&d); err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+// Questions and tasks an earlier program left bound to a session that had
+// already ended go to Review when the daemon starts (MEL-580).
+func TestDaemonStartReviewsEndedSessionRequests(t *testing.T) {
+	w := newWorld(t, "")
+	r, call := nativeReceiverFixture(t, w.alice, "pi")
+	_, back := nativeInput(t, w.alice, w.bob, r.Handle)
+	if e := w.alice.CloseReplySession(call); e != nil {
+		t.Fatal(e)
+	}
+	// As an earlier program left it: still bound, waiting.
+	var binding string
+	if err := w.alice.store.db.QueryRow(`SELECT id FROM reply_receivers WHERE json_extract(receiver,'$.session_handle')=?`, r.Handle).Scan(&binding); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.alice.store.db.Exec(`INSERT INTO reply_receiver_inputs(binding,inbox_id) VALUES(?,?)`, binding, back); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.alice.store.db.Exec(`UPDATE inbox SET state='pending', detail=NULL WHERE id=?`, back); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.alice.reviewEndedSessionRequests(); err != nil {
+		t.Fatal(err)
+	}
+	if boundInputs(t, w.alice, back) != 0 || jobDetail(t, w.alice, back) != endedSessionRequestDetail {
+		t.Fatal("a question for an already ended session stayed bound")
+	}
+	if s, _ := w.alice.store.jobState(back); s != stateNeedHuman {
+		t.Fatalf("state %s", s)
 	}
 }
 

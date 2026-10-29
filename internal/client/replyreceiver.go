@@ -501,8 +501,8 @@ func bindReplyReceiverInput(tx *sql.Tx, in envelope.Inner, fp string) error {
 	// The asking session has ended: its answer waits in this computer's
 	// inbox, where the next session's hooks announce it (MEL-537), never
 	// bound to a session that cannot take it. A question or task in reply
-	// stays bound, as releaseEndedInputs keeps it: never the person's OK
-	// item nor answered automatically.
+	// goes to the person's Review below (holdEndedSessionRequests, MEL-580);
+	// nothing answers it automatically.
 	if in.Kind != envelope.KindQuestion && in.Kind != envelope.KindTask {
 		if ended, e := endedLiveSession(tx, binding); e != nil {
 			return e
@@ -520,6 +520,8 @@ func bindReplyReceiverInput(tx *sql.Tx, in envelope.Inner, fp string) error {
 	}
 	if e = groupReceiverInput(tx, b, in.ID); e != nil {
 		_, err = tx.Exec(`UPDATE inbox SET state=?,detail=? WHERE id=?`, stateNotRun, e.Error(), in.ID)
+	} else if in.Kind == envelope.KindQuestion || in.Kind == envelope.KindTask {
+		_, err = holdEndedSessionRequests(tx, binding)
 	}
 	return err
 }
