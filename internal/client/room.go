@@ -259,6 +259,14 @@ func roomChain(q dbq, r agentReq, m dmMembers, info ParticipationInfo, self, fp 
 			if !p.Claimable() || p.Host.Address != c.from || p.Host.Fingerprint != c.key || p.Audience != protocol.AudienceRoom || p.PID == c.pid {
 				return verdictStop, "asking agent membership ended or does not match its exact host", nil
 			}
+			// MEL-713: an agent asking from its terminal has no upstream
+			// request. Its exact host device is the requester, checked as one.
+			if c.reply == "" {
+				if !m.device(c.from, c.key) || !m.requestEpoch(c.from, c.key, c.target) {
+					return verdictStop, "asking agent's host group admission changed", nil
+				}
+				break
+			}
 			cause, e := roomCauseIn(q, r.Conv, c.reply, self, fp)
 			if errors.Is(e, sql.ErrNoRows) {
 				return verdictWait, "upstream request evidence is pending", nil
@@ -337,7 +345,7 @@ func roomLocalParent(q dbq, r agentReq, self, fp string) (string, error) {
 		return "", err
 	}
 	seen := map[string]bool{c.id: true}
-	for c.human != nil && c.human.AgentAuthor() {
+	for c.human != nil && c.human.AgentAuthor() && c.reply != "" {
 		c, err = roomCauseIn(q, r.Conv, c.reply, self, fp)
 		if err != nil {
 			return "", err

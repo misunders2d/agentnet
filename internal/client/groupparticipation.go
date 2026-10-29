@@ -209,7 +209,9 @@ func (a *Agent) mayDeliverGroupParticipation(env envelope.Envelope) (bool, bool,
 		}
 		allowed = err == nil && (!m.device(env.To, fp) || epoch != "" && epoch == m.keyEpoch(fp))
 	}
-	if allowed && in.Human != nil && in.Human.AgentAuthor() && in.Target != nil {
+	// An agent's terminal ask (MEL-713) has no originating run to fence; its
+	// recipient checks it as a request from this device (roomChain).
+	if allowed && in.Human != nil && in.Human.AgentAuthor() && in.Target != nil && in.ReplyTo != "" {
 		var originState string
 		err = a.store.db.QueryRow(`SELECT state FROM inbox WHERE conv=? AND (id=? OR lid=?)`, in.Conv, in.ReplyTo, in.ReplyTo).Scan(&originState)
 		allowed = err == nil && originState == stateRunning
