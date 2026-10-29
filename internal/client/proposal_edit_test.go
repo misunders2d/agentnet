@@ -49,6 +49,7 @@ func syncedProposalFixture(t *testing.T) (*world, *Agent, string) {
 		if err = rows.Scan(&raw); err != nil {
 			t.Fatal(err)
 		}
+		var env envelope.Envelope // fresh: decoding into the proposal's would keep its absent fields
 		if err = json.Unmarshal([]byte(raw), &env); err != nil {
 			t.Fatal(err)
 		}
