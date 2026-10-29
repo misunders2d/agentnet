@@ -325,6 +325,27 @@ func TestQueueNoticeChangesOnlyWhenBusyStateChanges(t *testing.T) {
 	}
 }
 
+// MEL-580: the queue notice was refreshed only while a run went on, so the
+// last run's end left queued requests saying the agent was busy, for days.
+func TestBusyQueueNoticeClearsWhenTheLastRunEnds(t *testing.T) {
+	s := securityStore(t)
+	if _, err := s.db.Exec(`INSERT INTO inbox(id,sender,ts,kind,body,received_at,state,verified_by,last_attempt_at) VALUES('run','first/desk',1,'task','PRIVATE task',1,'running','key',100),('queue','next/desk',1,'task','Next task',1,'accepted','key',0)`); err != nil {
+		t.Fatal(err)
+	}
+	a := &Agent{store: s, statusWake: make(chan struct{}, 1), Logf: func(string, ...any) {}, wakeWorker: func() {}}
+	a.statusLive.Store(true)
+	a.noteBusyQueue()
+	if _, err := s.db.Exec(`UPDATE inbox SET state='answered' WHERE id='run'`); err != nil {
+		t.Fatal(err)
+	}
+	a.appUpdateMu.RLock() // as the claim took it
+	a.releaseExecutor("run")
+	var detail string
+	if err := s.db.QueryRow(`SELECT coalesce(detail,'') FROM inbox WHERE id='queue'`).Scan(&detail); err != nil || detail != "" {
+		t.Fatalf("queued request still says busy after the last run ended: %q %v", detail, err)
+	}
+}
+
 func TestStallNoticeAlertsOnceWithoutStopping(t *testing.T) {
 	s := securityStore(t)
 	if _, err := s.db.Exec(`INSERT INTO inbox(id,sender,ts,kind,body,received_at,state,verified_by,last_attempt_at) VALUES('run','first/desk',1,'task','PRIVATE task',1,'running','key',100)`); err != nil {

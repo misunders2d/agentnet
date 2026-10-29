@@ -246,7 +246,8 @@ func (a *Agent) releaseExecutor(id string) {
 	delete(a.workerLanes.jobs, id)
 	a.workerLanes.Unlock()
 	a.appUpdateMu.RUnlock()
-	a.changes.bump() // broadcast completion even if terminal state was stored earlier
+	a.noteBusyQueue() // the last run ended: queued requests are no longer "busy with another request" (MEL-580)
+	a.changes.bump()  // broadcast completion even if terminal state was stored earlier
 	a.wakeWorker()
 }
 func (a *Agent) executorsIdle() bool {
