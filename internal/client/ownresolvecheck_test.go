@@ -39,7 +39,11 @@ func TestOwnResolutionReadOnlyCapabilityCheck(t *testing.T) {
 		t.Fatal(e)
 	}
 	dropCapSuccessor(t, w.alice, protocol.CapOwnSyncV3)
-	if e := check(); !errors.Is(e, ErrNoControls) || !strings.Contains(e.Error(), "own-device history and decisions") || strings.Contains(e.Error(), "reactions") {
+	// The phone keeps profiles until the Hub's next member list: it sees the
+	// dropped capability once that push arrives.
+	var e error
+	eventually(t, "the phone to see the dropped capability", func() bool { e = check(); return e != nil })
+	if !errors.Is(e, ErrNoControls) || !strings.Contains(e.Error(), "own-device history and decisions") || strings.Contains(e.Error(), "reactions") {
 		t.Fatalf("wrong capability explanation: %v", e)
 	}
 	// Passing a check is never permission to skip the real send's current check.

@@ -236,11 +236,14 @@ func TestSharedTopicExactGuestLiveAndHistorical(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			p, e := w.alice.InviteHumanInScope(tctx(t), conv, guest.Address, []string{selected.LID}, "", &topic)
+			p, e := w.alice.InviteHumanInScope(WithQueuedSend(tctx(t), ""), conv, guest.Address, []string{selected.LID}, "", &topic)
 			if e != nil {
 				t.Fatal(e)
 			}
-			eventually(t, "exact scoped invitation", func() bool { return stateAt(t, guest, p.PID).State == PartInvited })
+			eventually(t, "exact scoped invitation", func() bool {
+				info, e := guest.Participation(p.PID)
+				return e == nil && info.State == PartInvited
+			})
 			if _, e = guest.AcceptParticipation(tctx(t), p.PID); e != nil {
 				t.Fatal(e)
 			}

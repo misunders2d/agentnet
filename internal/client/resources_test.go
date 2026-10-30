@@ -335,12 +335,15 @@ func TestConversationResourcesNewMember(t *testing.T) {
 				roomReader(t, a)
 			}
 			inviteCtx, traceInvite := traceFixtureHTTP(t, tctx(t))
-			guestInvite, err := w.alice.InviteHuman(inviteCtx, conv, guest.Address, nil, "")
+			guestInvite, err := w.alice.InviteHuman(WithQueuedSend(inviteCtx, ""), conv, guest.Address, nil, "")
 			traceInvite(err)
 			if err != nil {
 				t.Fatal(err)
 			}
-			eventually(t, "bootstrap guest invitation", func() bool { return stateAt(t, guest, guestInvite.PID).State == PartInvited })
+			eventually(t, "bootstrap guest invitation", func() bool {
+				info, e := guest.Participation(guestInvite.PID)
+				return e == nil && info.State == PartInvited
+			})
 			if _, err = guest.AcceptParticipation(tctx(t), guestInvite.PID); err != nil {
 				t.Fatal(err)
 			}
