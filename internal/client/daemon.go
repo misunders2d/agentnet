@@ -51,7 +51,10 @@ var ErrDaemonRunning = errors.New("another agentnet daemon is already running")
 // Each Run is one session: a fresh session id announced to the Hub, and,
 // with opts.Listen, an HTTPS listener for direct deliveries.
 func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
-	release, err := lockfile.Acquire(filepath.Join(a.home, "daemon.lock"))
+	// Status and update checks (daemonRunning, the CLI's) take this lock for
+	// an instant to see whether a daemon runs; a start that meets one waits
+	// it out instead of refusing. A daemon that really runs holds it longer.
+	release, err := lockfile.AcquireWithin(filepath.Join(a.home, "daemon.lock"), time.Second)
 	if errors.Is(err, lockfile.ErrLocked) {
 		return fmt.Errorf("%w for %s", ErrDaemonRunning, a.home)
 	}

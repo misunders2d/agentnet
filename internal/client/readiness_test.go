@@ -170,6 +170,39 @@ func TestDaemonReadinessLifecycle(t *testing.T) {
 	}
 }
 
+// A status check that holds daemon.lock for its instant when the daemon
+// starts must not make that start refuse as a second daemon (MEL-698).
+func TestDaemonStartOutlastsStatusProbe(t *testing.T) {
+	a := enrolledAt(t, "https://127.0.0.1:1", "")
+	defer a.Close()
+	probe, err := lockfile.Acquire(filepath.Join(a.home, "daemon.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- a.Run(ctx, RunOptions{HumanOnly: true}) }()
+	time.Sleep(100 * time.Millisecond)
+	probe()
+	eventually(t, "daemon started after the probe", func() bool {
+		select {
+		case err := <-done:
+			t.Fatalf("daemon start refused while a probe held the lock: %v", err)
+		default:
+		}
+		v, err := a.ReadDaemonReadiness(tctx(t))
+		return err == nil && v.HumanOnly
+	})
+	if running, err := daemonRunning(a.home); !running || err != nil {
+		t.Fatalf("started daemon does not hold its lock: %v %v", running, err)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDaemonReadinessRejectsForeignAndOversize(t *testing.T) {
 	a := enrolledAt(t, "https://127.0.0.1:1", "")
 	defer a.Close()
