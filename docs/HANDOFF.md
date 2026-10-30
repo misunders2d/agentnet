@@ -12,6 +12,18 @@ covers the window. Platform service acceptance remains open. The same pass
 found MEL-699 (v0.9.6), MEL-687 (v0.9.3) and MEL-627 already fixed in code,
 and closed MEL-530 on its regressions; Linear records each.
 
+The push-triggered CI run 40975570965 on released `fbeab7c4`, not checked
+before publication, failed five tests: Linux
+`TestCodexRoomExecutableLifecycle/cancel`, macOS
+`TestTopicOrganizationComicRendered` (timeout), and on Windows
+`TestDaemonStatusUsesRunningProcessAndDoesNotChangeCallerPath` ("state
+unknown") and the Hub member-push pair ("unknown stream" after a silent-stream
+close). Each passed on the same commit in run 40969662276; the Linux, daemon
+status and Hub cases also pass locally repeated (30×, 5×, 5×). The Codex case
+was a real race, visible only to that test (the worker already discarded a
+stopped run's output): c7e2a7ec makes a stopped run's late completed turn a
+failure, with `TestCodexRoomStoppedRunGivesNoAnswer`.
+
 ## v0.10.0 published and Hub deployed — October 30
 
 [App v0.10.0](https://github.com/misunders2d/agentnet/releases/tag/v0.10.0) is
