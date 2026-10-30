@@ -1,5 +1,26 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+## Proof-queue extra pass explained; await stall instrumented — October 30
+
+`TestProofQueueOneEventAndRestart` saw four drain passes on Windows. The job
+log shows no message during the drain. Reproduced locally: one injected
+transient Hub failure (directory or profile lookup) during the drain gives
+exactly four passes with the valid message admitted, the Windows symptom.
+`retryProof` looks at the same page again after a transient failure by design
+(context deadline, network error, 5xx, SQLite busy are all transient). The
+test's `drain` now counts passes that move the look on separately from same-page
+repeats; three moving passes are still required, so an extra full look still
+fails. `TestProofQueueTransientRepeatsOnePage` pins the mechanism (one
+injected failure: three pages, one repeat, valid admitted).
+
+`TestAwaitReplyStopsOnAwaiting` (macOS, ten-second wait expired after the
+host reached `awaiting`) is not reproduced: 40 local `-race` runs pass
+(median 1.6 s), and a stage probe over 25 more shows request receipt,
+awaiting, status told and requester storage all within one second. The
+waiter subscribes before checking, so no lost wake. No deadline was raised; the
+test now logs the host request state, its status copies and the requester's
+kept statuses on failure, for the next CI occurrence. Open.
+
 ## Group invitations return before delivery — unreleased, October 30
 
 Cause of the four room/guest invitation timeouts in the CI triage below. A

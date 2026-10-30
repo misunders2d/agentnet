@@ -125,6 +125,24 @@ func TestAwaitReplyStopsOnAwaiting(t *testing.T) {
 	var told []ExecView
 	r, err := w.alice.AwaitReply(tctx(t), q.ID, 60*time.Second, func(v ExecView) { told = append(told, v) })
 	if err != nil || r.Stopped == nil || r.Stopped.State != "awaiting" || r.Answer != nil || r.TimedOut {
+		// Each stage of the status path, for a failure seen only on CI.
+		var state, detail string
+		var due int64
+		w.bob.store.db.QueryRow(`SELECT state, coalesce(detail,''), status_due FROM inbox WHERE id=?`, q.ID).Scan(&state, &detail, &due)
+		t.Logf("host request state=%q detail=%q status_due=%d after %v", state, detail, due, time.Since(start))
+		if rows, e := w.bob.store.db.Query(`SELECT id, state, coalesce(error,'') FROM outbox WHERE sub=? AND ref_id=?`, envelope.SubStatus, q.ID); e == nil {
+			for rows.Next() {
+				var id, st, why string
+				if rows.Scan(&id, &st, &why) == nil {
+					t.Logf("host status copy %s state=%s error=%q", id, st, why)
+				}
+			}
+			rows.Close()
+		}
+		var held, kept int
+		w.alice.store.db.QueryRow(`SELECT count(*) FROM inbox WHERE sub=? AND ref_id=?`, envelope.SubStatus, q.ID).Scan(&kept)
+		w.alice.store.db.QueryRow(`SELECT count(*) FROM quarantine`).Scan(&held)
+		t.Logf("requester statuses kept=%d quarantined_messages=%d statuses_told=%+v", kept, held, told)
 		t.Fatalf("wait %+v %v", r, err)
 	}
 	if time.Since(start) > 30*time.Second || len(told) == 0 || told[len(told)-1].State != "awaiting" || told[len(told)-1].Host != w.bob.Address {

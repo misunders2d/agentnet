@@ -172,16 +172,30 @@ func setupProofQueue(t *testing.T, n int) (*world, *Agent, envelope.Envelope) {
 // drain does what a recovery event does in the daemon: the look starts
 // from the beginning and continues page by page until it reaches the end
 // (the daemon kicks its own next sync; here the loop stands in for that).
-func drain(t *testing.T, a *Agent) (pages int) {
+// pages counts syncs that moved the look on or ended it; a transient failure
+// leaves the look in place and the same page is looked at again (retryProof),
+// which counts in repeats.
+func drain(t *testing.T, a *Agent) (pages, repeats int) {
 	t.Helper()
+	at := func() heldLook {
+		a.convWork.mu.Lock()
+		defer a.convWork.mu.Unlock()
+		return a.heldLookNow()
+	}
 	a.convWork.due(convRetry)
 	for a.convWork.bits.Load()&(convRetry|convRetryMore) != 0 {
+		before := at()
 		a.convSync(tctx(t))
-		if pages++; pages > 100 {
+		if a.convWork.bits.Load()&(convRetry|convRetryMore) != 0 && at() == before {
+			repeats++
+		} else {
+			pages++
+		}
+		if pages+repeats > 100 {
 			t.Fatal("the look at held messages does not end")
 		}
 	}
-	return pages
+	return pages, repeats
 }
 
 // R2 as root reproduced it: 50 messages that stay unprovable come first;
@@ -210,8 +224,8 @@ func TestProofQueueReachesLaterMessages(t *testing.T) {
 func TestProofQueueOneEventAndRestart(t *testing.T) {
 	t.Parallel()
 	w, _, valid := setupProofQueue(t, 130)
-	if pages := drain(t, w.bob); pages != 3 || inboxCount(t, w.bob, "id = ?", valid.ID) != 1 {
-		t.Fatalf("one event: %d pages, valid admitted %v", pages, inboxCount(t, w.bob, "id = ?", valid.ID) == 1)
+	if pages, repeats := drain(t, w.bob); pages != 3 || inboxCount(t, w.bob, "id = ?", valid.ID) != 1 {
+		t.Fatalf("one event: %d pages (%d repeated after a transient failure), valid admitted %v", pages, repeats, inboxCount(t, w.bob, "id = ?", valid.ID) == 1)
 	}
 
 	w2, _, valid2 := setupProofQueue(t, 130)
@@ -232,5 +246,22 @@ func TestProofQueueOneEventAndRestart(t *testing.T) {
 	again.store.db.QueryRow(`SELECT count(*) FROM quarantine WHERE reason = ?`, reasonProof).Scan(&held)
 	if held != 130 {
 		t.Fatalf("%d unprovable messages still held, want 130", held)
+	}
+}
+
+// A transient Hub failure while a page is looked at keeps the look in place:
+// that page is looked at again, the look still ends after the same three
+// pages and reaches the valid message (Windows CI saw one such extra sync).
+func TestProofQueueTransientRepeatsOnePage(t *testing.T) {
+	t.Parallel()
+	w, _, valid := setupProofQueue(t, 130)
+	f := injectFaults(w.bob)
+	f.addAfter("GET", "/v1/agents/", 3, 1, false)
+	pages, repeats := drain(t, w.bob)
+	f.mu.Lock()
+	unused := f.rules[0].times
+	f.mu.Unlock()
+	if unused != 0 || pages != 3 || repeats != 1 || inboxCount(t, w.bob, "id = ?", valid.ID) != 1 {
+		t.Fatalf("one transient failure: fault unused %d, %d pages, %d repeated, valid admitted %v", unused, pages, repeats, inboxCount(t, w.bob, "id = ?", valid.ID) == 1)
 	}
 }
