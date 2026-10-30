@@ -1,5 +1,42 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+## Latency fixture misses brief pending states under load — October 30
+
+First local Android qualification on the Zenbook emulator (T3 Device panel,
+`agentnet_api35`, API 35 x86_64, debug build of `22cb8c1c`, synthetic offline
+fixture). This mirrors `qualify-emulator.sh` minus the signed release-upgrade
+step, which needs the CI preview key. Snapshot, the three notification modes
+and 16 of 17 latency suites passed. `latency:agents` failed once: "Timed out:
+agents.portable-link visible feedback". The link request ran 4501–4541 ms and
+the app ended on "Make a new app link", so "Making a link…" was shown for about
+40 ms. `until()` polls every 10 ms on timers; with the machine loaded, no poll
+ran inside that window. A forced race (link reply `pause(0)`) fails the old
+fixture 5/5. It is a fixture defect, not the app.
+
+Fix in `latency_fixture.mjs`: `brief(...)` marks the 14 predicates that check a
+pending state ending at a quick synthetic result (`Making a link…`,
+`Applying…`, `Sharing…`, `Opening…`, `Sending…`, disabled-while-pending).
+For those only, the measure's existing MutationObserver checks each committed
+change and records the first time the state appeared. A first version probed
+every predicate on every mutation; that raised probe cost 2–7× inside the
+measured frames and pushed heavy suites past their 30 s bound, so it was
+narrowed. `compose.returning-preselected` asserted the preselected person 2
+frames after the sheet appeared. The picker fills only after a frame plus
+`setTimeout(0)` (`contentReady`), so under load Chromium 320/360 failed
+"returning out-of-page person rebound" once. The step now waits for that exact
+checked person as its completed state.
+
+Evidence (Zenbook under load average 10–16 from other processes): forced race
+passes 3/3; all 17 emulator latency suites pass; probe cost 1517 ms in total
+against 1729 ms before. Chromium browser mode (1440x960 and 390x844, which
+include the 320/360 partitions) passes 41/41 cells, and topics–media twice more
+12/12. One emulator compose run of three exceeded the unchanged 30 s
+whole-fixture bound. Compose takes 21–26 s on this loaded laptop with the old
+fixture too (25.6 s), and the exact preselection wait adds about 130 ms. The
+limit was not raised; CI's dedicated emulator is the qualifying run. Not run here: Firefox and
+WebKit browser cells, the native WebKitGTK shell, the signed upgrade step and
+CI's Android job.
+
 ## Proof-queue extra pass explained; await stall instrumented — October 30
 
 `TestProofQueueOneEventAndRestart` saw four drain passes on Windows. The job
