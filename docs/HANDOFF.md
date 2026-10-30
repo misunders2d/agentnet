@@ -31,6 +31,13 @@ two client-9 parents move to the lightest shards (archive tail 62 s to
 client-0 at 322 s job time; retired task device 57 s to client-7 at 339 s);
 all 1,501 parents remain assigned exactly once, with the existing 18-way and
 600-second bounds.
+Dispatched run 41065316304 on `519aab08` (shard assignment is its only
+change) passed race client-0, client-7 and client-9. With the full run, every
+go.yml job has now passed on this code: native Linux/macOS/Windows, six
+Windows client partitions, all race shards, desktop app builds on three
+systems and the Hub container. Remaining release gates (skins gate, latency
+fixtures, Android workloads, physical devices) were not run; no release is
+authorized. MEL-698 stays unresolved.
 
 ## Group invitations return before delivery — unreleased, October 30
 
