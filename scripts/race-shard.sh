@@ -22,7 +22,7 @@ run_partition() {
 	local package=$1 k=$2 n=$3 label=$4 tests
 	# Balance measured parent costs with literal fixture moves.
 	# Keep every test and the 600-second bound for the selected count.
-	tests=$(go test -list '.*' "$package" | awk -v k="$k" -v n="$n" -v client="$([[ $package = ./internal/client ]] && echo 1 || echo 0)" '
+	tests=$(go test -list '.*' "$package" | awk -v k="$k" -v n="$n" -v client="$([[ $package = ./internal/client ]] && echo 1 || echo 0)" -v ui="$([[ $package = ./internal/ui ]] && echo 1 || echo 0)" '
 		/^Test/ {
 			part=i++%n
 			if (client && n==18) {
@@ -66,6 +66,11 @@ run_partition() {
 				if ($0=="TestP6FixOutsideAdmissionAndRemovalRights") part=9
 				if ($0=="TestSharedTopicCurrentAuthorityFences") part=11
 				if ($0=="TestHistoryCatchupDuplicateForeignDismissal") part=8
+			}
+			if (ui && n==3) {
+				if ($0=="TestBrowserEngineBacklogCatchUp") part=2
+				if ($0=="TestTwoOrdinaryPeopleLinkedStateJourney") part=2
+				if ($0=="TestBrowserAssistantReactionsMatchGo") part=2
 			}
 			if (part==k) print
 		}')
