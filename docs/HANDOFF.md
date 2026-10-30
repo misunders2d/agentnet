@@ -1,5 +1,24 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+## v0.10.1 candidate — October 30
+
+Owner authorized a release on October 30. A patch over v0.10.0 (60 non-test
+lines in 11 files), each change recorded in its own section below:
+
+- Daemon CPU: presence-only member lists no longer re-sweep own-device history.
+- Own-device history no longer stops behind a message deleted after its
+  copy was delivered.
+- App guest/agent invitations return once stored; the daemon delivers.
+- A never-run own request closes from its device thread; a stopped Codex run
+  gives no answer.
+- Not included: MEL-698 (its startup lock retry 272f04a5 is fully reverted).
+
+Gates on this exact commit: the push CI run (vet, race `others` and 18 client
+shards, native Linux/macOS/Windows with `TestMixedVersion` against v0.10.0,
+six Windows client partitions, Hub container journey), a dispatched
+platform run (desktop interaction qualification and Android qualification for
+v0.10.1) and the local skins gate. Results follow when they finish.
+
 ## Own-device history stuck behind a deleted message — unreleased, October 30
 
 Since 2026-10-20 13:38 the Zenbook daemon logged "copying direct history:
