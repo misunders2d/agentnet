@@ -16,6 +16,16 @@ in `TestDaemonStartReviewsEndedSessionRequests`; both fail on the old code.
 The live item (3d63852259367e33fee3e9c4028781a2 on the Linux laptop) is still
 waiting; `agentnet resolve ID` there closes it today.
 
+CI on the unreleased fixes. Run 41026965269 (272f04a5) failed
+`TestCLIQueuedNamedAgentJourney` on Linux and macOS ("timed out waiting for
+exact CLI invitation") and Windows `TestRoomGroupRequestCarryingHumanHeld`.
+Run 41029310349 (c7e2a7ec) failed `TestCLIQueuedNamedAgentJourney` on Linux,
+Windows `TestRoomGroupTurns`, client-3 at the 600-second shard bound, and
+client-4 `TestGroupGovernanceTerminalSupersededInvariant`. The CLI journey
+was suspected of following the MEL-698 lock retry: locally under `-race` it
+failed 1 of 20 runs with it and 0 of 16 with the old `Run` (overlay), so the
+change was kept, not proven innocent. The other failures are unjudged.
+
 ## MEL-698 startup race fixed — unreleased, October 30
 
 Owner asked for Linear verification and a few fixes without a release. A
