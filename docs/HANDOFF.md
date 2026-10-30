@@ -38,8 +38,13 @@ locally ("new phone accepts old inert history") — the old inline path with a
 60-second invitation context fails the same step, so this is a separate open
 finding, not caused by this change (local load average was about 8.4).
 Without `-race`, the matching participation/guest/invite/scope groups pass
-(123 client, 41 UI tests) and `go vet ./...` passes. Native platforms, race
-shards and CI were not run for this change.
+(123 client, 41 UI tests) and `go vet ./...` passes. Under `-race -count=3`,
+the three triage room tests, `TestRoomGroupQueuedVisitorInviteStoresEachEvent`,
+`TestTopicGuestInvitesOwnAgent` (its own-agent invitation with shared context
+now queued; the queued excerpt branch executed in both DM and group, and the
+host received the selected excerpt) and the UI regression pass every time;
+`TestCLIQueuedNamedAgentJourney` passes once under `-race`. Native platforms,
+race shards and CI were not run for this change.
 
 Owner report (Linux laptop, Comic): an old "Agent history" chat showed
 "Needs attention" for a question its own terminal session asked on October 27.

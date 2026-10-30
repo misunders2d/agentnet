@@ -2042,9 +2042,11 @@ delivery and receipts.
 
 Executed: `TestLiveGuestInviteCommitsBeforeDelivery` (group guest invitation
 through the HTTP handler while the Hub holds the inviter's message posts: the
-response arrives within one second of the held post with the invitation
-stored; after release the guest holds it; fails on the old code) and
-`TestRoomGroupQueuedVisitorInviteStoresEachEvent`. Not executed: a rendered
+response arrives while delivery is still held, with the invitation stored and
+shown as invited with no sending allowed; after release the guest holds it;
+fails on the old code; three `-race` passes) and
+`TestRoomGroupQueuedVisitorInviteStoresEachEvent`. Its bound is a generous
+correctness bound under `-race`, not a latency measurement. Not executed: a rendered
 browser timing of the invite sheets, the agent invitation through its HTTP
 handler (its client path is the same `inviteParticipation` and is covered at
 client level), and native platforms.

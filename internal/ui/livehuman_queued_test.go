@@ -262,10 +262,13 @@ func TestLiveGuestInviteCommitsBeforeDelivery(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("guest invite never reached blocked recipient delivery")
 	}
+	// Delivery stays held until release; the response must not wait for it.
+	// The bound is generous: this is a correctness check under -race, not
+	// the latency fixture.
 	var response *httptest.ResponseRecorder
 	select {
 	case response = <-done:
-	case <-time.After(time.Second):
+	case <-time.After(30 * time.Second):
 		release()
 		<-done
 		t.Fatal("guest invite response waited for recipient delivery")
@@ -279,6 +282,9 @@ func TestLiveGuestInviteCommitsBeforeDelivery(t *testing.T) {
 	}
 	if current, err := alice.Participation(view.PID); err != nil || current.State != client.PartInvited || current.Conv != group {
 		t.Fatalf("invite not stored before delivery: %+v %v", current, err)
+	}
+	if view.State != client.PartInvited || view.CanSend {
+		t.Fatalf("invite response overstated the guest's participation: %+v", view)
 	}
 	release()
 	waitFor(t, "the guest holds the group invitation", func() bool {

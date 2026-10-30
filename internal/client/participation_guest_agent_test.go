@@ -172,7 +172,7 @@ func testTopicGuestInvitesOwnAgent(t *testing.T, w *world, guest *Agent, conv st
 	if _, err = guest.InviteAgentInScope(tctx(t), conv, host.Address, "", []string{hidden.LID}, nil, "", &topic); err == nil {
 		t.Fatal("guest shared unselected private history")
 	}
-	child, err := guest.InviteAgentInScope(tctx(t), conv, host.Address, "", []string{selected.LID}, nil, "", &topic)
+	child, err := guest.InviteAgentInScope(WithQueuedSend(tctx(t), ""), conv, host.Address, "", []string{selected.LID}, nil, "", &topic)
 	if err != nil {
 		t.Fatal(err)
 	}
