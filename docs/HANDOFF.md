@@ -1,5 +1,46 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+## Closed app reported as an update refusal — unreleased, October 30
+
+Found on the Zenbook after v0.10.1 went out: its app-managed daemon stayed at
+v0.10.0 and reported "app update refused (404): 404 page not found". With the
+app closed, `app-ui-url` is gone and the pre-bridge fallback reads `ui-url`,
+which is the daemon's own page and has no app updater. A 404 from that
+fallback now means the app is not open: the daemon reports that, and
+`agentnet update` opens the app and retries as designed. A 404 from the app's
+own controls is still a refusal. `TestDaemonAutoUpdateClosedAppIsNotRefusal`
+fails on the old code. Until this ships, such a home updates when its app is
+opened.
+
+`TestBundledUpdateStartsClosedAppWithoutLimitingAcceptedStaging` fails on this
+laptop with or without the change: a local service probes loopback ports and
+hits the test's server (the same cause as the skins gate below). It and the
+other update tests pass in an isolated network namespace (`unshare -rn`).
+
+## v0.10.1 published and Hub deployed — October 30
+
+[App v0.10.1](https://github.com/misunders2d/agentnet/releases/tag/v0.10.1) is
+public and Latest at 20:57:56 UTC from
+`6102c31465092edee8244f4d686b91a8bc628203`, published by owner decision with
+the macOS desktop interaction gate failing (below and in
+[interaction coverage](INTERACTION_COVERAGE.md)). All twelve payloads plus
+SHA256SUMS match the verified draft byte for byte.
+[Gallery v2026.10.30.1](https://github.com/misunders2d/agentnet-skins/releases/tag/v2026.10.30.1)
+is Latest at 21:28:35 UTC from `a0785719d00961b458abb9c1427d79f66e2a0c38`; all
+150 raw files match `published/`.
+
+Hub starts v0.10.1 at 21:00:11 UTC from the exact public Linux binary (sha256
+`02894784…adbf`); public HTTPS version/realm, volume/settings and the
+neighboring service verify, zero restarts, schema 25. Local recovery verifies
+237 files, 220 local blobs and 8,945 remote Drive references. The v0.10.0
+staging scripts were reused; their exec'd helper header redefines `WORK`, so
+set it after the exec. Physical-device and installed-app checks remain
+incomplete.
+
+PR #8 (Windows alerts keep the configured sound): the same flags already
+shipped in v0.8.31 (`5fe81042`, with a regression test on the real call); its
+NOTIFY.md wording is incorporated with contributor credit, and the PR is closed.
+
 ## v0.10.1 candidate — October 30
 
 Owner authorized a release on October 30. A patch over v0.10.0 (60 non-test
