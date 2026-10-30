@@ -78,6 +78,33 @@ func TestBundledUpdateRejectsRemoteAndRedirect(t *testing.T) {
 	}
 }
 
+// With the app closed, ui-url names an app-managed daemon's own page, which
+// has no app updater: that is the app not being open, never a refusal.
+func TestDaemonAutoUpdateClosedAppIsNotRefusal(t *testing.T) {
+	old := bundledWith
+	bundledWith = "app"
+	t.Cleanup(func() { bundledWith = old })
+	home := t.TempDir()
+	daemonPage := httptest.NewServer(http.NotFoundHandler())
+	defer daemonPage.Close()
+	if e := secfile.Write(filepath.Join(home, uiURLFile), []byte(daemonPage.URL+"/?t=private")); e != nil {
+		t.Fatal(e)
+	}
+	if e := requestAppUpdateOnce(context.Background(), home, false, "v0.8.2"); !errors.Is(e, errAppUpdateNotReady) {
+		t.Fatalf("daemon page: %v", e)
+	}
+	if _, e := daemonAutoUpdate(home, "")(context.Background(), "v0.8.2"); e == nil || !strings.Contains(e.Error(), "is not open") {
+		t.Fatalf("daemon auto-update: %v", e)
+	}
+	// The app's own controls still report what they answer.
+	if e := secfile.Write(filepath.Join(home, appControlsURLFile), []byte(daemonPage.URL+"/?t=private")); e != nil {
+		t.Fatal(e)
+	}
+	if e := requestAppUpdateOnce(context.Background(), home, false, "v0.8.2"); e == nil || !strings.Contains(e.Error(), "refused (404)") {
+		t.Fatalf("app controls: %v", e)
+	}
+}
+
 func TestBundledUpdateCheckDoesNotInstall(t *testing.T) {
 	home := t.TempDir()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

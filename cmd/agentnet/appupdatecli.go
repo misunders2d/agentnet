@@ -63,7 +63,8 @@ func requestAppUpdateOnce(ctx context.Context, home string, check bool, tag stri
 		}
 	}
 	data, err := secfile.Read(filepath.Join(home, appControlsURLFile))
-	if errors.Is(err, os.ErrNotExist) {
+	fallback := errors.Is(err, os.ErrNotExist)
+	if fallback {
 		data, err = secfile.Read(filepath.Join(home, uiURLFile))
 	} // pre-bridge apps
 	if err != nil {
@@ -109,6 +110,10 @@ func requestAppUpdateOnce(ctx context.Context, home string, check bool, tag stri
 	b, err := io.ReadAll(io.LimitReader(resp.Body, 8193))
 	if err != nil || len(b) > 8192 {
 		return errors.New("invalid app updater response")
+	}
+	if fallback && resp.StatusCode == http.StatusNotFound {
+		// With the app closed, ui-url is a daemon's own page: no app answers.
+		return errAppUpdateNotReady
 	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("app update refused (%d): %s", resp.StatusCode, strings.TrimSpace(string(b)))
