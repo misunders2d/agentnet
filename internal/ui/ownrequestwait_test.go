@@ -33,16 +33,16 @@ func TestOwnNeverRunRequestClosesFromDeviceThread(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "self request stored", func() bool {
-		c, e := a.DisplayConversation(sent.ID, 0, 0)
-		return e == nil && slices.ContainsFunc(c.Messages, func(m client.ConversationMessage) bool { return m.ID == sent.ID && m.Dir == "out" })
-	})
-	stop()
 	db, err := sql.Open("sqlite", "file:"+filepath.Join(home, "agent.db")+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
+	waitFor(t, "self request received", func() bool {
+		var n int
+		return db.QueryRow(`SELECT count(*) FROM inbox WHERE id=? AND replica=0`, sent.ID).Scan(&n) == nil && n == 1
+	})
+	stop()
 	const why = "The terminal session that asked was closed before it handled this. Answer it, run it with your agent, or mark it handled."
 	if res, err := db.Exec(`UPDATE inbox SET state='needs_human',detail=?,attempts=0 WHERE id=? AND replica=0`, why, sent.ID); err != nil {
 		t.Fatal(err)
