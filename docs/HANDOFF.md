@@ -21,6 +21,17 @@ waiter subscribes before checking, so no lost wake. No deadline was raised; the
 test now logs the host request state, its status copies and the requester's
 kept statuses on failure, for the next CI occurrence. Open.
 
+Full CI run 41060115622 on `463c84a2`: 31 of 34 jobs passed (two skipped by
+design), including native Linux, macOS and Windows, all six Windows client
+partitions and every other race shard. The macOS await test passed there. Only
+race `client-9` failed: it exhausted the 600-second package budget (80 of 84
+parents finished, 568 s; `TestTopicTransferThousandRowsUsesBoundedApply` was
+31 s in). The two new tests shifted index-based shard membership. The heaviest
+two client-9 parents move to the lightest shards (archive tail 62 s to
+client-0 at 322 s job time; retired task device 57 s to client-7 at 339 s);
+all 1,501 parents remain assigned exactly once, with the existing 18-way and
+600-second bounds.
+
 ## Group invitations return before delivery — unreleased, October 30
 
 Cause of the four room/guest invitation timeouts in the CI triage below. A
