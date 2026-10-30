@@ -153,6 +153,10 @@ func TestNativeThinkingStoreFailureAndDeliveryFailureAreOptional(t *testing.T) {
 }
 
 func TestNativeThinkingWatcherCoalescesObservedTime(t *testing.T) {
+	synctest.Test(t, testNativeThinkingWatcherCoalescesObservedTime)
+}
+
+func testNativeThinkingWatcherCoalescesObservedTime(t *testing.T) {
 	a, j, _, _ := activityDeliveryFixture(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()

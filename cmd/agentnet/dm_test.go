@@ -108,9 +108,15 @@ func dmWorld(t *testing.T, runStops ...map[*client.Agent]func()) (alice, bob, ca
 		if err != nil {
 			t.Fatal(err)
 		}
+		a.Logf = func(format string, args ...any) { t.Logf(a.Address+": "+format, args...) }
 		run, stop := context.WithCancel(context.Background())
 		done := make(chan struct{})
-		go func() { a.Run(run, client.RunOptions{}); close(done) }()
+		go func() {
+			defer close(done)
+			if err := a.Run(run, client.RunOptions{}); err != nil && !errors.Is(err, context.Canceled) {
+				t.Errorf("%s daemon stopped: %v", a.Address, err)
+			}
+		}()
 		stopRun := func() { stop(); <-done }
 		for _, stops := range runStops {
 			stops[a] = stopRun

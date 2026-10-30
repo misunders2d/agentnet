@@ -16,15 +16,16 @@ in `TestDaemonStartReviewsEndedSessionRequests`; both fail on the old code.
 The live item (3d63852259367e33fee3e9c4028781a2 on the Linux laptop) is still
 waiting; `agentnet resolve ID` there closes it today.
 
-## MEL-698 startup race fixed — unreleased, October 30
+## MEL-698 startup retry reverted — unreleased, October 30
 
 Owner asked for Linear verification and a few fixes without a release. A
 status or update check takes `daemon.lock` for an instant; a daemon starting
-then refused as "already running". Run now retries the lock for up to one
-second (`lockfile.AcquireWithin`); a real second daemon is still refused.
-Commit 272f04a5; `TestDaemonStartOutlastsStatusProbe` fails on the old Run
-with the production error and passes now; `TestAcquireWithinOutlastsBriefHolder`
-covers the window. Platform service acceptance remains open. The same pass
+then refused as "already running". Commit 272f04a5 added a one-second lock
+retry, with focused regressions, but the CLI invitation journey failed in
+four subsequent native Linux/macOS jobs. Causality remains unproven. The
+October 30 triage takes the prior handoff's fallback: 10056517 reverts that
+unreleased commit. MEL-698 is unresolved; its Linear status has not been
+changed by this triage. The same earlier pass
 found MEL-699 (v0.9.6), MEL-687 (v0.9.3) and MEL-627 already fixed in code,
 and closed MEL-530 on its regressions; Linear records each.
 
@@ -50,14 +51,30 @@ was suspected of following the MEL-698 lock retry: locally under `-race` it
 failed 1 of 20 runs with it and 0 of 16 with the old `Run` (overlay), so the
 change was kept, not proven innocent. Later runs 41036647407 (a6547648) and
 41037245433 (05e5c4e0) make it 4 of 6 native Linux/macOS runs since
-272f04a5 with the CLI journey failing (none before); the next session decides
-cause or revert. They also failed, once each: macOS
+272f04a5 with the CLI journey failing (none before); the fallback revert is
+recorded above. They also failed, once each: macOS
 `TestAwaitReplyStopsOnAwaiting`, client-3 at the shard bound again, and on
 Windows `TestProofQueueOneEventAndRestart`,
 `TestGroupHistoryWitnessGuestDerivedParent`,
 `TestNativeThinkingWatcherCoalescesObservedTime` and
-`TestTopicGuestReplyToSelectedContext/group`. These and the other failures are
-unjudged.
+`TestTopicGuestReplyToSelectedContext/group`.
+
+October 30 triage inspected all these failed job logs. The governance failure
+is a test transport-replacement data race with background publication posts;
+the fixture now joins those posts. Client-3 exhausted its aggregate budget:
+the 112-second callback journey moves to measured lighter client-10, retaining
+all 1,500 parent tests exactly once and the existing 18-way/600-second bounds.
+The isolated thinking-summary watcher test now uses the existing `synctest`
+pattern instead of a wall-clock race. The room held-request and derived-history
+invitation timeouts also reproduced locally on Linux under `-race`: their
+ten-second operation budget expires during person-chain reads. The other
+room/guest timeouts, proof-queue extra pass and macOS awaiting-status timeout
+remain open; none is waived as a timing flake. CLI fixtures now expose daemon
+logs and unexpected `Run` errors. The reverted CLI journey passes three local
+`-race` repeats, the summary test passes ten, and `go vet ./...` passes. The
+focused client batch reproduced the open failures above; it is not a green
+qualification run. Native platform and full-suite qualification of this
+triage remains outstanding; no release is authorized.
 
 ## v0.10.0 published and Hub deployed — October 30
 

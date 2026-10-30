@@ -30,7 +30,7 @@ run_partition() {
 				if ($0=="TestOwnPersonTasksDirectAndGroup") part=4
 				if ($0=="TestRoomReciprocalRootQuestions") part=1
 				if ($0=="TestTopicTransferWholeSnapshotCapacityAndRetry") part=2
-				if ($0=="TestRoomBusyAncestorCallback") part=3
+				if ($0=="TestRoomBusyAncestorCallback") part=10
 				if ($0=="TestHistoryArchiveImportedTailRemainsBounded") part=9
 				if ($0=="TestTopicGuestInvitesOwnAgent") part=8
 				if ($0=="TestConversationResourcesDoNotConsumeSelectedHistorySlots") part=8

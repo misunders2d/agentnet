@@ -582,6 +582,8 @@ func TestGroupGovernanceTerminalSupersededInvariant(t *testing.T) {
 		t.Fatal(err)
 	}
 	bob, _, _ := w.bob.Person()
+	// Publication posts outlive Run; join them before replacing its transport.
+	joinControlPosts(t, w.alice)
 	injectFaults(w.alice).add("POST", "/v1/groups/", 1, true)
 	next, err := w.alice.RemoveGroupMember(tctx(t), p.State.Conv, bob.Person)
 	if err == nil {
