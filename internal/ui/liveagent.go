@@ -618,7 +618,7 @@ func (l *Live) InviteAgent(d AgentInvite) (AgentView, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 	defer cancel()
-	return l.agentResult(l.a.InviteAgentInScope(ctx, d.Conv, strings.TrimSpace(d.Host), d.AgentID, lids, d.TasksFrom, strings.TrimSpace(d.Note), d.Topic))
+	return l.agentResult(l.a.InviteAgentInScope(client.WithQueuedSend(ctx, ""), d.Conv, strings.TrimSpace(d.Host), d.AgentID, lids, d.TasksFrom, strings.TrimSpace(d.Note), d.Topic))
 }
 
 // DecideAgent implements Participants.

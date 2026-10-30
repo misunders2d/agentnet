@@ -248,7 +248,7 @@ func (l *Live) ChangeHuman(ctx context.Context, c GuestAction) (GuestView, error
 	}
 	switch c.Action {
 	case "invite":
-		info, err = l.a.InviteHumanInScope(ctx, c.Conv, c.Host, c.Share, c.Note, c.Topic)
+		info, err = l.a.InviteHumanInScope(client.WithQueuedSend(ctx, ""), c.Conv, c.Host, c.Share, c.Note, c.Topic)
 	case "decide":
 		if c.Accept == nil {
 			return GuestView{}, Refuse("Choose accept or decline.")

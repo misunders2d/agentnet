@@ -1159,7 +1159,9 @@ func (a *Agent) sendGrantedExcerpts(ctx context.Context, invite protocol.Partici
 				if spoolErr == nil {
 					stored = true
 					release()
-					if key.Address != a.Address {
+					if key.Address != a.Address && queuedSend(ctx) {
+						a.postOutboxBackground()
+					} else if key.Address != a.Address {
 						_, spoolErr = a.deliver(ctx, sealed, nil)
 					}
 					if retryable(spoolErr) {

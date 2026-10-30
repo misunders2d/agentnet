@@ -1399,6 +1399,12 @@ func (a *Agent) ownEvent(conv, pid, want string, types ...string) (*protocol.Par
 // resend sends a stored event again, byte for byte.
 func (a *Agent) resend(ctx context.Context, ev protocol.ParticipationEvent) error {
 	raw, _ := json.Marshal(ev)
+	// Each event is a separate control send, never the queued caller's
+	// single-use identity: one queued invite stores its invite, scope and
+	// consent sends independently.
+	if queuedSend(ctx) {
+		ctx = context.WithValue(ctx, proposalSendIDKey{}, protocol.NewID())
+	}
 	// Once a human end has encrypted recipient copies, retry those copies,
 	// never reconstruct a wider control audience after another guest joins.
 	if ev.Type == protocol.EventDismiss {

@@ -1,6 +1,45 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
-## Never-run own request closes from its device thread — unreleased, October 30
+## Group invitations return before delivery — unreleased, October 30
+
+Cause of the four room/guest invitation timeouts in the CI triage below. A
+request trace of the derived-history parent invitation (`-race`, local Linux)
+found 71 sequential Hub requests: the invite fanout delivered 12 copies inline
+(each group member device got the visitor's group proof, group context and
+invite, eight with blob uploads), then the scope fanout started and ran out
+of the ten-second context. Each request took 10–80 ms; about 400 ms of local
+work per delivery dominated. A CPU profile puts 47% of all CPU in SQLite
+statement preparation, which Go's race checkptr instrumentation slows
+heavily. The same invitation takes 0.6–0.8 s without `-race` on loopback; on a
+real relay its ~70 serial round trips would multiply by network latency.
+
+The app's guest and agent invitations (`ChangeHuman` invite,
+`Live.InviteAgent`) now use the existing queued send (`WithQueuedSend`), as
+dismissal, proposals and chat sends already do: they return once every copy is
+stored, and the daemon delivers. Each participation event send takes a fresh
+send identity (`resend`), generalizing `participationScope`'s rule, so one
+queued invitation's invite, scope and consent sends are not refused as
+"already kept". Queued granted excerpts wake background delivery instead of
+delivering inline. CLI invitations keep inline delivery and receipts, as the
+`WithQueuedSend` contract states. No deadline, roster refresh, key check or
+delivery guard changed.
+
+Regressions, both failing on the old code: `TestRoomGroupQueuedVisitorInviteStoresEachEvent`
+("this send is already kept here") and `TestLiveGuestInviteCommitsBeforeDelivery`
+("guest invite response waited for recipient delivery", Hub message posts held).
+The four triage fixtures now invite through the app's queued path and wait for
+the invitee with the error-tolerant predicate other room tests use: a visitor's
+participation reads as group-context-pending until its carriers are admitted,
+which the app already reports as 503 `group_context_pending`. Under `-race`,
+`TestRoomGroupTurns`, `TestRoomGroupRequestCarryingHumanHeld` and
+`TestTopicGuestReplyToSelectedContext` pass; the derived-history invitations
+take 5.5 s and 7.4 s instead of exceeding 10 s. That test then times out later
+locally ("new phone accepts old inert history") — the old inline path with a
+60-second invitation context fails the same step, so this is a separate open
+finding, not caused by this change (local load average was about 8.4).
+Without `-race`, the matching participation/guest/invite/scope groups pass
+(123 client, 41 UI tests) and `go vet ./...` passes. Native platforms, race
+shards and CI were not run for this change.
 
 Owner report (Linux laptop, Comic): an old "Agent history" chat showed
 "Needs attention" for a question its own terminal session asked on October 27.

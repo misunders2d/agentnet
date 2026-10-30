@@ -80,17 +80,20 @@ func groupParticipationHistoryAfterReadmission(t *testing.T, sharedOriginal bool
 			roomReader(t, a)
 		}
 		inviteCtx, reportInvite := traceFixtureHTTP(t, tctx(t))
-		parent, e := w.bob.InviteHumanInScope(inviteCtx, conv, executor.Address, nil, "", &topic)
+		parent, e := w.bob.InviteHumanInScope(WithQueuedSend(inviteCtx, ""), conv, executor.Address, nil, "", &topic)
 		reportInvite(e)
 		if e != nil {
 			t.Fatal(e)
 		}
-		eventually(t, "historical human parent", func() bool { return stateAt(t, executor, parent.PID).State == PartInvited })
+		eventually(t, "historical human parent", func() bool {
+			p, e := executor.Participation(parent.PID)
+			return e == nil && p.State == PartInvited
+		})
 		if _, e = executor.AcceptParticipation(tctx(t), parent.PID); e != nil {
 			t.Fatal(e)
 		}
 		inviteCtx, reportInvite = traceFixtureHTTP(t, tctx(t))
-		part, err = executor.InviteAgentInScope(inviteCtx, conv, executor.Address, "", nil, nil, "", &topic)
+		part, err = executor.InviteAgentInScope(WithQueuedSend(inviteCtx, ""), conv, executor.Address, "", nil, nil, "", &topic)
 		reportInvite(err)
 		if err != nil {
 			stack := make([]byte, 1<<20)

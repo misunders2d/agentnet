@@ -39,11 +39,14 @@ func testTopicGuestReplyToSelectedContext(t *testing.T, w *world, guest *Agent, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := w.alice.InviteHumanInScope(tctx(t), conv, guest.Address, []string{selected.LID}, "", &topic)
+	p, err := w.alice.InviteHumanInScope(WithQueuedSend(tctx(t), ""), conv, guest.Address, []string{selected.LID}, "", &topic)
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "scoped guest invite", func() bool { return stateAt(t, guest, p.PID).State == PartInvited })
+	eventually(t, "scoped guest invite", func() bool {
+		info, e := guest.Participation(p.PID)
+		return e == nil && info.State == PartInvited
+	})
 	if _, err = guest.AcceptParticipation(tctx(t), p.PID); err != nil {
 		t.Fatal(err)
 	}

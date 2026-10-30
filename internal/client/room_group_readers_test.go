@@ -27,7 +27,7 @@ func TestRoomGroupTurns(t *testing.T) {
 		roomReader(t, a)
 	}
 	// Dave's device gets the group's current context as a visitor host does.
-	visitor, err := w.alice.InviteAgent(tctx(t), conv, dave.Address, nil, nil, "context for a visitor")
+	visitor, err := w.alice.InviteAgent(WithQueuedSend(tctx(t), ""), conv, dave.Address, nil, nil, "context for a visitor")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestRoomGroupRequestCarryingHumanHeld(t *testing.T) {
 	for _, a := range []*Agent{w.alice, w.bob, dave} {
 		roomReader(t, a)
 	}
-	visitor, err := w.alice.InviteAgent(tctx(t), conv, dave.Address, nil, nil, "visitor agent")
+	visitor, err := w.alice.InviteAgent(WithQueuedSend(tctx(t), ""), conv, dave.Address, nil, nil, "visitor agent")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,4 +155,38 @@ func TestRoomGroupRequestCarryingHumanHeld(t *testing.T) {
 	if err != nil || why != reasonInvalid+": group human guest execution audience is not enabled" {
 		t.Fatalf("history carrying an audience: %q %v", why, err)
 	}
+}
+
+// The app invites a group visitor with a queued send: it returns once its
+// copies are stored, and the daemon delivers them. The invite and its public
+// scope are separate control sends; neither takes the caller's single-use
+// send identity, so the second is not refused as already kept.
+func TestRoomGroupQueuedVisitorInviteStoresEachEvent(t *testing.T) {
+	w, _, packet, _ := groupTurnsFixture(t)
+	conv := packet.State.Conv
+	dave := proofReader(t, w, "guest")
+	runAgent(t, dave)
+	publishGroupFixtureCaps(t, dave, true)
+	for _, a := range []*Agent{w.alice, w.bob, dave} {
+		roomReader(t, a)
+	}
+	id := protocol.NewID()
+	visitor, err := w.alice.InviteAgent(WithQueuedSend(tctx(t), id), conv, dave.Address, nil, nil, "queued visitor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, w.alice, `outbox WHERE id='`+id+`' OR lid='`+id+`'`); n != 0 {
+		t.Fatalf("a control send took the caller's queued identity: %d copies", n)
+	}
+	var sends int
+	if err := w.alice.store.db.QueryRow(`SELECT count(DISTINCT lid) FROM outbox WHERE pid=? AND sub=?`, visitor.PID, envelope.SubEvent).Scan(&sends); err != nil {
+		t.Fatal(err)
+	}
+	if sends != 2 {
+		t.Fatalf("invite and scope sends stored: %d, want 2", sends)
+	}
+	eventually(t, "the queued visitor invite at its host", func() bool {
+		p, e := dave.Participation(visitor.PID)
+		return e == nil && p.State == PartInvited && p.External
+	})
 }

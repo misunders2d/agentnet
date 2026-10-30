@@ -181,3 +181,108 @@ func TestLiveHumanEndCommitsBeforeDelivery(t *testing.T) {
 		})
 	}
 }
+
+// Inviting a guest into a group is a durable local decision too: the app's
+// response must not wait for recipient delivery, which the daemon finishes.
+func TestLiveGuestInviteCommitsBeforeDelivery(t *testing.T) {
+	t.Setenv("AGENTNET_NOTIFY", "off")
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancel()
+	type barrier struct {
+		entered, release chan struct{}
+		once             sync.Once
+	}
+	var held atomic.Pointer[barrier]
+	var inviter atomic.Value
+	dir, _, alice := platformHub(t, ctx, func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if b := held.Load(); b != nil && r.Method == "POST" && r.URL.Path == "/v1/messages" && r.Header.Get(protocol.HeaderAgent) == inviter.Load() {
+				b.once.Do(func() { close(b.entered) })
+				select {
+				case <-b.release:
+				case <-r.Context().Done():
+					return
+				}
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
+	inviter.Store(alice.Address)
+	cert, err := os.ReadFile(filepath.Join(dir, "tls.crt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	join := func(name string) *client.Agent {
+		t.Helper()
+		code, err := alice.Invite(ctx, name, time.Hour, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		inv, err := protocol.DecodeInvite(code)
+		if err != nil {
+			t.Fatal(err)
+		}
+		inv.CertPEM = string(cert)
+		a, err := client.Join(ctx, t.TempDir(), inv.Encode(), name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { a.Close() })
+		return a
+	}
+	bob, guest := join("desk"), join("guest")
+	for _, a := range []*client.Agent{alice, bob, guest} {
+		if _, err := a.CreatePerson(ctx, a.Address); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runDaemon(t, alice)
+	runDaemon(t, bob)
+	runDaemon(t, guest)
+	var dm string
+	waitFor(t, "member DM", func() bool { dm, err = alice.CreateDM(ctx, bob.Address); return err == nil })
+	inviteGuest(t, alice, guest, dm, func(what string, fn func() bool) { waitFor(t, what, fn) }) // the guest's person and capabilities are known
+	group := liveTwoMemberGroup(t, alice, bob)
+
+	b := &barrier{entered: make(chan struct{}), release: make(chan struct{})}
+	held.Store(b)
+	var once sync.Once
+	release := func() { once.Do(func() { close(b.release) }) }
+	defer func() { release(); held.Store(nil) }()
+	handler := New(NewLive(alice), "127.0.0.1:8123", testToken).Handler()
+	body, _ := json.Marshal(GuestAction{Conv: group, Host: guest.Address})
+	r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8123/api/dm/guest/invite", strings.NewReader(string(body)))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Origin", "http://127.0.0.1:8123")
+	r.AddCookie(&http.Cookie{Name: cookieName, Value: testToken})
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { w := httptest.NewRecorder(); handler.ServeHTTP(w, r); done <- w }()
+	select {
+	case <-b.entered:
+	case <-time.After(15 * time.Second):
+		t.Fatal("guest invite never reached blocked recipient delivery")
+	}
+	var response *httptest.ResponseRecorder
+	select {
+	case response = <-done:
+	case <-time.After(time.Second):
+		release()
+		<-done
+		t.Fatal("guest invite response waited for recipient delivery")
+	}
+	if response.Code != http.StatusOK {
+		t.Fatalf("invite HTTP%d: %s", response.Code, response.Body)
+	}
+	var view GuestView
+	if err := json.Unmarshal(response.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	if current, err := alice.Participation(view.PID); err != nil || current.State != client.PartInvited || current.Conv != group {
+		t.Fatalf("invite not stored before delivery: %+v %v", current, err)
+	}
+	release()
+	waitFor(t, "the guest holds the group invitation", func() bool {
+		got, err := guest.Participation(view.PID)
+		return err == nil && got.State == client.PartInvited
+	})
+}

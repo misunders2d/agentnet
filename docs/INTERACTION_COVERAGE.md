@@ -2025,3 +2025,26 @@ allowed. Ctrl+Shift+V still inserts the raw text. Executed: 35 paste checks
 browser image copy is not a table), the same Markdown lexer the chat uses parses
 the output as that table, and `go test ./internal/ui` passes. Not executed: a
 rendered paste run and a real Windows paste from Excel.
+
+### Invitations return before recipient delivery — October 30
+
+Guest and agent invitations from the app waited for every recipient copy: a
+group visitor invitation delivered about a dozen copies in sequence before its
+response (71 sequential Hub requests, traced). Reused counterpart: this
+repository's own queued send (`client.WithQueuedSend`), already used by the
+app's dismissal, chat sends and proposal confirmations, with the blocked-Hub
+pattern of `TestLiveHumanEndCommitsBeforeDelivery`. Invitations now return
+once every copy is stored and show the stored invitation; the daemon delivers
+and the existing pending/needs-update states report delivery truthfully.
+Adaptation: one invitation stores several control sends (invite, scope,
+consent), so each takes its own send identity. CLI invitations keep immediate
+delivery and receipts.
+
+Executed: `TestLiveGuestInviteCommitsBeforeDelivery` (group guest invitation
+through the HTTP handler while the Hub holds the inviter's message posts: the
+response arrives within one second of the held post with the invitation
+stored; after release the guest holds it; fails on the old code) and
+`TestRoomGroupQueuedVisitorInviteStoresEachEvent`. Not executed: a rendered
+browser timing of the invite sheets, the agent invitation through its HTTP
+handler (its client path is the same `inviteParticipation` and is covered at
+client level), and native platforms.
