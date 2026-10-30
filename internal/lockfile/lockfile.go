@@ -8,10 +8,8 @@
 package lockfile
 
 import (
-	"context"
 	"errors"
 	"sync"
-	"time"
 
 	"github.com/gofrs/flock"
 )
@@ -25,24 +23,6 @@ func Acquire(path string) (func(), error) { return acquire(path, false) }
 
 // Wait is Acquire that blocks until the lock is free.
 func Wait(path string) (func(), error) { return acquire(path, true) }
-
-// AcquireWithin is Acquire that keeps trying for up to d, so a holder that
-// only checks the lock for an instant does not cause a refusal. It fails
-// with ErrLocked if the lock is still held after d.
-func AcquireWithin(path string, d time.Duration) (func(), error) {
-	ctx, cancel := context.WithTimeout(context.Background(), d)
-	defer cancel()
-	f := flock.New(path)
-	ok, err := f.TryLockContext(ctx, 10*time.Millisecond)
-	if !ok {
-		if err == nil || errors.Is(err, context.DeadlineExceeded) {
-			return nil, ErrLocked
-		}
-		return nil, err
-	}
-	var once sync.Once
-	return func() { once.Do(func() { f.Unlock() }) }, nil
-}
 
 func acquire(path string, wait bool) (func(), error) {
 	f := flock.New(path) // O_CREATE|O_RDONLY (O_RDWR where exclusive locks need it), 0600
