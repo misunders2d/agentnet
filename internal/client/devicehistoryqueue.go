@@ -223,12 +223,14 @@ func (a *Agent) deviceHistoryPage(dev identity.Public) (bool, error) {
 		var prevHash, carrier, state string
 		e = tx.QueryRow(`SELECT c.hash,c.carrier,coalesce(o.state,'') FROM device_history_copies c LEFT JOIN outbox o ON o.id=c.carrier WHERE c.recipient_fp=? AND c.author=? AND c.id=?`, dev.Fingerprint(), r.item.FromKey, r.id).Scan(&prevHash, &carrier, &state)
 		if e == nil {
-			if prevHash != hash {
-				return errHistoryCatchupConflict
-			}
+			// A held copy stays held even if its original changed since
+			// (deleted here later): that change follows as its own copy.
 			if state != "" && state != stateNotDelivered && state != protocol.StateExpired {
 				done[key] = true
 				return nil
+			}
+			if prevHash != hash {
+				return errHistoryCatchupConflict
 			}
 		} else if !errors.Is(e, sql.ErrNoRows) {
 			return e

@@ -1,5 +1,36 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+## Own-device history stuck behind a deleted message — unreleased, October 30
+
+Since 2026-10-20 13:38 the Zenbook daemon logged "copying direct history:
+history logical source differs from its queued copy" on every pass (29,949
+lines by October 30). All three current own devices (linux-laptop, bezos,
+android-phone-3) stayed at `device_history_jobs.tail` 2519 of 5559 sources:
+nothing written or received after 13:37 that day reached them as history.
+Cause: two messages sent at 13:27/13:28 were deleted at 13:37. Their copies had
+already been delivered to every own device. The deletion's history item
+queues its original first; deleting cleared that original's body here, so its
+hash no longer matched the recorded copy. The queue compared the hash before
+checking whether the device already held the copy, returned the conflict, and
+`syncDeviceHistory` stopped for every device. Fix: a held copy (any state
+except not-delivered/expired) counts as done before the hash compare; the
+deletion still follows as its own copy. A copy the device never received keeps
+the fail-closed compare.
+
+`TestDeviceHistoryDeletionAfterDeliveredCopy` fails on the old code with the
+live error and passes with the fix. History/catch-up/retraction client tests
+passed under `-race` (552 s) and `go vet ./internal/client` is clean. On a
+network-isolated consistent copy of the live store (built from `git archive`
+plus the fix), all three devices advanced 2519 → 5559 in 61 pages without an
+error. That leaves about 4,200 history copies (1,436 / 1,869 / 934) to send
+once this ships; they wait in the outbox like any device-history copy. The
+copy and its keys were deleted afterwards.
+
+Not fixed: an original deleted after its copy *expired* undelivered still
+conflicts and would block the same way. Not observed here. The amplification
+is also unchanged: the first page error for any device still ends
+`syncDeviceHistory` for every device until the item is resolved.
+
 ## Daemon CPU: presence-only member lists re-swept own-device history — unreleased, October 30
 
 The live Zenbook daemon (v0.10.0) ran at about 110–120% CPU continuously. It
@@ -29,9 +60,9 @@ again"). `TestEveryMemberListRechecksHeld` now expects the exact bit per list.
 file shifts index-based shard membership; the next full CI run must confirm
 the 600 s shard budgets.
 
-Found alongside, not fixed: "copying direct history: history logical source
-differs from its queued copy" repeats on every history pass since October 11
-(cheap, but that direct-history item never syncs). The UI logs about 370
+Found alongside: "copying direct history: history logical source differs from
+its queued copy" repeats on every history pass since October 20 (fixed; see
+the section above). The UI logs about 370
 "broken pipe" writes an hour. `agent.db.vNN.bak` upgrade backups total about
 1.6 GB and are never pruned.
 

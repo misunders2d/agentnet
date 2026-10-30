@@ -84,3 +84,54 @@ func TestDeviceHistorySkipsOriginalsTheRecipientHolds(t *testing.T) {
 		t.Fatalf("missed original: %d copies, pending %d", copied(late), pending(late))
 	}
 }
+
+// An original deleted after its copy reached an own device differs from
+// that copy, but the device holds it: the deletion follows as its own copy.
+// Comparing first stopped every own device's history sync at that page
+// (the live store: nothing past one deleted message since October 20).
+func TestDeviceHistoryDeletionAfterDeliveredCopy(t *testing.T) {
+	w, phone, _, _ := historyCatchupFixture(t, 0)
+	a := w.alice
+	sent, err := a.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Kind: envelope.KindMessage, Body: "oops, wrong chat"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := func() {
+		t.Helper()
+		for range 4 {
+			a.convWork.mu.Lock()
+			a.convWork.historyDeferred = nil
+			a.convWork.mu.Unlock()
+			if _, err := a.deviceHistoryPage(phone.Self()); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	copied := func(id string) int {
+		t.Helper()
+		var n int
+		if err := a.store.db.QueryRow(`SELECT count(*) FROM device_history_copies c JOIN outbox o ON o.id=c.carrier WHERE c.id=? AND c.recipient_fp=? AND o.sub=?`, id, phone.Self().Fingerprint(), envelope.SubDeviceHistory).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	page()
+	if copied(sent.ID) != 1 {
+		t.Fatal("the original was not copied")
+	}
+	if _, err := a.store.db.Exec(`UPDATE outbox SET state=? WHERE id IN (SELECT carrier FROM device_history_copies WHERE id=?)`, protocol.StateDelivered, sent.ID); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := a.RefOf("", sent.ID, "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gone, err := a.Retract(tctx(t), ref, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page()
+	if copied(gone.ID) != 1 {
+		t.Fatal("the deletion was not copied to the device holding the original")
+	}
+}
