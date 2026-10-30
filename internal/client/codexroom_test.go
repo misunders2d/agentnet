@@ -140,7 +140,7 @@ func TestCodexRoomBridgeFailsClosed(t *testing.T) {
 			defer in.Close()
 			go io.Copy(io.Discard, in)
 			var output bytes.Buffer
-			b := &codexRoomBridge{input: out, output: &output, thread: "thread", turn: "turn", calls: map[string]bool{}, call: func(context.Context, json.RawMessage) (string, error) { t.Error("unauthorized call"); return "", nil }}
+			b := &codexRoomBridge{ctx: t.Context(), input: out, output: &output, thread: "thread", turn: "turn", calls: map[string]bool{}, call: func(context.Context, json.RawMessage) (string, error) { t.Error("unauthorized call"); return "", nil }}
 			b.event([]byte(c.event))
 			b.finish()
 			if output.Len() != 0 || !strings.Contains(b.failureText(), c.want) {
@@ -153,7 +153,7 @@ func TestCodexRoomBridgeFailsClosed(t *testing.T) {
 			in, out := io.Pipe()
 			in.Close()
 			var output bytes.Buffer
-			b := &codexRoomBridge{input: out, output: &output, thread: thread, calls: map[string]bool{}}
+			b := &codexRoomBridge{ctx: t.Context(), input: out, output: &output, thread: thread, calls: map[string]bool{}}
 			b.finish()
 			if output.Len() != 0 || b.failureText() != want {
 				t.Fatalf("output %q failure %q", output.String(), b.failureText())
@@ -165,7 +165,7 @@ func TestCodexRoomBridgeFailsClosed(t *testing.T) {
 		defer in.Close()
 		go io.Copy(io.Discard, in)
 		var output bytes.Buffer
-		b := &codexRoomBridge{input: out, output: &output, calls: map[string]bool{}, threadAvailable: func(string) bool { return false }}
+		b := &codexRoomBridge{ctx: t.Context(), input: out, output: &output, calls: map[string]bool{}, threadAvailable: func(string) bool { return false }}
 		b.event([]byte(`{"id":2,"result":{"thread":{"id":"owned"}}}`))
 		b.finish()
 		if b.failureText() != "" || !strings.HasPrefix(output.String(), needsHumanMarker+"\n"+nativeStatusPrefix+"The native session is already owned") {

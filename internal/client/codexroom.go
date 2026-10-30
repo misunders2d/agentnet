@@ -680,6 +680,13 @@ func (b *codexRoomBridge) event(raw []byte) {
 		}
 	case "turn/completed":
 		if b.thread != "" && b.turn != "" && p.ThreadID == b.thread && p.Turn.ID == b.turn {
+			if b.ctx.Err() != nil {
+				// The run was stopped; a turn Codex finished after that
+				// (it may have read the tool's refusal) is not its answer.
+				b.diagnosticEnd("stopped")
+				b.failLocked("the run was stopped before Codex finished the turn")
+				return
+			}
 			if p.Turn.Status != "completed" {
 				status := p.Turn.Status
 				if status != "failed" && status != "interrupted" {

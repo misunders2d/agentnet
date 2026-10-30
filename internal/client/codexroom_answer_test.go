@@ -17,7 +17,7 @@ func codexAnswerTestBridge(t *testing.T) (*codexRoomBridge, *bytes.Buffer) {
 	in, out := io.Pipe()
 	t.Cleanup(func() { in.Close(); out.Close() })
 	output := new(bytes.Buffer)
-	return &codexRoomBridge{input: out, output: output, thread: "thread", turn: "turn"}, output
+	return &codexRoomBridge{ctx: t.Context(), input: out, output: output, thread: "thread", turn: "turn"}, output
 }
 
 func codexAnswerTestEvent(t *testing.T, b *codexRoomBridge, method string, params any) {
@@ -84,6 +84,22 @@ func TestCodexRoomCompletedAnswerSelection(t *testing.T) {
 				t.Fatalf("failure %q, want %q", b.failureText(), wantFailure)
 			}
 		})
+	}
+}
+
+// A turn Codex completes after its run was stopped (for example after it
+// read the tool's refusal) gives no answer, however fast it comes.
+func TestCodexRoomStoppedRunGivesNoAnswer(t *testing.T) {
+	b, output := codexAnswerTestBridge(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	b.ctx = ctx
+	codexAnswerTestEvent(t, b, "item/completed", map[string]any{"threadId": "thread", "turnId": "turn",
+		"item": map[string]string{"id": "answer", "type": "agentMessage", "phase": "final_answer", "text": "ANSWER"}})
+	cancel()
+	codexAnswerTestEvent(t, b, "turn/completed", map[string]any{"threadId": "thread", "turn": map[string]string{"id": "turn", "status": "completed"}})
+	b.finish()
+	if output.Len() != 0 || !strings.Contains(b.failureText(), "stopped before Codex finished") {
+		t.Fatalf("output=%q failure=%q", output.String(), b.failureText())
 	}
 }
 
