@@ -49,6 +49,7 @@ const (
 	convServe                         // answer a file request from another device of this person (historyfiles.go)
 	convFetch                         // keep received conversation files (historyfiles.go)
 	convRecipients                    // continue bounded exact revocation discovery
+	convRetryHeld                     // a presence-only member list: restart the held look, keep deferred history
 )
 
 // proofPage bounds the held messages looked at in one sync.
@@ -162,14 +163,17 @@ func (a *Agent) convSync(ctx context.Context) {
 		a.convWork.due(convServe) // one file per sync
 		a.kickNow()
 	}
-	if work&(convRetry|convRetryMore) != 0 {
+	if work&(convRetry|convRetryHeld|convRetryMore) != 0 {
 		a.recoverHumanExcerpts(ctx)
 		a.discloseHumanAudience(ctx)
 		a.discloseOrganizationGrants(ctx)
 		a.discloseRoomDismissals(ctx, feats)
-		if work&convRetry != 0 {
+		if work&(convRetry|convRetryHeld) != 0 {
 			a.convWork.retried.Store(time.Now().Unix())
 			a.heldEvidence()
+		}
+		if work&convRetry != 0 {
+			// New evidence may admit deferred own-device history: sweep it again.
 			a.convWork.mu.Lock()
 			a.convWork.historyDeferred = nil
 			work |= convHistory

@@ -1,5 +1,40 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+## Daemon CPU: presence-only member lists re-swept own-device history — unreleased, October 30
+
+The live Zenbook daemon (v0.10.0) ran at about 110–120% CPU continuously. It
+read 400–1500 MB/s from SQLite's page cache (168 MB `agent.db`, so about 2.5
+full scans a second) and wrote about 0.7 MB/s (only `attention` changed).
+Measured with `/proc` counters, a per-second sample against the log, and
+row/content snapshots of a read-only connection. Cycle: `hub members` (173
+lists an hour, alternating 9/10 connected: one device flapping), then 16–30 s
+of work, then a brief idle. A network-isolated copy (`unshare -rn`, consistent
+DB snapshot, v0.10.0 from `git archive` plus a local pprof hook) idled at 0%.
+Calling the sync steps directly showed `historyStep` 10.5 s on the first pass,
+about 50 ms after. The profile points at `historyCatchupPage` →
+`prepareHistorySource` → `groupParticipationHistoryCheck`.
+
+Cause: every member list set `convRetry`, and `convRetry` cleared
+`historyDeferred`. Each own device's next catch-up page then re-deferred
+failed copies and restarted the whole group-context scan. A presence change is
+no evidence for that history. Fix: a list whose `discovery` did not change
+(presence only) sets the new `convRetryHeld`. It restarts the held look as
+before (heldEvidence, retryProof) without the history sweep. Every other
+`convRetry` source is unchanged; a device that reconnects or updates still
+gets history through `readerWait`. `TestPresenceOnlyMembersKeepHistoryDeferral`
+fails on the old code ("presence-only list swept deferred own-device history
+again"). `TestEveryMemberListRechecksHeld` now expects the exact bit per list.
+124 related client tests (members, retry, held look, history) passed under
+`-race` apart from that contract update, which then passed 3×. The new test
+file shifts index-based shard membership; the next full CI run must confirm
+the 600 s shard budgets.
+
+Found alongside, not fixed: "copying direct history: history logical source
+differs from its queued copy" repeats on every history pass since October 11
+(cheap, but that direct-history item never syncs). The UI logs about 370
+"broken pipe" writes an hour. `agent.db.vNN.bak` upgrade backups total about
+1.6 GB and are never pruned.
+
 ## Latency fixture misses brief pending states under load — October 30
 
 First local Android qualification on the Zenbook emulator (T3 Device panel,

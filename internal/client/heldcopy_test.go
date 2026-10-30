@@ -176,18 +176,24 @@ func TestHeldResentRecordSettlesIntoOneNotice(t *testing.T) {
 // arrives through local admissions that announce nothing (a root or roster
 // sync after a device is linked), which a presence-only list used to cover
 // in v0.8.16 and must still (CI: a linked phone's deletion stayed held).
+// A presence-only list restarts that look without sweeping deferred
+// own-device history (TestPresenceOnlyMembersKeepHistoryDeferral).
 func TestEveryMemberListRechecksHeld(t *testing.T) {
 	w := newWorld(t, "")
 	a := w.bob
-	for _, list := range []string{
-		`{"members":[{"address":"vitalii/desk","presence":"connected","joined":5}]}`,
-		`{"members":[{"address":"vitalii/desk","presence":"offline","joined":5}]}`,
-		`{"members":[{"address":"vitalii/desk","presence":"offline","joined":5,"version":"v0.8.17","suspended":true}]}`,
+	for _, c := range []struct {
+		list  string
+		retry uint32
+	}{
+		{`{"members":[{"address":"vitalii/desk","presence":"connected","joined":5}]}`, convRetry},
+		{`{"members":[{"address":"vitalii/desk","presence":"offline","joined":5}]}`, convRetryHeld},
+		{`{"members":[{"address":"vitalii/desk","presence":"offline","joined":5,"version":"v0.8.17","suspended":true}]}`, convRetry},
 	} {
 		a.convWork.take()
-		a.onMembers([]byte(list))
-		if work := a.convWork.take(); work&(convRetry|convPersons|convRelease) != convRetry|convPersons|convRelease {
-			t.Fatalf("list %s: work %b", list, work)
+		a.onMembers([]byte(c.list))
+		want := c.retry | convPersons | convRelease
+		if work := a.convWork.take(); work&(convRetry|convRetryHeld|convPersons|convRelease) != want {
+			t.Fatalf("list %s: work %b, want %b", c.list, work, want)
 		}
 	}
 }

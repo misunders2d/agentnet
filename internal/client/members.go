@@ -163,8 +163,15 @@ func (a *Agent) onMembers(data []byte) {
 	// evidence for a held message also arrives through local admissions
 	// that announce nothing (a root or roster sync after linking), and the
 	// Hub no longer re-sends an unchanged list, so this stays bounded; the
-	// look itself resumes from its cursor (heldLook).
+	// look itself resumes from its cursor (heldLook). A list that changed
+	// only presence is no evidence for deferred own-device history, so it
+	// does not sweep that again: a flapping device would otherwise re-check
+	// every group context on each push. A device that reconnects or updates
+	// still gets its history through readerWait below.
 	work := convRelease | convPersons | convRetry
+	if discovery == old.discovery {
+		work = convRelease | convPersons | convRetryHeld
+	}
 	if a.convWork.readerWait.Swap(false) {
 		work |= convHistory // own-device history held back for a device's program
 	}
