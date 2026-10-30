@@ -48,7 +48,16 @@ Windows `TestRoomGroupTurns`, client-3 at the 600-second shard bound, and
 client-4 `TestGroupGovernanceTerminalSupersededInvariant`. The CLI journey
 was suspected of following the MEL-698 lock retry: locally under `-race` it
 failed 1 of 20 runs with it and 0 of 16 with the old `Run` (overlay), so the
-change was kept, not proven innocent. The other failures are unjudged.
+change was kept, not proven innocent. Later runs 41036647407 (a6547648) and
+41037245433 (05e5c4e0) make it 4 of 6 native Linux/macOS runs since
+272f04a5 with the CLI journey failing (none before); the next session decides
+cause or revert. They also failed, once each: macOS
+`TestAwaitReplyStopsOnAwaiting`, client-3 at the shard bound again, and on
+Windows `TestProofQueueOneEventAndRestart`,
+`TestGroupHistoryWitnessGuestDerivedParent`,
+`TestNativeThinkingWatcherCoalescesObservedTime` and
+`TestTopicGuestReplyToSelectedContext/group`. These and the other failures are
+unjudged.
 
 ## v0.10.0 published and Hub deployed — October 30
 
