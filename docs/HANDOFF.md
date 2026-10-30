@@ -1,5 +1,17 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+## MEL-698 startup race fixed — unreleased, October 30
+
+Owner asked for Linear verification and a few fixes without a release. A
+status or update check takes `daemon.lock` for an instant; a daemon starting
+then refused as "already running". Run now retries the lock for up to one
+second (`lockfile.AcquireWithin`); a real second daemon is still refused.
+Commit 272f04a5; `TestDaemonStartOutlastsStatusProbe` fails on the old Run
+with the production error and passes now; `TestAcquireWithinOutlastsBriefHolder`
+covers the window. Platform service acceptance remains open. The same pass
+found MEL-699 (v0.9.6), MEL-687 (v0.9.3) and MEL-627 already fixed in code,
+and closed MEL-530 on its regressions; Linear records each.
+
 ## v0.10.0 published and Hub deployed — October 30
 
 [App v0.10.0](https://github.com/misunders2d/agentnet/releases/tag/v0.10.0) is
