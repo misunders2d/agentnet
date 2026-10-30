@@ -17,7 +17,44 @@ Gates on this exact commit: the push CI run (vet, race `others` and 18 client
 shards, native Linux/macOS/Windows with `TestMixedVersion` against v0.10.0,
 six Windows client partitions, Hub container journey), a dispatched
 platform run (desktop interaction qualification and Android qualification for
-v0.10.1) and the local skins gate. Results follow when they finish.
+v0.10.1) and the local skins gate.
+
+Results on 6102c314. Push run 41110291388 passed every job after reruns of
+failed jobs: attempt 1 failed macOS native
+`TestOwnResolutionReadOnlyCapabilityCheck` (a recorded judged flake: the
+phone's cached profile is reset only by the next member list) and Windows
+client partitions 3 and 5 (`TestSharedTopicExactGuestLiveAndHistorical/group`
+and `TestConversationResourcesNewMember/cleared-register`: inline CLI
+invitations exceeded their 10 s context, about 56 sequential Hub requests,
+the class fixed for four fixtures in ada4ddc2). Both Windows partitions passed
+on attempt 2. macOS native failed `TestDeviceDecisionsRendered` (feedback
+≥ 500 ms) on attempt 2 and passed on attempt 3. Dispatch run 41110291903:
+Android qualification and Linux/Windows desktop interaction passed. macOS
+desktop interaction failed all three attempts (see interaction coverage):
+2, 11 and 2 actions over 1000 ms. Each one shows its first DOM change in
+1–65 ms and the first frame after about 1.0–1.15 s. Preceding actions in the
+same vectors took 3–128 ms. Attempt 1 passed every native Tauri action. The
+web interface is unchanged since v0.10.0, whose macOS run passed. Owner
+decision (October 30): publish with this evidence; the macOS stall is a
+follow-up. The cause is not proven (hypothesis: about one second of
+throttled or starved painting on the CI Mac).
+
+Skins gate (agentnet-skins pinned to 6102c314, `agentnet` v0.10.1, packages
+regenerated; no entry code changed): run 2, network-isolated, passed every
+suite of all five published skins and the native request suite. Run 1 failed
+only the native suite: two `GET /` probes from a local Node process
+(`user-agent: node`, trace headers) hit the fixture server. It passed 3/3
+under `unshare -rn`. Run 2's only failure was the generated qa-orbit scaffold's
+provider timeout. Run 3, overlapping local race tests (load 18), timed out
+Classic's browser and touch suites. Every suite passed in at least one run;
+the published collection passed in run 2.
+
+Test repairs for the three timing races follow in 5bb2ef34 (after the tag):
+the capability check waits for the member-list push; the two group fixtures
+use the app's queued invitation. Under `-race`, all three pass, and
+`TestSharedTopicExactGuestLiveAndHistorical` passes both with and without the
+change at normal load (94 s, 98 s). Its one failure at load 18 was later, in
+the linked phone's history step.
 
 ## Own-device history stuck behind a deleted message — unreleased, October 30
 

@@ -1,5 +1,28 @@
 # Next-release interaction coverage and responsiveness
 
+## v0.10.1 macOS desktop interaction — published by owner decision, October 30
+
+Dispatch run 41110291903 on 6102c314 (`interaction_qualification`, Android
+included): Linux and Windows desktop interaction and Android qualification
+passed. macOS failed in all three attempts:
+
+| Attempt | Engine | Action (feedback ms; first DOM change; first frame) |
+|---|---|---|
+| 1 | WebKit | `message.menu-open-0`, `topics.all-open`; Chromium `topics.direct-menu` missing control |
+| 2 | Tauri WKWebView | `history.group-outcomes-open` 1419/1/–, `settings.open.permissions` 1097/10/–, `unread.later-page` 1000/65/–, `message.menu-open-0` 1083/59/1085, `agents.default-open` 1004/34/–, `settings.section-your-devices` 1106/12/–, `storage.drive-move-review` 1011/25/–, `workspaces.shared-name-save` 1127/11/– |
+| 2 | WebKit | `navigation.outbox` 1196/15/–, `topics.all-open` 1040/8/–, `groups.members-open` 1186/9/– |
+| 3 | Tauri WKWebView | `agents.default-open` 1145/36/1154 |
+| 3 | WebKit | `groups.members-open` 1019/7/1035 |
+
+Where recorded, the first frame came at about one second with 2–3 frames in
+total (the passing runs: 34–89 ms). The failing actions sit at vector
+positions 1–3, and the actions before them took 3–128 ms. Attempt 1 passed
+every native Tauri action. The web interface is unchanged since v0.10.0,
+whose macOS run (40974329818) passed. The cause is not proven; hypothesis:
+about one second of throttled or starved painting on the CI Mac. Owner
+decision: publish v0.10.1 with this evidence; investigating the stall is a
+follow-up. Not a pass, and no earlier limit is relied on.
+
 ## Never-run own request in a device thread — unreleased, October 30
 
 Owner report: Reply on a needs-attention card for a request that never ran
