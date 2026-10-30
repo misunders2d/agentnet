@@ -26,6 +26,13 @@ error. That leaves about 4,200 history copies (1,436 / 1,869 / 934) to send
 once this ships; they wait in the outbox like any device-history copy. The
 copy and its keys were deleted afterwards.
 
+CI: full run 41096417034 on ea6a0c9e passed every job except `race (others)`.
+There UI partition ui-0 hit the 600 s bound (523 s on the previous green run;
+partitions were split by count: 523/432/272 s). 868d6a04 moves ui-0's three
+slowest parents to ui-2; every test still runs once (586/586). The focused
+`race_shards=["others"]` run 41103003742 passed with ui 431/469/412 s. The
+previous full run 41090144175 on 1eef4585 passed every job.
+
 Not fixed: an original deleted after its copy *expired* undelivered still
 conflicts and would block the same way. Not observed here. The amplification
 is also unchanged: the first page error for any device still ends
