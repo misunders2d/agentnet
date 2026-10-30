@@ -1,5 +1,17 @@
 # Next-release interaction coverage and responsiveness
 
+## Never-run own request in a device thread — unreleased, October 30
+
+Owner report: Reply on a needs-attention card for a request that never ran
+(MEL-580, ended terminal session) failed with a validation toast, and the card
+had no Mark as handled. Changed: that card (Comic device thread, own request on
+its host) now shows the recorded reason and the existing Mark as handled
+control (ConfirmSheet → `/api/act` resolve, the F02 local-first dismissal); it
+no longer shows Reply. Evidence: provider regression
+`TestOwnNeverRunRequestClosesFromDeviceThread` (actions, reason, no
+continuation; resolve clears). Not yet run: a rendered test of this card state,
+latency measurement and other skins.
+
 ## MEL-713 step 1 — released in v0.10.0, October 30
 
 Nothing starts a version 1 turn (docs/plans/MEL_713.md). Changed controls:

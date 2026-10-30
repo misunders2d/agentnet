@@ -162,10 +162,12 @@ type ContinuationAction struct {
 	Handled *DecisionResult `json:"handled,omitempty"`
 }
 
+// A request that never ran (MEL-580: its terminal session ended first) has
+// no attempt and no agent clarification to answer, so it offers none.
 func (a *Agent) ContinuationFor(id, key string, exec *ExecView) (*ContinuationAction, error) {
 	var actual, verified string
 	var attempt int64
-	e := a.store.db.QueryRow(`SELECT id,coalesce(verified_by,''),attempts FROM inbox WHERE (id=? OR lid=?) AND state=? AND replica=0 AND kind IN (?,?) AND receiver_route IS NULL AND NOT EXISTS(SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id) AND (conv IS NULL OR pid IS NOT NULL AND json_extract(target,'$.address')=?) AND (?='' OR verified_by=?)`, id, id, stateNeedHuman, envelope.KindQuestion, envelope.KindTask, a.Address, key, key).Scan(&actual, &verified, &attempt)
+	e := a.store.db.QueryRow(`SELECT id,coalesce(verified_by,''),attempts FROM inbox WHERE (id=? OR lid=?) AND state=? AND attempts>=1 AND replica=0 AND kind IN (?,?) AND receiver_route IS NULL AND NOT EXISTS(SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id) AND (conv IS NULL OR pid IS NOT NULL AND json_extract(target,'$.address')=?) AND (?='' OR verified_by=?)`, id, id, stateNeedHuman, envelope.KindQuestion, envelope.KindTask, a.Address, key, key).Scan(&actual, &verified, &attempt)
 	if e == nil {
 		return &ContinuationAction{ID: actual, Key: verified, Attempt: attempt}, nil
 	}

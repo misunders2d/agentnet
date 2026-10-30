@@ -313,6 +313,19 @@ func (a *Agent) Resolve(id string) error {
 	return nil
 }
 
+// OwnRequestWait reports why a question or task this device sent to its own
+// agent waits for the person, when it does. Its device thread shows the sent
+// copy; the received copy holds the wait (MEL-580: its session ended).
+func (a *Agent) OwnRequestWait(id string) (string, bool, error) {
+	var why string
+	err := a.store.db.QueryRow(`SELECT coalesce(detail,'') FROM inbox WHERE id=? AND sender=? AND verified_by=? AND state=? AND replica=0 AND conv IS NULL AND kind IN (?,?)`,
+		id, a.Address, a.Self().Fingerprint(), stateNeedHuman, envelope.KindQuestion, envelope.KindTask).Scan(&why)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	return why, err == nil, err
+}
+
 // ErrNoDaemon refuses a cancel no daemon would act on.
 var ErrNoDaemon = errors.New("no daemon runs here now, so nothing is running this: a daemon stopped while it ran, and it shows as interrupted when the daemon starts again (agentnet daemon), any harness of it still running stopped first (Linux)")
 

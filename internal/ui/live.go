@@ -456,6 +456,13 @@ func (l *Live) Thread(id string) (Thread, error) {
 			v.Actions = ActionsFor(m.Kind, m.State)
 		} else {
 			v.Author = Author{Label: "This computer", About: "Sent from this installation: this page, the command line, or an agent session here. Which one is not recorded."}
+			// Asked of this device's own agent and now waiting for the person:
+			// the thread is read only (MEL-713), so it can be closed here.
+			if why, waits, e := l.a.OwnRequestWait(m.ID); e != nil {
+				return t, e
+			} else if waits && !m.History {
+				v.Actions, v.Detail = []string{DoResolve}, why
+			}
 		}
 		if m.AgentID != "" {
 			v.Author = Author{Label: "Agent " + m.AgentID, About: "Named executor asserted by host " + m.From + "; its host key and request bind this ID."}

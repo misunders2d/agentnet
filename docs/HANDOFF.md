@@ -1,5 +1,21 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+## Never-run own request closes from its device thread — unreleased, October 30
+
+Owner report (Linux laptop, Comic): an old "Agent history" chat showed
+"Needs attention" for a question its own terminal session asked on October 27.
+MEL-580 moved it to needs_human when that session ended, with no attempt. Reply
+sent attempt 0, which `ContinueRequest` refuses ("choose the exact waiting
+request and attempt…"), and the thread's sent copy had no Mark as handled.
+`ContinuationFor` now offers a local continuation only for an attempt that ran
+(the remote branch already required one). The device thread gives this
+device's own waiting request Mark as handled and its recorded reason
+(`OwnRequestWait`; the thread is read only, so nothing else). Regressions:
+`TestOwnNeverRunRequestClosesFromDeviceThread` (ui) and the continuation check
+in `TestDaemonStartReviewsEndedSessionRequests`; both fail on the old code.
+The live item (3d63852259367e33fee3e9c4028781a2 on the Linux laptop) is still
+waiting; `agentnet resolve ID` there closes it today.
+
 ## MEL-698 startup race fixed — unreleased, October 30
 
 Owner asked for Linear verification and a few fixes without a release. A

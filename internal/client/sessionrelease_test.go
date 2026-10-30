@@ -141,6 +141,11 @@ func TestDaemonStartReviewsEndedSessionRequests(t *testing.T) {
 	if s, _ := w.alice.store.jobState(back); s != stateNeedHuman {
 		t.Fatalf("state %s", s)
 	}
+	// It never ran: no attempt has a clarification to answer, so Reply is not
+	// offered (ContinueRequest refuses attempt 0); Mark as handled closes it.
+	if c, err := w.alice.ContinuationFor(back, "", nil); err != nil || c != nil {
+		t.Fatalf("never-run request offers a continuation: %+v %v", c, err)
+	}
 }
 
 func mustReview(t *testing.T, a *Agent) []Message {
