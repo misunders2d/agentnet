@@ -17,6 +17,14 @@ laptop with or without the change: a local service probes loopback ports and
 hits the test's server (the same cause as the skins gate below). It and the
 other update tests pass in an isolated network namespace (`unshare -rn`).
 
+CI run 41132521965 (full matrix at `5f891892`) qualifies this fix and the
+three test repairs. Attempt 1 failed two jobs; both passed on rerun. macOS
+native failed `TestDeviceDecisionsRendered` (feedback over 500 ms; the macOS
+stall above). Windows partition 3 failed `TestP6FixCapturedTurnsOnlyAndEpochFence`
+and `TestRoomHostEvidenceReadsOnceAndStaysFresh` in `groupTurnsFixture` within
+the same minute. Alice's group proof and context sat queued past the 15-second
+wait, and a loopback Hub GET hit its 60-second deadline: a stalled runner.
+
 ## v0.10.1 published and Hub deployed — October 30
 
 [App v0.10.1](https://github.com/misunders2d/agentnet/releases/tag/v0.10.1) is
