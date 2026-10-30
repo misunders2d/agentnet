@@ -1,6 +1,6 @@
 # Next-release interaction coverage and responsiveness
 
-## MEL-713 step 1 — v0.10.0 candidate, October 30
+## MEL-713 step 1 — released in v0.10.0, October 30
 
 Nothing starts a version 1 turn (docs/plans/MEL_713.md). Changed controls:
 
@@ -34,11 +34,24 @@ Executed:
 - `TestMixedVersion` against v0.9.9 built from its tag: pass (64 s, not
   skipped). Hub container journey with the DM send: pass locally.
 - agentnet-skins: read-only cases in collection-steering, v091-standalone and
-  the contract; full gate result is recorded with the gallery release.
+  the contract; full exact-pin gate 324 checks, zero skips (agentnet-skins
+  PROVENANCE.md).
+- CI on the released commit `fbeab7c4` (run 40969662276): native Linux, macOS
+  and Windows with the rendered tests, six Windows client partitions, mixed
+  version with the tag required, desktop apps and Android emulator workloads.
+  All passed except Windows client partition 1 and the Android media workload;
+  both passed on rerun (40974321311, 40974329818; media largest feedback
+  340 ms).
 
-Not executed: rendered tests that need Playwright's bundled browser, and 41
-rendered tests that also fail on main with the local Chromium 155, are left to
-CI; Android emulator and physical devices; the installed desktop app.
+Judged timing flakes, kept as evidence: on earlier candidate commits macOS
+TeamSelection, Windows client and Hub timing tests,
+TestPhoneLinkedStateDismissesExactNotices,
+TestOwnResolutionReadOnlyCapabilityCheck and the Android indicators-video,
+unread-focus and actions workloads each failed once and passed in another run
+or in repeated local runs (Hub Windows tests 5× under race, the read-only
+capability check 20×). No product change was made for them.
+
+Not executed: Android physical devices; the installed desktop app.
 
 ## MEL-710 — immediate request replies, unreleased October 29
 

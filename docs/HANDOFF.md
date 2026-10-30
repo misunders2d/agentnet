@@ -1,12 +1,41 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
-## MEL-713 planned — October 29
+## v0.10.0 published and Hub deployed — October 30
 
-Owner decided to remove legacy v1 device messaging and move agent-to-agent work
-into one "My agents" room with a topic per job. Plan only, nothing implemented:
-[plans/MEL_713.md](plans/MEL_713.md).
+[App v0.10.0](https://github.com/misunders2d/agentnet/releases/tag/v0.10.0) is
+public and Latest at 00:02:56 UTC October 30 from
+`fbeab7c400b31412d79b7cfdd49c10c00b101294`;
+[gallery v2026.10.30](https://github.com/misunders2d/agentnet-skins/releases/tag/v2026.10.30)
+at 08:08:16 UTC from `3675a2e7e1d7bd037c7244a751bc8cd177172c47`.
 
-## MEL-710 reply feedback — unreleased, October 29
+MEL-713 step 1: agent work moves into one "My agents" room, one topic per job;
+nothing starts a version 1 turn. Device chats stay readable, their received
+requests stay answerable, and their composers refuse new sends with a read-only
+note that keeps text and files. Old-format messages from devices not yet
+updated still arrive. Step 2 (next release) deletes version 1 receive and its
+tests: [plans/MEL_713.md](plans/MEL_713.md). MEL-710, MEL-714 and MEL-716 ride
+along; MEL-716 was not reproduced in the app's own webview, so it is unverified there.
+
+Gates on the exact pin: go vet, race `others` and 18 client shards, native
+Linux/macOS/Windows, six Windows client partitions, `TestMixedVersion` against
+v0.9.9 (CI, tag required), Hub container journey, latency fixtures (796
+actions, largest local feedback 197 ms), Android workloads (failed workloads
+reran green; media 340 ms max) and the skins gate (324 checks, zero skips).
+Timing flakes judged and retained are listed in
+[interaction coverage](INTERACTION_COVERAGE.md).
+
+All twelve public payloads plus SHA256SUMS match the verified draft. The frozen
+v0.10.0 gallery parser verifies five packages, 129 files and twenty previews
+over 151 HTTPS requests, byte-identical to `published/`. Hub starts v0.10.0 at
+08:06:31.78 UTC from the exact public Linux binary (sha256 `3e8e9d85…dfbd`);
+public HTTPS version/realm, volume/settings and neighboring service verify,
+zero restarts. Consistent local recovery is verified (schema 25, 219 files,
+202 local blobs, 8,945 remote Drive references), so it is a local copy, not a
+portable attachment backup. The first staged image was refused before any swap:
+its downloaded binary lacked the execute bit; modes now match v0.9.9 and it was
+rebuilt. Physical-device and installed-app checks remain incomplete.
+
+## MEL-710 reply feedback — released in v0.10.0, October 29
 
 Owner explicitly requested a fix without a release. Needs-attention Reply now
 closes its editor and shows the exact pending answer before I/O. A retained,
@@ -22,9 +51,8 @@ public contract, permission or transport changes. Standalone direct-chat action
 lists also expose the already-authorized `continue` action they had omitted.
 
 Focused browser and backend evidence, retained failures and coverage limits are
-in [interaction coverage](INTERACTION_COVERAGE.md). This is source work only:
-v0.9.9 and its gallery remain the published versions. No tag, deployment,
-installed-client update or full release qualification is authorized here.
+in [interaction coverage](INTERACTION_COVERAGE.md). It was source work only
+until it shipped with v0.10.0 above.
 
 ## v0.9.9 published and Hub deployed — October 29
 
