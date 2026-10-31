@@ -115,58 +115,9 @@ func groupTurnsFixture(t *testing.T, beforeRun ...func(*Agent)) (*world, *Agent,
 	}
 	last := map[string]string{}
 	t.Cleanup(func() {
-		if !t.Failed() {
-			return
-		}
-		t.Logf("initial fixture context wanted seq=%d hash=%s; initial observations=%v", next.State.Seq, next.State.Hash(), last)
-		for _, a := range []*Agent{w.alice, w.bob, carol} {
-			current, contextErr := a.GroupContext(next.State.Conv)
-			var proofHead sql.NullInt64
-			var proofCount, held int
-			proofErr := a.store.db.QueryRow(`SELECT max(seq), count(*) FROM group_proof_records WHERE conv=?`, next.State.Conv).Scan(&proofHead, &proofCount)
-			heldErr := a.store.db.QueryRow(`SELECT count(*) FROM quarantine WHERE reason=?`, reasonProof).Scan(&held)
-			t.Logf("context failure snapshot at=%s device=%s seq=%d hash=%s context_error=%v proof_head=%v proof_count=%d proof_error=%v held_proof=%d held_error=%v", time.Now().UTC().Format(time.RFC3339Nano), a.Address, current.State.Seq, current.State.Hash(), contextErr, proofHead, proofCount, proofErr, held, heldErr)
-			label, name, _ := protocol.SplitAddress(a.Address)
-			var profile protocol.Profile
-			profileErr := a.hub.do(tctx(t), "GET", "/v1/agents/"+label+"/"+name+"/profile", nil, &profile)
-			t.Logf("context failure profile device=%s live=%t sessions=%v signed_identity=%t signed_group=%t error=%v", a.Address, profile.Live, profile.Sessions, profile.Supports(a.Address, a.Self().SignKey, protocol.CapAgentIdentity), profile.Supports(a.Address, a.Self().SignKey, protocol.CapGroup), profileErr)
-			rows, err := a.store.db.Query(`SELECT recipient, coalesce(sub,''), state, count(*) FROM outbox WHERE conv=? GROUP BY recipient, sub, state`, next.State.Conv)
-			if err != nil {
-				t.Logf("%s outbox diagnostic: %v", a.Address, err)
-				continue
-			}
-			for rows.Next() {
-				var to, sub, state string
-				var count int
-				if err := rows.Scan(&to, &sub, &state, &count); err == nil {
-					t.Logf("%s -> %s sub=%s state=%s count=%d", a.Address, to, sub, state, count)
-				}
-			}
-			rows.Close()
-			// A held group copy records no reason: evaluate its gate now, read only.
-			packet, e := a.GroupContext(next.State.Conv)
-			if e != nil {
-				continue
-			}
-			t.Logf("%s delivery head seq=%d: %v", a.Address, packet.State.Seq, groupDeliveryHead(a.store.db, packet))
-			queued, err := a.store.db.Query(`SELECT recipient, sub, body, coalesce(error,''), created_at FROM outbox WHERE conv=? AND state=? AND sub IN (?,?)`, next.State.Conv, stateQueued, envelope.SubGroupProof, envelope.SubGroupContext)
-			if err != nil {
-				continue
-			}
-			for queued.Next() {
-				var to, sub, body, why string
-				var created int64
-				var d protocol.GroupCarrier
-				if queued.Scan(&to, &sub, &body, &why, &created) != nil {
-					continue
-				}
-				gate := decodeStrict([]byte(body), &d)
-				if gate == nil {
-					gate = groupDeliveryRecipient(a.store.db, packet, to, d.ToKey)
-				}
-				t.Logf("%s queued %s -> %s seq=%d age=%s gate=%v error=%q", a.Address, sub, to, d.Seq, time.Since(time.Unix(created, 0)).Round(time.Millisecond), gate, why)
-			}
-			queued.Close()
+		if t.Failed() {
+			t.Logf("initial fixture context wanted seq=%d hash=%s; initial observations=%v", next.State.Seq, next.State.Hash(), last)
+			groupFixtureSnapshot(t, t.Logf, next.State.Conv, w.alice, w.bob, carol)
 		}
 	})
 	for _, a := range []*Agent{w.bob, carol} {
@@ -177,6 +128,68 @@ func groupTurnsFixture(t *testing.T, beforeRun ...func(*Agent)) (*world, *Agent,
 		})
 	}
 	return w, carol, next, stops
+}
+
+// groupFixtureSnapshot logs each device's group context, outbox and held
+// copies for a failed fixture test, evaluating queued copies' gates read only.
+func groupFixtureSnapshot(t *testing.T, logf func(string, ...any), conv string, agents ...*Agent) {
+	for _, a := range agents {
+		current, contextErr := a.GroupContext(conv)
+		var proofHead sql.NullInt64
+		var proofCount, held int
+		proofErr := a.store.db.QueryRow(`SELECT max(seq), count(*) FROM group_proof_records WHERE conv=?`, conv).Scan(&proofHead, &proofCount)
+		heldErr := a.store.db.QueryRow(`SELECT count(*) FROM quarantine WHERE reason=?`, reasonProof).Scan(&held)
+		logf("context failure snapshot at=%s device=%s seq=%d hash=%s context_error=%v proof_head=%v proof_count=%d proof_error=%v held_proof=%d held_error=%v", time.Now().UTC().Format(time.RFC3339Nano), a.Address, current.State.Seq, current.State.Hash(), contextErr, proofHead, proofCount, proofErr, held, heldErr)
+		label, name, _ := protocol.SplitAddress(a.Address)
+		var profile protocol.Profile
+		profileErr := a.hub.do(tctx(t), "GET", "/v1/agents/"+label+"/"+name+"/profile", nil, &profile)
+		logf("context failure profile device=%s live=%t sessions=%v signed_identity=%t signed_group=%t error=%v", a.Address, profile.Live, profile.Sessions, profile.Supports(a.Address, a.Self().SignKey, protocol.CapAgentIdentity), profile.Supports(a.Address, a.Self().SignKey, protocol.CapGroup), profileErr)
+		rows, err := a.store.db.Query(`SELECT recipient, coalesce(sub,''), state, count(*) FROM outbox WHERE conv=? GROUP BY recipient, sub, state`, conv)
+		if err != nil {
+			logf("%s outbox diagnostic: %v", a.Address, err)
+			continue
+		}
+		for rows.Next() {
+			var to, sub, state string
+			var count int
+			if err := rows.Scan(&to, &sub, &state, &count); err == nil {
+				logf("%s -> %s sub=%s state=%s count=%d", a.Address, to, sub, state, count)
+			}
+		}
+		rows.Close()
+		// A held group copy records no reason: evaluate its gate now, read only.
+		packet, e := a.GroupContext(conv)
+		if e != nil {
+			continue
+		}
+		logf("%s delivery head seq=%d: %v", a.Address, packet.State.Seq, groupDeliveryHead(a.store.db, packet))
+		queued, err := a.store.db.Query(`SELECT recipient, sub, body, coalesce(error,''), created_at FROM outbox WHERE conv=? AND state=? AND sub IN (?,?)`, conv, stateQueued, envelope.SubGroupProof, envelope.SubGroupContext)
+		if err != nil {
+			continue
+		}
+		// The store has one connection: read every row before the gate
+		// queries, or the open rows hold it and the gate waits forever.
+		type copyRow struct {
+			to, sub, body, why string
+			created            int64
+		}
+		var waiting []copyRow
+		for queued.Next() {
+			var r copyRow
+			if queued.Scan(&r.to, &r.sub, &r.body, &r.why, &r.created) == nil {
+				waiting = append(waiting, r)
+			}
+		}
+		queued.Close()
+		for _, r := range waiting {
+			var d protocol.GroupCarrier
+			gate := decodeStrict([]byte(r.body), &d)
+			if gate == nil {
+				gate = groupDeliveryRecipient(a.store.db, packet, r.to, d.ToKey)
+			}
+			logf("%s queued %s -> %s seq=%d age=%s gate=%v error=%q", a.Address, r.sub, r.to, d.Seq, time.Since(time.Unix(r.created, 0)).Round(time.Millisecond), gate, r.why)
+		}
+	}
 }
 
 func groupTurns(t *testing.T, a *Agent, conv string) []ConvMessage {
@@ -199,6 +212,59 @@ func groupTurnEnvelope(t *testing.T, a *Agent, id string) envelope.Envelope {
 		t.Fatal(err)
 	}
 	return env
+}
+
+// A failure snapshot with a queued group copy evaluates its gate on the
+// store's single connection; it once waited there for its own open rows.
+func TestGroupFixtureSnapshotQueuedCopy(t *testing.T) {
+	w, carol, packet, stops := groupTurnsFixture(t)
+	stops[w.alice]()
+	var cols []string
+	rows, err := w.alice.store.db.Query(`SELECT name FROM pragma_table_info('outbox')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var c string
+		if err := rows.Scan(&c); err != nil {
+			t.Fatal(err)
+		}
+		cols = append(cols, c)
+	}
+	rows.Close()
+	picked := make([]string, len(cols))
+	for i, c := range cols {
+		picked[i] = map[string]string{"id": "?", "state": "?"}[c]
+		if picked[i] == "" {
+			picked[i] = c
+		}
+	}
+	list := strings.Join(cols, ",")
+	res, err := w.alice.store.db.Exec(`INSERT INTO outbox(`+list+`) SELECT `+strings.Join(picked, ",")+` FROM outbox WHERE conv=? AND sub=? AND recipient=? LIMIT 1`, protocol.NewID(), stateQueued, packet.State.Conv, envelope.SubGroupProof, carol.Address)
+	if n, _ := res.RowsAffected(); err != nil || n != 1 {
+		t.Fatalf("queued copy: %d %v", n, err)
+	}
+	var mu sync.Mutex
+	var lines []string
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		groupFixtureSnapshot(t, func(format string, args ...any) {
+			mu.Lock()
+			lines = append(lines, fmt.Sprintf(format, args...))
+			mu.Unlock()
+		}, packet.State.Conv, w.alice)
+	}()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("snapshot did not finish")
+	}
+	if !slices.ContainsFunc(lines, func(l string) bool {
+		return strings.Contains(l, "queued "+envelope.SubGroupProof+" -> "+carol.Address)
+	}) {
+		t.Fatalf("no queued copy reported: %q", lines)
+	}
 }
 
 func TestGroupTurnsT1ThreePeopleAndLinkedCopies(t *testing.T) {
