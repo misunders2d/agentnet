@@ -296,7 +296,7 @@ func (f *Fixture) Overview() (Overview, error) {
 			switch {
 			case v.Next == "Needs you":
 				s.Review++
-					o.Review = append(o.Review, ReviewItem{ID: m.ID, Peer: t.peer, Kind: m.Kind, Why: ReviewWhy(m.Kind, m.State, t.peer, m.Detail), Excerpt: excerpt(m.Body), At: m.At, Reason: reviewReason(m.Kind, m.State)})
+				o.Review = append(o.Review, ReviewItem{ID: m.ID, Peer: t.peer, Kind: m.Kind, Why: ReviewWhy(m.Kind, m.State, t.peer, m.Detail), Excerpt: excerpt(m.Body), At: m.At, Reason: reviewReason(m.Kind, m.State)})
 			case (m.State == "running" || m.State == "cancel_requested") && m.Dir == "in":
 				s.Running++
 				o.Review = append(o.Review, ReviewItem{ID: m.ID, Peer: t.peer, Kind: m.Kind, Why: ReviewWhy(m.Kind, m.State, t.peer, m.Detail), Excerpt: excerpt(m.Body), At: m.At, Reason: reviewReason(m.Kind, m.State)})
