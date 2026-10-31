@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -103,11 +104,14 @@ func dmWorld(t *testing.T, runStops ...map[*client.Agent]func()) (alice, bob, ca
 	t.Cleanup(cancel)
 	dir := filepath.Join(t.TempDir(), "hub")
 	testhub.Start(t, dir, "127.0.0.1:0", "")
+	homes := map[*client.Agent]string{}
 	join := func(code, name string) *client.Agent {
-		a, err := client.Join(ctx, filepath.Join(t.TempDir(), name), code, name)
+		home := filepath.Join(t.TempDir(), name)
+		a, err := client.Join(ctx, home, code, name)
 		if err != nil {
 			t.Fatal(err)
 		}
+		homes[a] = home
 		a.Logf = func(format string, args ...any) { t.Logf(a.Address+": "+format, args...) }
 		run, stop := context.WithCancel(context.Background())
 		done := make(chan struct{})
@@ -133,6 +137,14 @@ func dmWorld(t *testing.T, runStops ...map[*client.Agent]func()) (alice, bob, ca
 		return code
 	}
 	bob, carol = join(invite("bob"), "desk"), join(invite("carol"), "box")
+	// Registered after the daemons' cleanups, so it runs while they still do.
+	t.Cleanup(func() {
+		if t.Failed() {
+			for _, a := range []*client.Agent{alice, bob, carol} {
+				dmWorldSnapshot(t, a, homes[a])
+			}
+		}
+	})
 	for label, a := range map[string]*client.Agent{"Alice": alice, "Bob": bob, "Carol": carol} {
 		if _, err := a.CreatePerson(ctx, label); err != nil {
 			t.Fatal(err)
@@ -152,6 +164,45 @@ func dmWorld(t *testing.T, runStops ...map[*client.Agent]func()) (alice, bob, ca
 		return err == nil
 	})
 	return alice, bob, carol, conv, eventually
+}
+
+// dmWorldSnapshot logs, query only, what a failed journey left waiting on a
+// device: outgoing copies not yet delivered and held incoming ones, with age.
+func dmWorldSnapshot(t *testing.T, a *client.Agent, home string) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(home, "agent.db")+"?_pragma=busy_timeout(5000)&_pragma=query_only(1)")
+	if err != nil {
+		t.Logf("%s snapshot: %v", a.Address, err)
+		return
+	}
+	defer db.Close()
+	now := time.Now()
+	rows, err := db.Query(`SELECT recipient, coalesce(sub,''), state, coalesce(error,''), coalesce(created_ms, created_at*1000) FROM outbox WHERE state<>'delivered' ORDER BY created_at`)
+	if err != nil {
+		t.Logf("%s outbox snapshot: %v", a.Address, err)
+	} else {
+		for rows.Next() {
+			var to, sub, state, why string
+			var created int64
+			if rows.Scan(&to, &sub, &state, &why, &created) == nil {
+				t.Logf("%s outbox -> %s sub=%s state=%s age=%s error=%q", a.Address, to, sub, state, now.Sub(time.UnixMilli(created)).Round(time.Millisecond), why)
+			}
+		}
+		rows.Close()
+	}
+	rows, err = db.Query(`SELECT sender, reason, detail_code, received_at, acked FROM quarantine ORDER BY received_at`)
+	if err != nil {
+		t.Logf("%s held snapshot: %v", a.Address, err)
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var from, reason, detail string
+		var received int64
+		var acked bool
+		if rows.Scan(&from, &reason, &detail, &received, &acked) == nil {
+			t.Logf("%s held from %s reason=%s detail=%s age=%s acked=%t", a.Address, from, reason, detail, now.Sub(time.Unix(received, 0)).Round(time.Second), acked)
+		}
+	}
 }
 
 // BUG-20: accepting an agent's invitation is the standing task grant for the
