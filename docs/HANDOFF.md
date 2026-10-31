@@ -33,6 +33,21 @@ reproduce the CI failures (96 of 96 runs of the three group tests passed under
 group copy on failure, its age, error text and the delivery gate evaluated
 read only, so a held copy shows whether its gate or a failed send kept it.
 
+CI run 41193103059 on d5f5b25b failed four jobs, and the retry fix does not
+explain two of them. macOS `TestCLIQueuedNamedAgentJourney` failed again with
+the same signature (Bob holds Admin's group messages `proof_pending`, "verified
+decryptable context unavailable"); its cause is still unknown. Windows client
+partition 5 `TestSharedTopicExactGuestLiveAndHistorical/group` timed out in the
+linked phone's history step, as at load 18 above. The new snapshot shows no
+queued copy: every group copy was delivered, and four of Alice's history
+copies for the phone were still in Hub custody (5 members listed, 4
+connected). So that stall is not a held send. Windows native failed the
+recorded Hub member-push pair. Race client-13 hit the 600-second bound because
+the two new tests shifted the index-based partitions: by that run's timings,
+client-13's parents grew from 528 s to 587 s, plus a test still running. The
+fix moves `TestGroupHistoryWitnessGuestDerivedParent` (82 s) to partition 14
+(258 s); by the same timings the largest partition is now 543 s.
+
 ## Gallery skins update automatically — unreleased, October 31
 
 Owner request: installed skins update with the app. Gallery installs live in

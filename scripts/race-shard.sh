@@ -38,6 +38,7 @@ run_partition() {
 				if ($0=="TestGroupParticipationFilesLateLinkedRequestAndNamedOutput") part=15
 				if ($0=="TestGroupInteractionNamedMemberAndVisitor") part=16
 				if ($0=="TestGoogleReviewIntentRetry") part=0
+				if ($0=="TestGroupHistoryWitnessGuestDerivedParent") part=14
 			}
 			if (client && n==12) {
 				if ($0=="TestGroupInteractionNamedMemberAndVisitor") part=1
