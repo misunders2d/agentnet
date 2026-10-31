@@ -1,6 +1,35 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
-## Relay checks once per action, together — unreleased, October 31
+## v0.10.2 published and Hub deployed — November 1
+
+[App v0.10.2](https://github.com/misunders2d/agentnet/releases/tag/v0.10.2) is
+public and Latest at 23:10:57 UTC October 31 from
+`40baa3f1c9a7da60eb8f0152ba125c5e24eb6eb6`. All twelve payloads plus
+SHA256SUMS match the verified draft byte for byte. Gates on that commit:
+CI 41245674459 green (Linux `itest` with `AGENTNET_REQUIRE_COMPAT=1`, so
+`TestMixedVersion` ran against v0.10.1); platform run 41248782261 desktop
+×3 green, Android green on rerun (attempt 1 lost the compose suite's final
+Binder result after its workload finished, the script's documented case);
+skins gate run 1 network-isolated: 324 checks, zero skipped, every suite of
+all five published skins and the native request suite pass; the generated
+qa-orbit scaffold's motion check failed (sweep ended before read). Run 2 at
+load 10 (unrelated local services) timed out 15 s waits in Classic browser
+and Classic/Holonet/qa-orbit touch. Same acceptance as v0.10.1.
+[Gallery v2026.11.01](https://github.com/misunders2d/agentnet-skins/releases/tag/v2026.11.01)
+is Latest from `5ec3326e6f3d3e1904fea2f7476691fb8f0a9805`; all 150 raw files
+match `published/`.
+
+Hub starts v0.10.2 at 23:14:35 UTC from the exact public Linux binary
+(sha256 `b5f07557…d5a5`); public HTTPS version/realm, volume/settings and the
+neighboring service verify, zero restarts, schema 25. Local recovery
+verifies 549 files, 532 local blobs and 8,945 remote Drive references. The
+v0.10.1 staging scripts were reused with only `WORK` changed.
+
+Seen during the gates, not chased: the owner's installed v0.10.1 daemon
+used about one core at idle (top, 18 h process). Recheck once it runs
+v0.10.2.
+
+## Relay checks once per action, together — v0.10.2, October 31
 
 Owner chose "fix lag, then release". The CI timing failures and the felt
 delay share one cause: sends and invitations asked the relay the same
