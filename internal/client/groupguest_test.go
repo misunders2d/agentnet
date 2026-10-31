@@ -233,7 +233,7 @@ func TestGroupGuestCapturedMessageControls(t *testing.T) {
 	for _, a := range []*Agent{w.alice, w.bob, member, guest} {
 		roomReader(t, a)
 	}
-	invite, e := member.InviteHuman(tctx(t), conv, guest.Address, nil, "")
+	invite, e := member.InviteHuman(WithQueuedSend(tctx(t), ""), conv, guest.Address, nil, "")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -320,7 +320,7 @@ func TestGroupGuestCapturedMessageControls(t *testing.T) {
 	runAgent(t, later)
 	publishGroupFixtureCaps(t, later, true)
 	roomReader(t, later)
-	next, e := member.InviteHuman(tctx(t), conv, later.Address, nil, "")
+	next, e := member.InviteHuman(WithQueuedSend(tctx(t), ""), conv, later.Address, nil, "")
 	if e != nil {
 		t.Fatal(e)
 	}

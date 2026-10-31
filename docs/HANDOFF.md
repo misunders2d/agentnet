@@ -48,6 +48,27 @@ client-13's parents grew from 528 s to 587 s, plus a test still running. The
 fix moves `TestGroupHistoryWitnessGuestDerivedParent` (82 s) to partition 14
 (258 s); by the same timings the largest partition is now 543 s.
 
+Run 41196936505 (5dce407a) passed race client-13 and macOS. Attempt 1 failed
+Windows `TestSelfConsentGroupLinkedDevice` (the linked phone did not hold the
+group within 15 s; Alice's context and proof copies to it show delivered) and
+the recorded `TestGroupLifecycleConcurrentInvitationsReissuedForFreshConsent`
+(its reissue was logged just after the wait expired). Attempt 2 hung Windows
+partition 4 at the 1800-second bound, and the hang was the new
+`groupTurnsFixture` snapshot itself. It evaluated each queued copy's gate on
+the store's single connection while the queued rows were still open. The
+first failure snapshot had nothing queued, so it never reached that query.
+`groupFixtureSnapshot` now reads the rows first.
+`TestGroupFixtureSnapshotQueuedCopy` queues a copy and requires the snapshot
+to finish and report it (the old loop hangs it). The test that failed there,
+`TestGroupGuestCapturedMessageControls`, ran out of its 10 s inline
+`InviteHuman` context ("persons/…/chain: context deadline exceeded"). It
+failed the same way locally under `-race` at load 7–13, on 1df69c08 (2 of 3)
+as on HEAD (3 of 3). Both of its invitations now use the app's queued
+invitation, as in 5bb2ef34. After that it passed 4 of 5; the miss was the
+second invitation's 15 s wait at load 13, from other processes. The added test moves the
+race partitions again: `TestGroupParticipationHistoryDismissedLinkedRestartReorder`
+moves to partition 12, and by run 41193103059's timings the largest is 545 s.
+
 ## Gallery skins update automatically — unreleased, October 31
 
 Owner request: installed skins update with the app. Gallery installs live in
