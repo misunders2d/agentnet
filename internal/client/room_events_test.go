@@ -2,6 +2,7 @@ package client
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +24,10 @@ func roomReader(t *testing.T, a *Agent) {
 // publishGroupFixtureCaps) dated ahead of the clock.
 func signCapsAfter(t *testing.T, a *Agent, caps []string) {
 	t.Helper()
+	// A signed record lists its names sorted and once, in either branch.
+	caps = slices.Clone(caps)
+	slices.Sort(caps)
+	caps = slices.Compact(caps)
 	waitNamedAgentCaps(t, a)
 	label, name, _ := protocol.SplitAddress(a.Address)
 	var prof protocol.Profile
@@ -49,6 +54,41 @@ func signCapsAfter(t *testing.T, a *Agent, caps []string) {
 		return
 	}
 	signCapsNow(t, a, caps)
+}
+
+// signCapsAfter once signed a list as given when the latest record was
+// ahead of the clock, so an unsorted list failed only then.
+func TestSignCapsAfterSortsAheadOfClock(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.bob)
+	waitNamedAgentCaps(t, w.bob)
+	label, device, _ := protocol.SplitAddress(w.bob.Address)
+	profile := func() protocol.Profile {
+		var prof protocol.Profile
+		if err := w.bob.hub.do(tctx(t), "GET", "/v1/agents/"+label+"/"+device+"/profile", nil, &prof); err != nil {
+			t.Fatal(err)
+		}
+		return prof
+	}
+	prof := profile()
+	if len(prof.Sessions) != 1 {
+		t.Fatalf("%d sessions", len(prof.Sessions))
+	}
+	ahead := time.Now().Unix() + 100
+	rec := protocol.CapsRecord{Address: w.bob.Address, Session: prof.Sessions[0], Caps: slices.Clone(ownCaps), TS: ahead}
+	rec.Sign(w.bob.id.Sign)
+	if err := w.bob.hub.do(tctx(t), "PUT", "/v1/caps", rec, nil); err != nil {
+		t.Fatal(err)
+	}
+	unsorted := append(slices.Clone(ownCaps), protocol.CapPerson)
+	slices.Reverse(unsorted)
+	signCapsAfter(t, w.bob, unsorted)
+	for _, raw := range profile().Caps {
+		if r, err := protocol.ParseCapsRecord(raw); err == nil && r.TS == ahead+1 && slices.Equal(r.Caps, ownCaps) {
+			return
+		}
+	}
+	t.Fatal("no sorted successor record ahead of the clock")
 }
 
 // roomInvite is a's signed room invitation in conv for an agent (role "")
