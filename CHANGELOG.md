@@ -6,6 +6,9 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+- Say why an invited agent has not joined: its device is offline (it joins
+  when the device is back) or its AgentNet is behind the relay's release
+  (update it there), instead of a plain "Joining on …".
 - Retry a send that failed on a temporary Hub or network error after 1, 2,
   4 … seconds (at most 45) instead of waiting for the next 90-second ping or
   other traffic. Nothing extra runs while sends succeed.

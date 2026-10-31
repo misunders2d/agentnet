@@ -971,6 +971,9 @@ type DirMember struct {
 	Address  string    `json:"address"`
 	Presence string    `json:"presence"`
 	Joined   time.Time `json:"joined"`
+	// Suspended: the relay serves the device nothing until it updates
+	// AgentNet (its last reported version is behind the relay's release).
+	Suspended bool `json:"suspended,omitempty"`
 }
 
 // ReviewItem is a received item waiting for the person. Notice marks a

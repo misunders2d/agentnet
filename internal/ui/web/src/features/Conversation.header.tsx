@@ -1,4 +1,4 @@
-import { pendingGroupInvites } from "./RoomPanel.model";
+import { hostNote, pendingGroupInvites } from "./RoomPanel.model";
 // The conversation's header (who this is, whether their computer is on,
 // Bring in, and the overflow menu) and, on phones, the guest bar: who is
 // helping here right now, with Dismiss said in words.
@@ -52,11 +52,12 @@ export function helpers(ctx: Ctx, run: <R>(fn: (a: Api) => Promise<R>) => Promis
   for (const a of t.agents || []) {
     if (a.state !== "active" && a.state !== "invited") continue;
     const since = joined(a.pid) || a.invited;
+    const note = a.state === "invited" && !a.host_here ? hostNote(ctx.overview, a.host.address) : "";
     out.push({
       pid: a.pid, who: "a:" + a.host.address + "#" + (a.agent_id || ""), name: agentLabel(a, ctx), agent: true, member:!!a.member, seed: a.agent_id || a.host.address, device: a.member ? undefined : deviceKind(a.host.address), active: a.state === "active",
       // Only the host's actual acceptance makes it active. An owner's signed
       // invitation already gives consent while that confirmation is in flight.
-      sub: a.state === "active" ? "since " + timeOf(since) : a.owner_invited ? a.state_text : a.host_here ? "Waiting for your OK" : "Waiting for " + personName(a.host) + "’s OK",
+      sub: a.state === "active" ? "since " + timeOf(since) : note || (a.owner_invited ? a.state_text : a.host_here ? "Waiting for your OK" : "Waiting for " + personName(a.host) + "’s OK"),
       dismiss: a.can_dismiss ? () => run((x) => x.dismissAgent(a.pid)) : undefined, review: a.can_decide,
     });
   }

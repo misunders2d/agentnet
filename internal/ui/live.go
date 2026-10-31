@@ -311,7 +311,7 @@ func directoryOf(v client.MemberView, self string) Directory {
 		}
 		e := DirMember{Address: m.Address, Joined: time.Unix(m.Joined, 0)}
 		if v.Current {
-			e.Presence = m.Presence
+			e.Presence, e.Suspended = m.Presence, m.Suspended
 		}
 		d.Members = append(d.Members, e)
 	}

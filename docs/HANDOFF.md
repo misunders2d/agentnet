@@ -1,5 +1,21 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+## Invited agent on an offline or outdated device — unreleased, October 31
+
+Owner phone report on v0.10.1: own Claude stuck "Joining on
+admin/linux-laptop…". That laptop ran no AgentNet daemon and was on v0.10.0,
+so the relay would also suspend it (latest-only rule). The invited agent's
+line now says "<device> is offline · joins when it’s back" or "<device>’s
+AgentNet is behind · update it there", from the current relay directory
+(`DirMember.suspended`, new). Evidence: docs/INTERACTION_COVERAGE.md top
+section. `TestOwnInviteBrowserHostJourney`'s rendered part is not in CI's
+rendered list and had failed on HEAD (a read-only lookup counted as a
+write); fixed, run locally only. A full non-race `go test ./internal/ui`
+(617 s, `unshare -rn`) failed once in `TestBrowserGroupWarmRecovery`
+("remote newer context cannot complete the older remaining-member fanout");
+it passed 3/3 alone and does not touch the changed code. Load flake, not
+yet investigated.
+
 ## A transiently failed send waited for the next ping — unreleased, October 31
 
 CI runs 41132521965 and 41181824394 (both green on rerun) failed three tests

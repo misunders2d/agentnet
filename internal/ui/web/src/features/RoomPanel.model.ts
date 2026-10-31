@@ -16,6 +16,17 @@ export function online(o: T.Overview | null, address: string): boolean | null {
   return m ? m.presence === "connected" : null;
 }
 
+/** hostNote: why an invited agent's device cannot take the invitation now,
+ *  in words, from the Hub's current member list: "" when nothing is known. */
+export function hostNote(o: T.Overview | null, address: string): string {
+  if (!o || address === o.me.address || !o.directory?.current) return "";
+  const m = (o.directory.members || []).find((x) => x.address === address);
+  if (!m) return "";
+  const device = niceDevice(address);
+  if (m.suspended) return device + "’s AgentNet is behind · update it there";
+  return m.presence === "connected" ? "" : device + " is offline · joins when it’s back";
+}
+
 const holds = (p: T.PersonView | undefined | null, address: string) =>
   !!p && (p.address === address || (p.devices || []).some((d) => d.address === address));
 
@@ -176,7 +187,7 @@ export function room(t: T.DMThread, o: T.Overview | null, names: Record<string, 
       where: a.host_here ? "this computer" : niceDevice(a.host.address),
       online: online(o, a.host.address), hostName: a.host_here ? "you" : personName(a.host), hostHere: a.host_here,
       invitedBy: inviterWord(a.inviter), note: a.note?.trim() || undefined,
-      state: a.state, stateText: a.state_text, ownerInvited: a.owner_invited,
+      state: a.state, stateText: (a.state === "invited" && !a.host_here && hostNote(o, a.host.address)) || a.state_text, ownerInvited: a.owner_invited,
       shared: msgs.filter((m) => (a.shared || []).includes(m.id)), missing: a.missing,
       ...times(a.pid, a.state, a.invited && !a.invited.startsWith("0001") ? a.invited : undefined), working: working(a.pid),
       can: { decide: a.can_decide, dismiss: a.can_dismiss, end: false, leave: false },

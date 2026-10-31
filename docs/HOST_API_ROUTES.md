@@ -634,6 +634,11 @@ decision does not close the request; only the host's signed status does.
 
 **Other state words.**
 
+- A relay directory member (`directory.members[]`, only when
+  `directory.current`): `presence` is `connected` or not, and `suspended`
+  (optional) means the relay serves that device nothing until it updates
+  AgentNet. Show an invited agent's device as offline or behind from these;
+  otherwise use its `state_text`.
 - Delivery of a sent copy (`state` of an outgoing message, `copies[].state`):
   - `queued`
   - `waiting`: kept here because that device cannot read it yet, or

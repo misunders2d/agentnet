@@ -21,6 +21,7 @@ if(p==='/api/groups/invitations')return [];
 if(p.startsWith('/api/typing/status'))return {send:false,scopes:[]};
 if(p.includes('/topics'))return {topics:[],placements:[]};
 if(p==='/api/permissions')return {questions:[],tasks:[]};
+if(p==='/api/topic/transfer/location')return null; // read-only lookup sent as POST
 if(body!==undefined&&p!=='/api/refresh')throw Error('Unexpected write '+p);
 return {};
 }};
@@ -30,6 +31,7 @@ if(manifest.document){const css=new CSSStyleSheet();css.replaceSync(await(await 
 const shadow=document.querySelector('#skin').attachShadow({mode:'open'}),css=new CSSStyleSheet();css.replaceSync(await(await fetch(base+manifest.style)).text());shadow.adoptedStyleSheets=[css];
 const node=document.createElement('div');node.className='skin-root';shadow.append(node);await(await import(base+manifest.entry)).mount(node,host);
 window.openGroup=()=>open(fixture.thread.id,'conversation');
+window.hostDevice=(presence,suspended)=>{const a=fixture.thread.agents.find(a=>a.state==='invited'&&!a.host_here);fixture.overview={...fixture.overview,directory:{status:'listed',current:true,truncated:false,members:[...(fixture.overview.directory?.members||[]).filter(m=>m.address!==a.host.address),{address:a.host.address,presence,joined:'2026-10-31T00:00:00Z',...suspended?{suspended}:{}}]}};changed?.({type:'change',seq:++seq});};
 window.transition=state=>{const next=structuredClone(views[mode+'-'+state]);fixture.overview=next.overview;fixture.thread=next.thread;changed?.({type:'change',seq:++seq});};window.ready=true;
 `;
 const server=http.createServer((req,res)=>{
@@ -58,16 +60,21 @@ const server=http.createServer((req,res)=>{
    await page.evaluate(()=>openGroup());
    const panel=page.getByRole('button',{name:'In this chat',exact:true});
    if(await panel.isVisible())await panel.click();else await page.getByRole('button',{name:/Who’s in this chat/}).click();
-   const text=mode==='native'?/Enable this agent on this computer/:/Joining on /;
+   const text=mode==='native'?/Enable this agent on this computer/:/ is offline · joins when it’s back/; // the browser views are taken with the host daemon stopped
    await page.getByText(text).and(page.locator(':visible')).first().waitFor();
    const verify=async()=>{
     assert.equal(await page.getByRole('button',{name:/^(Let it join|Accept…|Decline…|Decide in chat)$/}).count(),0,'no second consent control');
     assert.equal(await page.getByText(/Waiting for (?:your|.*’s) OK|Needs your OK/).and(page.locator(':visible')).count(),0,'no false approval state');
-    assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.body!==undefined&&r.path!=='/api/refresh').length),0,'render sends no approvals');
+    assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.body!==undefined&&r.path!=='/api/refresh'&&r.path!=='/api/topic/transfer/location').length),0,'render sends no approvals');
    };
    await verify();
    const shot=path.join(evidence,mode+'-'+skin+'-pending-'+width+'.png');await settle(page);await page.screenshot({path:shot});shots.push(shot);
-   if(mode==='browser'){await page.evaluate(()=>transition('delayed'));await page.getByText(text).and(page.locator(':visible')).first().waitFor();await verify();}
+   if(mode==='browser'){
+    // Same view, host device behind the relay's release, then connected and current.
+    await page.evaluate(()=>hostDevice('connected',true));await page.getByText(/’s AgentNet is behind · update it there/).and(page.locator(':visible')).first().waitFor();await verify();
+    const behind=path.join(evidence,mode+'-'+skin+'-behind-'+width+'.png');await settle(page);await page.screenshot({path:behind});shots.push(behind);
+    await page.evaluate(()=>hostDevice('connected'));await page.getByText(/Joining on /).and(page.locator(':visible')).first().waitFor();await verify();
+    await page.evaluate(()=>transition('delayed'));await page.getByText(text).and(page.locator(':visible')).first().waitFor();await verify();}
    await page.evaluate(()=>transition('active'));
    await page.getByText(/Member of this group/).and(page.locator(':visible')).first().waitFor();
    await verify();
@@ -76,6 +83,6 @@ const server=http.createServer((req,res)=>{
   }
   assert.deepEqual(errors,[]);
   const keep=process.env.AGENTNET_RENDERED_RETAIN;if(keep){assert(path.resolve(keep).startsWith('/tmp/'));fs.mkdirSync(keep,{recursive:true,mode:0o700});for(const shot of shots)fs.copyFileSync(shot,path.join(keep,path.basename(shot)));}
-  console.log(JSON.stringify({ok:true,checks:'Real signed native/browser views; offline/disabled joining, delayed and signed-active transitions; no approval controls/counts; Comic 1280/390',shots}));
+  console.log(JSON.stringify({ok:true,checks:'Real signed native/browser views; offline/disabled joining, host behind and connected, delayed and signed-active transitions; no approval controls/counts; Comic 1280/390',shots}));
  }finally{if(browser)await browser.close();server.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

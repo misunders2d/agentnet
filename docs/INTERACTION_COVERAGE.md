@@ -1,5 +1,27 @@
 # Next-release interaction coverage and responsiveness
 
+## Invited agent on an offline or outdated device — unreleased, October 31
+
+Owner report (phone, v0.10.1): own Claude stuck "Joining on admin/linux-laptop…"
+with nothing happening; that laptop ran no daemon and was on v0.10.0. Owner
+asked for "offline" and "version is behind, update it". Counterpart: Telegram
+and Slack show a contact's offline/last-seen state beside the conversation
+(from knowledge; not re-checked). No new control; the invited agent's line
+in the header strip and the **In this chat** card now reads:
+- host device not connected in the current relay directory: "Laptop is
+  offline · joins when it’s back";
+- host device suspended by the relay (behind its release): "Laptop’s AgentNet
+  is behind · update it there";
+- connected, current, or no current directory: unchanged server text.
+
+`own_invite_rendered.cjs` (TestOwnInviteBrowserHostJourney, Comic 1280/390,
+`unshare -rn`): the real browser views, taken with the host daemon stopped,
+show the offline line; the same view with the host marked suspended shows the
+behind line, and connected shows "Joining on". The fixture also answered the
+read-only `/api/topic/transfer/location` lookup as a write and failed on
+HEAD; it now answers it as a lookup. `host_note_check.mjs` covers the model,
+`TestDirectorySuspendedDevice` the directory field.
+
 ## Gallery skins update automatically, trust kept — unreleased, October 31
 
 Owner request: installed gallery skins update with the app. Owner decision:

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -697,5 +698,31 @@ func TestWorkspaceEventsStalledReaderDoesNotLockMembership(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestHostNoteOfflineAndBehind(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required for Comic host note model checks")
+	}
+	out, err := exec.CommandContext(t.Context(), node, "testdata/host_note_check.mjs").CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	t.Log(string(out))
+}
+
+// The page's directory carries the relay's suspension with presence, and
+// neither from a view that is not current.
+func TestDirectorySuspendedDevice(t *testing.T) {
+	members := protocol.Members{Members: []protocol.Member{{Address: "admin/linux-laptop", Presence: protocol.PresenceOffline, Version: "v0.10.0", Suspended: true}}}
+	d := directoryOf(client.MemberView{Listed: client.MembersListed, Current: true, Members: members}, "admin/zenbook")
+	if len(d.Members) != 1 || !d.Members[0].Suspended || d.Members[0].Presence != protocol.PresenceOffline {
+		t.Fatalf("current view: %+v", d.Members)
+	}
+	d = directoryOf(client.MemberView{Listed: client.MembersListed, Members: members}, "admin/zenbook")
+	if len(d.Members) != 1 || d.Members[0].Suspended || d.Members[0].Presence != "" {
+		t.Fatalf("stale view claimed state: %+v", d.Members)
 	}
 }

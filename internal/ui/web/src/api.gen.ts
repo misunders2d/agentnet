@@ -394,6 +394,7 @@ export interface DirMember {
   address: string;
   presence: string;
   joined: string;
+  suspended?: boolean;
 }
 
 export interface Directory {
