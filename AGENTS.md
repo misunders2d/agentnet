@@ -73,7 +73,10 @@ program, `agentnet`, that is both the laptop client and the Hub.
   crashes and restarts; retries are idempotent; nothing already answered or
   run is repeated silently.
 - **No polling.** The daemon holds one push stream; the only periodic
-  request is the signed ping acknowledgement.
+  request is the signed ping acknowledgement. Retrying after a failure is
+  not polling: a send that failed transiently is retried after 1 s, doubling
+  up to 45 s while sends keep failing, as Telegram's tdlib does (owner,
+  2026-10-31).
 - **Questions** are answered automatically only for approved senders, by the
   recipient's chosen harness with the recipient's own setup: their skills,
   plugins, MCP servers and permissions unchanged (see docs/revival/M4.md).
