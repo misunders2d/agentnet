@@ -109,6 +109,16 @@ bound output within 15 s), `TestRoomGroupQueuedVisitorInviteStoresEachEvent`
 recovery wait). All 220 fault-injection tests that completed locally under
 `-race` passed; the batch hit its 590 s bound before finishing.
 
+Run 41212268980 (98379f75) failed two jobs. Windows
+`TestHistoryContributionReviewedGroup` hit an inline Hub `Get` deadline (the
+recorded class). macOS `TestCLIQueuedNamedAgentJourney` failed again at the
+first invitation, with Bob holding three of Admin's group messages
+`proof_pending`. The `dmWorld` snapshot logged no lines. A local probe shows
+its held and undelivered queries print rows when rows exist. So at cleanup,
+just after the 30 s wait, nothing was held or undelivered on any device: the
+stall had cleared by then. It now always logs a count line per device, so an
+empty snapshot is distinguishable from one that did not run.
+
 ## Gallery skins update automatically — unreleased, October 31
 
 Owner request: installed skins update with the app. Gallery installs live in

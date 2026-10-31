@@ -176,6 +176,8 @@ func dmWorldSnapshot(t *testing.T, a *client.Agent, home string) {
 	}
 	defer db.Close()
 	now := time.Now()
+	var waiting, held int
+	defer func() { t.Logf("%s snapshot: %d outgoing copies not delivered, %d held", a.Address, waiting, held) }()
 	rows, err := db.Query(`SELECT recipient, coalesce(sub,''), state, coalesce(error,''), coalesce(created_ms, created_at*1000) FROM outbox WHERE state<>'delivered' ORDER BY created_at`)
 	if err != nil {
 		t.Logf("%s outbox snapshot: %v", a.Address, err)
@@ -184,6 +186,7 @@ func dmWorldSnapshot(t *testing.T, a *client.Agent, home string) {
 			var to, sub, state, why string
 			var created int64
 			if rows.Scan(&to, &sub, &state, &why, &created) == nil {
+				waiting++
 				t.Logf("%s outbox -> %s sub=%s state=%s age=%s error=%q", a.Address, to, sub, state, now.Sub(time.UnixMilli(created)).Round(time.Millisecond), why)
 			}
 		}
@@ -200,6 +203,7 @@ func dmWorldSnapshot(t *testing.T, a *client.Agent, home string) {
 		var received int64
 		var acked bool
 		if rows.Scan(&from, &reason, &detail, &received, &acked) == nil {
+			held++
 			t.Logf("%s held from %s reason=%s detail=%s age=%s acked=%t", a.Address, from, reason, detail, now.Sub(time.Unix(received, 0)).Round(time.Second), acked)
 		}
 	}
