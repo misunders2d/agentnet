@@ -23,8 +23,8 @@ hold a message up to 90 seconds in a quiet chat. Owner decision: retry soon.
 `retrySendSoon` (backgroundsend.go) arms one wake 1 s after a transient
 failure, doubling to 45 s while sends keep failing; a handover resets it.
 Nothing is armed for a copy held by its own gate, for update-required or for a
-stopping daemon. The wake is the running daemon's own sync (`kickNow`), so
-there is no request without a daemon. `TestQueuedSendTransientFailureRetriesSoon`
+stopping daemon. The wake is `kickNow`, armed and fired only during a daemon
+run (corrected below). `TestQueuedSendTransientFailureRetriesSoon`
 delivers in about 3.5 s (the probe on the old code: still queued after 40 s);
 `TestRetrySendSoonOnlyForTransientFailures` pins the gate and the backoff. The
 eight tests that inject POST failures pass under `-race`. Local stress did not
@@ -89,6 +89,25 @@ Alice's history `proof_pending`) and `TestProofQueueTransientRepeatsOnePage`
 that drain, so the send retry is not involved; the extra repeats are
 transient Hub failures under load, a class the October 30 note records for
 `retryProof`.
+
+Run 41207796307 (54bc9ef1) exposed a defect in the send retry. Race client-8
+`TestRoomCompletedChildOutputAfterParentAnswer` stops every daemon, queues
+answer copies by SQL, dismisses the parent and expects both copies held; it
+found none. `a.kick` stays set after `Run` returns, and calling it posts the
+outbox directly (`postOutboxBackground`). So a retry wake armed during a run
+could still fire after the run ended and send by itself, with no daemon
+running. The earlier claim here, "no request without a daemon", was wrong.
+`sendRetry` now arms and fires only while a run is current; `Run` disarms
+it on return. Both retry tests check this (an ended run disarms a pending
+wake; none arms after it). This mechanism is consistent with the failure
+(held 0) but not proven to be its cause: the log shows no send failure.
+That run's three Windows waits are recorded, not changed:
+`TestGroupHistoryWitnessRetiredTaskDevice` (new phone did not accept the
+bound output within 15 s), `TestRoomGroupQueuedVisitorInviteStoresEachEvent`
+(inline Hub `Get` deadline) and
+`TestConversationResourcesMembersCASRestartAndGuestBoundary` (linked member
+recovery wait). All 220 fault-injection tests that completed locally under
+`-race` passed; the batch hit its 590 s bound before finishing.
 
 ## Gallery skins update automatically — unreleased, October 31
 

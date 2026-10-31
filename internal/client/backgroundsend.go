@@ -56,9 +56,21 @@ const sendRetryMax = 45 * time.Second // the stream's reconnect cap
 
 type sendRetry struct {
 	sync.Mutex
-	timer  *time.Timer
-	wait   time.Duration
-	closed bool
+	timer   *time.Timer
+	wait    time.Duration
+	running bool // a daemon run is current; kickNow outlives it and would post alone
+	closed  bool
+}
+
+// runs marks a daemon run current or ended; an ended run disarms its wake.
+func (r *sendRetry) runs(on bool) {
+	r.Lock()
+	defer r.Unlock()
+	r.running, r.wait = on, 0
+	if !on && r.timer != nil {
+		r.timer.Stop()
+		r.timer = nil
+	}
 }
 
 func (r *sendRetry) succeeded() {
@@ -75,7 +87,7 @@ func (a *Agent) retrySendSoon(err error) {
 	r := &a.sendRetry
 	r.Lock()
 	defer r.Unlock()
-	if r.closed || r.timer != nil {
+	if r.closed || !r.running || r.timer != nil {
 		return
 	}
 	wait := max(r.wait, time.Second)
@@ -83,10 +95,10 @@ func (a *Agent) retrySendSoon(err error) {
 	r.timer = time.AfterFunc(wait, func() {
 		r.Lock()
 		r.timer = nil
-		closed := r.closed
+		due := r.running && !r.closed
 		r.Unlock()
-		if !closed {
-			a.kickNow() // a running daemon's own sync; nothing without one
+		if due {
+			a.kickNow() // the current daemon run's own sync; nothing after it ends
 		}
 	})
 }

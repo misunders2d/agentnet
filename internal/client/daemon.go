@@ -59,6 +59,8 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 		return err
 	}
 	defer release()
+	a.sendRetry.runs(true)
+	defer a.sendRetry.runs(false) // a failed send's wake belongs to this run (backgroundsend.go)
 	if stop, err := a.listenReadiness(opts.HumanOnly); err != nil {
 		a.Logf("local daemon readiness unavailable: %v", err)
 	} else {

@@ -180,7 +180,7 @@ func TestQueuedSendLostReceiptRetryIsOneDelivery(t *testing.T) {
 // October 31). A handover resets the wait.
 func TestQueuedSendTransientFailureRetriesSoon(t *testing.T) {
 	w, conv := queuedDMWorld(t)
-	runAgent(t, w.alice)
+	stop := runAgent(t, w.alice)
 	eventually(t, "connect-time sync settled", func() bool {
 		w.alice.posting.Lock()
 		defer w.alice.posting.Unlock()
@@ -201,6 +201,15 @@ func TestQueuedSendTransientFailureRetriesSoon(t *testing.T) {
 		defer w.alice.sendRetry.Unlock()
 		return w.alice.sendRetry.wait == 0
 	})
+	// The wake belongs to the run: kickNow outlives it and would post alone.
+	stop()
+	w.alice.retrySendSoon(&HubError{Status: 503})
+	w.alice.sendRetry.Lock()
+	armed := w.alice.sendRetry.running || w.alice.sendRetry.timer != nil
+	w.alice.sendRetry.Unlock()
+	if armed {
+		t.Fatal("a retry wake outlived the daemon run")
+	}
 }
 
 // Only a transient failure arms a retry; the wait doubles up to its cap, and
@@ -208,6 +217,11 @@ func TestQueuedSendTransientFailureRetriesSoon(t *testing.T) {
 func TestRetrySendSoonOnlyForTransientFailures(t *testing.T) {
 	a := &Agent{}
 	busy := &HubError{Status: 503}
+	a.retrySendSoon(busy)
+	if a.sendRetry.timer != nil {
+		t.Fatal("a retry armed with no daemon run")
+	}
+	a.sendRetry.runs(true)
 	a.retrySendSoon(&HubError{Status: 426, Code: codeUpdateRequired})
 	a.retrySendSoon(context.Canceled)
 	a.retrySendSoon(errors.New("a check that fails the same way again"))
@@ -235,6 +249,15 @@ func TestRetrySendSoonOnlyForTransientFailures(t *testing.T) {
 	if a.sendRetry.wait != 0 {
 		t.Fatal("success kept the backoff")
 	}
+	// kickNow outlives a daemon run and posts on its own: an ended run
+	// disarms a pending wake, and none arms until the next run.
+	a.retrySendSoon(busy)
+	a.sendRetry.runs(false)
+	a.retrySendSoon(busy)
+	if a.sendRetry.timer != nil {
+		t.Fatal("a wake outlived its daemon run")
+	}
+	a.sendRetry.runs(true)
 	a.stopBackgroundPosts()
 	a.retrySendSoon(busy)
 	if a.sendRetry.timer != nil {
