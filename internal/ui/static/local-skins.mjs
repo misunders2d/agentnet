@@ -172,6 +172,23 @@ export async function remove(id) {
     }catch(_){throw storageFailed();}
   });
 }
+// prune deletes stored versions that a newer version of the same skin
+// replaced, except the digests in keep (what this page runs). Another open
+// tab still running an old version keeps what it loaded until it reloads.
+export async function prune(keep=[]) {
+  if(!supported())return;
+  return navigator.locks.request('agentnet-local-skins',async()=>{
+    try {
+      const listed=new Map((await readCatalog()).map(x=>[x.id,x.digest]));
+      for(const name of (await caches.keys()).filter(packageName)){
+        const digest=name.slice(prefix.length);let meta=null;
+        if(keep.includes(digest))continue;
+        try { meta=await snapshotReady(name); } catch(_) { continue; /* inaccessible data is kept */ }
+        if(meta?.id&&listed.has(meta.id)&&listed.get(meta.id)!==digest)await caches.delete(name);
+      }
+    }catch(_){throw storageFailed();}
+  });
+}
 const waitState=(worker,state)=>new Promise((resolve,reject)=>{
   const reached=()=>worker.state===state||(state==='installed'&&['activating','activated'].includes(worker.state));if(reached()){resolve();return;}const timer=setTimeout(()=>{worker.removeEventListener('statechange',change);reject(new Error('The skin worker is not ready. Close other AgentNet tabs and reopen this page.'));},15000);
   function change(){if(reached()||worker.state==='redundant'){clearTimeout(timer);worker.removeEventListener('statechange',change);reached()?resolve():reject(new Error('The skin worker could not be activated.'));}}

@@ -1,5 +1,38 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+## Gallery skins update automatically — unreleased, October 31
+
+Owner request: installed skins update with the app. Gallery installs live in
+each browser's storage (desktop app, Android, relay page), and nothing updated
+them. Now, once a page has read its release from an overview, it installs
+the newest compatible published version of every gallery skin stored there,
+once per open (`updateInstalled`, skin-gallery.mjs; loader.js). The new
+version is used from the next open. A browser storing no skin never contacts
+GitHub. Owner decision: an update keeps trust given to the exact version it
+replaces, by hand or automatically; imports still ask. Each open removes
+versions that a newer one of the same skin replaced (`prune`,
+local-skins.mjs), except the one it runs. These replaced versions used to
+count toward the 64 MiB limit forever. Hand-placed `skins/` folders on a
+program or relay are unchanged. The host API is unchanged; the contract text
+changed (docs/UI_SKINS.md Trust and Skin gallery). Limit: each open of a
+browser that stores a skin makes one unauthenticated GitHub API request (60 per
+hour per IP, shared by devices behind one router); if that bites, remember the
+last check per running release for about an hour. The skins gate serves its
+packages from a program `skins/` folder, so automatic updates never replace a
+skin under test.
+
+Release order follows from this: publish the gallery release before deploying
+the relay. For v0.10.1 the gallery came about 30 minutes after the relay, so
+devices that updated at once got their skin updates only on a later open.
+
+Verified locally under `unshare -rn`: the gallery check, the rendered gallery
+test (desktop light, phone dark: manual Update and update on open keep trust,
+replaced versions removed) and the other skin/loader rendered tests. The new
+rendered steps fail on the old code. `TestSkinControlsQuotesAndCollapsedPanelRendered`
+and `TestP3ReviewSkinsRendered` fail here with or without the change: they
+need Playwright's own browser build, not installed on this laptop. The skins
+gate against this change is not run yet.
+
 ## Closed app reported as an update refusal — unreleased, October 30
 
 Found on the Zenbook after v0.10.1 went out: its app-managed daemon stayed at

@@ -103,7 +103,9 @@ names), shared by the host and the browser-local package manager; Go tests
 pin it to `static/skins.go`. Any other skin asks first:
 it can read your chats and act as you, including sending messages and
 approving work. Consent is to the package's exact digest, per browser origin
-(including the daemon's port); a changed package asks again.
+(including the daemon's port); a changed package asks again. One exception,
+by owner decision (October 31, 2026): a [gallery](#skin-gallery) update of a
+skin whose replaced version the person trusted keeps that trust.
 
 Installed code has the same access as Comic. This is **not** a sandbox.
 Installing on a relay makes the package available to every browser device
@@ -201,8 +203,18 @@ draw its own through `host.gallery`.
   has not read an overview through `host.api` yet.
 - **Stored like an import.** Installing uses the browser-local package
   manager: the same limits, `local:` ids and per-browser, per-origin
-  storage. Choosing the skin asks for trust with its exact digest; an
-  update stores a new digest, so it asks again. Nothing is uploaded.
+  storage. Choosing the skin asks for trust with its exact digest. An
+  update stores a new digest; trust given to the exact digest it replaces
+  moves to it, otherwise choosing it asks again. Nothing is uploaded.
+- **Automatic updates.** Once a page has read its release from an overview,
+  it installs the newest compatible published version of every gallery skin
+  stored in that browser, once per open; the new version is used from the
+  next open. A package stored under a gallery skin's id is that skin: an
+  imported build of it is replaced too. A version that needs a newer
+  AgentNet waits until AgentNet is updated; offline or busy, the next open
+  tries again. Each open then removes versions that a newer one of the same
+  skin replaced, except the one it runs; another tab still running an old
+  version keeps what it loaded until it reloads.
 
 Catalog format (`published/catalog.json`, written by the collection's
 publish step, never by hand):
@@ -362,7 +374,7 @@ still runs with the page's full trust.
 | `host.selectSkin(id)` | Reloads into a skin from `host.skins`. It throws, without reloading, for an unknown id or a package that needs a newer AgentNet (see [Manifest](#manifest)). The current skin must preserve or explicitly resolve unsent drafts first. |
 | `host.controls` | Optional for external skins. `open(trigger?)` opens the host's existing skin/workspace/Comic recovery controls in a native dialog and restores focus to `trigger`. A skin exposing this action in its existing Settings calls `claim(root)` with its exact mounted root and keeps the returned teardown until unmount; this hides the host's floating fallback. Claims from stale roots or workspaces are ignored. Unmount, failed mount and remount restore fallback access. Comic already supplies its own controls and receives no extra surface. |
 | `host.manageLocalSkins(root)` | Present on every host; where the browser cannot store skins it draws only its heading, its introduction and "This browser cannot store skins." Draws the host's browser-local skin manager (import files or a folder, the stored skins, Remove) into an element the skin owns; returns its teardown, which empties that element. Consent stays the host's: a stored skin asks for trust when chosen. |
-| `host.gallery` | The [skin gallery](#skin-gallery), present wherever the host has it: `list({fresh?})` resolves `{release, skins[{id, name, description, version, api, agentnet?, state, installed, previews, alts}]}` (`state`: `install`, `installed`, `update` (a newer digest is published) or `incompatible` (it needs another Host API or a newer AgentNet than the one serving this page); `installed`: this browser's catalog id for a stored version, else `""`); `preview(id, index)` resolves one verified preview as a `Blob` (show it with an object URL and revoke it); `install(id)` downloads, verifies and stores the package in this browser and resolves its catalog id (`local:<id>`), which the skin passes to `host.selectSkin` (trust is then asked as for any stored skin). Every method rejects with a sentence to show: unreachable, busy, no published release, a file that did not match, a skin that needs a newer AgentNet, or a browser that cannot store skins. It never selects a skin or grants trust. |
+| `host.gallery` | The [skin gallery](#skin-gallery), present wherever the host has it: `list({fresh?})` resolves `{release, skins[{id, name, description, version, api, agentnet?, state, installed, previews, alts}]}` (`state`: `install`, `installed`, `update` (a newer digest is published) or `incompatible` (it needs another Host API or a newer AgentNet than the one serving this page); `installed`: this browser's catalog id for a stored version, else `""`); `preview(id, index)` resolves one verified preview as a `Blob` (show it with an object URL and revoke it); `install(id)` downloads, verifies and stores the package in this browser and resolves its catalog id (`local:<id>`), which the skin passes to `host.selectSkin` (trust is then asked as for any stored skin, except that an update keeps trust given to the exact version it replaces). Every method rejects with a sentence to show: unreachable, busy, no published release, a file that did not match, a skin that needs a newer AgentNet, or a browser that cannot store skins. It never selects a skin or grants new trust. |
 | `host.reconnect()` | Optional, present on this computer's program with workspaces and on Android. It works once the skin has read `/api/overview` (with or without a query) through this host, which proves the membership's identity; otherwise it rejects, as it does for a membership whose `realm` is absent or not 32 hex characters. After the program restarted and retired this membership's handle, binds the same membership again (only when the program still names it with the endpoint, realm, address and key it proved in its own overview) and mounts the skin again over the new binding. Resolves without remounting when the binding still holds. Nothing under way is retargeted or replayed: staged files and sends stay with the old binding, so a skin keeps text drafts and asks for files again. |
 | `host.workspace` | The membership this host is bound to: `{id, handle, name, endpoint, address, realm?, state, hub_name?}` (`realm` may be absent; a browser's never has `hub_name`, read `overview.workspace.name` instead). `name` is this device's own label for it (`""` for none); `hub_name` is the workspace's own name its admin set, as last listed. A host never changes membership: what a skin holds when an operation starts (a send, a staged file, a file open) stays bound to it. |
 | `host.linkTo(target)` | Optional. Returns a portable `agentnet://open#realm=<32hex>&conv=<64hex>&topic=<main-or-32hex>` for `{conv, topic}` (Main is always explicit), or `agentnet://open#realm=<32hex>&thread=<32hex>` for `{thread}`. `thread` names an existing exact legacy conversation root, never a later message or a peer-wide chat, and cannot be mixed with `conv` or `topic`. The realm comes from this host’s locally recorded workspace identity; a missing identity or malformed target throws a readable error. Names, device-local aliases, endpoint URLs, ports, credentials and message content are absent. |

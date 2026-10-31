@@ -5,7 +5,7 @@
 // Runs in Node with the real package preparation (local-skins.mjs prepare).
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { gallery, newer, LATEST, RAW } from '../static/skin-gallery.mjs';
+import { gallery, newer, updateInstalled, LATEST, RAW } from '../static/skin-gallery.mjs';
 import { prepare } from '../static/local-skins.mjs';
 
 const sha = (b) => createHash('sha256').update(b).digest('hex');
@@ -25,9 +25,8 @@ const entry = async (id, files, extra = {}) => ({
 const catalog = { catalog: 1, skins: [await entry('pulp', pulp, { agentnet: 'v0.8.25' }), await entry('diner', diner, { agentnet: 'v0.8.26' }),
   { id: '../bad', name: 'Bad', api: 1 }, { id: 'nofiles', name: 'No files', api: 1, version: '1', digest: 'a'.repeat(64), files: [] }] };
 
-function world({ tag = 'v1.2.0', release = {}, cat = catalog, tamper = null, length = null } = {}) {
+function world({ tag = 'v1.2.0', release = {}, cat = catalog, tamper = null, length = null, files = { pulp, diner }, held = [], trusted = {} } = {}) {
   const asked = [];
-  const files = { pulp, diner };
   const fetcher = async (url, init) => {
     asked.push(url);
     assert.equal(init.credentials, 'omit'); assert.equal(init.redirect, 'error'); assert.equal(init.referrerPolicy, 'no-referrer');
@@ -43,12 +42,13 @@ function world({ tag = 'v1.2.0', release = {}, cat = catalog, tamper = null, len
     }
     return new Response(body, { status: 200, headers: length ? { 'Content-Length': String(length) } : {} });
   };
-  const store = [];
+  const store = [...held];
   const local = { supported: () => true, prepare, catalog: async () => store.map((x) => ({ ...x })),
-    install: async (fs) => { const { item } = await prepare(fs); store.push(item); return item; } };
+    install: async (fs) => { const { item } = await prepare(fs); const i = store.findIndex((x) => x.id === item.id); if (i >= 0) store[i] = item; else store.push(item); return item; } };
   let changed = 0;
-  const g = gallery({ running: () => 'v0.8.25', changed: async () => { changed++; }, fetcher, local });
-  return { g, asked, store, changedCount: () => changed };
+  const trust = { get: (id) => trusted[id] ?? null, set: (id, d) => { trusted[id] = d; } };
+  const g = gallery({ running: () => 'v0.8.25', changed: async () => { changed++; }, fetcher, local, trust });
+  return { g, local, asked, store, trusted, changedCount: () => changed };
 }
 
 // Versions agree with protocol.Newer on the cases that matter here.
@@ -117,4 +117,33 @@ assert.equal(newer('0.8.26', 'v0.8.25'), false);
   await assert.rejects(unsupported.list(), /cannot store skins/);
 }
 
-console.log('skin gallery check PASS: fixed sources, verified previews and files, digest before storing, version gate, fail-closed catalogs');
+{ // Updates: every stored gallery skin with a newer compatible version, keeping
+  // trust only when it named the exact version replaced (owner decision).
+  const pulp2 = { ...pulp, 'entry.mjs': enc.encode('export async function mount(root, host) { host.onOpen(() => {}); } // 1.1') };
+  const diner0 = { ...diner, 'skin.json': manifest('diner', { agentnet: 'v0.8.24' }) };
+  const cat2 = { catalog: 1, skins: [await entry('pulp', pulp2, { agentnet: 'v0.8.25', version: '1.1.0' }), await entry('diner', diner, { agentnet: 'v0.8.26' })] };
+  const old = (await prepare(asFiles(pulp))).item, oldDiner = (await prepare(asFiles(diner0))).item, fresh = cat2.skins[0].digest;
+  const files = { pulp: pulp2, diner };
+  const w = world({ cat: cat2, files, held: [old, oldDiner], trusted: { 'local:pulp': old.digest, 'local:diner': oldDiner.digest } });
+  assert.deepEqual(await updateInstalled(w.g, w.local), ['pulp']);
+  assert.equal(w.store.find((x) => x.id === 'local:pulp').digest, fresh);
+  assert.equal(w.trusted['local:pulp'], fresh, 'trust given to the replaced version carries');
+  assert.equal(w.store.find((x) => x.id === 'local:diner').digest, oldDiner.digest, 'a version that needs a newer AgentNet is not installed');
+  assert.ok(!w.asked.some((u) => u.includes('/published/diner/')));
+  assert.deepEqual(await updateInstalled(w.g, w.local), [], 'current versions are left alone');
+  const never = world({ cat: cat2, files, held: [old] });
+  assert.deepEqual(await updateInstalled(never.g, never.local), ['pulp']);
+  assert.equal(never.trusted['local:pulp'], undefined, 'an untrusted skin stays untrusted');
+  const other = world({ cat: cat2, files, held: [old], trusted: { 'local:pulp': 'e'.repeat(64) } });
+  await other.g.install('pulp');
+  assert.equal(other.trusted['local:pulp'], 'e'.repeat(64), 'trust in other bytes never carries');
+  const none = world({ cat: cat2, files });
+  assert.deepEqual(await updateInstalled(none.g, none.local), [], 'nothing is installed that was not');
+  assert.equal(none.store.length, 0);
+  assert.deepEqual(none.asked, [], 'a browser storing no skin never asks the gallery');
+  const tampered = world({ cat: cat2, files, held: [old], trusted: { 'local:pulp': old.digest }, tamper: '/published/pulp/entry.mjs' });
+  assert.deepEqual(await updateInstalled(tampered.g, tampered.local), []);
+  assert.equal(tampered.store[0].digest, old.digest); assert.equal(tampered.trusted['local:pulp'], old.digest);
+}
+
+console.log('skin gallery check PASS: fixed sources, verified previews and files, digest before storing, version gate, fail-closed catalogs, updates keep exact trust');

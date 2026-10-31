@@ -207,7 +207,8 @@ to rediscover how AgentNet works. The
 
 **Choose skins from people you trust.** A skin can read the conversations it
 shows and perform actions as you. AgentNet asks you to trust an installed
-skin, and asks again when its package changes. The checks establish
+skin, and asks again when its package changes, except when the skin gallery
+updates a version you trusted. Gallery skins update automatically. The checks establish
 compatibility; they do not make arbitrary skin code safe.
 
 ## Get started

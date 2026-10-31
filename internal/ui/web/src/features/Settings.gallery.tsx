@@ -1,7 +1,8 @@
 // The skin gallery: skins published in AgentNet's skin collection, read and
 // checked by the host (host.gallery). Nothing is installed until the person
 // chooses Install; using a skin afterwards still goes through the host's
-// trust step, as for any skin stored in this browser.
+// trust step, as for any skin stored in this browser. The host updates an
+// installed skin on its own and keeps trust given to the version replaced.
 import { IconChevronLeft, IconChevronRight } from "@tabler/icons-react";
 import { useCallback, useEffect, useState } from "react";
 import { errorText } from "../api";

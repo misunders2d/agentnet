@@ -1,5 +1,30 @@
 # Next-release interaction coverage and responsiveness
 
+## Gallery skins update automatically, trust kept — unreleased, October 31
+
+Owner request: installed gallery skins update with the app. Owner decision:
+an update keeps trust given to the exact version it replaces (it used to ask
+again). Counterpart: browser extensions, which update in the background and
+ask again only when an update asks for more permissions (Chrome extension
+documentation, from knowledge; not re-checked for this change). A skin has no
+permission levels, so a gallery update never asks; an import still does.
+
+Changed interactions, in `skin_gallery_rendered.cjs` (desktop light and phone
+dark, Chromium, `unshare -rn`):
+- **Update** in Settings → Appearance → Skin gallery: unchanged immediate
+  "Updating…" feedback; **Use Pulp** then mounts the update with no trust card,
+  and the stored trust names the new digest.
+- **Opening AgentNet** after a newer version is published: no control; the
+  open installs it in the background and the next open uses it, again with no
+  card. The card lists the new version, with no Update control. The open after
+  that leaves only the newest version in storage.
+- First install still shows the trust card (unchanged assertions).
+
+`skin_gallery_check.mjs` covers trust carried only from the exact replaced
+digest, never for an untrusted skin or other bytes, no update past the running
+release, nothing installed that was not, and a tampered update leaving the
+stored version and trust alone. Both fail or are absent on the old code.
+
 ## v0.10.1 macOS desktop interaction — published by owner decision, October 30
 
 Dispatch run 41110291903 on 6102c314 (`interaction_qualification`, Android

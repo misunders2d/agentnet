@@ -147,7 +147,7 @@
   const go = (id, hash) => { const u = new URL(location.href); u.searchParams.set("skin", id); if (hash !== undefined) u.hash = hash; location.assign(u); };
   // The release serving this page, as its overviews say (host.api below), and
   // the gallery's release comparison once its module has loaded.
-  let runningVersion = "", newerRelease = null;
+  let runningVersion = "", newerRelease = null, updateGallerySkins = () => {};
   const { browserBackNavigation } = await import("/assets/browser-back.mjs");
   const onBack = window.__agentnetPlatform === "android" ? window.__agentnetOnBack : !nativeAppJSON ? browserBackNavigation() : undefined;
   const common = {
@@ -195,11 +195,23 @@
   if (localSkins) common.manageLocalSkins = (root) => localSkins.manager(root, { changed: refreshSkins });
   // The skin gallery (skin-gallery.mjs): published packages from one fixed
   // repository, verified, stored like an import; choosing one asks for trust.
-  // The running version comes from the overviews this page has read.
+  // The running version comes from the overviews this page has read. Once
+  // this page knows it, every gallery skin stored here is updated to its
+  // newest compatible version, keeping trust given to the version replaced.
   try {
-    const { gallery, newer } = await import("/assets/skin-gallery.mjs");
+    const { gallery, newer, updateInstalled } = await import("/assets/skin-gallery.mjs");
     newerRelease = newer;
-    common.gallery = gallery({ running: () => runningVersion, changed: refreshSkins });
+    const trust = {
+      get: (id) => localStorage.getItem("agentnet.skin.trusted." + id),
+      set: (id, digest) => localStorage.setItem("agentnet.skin.trusted." + id, digest),
+    };
+    common.gallery = gallery({ running: () => runningVersion, changed: refreshSkins, trust });
+    let started = false;
+    updateGallerySkins = () => {
+      if (started || !runningVersion) return;
+      started = true; // once per page; the next open checks again
+      updateInstalled(common.gallery).catch(() => { /* offline or unsupported: next open */ });
+    };
   } catch (_) { /* a program without it: import still works */ }
 
   // ---- workspaces: one shell, immutable bound transports
@@ -258,7 +270,7 @@
       // Any overview read (with or without query) proves this membership's
       // identity for reconnect and names it in the switcher.
       if (body === undefined && path.split("?")[0] === "/api/overview" && r) {
-        if (typeof r.version === "string") runningVersion = r.version;
+        if (typeof r.version === "string") { runningVersion = r.version; updateGallerySkins(); }
         if (r.me && r.me.fingerprint) known.set(wid, { address: r.me.address, fingerprint: r.me.fingerprint });
         for (const fn of [...overviewSeen]) { try { fn(wid, r); } catch (_) { /* the bar's own */ } }
       }
@@ -393,7 +405,7 @@
         title: "Use the skin “" + selected.name + "”?", mark: "✦",
         lines: [
           text("p", "This skin was made by someone else. It can read your chats and act as you, including sending messages and approving work. Use it only if you trust whoever made it."),
-          text("p", (selected.local ? "It is stored in this browser" : "It is installed on this computer") + ". You are asked again whenever it changes."),
+          text("p", (selected.local ? "It is stored in this browser" : "It is installed on this computer") + ". You are asked again whenever it changes, except when the skin gallery updates a version you trusted."),
           digest,
         ],
         actions: [
@@ -407,6 +419,8 @@
       });
     });
     if (selected.local) await localSkins.activate();
+    // Versions a gallery update replaced, except the one this page opens.
+    if (localSkins) localSkins.prune(selected.local ? [selected.digest] : []).catch(() => { /* next open */ });
     const base = selected.local ? "/local-skins/" + selected.digest + "/" : "/assets/skins/" + selected.id + "/";
     if (selected.document) {
       // A failure seen before the skin mounts stops it, as always; the rules

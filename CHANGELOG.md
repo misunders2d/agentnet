@@ -6,6 +6,9 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+- Update installed gallery skins automatically: each open installs the newest
+  compatible published version, keeps trust given to the version it replaces
+  and removes replaced versions from browser storage.
 - Preserve completed Codex final answers when later message items are empty
   or contain commentary. Keep legacy phase-less answers compatible and record
   bounded handoff diagnostics without prompts, answer text or tool payloads.

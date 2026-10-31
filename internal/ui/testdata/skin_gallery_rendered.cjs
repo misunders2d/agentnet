@@ -46,21 +46,28 @@ function digest(files) {
         { path: 'previews/phone-dark.png', sha256: sha(png).toString('hex'), size: png.length, alt: name + ' on a phone, dark' }] });
     const catalog = { catalog: 1, skins: [entry('pulp', 'Pulp', pulp, 'v0.8.25'), entry('diner', 'Diner', diner, 'v99.0.0')] };
     const updatedCatalog = { catalog: 1, skins: [{ ...entry('pulp', 'Pulp', pulpUpdate, 'v0.8.25'), version: '1.1.0' }, entry('diner', 'Diner', diner, 'v99.0.0')] };
+    const pulpAuto = pkg('pulp', 'Pulp', 'v0.8.25', 'Pulp automatic update');
+    const autoCatalog = { catalog: 1, skins: [{ ...entry('pulp', 'Pulp', pulpAuto, 'v0.8.25'), version: '1.2.0' }, entry('diner', 'Diner', diner, 'v99.0.0')] };
+    const releases = { 'v1.0.0': [catalog, pulp], 'v1.1.0': [updatedCatalog, pulpUpdate], 'v1.2.0': [autoCatalog, pulpAuto] };
+    const until = async (ok, what) => { for (const end = Date.now() + 20000; !(await ok());) { if (Date.now() > end) assert.fail(what); await new Promise((r) => setTimeout(r, 50)); } };
 
     for (const [tag, width, height, scheme] of [['desk-light', 1440, 960, 'light'], ['phone-dark', 390, 844, 'dark']]) {
       const ctx = await browser.newContext({ viewport: { width, height }, colorScheme: scheme });
       const page = await ctx.newPage(), errors = [], outside = [];
-      let tamper = false, updatePublished = false;
+      let tamper = false, published = 'v1.0.0', galleryDown = false, downHits = 0;
       page.on('pageerror', (e) => errors.push(e.message));
       page.on('request', (r) => { const u = new URL(r.url()); if (u.protocol.startsWith('http') && u.origin !== new URL(target).origin && !r.url().startsWith(LATEST) && !r.url().startsWith(RAW)) outside.push(r.url()); });
-      await ctx.route(LATEST, (route) => route.fulfill({ status: 200, contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ tag_name: updatePublished ? 'v1.1.0' : 'v1.0.0', draft: false, prerelease: false }) }));
+      await ctx.route(LATEST, (route) => {
+        if (galleryDown) { downHits++; return route.fulfill({ status: 503, headers: { 'Access-Control-Allow-Origin': '*' }, body: '' }); }
+        return route.fulfill({ status: 200, contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ tag_name: published, draft: false, prerelease: false }) });
+      });
       await ctx.route(RAW + '**', (route) => {
-        const updated = route.request().url().startsWith(RAW + 'v1.1.0/published/');
-        const prefix = RAW + (updated ? 'v1.1.0' : 'v1.0.0') + '/published/', rest = route.request().url().slice(prefix.length), cors = { 'Access-Control-Allow-Origin': '*' };
-        if (!route.request().url().startsWith(prefix)) return route.fulfill({ status: 404, headers: cors, body: '' });
-        if (rest === 'catalog.json') return route.fulfill({ status: 200, headers: cors, contentType: 'text/plain', body: JSON.stringify(updated ? updatedCatalog : catalog) });
+        const m = route.request().url().slice(RAW.length).match(/^(v[0-9.]+)\/published\/(.+)$/), cors = { 'Access-Control-Allow-Origin': '*' };
+        if (!m || !releases[m[1]]) return route.fulfill({ status: 404, headers: cors, body: '' });
+        const [cat, pulpFiles] = releases[m[1]], rest = m[2];
+        if (rest === 'catalog.json') return route.fulfill({ status: 200, headers: cors, contentType: 'text/plain', body: JSON.stringify(cat) });
         const [id, ...p] = rest.split('/'), file = p.join('/');
-        let body = file.startsWith('previews/') ? png : ({ pulp: updated ? pulpUpdate : pulp, diner }[id] || {})[file];
+        let body = file.startsWith('previews/') ? png : ({ pulp: pulpFiles, diner }[id] || {})[file];
         if (!body) return route.fulfill({ status: 404, headers: cors, body: '' });
         if (tamper && file === 'entry.mjs') body = Buffer.concat([body, Buffer.from('\n// changed')]);
         return route.fulfill({ status: 200, headers: cors, contentType: 'text/plain', body });
@@ -126,28 +133,48 @@ function digest(files) {
       await page.getByText('In this browser', { exact: true }).first().waitFor({ timeout: 15000 })
         .catch(() => assert.fail(tag + ': installed skin marked'));
 
-      // A new published digest is an update, and needs its own exact trust.
-      updatePublished = true;
+      // An update of the version the person trusted keeps that trust (owner
+      // decision, October 31). By hand first: this open's automatic update
+      // finds the gallery unavailable, then the gallery offers Update.
+      const trustedDigest = () => page.evaluate(() => localStorage.getItem('agentnet.skin.trusted.local:pulp'));
+      published = 'v1.1.0'; galleryDown = true; downHits = 0;
       await page.reload();
+      await until(() => downHits > 0, tag + ': the automatic update asked the gallery');
+      galleryDown = false;
       await settings();
       await page.getByRole('button', { name: 'Update Pulp', exact: true }).click();
       const useUpdate = page.getByRole('dialog').getByRole('button', { name: 'Use Pulp', exact: true });
       await useUpdate.waitFor({ timeout: 15000 });
       await snap('update-use');
+      assert.equal(await trustedDigest(), digest(pulpUpdate), tag + ': trust moves to the exact updated bytes');
       await useUpdate.click();
-      const trustUpdate = page.getByRole('button', { name: 'Use this skin', exact: true });
-      await trustUpdate.waitFor({ timeout: 20000 });
-      assert.equal(await page.evaluate(() => localStorage.getItem('agentnet.skin.trusted.local:pulp')), digest(pulp), 'old consent cannot cover the update');
-      await snap('update-trust');
-      await trustUpdate.click();
-      await page.waitForFunction(() => /Pulp updated gallery skin/.test(document.getElementById('skin').shadowRoot.textContent), null, { timeout: 20000 });
-      assert.equal(await page.evaluate(() => localStorage.getItem('agentnet.skin.trusted.local:pulp')), digest(pulpUpdate), 'consent names the exact updated bytes');
+      // Mounting proves no trust card waited for an answer.
+      await page.waitForFunction(() => /Pulp updated gallery skin/.test(document.getElementById('skin')?.shadowRoot?.textContent || ''), null, { timeout: 20000 });
       await page.getByRole('button', { name: 'AgentNet controls', exact: true }).click();
       await page.getByRole('dialog', { name: 'AgentNet controls', exact: true }).getByRole('button', { name: 'Switch to Comic', exact: true }).click();
       await settings();
-      const updatedCard = page.locator('section[aria-labelledby="appearance-gallery"]').locator('article,div').filter({ has: page.getByRole('button', { name: 'Use Pulp', exact: true }) }).first();
-      await updatedCard.getByText('1.1.0', { exact: true }).waitFor({ timeout: 15000 });
-      await updatedCard.getByText('In this browser', { exact: true }).waitFor({ timeout: 15000 });
+      const pulpCard = () => page.locator('section[aria-labelledby="appearance-gallery"]').locator('article,div').filter({ has: page.getByRole('button', { name: 'Use Pulp', exact: true }) }).first();
+      await pulpCard().getByText('1.1.0', { exact: true }).waitFor({ timeout: 15000 });
+      await pulpCard().getByText('In this browser', { exact: true }).waitFor({ timeout: 15000 });
+
+      // Automatically: the next open installs the newest version, keeping trust.
+      published = 'v1.2.0';
+      await page.reload();
+      await until(async () => (await trustedDigest()) === digest(pulpAuto), tag + ': the open updated Pulp and kept trust');
+      await settings();
+      await pulpCard().getByText('1.2.0', { exact: true }).waitFor({ timeout: 15000 });
+      await pulpCard().getByText('In this browser', { exact: true }).waitFor({ timeout: 15000 });
+      assert.equal(await page.getByRole('button', { name: 'Update Pulp', exact: true }).count(), 0, tag + ': nothing left to update');
+      // Replaced versions are removed once a page opens without them.
+      await page.reload();
+      const stored = () => page.evaluate(async () => (await caches.keys()).filter((k) => k.startsWith('agentnet-skin-package-v1-')));
+      await until(async () => (await stored()).length === 1, tag + ': replaced versions removed');
+      assert.deepEqual(await stored(), ['agentnet-skin-package-v1-' + digest(pulpAuto)]);
+      await page.goto(origin + '/?skin=local:pulp');
+      await page.waitForFunction(() => /Pulp automatic update/.test(document.getElementById('skin')?.shadowRoot?.textContent || ''), null, { timeout: 20000 });
+      await page.getByRole('button', { name: 'AgentNet controls', exact: true }).click();
+      await page.getByRole('dialog', { name: 'AgentNet controls', exact: true }).getByRole('button', { name: 'Switch to Comic', exact: true }).click();
+      await settings();
       if (tag === 'desk-light') {
         // A package imported by hand that needs a newer AgentNet is stored (import checks only the
         // field's form) but cannot be chosen: the host refuses and Comic says why.
@@ -164,7 +191,7 @@ function digest(files) {
       assert.deepEqual(errors, [], tag + ': page errors');
       await ctx.close();
     }
-    console.log('skin gallery rendered PASS: desktop light and phone dark — verified previews, version gate, tamper refused, install/update → exact digest trust → mounted → return to Comic, marked installed');
+    console.log('skin gallery rendered PASS: desktop light and phone dark — verified previews, version gate, tamper refused, install → exact digest trust → mounted → return to Comic, marked installed; update by hand and on open keep trust, replaced versions removed');
   } finally {
     await browser.close();
   }

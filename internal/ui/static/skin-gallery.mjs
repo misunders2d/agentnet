@@ -3,7 +3,8 @@
 // published release counts, read from one fixed repository; every file and
 // preview must match the SHA-256 its catalog names, and a package must match
 // its catalog digest before it is stored. Installing goes through the
-// browser-local package manager, so choosing the skin still asks for trust.
+// browser-local package manager, so choosing the skin still asks for trust,
+// except for an update of a version the person trusted.
 // Nothing is uploaded and no AgentNet data leaves this page.
 import * as localSkins from './local-skins.mjs';
 
@@ -81,7 +82,9 @@ function validate(raw) {
 /** gallery binds the fixed source to this page. running() names the
  *  AgentNet version serving the page ("" while unknown); changed() refreshes
  *  host.skins after an install. */
-export function gallery({ running = () => '', changed = async () => {}, fetcher = (...a) => globalThis.fetch(...a), local = localSkins } = {}) {
+// trust reads and writes the digest a person trusted for a stored skin id
+// (the host keeps it); an update of a version they trusted keeps that trust.
+export function gallery({ running = () => '', changed = async () => {}, fetcher = (...a) => globalThis.fetch(...a), local = localSkins, trust = null } = {}) {
   const { supported, prepare, install: store, catalog: stored } = local;
   let cached = null; // { at, release, skins } for this page
   const load = async (fresh) => {
@@ -142,9 +145,27 @@ export function gallery({ running = () => '', changed = async () => {}, fetcher 
       }
       const { item } = await prepare(files);
       if (item.package_id !== skin.id || item.digest !== skin.digest) fail(skin.name + ' did not match the gallery. Nothing was installed.');
+      let held = null;
+      try { held = (await stored()).find((x) => x.package_id === skin.id) || null; } catch (_) { /* no usable earlier version */ }
       const saved = await store(files);
+      // Owner decision (October 31): a gallery update keeps trust given to the
+      // exact version it replaces. Anything else asks as for any stored skin.
+      try { if (trust && held && held.digest !== saved.digest && trust.get(saved.id) === held.digest) trust.set(saved.id, saved.digest); } catch (_) { /* asks again */ }
       await changed();
       return saved.id;
     },
   });
+}
+
+/** Installs the published version of every gallery skin stored here that
+ *  has a newer compatible one; resolves the ids updated. One failing skin
+ *  never stops the others. A browser storing no skin never asks the gallery. */
+export async function updateInstalled(g, local = localSkins) {
+  const updated = [];
+  if (!local.supported() || !(await local.catalog()).length) return updated;
+  for (const s of (await g.list()).skins) {
+    if (s.state !== 'update') continue;
+    try { await g.install(s.id); updated.push(s.id); } catch (_) { /* the gallery offers it again */ }
+  }
+  return updated;
 }
