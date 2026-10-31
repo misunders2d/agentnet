@@ -79,7 +79,7 @@ func TestAcceptRefusesEndedParticipation(t *testing.T) {
 	if _, err := w.alice.DismissParticipation(tctx(t), pid); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "bob to see the participation dismissed", func() bool { return stateAt(t, w.bob, pid).State == PartDismissed })
+	eventually(t, "bob to see the participation dismissed", func() bool { return pollState(t, w.bob, pid).State == PartDismissed })
 	if err := w.bob.Accept(id); !errors.Is(err, ErrNothingRuns) || !strings.Contains(err.Error(), "participation is dismissed") {
 		t.Fatalf("accept of an ended participation's request: %v", err)
 	}

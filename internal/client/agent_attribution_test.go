@@ -96,7 +96,7 @@ func TestAgentTurnsComeOnlyFromTheExactHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the second invite at bob", func() bool { return stateAt(t, w.bob, p2.PID).State == PartInvited })
+	eventually(t, "the second invite at bob", func() bool { return pollState(t, w.bob, p2.PID).State == PartInvited })
 	early := craft(t, w.bob, w.alice, turn(envelope.Inner{Kind: envelope.KindAnswer, Body: "early", ReplyTo: q.ID, PID: p2.PID, Origin: envelope.OriginAgentPrefix + "agentstub", Emotion: "calm"}))
 	if err := w.alice.accept(tctx(t), early); err != nil {
 		t.Fatal(err)
@@ -114,7 +114,7 @@ func TestAgentTurnsComeOnlyFromTheExactHost(t *testing.T) {
 	if _, err := w.alice.DismissParticipation(tctx(t), pid); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "bob to see the dismissal", func() bool { return stateAt(t, w.bob, pid).State == PartDismissed })
+	eventually(t, "bob to see the dismissal", func() bool { return pollState(t, w.bob, pid).State == PartDismissed })
 	late := craft(t, w.bob, w.alice, turn(envelope.Inner{Kind: envelope.KindAnswer, Body: "late", ReplyTo: q.ID, PID: pid, Origin: envelope.OriginAgentPrefix + "agentstub", Emotion: "calm"}))
 	if err := w.alice.accept(tctx(t), late); err != nil {
 		t.Fatal(err)
@@ -128,11 +128,11 @@ func TestAgentTurnsComeOnlyFromTheExactHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the third invite at bob", func() bool { return stateAt(t, w.bob, p3.PID).State == PartInvited })
+	eventually(t, "the third invite at bob", func() bool { return pollState(t, w.bob, p3.PID).State == PartInvited })
 	if _, err := w.bob.DeclineParticipation(tctx(t), p3.PID); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "alice to see the decline", func() bool { return stateAt(t, w.alice, p3.PID).State == PartDeclined })
+	eventually(t, "alice to see the decline", func() bool { return pollState(t, w.alice, p3.PID).State == PartDeclined })
 	declined := craft(t, w.bob, w.alice, turn(envelope.Inner{Kind: envelope.KindAnswer, Body: "declined", ReplyTo: q.ID, PID: p3.PID, Origin: envelope.OriginAgentPrefix + "agentstub", Emotion: "calm"}))
 	if err := w.alice.accept(tctx(t), declined); err != nil {
 		t.Fatal(err)
@@ -220,7 +220,7 @@ func TestAgentTurnUnderAHumanParticipationIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "carol to see the invite", func() bool { return stateAt(t, carol, p.PID).State == PartInvited })
+	eventually(t, "carol to see the invite", func() bool { return pollState(t, carol, p.PID).State == PartInvited })
 	if _, err := carol.AcceptParticipation(tctx(t), p.PID); err != nil {
 		t.Fatal(err)
 	}

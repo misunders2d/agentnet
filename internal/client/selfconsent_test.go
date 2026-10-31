@@ -367,14 +367,14 @@ func TestSelfConsentLinkedDevices(t *testing.T) {
 	host := w.alice
 	waits := func(pid string) {
 		t.Helper()
-		eventually(t, "the invite at the host", func() bool { return stateAt(t, host, pid).State == PartInvited })
+		eventually(t, "the invite at the host", func() bool { return pollState(t, host, pid).State == PartInvited })
 		if ok, err := host.selfConsent(tctx(t), pid); ok || err != nil || stateAt(t, host, pid).State != PartInvited {
 			t.Fatalf("invite %s accepted without a click (%v)", pid, err)
 		}
 	}
 	joins := func(pid string) {
 		t.Helper()
-		eventually(t, "the own agent to join", func() bool { return stateAt(t, host, pid).State == PartActive })
+		eventually(t, "the own agent to join", func() bool { return pollState(t, host, pid).State == PartActive })
 		if n := decisionsBy(t, host, conv, pid, host.Self().Fingerprint()); n != 1 {
 			t.Fatalf("%d decisions signed", n)
 		}
@@ -382,7 +382,7 @@ func TestSelfConsentLinkedDevices(t *testing.T) {
 
 	fromDesk := invite(desk)
 	joins(fromDesk)
-	eventually(t, "bob to see it active", func() bool { return stateAt(t, w.bob, fromDesk).State == PartActive })
+	eventually(t, "bob to see it active", func() bool { return pollState(t, w.bob, fromDesk).State == PartActive })
 	fromPhone := invite(phone)
 	joins(fromPhone)
 	if p, err := host.InviteAgent(tctx(t), conv, host.Address, nil, []string{phone.Self().Fingerprint()}, ""); err != nil || p.State != PartActive {
@@ -497,7 +497,7 @@ func TestSelfConsentGroup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "bob's fresh invite at alice", func() bool { return stateAt(t, w.alice, q.PID).State == PartInvited })
+	eventually(t, "bob's fresh invite at alice", func() bool { return pollState(t, w.alice, q.PID).State == PartInvited })
 	if ok, err := w.alice.selfConsent(tctx(t), q.PID); ok || err != nil {
 		t.Fatalf("another member's invite accepted without a click (%v)", err)
 	}
@@ -556,7 +556,7 @@ func TestSelfConsentGroupLinkedDevice(t *testing.T) {
 		p, err = desk.InviteNamedAgent(tctx(t), conv, w.alice.Address, named.ID, nil, nil, "")
 		return err == nil
 	})
-	eventually(t, "alice to accept it without a click", func() bool { return stateAt(t, w.alice, p.PID).State == PartActive })
+	eventually(t, "alice to accept it without a click", func() bool { return pollState(t, w.alice, p.PID).State == PartActive })
 	if n := decisionsBy(t, w.alice, conv, p.PID, w.alice.Self().Fingerprint()); n != 1 {
 		t.Fatalf("%d decisions signed", n)
 	}
@@ -580,7 +580,7 @@ func TestSelfConsentGroupLinkedDevice(t *testing.T) {
 		t.Fatalf("the group accept's copies: %d, then %d after the sweep", sent, n)
 	}
 	for _, a := range []*Agent{w.bob, carol} {
-		eventually(t, a.Address+" to see it active", func() bool { return stateAt(t, a, p.PID).State == PartActive })
+		eventually(t, a.Address+" to see it active", func() bool { return pollState(t, a, p.PID).State == PartActive })
 	}
 }
 
@@ -672,7 +672,7 @@ func TestSelfConsentUnsentAcceptResent(t *testing.T) {
 	if n := copies(); n == 0 {
 		t.Fatal("the sweep did not send the stored accept")
 	}
-	eventually(t, "bob to see it active", func() bool { return stateAt(t, w.bob, pid).State == PartActive })
+	eventually(t, "bob to see it active", func() bool { return pollState(t, w.bob, pid).State == PartActive })
 	sent := copies()
 	w.alice.sweepSelfConsent(tctx(t))
 	if n := copies(); n != sent {

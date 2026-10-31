@@ -55,7 +55,7 @@ func TestDMLiveAgentContext(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			eventually(t, "helper invitation", func() bool { return stateAt(t, host, p.PID).State == PartInvited })
+			eventually(t, "helper invitation", func() bool { return pollState(t, host, p.PID).State == PartInvited })
 			if _, err = host.AcceptParticipation(tctx(t), p.PID); err != nil {
 				t.Fatal(err)
 			}
@@ -184,7 +184,7 @@ func TestDMLiveAgentContext(t *testing.T) {
 			if _, err = w.alice.DismissParticipation(tctx(t), p.PID); err != nil {
 				t.Fatal(err)
 			}
-			eventually(t, "helper dismissed", func() bool { return stateAt(t, host, p.PID).State == PartDismissed })
+			eventually(t, "helper dismissed", func() bool { return pollState(t, host, p.PID).State == PartDismissed })
 			if _, err = host.ParticipationContext(p.PID, 0); err == nil {
 				t.Fatal("dismissed helper still exposes context")
 			}
@@ -196,7 +196,7 @@ func TestDMLiveAgentContext(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				eventually(t, "new invitation", func() bool { return stateAt(t, host, next.PID).State == PartInvited })
+				eventually(t, "new invitation", func() bool { return pollState(t, host, next.PID).State == PartInvited })
 				if _, err = host.AcceptParticipation(tctx(t), next.PID); err != nil {
 					t.Fatal(err)
 				}
@@ -293,7 +293,7 @@ func TestDMLiveExternalPeerContext(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		eventually(t, "outside invitation", func() bool { return stateAt(t, host, p.PID).State == PartInvited })
+		eventually(t, "outside invitation", func() bool { return pollState(t, host, p.PID).State == PartInvited })
 		if _, err := host.AcceptParticipation(tctx(t), p.PID); err != nil {
 			t.Fatal(err)
 		}

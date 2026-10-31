@@ -24,7 +24,7 @@ func TestHistoryCatchupDuplicateForeignDismissal(t *testing.T) {
 	if _, err = w.bob.DismissParticipation(tctx(t), part.PID); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "source sees original dismissal", func() bool { return stateAt(t, a, part.PID).State == PartDismissed })
+	eventually(t, "source sees original dismissal", func() bool { return pollState(t, a, part.PID).State == PartDismissed })
 	var original string
 	if err = a.store.db.QueryRow(`SELECT id FROM inbox WHERE sender=? AND conv=? AND pid=? AND sub='event' AND json_extract(body,'$.type')='dismiss' LIMIT 1`, w.bob.Address, packet.State.Conv, part.PID).Scan(&original); err != nil {
 		t.Fatal(err)

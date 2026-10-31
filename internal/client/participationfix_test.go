@@ -261,7 +261,7 @@ func TestContextSelectsExactMessages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "bob to see the first invite", func() bool { return stateAt(t, w.bob, p.PID).State == PartInvited })
+	eventually(t, "bob to see the first invite", func() bool { return pollState(t, w.bob, p.PID).State == PartInvited })
 	c, err := w.bob.ParticipationContext(p.PID, 0)
 	if err != nil || len(c.Messages) != 1 || c.Messages[0].Body != "deploy failed at step 3" {
 		t.Fatalf("the granted message only: %+v %v", c, err)

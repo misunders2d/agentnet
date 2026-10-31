@@ -434,7 +434,7 @@ func TestGroupTopicProposalConfirmation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "group agent invitation", func() bool { return stateAt(t, w.bob, pid.PID).State == PartInvited })
+	eventually(t, "group agent invitation", func() bool { return pollState(t, w.bob, pid.PID).State == PartInvited })
 	if _, err = w.bob.AcceptParticipation(tctx(t), pid.PID); err != nil {
 		t.Fatal(err)
 	}
@@ -474,7 +474,7 @@ func TestOwnPhoneGuestProposal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "phone human invite", func() bool { return stateAt(t, phone, human.PID).State == PartInvited })
+	eventually(t, "phone human invite", func() bool { return pollState(t, phone, human.PID).State == PartInvited })
 	if _, err = phone.AcceptParticipation(tctx(t), human.PID); err != nil {
 		t.Fatal(err)
 	}
@@ -483,7 +483,7 @@ func TestOwnPhoneGuestProposal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "own external agent invite", func() bool { return stateAt(t, host, agent.PID).State == PartInvited })
+	eventually(t, "own external agent invite", func() bool { return pollState(t, host, agent.PID).State == PartInvited })
 	if _, err = host.AcceptParticipation(tctx(t), agent.PID); err != nil {
 		t.Fatal(err)
 	}

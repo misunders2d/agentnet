@@ -20,7 +20,7 @@ func TestGroupHistoryWitnessRetiredOwnEndForwarder(t *testing.T) {
 	if _, err := w.bob.DismissParticipation(tctx(t), part.PID); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "old own phone sees original signed end", func() bool { return stateAt(t, old, part.PID).State == PartDismissed })
+	eventually(t, "old own phone sees original signed end", func() bool { return pollState(t, old, part.PID).State == PartDismissed })
 	events, err := old.store.participationEvents(packet.State.Conv, part.PID)
 	if err != nil {
 		t.Fatal(err)

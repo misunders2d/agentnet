@@ -13,7 +13,7 @@ func TestHumanGuestSeesBothOriginalsBeforeConsent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "human invite", func() bool { return stateAt(t, carol, p.PID).State == PartInvited })
+	eventually(t, "human invite", func() bool { return pollState(t, carol, p.PID).State == PartInvited })
 	var want []string
 	for _, a := range []*Agent{w.alice, w.bob} {
 		me, ok, err := a.Person()

@@ -94,7 +94,7 @@ func TestInboxNoticePageKeepsExactPendingInvitation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "pending invitation", func() bool { return stateAt(t, w.bob, p.PID).State == PartInvited })
+	eventually(t, "pending invitation", func() bool { return pollState(t, w.bob, p.PID).State == PartInvited })
 	page, err := w.bob.InspectInboxNotices("invites", InboxPageOptions{Limit: 1})
 	if err != nil || len(page.Items) != 1 || page.Items[0].PID != p.PID || page.Items[0].Conv != conv {
 		t.Fatalf("exact invitation metadata: %+v %v", page, err)

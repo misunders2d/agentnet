@@ -97,7 +97,7 @@ func TestP6GroupMemberReuseAndNonInviter(t *testing.T) {
 	if _, err = carol.DismissParticipation(tctx(t), p.PID); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "removed", func() bool { return stateAt(t, w.bob, p.PID).State == PartDismissed })
+	eventually(t, "removed", func() bool { return pollState(t, w.bob, p.PID).State == PartDismissed })
 	if _, err = w.alice.AskAgent(tctx(t), p.PID, envelope.KindQuestion, "removed"); err == nil {
 		t.Fatal("removed agent accepted new work")
 	}
@@ -420,7 +420,7 @@ func TestP6OriginAndTargetFences(t *testing.T) {
 	if _, e = w.alice.DismissParticipation(tctx(t), from.PID); e != nil {
 		t.Fatal(e)
 	}
-	eventually(t, "ended source", func() bool { return stateAt(t, w.bob, from.PID).State == PartDismissed })
+	eventually(t, "ended source", func() bool { return pollState(t, w.bob, from.PID).State == PartDismissed })
 	r := agentReq{ID: childIDForP6(t, w.bob, ask.LID), Sender: original.from, Key: original.key, Conv: conv, PID: to.PID, Kind: original.kind, Target: original.target, State: stateAccepted}
 	v, _, e := agentVerdict(w.bob.store.db, r, w.bob.Address, w.bob.Self().Fingerprint(), false, map[string]*partView{})
 	if e != nil || v == verdictRun {
@@ -491,7 +491,7 @@ func TestP6InviterLeavesWithoutRemovingAgent(t *testing.T) {
 	if _, e = w.alice.DismissParticipation(tctx(t), p.PID); e != nil {
 		t.Fatal(e)
 	}
-	eventually(t, "explicit removal still counts", func() bool { return stateAt(t, host, p.PID).State == PartDismissed })
+	eventually(t, "explicit removal still counts", func() bool { return pollState(t, host, p.PID).State == PartDismissed })
 }
 
 // Count actual SQL projections, not helper invocations; delegation still reads the real store.

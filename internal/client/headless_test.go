@@ -457,11 +457,11 @@ func TestReplyWithoutEmotionIsNeutral(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "bob sees the invite", func() bool { return stateAt(t, w.bob, p.PID).State == PartInvited })
+	eventually(t, "bob sees the invite", func() bool { return pollState(t, w.bob, p.PID).State == PartInvited })
 	if _, err := w.bob.AcceptParticipation(tctx(t), p.PID); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "alice sees it active", func() bool { return stateAt(t, w.alice, p.PID).State == PartActive })
+	eventually(t, "alice sees it active", func() bool { return pollState(t, w.alice, p.PID).State == PartActive })
 	q, err := w.alice.AskAgent(tctx(t), p.PID, envelope.KindQuestion, "what failed?")
 	if err != nil {
 		t.Fatal(err)

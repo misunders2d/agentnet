@@ -248,7 +248,7 @@ func TestAssistantReactionParticipation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "invite at host", func() bool { return stateAt(t, host, p.PID).State == PartInvited })
+	eventually(t, "invite at host", func() bool { return pollState(t, host, p.PID).State == PartInvited })
 	if _, err = host.AcceptParticipation(tctx(t), p.PID); err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +300,7 @@ func TestAssistantReactionParticipation(t *testing.T) {
 	if _, err = w.bob.DismissParticipation(tctx(t), p.PID); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "end at host", func() bool { return stateAt(t, host, p.PID).State == PartDismissed })
+	eventually(t, "end at host", func() bool { return pollState(t, host, p.PID).State == PartDismissed })
 	if _, err = host.reactAsAssistant(tctx(t), q.ID, "reactagent", "✅", false); err == nil {
 		t.Fatal("assistant reacted after its participation ended")
 	}

@@ -126,7 +126,7 @@ func TestP6SecurityStaleMembershipCarrier(t *testing.T) {
 	if _, err = w.alice.DismissParticipation(tctx(t), visitor.PID); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "Bob knows outside removal", func() bool { return stateAt(t, w.bob, visitor.PID).State == PartDismissed })
+	eventually(t, "Bob knows outside removal", func() bool { return pollState(t, w.bob, visitor.PID).State == PartDismissed })
 	dave := proofReader(t, w, "stale-dave")
 	runAgent(t, dave)
 	publishGroupFixtureCaps(t, dave, true)
@@ -201,7 +201,7 @@ func TestP6SecurityWithdrawalStripsPrivateMemberships(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "private invitation", func() bool { return stateAt(t, w.bob, private.PID).State == PartInvited })
+	eventually(t, "private invitation", func() bool { return pollState(t, w.bob, private.PID).State == PartInvited })
 	if _, err = w.bob.AcceptParticipation(tctx(t), private.PID); err != nil {
 		t.Fatal(err)
 	}

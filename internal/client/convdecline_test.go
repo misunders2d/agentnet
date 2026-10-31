@@ -100,7 +100,7 @@ func TestDeclineConversationRequest(t *testing.T) {
 	if _, err := w.alice.DismissParticipation(tctx(t), pid); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "bob to see the dismissal", func() bool { return stateAt(t, w.bob, pid).State == PartDismissed })
+	eventually(t, "bob to see the dismissal", func() bool { return pollState(t, w.bob, pid).State == PartDismissed })
 	if _, err := w.bob.Decline(tctx(t), late.ID, ""); err != nil || jobState(t, w.bob, late.ID) != stateDeclined {
 		t.Fatalf("decline after the end: %v, state %q", err, jobState(t, w.bob, late.ID))
 	}

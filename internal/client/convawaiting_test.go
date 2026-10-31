@@ -72,7 +72,7 @@ func TestConvRequestAwaitingToldToRequester(t *testing.T) {
 	if _, err := w.alice.DismissParticipation(tctx(t), pid); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "bob to see the dismissal", func() bool { return stateAt(t, w.bob, pid).State == PartDismissed })
+	eventually(t, "bob to see the dismissal", func() bool { return pollState(t, w.bob, pid).State == PartDismissed })
 	stopBob()
 	in := agentRequest(t, w, conv, pid, envelope.KindTask)
 	if _, err := w.bob.store.addConvInbox(in, w.alice.Self().Fingerprint(), stateAgentWaiting, false, nil); err != nil {

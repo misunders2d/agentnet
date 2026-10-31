@@ -31,6 +31,20 @@ prefetching before the invitation is stored). Under that load the witness
 test once also failed at "public scope is not held here yet"; 8/8 on both
 HEAD and this tree at equal load afterwards. Recorded as a load flake.
 
+CI 41241761984 (3b14cf7d): a guest's invitation now may arrive before the
+group context it is read with (carriers go independently), and
+`Participation` reports `ErrGroupContextPending` meanwhile. Waits on a
+participation state use `pollState` (participation_test.go), which reads
+that as not yet; `stateAt` stays strict for one-shot checks. Fixed:
+`TestProactiveAgentMessageAdmission/group_guest`,
+`TestConversationResourcesMembersCASRestartAndGuestBoundary`,
+`TestHistoryContributionSelectedFilesAndGuestAuthority` (old code passed
+4/4 at a 300 ms relay, new failed 4/4 before the helper). Not from this
+change: race `TestGroupHistoryWitnessGuestDerivedParent` "new phone accepts
+old inert history" (open finding below, reproduced on clean `5a7da455`) and
+Windows `TestGroupHistoryWitnessRetiredOwnEndForwarder` (fixture stall
+below).
+
 ## Invited agent on an offline or outdated device — unreleased, October 31
 
 Owner phone report on v0.10.1: own Claude stuck "Joining on

@@ -275,7 +275,7 @@ func TestGroupInteractionEpochRetryFences(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "epoch invitation", func() bool { return stateAt(t, w.bob, pid.PID).State == PartInvited })
+	eventually(t, "epoch invitation", func() bool { return pollState(t, w.bob, pid.PID).State == PartInvited })
 	if _, err = w.bob.AcceptParticipation(tctx(t), pid.PID); err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +316,7 @@ func TestGroupInteractionEpochRetryFences(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
-		eventually(t, "fresh member invite", func() bool { return stateAt(t, w.bob, inv.PID).State == PartInvited })
+		eventually(t, "fresh member invite", func() bool { return pollState(t, w.bob, inv.PID).State == PartInvited })
 		if _, e = w.bob.AcceptParticipation(tctx(t), inv.PID); e != nil {
 			t.Fatal(e)
 		}
@@ -1068,7 +1068,7 @@ func TestGroupInteractionNamedMemberAndVisitor(t *testing.T) {
 	if _, err = w.alice.DismissParticipation(tctx(t), v.PID); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "visitor dismissed", func() bool { return stateAt(t, host, v.PID).State == PartDismissed })
+	eventually(t, "visitor dismissed", func() bool { return pollState(t, host, v.PID).State == PartDismissed })
 	if _, err = w.alice.AskAgent(tctx(t), v.PID, envelope.KindQuestion, "dismissed"); err == nil {
 		t.Fatal("dismissed future work")
 	}

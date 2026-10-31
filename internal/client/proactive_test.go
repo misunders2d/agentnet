@@ -45,7 +45,7 @@ func TestProactiveAgentMessageAdmission(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					eventually(t, "human guest invited", func() bool { return stateAt(t, guest, invite.PID).State == PartInvited })
+					eventually(t, "human guest invited", func() bool { return pollState(t, guest, invite.PID).State == PartInvited })
 					if _, err := guest.AcceptParticipation(tctx(t), invite.PID); err != nil {
 						t.Fatal(err)
 					}

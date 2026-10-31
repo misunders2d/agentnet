@@ -151,7 +151,7 @@ func TestNamedConversationWaitsForRequiredCapability(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "named capability fixture invitation", func() bool { return stateAt(t, w.bob, part.PID).State == PartInvited })
+	eventually(t, "named capability fixture invitation", func() bool { return pollState(t, w.bob, part.PID).State == PartInvited })
 	if _, err = w.bob.AcceptParticipation(tctx(t), part.PID); err != nil {
 		t.Fatal(err)
 	}

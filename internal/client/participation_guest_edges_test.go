@@ -20,7 +20,7 @@ func TestTopicGuestTwoOwnersCapturedAudience(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
-		eventually(t, "parent received", func() bool { return stateAt(t, guest, p.PID).State == PartInvited })
+		eventually(t, "parent received", func() bool { return pollState(t, guest, p.PID).State == PartInvited })
 		if _, e = guest.AcceptParticipation(tctx(t), p.PID); e != nil {
 			t.Fatal(e)
 		}

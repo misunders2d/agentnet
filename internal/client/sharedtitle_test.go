@@ -322,7 +322,7 @@ func TestSharedTopicExactGuestLiveAndHistorical(t *testing.T) {
 			if _, e = w.alice.DismissParticipation(tctx(t), p.PID); e != nil {
 				t.Fatal(e)
 			}
-			eventually(t, "dismissed exact guest", func() bool { return stateAt(t, guest, p.PID).State == PartDismissed })
+			eventually(t, "dismissed exact guest", func() bool { return pollState(t, guest, p.PID).State == PartDismissed })
 			if _, e = guest.RenameSharedTopic(tctx(t), conv, topic, "post-dismiss"); e == nil {
 				t.Fatal("dismissed guest renamed")
 			}
@@ -521,7 +521,7 @@ func TestSharedTopicCurrentAuthorityFences(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			eventually(t, "invitation", func() bool { return stateAt(t, guest, p.PID).State == PartInvited })
+			eventually(t, "invitation", func() bool { return pollState(t, guest, p.PID).State == PartInvited })
 			if _, e = guest.AcceptParticipation(ctx, p.PID); e != nil {
 				t.Fatal(e)
 			}

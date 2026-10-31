@@ -19,7 +19,7 @@ func TestProgressParticipationAuthorityCapsAndEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "invite at host", func() bool { return stateAt(t, host, p.PID).State == PartInvited })
+	eventually(t, "invite at host", func() bool { return pollState(t, host, p.PID).State == PartInvited })
 	if _, err = host.AcceptParticipation(tctx(t), p.PID); err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +144,7 @@ func TestProgressParticipationAuthorityCapsAndEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	runAgent(t, host)
-	eventually(t, "end at host", func() bool { return stateAt(t, host, p.PID).State == PartDismissed })
+	eventually(t, "end at host", func() bool { return pollState(t, host, p.PID).State == PartDismissed })
 	host.holdEndedOutputs("")
 	var lateStates []string
 	rows, _ := host.store.db.Query(`SELECT state FROM outbox WHERE body='LATE PROGRESS'`)

@@ -164,7 +164,7 @@ func TestDesktopAlertPresentationAndKinds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "bob to see the invite", func() bool { return stateAt(t, w.bob, p.PID).State == PartInvited })
+	eventually(t, "bob to see the invite", func() bool { return pollState(t, w.bob, p.PID).State == PartInvited })
 	time.Sleep(1500 * time.Millisecond)
 	if n.count() > shownBefore {
 		t.Fatalf("%d alerts for presented messages or a participation record", n.count())

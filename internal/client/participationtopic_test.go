@@ -25,7 +25,7 @@ func TestParticipationTopicScopeContextAndExactRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "scoped invitation", func() bool { return stateAt(t, w.bob, p.PID).State == PartInvited })
+	eventually(t, "scoped invitation", func() bool { return pollState(t, w.bob, p.PID).State == PartInvited })
 	if _, err = w.bob.AcceptParticipation(tctx(t), p.PID); err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestParticipationTopicScopeGroupFreshPIDAndFanout(t *testing.T) {
 	if narrow.PID == broad.PID {
 		t.Fatal("broad membership relabeled narrower")
 	}
-	eventually(t, "scoped group invitation", func() bool { return stateAt(t, w.bob, narrow.PID).State == PartInvited })
+	eventually(t, "scoped group invitation", func() bool { return pollState(t, w.bob, narrow.PID).State == PartInvited })
 	if _, err = w.bob.AcceptParticipation(tctx(t), narrow.PID); err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func TestParticipationTopicScopeHumanGuestAndOldPeer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "topic guest invitation", func() bool { return stateAt(t, guest, p.PID).State == PartInvited })
+	eventually(t, "topic guest invitation", func() bool { return pollState(t, guest, p.PID).State == PartInvited })
 	if _, err = guest.AcceptParticipation(tctx(t), p.PID); err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +246,7 @@ func TestParticipationTopicScopeHumanGuestAndOldPeer(t *testing.T) {
 	if _, err = w.alice.DismissParticipation(tctx(t), p.PID); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "guest scope ended", func() bool { return stateAt(t, guest, p.PID).State == PartDismissed })
+	eventually(t, "guest scope ended", func() bool { return pollState(t, guest, p.PID).State == PartDismissed })
 	if _, err = guest.SendConv(tctx(t), conv, ConvOutgoing{Body: "after removal", Topic: topic, PID: p.PID}); err == nil {
 		t.Fatal("removed topic guest sent")
 	}

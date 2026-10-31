@@ -94,7 +94,7 @@ func roomDM(t *testing.T) (w *world, carol *Agent, conv string, ap, hp Participa
 	}
 	sendEvent(t, w.alice, conv, inv)
 	sendEvent(t, w.alice, conv, signedAs(w.alice, protocol.ScopeOf(inv, time.Now().Unix())))
-	eventually(t, "the follower invited at its host", func() bool { return stateAt(t, carol, inv.PID).State == PartInvited })
+	eventually(t, "the follower invited at its host", func() bool { return pollState(t, carol, inv.PID).State == PartInvited })
 	if _, err := carol.AcceptParticipation(tctx(t), inv.PID); err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestRoomFollowerReadsInADM(t *testing.T) {
 	if _, err := w.alice.DismissParticipation(tctx(t), inv.PID); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the follower ended at its host", func() bool { return stateAt(t, carol, inv.PID).State == PartDismissed })
+	eventually(t, "the follower ended at its host", func() bool { return pollState(t, carol, inv.PID).State == PartDismissed })
 	late := roomTurn(t, w.alice, conv, turn.Human)
 	env = sealTo(t, w.alice, carol, late)
 	eventually(t, "a turn for an ended follower held", func() bool { return quarantined(t, carol, env.ID) })
@@ -172,7 +172,7 @@ func TestRoomAgentAskWaitsForTheHost(t *testing.T) {
 	own := roomInvite(t, w.alice, conv, w.alice, "", 0) // Alice's own agent, on her member device
 	sendEvent(t, w.alice, conv, own)
 	sendEvent(t, w.alice, conv, signedAs(w.alice, protocol.ScopeOf(own, time.Now().Unix())))
-	eventually(t, "Alice's agent invited at Alice", func() bool { return stateAt(t, w.alice, own.PID).State == PartInvited })
+	eventually(t, "Alice's agent invited at Alice", func() bool { return pollState(t, w.alice, own.PID).State == PartInvited })
 	if _, err := w.alice.AcceptParticipation(tctx(t), own.PID); err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestRoomAgentAskWaitsForTheHost(t *testing.T) {
 	if _, err := w.alice.DismissParticipation(tctx(t), own.PID); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "Bob observes the end", func() bool { return stateAt(t, w.bob, own.PID).State == PartDismissed })
+	eventually(t, "Bob observes the end", func() bool { return pollState(t, w.bob, own.PID).State == PartDismissed })
 	// Once the asking agent's participation ended nothing here would run
 	// its task: accept is refused with that reason and the task stays as it
 	// was, for the person to decline or resolve.
@@ -266,7 +266,7 @@ func TestRoomFollowerReadsSharedLifecycle(t *testing.T) {
 	}
 	sendEvent(t, w.alice, conv, inv)
 	sendEvent(t, w.alice, conv, signedAs(w.alice, protocol.ScopeOf(inv, time.Now().Unix())))
-	eventually(t, "the follower invited at its host", func() bool { return stateAt(t, dave, inv.PID).State == PartInvited })
+	eventually(t, "the follower invited at its host", func() bool { return pollState(t, dave, inv.PID).State == PartInvited })
 	if _, err := dave.AcceptParticipation(tctx(t), inv.PID); err != nil {
 		t.Fatal(err)
 	}

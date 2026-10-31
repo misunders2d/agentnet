@@ -103,7 +103,7 @@ func TestOrdinaryMentionAgentReaction(t *testing.T) {
 	if _, err = author.DismissParticipation(tctx(t), p.PID); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "host revoked", func() bool { return stateAt(t, host, p.PID).State == PartDismissed })
+	eventually(t, "host revoked", func() bool { return pollState(t, host, p.PID).State == PartDismissed })
 	if _, err = host.SendAgentReaction(tctx(t), p.PID, ref, "👍", false); err == nil {
 		t.Fatal("revoked agent retained reactions")
 	}

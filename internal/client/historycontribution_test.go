@@ -228,7 +228,7 @@ func TestHistoryContributionSelectedFilesAndGuestAuthority(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	eventually(t, "contribution guest invited", func() bool { return stateAt(t, guest, invite.PID).State == PartInvited })
+	eventually(t, "contribution guest invited", func() bool { return pollState(t, guest, invite.PID).State == PartInvited })
 	request := HistoryContributionRequest{Source: source, IDs: []string{selected.ID}, Destination: destination, Files: []HistoryContributionFileRef{{ID: selected.ID, Index: 0}}}
 	pending, e := w.alice.PreviewHistoryContribution(request)
 	if e != nil {

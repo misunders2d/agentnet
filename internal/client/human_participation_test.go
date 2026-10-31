@@ -75,7 +75,7 @@ func TestHumanGuestSendsWithoutNamingItsParticipation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "human invite", func() bool { return stateAt(t, carol, p.PID).State == PartInvited })
+	eventually(t, "human invite", func() bool { return pollState(t, carol, p.PID).State == PartInvited })
 	if _, err := carol.AcceptParticipation(tctx(t), p.PID); err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestHumanGuestNativeConsentMessagesFileAndLeave(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "human invite", func() bool { return stateAt(t, carol, p.PID).State == PartInvited })
+	eventually(t, "human invite", func() bool { return pollState(t, carol, p.PID).State == PartInvited })
 	var excerpts int
 	carol.store.db.QueryRow(`SELECT count(*) FROM inbox WHERE conv=? AND sub=?`, conv, envelope.SubExcerpt).Scan(&excerpts)
 	if excerpts != 0 {

@@ -164,7 +164,7 @@ func testTopicGuestInvitesOwnAgent(t *testing.T, w *world, guest *Agent, conv st
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "scoped guest invite", func() bool { return stateAt(t, guest, p.PID).State == PartInvited })
+	eventually(t, "scoped guest invite", func() bool { return pollState(t, guest, p.PID).State == PartInvited })
 	if _, err = guest.AcceptParticipation(tctx(t), p.PID); err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +280,7 @@ func testTopicGuestInvitesOwnAgent(t *testing.T, w *world, guest *Agent, conv st
 	if e != nil {
 		t.Fatal(e)
 	}
-	eventually(t, "new parent invitation", func() bool { return stateAt(t, guest, reinvite.PID).State == PartInvited })
+	eventually(t, "new parent invitation", func() bool { return pollState(t, guest, reinvite.PID).State == PartInvited })
 	if _, e = guest.AcceptParticipation(tctx(t), reinvite.PID); e != nil {
 		t.Fatal(e)
 	}

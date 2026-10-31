@@ -9,7 +9,7 @@ func TestGroupAgentRejoinStaleInviteUsesCurrentPID(t *testing.T) {
 	if _, err := w.alice.DismissParticipation(tctx(t), old.PID); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "host sees dismissal", func() bool { return stateAt(t, w.bob, old.PID).State == PartDismissed })
+	eventually(t, "host sees dismissal", func() bool { return pollState(t, w.bob, old.PID).State == PartDismissed })
 	next, err := w.alice.InviteAgent(tctx(t), conv, w.bob.Address, nil, nil, "")
 	if err != nil {
 		t.Fatal(err)
@@ -21,7 +21,7 @@ func TestGroupAgentRejoinStaleInviteUsesCurrentPID(t *testing.T) {
 	if err != nil || repeat.PID != next.PID {
 		t.Fatalf("pending stale invite duplicated: %+v %v", repeat, err)
 	}
-	eventually(t, "host sees rejoin", func() bool { return stateAt(t, w.bob, next.PID).State == PartInvited })
+	eventually(t, "host sees rejoin", func() bool { return pollState(t, w.bob, next.PID).State == PartInvited })
 	if _, err = w.bob.AcceptParticipation(tctx(t), next.PID); err != nil {
 		t.Fatal(err)
 	}

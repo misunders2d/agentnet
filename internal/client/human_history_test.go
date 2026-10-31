@@ -32,7 +32,7 @@ func TestHumanHistoryUnchangedDescriptorOriginalOnlyFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "guest invited", func() bool { return stateAt(t, carol, p.PID).State == PartInvited })
+	eventually(t, "guest invited", func() bool { return pollState(t, carol, p.PID).State == PartInvited })
 	if _, err = carol.AcceptParticipation(tctx(t), p.PID); err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestHumanHistoryUnchangedDescriptorOriginalOnlyFiles(t *testing.T) {
 	if _, err = w.alice.DismissParticipation(tctx(t), p.PID); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "guest ended", func() bool { return stateAt(t, carol, p.PID).State == PartDismissed })
+	eventually(t, "guest ended", func() bool { return pollState(t, carol, p.PID).State == PartDismissed })
 	phone := humanLinked(t, w.alice)
 	eventually(t, "original member own linked history", func() bool { return humanBodyCount(t, phone, conv, "human retained turn") == 1 })
 	msgs, _ := phone.ConversationMessages(conv)

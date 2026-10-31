@@ -48,8 +48,8 @@ func TestRoomDismissalReachesLateJoiner(t *testing.T) {
 		return err == nil && p.Following()
 	})
 	stop := runAgent(t, w.alice)
-	eventually(t, "delayed original host end reaches publisher", func() bool { return stateAt(t, w.alice, visitor.PID).State == PartDismissed })
-	eventually(t, "counted end forwarded to late member without new publication", func() bool { return stateAt(t, dave, visitor.PID).State == PartDismissed })
+	eventually(t, "delayed original host end reaches publisher", func() bool { return pollState(t, w.alice, visitor.PID).State == PartDismissed })
+	eventually(t, "counted end forwarded to late member without new publication", func() bool { return pollState(t, dave, visitor.PID).State == PartDismissed })
 	stop()
 	proof, err := roomMembershipProof(w.alice.store.db, next)
 	if err != nil {
@@ -173,7 +173,7 @@ func TestRoomDismissalFormerAdminDoesNotPoisonCarrier(t *testing.T) {
 	if _, err = w.bob.DismissParticipation(tctx(t), visitor.PID); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "publisher counts another admin removal", func() bool { return stateAt(t, w.alice, visitor.PID).State == PartDismissed })
+	eventually(t, "publisher counts another admin removal", func() bool { return pollState(t, w.alice, visitor.PID).State == PartDismissed })
 	demoted, err := w.alice.DemoteGroupMember(tctx(t), conv, bob.info.Person)
 	if err != nil {
 		t.Fatal(err)
@@ -182,11 +182,11 @@ func TestRoomDismissalFormerAdminDoesNotPoisonCarrier(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "member receives invitation to decline", func() bool { return stateAt(t, w.bob, declined.PID).State == PartInvited })
+	eventually(t, "member receives invitation to decline", func() bool { return pollState(t, w.bob, declined.PID).State == PartInvited })
 	if _, err = w.bob.DeclineParticipation(tctx(t), declined.PID); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "publisher knows declined membership", func() bool { return stateAt(t, w.alice, declined.PID).State == PartDeclined })
+	eventually(t, "publisher knows declined membership", func() bool { return pollState(t, w.alice, declined.PID).State == PartDeclined })
 	if _, err = w.alice.DismissParticipation(tctx(t), declined.PID); err != nil {
 		t.Fatal(err)
 	}

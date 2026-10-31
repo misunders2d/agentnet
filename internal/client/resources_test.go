@@ -24,7 +24,7 @@ func TestConversationResourcesMembersCASRestartAndGuestBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "guest invitation", func() bool { return stateAt(t, guest, invited.PID).State == PartInvited })
+	eventually(t, "guest invitation", func() bool { return pollState(t, guest, invited.PID).State == PartInvited })
 	if _, err = guest.AcceptParticipation(tctx(t), invited.PID); err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +280,7 @@ func TestConversationResourcesMemberAgentContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "context guest invited", func() bool { return stateAt(t, guest, invited.PID).State == PartInvited })
+	eventually(t, "context guest invited", func() bool { return pollState(t, guest, invited.PID).State == PartInvited })
 	if _, err = guest.AcceptParticipation(tctx(t), invited.PID); err != nil {
 		t.Fatal(err)
 	}

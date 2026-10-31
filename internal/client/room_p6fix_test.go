@@ -264,7 +264,7 @@ func TestP6FixRemovedAudienceDoesNotKillOtherAnswer(t *testing.T) {
 	if _, err = w.alice.DismissParticipation(tctx(t), removed.PID); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "target sees removed scope", func() bool { return stateAt(t, w.bob, removed.PID).State == PartDismissed })
+	eventually(t, "target sees removed scope", func() bool { return pollState(t, w.bob, removed.PID).State == PartDismissed })
 	if err = w.bob.Accept(ask.LID); err != nil {
 		t.Fatal(err)
 	}
@@ -484,7 +484,7 @@ func TestP6FixOutsideAdmissionAndRemovalRights(t *testing.T) {
 	if _, err = outside.DismissParticipation(tctx(t), visitor.PID); err != nil {
 		t.Fatalf("outside host owner removal: %v", err)
 	}
-	eventually(t, "host removal reaches group", func() bool { return stateAt(t, w.alice, visitor.PID).State == PartDismissed })
+	eventually(t, "host removal reaches group", func() bool { return pollState(t, w.alice, visitor.PID).State == PartDismissed })
 	visitor = p6Member(t, w.alice, outside, conv)
 	if _, err = w.alice.DismissParticipation(tctx(t), visitor.PID); err != nil {
 		t.Fatalf("admin removal: %v", err)

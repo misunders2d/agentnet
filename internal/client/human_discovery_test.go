@@ -243,7 +243,7 @@ func TestHumanSharedEndAfterLostAcceptanceReceiptAndReplay(t *testing.T) {
 		end, ok := sharedOf(humanSharedCopies(t, w.alice, conv, pc.PID, dana.Address), protocol.EventDismiss)
 		return ok && end.ev.Author.Address == carol.Address && end.fp == dana.Self().Fingerprint()
 	})
-	eventually(t, "Dana applies the end", func() bool { return stateAt(t, dana, pc.PID).State == PartDismissed })
+	eventually(t, "Dana applies the end", func() bool { return pollState(t, dana, pc.PID).State == PartDismissed })
 	handled, allowed, err := w.alice.mayDeliverExternal(accept.env)
 	if err != nil || !handled || allowed {
 		t.Fatalf("stale acceptance escaped: %v %v %v", handled, allowed, err)

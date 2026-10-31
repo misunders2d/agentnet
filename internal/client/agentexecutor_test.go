@@ -260,7 +260,7 @@ func TestNamedExecutorParticipationResolverRollback(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		eventually(t, "named participation invitation", func() bool { return stateAt(t, w.bob, invited.PID).State == PartInvited })
+		eventually(t, "named participation invitation", func() bool { return pollState(t, w.bob, invited.PID).State == PartInvited })
 		if _, err = w.bob.AcceptParticipation(tctx(t), invited.PID); err != nil {
 			t.Fatal(err)
 		}

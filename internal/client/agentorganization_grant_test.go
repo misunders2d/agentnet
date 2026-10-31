@@ -59,7 +59,7 @@ func testAgentOrganizationScopeOnlySelectedGrant(t *testing.T, legacy bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "signed invitation at host", func() bool { return stateAt(t, w.bob, p.PID).State == PartInvited })
+	eventually(t, "signed invitation at host", func() bool { return pollState(t, w.bob, p.PID).State == PartInvited })
 	if _, err = w.bob.AcceptParticipation(tctx(t), p.PID); err != nil {
 		t.Fatal(err)
 	}

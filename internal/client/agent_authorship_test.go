@@ -47,7 +47,7 @@ func TestNamedAgentExecutedRequestAuthorship(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			eventually(t, "named invitation", func() bool { return stateAt(t, host, p.PID).State == PartInvited })
+			eventually(t, "named invitation", func() bool { return pollState(t, host, p.PID).State == PartInvited })
 			if _, err = host.AcceptParticipation(tctx(t), p.PID); err != nil {
 				t.Fatal(err)
 			}

@@ -26,7 +26,7 @@ func testHumanMultipleEnd(t *testing.T, selfLeave bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "Carol invitation", func() bool { return stateAt(t, carol, pc.PID).State == PartInvited })
+	eventually(t, "Carol invitation", func() bool { return pollState(t, carol, pc.PID).State == PartInvited })
 	if _, err = carol.AcceptParticipation(tctx(t), pc.PID); err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func testHumanMultipleEnd(t *testing.T, selfLeave bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "Dana invitation", func() bool { return stateAt(t, dana, pd.PID).State == PartInvited })
+	eventually(t, "Dana invitation", func() bool { return pollState(t, dana, pd.PID).State == PartInvited })
 	if _, err = dana.AcceptParticipation(tctx(t), pd.PID); err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func testHumanMultipleEnd(t *testing.T, selfLeave bool) {
 	if _, err = ender.DismissParticipation(tctx(t), pc.PID); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "original observes guest end", func() bool { return stateAt(t, w.alice, pc.PID).State == PartDismissed })
+	eventually(t, "original observes guest end", func() bool { return pollState(t, w.alice, pc.PID).State == PartDismissed })
 	var beforeEndCopies, afterEndCopies int
 	ender.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE conv=? AND pid=? AND sub=?`, conv, pc.PID, envelope.SubEvent).Scan(&beforeEndCopies)
 	if _, err = ender.DismissParticipation(tctx(t), pc.PID); err != nil {
@@ -149,7 +149,7 @@ func testHumanMultipleEnd(t *testing.T, selfLeave bool) {
 	if _, err = dana.DismissParticipation(tctx(t), pd.PID); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "both originals private", func() bool { return stateAt(t, w.alice, pd.PID).State == PartDismissed })
+	eventually(t, "both originals private", func() bool { return pollState(t, w.alice, pd.PID).State == PartDismissed })
 	private, err := w.alice.SendConv(tctx(t), conv, ConvOutgoing{Body: "only original private flow"})
 	if err != nil {
 		t.Fatal(err)
@@ -169,7 +169,7 @@ func TestHumanOriginalEndDominatesDelayedAcceptance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "invitation at guest", func() bool { return stateAt(t, carol, p.PID).State == PartInvited })
+	eventually(t, "invitation at guest", func() bool { return pollState(t, carol, p.PID).State == PartInvited })
 	if _, err = w.alice.DismissParticipation(tctx(t), p.PID); err != nil {
 		t.Fatal(err)
 	}

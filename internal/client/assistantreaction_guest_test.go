@@ -181,7 +181,7 @@ func TestAssistantReactionGuestAudience(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "Dave invited", func() bool { return stateAt(t, dave, dp.PID).State == PartInvited })
+	eventually(t, "Dave invited", func() bool { return pollState(t, dave, dp.PID).State == PartInvited })
 	if _, err = dave.AcceptParticipation(tctx(t), dp.PID); err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +307,7 @@ func TestAssistantReactionGuestAudience(t *testing.T) {
 	if _, err = dave.DismissParticipation(tctx(t), dp.PID); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "Bob observes Dave's end", func() bool { return stateAt(t, w.bob, dp.PID).State == PartDismissed })
+	eventually(t, "Bob observes Dave's end", func() bool { return pollState(t, w.bob, dp.PID).State == PartDismissed })
 	addCapSuccessor(t, dave, protocol.CapAgentReaction)
 	feats, err := w.bob.relayFeatures(tctx(t))
 	if err != nil {

@@ -253,7 +253,7 @@ func TestPageReviewRequestsStillDecidable(t *testing.T) {
 	if _, err := w.alice.DismissParticipation(tctx(t), pid); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "bob to see the participation dismissed", func() bool { return stateAt(t, w.bob, pid).State == PartDismissed })
+	eventually(t, "bob to see the participation dismissed", func() bool { return pollState(t, w.bob, pid).State == PartDismissed })
 	if r, ok := needsYou(t, w.bob, pid, id); ok {
 		t.Fatalf("a request whose participation ended is listed: %+v", r)
 	}

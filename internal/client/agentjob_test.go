@@ -94,7 +94,7 @@ func participate(t *testing.T, w *world, conv string, grant, taskKeys []string) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "bob to see the invite", func() bool { return stateAt(t, w.bob, p.PID).State == PartInvited })
+	eventually(t, "bob to see the invite", func() bool { return pollState(t, w.bob, p.PID).State == PartInvited })
 	if _, err := w.bob.AcceptParticipation(tctx(t), p.PID); err != nil {
 		t.Fatal(err)
 	}
@@ -362,7 +362,7 @@ func TestAgentDismissal(t *testing.T) {
 	if _, err := w.alice.DismissParticipation(tctx(t), pid); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "bob to see the dismissal", func() bool { return stateAt(t, w.bob, pid).State == PartDismissed })
+	eventually(t, "bob to see the dismissal", func() bool { return pollState(t, w.bob, pid).State == PartDismissed })
 	setResponder(t, w.bob, "agentstub", st.dir, time.Minute)
 	notifyDaemon(w.bob.home)
 	eventually(t, "not run", func() bool { return jobState(t, w.bob, before.ID) == stateNotRun })
@@ -398,7 +398,7 @@ func TestAgentDismissal(t *testing.T) {
 	if _, err := w.alice.DismissParticipation(tctx(t), pid3); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "bob to see the dismissal", func() bool { return stateAt(t, w.bob, pid3).State == PartDismissed })
+	eventually(t, "bob to see the dismissal", func() bool { return pollState(t, w.bob, pid3).State == PartDismissed })
 	w.bob.finishAgent(tctx(t), j, &Responder{Harness: "agentstub"}, envelope.StatusDone, "late reply\nemotion: calm")
 	if m, _ := w.bob.store.inboxMessage(late.ID); m.State != stateNotDelivered || !strings.Contains(m.Detail, "late reply") {
 		t.Fatalf("late output: %+v", m)
@@ -636,7 +636,7 @@ func TestAgentHeadOfLine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "bob to see the invite", func() bool { return stateAt(t, w.bob, invited.PID).State == PartInvited })
+	eventually(t, "bob to see the invite", func() bool { return pollState(t, w.bob, invited.PID).State == PartInvited })
 	pid := participate(t, w, conv, nil, nil)
 	aliceFP := w.alice.id.Public(w.alice.Address).Fingerprint()
 	for i := range 2*agentPage + 5 {

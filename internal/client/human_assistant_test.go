@@ -53,7 +53,7 @@ func guestAssistant(t *testing.T) (w *world, carol *Agent, conv string, lids []s
 	if hp, err = w.alice.InviteHuman(tctx(t), conv, carol.Address, nil, "PRIVATE_GUEST_NOTE_C2"); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "Carol invited", func() bool { return stateAt(t, carol, hp.PID).State == PartInvited })
+	eventually(t, "Carol invited", func() bool { return pollState(t, carol, hp.PID).State == PartInvited })
 	if _, err = carol.AcceptParticipation(tctx(t), hp.PID); err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestHumanGuestAsksMemberHostedAssistant(t *testing.T) {
 	if _, err := carol.DismissParticipation(tctx(t), hp.PID); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "Bob observes the leave", func() bool { return stateAt(t, w.bob, hp.PID).State == PartDismissed })
+	eventually(t, "Bob observes the leave", func() bool { return pollState(t, w.bob, hp.PID).State == PartDismissed })
 	if err := w.bob.Accept(task.LID); !errors.Is(err, ErrNothingRuns) || !strings.Contains(err.Error(), "asking guest's participation ended") {
 		t.Fatalf("accept of an ended guest's task: %v", err)
 	}
@@ -230,7 +230,7 @@ func TestHumanGuestAsksOutsideHostedAssistant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "Carol invited", func() bool { return stateAt(t, carol, hp.PID).State == PartInvited })
+	eventually(t, "Carol invited", func() bool { return pollState(t, carol, hp.PID).State == PartInvited })
 	if _, err := carol.AcceptParticipation(tctx(t), hp.PID); err != nil {
 		t.Fatal(err)
 	}

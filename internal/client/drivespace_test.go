@@ -84,7 +84,7 @@ func TestDriveEncryptedStateOwnershipAndAgentGrants(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	eventually(t, "Drive agent invite", func() bool { return stateAt(t, w.bob, p.PID).State == PartInvited })
+	eventually(t, "Drive agent invite", func() bool { return pollState(t, w.bob, p.PID).State == PartInvited })
 	if _, e = w.bob.AcceptParticipation(tctx(t), p.PID); e != nil {
 		t.Fatal(e)
 	}

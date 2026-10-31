@@ -139,7 +139,7 @@ func TestExternalAgentEncryptedLifecycle(t *testing.T) {
 	if _, err = w.bob.DismissParticipation(tctx(t), p.PID); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "host dismissed", func() bool { return stateAt(t, host, p.PID).State == PartDismissed })
+	eventually(t, "host dismissed", func() bool { return pollState(t, host, p.PID).State == PartDismissed })
 	if _, err = w.alice.AskAgent(tctx(t), p.PID, envelope.KindQuestion, "dismissed"); err == nil {
 		t.Fatal("dismissed ask")
 	}
@@ -173,7 +173,7 @@ func TestExternalAgentEncryptedLifecycle(t *testing.T) {
 	if newInvite.PID == p.PID {
 		t.Fatal("reused dismissed PID")
 	}
-	eventually(t, "second host invitation", func() bool { return stateAt(t, host, newInvite.PID).State == PartInvited })
+	eventually(t, "second host invitation", func() bool { return pollState(t, host, newInvite.PID).State == PartInvited })
 	if _, err = host.AcceptParticipation(tctx(t), newInvite.PID); err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +206,7 @@ func TestExternalAgentAskRefusesInvisibleText(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "external invite at the host", func() bool { return stateAt(t, host, p.PID).State == PartInvited })
+	eventually(t, "external invite at the host", func() bool { return pollState(t, host, p.PID).State == PartInvited })
 	if _, err = host.AcceptParticipation(tctx(t), p.PID); err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +238,7 @@ func TestExternalAgentProofReplayAndQueuedGates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "pending external host", func() bool { return stateAt(t, host, p.PID).State == PartInvited })
+	eventually(t, "pending external host", func() bool { return pollState(t, host, p.PID).State == PartInvited })
 	stopHost()                 // all subsequent native admission/claim/output is deterministic
 	host.stopBackgroundPosts() // join its independent sender before reopening the same outbox
 	_, raw, _, _ := host.store.conversation(conv)
@@ -446,7 +446,7 @@ func TestExternalAgentRequestCorrelationAndOrdering(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		eventually(t, "external invitation", func() bool { return stateAt(t, host, p.PID).State == PartInvited })
+		eventually(t, "external invitation", func() bool { return pollState(t, host, p.PID).State == PartInvited })
 		if _, err := host.AcceptParticipation(tctx(t), p.PID); err != nil {
 			t.Fatal(err)
 		}
@@ -654,7 +654,7 @@ func TestExternalAgentLinkedHumanHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "outside host invited", func() bool { return stateAt(t, host, p.PID).State == PartInvited })
+	eventually(t, "outside host invited", func() bool { return pollState(t, host, p.PID).State == PartInvited })
 	if _, err := host.AcceptParticipation(tctx(t), p.PID); err != nil {
 		t.Fatal(err)
 	}

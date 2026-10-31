@@ -44,6 +44,18 @@ func stateAt(t *testing.T, a *Agent, pid string) ParticipationInfo {
 	return p
 }
 
+// pollState is stateAt for a wait on a state to arrive: an invitation may
+// come before the group context it is read with, since carriers travel
+// independently of the copies they explain, and that reads as not yet.
+func pollState(t *testing.T, a *Agent, pid string) ParticipationInfo {
+	t.Helper()
+	p, err := a.Participation(pid)
+	if err != nil && !errors.Is(err, ErrNoParticipation) && !errors.Is(err, ErrGroupContextPending) {
+		t.Fatal(err)
+	}
+	return p
+}
+
 // An invite names the host, exactly which earlier messages may be shared
 // and which keys may ask for follow-up tasks; only the host's person accepts
 // it, all or nothing; a retried accept sends the same event; the agent is
@@ -71,7 +83,7 @@ func TestParticipationInviteAcceptDismiss(t *testing.T) {
 		t.Fatalf("invite: %+v %v", p, err)
 	}
 	pid := p.PID
-	eventually(t, "bob to see the invite", func() bool { return stateAt(t, w.bob, pid).State == PartInvited })
+	eventually(t, "bob to see the invite", func() bool { return pollState(t, w.bob, pid).State == PartInvited })
 	atBob := stateAt(t, w.bob, pid)
 	if !atBob.HostHere || !slices.Equal(grantLIDs(atBob.Grant), lids[:2]) || atBob.Note != "please check the deploy" || atBob.Invite != p.Invite {
 		t.Fatalf("bob's view: %+v", atBob)
@@ -101,7 +113,7 @@ func TestParticipationInviteAcceptDismiss(t *testing.T) {
 	if _, err := w.bob.DeclineParticipation(tctx(t), pid); err == nil {
 		t.Fatal("the host decided twice")
 	}
-	eventually(t, "alice to see it active", func() bool { return stateAt(t, w.alice, pid).State == PartActive })
+	eventually(t, "alice to see it active", func() bool { return pollState(t, w.alice, pid).State == PartActive })
 
 	// Context: the two granted earlier messages, not the third; then the
 	// question to the agent. Bob has no responder: it waits for his agent,
@@ -132,7 +144,7 @@ func TestParticipationInviteAcceptDismiss(t *testing.T) {
 	if d, err := w.alice.DismissParticipation(tctx(t), pid); err != nil || d.State != PartDismissed {
 		t.Fatalf("dismiss: %+v %v", d, err)
 	}
-	eventually(t, "bob to see it dismissed", func() bool { return stateAt(t, w.bob, pid).State == PartDismissed })
+	eventually(t, "bob to see it dismissed", func() bool { return pollState(t, w.bob, pid).State == PartDismissed })
 	if _, err := w.alice.AskAgent(tctx(t), pid, envelope.KindQuestion, "late"); err == nil {
 		t.Fatal("asked a dismissed agent")
 	}
