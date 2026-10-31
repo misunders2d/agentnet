@@ -16,6 +16,25 @@ write); fixed, run locally only. A full non-race `go test ./internal/ui`
 it passed 3/3 alone and does not touch the changed code. Load flake, not
 yet investigated.
 
+`TestCLIQueuedNamedAgentJourney` "timed out waiting for exact CLI
+invitation" is solved, and it was not late delivery (that earlier reading is
+corrected here). CI 41222025163's timeline showed Bob admitting all of
+Admin's copies by +1.7 s with nothing held. Logging Bob's view of the
+participation showed it already `active`: Bob approved Admin, so it accepts
+without a click (grantConsent, MEL-713). When that accept lands before the
+test's first poll, a wait for exactly `invited` never matches. Locally
+(`taskset -c 0,1`) it failed 4/25 runs. The wait now accepts `invited` or
+`active`, and `accept-agent` resends this device's own accept. Result: 0/25
+failures, with 6 runs where the accept came first.
+
+Same run, recorded only: Windows client `TestAgyNamedGroupResponder` (the
+agy hub `Get` exceeded its 10 s deadline; Admin's copies to carol sat
+`queued` 8.5 s with no gate and no error, so they were never attempted) and
+Windows native `TestAttentionReplyPendingRendered` (19/20 cases passed; the
+`workspace`/report/390 page never showed "Reports from other computers"
+within 30 s after loading; each case uses a fresh page). Both look like
+runner starvation; neither was investigated further.
+
 CI 41218773896 (a6472b50): the macOS CLI journey passed; macOS failed
 `mobile/core` `TestPhoneLinkedStateDismissesExactNotices` instead: its
 `MarkUnread` got "attention: this chat changed; try again" (three snapshot

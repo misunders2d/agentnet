@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -109,9 +110,18 @@ func TestCLIQueuedNamedAgentJourney(t *testing.T) {
 			t.Fatalf("invite=%s error=%v", text, err)
 		}
 		pid := fields[0]
+		seen := ""
 		eventually("exact CLI invitation", func() bool {
 			p, err := host.Participation(pid)
-			return err == nil && p.State == client.PartInvited
+			// Each change of the host's view, for a timed-out wait's timeline.
+			if now := fmt.Sprintf("state=%q held=%d conflict=%q err=%v", p.State, p.Held, p.Conflict, err); now != seen {
+				seen = now
+				t.Logf("%s sees %s: %s", host.Address, pid, now)
+			}
+			// The host approved this inviter, so it may accept without a click
+			// (grantConsent, MEL-713) before this sees the invite waiting;
+			// accept-agent then resends its own accept.
+			return err == nil && (p.State == client.PartInvited || p.State == client.PartActive)
 		})
 		var accepted bytes.Buffer
 		if err := runDM(ctx, host, []string{"accept-agent", pid}, &accepted); err != nil {
