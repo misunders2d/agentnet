@@ -105,6 +105,7 @@ func dmWorld(t *testing.T, runStops ...map[*client.Agent]func()) (alice, bob, ca
 	dir := filepath.Join(t.TempDir(), "hub")
 	testhub.Start(t, dir, "127.0.0.1:0", "")
 	homes := map[*client.Agent]string{}
+	began := time.Now() // log lines and the failure snapshot share this clock
 	join := func(code, name string) *client.Agent {
 		home := filepath.Join(t.TempDir(), name)
 		a, err := client.Join(ctx, home, code, name)
@@ -112,7 +113,9 @@ func dmWorld(t *testing.T, runStops ...map[*client.Agent]func()) (alice, bob, ca
 			t.Fatal(err)
 		}
 		homes[a] = home
-		a.Logf = func(format string, args ...any) { t.Logf(a.Address+": "+format, args...) }
+		a.Logf = func(format string, args ...any) {
+			t.Logf("+%s %s: "+format, append([]any{time.Since(began).Round(time.Millisecond), a.Address}, args...)...)
+		}
 		run, stop := context.WithCancel(context.Background())
 		done := make(chan struct{})
 		go func() {
@@ -141,7 +144,7 @@ func dmWorld(t *testing.T, runStops ...map[*client.Agent]func()) (alice, bob, ca
 	t.Cleanup(func() {
 		if t.Failed() {
 			for _, a := range []*client.Agent{alice, bob, carol} {
-				dmWorldSnapshot(t, a, homes[a])
+				dmWorldSnapshot(t, a, homes[a], began)
 			}
 		}
 	})
@@ -166,47 +169,59 @@ func dmWorld(t *testing.T, runStops ...map[*client.Agent]func()) (alice, bob, ca
 	return alice, bob, carol, conv, eventually
 }
 
-// dmWorldSnapshot logs, query only, what a failed journey left waiting on a
-// device: outgoing copies not yet delivered and held incoming ones, with age.
-func dmWorldSnapshot(t *testing.T, a *client.Agent, home string) {
+// dmWorldSnapshot logs, query only, a failed journey's timeline on a device
+// (times since dmWorld began): every outgoing copy with its state, every
+// admitted incoming message and every held one.
+func dmWorldSnapshot(t *testing.T, a *client.Agent, home string, began time.Time) {
 	db, err := sql.Open("sqlite", "file:"+filepath.Join(home, "agent.db")+"?_pragma=busy_timeout(5000)&_pragma=query_only(1)")
 	if err != nil {
 		t.Logf("%s snapshot: %v", a.Address, err)
 		return
 	}
 	defer db.Close()
-	now := time.Now()
-	var waiting, held int
-	defer func() { t.Logf("%s snapshot: %d outgoing copies not delivered, %d held", a.Address, waiting, held) }()
-	rows, err := db.Query(`SELECT recipient, coalesce(sub,''), state, coalesce(error,''), coalesce(created_ms, created_at*1000) FROM outbox WHERE state<>'delivered' ORDER BY created_at`)
-	if err != nil {
-		t.Logf("%s outbox snapshot: %v", a.Address, err)
-	} else {
-		for rows.Next() {
-			var to, sub, state, why string
-			var created int64
-			if rows.Scan(&to, &sub, &state, &why, &created) == nil {
-				waiting++
-				t.Logf("%s outbox -> %s sub=%s state=%s age=%s error=%q", a.Address, to, sub, state, now.Sub(time.UnixMilli(created)).Round(time.Millisecond), why)
-			}
+	at := func(ms int64) time.Duration { return time.UnixMilli(ms).Sub(began).Round(time.Millisecond) }
+	var waiting, admitted, held int
+	defer func() {
+		t.Logf("%s snapshot at +%s: %d outgoing copies not delivered, %d admitted, %d held", a.Address, time.Since(began).Round(time.Millisecond), waiting, admitted, held)
+	}()
+	query := func(what, q string, row func(*sql.Rows)) {
+		rows, err := db.Query(q)
+		if err != nil {
+			t.Logf("%s %s snapshot: %v", a.Address, what, err)
+			return
 		}
-		rows.Close()
+		defer rows.Close()
+		for rows.Next() {
+			row(rows)
+		}
 	}
-	rows, err = db.Query(`SELECT sender, reason, detail_code, received_at, acked FROM quarantine ORDER BY received_at`)
-	if err != nil {
-		t.Logf("%s held snapshot: %v", a.Address, err)
-		return
-	}
-	defer rows.Close()
-	for rows.Next() {
+	query("outbox", `SELECT recipient, coalesce(kind,''), coalesce(sub,''), state, coalesce(error,''), coalesce(created_ms, created_at*1000) FROM outbox ORDER BY 6`, func(rows *sql.Rows) {
+		var to, kind, sub, state, why string
+		var created int64
+		if rows.Scan(&to, &kind, &sub, &state, &why, &created) == nil {
+			if state != "delivered" {
+				waiting++
+			}
+			t.Logf("%s +%s out -> %s kind=%s sub=%s state=%s error=%q", a.Address, at(created), to, kind, sub, state, why)
+		}
+	})
+	query("inbox", `SELECT sender, kind, coalesce(received_ms, received_at*1000) FROM inbox ORDER BY 3`, func(rows *sql.Rows) {
+		var from, kind string
+		var received int64
+		if rows.Scan(&from, &kind, &received) == nil {
+			admitted++
+			t.Logf("%s +%s in <- %s kind=%s", a.Address, at(received), from, kind)
+		}
+	})
+	query("held", `SELECT sender, reason, detail_code, received_at, acked FROM quarantine ORDER BY received_at`, func(rows *sql.Rows) {
 		var from, reason, detail string
 		var received int64
 		var acked bool
 		if rows.Scan(&from, &reason, &detail, &received, &acked) == nil {
 			held++
-			t.Logf("%s held from %s reason=%s detail=%s age=%s acked=%t", a.Address, from, reason, detail, now.Sub(time.Unix(received, 0)).Round(time.Second), acked)
+			t.Logf("%s +%s held <- %s reason=%s detail=%s acked=%t", a.Address, at(received*1000), from, reason, detail, acked)
 		}
-	}
+	})
 }
 
 // BUG-20: accepting an agent's invitation is the standing task grant for the
