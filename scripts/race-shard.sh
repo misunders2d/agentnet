@@ -30,16 +30,22 @@ run_partition() {
 				if ($0=="TestOwnPersonTasksDirectAndGroup") part=4
 				if ($0=="TestRoomReciprocalRootQuestions") part=1
 				if ($0=="TestTopicTransferWholeSnapshotCapacityAndRetry") part=2
-				if ($0=="TestRoomBusyAncestorCallback") part=10
-				if ($0=="TestHistoryArchiveImportedTailRemainsBounded") part=0
+				if ($0=="TestRoomBusyAncestorCallback") part=5
+				if ($0=="TestHistoryArchiveImportedTailRemainsBounded") part=12
 				if ($0=="TestGroupHistoryWitnessRetiredTaskDevice") part=7
-				if ($0=="TestTopicGuestInvitesOwnAgent") part=8
+				if ($0=="TestTopicGuestInvitesOwnAgent") part=3
 				if ($0=="TestConversationResourcesDoNotConsumeSelectedHistorySlots") part=8
 				if ($0=="TestGroupParticipationFilesLateLinkedRequestAndNamedOutput") part=15
 				if ($0=="TestGroupInteractionNamedMemberAndVisitor") part=16
 				if ($0=="TestGoogleReviewIntentRetry") part=0
-				if ($0=="TestGroupHistoryWitnessGuestDerivedParent") part=14
+				if ($0=="TestGroupHistoryWitnessGuestDerivedParent") part=13
 				if ($0=="TestGroupParticipationHistoryDismissedLinkedRestartReorder") part=12
+				if ($0=="TestProposalRefusesAgentHostAndRemovedPhone") part=11
+				if ($0=="TestReceiverRemoteGroupNamedNativeMemberVisitor") part=13
+				if ($0=="TestGroupGuestCapturedMessageControls") part=12
+				if ($0=="TestSharedTopicExactGuestLiveAndHistorical") part=17
+				if ($0=="TestConversationResourcesMemberAgentContext") part=3
+				if ($0=="TestSelfConsentLinkedDevices") part=4
 			}
 			if (client && n==12) {
 				if ($0=="TestGroupInteractionNamedMemberAndVisitor") part=1

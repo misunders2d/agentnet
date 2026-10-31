@@ -69,6 +69,27 @@ second invitation's 15 s wait at load 13, from other processes. The added test m
 race partitions again: `TestGroupParticipationHistoryDismissedLinkedRestartReorder`
 moves to partition 12, and by run 41193103059's timings the largest is 545 s.
 
+Run 41204693107 (2633f0a1) failed four jobs. Race client-14 hit the
+600-second bound with no hang: 594 s of passing parents against the 533 s
+predicted from one earlier run, because CI timing varies by about 11%. The
+partitions are now balanced on the larger of two runs' timings per parent
+(41193103059, 41204693107): ten literal moves give 441–469 s, checked against
+the script itself. The mean is 460 s of the 600-second bound, so headroom is
+thin. Linux native `TestOwnInvitationVisibleOnLinkedDevice` failed in 0.28 s
+on a fixture defect: it passes `signCapsAfter` an unsorted list (own sync v2
+appended last). When the latest record was ahead of the clock, that helper
+signed the list as given and failed validation ("names must be sorted,
+unique"); the other branch sorts. It now sorts and deduplicates first.
+`TestSignCapsAfterSortsAheadOfClock` fails the old helper with the CI message.
+Windows recorded or new waits, not changed: `TestOwnResolutionReadOnlyCapabilityCheck`
+again (phone did not see the dropped capability; 5bb2ef34's member-list wait
+did not settle it), `TestGroupHistorySelectedTextAdmission` (Carol held
+Alice's history `proof_pending`) and `TestProofQueueTransientRepeatsOnePage`
+(5 repeats, want 1, with the one injected fault used). No daemon runs during
+that drain, so the send retry is not involved; the extra repeats are
+transient Hub failures under load, a class the October 30 note records for
+`retryProof`.
+
 ## Gallery skins update automatically — unreleased, October 31
 
 Owner request: installed skins update with the app. Gallery installs live in
