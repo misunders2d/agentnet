@@ -241,8 +241,11 @@ func TestGroupFixtureSnapshotQueuedCopy(t *testing.T) {
 	}
 	list := strings.Join(cols, ",")
 	res, err := w.alice.store.db.Exec(`INSERT INTO outbox(`+list+`) SELECT `+strings.Join(picked, ",")+` FROM outbox WHERE conv=? AND sub=? AND recipient=? LIMIT 1`, protocol.NewID(), stateQueued, packet.State.Conv, envelope.SubGroupProof, carol.Address)
-	if n, _ := res.RowsAffected(); err != nil || n != 1 {
-		t.Fatalf("queued copy: %d %v", n, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		t.Fatalf("queued copy: %d rows", n)
 	}
 	var mu sync.Mutex
 	var lines []string
