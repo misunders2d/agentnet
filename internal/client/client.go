@@ -57,6 +57,7 @@ type Agent struct {
 	receiptLock      chan struct{} // dispositions never wait for history upkeep
 	routeHints       sync.Map      // optional verified first-attempt direct route; never queue storage
 	posting          backgroundPosts
+	sendRetry        sendRetry     // a transient send failure is tried again soon (backgroundsend.go)
 	humanMu          sync.RWMutex  // local human end commits serialize with ordinary copy/file delivery
 	statusLocks      keyedLocks    // one status of a request at a time (headless.go)
 	statusWake       chan struct{} // wakes this process's status sender (statusLoop)
@@ -729,6 +730,7 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 				return SendResult{ID: env.ID, State: stateConvWaiting, Detail: WaitPeerUpdate + err.Error()}, a.store.setOutboxState(env.ID, stateConvWaiting, WaitPeerUpdate+err.Error(), "")
 			}
 			if retryable(err) {
+				a.retrySendSoon(err)
 				return SendResult{ID: env.ID, State: stateQueued, Detail: err.Error()}, a.store.setOutboxState(env.ID, stateQueued, err.Error(), "")
 			}
 			a.store.setOutboxState(env.ID, stateFailed, err.Error(), "")
@@ -794,6 +796,7 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 	case err == nil:
 		return a.handedOver(env, r.State, protocol.PathRelay)
 	case retryable(err):
+		a.retrySendSoon(err)
 		detail := sendErrorDetail(err)
 		return SendResult{ID: env.ID, State: stateQueued, Detail: detail}, a.store.setOutboxState(env.ID, stateQueued, detail, "")
 	default:
@@ -814,6 +817,7 @@ func (a *Agent) handedOver(env envelope.Envelope, state, path string) (SendResul
 	if err := a.store.setOutboxState(env.ID, state, "", path); err != nil {
 		return SendResult{}, err
 	}
+	a.sendRetry.succeeded()
 	a.releaseSpool(env)
 	return SendResult{ID: env.ID, State: state, Path: path}, nil
 }

@@ -143,6 +143,30 @@ func groupTurnsFixture(t *testing.T, beforeRun ...func(*Agent)) (*world, *Agent,
 				}
 			}
 			rows.Close()
+			// A held group copy records no reason: evaluate its gate now, read only.
+			packet, e := a.GroupContext(next.State.Conv)
+			if e != nil {
+				continue
+			}
+			t.Logf("%s delivery head seq=%d: %v", a.Address, packet.State.Seq, groupDeliveryHead(a.store.db, packet))
+			queued, err := a.store.db.Query(`SELECT recipient, sub, body, coalesce(error,''), created_at FROM outbox WHERE conv=? AND state=? AND sub IN (?,?)`, next.State.Conv, stateQueued, envelope.SubGroupProof, envelope.SubGroupContext)
+			if err != nil {
+				continue
+			}
+			for queued.Next() {
+				var to, sub, body, why string
+				var created int64
+				var d protocol.GroupCarrier
+				if queued.Scan(&to, &sub, &body, &why, &created) != nil {
+					continue
+				}
+				gate := decodeStrict([]byte(body), &d)
+				if gate == nil {
+					gate = groupDeliveryRecipient(a.store.db, packet, to, d.ToKey)
+				}
+				t.Logf("%s queued %s -> %s seq=%d age=%s gate=%v error=%q", a.Address, sub, to, d.Seq, time.Since(time.Unix(created, 0)).Round(time.Millisecond), gate, why)
+			}
+			queued.Close()
 		}
 	})
 	for _, a := range []*Agent{w.bob, carol} {

@@ -6,6 +6,9 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+- Retry a send that failed on a temporary Hub or network error after 1, 2,
+  4 … seconds (at most 45) instead of waiting for the next 90-second ping or
+  other traffic. Nothing extra runs while sends succeed.
 - Update installed gallery skins automatically: each open installs the newest
   compatible published version, keeps trust given to the version it replaces
   and removes replaced versions from browser storage.

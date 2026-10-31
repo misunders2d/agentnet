@@ -46,6 +46,51 @@ type backgroundPosts struct {
 	again, closed bool
 }
 
+// A send that failed transiently (no answer, 5xx, 429) is tried again soon,
+// not only at the next Hub ping: 1 s after the failure, then 2 s, 4 s … up to
+// sendRetryMax while sends keep failing (owner decision, October 31). A
+// handover resets the wait. Nothing is scheduled while sends succeed or a
+// copy only waits on its own gate, so an idle daemon still makes no
+// requests; one pending wake covers every queued copy.
+const sendRetryMax = 45 * time.Second // the stream's reconnect cap
+
+type sendRetry struct {
+	sync.Mutex
+	timer  *time.Timer
+	wait   time.Duration
+	closed bool
+}
+
+func (r *sendRetry) succeeded() {
+	r.Lock()
+	r.wait = 0
+	r.Unlock()
+}
+
+func (a *Agent) retrySendSoon(err error) {
+	var he *HubError
+	if !transient(err) || refusedUntilUpdate(err) || errors.As(err, &he) && he.Code == codeUpdateRequired || errors.Is(err, context.Canceled) {
+		return // fails the same way again, waits for the updated program, or this daemon is stopping
+	}
+	r := &a.sendRetry
+	r.Lock()
+	defer r.Unlock()
+	if r.closed || r.timer != nil {
+		return
+	}
+	wait := max(r.wait, time.Second)
+	r.wait = min(2*wait, sendRetryMax)
+	r.timer = time.AfterFunc(wait, func() {
+		r.Lock()
+		r.timer = nil
+		closed := r.closed
+		r.Unlock()
+		if !closed {
+			a.kickNow() // a running daemon's own sync; nothing without one
+		}
+	})
+}
+
 // Only a wake is in memory. The encrypted outbox is the queue, including on
 // crashes. Every pass uses the same retry path and durable insertion order.
 func (a *Agent) postOutboxBackground() {
@@ -95,6 +140,13 @@ func (a *Agent) postOutboxBackground() {
 }
 
 func (a *Agent) stopBackgroundPosts() {
+	a.sendRetry.Lock()
+	a.sendRetry.closed = true
+	if a.sendRetry.timer != nil {
+		a.sendRetry.timer.Stop()
+		a.sendRetry.timer = nil
+	}
+	a.sendRetry.Unlock()
 	p := &a.posting
 	p.Lock()
 	p.closed = true

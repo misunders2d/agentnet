@@ -346,7 +346,8 @@ func (b *streamBody) Read(p []byte) (int, error) {
 
 // sync retries queued sends and unsent receipts. The stream's worker runs it
 // on connect and on each Hub ping, so retries ride on existing traffic
-// instead of a poll loop.
+// instead of a poll loop; a send that just failed transiently also wakes it
+// after a short backoff (retrySendSoon, backgroundsend.go).
 func (a *Agent) sync(ctx context.Context) {
 	if a.hub.gate.holding() {
 		// The Hub refuses this build (updaterequired.go): it still takes

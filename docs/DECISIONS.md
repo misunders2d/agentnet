@@ -1,5 +1,18 @@
 # AgentNet Revival — Architectural Decision Records & Linear Roadmap
 
+## 2026-10-31 — gallery skin updates keep trust; failed sends retry soon
+
+Owner decisions. An installed gallery skin updates itself on each open; an
+update keeps trust given to the exact version it replaces, by hand or
+automatically. Imports still ask, and a first install still asks.
+
+A send that failed on a temporary error (no answer, 5xx, 429) is retried
+after 1 s, then 2 s, 4 s … at most 45 s, until a handover succeeds. This is
+not polling: nothing is scheduled while sends succeed, while a copy only waits
+on its own gate (a frozen person, a pending group context), or while the Hub
+refuses this build until it is updated. Previously such a copy waited for the
+next 90-second ping or unrelated traffic.
+
 ## 2026-10-23 — confirmed topic changes and terminal group removal context
 
 Comic bulk topic changes call the existing host mutation immediately after one

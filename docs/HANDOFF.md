@@ -1,5 +1,38 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+## A transiently failed send waited for the next ping — unreleased, October 31
+
+CI runs 41132521965 and 41181824394 (both green on rerun) failed three tests
+waiting on group delivery: Windows `TestP6FixCapturedTurnsOnlyAndEpochFence` and
+`TestRoomHostEvidenceReadsOnceAndStaysFresh` (same minute, in
+`groupTurnsFixture`), Windows `TestGroupLifecycleConcurrentInvitationsReissuedForFreshConsent`
+and macOS `TestCLIQueuedNamedAgentJourney` ("timed out waiting for exact CLI
+invitation"). The CLI journey failure is the one earlier blamed on the MEL-698
+lock retry; it recurs after that revert (10056517), so that retry is not its
+cause. Each failure had group messages held `proof_pending` ("verified
+decryptable context unavailable"). In the `groupTurnsFixture` snapshot, Alice's
+seq-1 group proof for Bob was still `queued`, and a loopback Hub GET in the same
+minute hit its 60-second deadline.
+
+Mechanism, proven by a probe: with both daemons running and no other traffic,
+one failed `POST /v1/messages` left the message queued for over 40 seconds. A
+retryable failure kept the copy queued, and only connect, the 90-second Hub
+ping or unrelated traffic flushed it again. Under CI load a transient failure
+then outlasts the tests' 15–30-second waits; for people, one Hub error could
+hold a message up to 90 seconds in a quiet chat. Owner decision: retry soon.
+`retrySendSoon` (backgroundsend.go) arms one wake 1 s after a transient
+failure, doubling to 45 s while sends keep failing; a handover resets it.
+Nothing is armed for a copy held by its own gate, for update-required or for a
+stopping daemon. The wake is the running daemon's own sync (`kickNow`), so
+there is no request without a daemon. `TestQueuedSendTransientFailureRetriesSoon`
+delivers in about 3.5 s (the probe on the old code: still queued after 40 s);
+`TestRetrySendSoonOnlyForTransientFailures` pins the gate and the backoff. The
+eight tests that inject POST failures pass under `-race`. Local stress did not
+reproduce the CI failures (96 of 96 runs of the three group tests passed under
+`-race` at load average 16). `groupTurnsFixture` now also logs, for each queued
+group copy on failure, its age, error text and the delivery gate evaluated
+read only, so a held copy shows whether its gate or a failed send kept it.
+
 ## Gallery skins update automatically — unreleased, October 31
 
 Owner request: installed skins update with the app. Gallery installs live in

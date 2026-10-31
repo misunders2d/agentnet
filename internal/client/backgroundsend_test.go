@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"sync"
 	"testing"
@@ -173,6 +174,74 @@ func TestQueuedSendLostReceiptRetryIsOneDelivery(t *testing.T) {
 		t.Fatal(n)
 	}
 }
+
+// One transient send failure with no other traffic: the running daemon tries
+// again within seconds, not at the next 90-second Hub ping (owner decision,
+// October 31). A handover resets the wait.
+func TestQueuedSendTransientFailureRetriesSoon(t *testing.T) {
+	w, conv := queuedDMWorld(t)
+	runAgent(t, w.alice)
+	eventually(t, "connect-time sync settled", func() bool {
+		w.alice.posting.Lock()
+		defer w.alice.posting.Unlock()
+		return w.alice.posting.done == nil
+	})
+	f := injectFaults(w.alice)
+	f.add("POST", "/v1/messages", 1, false)
+	// Not queuedTurn: its one-second return bound is another test's, and this
+	// one runs Alice's daemon beside it.
+	sent, err := w.alice.SendConv(WithQueuedSend(tctx(t), ""), conv, ConvOutgoing{Body: "after one failure"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "delivered by the soon retry", func() bool { return inboxCount(t, w.bob, "id=?", sent.ID) == 1 })
+	// Bob can store it before Alice reads her POST's answer.
+	eventually(t, "backoff reset after the handover", func() bool {
+		w.alice.sendRetry.Lock()
+		defer w.alice.sendRetry.Unlock()
+		return w.alice.sendRetry.wait == 0
+	})
+}
+
+// Only a transient failure arms a retry; the wait doubles up to its cap, and
+// a closed agent arms nothing.
+func TestRetrySendSoonOnlyForTransientFailures(t *testing.T) {
+	a := &Agent{}
+	busy := &HubError{Status: 503}
+	a.retrySendSoon(&HubError{Status: 426, Code: codeUpdateRequired})
+	a.retrySendSoon(context.Canceled)
+	a.retrySendSoon(errors.New("a check that fails the same way again"))
+	a.retrySendSoon(&HubError{Status: 400})
+	if a.sendRetry.timer != nil {
+		t.Fatal("a non-transient failure, a refusal until update or a stopping daemon armed a retry")
+	}
+	for _, want := range []time.Duration{2 * time.Second, 4 * time.Second} {
+		a.retrySendSoon(busy)
+		a.retrySendSoon(busy) // one pending wake covers both
+		if a.sendRetry.timer == nil || a.sendRetry.wait != want {
+			t.Fatalf("wait %s, want %s", a.sendRetry.wait, want)
+		}
+		a.sendRetry.timer.Stop()
+		a.sendRetry.timer = nil
+	}
+	a.sendRetry.wait = sendRetryMax
+	a.retrySendSoon(busy)
+	a.sendRetry.timer.Stop()
+	a.sendRetry.timer = nil
+	if a.sendRetry.wait != sendRetryMax {
+		t.Fatalf("cap exceeded: %s", a.sendRetry.wait)
+	}
+	a.sendRetry.succeeded()
+	if a.sendRetry.wait != 0 {
+		t.Fatal("success kept the backoff")
+	}
+	a.stopBackgroundPosts()
+	a.retrySendSoon(busy)
+	if a.sendRetry.timer != nil {
+		t.Fatal("a closed agent armed a retry")
+	}
+}
+
 func TestQueuedSendCloseWaitsForInFlight(t *testing.T) {
 	w, conv := queuedDMWorld(t)
 	p := pausePosts(w.alice)
