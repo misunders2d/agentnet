@@ -27,7 +27,19 @@ test's first poll, a wait for exactly `invited` never matches. Locally
 `active`, and `accept-agent` resends this device's own accept. Result: 0/25
 failures, with 6 runs where the accept came first.
 
-Same run, recorded only: Windows client `TestAgyNamedGroupResponder` (the
+CI 41226877641 (8447634e): the CLI journey passed on Linux and macOS. It
+failed only on timing elsewhere: Windows client
+`TestTopicOrganizationReviewedGroup` (one send took 7 s, so a 10 s budget
+ended at 11.2 s; one copy to bob sat `queued` with no error), Windows client
+`TestGroupHistorySelectedTextAdmission` (51 s, group copies held
+`proof_pending`) and macOS `TestMessagePopupsImmediateRendered` (reactions
+popup missed its 500 ms frame). No run has been green since 1df69c08: 9 in a
+row, some from this session's own test slips (fixed). The stalled copies show
+no error, so the send retry (d5f5b25b) never ran for them; it is not
+implicated. Copies that sit `queued` with no attempt behind a slow Hub
+request are the open lead.
+
+CI 41222025163, recorded only: Windows client `TestAgyNamedGroupResponder` (the
 agy hub `Get` exceeded its 10 s deadline; Admin's copies to carol sat
 `queued` 8.5 s with no gate and no error, so they were never attempted) and
 Windows native `TestAttentionReplyPendingRendered` (19/20 cases passed; the
