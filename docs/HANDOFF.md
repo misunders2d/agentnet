@@ -74,7 +74,7 @@ old inert history" (open finding below, reproduced on clean `5a7da455`) and
 Windows `TestGroupHistoryWitnessRetiredOwnEndForwarder` (fixture stall
 below).
 
-## Invited agent on an offline or outdated device — unreleased, October 31
+## Invited agent on an offline or outdated device — v0.10.2, October 31
 
 Owner phone report on v0.10.1: own Claude stuck "Joining on
 admin/linux-laptop…". That laptop ran no AgentNet daemon and was on v0.10.0,
@@ -128,7 +128,7 @@ attempts each saw a daemon write). internal/client and internal/ui tests
 already retry exactly that mutation-free refusal; the mobile test now does
 too.
 
-## A transiently failed send waited for the next ping — unreleased, October 31
+## A transiently failed send waited for the next ping — v0.10.2, October 31
 
 CI runs 41132521965 and 41181824394 (both green on rerun) failed three tests
 waiting on group delivery: Windows `TestP6FixCapturedTurnsOnlyAndEpochFence` and
@@ -247,7 +247,7 @@ just after the 30 s wait, nothing was held or undelivered on any device: the
 stall had cleared by then. It now always logs a count line per device, so an
 empty snapshot is distinguishable from one that did not run.
 
-## Gallery skins update automatically — unreleased, October 31
+## Gallery skins update automatically — v0.10.2, October 31
 
 Owner request: installed skins update with the app. Gallery installs live in
 each browser's storage (desktop app, Android, relay page), and nothing updated
@@ -280,7 +280,7 @@ and `TestP3ReviewSkinsRendered` fail here with or without the change: they
 need Playwright's own browser build, not installed on this laptop. The skins
 gate against this change is not run yet.
 
-## Closed app reported as an update refusal — unreleased, October 30
+## Closed app reported as an update refusal — v0.10.2, October 30
 
 Found on the Zenbook after v0.10.1 went out: its app-managed daemon stayed at
 v0.10.0 and reported "app update refused (404): 404 page not found". With the
@@ -385,7 +385,7 @@ use the app's queued invitation. Under `-race`, all three pass, and
 change at normal load (94 s, 98 s). Its one failure at load 18 was later, in
 the linked phone's history step.
 
-## Own-device history stuck behind a deleted message — unreleased, October 30
+## Own-device history stuck behind a deleted message — v0.10.1, October 30
 
 Since 2026-10-20 13:38 the Zenbook daemon logged "copying direct history:
 history logical source differs from its queued copy" on every pass (29,949
@@ -423,7 +423,7 @@ conflicts and would block the same way. Not observed here. The amplification
 is also unchanged: the first page error for any device still ends
 `syncDeviceHistory` for every device until the item is resolved.
 
-## Daemon CPU: presence-only member lists re-swept own-device history — unreleased, October 30
+## Daemon CPU: presence-only member lists re-swept own-device history — v0.10.1, October 30
 
 The live Zenbook daemon (v0.10.0) ran at about 110–120% CPU continuously. It
 read 400–1500 MB/s from SQLite's page cache (168 MB `agent.db`, so about 2.5
@@ -534,7 +534,7 @@ systems and the Hub container. Remaining release gates (skins gate, latency
 fixtures, Android workloads, physical devices) were not run; no release is
 authorized. MEL-698 stays unresolved.
 
-## Group invitations return before delivery — unreleased, October 30
+## Group invitations return before delivery — v0.10.1, October 30
 
 Cause of the four room/guest invitation timeouts in the CI triage below. A
 request trace of the derived-history parent invitation (`-race`, local Linux)
@@ -594,7 +594,7 @@ in `TestDaemonStartReviewsEndedSessionRequests`; both fail on the old code.
 The live item (3d63852259367e33fee3e9c4028781a2 on the Linux laptop) is still
 waiting; `agentnet resolve ID` there closes it today.
 
-## MEL-698 startup retry reverted — unreleased, October 30
+## MEL-698 startup retry reverted — v0.10.1, October 30
 
 Owner asked for Linear verification and a few fixes without a release. A
 status or update check takes `daemon.lock` for an instant; a daemon starting
