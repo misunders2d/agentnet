@@ -36,8 +36,11 @@ func runRoom(ctx context.Context, a *client.Agent, args []string, out io.Writer)
 		if len(fs.Args()) == 0 || !*fresh && *topic == "" {
 			return errors.New("usage: room organize --topic ID | --new [--title TITLE] MESSAGE_LID...")
 		}
-		main:=*topic=="main";if main{*topic=""}
-		sent, err := a.OrganizeAgentTopic(ctx, cause, attempt, client.TopicOrganizationRequest{IDs: fs.Args(), Topic: *topic, New: *fresh, Title: *title,Main:main})
+		main := *topic == "main"
+		if main {
+			*topic = ""
+		}
+		sent, err := a.OrganizeAgentTopic(ctx, cause, attempt, client.TopicOrganizationRequest{IDs: fs.Args(), Topic: *topic, New: *fresh, Title: *title, Main: main})
 		if err != nil {
 			return err
 		}
