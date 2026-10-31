@@ -606,6 +606,7 @@ func (a *Agent) InviteNamedAgent(ctx context.Context, conv, hostAddress, agentID
 	if !protocol.ValidID(agentID) {
 		return ParticipationInfo{}, ErrUnknownAgent
 	}
+	ctx = withRoundTrips(ctx) // the catalog's key check is the invitation's
 	records, err := a.AgentCatalog(ctx, hostAddress)
 	if err != nil {
 		return ParticipationInfo{}, err
@@ -625,6 +626,7 @@ func (a *Agent) InviteHuman(ctx context.Context, conv, hostAddress string, grant
 	return a.inviteParticipation(ctx, conv, hostAddress, "", grant, nil, note, protocol.RoleHuman)
 }
 func (a *Agent) inviteParticipation(ctx context.Context, conv, hostAddress, agentID string, grant, taskKeys []string, note, role string, topics ...*string) (ParticipationInfo, error) {
+	ctx = withRoundTrips(ctx)
 	var topic *string
 	if len(topics) > 0 {
 		topic = topics[0]

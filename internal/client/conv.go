@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -254,11 +255,29 @@ func (a *Agent) convSync(ctx context.Context) {
 	}
 }
 
-// relayFeatures asks the Hub what it supports.
+// relayFeatures asks the Hub what it supports: once per connection
+// (relayCache), or without a stream once per action (roundtrips.go).
 func (a *Agent) relayFeatures(ctx context.Context) ([]string, error) {
-	var v protocol.VersionInfo
-	err := a.hub.do(ctx, "GET", "/v1/version", nil, &v)
-	return v.Features, err
+	c := &a.relay
+	c.mu.Lock()
+	feats, known, gen := c.feats, c.known, c.gen
+	c.mu.Unlock()
+	if known {
+		return slices.Clone(feats), nil
+	}
+	feats, err := askOnce(ctx, func(rt *roundTrips) *map[string]*roundTrip[[]string] { return &rt.feats }, "", func() ([]string, error) {
+		var v protocol.VersionInfo
+		err := a.hub.do(ctx, "GET", "/v1/version", nil, &v)
+		if err == nil {
+			c.mu.Lock()
+			if c.active && c.gen == gen { // the same relay until the stream drops (relayCache)
+				c.feats, c.known = slices.Clone(v.Features), true
+			}
+			c.mu.Unlock()
+		}
+		return v.Features, err
+	})
+	return slices.Clone(feats), err
 }
 
 // ownCaps is what a session of this program reads (sorted, as the relay
@@ -299,6 +318,11 @@ func (a *Agent) putCaps(ctx context.Context, session string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	caps, agent := a.advertisedCaps()
+	published := session + "\x00" + strings.Join(caps, ",")
+	if a.relay.published(&a.relay.caps, published) {
+		return nil // the relay keeps this session's record; a newer ts would only wake every device
+	}
+	gen := a.relay.generation()
 	p.lastTS = max(time.Now().Unix(), p.lastTS+1)
 	rec := protocol.CapsRecord{Address: a.Address, Session: session, Caps: caps, TS: p.lastTS}
 	rec.Sign(a.id.Sign)
@@ -309,6 +333,7 @@ func (a *Agent) putCaps(ctx context.Context, session string) error {
 		return err
 	}
 	p.published, p.agent = true, agent
+	a.relay.keep(&a.relay.caps, published, gen)
 	return nil
 }
 
@@ -684,6 +709,7 @@ type outCopy struct {
 // to this person's own devices are replicas (history: never executed),
 // except the one to a request's execution target.
 func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (ConvSent, error) {
+	ctx = withRoundTrips(ctx)
 	if m.SendGroup == "" {
 		m.SendGroup, _ = ctx.Value(sendGroupKey{}).(string)
 	}
@@ -1123,10 +1149,18 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 	} else {
 		sent.ID = local.ID
 	}
+	var queued []envelope.Envelope
+	for _, c := range copies {
+		if c.state == stateQueued {
+			queued = append(queued, c.env)
+		}
+	}
+	results, errs := a.deliverEach(ctx, queued)
 	for _, c := range copies {
 		cp := ConvCopy{ID: c.env.ID, To: c.in.To, State: c.state, Detail: c.why}
 		if c.state == stateQueued {
-			res, err := a.deliver(ctx, c.env, nil)
+			res, err := results[0], errs[0]
+			results, errs = results[1:], errs[1:]
 			switch {
 			case err == nil:
 				cp.State, cp.Detail = res.State, res.Detail

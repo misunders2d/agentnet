@@ -19,6 +19,7 @@ func sameParticipationTopic(a, b *string) bool {
 // InviteAgentInScope preserves the legacy whole-chat API while the UI supplies
 // an explicit stable topic. A different scope always creates a distinct PID.
 func (a *Agent) InviteAgentInScope(ctx context.Context, conv, host, agent string, grant, tasks []string, note string, topic *string) (ParticipationInfo, error) {
+	ctx = withRoundTrips(ctx) // the catalog's key check is the invitation's
 	if agent != "" {
 		records, err := a.AgentCatalog(ctx, host)
 		if err != nil {

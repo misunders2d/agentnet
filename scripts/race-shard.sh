@@ -46,6 +46,8 @@ run_partition() {
 				if ($0=="TestSharedTopicExactGuestLiveAndHistorical") part=17
 				if ($0=="TestConversationResourcesMemberAgentContext") part=3
 				if ($0=="TestSelfConsentLinkedDevices") part=4
+				if ($0=="TestGroupSendAsksRostersTogether") part=10
+				if ($0=="TestGroupInvitationAsksEachCheckOnce") part=17
 			}
 			if (client && n==12) {
 				if ($0=="TestGroupInteractionNamedMemberAndVisitor") part=1

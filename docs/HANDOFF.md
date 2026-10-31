@@ -1,5 +1,36 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+## Relay checks once per action, together — unreleased, October 31
+
+Owner chose "fix lag, then release". The CI timing failures and the felt
+delay share one cause: sends and invitations asked the relay the same
+checks again and one after another. Each device key, person roster, device
+profile and the relay's features is now asked once per action
+(`internal/client/roundtrips.go`), members' checks go together, and an
+inline send's copies to different devices go out at once (`deliverEach`,
+four slots as the outbox). While connected, features are read once and an
+unchanged caps record or agent catalog is not republished
+(`relayCache`, `profilecache.go`). Decision and numbers: docs/DECISIONS.md
+2026-10-31. No protocol change; no cross-action cache.
+
+Slow-relay knob for tests: `AGENTNET_TEST_RELAY_DELAY=100ms` (fixed) or
+`~600ms` (random up to). `testhub.Proc` also records `Requests()`,
+`Arrivals()` and takes `SetHold` (hub `Config.Wrap`, tests only).
+Regression tests at the end of `internal/client/workspaces_test.go`
+(kept last so race partitions do not shift; the two fixture tests are moved
+to light partitions 10 and 17 in `scripts/race-shard.sh`):
+`TestRoundTripsAskOnce`, `TestRelayCacheOnOneConnection`,
+`TestGroupSendAsksRostersTogether`, `TestGroupInvitationAsksEachCheckOnce`;
+the last three fail with the prefetch, the unchanged-caps skip or the
+invitation's memo removed. Copies to different devices now arrive in any
+order: `TestGroupHistoryWitnessGuestDerivedParent` waits for the executor's
+own copy (it had relied on one-by-one sends). Local non-race client sweep
+(4 parallel parts, load ~28): 1483 pass; that test and
+`TestSelfConsentBeforeFanout` failed and are fixed (the latter by not
+prefetching before the invitation is stored). Under that load the witness
+test once also failed at "public scope is not held here yet"; 8/8 on both
+HEAD and this tree at equal load afterwards. Recorded as a load flake.
+
 ## Invited agent on an offline or outdated device — unreleased, October 31
 
 Owner phone report on v0.10.1: own Claude stuck "Joining on

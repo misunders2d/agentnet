@@ -81,6 +81,7 @@ func (a *Agent) MemberView() MemberView {
 // response headers: a Hub that lists members says so there and sends the
 // list next.
 func (a *Agent) membersConnected(h http.Header) {
+	a.relay.reset(true)
 	a.members.mu.Lock()
 	a.members.view.Current = false
 	if h.Get(protocol.MembersHeader) == "1" {
@@ -96,6 +97,7 @@ func (a *Agent) membersConnected(h http.Header) {
 // last list is no longer current.
 func (a *Agent) membersDisconnected() {
 	a.profiles.reset(false)
+	a.relay.reset(false)
 	a.members.mu.Lock()
 	a.members.view.Current = false
 	a.members.mu.Unlock()

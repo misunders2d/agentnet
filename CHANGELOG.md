@@ -6,6 +6,13 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+- Send and invite faster over a distant relay: each safety check (device key,
+  person roster, device profile, relay features) is asked once per action and
+  members' checks go together; copies to different devices go out at once.
+  An unchanged capability record or agent catalog is not republished while
+  connected. At 100 ms per request a group message reaches the relay in
+  0.34 s instead of 1.14 s, an invitation returns in 0.5 s instead of 3 s
+  and reaches the agent's device in about 2.2 s instead of 4.1 s.
 - Say why an invited agent has not joined: its device is offline (it joins
   when the device is back) or its AgentNet is behind the relay's release
   (update it there), instead of a plain "Joining on …".

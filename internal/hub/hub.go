@@ -73,6 +73,10 @@ type Config struct {
 	// No wildcard (browserorigins.go, static/workspaces_origins.go).
 	BrowserOrigins []string
 
+	// Wrap, for tests only, wraps the handler of every request (testhub's
+	// request count and slow-relay delay). Nil serves the routes as they are.
+	Wrap func(http.Handler) http.Handler
+
 	// PushHosts are push services this Hub sends Web Push to besides
 	// protocol.DefaultPushHosts (each a host name; a subscription's host
 	// must be one of them or a subdomain of one).
@@ -320,8 +324,12 @@ func (h *Hub) loadOrCreateCert(host string) error {
 
 // Serve serves HTTPS on ln until ctx is cancelled.
 func (h *Hub) Serve(ctx context.Context, ln net.Listener) error {
+	handler := h.routes()
+	if h.cfg.Wrap != nil {
+		handler = h.cfg.Wrap(handler)
+	}
 	srv := &http.Server{
-		Handler:           h.routes(),
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 		TLSConfig:         &tls.Config{Certificates: []tls.Certificate{h.cert}, MinVersion: tls.VersionTLS13},

@@ -88,6 +88,7 @@ type Agent struct {
 	listed           listedCache                // rosters the Hub lists for persons not pinned here (persons.go)
 	members          memberState                // the Hub's member list from the push stream (members.go)
 	profiles         profileCache               // device profiles until the next member list (profilecache.go)
+	relay            relayCache                 // relay features and own publications while the stream is open (profilecache.go)
 	session          string                     // this run's session id (Run); "" outside Run
 	convWork         convWork                   // conversation upkeep due on the next sync (conv.go)
 	capsPub          capsPublisher              // this run's capability records (conv.go)
@@ -332,7 +333,15 @@ func (a *Agent) Close() error {
 // Self returns this agent's own directory entry.
 func (a *Agent) Self() identity.Public { return a.id.Public(a.Address) }
 
+// directory reads the Hub's verified entry for address, once per action
+// (roundtrips.go).
 func (a *Agent) directory(ctx context.Context, address string) (protocol.DirectoryEntry, error) {
+	return askOnce(ctx, func(rt *roundTrips) *map[string]*roundTrip[protocol.DirectoryEntry] { return &rt.dir }, address, func() (protocol.DirectoryEntry, error) {
+		return a.askDirectory(ctx, address)
+	})
+}
+
+func (a *Agent) askDirectory(ctx context.Context, address string) (protocol.DirectoryEntry, error) {
 	var e protocol.DirectoryEntry
 	label, name, err := protocol.SplitAddress(address)
 	if err != nil {
@@ -710,6 +719,7 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 		}
 	}
 	if required != "" {
+		askAhead(ctx, func() { a.peerProfile(ctx, env.To) }) // readerCheck's, asked with the key
 		key, err := a.sendKey(ctx, env.To)
 		if err == nil && (n.followup || n.proposal || required == protocol.CapAgentReaction || required == protocol.CapControl || required == protocol.CapContinuation || required == protocol.CapOwnSyncV3) && capturedFP != "" && key.Fingerprint() != capturedFP {
 			// Sealed for the reader key captured at enqueue: never for its replacement.
@@ -929,7 +939,36 @@ func (a *Agent) flushRecipients(ctx context.Context, filesOnly bool) error {
 	}
 }
 
+// deliverEach delivers the copies of one send: those to different devices
+// at once, in the four network slots flushRecipients shares, each device's
+// in order. Results are by index.
+func (a *Agent) deliverEach(ctx context.Context, envs []envelope.Envelope) ([]SendResult, []error) {
+	res, errs := make([]SendResult, len(envs)), make([]error, len(envs))
+	byDevice := map[string][]int{}
+	var devices []string
+	for i, env := range envs {
+		if len(byDevice[env.To]) == 0 {
+			devices = append(devices, env.To)
+		}
+		byDevice[env.To] = append(byDevice[env.To], i)
+	}
+	slots := make(chan struct{}, 4)
+	var wg sync.WaitGroup
+	for _, to := range devices {
+		wg.Go(func() {
+			slots <- struct{}{}
+			defer func() { <-slots }()
+			for _, i := range byDevice[to] {
+				res[i], errs[i] = a.deliver(ctx, envs[i], nil)
+			}
+		})
+	}
+	wg.Wait()
+	return res, errs
+}
+
 func (a *Agent) flushCopies(ctx context.Context, envs []envelope.Envelope, syncOnly bool) error {
+	ctx = withRoundTrips(ctx) // one batch asks the Hub each check once
 	blocked := map[string]bool{}
 	// Readable turns share a FIFO. Controls, history, context carriers and
 	// private receiver operations pass their existing gates independently.

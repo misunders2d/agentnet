@@ -116,18 +116,24 @@ func groupParticipationHistoryAfterReadmission(t *testing.T, sharedOriginal bool
 	if err != nil {
 		t.Fatal(err)
 	}
-	var originalID string
+	var originalID, executorID string
 	for _, copy := range ask.Copies {
 		if copy.To == source.Address {
 			originalID = copy.ID
 		}
+		if copy.To == executor.Address {
+			executorID = copy.ID
+		}
 	}
-	if originalID == "" {
-		t.Fatal("own replica was not addressed to source")
+	if originalID == "" || executorID == "" {
+		t.Fatal("own replica was not addressed to source, or the question to its executor")
 	}
 	eventually(t, "source stores exact original replica", func() bool {
 		return inboxCount(t, source, `id=? AND replica=1`, originalID) == 1
 	})
+	// The executor answers a question it holds; its copy may arrive after
+	// the replica, as copies to different devices go out together.
+	eventually(t, "executor stores the question", func() bool { return inboxCount(t, executor, `id=?`, executorID) == 1 })
 	filePath := filepath.Join(t.TempDir(), "history.txt")
 	if err = os.WriteFile(filePath, []byte("EXACT_OLD_HISTORY_BYTES"), 0600); err != nil {
 		t.Fatal(err)

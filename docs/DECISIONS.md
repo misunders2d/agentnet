@@ -1,5 +1,55 @@
 # AgentNet Revival — Architectural Decision Records & Linear Roadmap
 
+## 2026-10-31 — each relay check once per action, asked together
+
+Owner decision ("fix lag, then release"): keep every safety check a send or
+an invitation makes, but ask the relay each one once per action and in
+parallel. Measured with the opt-in slow-relay knob
+(`AGENTNET_TEST_RELAY_DELAY=100ms`): a three-person group message made nine
+lookups one after another before it was queued; an agent's invitation into
+that group made about seventy requests, most in a row (7.7 s inline).
+
+- One action (a send, an invitation, one outbox batch) asks each device key,
+  person roster, device profile and the relay's features once
+  (`internal/client/roundtrips.go`). Nothing is kept past the action; an
+  error is asked again, except an unreachable Hub, which an action waits for
+  once. Revocation, key-change and roster checks still run on every action.
+- A group send or a participation send asks every member's roster, then
+  every member device's key and profile, together; a host's key, profile
+  and agent catalog are asked together. An inline send hands its copies to
+  different devices at once in the four slots the outbox already uses; each
+  device keeps its order.
+- While the push stream is open the relay's features are read once per
+  connection, and an unchanged capability record or agent catalog is not
+  published again on it (a newer timestamp only woke every device). A new
+  connection reads and publishes afresh.
+- No cross-action cache and no time-to-live on any check: that would change
+  what a check proves and needs a separate owner decision.
+
+Counterpart: Telegram's tdlib sends a message as one request against peers
+it already knows, kept current by its update stream. AgentNet keeps its
+per-action freshness checks (no change to what they prove); this change only
+removes repeats and serial waits. tdlib source not re-inspected for this
+change.
+
+Result at 100 ms per request (two runs each, `unshare -rn`, Zenbook):
+group message to custody 1.14 s → 0.33–0.34 s; app (queued) invitation
+returns in 0.48–0.53 s instead of 3.0 s and reaches the host in 2.1–2.4 s
+instead of 4.1 s (requests 72 → 47); CLI (inline) invitation 7.7 s →
+1.6 s. The 2 s arrival goal is narrowly missed: per-device encrypted file
+uploads (three requests each) and the host's own checks remain serial.
+At a random 0–600 ms per request `TestAgyNamedGroupResponder` and
+`TestTopicOrganizationReviewedGroup` passed 8/8 (before: the first failed
+every run on its 10 s budget).
+
+Beyond the literal approval, stated for the owner: the relay's features
+and the unchanged-publication skip are kept per stream connection, across
+actions (they never cover a peer's key, revocation or roster); and within
+an action an answer is reused for at most five seconds, then asked again.
+Tests reach the Hub through a new nil-by-default `hub.Config.Wrap` hook.
+The invitation's first request still comes after its local decision is
+stored (`TestSelfConsentBeforeFanout`): nothing is prefetched before that.
+
 ## 2026-10-31 — gallery skin updates keep trust; failed sends retry soon
 
 Owner decisions. An installed gallery skin updates itself on each open; an

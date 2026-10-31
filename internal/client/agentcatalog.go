@@ -271,14 +271,34 @@ func (a *Agent) PublishAgentCatalog(ctx context.Context) error {
 			records[i].Harness, records[i].HarnessSig = "", nil
 		}
 	}
-	return a.hub.do(ctx, "PUT", "/v1/agent-catalog", records, nil)
+	raw, err := json.Marshal(records)
+	if err != nil {
+		return err
+	}
+	if a.relay.published(&a.relay.catalog, string(raw)) {
+		return nil // unchanged on this connection: the relay keeps it (relayCache)
+	}
+	gen := a.relay.generation()
+	if err = a.hub.do(ctx, "PUT", "/v1/agent-catalog", records, nil); err != nil {
+		return err
+	}
+	a.relay.keep(&a.relay.catalog, string(raw), gen)
+	return nil
 }
+
+// AgentCatalog returns host's verified agent catalog. Its key, profile and
+// catalog are asked together, then checked in that order.
 func (a *Agent) AgentCatalog(ctx context.Context, host string) ([]protocol.AgentRecord, error) {
-	key, err := a.sendKey(ctx, host)
+	label, name, err := protocol.SplitAddress(host)
 	if err != nil {
 		return nil, err
 	}
-	label, name, err := protocol.SplitAddress(host)
+	ctx = withRoundTrips(ctx)
+	askAhead(ctx, func() { a.peerProfile(ctx, host) })
+	var records []protocol.AgentRecord
+	fetched := make(chan error, 1)
+	go func() { fetched <- a.hub.do(ctx, "GET", "/v1/agents/"+label+"/"+name+"/agent-catalog", nil, &records) }()
+	key, err := a.sendKey(ctx, host)
 	if err != nil {
 		return nil, err
 	}
@@ -289,8 +309,7 @@ func (a *Agent) AgentCatalog(ctx context.Context, host string) ([]protocol.Agent
 	if !profile.Supports(host, key.SignKey, protocol.CapAgentIdentity) {
 		return nil, errors.New("host cannot select stable agents yet; update all its active AgentNet sessions")
 	}
-	var records []protocol.AgentRecord
-	if err = a.hub.do(ctx, "GET", "/v1/agents/"+label+"/"+name+"/agent-catalog", nil, &records); err != nil {
+	if err = <-fetched; err != nil {
 		return nil, err
 	}
 	if len(records) > protocol.MaxAgentCatalog {

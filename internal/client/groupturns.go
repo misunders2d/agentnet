@@ -207,6 +207,12 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 	// go to the devices pinned here and wait, as a DM's do: each is released
 	// only once its recipient's current record shows it may read it, and the
 	// current group state is checked again when it is sent.
+	ctx = withRoundTrips(ctx)
+	persons := make([]string, 0, len(packet.State.Members))
+	for _, member := range packet.State.Members {
+		persons = append(persons, member.Person)
+	}
+	a.prefetchGroup(ctx, persons)
 	waiting := ""
 	for _, member := range packet.State.Members {
 		if _, err = a.refreshPerson(ctx, member.Person, false); hubUnreachable(err) {
@@ -407,10 +413,18 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 	a.kickNow()
 	defer notifyDaemon(a.home)
 	sent := ConvSent{ID: copies[0].env.ID, LID: lid, State: protocol.StateDelivered}
+	var sending []envelope.Envelope
+	for _, copy := range copies {
+		if copy.state != stateConvWaiting { // released by releaseConv, never sent from here
+			sending = append(sending, copy.env)
+		}
+	}
+	results, errs := a.deliverEach(ctx, sending)
 	for _, copy := range copies {
 		cp := ConvCopy{ID: copy.env.ID, To: copy.env.To, State: copy.state, Detail: copy.why}
-		if copy.state != stateConvWaiting { // released by releaseConv, never sent from here
-			r, e := a.deliver(ctx, copy.env, nil)
+		if copy.state != stateConvWaiting {
+			r, e := results[0], errs[0]
+			results, errs = results[1:], errs[1:]
 			if e != nil {
 				cp.Detail = e.Error()
 			} else {

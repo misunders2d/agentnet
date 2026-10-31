@@ -436,8 +436,15 @@ func (a *Agent) fetchChain(ctx context.Context, person string, after int64) ([][
 	}
 }
 
-// refreshPerson pins the steps of person newer than what is pinned here.
+// refreshPerson pins the steps of person newer than what is pinned here,
+// asking the Hub once per action (roundtrips.go).
 func (a *Agent) refreshPerson(ctx context.Context, person string, adopt bool) (pinResult, error) {
+	return askOnce(ctx, func(rt *roundTrips) *map[string]*roundTrip[pinResult] { return &rt.persons }, fmt.Sprint(person, "\x00", adopt), func() (pinResult, error) {
+		return a.pinNewerSteps(ctx, person, adopt)
+	})
+}
+
+func (a *Agent) pinNewerSteps(ctx context.Context, person string, adopt bool) (pinResult, error) {
 	after := int64(-1)
 	if p, ok, err := a.store.personByID(person); err != nil {
 		return pinResult{}, err

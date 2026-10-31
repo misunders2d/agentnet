@@ -526,6 +526,8 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 			ids = append(ids, id)
 		}
 	}
+	ctx = withRoundTrips(ctx)
+	a.prefetchGroup(ctx, ids)
 	for _, id := range ids {
 		if _, err := a.refreshPerson(ctx, id, false); err != nil {
 			return ConvSent{}, err
@@ -972,10 +974,18 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 	}
 	defer notifyDaemon(a.home)
 	sent := ConvSent{ID: copies[0].env.ID, LID: in.LID, State: protocol.StateDelivered}
+	var queued []envelope.Envelope
+	for _, c := range copies {
+		if c.state == stateQueued {
+			queued = append(queued, c.env)
+		}
+	}
+	results, errs := a.deliverEach(ctx, queued)
 	for _, c := range copies {
 		cp := ConvCopy{ID: c.env.ID, To: c.in.To, State: c.state, Detail: c.why}
 		if c.state == stateQueued {
-			result, err := a.deliver(ctx, c.env, nil)
+			result, err := results[0], errs[0]
+			results, errs = results[1:], errs[1:]
 			if err == nil {
 				cp.State, cp.Detail = result.State, result.Detail
 			} else if retryable(err) {

@@ -338,9 +338,14 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 	if request {
 		sent.ID = in.LID // the exact executable copy, independent of audience order
 	}
-	for _, c := range copies {
+	envs := make([]envelope.Envelope, len(copies))
+	for i, c := range copies {
+		envs[i] = c.env
+	}
+	results, errs := a.deliverEach(ctx, envs)
+	for i, c := range copies {
 		cp := ConvCopy{ID: c.env.ID, To: c.env.To, State: c.state}
-		result, err := a.deliver(ctx, c.env, nil)
+		result, err := results[i], errs[i]
 		if err == nil {
 			cp.State, cp.Detail = result.State, result.Detail
 		} else {
