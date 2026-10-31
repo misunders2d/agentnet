@@ -16,6 +16,13 @@ write); fixed, run locally only. A full non-race `go test ./internal/ui`
 it passed 3/3 alone and does not touch the changed code. Load flake, not
 yet investigated.
 
+CI 41218773896 (a6472b50): the macOS CLI journey passed; macOS failed
+`mobile/core` `TestPhoneLinkedStateDismissesExactNotices` instead: its
+`MarkUnread` got "attention: this chat changed; try again" (three snapshot
+attempts each saw a daemon write). internal/client and internal/ui tests
+already retry exactly that mutation-free refusal; the mobile test now does
+too.
+
 ## A transiently failed send waited for the next ping — unreleased, October 31
 
 CI runs 41132521965 and 41181824394 (both green on rerun) failed three tests

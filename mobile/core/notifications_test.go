@@ -419,16 +419,27 @@ func TestPhoneLinkedStateDismissesExactNotices(t *testing.T) {
 	}
 	// A read with an obsolete deliberate-unread generation succeeds only for
 	// ordinary read state. Its native notice must remain visible.
-	if err = app.session.a.MarkUnread(newPhone.ID, []string{newPhone.ID}); err != nil {
-		t.Fatal(err)
+	// The running daemons may commit between the canonical scope and the write
+	// transaction; only that mutation-free refusal retries, as in
+	// internal/client and internal/ui.
+	markUnread := func() {
+		waitMobile(t, "deliberate unread obtains a current snapshot", func() bool {
+			err := app.session.a.MarkUnread(newPhone.ID, []string{newPhone.ID})
+			if err != nil && err.Error() == "attention: this chat changed; try again" {
+				return false
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			return true
+		})
 	}
+	markUnread()
 	observed := message(app.session.a, "newer unseen notice").Attention
 	if observed == nil {
 		t.Fatal("missing deliberate-unread generation")
 	}
-	if err = app.session.a.MarkUnread(newPhone.ID, []string{newPhone.ID}); err != nil {
-		t.Fatal(err)
-	}
+	markUnread()
 	if _, err = provider.Act(ui.Action{Do: ui.DoRead, IDs: []string{newPhone.ID}, Attention: map[string]protocol.AttentionGeneration{newPhone.ID: *observed}}); err != nil {
 		t.Fatal(err)
 	}
