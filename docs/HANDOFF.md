@@ -40,8 +40,11 @@ load 10–18: list rebuild 4.2–5.2 s → 1.8–2.2 s, the 641-message chat 640
 267 ms, the next 476 → 196 ms. Device-thread queries on `conv IS NULL` now
 use the new index too; timed equal to `outbox_conv_lid`. Remaining per
 rebuild (~1.9 s): `dmOverview` ~0.8 s (whole chats loaded for one row),
-`topicOverview` ~0.8 s over 962 threads, `HistoryProgress` ~0.2 s. Paging
-is next.
+`topicOverview` ~0.8 s over 962 threads, `HistoryProgress` ~0.2 s. Owner
+chose "Paging next" over lean list rows. Paging research (Telegram source and
+the measured ceiling) is in docs/INTERACTION_COVERAGE.md "Chat open and
+history paging": Comic already mounts 24/80 groups, fetch paging would cut
+only ~25% of a 0.24–0.36 s open; asked owner whether to continue.
 
 ## Owner daemon at a full core on v0.10.2 — unreleased, November 1
 

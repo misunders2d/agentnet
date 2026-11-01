@@ -1,5 +1,34 @@
 # Next-release interaction coverage and responsiveness
 
+## Chat open and history paging — research, November 1
+
+Opening a chat (owner: "investigate why opening a chat is slow"). No
+interaction changed yet; the two `outbox` indexes (3b5aa442, 72d5419c) are
+storage-only. Counterpart inspected in source:
+
+- Telegram Desktop `5ff61571`, `history/history_widget.cpp`: lines 229–231
+  `kMessagesPerPageFirst = 30`, `kMessagesPerPage = 50`,
+  `kPreloadHeightsCount = 3`; `firstLoadMessages` (5027) loads 30 at the end,
+  or 50 around the first unread or a jumped-to message (offset −25);
+  `loadMessages` (5098) asks 50 older than the oldest loaded;
+  `preloadHistoryByScroll` (5410) loads older within three screens of the
+  top and newer within three screens of the bottom.
+- Telegram Android `3de37c8c`, `ui/ChatActivity.java`: 3135–3137 first load
+  15–25 messages by device class; 13926–13928 load 50 older when within
+  `checkLoadCount` (5) items of the top.
+
+AgentNet today: Comic already mounts only the newest 24 message groups and
+reveals 80 older groups on backward scroll (`Conversation.timeline.tsx`
+`INITIAL_PAGE`/`HISTORY_PAGE`), and prefetches a chat on press/hover. The
+fetch itself is whole-chat. On a private offline copy of the owner's store
+the 641-message chat's `/api/dm` takes 236–356 ms (525 KB JSON, 8 ms
+encode): whole-chat load 35%, group history 18%, participations 11%,
+per-message request/proposal/agent checks ~20–25%. Fetch paging would remove
+only the per-message share (~0.3 → ~0.2 s) and needs every consumer that
+reads the whole `messages` list guarded (about 15, one of them topic merge).
+Unverified: Comic-side processing time of a whole view; a Telegram server
+page size other than these client constants.
+
 ## Message times carry their day — unreleased, November 1
 
 Owner report (Comic on the phone, screenshot): messages showed only "8:27 PM",
