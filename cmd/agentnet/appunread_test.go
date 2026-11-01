@@ -55,7 +55,11 @@ type unreadTestHost struct {
 
 func (h *unreadTestHost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("agentnet_ui")
-	if err != nil || cookie.Value != "private" || r.URL.RawQuery != "" {
+	query := "" // an overview asks for the page's variant: one shared build (MEL-731)
+	if strings.HasSuffix(r.URL.Path, "/api/overview") {
+		query = "topics=1"
+	}
+	if err != nil || cookie.Value != "private" || r.URL.RawQuery != query {
 		http.Error(w, "no local cookie", 401)
 		return
 	}

@@ -83,11 +83,33 @@ only ~25% of a 0.24–0.36 s open; asked owner whether to continue.
 **Still busy on v0.10.3 (MEL-731, In Progress).** Process 1011 re-executed into
 v0.10.3 at 23:38. Twenty minutes later, read-only /proc samples showed 116%
 over 20 s, then 119%, 91% and 115% over 30 s windows, with the desktop app
-open and machine load 6–8. `outbox_lid` did not settle it. Hypothesis, not
-verified: every change event makes the open app rebuild the overview (~1.9 s
-CPU on this store), and frequent changes (harness hooks on every agent tool
-call, presence) keep about one core busy. Count changes and overview
-requests per minute, or compare with the app closed, before changing code.
+open and machine load 6–8. `outbox_lid` did not settle it.
+
+Measured November 2, read-only (change socket, `ss` byte counters, /proc,
+`PRAGMA data_version` on a `mode=ro` connection; no restart, app left open):
+the daemon is not busy all the time. Each content change starts a burst of
+about 13 s at 100–150% CPU (357 MB/s of 4 KB page reads, 3.3 MB SQLite
+temp sorts in /var/tmp), then it idles at 0%. A burst serves 4–5 overview
+builds of ~600 KB: the page asks `/api/overview?topics=1`, while the desktop
+app's badge (`fetchAppUnread`) asked plain `/api/overview`, a second cache
+slot, so every change built both, one after the other under `overviewMu`.
+The badge's 5 s timeout then dropped slow answers (the `ui: write: broken
+pipe` lines, ~6/min). The most frequent trigger: every Claude/Codex hook
+(each tool call of every session) re-saved its unchanged reply-session row
+and dialed the daemon socket; the daemon bumps content on every dial. One
+tool call here gave 2–3 changes ~1.5 s later, so working agents kept the
+daemon near a core. Fix (unreleased): the badge asks the page's variant
+(`alert_total` is the same, `unread_provider_test.go`), and an unchanged
+registration is neither written nor announced (`quietHook` in
+`TestClaudeReplyRegistryRenewalAndDetach` and
+`TestNativeOriginCodexExactThread`; both fail without the fix). A Codex
+`queue` that failed now retries at the next store change or Hub ping, not
+the next tool call. Not fixed: one overview build still costs ~2.5–3 s here
+(temp sort, `dmOverview`, `topicOverview`), each reload asks the Hub for
+agent catalogs (`loadAgentNames`), and the kick handler bumps content for
+the daemon's own wakes too. `TestCodexRoomToolQuestionAndCancellation`
+fails locally with and without this change (context deadline); CI passed it
+on ddf830d4. Acceptance on the owner's daemon comes with the next release.
 
 After the self-update (same pid re-executed into v0.10.2) the owner's daemon
 still used about 1.1 cores: ~235 MB/s of 4 KB SQLite page reads from cache

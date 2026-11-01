@@ -448,6 +448,10 @@ func (a *Agent) registerCodexReplySession(event, sid, file string, route codexNa
 			if e = releaseEndedInputs(tx, r.Handle); e != nil {
 				return "", e
 			}
+		} else {
+			// Unchanged: no write and no daemon wake per tool call (MEL-731).
+			// A failed queue retries at the next store change or Hub ping.
+			return r.Handle, nil
 		}
 	}
 	if e = saveReplySession(tx, r); e == nil {

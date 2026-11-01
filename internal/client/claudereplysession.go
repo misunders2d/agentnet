@@ -130,6 +130,11 @@ func (a *Agent) registerClaudeReplySession(event, sid, file string, route claude
 			if e = releaseEndedInputs(tx, r.Handle); e != nil {
 				return "", e
 			}
+		} else {
+			// Every tool call runs this hook. An unchanged registration is
+			// neither written nor announced: each wake made the daemon's
+			// open views rebuild (MEL-731).
+			return r.Handle, nil
 		}
 	}
 	if e = saveReplySession(tx, r); e == nil {

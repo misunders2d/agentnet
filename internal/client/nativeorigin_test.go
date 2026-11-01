@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
@@ -255,8 +256,12 @@ func TestNativeOriginCodexExactThread(t *testing.T) {
 	}
 	os.WriteFile(file, original, 0600)
 
+	woken := quietHook(t, w.alice, func(event string) (string, error) { return w.alice.registerCodexReplySession(event, sid, file, route) })
 	if _, err := w.alice.registerCodexReplySession("SessionEnd", sid, file, route); err != nil {
 		t.Fatal(err)
+	}
+	if !woken(time.Second) {
+		t.Fatal("SessionEnd did not wake the daemon")
 	}
 	r, e = w.alice.codexOrigin(sid, home)
 	refusedOrigin(t, "ended thread", r, e)

@@ -229,6 +229,9 @@ func fetchAppUnread(ctx context.Context, c *http.Client, base *url.URL, token st
 	defer cancel()
 	u := *base
 	u.Path = "/workspaces/" + fetch.binding.ID + "/" + fetch.binding.Handle + "/api/overview"
+	// The page's own variant: both read one cached build per change, not
+	// two (MEL-731). Its alert_total counts archived topics as well.
+	u.RawQuery = "topics=1"
 	res, err := appUnreadRequest(requestCtx, c, &u, token)
 	if err != nil {
 		return fetch

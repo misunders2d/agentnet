@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
@@ -73,8 +74,14 @@ func TestClaudeReplyRegistryRenewalAndDetach(t *testing.T) {
 	if e != nil || stable.Generation != owner.Generation || stable.OwnerToken != owner.OwnerToken {
 		t.Fatal("ordinary hook changed active owner")
 	}
+	woken := quietHook(t, w.alice, func(event string) (string, error) {
+		return w.alice.registerClaudeReplySession(event, owner.SessionID, owner.File, route)
+	})
 	if _, e = w.alice.registerClaudeReplySession("SessionStart", owner.SessionID, owner.File, route); e != nil {
 		t.Fatal(e)
+	}
+	if !woken(time.Second) {
+		t.Fatal("renewal did not wake the daemon")
 	}
 	renewed, e := w.alice.claudeReplyChannelOwner(owner.SessionID, route)
 	if e != nil || renewed.Handle != owner.Handle || renewed.Generation <= owner.Generation || renewed.OwnerToken == owner.OwnerToken {
