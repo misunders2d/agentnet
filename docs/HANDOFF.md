@@ -4,7 +4,11 @@
 
 87186a2a: Comic message times show their day when not today ("Yesterday
 6:13 PM", "Thu 6:13 PM", "Oct 24, 6:13 PM", year if older); details in
-docs/INTERACTION_COVERAGE.md. Classic, Holonet and Zoom skins unchanged.
+docs/INTERACTION_COVERAGE.md. Classic, Holonet and Zoom got the same day lines
+and stamps in agentnet-skins 621a603 (source only: `npm run check` passes
+322 of 325, the 3 failures being "published entry.mjs matches dist: run npm
+run publish" for those skins, which the next gallery release regenerates
+with version bumps). Owner: hold for the next release.
 CI 41288532459 failed `TestCLISendReportsDelivery` (`send --wait 0` saw the
 peer's receipt; fixed in 7405619b to accept it) and Windows
 `TestAdminRecommendationNeverSuspends` (stream lease during the clear,

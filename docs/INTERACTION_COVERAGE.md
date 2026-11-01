@@ -17,7 +17,12 @@ join/leave/invite lines reads "6:13 PM" today, "Yesterday 6:13 PM",
 than it arrived is folded into the same stamp. `clock_format_check.mjs`
 (`stamp`, four zones incl. a DST night, ≤4 formatters per batch);
 `latency_fixture.mjs` parity now allows "Yesterday" near midnight. Classic,
-Holonet and Zoom gallery skins still show the time only.
+Holonet and Zoom (agentnet-skins 621a603, owner decision "Yes, add them")
+gained Comic's day lines and the same message stamps with the full date on
+hover; a message minutes after midnight starts its own group.
+`tests/message-day-stamps.test.mjs` mounts each at 390 and 1280 px on today's
+clock and a fixed January 3 clock (fails on the previous skins). Their
+published packages follow at the next gallery release.
 
 ## Invited agent on an offline or outdated device — unreleased, October 31
 
