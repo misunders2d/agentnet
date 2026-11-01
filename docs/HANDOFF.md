@@ -80,6 +80,15 @@ only ~25% of a 0.24–0.36 s open; asked owner whether to continue.
 
 ## Owner daemon at a full core on v0.10.2 — unreleased, November 1
 
+**Still busy on v0.10.3 (MEL-731, In Progress).** Process 1011 re-executed into
+v0.10.3 at 23:38. Twenty minutes later, read-only /proc samples showed 116%
+over 20 s, then 119%, 91% and 115% over 30 s windows, with the desktop app
+open and machine load 6–8. `outbox_lid` did not settle it. Hypothesis, not
+verified: every change event makes the open app rebuild the overview (~1.9 s
+CPU on this store), and frequent changes (harness hooks on every agent tool
+call, presence) keep about one core busy. Count changes and overview
+requests per minute, or compare with the app closed, before changing code.
+
 After the self-update (same pid re-executed into v0.10.2) the owner's daemon
 still used about 1.1 cores: ~235 MB/s of 4 KB SQLite page reads from cache
 against a 196 MB `agent.db`, 134 MB of it `outbox` (28,000 rows, envelopes
