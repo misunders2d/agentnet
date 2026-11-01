@@ -596,6 +596,11 @@ type FileView struct {
 	// sent before copies were kept, or from another device of this
 	// person. The page shows Open only when true; never a fake Open.
 	Openable bool `json:"openable"`
+	// Fetch is a received file not held here yet that waits for a tap
+	// ("wait": videos over 10 MiB, other files over 3 MiB, cleared copies)
+	// or is downloading ("fetching"): POST /api/files/{message}/{index}/fetch
+	// starts it and GET .../progress follows it (FileFetches).
+	Fetch string `json:"fetch,omitempty"`
 }
 
 // Files is implemented by providers that send files and open them (MEL-489).
@@ -618,6 +623,15 @@ type Files interface {
 	// makes the reference exact. With dir "" an id in both directions is
 	// refused, never resolved to the other file.
 	OpenFile(ctx context.Context, dir, msgID string, index int) (io.ReadCloser, string, error)
+}
+
+// FileFetches is implemented by providers that keep big received files for
+// a tap (client filewait.go). FetchFile starts a download in the background
+// and says where it stands; FileProgress answers once the download moved past
+// after bytes, ended, or a while passed: one answer per step, no timer.
+type FileFetches interface {
+	FetchFile(dir, msgID string, index int) (client.FileProgress, error)
+	FileProgress(ctx context.Context, dir, msgID string, index int, after int64) (client.FileProgress, error)
 }
 
 // ImageOpener hands a verified raster attachment to this computer's image app.
@@ -1249,6 +1263,7 @@ type File struct {
 	Openable     bool   `json:"openable"`
 	Note         string `json:"note,omitempty"`
 	Availability string `json:"availability,omitempty"`
+	Fetch        string `json:"fetch,omitempty"` // as FileView's
 }
 
 // Draft is a message to send.

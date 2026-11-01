@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"cmp"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -106,6 +107,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/media/video", s.prepareVideo)
 	mux.HandleFunc("POST /api/upload/discard", s.discard)
 	mux.HandleFunc("GET /api/files/{id}/{i}", s.file)
+	mux.HandleFunc("POST /api/files/{id}/{i}/fetch", s.fetchFile)
+	mux.HandleFunc("GET /api/files/{id}/{i}/progress", s.fileProgress)
 	mux.HandleFunc("POST /api/file/request", s.requestFile)
 	mux.HandleFunc("POST /api/file/open-image", s.openImage)
 	mux.HandleFunc("GET /api/schedules", s.schedules)
@@ -575,6 +578,47 @@ func (s *Server) file(w http.ResponseWriter, r *http.Request) {
 	h.Set("Content-Type", "application/octet-stream")
 	h.Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
 	io.Copy(w, rc)
+}
+
+// fileRef reads a file reference as GET /api/files/{id}/{i} takes it.
+func fileRef(r *http.Request) (dir string, i int, ok bool) {
+	i, err := strconv.Atoi(r.PathValue("i"))
+	dir = r.URL.Query().Get("dir")
+	return dir, i, err == nil && i >= 0 && (dir == "in" || dir == "out")
+}
+
+// fetchFile starts downloading a received file that waits for a tap.
+func (s *Server) fetchFile(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.p.(FileFetches)
+	dir, i, exact := fileRef(r)
+	if !ok || !exact {
+		writeErr(w, NotFound("no such file to download"))
+		return
+	}
+	v, err := p.FetchFile(dir, r.PathValue("id"), i)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, v)
+}
+
+// fileProgress answers where a download stands once it moved past ?after=
+// bytes, ended, or a while passed.
+func (s *Server) fileProgress(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.p.(FileFetches)
+	dir, i, exact := fileRef(r)
+	after, err := strconv.ParseInt(cmp.Or(r.URL.Query().Get("after"), "-1"), 10, 64)
+	if !ok || !exact || err != nil {
+		writeErr(w, NotFound("no such file to download"))
+		return
+	}
+	v, err := p.FileProgress(r.Context(), dir, r.PathValue("id"), i, after)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, v)
 }
 
 // requestFile asks the device a history message came from for its file.

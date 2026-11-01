@@ -445,7 +445,7 @@ func (l *Live) Thread(id string) (Thread, error) {
 		}
 		v.Unread, v.Attention = m.Unread, m.Attention
 		for i, f := range m.Attachments {
-			fv := File{Index: i, Name: client.SafeName(f.Name), Size: f.Size, Saved: f.SavedPath, Openable: f.Openable, Availability: f.Availability} // the name it is saved under
+			fv := File{Index: i, Name: client.SafeName(f.Name), Size: f.Size, Saved: f.SavedPath, Openable: f.Openable, Availability: f.Availability, Fetch: f.Fetch} // the name it is saved under
 			if !fv.Openable && fv.Availability == "" {
 				fv.Note = notKeptNote
 			}

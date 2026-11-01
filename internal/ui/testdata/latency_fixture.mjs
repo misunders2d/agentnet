@@ -50,7 +50,7 @@ try {
  const cacheFiles=[{id:'1'.repeat(32),sha256:'2'.repeat(64),size:1024},{id:'3'.repeat(32),sha256:'4'.repeat(64),size:2048}];
  const bucket={files:2,reserved_bytes:3072,recorded_received_bytes:3072};
  const storage={local:{scope:'daemon',complete:true,known:{files:2,bytes:3072},areas:[],files:[]},remote:{status:'available',usage:{quota_bytes:1073741824,max_file_bytes:104857600,upload_idle_ttl_seconds:3600,location:'fixture relay',policy:{delivered_attachments:'retained',undelivered_attachments:'retained',unattached_attachments:'retained',message_envelopes:'retained',incomplete_uploads:'bounded',manual_delivered_age_default_seconds:86400,manual_unattached_age_default_seconds:86400},can_change_quota:true,own:{stored:bucket,incomplete:{...bucket,files:0,reserved_bytes:0}},global:{stored:bucket,incomplete:{...bucket,files:0,reserved_bytes:0}}}}};
- const presentationFiles=new Map();reports.fileCalls=[];reports.assignmentAttempts=[];
+ const presentationFiles=new Map();reports.fileCalls=[];reports.assignmentAttempts=[];let bigFetch=null;
  reports.proposalAttempts=[];reports.ownerDecisionAttempts=[];reports.presentationFailures=[];
  let simulatedSetup=false,setupReceipt=false,setupPublishes=0,missingFolderMode=false;
  let reviewedSetup;
@@ -219,6 +219,7 @@ try {
    if(path.startsWith('/api/grants'))return{grants:[]};
    if(path.startsWith('/api/teams'))return{teams:[],current:true,status:'available'};
    if(path.startsWith('/api/schedules'))return[];
+   if(bigFetch&&path.startsWith('/api/files/'))return bigFetch(path,body);
    if(path.startsWith('/api/storage'))throw Error('Synthetic storage unavailable; Retry is safe.');
    if(path.includes('/drive')||path.includes('/google'))return{status:'unavailable',spaces:[]};
    if(body!==undefined)return {};
@@ -1123,6 +1124,25 @@ try {
    const retry=control('Retry this task',assign());await tap('assign.retry-refused',retry,brief(()=>!!control('Sending task…',assign())),'same prepared assignment retry pending',()=>visibleText('Synthetic assignment refused; no task or native work started')&&!control('Sending task…',assign()));
    assert(reports.assignmentAttempts.at(-1).id===firstAttempt.id&&reports.assignmentAttempts.at(-1).body===firstAttempt.body,'retry changed prepared task ID/body');
    await closeSheet('assign.close','Assign to your agent');shadow.removeEventListener('click',downloadCapture,true);
+   // A big received file waits for a tap (FileView.fetch "wait", Telegram-like):
+   // progress shows before the request returns; a refused attempt keeps the
+   // file offered with Retry; the next one completes through held progress
+   // answers (each request carries the bytes already shown, no timer), and
+   // the ordinary save action returns. Bytes are invented; no relay is used.
+   const bigID='b'.repeat(32),bigSize=25*1024*1024,bigCalls=[];let bigAttempts=0,bigHave=0;
+   bigFetch=async path=>{const u=new URL(path,location.origin),call={path:u.pathname,dir:u.searchParams.get('dir'),after:u.searchParams.get('after'),start:performance.now()};bigCalls.push(call);
+    assert(u.pathname.startsWith('/api/files/'+bigID+'/0/')&&call.dir==='in','exact waiting file reference');
+    if(u.pathname.endsWith('/fetch')){await pause(300);if(++bigAttempts===1)throw Error('Synthetic relay unavailable; Retry is safe.');bigHave=0;return{have:0,total:bigSize,done:false,fetching:true};}
+    assert(Number(call.after)===bigHave,'progress asks past the bytes it showed');await pause(120);bigHave=Math.min(bigSize,bigHave+bigSize/4);
+    if(bigHave>=bigSize){const m=view.messages.find(m=>m.id===bigID);m.attachments[0].fetch='';emit();return{have:bigSize,total:bigSize,done:true};}
+    return{have:bigHave,total:bigSize,done:false,fetching:true};};
+   view.messages.push({...clone(fileMessage),id:bigID,lid:bigID,dir:'in',from:peer.address,body:'Fixture big clip',reactions:[],unread:false,attachments:[{index:0,name:'fixture-clip.mp4',size:bigSize,openable:true,fetch:'wait'}]});emit();
+   const bigOffer=()=>control(/^Download fixture-clip\.mp4, /),bigBar=()=>active('[role="progressbar"][aria-label="Downloading fixture-clip.mp4"]');await until(bigOffer,'big file offered for download');
+   assert(!control('Play video fixture-clip.mp4')&&!control('Download fixture-clip.mp4'),'waiting video offers neither playback nor save');
+   await tap('files.big-download-refused',bigOffer(),()=>!!bigBar(),'download progress visible before the request returns',()=>visibleText('Couldn’t download: Synthetic relay unavailable')&&!!control('Retry download fixture-clip.mp4'));
+   await tap('files.big-download',control('Retry download fixture-clip.mp4'),()=>!!bigBar(),'download progress visible at once',()=>!bigBar()&&!!control('Download fixture-clip.mp4'));
+   const steps=bigCalls.filter(c=>c.path.endsWith('/progress'));assert(steps.length===4&&steps.every((c,i)=>i===0||c.start>=steps[i-1].start),'one held progress answer per step');
+   reports.bigFileDownload={attempts:bigAttempts,progressRequests:steps.length,calls:bigCalls.length};bigFetch=null;
    reports.filePresentation={fileID,fileCalls:reports.fileCalls,assignmentNativeEffects:false,downloadNativeEffect:host.platform==='android'?'native export; provider cancelled by test monitor':false,providerWrite:'not_executed',originalBytesVerified:true};
 
    reports.mediaProcessing='Photo conversion is actual CPU work and reported separately; video cancellation/unsupported choice measures UI. Actual codec output/audio/orientation/deadline qualification remains earlier media evidence.';

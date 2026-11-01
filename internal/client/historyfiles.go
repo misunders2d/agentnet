@@ -602,6 +602,9 @@ func (a *Agent) markOpenable(files []FileInfo, sent bool) {
 			files[i].Openable = a.keptHere(files[i].SHA256)
 		default:
 			files[i].Openable = !strings.HasPrefix(files[i].BlobID, historyBlob)
+			if files[i].Openable {
+				a.markFetch(&files[i])
+			}
 		}
 	}
 }
@@ -616,7 +619,7 @@ func (a *Agent) prefetchFiles(ctx context.Context) (more bool) {
 	rows, err := a.store.db.Query(`SELECT a.blob_id, a.name, a.size, a.sha256, a.ct_size, a.ct_sha256
 		FROM attachments a JOIN inbox i ON i.id = a.message_id
 		WHERE i.local = 0 AND a.blob_id NOT LIKE ?
-		AND NOT EXISTS(SELECT 1 FROM config c WHERE c.k='cache-cleared/'||a.blob_id AND c.v=a.ct_sha256)
+		AND NOT EXISTS(SELECT 1 FROM config c WHERE c.k IN ('cache-cleared/'||a.blob_id, 'file-gone/'||a.blob_id) AND c.v=a.ct_sha256)
 		AND NOT `+retractedClause+` AND NOT (`+erasedIn+` AND NOT `+retainedIn+`)
 		ORDER BY coalesce(i.received_ms, i.received_at * 1000) DESC`, historyBlob+"%")
 	if err != nil {
@@ -628,7 +631,7 @@ func (a *Agent) prefetchFiles(ctx context.Context) (more bool) {
 		if rows.Scan(&f.BlobID, &f.Name, &f.Size, &f.SHA256, &f.ctSize, &f.ctSHA256) != nil {
 			continue
 		}
-		if _, err := os.Stat(a.downloadPath(f.BlobID)); err == nil || a.prefetchFailed[f.BlobID] {
+		if _, err := os.Stat(a.downloadPath(f.BlobID)); err == nil || a.prefetchFailed[f.BlobID] || !keptAutomatically(f.Name, f.Size) {
 			continue
 		}
 		todo = append(todo, f)

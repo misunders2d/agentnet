@@ -1,5 +1,32 @@
 # Next-release interaction coverage and responsiveness
 
+## Big received files wait for a tap — unreleased, November 1
+
+Owner: "large video files (>10Mb) should be offered for download instead of
+instantly playing. same as on Telegram". Counterpart inspected in source:
+Telegram Android `3de37c8c` `messenger/DownloadController.java` 261–263
+default presets: low (roaming) photo 1 MB, video 500 KB, file 500 KB; medium
+(mobile data) photo 1 MB, video 10 MB, file 1 MB; high (Wi-Fi) photo 1 MB,
+video 15 MB, file 3 MB; its server may replace them (not checked). Telegram
+Desktop `5ff61571` `data/data_auto_download.cpp` 20–21, 91–102: photos and
+files up to 8 MB, autoplay video/GIF streamed up to 50 MB. Reused: Android's
+medium video bound (10) and high file bound (3), applied in MiB; a waiting
+file shows its size and a download control that becomes progress, then the
+ordinary actions. AgentNet adaptation: pictures are always kept (owner:
+"photos as today"); no per-network presets; video plays only after the whole
+file is here (no streaming); a file the relay lost says so.
+
+| Control | Immediate local change | Completion | Failure | Evidence |
+|---|---|---|---|---|
+| Download · size (waiting file) | progress bar at 0% before the request returns | progress per held answer, then Play (≤16 MiB video) or save | "Couldn’t download: …" with Retry; state kept | `files.big-download-refused`: feedback 31 ms, refusal 361 ms (300 ms invented) |
+| Retry download | progress bar at once | as above | as above | `files.big-download`: feedback 15 ms, done 921 ms (300 ms + 4×120 ms invented) |
+
+Chromium 1440×960, `media` suite, daemon host, local run November 1. Not
+run: WebKit, native Windows/macOS/Android shells, 320 px, 10x history,
+concurrent synchronization. Leaving the chat keeps the download running in
+the device; returning follows it again (`fetch: "fetching"`), not rendered
+in this suite.
+
 ## Chat open and history paging — research, November 1
 
 Opening a chat (owner: "investigate why opening a chat is slow"). No

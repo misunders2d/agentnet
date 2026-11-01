@@ -6,6 +6,12 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+- Big received files wait for a tap, as on Telegram: videos over 10 MiB and
+  other files over 3 MiB are no longer downloaded in the background; the
+  message offers "Download · size" with progress, then plays or saves as
+  before. Pictures and smaller files download as today. A file whose cached
+  copy was cleared waits too, and one the relay no longer has (an admin's
+  `agentnet hub cleanup`) says so instead of offering a download.
 - Show the day on older message times: "Yesterday 6:13 PM", "Thu 6:13 PM"
   within the week, "Oct 24, 6:13 PM" and the year for another year; today's
   messages keep just the time and hovering a time shows the full date. Day

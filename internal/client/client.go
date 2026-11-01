@@ -79,6 +79,7 @@ type Agent struct {
 	selfKicks        atomic.Int64               // wakes in flight that this daemon sent itself (notifyOwnWork)
 	receiveFails     receiveFailures            // transient admission failures per pushed envelope (daemon.go)
 	prefetchFailed   map[string]bool            // conversation files that could not be kept this run (historyfiles.go; the stream worker only)
+	fetches          fileFetches                // received files a person chose to download (filewait.go)
 	wakeWorker       func()                     // sends a coalesced local wake; stable for this Agent handle
 	workerLanes      executionLanes             // local selected executors, through run cleanup
 	appUpdateMu      sync.RWMutex               // holds job claim/run against whole-app replacement
@@ -322,6 +323,7 @@ func Open(home string) (*Agent, error) {
 
 // Close releases local storage and the agent's unused Hub connections.
 func (a *Agent) Close() error {
+	a.fetches.stop()
 	a.stopArchivePosts()
 	a.stopBackgroundPosts()
 	a.typingDisconnected()

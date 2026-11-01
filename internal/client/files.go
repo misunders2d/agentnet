@@ -438,6 +438,12 @@ func finalNames(files []FileInfo) []string {
 var errFileCiphertextIntegrity = errors.New("signed ciphertext integrity mismatch")
 
 func (a *Agent) fetchCiphertext(ctx context.Context, f FileInfo) error {
+	return a.fetchCiphertextTo(ctx, f, nil)
+}
+
+// fetchCiphertextTo is fetchCiphertext reporting the ciphertext bytes held
+// so far to progress, when given (FetchFile).
+func (a *Agent) fetchCiphertextTo(ctx context.Context, f FileInfo, progress func(int64)) error {
 	done := a.downloadPath(f.BlobID)
 	if _, err := os.Stat(done); err == nil {
 		return nil
@@ -470,10 +476,17 @@ func (a *Agent) fetchCiphertext(ctx context.Context, f FileInfo) error {
 	if offset > f.ctSize {
 		return a.discard(part, "partial download is longer than the attachment")
 	}
+	var dst io.Writer = w
+	if progress != nil {
+		progress(offset)
+	}
 	for offset < f.ctSize {
 		end := min(offset+downloadRange, f.ctSize)
-		if err := a.hub.getRange(ctx, "/v1/blobs/"+url.PathEscape(f.BlobID)+"/data", offset, end, w); err != nil {
-			return err // the part file keeps what arrived; the next attempt resumes
+		if progress != nil {
+			dst = &progressWriter{w: w, at: offset, report: progress}
+		}
+		if err := a.hub.getRange(ctx, "/v1/blobs/"+url.PathEscape(f.BlobID)+"/data", offset, end, dst); err != nil {
+			return a.goneOnRelay(f, err) // the part file keeps what arrived; the next attempt resumes
 		}
 		if err := w.Sync(); err != nil {
 			return err

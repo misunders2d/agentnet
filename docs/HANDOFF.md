@@ -25,10 +25,36 @@ checked). Desktop (tdesktop 5ff61571, `data_auto_download.cpp`): files and
 photos ≤8 MB (files 0 in channels); videos are never downloaded as files and
 autoplay streamed up to 50 MB. Owner decisions: videos over 10 MB and other
 files over 3 MB wait for a tap ("Download · size" with progress), photos as
-today; only where the relay stores attachments in Google Drive (a relay
-without Drive deletes delivered attachments after 30 days by default, so
-there every file keeps downloading). The existing Settings → System "Review
-received cache…" cleaner is enough.
+today, on every relay ("Every relay"). Corrected before that choice: no relay
+deletes attachments by itself (`GET /v1/storage` policy: manual operator
+cleanup only); `agentnet hub cleanup` (admin, default: delivered over 30
+days) removes delivered attachments, Drive copies included
+(`cleanupRemoteAttachment`), so a skipped file is lost only through that
+command, with or without Drive. An earlier "Drive relays only" choice rested
+on my wrong claim that relays without Drive delete after 30 days. The
+existing Settings → System "Review received cache…" cleaner is enough.
+
+Big files, implemented (unreleased): `client/filewait.go` —
+`keptAutomatically` (pictures always; video names over 10 MiB and other
+files over 3 MiB wait), `prefetchFiles` skips them and files the relay
+answered 404 for (`file-gone/` marker, like `cache-cleared/`); views carry
+`fetch: "wait"|"fetching"` (cleared copies wait too) or `availability:
+"unavailable"` once gone. `POST /api/files/{id}/{i}/fetch` starts a
+background download (one per blob, lockfile-shared with the prefetcher,
+stopped on Close); `GET .../progress?after=` answers once the download
+moved past the bytes the page showed, ended, or 20 s passed: held request,
+no page timer (an SSE event kind would need every host's listener changed;
+hints are targeted, so a new kind was possible but touched 5 hosts). Comic
+`Message.files.tsx`: "Download · size" button, progress bar shown before the
+request returns, failure text + Retry, Play/save only once here; state shared
+per file between chip and video. Skins untouched: `host.file` still fetches
+on demand without progress. Tests: `TestKeptAutomatically`,
+`TestBigReceivedFilesWaitForATap` (fails with the rule removed; race clean),
+`TestFileFetchRoutes`, media latency suite `files.big-download-refused` /
+`files.big-download` (Chromium 1440: feedback 31/15 ms, done 361/921 ms with
+300 ms + 4×120 ms invented delays). Not run: WebKit/Android/Windows hosts,
+10x history, the browser device (B keeps no files: routes answer "Unknown
+request.").
 
 List fix, step one (unreleased): a chat's view filtered history, sync and
 proof copies by `sub`, stored after the inline envelope, so it read every

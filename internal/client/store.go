@@ -1040,6 +1040,9 @@ type FileInfo struct {
 	// of. False for a sent file this device kept no copy of (sent before
 	// copies were kept, or from another device) and for history-only files.
 	Openable bool `json:"openable"`
+	// Fetch is a received file not held here yet that is not kept in the
+	// background (filewait.go): "wait" for a tap, or "fetching".
+	Fetch string `json:"fetch,omitempty"`
 
 	ctSize   int64
 	ctSHA256 string

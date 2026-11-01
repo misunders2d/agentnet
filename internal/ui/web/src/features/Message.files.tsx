@@ -3,9 +3,9 @@
 // with name, size and Download. Files come checked and decrypted from
 // host.file; a download is a link the browser saves where it saves things,
 // so nothing here claims where the file went. HTML and SVG never render.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { IconDownload, IconFile, IconFileText, IconFileZip, IconPhoto, IconCloudDownload } from "@tabler/icons-react";
-import { errorText, type Api } from "../api";
+import { errorText, type Api, type FileProgress } from "../api";
 import { useStore } from "../store";
 import { useApp } from "../context";
 import { usePortal } from "../owned";
@@ -20,7 +20,7 @@ import { SaveToDrive } from "./Drive";
 import { previewText, textPreviewName, TEXT_PREVIEW_LIMIT } from "./Message.files.text";
 import { Markdown } from "./Markdown";
 
-interface FileItem { index: number; name: string; size: number; openable: boolean; availability?: string; note?: string }
+interface FileItem { index: number; name: string; size: number; openable: boolean; availability?: string; note?: string; fetch?: string }
 
 const pictureName = /\.(png|jpe?g|gif|webp)$/i;
 const videoName = /\.(mp4|m4v|mov|webm|ogv|ogg)$/i;
@@ -36,8 +36,8 @@ function sniff(b: Uint8Array): string {
 }
 
 function filesOf(m: AnyMsg): FileItem[] {
-  if (isThreadMsg(m)) return (m.files || []).map((f, i) => ({ index: f.index ?? i, name: f.name, size: f.size, openable: f.openable, availability: f.availability, note: f.note }));
-  return (m.attachments || []).map((f, i) => ({ index: f.index ?? i, name: f.name, size: f.size, openable: f.openable, availability: f.availability, note: f.note }));
+  if (isThreadMsg(m)) return (m.files || []).map((f, i) => ({ index: f.index ?? i, name: f.name, size: f.size, openable: f.openable, availability: f.availability, note: f.note, fetch: f.fetch }));
+  return (m.attachments || []).map((f, i) => ({ index: f.index ?? i, name: f.name, size: f.size, openable: f.openable, availability: f.availability, note: f.note, fetch: f.fetch }));
 }
 
 /** Where a file stands for this device: openable here, to ask for, asked, or not here. */
@@ -207,6 +207,87 @@ function Picture({ m, f, grouped = false }: { m: AnyMsg; f: FileItem; grouped?: 
   );
 }
 
+// Big received files wait for a tap, as on Telegram (FileView.fetch: videos
+// over 10 MiB, other files over 3 MiB, cleared copies). The download runs in
+// this device's AgentNet whatever the page does; the page follows it one
+// step at a time (each progress answer comes once it moved) and shares one
+// state per file between the chip and the video around it.
+type Download = { phase: "wait" | "fetching" | "failed" | "gone" | "here"; have: number; total: number; error?: string };
+const downloads = new Map<string, Download>();
+const downloadSubs = new Map<string, Set<() => void>>();
+const following = new Set<string>();
+
+function setDownload(key: string, d: Download) {
+  downloads.set(key, d);
+  downloadSubs.get(key)?.forEach((fn) => fn());
+}
+
+async function follow(api: Api, key: string, m: AnyMsg, f: FileItem, p: FileProgress) {
+  if (following.has(key)) return;
+  following.add(key);
+  try {
+    for (;;) {
+      if (p.done) return setDownload(key, { phase: "here", have: p.total, total: p.total });
+      if (p.gone) return setDownload(key, { phase: "gone", have: 0, total: p.total, error: p.error });
+      if (p.error) return setDownload(key, { phase: "failed", have: p.have, total: p.total, error: p.error });
+      if (!p.fetching) return setDownload(key, { phase: "wait", have: p.have, total: p.total }); // nothing runs now (a restart): offer it again
+      setDownload(key, { phase: "fetching", have: p.have, total: p.total });
+      p = await api.fileProgress(m.id, f.index, m.dir, p.have);
+    }
+  } catch (e) {
+    setDownload(key, { phase: "failed", have: downloads.get(key)?.have || 0, total: downloads.get(key)?.total || f.size, error: errorText(e) });
+  } finally { following.delete(key); }
+}
+
+// useDownload is where a waiting file stands here, and start() downloads it:
+// the progress shows at once, before the request leaves.
+function useDownload(m: AnyMsg, f: FileItem) {
+  const store = useApp();
+  const key = pictureKey(m, f);
+  const subscribe = useCallback((fn: () => void) => {
+    let subs = downloadSubs.get(key);
+    if (!subs) downloadSubs.set(key, subs = new Set());
+    subs.add(fn);
+    return () => { subs!.delete(fn); if (!subs!.size) downloadSubs.delete(key); };
+  }, [key]);
+  const known = useSyncExternalStore(subscribe, () => downloads.get(key));
+  const waiting = f.fetch === "wait" || f.fetch === "fetching";
+  useEffect(() => { // a download started earlier, maybe elsewhere: follow it again
+    if (f.fetch === "fetching" && !known && !following.has(key))
+      void store.api.fileProgress(m.id, f.index, m.dir, -1).then((p) => follow(store.api, key, m, f, p)).catch(() => {});
+  }, [key, f.fetch]);
+  const d: Download = !waiting ? { phase: "here", have: f.size, total: f.size } : known || { phase: f.fetch === "fetching" ? "fetching" : "wait", have: 0, total: f.size };
+  const start = () => {
+    if (d.phase === "fetching" && following.has(key)) return;
+    setDownload(key, { phase: "fetching", have: d.phase === "failed" ? d.have : 0, total: d.total || f.size });
+    store.api.fetchFile(m.id, f.index, m.dir).then((p) => follow(store.api, key, m, f, p))
+      .catch((e) => setDownload(key, { phase: "failed", have: 0, total: f.size, error: errorText(e) }));
+  };
+  return { ...d, start };
+}
+
+function DownloadState({ f, d }: { f: FileItem; d: ReturnType<typeof useDownload> }) {
+  const pct = d.total > 0 ? Math.min(100, Math.floor((d.have / d.total) * 100)) : 0;
+  if (d.phase === "fetching") return (
+    <div className="w-full space-y-1" data-download="fetching">
+      <div role="progressbar" aria-label={"Downloading " + f.name} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}
+        className="h-1.5 w-full overflow-hidden rounded-full bg-sunken">
+        <div className="h-full rounded-full bg-accent transition-[width] duration-200 motion-reduce:transition-none" style={{ width: pct + "%" }} />
+      </div>
+      <p className="text-[12px] text-muted tnum">Downloading {pct}% · {bytes(Math.round(f.size * pct / 100))} of {bytes(f.size)}</p>
+    </div>);
+  if (d.phase === "failed") return (
+    <div className="flex flex-wrap items-center gap-2" data-download="failed">
+      <p role="status" className="text-[13px] text-text-2">Couldn’t download: {d.error}</p>
+      <Button className="min-h-11" aria-label={"Retry download " + f.name} onClick={d.start}>Retry</Button>
+    </div>);
+  if (d.phase === "gone") return <p role="status" className="text-[13px] text-text-2" data-download="gone">This file is no longer on the relay.</p>;
+  return (
+    <Button className="min-h-11" icon={<IconDownload size={18} />} aria-label={"Download " + f.name + ", " + bytes(f.size)} data-download="wait" onClick={d.start}>
+      Download · {bytes(f.size)}
+    </Button>);
+}
+
 // Each open owns one Blob. Closing or leaving invalidates a pending read;
 // host.file has no AbortSignal, so its late bytes are discarded, not cached.
 function VideoFile({ m, f }: { m: AnyMsg; f: FileItem }) {
@@ -225,6 +306,7 @@ function VideoFile({ m, f }: { m: AnyMsg; f: FileItem }) {
   const [url, setURL] = useState("");
   const [phase, setPhase] = useState<"idle" | "loading" | "ready" | "failed">("idle");
   const [note, setNote] = useState("");
+  const download = useDownload(m, f);
   const inline = Number.isSafeInteger(f.size) && f.size > 0 && f.size <= INLINE_VIDEO_LIMIT;
 
   function release(reset = true) {
@@ -291,7 +373,7 @@ function VideoFile({ m, f }: { m: AnyMsg; f: FileItem }) {
   return (
     <div role="group" aria-label={"Video " + f.name} className="w-full min-w-0 max-w-[480px] space-y-1.5">
       <FileChip m={m} f={f} />
-      {inline ? <div className="flex flex-wrap items-center gap-2">
+      {download.phase !== "here" ? null : inline ? <div className="flex flex-wrap items-center gap-2">
         {phase === "idle" && <Button className="min-h-11" aria-label={"Play video " + f.name} onClick={() => void open()}>Play</Button>}
         {(phase === "loading" || phase === "ready") && <Button className="min-h-11" aria-label={"Close video " + f.name} onClick={() => release()}>Close video</Button>}
       </div> : <p className="text-[12px] text-muted">{f.size > INLINE_VIDEO_LIMIT ? "Videos up to 16 MiB can play here." : "This video’s size is unknown."} Download to play this file.</p>}
@@ -313,6 +395,8 @@ function FileChip({ m, f }: { m: AnyMsg; f: FileItem }) {
   const [pictureURL, setPictureURL] = useState("");
   const [preview, setPreview] = useState<{ text: string; url: string } | null>(null);
   const st = standing(m, f);
+  const download = useDownload(m, f);
+  const waits = st === "open" && download.phase !== "here";
   const from = m.synced_from ? "your " + niceDevice(m.synced_from) : "the device it came from";
   const Icon = /\.(zip|tar|gz|tgz|7z|rar)$/i.test(f.name) ? IconFileZip : /\.(txt|md|csv|json|log|pdf|docx?)$/i.test(f.name) ? IconFileText : IconFile;
 
@@ -337,7 +421,7 @@ function FileChip({ m, f }: { m: AnyMsg; f: FileItem }) {
     finally { if (store.isActive()) setBusy(false); }
   };
 
-  return (
+  const row = (
     <div className="flex min-w-0 items-center gap-2.5 rounded-xl border border-outline/25 bg-surface/80 py-1.5 pl-2.5 pr-1 text-ink">
       <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-sunken text-text-2" aria-hidden="true"><Icon size={20} stroke={1.7} /></span>
       <span className="min-w-0 flex-1">
@@ -350,7 +434,7 @@ function FileChip({ m, f }: { m: AnyMsg; f: FileItem }) {
           {f.note && " · " + f.note}
         </span>
       </span>
-      {st === "open" && (
+      {st === "open" && !waits && (
         <>
         {textPreviewName(f.name) && f.size <= TEXT_PREVIEW_LIMIT && <Button disabled={busy} aria-label={"Preview " + f.name} onClick={() => void showText()}>Preview</Button>}
         <button type="button" onClick={open} disabled={busy} aria-label={"Download " + f.name}
@@ -371,4 +455,5 @@ function FileChip({ m, f }: { m: AnyMsg; f: FileItem }) {
       )}
     </div>
   );
+  return waits ? <div className="min-w-0 space-y-1.5">{row}<DownloadState f={f} d={download} /></div> : row;
 }

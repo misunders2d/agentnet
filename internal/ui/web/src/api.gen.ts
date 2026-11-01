@@ -442,6 +442,7 @@ export interface File {
   openable: boolean;
   note?: string;
   availability?: string;
+  fetch?: string;
 }
 
 export interface FileLimits {
@@ -458,6 +459,7 @@ export interface FileView {
   availability?: string;
   note?: string;
   openable: boolean;
+  fetch?: string;
 }
 
 export interface FolderView {

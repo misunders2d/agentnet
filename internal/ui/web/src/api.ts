@@ -47,6 +47,11 @@ export interface TopicTransferLocation {
   scope: string; topic: string; destination: string; destination_topic: string; operation: string; at: number; writer: string; revision: number; available: boolean;
 }
 
+// A received file waiting for a tap (FileView.fetch): its download runs in
+// this device's AgentNet; each progress answer comes once it moved past
+// after bytes, ended, or a while passed. Bytes are ciphertext bytes.
+export interface FileProgress { have: number; total: number; done: boolean; fetching?: boolean; gone?: boolean; error?: string }
+
 // Read-only folder listings use the daemon's generated contract.
 export type FoldersView = T.FoldersView;
 export type FolderEntry = T.FolderView;
@@ -138,6 +143,8 @@ export function api(host: Host) {
     file: (id: string, index: number, dir?: string) => host.file(id, index, dir),
     openImage: (id: string, index: number, dir: string) => post<unknown>("/api/file/open-image", { id, index, dir }),
     requestFile: (id: string, index: number) => post<unknown>("/api/file/request", { id, index }),
+    fetchFile: (id: string, index: number, dir: string) => post<FileProgress>(q("/api/files/" + encodeURIComponent(id) + "/" + index + "/fetch", { dir }), {}),
+    fileProgress: (id: string, index: number, dir: string, after: number) => get<FileProgress>(q("/api/files/" + encodeURIComponent(id) + "/" + index + "/progress", { dir, after: String(after) })),
 
     // Typing (ephemeral; never content)
     typing: (scope: T.TypingScope) => get<T.TypingView>(q("/api/typing", { conv: scope.conv || "", peer: scope.peer || "", thread: scope.thread || "" })),

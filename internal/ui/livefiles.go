@@ -124,6 +124,27 @@ func (l *Live) OpenFile(ctx context.Context, dir, msgID string, index int) (io.R
 	return r, client.SafeName(f.Name), nil
 }
 
+// FetchFile implements FileFetches.
+func (l *Live) FetchFile(dir, msgID string, index int) (client.FileProgress, error) {
+	p, err := l.a.FetchFile(dir, msgID, index)
+	if err != nil {
+		return p, Refuse(sentence(err))
+	}
+	return p, nil
+}
+
+// fileProgressWait bounds one progress answer when nothing moves.
+const fileProgressWait = 20 * time.Second
+
+// FileProgress implements FileFetches.
+func (l *Live) FileProgress(ctx context.Context, dir, msgID string, index int, after int64) (client.FileProgress, error) {
+	p, err := l.a.FileProgress(ctx, dir, msgID, index, after, fileProgressWait)
+	if err != nil && !errors.Is(err, context.Canceled) {
+		return p, Refuse(sentence(err))
+	}
+	return p, err
+}
+
 // RequestFile implements HistoryFiles.
 func (l *Live) RequestFile(ctx context.Context, msgID string, index int) error {
 	if err := l.a.RequestFile(ctx, msgID, index); err != nil {
@@ -136,7 +157,7 @@ func (l *Live) RequestFile(ctx context.Context, msgID string, index int) error {
 func fileViews(files []client.FileInfo) []FileView {
 	var out []FileView
 	for i, f := range files {
-		v := FileView{Index: i, Name: client.SafeName(f.Name), Size: f.Size, Saved: f.SavedPath, Availability: f.Availability, Openable: f.Openable}
+		v := FileView{Index: i, Name: client.SafeName(f.Name), Size: f.Size, Saved: f.SavedPath, Availability: f.Availability, Openable: f.Openable, Fetch: f.Fetch}
 		if !v.Openable && v.Availability == "" {
 			v.Note = notKeptNote
 		}
