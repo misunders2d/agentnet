@@ -30,6 +30,19 @@ without Drive deletes delivered attachments after 30 days by default, so
 there every file keeps downloading). The existing Settings → System "Review
 received cache…" cleaner is enough.
 
+List fix, step one (unreleased): a chat's view filtered history, sync and
+proof copies by `sub`, stored after the inline envelope, so it read every
+skipped copy (biggest chat: 3,169 of 3,266 outbox rows are history copies,
+~4.7 KB each; each list rebuild read ~68 MB). Appended step `outbox_conv_sub`
+on `outbox(conv, created_at, sub)` lets SQLite reject them in the index
+(`TestConversationViewSkipsCopiesInIndex` fails without it). Same snapshot,
+load 10–18: list rebuild 4.2–5.2 s → 1.8–2.2 s, the 641-message chat 640 →
+267 ms, the next 476 → 196 ms. Device-thread queries on `conv IS NULL` now
+use the new index too; timed equal to `outbox_conv_lid`. Remaining per
+rebuild (~1.9 s): `dmOverview` ~0.8 s (whole chats loaded for one row),
+`topicOverview` ~0.8 s over 962 threads, `HistoryProgress` ~0.2 s. Paging
+is next.
+
 ## Owner daemon at a full core on v0.10.2 — unreleased, November 1
 
 After the self-update (same pid re-executed into v0.10.2) the owner's daemon

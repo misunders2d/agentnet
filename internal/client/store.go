@@ -327,13 +327,19 @@ CREATE TABLE reported(
 CREATE INDEX outbox_conv_lid ON outbox(conv, lid);
 `, historyReceiptSchema, deviceHistorySchema, proposalChoiceSchema, receiptGenerationSchema, requestFollowupSchema, answeredConversationStatusSchema, modelReportSchema, heldCopySchema, retainedConversationStatusSchema, heldLogicalSchema, waitingConversationStatusSchema, topicMarkSyncSchema, skippedCopySchema, historyArchiveSchema, `
 ALTER TABLE quarantine ADD COLUMN relay_ingress INTEGER NOT NULL DEFAULT 0;
-`, deviceHistoryOriginalPeerSchema, groupPublicationBindingSchema, agentActionSchema, nativeApprovalSchema, attentionMarkSchema, sharedTopicTitleSchema, scheduledSendSchema, conversationResourcesSchema, directTopicSchema, reminderSyncSchema, sendRetryProofSchema, topicTransferSchema, steeringLifecycleSchema, helperWaitSchema, outboxLogicalIDSchema}
+`, deviceHistoryOriginalPeerSchema, groupPublicationBindingSchema, agentActionSchema, nativeApprovalSchema, attentionMarkSchema, sharedTopicTitleSchema, scheduledSendSchema, conversationResourcesSchema, directTopicSchema, reminderSyncSchema, sendRetryProofSchema, topicTransferSchema, steeringLifecycleSchema, helperWaitSchema, outboxLogicalIDSchema, outboxConvSubSchema}
 
 // Lookups by logical ID alone (a request's continuation and stop, proposal
 // confirmation, sent copies) otherwise read every outbox row with its inline
 // envelope, once per message shown: seconds per overview on a busy device
 // (owner's daemon at a full core, November 1, 2026).
 const outboxLogicalIDSchema = `CREATE INDEX outbox_lid ON outbox(lid);`
+
+// A conversation's view skips its history, sync and proof copies by sub. The
+// table row keeps sub after the inline envelope, so filtering there read every
+// copy's envelope: on the owner's store each list rebuild read ~68 MB and the
+// biggest chat 15 MB. With sub in the index the skipped copies are never read.
+const outboxConvSubSchema = `CREATE INDEX outbox_conv_sub ON outbox(conv, created_at, sub);`
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
 const (
