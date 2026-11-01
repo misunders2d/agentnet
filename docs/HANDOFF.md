@@ -109,7 +109,11 @@ the next tool call. Not fixed: one overview build still costs ~2.5–3 s here
 agent catalogs (`loadAgentNames`), and the kick handler bumps content for
 the daemon's own wakes too. `TestCodexRoomToolQuestionAndCancellation`
 fails locally with and without this change (context deadline); CI passed it
-on ddf830d4. Acceptance on the owner's daemon comes with the next release.
+on ddf830d4. CI 41359862557 (392f6f6a) is green on attempt 2 after
+rerunning windows-client (0): `TestGroupInvitationAsksEachCheckOnce` timed
+out on group context (no hook path), as the Windows group-context failures
+of 41322661937 did. Acceptance on the owner's daemon comes with the next
+release.
 
 After the self-update (same pid re-executed into v0.10.2) the owner's daemon
 still used about 1.1 cores: ~235 MB/s of 4 KB SQLite page reads from cache
