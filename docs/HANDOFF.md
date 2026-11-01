@@ -47,8 +47,13 @@ no page timer (an SSE event kind would need every host's listener changed;
 hints are targeted, so a new kind was possible but touched 5 hosts). Comic
 `Message.files.tsx`: "Download · size" button, progress bar shown before the
 request returns, failure text + Retry, Play/save only once here; state shared
-per file between chip and video. Skins untouched: `host.file` still fetches
-on demand without progress. Tests: `TestKeptAutomatically`,
+per file between chip and video. Skins: `fetch` and the two routes are in
+docs/UI_SKINS.md (`host.file` row) and HOST_API_ROUTES.md; Classic, Holonet
+and Zoom in agentnet-skins do not show Download yet (`host.file` still
+fetches on demand without progress): update them before the release's skins
+gate. Android pages are this bundle over `ui.Live`, so the routes apply there,
+not run on a device. `markFetch` per view file: one stat; two config key
+probes only for a file not held (not timed on owner data). Tests: `TestKeptAutomatically`,
 `TestBigReceivedFilesWaitForATap` (fails with the rule removed; race clean),
 `TestFileFetchRoutes`, media latency suite `files.big-download-refused` /
 `files.big-download` (Chromium 1440: feedback 31/15 ms, done 361/921 ms with
@@ -92,7 +97,8 @@ dropped. Remaining cost, not fixed: overview's `dmOverview` (2.7 s CPU) and
 conversations for list rows; 9 outbox scans remain (`maint.go:75`,
 `proposal.go:346`, `proposalchoice.go:130/209`, `remindersync.go:165`,
 `replyreceiver.go:372/649`, `replyreceiver_worker.go:322`, `store.go:756`).
-CI 41300899837 (3b5aa442) is green after rerunning desktop / app (ubuntu):
+CI 41312366138 (72d5419c, outbox_conv_sub) is green on attempt 2 after
+rerunning Windows jobs that flaked. CI 41300899837 (3b5aa442) is green after rerunning desktop / app (ubuntu):
 the downloaded `linuxdeploy` failed bundling the AppImage once with no
 reason given. Not verified on the owner's running daemon (no restart);
 acceptance comes with the next release. The home also keeps every pre-upgrade snapshot
