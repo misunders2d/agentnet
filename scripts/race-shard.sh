@@ -42,7 +42,9 @@ run_partition() {
 				if ($0=="TestGroupParticipationHistoryDismissedLinkedRestartReorder") part=12
 				if ($0=="TestProposalRefusesAgentHostAndRemovedPhone") part=11
 				if ($0=="TestReceiverRemoteGroupNamedNativeMemberVisitor") part=13
-				if ($0=="TestGroupGuestCapturedMessageControls") part=12
+				if ($0=="TestGroupGuestCapturedMessageControls") part=9
+				if ($0=="TestGroupParticipationHistoryAfterHostReadmission") part=6
+				if ($0=="TestAgentRoomAskVisitsAnotherPersonsAgent") part=9
 				if ($0=="TestSharedTopicExactGuestLiveAndHistorical") part=17
 				if ($0=="TestConversationResourcesMemberAgentContext") part=3
 				if ($0=="TestSelfConsentLinkedDevices") part=4
