@@ -1,5 +1,35 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+## Owner decisions: chat open and big files — November 1 (in progress)
+
+Opening a chat (owner: "investigate why opening a chat is slow"), measured on a
+private offline snapshot of the owner's store, one connection, machine load ~9:
+the 641-message chat opens in 2.2 s on v0.10.2, ~0.8 s with `outbox_lid`
+(30% loading every message, 20% `SelectGroupHistory`, 13% `Participations`,
+~12% per-message proposal/continuation checks). Opening marks the chat read,
+which rebuilds the chat list: `dmOverview` loads every message of every chat
+(`ConversationMessages` per DM) just to draw rows, 3–4 s, and an open during it
+takes +0.3–0.7 s. Paging alone gives ~2x on a big chat (the chat-wide work
+stays), not the ~10x first estimated. Owner decision: "List fix, then
+paging": first make the list read each chat's last message and unread count
+only, then load the newest page first (topics, jump to a quote, unread jump
+and in-chat search then need server-side paging).
+
+Big files (owner: large videos should be offered for download as on
+Telegram, with cache cleaning). Today `prefetchFiles` downloads every received
+file whatever its size. Telegram checked in source: Android
+(DrKLO/Telegram 3de37c8c, `DownloadController.java`) defaults to auto-download
+of videos ≤10 MB on mobile data (15 MB Wi-Fi, 500 KB roaming), other files
+≤1 MB (3 MB Wi-Fi), photos ≤1 MB; its server may replace these presets (not
+checked). Desktop (tdesktop 5ff61571, `data_auto_download.cpp`): files and
+photos ≤8 MB (files 0 in channels); videos are never downloaded as files and
+autoplay streamed up to 50 MB. Owner decisions: videos over 10 MB and other
+files over 3 MB wait for a tap ("Download · size" with progress), photos as
+today; only where the relay stores attachments in Google Drive (a relay
+without Drive deletes delivered attachments after 30 days by default, so
+there every file keeps downloading). The existing Settings → System "Review
+received cache…" cleaner is enough.
+
 ## Owner daemon at a full core on v0.10.2 — unreleased, November 1
 
 After the self-update (same pid re-executed into v0.10.2) the owner's daemon
