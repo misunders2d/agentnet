@@ -287,7 +287,9 @@ func TestCLISendReportsDelivery(t *testing.T) {
 	if both, _ := c.try("--home", "alice", "send", "bob/desk", "again"); !strings.Contains(both, "not necessarily read or answered") {
 		t.Fatalf("online send explanation:\n%s", both)
 	}
-	if f := strings.Fields(c.run("--home", "alice", "send", "--wait", "0", "bob/desk", "at once")); f[1] != "custody" {
+	// --wait 0 returns at once with the state then: the Hub's custody, or
+	// bob's receipt when it was quicker than the status read.
+	if f := strings.Fields(c.run("--home", "alice", "send", "--wait", "0", "bob/desk", "at once")); len(f) != 3 || f[1] != "custody" && f[1] != "delivered" {
 		t.Fatalf("--wait 0: %v", f)
 	}
 	if out, err := c.try("--home", "alice", "ask", "--answer-wait", "0", "bob/desk", "q?"); err == nil || !strings.Contains(out, "dm ask-agent") {
