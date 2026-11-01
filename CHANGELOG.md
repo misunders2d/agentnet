@@ -10,6 +10,10 @@ This record starts with v0.8.1; earlier releases remain on the
   within the week, "Oct 24, 6:13 PM" and the year for another year; today's
   messages keep just the time and hovering a time shows the full date. Day
   dividers stay.
+- Open chats and the chat list faster on a busy device: looking up a sent
+  message by its conversation ID no longer reads every sent message. On a
+  device with 28,000 sent copies the slowest chat view drops from about
+  1.6 s to 0.5 s and the overview from about 4.3 s to 2–3 s.
 - Send and invite faster over a distant relay: each safety check (device key,
   person roster, device profile, relay features) is asked once per action and
   members' checks go together; copies to different devices go out at once.

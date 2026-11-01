@@ -1,5 +1,29 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+## Owner daemon at a full core on v0.10.2 — unreleased, November 1
+
+After the self-update (same pid re-executed into v0.10.2) the owner's daemon
+still used about 1.1 cores: ~235 MB/s of 4 KB SQLite page reads from cache
+against a 196 MB `agent.db`, 134 MB of it `outbox` (28,000 rows, envelopes
+inline before `state`/`conv`/`lid`, so a scan walks every overflow page). The
+desktop app's webview asked for a view every few seconds and often hung up
+before the reply ("ui: write: broken pipe"). Profiled offline on a private
+snapshot (deleted after; network-less sandbox): overview 4.3–6.9 s, worst chat
+1.6–4.1 s; `CanConfirmProposal`, `remoteRequestFor`, `SentCopies` and other
+lookups by `lid` alone scanned `outbox` once per shown message (17 of 26
+outbox scans found by `EXPLAIN QUERY PLAN` over every outbox query).
+Appended step `outbox_lid` (`outboxlidindex_test.go`): worst chat 0.4–0.6 s,
+overview 2.1–3.1 s, total profile CPU ~22 s → ~12 s (machine load ~10, so
+±50%). A 32/64 MB page cache gave nothing once the index existed and was
+dropped. Remaining cost, not fixed: overview's `dmOverview` (2.7 s CPU) and
+`topicOverview`/`peerThreadGroups` over 962 threads (2.1 s) load whole
+conversations for list rows; 9 outbox scans remain (`maint.go:75`,
+`proposal.go:346`, `proposalchoice.go:130/209`, `remindersync.go:165`,
+`replyreceiver.go:372/649`, `replyreceiver_worker.go:322`, `store.go:756`).
+Not verified on the owner's running daemon (no restart); acceptance comes
+with the next release. The home also keeps every pre-upgrade snapshot
+(`agent.db.v48.bak` … `v88.bak`, about 1.6 GB).
+
 ## Message times carry their day — unreleased, November 1
 
 87186a2a: Comic message times show their day when not today ("Yesterday
