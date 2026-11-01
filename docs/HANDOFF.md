@@ -48,10 +48,11 @@ hints are targeted, so a new kind was possible but touched 5 hosts). Comic
 `Message.files.tsx`: "Download · size" button, progress bar shown before the
 request returns, failure text + Retry, Play/save only once here; state shared
 per file between chip and video. Skins: `fetch` and the two routes are in
-docs/UI_SKINS.md (`host.file` row) and HOST_API_ROUTES.md; Classic, Holonet
-and Zoom in agentnet-skins do not show Download yet (`host.file` still
-fetches on demand without progress): update them before the release's skins
-gate. Android pages are this bundle over `ui.Live`, so the routes apply there,
+docs/UI_SKINS.md (`host.file` row) and HOST_API_ROUTES.md. agentnet-skins
+0ee0f5e (source only, unpublished) gives Classic, Holonet and Zoom the same
+Download · size, progress, Retry and gone states (`file-fetch.mjs`;
+tests/big-file-download.test.mjs at 390/1280, fails on the old skins);
+Office and Pulp overlay Comic. Publish with the next gallery release. Android pages are this bundle over `ui.Live`, so the routes apply there,
 not run on a device. `markFetch` per view file: one stat; two config key
 probes only for a file not held (not timed on owner data). Tests: `TestKeptAutomatically`,
 `TestBigReceivedFilesWaitForATap` (fails with the rule removed; race clean),
