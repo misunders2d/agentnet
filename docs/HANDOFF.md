@@ -97,7 +97,12 @@ dropped. Remaining cost, not fixed: overview's `dmOverview` (2.7 s CPU) and
 conversations for list rows; 9 outbox scans remain (`maint.go:75`,
 `proposal.go:346`, `proposalchoice.go:130/209`, `remindersync.go:165`,
 `replyreceiver.go:372/649`, `replyreceiver_worker.go:322`, `store.go:756`).
-CI 41312366138 (72d5419c, outbox_conv_sub) is green on attempt 2 after
+CI 41325785187 (ddf830d4: big files + race partition rebalance) is green
+first time. Its predecessor 41322661937 failed: race client-12 passed the
+600 s bound after the two new tests shifted the round-robin split (fixed by
+pins in scripts/race-shard.sh; now client-9 513 s, client-13 537 s, client-12
+done well inside), plus three Windows group-context timing failures that
+passed in the next run. CI 41312366138 (72d5419c, outbox_conv_sub) is green on attempt 2 after
 rerunning Windows jobs that flaked. CI 41300899837 (3b5aa442) is green after rerunning desktop / app (ubuntu):
 the downloaded `linuxdeploy` failed bundling the AppImage once with no
 reason given. Not verified on the owner's running daemon (no restart);
