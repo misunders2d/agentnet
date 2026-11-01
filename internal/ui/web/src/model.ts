@@ -689,6 +689,40 @@ export const clock = (d: Date) => {
   return clockFormat.format(d);
 };
 
+// Formatters for stamp, built once per render batch like clock's.
+const stampFormats = new Map<string, Intl.DateTimeFormat>();
+const stampFormat = (key: string, options: Intl.DateTimeFormatOptions) => {
+  let f = stampFormats.get(key);
+  if (!f) {
+    if (!stampFormats.size) queueMicrotask(() => stampFormats.clear());
+    stampFormats.set(key, f = new Intl.DateTimeFormat([], options));
+  }
+  return f;
+};
+const dayStart = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+
+/** stamp says when a message was written, on this device's clock: "9:00 AM"
+ *  today, "Yesterday 9:00 AM", "Thu 9:00 AM" within the week, "Oct 24, 9:00 AM",
+ *  and "Oct 24, 2025, 9:00 AM" from another year. Day dividers still group the
+ *  conversation; the stamp keeps the day on a message scrolled away from one. */
+export const stamp = (d: Date, now = new Date()) => {
+  if (!Number.isFinite(d.getTime())) return clock(d);
+  const days = Math.round((dayStart(now) - dayStart(d)) / 86400000);
+  if (days === 0) return clock(d);
+  if (days === 1) return "Yesterday " + clock(d);
+  if (days > 1 && days < 7) return stampFormat("week", { weekday: "short", hour: "numeric", minute: "2-digit" }).format(d);
+  return d.getFullYear() === now.getFullYear()
+    ? stampFormat("date", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(d)
+    : stampFormat("year", { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(d);
+};
+export const stampOf = (s: string) => stamp(new Date(s));
+
+/** fullStamp is a message time's hover text: "Thursday, October 29, 2026 at 6:13 PM". */
+export const fullStamp = (s: string) => {
+  const d = new Date(s);
+  return Number.isFinite(d.getTime()) ? stampFormat("full", { dateStyle: "full", timeStyle: "short" }).format(d) : "";
+};
+
 /** dueText says when, on this device's clock: "today 15:00", "tomorrow 9:00", "Tue 7 Oct 9:00". */
 export function dueText(when: string | Date, now = new Date()): string {
   const d = new Date(when);

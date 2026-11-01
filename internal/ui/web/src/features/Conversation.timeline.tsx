@@ -9,7 +9,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { IconArrowDown, IconMessageCircle } from "@tabler/icons-react";
 import { useApp } from "../context";
 import { useStore, type ReadVisit } from "../store";
-import { agentName, dayLabel, messageTarget, timeOf } from "../model";
+import { agentName, dayLabel, messageTarget, stamp, timeOf } from "../model";
 import { AgentAvatar, PersonAvatar } from "../ui/Avatar";
 import { groupedSends } from "../optimistic.mjs";
 import { localRunningDetail } from "../runningDetail";
@@ -91,10 +91,10 @@ export function Timeline({ ctx, messages, focus, focusSeq, unread, readVisit, se
   let finish = hasLater ? items.indexOf(groups[to]) : items.length;
   while (hasLater && finish > begin && items[finish - 1].type !== "msg") finish--;
   const visible = items.slice(begin, finish);
-  // Constructing a locale formatter per timestamp dominates large-page render
-  // time. Reuse one for this immutable message projection, including redraws.
-  const clock = useMemo(() => new Intl.DateTimeFormat([], { hour: "numeric", minute: "2-digit" }), [messages]);
-  const formatTime = useCallback((at: string) => { const date = new Date(at); return Number.isNaN(date.getTime()) ? timeOf(at) : clock.format(date); }, [clock]);
+  // One "now" per message projection, as the day dividers: a new message
+  // re-dates "Today"/"Yesterday"; redraws and typing reformat nothing.
+  const now = useMemo(() => new Date(), [messages]);
+  const formatTime = useCallback((at: string) => stamp(new Date(at), now), [now]);
   const [keyboardEntry, setKeyboardEntry] = useState<{ id: string; target?: string }>();
   const entryID = keyboardEntry?.target === target ? keyboardEntry?.id : target;
   const keyboardRow = visible.find(it => it.type === "msg" && (it.m.id === entryID || it.targets?.some(m => m.id === entryID)));

@@ -1,5 +1,24 @@
 # Next-release interaction coverage and responsiveness
 
+## Message times carry their day — unreleased, November 1
+
+Owner report (Comic on the phone, screenshot): messages showed only "8:27 PM",
+so a conversation scrolled away from its day divider did not say which day.
+Owner decision: keep the day dividers and put the day on each older
+message's time. Counterpart: Telegram and Slack keep a time on each message
+and a "Today"/"Yesterday"/date divider between days, with the full date on
+hover (from knowledge; not re-checked). The per-message day goes beyond
+them by owner decision; its forms follow the chat list's existing `when`
+(time, weekday, date). No new control. The time on a message and on the
+join/leave/invite lines reads "6:13 PM" today, "Yesterday 6:13 PM",
+"Thu 6:13 PM" within the week, "Oct 24, 6:13 PM", and "Oct 24, 2025,
+6:13 PM" from another year; hovering it shows "Thursday, October 29, 2026 at
+6:13 PM". The former "Oct 29 · " prefix for a message sent on another day
+than it arrived is folded into the same stamp. `clock_format_check.mjs`
+(`stamp`, four zones incl. a DST night, ≤4 formatters per batch);
+`latency_fixture.mjs` parity now allows "Yesterday" near midnight. Classic,
+Holonet and Zoom gallery skins still show the time only.
+
 ## Invited agent on an offline or outdated device — unreleased, October 31
 
 Owner report (phone, v0.10.1): own Claude stuck "Joining on admin/linux-laptop…"

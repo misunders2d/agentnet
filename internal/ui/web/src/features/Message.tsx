@@ -16,7 +16,7 @@ import {
 } from "@tabler/icons-react";
 import type { T } from "../api";
 import { useApp, useHoverPointer, useWide } from "../context";
-import { deliveryWord, deviceName, firstLine, owner, personName, plain, reminderOf, timeOf } from "../model";
+import { deliveryWord, deviceName, firstLine, fullStamp, owner, personName, plain, reminderOf, stampOf } from "../model";
 import { AgentAvatar, PersonAvatar } from "../ui/Avatar";
 import { Tag } from "../ui/Tag";
 import { ApprovalCard } from "./Approvals";
@@ -64,7 +64,7 @@ export const MessageView = memo(function MessageView(p: MessageProps) {
   return <ReactionTargets.Provider value={p.targets}><Bubble {...p} /></ReactionTargets.Provider>;
 });
 
-function Bubble({ m, ctx, all, first = true, last = true, status, compact, grouped, targets, selectedIds, outcomeOnly, readOnly, onJump, selecting, selected, onSelect, tabStop, onEntryFocus, formatTime = timeOf }: MessageProps) {
+function Bubble({ m, ctx, all, first = true, last = true, status, compact, grouped, targets, selectedIds, outcomeOnly, readOnly, onJump, selecting, selected, onSelect, tabStop, onEntryFocus, formatTime = stampOf }: MessageProps) {
   const store = useApp();
   const wide = useWide();
   const hoverPointer = useHoverPointer();
@@ -282,7 +282,7 @@ function Meta({ m, who, shared, answered, formatTime }: { m: AnyMsg; who: Who; s
   return (
     <span className="float-right ml-2.5 mt-[0.5em] inline-flex items-center gap-1 text-[12px] leading-none text-muted tnum">
       {m.edited && !m.deleted && <span>edited</span>}
-      <time dateTime={m.sent_at || m.at}>{new Date(m.sent_at || m.at).toDateString()!==new Date(m.at).toDateString()?new Date(m.sent_at || m.at).toLocaleDateString([], {month:"short",day:"numeric"})+" · ":""}{formatTime(m.sent_at || m.at)}</time>
+      <time dateTime={m.sent_at || m.at} title={fullStamp(m.sent_at || m.at)}>{formatTime(m.sent_at || m.at)}</time>
       {tick && <span aria-hidden="true" className="-mr-0.5">{tick}</span>}
       {tick && <span className="sr-only">{m.delivery_uncertain ? "Delivery unconfirmed" : deliveryWord(s)}</span>}
     </span>
@@ -421,7 +421,7 @@ function EventDivider({ m, ctx, all }: { m: T.DMMessage; ctx: Ctx; all: AnyMsg[]
     // Invitations, refusals and records this page can't read are quiet lines; joining and leaving are the dividers.
     return (
       <p data-mid={m.id} role="note" className="mx-auto my-2 max-w-[min(92%,520px)] px-4 text-center text-[13px] leading-snug text-muted [overflow-wrap:anywhere]">
-        {line}{sub && <span> · {sub}</span>}<span className="whitespace-nowrap"> · {timeOf(m.at)}</span>
+        {line}{sub && <span> · {sub}</span>}<span className="whitespace-nowrap"> · {stampOf(m.at)}</span>
       </p>
     );
   }
@@ -435,7 +435,7 @@ function EventDivider({ m, ctx, all }: { m: T.DMMessage; ctx: Ctx; all: AnyMsg[]
         {a && <AgentAvatar seed={a.agent_id || a.host.address} size={28} guest={joined} mood={joined ? "neutral" : "asleep"} />}
         {g && !a && <PersonAvatar name={personName(g.host)} seed={g.host.person || g.host.address} size={28} guest={joined} />}
         <span className="min-w-0">
-          <span className="block text-[14px] [overflow-wrap:anywhere]">{line}<span className="text-muted"> · {timeOf(m.at)}</span></span>
+          <span className="block text-[14px] [overflow-wrap:anywhere]">{line}<span className="text-muted"> · {stampOf(m.at)}</span></span>
           {sub && <span className="block text-muted">{sub}</span>}
           {joined && seen > 0 && (
             <button type="button" onClick={() => setSaw(true)}

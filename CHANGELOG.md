@@ -6,6 +6,10 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+- Show the day on older message times: "Yesterday 6:13 PM", "Thu 6:13 PM"
+  within the week, "Oct 24, 6:13 PM" and the year for another year; today's
+  messages keep just the time and hovering a time shows the full date. Day
+  dividers stay.
 - Send and invite faster over a distant relay: each safety check (device key,
   person roster, device profile, relay features) is asked once per action and
   members' checks go together; copies to different devices go out at once.
