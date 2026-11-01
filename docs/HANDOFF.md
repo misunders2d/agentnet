@@ -20,8 +20,10 @@ dropped. Remaining cost, not fixed: overview's `dmOverview` (2.7 s CPU) and
 conversations for list rows; 9 outbox scans remain (`maint.go:75`,
 `proposal.go:346`, `proposalchoice.go:130/209`, `remindersync.go:165`,
 `replyreceiver.go:372/649`, `replyreceiver_worker.go:322`, `store.go:756`).
-Not verified on the owner's running daemon (no restart); acceptance comes
-with the next release. The home also keeps every pre-upgrade snapshot
+CI 41300899837 (3b5aa442) is green after rerunning desktop / app (ubuntu):
+the downloaded `linuxdeploy` failed bundling the AppImage once with no
+reason given. Not verified on the owner's running daemon (no restart);
+acceptance comes with the next release. The home also keeps every pre-upgrade snapshot
 (`agent.db.v48.bak` … `v88.bak`, about 1.6 GB).
 
 ## Message times carry their day — unreleased, November 1
