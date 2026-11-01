@@ -1,5 +1,22 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+## Message times carry their day — unreleased, November 1
+
+87186a2a: Comic message times show their day when not today ("Yesterday
+6:13 PM", "Thu 6:13 PM", "Oct 24, 6:13 PM", year if older); details in
+docs/INTERACTION_COVERAGE.md. Classic, Holonet and Zoom skins unchanged.
+CI 41288532459 failed `TestCLISendReportsDelivery` (`send --wait 0` saw the
+peer's receipt; fixed in 7405619b to accept it) and Windows
+`TestAdminRecommendationNeverSuspends` (stream lease during the clear,
+passed in the next run). CI 41290653635 (7405619b) is green after rerunning
+Windows client 5: `TestGroupTurnKeptOfflineNotSentToUnrevokedRemovedDevice`
+hit the open `groupTurnsFixture` stall. New detail: Alice's two group-proof
+copies for Bob stayed `queued` 19–21 s with no gate and no error (never
+attempted, not a failed send), so Bob held her seq-1 context `proof_pending`
+(reported to Alice as `quarantined`: held copies live in the quarantine
+table). The same queued proof was recorded before v0.10.2 (run
+41132521965). Not reproduced locally: 12 of 12 with a random 0–300 ms relay.
+
 ## v0.10.2 published and Hub deployed — November 1
 
 [App v0.10.2](https://github.com/misunders2d/agentnet/releases/tag/v0.10.2) is
