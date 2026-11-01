@@ -1,6 +1,6 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
-## Owner decisions: chat open and big files — November 1 (in progress)
+## Owner decisions: chat open and big files — November 1 (released in v0.10.3)
 
 Opening a chat (owner: "investigate why opening a chat is slow"), measured on a
 private offline snapshot of the owner's store, one connection, machine load ~9:
@@ -130,6 +130,34 @@ attempted, not a failed send), so Bob held her seq-1 context `proof_pending`
 (reported to Alice as `quarantined`: held copies live in the quarantine
 table). The same queued proof was recorded before v0.10.2 (run
 41132521965). Not reproduced locally: 12 of 12 with a random 0–300 ms relay.
+
+## v0.10.3 published and Hub deployed — November 1
+
+[App v0.10.3](https://github.com/misunders2d/agentnet/releases/tag/v0.10.3) is
+public and Latest at 21:30:41 UTC from
+`ddf830d4365a7355d0e29916b3da0c49a3ca9991` (chat open and list speedup,
+big received files wait for a tap, Comic day stamps). All twelve payloads
+plus SHA256SUMS verified in the draft (names, checksums, linux-amd64 reports
+v0.10.3 at that revision with a clean tree); the public SHA256SUMS is
+identical. Gates on that commit: CI 41325785187 green; `TestMixedVersion`
+against v0.10.2 passed locally (210 s); skins gate network-isolated (loopback
+up), run 4: 326 checks, zero skipped, every suite of all five published
+skins, qa-orbit, qa-overlay and the native request suite pass (runs 1–3 at
+load 4–18 from Memento's worker timed out waits; agentnet-skins
+PROVENANCE.md). Platform run 41353179934 (desktop ×3, Android) is green, but
+it was dispatched after publication: push CI skips Android qualification, so
+dispatch `platform_only` before tagging next time.
+[Gallery v2026.11.01.1](https://github.com/misunders2d/agentnet-skins/releases/tag/v2026.11.01.1)
+is Latest from `dc7993b`; all 153 raw files match `published/` (Classic,
+Holonet, Zoom 1.11.0 with the Download control and day lines).
+
+Hub starts v0.10.3 at 21:38:22 UTC from the exact public Linux binary
+(sha256 `b7fde305…a402`); public HTTPS version/realm, volume/settings and the
+neighboring service verify, zero restarts, schema 25; the served engine.mjs
+matches the tag with its BUILD stamp. Local recovery verifies 598 files, 581
+local blobs and 8,945 remote Drive references. The v0.10.2 staging scripts
+were reused with only `WORK` changed; the compose file differed from the
+v0.10.2 baseline only by its image line.
 
 ## v0.10.2 published and Hub deployed — November 1
 
