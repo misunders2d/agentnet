@@ -30,6 +30,28 @@ Not fixed: the overview build itself (3–8 s with page and badge on
 successive revisions), so a burst of real changes can still outlast the
 badge's 5 s and log a broken pipe.
 
+Counterparts (owner: "inspect how slack and telegram and whatsapp are doing
+this"). TDLib 4c6377aa (`MessagesManager.cpp`
+`set_dialog_last_read_inbox_message_id`, `send_update_unread_message_count`):
+each chat list keeps unread totals in memory, saved in the binlog; a chat's
+change adds its delta, and `updateUnreadMessageCount`/`updateUnreadChatCount`
+(a few integers) go out only when the delta is non-zero, postponed while
+catching up (`running_get_difference_`). Telegram Desktop 5ff61571
+(`dialogs_main_list.cpp` `unreadStateChanged`, `data_session.cpp`
+`unreadBadge`, `main_domain.cpp` `updateUnreadBadge`): each entry keeps its
+`UnreadState`; the list adds `now − was` and fires a change; the tray badge
+reads the in-memory sum; row repaints coalesce (`updateChatListEntryPostponed`).
+Slack (closed; "Making Slack Faster By Being Lazy", 2017): one `users.counts`
+call lights the whole channel list at start, then the WebSocket brings model
+updates. WhatsApp (closed; Baileys 81345beb, `process-message.ts`,
+`chat-utils.ts`): per-chat `unreadCount` deltas (+1 per real incoming
+message, 0 on a synced mark-read) as `chats.update`, events buffered during
+sync. None rebuilds the chat list for a badge, none pulls the list on a
+timeout, and keep-alive pings produce no update. Reused here: signal only on
+an actual change (the send-pass fix). Not yet reused: per-chat counters
+updated on write, a pushed count for the badge and per-row list updates;
+the badge's retry-once is a stopgap for its pull design, with no counterpart.
+
 ## v0.10.4 published and Hub deployed — November 2
 
 [App v0.10.4](https://github.com/misunders2d/agentnet/releases/tag/v0.10.4) is
