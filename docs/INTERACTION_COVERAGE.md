@@ -81,7 +81,7 @@ AgentNet: the final six-test focused batch passes, zero failures/skips. The
 visibility VM, read/scroll rendered test and read convergence checks were also
 rerun after their affected changes. The old
 visibility VM needed the new entry refs in its fixture; its assertions remain.
-Native badge: three top-level tests plus three delayed-read subtests pass.
+Native badge: three top-level tests plus five delayed-read subtests pass.
 `go vet ./...` and TypeScript type checking in a disposable source copy pass.
 Collection: 19 tests pass with zero failures/skips; the augmented entry timing
 and saved-workspace checks also pass in the separate focused rerun:
