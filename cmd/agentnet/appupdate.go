@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"mime"
 	"net/http"
 	"os"
@@ -134,6 +135,7 @@ func (r *appRunner) stageAppUpdateTo(ctx context.Context, tag string) (string, s
 		return "", "", errors.New("An update is already being prepared.")
 	}
 	defer release()
+	removeOldAppUpdates(r.home)
 	dir, err := os.MkdirTemp(r.home, "app-update-")
 	if err != nil {
 		return "", "", err
@@ -395,6 +397,34 @@ func (r *appRunner) updateApp(ctx context.Context, version string) (map[string]s
 	}
 	keepPaused = true
 	return map[string]string{"state": "restarting", "message": "Restarting AgentNet with the update…"}, nil
+}
+
+// Every update attempt keeps its folder: download, helper and, on Windows,
+// the previous app (the helper runs from it there and cannot delete itself).
+// A running app preparing a new update has finished every earlier attempt,
+// so their folders are obsolete, as Telegram Desktop clears its tupdates
+// after each try. A folder written in the last ten minutes, or whose helper
+// program is still running (Windows refuses to delete it), stays.
+func removeOldAppUpdates(home string) {
+	entries, err := os.ReadDir(home)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil || !e.IsDir() || !strings.HasPrefix(e.Name(), "app-update-") || time.Since(info.ModTime()) < 10*time.Minute {
+			continue
+		}
+		dir := filepath.Join(home, e.Name())
+		helper := filepath.Join(dir, appStableExeDir, "agentnet")
+		if runtime.GOOS == "windows" {
+			helper += ".exe"
+		}
+		if err := os.Remove(helper); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		os.RemoveAll(dir)
+	}
 }
 
 // autoUpdate is the app's daemon's automatic update

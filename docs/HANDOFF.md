@@ -34,6 +34,31 @@ Faster Smaller (Telegram Android converts after send) is not built.
 transfer 404s marked expected; its leave-cleanup check is timing-flaky before
 and after this change.
 
+## Windows app update checks what the installer wrote — November 2 (unreleased, for v0.10.5)
+
+A colleague's Windows PC lost `agentnet-app.exe` and `agentnet.exe`; the
+NSIS installer then exited 0 without writing them ("Can't write …", shown
+only when run by hand). Later evidence there: the two names stay refused in
+`%LOCALAPPDATA%\AgentNet` after a reboot with no open handle (Sysinternals
+Handle), other names write fine, and the same program under another name
+runs. Most likely the managed security product (Bitdefender) blocks those
+paths; not proven, and not something the updater caused or can bypass.
+
+- After a silent install, `installedWindowsApp` requires both programs to
+  exist, be non-empty and differ from the copy in `previous-app`, then the
+  version check as before. Otherwise the update fails with "Windows or
+  security software may have blocked it" and restores the copy.
+- Backup and restore copy each file up to 100 times 100 ms apart, as
+  Telegram Desktop's `updater_win.cpp` does.
+- Preparing an update removes `app-update-*` folders older than ten minutes
+  whose helper can be deleted (Windows kept every attempt's folder);
+  Telegram Desktop clears `tupdates` the same way.
+
+Regressions: `TestAppUpdateWindowsInstallerExitZeroChecksBothPrograms`,
+`TestCopyAppTreeRetriesHeldFile`, `TestRemoveOldAppUpdates`. Not run: a real
+NSIS installer on Windows against a blocked path. The installers are
+unsigned; signing is the owner's decision.
+
 ## Agent dismissals side by side — November 2 (unreleased, for v0.10.5)
 
 Owner: dismiss agents "asyncronously" — each dismissal blocked the next for

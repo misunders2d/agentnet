@@ -32,10 +32,12 @@ was forced off in the page to show Expand. Playback after the rewrite was
 measured in the real Linux app shell (the v0.10.4 AppImage extracted, a
 synthetic 12 s 24 fps clip in mediabunny's layout): before, the picture stuck
 at 2.0 s (48 presented frames in 12 s) while time ran on; after, 286 frames
-in 12 s with and without sound, rewrite 179 ms for 12 MB. Not run: the
-crash itself (needs the owner's input path), the CI-built AppImage with
-fullscreen off, macOS/Windows/Android shells, the gallery skins' own video
-player (skins/shared/video-file.mjs keeps native controls only).
+in 12 s with and without sound, rewrite 179 ms for 12 MB. The CI-built
+AppImage (push run 41437279765, f2baf644) reports WebKit fullscreen off and
+`document.fullscreenEnabled` undefined, so Expand shows; the v0.10.4 AppImage
+reported both on. Not run: the crash itself (needs the owner's input path),
+macOS/Windows/Android shells, the gallery skins' own video player
+(skins/shared/video-file.mjs keeps native controls only).
 
 ## Agent dismissals run side by side — unreleased, November 2
 

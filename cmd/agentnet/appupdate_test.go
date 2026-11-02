@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 )
 
 func TestAppAPIRequiresOwnHostCookieAndOrigin(t *testing.T) {
@@ -120,6 +121,139 @@ func TestAppUpdateWindowsInstallerRestoresPreviousFiles(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(cli); string(b) != "old cli" {
 		t.Fatal("old cli lost")
+	}
+}
+
+// A silent NSIS installer exits 0 when Windows or security software keeps
+// it from writing a program (a colleague's PC, November 2, 2026). Exit 0 is
+// not success: the missing or unreplaced program is named and the previous
+// app comes back.
+func TestAppUpdateWindowsInstallerExitZeroChecksBothPrograms(t *testing.T) {
+	oldRun := appInstallerRun
+	defer func() { appInstallerRun = oldRun }()
+	for _, c := range []struct {
+		name, want string
+		install    func(app, cli string)
+	}{
+		{"app removed", "did not write agentnet-app.exe", func(app, cli string) { os.Remove(app); os.WriteFile(cli, []byte("new cli"), 0700) }},
+		{"nothing written", "did not replace agentnet-app.exe", func(app, cli string) {}},
+		{"only the command", "did not replace agentnet-app.exe", func(app, cli string) { os.WriteFile(cli, []byte("new cli"), 0700) }},
+		{"only the app", "did not replace agentnet.exe", func(app, cli string) { os.WriteFile(app, []byte("new app"), 0700) }},
+		{"command emptied", "did not write agentnet.exe", func(app, cli string) { os.WriteFile(app, []byte("new app"), 0700); os.WriteFile(cli, nil, 0700) }},
+		{"both replaced", "", func(app, cli string) {
+			os.WriteFile(app, []byte("new app"), 0700)
+			os.WriteFile(cli, []byte("new cli"), 0700)
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			install, backup := filepath.Join(dir, "install"), filepath.Join(dir, "backup")
+			os.MkdirAll(install, 0700)
+			app, cli := filepath.Join(install, "agentnet-app.exe"), filepath.Join(install, "agentnet.exe")
+			os.WriteFile(app, []byte("old app"), 0700)
+			os.WriteFile(cli, []byte("old cli"), 0700)
+			if err := copyAppTree(install, backup); err != nil {
+				t.Fatal(err)
+			}
+			appInstallerRun = func(context.Context, string, ...string) error { c.install(app, cli); return nil }
+			err := installWindowsApp(appUpdatePlan{App: app, Asset: filepath.Join(dir, "installer.exe"), Backup: backup})
+			if c.want == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "restored") {
+				t.Fatalf("exit 0 with %s reported %v", c.name, err)
+			}
+			for path, old := range map[string]string{app: "old app", cli: "old cli"} {
+				if b, _ := os.ReadFile(path); string(b) != old {
+					t.Fatalf("%s not restored: %q", filepath.Base(path), b)
+				}
+			}
+			if problem := installedWindowsApp(context.Background(), appUpdatePlan{App: app, Backup: filepath.Join(dir, "none")}); problem != nil {
+				t.Fatal(problem)
+			}
+			// The reason the helper records names the program.
+			c.install(app, cli)
+			if problem := installedWindowsApp(context.Background(), appUpdatePlan{App: app, Backup: backup}); problem == nil || !strings.Contains(problem.Error(), c.want) {
+				t.Fatalf("reason %v, want %q", problem, c.want)
+			}
+		})
+	}
+}
+
+// Restoring waits out a file Windows or security software holds briefly,
+// within a bound, as Telegram Desktop's updater does.
+func TestCopyAppTreeRetriesHeldFile(t *testing.T) {
+	oldOpen, oldTries, oldPause := appOpenWrite, appCopyTries, appCopyPause
+	defer func() { appOpenWrite, appCopyTries, appCopyPause = oldOpen, oldTries, oldPause }()
+	appCopyTries, appCopyPause = 5, time.Millisecond
+	src, dst := t.TempDir(), t.TempDir()
+	os.WriteFile(filepath.Join(src, "agentnet-app.exe"), []byte("previous app"), 0700)
+	refuse := 0
+	appOpenWrite = func(name string, flag int, perm os.FileMode) (*os.File, error) {
+		if refuse > 0 {
+			refuse--
+			return nil, &os.PathError{Op: "open", Path: name, Err: errors.New("Access is denied.")}
+		}
+		return os.OpenFile(name, flag, perm)
+	}
+	refuse = 4
+	if err := copyAppTree(src, dst); err != nil {
+		t.Fatal("held four times, then free:", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dst, "agentnet-app.exe")); string(b) != "previous app" {
+		t.Fatalf("copied %q", b)
+	}
+	refuse = 5
+	if err := copyAppTree(src, t.TempDir()); err == nil || !strings.Contains(err.Error(), "Access is denied") {
+		t.Fatal("held past the bound must fail with its reason:", err)
+	}
+	if refuse != 0 {
+		t.Fatalf("%d tries left unused", refuse)
+	}
+}
+
+// Earlier attempts' folders (download, helper, previous app) go when a new
+// update is prepared; a recent one and one whose helper still runs stay.
+func TestRemoveOldAppUpdates(t *testing.T) {
+	home := t.TempDir()
+	exe := "agentnet"
+	if runtime.GOOS == "windows" {
+		exe += ".exe"
+	}
+	old := time.Now().Add(-time.Hour)
+	folder := func(name string, running bool, at time.Time) string {
+		dir := filepath.Join(home, name)
+		os.MkdirAll(filepath.Join(dir, "previous-app"), 0700)
+		os.WriteFile(filepath.Join(dir, "previous-app", "agentnet-app.exe"), []byte("app"), 0600)
+		os.MkdirAll(filepath.Join(dir, appStableExeDir), 0700)
+		helper := filepath.Join(dir, appStableExeDir, exe)
+		if running {
+			// Stands in for a running program: removing it fails.
+			os.MkdirAll(filepath.Join(helper, "busy"), 0700)
+		} else {
+			os.WriteFile(helper, []byte("helper"), 0700)
+		}
+		os.Chtimes(dir, at, at)
+		return dir
+	}
+	finished := folder("app-update-1", false, old)
+	empty := filepath.Join(home, "app-update-2")
+	os.Mkdir(empty, 0700)
+	os.Chtimes(empty, old, old)
+	recent := folder("app-update-3", false, time.Now())
+	running := folder("app-update-4", true, old)
+	other := folder("update-helper-5", false, old)
+	removeOldAppUpdates(home)
+	for dir, want := range map[string]bool{finished: false, empty: false, recent: true, running: true, other: true} {
+		if _, err := os.Stat(dir); (err == nil) != want {
+			t.Fatalf("%s kept=%v, want %v", filepath.Base(dir), err == nil, want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(running, "previous-app", "agentnet-app.exe")); err != nil {
+		t.Fatal("a running attempt's backup was touched:", err)
 	}
 }
 
