@@ -1,5 +1,35 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+## Broken pipes on v0.10.4: the ping's content pair — November 2 (unreleased, MEL-731)
+
+Owner: "investigate the broken pipe". Read-only on the owner's v0.10.4
+daemon (pid 1011; no restart, no token): 10 min of `ss` mapping each
+`ui: write: broken pipe` port to its client process and byte counts. All 7
+were the desktop app's unread badge (`agentnet app`), none the webview:
+the badge's 255-byte overview GET hit its 5 s timeout and the daemon wrote
+the ~612 KB overview 1–3 s later. Those builds took 6–8 s, because two
+content revisions ~100 ms apart each made a build under `overviewMu`.
+`PRAGMA data_version` and WAL frame pages showed each 90 s Hub ping
+committing two empty-table `DELETE FROM history_archive_export_errors` (an
+archive wake each; not in the change chain). A probe test (1 s Hub
+heartbeat, stack per bump) found both content bumps came from
+`postOutboxBackground`'s unconditional `NoteChange()` after every pass,
+including passes that sent nothing.
+
+Fix: the pass signals a change only when `total_changes()` moved (the store
+has one connection, so direct updates count; a query error still
+signals). Probe after: 5 pings, content unchanged. Regression check in
+`TestQueuedSendReturnsBeforePostAndOrdersTwoTurns` (fails before: 17 → 18).
+The ping pair had also hidden a badge gap: a failed overview GET marked
+the badge partial and nothing asked again until the next change, which the
+ping used to supply. The badge now asks once more for a revision whose
+request failed (never more; `TestAppUnreadOwnedAttachedProjectionAndUnknown`,
+truncated body because Go's transport silently re-sends a GET whose
+connection closes before any answer; fails before: stays partial).
+Not fixed: the overview build itself (3–8 s with page and badge on
+successive revisions), so a burst of real changes can still outlast the
+badge's 5 s and log a broken pipe.
+
 ## v0.10.4 published and Hub deployed — November 2
 
 [App v0.10.4](https://github.com/misunders2d/agentnet/releases/tag/v0.10.4) is
@@ -149,7 +179,8 @@ change at all. Over 60 s: 9% CPU, 39 MB/s of reads (was ~107% and
 357 MB/s). Over the next 3 minutes with the app open and agents idle: 4%
 average, no broken pipes; the only changes came in pairs 90 s apart (the Hub
 ping interval), each costing one build of ~3–5 s at 20–30% instead of a
-13 s burst. What bumps content at each ping is not identified yet.
+13 s burst. The ping pair was `postOutboxBackground`'s unconditional change
+signal (see the broken-pipe section above).
 
 After the self-update (same pid re-executed into v0.10.2) the owner's daemon
 still used about 1.1 cores: ~235 MB/s of 4 KB SQLite page reads from cache

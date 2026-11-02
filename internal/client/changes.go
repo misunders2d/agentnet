@@ -78,6 +78,14 @@ func (s *store) changed() {
 	}
 }
 
+// rowChanges counts the rows this process has written so far. The store has
+// one connection (sqlitedb), so total_changes() sees every write through it,
+// direct updates included; a new connection restarts the count.
+func (s *store) rowChanges() (int64, bool) {
+	var n int64
+	return n, s.db.QueryRow(`SELECT total_changes()`).Scan(&n) == nil
+}
+
 // done signals a change when err is nil and returns err.
 func (s *store) done(err error) error {
 	if err == nil {

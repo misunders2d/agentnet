@@ -127,6 +127,7 @@ func (a *Agent) postOutboxBackground() {
 	go func() {
 		defer cancel()
 		for {
+			before, counted := a.store.rowChanges()
 			if err := a.flushReceipts(ctx); err != nil && ctx.Err() == nil {
 				a.Logf("receipts: %v", err)
 			}
@@ -136,7 +137,11 @@ func (a *Agent) postOutboxBackground() {
 			if err := a.flushReceipts(ctx); err != nil && ctx.Err() == nil {
 				a.Logf("receipts: %v", err)
 			}
-			a.NoteChange()
+			// Every Hub ping runs this pass. One that stored nothing must
+			// not make open views rebuild (MEL-731).
+			if after, ok := a.store.rowChanges(); !counted || !ok || after != before {
+				a.NoteChange()
+			}
 			p.Lock()
 			if p.again && !p.closed && ctx.Err() == nil {
 				p.again = false

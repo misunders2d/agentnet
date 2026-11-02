@@ -119,6 +119,23 @@ func TestQueuedSendReturnsBeforePostAndOrdersTwoTurns(t *testing.T) {
 	if err := w.alice.FlushOutbox(tctx(t)); err != nil {
 		t.Fatal(err)
 	}
+	// Each Hub ping runs a background pass. One with nothing to send leaves
+	// open views alone: no content change, no rebuild (MEL-731).
+	pass := func() {
+		w.alice.postOutboxBackground()
+		w.alice.posting.Lock()
+		done := w.alice.posting.done
+		w.alice.posting.Unlock()
+		if done != nil {
+			<-done
+		}
+	}
+	pass()
+	before, _ := w.alice.ViewChanges()
+	pass()
+	if after, _ := w.alice.ViewChanges(); after.Content != before.Content {
+		t.Fatalf("an idle pass changed content %d -> %d", before.Content, after.Content)
+	}
 }
 
 // Pending auxiliary copies keep their own delivery gate closed without

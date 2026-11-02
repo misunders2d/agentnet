@@ -45,7 +45,7 @@ type unreadTestHost struct {
 	mu             sync.Mutex
 	totals         map[string]*uint64
 	status         map[string]int
-	hits           map[string]int
+	hits, drops    map[string]int
 	messages       chan string
 	requests       chan string
 	closed         chan struct{}
@@ -91,10 +91,22 @@ func (h *unreadTestHost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.hits[key]++
 	total, status := h.totals[key], h.status[key]
 	blocked := key == h.blockKey
+	drop := h.drops[key] > 0
+	if drop {
+		h.drops[key]--
+	}
 	h.mu.Unlock()
 	select {
 	case h.requests <- key:
 	default:
+	}
+	if drop { // the request fails as a timed-out one does: no whole answer
+		w.Header().Set("Content-Length", "64")
+		w.Write([]byte("{"))
+		if conn, _, err := w.(http.Hijacker).Hijack(); err == nil {
+			conn.Close()
+		}
+		return
 	}
 	if blocked {
 		select {
@@ -119,7 +131,7 @@ func (h *unreadTestHost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 func unreadCount(v uint64) *uint64 { return &v }
 func newUnreadTestHost() *unreadTestHost {
-	return &unreadTestHost{totals: map[string]*uint64{}, status: map[string]int{}, hits: map[string]int{}, messages: make(chan string, 30), requests: make(chan string, 30), closed: make(chan struct{}, 4), block: make(chan struct{}), started: make(chan struct{}, 1)}
+	return &unreadTestHost{totals: map[string]*uint64{}, status: map[string]int{}, hits: map[string]int{}, drops: map[string]int{}, messages: make(chan string, 30), requests: make(chan string, 30), closed: make(chan struct{}, 4), block: make(chan struct{}), started: make(chan struct{}, 1)}
 }
 func unreadMembership(rev uint64, bindings ...appUnreadBinding) string {
 	if bindings == nil {
@@ -225,6 +237,43 @@ func TestAppUnreadOwnedAttachedProjectionAndUnknown(t *testing.T) {
 			host.messages <- unreadChange(a)
 			host.requested(t, ka)
 			b.Seq = 3
+			host.set(kb, unreadCount(1), 0)
+			host.messages <- unreadChange(b)
+			output.next(t, 1, false)
+			// A failed GET (a daemon rebuild outlasted the timeout) is asked
+			// once more for that revision, never again (MEL-731).
+			b.Seq = 4
+			host.mu.Lock()
+			host.drops[kb], host.hits[kb] = 1, 0
+			host.mu.Unlock()
+			host.set(kb, unreadCount(4), 0)
+			host.messages <- unreadChange(b)
+			output.next(t, 4, false)
+			for len(host.requests) > 0 {
+				<-host.requests
+			}
+			b.Seq = 5
+			host.mu.Lock()
+			host.drops[kb], host.hits[kb] = 5, 0
+			host.mu.Unlock()
+			host.messages <- unreadChange(b)
+			output.next(t, 4, true)
+			host.requested(t, kb)
+			host.requested(t, kb)
+			select {
+			case <-host.requests:
+				t.Fatal("a failed revision was asked more than twice")
+			case <-time.After(200 * time.Millisecond):
+			}
+			host.mu.Lock()
+			if host.hits[kb] != 2 || host.drops[kb] != 3 {
+				t.Fatal("retry count", host.hits[kb], host.drops[kb])
+			}
+			host.mu.Unlock()
+			b.Seq = 6
+			host.mu.Lock()
+			host.drops[kb] = 0
+			host.mu.Unlock()
 			host.set(kb, unreadCount(1), 0)
 			host.messages <- unreadChange(b)
 			output.next(t, 1, false)

@@ -30,14 +30,14 @@ type appUnreadBinding struct {
 	Seq    uint64 `json:"seq"`
 }
 type appUnreadValue struct {
-	binding                 appUnreadBinding
-	total                   uint64
-	known, unknown, pending bool
+	binding                          appUnreadBinding
+	total                            uint64
+	known, unknown, pending, retried bool
 }
 type appUnreadFetch struct {
-	binding appUnreadBinding
-	total   *uint64
-	stale   bool
+	binding       appUnreadBinding
+	total         *uint64
+	stale, failed bool
 }
 type appUnreadMessage struct {
 	name string
@@ -234,6 +234,7 @@ func fetchAppUnread(ctx context.Context, c *http.Client, base *url.URL, token st
 	u.RawQuery = "topics=1"
 	res, err := appUnreadRequest(requestCtx, c, &u, token)
 	if err != nil {
+		fetch.failed = true
 		return fetch
 	}
 	defer res.Body.Close()
@@ -248,7 +249,9 @@ func fetchAppUnread(ctx context.Context, c *http.Client, base *url.URL, token st
 		Total *uint64 `json:"alert_total"`
 	}
 	data, err := io.ReadAll(io.LimitReader(res.Body, (4<<20)+1))
-	if err == nil && len(data) <= 4<<20 && json.Unmarshal(data, &value) == nil {
+	if err != nil {
+		fetch.failed = true
+	} else if len(data) <= 4<<20 && json.Unmarshal(data, &value) == nil {
 		fetch.total = value.Total
 	}
 	return fetch
@@ -342,6 +345,12 @@ func (r *appRunner) unreadConnection(session *appUnreadSession, c *http.Client, 
 				delete(states, key)
 			} else if result.total == nil {
 				state.unknown = true
+				// The request failed (a rebuild outlasted the timeout): ask
+				// once more for this revision, as no event asks again until
+				// the next change (MEL-731).
+				if result.failed && !state.retried {
+					state.retried, state.pending = true, true
+				}
 			} else {
 				state.total, state.known, state.unknown = *result.total, true, false
 			}
@@ -375,7 +384,7 @@ func (r *appRunner) unreadConnection(session *appUnreadSession, c *http.Client, 
 						state = &appUnreadValue{binding: binding, unknown: true, pending: true}
 					} else if binding.Seq > state.binding.Seq {
 						state.binding.Seq = binding.Seq
-						state.pending = true
+						state.pending, state.retried = true, false
 					} else if state.unknown && !(busy && appUnreadKey(inFlight) == key && inFlight.Seq == state.binding.Seq) {
 						state.pending = true
 					}
@@ -396,7 +405,7 @@ func (r *appRunner) unreadConnection(session *appUnreadSession, c *http.Client, 
 				state := states[appUnreadKey(binding)]
 				if state != nil && binding.Seq > state.binding.Seq {
 					state.binding.Seq = binding.Seq
-					state.pending = true
+					state.pending, state.retried = true, false
 				}
 			}
 		}
