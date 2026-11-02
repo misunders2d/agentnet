@@ -272,8 +272,9 @@ func TestGoogleReviewEmailConflict(t *testing.T) {
 // the new one instead of freezing it, once the relay shows every earlier
 // device revoked; an earlier freeze and the messages it held are released.
 func TestGoogleReviewEmailRejoinAfterRemoval(t *testing.T) {
-	for _, frozen := range []bool{false, true} {
-		t.Run(fmt.Sprint("frozen=", frozen), func(t *testing.T) {
+	for _, scenario := range []string{"fresh", "frozen", "interrupted"} {
+		frozen := scenario != "fresh"
+		t.Run(scenario, func(t *testing.T) {
 			w := newGoogleReviewWorld(t)
 			first := w.join(t, "laptop")
 			old, _, err := first.Person()
@@ -313,6 +314,16 @@ func TestGoogleReviewEmailRejoinAfterRemoval(t *testing.T) {
 				}
 				if _, err = peer.store.db.Exec(`INSERT INTO quarantine(id, sender, reason, envelope, received_at) VALUES('held-1', ?, ?, '{}', 1)`, fresh.Address, reasonConflict); err != nil {
 					t.Fatal(err)
+				}
+			}
+			if scenario == "interrupted" {
+				// The freeze was released, then the chain fetch failed or the
+				// process stopped before the new pin.
+				if err = peer.settleEmail(w.ctx, np.Person, old.Email); err != nil {
+					t.Fatal(err)
+				}
+				if ok, err := peer.store.releaseEmailClaim(np.Person, old.Email); err != nil || !ok {
+					t.Fatal("setup: release:", ok, err)
 				}
 			}
 			if _, err = peer.refreshPerson(w.ctx, np.Person, false); err != nil {

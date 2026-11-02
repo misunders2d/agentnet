@@ -447,7 +447,7 @@ func (a *Agent) refreshPerson(ctx context.Context, person string, adopt bool) (p
 
 func (a *Agent) pinNewerSteps(ctx context.Context, person string, adopt bool) (pinResult, error) {
 	after := int64(-1)
-	reclaimed := false
+	first := true // pinned here from step 0 now: never before, or its email-claim freeze released
 	if p, ok, err := a.store.personByID(person); err != nil {
 		return pinResult{}, err
 	} else if ok {
@@ -467,9 +467,8 @@ func (a *Agent) pinNewerSteps(ctx context.Context, person string, adopt bool) (p
 			} else if !ok {
 				return pinResult{}, errPersonConflict
 			}
-			reclaimed = true
 		} else {
-			after = p.info.Seq
+			after, first = p.info.Seq, false
 		}
 	}
 	raws, err := a.fetchChain(ctx, person, after)
@@ -484,8 +483,9 @@ func (a *Agent) pinNewerSteps(ctx context.Context, person string, adopt bool) (p
 		}
 	}
 	res, err := a.store.pinChain(person, raws, a.Self(), adopt)
-	if err == nil && reclaimed {
-		// Messages held while it was frozen look again, as for new proof.
+	if err == nil && first && res.changed {
+		// Messages held while it was frozen look again, as for new proof,
+		// also when a release was interrupted before this pin.
 		if n, e := a.store.releaseConflictHolds(person); e != nil {
 			return res, e
 		} else if n > 0 {

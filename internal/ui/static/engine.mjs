@@ -3558,13 +3558,12 @@ export class Engine {
   // pinChain pins person the first time: its whole chain, verified from
   // step 0 (trust on first use), and its devices' keys.
   async pinChain(person, admission = null) {
-    let known = person === (this.me && this.me.person) ? this.me : await this.store.get("persons", person), reclaimed = false;
+    let known = person === (this.me && this.me.person) ? this.me : await this.store.get("persons", person);
     if (known?.state === "conflict" && known.email_claim && !admission?.localOnly && !(await this.emailHeld(known, admission))) {
       // Frozen only for claiming an email whose holder has left since: the
       // freeze is forgotten and the chain pinned again from step 0.
       await this.store.write([{ s: "persons", k: person, v: undefined }], [{ s: "persons", k: person, v: known }]);
       known = null;
-      reclaimed = true;
     }
     if (known && admission?.localOnly) return this.receivePerson(known, admission);
     if (known) {
@@ -3591,7 +3590,9 @@ export class Engine {
     }
     await put(this.store, "persons", p.person, p);
     await this.pinDevices(p);
-    if (reclaimed) await this.releaseConflictHolds(p);
+    // Pinned from step 0: what its frozen claim held looks again, also when
+    // a release was interrupted before this pin.
+    await this.releaseConflictHolds(p);
     return admission ? this.receivePerson(p, admission) : p;
   }
 
