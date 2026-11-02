@@ -979,3 +979,45 @@ preserving the existing 28 advertised names, 32 reader names and 1024 signed-byt
 bounds. Unsupported readers keep exact sealed copies; body erasure/archive
 repack must retain this requirement. Legacy event bytes remain unchanged when
 the parent field is absent. No new schema, service, polling or permission mode.
+
+## November 2, 2026 — lost every device: reconnect with Google and admin approval (MEL-736)
+
+Owner: "he should be able to just reconnect".
+
+**The case.** A colleague's full uninstall deleted his device keys. The Hub still listed that device as active. His Google sign-in on a new install then waited for approval from that dead device, which can never come.
+
+**Owner decisions (November 2):**
+- Recovery needs an admin's approval.
+- A fresh identity is acceptable when the person proves the email with a fresh Google sign-in.
+- The same recovery covers workspace admins.
+
+**Next release scope:**
+
+1. **Recovery request.** The Google sign-in and link-pending screens offer "I no longer have my other devices".
+   - A fresh Google token (same subject and email) plus the new device key forms the request.
+   - Device loss is never inferred from offline status.
+2. **Admin approval.** Admins see the request in the app and in `agentnet admin google`, and approve it once. In one transaction the Hub then:
+   - revokes every active, pending and detached device of the earlier person (`settleRevokedDevice`);
+   - replaces the Google binding with the requester's new signed first roster;
+   - keeps the email allowed.
+
+   The Hub never continues the old roster, because `VerifyNext` needs an old key. The new person never inherits the old person's grants. Another admin approves an admin's request. When no admin device remains, the Hub host operator approves with an `agentnet hub` command.
+3. **Start again.** Removed, pending, expired and refused devices offer Start again in every interface.
+   - After confirmation, the old local data is set aside. Nobody deletes folders by hand.
+   - The removed state persists across restarts.
+4. **Peers accept the reset person.** This fixes a defect.
+   - P8 above says local pins only hide a conflicting person's email. The code instead freezes the new person, in the client (`persons.go`, `pinChain` and `Persons`) and the browser engine (`pinChain`). Frozen persons are refused by DMs and groups, and nothing clears the state.
+   - Fix: when every device of the earlier person with that email is revoked on the Hub, peers pin the new person and show a key-change notice. The earlier person, its history and pins stay. Existing frozen records are re-evaluated.
+   - A still-active earlier person keeps freezing the new claim.
+
+**Deferred:**
+- a waiting period and notices to old devices;
+- continuity of the same person;
+- automatic group re-membership.
+
+**Gates.** Before the build, inspect the Telegram and Slack counterparts' code; so far they are compared only from their documentation. Also required:
+- focused regressions for this exact case;
+- rendered interactions under 1000 ms;
+- the mixed-version and skins gates.
+
+Read-only reviews by Codex and Antigravity (November 2) are the design input. Nothing is implemented yet.
