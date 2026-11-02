@@ -106,9 +106,9 @@ for(const target of ['current-thread','same-peer-other-thread']){
  // async guard. Stub React state/ref storage while keeping the exact source.
  const source=readFileSync(new URL('web/src/features/RoomPanel.tsx',root),'utf8');
  const hook=stripTypeScriptTypes(source.slice(source.indexOf('function useRoomAction('),source.indexOf('/** Decisions stay')));
- const selected={kind:'dm',id:conv},states=[],g={key:'agent',kind:'agent',pid:'p',name:'Pi'};
+ const selected={kind:'dm',id:conv},states=[],g={key:'guest',kind:'guest',pid:'g',name:'Ann'},agent={key:'agent',kind:'agent',pid:'p',name:'Pi'};
  let calls=0,snacks=0;
- const store={get:()=>({open:selected,pending:null}),isActive:()=>true,api:{dismissAgent:async()=>{calls++;return {}; }},run:fn=>fn(),refreshOpen:async()=>{throw Error('room refresh failed');}};
+ const store={get:()=>({open:selected,pending:null}),isActive:()=>true,api:{endGuest:async()=>{calls++;return {}; },dismissAgent:async()=>{calls++;return {}; }},run:fn=>fn(),refreshOpen:async()=>{throw Error('room refresh failed');}};
  const useRoomAction=Function('useApp','useState','useRef','callName','cap',hook+';return useRoomAction;')(()=>store,()=>['',s=>states.push(s)],v=>({current:v}),n=>n,n=>n);
  const action=useRoomAction(conv,()=>snacks++);
  await assert.rejects(action.act(g,'dismiss'),/room refresh failed/);
@@ -117,6 +117,15 @@ for(const target of ['current-thread','same-peer-other-thread']){
  const dm=gate();store.refreshOpen=()=>dm.promise;
  const retry=action.act(g,'dismiss');await pause(0);await action.act(g,'dismiss');assert.equal(calls,3,'pending guard survives selected refresh and rejects duplicate');
  dm.release(true);await retry;assert.equal(states.at(-1),'');assert.equal(snacks,1,'retry succeeds after failure cleared guard');
+ // An agent's dismissal never takes the room's lock: its card waits on its
+ // own store entry (agent_dismissal_rendered.cjs), so a held room reload
+ // neither blocks the next dismissal nor shows the room busy.
+ const marks=states.length;store.refreshOpen=async()=>{throw Error('room refresh failed');};
+ await assert.rejects(action.act(agent,'dismiss'),/room refresh failed/);assert.equal(snacks,1,'agent refresh failure offers no Undo');
+ const held=gate();store.refreshOpen=()=>held.promise;
+ const first=action.act(agent,'dismiss');await pause(0);const second=action.act(g,'dismiss');await pause(0);
+ assert.equal(calls,6,'the room stays usable while an agent dismissal waits for its reload');assert.equal(states.length,marks+1,'only the guest action shows the room busy');
+ held.release(true);await first;await second;assert.equal(snacks,3);assert.equal(states.at(-1),'');
  console.log('RoomPanel failure cleanup and duplicate guard PASS');
 }
 
