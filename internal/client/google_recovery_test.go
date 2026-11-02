@@ -61,7 +61,7 @@ func TestMEL736RequesterAndAdminAPI(t *testing.T) {
 	if e = conn.do(ctx, "POST", "/v1/google/prepare", oldReq, &prepared); e != nil {
 		t.Fatal(e)
 	}
-	oldPub.Address = prepared.Address
+	oldPub = oldKey.Public(prepared.Address)
 	oldPerson := protocol.PersonRoster{Person: protocol.NewID(), Label: "Bohdan", Email: email, Devices: []identity.Public{oldPub}}
 	oldPerson.Sign(oldKey.Sign)
 	oldReq.Public = oldPub
