@@ -364,12 +364,18 @@ export class Store {
       }
       views[id] = share(view, projected);
       const summary = kind === "dm" ? overview?.dms?.find(d => d.id === id) : overview?.threads?.find(t => t.id === id) || overview?.topics?.find(t => t.latest.id === id)?.latest;
-      // A newer overview may already include the commit; do not subtract twice.
       const group = kind === "thread" ? this.archivedRead(view) : undefined;
-      if (overview && (summary || group) && (overview.seq || 0) <= (view.seq || 0)) {
+      // A newer overview may already include this commit or newer arrivals the
+      // view lacks: subtract only these exact rows, never below the view's
+      // remainder and never above the overview. Sequence alone proves neither.
+      const newer = (overview?.seq || 0) > (view.seq || 0);
+      const project = (base: number, left: number) => newer ? Math.min(base, Math.max(left, base - cleared)) : left;
+      const left = messages.filter(m => m.unread).length;
+      const latest = group && overview?.topics?.find(t => JSON.stringify([t.peer, directChatKey(t.latest)]) === group.group);
+      if (overview && (summary || group)) {
         overview = this.readOverview(overview, { kind, id, seq: view.seq || 0,
-          unread: Math.min(summary?.unread ?? Infinity, messages.filter(m => m.unread).length),
-          ...(group ? { ...group, archived_unread: Math.max(0, group.archived_unread - cleared) } : {}) });
+          unread: summary ? Math.min(summary.unread, project(summary.unread, left)) : left,
+          ...(group ? { ...group, archived_unread: latest ? project(latest.archived_unread, Math.max(0, group.archived_unread - cleared)) : Math.max(0, group.archived_unread - cleared) } : {}) });
       }
     }
     const value = { ...s, views, overview,

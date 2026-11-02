@@ -141,3 +141,26 @@ for(const blocked of [false,true]){
  assert(s.get().toasts.some(t=>t.text==='Read status not confirmed. Reopen this chat to retry.'));s.stop();
  console.log(JSON.stringify({ok:true,mode:'accepted-without-native-commit',reads}));
 }
+
+// MEL-741 review: a newer overview (unrelated activity or a refresh before the
+// view) must not hold the badge, resurrect it, or hide a newer arrival.
+{
+ const readGate=gate();let seq=2,arrival=false,rejectRead;
+ const failed=new Promise((_,reject)=>rejectRead=reject);
+ const host={platform:'daemon',workspace:{id:'newer-overview'},listen:()=>()=>{},async api(path){
+  if(path.startsWith('/api/overview'))return{seq,version:'test',me,dms:[{id:conv,unread:arrival?2:1}],threads:[],unread_total:arrival?2:1};
+  if(path.startsWith('/api/dm?'))return{id:conv,seq:1,peer:{},agents:[],messages:[{id:'seen',kind:'message',dir:'in',unread:true}]};
+  if(path==='/api/act'){await readGate.promise;return failed;}
+  if(path.startsWith('/api/agents'))return{agents:[]};return{};
+ }};
+ const s=new Store(host);mount(s);await s.start();await s.open({kind:'dm',id:conv});for(let i=0;i<20;i++)await tick();
+ assert.equal(s.get().dm.messages[0].unread,false,'row clears at once');
+ assert.equal(s.get().overview.dms[0].unread,0,'newer overview badge clears at once');assert.equal(s.get().overview.unread_total,0);
+ seq=3;await s.load(false,false);for(let i=0;i<20;i++)await tick();
+ assert.equal(s.get().overview.dms[0].unread,0,'newer pre-commit overview cannot resurrect the badge');
+ arrival=true;seq=4;await s.load(false,false);for(let i=0;i<20;i++)await tick();
+ assert.equal(s.get().overview.dms[0].unread,1,'newer arrival absent from the view is kept');assert.equal(s.get().overview.unread_total,1);
+ readGate.release();rejectRead(Error('fictional read rejection'));for(let i=0;i<20;i++)await tick();
+ assert.equal(s.get().dm.messages[0].unread,true,'failure restores the row');assert.equal(s.get().overview.dms[0].unread,2,'failure restores the badge');
+ s.stop();console.log(JSON.stringify({ok:true,mode:'newer-overview-optimistic-read'}));
+}
