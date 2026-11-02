@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -11,8 +12,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/misunders2d/agentnet/internal/hub"
 	"github.com/misunders2d/agentnet/internal/identity"
 	"github.com/misunders2d/agentnet/internal/protocol"
+	"github.com/misunders2d/agentnet/internal/testgoogle"
+	"github.com/misunders2d/agentnet/internal/testhub"
 )
 
 func mel736OneRoster(t *testing.T, id, name string) protocol.PersonRoster {
@@ -47,6 +51,7 @@ func mel736OneLeave(t *testing.T, s *store, r protocol.PersonRoster, complete bo
 }
 func TestMEL736OneBohdanResolverRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "agent.db")
+	seedFixtureStore(t, filepath.Dir(path))
 	s, e := openStore(path)
 	if e != nil {
 		t.Fatal(e)
@@ -83,7 +88,9 @@ func TestMEL736OneBohdanResolverRestart(t *testing.T) {
 	}
 }
 func TestMEL736OneIncompleteHeadFailsClosed(t *testing.T) {
-	s, e := openStore(filepath.Join(t.TempDir(), "agent.db"))
+	home := t.TempDir()
+	seedFixtureStore(t, home)
+	s, e := openStore(filepath.Join(home, "agent.db"))
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -100,7 +107,9 @@ func TestMEL736OneIncompleteHeadFailsClosed(t *testing.T) {
 }
 
 func TestMEL736OneBohdanTimelinesAndReplies(t *testing.T) {
-	s, e := openStore(filepath.Join(t.TempDir(), "agent.db"))
+	home := t.TempDir()
+	seedFixtureStore(t, home)
+	s, e := openStore(filepath.Join(home, "agent.db"))
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -171,7 +180,9 @@ func TestMEL736OneBohdanTimelinesAndReplies(t *testing.T) {
 func TestMEL736OneAmbiguousAndLiveFailClosed(t *testing.T) {
 	for _, complete := range []bool{false, true} {
 		t.Run(fmt.Sprint(complete), func(t *testing.T) {
-			s, e := openStore(filepath.Join(t.TempDir(), "agent.db"))
+			home := t.TempDir()
+			seedFixtureStore(t, home)
+			s, e := openStore(filepath.Join(home, "agent.db"))
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -179,8 +190,18 @@ func TestMEL736OneAmbiguousAndLiveFailClosed(t *testing.T) {
 			old := mel736OneRoster(t, protocol.NewID(), "old")
 			next := mel736OneRoster(t, protocol.NewID(), "new")
 			mel736OnePin(t, s, old)
-			mel736OneLeave(t, s, old, complete)
-			mel736OnePin(t, s, next)
+			if complete {
+				mel736OneLeave(t, s, old, true)
+				mel736OnePin(t, s, next)
+			} else {
+				if e = s.setConfig(map[string]string{continuityHeadPrefix + old.Person: old.Hash()}); e != nil {
+					t.Fatal(e)
+				}
+				raw, _ := json.Marshal(next)
+				if _, e = s.pinChain(next.Person, [][]byte{raw}, identity.Public{}, false); !errors.Is(e, errPersonConflict) {
+					t.Fatal("live old holder did not block", e)
+				}
+			}
 			if complete {
 				third := mel736OneRoster(t, protocol.NewID(), "third")
 				raw, _ := json.Marshal(third)
@@ -198,7 +219,9 @@ func TestMEL736OneAmbiguousAndLiveFailClosed(t *testing.T) {
 }
 
 func TestMEL736OneGroupMembershipRemovalAndDedupe(t *testing.T) {
-	s, e := openStore(filepath.Join(t.TempDir(), "agent.db"))
+	home := t.TempDir()
+	seedFixtureStore(t, home)
+	s, e := openStore(filepath.Join(home, "agent.db"))
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -248,8 +271,8 @@ func TestMEL736OneGroupMembershipRemovalAndDedupe(t *testing.T) {
 }
 
 func TestMEL736OneHubRecoveryDMAndNoGrantInheritance(t *testing.T) {
-	w := newGoogleReviewWorld(t)
-	first := w.join(t, "lost")
+	w := newMEL736OneWorld(t)
+	first := mel736OneJoin(t, w, "lost")
 	peer := w.admin
 	if _, e := peer.CreatePerson(w.ctx, "Colleague"); e != nil {
 		t.Fatal(e)
@@ -278,7 +301,7 @@ func TestMEL736OneHubRecoveryDMAndNoGrantInheritance(t *testing.T) {
 	if e = peer.ChangeGoogleAccess(w.ctx, protocol.GoogleAccessChange{Email: old.Email}); e != nil {
 		t.Fatal(e)
 	}
-	fresh := w.join(t, "new")
+	fresh := mel736OneJoin(t, w, "new")
 	runAgent(t, fresh)
 	waitNamedAgentCaps(t, fresh)
 	next, _, _ := fresh.Person()
@@ -340,18 +363,63 @@ func TestMEL736OneHubRecoveryDMAndNoGrantInheritance(t *testing.T) {
 			t.Fatalf("union before=%v after=%v notices=%d", before, after, notices)
 		}
 	}
+	// Recover once more through the same old link. Earlier signed roots and
+	// the first transition notice remain intact; the terminal gets a new root.
+	if e = peer.ChangeGoogleAccess(w.ctx, protocol.GoogleAccessChange{Email: old.Email, Remove: true}); e != nil {
+		t.Fatal(e)
+	}
+	if e = peer.ChangeGoogleAccess(w.ctx, protocol.GoogleAccessChange{Email: old.Email}); e != nil {
+		t.Fatal(e)
+	}
+	third := mel736OneJoin(t, w, "third")
+	runAgent(t, third)
+	waitNamedAgentCaps(t, third)
+	terminal, _, _ := third.Person()
+	if _, e = peer.refreshPerson(w.ctx, terminal.Person, false); e != nil {
+		t.Fatal(e)
+	}
+	again, e := peer.SendConv(w.ctx, conv, ConvOutgoing{Body: "After second recovery", ReplyTo: reply.LID})
+	if e != nil {
+		t.Fatal(e)
+	}
+	eventually(t, "terminal device gets continued reply", func() bool {
+		cs, _ := third.Conversations()
+		for _, c := range cs {
+			ms, _ := third.ConversationMessages(c.ID)
+			for _, m := range ms {
+				if m.LID == again.LID {
+					return true
+				}
+			}
+		}
+		return false
+	})
+	ms, e := peer.MessagingConversationMessages(conv)
+	if e != nil {
+		t.Fatal(e)
+	}
+	notices := 0
+	for _, m := range ms {
+		if m.Sub == "continuity" {
+			notices++
+		}
+	}
+	if notices != 2 {
+		t.Fatal("second recovery notice count", notices)
+	}
+
 }
 
 func TestMEL736OneStaleRosterAndDirectoryRetry(t *testing.T) {
-	w := newGoogleReviewWorld(t)
-	first := w.join(t, "lost")
+	w := newMEL736OneWorld(t)
+	first := mel736OneJoin(t, w, "lost")
 	peer := w.admin
 	runAgent(t, first)
 	old, _, _ := first.Person()
 	if _, e := peer.refreshPerson(w.ctx, old.Person, false); e != nil {
 		t.Fatal(e)
 	}
-	phone := w.join(t, "phone")
+	phone := mel736OneJoin(t, w, "phone")
 	request := pendingLink(t, first)
 	if e := first.DecideLink(w.ctx, request.ID, true); e != nil {
 		t.Fatal(e)
@@ -369,7 +437,7 @@ func TestMEL736OneStaleRosterAndDirectoryRetry(t *testing.T) {
 	if e := peer.ChangeGoogleAccess(w.ctx, protocol.GoogleAccessChange{Email: old.Email}); e != nil {
 		t.Fatal(e)
 	}
-	fresh := w.join(t, "new")
+	fresh := mel736OneJoin(t, w, "new")
 	next, _, _ := fresh.Person()
 	faults := injectFaults(peer)
 	faults.add("GET", "/v1/agents/", 1, false)
@@ -379,9 +447,22 @@ func TestMEL736OneStaleRosterAndDirectoryRetry(t *testing.T) {
 	if to, e := peer.store.logicalPerson(old.Person); e != nil || to != old.Person {
 		t.Fatal("failed refresh aliased", to, e)
 	}
-	if _, e := peer.refreshPerson(w.ctx, next.Person, false); e != nil {
-		t.Fatal("retry", e)
+	raws, e := peer.fetchChain(w.ctx, next.Person, -1)
+	if e != nil {
+		t.Fatal(e)
 	}
+	if _, e = peer.store.pinChain(next.Person, raws, peer.Self(), false); !errors.Is(e, errPersonConflict) {
+		t.Fatal("fixture email claim not frozen", e)
+	}
+	members, e := peer.Members(w.ctx)
+	if e != nil {
+		t.Fatal(e)
+	}
+	peer.checkPersons(w.ctx, members)
+	if p, ok, e := peer.store.personByID(next.Person); e != nil || !ok || p.info.State != personPinned {
+		t.Fatal("member push did not retry frozen claim", p.info, e)
+	}
+
 	kept, _, e := peer.store.personByID(old.Person)
 	if e != nil || len(kept.roster.Devices) != 2 || kept.roster.Seq <= stale.roster.Seq {
 		t.Fatal("stale chain not refreshed", kept.info, e)
@@ -405,8 +486,8 @@ func TestMEL736OneStaleRosterAndDirectoryRetry(t *testing.T) {
 }
 
 func TestMEL736OneGroupContinuesAfterRecovery(t *testing.T) {
-	w := newGoogleReviewWorld(t)
-	oldDevice := w.join(t, "lost")
+	w := newMEL736OneWorld(t)
+	oldDevice := mel736OneJoin(t, w, "lost")
 	peer := w.admin
 	if _, e := peer.CreatePerson(w.ctx, "Colleague"); e != nil {
 		t.Fatal(e)
@@ -445,6 +526,26 @@ func TestMEL736OneGroupContinuesAfterRecovery(t *testing.T) {
 		t.Fatal(e)
 	}
 	eventually(t, "old group context", func() bool { _, e := oldDevice.GroupContext(root.ID()); return e == nil })
+	phone := mel736OneJoin(t, w, "phone")
+	request := pendingLink(t, oldDevice)
+	if e = oldDevice.DecideLink(w.ctx, request.ID, true); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = phone.finishLink(w.ctx); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = peer.refreshPerson(w.ctx, old.roster.Person, false); e != nil {
+		t.Fatal(e)
+	}
+	members, e := peer.GroupMembers(root.ID())
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, m := range members {
+		if m.Person == old.roster.Person && m.Roster != old.roster.Hash() {
+			t.Fatal("ordinary linked roster rewrote signed group admission", m)
+		}
+	}
 	stopOld()
 	if e = peer.ChangeGoogleAccess(w.ctx, protocol.GoogleAccessChange{Email: old.roster.Email, Remove: true}); e != nil {
 		t.Fatal(e)
@@ -452,7 +553,7 @@ func TestMEL736OneGroupContinuesAfterRecovery(t *testing.T) {
 	if e = peer.ChangeGoogleAccess(w.ctx, protocol.GoogleAccessChange{Email: old.roster.Email}); e != nil {
 		t.Fatal(e)
 	}
-	fresh := w.join(t, "new")
+	fresh := mel736OneJoin(t, w, "new")
 	runAgent(t, fresh)
 	waitNamedAgentCaps(t, fresh)
 	next, _, _ := fresh.Person()
@@ -485,4 +586,46 @@ func TestMEL736OneGroupContinuesAfterRecovery(t *testing.T) {
 		}
 		return false
 	})
+}
+
+func mel736OneJoin(t *testing.T, w *googleReviewWorld, name string) *Agent {
+	t.Helper()
+	home := t.TempDir()
+	seedFixtureStore(t, home)
+	pub, e := GoogleDevice(home, name)
+	if e != nil {
+		t.Fatal(e)
+	}
+	a, e := JoinGoogle(w.ctx, home, w.opts, w.issuer.IDToken(t, pub, "person@example.com", nil), name)
+	if e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() { a.Close() })
+	return a
+}
+
+// Schema creation is already covered by the owning store tests. Reuse their
+// empty current-schema image before starting the unchanged network deadline.
+func newMEL736OneWorld(t *testing.T) *googleReviewWorld {
+	t.Helper()
+	issuer := testgoogle.New(t)
+	relay := testhub.StartConfig(t, hub.Config{DataDir: filepath.Join(t.TempDir(), "hub"), GoogleWebClientID: testgoogle.ClientID, GoogleHTTP: issuer.Client}, "127.0.0.1:0")
+	home := t.TempDir()
+	seedFixtureStore(t, home)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
+	code := testhub.BootstrapCode(t, relay.Dir)
+	inv, e := protocol.DecodeInvite(code)
+	if e != nil {
+		t.Fatal(e)
+	}
+	admin, e := Join(ctx, home, code, "admin")
+	if e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() { admin.Close() })
+	if e = admin.ChangeGoogleAccess(ctx, protocol.GoogleAccessChange{Domain: "example.com"}); e != nil {
+		t.Fatal(e)
+	}
+	return &googleReviewWorld{ctx: ctx, issuer: issuer, admin: admin, opts: GoogleOptions{Hub: inv.Hub, CertPEM: inv.CertPEM}}
 }

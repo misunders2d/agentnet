@@ -152,7 +152,11 @@ async function handle(req) {
     assert(rows.some(r=>r.id===original&&r.read)&&rows.some(r=>r.id===other&&!r.read),"read state lost");
     const family=await e.continuityDMs(roots[0].id);await e.continuityNotices(family[0].id,family);assert((await mem.all("inbox")).filter(r=>r.sub==="continuity").length===1,"notice duplicated");
     const reopened=new Engine({store:mem,base:e.base});reopened.me=e.me;assert((await reopened.logicalPersons()).get(old.person)===next.person,"restart split");
+    await mem.write([{s:"persons",k:next.person,v:{...next,state:"conflict",email_claim:true}}]);
+    e.chain=async id=>[rosters[id===old.person?0:1]];e.directory=async address=>({revoked:address===old.devices[0].address,fingerprint:address===old.devices[0].address?old.fingerprint:next.fingerprint});
+    await e.refreshContinuity();assert((await mem.get("persons",next.person)).state==="pinned"&&(await e.logicalPersons()).get(old.person)===next.person,"frozen claim did not retry on evidence");
     await save(third);assert((await e.logicalPersons()).get(old.person)===old.person,"ambiguous candidate aliases");await leave(next);assert((await e.logicalPersons()).get(old.person)===third.person,"second recovery");
+    const secondFamily=await e.continuityDMs(roots[0].id);await e.continuityNotices(secondFamily[0].id,secondFamily);await e.continuityNotices(secondFamily[0].id,secondFamily);assert((await mem.all("inbox")).filter(r=>r.sub==="continuity").length===2,"second recovery notice count");
     // Stale head marker and directory failures never publish completeness.
     await mem.write([{s:"kv",k:"continuity-head/"+old.person,v:{person:old.person,hash:"0".repeat(64)}}]);assert((await e.logicalPersons()).get(old.person)===old.person,"stale head aliases");
     e.chain=async()=>[rosters[0]];e.directory=async()=>{throw new HubError(503,"unavailable","fixture unavailable")};let failed=false;try{await e.continuityHead(old);}catch(_){failed=true;}assert(failed,"directory failure swallowed");

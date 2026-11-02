@@ -169,7 +169,11 @@ func (a *Agent) BuildGroupCommit(ctx context.Context, packet GroupContext) (prot
 	}
 	recipients := []age.Recipient{a.id.Box.Recipient()}
 	seen := map[string]bool{a.id.Box.Recipient().String(): true}
-	for _, m := range packet.State.EffectiveMembers(append(packet.Withdrawals, knownWithdrawals...)) {
+	effective, err := logicalGroupMembers(a.store.db, GroupContext{Root: packet.Root, Proof: packet.Proof, State: packet.State, Withdrawals: append(packet.Withdrawals, knownWithdrawals...)})
+	if err != nil {
+		return out, err
+	}
+	for _, m := range effective {
 		// Membership binds the independently pinned person chain, not a forever
 		// device list. Refresh its current verified step before encrypting so
 		// removed devices receive no new packet.
@@ -822,7 +826,11 @@ func (a *Agent) GroupMembers(conv string) ([]protocol.ConvMember, error) {
 	if err == nil && (seq > p.State.Seq || seq == p.State.Seq && hash != p.State.Hash()) {
 		return nil, ErrGroupContextPending
 	}
-	effective := p.State.EffectiveMembers(append(p.Withdrawals, withdrawals...))
+	p.Withdrawals = append(p.Withdrawals, withdrawals...)
+	effective, err := logicalGroupMembers(a.store.db, p)
+	if err != nil {
+		return nil, err
+	}
 	self, ok, err := a.store.selfPerson(a.Address)
 	if err != nil {
 		return nil, err
@@ -845,7 +853,11 @@ func (a *Agent) GroupMembers(conv string) ([]protocol.ConvMember, error) {
 			duplicate = duplicate || kept.Person == p.roster.Person
 		}
 		if !duplicate {
-			out = append(out, protocol.ConvMember{Person: p.roster.Person, Roster: p.roster.Hash()})
+			if p.roster.Person == m.Person {
+				out = append(out, m.ConvMember)
+			} else {
+				out = append(out, protocol.ConvMember{Person: p.roster.Person, Roster: p.roster.Hash()})
+			}
 		}
 		own = own || p.roster.Person == self.roster.Person
 	}

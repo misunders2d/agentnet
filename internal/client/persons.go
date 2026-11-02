@@ -544,6 +544,10 @@ func (a *Agent) pinNewerSteps(ctx context.Context, person string, adopt bool) (p
 	}
 
 	if err == nil && first && res.changed {
+		if p, ok, e := a.store.personByID(person); e == nil && ok && p.roster.Email != "" {
+			a.convWork.due(convPersons)
+		}
+
 		// Messages held while it was frozen look again, as for new proof,
 		// also when a release was interrupted before this pin.
 		if n, e := a.store.releaseConflictHolds(person); e != nil {
@@ -777,26 +781,42 @@ func (a *Agent) checkPersons(ctx context.Context, ms protocol.Members) {
 			continue
 		}
 		seen[m.Person.ID] = true
-		if _, ok, err := a.store.personByID(m.Person.ID); err == nil && ok {
-			a.observeRef(ctx, m.Person)
+		if p, ok, err := a.store.personByID(m.Person.ID); err == nil && ok {
+			if p.info.State == personConflict {
+				if claim, e := a.store.emailClaimOnly(m.Person.ID); e == nil && claim {
+					if _, e = a.refreshPerson(ctx, m.Person.ID, false); e == nil {
+						changed = true
+					} else if retryable(e) {
+						a.convWork.due(convPersons)
+					}
+				}
+			} else {
+				a.observeRef(ctx, m.Person)
+			}
 			continue
 		}
 		wanted[m.Person.Hash] = true
-		if a.listed.has(m.Person.Hash) {
-			continue
+		r, cached := a.listed.get(m.Person.Hash)
+		if !cached {
+			prof, err := a.peerProfile(ctx, m.Address)
+			if err != nil {
+				continue
+			}
+			r, err = protocol.ParsePersonRoster(prof.Person)
+			if err != nil || r.Hash() != m.Person.Hash {
+				continue
+			}
 		}
-		prof, err := a.peerProfile(ctx, m.Address)
-		if err != nil {
-			continue
-		}
-		if r, err := protocol.ParsePersonRoster(prof.Person); err == nil && r.Hash() == m.Person.Hash {
+		if r.Hash() == m.Person.Hash {
 			if r.Email != "" {
 				var known int
 				if a.store.db.QueryRow(`SELECT count(*) FROM persons WHERE person<>? AND state=? AND json_extract(record,'$.email')=?`, r.Person, personPinned, r.Email).Scan(&known) == nil && known > 0 {
 					if _, err := a.refreshPerson(ctx, r.Person, false); err == nil {
 						changed = true
-						continue
+					} else if retryable(err) {
+						a.convWork.due(convPersons)
 					}
+					continue
 				}
 			}
 
@@ -818,6 +838,13 @@ func (a *Agent) checkPersons(ctx context.Context, ms protocol.Members) {
 type listedCache struct {
 	mu     sync.Mutex
 	byHash map[string]protocol.PersonRoster
+}
+
+func (c *listedCache) get(hash string) (protocol.PersonRoster, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	r, ok := c.byHash[hash]
+	return r, ok
 }
 
 func (c *listedCache) has(hash string) bool {

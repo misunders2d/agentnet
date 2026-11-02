@@ -125,6 +125,19 @@ func memberRowsIn(q dbq, root protocol.ConvRoot, members []protocol.ConvMember) 
 func memberRowsKnownIn(q dbq, root protocol.ConvRoot, members []protocol.ConvMember, known map[string]personRow) (dmMembers, error) {
 	q, closeReads := prepareMembershipReads(q)
 	defer closeReads()
+	var aliases map[string]string
+	if root.Kind == protocol.ConvKindGroup {
+		have, e := hasContinuity(q)
+		if e != nil {
+			return dmMembers{}, e
+		}
+		if have {
+			aliases, e = logicalPersons(q)
+			if e != nil {
+				return dmMembers{}, e
+			}
+		}
+	}
 	m := dmMembers{root: root, persons: map[string]personRow{}, hosts: map[string]personRow{}, chains: map[string]map[string]bool{}}
 	for _, mem := range members {
 		p, ok := known[mem.Person]
@@ -154,35 +167,33 @@ func memberRowsKnownIn(q dbq, root protocol.ConvRoot, members []protocol.ConvMem
 		rows.Close()
 		if chain[mem.Roster] {
 			id := mem.Person
-			if root.Kind == protocol.ConvKindGroup {
+			if to := aliases[mem.Person]; to != "" && to != mem.Person {
+				id = to
 				var err error
-				p, ok, err = messagingPersonIn(q, mem.Person)
+				p, ok, err = personByIDIn(q, id)
 				if err != nil {
 					return dmMembers{}, err
 				}
 				if !ok || p.info.State == personConflict {
 					continue
 				}
-				id = p.roster.Person
-				if id != mem.Person {
-					chain = map[string]bool{}
-					rows, err := q.Query(`SELECT hash FROM person_chain WHERE person=?`, id)
-					if err != nil {
-						return dmMembers{}, err
-					}
-					for rows.Next() {
-						var h string
-						if err = rows.Scan(&h); err != nil {
-							rows.Close()
-							return dmMembers{}, err
-						}
-						chain[h] = true
-					}
-					if err = rows.Err(); err != nil {
+				chain = map[string]bool{}
+				rows, err := q.Query(`SELECT hash FROM person_chain WHERE person=?`, id)
+				if err != nil {
+					return dmMembers{}, err
+				}
+				for rows.Next() {
+					var h string
+					if err = rows.Scan(&h); err != nil {
 						rows.Close()
 						return dmMembers{}, err
 					}
-					rows.Close()
+					chain[h] = true
+				}
+				err = rows.Err()
+				rows.Close()
+				if err != nil {
+					return dmMembers{}, err
 				}
 			}
 			m.persons[id], m.chains[id] = p, chain

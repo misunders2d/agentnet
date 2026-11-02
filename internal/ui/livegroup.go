@@ -179,13 +179,12 @@ func (l *Live) RefreshGroup(ctx context.Context, id string) (GroupInvitationView
 }
 
 func (l *Live) groupMembers(c client.ConversationInfo) ([]GroupMemberView, error) {
-	packet, err := l.a.GroupContext(c.ID)
-	if err != nil {
-		return nil, err
-	}
 	result := []GroupMemberView{}
 	for _, p := range c.Members {
-		m, ok := packet.State.Member(p.Person)
+		m, ok, err := l.a.MessagingGroupMembership(c.ID, p.Person)
+		if err != nil {
+			return nil, err
+		}
 		if !ok {
 			return nil, client.ErrGroupContextPending
 		}

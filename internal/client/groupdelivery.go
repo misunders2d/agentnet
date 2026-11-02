@@ -96,6 +96,31 @@ func groupDeliveryRecipient(q dbq, packet GroupContext, address, fp string) erro
 	if err := groupDeliveryHead(q, packet); err != nil {
 		return err
 	}
+	if have, e := hasContinuity(q); e != nil {
+		return e
+	} else if !have {
+		for _, member := range packet.State.Members {
+			person, ok, err := personByIDIn(q, member.Person)
+			if err != nil {
+				return err
+			}
+			if !ok || !person.has(address, fp) {
+				continue
+			}
+			if person.info.State == personConflict {
+				return errPersonConflict
+			}
+			var withdrawn int
+			if err = q.QueryRow(`SELECT count(*) FROM (SELECT admission FROM group_withdrawals WHERE conv=? AND person=? AND admission=? UNION ALL SELECT admission FROM group_pending_withdrawals WHERE conv=? AND person=? AND admission=?)`, packet.State.Conv, member.Person, member.Admission.Hash(), packet.State.Conv, member.Person, member.Admission.Hash()).Scan(&withdrawn); err != nil {
+				return err
+			}
+			if withdrawn != 0 || packet.State.Withdrawn(member, packet.Withdrawals) {
+				return errGroupRecipientWithdrawn
+			}
+			return nil
+		}
+		return errGroupRecipientNotCurrent
+	}
 	members, err := logicalGroupMembers(q, packet)
 	if err != nil {
 		return err

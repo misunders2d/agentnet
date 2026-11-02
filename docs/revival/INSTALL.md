@@ -70,6 +70,23 @@ disabled login startup choices are kept.
    handles spaces in your account or installation folder name. An enabled
    older startup entry is repaired; your choice to disable startup is kept.
 
+**Lost every device (MEL-736 continuity candidate, unreleased).** Ask a
+workspace admin to remove the old Google account and invite the same email
+again (`agentnet admin google remove EMAIL`, then
+`agentnet admin google invite EMAIL`). Sign in with Google on the new install.
+Updated colleagues’ apps verify the old roster and exact Hub revocations, then
+show one person and one continued DM with a small “signed in again” notice;
+no colleague accepts the new keys. Current group messaging follows the same
+identity when membership remains valid. Removed/withdrawn memberships stay
+removed. Task/native permissions do not transfer, and lost ciphertext keys
+are not restored. Existing old/new local chat timelines remain available in
+the continued view.
+
+The separate recovery-request/admin-approval workflow is parked for a future
+build. Use the existing **Start again** control where offered to set aside an
+old local installation; the continuity change does not add a new reset or
+approval screen. Do not delete data folders to merge colleagues’ histories.
+
 Google sign-in has local test coverage, not a real-account sign-in check.
 An identity created before Google enrollment is not converted automatically;
 a Google-enabled workspace requires joining afresh. Do not treat that as a

@@ -2280,3 +2280,48 @@ correctness bound under `-race`, not a latency measurement. Not executed: a rend
 browser timing of the invite sheets, the agent invitation through its HTTP
 handler (its client path is the same `inviteParticipation` and is covered at
 client level), and native platforms.
+
+### MEL-736 Option A: recovered person and continued chat — November 2
+
+Inventory additions (existing controls, new continuity state):
+
+| Entry | Interaction/state | Executed rendered evidence |
+|---|---|---|
+| `mel736-one.directory` | One current person / one DM row; open the continued chat | `TestMEL736OneRendered`: canonical Comic at 1280×900 and 390×900; one Bohdan row. Resolver correctness is separately exercised against the signed real Hub in Go and browser tests. |
+| `mel736-one.open` | Cold and warm continued chat; old history beside current-device messages | Same rendered test, 10 and 100 retained messages, each width; current chat content stays usable after returning from Chats/Outbox. |
+| `mel736-one.send` | Send from the continued view; immediate pending row, explicit failure and restored draft | Same rendered test: backend held 1500 ms then HTTP 503; concurrent synchronized arrival after 100 ms; pending is not delivery success. |
+| `mel736-one.notice` | Small durable “Bohdan signed in again” event | Same rendered test: exactly one notice before/after concurrent arrival and failed send; no action/native permission on the event. Durability/duplicate/second-recovery behavior is separately tested in both engines. |
+
+Measured from the actual input event to visible feedback (milliseconds):
+
+| History | Width | Cold open / notice | Warm open | Pending send | Explicit failure result |
+|---|---:|---:|---:|---:|---:|
+| 10 | 1280 | 424.6 | 21.0 | 92.4 | 2120.4 |
+| 10 | 390 | 547.5 | 96.0 | 83.1 | 2058.2 |
+| 100 (10×) | 1280 | 326.0 | 32.7 | 118.1 | 1919.4 |
+| 100 (10×) | 390 | 546.2 | 189.1 | 93.0 | 1821.6 |
+
+Executed command:
+
+```
+AGENTNET_PLAYWRIGHT=/tmp/agr/pw/node_modules/playwright AGENTNET_CHROMIUM=/usr/bin/chromium TMPDIR=/tmp/agr AGENTNET_SCREENSHOTS=/tmp/agr/mel736-one-shots go test ./internal/ui -run '^TestMEL736OneRendered$' -count=1 -json
+```
+
+One parent test and both history subtests passed. All four final screenshots
+were inspected: notice, retained timeline, current-device message, concurrent
+arrival, explicit failure and restored draft were visible. Screenshots/logs
+remain temporary outside the repository. This is the production renderer over
+an inert loopback presentation fixture, not a live Google-account or physical
+phone test. Real signed/encrypted routing, automatic discovery, group admission
+and restart use `TestMEL736OneBrowserParity/hub`, the Go client regressions and
+`TestMEL736OneRealBinaries`; they are not inferred from this fixture.
+
+No request-recovery, approve/deny or Start again control is added by Option A;
+that Phase 1 branch is parked. Alternate installed skins, native OS/device
+interaction timing and arbitrary host CPU saturation are not qualified here.
+Existing local `TestComicSetupParityRendered` still fails at
+`comic_setup_parity_check.cjs:164:62`, waiting for the `Your agent` button, with
+Playwright 1.63 and `/usr/bin/chromium`. The same failure was reproduced on
+pre-change source; CI 41466686316 on `cfa66090` passed UI race partitions.
+Neither this baseline failure nor any race timeout counts as a pass. Full
+release/platform/skins qualification remains a separate gate before release.

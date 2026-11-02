@@ -61,7 +61,12 @@ func (a *Agent) projectGroupConversations(rows []ConversationInfo) ([]Conversati
 		if err != nil {
 			return nil, err
 		}
-		for _, member := range packet.State.EffectiveMembers(append(packet.Withdrawals, withdrawals...)) {
+		packet.Withdrawals = append(packet.Withdrawals, withdrawals...)
+		members, e := logicalGroupMembers(a.store.db, packet)
+		if e != nil {
+			return nil, e
+		}
+		for _, member := range members {
 			p, ok, err := messagingPersonIn(a.store.db, member.Person)
 			if err != nil {
 				return nil, err

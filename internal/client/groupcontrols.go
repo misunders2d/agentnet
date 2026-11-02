@@ -99,6 +99,54 @@ unwrapped:
 			return dmMembers{}, ErrGroupContextPending
 		}
 	}
+	if have, e := hasContinuity(q); e != nil {
+		return dmMembers{}, e
+	} else if !have {
+		people := make(map[string]personRow, len(packet.State.Members))
+		withdrawn := make(map[string]bool, len(packet.State.Members))
+		var members []protocol.ConvMember
+		for _, member := range packet.State.Members {
+			p, ok, err := personByIDIn(q, member.Person)
+			if err != nil {
+				return dmMembers{}, err
+			}
+			if !ok || p.info.State == personConflict {
+				return dmMembers{}, ErrGroupContextPending
+			}
+			people[member.Person] = p
+			var count int
+			if err = q.QueryRow(`SELECT count(*) FROM group_withdrawals WHERE conv=? AND person=? AND admission=?`, conv, member.Person, member.Admission.Hash()).Scan(&count); err != nil {
+				return dmMembers{}, err
+			}
+			withdrawn[member.Person] = count != 0 || packet.State.Withdrawn(member, packet.Withdrawals)
+			if !withdrawn[member.Person] {
+				members = append(members, member.ConvMember)
+			}
+		}
+		// Preserve the exact recipient walk, including first-match behavior if
+		// conflicting stored rosters happen to claim the same address/key.
+		for _, member := range members {
+			for _, device := range people[member.Person].roster.Devices {
+				found := false
+				for _, candidate := range packet.State.Members {
+					if !people[candidate.Person].has(device.Address, device.Fingerprint()) {
+						continue
+					}
+					if withdrawn[candidate.Person] {
+						return dmMembers{}, errGroupRecipientWithdrawn
+					}
+					found = true
+					break
+				}
+				if !found {
+					return dmMembers{}, errGroupRecipientNotCurrent
+				}
+			}
+		}
+		m, err := memberRowsKnownIn(q, root, members, people)
+		m.group = &packet
+		return m, err
+	}
 	selected, err := logicalGroupMembers(q, packet)
 	if err != nil {
 		return dmMembers{}, err

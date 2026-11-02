@@ -3598,7 +3598,7 @@ export class Engine {
     // Pinned from step 0: what its frozen claim held looks again, also when
     // a release was interrupted before this pin.
     await this.releaseConflictHolds(p);
-    if(!admission?.localOnly)this.syncContinuityGroups().catch(()=>{this.continuityRetry=true;});
+    if(!admission?.localOnly&&p.email){this.syncContinuityGroups().catch(()=>{this.continuityRetry=true;});this.fillListed().catch(()=>{this.continuityDiscoveryRetry=true;});}
     return admission ? this.receivePerson(p, admission) : p;
   }
 
@@ -3650,6 +3650,8 @@ export class Engine {
   }
 
   async refreshContinuity() {
+    const records=await this.store.all("persons");
+    for(const p of records)if(p.state==="conflict"&&p.email_claim){try{await this.pinChain(p.person);}catch(e){if(retryable(e))throw e;}}
     const ps=(await this.store.all("persons")).filter(p=>p.email&&p.state==="pinned"), counts=new Map();
     for(const p of [this.me,...ps].filter(Boolean))if(p.email)counts.set(p.email,(counts.get(p.email)||0)+1);
     for(const p of ps)if(counts.get(p.email)>1)await this.continuityHead(p);
@@ -3697,10 +3699,10 @@ export class Engine {
   async continuityNotices(id,family=[]) {
     const aliases=await this.logicalPersons(),targets=new Set();
     if(family.length){for(const c of family){const to=aliases.get(c.peer);if(to&&to!==c.peer)targets.add(to);}}
-    else {const g=await this.groupRecord(id);if(g){const packet=await this.groupCurrentState(id);for(const m of await this.logicalGroupMembers(packet)){const to=aliases.get(m.person);if(to&&to!==m.person)targets.add(to);}}}
+    else {const g=await this.groupRecord(id);if(g){const packet=await this.groupCurrentState(id),current=new Set((await this.logicalGroupMembers(packet)).map(m=>aliases.get(m.person)||m.person));for(const m of [...packet.root.members,...packet.state.members,...(packet.proof||[]).flatMap(s=>s.members)]){const to=aliases.get(m.person);if(to&&to!==m.person&&current.has(to))targets.add(to);}}}
     for(const target of targets){
       const p=target===this.me?.person?this.me:await this.store.get("persons",target),scope=family.length?"dm/"+target:id;
-      const hash=await wire.sha256(new TextEncoder().encode("agentnet-local-continuity-v1\n"+scope+"\n"+target)),key=[...hash.slice(0,16)].map(b=>b.toString(16).padStart(2,"0")).join("");
+      const hash=await wire.sha256(new TextEncoder().encode("agentnet-local-continuity-v1\n"+scope+"\n"+target)),key="continuity/"+[...hash].map(b=>b.toString(16).padStart(2,"0")).join("");
       const before=await this.store.get("inbox",key);if(before)continue;
       const row={id:key,lid:key,conv:id,kind:"message",sub:"continuity",body:(p?.label||"Someone")+" signed in again",at:this.now(),from:this.address,local:true,read:true};
       try{await this.store.write([{s:"inbox",k:key,v:row}],[{s:"inbox",k:key,v:before}]);}catch(e){if(!(e instanceof StoreConflict))throw e;}
@@ -8647,6 +8649,7 @@ export class Engine {
       if (!acked) this.ackPing(data);
       if (this.recipientDiscoveryFailed?.size) this.reconcileRevokedRecipients().catch(() => {});
       if(this.continuityRetry)this.refreshContinuity().then(()=>{this.continuityRetry=false;}).catch(()=>{});
+      if(this.continuityDiscoveryRetry)this.fillListed().catch(()=>{});
       this.flushOutbox().catch(() => {});
       this.flushReceipts().catch(() => {});
       this.retryPendingReceives().catch(() => {});
@@ -8768,6 +8771,7 @@ export class Engine {
   // not pinned here: their claimed name and devices for the people list
   // (unverified; pinned only when a DM starts).
   async fillListed() {
+    this.continuityDiscoveryRetry=false;
     if (!this.listed) this.listed = new Map();
     let reads = 0;
     const want = new Set();
@@ -8776,7 +8780,8 @@ export class Engine {
       if (!ref || !wire.validID(ref.id) || !wire.validHash(ref.hash) || m.address === this.address) continue;
       if (ref.id === (this.me && this.me.person) || (await this.store.get("persons", ref.id))) continue;
       want.add(ref.hash);
-      if (this.listed.has(ref.hash) || reads >= 64) continue;
+      if(reads>=64)continue;
+      const cached=this.listed.get(ref.hash);if(cached&&(!cached.email||!(await this.store.all("persons")).some(p=>p.person!==cached.person&&p.state==="pinned"&&p.email===cached.email)))continue;
       reads++;
       try {
         const prof = await this.profile(m.address);
@@ -8786,10 +8791,10 @@ export class Engine {
             await this.pinChain(r.person);this.changed();continue;
           }
 
-          this.listed.set(ref.hash, { person: r.person, label: r.label, picture: r.picture || "",
+          this.listed.set(ref.hash, { person: r.person, label: r.label, email:r.email||"", picture: r.picture || "",
             devices: await Promise.all(r.devices.map(async (d) => ({ address: d.address, fingerprint: await wire.fingerprint(d) }))) });
         }
-      } catch (e) { /* not shown */ }
+      } catch (e) {if(retryable(e))this.continuityDiscoveryRetry=true;}
     }
     for (const h of [...this.listed.keys()]) if (!want.has(h)) this.listed.delete(h);
     this.changed();

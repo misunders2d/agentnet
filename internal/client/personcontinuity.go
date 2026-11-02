@@ -166,6 +166,9 @@ func (a *Agent) MessagingPersons() ([]PersonInfo, error) {
 }
 
 func (a *Agent) continuityDMs(conv string) ([]ConversationInfo, error) {
+	if have, e := hasContinuity(a.store.db); e != nil || !have {
+		return nil, e
+	}
 	rows, e := a.store.conversations()
 	if e != nil {
 		return nil, e
@@ -215,6 +218,9 @@ func (a *Agent) ContinuityConversation(conv string) (string, error) {
 	return conv, nil
 }
 func (a *Agent) projectContinuityDMs(rows []ConversationInfo) ([]ConversationInfo, error) {
+	if have, e := hasContinuity(a.store.db); e != nil || !have {
+		return rows, e
+	}
 	aliases, e := logicalPersons(a.store.db)
 	if e != nil {
 		return nil, e
@@ -273,6 +279,11 @@ func (a *Agent) currentDM(ctx context.Context, conv string) (string, error) {
 }
 
 func messagingPersonIn(q dbq, id string) (personRow, bool, error) {
+	if have, e := hasContinuity(q); e != nil {
+		return personRow{}, false, e
+	} else if !have {
+		return personByIDIn(q, id)
+	}
 	aliases, e := logicalPersons(q)
 	if e != nil {
 		return personRow{}, false, e
@@ -491,6 +502,9 @@ func (a *Agent) MessagingConversations() ([]ConversationInfo, error) {
 // Local-only rows are excluded from signed history and native work. Their
 // deterministic IDs survive retries, duplicate catch-up and process restarts.
 func (a *Agent) continuityNotices(conv string, family []ConversationInfo) ([]ConvMessage, error) {
+	if have, e := hasContinuity(a.store.db); e != nil || !have {
+		return nil, e
+	}
 	aliases, e := logicalPersons(a.store.db)
 	if e != nil {
 		return nil, e
@@ -509,8 +523,25 @@ func (a *Agent) continuityNotices(conv string, family []ConversationInfo) ([]Con
 			if err != nil {
 				return nil, err
 			}
+			current := map[string]bool{}
 			for _, m := range ms {
-				if to := aliases[m.Person]; to != "" && to != m.Person {
+				id := aliases[m.Person]
+				if id == "" {
+					id = m.Person
+				}
+				current[id] = true
+			}
+			history := append([]protocol.ConvMember{}, packet.Root.Members...)
+			for _, m := range packet.State.Members {
+				history = append(history, m.ConvMember)
+			}
+			for _, state := range packet.Proof {
+				for _, m := range state.Members {
+					history = append(history, m.ConvMember)
+				}
+			}
+			for _, m := range history {
+				if to := aliases[m.Person]; to != "" && to != m.Person && current[to] {
 					targets[to] = true
 				}
 			}
@@ -529,7 +560,14 @@ func (a *Agent) continuityNotices(conv string, family []ConversationInfo) ([]Con
 			scope = "dm/" + target
 		}
 		sum := sha256.Sum256([]byte("agentnet-local-continuity-v1\n" + scope + "\n" + target))
-		id := hex.EncodeToString(sum[:16])
+		id := "continuity/" + hex.EncodeToString(sum[:])
+		var exists bool
+		if e = a.store.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM inbox WHERE id=? AND local=1 AND sub='continuity')`, id).Scan(&exists); e != nil {
+			return nil, e
+		}
+		if exists {
+			continue
+		}
 		now := time.Now().UnixMilli()
 		_, e = a.store.db.Exec(`INSERT OR IGNORE INTO inbox(id,sender,ts,kind,body,received_at,received_ms,read_at,acked,local,conv,lid,sub) VALUES(?, ?, ?, 'message', ?, ?, ?, ?,1,1,?,?,'continuity')`, id, a.Address, now/1000, p.info.Label+" signed in again", now/1000, now, now/1000, conv, id)
 		if e != nil {
@@ -600,6 +638,9 @@ func logicalGroupMember(q dbq, p GroupContext, person string) (protocol.GroupMem
 // markers. Recovery shares current group state, never historical ciphertext or
 // execution grants, and never asks a group admin to sign another membership.
 func (a *Agent) syncContinuityGroups(ctx context.Context) error {
+	if have, e := hasContinuity(a.store.db); e != nil || !have {
+		return e
+	}
 	aliases, e := logicalPersons(a.store.db)
 	if e != nil {
 		return e
@@ -727,4 +768,20 @@ func (a *Agent) MessagingRefOf(conv, id, dir string) (ControlRef, error) {
 		}
 	}
 	return ref, e
+}
+
+func hasContinuity(q dbq) (bool, error) {
+	var exists bool
+	e := q.QueryRow(`SELECT EXISTS(SELECT 1 FROM config WHERE k LIKE 'continuity-head/%')`).Scan(&exists)
+	return exists, e
+}
+
+// MessagingGroupMembership exposes the original signed admission selected for
+// the logical current person. It is display/messaging metadata, not a grant.
+func (a *Agent) MessagingGroupMembership(conv, person string) (protocol.GroupMember, bool, error) {
+	p, e := groupTurnPacketIn(a.store.db, conv)
+	if e != nil {
+		return protocol.GroupMember{}, false, e
+	}
+	return logicalGroupMember(a.store.db, p, person)
 }
