@@ -246,6 +246,27 @@ func TestMediaSenderRendered(t *testing.T) {
 	t.Log(browserCheck(t, "testdata/media_sender_rendered.cjs"))
 }
 
+// Prepared and received videos play past two seconds in the Linux app: the
+// same packets, sound and picture interleaved by time (owner report,
+// November 2, 2026).
+func TestVideoInterleaveRewritesTimeOrder(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed")
+	}
+	if _, _, ok := mediaTools(); !ok {
+		t.Skip("synthetic video needs optional local ffmpeg and ffprobe")
+	}
+	if _, err := os.Stat("web/node_modules/mediabunny"); err != nil {
+		t.Skip("web tooling not installed (npm ci in internal/ui/web)")
+	}
+	out, err := exec.CommandContext(t.Context(), node, "testdata/video_interleave_check.mjs").CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	t.Logf("%s", out)
+}
+
 func TestLocalVideoPreparationLongDuration(t *testing.T) {
 	ffmpeg, ffprobe, ok := mediaTools()
 	if !ok {

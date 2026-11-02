@@ -3,6 +3,7 @@
 // needed for complete seekable files. WebCodecs owns the codec work.
 import { Input, Output, Mp4OutputFormat, WebMOutputFormat, StreamTarget, BlobSource, Conversion, MP4, WEBM, MATROSKA, canEncodeVideo, canEncodeAudio } from "mediabunny";
 import { videoBitrate } from "./Composer.media-budget";
+import { interleaveMp4 } from "./video-interleave";
 
 const MAX_OUTPUT = 32 * 1024 * 1024;
 
@@ -56,7 +57,12 @@ export async function compressVideo(file: File, signal: AbortSignal, progress: (
     await conversion.execute();
     signal.throwIfAborted();
     if (timedOut) throw Error("Video preparation reached its two-minute limit.");
-    return new File([bytes.subarray(0, length)], file.name.replace(/\.[^.]*$/, "") + (mp4 ? ".mp4" : ".webm"), { type: mp4 ? "video/mp4" : "video/webm", lastModified: file.lastModified });
+    // The muxer writes in encoder order; the Linux app's player froze two
+    // seconds into such files. Same packets, time order (video-interleave.ts).
+    const prepared = mp4 ? interleaveMp4(bytes.subarray(0, length)) : bytes.subarray(0, length);
+    if (prepared.length > MAX_OUTPUT) throw Error("The prepared video exceeds the 32 MiB output limit.");
+    signal.throwIfAborted();
+    return new File([prepared],file.name.replace(/\.[^.]*$/, "") + (mp4 ? ".mp4" : ".webm"), { type: mp4 ? "video/mp4" : "video/webm", lastModified: file.lastModified });
   } finally {
     clearTimeout(deadline); signal.removeEventListener("abort", cancel);
     input.dispose(); bytes = undefined;

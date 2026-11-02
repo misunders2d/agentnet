@@ -43,6 +43,7 @@ async function checkVideos(p, ctx, phone, base, errors, reads, probes) {
     await video.evaluate(v => v.requestFullscreen());
     assert.equal(await video.evaluate(v => v.ownerDocument.fullscreenElement === v || v.getRootNode().fullscreenElement === v), true);
     await p.evaluate(() => document.exitFullscreen());
+    assert.equal(await card('received.webm').getByRole('button',{name:'Expand video received.webm',exact:true}).count(),0,'native fullscreen works: no own Expand');
   }
   await video.scrollIntoViewIfNeeded();
   const geometry = await video.boundingBox();
@@ -60,6 +61,44 @@ async function checkVideos(p, ctx, phone, base, errors, reads, probes) {
   await video.waitFor({state:'detached'});
   assert.deepEqual(await handle.evaluate(v => [v.paused,v.hasAttribute('src')]),[true,false]);
   assert(await p.evaluate(src => window.videoResources.revoked.includes(src),src),'Close revokes owned media URL');
+
+  // The Linux app turns WebKit fullscreen off (it aborted the app); Expand
+  // shows the same video at window size and carries position and play state
+  // in and back.
+  await p.evaluate(() => { window.fullscreenDescriptor = Object.getOwnPropertyDescriptor(Document.prototype,'fullscreenEnabled'); Object.defineProperty(Document.prototype,'fullscreenEnabled',{configurable:true,get:()=>false}); });
+  await file('received.webm').click();
+  video = card('received.webm').locator('video');
+  await p.waitForFunction(v => !v.paused && v.currentTime > .1,await video.elementHandle());
+  await video.evaluate(v => { v.currentTime = 1; });
+  await p.waitForFunction(v => !v.seeking && !v.paused && v.currentTime >= 1,await video.elementHandle());
+  const viewer = p.getByRole('dialog',{name:'received.webm'}), big = viewer.locator('video');
+  const expandStarted = Date.now();
+  await card('received.webm').getByRole('button',{name:'Expand video received.webm',exact:true}).click();
+  await viewer.waitFor();
+  const expandMs = Date.now() - expandStarted;
+  assert(expandMs < 1000, 'Expand shows the view within a second: ' + expandMs);
+  await p.waitForFunction(v => !v.paused && v.currentTime >= 1,await big.elementHandle());
+  assert.equal(await video.evaluate(v => v.paused),true,'the inline copy pauses while expanded');
+  assert.equal(await p.locator('.an-app').evaluate(el => el.inert),true);
+  const expandedBox = await big.boundingBox();
+  assert(expandedBox.width >= (phone ? 390 : 1440) - 1 && expandedBox.height >= (phone ? 844 : 900) * .7,'video fills the window: ' + JSON.stringify(expandedBox));
+  if (process.env.AGENTNET_SCREENSHOTS) await p.screenshot({path:path.join(process.env.AGENTNET_SCREENSHOTS,`video-expanded-${phone?'390':'1440'}.png`)});
+  await big.evaluate(v => { v.pause(); v.currentTime = 2; });
+  await p.waitForFunction(v => !v.seeking && Math.abs(v.currentTime-2) < .15,await big.elementHandle());
+  if (phone) assert.equal(await p.evaluate(() => window.imageViewerBack()),true,'Android Back closes the view');
+  else await p.keyboard.press('Escape');
+  await viewer.waitFor({state:'hidden'});
+  assert.deepEqual(await video.evaluate(v => [v.paused,Math.abs(v.currentTime-2) < .15]),[true,true],'paused place carries back');
+  await card('received.webm').getByRole('button',{name:'Expand video received.webm',exact:true}).click();
+  await p.waitForFunction(v => v.readyState >= 1 && Math.abs(v.currentTime-2) < .15,await big.elementHandle());
+  await big.evaluate(v => v.play());
+  await p.waitForFunction(v => !v.paused && v.currentTime > 2.2,await big.elementHandle());
+  await viewer.getByRole('button',{name:'Close',exact:true}).click();
+  await viewer.waitFor({state:'hidden'});
+  await p.waitForFunction(v => !v.paused && v.currentTime > 2.2,await video.elementHandle());
+  await close('received.webm').click();
+  await video.waitFor({state:'detached'});
+  await p.evaluate(() => Object.defineProperty(Document.prototype,'fullscreenEnabled',window.fullscreenDescriptor));
 
   // Delayed async activation rejection keeps native controls and allows the
   // user's next Play; it is not misreported as unsupported codec.
@@ -226,7 +265,7 @@ async function checkVideos(p, ctx, phone, base, errors, reads, probes) {
     workspace=await cleanupAtPhase(workspaceNode,workspaceStart,'workspace',await phaseGate(workspaceNode,workspaceStart,'workspace'));
     workspace.url=await releasedURL(workspaceURL);await p.waitForFunction(v=>!v.isConnected,workspaceNode);
   }else await close('received.webm').click();
-  console.log(JSON.stringify({video:phone?'390':'1440',policy,reads,decodedAudio,fullscreenEnabled,denied,geometry,navigation,late,topic,workspace,expectedResourceErrors:probes.errors}));
+  console.log(JSON.stringify({video:phone?'390':'1440',policy,reads,decodedAudio,fullscreenEnabled,expandMs,denied,geometry,navigation,late,topic,workspace,expectedResourceErrors:probes.errors}));
 }
 
 (async () => {
@@ -259,7 +298,8 @@ async function checkVideos(p, ctx, phone, base, errors, reads, probes) {
       p.on('request', r => { const m = r.url().match(/\/api\/files\/picture-message\/(\d+)\?dir=(in|out)$/); if (m && +m[1] >= 8) {reads.push([+m[1],m[2]]);if(+m[1]===15)probes.urls.add(r.url());} });
       p.setDefaultTimeout(10000);
       p.on('pageerror', e => errors.push(String(e)));
-      p.on('console', m => { if (m.type() === 'error') {const e={text:m.text(),url:m.location().url};if(probes.urls.has(e.url)&&/ERR_FILE_NOT_FOUND|Failed to load resource|Fetch API cannot load/.test(e.text))probes.errors.push(e);else errors.push(e);} });
+      p.on('console', m => { if (m.type() === 'error') {const e={text:m.text(),url:m.location().url};// This fixture lacks Drive and topic transfer: those lookups answer 404.
+      if((probes.urls.has(e.url)||/\/api\/(drive\?conv=|topic\/transfer\/location)/.test(e.url))&&/ERR_FILE_NOT_FOUND|Failed to load resource|Fetch API cannot load/.test(e.text))probes.errors.push(e);else errors.push(e);} });
       await p.goto(process.argv[2]);
       assert.equal(await p.title(), 'AgentNet');
       assert.equal(new URL(p.url()).origin, new URL(process.argv[2]).origin);

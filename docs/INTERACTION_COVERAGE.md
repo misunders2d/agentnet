@@ -1,5 +1,42 @@
 # Next-release interaction coverage and responsiveness
 
+## Video in the Linux app — unreleased, November 2
+
+Owner, Linux app: "Smaller video" prepared again on each click; playback
+froze about 3 s in ("progress goes, but frame is stuck"); "maximizing the
+video crashes the app completely".
+
+Counterparts inspected in source: Telegram Desktop 5ff61571
+`media/view/media_view_overlay_widget.cpp` `OverlayWidget::toggleFullScreen`
+(3185) and `playbackToggleFullScreen` (6058): video opens in Telegram's own
+viewer over the window; full screen is its own geometry, not the toolkit's
+element fullscreen. Telegram Android 3de37c8c `messenger/video/MP4Builder.java`
+`createStsc`/`createStco` (508–580): samples are written as the converter
+delivers them and each run of one track's adjacent samples is a chunk. Slack
+and WhatsApp are closed; not inspected.
+
+AgentNet adaptation: the Linux app turns WebKit fullscreen off (its
+fullscreen controller aborted the app, WebKitGTK 2.50.4) and the player shows
+Expand, a window-size view of the same in-memory video. Prepared MP4s and
+MP4s played in WebKitGTK are rewritten so every sample is its own chunk in
+time order (`video-interleave.ts`); the packets are unchanged.
+
+| Control | Immediate local change | Completion | Failure | Evidence |
+|---|---|---|---|---|
+| Expand (video, where native fullscreen is off) | window-size view opens, inline copy pauses | same place and play state; Esc, Close or Android Back carry both back | view closes with the inline video if the video is released | `TestImageViewerRendered`: feedback 67–133 ms over three runs at 1440 and 390 |
+| Smaller again (video already prepared or preparing) | nothing restarts: progress or the prepared file stays | same prepared file (same hash) | — | `TestMediaSenderRendered` |
+| Smaller after Original | prepared file returns at once | same prepared file, no new preparation | — | `TestMediaSenderRendered` |
+
+Chromium 1440×900 and 390×844, local runs November 2; `fullscreenEnabled`
+was forced off in the page to show Expand. Playback after the rewrite was
+measured in the real Linux app shell (the v0.10.4 AppImage extracted, a
+synthetic 12 s 24 fps clip in mediabunny's layout): before, the picture stuck
+at 2.0 s (48 presented frames in 12 s) while time ran on; after, 286 frames
+in 12 s with and without sound, rewrite 179 ms for 12 MB. Not run: the
+crash itself (needs the owner's input path), the CI-built AppImage with
+fullscreen off, macOS/Windows/Android shells, the gallery skins' own video
+player (skins/shared/video-file.mjs keeps native controls only).
+
 ## Agent dismissals run side by side — unreleased, November 2
 
 Owner: "dismissing the agents from chat asyncronously. right now I click

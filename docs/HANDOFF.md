@@ -1,5 +1,39 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+## Video in the Linux app — November 2 (unreleased, for v0.10.5)
+
+Owner (ThinkPad, v0.10.4 AppImage): Smaller video re-prepared on each click,
+playback froze about 3 s in, and maximizing a video aborted the app.
+
+- Freeze: mediabunny's MP4 muxer writes each track's half-second chunks in
+  encoder order (it interleaves only fragmented output), so the file holds
+  ~1.5 s of picture ahead of its sound. The app's WebKitGTK 2.50.4 with
+  GStreamer 1.20.3 range-seeks in its source, reads wrong bytes
+  (avdec_h264 "Invalid NAL unit size") and the picture sticks at 2.0 s.
+  Time-ordered half-second chunks still stutter; one sample per chunk (as
+  ffmpeg writes) plays. `features/video-interleave.ts` rewrites boxes only:
+  index first, every sample its own chunk in decode-time order, all other
+  boxes byte for byte. Used for every prepared MP4 and, in WebKitGTK only,
+  for inline playback of received MP4/QuickTime (falls back to the bytes as
+  sent). Regression: `TestVideoInterleaveRewritesTimeOrder` (ffmpeg +
+  mediabunny fixtures, QuickTime with B-frames/edit list/rotation, fragmented
+  and truncated refused).
+- Crash: the owner's Codex symbolized the core: WebKit's fullscreen
+  controller released a client whose checked-pointer count was zero, and
+  WebKit aborts on that. `desktop/src-tauri/src/main.rs` turns WebKit
+  fullscreen off on Linux; the player offers Expand (`ui/VideoViewer.tsx`),
+  as Telegram Desktop's own viewer. The abort itself was not reproduced.
+- Smaller: the draft keeps the prepared file (`StagedFile.prepared`); Smaller
+  again and Smaller after Original reuse it.
+
+Evidence and limits: docs/INTERACTION_COVERAGE.md (top). Not fixed: the
+gallery skins' shared player (skins/shared/video-file.mjs) has no Expand and
+no rewrite; with WebKit fullscreen off it cannot enter fullscreen either.
+Faster Smaller (Telegram Android converts after send) is not built.
+`TestImageViewerRendered` (not in CI) needed its fixture's Drive and topic
+transfer 404s marked expected; its leave-cleanup check is timing-flaky before
+and after this change.
+
 ## Agent dismissals side by side — November 2 (unreleased, for v0.10.5)
 
 Owner: dismiss agents "asyncronously" — each dismissal blocked the next for

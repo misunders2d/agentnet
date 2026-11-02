@@ -158,6 +158,15 @@ fn main() {
                 .build()?;
             #[cfg(target_os = "linux")]
             droppedfiles::install(&window);
+            // WebKitGTK 2.50.4 aborted the whole app when a video entered
+            // fullscreen (owner's crash, November 2, 2026: its fullscreen
+            // controller released a dead client). Without WebKit fullscreen
+            // the video player offers Expand, a window-sized view.
+            #[cfg(target_os = "linux")]
+            let _ = window.with_webview(|view| {
+                use webkit2gtk::{SettingsExt, WebViewExt};
+                if let Some(settings) = view.inner().settings() { settings.set_enable_fullscreen(false); }
+            });
             *app.state::<Shell>().splash.lock().unwrap() = window.url().ok();
             #[cfg(target_os = "linux")]
             if let Ok(Some(previous)) = &installation {

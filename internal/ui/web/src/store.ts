@@ -49,6 +49,7 @@ export interface StagedFile {
   staged?: unknown;          // what host.stage returned (an id on a daemon, a file handle in a browser)
   file: File;
   original?: File;           // untouched source for an explicit Original file choice
+  prepared?: { file: File; note: string }; // its smaller version, kept for a later Smaller choice
   mediaMode?: "original" | "smaller";
   preparing?: boolean;
   nativeReading?: boolean;

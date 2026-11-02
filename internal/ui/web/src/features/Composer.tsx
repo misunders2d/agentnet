@@ -364,10 +364,13 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
 
   function chooseMedia(key: string, mode: "original" | "smaller") {
     const c = conv, slot = c + ":" + key;
-    mediaJobs.current.get(slot)?.cancel();
     const f = store.draft(c).files?.find(f => f.key === key);
     if (!f) return;
     const source = f.original || f.file;
+    // Smaller again keeps the running or finished preparation; back from
+    // Original reuses it. The original is prepared once per draft file.
+    if (mode === "smaller" && f.mediaMode === "smaller" && (f.preparing || f.file !== source)) return;
+    mediaJobs.current.get(slot)?.cancel();
     const update = (patch: Partial<StagedFile>) => {
       const d = store.draft(c);
       if (!store.isActive() || !d.files?.some(f => f.key === key)) return;
@@ -387,6 +390,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
         url: !changed ? current.url : /^image\/(png|jpeg|gif|webp)$/.test(file.type) || mediaKind(file) === "video" ? URL.createObjectURL(file) : undefined, mediaMode: mode, preparing, mediaProgress: undefined, mediaNote: note });
     };
     if (mode === "original") { replace(source, "Exact original file. Its bytes and metadata are unchanged."); return; }
+    if (f.prepared) { replace(f.prepared.file, f.prepared.note); return; }
     const controller = new AbortController();
     const cancel = () => {
       controller.abort(); mediaJobs.current.delete(slot);
@@ -399,7 +403,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       const progress = Math.floor(n * 100 / 5) * 5;
       if (!controller.signal.aborted && progress !== previous) { previous = progress; update({ mediaProgress: progress }); }
     }).then(result => {
-      if (!controller.signal.aborted) replace(result.file, result.note);
+      if (!controller.signal.aborted) { replace(result.file, result.note); update({ prepared: { file: result.file, note: result.note } }); }
     }).catch(e => {
       if (!controller.signal.aborted) replace(source, errorText(e).replace(/\.?$/, ".") + " Using the original file.");
     }).finally(() => {

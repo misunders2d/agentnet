@@ -12,6 +12,7 @@ import { usePortal } from "../owned";
 import { niceDevice, size as bytes } from "../model";
 import { Sheet } from "../ui/Sheet";
 import { ImageViewer } from "../ui/ImageViewer";
+import { VideoViewer, type VideoPlace } from "../ui/VideoViewer";
 import { Button } from "../ui/Button";
 import { useLeaving } from "../ui/Motion";
 import { openPictureEditor, sniffVideo } from "../pictures.mjs";
@@ -19,12 +20,15 @@ import { isThreadMsg, type AnyMsg } from "./Message.model";
 import { SaveToDrive } from "./Drive";
 import { previewText, textPreviewName, TEXT_PREVIEW_LIMIT } from "./Message.files.text";
 import { Markdown } from "./Markdown";
+import { interleaveMp4 } from "./video-interleave";
 
 interface FileItem { index: number; name: string; size: number; openable: boolean; availability?: string; note?: string; fetch?: string }
 
 const pictureName = /\.(png|jpe?g|gif|webp)$/i;
 const videoName = /\.(mp4|m4v|mov|webm|ogv|ogg)$/i;
 const INLINE_VIDEO_LIMIT = 16 * 1024 * 1024;
+// The Linux app's webview (and GNOME Web): WebKitGTK, not Chromium or Android.
+const webkitGTK = typeof navigator !== "undefined" && /\bLinux\b/.test(navigator.userAgent) && /AppleWebKit/.test(navigator.userAgent) && !/Chrome|Chromium|Android/.test(navigator.userAgent);
 
 function sniff(b: Uint8Array): string {
   const at = (i: number, s: string) => [...s].every((c, j) => b[i + j] === c.charCodeAt(0));
@@ -306,6 +310,7 @@ function VideoFile({ m, f }: { m: AnyMsg; f: FileItem }) {
   const [url, setURL] = useState("");
   const [phase, setPhase] = useState<"idle" | "loading" | "ready" | "failed">("idle");
   const [note, setNote] = useState("");
+  const [expanded, setExpanded] = useState<VideoPlace | null>(null);
   const download = useDownload(m, f);
   const inline = Number.isSafeInteger(f.size) && f.size > 0 && f.size <= INLINE_VIDEO_LIMIT;
 
@@ -315,7 +320,23 @@ function VideoFile({ m, f }: { m: AnyMsg; f: FileItem }) {
     const video = media.current;
     if (video) { video.pause(); video.removeAttribute("src"); video.load(); }
     if (owned.current) { URL.revokeObjectURL(owned.current); owned.current = ""; }
+    if (mounted.current) setExpanded(null);
     if (reset && mounted.current) { setURL(""); setPhase("idle"); setNote(""); }
+  }
+  // Where native fullscreen is off (the Linux app), the window-size view.
+  function expand() {
+    const v = media.current;
+    if (!v || !owned.current) return;
+    const playing = !v.paused && !v.ended;
+    v.pause();
+    setExpanded({ time: v.currentTime, playing });
+  }
+  function collapse(to: VideoPlace) {
+    setExpanded(null);
+    const v = media.current;
+    if (!v || !owned.current) return;
+    v.currentTime = to.time;
+    if (to.playing) void v.play().catch(() => {});
   }
   function failed(message: string) {
     release(false);
@@ -360,8 +381,14 @@ function VideoFile({ m, f }: { m: AnyMsg; f: FileItem }) {
       let b = (await store.api.file(m.id, f.index, m.dir)).bytes;
       if (!mounted.current || leavingRef.current || generation.current !== visit || !store.isActive()) return;
       if (b.byteLength > INLINE_VIDEO_LIMIT || b.byteLength !== f.size) throw Error("Video size differs from its attachment details. Download to play it.");
-      const type = sniffVideo(b);
+      let type = sniffVideo(b);
       if (!type) throw Error("This video can’t be played here. Download to play it.");
+      // WebKitGTK's player reads the wrong bytes in files whose sound and
+      // picture lie far apart (video-interleave.ts): play the same packets in
+      // time order. If that fails, the file as sent.
+      if (webkitGTK && (type === "video/mp4" || type === "video/quicktime")) {
+        try { b = interleaveMp4(b); type = "video/mp4"; } catch { /* the bytes as sent */ }
+      }
       const blob = new Blob([b as BlobPart], { type });
       b = new Uint8Array(0);
       owned.current = URL.createObjectURL(blob);
@@ -376,12 +403,14 @@ function VideoFile({ m, f }: { m: AnyMsg; f: FileItem }) {
       {download.phase !== "here" ? null : inline ? <div className="flex flex-wrap items-center gap-2">
         {phase === "idle" && <Button className="min-h-11" aria-label={"Play video " + f.name} onClick={() => void open()}>Play</Button>}
         {(phase === "loading" || phase === "ready") && <Button className="min-h-11" aria-label={"Close video " + f.name} onClick={() => release()}>Close video</Button>}
+        {phase === "ready" && !document.fullscreenEnabled && <Button className="min-h-11" aria-label={"Expand video " + f.name} onClick={expand}>Expand</Button>}
       </div> : <p className="text-[12px] text-muted">{f.size > INLINE_VIDEO_LIMIT ? "Videos up to 16 MiB can play here." : "This video’s size is unknown."} Download to play this file.</p>}
       {note && <p role="status" className="text-[13px] text-text-2">{note}</p>}
       {/* preload="auto": the bytes are in memory; "none" froze a few seconds in on the Linux app (October 29, 2026). */}
       {url && <video ref={bindMedia} src={url} controls playsInline preload="auto" aria-label={f.name}
         className="block max-h-[min(60dvh,480px)] w-full rounded-xl bg-black object-contain"
         onError={() => { if (owned.current) failed("This video can’t be played here. Download to play it."); }} />}
+      {url && expanded && <VideoViewer src={url} name={f.name} from={expanded} onClose={collapse} />}
     </div>
   );
 }
