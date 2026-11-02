@@ -2116,7 +2116,7 @@ export class Store {
     keys.forEach(key => this.reading.add(key));
     const overlays = this.localReads.get(o.id) || new Map<string, { kind: "dm" | "thread"; id: string; saved: boolean; accepted?: number }>();
     this.localReads.set(o.id, overlays);
-    const batch = pending.map(m => { const key = this.readIdentity(m); const record = { kind: o.kind, id: m.id, saved: false }; overlays.set(key, record); return { key, record }; });
+    const batch = pending.map(m => { const key = this.readIdentity(m); const record: { kind: "dm" | "thread"; id: string; saved: boolean; accepted?: number } = { kind: o.kind, id: m.id, saved: false }; overlays.set(key, record); return { key, record }; });
     this.publishReads();
     let readAccepted = false;
     // The change stream brings the committed read state. Keep exact successful
