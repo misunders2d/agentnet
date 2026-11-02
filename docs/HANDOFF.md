@@ -1,6 +1,6 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
-## v0.10.6 published — November 2 (Hub deploy pending)
+## v0.10.6 published and Hub deployed — November 2
 
 [App v0.10.6](https://github.com/misunders2d/agentnet/releases/tag/v0.10.6) is
 public and Latest at 17:24:24 UTC from
@@ -37,7 +37,28 @@ is Latest from `9b771cb`: only the agentnet version fields and derived hashes
 changed, versions unchanged. All 153 files under `published/` fetched
 unauthenticated at the tag match the commit.
 
-The Hub still runs v0.10.5; its v0.10.6 deploy waits for owner approval.
+Owner authorized this one Hub image upgrade. Hub starts v0.10.6 at
+17:32:37.472241073 UTC from the public Linux binary (sha256
+`1335eeb00646bdbb420ad9bb397e8e2be5942923a4d238968f483e1ed3d41c58`).
+
+- Image `agentnet-revived:v0.10.6-cfa66090`, id
+  `sha256:50ea3d30ab7f32d4b5b6996e0ad0d6bc73c04c6cf256bbbda415f27af51fb1ac`.
+- Public HTTPS reports v0.10.6; realm
+  `4bd7c66953ccf5496fad8eadbab945bd`, volume/settings preserved;
+  zero container restarts, schema 25.
+- Neighbor id `5cdc33d3f40c7c7248bb1a0880a6e464a374d28bb1acc8da57b88178d385d3c9`
+  and StartedAt `2026-10-26T12:40:43.89210067Z` identical before/after.
+- Curl-fetched `/assets/engine.mjs` matches the tag with BUILD v0.10.6:
+  sha256 `c54f5934c5353c519991c6eeb8aa3e95e765202308be5f6a65bf5834ee89b20b`.
+  `device.mjs` and `core.css` byte-identical to tag, respective SHA256:
+  `596724aabf292bc7007fdadac373f2ffad1bb868dbd157b74947f65d16aacce6`,
+  `d25a7736bf30d792d77fb2eca788e3261481811ae8620cb11096758ad4bc18a0`.
+- Local snapshot and isolated storage rehearsal verify 732 files, 715 local
+  blobs and 8,945 remote Drive references; remote bytes were not downloaded.
+- Release directory `/opt/agentnet-revived/releases/v0.10.6-cfa66090`.
+  v0.10.5 scripts reused with only WORK changed, after helper exec;
+  live baseline captured and compose verified image-line-only before/after.
+  Existing snapshots, volumes and older releases retained.
 
 ## v0.10.5 published and Hub deployed — November 2
 
