@@ -127,3 +127,17 @@ for(const blocked of [false,true]){
  assert.equal(reads,1);assert.equal(s.get().toasts.length,blocked?0:1,'confirmation failure uses existing load error only');assert(!s.get().toasts.some(t=>t.text==='Read status not confirmed. Reopen this chat to retry.'),'accepted write has no duplicate write warning');
  s.close();assert.equal(s.get().open,null,'Back remains available during blocked confirmation');heldView.release();for(let i=0;i<20;i++)await tick();s.stop();console.log(JSON.stringify({ok:true,mode:blocked?'blocked-read-confirmation':'failed-read-confirmation',reads}));
 }
+
+// An accepted action is not proof of a read: the fresh native view wins.
+{
+ let reads=0;
+ const host={platform:'daemon',workspace:{id:'accepted-without-read'},listen:()=>()=>{},async api(path){
+  if(path.startsWith('/api/overview'))return{seq:1,version:'test',me,dms:[{id:conv,unread:1}],threads:[],unread_total:1};
+  if(path.startsWith('/api/dm?'))return{id:conv,seq:1,peer:{},agents:[],messages:[{id:'not-committed',kind:'message',dir:'in',unread:true}]};
+  if(path==='/api/act'){reads++;return{};}if(path.startsWith('/api/agents'))return{agents:[]};return{};
+ }};
+ const s=new Store(host);mount(s);await s.start();await s.open({kind:'dm',id:conv});for(let i=0;i<20;i++)await tick();
+ assert.equal(reads,1);assert.equal(s.get().dm.messages[0].unread,true);assert.equal(s.get().overview.dms[0].unread,1);
+ assert(s.get().toasts.some(t=>t.text==='Read status not confirmed. Reopen this chat to retry.'));s.stop();
+ console.log(JSON.stringify({ok:true,mode:'accepted-without-native-commit',reads}));
+}

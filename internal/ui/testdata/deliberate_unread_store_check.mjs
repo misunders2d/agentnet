@@ -305,3 +305,21 @@ await checkFresh('superseded row preview cannot replace exact same-ID notificati
 });
 assert.deepEqual(freshFailures,[],'all fresh-entry and visible-topic discriminators pass');
 console.log('PASS deliberate unread Store: current visit, remote/local mark, exact single/from-here/siblings/sent/files, explicit entry, bootstrap/remount, full-generation delayed CAS, ordinary-read cost, uncapped atomic snapshot and fresh-entry/scope fencing');
+
+// MEL-741: native writes wait; exact local presentation must not wait with them.
+{
+ const f=fixture(),gate=deferred();
+ f.rows.splice(1,2,...Array.from({length:4},(_,i)=>({id:'visible-'+i,kind:'message',dir:'in',body:'visible unread',topic:'',unread:true,attention:{rev:5,writer:fp}})));
+ f.rows[0].unread=true;f.rows[0].attention={rev:5,writer:fp};f.readGate=gate.promise;
+ await f.store.start();await f.store.open({kind:'dm',id:conv});await drain();
+ const cleared=()=>f.store.get().views[conv].messages.every(m=>!m.unread);
+ assert.equal(f.reads().length,1);assert(cleared(),'all five rows clear before native completion');assert(f.rows.every(m=>m.unread));assert.equal(f.store.get().overview.dms[0].unread,0);
+ await f.change();assert(cleared(),'stale stream refresh cannot resurrect pending reads');assert.equal(f.reads().length,1);
+ f.rows.push({id:'late-catch-up',kind:'message',dir:'in',body:'late',topic:'',unread:true,attention:{rev:9,writer:fp}});
+ await f.change();assert.equal(f.reads().length,2,'visible backlog needs no matching entry generation');assert(cleared());assert.equal(f.store.get().overview.dms[0].unread,0);
+ gate.reject(Error('Invented native read rejection'));await drain();
+ assert(f.store.get().views[conv].messages.every(m=>m.unread),'failure restores current exact rows');assert.equal(f.store.get().overview.dms[0].unread,6);
+ assert(f.store.get().toasts.some(t=>t.text==='Read status not confirmed. Reopen this chat to retry.'));
+ f.readGate=null;f.store.close();await f.store.open({kind:'dm',id:conv});await drain();assert(f.rows.every(m=>!m.unread),'explicit retry commits');assert(cleared());f.store.stop();
+ console.log('PASS MEL-741 five-row optimistic read, stale stream, late catch-up generation, rejection and retry');
+}
