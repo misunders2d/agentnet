@@ -165,6 +165,8 @@ async function handle(req) {
     assert((await e.logicalGroupMembers(packet)).length===1,"hand-added group duplicates");
     const current=await e.groupPeople(packet);assert(current.length===1&&current[0].person===third.person&&current[0].devices[0].fingerprint===third.fingerprint,"group uses recovered device");packet.state.members=[];assert((await e.logicalGroupMembers(packet)).length===0,"removed group resurrected");
     const own=new Engine({store:mem,base:e.base});own.me={...third,state:"self"};assert((await own.logicalPersons()).get(old.person)===third.person,"recovered own person");
+    e.groupRecord=async()=>({});assert((await e.continuityNotices("held-group")).length===0,"unavailable group context blocks notices instead of history");
+    const ordinary=new Engine({store:memoryStore(),base:e.base});ordinary.me=e.me;ordinary.groupRecord=async()=>{throw Error("ordinary group notice requested current context")};assert((await ordinary.continuityNotices("ordinary-held-group")).length===0,"ordinary held group cannot render");
     return {passed:true,checks};
   }
   case "googleReviewProbes": {

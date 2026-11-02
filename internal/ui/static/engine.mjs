@@ -3699,7 +3699,15 @@ export class Engine {
   async continuityNotices(id,family=[]) {
     const aliases=await this.logicalPersons(),targets=new Set();
     if(family.length){for(const c of family){const to=aliases.get(c.peer);if(to&&to!==c.peer)targets.add(to);}}
-    else {const g=await this.groupRecord(id);if(g){const packet=await this.groupCurrentState(id),current=new Set((await this.logicalGroupMembers(packet)).map(m=>aliases.get(m.person)||m.person));for(const m of [...packet.root.members,...packet.state.members,...(packet.proof||[]).flatMap(s=>s.members)]){const to=aliases.get(m.person);if(to&&to!==m.person&&current.has(to))targets.add(to);}}}
+    else if([...aliases].some(([from,to])=>from!==to)) {
+      const g=await this.groupRecord(id);
+      if(g) {
+        // A held group still renders its history. Defer new notices until
+        // current membership is verified; retain any already stored notice.
+        let packet;try{packet=await this.groupCurrentState(id);}catch(e){if(!(e instanceof Hold))throw e;}
+        if(packet){const current=new Set((await this.logicalGroupMembers(packet)).map(m=>aliases.get(m.person)||m.person));for(const m of [...packet.root.members,...packet.state.members,...(packet.proof||[]).flatMap(s=>s.members)]){const to=aliases.get(m.person);if(to&&to!==m.person&&current.has(to))targets.add(to);}}
+      }
+    }
     for(const target of targets){
       const p=target===this.me?.person?this.me:await this.store.get("persons",target),scope=family.length?"dm/"+target:id;
       const hash=await wire.sha256(new TextEncoder().encode("agentnet-local-continuity-v1\n"+scope+"\n"+target)),key="continuity/"+[...hash].map(b=>b.toString(16).padStart(2,"0")).join("");
