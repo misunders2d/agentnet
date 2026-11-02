@@ -2325,3 +2325,24 @@ Playwright 1.63 and `/usr/bin/chromium`. The same failure was reproduced on
 pre-change source; CI 41466686316 on `cfa66090` passed UI race partitions.
 Neither this baseline failure nor any race timeout counts as a pass. Full
 release/platform/skins qualification remains a separate gate before release.
+
+Final focused race rerun, after all broad shards completed:
+
+```
+AGENTNET_PLAYWRIGHT=/tmp/agr/pw/node_modules/playwright AGENTNET_CHROMIUM=/usr/bin/chromium TMPDIR=/tmp/agr AGENTNET_SCREENSHOTS=/tmp/agr/mel736-one-race-shots go test -race ./internal/ui -run '^TestMEL736OneRendered$' -count=1 -timeout 600s -json
+```
+
+One parent and both history subtests passed, zero fail/skip. All four race-run
+screenshots were also inspected (same notice/history/failure/draft states).
+
+| History | Width | Cold open / notice | Warm open | Pending send | Explicit failure result |
+|---|---:|---:|---:|---:|---:|
+| 10 | 1280 | 524.5 | 170.2 | 92.7 | 2007.5 |
+| 10 | 390 | 261.5 | 91.2 | 46.2 | 1913.1 |
+| 100 | 1280 | 264.1 | 15.0 | 60.2 | 1961.0 |
+| 100 | 390 | 205.3 | 70.6 | 30.4 | 1849.8 |
+
+An earlier run under concurrent heavy race jobs failed at 1062 ms cold
+feedback. The passing tables qualify the stated local scenarios, not arbitrary
+CPU saturation; the broad race matrix remains failing/incomplete. No release
+qualification is claimed.

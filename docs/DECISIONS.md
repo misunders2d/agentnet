@@ -1034,10 +1034,14 @@ and release qualification are recorded in HANDOFF and INTERACTION_COVERAGE.
 - recovery request/admin approval/Start again UX (items 1–3);
 - any group slot replacement or new group governance signature protocol.
 
-**Gates.** Before the build, inspect the Telegram and Slack counterparts' code; so far they are compared only from their documentation. Also required:
-- focused regressions for this exact case;
-- rendered interactions under 1000 ms;
-- the mixed-version and skins gates.
+**Evidence and remaining gates.** The scoped plan records the inspected Signal
+and Telegram revisions and reused flows; Slack is closed source, so its account
+association evidence remains authoritative documentation only. Focused recovery
+and rendered interaction checks pass. Broad client/UI race runs fail or time
+out and leave unstarted/opt-in tests; this is not release qualification. Exact
+commands, counts, baseline comparisons and gaps are in the scoped plan and
+HANDOFF. Mixed-version, external skins and platform release gates remain unrun
+for this candidate.
 
 Read-only reviews and the November 2 Option A debate are design input. The
 Option A feature branch is implemented for review; it is not merged, released

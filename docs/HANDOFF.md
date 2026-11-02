@@ -12,13 +12,25 @@ See [the scoped design](plans/MEL736_CONTINUITY.md). Phase 1 remains parked,
 pushed and unmerged at `t3/mel736-continuity` / `fa134267`; do not integrate it
 for this fix. No merge, tag, release or deployment is authorized here.
 
-Verification is in progress. Focused real-Hub DM/group recovery and the real
-client-binary/restart journey pass; final focused, race and rendered evidence
-will be recorded before handoff. Existing local Comic setup parity failure
-reproduces with Playwright 1.63/system Chromium at
-`comic_setup_parity_check.cjs:164` waiting for `Your agent`; it also failed on
-the pre-change source. CI 41466686316 on `cfa66090` had all UI partitions green.
-Do not treat that local baseline failure as a continuity pass.
+Verification completed locally November 2–3: vet passed; focused package checks
+22 passed / 0 failed / 1 rendered opt-in skip (rendered separately passed).
+All eight new Go recovery regressions have passing race runs; browser parity,
+real-Hub DM/group continuation and the real-binary daemon restart journey pass.
+Rendered Comic continuity covers 10/100 messages, desktop/phone widths,
+concurrent arrival and delayed HTTP 503: final normal-run feedback below 548 ms
+(open/notice) and 119 ms (pending send). Four screenshots inspected.
+
+**Not release-qualified.** Both CLI race partitions passed (219 parent tests,
+2 skips). All 18 client and all three UI race partitions failed or timed out;
+many tests never started. Fixed two introduced regressions (duplicate current
+person reads; held-group notice projection); focused race reruns pass. Eight
+UI rendered failures reproduce on untouched source; nine additional rendered
+failures remain unclassified. Existing IndexedDB/native/SDK opt-ins skipped.
+See [exact commands, counts and limits](plans/MEL736_CONTINUITY.md#verification--november-23-review-candidate)
+and [interaction evidence](INTERACTION_COVERAGE.md#mel-736-option-a-recovered-person-and-continued-chat--november-2).
+Group messaging follows recovery without new signatures; recovered group-admin
+governance is not qualified. Lost keys do not restore ciphertext to a fresh
+device. Physical platforms, external skins and release gates remain unverified.
 
 ## v0.10.6 published and Hub deployed — November 2
 
