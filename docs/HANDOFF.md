@@ -1,5 +1,33 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+## v0.10.4 published and Hub deployed — November 2
+
+[App v0.10.4](https://github.com/misunders2d/agentnet/releases/tag/v0.10.4) is
+public and Latest at 01:51:23 UTC from
+`392f6f6a8d17dc1891373842e71f2f28e6cafce5` (quiet hooks and one shared
+overview build, MEL-731). All twelve payloads plus SHA256SUMS verified in
+the draft (names, checksums, linux-amd64 reports v0.10.4 at that revision
+with a clean tree); the public SHA256SUMS is identical. Gates, all before
+the tag: CI 41359862557 green (attempt 2, see the MEL-731 section);
+platform run 41368055217 (desktop ×3, Android) green on attempt 2 (attempt 1:
+the emulator's `history.quote-exact-parent` local feedback passed the
+1000 ms bound in the baseline vector; no UI code changed);
+`TestMixedVersion` against v0.10.3 passed with `AGENTNET_REQUIRE_COMPAT=1`
+(96 s); skins gate network-isolated (loopback up), run 1: 326 checks, zero
+skipped, every suite of all five published skins, qa-orbit and qa-overlay
+pass. [Gallery v2026.11.02](https://github.com/misunders2d/agentnet-skins/releases/tag/v2026.11.02)
+is Latest from `0d7df3e` (only `agentnet` fields, manifests and catalog
+changed); all 153 raw files match `published/`.
+
+Hub starts v0.10.4 at 01:52:46 UTC from the exact public Linux binary
+(sha256 `53074f04…1806`); public HTTPS version/realm, volume/settings and the
+neighboring service verify, zero restarts, schema 25; the served engine.mjs
+matches the tag with its BUILD stamp. Local recovery verifies 598 files, 581
+local blobs and 8,945 remote Drive references. The v0.10.3 staging scripts
+were reused with only `WORK` changed; the compose file differed from the
+v0.10.3 baseline only by its image line. The owner's daemon and app updated
+themselves within two minutes (acceptance numbers in the MEL-731 section).
+
 ## Owner decisions: chat open and big files — November 1 (released in v0.10.3)
 
 Opening a chat (owner: "investigate why opening a chat is slow"), measured on a
@@ -78,7 +106,7 @@ the measured ceiling) is in docs/INTERACTION_COVERAGE.md "Chat open and
 history paging": Comic already mounts 24/80 groups, fetch paging would cut
 only ~25% of a 0.24–0.36 s open; asked owner whether to continue.
 
-## Owner daemon at a full core on v0.10.2 — unreleased, November 1
+## Owner daemon at a full core on v0.10.2 — November 1–2 (released in v0.10.4)
 
 **Still busy on v0.10.3 (MEL-731, In Progress).** Process 1011 re-executed into
 v0.10.3 at 23:38. Twenty minutes later, read-only /proc samples showed 116%
@@ -98,7 +126,7 @@ pipe` lines, ~6/min). The most frequent trigger: every Claude/Codex hook
 (each tool call of every session) re-saved its unchanged reply-session row
 and dialed the daemon socket; the daemon bumps content on every dial. One
 tool call here gave 2–3 changes ~1.5 s later, so working agents kept the
-daemon near a core. Fix (unreleased): the badge asks the page's variant
+daemon near a core. Fix (v0.10.4): the badge asks the page's variant
 (`alert_total` is the same, `unread_provider_test.go`), and an unchanged
 registration is neither written nor announced (`quietHook` in
 `TestClaudeReplyRegistryRenewalAndDetach` and
@@ -112,8 +140,16 @@ fails locally with and without this change (context deadline); CI passed it
 on ddf830d4. CI 41359862557 (392f6f6a) is green on attempt 2 after
 rerunning windows-client (0): `TestGroupInvitationAsksEachCheckOnce` timed
 out on group context (no hook path), as the Windows group-context failures
-of 41322661937 did. Acceptance on the owner's daemon comes with the next
-release.
+of 41322661937 did.
+
+**Accepted on the owner's daemon (v0.10.4, MEL-731 In Review).** Process
+1011 updated itself and switched to v0.10.4 at 03:53:51 (same pid), and the
+app restarted as a whole. Two of this session's tool calls then gave no
+change at all. Over 60 s: 9% CPU, 39 MB/s of reads (was ~107% and
+357 MB/s). Over the next 3 minutes with the app open and agents idle: 4%
+average, no broken pipes; the only changes came in pairs 90 s apart (the Hub
+ping interval), each costing one build of ~3–5 s at 20–30% instead of a
+13 s burst. What bumps content at each ping is not identified yet.
 
 After the self-update (same pid re-executed into v0.10.2) the owner's daemon
 still used about 1.1 cores: ~235 MB/s of 4 KB SQLite page reads from cache
