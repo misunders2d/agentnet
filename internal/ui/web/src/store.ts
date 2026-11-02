@@ -326,7 +326,7 @@ export class Store {
 
   // Keep native snapshots intact: a failed write restores the current snapshot,
   // while every stale refresh is presented through the same exact-key overlay.
-  private localReads = new Map<string, Map<string, { kind: "dm" | "thread"; id: string; saved: boolean }>>();
+  private localReads = new Map<string, Map<string, { kind: "dm" | "thread"; id: string; saved: boolean; accepted?: number }>>();
   private readState?: { source: State; value: State };
   private readIdentity(m: T.DMMessage | T.Message): string {
     return JSON.stringify([this.readKey(m), m.dir, (m as T.DMMessage).lid || m.id,
@@ -350,7 +350,8 @@ export class Store {
         const record = m.unread && reads.get(this.readIdentity(m));
         if (!record) return m;
         cleared++;
-        if (!record.saved) waiting++;
+        // An overview loaded before acceptance predates this commit.
+        if (!record.saved || (s.overview?.seq || 0) <= (record.accepted ?? -1)) waiting++;
         return { ...m, unread: false };
       });
       if (!cleared) continue;
@@ -2113,7 +2114,7 @@ export class Store {
     const keys = pending.map(m => this.readKey(m));
     const attention = Object.fromEntries(pending.filter(m => m.attention).map(m => [m.id, m.attention!]));
     keys.forEach(key => this.reading.add(key));
-    const overlays = this.localReads.get(o.id) || new Map<string, { kind: "dm" | "thread"; id: string; saved: boolean }>();
+    const overlays = this.localReads.get(o.id) || new Map<string, { kind: "dm" | "thread"; id: string; saved: boolean; accepted?: number }>();
     this.localReads.set(o.id, overlays);
     const batch = pending.map(m => { const key = this.readIdentity(m); const record = { kind: o.kind, id: m.id, saved: false }; overlays.set(key, record); return { key, record }; });
     this.publishReads();
@@ -2122,7 +2123,8 @@ export class Store {
     // acknowledgements so refreshing a sent device-thread row cannot loop.
     void this.api.markRead(ids, Object.keys(attention).length ? attention : undefined).then(async () => {
       readAccepted = true;
-      batch.forEach(({ record }) => { record.saved = true; });
+      const accepted = this.state.overview?.seq || 0;
+      batch.forEach(({ record }) => { record.saved = true; record.accepted = accepted; });
       keys.forEach(key => { acknowledged.add(key); this.reading.delete(key); });
       // The native action also writes legacy read state. A cleared sent row
       // returns to its plain ID; keep that acknowledgement within this visit.

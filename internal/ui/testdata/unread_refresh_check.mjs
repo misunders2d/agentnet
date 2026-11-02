@@ -164,3 +164,23 @@ for(const blocked of [false,true]){
  assert.equal(s.get().dm.messages[0].unread,true,'failure restores the row');assert.equal(s.get().overview.dms[0].unread,2,'failure restores the badge');
  s.stop();console.log(JSON.stringify({ok:true,mode:'newer-overview-optimistic-read'}));
 }
+
+// Acceptance alone must not bring back a badge the newer pre-commit overview
+// still counts while the confirming view loads.
+{
+ const readGate=gate(),viewGate=gate();let committed=false,views=0;
+ const host={platform:'daemon',workspace:{id:'accepted-newer-overview'},listen:()=>()=>{},async api(path){
+  if(path.startsWith('/api/overview'))return{seq:2,version:'test',me,dms:[{id:conv,unread:committed?0:1}],threads:[],unread_total:committed?0:1};
+  if(path.startsWith('/api/dm?')){views++;if(views>1)await viewGate.promise;return{id:conv,seq:views>1?3:1,peer:{},agents:[],messages:[{id:'seen',kind:'message',dir:'in',unread:!committed}]};}
+  if(path==='/api/act'){await readGate.promise;committed=true;return{};}
+  if(path.startsWith('/api/agents'))return{agents:[]};return{};
+ }};
+ const s=new Store(host);mount(s);await s.start();await s.open({kind:'dm',id:conv});for(let i=0;i<20;i++)await tick();
+ assert.equal(s.get().overview.dms[0].unread,0,'pending read clears at once');
+ readGate.release();for(let i=0;i<20;i++)await tick();
+ s.set({contentRevision:s.state.contentRevision+1});/* any unrelated render */
+ assert.equal(views,2,'confirming view is loading');assert.equal(s.get().overview.dms[0].unread,0,'acceptance does not bring the badge back');assert.equal(s.get().overview.unread_total,0);
+ viewGate.release();for(let i=0;i<20;i++)await tick();
+ assert.equal(s.get().dm.messages[0].unread,false);assert.equal(s.get().overview.dms[0].unread,0);assert(!s.get().toasts.some(t=>t.text==='Read status not confirmed. Reopen this chat to retry.'));
+ s.stop();console.log(JSON.stringify({ok:true,mode:'accepted-before-confirming-view'}));
+}
