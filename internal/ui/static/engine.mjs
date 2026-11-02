@@ -3558,7 +3558,14 @@ export class Engine {
   // pinChain pins person the first time: its whole chain, verified from
   // step 0 (trust on first use), and its devices' keys.
   async pinChain(person, admission = null) {
-    const known = person === (this.me && this.me.person) ? this.me : await this.store.get("persons", person);
+    let known = person === (this.me && this.me.person) ? this.me : await this.store.get("persons", person), reclaimed = false;
+    if (known?.state === "conflict" && known.email_claim && !admission?.localOnly && !(await this.emailHeld(known, admission))) {
+      // Frozen only for claiming an email whose holder has left since: the
+      // freeze is forgotten and the chain pinned again from step 0.
+      await this.store.write([{ s: "persons", k: person, v: undefined }], [{ s: "persons", k: person, v: known }]);
+      known = null;
+      reclaimed = true;
+    }
     if (known && admission?.localOnly) return this.receivePerson(known, admission);
     if (known) {
       const current = await this.refreshPerson(known, admission);
@@ -3575,16 +3582,57 @@ export class Engine {
       throw new Hold("proof_pending", "person " + person + ": " + e.message);
     }
     const p = await this.personRecord(steps, "pinned", null);
-    const peers = [this.me, ...(await this.store.all("persons"))].filter(Boolean);
-    if (p.email && peers.some(other => other.person !== p.person && other.email === p.email)) {
+    if (p.email && await this.emailHeld(p, admission)) {
       p.state = "conflict";
+      p.email_claim = true; // no conflicting step: looked at again once the holder left
       await put(this.store, "persons", p.person, p);
       this.changed();
-      throw new Hold("invalid", "Another account claims this email; the earlier person stays pinned.");
+      throw new Hold("identity_conflict", "Another account claims this email; the earlier person stays pinned.");
     }
     await put(this.store, "persons", p.person, p);
     await this.pinDevices(p);
+    if (reclaimed) await this.releaseConflictHolds(p);
     return admission ? this.receivePerson(p, admission) : p;
+  }
+
+  // emailHeld says whether a person kept here other than p still holds its
+  // email: your own person always does, another one until the server has
+  // revoked every one of its devices (asked when not recorded here yet).
+  // One who left stays kept as it was, history and pins included, while
+  // its email may name a person who joined afresh (DECISIONS, November 2,
+  // 2026; MEL-736), as Telegram Desktop keeps a deleted account, renamed,
+  // and drops its phone (tdesktop 5ff6157, data_session.cpp:804). A server
+  // out of reach is thrown, so what waits is retried rather than frozen.
+  async emailHeld(p, admission = null) {
+    const others = [this.me, ...(await this.store.all("persons"))].filter(o => o && o.person !== p.person && o.email && o.email === p.email);
+    for (const o of others) {
+      if (o.state === "self" || o.person === this.me?.person || !(o.devices || []).length) return true;
+      for (const d of o.devices) {
+        const key = "revoked-device/" + d.address + "/" + d.fingerprint;
+        if (await this.store.get("kv", key)) continue;
+        let entry;
+        try { entry = await this.directory(d.address, admission); }
+        catch (e) { if (retryable(e)) throw e; return true; }
+        if (!entry.revoked || entry.fingerprint !== d.fingerprint) return true;
+        // Recorded now; its transport ends after work under way, never
+        // inside it (endRecipient waits for history production).
+        await put(this.store, "kv", key, { address: d.address, fingerprint: d.fingerprint });
+        (this.revokedRecipientKeys ||= new Set()).add(d.address + "/" + d.fingerprint);
+        this.endRecipient(d.address, d.fingerprint, true).catch(() => {});
+      }
+    }
+    return false;
+  }
+
+  // releaseConflictHolds moves what was held as an identity conflict from a
+  // device of p, pinned now, to the proof retry.
+  async releaseConflictHolds(p) {
+    const from = new Set(p.devices.map(d => d.address));
+    const rows = (await this.store.all("held")).filter(h => h.reason === "identity_conflict" && from.has(h.from));
+    if (!rows.length) return;
+    await this.store.write(rows.map(h => ({ s: "held", k: h.id, v: { ...h, reason: "proof_pending" } })), rows.map(h => ({ s: "held", k: h.id, v: h })));
+    this.changed();
+    this.retryHeld().catch(() => {});
   }
 
   // refreshPerson follows p's chain past the step pinned here, verifying

@@ -267,6 +267,118 @@ func TestGoogleReviewEmailConflict(t *testing.T) {
 	}
 }
 
+// MEL-736: a person who lost every device is removed by an admin and joins
+// afresh with the same email. A peer that pinned the earlier person pins
+// the new one instead of freezing it, once the relay shows every earlier
+// device revoked; an earlier freeze and the messages it held are released.
+func TestGoogleReviewEmailRejoinAfterRemoval(t *testing.T) {
+	for _, frozen := range []bool{false, true} {
+		t.Run(fmt.Sprint("frozen=", frozen), func(t *testing.T) {
+			w := newGoogleReviewWorld(t)
+			first := w.join(t, "laptop")
+			old, _, err := first.Person()
+			if err != nil {
+				t.Fatal(err)
+			}
+			peer := w.admin
+			if _, err = peer.refreshPerson(w.ctx, old.Person, false); err != nil {
+				t.Fatal("pin earlier person:", err)
+			}
+			if err = w.admin.ChangeGoogleAccess(w.ctx, protocol.GoogleAccessChange{Email: old.Email, Remove: true}); err != nil {
+				t.Fatal(err)
+			}
+			if err = w.admin.ChangeGoogleAccess(w.ctx, protocol.GoogleAccessChange{Email: old.Email}); err != nil {
+				t.Fatal(err)
+			}
+			home := t.TempDir()
+			pub, _ := GoogleDevice(home, "laptop")
+			fresh, err := JoinGoogle(w.ctx, home, w.opts, w.issuer.IDToken(t, pub, old.Email, nil), "laptop")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer fresh.Close()
+			np, _, err := fresh.Person()
+			if err != nil || np.Person == old.Person || np.Email != old.Email {
+				t.Fatalf("fresh person: %+v %v", np, err)
+			}
+			if frozen {
+				// As a build before this fix froze it: pinned with no
+				// revocation known, the email still looks held.
+				raws, err := peer.fetchChain(w.ctx, np.Person, -1)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err = peer.store.pinChain(np.Person, raws, peer.Self(), false); !errors.Is(err, errPersonConflict) {
+					t.Fatal("setup: email claim not frozen:", err)
+				}
+				if _, err = peer.store.db.Exec(`INSERT INTO quarantine(id, sender, reason, envelope, received_at) VALUES('held-1', ?, ?, '{}', 1)`, fresh.Address, reasonConflict); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err = peer.refreshPerson(w.ctx, np.Person, false); err != nil {
+				t.Fatal("rejoined person still refused:", err)
+			}
+			got, ok, err := peer.store.personByID(np.Person)
+			if err != nil || !ok || got.info.State != personPinned || got.info.Email != old.Email || !got.has(fresh.Address, fresh.Self().Fingerprint()) {
+				t.Fatalf("rejoined person here: %+v %v %v", got.info, ok, err)
+			}
+			kept, ok, err := peer.store.personByID(old.Person)
+			if err != nil || !ok || kept.info.State != personPinned || kept.info.Seq != old.Seq {
+				t.Fatalf("earlier person not kept as pinned: %+v %v %v", kept.info, ok, err)
+			}
+			if known, err := revokedDeviceKnown(peer.store.db, first.Address, first.Self().Fingerprint()); err != nil || !known {
+				t.Fatal("earlier device not recorded as revoked:", known, err)
+			}
+			if frozen {
+				var reason string
+				if err = peer.store.db.QueryRow(`SELECT reason FROM quarantine WHERE id = 'held-1'`).Scan(&reason); err != nil || reason != reasonProof {
+					t.Fatal("held message not released to the proof retry:", reason, err)
+				}
+			}
+			listed, err := peer.ListedPersons()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, p := range listed {
+				if p.State == personConflict {
+					t.Fatalf("listed as a conflict: %+v", p)
+				}
+			}
+		})
+	}
+}
+
+// A peer keeps refusing a new person with a pinned person's email while
+// that person still has a device the relay did not revoke.
+func TestGoogleReviewEmailClaimWhileHolderLive(t *testing.T) {
+	w := newGoogleReviewWorld(t)
+	first := w.join(t, "laptop")
+	old, _, err := first.Person()
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer := w.admin
+	if _, err = peer.refreshPerson(w.ctx, old.Person, false); err != nil {
+		t.Fatal(err)
+	}
+	key, _ := identity.Generate()
+	spoof := protocol.PersonRoster{Person: protocol.NewID(), Label: "Spoof", Email: old.Email, Devices: []identity.Public{key.Public("spoof/laptop")}}
+	spoof.Sign(key.Sign)
+	raw, _ := json.Marshal(spoof)
+	if _, err = peer.store.pinChain(spoof.Person, [][]byte{raw}, peer.Self(), false); !errors.Is(err, errPersonConflict) {
+		t.Fatal("claim pinned:", err)
+	}
+	if err = peer.settleEmail(w.ctx, spoof.Person, old.Email); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := peer.store.releaseEmailClaim(spoof.Person, old.Email); err != nil || ok {
+		t.Fatal("claim released while its holder is live:", ok, err)
+	}
+	if known, err := revokedDeviceKnown(peer.store.db, first.Address, first.Self().Fingerprint()); err != nil || known {
+		t.Fatal("live device recorded as revoked:", known, err)
+	}
+}
+
 func TestGoogleReviewLostJoinResponseAfterApproval(t *testing.T) {
 	w := newGoogleReviewWorld(t)
 	first := w.join(t, "laptop")

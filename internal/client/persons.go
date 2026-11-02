@@ -301,9 +301,13 @@ func (s *store) pinChain(person string, raws [][]byte, me identity.Public, adopt
 	}
 	raw, _ := json.Marshal(cur)
 	if cur.Email != "" {
-		var other string
-		e := tx.QueryRow(`SELECT person FROM persons WHERE person != ? AND json_extract(record, '$.email') = ? LIMIT 1`, person, cur.Email).Scan(&other)
-		if e == nil {
+		held, e := emailHeldIn(tx, person, cur.Email)
+		if e != nil {
+			return res, e
+		}
+		if held {
+			// An email claim: frozen without a conflicting step (conflict
+			// stays NULL), so it is looked at again once its holder left.
 			if _, e = tx.Exec(`INSERT INTO persons(person,label,seq,hash,record,state,pinned_at) VALUES(?,?,?,?,?,?,?)`, person, cur.Label, cur.Seq, cur.Hash(), string(raw), personConflict, time.Now().Unix()); e != nil {
 				return res, e
 			}
@@ -311,9 +315,6 @@ func (s *store) pinChain(person string, raws [][]byte, me identity.Public, adopt
 				return res, e
 			}
 			return res, errPersonConflict
-		}
-		if !errors.Is(e, sql.ErrNoRows) {
-			return res, e
 		}
 	}
 	lists := cur.Has(me.Address, me.Fingerprint())
@@ -446,19 +447,52 @@ func (a *Agent) refreshPerson(ctx context.Context, person string, adopt bool) (p
 
 func (a *Agent) pinNewerSteps(ctx context.Context, person string, adopt bool) (pinResult, error) {
 	after := int64(-1)
+	reclaimed := false
 	if p, ok, err := a.store.personByID(person); err != nil {
 		return pinResult{}, err
 	} else if ok {
 		if p.info.State == personConflict {
-			return pinResult{}, errPersonConflict
+			// Only an email claim is looked at again, once the person that
+			// held the email has left; a conflicting step stays frozen.
+			if claim, err := a.store.emailClaimOnly(person); err != nil {
+				return pinResult{}, err
+			} else if !claim {
+				return pinResult{}, errPersonConflict
+			}
+			if err := a.settleEmail(ctx, person, p.roster.Email); err != nil {
+				return pinResult{}, err
+			}
+			if ok, err := a.store.releaseEmailClaim(person, p.roster.Email); err != nil {
+				return pinResult{}, err
+			} else if !ok {
+				return pinResult{}, errPersonConflict
+			}
+			reclaimed = true
+		} else {
+			after = p.info.Seq
 		}
-		after = p.info.Seq
 	}
 	raws, err := a.fetchChain(ctx, person, after)
 	if err != nil {
 		return pinResult{}, err
 	}
+	if len(raws) > 0 {
+		if r, err := protocol.ParsePersonRoster(raws[len(raws)-1]); err == nil && r.Email != "" {
+			if err := a.settleEmail(ctx, person, r.Email); err != nil {
+				return pinResult{}, err
+			}
+		}
+	}
 	res, err := a.store.pinChain(person, raws, a.Self(), adopt)
+	if err == nil && reclaimed {
+		// Messages held while it was frozen look again, as for new proof.
+		if n, e := a.store.releaseConflictHolds(person); e != nil {
+			return res, e
+		} else if n > 0 {
+			a.convWork.due(convRetry)
+			a.kickNow()
+		}
+	}
 	if err == nil && res.left {
 		a.Logf("this device is no longer a device of its person")
 		a.store.setConfig(map[string]string{"role": ""})
@@ -475,6 +509,148 @@ func (a *Agent) pinNewerSteps(ctx context.Context, person string, adopt bool) (p
 		}
 	}
 	return res, err
+}
+
+// A person whose every device the relay removed has left: it stays pinned
+// here as it was, history, keys and pins included, while its email may
+// belong to a person who joined afresh with it (DECISIONS, November 2,
+// 2026; MEL-736). Telegram Desktop does the same with a deleted account: it
+// keeps the user, renamed, and drops its phone number (tdesktop 5ff6157,
+// data_session.cpp:804), so the number can name a new account.
+
+// emailHeldIn reports whether a pinned person other than person still holds
+// email: your own person always does, another one until it left.
+func emailHeldIn(q dbq, person, email string) (bool, error) {
+	others, err := emailOthersIn(q, person, email)
+	if err != nil {
+		return false, err
+	}
+	for _, id := range others {
+		if left, err := personLeftIn(q, id); err != nil || !left {
+			return true, err
+		}
+	}
+	return false, nil
+}
+
+func emailOthersIn(q dbq, person, email string) ([]string, error) {
+	rows, err := q.Query(`SELECT person FROM persons WHERE person != ? AND json_extract(record, '$.email') = ?`, person, email)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// personLeftIn reports whether the relay revoked every current device of
+// the pinned person id, as recorded here (endRecipient). Your own person
+// never left.
+func personLeftIn(q dbq, id string) (bool, error) {
+	p, ok, err := personByIDIn(q, id)
+	if err != nil || !ok || p.info.State == personSelf || len(p.roster.Devices) == 0 {
+		return false, err
+	}
+	for _, d := range p.roster.Devices {
+		if known, err := revokedDeviceKnown(q, d.Address, d.Fingerprint()); err != nil || !known {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+// settleEmail asks the relay about each current device of the other persons
+// pinned here with email before person is pinned with it. A device the
+// relay revoked, with the key pinned here, is ended as revoked; a live or
+// unknown device leaves its person holding the email. A relay out of reach
+// is returned, so what waits on person is retried instead of frozen. Your
+// own person is never asked about.
+func (a *Agent) settleEmail(ctx context.Context, person, email string) error {
+	others, err := emailOthersIn(a.store.db, person, email)
+	if err != nil {
+		return err
+	}
+	for _, id := range others {
+		p, ok, err := a.store.personByID(id)
+		if err != nil {
+			return err
+		}
+		if !ok || p.info.State == personSelf {
+			continue
+		}
+		for _, d := range p.roster.Devices {
+			fp := d.Fingerprint()
+			if known, err := revokedDeviceKnown(a.store.db, d.Address, fp); err != nil {
+				return err
+			} else if known {
+				continue
+			}
+			e, err := a.directory(ctx, d.Address)
+			var he *HubError
+			if errors.As(err, &he) && !transient(err) {
+				break
+			}
+			if err != nil {
+				return err
+			}
+			if !e.Revoked || e.Public.Fingerprint() != fp {
+				break
+			}
+			if err := a.store.endRecipient(d.Address, fp, true); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// emailClaimOnly reports whether person is frozen here only for claiming a
+// pinned person's email: no conflicting step was seen for it.
+func (s *store) emailClaimOnly(person string) (bool, error) {
+	var claim bool
+	err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM persons WHERE person = ? AND state = ? AND conflict IS NULL AND coalesce(json_extract(record, '$.email'), '') != '')`, person, personConflict).Scan(&claim)
+	return claim, err
+}
+
+// releaseEmailClaim forgets person's email-claim freeze once nobody pinned
+// here holds email any more, so its chain is pinned again from step 0 and
+// verified as at first sight. It reports whether it did.
+func (s *store) releaseEmailClaim(person, email string) (bool, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	var claim bool
+	if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM persons WHERE person = ? AND state = ? AND conflict IS NULL AND json_extract(record, '$.email') = ?)`, person, personConflict, email).Scan(&claim); err != nil || !claim {
+		return false, err
+	}
+	if held, err := emailHeldIn(tx, person, email); err != nil || held {
+		return false, err
+	}
+	for _, q := range []string{`DELETE FROM persons WHERE person = ?`, `DELETE FROM person_chain WHERE person = ?`, `DELETE FROM person_devices WHERE person = ?`} {
+		if _, err := tx.Exec(q, person); err != nil {
+			return false, err
+		}
+	}
+	return true, tx.Commit()
+}
+
+// releaseConflictHolds moves messages held as an identity conflict from a
+// current device of person, pinned now, to the proof retry.
+func (s *store) releaseConflictHolds(person string) (int64, error) {
+	res, err := s.db.Exec(`UPDATE quarantine SET reason = ? WHERE reason = ? AND sender IN (SELECT address FROM person_devices WHERE person = ?)`, reasonProof, reasonConflict, person)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // personOfKey returns the person that the device at address, with key, its
@@ -656,6 +832,13 @@ func (a *Agent) ListedPersons() ([]PersonInfo, error) {
 	rows.Close()
 	if err != nil {
 		return nil, err
+	}
+	for email, person := range emails {
+		if left, err := personLeftIn(a.store.db, person); err != nil {
+			return nil, err
+		} else if left {
+			delete(emails, email) // a person who left holds no email
+		}
 	}
 	for _, m := range a.MemberView().Members.Members {
 		if m.Person == nil || seen[m.Person.ID] {

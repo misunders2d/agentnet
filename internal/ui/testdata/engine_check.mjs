@@ -173,6 +173,21 @@ async function handle(req) {
     let blocked=false;try { await e.pinChain(spoof.person); } catch { blocked=true; }
     const conflicting=await mem.get("persons",spoof.person);
     if(!blocked || conflicting.state!=="conflict" || e.personView(conflicting).email) throw Error("duplicate email displayed as pinned person");
+    // MEL-736: while the server still lists the earlier device, the claim
+    // stays frozen; once it revoked every one, the person who joined afresh
+    // with that email is pinned and what it held is retried.
+    const headFP=(await mem.get("persons",head.person)).devices[0].fingerprint;
+    let revoked=false;e.retryHeld=async()=>{};e.endRecipient=async()=>{};
+    e.directory=async address=>{if(address!==ownerAddress)throw Error("unexpected directory "+address);return {fingerprint:headFP,revoked};};
+    await mem.write([{s:"held",k:"held-1",v:{id:"held-1",from:"g-spoof/phone",reason:"identity_conflict",envelope:"{}",at:1}}]);
+    let still;try { still=await e.pinChain(spoof.person); } catch { still=null; }
+    if((still && still.state!=="conflict") || (await mem.get("persons",spoof.person)).state!=="conflict") throw Error("claim released while its holder is live");
+    revoked=true;
+    const rejoined=await e.pinChain(spoof.person);
+    if(rejoined.state!=="pinned" || e.personView(rejoined).email!==email) throw Error("rejoined person not pinned with its email: "+rejoined.state);
+    if((await mem.get("persons",head.person)).state!=="pinned") throw Error("earlier person not kept");
+    if(!(await mem.get("kv","revoked-device/"+ownerAddress+"/"+headFP))) throw Error("earlier device not recorded as revoked");
+    if((await mem.get("held","held-1")).reason!=="proof_pending") throw Error("held message not released to the proof retry");
     return {passed:true};
   }
   case "googleKeys": {

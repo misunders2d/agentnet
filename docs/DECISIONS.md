@@ -1009,6 +1009,7 @@ Owner: "he should be able to just reconnect".
    - P8 above says local pins only hide a conflicting person's email. The code instead freezes the new person, in the client (`persons.go`, `pinChain` and `Persons`) and the browser engine (`pinChain`). Frozen persons are refused by DMs and groups, and nothing clears the state.
    - Fix: when every device of the earlier person with that email is revoked on the Hub, peers pin the new person and show a key-change notice. The earlier person, its history and pins stay. Existing frozen records are re-evaluated.
    - A still-active earlier person keeps freezing the new claim.
+   - Owner, November 2: ship this item first, alone, as v0.10.6. The key-change notice ships with items 1–3; until then the new person shows as a separate person under the same name, with its email.
 
 **Deferred:**
 - a waiting period and notices to old devices;
