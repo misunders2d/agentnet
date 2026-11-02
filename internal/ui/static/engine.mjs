@@ -3744,12 +3744,19 @@ export class Engine {
   }
 
   async logicalGroupMembers(packet) {
-    const aliases=await this.logicalPersons(),selected=new Map(),blocked=new Set();
-    for(const m of packet.state.members){const id=aliases.get(m.person)||m.person;if(id===m.person&&await wire.groupWithdrawn(packet.state,m,packet.withdrawals||[]))blocked.add(id);}
-    for(const past of packet.proof||[])for(const m of past.members){const id=aliases.get(m.person)||m.person;if(id===m.person&&!wire.groupMember(packet.state,id))blocked.add(id);}
-    for(const m of await wire.effectiveGroupMembers(packet.state,packet.withdrawals||[])){
-      const id=aliases.get(m.person)||m.person,old=selected.get(id);
-      if(blocked.has(id))continue;
+    const aliases=await this.logicalPersons(),logical=person=>aliases.get(person)||person,selected=new Map(),blockedThrough=new Map();
+    const withdrawals=(packet.withdrawals||[]).filter(w=>w.conv===packet.state.conv&&w.realm===packet.state.realm),withdrawn=new Set(withdrawals.map(w=>w.person+"/"+w.admission)),withdrawnPeople=new Set(withdrawals.map(w=>w.person));
+    const block=(person,seq)=>{const id=logical(person);if(!blockedThrough.has(id)||seq>blockedThrough.get(id))blockedThrough.set(id,seq);};
+    // Verified proof is ordered. Removal blocks the entire family at that
+    // transition; withdrawal blocks its exact admission and older duplicates.
+    const states=[...(packet.proof||[]),packet.state];
+    for(let i=0;i<states.length;i++)for(const m of states[i].members){
+      if(withdrawnPeople.has(m.person)&&withdrawn.has(m.person+"/"+await wire.groupAdmissionHash(m.admission)))block(m.person,m.admission.seq);
+      if(i+1<states.length&&!wire.groupMember(states[i+1],m.person))block(m.person,states[i+1].seq);
+    }
+    for(const m of packet.state.members){
+      const id=logical(m.person),old=selected.get(id);
+      if(blockedThrough.has(id)&&m.admission.seq<=blockedThrough.get(id))continue;
       if(!old||m.person===id&&old.person!==id||m.person!==id&&old.person!==id&&(m.admission.seq>old.admission.seq||m.admission.seq===old.admission.seq&&m.person<old.person))selected.set(id,m);
     }
     return [...selected.values()];

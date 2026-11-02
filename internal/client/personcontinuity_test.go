@@ -270,6 +270,61 @@ func TestMEL736OneGroupMembershipRemovalAndDedupe(t *testing.T) {
 	}
 }
 
+func TestMEL736OneGroupRemovalSurvivesSecondRecovery(t *testing.T) {
+	for _, mode := range []string{"removed", "withdrawn", "local-withdrawal"} {
+		t.Run(mode, func(t *testing.T) {
+			home := t.TempDir()
+			seedFixtureStore(t, home)
+			s, e := openStore(filepath.Join(home, "agent.db"))
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer s.db.Close()
+			a, b, c := mel736OneRoster(t, protocol.NewID(), "a"), mel736OneRoster(t, protocol.NewID(), "b"), mel736OneRoster(t, protocol.NewID(), "c")
+			mel736OnePin(t, s, a)
+			mel736OneLeave(t, s, a, true)
+			mel736OnePin(t, s, b)
+			conv := protocol.NewID()
+			member := func(p protocol.PersonRoster, seq int64) protocol.GroupMember {
+				return protocol.GroupMember{ConvMember: protocol.ConvMember{Person: p.Person, Roster: p.Hash()}, Admission: protocol.GroupAdmission{Conv: conv, Person: p.Person, Roster: p.Hash(), Seq: seq}}
+			}
+			ma, mb := member(a, 0), member(b, 1)
+			initial := protocol.GroupState{Conv: conv, Members: []protocol.GroupMember{ma}}
+			restored := protocol.GroupState{Conv: conv, Seq: 1, Members: []protocol.GroupMember{ma, mb}}
+			packet := GroupContext{Proof: []protocol.GroupState{initial}, State: restored}
+			if mode == "removed" {
+				packet.Proof = append(packet.Proof, restored)
+				packet.State = protocol.GroupState{Conv: conv, Seq: 2, Members: []protocol.GroupMember{ma}}
+			} else {
+				w := protocol.GroupWithdrawal{Conv: conv, Person: b.Person, Admission: mb.Admission.Hash()}
+				if mode == "local-withdrawal" {
+					raw, _ := json.Marshal(w)
+					if _, e := s.db.Exec(`INSERT INTO group_withdrawals(conv,person,admission,record) VALUES(?,?,?,?)`, conv, w.Person, w.Admission, string(raw)); e != nil {
+						t.Fatal(e)
+					}
+				} else {
+					packet.Withdrawals = []protocol.GroupWithdrawal{w}
+				}
+			}
+			check := func(want string) {
+				t.Helper()
+				ms, e := logicalGroupMembers(s.db, packet)
+				if e != nil || want == "" && len(ms) != 0 || want != "" && (len(ms) != 1 || ms[0].Person != want) {
+					t.Fatal("logical membership", ms, e)
+				}
+			}
+			check("")
+			mel736OneLeave(t, s, b, true)
+			mel736OnePin(t, s, c)
+			check("") // A and B now both alias C; A's slot grants nothing.
+			packet.Proof = append(packet.Proof, packet.State)
+			packet.State.Seq++
+			packet.State.Members = append(append([]protocol.GroupMember(nil), packet.State.Members...), member(c, packet.State.Seq))
+			check(c.Person) // Only a later explicit admission restores access.
+		})
+	}
+}
+
 func TestMEL736OneHubRecoveryDMAndNoGrantInheritance(t *testing.T) {
 	w := newMEL736OneWorld(t)
 	first := mel736OneJoin(t, w, "lost")

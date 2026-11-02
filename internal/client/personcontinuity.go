@@ -320,59 +320,69 @@ func messagingPersonIn(q dbq, id string) (personRow, bool, error) {
 	return personByIDIn(q, id)
 }
 
-// Filter withdrawal/removal first, then prefer an explicit current-identity
-// admission over a historical duplicate. Signed state and admissions stay intact.
+// Removal and withdrawal apply to the whole logical family. Only an explicit
+// later admission can supersede them; signed state/admissions stay intact.
 func logicalGroupMembers(q dbq, p GroupContext) ([]protocol.GroupMember, error) {
 	aliases, e := logicalPersons(q)
 	if e != nil {
 		return nil, e
 	}
-	chosen := map[string]protocol.GroupMember{}
-	blocked := map[string]bool{}
-	for _, m := range p.State.Members {
-		id := aliases[m.Person]
-		if id == "" {
-			id = m.Person
+	logical := func(person string) string {
+		if id := aliases[person]; id != "" {
+			return id
 		}
-		if id != m.Person {
-			continue
-		}
-		var gone int
-		if e = q.QueryRow(`SELECT count(*) FROM group_withdrawals WHERE conv=? AND person=? AND admission=?`, p.State.Conv, m.Person, m.Admission.Hash()).Scan(&gone); e != nil {
+		return person
+	}
+	withdrawn := map[string]bool{}
+	withdrawnPeople := map[string]bool{}
+	rows, e := q.Query(`SELECT person,admission FROM group_withdrawals WHERE conv=?`, p.State.Conv)
+	if e != nil {
+		return nil, e
+	}
+	for rows.Next() {
+		var person, admission string
+		if e = rows.Scan(&person, &admission); e != nil {
+			rows.Close()
 			return nil, e
 		}
-		if gone != 0 || p.State.Withdrawn(m, p.Withdrawals) {
-			blocked[id] = true
+		withdrawn[person+"/"+admission] = true
+		withdrawnPeople[person] = true
+	}
+	e = rows.Err()
+	rows.Close()
+	if e != nil {
+		return nil, e
+	}
+	for _, w := range p.Withdrawals {
+		if w.Conv == p.State.Conv && w.Realm == p.State.Realm {
+			withdrawn[w.Person+"/"+w.Admission] = true
+			withdrawnPeople[w.Person] = true
 		}
 	}
-	// A separately restored terminal slot, subsequently removed in signed
-	// state, takes precedence over an older duplicate slot still present.
-	for _, past := range p.Proof {
-		for _, m := range past.Members {
-			id := aliases[m.Person]
-			if id == "" {
-				id = m.Person
+	blockedThrough := map[string]int64{}
+	block := func(person string, seq int64) {
+		id := logical(person)
+		if old, ok := blockedThrough[id]; !ok || seq > old {
+			blockedThrough[id] = seq
+		}
+	}
+	states := append(append([]protocol.GroupState(nil), p.Proof...), p.State)
+	for i, state := range states {
+		for _, m := range state.Members {
+			if withdrawnPeople[m.Person] && withdrawn[m.Person+"/"+m.Admission.Hash()] {
+				block(m.Person, m.Admission.Seq)
 			}
-			if id == m.Person {
-				if _, present := p.State.Member(id); !present {
-					blocked[id] = true
+			if i+1 < len(states) {
+				if _, present := states[i+1].Member(m.Person); !present {
+					block(m.Person, states[i+1].Seq)
 				}
 			}
 		}
 	}
-	for _, m := range p.State.EffectiveMembers(p.Withdrawals) {
-		var withdrawn int
-		if e = q.QueryRow(`SELECT count(*) FROM group_withdrawals WHERE conv=? AND person=? AND admission=?`, p.State.Conv, m.Person, m.Admission.Hash()).Scan(&withdrawn); e != nil {
-			return nil, e
-		}
-		if withdrawn != 0 {
-			continue
-		}
-		id := aliases[m.Person]
-		if id == "" {
-			id = m.Person
-		}
-		if blocked[id] {
+	chosen := map[string]protocol.GroupMember{}
+	for _, m := range p.State.Members {
+		id := logical(m.Person)
+		if seq, blocked := blockedThrough[id]; blocked && m.Admission.Seq <= seq {
 			continue
 		}
 		old, exists := chosen[id]
