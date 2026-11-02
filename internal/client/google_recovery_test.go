@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"github.com/misunders2d/agentnet/internal/hub"
+	"github.com/misunders2d/agentnet/internal/identity"
 	"github.com/misunders2d/agentnet/internal/protocol"
 	"github.com/misunders2d/agentnet/internal/testgoogle"
 	"github.com/misunders2d/agentnet/internal/testhub"
@@ -45,9 +46,30 @@ func TestMEL736RequesterAndAdminAPI(t *testing.T) {
 		}
 		return a, home
 	}
-	old, _ := enroll("old")
-	defer old.Close()
-	oldPerson, _, _ := old.Person()
+	// The lost device has no surviving local database. Enroll its signed
+	// genesis directly, retaining only public Hub evidence for the recovery.
+	oldKey, _ := identity.Generate()
+	oldPub := oldKey.Public("google/old")
+	conn, e := newHubConn(o.Hub, o.CertPEM, "", nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer conn.release()
+	oldReq := protocol.GoogleRequest{Public: oldPub, IDToken: issuer.IDToken(t, oldPub, email, nil)}
+	oldReq.Sign(oldKey.Sign)
+	var prepared protocol.GooglePrepared
+	if e = conn.do(ctx, "POST", "/v1/google/prepare", oldReq, &prepared); e != nil {
+		t.Fatal(e)
+	}
+	oldPub.Address = prepared.Address
+	oldPerson := protocol.PersonRoster{Person: protocol.NewID(), Label: "Bohdan", Email: email, Devices: []identity.Public{oldPub}}
+	oldPerson.Sign(oldKey.Sign)
+	oldReq.Public = oldPub
+	oldReq.First = &oldPerson
+	oldReq.Sign(oldKey.Sign)
+	if e = conn.do(ctx, "POST", "/v1/google/join", oldReq, nil); e != nil {
+		t.Fatal(e)
+	}
 	if e = admin.ChangeGoogleAccess(ctx, protocol.GoogleAccessChange{Email: email, Remove: true}); e != nil {
 		t.Fatal(e)
 	}

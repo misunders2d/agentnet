@@ -392,3 +392,15 @@ func TestMEL736DetachedOldAdminCannotSelfApprove(t *testing.T) {
 		t.Fatal("detached old self approval accepted")
 	}
 }
+
+func TestMEL736CycleAdmission(t *testing.T) {
+	f := mel736Fixture(t, false)
+	// Model a previously committed target -> old edge. The otherwise valid
+	// old -> target consent must fail specifically at the graph admission gate.
+	if _, e := f.h.store.db.Exec(`INSERT INTO person_recoveries(id,realm,old_person,new_person,record,subject,status) VALUES(?,?,?,?,?,?,'committed')`, protocol.NewID(), f.h.realmID, f.new.Person, f.old.Person, "{}", f.claims.Subject); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := f.h.store.requestRecovery(f.h.realmID, f.new.Devices[0].Address, f.claims, f.req); e == nil {
+		t.Fatal("cycle accepted")
+	}
+}
