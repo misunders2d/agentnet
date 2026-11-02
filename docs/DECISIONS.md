@@ -988,7 +988,7 @@ Owner: "he should be able to just reconnect".
 
 **Owner decisions (November 2):**
 - Recovery needs an admin's approval.
-- A fresh identity is acceptable when the person proves the email with a fresh Google sign-in.
+- A fresh identity is acceptable when the person proves the email with a fresh Google sign-in. Owner correction (November 2 evening): this meant new keys for the SAME person, not a separate new person. "Same person with same email is accepted as same previous identity." A Google-verified email plus the admin's approval is the trust for continuity. Colleagues see a "signed in again" notice; no colleague has to accept the new keys first. This is an explicit exception to "changed peer keys block until trusted", only for this verified recovery. An earlier note recorded it as a separate person, which was a misreading.
 - The same recovery covers workspace admins.
 - Owner, November 2 evening, after v0.10.6 left Bogdan as two people: "Merge into one". Continuity of the same person moves from Deferred into the next release, as in Telegram and Slack. After admin approval and a fresh Google sign-in, everyone sees one person: old chats continue with a "signed in again" notice and groups come back. Bogdan's existing split, from the removal and re-allowing before v0.10.6, is merged too. A merge without a release is impossible: only a key of the earlier person can vouch for a new device, and the Hub cannot forge one. The design comes to the owner before the build.
 
