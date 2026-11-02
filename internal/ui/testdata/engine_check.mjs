@@ -172,6 +172,25 @@ async function handle(req) {
       p.proof.push(p.state);p.state={...p.state,seq:p.state.seq+1,members:[...p.state.members,member(third,p.state.seq+1)]};
       const admitted=await e.logicalGroupMembers(p);assert(admitted.length===1&&admitted[0].person===third.person,"later explicit family re-admission rejected");
     }
+    // Recovery carries ordinary messaging membership, never administrator role.
+    const adminStore=memoryStore(),adminEngine=new Engine({store:adminStore,base:e.base}),me={...next,state:"self"};
+    adminEngine.me=me;adminEngine.address=next.devices[0].address;adminEngine.fp=next.devices[0].fingerprint;
+    await adminStore.write([{s:"persons",k:old.person,v:old},{s:"kv",k:"person",v:me},{s:"kv",k:"continuity-head/"+old.person,v:{person:old.person,hash:old.hash}},...old.devices.map(d=>({s:"kv",k:"revoked-device/"+d.address+"/"+d.fingerprint,v:{address:d.address,fingerprint:d.fingerprint}}))]);
+    const adminPacket={root:{},proof:[],state:{conv:"1".repeat(64),realm:wire.newID(),seq:0,title:"Admin boundary",members:[{...m(old),admin:true}]},withdrawals:[]};
+    adminEngine.groupTurnEvidence=async()=>({packet:adminPacket,g:{}});
+    adminEngine.managedGroupInvitation=async()=>({status:"pending",proposal:{state:adminPacket.state,target:third.person}});
+    adminEngine.call=async()=>{throw Error("unexpected administrator network call")};
+    assert((await adminEngine.groupPeople(adminPacket))[0].admin===false,"projected administrator role inherited");
+    assert((await adminEngine.groupTarget(adminPacket.state,[],[])).person===next.person,"ordinary recovered membership lost");
+    const denied=async(fn,message)=>{let error="";try{await fn();}catch(e){error=e.message;}assert(error===message,"recovered admin gate: "+error);};
+    const rename=()=>adminEngine.manageGroup({conv:adminPacket.state.conv,action:"rename",title:adminPacket.state.title});
+    await denied(rename,"Current person administrator required.");
+    await denied(()=>adminEngine.cancelGroup({id:wire.newID()}),"Current inviting administrator required.");
+    await denied(()=>adminEngine.leaveGroup(adminPacket.state.conv),"Exact current group membership required.");
+    const admittedAdmin={...m(next),admin:false};adminPacket.state.members.push(admittedAdmin);
+    await denied(rename,"Current person administrator required.");
+    admittedAdmin.admin=true;
+    assert((await rename()).queued===false&&(await adminEngine.groupPeople(adminPacket))[0].admin===true,"explicit administrator grant rejected");
     const own=new Engine({store:mem,base:e.base});own.me={...third,state:"self"};assert((await own.logicalPersons()).get(old.person)===third.person,"recovered own person");
     e.groupRecord=async()=>({});assert((await e.continuityNotices("held-group")).length===0,"unavailable group context blocks notices instead of history");
     const ordinary=new Engine({store:memoryStore(),base:e.base});ordinary.me=e.me;ordinary.groupRecord=async()=>{throw Error("ordinary group notice requested current context")};assert((await ordinary.continuityNotices("ordinary-held-group")).length===0,"ordinary held group cannot render");

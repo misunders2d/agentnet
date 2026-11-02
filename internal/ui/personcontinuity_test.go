@@ -83,21 +83,39 @@ func testMEL736OneBrowserHub(t *testing.T) {
 		}
 		return false
 	})
-	group := w.api("/api/groups/new", map[string]any{"title": "Continuity group"})["id"].(string)
-	invitation := w.api("/api/groups/invite", map[string]any{"conv": group, "person": before.Person})["id"].(string)
-	w.until("old group invitation", func() bool {
-		rows, _ := old.GroupInvitations()
-		for _, r := range rows {
-			if r.ID == invitation {
+	// The lost identity is the original administrator. Recovery must retain
+	// ordinary messaging membership without transferring that signed role.
+	created, e := old.CreateGroup(t.Context(), "Continuity group")
+	if e != nil {
+		t.Fatal(e)
+	}
+	group := created.State.Conv
+	browser := w.api("/api/overview", nil)["person"].(map[string]any)["person"].(string)
+	invitation, e := old.InviteGroup(t.Context(), group, browser, nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	w.until("browser group invitation", func() bool {
+		v := w.call(map[string]any{"op": "api", "path": "/api/groups/invitations"})
+		rows, _ := v["v"].([]any)
+		for _, row := range rows {
+			if row.(map[string]any)["id"] == invitation.ID {
 				return true
 			}
 		}
 		return false
 	})
-	if e := old.DecideGroupInvitation(t.Context(), invitation, true); e != nil {
-		t.Fatal(e)
-	}
-	w.until("old group membership", func() bool { _, e := old.GroupMembers(group); return e == nil })
+	w.api("/api/groups/decide", map[string]any{"id": invitation.ID, "accept": true})
+	w.until("group membership published", func() bool {
+		members, e := old.GroupMembers(group)
+		return e == nil && len(members) == 2
+	})
+	w.until("browser group membership", func() bool {
+		v := w.call(map[string]any{"op": "api", "path": "/api/dm?id=" + group})
+		thread, _ := v["v"].(map[string]any)
+		members, _ := thread["members"].([]any)
+		return v["error"] == nil && len(members) == 2
+	})
 	stopOld()
 	w.api("/api/google/access", map[string]any{"email": email, "remove": true})
 	w.api("/api/google/access", map[string]any{"email": email})
@@ -189,6 +207,14 @@ func testMEL736OneBrowserHub(t *testing.T) {
 	if e != nil || view.Role != "member" || len(view.Members) != 2 {
 		t.Fatal("Go rendered group projection", view.Role, len(view.Members), e)
 	}
+	for _, m := range view.Members {
+		if m.Person == current.Person && m.Admin {
+			t.Fatal("Go projected old administrator role onto recovered person")
+		}
+	}
+	if _, e := fresh.RenameGroup(t.Context(), group, "Must not inherit admin"); e == nil || !strings.Contains(e.Error(), "administrator required") {
+		t.Fatal("Go recovered administrator gate", e)
+	}
 	count := 0
 	for _, m := range view.Messages {
 		if strings.Contains(m.Event, "signed in again") {
@@ -199,6 +225,12 @@ func testMEL736OneBrowserHub(t *testing.T) {
 		t.Fatal("Go group recovery notice", count)
 	}
 	groupView := w.api("/api/dm?id="+group, nil)
+	for _, m := range groupView["members"].([]any) {
+		p := m.(map[string]any)
+		if p["person"] == current.Person && p["admin"] == true {
+			t.Fatal("browser projected old administrator role onto recovered person")
+		}
+	}
 	count = 0
 	for _, m := range groupView["messages"].([]any) {
 		if strings.Contains(fmt.Sprint(m.(map[string]any)["event"]), "signed in again") {

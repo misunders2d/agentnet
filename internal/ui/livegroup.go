@@ -188,7 +188,7 @@ func (l *Live) groupMembers(c client.ConversationInfo) ([]GroupMemberView, error
 		if !ok {
 			return nil, client.ErrGroupContextPending
 		}
-		result = append(result, GroupMemberView{PersonView: personView(p), Admin: m.Admin})
+		result = append(result, GroupMemberView{PersonView: personView(p), Admin: m.Person == p.Person && m.Admin})
 	}
 	return result, nil
 }

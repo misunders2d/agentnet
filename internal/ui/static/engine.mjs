@@ -5475,7 +5475,7 @@ export class Engine {
       if(!old||old.state==="conflict"||!old.hashes?.includes(m.roster))throw new Hold("proof_pending","Group signed member identity is not kept here.");
       const id=aliases.get(m.person)||m.person,p=id===old.person?old:await this.groupRead(checks,id===this.me?.person?"kv":"persons",id===this.me?.person?"person":id);
       if(!p||!["self","pinned"].includes(p.state))throw new Hold("proof_pending","Group member identity is not current here.");
-      out.push({...this.personView(p),admin:m.admin});
+      out.push({...this.personView(p),admin:m.person===p.person&&!!m.admin});
     }
     return out;
   }
@@ -5749,7 +5749,7 @@ export class Engine {
     if(!change||typeof change!=="object"||Array.isArray(change)||Object.keys(change).some(k=>!["conv","action","title","person"].includes(k))||!["rename","promote","demote","remove","leave"].includes(change.action))throw Error("Unknown group action.");
     if(change.action==="rename"?change.person:change.action==="leave"?change.person||change.title:change.title||!change.person)throw Error("Group action has unexpected target fields.");
     if(change.action==="leave")return this.leaveGroup(change.conv);
-    const checks=[],{packet,g}=await this.groupTurnEvidence(change.conv,checks), me=await this.groupRead(checks,"kv","person"), member=(await this.logicalGroupMember(packet,me.person));
+    const checks=[],{packet,g}=await this.groupTurnEvidence(change.conv,checks), me=await this.groupRead(checks,"kv","person"), member=wire.groupMember(packet.state,me.person);
     if(!member?.admin)throw Error("Current person administrator required.");
     const state=structuredClone(packet.state);state.members=await wire.effectiveGroupMembers(packet.state,packet.withdrawals||[]);
     if(change.action==="rename") {state.title=change.title;if(state.title===packet.state.title)return {queued:false};}
@@ -5768,7 +5768,8 @@ export class Engine {
   }
 
   async leaveGroup(conv) {
-    const checks=[],{packet,g,members}=await this.groupTurnEvidence(conv,checks), me=await this.groupRead(checks,"kv","person"), member=(await this.logicalGroupMember(packet,me.person));
+    const checks=[],{packet,g,members}=await this.groupTurnEvidence(conv,checks), me=await this.groupRead(checks,"kv","person"), member=wire.groupMember(packet.state,me.person);
+    if(!member)throw Error("Exact current group membership required.");
     if(member.admin) {
       if(wire.groupAdmins(packet.state).length===1)throw Error("The last administrator must appoint a successor first.");
       return this.manageGroup({conv,action:"remove",person:me.person});
@@ -5869,7 +5870,7 @@ export class Engine {
     const checks=[],k="group-invitation/out/"+id,row=await this.managedGroupInvitation(id,checks);
     if(row.status==="cancelled")return {cancelled:true};
     if(!["pending","accepted","stale","reissue"].includes(row.status))throw Error("Group invitation cannot be cancelled after publication or decline.");
-    const {packet}=await this.groupTurnEvidence(row.proposal.state.conv,checks),me=await this.groupRead(checks,"kv","person"),admin=(await this.logicalGroupMember(packet,me.person));
+    const {packet}=await this.groupTurnEvidence(row.proposal.state.conv,checks),me=await this.groupRead(checks,"kv","person"),admin=wire.groupMember(packet.state,me.person);
     if(!admin?.admin)throw Error("Current inviting administrator required.");
     const admitted=wire.groupMember(packet.state,row.proposal.target);if(admitted&&!await wire.groupWithdrawn(packet.state,admitted,packet.withdrawals||[]))throw Error("Group membership already published.");
     const p=row.proposal,result=await this.call("POST","/v1/groups/"+p.state.conv+"/cancel-invitation?creator="+p.root.creator.fingerprint,{v:1,realm:p.root.realm,conv:p.state.conv,bootstrap:p.root.creator.fingerprint,person:row.owner,invitation:id,seq:p.seq,prev:p.prev,head:await wire.groupStateHash(packet.state)});
