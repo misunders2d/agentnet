@@ -447,3 +447,16 @@ func TestMEL736DurableRequestRetryAfterAdmissionWindow(t *testing.T) {
 		t.Fatal(v, e)
 	}
 }
+
+func TestMEL736DisabledGoogleRefusesRequest(t *testing.T) {
+	f := mel736Fixture(t, false)
+	requester := member{f.key, f.new.Devices[0].Address}
+	code, _ := requester.call(t, f.h, "POST", "/v1/google/recovery", f.req)
+	if code != 401 {
+		t.Fatalf("disabled Google returned %d", code)
+	}
+	var count int
+	if e := f.h.store.db.QueryRow(`SELECT count(*) FROM person_recoveries`).Scan(&count); e != nil || count != 0 {
+		t.Fatal("disabled Google admitted recovery", count, e)
+	}
+}
