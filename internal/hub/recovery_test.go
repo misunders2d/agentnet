@@ -407,3 +407,43 @@ func TestMEL736CycleAdmission(t *testing.T) {
 		t.Fatal("cycle accepted")
 	}
 }
+
+func TestMEL736SameEmailSplitCannotSelfApprove(t *testing.T) {
+	f := mel736Fixture(t, false)
+	f.request(t)
+	a, e := f.h.store.agent(f.admin.addr)
+	if e != nil {
+		t.Fatal(e)
+	}
+	r := protocol.PersonRoster{Person: protocol.NewID(), Label: "Bohdan", Email: f.claims.Email, Devices: []identity.Public{a.Public}}
+	r.Sign(f.admin.id.Sign)
+	raw, _ := json.Marshal(r)
+	if _, e = f.h.store.db.Exec(`INSERT INTO persons(person,seq,hash,record) VALUES(?,0,?,?)`, r.Person, r.Hash(), string(raw)); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = f.h.store.db.Exec(`UPDATE agents SET person_id=? WHERE address=?`, r.Person, f.admin.addr); e != nil {
+		t.Fatal(e)
+	}
+	if _, _, e = f.h.store.decideRecovery(f.h.realmID, f.admin.addr, f.req.Successor.Hash(), true, false); e == nil {
+		t.Fatal("same-email historical split approved own recovery")
+	}
+}
+
+func TestMEL736DurableRequestRetryAfterAdmissionWindow(t *testing.T) {
+	f := mel736Fixture(t, false)
+	s := &f.req.Successor
+	s.Created = time.Now().Unix() - 1000
+	s.Sign(f.key.Sign)
+	if _, e := f.h.store.requestRecovery(f.h.realmID, f.new.Devices[0].Address, f.claims, f.req); e == nil {
+		t.Fatal("new stale request admitted")
+	}
+	// Restore an earlier admitted request as found after restart/offline time.
+	raw, _ := json.Marshal(s)
+	if _, e := f.h.store.db.Exec(`INSERT INTO person_recoveries(id,realm,old_person,new_person,record,subject,status) VALUES(?,?,?,?,?,?,'pending')`, s.Hash(), s.Realm, s.OldPerson, s.NewPerson, string(raw), f.claims.Subject); e != nil {
+		t.Fatal(e)
+	}
+	v, e := f.h.store.requestRecovery(f.h.realmID, f.new.Devices[0].Address, f.claims, f.req)
+	if e != nil || v.ID != s.Hash() || v.Status != "pending" {
+		t.Fatal(v, e)
+	}
+}

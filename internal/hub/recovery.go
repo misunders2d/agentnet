@@ -89,7 +89,7 @@ func (s *store) requestRecovery(realm, caller string, c googleauth.Claims, req p
 	}
 	defer tx.Rollback()
 	p := req.Successor
-	if req.Google.Verify() != nil || c.Email != p.Email || c.IssuedAt <= 0 || time.Now().Unix()-c.IssuedAt > 300 || c.IssuedAt > time.Now().Unix()+60 || time.Now().Unix()-p.Created > 900 || p.Created > time.Now().Unix()+60 {
+	if req.Google.Verify() != nil || c.Email != p.Email || c.IssuedAt <= 0 || time.Now().Unix()-c.IssuedAt > 300 || c.IssuedAt > time.Now().Unix()+60 || p.Created > time.Now().Unix()+60 {
 		return protocol.RecoveryRecord{}, errRecovery
 	}
 	a, e := agentIn(tx, caller)
@@ -112,6 +112,16 @@ func (s *store) requestRecovery(realm, caller string, c googleauth.Claims, req p
 		return protocol.RecoveryRecord{}, e
 	}
 	if bound != "" && (bound != p.OldPerson && bound != p.NewPerson) {
+		return protocol.RecoveryRecord{}, errRecovery
+	}
+	// Admission freshness does not invalidate a durable request on retry.
+	// The caller still presents fresh Google proof and exact valid consent.
+	if existing, err := recoveryIn(tx, p.Hash()); err == nil {
+		return existing, tx.Commit()
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return existing, err
+	}
+	if time.Now().Unix()-p.Created > 900 {
 		return protocol.RecoveryRecord{}, errRecovery
 	}
 	raw, _ := json.Marshal(p)
@@ -160,6 +170,23 @@ func (s *store) decideRecovery(realm, caller, id string, approve, operator bool)
 		}
 		if !a.Admin || a.Revoked || a.Pending || a.Person == p.OldPerson || a.Person == p.NewPerson {
 			return v, nil, errRecovery
+		}
+		// A third historical split with the same roster email is the same
+		// recovering human under the owner rule, not an independent approver.
+		if a.Person != "" {
+			head, found, err := personHeadIn(tx, a.Person)
+			if err != nil {
+				return v, nil, err
+			}
+			if found {
+				roster, err := protocol.ParsePersonRoster(head.record)
+				if err != nil {
+					return v, nil, err
+				}
+				if roster.Email == p.Email {
+					return v, nil, errRecovery
+				}
+			}
 		}
 		// A detached historical device is still the recovering person;
 		// clearing person_id must not enable self approval.

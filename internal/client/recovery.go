@@ -85,11 +85,12 @@ func (a *Agent) RequestGoogleRecovery(ctx context.Context, old, token string) (p
 	if e = s.Verify(version.RealmID, g, n); e != nil {
 		return out, e
 	}
-	// Reuse exact consent after an ambiguous response, within the admission window.
+	// Reuse durable exact consent after an ambiguous response, even after
+	// its original admission window. The Hub requires fresh Google proof.
 	key := "recovery-consent:" + old
 	if saved, _ := a.store.config(key); saved != "" {
 		var prior protocol.PersonSuccessor
-		if json.Unmarshal([]byte(saved), &prior) == nil && prior.OldHead == s.OldHead && prior.NewGenesis == s.NewGenesis && prior.Verify(version.RealmID, g, n) == nil && time.Now().Unix()-prior.Created <= 900 {
+		if json.Unmarshal([]byte(saved), &prior) == nil && prior.OldHead == s.OldHead && prior.NewGenesis == s.NewGenesis && prior.Verify(version.RealmID, g, n) == nil {
 			s = prior
 		}
 	}
