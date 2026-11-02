@@ -161,6 +161,15 @@ func (s *store) decideRecovery(realm, caller, id string, approve, operator bool)
 		if !a.Admin || a.Revoked || a.Pending || a.Person == p.OldPerson || a.Person == p.NewPerson {
 			return v, nil, errRecovery
 		}
+		// A detached historical device is still the recovering person;
+		// clearing person_id must not enable self approval.
+		var ownHistory int
+		if e = tx.QueryRow(`SELECT count(*) FROM person_chain pc,json_each(pc.record,'$.devices') d WHERE pc.person IN (?,?) AND json_extract(d.value,'$.address')=?`, p.OldPerson, p.NewPerson, caller).Scan(&ownHistory); e != nil {
+			return v, nil, e
+		}
+		if ownHistory != 0 {
+			return v, nil, errRecovery
+		}
 		actorKey = a.Public.Fingerprint()
 		actorPerson = a.Person
 	}

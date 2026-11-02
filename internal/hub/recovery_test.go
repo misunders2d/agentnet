@@ -380,3 +380,15 @@ func TestMEL736ChangedHeadOrRemovedSuccessorBlocksApproval(t *testing.T) {
 		})
 	}
 }
+
+func TestMEL736DetachedOldAdminCannotSelfApprove(t *testing.T) {
+	f := mel736Fixture(t, false)
+	f.request(t)
+	caller := f.old.Devices[0].Address
+	if _, e := f.h.store.db.Exec(`UPDATE agents SET person_id=NULL,linked=0,admin=1 WHERE address=?`, caller); e != nil {
+		t.Fatal(e)
+	}
+	if _, _, e := f.h.store.decideRecovery(f.h.realmID, caller, f.req.Successor.Hash(), true, false); e == nil {
+		t.Fatal("detached old self approval accepted")
+	}
+}
