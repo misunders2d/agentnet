@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -63,6 +64,26 @@ func runHub(ctx context.Context, args []string) error {
 		return nil
 	}
 	switch args[0] {
+	case "recovery":
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if err := need(); err != nil {
+			return err
+		}
+		if fs.NArg() != 2 || fs.Arg(0) != "approve" || !protocol.ValidHash(fs.Arg(1)) {
+			return errors.New("usage: hub recovery --data DIR approve ID")
+		}
+		m, err := hub.OpenMaintenance(*data)
+		if err != nil {
+			return err
+		}
+		defer m.Close()
+		v, err := m.ApproveRecovery(fs.Arg(1))
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(v)
 	case "serve":
 		return hubServe(ctx, fs, data, args[1:])
 	case "bootstrap-invite":

@@ -791,3 +791,41 @@ qualification of the current desktop installers.
 | Railway | not deployed | | |
 
 For the full live harness and desktop notification qualification ledger, see [`docs/HANDOFF.md`](../HANDOFF.md).
+
+
+### Lost-every-device recovery: Phase 1 CLI
+
+The continuity branch adds the Hub and CLI recovery flow. App controls and
+Go/browser chat folding follow in later phases; this phase alone still shows
+two people in existing apps. No local task grants or native permissions transfer.
+
+From the enrolled replacement human device, explicitly name the old person:
+
+```sh
+agentnet recover --from OLD-PERSON-ID
+```
+
+Complete the fresh Google sign-in with the same email. The command prints a
+pending successor record; its canonical hash identifies the request. An
+independent workspace admin then runs:
+
+```sh
+agentnet admin google recovery list
+agentnet admin google recovery approve REQUEST-HASH
+# Or refuse it:
+agentnet admin google recovery deny REQUEST-HASH
+```
+
+Approval permanently revokes old active, pending and detached device keys,
+changes the Google binding and keeps the email allowed in one transaction.
+The old signed roster stays intact. Exact retries are idempotent. A denied
+request requires fresh consent to try again. If no admin device remains, the
+host operator can use the stopped Hub's existing data directory:
+
+```sh
+agentnet hub recovery --data DIR approve REQUEST-HASH
+```
+
+This takes the ordinary maintenance lock and records `hub-operator`. Never
+remove local folders to make recovery work. Start again and non-enrolled
+Google/link-pending recovery controls are not included in Phase 1.

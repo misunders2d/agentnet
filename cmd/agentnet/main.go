@@ -109,6 +109,8 @@ func run(args []string) error {
 	}
 	defer a.Close()
 	switch cmd {
+	case "recover":
+		return runRecover(ctx, a, rest)
 	case "whoami":
 		return runWhoami(ctx, a, os.Stdout)
 	case "send":

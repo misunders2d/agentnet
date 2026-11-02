@@ -18,7 +18,10 @@ import (
 
 var ErrCredential = errors.New("Google sign-in could not be verified; sign in again")
 
-type Claims struct{ Email, Name, Subject, Domain string }
+type Claims struct {
+	Email, Name, Subject, Domain string
+	IssuedAt                     int64
+}
 type Validator struct {
 	verifier  *idtoken.Validator
 	audiences []string
@@ -75,5 +78,5 @@ func (v *Validator) Verify(ctx context.Context, token, nonce string) (Claims, er
 		}
 	}
 	domain, _ := p.Claims["hd"].(string)
-	return Claims{Email: email, Name: name, Subject: p.Subject, Domain: strings.ToLower(domain)}, nil
+	return Claims{Email: email, Name: name, Subject: p.Subject, Domain: strings.ToLower(domain), IssuedAt: p.IssuedAt}, nil
 }

@@ -155,6 +155,9 @@ func (s *appSetup) completeJoin(a *client.Agent, host string) (ui.SetupResult, e
 }
 
 func runGoogleAdmin(ctx context.Context, a *client.Agent, args []string) error {
+	if len(args) > 0 && args[0] == "recovery" {
+		return runRecoveryAdmin(ctx, a, args[1:])
+	}
 	if len(args) == 0 || args[0] == "list" {
 		v, e := a.GoogleAccess(ctx)
 		if e == nil {
@@ -241,4 +244,70 @@ func googleJoinWords(err error) string {
 		return "The workspace needs an AgentNet update. Ask its admin."
 	}
 	return "Could not sign in. Check your connection and try again."
+}
+
+func runRecoveryAdmin(ctx context.Context, a *client.Agent, args []string) error {
+	if len(args) == 1 && args[0] == "list" {
+		v, e := a.GoogleRecoveries(ctx)
+		if e != nil {
+			return e
+		}
+		return json.NewEncoder(os.Stdout).Encode(v)
+	}
+	if len(args) != 2 || (args[0] != "approve" && args[0] != "deny") {
+		return errors.New("usage: admin google recovery list|approve ID|deny ID")
+	}
+	v, e := a.GoogleRecoveryDecision(ctx, args[1], args[0] == "approve")
+	if e != nil {
+		return e
+	}
+	return json.NewEncoder(os.Stdout).Encode(v)
+}
+func runRecover(ctx context.Context, a *client.Agent, args []string) error {
+	fs := flag.NewFlagSet("recover", flag.ContinueOnError)
+	old := fs.String("from", "", "exact old person id")
+	if e := fs.Parse(args); e != nil {
+		return e
+	}
+	if fs.NArg() != 0 || !protocol.ValidID(*old) {
+		return errors.New("usage: recover --from OLD-PERSON-ID")
+	}
+	cfg, e := a.RecoveryGoogleConfig(ctx)
+	if e != nil {
+		return e
+	}
+	if cfg.DesktopClientID == "" {
+		return errors.New("workspace Google Desktop sign-in is not configured")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	type result struct {
+		token string
+		err   error
+	}
+	done := make(chan result, 1)
+	auth, stop, e := startGoogleDesktop(ctx, cfg.DesktopClientID, protocol.GoogleNonce(a.Self()), func(ctx context.Context, code, verifier, redirect string) (string, error) {
+		return a.RecoveryGoogleExchange(ctx, code, verifier, redirect)
+	}, func(token string, e error) { done <- result{token, e} })
+	if e != nil {
+		return e
+	}
+	defer stop()
+	if e = openGoogleBrowser(auth); e != nil {
+		return e
+	}
+	fmt.Fprintln(os.Stderr, "Sign in with Google to consent to replacing your lost devices. Waiting for Google…")
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case r := <-done:
+		if r.err != nil {
+			return r.err
+		}
+		v, e := a.RequestGoogleRecovery(ctx, *old, r.token)
+		if e != nil {
+			return e
+		}
+		return json.NewEncoder(os.Stdout).Encode(v)
+	}
 }

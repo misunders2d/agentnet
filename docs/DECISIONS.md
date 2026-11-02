@@ -1014,7 +1014,6 @@ Owner: "he should be able to just reconnect".
 
 **Deferred:**
 - a waiting period and notices to old devices;
-- continuity of the same person;
 - automatic group re-membership.
 
 **Gates.** Before the build, inspect the Telegram and Slack counterparts' code; so far they are compared only from their documentation. Also required:
@@ -1022,4 +1021,15 @@ Owner: "he should be able to just reconnect".
 - rendered interactions under 1000 ms;
 - the mixed-version and skins gates.
 
-Read-only reviews by Codex and Antigravity (November 2) are the design input. Nothing is implemented yet.
+Read-only reviews by Codex and Antigravity (November 2) are the design input.
+
+**November 2 evening implementation status (MEL-736 Phase 1):** protocol consent,
+Hub pending/committed recovery storage, atomic approval/denial, authenticated
+catch-up and CLI/operator commands are implemented on the continuity branch.
+See [scoped implementation](plans/MEL736_CONTINUITY.md). Fresh proof of the same
+normalized email is sufficient; archived subject equality is not required.
+Hub approval counts for messaging trust (Option B); no per-peer acceptance.
+Go/browser aliasing, unified chat history, notices and app controls remain for
+subsequent phases. Continuity is approved scope, not deferred; automatic group
+slot replacement remains deferred. This phase does not yet make apps show one
+person or implement the full Start again flow.

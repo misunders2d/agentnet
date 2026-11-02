@@ -105,6 +105,19 @@ Tested on Linux; macOS and Windows run in CI. Also: docs/revival/INSTALL.md
 
 // topics maps a command (or "command subcommand") to its help text.
 var topics = map[string]string{
+	"recover": `Usage: agentnet recover --from OLD-PERSON-ID
+
+From an enrolled new human device, sign in freshly with Google and consent to
+replacing the explicitly selected lost identity. An independent workspace admin
+must approve. No task grants or native permissions transfer.`,
+	"admin google recovery": `Usage: agentnet admin google recovery list|approve ID|deny ID
+
+List pending lost-device recovery requests, or decide one exact request hash.
+The recovering person cannot approve their own request.`,
+	"hub recovery": `Usage: agentnet hub recovery --data DIR approve ID
+
+Offline host-operator fallback for an exact pending recovery request. Requires
+the stopped Hub's data-directory lock. Recorded as hub-operator.`,
 	"receivers": `Usage: agentnet receivers [--json]
 
 Read local selected reply receivers and their input states. Delivery, accepted
