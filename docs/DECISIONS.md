@@ -990,6 +990,7 @@ Owner: "he should be able to just reconnect".
 - Recovery needs an admin's approval.
 - A fresh identity is acceptable when the person proves the email with a fresh Google sign-in.
 - The same recovery covers workspace admins.
+- Owner, November 2 evening, after v0.10.6 left Bogdan as two people: "Merge into one". Continuity of the same person moves from Deferred into the next release, as in Telegram and Slack. After admin approval and a fresh Google sign-in, everyone sees one person: old chats continue with a "signed in again" notice and groups come back. Bogdan's existing split, from the removal and re-allowing before v0.10.6, is merged too. A merge without a release is impossible: only a key of the earlier person can vouch for a new device, and the Hub cannot forge one. The design comes to the owner before the build.
 
 **Next release scope:**
 
