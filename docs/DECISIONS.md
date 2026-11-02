@@ -995,7 +995,7 @@ Owner: "he should be able to just reconnect".
 **Next release scope:**
 
 1. **Recovery request.** The Google sign-in and link-pending screens offer "I no longer have my other devices".
-   - A fresh Google token (same subject and email) plus the new device key forms the request.
+   - A fresh Google token proving the same normalized email plus new-person key consent forms the request; no archived Google subject is required.
    - Device loss is never inferred from offline status.
 2. **Admin approval.** Admins see the request in the app and in `agentnet admin google`, and approve it once. In one transaction the Hub then:
    - revokes every active, pending and detached device of the earlier person (`settleRevokedDevice`);
