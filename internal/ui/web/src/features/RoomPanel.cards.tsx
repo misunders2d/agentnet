@@ -21,8 +21,12 @@ function GuestAvatar({ g, size, mood, past }: { g: Guest; size: 32 | 40; mood?: 
     : <PersonAvatar name={g.name} seed={g.seed} size={size} guest={!past} online={past ? undefined : g.online} />;
 }
 
+// The agent's own dismissal, while it runs; other cards stay usable.
+const useDismissing = (g: Guest) => useStore(useApp(), s => g.kind === "agent" && !!s.agentDismissals?.[g.pid]);
+
 export function GuestCard({ g, t, busy, onAct }: { g: Guest; t: T.DMThread; busy: boolean; onAct: Act }) {
   const [seeing, setSeeing] = useState(false);
+  const dismissing = useDismissing(g);
   const x = exposure(t, g, timeOf);
   const asleep = g.kind === "agent" && g.online === false;
   const line = [asleep ? g.line.replace(/ · ([^·]+)$/, " · asleep · $1 offline") : g.line, g.sinceAt && "since " + timeOf(g.sinceAt)].filter(Boolean).join(" · ");
@@ -55,7 +59,7 @@ export function GuestCard({ g, t, busy, onAct }: { g: Guest; t: T.DMThread; busy
       </div>
       <div className="mt-2.5 flex flex-wrap gap-2">
         <Button size="sm" icon={<IconEye size={18} />} onClick={() => setSeeing(true)}>{g.hostHere && g.kind === "person" ? "What you saw" : "What " + shortName(g) + " saw"}</Button>
-        {(g.can.dismiss || g.can.end) && <Button size="sm" disabled={busy} icon={<IconHandStop size={18} />} onClick={() => onAct(g, "dismiss")}>{g.member ? "Remove agent" : "Dismiss"}</Button>}
+        {(g.can.dismiss || g.can.end) && <Button size="sm" disabled={busy || dismissing} icon={<IconHandStop size={18} />} onClick={() => onAct(g, "dismiss")}>{dismissing ? (g.member ? "Removing…" : "Dismissing…") : g.member ? "Remove agent" : "Dismiss"}</Button>}
         {g.can.leave && <Button size="sm" disabled={busy} icon={<IconDoorExit size={18} />} onClick={() => onAct(g, "leave")}>Leave</Button>}
       </div>
       {(g.can.dismiss || g.can.end) && (
@@ -73,7 +77,7 @@ export function GuestCard({ g, t, busy, onAct }: { g: Guest; t: T.DMThread; busy
 export function PendingCard({ g, t, busy, onAct }: { g: Guest; t: T.DMThread; busy: boolean; onAct: Act }) {
   const [seeing, setSeeing] = useState(false);
   const mine = g.can.decide;
-  const store = useApp(), me = useStore(store, s => s.overview?.person?.label);
+  const store = useApp(), me = useStore(store, s => s.overview?.person?.label), dismissing = useDismissing(g);
   const waiting=(t.guests||[]).find(x=>x.pid===g.pid)?.needs_update||[];
   const waitFor = waiting.length?"Waiting for "+waiting.map(label => label === me ? "your other device" : label).join(", ")+" to update AgentNet":g.ownerInvited ? g.stateText : g.kind === "agent" ? (g.hostHere ? "Waiting for your OK" : "Waiting for " + g.hostName + "’s OK") : g.hostHere ? "You’re invited to help" : "Waiting for " + g.name + " to join";
   return (
@@ -105,7 +109,7 @@ export function PendingCard({ g, t, busy, onAct }: { g: Guest; t: T.DMThread; bu
         {mine && <Button size="sm" disabled={busy} onClick={() => onAct(g, "decline")}>Decline</Button>}
         <Button size="sm" variant="ghost" icon={<IconEye size={18} />} onClick={() => setSeeing(true)}>{g.kind === "agent" ? "What it would see" : g.hostHere ? "What you’d see" : "What " + g.name + " would see"}</Button>
         {waiting.length>0 && <AskUpdate t={t} pid={g.pid} />}
-        {!mine && (g.can.dismiss || g.can.end) && <Button size="sm" variant="ghost" disabled={busy} onClick={() => onAct(g, "cancel")}>Cancel invite</Button>}
+        {!mine && (g.can.dismiss || g.can.end) && <Button size="sm" variant="ghost" disabled={busy || dismissing} onClick={() => onAct(g, "cancel")}>{dismissing ? "Cancelling…" : "Cancel invite"}</Button>}
       </div>
       <WhatTheySaw t={t} g={g} open={seeing} onOpenChange={setSeeing} pending />
     </article>

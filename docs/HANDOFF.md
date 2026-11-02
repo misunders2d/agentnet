@@ -1,5 +1,20 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+## Agent dismissals side by side — November 2 (unreleased, for v0.10.5)
+
+Owner: dismiss agents "asyncronously" — each dismissal blocked the next for
+10–15 s. The room panel held one lock through the POST and the room's
+reload. Now each agent's dismissal is a store entry (`agentDismissals`,
+the device-removal pattern): its own button shows "Dismissing…" at once,
+the other cards stay usable, repeated input shares one request, a refusal
+restores only that card with its reason, and the notice still waits for the
+refreshed room. Counterpart tdesktop `kickParticipant` (removes the row,
+then sends; per-participant request dedupe). Evidence and limits:
+docs/INTERACTION_COVERAGE.md (top). New `TestAgentDismissalsRendered` is in
+CI's rendered list. Found, not fixed: `TestComicPhoneRejoinRendered` (not in
+CI) fails before and after at its "Bring Analyst in" step; the group route's
+button now reads "Invite … as a member".
+
 ## Broken pipes on v0.10.4: the ping's content pair and the badge's pull — November 2 (unreleased, MEL-731)
 
 Owner: "investigate the broken pipe". Read-only on the owner's v0.10.4

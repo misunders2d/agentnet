@@ -1,5 +1,46 @@
 # Next-release interaction coverage and responsiveness
 
+## Agent dismissals run side by side — unreleased, November 2
+
+Owner: "dismissing the agents from chat asyncronously. right now I click
+\"dismiss\" and have to wait for 10-15 seconds until I can dismiss the next
+one." Cause: the room's `useRoomAction` held one lock for the whole room
+through the dismissal POST and the open conversation's reload, so every other
+card waited.
+
+Counterpart: Telegram Desktop 5ff61571
+(`boxes/peers/edit_participants_box.cpp` `ParticipantsBoxController::kickParticipant`,
+`api/api_chat_participants.cpp` `ChatParticipants::kick`): the row is removed
+locally first, then the request is sent; `_kickRequests` dedupes per
+(channel, participant) and nothing locks the list. Slack and WhatsApp are
+closed; not inspected. Reused locally: the device-removal store pattern
+(per-key pending entry, one shared request for repeated input, failure
+restores with its reason, presentation only).
+
+AgentNet adaptation: the card is not removed before the answer. Its own
+button turns "Dismissing…" (disabled) at once and every other card stays
+usable; the "left · dismissed by you" notice still waits for the refreshed
+room (the existing phone rule). The reported participation never changes
+locally. A saved dismissal clears when the conversation shows it ended.
+
+Evidence: `TestAgentDismissalsRendered` (`agent_dismissal_rendered.cjs`,
+actual `RoomPanel`/`RoomSheet` and Store, held synthetic dismissals) at 1440
+and 390: three dismissals clicked in a row, each "Dismissing…" in 38–125 ms
+from an actionable click (three local runs), all three sent while none
+answered; repeated input shares one request; no notice before
+confirmation; the second answering first shows its notice while the others
+keep waiting; a refusal restores only its own Dismiss with the reason; a
+late refusal after the agent ended elsewhere brings nothing back; the
+unsent flag clears; a desktop draft survives. Fails on 02c23f7e (the second
+click shows no wait within 500 ms). Pending and settled images inspected at
+both widths. Added to CI's rendered list. `TestComicPhoneRejoinRendered` (not in
+that list) passes its dismissal checks, then stops at a later step,
+"Bring Analyst in", exactly as on 02c23f7e: a separate existing failure,
+not fixed here.
+Not covered: the daemon's own time per dismissal (the owner's 10–15 s) is
+not measured; the room no longer waits on it. The phone single-guest bar
+already waits per guest. Human guests' End still uses the room lock.
+
 ## Big received files wait for a tap — unreleased, November 1
 
 Owner: "large video files (>10Mb) should be offered for download instead of

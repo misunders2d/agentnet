@@ -158,6 +158,9 @@ export interface State {
   googleAccessChange?: { request: { address: string; fingerprint: string; person?: string; change: T.GoogleAccessChange }; saved?: boolean; error?: string };
   deviceDecisions?: Record<string, { link: T.LinkRequest; person: string; accept: boolean; saved?: boolean }>;
   deviceRemovals?: Record<string, { device: T.DeviceView; person: string; saved?: boolean }>;
+  // Each agent being dismissed, by participation: its own control shows the
+  // wait while every other control stays usable (tdesktop kickParticipant).
+  agentDismissals?: Record<string, { conv: string; saved?: boolean }>;
   groupDecisions?: Record<string, { invitation: T.GroupInvitationView; person: string; accept: boolean; saved?: boolean }>;
   groupChanges?: Record<string, PendingGroupChange>;
   groupCreation?: { request: { title: string; people: string[] }; person: string; remaining: string[]; id?: string; done?: boolean; error?: string };
@@ -191,7 +194,7 @@ const draftsKey = (ws: string) => brand.storage + ".drafts." + ws;
 
 // unsentIn: what a reload would lose: a draft's text or files, or a send
 // not yet stored.
-export const unsentIn = (s: Pick<State, "drafts" | "unsent"> & Partial<Pick<State,"scheduleSaves" | "messageChanges" | "reminderChanges" | "pictureChange" | "personRename" | "personCreation" | "workspaceRename" | "googleAccessChange" | "deviceDecisions" | "deviceRemovals" | "groupDecisions" | "groupChanges" | "groupCreation" | "invitationSends" | "teamCreation" | "teamChanges">>) => s.unsent || !!s.googleAccessChange && !s.googleAccessChange.saved && !s.googleAccessChange.error || !!s.workspaceRename && !s.workspaceRename.saved && !s.workspaceRename.error || !!s.personCreation && !s.personCreation.saved && !s.personCreation.error || !!s.personRename && !s.personRename.saved && !s.personRename.error || Object.values(s.invitationSends || {}).some(p => !p.done && !p.error) || !!s.groupCreation && !s.groupCreation.done && !s.groupCreation.error || Object.values(s.teamChanges || {}).some(p => !p.saved && !p.error) || !!s.teamCreation && !s.teamCreation.saved && !s.teamCreation.error || Object.values(s.groupChanges || {}).some(p => !p.saved && !p.error) || Object.values(s.groupDecisions || {}).some(p => !p.saved) || Object.values(s.deviceDecisions || {}).some(p => !p.saved) || Object.values(s.deviceRemovals || {}).some(p => !p.saved) || !!s.pictureChange && !s.pictureChange.saved || Object.keys(s.reminderChanges || {}).length > 0 || Object.values(s.messageChanges || {}).some(p => p.status === "pending" || p.status === "failed" && p.action === "edit") || Object.values(s.scheduleSaves || {}).some(slot=>!!slot.attempt && (slot.status==="saving" || slot.status==="uncertain")) || Object.values(s.drafts).some((d) => d.text || (d.files && d.files.length));
+export const unsentIn = (s: Pick<State, "drafts" | "unsent"> & Partial<Pick<State,"scheduleSaves" | "messageChanges" | "reminderChanges" | "pictureChange" | "personRename" | "personCreation" | "workspaceRename" | "googleAccessChange" | "deviceDecisions" | "deviceRemovals" | "agentDismissals" | "groupDecisions" | "groupChanges" | "groupCreation" | "invitationSends" | "teamCreation" | "teamChanges">>) => s.unsent || !!s.googleAccessChange && !s.googleAccessChange.saved && !s.googleAccessChange.error || !!s.workspaceRename && !s.workspaceRename.saved && !s.workspaceRename.error || !!s.personCreation && !s.personCreation.saved && !s.personCreation.error || !!s.personRename && !s.personRename.saved && !s.personRename.error || Object.values(s.invitationSends || {}).some(p => !p.done && !p.error) || !!s.groupCreation && !s.groupCreation.done && !s.groupCreation.error || Object.values(s.teamChanges || {}).some(p => !p.saved && !p.error) || !!s.teamCreation && !s.teamCreation.saved && !s.teamCreation.error || Object.values(s.groupChanges || {}).some(p => !p.saved && !p.error) || Object.values(s.groupDecisions || {}).some(p => !p.saved) || Object.values(s.deviceDecisions || {}).some(p => !p.saved) || Object.values(s.deviceRemovals || {}).some(p => !p.saved) || Object.values(s.agentDismissals || {}).some(p => !p.saved) || !!s.pictureChange && !s.pictureChange.saved || Object.keys(s.reminderChanges || {}).length > 0 || Object.values(s.messageChanges || {}).some(p => p.status === "pending" || p.status === "failed" && p.action === "edit") || Object.values(s.scheduleSaves || {}).some(slot=>!!slot.attempt && (slot.status==="saving" || slot.status==="uncertain")) || Object.values(s.drafts).some((d) => d.text || (d.files && d.files.length));
 
 const recovery = { update: [500, 1000, 2000, 4000, 8000, 15000, 30000], missed: [1000, 3000, 8000] };
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -219,6 +222,7 @@ export class Store {
   private deviceDecisionWork = new Map<string, { accept: boolean; work: Promise<{ note: string }> }>();
   private deviceDecisionState?: { source: State; value: State };
   private deviceRemovalWork = new Map<string, Promise<{ note: string }>>();
+  private agentDismissalWork = new Map<string, Promise<T.AgentView>>();
   private groupDecisionWork = new Map<string, { accept: boolean; work: Promise<{ recorded: boolean }> }>();
   private groupDecisionState?: { source: State; value: State };
   private groupChangeWork = new Map<string, { change: T.GroupChange; work: Promise<T.GroupChangeResult> }>();
@@ -285,6 +289,7 @@ export class Store {
       changeGoogleAccess: change => this.changeGoogleAccess(change, calls),
       decideDevice: (id, accept) => this.decideDevice(id, accept, calls),
       removeDevice: address => this.removeDevice(address, calls),
+      dismissAgent: pid => this.dismissAgent(pid, calls),
       decideGroup: (id, accept) => this.decideGroup(id, accept, calls),
       manageGroup: change => this.changeGroup(change, calls),
       newDM: address => this.startDM(address, calls),
@@ -712,6 +717,37 @@ export class Store {
     if (pending.length !== Object.keys(changes).length) this.set({ deviceRemovals: Object.fromEntries(pending) });
   }
 
+  // dismissAgent sends one exact dismissal; a repeat while it runs is that
+  // same request. Only this agent's control waits. Presentation only: the
+  // participation stays as the server reports it until a refresh shows it
+  // ended, and a failure restores the control with the error.
+  private dismissAgent(pid: string, calls: Api): Promise<T.AgentView> {
+    if (!this.alive) return Promise.reject(Error("stale or disconnected workspace"));
+    const prior = this.agentDismissalWork.get(pid);
+    if (prior) return prior;
+    const conv = this.state.dm?.agents?.some(a => a.pid === pid) ? this.state.dm.id : "";
+    const change = { conv };
+    const current = () => this.alive && this.state.agentDismissals?.[pid] === change;
+    this.set({ agentDismissals: { ...this.state.agentDismissals, [pid]: change } });
+    const work = Promise.resolve().then(async () => {
+      try {
+        const result = await calls.dismissAgent(pid);
+        if (current()) this.set({ agentDismissals: { ...this.state.agentDismissals, [pid]: { ...change, saved: true } } });
+        return result;
+      } catch (error) {
+        if (current()) {
+          const pending = { ...this.state.agentDismissals }; delete pending[pid];
+          this.set({ agentDismissals: pending });
+        }
+        throw error;
+      } finally {
+        if (this.agentDismissalWork.get(pid) === work) this.agentDismissalWork.delete(pid);
+      }
+    });
+    this.agentDismissalWork.set(pid, work);
+    return work;
+  }
+
   private removeDevice(address: string, calls: Api): Promise<{ note: string }> {
     if (!this.alive) return Promise.reject(Error("stale or disconnected workspace"));
     const prior = this.deviceRemovalWork.get(address);
@@ -1117,6 +1153,15 @@ export class Store {
       });
       if (keep.length !== entries.length) this.state = { ...this.state, groupChanges: Object.fromEntries(keep) };
     }
+    if (this.state.agentDismissals && (patch.dm || patch.views)) {
+      // A saved dismissal waits for the conversation to show it ended.
+      const entries = Object.entries(this.state.agentDismissals), keep = entries.filter(([pid, p]) => {
+        const t = this.state.dm?.id === p.conv ? this.state.dm : this.state.views[p.conv] as T.DMThread | undefined;
+        const agent = t?.agents?.find(a => a.pid === pid);
+        return !p.saved || !!agent && (agent.state === "active" || agent.state === "invited");
+      });
+      if (keep.length !== entries.length) this.state = { ...this.state, agentDismissals: Object.fromEntries(keep) };
+    }
     for (const fn of this.subs) fn();
   }
 
@@ -1160,6 +1205,7 @@ export class Store {
     this.pictureWork = undefined;
     this.deviceDecisionWork.clear();
     this.deviceRemovalWork.clear();
+    this.agentDismissalWork.clear();
     this.groupDecisionWork.clear();
     this.groupChangeWork.clear();
     this.teamCreationWork = undefined;

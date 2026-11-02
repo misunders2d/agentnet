@@ -143,9 +143,19 @@ function useRoomAction(conv: string, onDismissed?: (s: Snack) => void) {
   const pending = useRef(false);
   // act runs one decision or dismissal; the change stream then redraws the room.
   const act: Act = async (g, what) => {
-    if (pending.current) return;
     const selected = store.get().open;
     if (!store.isActive() || selected?.kind !== "dm" || selected.id !== conv || store.get().pending) return;
+    // An agent's dismissal waits on its own control (store agentDismissals),
+    // never on the room: the next one can go at once, as tdesktop's
+    // kickParticipant. Its notice still waits for the refreshed room.
+    if (g.kind === "agent" && (what === "dismiss" || what === "cancel")) {
+      const current = () => store.isActive() && store.get().open === selected && !store.get().pending;
+      const ok = await store.run(() => store.api.dismissAgent(g.pid), what === "cancel" ? "Invitation cancelled" : undefined);
+      if (ok === undefined || !current() || !await store.refreshOpen()) return;
+      if (what === "dismiss" && current()) onDismissed?.({ name: g.name, kind: g.kind, who: g.who, pid: g.pid, id: Date.now() });
+      return;
+    }
+    if (pending.current) return;
     pending.current = true;
     const current = () => store.isActive() && store.get().open === selected && !store.get().pending;
     setBusy(g.key);
