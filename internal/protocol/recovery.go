@@ -32,6 +32,11 @@ func (s PersonSuccessor) Canonical() []byte {
 }
 func (s PersonSuccessor) Hash() string               { return hashHex(s.Canonical()) }
 func (s *PersonSuccessor) Sign(k ed25519.PrivateKey) { s.Sig = ed25519.Sign(k, s.Canonical()) }
+
+// Verify checks consent against an already verified new-person roster chain.
+// Callers verify the chain before supplying current. For committed proofs,
+// current may be the historical consent-time roster after a signer rotates out;
+// current recipient revocation checks remain a separate send-time requirement.
 func (s PersonSuccessor) Verify(realm string, genesis, current PersonRoster) error {
 	email, e := NormalizeEmail(s.Email)
 	if s.Version != 1 || realm == "" || s.Realm != realm || !ValidID(s.OldPerson) || !ValidID(s.NewPerson) || s.OldPerson == s.NewPerson || !ValidHash(s.OldHead) || !ValidHash(s.NewGenesis) || !ValidID(s.Nonce) || s.Created <= 0 || e != nil || email != s.Email {

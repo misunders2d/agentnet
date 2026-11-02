@@ -15,7 +15,8 @@ consent, not independent proof of admin authority. Only a committed record
 obtained through the authenticated Hub establishes continuity.
 
 Fresh Google credentials must have been issued within five minutes. The request
-must be created within fifteen minutes. Tokens remain in memory. The old email
+must initially be created within fifteen minutes; exact admitted retries remain
+valid with fresh Google proof after that window. Tokens remain in memory. The old email
 comes from the retained signed roster, including after Remove deleted its Google
 binding. Archived Google subject equality is not required. No email-only merge.
 
