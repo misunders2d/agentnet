@@ -1,6 +1,54 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
-## Video in the Linux app — November 2 (unreleased, for v0.10.5)
+## v0.10.5 published and Hub deployed — November 2
+
+[App v0.10.5](https://github.com/misunders2d/agentnet/releases/tag/v0.10.5) is
+public and Latest at 14:00:17 UTC from
+`0b7a758504cb1b02cb70d0d90fc7cd234839455a`. It contains:
+
+- Linux app video plays past 2 s and Expand replaces the WebKit fullscreen
+  that crashed (MEL-734); Smaller video reuses its prepared file.
+- Agent dismissals run side by side.
+- The app badge gets a pushed running unread total (MEL-731).
+- Windows app updates check that both programs were written (MEL-735).
+
+All twelve payloads plus SHA256SUMS verified in the draft: names and
+checksums match, and linux-amd64 reports v0.10.5 at that revision with a
+clean tree. The public SHA256SUMS is identical.
+
+Gates, all on that commit before the tag:
+
+- Push CI 41445269061 green on attempt 2. Attempt 1:
+  `TestRelayAttachmentDriveConsentNetworkDoesNotBlockLocalCustody/ensure_folder`
+  on native Windows, a chunk "storage error" and its 500 ms bound;
+  `internal/hub` is unchanged since October 31.
+- Platform run 41445702317 (desktop ×3, Android) green. The f2baf644 run
+  41439334454 had failed Android's fullscreen fixture "Original system bars
+  not restored"; Android code is unchanged.
+- `TestMixedVersion` against v0.10.4 passed (71 s).
+- Skins gate at the exact pin, with network: 326 checks, zero skipped, every
+  suite of all five published skins, qa-orbit and qa-overlay pass. Classic's
+  contract send had timed out twice on f2baf644, cause unknown. Its journey
+  now reports the composer state on failure.
+
+[Gallery v2026.11.02.1](https://github.com/misunders2d/agentnet-skins/releases/tag/v2026.11.02.1)
+is Latest from `203920c`: Office and Pulp entries regenerated for the Comic
+video player, versions unchanged. The catalog and skin.json files at the tag
+match `published/`.
+
+Hub starts v0.10.5 at 14:04:41 UTC from the exact public Linux binary
+(sha256 `9ca1c546…a1c5`):
+
+- Public HTTPS version/realm, volume/settings and the neighboring service
+  verify; zero restarts, schema 25.
+- The served `/assets/engine.mjs` matches the tag with its BUILD stamp;
+  `device.mjs` and `core.css` match byte for byte.
+- Local recovery verifies 698 files, 681 local blobs and 8,945 remote Drive
+  references.
+- The v0.10.4 staging scripts were reused with only `WORK` changed. The
+  compose file differed from the v0.10.4 baseline only by its image line.
+
+## Video in the Linux app — November 2 (released in v0.10.5)
 
 Owner (ThinkPad, v0.10.4 AppImage): Smaller video re-prepared on each click,
 playback froze about 3 s in, and maximizing a video aborted the app.
@@ -34,7 +82,7 @@ Faster Smaller (Telegram Android converts after send) is not built.
 transfer 404s marked expected; its leave-cleanup check is timing-flaky before
 and after this change.
 
-## Windows app update checks what the installer wrote — November 2 (unreleased, for v0.10.5)
+## Windows app update checks what the installer wrote — November 2 (released in v0.10.5)
 
 A colleague's Windows PC lost `agentnet-app.exe` and `agentnet.exe`; the
 NSIS installer then exited 0 without writing them ("Can't write …", shown
@@ -59,7 +107,7 @@ Regressions: `TestAppUpdateWindowsInstallerExitZeroChecksBothPrograms`,
 NSIS installer on Windows against a blocked path. The installers are
 unsigned; signing is the owner's decision.
 
-## Agent dismissals side by side — November 2 (unreleased, for v0.10.5)
+## Agent dismissals side by side — November 2 (released in v0.10.5)
 
 Owner: dismiss agents "asyncronously" — each dismissal blocked the next for
 10–15 s. The room panel held one lock through the POST and the room's
@@ -74,7 +122,7 @@ CI's rendered list. Found, not fixed: `TestComicPhoneRejoinRendered` (not in
 CI) fails before and after at its "Bring Analyst in" step; the group route's
 button now reads "Invite … as a member".
 
-## Broken pipes on v0.10.4: the ping's content pair and the badge's pull — November 2 (unreleased, MEL-731)
+## Broken pipes on v0.10.4: the ping's content pair and the badge's pull — November 2 (released in v0.10.5, MEL-731)
 
 Owner: "investigate the broken pipe". Read-only on the owner's v0.10.4
 daemon (pid 1011; no restart, no token): 10 min of `ss` mapping each

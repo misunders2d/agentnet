@@ -1,6 +1,6 @@
 # Next-release interaction coverage and responsiveness
 
-## Video in the Linux app — unreleased, November 2
+## Video in the Linux app — released in v0.10.5, November 2
 
 Owner, Linux app: "Smaller video" prepared again on each click; playback
 froze about 3 s in ("progress goes, but frame is stuck"); "maximizing the
@@ -39,7 +39,7 @@ reported both on. Not run: the crash itself (needs the owner's input path),
 macOS/Windows/Android shells, the gallery skins' own video player
 (skins/shared/video-file.mjs keeps native controls only).
 
-## Agent dismissals run side by side — unreleased, November 2
+## Agent dismissals run side by side — released in v0.10.5, November 2
 
 Owner: "dismissing the agents from chat asyncronously. right now I click
 \"dismiss\" and have to wait for 10-15 seconds until I can dismiss the next
