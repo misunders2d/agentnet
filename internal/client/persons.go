@@ -300,12 +300,20 @@ func (s *store) pinChain(person string, raws [][]byte, me identity.Public, adopt
 		return res, nil
 	}
 	raw, _ := json.Marshal(cur)
-	if cur.Email != "" {
+	if cur.Email != "" && !pinned {
 		held, e := emailHeldIn(tx, person, cur.Email)
 		if e != nil {
 			return res, e
 		}
-		if held {
+		historical := len(cur.Devices) > 0
+		for _, d := range cur.Devices {
+			known, err := revokedDeviceKnown(tx, d.Address, d.Fingerprint())
+			if err != nil {
+				return res, err
+			}
+			historical = historical && known
+		}
+		if held && !historical {
 			// An email claim: frozen without a conflicting step (conflict
 			// stays NULL), so it is looked at again once its holder left.
 			if _, e = tx.Exec(`INSERT INTO persons(person,label,seq,hash,record,state,pinned_at) VALUES(?,?,?,?,?,?,?)`, person, cur.Label, cur.Seq, cur.Hash(), string(raw), personConflict, time.Now().Unix()); e != nil {
@@ -482,7 +490,59 @@ func (a *Agent) pinNewerSteps(ctx context.Context, person string, adopt bool) (p
 			}
 		}
 	}
+	historicalHead := ""
+	if first && len(raws) > 0 {
+		last, err := protocol.ParsePersonRoster(raws[len(raws)-1])
+		if err != nil {
+			return pinResult{}, err
+		}
+		if last.Email != "" {
+			held, err := emailHeldIn(a.store.db, person, last.Email)
+			if err != nil {
+				return pinResult{}, err
+			}
+			if held {
+				var prev protocol.PersonRoster
+				for i, raw := range raws {
+					r, err := protocol.ParsePersonRoster(raw)
+					if err != nil {
+						return pinResult{}, err
+					}
+					if i == 0 {
+						err = r.VerifyFirst()
+					} else {
+						_, err = r.VerifyNext(prev)
+					}
+					if err != nil {
+						return pinResult{}, err
+					}
+					prev = r
+				}
+				all := len(last.Devices) > 0
+				for _, d := range last.Devices {
+					entry, err := a.directory(ctx, d.Address)
+					if err != nil {
+						return pinResult{}, err
+					}
+					if !entry.Revoked || entry.Public.Fingerprint() != d.Fingerprint() {
+						all = false
+						continue
+					}
+					if err = a.store.endRecipient(d.Address, d.Fingerprint(), true); err != nil {
+						return pinResult{}, err
+					}
+				}
+				if all {
+					historicalHead = last.Hash()
+				}
+			}
+		}
+	}
 	res, err := a.store.pinChain(person, raws, a.Self(), adopt)
+	if err == nil && historicalHead != "" {
+		err = a.store.setConfig(map[string]string{continuityHeadPrefix + person: historicalHead})
+	}
+
 	if err == nil && first && res.changed {
 		// Messages held while it was frozen look again, as for new proof,
 		// also when a release was interrupted before this pin.
@@ -585,27 +645,11 @@ func (a *Agent) settleEmail(ctx context.Context, person, email string) error {
 		if !ok || p.info.State == personSelf {
 			continue
 		}
-		for _, d := range p.roster.Devices {
-			fp := d.Fingerprint()
-			if known, err := revokedDeviceKnown(a.store.db, d.Address, fp); err != nil {
-				return err
-			} else if known {
-				continue
-			}
-			e, err := a.directory(ctx, d.Address)
-			var he *HubError
-			if errors.As(err, &he) && !transient(err) {
-				break
-			}
-			if err != nil {
-				return err
-			}
-			if !e.Revoked || e.Public.Fingerprint() != fp {
-				break
-			}
-			if err := a.store.endRecipient(d.Address, fp, true); err != nil {
-				return err
-			}
+		if p.info.State == personConflict {
+			return errPersonConflict
+		}
+		if err = a.refreshContinuityPerson(ctx, p); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -746,6 +790,16 @@ func (a *Agent) checkPersons(ctx context.Context, ms protocol.Members) {
 			continue
 		}
 		if r, err := protocol.ParsePersonRoster(prof.Person); err == nil && r.Hash() == m.Person.Hash {
+			if r.Email != "" {
+				var known int
+				if a.store.db.QueryRow(`SELECT count(*) FROM persons WHERE person<>? AND state=? AND json_extract(record,'$.email')=?`, r.Person, personPinned, r.Email).Scan(&known) == nil && known > 0 {
+					if _, err := a.refreshPerson(ctx, r.Person, false); err == nil {
+						changed = true
+						continue
+					}
+				}
+			}
+
 			if a.listed.put(r) {
 				changed = true
 			}

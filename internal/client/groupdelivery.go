@@ -96,25 +96,38 @@ func groupDeliveryRecipient(q dbq, packet GroupContext, address, fp string) erro
 	if err := groupDeliveryHead(q, packet); err != nil {
 		return err
 	}
-	for _, member := range packet.State.Members {
-		person, ok, err := personByIDIn(q, member.Person)
+	members, err := logicalGroupMembers(q, packet)
+	if err != nil {
+		return err
+	}
+	for _, m := range members {
+		p, ok, err := messagingPersonIn(q, m.Person)
 		if err != nil {
 			return err
 		}
-		if !ok || !person.has(address, fp) {
+		if !ok || !p.has(address, fp) {
 			continue
 		}
-		if person.info.State == personConflict {
+		if p.info.State == personConflict {
 			return errPersonConflict
 		}
-		var withdrawn int
-		if err = q.QueryRow(`SELECT count(*) FROM (SELECT admission FROM group_withdrawals WHERE conv=? AND person=? AND admission=? UNION ALL SELECT admission FROM group_pending_withdrawals WHERE conv=? AND person=? AND admission=?)`, packet.State.Conv, member.Person, member.Admission.Hash(), packet.State.Conv, member.Person, member.Admission.Hash()).Scan(&withdrawn); err != nil {
+		var pending int
+		if err = q.QueryRow(`SELECT count(*) FROM group_pending_withdrawals WHERE conv=? AND person=? AND admission=?`, packet.State.Conv, m.Person, m.Admission.Hash()).Scan(&pending); err != nil {
 			return err
 		}
-		if withdrawn != 0 || packet.State.Withdrawn(member, packet.Withdrawals) {
+		if pending != 0 {
 			return errGroupRecipientWithdrawn
 		}
 		return nil
+	}
+	for _, m := range packet.State.Members {
+		p, ok, e := personByIDIn(q, m.Person)
+		if e != nil {
+			return e
+		}
+		if ok && p.has(address, fp) {
+			return errGroupRecipientWithdrawn
+		}
 	}
 	return errGroupRecipientNotCurrent
 }
@@ -288,11 +301,15 @@ func (a *Agent) groupDeliveryCopies(ctx context.Context, packet GroupContext) (c
 	if err != nil {
 		return nil, err
 	}
-	for _, member := range packet.State.EffectiveMembers(packet.Withdrawals) {
+	members, e := logicalGroupMembers(a.store.db, packet)
+	if e != nil {
+		return nil, e
+	}
+	for _, member := range members {
 		if _, err = a.refreshPerson(ctx, member.Person, false); err != nil {
 			return copies, err
 		}
-		person, ok, e := a.store.personByID(member.Person)
+		person, ok, e := messagingPersonIn(a.store.db, member.Person)
 		if e != nil {
 			return copies, e
 		}

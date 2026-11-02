@@ -46,8 +46,12 @@ func groupMemberAdmission(q dbq, packet GroupContext, address, fp string) (proto
 	if err := groupTurnCheck(q, packet, address, fp); err != nil {
 		return protocol.GroupAdmission{}, err
 	}
-	for _, m := range packet.State.Members {
-		p, ok, err := personByIDIn(q, m.Person)
+	members, err := logicalGroupMembers(q, packet)
+	if err != nil {
+		return protocol.GroupAdmission{}, err
+	}
+	for _, m := range members {
+		p, ok, err := messagingPersonIn(q, m.Person)
 		if err != nil {
 			return protocol.GroupAdmission{}, err
 		}

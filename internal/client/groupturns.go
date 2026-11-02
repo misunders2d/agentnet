@@ -62,7 +62,7 @@ func (a *Agent) projectGroupConversations(rows []ConversationInfo) ([]Conversati
 			return nil, err
 		}
 		for _, member := range packet.State.EffectiveMembers(append(packet.Withdrawals, withdrawals...)) {
-			p, ok, err := a.store.personByID(member.Person)
+			p, ok, err := messagingPersonIn(a.store.db, member.Person)
 			if err != nil {
 				return nil, err
 			}
@@ -199,6 +199,9 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 	if len(m.Files) > envelope.MaxAttachments {
 		return ConvSent{}, errors.New("group: too many files")
 	}
+	if err := a.syncContinuityGroups(ctx); err != nil {
+		return ConvSent{}, err
+	}
 	packet, err := groupTurnPacketIn(a.store.db, conv)
 	if err != nil {
 		return ConvSent{}, err
@@ -274,16 +277,21 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 		}
 	}
 	others := false // the group has another current member
-	for _, member := range packet.State.EffectiveMembers(append(packet.Withdrawals, withdrawals...)) {
-		others = others || member.Person != me.roster.Person
-		person, ok, e := a.store.personByID(member.Person)
+	packet.Withdrawals = append(packet.Withdrawals, withdrawals...)
+	members, e := logicalGroupMembers(a.store.db, packet)
+	if e != nil {
+		return ConvSent{}, e
+	}
+	for _, member := range members {
+		person, ok, e := messagingPersonIn(a.store.db, member.Person)
 		if e != nil {
 			return ConvSent{}, e
 		}
 		if !ok {
 			return ConvSent{}, ErrGroupContextPending
 		}
-		rosters[member.Person] = person.roster.Hash()
+		others = others || person.roster.Person != me.roster.Person
+		rosters[person.roster.Person] = person.roster.Hash()
 		for _, device := range person.roster.Devices {
 			if device.Address == a.Address {
 				continue

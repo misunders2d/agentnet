@@ -151,6 +151,14 @@ func (a *Agent) convSync(ctx context.Context) {
 		a.checkPersons(ctx, a.MemberView().Members)
 	}
 	if work&(convPersons|convRecipients) != 0 {
+		if err := a.refreshContinuity(ctx); err != nil {
+			a.Logf("person continuity: %v", err)
+			a.convWork.due(convPersons)
+		}
+		if err := a.syncContinuityGroups(ctx); err != nil {
+			a.Logf("group continuity: %v", err)
+			a.convWork.due(convPersons)
+		}
 		if err := a.reconcileRecipientLifecycle(ctx); err != nil {
 			a.Logf("reconciling permanently removed recipients: %v", err)
 		}
@@ -417,7 +425,7 @@ func (a *Agent) DMWith(ctx context.Context, address string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	convs, err := a.Conversations()
+	convs, err := a.MessagingConversations()
 	if err != nil {
 		return "", err
 	}
@@ -541,6 +549,54 @@ func (a *Agent) Conversations() ([]ConversationInfo, error) {
 }
 
 // ConversationMessages lists a conversation's messages here, oldest first.
+func (a *Agent) MessagingConversationMessages(conv string) ([]ConvMessage, error) {
+	rows, err := a.continuityDMs(conv)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		rows = []ConversationInfo{{ID: conv}}
+	}
+	var out []ConvMessage
+	seen := map[string]bool{}
+	for _, row := range rows {
+		msgs, e := a.conversationMessages(row.ID, "")
+		if e != nil {
+			return nil, e
+		}
+		if e = a.projectConvAttention(row.ID, msgs); e != nil {
+			return nil, e
+		}
+		for _, m := range msgs {
+			if !envelope.TopicMetadata(m.TopicEvent) && !seen[m.ID] {
+				seen[m.ID] = true
+				out = append(out, m)
+			}
+		}
+	}
+	noticeFamily := rows
+	if len(rows) == 1 && rows[0].Kind == "" {
+		noticeFamily = nil
+	}
+	notices, e := a.continuityNotices(conv, noticeFamily)
+	if e != nil {
+		return nil, e
+	}
+	out = append(out, notices...)
+	slices.SortStableFunc(out, func(x, y ConvMessage) int {
+		if x.AtMS < y.AtMS {
+			return -1
+		}
+		if x.AtMS > y.AtMS {
+			return 1
+		}
+		return strings.Compare(x.ID, y.ID)
+	})
+	return out, nil
+}
+
+// ConversationMessages retains the exact cryptographic scope for native
+// execution, history grants, and selected-context callers.
 func (a *Agent) ConversationMessages(conv string) ([]ConvMessage, error) {
 	msgs, err := a.conversationMessages(conv, "")
 	if err != nil {
@@ -710,6 +766,17 @@ type outCopy struct {
 // except the one to a request's execution target.
 func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (ConvSent, error) {
 	ctx = withRoundTrips(ctx)
+	continuity := m.claim == nil && m.PID == "" && m.Target == nil && m.sub == "" && (m.Kind == "" || m.Kind == envelope.KindMessage) && !envelope.AgentOrigin(m.Origin)
+	replyParent := func(conv, ref string) (string, bool, error) { return humanReplyParent(a.store.db, conv, ref) }
+	if continuity {
+		replyParent = a.continuityReplyParent
+
+		next, e := a.currentDM(ctx, conv)
+		if e != nil {
+			return ConvSent{}, e
+		}
+		conv = next
+	}
 	if m.SendGroup == "" {
 		m.SendGroup, _ = ctx.Value(sendGroupKey{}).(string)
 	}
@@ -873,7 +940,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		m.Origin = envelope.OriginUI
 	}
 	if m.Quote != "" {
-		parent, known, err := humanReplyParent(a.store.db, conv, m.Quote)
+		parent, known, err := replyParent(conv, m.Quote)
 		if err != nil {
 			return ConvSent{}, err
 		}
@@ -884,7 +951,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 	}
 	organizationParent := envelope.AgentTopicOrganization(envelope.Inner{PID: m.PID, Origin: m.Origin, TopicEvent: m.TopicEvent})
 	if m.ReplyTo != "" && (organizationParent || (m.claim == nil || m.Origin == envelope.OriginUI) && !envelope.AgentOrigin(m.Origin)) { // display organization and human replies use a logical parent
-		parent, known, e := humanReplyParent(a.store.db, conv, m.ReplyTo)
+		parent, known, e := replyParent(conv, m.ReplyTo)
 		if e != nil {
 			return ConvSent{}, e
 		}
@@ -1621,7 +1688,13 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 		if known, err := a.store.knownMessage(in.ReplyTo); err != nil {
 			return err
 		} else if known && c != in.Conv {
-			return hold(reasonInvalid, "it replies to a message outside its conversation")
+			same, e := sameLogicalDMIn(a.store.db, c, in.Conv)
+			if e != nil {
+				return e
+			}
+			if !same || in.Kind != envelope.KindMessage || in.Sub != "" || in.PID != "" || in.Target != nil || envelope.AgentOrigin(in.Origin) {
+				return hold(reasonInvalid, "it replies to a message outside its conversation")
+			}
 		}
 	}
 	var also func(*sql.Tx) error

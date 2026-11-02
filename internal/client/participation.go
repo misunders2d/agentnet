@@ -81,19 +81,20 @@ type ParticipationInfo struct {
 // roster the root binds it to, is left out. Their devices are the current
 // ones; chains holds each person's pinned roster steps.
 type dmMembers struct {
-	historyEvents     []protocol.ParticipationEvent // verified history-only evidence, never persisted as live authority
-	historyTaskEpochs map[string]string             // original signed task keys, only while verifying inert history
-	root              protocol.ConvRoot
-	persons           map[string]personRow
-	hosts             map[string]personRow // verified invite hosts; never member/asker/task authority
-	group             *GroupContext        // verified current context; never ordinary visitor authority
-	groupInvites      map[string]bool
-	roomEvents        map[string]bool
-	shareGrants       map[string][]protocol.GrantRef
-	roomAuthors       map[string]personRow
-	guestParents      map[string]ParticipationInfo // parent acceptance hash -> exact resolved human parent, operation-local
-	chains            map[string]map[string]bool
-	departedTaskKeys  map[string]map[string]bool // DM invite hash -> task keys its author's signed step listed, removed since (loadDepartedTaskKeys)
+	continuityAdmissions map[string]protocol.GroupAdmission // current messaging membership; never a native grant
+	historyEvents        []protocol.ParticipationEvent      // verified history-only evidence, never persisted as live authority
+	historyTaskEpochs    map[string]string                  // original signed task keys, only while verifying inert history
+	root                 protocol.ConvRoot
+	persons              map[string]personRow
+	hosts                map[string]personRow // verified invite hosts; never member/asker/task authority
+	group                *GroupContext        // verified current context; never ordinary visitor authority
+	groupInvites         map[string]bool
+	roomEvents           map[string]bool
+	shareGrants          map[string][]protocol.GrantRef
+	roomAuthors          map[string]personRow
+	guestParents         map[string]ParticipationInfo // parent acceptance hash -> exact resolved human parent, operation-local
+	chains               map[string]map[string]bool
+	departedTaskKeys     map[string]map[string]bool // DM invite hash -> task keys its author's signed step listed, removed since (loadDepartedTaskKeys)
 }
 
 func (a *Agent) dmMembers(conv string) (dmMembers, error) { return membersIn(a.store.db, conv) }
@@ -152,7 +153,39 @@ func memberRowsKnownIn(q dbq, root protocol.ConvRoot, members []protocol.ConvMem
 		}
 		rows.Close()
 		if chain[mem.Roster] {
-			m.persons[mem.Person], m.chains[mem.Person] = p, chain
+			id := mem.Person
+			if root.Kind == protocol.ConvKindGroup {
+				var err error
+				p, ok, err = messagingPersonIn(q, mem.Person)
+				if err != nil {
+					return dmMembers{}, err
+				}
+				if !ok || p.info.State == personConflict {
+					continue
+				}
+				id = p.roster.Person
+				if id != mem.Person {
+					chain = map[string]bool{}
+					rows, err := q.Query(`SELECT hash FROM person_chain WHERE person=?`, id)
+					if err != nil {
+						return dmMembers{}, err
+					}
+					for rows.Next() {
+						var h string
+						if err = rows.Scan(&h); err != nil {
+							rows.Close()
+							return dmMembers{}, err
+						}
+						chain[h] = true
+					}
+					if err = rows.Err(); err != nil {
+						rows.Close()
+						return dmMembers{}, err
+					}
+					rows.Close()
+				}
+			}
+			m.persons[id], m.chains[id] = p, chain
 		}
 	}
 	return m, nil

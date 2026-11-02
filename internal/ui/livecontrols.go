@@ -16,7 +16,7 @@ import (
 // keys do not allow.
 
 func (l *Live) controlRef(x ControlAction) (client.ControlRef, error) {
-	ref, err := l.a.RefOf(x.Conv, x.ID, x.Dir)
+	ref, err := l.a.MessagingRefOf(x.Conv, x.ID, x.Dir)
 	if errors.Is(err, client.ErrNoMessage) {
 		return ref, NotFound("no such message here")
 	}

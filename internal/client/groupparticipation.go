@@ -13,6 +13,9 @@ func (m dmMembers) authorEpoch(au protocol.EventAuthor) bool {
 	if m.group == nil {
 		return au.GroupAdmission == ""
 	}
+	if admission, ok := m.continuityAdmissions[au.Person]; ok {
+		return au.GroupAdmission == admission.Hash()
+	}
 	member, ok := m.group.State.Member(au.Person)
 	return ok && au.GroupAdmission == member.Admission.Hash()
 }
@@ -28,6 +31,9 @@ func (m dmMembers) keyEpoch(fp string) string {
 	}
 	for person, p := range m.persons {
 		if _, ok := p.roster.Device(fp); ok {
+			if admission, ok := m.continuityAdmissions[person]; ok {
+				return admission.Hash()
+			}
 			member, ok := m.group.State.Member(person)
 			if ok {
 				return member.Admission.Hash()

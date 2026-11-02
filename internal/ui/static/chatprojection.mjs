@@ -76,8 +76,8 @@ export function projectDeviceThreads({ inbox, outbox }, { address, fingerprint, 
 
 export async function readChatView(store, { me, fingerprint }, conv = null) {
   const [incoming, outgoing, persons, convs, groups, reports, decisions] = await Promise.all([
-    conv === null ? store.all('inbox') : store.byConv('inbox', conv),
-    conv === null ? store.all('outbox') : store.byConv('outbox', conv),
+    conv === null ? store.all('inbox') : Promise.all((Array.isArray(conv)?conv:[conv]).map(id=>store.byConv('inbox',id))).then(rows=>rows.flat()),
+    conv === null ? store.all('outbox') : Promise.all((Array.isArray(conv)?conv:[conv]).map(id=>store.byConv('outbox',id))).then(rows=>rows.flat()),
     store.all('persons'), store.all('convs'), store.prefix('kv', 'group/'),
     conv === null ? [] : store.inboxStatus('review_notice'),
     conv === null ? [] : store.outboxSub('decision'),

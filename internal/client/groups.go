@@ -176,7 +176,7 @@ func (a *Agent) BuildGroupCommit(ctx context.Context, packet GroupContext) (prot
 		if _, e := a.refreshPerson(ctx, m.Person, false); e != nil {
 			return out, e
 		}
-		current, ok, e := a.store.personByID(m.Person)
+		current, ok, e := messagingPersonIn(a.store.db, m.Person)
 		if e != nil {
 			return out, e
 		}
@@ -833,8 +833,21 @@ func (a *Agent) GroupMembers(conv string) ([]protocol.ConvMember, error) {
 	out := []protocol.ConvMember{}
 	own := false
 	for _, m := range effective {
-		out = append(out, m.ConvMember)
-		own = own || m.Person == self.roster.Person
+		p, found, e := messagingPersonIn(a.store.db, m.Person)
+		if e != nil {
+			return nil, e
+		}
+		if !found {
+			return nil, ErrGroupContextPending
+		}
+		duplicate := false
+		for _, kept := range out {
+			duplicate = duplicate || kept.Person == p.roster.Person
+		}
+		if !duplicate {
+			out = append(out, protocol.ConvMember{Person: p.roster.Person, Roster: p.roster.Hash()})
+		}
+		own = own || p.roster.Person == self.roster.Person
 	}
 	if !own {
 		return nil, errors.New("group: own membership withdrawn or removed")

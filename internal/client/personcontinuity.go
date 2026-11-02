@@ -1,0 +1,730 @@
+package client
+
+import (
+	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"errors"
+	"sort"
+	"time"
+
+	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/lockfile"
+	"github.com/misunders2d/agentnet/internal/protocol"
+)
+
+// A local completeness checkpoint binds exact revocations to the head actually
+// fetched from the authenticated Hub. It is not a successor record or grant.
+const continuityHeadPrefix = "continuity-head/"
+
+// logicalPersons is messaging-only. Execution grants and historical signature
+// verification must continue to use the original cryptographic person IDs.
+func logicalPersons(q dbq) (map[string]string, error) {
+	rows, e := q.Query(`SELECT person,record,state,coalesce(conflict,'') FROM persons ORDER BY person`)
+	if e != nil {
+		return nil, e
+	}
+	type candidate struct {
+		r               protocol.PersonRoster
+		state, conflict string
+	}
+	var all []candidate
+	for rows.Next() {
+		var id, raw, state, conflict string
+		if e = rows.Scan(&id, &raw, &state, &conflict); e != nil {
+			rows.Close()
+			return nil, e
+		}
+		r, err := protocol.ParsePersonRoster([]byte(raw))
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		all = append(all, candidate{r, state, conflict})
+	}
+	e = rows.Err()
+	rows.Close()
+	if e != nil {
+		return nil, e
+	}
+	result := map[string]string{}
+	groups := map[string][]candidate{}
+	for _, p := range all {
+		result[p.r.Person] = p.r.Person
+		if p.r.Email != "" && (p.state == personPinned || p.state == personSelf) && p.conflict == "" {
+			groups[p.r.Email] = append(groups[p.r.Email], p)
+		}
+	}
+	for _, ps := range groups {
+		var terminal string
+		var left []string
+		ambiguous := false
+		for _, p := range ps {
+			var checkpoint string
+			e = q.QueryRow(`SELECT v FROM config WHERE k=?`, continuityHeadPrefix+p.r.Person).Scan(&checkpoint)
+			if e != nil && !errors.Is(e, sql.ErrNoRows) {
+				return nil, e
+			}
+			gone, e := personLeftIn(q, p.r.Person)
+			if e != nil {
+				return nil, e
+			}
+			if gone && checkpoint == p.r.Hash() {
+				left = append(left, p.r.Person)
+			} else {
+				if terminal != "" {
+					ambiguous = true
+				}
+				terminal = p.r.Person
+			}
+		}
+		if !ambiguous && terminal != "" {
+			for _, id := range left {
+				result[id] = terminal
+			}
+		}
+	}
+	return result, nil
+}
+func (s *store) logicalPerson(id string) (string, error) {
+	m, e := logicalPersons(s.db)
+	if e != nil {
+		return "", e
+	}
+	if to := m[id]; to != "" {
+		return to, nil
+	}
+	return id, nil
+}
+
+// refreshContinuity never runs a worker or releases execution claims. All old
+// heads are refreshed before their devices are checked, including a stale pin.
+func (a *Agent) refreshContinuity(ctx context.Context) error {
+	rows, e := a.store.db.Query(`SELECT person,record FROM persons WHERE state IN (?,?) AND coalesce(json_extract(record,'$.email'),'')!=''`, personPinned, personSelf)
+	if e != nil {
+		return e
+	}
+	type entry struct{ id, email string }
+	var entries []entry
+	counts := map[string]int{}
+	for rows.Next() {
+		var id, raw string
+		if e = rows.Scan(&id, &raw); e != nil {
+			rows.Close()
+			return e
+		}
+		r, err := protocol.ParsePersonRoster([]byte(raw))
+		if err != nil {
+			rows.Close()
+			return err
+		}
+		entries = append(entries, entry{id, r.Email})
+		counts[r.Email]++
+	}
+	e = rows.Err()
+	rows.Close()
+	if e != nil {
+		return e
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].id < entries[j].id })
+	for _, entry := range entries {
+		if counts[entry.email] < 2 {
+			continue
+		}
+		p, ok, e := a.store.personByID(entry.id)
+		if e != nil {
+			return e
+		}
+		if !ok || p.info.State == personSelf {
+			continue
+		}
+		if e = a.refreshContinuityPerson(ctx, p); e != nil {
+			return e
+		}
+	}
+	return nil
+}
+
+// MessagingPersons is a directory projection, never a source of grants.
+func (a *Agent) MessagingPersons() ([]PersonInfo, error) {
+	ps, e := a.KnownPersons()
+	if e != nil {
+		return nil, e
+	}
+	aliases, e := logicalPersons(a.store.db)
+	if e != nil {
+		return nil, e
+	}
+	out := ps[:0]
+	for _, p := range ps {
+		if aliases[p.Person] == p.Person {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
+func (a *Agent) continuityDMs(conv string) ([]ConversationInfo, error) {
+	rows, e := a.store.conversations()
+	if e != nil {
+		return nil, e
+	}
+	aliases, e := logicalPersons(a.store.db)
+	if e != nil {
+		return nil, e
+	}
+	var peer string
+	for _, r := range rows {
+		if r.ID == conv && r.Kind == protocol.ConvKindDM {
+			peer = aliases[r.Peer.Person]
+			break
+		}
+	}
+	if peer == "" {
+		return nil, nil
+	}
+	recovered := false
+	for id, to := range aliases {
+		if id != to && to == peer {
+			recovered = true
+		}
+	}
+	var out []ConversationInfo
+	for _, r := range rows {
+		if r.ID == conv || recovered && r.Kind == protocol.ConvKindDM && aliases[r.Peer.Person] == peer {
+			out = append(out, r)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Created != out[j].Created {
+			return out[i].Created < out[j].Created
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out, nil
+}
+func (a *Agent) ContinuityConversation(conv string) (string, error) {
+	rows, e := a.continuityDMs(conv)
+	if e != nil {
+		return "", e
+	}
+	if len(rows) > 0 {
+		return rows[0].ID, nil
+	}
+	return conv, nil
+}
+func (a *Agent) projectContinuityDMs(rows []ConversationInfo) ([]ConversationInfo, error) {
+	aliases, e := logicalPersons(a.store.db)
+	if e != nil {
+		return nil, e
+	}
+	seen := map[string]bool{}
+	out := rows[:0]
+	for _, r := range rows {
+		if r.Kind != protocol.ConvKindDM {
+			out = append(out, r)
+			continue
+		}
+		view, e := a.ContinuityConversation(r.ID)
+		if e != nil {
+			return nil, e
+		}
+		if seen[view] {
+			continue
+		}
+		seen[view] = true
+		r.ID = view
+		if to := aliases[r.Peer.Person]; to != "" && to != r.Peer.Person {
+			p, ok, e := a.store.personByID(to)
+			if e != nil {
+				return nil, e
+			}
+			if ok {
+				r.Peer = p.info
+			}
+		}
+		out = append(out, r)
+	}
+	return out, nil
+}
+func (a *Agent) currentDM(ctx context.Context, conv string) (string, error) {
+	rows, e := a.continuityDMs(conv)
+	if e != nil || len(rows) == 0 {
+		return conv, e
+	}
+	peer, e := a.store.logicalPerson(rows[0].Peer.Person)
+	if e != nil {
+		return "", e
+	}
+	for _, r := range rows {
+		if r.Peer.Person == peer {
+			return r.ID, nil
+		}
+	}
+	p, ok, e := a.store.personByID(peer)
+	if e != nil {
+		return "", e
+	}
+	if !ok || len(p.roster.Devices) == 0 {
+		return "", errPersonRecord
+	}
+	return a.CreateDM(ctx, p.roster.Devices[0].Address)
+}
+
+func messagingPersonIn(q dbq, id string) (personRow, bool, error) {
+	aliases, e := logicalPersons(q)
+	if e != nil {
+		return personRow{}, false, e
+	}
+	if to := aliases[id]; to != "" {
+		id = to
+	}
+	return personByIDIn(q, id)
+}
+
+// Filter withdrawal/removal first, then prefer an explicit current-identity
+// admission over a historical duplicate. Signed state and admissions stay intact.
+func logicalGroupMembers(q dbq, p GroupContext) ([]protocol.GroupMember, error) {
+	aliases, e := logicalPersons(q)
+	if e != nil {
+		return nil, e
+	}
+	chosen := map[string]protocol.GroupMember{}
+	blocked := map[string]bool{}
+	for _, m := range p.State.Members {
+		id := aliases[m.Person]
+		if id == "" {
+			id = m.Person
+		}
+		if id != m.Person {
+			continue
+		}
+		var gone int
+		if e = q.QueryRow(`SELECT count(*) FROM group_withdrawals WHERE conv=? AND person=? AND admission=?`, p.State.Conv, m.Person, m.Admission.Hash()).Scan(&gone); e != nil {
+			return nil, e
+		}
+		if gone != 0 || p.State.Withdrawn(m, p.Withdrawals) {
+			blocked[id] = true
+		}
+	}
+	// A separately restored terminal slot, subsequently removed in signed
+	// state, takes precedence over an older duplicate slot still present.
+	for _, past := range p.Proof {
+		for _, m := range past.Members {
+			id := aliases[m.Person]
+			if id == "" {
+				id = m.Person
+			}
+			if id == m.Person {
+				if _, present := p.State.Member(id); !present {
+					blocked[id] = true
+				}
+			}
+		}
+	}
+	for _, m := range p.State.EffectiveMembers(p.Withdrawals) {
+		var withdrawn int
+		if e = q.QueryRow(`SELECT count(*) FROM group_withdrawals WHERE conv=? AND person=? AND admission=?`, p.State.Conv, m.Person, m.Admission.Hash()).Scan(&withdrawn); e != nil {
+			return nil, e
+		}
+		if withdrawn != 0 {
+			continue
+		}
+		id := aliases[m.Person]
+		if id == "" {
+			id = m.Person
+		}
+		if blocked[id] {
+			continue
+		}
+		old, exists := chosen[id]
+		if !exists || m.Person == id && old.Person != id || m.Person != id && old.Person != id && (m.Admission.Seq > old.Admission.Seq || m.Admission.Seq == old.Admission.Seq && m.Person < old.Person) {
+			chosen[id] = m
+		}
+	}
+	keys := make([]string, 0, len(chosen))
+	for id := range chosen {
+		keys = append(keys, id)
+	}
+	sort.Strings(keys)
+	out := make([]protocol.GroupMember, 0, len(keys))
+	for _, id := range keys {
+		out = append(out, chosen[id])
+	}
+	return out, nil
+}
+
+func (a *Agent) refreshContinuityPerson(ctx context.Context, p personRow) error {
+	// Verify from the pinned chain without email settlement recursion.
+	raws, e := a.fetchChain(ctx, p.roster.Person, p.info.Seq-1)
+	if e != nil {
+		return e
+	}
+	if len(raws) == 0 {
+		return errPersonRecord
+	}
+	candidate := p.roster
+	for _, raw := range raws {
+		next, err := protocol.ParsePersonRoster(raw)
+		if err != nil {
+			return err
+		}
+		if next.Person != p.roster.Person {
+			return errPersonRecord
+		}
+		if next.Seq == candidate.Seq {
+			if next.Hash() != candidate.Hash() {
+				_, err = a.store.pinChain(p.roster.Person, raws, a.Self(), false)
+				if err != nil {
+					return err
+				}
+				return errPersonConflict
+			}
+			continue
+		}
+		if _, err = next.VerifyNext(candidate); err != nil {
+			return err
+		}
+		candidate = next
+	}
+	if candidate.Hash() != p.roster.Hash() {
+		if e = a.store.deleteConfig(continuityHeadPrefix + p.roster.Person); e != nil {
+			return e
+		}
+	}
+	all := true
+	for _, d := range candidate.Devices {
+		directory, e := a.directory(ctx, d.Address)
+		if e != nil {
+			return e
+		}
+		if !directory.Revoked || directory.Public.Fingerprint() != d.Fingerprint() {
+			all = false
+			continue
+		}
+		if e = a.store.endRecipient(d.Address, d.Fingerprint(), true); e != nil {
+			return e
+		}
+	}
+	if _, e = a.store.pinChain(p.roster.Person, raws, a.Self(), false); e != nil {
+		return e
+	}
+	if all && len(candidate.Devices) > 0 {
+		if e = a.store.setConfig(map[string]string{continuityHeadPrefix + p.roster.Person: candidate.Hash()}); e != nil {
+			return e
+		}
+	}
+	return nil
+}
+
+func sameLogicalDMIn(q dbq, left, right string) (bool, error) {
+	if left == right {
+		return true, nil
+	}
+	a, _, ok, e := conversationIn(q, left)
+	if e != nil || !ok {
+		return false, e
+	}
+	b, _, ok, e := conversationIn(q, right)
+	if e != nil || !ok || a.Kind != protocol.ConvKindDM || b.Kind != protocol.ConvKindDM {
+		return false, e
+	}
+	aliases, e := logicalPersons(q)
+	if e != nil {
+		return false, e
+	}
+	normalize := func(id string) string {
+		if v := aliases[id]; v != "" {
+			return v
+		}
+		return id
+	}
+	ids := map[string]bool{}
+	recovered := false
+	for _, m := range a.Members {
+		ids[normalize(m.Person)] = true
+	}
+	for _, m := range b.Members {
+		if !ids[normalize(m.Person)] {
+			return false, nil
+		}
+	}
+	for from, to := range aliases {
+		if from != to && ids[to] {
+			recovered = true
+		}
+	}
+	return recovered, nil
+}
+func (a *Agent) continuityReplyParent(conv, ref string) (string, bool, error) {
+	parent, known, e := humanReplyParent(a.store.db, conv, ref)
+	if e == nil && known {
+		return parent, known, nil
+	}
+	var source string
+	err := a.store.db.QueryRow(`SELECT coalesce(conv,'') FROM inbox WHERE (id=? OR lid=?) AND ref_id IS NULL UNION SELECT coalesce(conv,'') FROM outbox WHERE (id=? OR lid=?) AND ref_id IS NULL LIMIT 1`, ref, ref, ref, ref).Scan(&source)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", false, err
+	}
+	if source == "" {
+		return parent, known, e
+	}
+	same, err := sameLogicalDMIn(a.store.db, conv, source)
+	if err != nil {
+		return "", false, err
+	}
+	if !same {
+		return parent, known, e
+	}
+	return humanReplyParent(a.store.db, source, ref)
+}
+
+func (a *Agent) MessagingConversations() ([]ConversationInfo, error) {
+	rows, e := a.Conversations()
+	if e != nil {
+		return nil, e
+	}
+	return a.projectContinuityDMs(rows)
+}
+
+// Local-only rows are excluded from signed history and native work. Their
+// deterministic IDs survive retries, duplicate catch-up and process restarts.
+func (a *Agent) continuityNotices(conv string, family []ConversationInfo) ([]ConvMessage, error) {
+	aliases, e := logicalPersons(a.store.db)
+	if e != nil {
+		return nil, e
+	}
+	targets := map[string]bool{}
+	if len(family) > 0 {
+		for _, r := range family {
+			if to := aliases[r.Peer.Person]; to != "" && to != r.Peer.Person {
+				targets[to] = true
+			}
+		}
+	} else {
+		packet, err := groupTurnPacketIn(a.store.db, conv)
+		if err == nil {
+			ms, err := logicalGroupMembers(a.store.db, packet)
+			if err != nil {
+				return nil, err
+			}
+			for _, m := range ms {
+				if to := aliases[m.Person]; to != "" && to != m.Person {
+					targets[to] = true
+				}
+			}
+		}
+	}
+	for target := range targets {
+		p, ok, err := a.store.personByID(target)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		scope := conv
+		if len(family) > 0 {
+			scope = "dm/" + target
+		}
+		sum := sha256.Sum256([]byte("agentnet-local-continuity-v1\n" + scope + "\n" + target))
+		id := hex.EncodeToString(sum[:16])
+		now := time.Now().UnixMilli()
+		_, e = a.store.db.Exec(`INSERT OR IGNORE INTO inbox(id,sender,ts,kind,body,received_at,received_ms,read_at,acked,local,conv,lid,sub) VALUES(?, ?, ?, 'message', ?, ?, ?, ?,1,1,?,?,'continuity')`, id, a.Address, now/1000, p.info.Label+" signed in again", now/1000, now, now/1000, conv, id)
+		if e != nil {
+			return nil, e
+		}
+	}
+	// Older transition notices stay in the same union when another recovery occurs.
+	ids := []string{conv}
+	if len(family) > 0 {
+		ids = nil
+		for _, r := range family {
+			ids = append(ids, r.ID)
+		}
+	}
+	var out []ConvMessage
+	for _, id := range ids {
+		rows, err := a.store.db.Query(`SELECT id,body,received_at,received_ms FROM inbox WHERE conv=? AND local=1 AND sub='continuity'`, id)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var m ConvMessage
+			if err = rows.Scan(&m.ID, &m.Body, &m.At, &m.AtMS); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			m.LID = m.ID
+			m.Kind = "message"
+			m.Sub = "continuity"
+			m.Dir = "in"
+			out = append(out, m)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+func logicalGroupMember(q dbq, p GroupContext, person string) (protocol.GroupMember, bool, error) {
+	aliases, e := logicalPersons(q)
+	if e != nil {
+		return protocol.GroupMember{}, false, e
+	}
+	target := aliases[person]
+	if target == "" {
+		target = person
+	}
+	ms, e := logicalGroupMembers(q, p)
+	if e != nil {
+		return protocol.GroupMember{}, false, e
+	}
+	for _, m := range ms {
+		id := aliases[m.Person]
+		if id == "" {
+			id = m.Person
+		}
+		if id == target {
+			return m, true, nil
+		}
+	}
+	return protocol.GroupMember{}, false, nil
+}
+
+// Reuse the existing proof/current-context carriers and durable outbox batch
+// markers. Recovery shares current group state, never historical ciphertext or
+// execution grants, and never asks a group admin to sign another membership.
+func (a *Agent) syncContinuityGroups(ctx context.Context) error {
+	aliases, e := logicalPersons(a.store.db)
+	if e != nil {
+		return e
+	}
+	recovered := map[string]bool{}
+	for from, to := range aliases {
+		if from != to {
+			recovered[to] = true
+		}
+	}
+	if len(recovered) == 0 {
+		return nil
+	}
+	rows, e := a.store.db.Query(`SELECT conv FROM group_context ORDER BY conv`)
+	if e != nil {
+		return e
+	}
+	var convs []string
+	for rows.Next() {
+		var conv string
+		if e = rows.Scan(&conv); e != nil {
+			rows.Close()
+			return e
+		}
+		convs = append(convs, conv)
+	}
+	e = rows.Err()
+	rows.Close()
+	if e != nil {
+		return e
+	}
+	release, e := lockfile.Wait(a.spoolLockPath())
+	if e != nil {
+		return e
+	}
+	defer release()
+	for _, conv := range convs {
+		packet, e := groupTurnPacketIn(a.store.db, conv)
+		if e != nil {
+			return e
+		}
+		if e = groupTurnCheck(a.store.db, packet, a.Address, a.Self().Fingerprint()); e != nil {
+			continue
+		}
+		members, e := logicalGroupMembers(a.store.db, packet)
+		if e != nil {
+			return e
+		}
+		payloads, e := groupDeliveryPayloads(a.store.db, packet)
+		if e != nil {
+			return e
+		}
+		for _, m := range members {
+			p, ok, e := messagingPersonIn(a.store.db, m.Person)
+			if e != nil {
+				return e
+			}
+			if !ok || !recovered[p.roster.Person] {
+				continue
+			}
+			for _, dev := range p.roster.Devices {
+				if dev.Address == a.Address {
+					continue
+				}
+				present, e := a.groupHistoryBatchPresent(a.store.db, dev, packet, payloads)
+				if e != nil {
+					return e
+				}
+				if present {
+					continue
+				}
+				copies, e := a.groupDeliveryTo(ctx, packet, payloads, dev)
+				if e != nil {
+					return e
+				}
+				e = a.store.addConvOutbox(copies, envelope.Inner{}, func(tx *sql.Tx, _ string) error {
+					if e := groupTurnCheck(tx, packet, a.Address, a.Self().Fingerprint()); e != nil {
+						return e
+					}
+					if e := groupTurnCheck(tx, packet, dev.Address, dev.Fingerprint()); e != nil {
+						return e
+					}
+					present, e := a.groupHistoryBatchPresent(tx, dev, packet, payloads)
+					if e != nil {
+						return e
+					}
+					if present {
+						return errGroupPublished
+					}
+					return nil
+				}, "")
+				if e != nil {
+					a.releaseGroupCopies(copies)
+					if !errors.Is(e, errGroupPublished) {
+						return e
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// UI controls keep the selected message's original signed conversation. A
+// merged view is not permission to edit or react under a different root.
+func (a *Agent) MessagingRefOf(conv, id, dir string) (ControlRef, error) {
+	ref, e := a.RefOf(conv, id, dir)
+	if e == nil || !errors.Is(e, ErrNoMessage) {
+		return ref, e
+	}
+	family, err := a.continuityDMs(conv)
+	if err != nil {
+		return ControlRef{}, err
+	}
+	for _, c := range family {
+		if c.ID == conv {
+			continue
+		}
+		ref, err = a.RefOf(c.ID, id, dir)
+		if err == nil {
+			return ref, nil
+		}
+		if !errors.Is(err, ErrNoMessage) {
+			return ControlRef{}, err
+		}
+	}
+	return ref, e
+}

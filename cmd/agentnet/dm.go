@@ -59,7 +59,7 @@ func runPerson(ctx context.Context, a *client.Agent, args []string, stdout io.Wr
 	}
 	switch {
 	case args[0] == "list" && len(args) == 1:
-		people, err := a.KnownPersons()
+		people, err := a.MessagingPersons()
 		if err != nil {
 			return err
 		}
@@ -219,7 +219,7 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 		fmt.Fprintln(stdout, id)
 		return nil
 	case "list":
-		convs, err := a.Conversations()
+		convs, err := a.MessagingConversations()
 		if err != nil {
 			return err
 		}
@@ -234,7 +234,7 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 		if len(args) != 2 {
 			return errors.New("usage: dm show ID")
 		}
-		msgs, err := a.ConversationMessages(args[1])
+		msgs, err := a.MessagingConversationMessages(args[1])
 		if err != nil {
 			return err
 		}

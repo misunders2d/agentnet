@@ -131,6 +131,38 @@ async function handle(req) {
     return { joined: engine.joined };
   case "join":
     return { address: await engine.join(req.code, req.name) };
+  case "mel736OneProbes": {
+    const mem=memoryStore(),e=new Engine({store:mem,base:"https://fixture.invalid",fetch:()=>{throw Error("unexpected network")}}),keys=await wire.newKeys();
+    e.keys=keys;e.address="peer/browser";e.fp=await wire.fingerprint(await wire.publicEntry(keys,e.address));
+    const mine=await wire.newRoster(keys,e.address,"Peer");e.me=await e.personRecord([mine],"self",null);
+    await mem.write([{s:"kv",k:"person",v:e.me}]);
+    const rosters=await Promise.all(req.rosters.map(wire.parseRoster));for(const r of rosters)await wire.verifyFirst(r);
+    const ps=await Promise.all(rosters.map(r=>e.personRecord([r],"pinned",null))),[old,next,third]=ps;
+    const save=async p=>mem.write([{s:"persons",k:p.person,v:p}]);await save(old);await save(next);
+    const leave=async p=>{for(const d of p.devices)await mem.write([{s:"kv",k:"revoked-device/"+d.address+"/"+d.fingerprint,v:{address:d.address,fingerprint:d.fingerprint}}]);await mem.write([{s:"kv",k:"continuity-head/"+p.person,v:{person:p.person,hash:p.hash}}]);};
+    let checks=0;const assert=(ok,why)=>{if(!ok)throw Error("MEL736: "+why);checks++;};
+    assert((await e.logicalPersons()).get(old.person)===old.person,"live aliases");
+    await leave(old);assert((await e.logicalPersons()).get(old.person)===next.person,"Bohdan split remains");
+    const roots=[];for(const p of [old,next]){const r=await wire.newRoot(keys,{person:e.me.person,roster:e.me.hash,address:e.address,fingerprint:e.fp},{person:p.person,roster:p.hash}),id=await wire.rootID(r);roots.push({id,root:wire.rootJSON(r),peer:p.person,created:r.created,creator:e.address});await mem.write([{s:"convs",k:id,v:roots.at(-1)}]);}
+    const original=wire.newID(),lid=wire.newID(),other=wire.newID();await mem.write([{s:"inbox",k:original,v:{id:original,lid,conv:roots[0].id,kind:"message",body:"old history",at:1,read:true,fp:old.fingerprint}},{s:"inbox",k:other,v:{id:other,lid:other,conv:roots[1].id,kind:"message",body:"new history",at:2,read:false,fp:next.fingerprint}}]);
+    assert((await e.continuityDMs(roots[0].id)).length===2,"DM union");assert(await e.currentDM(roots[0].id)===roots[1].id,"current root routing");
+    assert(await e.logicalReply(roots[1].id,lid,true,"Conversation",true)===lid,"cross-root reply");
+    let strict=false;try{await e.logicalReply(roots[1].id,lid,true,"Conversation");}catch(_){strict=true;}assert(strict,"native context crossed roots");
+    const read=await e.readView(roots[0].id),rows=await e.messagingMessages(roots[0].id,read.inbox,read.outbox,read);
+    assert(rows.some(r=>r.id===original&&r.read)&&rows.some(r=>r.id===other&&!r.read),"read state lost");
+    const family=await e.continuityDMs(roots[0].id);await e.continuityNotices(family[0].id,family);assert((await mem.all("inbox")).filter(r=>r.sub==="continuity").length===1,"notice duplicated");
+    const reopened=new Engine({store:mem,base:e.base});reopened.me=e.me;assert((await reopened.logicalPersons()).get(old.person)===next.person,"restart split");
+    await save(third);assert((await e.logicalPersons()).get(old.person)===old.person,"ambiguous candidate aliases");await leave(next);assert((await e.logicalPersons()).get(old.person)===third.person,"second recovery");
+    // Stale head marker and directory failures never publish completeness.
+    await mem.write([{s:"kv",k:"continuity-head/"+old.person,v:{person:old.person,hash:"0".repeat(64)}}]);assert((await e.logicalPersons()).get(old.person)===old.person,"stale head aliases");
+    e.chain=async()=>[rosters[0]];e.directory=async()=>{throw new HubError(503,"unavailable","fixture unavailable")};let failed=false;try{await e.continuityHead(old);}catch(_){failed=true;}assert(failed,"directory failure swallowed");
+    e.directory=async()=>({revoked:true,fingerprint:old.devices[0].fingerprint});await e.continuityHead(old);assert((await e.logicalPersons()).get(old.person)===third.person,"directory retry failed");
+    const m=p=>({person:p.person,roster:p.hash,admission:{conv:"",realm:"",person:p.person,roster:p.hash,seq:0,prev:"",history:[],by:""}}),packet={state:{members:[m(old),m(third)]},withdrawals:[]};
+    assert((await e.logicalGroupMembers(packet)).length===1,"hand-added group duplicates");
+    const current=await e.groupPeople(packet);assert(current.length===1&&current[0].person===third.person&&current[0].devices[0].fingerprint===third.fingerprint,"group uses recovered device");packet.state.members=[];assert((await e.logicalGroupMembers(packet)).length===0,"removed group resurrected");
+    const own=new Engine({store:mem,base:e.base});own.me={...third,state:"self"};assert((await own.logicalPersons()).get(old.person)===third.person,"recovered own person");
+    return {passed:true,checks};
+  }
   case "googleReviewProbes": {
     const ownerKeys = await wire.newKeys(), ownerAddress = "g-fixture/laptop", email = "person@example.com";
     const head = await wire.newRoster(ownerKeys, ownerAddress, "Person", email), hash = await wire.rosterHash(head);

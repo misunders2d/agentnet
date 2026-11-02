@@ -40,7 +40,7 @@ func (l *Live) dmOverview(o *Overview, unread *[]UnreadRow, mutes map[string]boo
 		v.Published = l.a.PersonPublished()
 		o.Person = &v
 	}
-	known, err := l.a.KnownPersons()
+	known, err := l.a.MessagingPersons()
 	if err != nil {
 		return err
 	}
@@ -60,7 +60,7 @@ func (l *Live) dmOverview(o *Overview, unread *[]UnreadRow, mutes map[string]boo
 			o.People = append(o.People, PersonView{Label: p.Label, Email: p.Email, Picture: p.Picture, PictureURL: pictureURL(p.Picture), Address: p.Address, State: PersonListed, Devices: deviceViews(p.Devices)})
 		}
 	}
-	convs, err := l.a.Conversations()
+	convs, err := l.a.MessagingConversations()
 	if err != nil {
 		return err
 	}
@@ -113,7 +113,7 @@ func (l *Live) dmOverview(o *Overview, unread *[]UnreadRow, mutes map[string]boo
 		if c.Deleted { // deleted here, nothing later yet (client convclear.go)
 			continue
 		}
-		msgs, err := l.a.ConversationMessages(c.ID)
+		msgs, err := l.a.MessagingConversationMessages(c.ID)
 		if err != nil {
 			return err
 		}
@@ -382,7 +382,12 @@ func (l *Live) NewDM(address string) (string, error) {
 
 // DM implements Persons.
 func (l *Live) DM(id string) (DMThread, error) {
-	convs, err := l.a.Conversations()
+	if resolved, err := l.a.ContinuityConversation(id); err != nil {
+		return DMThread{}, err
+	} else {
+		id = resolved
+	}
+	convs, err := l.a.MessagingConversations()
 	if err != nil {
 		return DMThread{}, err
 	}
@@ -390,7 +395,7 @@ func (l *Live) DM(id string) (DMThread, error) {
 		if c.ID != id {
 			continue
 		}
-		msgs, err := l.a.ConversationMessages(id)
+		msgs, err := l.a.MessagingConversationMessages(id)
 		if err != nil {
 			return DMThread{}, err
 		}
@@ -559,6 +564,10 @@ func (l *Live) DM(id string) (DMThread, error) {
 			if m.Kind == KindTask {
 				dm.Proposal, _ = l.a.ProposalOf(m.ID)
 			}
+			if m.Sub == "continuity" {
+				dm.Event, dm.Body, dm.StateText = m.Body, "", ""
+				dm.Can = nil
+			}
 			if m.Sub == envelope.SubEvent {
 				dm.Event, dm.Body, dm.StateText = eventText(m.Body, people), "", ""
 				dm.EventType, _, dm.EventBy = eventFields(m.Body, people)
@@ -605,7 +614,7 @@ func (l *Live) SendDM(d DMDraft) (Sent, error) {
 // per open, ask the Hub about copies it still holds, and, for a DM, about the
 // person's device.
 func (l *Live) refreshDM(id string) (Presence, bool, error) {
-	convs, err := l.a.Conversations()
+	convs, err := l.a.MessagingConversations()
 	if err != nil {
 		return Presence{}, false, err
 	}
@@ -613,7 +622,7 @@ func (l *Live) refreshDM(id string) (Presence, bool, error) {
 		if c.ID != id {
 			continue
 		}
-		msgs, err := l.a.ConversationMessages(id)
+		msgs, err := l.a.MessagingConversationMessages(id)
 		if err != nil {
 			return Presence{}, true, err
 		}

@@ -2980,9 +2980,12 @@ export class Engine {
   // Reuse original signed group journals and existing encrypted carriers.
   // A durable usable batch is the marker; terminal failures and legacy
   // completed jobs without carriers recover without resetting history.
-  async groupHistoryCarriers(c,dev,checks) {
+  async groupHistoryCarriers(c,dev,checks,continuity=false) {
     const {packet,g}=await this.groupTurnEvidence(c.id,checks),own=await this.groupTarget(packet.state,packet.withdrawals,checks);
-    if(!own.devices.some(d=>d.address===dev.address&&d.fingerprint===dev.fingerprint))throw Error("Group history recipient is not a current own device.");
+    if(!own.devices.some(d=>d.address===dev.address&&d.fingerprint===dev.fingerprint)){
+      const aliases=await this.logicalPersons(),members=await this.groupPeople(packet,checks),target=members.find(p=>p.devices.some(d=>d.address===dev.address&&d.fingerprint===dev.fingerprint));
+      if(!continuity||!target||![...aliases].some(([from,to])=>from!==to&&to===target.person))throw Error("Group history recipient is not a current own device.");
+    }
     const pin=await this.groupRead(checks,"pins",dev.address);
     if(!pin||pin.pending||pin.fingerprint!==dev.fingerprint)throw Error("Group history recipient key changed.");
     const records=g.records.map(wire.parseGroupCommit),payloads=[];
@@ -3001,7 +3004,7 @@ export class Engine {
     }
     if(seen.size===payloads.length)return [];
     const copies=[];
-    for(const [index,p] of payloads.entries())if(!seen.has(index))copies.push(await this.groupCarrierCopy(packet.root,p.sub,p.descriptor,p.body,dev));
+    for(const [index,p] of payloads.entries())if(!seen.has(index))copies.push(await this.groupCarrierCopy(packet.root,p.sub,p.descriptor,p.body,dev,{},false,continuity));
     return copies;
   }
 
@@ -3581,7 +3584,9 @@ export class Engine {
       throw new Hold("proof_pending", "person " + person + ": " + e.message);
     }
     const p = await this.personRecord(steps, "pinned", null);
-    if (p.email && await this.emailHeld(p, admission)) {
+    let held=p.email&&await this.emailHeld(p,admission);
+    if(held&&!admission?.localOnly){try{await this.continuityHead(p,admission);held=(await this.store.get("kv","continuity-head/"+p.person))?.hash!==p.hash;}catch(e){if(retryable(e))throw e;}}
+    if (held) {
       p.state = "conflict";
       p.email_claim = true; // no conflicting step: looked at again once the holder left
       await put(this.store, "persons", p.person, p);
@@ -3593,6 +3598,7 @@ export class Engine {
     // Pinned from step 0: what its frozen claim held looks again, also when
     // a release was interrupted before this pin.
     await this.releaseConflictHolds(p);
+    if(!admission?.localOnly)this.syncContinuityGroups().catch(()=>{this.continuityRetry=true;});
     return admission ? this.receivePerson(p, admission) : p;
   }
 
@@ -3606,7 +3612,8 @@ export class Engine {
   // out of reach is thrown, so what waits is retried rather than frozen.
   async emailHeld(p, admission = null) {
     const others = [this.me, ...(await this.store.all("persons"))].filter(o => o && o.person !== p.person && o.email && o.email === p.email);
-    for (const o of others) {
+    for (let o of others) {
+      if(!admission?.localOnly && o.state!=="self" && o.person!==this.me?.person){try{o=await this.continuityHead(o,admission);}catch(e){if(retryable(e))throw e;return true;}}
       if (o.state === "self" || o.person === this.me?.person || !(o.devices || []).length) return true;
       for (const d of o.devices) {
         const key = "revoked-device/" + d.address + "/" + d.fingerprint;
@@ -3623,6 +3630,124 @@ export class Engine {
       }
     }
     return false;
+  }
+
+  // Messaging equivalence only. Signed roots, history grants and native
+  // authority retain their exact original person IDs.
+  async logicalPersons() {
+    const people=[...new Map([...await this.store.all("persons"),this.me].filter(Boolean).map(p=>[p.person,p])).values()], aliases=new Map(people.map(p=>[p.person,p.person])), emails=new Map();
+    const revoked=new Set((await this.store.prefix("kv","revoked-device/")).map(d=>d.address+"/"+d.fingerprint));
+    const heads=new Map((await this.store.prefix("kv","continuity-head/")).map(h=>[h.person,h.hash]));
+    for(const p of people)if(p.email&&["pinned","self"].includes(p.state)){
+      if(!emails.has(p.email))emails.set(p.email,[]);emails.get(p.email).push(p);
+    }
+    for(const ps of emails.values()){
+      const left=p=>p.person!==this.me?.person&&p.devices?.length&&heads.get(p.person)===p.hash&&p.devices.every(d=>revoked.has(d.address+"/"+d.fingerprint));
+      const live=ps.filter(p=>!left(p));
+      if(live.length===1)for(const p of ps)if(left(p))aliases.set(p.person,live[0].person);
+    }
+    return aliases;
+  }
+
+  async refreshContinuity() {
+    const ps=(await this.store.all("persons")).filter(p=>p.email&&p.state==="pinned"), counts=new Map();
+    for(const p of [this.me,...ps].filter(Boolean))if(p.email)counts.set(p.email,(counts.get(p.email)||0)+1);
+    for(const p of ps)if(counts.get(p.email)>1)await this.continuityHead(p);
+    await this.syncContinuityGroups();
+    this.changed();
+  }
+
+  async continuityHead(p, admission=null) {
+    if(admission?.localOnly)return p;
+    // Fetch including the exact pinned head; an empty/stale response cannot
+    // establish completeness even when all locally known keys were revoked.
+    const steps=await this.chain(p.person,p.seq-1,admission);
+    if(!steps.length)throw new Hold("proof_pending","Recovery roster head is not current.");
+    if(await wire.rosterHash(steps[0])!==p.hash){await this.freeze(p);throw new Hold("identity_conflict","Recovery roster conflicts with the pinned head.");}
+    let prev=steps[0];for(const step of steps.slice(1)){await wire.verifyNext(step,prev);prev=step;}
+    const next=await this.personRecord(steps,p.state,p);
+    if(next.hash!==p.hash){await put(this.store,"kv","continuity-head/"+p.person,undefined);this.changed();}
+    let all=!!next.devices.length;
+    for(const d of next.devices){
+      const entry=await this.directory(d.address,admission);
+      if(!entry.revoked||entry.fingerprint!==d.fingerprint){all=false;continue;}
+      await put(this.store,"kv","revoked-device/"+d.address+"/"+d.fingerprint,{address:d.address,fingerprint:d.fingerprint});
+      this.endRecipient(d.address,d.fingerprint,true).catch(()=>{});
+    }
+    if(all||await this.store.get("persons",next.person))await put(this.store,"persons",next.person,next);
+    if(all)await put(this.store,"kv","continuity-head/"+next.person,{person:next.person,hash:next.hash});
+    return next;
+  }
+
+  async continuityDMs(id, convs=null, aliases=null) {
+    convs ||= await this.store.all("convs");aliases ||= await this.logicalPersons();
+    const c=convs.find(c=>c.id===id);if(!c||c.kind==="group")return c?[c]:[];
+    const peer=aliases.get(c.peer)||c.peer,recovered=[...aliases].some(([a,b])=>a!==b&&b===peer);
+    return convs.filter(r=>r.id===id||recovered&&r.kind!=="group"&&(aliases.get(r.peer)||r.peer)===peer).sort((a,b)=>a.created-b.created||a.id.localeCompare(b.id));
+  }
+
+  async currentDM(id) {
+    const family=await this.continuityDMs(id);if(!family.length)return id;
+    const aliases=await this.logicalPersons(),peer=aliases.get(family[0].peer)||family[0].peer;
+    const current=family.find(c=>c.peer===peer);if(current)return current.id;
+    const p=await this.store.get("persons",peer);if(!p?.devices?.length)throw Error("Current person has no verified device.");
+    return this.newDM(p.devices[0].address);
+  }
+
+  async continuityNotices(id,family=[]) {
+    const aliases=await this.logicalPersons(),targets=new Set();
+    if(family.length){for(const c of family){const to=aliases.get(c.peer);if(to&&to!==c.peer)targets.add(to);}}
+    else {const g=await this.groupRecord(id);if(g){const packet=await this.groupCurrentState(id);for(const m of await this.logicalGroupMembers(packet)){const to=aliases.get(m.person);if(to&&to!==m.person)targets.add(to);}}}
+    for(const target of targets){
+      const p=target===this.me?.person?this.me:await this.store.get("persons",target),scope=family.length?"dm/"+target:id;
+      const hash=await wire.sha256(new TextEncoder().encode("agentnet-local-continuity-v1\n"+scope+"\n"+target)),key=[...hash.slice(0,16)].map(b=>b.toString(16).padStart(2,"0")).join("");
+      const before=await this.store.get("inbox",key);if(before)continue;
+      const row={id:key,lid:key,conv:id,kind:"message",sub:"continuity",body:(p?.label||"Someone")+" signed in again",at:this.now(),from:this.address,local:true,read:true};
+      try{await this.store.write([{s:"inbox",k:key,v:row}],[{s:"inbox",k:key,v:before}]);}catch(e){if(!(e instanceof StoreConflict))throw e;}
+    }
+    const ids=new Set(family.length?family.map(c=>c.id):[id]);
+    return (await Promise.all([...ids].map(id=>this.store.byConv("inbox",id)))).flat().filter(r=>r.local&&r.sub==="continuity");
+  }
+
+  async messagingMessages(id,inbox,outbox,read) {
+    const family=await this.continuityDMs(id,read?.convs), rows=[];
+    rows.push(...await this.continuityNotices(family[0]?.id||id,family));
+    for(const c of family.length?family:[{id}])rows.push(...await this.convMessages(c.id,inbox,outbox,read));
+    return [...new Map(rows.map(m=>[m.id,m])).values()].sort((a,b)=>a.at-b.at||a.id.localeCompare(b.id));
+  }
+
+  async syncContinuityGroups() {
+    if(this.continuityGroupsTask)return this.continuityGroupsTask;
+    const task=this.syncContinuityGroupsOnce();this.continuityGroupsTask=task;
+    try{return await task;}finally{if(this.continuityGroupsTask===task)this.continuityGroupsTask=null;}
+  }
+
+  async syncContinuityGroupsOnce() {
+    const aliases=await this.logicalPersons(),targets=new Set([...aliases].filter(([a,b])=>a!==b).map(([,b])=>b));if(!targets.size)return;
+    for(const g of await this.store.prefix("kv","group/")){
+      const packet=wire.parseGroupContext(g.context),c={id:packet.state.conv,kind:"group",root:g.root};
+      try{await this.groupCurrent(c.id);}catch(_){continue;}
+      const checks=[],members=await this.groupPeople(packet,checks),copies=[];
+      for(const p of members)if(targets.has(p.person))for(const d of p.devices)if(d.address!==this.address)copies.push(...await this.groupHistoryCarriers(c,d,checks,true));
+      if(copies.length){await this.store.write(copies.map(v=>({s:"outbox",k:v.id,v})),checks);this.changed();if(this.connected)this.queueOutbox();}
+    }
+  }
+
+  async logicalGroupMembers(packet) {
+    const aliases=await this.logicalPersons(),selected=new Map(),blocked=new Set();
+    for(const m of packet.state.members){const id=aliases.get(m.person)||m.person;if(id===m.person&&await wire.groupWithdrawn(packet.state,m,packet.withdrawals||[]))blocked.add(id);}
+    for(const past of packet.proof||[])for(const m of past.members){const id=aliases.get(m.person)||m.person;if(id===m.person&&!wire.groupMember(packet.state,id))blocked.add(id);}
+    for(const m of await wire.effectiveGroupMembers(packet.state,packet.withdrawals||[])){
+      const id=aliases.get(m.person)||m.person,old=selected.get(id);
+      if(blocked.has(id))continue;
+      if(!old||m.person===id&&old.person!==id||m.person!==id&&old.person!==id&&(m.admission.seq>old.admission.seq||m.admission.seq===old.admission.seq&&m.person<old.person))selected.set(id,m);
+    }
+    return [...selected.values()];
+  }
+
+  async logicalGroupMember(packet,person) {
+    const aliases=await this.logicalPersons(),id=aliases.get(person)||person;
+    return (await this.logicalGroupMembers(packet)).find(m=>(aliases.get(m.person)||m.person)===id);
   }
 
   // releaseConflictHolds moves what was held as an identity conflict from a
@@ -3804,6 +3929,7 @@ export class Engine {
   // sendDM sends a message to the person. Never a question or task for
   // them, never v1.
   async sendDM({ id: sendID = "", conv, body, topic="",topic_event=null,quote="", reply_to: replyTo, files = [], reply_receiver = null, pid = "", beforeStore = null }) {
+    if(!pid && !reply_receiver)conv=await this.currentDM(conv);
     topic=await this.outgoingTopic(conv,topic,replyTo);
     if(topic&&!replyTo&&!topic_event)replyTo=await this.chatTopicHead(conv,topic);
     body = String(body || "").trim();
@@ -3831,7 +3957,7 @@ export class Engine {
       if(captured)return this.sendHumanTurn(c,{id:sendID,queued:true,beforeStore,kind:"message",body,topic,topic_event,quote,reply_to:replyTo||"",origin:"ui",files,receiver:reply_receiver},captured);
       return this.sendGroupTurn(c, {id:sendID,queued:true,beforeStore,body, topic,topic_event,quote,reply_to:replyTo || "",files,receiver:reply_receiver});
     }
-    try { replyTo=await this.logicalReply(conv,replyTo,true,"Conversation"); } catch(e) { throw Error("A reply stays within its conversation: "+e.message); }
+    try { replyTo=await this.logicalReply(conv,replyTo,true,"Conversation",!pid&&!reply_receiver); } catch(e) { throw Error("A reply stays within its conversation: "+e.message); }
     const human = await this.livePlan(c,pid,"",topic);
     if (human) return this.sendHumanTurn(c, { id: sendID, queued: true, beforeStore, kind: "message", body, topic,topic_event,quote,reply_to: replyTo || "", origin: "ui", files, receiver: reply_receiver, pid }, human);
     return this.sendConv(c, { id: sendID, queued: true, beforeStore, kind: "message", body, topic,topic_event,quote,reply_to: replyTo || "", origin: "ui", files, receiver: reply_receiver });
@@ -3891,7 +4017,7 @@ export class Engine {
     const attention = origin === "ui" && sub === "" && !topic_event && ["message", "question", "task"].includes(kind);
     const plain = [];
     for (const f of files) plain.push({ name: wire.safeName(f.name), bytes: f.bytes instanceof Uint8Array ? f.bytes : new Uint8Array(await f.arrayBuffer()) });
-    quote = await this.logicalReply(c.id, quote, true, "Conversation");
+    quote = await this.logicalReply(c.id, quote, true, "Conversation",!pid&&!target&&kind==="message");
     const prepared = await this.prepareReceiverRequest(receiver, { id: target ? lid : firstID, lid, conv: c.id, root: c.root, ts: Math.floor(at/1000), kind, body, topic,topic_event,quote,reply_to: replyTo, origin, target, pid, followup }, plain, checks);
     const recs = [];
     // A turn is for the other person (as client.SendConv): a changed key
@@ -5290,7 +5416,7 @@ export class Engine {
     const inbox=read.inbox,outbox=read.outbox,ctls=[...inbox,...outbox].filter(r=>r.control&&r.conv===conv);
     const privateReports = await this.ownNeedsYouReports(inbox, outbox);
     const visitorPIDs=new Set(infos.filter(i=>i.external&&i.host?.address===this.address&&i.host.fingerprint===this.fp).map(i=>i.pid));
-    const messages=(await this.convMessages(conv,inbox,outbox,read)).filter(m=>role==="member"||role==="former_member"||visitorPIDs.has(m.pid||m.excerpt_pid)||m.human?.audience.some(s=>visitorPIDs.has(s.pid))),shownReply=linkReplies(messages,this.fp);
+    const messages=[...await this.convMessages(conv,inbox,outbox,read),...await this.continuityNotices(conv)].sort((a,b)=>a.at-b.at).filter(m=>role==="member"||role==="former_member"||visitorPIDs.has(m.pid||m.excerpt_pid)||m.human?.audience.some(s=>visitorPIDs.has(s.pid))),shownReply=linkReplies(messages,this.fp);
     const personLabel=pid=>pid===this.me.person?"You":members.find(p=>p.person===pid)?.label||"Someone", words=await this.peerWordsFn(read);
     const agentCards=new Map();
     for(const i of infos) {
@@ -5315,7 +5441,7 @@ export class Engine {
     const humans=new Map(infos.filter(i=>i.role==="human").map(i=>[i.pid,i])),humanHosts=[...humans.values()].map(i=>i.host);
     const resources=role==="member"&&!frozen?await this.conversationResources(conv):undefined;
     return {id:conv,kind:"group",title:packet.state.title,peer:{label:packet.state.title,address:"",state:""},role,members,frozen,...(resources?{resources}:{}),created:iso(packet.root.created*1000),mine:packet.root.creator.address===this.address,agents:[...agentCards.values()],guests:infos.filter(i=>i.role==="human").map(i=>this.guestView(i,role==="member")),audience_pending:infos.some(i=>i.role==="human"&&i.state==="active"&&i.held),messages:await Promise.all(messages.map(async m=>{
-      const here=!m.fp&&!m.history,out=here||!!m.own,event=m.sub==="event"?this.eventText(m.body,null,members,humans.get(m.pid)||false,{originals:members,member:role==="member"}):"",fp=m.fp||m.claimed_key||this.fp,ev=event?this.eventFields(m.body,members,humanHosts):null;
+      const here=!m.fp&&!m.history,out=here||!!m.own,event=m.sub==="continuity"?m.body:m.sub==="event"?this.eventText(m.body,null,members,humans.get(m.pid)||false,{originals:members,member:role==="member"}):"",fp=m.fp||m.claimed_key||this.fp,ev=m.sub==="event"?this.eventFields(m.body,members,humanHosts):null;
       const targetPerson=await this.personOfFp(fp,read),rel=ctls.filter(x=>x.ref?.id===m.lid&&x.ref.fingerprint===fp&&x.sub!==wire.SubStatus&&x.sub!==wire.SubDecision);
       const view=event||m.excerpt_pid?{can:[],reactions:[]}:this.controlsOn(rel,targetPerson,x=>x.person||"",personLabel,p=>p===this.me.person,undefined,pid=>infos.find(i=>i.pid===pid)?.host?.label||"");
       view.can=view.deleted||event||m.excerpt_pid||frozen||role!=="member"?[]:["react",...(targetPerson===this.me.person?["edit","delete"]:[])];
@@ -5326,10 +5452,12 @@ export class Engine {
   }
 
   async groupPeople(packet, checks = []) {
-    const out = [];
-    for (const m of await wire.effectiveGroupMembers(packet.state, packet.withdrawals || [])) {
-      const p = await this.groupRead(checks, m.person === this.me?.person ? "kv" : "persons", m.person === this.me?.person ? "person" : m.person);
-      if (!p || p.state === "conflict" || !(p.hashes || []).includes(m.roster)) throw new Hold("proof_pending","Group member identity is not current here.");
+    const out=[],aliases=await this.logicalPersons();
+    for(const m of await this.logicalGroupMembers(packet)){
+      const old=await this.groupRead(checks,m.person===this.me?.person?"kv":"persons",m.person===this.me?.person?"person":m.person);
+      if(!old||old.state==="conflict"||!old.hashes?.includes(m.roster))throw new Hold("proof_pending","Group signed member identity is not kept here.");
+      const id=aliases.get(m.person)||m.person,p=id===old.person?old:await this.groupRead(checks,id===this.me?.person?"kv":"persons",id===this.me?.person?"person":id);
+      if(!p||!["self","pinned"].includes(p.state))throw new Hold("proof_pending","Group member identity is not current here.");
       out.push({...this.personView(p),admin:m.admin});
     }
     return out;
@@ -5370,13 +5498,13 @@ export class Engine {
       const packet = await this.groupCurrent(c.id), members = await this.groupPeople(packet);
       if (rec) {
         const dev = members.flatMap(m => m.devices || []).find(d => d.address === rec.to && d.fingerprint === rec.recipient_fp);
-        const self = wire.groupMember(packet.state,this.me.person);
+        const self = (await this.logicalGroupMember(packet,this.me.person));
         if (!dev || rec.group_admission && await wire.groupAdmissionHash(self.admission) !== rec.group_admission) throw Error("Group audience or admission changed; this saved copy is not sent.");
         const pin = await this.store.get("pins", rec.to);
         if (!pin || pin.pending || pin.fingerprint !== rec.recipient_fp) throw Error("Group recipient key changed; this saved copy is not sent.");
         if (rec.sub === "history") {
           const h=wire.parseHistory(rec.body), person=members.find(m=>m.devices?.some(d=>d.address===rec.to&&d.fingerprint===rec.recipient_fp));
-          const admission=wire.groupMember(packet.state,person.person).admission;
+          const admission=(await this.logicalGroupMember(packet,person.person)).admission;
           if(await wire.groupAdmissionHash(admission)!==rec.recipient_admission)throw Error("Saved group history recipient admission changed.");
           if(wire.conversationResources(h.topic_event)&&(!rec.group_history||person.person!==this.me.person))throw Error("Resources history is only a current own linked replica.");
           if(rec.group_history) {if(person.person!==this.me.person||h.group_admission!==await wire.groupAdmissionHash(admission))throw Error("Saved own group history source admission changed.");if(h.pid||h.ref)await this.groupParticipationHistoryCheck(c.id,h,{address:this.address,fingerprint:this.fp});}
@@ -5604,7 +5732,7 @@ export class Engine {
     if(!change||typeof change!=="object"||Array.isArray(change)||Object.keys(change).some(k=>!["conv","action","title","person"].includes(k))||!["rename","promote","demote","remove","leave"].includes(change.action))throw Error("Unknown group action.");
     if(change.action==="rename"?change.person:change.action==="leave"?change.person||change.title:change.title||!change.person)throw Error("Group action has unexpected target fields.");
     if(change.action==="leave")return this.leaveGroup(change.conv);
-    const checks=[],{packet,g}=await this.groupTurnEvidence(change.conv,checks), me=await this.groupRead(checks,"kv","person"), member=wire.groupMember(packet.state,me.person);
+    const checks=[],{packet,g}=await this.groupTurnEvidence(change.conv,checks), me=await this.groupRead(checks,"kv","person"), member=(await this.logicalGroupMember(packet,me.person));
     if(!member?.admin)throw Error("Current person administrator required.");
     const state=structuredClone(packet.state);state.members=await wire.effectiveGroupMembers(packet.state,packet.withdrawals||[]);
     if(change.action==="rename") {state.title=change.title;if(state.title===packet.state.title)return {queued:false};}
@@ -5623,7 +5751,7 @@ export class Engine {
   }
 
   async leaveGroup(conv) {
-    const checks=[],{packet,g,members}=await this.groupTurnEvidence(conv,checks), me=await this.groupRead(checks,"kv","person"), member=wire.groupMember(packet.state,me.person);
+    const checks=[],{packet,g,members}=await this.groupTurnEvidence(conv,checks), me=await this.groupRead(checks,"kv","person"), member=(await this.logicalGroupMember(packet,me.person));
     if(member.admin) {
       if(wire.groupAdmins(packet.state).length===1)throw Error("The last administrator must appoint a successor first.");
       return this.manageGroup({conv,action:"remove",person:me.person});
@@ -5633,7 +5761,7 @@ export class Engine {
     for(const current of members)for(const device of current.devices || []) {
       if(device.address===this.address)continue;
       await this.groupRead(checks,"pins",device.address);
-      copies.push(await this.groupCarrierCopy(packet.root,wire.SubGroupWithdrawal,{v:1,seq:packet.state.seq,hash},text,device,{group_withdrawal:text,recipient_admission:await wire.groupAdmissionHash(wire.groupMember(packet.state,current.person).admission)},true));
+      copies.push(await this.groupCarrierCopy(packet.root,wire.SubGroupWithdrawal,{v:1,seq:packet.state.seq,hash},text,device,{group_withdrawal:text,recipient_admission:await wire.groupAdmissionHash((await this.logicalGroupMember(packet,current.person)).admission)},true));
     }
     const next=structuredClone(g);if(!next.withdrawals.includes(text))next.withdrawals.push(text);
     const records=g.records.map(wire.parseGroupCommit),update={...packet,memberships:undefined,withdrawals:[...packet.withdrawals,withdrawal]};
@@ -5724,7 +5852,7 @@ export class Engine {
     const checks=[],k="group-invitation/out/"+id,row=await this.managedGroupInvitation(id,checks);
     if(row.status==="cancelled")return {cancelled:true};
     if(!["pending","accepted","stale","reissue"].includes(row.status))throw Error("Group invitation cannot be cancelled after publication or decline.");
-    const {packet}=await this.groupTurnEvidence(row.proposal.state.conv,checks),me=await this.groupRead(checks,"kv","person"),admin=wire.groupMember(packet.state,me.person);
+    const {packet}=await this.groupTurnEvidence(row.proposal.state.conv,checks),me=await this.groupRead(checks,"kv","person"),admin=(await this.logicalGroupMember(packet,me.person));
     if(!admin?.admin)throw Error("Current inviting administrator required.");
     const admitted=wire.groupMember(packet.state,row.proposal.target);if(admitted&&!await wire.groupWithdrawn(packet.state,admitted,packet.withdrawals||[]))throw Error("Group membership already published.");
     const p=row.proposal,result=await this.call("POST","/v1/groups/"+p.state.conv+"/cancel-invitation?creator="+p.root.creator.fingerprint,{v:1,realm:p.root.realm,conv:p.state.conv,bootstrap:p.root.creator.fingerprint,person:row.owner,invitation:id,seq:p.seq,prev:p.prev,head:await wire.groupStateHash(packet.state)});
@@ -5917,9 +6045,9 @@ export class Engine {
     let resourceTurn=null;
     if(resources) {
       const publisher=await this.groupRead(finalChecks,"kv","person"),rev=resources.rev+1;
-      if(!publisher||publisher.state!=="self"||!publisher.human_keys?.includes(this.fp)||!publisher.devices.some(d=>d.address===this.address&&d.fingerprint===this.fp)||!wire.groupMember(packet.state,publisher.person))throw Error("Only a current human member may publish resources.");
+      if(!publisher||publisher.state!=="self"||!publisher.human_keys?.includes(this.fp)||!publisher.devices.some(d=>d.address===this.address&&d.fingerprint===this.fp)||!(await this.logicalGroupMember(packet,publisher.person)))throw Error("Only a current human member may publish resources.");
       if(!Number.isSafeInteger(rev))throw Error("Resources revision limit reached.");
-      resourceTurn={conv,lid:wire.newID(),kind:"message",body:"",topic:"",topic_event:{action:"resources",resources:resources.resources||[],rev},origin:"ui",from:this.address,at:this.now(),group_admission:await wire.groupAdmissionHash(wire.groupMember(packet.state,publisher.person).admission)};
+      resourceTurn={conv,lid:wire.newID(),kind:"message",body:"",topic:"",topic_event:{action:"resources",resources:resources.resources||[],rev},origin:"ui",from:this.address,at:this.now(),group_admission:await wire.groupAdmissionHash((await this.logicalGroupMember(packet,publisher.person)).admission)};
     }
     for(const member of superseded?[]:await wire.effectiveGroupMembers(packet.state,finalPins)) {
       const p=finalResolved.people.get(member.person);
@@ -6011,28 +6139,30 @@ export class Engine {
 
   // logicalReply names a reply's parent by its logical id: every device of a
   // multi-device audience keeps the LID, never the replier's own copy id.
-  async logicalReply(conv, ref, required=true, what="Group") {
+  async logicalReply(conv, ref, required=true, what="Group", continuity=false) {
     if(!ref) return "";
     const source=[...(await this.store.all("inbox")),...(await this.store.all("outbox"))];
     const rows=source.filter(m=>!m.control&&!m.aside&&m.sub!=="excerpt"&&(m.id===ref||m.lid===ref));
     const lids=new Set(rows.map(m=>m.lid));
-    if(rows.some(m=>m.conv!==conv)||lids.size>1) throw Error(what+" reply names an ambiguous parent or another conversation.");
+    const allowed=new Set(what==="Conversation"&&continuity?(await this.continuityDMs(conv)).map(c=>c.id):[conv]);
+    if(rows.some(m=>!allowed.has(m.conv))||lids.size>1) throw Error(what+" reply names an ambiguous parent or another conversation.");
     if(!rows.length) {const selected=await this.excerptReplyParent(conv,ref,source);if(selected)return selected;if(!required&&wire.validID(ref))return ref;throw Error("That "+what.toLowerCase()+" parent is not kept here.");}
     return rows[0].lid || rows[0].id;
   }
 
   async sendGroupTurn(c,{id:sendID="",queued=false,beforeStore=null,body,topic="",topic_event=null,quote="",reply_to="",files=[],receiver=null,organization_review=null,contribution_review=null,organization_batch=null}) {
+    await this.syncContinuityGroups();
     checkFiles(files);
     if(wire.topicOrganization(topic_event)){wire.checkTopic({v:wire.Version2,kind:"message",topic,topic_event,attachments:files,receiver_route:receiver});await this.topicOrganizationAuthor(c);}
     const consentChecks=[], consentEvents=await this.convEvents(c.id,consentChecks), consentMembers=await this.dmMembers(c,consentEvents,consentChecks), human=wire.topicOrganization(topic_event)||wire.conversationResources(topic_event)?null:await this.roomPlan(c,consentEvents,consentMembers,topic);
     if(human&&!wire.topicOrganization(topic_event)&&!wire.conversationResources(topic_event))return this.sendHumanTurn(c,{id:sendID,queued,kind:"message",body,topic,topic_event,quote,reply_to,files,receiver,contribution_review,beforeStore},human);
-    const checks=consentChecks, {packet,members}=await this.groupTurnEvidence(c.id,checks), me=await this.groupRead(checks,"kv","person"), own=wire.groupMember(packet.state,me.person), reply=await this.groupReply(c.id,reply_to);
+    const checks=consentChecks, {packet,members}=await this.groupTurnEvidence(c.id,checks), me=await this.groupRead(checks,"kv","person"), own=(await this.logicalGroupMember(packet,me.person)), reply=await this.groupReply(c.id,reply_to);
     if(wire.conversationResources(topic_event)){wire.checkTopic({v:wire.Version2,kind:"message",body,topic,topic_event,quote,reply_to,attachments:files,receiver_route:receiver});await this.resourceMembers(c.id,checks);}
     quote=await this.groupReply(c.id,quote);
     const plain=[];for(const file of files)plain.push({name:wire.safeName(file.name),bytes:file.bytes instanceof Uint8Array?file.bytes:new Uint8Array(await file.arrayBuffer())});
     const copies=[], lid=this.localSendID(sendID), firstID=wire.newID(), at=this.now(), stamp=await wire.groupAdmissionHash(own.admission);
     const replyKeys=[];
-    if(receiver?.host) for(const member of members) if(member.person!==me.person) for(const d of member.devices || []) replyKeys.push({key:d.fingerprint,admission:await wire.groupAdmissionHash(wire.groupMember(packet.state,member.person).admission)});
+    if(receiver?.host) for(const member of members) if(member.person!==me.person) for(const d of member.devices || []) replyKeys.push({key:d.fingerprint,admission:await wire.groupAdmissionHash((await this.logicalGroupMember(packet,member.person)).admission)});
     replyKeys.sort((a,b)=>a.key.localeCompare(b.key));
     const prepared=await this.prepareReceiverRequest(receiver,{id:firstID,lid,conv:c.id,root:wire.rootJSON(packet.root),ts:Math.floor(at/1000),kind:"message",body,quote,reply_to:reply,origin:"ui",group_admission:stamp,group_replies:replyKeys},plain,checks);
     const skipped=[];
@@ -6112,7 +6242,7 @@ export class Engine {
     const key=pin.fingerprint+"/"+n.lid, hash=await wire.groupHistoryContentHash(n.conv,n), seen=await this.groupRead(checks,"lids",key);
     if(seen&&!seen.history) {if(seen.hash!==hash)throw new Hold("conflicting_duplicate","Conflicting group logical turn.");const ops=[];ops.checks=checks;return ops;}
     const ops=[];if(seen?.history)ops.push({s:"inbox",k:seen.id,v:undefined});
-    const currentMember=wire.groupMember(packet.state,this.me.person),stamp=currentMember?await wire.groupAdmissionHash(currentMember.admission):"";
+    const currentMember=(await this.logicalGroupMember(packet,this.me.person)),stamp=currentMember?await wire.groupAdmissionHash(currentMember.admission):"";
     ops.push({s:"inbox",k:env.id,v:{...base,v:wire.Version2,conv:n.conv,lid:n.lid,sub:"",origin:n.origin,fp:pin.fingerprint,own,replica:n.replica,state:"",group_admission:stamp,...(n.human?{pid:n.pid,human:n.human}:{})}},{s:"lids",k:key,v:{id:env.id,conv:n.conv,hash}});
     ops.push(...await this.roomStoredOps(n.conv,checks,n,pin.fingerprint,null,null,packet));
     ops.checks=checks;return ops;
@@ -6254,7 +6384,7 @@ export class Engine {
   async groupFileAuthorized(packet,members,address,fp,message,checks=[], admission = null) {
     const person=members.find(p=>p.devices?.some(d=>d.address===address&&d.fingerprint===fp));
     if(!person)throw Error("Group file requester is no longer a current device.");
-    const member=wire.groupMember(packet.state,person.person), stamp=await wire.groupAdmissionHash(member.admission);
+    const member=(await this.logicalGroupMember(packet,person.person)), stamp=await wire.groupAdmissionHash(member.admission);
     if(!message.group_admission || message.group_admission!==stamp)throw Error("Group file requester admission changed.");
     const exactSource=await this.groupFileSource(packet.state.conv,message,checks, admission);
     if(exactSource.pid) {if(person.person!==this.me.person||exactSource.group_admission!==stamp)throw Error("Group PID files require exact current own-linked history.");if(exactSource.group_history&&!await this.ownHistoryAuthority({address,fingerprint:fp},checks))throw Error("Historical witness file requires current own human devices and unchanged pins.");return;}
@@ -6269,7 +6399,7 @@ export class Engine {
     const checks=[],{packet,members}=await this.groupTurnEvidence(row.conv,checks), item=await this.groupRead(checks,"inbox",row.id), attachment=item?.attachments?.[index], selected=row.attachments?.[index];
     if(!attachment||item.deleted)throw Error("No selected file at this index.");
     if(!selected||attachment.name!==selected.name||attachment.size!==selected.size||attachment.sha256!==selected.sha256)throw Error("The selected file changed; select it again.");if(attachment.blob)return {note:"It is here already."};
-    const member=wire.groupMember(packet.state,this.me.person), message={v:1,type:"request",lid:item.lid,sha256:attachment.sha256,author:item.claimed_key,hash:await wire.groupHistoryContentHash(item.conv,item),index,name:attachment.name,size:attachment.size,group_admission:await wire.groupAdmissionHash(member.admission)};
+    const member=(await this.logicalGroupMember(packet,this.me.person)), message={v:1,type:"request",lid:item.lid,sha256:attachment.sha256,author:item.claimed_key,hash:await wire.groupHistoryContentHash(item.conv,item),index,name:attachment.name,size:attachment.size,group_admission:await wire.groupAdmissionHash(member.admission)};
     await this.groupFileAuthorized(packet,members,this.address,this.fp,message,checks);await this.groupFileSource(item.conv,message,checks);
     const device=members.flatMap(m=>m.devices||[]).find(d=>d.address===item.synced_from);if(!device)throw Error("History forwarder is no longer a current group device.");
     const pendingKey="group-file-request/"+item.id+"/"+attachment.sha256, prior=await this.groupRead(checks,"kv",pendingKey);
@@ -6341,7 +6471,7 @@ export class Engine {
     const envelope=await wire.seal({v:wire.Version2,id,lid,conv:packet.state.conv,root:wire.rootJSON(packet.root),from:this.address,to:device.address,ts:Math.floor(this.now()/1000),kind:"message",sub,body,replica:true,attachments:sealed.map(f=>f.attachment)},this.keys,key);
     const person=(await this.groupPeople(packet)).find(m=>m.devices?.some(d=>d.address===device.address&&d.fingerprint===device.fingerprint));
     if(!person)throw Error("Group data recipient is not current.");
-    const recipient_admission=await wire.groupAdmissionHash(wire.groupMember(packet.state,person.person).admission);
+    const recipient_admission=await wire.groupAdmissionHash((await this.logicalGroupMember(packet,person.person)).admission);
     return {id,lid,conv:packet.state.conv,to:device.address,recipient_fp:device.fingerprint,recipient_admission,required_cap:wire.CapGroup,kind:"message",sub,body,aside:true,replica:true,at:this.now(),envelope,state:why?"waiting":"queued",...(why?{detail:why}:{}),files:sealed.length?sealed.map(f=>({...f,uploaded:false})):undefined};
   }
 
@@ -6422,7 +6552,7 @@ export class Engine {
   }
 
   async groupHistoryOwnTransport(c,h,packet,checks, admission = null) {
-    const own=await this.groupRead(checks,"kv","person"),pin=await this.groupRead(checks,"pins",h.from),member=wire.groupMember(packet.state,own?.person);
+    const own=await this.groupRead(checks,"kv","person"),pin=await this.groupRead(checks,"pins",h.from),member=(await this.logicalGroupMember(packet,own?.person));
     if(!own||own.state!=="self"||!member||await wire.groupAdmissionHash(member.admission)!==h.group_admission||!own.known.some(d=>d.address===h.from&&d.fingerprint===h.from_key)||pin&&(pin.pending||pin.fingerprint!==h.from_key))return false;
     const human=async r=>r.person===own.person&&own.hashes.includes(await wire.rosterHash(r))&&await wire.rosterHas(r,h.from,h.from_key)&&await wire.rosterHuman(r,h.from_key);
     const group=await this.groupRead(checks,"kv","group/"+c.id);
@@ -6541,7 +6671,7 @@ export class Engine {
     if(wire.conversationResources(h.topic_event)&&sender.person!==this.me.person)throw new Hold("invalid","Resources history is only a current own linked replica.");
     if(wire.topicOrganization(h.topic_event))await this.receivedOrganizationAuthor(await this.groupRecord(n.conv),h.from,h.from_key,checks,{...h,conv:n.conv,v:wire.Version2},true);
     if(h.attachments.length>8 || (JSON.parse(n.body).attachments||[]).some(a=>!a.name || !Number.isSafeInteger(a.size) || a.size<0 || a.size>(100<<20) || !wire.validHash(a.sha256) || a.blob?.id || a.blob?.size || a.blob?.sha256))throw new Hold("invalid","Group history file is not an exact manifest.");
-    const ref={lid:h.lid,author:h.from_key,hash:await wire.groupHistoryContentHash(n.conv,h)}, self=wire.groupMember(packet.state,this.me.person);
+    const ref={lid:h.lid,author:h.from_key,hash:await wire.groupHistoryContentHash(n.conv,h)}, self=(await this.logicalGroupMember(packet,this.me.person));
     const selected=!wire.conversationResources(h.topic_event)&&wire.groupAllowsHistory(self.admission,ref);
     // Own linked history vouches for past attribution. An author's departure
     // cannot erase our old messages; the live sender/receiver gates stay above.
@@ -6669,7 +6799,7 @@ export class Engine {
   async groupTarget(state, withdrawals, checks) {
     const me = await this.groupRead(checks, "kv", "person");
     if (!me || me.state !== "self" || !me.devices.some((d) => d.address === this.address && d.fingerprint === this.fp)) throw new Hold("invalid", "group target is not a current own device");
-    const member = wire.groupMember(state, me.person);
+    const member = await this.logicalGroupMember({state,withdrawals},me.person);
     if (!member || await wire.groupWithdrawn(state, member, withdrawals)) throw new Hold("invalid", "group target admission is absent or withdrawn");
     return me;
   }
@@ -7399,7 +7529,7 @@ export class Engine {
     }
     if (n.reply_to) {
       const m = (await this.store.get("inbox", n.reply_to)) || (await this.store.get("outbox", n.reply_to));
-      if (m && m.conv !== n.conv) throw new Hold("invalid", "it replies to a message outside its conversation");
+      if (m && m.conv !== n.conv && !(n.kind==="message"&&!n.sub&&!n.pid&&!n.target&&!n.agent_id&&(await this.continuityDMs(m.conv,[...await this.store.all("convs"),conv])).some(c=>c.id===n.conv))) throw new Hold("invalid", "it replies to a message outside its conversation");
     }
     if (n.sub === wire.SubDriveSpace) await this.checkDriveSpace(n, sp, root); // the space record follows the one kept here, under its owner (sp: the sender's person, verified above)
     if (n.sub === "history") {
@@ -8502,6 +8632,7 @@ export class Engine {
         const p = ref.id === (this.me && this.me.person) ? this.me : await this.store.get("persons", ref.id);
         if (p && (ref.seq > p.seq || (ref.seq === p.seq && ref.hash !== p.hash))) this.refreshPerson(p).catch(() => {});
       }
+      this.continuityRetry=true;this.refreshContinuity().then(()=>{this.continuityRetry=false;}).catch(()=>{});
       this.fillListed().catch(() => {});
       await this.refreshTyping(false);
       this.changed();
@@ -8515,6 +8646,7 @@ export class Engine {
     } else if (event === "ping") {
       if (!acked) this.ackPing(data);
       if (this.recipientDiscoveryFailed?.size) this.reconcileRevokedRecipients().catch(() => {});
+      if(this.continuityRetry)this.refreshContinuity().then(()=>{this.continuityRetry=false;}).catch(()=>{});
       this.flushOutbox().catch(() => {});
       this.flushReceipts().catch(() => {});
       this.retryPendingReceives().catch(() => {});
@@ -8650,6 +8782,10 @@ export class Engine {
         const prof = await this.profile(m.address);
         const r = await wire.parseRoster(prof.person);
         if (r.person === ref.id && (await wire.rosterHash(r)) === ref.hash) {
+          if(r.email&&(await this.store.all("persons")).some(p=>p.person!==r.person&&p.state==="pinned"&&p.email===r.email)){
+            await this.pinChain(r.person);this.changed();continue;
+          }
+
           this.listed.set(ref.hash, { person: r.person, label: r.label, picture: r.picture || "",
             devices: await Promise.all(r.devices.map(async (d) => ({ address: d.address, fingerprint: await wire.fingerprint(d) }))) });
         }
@@ -8681,7 +8817,7 @@ export class Engine {
       const copies=[...g.map(r=>({id:r.id,to:r.to,state:r.state,detail:r.detail,...this.cancellationView(r),own:!!r.own||!!this.me?.devices?.some(d=>d.address===r.to),person:r.person||personOf(r.to),...(this.peerSuspended(r.to)?{suspended:true}:{})})),
         ...skipped.map(s=>({id:s.id,to:s.to,state:s.state,detail:s.detail,own:!!s.own||!!this.me?.devices?.some(d=>d.address===s.to),person:s.person||personOf(s.to)}))]; return { ...g[0], key:this.fp, send_group:g.some(r=>r.send_group_conflict)||new Set(g.map(r=>r.send_group).filter(Boolean)).size>1?"":g.find(r=>r.send_group)?.send_group||"", state: least.state, delivery:deliveryOf(copies),detail: least.detail, lagging: least.to, copies, delivery_cancelled:g.some(r=>r.delivery_cancelled)&&!g.some(r=>["custody","delivered"].includes(r.state)), handover_started:g.some(r=>r.delivery_cancelled&&r.state==="failed"&&r.handover_started!==false) ? true : least.handover_started };
     });
-    const received = inbox.filter((m) => m.conv === convId && !m.control && m.sub !== wire.SubRootSync && m.sub !== wire.SubDriveSpace && !this.erasedRow(m)).map((m) => {
+    const received = inbox.filter((m) => m.conv === convId && !m.local && !m.control && m.sub !== wire.SubRootSync && m.sub !== wire.SubDriveSpace && !this.erasedRow(m)).map((m) => {
       if (m.sub !== "excerpt") return m;
       const h = wire.parseHistory(m.body);
       return { ...m, ...h, id: m.id, at: h.ts * 1000, sub: "", fp: "", excerpt_pid: m.pid, claimed_key: h.from_key,
@@ -10007,6 +10143,8 @@ export class Engine {
   // exact reference; the keys decide who may do what; nothing is ever sent
   // as an older version instead.
   async messageControl(what, x) {
+    if(x.conv){const row=await this.store.get(x.dir==="out"?"outbox":"inbox",x.id);if(row?.conv&&row.conv!==x.conv&&(await this.continuityDMs(x.conv)).some(c=>c.id===row.conv))x={...x,conv:row.conv};}
+
     if (!wire.validID(x.id || "") || (x.dir !== "in" && x.dir !== "out")) throw new Error("A control names a message by its id and direction.");
     const conv = x.conv || "";
     // The exact stored message: received (inbox), sent here (outbox), or, shown
@@ -10166,7 +10304,8 @@ export class Engine {
   // One presentation operation shares its saved rows. Actions and admission
   // never use this view: their current reads and transaction checks stay intact.
   async readView(conv = null) {
-    return this.attentionSnapshot(await readChatView(this.store,{me:this.me,fingerprint:this.fp},conv));
+    const family=conv===null?null:await this.continuityDMs(conv);
+    return this.attentionSnapshot(await readChatView(this.store,{me:this.me,fingerprint:this.fp},family?.length?family.map(c=>c.id):conv));
   }
 
   async overview(listArchived = true) {
@@ -10178,9 +10317,9 @@ export class Engine {
   }
 
   async buildOverview(listArchived = true, capturedSeq = this.seq) {
-    const read=await this.readView(), persons=read.persons;
+    const read=await this.readView(), persons=read.persons,aliases=await this.logicalPersons();
     const notify=await this.notifyView(),mutes=new Set(notify?.mutes||[]),unreadRows=[],collectUnread=this.unreadIndex?.seq!==capturedSeq;
-    const people = persons.map((p) => this.personView(p));
+    const people = persons.filter(p=>(aliases.get(p.person)||p.person)===p.person).map((p) => this.personView(p));
     const listedSeen = new Set();
     for (const m of this.members.list) {
       const l = m.person && this.listed && this.listed.get(m.person.hash);
@@ -10196,9 +10335,12 @@ export class Engine {
     const dms = [], links = new Map(); // person → the agents their device runs in DMs here
     const privateReports = await this.ownNeedsYouReports(inbox, outbox);
     const needsYou = [], heldTurns = []; // what waits for this person (client.PageReview), by conversation
+    const seenContinuity=new Set();
     for (const c of read.convs) {
-      const peer = persons.find((p) => p.person === c.peer);
-      let msgs = (await this.convMessages(c.id, inbox, outbox, read));
+      const family=await this.continuityDMs(c.id,read.convs,aliases),view=family[0]?.id||c.id;
+      if(seenContinuity.has(view))continue;seenContinuity.add(view);
+      const peer = persons.find((p) => p.person === (aliases.get(c.peer)||c.peer));
+      let msgs = (await this.messagingMessages(c.id, inbox, outbox, read));
       const participations = await this.participationsOf(c, read), member = !!wire.rootMember(wire.parseRoot(c.root), this.me?.person);
       const originals = member ? [] : [...(await this.dmMembers(c, null, [], null, null, read)).values()];
       if (!member) msgs = msgs.filter(m => m.sub !== "event" || participations.some(p => p.pid === m.pid && (p.role !== "human" || p.host?.address === this.address && p.host.fingerprint === this.fp || p.decision && ["active", "dismissed"].includes(p.state))));
@@ -10226,7 +10368,7 @@ export class Engine {
         : !m.body && (m.attachments || []).length ? "📎 " + m.attachments.map((a) => wire.safeName(a.name)).join(", ") // files only: their names
           : bodyPreview(m.body));
       const last = msgs.length ? this.lastEvent(msgs.at(-1), [peer, ...originals], pinned) : undefined;
-      dms.push({ id: c.id, peer: this.personView(peer), ...(member ? {} : { members: originals.map(p => this.personView(p)) }), role: member ? "member" : participations.some(p => p.role === "human" && p.host?.address === this.address && p.host.fingerprint === this.fp) ? "human_guest" : "visitor", created: iso(c.created * 1000), mine: c.creator === this.address, count: msgs.length,
+      dms.push({ id: view, peer: this.personView(peer), ...(member ? {} : { members: originals.map(p => this.personView(p)) }), role: member ? "member" : participations.some(p => p.role === "human" && p.host?.address === this.address && p.host.fingerprint === this.fp) ? "human_guest" : "visitor", created: iso(c.created * 1000), mine: c.creator === this.address, count: msgs.length,
         title: msgs[0] ? line(msgs[0]) : "", last: msgs.length ? wire.topicOrganization(msgs.at(-1).topic_event)?await this.topicOrganizationNotice(c.id,msgs.at(-1).topic):line(msgs.at(-1)) : "",
         ...(msgs.length ? {last_id:previewMessageID(msgs,msgs.at(-1))} : {}),
         last_at: iso(msgs.length ? msgs[msgs.length - 1].at : c.created * 1000),
@@ -10340,13 +10482,16 @@ export class Engine {
   async dm(id, read = null) {
     read ||= await this.readView(id);
     if(await this.groupRecord(id))return this.groupThread(id,read,true);
+    const family=await this.continuityDMs(id,read.convs),aliases=await this.logicalPersons();
+    id=family[0]?.id||id;
     const c = read.convs.find(c=>c.id===id);
     if (!c) throw new Error("No conversation with that id.");
-    const peer = read.persons.find(p=>p.person===c.peer);
+    const peer = read.persons.find(p=>p.person===(aliases.get(c.peer)||c.peer));
     const inbox = read.inbox, outbox = read.outbox;
     const privateReports = await this.ownNeedsYouReports(inbox, outbox);
-    let msgs = (await this.convMessages(id, inbox, outbox, read));
-    const ctls = [...inbox.filter((r) => r.control && r.conv === id), ...outbox.filter((r) => r.control && r.conv === id).map((r) => ({ ...r, dir: "out" }))];
+    let msgs = (await this.messagingMessages(id, inbox, outbox, read));
+    const familyIDs=new Set(family.map(c=>c.id));
+    const ctls = [...inbox.filter((r) => r.control && familyIDs.has(r.conv)), ...outbox.filter((r) => r.control && familyIDs.has(r.conv)).map((r) => ({ ...r, dir: "out" }))];
     const myLabel = this.me && this.me.label ? this.me.label : "You";
     const personLabel = (pid) => (pid === (this.me && this.me.person) ? myLabel : peer && pid === peer.person ? peer.label : "someone");
     const controlsOf = (m, here) => {
@@ -10390,8 +10535,8 @@ export class Engine {
       messages: await Promise.all(msgs.map(async (m) => {
         const here = !m.fp && !m.excerpt_pid, out = here || !!m.own; // claimed excerpts have no verified original author key
         const state = m.state === "conv_held" && !this.heldOpen(m, msgs) ? "manual" : m.state; // answered here (client.turnClosesHeld)
-        const event = m.sub === "event" ? this.eventText(m.body, peer, null, humans.get(m.pid) || false, { originals, member }) : "";
-        const ev = event ? this.eventFields(m.body, [peer, ...originals], pinned) : null;
+        const event = m.sub === "continuity" ? m.body : m.sub === "event" ? this.eventText(m.body, peer, null, humans.get(m.pid) || false, { originals, member }) : "";
+        const ev = m.sub === "event" ? this.eventFields(m.body, [peer, ...originals], pinned) : null;
         return { id: m.id, lid: m.lid, dir: out ? "out" : "in", from: here ? this.address : m.from, kind: m.kind, status: m.status || "", actions: await this.proposalActions(m), proposal:await this.proposalProvenance(m, read), body: event ? "" : m.body, reply_to: shownReply(m.reply_to),quote:shownReply(m.quote),sent_at:sentAt(m),delivery:m.delivery||"",
           ...(ev && ev.type ? { event_type: ev.type, event_by: ev.by } : {}),
           ...(m.agent_id ? { agent_id: m.agent_id } : {}), ...(m.target ? { target: m.target } : {}),
@@ -11629,9 +11774,12 @@ export class Engine {
     const root = group ? packet.root : wire.parseRoot(c.root);
     const out = new Map();
     if (group) { out.group=packet;out.epochs=new Map();out.groupInvites=new Set();out.roomEvents=new Set();out.roomAuthors=new Map();out.historyTaskEpochs=historyTaskEpochs||this.historyTaskEpochs?.get(currentPacket); }
-    for (const member of group ? await wire.effectiveGroupMembers(packet.state,packet.withdrawals) : root.members) {
-      const p = group ? await this.groupRead(checks, member.person === this.me?.person ? "kv" : "persons", member.person === this.me?.person ? "person" : member.person) : member.person === this.me?.person ? this.me : await this.store.get("persons", member.person);
+    const aliases=group?await this.logicalPersons():null;
+    for (const member of group ? await this.logicalGroupMembers(packet) : root.members) {
+      let p = group ? await this.groupRead(checks, member.person === this.me?.person ? "kv" : "persons", member.person === this.me?.person ? "person" : member.person) : member.person === this.me?.person ? this.me : await this.store.get("persons", member.person);
       if (p && p.state !== "conflict" && p.hashes.includes(group ? member.roster : wire.rootMember(root, p.person))) {
+        if(group){const id=aliases.get(p.person)||p.person;if(id!==p.person)p=await this.groupRead(checks,id===this.me?.person?"kv":"persons",id===this.me?.person?"person":id);}
+        if(!p||!["pinned","self"].includes(p.state))continue;
         out.set(p.person,p);
         if (group) { const epoch=await wire.groupAdmissionHash(member.admission);for(const d of p.devices)out.epochs.set(d.fingerprint,epoch); }
       }

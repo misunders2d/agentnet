@@ -406,9 +406,17 @@ func (a *Agent) acceptGroupContextFrom(ctx context.Context, packet GroupContext,
 	if !ok {
 		return ErrGroupContextPending
 	}
-	if _, ok = packet.State.Member(self.roster.Person); !ok {
+	for _, m := range packet.State.Members {
+		if _, err = a.refreshPerson(ctx, m.Person, false); err != nil {
+			return err
+		}
+	}
+	if _, present, e := logicalGroupMember(a.store.db, packet, self.roster.Person); e != nil {
+		return e
+	} else if !present {
 		return errors.New("group: forwarded context does not name this member")
 	}
+
 	if _, err = a.refreshPerson(ctx, self.roster.Person, false); err != nil {
 		return err
 	}
@@ -596,7 +604,11 @@ func (a *Agent) forwardedGroupTarget(tx *sql.Tx, packet GroupContext, withdrawal
 	if !ok || !self.has(a.Address, a.Self().Fingerprint()) {
 		return errors.New("group: forwarded target is not a current own device")
 	}
-	member, ok := packet.State.Member(self.roster.Person)
+	packet.Withdrawals = withdrawals
+	member, ok, err := logicalGroupMember(tx, packet, self.roster.Person)
+	if err != nil {
+		return err
+	}
 	if !ok || packet.State.Withdrawn(member, withdrawals) {
 		return errors.New("group: forwarded target is not an effective current member")
 	}

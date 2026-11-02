@@ -992,7 +992,16 @@ Owner: "he should be able to just reconnect".
 - The same recovery covers workspace admins.
 - Owner, November 2 evening, after v0.10.6 left Bogdan as two people: "Merge into one". Continuity of the same person moves from Deferred into the next release, as in Telegram and Slack. After admin approval and a fresh Google sign-in, everyone sees one person: old chats continue with a "signed in again" notice and groups come back. Bogdan's existing split, from the removal and re-allowing before v0.10.6, is merged too. A merge without a release is impossible: only a key of the earlier person can vouch for a new device, and the Hub cannot forge one. The design comes to the owner before the build.
 
-**Next release scope:**
+**Current implementation scope (Option A, November 2 evening):**
+
+Same verified email plus admin Remove/re-allow already supplies approval for
+Bohdan’s split. Build client continuity from existing pinned chains and exact
+revocations; no new Hub records, endpoints or tables. Phase 1 request/approval
+code is parked, pushed and unmerged on `t3/mel736-continuity` at `fa134267`.
+See [final design](plans/MEL736_CONTINUITY.md). Items 1–3 below remain the
+approved future recovery UX; they are not part of Option A.
+
+**Future recovery UX (parked):**
 
 1. **Recovery request.** The Google sign-in and link-pending screens offer "I no longer have my other devices".
    - A fresh Google token (same subject and email) plus the new device key forms the request.
@@ -1012,14 +1021,25 @@ Owner: "he should be able to just reconnect".
    - A still-active earlier person keeps freezing the new claim.
    - Owner, November 2: ship this item first, alone, as v0.10.6. The key-change notice ships with items 1–3; until then the new person shows as a separate person under the same name, with its email.
 
+**Option A build status:** Go client, CLI and browser engine derive one logical
+person and DM view from refreshed verified chains plus complete exact
+revocations. Ordinary replies route through a valid current-person root;
+current group messaging resolves the same equivalence and reuses existing
+context carriers. Signed history and native grants remain exact. Durable
+local “signed in again” notices use existing conversation storage. Validation
+and release qualification are recorded in HANDOFF and INTERACTION_COVERAGE.
+
 **Deferred:**
 - a waiting period and notices to old devices;
-- continuity of the same person;
-- automatic group re-membership.
+- recovery request/admin approval/Start again UX (items 1–3);
+- any group slot replacement or new group governance signature protocol.
 
 **Gates.** Before the build, inspect the Telegram and Slack counterparts' code; so far they are compared only from their documentation. Also required:
 - focused regressions for this exact case;
 - rendered interactions under 1000 ms;
 - the mixed-version and skins gates.
 
-Read-only reviews by Codex and Antigravity (November 2) are the design input. Nothing is implemented yet.
+Read-only reviews and the November 2 Option A debate are design input. The
+Option A feature branch is implemented for review; it is not merged, released
+or deployed. The earlier statement that continuity was deferred is superseded
+by the owner’s “Merge into one” correction and this scoped build.
