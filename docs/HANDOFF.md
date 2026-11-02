@@ -1,5 +1,44 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+## v0.10.6 published — November 2 (Hub deploy pending)
+
+[App v0.10.6](https://github.com/misunders2d/agentnet/releases/tag/v0.10.6) is
+public and Latest at 17:24:24 UTC from
+`cfa66090aa2bf81fb47810808cb7439e78142db8`. It contains only the MEL-736
+peer fix (owner: ship it alone first): a person who lost every device and
+rejoined with Google after an admin removed and re-allowed their email is
+pinned as a new person, no longer frozen by peers as an email conflict, once
+the Hub reports the old person's devices revoked. Messages held as
+`identity_conflict` are released for retry. Go client and browser engine.
+Recovery request, admin approval and Start again (DECISIONS, November 2)
+come in a later release.
+
+All twelve payloads plus SHA256SUMS verified in the draft: sizes, names (as
+v0.10.5) and checksums match, and linux-amd64 reports v0.10.6 at that
+revision with a clean tree. Public assets fetched unauthenticated match the
+identical SHA256SUMS.
+
+Gates, all on that commit before the tag:
+
+- Push CI 41466686316 green on attempt 3 (Linux native ran `TestMixedVersion`
+  against v0.10.5 with `AGENTNET_REQUIRE_COMPAT=1`). Flakes passed on rerun:
+  native Windows `TestAdminRecommendationNeverSuspends` (404 unknown stream),
+  Windows client-5 `TestP6SecurityStaleMembershipCarrier` timeout, native
+  macOS `TestDeviceDecisionsRendered` feedback bound (500 ms); the first
+  macOS rerun was cancelled for lack of a runner.
+- Platform run 41486510510 (desktop ×3, Android) green.
+- Skins gate at the exact pin, with network: 326 checks, zero skipped, every
+  suite of all five published skins, qa-orbit and qa-overlay pass; Classic
+  and Zoom motion remain the explicit inapplicable groups.
+- Release build 41488499376 green.
+
+[Gallery v2026.11.02.2](https://github.com/misunders2d/agentnet-skins/releases/tag/v2026.11.02.2)
+is Latest from `9b771cb`: only the agentnet version fields and derived hashes
+changed, versions unchanged. All 153 files under `published/` fetched
+unauthenticated at the tag match the commit.
+
+The Hub still runs v0.10.5; its v0.10.6 deploy waits for owner approval.
+
 ## v0.10.5 published and Hub deployed — November 2
 
 [App v0.10.5](https://github.com/misunders2d/agentnet/releases/tag/v0.10.5) is
