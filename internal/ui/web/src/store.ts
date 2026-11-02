@@ -345,10 +345,12 @@ export class Store {
       const view = views[id];
       if (!view) continue;
       const kind = reads.values().next().value!.kind;
-      let cleared = 0;
+      let cleared = 0, waiting = 0;
       const messages = (view.messages || []).map(m => {
-        if (!m.unread || !reads.has(this.readIdentity(m))) return m;
+        const record = m.unread && reads.get(this.readIdentity(m));
+        if (!record) return m;
         cleared++;
+        if (!record.saved) waiting++;
         return { ...m, unread: false };
       });
       if (!cleared) continue;
@@ -365,11 +367,11 @@ export class Store {
       views[id] = share(view, projected);
       const summary = kind === "dm" ? overview?.dms?.find(d => d.id === id) : overview?.threads?.find(t => t.id === id) || overview?.topics?.find(t => t.latest.id === id)?.latest;
       const group = kind === "thread" ? this.archivedRead(view) : undefined;
-      // A newer overview may already include this commit or newer arrivals the
-      // view lacks: subtract only these exact rows, never below the view's
-      // remainder and never above the overview. Sequence alone proves neither.
+      // A newer overview may include newer arrivals the view lacks, and after
+      // acceptance possibly this commit: subtract only exact rows still
+      // awaiting the write, bounded by the view's remainder and the overview.
       const newer = (overview?.seq || 0) > (view.seq || 0);
-      const project = (base: number, left: number) => newer ? Math.min(base, Math.max(left, base - cleared)) : left;
+      const project = (base: number, left: number) => newer ? Math.min(base, Math.max(left, base - waiting)) : left;
       const left = messages.filter(m => m.unread).length;
       const latest = group && overview?.topics?.find(t => JSON.stringify([t.peer, directChatKey(t.latest)]) === group.group);
       if (overview && (summary || group)) {
