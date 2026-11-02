@@ -101,6 +101,32 @@ func (s *store) logicalPerson(id string) (string, error) {
 // refreshContinuity never runs a worker or releases execution claims. All old
 // heads are refreshed before their devices are checked, including a stale pin.
 func (a *Agent) refreshContinuity(ctx context.Context) error {
+	// Older clients may have frozen the new identity before learning that
+	// the email holder's devices were revoked. Retry those claims before
+	// counting pinned identities; step conflicts must remain frozen.
+	claims, e := a.store.db.Query(`SELECT person FROM persons WHERE state=? AND conflict IS NULL AND coalesce(json_extract(record,'$.email'),'')!='' ORDER BY person`, personConflict)
+	if e != nil {
+		return e
+	}
+	var held []string
+	for claims.Next() {
+		var id string
+		if e = claims.Scan(&id); e != nil {
+			claims.Close()
+			return e
+		}
+		held = append(held, id)
+	}
+	e = claims.Err()
+	claims.Close()
+	if e != nil {
+		return e
+	}
+	for _, id := range held {
+		if _, e = a.refreshPerson(ctx, id, false); e != nil && !errors.Is(e, errPersonConflict) {
+			return e
+		}
+	}
 	rows, e := a.store.db.Query(`SELECT person,record FROM persons WHERE state IN (?,?) AND coalesce(json_extract(record,'$.email'),'')!=''`, personPinned, personSelf)
 	if e != nil {
 		return e

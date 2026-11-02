@@ -485,6 +485,98 @@ func TestMEL736OneStaleRosterAndDirectoryRetry(t *testing.T) {
 	}
 }
 
+func TestMEL736OneStartupEmailClaimRecovery(t *testing.T) {
+	for _, removed := range []bool{false, true} {
+		name := "live-holder"
+		if removed {
+			name = "revoked-holder-unknown-locally"
+		}
+		t.Run(name, func(t *testing.T) {
+			w := newMEL736OneWorld(t)
+			oldDevice := mel736OneJoin(t, w, "lost")
+			peer := w.admin // No daemon/discovery: exercise startup work directly.
+			oldRecord, ok, e := oldDevice.store.selfPerson(oldDevice.Address)
+			if e != nil || !ok {
+				t.Fatal("old roster", e)
+			}
+			old := oldRecord.roster
+			if _, e := peer.refreshPerson(w.ctx, old.Person, false); e != nil {
+				t.Fatal(e)
+			}
+			var next protocol.PersonRoster
+			var raws [][]byte
+			if removed {
+				if e := peer.ChangeGoogleAccess(w.ctx, protocol.GoogleAccessChange{Email: old.Email, Remove: true}); e != nil {
+					t.Fatal(e)
+				}
+				if e := peer.ChangeGoogleAccess(w.ctx, protocol.GoogleAccessChange{Email: old.Email}); e != nil {
+					t.Fatal(e)
+				}
+				fresh := mel736OneJoin(t, w, "new")
+				person, _, _ := fresh.Person()
+				raws, e = peer.fetchChain(w.ctx, person.Person, -1)
+				if e != nil {
+					t.Fatal(e)
+				}
+				next, e = protocol.ParsePersonRoster(raws[len(raws)-1])
+				if e != nil {
+					t.Fatal(e)
+				}
+			} else {
+				// A same-email claim cannot displace the live Hub identity.
+				k, e := identity.Generate()
+				if e != nil {
+					t.Fatal(e)
+				}
+				next = protocol.PersonRoster{Person: protocol.NewID(), Label: old.Label, Email: old.Email, Devices: []identity.Public{k.Public("claim/new")}}
+				next.Sign(k.Sign)
+				raw, _ := json.Marshal(next)
+				raws = [][]byte{raw}
+			}
+			if known, e := revokedDeviceKnown(peer.store.db, oldDevice.Address, oldDevice.Self().Fingerprint()); e != nil || known {
+				t.Fatal("fixture already knows revocation", known, e)
+			}
+			if _, e := peer.store.pinChain(next.Person, raws, peer.Self(), false); !errors.Is(e, errPersonConflict) {
+				t.Fatal("fixture did not store email claim hold", e)
+			}
+			if claim, e := peer.store.emailClaimOnly(next.Person); e != nil || !claim {
+				t.Fatal("fixture is not conflict with NULL conflicting step", claim, e)
+			}
+			me := protocol.NewID()
+			for _, p := range []protocol.PersonRoster{old, next} {
+				r := protocol.ConvRoot{V: 1, Kind: protocol.ConvKindDM, Created: 1, Nonce: protocol.NewID(), Members: []protocol.ConvMember{{Person: me, Roster: old.Hash()}, {Person: p.Person, Roster: p.Hash()}}}
+				raw, _ := json.Marshal(r)
+				if e := peer.store.addConversation(r, raw, p.Person); e != nil {
+					t.Fatal(e)
+				}
+			}
+			for range 2 { // Startup/repeated work needs no new roster push.
+				if e := peer.refreshContinuity(w.ctx); e != nil {
+					t.Fatal(e)
+				}
+				known, e := revokedDeviceKnown(peer.store.db, oldDevice.Address, oldDevice.Self().Fingerprint())
+				if e != nil || known != removed {
+					t.Fatal("revocation evidence", known, e)
+				}
+				wantPerson, wantState, wantRows := old.Person, personConflict, 2
+				if removed {
+					wantPerson, wantState, wantRows = next.Person, personPinned, 1
+				}
+				p, ok, e := peer.store.personByID(next.Person)
+				if e != nil || !ok || p.info.State != wantState {
+					t.Fatal("claim state", p.info, e)
+				}
+				if to, e := peer.store.logicalPerson(old.Person); e != nil || to != wantPerson {
+					t.Fatal("logical person", to, e)
+				}
+				if rows, e := peer.MessagingConversations(); e != nil || len(rows) != wantRows {
+					t.Fatal("DM rows", rows, e)
+				}
+			}
+		})
+	}
+}
+
 func TestMEL736OneGroupContinuesAfterRecovery(t *testing.T) {
 	w := newMEL736OneWorld(t)
 	oldDevice := mel736OneJoin(t, w, "lost")
