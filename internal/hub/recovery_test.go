@@ -157,6 +157,9 @@ func TestMEL736InvalidRequests(t *testing.T) {
 			case "consent":
 				s.Sig[0] ^= 1
 			}
+			if field != "consent" {
+				s.Sign(f.key.Sign)
+			}
 			if _, e := f.h.store.requestRecovery(f.h.realmID, f.new.Devices[0].Address, f.claims, f.req); e == nil {
 				t.Fatal("accepted")
 			}

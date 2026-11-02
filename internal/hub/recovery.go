@@ -277,7 +277,7 @@ func (h *Hub) handleRecoveryRequest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, "", "recovery refused")
 		return
 	}
-	h.membersChanged()
+	h.lookAgain() // Pending requests also need a push when membership is unchanged.
 	writeJSON(w, 201, v)
 }
 func (h *Hub) handleRecoveryList(w http.ResponseWriter, r *http.Request) {
@@ -342,7 +342,6 @@ func (h *Hub) handleRecoveryDecision(w http.ResponseWriter, r *http.Request) {
 		h.streams.disconnect(a)
 		h.presence.drop(a)
 	}
-	h.membersChanged()
 	h.lookAgain()
 	h.waiters.notifyAll()
 	writeJSON(w, 200, v)
