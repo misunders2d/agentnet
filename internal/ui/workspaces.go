@@ -114,10 +114,20 @@ type workspaceInvalidation struct {
 	ID     string `json:"id"`
 	Handle string `json:"handle"`
 	Seq    uint64 `json:"seq"`
+	// AlertTotal is the workspace's running unread total, pushed the way
+	// TDLib pushes updateUnreadMessageCount; absent until counted (MEL-731).
+	AlertTotal *int `json:"alert_total,omitempty"`
+}
+
+// unreadWatcher keeps a running alert total while watched (liveunreadcount.go).
+type unreadWatcher interface {
+	WatchUnread() (release func())
+	UnreadTotal() (total int, known bool, changed <-chan struct{})
 }
 
 // One local connection selects directly over copied provider and membership
-// channels. It carries invalidations only; totals remain provider-owned.
+// channels. It carries invalidations and each workspace's running unread
+// total; the app's badge reads that number and never builds a view for it.
 func (s *Server) workspaceEvents(w http.ResponseWriter, r *http.Request, set *WorkspaceProviders) {
 	if origin := r.Header.Get("Origin"); origin != "" && origin != "http://"+s.host {
 		http.Error(w, "cross-origin request refused", http.StatusForbidden)
@@ -145,10 +155,18 @@ func (s *Server) workspaceEvents(w http.ResponseWriter, r *http.Request, set *Wo
 	first := true
 	var previousRev uint64
 	last := map[string]uint64{}
+	lastTotal := map[string]int{} // -1: not counted yet
+	watching := map[string]func(){}
+	defer func() {
+		for _, release := range watching {
+			release()
+		}
+	}()
 	for {
 		rev, wake, entries := set.snapshot()
 		bindings := make([]workspaceInvalidation, 0, len(entries))
 		cases := []reflect.SelectCase{{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(r.Context().Done())}, {Dir: reflect.SelectRecv, Chan: reflect.ValueOf(s.restarting)}, {Dir: reflect.SelectRecv, Chan: reflect.ValueOf(wake)}}
+		current := map[string]bool{}
 		for _, entry := range entries {
 			seq, next := entry.provider.Changed()
 			if detailed, ok := entry.provider.(interface {
@@ -158,8 +176,33 @@ func (s *Server) workspaceEvents(w http.ResponseWriter, r *http.Request, set *Wo
 				view, next = detailed.ViewChanges()
 				seq = view.Content
 			}
-			bindings = append(bindings, workspaceInvalidation{entry.ID, entry.Handle, seq})
+			binding := workspaceInvalidation{ID: entry.ID, Handle: entry.Handle, Seq: seq}
+			if u, ok := entry.provider.(unreadWatcher); ok {
+				key := entry.ID + ":" + entry.Handle
+				current[key] = true
+				if watching[key] == nil {
+					watching[key] = u.WatchUnread()
+				}
+				total, known, changed := u.UnreadTotal()
+				if known {
+					binding.AlertTotal = &total
+				}
+				cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(changed)})
+			}
+			bindings = append(bindings, binding)
 			cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(next)})
+		}
+		for key, release := range watching {
+			if !current[key] {
+				release()
+				delete(watching, key)
+			}
+		}
+		counted := func(b workspaceInvalidation) int {
+			if b.AlertTotal == nil {
+				return -1
+			}
+			return *b.AlertTotal
 		}
 		// Recheck the snapshot and copy pending events under the map lock,
 		// then release it before any writer I/O. A removal after this check
@@ -182,20 +225,22 @@ func (s *Server) workspaceEvents(w http.ResponseWriter, r *http.Request, set *Wo
 				Rev      uint64                  `json:"rev"`
 				Bindings []workspaceInvalidation `json:"bindings"`
 			}{rev, bindings}})
-			last = map[string]uint64{}
+			last, lastTotal = map[string]uint64{}, map[string]int{}
 			for _, binding := range bindings {
 				last[binding.ID+":"+binding.Handle] = binding.Seq
+				lastTotal[binding.ID+":"+binding.Handle] = counted(binding)
 			}
 			first, previousRev = false, rev
 		} else {
 			for _, binding := range bindings {
 				key := binding.ID + ":" + binding.Handle
-				if binding.Seq > last[key] {
+				if binding.Seq > last[key] || counted(binding) != lastTotal[key] {
 					pending = append(pending, struct {
 						name string
 						data any
 					}{"change", binding})
-					last[key] = binding.Seq
+					last[key] = max(last[key], binding.Seq)
+					lastTotal[key] = counted(binding)
 				}
 			}
 		}

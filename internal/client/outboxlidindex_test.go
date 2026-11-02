@@ -2,6 +2,7 @@ package client
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -17,7 +18,7 @@ func TestOutboxLogicalIDLookupsSearchIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.db.Close()
-	if schema[len(schema)-2] != outboxLogicalIDSchema {
+	if i := slices.Index(schema, outboxLogicalIDSchema); i < 0 || schema[i+1] != outboxConvSubSchema {
 		t.Fatal("outbox_lid must be an appended schema step")
 	}
 	for name, q := range map[string]string{
@@ -62,7 +63,7 @@ func TestConversationViewSkipsCopiesInIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.db.Close()
-	if schema[len(schema)-1] != outboxConvSubSchema {
+	if i := slices.Index(schema, outboxConvSubSchema); i < 1 || schema[i-1] != outboxLogicalIDSchema {
 		t.Fatal("outbox_conv_sub must be an appended schema step")
 	}
 	q := `SELECT o.id FROM outbox o LEFT JOIN inbox j ON j.id = o.id AND j.local = 1 WHERE o.conv = ? AND coalesce(o.sub, '') NOT IN ('read-sync', 'root-sync', 'history', 'file', 'drive-space', 'group-proof', 'group-context','group-invite','group-consent','group-withdrawal') AND o.ref_id IS NULL AND NOT ` + erasedOut

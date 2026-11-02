@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
@@ -391,6 +392,137 @@ func TestWorkspaceEventsAuthenticatedContentAndMembership(t *testing.T) {
 	}
 	cancel()
 }
+
+// workspaceCountProvider keeps a running unread total the way Live does.
+type workspaceCountProvider struct {
+	*workspacePushProvider
+	count    sync.Mutex
+	watchers int
+	total    int
+	known    bool
+	changed  chan struct{}
+}
+
+func (p *workspaceCountProvider) WatchUnread() func() {
+	p.count.Lock()
+	p.watchers++
+	p.count.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			p.count.Lock()
+			p.watchers--
+			p.count.Unlock()
+		})
+	}
+}
+func (p *workspaceCountProvider) UnreadTotal() (int, bool, <-chan struct{}) {
+	p.count.Lock()
+	defer p.count.Unlock()
+	return p.total, p.known, p.changed
+}
+func (p *workspaceCountProvider) set(total int) {
+	p.count.Lock()
+	defer p.count.Unlock()
+	p.total, p.known = total, true
+	close(p.changed)
+	p.changed = make(chan struct{})
+}
+func (p *workspaceCountProvider) watched(t *testing.T, want int) {
+	t.Helper()
+	for deadline := time.Now().Add(3 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		p.count.Lock()
+		got := p.watchers
+		p.count.Unlock()
+		if got == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("watchers=%d want %d", got, want)
+		}
+	}
+}
+
+// The app badge reads each workspace's running total from this stream and
+// never builds a view for it (MEL-731): a moved total is pushed even without
+// new content, and nothing is sent when neither moved.
+func TestWorkspaceEventsCarryRunningUnreadTotal(t *testing.T) {
+	p := &workspaceCountProvider{workspacePushProvider: &workspacePushProvider{Provider: NewFixture(time.Now), wake: make(chan struct{}), observed: make(chan uint64, 20)}, changed: make(chan struct{})}
+	set := NewWorkspaceProviders()
+	bound, err := set.Bind(client.Workspace{ID: "default", State: "enrolled"}, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := New(p, "127.0.0.1:12345", testToken)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second) // a missing event ends the stream
+	defer cancel()
+	reader, writer := io.Pipe()
+	defer reader.Close()
+	req := httptest.NewRequest("GET", "http://127.0.0.1:12345/api/workspaces/events", nil).WithContext(ctx)
+	req.Header.Set("Cookie", "agentnet_ui="+testToken)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer writer.Close()
+		server.WorkspaceHandler(set).ServeHTTP(workspacePipeWriter{httptest.NewRecorder(), writer}, req)
+	}()
+	scanner := bufio.NewScanner(reader)
+	next := func() (string, map[string]any) {
+		t.Helper()
+		name := ""
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.HasPrefix(line, "event: ") {
+				name = strings.TrimPrefix(line, "event: ")
+			}
+			if strings.HasPrefix(line, "data: ") {
+				var data map[string]any
+				if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &data); err != nil {
+					t.Fatal(err)
+				}
+				return name, data
+			}
+		}
+		t.Fatal("missing stream event", scanner.Err())
+		return "", nil
+	}
+	name, data := next()
+	if binding := data["bindings"].([]any)[0].(map[string]any); name != "workspaces" || binding["alert_total"] != nil {
+		t.Fatal("uncounted total was sent", name, data)
+	}
+	p.watched(t, 1)
+	p.set(3)
+	if name, data = next(); name != "change" || data["alert_total"] != float64(3) || data["seq"] != float64(0) {
+		t.Fatal("counted total not pushed", name, data)
+	}
+	p.bump("typing")
+	p.seen(t, 1)
+	p.set(3)
+	p.bump("")
+	if name, data = next(); name != "change" || data["seq"] != float64(2) || data["alert_total"] != float64(3) {
+		t.Fatal("an unmoved total or typing became a change", name, data)
+	}
+	p.set(0)
+	if name, data = next(); name != "change" || data["seq"] != float64(2) || data["alert_total"] != float64(0) || data["handle"] != bound.Handle {
+		t.Fatal("cleared total not pushed", name, data)
+	}
+	set.Remove(bound.ID)
+	if name, _ = next(); name != "workspaces" {
+		t.Fatal(name)
+	}
+	p.watched(t, 0)
+	cancel()
+	<-done
+}
+
+// workspacePipeWriter streams the handler's output to the test's reader.
+type workspacePipeWriter struct {
+	*httptest.ResponseRecorder
+	pipe *io.PipeWriter
+}
+
+func (w workspacePipeWriter) Write(data []byte) (int, error) { return w.pipe.Write(data) }
+func (w workspacePipeWriter) FlushError() error              { return nil }
 
 func TestWorkspaceMembershipWakeSnapshotAndConcurrentMutation(t *testing.T) {
 	set := NewWorkspaceProviders()

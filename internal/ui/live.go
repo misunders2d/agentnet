@@ -28,6 +28,7 @@ type Live struct {
 	overviews  map[bool]cachedOverview
 	unreadMu   sync.Mutex
 	unread     *unreadIndex // guarded separately: unread never waits for complete overview cards
+	count      unreadCount  // the app badge's running total (liveunreadcount.go)
 }
 
 type cachedOverview struct {
@@ -97,6 +98,9 @@ func (l *Live) overviewLocked(listArchived bool) (Overview, error) {
 			l.overviews = make(map[bool]cachedOverview)
 		}
 		l.overviews[listArchived] = cachedOverview{revision.Content, o}
+		if o.AlertTotal != nil {
+			l.checkUnread(revision.Content, *o.AlertTotal)
+		}
 		if collect != nil {
 			l.unreadMu.Lock()
 			if l.unread == nil || l.unread.content < revision.Content {

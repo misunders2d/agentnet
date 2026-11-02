@@ -41,25 +41,18 @@ func (o *unreadTestOutput) next(t *testing.T, total uint64, partial bool) appEve
 	}
 }
 
+// unreadTestHost speaks only the local event stream. Any other request is a
+// view the badge must never build (MEL-731).
 type unreadTestHost struct {
-	mu             sync.Mutex
-	totals         map[string]*uint64
-	status         map[string]int
-	hits, drops    map[string]int
-	messages       chan string
-	requests       chan string
-	closed         chan struct{}
-	blockKey       string
-	block, started chan struct{}
+	mu       sync.Mutex
+	hits     []string
+	messages chan string
+	closed   chan struct{}
 }
 
 func (h *unreadTestHost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("agentnet_ui")
-	query := "" // an overview asks for the page's variant: one shared build (MEL-731)
-	if strings.HasSuffix(r.URL.Path, "/api/overview") {
-		query = "topics=1"
-	}
-	if err != nil || cookie.Value != "private" || r.URL.RawQuery != query {
+	if err != nil || cookie.Value != "private" || r.URL.RawQuery != "" {
 		http.Error(w, "no local cookie", 401)
 		return
 	}
@@ -67,71 +60,49 @@ func (h *unreadTestHost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"version": "dev"})
 		return
 	}
-	if r.URL.Path == "/api/workspaces/events" {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.(http.Flusher).Flush()
-		defer func() {
-			select {
-			case h.closed <- struct{}{}:
-			default:
-			}
-		}()
-		for {
-			select {
-			case <-r.Context().Done():
-				return
-			case message := <-h.messages:
-				fmt.Fprint(w, message)
-				w.(http.Flusher).Flush()
-			}
-		}
-	}
-	key := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/workspaces/"), "/api/overview")
-	h.mu.Lock()
-	h.hits[key]++
-	total, status := h.totals[key], h.status[key]
-	blocked := key == h.blockKey
-	drop := h.drops[key] > 0
-	if drop {
-		h.drops[key]--
-	}
-	h.mu.Unlock()
-	select {
-	case h.requests <- key:
-	default:
-	}
-	if drop { // the request fails as a timed-out one does: no whole answer
-		w.Header().Set("Content-Length", "64")
-		w.Write([]byte("{"))
-		if conn, _, err := w.(http.Hijacker).Hijack(); err == nil {
-			conn.Close()
-		}
+	if r.URL.Path != "/api/workspaces/events" {
+		h.mu.Lock()
+		h.hits = append(h.hits, r.URL.Path)
+		h.mu.Unlock()
+		http.NotFound(w, r)
 		return
 	}
-	if blocked {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.(http.Flusher).Flush()
+	defer func() {
 		select {
-		case h.started <- struct{}{}:
+		case h.closed <- struct{}{}:
 		default:
 		}
+	}()
+	for {
 		select {
-		case <-h.block:
 		case <-r.Context().Done():
 			return
+		case message := <-h.messages:
+			fmt.Fprint(w, message)
+			w.(http.Flusher).Flush()
 		}
 	}
-	if status != 0 {
-		w.WriteHeader(status)
-		return
-	}
-	if total == nil {
-		fmt.Fprint(w, `{"seq":0}`)
-	} else {
-		json.NewEncoder(w).Encode(map[string]any{"alert_total": *total, "seq": 0})
+}
+func (h *unreadTestHost) views(t *testing.T) {
+	t.Helper()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.hits) != 0 {
+		t.Fatal("the badge asked for a view", h.hits)
 	}
 }
-func unreadCount(v uint64) *uint64 { return &v }
 func newUnreadTestHost() *unreadTestHost {
-	return &unreadTestHost{totals: map[string]*uint64{}, status: map[string]int{}, hits: map[string]int{}, drops: map[string]int{}, messages: make(chan string, 30), requests: make(chan string, 30), closed: make(chan struct{}, 4), block: make(chan struct{}), started: make(chan struct{}, 1)}
+	return &unreadTestHost{messages: make(chan string, 30), closed: make(chan struct{}, 4)}
+}
+func counted(b appUnreadBinding, seq, total uint64) appUnreadBinding {
+	b.Seq, b.AlertTotal = seq, &total
+	return b
+}
+func uncounted(b appUnreadBinding, seq uint64) appUnreadBinding {
+	b.Seq, b.AlertTotal = seq, nil
+	return b
 }
 func unreadMembership(rev uint64, bindings ...appUnreadBinding) string {
 	if bindings == nil {
@@ -143,24 +114,6 @@ func unreadMembership(rev uint64, bindings ...appUnreadBinding) string {
 func unreadChange(binding appUnreadBinding) string {
 	data, _ := json.Marshal(binding)
 	return "event: change\ndata: " + string(data) + "\n\n"
-}
-func (h *unreadTestHost) set(key string, total *uint64, status int) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.totals[key], h.status[key] = total, status
-}
-func (h *unreadTestHost) requested(t *testing.T, key string) {
-	t.Helper()
-	for {
-		select {
-		case got := <-h.requests:
-			if got == key {
-				return
-			}
-		case <-time.After(3 * time.Second):
-			t.Fatal("no scoped overview request", key)
-		}
-	}
 }
 
 func TestAppUnreadOwnedAttachedProjectionAndUnknown(t *testing.T) {
@@ -176,9 +129,6 @@ func TestAppUnreadOwnedAttachedProjectionAndUnknown(t *testing.T) {
 			defer r.stopUnread()
 			a := appUnreadBinding{ID: "default", Handle: strings.Repeat("a", 32)}
 			b := appUnreadBinding{ID: strings.Repeat("b", 32), Handle: strings.Repeat("c", 32)}
-			ka, kb := a.ID+"/"+a.Handle, b.ID+"/"+b.Handle
-			host.set(ka, unreadCount(2), 0)
-			host.set(kb, unreadCount(3), 0)
 			if mode == "attached" {
 				if err := secfile.Write(filepath.Join(r.home, uiURLFile), []byte(server.URL+"/?t=private")); err != nil {
 					t.Fatal(err)
@@ -188,95 +138,35 @@ func TestAppUnreadOwnedAttachedProjectionAndUnknown(t *testing.T) {
 				r.emit(appEvent{Event: "page", Mode: mode, URL: r.pageURL()})
 			}
 			initial := output.next(t, 0, true)
-			host.messages <- unreadMembership(1, a, b)
+			// Pushed totals add up at once: no view is requested (MEL-731).
+			host.messages <- unreadMembership(1, counted(a, 0, 2), counted(b, 0, 3))
 			sum := output.next(t, 5, false)
 			if sum.Seq <= initial.Seq {
 				t.Fatal("sequence did not advance")
 			}
-			host.mu.Lock()
-			if host.hits[ka] != 1 || host.hits[kb] != 1 {
-				t.Fatal("initial seq0 was not fetched", host.hits)
-			}
-			host.mu.Unlock()
-			// A repeated content revision causes no extra GET or sidecar line.
-			host.messages <- unreadChange(a)
-			host.messages <- unreadMembership(2, a, b)
-			a.Seq = 1
-			host.set(ka, unreadCount(0), 0)
-			host.messages <- unreadChange(a)
+			// A content change that keeps the total publishes nothing.
+			host.messages <- unreadChange(counted(a, 1, 2))
+			host.messages <- unreadChange(counted(a, 2, 0))
 			zeroA := output.next(t, 3, false)
 			if zeroA.Seq != sum.Seq+1 {
-				t.Fatal("duplicate pair produced extra publication", sum.Seq, zeroA.Seq)
+				t.Fatal("unchanged total produced extra publication", sum.Seq, zeroA.Seq)
 			}
-			// An absent scalar is unknown, preserving only that binding's last known3.
-			b.Seq = 1
-			host.set(kb, nil, 0)
-			host.messages <- unreadChange(b)
-			unknown := output.next(t, 3, true)
-			if unknown.Seq <= zeroA.Seq {
-				t.Fatal("unknown transition lost")
-			}
-			b.Seq = 2
-			host.set(kb, unreadCount(0), 0)
-			host.messages <- unreadChange(b)
-			zero := output.next(t, 0, false)
-			raw, _ := json.Marshal(zero)
-			if !strings.Contains(string(raw), `"total":0`) || !strings.Contains(string(raw), `"partial":false`) {
-				t.Fatal("known zero was omitted", string(raw))
-			}
-			// New mount never known is omitted, with partial=true; removal clears it.
+			// A stale change and one for no current binding are ignored.
+			host.messages <- unreadChange(counted(a, 1, 40))
+			host.messages <- unreadChange(counted(appUnreadBinding{ID: strings.Repeat("f", 32), Handle: strings.Repeat("f", 32)}, 9, 50))
+			// A workspace not counted yet makes the sum partial.
 			c := appUnreadBinding{ID: strings.Repeat("d", 32), Handle: strings.Repeat("e", 32)}
-			host.messages <- unreadMembership(3, a, b, c)
-			output.next(t, 0, true)
-			host.requested(t, c.ID+"/"+c.Handle)
-			host.messages <- unreadMembership(4, a, b)
+			host.messages <- unreadMembership(2, counted(a, 2, 0), counted(b, 0, 3), uncounted(c, 0))
+			output.next(t, 3, true)
+			host.messages <- unreadChange(counted(c, 1, 0))
+			zero := output.next(t, 3, false)
+			raw, _ := json.Marshal(zero)
+			if !strings.Contains(string(raw), `"partial":false`) {
+				t.Fatal("known total was not final", string(raw))
+			}
+			// Removal drops its total.
+			host.messages <- unreadMembership(3, counted(a, 2, 0))
 			output.next(t, 0, false)
-			// A stale scoped handle contributes nothing and awaits a membership refresh.
-			a.Seq = 2
-			host.set(ka, nil, 409)
-			host.messages <- unreadChange(a)
-			host.requested(t, ka)
-			b.Seq = 3
-			host.set(kb, unreadCount(1), 0)
-			host.messages <- unreadChange(b)
-			output.next(t, 1, false)
-			// A failed GET (a daemon rebuild outlasted the timeout) is asked
-			// once more for that revision, never again (MEL-731).
-			b.Seq = 4
-			host.mu.Lock()
-			host.drops[kb], host.hits[kb] = 1, 0
-			host.mu.Unlock()
-			host.set(kb, unreadCount(4), 0)
-			host.messages <- unreadChange(b)
-			output.next(t, 4, false)
-			for len(host.requests) > 0 {
-				<-host.requests
-			}
-			b.Seq = 5
-			host.mu.Lock()
-			host.drops[kb], host.hits[kb] = 5, 0
-			host.mu.Unlock()
-			host.messages <- unreadChange(b)
-			output.next(t, 4, true)
-			host.requested(t, kb)
-			host.requested(t, kb)
-			select {
-			case <-host.requests:
-				t.Fatal("a failed revision was asked more than twice")
-			case <-time.After(200 * time.Millisecond):
-			}
-			host.mu.Lock()
-			if host.hits[kb] != 2 || host.drops[kb] != 3 {
-				t.Fatal("retry count", host.hits[kb], host.drops[kb])
-			}
-			host.mu.Unlock()
-			b.Seq = 6
-			host.mu.Lock()
-			host.drops[kb] = 0
-			host.mu.Unlock()
-			host.set(kb, unreadCount(1), 0)
-			host.messages <- unreadChange(b)
-			output.next(t, 1, false)
 			r.stopUnread()
 			output.next(t, 0, true)
 			select {
@@ -284,11 +174,23 @@ func TestAppUnreadOwnedAttachedProjectionAndUnknown(t *testing.T) {
 			case <-time.After(time.Second):
 				t.Fatal("quit leaked local event handler")
 			}
+			for {
+				select {
+				case e := <-output.events:
+					if e.Total != nil && (*e.Total == 40 || *e.Total == 50) {
+						t.Fatal("stale or foreign change published", e)
+					}
+					continue
+				default:
+				}
+				break
+			}
+			host.views(t)
 		})
 	}
 }
 
-func TestAppUnreadRemovedAndNewPageFenceDelayedGET(t *testing.T) {
+func TestAppUnreadRemovedAndNewPageFence(t *testing.T) {
 	host := newUnreadTestHost()
 	server := httptest.NewServer(host)
 	defer server.Close()
@@ -298,24 +200,14 @@ func TestAppUnreadRemovedAndNewPageFenceDelayedGET(t *testing.T) {
 	r := &appRunner{out: output, unreadContext: ctx}
 	defer r.stopUnread()
 	a := appUnreadBinding{ID: "default", Handle: strings.Repeat("a", 32)}
-	key := a.ID + "/" + a.Handle
-	host.set(key, unreadCount(99), 0)
-	host.blockKey = key
 	r.emit(appEvent{Event: "page", Mode: "daemon", URL: server.URL + "/?t=private"})
 	output.next(t, 0, true)
-	host.messages <- unreadMembership(1, a)
-	select {
-	case <-host.started:
-	case <-time.After(time.Second):
-		t.Fatal("GET did not start")
-	}
+	host.messages <- unreadMembership(1, counted(a, 0, 99))
+	output.next(t, 99, false)
 	host.messages <- unreadMembership(2)
 	output.next(t, 0, false)
-	close(host.block)
-	// A subsequent admitted mount/result is a deterministic ordering barrier.
 	b := appUnreadBinding{ID: strings.Repeat("b", 32), Handle: strings.Repeat("c", 32)}
-	host.set(b.ID+"/"+b.Handle, unreadCount(2), 0)
-	host.messages <- unreadMembership(3, b)
+	host.messages <- unreadMembership(3, counted(b, 0, 2))
 	output.next(t, 2, false)
 	r.outMu.Lock()
 	oldEpoch := r.unread
@@ -328,9 +220,10 @@ func TestAppUnreadRemovedAndNewPageFenceDelayedGET(t *testing.T) {
 		select {
 		case e := <-output.events:
 			if e.Event == "unread" && e.Total != nil && *e.Total == 99 {
-				t.Fatal("removed/delayed response revived")
+				t.Fatal("removed workspace or old page revived")
 			}
 		default:
+			host.views(t)
 			return
 		}
 	}
@@ -386,52 +279,50 @@ func TestAppUnreadReconnectWindowAndCookieRedirect(t *testing.T) {
 	}
 }
 
-func TestAppUnreadReconnectRevalidatesZeroRevisionAndHoldsPending(t *testing.T) {
+// A restarted daemon counts again from scratch: the badge keeps showing the
+// last total until the new connection's total is counted.
+func TestAppUnreadReconnectHoldsLastTotalUntilCounted(t *testing.T) {
 	output := &unreadTestOutput{events: make(chan appEvent, 30)}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	session := &appUnreadSession{ctx: ctx, cancel: cancel}
 	runner := &appRunner{out: output, unread: session, unreadContext: ctx}
 	binding := appUnreadBinding{ID: "default", Handle: strings.Repeat("a", 32)}
-	disconnect := make(chan struct{})
-	secondGET := make(chan struct{})
-	releaseGET := make(chan struct{})
-	var streams, gets atomic.Int32
+	disconnect, secondStream, count := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var streams, views atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie("agentnet_ui")
 		if err != nil || cookie.Value != "private" {
 			http.Error(w, "cookie", 401)
 			return
 		}
-		if r.URL.Path == "/api/workspaces/events" {
-			connection := streams.Add(1)
-			w.Header().Set("Content-Type", "text/event-stream")
-			fmt.Fprint(w, unreadMembership(1, binding))
+		if r.URL.Path != "/api/workspaces/events" {
+			views.Add(1)
+			http.NotFound(w, r)
+			return
+		}
+		connection := streams.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		if connection == 1 {
+			fmt.Fprint(w, unreadMembership(1, counted(binding, 0, 2)))
 			w.(http.Flusher).Flush()
-			if connection == 1 {
-				select {
-				case <-disconnect:
-				case <-r.Context().Done():
-				}
-			} else {
-				<-r.Context().Done()
+			select {
+			case <-disconnect:
+			case <-r.Context().Done():
 			}
 			return
 		}
-		n := gets.Add(1)
-		if n == 2 {
-			close(secondGET)
-			select {
-			case <-releaseGET:
-			case <-r.Context().Done():
-				return
-			}
+		fmt.Fprint(w, unreadMembership(1, uncounted(binding, 0)))
+		w.(http.Flusher).Flush()
+		close(secondStream)
+		select {
+		case <-count:
+		case <-r.Context().Done():
+			return
 		}
-		total := uint64(2)
-		if n > 1 {
-			total = 7
-		}
-		json.NewEncoder(w).Encode(map[string]uint64{"alert_total": total})
+		fmt.Fprint(w, unreadChange(counted(binding, 1, 7)))
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
 	}))
 	defer server.Close()
 	u, _ := url.Parse(server.URL + "/api/workspaces/events")
@@ -443,19 +334,21 @@ func TestAppUnreadReconnectRevalidatesZeroRevisionAndHoldsPending(t *testing.T) 
 	first := output.next(t, 2, false)
 	close(disconnect)
 	select {
-	case <-secondGET:
+	case <-secondStream:
 	case <-time.After(2 * time.Second):
-		t.Fatal("new stream did not refetch seq0")
+		t.Fatal("no new stream")
 	}
+	close(count)
 	select {
 	case e := <-output.events:
-		t.Fatalf("reconnect cleared last value before fresh GET: %+v", e)
-	default:
+		if e.Event != "unread" || e.Total == nil || *e.Total != 7 || *e.Partial || e.Seq <= first.Seq {
+			t.Fatalf("reconnect replaced the last total before it was counted: %+v", e)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("counted total not published")
 	}
-	close(releaseGET)
-	second := output.next(t, 7, false)
-	if second.Seq <= first.Seq || streams.Load() != 2 || gets.Load() != 2 {
-		t.Fatal("reconnect epoch/dedup", first, second, streams.Load(), gets.Load())
+	if streams.Load() != 2 || views.Load() != 0 {
+		t.Fatal("reconnect", streams.Load(), views.Load())
 	}
 	runner.emit(appEvent{Event: "error", Text: "synthetic daemon error"})
 	runner.stopUnread()

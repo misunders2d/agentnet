@@ -1,6 +1,6 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
-## Broken pipes on v0.10.4: the ping's content pair — November 2 (unreleased, MEL-731)
+## Broken pipes on v0.10.4: the ping's content pair and the badge's pull — November 2 (unreleased, MEL-731)
 
 Owner: "investigate the broken pipe". Read-only on the owner's v0.10.4
 daemon (pid 1011; no restart, no token): 10 min of `ss` mapping each
@@ -22,13 +22,8 @@ signals). Probe after: 5 pings, content unchanged. Regression check in
 `TestQueuedSendReturnsBeforePostAndOrdersTwoTurns` (fails before: 17 → 18).
 The ping pair had also hidden a badge gap: a failed overview GET marked
 the badge partial and nothing asked again until the next change, which the
-ping used to supply. The badge now asks once more for a revision whose
-request failed (never more; `TestAppUnreadOwnedAttachedProjectionAndUnknown`,
-truncated body because Go's transport silently re-sends a GET whose
-connection closes before any answer; fails before: stays partial).
-Not fixed: the overview build itself (3–8 s with page and badge on
-successive revisions), so a burst of real changes can still outlast the
-badge's 5 s and log a broken pipe.
+ping used to supply. 8c84235e added a retry-once; the push below replaces
+it and the pull altogether.
 
 Counterparts (owner: "inspect how slack and telegram and whatsapp are doing
 this"). TDLib 4c6377aa (`MessagesManager.cpp`
@@ -48,9 +43,64 @@ updates. WhatsApp (closed; Baileys 81345beb, `process-message.ts`,
 message, 0 on a synced mark-read) as `chats.update`, events buffered during
 sync. None rebuilds the chat list for a badge, none pulls the list on a
 timeout, and keep-alive pings produce no update. Reused here: signal only on
-an actual change (the send-pass fix). Not yet reused: per-chat counters
-updated on write, a pushed count for the badge and per-row list updates;
-the badge's retry-once is a stopgap for its pull design, with no counterpart.
+an actual change (the send-pass fix), per-chat counters updated on write
+and a pushed total for the badge (below). Not yet reused: per-row list
+updates for the page.
+
+Owner: "Proper fix first" — build the running count, release together.
+The badge now follows Telegram's pushed total and builds no view:
+- Store (`unreadview.go`, new schema step): table `unread_dirty(key, seq)`
+  and triggers on the writes that can change unread — inbox/outbox insert,
+  delete and updates of the projection's columns (read_at, conv, kind, sub,
+  local, ref_id, replica, via, status, lid, …; not job or delivery state),
+  device history rows, attention marks, reply-receiver inputs,
+  conversations and erasures. Each names its chat (`c:`conv) or direct peer
+  (`p:`peer) and gives that key a seq above all others. Readers keep a
+  high-water mark and never write: a reader's DELETE broke attention
+  actions' `total_changes()` snapshot check ("this chat changed; try
+  again"). The triggers are UPSERTs, not `OR REPLACE`: a statement's own
+  `OR IGNORE` (inbox inserts, `UPDATE OR IGNORE`) overrides a trigger's
+  conflict clause and kept the old seq
+  (`TestUnreadConversationCandidatesKeepLegacyExcerpts`; fails with the
+  REPLACE form: the read mark is missed).
+- Daemon (`internal/ui/liveunreadcount.go`): while something watches, a
+  worker recounts only the marked chats with the overview's own projection
+  (`ConversationMessages` unread rows per chat, `peerTopics` per peer,
+  mutes excluded) and keeps the per-chat map; the first pass counts all.
+  Each completed overview at the same revision cross-checks the total; a
+  difference logs once and recounts everything; a pass during which
+  content changed is not cross-checked (it may hold part of a write)
+  (`TestLiveUnreadProvider` asserts the running total equals `alert_total`
+  in every scenario, local mutes included, and that the cross-check never
+  fired).
+- `/api/workspaces/events` carries each workspace's `alert_total`, absent
+  until counted, and sends a change when the total moves even without new
+  content; nothing when neither moved
+  (`TestWorkspaceEventsCarryRunningUnreadTotal`; fails without the
+  total-only change). The stream holds a watch per bound workspace and
+  releases it on removal or disconnect.
+- Badge (`cmd/agentnet/appunread.go`): sums the pushed totals; no overview
+  GET, no 5 s timeout, no retry. On reconnect it keeps the last display
+  until every workspace is counted (`TestAppUnread*`; the fake host
+  serves only the stream and fails on any other request).
+Limits: a touched group chat is recounted from all its rows (the same
+per-chat work the overview does), not by a delta; the page still rebuilds
+the overview on each change — per-row updates reusing the per-chat map are
+the next item. Two empty `history_archive_export_errors` DELETEs per ping
+remain (no change signal; minor writes).
+The stream's only reader is the badge; `/api/workspaces/events` is not a
+skin route (docs/HOST_API_ROUTES.md), so the contract is unchanged.
+Local runs: `TestBundledUpdateStartsClosedAppWithoutLimitingAcceptedStaging`
+fails every run on this laptop, at a111a0f8 and 392f6f6a alike;
+`TestAppCheckLeavesBusyUnsupportedAppUntouched` intermittently. A local
+process sends `GET /` to `localhost:<test port>` (logged), which the fake
+app rejects. Environment, not code; CI 41359862557 ran them green.
+CI 41414947441 (8c84235e) failed four recorded load flakes, Linux race
+shards green: macOS `TestDeviceDecisionsRendered` (feedback over 500 ms),
+Windows `TestDaemonStatusUsesRunningProcessAndDoesNotChangeCallerPath`
+(readiness i/o timeout), `TestProofQueueTransientRepeatsOnePage` and
+`TestRoomDismissalReachesLateJoiner` (group copies still waiting at the
+fixture's deadline).
 
 ## v0.10.4 published and Hub deployed — November 2
 

@@ -24,6 +24,7 @@ func TestLiveUnreadProvider(t *testing.T) {
 		stop()
 	}
 	live := NewLive(alice)
+	t.Cleanup(live.WatchUnread()) // the app badge's running count, kept from here on
 	a, b := protocol.NewID(), protocol.NewID()
 	ids := map[string][]string{}
 	for _, topic := range []string{"", "", a, b, b, b} {
@@ -82,6 +83,12 @@ func TestLiveUnreadProvider(t *testing.T) {
 				t.Fatalf("totals archived=%v: unread=%d alert=%d want %d/%d", archived, *o.UnreadTotal, *o.AlertTotal, want, alert)
 			}
 		}
+		// The badge's running count, changed chat by chat, agrees with the
+		// complete overview (MEL-731).
+		eventually("running unread total", func() bool {
+			total, known, _ := live.UnreadTotal()
+			return known && total == alert
+		})
 		current, err := live.UnreadPage(UnreadQuery{Limit: 200})
 		if err != nil {
 			t.Fatal(err)
@@ -251,6 +258,11 @@ func TestLiveUnreadProvider(t *testing.T) {
 	if before.Content != after.Content {
 		t.Fatal("projection changed read state")
 	}
+	live.count.mu.Lock()
+	if live.count.reported {
+		t.Fatal("a complete overview disagreed with the running count")
+	}
+	live.count.mu.Unlock()
 
 	// Exercise the actual optional authenticated HTTP route, including parse errors.
 	var server *Server

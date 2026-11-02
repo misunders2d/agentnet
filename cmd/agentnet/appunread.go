@@ -24,20 +24,13 @@ type appUnreadSession struct {
 	partial, emitted bool // accessed only under appRunner.outMu
 }
 
+// The daemon pushes each workspace's running unread total with its binding,
+// as Telegram pushes updateUnreadMessageCount (MEL-731): absent until counted.
 type appUnreadBinding struct {
-	ID     string `json:"id"`
-	Handle string `json:"handle"`
-	Seq    uint64 `json:"seq"`
-}
-type appUnreadValue struct {
-	binding                          appUnreadBinding
-	total                            uint64
-	known, unknown, pending, retried bool
-}
-type appUnreadFetch struct {
-	binding       appUnreadBinding
-	total         *uint64
-	stale, failed bool
+	ID         string  `json:"id"`
+	Handle     string  `json:"handle"`
+	Seq        uint64  `json:"seq"`
+	AlertTotal *uint64 `json:"alert_total,omitempty"`
 }
 type appUnreadMessage struct {
 	name string
@@ -59,7 +52,6 @@ func appUnreadIdentity(id, handle string) bool {
 	}
 	return (id == "default" || hex(id)) && hex(handle)
 }
-func appUnreadKey(b appUnreadBinding) string { return b.ID + ":" + b.Handle }
 
 // Called with outMu held, after the page/error line itself. Cancellation and
 // publication share this lock: no old page response can follow a new page.
@@ -224,42 +216,8 @@ func scanAppUnread(ctx context.Context, body io.Reader, messages chan<- appUnrea
 	send(appUnreadMessage{err: err})
 }
 
-func fetchAppUnread(ctx context.Context, c *http.Client, base *url.URL, token string, fetch appUnreadFetch) appUnreadFetch {
-	requestCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	u := *base
-	u.Path = "/workspaces/" + fetch.binding.ID + "/" + fetch.binding.Handle + "/api/overview"
-	// The page's own variant: both read one cached build per change, not
-	// two (MEL-731). Its alert_total counts archived topics as well.
-	u.RawQuery = "topics=1"
-	res, err := appUnreadRequest(requestCtx, c, &u, token)
-	if err != nil {
-		fetch.failed = true
-		return fetch
-	}
-	defer res.Body.Close()
-	if res.StatusCode == http.StatusConflict {
-		fetch.stale = true
-		return fetch
-	}
-	if res.StatusCode != http.StatusOK {
-		return fetch
-	}
-	var value struct {
-		Total *uint64 `json:"alert_total"`
-	}
-	data, err := io.ReadAll(io.LimitReader(res.Body, (4<<20)+1))
-	if err != nil {
-		fetch.failed = true
-	} else if len(data) <= 4<<20 && json.Unmarshal(data, &value) == nil {
-		fetch.total = value.Total
-	}
-	return fetch
-}
-
-// Each connection is an epoch. One decoder and one bounded fetch worker permit
-// membership/content events to invalidate an outstanding GET before it returns.
-// No worker or retained queue is created per workspace.
+// Each connection is an epoch. The badge adds up the totals the stream
+// pushes and asks for nothing else: no view is built for it (MEL-731).
 func (r *appRunner) unreadConnection(session *appUnreadSession, c *http.Client, u *url.URL, token string) (connected bool) {
 	ctx, cancel := context.WithCancel(session.ctx)
 	defer cancel()
@@ -272,89 +230,29 @@ func (r *appRunner) unreadConnection(session *appUnreadSession, c *http.Client, 
 		return false
 	}
 	messages := make(chan appUnreadMessage, 1)
-	requests := make(chan appUnreadFetch)
-	results := make(chan appUnreadFetch, 1)
-	readerDone, fetchDone := make(chan struct{}), make(chan struct{})
+	readerDone := make(chan struct{})
 	go func() { defer close(readerDone); scanAppUnread(ctx, res.Body, messages) }()
-	go func() {
-		defer close(fetchDone)
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case fetch := <-requests:
-				value := fetchAppUnread(ctx, c, u, token, fetch)
-				select {
-				case results <- value:
-				case <-ctx.Done():
-					return
-				}
-			}
-		}
-	}()
-	defer func() { cancel(); res.Body.Close(); <-readerDone; <-fetchDone }()
-	states := map[string]*appUnreadValue{}
+	defer func() { cancel(); res.Body.Close(); <-readerDone }()
+	states := map[string]appUnreadBinding{}
 	var rev uint64
-	haveRev, busy := false, false
-	var inFlight appUnreadBinding
-	publish := func() {
-		total := uint64(0)
-		partial := false
+	haveRev := false
+	sum := func() (total uint64, partial bool) {
 		for _, state := range states {
-			partial = partial || state.unknown
-			if state.known {
-				if math.MaxUint64-total < state.total {
-					total = math.MaxUint64
-					partial = true
-				} else {
-					total += state.total
-				}
+			switch {
+			case state.AlertTotal == nil:
+				partial = true
+			case math.MaxUint64-total < *state.AlertTotal:
+				total, partial = math.MaxUint64, true
+			default:
+				total += *state.AlertTotal
 			}
 		}
-		r.publishUnread(session, total, partial)
+		return total, partial
 	}
 	for {
-		var request appUnreadFetch
-		var send chan appUnreadFetch
-		if !busy {
-			for _, state := range states {
-				if state.pending {
-					request.binding = state.binding
-					send = requests
-					break
-				}
-			}
-		}
 		select {
 		case <-ctx.Done():
 			return connected
-		case send <- request:
-			busy = true
-			inFlight = request.binding
-			if state := states[appUnreadKey(request.binding)]; state != nil {
-				state.pending = false
-			}
-		case result := <-results:
-			busy = false
-			key := appUnreadKey(result.binding)
-			state := states[key]
-			if state == nil || state.binding.Seq != result.binding.Seq {
-				continue
-			}
-			if result.stale {
-				delete(states, key)
-			} else if result.total == nil {
-				state.unknown = true
-				// The request failed (a rebuild outlasted the timeout): ask
-				// once more for this revision, as no event asks again until
-				// the next change (MEL-731).
-				if result.failed && !state.retried {
-					state.retried, state.pending = true, true
-				}
-			} else {
-				state.total, state.known, state.unknown = *result.total, true, false
-			}
-			publish()
 		case message := <-messages:
 			if message.err != nil {
 				return connected
@@ -371,42 +269,35 @@ func (r *appRunner) unreadConnection(session *appUnreadSession, c *http.Client, 
 				if haveRev && value.Rev <= rev {
 					continue
 				}
-				next := make(map[string]*appUnreadValue, len(*value.Bindings))
-				ids := map[string]bool{}
+				next := make(map[string]appUnreadBinding, len(*value.Bindings))
 				for _, binding := range *value.Bindings {
-					if !appUnreadIdentity(binding.ID, binding.Handle) || ids[binding.ID] {
+					if !appUnreadIdentity(binding.ID, binding.Handle) {
 						return connected
 					}
-					ids[binding.ID] = true
-					key := appUnreadKey(binding)
-					state := states[key]
-					if state == nil {
-						state = &appUnreadValue{binding: binding, unknown: true, pending: true}
-					} else if binding.Seq > state.binding.Seq {
-						state.binding.Seq = binding.Seq
-						state.pending, state.retried = true, false
-					} else if state.unknown && !(busy && appUnreadKey(inFlight) == key && inFlight.Seq == state.binding.Seq) {
-						state.pending = true
+					if _, dup := next[binding.ID]; dup {
+						return connected
 					}
-					next[key] = state
+					next[binding.ID] = binding
 				}
 				initial := !haveRev
 				states, rev, haveRev, connected = next, value.Rev, true, true
-				// On reconnect, keep the prior display while the first fresh
-				// GET is pending. Empty membership is an authoritative clear.
-				if !initial || len(states) == 0 {
-					publish()
+				// On reconnect, keep the prior display until every total
+				// is counted. Empty membership is an authoritative clear.
+				if total, partial := sum(); !initial || !partial || len(states) == 0 {
+					r.publishUnread(session, total, partial)
 				}
 			case "change":
 				var binding appUnreadBinding
 				if json.Unmarshal(message.data, &binding) != nil || !appUnreadIdentity(binding.ID, binding.Handle) {
 					return connected
 				}
-				state := states[appUnreadKey(binding)]
-				if state != nil && binding.Seq > state.binding.Seq {
-					state.binding.Seq = binding.Seq
-					state.pending, state.retried = true, false
+				state, ok := states[binding.ID]
+				if !ok || state.Handle != binding.Handle || binding.Seq < state.Seq {
+					continue
 				}
+				states[binding.ID] = binding
+				total, partial := sum()
+				r.publishUnread(session, total, partial)
 			}
 		}
 	}

@@ -39,4 +39,32 @@ func TestUnreadConversationCandidatesKeepLegacyExcerpts(t *testing.T) {
 			}
 		})
 	}
+
+	// The badge's running count recounts only chats a write marked
+	// (MEL-731). A write's own OR IGNORE overrides a trigger's conflict
+	// clause, so marking must still move an already marked chat past the
+	// reader's mark; reading marks writes nothing.
+	conv, id := strings.Repeat("b", 64), protocol.NewID()
+	_, mark, err := a.UnreadDirtySince(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range []struct {
+		write string
+		want  []string
+	}{
+		{`INSERT OR IGNORE INTO inbox(id,sender,ts,kind,body,received_at,conv) VALUES(?2,'bob/desk',1,'message','',1,?1)`, []string{"c:" + conv}},
+		{`UPDATE OR IGNORE inbox SET read_at=1 WHERE id=?2 AND ?1<>''`, []string{"c:" + conv}},
+		{`UPDATE inbox SET status_due=5 WHERE id=?2 AND ?1<>''`, nil},
+	} {
+		if _, err := s.db.Exec(step.write, conv, id); err != nil {
+			t.Fatal(err)
+		}
+		before, _ := s.rowChanges()
+		keys, next, err := a.UnreadDirtySince(mark)
+		if after, _ := s.rowChanges(); err != nil || strings.Join(keys, ",") != strings.Join(step.want, ",") || after != before {
+			t.Fatalf("%s: marked %v want %v, reader wrote %d rows: %v", step.write, keys, step.want, after-before, err)
+		}
+		mark = next
+	}
 }
