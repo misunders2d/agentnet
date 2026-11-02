@@ -104,6 +104,12 @@ func testMEL736OneBrowserHub(t *testing.T) {
 	fresh := join("fresh")
 	runDaemon(t, fresh)
 	current, _, _ := fresh.Person()
+	// Capability publication follows enrollment asynchronously. As in the
+	// initial DM setup, wait for a usable current-person root before sending.
+	w.until("recovered device conversation capabilities", func() bool {
+		v := w.call(map[string]any{"op": "api", "path": "/api/dm/new", "body": map[string]any{"address": fresh.Address}})
+		return v["error"] == nil
+	})
 	w.until("browser folds recovered person", func() bool {
 		v := w.api("/api/overview", nil)
 		oldShown, newShown := false, false
