@@ -329,6 +329,7 @@ func (a *Agent) Close() error {
 	a.typingDisconnected()
 	a.hub.release()
 	a.required.writes.Wait() // a refusal met is recorded before the database closes
+	forgetContinuityPresence(a.store.db)
 	return a.store.db.Close()
 }
 

@@ -56,11 +56,45 @@ func TestMEL736OneBohdanResolverRestart(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	// The negative path cannot borrow SQLite's sole connection: it is held
+	// here by a transaction, as it often is during admission checks.
+	tx, e := s.db.Begin()
+	if e != nil {
+		t.Fatal(e)
+	}
+	done := make(chan error, 1)
+	go func() {
+		have, e := hasContinuity(s.db)
+		if e == nil && have {
+			e = errors.New("unexpected continuity")
+		}
+		done <- e
+	}()
+	select {
+	case e := <-done:
+		if e != nil {
+			tx.Rollback()
+			t.Fatal(e)
+		}
+	case <-time.After(time.Second):
+		tx.Rollback()
+		t.Fatal("negative continuity check issued SQL")
+	}
+	tx.Rollback()
+	peerStore, e := openStore(path)
+	if e != nil {
+		t.Fatal(e)
+	}
 	old := mel736OneRoster(t, "faeb3e71bb3aac661d198083239baa6f", "lost")
 	next := mel736OneRoster(t, "59c89e536113a047e24569888bcc106a", "new")
 	mel736OnePin(t, s, old)
 	mel736OneLeave(t, s, old, true)
 	mel736OnePin(t, s, next)
+	if have, e := hasContinuity(peerStore); e != nil || !have {
+		t.Fatal("shared store lost continuity presence", have, e)
+	}
+	forgetContinuityPresence(peerStore.db)
+	peerStore.db.Close()
 	got, e := s.logicalPerson(old.Person)
 	if e != nil || got != next.Person {
 		t.Fatal(got, e)

@@ -299,6 +299,9 @@ func (s *store) pinChain(person string, raws [][]byte, me identity.Public, adopt
 	if !res.changed {
 		return res, nil
 	}
+	if cur.Email != "" {
+		s.continuityDirty.Store(true)
+	}
 	raw, _ := json.Marshal(cur)
 	if cur.Email != "" && !pinned {
 		held, e := emailHeldIn(tx, person, cur.Email)

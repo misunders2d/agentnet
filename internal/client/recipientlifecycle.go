@@ -202,6 +202,9 @@ func (s *store) endRecipient(address, fp string, revoked bool) error {
 		return err
 	}
 	if changed > 0 {
+		if revoked {
+			s.continuityDirty.Store(true)
+		}
 		s.changed()
 	}
 	return nil

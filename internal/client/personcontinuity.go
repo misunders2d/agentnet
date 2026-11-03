@@ -19,6 +19,75 @@ import (
 // fetched from the authenticated Hub. It is not a successor record or grant.
 const continuityHeadPrefix = "continuity-head/"
 
+// Presence is an availability hint, never an identity/permission cache. A true
+// hint still resolves current SQL evidence. Unknown DBs keep the SQL fallback.
+var continuityPresence = struct {
+	sync.RWMutex
+	dbs    map[*sql.DB]bool
+	paths  map[*sql.DB]string
+	active int
+}{dbs: map[*sql.DB]bool{}, paths: map[*sql.DB]string{}}
+
+func setContinuityPresence(db *sql.DB, present bool) {
+	continuityPresence.Lock()
+	defer continuityPresence.Unlock()
+	for oldDB, present := range continuityPresence.dbs {
+		if oldDB != db && oldDB.Stats().OpenConnections == 0 {
+			if present {
+				continuityPresence.active--
+			}
+			delete(continuityPresence.dbs, oldDB)
+			delete(continuityPresence.paths, oldDB)
+		}
+	}
+	if path := continuityPresence.paths[db]; path != "" {
+		for peer, p := range continuityPresence.paths {
+			if p == path && continuityPresence.dbs[peer] {
+				present = true
+				break
+			}
+		}
+	}
+	old := continuityPresence.dbs[db]
+	if old {
+		present = true
+	} // Conservative until this store is closed.
+	if path := continuityPresence.paths[db]; present && path != "" {
+		for peer, p := range continuityPresence.paths {
+			if p == path && !continuityPresence.dbs[peer] {
+				continuityPresence.dbs[peer] = true
+				continuityPresence.active++
+			}
+		}
+		old = continuityPresence.dbs[db]
+	}
+	if old != present {
+		if present {
+			continuityPresence.active++
+		} else {
+			continuityPresence.active--
+		}
+	}
+	continuityPresence.dbs[db] = present
+}
+func forgetContinuityPresence(db *sql.DB) {
+	continuityPresence.Lock()
+	defer continuityPresence.Unlock()
+	if continuityPresence.dbs[db] {
+		continuityPresence.active--
+	}
+	delete(continuityPresence.dbs, db)
+	delete(continuityPresence.paths, db)
+}
+func (s *store) loadContinuityPresence() error {
+	var present bool
+	if e := s.db.QueryRow(continuityHeadQuery).Scan(&present); e != nil {
+		return e
+	}
+	setContinuityPresence(s.db, present)
+	return nil
+}
+
 // Cached maps are immutable after publication.
 type continuityCache struct {
 	mu         sync.Mutex
@@ -877,6 +946,36 @@ func (a *Agent) MessagingRefOf(conv, id, dir string) (ControlRef, error) {
 const continuityHeadQuery = `SELECT EXISTS(SELECT 1 FROM config WHERE k >= 'continuity-head/' AND k < 'continuity-head0')`
 
 func hasContinuity(q dbq) (bool, error) {
+	for {
+		switch r := q.(type) {
+		case *membershipReads:
+			q = r.dbq
+		case *preparedReads:
+			q = r.dbq
+		default:
+			goto unwrapped
+		}
+	}
+unwrapped:
+	continuityPresence.RLock()
+	var db *sql.DB
+	switch r := q.(type) {
+	case *store:
+		db = r.db
+	case *sql.DB:
+		db = r
+	}
+	if db != nil {
+		if present, known := continuityPresence.dbs[db]; known {
+			continuityPresence.RUnlock()
+			return present, nil
+		}
+	}
+	if _, transaction := q.(*sql.Tx); transaction && continuityPresence.active == 0 {
+		continuityPresence.RUnlock()
+		return false, nil
+	}
+	continuityPresence.RUnlock()
 	var exists bool
 	e := q.QueryRow(continuityHeadQuery).Scan(&exists)
 	return exists, e

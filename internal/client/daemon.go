@@ -840,6 +840,7 @@ func (a *Agent) startWorker(ctx context.Context) (func(), error) {
 		work := convHistory | convServe | convFetch | convRelease | convRecipients
 		ownKick := a.ownKick()
 		if !ownKick {
+			a.store.continuityDirty.Store(true)
 			work |= convRetry // a local participation record shares its public scope with guests now
 		}
 		a.convWork.due(work)

@@ -151,13 +151,21 @@ func (a *Agent) convSync(ctx context.Context) {
 		a.checkPersons(ctx, a.MemberView().Members)
 	}
 	if work&(convPersons|convRecipients) != 0 {
-		if err := a.refreshContinuity(ctx); err != nil {
-			a.Logf("person continuity: %v", err)
-			a.convWork.due(convPersons)
-		}
-		if err := a.syncContinuityGroups(ctx); err != nil {
-			a.Logf("group continuity: %v", err)
-			a.convWork.due(convPersons)
+		if a.store.continuityDirty.Swap(false) {
+			if err := a.store.loadContinuityPresence(); err != nil {
+				a.store.continuityDirty.Store(true)
+				a.convWork.due(convPersons)
+			}
+			if err := a.refreshContinuity(ctx); err != nil {
+				a.Logf("person continuity: %v", err)
+				a.store.continuityDirty.Store(true)
+				a.convWork.due(convPersons)
+			}
+			if err := a.syncContinuityGroups(ctx); err != nil {
+				a.Logf("group continuity: %v", err)
+				a.store.continuityDirty.Store(true)
+				a.convWork.due(convPersons)
+			}
 		}
 		if err := a.reconcileRecipientLifecycle(ctx); err != nil {
 			a.Logf("reconciling permanently removed recipients: %v", err)

@@ -69,7 +69,12 @@ func (a *Agent) ViewChanges() (ViewChange, <-chan struct{}) { return a.changes.v
 
 // NoteChange records a change made through this Agent that does not pass
 // through the store's own write methods (for example a direct update).
-func (a *Agent) NoteChange() { a.changes.bump() }
+func (a *Agent) NoteChange() {
+	if a.store != nil {
+		a.store.continuityDirty.Store(true)
+	}
+	a.changes.bump()
+}
 
 // changed tells the store's owner that local state changed.
 func (s *store) changed() {

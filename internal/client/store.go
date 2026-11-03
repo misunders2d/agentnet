@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
@@ -348,10 +351,11 @@ const (
 )
 
 type store struct {
-	continuity continuityCache
-	db         *sql.DB
-	onChange   func() // set by the Agent: local state changed (changes.go)
-	onJobReady func() // local own-agent request committed; wake before remote delivery
+	continuity      continuityCache
+	continuityDirty atomic.Bool
+	db              *sql.DB
+	onChange        func() // set by the Agent: local state changed (changes.go)
+	onJobReady      func() // local own-agent request committed; wake before remote delivery
 }
 
 func openStore(path string) (*store, error) {
@@ -359,10 +363,27 @@ func openStore(path string) (*store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &store{db: db}, nil
+	s := &store{db: db}
+	canonical, _ := filepath.Abs(path)
+	continuityPresence.Lock()
+	continuityPresence.paths[db] = canonical
+	continuityPresence.Unlock()
+	if err := s.loadContinuityPresence(); err != nil {
+		forgetContinuityPresence(db)
+		db.Close()
+		return nil, err
+	}
+	s.continuityDirty.Store(true)
+	return s, nil
 }
 
 func (s *store) setConfig(kv map[string]string) error {
+	for k := range kv {
+		if strings.HasPrefix(k, continuityHeadPrefix) {
+			setContinuityPresence(s.db, true)
+			s.continuityDirty.Store(true)
+		}
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
