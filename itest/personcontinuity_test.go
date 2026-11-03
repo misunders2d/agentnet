@@ -71,7 +71,15 @@ func TestMEL736OneRealBinaries(t *testing.T) {
 		out, e := c.try("--home", "peer", "dm", "show", conv)
 		return e == nil && strings.Count(out, "signed in again") == 1
 	})
-	c.run("--home", "peer", "dm", "send", conv, "After recovery through the old link")
+	// Sending preflight verifies the fresh device's current signed capability
+	// profile. Directory continuity can settle before that profile is published.
+	waitFor(t, "fresh device signed messaging profile", func() bool {
+		out, err := c.try("--home", "peer", "dm", "send", conv, "After recovery through the old link")
+		if err != nil && !strings.Contains(out, "peer_update:") {
+			t.Fatalf("recovered DM send: %v: %s", err, out)
+		}
+		return err == nil
+	})
 	waitFor(t, "new device receives", func() bool {
 		out, e := c.try("--home", "new", "dm", "list")
 		if e != nil || out == "" {
