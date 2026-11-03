@@ -1,5 +1,104 @@
 # Next-release interaction coverage and responsiveness
 
+## MEL-741 / MEL-742 candidate — November 3, 2026
+
+Bounded frontend changes on `mel741-742-read-scroll`; no release qualification
+or deployment. The matching collection branch has the same name.
+
+Counterpart evidence reused from the November 2 diagnoses: Telegram Desktop
+[a8de5f9, history_widget.cpp:8520–8533](https://github.com/telegramdesktop/tdesktop/blob/a8de5f928ba68197195e6e752293af39d4db8e6c/Telegram/SourceFiles/history/history_widget.cpp#L8520)
+separates end, unread-bar and explicit-target placement. AgentNet now aligns the
+DOM unread separator with the scrolling viewport (below Zoom's sticky header),
+keeps that entry anchor through resize/history reconciliation, and releases it
+on user scroll/navigation. Quotes and exact notification targets retain their
+own navigation. Classic workspace restoration no longer reapplies saved pixels.
+Holonet already used the unread separator; its missing resize retention is fixed.
+
+For reads, the transferable TDLib pattern inspected at
+[4c6377aa, MessagesManager.cpp](https://github.com/tdlib/td/blob/4c6377aa7386c39217878a9a56d581922ad37ca4/td/telegram/MessagesManager.cpp)
+is local attention presentation reconciled with authoritative read state. This
+candidate adds an exact conversation/message/author/generation presentation
+overlay over Comic's native snapshots. A visible late catch-up row needs no
+entry-generation match; a newer deliberate unread mark on an existing row
+retains its generation. Native snapshots remain intact for rejection recovery.
+Accepted actions reconcile through fresh native views; acceptance without a
+committed read restores attention and the existing reopen-to-retry error.
+No change to encrypted read synchronization, Hub ordering or native permissions.
+Returning-device catch-up attention coherence remains outside this candidate.
+
+| Inventory | Intended local feedback | Completion/recovery | Executed evidence |
+|---|---|---|---|
+| MEL-742 Comic ordinary unread/end entry, cold and warm | unread divider at top; no unread at newest | image and older-history layout keep anchor | `TestReadScrollRendered`, 240/2400 rows, 1440×900 and 390×900 |
+| MEL-742 scroll, paging, Latest, quote/exact navigation | user movement releases entry anchor | subsequent resize does not pull reader back; exact focus wins | `TestReadScrollRendered`, `TestNormalRowUnreadRendered`, `TestTimelineNavigationRendered` |
+| MEL-741 visible read, chat badge and workspace total | exact visible rows clear before native API completes | stale refresh cannot resurrect; unseen sibling/tail retained | `TestReadScrollRendered`, `TestComicDeliberateUnreadStore`, `TestComicVisibleUnreadRows` |
+| MEL-741 rejection and reopen retry | current raw unread restored with explicit error | reopen retries; accepted-without-commit also restores | `TestReadScrollRendered`, `TestViewedTopicReadConvergesWithoutPush` |
+| MEL-742 Classic/Zoom/Holonet ordinary entry and scroll | selected pending conversation paints before long history render; then unread/end placement | image/older history preserve entry until wheel/touch/key/scrollbar/exact navigation | collection `tests/read-scroll.test.mjs`, 240/2400 rows, 1280×844 and 390×844 |
+| MEL-742 Classic saved workspace | ordinary unread/end placement owns restored chat | saved scroll cannot overwrite it | collection rendered startup restore block in `tests/read-scroll.test.mjs` |
+
+Measurements use browser `performance.now()` at input and requestAnimationFrame
+at the first visible condition, with a strict **under-1000-ms local-feedback**
+assertion. Local pending navigation and completed history placement are measured
+separately; pending is never reported as completed. Read API completion is held
+in the rendered read tests; native rows are asserted still unread while the
+local presentation is clear. Stream refresh and late-generation arrival run
+while those writes remain pending. Tests use invented data, Chromium on this
+loaded Linux laptop, reduced motion for the history matrix, and existing CSS.
+
+Comic measurements (final focused run): cold placement 85.1–618.4 ms, warm
+placement 39.4–212.7 ms, wheel feedback 16.8–18.0 ms, five-row optimistic read
+127.2–206.4 ms. Cold placement includes the invented provider's local completion;
+it is not a remote-delivery latency claim.
+
+Collection measurements (final augmented entry run, milliseconds):
+
+| Surface | Local pending feedback | Wheel feedback | Completed entry placement |
+|---|---:|---:|---:|
+| Classic | 11.2–185.0 | 21.3–190.8 | 220.1–3236.4 |
+| Holonet | 13.6–184.6 | 19.3–181.9 | 238.1–3031.4 |
+| Zoom | 11.0–59.7 | 17.1–54.9 | 96.5–1323.9 |
+
+The 2400-row standalone render can exceed one second; the selected pending
+conversation is already visible and no completed placement is claimed while
+it renders. This is a local-feedback result, not a claim that complete history
+rendering takes under one second. A more loaded prior run measured Holonet
+completion at 9053.6 ms with 152.4 ms local pending feedback; no parity or
+complete next-release inventory qualification is claimed.
+
+Verification commands (all from the respective worktree; no race shards or
+full UI/collection suites):
+
+```sh
+export AGENTNET_PLAYWRIGHT=/tmp/agr/pw/node_modules/playwright
+export AGENTNET_CHROMIUM=/usr/bin/chromium TMPDIR=/tmp/agr
+go test ./internal/ui -run '^(TestComicDeliberateUnreadStore|TestComicVisibleUnreadRows|TestViewedTopicReadConvergesWithoutPush|TestReadScrollRendered|TestTimelineNavigationRendered|TestNormalRowUnreadRendered)$' -count=1 -v
+go test ./mobile/core -run '^(TestAppUnreadRealWorkspacesMutesReadAndTyping|TestAppUnreadDelayedReadFences|TestSessionUnreadReusesComicOverview)$' -count=1 -v
+go vet ./...
+# Collection worktree, with AGENTNET_SOURCE pointing to this AgentNet worktree:
+node --test --test-concurrency=1 tests/read-scroll.test.mjs tests/deliberate-unread.test.mjs tests/zoom-thread-refresh.test.mjs
+```
+
+AgentNet: the final six-test focused batch passes, zero failures/skips. The
+visibility VM, read/scroll rendered test and read convergence checks were also
+rerun after their affected changes. The old
+visibility VM needed the new entry refs in its fixture; its assertions remain.
+Native badge: three top-level tests plus five delayed-read subtests pass.
+`go vet ./...` and TypeScript type checking in a disposable source copy pass.
+Collection: 19 tests pass with zero failures/skips; the augmented entry timing
+and saved-workspace checks also pass in the separate focused rerun:
+`node --test tests/read-scroll.test.mjs` (7 tests, zero failures/skips).
+
+Limits: Android-host/phone-viewport Chromium is executed, physical Android
+WebView and other native platforms are not. Office/Pulp inherit these shared
+Comic changes when rebuilt; overlay bundles were not rebuilt or independently
+rendered. Standalone skins' MEL-741 read implementation is unchanged; this
+candidate's optimistic-read fix is in the shared Comic store. Native badge
+production code is unchanged: its existing local-commit sink, stale-revision
+fences and shared overview/cache checks pass. `TestComicSetupParityRendered`
+was excluded as requested. Embedded bundles and collection `published/` remain
+for integration/release; no generated build output is committed. Screenshots
+and full logs stay under `/tmp/agr/mel741-742-*`, outside both repositories.
+
+
 ## Video in the Linux app — released in v0.10.5, November 2
 
 Owner, Linux app: "Smaller video" prepared again on each click; playback

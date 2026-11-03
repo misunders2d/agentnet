@@ -32,6 +32,77 @@ Group messaging follows recovery without new signatures; recovered group-admin
 governance is not qualified. Lost keys do not restore ciphertext to a fresh
 device. Physical platforms, external skins and release gates remain unverified.
 
+## v0.10.7 published and Hub deployed — November 3
+
+[App v0.10.7](https://github.com/misunders2d/agentnet/releases/tag/v0.10.7) is
+public and Latest at 08:07:24 UTC from
+`21938aa732d2177e865788087ffafebabc0087e7`. It contains only the Comic
+read/scroll fixes:
+
+- A read clears its unread badge at once, also when the overview is newer
+  than the open view; an older pre-commit overview cannot bring it back, a
+  newer arrival keeps its count, and a failed write restores the badge
+  (MEL-741).
+- Opening a chat lands at the first unread message instead of mid-history
+  (MEL-742).
+
+All twelve payloads plus SHA256SUMS verified in the draft and again after
+publication: names as v0.10.6, checksums match, and linux-amd64 reports
+v0.10.7 at that revision with a clean tree.
+
+Gates, all on that commit before the tag:
+
+- Full dispatch CI 41544186822 green on attempt 3. Linux native passed
+  `./itest` with `AGENTNET_REQUIRE_COMPAT=1`, so `TestMixedVersion` ran
+  against v0.10.6. Attempt 1 failed native macOS, Windows client-4/-5 and
+  race client-5; all passed on rerun.
+- Push CI 41558327512 still red after attempt 3: Windows client-0
+  `TestGroupHistoryWitnessGuestDerivedParent`. Client Go code is unchanged
+  since v0.10.6, each attempt failed different tests, and the same partition
+  passed in 41544186822. Recorded as a flake, not fixed.
+- Platform run 41558411719: desktop ×3 green; Android failed all 4 attempts.
+  Three attempts hit "Original system bars not restored". One lost the final
+  Binder result of the groups/topics latency suites after their workload had
+  finished. Two latency misses: scroll-prepend 1015 ms and
+  quote-exact-parent 1040 ms. The same classes hit commits without these
+  changes (f2baf644, 31b9aee2, f11c5211; aeaf6a9a measured quote-exact-parent
+  1044 ms). History latencies measured in the same range as on v0.10.6.
+  Fresh Android-only runs 41573344938 and 41573352942 on the same commit both
+  passed: 17 latency suites, zero bound misses, no fixture failure. Their
+  desktop job never started, because `desktop_os` takes a JSON list. The
+  owner approved publishing on this evidence. The Android gate fails about
+  half of its runs on these emulator classes; that is a gate defect still
+  open.
+- Skins gate at the exact pin: 333 checks with zero skipped and 37 runtime
+  groups passed (five recorded as inapplicable).
+- Release build 41577908521 green.
+
+[Gallery v2026.11.03](https://github.com/misunders2d/agentnet-skins/releases/tag/v2026.11.03)
+is Latest from `c8feb73`: Classic, Holonet and Zoom 1.11.1, Office 1.8.1,
+Pulp 1.10.1; all require v0.10.7. `published/catalog.json` and the sampled
+Classic and Office entries fetched unauthenticated at the tag match the
+commit.
+
+The owner authorized this one Hub image upgrade. The Hub started v0.10.7 at
+08:09:44.133318661 UTC from the public Linux binary (sha256
+`f74ca3a6cad50b601f104af111aad89f220f46226132da8c6364246bd1109cc4`).
+
+- Image `agentnet-revived:v0.10.7-21938aa7`, id
+  `sha256:449edcee3738e37017e621f0d26a3926da4cf04d99ea130cf0a68ff3f9c3baee`.
+- Public HTTPS reports v0.10.7 with realm
+  `4bd7c66953ccf5496fad8eadbab945bd`; volume and settings preserved; zero
+  container restarts; schema 25. Neighbor unchanged.
+- Curl-fetched `/assets/engine.mjs` matches the tag with BUILD v0.10.7:
+  sha256 `18cf5ebd80247df12b6f9f6239f4c3d979a00d8c876e564c8b5ad84ca438358e`.
+  `/assets/skins/comic/entry.mjs` is byte-identical to the tag (sha256
+  `6231f41499ffd04b941eeeb753fac0d864bda043dd529a53bce2ab2335c4fced`).
+- The local snapshot and isolated storage rehearsal verified 748 files, 731
+  local blobs and 8,945 remote Drive references (Hub offline about 13 s for
+  the capture).
+- Release directory `/opt/agentnet-revived/releases/v0.10.7-21938aa7`:
+  v0.10.6 scripts reused with only WORK changed. Compose was verified to
+  differ only in the image line, and the live settings to equal v0.10.6's.
+
 ## v0.10.6 published and Hub deployed — November 2
 
 [App v0.10.6](https://github.com/misunders2d/agentnet/releases/tag/v0.10.6) is

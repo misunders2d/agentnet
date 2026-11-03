@@ -313,7 +313,7 @@ export class Store {
 
   // ---- subscription
   get = () => {
-    const s = this.presentWorkspaceRename(this.presentPersonRename(this.presentGroupChanges(this.presentGroupDecisions(this.presentDeviceDecisions(this.presentPicture(this.presentReminders(this.presentMessages(this.presentTopics()))))))));
+    const s = this.presentWorkspaceRename(this.presentPersonRename(this.presentGroupChanges(this.presentGroupDecisions(this.presentDeviceDecisions(this.presentPicture(this.presentReminders(this.presentMessages(this.presentReads(this.presentTopics())))))))));
     if (!s.overview || !Object.keys(s.dismissPending).length) return s;
     if (this.dismissState?.source === s) return this.dismissState.value;
     if (this.dismissOverview?.source !== s.overview || this.dismissOverview.pending !== s.dismissPending) {
@@ -323,6 +323,70 @@ export class Store {
     this.dismissState = { source: s, value };
     return value;
   };
+
+  // Keep native snapshots intact: a failed write restores the current snapshot,
+  // while every stale refresh is presented through the same exact-key overlay.
+  private localReads = new Map<string, Map<string, { kind: "dm" | "thread"; id: string; saved: boolean; accepted?: number }>>();
+  private readState?: { source: State; value: State };
+  private readIdentity(m: T.DMMessage | T.Message): string {
+    return JSON.stringify([this.readKey(m), m.dir, (m as T.DMMessage).lid || m.id,
+      (m as T.DMMessage).topic || "", (m as T.DMMessage).send_group_author || (m as T.DMMessage).claimed_key || (m as T.Message).from_key]);
+  }
+  private publishReads() {
+    this.readState = undefined;
+    for (const fn of this.subs) fn();
+  }
+  private presentReads(s: State): State {
+    if (!this.localReads.size) return s;
+    if (this.readState?.source === s) return this.readState.value;
+    let overview = s.overview;
+    const views = { ...s.views };
+    for (const [id, reads] of this.localReads) {
+      const view = views[id];
+      if (!view) continue;
+      const kind = reads.values().next().value!.kind;
+      let cleared = 0, waiting = 0;
+      const messages = (view.messages || []).map(m => {
+        const record = m.unread && reads.get(this.readIdentity(m));
+        if (!record) return m;
+        cleared++;
+        // An overview loaded before acceptance predates this commit.
+        if (!record.saved || (s.overview?.seq || 0) <= (record.accepted ?? -1)) waiting++;
+        return { ...m, unread: false };
+      });
+      if (!cleared) continue;
+      const projected = { ...view, messages } as View;
+      if (kind === "dm") {
+        const dm = projected as T.DMThread;
+        dm.topics = dm.topics?.map(t => ({ ...t, unread: messages.filter(m => m.unread && "topic" in m && m.topic === t.id).length }));
+        if (dm.main_topic) dm.main_topic = { ...dm.main_topic, unread: messages.filter(m => m.unread && !("topic" in m && m.topic)).length };
+      }
+      if (kind === "thread" && (projected as T.Thread).topic) {
+        const thread = projected as T.Thread;
+        thread.topic = { ...thread.topic!, unread: messages.filter(m => m.unread).length };
+      }
+      views[id] = share(view, projected);
+      const summary = kind === "dm" ? overview?.dms?.find(d => d.id === id) : overview?.threads?.find(t => t.id === id) || overview?.topics?.find(t => t.latest.id === id)?.latest;
+      const group = kind === "thread" ? this.archivedRead(view) : undefined;
+      // A newer overview may include newer arrivals the view lacks, and after
+      // acceptance possibly this commit: subtract only exact rows still
+      // awaiting the write, bounded by the view's remainder and the overview.
+      const newer = (overview?.seq || 0) > (view.seq || 0);
+      const project = (base: number, left: number) => newer ? Math.min(base, Math.max(left, base - waiting)) : left;
+      const left = messages.filter(m => m.unread).length;
+      const latest = group && overview?.topics?.find(t => JSON.stringify([t.peer, directChatKey(t.latest)]) === group.group);
+      if (overview && (summary || group)) {
+        overview = this.readOverview(overview, { kind, id, seq: view.seq || 0,
+          unread: summary ? Math.min(summary.unread, project(summary.unread, left)) : left,
+          ...(group ? { ...group, archived_unread: latest ? project(latest.archived_unread, Math.max(0, group.archived_unread - cleared)) : Math.max(0, group.archived_unread - cleared) } : {}) });
+      }
+    }
+    const value = { ...s, views, overview,
+      dm: s.dm && (views[s.dm.id] as T.DMThread || s.dm),
+      thread: s.thread && (views[s.thread.id] as T.Thread || s.thread) };
+    this.readState = { source: s, value };
+    return value;
+  }
 
   private presentPicture(s: State): State {
     const p = s.pictureChange, o = s.overview;
@@ -1720,6 +1784,12 @@ export class Store {
   // keep remembers a loaded view (the most recent VIEWS_KEPT, and the open one).
   private keep(id: string, v: View) {
     if (typeof v.seq === "number" && (this.state.views[id]?.seq || 0) > v.seq) return;
+    const reads = this.localReads.get(id);
+    if (reads) {
+      const read = new Set((v.messages || []).filter(m => !m.unread).map(m => m.id));
+      for (const [key, record] of reads) if (record.saved && read.has(record.id)) reads.delete(key);
+      if (!reads.size) this.localReads.delete(id);
+    }
     v = share(this.state.views[id], { ...v, messages: this.sends.merge<T.DMMessage | T.Message>(id, v.messages || []) } as View);
     if (v === this.state.views[id]) return;
     const views: Record<string, View> = { ...this.state.views };
@@ -1728,6 +1798,7 @@ export class Store {
     const ids = Object.keys(views);
     for (const old of ids.slice(0, Math.max(0, ids.length - VIEWS_KEPT))) if (old !== this.state.open?.id) {
       delete views[old];
+      this.localReads.delete(old);
       if (!this.fetching.has(old)) this.latestFetch.delete(old);
     }
     this.reconcileUnreadReview(v);
@@ -1927,7 +1998,7 @@ export class Store {
       // Only this entry's first committed fresh load arms deliberate reads.
       // Cached display and routine acknowledgement calls cannot consume it.
       if (this.readAcknowledged === visit && visit.entering === o && (first || this.state.open === o) && v.id === o.id) {
-        visit.entry = new Map((v.messages || []).filter(m => m.attention).map(m => [m.id, this.readKey(m)]));
+        visit.entry = new Map((v.messages || []).map(m => [m.id, this.readKey(m)]));
         visit.entering = null;
       }
       this.set({ ...(first ? { open: o, pending: null } : {}),
@@ -1960,15 +2031,15 @@ export class Store {
   // conversation endpoint. Match Conversation's visible-message selection.
   private reading = new Set<string>();
   private readAcknowledged = { id: "", ids: new Set<string>(), entry: new Map<string, string>(), entering: null as Open,
-    visit: null as ReadVisit | null, visible: new Map<string, string>() };
+    visit: null as ReadVisit | null, visible: new Map<string, string>(), explicit: false };
   private readKey(m: T.DMMessage | T.Message): string {
     return m.attention ? JSON.stringify([m.id, m.attention.rev, m.attention.writer]) : m.id;
   }
   private beginReadVisit(view?: View, entering: Open = null) {
     // A superseded entry's request must not become a later entry's baseline.
     if (this.readAcknowledged.entering) this.fetching.delete(this.readAcknowledged.entering.id);
-    this.readAcknowledged = { id: "", ids: new Set<string>(), entering, visit: null, visible: new Map<string, string>(),
-      entry: new Map((view?.messages || []).filter(m => m.attention).map(m => [m.id, this.readKey(m)])) };
+    this.readAcknowledged = { id: "", ids: new Set<string>(), entering, explicit: !!view || !!entering, visit: null, visible: new Map<string, string>(),
+      entry: new Map((view?.messages || []).map(m => [m.id, this.readKey(m)])) };
   }
 
   private readScope(o: NonNullable<Open>, topic: string, fresh: boolean) { return JSON.stringify([o.kind, o.id, topic, fresh]); }
@@ -2032,20 +2103,28 @@ export class Store {
     const acknowledged = this.readAcknowledged.ids;
     const visible = new Set((messages || []).flatMap(m => [m.id, this.readKey(m)]));
     for (const id of acknowledged) if (!visible.has(id)) acknowledged.delete(id);
+    // A catch-up row absent at entry is readable as soon as it is visible.
+    // A newer deliberate mark on an already-present row keeps its own generation.
     const pending = (messages || []).filter(m => this.canMarkUnread(m) && (m.unread || o.kind === "thread" && m.dir === "out") &&
       this.readAcknowledged.visible.get(m.id) === this.readKey(m) &&
-      (!m.attention || this.readAcknowledged.entry.get(m.id) === this.readKey(m)) &&
+      (!m.attention || this.readAcknowledged.explicit && !this.readAcknowledged.entry.has(m.id) || this.readAcknowledged.entry.get(m.id) === this.readKey(m)) &&
       !this.reading.has(this.readKey(m)) && !acknowledged.has(this.readKey(m)));
     const ids = pending.map(m => m.id);
     if (!ids.length) return;
     const keys = pending.map(m => this.readKey(m));
     const attention = Object.fromEntries(pending.filter(m => m.attention).map(m => [m.id, m.attention!]));
     keys.forEach(key => this.reading.add(key));
+    const overlays = this.localReads.get(o.id) || new Map<string, { kind: "dm" | "thread"; id: string; saved: boolean; accepted?: number }>();
+    this.localReads.set(o.id, overlays);
+    const batch = pending.map(m => { const key = this.readIdentity(m); const record: { kind: "dm" | "thread"; id: string; saved: boolean; accepted?: number } = { kind: o.kind, id: m.id, saved: false }; overlays.set(key, record); return { key, record }; });
+    this.publishReads();
     let readAccepted = false;
     // The change stream brings the committed read state. Keep exact successful
     // acknowledgements so refreshing a sent device-thread row cannot loop.
     void this.api.markRead(ids, Object.keys(attention).length ? attention : undefined).then(async () => {
       readAccepted = true;
+      const accepted = this.state.overview?.seq || 0;
+      batch.forEach(({ record }) => { record.saved = true; record.accepted = accepted; });
       keys.forEach(key => { acknowledged.add(key); this.reading.delete(key); });
       // The native action also writes legacy read state. A cleared sent row
       // returns to its plain ID; keep that acknowledgement within this visit.
@@ -2055,7 +2134,17 @@ export class Store {
       // hold this read behind it. The exact fresh view proves a CAS result.
       const unread = new Set(pending.filter(m => m.unread).map(m => this.readKey(m)));
       const stale = () => this.state.views[o.id]?.messages?.some(m => unread.has(this.readKey(m)) && m.unread);
-      if (this.state.open?.id === o.id && stale()) await this.loadOpen(this.state.open, true);
+      if (this.state.open?.id === o.id && stale()) {
+        const refreshed = await this.loadOpen(this.state.open, true);
+        if (refreshed && stale()) {
+          // Acceptance alone is not a committed read. A fresh exact view that
+          // still carries this generation wins over the optimistic presentation.
+          batch.forEach(({ key, record }) => { if (overlays.get(key) === record) overlays.delete(key); });
+          if (!overlays.size && this.localReads.get(o.id) === overlays) this.localReads.delete(o.id);
+          this.publishReads();
+          this.toast("Read status not confirmed. Reopen this chat to retry.", "error");
+        }
+      }
       if (!this.alive) return;
       const current = this.state.views[o.id];
       if (this.state.open?.id === o.id && current) this.confirmReadOverview(o, current);
@@ -2063,6 +2152,11 @@ export class Store {
       if (this.state.open?.id === o.id && current && !stale() && summary?.unread === (current.messages || []).filter(m => m.unread).length) return;
       void this.load(false, false);
     }).catch(error => {
+      if (!readAccepted) {
+        batch.forEach(({ key, record }) => { if (overlays.get(key) === record) overlays.delete(key); });
+        if (!overlays.size && this.localReads.get(o.id) === overlays) this.localReads.delete(o.id);
+        this.publishReads();
+      }
       // A timed-out write may have committed. Keep unread truthful until a
       // fresh view proves otherwise, and warn even after returning to Review.
       // A departed workspace or superseding read/generation owns no warning.

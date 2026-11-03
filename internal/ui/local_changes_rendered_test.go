@@ -28,3 +28,14 @@ func TestTimelineNavigationRendered(t *testing.T) {
 	}
 	t.Log(string(output))
 }
+
+func TestReadScrollRendered(t *testing.T) {
+	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
+		t.Skip("set AGENTNET_PLAYWRIGHT for rendered read and scroll checks")
+	}
+	output, err := exec.CommandContext(t.Context(), "node", "testdata/read_scroll_rendered.cjs").CombinedOutput()
+	if err != nil {
+		t.Fatalf("rendered read and scroll: %v\n%s", err, output)
+	}
+	t.Log(string(output))
+}

@@ -57,6 +57,14 @@ export function Timeline({ ctx, messages, focus, focusSeq, unread, readVisit, se
   const retained = useRef<string[]>([]);
   const prependAnchor = useRef<{ row: HTMLElement; top: number; focus: boolean } | null>(null);
   const readingAnchor = useRef<ReadingAnchor | null>(null);
+  const entryAnchor = useRef<ReadingAnchor | null>(null);
+  const releaseEntry = () => { entryAnchor.current = null; };
+  const placeEntry = (el: HTMLElement) => {
+    const anchor = entryAnchor.current;
+    if (!anchor?.row.isConnected) return;
+    el.scrollTop += anchor.row.getBoundingClientRect().top - el.getBoundingClientRect().top - el.clientTop;
+    anchor.scrollTop = el.scrollTop;
+  };
   const [requested, setRequested] = useState<{ id: string; focus?: string; seq?: number; visit: ReadVisit | null }>();
   const focused = messageTarget(messages, focus || firstUnread)?.id;
   const target = requested && requested.visit === readVisit && requested.focus === focus && requested.seq === focusSeq ? requested.id : focused;
@@ -137,6 +145,7 @@ export function Timeline({ ctx, messages, focus, focusSeq, unread, readVisit, se
   };
 
   const earlier = (event?: { detail: number }) => {
+    releaseEntry();
     if (!from || prependAnchor.current) return;
     // Capture one existing node only for this known prepend. Browser scroll
     // anchoring normally keeps it still; this delta is also the fallback on
@@ -148,6 +157,7 @@ export function Timeline({ ctx, messages, focus, focusSeq, unread, readVisit, se
     setFirst(groups[Math.max(0, from - HISTORY_PAGE)].key);
   };
   const later = (event: { detail: number }) => {
+    releaseEntry();
     if (!hasLater || prependAnchor.current) return;
     const row = inner.current?.querySelector<HTMLElement>('[data-mid="' + CSS.escape(groups[to - 1].m.id) + '"]');
     if (row) prependAnchor.current = { row, top: row.getBoundingClientRect().top, focus: event.detail === 0 && to + HISTORY_PAGE >= groups.length };
@@ -174,15 +184,27 @@ export function Timeline({ ctx, messages, focus, focusSeq, unread, readVisit, se
     }
     if (!seen.current) {
       seen.current = new Set(messages.map((m) => m.id));
+      if (!focus && !requested && firstUnread) {
+        const divider = el.querySelector<HTMLElement>('[aria-label="Unread messages"]');
+        if (divider) {
+          entryAnchor.current = { row: divider, offset: 0, scrollTop: el.scrollTop };
+          placeEntry(el);
+          placedOnEntry = true; atBottom.current = false; return;
+        }
+      }
       if (target && flash(el, target, false)) { placedOnEntry = true; atBottom.current = false; return; }
       el.scrollTop = el.scrollHeight;
       atBottom.current = !hasLater;
       return;
     }
+    if (entryAnchor.current?.row.isConnected) {
+      placeEntry(el);
+    }
     const added = messages.filter((m) => !seen.current!.has(m.id));
     for (const m of added) seen.current.add(m.id);
     if (!added.length) return;
     if (atBottom.current || added.some((m) => whoWrote(m, ctx).mine)) {
+      releaseEntry();
       if (hasLater) { setFirst(groups[Math.max(0, groups.length - INITIAL_PAGE)].key); setThrough(undefined); setRequested({ id: messages.at(-1)!.id, focus, seq: focusSeq, visit: readVisit }); }
       atBottom.current = true;
       el.scrollTo({ top: el.scrollHeight, behavior: reduced() ? "auto" : "smooth" });
@@ -192,6 +214,7 @@ export function Timeline({ ctx, messages, focus, focusSeq, unread, readVisit, se
 
   useLayoutEffect(() => {
     if (target && !placedOnEntry && seen.current && box.current) {
+      releaseEntry();
       readingAnchor.current = null;
       atBottom.current = false;
       flash(box.current, target, false);
@@ -206,7 +229,9 @@ export function Timeline({ ctx, messages, focus, focusSeq, unread, readVisit, se
     if (!el || !content) return;
     const needsAnchor = !CSS.supports("overflow-anchor", "auto");
     const ro = new ResizeObserver(() => {
-      if (atBottom.current) {
+      if (entryAnchor.current?.row.isConnected) {
+        placeEntry(el);
+      } else if (atBottom.current) {
         readingAnchor.current = null;
         el.scrollTop = el.scrollHeight;
       } else if (needsAnchor) {
@@ -242,14 +267,18 @@ export function Timeline({ ctx, messages, focus, focusSeq, unread, readVisit, se
   const onScroll = () => {
     visibleRows.current();
     const el = box.current!;
+    const anchor = entryAnchor.current;
+    if (anchor && Math.abs(el.scrollTop - anchor.scrollTop) > .5 &&
+        Math.abs(anchor.row.getBoundingClientRect().top - el.getBoundingClientRect().top - el.clientTop) > 1) releaseEntry();
     const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
     atBottom.current = !hasLater && gap < 80;
     setFar(gap > 600);
-    if (el.scrollTop < 80 && !atBottom.current) earlier();
+    if (el.scrollTop < 80 && !atBottom.current && !entryAnchor.current) earlier();
     if (atBottom.current) { if (fresh) setFresh(0); reportSeen(); }
   };
-  const down = () => { if (hasLater) { setFirst(groups[Math.max(0, groups.length - INITIAL_PAGE)].key); setThrough(undefined); setRequested({ id: messages.at(-1)!.id, focus, seq: focusSeq, visit: readVisit }); } box.current?.scrollTo({ top: box.current.scrollHeight, behavior: reduced() ? "auto" : "smooth" }); setFresh(0); };
+  const down = () => { releaseEntry(); if (hasLater) { setFirst(groups[Math.max(0, groups.length - INITIAL_PAGE)].key); setThrough(undefined); setRequested({ id: messages.at(-1)!.id, focus, seq: focusSeq, visit: readVisit }); } box.current?.scrollTo({ top: box.current.scrollHeight, behavior: reduced() ? "auto" : "smooth" }); setFresh(0); };
   const jump = useCallback((id: string) => {
+    entryAnchor.current = null;
     readingAnchor.current = null;
     atBottom.current = false;
     const { focus, focusSeq, readVisit } = navigation.current;
@@ -258,7 +287,7 @@ export function Timeline({ ctx, messages, focus, focusSeq, unread, readVisit, se
 
   return (
     <div className="relative min-h-0 flex-1">
-      <div ref={box} onScroll={onScroll} className="dots h-full overflow-y-auto overscroll-contain">
+      <div ref={box} onWheel={releaseEntry} onTouchMove={releaseEntry} onPointerDown={releaseEntry} onKeyDown={releaseEntry} onScroll={onScroll} className="dots h-full overflow-y-auto overscroll-contain">
         <div ref={inner} role="log" aria-live="polite" aria-relevant="additions" aria-label="Messages" data-part="timeline" onKeyDownCapture={keyboard} className="mx-auto flex min-h-full w-full max-w-[800px] flex-col justify-end pb-6 pt-3 [&>[data-mid]]:[contain:layout_style] [&>[data-send-group]]:[contain:layout_style]"
           style={reserve || hasLater ? { paddingBottom: reserve + (hasLater ? 80 : 24) } : undefined}>
           {items.length === 0 && empty}
