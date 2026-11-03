@@ -539,6 +539,9 @@ func (a *Agent) admitGroupCarrier(ctx context.Context, env envelope.Envelope, in
 		if errors.Is(err, ErrGroupContextPending) || errors.Is(err, ErrNoPerson) {
 			return hold(reasonProof, err.Error())
 		}
+		if errors.Is(err, errPersonClaimFrozen) {
+			return hold(reasonProof, frozenMemberWhy)
+		}
 		var he *HubError
 		var ne net.Error
 		if errors.As(err, &he) && retryable(err) || errors.As(err, &ne) || errors.Is(err, context.Canceled) {

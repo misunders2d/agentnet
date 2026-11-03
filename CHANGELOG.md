@@ -6,6 +6,17 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+- Groups work again for a person who signed in afresh after losing their
+  device (MEL-747). A device set up before v0.10.8 had frozen that person's
+  own old identity as a conflict, so it refused every group message and
+  invitation; it now confirms with the relay that each old device was
+  removed, treats the old identity as the same person and takes the group
+  messages it refused once more. A real conflict, a live or unknown old
+  device, or a relay serving a different record keeps the freeze.
+  Other members' devices that held messages naming such a person as an
+  identity conflict (for example a colleague's history copies from November
+  2) look at them once more on upgrade; what still conflicts stays held.
+
 - Big received files wait for a tap, as on Telegram: videos over 10 MiB and
   other files over 3 MiB are no longer downloaded in the background; the
   message offers "Download · size" with progress, then plays or saves as

@@ -927,6 +927,7 @@ func addControlInboxIn(tx *sql.Tx, in envelope.Inner, verifiedBy string, fromQua
 // is checked whenever the target is shown (resolveControls).
 func (a *Agent) admitControl(ctx context.Context, env envelope.Envelope, in envelope.Inner, sender identity.Public, fromQuarantine bool) error {
 	hold := func(reason, why string) error {
+		reason, why = frozenRecordWaits(reason, why)
 		return a.holdOpened(ctx, "control", env, in, sender, reason, why)
 	}
 	allowed, err := a.revokedIngressAllowed(ctx, env, in, sender)
@@ -1039,6 +1040,8 @@ func (a *Agent) admitControl(ctx context.Context, env envelope.Envelope, in enve
 	if err != nil {
 		var he *HubError
 		switch {
+		case errors.Is(err, errPersonClaimFrozen):
+			return hold(reasonProof, err.Error()) // looked at again once the claim settles (MEL-747)
 		case errors.Is(err, errPersonConflict):
 			return hold(reasonConflict, err.Error())
 		case errors.Is(err, ErrNoPerson), errors.Is(err, errPersonRecord), errors.As(err, &he) && !transient(err):

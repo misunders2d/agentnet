@@ -1488,6 +1488,8 @@ func (a *Agent) retryProof(ctx context.Context) (more bool) {
 func holdForPerson(err error, hold func(string, string) error) error {
 	var he *HubError
 	switch {
+	case errors.Is(err, errPersonClaimFrozen):
+		return hold(reasonProof, err.Error()) // looked at again once the claim settles (MEL-747)
 	case errors.Is(err, errPersonConflict):
 		return hold(reasonConflict, err.Error())
 	case errors.Is(err, ErrNoPerson), errors.Is(err, errPersonRecord), errors.As(err, &he) && !transient(err):
@@ -1501,16 +1503,31 @@ func holdForPerson(err error, hold func(string, string) error) error {
 // conflict of this sender's, so the message waits for proof instead.
 func holdForMember(err error, sender bool, hold func(string, string) error) error {
 	if !sender && errors.Is(err, errPersonConflict) {
-		return hold(reasonProof, "group: a member's person record is frozen here")
+		return hold(reasonProof, frozenMemberWhy)
 	}
 	return holdForPerson(err, hold)
 }
+
+// frozenRecordWaits keeps a message that failed only because a person
+// record it names is frozen here as an email claim (errPersonClaimFrozen)
+// waiting for proof: it is looked at again once that claim settles
+// (MEL-747), never refused for good; a conflicting step still refuses it.
+// Admission verifies everything again then.
+func frozenRecordWaits(reason, why string) (string, string) {
+	if reason == reasonInvalid && why == errPersonClaimFrozen.Error() {
+		return reasonProof, frozenMemberWhy
+	}
+	return reason, why
+}
+
+const frozenMemberWhy = "group: a member's person record is frozen here"
 
 // admitConv admits a verified version 2 message, or holds it (quarantine)
 // with the reason it cannot be admitted yet. fromQuarantine: env is held
 // already, and is released when admitted.
 func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelope.Inner, sender identity.Public, fromQuarantine bool) error {
 	hold := func(reason, why string) error {
+		reason, why = frozenRecordWaits(reason, why)
 		return a.holdOpened(ctx, "conversation message", env, in, sender, reason, why)
 	}
 	allowed, err := a.revokedIngressAllowed(ctx, env, in, sender)

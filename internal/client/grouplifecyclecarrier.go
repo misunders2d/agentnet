@@ -362,6 +362,9 @@ func (a *Agent) admitGroupLifecycle(ctx context.Context, env envelope.Envelope, 
 		if errors.Is(err, ErrGroupContextPending) || errors.Is(err, ErrNoPerson) || errors.Is(err, sql.ErrNoRows) {
 			return hold(reasonProof, err.Error())
 		}
+		if errors.Is(err, errPersonClaimFrozen) {
+			return hold(reasonProof, frozenMemberWhy)
+		}
 		if groupLifecycleTransient(err) {
 			return err
 		}
