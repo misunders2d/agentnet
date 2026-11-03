@@ -169,7 +169,7 @@ func (a *Agent) BuildGroupCommit(ctx context.Context, packet GroupContext) (prot
 	}
 	recipients := []age.Recipient{a.id.Box.Recipient()}
 	seen := map[string]bool{a.id.Box.Recipient().String(): true}
-	effective, err := logicalGroupMembers(a.store.db, GroupContext{Root: packet.Root, Proof: packet.Proof, State: packet.State, Withdrawals: append(packet.Withdrawals, knownWithdrawals...)})
+	effective, err := logicalGroupMembers(a.store, GroupContext{Root: packet.Root, Proof: packet.Proof, State: packet.State, Withdrawals: append(packet.Withdrawals, knownWithdrawals...)})
 	if err != nil {
 		return out, err
 	}
@@ -180,7 +180,7 @@ func (a *Agent) BuildGroupCommit(ctx context.Context, packet GroupContext) (prot
 		if _, e := a.refreshPerson(ctx, m.Person, false); e != nil {
 			return out, e
 		}
-		current, ok, e := messagingPersonIn(a.store.db, m.Person)
+		current, ok, e := messagingPersonIn(a.store, m.Person)
 		if e != nil {
 			return out, e
 		}
@@ -827,7 +827,7 @@ func (a *Agent) GroupMembers(conv string) ([]protocol.ConvMember, error) {
 		return nil, ErrGroupContextPending
 	}
 	p.Withdrawals = append(p.Withdrawals, withdrawals...)
-	effective, err := logicalGroupMembers(a.store.db, p)
+	effective, err := logicalGroupMembers(a.store, p)
 	if err != nil {
 		return nil, err
 	}
@@ -841,7 +841,7 @@ func (a *Agent) GroupMembers(conv string) ([]protocol.ConvMember, error) {
 	out := []protocol.ConvMember{}
 	own := false
 	for _, m := range effective {
-		p, found, e := messagingPersonIn(a.store.db, m.Person)
+		p, found, e := messagingPersonIn(a.store, m.Person)
 		if e != nil {
 			return nil, e
 		}

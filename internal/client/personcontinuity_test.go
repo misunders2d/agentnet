@@ -77,6 +77,41 @@ func TestMEL736OneBohdanResolverRestart(t *testing.T) {
 	if e != nil || got != next.Person {
 		t.Fatal("restart", got, e)
 	}
+	// Query planning must use the config primary-key range, not a full scan.
+	plan, e := s.db.Query("EXPLAIN QUERY PLAN " + continuityHeadQuery)
+	if e != nil {
+		t.Fatal(e)
+	}
+	indexed := false
+	for plan.Next() {
+		var id, parent, unused int
+		var detail string
+		if e = plan.Scan(&id, &parent, &unused, &detail); e != nil {
+			t.Fatal(e)
+		}
+		indexed = indexed || strings.Contains(detail, "SEARCH config")
+	}
+	plan.Close()
+	if !indexed {
+		t.Fatal("continuity checkpoint lookup is not indexed")
+	}
+	// An external writer must invalidate the cached alias even when this
+	// connection's total_changes() has not changed.
+	external, e := sql.Open("sqlite", path)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = external.Exec(`UPDATE config SET v=? WHERE k=?`, strings.Repeat("0", 64), continuityHeadPrefix+old.Person); e != nil {
+		t.Fatal(e)
+	}
+	external.Close()
+	if got, e = s.logicalPerson(old.Person); e != nil || got != old.Person {
+		t.Fatal("external checkpoint change retained cached alias", got, e)
+	}
+	mel736OneLeave(t, s, old, true)
+	if got, e = s.logicalPerson(old.Person); e != nil || got != next.Person {
+		t.Fatal("local checkpoint update did not invalidate alias cache", got, e)
+	}
 	third := mel736OneRoster(t, protocol.NewID(), "third")
 	mel736OneLeave(t, s, next, true)
 	mel736OnePin(t, s, third)

@@ -412,7 +412,7 @@ func (a *Agent) acceptGroupContextFrom(ctx context.Context, packet GroupContext,
 				return err
 			}
 		}
-		if _, present, e := logicalGroupMember(a.store.db, packet, self.roster.Person); e != nil {
+		if _, present, e := logicalGroupMember(a.store, packet, self.roster.Person); e != nil {
 			return e
 		} else if !present {
 			return errors.New("group: forwarded context does not name this member")

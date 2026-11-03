@@ -348,6 +348,7 @@ const (
 )
 
 type store struct {
+	continuity continuityCache
 	db         *sql.DB
 	onChange   func() // set by the Agent: local state changed (changes.go)
 	onJobReady func() // local own-agent request committed; wake before remote delivery

@@ -326,7 +326,7 @@ func (a *Agent) groupDeliveryCopies(ctx context.Context, packet GroupContext) (c
 	if err != nil {
 		return nil, err
 	}
-	members, e := logicalGroupMembers(a.store.db, packet)
+	members, e := logicalGroupMembers(a.store, packet)
 	if e != nil {
 		return nil, e
 	}
@@ -334,7 +334,7 @@ func (a *Agent) groupDeliveryCopies(ctx context.Context, packet GroupContext) (c
 		if _, err = a.refreshPerson(ctx, member.Person, false); err != nil {
 			return copies, err
 		}
-		person, ok, e := messagingPersonIn(a.store.db, member.Person)
+		person, ok, e := messagingPersonIn(a.store, member.Person)
 		if e != nil {
 			return copies, e
 		}

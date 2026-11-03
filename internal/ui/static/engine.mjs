@@ -3636,8 +3636,10 @@ export class Engine {
   // authority retain their exact original person IDs.
   async logicalPersons() {
     const people=[...new Map([...await this.store.all("persons"),this.me].filter(Boolean).map(p=>[p.person,p])).values()], aliases=new Map(people.map(p=>[p.person,p.person])), emails=new Map();
-    const revoked=new Set((await this.store.prefix("kv","revoked-device/")).map(d=>d.address+"/"+d.fingerprint));
+    if(!people.some(p=>p.email))return aliases;
     const heads=new Map((await this.store.prefix("kv","continuity-head/")).map(h=>[h.person,h.hash]));
+    if(!heads.size)return aliases;
+    const revoked=new Set((await this.store.prefix("kv","revoked-device/")).map(d=>d.address+"/"+d.fingerprint));
     for(const p of people)if(p.email&&["pinned","self"].includes(p.state)){
       if(!emails.has(p.email))emails.set(p.email,[]);emails.get(p.email).push(p);
     }
@@ -3656,7 +3658,9 @@ export class Engine {
   }
 
   async refreshContinuityOnce() {
-    const records=await this.store.all("persons");
+    const records=await this.store.all("persons"),emails=new Map();
+    for(const p of [this.me,...records.filter(p=>p.state==="pinned")].filter(Boolean))if(p.email)emails.set(p.email,(emails.get(p.email)||0)+1);
+    if(!records.some(p=>p.state==="conflict"&&p.email_claim)&&![...emails.values()].some(n=>n>1))return;
     for(const p of records)if(p.state==="conflict"&&p.email_claim){try{await this.pinChain(p.person);}catch(e){if(retryable(e))throw e;}}
     const ps=(await this.store.all("persons")).filter(p=>p.email&&p.state==="pinned"), counts=new Map();
     for(const p of [this.me,...ps].filter(Boolean))if(p.email)counts.set(p.email,(counts.get(p.email)||0)+1);

@@ -194,6 +194,7 @@ async function handle(req) {
     const own=new Engine({store:mem,base:e.base});own.me={...third,state:"self"};assert((await own.logicalPersons()).get(old.person)===third.person,"recovered own person");
     e.groupRecord=async()=>({});assert((await e.continuityNotices("held-group")).length===0,"unavailable group context blocks notices instead of history");
     const ordinary=new Engine({store:memoryStore(),base:e.base});ordinary.me=e.me;ordinary.groupRecord=async()=>{throw Error("ordinary group notice requested current context")};assert((await ordinary.continuityNotices("ordinary-held-group")).length===0,"ordinary held group cannot render");
+    ordinary.changed=()=>{throw Error("empty continuity refresh rendered again")};ordinary.syncContinuityGroups=async()=>{throw Error("empty continuity refresh scanned groups")};await ordinary.refreshContinuity();assert(true,"empty continuity refresh must be inert");
     const background=new Engine({store:memoryStore(),base:e.base});let attempts=0;
     background.syncContinuityGroupsOnce=async()=>{if(++attempts===1)await background.store.write([{s:"kv",k:"conflict-probe",v:1}],[{s:"kv",k:"conflict-probe",v:"stale"}]);};
     await background.syncContinuityGroups();assert(attempts===2,"background storage conflict did not retry");

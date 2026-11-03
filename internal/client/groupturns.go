@@ -62,12 +62,12 @@ func (a *Agent) projectGroupConversations(rows []ConversationInfo) ([]Conversati
 			return nil, err
 		}
 		packet.Withdrawals = append(packet.Withdrawals, withdrawals...)
-		members, e := logicalGroupMembers(a.store.db, packet)
+		members, e := logicalGroupMembers(a.store, packet)
 		if e != nil {
 			return nil, e
 		}
 		for _, member := range members {
-			p, ok, err := messagingPersonIn(a.store.db, member.Person)
+			p, ok, err := messagingPersonIn(a.store, member.Person)
 			if err != nil {
 				return nil, err
 			}
@@ -283,12 +283,12 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 	}
 	others := false // the group has another current member
 	packet.Withdrawals = append(packet.Withdrawals, withdrawals...)
-	members, e := logicalGroupMembers(a.store.db, packet)
+	members, e := logicalGroupMembers(a.store, packet)
 	if e != nil {
 		return ConvSent{}, e
 	}
 	for _, member := range members {
-		person, ok, e := messagingPersonIn(a.store.db, member.Person)
+		person, ok, e := messagingPersonIn(a.store, member.Person)
 		if e != nil {
 			return ConvSent{}, e
 		}

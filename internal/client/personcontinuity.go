@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
@@ -18,9 +19,54 @@ import (
 // fetched from the authenticated Hub. It is not a successor record or grant.
 const continuityHeadPrefix = "continuity-head/"
 
-// logicalPersons is messaging-only. Execution grants and historical signature
-// verification must continue to use the original cryptographic person IDs.
+// Cached maps are immutable after publication.
+type continuityCache struct {
+	mu         sync.Mutex
+	generation [2]int64
+	valid      bool
+	aliases    map[string]string
+}
+
+func (s *store) Query(query string, args ...any) (*sql.Rows, error) {
+	return s.db.Query(query, args...)
+}
+func (s *store) QueryRow(query string, args ...any) *sql.Row { return s.db.QueryRow(query, args...) }
+
+// Missing map entries mean identity. With no checkpoint, do not parse persons.
+// Native grants and historical signature verification still use exact IDs.
 func logicalPersons(q dbq) (map[string]string, error) {
+	if have, e := hasContinuity(q); e != nil || !have {
+		return nil, e
+	}
+	var cache *continuityCache
+	var generation [2]int64
+	// Transactions must read their own writes and are deliberately uncached.
+	// SQLite's two counters cover local writes and other connections' commits.
+	if s, ok := q.(*store); ok {
+		cache = &s.continuity
+		if e := s.db.QueryRow(`SELECT total_changes(),data_version FROM pragma_data_version`).Scan(&generation[0], &generation[1]); e != nil {
+			return nil, e
+		}
+		cache.mu.Lock()
+		aliases, valid := cache.aliases, cache.valid && cache.generation == generation
+		cache.mu.Unlock()
+		if valid {
+			return aliases, nil
+		}
+	}
+	aliases, e := resolveLogicalPersons(q)
+	if e == nil && cache != nil {
+		var after [2]int64
+		if q.QueryRow(`SELECT total_changes(),data_version FROM pragma_data_version`).Scan(&after[0], &after[1]) == nil && after == generation {
+			cache.mu.Lock()
+			cache.aliases, cache.generation, cache.valid = aliases, generation, true
+			cache.mu.Unlock()
+		}
+	}
+	return aliases, e
+}
+
+func resolveLogicalPersons(q dbq) (map[string]string, error) {
 	rows, e := q.Query(`SELECT person,record,state,coalesce(conflict,'') FROM persons ORDER BY person`)
 	if e != nil {
 		return nil, e
@@ -88,7 +134,7 @@ func logicalPersons(q dbq) (map[string]string, error) {
 	return result, nil
 }
 func (s *store) logicalPerson(id string) (string, error) {
-	m, e := logicalPersons(s.db)
+	m, e := logicalPersons(s)
 	if e != nil {
 		return "", e
 	}
@@ -101,6 +147,10 @@ func (s *store) logicalPerson(id string) (string, error) {
 // refreshContinuity never runs a worker or releases execution claims. All old
 // heads are refreshed before their devices are checked, including a stale pin.
 func (a *Agent) refreshContinuity(ctx context.Context) error {
+	var email bool
+	if e := a.store.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM persons WHERE state='conflict' AND conflict IS NULL AND coalesce(json_extract(record,'$.email'),'')!='') OR EXISTS(SELECT 1 FROM persons WHERE state IN ('pinned','self') AND coalesce(json_extract(record,'$.email'),'')!='' GROUP BY json_extract(record,'$.email') HAVING count(*)>1)`).Scan(&email); e != nil || !email {
+		return e
+	}
 	// Older clients may have frozen the new identity before learning that
 	// the email holder's devices were revoked. Retry those claims before
 	// counting pinned identities; step conflicts must remain frozen.
@@ -178,13 +228,13 @@ func (a *Agent) MessagingPersons() ([]PersonInfo, error) {
 	if e != nil {
 		return nil, e
 	}
-	aliases, e := logicalPersons(a.store.db)
+	aliases, e := logicalPersons(a.store)
 	if e != nil {
 		return nil, e
 	}
 	out := ps[:0]
 	for _, p := range ps {
-		if aliases[p.Person] == p.Person {
+		if to := aliases[p.Person]; to == "" || to == p.Person {
 			out = append(out, p)
 		}
 	}
@@ -199,7 +249,7 @@ func (a *Agent) continuityDMs(conv string) ([]ConversationInfo, error) {
 	if e != nil {
 		return nil, e
 	}
-	aliases, e := logicalPersons(a.store.db)
+	aliases, e := logicalPersons(a.store)
 	if e != nil {
 		return nil, e
 	}
@@ -247,7 +297,7 @@ func (a *Agent) projectContinuityDMs(rows []ConversationInfo) ([]ConversationInf
 	if have, e := hasContinuity(a.store.db); e != nil || !have {
 		return rows, e
 	}
-	aliases, e := logicalPersons(a.store.db)
+	aliases, e := logicalPersons(a.store)
 	if e != nil {
 		return nil, e
 	}
@@ -359,6 +409,15 @@ func logicalGroupMembers(q dbq, p GroupContext) ([]protocol.GroupMember, error) 
 			withdrawnPeople[w.Person] = true
 		}
 	}
+	if len(aliases) == 0 {
+		out := []protocol.GroupMember{}
+		for _, m := range p.State.Members {
+			if !withdrawnPeople[m.Person] || !withdrawn[m.Person+"/"+m.Admission.Hash()] {
+				out = append(out, m)
+			}
+		}
+		return out, nil
+	}
 	blockedThrough := map[string]int64{}
 	block := func(person string, seq int64) {
 		id := logical(person)
@@ -466,6 +525,9 @@ func (a *Agent) refreshContinuityPerson(ctx context.Context, p personRow) error 
 }
 
 func sameLogicalDMIn(q dbq, left, right string) (bool, error) {
+	if have, e := hasContinuity(q); e != nil || !have {
+		return left == right, e
+	}
 	if left == right {
 		return true, nil
 	}
@@ -505,6 +567,12 @@ func sameLogicalDMIn(q dbq, left, right string) (bool, error) {
 	return recovered, nil
 }
 func (a *Agent) continuityReplyParent(conv, ref string) (string, bool, error) {
+	if have, e := hasContinuity(a.store.db); e != nil || !have {
+		if e != nil {
+			return "", false, e
+		}
+		return humanReplyParent(a.store.db, conv, ref)
+	}
 	parent, known, e := humanReplyParent(a.store.db, conv, ref)
 	if e == nil && known {
 		return parent, known, nil
@@ -541,7 +609,7 @@ func (a *Agent) continuityNotices(conv string, family []ConversationInfo) ([]Con
 	if have, e := hasContinuity(a.store.db); e != nil || !have {
 		return nil, e
 	}
-	aliases, e := logicalPersons(a.store.db)
+	aliases, e := logicalPersons(a.store)
 	if e != nil {
 		return nil, e
 	}
@@ -555,7 +623,7 @@ func (a *Agent) continuityNotices(conv string, family []ConversationInfo) ([]Con
 	} else {
 		packet, err := groupTurnPacketIn(a.store.db, conv)
 		if err == nil {
-			ms, err := logicalGroupMembers(a.store.db, packet)
+			ms, err := logicalGroupMembers(a.store, packet)
 			if err != nil {
 				return nil, err
 			}
@@ -677,7 +745,7 @@ func (a *Agent) syncContinuityGroups(ctx context.Context) error {
 	if have, e := hasContinuity(a.store.db); e != nil || !have {
 		return e
 	}
-	aliases, e := logicalPersons(a.store.db)
+	aliases, e := logicalPersons(a.store)
 	if e != nil {
 		return e
 	}
@@ -721,7 +789,7 @@ func (a *Agent) syncContinuityGroups(ctx context.Context) error {
 		if e = groupTurnCheck(a.store.db, packet, a.Address, a.Self().Fingerprint()); e != nil {
 			continue
 		}
-		members, e := logicalGroupMembers(a.store.db, packet)
+		members, e := logicalGroupMembers(a.store, packet)
 		if e != nil {
 			return e
 		}
@@ -730,7 +798,7 @@ func (a *Agent) syncContinuityGroups(ctx context.Context) error {
 			return e
 		}
 		for _, m := range members {
-			p, ok, e := messagingPersonIn(a.store.db, m.Person)
+			p, ok, e := messagingPersonIn(a.store, m.Person)
 			if e != nil {
 				return e
 			}
@@ -806,9 +874,11 @@ func (a *Agent) MessagingRefOf(conv, id, dir string) (ControlRef, error) {
 	return ref, e
 }
 
+const continuityHeadQuery = `SELECT EXISTS(SELECT 1 FROM config WHERE k >= 'continuity-head/' AND k < 'continuity-head0')`
+
 func hasContinuity(q dbq) (bool, error) {
 	var exists bool
-	e := q.QueryRow(`SELECT EXISTS(SELECT 1 FROM config WHERE k LIKE 'continuity-head/%')`).Scan(&exists)
+	e := q.QueryRow(continuityHeadQuery).Scan(&exists)
 	return exists, e
 }
 
@@ -819,5 +889,5 @@ func (a *Agent) MessagingGroupMembership(conv, person string) (protocol.GroupMem
 	if e != nil {
 		return protocol.GroupMember{}, false, e
 	}
-	return logicalGroupMember(a.store.db, p, person)
+	return logicalGroupMember(a.store, p, person)
 }
