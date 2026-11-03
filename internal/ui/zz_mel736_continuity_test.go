@@ -1,3 +1,4 @@
+// Kept last in discovery order to preserve baseline UI race partitions.
 package ui
 
 import (

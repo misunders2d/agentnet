@@ -80,6 +80,8 @@ run_partition() {
 				if ($0=="TestHistoryCatchupDuplicateForeignDismissal") part=8
 			}
 			if (ui && n==3) {
+				if ($0=="TestMEL736OneBrowserParity") part=0
+				if ($0=="TestMEL736OneRendered") part=0
 				if ($0=="TestBrowserEngineBacklogCatchUp") part=2
 				if ($0=="TestTwoOrdinaryPeopleLinkedStateJourney") part=2
 				if ($0=="TestBrowserAssistantReactionsMatchGo") part=2
