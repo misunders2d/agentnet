@@ -3650,6 +3650,12 @@ export class Engine {
   }
 
   async refreshContinuity() {
+    if(this.continuityRefreshTask){this.continuityRefreshAgain=true;return this.continuityRefreshTask;}
+    const task=(async()=>{do{this.continuityRefreshAgain=false;await this.refreshContinuityOnce();}while(this.continuityRefreshAgain);})();this.continuityRefreshTask=task;
+    try{return await task;}finally{if(this.continuityRefreshTask===task)this.continuityRefreshTask=null;}
+  }
+
+  async refreshContinuityOnce() {
     const records=await this.store.all("persons");
     for(const p of records)if(p.state==="conflict"&&p.email_claim){try{await this.pinChain(p.person);}catch(e){if(retryable(e))throw e;}}
     const ps=(await this.store.all("persons")).filter(p=>p.email&&p.state==="pinned"), counts=new Map();
@@ -3727,16 +3733,17 @@ export class Engine {
   }
 
   async syncContinuityGroups() {
-    if(this.continuityGroupsTask)return this.continuityGroupsTask;
-    const task=this.syncContinuityGroupsOnce();this.continuityGroupsTask=task;
+    if(this.continuityGroupsTask){this.continuityGroupsAgain=true;return this.continuityGroupsTask;}
+    const task=(async()=>{for(let attempt=0;;attempt++){this.continuityGroupsAgain=false;try{await this.syncContinuityGroupsOnce();}catch(e){if(!(e instanceof StoreConflict)||attempt>=2)throw e;this.continuityGroupsAgain=true;}if(!this.continuityGroupsAgain)break;}})();this.continuityGroupsTask=task;
     try{return await task;}finally{if(this.continuityGroupsTask===task)this.continuityGroupsTask=null;}
   }
 
   async syncContinuityGroupsOnce() {
+    this.continuityGroupsRetry=false;
     const aliases=await this.logicalPersons(),targets=new Set([...aliases].filter(([a,b])=>a!==b).map(([,b])=>b));if(!targets.size)return;
     for(const g of await this.store.prefix("kv","group/")){
       const packet=wire.parseGroupContext(g.context),c={id:packet.state.conv,kind:"group",root:g.root};
-      try{await this.groupCurrent(c.id);}catch(_){continue;}
+      try{await this.groupCurrent(c.id);}catch(_){this.continuityGroupsRetry=true;continue;}
       const checks=[],members=await this.groupPeople(packet,checks),copies=[];
       for(const p of members)if(targets.has(p.person))for(const d of p.devices)if(d.address!==this.address)copies.push(...await this.groupHistoryCarriers(c,d,checks,true));
       if(copies.length){await this.store.write(copies.map(v=>({s:"outbox",k:v.id,v})),checks);this.changed();if(this.connected)this.queueOutbox();}
@@ -6169,12 +6176,11 @@ export class Engine {
   }
 
   async sendGroupTurn(c,{id:sendID="",queued=false,beforeStore=null,body,topic="",topic_event=null,quote="",reply_to="",files=[],receiver=null,organization_review=null,contribution_review=null,organization_batch=null}) {
-    await this.syncContinuityGroups();
     checkFiles(files);
     if(wire.topicOrganization(topic_event)){wire.checkTopic({v:wire.Version2,kind:"message",topic,topic_event,attachments:files,receiver_route:receiver});await this.topicOrganizationAuthor(c);}
     const consentChecks=[], consentEvents=await this.convEvents(c.id,consentChecks), consentMembers=await this.dmMembers(c,consentEvents,consentChecks), human=wire.topicOrganization(topic_event)||wire.conversationResources(topic_event)?null:await this.roomPlan(c,consentEvents,consentMembers,topic);
     if(human&&!wire.topicOrganization(topic_event)&&!wire.conversationResources(topic_event))return this.sendHumanTurn(c,{id:sendID,queued,kind:"message",body,topic,topic_event,quote,reply_to,files,receiver,contribution_review,beforeStore},human);
-    const checks=consentChecks, {packet,members}=await this.groupTurnEvidence(c.id,checks), me=await this.groupRead(checks,"kv","person"), own=(await this.logicalGroupMember(packet,me.person)), reply=await this.groupReply(c.id,reply_to);
+    const checks=consentChecks, {packet,members}=await this.groupTurnEvidence(c.id,checks), me=await this.groupRead(checks,"kv","person"), own=me.email?await this.logicalGroupMember(packet,me.person):wire.groupMember(packet.state,me.person), reply=await this.groupReply(c.id,reply_to);
     if(wire.conversationResources(topic_event)){wire.checkTopic({v:wire.Version2,kind:"message",body,topic,topic_event,quote,reply_to,attachments:files,receiver_route:receiver});await this.resourceMembers(c.id,checks);}
     quote=await this.groupReply(c.id,quote);
     const plain=[];for(const file of files)plain.push({name:wire.safeName(file.name),bytes:file.bytes instanceof Uint8Array?file.bytes:new Uint8Array(await file.arrayBuffer())});
@@ -8666,6 +8672,7 @@ export class Engine {
       if (this.recipientDiscoveryFailed?.size) this.reconcileRevokedRecipients().catch(() => {});
       if(this.continuityRetry)this.refreshContinuity().then(()=>{this.continuityRetry=false;}).catch(()=>{});
       if(this.continuityDiscoveryRetry)this.fillListed().catch(()=>{});
+      if(this.continuityGroupsRetry)this.syncContinuityGroups().catch(()=>{this.continuityGroupsRetry=true;});
       this.flushOutbox().catch(() => {});
       this.flushReceipts().catch(() => {});
       this.retryPendingReceives().catch(() => {});
