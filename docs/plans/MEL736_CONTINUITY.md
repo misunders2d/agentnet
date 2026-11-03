@@ -178,3 +178,28 @@ source; all failures, no skips, unless stated):
   3 pass / 1 fail before the held-group fix; its final pass is retained above.
 - Candidate `go test -race ./internal/ui -run '^TestGroupChangesRendered$' -count=1 -timeout 600s -json`:
   1 pass, no fail/skip after dependency installation.
+
+
+### November 3 — merged v0.10.7 and isolated resource-register regression check
+
+Merged origin/main at `1a543d36` (including v0.10.7 / `21938aa7` read/scroll
+fixes); retained both handoff sections and rebuilt Comic with
+`TMPDIR=/tmp/agr bash internal/ui/web/build.sh` under `set -o pipefail`.
+Discovery lists passed through the race script's actual awk preserve every
+main assignment: ui-0 196→198 (the two pinned MEL-736 parents), ui-1 197→197,
+ui-2 200→200; client-12 85→86 (only the existing MEL-736 stale-roster test).
+
+`cleared-register` clears Carol's resource-link register, then tests guest
+invitation, new group-member admission and fresh register bootstrap. It does
+not clear or re-register an identity. Resource implementation matches main;
+these fixtures have no email recovery/aliases, so family removal and recovered
+admin logic do not apply. Eight separate alternating invocations on each
+revision of `go test -race ./internal/client -run
+'^TestConversationResourcesNewMember$/^cleared-register$' -count=1 -json`
+completed: merged branch 8 pass / 0 fail; main `1a543d36` 7 pass / 1 fail
+(bootstrap guest invitation timeout at resources_test.go:343, matching the
+previous stress failure signature). No skips or package timeouts. No branch
+cause reproduced; no product workaround added. The previous concurrent
+-count runs' excess branch failures are not reproduced by isolated runs.
+Carrier flake left unchanged as requested. No broad shards, platform runs,
+timeout changes or partition-count changes in this follow-up.
