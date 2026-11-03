@@ -4,6 +4,7 @@ package client
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -241,17 +242,18 @@ func mel747Upgrade(t *testing.T, archive bool) {
 	var invite string
 	for id, sub := range held {
 		if sub == envelope.SubGroupInvite {
+			// Held as an identity conflict, as an earlier client held what
+			// named a record frozen as a claim (Zenbook, November 2).
 			invite = id
-			if !archive {
-				continue
-			}
-			if _, e := f.fresh.store.db.Exec(`UPDATE quarantine SET notice_archived=1 WHERE id=?`, id); e != nil {
+			if _, e := f.fresh.store.db.Exec(`UPDATE quarantine SET reason=?, detail_code='', notice_archived=? WHERE id=?`, reasonConflict, archive, id); e != nil {
 				t.Fatal(e)
 			}
 		}
 	}
-	if _, e := f.fresh.store.db.Exec(`DELETE FROM config WHERE k=?`, frozenMemberRecoveryScan); e != nil {
-		t.Fatal(e)
+	for _, scan := range []string{frozenMemberRecoveryScan, frozenRecordConflictScan} {
+		if _, e := f.fresh.store.db.Exec(`DELETE FROM config WHERE k=?`, scan); e != nil {
+			t.Fatal(e)
+		}
 	}
 	upgraded, e := Open(f.fresh.home)
 	if e != nil {
@@ -262,7 +264,7 @@ func mel747Upgrade(t *testing.T, archive bool) {
 		reason, _, archived := mel747Reason(t, upgraded, id)
 		switch {
 		case id == invite && archive:
-			if reason != reasonInvalid || !archived {
+			if reason != reasonConflict || !archived {
 				t.Fatal("archived notice changed", reason, archived)
 			}
 		case id == invite:
@@ -288,7 +290,7 @@ func mel747Upgrade(t *testing.T, archive bool) {
 		return invitations
 	}
 	if archive {
-		if reason, _, archived := mel747Reason(t, upgraded, invite); reason != reasonInvalid || !archived {
+		if reason, _, archived := mel747Reason(t, upgraded, invite); reason != reasonConflict || !archived {
 			t.Fatal("archived invitation resurfaced", reason, archived)
 		}
 		if count() != 0 {
@@ -386,6 +388,20 @@ func TestMEL747ClaimRecoveryFailsClosedAndSettles(t *testing.T) {
 	if reason, _ := frozenRecordWaits(reasonInvalid, errPersonClaimFrozen.Error()); reason != reasonProof {
 		t.Fatal("claim freeze refused for good", reason)
 	}
+	// Every person hold: a claim freeze, also wrapped, waits for proof; a
+	// conflicting step stays an identity conflict.
+	for err, want := range map[error]string{
+		errPersonClaimFrozen:                             reasonProof,
+		fmt.Errorf("member x: %w", errPersonClaimFrozen): reasonProof,
+		errPersonConflict:                                reasonConflict,
+		fmt.Errorf("%w: x", errPersonRecord):             reasonProof,
+	} {
+		var got string
+		_ = holdForPerson(err, func(reason, _ string) error { got = reason; return nil })
+		if got != want {
+			t.Fatal("person hold", err, got, want)
+		}
+	}
 	if _, e = a.store.db.Exec(`UPDATE persons SET conflict=NULL WHERE person=?`, f.old.Person); e != nil {
 		t.Fatal(e)
 	}
@@ -463,5 +479,43 @@ func TestMEL747ClaimRecoveryFailsClosedAndSettles(t *testing.T) {
 	}
 	if p, _, _ := a.store.personByID(f.old.Person); p.info.State != personConflict {
 		t.Fatal("fork pinned", p.info)
+	}
+}
+
+// The upgrade looks once at every message an earlier client held as an
+// identity conflict: open notices wait for proof (admission decides again),
+// an archived notice stays as it was, and nothing held later is touched.
+func TestMEL747ConflictSweepScope(t *testing.T) {
+	a, sender, root, item := historyRecoveryFixture(t)
+	open := historyRecoveryEnvelope(t, sender, a, root, item)
+	archived := historyRecoveryEnvelope(t, sender, a, root, item)
+	invalid := historyRecoveryEnvelope(t, sender, a, root, item)
+	for env, reason := range map[*envelope.Envelope]string{&open: reasonConflict, &archived: reasonConflict, &invalid: reasonInvalid} {
+		if e := a.store.holdAs(*env, reason); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if _, e := a.store.db.Exec(`UPDATE quarantine SET notice_archived=1 WHERE id=?`, archived.ID); e != nil {
+		t.Fatal(e)
+	}
+	if e := a.store.deleteConfig(frozenRecordConflictScan); e != nil {
+		t.Fatal(e)
+	}
+	if e := a.recoverFrozenRecordConflicts(); e != nil {
+		t.Fatal(e)
+	}
+	historyRecoveryReason(t, a, open.ID, reasonProof)
+	historyRecoveryReason(t, a, archived.ID, reasonConflict)
+	historyRecoveryReason(t, a, invalid.ID, reasonInvalid)
+	late := historyRecoveryEnvelope(t, sender, a, root, item)
+	if e := a.store.holdAs(late, reasonConflict); e != nil {
+		t.Fatal(e)
+	}
+	if e := a.recoverFrozenRecordConflicts(); e != nil {
+		t.Fatal(e)
+	}
+	historyRecoveryReason(t, a, late.ID, reasonConflict)
+	if got := inboxCount(t, a, "1=1"); got != 0 {
+		t.Fatalf("sweep inserted %d messages", got)
 	}
 }

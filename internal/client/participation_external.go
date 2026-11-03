@@ -1273,6 +1273,9 @@ func (a *Agent) admitExternalParticipation(ctx context.Context, env envelope.Env
 		return false, nil
 	}
 	proofErr := func(err error) (bool, error) {
+		if errors.Is(err, errPersonClaimFrozen) {
+			return true, hold(reasonProof, err.Error()) // looked at again once the claim settles (MEL-747)
+		}
 		if errors.Is(err, errPersonConflict) {
 			return true, hold(reasonConflict, err.Error())
 		}

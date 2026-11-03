@@ -424,6 +424,13 @@ func (a *Agent) admitHistory(ctx context.Context, env envelope.Envelope, in enve
 	if p, ok, err := a.store.personByID(owner); err != nil {
 		return err
 	} else if ok && p.info.State == personConflict {
+		// An author frozen only as an email claim is looked at again once
+		// it settles (MEL-747); a conflicting step refuses it.
+		if claim, err := a.store.emailClaimOnly(owner); err != nil {
+			return err
+		} else if claim {
+			return hold(reasonProof, errPersonClaimFrozen.Error())
+		}
 		return hold(reasonConflict, errPersonConflict.Error())
 	}
 	orig := item.inner(in.Conv)
@@ -499,6 +506,9 @@ func (a *Agent) admitHistory(ctx context.Context, env envelope.Envelope, in enve
 				if reason, err := a.externalHostProof(ctx, ev.Host); err != nil {
 					if reason != "" {
 						return hold(reason, err.Error())
+					}
+					if errors.Is(err, errPersonClaimFrozen) {
+						return hold(reasonProof, err.Error()) // looked at again once the claim settles (MEL-747)
 					}
 					if errors.Is(err, errPersonConflict) {
 						return hold(reasonConflict, err.Error())

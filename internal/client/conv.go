@@ -1488,6 +1488,8 @@ func (a *Agent) retryProof(ctx context.Context) (more bool) {
 func holdForPerson(err error, hold func(string, string) error) error {
 	var he *HubError
 	switch {
+	case errors.Is(err, errPersonClaimFrozen):
+		return hold(reasonProof, err.Error()) // looked at again once the claim settles (MEL-747)
 	case errors.Is(err, errPersonConflict):
 		return hold(reasonConflict, err.Error())
 	case errors.Is(err, ErrNoPerson), errors.Is(err, errPersonRecord), errors.As(err, &he) && !transient(err):
