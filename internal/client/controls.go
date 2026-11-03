@@ -927,6 +927,7 @@ func addControlInboxIn(tx *sql.Tx, in envelope.Inner, verifiedBy string, fromQua
 // is checked whenever the target is shown (resolveControls).
 func (a *Agent) admitControl(ctx context.Context, env envelope.Envelope, in envelope.Inner, sender identity.Public, fromQuarantine bool) error {
 	hold := func(reason, why string) error {
+		reason, why = frozenRecordWaits(reason, why)
 		return a.holdOpened(ctx, "control", env, in, sender, reason, why)
 	}
 	allowed, err := a.revokedIngressAllowed(ctx, env, in, sender)

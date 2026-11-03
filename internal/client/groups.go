@@ -62,6 +62,11 @@ func (a *Agent) groupResolver(ctx context.Context, packet GroupContext) (protoco
 		if current, ok, err := a.store.personByID(person); err != nil {
 			return nil, err
 		} else if ok && current.info.State == personConflict {
+			if claim, err := a.store.emailClaimOnly(person); err != nil {
+				return nil, err
+			} else if claim {
+				return nil, errPersonClaimFrozen
+			}
 			return nil, errPersonConflict
 		}
 		for hash := range hashes {

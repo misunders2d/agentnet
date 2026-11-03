@@ -312,6 +312,11 @@ func Open(home string) (*Agent, error) {
 		st.db.Close()
 		return nil, err
 	}
+	if err := a.recoverFrozenMemberCarriers(); err != nil {
+		a.hub.release()
+		st.db.Close()
+		return nil, err
+	}
 	a.hub.workspaceCheck = a.WorkspaceRequestGuard()
 	a.hub.gate = &updateGate{refused: a.noteUpdateRequired} // the Hub's refusal of this build (updaterequired.go)
 	if u, ok := st.updateRequired(); ok {

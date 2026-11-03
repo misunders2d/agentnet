@@ -37,6 +37,12 @@ const (
 
 var errPersonConflict = errors.New("this person's record conflicts with the one pinned here; it is frozen")
 
+// errPersonClaimFrozen is errPersonConflict for a person frozen only for
+// claiming an email a pinned person holds here (no conflicting step): it is
+// looked at again as the email settles, so what waits on it is not refused
+// for good (MEL-747). A conflicting step stays errPersonConflict.
+var errPersonClaimFrozen = fmt.Errorf("%w: only for an email held here, looked at again", errPersonConflict)
+
 // ErrService refuses a person on an installation set up as a service.
 var ErrService = errors.New("this installation is a service: it speaks as itself, not for a person")
 
@@ -464,7 +470,8 @@ func (a *Agent) pinNewerSteps(ctx context.Context, person string, adopt bool) (p
 	} else if ok {
 		if p.info.State == personConflict {
 			// Only an email claim is looked at again, once the person that
-			// held the email has left; a conflicting step stays frozen.
+			// held the email has left, or the claimant itself has; a
+			// conflicting step stays frozen.
 			if claim, err := a.store.emailClaimOnly(person); err != nil {
 				return pinResult{}, err
 			} else if !claim {
@@ -476,7 +483,44 @@ func (a *Agent) pinNewerSteps(ctx context.Context, person string, adopt bool) (p
 			if ok, err := a.store.releaseEmailClaim(person, p.roster.Email); err != nil {
 				return pinResult{}, err
 			} else if !ok {
-				return pinResult{}, errPersonConflict
+				// MEL-747: an earlier client froze a recovered person's
+				// old identity on its new device, where the holder is this
+				// device's own person and never leaves. A claimant whose
+				// every device the relay revoked under its exact pinned key
+				// left: pinned again as at first sight, where the same relay
+				// check makes it historical. A live or unknown device keeps
+				// the freeze.
+				// A relay out of reach is retried; any other failure keeps
+				// the claim frozen without stopping other persons' work.
+				keep := func(err error) (pinResult, error) {
+					if transient(err) {
+						return pinResult{}, err
+					}
+					return pinResult{}, errPersonClaimFrozen
+				}
+				// The relay's chain must still carry the frozen step: a
+				// different one at its seq stays frozen, nothing released.
+				raws, err := a.fetchChain(ctx, person, -1)
+				if err != nil {
+					return keep(err)
+				}
+				head, same, err := claimHead(raws, p.roster)
+				if err != nil {
+					return keep(err)
+				}
+				if !same {
+					return pinResult{}, errPersonConflict
+				}
+				if left, err := a.claimantLeft(ctx, head); err != nil {
+					return keep(err)
+				} else if !left {
+					return pinResult{}, errPersonClaimFrozen
+				}
+				if ok, err := a.store.releaseLeftEmailClaim(person, p.roster.Hash()); err != nil {
+					return pinResult{}, err
+				} else if !ok {
+					return pinResult{}, errPersonClaimFrozen
+				}
 			}
 		} else {
 			after, first = p.info.Seq, false
@@ -544,6 +588,10 @@ func (a *Agent) pinNewerSteps(ctx context.Context, person string, adopt bool) (p
 	res, err := a.store.pinChain(person, raws, a.Self(), adopt)
 	if err == nil && historicalHead != "" {
 		err = a.store.setConfig(map[string]string{continuityHeadPrefix + person: historicalHead})
+		if err == nil { // group traffic that waited on its frozen record looks again
+			a.convWork.due(convRetry)
+			a.kickNow()
+		}
 	}
 
 	if err == nil && first && res.changed {
@@ -684,6 +732,80 @@ func (s *store) releaseEmailClaim(person, email string) (bool, error) {
 		return false, err
 	}
 	if held, err := emailHeldIn(tx, person, email); err != nil || held {
+		return false, err
+	}
+	for _, q := range []string{`DELETE FROM persons WHERE person = ?`, `DELETE FROM person_chain WHERE person = ?`, `DELETE FROM person_devices WHERE person = ?`} {
+		if _, err := tx.Exec(q, person); err != nil {
+			return false, err
+		}
+	}
+	return true, tx.Commit()
+}
+
+// claimHead verifies raws, a person's whole chain from step 0, and returns
+// its newest step. same reports that the chain carries the pinned step at its
+// seq: a relay serving another step there is not followed.
+func claimHead(raws [][]byte, pinned protocol.PersonRoster) (protocol.PersonRoster, bool, error) {
+	var head protocol.PersonRoster
+	same := false
+	for i, raw := range raws {
+		r, err := protocol.ParsePersonRoster(raw)
+		if err != nil {
+			return head, false, err
+		}
+		if i == 0 {
+			err = r.VerifyFirst()
+		} else {
+			_, err = r.VerifyNext(head)
+		}
+		if err != nil {
+			return head, false, err
+		}
+		if r.Person != pinned.Person {
+			return head, false, errPersonRecord
+		}
+		if r.Seq == pinned.Seq {
+			if r.Hash() != pinned.Hash() {
+				return head, false, nil
+			}
+			same = true
+		}
+		head = r
+	}
+	return head, same, nil
+}
+
+// claimantLeft reports whether the relay revoked every device of an email
+// claimant under the exact key pinned for it here: that person left. A
+// relay out of reach is returned, so the claim is looked at again later.
+func (a *Agent) claimantLeft(ctx context.Context, r protocol.PersonRoster) (bool, error) {
+	if len(r.Devices) == 0 {
+		return false, nil
+	}
+	for _, d := range r.Devices {
+		entry, err := a.directory(ctx, d.Address)
+		if err != nil {
+			return false, err
+		}
+		if !entry.Revoked || entry.Public.Fingerprint() != d.Fingerprint() {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// releaseLeftEmailClaim forgets the email-claim freeze of a claimant that
+// left (claimantLeft), only while the frozen record is still the one
+// checked, so its chain is pinned again from step 0 and verified as at
+// first sight. It reports whether it did.
+func (s *store) releaseLeftEmailClaim(person, hash string) (bool, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	var claim bool
+	if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM persons WHERE person = ? AND state = ? AND conflict IS NULL AND hash = ? AND coalesce(json_extract(record, '$.email'), '') != '')`, person, personConflict, hash).Scan(&claim); err != nil || !claim {
 		return false, err
 	}
 	for _, q := range []string{`DELETE FROM persons WHERE person = ?`, `DELETE FROM person_chain WHERE person = ?`, `DELETE FROM person_devices WHERE person = ?`} {
