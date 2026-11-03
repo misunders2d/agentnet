@@ -218,6 +218,25 @@ type pinResult struct {
 // (errPersonConflict). me is this installation's device; with adopt, a
 // person listing it becomes this installation's own (a device link).
 func (s *store) pinChain(person string, raws [][]byte, me identity.Public, adopt bool) (pinResult, error) {
+	return s.pinSteps(person, raws, me, adopt, "", false)
+}
+
+// pinLeftClaim pins raws, the claimant's whole chain from step 0, over its
+// email-claim freeze with hash claim (MEL-747), in one transaction with
+// its continuity checkpoint. The chain is checked against every step pinned
+// for it: a different verified step freezes it for good as a conflicting
+// step. left: the relay revoked every device of the newest step under its
+// exact key (claimantLeft), recorded here as revoked (endRecipient); without
+// it, or if a device of it is not known revoked here, nothing changes and
+// the claim stays frozen (errPersonClaimFrozen).
+func (s *store) pinLeftClaim(person string, raws [][]byte, me identity.Public, claim string, left bool) (pinResult, error) {
+	if claim == "" || len(raws) == 0 {
+		return pinResult{}, errPersonClaimFrozen
+	}
+	return s.pinSteps(person, raws, me, false, claim, left)
+}
+
+func (s *store) pinSteps(person string, raws [][]byte, me identity.Public, adopt bool, claim string, left bool) (pinResult, error) {
 	var res pinResult
 	if len(raws) == 0 {
 		// No steps can change the pin. Recheck its current conflict state
@@ -240,17 +259,34 @@ func (s *store) pinChain(person string, raws [][]byte, me identity.Public, adopt
 	if err != nil {
 		return res, err
 	}
+	claimed := false // over the exact email-claim freeze claim
 	if pinned && head.info.State == personConflict {
-		return res, errPersonConflict
+		if claim == "" || head.roster.Hash() != claim {
+			return res, errPersonConflict
+		}
+		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM persons WHERE person = ? AND state = ? AND conflict IS NULL AND hash = ?)`, person, personConflict, claim).Scan(&claimed); err != nil {
+			return res, err
+		}
+		if !claimed {
+			return res, errPersonConflict
+		}
+	} else if claim != "" {
+		return res, errPersonClaimFrozen // no longer that freeze: looked at again from what is pinned now
 	}
 	// freeze freezes the pinned person other (a verified step conflicts
 	// with it) and refuses the steps; this installation's own person is
-	// never frozen, only the step refused.
+	// never frozen, only the step refused. A claim's own conflicting step
+	// makes its freeze a conflicting step's.
 	freeze := func(other string, raw []byte) (pinResult, error) {
 		tx.Rollback()
 		if _, err := s.db.Exec(`UPDATE persons SET state = ?, conflict = coalesce(conflict, ?) WHERE person = ? AND state = ?`,
 			personConflict, string(raw), other, personPinned); err != nil {
 			return res, err
+		}
+		if claimed && other == person {
+			if _, err := s.db.Exec(`UPDATE persons SET conflict = coalesce(conflict, ?) WHERE person = ? AND state = ?`, string(raw), person, personConflict); err != nil {
+				return res, err
+			}
 		}
 		check, e := s.db.Begin()
 		if e != nil {
@@ -302,6 +338,25 @@ func (s *store) pinChain(person string, raws [][]byte, me identity.Public, adopt
 		}
 		cur, have, res.changed = r, true, true
 	}
+	if claimed {
+		// Only a claimant that left is pinned: every device of its newest
+		// step known revoked here; otherwise nothing changes.
+		historical := left && len(cur.Devices) > 0
+		for _, d := range cur.Devices {
+			known, err := revokedDeviceKnown(tx, d.Address, d.Fingerprint())
+			if err != nil {
+				return res, err
+			}
+			historical = historical && known
+		}
+		if !historical {
+			return res, errPersonClaimFrozen
+		}
+		if _, err := tx.Exec(`INSERT OR REPLACE INTO config(k, v) VALUES(?, ?)`, continuityHeadPrefix+person, cur.Hash()); err != nil {
+			return res, err
+		}
+		res.changed = true
+	}
 	if !res.changed {
 		return res, nil
 	}
@@ -340,6 +395,9 @@ func (s *store) pinChain(person string, raws [][]byte, me identity.Public, adopt
 		return res, err
 	}
 	state := head.info.State
+	if claimed {
+		state = personPinned
+	}
 	switch {
 	case !pinned && lists && adopt && !haveSelf:
 		state, res.joined = personSelf, true
@@ -486,41 +544,11 @@ func (a *Agent) pinNewerSteps(ctx context.Context, person string, adopt bool) (p
 				// MEL-747: an earlier client froze a recovered person's
 				// old identity on its new device, where the holder is this
 				// device's own person and never leaves. A claimant whose
-				// every device the relay revoked under its exact pinned key
-				// left: pinned again as at first sight, where the same relay
-				// check makes it historical. A live or unknown device keeps
-				// the freeze.
-				// A relay out of reach is retried; any other failure keeps
-				// the claim frozen without stopping other persons' work.
-				keep := func(err error) (pinResult, error) {
-					if transient(err) {
-						return pinResult{}, err
-					}
-					return pinResult{}, errPersonClaimFrozen
-				}
-				// The relay's chain must still carry the frozen step: a
-				// different one at its seq stays frozen, nothing released.
-				raws, err := a.fetchChain(ctx, person, -1)
-				if err != nil {
-					return keep(err)
-				}
-				head, same, err := claimHead(raws, p.roster)
-				if err != nil {
-					return keep(err)
-				}
-				if !same {
-					return pinResult{}, errPersonConflict
-				}
-				if left, err := a.claimantLeft(ctx, head); err != nil {
-					return keep(err)
-				} else if !left {
-					return pinResult{}, errPersonClaimFrozen
-				}
-				if ok, err := a.store.releaseLeftEmailClaim(person, p.roster.Hash()); err != nil {
-					return pinResult{}, err
-				} else if !ok {
-					return pinResult{}, errPersonClaimFrozen
-				}
+				// every device the relay revoked under its exact key left:
+				// pinned over its freeze, checked against every step pinned
+				// for it, as historical. A live or unknown device keeps the
+				// freeze; a different verified step freezes it for good.
+				return a.pinLeftClaim(ctx, person, p.roster.Hash())
 			}
 		} else {
 			after, first = p.info.Seq, false
@@ -742,42 +770,58 @@ func (s *store) releaseEmailClaim(person, email string) (bool, error) {
 	return true, tx.Commit()
 }
 
-// claimHead verifies raws, a person's whole chain from step 0, and returns
-// its newest step. same reports that the chain carries the pinned step at its
-// seq: a relay serving another step there is not followed.
-func claimHead(raws [][]byte, pinned protocol.PersonRoster) (protocol.PersonRoster, bool, error) {
-	var head protocol.PersonRoster
-	same := false
-	for i, raw := range raws {
-		r, err := protocol.ParsePersonRoster(raw)
-		if err != nil {
-			return head, false, err
+// pinLeftClaim looks at an email claim its holder cannot release (MEL-747).
+// A relay out of reach is retried; any other failure keeps the claim frozen
+// without stopping other persons' work.
+func (a *Agent) pinLeftClaim(ctx context.Context, person, claim string) (pinResult, error) {
+	keep := func(err error) (pinResult, error) {
+		if transient(err) {
+			return pinResult{}, err
 		}
-		if i == 0 {
-			err = r.VerifyFirst()
-		} else {
-			_, err = r.VerifyNext(head)
-		}
-		if err != nil {
-			return head, false, err
-		}
-		if r.Person != pinned.Person {
-			return head, false, errPersonRecord
-		}
-		if r.Seq == pinned.Seq {
-			if r.Hash() != pinned.Hash() {
-				return head, false, nil
-			}
-			same = true
-		}
-		head = r
+		return pinResult{}, errPersonClaimFrozen
 	}
-	return head, same, nil
+	raws, err := a.fetchChain(ctx, person, -1)
+	if err != nil {
+		return keep(err)
+	}
+	if len(raws) == 0 {
+		return pinResult{}, errPersonClaimFrozen
+	}
+	head, err := protocol.ParsePersonRoster(raws[len(raws)-1])
+	if err != nil || head.Person != person {
+		return pinResult{}, errPersonClaimFrozen
+	}
+	left, err := a.claimantLeft(ctx, head)
+	if err != nil {
+		return keep(err)
+	}
+	if left {
+		for _, d := range head.Devices {
+			if err = a.store.endRecipient(d.Address, d.Fingerprint(), true); err != nil {
+				return pinResult{}, err
+			}
+		}
+	}
+	res, err := a.store.pinLeftClaim(person, raws, a.Self(), claim, left)
+	if err != nil {
+		if errors.Is(err, errPersonRecord) {
+			return pinResult{}, errPersonClaimFrozen
+		}
+		return res, err
+	}
+	// Now historical: what waited on its freeze looks again (as at first
+	// sight), and continuity takes it up.
+	a.convWork.due(convPersons)
+	if _, e := a.store.releaseConflictHolds(person); e != nil {
+		return res, e
+	}
+	a.convWork.due(convRetry)
+	a.kickNow()
+	return res, nil
 }
 
 // claimantLeft reports whether the relay revoked every device of an email
-// claimant under the exact key pinned for it here: that person left. A
-// relay out of reach is returned, so the claim is looked at again later.
+// claimant's step under the exact key it lists: that person left.
 func (a *Agent) claimantLeft(ctx context.Context, r protocol.PersonRoster) (bool, error) {
 	if len(r.Devices) == 0 {
 		return false, nil
@@ -792,28 +836,6 @@ func (a *Agent) claimantLeft(ctx context.Context, r protocol.PersonRoster) (bool
 		}
 	}
 	return true, nil
-}
-
-// releaseLeftEmailClaim forgets the email-claim freeze of a claimant that
-// left (claimantLeft), only while the frozen record is still the one
-// checked, so its chain is pinned again from step 0 and verified as at
-// first sight. It reports whether it did.
-func (s *store) releaseLeftEmailClaim(person, hash string) (bool, error) {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return false, err
-	}
-	defer tx.Rollback()
-	var claim bool
-	if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM persons WHERE person = ? AND state = ? AND conflict IS NULL AND hash = ? AND coalesce(json_extract(record, '$.email'), '') != '')`, person, personConflict, hash).Scan(&claim); err != nil || !claim {
-		return false, err
-	}
-	for _, q := range []string{`DELETE FROM persons WHERE person = ?`, `DELETE FROM person_chain WHERE person = ?`, `DELETE FROM person_devices WHERE person = ?`} {
-		if _, err := tx.Exec(q, person); err != nil {
-			return false, err
-		}
-	}
-	return true, tx.Commit()
 }
 
 // releaseConflictHolds moves messages held as an identity conflict from a

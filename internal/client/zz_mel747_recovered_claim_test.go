@@ -40,6 +40,7 @@ type mel747Fixture struct {
 	old   protocol.PersonRoster
 	root  protocol.ConvRoot
 	fresh *Agent
+	lost  *Agent // the old person's device, revoked
 }
 
 // mel747Recovered builds Bohdan's production state: a group naming his old
@@ -96,7 +97,7 @@ func mel747Recovered(t *testing.T) mel747Fixture {
 	}
 	fresh := mel736OneJoin(t, w, "new")
 	mel747FreezeOldOnRecovered(t, w, fresh, old.roster)
-	return mel747Fixture{w: w, peer: peer, old: old.roster, root: root, fresh: fresh}
+	return mel747Fixture{w: w, peer: peer, old: old.roster, root: root, fresh: fresh, lost: oldDevice}
 }
 
 // mel747GroupWorks checks both directions of group traffic for the
@@ -202,6 +203,11 @@ func mel747Reason(t *testing.T, a *Agent, id string) (reason, code string, archi
 // leaves a notice its reader archived as it was, and the group arrives with
 // no new copy from anyone.
 func TestMEL747UpgradeRecoversCarriersRefusedEarlier(t *testing.T) {
+	t.Run("invitation notice archived", func(t *testing.T) { mel747Upgrade(t, true) })
+	t.Run("invitation notice open", func(t *testing.T) { mel747Upgrade(t, false) })
+}
+
+func mel747Upgrade(t *testing.T, archive bool) {
 	f := mel747Recovered(t)
 	// v0.10.8 refused what named the frozen record as for a conflicting
 	// step: hold the freeze as one while this device collects those refusals.
@@ -236,6 +242,9 @@ func TestMEL747UpgradeRecoversCarriersRefusedEarlier(t *testing.T) {
 	for id, sub := range held {
 		if sub == envelope.SubGroupInvite {
 			invite = id
+			if !archive {
+				continue
+			}
 			if _, e := f.fresh.store.db.Exec(`UPDATE quarantine SET notice_archived=1 WHERE id=?`, id); e != nil {
 				t.Fatal(e)
 			}
@@ -252,9 +261,13 @@ func TestMEL747UpgradeRecoversCarriersRefusedEarlier(t *testing.T) {
 	for id, sub := range held {
 		reason, _, archived := mel747Reason(t, upgraded, id)
 		switch {
-		case id == invite:
+		case id == invite && archive:
 			if reason != reasonInvalid || !archived {
 				t.Fatal("archived notice changed", reason, archived)
+			}
+		case id == invite:
+			if reason != reasonProof {
+				t.Fatal("open invitation not reconsidered", reason)
 			}
 		case sub == envelope.SubGroupContext:
 			if reason != reasonProof {
@@ -267,12 +280,34 @@ func TestMEL747UpgradeRecoversCarriersRefusedEarlier(t *testing.T) {
 	}
 	runAgent(t, upgraded)
 	mel747GroupWorks(t, f, upgraded)
-	if reason, _, archived := mel747Reason(t, upgraded, invite); reason != reasonInvalid || !archived {
-		t.Fatal("archived invitation resurfaced", reason, archived)
-	}
 	var invitations int
-	if e := upgraded.store.db.QueryRow(`SELECT count(*) FROM group_invitations WHERE direction='in'`).Scan(&invitations); e != nil || invitations != 0 {
-		t.Fatal("archived invitation admitted", invitations, e)
+	count := func() int {
+		if e := upgraded.store.db.QueryRow(`SELECT count(*) FROM group_invitations WHERE direction='in'`).Scan(&invitations); e != nil {
+			t.Fatal(e)
+		}
+		return invitations
+	}
+	if archive {
+		if reason, _, archived := mel747Reason(t, upgraded, invite); reason != reasonInvalid || !archived {
+			t.Fatal("archived invitation resurfaced", reason, archived)
+		}
+		if count() != 0 {
+			t.Fatal("archived invitation admitted", invitations)
+		}
+		return
+	}
+	// The open invitation is admitted in full as received: no longer held.
+	eventually(t, "open invitation admitted", func() bool {
+		var held int
+		upgraded.store.db.QueryRow(`SELECT count(*) FROM quarantine WHERE id=?`, invite).Scan(&held)
+		return held == 0 && count() == 1
+	})
+	var state string
+	if e := upgraded.store.db.QueryRow(`SELECT state FROM group_invitations WHERE direction='in'`).Scan(&state); e != nil {
+		t.Fatal(e)
+	}
+	if state != "pending" {
+		t.Fatal("open invitation not pending for its reader", state)
 	}
 }
 
@@ -306,23 +341,37 @@ func TestMEL747ClaimRecoveryFailsClosedAndSettles(t *testing.T) {
 	if left, e := a.claimantLeft(ctx, f.old); e != nil || !left {
 		t.Fatal("revoked claimant not left", left, e)
 	}
-	// A relay serving another step at the pinned seq is not followed.
+	// Not left, or left without its revocation known here, or looked at
+	// from a stale freeze: frozen as it was, its chain kept.
 	raws, e := a.fetchChain(ctx, f.old.Person, -1)
 	if e != nil {
 		t.Fatal(e)
 	}
-	if _, same, e := claimHead(raws, f.old); e != nil || !same {
-		t.Fatal("pinned step not found", same, e)
+	chain := func() (n int) {
+		t.Helper()
+		if e := a.store.db.QueryRow(`SELECT count(*) FROM person_chain WHERE person=?`, f.old.Person).Scan(&n); e != nil {
+			t.Fatal(e)
+		}
+		return n
 	}
-	forked := f.old
-	forked.Label = "Forked"
-	if _, same, _ := claimHead(raws, forked); same {
-		t.Fatal("different step at pinned seq followed")
+	steps := chain()
+	if steps == 0 {
+		t.Fatal("claim kept no chain")
 	}
-	ahead := f.old
-	ahead.Seq += 5
-	if _, same, _ := claimHead(raws, ahead); same {
-		t.Fatal("chain without the pinned step followed")
+	for name, try := range map[string]struct {
+		claim string
+		left  bool
+	}{
+		"not left":          {f.old.Hash(), false},
+		"revocation unseen": {f.old.Hash(), true},
+		"stale freeze":      {"stale", true},
+	} {
+		if _, e = a.store.pinLeftClaim(f.old.Person, raws, a.Self(), try.claim, try.left); !errors.Is(e, errPersonConflict) {
+			t.Fatal(name, "pinned", e)
+		}
+		if claim, e := a.store.emailClaimOnly(f.old.Person); e != nil || !claim || chain() != steps {
+			t.Fatal(name, "claim changed", claim, e)
+		}
 	}
 	// A conflicting step stays frozen: no release, no claim error.
 	if _, e = a.store.db.Exec(`UPDATE persons SET conflict='step' WHERE person=?`, f.old.Person); e != nil {
@@ -369,8 +418,8 @@ func TestMEL747ClaimRecoveryFailsClosedAndSettles(t *testing.T) {
 		t.Fatal(e)
 	}
 	healed("checkpoint repair")
-	// Interrupted after the release, before the pin: the next lookup pins
-	// it as at first sight.
+	// Never pinned here (or forgotten): the next lookup pins it as at
+	// first sight, historical.
 	for _, q := range []string{`DELETE FROM persons WHERE person = ?`, `DELETE FROM person_chain WHERE person = ?`, `DELETE FROM person_devices WHERE person = ?`} {
 		if _, e = a.store.db.Exec(q, f.old.Person); e != nil {
 			t.Fatal(e)
@@ -389,5 +438,30 @@ func TestMEL747ClaimRecoveryFailsClosedAndSettles(t *testing.T) {
 	}
 	if a.store.continuityDirty.Load() || a.convWork.bits.Load()&(convPersons|convRecipients) != 0 {
 		t.Fatalf("settled continuity spins: dirty=%v work=%d", a.store.continuityDirty.Load(), a.convWork.bits.Load())
+	}
+	// A different verified step at a pinned seq, served for a claim, freezes
+	// it for good as a conflicting step: never looked at again, never
+	// pinned, its carriers refused.
+	if _, e = a.store.db.Exec(`UPDATE persons SET state=?, conflict=NULL WHERE person=?`, personConflict, f.old.Person); e != nil {
+		t.Fatal(e)
+	}
+	forked := f.old
+	forked.Label = "Forked"
+	forked.Sign(f.lost.id.Sign)
+	if e = forked.VerifyFirst(); e != nil {
+		t.Fatal("fixture: fork does not verify", e)
+	}
+	fork, _ := json.Marshal(forked)
+	if _, e = a.store.pinLeftClaim(f.old.Person, [][]byte{fork}, a.Self(), f.old.Hash(), true); !errors.Is(e, errPersonConflict) || errors.Is(e, errPersonClaimFrozen) {
+		t.Fatal("fork not frozen for good", e)
+	}
+	if claim, e := a.store.emailClaimOnly(f.old.Person); e != nil || claim {
+		t.Fatal("fork left as a claim", claim, e)
+	}
+	if _, e = a.refreshPerson(ctx, f.old.Person, false); !errors.Is(e, errPersonConflict) || errors.Is(e, errPersonClaimFrozen) {
+		t.Fatal("fork looked at again", e)
+	}
+	if p, _, _ := a.store.personByID(f.old.Person); p.info.State != personConflict {
+		t.Fatal("fork pinned", p.info)
 	}
 }

@@ -12,28 +12,27 @@ const frozenMemberRecoveryScan = "group-frozen-member-invalid-recovery-v1"
 
 // Earlier clients refused group lifecycle and context carriers for good when
 // a person record the group names was frozen here (MEL-747): a recovered
-// person's own old identity, frozen as an email claim. Reconsider those inert
-// carriers once, locally and in pages: they wait for proof again and normal
-// ingress verifies them in full. Nothing runs work or grants membership here,
-// and a notice its reader already archived stays as it was.
+// person's own old identity, frozen as an email claim, also one released
+// since. Reconsider those inert carriers once, locally and in pages: they
+// wait for proof again and normal ingress verifies them in full; one refused
+// for another reason is refused again. Nothing runs work or grants
+// membership here, and a notice its reader already archived stays as it
+// was. Only rows refused at admission are opened, each outside any write
+// transaction; each move is its own conditional update, so an interrupted
+// scan resumes where it stopped.
 func (a *Agent) recoverFrozenMemberCarriers() error {
-	tx, err := a.store.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
+	db := a.store.db
 	var done string
-	err = tx.QueryRow(`SELECT v FROM config WHERE k=?`, frozenMemberRecoveryScan).Scan(&done)
-	if err == nil {
+	switch err := db.QueryRow(`SELECT v FROM config WHERE k=?`, frozenMemberRecoveryScan).Scan(&done); {
+	case err == nil:
 		return nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
+	case !errors.Is(err, sql.ErrNoRows):
 		return err
 	}
 	moved := 0
 	type held struct{ id, sender, raw string }
 	for after := ""; ; {
-		rows, err := tx.Query(`SELECT id,sender,envelope FROM quarantine WHERE reason=? AND detail_code='admission_failed' AND notice_archived=0 AND id>? ORDER BY id LIMIT ?`, reasonInvalid, after, proofPage)
+		rows, err := db.Query(`SELECT id,sender,envelope FROM quarantine WHERE reason=? AND detail_code='admission_failed' AND notice_archived=0 AND id>? ORDER BY id LIMIT ?`, reasonInvalid, after, proofPage)
 		if err != nil {
 			return err
 		}
@@ -60,7 +59,7 @@ func (a *Agent) recoverFrozenMemberCarriers() error {
 			if json.Unmarshal([]byte(h.raw), &env) != nil || env.V != envelope.Version2 || env.ID != h.id || env.From != h.sender || env.To != a.Address {
 				continue
 			}
-			sender, found, err := pinnedKey(tx, env.From)
+			sender, found, err := pinnedKey(db, env.From)
 			if err != nil {
 				return err
 			}
@@ -76,7 +75,7 @@ func (a *Agent) recoverFrozenMemberCarriers() error {
 			default:
 				continue
 			}
-			res, err := tx.Exec(`UPDATE quarantine SET reason=? WHERE id=? AND reason=?`, reasonProof, env.ID, reasonInvalid)
+			res, err := db.Exec(`UPDATE quarantine SET reason=? WHERE id=? AND reason=? AND detail_code='admission_failed' AND notice_archived=0`, reasonProof, env.ID, reasonInvalid)
 			if err != nil {
 				return err
 			}
@@ -85,13 +84,11 @@ func (a *Agent) recoverFrozenMemberCarriers() error {
 			}
 		}
 	}
-	if _, err = tx.Exec(`INSERT INTO config(k,v) VALUES(?, '1')`, frozenMemberRecoveryScan); err != nil {
-		return err
-	}
-	if err = a.store.done(tx.Commit()); err != nil {
+	if _, err := db.Exec(`INSERT OR IGNORE INTO config(k,v) VALUES(?, '1')`, frozenMemberRecoveryScan); err != nil {
 		return err
 	}
 	if moved > 0 {
+		a.store.changed()
 		a.convWork.due(convRetry)
 	}
 	return nil
