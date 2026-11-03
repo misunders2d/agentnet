@@ -1,3 +1,4 @@
+// Kept last in discovery order to preserve main's client-12 shard composition.
 package client
 
 import (
@@ -56,31 +57,6 @@ func TestMEL736OneBohdanResolverRestart(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	// The negative path cannot borrow SQLite's sole connection: it is held
-	// here by a transaction, as it often is during admission checks.
-	tx, e := s.db.Begin()
-	if e != nil {
-		t.Fatal(e)
-	}
-	done := make(chan error, 1)
-	go func() {
-		have, e := hasContinuity(s.db)
-		if e == nil && have {
-			e = errors.New("unexpected continuity")
-		}
-		done <- e
-	}()
-	select {
-	case e := <-done:
-		if e != nil {
-			tx.Rollback()
-			t.Fatal(e)
-		}
-	case <-time.After(time.Second):
-		tx.Rollback()
-		t.Fatal("negative continuity check issued SQL")
-	}
-	tx.Rollback()
 	peerStore, e := openStore(path)
 	if e != nil {
 		t.Fatal(e)
@@ -93,7 +69,6 @@ func TestMEL736OneBohdanResolverRestart(t *testing.T) {
 	if have, e := hasContinuity(peerStore); e != nil || !have {
 		t.Fatal("shared store lost continuity presence", have, e)
 	}
-	forgetContinuityPresence(peerStore.db)
 	peerStore.db.Close()
 	got, e := s.logicalPerson(old.Person)
 	if e != nil || got != next.Person {
@@ -844,4 +819,59 @@ func newMEL736OneWorld(t *testing.T) *googleReviewWorld {
 		t.Fatal(e)
 	}
 	return &googleReviewWorld{ctx: ctx, issuer: issuer, admin: admin, opts: GoogleOptions{Hub: inv.Hub, CertPEM: inv.CertPEM}}
+}
+
+func TestMEL736OneLateRevocationSchedulesContinuity(t *testing.T) {
+	w := newMEL736OneWorld(t)
+	old := mel736OneJoin(t, w, "lost")
+	peer := w.admin
+	before, _, _ := old.Person()
+	if _, e := peer.refreshPerson(w.ctx, before.Person, false); e != nil {
+		t.Fatal(e)
+	}
+	if e := peer.ChangeGoogleAccess(w.ctx, protocol.GoogleAccessChange{Email: before.Email, Remove: true}); e != nil {
+		t.Fatal(e)
+	}
+	if e := peer.ChangeGoogleAccess(w.ctx, protocol.GoogleAccessChange{Email: before.Email}); e != nil {
+		t.Fatal(e)
+	}
+	fresh := mel736OneJoin(t, w, "new")
+	next, _, _ := fresh.Person()
+	raws, e := peer.fetchChain(w.ctx, next.Person, -1)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = peer.store.pinChain(next.Person, raws, peer.Self(), false); !errors.Is(e, errPersonConflict) {
+		t.Fatal("claim not held", e)
+	}
+	members, e := peer.Members(w.ctx)
+	if e != nil {
+		t.Fatal(e)
+	}
+	raw, _ := json.Marshal(members)
+	peer.onMembers(raw)
+	// An outstanding copy makes recipient reconciliation discover the old
+	// device's exact revocation, after continuity's turn in this pass.
+	if _, e = peer.store.db.Exec(`INSERT INTO outbox(id,recipient,recipient_fp,body,envelope,state,created_at) VALUES(?,?,?,'','', 'queued',1)`, protocol.NewID(), old.Address, old.Self().Fingerprint()); e != nil {
+		t.Fatal(e)
+	}
+	peer.store.continuityDirty.Store(false)
+	peer.convWork.bits.Store(convRecipients)
+	peer.convSync(w.ctx)
+	if !peer.store.continuityDirty.Load() || peer.convWork.bits.Load()&convPersons == 0 {
+		t.Fatalf("late revocation lost wake: dirty=%v work=%d", peer.store.continuityDirty.Load(), peer.convWork.bits.Load())
+	}
+	for range 4 {
+		peer.convSync(w.ctx)
+	} // Only self-scheduled work; no new event.
+	p, ok, e := peer.store.personByID(next.Person)
+	if e != nil || !ok || p.info.State != personPinned {
+		t.Fatal("late claim stayed held", p.info, e)
+	}
+	if to, e := peer.store.logicalPerson(before.Person); e != nil || to != next.Person {
+		t.Fatal("not merged", to, e)
+	}
+	if peer.store.continuityDirty.Load() || peer.convWork.bits.Load()&(convPersons|convRecipients) != 0 {
+		t.Fatalf("settled continuity spins: dirty=%v work=%d", peer.store.continuityDirty.Load(), peer.convWork.bits.Load())
+	}
 }

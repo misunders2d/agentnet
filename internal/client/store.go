@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -364,37 +363,37 @@ func openStore(path string) (*store, error) {
 		return nil, err
 	}
 	s := &store{db: db}
-	canonical, _ := filepath.Abs(path)
-	continuityPresence.Lock()
-	continuityPresence.paths[db] = canonical
-	continuityPresence.Unlock()
-	if err := s.loadContinuityPresence(); err != nil {
-		forgetContinuityPresence(db)
-		db.Close()
-		return nil, err
-	}
 	s.continuityDirty.Store(true)
 	return s, nil
 }
 
 func (s *store) setConfig(kv map[string]string) error {
-	for k := range kv {
-		if strings.HasPrefix(k, continuityHeadPrefix) {
-			setContinuityPresence(s.db, true)
-			s.continuityDirty.Store(true)
-		}
-	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	continuityChanged := false
 	for k, v := range kv {
+		if strings.HasPrefix(k, continuityHeadPrefix) {
+			var old string
+			e := tx.QueryRow(`SELECT v FROM config WHERE k=?`, k).Scan(&old)
+			if e != nil && !errors.Is(e, sql.ErrNoRows) {
+				return e
+			}
+			continuityChanged = continuityChanged || errors.Is(e, sql.ErrNoRows) || old != v
+		}
 		if _, err := tx.Exec(`INSERT OR REPLACE INTO config(k, v) VALUES(?, ?)`, k, v); err != nil {
 			return err
 		}
 	}
-	return s.done(tx.Commit())
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if continuityChanged {
+		s.continuityDirty.Store(true)
+	}
+	return s.done(nil)
 }
 
 func (s *store) deleteConfig(k string) error {

@@ -152,10 +152,6 @@ func (a *Agent) convSync(ctx context.Context) {
 	}
 	if work&(convPersons|convRecipients) != 0 {
 		if a.store.continuityDirty.Swap(false) {
-			if err := a.store.loadContinuityPresence(); err != nil {
-				a.store.continuityDirty.Store(true)
-				a.convWork.due(convPersons)
-			}
 			if err := a.refreshContinuity(ctx); err != nil {
 				a.Logf("person continuity: %v", err)
 				a.store.continuityDirty.Store(true)
@@ -169,6 +165,9 @@ func (a *Agent) convSync(ctx context.Context) {
 		}
 		if err := a.reconcileRecipientLifecycle(ctx); err != nil {
 			a.Logf("reconciling permanently removed recipients: %v", err)
+		}
+		if a.store.continuityDirty.Load() {
+			a.convWork.due(convPersons)
 		}
 	}
 	if err := a.flushOutbox(ctx, true); err != nil {
