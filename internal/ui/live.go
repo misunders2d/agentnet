@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -25,23 +26,25 @@ type Live struct {
 	a              *client.Agent
 	assistantSetup AssistantSetupFunc
 	// timeout bounds each network request an action makes.
-	timeout       time.Duration
-	staged        staged // files the page handed over, not sent yet
-	app           bool   // served by the AgentNet app (SetApp)
-	overviewMu    sync.Mutex
-	overviews     map[bool]cachedOverview
-	chats         map[string]*chatEntry // each chat's list row (overviewMu; livedm.go)
-	viewMark      int64                 // writes up to here are reflected in chats (overviewMu)
-	viewCachesOff bool                  // the fresh build overviewOracle compares with (overviewMu)
-	historyJobs   []client.HistoryJob   // (overviewMu; liveidentity.go)
-	historyAt     time.Time
-	historyCost   time.Duration
-	historyKept   bool
-	historyDirty  bool
-	historyWake   atomic.Bool
-	unreadMu      sync.Mutex
-	unread        *unreadIndex // guarded separately: unread never waits for complete overview cards
-	count         unreadCount  // the app badge's running total (liveunreadcount.go)
+	timeout        time.Duration
+	staged         staged // files the page handed over, not sent yet
+	app            bool   // served by the AgentNet app (SetApp)
+	overviewMu     sync.Mutex
+	overviews      map[bool]cachedOverview
+	chats          map[string]*chatEntry  // each chat's list row (overviewMu; livedm.go)
+	viewMark       int64                  // writes up to here are reflected in chats (overviewMu)
+	unreadChats    map[string][]UnreadRow // each chat's unread rows (unreadMu)
+	unreadChatMark int64                  // view_dirty read so far for unreadChats (unreadMu)
+	viewCachesOff  bool                   // the fresh build overviewOracle compares with (overviewMu)
+	historyJobs    []client.HistoryJob    // (overviewMu; liveidentity.go)
+	historyAt      time.Time
+	historyCost    time.Duration
+	historyKept    bool
+	historyDirty   bool
+	historyWake    atomic.Bool
+	unreadMu       sync.Mutex
+	unread         *unreadIndex // guarded separately: unread never waits for complete overview cards
+	count          unreadCount  // the app badge's running total (liveunreadcount.go)
 }
 
 type cachedOverview struct {
@@ -145,12 +148,16 @@ func (l *Live) compareFresh(listArchived bool, kept Overview, content uint64) {
 	l.viewCachesOff = true
 	l.a.SetViewCachesOff(true)
 	fresh, err := l.buildOverview(listArchived, nil)
+	freshRows, rowsErr := l.unreadRows(true)
 	l.a.SetViewCachesOff(false)
 	l.viewCachesOff = false
 	_, after, e := l.a.ViewDirtySince(before)
 	revision, _ := l.a.ViewChanges()
 	if e != nil || after != before || before != l.viewMark || revision.Content != content {
 		return // something changed under the comparison
+	}
+	if err == nil {
+		err = rowsErr
 	}
 	if err != nil {
 		overviewOracle("a fresh read failed where the kept list did not: " + err.Error())
@@ -171,6 +178,20 @@ func (l *Live) compareFresh(listArchived bool, kept Overview, content uint64) {
 	compare("people", kept.People, fresh.People)
 	compare("unread", *kept.UnreadTotal, *fresh.UnreadTotal)
 	compare("alert", *kept.AlertTotal, *fresh.AlertTotal)
+	byKey := func(rows []UnreadRow) []UnreadRow {
+		rows = slices.Clone(rows)
+		slices.SortFunc(rows, func(a, b UnreadRow) int { return strings.Compare(a.Key, b.Key) })
+		return rows
+	}
+	l.unreadMu.Lock()
+	var keptRows []UnreadRow
+	if l.unread != nil && l.unread.content == content {
+		keptRows = byKey(l.unread.rows)
+	}
+	l.unreadMu.Unlock()
+	if keptRows != nil {
+		compare("unread rows", keptRows, byKey(freshRows))
+	}
 	if same {
 		overviewOracle("")
 	}

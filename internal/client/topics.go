@@ -495,37 +495,14 @@ func (a *Agent) topicOverview(listArchived bool, unread *[]DeviceUnreadRef) ([]T
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 	off := cache.off.Load()
-	if !off {
-		// Before anything is read: a write from here on is seen again next time.
-		keys, next, err := a.ViewDirtySince(cache.mark)
-		if err != nil {
-			return nil, nil, err
-		}
-		cache.mark = next
-		for _, key := range keys {
-			if key == "*" {
-				cache.peers = nil
-			} else if peer, ok := strings.CutPrefix(key, "p:"); ok {
-				delete(cache.peers, peer)
-			}
-		}
-	}
-	peers, err := a.store.conversationPeers()
+	peers, current, err := a.keptPeerTopics(off)
 	if err != nil {
 		return nil, nil, err
 	}
-	now := storeNow().Unix()
 	var out []ThreadSummary
 	var counts []PeerTopics
-	current := make(map[string]*peerTopicsEntry, len(peers))
 	for _, peer := range peers {
-		e, kept := cache.peers[peer]
-		if off || !kept || now-e.at >= topicCacheAge || now < e.at {
-			if e, err = a.buildPeerTopics(peer, now); err != nil {
-				return nil, nil, err
-			}
-		}
-		current[peer] = e
+		e := current[peer]
 		if unread != nil {
 			*unread = append(*unread, e.unread...)
 		}
@@ -572,22 +549,18 @@ func (a *Agent) topicOverview(listArchived bool, unread *[]DeviceUnreadRef) ([]T
 			counts = append(counts, *c)
 		}
 	}
-	if !off {
-		cache.peers = current // a peer gone from the list leaves with it
-	}
 	sortTopics(out)
 	sort.Slice(counts, func(i, j int) bool { return counts[i].Peer < counts[j].Peer })
 	return out, counts, nil
 }
 
-// topicCacheAge bounds how long a peer's summaries go unread for what no write
-// marks: the clock's quiet-topic archive. Nothing shown depends on it to the second.
-const topicCacheAge = 60
-
+// A peer's summaries change with nothing written in one way: a topic quiet for
+// TopicArchiveAfter is archived by the clock. until is the first such moment, and
+// at guards against a clock moved back.
 type peerTopicsEntry struct {
-	all    []ThreadSummary // with their text
-	unread []DeviceUnreadRef
-	at     int64
+	all       []ThreadSummary // with their text
+	unread    []DeviceUnreadRef
+	at, until int64
 }
 
 // topicCache keeps each direct peer's summaries between list builds; view_dirty
@@ -599,11 +572,60 @@ type topicCache struct {
 	off   atomic.Bool
 }
 
+// keptPeerTopics brings every direct peer's summaries up to date, reading only
+// what a write touched or the clock changed; the caller holds a.topicCache.mu. off
+// reads all of them and leaves what is kept as it was.
+func (a *Agent) keptPeerTopics(off bool) ([]string, map[string]*peerTopicsEntry, error) {
+	cache := &a.topicCache
+	if !off {
+		// Before anything is read: a write from here on is seen again next time.
+		keys, next, err := a.ViewDirtySince(cache.mark)
+		if err != nil {
+			return nil, nil, err
+		}
+		cache.mark = next
+		for _, key := range keys {
+			if key == "*" {
+				cache.peers = nil
+			} else if peer, ok := strings.CutPrefix(key, "p:"); ok {
+				delete(cache.peers, peer)
+			}
+		}
+	}
+	peers, err := a.store.conversationPeers()
+	if err != nil {
+		return nil, nil, err
+	}
+	now := storeNow().Unix()
+	current := make(map[string]*peerTopicsEntry, len(peers))
+	for _, peer := range peers {
+		e, kept := cache.peers[peer]
+		if off || !kept || e.until != 0 && now >= e.until || now < e.at {
+			if e, err = a.buildPeerTopics(peer, now); err != nil {
+				return nil, nil, err
+			}
+		}
+		current[peer] = e
+	}
+	if !off {
+		cache.peers = current // a peer gone from the list leaves with it
+	}
+	return peers, current, nil
+}
+
 func (a *Agent) buildPeerTopics(peer string, now int64) (*peerTopicsEntry, error) {
 	e := &peerTopicsEntry{at: now}
 	var err error
 	if e.all, err = a.peerTopics(peer, now, &e.unread); err != nil {
 		return nil, err
+	}
+	for _, t := range e.all {
+		if t.State == TopicArchived || t.Pending {
+			continue
+		}
+		if at := t.QuietSince.Unix() + int64(TopicArchiveAfter/time.Second); e.until == 0 || at < e.until {
+			e.until = at
+		}
 	}
 	text := make([]*ThreadSummary, len(e.all))
 	titles := make(map[string]string, len(e.all))
