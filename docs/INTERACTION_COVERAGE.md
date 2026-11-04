@@ -43,6 +43,9 @@ proposal lookups scanned a whole table per row.
 | Mark unread shows before the server answers | `e7288625` | `unread.mark`, `unread.mark-refused` in `TestUIResponsivenessRendered`; failed without the fix |
 | Outbox rows act at once and alone; a deleted chat leaves first; any other write unanswered after 600 ms says so | `b5a81f26` | `TestUIResponsivenessRendered` slow-write pass, `chat.delete`, `chat.delete-refused`; failed without the fix |
 | A pending delete does not hide a newer message; unread marks add up and clear alone; a failed list refresh keeps the result | `e66237be` | `chat.delete`, `unread.mark-second`, `unread.mark-third-refused`, `outbox.schedule-cancel`; each failed without the fix |
+| A link or notification changing the page fragment is not Back, so it lands where it points; Back after it still reaches the open layer, also after Forward entries are cut and at history's cap (on base too) | `d3d62ac6`, final form `b13be097` | `TestComicNotificationLandingRendered`, `TestBrowserBackRendered` |
+| A refused dismiss keeps the report list open with its retry (on base too) | `97a14cf4`, corrected in `b13be097` | `TestHeldPersonTurnRendered`; `TestAttentionReplyPendingRendered` and `TestResponsiveEditorDraftsRendered` caught that first version freezing the list when no parent owns its state |
+| Deleting a chat that came back keeps it hidden when the first delete answers | `b13be097` | `chat.delete-again` in `TestUIResponsivenessRendered` |
 
 **Measured, input to result on the native route: no HTTP and no rendering.**
 ThinkPad at `d013bf5b`, real disk (btrfs on LUKS), a read-only copy of its store,
@@ -127,6 +130,14 @@ proves nothing about database or sync contention. The survey ran on a fixture ho
 the first version of the notice crashed the real frozen host, which only
 `TestScheduleLiveRendered` showed.
 
+Counterpart for the Back guard: Telegram Web K `28bba1b2`,
+`src/components/appNavigationController.ts`. Its entries carry a state id that tells
+them from others; with the Navigation API it reads `navigationType === 'push'` as a
+hash change and compares `destination.index` for direction. AgentNet's browser host
+adapts that without the Navigation API, which not every browser it serves has: an
+entry with no mark is new, and each mark holds its place, so direction never depends
+on `history.length`.
+
 Counterpart for `b5a81f26`: Telegram Desktop `a8de5f92`,
 `window/window_connecting_widget.cpp` shows connection status only after a delay
 (`kConnectingStateDelay` 1000 ms). AgentNet's 600 ms is shorter to stay under the
@@ -174,6 +185,19 @@ are not measured. Other gaps:
   withdrawal and head changes beyond removal, topic moves, clock archive, last
   message edit or delete in the comparison, Waiting and Held transitions, selected
   receiver changes.
+
+**Rendered tests outside CI's list.** CI names 36 rendered tests; no other rendered
+test runs there. Of the others, 34 failed on both this candidate and base `cabe5c3c`
+when first run. 33 now pass on single runs: 9 needed nothing more, 22 had stale
+expectations repaired, and 2 found the real defects above. `TestComicSetupParityRendered`
+still fails on base and here, at wording changed by `9133893b`, and its later steps
+have not run. MEL-749 tracks it and CI's fixed list. Repairs dropped three checks:
+first focus on a desktop list row, the steps inside the laptop–Pixel thread, which
+no longer has a row, and the Needs you chip in `TestTopicsRendered`, whose fixture has
+no current agent. That test also no longer requires a topic switch to keep the last
+topic's messages: since `753a4795` the selection is immediate and a topic not yet
+loaded shows the opening sketch. `TestHeldPersonTurnRendered` showed a notice can
+cover a button at some widths; no check covers that.
 
 **Inventory.** Comic has 939 inventory rows: 59 rendered, 17 fired by trusted
 input, 12 with a change asserted, 9 within bound, 15 failed, 769 not executed, 146
