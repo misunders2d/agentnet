@@ -5,15 +5,7 @@ import (
 	"time"
 )
 
-// Other tests count exact pages on machines of any speed; the pacing itself is
-// tested below and in the separate-process journeys.
-func init() {
-	historyPageBudget, historyPageStart = time.Hour, historyPage
-}
-
 func TestHistoryPageFollowsItsCost(t *testing.T) {
-	defer func(d time.Duration) { historyPageBudget = d }(historyPageBudget)
-	historyPageBudget = 250 * time.Millisecond
 	for _, c := range []struct {
 		limit int
 		took  time.Duration
@@ -79,5 +71,34 @@ func TestHistoryTurnWaitsOutItsRest(t *testing.T) {
 	a.historyTurn(t.Context()) // would use the nil store if it ran
 	if a.convWork.bits.Load()&convHistory == 0 {
 		t.Fatal("the resting turn was dropped")
+	}
+}
+
+// The worst measured machine sits at the smallest page: everything still
+// arrives, exactly once, newest first, with no turn lost.
+func TestHistoryCatchupCompletesAtTheSmallestPage(t *testing.T) {
+	w, phone, _, ids := historyCatchupFixture(t, 12)
+	a := w.alice
+	for rounds := 0; ; rounds++ {
+		a.convWork.historyLimit.Store(1)
+		more, err := a.historyCatchupPage(tctx(t), phone.Self())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !more {
+			break
+		}
+		if rounds > 3*len(ids) {
+			t.Fatalf("no end after %d single-row pages", rounds)
+		}
+	}
+	seen := map[string]int{}
+	for _, item := range historyCopiedItems(t, a, phone) {
+		seen[item.ID]++
+	}
+	for _, id := range ids {
+		if seen[id] != 1 {
+			t.Fatalf("row %s copied %d times", id, seen[id])
+		}
 	}
 }

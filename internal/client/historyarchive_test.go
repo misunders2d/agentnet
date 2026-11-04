@@ -271,7 +271,7 @@ func TestHistoryArchiveReceiptDrivenMultiChunkCompletion(t *testing.T) {
 	if full, err := syncWindowFull(a.store.db, phone.Self()); err != nil || full {
 		t.Fatalf("synthetic export did not start with an available sync window: %v %v", full, err)
 	}
-	for page := int64(1); page <= 4; page++ {
+	for page := int64(1); page <= 124; page++ { // the smallest page takes one round per row
 		if _, err := a.historyCatchupPage(tctx(t), phone.Self()); err != nil {
 			t.Fatal(err)
 		}
@@ -414,8 +414,17 @@ func TestHistoryArchiveTenThousandSourcesBoundedNewestFirst(t *testing.T) {
 	if err = a.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE state=?`, archiveStaged).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	if count != historyPage {
+	if count < 1 || count > historyPage {
 		t.Fatalf("prebuilt corpus instead of one source page: %d", count)
+	}
+	// Paced pages reach one full window, and stop there, before any is packed.
+	for range historyPage {
+		if _, err = a.historyCatchupPage(tctx(t), phone.Self()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = a.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE state=?`, archiveStaged).Scan(&count); err != nil || count != historyPage {
+		t.Fatalf("paced corpus did not fill exactly one window: %d %v", count, err)
 	}
 	if err = a.archivePack(tctx(t)); err != nil {
 		t.Fatal(err)

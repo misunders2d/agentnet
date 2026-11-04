@@ -146,7 +146,7 @@ func importedTailRemainsBounded(t *testing.T, direct bool) {
 		defer func() { phone.hub.http.Transport = base }()
 	}
 	// The phone then imports the laptop's bootstrap archives (receipt-driven chunks).
-	for page := int64(1); page <= 4; page++ {
+	for page := int64(1); page <= int64(rows)+1; page++ { // the smallest page takes one round per row
 		if err = pageFor(a, phone); err != nil {
 			t.Fatal(err)
 		}
@@ -183,10 +183,14 @@ func importedTailRemainsBounded(t *testing.T, direct bool) {
 		if err = a.store.applyReceipt(protocol.ReceiptEvent{ID: desc.ID, State: protocol.StateDelivered, Seq: page}); err != nil {
 			t.Fatal(err)
 		}
+		var children int
+		if phone.store.db.QueryRow(`SELECT count(*) FROM history_archive_children`).Scan(&children); children == rows {
+			break
+		}
 	}
 	var imported int
 	phone.store.db.QueryRow(`SELECT count(*) FROM history_archive_children`).Scan(&imported)
-	for range 5 {
+	for range historyPage + 1 { // paced pages reach the full window, then stop
 		if err = pageFor(phone, third); err != nil {
 			t.Fatal(err)
 		}

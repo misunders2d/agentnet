@@ -323,14 +323,15 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 		return false, err
 	}
 	defer release()
-	limit, started := historyPage, time.Now()
-	if a.pacedSync() {
-		limit = a.convWork.historyPageLimit()
-		defer func() { a.convWork.historyLimit.Store(int64(nextHistoryLimit(limit, time.Since(started)))) }()
-	}
-	full, e := syncWindowFull(a.store.db, dev)
+	limit, started := a.convWork.historyPageLimit(), time.Now()
+	defer func() { a.convWork.historyLimit.Store(int64(nextHistoryLimit(limit, time.Since(started)))) }()
+	room, e := syncWindowRoom(a.store.db, dev)
 	if e != nil {
 		return false, e
+	}
+	full := room == 0
+	if !full {
+		limit = min(limit, room)
 	}
 	p, err := a.historyCatchupState(dev)
 	if err != nil {

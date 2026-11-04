@@ -1897,12 +1897,9 @@ func (a *Agent) ownDevices() map[string]bool {
 // size follows what the last page cost, and the next turn rests as long as the
 // last one worked. Real sends and the page wait for the same lock and database
 // connection; "the next page follows at once" froze the app on 2026-11-04.
-var (
-	historyPageBudget = 250 * time.Millisecond
-	historyPageStart  = 4 // cost is unknown after a start: grows while it stays cheap
-)
-
 const (
+	historyPageBudget   = 250 * time.Millisecond
+	historyPageStart    = 4 // cost is unknown after a start: grows while it stays cheap
 	historyRestMax      = 2 * time.Second
 	historyRestFloor    = 20 * time.Millisecond // cheaper turns follow at once
 	deferredSweepFactor = 10                    // a deferred restart costs at most a tenth of the time

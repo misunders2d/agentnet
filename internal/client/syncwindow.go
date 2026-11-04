@@ -23,6 +23,19 @@ func syncStateWindowFull(q dbq, dev identity.Public, prepared ...[]outCopy) (boo
 	return syncPendingFull(q, dev, true, prepared...)
 }
 
+// syncWindowRoom is how many more cold copies this device's window takes now.
+// A paced page never overshoots it: the bound does not depend on a page's size.
+func syncWindowRoom(q dbq, dev identity.Public) (int, error) {
+	if revoked, err := revokedDeviceKnown(q, dev.Address, dev.Fingerprint()); err != nil || revoked {
+		return 0, err
+	}
+	var n int
+	if err := q.QueryRow(syncWindowQuery, historyPage, dev.Address, dev.Fingerprint(), dev.Address, dev.Fingerprint()).Scan(&n); err != nil {
+		return 0, err
+	}
+	return max(historyPage-n, 0), nil
+}
+
 func syncPendingFull(q dbq, dev identity.Public, stateOnly bool, prepared ...[]outCopy) (bool, error) {
 	// A retained signed roster may still list a relay-revoked key. Do not
 	// regenerate its background copies after terminal reconciliation.
