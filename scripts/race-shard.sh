@@ -85,6 +85,9 @@ run_partition() {
 				if ($0=="TestBrowserEngineBacklogCatchUp") part=2
 				if ($0=="TestTwoOrdinaryPeopleLinkedStateJourney") part=2
 				if ($0=="TestBrowserAssistantReactionsMatchGo") part=2
+				if ($0=="TestLiveUnreadProvider") part=0
+				if ($0=="TestLiveUnreadHistoryScale") part=0
+				if ($0=="TestLiveIdentity") part=0
 			}
 			if (part==k) print
 		}')
