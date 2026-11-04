@@ -312,6 +312,7 @@ try {
  if(suite==='actions'){
   const message=view.messages.at(-1),row=()=>root.querySelector('[data-mid="'+message.id+'"]'),pending=()=>row()?.querySelector('[data-reaction-pending="true"]');
   await measure('navigation.actions-dm',()=>[...root.querySelectorAll('[data-part="chat-row"]')].find(b=>b.textContent.includes('Vitalii')).click(),()=>onScreen(root.querySelector('section[aria-busy="true"]'))||onScreen(row()),'opening feedback or exact action target visible',()=>onScreen(row()));
+  if(query.get('runtimeCrawl')==='1'&&await trustedCheckpoint('runtime-crawl','actions/dm-open/messages-visible'))return {ok:true,...reports};
   if(trustedFile==='Conversation.header.tsx'&&await trustedCheckpoint('conversation-header','actions/dm-open/header-visible'))return {ok:true,...reports};
   if(trustedFile==='Approvals.card.tsx'&&await trustedCheckpoint('approval-card','actions/dm-open/pending-approval-card-visible'))return {ok:true,...reports};
   const item=name=>[...scope().querySelectorAll('button,[role="menuitem"]')].find(b=>shown(b)&&!b.closest('[data-ending-style]')&&label(b)===name);
