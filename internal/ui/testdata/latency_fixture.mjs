@@ -1158,7 +1158,6 @@ try {
   }
   if(suite==='review'){
    await tap('review.open',button(/^Review/),()=>!!active('section[aria-label="Codex native request"]'),'native request presentation visible');
-   if(trustedFile==='Approvals.card.tsx'&&await trustedCheckpoint('approval-card'))return {ok:true,...reports};
    const card=active('section[aria-label="Codex native request"]');assert(card.textContent.includes('printf fixture'),'native card exact operation missing');
    await tap('review.native-deny',control('Deny this action',card),()=>card.textContent.includes('Response saved.'),'invented callback response saved, native result explicitly pending');
    assert(!card.textContent.includes('completed successfully'),'invented callback claimed execution');
