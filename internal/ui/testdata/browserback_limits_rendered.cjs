@@ -76,7 +76,7 @@ const run = async (name, fn) => {
   // A traversal the browser really takes its time over, with a real click during it.
   // While it is on its way this harness can no longer evaluate in the page, so the page
   // reports for itself: each write, Back and input as a beacon, in the order they happened.
-  const slowLeave = async (name, leaveTo, {reload = false, olderEngine = false, busy = false} = {}) => {
+  const slowLeave = async (name, leaveTo, {reload = false, olderEngine = false, busy = false, legacyTab = false} = {}) => {
     const context = await browser.newContext(), page = await context.newPage();
     page.setDefaultTimeout(8000);
     await context.addCookies([{name: 'agentnet_ui', value: token, url: origin, httpOnly: true, sameSite: 'Strict'}]);
@@ -90,8 +90,9 @@ const run = async (name, fn) => {
     await page.route(origin + '/back-trace', async r => { trace.push(JSON.parse(r.request().postData())); await r.fulfill({status: 204}); });
     await page.goto(leaveTo);
     await page.goto(origin + '/back-' + name);
-    if (reload) await page.reload();
-    await page.evaluate(async ({olderEngine, busy}) => {
+    // An earlier version marked this entry, and never wrote what the load saw.
+    if (legacyTab) await page.evaluate(() => history.replaceState({agentnetBack: 'agentnet-back-earlier', agentnetBackSeq: 0}, '', location.href));
+    const arm = () => page.evaluate(async ({olderEngine, busy}) => {
       if (olderEngine) Object.defineProperty(window, 'navigation', {value: undefined, configurable: true});
       const {browserBackNavigation} = await import('/assets/browser-back.mjs');
       let calls = 0, writes = 0, tracing = false;
@@ -110,6 +111,10 @@ const run = async (name, fn) => {
       addEventListener('pointerdown', () => say('input'), true);
       addEventListener('popstate', () => say('popstate'), true);
     }, {olderEngine, busy});
+    // The app arms on every load: the load that saw what is behind, then the reload.
+    if (reload && !legacyTab) await page.evaluate(async () => { (await import('/assets/browser-back.mjs')).browserBackNavigation()(() => false); });
+    if (reload) await page.reload();
+    await arm();
     if (busy) {
       // One more entry of this document, so a step of the walk stays inside it.
       await page.evaluate(() => new Promise(r => { addEventListener('hashchange', r, {once: true}); location.hash = '#late'; }));
@@ -141,22 +146,49 @@ const run = async (name, fn) => {
     const r = await slowLeave('slow-busy', origin + '/back-earlier-busy', {busy: true}); once(r); none(r);
   });
 
-  // The stated limits. After a reload the browser cannot tell other origins behind this page
-  // from ones ahead of it; an engine without the navigation API cannot tell a slow traversal
-  // from none. Input past a second brings the guard back, and that Back still leaves: this
-  // Chromium, with its navigation API hidden for the older-engine paths. Firefox, Safari and
-  // real older engines have not run this.
-  const stated = async (label, name, to, options) => {
-    await run('the stated limit, ' + label + ': a click may write once, and that Back still leaves', async () => {
-      const r = await slowLeave(name, to, options); once(r);
-      assert.ok(r.writes === 0 || r.trace.findIndex(e => e.what === 'replaceState') > r.input, 'a write came before any input: ' + JSON.stringify(r.trace));
-      assert.ok(r.writes <= 2, 'wrote more than the guard: ' + JSON.stringify(r.trace));
-      limit[label] = {writes: r.writes};
+  // What the load saw, kept on the entry, holds across a reload and without the API.
+  await run('after a reload: a click during a slow page of another origin writes nothing', async () => {
+    const r = await slowLeave('slow-reload', other, {reload: true}); once(r); none(r); limit['after a reload'] = {order: r.trace.map(e => e.what).join(' ')};
+  });
+  await run('older engine: a click during a slow page writes nothing', async () => {
+    const r = await slowLeave('slow-older', origin + '/back-earlier-older', {olderEngine: true}); once(r); none(r); limit['older engine'] = {order: r.trace.map(e => e.what).join(' ')};
+  });
+  await run('older engine, busy page: a step arriving after a second, with a click, writes nothing', async () => {
+    const r = await slowLeave('slow-older-busy', origin + '/back-earlier-older-busy', {olderEngine: true, busy: true}); once(r); none(r); limit['older engine busy'] = {order: r.trace.map(e => e.what).join(' ')};
+  });
+
+  // The stated limit: an entry from before this version says nothing about what is behind
+  // it. Input past a second brings the guard back, and that Back still leaves. On this
+  // Chromium only: Firefox, Safari and real older engines have not run any of this.
+  await run('the stated limit, a tab from before this version: a click may write the guard, and Back still leaves', async () => {
+    const r = await slowLeave('slow-legacy', other, {reload: true, legacyTab: true}); once(r);
+    assert.ok(r.writes === 0 || r.trace.findIndex(e => e.what === 'replaceState') > r.input, 'a write came before any input: ' + JSON.stringify(r.trace));
+    assert.ok(r.writes <= 2, 'wrote more than the guard: ' + JSON.stringify(r.trace));
+    limit['tab from before this version'] = {writes: r.writes};
+  });
+  await run('the stated limit, older engine past the cap: Back still reaches a layer after input', async () => {
+    const context = await browser.newContext(), page = await context.newPage();
+    page.setDefaultTimeout(5000);
+    await context.addCookies([{name: 'agentnet_ui', value: token, url: origin, httpOnly: true, sameSite: 'Strict'}]);
+    await page.route(origin + '/back-*', r => r.fulfill({contentType: 'text/html', body: '<!doctype html><title>Limits fixture</title><body style="height:900px">x</body>'}));
+    await page.goto(origin + '/back-earlier');
+    await page.goto(origin + '/back-older-cap');
+    await page.evaluate(async () => {
+      Object.defineProperty(window, 'navigation', {value: undefined, configurable: true});
+      const {browserBackNavigation} = await import('/assets/browser-back.mjs');
+      window.layers = 0; window.calls = 0;
+      browserBackNavigation()(() => { calls++; if (layers) { layers--; return true; } return false; });
     });
-  };
-  await stated('after a reload', 'slow-reload', other, {reload: true});
-  await stated('older engine, slow page', 'slow-older', origin + '/back-earlier-older', {olderEngine: true});
-  await stated('older engine, busy page', 'slow-older-busy', origin + '/back-earlier-older-busy', {olderEngine: true, busy: true});
+    for (let i = 0; i < 70; i++) await page.evaluate(hash => new Promise(r => { addEventListener('hashchange', r, {once: true}); location.hash = hash; }), '#cap-' + i);
+    await page.goBack().catch(() => {});
+    await page.waitForFunction(() => calls === 1);
+    await page.waitForTimeout(1600); // past the second this limit waits, on the entry where nothing is behind
+    await page.mouse.click(5, 5);
+    await page.evaluate(() => { layers = 1; });
+    await page.goBack().catch(() => {});
+    await page.waitForFunction(() => calls === 2 && layers === 0, null, {timeout: 3000});
+    await context.close();
+  });
   await browser.close();
   console.log(JSON.stringify(results, null, 1));
   console.log(JSON.stringify({limit}));

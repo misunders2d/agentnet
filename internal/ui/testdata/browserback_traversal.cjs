@@ -10,7 +10,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // entries: {doc, origin?, state?}. Only entries of doc 'app' are this document; landing
 // on any other leaves it. slow(entry) is the delay of the traversal landing on it.
-const world = ({entries, index, api = false, activation = 'push', refuse = false, slow = () => 0}) => {
+const world = ({entries, index, api = false, activation = 'push', refuse = false, loaded, slow = () => 0}) => {
   const listeners = {}, log = {writes: 0, backs: 0, left: null};
   const fire = (type, event) => [...(listeners[type] || [])].forEach(f => f(event));
   const land = to => setTimeout(() => {
@@ -23,6 +23,7 @@ const world = ({entries, index, api = false, activation = 'push', refuse = false
     index, entries, log,
     crypto: {randomUUID: () => 'id'}, location: {href: 'app'},
     setTimeout, clearTimeout,
+    ...(loaded ? {performance: {getEntriesByType: () => [{type: loaded}]}} : {}),
     addEventListener: (t, f) => { (listeners[t] ||= new Set()).add(f); },
     removeEventListener: (t, f) => { listeners[t]?.delete(f); },
     fire,
@@ -112,6 +113,71 @@ const app = () => ({doc: 'app'}), earlier = () => ({doc: 'earlier'}), outside = 
     });
   }
 
+  // An engine without the API still knows what its own load saw, and keeps it on the entry.
+  await run('older engine, freshly loaded: a slow last step with input writes nothing', async () => {
+    const {w, seen} = armed({entries: [earlier(), app()], index: 1, loaded: 'navigate', slow: e => e.doc === 'earlier' ? 1500 : 0});
+    const before = w.log.writes;
+    press(w);
+    await sleep(1200);
+    input(w);
+    await sleep(100);
+    assert.equal(w.log.writes, before, 'wrote history while the traversal was on its way');
+    await sleep(400);
+    assert.equal(w.log.left, 'earlier');
+    assert.equal(seen.calls, 1);
+  });
+
+  await run('older engine, freshly loaded: a late step inside the document with input writes nothing and runs nothing', async () => {
+    const entries = [earlier(), app(), app()];
+    const {w, seen} = armed({entries, index: 2, loaded: 'navigate', slow: e => e === entries[1] ? 1500 : 0});
+    const before = w.log.writes;
+    // The guard above, then one more of this document's own entries.
+    w.history.pushState({agentnetBack: w.history.state.agentnetBack, agentnetBackSeq: 2}, '', 'app');
+    const pushed = w.log.writes;
+    press(w);
+    await sleep(100);
+    press(w);
+    await sleep(1100);
+    input(w);
+    await sleep(600);
+    assert.equal(w.log.writes, pushed, 'wrote history during the walk, from ' + before);
+    assert.equal(seen.calls, 1, 'the late step ran the skin as a new Back');
+    assert.equal(w.log.left, 'earlier');
+  });
+
+  await run('older engine, directly opened and freshly loaded: nothing behind, so Back works at once', async () => {
+    const entries = [app()];
+    const {w, seen} = armed({entries, index: 0, loaded: 'navigate'});
+    press(w);
+    await settle();
+    assert.equal(seen.calls, 1);
+    assert.equal(w.history.state.agentnetBackSeq, 1, 'the guard returned without input');
+    seen.layers = 1;
+    press(w);
+    await settle();
+    assert.equal(seen.layers, 0);
+  });
+
+  await run('a reload keeps what the load saw: another origin behind stays a certain traversal', async () => {
+    // Stamped by the load before: the reload itself says nothing about either side.
+    const entries = [outside(), app()];
+    const {w} = armed({entries, index: 1, api: true, activation: 'push'});
+    const mark = w.entries[1].state;
+    assert.equal(mark.agentnetBackBefore, 'other');
+    const again = world({entries: [outside(), {doc: 'app', state: mark}], index: 1, api: true, activation: 'reload', slow: e => e.origin ? 1500 : 0});
+    const seen = {calls: 0};
+    browserBackNavigation(again)(() => { seen.calls++; return false; });
+    const before = again.log.writes;
+    again.history.back();
+    await sleep(1200);
+    input(again);
+    await sleep(100);
+    assert.equal(again.log.writes, before, 'wrote history during the traversal');
+    await sleep(400);
+    assert.equal(again.log.left, 'outside');
+    assert.equal(seen.calls, 1);
+  });
+
   await run('navigation API: a late popstate with input between writes nothing and runs nothing', async () => {
     const entries = [earlier(), app(), app(), app()];
     const {w, seen} = armed({entries, index: 3, api: true, slow: e => e === entries[1] ? 1500 : 0});
@@ -197,7 +263,7 @@ const app = () => ({doc: 'app'}), earlier = () => ({doc: 'earlier'}), outside = 
     assert.equal(seen.layers, 0, 'an ordinary Back after the guard returned reaches the layer');
   });
 
-  await run('older engine, the stated limit: a traversal over a second with input writes, and is still that Back', async () => {
+  await run('the stated limit, no load seen: a traversal over a second with input writes, and is still that Back', async () => {
     const entries = [earlier(), app(), app(), app()];
     const {w, seen} = armed({entries, index: 3, slow: e => e === entries[1] ? 1500 : 0});
     w.entries[1].state = {agentnetBack: w.history.state.agentnetBack, agentnetBackSeq: 0};

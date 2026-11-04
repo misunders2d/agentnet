@@ -13,6 +13,12 @@ export function browserBackNavigation(win = window) {
   let generation = own(win.history.state) ? generationOf(win.history.state) : 0;
   const stamp = seq => ({ ...win.history.state, agentnetBack: marker, agentnetBackSeq: seq, agentnetBackGeneration: generation });
   let at = own(win.history.state) ? win.history.state.agentnetBackSeq : -1;
+  // A page newly navigated to has cut whatever was ahead of it, so all of history but
+  // this entry is behind it, once, while nothing has been dropped. Kept on the entry,
+  // this holds across reloads and returns, when the browser no longer says.
+  const historyCap = 50;
+  const pushed = nav?.activation ? nav.activation.navigationType === 'push' : !nav && win.performance?.getEntriesByType?.('navigation')?.[0]?.type === 'navigate';
+  const before = !pushed || win.history.length >= historyCap ? undefined : win.history.length > 1 ? 'other' : 'nothing';
   const guard = () => { at += 1; win.history.pushState(stamp(at), '', win.location.href); };
   const guardFromHere = () => {
     generation += 1;
@@ -20,17 +26,19 @@ export function browserBackNavigation(win = window) {
     win.history.replaceState(stamp(at), '', win.location.href);
     guard();
   };
-  // What the browser can say about the entry behind this one (HTML navigation API).
-  // It lists only same-origin entries touching this one. History longer than that list
-  // holds other origins: behind this page when it was pushed or replaced, since those cut
-  // whatever was ahead of it, and on either side after a reload or a return.
+  // What is behind this entry. Going back past the start raises no event, so a traversal
+  // this page may not be sure of cannot be told from a slow one: it must know beforehand.
+  // The HTML navigation API lists only same-origin entries touching this one, so history
+  // longer than that list holds other origins, on a side only the page's load can tell.
   const behind = () => {
-    const current = nav?.currentEntry;
-    if (!current || !(current.index >= 0)) return 'unknown';
-    if (current.index > 0) return 'own';
-    if (win.history.length <= nav.entries().length) return 'nothing';
-    const type = nav.activation?.navigationType;
-    return type === 'push' || type === 'replace' ? 'other' : 'unknown';
+    const current = nav?.currentEntry, state = win.history.state;
+    if (current?.index > 0) return 'own';
+    if (current?.index === 0 && win.history.length <= nav.entries().length) return 'nothing';
+    // Past the cap, entries were dropped from behind: what the load saw no longer holds.
+    // So too when places count more entries than history has.
+    if (!own(state) || (!current && (win.history.length >= historyCap || state.agentnetBackSeq >= win.history.length))) return 'unknown';
+    if (state.agentnetBackSeq === 0) return state.agentnetBackBefore || 'unknown';
+    return current ? 'unknown' : 'other';
   };
   const listen = on => {
     const change = on ? win.addEventListener : win.removeEventListener;
@@ -63,8 +71,8 @@ export function browserBackNavigation(win = window) {
       step.finished?.catch(() => {});
       return;
     }
-    // The browser cannot say whether anything is behind this entry, and going back past
-    // the start raises no event, so a slow traversal looks the same as none at all.
+    // Only here is a slow traversal the same as none at all: a tab from before this
+    // version, or an engine without the API at the cap. Input past a second brings the guard.
     if (there === 'unknown') giveUp = win.setTimeout(mayReturnOnInput, 1000);
     win.history.back();
   };
@@ -101,7 +109,7 @@ export function browserBackNavigation(win = window) {
     if (!armed) { canLeave = win.history.length > Math.max(at, 0) + 1; armed = true; }
     if (returning) listen(true);
     if (!walking) {
-      if (!own(win.history.state)) { at = Math.max(at, 0); win.history.replaceState(stamp(at), '', win.location.href); }
+      if (!own(win.history.state)) { at = Math.max(at, 0); win.history.replaceState({ ...stamp(at), ...(before && at === 0 ? { agentnetBackBefore: before } : {}) }, '', win.location.href); }
       if (at === 0) guard();
     }
     return () => { if (handler === fn) { handler = undefined; listen(false); } };
