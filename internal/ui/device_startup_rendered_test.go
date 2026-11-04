@@ -33,7 +33,7 @@ func TestDeviceCachedStartupRendered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, mode := range []string{"held", "offline", "catalog-held", "catalog-slow", "document-held", "change-during-overview"} {
+	for _, mode := range []string{"held", "offline", "catalog-held", "catalog-slow", "document-held", "change-during-overview", "history"} {
 		t.Run(mode, func(t *testing.T) {
 			out, err := exec.Command(node, "testdata/device_startup_rendered.cjs", mode).CombinedOutput()
 			if err != nil || !strings.Contains(string(out), "cached device Comic real IndexedDB startup PASS ["+mode+"]") {

@@ -34,6 +34,9 @@ const modes={
  'document-held':{relay:'held',hold:'/assets/skins/comic/document.css'},
  // An arrival saved and told (changed) while the first overview is slow.
  'change-during-overview':{relay:'held',arrival:true},
+ // Back around what device.mjs and setup.mjs take out of the address: both
+ // replace history's state with null, the Back guard's mark included.
+ history:{relay:'held'},
 };
 const chosen=process.argv.slice(2).length?process.argv.slice(2):Object.keys(modes);
 for(const m of chosen)assert.ok(modes[m],'unknown mode '+m);
@@ -64,6 +67,55 @@ const newestInView=([id,body])=>{
  const hit=sr.elementFromPoint(r.left+r.width/2,r.top+r.height/2);
  return !!hit&&row.contains(hit)&&{rendered:rows.length,top:Math.round(r.top),bottom:Math.round(r.bottom)};
 };
+
+// The chat is open, opened from the list, after the seed page. Each path takes
+// a fragment out of the address, then Back must still close what is open and
+// then reach the earlier document, and a later return must still handle Back.
+async function historyPaths(page, base, context, local) {
+ const results = {};
+ const conversation = page.locator('[data-card]:not([aria-hidden]) [role=log]');
+ const backTo = async url => { for (let i = 0; i < 6 && page.url() !== url; i++) { await page.goBack({waitUntil:'commit'}).catch(() => {}); await page.waitForTimeout(250); } assert.equal(page.url(), url, 'Back reaches the earlier document, not trapped'); };
+ const take = async hash => {
+  await page.evaluate(h => { location.hash = h; }, hash);
+  await page.waitForFunction(() => location.hash === '', undefined, {timeout:5000});
+  assert.equal(await page.evaluate(() => history.state), null, hash + ': device.mjs replaced the state');
+ };
+ for (const [name, hash] of [['notification', '#agentnet-open:'], ['workspace notification', '#agentnet-workspace-open::']]) {
+  await take(hash);
+  await page.waitForTimeout(300);
+  const open = await conversation.isVisible(); // an empty channel names nothing to open
+  if (open) {
+   await page.goBack({waitUntil:'commit'});
+   await conversation.waitFor({state:'detached',timeout:5000});
+   assert.equal(new URL(page.url()).pathname, '/', name + ': Back closed the chat and stayed');
+  }
+  await backTo(base + '/seed');
+  // Forward, or the app's page opened again from this tab, still handles Back.
+  await page.goto(base + '/', {waitUntil:'domcontentloaded'});
+  const row = page.getByRole('button').filter({hasText:'Saved colleague'}).first();
+  await row.waitFor({timeout:5000});
+  await row.tap();
+  await conversation.waitFor({timeout:5000});
+  results[name] = (open ? 'closed chat, ' : 'chat already closed, ') + 'reached earlier document, handled again';
+ }
+ // An invitation opened in the address: taken before Comic mounts.
+ await backTo(base + '/seed');
+ await page.goto(base + '/#agentnet-invite-v1:not-a-real-code', {waitUntil:'domcontentloaded'});
+ await page.waitForFunction(() => location.hash === '', undefined, {timeout:5000});
+ await backTo(base + '/seed');
+ results.invite = 'code out of the address, reached earlier document';
+ // The app's first-run page takes its invitation the same way.
+ await page.route(base + '/first-run', route => route.fulfill({contentType:'text/html', body:'<!doctype html><title>First run</title><div id="skin"></div><script type="module" src="/assets/setup.mjs"></script>'}));
+ await page.route(base + '/api/setup', route => route.fulfill({contentType:'application/json', body:JSON.stringify({state:'none'})}));
+ await page.goto(base + '/first-run#agentnet-invite-v1:not-a-real-code', {waitUntil:'domcontentloaded'});
+ await page.waitForFunction(() => location.hash === '' && !!document.getElementById('app-setup'), undefined, {timeout:5000});
+ assert.equal(await page.evaluate(() => history.state), null, 'setup.mjs replaced the state');
+ await page.evaluate(() => { location.hash = '#agentnet-invite-v1:another-link'; }); // the app opened again from another link
+ await page.waitForFunction(() => location.hash === '', undefined, {timeout:5000});
+ await backTo(base + '/seed');
+ results.setup = 'both invitations out of the address, reached earlier document';
+ return results;
+}
 
 (async () => {
  let browser, current, errors = [], relay = null;
@@ -167,6 +219,7 @@ const newestInView=([id,body])=>{
      late.fontFaces = await page.evaluate(faces);
     }
    }
+   if (mode === 'history') late.history = await historyPaths(page, base, context, local);
    assert.equal(errors.length, 0, errors.join('\n'));
    console.log(JSON.stringify({mode,messages,firstChatListMs,firstSavedMessageMs,newest:shown,late,relay:{held:relay.held,refused:relay.refused,holding:relay.holding},stage}));
    seen.closing = true;
