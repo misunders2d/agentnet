@@ -865,7 +865,7 @@ func TestAttentionScopeSnapshotRevalidatedBeforeWrite(t *testing.T) {
 	tx, scope, err := a.attentionActionScope(func() (map[string]protocol.ReadRef, error) {
 		calls++
 		if calls == 1 {
-			_, e := a.store.db.Exec(`INSERT INTO config(k,v) VALUES('attention-scope-change','1')`)
+			_, e := a.store.db.Exec(`INSERT INTO config(k,v) VALUES('suspended_devices','[]')`)
 			if e != nil {
 				return nil, e
 			}
@@ -878,10 +878,6 @@ func TestAttentionScopeSnapshotRevalidatedBeforeWrite(t *testing.T) {
 	defer tx.Rollback()
 	if calls != 2 || len(scope) != 1 {
 		t.Fatal("stale canonical snapshot entered transaction", calls, scope)
-	}
-	var stable int
-	if err = tx.QueryRow(`SELECT count(*) FROM config WHERE k='attention-scope-change'`).Scan(&stable); err != nil || stable != 1 {
-		t.Fatal(stable, err)
 	}
 	if err = tx.Rollback(); err != nil {
 		t.Fatal(err)
@@ -899,7 +895,7 @@ func TestAttentionScopeSnapshotRevalidatedBeforeWrite(t *testing.T) {
 	tx, _, err = a.attentionActionScope(func() (map[string]protocol.ReadRef, error) {
 		calls++
 		if calls == 1 {
-			_, e := other.Exec(`INSERT INTO config(k,v) VALUES('attention-other-connection','1')`)
+			_, e := other.Exec(`UPDATE config SET v='[ ]' WHERE k='suspended_devices'`)
 			if e != nil {
 				return nil, e
 			}
@@ -977,7 +973,7 @@ func TestAttentionScopeSnapshotRevalidatedBeforeWrite(t *testing.T) {
 				if e != nil {
 					return nil, e
 				}
-				_, e = writer.db.Exec(`INSERT INTO config(k,v) VALUES('attention-continuous',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, calls)
+				_, e = writer.db.Exec(`UPDATE inbox SET read_at=read_at WHERE id=?`, incoming.ID)
 				return scope, e
 			})
 			if tx != nil {
@@ -1021,6 +1017,51 @@ func TestAttentionScopeSnapshotRevalidatedBeforeWrite(t *testing.T) {
 		t.Fatal("malformed generation reached legacy fallback")
 	}
 	checkLegacy(t, false)
+}
+
+// Catch-up in another chat must not refuse "mark unread" with "this chat changed"
+// (MEL-748); a write to this chat, or to everything, still must.
+func TestAttentionScopeMovesOnlyWithItsOwnChat(t *testing.T) {
+	w, _, _, _ := historyCatchupFixture(t, 0)
+	a := w.alice
+	chat := map[string]protocol.ReadRef{"m": {Conv: "this", LID: "m"}}
+	device := map[string]protocol.ReadRef{"m": {LID: "m"}}
+	for _, c := range []struct {
+		name  string
+		scope map[string]protocol.ReadRef
+		key   string
+		moved bool
+	}{
+		{"another chat", chat, "c:other", false},
+		{"history progress", chat, "h", false},
+		{"a device thread", chat, "p:someone", false},
+		{"the same chat", chat, "c:this", true},
+		{"everything", chat, "*", true},
+		{"a chat, for a device thread", device, "c:other", false},
+		{"a device thread's peer", device, "p:someone", true},
+		{"everything, for a device thread", device, "*", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			calls := 0
+			tx, _, err := a.attentionActionScope(func() (map[string]protocol.ReadRef, error) {
+				calls++
+				if calls == 1 {
+					_, e := a.store.db.Exec(`INSERT INTO view_dirty(key,seq) VALUES(?,(SELECT max(seq)+1 FROM view_dirty)) ON CONFLICT(key) DO UPDATE SET seq=excluded.seq`, c.key)
+					return c.scope, e
+				}
+				return c.scope, nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := tx.Rollback(); err != nil {
+				t.Fatal(err)
+			}
+			if want := map[bool]int{false: 1, true: 2}[c.moved]; calls != want {
+				t.Fatalf("resolved %d times, want %d", calls, want)
+			}
+		})
+	}
 }
 
 func TestAttentionExactAuthorReferences(t *testing.T) {

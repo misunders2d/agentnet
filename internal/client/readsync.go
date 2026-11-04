@@ -9,6 +9,7 @@ import (
 	"github.com/misunders2d/agentnet/internal/identity"
 	"github.com/misunders2d/agentnet/internal/lockfile"
 	"github.com/misunders2d/agentnet/internal/protocol"
+	"strings"
 	"time"
 )
 
@@ -599,12 +600,12 @@ func (a *Agent) attentionScope(anchor string) (map[string]protocol.ReadRef, erro
 // Existing canonical views read through the store's single connection. Validate
 // that snapshot after acquiring the write transaction, so an erasure, topic
 // move or new control cannot slip between scope validation and the action.
-// total_changes covers this connection; data_version covers other connections.
+// Only a write to these chats can do that: catch-up in another chat must not
+// refuse the action (MEL-748). view_dirty covers every connection.
 func (a *Agent) attentionActionScope(resolve func() (map[string]protocol.ReadRef, error)) (*sql.Tx, map[string]protocol.ReadRef, error) {
-	const stampSQL = `SELECT total_changes(),data_version FROM pragma_data_version`
 	for attempt := 0; attempt < 3; attempt++ {
-		var changes, version, afterChanges, afterVersion int64
-		if err := a.store.db.QueryRow(stampSQL).Scan(&changes, &version); err != nil {
+		var mark int64
+		if err := a.store.db.QueryRow(`SELECT coalesce(max(seq),0) FROM view_dirty`).Scan(&mark); err != nil {
 			return nil, nil, err
 		}
 		scope, err := resolve()
@@ -615,16 +616,49 @@ func (a *Agent) attentionActionScope(resolve func() (map[string]protocol.ReadRef
 		if err != nil {
 			return nil, nil, err
 		}
-		if err = tx.QueryRow(stampSQL).Scan(&afterChanges, &afterVersion); err != nil {
+		moved, err := attentionScopeMoved(tx, mark, scope)
+		if err != nil {
 			tx.Rollback()
 			return nil, nil, err
 		}
-		if changes == afterChanges && version == afterVersion {
+		if !moved {
 			return tx, scope, nil
 		}
 		tx.Rollback()
 	}
 	return nil, nil, errAttentionScopeChanged
+}
+
+// attentionScopeMoved says whether anything since mark can change what scope
+// holds. A device thread's rows are marked by peer and its refs do not name one,
+// so any peer's write counts for them.
+func attentionScopeMoved(q dbq, mark int64, scope map[string]protocol.ReadRef) (bool, error) {
+	convs := map[string]bool{}
+	for _, ref := range scope {
+		convs[ref.Conv] = true
+	}
+	rows, err := q.Query(`SELECT key FROM view_dirty WHERE seq>?`, mark)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	moved := false
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return false, err
+		}
+		switch {
+		case key == "h":
+		case strings.HasPrefix(key, "c:"):
+			moved = moved || convs[key[2:]]
+		case strings.HasPrefix(key, "p:"):
+			moved = moved || convs[""]
+		default:
+			moved = true
+		}
+	}
+	return moved, rows.Err()
 }
 
 // MarkUnread applies exactly this admitted topic snapshot, atomically. Its

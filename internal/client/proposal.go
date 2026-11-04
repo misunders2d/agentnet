@@ -222,6 +222,12 @@ func (a *Agent) confirmableProposal(id string) (p confirmableProposal, err error
 }
 
 func (a *Agent) confirmableProposalIn(q dbq, id string) (p confirmableProposal, err error) {
+	return a.confirmableProposalKnown(q, id, nil)
+}
+
+// known, when given, shares one read of a chat's members between the rows of one
+// view; every other check runs for each row.
+func (a *Agent) confirmableProposalKnown(q dbq, id string, known map[string]dmMembers) (p confirmableProposal, err error) {
 	p.id = id
 	self, found, e := scanPersonIn(q, `state=?`, personSelf)
 	if e != nil {
@@ -318,9 +324,15 @@ func (a *Agent) confirmableProposalIn(q dbq, id string) (p confirmableProposal, 
 		if p.pid == "" || p.pid != questionPID || p.topic != questionTopic {
 			return p, ErrNotConfirmable
 		}
-		members, e := membersIn(q, p.conv)
-		if e != nil {
-			return p, e
+		members, ok := known[p.conv]
+		if !ok {
+			var e error
+			if members, e = membersIn(q, p.conv); e != nil {
+				return p, e
+			}
+			if known != nil {
+				known[p.conv] = members
+			}
 		}
 		info, e := participationIn(q, p.conv, p.pid, members, a.Address)
 		if e != nil {
@@ -365,6 +377,20 @@ func (a *Agent) CanConfirmProposal(id string) bool {
 	}
 	sent, err := a.confirmedProposal(a.store.db, p)
 	return err == nil && sent == ""
+}
+
+// ProposalConfirmer is CanConfirmProposal for the rows of one view: what it lists
+// is display only, and ConfirmProposal repeats every check when tapped.
+func (a *Agent) ProposalConfirmer() func(id string) bool {
+	known := make(map[string]dmMembers)
+	return func(id string) bool {
+		p, err := a.confirmableProposalKnown(a.store.db, id, known)
+		if err != nil {
+			return false
+		}
+		sent, err := a.confirmedProposal(a.store.db, p)
+		return err == nil && sent == ""
+	}
 }
 
 var errProposalConfirmed = errors.New("proposal already confirmed")

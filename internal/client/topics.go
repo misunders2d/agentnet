@@ -409,30 +409,52 @@ func (s *store) firstLines(peer string, ids []string) (map[string]string, error)
 	// labels may precede the visible tail, so bound that scan by a message,
 	// not by one collective payload. Neither branch returns raw text to UI.
 	line = `CASE WHEN instr(substr(body, 1, ` + strconv.Itoa(topicLineScan) + `), '](agentnet:') > 0 THEN substr(body, 1, min(coalesce(nullif(instr(body, char(10)), 0) - 1, ` + strconv.Itoa(protocol.MaxBody) + `), ` + strconv.Itoa(protocol.MaxBody) + `)) ELSE ` + line + ` END`
+	if len(unique) == 0 {
+		return out, nil
+	}
+	// Once, not with each chunk: the view reads all of this peer's rows, and a list
+	// of its topics needs many chunks (MEL-748).
+	links := map[string]bool{}
+	linked, err := s.db.Query(`SELECT storage, id FROM device_thread_links WHERE peer=?`, peer)
+	if err != nil {
+		return nil, err
+	}
+	for linked.Next() {
+		var storage, id string
+		if err := linked.Scan(&storage, &id); err != nil {
+			linked.Close()
+			return nil, err
+		}
+		links[storage+"\x00"+id] = true
+	}
+	linked.Close()
+	if err := linked.Err(); err != nil {
+		return nil, err
+	}
 	for len(unique) > 0 {
 		chunk := unique[:min(len(unique), topicLineChunk)]
 		unique = unique[len(chunk):]
 		marks := strings.TrimSuffix(strings.Repeat("?,", len(chunk)), ",")
-		args := []any{peer}
-		for _, id := range chunk {
-			args = append(args, id)
+		args := make([]any, 0, 2*len(chunk))
+		for range 2 {
+			for _, id := range chunk {
+				args = append(args, id)
+			}
 		}
-		args = append(args, peer)
-		for _, id := range chunk {
-			args = append(args, id)
-		}
-		rows, err := s.db.Query(`SELECT id, `+line+` FROM inbox WHERE id IN (SELECT id FROM device_thread_links WHERE peer=? AND storage='in') AND conv IS NULL AND ref_id IS NULL AND id IN (`+marks+`)
-			UNION ALL SELECT id, `+line+` FROM outbox WHERE id IN (SELECT id FROM device_thread_links WHERE peer=? AND storage='out') AND conv IS NULL AND ref_id IS NULL AND id IN (`+marks+`)`, args...)
+		rows, err := s.db.Query(`SELECT 'in', id, `+line+` FROM inbox WHERE conv IS NULL AND ref_id IS NULL AND id IN (`+marks+`)
+			UNION ALL SELECT 'out', id, `+line+` FROM outbox WHERE conv IS NULL AND ref_id IS NULL AND id IN (`+marks+`)`, args...)
 		if err != nil {
 			return nil, err
 		}
 		for rows.Next() {
-			var id, l string
-			if err := rows.Scan(&id, &l); err != nil {
+			var storage, id, l string
+			if err := rows.Scan(&storage, &id, &l); err != nil {
 				rows.Close()
 				return nil, err
 			}
-			out[id] = BodyPreview(l)
+			if links[storage+"\x00"+id] {
+				out[id] = BodyPreview(l)
+			}
 		}
 		rows.Close()
 		if err := rows.Err(); err != nil {
@@ -506,7 +528,7 @@ func (a *Agent) topicOverview(listArchived bool, unread *[]DeviceUnreadRef) ([]T
 		if unread != nil {
 			*unread = append(*unread, e.unread...)
 		}
-		all := slices.Clone(e.all)
+		all := e.all // text below fills it in, under cache.mu
 		c := PeerTopics{Peer: peer}
 		var shown []*ThreadSummary
 		for i := range all {
@@ -535,6 +557,27 @@ func (a *Agent) topicOverview(listArchived bool, unread *[]DeviceUnreadRef) ([]T
 				byAgent[key] = c
 			}
 			addPeerTopic(c, t)
+		}
+		// Only what this list shows needs its text: thousands of archived topics'
+		// lines are most of a cold list otherwise (MEL-748).
+		var text []*ThreadSummary
+		need := func(t *ThreadSummary) {
+			if !e.text[t.ID] {
+				e.text[t.ID] = true
+				text = append(text, t)
+			}
+		}
+		for _, t := range shown {
+			need(t)
+		}
+		for _, c := range byAgent {
+			if i := slices.IndexFunc(all, func(t ThreadSummary) bool { return t.ID == c.Latest.ID }); i >= 0 {
+				need(&all[i])
+			}
+		}
+		if err := a.topicText(peer, text); err != nil {
+			delete(cache.peers, peer)
+			return nil, nil, err
 		}
 		for _, t := range shown {
 			out = append(out, *t)
@@ -565,7 +608,8 @@ func (a *Agent) topicOverview(listArchived bool, unread *[]DeviceUnreadRef) ([]T
 // TopicArchiveAfter is archived by the clock. until is the first such moment, and
 // at guards against a clock moved back.
 type peerTopicsEntry struct {
-	all       []ThreadSummary // with their text
+	all       []ThreadSummary
+	text      map[string]bool // the topics in all whose text has been read
 	unread    []DeviceUnreadRef
 	at, until int64
 }
@@ -621,7 +665,7 @@ func (a *Agent) keptPeerTopics(off bool) ([]string, map[string]*peerTopicsEntry,
 }
 
 func (a *Agent) buildPeerTopics(peer string, now int64) (*peerTopicsEntry, error) {
-	e := &peerTopicsEntry{at: now}
+	e := &peerTopicsEntry{at: now, text: make(map[string]bool)}
 	var err error
 	if e.all, err = a.peerTopics(peer, now, &e.unread); err != nil {
 		return nil, err
@@ -634,15 +678,22 @@ func (a *Agent) buildPeerTopics(peer string, now int64) (*peerTopicsEntry, error
 			e.until = at
 		}
 	}
-	text := make([]*ThreadSummary, len(e.all))
-	titles := make(map[string]string, len(e.all))
+	threads := make(map[string]bool, len(e.unread))
+	for _, r := range e.unread {
+		threads[r.Thread] = true
+	}
+	var text []*ThreadSummary
 	for i := range e.all {
-		text[i] = &e.all[i]
+		if t := &e.all[i]; t.Unread > 0 || threads[t.ID] {
+			e.text[t.ID] = true
+			text = append(text, t)
+		}
 	}
 	if err = a.topicText(peer, text); err != nil {
 		return nil, err
 	}
-	for _, t := range e.all {
+	titles := make(map[string]string, len(text))
+	for _, t := range text {
 		titles[t.ID] = t.Title
 	}
 	for i := range e.unread {

@@ -601,6 +601,7 @@ func (l *Live) DM(id string) (DMThread, error) {
 		for _, p := range known {
 			labels[p.Person] = p.Label
 		}
+		confirmable := l.a.ProposalConfirmer()
 		for _, m := range shownRows(msgs, people) {
 			dm := DMMessage{SendGroup: m.SendGroup, SendGroupAuthor: cmp.Or(m.Key, m.Claimed), Status: m.Status(), Topic: assigned[m.LID], TopicEvent: m.TopicEvent, ID: m.ID, LID: m.LID, AgentID: m.AgentID, Target: m.Target, Dir: m.Dir, From: m.From, Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Quote: m.Quote, SentAt: shownSent(time.Unix(m.Sent, 0), time.Unix(m.At, 0)), Delivery: m.Delivery,
 				Origin: m.Origin, State: m.State, StateText: DMStateText(m.Dir, m.Kind, m.State, words(laggingCopy(m, c.Peer.Address)), m.Detail),
@@ -676,7 +677,7 @@ func (l *Live) DM(id string) (DMThread, error) {
 					dm.StateText = "Your agent: " + strings.ToLower(text[:1]) + text[1:]
 				}
 			}
-			if m.Kind == KindAnswer && m.Status() == envelope.StatusProposal && l.a.CanConfirmProposal(m.ID) {
+			if m.Kind == KindAnswer && m.Status() == envelope.StatusProposal && confirmable(m.ID) {
 				dm.Actions = []string{DoIt}
 			}
 			if m.Kind == KindTask {
