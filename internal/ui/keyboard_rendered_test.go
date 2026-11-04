@@ -39,7 +39,7 @@ func TestKeyboardViewportRendered(t *testing.T) {
 		t.Fatal(err)
 	}
 	alice, bob, live := liveWorld(t)
-	const total = 30 // one topic, taller than the screen
+	const total = 20 // one topic, taller than the screen, all of it drawn
 	root := ""
 	for i := range total {
 		// The topic starts with a task that waits for bob's OK: its card has a Reply of its own.
