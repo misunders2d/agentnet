@@ -268,8 +268,14 @@ async function desktop(browser) {
   p.on('pageerror', (e) => errors.push(String(e)));
   let m = await openChat(p, name);
   assert.equal(m.coarse, false, name + ': a fine pointer');
-  // This chat opens from a waiting task and Latest, not a list row, so its first focus is not a row's.
-  await field(p).click(); m = await measure(p);
+  // This chat opened from a waiting task and Latest. A list row gives the first focus.
+  await p.goto(url);
+  await p.waitForSelector('section[aria-label="Chats"]', { timeout: 20000 });
+  await p.getByRole('button', { name: /not linked to a person/i }).first().click();
+  await field(p).waitFor({ timeout: 20000 });
+  await p.waitForTimeout(450); // the card has arrived
+  m = await measure(p);
+  assert.ok(m.focused, name + ': opening a chat from its list row puts the cursor in the field: ' + JSON.stringify(m));
   assert.equal(await p.getByRole('radio', { name: 'Do it' }).count(), 0, name + ': no up-front task toggle');
   assert.deepEqual(errors, [], name + ': page errors');
   await ctx.close();

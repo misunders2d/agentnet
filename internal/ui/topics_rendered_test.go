@@ -96,3 +96,56 @@ func TestTopicsRendered(t *testing.T) {
 	}
 	t.Logf("%s", out)
 }
+
+// A question to a person's current agent has its own row since 771e738e, and its
+// topic there says it needs the person (MEL-748 restored this after that change
+// left the older check with no such topic to look at).
+func TestTopicNeedsYouRendered(t *testing.T) {
+	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
+		t.Skip("opt-in: set AGENTNET_PLAYWRIGHT to an installed playwright-core")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Fatal(err)
+	}
+	alice, bob, live := liveWorld(t)
+	ctx := t.Context()
+	created, err := live.ChangeAgent(ctx, AgentCatalogChange{Action: "create", Label: "Dock helper", Harness: "claude", Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &envelope.Target{Address: bob.Address, Fingerprint: bob.Self().Fingerprint(), AgentID: created.Agent.Record.ID}
+	var last string
+	for _, q := range []string{"Can the Denver pallets wait a day?", "Should I reprint the dock 2 labels?", "Is the Tuesday truck confirmed?", "May I move the Savannah order to Friday?"} {
+		var r client.SendResult
+		for deadline := time.Now().Add(20 * time.Second); ; time.Sleep(100 * time.Millisecond) { // bob's capabilities publish after it connects
+			if r, err = alice.SendMessage(ctx, client.Outgoing{To: bob.Address, Kind: envelope.KindQuestion, Body: q, Target: target}); err == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal(err)
+			}
+		}
+		last = r.ID
+	}
+	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if _, err := bob.TopicOf(last); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the questions never arrived")
+		}
+	}
+	var s *Server
+	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { s.Handler().ServeHTTP(w, r) }))
+	t.Cleanup(ts.Close)
+	s = New(live, ts.Listener.Addr().String(), testToken)
+	ts.Start()
+	cmd := exec.Command(node, "testdata/topics_needsyou_check.cjs")
+	cmd.Env = append(os.Environ(), "TOPICS_URL="+ts.URL+"/?t="+testToken)
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "topic needs you check PASS") {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	t.Logf("%s", out)
+}
