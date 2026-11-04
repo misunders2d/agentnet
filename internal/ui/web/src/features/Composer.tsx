@@ -559,7 +559,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       if (restored) { store.setDraft(c, { ...d, files: sent }); store.sends.remove(id); }
       else store.sends.fail(id, errorText(e), !definite);
       const why = errorText(e).replace(/\.?$/, ".");
-      if (visible.current === c) setNotice({ conv: c, text: (definite ? "Not sent: " : "Not confirmed: ") + why + (restored ? " Your text and files are restored." : followup ? " The exact steering request and files are kept above. Check the original work before retrying." : " Your newer draft is kept. Retry the failed message above.") });
+      if (visible.current === c) setNotice({ conv: c, text: (definite ? "Not sent: " : "Not confirmed: ") + why + (restored ? " Your text and files are restored." : followup ? " The exact steering request and files are kept above. Check the original work before retrying." : current.text || (current.files || []).length ? " Your newer draft is kept. Retry the failed message above." : " It’s kept above. Retry it there.") });
       else store.toast("Not sent to " + title + ": " + why + " It’s kept in that chat.", "error");
     } finally {
       setBusy(({ [c]: _, ...rest }) => rest);

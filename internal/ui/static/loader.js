@@ -86,7 +86,7 @@
     if (!path.startsWith("/api/")) throw new Error("Expected an AgentNet API path");
     if (browser) return browser.api(path, body);
     const r = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    if (!r.ok) throw new Error((await r.text()).trim() || r.statusText);
+    if (!r.ok) throw Object.assign(new Error((await r.text()).trim() || r.statusText), { status: r.status }); // as a workspace's host does: an answer is not a lost request
     return r.json();
   };
   const nativeAppJSON = typeof window.__agentnetNativeAppJSON === "function" ? window.__agentnetNativeAppJSON : null;

@@ -662,7 +662,11 @@ decision does not close the request; only the host's signed status does.
   - `custody`: on the relay.
   - `delivered`
   - `expired`
-  - `failed`
+  - `failed`: also the answer to `/api/dm/send` when a queued send is refused
+    at once (a frozen person, a changed audience). Nothing is delivered. The
+    message stays in its chat with its words and `detail`; its `queued_send`
+    row carries Retry and Discard (`/api/schedule/retry_send`,
+    `/api/schedule/discard_send`). The answer is 200, not a refusal.
   - `not_delivered`
   - `quarantined`
 

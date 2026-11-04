@@ -104,6 +104,16 @@ console.log('queued engine send PASS: durable return, FIFO, retry, no duplicate 
   assert.equal(sends.merge('c',[kept('needs_review',4,{detail:'x'})]).length,0);
   assert.equal(sends.merge('c',[]).length,0);
   assert.equal(sends.merge('c',[kept('needs_review',4,{detail:'x'})]).length,1,'the host decides once the action is settled');
+  // Refused on its first attempt: the answer says failed and the host's row
+  // brings Retry and Discard, one row with its words throughout.
+  const refusedID=sends.begin('r',{id:'rf',lid:'rf',dir:'out',at:at(1),body:'kept'});
+  sends.finish(refusedID,{id:'rf',lid:'rf',state:'failed',detail:'This person is frozen.'});
+  let answered=sends.merge('r',[]);
+  assert.equal(answered.length,1);assert.equal(answered[0].body,'kept');assert.equal(answered[0].state,'failed');assert.equal(answered[0].state_text,'This person is frozen.');
+  const hostRow={id:'rf',lid:'rf',dir:'out',at:at(1),body:'kept',state:'failed',detail:'This person is frozen.',queued_send:{state:'needs_review',rev:2}};
+  answered=sends.merge('r',[hostRow]);
+  assert.equal(answered.length,1);assert.equal(answered[0].body,'kept');assert.equal(answered[0].state_text,'This person is frozen.');
+  assert.equal(answered[0]._failed,true);assert.equal(typeof answered[0]._retry,'function');assert.equal(typeof answered[0]._discard,'function');
   // A local preview takes its place by time, keeps it failed, and yields by id.
   const id=sends.begin('d',{id:'l',lid:'l',dir:'out',at:at(10),body:'local'});
   const older={id:'o',dir:'in',at:at(5)},newer={id:'n',dir:'in',at:at(20)};
