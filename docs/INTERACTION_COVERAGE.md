@@ -1,5 +1,79 @@
 # Next-release interaction coverage and responsiveness
 
+## MEL-748 v0.10.10 candidate — November 4, 2026
+
+Not qualified and not released. Pre-CI checkpoint not cleared. Owner reports:
+the app froze during catch-up, messages sat in queue and were cancelled, every
+interaction was slow on the ThinkPad, and a delayed reply reached Amazon_team.
+
+**Counterparts inspected.** TDLib `4c6377aa`, `MessagesManager.cpp`
+(`get_next_yet_unsent_message_id`, `fail_send_message`,
+`set_dialog_last_message_id`, `set_dialog_last_read_inbox_message_id`,
+`send_update_chat_last_message`): a sent message is stored before any network
+step and keeps its identity, its place and its retry; a chat's last message and
+read state are kept per chat and updated by the write, not recomputed for the
+list. Telegram Desktop `a8de5f92`, `api/api_sending.cpp`. Signal Desktop
+`5dad34ad`, `sql/main.main.ts`, `jobs/JobQueue.std.ts`. Slack is closed source,
+unverified. Adaptation: per-chat scope comes from SQLite triggers (`view_dirty`)
+because a second process writes the same store; native checks are unchanged.
+
+**Causes, measured on a private copy of the owner's Zenbook store.** One history
+page took 32 s, 87.5% in repeated roster and signature work; the store's only
+connection and the spool lock were held meanwhile. A group send then waited on
+that lock until its 20 s budget ended, and the failed chain request returned
+before anything was stored, so the text came back to the composer. Proven from
+source; the exact 12:49 timing is inferred. A held chain request stopped the
+one goroutine reading the push stream for up to 30 s per member. The chat list
+rebuilt every chat on any write, which is why every control felt slow. Task and
+proposal lookups scanned a whole table per row.
+
+| Fix | Commit | Regression |
+|---|---|---|
+| Catch-up no longer re-verifies rosters per item; pages bounded, rest between turns | `3e41afbe` `a96642c6` `25814cca` | production-default pacing tests, page ≤ flow-control window |
+| An accepted message is stored before any network step, same ID through retries | `99b76efd` | `TestQueuedSend*`: stalls, busy spool, restart at each stage, ambiguous accept, terminal failure, cancel/retry/repeat, timeout never cancels, place kept |
+| A slow roster request holds that message, not the stream | `cde9b868` `d013bf5b` | `TestHeldChainRequest*`, `TestInboundWaits*`, `TestChainFailure*`, `TestFailingChain*` |
+| Group waiting row in place and in view | `b5a55126` | `TestQueuedGroupSendKeepsItsPlace`, `TestQueuedSendRendered` |
+| Lists read again only the chats a write touched | `d7ebde4d` `ac2ec42c` `248af359` `f0a55cf6` `60a5c9a7` | `TestViewDirty*`, `TestOverviewKeptSummariesMatchAFreshRead`; every UI test comparing kept and fresh lists fails the package on any difference |
+| Task and proposal lookups use indexes | `356fc795` `60a5c9a7` | `TestProposalLookupsFindTheirRowsByIndex` |
+| "Mark unread" is refused only for a write to its own chat | `60a5c9a7` | `TestAttentionScopeMovesOnlyWithItsOwnChat` |
+| Reactions, edits and deletes do not wait on a stalled request | `4151cbe5` | `TestLiveControlsAcceptThroughAStalledRequest`: 2–13 ms |
+
+**Measured, input to result on the native route: no HTTP and no rendering.**
+ThinkPad at `d013bf5b`, real disk (btrfs on LUKS), a read-only copy of its store,
+no network, idle otherwise, built with temporary measurement helpers that are
+not in the tree. "Busy" is a history sweep alternating with each route. n=5 idle,
+n=8 busy. Milliseconds, p50 / max.
+
+| Route | Current size, idle | Current size, busy | 10x, idle | 10x, busy |
+|---|---:|---:|---:|---:|
+| First chat list (cold) | 827 | – | 9833 | – |
+| Chat list, one chat changed | 130 / 139 | 230 / 275 | 561 / 600 | 924 / **1208** |
+| Comic's topic list | 100 / 112 | 151 / 200 | 301 / 311 | 349 / 616 |
+| Open biggest chat | 215 / 242 | 305 / 362 | **1959 / 2109** | **1861 / 2093** |
+| Open another chat | 134 / 146 | 146 / 185 | **1332 / 1481** | **1179 / 1345** |
+| Unread page | 0 | 55 / 171 | 113 / 118 | 477 / **2201** |
+| One peer's topics | 103 / 109 | 119 / 134 | **1115 / 1396** | **1120 / 1251** |
+| Approvals | 83 / 90 | 118 / 149 | 96 / 107 | 94 / 232 |
+| Send accepted | 99 / 101 | 260 / 265 | 148 / 171 | 124 / 258 |
+
+Current size is 256 MB; 10x duplicates its rows (1.77 GB). Zenbook, DB on tmpfs,
+loaded by other work, current size: first list 2559 ms, busy list max 783 ms, open
+biggest chat busy max 605 ms. Same machine before these fixes: list rebuild
+1420 ms, busy p95 3300 ms.
+
+**Not met or not shown.** At 10x, opening a chat and the first list exceed one
+second for the confirmed result, as does the first list at current size on a
+loaded machine. These are confirmed results; rendered local feedback at 10x is
+not measured. Fetch paging or a saved first page would be needed: proposals, not
+in this candidate. Other gaps: `invites` asks for sign-in synchronously, so it
+fails with no network; 49 UI actions still wait on the network inside the
+request (local pending state not yet shown for each); chain failure with no newer
+step can leave a message waiting up to 45 s; forwarded group context still asks
+rosters one by one on the stream reader; the freeze's lane demotion and
+foreground continuity lock remain open. Rendered tests with invented data do not
+exercise the native list: CI's 36 compared none. Live and browser tests compared
+148 kept lists with a fresh read, 0 differed; real data 7, 0 differed.
+
 ## MEL-741 / MEL-742 candidate — November 3, 2026
 
 Bounded frontend changes on `mel741-742-read-scroll`; no release qualification
@@ -234,6 +308,12 @@ only the per-message share (~0.3 → ~0.2 s) and needs every consumer that
 reads the whole `messages` list guarded (about 15, one of them topic merge).
 Unverified: Comic-side processing time of a whole view; a Telegram server
 page size other than these client constants.
+
+Corrected November 4 (MEL-748): those shares were measured on one chat at
+current size. The same store at 10x, and the list under write load, showed
+whole-table scans per row and a list rebuilt on every write; fixing those took
+the 10x open on the Zenbook from 4.4 s to 1.4 s without paging. Paging remains the remaining
+step for a chat that size.
 
 ## Message times carry their day — unreleased, November 1
 
