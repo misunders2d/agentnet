@@ -242,6 +242,7 @@ async function checkPanelLayout(page,width,nav,shots){
  if(width<1024)await chats.getByRole('button',{name:'Search chats',exact:true}).click();
  else await page.keyboard.press('Control+k');
  const search=chats.getByRole('searchbox',{name:/^Search chats/});await search.waitFor();
+ await search.page().waitForTimeout(0);for(let i=0;i<20&&!await search.evaluate(el=>el.getRootNode().activeElement===el);i++)await search.page().waitForTimeout(50); // focus follows the frame that shows it
  assert(await search.evaluate(el=>el.getRootNode().activeElement===el),'chat search receives keyboard focus');
  await search.fill('Z'.repeat(80));await chats.getByText(/Nothing matches/).waitFor();
  await capture('search-empty');await search.press('Escape');assert.equal(await search.inputValue(),'');
