@@ -631,7 +631,10 @@ func (a *Agent) attentionActionScope(resolve func() (map[string]protocol.ReadRef
 
 // attentionScopeMoved says whether anything since mark can change what scope
 // holds. A device thread's rows are marked by peer and its refs do not name one,
-// so any peer's write counts for them.
+// so any peer's write counts for them. A scope is built from message rows that
+// have no sub, never carriers (those mark only h), from the erased and topic
+// tables and from own devices: all marked. Files and requests read on the way
+// change no ref.
 func attentionScopeMoved(q dbq, mark int64, scope map[string]protocol.ReadRef) (bool, error) {
 	convs := map[string]bool{}
 	for _, ref := range scope {
