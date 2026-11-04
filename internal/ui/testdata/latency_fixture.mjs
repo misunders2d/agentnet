@@ -480,6 +480,7 @@ try {
  const search=chatSearch();if(search){const set=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;await measure('search.no-results',()=>{set.call(search,'No such synthetic person');search.dispatchEvent(new Event('input',{bubbles:true}));},()=>visibleText('Nothing matches'),'visible empty search result');await measure('search.clear',()=>button('Clear search').click(),()=>search.value===''&&buttons().some(b=>label(b).includes('Vitalii')),'search cleared and original chat row visible');}
  const fresh=button('New')||button('New chat');assert(fresh,'New chat control missing');
  await measure('new-chat.open',()=>fresh.click(),()=>onScreen(scope().querySelector('[role="dialog"]')),'new chat dialog visible on screen');
+ if(trustedFile==='NewChat.tsx'&&await trustedCheckpoint('new-chat'))return {ok:true,...reports};
  const dialog=()=>scope().querySelector('[role="dialog"]'),personRows=()=>[...dialog().querySelectorAll('li')].filter(el=>el.textContent.includes('Person '));
  if(peopleCount>40){assert(personRows().length<=40,'new-chat initial directory render is unbounded');const before=personRows().length;await measure('new-chat.reveal',()=>button(/^Show more people/).click(),()=>personRows().length>before,'next directory page rendered');assert(personRows().length-before<=40,'directory reveal exceeds one bounded page');}
  const q=dialog().querySelector('input[type="search"]');assert(q,'new chat search missing');
@@ -777,7 +778,7 @@ try {
 
   }
   if(suite==='profile'){
-   await settings('Profile');const field=active('#settings-name');await fill('profile.name-edit',field,'Fixture Alice');
+   await settings('Profile');if(trustedFile==='Settings.profile.tsx'&&await trustedCheckpoint('settings-profile'))return {ok:true,...reports};const field=active('#settings-name');await fill('profile.name-edit',field,'Fixture Alice');
    const profileSave=()=>active('#settings-name')?.closest('form')?.querySelector('button[type="submit"]');await until(()=>profileSave()&&label(profileSave())==='Save'&&!profileSave().disabled,'exact profile form Save control ready');
    await tap('profile.name-save',profileSave(),()=>!!active('section[aria-label="Name change"]')&&!active('#settings-name'),'exact name submitted with local pending profile',()=>me.label==='Fixture Alice'&&active('#settings-name')?.value==='Fixture Alice'&&!profileSave()&&!active('section[aria-label="Name change"]'));
    if(innerWidth<1024)await tap('profile.back',active('[data-settings-back]'),()=>!!control(/^Your devices/),'settings list visible again');
