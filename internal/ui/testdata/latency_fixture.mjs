@@ -781,7 +781,7 @@ try {
 
   }
   if(suite==='profile'){
-   await settings('Profile');if(trustedFile==='Settings.profile.tsx'&&await trustedCheckpoint('settings-profile'))return {ok:true,...reports};const field=active('#settings-name');await fill('profile.name-edit',field,'Fixture Alice');
+   await settings('Profile');if(trustedFile==='Settings.profile.tsx'&&await trustedCheckpoint('settings-profile','profile/settings-profile-open'))return {ok:true,...reports};const field=active('#settings-name');await fill('profile.name-edit',field,'Fixture Alice');
    const profileSave=()=>active('#settings-name')?.closest('form')?.querySelector('button[type="submit"]');await until(()=>profileSave()&&label(profileSave())==='Save'&&!profileSave().disabled,'exact profile form Save control ready');
    await tap('profile.name-save',profileSave(),()=>!!active('section[aria-label="Name change"]')&&!active('#settings-name'),'exact name submitted with local pending profile',()=>me.label==='Fixture Alice'&&active('#settings-name')?.value==='Fixture Alice'&&!profileSave()&&!active('section[aria-label="Name change"]'));
    if(innerWidth<1024)await tap('profile.back',active('[data-settings-back]'),()=>!!control(/^Your devices/),'settings list visible again');
