@@ -350,7 +350,7 @@ const outboxConvSubSchema = `CREATE INDEX outbox_conv_sub ON outbox(conv, create
 const continuityGenerationSchema = `CREATE TABLE continuity_generation(id INTEGER PRIMARY KEY CHECK(id=1), token TEXT NOT NULL);
 INSERT INTO continuity_generation VALUES(1, hex(randomblob(16)));
 CREATE TRIGGER continuity_persons_insert AFTER INSERT ON persons BEGIN UPDATE continuity_generation SET token=hex(randomblob(16)); END;
-CREATE TRIGGER continuity_persons_update AFTER UPDATE ON persons BEGIN UPDATE continuity_generation SET token=hex(randomblob(16)); END;
+CREATE TRIGGER continuity_persons_update AFTER UPDATE ON persons WHEN OLD.person IS NOT NEW.person OR OLD.record IS NOT NEW.record OR OLD.state IS NOT NEW.state OR OLD.conflict IS NOT NEW.conflict BEGIN UPDATE continuity_generation SET token=hex(randomblob(16)); END;
 CREATE TRIGGER continuity_persons_delete AFTER DELETE ON persons BEGIN UPDATE continuity_generation SET token=hex(randomblob(16)); END;
 CREATE TRIGGER continuity_config_insert AFTER INSERT ON config WHEN NEW.k GLOB 'continuity-head/*' OR NEW.k GLOB 'revoked-exact-device/*' BEGIN UPDATE continuity_generation SET token=hex(randomblob(16)); END;
 CREATE TRIGGER continuity_config_update AFTER UPDATE ON config WHEN NEW.k GLOB 'continuity-head/*' OR NEW.k GLOB 'revoked-exact-device/*' OR OLD.k GLOB 'continuity-head/*' OR OLD.k GLOB 'revoked-exact-device/*' BEGIN UPDATE continuity_generation SET token=hex(randomblob(16)); END;

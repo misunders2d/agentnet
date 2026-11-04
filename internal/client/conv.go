@@ -67,7 +67,13 @@ type convWork struct {
 	// readerWait: own-device history produced nothing for a device that
 	// cannot read it now (or is suspended); the next member list, which
 	// says when that device reconnects or updates, looks again.
-	readerWait atomic.Bool
+	readerWait       atomic.Bool
+	historyLimit     atomic.Int64 // rows in the next catch-up page; 0: historyPage
+	historyNotBefore atomic.Int64 // unix nanos: no history turn before this
+	historyCost      atomic.Int64 // nanos the last history turn took
+	paceTimer        atomic.Bool  // a paced wake is already set
+	sweepRestarted   time.Time    // when deferred history last restarted (mu)
+	sweepPending     bool         // evidence arrived during the wait (mu)
 }
 
 func (w *convWork) due(b uint32) { w.bits.Or(b) }
@@ -189,11 +195,11 @@ func (a *Agent) convSync(ctx context.Context) {
 			a.heldEvidence()
 		}
 		if work&convRetry != 0 {
-			// New evidence may admit deferred own-device history: sweep it again.
-			a.convWork.mu.Lock()
-			a.convWork.historyDeferred = nil
-			work |= convHistory
-			a.convWork.mu.Unlock()
+			// New evidence may admit deferred own-device history: sweep it again,
+			// but not more often than the sweep's own cost allows.
+			if a.restartDeferredHistory(time.Now()) {
+				work |= convHistory
+			}
 		}
 		if a.retryProof(ctx) {
 			// More pages: continue on the next sync, which this kicks now,
@@ -209,60 +215,7 @@ func (a *Agent) convSync(ctx context.Context) {
 		a.releaseConv(ctx, feats)
 	}
 	if work&convHistory != 0 {
-		roots, err := a.syncRoots()
-		if err != nil {
-			a.Logf("copying conversation roots: %v", err)
-			a.convWork.due(convHistory)
-		}
-		reads, readErr := a.syncReadMarks()
-		if readErr != nil {
-			a.Logf("copying read state: %v", readErr)
-			a.convWork.due(convHistory)
-		}
-		invites, inviteErr := a.syncInvitations()
-		if inviteErr != nil {
-			a.Logf("copying invitation views: %v", inviteErr)
-			a.convWork.due(convHistory)
-		}
-		titles, titleErr := a.syncTopicTitles()
-		if titleErr != nil {
-			a.Logf("copying topic titles: %v", titleErr)
-			a.convWork.due(convHistory)
-		}
-		locations, locationErr := a.syncTopicLocations()
-		if locationErr != nil {
-			a.Logf("copying topic locations: %v", locationErr)
-			a.convWork.due(convHistory)
-		}
-		marks, markErr := a.syncTopicMarks()
-		if markErr != nil {
-			a.Logf("copying topic marks: %v", markErr)
-			a.convWork.due(convHistory)
-		}
-		reminders, reminderErr := a.syncReminders()
-		if reminderErr != nil {
-			a.Logf("copying reminders: %v", reminderErr)
-			a.convWork.due(convHistory)
-		}
-		placements, placementErr := a.syncDirectTopics()
-		if placementErr != nil {
-			a.Logf("copying direct topic placements: %v", placementErr)
-			a.convWork.due(convHistory)
-		}
-		models, modelErr := a.syncModelReports()
-		if modelErr != nil {
-			a.Logf("copying model reports: %v", modelErr)
-			a.convWork.due(convHistory)
-		}
-		more := a.historyStep(ctx)
-		direct, directErr := a.syncDeviceHistory()
-		if directErr != nil {
-			a.Logf("copying direct history: %v", directErr)
-		}
-		if roots || reads || invites || titles || locations || marks || reminders || placements || models || more || direct {
-			a.convWork.due(convHistory) // one page per sync; the next follows at once
-			a.kickNow()
-		}
+		a.historyTurn(ctx)
 	}
 	if work&convFetch != 0 && a.prefetchFiles(ctx) {
 		a.convWork.due(convFetch) // one file per sync
@@ -1938,4 +1891,163 @@ func (a *Agent) ownDevices() map[string]bool {
 		}
 	}
 	return own
+}
+
+// Background catch-up never holds the spool lock or a core for long: a page's
+// size follows what the last page cost, and the next turn rests as long as the
+// last one worked. Real sends and the page wait for the same lock and database
+// connection; "the next page follows at once" froze the app on 2026-11-04.
+var (
+	historyPageBudget = 250 * time.Millisecond
+	historyPageStart  = 4 // cost is unknown after a start: grows while it stays cheap
+)
+
+const (
+	historyRestMax      = 2 * time.Second
+	historyRestFloor    = 20 * time.Millisecond // cheaper turns follow at once
+	deferredSweepFactor = 10                    // a deferred restart costs at most a tenth of the time
+	deferredSweepMax    = time.Minute
+)
+
+func (w *convWork) historyPageLimit() int {
+	if n := w.historyLimit.Load(); n > 0 {
+		return int(n)
+	}
+	return historyPageStart
+}
+
+func nextHistoryLimit(limit int, took time.Duration) int {
+	switch {
+	case took > historyPageBudget:
+		return max(int(int64(limit)*int64(historyPageBudget)/int64(took)), 1)
+	case took < historyPageBudget/2:
+		return min(limit*2, historyPage)
+	}
+	return limit
+}
+
+// historyRest records a finished history turn and returns the wait before the
+// next one. Without a running stream (paced false) nothing would wake it.
+func (w *convWork) historyRest(took time.Duration, paced bool) time.Duration {
+	w.historyCost.Store(int64(took))
+	if !paced || took < historyRestFloor {
+		w.historyNotBefore.Store(0)
+		return 0
+	}
+	rest := min(took, historyRestMax)
+	w.historyNotBefore.Store(time.Now().Add(rest).UnixNano())
+	return rest
+}
+
+func (a *Agent) pacedSync() bool {
+	a.kickMu.Lock()
+	defer a.kickMu.Unlock()
+	return a.kick != nil
+}
+
+// kickAfter wakes the sync after d; one such wake covers every waiter.
+func (a *Agent) kickAfter(d time.Duration) {
+	if a.convWork.paceTimer.CompareAndSwap(false, true) {
+		time.AfterFunc(d, func() {
+			a.convWork.paceTimer.Store(false)
+			a.kickNow()
+		})
+	}
+}
+
+// restartDeferredHistory forgets where the deferred sweeps are, so they run
+// again, unless the last turn's cost says it is too soon. Then the evidence
+// stays noted and the restart happens when the wait ends: nothing is dropped.
+func (a *Agent) restartDeferredHistory(now time.Time) bool {
+	w := &a.convWork
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	wait := min(deferredSweepFactor*time.Duration(w.historyCost.Load()), deferredSweepMax)
+	if left := wait - now.Sub(w.sweepRestarted); a.pacedSync() && left > 0 {
+		w.sweepPending = true
+		w.due(convHistory)
+		a.kickAfter(left)
+		return false
+	}
+	w.historyDeferred = nil
+	w.sweepPending = false
+	w.sweepRestarted = now
+	return true
+}
+
+// historyTurn is one paced turn of own-device copying: the upkeep records and
+// one page of every running history.
+func (a *Agent) historyTurn(ctx context.Context) {
+	w := &a.convWork
+	started := time.Now()
+	if wait := time.Unix(0, w.historyNotBefore.Load()).Sub(started); w.historyNotBefore.Load() != 0 && wait > 0 {
+		w.due(convHistory)
+		a.kickAfter(wait)
+		return
+	}
+	w.mu.Lock()
+	pending := w.sweepPending
+	w.mu.Unlock()
+	if pending {
+		a.restartDeferredHistory(started)
+	}
+	roots, err := a.syncRoots()
+	if err != nil {
+		a.Logf("copying conversation roots: %v", err)
+		a.convWork.due(convHistory)
+	}
+	reads, readErr := a.syncReadMarks()
+	if readErr != nil {
+		a.Logf("copying read state: %v", readErr)
+		a.convWork.due(convHistory)
+	}
+	invites, inviteErr := a.syncInvitations()
+	if inviteErr != nil {
+		a.Logf("copying invitation views: %v", inviteErr)
+		a.convWork.due(convHistory)
+	}
+	titles, titleErr := a.syncTopicTitles()
+	if titleErr != nil {
+		a.Logf("copying topic titles: %v", titleErr)
+		a.convWork.due(convHistory)
+	}
+	locations, locationErr := a.syncTopicLocations()
+	if locationErr != nil {
+		a.Logf("copying topic locations: %v", locationErr)
+		a.convWork.due(convHistory)
+	}
+	marks, markErr := a.syncTopicMarks()
+	if markErr != nil {
+		a.Logf("copying topic marks: %v", markErr)
+		a.convWork.due(convHistory)
+	}
+	reminders, reminderErr := a.syncReminders()
+	if reminderErr != nil {
+		a.Logf("copying reminders: %v", reminderErr)
+		a.convWork.due(convHistory)
+	}
+	placements, placementErr := a.syncDirectTopics()
+	if placementErr != nil {
+		a.Logf("copying direct topic placements: %v", placementErr)
+		a.convWork.due(convHistory)
+	}
+	models, modelErr := a.syncModelReports()
+	if modelErr != nil {
+		a.Logf("copying model reports: %v", modelErr)
+		a.convWork.due(convHistory)
+	}
+	more := a.historyStep(ctx)
+	direct, directErr := a.syncDeviceHistory()
+	if directErr != nil {
+		a.Logf("copying direct history: %v", directErr)
+	}
+	rest := a.convWork.historyRest(time.Since(started), a.pacedSync())
+	if roots || reads || invites || titles || locations || marks || reminders || placements || models || more || direct {
+		a.convWork.due(convHistory) // one page per sync; the next follows after its rest
+		if rest > 0 {
+			a.kickAfter(rest)
+		} else {
+			a.kickNow()
+		}
+	}
 }
