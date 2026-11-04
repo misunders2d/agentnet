@@ -116,7 +116,7 @@ try {
  }
  if(p1==='bulk')for(const [i,t]of view.topics.entries())Object.assign(t,{state:'active',title:'Portable bulk '+(i+1),renamed:true,count:1});
 
- let held,release,typing=false,seq=100,reactionFailure=false;
+ let held,release,typing=false,seq=100,reactionFailure=false,unreadHold=null,unreadFailure=false;
  let typingPreferences={send:false,show:true};
  const counts={overview:0,dm:0,typing:0,catalogs:0},listeners=new Set();
  const emit=hint=>{seq++;for(const fn of listeners)fn({type:'change',seq,...(hint?{hint}:{})});};
@@ -210,6 +210,7 @@ try {
    if(path==='/api/message/delete'){await pause(25);const m=view.messages.find(m=>m.id===body.id);assert(m,'wrong delete ID');m.deleted=true;m.body='';emit();return{note:'Stored'};}
    if(path==='/api/storage/retry_send'){await pause(100);assert(body.conv===view.id&&body.id===view.messages.at(-1).id,'retry changed exact target');Object.assign(view.messages.at(-1),{state:'queued',delivery:'queued',state_text:'Queued',detail:''});emit();return{id:body.id,retried:1};}
    if(path==='/api/act'){
+    if(body?.do==='unread'){if(unreadHold)await unreadHold;await pause(100);if(unreadFailure)throw Error('Synthetic unread refusal');for(const m of view.messages)if(body.ids?.includes(m.id))m.unread=true;overview.dms[0].unread=view.messages.filter(m=>m.unread).length;emit();return{note:'Stored'};}
     if(body?.do==='read'){for(const m of view.messages)if(body.ids?.includes(m.id))m.unread=false;overview.dms[0].unread=view.messages.filter(m=>m.unread).length;view.main_topic={unread:overview.dms[0].unread};emit();}
     return {};
    }
@@ -309,6 +310,14 @@ try {
   const item=name=>[...scope().querySelectorAll('button,[role="menuitem"]')].find(b=>shown(b)&&!b.closest('[data-ending-style]')&&label(b)===name);
   const settled=()=>until(()=>!scope().querySelector('[data-ending-style]'),'previous popup retired');
   let menus=0;const menu=async()=>{await settled();row().querySelector('[data-message-bubble]').dispatchEvent(new PointerEvent('pointerover',{bubbles:true,pointerType:'mouse'}));await until(()=>row().querySelector('button[aria-label="More actions"],button[aria-label="Message actions"]'),'message action control');const more=row().querySelector('button[aria-label="More actions"],button[aria-label="Message actions"]');more.focus();await measure('message.menu-open-'+menus++,()=>more.click(),()=>!!item('Details'),'message action menu visible');};
+  // The chat's unread mark shows before the server answers (TDLib sets its own
+  // first), stays with the answer held, and comes back off when refused.
+  const markedRow=()=>[...root.querySelectorAll('[data-part="chat-row"][data-unread]')].some(b=>b.textContent.includes('Vitalii'));
+  let releaseUnread;unreadHold=new Promise(r=>releaseUnread=r);
+  await menu();await measure('unread.mark',()=>item('Mark unread').click(),markedRow,'chat row shows unread with the answer held');assert(markedRow(),'unread mark stays while held');
+  unreadHold=null;releaseUnread();await until(()=>message.unread&&markedRow(),'unread mark confirmed');await settled();
+  message.unread=false;overview.dms[0].unread=0;seq++;emit();await until(()=>!markedRow(),'chat read again for the refused case');
+  unreadFailure=true;await menu();await measure('unread.mark-refused',()=>item('Mark unread').click(),markedRow,'chat row shows unread before the refusal',()=>visibleText('Synthetic unread refusal')&&!markedRow());unreadFailure=false;await settled();
   await menu();const pick=item('React 👍');if(!pick){const react=row().querySelector('button[aria-label="React"]');assert(react,'reaction control missing');const details=item('Details');details.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));await settled();await measure('reaction.picker-open',()=>react.click(),()=>!!item('React 👍'),'quick reaction choices visible');}
   await measure('reaction.add',()=>item('React 👍').click(),()=>!!pending(),'explicit pending reaction feedback',()=>message.reactions.some(r=>r.mine)&&!pending()&&!!row().querySelector('[aria-pressed="true"]'));await settled();
   await measure('reaction.remove',()=>row().querySelector('[aria-pressed="true"]').click(),()=>!!pending(),'explicit removal pending feedback',()=>!message.reactions.some(r=>r.mine)&&!pending()&&!row().querySelector('[aria-pressed="true"]'));

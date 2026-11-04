@@ -327,6 +327,10 @@ export class Store {
   // Keep native snapshots intact: a failed write restores the current snapshot,
   // while every stale refresh is presented through the same exact-key overlay.
   private localReads = new Map<string, Map<string, { kind: "dm" | "thread"; id: string; saved: boolean; accepted?: number }>>();
+  // A chat's unread mark shows before the server is asked, as Telegram sets its
+  // own first (TDLib toggle_dialog_is_marked_as_unread), until a list read after
+  // the answer says. Never below what the list says: arrivals keep counting.
+  private localUnreads = new Map<string, { kind: "dm" | "thread"; unread: number }>();
   private readState?: { source: State; value: State };
   private readIdentity(m: T.DMMessage | T.Message): string {
     return JSON.stringify([this.readKey(m), m.dir, (m as T.DMMessage).lid || m.id,
@@ -337,7 +341,7 @@ export class Store {
     for (const fn of this.subs) fn();
   }
   private presentReads(s: State): State {
-    if (!this.localReads.size) return s;
+    if (!this.localReads.size && !this.localUnreads.size) return s;
     if (this.readState?.source === s) return this.readState.value;
     let overview = s.overview;
     const views = { ...s.views };
@@ -380,6 +384,10 @@ export class Store {
           unread: summary ? Math.min(summary.unread, project(summary.unread, left)) : left,
           ...(group ? { ...group, archived_unread: latest ? project(latest.archived_unread, Math.max(0, group.archived_unread - cleared)) : Math.max(0, group.archived_unread - cleared) } : {}) });
       }
+    }
+    for (const [id, mark] of this.localUnreads) {
+      const summary = mark.kind === "dm" ? overview?.dms?.find(d => d.id === id) : overview?.threads?.find(t => t.id === id) || overview?.topics?.find(t => t.latest.id === id)?.latest;
+      if (overview && summary && summary.unread < mark.unread) overview = this.readOverview(overview, { kind: mark.kind, id, seq: overview.seq || 0, unread: mark.unread });
     }
     const value = { ...s, views, overview,
       dm: s.dm && (views[s.dm.id] as T.DMThread || s.dm),
@@ -2084,7 +2092,15 @@ export class Store {
     const anchor = messages.findIndex(m => m.id === id && this.canMarkUnread(m));
     if (anchor < 0) { this.toast("That message is no longer available here.", "error"); return; }
     const ids = [...new Set((fromHere ? messages.slice(anchor) : [messages[anchor]]).filter(m => this.canMarkUnread(m)).map(m => m.id))];
-    await this.run(a => a.act({ do: "unread", id, ids }));
+    const marked = messages.filter(m => ids.includes(m.id) && !m.unread).length;
+    const summary = o.kind === "dm" ? this.state.overview?.dms?.find(d => d.id === o.id)
+      : this.state.overview?.threads?.find(t => t.id === o.id) || this.state.overview?.topics?.find(t => t.latest.id === o.id)?.latest;
+    const mark = { kind: o.kind, unread: (summary?.unread || 0) + marked };
+    if (marked && summary) { this.localUnreads.set(o.id, mark); this.publishReads(); }
+    const clear = () => { if (this.localUnreads.get(o.id) === mark) { this.localUnreads.delete(o.id); this.publishReads(); } };
+    if (await this.run(a => a.act({ do: "unread", id, ids })) === undefined) clear(); // refused: its toast says so
+    await this.refetch();
+    clear();
   }
 
   private markOpenRead() {
