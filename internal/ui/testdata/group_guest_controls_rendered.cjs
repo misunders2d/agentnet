@@ -1683,7 +1683,7 @@ if(process.env.AGENTNET_AGENT_CHILD_REGRESSION==='1'){
   await card.getByText(/originating local run stopped/).waitFor();
   assert.equal(await card.getByRole('button',{name:'Run it again',exact:true}).count(),0);
   await card.getByRole('button',{name:'Mark as handled',exact:true}).waitFor();
-  assert.doesNotMatch(await card.innerText(),/You asked|Running it again starts fresh/);assert.match(await card.innerText(),/Your Codex asks your Claude/);
+  assert.doesNotMatch(await card.innerText(),/You asked|Running it again starts fresh/);assert.match(await card.innerText(),/Your Codex(?: · program unavailable)? asks your Claude/);
   assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/act'&&r.body?.do!=='read').length),0,'expanding never replays or resolves');
   await settle(page);
   const shot=path.join(evidence,'comic-agent-child-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
