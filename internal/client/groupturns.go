@@ -471,9 +471,10 @@ func (a *Agent) admitGroupTurn(ctx context.Context, env envelope.Envelope, in en
 	if !sameGroupRoot(packet.Root, root) {
 		return hold(reasonInvalid, "group: root differs from verified current context")
 	}
-	for _, p := range packet.State.Members {
-		if _, err = a.refreshPerson(ctx, p.Person, false); err != nil {
-			return holdForMember(err, p.Person == sp.info.Person, hold)
+	persons := groupMemberPersons(packet.State.Members)
+	for i, e := range a.refreshAdmitting(ctx, persons) {
+		if e != nil {
+			return holdForMember(e, persons[i] == sp.info.Person, hold)
 		}
 	}
 	me, _, err = a.store.selfPerson(a.Address)

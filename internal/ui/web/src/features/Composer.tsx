@@ -434,7 +434,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   };
 
   // ---- sending
-  async function send(retry?: { id: string; c: string; d: Draft; to: Target; here?: T.DMThread; device?: T.Thread; fanout?: boolean; group?: string; followup?: ComposerFollowup }) {
+  async function send(retry?: { id: string; c: string; d: Draft; to: Target; here?: T.DMThread; device?: T.Thread; fanout?: boolean; group?: string; at?: string; followup?: ComposerFollowup }) {
     if (!retry && target.kind === "readonly") { setNotice({ conv, text: target.note }); return; }
     if (store.host.platform === "android") { if (!retry) await sendAndroid(); return; }
     if (!retry && (!ready || (!dm && !thread))) return;
@@ -480,14 +480,15 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     const progress = (s: string) => setBusy((b) => ({ ...b, [c]: s }));
     const title = here ? (here.kind === "group" ? here.title || "the group" : personName(here.peer)) : to.kind === "device" ? to.name : "that chat";
     if (to.kind === "none" || to.kind === "readonly") return;
+    const at = retry?.at || new Date().toISOString(); // a retry keeps the place the message took
     if (store.isActive()) {
       clearSent(c, d, sent);
       if (d.newTopic && !retry) store.setDraft(c, { ...store.draft(c), newTopic: false, ...(here ? { topic: d.topic } : {}) });
     }
     store.sends.begin(c, { id, ...(here ? { lid: id, origin: "ui", send_group: group, send_group_author: store.get().overview?.me.fingerprint, pid: to.kind === "agent" ? to.pid : "" } : { author: { label: "You", about: "" }, to: device?.peer }),
-      _topic: !!d.newTopic, topic: d.topic, dir: "out", from: store.get().overview?.me.address || "", kind: followup?.kind || (to.kind === "answer" ? "answer" : here && to.kind !== "agent" || to.kind === "device" && !to.ask ? "message" : "question"), body, at: new Date().toISOString(),
+      _topic: !!d.newTopic, topic: d.topic, dir: "out", from: store.get().overview?.me.address || "", kind: followup?.kind || (to.kind === "answer" ? "answer" : here && to.kind !== "agent" || to.kind === "device" && !to.ask ? "message" : "question"), body, at,
       reply_to: d.replyTo, quote: d.replyTo, attachments: sent.map(f => ({ name: f.name, size: f.size, openable: false })), files: sent.map(f => ({ name: f.name, size: f.size, openable: false })) },
-      () => { store.sends.remove(id); void send({ id, c, d, to, here, device, fanout:retry?.fanout, group, followup }); });
+      () => { store.sends.remove(id); void send({ id, c, d, to, here, device, fanout:retry?.fanout, group, at, followup }); });
     setNotice(null);
     typing.stop();
     try {
@@ -548,13 +549,17 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       void store.refetch();
     } catch (e) {
       if (!store.sends.has(id)) return; // a pushed durable turn already proves this save
-      if (!store.isActive()) { store.sends.fail(id, errorText(e)); return; }
+      // Only an answer refusing it is definite. No answer may mean it was kept:
+      // the row stays with a retry under the same id, never a second draft.
+      const status = (e as { status?: unknown }).status;
+      const definite = typeof status === "number" && status < 500;
+      if (!store.isActive()) { store.sends.fail(id, errorText(e), !definite); return; }
       const current = store.get().drafts[c] ?? EMPTY;
-      const restored = !followup && !retry?.fanout && !current.text && !(current.files || []).length;
+      const restored = definite && !followup && !retry?.fanout && !current.text && !(current.files || []).length;
       if (restored) { store.setDraft(c, { ...d, files: sent }); store.sends.remove(id); }
-      else store.sends.fail(id, errorText(e));
+      else store.sends.fail(id, errorText(e), !definite);
       const why = errorText(e).replace(/\.?$/, ".");
-      if (visible.current === c) setNotice({ conv: c, text: "Not sent: " + why + (restored ? " Your text and files are restored." : followup ? " The exact steering request and files are kept above. Check the original work before retrying." : " Your newer draft is kept. Retry the failed message above.") });
+      if (visible.current === c) setNotice({ conv: c, text: (definite ? "Not sent: " : "Not confirmed: ") + why + (restored ? " Your text and files are restored." : followup ? " The exact steering request and files are kept above. Check the original work before retrying." : " Your newer draft is kept. Retry the failed message above.") });
       else store.toast("Not sent to " + title + ": " + why + " It’s kept in that chat.", "error");
     } finally {
       setBusy(({ [c]: _, ...rest }) => rest);

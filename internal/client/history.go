@@ -339,7 +339,7 @@ func (a *Agent) admitHistory(ctx context.Context, env envelope.Envelope, in enve
 		// predecessors remain in the existing bounded proof queue.
 		ev, _ := protocol.ParseParticipationEvent([]byte(originalItem.Body))
 		if _, present := a.store.deviceKey(ev.Author.Person, ev.Author.Address, ev.Author.Fingerprint); !present {
-			if _, e := a.refreshPerson(ctx, ev.Author.Person, false); e != nil {
+			if e := a.refreshAdmitting(ctx, []string{ev.Author.Person})[0]; e != nil {
 				return hold(reasonProof, e.Error())
 			}
 		}
@@ -362,12 +362,18 @@ func (a *Agent) admitHistory(ctx context.Context, env envelope.Envelope, in enve
 	external := false
 	var key identity.Public
 	for pass := 0; pass < 2 && owner == ""; pass++ {
-		for _, m := range root.Members {
-			if pass == 1 {
-				if _, err := a.refreshPerson(ctx, m.Person, false); err != nil && !errors.Is(err, errPersonConflict) {
-					return holdForPerson(err, hold)
+		if pass == 1 {
+			persons := make([]string, 0, len(root.Members))
+			for _, m := range root.Members {
+				persons = append(persons, m.Person)
+			}
+			for _, e := range a.refreshAdmitting(ctx, persons) {
+				if e != nil && !errors.Is(e, errPersonConflict) {
+					return holdForPerson(e, hold)
 				}
 			}
+		}
+		for _, m := range root.Members {
 			if k, ok := a.store.deviceKey(m.Person, item.From, item.FromKey); ok {
 				owner, key = m.Person, k
 				break

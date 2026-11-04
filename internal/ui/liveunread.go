@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -158,7 +159,7 @@ func (l *Live) UnreadPage(q UnreadQuery) (UnreadPage, error) {
 	defer l.unreadMu.Unlock()
 	revision, _ := l.a.ViewChanges()
 	if l.unread == nil || l.unread.content != revision.Content {
-		rows, err := l.unreadRows()
+		rows, err := l.unreadRows(false)
 		if err != nil {
 			return UnreadPage{}, err
 		}
@@ -212,7 +213,28 @@ func (l *Live) UnreadPage(q UnreadQuery) (UnreadPage, error) {
 // rows still use the same admitted messages, controls, topic placement and
 // effective read generations as the complete overview; people/cards, native
 // decisions and read-only chats do not delay the first unread page.
-func (l *Live) unreadRows() ([]UnreadRow, error) {
+//
+// It keeps each chat's rows between calls and reads again only the chats a write
+// touched (view_dirty). fresh reads everything and keeps nothing, for comparison.
+// Otherwise the caller holds unreadMu.
+func (l *Live) unreadRows(fresh bool) ([]UnreadRow, error) {
+	var kept map[string][]UnreadRow
+	if !fresh {
+		// Before anything is read: a write from here on is seen again next time.
+		keys, next, err := l.a.ViewDirtySince(l.unreadChatMark)
+		if err != nil {
+			return nil, err
+		}
+		kept, l.unreadChats, l.unreadChatMark = l.unreadChats, nil, next // nil until this read succeeds
+		if kept == nil || slices.Contains(keys, "*") {
+			kept = make(map[string][]UnreadRow)
+		}
+		for _, key := range keys {
+			if conv, ok := strings.CutPrefix(key, "c:"); ok {
+				delete(kept, conv)
+			}
+		}
+	}
 	candidates, err := l.a.UnreadConversationCandidates()
 	if err != nil {
 		return nil, err
@@ -227,6 +249,10 @@ func (l *Live) unreadRows() ([]UnreadRow, error) {
 			if c.Deleted || !candidates[c.ID] {
 				continue
 			}
+			if own, ok := kept[c.ID]; ok {
+				rows = append(rows, own...)
+				continue
+			}
 			msgs, err := l.a.ConversationMessages(c.ID)
 			if err != nil {
 				return nil, err
@@ -237,19 +263,23 @@ func (l *Live) unreadRows() ([]UnreadRow, error) {
 					selected = append(selected, m)
 				}
 			}
-			if len(selected) == 0 {
-				continue
+			var own []UnreadRow
+			if len(selected) > 0 {
+				assigned := client.ChatTopicAssignments(msgs)
+				topics, err := l.a.ChatTopicsForMessages(c.ID, msgs, assigned)
+				if err != nil {
+					return nil, err
+				}
+				titles := make(map[string]string, len(topics))
+				for _, topic := range topics {
+					titles[topic.ID] = topic.Title
+				}
+				appendChatUnread(&own, c.ID, selected, assigned, titles)
 			}
-			assigned := client.ChatTopicAssignments(msgs)
-			topics, err := l.a.ChatTopicsForMessages(c.ID, msgs, assigned)
-			if err != nil {
-				return nil, err
+			if !fresh {
+				kept[c.ID] = own
 			}
-			titles := make(map[string]string, len(topics))
-			for _, topic := range topics {
-				titles[topic.ID] = topic.Title
-			}
-			appendChatUnread(&rows, c.ID, selected, assigned, titles)
+			rows = append(rows, own...)
 		}
 	}
 	device, err := l.a.UnreadDeviceRefs()
@@ -257,6 +287,9 @@ func (l *Live) unreadRows() ([]UnreadRow, error) {
 		return nil, err
 	}
 	appendDeviceUnread(&rows, device)
+	if !fresh {
+		l.unreadChats = kept
+	}
 	return rows, nil
 }
 

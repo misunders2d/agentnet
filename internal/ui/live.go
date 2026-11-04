@@ -1,11 +1,15 @@
 package ui
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -18,17 +22,29 @@ import (
 // goes through the client's existing operation for it, with the same rules
 // as the CLI: nothing here grants, approves or runs anything on its own.
 type Live struct {
+	sendWait       time.Duration // how long SendDM stays to hear a first attempt; the message does not depend on it
 	a              *client.Agent
 	assistantSetup AssistantSetupFunc
 	// timeout bounds each network request an action makes.
-	timeout    time.Duration
-	staged     staged // files the page handed over, not sent yet
-	app        bool   // served by the AgentNet app (SetApp)
-	overviewMu sync.Mutex
-	overviews  map[bool]cachedOverview
-	unreadMu   sync.Mutex
-	unread     *unreadIndex // guarded separately: unread never waits for complete overview cards
-	count      unreadCount  // the app badge's running total (liveunreadcount.go)
+	timeout        time.Duration
+	staged         staged // files the page handed over, not sent yet
+	app            bool   // served by the AgentNet app (SetApp)
+	overviewMu     sync.Mutex
+	overviews      map[bool]cachedOverview
+	chats          map[string]*chatEntry  // each chat's list row (overviewMu; livedm.go)
+	viewMark       int64                  // writes up to here are reflected in chats (overviewMu)
+	unreadChats    map[string][]UnreadRow // each chat's unread rows (unreadMu)
+	unreadChatMark int64                  // view_dirty read so far for unreadChats (unreadMu)
+	viewCachesOff  bool                   // the fresh build overviewOracle compares with (overviewMu)
+	historyJobs    []client.HistoryJob    // (overviewMu; liveidentity.go)
+	historyAt      time.Time
+	historyCost    time.Duration
+	historyKept    bool
+	historyDirty   bool
+	historyWake    atomic.Bool
+	unreadMu       sync.Mutex
+	unread         *unreadIndex // guarded separately: unread never waits for complete overview cards
+	count          unreadCount  // the app badge's running total (liveunreadcount.go)
 }
 
 type cachedOverview struct {
@@ -56,7 +72,7 @@ func NewLive(a *client.Agent) *Live {
 	if err := a.CleanStaging(); err != nil && a.Logf != nil {
 		a.Logf("messenger page: files left from an earlier run: %v", err)
 	}
-	return &Live{a: a, timeout: 20 * time.Second}
+	return &Live{a: a, timeout: 20 * time.Second, sendWait: 250 * time.Millisecond}
 }
 
 // Changed implements Provider.
@@ -108,8 +124,77 @@ func (l *Live) overviewLocked(listArchived bool) (Overview, error) {
 			}
 			l.unreadMu.Unlock()
 		}
+		if overviewOracle != nil {
+			l.compareFresh(listArchived, o, revision.Content)
+		}
 	}
 	return o, err
+}
+
+// overviewOracle, set only by tests, hears of any difference between a list built
+// from what is kept and one read afresh: a scope view_dirty fails to mark. An
+// empty string says a comparison ran and found none. overviewChatBuilt hears
+// which chat's summary was read again.
+var (
+	overviewOracle    func(string)
+	overviewChatBuilt func(string)
+)
+
+func (l *Live) compareFresh(listArchived bool, kept Overview, content uint64) {
+	_, before, err := l.a.ViewDirtySince(l.viewMark)
+	if err != nil {
+		return
+	}
+	l.viewCachesOff = true
+	l.a.SetViewCachesOff(true)
+	fresh, err := l.buildOverview(listArchived, nil)
+	freshRows, rowsErr := l.unreadRows(true)
+	l.a.SetViewCachesOff(false)
+	l.viewCachesOff = false
+	_, after, e := l.a.ViewDirtySince(before)
+	revision, _ := l.a.ViewChanges()
+	if e != nil || after != before || before != l.viewMark || revision.Content != content {
+		return // something changed under the comparison
+	}
+	if err == nil {
+		err = rowsErr
+	}
+	if err != nil {
+		overviewOracle("a fresh read failed where the kept list did not: " + err.Error())
+		return
+	}
+	same := true
+	compare := func(name string, a, b any) {
+		x, _ := json.Marshal(a)
+		y, _ := json.Marshal(b)
+		if !bytes.Equal(x, y) {
+			same = false
+			overviewOracle(name + " differs from a fresh read:\nkept  " + string(x) + "\nfresh " + string(y))
+		}
+	}
+	compare("dms", kept.DMs, fresh.DMs)
+	compare("threads", kept.Threads, fresh.Threads)
+	compare("topics", kept.Topics, fresh.Topics)
+	compare("people", kept.People, fresh.People)
+	compare("unread", *kept.UnreadTotal, *fresh.UnreadTotal)
+	compare("alert", *kept.AlertTotal, *fresh.AlertTotal)
+	byKey := func(rows []UnreadRow) []UnreadRow {
+		rows = slices.Clone(rows)
+		slices.SortFunc(rows, func(a, b UnreadRow) int { return strings.Compare(a.Key, b.Key) })
+		return rows
+	}
+	l.unreadMu.Lock()
+	var keptRows []UnreadRow
+	if l.unread != nil && l.unread.content == content {
+		keptRows = byKey(l.unread.rows)
+	}
+	l.unreadMu.Unlock()
+	if keptRows != nil {
+		compare("unread rows", keptRows, byKey(freshRows))
+	}
+	if same {
+		overviewOracle("")
+	}
 }
 
 func (l *Live) buildOverview(listArchived bool, unread *[]UnreadRow) (Overview, error) {
@@ -665,6 +750,12 @@ func (l *Live) Act(x Action) (string, error) {
 // sentence turns a client error into text for the person. Client errors are
 // written for people already; this only makes the first letter upper case.
 func sentence(err error) string {
+	if client.RefusedUntilUpdate(err) {
+		return "This device needs the latest AgentNet. Update it, then try again."
+	}
+	if client.TechnicalError(err) {
+		return "AgentNet could not finish this just now. Try again."
+	}
 	if errors.Is(err, syscall.ENOSPC) {
 		return "This device is out of storage. Free disk space, then try again."
 	}

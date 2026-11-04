@@ -6,7 +6,7 @@ export function pendingSends(host: object, changed?: () => void): {
  move(id: string, key: string): void;
  ready(id: string): Promise<void>;
  finish(id: string, result?: {id?: string; lid?: string; state?: string; detail?: string}): void;
- fail(id: string, reason: string): boolean;
+ fail(id: string, reason: string, unsure?: boolean): boolean;
  remove(id: string): void;
  unsent(): boolean;
  dispose(): void;

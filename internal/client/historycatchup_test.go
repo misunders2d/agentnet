@@ -98,11 +98,12 @@ func TestHistoryCatchupRecentTailRestart(t *testing.T) {
 		t.Fatalf("first page: %v %v", more, err)
 	}
 	items := historyCopiedItems(t, a, phone)
-	if len(items) != historyPage {
-		t.Fatalf("first bounded page: %d", len(items))
+	first := len(items)
+	if first < 1 || first > historyPage {
+		t.Fatalf("first bounded page: %d", first)
 	}
-	if items[0].Body != "row-056" || items[len(items)-1].Body != "row-007" {
-		t.Fatalf("not newest page: first=%q last=%q", items[0].Body, items[len(items)-1].Body)
+	if items[0].Body != "row-056" || items[first-1].Body != fmt.Sprintf("row-%03d", 57-first) {
+		t.Fatalf("not newest page: first=%q last=%q of %d", items[0].Body, items[first-1].Body, first)
 	}
 	a.Close()
 	a, err = Open(a.home)
@@ -126,7 +127,7 @@ func TestHistoryCatchupRecentTailRestart(t *testing.T) {
 		t.Fatalf("legacy fixture produced archives=%d err=%v", archives, err)
 	}
 	items = historyCopiedItems(t, a, phone)
-	if len(items) <= historyPage || items[historyPage].Body != "old timestamp arrives during backfill" {
+	if len(items) <= first || items[first].Body != "old timestamp arrives during backfill" {
 		t.Fatal("old timestamp waited behind older backfill")
 	}
 	var receiptSeq int64
@@ -161,7 +162,7 @@ func TestHistoryCatchupRecentTailRestart(t *testing.T) {
 		if !more {
 			break
 		}
-		if rounds > 5 {
+		if rounds > len(ids)+5 { // the smallest page takes one round per row
 			t.Fatal("unchanged history did not settle")
 		}
 	}
@@ -393,6 +394,20 @@ func TestHistoryCatchupConcurrentPagesDoNotRegress(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if got := len(historyCopiedItems(t, a, phone)); got < 1 || got > historyPage {
+		t.Fatalf("concurrent pages escaped the unacknowledged window: %d", got)
+	}
+	// Grown pages under the same concurrency fill the window exactly, never past it.
+	for range historyPage {
+		for range 2 {
+			go func() { _, err := a.historyCatchupPage(tctx(t), phone.Self()); done <- err }()
+		}
+		for range 2 {
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 	if got := len(historyCopiedItems(t, a, phone)); got != historyPage {
 		t.Fatalf("concurrent pages escaped the unacknowledged window: %d", got)
 	}
@@ -428,8 +443,10 @@ func TestHistoryCatchupConcurrentPagesDoNotRegress(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := a.historyCatchupPage(tctx(t), phone.Self()); err != nil {
-		t.Fatal(err)
+	for range historyPage {
+		if _, err := a.historyCatchupPage(tctx(t), phone.Self()); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if got := len(historyCopiedItems(t, a, phone)); got != 57 {
 		t.Fatalf("serialized page regressed cursor: %d", got)
@@ -454,7 +471,7 @@ func TestHistoryCatchupNewestReplyIncludesOlderDependency(t *testing.T) {
 		t.Fatal(err)
 	}
 	items := historyCopiedItems(t, a, phone)
-	if len(items) != historyPage+1 || items[0].ID != ids[0] || items[1].ID != latest.ID {
+	if len(items) < 2 || len(items) > historyPage+1 || items[0].ID != ids[0] || items[1].ID != latest.ID {
 		t.Fatalf("newest reply dependency not queued first: %d copies", len(items))
 	}
 	rows, err := a.historySourceRows(a.store.db, "dir='in' AND id=?", "conv,ms,id", 1, latest.ID)

@@ -323,9 +323,15 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 		return false, err
 	}
 	defer release()
-	full, e := syncWindowFull(a.store.db, dev)
+	limit, started := a.convWork.historyPageLimit(), time.Now()
+	defer func() { a.convWork.historyLimit.Store(int64(nextHistoryLimit(limit, time.Since(started)))) }()
+	room, e := syncWindowRoom(a.store.db, dev)
 	if e != nil {
 		return false, e
+	}
+	full := room == 0
+	if !full {
+		limit = min(limit, room)
 	}
 	p, err := a.historyCatchupState(dev)
 	if err != nil {
@@ -363,7 +369,7 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 	var items []historySourceRow
 	var contextConvs []string
 	if !p.contextDone && !full {
-		rows, e := a.store.db.Query(`SELECT conv FROM (SELECT conv FROM group_context UNION SELECT conv FROM group_proof_roots) WHERE conv>? ORDER BY conv LIMIT ?`, p.context, historyPage)
+		rows, e := a.store.db.Query(`SELECT conv FROM (SELECT conv FROM group_context UNION SELECT conv FROM group_proof_roots) WHERE conv>? ORDER BY conv LIMIT ?`, p.context, limit)
 		if e != nil {
 			return false, e
 		}
@@ -381,19 +387,19 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 		if e != nil {
 			return false, e
 		}
-		p.contextDone = len(contextConvs) < historyPage
+		p.contextDone = len(contextConvs) < limit
 		more = more || !p.contextDone
 	}
 	var tailCeiling int64
 	if err = a.store.db.QueryRow(`SELECT CAST(v AS INTEGER) FROM config WHERE k='arrival'`).Scan(&tailCeiling); err != nil {
 		return false, err
 	}
-	tail, err := a.ownHistorySourceRows(a.store.db, dev, "dir='in' AND arrival>? AND arrival<=?", "arrival", historyPage, p.tail, tailCeiling)
+	tail, err := a.ownHistorySourceRows(a.store.db, dev, "dir='in' AND arrival>? AND arrival<=?", "arrival", limit, p.tail, tailCeiling)
 	if err != nil {
 		return false, err
 	}
 	items = append(items, tail...)
-	if len(tail) == historyPage {
+	if len(tail) == limit {
 		p.tail = tail[len(tail)-1].arrival
 		more = true
 	} else {
@@ -402,7 +408,7 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 	// Visit one bounded newest page per conversation using its existing
 	// timestamp index, never repeatedly rank the whole message corpus.
 	if p.phase == "recent" && !full {
-		for conversations := 0; conversations < historyPage; conversations++ {
+		for conversations := 0; conversations < limit; conversations++ {
 			latest, e := a.ownHistorySourceRows(a.store.db, dev, "conv>? AND arrival<=? AND outseq<=?", "conv,ms DESC,id DESC", 1, p.pos.Conv, p.inbox, p.outbox)
 			if e != nil {
 				return false, e
@@ -412,28 +418,28 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 				p.pos = historyPos{}
 				break
 			}
-			page, e := a.ownHistorySourceRows(a.store.db, dev, "conv=? AND arrival<=? AND outseq<=?", "ms DESC,id DESC", historyPage, latest[0].conv, p.inbox, p.outbox)
+			page, e := a.ownHistorySourceRows(a.store.db, dev, "conv=? AND arrival<=? AND outseq<=?", "ms DESC,id DESC", limit, latest[0].conv, p.inbox, p.outbox)
 			if e != nil {
 				return false, e
 			}
-			if len(items) > len(tail) && len(items)-len(tail)+len(page) > historyPage {
+			if len(items) > len(tail) && len(items)-len(tail)+len(page) > limit {
 				more = true
 				break
 			}
 			items = append(items, page...)
 			p.pos = historyPos{Conv: latest[0].conv}
 			// At most one full page, or up to 50 sparse conversations, per pass.
-			if len(items)-len(tail) >= historyPage {
+			if len(items)-len(tail) >= limit {
 				more = true
 				break
 			}
-			if conversations == historyPage-1 {
+			if conversations == limit-1 {
 				more = true
 			}
 		}
 	}
 	if p.phase == "older" && !full {
-		page, e := a.ownHistorySourceRows(a.store.db, dev, "arrival<=? AND outseq<=? AND (conv,ms,id)>(?,?,?)", "conv,ms,id", historyPage, p.inbox, p.outbox, p.pos.Conv, p.pos.Ms, p.pos.ID)
+		page, e := a.ownHistorySourceRows(a.store.db, dev, "arrival<=? AND outseq<=? AND (conv,ms,id)>(?,?,?)", "conv,ms,id", limit, p.inbox, p.outbox, p.pos.Conv, p.pos.Ms, p.pos.ID)
 		if e != nil {
 			return false, e
 		}
@@ -441,14 +447,14 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 		if len(page) > 0 {
 			p.pos = page[len(page)-1].pos
 		}
-		if len(page) == historyPage {
+		if len(page) == limit {
 			more = true
 		} else {
 			p.phase = "done"
 		}
 	}
 	if !sweep.done && !full {
-		rows, e := a.store.db.Query(`SELECT dir,id FROM history_deferred WHERE recipient_fp=? AND (dir,id)>(?,?) ORDER BY dir,id LIMIT ?`, dev.Fingerprint(), sweep.dir, sweep.id, historyPage)
+		rows, e := a.store.db.Query(`SELECT dir,id FROM history_deferred WHERE recipient_fp=? AND (dir,id)>(?,?) ORDER BY dir,id LIMIT ?`, dev.Fingerprint(), sweep.dir, sweep.id, limit)
 		if e != nil {
 			return false, e
 		}
@@ -479,7 +485,7 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 			items = append(items, source...)
 			sweep = ref
 		}
-		sweep.done = len(refs) < historyPage
+		sweep.done = len(refs) < limit
 		more = more || !sweep.done
 	}
 	var copies []outCopy

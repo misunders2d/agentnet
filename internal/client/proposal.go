@@ -222,6 +222,12 @@ func (a *Agent) confirmableProposal(id string) (p confirmableProposal, err error
 }
 
 func (a *Agent) confirmableProposalIn(q dbq, id string) (p confirmableProposal, err error) {
+	return a.confirmableProposalKnown(q, id, nil)
+}
+
+// known, when given, shares one read of a chat's members between the rows of one
+// view; every other check runs for each row.
+func (a *Agent) confirmableProposalKnown(q dbq, id string, known map[string]dmMembers) (p confirmableProposal, err error) {
 	p.id = id
 	self, found, e := scanPersonIn(q, `state=?`, personSelf)
 	if e != nil {
@@ -284,7 +290,7 @@ func (a *Agent) confirmableProposalIn(q dbq, id string) (p confirmableProposal, 
 		ref = p.lid
 	}
 	var controls int
-	err = q.QueryRow(`SELECT count(*) FROM (SELECT id FROM inbox WHERE coalesce(conv,'')=? AND ref_id=? AND ref_fp=? AND sub IN (?,?) UNION ALL SELECT id FROM outbox WHERE coalesce(conv,'')=? AND ref_id=? AND ref_fp=? AND sub IN (?,?))`, p.conv, ref, p.key, envelope.SubRevision, envelope.SubRetraction, p.conv, ref, p.key, envelope.SubRevision, envelope.SubRetraction).Scan(&controls)
+	err = q.QueryRow(`SELECT count(*) FROM (SELECT id FROM inbox WHERE `+convIs(p.conv)+` AND ref_id=? AND ref_fp=? AND sub IN (?,?) UNION ALL SELECT id FROM outbox WHERE `+convIs(p.conv)+` AND ref_id=? AND ref_fp=? AND sub IN (?,?))`, p.conv, ref, p.key, envelope.SubRevision, envelope.SubRetraction, p.conv, ref, p.key, envelope.SubRevision, envelope.SubRetraction).Scan(&controls)
 	if err != nil {
 		return p, err
 	}
@@ -292,7 +298,7 @@ func (a *Agent) confirmableProposalIn(q dbq, id string) (p confirmableProposal, 
 		return p, errors.New("the proposal was edited or deleted after it was made, so it cannot be confirmed")
 	}
 	var target, questionPID, questionTopic string
-	err = q.QueryRow(`SELECT coalesce(target,''),coalesce(pid,''),coalesce(topic,'') FROM outbox WHERE (id=? OR lid=?) AND coalesce(conv,'')=? AND ref_id IS NULL AND coalesce(kind,json_extract(envelope,'$.kind'))=? AND (?<>'' OR recipient=? OR substr(recipient,1,length(?)+1)=?||'#')`, p.replyTo, p.replyTo, p.conv, envelope.KindQuestion, p.conv, p.from, p.from, p.from).Scan(&target, &questionPID, &questionTopic)
+	err = q.QueryRow(`SELECT coalesce(target,''),coalesce(pid,''),coalesce(topic,'') FROM outbox WHERE (id=? OR lid=?) AND `+convIs(p.conv)+` AND ref_id IS NULL AND coalesce(kind,json_extract(envelope,'$.kind'))=? AND (?<>'' OR recipient=? OR substr(recipient,1,length(?)+1)=?||'#')`, p.replyTo, p.replyTo, p.conv, envelope.KindQuestion, p.conv, p.from, p.from, p.from).Scan(&target, &questionPID, &questionTopic)
 	if errors.Is(err, sql.ErrNoRows) {
 		target, questionPID, questionTopic, err = a.sharedProposalQuestion(q, p)
 		p.shared = err == nil
@@ -318,9 +324,15 @@ func (a *Agent) confirmableProposalIn(q dbq, id string) (p confirmableProposal, 
 		if p.pid == "" || p.pid != questionPID || p.topic != questionTopic {
 			return p, ErrNotConfirmable
 		}
-		members, e := membersIn(q, p.conv)
-		if e != nil {
-			return p, e
+		members, ok := known[p.conv]
+		if !ok {
+			var e error
+			if members, e = membersIn(q, p.conv); e != nil {
+				return p, e
+			}
+			if known != nil {
+				known[p.conv] = members
+			}
 		}
 		info, e := participationIn(q, p.conv, p.pid, members, a.Address)
 		if e != nil {
@@ -343,7 +355,7 @@ func (a *Agent) confirmedProposal(q dbq, p confirmableProposal) (string, error) 
 	if err == nil || !errors.Is(err, sql.ErrNoRows) {
 		return id, err
 	}
-	err = q.QueryRow(`SELECT id FROM outbox WHERE coalesce(conv,'')=? AND ref_id IS NULL AND coalesce(kind,json_extract(envelope,'$.kind'))=? AND reply_to=? AND body=? AND coalesce(pid,'')=? AND coalesce(target,'')=? AND (?<>'' OR recipient=?) ORDER BY rowid LIMIT 1`, p.conv, envelope.KindTask, ref, p.body, p.pid, targetJSON(p.target), p.conv, p.from).Scan(&id)
+	err = q.QueryRow(`SELECT id FROM outbox WHERE `+convIs(p.conv)+` AND ref_id IS NULL AND coalesce(kind,json_extract(envelope,'$.kind'))=? AND reply_to=? AND body=? AND coalesce(pid,'')=? AND coalesce(target,'')=? AND (?<>'' OR recipient=?) ORDER BY rowid LIMIT 1`, p.conv, envelope.KindTask, ref, p.body, p.pid, targetJSON(p.target), p.conv, p.from).Scan(&id)
 	if !errors.Is(err, sql.ErrNoRows) {
 		return id, err
 	}
@@ -365,6 +377,20 @@ func (a *Agent) CanConfirmProposal(id string) bool {
 	}
 	sent, err := a.confirmedProposal(a.store.db, p)
 	return err == nil && sent == ""
+}
+
+// ProposalConfirmer is CanConfirmProposal for the rows of one view: what it lists
+// is display only, and ConfirmProposal repeats every check when tapped.
+func (a *Agent) ProposalConfirmer() func(id string) bool {
+	known := make(map[string]dmMembers)
+	return func(id string) bool {
+		p, err := a.confirmableProposalKnown(a.store.db, id, known)
+		if err != nil {
+			return false
+		}
+		sent, err := a.confirmedProposal(a.store.db, p)
+		return err == nil && sent == ""
+	}
 }
 
 var errProposalConfirmed = errors.New("proposal already confirmed")
