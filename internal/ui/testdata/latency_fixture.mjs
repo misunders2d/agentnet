@@ -481,8 +481,9 @@ try {
  const searchButton=button('Search chats');if(searchButton)await measure('search.open',()=>searchButton.click(),()=>!!chatSearch(),'chat search field visible in the active list');
  const search=chatSearch();if(search){const set=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;await measure('search.no-results',()=>{set.call(search,'No such synthetic person');search.dispatchEvent(new Event('input',{bubbles:true}));},()=>visibleText('Nothing matches'),'visible empty search result');await measure('search.clear',()=>button('Clear search').click(),()=>search.value===''&&buttons().some(b=>label(b).includes('Vitalii')),'search cleared and original chat row visible');}
  const fresh=button('New')||button('New chat');assert(fresh,'New chat control missing');
+ if(trustedFile==='NewChat.tsx'&&trustedID.includes('#NewChatButton/')&&await trustedCheckpoint('new-chat-trigger','navigation/chat-list/new-chat-trigger-visible'))return {ok:true,...reports};
  await measure('new-chat.open',()=>fresh.click(),()=>onScreen(scope().querySelector('[role="dialog"]')),'new chat dialog visible on screen');
- if(trustedFile==='NewChat.tsx'&&await trustedCheckpoint('new-chat'))return {ok:true,...reports};
+ if(trustedFile==='NewChat.tsx'&&await trustedCheckpoint('new-chat','navigation/new-chat-dialog-open'))return {ok:true,...reports};
  const dialog=()=>scope().querySelector('[role="dialog"]'),personRows=()=>[...dialog().querySelectorAll('li')].filter(el=>el.textContent.includes('Person '));
  if(peopleCount>40){assert(personRows().length<=40,'new-chat initial directory render is unbounded');const before=personRows().length;await measure('new-chat.reveal',()=>button(/^Show more people/).click(),()=>personRows().length>before,'next directory page rendered');assert(personRows().length-before<=40,'directory reveal exceeds one bounded page');}
  const q=dialog().querySelector('input[type="search"]');assert(q,'new chat search missing');
