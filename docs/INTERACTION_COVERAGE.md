@@ -81,8 +81,9 @@ November 2, during catch-up on v0.10.9; the candidate's fixes address that path,
 and live arrival on the candidate is not yet measured.
 
 **Rendered on a real store copy.** Comic at 1440×960 in Chromium on the Zenbook,
-real `Live` over a private copy of the owner's store on tmpfs, no network, build
-`e7288625`. "Busy" is a catch-up sweep running throughout. Milliseconds, p50 / max.
+real `Live` over a private copy of the owner's store on tmpfs, no network, mostly
+build `e7288625`; the 10x reaction picker rows are from a later build. "Busy" is a
+catch-up sweep running throughout. Milliseconds, p50 / max.
 Sends cannot reach the Hub in that namespace, so confirmed network results are not
 measured here. The ThinkPad's rendered numbers are not measured.
 
@@ -99,6 +100,10 @@ measured here. The ThinkPad's rendered numbers are not measured.
 | Reaction picker | 141 / 370 | 98 / 138 | 77 / 92 | 91 / 110 |
 | Reaction shown | 79 / 236 | 151 / 178 | 102 / 107 | 108 / 131 |
 | Search, type and clear | 28–43 / 45 | 35 / 94 | 25–32 / 36 | 41–55 / 100 |
+
+Later, at `ebe6933b`, normal size: the app shell is visible in 529 ms idle and 708
+ms busy; its first list follows at 1860 ms idle and 1507 ms busy. So the screen
+responds under a second, and the list content does not.
 
 The only local feedback over a second here is the cold first list. Each cycle ran
 two to four times, so these are not percentile evidence. Two misses in these runs
@@ -148,8 +153,14 @@ are not measured. Other gaps:
   `participation_external.go:1310`, `modelreport.go:331`, `conv.go:1241`,
   `daemon.go:739`, `persons.go:887`, `grouplifecycle.go:214,657`, `groups.go:78`.
   The call graph is by name and over-approximates.
-- The freeze's lane demotion and foreground continuity lock remain open. Do not
-  read this candidate as fixing the freeze.
+- Freeze: its measured cause is fixed, and every control above stayed under a second
+  during a sweep on a copy. A real catch-up with the network running is not measured,
+  and send to custody under load on the real app is not measured. Two parts I looked
+  at again are not causes on this evidence. `syncContinuityGroups` costs about 100 ms
+  before each group send on the Zenbook copy (7 groups, 1 recovered person), after
+  the message is already stored. Own-device mirror copies travel in the live lane
+  but hold only their own device's queue; both stores have 0 queued there now, and a
+  backlog was not measured.
 - Every group message asks for one chain per member.
 - The browser engine's errors carry no status, so its refusals read "Not confirmed".
   Standalone skins keep their own optimistic copy with no Discard on a `failed`
