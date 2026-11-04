@@ -131,6 +131,115 @@ func TestHeldChainRequestHoldsGroupHistoryCarriers(t *testing.T) {
 	}
 }
 
+// A group reaction, edit or deletion asked each member's chain one after another
+// on the same goroutine.
+func TestHeldChainRequestHoldsAGroupReaction(t *testing.T) {
+	w, _, p, _ := groupTurnsFixture(t)
+	conv := p.State.Conv
+	dm := newDM(t, w.alice, w.bob)
+	turn, err := w.alice.SendConv(tctx(t), conv, ConvOutgoing{Kind: envelope.KindMessage, Origin: envelope.OriginUI, Body: "reacted to"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(20 * time.Second); !w.bob.shows(t, conv, "reacted to"); time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the turn never came in")
+		}
+	}
+	ref, err := w.alice.RefOf(conv, turn.ID, "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hold atomic.Bool
+	hold.Store(true)
+	defer hold.Store(false)
+	w.hub.SetHold(func(r *http.Request) {
+		if bobAsksChain(w, r) {
+			for hold.Load() {
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+	})
+	defer w.hub.SetHold(nil)
+	started := time.Now()
+	if _, err = w.alice.React(tctx(t), ref, "👍", false); err != nil {
+		t.Fatal(err)
+	}
+	sendTurn(t, w.alice, dm, "a direct message behind it")
+	limit := 2*admitChainBudget + 3*time.Second
+	for !w.bob.shows(t, dm, "a direct message behind it") {
+		if time.Since(started) > limit {
+			t.Fatalf("the stream stayed stopped for %v behind a group reaction", time.Since(started))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	hold.Store(false)
+	for deadline := time.Now().Add(40 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		m, _ := convMsg(t, w.bob, conv, func(m ConvMessage) bool { return m.Body == "reacted to" }) // each member has its own copy id
+		if slices.ContainsFunc(m.Reactions, func(v ReactionView) bool { return v.Emoji == "👍" }) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the held reaction was never looked at again")
+		}
+	}
+}
+
+// A new chat's root naming a step of its creator's chain not pinned here asked
+// for it with the whole request budget, on the same goroutine.
+func TestHeldChainRequestHoldsANewChatNamingANewerStep(t *testing.T) {
+	w, carol, _, _ := groupTurnsFixture(t)
+	behind := newDM(t, carol, w.bob)
+	sendTurn(t, carol, behind, "before")
+	for deadline := time.Now().Add(20 * time.Second); !w.bob.shows(t, behind, "before"); time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("carol's message never came in")
+		}
+	}
+	var hold atomic.Bool
+	hold.Store(true)
+	defer hold.Store(false)
+	w.hub.SetHold(func(r *http.Request) {
+		if bobAsksChain(w, r) {
+			for hold.Load() {
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+	})
+	defer w.hub.SetHold(nil)
+	if _, err := w.alice.RenamePerson(tctx(t), "Alice again"); err != nil {
+		t.Fatal(err)
+	}
+	dm, err := w.alice.CreateDM(tctx(t), w.bob.Address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	sendTurn(t, w.alice, dm, "in a new chat")
+	for w.bob.heldForTest(t, reasonProof) == 0 {
+		if time.Since(started) > 2*admitChainBudget+3*time.Second {
+			t.Fatalf("not held as waiting after %v", time.Since(started))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	sendTurn(t, carol, behind, "behind it")
+	for !w.bob.shows(t, behind, "behind it") {
+		if time.Since(started) > 2*admitChainBudget+3*time.Second {
+			t.Fatalf("the stream stayed stopped for %v behind a new chat", time.Since(started))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	hold.Store(false)
+	for deadline := time.Now().Add(40 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if msgs, err := w.bob.ConversationMessages(dm); err == nil && slices.ContainsFunc(msgs, func(m ConvMessage) bool { return m.Body == "in a new chat" }) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the held new chat was never looked at again")
+		}
+	}
+}
+
 // A newer step the relay names and does not deliver: the message is not admitted
 // on the older roster, the reader moves on within its budget, and the message
 // comes in once the step is pinned.

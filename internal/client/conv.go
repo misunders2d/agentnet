@@ -1893,11 +1893,21 @@ func (a *Agent) retryHeldFor(in envelope.Inner) {
 
 // boundIn reports whether hash, the roster step a root binds person to, is
 // in person's pinned chain, fetching newer steps once if it is not.
+//
+// Admitting a relay delivery, on the one goroutine reading the stream, the asking
+// is refreshAdmitting's: a step the relay does not deliver in time makes the
+// message wait held (admissionFailed), not everything behind it.
 func (a *Agent) boundIn(ctx context.Context, person, hash string) (bool, error) {
 	if a.store.inChain(person, hash) {
 		return true, nil
 	}
-	if _, err := a.refreshPerson(ctx, person, false); err != nil {
+	var err error
+	if ctx.Value(relayIngressKey{}) != nil {
+		err = a.refreshAdmitting(ctx, []string{person})[0]
+	} else {
+		_, err = a.refreshPerson(ctx, person, false)
+	}
+	if err != nil {
 		return false, err
 	}
 	return a.store.inChain(person, hash), nil
