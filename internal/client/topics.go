@@ -4,9 +4,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
@@ -489,6 +491,25 @@ func (a *Agent) TopicOverviewUnread(listArchived bool, unread *[]DeviceUnreadRef
 }
 
 func (a *Agent) topicOverview(listArchived bool, unread *[]DeviceUnreadRef) ([]ThreadSummary, []PeerTopics, error) {
+	cache := &a.topicCache
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	off := cache.off.Load()
+	if !off {
+		// Before anything is read: a write from here on is seen again next time.
+		keys, next, err := a.ViewDirtySince(cache.mark)
+		if err != nil {
+			return nil, nil, err
+		}
+		cache.mark = next
+		for _, key := range keys {
+			if key == "*" {
+				cache.peers = nil
+			} else if peer, ok := strings.CutPrefix(key, "p:"); ok {
+				delete(cache.peers, peer)
+			}
+		}
+	}
 	peers, err := a.store.conversationPeers()
 	if err != nil {
 		return nil, nil, err
@@ -496,25 +517,25 @@ func (a *Agent) topicOverview(listArchived bool, unread *[]DeviceUnreadRef) ([]T
 	now := storeNow().Unix()
 	var out []ThreadSummary
 	var counts []PeerTopics
+	current := make(map[string]*peerTopicsEntry, len(peers))
 	for _, peer := range peers {
-		unreadStart := 0
+		e, kept := cache.peers[peer]
+		if off || !kept || now-e.at >= topicCacheAge || now < e.at {
+			if e, err = a.buildPeerTopics(peer, now); err != nil {
+				return nil, nil, err
+			}
+		}
+		current[peer] = e
 		if unread != nil {
-			unreadStart = len(*unread)
+			*unread = append(*unread, e.unread...)
 		}
-		all, err := a.peerTopics(peer, now, unread)
-		if err != nil {
-			return nil, nil, err
-		}
+		all := slices.Clone(e.all)
 		c := PeerTopics{Peer: peer}
 		var shown []*ThreadSummary
-		latest := -1
 		for i := range all {
 			t := &all[i]
 			if !t.NoticeOnly {
 				c.Total++
-				if latest < 0 || newer(*t, all[latest]) {
-					latest = i
-				}
 			}
 			if t.State == TopicArchived && !t.NoticeOnly {
 				c.Archived++
@@ -538,43 +559,6 @@ func (a *Agent) topicOverview(listArchived bool, unread *[]DeviceUnreadRef) ([]T
 			}
 			addPeerTopic(c, t)
 		}
-		text := shown
-		for _, c := range byAgent {
-			if c.Latest.State == TopicArchived && !listArchived {
-				for i := range all {
-					if all[i].ID == c.Latest.ID {
-						text = append(text, &all[i])
-						break
-					}
-				}
-			}
-		}
-		if latest >= 0 && all[latest].State == TopicArchived && !listArchived {
-			text = append(text, &all[latest])
-		}
-		if unread != nil {
-			included := make(map[string]bool, len(text))
-			for _, t := range text {
-				included[t.ID] = true
-			}
-			for i := range all {
-				if all[i].Unread > 0 && !included[all[i].ID] {
-					text = append(text, &all[i])
-				}
-			}
-		}
-		if err := a.topicText(peer, text); err != nil {
-			return nil, nil, err
-		}
-		if unread != nil {
-			titles := make(map[string]string, len(all))
-			for _, t := range all {
-				titles[t.ID] = t.Title
-			}
-			for i := unreadStart; i < len(*unread); i++ {
-				(*unread)[i].TopicTitle = titles[(*unread)[i].Thread]
-			}
-		}
 		for _, t := range shown {
 			out = append(out, *t)
 		}
@@ -588,9 +572,54 @@ func (a *Agent) topicOverview(listArchived bool, unread *[]DeviceUnreadRef) ([]T
 			counts = append(counts, *c)
 		}
 	}
+	if !off {
+		cache.peers = current // a peer gone from the list leaves with it
+	}
 	sortTopics(out)
 	sort.Slice(counts, func(i, j int) bool { return counts[i].Peer < counts[j].Peer })
 	return out, counts, nil
+}
+
+// topicCacheAge bounds how long a peer's summaries go unread for what no write
+// marks: the clock's quiet-topic archive. Nothing shown depends on it to the second.
+const topicCacheAge = 60
+
+type peerTopicsEntry struct {
+	all    []ThreadSummary // with their text
+	unread []DeviceUnreadRef
+	at     int64
+}
+
+// topicCache keeps each direct peer's summaries between list builds; view_dirty
+// says which to read again (viewdirty.go).
+type topicCache struct {
+	mu    sync.Mutex
+	mark  int64
+	peers map[string]*peerTopicsEntry
+	off   atomic.Bool
+}
+
+func (a *Agent) buildPeerTopics(peer string, now int64) (*peerTopicsEntry, error) {
+	e := &peerTopicsEntry{at: now}
+	var err error
+	if e.all, err = a.peerTopics(peer, now, &e.unread); err != nil {
+		return nil, err
+	}
+	text := make([]*ThreadSummary, len(e.all))
+	titles := make(map[string]string, len(e.all))
+	for i := range e.all {
+		text[i] = &e.all[i]
+	}
+	if err = a.topicText(peer, text); err != nil {
+		return nil, err
+	}
+	for _, t := range e.all {
+		titles[t.ID] = t.Title
+	}
+	for i := range e.unread {
+		e.unread[i].TopicTitle = titles[e.unread[i].Thread]
+	}
+	return e, nil
 }
 
 // newer orders topics most recently active first (then by id, descending,

@@ -58,6 +58,7 @@ type Agent struct {
 	routeHints       sync.Map      // optional verified first-attempt direct route; never queue storage
 	posting          backgroundPosts
 	queued           queuedSends
+	topicCache       topicCache
 	sendRetry        sendRetry     // a transient send failure is tried again soon (backgroundsend.go)
 	humanMu          sync.RWMutex  // local human end commits serialize with ordinary copy/file delivery
 	statusLocks      keyedLocks    // one status of a request at a time (headless.go)
