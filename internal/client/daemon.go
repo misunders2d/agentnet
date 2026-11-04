@@ -123,6 +123,9 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 		}()
 		defer func() { stopReview(); <-reviewDone }()
 	}
+	awayCtx, stopAway := context.WithCancel(ctx)
+	a.readerAwayCtx.Store(&awayCtx)
+	defer func() { stopAway(); a.readerAwayCtx.Store(nil); a.readerAway.Wait() }()
 	alertCtx, stopAlerts := context.WithCancel(ctx)
 	alertsDone := make(chan struct{})
 	go func() { defer close(alertsDone); a.alertLoop(alertCtx, a.alertWake) }()
@@ -465,9 +468,12 @@ func (a *Agent) dispatch(ctx context.Context, event, data string) error {
 		// Prove this connection is alive; the Hub drops unanswered streams.
 		var ping protocol.PingAck
 		if err := json.Unmarshal([]byte(data), &ping); err == nil && ping.Conn != "" {
-			if err := a.hub.do(ctx, "POST", "/v1/stream/ack", ping, nil); err != nil {
-				a.Logf("ping ack: %v", err)
-			}
+			// Not on this goroutine: a held acknowledgement would hold every message.
+			go func() {
+				if err := a.hub.do(ctx, "POST", "/v1/stream/ack", ping, nil); err != nil && ctx.Err() == nil {
+					a.Logf("ping ack: %v", err)
+				}
+			}()
 		}
 		a.kick()
 	}
@@ -505,6 +511,11 @@ func (a *Agent) accept(ctx context.Context, env envelope.Envelope) error {
 // The stream queues receipts; other callers retain their synchronous path.
 func (a *Agent) storeReceived(ctx context.Context, env envelope.Envelope) error {
 	ctx = withRelayIngress(ctx, env.ID)
+	budget := admitChainBudget
+	if a.convWork.chainWaiting(readerAsks) {
+		budget = 0 // the relay just did not answer: nothing here waits for it until the next look
+	}
+	ctx = withReaderBudget(ctx, time.Now().Add(budget))
 	seen, err := a.store.seen(env.ID)
 	if err != nil {
 		return err
@@ -613,8 +624,16 @@ func (a *Agent) admissionFailed(ctx context.Context, env envelope.Envelope, err 
 		in, e := envelope.Open(env, a.id, a.Address, sender)
 		conv = e == nil && (in.V == envelope.Version2 || in.V == envelope.Version3)
 	}
-	if transient(err) && (!conv || a.receiveFails.note(env.ID) < receiveAttempts) {
+	// The relay did not answer within the reader's budget: this message waits
+	// held, with those behind it free to come in. Which of them need the relay
+	// wait with it until the next look (readerWaits); it is looked at again away
+	// from the stream, with no budget.
+	relayLate := conv && transient(err) && readerBudgetSpent(ctx)
+	if transient(err) && !relayLate && (!conv || a.receiveFails.note(env.ID) < receiveAttempts) {
 		return err
+	}
+	if relayLate {
+		a.readerWaits()
 	}
 	a.receiveFails.clear(env.ID)
 	reason := reasonInvalid

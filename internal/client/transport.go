@@ -212,6 +212,8 @@ func (c *hubConn) do(ctx context.Context, method, path string, in, out any) erro
 // doBytes sends a raw body within the request timeout and decodes a JSON
 // answer into out.
 func (c *hubConn) doBytes(ctx context.Context, method, path string, body []byte, out any) error {
+	ctx, stop := readerBounded(ctx)
+	defer stop()
 	ctx, cancel := context.WithTimeoutCause(ctx, c.timeout, errHubRequestTimeout)
 	defer cancel()
 	req, err := c.request(ctx, method, path, body)
@@ -237,6 +239,8 @@ func (c *hubConn) doBytes(ctx context.Context, method, path string, body []byte,
 
 // getRange copies bytes [from, to) of path into w within the request timeout.
 func (c *hubConn) getRange(ctx context.Context, path string, from, to int64, w io.Writer) error {
+	ctx, stop := readerBounded(ctx)
+	defer stop()
 	ctx, cancel := context.WithTimeoutCause(ctx, c.timeout, errHubRequestTimeout)
 	defer cancel()
 	req, err := c.request(ctx, "GET", path, nil)

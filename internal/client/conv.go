@@ -1496,6 +1496,24 @@ func (w *convWork) chainFailed(person string) time.Duration {
 	return delay
 }
 
+// readerAsks stands in chainWaits for what the stream's reader itself waits
+// for: a request outside refreshAdmitting that ran out of the reader's budget.
+// No person has an empty id.
+const readerAsks = ""
+
+// readerWaits sets the next look after the reader gave up on the relay. Until
+// then a received message that needs the relay waits held at once, so a stalled
+// relay costs the stream the budget once per retry, not once per message.
+func (a *Agent) readerWaits() {
+	if a.convWork.chainWaiting(readerAsks) {
+		return // the look that ends this wait is set
+	}
+	time.AfterFunc(a.convWork.chainFailed(readerAsks), func() {
+		a.convWork.due(convPersons | convRetry)
+		a.kickNow()
+	})
+}
+
 // chainAnswered reports whether a message may have been waiting for person.
 func (w *convWork) chainAnswered(person string) bool {
 	w.chainMu.Lock()
@@ -1514,6 +1532,13 @@ func (w *convWork) chainAnswered(person string) bool {
 // posted after a roster step is checked against that step.
 func (a *Agent) refreshAdmitting(ctx context.Context, persons []string) []error {
 	errs := make([]error, len(persons))
+	if readerBudgetSpent(ctx) { // nothing left to ask with, and no person's failure
+		a.readerWaits()
+		for i := range errs {
+			errs[i] = errChainWaits
+		}
+		return errs
+	}
 	bounded, cancel := context.WithTimeout(ctx, admitChainBudget)
 	defer cancel()
 	var wg sync.WaitGroup
@@ -1855,7 +1880,7 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 		if in.Sub == envelope.SubEvent {
 			a.convWork.due(convRetry)
 			a.kickNow()
-			a.trySelfConsent(ctx, in.PID) // an invite of this person's own agent, hosted here
+			a.consentAway(ctx, in.PID) // an invite of this person's own agent, hosted here
 		}
 		a.wakeWorker() // a request, or an event that may let one run or stop
 		if statusDue(state, in.Kind) != 0 {

@@ -1,7 +1,9 @@
 package client
 
 import (
+	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"slices"
 	"strings"
@@ -358,5 +360,179 @@ func TestFailingChainIsNotHammered(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatal("never looked at again after the relay recovered")
 		}
+	}
+}
+
+// MEL-748: what the reader asked the relay outside refreshAdmitting waited out
+// the 30 s request timeout per person, per attempt, with every later message
+// and ping behind it. A group's new step reaches several such asks.
+func TestHeldRelayAskStopsNoMessageBehindAGroupStep(t *testing.T) {
+	w, _, p, _ := groupTurnsFixture(t)
+	dm := newDM(t, w.alice, w.bob)
+	var hold atomic.Bool
+	var asked atomic.Int32
+	hold.Store(true)
+	defer hold.Store(false)
+	w.hub.SetHold(func(r *http.Request) {
+		if bobAsksChain(w, r) {
+			asked.Add(1)
+			for hold.Load() {
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+	})
+	defer w.hub.SetHold(nil)
+	var renamed GroupContext
+	for _, title := range []string{"A held step", "Another held step", "A third held step"} {
+		var err error
+		if renamed, err = w.alice.RenameGroup(tctx(t), p.State.Conv, title); err != nil {
+			t.Fatal(err)
+		}
+	}
+	eventually(t, "a request held", func() bool { return asked.Load() > 0 })
+	started := time.Now()
+	sendTurn(t, w.alice, dm, "a direct message behind the step")
+	limit := 2*admitChainBudget + 3*time.Second
+	for !w.bob.shows(t, dm, "a direct message behind the step") {
+		if time.Since(started) > limit {
+			t.Fatalf("the stream stayed stopped for %v behind a held request", time.Since(started))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got, e := w.bob.GroupContext(p.State.Conv); e == nil && got.State.Hash() == renamed.State.Hash() {
+		t.Fatal("the group's step was accepted without the rosters it depends on")
+	}
+	hold.Store(false)
+	eventually(t, "the held step looked at again", func() bool {
+		got, e := w.bob.GroupContext(p.State.Conv)
+		return e == nil && got.State.Hash() == renamed.State.Hash()
+	})
+}
+
+// A held acknowledgement of the Hub's ping held every message behind it.
+func TestHeldPingAckStopsNoMessage(t *testing.T) {
+	w := newWorld(t, "")
+	w.bob.kick = func() {}
+	var hold atomic.Bool
+	hold.Store(true)
+	defer hold.Store(false)
+	w.hub.SetHold(func(r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/v1/stream/ack") {
+			for hold.Load() {
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+	})
+	defer w.hub.SetHold(nil)
+	done := make(chan error, 1)
+	ping, err := json.Marshal(protocol.PingAck{Conn: "held-connection"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { done <- w.bob.dispatch(tctx(t), "ping", string(ping)) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the stream's reader waited for the acknowledgement")
+	}
+}
+
+// What the reader asks the relay ends with the message's budget, for every
+// kind of request, and the failure can be told from any other.
+func TestReaderBudgetEndsEveryRelayRequest(t *testing.T) {
+	w := newWorld(t, "")
+	var hold atomic.Bool
+	hold.Store(true)
+	defer hold.Store(false)
+	w.hub.SetHold(func(r *http.Request) {
+		if r.Header.Get(protocol.HeaderAgent) == w.bob.Address && strings.HasPrefix(r.URL.Path, "/v1/agents/") {
+			for hold.Load() {
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+	})
+	defer w.hub.SetHold(nil)
+	for name, ask := range map[string]func(context.Context) error{
+		"answer": func(ctx context.Context) error { return w.bob.hub.do(ctx, "GET", "/v1/agents/alice/laptop", nil, nil) },
+		"range": func(ctx context.Context) error {
+			return w.bob.hub.getRange(ctx, "/v1/agents/alice/laptop", 0, 1, io.Discard)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := withReaderBudget(tctx(t), time.Now().Add(200*time.Millisecond))
+			started := time.Now()
+			err := ask(ctx)
+			if !transient(err) || !readerBudgetSpent(ctx) {
+				t.Fatalf("after %v: %v", time.Since(started), err)
+			}
+			if took := time.Since(started); took > 2*time.Second {
+				t.Fatalf("the request outlived its budget by %v", took)
+			}
+			if err := ask(withReaderBudget(tctx(t), time.Now())); !transient(err) {
+				t.Fatalf("a spent budget still asked: %v", err)
+			}
+		})
+	}
+	// Away from the reader, an answer that matters waits as long as it may.
+	if until, ok := readerBudgetEnd(withoutReaderBudget(withReaderBudget(tctx(t), time.Now()))); ok {
+		t.Fatalf("still bounded by %v", until)
+	}
+}
+
+// An unknown sender cannot wait held, since the look at held messages needs its
+// key. The stream ends as before, within the budget, and nothing is decided.
+func TestLateDirectoryAnswerIsAskedAgainWithinTheBudget(t *testing.T) {
+	w := newWorld(t, "")
+	carol := proofReader(t, w, "carol")
+	persons(t, w.alice, w.bob)
+	if _, err := carol.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "from someone new"}); err != nil {
+		t.Fatal(err)
+	}
+	var raw []byte
+	if err := carol.store.db.QueryRow(`SELECT envelope FROM outbox WHERE recipient=?`, w.bob.Address).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	var env envelope.Envelope
+	if err := json.Unmarshal(raw, &env); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.bob.store.db.Exec(`DELETE FROM peers WHERE address=?`, carol.Address); err != nil {
+		t.Fatal(err)
+	}
+	seen, err := w.bob.store.seen(env.ID)
+	if err != nil || seen {
+		t.Fatalf("already here: %v %v", seen, err)
+	}
+	var hold atomic.Bool
+	hold.Store(true)
+	defer hold.Store(false)
+	w.hub.SetHold(func(r *http.Request) {
+		if r.Header.Get(protocol.HeaderAgent) == w.bob.Address && strings.HasPrefix(r.URL.Path, "/v1/agents/") {
+			for hold.Load() {
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+	})
+	defer w.hub.SetHold(nil)
+	started := time.Now()
+	err = w.bob.storeReceived(tctx(t), env)
+	if !transient(err) {
+		t.Fatalf("not left for the Hub to push again: %v", err)
+	}
+	if took := time.Since(started); took > admitChainBudget+2*time.Second {
+		t.Fatalf("the reader waited %v", took)
+	}
+	if seen, e := w.bob.store.seen(env.ID); e != nil || seen {
+		t.Fatalf("decided without its sender's key: %v %v", seen, e)
+	}
+	hold.Store(false)
+	if err := w.bob.storeReceived(tctx(t), env); err != nil {
+		t.Fatal(err)
+	}
+	if seen, e := w.bob.store.seen(env.ID); e != nil || !seen {
+		t.Fatalf("never came in: %v %v", seen, e)
 	}
 }

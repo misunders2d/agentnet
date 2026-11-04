@@ -518,9 +518,12 @@ func (a *Agent) refreshPerson(ctx context.Context, person string, adopt bool) (p
 	res, err := askOnce(ctx, func(rt *roundTrips) *map[string]*roundTrip[pinResult] { return &rt.persons }, fmt.Sprint(person, "\x00", adopt), func() (pinResult, error) {
 		return a.pinNewerSteps(ctx, person, adopt)
 	})
-	if err == nil && a.convWork.chainAnswered(person) {
-		a.convWork.due(convRetry) // what waited for this answer need not wait out its retry
-		a.kickNow()
+	if err == nil {
+		waited := a.convWork.chainAnswered(person)
+		if a.convWork.chainAnswered(readerAsks) || waited {
+			a.convWork.due(convRetry) // what waited for this answer need not wait out its retry
+			a.kickNow()
+		}
 	}
 	return res, err
 }

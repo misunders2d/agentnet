@@ -44,6 +44,9 @@ type Agent struct {
 	Address string
 	Logf    func(format string, args ...any)
 
+	readerAwayCtx atomic.Pointer[context.Context] // this run's, for work leaving the stream's reader
+	readerAway    sync.WaitGroup                  // that work, waited for when the run ends
+
 	deliveryLocks    keyedLocks // envelope ID, shared by immediate sends and retry passes
 	flushOnce        sync.Once
 	flushLock        chan struct{} // readable turns serialize independently of replication

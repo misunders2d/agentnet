@@ -1264,6 +1264,29 @@ func (a *Agent) agentEnabled(agentID string) (bool, error) {
 // what it is. An invite not accepted waits for the click or the next
 // daemon start; an accept stored whose sending failed is sent again by
 // the next daemon start's sweep, or now by dm accept-agent PID.
+// consentAway is trySelfConsent for a message just admitted. Its accept is a
+// send: spool lock, every reader, the network. On the stream's reader that would
+// hold every later message, so it runs beside the stream, for this run.
+func (a *Agent) consentAway(ctx context.Context, pid string) {
+	if run := a.awayFromReader(ctx); run != nil {
+		a.readerAway.Go(func() { a.trySelfConsent(run, pid) })
+		return
+	}
+	a.trySelfConsent(withoutReaderBudget(ctx), pid)
+}
+
+// awayFromReader is the context for work leaving the stream's reader, or nil
+// when ctx is not on it or no daemon runs here to do the work.
+func (a *Agent) awayFromReader(ctx context.Context) context.Context {
+	if _, on := readerBudgetEnd(ctx); !on {
+		return nil
+	}
+	if run := a.readerAwayCtx.Load(); run != nil {
+		return *run
+	}
+	return nil
+}
+
 func (a *Agent) trySelfConsent(ctx context.Context, pid string) {
 	accepted, err := a.selfConsent(ctx, pid)
 	if err == nil && !accepted {

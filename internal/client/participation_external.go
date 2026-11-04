@@ -1519,7 +1519,7 @@ func (a *Agent) admitExternalParticipation(ctx context.Context, env envelope.Env
 			a.wakeStatus() // its requester hears it waits here (stored with it)
 		}
 		if ev != nil {
-			a.trySelfConsent(ctx, in.PID) // an invite of this person's own agent, hosted here (a group's)
+			a.consentAway(ctx, in.PID) // an invite of this person's own agent, hosted here (a group's)
 		}
 	}
 	return true, nil
