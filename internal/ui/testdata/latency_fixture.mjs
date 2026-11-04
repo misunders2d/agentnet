@@ -11,9 +11,10 @@ const reports={actions:[],apiCalls:[],seenControls:[],firedControlIds:[],untagge
 const trackedHandlers=new WeakMap();
 globalThis.__anTrack=(id,fn)=>{if(typeof fn!=='function')return fn;let ids=trackedHandlers.get(fn);if(!ids){ids=new Map();trackedHandlers.set(fn,ids);}let wrapped=ids.get(id);if(!wrapped){wrapped=function(...args){if(!reports.firedControlIds.includes(id))reports.firedControlIds.push(id);return fn.apply(this,args);};ids.set(id,wrapped);}return wrapped;};
 globalThis.__anFiredControlIds=reports.firedControlIds;
+globalThis.__anTrustedApiCalls=reports.apiCalls;
 const pageError=e=>reports.pageErrors.push(String(e.message||e.reason||e).slice(0,1000));window.addEventListener('error',pageError);window.addEventListener('unhandledrejection',pageError);
 try {
- const query=new URL(location.href).searchParams,token=query.get('token'),trustedFile=query.get('trustedFile')||'',trustedID=query.get('trustedID')||'';
+ const query=new URL(location.href).searchParams,token=query.get('token'),trustedFile=query.get('trustedFile')||'',trustedID=query.get('trustedID')||'',trustedBackend=query.get('trustedBackend')||'';
  const trustedCheckpoint=async(name,path)=>{if(query.get('trusted')!=='1')return false;reports.trusted_checkpoint=name;reports.trusted_state_path=path;window.__agentnetTrustedCheckpoint={name,file:trustedFile,control_id:trustedID,state_path:path};await new Promise(resolve=>{window.__agentnetTrustedResume=resolve;});reports.trusted_interactions=window.__anTrustedInteractions||[];return true;};
  const paintDiagnostic=query.get('paintDiagnostic')||'';assert(['','baseline','motion','flat','no-background','no-shadow','no-radius','no-filter','no-scrim'].includes(paintDiagnostic),'Invalid paint diagnostic');if(paintDiagnostic)reports.paintDiagnostic=paintDiagnostic;
  const suite=window.__agentnetLatencySuite||query.get('suite')||'history',teamsPart=query.get('teamsPart')||'';assert(!teamsPart||suite==='teams'&&['list','group'].includes(teamsPart),'Invalid Teams page partition');reports.suite=suite;if(teamsPart)reports.teamsPart=teamsPart;reports.portableVector=p1;const extraSuites=['topics','groups','compose','media','review','outbox','agents','teams','profile','storage','workspaces','permissions'];const extended=extraSuites.includes(suite);assert(['history','navigation','settings','unread','actions',...extraSuites].includes(suite),'Unknown timing workload');
@@ -182,7 +183,7 @@ try {
     if(p==='/api/request/followup'){await pause(25);assert(body.conv===view.id&&body.ref.id==='a'.repeat(32)&&body.ref.fingerprint===overview.me.fingerprint&&body.attempt===0,'tagged reply exact stored parent binding');view.messages.push({...body,lid:body.id,kind:'question',pid:'b'.repeat(32),from:overview.me.address,dir:'out',at:new Date().toISOString(),state:'queued',can:[],actions:[],reactions:[]});emit();return{note:'Reply queued in the original request context.'};}
     if(p==='/api/operator/decide'){await pause(25);if(nativeFailure){nativeFailure=false;throw Error('Synthetic native callback response unavailable');}return{note:'Fixture response saved; native result unknown'};}
     if(p==='/api/groups/decide'){await pause(25);overview.group_invitations=overview.group_invitations.filter(g=>g.id!==body.id);emit();return{recorded:true};}
-    if(p==='/api/person/label'){await pause(25);me.label=body.label;emit();return clone(me);}
+    if(p==='/api/person/label'){if(trustedBackend==='delayed')await pause(1200);else await pause(25);if(trustedBackend==='failing')throw Error('Synthetic profile save unavailable');me.label=body.label;emit();return clone(me);}
     if(p==='/api/get-app')return{detected:'linux',platforms:[{id:'linux',label:'Linux',url:'https://fixture.invalid/linux'},{id:'macos',label:'macOS',url:'https://fixture.invalid/mac'},{id:'windows',label:'Windows',url:'https://fixture.invalid/windows'}]};
     if(p==='/api/device/link'){await pause(25);return{url:'https://fixture.invalid/one-use-only',expires:future};}
     if(p==='/api/device/decide'){await pause(25);overview.links=overview.links.filter(l=>l.id!==body.id);emit();return{note:'Fixture device decision stored'};}
