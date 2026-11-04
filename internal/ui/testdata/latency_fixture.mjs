@@ -55,7 +55,7 @@ try {
  reports.proposalAttempts=[];reports.ownerDecisionAttempts=[];reports.presentationFailures=[];
  let simulatedSetup=false,setupReceipt=false,setupPublishes=0,missingFolderMode=false;
  let reviewedSetup;
- let nativeFailure=false,notificationFailure=false,storageOffline=false,cacheOffline=false,cacheHold=false,releaseCache,workspaceInfo={name:'Fixture workspace',server:'Fixture server',can_rename:true};
+ let scheduleListFailure=false,nativeFailure=false,notificationFailure=false,storageOffline=false,cacheOffline=false,cacheHold=false,releaseCache,workspaceInfo={name:'Fixture workspace',server:'Fixture server',can_rename:true};
  if(suite==='workspaces')overview.workspace={name:workspaceInfo.name,server:workspaceInfo.server};
  const relayStorage={can_admin:true,configured:true,connected:true,state:'connected',local:{files:2,bytes:3072},remote:{files:0,bytes:0},pending:{files:2,bytes:3072},remote_only_files:0,migration:{running:false,files:0,bytes:0,total_files:0,total_bytes:0}};
  const staged=[];reports.files=staged;
@@ -168,6 +168,7 @@ try {
     if(p==='/api/approvals')return clone(grants);
     if(p==='/api/folders')return{path:u.searchParams.get('path')||'/fixture',home:'/fixture',roots:['/'],dirs:[{name:'work',path:'/fixture/work'}],parent:'/',entries:[{name:'work',path:'/fixture/work',directory:true}],folders:[{name:'work',path:'/fixture/work'}]};
     if(p==='/api/assistant-setup'){await pause(25);if(body?.action==='review')reviewedSetup=clone(body);if(body?.action==='apply'){assert(reviewedSetup&&body.review_id==='fixture-review'&&JSON.stringify(body.harnesses)===JSON.stringify(reviewedSetup.harnesses),'setup Apply must match the exact reviewed token and harnesses');reports.setupApplyReview={review_id:body.review_id,harnesses:clone(body.harnesses),reviewMatched:true,nativeEffects:false};if(!simulatedSetup)throw Error('Synthetic native setup refused; real harness configuration required');setupReceipt=true;}return{local:true,review_id:body?.action==='review'?'fixture-review':'',harnesses:[{id:'codex',label:'Codex',detected:true,configured:setupReceipt,registered:setupReceipt,supported:true,state:setupReceipt?'connected':'needs_setup',note:'Invented native setup presentation',change:'Update fixture hooks',target:'/fixture/settings'},{id:'pi',label:'Pi',detected:true,configured:true,registered:setupReceipt,supported:true,state:setupReceipt?'connected':'needs_activation',note:'Invented setup status'},...(missingFolderMode?[{id:'claude',label:'Claude',detected:true,configured:false,registered:false,supported:true,state:'needs_setup',note:'Invented detected Claude without chosen folder'}]:[])]};}
+    if(p==='/api/schedules'&&!body&&scheduleListFailure)throw Error('Synthetic list unavailable');
     if(p==='/api/schedules')return body?{}:u.searchParams.has('id')?clone(schedules.find(s=>s.id===u.searchParams.get('id'))):clone(u.searchParams.get('all')==='1'?[...schedules,historySchedule]:schedules);
     if(p==='/api/schedule/audience')return{persons:[me.person,peer.person],pids:[]};
     if(p.startsWith('/api/schedule/')){await pause(25);let row=schedules.find(s=>s.id===body.id);if(p.endsWith('/create')){row={...body,rev:1,state:'pending',files:body.files||[]};schedules.push(row);}else{assert(row&&row.rev===body.rev,'schedule exact revision');if(p.endsWith('/edit'))Object.assign(row,body,{rev:row.rev+1});if(p.endsWith('/cancel'))row.state='cancelled';if(p.endsWith('/send_now'))row.state='sent';}emit();return clone(row);}
@@ -311,7 +312,7 @@ try {
  const initialChat=()=>[...root.querySelectorAll('[data-part="chat-row"]')].find(b=>b.textContent.includes(p1==='direct'?'Portable Pi':'Vitalii')&&onScreen(b));
  await until(initialChat,'visible initial chat row');await frame();await frame();assert(initialChat(),'initial chat control disappeared before input');reports.initialControl={visible:true,paintOpportunityFrames:2,readyAtMs:performance.now(),fonts:document.fonts.status};
  if(suite==='actions'){
-  const message=view.messages.at(-1),row=()=>root.querySelector('[data-mid="'+message.id+'"]'),pending=()=>row()?.querySelector('[data-reaction-pending="true"]');
+  const message=view.messages.at(-1);let target=message.id;const row=()=>root.querySelector('[data-mid="'+target+'"]'),pending=()=>row()?.querySelector('[data-reaction-pending="true"]');
   await measure('navigation.actions-dm',()=>[...root.querySelectorAll('[data-part="chat-row"]')].find(b=>b.textContent.includes('Vitalii')).click(),()=>onScreen(root.querySelector('section[aria-busy="true"]'))||onScreen(row()),'opening feedback or exact action target visible',()=>onScreen(row()));
   const item=name=>[...scope().querySelectorAll('button,[role="menuitem"]')].find(b=>shown(b)&&!b.closest('[data-ending-style]')&&label(b)===name);
   const settled=()=>until(()=>!scope().querySelector('[data-ending-style]'),'previous popup retired');
@@ -321,8 +322,15 @@ try {
   const markedRow=()=>[...root.querySelectorAll('[data-part="chat-row"][data-unread]')].some(b=>b.textContent.includes('Vitalii'));
   let releaseUnread;unreadHold=new Promise(r=>releaseUnread=r);
   await menu();await measure('unread.mark',()=>item('Mark unread').click(),markedRow,'chat row shows unread with the answer held');assert(markedRow(),'unread mark stays while held');
-  unreadHold=null;releaseUnread();await until(()=>message.unread&&markedRow(),'unread mark confirmed');await settled();
-  message.unread=false;overview.dms[0].unread=0;seq++;emit();await until(()=>!markedRow(),'chat read again for the refused case');
+  const unreadCount=()=>Number([...root.querySelectorAll('[data-part="chat-row"][data-unread]')].find(b=>b.textContent.includes('Vitalii'))?.querySelector('[data-part="unread"]')?.firstChild?.textContent||0);
+  // A second mark adds to the first while both are unanswered, and a refusal takes back only its own.
+  const second=view.messages.at(-2),third=view.messages.at(-4);target=second.id;await settled();await menu();
+  await measure('unread.mark-second',()=>item('Mark unread').click(),()=>unreadCount()===2,'second unanswered mark adds to the first');
+  unreadHold=null;unreadFailure=true;target=third.id;await settled();await menu();
+  await measure('unread.mark-third-refused',()=>item('Mark unread').click(),()=>unreadCount()===3,'third mark adds before its refusal',()=>visibleText('Synthetic unread refusal')&&unreadCount()===2);
+  unreadFailure=false;target=message.id;assert(!third.unread,'refused mark changed nothing');
+  releaseUnread();await until(()=>!reports.apiCalls.some(c=>c.path==='/api/act'&&c.ok===undefined),'both unread marks answered');assert(reports.apiCalls.filter(c=>c.path==='/api/act'&&c.ok===true).length>=2,'both unread marks accepted');await settled();
+  message.unread=second.unread=false;overview.dms[0].unread=0;seq++;emit();await until(()=>!markedRow(),'chat read again for the refused case');
   unreadFailure=true;await menu();await measure('unread.mark-refused',()=>item('Mark unread').click(),markedRow,'chat row shows unread before the refusal',()=>visibleText('Synthetic unread refusal')&&!markedRow());unreadFailure=false;await settled();
   await menu();const pick=item('React 👍');if(!pick){const react=row().querySelector('button[aria-label="React"]');assert(react,'reaction control missing');const details=item('Details');details.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));await settled();await measure('reaction.picker-open',()=>react.click(),()=>!!item('React 👍'),'quick reaction choices visible');}
   await measure('reaction.add',()=>item('React 👍').click(),()=>!!pending(),'explicit pending reaction feedback',()=>message.reactions.some(r=>r.mine)&&!pending()&&!!row().querySelector('[aria-pressed="true"]'));await settled();
@@ -349,6 +357,8 @@ try {
   await measure('chat.delete',()=>[...confirmChat.querySelectorAll('button')].find(b=>label(b)==='Delete').click(),()=>!chatRow()&&!onScreen(row()),'chat leaves the list and closes with the server answer held');
   // Any write still unanswered also says so, wherever the person has gone since.
   const workingNotice=()=>scope().querySelector('[data-part="working"]');await until(workingNotice,'working notice while the server is silent',1500);
+  // A message arriving meanwhile brings the chat back: only what was deleted stays hidden.
+  Object.assign(overview.dms.find(d=>d.id===view.id),{last_at:new Date().toISOString(),last_id:'f'.repeat(32)});seq++;emit();await until(chatRow,'newer message brings the chat back during the delete',3000);
   chatDeleteHold=null;releaseChatDelete();await until(()=>!overview.dms.some(d=>d.title==='Vitalii'||d.id===view.id),'chat delete confirmed');await pause(50);assert(!chatRow(),'confirmed delete brought the chat back');await until(()=>!workingNotice(),'working notice gone once answered',1500);
  }
  if(suite==='history'){
@@ -778,7 +788,7 @@ try {
    await tap('outbox.schedule-edit-again',control('Edit schedule'),()=>!!active('textarea[aria-label="Scheduled message text"]'),'same row edit visible');
    await tap('outbox.schedule-keep',control('Keep saved schedule'),()=>!active('textarea[aria-label="Scheduled message text"]'),'edit cancelled without mutation');
    await tap('outbox.schedule-reopen-for-cancel',control('Edit schedule'),()=>!!control('Cancel schedule'),'specific schedule expanded for cancellation');
-   await tap('outbox.schedule-cancel',control('Cancel schedule'),()=>schedules[0].state==='cancelled'&&!root.textContent.includes('Edited scheduled fixture'),'exact schedule cancelled and active row removed');
+   scheduleListFailure=true;await tap('outbox.schedule-cancel',control('Cancel schedule'),()=>schedules[0].state==='cancelled'&&!root.textContent.includes('Edited scheduled fixture'),'exact schedule cancelled and active row removed');await until(()=>visibleText('This list could not refresh'),'cancel kept with the list unread');scheduleListFailure=false;
    const remainingSchedule=schedules[1];await tap('outbox.schedule-sendnow-open',control('Edit schedule'),()=>!!control('Send now'),'other exact pending schedule details visible');
    const recipients=active('article details');await tap('outbox.schedule-recipients',recipients.querySelector('summary'),()=>recipients.open,'captured audience disclosed');
    await tap('outbox.schedule-sendnow',control('Send now'),()=>remainingSchedule.state==='sent'&&!control('Send now'),'exact revision dispatched, delivery separately confirmed');

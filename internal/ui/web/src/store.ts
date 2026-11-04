@@ -333,7 +333,8 @@ export class Store {
   // A chat's unread mark shows before the server is asked, as Telegram sets its
   // own first (TDLib toggle_dialog_is_marked_as_unread), until a list read after
   // the answer says. Never below what the list says: arrivals keep counting.
-  private localUnreads = new Map<string, { kind: "dm" | "thread"; unread: number }>();
+  // Marks the server has not answered yet, per chat. Each request clears alone.
+  private localUnreads = new Map<string, { kind: "dm" | "thread"; requests: Set<string[]> }>();
   private readState?: { source: State; value: State };
   private readIdentity(m: T.DMMessage | T.Message): string {
     return JSON.stringify([this.readKey(m), m.dir, (m as T.DMMessage).lid || m.id,
@@ -390,11 +391,13 @@ export class Store {
     }
     for (const [id, mark] of this.localUnreads) {
       const summary = mark.kind === "dm" ? overview?.dms?.find(d => d.id === id) : overview?.threads?.find(t => t.id === id) || overview?.topics?.find(t => t.latest.id === id)?.latest;
-      if (overview && summary && summary.unread < mark.unread) overview = this.readOverview(overview, { kind: mark.kind, id, seq: overview.seq || 0, unread: mark.unread });
+      const shown = views[id]?.messages;
+      const waiting = [...new Set([...mark.requests].flat())].filter(m => !shown?.some(x => x.id === m && x.unread)).length;
+      if (overview && summary && waiting) overview = this.readOverview(overview, { kind: mark.kind, id, seq: overview.seq || 0, unread: summary.unread + waiting });
     }
     if (overview && this.deletingChats.size) {
-      const kept = (id: string) => !this.deletingChats.has(id);
-      overview = { ...overview, dms: overview.dms?.filter(d => kept(d.id)) ?? null, threads: overview.threads?.filter(t => kept(t.id)) ?? null, topics: overview.topics?.filter(t => kept(t.latest.id)) ?? overview.topics };
+      const kept = (c: { id: string; last_at: string; last_id?: string }) => this.deletingChats.get(c.id) !== this.chatStamp(c);
+      overview = { ...overview, dms: overview.dms?.filter(kept) ?? null, threads: overview.threads?.filter(kept) ?? null, topics: overview.topics?.filter(t => kept(t.latest)) ?? overview.topics };
     }
     const value = { ...s, views, overview,
       dm: s.dm && (views[s.dm.id] as T.DMThread || s.dm),
@@ -2099,12 +2102,16 @@ export class Store {
     const anchor = messages.findIndex(m => m.id === id && this.canMarkUnread(m));
     if (anchor < 0) { this.toast("That message is no longer available here.", "error"); return; }
     const ids = [...new Set((fromHere ? messages.slice(anchor) : [messages[anchor]]).filter(m => this.canMarkUnread(m)).map(m => m.id))];
-    const marked = messages.filter(m => ids.includes(m.id) && !m.unread).length;
+    const request = messages.filter(m => ids.includes(m.id) && !m.unread).map(m => m.id);
     const summary = o.kind === "dm" ? this.state.overview?.dms?.find(d => d.id === o.id)
       : this.state.overview?.threads?.find(t => t.id === o.id) || this.state.overview?.topics?.find(t => t.latest.id === o.id)?.latest;
-    const mark = { kind: o.kind, unread: (summary?.unread || 0) + marked };
-    if (marked && summary) { this.localUnreads.set(o.id, mark); this.publishReads(); }
-    const clear = () => { if (this.localUnreads.get(o.id) === mark) { this.localUnreads.delete(o.id); this.publishReads(); } };
+    const mark = this.localUnreads.get(o.id) || { kind: o.kind, requests: new Set<string[]>() };
+    if (request.length && summary) { mark.requests.add(request); this.localUnreads.set(o.id, mark); this.publishReads(); }
+    const clear = () => {
+      if (!mark.requests.delete(request)) return;
+      if (!mark.requests.size && this.localUnreads.get(o.id) === mark) this.localUnreads.delete(o.id);
+      this.publishReads();
+    };
     if (await this.run(a => a.act({ do: "unread", id, ids })) === undefined) clear(); // refused: its toast says so
     await this.refetch();
     clear();
@@ -2438,10 +2445,13 @@ export class Store {
 
   // A deleted chat leaves at once, as tdlib deletes a chat's messages locally
   // before the server answers. A refusal puts it back and says why.
-  private deletingChats = new Set<string>();
+  // Only what was there when deleted: a message arriving meanwhile brings it back.
+  private deletingChats = new Map<string, string>();
+  private chatStamp(c: { last_at: string; last_id?: string }) { return c.last_at + "\0" + (c.last_id || ""); }
   async deleteChat(id: string, ref: Parameters<Api["deleteConversation"]>[0]) {
-    const open = this.state.open;
-    this.deletingChats.add(id);
+    const open = this.state.open, o = this.state.overview;
+    const summary = o?.dms?.find(d => d.id === id) || o?.threads?.find(t => t.id === id) || o?.topics?.find(t => t.latest.id === id)?.latest;
+    this.deletingChats.set(id, summary ? this.chatStamp(summary) : "");
     this.publishReads();
     this.close();
     const result = await this.run(a => a.deleteConversation(ref));
