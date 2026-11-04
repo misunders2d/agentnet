@@ -10,10 +10,21 @@ export function browserBackNavigation(win = window) {
   const stamp = seq => ({ ...win.history.state, agentnetBack: marker, agentnetBackSeq: seq });
   let at = own(win.history.state) ? win.history.state.agentnetBackSeq : -1;
   const guard = () => { at += 1; win.history.pushState(stamp(at), '', win.location.href); };
+  // An older version's entry has no mark. Keep going past it; if nothing is earlier, stay able to handle Back.
+  const leavePast = () => {
+    win.history.back();
+    win.setTimeout(() => {
+      if (!leaving || own(win.history.state)) return;
+      leaving = false; canLeave = false; at = 0;
+      win.history.replaceState(stamp(at), '', win.location.href);
+      guard();
+    }, 1000);
+  };
   const pop = event => {
     if (!own(event.state)) {
+      if (leaving) { leavePast(); return; }
       // A link or notification changing the fragment made a new entry. It is not Back.
-      if (!leaving) { at += 1; win.history.replaceState(stamp(at), '', win.location.href); }
+      at += 1; win.history.replaceState(stamp(at), '', win.location.href);
       return;
     }
     const back = event.state.agentnetBackSeq < at;

@@ -46,6 +46,28 @@ const {chromium} = require(process.env.AGENTNET_PLAYWRIGHT || 'playwright-core')
    await context.close();
    console.log(JSON.stringify({fragment:'followed links leave the layer open; every Back reaches it'}));
   }
+  {
+   // A tab open across the update has an older version's entries, with no mark.
+   const legacy=async(direct)=>{
+    const context=await browser.newContext(),page=await context.newPage();
+    await context.addCookies([{name:'agentnet_ui',value:new URL(process.argv[2]).searchParams.get('t'),url:origin,httpOnly:true,sameSite:'Strict'}]);
+    await page.route(origin+'/back-*',r=>r.fulfill({contentType:'text/html',body:'<!doctype html><title>Legacy fixture</title>'}));
+    if(!direct)await page.goto(origin+'/back-earlier');
+    await page.goto(origin+'/back-legacy');
+    if(direct){const session=await context.newCDPSession(page);await session.send('Page.resetNavigationHistory');await session.detach();}
+    await page.evaluate(()=>history.pushState({agentnetBack:'agentnet-back-legacy'},'',location.href));
+    await page.reload();
+    await page.evaluate(async()=>{const {browserBackNavigation}=await import('/assets/browser-back.mjs');window.layers=1;window.calls=0;browserBackNavigation()(()=>{calls++;if(layers){layers--;return true;}return false;});});
+    await page.goBack();await page.waitForFunction(()=>calls===1&&layers===0);
+    return {context,page};
+   };
+   const left=await legacy(false);
+   await left.page.goBack({waitUntil:'commit'}).catch(()=>{});await left.page.waitForURL(origin+'/back-earlier');await left.context.close();
+   const stayed=await legacy(true);
+   await stayed.page.goBack();await stayed.page.waitForFunction(()=>calls===2);await stayed.page.waitForTimeout(1200);
+   await stayed.page.evaluate(()=>{layers=1;});await stayed.page.goBack();await stayed.page.waitForFunction(()=>calls===3&&layers===0);await stayed.context.close();
+   console.log(JSON.stringify({legacy:'leaves past unmarked entries; a direct tab keeps handling Back'}));
+  }
   console.log('browser Back PASS');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});
