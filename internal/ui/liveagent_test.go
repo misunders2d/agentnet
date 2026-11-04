@@ -76,6 +76,7 @@ func TestLiveAgentsInDMs(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		s = storedSend(t, pb, conv, s)
 		if shared == "" {
 			shared = s.ID
 		} else {
@@ -589,6 +590,7 @@ func TestLiveReminders(t *testing.T) {
 		return err == nil && len(d.Messages) == 1 && terr == nil
 	})
 	mine, _ := pb.SendDM(DMDraft{Conv: conv, Body: "my own"})
+	mine = storedSend(t, pb, conv, mine)
 	before, _ := pb.DM(conv) // bob's own turn answered the held question (BUG-24): it is no longer held
 
 	o, _ := pb.Overview()
@@ -740,6 +742,7 @@ func TestLiveFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	sent = storedSend(t, pb, conv, sent)
 	if len(pb.staged.files) != 0 {
 		t.Fatalf("a sent file is still staged: %v", pb.staged.files)
 	}

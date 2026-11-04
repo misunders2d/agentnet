@@ -207,6 +207,7 @@ func TestOverviewKeptSummariesMatchAFreshRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	sent = storedSend(t, live, conv, sent)
 	w.see("a sent message", func(o Overview) bool { return w.chat(o, conv).Last == "outbound one" })
 	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(50 * time.Millisecond) {
 		thread, err = live.DM(conv)

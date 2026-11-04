@@ -303,3 +303,30 @@ func TestARefusedMessageStaysInItsPlace(t *testing.T) {
 		t.Fatalf("repeat made %d rows", len(rows))
 	}
 }
+
+// storedSend waits for an accepted message to be stored for sending and answers
+// with it as stored. SendDM stays 250 ms to hear the first attempt; past that it
+// answers with the queued row's id, which the page follows by LID, and a slower
+// or race-built run gets that answer too. A test that goes on to act on the stored
+// message waits for it here, as the page does; the 250 ms path itself is unchanged.
+func storedSend(t *testing.T, l *Live, conv string, sent Sent) Sent {
+	t.Helper()
+	if sent.LID == "" {
+		t.Fatalf("send has no LID: %+v", sent)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		copies, err := l.a.SentCopies(sent.LID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(copies) > 0 {
+			sent.ID, sent.State = copies[0].ID, copies[0].State
+			return sent
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("message %s in %s was not stored: %+v", sent.LID, conv, queuedRowsOf(t, l, conv, sent.LID))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}

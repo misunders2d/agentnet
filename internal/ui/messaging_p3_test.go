@@ -140,6 +140,7 @@ func TestLiveP3MessageFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	parent = storedSend(t, live, conv, parent)
 	_, err = live.SendDM(DMDraft{Conv: conv, Body: "explicit reply", ReplyTo: parent.ID, Quote: parent.ID})
 	if err != nil {
 		t.Fatal(err)

@@ -66,6 +66,7 @@ func TestLiveUnreadScopeCounts(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		sent = storedSend(t, live, conv, sent)
 		ids[topic] = append(ids[topic], sent.ID)
 	}
 	// Finish the independent queued sender before taking attention snapshots.
@@ -137,6 +138,7 @@ func TestLiveDeliberateUnreadHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	sent = storedSend(t, live, conv, sent)
 	var server *Server
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { server.Handler().ServeHTTP(w, r) }))
 	t.Cleanup(ts.Close)
