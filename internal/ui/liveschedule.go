@@ -84,10 +84,11 @@ func (l *Live) ChangeSchedule(ctx context.Context, what string, d ScheduleDraft)
 		if !protocol.ValidID(d.ID) {
 			return client.ScheduledSend{}, Refuse("Choose the exact message.")
 		}
-		row, err := l.a.RetryQueuedSend(d.ID)
+		act := l.a.RetryQueuedSend
 		if what == "discard_send" {
-			row, err = l.a.DiscardQueuedSend(d.ID)
+			act = l.a.DiscardQueuedSend
 		}
+		row, err := act(d.ID)
 		if err != nil {
 			return row, Refuse(sentence(err))
 		}

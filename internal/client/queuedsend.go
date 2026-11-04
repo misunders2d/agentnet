@@ -253,16 +253,6 @@ func (a *Agent) DiscardQueuedSend(id string) (ScheduledSend, error) {
 	return ScheduledSend{ID: id, State: ScheduledCancelled, Immediate: true}, nil
 }
 
-// DropQueuedRefusal removes a stopped message whose refusal the caller reports
-// to the person instead; the same id may then be sent again.
-func (a *Agent) DropQueuedRefusal(id string) error {
-	_, err := a.store.db.Exec(`DELETE FROM scheduled_sends WHERE id=? AND immediate=1 AND state='needs_review'`, id)
-	if err == nil {
-		a.store.changed()
-	}
-	return err
-}
-
 // QueuedSends lists messages accepted here and not yet stored for sending, in
 // one conversation (or its recovered family) oldest first, for its view.
 func (a *Agent) QueuedSends(conv string) ([]ScheduledSend, error) {

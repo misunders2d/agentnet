@@ -33,6 +33,7 @@ type Live struct {
 	overviews      map[bool]cachedOverview
 	chats          map[string]*chatEntry  // each chat's list row (overviewMu; livedm.go)
 	viewMark       int64                  // writes up to here are reflected in chats (overviewMu)
+	dirtyKeys      []string               // read since viewMark moved, not yet applied to chats
 	unreadChats    map[string][]UnreadRow // each chat's unread rows (unreadMu)
 	unreadChatMark int64                  // view_dirty read so far for unreadChats (unreadMu)
 	viewCachesOff  bool                   // the fresh build overviewOracle compares with (overviewMu)

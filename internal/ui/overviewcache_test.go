@@ -190,6 +190,18 @@ func TestOverviewKeptSummariesMatchAFreshRead(t *testing.T) {
 	}
 	w.see("a read mark", func(o Overview) bool { return w.chat(o, conv).Unread == 0 })
 
+	// A build that fails after reading the marks: what they named is still read
+	// again by the next one, or cleared attention would come back.
+	before := chatBuildCount(conv)
+	w.exec(`UPDATE conversations SET pinned_at=pinned_at WHERE id=?`, conv)
+	live.overviewMu.Lock()
+	err = live.viewDirty()
+	live.overviewMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.see("a failed build's marks", func(Overview) bool { return chatBuildCount(conv) > before })
+
 	// A delivery change: bob's own message, then its receipt.
 	sent, err := live.SendDM(DMDraft{Conv: conv, Body: "outbound one"})
 	if err != nil {

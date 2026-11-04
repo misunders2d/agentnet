@@ -60,15 +60,14 @@ func (l *Live) dmOverview(o *Overview, unread *[]UnreadRow, mutes map[string]boo
 			o.People = append(o.People, PersonView{Label: p.Label, Email: p.Email, Picture: p.Picture, PictureURL: pictureURL(p.Picture), Address: p.Address, State: PersonListed, Devices: deviceViews(p.Devices)})
 		}
 	}
-	dirty, err := l.viewDirty() // before anything of a chat is read
-	if err != nil {
+	if err := l.viewDirty(); err != nil { // before anything of a chat is read
 		return err
 	}
 	convs, err := l.a.MessagingConversations()
 	if err != nil {
 		return err
 	}
-	chats := l.keptChats(dirty, convs)
+	chats := l.keptChats(convs)
 	// The agents each person's device runs in DMs here, from the
 	// participations as resolved (the host's person and device).
 	links := map[string][]AgentLink{}
@@ -203,24 +202,25 @@ func (e *chatEntry) applyTo(s *DMSummary, c client.ConversationInfo) {
 	}
 }
 
-// viewDirty reads what was written since the last list build, or nil with the
-// caches off. Called before anything it may mark is read.
-func (l *Live) viewDirty() ([]string, error) {
+// viewDirty collects what was written since the last list build. The keys wait
+// for keptChats, so a build failing before then loses none of them. Called before
+// anything they may mark is read.
+func (l *Live) viewDirty() error {
 	if l.viewCachesOff {
-		return nil, nil
+		return nil
 	}
 	keys, next, err := l.a.ViewDirtySince(l.viewMark)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	l.viewMark = next
-	return keys, nil
+	l.viewMark, l.dirtyKeys = next, append(l.dirtyKeys, keys...)
+	return nil
 }
 
 // keptChats are the list rows still current. A write to a chat not listed may be
 // one of a listed chat's earlier conversations (client personcontinuity.go), so
 // it, like "*", reads every chat again; that costs only the read.
-func (l *Live) keptChats(dirty []string, convs []client.ConversationInfo) map[string]*chatEntry {
+func (l *Live) keptChats(convs []client.ConversationInfo) map[string]*chatEntry {
 	if l.viewCachesOff {
 		return map[string]*chatEntry{}
 	}
@@ -234,7 +234,9 @@ func (l *Live) keptChats(dirty []string, convs []client.ConversationInfo) map[st
 			kept[conv] = e
 		}
 	}
-	l.chats = nil // until this build completes: its marks are read, and it may fail
+	l.chats = nil // until this build completes: its marks are used now, and it may fail
+	dirty := l.dirtyKeys
+	l.dirtyKeys = nil
 	for _, key := range dirty {
 		if key == "h" {
 			l.historyDirty = true
@@ -755,16 +757,11 @@ func (l *Live) queueDM(d DMDraft, body string, files []client.OutgoingFile) (Sen
 	if res.Sent != nil {
 		return Sent{LID: res.Sent.LID, ID: res.Sent.ID, State: res.Sent.State, Detail: res.Sent.Detail}, true, nil
 	}
-	if res.AttemptErr != nil && res.Row.State == client.ScheduledNeedsReview {
-		// Refused while the person is still here: say so now and hand the text
-		// back, instead of leaving a stopped row for something they just did.
-		if e := l.a.DropQueuedRefusal(id); e != nil {
-			return Sent{}, true, e
-		}
-		if errors.Is(res.AttemptErr, client.ErrScheduledAudience) {
-			return Sent{}, true, Refuse("The people in this chat changed. Check them and send again.")
-		}
-		return Sent{}, true, Refuse(sentence(res.AttemptErr))
+	if res.Row.State == client.ScheduledNeedsReview {
+		// A refused message keeps its place with its words, Retry and Discard, as
+		// a later failure does (TDLib fail_send_message): its text is safe if this
+		// answer is lost, which handing it back to the composer could not promise.
+		return Sent{LID: id, ID: id, State: "failed", Detail: res.Row.Detail}, true, nil
 	}
 	return Sent{LID: id, ID: id, State: "queued", Detail: res.Row.Detail}, true, nil
 }
