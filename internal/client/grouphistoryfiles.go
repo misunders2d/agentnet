@@ -280,9 +280,11 @@ func (a *Agent) admitGroupFile(ctx context.Context, env envelope.Envelope, in en
 	if !sameGroupRoot(root, packet.Root) {
 		return hold(reasonInvalid, "group: file root differs")
 	}
-	for _, member := range packet.State.Members {
-		if _, err = a.refreshPerson(ctx, member.Person, false); err != nil {
-			return err
+	for _, e := range a.refreshAdmitting(ctx, groupMemberPersons(packet.State.Members)) {
+		if errors.Is(e, errChainWaits) {
+			return hold(reasonProof, e.Error())
+		} else if e != nil {
+			return e
 		}
 	}
 	check := func(q dbq) error {

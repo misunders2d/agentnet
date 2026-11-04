@@ -1,6 +1,7 @@
 package client
 
 import (
+	"encoding/json"
 	"net/http"
 	"slices"
 	"strings"
@@ -84,6 +85,49 @@ func TestHeldChainRequestStopsNoLaterMessage(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatal("held turns were never looked at again")
 		}
+	}
+}
+
+// A history file carrier and a participation history row checked each member's
+// chain the same way, on the same goroutine.
+func TestHeldChainRequestHoldsGroupHistoryCarriers(t *testing.T) {
+	w, _, p, _ := groupTurnsFixture(t)
+	var hold atomic.Bool
+	hold.Store(true)
+	defer hold.Store(false)
+	w.hub.SetHold(func(r *http.Request) {
+		if bobAsksChain(w, r) {
+			for hold.Load() {
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+	})
+	defer w.hub.SetHold(nil)
+	index, size := 0, int64(1)
+	body, err := json.Marshal(fileMsg{V: 1, Type: "request", LID: protocol.NewID(), Author: w.alice.Self().Fingerprint(), Hash: strings.Repeat("a", 64), SHA256: strings.Repeat("b", 64), Index: &index, Name: "file.bin", Size: &size})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := envelope.Inner{Conv: p.State.Conv, Replica: true, Body: string(body)}
+	for name, admit := range map[string]func(func(string, string) error) error{
+		"history file": func(h func(string, string) error) error {
+			return w.bob.admitGroupFile(tctx(t), envelope.Envelope{ID: protocol.NewID()}, in, p.Root, w.alice.Self(), false, h)
+		},
+		"participation history": func(h func(string, string) error) error {
+			return w.bob.admitGroupParticipationHistory(tctx(t), envelope.Envelope{ID: protocol.NewID()}, in, p.Root, w.alice.Self(), HistoryItem{}, false, h)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			reason := ""
+			started := time.Now()
+			err := admit(func(r, _ string) error { reason = r; return nil })
+			if err != nil || reason != reasonProof {
+				t.Fatalf("not held for its proof: reason %q err %v", reason, err)
+			}
+			if took := time.Since(started); took > admitChainBudget+3*time.Second {
+				t.Fatalf("the stream's reader waited %v behind a held chain request", took)
+			}
+		})
 	}
 }
 

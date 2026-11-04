@@ -42,6 +42,7 @@ func init() {
 
 func TestMain(m *testing.M) {
 	code := m.Run()
+	fmt.Fprintf(os.Stderr, "overview cache: %d kept lists equal a fresh read\n", overviewCompared.Load())
 	if n := overviewDiffered.Load(); n > 0 {
 		fmt.Fprintf(os.Stderr, "overview cache: %d kept lists differed from a fresh read\n", n)
 		code = 1
