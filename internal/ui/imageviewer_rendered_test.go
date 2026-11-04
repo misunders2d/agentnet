@@ -111,6 +111,9 @@ func TestImageViewerRendered(t *testing.T) {
 	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
 		t.Skip("opt-in: set AGENTNET_PLAYWRIGHT to installed Playwright")
 	}
+	if os.Getenv("AGENTNET_SCREENSHOTS") == "" { // the check writes its evidence there
+		t.Setenv("AGENTNET_SCREENSHOTS", t.TempDir())
+	}
 	f := &imageViewerFixture{imageOpenFixture: &imageOpenFixture{pictureFixture: newPictureFixture()}}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
