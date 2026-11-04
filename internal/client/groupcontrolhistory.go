@@ -279,9 +279,11 @@ func (a *Agent) admitGroupControlHistory(ctx context.Context, env envelope.Envel
 	if err != nil {
 		return hold(reasonProof, err.Error())
 	}
-	for _, member := range packet.State.Members {
-		if _, err = a.refreshPerson(ctx, member.Person, false); err != nil {
-			return err
+	for _, e := range a.refreshAdmitting(ctx, groupMemberPersons(packet.State.Members)) {
+		if errors.Is(e, errChainWaits) {
+			return hold(reasonProof, e.Error())
+		} else if e != nil {
+			return e
 		}
 	}
 	check := func(q dbq) error { return a.groupControlHistoryCheck(q, root, sender, item) }

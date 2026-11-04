@@ -64,6 +64,8 @@ type convWork struct {
 	historyDeferred map[string]historyDeferredScan
 	recipients      recipientDiscovery
 	retried         atomic.Int64 // unix time the last full look at held messages began
+	chainMu         sync.Mutex
+	chainWaits      map[string]chainWait // rosters a received message could not get (chainMu)
 	// readerWait: own-device history produced nothing for a device that
 	// cannot read it now (or is suspended); the next member list, which
 	// says when that device reconnects or updates, looks again.
@@ -1441,6 +1443,8 @@ func (a *Agent) retryProof(ctx context.Context) (more bool) {
 func holdForPerson(err error, hold func(string, string) error) error {
 	var he *HubError
 	switch {
+	case errors.Is(err, errChainWaits):
+		return hold(reasonProof, err.Error())
 	case errors.Is(err, errPersonClaimFrozen):
 		return hold(reasonProof, err.Error()) // looked at again once the claim settles (MEL-747)
 	case errors.Is(err, errPersonConflict):
@@ -1449,6 +1453,99 @@ func holdForPerson(err error, hold func(string, string) error) error {
 		return hold(reasonProof, err.Error())
 	}
 	return err
+}
+
+// errChainWaits: a message's admission needs a person's roster, and the relay
+// did not answer in time. Nothing was decided about the message: it waits as
+// held evidence and is looked at again.
+var errChainWaits = errors.New("waiting for a member's roster")
+
+const (
+	// admitChainBudget bounds what a received message waits for rosters.
+	// Messages are admitted on the one goroutine reading the push stream, so a
+	// request waited on here also holds every later message and ping.
+	admitChainBudget = 3 * time.Second
+	// A roster that did not come is asked for again after 1 s, doubling while
+	// it keeps failing (the owner's retry rule, AGENTS.md "No polling").
+	chainWaitFirst = time.Second
+	chainWaitMax   = 45 * time.Second
+)
+
+type chainWait struct {
+	until time.Time
+	delay time.Duration
+}
+
+func (w *convWork) chainWaiting(person string) bool {
+	w.chainMu.Lock()
+	defer w.chainMu.Unlock()
+	return time.Now().Before(w.chainWaits[person].until)
+}
+
+func (w *convWork) chainFailed(person string) time.Duration {
+	w.chainMu.Lock()
+	defer w.chainMu.Unlock()
+	if w.chainWaits == nil {
+		w.chainWaits = map[string]chainWait{}
+	}
+	delay := min(2*w.chainWaits[person].delay, chainWaitMax)
+	if delay == 0 {
+		delay = chainWaitFirst
+	}
+	w.chainWaits[person] = chainWait{time.Now().Add(delay), delay}
+	return delay
+}
+
+// chainAnswered reports whether a message may have been waiting for person.
+func (w *convWork) chainAnswered(person string) bool {
+	w.chainMu.Lock()
+	defer w.chainMu.Unlock()
+	_, waited := w.chainWaits[person]
+	delete(w.chainWaits, person)
+	return waited
+}
+
+// refreshAdmitting is refreshPerson for a received message and each of persons:
+// together, and within admitChainBudget. A roster the relay does not deliver in
+// time makes the message wait held rather than stop the stream. While a person's
+// roster keeps failing, later messages wait without asking again, so a stalled
+// relay costs the stream the budget once per retry, not once per message. The
+// answer still comes from the relay for every message otherwise: a message
+// posted after a roster step is checked against that step.
+func (a *Agent) refreshAdmitting(ctx context.Context, persons []string) []error {
+	errs := make([]error, len(persons))
+	bounded, cancel := context.WithTimeout(ctx, admitChainBudget)
+	defer cancel()
+	var wg sync.WaitGroup
+	for i, person := range persons {
+		if a.convWork.chainWaiting(person) {
+			errs[i] = errChainWaits
+			continue
+		}
+		wg.Go(func() {
+			_, err := a.refreshPerson(bounded, person, false)
+			if err != nil && ctx.Err() == nil && transient(err) {
+				time.AfterFunc(a.convWork.chainFailed(person), func() {
+					// Due when it fires, not now: a look before then, with this
+					// person still waiting, would use the work up.
+					a.convWork.due(convPersons | convRetry)
+					a.kickNow()
+				})
+				err = errChainWaits
+			}
+			errs[i] = err
+		})
+	}
+	wg.Wait()
+	return errs
+}
+
+func groupMemberPersons(members []protocol.GroupMember) []string {
+	persons := make([]string, 0, len(members))
+	for _, m := range members {
+		persons = append(persons, m.Person)
+	}
+	return persons
 }
 
 // holdForMember is holdForPerson for a group member's person record that a

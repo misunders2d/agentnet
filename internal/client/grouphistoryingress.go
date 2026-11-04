@@ -92,9 +92,11 @@ func (a *Agent) admitGroupHistory(ctx context.Context, env envelope.Envelope, in
 	if err != nil {
 		return hold(reasonProof, err.Error())
 	}
-	for _, m := range packet.State.Members {
-		if _, err = a.refreshPerson(ctx, m.Person, false); err != nil {
-			return err
+	for _, e := range a.refreshAdmitting(ctx, groupMemberPersons(packet.State.Members)) {
+		if errors.Is(e, errChainWaits) {
+			return hold(reasonProof, e.Error())
+		} else if e != nil {
+			return e
 		}
 	}
 	check := func(q dbq) error { return a.groupHistoryReceiveCheck(q, root, sender, item) }
