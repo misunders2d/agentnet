@@ -117,7 +117,7 @@ try {
  }
  if(p1==='bulk')for(const [i,t]of view.topics.entries())Object.assign(t,{state:'active',title:'Portable bulk '+(i+1),renamed:true,count:1});
 
- let held,release,typing=false,seq=100,reactionFailure=false,unreadHold=null,unreadFailure=false;let chatDeleteHold=null,chatDeleteFailure=false;
+ let held,release,typing=false,seq=100,reactionFailure=false,unreadHold=null,unreadFailure=false;let chatDeleteHold=null,chatDeleteFailure=false,chatDeleteRefusals=0,chatDeleteWaiting=0;
  let typingPreferences={send:false,show:true};
  const counts={overview:0,dm:0,typing:0,catalogs:0},listeners=new Set();
  const emit=hint=>{seq++;for(const fn of listeners)fn({type:'change',seq,...(hint?{hint}:{})});};
@@ -216,7 +216,7 @@ try {
     if(body?.do==='read'){for(const m of view.messages)if(body.ids?.includes(m.id))m.unread=false;overview.dms[0].unread=view.messages.filter(m=>m.unread).length;view.main_topic={unread:overview.dms[0].unread};emit();}
     return {};
    }
-   if(path==='/api/conversation/delete'){if(chatDeleteHold)await chatDeleteHold;await pause(100);if(chatDeleteFailure)throw Error('Synthetic delete refusal');overview.dms=overview.dms.filter(d=>d.id!==body.conv);seq++;emit();return{note:''};}
+   if(path==='/api/conversation/delete'){if(chatDeleteHold){chatDeleteWaiting++;await chatDeleteHold;}await pause(100);if(chatDeleteFailure){chatDeleteRefusals++;throw Error('Synthetic delete refusal');}overview.dms=overview.dms.filter(d=>d.id!==body.conv);seq++;emit();return{note:''};}
    if(path==='/api/refresh')return {};
    if(path.startsWith('/api/agents')){counts.catalogs++;return{host:overview.me.address,local:true,agents:[],sessions:[]};}
    if(path==='/api/responder')return{manual:true,harness:'',dir:'',available:[],setup:{tools:[]}};
@@ -359,7 +359,11 @@ try {
   const workingNotice=()=>scope().querySelector('[data-working]');await until(workingNotice,'working notice while the server is silent',1500);
   // A message arriving meanwhile brings the chat back: only what was deleted stays hidden.
   Object.assign(overview.dms.find(d=>d.id===view.id),{last_at:new Date().toISOString(),last_id:'f'.repeat(32)});seq++;emit();await until(chatRow,'newer message brings the chat back during the delete',3000);
-  chatDeleteHold=null;releaseChatDelete();await until(()=>!overview.dms.some(d=>d.title==='Vitalii'||d.id===view.id),'chat delete confirmed');await pause(50);assert(!chatRow(),'confirmed delete brought the chat back');await until(()=>!workingNotice(),'working notice gone once answered',1500);
+  // Deleting what came back keeps it hidden even when the first delete is then refused.
+  await until(()=>chatDeleteWaiting===1,'first delete at the server',3000);chatRow().click();await until(()=>onScreen(row()),'chat that came back opens',3000);let releaseSecondDelete;chatDeleteHold=new Promise(r=>releaseSecondDelete=r);confirmChat=await askDeleteChat();
+  await measure('chat.delete-again',()=>[...confirmChat.querySelectorAll('button')].find(b=>label(b)==='Delete').click(),()=>!chatRow()&&!onScreen(row()),'chat that came back leaves again with both answers held');
+  await until(()=>chatDeleteWaiting===2,'second delete at the server',3000);chatDeleteRefusals=0;chatDeleteFailure=true;releaseChatDelete();await until(()=>chatDeleteRefusals===1,'first delete refused',3000);await pause(150);assert(!chatRow()&&!onScreen(row()),'a refused first delete brought back the chat a later delete is removing');chatDeleteFailure=false;
+  chatDeleteHold=null;releaseSecondDelete();await until(()=>!overview.dms.some(d=>d.title==='Vitalii'||d.id===view.id),'chat delete confirmed');await pause(50);assert(!chatRow(),'confirmed delete brought the chat back');await until(()=>!workingNotice(),'working notice gone once answered',1500);
  }
  if(suite==='history'){
  const messageReady=()=>[...root.querySelectorAll('[data-part="message"]')].some(onScreen);

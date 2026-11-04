@@ -2451,16 +2451,19 @@ export class Store {
   async deleteChat(id: string, ref: Parameters<Api["deleteConversation"]>[0]) {
     const open = this.state.open, o = this.state.overview;
     const summary = o?.dms?.find(d => d.id === id) || o?.threads?.find(t => t.id === id) || o?.topics?.find(t => t.latest.id === id)?.latest;
-    this.deletingChats.set(id, summary ? this.chatStamp(summary) : "");
+    const stamp = summary ? this.chatStamp(summary) : "";
+    this.deletingChats.set(id, stamp);
     this.publishReads();
     this.close();
     const result = await this.run(a => a.deleteConversation(ref));
     if (result) await this.refetch();
-    this.deletingChats.delete(id);
+    // A later delete of what came back meanwhile keeps its own hold.
+    const latest = this.deletingChats.get(id) === stamp;
+    if (latest) this.deletingChats.delete(id);
     this.publishReads();
     if (!this.alive) return;
     if (result?.note) this.toast(result.note, "ok");
-    if (!result && open && !this.state.open && !this.state.pending) void this.open(open);
+    if (latest && !result && open && !this.state.open && !this.state.pending) void this.open(open);
   }
 
   // run performs one action and reports its failure in words; the change

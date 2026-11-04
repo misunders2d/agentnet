@@ -478,7 +478,7 @@
       routeNotice.replaceChildren();routeNotice.hidden=!words;
       if(words){routeNotice.append(text('span',words));if(action)routeNotice.append(button(action,()=>go(HOME,fragment)));routeNotice.append(button('Dismiss',()=>notice('')));}
     };
-    const clear = () => history.replaceState(null, "", location.pathname + location.search);
+    const clear = () => history.replaceState(history.state, "", location.pathname + location.search);
     let linkSequence=0;
     openPortable = async (value) => {
       const sequence=++linkSequence, previous=shell?.active;
