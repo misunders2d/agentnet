@@ -623,8 +623,18 @@ func (a *Agent) Participations(conv string) ([]ParticipationInfo, error) {
 		return nil, err
 	}
 	out := make([]ParticipationInfo, 0, len(pids))
+	if len(pids) == 0 {
+		return out, nil
+	}
+	// One read of the members for the whole list: every participation here
+	// resolves against the same state, and a chat with many records does not
+	// parse its rosters once per record.
+	m, err := a.dmMembers(conv)
+	if err != nil {
+		return nil, err
+	}
 	for _, pid := range pids {
-		info, err := a.participation(conv, pid)
+		info, err := participationIn(a.store.db, conv, pid, m, a.Address)
 		if err != nil {
 			return nil, err
 		}
