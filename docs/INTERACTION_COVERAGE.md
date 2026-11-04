@@ -37,6 +37,12 @@ proposal lookups scanned a whole table per row.
 | Task and proposal lookups use indexes | `356fc795` `60a5c9a7` | `TestProposalLookupsFindTheirRowsByIndex` |
 | "Mark unread" is refused only for a write to its own chat | `60a5c9a7` | `TestAttentionScopeMovesOnlyWithItsOwnChat` |
 | Reactions, edits and deletes do not wait on a stalled request | `4151cbe5` | `TestLiveControlsAcceptThroughAStalledRequest`: 2–13 ms |
+| Discard no longer retries first; a refused message keeps its place; a failed list build keeps its marks | `cfc63a4c` | `TestDiscardingAStoppedMessageDoesNotRetryIt`, `TestARefusedMessageStaysInItsPlace`, failed-build step in `TestOverviewKeptSummariesMatchAFreshRead` |
+| A group reaction or new chat naming a newer roster step waits without stopping the stream | `391812ad` | `TestHeldChainRequestHoldsAGroupReaction`, `TestHeldChainRequestHoldsANewChatNamingANewerStep` |
+| A refusal and a lost request read differently on every host, so a lost request is never told to retype | `4e6aba4b` | `TestP12SendRendered`, `TestMenuOfflineRendered`, `queued_send_check.mjs` |
+| Mark unread shows before the server answers | `e7288625` | `unread.mark`, `unread.mark-refused` in `TestUIResponsivenessRendered`; failed without the fix |
+| Outbox rows act at once and alone; a deleted chat leaves first; any other write unanswered after 600 ms says so | `b5a81f26` | `TestUIResponsivenessRendered` slow-write pass, `chat.delete`, `chat.delete-refused`; failed without the fix |
+| A pending delete does not hide a newer message; unread marks add up and clear alone; a failed list refresh keeps the result | `e66237be` | `chat.delete`, `unread.mark-second`, `unread.mark-third-refused`, `outbox.schedule-cancel`; each failed without the fix |
 
 **Measured, input to result on the native route: no HTTP and no rendering.**
 ThinkPad at `d013bf5b`, real disk (btrfs on LUKS), a read-only copy of its store,
@@ -74,18 +80,97 @@ stall. Live arrival on the ThinkPad was 6–10 s on November 4 against at most 3
 November 2, during catch-up on v0.10.9; the candidate's fixes address that path,
 and live arrival on the candidate is not yet measured.
 
-**Not met or not shown.** At 10x, opening a chat and the first list exceed one
-second for the confirmed result, as does the first list at current size on a
-loaded machine. These are confirmed results; rendered local feedback at 10x is
-not measured. Fetch paging or a saved first page would be needed: proposals, not
-in this candidate. Other gaps: `invites` asks for sign-in synchronously, so it
-fails with no network; 49 UI actions still wait on the network inside the
-request (local pending state not yet shown for each); chain failure with no newer
-step can leave a message waiting up to 45 s; forwarded group context still asks
-rosters one by one on the stream reader; the freeze's lane demotion and
-foreground continuity lock remain open. Rendered tests with invented data do not
-exercise the native list: CI's 36 compared none. Live and browser tests compared
-148 kept lists with a fresh read, 0 differed; real data 7, 0 differed.
+**Rendered on a real store copy.** Comic at 1440×960 in Chromium on the Zenbook,
+real `Live` over a private copy of the owner's store on tmpfs, no network, build
+`e7288625`. "Busy" is a catch-up sweep running throughout. Milliseconds, p50 / max.
+Sends cannot reach the Hub in that namespace, so confirmed network results are not
+measured here. The ThinkPad's rendered numbers are not measured.
+
+| Local feedback | Current, idle | Current, busy | 10x, idle | 10x, busy |
+|---|---:|---:|---:|---:|
+| First list visible (cold) | **2243** | **1261** | **8642** | **3238** |
+| Main tabs, worst of five | 121 / 267 | 150 / 193 | 204 / 207 | 205 / 227 |
+| Chat row selected | 167 / 308 | 149 / 502 | 125 / 349 | 173 / 561 |
+| Messages visible (a result, not local feedback) | 454 / 1120 | 549 / 1147 | 640 / 2590 | 1891 / **10747** |
+| Send row appears | 116 / 134 | 252 / 298 | 88 / 104 | 110 / 151 |
+| Composer cleared | 6 / 7 | 8 / 32 | 5 / 6 | 5 / 7 |
+| Message menu | 351 / 929 | 225 / 315 | 368 / 585 | 408 / 486 |
+| Mark unread | 118 / 198 | 138 / 154 | 125 / 125 | 145 / 145 |
+| Reaction picker | 141 / 370 | 98 / 138 | 77 / 92 | 91 / 110 |
+| Reaction shown | 79 / 236 | 151 / 178 | 102 / 107 | 108 / 131 |
+| Search, type and clear | 28–43 / 45 | 35 / 94 | 25–32 / 36 | 41–55 / 100 |
+
+The only local feedback over a second here is the cold first list. Each cycle ran
+two to four times, so these are not percentile evidence. Two misses in these runs
+came from the measurement. Mark unread reported "row stayed read" only when the
+open chat was already unread (`currentAlreadyUnread: true`), so its count could not
+rise. At 10x, a reused store copy kept 👍 from earlier runs, so the click removed
+it; with the check accepting removal, 6 of 6 passed. The per-row state was not
+logged, so that second cause is consistent with the result, not proven.
+
+**With every write held.** `AGENTNET_LATENCY_WRITE_DELAY` holds each write in the
+rendered harness and records each control's first change on screen.
+`TestUIResponsivenessRendered` now also runs `actions` and `outbox` this way, so
+this runs in CI. Before `b5a81f26`, Outbox Cancel, Send now and Save showed only a
+disabled button until the server answered, and chat delete showed nothing. After
+it, across all 16 suites at 1100 ms: 104 write controls, 0 silent. Of those, 34
+change at once but their check passes only when the mock server answers, so whether
+that first change is the intended one is not judged. The harness reached 48 of the
+84 API paths named in `api.ts`. The others have no measured control: the 600 ms
+notice is their only cover, proven on chat delete alone. This is a mocked host and
+proves nothing about database or sync contention. The survey ran on a fixture host:
+the first version of the notice crashed the real frozen host, which only
+`TestScheduleLiveRendered` showed.
+
+Counterpart for `b5a81f26`: Telegram Desktop `a8de5f92`,
+`window/window_connecting_widget.cpp` shows connection status only after a delay
+(`kConnectingStateDelay` 1000 ms). AgentNet's 600 ms is shorter to stay under the
+gate. TDLib `4c6377aa`, `MessagesManager.cpp:8613` `delete_dialog_history`, removes
+the messages locally before `delete_dialog_history_on_server`, and a later message
+brings the chat back.
+
+**Not met or not shown.** The first list is over one second at current size and
+far over at 10x, with no saved first page to show meanwhile. At 10x under sync,
+opening a chat took up to 10.7 s to show its messages, though the row selected
+within 561 ms. Fetch paging or a saved first page would be needed: proposals, not
+in this candidate. Rendered numbers on the ThinkPad and confirmed network results
+are not measured. Other gaps:
+
+- `invites` asks for sign-in synchronously, so it fails with no network.
+- 49 UI actions in `Live` still wait on the network inside the request. Their local
+  feedback is shown only where a control above measures it.
+- Selected reply receivers, `AskAgent`, `/api/send`, `/api/act` replies and
+  `/api/request/followup` stay synchronous under the 20 s budget.
+- Chain failure with no newer step can leave a message waiting up to 45 s.
+- Roster asks on the stream reader traced and not converted, full budget per ask:
+  `groupproof.go:411,422,514`, `groupparticipationstatus.go:99`,
+  `groupwithdrawaldelivery.go:443`, `groupwithdrawal.go:17`,
+  `participation_external.go:1310`, `modelreport.go:331`, `conv.go:1241`,
+  `daemon.go:739`, `persons.go:887`, `grouplifecycle.go:214,657`, `groups.go:78`.
+  The call graph is by name and over-approximates.
+- The freeze's lane demotion and foreground continuity lock remain open. Do not
+  read this candidate as fixing the freeze.
+- Every group message asks for one chain per member.
+- The browser engine's errors carry no status, so its refusals read "Not confirmed".
+  Standalone skins keep their own optimistic copy with no Discard on a `failed`
+  answer; the skins gate has not been run.
+- Rendered tests with invented data do not exercise the native list: CI's 36
+  compared none. Live and browser tests compared 148 kept lists with a fresh read, 0
+  differed; real data 15, 0 differed, with one history page error at 10x treated as
+  an artifact of duplicating rows, not shown otherwise.
+- Comparison cases not run: a writer between stamps, eviction, two concurrent
+  readers, delayed duplicate history against read and delete, family writes,
+  withdrawal and head changes beyond removal, topic moves, clock archive, last
+  message edit or delete in the comparison, Waiting and Held transitions, selected
+  receiver changes.
+
+**Inventory.** Comic has 939 inventory rows: 59 rendered, 17 fired by trusted
+input, 12 with a change asserted, 9 within bound, 15 failed, 769 not executed, 146
+unreachable. The runtime crawl trial on one state found 18 controls, 15 changed
+under one second, and bound 0 to inventory rows, because Chromium lacks
+`Debugger.getFunctionDetails` and the tagged bundle has no source map. It stopped
+there. This is not exhaustive. Crawl results do not replace database and sync
+evidence.
 
 ## MEL-741 / MEL-742 candidate — November 3, 2026
 
