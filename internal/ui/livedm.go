@@ -395,6 +395,12 @@ func (l *Live) DM(id string) (DMThread, error) {
 		if c.ID != id {
 			continue
 		}
+		// Before the messages: a send stored between the two reads is then seen
+		// twice and shown once, where the other order would lose it from this view.
+		queued, err := l.a.QueuedSends(id)
+		if err != nil {
+			return DMThread{}, err
+		}
 		msgs, err := l.a.MessagingConversationMessages(id)
 		if err != nil {
 			return DMThread{}, err
@@ -578,10 +584,6 @@ func (l *Live) DM(id string) (DMThread, error) {
 			t.Messages = append(t.Messages, dm)
 		}
 		linkReplies(msgs, t.Messages)
-		queued, err := l.a.QueuedSends(id)
-		if err != nil {
-			return DMThread{}, err
-		}
 		t.Messages = withQueuedSends(t.Messages, queued, l.a.Address)
 		t.Agents = l.agentViews(infos, people, msgs)
 		return t, nil
@@ -660,6 +662,9 @@ func (l *Live) queueDM(d DMDraft, body string, files []client.OutgoingFile) (Sen
 // one keeps it too (TDLib, MessagesManager.cpp at 4c6377aa: fail_send_message).
 func withQueuedSends(rows []DMMessage, queued []client.ScheduledSend, self string) []DMMessage {
 	for _, s := range queued {
+		if slices.ContainsFunc(rows, func(m DMMessage) bool { return m.Dir == "out" && m.LID == s.ID }) {
+			continue
+		}
 		m := DMMessage{ID: s.ID, LID: s.ID, Dir: "out", From: self, Kind: KindMessage, Body: s.Body, ReplyTo: s.ReplyTo, Quote: s.Quote,
 			Origin: envelope.OriginUI, Topic: s.Topic, PID: s.Audience.AuthorPID, At: s.Created, State: "queued", StateText: "Sending…", Detail: s.Detail,
 			QueuedSend: &QueuedSendView{State: s.State, Rev: s.Rev, Diagnostic: s.Diagnostic}}

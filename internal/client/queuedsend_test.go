@@ -524,6 +524,37 @@ func TestQueuedSendKeepsItsPlace(t *testing.T) {
 	}
 }
 
+// The incident's path: in a group, a message that waited out a stall stayed below
+// what arrived meanwhile. It keeps the place it took when accepted.
+func TestQueuedGroupSendKeepsItsPlace(t *testing.T) {
+	w, _, p, _ := groupTurnsFixture(t)
+	conv := p.State.Conv
+	w.alice.queued.budget = 100 * time.Millisecond
+	free := stallPersonChains(t, w, w.alice)
+	id := protocol.NewID()
+	if _, err := w.alice.QueueSend(ScheduledSendInput{ID: id, Conv: conv, Body: "written first"}, "", 0); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1100 * time.Millisecond) // a whole second apart: shown times differ
+	if _, err := w.bob.SendConv(tctx(t), conv, ConvOutgoing{Kind: envelope.KindMessage, Origin: envelope.OriginUI, Body: "arrived later"}); err != nil {
+		t.Fatal(err)
+	}
+	free()
+	eventually(t, "sent", func() bool { return queuedLIDCopies(t, w.alice, id) > 0 })
+	eventually(t, "received", func() bool { return w.alice.shows(t, conv, "arrived later") })
+	msgs, err := w.alice.MessagingConversationMessages(conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var order []string
+	for _, m := range msgs {
+		order = append(order, m.Body)
+	}
+	if got := strings.Join(order, " | "); !strings.Contains(got, "written first | arrived later") {
+		t.Fatalf("it moved below what arrived meanwhile: %s", got)
+	}
+}
+
 // Queued rows are the chat's, never schedules, and the deadline loop leaves them.
 func TestQueuedSendIsNotASchedule(t *testing.T) {
 	w, _, p, stops := groupTurnsFixture(t)

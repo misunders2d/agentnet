@@ -567,7 +567,11 @@ func (s *store) addConvOutboxGuarded(copies []outCopy, local envelope.Inner, cla
 		}
 	}
 	// A message accepted earlier keeps the place the person saw it take.
-	if accepted, e := queuedSendAccepted(tx, local.LID); e != nil {
+	lid := local.LID
+	if lid == "" && len(copies) > 0 { // a group turn's copies each carry it
+		lid = copies[0].in.LID
+	}
+	if accepted, e := queuedSendAccepted(tx, lid); e != nil {
 		return e
 	} else if !accepted.IsZero() {
 		now = accepted

@@ -180,3 +180,13 @@ func TestSentenceKeepsRequestTextOutAndStaysTrue(t *testing.T) {
 		t.Fatalf("a real reason lost: %q", got)
 	}
 }
+
+// A send stored between the thread's two reads is in both: one row, the stored one.
+func TestQueuedRowStoredMeanwhileIsShownOnce(t *testing.T) {
+	at := time.Now()
+	rows := []DMMessage{{ID: "copy", LID: "lid", Dir: "out", Body: "stored", At: at}}
+	got := withQueuedSends(rows, []client.ScheduledSend{{ID: "lid", Body: "stored", Created: at}, {ID: "other", Body: "waits", Created: at}}, "me")
+	if len(got) != 2 || got[0].ID != "copy" || got[1].ID != "other" {
+		t.Fatalf("rows: %+v", got)
+	}
+}
