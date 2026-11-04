@@ -43,7 +43,7 @@ proposal lookups scanned a whole table per row.
 | Mark unread shows before the server answers | `e7288625` | `unread.mark`, `unread.mark-refused` in `TestUIResponsivenessRendered`; failed without the fix |
 | Outbox rows act at once and alone; a deleted chat leaves first; any other write unanswered after 600 ms says so | `b5a81f26` | `TestUIResponsivenessRendered` slow-write pass, `chat.delete`, `chat.delete-refused`; failed without the fix |
 | A pending delete does not hide a newer message; unread marks add up and clear alone; a failed list refresh keeps the result | `e66237be` | `chat.delete`, `unread.mark-second`, `unread.mark-third-refused`, `outbox.schedule-cancel`; each failed without the fix |
-| A link or notification changing the page fragment is not Back, so it lands where it points; Back after it still reaches the open layer, also after Forward entries are cut and at history's cap (on base too) | `d3d62ac6`, final form `b13be097` | `TestComicNotificationLandingRendered`, `TestBrowserBackRendered` |
+| A link or notification changing the page fragment is not Back, so it lands where it points; Back after it still reaches the open layer, also after Forward entries are cut and at history's cap (on base too) | `d3d62ac6`, final form `b13be097` `1d4efabf` | `TestComicNotificationLandingRendered`, `TestBrowserBackRendered` |
 | A refused dismiss keeps the report list open with its retry (on base too) | `97a14cf4`, corrected in `b13be097` | `TestHeldPersonTurnRendered`; `TestAttentionReplyPendingRendered` and `TestResponsiveEditorDraftsRendered` caught that first version freezing the list when no parent owns its state |
 | Deleting a chat that came back keeps it hidden when the first delete answers | `b13be097` | `chat.delete-again` in `TestUIResponsivenessRendered` |
 
@@ -186,9 +186,18 @@ are not measured. Other gaps:
   message edit or delete in the comparison, Waiting and Held transitions, selected
   receiver changes.
 
+**Bounded runs at `e698f61e`, Zenbook, other work running, `nice`, one browser at a
+time.** CI's 36 in 408 s: 35 passed. `TestDeviceRemovalRendered` failed once at its own
+`feedbackMs<500` bound with load near 10, then passed 3 of 3 at the same load on the
+next commit; this is not qualification. The rendered tests outside CI's list, in 668 s:
+36 of 37 passed. `TestScheduleLiveRendered`, `TestUIResponsivenessRendered` with
+`actions,outbox` written held, the UI batch and the client send, stream and history
+batches passed. At `1d4efabf`, the only later change, `TestBrowserBackRendered` and
+`TestComicNotificationLandingRendered` passed.
+
 **Rendered tests outside CI's list.** CI names 36 rendered tests; no other rendered
 test runs there. Of the others, 34 failed on both this candidate and base `cabe5c3c`
-when first run. 33 now pass on single runs: 9 needed nothing more, 22 had stale
+when first run. 33 now pass, in one run at `e698f61e`: 9 needed nothing more, 22 had stale
 expectations repaired, and 2 found the real defects above. `TestComicSetupParityRendered`
 still fails on base and here, at wording changed by `9133893b`, and its later steps
 have not run. MEL-749 tracks it and CI's fixed list. Repairs dropped three checks:
