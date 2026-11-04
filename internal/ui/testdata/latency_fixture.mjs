@@ -14,8 +14,8 @@ globalThis.__anFiredControlIds=reports.firedControlIds;
 globalThis.__anTrustedApiCalls=reports.apiCalls;
 const pageError=e=>reports.pageErrors.push(String(e.message||e.reason||e).slice(0,1000));window.addEventListener('error',pageError);window.addEventListener('unhandledrejection',pageError);
 try {
- const query=new URL(location.href).searchParams,token=query.get('token'),trustedFile=query.get('trustedFile')||'',trustedID=query.get('trustedID')||'',trustedBackend=query.get('trustedBackend')||'';
- const trustedCheckpoint=async(name,path)=>{if(query.get('trusted')!=='1')return false;reports.trusted_checkpoint=name;reports.trusted_state_path=path;window.__agentnetTrustedCheckpoint={name,file:trustedFile,control_id:trustedID,state_path:path};await new Promise(resolve=>{window.__agentnetTrustedResume=resolve;});reports.trusted_interactions=window.__anTrustedInteractions||[];return true;};
+ const query=new URL(location.href).searchParams,token=query.get('token'),trustedFile=query.get('trustedFile')||'',trustedID=query.get('trustedID')||'',trustedBackend=query.get('runtimeWide')==='1'?'':query.get('trustedBackend')||'';
+ const trustedCheckpoint=async(name,path)=>{if(query.get('runtimeWide')==='1')path=`${suite}/${p1||'baseline'}/${path}`;if(query.get('runtimeWide')==='1')(window.__runtimeStates||=[]).push(path);if(query.get('trusted')!=='1')return false;if(query.get('runtimeWide')==='1'&&query.get('runtimeState')!==path)return false;reports.trusted_checkpoint=name;reports.trusted_state_path=path;window.__agentnetTrustedCheckpoint={name,file:trustedFile,control_id:trustedID,state_path:path};await new Promise(resolve=>{window.__agentnetTrustedResume=resolve;});reports.trusted_interactions=window.__anTrustedInteractions||[];return true;};
  const paintDiagnostic=query.get('paintDiagnostic')||'';assert(['','baseline','motion','flat','no-background','no-shadow','no-radius','no-filter','no-scrim'].includes(paintDiagnostic),'Invalid paint diagnostic');if(paintDiagnostic)reports.paintDiagnostic=paintDiagnostic;
  const suite=window.__agentnetLatencySuite||query.get('suite')||'history',teamsPart=query.get('teamsPart')||'';assert(!teamsPart||suite==='teams'&&['list','group'].includes(teamsPart),'Invalid Teams page partition');reports.suite=suite;if(teamsPart)reports.teamsPart=teamsPart;reports.portableVector=p1;const extraSuites=['topics','groups','compose','media','review','outbox','agents','teams','profile','storage','workspaces','permissions'];const extended=extraSuites.includes(suite);assert(['history','navigation','settings','unread','actions',...extraSuites].includes(suite),'Unknown timing workload');
  if(token)await fetch('/?t='+encodeURIComponent(token));
@@ -33,7 +33,7 @@ try {
  const peers=Array.from({length:peopleCount},(_,i)=>({person:'fixture-person-'+i,label:'Person '+i,address:'fixture-'+i+'/laptop',state:'pinned',devices:[{address:'fixture-'+i+'/laptop',name:'Laptop',human:true}]}));
  overview.people=[...overview.people,...peers];overview.directory={status:'listed',members:peers.map(p=>({address:p.address,presence:'connected',joined:1}))};
  view.messages=Array.from({length:400},(_,i)=>({id:(i+1).toString(16).padStart(32,'0'),lid:(i+1).toString(16).padStart(32,'0'),dir:i%2?'out':'in',from:i%2?overview.me.address:view.peer.address,kind:'message',body:'Retained message '+(i+1),state:'delivered',delivery:'delivered',origin:'ui',at:new Date(Date.now()-(400-i)*1000).toISOString(),can:[],actions:[],reactions:[],unread:false}));
- if(trustedFile==='Approvals.card.tsx'&&suite==='actions')view.messages.push({id:'a'.repeat(32),lid:'a'.repeat(32),dir:'in',from:view.peer.address,kind:'task',body:'Fixture approval request with enough detail to reveal the full request card and its controls.',state:'awaiting',delivery:'delivered',origin:'ui',at:new Date().toISOString(),can:[],actions:['accept','decline','reply','accept_always','approve','resolve'],reactions:[],unread:false,exec:{state:'awaiting',host:view.peer.address,at:1}});
+ if((trustedFile==='Approvals.card.tsx'||query.get('runtimeWide')==='1')&&suite==='actions')view.messages.push({id:'a'.repeat(32),lid:'a'.repeat(32),dir:'in',from:view.peer.address,kind:'task',body:'Fixture approval request with enough detail to reveal the full request card and its controls.',state:'awaiting',delivery:'delivered',origin:'ui',at:new Date().toISOString(),can:[],actions:['accept','decline','reply','accept_always','approve','resolve'],reactions:[],unread:false,exec:{state:'awaiting',host:view.peer.address,at:1}});
  // One human send at the initial window boundary has two distinct targets.
  for(const i of [375,376])Object.assign(view.messages[i],{kind:'question',dir:'out',from:overview.me.address,body:'Grouped boundary request',send_group:'a'.repeat(32),send_group_author:'b'.repeat(64),pid:(i+1).toString(16).padStart(32,'0')});
  view.messages[399].quote=view.messages[0].id;
@@ -240,7 +240,7 @@ try {
  if(suite==='workspaces'){
   const memberships=[{...host.workspace,endpoint:location.origin,address:overview.me.address,handle:'fixture-active'},{id:'other',name:'Fixture other',state:'enrolled',endpoint:'https://fixture.invalid',address:'fixture/other',handle:'fixture-other'}],disconnected=[{id:'closed',name:'Fixture closed',state:'disconnected',endpoint:'https://fixture.invalid',address:'fixture/closed'}],subscribers=new Set(),bags={};let selectedWorkspace=host.workspace.id;
   const changed=()=>{for(const fn of subscribers)fn({id:selectedWorkspace});};reports.hostCalls=[];
-  const owned=async(name,body,run)=>{const c={name,request:clone(body),start:performance.now()};reports.hostCalls.push(c);try{const v=await run();c.ok=true;return v;}catch(e){c.ok=false;throw e;}finally{c.result=performance.now();}};
+  const owned=async(name,body,run)=>{const c={name,request:clone(body),start:performance.now()};reports.hostCalls.push(c);try{if(window.__runtimeBackend==='held')await new Promise(()=>{});if(window.__runtimeBackend==='failing')throw Error('Runtime crawl native host failure');const v=await run();c.ok=true;return v;}catch(e){c.ok=false;throw e;}finally{c.result=performance.now();}};
   host.workspaces={list:()=>memberships,active:()=>selectedWorkspace,has:id=>memberships.some(w=>w.id===id),onChange:fn=>{subscribers.add(fn);return()=>subscribers.delete(fn);},state:id=>bags[id]||(bags[id]={}),select:id=>{assert(memberships.some(w=>w.id===id),'unknown fixture membership');selectedWorkspace=id;changed();},
    rename:(id,name)=>owned('workspace.rename',{id,name},async()=>{await pause(25);const w=memberships.find(w=>w.id===id);w.name=name;changed();return w;}),
    disconnect:id=>owned('workspace.disconnect',{id},async()=>{await pause(25);const w=memberships.find(w=>w.id===id);assert(id!==host.workspace.id,'cannot disconnect active fixture in this vector');memberships.splice(memberships.indexOf(w),1);disconnected.push({...w,state:'disconnected'});changed();}),
@@ -250,6 +250,7 @@ try {
  const originalAPI=host.api;
  host.api=async(path,body)=>{
   const call={path,method:body===undefined?'read':'write',start:performance.now()};if(extended&&body!==undefined)call.request=clone(body);reports.apiCalls.push(call);
+  if(window.__runtimeBackend==='held')await new Promise(()=>{});if(window.__runtimeBackend==='failing')throw Error('Runtime crawl backend failure');
   // A slow server must not delay what the person sees: every write waits here.
   // The cache clear below is released by hand, so it must reach the fixture first.
   if(writeDelay&&body!==undefined&&path!=='/api/storage/cache')await new Promise(r=>setTimeout(r,writeDelay));
@@ -277,6 +278,7 @@ try {
  const visibleText=text=>[...scope().querySelectorAll('h1,h2,h3,p,[role="heading"],[role="dialog"],[role="alert"],[role="status"]')].some(el=>onScreen(el)&&el.textContent.includes(text));
  const census=()=>{for(const el of [...scope().querySelectorAll('button,input,textarea,select,summary,a[href],[role],[tabindex]')].filter(el=>shown(el)&&(el.matches('button,input,textarea,select,summary,a[href],[tabindex]')||/^(button|link|menuitem|menuitemcheckbox|menuitemradio|tab|switch|radio|checkbox|combobox|textbox|option|slider|spinbutton|treeitem)$/.test(el.getAttribute('role')||'')))){const id=el.getAttribute('data-an-control'),key=el.tagName.toLowerCase()+':'+(el.getAttribute('type')||el.getAttribute('role')||'')+':'+label(el);if(id){if(!reports.seenControls.includes(id))reports.seenControls.push(id);}else{const gap={element:key,nearest_control:el.closest('[data-an-control]')?.getAttribute('data-an-control')||null};if(!reports.untaggedInteractive.some(x=>x.element===gap.element&&x.nearest_control===gap.nearest_control))reports.untaggedInteractive.push(gap);}}};
  const measure=async(id,action,expected,description,complete=expected)=>{
+  if(query.get('runtimeWide')==='1'){if(await trustedCheckpoint('measure',id))return;}
   window.latencyProgress={active:id,reports};census();assert(!expected(),id+' expected visible state already true before input');const record={id,expected:description,input:'synthetic DOM',start:performance.now(),apiStart:reports.apiCalls.length,hostStart:reports.hostCalls?.length||0},gaps=[];performance.mark('latency:'+id+':input');let running=true,last=record.start,rafCount=0;
   const menuFrames=[],menuSamples=[];
   const menuDiagnostic=id==='message.menu-open-0';
@@ -321,27 +323,29 @@ try {
   const message=view.messages.at(-1);let target=message.id;const row=()=>root.querySelector('[data-mid="'+target+'"]'),pending=()=>row()?.querySelector('[data-reaction-pending="true"]');
   await measure('navigation.actions-dm',()=>[...root.querySelectorAll('[data-part="chat-row"]')].find(b=>b.textContent.includes('Vitalii')).click(),()=>onScreen(root.querySelector('section[aria-busy="true"]'))||onScreen(row()),'opening feedback or exact action target visible',()=>onScreen(row()));
   if(query.get('runtimeCrawl')==='1'&&await trustedCheckpoint('runtime-crawl','actions/dm-open/messages-visible'))return {ok:true,...reports};
-  if(trustedFile==='Conversation.header.tsx'&&await trustedCheckpoint('conversation-header','actions/dm-open/header-visible'))return {ok:true,...reports};
-  if(trustedFile==='Approvals.card.tsx'&&await trustedCheckpoint('approval-card','actions/dm-open/pending-approval-card-visible'))return {ok:true,...reports};
+  if((trustedFile==='Conversation.header.tsx'||query.get('runtimeWide')==='1')&&await trustedCheckpoint('conversation-header','actions/dm-open/header-visible'))return {ok:true,...reports};
+  if((trustedFile==='Approvals.card.tsx'||query.get('runtimeWide')==='1')&&await trustedCheckpoint('approval-card','actions/dm-open/pending-approval-card-visible'))return {ok:true,...reports};
   const item=name=>[...scope().querySelectorAll('button,[role="menuitem"]')].find(b=>shown(b)&&!b.closest('[data-ending-style]')&&label(b)===name);
   const settled=()=>until(()=>!scope().querySelector('[data-ending-style]'),'previous popup retired');
   let menus=0;const menu=async()=>{await settled();row().querySelector('[data-message-bubble]').dispatchEvent(new PointerEvent('pointerover',{bubbles:true,pointerType:'mouse'}));await until(()=>row().querySelector('button[aria-label="More actions"],button[aria-label="Message actions"]'),'message action control');const more=row().querySelector('button[aria-label="More actions"],button[aria-label="Message actions"]');more.focus();await measure('message.menu-open-'+menus++,()=>more.click(),()=>!!item('Details'),'message action menu visible');};
   // The chat's unread mark shows before the server answers (TDLib sets its own
   // first), stays with the answer held, and comes back off when refused.
-  const markedRow=()=>[...root.querySelectorAll('[data-part="chat-row"][data-unread]')].some(b=>b.textContent.includes('Vitalii'));
+  const runtimePhoneUnread=query.get('runtimeWide')==='1'&&innerWidth<1024;
+  if(runtimePhoneUnread)reports.runtimeSetupLimit='Phone chat-list unread counter is unmounted under the conversation; setup asserts menu closure, not the hidden counter.';
+  const markedRow=()=>runtimePhoneUnread?!item('Mark unread'):[...root.querySelectorAll('[data-part="chat-row"][data-unread]')].some(b=>b.textContent.includes('Vitalii'));
   let releaseUnread;unreadHold=new Promise(r=>releaseUnread=r);
   await menu();await measure('unread.mark',()=>item('Mark unread').click(),markedRow,'chat row shows unread with the answer held');assert(markedRow(),'unread mark stays while held');
   const unreadCount=()=>Number([...root.querySelectorAll('[data-part="chat-row"][data-unread]')].find(b=>b.textContent.includes('Vitalii'))?.querySelector('[data-part="unread"]')?.firstChild?.textContent||0);
   // A second mark adds to the first while both are unanswered, and a refusal takes back only its own.
   const second=view.messages.at(-2),third=view.messages.at(-4);target=second.id;await settled();await menu();
-  await measure('unread.mark-second',()=>item('Mark unread').click(),()=>unreadCount()===2,'second unanswered mark adds to the first');
+  await measure('unread.mark-second',()=>item('Mark unread').click(),()=>runtimePhoneUnread?!item('Mark unread'):unreadCount()===2,runtimePhoneUnread?'phone unread menu closes; hidden chat-list count unasserted':'second unanswered mark adds to the first');
   unreadHold=null;unreadFailure=true;target=third.id;await settled();await menu();
-  await measure('unread.mark-third-refused',()=>item('Mark unread').click(),()=>unreadCount()===3,'third mark adds before its refusal',()=>visibleText('Synthetic unread refusal')&&unreadCount()===2);
+  await measure('unread.mark-third-refused',()=>item('Mark unread').click(),()=>runtimePhoneUnread?!item('Mark unread'):unreadCount()===3,runtimePhoneUnread?'phone unread menu closes before refusal; hidden chat-list count unasserted':'third mark adds before its refusal',()=>visibleText('Synthetic unread refusal')&&(runtimePhoneUnread||unreadCount()===2));
   unreadFailure=false;target=message.id;assert(!third.unread,'refused mark changed nothing');
   releaseUnread();await until(()=>!reports.apiCalls.some(c=>c.path==='/api/act'&&c.ok===undefined),'both unread marks answered');assert(reports.apiCalls.filter(c=>c.path==='/api/act'&&c.ok===true).length>=2,'both unread marks accepted');await settled();
-  message.unread=second.unread=false;overview.dms[0].unread=0;seq++;emit();await until(()=>!markedRow(),'chat read again for the refused case');
-  unreadFailure=true;await menu();await measure('unread.mark-refused',()=>item('Mark unread').click(),markedRow,'chat row shows unread before the refusal',()=>visibleText('Synthetic unread refusal')&&!markedRow());unreadFailure=false;await settled();
-  if(trustedFile==='Message.tsx'&&await trustedCheckpoint('message-base','actions/dm-open/message-visible/no-sheet'))return {ok:true,...reports};await menu();const pick=item('React 👍');if(!pick){const react=row().querySelector('button[aria-label="React"]');assert(react,'reaction control missing');const details=item('Details');details.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));await settled();await measure('reaction.picker-open',()=>react.click(),()=>!!item('React 👍'),'quick reaction choices visible');}
+  message.unread=second.unread=false;overview.dms[0].unread=0;seq++;emit();await until(()=>runtimePhoneUnread||!markedRow(),'chat read again for the refused case');
+  unreadFailure=true;await menu();await measure('unread.mark-refused',()=>item('Mark unread').click(),markedRow,runtimePhoneUnread?'phone unread menu closes before refusal; hidden chat-list count unasserted':'chat row shows unread before the refusal',()=>visibleText('Synthetic unread refusal')&&(runtimePhoneUnread||!markedRow()));unreadFailure=false;await settled();
+  if((trustedFile==='Message.tsx'||query.get('runtimeWide')==='1')&&await trustedCheckpoint('message-base','actions/dm-open/message-visible/no-sheet'))return {ok:true,...reports};await menu();const pick=item('React 👍');if(!pick){const react=row().querySelector('button[aria-label="React"]');assert(react,'reaction control missing');const details=item('Details');details.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));await settled();await measure('reaction.picker-open',()=>react.click(),()=>!!item('React 👍'),'quick reaction choices visible');}
   await measure('reaction.add',()=>item('React 👍').click(),()=>!!pending(),'explicit pending reaction feedback',()=>message.reactions.some(r=>r.mine)&&!pending()&&!!row().querySelector('[aria-pressed="true"]'));await settled();
   await measure('reaction.remove',()=>row().querySelector('[aria-pressed="true"]').click(),()=>!!pending(),'explicit removal pending feedback',()=>!message.reactions.some(r=>r.mine)&&!pending()&&!row().querySelector('[aria-pressed="true"]'));
   reactionFailure=true;await menu();if(!item('React 👍')){item('Details').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));await settled();row().querySelector('button[aria-label="React"]').click();await until(()=>item('React 👍'),'quick reactions');}
@@ -524,9 +528,9 @@ try {
  const searchButton=button('Search chats');if(searchButton)await measure('search.open',()=>searchButton.click(),()=>!!chatSearch(),'chat search field visible in the active list');
  const search=chatSearch();if(search){const set=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;await measure('search.no-results',()=>{set.call(search,'No such synthetic person');search.dispatchEvent(new Event('input',{bubbles:true}));},()=>visibleText('Nothing matches'),'visible empty search result');await measure('search.clear',()=>button('Clear search').click(),()=>search.value===''&&buttons().some(b=>label(b).includes('Vitalii')),'search cleared and original chat row visible');}
  const fresh=button('New')||button('New chat');assert(fresh,'New chat control missing');
- if(trustedFile==='NewChat.tsx'&&trustedID.includes('#NewChatButton/')&&await trustedCheckpoint('new-chat-trigger','navigation/chat-list/new-chat-trigger-visible'))return {ok:true,...reports};
+ if((trustedFile==='NewChat.tsx'||query.get('runtimeWide')==='1')&&(trustedID.includes('#NewChatButton/')||query.get('runtimeWide')==='1')&&await trustedCheckpoint('new-chat-trigger','navigation/chat-list/new-chat-trigger-visible'))return {ok:true,...reports};
  await measure('new-chat.open',()=>fresh.click(),()=>onScreen(scope().querySelector('[role="dialog"]')),'new chat dialog visible on screen');
- if(trustedFile==='NewChat.tsx'&&await trustedCheckpoint('new-chat','navigation/new-chat-dialog-open'))return {ok:true,...reports};
+ if((trustedFile==='NewChat.tsx'||query.get('runtimeWide')==='1')&&await trustedCheckpoint('new-chat','navigation/new-chat-dialog-open'))return {ok:true,...reports};
  const dialog=()=>scope().querySelector('[role="dialog"]'),personRows=()=>[...dialog().querySelectorAll('li')].filter(el=>el.textContent.includes('Person '));
  if(peopleCount>40){assert(personRows().length<=40,'new-chat initial directory render is unbounded');const before=personRows().length;await measure('new-chat.reveal',()=>button(/^Show more people/).click(),()=>personRows().length>before,'next directory page rendered');assert(personRows().length-before<=40,'directory reveal exceeds one bounded page');}
  const q=dialog().querySelector('input[type="search"]');assert(q,'new chat search missing');
@@ -824,7 +828,7 @@ try {
 
   }
   if(suite==='profile'){
-   await settings('Profile');if(trustedFile==='Settings.profile.tsx'&&await trustedCheckpoint('settings-profile','profile/settings-profile-open'))return {ok:true,...reports};const field=active('#settings-name');await fill('profile.name-edit',field,'Fixture Alice');
+   await settings('Profile');if((trustedFile==='Settings.profile.tsx'||query.get('runtimeWide')==='1')&&await trustedCheckpoint('settings-profile','profile/settings-profile-open'))return {ok:true,...reports};const field=active('#settings-name');await fill('profile.name-edit',field,'Fixture Alice');
    const profileSave=()=>active('#settings-name')?.closest('form')?.querySelector('button[type="submit"]');await until(()=>profileSave()&&label(profileSave())==='Save'&&!profileSave().disabled,'exact profile form Save control ready');
    await tap('profile.name-save',profileSave(),()=>!!active('section[aria-label="Name change"]')&&!active('#settings-name'),'exact name submitted with local pending profile',()=>me.label==='Fixture Alice'&&active('#settings-name')?.value==='Fixture Alice'&&!profileSave()&&!active('section[aria-label="Name change"]'));
    if(innerWidth<1024)await tap('profile.back',active('[data-settings-back]'),()=>!!control(/^Your devices/),'settings list visible again');
