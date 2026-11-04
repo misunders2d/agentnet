@@ -410,6 +410,17 @@ delay it. No relay-side timer or closed-page browser execution is promised.
 | `POST /api/schedule/edit` | D B | Change a mutable schedule at its exact revision. | `ScheduleDraft` with `id` and positive `rev` | `ScheduledSend` |
 | `POST /api/schedule/cancel` | D B | Cancel a mutable schedule. | `{id,rev}` | `ScheduledSend` |
 | `POST /api/schedule/send_now` | D B | Dispatch through the same guarded sender now, retaining its approved audience. | `{id,rev}` | `ScheduledSend` |
+| `POST /api/schedule/retry_send` | D | Retry one accepted chat message (a row with `queued_send`) under its id; its audience is read anew. | `{id}` | `ScheduledSend` |
+| `POST /api/schedule/discard_send` | D | The person's cancel of one accepted chat message. A message already stored for sending stays sent (refused). | `{id}` | `ScheduledSend` |
+
+On D, `POST /api/dm/send` keeps an ordinary message durably before it does
+anything that can wait, and may answer `state:"queued"` while it is still being
+sent under its `id` (a repeat of that `id` reaches the same message, never a
+second one). Until it is stored for sending, `GET /api/dm` lists it among the
+messages with `queued_send:{state,rev,diagnostic?}`: `pending` or `dispatching`
+is on its way, `needs_review` stopped and `detail` says why. `diagnostic` is the
+technical cause, for a details view only. The message's normal row takes over
+under the same `lid`. Nothing here is a delivery receipt.
 
 `ScheduleDraft` is `{id?,rev?,conv,topic?,body,reply_to?,quote?,due,timezone,
 files?,audience?}`. `due` is an absolute RFC3339 instant. Browser precision is

@@ -57,6 +57,7 @@ type Agent struct {
 	receiptLock      chan struct{} // dispositions never wait for history upkeep
 	routeHints       sync.Map      // optional verified first-attempt direct route; never queue storage
 	posting          backgroundPosts
+	queued           queuedSends
 	sendRetry        sendRetry     // a transient send failure is tried again soon (backgroundsend.go)
 	humanMu          sync.RWMutex  // local human end commits serialize with ordinary copy/file delivery
 	statusLocks      keyedLocks    // one status of a request at a time (headless.go)
@@ -335,6 +336,7 @@ func Open(home string) (*Agent, error) {
 func (a *Agent) Close() error {
 	a.fetches.stop()
 	a.stopArchivePosts()
+	a.queued.stop()
 	a.stopBackgroundPosts()
 	a.typingDisconnected()
 	a.hub.release()

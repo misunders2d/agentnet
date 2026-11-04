@@ -71,6 +71,11 @@ type ScheduledSend struct {
 	Audience ScheduledAudience `json:"audience"`
 	Files    []ScheduledFile   `json:"files"`
 	Detail   string            `json:"detail,omitempty"`
+	// An immediate row is one accepted ordinary send on its way (queuedsend.go):
+	// never listed as a schedule. Diagnostic is the technical cause behind Detail.
+	Immediate  bool      `json:"-"`
+	Diagnostic string    `json:"-"`
+	Created    time.Time `json:"-"`
 }
 
 // Files are consumed while saving, never saved as filesystem paths. On edit,
@@ -83,19 +88,23 @@ type ScheduledSendInput struct {
 	// Optional exact preview the person approved. A stale preview is refused.
 	// An edit without it retains the saved audience in an unchanged scope.
 	Audience *ScheduledAudience
+	// QueueSend only: the author participation the caller named.
+	immediate bool
+	pid       string
 }
 
-const scheduledCols = `id,conv,topic,body,reply_to,quote,due_at,timezone,rev,state,audience,files,detail`
+const scheduledCols = `id,conv,topic,body,reply_to,quote,due_at,timezone,rev,state,audience,files,detail,immediate,diagnostic,created_at`
 
 func scanScheduled(row interface{ Scan(...any) error }) (ScheduledSend, error) {
 	var s ScheduledSend
-	var due int64
+	var due, created int64
 	var audience, files string
-	err := row.Scan(&s.ID, &s.Conv, &s.Topic, &s.Body, &s.ReplyTo, &s.Quote, &due, &s.Timezone, &s.Rev, &s.State, &audience, &files, &s.Detail)
+	err := row.Scan(&s.ID, &s.Conv, &s.Topic, &s.Body, &s.ReplyTo, &s.Quote, &due, &s.Timezone, &s.Rev, &s.State, &audience, &files, &s.Detail, &s.Immediate, &s.Diagnostic, &created)
 	if err != nil {
 		return s, err
 	}
 	s.Due = time.Unix(0, due).UTC()
+	s.Created = time.Unix(0, created).UTC()
 	if err = json.Unmarshal([]byte(audience), &s.Audience); err == nil {
 		err = json.Unmarshal([]byte(files), &s.Files)
 	}
@@ -109,7 +118,7 @@ func (a *Agent) ScheduledSend(id string) (ScheduledSend, bool, error) {
 	return s, err == nil, err
 }
 func (a *Agent) ScheduledSends(all bool) ([]ScheduledSend, error) {
-	rows, err := a.store.db.Query(`SELECT `+scheduledCols+` FROM scheduled_sends WHERE ? OR state IN ('pending','dispatching','needs_review') ORDER BY due_at,id`, all)
+	rows, err := a.store.db.Query(`SELECT `+scheduledCols+` FROM scheduled_sends WHERE immediate=0 AND (? OR state IN ('pending','dispatching','needs_review')) ORDER BY due_at,id`, all)
 	if err != nil {
 		return nil, err
 	}
@@ -241,7 +250,7 @@ func (a *Agent) keepScheduledFiles(files []OutgoingFile) ([]ScheduledFile, error
 }
 func (a *Agent) prepareScheduled(in ScheduledSendInput, keep []ScheduledFile) (ScheduledSend, error) {
 	now := time.Now()
-	if !in.Due.After(now) || in.Due.Sub(now) > maxReminderAhead {
+	if !in.immediate && (!in.Due.After(now) || in.Due.Sub(now) > maxReminderAhead) {
 		return ScheduledSend{}, errors.New("choose a future time within ten years")
 	}
 	if in.Timezone == "" {
@@ -300,6 +309,9 @@ func (a *Agent) prepareScheduled(in ScheduledSendInput, keep []ScheduledFile) (S
 	if in.Audience != nil && (!scheduledWithin(audience, *in.Audience) || !scheduledWithin(*in.Audience, audience)) {
 		return ScheduledSend{}, ErrScheduledAudience
 	}
+	if in.immediate && in.pid != audience.AuthorPID {
+		return ScheduledSend{}, errors.New("this send names a different author than this topic allows")
+	}
 	// Resolve reply/quote with the existing local chat authority, never a remote hunt.
 	reply, quote := in.ReplyTo, in.Quote
 	for _, ref := range []*string{&reply, &quote} {
@@ -314,7 +326,7 @@ func (a *Agent) prepareScheduled(in ScheduledSendInput, keep []ScheduledFile) (S
 			}
 		}
 	}
-	return ScheduledSend{ID: protocol.NewID(), Conv: in.Conv, Topic: topic, Body: in.Body, ReplyTo: reply, Quote: quote, Due: in.Due.UTC(), Timezone: in.Timezone, Rev: 1, State: ScheduledPending, Audience: audience, Files: files}, nil
+	return ScheduledSend{ID: protocol.NewID(), Conv: in.Conv, Topic: topic, Body: in.Body, ReplyTo: reply, Quote: quote, Due: in.Due.UTC(), Timezone: in.Timezone, Rev: 1, State: ScheduledPending, Audience: audience, Files: files, Immediate: in.immediate, Created: now.UTC()}, nil
 }
 func (a *Agent) ScheduleSend(in ScheduledSendInput) (ScheduledSend, error) {
 	return a.saveScheduled("", 0, in)
@@ -330,7 +342,7 @@ func (a *Agent) sameScheduledCreate(old ScheduledSend, in ScheduledSendInput) (b
 	if timezone == "" {
 		timezone = "UTC"
 	}
-	if old.Conv != in.Conv || old.Body != in.Body || !old.Due.Equal(in.Due) || old.Timezone != timezone {
+	if old.Immediate != in.immediate || old.Conv != in.Conv || old.Body != in.Body || !old.Immediate && (!old.Due.Equal(in.Due) || old.Timezone != timezone) {
 		return false, nil
 	}
 	topic, err := a.outgoingTopic(in.Conv, in.Topic, in.ReplyTo)
@@ -396,6 +408,9 @@ func (a *Agent) saveScheduled(id string, rev int64, in ScheduledSendInput) (Sche
 			return ScheduledSend{}, e
 		}
 		if found {
+			if existing.Immediate && in.immediate && existing.State == ScheduledCancelled {
+				return existing, nil // discarded here: its text is gone and it stays discarded
+			}
 			same, e := a.sameScheduledCreate(existing, in)
 			if e != nil {
 				return ScheduledSend{}, e
@@ -412,6 +427,9 @@ func (a *Agent) saveScheduled(id string, rev int64, in ScheduledSendInput) (Sche
 			return ScheduledSend{}, e
 		}
 		if collision {
+			if in.immediate {
+				return a.queuedAlreadySent(in)
+			}
 			return ScheduledSend{}, ErrScheduledIDConflict
 		}
 	}
@@ -422,7 +440,7 @@ func (a *Agent) saveScheduled(id string, rev int64, in ScheduledSendInput) (Sche
 		if err != nil {
 			return old, err
 		}
-		if !found || old.Rev != rev || old.State != ScheduledPending && old.State != ScheduledNeedsReview {
+		if !found || old.Immediate || old.Rev != rev || old.State != ScheduledPending && old.State != ScheduledNeedsReview {
 			return old, ErrScheduledStale
 		}
 	}
@@ -444,7 +462,7 @@ func (a *Agent) saveScheduled(id string, rev int64, in ScheduledSendInput) (Sche
 	now := time.Now().UnixNano()
 	if id == "" {
 		var result sql.Result
-		result, err = a.store.db.Exec(`INSERT INTO scheduled_sends(id,conv,topic,body,reply_to,quote,due_at,timezone,rev,state,audience,files,created_at,updated_at) SELECT ?,?,?,?,?,?,?,?,1,'pending',?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM outbox WHERE lid=?) AND NOT EXISTS(SELECT 1 FROM inbox WHERE lid=? AND local=1)`, s.ID, s.Conv, s.Topic, s.Body, s.ReplyTo, s.Quote, s.Due.UnixNano(), s.Timezone, string(audience), string(files), now, now, s.ID, s.ID)
+		result, err = a.store.db.Exec(`INSERT INTO scheduled_sends(id,conv,topic,body,reply_to,quote,due_at,timezone,rev,state,audience,files,created_at,updated_at,immediate) SELECT ?,?,?,?,?,?,?,?,1,'pending',?,?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM outbox WHERE lid=?) AND NOT EXISTS(SELECT 1 FROM inbox WHERE lid=? AND local=1)`, s.ID, s.Conv, s.Topic, s.Body, s.ReplyTo, s.Quote, s.Due.UnixNano(), s.Timezone, string(audience), string(files), now, now, s.Immediate, s.ID, s.ID)
 		if err == nil {
 			n, _ := result.RowsAffected()
 			if n != 1 {
@@ -502,7 +520,7 @@ func (a *Agent) SendScheduledNow(ctx context.Context, id string, rev int64) (Sch
 	}
 	a.store.changed()
 	notifyDaemon(a.home)
-	return a.dispatchScheduledLocked(ctx, id)
+	return a.dispatchScheduledLocked(ctx, id, nil)
 }
 func scheduledWithin(current, approved ScheduledAudience) bool {
 	if current.AuthorPID != approved.AuthorPID {
@@ -522,7 +540,7 @@ func scheduledWithin(current, approved ScheduledAudience) bool {
 }
 func (a *Agent) scheduledCommit(s ScheduledSend) beforeConvStore {
 	return func(tx *sql.Tx, copies []outCopy, local envelope.Inner) error {
-		if time.Now().Before(s.Due) {
+		if !s.Immediate && time.Now().Before(s.Due) {
 			return errScheduledEarly
 		}
 		current, m, err := a.scheduledAudience(tx, s.Conv, s.Topic)
@@ -565,7 +583,7 @@ func (a *Agent) scheduledCommit(s ScheduledSend) beforeConvStore {
 				return ErrScheduledAudience
 			}
 		}
-		result, err := tx.Exec(`UPDATE scheduled_sends SET state='sent',detail='',updated_at=? WHERE id=? AND rev=? AND state='dispatching' AND conv=? AND topic=? AND due_at=? AND due_at<=?`, time.Now().UnixNano(), s.ID, s.Rev, s.Conv, s.Topic, s.Due.UnixNano(), time.Now().UnixNano())
+		result, err := tx.Exec(`UPDATE scheduled_sends SET state='sent',detail='',updated_at=? WHERE id=? AND rev=? AND state='dispatching' AND conv=? AND topic=? AND due_at=? AND (immediate=1 OR due_at<=?)`, time.Now().UnixNano(), s.ID, s.Rev, s.Conv, s.Topic, s.Due.UnixNano(), time.Now().UnixNano())
 		if err != nil {
 			return err
 		}
@@ -584,11 +602,13 @@ func (a *Agent) dispatchScheduled(ctx context.Context, id string) (ScheduledSend
 		return ScheduledSend{}, err
 	}
 	defer release()
-	return a.dispatchScheduledLocked(ctx, id)
+	return a.dispatchScheduledLocked(ctx, id, nil)
 }
 
-// dispatchScheduledLocked runs one attempt while the caller owns scheduled-send.lock.
-func (a *Agent) dispatchScheduledLocked(ctx context.Context, id string) (ScheduledSend, error) {
+// dispatchScheduledLocked runs one attempt while the caller owns scheduled-send.lock;
+// an immediate row needs no such lock (queuedsend.go). stored, when given, receives
+// what the ordinary sender reported.
+func (a *Agent) dispatchScheduledLocked(ctx context.Context, id string, stored *ConvSent) (ScheduledSend, error) {
 	s, found, err := a.ScheduledSend(id)
 	if err != nil {
 		return s, err
@@ -602,7 +622,7 @@ func (a *Agent) dispatchScheduledLocked(ctx context.Context, id string) (Schedul
 	if ctx.Err() != nil {
 		return s, ctx.Err()
 	}
-	if time.Now().Before(s.Due) {
+	if !s.Immediate && time.Now().Before(s.Due) {
 		return s, errScheduledEarly
 	}
 	var committed bool
@@ -618,7 +638,7 @@ func (a *Agent) dispatchScheduledLocked(ctx context.Context, id string) (Schedul
 		return s, err
 	}
 	if s.State == ScheduledPending {
-		result, e := a.store.db.Exec(`UPDATE scheduled_sends SET state='dispatching',rev=rev+1,updated_at=? WHERE id=? AND rev=? AND state='pending' AND due_at<=?`, time.Now().UnixNano(), id, s.Rev, time.Now().UnixNano())
+		result, e := a.store.db.Exec(`UPDATE scheduled_sends SET state='dispatching',rev=rev+1,updated_at=? WHERE id=? AND rev=? AND state='pending' AND (immediate=1 OR due_at<=?)`, time.Now().UnixNano(), id, s.Rev, time.Now().UnixNano())
 		if e != nil {
 			return s, e
 		}
@@ -630,7 +650,11 @@ func (a *Agent) dispatchScheduledLocked(ctx context.Context, id string) (Schedul
 		s.Rev++
 	}
 	fail := func(state, detail string, cause error) (ScheduledSend, error) {
-		result, e := a.store.db.Exec(`UPDATE scheduled_sends SET state=?,detail=?,updated_at=? WHERE id=? AND rev=? AND state='dispatching'`, state, detail, time.Now().UnixNano(), id, s.Rev)
+		diagnostic := ""
+		if s.Immediate {
+			detail, diagnostic = queuedSendWords(state, detail, cause)
+		}
+		result, e := a.store.db.Exec(`UPDATE scheduled_sends SET state=?,detail=?,diagnostic=?,updated_at=? WHERE id=? AND rev=? AND state='dispatching'`, state, detail, diagnostic, time.Now().UnixNano(), id, s.Rev)
 		if e != nil {
 			return s, e
 		}
@@ -672,7 +696,18 @@ func (a *Agent) dispatchScheduledLocked(ctx context.Context, id string) (Schedul
 		files = append(files, OutgoingFile{Path: path, Name: f.Name})
 	}
 	dispatchCtx := context.WithValue(WithQueuedSend(ctx, s.ID), scheduledDispatchKey{}, s.ID)
-	_, err = a.SendConv(dispatchCtx, s.Conv, ConvOutgoing{Kind: envelope.KindMessage, Origin: envelope.OriginUI, Body: s.Body, Topic: s.Topic, ReplyTo: s.ReplyTo, Quote: s.Quote, PID: s.Audience.AuthorPID, Files: files, beforeStore: a.scheduledCommit(s)})
+	sent, err := a.SendConv(dispatchCtx, s.Conv, ConvOutgoing{Kind: envelope.KindMessage, Origin: envelope.OriginUI, Body: s.Body, Topic: s.Topic, ReplyTo: s.ReplyTo, Quote: s.Quote, PID: s.Audience.AuthorPID, Files: files, beforeStore: a.scheduledCommit(s)})
+	if errors.Is(err, ErrSendAlreadyKept) {
+		// Another attempt stored this exact id: the same send, nothing to repeat.
+		if _, err = a.store.db.Exec(`UPDATE scheduled_sends SET state='sent',detail='',diagnostic='',updated_at=? WHERE id=? AND state IN ('pending','dispatching')`, time.Now().UnixNano(), id); err == nil {
+			a.store.changed()
+		}
+		s, _, _ = a.ScheduledSend(id)
+		return s, err
+	}
+	if err == nil && stored != nil {
+		*stored = sent
+	}
 	if err != nil {
 		// An ordinary authority guard may reject a changed group before our
 		// neutral guard runs. Growth still requires explicit audience review.
@@ -696,7 +731,7 @@ func scheduledWait(err error) bool {
 // scheduledDue is called by the existing reminder loop. Overdue schedules that
 // cannot plan wait for a real Changed/wake, never a hot overdue wall timer.
 func (a *Agent) scheduledDue(ctx context.Context, now time.Time) (time.Time, error) {
-	rows, err := a.store.db.Query(`SELECT id FROM scheduled_sends WHERE state IN ('pending','dispatching') AND due_at<=? ORDER BY due_at,id`, now.UnixNano())
+	rows, err := a.store.db.Query(`SELECT id FROM scheduled_sends WHERE immediate=0 AND state IN ('pending','dispatching') AND due_at<=? ORDER BY due_at,id`, now.UnixNano())
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -721,7 +756,7 @@ func (a *Agent) scheduledDue(ctx context.Context, now time.Time) (time.Time, err
 		_, _ = a.dispatchScheduled(ctx, id)
 	}
 	var next sql.NullInt64
-	err = a.store.db.QueryRow(`SELECT min(due_at) FROM scheduled_sends WHERE state IN ('pending','dispatching') AND due_at>?`, time.Now().UnixNano()).Scan(&next)
+	err = a.store.db.QueryRow(`SELECT min(due_at) FROM scheduled_sends WHERE immediate=0 AND state IN ('pending','dispatching') AND due_at>?`, time.Now().UnixNano()).Scan(&next)
 	if err != nil || !next.Valid {
 		return time.Time{}, err
 	}

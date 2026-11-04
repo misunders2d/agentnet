@@ -107,6 +107,7 @@ func (a *Agent) retrySendSoon(err error) {
 // crashes. Every pass uses the same retry path and durable insertion order.
 func (a *Agent) postOutboxBackground() {
 	a.initFlushLanes()
+	a.queued.wakeAll()
 	select {
 	case a.flushWake <- struct{}{}:
 	default:

@@ -566,6 +566,12 @@ func (s *store) addConvOutboxGuarded(copies []outCopy, local envelope.Inner, cla
 			return err
 		}
 	}
+	// A message accepted earlier keeps the place the person saw it take.
+	if accepted, e := queuedSendAccepted(tx, local.LID); e != nil {
+		return e
+	} else if !accepted.IsZero() {
+		now = accepted
+	}
 	for i, c := range copies {
 		env, in := c.env, c.in
 		data, _ := json.Marshal(env)

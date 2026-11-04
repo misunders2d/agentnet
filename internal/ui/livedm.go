@@ -578,6 +578,11 @@ func (l *Live) DM(id string) (DMThread, error) {
 			t.Messages = append(t.Messages, dm)
 		}
 		linkReplies(msgs, t.Messages)
+		queued, err := l.a.QueuedSends(id)
+		if err != nil {
+			return DMThread{}, err
+		}
+		t.Messages = withQueuedSends(t.Messages, queued, l.a.Address)
 		t.Agents = l.agentViews(infos, people, msgs)
 		return t, nil
 	}
@@ -600,6 +605,11 @@ func (l *Live) SendDM(d DMDraft) (Sent, error) {
 		return Sent{}, err
 	}
 	defer cleanup() // SendConv encrypted them into the spool, or refused: either way the staged copies go
+	if receiver == nil {
+		if sent, done, e := l.queueDM(d, body, files); done {
+			return sent, e
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 	defer cancel()
 	ctx = client.WithQueuedSend(ctx, d.ID)
@@ -608,6 +618,64 @@ func (l *Live) SendDM(d DMDraft) (Sent, error) {
 		return Sent{}, Refuse(sentence(err))
 	}
 	return Sent{LID: res.LID, ID: res.ID, State: res.State, Detail: res.Detail}, nil
+}
+
+// queueDM accepts an ordinary message durably before anything can make it wait
+// (client.QueueSend). done is false when this device cannot accept it that way
+// (a new topic, a reply it cannot resolve here, a recovered person's chat not
+// created yet, no author here): the ordinary sender then decides, and its
+// refusal stays authoritative.
+func (l *Live) queueDM(d DMDraft, body string, files []client.OutgoingFile) (Sent, bool, error) {
+	id := d.ID
+	if id == "" {
+		id = protocol.NewID()
+	}
+	res, err := l.a.QueueSend(client.ScheduledSendInput{ID: id, Conv: d.Conv, Topic: d.Topic, Body: body, ReplyTo: d.ReplyTo, Quote: d.Quote, Files: files}, d.PID, l.sendWait)
+	if errors.Is(err, client.ErrQueuedSendDiscarded) {
+		return Sent{}, true, Refuse(sentence(err))
+	}
+	if err != nil {
+		return Sent{}, false, nil
+	}
+	if res.Sent != nil {
+		return Sent{LID: res.Sent.LID, ID: res.Sent.ID, State: res.Sent.State, Detail: res.Sent.Detail}, true, nil
+	}
+	if res.AttemptErr != nil && res.Row.State == client.ScheduledNeedsReview {
+		// Refused while the person is still here: say so now and hand the text
+		// back, instead of leaving a stopped row for something they just did.
+		if e := l.a.DropQueuedRefusal(id); e != nil {
+			return Sent{}, true, e
+		}
+		if errors.Is(res.AttemptErr, client.ErrScheduledAudience) {
+			return Sent{}, true, Refuse("The people in this chat changed. Check them and send again.")
+		}
+		return Sent{}, true, Refuse(sentence(res.AttemptErr))
+	}
+	return Sent{LID: id, ID: id, State: "queued", Detail: res.Row.Detail}, true, nil
+}
+
+// withQueuedSends shows messages accepted here and not yet stored for sending
+// in their place in the chat, so a reload or restart keeps them in view. A
+// yet-unsent message keeps the position it took when accepted, and a failed
+// one keeps it too (TDLib, MessagesManager.cpp at 4c6377aa: fail_send_message).
+func withQueuedSends(rows []DMMessage, queued []client.ScheduledSend, self string) []DMMessage {
+	for _, s := range queued {
+		m := DMMessage{ID: s.ID, LID: s.ID, Dir: "out", From: self, Kind: KindMessage, Body: s.Body, ReplyTo: s.ReplyTo, Quote: s.Quote,
+			Origin: envelope.OriginUI, Topic: s.Topic, PID: s.Audience.AuthorPID, At: s.Created, State: "queued", StateText: "Sending…", Detail: s.Detail,
+			QueuedSend: &QueuedSendView{State: s.State, Rev: s.Rev, Diagnostic: s.Diagnostic}}
+		if s.State == client.ScheduledNeedsReview {
+			m.State, m.StateText = "failed", s.Detail
+		}
+		for i, f := range s.Files {
+			m.Attachments = append(m.Attachments, FileView{Index: i, Name: f.Name, Size: f.Size})
+		}
+		at := len(rows)
+		for at > 0 && rows[at-1].At.After(m.At) {
+			at--
+		}
+		rows = slices.Insert(rows, at, m)
+	}
+	return rows
 }
 
 // refreshDM is Refresh for a DM or group (ok false when id is not one): once

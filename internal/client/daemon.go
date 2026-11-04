@@ -131,6 +131,7 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 	statusDone := make(chan struct{})
 	go func() { defer close(statusDone); a.statusLoop(statusCtx) }() // statuses due, from this run or an earlier process (headless.go)
 	defer func() { stopStatuses(); <-statusDone }()
+	a.driveQueuedSends() // accepted before a restart: same id, never a second send
 	remindCtx, stopRemind := context.WithCancel(ctx)
 	remindDone := make(chan struct{})
 	go func() { defer close(remindDone); a.remindLoop(remindCtx) }()

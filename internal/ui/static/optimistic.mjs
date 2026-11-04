@@ -40,6 +40,22 @@ export function pendingSends(host, changed = () => {}) {
   }
   shared.changed = changed; // the currently mounted renderer owns notifications
   const ledger = shared.ledger, notify = () => shared.changed?.();
+  // The person's Retry or Discard on a message the host keeps: shown at once,
+  // undone if the host refuses, cleared when its own state shows the change.
+  const actions = shared.actions ||= new Map();
+  const act = (kind, m, key) => {
+    actions.set(m.id, {kind, rev: m.queued_send.rev, key});
+    notify();
+    return host.api('/api/schedule/' + (kind === 'retry' ? 'retry_send' : 'discard_send'), {id: m.id}).catch(e => { actions.delete(m.id); notify(); throw e; });
+  };
+  const queuedRow = (m, key) => {
+    const action = actions.get(m.id), stopped = m.queued_send.state === 'needs_review' && action?.kind !== 'retry';
+    const waiting = !stopped && !action && m.queued_send.state === 'pending' && m.detail;
+    return {...m, _local: true, _failed: stopped, delivery: stopped ? 'failed' : 'queued', state_text: stopped ? m.detail || 'Not sent.' : waiting || 'Sending…',
+      _retry: () => act('retry', m, key), _discard: () => act('discard', m, key), _diagnostic: m.queued_send.diagnostic,
+      can: [], actions: [], copies: [], reactions: []};
+  };
+  const when = m => { const t = Date.parse(m.at); return Number.isNaN(t) ? Infinity : t; };
   const rows = key => [...ledger.values()].filter(x => x.key === key);
   return {
     begin(key, message, retry) {
@@ -59,10 +75,11 @@ export function pendingSends(host, changed = () => {}) {
         state_text: ['custody','delivered'].includes(state) ? (state === 'custody' ? 'On your server' : 'Delivered') : result?.detail || 'Sending…' };
       notify();
     },
-    fail(id, reason) {
+    fail(id, reason, unsure) {
       const x = ledger.get(id); if (!x) return false;
       x.saved();
-      x.m = { ...x.m, state: 'failed', delivery: 'failed', state_text: 'Not sent: ' + reason, _failed: true };
+      x.m = { ...x.m, state: 'failed', delivery: 'failed', state_text: (unsure ? 'Not confirmed: ' : 'Not sent: ') + reason, _failed: true,
+        _discard: () => { ledger.get(id)?.saved(); ledger.delete(id); notify(); } };
       notify(); return true;
     },
     remove(id) { ledger.get(id)?.saved(); ledger.delete(id); notify(); },
@@ -71,10 +88,22 @@ export function pendingSends(host, changed = () => {}) {
     unsent: () => [...ledger.values()].some(x => !x.done),
     dispose() { if (shared.changed === changed) shared.changed = null; },
     merge(key, messages = []) {
-      const actual = messages.some(m => m._local) ? messages.filter(m => !m._local) : messages;
+      const actual = messages.some(m => m._local && !m.queued_send) ? messages.filter(m => !m._local || m.queued_send) : messages;
       for (const [id, x] of ledger) if (x.key === key && actual.some(m => m.dir === 'out' && (m.id === x.m.id || (m.lid && m.lid === x.m.lid)))) { x.saved(); ledger.delete(id); }
+      for (const [id, action] of actions) {
+        if (action.key !== key) continue;
+        const row = actual.find(m => m.id === id && m.queued_send);
+        if (!row || action.kind === 'retry' && row.queued_send.rev !== action.rev) actions.delete(id);
+      }
+      const shown = actual.some(m => m.queued_send) ? actual.filter(m => !m.queued_send || actions.get(m.id)?.kind !== 'discard').map(m => m.queued_send ? queuedRow(m, key) : m) : actual;
       const pending = rows(key);
-      return pending.length ? [...actual, ...pending.map(x => x.m)] : actual;
+      if (!pending.length) return shown;
+      // A yet-unsent message keeps the place it took, and a failed one keeps it
+      // too: later arrivals go below it (TDLib 4c6377aa, MessagesManager.cpp:
+      // get_next_yet_unsent_message_id, fail_send_message).
+      const out = [...shown];
+      for (const {m} of pending) { let i = out.length; while (i > 0 && when(out[i - 1]) > when(m)) i--; out.splice(i, 0, m); }
+      return out;
     },
   };
 }
