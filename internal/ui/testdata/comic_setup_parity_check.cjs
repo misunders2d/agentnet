@@ -164,7 +164,7 @@ const T = { timeout: 15000 }, shots = process.env.AGENTNET_SCREENSHOTS || '';
         await p.getByRole('button', { name: /^Coding agents/ }).click(); // renamed in 9133893b
         await p.getByRole('button', { name: 'Find them', exact: true }).click();
         await p.getByText('Ready', { exact: true }).waitFor(T);
-        await p.getByText('Fictional helper is set up for chats, questions and approved tasks.',{exact:true}).waitFor(T);
+        await p.getByText(/ is set up for chats, questions and approved tasks\.$/).waitFor(T); // names the harness since 9133893b
         await p.getByText('Agent: Fictional helper',{exact:true}).waitFor(T);assert.equal(await p.getByRole('radio',{name:'Fictional helper',exact:true}).count(),0,'sole exact agent needs no selector');
         assert.equal(await p.getByRole('radio',{name:/Codex/}).isVisible(),false,'default responder is subordinate');
         await p.getByText('Native sessions',{exact:true}).click();

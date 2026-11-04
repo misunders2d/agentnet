@@ -46,12 +46,14 @@ func TestTopicsRendered(t *testing.T) {
 	for i := range 40 {
 		send(envelope.KindMessage, fmt.Sprintf("Shipment note %d: pallets for dock %d are labelled", i, i%4+1))
 	}
-	ids := []string{send(envelope.KindQuestion, "May I move the Savannah order to Friday?")}
+	// Questions and tasks to an agent are their own chat since 771e738e, with no row
+	// here (no current agent), so this chat's topics are all plain messages.
+	ids := []string{send(envelope.KindMessage, "May I move the Savannah order to Friday?")}
 	for _, q := range []string{"Can the Denver pallets wait a day?", "Should I reprint the dock 2 labels?", "Is the Tuesday truck confirmed?"} {
-		ids = append(ids, send(envelope.KindQuestion, q)) // more questions held for the person than a phone's bar shows
+		ids = append(ids, send(envelope.KindMessage, q))
 	}
 	for aisle := 1; aisle <= 4; aisle++ { // one finished task per rendering: each run reopens its own
-		ids = append(ids, send(envelope.KindTask, fmt.Sprintf("Count the bath sets in aisle %d", aisle)))
+		ids = append(ids, send(envelope.KindMessage, fmt.Sprintf("Count the bath sets in aisle %d", aisle)))
 	}
 	for _, id := range ids {
 		deadline := time.Now().Add(15 * time.Second)

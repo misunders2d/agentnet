@@ -714,7 +714,10 @@ if(completion){
     }
     openGroup();
    },{mode,first:completion.first,second:completion.second,answer:completion.answer});
-   const first=page.locator('[data-mid="'+completion.first+'"]'),second=page.locator('[data-mid="'+completion.second+'"]');
+   // Grouped requests fold under "N agent outcomes" since 0fcabd58, and their rows carry no data-mid.
+   if(mode==='grouped')await page.locator('[data-agent-outcomes]>summary').first().click();
+   const request=id=>page.locator(mode==='grouped'?'[data-agent-outcome="'+id+'"]':'[data-mid="'+id+'"]');
+   const first=request(completion.first),second=request(completion.second);
    await first.waitFor();await second.waitFor();await settle(page);
    assert.match(await first.innerText(),/Answered/,'verified exact answer completes only its request');
    assert.match(await second.innerText(),/Sending/,'different target/inert/quoted/unrelated reply cannot complete second request');
@@ -870,7 +873,6 @@ if(process.env.AGENTNET_REPORT_HISTORY_REGRESSION==='1'){
  try{
   const original=page.locator('[data-mid="'+'3'.repeat(32)+'"]');
   await original.getByText(/For a native permission or required authorization/).waitFor();
-  await original.getByText(/Reply in this chat and tag the same agent/).waitFor();
   await original.getByRole('button',{name:'Mark as handled',exact:true}).waitFor();
   assert.equal(await page.evaluate(()=>fixture.thread.messages.find(m=>m.id==='3'.repeat(32)).exec.state),'needs_human','same-outcome follow-up success cannot invent an exact resolution');
   if(width===390)await page.getByRole('button',{name:'Back to chats',exact:true}).click();

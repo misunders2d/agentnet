@@ -28,7 +28,10 @@ func TestP3ReviewSkinsRendered(t *testing.T) {
 	if _, err := f.SendDM(DMDraft{Conv: conv, Body: "P3 QUOTED TEXT", Quote: parent.ID}); err != nil {
 		t.Fatal(err)
 	}
+	// A landing refuses ids that are not real message and conversation ids (3ba44749).
+	f.dms[0].id = strings.Repeat("c", 64)
 	q := &f.dms[0].msgs[1]
+	q.ID = strings.Repeat("a", 32)
 	q.State, q.Delivery = "waiting", "waiting"
 	q.Detail = client.WaitServerUnavailable + "cannot reach the Hub"
 	q.StateText = DMStateText("out", "message", q.State, "Bob", q.Detail)
