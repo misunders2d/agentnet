@@ -113,11 +113,21 @@ func TestUIResponsivenessRendered(t *testing.T) {
 			evidence = filepath.Join(t.TempDir(), "latency.png")
 		}
 		cmd.Env = append(os.Environ(), "LATENCY_URL="+ts.URL+"/latency?run=chromium", "LATENCY_TOKEN="+testToken, "LATENCY_EVIDENCE="+evidence)
-		out, err := cmd.CombinedOutput()
+		var out []byte
+		var err error
+		if os.Getenv("AGENTNET_RUNTIME_CRAWL") == "1" {
+			cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+			err = cmd.Run()
+		} else {
+			out, err = cmd.CombinedOutput()
+		}
 		if err != nil {
 			t.Fatalf("%v\n%s", err, out)
 		}
 		t.Log(string(out))
+		if os.Getenv("AGENTNET_RUNTIME_CRAWL") == "1" {
+			return
+		}
 		// Again with every write held, for controls that write: each must change
 		// on screen before the server answers, not only when it answers quickly.
 		slow := exec.CommandContext(t.Context(), "node", "testdata/latency_rendered_check.cjs")
@@ -128,6 +138,8 @@ func TestUIResponsivenessRendered(t *testing.T) {
 		slow.Env = append(os.Environ(), "LATENCY_URL="+ts.URL+"/latency?run=chromium-slow-writes", "LATENCY_TOKEN="+testToken, "AGENTNET_LATENCY_WRITE_DELAY=1100", "AGENTNET_LATENCY_SUITES="+suites)
 		if out, err := slow.CombinedOutput(); err != nil {
 			t.Fatalf("with writes held: %v\n%s", err, out)
+		} else if os.Getenv("AGENTNET_LATENCY_LOG_SLOW") == "1" {
+			t.Log(string(out))
 		}
 	}
 	if shell := os.Getenv("AGENTNET_NATIVE_SHELL"); shell != "" {
