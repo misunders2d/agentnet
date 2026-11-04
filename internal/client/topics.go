@@ -550,7 +550,14 @@ func (a *Agent) topicOverview(listArchived bool, unread *[]DeviceUnreadRef) ([]T
 		}
 	}
 	sortTopics(out)
-	sort.Slice(counts, func(i, j int) bool { return counts[i].Peer < counts[j].Peer })
+	// One peer has one entry per agent, built from a map: without the second key
+	// their order changed from one list to the next.
+	sort.Slice(counts, func(i, j int) bool {
+		if counts[i].Peer != counts[j].Peer {
+			return counts[i].Peer < counts[j].Peer
+		}
+		return topicAgentKey(counts[i].Latest) < topicAgentKey(counts[j].Latest)
+	})
 	return out, counts, nil
 }
 
