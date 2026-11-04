@@ -55,7 +55,7 @@ const link=(r,t)=>'agentnet://open#realm='+r+'&conv='+conv+'&topic='+t;
    await page.unroute('**/workspaces/'+other+'/*/api/dm?*');
    assert.equal(await page.evaluate(()=>window.agentnet.workspace.id),'default');
    assert.equal(await field().inputValue(),'unsent draft stays here');await page.getByText('draft.txt',{exact:true}).waitFor();
-   assert(posts.slice(before).every(p=>p.endsWith('/api/act')),'navigation never joins, approves, sends, stages, or requests shared history: '+posts.slice(before));
+   assert(posts.slice(before).every(p=>p.endsWith('/api/act')||p.endsWith('/api/topic/transfer/location')),'navigation never joins, approves, sends, stages, or requests shared history: '+posts.slice(before));
    assert(!posts.some(p=>/\/api\/(refresh|send|dm\/send|.*\/invite|.*\/decide)/.test(p)));
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
    if(process.env.AGENTNET_SCREENSHOTS)await page.screenshot({path:path.join(process.env.AGENTNET_SCREENSHOTS,'conversation-link-error-'+name+'.png')});

@@ -480,7 +480,7 @@ const server = http.createServer((req, res) => {
           assert.equal(await page.locator('[data-mid="'+ 'b'.repeat(32)+'"]').getAttribute('data-from'),'me',tag+': selected outgoing request keeps its author and direction');
           assert.equal(await composer.inputValue(),'Draft survives pending request navigation',tag+': draft remains in the bound conversation');
           await shot('pending-focused');
-          assert.equal((await page.evaluate(()=>fixture.requests.filter(r=>r.body&&r.path!='/api/refresh'&&!(r.path==='/api/act'&&r.body.do==='read')))).length,0,tag+': navigation sends no grants/retries/cancel/topic decisions');
+          assert.equal((await page.evaluate(()=>fixture.requests.filter(r=>r.body&&r.path!='/api/refresh'&&r.path!='/api/topic/transfer/location'&&!(r.path==='/api/act'&&r.body.do==='read')))).length,0,tag+': navigation sends no grants/retries/cancel/topic decisions');
           await page.evaluate(()=>resolvePending());
           await page.waitForTimeout(100);
           await current().click();

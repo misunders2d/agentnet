@@ -265,7 +265,7 @@ const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://127.0
   await new Promise(r=>server.listen(0,'127.0.0.1',r));const origin='http://127.0.0.1:'+server.address().port;
   browser=await chromium.launch({headless:true,executablePath:process.env.AGENTNET_CHROMIUM||'/usr/bin/chromium'});
   for(const width of [1280,390]){
-   const context=await browser.newContext({viewport:{width,height:900}}),page=await context.newPage(),errors=[];page.setDefaultTimeout(10000);
+   const phone=width<1024,context=await browser.newContext({viewport:{width,height:900},isMobile:phone,hasTouch:phone}),page=await context.newPage(),errors=[];page.setDefaultTimeout(10000);
    await context.route('**/*',r=>new URL(r.request().url()).origin===origin?r.continue():r.abort());page.on('pageerror',e=>errors.push(e.stack));
    await page.goto(origin);await page.waitForFunction(()=>window.ready);
    const nav=page.getByRole('navigation',{name:'Main'}),sent=()=>page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/dm/agent/ask').map(r=>r.body));
