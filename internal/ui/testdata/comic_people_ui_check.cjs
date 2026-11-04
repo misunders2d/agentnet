@@ -19,36 +19,18 @@ async function run(browser, w, h) {
   await shot('list');
   const text = await list.innerText();
   assert.ok(!/on Pixel/.test(text), name + ': no "on Pixel" agent row:\n' + text);
-  assert.ok(/asked from your Pixel/.test(text), name + ': the phone thread is this computer\'s agent:\n' + text);
+  // An unbound historical agent thread has no list row since 9133893b (model.ts,
+  // currentAgentTarget), so the laptop-Pixel and Zenbook threads are no longer reachable from here.
+  assert.ok(!/asked from your Pixel/.test(text), name + ': a retired agent thread has no row:\n' + text);
   assert.ok(/Vitalii/.test(text) && /from Phone/.test(text), name + ': Vitalii\'s phone is Vitalii:\n' + text);
-  assert.ok(/on Zenbook/.test(text), name + ': Zenbook runs an agent:\n' + text);
-
-  // The laptop↔Pixel thread: typed on the phone is yours, the answer is the agent's.
-  await p.getByRole('button', { name: /asked from your Pixel/ }).first().click();
-  const asked = p.locator('[role="log"] [data-mid]', { hasText: 'Did the nightly backup finish?' }).first();
-  await asked.waitFor({ timeout: 10000 });
-  await p.waitForTimeout(700); // the pane settles
-  await shot('pixel-thread');
-  assert.ok(await p.getByText('You · from Pixel').count() >= 2, name + ': "You · from Pixel" on what was typed on the phone');
-  assert.equal(await p.getByRole('button', { name: /^Ask / }).count(), 0, name + ': no Ask toward the phone');
-  assert.equal(await p.getByRole('textbox', { name: /^Ask / }).count(), 0, name + ': no Ask field toward the phone');
-  await p.getByText('Nothing to ask here').first().waitFor({ timeout: 5000 });
-  const side = await asked.evaluate((e) => {
-    const bubble = [...e.querySelectorAll('*')].filter((x) => /nightly backup/.test(x.textContent) && x.getBoundingClientRect().width > 0)
-      .sort((a, b) => a.getBoundingClientRect().width - b.getBoundingClientRect().width)[0] || e;
-    const b = bubble.getBoundingClientRect(), l = e.closest('[role="log"]').getBoundingClientRect();
-    return { right: l.right - b.right, left: b.left - l.left };
-  });
-  assert.ok(side.right < side.left, name + ': the phone\'s question is on the right: ' + JSON.stringify(side));
 
   // Vitalii's phone: a plain message only.
-  if (w < 600) await p.getByRole('button', { name: /^Back to chats/ }).first().click();
-  await p.waitForSelector('section[aria-label="Chats"]', { timeout: 10000 });
   await p.getByRole('button', { name: /from Phone/ }).first().click();
   await p.locator('[role="log"] [data-mid]', { hasText: 'Are we still on for the review at 4?' }).first().waitFor({ timeout: 10000 });
   await p.waitForTimeout(700);
   await shot('vitalii-thread');
-  const field = p.getByRole('textbox', { name: /^Message Vitalii/ });
+  // An old device conversation takes no new turn since 4825ff89 (MEL-713).
+  const field = p.getByRole('textbox', { name: 'Read only: write in a chat' });
   await field.waitFor({ timeout: 10000 });
   assert.equal(await p.getByRole('button', { name: /^Ask / }).count(), 0, name + ': no Ask toward Vitalii\'s phone');
 
