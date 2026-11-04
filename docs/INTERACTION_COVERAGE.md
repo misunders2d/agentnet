@@ -193,7 +193,8 @@ next commit; this is not qualification. The rendered tests outside CI's list, in
 36 of 37 passed. `TestScheduleLiveRendered`, `TestUIResponsivenessRendered` with
 `actions,outbox` written held, the UI batch and the client send, stream and history
 batches passed. At `1d4efabf`, the only later change, `TestBrowserBackRendered` and
-`TestComicNotificationLandingRendered` passed.
+`TestComicNotificationLandingRendered` passed. At `e8eaf6dd`, CI's 36 passed, 36 of 36
+in 405 s.
 
 **Rendered tests outside CI's list.** CI names 36 rendered tests; no other rendered
 test runs there. Of the others, 34 failed on both this candidate and base `cabe5c3c`
