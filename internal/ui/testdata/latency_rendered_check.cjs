@@ -38,7 +38,7 @@ async function trustedInteraction(page,control_id,{suite,width,height,touch,row,
    const asserted=await page.evaluate(()=>window.__anIntentOracle),after=await page.evaluate(id=>({fired:(window.__anFiredControlIds||window.latencyReport?.firedControlIds||[]).some(x=>x===id||x.startsWith(id+'#')),at:performance.now()}),control_id),elapsed=asserted.at===null?null:asserted.at-before,within_bound=elapsed!==null&&elapsed<1000;
    const reason=!after.fired?'trusted input did not fire tagged handler':!asserted.pass?'intent oracle did not observe '+intent.target:!within_bound?'intent assertion exceeded 1000 ms':'intent assertion passed';
    results.push({...base,fired_trusted:after.fired,change_asserted:asserted.pass,assertion_kind:intent.class,within_bound,input_to_visible_local_change_ms:elapsed,observed_visible_change:asserted,status:after.fired&&asserted.pass&&within_bound?'executed-pass':'executed-fail',reason,fixture_only:true,native_db_sync_contention:'not_run'});
-  }catch(error){results.push({...base,status:'failed',reason:String(error.message||error),fired_trusted:false,change_asserted:false,within_bound:false,input_to_visible_local_change_ms:null,observed_visible_change:null});}
+  }catch(error){results.push({...base,status:'executed-fail',reason:String(error.message||error),fired_trusted:false,change_asserted:false,within_bound:false,input_to_visible_local_change_ms:null,observed_visible_change:null,fixture_only:true,native_db_sync_contention:'not_run'});}
  return results;
 }
 (async()=>{
