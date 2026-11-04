@@ -22,6 +22,7 @@ try {
  // notification routing; the toy provider's dm0001 is not a valid target.
  overview.dms[0].id=view.id='c'.repeat(64);
  overview.demo=false;overview.review=[];overview.needs_you=[];overview.quarantine=[];overview.held=[];overview.threads=[];overview.topics=[];
+ const writeDelay=Number(query.get('writeDelay')||0);assert(Number.isInteger(writeDelay)&&writeDelay>=0&&writeDelay<=2500,'Invalid bounded write delay');reports.writeDelayMs=writeDelay;
  const chatLoadDelay=Number(query.get('chatLoadDelay')||15);assert(Number.isInteger(chatLoadDelay)&&chatLoadDelay>=15&&chatLoadDelay<=1500,'Invalid bounded chat load delay');reports.chatLoadDelayMs=chatLoadDelay;
  const peopleCount=Number(query.get('people')||1000);assert(Number.isInteger(peopleCount)&&peopleCount>=1&&peopleCount<=1000,'Invalid bounded fixture roster');
  const peers=Array.from({length:peopleCount},(_,i)=>({person:'fixture-person-'+i,label:'Person '+i,address:'fixture-'+i+'/laptop',state:'pinned',devices:[{address:'fixture-'+i+'/laptop',name:'Laptop',human:true}]}));
@@ -116,7 +117,7 @@ try {
  }
  if(p1==='bulk')for(const [i,t]of view.topics.entries())Object.assign(t,{state:'active',title:'Portable bulk '+(i+1),renamed:true,count:1});
 
- let held,release,typing=false,seq=100,reactionFailure=false,unreadHold=null,unreadFailure=false;
+ let held,release,typing=false,seq=100,reactionFailure=false,unreadHold=null,unreadFailure=false;let chatDeleteHold=null,chatDeleteFailure=false;
  let typingPreferences={send:false,show:true};
  const counts={overview:0,dm:0,typing:0,catalogs:0},listeners=new Set();
  const emit=hint=>{seq++;for(const fn of listeners)fn({type:'change',seq,...(hint?{hint}:{})});};
@@ -214,6 +215,7 @@ try {
     if(body?.do==='read'){for(const m of view.messages)if(body.ids?.includes(m.id))m.unread=false;overview.dms[0].unread=view.messages.filter(m=>m.unread).length;view.main_topic={unread:overview.dms[0].unread};emit();}
     return {};
    }
+   if(path==='/api/conversation/delete'){if(chatDeleteHold)await chatDeleteHold;await pause(100);if(chatDeleteFailure)throw Error('Synthetic delete refusal');overview.dms=overview.dms.filter(d=>d.id!==body.conv);seq++;emit();return{note:''};}
    if(path==='/api/refresh')return {};
    if(path.startsWith('/api/agents')){counts.catalogs++;return{host:overview.me.address,local:true,agents:[],sessions:[]};}
    if(path==='/api/responder')return{manual:true,harness:'',dir:'',available:[],setup:{tools:[]}};
@@ -241,6 +243,8 @@ try {
  const originalAPI=host.api;
  host.api=async(path,body)=>{
   const call={path,method:body===undefined?'read':'write',start:performance.now()};if(extended&&body!==undefined)call.request=clone(body);reports.apiCalls.push(call);
+  // A slow server must not delay what the person sees: every write waits here.
+  if(writeDelay&&body!==undefined)await new Promise(r=>setTimeout(r,writeDelay));
   try{const result=await originalAPI(path,body);call.result=performance.now();call.ok=true;return result;}
   catch(e){call.result=performance.now();call.ok=false;throw e;}
  };
@@ -287,16 +291,17 @@ try {
   // Keep the same visible state and under-1000-ms acceptance; these are diagnostics.
   // A brief pending state can end between polls on a busy device; for those
   // predicates only, the observer checks each committed change.
-  let seenAt;const mutations=new MutationObserver(()=>{const now=performance.now();if(record.firstMutationMs===undefined)record.firstMutationMs=now-record.start;if(expected.brief&&seenAt===undefined){try{if(probe())seenAt=now;}catch{}}});mutations.observe(root,{subtree:true,childList:true,attributes:true,characterData:true});
+  let seenAt;const mutations=new MutationObserver(list=>{const now=performance.now();if(record.firstMutationMs===undefined)record.firstMutationMs=now-record.start;if(record.firstStructuralMs===undefined&&list.some(m=>m.type!=='attributes'))record.firstStructuralMs=now-record.start;if(expected.brief&&seenAt===undefined){try{if(probe())seenAt=now;}catch{}}});mutations.observe(writeDelay?shadow:root,{subtree:true,childList:true,attributes:true,characterData:true});
   record.feedbackProbeMs=0;record.feedbackProbeMaxMs=0;
   const probe=()=>{const start=performance.now();try{return expected();}finally{const elapsed=performance.now()-start;record.feedbackProbeMs+=elapsed;record.feedbackProbeMaxMs=Math.max(record.feedbackProbeMaxMs,elapsed);}};
-  try{action();record.dispatchMs=performance.now()-record.start;queueMicrotask(()=>{record.microtaskMs=performance.now()-record.start;});await until(()=>seenAt!==undefined||probe(),id+' visible feedback',3000);record.feedbackMs=(seenAt??performance.now())-record.start;performance.mark('latency:'+id+':feedback');
-   await until(complete,id+' completed visible state',3000);record.visibleMs=performance.now()-record.start;await frame();await frame();assert(complete(),id+' state lost before paint opportunity');record.paintMs=performance.now()-record.start;
+  try{action();record.dispatchMs=performance.now()-record.start;queueMicrotask(()=>{record.microtaskMs=performance.now()-record.start;});await until(()=>seenAt!==undefined||probe(),id+' visible feedback',3000+writeDelay*6);record.feedbackMs=(seenAt??performance.now())-record.start;performance.mark('latency:'+id+':feedback');
+   await until(complete,id+' completed visible state',3000+writeDelay*6);record.visibleMs=performance.now()-record.start;await frame();await frame();assert(complete(),id+' state lost before paint opportunity');record.paintMs=performance.now()-record.start;
    if(reports.hostCalls)record.hostResults=reports.hostCalls.slice(record.hostStart).map(c=>({...c,startMs:c.start-record.start,resultMs:c.result===undefined?null:c.result-record.start}));
    record.api=reports.apiCalls.slice(record.apiStart).map(c=>({path:c.path,method:c.method,startMs:c.start-record.start,resultMs:c.result===undefined?null:c.result-record.start,ok:c.ok??null}));
    const writes=record.api.filter(c=>c.method==='write'&&c.resultMs!==null&&c.ok===true),failed=record.api.filter(c=>c.method==='write'&&c.resultMs!==null&&c.ok===false),projections=record.api.filter(c=>(c.path.startsWith('/api/dm?')||p1&&c.path.startsWith('/api/thread?'))&&c.resultMs!==null&&c.ok===true);
    record.durableResultMs=writes.length?Math.max(...writes.map(c=>c.resultMs)):null;record.durableSource=writes.length?'synthetic host API result (not database persistence)':null;
    record.failedResultMs=failed.length?Math.max(...failed.map(c=>c.resultMs)):null;
+   if(writeDelay){const started=record.api.filter(c=>c.method==='write');if(started.length)(reports.writeRows||=[]).push({id,writes:started.map(c=>c.path),firstWriteStartMs:Math.min(...started.map(c=>c.startMs)),firstMutationMs:record.firstMutationMs??null,firstStructuralMs:record.firstStructuralMs??null,feedbackMs:record.feedbackMs});}
    record.projectionResultMs=projections.length?Math.max(...projections.map(c=>c.resultMs)):null;
    record.frameMaxMs=Math.max(0,...gaps);record.frameP95Ms=gaps.sort((a,b)=>a-b)[Math.min(gaps.length-1,Math.floor(gaps.length*.95))]||0;
    record.stateVerified=true;record.feedbackBoundPassed=record.feedbackMs<1000;record.ok=record.feedbackBoundPassed;if(!record.feedbackBoundPassed)reports.feedbackFailures.push(id+' local feedback exceeds owner’s under-1000-ms bound');census();
@@ -332,6 +337,18 @@ try {
   const move=item('Move to topic');if(move){await measure('message.organize-open',()=>move.click(),()=>visibleText('Move selected messages'),'organization review for selected original visible');await settled();const organize=[...scope().querySelectorAll('[role="dialog"]')].find(d=>d.textContent.includes('Move selected messages'));assert(organize.textContent.includes('Edited exact action target'),'organization lost exact original');await measure('message.organize-cancel',()=>[...organize.querySelectorAll('button')].find(b=>label(b)==='Cancel').click(),()=>organize.hasAttribute('data-ending-style')||!organize.isConnected,'organization cancelled without applying move',()=>!organize.isConnected);await settled();}
   await measure('message.selection-stop',()=>item('Stop selecting').click(),()=>!item('Stop selecting')&&!!root.querySelector('[data-part="composer"]'),'selection exits to original composer');
   await menu();await measure('message.delete-confirm',()=>item('Delete…').click(),()=>visibleText('Delete this message?'),'delete requires concrete confirmation');await settled();const confirm=[...scope().querySelectorAll('[role="alertdialog"]')].find(shown);await measure('message.delete-cancel',()=>[...confirm.querySelectorAll('button')].find(b=>label(b)==='Keep it').click(),()=>confirm.hasAttribute('data-ending-style')||!confirm.isConnected,'cancel starts closing',()=>!confirm.isConnected);assert(!message.deleted,'cancel deleted message');await menu();item('Delete…').click();await until(()=>visibleText('Delete this message?'),'second explicit delete confirmation');const deleting=[...scope().querySelectorAll('[role="alertdialog"]')].find(shown);await measure('message.delete',()=>item('Delete').click(),()=>deleting.hasAttribute('data-ending-style')||!deleting.isConnected,'explicit delete starts closing confirmation',()=>!!message.deleted&&row().textContent.includes('Message deleted'));
+  // A deleted chat leaves the list and closes before the server answers, stays
+  // gone with the answer held, and comes back with the reason when refused.
+  // Not onScreen: the confirmation makes everything behind it inert.
+  const chatRow=()=>[...root.querySelectorAll('[data-part="chat-row"]')].find(b=>b.textContent.includes('Vitalii'));
+  const askDeleteChat=async()=>{await settled();await until(()=>[...root.querySelectorAll('button')].some(b=>shown(b)&&label(b)==='More'),'chat menu');[...root.querySelectorAll('button')].find(b=>shown(b)&&label(b)==='More').click();await until(()=>item('Delete conversation…'),'delete conversation item');item('Delete conversation…').click();await until(()=>[...scope().querySelectorAll('[role="alertdialog"]')].find(shown),'delete conversation confirmation');await settled();return [...scope().querySelectorAll('[role="alertdialog"]')].find(shown);};
+  chatDeleteFailure=true;let confirmChat=await askDeleteChat();
+  await measure('chat.delete-refused',()=>[...confirmChat.querySelectorAll('button')].find(b=>label(b)==='Delete').click(),()=>!chatRow(),'chat leaves the list before the refusal',()=>!!chatRow()&&visibleText('Synthetic delete refusal')&&onScreen(row()));
+  chatDeleteFailure=false;let releaseChatDelete;chatDeleteHold=new Promise(r=>releaseChatDelete=r);confirmChat=await askDeleteChat();
+  await measure('chat.delete',()=>[...confirmChat.querySelectorAll('button')].find(b=>label(b)==='Delete').click(),()=>!chatRow()&&!onScreen(row()),'chat leaves the list and closes with the server answer held');
+  // Any write still unanswered also says so, wherever the person has gone since.
+  const workingNotice=()=>scope().querySelector('[data-part="working"]');await until(workingNotice,'working notice while the server is silent',1500);
+  chatDeleteHold=null;releaseChatDelete();await until(()=>!overview.dms.some(d=>d.title==='Vitalii'||d.id===view.id),'chat delete confirmed');await pause(50);assert(!chatRow(),'confirmed delete brought the chat back');await until(()=>!workingNotice(),'working notice gone once answered',1500);
  }
  if(suite==='history'){
  const messageReady=()=>[...root.querySelectorAll('[data-part="message"]')].some(onScreen);
@@ -1272,7 +1289,9 @@ try {
  reports.families={};for(const family of new Set(reports.actions.map(a=>a.id.split('.')[0]))){const actions=reports.actions.filter(a=>a.id.split('.')[0]===family&&(a.ok||a.stateVerified));const values=actions.map(a=>a.feedbackMs);reports.families[family]={samples:values.length,p50:percentile(values,.5),p95:percentile(values,.95),max:values.length?Math.max(...values):null};}
  reports.routineOver200ms=reports.actions.filter(a=>(a.ok||a.stateVerified)&&a.feedbackMs>200&&!a.id.startsWith('presence.')&&!a.id.startsWith('sync.')).map(({id,feedbackMs,visibleMs,paintMs,frameMaxMs})=>({id,feedbackMs,visibleMs,paintMs,frameMaxMs}));
  reports.smooth=reports.routineOver200ms.length===0;reports.timingMeaning='family percentiles pool different named controls in one pass; not repeated per-control statistical confidence. Under 1000ms is the owner’s local-feedback acceptance ceiling; routine feedback above200ms is retained as an additional diagnostic. Background completion is measured separately.';
- assert(reports.feedbackFailures.length===0,reports.feedbackFailures.join('; '));
+ if(!writeDelay)assert(reports.feedbackFailures.length===0,reports.feedbackFailures.join('; '));
+ // With every write held, each control that writes still changes on screen in time.
+ if(writeDelay)assert(!(reports.writeRows||[]).some(r=>!(r.firstStructuralMs<1000)),'Silent while the server is slow: '+(reports.writeRows||[]).filter(r=>!(r.firstStructuralMs<1000)).map(r=>r.id).join(', '));
  assert(reports.pageErrors.length===0,'Runtime errors: '+reports.pageErrors.join('; '));return {ok:true,...reports};
  }catch(e){reports.failureSnapshot={html:document.querySelector('#fixture')?.shadowRoot?.innerHTML.slice(-32000),topicBars:[...(document.querySelector('#fixture')?.shadowRoot?.querySelectorAll('[data-part="topic-bar"]')||[])].map(nav=>({rect:nav.getBoundingClientRect().toJSON(),clientWidth:nav.clientWidth,scrollWidth:nav.scrollWidth,padding:getComputedStyle(nav).padding,columnGap:getComputedStyle(nav).columnGap,controls:[...nav.querySelectorAll('button')].map(button=>({label:button.getAttribute('aria-label')||button.textContent,topic:button.dataset.topic,current:button.getAttribute('aria-current'),pressed:button.getAttribute('aria-pressed'),width:button.offsetWidth,rect:button.getBoundingClientRect().toJSON(),font:getComputedStyle(button).font}))})),controls:[...(document.querySelector('#fixture')?.shadowRoot?.querySelectorAll('button,[role=alert]')||[])].filter(el=>el.getClientRects().length).map(el=>({label:el.getAttribute('aria-label')||el.textContent,ariaHidden:el.getAttribute('aria-hidden'),inert:!!el.closest('[inert]'),rect:el.getBoundingClientRect().toJSON()}))};return {ok:false,error:String(e.message||e)+'\n'+String(e.stack||''),...reports};}
 }

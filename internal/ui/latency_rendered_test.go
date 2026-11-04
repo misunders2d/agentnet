@@ -118,6 +118,17 @@ func TestUIResponsivenessRendered(t *testing.T) {
 			t.Fatalf("%v\n%s", err, out)
 		}
 		t.Log(string(out))
+		// Again with every write held, for controls that write: each must change
+		// on screen before the server answers, not only when it answers quickly.
+		slow := exec.CommandContext(t.Context(), "node", "testdata/latency_rendered_check.cjs")
+		suites := os.Getenv("AGENTNET_LATENCY_WRITE_SUITES")
+		if suites == "" {
+			suites = "actions,outbox"
+		}
+		slow.Env = append(os.Environ(), "LATENCY_URL="+ts.URL+"/latency?run=chromium-slow-writes", "LATENCY_TOKEN="+testToken, "AGENTNET_LATENCY_WRITE_DELAY=1100", "AGENTNET_LATENCY_SUITES="+suites)
+		if out, err := slow.CombinedOutput(); err != nil {
+			t.Fatalf("with writes held: %v\n%s", err, out)
+		}
 	}
 	if shell := os.Getenv("AGENTNET_NATIVE_SHELL"); shell != "" {
 		suffix := ""

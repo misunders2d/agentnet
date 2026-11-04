@@ -71,6 +71,7 @@ export type Tab = "chats" | "agents" | "oks" | "outbox" | "settings";
 /** A conversation as last loaded: a DM or group, or a device thread (one topic). */
 export type View = T.DMThread | T.Thread;
 type ConfirmedRead = { kind: "dm" | "thread"; id: string; seq: number; unread: number; group?: string; archived_unread?: number };
+const WRITE_NOTICE_MS = 600; // how long a write may go unanswered before the app says it is still working
 const VIEWS_KEPT = 24; // conversations kept for an instant reopen (loaded again when opened)
 
 export interface PendingReaction {
@@ -139,6 +140,8 @@ export interface State {
   drafts: Record<string, Draft>;
   scheduleSaves: Record<string, ScheduleSave>;
   toasts: Toast[];
+  // A write the server has not answered for a noticeable time.
+  working: boolean;
   messageLanding: MessageLanding | null; // one exact notification, only for this mounted workspace
   loadError: string;
   groupContextPending: string; // selected group keeps its last verified view while its new context arrives
@@ -280,7 +283,7 @@ export class Store {
 
   constructor(readonly host: Host) {
     this.chooseMain = mainPreferences(host.workspace.id, () => localStorage);
-    const calls = api(host);
+    const calls = api(this.watchWrites(host));
     this.api = { ...calls, act: action => action.do === "resolve" ? this.dismiss(action, calls) : calls.act(action),
       edit: c => this.changeMessage("edit", c, calls), retract: c => this.changeMessage("delete", c, calls),
       setPersonPicture: png => this.changePicture(png, calls),
@@ -303,7 +306,7 @@ export class Store {
     });
     this.state = {
       tab: "chats", overview: null, open: null, pending: null, views: {}, dm: null, thread: null, typing: null, invitations: [], attentionReplies: {}, reactionPending: {}, dismissPending: {}, messageChanges: {}, reminderChanges: {},
-      conn: "loading", version: "", newVersion: "", unsent: false, drafts: this.loadDrafts(), scheduleSaves:{}, toasts: [], messageLanding: null, loadError: "", groupContextPending: "", invite: null, topicBusy: {}, topicPreviews: {}, panel: false, section: "", agentNames: {}, readVisit: null, contentRevision: 0,
+      conn: "loading", version: "", newVersion: "", unsent: false, drafts: this.loadDrafts(), scheduleSaves:{}, toasts: [], working: false, messageLanding: null, loadError: "", groupContextPending: "", invite: null, topicBusy: {}, topicPreviews: {}, panel: false, section: "", agentNames: {}, readVisit: null, contentRevision: 0,
     };
     const saved=host.workspaces?.state?.(host.workspace.id)?.comicDrafts as {handle?:string;open:Open;dm:T.DMThread|null;thread:T.Thread|null;tab:State['tab']}|undefined;
     if(saved&&saved.handle===host.workspace.handle)Object.assign(this.state,{open:saved.open,dm:saved.dm,thread:saved.thread,tab:saved.tab});
@@ -341,7 +344,7 @@ export class Store {
     for (const fn of this.subs) fn();
   }
   private presentReads(s: State): State {
-    if (!this.localReads.size && !this.localUnreads.size) return s;
+    if (!this.localReads.size && !this.localUnreads.size && !this.deletingChats.size) return s;
     if (this.readState?.source === s) return this.readState.value;
     let overview = s.overview;
     const views = { ...s.views };
@@ -388,6 +391,10 @@ export class Store {
     for (const [id, mark] of this.localUnreads) {
       const summary = mark.kind === "dm" ? overview?.dms?.find(d => d.id === id) : overview?.threads?.find(t => t.id === id) || overview?.topics?.find(t => t.latest.id === id)?.latest;
       if (overview && summary && summary.unread < mark.unread) overview = this.readOverview(overview, { kind: mark.kind, id, seq: overview.seq || 0, unread: mark.unread });
+    }
+    if (overview && this.deletingChats.size) {
+      const kept = (id: string) => !this.deletingChats.has(id);
+      overview = { ...overview, dms: overview.dms?.filter(d => kept(d.id)) ?? null, threads: overview.threads?.filter(t => kept(t.id)) ?? null, topics: overview.topics?.filter(t => kept(t.latest.id)) ?? overview.topics };
     }
     const value = { ...s, views, overview,
       dm: s.dm && (views[s.dm.id] as T.DMThread || s.dm),
@@ -2403,6 +2410,47 @@ export class Store {
     const id = ++this.toastSeq;
     this.set({ toasts: [...this.state.toasts, { id, text, tone }] });
     setTimeout(() => this.set({ toasts: this.state.toasts.filter((t) => t.id !== id) }), tone === "error" ? 7000 : 3500);
+  }
+
+  // Nothing a person asks for may look ignored. Most actions show their own
+  // change at once; any write still unanswered after a moment also says so, as
+  // tdesktop's connecting widget does, so a slow server is never silence. Sends
+  // and reactions have their own pending row; the rest here nobody asked for.
+  private watchWrites(host: Host): Host {
+    const own = /^\/api\/(typing|notify\/seen|upload|refresh|dm\/send|send\b|message\/react|topic\/transfer\/location|dm\/guest\/check)/;
+    const watched = <R>(path: string, body?: unknown): Promise<R> => {
+      const work = host.api<R>(path, body);
+      return body === undefined || own.test(path) || (body as { do?: string }).do === "read" ? work : this.trackWrite(work);
+    };
+    // Hosts are frozen, so this shadows host.api rather than assigning it.
+    return Object.create(host, { api: { value: watched } }) as Host;
+  }
+  private writes = 0;
+  private writeTimer?: ReturnType<typeof setTimeout>;
+  private trackWrite<R>(work: Promise<R>): Promise<R> {
+    if (this.writes++ === 0) this.writeTimer = setTimeout(() => { if (this.alive && this.writes > 0) this.set({ working: true }); }, WRITE_NOTICE_MS);
+    return work.finally(() => {
+      if (--this.writes > 0) return;
+      clearTimeout(this.writeTimer);
+      if (this.alive && this.state.working) this.set({ working: false });
+    });
+  }
+
+  // A deleted chat leaves at once, as tdlib deletes a chat's messages locally
+  // before the server answers. A refusal puts it back and says why.
+  private deletingChats = new Set<string>();
+  async deleteChat(id: string, ref: Parameters<Api["deleteConversation"]>[0]) {
+    const open = this.state.open;
+    this.deletingChats.add(id);
+    this.publishReads();
+    this.close();
+    const result = await this.run(a => a.deleteConversation(ref));
+    if (result) await this.refetch();
+    this.deletingChats.delete(id);
+    this.publishReads();
+    if (!this.alive) return;
+    if (result?.note) this.toast(result.note, "ok");
+    if (!result && open && !this.state.open && !this.state.pending) void this.open(open);
   }
 
   // run performs one action and reports its failure in words; the change
