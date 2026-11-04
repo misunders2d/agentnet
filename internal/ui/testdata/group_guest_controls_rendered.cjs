@@ -2061,7 +2061,7 @@ if(process.env.AGENTNET_HELDBACK_REGRESSION==='1'){
 if(process.env.AGENTNET_DELIVERY_STOP_REGRESSION==='1'){
     for(const scenario of ['never','never-native','uncertain','uncertain-native','custody','delivered','running','answered','queued-error']){
      const {page,context}=await openCase('delivery-'+scenario),request='9'.repeat(32);
-     await page.evaluate(id=>openFixtureMessage(id),request);
+     await page.locator('#skin [data-part="chat-row"]').filter({hasText:'Synthetic delivery request'}).first().click();
      const row=page.locator('[data-mid="'+request+'"]');
      try{await row.waitFor();}catch(e){const shot=path.join(evidence,skin+'-'+scenario+'-failure-'+width+'.png');await page.screenshot({path:shot});console.error(JSON.stringify({skin,width,scenario,errors,shot,text:await page.locator('#skin').evaluate(e=>e.shadowRoot.innerText||e.shadowRoot.textContent),requests:await page.evaluate(()=>fixture.requests)}));throw e;}const visible=await row.innerText();
      assert(!/Cancelled|Canceled/.test(visible),skin+' '+scenario+': local stop never claims recipient cancellation');
@@ -2075,7 +2075,7 @@ if(process.env.AGENTNET_DELIVERY_STOP_REGRESSION==='1'){
      const detail=await page.evaluate(()=>fixture.deliveryDetail);
      if(detail)await page.getByText(detail,{exact:true}).filter({visible:true}).first().waitFor();
      if(scenario.startsWith('uncertain'))assert(await page.getByText(/Cancellation cannot be confirmed/).filter({visible:true}).count()>0);
-     assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>['/api/act','/api/send','/api/dm/send'].includes(r.path)).length),0,'Opening status/details never retries work');
+     const retried=await page.evaluate(()=>fixture.requests.filter(r=>['/api/act','/api/send','/api/dm/send'].includes(r.path)&&r.body?.do!=='read'));assert.deepEqual(retried,[],'Opening status/details never retries work');
      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false,'Delivery detail fits viewport');
      await settle(page);const shot=path.join(evidence,skin+'-'+scenario+'-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);await context.close();
     }
