@@ -356,7 +356,7 @@ try {
   chatDeleteFailure=false;let releaseChatDelete;chatDeleteHold=new Promise(r=>releaseChatDelete=r);confirmChat=await askDeleteChat();
   await measure('chat.delete',()=>[...confirmChat.querySelectorAll('button')].find(b=>label(b)==='Delete').click(),()=>!chatRow()&&!onScreen(row()),'chat leaves the list and closes with the server answer held');
   // Any write still unanswered also says so, wherever the person has gone since.
-  const workingNotice=()=>scope().querySelector('[data-part="working"]');await until(workingNotice,'working notice while the server is silent',1500);
+  const workingNotice=()=>scope().querySelector('[data-working]');await until(workingNotice,'working notice while the server is silent',1500);
   // A message arriving meanwhile brings the chat back: only what was deleted stays hidden.
   Object.assign(overview.dms.find(d=>d.id===view.id),{last_at:new Date().toISOString(),last_id:'f'.repeat(32)});seq++;emit();await until(chatRow,'newer message brings the chat back during the delete',3000);
   chatDeleteHold=null;releaseChatDelete();await until(()=>!overview.dms.some(d=>d.title==='Vitalii'||d.id===view.id),'chat delete confirmed');await pause(50);assert(!chatRow(),'confirmed delete brought the chat back');await until(()=>!workingNotice(),'working notice gone once answered',1500);
