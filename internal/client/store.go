@@ -329,7 +329,7 @@ CREATE TABLE reported(
 CREATE INDEX outbox_conv_lid ON outbox(conv, lid);
 `, historyReceiptSchema, deviceHistorySchema, proposalChoiceSchema, receiptGenerationSchema, requestFollowupSchema, answeredConversationStatusSchema, modelReportSchema, heldCopySchema, retainedConversationStatusSchema, heldLogicalSchema, waitingConversationStatusSchema, topicMarkSyncSchema, skippedCopySchema, historyArchiveSchema, `
 ALTER TABLE quarantine ADD COLUMN relay_ingress INTEGER NOT NULL DEFAULT 0;
-`, deviceHistoryOriginalPeerSchema, groupPublicationBindingSchema, agentActionSchema, nativeApprovalSchema, attentionMarkSchema, sharedTopicTitleSchema, scheduledSendSchema, conversationResourcesSchema, directTopicSchema, reminderSyncSchema, sendRetryProofSchema, topicTransferSchema, steeringLifecycleSchema, helperWaitSchema, outboxLogicalIDSchema, outboxConvSubSchema, unreadDirtySchema, continuityGenerationSchema, queuedSendSchema, viewDirtySchema}
+`, deviceHistoryOriginalPeerSchema, groupPublicationBindingSchema, agentActionSchema, nativeApprovalSchema, attentionMarkSchema, sharedTopicTitleSchema, scheduledSendSchema, conversationResourcesSchema, directTopicSchema, reminderSyncSchema, sendRetryProofSchema, topicTransferSchema, steeringLifecycleSchema, helperWaitSchema, outboxLogicalIDSchema, outboxConvSubSchema, unreadDirtySchema, continuityGenerationSchema, queuedSendSchema, viewDirtySchema, proposalLookupSchema}
 
 // Lookups by logical ID alone (a request's continuation and stop, proposal
 // confirmation, sent copies) otherwise read every outbox row with its inline

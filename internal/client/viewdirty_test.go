@@ -133,7 +133,7 @@ func TestViewDirtyNamesTheScopeOfEveryWrite(t *testing.T) {
 // summary can predate the step, and every later write is marked.
 func TestViewDirtyStartsWithEverythingOnAnUpgrade(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "agent.db")
-	old, err := sqlitedb.Open(path, schema[:len(schema)-1])
+	old, err := sqlitedb.Open(path, schema[:slices.Index(schema, viewDirtySchema)])
 	if err != nil {
 		t.Fatal(err)
 	}

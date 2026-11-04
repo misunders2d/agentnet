@@ -284,7 +284,7 @@ func (a *Agent) confirmableProposalIn(q dbq, id string) (p confirmableProposal, 
 		ref = p.lid
 	}
 	var controls int
-	err = q.QueryRow(`SELECT count(*) FROM (SELECT id FROM inbox WHERE coalesce(conv,'')=? AND ref_id=? AND ref_fp=? AND sub IN (?,?) UNION ALL SELECT id FROM outbox WHERE coalesce(conv,'')=? AND ref_id=? AND ref_fp=? AND sub IN (?,?))`, p.conv, ref, p.key, envelope.SubRevision, envelope.SubRetraction, p.conv, ref, p.key, envelope.SubRevision, envelope.SubRetraction).Scan(&controls)
+	err = q.QueryRow(`SELECT count(*) FROM (SELECT id FROM inbox WHERE `+convIs(p.conv)+` AND ref_id=? AND ref_fp=? AND sub IN (?,?) UNION ALL SELECT id FROM outbox WHERE `+convIs(p.conv)+` AND ref_id=? AND ref_fp=? AND sub IN (?,?))`, p.conv, ref, p.key, envelope.SubRevision, envelope.SubRetraction, p.conv, ref, p.key, envelope.SubRevision, envelope.SubRetraction).Scan(&controls)
 	if err != nil {
 		return p, err
 	}
@@ -292,7 +292,7 @@ func (a *Agent) confirmableProposalIn(q dbq, id string) (p confirmableProposal, 
 		return p, errors.New("the proposal was edited or deleted after it was made, so it cannot be confirmed")
 	}
 	var target, questionPID, questionTopic string
-	err = q.QueryRow(`SELECT coalesce(target,''),coalesce(pid,''),coalesce(topic,'') FROM outbox WHERE (id=? OR lid=?) AND coalesce(conv,'')=? AND ref_id IS NULL AND coalesce(kind,json_extract(envelope,'$.kind'))=? AND (?<>'' OR recipient=? OR substr(recipient,1,length(?)+1)=?||'#')`, p.replyTo, p.replyTo, p.conv, envelope.KindQuestion, p.conv, p.from, p.from, p.from).Scan(&target, &questionPID, &questionTopic)
+	err = q.QueryRow(`SELECT coalesce(target,''),coalesce(pid,''),coalesce(topic,'') FROM outbox WHERE (id=? OR lid=?) AND `+convIs(p.conv)+` AND ref_id IS NULL AND coalesce(kind,json_extract(envelope,'$.kind'))=? AND (?<>'' OR recipient=? OR substr(recipient,1,length(?)+1)=?||'#')`, p.replyTo, p.replyTo, p.conv, envelope.KindQuestion, p.conv, p.from, p.from, p.from).Scan(&target, &questionPID, &questionTopic)
 	if errors.Is(err, sql.ErrNoRows) {
 		target, questionPID, questionTopic, err = a.sharedProposalQuestion(q, p)
 		p.shared = err == nil
@@ -343,7 +343,7 @@ func (a *Agent) confirmedProposal(q dbq, p confirmableProposal) (string, error) 
 	if err == nil || !errors.Is(err, sql.ErrNoRows) {
 		return id, err
 	}
-	err = q.QueryRow(`SELECT id FROM outbox WHERE coalesce(conv,'')=? AND ref_id IS NULL AND coalesce(kind,json_extract(envelope,'$.kind'))=? AND reply_to=? AND body=? AND coalesce(pid,'')=? AND coalesce(target,'')=? AND (?<>'' OR recipient=?) ORDER BY rowid LIMIT 1`, p.conv, envelope.KindTask, ref, p.body, p.pid, targetJSON(p.target), p.conv, p.from).Scan(&id)
+	err = q.QueryRow(`SELECT id FROM outbox WHERE `+convIs(p.conv)+` AND ref_id IS NULL AND coalesce(kind,json_extract(envelope,'$.kind'))=? AND reply_to=? AND body=? AND coalesce(pid,'')=? AND coalesce(target,'')=? AND (?<>'' OR recipient=?) ORDER BY rowid LIMIT 1`, p.conv, envelope.KindTask, ref, p.body, p.pid, targetJSON(p.target), p.conv, p.from).Scan(&id)
 	if !errors.Is(err, sql.ErrNoRows) {
 		return id, err
 	}
