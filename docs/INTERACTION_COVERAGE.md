@@ -61,6 +61,19 @@ loaded by other work, current size: first list 2559 ms, busy list max 783 ms, op
 biggest chat busy max 605 ms. Same machine before these fixes: list rebuild
 1420 ms, busy p95 3300 ms.
 
+**Amazon_team late arrival, checked against stored times; no message text read.**
+The Hub accepted nothing from the sender the owner named from at least November 3
+06:00 UTC until November 4 09:00 UTC, so that reply was delayed before the Hub, on
+the sender's device. Why is not provable from here; a device suspended for being
+outdated is the leading hypothesis and needs that device's records. No row sent
+on November 3 arrived late on the ThinkPad or the Zenbook. Rows delayed about 25
+minutes on November 4 were held by the Hub while the ThinkPad's app was not running
+(13:03–13:28; no crash record, reason unknown) or the Zenbook was off (until 12:14),
+and arrived within 24 s of the app starting. Those are offline catch-up, not a
+stall. Live arrival on the ThinkPad was 6–10 s on November 4 against at most 3 s on
+November 2, during catch-up on v0.10.9; the candidate's fixes address that path,
+and live arrival on the candidate is not yet measured.
+
 **Not met or not shown.** At 10x, opening a chat and the first list exceed one
 second for the confirmed result, as does the first list at current size on a
 loaded machine. These are confirmed results; rendered local feedback at 10x is
