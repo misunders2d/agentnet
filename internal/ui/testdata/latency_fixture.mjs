@@ -244,7 +244,8 @@ try {
  host.api=async(path,body)=>{
   const call={path,method:body===undefined?'read':'write',start:performance.now()};if(extended&&body!==undefined)call.request=clone(body);reports.apiCalls.push(call);
   // A slow server must not delay what the person sees: every write waits here.
-  if(writeDelay&&body!==undefined)await new Promise(r=>setTimeout(r,writeDelay));
+  // The cache clear below is released by hand, so it must reach the fixture first.
+  if(writeDelay&&body!==undefined&&path!=='/api/storage/cache')await new Promise(r=>setTimeout(r,writeDelay));
   try{const result=await originalAPI(path,body);call.result=performance.now();call.ok=true;return result;}
   catch(e){call.result=performance.now();call.ok=false;throw e;}
  };
@@ -1147,7 +1148,7 @@ try {
    const beforeSends=reports.assignmentAttempts.length,send=control('Send task',assign());await tap('assign.refused',send,brief(()=>!!control('Sending task…',assign())),'exact assignment submission pending',()=>visibleText('Synthetic assignment refused; no task or native work started'));
    assert(reports.assignmentAttempts.length===beforeSends+1,'one exact assignment attempt');const firstAttempt=reports.assignmentAttempts.at(-1);const invited=reports.assignmentInvites.at(-1);assert(invited.host===assignmentHost&&invited.agent_id===assignmentAgent&&invited.topic===firstAttempt.topic&&firstAttempt.pid==='assignment-pid'&&firstAttempt.kind==='task'&&firstAttempt.body.includes('agentnet:message/'+fileID+'?conv='+view.id)&&firstAttempt.body.includes('> '+fileMessage.body),'assignment exact host/agent/original provenance lost');
    assert(staged.at(-1).sha256===reports.downloadOriginal.sha256,'assignment staged bytes differ from reviewed original');
-   const retry=control('Retry this task',assign());await tap('assign.retry-refused',retry,brief(()=>!!control('Sending task…',assign())),'same prepared assignment retry pending',()=>visibleText('Synthetic assignment refused; no task or native work started')&&!control('Sending task…',assign()));
+   await until(()=>control('Retry this task',assign()),'retry offered after the refusal');const retry=control('Retry this task',assign());await tap('assign.retry-refused',retry,brief(()=>!!control('Sending task…',assign())),'same prepared assignment retry pending',()=>visibleText('Synthetic assignment refused; no task or native work started')&&!control('Sending task…',assign()));
    assert(reports.assignmentAttempts.at(-1).id===firstAttempt.id&&reports.assignmentAttempts.at(-1).body===firstAttempt.body,'retry changed prepared task ID/body');
    await closeSheet('assign.close','Assign to your agent');shadow.removeEventListener('click',downloadCapture,true);
    // A big received file waits for a tap (FileView.fetch "wait", Telegram-like):
