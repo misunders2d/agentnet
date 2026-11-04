@@ -234,7 +234,7 @@ function linkCard(code, inv) {
 function take() {
   const h = location.hash.slice(1);
   if (!h) return "";
-  history.replaceState(null, "", location.pathname + location.search);
+  history.replaceState(history.state, "", location.pathname + location.search);
   return codeFrom("#" + h);
 }
 

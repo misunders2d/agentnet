@@ -47,14 +47,14 @@ function openNotified(chan) {
 function takeOpen() {
   if (location.hash.startsWith(wsOpenPrefix)) { // opened only once the workspace it names is registered here
     const [id, chan] = location.hash.slice(wsOpenPrefix.length).split(":");
-    history.replaceState(null, "", location.pathname + location.search);
+    history.replaceState(history.state, "", location.pathname + location.search);
     pendingWorkspaceOpen = { id: /^[a-f0-9]{32}$/.test(id) ? id : "", chan: /^[A-Za-z0-9_-]{0,22}$/.test(chan || "") ? chan : "" };
     if (shell) openWorkspaceRoute();
     return;
   }
   if (!location.hash.startsWith(openPrefix)) return;
   const chan = location.hash.slice(openPrefix.length);
-  history.replaceState(null, "", location.pathname + location.search);
+  history.replaceState(history.state, "", location.pathname + location.search);
   openNotified(/^[A-Za-z0-9_-]{0,22}$/.test(chan) ? chan : "");
 }
 
@@ -207,7 +207,7 @@ function takeInvite() {
   const link = location.hash.startsWith(linkPrefix);
   if (!link && !location.hash.startsWith(invitePrefix)) return null;
   const raw = location.hash.slice(1);
-  history.replaceState(null, "", location.pathname + location.search);
+  history.replaceState(history.state, "", location.pathname + location.search);
   try { return { code: decodeURIComponent(raw), damaged: false, link }; } catch (e) { return { code: "", damaged: true, link }; }
 }
 

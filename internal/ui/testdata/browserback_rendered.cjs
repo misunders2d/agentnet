@@ -65,6 +65,7 @@ const {chromium} = require(process.env.AGENTNET_PLAYWRIGHT || 'playwright-core')
    await left.page.goBack({waitUntil:'commit'}).catch(()=>{});await left.page.waitForURL(origin+'/back-earlier');await left.context.close();
    const stayed=await legacy(true);
    await stayed.page.goBack();await stayed.page.waitForFunction(()=>calls===2);await stayed.page.waitForTimeout(1200);
+   await stayed.page.mouse.click(5,5); // the guard returns with the next input
    await stayed.page.evaluate(()=>{layers=1;});await stayed.page.goBack();await stayed.page.waitForFunction(()=>calls===3&&layers===0);await stayed.context.close();
    console.log(JSON.stringify({legacy:'leaves past unmarked entries; a direct tab keeps handling Back'}));
   }

@@ -35,7 +35,7 @@ const modes={
  // An arrival saved and told (changed) while the first overview is slow.
  'change-during-overview':{relay:'held',arrival:true},
  // Back around what device.mjs and setup.mjs take out of the address: both
- // replace history's state with null, the Back guard's mark included.
+ // keep history's state, the Back guard's mark included.
  history:{relay:'held'},
 };
 const chosen=process.argv.slice(2).length?process.argv.slice(2):Object.keys(modes);
@@ -78,7 +78,7 @@ async function historyPaths(page, base, context, local) {
  const take = async hash => {
   await page.evaluate(h => { location.hash = h; }, hash);
   await page.waitForFunction(() => location.hash === '', undefined, {timeout:5000});
-  assert.equal(await page.evaluate(() => history.state), null, hash + ': device.mjs replaced the state');
+  assert.match(String(await page.evaluate(() => history.state?.agentnetBack)), /^agentnet-back-/, hash + ': device.mjs kept the Back mark');
  };
  for (const [name, hash] of [['notification', '#agentnet-open:'], ['workspace notification', '#agentnet-workspace-open::']]) {
   await take(hash);
@@ -109,7 +109,9 @@ async function historyPaths(page, base, context, local) {
  await page.route(base + '/api/setup', route => route.fulfill({contentType:'application/json', body:JSON.stringify({state:'none'})}));
  await page.goto(base + '/first-run#agentnet-invite-v1:not-a-real-code', {waitUntil:'domcontentloaded'});
  await page.waitForFunction(() => location.hash === '' && !!document.getElementById('app-setup'), undefined, {timeout:5000});
- assert.equal(await page.evaluate(() => history.state), null, 'setup.mjs replaced the state');
+ await page.evaluate(() => { history.replaceState({own: 'kept'}, '', location.pathname + '#agentnet-invite-v1:a-link'); dispatchEvent(new HashChangeEvent('hashchange')); });
+ await page.waitForFunction(() => location.hash === '', undefined, {timeout:5000});
+ assert.equal(await page.evaluate(() => history.state?.own), 'kept', 'setup.mjs kept the state of the entry it took a code from');
  await page.evaluate(() => { location.hash = '#agentnet-invite-v1:another-link'; }); // the app opened again from another link
  await page.waitForFunction(() => location.hash === '', undefined, {timeout:5000});
  await backTo(base + '/seed');
