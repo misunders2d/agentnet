@@ -161,7 +161,7 @@ const T = { timeout: 15000 }, shots = process.env.AGENTNET_SCREENSHOTS || '';
       // also has a You button, which keeps the current section open.
       if (width < 1024) await p.locator('.an-tab-in > .sticky').getByRole('button', { name: 'You', exact: true }).click();
       if (platform === 'daemon') {
-        await p.getByRole('button', { name: /^Your agent/ }).click();
+        await p.getByRole('button', { name: /^Coding agents/ }).click(); // renamed in 9133893b
         await p.getByRole('button', { name: 'Find them', exact: true }).click();
         await p.getByText('Ready', { exact: true }).waitFor(T);
         await p.getByText('Fictional helper is set up for chats, questions and approved tasks.',{exact:true}).waitFor(T);

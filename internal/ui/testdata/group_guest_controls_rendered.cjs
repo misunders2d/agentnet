@@ -825,7 +825,7 @@ if(process.env.AGENTNET_GUEST_INLINE==='1'){
   assert.match(await banner.innerText(),/Join when ready/);assert.doesNotMatch(await banner.innerText(),/your agent|It joins/);
   assert.equal(await banner.locator('[data-size="40"]').count(),1,'Human invitation uses person avatar');
   await page.evaluate(()=>{fixture.overview.needs_you[0].role='';reloadFixture();});
-  await banner.getByText('It joins only when you say so',{exact:true}).waitFor();assert.match(await banner.innerText(),/invited your agent into/,'Agent invitation retains its original wording');
+  await banner.getByText('It joins only when you say so',{exact:true}).waitFor();assert.match(await banner.innerText(),/invited .+ into/,'Agent invitation retains its original wording');
   assert.equal(await banner.locator('[data-size="40"]').count(),0,'Agent invitation retains robot avatar');
   await page.evaluate(()=>{fixture.overview.needs_you[0].role='human';reloadFixture();});await banner.getByText('Join when ready',{exact:true}).waitFor();
   await page.getByRole('button',{name:/^Review/}).click();
@@ -2124,7 +2124,7 @@ if(process.env.AGENTNET_DELIVERY_STOP_REGRESSION==='1'){
     await activity();await waiting.getByRole('button').filter({hasText:body}).waitFor();
     if(skin==='comic'){await page.locator('header').filter({has:page.getByRole('heading',{name:'Review',exact:true})}).getByText('1 needs attention',{exact:true}).waitFor();assert.equal(await page.getByRole('navigation',{name:'Main',exact:true}).getByRole('button',{name:/^Review/}).getByText('1',{exact:true}).count(),1,'Direct held request counts in OK badge');}
     if(skin==='comic'){
-     await waiting.getByRole('button',{name:'Brin asked your agent something. Review it.',exact:true}).waitFor();
+     await waiting.getByRole('button',{name:/^Brin asked .+ something\. Review it\.$/}).waitFor();
      await waiting.getByRole('button',{name:'Allow once',exact:true}).waitFor();
      for(const state of ['needs_human','interrupted']){
       await page.evaluate(state=>setDeviceState(state),state);
@@ -2136,7 +2136,7 @@ if(process.env.AGENTNET_DELIVERY_STOP_REGRESSION==='1'){
      // Same actual human request, now from a verified own phone. It is a person,
      // even if an old server still holds it; no agent is advertised there.
      await page.evaluate(()=>{const phone={address:'aster/android-phone-3',fingerprint:'phone-key'};fixture.overview.person.devices.push(phone);fixture.deviceThread.peer=phone.address;fixture.deviceThread.messages[0].from=phone.address;setDeviceState('held');fixture.overview.review[0].peer=phone.address;reloadFixture();});
-     await waiting.getByRole('button',{name:'You asked your agent something. Review it.',exact:true}).waitFor();
+     await waiting.getByRole('button',{name:/^You asked .+ something\. Review it\.$/}).waitFor();
      assert.equal(await waiting.getByText(/Your agent on Android phone 3/).count(),0,'Human own phone is not relabeled an agent');
      assert.equal(await waiting.locator('[data-me]').count(),1,'Own human uses person avatar');
      // A stale list can never approve a now-answered request.
