@@ -29,7 +29,7 @@ CREATE TABLE proposal_sends(conv TEXT NOT NULL,ref TEXT NOT NULL,author TEXT NOT
 type proposalSendIDKey struct{}
 
 // convIs names one conversation's rows and leaves the choice of index to a row's
-// own id, logical id or reply, which each find a few rows. coalesce(conv,'') and a
+// own id, logical id or reply, which each find a few rows. a coalesced conv and a
 // logical id behind CASE made SQLite read the whole table, once for each task and
 // proposal a chat shows (MEL-748). Rows stored with no conversation keep the old form.
 func convIs(conv string) string {
