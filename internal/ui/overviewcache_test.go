@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/client"
+	"github.com/misunders2d/agentnet/internal/sqlitedb/schematest"
 )
 
 var (
@@ -43,6 +44,7 @@ func init() {
 func TestMain(m *testing.M) {
 	code := m.Run()
 	fmt.Fprintf(os.Stderr, "overview cache: %d kept lists equal a fresh read\n", overviewCompared.Load())
+	fmt.Fprintf(os.Stderr, "schema image: %d fixture stores started from a copy, not schema proof\n", schematest.Copies())
 	if n := overviewDiffered.Load(); n > 0 {
 		fmt.Fprintf(os.Stderr, "overview cache: %d kept lists differed from a fresh read\n", n)
 		code = 1

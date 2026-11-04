@@ -2,12 +2,15 @@
 package sqlitedb
 
 import (
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 
 	"github.com/misunders2d/agentnet/internal/lockfile"
 	"github.com/misunders2d/agentnet/internal/secfile"
@@ -30,6 +33,10 @@ func Open(path string, steps []string) (*sql.DB, error) {
 		return nil, err
 	}
 	defer unlock()
+	remember, again, err := startFresh(path, steps)
+	if err != nil {
+		return nil, err
+	}
 	dsn, err := FileURI(path, "_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_txlock=immediate")
 	if err != nil {
 		return nil, err
@@ -48,7 +55,84 @@ func Open(path string, steps []string) (*sql.DB, error) {
 		db.Close()
 		return nil, err
 	}
+	if remember != nil {
+		if err := remember(db, path); err != nil {
+			db.Close()
+			return nil, err
+		}
+	}
+	if again != nil {
+		if err := again(db); err != nil {
+			db.Close()
+			return nil, err
+		}
+	}
 	return db, nil
+}
+
+// ReuseFreshSchema is for test fixtures whose subject is not the schema: with it on, a
+// new empty store starts as a copy of the first one fully upgraded under exactly the same
+// steps, instead of running every step again. again runs on each copy, for anything a
+// step means to differ between stores. A store that already has anything in it upgrades
+// as ever, and turning this off forgets every copy kept. It is off by default and no
+// program turns it on; tests that prove schema steps, upgrades and backups leave it off.
+// schematest proves a copy equals a stepped store.
+func ReuseFreshSchema(on bool, again func(*sql.DB) error) {
+	fresh.Lock()
+	defer fresh.Unlock()
+	fresh.on, fresh.again = on, again
+	if !on {
+		fresh.images = nil
+	}
+}
+
+var fresh struct {
+	sync.Mutex
+	on     bool
+	again  func(*sql.DB) error
+	images map[[sha256.Size]byte][]byte
+}
+
+// startFresh gives an empty file the image for these steps. With no image yet, it
+// returns what keeps one from this store once it is upgraded.
+func startFresh(path string, steps []string) (remember func(*sql.DB, string) error, again func(*sql.DB) error, err error) {
+	fresh.Lock()
+	defer fresh.Unlock()
+	if !fresh.on {
+		return nil, nil, nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	if info.Size() != 0 {
+		return nil, nil, nil
+	}
+	key := sha256.Sum256([]byte(strings.Join(steps, "\x00")))
+	if image, ok := fresh.images[key]; ok {
+		return nil, fresh.again, os.WriteFile(path, image, 0o600)
+	}
+	return func(db *sql.DB, path string) error {
+		copied := path + ".fresh"
+		defer os.Remove(copied)
+		if _, err := db.Exec(`VACUUM INTO ?`, copied); err != nil {
+			return err
+		}
+		image, err := os.ReadFile(copied)
+		if err != nil {
+			return err
+		}
+		fresh.Lock()
+		defer fresh.Unlock()
+		if !fresh.on {
+			return nil // turned off meanwhile: nothing may stay behind
+		}
+		if fresh.images == nil {
+			fresh.images = map[[sha256.Size]byte][]byte{}
+		}
+		fresh.images[key] = image
+		return nil
+	}, nil, nil
 }
 
 // ErrNewerSchema means a newer program wrote the database: this one refuses
