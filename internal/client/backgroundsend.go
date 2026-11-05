@@ -60,6 +60,22 @@ type sendRetry struct {
 	wait    time.Duration
 	running bool // a daemon run is current; kickNow outlives it and would post alone
 	closed  bool
+
+	pace       *time.Timer // this run's paced history wake, the earliest asked (kickAfter)
+	paceAt     time.Time
+	paceSerial uint64
+}
+
+// disarm stops this run's wakes. The caller holds the lock.
+func (r *sendRetry) disarm() {
+	if r.timer != nil {
+		r.timer.Stop()
+		r.timer = nil
+	}
+	if r.pace != nil {
+		r.pace.Stop()
+		r.pace = nil
+	}
 }
 
 // runs marks a daemon run current or ended; an ended run disarms its wake.
@@ -67,9 +83,8 @@ func (r *sendRetry) runs(on bool) {
 	r.Lock()
 	defer r.Unlock()
 	r.running, r.wait = on, 0
-	if !on && r.timer != nil {
-		r.timer.Stop()
-		r.timer = nil
+	if !on {
+		r.disarm()
 	}
 }
 
@@ -169,10 +184,7 @@ func (a *Agent) postOutboxBackground() {
 func (a *Agent) stopBackgroundPosts() {
 	a.sendRetry.Lock()
 	a.sendRetry.closed = true
-	if a.sendRetry.timer != nil {
-		a.sendRetry.timer.Stop()
-		a.sendRetry.timer = nil
-	}
+	a.sendRetry.disarm()
 	a.sendRetry.Unlock()
 	p := &a.posting
 	p.Lock()

@@ -73,7 +73,6 @@ type convWork struct {
 	historyLimit     atomic.Int64 // rows in the next catch-up page; 0: historyPage
 	historyNotBefore atomic.Int64 // unix nanos: no history turn before this
 	historyCost      atomic.Int64 // nanos the last history turn took
-	paceTimer        atomic.Bool  // a paced wake is already set
 	sweepRestarted   time.Time    // when deferred history last restarted (mu)
 	sweepPending     bool         // evidence arrived during the wait (mu)
 }
@@ -2081,13 +2080,38 @@ func (a *Agent) pacedSync() bool {
 	return a.kick != nil
 }
 
-// kickAfter wakes the sync after d; one such wake covers every waiter.
+// kickAfter wakes the current run's sync after d, or sooner if an earlier wake is set: the
+// turn that wake starts asks again for whatever still waits, so one wake covers every
+// waiter and a long wait never hides a short one. The wake belongs to this run: ending
+// the run stops it (runs, stopBackgroundPosts).
 func (a *Agent) kickAfter(d time.Duration) {
-	if a.convWork.paceTimer.CompareAndSwap(false, true) {
-		time.AfterFunc(d, func() {
-			a.convWork.paceTimer.Store(false)
-			a.kickRun()
-		})
+	r := &a.sendRetry
+	r.Lock()
+	defer r.Unlock()
+	at := time.Now().Add(d)
+	if !r.running || r.closed || r.pace != nil && !at.Before(r.paceAt) {
+		return
+	}
+	if r.pace != nil {
+		r.pace.Stop()
+	}
+	r.paceSerial++
+	serial := r.paceSerial
+	r.pace, r.paceAt = time.AfterFunc(d, func() { a.paceFired(serial) }), at
+}
+
+// paceFired is one paced timer's call. One replaced or stopped as it fired is no longer
+// the wake that is set, and wakes nothing.
+func (a *Agent) paceFired(serial uint64) {
+	r := &a.sendRetry
+	r.Lock()
+	own := r.pace != nil && r.paceSerial == serial
+	if own {
+		r.pace = nil
+	}
+	r.Unlock()
+	if own {
+		a.kickRun()
 	}
 }
 

@@ -40,25 +40,25 @@ func TestOwnEndpointMetadataArrivesAtProductionPace(t *testing.T) {
 	}
 	// A rest is proved by what only a rest does: a turn stopping at it arms a wake and records
 	// no cost, where a turn that runs records its cost before it arms anything. Two in a row
-	// with no cost between them also mean no page is still being written. Clearing the flag
-	// each time shows a stop however the timers fall; the last stop's flag is left as it is.
+	// with no cost between them also mean no page is still being written. Dropping the wake
+	// each time shows a stop however the timers fall; the last stop's wake is left set.
 	restIsHeld := func() {
 		t.Helper()
 		w := &a.convWork
 		cost, stopped, finished := w.historyCost.Load(), 0, 0
-		w.paceTimer.Store(false)
+		dropPace(a)
 		for deadline := time.Now().Add(time.Minute); ; time.Sleep(20 * time.Millisecond) {
-			armed := w.paceTimer.Load() // before the cost, which a running turn records first
+			armed := paceArmed(a) // before the cost, which a running turn records first
 			if now := w.historyCost.Load(); now != cost {
 				cost, stopped = now, 0
 				finished++
-				w.paceTimer.Store(false)
+				dropPace(a)
 			} else if armed {
 				if stopped++; stopped == 2 {
 					t.Logf("a rest held: two turns stopped at it, after %d finished", finished)
 					return
 				}
-				w.paceTimer.Store(false)
+				dropPace(a)
 			}
 			if time.Now().After(deadline) {
 				if finished >= 2 {
@@ -94,12 +94,12 @@ func TestOwnEndpointMetadataArrivesAtProductionPace(t *testing.T) {
 		restIsHeld()
 		return release
 	}
-	// Only a firing timer clears this flag (kickAfter). Stream events wake a sync too and
+	// Only a firing timer clears a set wake (paceFired). Stream events wake a sync too and
 	// finish the copying (members.go), so the outcome cannot show a wake that never fired.
 	// Whether that wake then reaches the sync: TestPacedWakeReachesOnlyTheCurrentRun.
 	wakeFires := func(what string) {
 		t.Helper()
-		for limit := time.Now().Add(20 * time.Second); a.convWork.paceTimer.Load(); time.Sleep(time.Millisecond) {
+		for limit := time.Now().Add(20 * time.Second); paceArmed(a); time.Sleep(time.Millisecond) {
 			if time.Now().After(limit) {
 				t.Fatalf("a paced wake never fired %s", what)
 			}
@@ -139,15 +139,58 @@ func TestOwnEndpointMetadataArrivesAtProductionPace(t *testing.T) {
 	if copied(last) {
 		t.Fatal("copying did not wait out its rest before the restart")
 	}
+	// A real end and restart of the daemon. A wake set in the ended run, an hour off so it is
+	// surely still set, stops with it, and its call arriving anyway reaches neither run.
+	dropPace(a)
+	a.kickAfter(time.Hour)
+	old := paceSerialOf(a)
+	if !paceArmed(a) {
+		t.Fatal("no paced wake to end with the run")
+	}
 	stop()
 	release()
+	if paceArmed(a) {
+		t.Fatal("an ended daemon kept its paced wake")
+	}
 	runAgent(t, a)
 	finishes("after a restart during a rest", last)
+	var wakes atomic.Int32 // the next run is now syncing, so this is its own kick
+	a.kickMu.Lock()
+	next := a.kick
+	a.kick = func() { wakes.Add(1); next() }
+	a.kickMu.Unlock()
+	a.paceFired(old)
+	if wakes.Load() != 0 {
+		t.Fatal("an ended daemon's wake reached the next run")
+	}
+}
+
+func paceArmed(a *Agent) bool {
+	a.sendRetry.Lock()
+	defer a.sendRetry.Unlock()
+	return a.sendRetry.pace != nil
+}
+
+func paceSerialOf(a *Agent) uint64 {
+	a.sendRetry.Lock()
+	defer a.sendRetry.Unlock()
+	return a.sendRetry.paceSerial
+}
+
+func dropPace(a *Agent) {
+	a.sendRetry.Lock()
+	defer a.sendRetry.Unlock()
+	if a.sendRetry.pace != nil {
+		a.sendRetry.pace.Stop()
+		a.sendRetry.pace = nil
+	}
 }
 
 // A paced wake is a timer's call to the current run's sync, and it carries no work: the bits
 // in convWork say what a sync does. There is no stream here, whose events wake a sync too, so
 // each wake can only be the timer's. A run's kick is the test's own, as streamOnce sets one.
+// A wake an hour off is surely still set, so nothing here depends on how the timers fall; the
+// journey above ends and restarts a real daemon.
 func TestPacedWakeReachesOnlyTheCurrentRun(t *testing.T) {
 	const settle = 100 * time.Millisecond // nothing more may come; a late one could only pass
 	a := &Agent{}
@@ -158,65 +201,123 @@ func TestPacedWakeReachesOnlyTheCurrentRun(t *testing.T) {
 		a.kick = func() { wakes.Add(1) }
 		return wakes
 	}
-	// The flag falls first in the timer's call, so a timer never armed and one that woke nothing
-	// are told apart.
-	hasFired := func() {
+	arm := func(d time.Duration) uint64 {
 		t.Helper()
-		for limit := time.Now().Add(5 * time.Second); a.convWork.paceTimer.Load(); time.Sleep(time.Millisecond) {
+		before := paceSerialOf(a)
+		a.kickAfter(d)
+		after := paceSerialOf(a)
+		if after == before {
+			t.Fatal("a paced wake was not armed")
+		}
+		return after
+	}
+	arrives := func(wakes *atomic.Int32, failure string) {
+		t.Helper()
+		for limit := time.Now().Add(5 * time.Second); wakes.Load() == 0; time.Sleep(time.Millisecond) {
 			if time.Now().After(limit) {
-				t.Fatal("a paced wake never fired")
+				t.Fatal(failure)
 			}
 		}
 	}
 	wakesOnce := func(wakes *atomic.Int32) {
 		t.Helper()
-		hasFired()
-		for limit := time.Now().Add(5 * time.Second); wakes.Load() == 0; time.Sleep(time.Millisecond) {
+		for limit := time.Now().Add(5 * time.Second); paceArmed(a); time.Sleep(time.Millisecond) {
 			if time.Now().After(limit) {
-				t.Fatal("a paced wake fired and woke nothing")
+				t.Fatal("a paced wake never fired")
 			}
 		}
+		arrives(wakes, "a paced wake fired and woke nothing")
 		time.Sleep(settle)
 		if n := wakes.Load(); n != 1 {
 			t.Fatalf("a paced wake woke the sync %d times", n)
 		}
 	}
-
 	first := kickOf()
 	a.sendRetry.runs(true)
-	a.kickAfter(time.Millisecond)
-	a.kickAfter(time.Millisecond) // one wake covers the two
+	arm(time.Millisecond)
 	wakesOnce(first)
 
-	// Fired in one run, it reaches the sync of the run current when its call gets there. The
-	// lock holds that call after its flag falls, whenever that is, until the next run is set.
-	armedIn := kickOf()
-	a.sendRetry.Lock()
-	a.kickAfter(time.Millisecond)
-	hasFired()
-	next := kickOf()
-	a.sendRetry.Unlock()
-	time.Sleep(settle)
-	if armedIn.Load() != 0 {
-		t.Fatal("a stale wake reached the run it was armed in")
+	// Only the earliest wake stays set, whichever was asked first.
+	long := arm(time.Hour)
+	a.kickAfter(2 * time.Hour)
+	if paceSerialOf(a) != long {
+		t.Fatal("a later wake replaced an earlier one")
 	}
-	wakesOnce(next)
-
-	a.sendRetry.runs(false)
-	ended := kickOf()
+	short := kickOf()
 	a.kickAfter(time.Millisecond)
-	hasFired()
-	time.Sleep(settle)
+	arrives(short, "a shorter wake waited behind a longer one")
+	wakesOnce(short)
+	a.paceFired(long)
+	if short.Load() != 1 {
+		t.Fatal("a replaced wake still woke the sync")
+	}
+
+	// The order a sync reaches: new evidence defers a restart by up to a minute, then the
+	// same sync's history turn asks for its short rest.
+	w := &a.convWork
+	w.historyCost.Store(int64(time.Minute))
+	now := time.Now()
+	w.sweepRestarted = now
+	turn := kickOf()
+	if a.restartDeferredHistory(now) || !paceArmed(a) {
+		t.Fatal("the restart was not deferred behind a wake")
+	}
+	a.kickAfter(w.historyRest(30*time.Millisecond, a.pacedSync()))
+	arrives(turn, "a turn's rest waited behind a deferred restart")
+
+	// A stream replaced within one run: the wake is the run's, and reaches its current stream.
+	dropPace(a)
+	armedIn := kickOf()
+	inFlight := arm(time.Hour)
+	current := kickOf()
+	a.paceFired(inFlight)
+	if armedIn.Load() != 0 {
+		t.Fatal("a stale wake reached the stream it was armed in")
+	}
+	if current.Load() != 1 {
+		t.Fatal("a wake did not reach the run's current stream")
+	}
+
+	// An ended run: its wake stops, and its call arriving anyway reaches neither run.
+	ended := kickOf()
+	gone := arm(time.Hour)
+	a.sendRetry.runs(false)
+	if paceArmed(a) {
+		t.Fatal("an ended run kept its wake")
+	}
+	a.paceFired(gone)
 	if ended.Load() != 0 {
 		t.Fatal("an ended run's wake reached the sync")
 	}
-
+	a.kickAfter(time.Hour)
+	if paceArmed(a) {
+		t.Fatal("a wake was set with no run")
+	}
 	a.sendRetry.runs(true)
-	a.stopBackgroundPosts()
-	stopped := kickOf()
-	a.kickAfter(time.Millisecond)
-	hasFired()
+	next := kickOf()
+	a.paceFired(gone)
+	if next.Load() != 0 {
+		t.Fatal("an old run's wake reached the next run")
+	}
+	arm(time.Millisecond) // and hides nothing of the next run's
+	wakesOnce(next)
+	timed := kickOf()
+	arm(5 * time.Millisecond) // a real timer across a real end: earlier, it could only wake its own run
+	a.sendRetry.runs(false)
+	a.sendRetry.runs(true)
+	afterIt := kickOf()
 	time.Sleep(settle)
+	if timed.Load() > 1 || afterIt.Load() != 0 {
+		t.Fatal("an old run's timer reached the next run")
+	}
+
+	stopped := kickOf()
+	last := arm(time.Hour)
+	a.stopBackgroundPosts()
+	if paceArmed(a) {
+		t.Fatal("a stopped agent kept its wake")
+	}
+	a.paceFired(last)
 	if stopped.Load() != 0 {
 		t.Fatal("a stopped agent's wake reached the sync")
 	}
