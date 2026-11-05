@@ -3,6 +3,7 @@ package client
 
 import (
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -93,16 +94,23 @@ func TestOwnEndpointMetadataArrivesAtProductionPace(t *testing.T) {
 		restIsHeld()
 		return release
 	}
+	// Only a firing timer clears this flag (kickAfter). Stream events wake a sync too and
+	// finish the copying (members.go), so the outcome cannot show a wake that never fired.
+	// Whether that wake then reaches the sync: TestPacedWakeReachesOnlyTheCurrentRun.
+	wakeFires := func(what string) {
+		t.Helper()
+		for limit := time.Now().Add(20 * time.Second); a.convWork.paceTimer.Load(); time.Sleep(time.Millisecond) {
+			if time.Now().After(limit) {
+				t.Fatalf("a paced wake never fired %s", what)
+			}
+		}
+	}
 	finishes := func(what string, ids ...string) {
 		t.Helper()
-		started, cost := time.Now(), a.convWork.historyCost.Load()
+		started := time.Now()
 		for _, id := range ids {
 			for !copied(id) {
 				if time.Since(started) > time.Minute {
-					// A wake clears its flag when it fires, and no later turn ran.
-					if a.convWork.paceTimer.Load() && a.convWork.historyCost.Load() == cost {
-						t.Fatalf("a paced wake never fired %s", what)
-					}
 					t.Fatalf("copying never finished %s", what)
 				}
 				time.Sleep(50 * time.Millisecond)
@@ -123,6 +131,7 @@ func TestOwnEndpointMetadataArrivesAtProductionPace(t *testing.T) {
 		t.Fatal("not at the production pace")
 	}
 	release()
+	wakeFires("after a rest")
 	finishes("after a rest", ids...)
 
 	release = holdRest()
@@ -134,6 +143,83 @@ func TestOwnEndpointMetadataArrivesAtProductionPace(t *testing.T) {
 	release()
 	runAgent(t, a)
 	finishes("after a restart during a rest", last)
+}
+
+// A paced wake is a timer's call to the current run's sync, and it carries no work: the bits
+// in convWork say what a sync does. There is no stream here, whose events wake a sync too, so
+// each wake can only be the timer's. A run's kick is the test's own, as streamOnce sets one.
+func TestPacedWakeReachesOnlyTheCurrentRun(t *testing.T) {
+	const settle = 100 * time.Millisecond // nothing more may come; a late one could only pass
+	a := &Agent{}
+	kickOf := func() *atomic.Int32 {
+		wakes := new(atomic.Int32)
+		a.kickMu.Lock()
+		defer a.kickMu.Unlock()
+		a.kick = func() { wakes.Add(1) }
+		return wakes
+	}
+	// The flag falls first in the timer's call, so a timer never armed and one that woke nothing
+	// are told apart.
+	hasFired := func() {
+		t.Helper()
+		for limit := time.Now().Add(5 * time.Second); a.convWork.paceTimer.Load(); time.Sleep(time.Millisecond) {
+			if time.Now().After(limit) {
+				t.Fatal("a paced wake never fired")
+			}
+		}
+	}
+	wakesOnce := func(wakes *atomic.Int32) {
+		t.Helper()
+		hasFired()
+		for limit := time.Now().Add(5 * time.Second); wakes.Load() == 0; time.Sleep(time.Millisecond) {
+			if time.Now().After(limit) {
+				t.Fatal("a paced wake fired and woke nothing")
+			}
+		}
+		time.Sleep(settle)
+		if n := wakes.Load(); n != 1 {
+			t.Fatalf("a paced wake woke the sync %d times", n)
+		}
+	}
+
+	first := kickOf()
+	a.sendRetry.runs(true)
+	a.kickAfter(time.Millisecond)
+	a.kickAfter(time.Millisecond) // one wake covers the two
+	wakesOnce(first)
+
+	// Fired in one run, it reaches the sync of the run current when its call gets there. The
+	// lock holds that call after its flag falls, whenever that is, until the next run is set.
+	armedIn := kickOf()
+	a.sendRetry.Lock()
+	a.kickAfter(time.Millisecond)
+	hasFired()
+	next := kickOf()
+	a.sendRetry.Unlock()
+	time.Sleep(settle)
+	if armedIn.Load() != 0 {
+		t.Fatal("a stale wake reached the run it was armed in")
+	}
+	wakesOnce(next)
+
+	a.sendRetry.runs(false)
+	ended := kickOf()
+	a.kickAfter(time.Millisecond)
+	hasFired()
+	time.Sleep(settle)
+	if ended.Load() != 0 {
+		t.Fatal("an ended run's wake reached the sync")
+	}
+
+	a.sendRetry.runs(true)
+	a.stopBackgroundPosts()
+	stopped := kickOf()
+	a.kickAfter(time.Millisecond)
+	hasFired()
+	time.Sleep(settle)
+	if stopped.Load() != 0 {
+		t.Fatal("a stopped agent's wake reached the sync")
+	}
 }
 
 // Remembered persons are kept for the whole process, by this token alone. So stores made
