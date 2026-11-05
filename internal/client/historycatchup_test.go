@@ -93,7 +93,7 @@ func TestHistoryCatchupRecentTailRestart(t *testing.T) {
 		return err == nil && profile.Supports(phone.Address, phone.Self().SignKey, protocol.CapOwnSyncV3) && !profile.Supports(phone.Address, phone.Self().SignKey, protocol.CapHistoryArchive)
 	})
 	a := w.alice
-	more, err := a.historyCatchupPage(tctx(t), phone.Self())
+	more, err := a.pageByHand(tctx(t), phone.Self())
 	if err != nil || !more {
 		t.Fatalf("first page: %v %v", more, err)
 	}
@@ -119,7 +119,7 @@ func TestHistoryCatchupRecentTailRestart(t *testing.T) {
 	if _, err := a.store.db.Exec(`UPDATE inbox SET received_ms=1 WHERE id=?`, late.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.historyCatchupPage(tctx(t), phone.Self()); err != nil {
+	if _, err := a.pageByHand(tctx(t), phone.Self()); err != nil {
 		t.Fatal(err)
 	}
 	var archives int
@@ -155,7 +155,7 @@ func TestHistoryCatchupRecentTailRestart(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		more, err := a.historyCatchupPage(tctx(t), phone.Self())
+		more, err := a.pageByHand(tctx(t), phone.Self())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -186,7 +186,7 @@ func TestHistoryCatchupRecentTailRestart(t *testing.T) {
 		t.Fatalf("history ran work: %d %v", jobs, err)
 	}
 	before := len(items)
-	if more, err := a.historyCatchupPage(tctx(t), phone.Self()); more || err != nil {
+	if more, err := a.pageByHand(tctx(t), phone.Self()); more || err != nil {
 		t.Fatalf("settled wake: %v %v", more, err)
 	}
 	if got := len(historyCopiedItems(t, a, phone)); got != before {
@@ -201,7 +201,7 @@ func TestHistoryCatchupRecentTailRestart(t *testing.T) {
 func TestHistoryCatchupExpiredCopyAndConflictingSource(t *testing.T) {
 	w, phone, _, ids := historyCatchupFixture(t, 1)
 	a := w.alice
-	if _, err := a.historyCatchupPage(tctx(t), phone.Self()); err != nil {
+	if _, err := a.pageByHand(tctx(t), phone.Self()); err != nil {
 		t.Fatal(err)
 	}
 	var original string
@@ -212,7 +212,7 @@ func TestHistoryCatchupExpiredCopyAndConflictingSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.convWork.historyDeferred = nil
-	if _, err := a.historyCatchupPage(tctx(t), phone.Self()); err != nil {
+	if _, err := a.pageByHand(tctx(t), phone.Self()); err != nil {
 		t.Fatal(err)
 	}
 	var replacement string
@@ -229,7 +229,7 @@ func TestHistoryCatchupExpiredCopyAndConflictingSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.convWork.historyDeferred = nil
-	if _, err := a.historyCatchupPage(tctx(t), phone.Self()); !errors.Is(err, errHistoryCatchupConflict) {
+	if _, err := a.pageByHand(tctx(t), phone.Self()); !errors.Is(err, errHistoryCatchupConflict) {
 		t.Fatalf("conflicting logical bytes accepted: %v", err)
 	}
 	if got := len(historyCopiedItems(t, a, phone)); got != 2 {
@@ -276,7 +276,7 @@ func TestHistoryCatchupMissingContextDoesNotBlockOtherChat(t *testing.T) {
 	if _, err := source.store.db.Exec(`DELETE FROM group_context WHERE conv=?`, packet.State.Conv); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := source.historyCatchupPage(tctx(t), phone.Self()); err != nil {
+	if _, err := source.pageByHand(tctx(t), phone.Self()); err != nil {
 		t.Fatal(err)
 	}
 	items := historyCopiedItems(t, source, phone)
@@ -287,7 +287,7 @@ func TestHistoryCatchupMissingContextDoesNotBlockOtherChat(t *testing.T) {
 	if err := source.store.db.QueryRow(`SELECT count(*) FROM history_deferred WHERE recipient_fp=?`, phone.Self().Fingerprint()).Scan(&pending); err != nil || pending < 1 {
 		t.Fatalf("missing source silently discarded: %d %v", pending, err)
 	}
-	if more, err := source.historyCatchupPage(tctx(t), phone.Self()); err != nil || more {
+	if more, err := source.pageByHand(tctx(t), phone.Self()); err != nil || more {
 		t.Fatalf("unchanged proof retries forever: %v %v", more, err)
 	}
 	source.Close()
@@ -299,7 +299,7 @@ func TestHistoryCatchupMissingContextDoesNotBlockOtherChat(t *testing.T) {
 	if _, err := source.store.db.Exec(`INSERT INTO group_context(conv,payload) VALUES(?,?)`, packet.State.Conv, groupPayload); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := source.historyCatchupPage(tctx(t), phone.Self()); err != nil {
+	if _, err := source.pageByHand(tctx(t), phone.Self()); err != nil {
 		t.Fatal(err)
 	}
 	items = historyCopiedItems(t, source, phone)
@@ -317,7 +317,7 @@ func TestHistoryCatchupAuthorityAndAtomicPage(t *testing.T) {
 	if _, err := a.store.db.Exec(`UPDATE peers SET pending=public WHERE address=?`, phone.Address); err != nil {
 		t.Fatal(err)
 	}
-	a.historyStep(tctx(t))
+	a.stepByHand(tctx(t))
 	if items := historyCopiedItems(t, a, phone); len(items) != 0 {
 		t.Fatal("pending human key fell back to legacy queue authority")
 	}
@@ -327,7 +327,7 @@ func TestHistoryCatchupAuthorityAndAtomicPage(t *testing.T) {
 	if _, err := a.store.db.Exec(`CREATE TRIGGER test_history_abort BEFORE INSERT ON outbox WHEN NEW.sub='history' BEGIN SELECT RAISE(ABORT,'synthetic history queue interruption'); END`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.historyCatchupPage(tctx(t), phone.Self()); err == nil {
+	if _, err := a.pageByHand(tctx(t), phone.Self()); err == nil {
 		t.Fatal("interrupted queue reported success")
 	}
 	var n int
@@ -341,11 +341,11 @@ func TestHistoryCatchupAuthorityAndAtomicPage(t *testing.T) {
 	if _, err := a.store.db.Exec(`DROP TRIGGER test_history_abort`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.historyCatchupPage(tctx(t), phone.Self()); err != nil {
+	if _, err := a.pageByHand(tctx(t), phone.Self()); err != nil {
 		t.Fatal(err)
 	}
 	historyRecoveryChangeRole(t, a, phone, "sender")
-	a.historyStep(tctx(t))
+	a.stepByHand(tctx(t))
 	if items := historyCopiedItems(t, a, phone); len(items) != 3 {
 		t.Fatalf("role change replayed legacy snapshot: %d", len(items))
 	}
@@ -387,7 +387,7 @@ func TestHistoryCatchupConcurrentPagesDoNotRegress(t *testing.T) {
 	}
 	done := make(chan error, 2)
 	for range 2 {
-		go func() { _, err := a.historyCatchupPage(tctx(t), phone.Self()); done <- err }()
+		go func() { _, err := a.pageByHand(tctx(t), phone.Self()); done <- err }()
 	}
 	for range 2 {
 		if err := <-done; err != nil {
@@ -400,7 +400,7 @@ func TestHistoryCatchupConcurrentPagesDoNotRegress(t *testing.T) {
 	// Grown pages under the same concurrency fill the window exactly, never past it.
 	for range historyPage {
 		for range 2 {
-			go func() { _, err := a.historyCatchupPage(tctx(t), phone.Self()); done <- err }()
+			go func() { _, err := a.pageByHand(tctx(t), phone.Self()); done <- err }()
 		}
 		for range 2 {
 			if err := <-done; err != nil {
@@ -444,7 +444,7 @@ func TestHistoryCatchupConcurrentPagesDoNotRegress(t *testing.T) {
 		}
 	}
 	for range historyPage {
-		if _, err := a.historyCatchupPage(tctx(t), phone.Self()); err != nil {
+		if _, err := a.pageByHand(tctx(t), phone.Self()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -454,7 +454,7 @@ func TestHistoryCatchupConcurrentPagesDoNotRegress(t *testing.T) {
 	if _, err := a.store.db.Exec(`UPDATE history_jobs SET state='ended' WHERE device=?`, phone.Address); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.historyCatchupPage(tctx(t), phone.Self()); !errors.Is(err, errHistoryRecoveryAuthority) {
+	if _, err := a.pageByHand(tctx(t), phone.Self()); !errors.Is(err, errHistoryRecoveryAuthority) {
 		t.Fatalf("ended job restarted: %v", err)
 	}
 }
@@ -467,7 +467,7 @@ func TestHistoryCatchupNewestReplyIncludesOlderDependency(t *testing.T) {
 	if err := a.verifyAndStore(tctx(t), latest); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.historyCatchupPage(tctx(t), phone.Self()); err != nil {
+	if _, err := a.pageByHand(tctx(t), phone.Self()); err != nil {
 		t.Fatal(err)
 	}
 	items := historyCopiedItems(t, a, phone)

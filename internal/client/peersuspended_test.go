@@ -146,7 +146,7 @@ func TestDeviceHistoryWaitsForItsReader(t *testing.T) {
 	}
 	for range 4 {
 		w.alice.convWork.due(convHistory)
-		w.alice.convSync(tctx(t))
+		w.alice.convSyncByHand(tctx(t))
 	}
 	if copies, jobs := produced(); copies != 0 || jobs != 0 {
 		t.Fatalf("sealed for a device that cannot read it: %d copies, %d jobs", copies, jobs)
@@ -190,7 +190,7 @@ func TestDeviceHistoryWaitsForItsReader(t *testing.T) {
 	})
 	stopPhone()
 	listMembers(t, w.alice, nil, w.alice.Address, w.bob.Address, phone.Address)
-	w.alice.convSync(tctx(t)) // the member list alone wakes the waiting history
+	w.alice.convSyncByHand(tctx(t)) // the member list alone wakes the waiting history
 	if copies, _ := produced(); copies == 0 {
 		t.Fatal("no direct history once the device reads it")
 	}

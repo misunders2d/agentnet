@@ -60,7 +60,7 @@ func TestHistoryFlushYieldsToRequestedFile(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err = a.historyCatchupPage(tctx(t), phone.Self()); err != nil {
+	if _, err = a.pageByHand(tctx(t), phone.Self()); err != nil {
 		t.Fatal(err)
 	}
 	envs, err := a.store.queued()
@@ -143,11 +143,7 @@ func TestHistoryFlushYieldsToRequestedFile(t *testing.T) {
 		return phoneBase.RoundTrip(r)
 	})
 	phone.convWork.due(convHistory)
-	// This drives one turn by hand and counts its rows. Rests and pages following their
-	// cost have their own tests.
-	phone.convWork.historyNotBefore.Store(0)
-	phone.convWork.historyLimit.Store(historyPage)
-	phone.sync(tctx(t))
+	phone.syncByHand(tctx(t))
 	phone.stopBackgroundPosts()
 	phone.stopArchivePosts()
 	phone.hub.http.Transport = phoneBase
@@ -206,7 +202,7 @@ func TestHistoryFlushYieldsToRequestedFile(t *testing.T) {
 		t.Fatalf("signed request not pending: %d", pending)
 	}
 	posted = nil
-	a.convSync(tctx(t))
+	a.convSyncByHand(tctx(t))
 	var offerID string
 	if err = a.store.db.QueryRow(`SELECT id FROM outbox WHERE sub='file'`).Scan(&offerID); err != nil {
 		t.Fatal(err)

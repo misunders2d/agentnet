@@ -138,7 +138,7 @@ func testGroupParticipationHistoryLinkedRestartReorder(t *testing.T, dismissed, 
 	}
 	if len(catchup) > 0 && catchup[0] {
 		for pages := 0; ; pages++ {
-			more, e := producer.historyCatchupPage(tctx(t), phone.Self())
+			more, e := producer.pageByHand(tctx(t), phone.Self())
 			if e != nil || pages > 10 {
 				t.Fatalf("catch-up did not settle: %d %v", pages, e)
 			}

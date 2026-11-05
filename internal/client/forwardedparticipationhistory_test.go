@@ -356,7 +356,7 @@ func TestForwardedParticipationHistoryToOwnPhone(t *testing.T) {
 		release()
 		release = nil
 		for range 8 {
-			more, err = source.historyCatchupPage(tctx(t), phone.Self())
+			more, err = source.pageByHand(tctx(t), phone.Self())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -417,7 +417,7 @@ func TestForwardedParticipationHistoryToOwnPhone(t *testing.T) {
 		source.convWork.mu.Lock()
 		delete(source.convWork.historyDeferred, phone.Self().Fingerprint())
 		source.convWork.mu.Unlock()
-		if _, err := source.historyCatchupPage(tctx(t), phone.Self()); err != nil {
+		if _, err := source.pageByHand(tctx(t), phone.Self()); err != nil {
 			t.Fatal(err)
 		}
 		var again string

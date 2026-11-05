@@ -182,7 +182,9 @@ const run = async (name, fn) => {
     for (let i = 0; i < 70; i++) await page.evaluate(hash => new Promise(r => { addEventListener('hashchange', r, {once: true}); location.hash = hash; }), '#cap-' + i);
     await page.goBack().catch(() => {});
     await page.waitForFunction(() => calls === 1);
-    await page.waitForTimeout(1600); // past the second this limit waits, on the entry where nothing is behind
+    // The walk has ended, and past the second this limit waits on the entry where nothing is behind.
+    await page.evaluate(() => { window.lastPop = performance.now(); addEventListener('popstate', () => { window.lastPop = performance.now(); }); });
+    await page.waitForFunction(() => performance.now() - lastPop > 1600, null, {timeout: 20000});
     await page.mouse.click(5, 5);
     await page.evaluate(() => { layers = 1; });
     await page.goBack().catch(() => {});

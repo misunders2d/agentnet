@@ -26,10 +26,16 @@ run_partition() {
 		/^Test/ {
 			part=i++%n
 			if (client && n==18) {
-				if ($0=="TestDMLiveAgentContext") part=17
+				if ($0=="TestHumanMultipleGuestsSelfLeaveAndCapturedQueueFence") part=2
+				if ($0=="TestP6SecurityStaleMembershipCarrier") part=15
+				if ($0=="TestProofQueueOneEventAndRestart") part=12
+				if ($0=="TestGroupMixedReaderDoesNotBlockSelectedExecutors") part=4
+				if ($0=="TestP6FixLocalAndNestedHarnessUseRealCLI") part=14
+				if ($0=="TestLocalHelperOutlivesItsCoordinatorsRun") part=2
+				if ($0=="TestDMLiveAgentContext") part=0
 				if ($0=="TestOwnPersonTasksDirectAndGroup") part=4
 				if ($0=="TestRoomReciprocalRootQuestions") part=1
-				if ($0=="TestTopicTransferWholeSnapshotCapacityAndRetry") part=2
+				if ($0=="TestTopicTransferWholeSnapshotCapacityAndRetry") part=9
 				if ($0=="TestRoomBusyAncestorCallback") part=5
 				if ($0=="TestHistoryArchiveImportedTailRemainsBounded") part=12
 				if ($0=="TestTopicTransferThousandRowsUsesBoundedApply") part=11
@@ -43,8 +49,8 @@ run_partition() {
 				if ($0=="TestGroupHistoryWitnessRetiredTaskDevice") part=7
 				if ($0=="TestTopicGuestInvitesOwnAgent") part=3
 				if ($0=="TestConversationResourcesDoNotConsumeSelectedHistorySlots") part=8
-				if ($0=="TestGroupParticipationFilesLateLinkedRequestAndNamedOutput") part=10
-				if ($0=="TestGroupInteractionNamedMemberAndVisitor") part=16
+				if ($0=="TestGroupParticipationFilesLateLinkedRequestAndNamedOutput") part=14
+				if ($0=="TestGroupInteractionNamedMemberAndVisitor") part=13
 				if ($0=="TestGoogleReviewIntentRetry") part=0
 				if ($0=="TestGroupHistoryWitnessGuestDerivedParent") part=13
 				if ($0=="TestGroupParticipationHistoryDismissedLinkedRestartReorder") part=12

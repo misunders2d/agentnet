@@ -1,8 +1,11 @@
 package client
 
 import (
+	"context"
 	"testing"
 	"time"
+
+	"github.com/misunders2d/agentnet/internal/identity"
 )
 
 func TestHistoryPageFollowsItsCost(t *testing.T) {
@@ -101,4 +104,32 @@ func TestHistoryCatchupCompletesAtTheSmallestPage(t *testing.T) {
 			t.Fatalf("row %s copied %d times", id, seen[id])
 		}
 	}
+}
+
+// The ByHand forms are for a test that drives one sync or history turn itself and counts
+// its rows. A turn's rest and its page size follow its cost, which have their own tests
+// above, so under load or race a hand-driven turn may otherwise skip or take fewer rows.
+func turnsByHand(a *Agent) {
+	a.convWork.historyNotBefore.Store(0)
+	a.convWork.historyLimit.Store(historyPage)
+}
+
+func (a *Agent) pageByHand(ctx context.Context, dev identity.Public) (bool, error) {
+	turnsByHand(a)
+	return a.historyCatchupPage(ctx, dev)
+}
+
+func (a *Agent) stepByHand(ctx context.Context) bool {
+	turnsByHand(a)
+	return a.historyStep(ctx)
+}
+
+func (a *Agent) convSyncByHand(ctx context.Context) {
+	turnsByHand(a)
+	a.convSync(ctx)
+}
+
+func (a *Agent) syncByHand(ctx context.Context) {
+	turnsByHand(a)
+	a.sync(ctx)
 }

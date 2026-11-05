@@ -338,7 +338,7 @@ func TestGroupControlOfRemovedDeviceMessage(t *testing.T) {
 
 	// The new phone's catch-up: bob checks the stored edit again inside the
 	// transaction that queues it (checkHistoryCopies).
-	if err := within(t, "bob's catch-up page", func() error { _, e := w.bob.historyCatchupPage(tctx(t), newPhone.Self()); return e }); err != nil {
+	if err := within(t, "bob's catch-up page", func() error { _, e := w.bob.pageByHand(tctx(t), newPhone.Self()); return e }); err != nil {
 		t.Fatalf("catch-up holding the removed device's edited message: %v", err)
 	}
 	// The phone holds alice's chain as bob does, the removed step included,

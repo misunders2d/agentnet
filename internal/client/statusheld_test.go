@@ -52,7 +52,7 @@ func TestStatusHeldBeforeItsRequestIsAdmittedWithIt(t *testing.T) {
 	if err = w.bob.verifyAndStore(tctx(t), original); err != nil {
 		t.Fatal(err)
 	}
-	w.bob.convSync(tctx(t))
+	w.bob.convSyncByHand(tctx(t))
 	if inboxCount(t, w.bob, `id=? AND sub=?`, env.ID, envelope.SubStatus) != 1 {
 		t.Fatal("the status stayed held after its request arrived")
 	}

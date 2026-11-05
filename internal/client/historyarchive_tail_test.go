@@ -114,7 +114,7 @@ func importedTailRemainsBounded(t *testing.T, direct bool) {
 			_, e := source.deviceHistoryPage(target.Self())
 			return e
 		}
-		_, e := source.historyCatchupPage(tctx(t), target.Self())
+		_, e := source.pageByHand(tctx(t), target.Self())
 		return e
 	}
 	if direct {

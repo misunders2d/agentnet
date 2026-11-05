@@ -105,7 +105,7 @@ func TestHistoryCatchupDuplicateForeignDismissal(t *testing.T) {
 		}
 	}
 	for i := 0; i < 8; i++ {
-		more, e := a.historyCatchupPage(tctx(t), phone.Self())
+		more, e := a.pageByHand(tctx(t), phone.Self())
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -133,7 +133,7 @@ func TestHistoryCatchupDuplicateForeignDismissal(t *testing.T) {
 		t.Fatalf("dependent request stayed blocked: %d %v", requestCopies, err)
 	}
 	before := historyCarrierCount(t, a, phone.Address)
-	if _, err = a.historyCatchupPage(tctx(t), phone.Self()); err != nil {
+	if _, err = a.pageByHand(tctx(t), phone.Self()); err != nil {
 		t.Fatal(err)
 	}
 	if after := historyCarrierCount(t, a, phone.Address); after != before {
@@ -159,7 +159,7 @@ func TestHistoryCatchupDuplicateForeignDismissal(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err = a.historyCatchupPage(tctx(t), phone.Self()); err != nil {
+	if _, err = a.pageByHand(tctx(t), phone.Self()); err != nil {
 		t.Fatal(err)
 	}
 	if count(invalid) != 1 || count(unmatched) != 1 || count(attached) != 1 {
@@ -171,7 +171,7 @@ func TestHistoryCatchupDuplicateForeignDismissal(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	if _, err = reopened.historyCatchupPage(tctx(t), phone.Self()); err != nil {
+	if _, err = reopened.pageByHand(tctx(t), phone.Self()); err != nil {
 		t.Fatal(err)
 	}
 	if after := historyCarrierCount(t, reopened, phone.Address); after != before {

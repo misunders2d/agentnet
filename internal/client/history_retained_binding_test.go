@@ -11,7 +11,7 @@ import (
 func TestHistoryRedactedCoverageKeepsExactBinding(t *testing.T) {
 	w, phone, conv, ids := historyCatchupFixture(t, 1)
 	a := w.alice
-	if _, e := a.historyCatchupPage(tctx(t), phone.Self()); e != nil {
+	if _, e := a.pageByHand(tctx(t), phone.Self()); e != nil {
 		t.Fatal(e)
 	}
 	source := func() historySourceRow {

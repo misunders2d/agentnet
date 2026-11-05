@@ -54,8 +54,8 @@ func TestDirectTopicCompletedRequestAndFilesNeverReplay(t *testing.T) {
 	if _, err = w.alice.ApplyTopicOrganization(tctx(t), review); err != nil {
 		t.Fatal(err)
 	}
-	w.alice.convSync(tctx(t))
-	w.bob.convSync(tctx(t))
+	w.alice.convSyncByHand(tctx(t))
+	w.bob.convSyncByHand(tctx(t))
 	after, err := w.alice.Conversation(request.ID, 0, 0)
 	if err != nil {
 		t.Fatal(err)

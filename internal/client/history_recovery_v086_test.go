@@ -73,7 +73,7 @@ func TestGroupHistoryLinkOutgoingControlAfterReaderLeaves(t *testing.T) {
 			// accepted-row migration at the first upgraded restart.
 			// A paced page may be small: the snapshot is complete when no page follows.
 			for more := true; more; {
-				if more, err = a.historyCatchupPage(tctx(t), phone.Self()); err != nil {
+				if more, err = a.pageByHand(tctx(t), phone.Self()); err != nil {
 					t.Fatalf("departed original reader blocked linked history: %v", err)
 				}
 			}

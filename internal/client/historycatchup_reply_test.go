@@ -19,7 +19,7 @@ func TestHistoryCatchupMissingReplyTargetStillCopiesVerifiedMessage(t *testing.T
 		t.Fatal(err)
 	}
 	for page := 0; ; page++ {
-		more, err := a.historyCatchupPage(tctx(t), phone.Self())
+		more, err := a.pageByHand(tctx(t), phone.Self())
 		if err != nil {
 			t.Fatal(err)
 		}

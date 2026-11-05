@@ -16,7 +16,7 @@ import (
 func TestHistoryCatchupRedactedDependencyRetainsExactLedger(t *testing.T) {
 	w, phone, conv, ids := historyCatchupFixture(t, 1)
 	a := w.alice
-	if _, e := a.historyCatchupPage(tctx(t), phone.Self()); e != nil {
+	if _, e := a.pageByHand(tctx(t), phone.Self()); e != nil {
 		t.Fatal(e)
 	}
 	source := func(id string) historySourceRow {
@@ -43,7 +43,7 @@ func TestHistoryCatchupRedactedDependencyRetainsExactLedger(t *testing.T) {
 		return env.ID
 	}
 	revision := control(envelope.SubRevision, `{"rev":1,"text":"synthetic revision"}`)
-	if _, e := a.historyCatchupPage(tctx(t), phone.Self()); e != nil {
+	if _, e := a.pageByHand(tctx(t), phone.Self()); e != nil {
 		t.Fatal(e)
 	}
 	before := map[string]historySourceRow{original.in.ID: original, revision: source(revision)}
@@ -91,7 +91,7 @@ func TestHistoryCatchupRedactedDependencyRetainsExactLedger(t *testing.T) {
 	}
 	// The original strict comparator must keep refusing redacted content, while
 	// catch-up advances the already-covered dependencies and queues the deletion.
-	if _, e := a.historyCatchupPage(tctx(t), phone.Self()); e != nil {
+	if _, e := a.pageByHand(tctx(t), phone.Self()); e != nil {
 		t.Fatalf("retraction catch-up blocked: %v", e)
 	}
 	for id, row := range before {

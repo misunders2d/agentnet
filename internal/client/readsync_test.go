@@ -1421,7 +1421,7 @@ func testReadSyncV2Waiting(t *testing.T, mode string) {
 	if a.convWork.bits.Load()&convHistory == 0 {
 		t.Fatal("receipt did not wake latent attention")
 	}
-	a.convSync(tctx(t))
+	a.convSyncByHand(tctx(t))
 	var latestEncoded string
 	if err = a.store.db.QueryRow(`SELECT envelope FROM outbox WHERE required_cap=? AND id!=? ORDER BY rowid DESC LIMIT 1`, protocol.CapReadSyncV2, carrier).Scan(&latestEncoded); err != nil {
 		t.Fatal("receipt wake failed to produce latest generation", err)

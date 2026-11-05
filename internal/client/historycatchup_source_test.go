@@ -51,7 +51,7 @@ func TestHistoryCatchupPreservesOriginalGroupMetadataAndRevision(t *testing.T) {
 		t.Fatal("existing signed selected projection changed")
 	}
 	for pages := 0; ; pages++ {
-		more, e := a.historyCatchupPage(tctx(t), phone.Self())
+		more, e := a.pageByHand(tctx(t), phone.Self())
 		if e != nil || pages > 10 {
 			t.Fatalf("catch-up: %d %v", pages, e)
 		}
@@ -107,7 +107,7 @@ func TestHistoryCatchupIntentionalExclusionDoesNotStayDeferred(t *testing.T) {
 		t.Fatal(err)
 	}
 	for pages := 0; ; pages++ {
-		more, e := a.historyCatchupPage(tctx(t), phone.Self())
+		more, e := a.pageByHand(tctx(t), phone.Self())
 		if e != nil || pages > 10 {
 			t.Fatalf("catch-up: %d %v", pages, e)
 		}

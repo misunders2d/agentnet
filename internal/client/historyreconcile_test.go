@@ -60,7 +60,7 @@ func TestHistoryCurrentOwnDeviceSuppliesMissingSnapshot(t *testing.T) {
 	if result := <-awaited; result.err != nil {
 		t.Fatal(result.err)
 	}
-	approver.historyStep(tctx(t))
+	approver.stepByHand(tctx(t))
 	var supplied int
 	if err := approver.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE recipient=? AND sub='history'`, phone.Address).Scan(&supplied); err != nil || supplied != 0 {
 		t.Fatalf("approver supplied history it did not have: count=%d error=%v", supplied, err)
@@ -81,7 +81,7 @@ func TestHistoryCurrentOwnDeviceSuppliesMissingSnapshot(t *testing.T) {
 	if source.convWork.bits.Load()&convHistory == 0 {
 		t.Fatal("verified own-roster change did not wake history upkeep")
 	}
-	source.convSync(tctx(t))
+	source.convSyncByHand(tctx(t))
 	var jobs, copies int
 	if err := source.store.db.QueryRow(`SELECT count(*) FROM history_jobs WHERE device=? AND fingerprint=?`, phone.Address, phone.Self().Fingerprint()).Scan(&jobs); err != nil {
 		t.Fatal(err)
@@ -148,13 +148,13 @@ func TestHistoryCurrentOwnDeviceSuppliesMissingSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	source.convWork.historyDeferred = nil
-	source.historyStep(tctx(t))
+	source.stepByHand(tctx(t))
 	reopened, err := Open(source.home)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	reopened.historyStep(tctx(t))
+	reopened.stepByHand(tctx(t))
 	var after string
 	if err := reopened.store.db.QueryRow(`SELECT pos FROM history_jobs WHERE device=?`, phone.Address).Scan(&after); err != nil || after != before {
 		t.Fatalf("repeat/restart changed snapshot cursor: %v", err)
@@ -380,7 +380,7 @@ func TestHistoryLateOwnCopyConvergesAfterCompletedSnapshot(t *testing.T) {
 	}
 	// The same upkeep a reconnect schedules; no cursor reset or broad replay.
 	reopened.convWork.due(convHistory | convRetry)
-	reopened.convSync(tctx(t))
+	reopened.convSyncByHand(tctx(t))
 	var after string
 	if err := reopened.store.db.QueryRow(`SELECT pos FROM history_jobs WHERE device=?`, phone.Address).Scan(&after); err != nil || before != after {
 		t.Fatalf("completed snapshot cursor changed: %v", err)

@@ -43,7 +43,7 @@ func TestDeviceHistoryLinkedLegacyConversation(t *testing.T) {
 	stopPhone()
 	for range 8 {
 		w.alice.convWork.due(convHistory)
-		w.alice.convSync(tctx(t))
+		w.alice.convSyncByHand(tctx(t))
 	}
 	rows, err := w.alice.store.db.Query(`SELECT envelope FROM outbox WHERE recipient=? AND sub IN ('history','device-history') ORDER BY rowid`, phone.Address)
 	if err != nil {
