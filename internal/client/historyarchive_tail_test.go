@@ -108,6 +108,8 @@ func importedTailRemainsBounded(t *testing.T, direct bool) {
 	}
 	// The phone starts its catch-up job for the third device first (snapshot).
 	pageFor := func(source, target *Agent) error {
+		// This test counts rows per page. Pages following their cost have their own tests.
+		source.convWork.historyLimit.Store(historyPage)
 		if direct {
 			_, e := source.deviceHistoryPage(target.Self())
 			return e
