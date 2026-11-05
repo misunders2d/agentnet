@@ -2,6 +2,7 @@
 package client
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 // timer, with no further kick, and after a restart in the middle of a rest as well. The test
 // only rolls the rest forward, never past the longest one, so each ends as any rest ends.
 // The bound is for liveness, not speed: a race build's turns cost many times a real one's.
+// So this proves fairness and liveness across a rest, and nothing about local feedback time.
 func TestOwnEndpointMetadataArrivesAtProductionPace(t *testing.T) {
 	w := newWorld(t, "")
 	a := w.alice
@@ -53,6 +55,9 @@ func TestOwnEndpointMetadataArrivesAtProductionPace(t *testing.T) {
 				}
 			}
 		}()
+		var once sync.Once
+		release = func() { once.Do(func() { close(done); <-stopped }) }
+		t.Cleanup(release) // a Fatal below or in the caller must not leave the rest rolling
 		// A turn begun before the rest ends by setting a paced wake; every later one finds
 		// the rest and sets one. Seeing it set again means no page is still being written.
 		sawClear, deadline := false, time.Now().Add(time.Minute)
@@ -70,7 +75,7 @@ func TestOwnEndpointMetadataArrivesAtProductionPace(t *testing.T) {
 			time.Sleep(20 * time.Millisecond)
 		}
 		time.Sleep(50 * time.Millisecond)
-		return func() { close(done); <-stopped }
+		return release
 	}
 	finishes := func(what string, ids ...string) {
 		t.Helper()
