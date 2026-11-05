@@ -439,6 +439,7 @@ func (w *custodyWorld) summary() []map[string]any {
 			"accept_p50_ms": custodyPercentile(accept, 50), "accept_max_ms": custodyPercentile(accept, 100),
 			"custody_p50_ms": custodyPercentile(custody, 50), "custody_max_ms": custodyPercentile(custody, 100),
 			"arrival_p50_ms": custodyPercentile(arrival, 50), "arrival_max_ms": custodyPercentile(arrival, 100),
+			"arrival_ms_in_order": arrival,
 			"samples_with_sync_waiting": backlogged, "most_sync_waiting": most,
 		})
 	}
