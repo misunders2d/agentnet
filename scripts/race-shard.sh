@@ -110,7 +110,10 @@ run_partition() {
 		return
 	fi
 	echo "shard $label of $n: $(echo "$tests" | wc -l) tests"
-	go test -race -json -count=1 -timeout 600s -run "^($(echo "$tests" | paste -sd'|'))\$" "$package"
+	# Client partitions start new stores from a copy of the fresh schema, and say how many
+	# (internal/client/freshschema_test.go). Every other run of that package runs every step.
+	AGENTNET_TEST_SCHEMA_IMAGE=$([[ $package = ./internal/client ]] && echo 1) \
+		go test -race -json -count=1 -timeout 600s -run "^($(echo "$tests" | paste -sd'|'))\$" "$package"
 }
 
 if [ "$shard" = others ]; then

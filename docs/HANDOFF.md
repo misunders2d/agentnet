@@ -9,9 +9,9 @@ slow on the ThinkPad. Causes, fixes, measurements and what is still unshown are 
 Exact control evidence, Back on real engines, send-to-custody and what stays unproven are
 there too. Run the opt-in journey with `AGENTNET_CUSTODY=1`. A new client test changes the
 assignment of every test after it, so re-derive and rebalance `scripts/race-shard.sh`.
-Client and UI test stores start from a copy of the fresh schema (`schematest.Use`), and
-their runs say so: those results are not schema proof, which stays with
-`TestFreshSchemaImageMatchesEveryStep` and the sqlitedb, hub, cmd/agentnet and itest runs.
+UI tests and the client's race partitions start new stores from a copy of the fresh schema
+(`schematest.Use`), and their runs say how many: those results are not schema proof. Every
+other client run, CI's native jobs included, runs every step.
 Pre-CI review not cleared; no full, platform or skins qualification has run.
 
 ## v0.10.9 published and Hub deployed — November 3

@@ -1,19 +1,31 @@
 package client
 
 import (
+	"os"
 	"testing"
 
+	"github.com/misunders2d/agentnet/internal/sqlitedb"
 	"github.com/misunders2d/agentnet/internal/sqlitedb/schematest"
 )
 
-// A new store in these tests starts from a copy instead of running every schema step
-// again, which cost Join and Open fixtures about 4 s each under race. An old store still
-// runs its later steps on the way up, as ever. The steps themselves are proved by the
-// check below, and one by one in sqlitedb, hub, cmd/agentnet and itest.
-func init() { schematest.Use() }
+// By default every store in these tests runs every schema step, as a program's does.
+// Only the race partitions ask for the copy (scripts/race-shard.sh): a full run of the
+// steps costs Join and Open fixtures about 4 s each there, against a 600 s bound. Their
+// output counts the stores that were copies, and those results are not schema proof.
+func imageAsked() bool { return os.Getenv("AGENTNET_TEST_SCHEMA_IMAGE") == "1" }
 
-// The check turns the copy off and on to compare; later tests get it back afterwards.
+func init() { restoreImage() }
+
+// restoreImage puts back what this run asked for, after a test changed it.
+func restoreImage() {
+	if imageAsked() {
+		schematest.Use()
+	} else {
+		sqlitedb.ReuseFreshSchema(false, nil)
+	}
+}
+
 func TestFreshSchemaImageMatchesEveryStep(t *testing.T) {
-	t.Cleanup(schematest.Use)
+	t.Cleanup(restoreImage) // first in, so last out: after the check's own reset
 	schematest.CheckFreshImage(t, schema)
 }
