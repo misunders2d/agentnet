@@ -183,9 +183,16 @@ func (a *Agent) convSync(ctx context.Context) {
 	}
 	// A requested file gets its bounded turn before bulk proof/history work.
 	// Its existing serve-time refresh and current-authority checks still run.
-	if work&convServe != 0 && a.serveFiles(ctx) {
-		a.convWork.due(convServe) // one file per sync
-		a.kickNow()
+	if work&convServe != 0 {
+		more := a.serveFiles(ctx)
+		// The answer leaves now: this sync's bulk work below can take seconds.
+		if err := a.flushOutbox(ctx, true); err != nil {
+			a.Logf("file outbox: %v", err)
+		}
+		if more {
+			a.convWork.due(convServe) // one file per sync
+			a.kickNow()
+		}
 	}
 	if work&(convRetry|convRetryHeld|convRetryMore) != 0 {
 		a.recoverHumanExcerpts(ctx)
