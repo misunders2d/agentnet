@@ -536,3 +536,22 @@ func TestLateDirectoryAnswerIsAskedAgainWithinTheBudget(t *testing.T) {
 		t.Fatalf("never came in: %v %v", seen, e)
 	}
 }
+
+// A timer the reader set belongs to its run: once that run ends it posts nothing.
+func TestReaderTimerWakesOnlyItsOwnRun(t *testing.T) {
+	a := &Agent{}
+	var wakes atomic.Int32
+	a.kick = func() { wakes.Add(1) }
+	a.sendRetry.runs(true)
+	a.readerWaits() // the first wait is chainWaitFirst
+	a.sendRetry.runs(false)
+	time.Sleep(chainWaitFirst + 300*time.Millisecond)
+	if n := wakes.Load(); n != 0 {
+		t.Fatalf("an ended run's timer woke the sync %d times", n)
+	}
+	a.sendRetry.runs(true)
+	a.kickRun()
+	if n := wakes.Load(); n != 1 {
+		t.Fatalf("a current run's wake reached the sync %d times", n)
+	}
+}

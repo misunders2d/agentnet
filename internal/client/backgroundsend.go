@@ -73,6 +73,18 @@ func (r *sendRetry) runs(on bool) {
 	}
 }
 
+// kickRun is the wake of a timer: kickNow outlives a daemon run and would post
+// alone, so a timer that run left behind wakes nothing.
+func (a *Agent) kickRun() {
+	r := &a.sendRetry
+	r.Lock()
+	due := r.running && !r.closed
+	r.Unlock()
+	if due {
+		a.kickNow()
+	}
+}
+
 func (r *sendRetry) succeeded() {
 	r.Lock()
 	r.wait = 0
@@ -95,11 +107,8 @@ func (a *Agent) retrySendSoon(err error) {
 	r.timer = time.AfterFunc(wait, func() {
 		r.Lock()
 		r.timer = nil
-		due := r.running && !r.closed
 		r.Unlock()
-		if due {
-			a.kickNow() // the current daemon run's own sync; nothing after it ends
-		}
+		a.kickRun() // the current daemon run's own sync; nothing after it ends
 	})
 }
 

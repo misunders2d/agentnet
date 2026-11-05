@@ -1510,7 +1510,7 @@ func (a *Agent) readerWaits() {
 	}
 	time.AfterFunc(a.convWork.chainFailed(readerAsks), func() {
 		a.convWork.due(convPersons | convRetry)
-		a.kickNow()
+		a.kickRun()
 	})
 }
 
@@ -1554,7 +1554,7 @@ func (a *Agent) refreshAdmitting(ctx context.Context, persons []string) []error 
 					// Due when it fires, not now: a look before then, with this
 					// person still waiting, would use the work up.
 					a.convWork.due(convPersons | convRetry)
-					a.kickNow()
+					a.kickRun()
 				})
 				err = errChainWaits
 			}
@@ -2079,7 +2079,7 @@ func (a *Agent) kickAfter(d time.Duration) {
 	if a.convWork.paceTimer.CompareAndSwap(false, true) {
 		time.AfterFunc(d, func() {
 			a.convWork.paceTimer.Store(false)
-			a.kickNow()
+			a.kickRun()
 		})
 	}
 }

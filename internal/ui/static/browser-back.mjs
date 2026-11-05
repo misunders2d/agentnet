@@ -108,6 +108,7 @@ export function browserBackNavigation(win = window) {
     win.clearTimeout(giveUp);
     listen(false);
     if (own(win.history.state)) at = win.history.state.agentnetBackSeq;
+    if (handler && at === 0) guard(); // returned from the page cache onto the base entry: no skin arms again
   };
   win.addEventListener('popstate', pop);
   win.addEventListener('pageshow', page);

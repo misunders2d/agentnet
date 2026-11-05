@@ -355,6 +355,24 @@ const app = () => ({doc: 'app'}), earlier = () => ({doc: 'earlier'}), outside = 
     assert.equal(w.log.left, 'earlier');
   });
 
+  await run('a return from the page cache onto the base entry still reaches a layer', async () => {
+    const entries = [earlier(), app()];
+    const {w, seen} = armed({entries, index: 1, api: true});
+    press(w);
+    await settle();
+    assert.equal(w.log.left, 'earlier');
+    // Forward from there restores this page, as it was, on the entry below its guard.
+    w.log.left = null;
+    w.index = 1;
+    w.fire('pageshow', {persisted: true});
+    assert.equal(w.history.state.agentnetBackSeq, 1, 'no guard above the base entry');
+    seen.layers = 1;
+    press(w);
+    await settle();
+    assert.equal(seen.layers, 0, 'Back left the page with a layer open');
+    assert.equal(w.log.left, null);
+  });
+
   await run('pageshow during a wait drops the listeners and the wait', async () => {
     const entries = [app(), app()];
     const {w} = armed({entries, index: 1});
