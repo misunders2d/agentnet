@@ -246,6 +246,23 @@ the rows of `TestUIResponsivenessRendered` and rendered tests with their own fee
 assertions. The 1109 definitions outside Comic have no exact evidence: the tags cover only
 Comic. This is not exhaustive and it is not a pass.
 
+**C1 harness repair, November 5: subset only.** The 43-row discovery index is
+not an executable all-control gate. `c1_controls_rendered.cjs --family
+new-group-selection --part 0` (and part 1) defines disjoint wide/narrow selections:
+six control types, 41 individually bound checkbox targets and 91 state/input
+cases per viewport/backend cell, 546 required cases across both widths and three
+synthetic backend modes. Seven C1 source rows participate; the parent `onBack`
+callback aliases the Back button, while its `onCreated` callback remains missing.
+The runner records trusted input, new intended DOM states across paint opportunities,
+rendered screenshot completion as a conservative feedback upper bound, separate
+local-result timing and another bounded control while the synthetic request is held
+or failed. Candidate/source, bundle, browser payload and runner hashes bind each run.
+Live injected failures exercise the measuring path, not just fabricated validator
+records. This does not close all dimensions of any source row: the other 36 C1 rows,
+selected-person Remove buttons, creation/recovery controls, real normal/10x history,
+cold/warm app and DB/sync contention, stale/newer state, input variants, other skins
+and supported platforms remain open. No release or pre-CI qualification follows.
+
 Routes: `docs/HOST_API_ROUTES.md` documents 126 paths; 46 were seen as real requests under
 those tests. Many rendered tests answer from an in-page stub, so unseen does not mean
 unused, and seen does not mean correct.
