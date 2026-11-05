@@ -36,15 +36,20 @@ check('non-JSX fragment gap is explicit and later candidates survive',()=>{
  assert.equal(nodes.length,1);assert.equal(nodes[0].tag,'button');
 });
 const expected={
- 'Teams.tsx':[270,277,330,333,339,340,346],
+ 'Teams.tsx':[['Button','Close {noun} search'],['Button','Show more {noun}'],['select','value={team} onChange'],['Button','Add list’s people</Button>'],['Button','Retry list selection</Button>'],['Button','Cancel list selection</Button>'],['Button','Remove {personLabel(o, p.id)}']],
  // Nested JSX inside Timeline.footer remains grouped under Timeline. Verify
  // the enclosing tag and subsequent siblings; do not claim its child input.
- 'Conversation.tsx':[111,141,195],
- 'Conversation.topics.tsx':[307,359,403,425],
+ 'Conversation.tsx':[['Timeline','key={open.id + ":"'],['button','aria-label="Stop selecting"'],['button','>Try again</button>']],
+ 'Conversation.topics.tsx':[['Button','key={id} variant="ghost"'],['input','id="rename-topic-name" value={title}'],['Button','>Open {ctx.dm.topics'],['Button','aria-busy={!!busy} icon={<IconRotateClockwise']],
 };
-for(const [file,lines] of Object.entries(expected))check('actual source '+file,()=>{
+for(const [file,anchors] of Object.entries(expected))check('actual source '+file,()=>{
  const source=fs.readFileSync(path.join(__dirname,'../web/src/features',file),'utf8');
  const nodes=scanJsx(source),found=new Set(nodes.filter(n=>attrs(n).some(a=>/^on[A-Z]/.test(a.name))).map(n=>source.slice(0,n.start).split('\n').length));
- for(const line of lines)assert.ok(found.has(line),file+':'+line+' missing input/callback source');
+ for(const [tag,marker] of anchors){
+  const at=source.indexOf(marker);assert(at>=0,file+' source anchor missing: '+marker);
+  const start=source.lastIndexOf('<'+tag,at);assert(start>=0,file+' opening tag missing: '+marker);
+  const line=source.slice(0,start).split('\n').length;
+  assert.ok(found.has(line),file+':'+line+' missing input/callback source');
+ }
 });
 console.log(JSON.stringify({checks_passed:checks,failed:0,skipped:0,scope:'source scanner only'}));

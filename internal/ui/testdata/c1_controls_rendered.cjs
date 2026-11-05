@@ -79,14 +79,14 @@ module.exports = { rows, table };
 if (require.main === module) {
   const args = process.argv.slice(2);
   if (args.length === 1 && args[0] === '--table') console.log(JSON.stringify(table(), null, 1));
-  else if (args[0] === '--family' && args[1] === 'new-group-selection' &&
+  else if (args[0] === '--family' && ['new-group-selection','team-snapshot'].includes(args[1]) &&
     (args.length === 2 || (args.length === 4 && ['--negative','--part'].includes(args[2])))) {
-    require('./c1_new_group.cjs').run({ out: process.env.C1_OUT,
+    require('./c1_new_group.cjs').run({ out: process.env.C1_OUT, family:args[1],
       negative:args[2]==='--negative'?args[3]:null,part:args[2]==='--part'?Number(args[3]):null }).catch(error => {
       console.error(error.stack || error);process.exitCode = 1;
     });
   } else {
-    console.error('C1 incomplete: choose --family new-group-selection explicitly. Other C1 rows remain unimplemented; open/missing cases cannot pass. --table is discovery only.');
+    console.error('C1 incomplete: choose --family new-group-selection or team-snapshot explicitly. Other C1 rows remain unimplemented; open/missing cases cannot pass. --table is discovery only.');
     process.exitCode = 1;
   }
 }

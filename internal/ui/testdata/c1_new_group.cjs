@@ -4,6 +4,7 @@ const fs = require('node:fs'), path = require('node:path'), http = require('node
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
 const { measure, finishMeasurement, capturePresented, checkBackend, checkReport, digest } = require('./c1_oracle.cjs');
+const { teamSnapshotFixture, snapshotConfig } = require('./c1_team_snapshot_fixture.cjs');
 const repo = path.resolve(__dirname, '../../..'), web = path.join(repo, 'internal/ui/web');
 const prefix = 'agentnet:internal/ui/web/src/features/NewChat.tsx#';
 const id = (suffix, event) => prefix + suffix + '#' + event;
@@ -27,6 +28,15 @@ function snapshot() {
   const group = [...document.querySelectorAll('input')].find(e => e.placeholder === 'For example, Savannah rush order');
   const boxes = [...(dialog?.querySelectorAll('input[type=checkbox]') || [])];
   const selected = document.querySelector('[aria-label="Selected people"]');
+  const pending=dialog?.querySelector('[aria-label^="Pending selection from "]');
+  let pendingVisible=visible(pending);
+  if(pendingVisible){
+    let box=pending.getBoundingClientRect(),left=Math.max(0,box.left),right=Math.min(innerWidth,box.right),top=Math.max(0,box.top),bottom=Math.min(innerHeight,box.bottom);
+    for(let parent=pending.parentElement;parent;parent=parent.parentElement){
+      if(/auto|scroll|hidden|clip/.test(getComputedStyle(parent).overflowY)){const r=parent.getBoundingClientRect();top=Math.max(top,r.top);bottom=Math.min(bottom,r.bottom);}
+    }
+    pendingVisible=right>left&&bottom-top>=24;
+  }
   return {
     dialog: dialog?.textContent.includes('Give it a name.') ? 'group' : dialog ? 'chat' : null,
     search: search?.value ?? null,
@@ -38,6 +48,12 @@ function snapshot() {
     checkboxes: boxes.map(e => ({ name: e.closest('label')?.textContent.trim(), checked: e.checked })),
     selected: [...(selected?.querySelectorAll('button') || [])].map(e => e.textContent.trim()),
     newFocused: document.activeElement?.textContent?.trim() === 'New',
+    teamChoice: dialog?.querySelector('select')?.value ?? null,
+    teamOptions: [...(dialog?.querySelector('select')?.options || [])].map(o=>({id:o.value,label:o.textContent})),
+    snapshotPending: !!pending,
+    snapshotPendingVisible: pendingVisible,
+    snapshotError: dialog?.querySelector('[aria-label^="Pending selection from "] [role=alert]')?.textContent ?? null,
+    createDisabled: buttons.find(b=>visible(b)&&b.textContent.trim()==='Create group')?.disabled ?? null,
   };
 }
 
@@ -74,9 +90,16 @@ const people=Array.from({length:config.people},(_,n)=>({person:'person-'+n,label
 people.push({person:'unverified',label:'Excluded unverified',state:'unknown',address:'unverified/laptop',devices:[]});
 const person={person:'self',label:'Self',state:'self',address:'self/laptop',devices:[]};people.push(person);
 const overview={seq:1,version:'synthetic-c1',role:'person',groups:true,persons:true,me:{address:'self/laptop'},person,people,dms:[],threads:[],needs_you:[]};
-const f=globalThis.fixture={config,mode,requests:0,pending:0,failed:0};
+const f=globalThis.fixture={config,mode,requests:0,pending:0,failed:0,group_creates:0,group_invites:0,unexpected_mutations:[],navigation:[]};
+const snapshots=config.teamSnapshots?(${teamSnapshotFixture.toString()})(config.teamSnapshots):null;
+f.snapshots=snapshots;
 const host={platform:'daemon',workspace:{id:'c1-synthetic',state:'enrolled'},listen(){return()=>{}},async api(p,b){
+ if(p==='/api/groups/new')f.group_creates++;
+ if(p==='/api/groups/invite')f.group_invites++;
+ if(b&&!['/api/teams/snapshot','/api/refresh','/api/topic/transfer/location'].includes(p))f.unexpected_mutations.push({path:p,at_ms:performance.now()});
  if(p.startsWith('/api/overview'))return structuredClone(overview);
+ if(p==='/api/teams/snapshot'){if(!snapshots)throw Error('Unexpected C1 snapshot request');return snapshots.snapshot(b.teams)}
+ if(p==='/api/teams'&&snapshots)return snapshots.teams();
  if(p==='/api/teams'){f.requests++;if(mode==='failing'||config.fault==='backend-fails'){f.failed++;throw Error('Synthetic C1 team-list refusal')}if(mode==='held'){f.pending++;return new Promise(()=>{})}return {status:'available',current:true,teams:[]}}
  if(p==='/api/refresh'||p==='/api/topic/transfer/location')return {};
  if(p.includes('/groups/invitations'))return [];
@@ -85,14 +108,19 @@ const host={platform:'daemon',workspace:{id:'c1-synthetic',state:'enrolled'},lis
 }};
 const root=document.getElementById('root'),app=document.getElementById('app'),portals=document.getElementById('portals');
 const store=new Store(host);await store.start();
+f.state=()=>{const s=store.get();return{tab:s.tab,has_open:!!s.open,message_landing:!!s.messageLanding,group_creation:!!s.groupCreation}};
+let selection=JSON.stringify(f.state());store.subscribe(()=>{const next=JSON.stringify(f.state());if(next!==selection){f.navigation.push({at_ms:performance.now(),before:selection,after:next});selection=next}});
 createRoot(app).render(<OwnedContext.Provider value={{root,app,portals}}><StoreContext.Provider value={store}><NewChatButton/></StoreContext.Provider></OwnedContext.Provider>);
 `;
 }
 
-async function run({ out, negative = null, part = null }) {
+async function run({ out, negative = null, part = null, family = 'new-group-selection' }) {
+  assert(['new-group-selection','team-snapshot'].includes(family),'Unknown C1 family');
+  const team = family==='team-snapshot'?require('./c1_team_snapshot_cases.cjs'):null;
   assert(out && path.isAbsolute(out), 'C1_OUT must be a new absolute private artifact directory');
   assert(!path.resolve(out).startsWith(repo + path.sep), 'C1 artifacts must stay outside repository');
   assert([null, 'already-true', 'fixture', 'handler-noop', 'independent-noop', 'slow-paint', 'backend-fails', 'observer-throws'].includes(negative), 'Unknown C1 negative');
+  if(team)assert([null,'handler-noop','independent-noop'].includes(negative),'Unsupported snapshot negative');
   assert(part===null||part===0||part===1,'C1 part must be 0 or 1');
   process.umask(0o077);
   fs.mkdirSync(out, { mode: 0o700 });
@@ -106,7 +134,7 @@ async function run({ out, negative = null, part = null }) {
   const source = fs.readFileSync(path.join(web, 'src/features/NewChat.tsx'), 'utf8');
   const pageSize = Number(source.split('export function NewGroupForm')[1].match(/const pageSize = (\d+);/)[1]);
   assert.equal(pageSize, 40, 'C1 expected page-size contract changed; review cases');
-  const config = { pageSize, people: pageSize + 1 };
+  const config = { pageSize, people: pageSize + 1, ...(team?{teamSnapshots:snapshotConfig('held')}:{}) };
   const selectedRows = require('./c1_controls_rendered.cjs').rows.filter(r => Object.values(bindings).flat().some(h => definition(h) === r.id));
   assert.equal(selectedRows.length,7,'C1 source-row selection changed');
   for (const row of selectedRows) {
@@ -123,7 +151,7 @@ async function run({ out, negative = null, part = null }) {
   const browserPath = process.env.AGENTNET_CHROMIUM || chromium.executablePath();
   const browserBytes = fs.readFileSync(fs.realpathSync(browserPath));
   const git = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding:'utf8' }).trim();
-  const runnerFiles = ['c1_controls_rendered.cjs', 'c1_new_group.cjs', 'c1_oracle.cjs', 'interaction_inventory.cjs'];
+  const runnerFiles = ['c1_controls_rendered.cjs', 'c1_new_group.cjs', 'c1_oracle.cjs', 'interaction_inventory.cjs','c1_team_snapshot_fixture.cjs',...(team?['c1_team_snapshot_cases.cjs']:[])];
   function sourceInputs(dir) {
     return fs.readdirSync(dir,{withFileTypes:true}).sort((a,b)=>a.name.localeCompare(b.name)).flatMap(e=>{
       const file=path.join(dir,e.name);return e.isDirectory()?sourceInputs(file):[{path:path.relative(work,file),sha256:digest(fs.readFileSync(file))}];
@@ -139,8 +167,8 @@ async function run({ out, negative = null, part = null }) {
     launcher_sha256:digest(browserBytes), launcher_path:fs.realpathSync(browserPath), browser_sha256:null,
     dependencies:{node:process.version,playwright:require(path.join(process.env.AGENTNET_PLAYWRIGHT,'package.json')).version,web_lock_sha256:digest(fs.readFileSync(path.join(web,'package-lock.json')))},
     fixture_sha256:digest(fixtureEntry), config };
-  const cases = [], defs = definitions(config.people);
-  for (const width of [1440,390]) for (const backend of ['normal','held','failing']) for (const d of defs) {
+  const cases = team?team.manifestCases():[], defs = definitions(config.people);
+  if(!team)for (const width of [1440,390]) for (const backend of ['normal','held','failing']) for (const d of defs) {
     const other_handlers = d.action === 'back' ? [id('shownAgents/input/onChange,onKeyDown#1','onChange')]
       : d.action === 'close' ? [id('NewChatButton/Button/onClick#1','onClick')] : [id('back/input/onChange#1','onChange')];
     const value='Independent '+cases.length;
@@ -157,8 +185,20 @@ async function run({ out, negative = null, part = null }) {
         input:d.action==='search'?'native-text-insertion':d.escape?'keyboard-Escape':'pointer'} });
   }
   const widths=part===null?[1440,390]:[[1440,390][part]];
-  const selectedCases=cases.filter(c=>widths.includes(c.dimensions.width));
-  const manifest = { family:'new-group-selection', binding, cases:selectedCases, required_case_ids:selectedCases.map(c=>c.case_id),
+  const onlyCase=process.env.C1_ONLY_CASE;
+  assert(!onlyCase||team&&cases.some(c=>c.key===onlyCase),'Unknown focused snapshot case');
+  const gesture=process.env.C1_GESTURE||'mouse';
+  assert(['mouse','mouse-independent','touch','Enter','Space'].includes(gesture),'Unknown focused gesture');
+  if(gesture!=='mouse')assert(team&&onlyCase&&(['mouse-independent','touch'].includes(gesture)?onlyCase==='add.duplicate':['cancel.held','retry.error-held'].includes(onlyCase)),'Gesture requires exact adjacent case');
+  const selectedCases=cases.filter(c=>widths.includes(c.dimensions.width)&&(!onlyCase||c.key===onlyCase)).map(c=>gesture==='mouse'?c:{...c,case_id:c.case_id+'::'+gesture,input_variant:gesture,dimensions:{...c.dimensions,input:gesture}});
+  const manifest = team?{family:gesture==='mouse'?family:'team-snapshot-adjacent-input',binding,cases:selectedCases,required_case_ids:selectedCases.map(c=>c.case_id),all_required_case_ids:gesture==='mouse'?cases.map(c=>c.case_id):selectedCases.map(c=>c.case_id),base_family_required_case_ids:cases.map(c=>c.case_id),
+    partition:{index:part,count:2,rule:'0=1440px; 1=390px'},selection:{only_case:onlyCase||null,gesture,remaining_family_cases:cases.length-selectedCases.length},primary_action_types:['add','retry','cancel'],
+    owner:'Direct NewChatButton fixture → picker → NewGroupForm → TeamPeople',
+    missing_owners:['ChatList launcher placements','history-transfer destination','people-list draft','InviteSheet'],
+    confirmation_scope:'mock-backed presented selection; no real HTTP/Hub/DB or remote custody',
+    missing_dimensions:['remaining discovered scenarios','keyboard/touch','normal/10x cold/warm real history','real sync/DB contention','newer remote state','offline/reconnect/restart','other skins/native platforms','identity/admission/signature/E2EE'],
+    source_rows_complete_across_all_required_dimensions:0,release_qualified:false,
+  }:{ family:'new-group-selection', binding, cases:selectedCases, required_case_ids:selectedCases.map(c=>c.case_id),
     all_required_case_ids:cases.map(c=>c.case_id),partition:{index:part,count:2,rule:'0=1440px; 1=390px'},
     semantic_control_types:6, physical_target_instances:46, dynamic_checkbox_instances:41,
     semantic_controls:Object.keys(bindings).map(action=>({action,callback_definitions:bindings[action],state_cases:defs.filter(d=>d.action===action).map(d=>d.key)})),
@@ -196,21 +236,45 @@ async function run({ out, negative = null, part = null }) {
     }
     await session.detach();
     fs.writeFileSync(path.join(out,'manifest.json'),JSON.stringify(manifest,null,2));
-    for (const width of widths) for (const backend of ['normal','held','failing']) {
-      const page = await browser.newPage({ viewport:{width,height:960}, reducedMotion:'reduce' });
+    for (const width of widths) for (const backend of (team?['held']:['normal','held','failing'])) {
+      const page = await browser.newPage({ viewport:{width,height:960}, reducedMotion:'reduce',hasTouch:gesture==='touch' });
       page.setDefaultTimeout(4000);
       const errors = [];page.on('pageerror',e=>errors.push(String(e)));
-      await page.addInitScript(({negative,searchHandler,independentHandler}) => {
+      await page.addInitScript(({negative,searchHandler,independentHandler,armDuringMeasurement}) => {
         globalThis.__c1Fired=[];
+        globalThis.__c1NegativeArmed=!armDuringMeasurement;
+        if(armDuringMeasurement){
+          globalThis.__c1InteractionTrace=[];
+          globalThis.__c1SubmitEvents=[];
+          document.addEventListener('submit',e=>globalThis.__c1SubmitEvents.push({at_ms:performance.now(),trusted:e.isTrusted,source:e.target.getAttribute('data-an-control')}),true);
+          const rect=el=>{if(!el)return null;const r=el.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height};};
+          const record=(phase,event)=>{
+            const dialog=[...document.querySelectorAll('[role=dialog]')].find(e=>e.getClientRects().length);
+            const buttons=[...document.querySelectorAll('button')].filter(e=>/^(Add list’s people|Cancel list selection|Retry list selection)$/.test(e.textContent.trim()));
+            const scrolls=dialog?[dialog,...dialog.querySelectorAll('*')].filter(e=>/auto|scroll/.test(getComputedStyle(e).overflowY)).map(e=>({tag:e.tagName,scrollTop:e.scrollTop,clientHeight:e.clientHeight,scrollHeight:e.scrollHeight,rect:rect(e)})):[];
+            globalThis.__c1InteractionTrace.push({at_ms:performance.now(),phase,event,viewport:{width:innerWidth,height:innerHeight,scrollY},dialog:rect(dialog),buttons:buttons.map(e=>({text:e.textContent.trim(),disabled:e.disabled,source:e.getAttribute('data-an-control'),rect:rect(e)})),pending:rect(dialog?.querySelector('[aria-label^="Pending selection from "]')),scrolls});
+            if(globalThis.__c1InteractionTrace.length>160)globalThis.__c1InteractionTrace.shift();
+          };
+          for(const type of ['pointerdown','pointerup','click','keydown','keyup','scroll'])document.addEventListener(type,e=>{
+            const target=e.target instanceof Element?e.target:null,control=target?.closest('[data-an-control]');
+            const event={type:e.type,trusted:e.isTrusted,detail:e.detail,pointerType:e.pointerType,key:e.key,clientX:e.clientX,clientY:e.clientY,target:target?.tagName,source:control?.getAttribute('data-an-control'),targetRect:rect(target)};
+            record('capture',event);queueMicrotask(()=>record('microtask',event));requestAnimationFrame(()=>record('frame',event));
+          },true);
+        }
         globalThis.__anTrack=(id,fn)=>typeof fn!=='function'?fn:function(...args){
           globalThis.__c1Fired.push({id,at_ms:performance.now()});
-          if ((negative==='handler-noop'&&id===searchHandler)||(negative==='independent-noop'&&id===independentHandler)) return;
-          if (negative==='slow-paint'&&id===searchHandler) { const until=performance.now()+1100;while(performance.now()<until){} }
-          if (negative==='observer-throws'&&id===searchHandler) globalThis.__c1ThrowSnapshot=true;
+          if (globalThis.__c1NegativeArmed&&((negative==='handler-noop'&&id===searchHandler)||(negative==='independent-noop'&&id===independentHandler))) return;
+          if (globalThis.__c1NegativeArmed&&negative==='slow-paint'&&id===searchHandler) { const until=performance.now()+1100;while(performance.now()<until){} }
+          if (globalThis.__c1NegativeArmed&&negative==='observer-throws'&&id===searchHandler) globalThis.__c1ThrowSnapshot=true;
           return fn.apply(this,args);
         };
-      },{negative,searchHandler:bindings.search[0],independentHandler:id('back/input/onChange#1','onChange')});
+      },{negative,searchHandler:team?team.source.add+'#onClick':bindings.search[0],independentHandler:id('back/input/onChange#1','onChange'),armDuringMeasurement:!!team});
       await page.goto('http://127.0.0.1:'+server.address().port+'/?backend='+backend);
+      if(team){
+        await team.executeCell({page,width,manifest,report,out,snapshot,negative});
+        assert.deepEqual(errors,[],'C1 runtime error');
+        await page.close();continue;
+      }
       async function freshGroup() {
         if (await page.getByRole('button',{name:'Close',exact:true}).isVisible().catch(()=>false)) await page.getByRole('button',{name:'Close',exact:true}).click();
         await page.getByRole('button',{name:'New',exact:true}).click();
@@ -261,6 +325,7 @@ async function run({ out, negative = null, part = null }) {
       await page.close();
     }
     report.summary=checkReport(manifest,report,name=>fs.readFileSync(path.join(out,name)));
+    if(team)team.checkCompletions(manifest,report);
   } catch (e) { report.errors.push(e.message);throw e; }
   finally {
     report.cleanup={browser_closed:false,server_closed:false};
@@ -277,4 +342,4 @@ async function run({ out, negative = null, part = null }) {
   console.log(JSON.stringify({summary:report.summary,binding,artifact_directory:out}));
 }
 
-module.exports = { run, definitions, snapshot };
+module.exports = { run, definitions, snapshot, entry };

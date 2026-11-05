@@ -291,7 +291,9 @@ export function TeamPeople({ selected, onChange, excluded = [], disabled = false
   const busy = !!selection && !selection.error;
   const [at, setAt] = useState(0);
   const selectionRegion = useRef<HTMLElement>(null);
-  useLayoutEffect(() => { selectionRegion.current?.scrollIntoView({ block: "nearest", behavior: "instant" }); }, [selection]);
+  // Reveal feedback, not the later action row: moving Cancel beneath Add's
+  // pointer turns a rapid repeated Add into an unintended cancellation.
+  useLayoutEffect(() => { selectionRegion.current?.querySelector('[role="status"], [role="alert"]')?.scrollIntoView({ block: "nearest", behavior: "instant" }); }, [selection]);
   const latest = useRef({ selected, excluded, disabled, onChange });
   useLayoutEffect(() => {
     const pending = selectionRef.current;

@@ -246,6 +246,25 @@ the rows of `TestUIResponsivenessRendered` and rendered tests with their own fee
 assertions. The 1109 definitions outside Comic have no exact evidence: the tags cover only
 Comic. This is not exhaustive and it is not a pass.
 
+**List-snapshot rapid input, November 5: focused source fix only.** Scrolling the
+whole pending-selection card could move Cancel beneath Add's pointer: a repeated
+click cancelled the selection while its snapshot request remained held. TeamPeople
+now reveals the status text, leaving the later recovery actions below it. There
+is no debounce or event-detail filter. The actual Comic component fixture
+(`--family team-snapshot`) has 16 wide/narrow cases for pending/rejected snapshots,
+duplicate input, concurrent selection/removal, deliberate Cancel/Retry and stale
+completion. Twelve separate adjacent cases cover fixed-coordinate detail1 clicks,
+emulated touch taps and Enter/Space Cancel/Retry at both widths. Each checks intended
+local feedback separately from the mock-backed result, independent controls and
+zero parent submits, group creates/invites or navigation. Two live handler-noop
+faults fail the measuring path. These are synthetic component results, not unique
+control totals, real-store proof or complete C1 acceptance. Other owners,
+touch Cancel/Retry, pen, skins, native platforms, real sync/DB contention and the
+remaining states are unverified; production bundle rebuild is still pending.
+The task-owned wrapper records configured runtime policy, process pins and cleanup;
+earlier receipts sampled pre-activation settings, while later keyboard/negative
+receipts additionally record active/running policy. Neither group clears pre-CI.
+
 **C1 harness repair, November 5: subset only.** The 43-row discovery index is
 not an executable all-control gate. `c1_controls_rendered.cjs --family
 new-group-selection --part 0` (and part 1) defines disjoint wide/narrow selections:
