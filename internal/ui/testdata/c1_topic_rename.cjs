@@ -7,11 +7,19 @@ function entry(config){
 import React,{useEffect} from 'react';import {createRoot} from 'react-dom/client';
 import {Store,useStore} from './src/store';import {StoreContext} from './src/context';import {OwnedContext} from './src/owned';
 import {Conversation} from './src/features/Conversation';
+import {Toasts} from './src/features/Status';
 const backend=(${topicRenameFixture.toString()})(${JSON.stringify(config)});
 const fixture=globalThis.fixture={backend,requests:()=>backend.witness()};
 globalThis.__c1Fired=[];
 globalThis.__anTrack=(id,fn)=>typeof fn!=='function'?fn:function(...args){
  globalThis.__c1Fired.push({id,at_ms:performance.now()});
+ if(fixture.fault?.handler===id){
+  const start=performance.now(),hit={kind:fixture.fault.kind,handler:id,at_ms:start,trusted:args[0]?.nativeEvent?.isTrusted??args[0]?.isTrusted??false};
+  (fixture.fault_hits||=[]).push(hit);
+  if(hit.kind==='observer-fault')globalThis.__c1RenameSnapshotFault=true;
+  if(hit.kind==='slow-paint'){while(performance.now()-start<1100){}hit.blocked_ms=performance.now()-start;}
+  if(['primary-noop','independent-noop'].includes(hit.kind)){args[0]?.preventDefault?.();return;}
+ }
  if(fixture.noop===id){args[0]?.preventDefault?.();return;}
  return fn.apply(this,args);
 };
@@ -20,8 +28,8 @@ const root=document.getElementById('root'),app=document.getElementById('app'),po
 const store=new Store(host);await store.start();
 // Fixture setup only. Observed Rename/Reset/Save/typing must use trusted UI input.
 await store.open({kind:'dm',id:backend.conv});store.setDraft(backend.conv,{...store.draft(backend.conv),topic:backend.topic});
-fixture.state=()=>{const s=store.get(),t=s.views[backend.conv]?.topics?.find(t=>t.id===backend.topic);return{title:t?.title,busy:Object.values(s.topicBusy),pending:backend.witness().pending,open:s.open,tab:s.tab}};
-function Scene(){const open=useStore(store,s=>s.open);useEffect(()=>{globalThis.__c1RenameMounted=true;},[]);return open?<Conversation o={open}/>:null;}
+fixture.state=()=>{const s=store.get(),v=s.views[backend.conv],t=v?.topics?.find(t=>t.id===backend.topic);return{title:t?.title,view_kind:v?.kind,message_count:v?.messages?.length,busy:Object.values(s.topicBusy),pending:backend.witness().pending,open:s.open,tab:s.tab}};
+function Scene(){const open=useStore(store,s=>s.open);useEffect(()=>{globalThis.__c1RenameMounted=true;},[]);return <div className="flex h-dvh w-full">{open&&<Conversation o={open}/>}<Toasts/></div>;}
 createRoot(app).render(<OwnedContext.Provider value={{root,app,portals}}><StoreContext.Provider value={store}><Scene/></StoreContext.Provider></OwnedContext.Provider>);
 `;
 }
@@ -45,7 +53,7 @@ function snapshot(){
  const name=document.querySelector('#rename-topic-name');
  return{topic_label:menu.getAttribute('aria-label'),topic_text:menu.textContent.trim(),topic_visible:visible(menu),rename_open:dialogs.some(d=>d.querySelector('#rename-topic-name')),
   name:name?.value??null,name_visible:visible(name),composer:field?.value??null,composer_mirror:mirror?.textContent??null,composer_visible:visible(mirror),
-  backend:fixture.backend.witness()};
+  alerts:[...document.querySelectorAll('[role="alert"]')].filter(visible).map(e=>e.textContent.trim()),backend:fixture.backend.witness()};
 }
 const bindings={
  reset:'agentnet:internal/ui/web/src/features/Conversation.topics.tsx#save/Button/onClick#1',
@@ -54,5 +62,7 @@ const bindings={
  submit:'agentnet:internal/ui/web/src/features/Conversation.topics.tsx#save/form/onSubmit#1',
  composer:'agentnet:internal/ui/web/src/features/Composer.tsx#candidate/Field/onChange,onSelect,onBlur,onScroll,onKeyDown,onPaste#1',
  composer_native_alias:'agentnet:internal/ui/web/src/features/Composer.parts.tsx#Field/textarea/#1',
+ topicbar_menu:'agentnet:internal/ui/web/src/features/Conversation.topics.tsx#leaveNew/Menu.Trigger/#1',
+ person_menu:'agentnet:internal/ui/web/src/features/PersonTopics.tsx#result/Menu.Trigger/#1',
 };
 module.exports={entry,snapshot,bindings};

@@ -1,6 +1,7 @@
 // Synthetic transport for the actual Conversation/Store fixture. No real store.
 function topicRenameFixture(config) {
  const need=(ok,message)=>{if(!ok)throw Error('C1 rename fixture: '+message);};
+ need(config&&Object.keys(config).length===3&&Object.keys(config).every(k=>['placement','mode','history'].includes(k)),'only consumed fixture options allowed');
  need(config&&['topicbar','person'].includes(config.placement),'explicit placement required');
  need(['held','normal','failing'].includes(config.mode),'explicit backend mode required');
  need(Number.isSafeInteger(config.history)&&config.history>0,'explicit history size required');
@@ -32,7 +33,10 @@ function topicRenameFixture(config) {
   }
   if(!b&&u.pathname==='/api/agents')return{host:self.address,local:true,agents:[],sessions:[]};
   if(!b&&u.pathname==='/api/groups/invitations')return[];
-  if(!b&&u.pathname==='/api/typing/status')return{send:false,scopes:[]};
+  if(!b&&u.pathname==='/api/typing'){
+   need(u.searchParams.get('conv')===conv,'wrong typing conversation');
+   return{scope:{conv},preferences:{send:false,show:false},supported:false,current:true,entries:[]};
+  }
   if(!b&&u.pathname==='/api/schedules')return[];
   if(u.pathname==='/api/refresh'||u.pathname==='/api/topic/transfer/location')return{};
   unexpected.push({path:u.pathname,mutation:!!b});throw Error('Unexpected C1 rename request '+u.pathname);

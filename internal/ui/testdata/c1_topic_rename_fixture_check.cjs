@@ -7,6 +7,7 @@ async function main(){
  for(const bad of [null,{...config,placement:'unknown'},{...config,mode:'unknown'},{...config,history:0}]){assert.throws(()=>entry(bad),/C1 rename fixture/);count++;}
  const f=topicRenameFixture(config),read=await f.api('/api/dm?id='+f.conv);
  assert.equal(read.messages.length,10);assert.equal(read.kind,'dm');assert.equal(read.topics[0].title,'Original renamed topic');count++;
+ const typing=await f.api('/api/typing?conv='+f.conv);assert.equal(typing.scope.conv,f.conv);assert.equal(typing.preferences.send,false);count++;
  let finished=false;const promise=f.api('/api/topic/rename',{conv:f.conv,id:f.topic,title:'New title'}).then(()=>{finished=true;});
  await Promise.resolve();assert.equal(finished,false);assert.equal(f.witness().pending,1);assert.equal(f.witness().confirmed_title,'Original renamed topic');count++;
  f.settle(1,'resolve');await promise;assert.equal(f.witness().confirmed_title,'New title');assert.equal(f.witness().pending,0);count++;
