@@ -9,7 +9,7 @@ const brief=f=>Object.assign(f,{brief:true});
 async function runVector(p1=''){
 const reports={actions:[],apiCalls:[],seenControls:[],firedControlIds:[],untaggedInteractive:[],pageErrors:[],feedbackFailures:[],inputDispatch:'synthetic DOM events (excludes OS input dispatch)',viewport:{width:innerWidth,height:innerHeight,dpr:devicePixelRatio},userAgent:navigator.userAgent,hardwareConcurrency:navigator.hardwareConcurrency,nativeScrollAnchoring:CSS.supports('overflow-anchor','auto'),reducedMotion:matchMedia('(prefers-reduced-motion: reduce)').matches};
 const trackedHandlers=new WeakMap();
-globalThis.__anTrack=(id,fn)=>{if(typeof fn!=='function')return fn;let ids=trackedHandlers.get(fn);if(!ids){ids=new Map();trackedHandlers.set(fn,ids);}let wrapped=ids.get(id);if(!wrapped){wrapped=function(...args){if(!reports.firedControlIds.includes(id))reports.firedControlIds.push(id);return fn.apply(this,args);};ids.set(id,wrapped);}return wrapped;};
+globalThis.__anTrack=(id,fn)=>{if(typeof fn!=='function')return fn;let ids=trackedHandlers.get(fn);if(!ids){ids=new Map();trackedHandlers.set(fn,ids);}let wrapped=ids.get(id);if(!wrapped){wrapped=function(...args){(globalThis.__anFiredLog||=[]).push(id);if(!reports.firedControlIds.includes(id))reports.firedControlIds.push(id);return fn.apply(this,args);};ids.set(id,wrapped);}return wrapped;};
 globalThis.__anFiredControlIds=reports.firedControlIds;
 globalThis.__anTrustedApiCalls=reports.apiCalls;
 const pageError=e=>reports.pageErrors.push(String(e.message||e.reason||e).slice(0,1000));window.addEventListener('error',pageError);window.addEventListener('unhandledrejection',pageError);
@@ -330,21 +330,24 @@ try {
   let menus=0;const menu=async()=>{await settled();row().querySelector('[data-message-bubble]').dispatchEvent(new PointerEvent('pointerover',{bubbles:true,pointerType:'mouse'}));await until(()=>row().querySelector('button[aria-label="More actions"],button[aria-label="Message actions"]'),'message action control');const more=row().querySelector('button[aria-label="More actions"],button[aria-label="Message actions"]');more.focus();await measure('message.menu-open-'+menus++,()=>more.click(),()=>!!item('Details'),'message action menu visible');};
   // The chat's unread mark shows before the server answers (TDLib sets its own
   // first), stays with the answer held, and comes back off when refused.
-  const runtimePhoneUnread=query.get('runtimeWide')==='1'&&innerWidth<1024;
-  if(runtimePhoneUnread)reports.runtimeSetupLimit='Phone chat-list unread counter is unmounted under the conversation; setup asserts menu closure, not the hidden counter.';
-  const markedRow=()=>runtimePhoneUnread?!item('Mark unread'):[...root.querySelectorAll('[data-part="chat-row"][data-unread]')].some(b=>b.textContent.includes('Vitalii'));
+  const runtimePhoneUnread=innerWidth<1024;
+    const markedRow=()=>runtimePhoneUnread?!item('Mark unread'):[...root.querySelectorAll('[data-part="chat-row"][data-unread]')].some(b=>b.textContent.includes('Vitalii'));
   let releaseUnread;unreadHold=new Promise(r=>releaseUnread=r);
   await menu();await measure('unread.mark',()=>item('Mark unread').click(),markedRow,'chat row shows unread with the answer held');assert(markedRow(),'unread mark stays while held');
   const unreadCount=()=>Number([...root.querySelectorAll('[data-part="chat-row"][data-unread]')].find(b=>b.textContent.includes('Vitalii'))?.querySelector('[data-part="unread"]')?.firstChild?.textContent||0);
+  // On a phone the count lives on the list, under the open chat: go there and read it, as a person would.
+  const phoneList=async(step,want)=>{if(!runtimePhoneUnread)return;await settled();const chat=()=>[...root.querySelectorAll('[data-part="chat-row"]')].find(b=>b.textContent.includes('Vitalii'));await measure('unread.phone-list-'+step,()=>root.querySelector('button[aria-label="Back to chats"]').click(),()=>!!chat()&&(want?unreadCount()===want:!chat().hasAttribute('data-unread')),want?'phone chat list shows '+want+' unread':'phone chat list shows the refused mark taken back');await measure('unread.phone-reopen-'+step,()=>chat().click(),()=>onScreen(row()),'the same chat opens again from the list');await settled();};
   // A second mark adds to the first while both are unanswered, and a refusal takes back only its own.
   const second=view.messages.at(-2),third=view.messages.at(-4);target=second.id;await settled();await menu();
-  await measure('unread.mark-second',()=>item('Mark unread').click(),()=>runtimePhoneUnread?!item('Mark unread'):unreadCount()===2,runtimePhoneUnread?'phone unread menu closes; hidden chat-list count unasserted':'second unanswered mark adds to the first');
+  await measure('unread.mark-second',()=>item('Mark unread').click(),()=>runtimePhoneUnread?!item('Mark unread'):unreadCount()===2,runtimePhoneUnread?'phone unread menu closes; the list count is read next':'second unanswered mark adds to the first');
   unreadHold=null;unreadFailure=true;target=third.id;await settled();await menu();
-  await measure('unread.mark-third-refused',()=>item('Mark unread').click(),()=>runtimePhoneUnread?!item('Mark unread'):unreadCount()===3,runtimePhoneUnread?'phone unread menu closes before refusal; hidden chat-list count unasserted':'third mark adds before its refusal',()=>visibleText('Synthetic unread refusal')&&(runtimePhoneUnread||unreadCount()===2));
+  await measure('unread.mark-third-refused',()=>item('Mark unread').click(),()=>runtimePhoneUnread?!item('Mark unread'):unreadCount()===3,runtimePhoneUnread?'phone unread menu closes before refusal; the list count is read next':'third mark adds before its refusal',()=>visibleText('Synthetic unread refusal')&&(runtimePhoneUnread||unreadCount()===2));
   unreadFailure=false;target=message.id;assert(!third.unread,'refused mark changed nothing');
+  await phoneList('held',2);
   releaseUnread();await until(()=>!reports.apiCalls.some(c=>c.path==='/api/act'&&c.ok===undefined),'both unread marks answered');assert(reports.apiCalls.filter(c=>c.path==='/api/act'&&c.ok===true).length>=2,'both unread marks accepted');await settled();
   message.unread=second.unread=false;overview.dms[0].unread=0;seq++;emit();await until(()=>runtimePhoneUnread||!markedRow(),'chat read again for the refused case');
-  unreadFailure=true;await menu();await measure('unread.mark-refused',()=>item('Mark unread').click(),markedRow,runtimePhoneUnread?'phone unread menu closes before refusal; hidden chat-list count unasserted':'chat row shows unread before the refusal',()=>visibleText('Synthetic unread refusal')&&(runtimePhoneUnread||!markedRow()));unreadFailure=false;await settled();
+  unreadFailure=true;await menu();await measure('unread.mark-refused',()=>item('Mark unread').click(),markedRow,runtimePhoneUnread?'phone unread menu closes before refusal; the list count is read next':'chat row shows unread before the refusal',()=>visibleText('Synthetic unread refusal')&&(runtimePhoneUnread?reports.apiCalls.filter(c=>c.path==='/api/act'&&c.ok===false).length>=2:!markedRow()));unreadFailure=false;await settled();
+  await phoneList('refused',0);
   if((trustedFile==='Message.tsx'||query.get('runtimeWide')==='1')&&await trustedCheckpoint('message-base','actions/dm-open/message-visible/no-sheet'))return {ok:true,...reports};await menu();const pick=item('React 👍');if(!pick){const react=row().querySelector('button[aria-label="React"]');assert(react,'reaction control missing');const details=item('Details');details.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));await settled();await measure('reaction.picker-open',()=>react.click(),()=>!!item('React 👍'),'quick reaction choices visible');}
   await measure('reaction.add',()=>item('React 👍').click(),()=>!!pending(),'explicit pending reaction feedback',()=>message.reactions.some(r=>r.mine)&&!pending()&&!!row().querySelector('[aria-pressed="true"]'));await settled();
   await measure('reaction.remove',()=>row().querySelector('[aria-pressed="true"]').click(),()=>!!pending(),'explicit removal pending feedback',()=>!message.reactions.some(r=>r.mine)&&!pending()&&!row().querySelector('[aria-pressed="true"]'));
@@ -363,11 +366,12 @@ try {
   // gone with the answer held, and comes back with the reason when refused.
   // Not onScreen: the confirmation makes everything behind it inert.
   const chatRow=()=>[...root.querySelectorAll('[data-part="chat-row"]')].find(b=>b.textContent.includes('Vitalii'));
+  const chatOpen=()=>!!root.querySelector('button[aria-label="Back to chats"]');
   const askDeleteChat=async()=>{await settled();await until(()=>[...root.querySelectorAll('button')].some(b=>shown(b)&&label(b)==='More'),'chat menu');[...root.querySelectorAll('button')].find(b=>shown(b)&&label(b)==='More').click();await until(()=>item('Delete conversation…'),'delete conversation item');item('Delete conversation…').click();await until(()=>[...scope().querySelectorAll('[role="alertdialog"]')].find(shown),'delete conversation confirmation');await settled();return [...scope().querySelectorAll('[role="alertdialog"]')].find(shown);};
   chatDeleteFailure=true;let confirmChat=await askDeleteChat();
-  await measure('chat.delete-refused',()=>[...confirmChat.querySelectorAll('button')].find(b=>label(b)==='Delete').click(),()=>!chatRow(),'chat leaves the list before the refusal',()=>!!chatRow()&&visibleText('Synthetic delete refusal')&&onScreen(row()));
+  await measure('chat.delete-refused',()=>[...confirmChat.querySelectorAll('button')].find(b=>label(b)==='Delete').click(),()=>innerWidth<1024?visibleText('Synthetic delete refusal'):!chatRow(),innerWidth<1024?'phone: the refusal says why, with the chat still there':'chat leaves the list before the refusal',()=>visibleText('Synthetic delete refusal')&&(innerWidth<1024?!!chatRow()||chatOpen():!!chatRow()&&onScreen(row())));
   chatDeleteFailure=false;let releaseChatDelete;chatDeleteHold=new Promise(r=>releaseChatDelete=r);confirmChat=await askDeleteChat();
-  await measure('chat.delete',()=>[...confirmChat.querySelectorAll('button')].find(b=>label(b)==='Delete').click(),()=>!chatRow()&&!onScreen(row()),'chat leaves the list and closes with the server answer held');
+  await measure('chat.delete',()=>[...confirmChat.querySelectorAll('button')].find(b=>label(b)==='Delete').click(),()=>innerWidth<1024?!chatOpen()&&!chatRow():!chatRow()&&!onScreen(row()),'chat leaves the list and closes with the server answer held');
   // Any write still unanswered also says so, wherever the person has gone since.
   const workingNotice=()=>scope().querySelector('[data-working]');await until(workingNotice,'working notice while the server is silent',1500);
   // A message arriving meanwhile brings the chat back: only what was deleted stays hidden.

@@ -5,7 +5,8 @@
 import os,subprocess,time,json,signal,hashlib
 from pathlib import Path
 harness_sha256=hashlib.sha256(b"".join(Path(p).read_bytes() for p in ["testdata/latency_fixture.mjs","testdata/latency_rendered_check.cjs"])).hexdigest()
-start=time.time(); results=json.load(open('/tmp/agentnet-crawl-wide.json'))['runs'] if os.path.exists('/tmp/agentnet-crawl-wide.json') else []
+output=os.environ.get('AGENTNET_CRAWL_OUTPUT','/tmp/agentnet-crawl-wide.json')
+start=time.time(); results=json.load(open(output))['runs'] if os.path.exists(output) else []
 suites='actions agents compose groups history media navigation outbox permissions profile review settings storage teams topics unread workspaces'.split()
 for suite in suites:
  for mode in ['held','failing']:
@@ -27,4 +28,4 @@ for suite in suites:
     try: reports.append(json.loads(line.strip()))
     except: pass
    results.append(dict(phase='final',harness_sha256=harness_sha256,mode=mode,viewport=viewport,suite=suite,exit=code,reports=reports,log=raw[-3000:]))
-   with open('/tmp/agentnet-crawl-wide.json','w') as f: json.dump(dict(commit=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),duration_seconds=time.time()-start,runs=results),f)
+   with open(output,'w') as f: json.dump(dict(commit=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),duration_seconds=time.time()-start,runs=results),f)
