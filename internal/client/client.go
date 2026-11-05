@@ -79,6 +79,7 @@ type Agent struct {
 	adQuery          string                     // this run's signed session ad, for the push stream
 	kick             func()                     // wakes the current stream's retry worker
 	kickMu           sync.Mutex                 // guards kick for kickNow
+	paceClaimed      func()                     // optional deterministic after-claim test barrier
 	kicksLive        atomic.Bool                // this Agent's daemon serves the local wake-up socket (startWorker)
 	streamConnected  atomic.Bool                // the daemon currently holds an accepted Hub push stream
 	selfKicks        atomic.Int64               // wakes in flight that this daemon sent itself (notifyOwnWork)

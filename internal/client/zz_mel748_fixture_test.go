@@ -192,6 +192,79 @@ func dropPace(a *Agent) {
 // A wake an hour off is surely still set, so nothing here depends on how the timers fall; the
 // journey above ends and restarts a real daemon.
 func TestPacedWakeReachesOnlyTheCurrentRun(t *testing.T) {
+	t.Run("after-claim", func(t *testing.T) {
+		for _, transition := range []string{"restart", "reconnect", "close"} {
+			t.Run(transition, func(t *testing.T) {
+				a := &Agent{}
+				defer a.sendRetry.runs(false)
+				var old, next atomic.Int32
+				var unfenced atomic.Bool
+				a.kick = func() { old.Add(1) }
+				a.sendRetry.runs(true)
+				a.kickAfter(time.Hour)
+				serial := paceSerialOf(a)
+				claimed, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+				var unblock sync.Once
+				releaseClaim := func() { unblock.Do(func() { close(release) }) }
+				defer releaseClaim()
+				var once sync.Once
+				a.paceClaimed = func() { once.Do(func() { close(claimed); <-release }) }
+				go func() { defer close(done); a.paceFired(serial) }()
+				select {
+				case <-claimed:
+				case <-time.After(5 * time.Second):
+					t.Fatal("paced callback never reached after-claim barrier")
+				}
+				if transition == "restart" {
+					a.sendRetry.runs(false)
+					a.sendRetry.runs(true)
+				} else if transition == "close" {
+					a.stopBackgroundPosts()
+				}
+				a.kickMu.Lock()
+				a.kick = func() {
+					if a.sendRetry.TryLock() {
+						unfenced.Store(true)
+						a.sendRetry.Unlock()
+					}
+					if a.kickMu.TryLock() {
+						unfenced.Store(true)
+						a.kickMu.Unlock()
+					}
+					next.Add(1)
+				}
+				a.kickMu.Unlock()
+				if transition == "restart" {
+					a.kickAfter(time.Hour)
+				}
+				releaseClaim()
+				select {
+				case <-done:
+				case <-time.After(5 * time.Second):
+					t.Fatal("claimed paced callback did not finish")
+				}
+				want := int32(0)
+				if transition == "reconnect" {
+					want = 1
+				}
+				if old.Load() != 0 || next.Load() != want {
+					t.Fatalf("after-claim %s: old stream wakes=%d replacement wakes=%d want=%d", transition, old.Load(), next.Load(), want)
+				}
+				if unfenced.Load() {
+					t.Fatal("paced wake delivery was outside its run or stream lock")
+				}
+				if transition == "restart" {
+					if !paceArmed(a) {
+						t.Fatal("old callback consumed replacement run's timer")
+					}
+					a.paceFired(paceSerialOf(a))
+					if next.Load() != 1 {
+						t.Fatal("replacement run's own paced callback did not wake it")
+					}
+				}
+			})
+		}
+	})
 	const settle = 100 * time.Millisecond // nothing more may come; a late one could only pass
 	a := &Agent{}
 	kickOf := func() *atomic.Int32 {

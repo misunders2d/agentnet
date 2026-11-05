@@ -60,6 +60,7 @@ type sendRetry struct {
 	wait    time.Duration
 	running bool // a daemon run is current; kickNow outlives it and would post alone
 	closed  bool
+	run     uint64 // changes at both ends, including after a timer has claimed its wake
 
 	pace       *time.Timer // this run's paced history wake, the earliest asked (kickAfter)
 	paceAt     time.Time
@@ -82,6 +83,7 @@ func (r *sendRetry) disarm() {
 func (r *sendRetry) runs(on bool) {
 	r.Lock()
 	defer r.Unlock()
+	r.run++
 	r.running, r.wait = on, 0
 	if !on {
 		r.disarm()

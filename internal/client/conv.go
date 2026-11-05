@@ -2106,12 +2106,29 @@ func (a *Agent) paceFired(serial uint64) {
 	r := &a.sendRetry
 	r.Lock()
 	own := r.pace != nil && r.paceSerial == serial
+	run := r.run
 	if own {
 		r.pace = nil
 	}
 	r.Unlock()
 	if own {
-		a.kickRun()
+		if a.paceClaimed != nil {
+			a.paceClaimed()
+		}
+		// The claim may have outlived its run. Keep the run check and the
+		// actual wake together: neither a restart nor a stream replacement
+		// may slip between validation and delivery. The kick only queues
+		// background work; it performs no I/O and never takes these locks.
+		r.Lock()
+		defer r.Unlock()
+		if !r.running || r.closed || r.run != run {
+			return
+		}
+		a.kickMu.Lock() // lock order: sendRetry, then kickMu
+		defer a.kickMu.Unlock()
+		if a.kick != nil {
+			a.kick()
+		}
 	}
 }
 
