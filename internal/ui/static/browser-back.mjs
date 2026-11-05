@@ -26,14 +26,17 @@ export function browserBackNavigation(win = window) {
     win.history.replaceState(stamp(at), '', win.location.href);
     guard();
   };
+  // Firefox past its cap goes on listing the entries it dropped, oldest first, where going
+  // to one does nothing. History's length says how many of them are still real.
+  const firstListed = () => Math.max(nav.entries().length - win.history.length, 0);
   // What is behind this entry. Going back past the start raises no event, so a traversal
   // this page may not be sure of cannot be told from a slow one: it must know beforehand.
   // The HTML navigation API lists only same-origin entries touching this one, so history
   // longer than that list holds other origins, on a side only the page's load can tell.
   const behind = () => {
     const current = nav?.currentEntry, state = win.history.state;
-    if (current?.index > 0) return 'own';
-    if (current?.index === 0 && win.history.length <= nav.entries().length) return 'nothing';
+    if (current && current.index > firstListed()) return 'own';
+    if (current && win.history.length <= nav.entries().length) return 'nothing';
     // Past the cap, entries were dropped from behind: what the load saw no longer holds.
     // So too when places count more entries than history has.
     if (!own(state) || (!current && (win.history.length >= historyCap || state.agentnetBackSeq >= win.history.length))) return 'unknown';
@@ -55,10 +58,11 @@ export function browserBackNavigation(win = window) {
     walking = false;
     guardFromHere();
   };
-  // Leaving walks back one entry at a time. Places count entries the browser may have
-  // dropped or a writer re-marked, so a distance worked out from them can point past the
-  // start of history, where going back does nothing at all, and no event says so. An
-  // older version's entry has no mark, and this walks past that as well.
+  // Places count entries the browser may have dropped or a writer re-marked, so a distance
+  // worked out from them can point past the start of history, where going back does nothing
+  // at all, and no event says so. So an engine without the API walks one entry at a time,
+  // past an older version's unmarked entries as well. With the API the browser lists the
+  // entries, and leaving is one hop to the entry before this document's, however many it has.
   const leaveStep = () => {
     win.clearTimeout(giveUp);
     const there = behind();
@@ -66,7 +70,10 @@ export function browserBackNavigation(win = window) {
     walking = true;
     if (there === 'own') {
       const refused = () => { if (walking) { walking = false; mayReturnOnInput(); } };
-      const step = nav.back();
+      const list = nav.entries(), first = firstListed();
+      let to = nav.currentEntry.index;
+      while (to > first && list[to - 1].sameDocument) to--;
+      const step = nav.traverseTo(list[Math.max(to - 1, first)].key);
       step.committed?.catch(refused);
       step.finished?.catch(() => {});
       return;

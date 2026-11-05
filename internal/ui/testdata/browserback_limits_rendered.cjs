@@ -2,7 +2,7 @@
 // entries whose mark another writer erased, and a traversal that takes its time.
 // Each case reports for itself, so one failure hides none of the others.
 const assert = require('node:assert/strict');
-const {chromium} = require(process.env.AGENTNET_PLAYWRIGHT || 'playwright-core');
+const engines = require(process.env.AGENTNET_PLAYWRIGHT || 'playwright-core'), engine = process.env.AGENTNET_INTERACTION_ENGINE || 'chromium';
 const origin = new URL(process.argv[2]).origin;
 const token = new URL(process.argv[2]).searchParams.get('t');
 const results = {}, limit = {};
@@ -10,7 +10,7 @@ const run = async (name, fn) => {
   try { await fn(); results[name] = 'PASS'; } catch (e) { results[name] = 'FAIL: ' + String(e.message).split('\n')[0].slice(0, 160); }
 };
 (async () => {
-  const browser = await chromium.launch({headless: true, executablePath: process.env.AGENTNET_CHROMIUM || '/usr/bin/chromium', args: ['--no-sandbox']});
+  const browser = await engines[engine].launch(engine === 'chromium' ? {headless: true, executablePath: process.env.AGENTNET_CHROMIUM || '/usr/bin/chromium', args: ['--no-sandbox']} : {headless: !process.env.AGENTNET_INTERACTION_HEADED});
   const open = async name => {
     const context = await browser.newContext(), page = await context.newPage();
     page.setDefaultTimeout(5000);
@@ -33,7 +33,7 @@ const run = async (name, fn) => {
     for (let i = 0; i < 70; i++) await follow('#cap-' + i);
     const walk = Date.now();
     await page.goBack().catch(() => {});
-    await page.waitForFunction(() => calls === 1 && navigation.currentEntry.index === 1 && history.state?.agentnetBackSeq === 1, null, {timeout: 3000}).catch(async e => {
+    await page.waitForFunction(() => calls === 1 && history.state?.agentnetBackSeq === 1, null, {timeout: 3000}).catch(async e => {
       throw new Error('the guard did not return: ' + JSON.stringify(await page.evaluate(() => ({calls, length: history.length, index: navigation.currentEntry.index, seq: history.state?.agentnetBackSeq}))));
     });
     const walked = Date.now() - walk;

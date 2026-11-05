@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
-const {chromium} = require(process.env.AGENTNET_PLAYWRIGHT || 'playwright-core');
+const engines = require(process.env.AGENTNET_PLAYWRIGHT || 'playwright-core'), engine = process.env.AGENTNET_INTERACTION_ENGINE || 'chromium';
 (async()=>{
- const browser=await chromium.launch({headless:true,executablePath:process.env.AGENTNET_CHROMIUM||'/usr/bin/chromium'});
+ const browser=await engines[engine].launch(engine==='chromium'?{headless:true,executablePath:process.env.AGENTNET_CHROMIUM||'/usr/bin/chromium'}:{headless:!process.env.AGENTNET_INTERACTION_HEADED});
  try{
   const origin=new URL(process.argv[2]).origin;
   for(const width of [1280,390]){
@@ -10,6 +10,7 @@ const {chromium} = require(process.env.AGENTNET_PLAYWRIGHT || 'playwright-core')
    await page.route(origin+'/outside',r=>r.fulfill({contentType:'text/html',body:'<!doctype html><title>Outside fixture</title>Earlier document'}));
    await page.goto(origin+'/outside');await page.goto(process.argv[2]);
    const loaded=page.url();
+   await page.getByRole('button',{name:'New',exact:true}).waitFor(); // a reload during loading aborts its imports
    await page.reload();await page.getByRole('button',{name:'New',exact:true}).waitFor();
    await page.getByRole('button',{name:'New',exact:true}).click();await page.getByRole('dialog',{name:'New chat',exact:true}).waitFor();
    await page.goBack();await page.getByRole('dialog',{name:'New chat',exact:true}).waitFor({state:'detached'});assert.equal(page.url(),loaded);
@@ -24,7 +25,7 @@ const {chromium} = require(process.env.AGENTNET_PLAYWRIGHT || 'playwright-core')
   await context.addCookies([{name:'agentnet_ui',value:new URL(process.argv[2]).searchParams.get('t'),url:origin,httpOnly:true,sameSite:'Strict'}]);
   await page.route(origin+'/back-direct',r=>r.fulfill({contentType:'text/html',body:'<!doctype html><title>Direct tab fixture</title>'}));
   await page.goto(origin+'/back-direct');
-  const session=await context.newCDPSession(page);await session.send('Page.resetNavigationHistory');await session.detach();
+  if(engine==='chromium'){const session=await context.newCDPSession(page);await session.send('Page.resetNavigationHistory');await session.detach();}
   await page.evaluate(async()=>{const {browserBackNavigation}=await import('/assets/browser-back.mjs');window.layers=0;window.calls=0;window.off=browserBackNavigation()( ()=>{calls++;if(layers){layers--;return true;}return false;});});
   await page.goBack();await page.waitForFunction(()=>window.calls===1);await page.evaluate(()=>layers=1);await page.goBack();await page.waitForFunction(()=>calls===2&&layers===0);
   await page.evaluate(()=>{off();window.layers=1;});await page.goBack();assert.equal(await page.evaluate(()=>layers),1,'unmounted skin receives no Back action');await context.close();
@@ -54,7 +55,7 @@ const {chromium} = require(process.env.AGENTNET_PLAYWRIGHT || 'playwright-core')
     await page.route(origin+'/back-*',r=>r.fulfill({contentType:'text/html',body:'<!doctype html><title>Legacy fixture</title>'}));
     if(!direct)await page.goto(origin+'/back-earlier');
     await page.goto(origin+'/back-legacy');
-    if(direct){const session=await context.newCDPSession(page);await session.send('Page.resetNavigationHistory');await session.detach();}
+    if(direct){if(engine==='chromium'){const session=await context.newCDPSession(page);await session.send('Page.resetNavigationHistory');await session.detach();}}
     await page.evaluate(()=>history.pushState({agentnetBack:'agentnet-back-legacy'},'',location.href));
     await page.reload();
     await page.evaluate(async()=>{const {browserBackNavigation}=await import('/assets/browser-back.mjs');window.layers=1;window.calls=0;browserBackNavigation()(()=>{calls++;if(layers){layers--;return true;}return false;});});

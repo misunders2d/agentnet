@@ -10,8 +10,9 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // entries: {doc, origin?, state?}. Only entries of doc 'app' are this document; landing
 // on any other leaves it. slow(entry) is the delay of the traversal landing on it.
-const world = ({entries, index, api = false, activation = 'push', refuse = false, loaded, slow = () => 0}) => {
+const world = ({entries, index, api = false, activation = 'push', refuse = false, loaded, slow = () => 0, droppedStillListed = 0}) => {
   const listeners = {}, log = {writes: 0, backs: 0, left: null};
+  let nextKey = 0;
   const fire = (type, event) => [...(listeners[type] || [])].forEach(f => f(event));
   const land = to => setTimeout(() => {
     if (log.left) return;
@@ -45,13 +46,17 @@ const world = ({entries, index, api = false, activation = 'push', refuse = false
       return {from, to};
     };
     w.navigation = {
-      get currentEntry() { return {index: w.index - here().from}; },
-      entries() { const {from, to} = here(); return entries.slice(from, to + 1); },
+      get currentEntry() { return {index: droppedStillListed + w.index - here().from}; },
+      entries() {
+        const {from, to} = here();
+        // Firefox past its cap: going to one of these raises nothing and goes nowhere.
+        return [...Array.from({length: droppedStillListed}, () => ({key: 'dropped', sameDocument: true})), ...entries.slice(from, to + 1).map(e => { e.key ??= 'key' + nextKey++; e.sameDocument = e.doc === 'app'; return e; })];
+      },
       activation: {navigationType: activation},
-      back() {
+      traverseTo(key) {
         log.backs++;
         if (refuse) { const failed = Promise.reject(new Error('AbortError')); return {committed: failed, finished: failed}; }
-        land(w.index - 1);
+        if (key !== 'dropped') land(entries.findIndex(e => e.key === key));
         return {committed: Promise.resolve(), finished: Promise.resolve()};
       },
     };
@@ -206,6 +211,35 @@ const app = () => ({doc: 'app'}), earlier = () => ({doc: 'earlier'}), outside = 
     await sleep(500);
     assert.equal(w.log.left, 'outside');
     assert.equal(seen.calls, 1);
+  });
+
+  await run('navigation API: entries the browser dropped but still lists are never gone to', async () => {
+    const entries = [app(), app(), app()];
+    const {w, seen} = armed({entries, index: 2, api: true, droppedStillListed: 3});
+    entries[0].state = {agentnetBack: w.history.state.agentnetBack, agentnetBackSeq: 5};
+    entries[1].state = {agentnetBack: w.history.state.agentnetBack, agentnetBackSeq: 6};
+    press(w);
+    await settle();
+    await settle();
+    assert.equal(seen.calls, 1);
+    assert.equal(w.history.state.agentnetBackSeq, 1, 'the guard did not return above the oldest real entry');
+    seen.layers = 1;
+    press(w);
+    await settle();
+    assert.equal(seen.layers, 0, 'the next Back did not reach the layer');
+  });
+
+  await run('navigation API: leaving goes straight to the entry before this document, not one past it', async () => {
+    const entries = [earlier(), earlier(), app(), app(), app()];
+    const {w} = armed({entries, index: 4, api: true});
+    entries[2].state = {agentnetBack: w.history.state.agentnetBack, agentnetBackSeq: 0};
+    entries[3].state = {agentnetBack: w.history.state.agentnetBack, agentnetBackSeq: 1};
+    press(w);
+    await settle();
+    await settle();
+    assert.equal(w.log.left, 'earlier');
+    assert.equal(w.index, 1, 'skipped the document just before this one: index ' + w.index);
+    assert.equal(w.log.backs, 2, 'took ' + (w.log.backs - 1) + ' hops after the press');
   });
 
   await run('navigation API: nothing older: no traversal is begun and Back works at once', async () => {
