@@ -37,6 +37,38 @@ func TestOwnEndpointMetadataArrivesAtProductionPace(t *testing.T) {
 		err := a.store.db.QueryRow(`SELECT author_fp FROM device_thread_links WHERE storage='out' AND id=?`, id).Scan(&author)
 		return err == nil && author != ""
 	}
+	// A rest is proved by what only a rest does: a turn stopping at it arms a wake and records
+	// no cost, where a turn that runs records its cost before it arms anything. Two in a row
+	// with no cost between them also mean no page is still being written. Clearing the flag
+	// each time shows a stop however the timers fall; the last stop's flag is left as it is.
+	restIsHeld := func() {
+		t.Helper()
+		w := &a.convWork
+		cost, stopped, finished := w.historyCost.Load(), 0, 0
+		w.paceTimer.Store(false)
+		for deadline := time.Now().Add(time.Minute); ; time.Sleep(20 * time.Millisecond) {
+			armed := w.paceTimer.Load() // before the cost, which a running turn records first
+			if now := w.historyCost.Load(); now != cost {
+				cost, stopped = now, 0
+				finished++
+				w.paceTimer.Store(false)
+			} else if armed {
+				if stopped++; stopped == 2 {
+					t.Logf("a rest held: two turns stopped at it, after %d finished", finished)
+					return
+				}
+				w.paceTimer.Store(false)
+			}
+			if time.Now().After(deadline) {
+				if finished >= 2 {
+					t.Fatal("a history turn ran through the rest") // only one can have begun before it
+				}
+				t.Fatal("no history turn reached the rest")
+			}
+			w.due(convHistory)
+			a.kickNow()
+		}
+	}
 	holdRest := func() (release func()) {
 		t.Helper()
 		roll := func() { a.convWork.historyNotBefore.Store(time.Now().Add(historyRestMax).UnixNano()) }
@@ -58,31 +90,19 @@ func TestOwnEndpointMetadataArrivesAtProductionPace(t *testing.T) {
 		var once sync.Once
 		release = func() { once.Do(func() { close(done); <-stopped }) }
 		t.Cleanup(release) // a Fatal below or in the caller must not leave the rest rolling
-		// A turn begun before the rest ends by setting a paced wake; every later one finds
-		// the rest and sets one. Seeing it set again means no page is still being written.
-		sawClear, deadline := false, time.Now().Add(time.Minute)
-		for {
-			set := a.convWork.paceTimer.Load()
-			if sawClear && set {
-				break
-			}
-			sawClear = sawClear || !set
-			if time.Now().After(deadline) {
-				t.Fatal("no history turn found the rest")
-			}
-			a.convWork.due(convHistory)
-			a.kickNow()
-			time.Sleep(20 * time.Millisecond)
-		}
-		time.Sleep(50 * time.Millisecond)
+		restIsHeld()
 		return release
 	}
 	finishes := func(what string, ids ...string) {
 		t.Helper()
-		started := time.Now()
+		started, cost := time.Now(), a.convWork.historyCost.Load()
 		for _, id := range ids {
 			for !copied(id) {
 				if time.Since(started) > time.Minute {
+					// A wake clears its flag when it fires, and no later turn ran.
+					if a.convWork.paceTimer.Load() && a.convWork.historyCost.Load() == cost {
+						t.Fatalf("a paced wake never fired %s", what)
+					}
 					t.Fatalf("copying never finished %s", what)
 				}
 				time.Sleep(50 * time.Millisecond)
@@ -93,6 +113,7 @@ func TestOwnEndpointMetadataArrivesAtProductionPace(t *testing.T) {
 
 	release := holdRest()
 	ids := []string{send("first"), send("second"), send("third")}
+	restIsHeld() // turns have now stopped at the rest with these messages waiting
 	for _, id := range ids {
 		if copied(id) {
 			t.Fatal("copying did not wait out its rest")
