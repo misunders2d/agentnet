@@ -268,6 +268,10 @@ func TestDirectTopicSyncOwnEndpointsUseOriginalIdentity(t *testing.T) {
 	// History production fills the outgoing author metadata asynchronously.
 	// Wait for that presentation input before capturing the move's CAS review.
 	eventually(t, "original author metadata ready on both endpoints", func() bool {
+		// Not a test of how history copying is paced: its turns follow without a rest.
+		if w.alice.convWork.historyNotBefore.Swap(0) != 0 {
+			w.alice.kickNow()
+		}
 		for _, id := range []string{source, destination, third} {
 			var author string
 			if err := w.alice.store.db.QueryRow(`SELECT author_fp FROM device_thread_links WHERE storage='out' AND id=?`, id).Scan(&author); err != nil || author != w.alice.Self().Fingerprint() {
