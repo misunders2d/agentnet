@@ -165,6 +165,184 @@ func TestOwnEndpointMetadataArrivesAtProductionPace(t *testing.T) {
 	}
 }
 
+func testRetryReaderOwnership(t *testing.T) {
+	for _, mode := range []string{"retry-after-claim", "retry-before-clear", "retry-reconnect", "reader-budget", "reader-person"} {
+		t.Run(mode, func(t *testing.T) {
+			a := &Agent{}
+			a.sendRetry.runs(true)
+			defer a.sendRetry.runs(false)
+			var wakes atomic.Int32
+			a.kick = func() { wakes.Add(1) }
+			claimed, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			var unblock sync.Once
+			releaseClaim := func() { unblock.Do(func() { close(release) }) }
+			defer releaseClaim()
+			barrier := func(serial uint64) {
+				if serial == 1 {
+					close(claimed)
+					<-release
+				}
+			}
+			armRetry := func() (uint64, *time.Timer) {
+				a.retrySendSoon(&HubError{Status: 503})
+				a.sendRetry.Lock()
+				defer a.sendRetry.Unlock()
+				if a.sendRetry.timer == nil {
+					t.Fatal("retry was not armed")
+				}
+				a.sendRetry.timer.Stop() // dispatch is driven below, not by the clock
+				return a.sendRetry.timerSerial, a.sendRetry.timer
+			}
+			person := readerAsks
+			if mode == "reader-person" {
+				person = "synthetic-person"
+			}
+			armReader := func() uint64 {
+				serial := a.retryReader(person)
+				a.sendRetry.Lock()
+				defer a.sendRetry.Unlock()
+				wait := a.sendRetry.readers[person]
+				if wait.timer == nil {
+					t.Fatal("reader retry was not armed")
+				}
+				wait.timer.Stop()
+				return serial
+			}
+			reader := mode == "reader-budget" || mode == "reader-person"
+			var serial uint64
+			if reader {
+				a.readerFiring = func(_ string, serial uint64) { barrier(serial) }
+				serial = armReader()
+			} else {
+				if mode == "retry-after-claim" || mode == "retry-reconnect" {
+					a.retryClaimed = barrier
+				} else {
+					a.retryFiring = barrier
+				}
+				serial, _ = armRetry()
+			}
+			go func() {
+				defer close(done)
+				if reader {
+					a.readerFired(person, serial)
+				} else {
+					a.retryFired(serial)
+				}
+			}()
+			select {
+			case <-claimed:
+			case <-time.After(5 * time.Second):
+				t.Fatal("ownership barrier was not reached")
+			}
+			if mode != "retry-reconnect" {
+				a.sendRetry.runs(false)
+				a.sendRetry.runs(true)
+			}
+			a.kickMu.Lock()
+			a.kick = func() { wakes.Add(1) }
+			a.kickMu.Unlock()
+			a.convWork.take()
+			var replacement uint64
+			var timer *time.Timer
+			if reader {
+				replacement = armReader()
+			} else {
+				replacement, timer = armRetry()
+			}
+			releaseClaim()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("old callback did not return")
+			}
+			a.sendRetry.Lock()
+			kept := a.sendRetry.timer == timer
+			if reader {
+				kept = a.sendRetry.readers[person].serial == replacement && a.sendRetry.readers[person].timer != nil
+			}
+			a.sendRetry.Unlock()
+			bits := a.convWork.take()
+			want := int32(0)
+			if mode == "retry-reconnect" {
+				want = 1
+			}
+			if !kept || bits != 0 || wakes.Load() != want {
+				t.Fatalf("old callback crossed run: replacement_kept=%t due=%d wakes=%d", kept, bits, wakes.Load())
+			}
+			if reader {
+				a.readerFired(person, replacement)
+			} else {
+				a.retryFired(replacement)
+			}
+			if wakes.Load() != want+1 {
+				t.Fatal("owned callback lost delivery")
+			}
+			if reader && a.convWork.take() != convPersons|convRetry {
+				t.Fatal("owned reader callback lost due work")
+			}
+		})
+	}
+	t.Run("reader-independent", func(t *testing.T) {
+		a := &Agent{}
+		a.runTimers(true)
+		defer a.runTimers(false)
+		var original, current atomic.Int32
+		a.kick = func() { original.Add(1) }
+		arm := func(person string) uint64 {
+			t.Helper()
+			serial := a.retryReader(person)
+			a.sendRetry.Lock()
+			defer a.sendRetry.Unlock()
+			wait := a.sendRetry.readers[person]
+			if wait.timer == nil {
+				t.Fatal("independent reader timer missing")
+			}
+			wait.timer.Stop()
+			return serial
+		}
+		budget, first, second := arm(readerAsks), arm("first"), arm("second")
+		if !a.chainAnswered("first") {
+			t.Fatal("answer did not retire the first person's wait")
+		}
+		replacement := arm("first")
+		a.kickMu.Lock()
+		a.kick = func() { current.Add(1) }
+		a.kickMu.Unlock()
+		a.readerFired("first", first)
+		if a.convWork.take() != 0 || current.Load() != 0 {
+			t.Fatal("answered reader callback mutated replacement work")
+		}
+		for _, item := range []struct {
+			person string
+			serial uint64
+		}{{readerAsks, budget}, {"second", second}, {"first", replacement}} {
+			a.readerFired(item.person, item.serial)
+			if a.convWork.take() != convPersons|convRetry {
+				t.Fatal("independent reader lost its own due work")
+			}
+		}
+		if original.Load() != 0 || current.Load() != 3 {
+			t.Fatal("reader retry did not reach the same run's current stream")
+		}
+		a.readerFired(readerAsks, budget)
+		if a.convWork.take() != 0 || current.Load() != 3 {
+			t.Fatal("one reader callback delivered twice")
+		}
+		arm("retired-at-run-end")
+		a.runTimers(false)
+		a.runTimers(true)
+		a.kickMu.Lock()
+		retainedCallback := a.kick != nil
+		a.kickMu.Unlock()
+		a.sendRetry.Lock()
+		retainedWaits := len(a.sendRetry.readers)
+		a.sendRetry.Unlock()
+		if retainedCallback || retainedWaits != 0 || a.chainWaiting("retired-at-run-end") {
+			t.Fatal("new run retained the old stream or old reader waits")
+		}
+	})
+}
+
 func paceArmed(a *Agent) bool {
 	a.sendRetry.Lock()
 	defer a.sendRetry.Unlock()
@@ -192,6 +370,7 @@ func dropPace(a *Agent) {
 // A wake an hour off is surely still set, so nothing here depends on how the timers fall; the
 // journey above ends and restarts a real daemon.
 func TestPacedWakeReachesOnlyTheCurrentRun(t *testing.T) {
+	t.Run("retry-reader-ownership", testRetryReaderOwnership)
 	t.Run("after-claim", func(t *testing.T) {
 		for _, transition := range []string{"restart", "reconnect", "close"} {
 			t.Run(transition, func(t *testing.T) {

@@ -519,8 +519,8 @@ func (a *Agent) refreshPerson(ctx context.Context, person string, adopt bool) (p
 		return a.pinNewerSteps(ctx, person, adopt)
 	})
 	if err == nil {
-		waited := a.convWork.chainAnswered(person)
-		if a.convWork.chainAnswered(readerAsks) || waited {
+		waited := a.chainAnswered(person)
+		if a.chainAnswered(readerAsks) || waited {
 			a.convWork.due(convRetry) // what waited for this answer need not wait out its retry
 			a.kickNow()
 		}

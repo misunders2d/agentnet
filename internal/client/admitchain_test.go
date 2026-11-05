@@ -550,7 +550,10 @@ func TestReaderTimerWakesOnlyItsOwnRun(t *testing.T) {
 		t.Fatalf("an ended run's timer woke the sync %d times", n)
 	}
 	a.sendRetry.runs(true)
-	a.kickRun()
+	a.sendRetry.Lock()
+	run := a.sendRetry.run
+	a.sendRetry.Unlock()
+	a.kickRun(run)
 	if n := wakes.Load(); n != 1 {
 		t.Fatalf("a current run's wake reached the sync %d times", n)
 	}

@@ -80,6 +80,9 @@ type Agent struct {
 	kick             func()                     // wakes the current stream's retry worker
 	kickMu           sync.Mutex                 // guards kick for kickNow
 	paceClaimed      func()                     // optional deterministic after-claim test barrier
+	retryFiring      func(uint64)               // optional before-claim test barrier
+	retryClaimed     func(uint64)               // optional after-claim test barrier
+	readerFiring     func(string, uint64)       // optional before-mutation test barrier
 	kicksLive        atomic.Bool                // this Agent's daemon serves the local wake-up socket (startWorker)
 	streamConnected  atomic.Bool                // the daemon currently holds an accepted Hub push stream
 	selfKicks        atomic.Int64               // wakes in flight that this daemon sent itself (notifyOwnWork)

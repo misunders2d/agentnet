@@ -64,8 +64,6 @@ type convWork struct {
 	historyDeferred map[string]historyDeferredScan
 	recipients      recipientDiscovery
 	retried         atomic.Int64 // unix time the last full look at held messages began
-	chainMu         sync.Mutex
-	chainWaits      map[string]chainWait // rosters a received message could not get (chainMu)
 	// readerWait: own-device history produced nothing for a device that
 	// cannot read it now (or is suspended); the next member list, which
 	// says when that device reconnects or updates, looks again.
@@ -1478,31 +1476,22 @@ const (
 )
 
 type chainWait struct {
-	until time.Time
-	delay time.Duration
+	until  time.Time
+	delay  time.Duration
+	timer  *time.Timer
+	serial uint64
+	run    uint64
 }
 
-func (w *convWork) chainWaiting(person string) bool {
-	w.chainMu.Lock()
-	defer w.chainMu.Unlock()
-	return time.Now().Before(w.chainWaits[person].until)
+func (a *Agent) chainWaiting(person string) bool {
+	r := &a.sendRetry
+	r.Lock()
+	defer r.Unlock()
+	wait := r.readers[person]
+	return wait.run == r.run && time.Now().Before(wait.until)
 }
 
-func (w *convWork) chainFailed(person string) time.Duration {
-	w.chainMu.Lock()
-	defer w.chainMu.Unlock()
-	if w.chainWaits == nil {
-		w.chainWaits = map[string]chainWait{}
-	}
-	delay := min(2*w.chainWaits[person].delay, chainWaitMax)
-	if delay == 0 {
-		delay = chainWaitFirst
-	}
-	w.chainWaits[person] = chainWait{time.Now().Add(delay), delay}
-	return delay
-}
-
-// readerAsks stands in chainWaits for what the stream's reader itself waits
+// readerAsks names the retry for what the stream's reader itself waits
 // for: a request outside refreshAdmitting that ran out of the reader's budget.
 // No person has an empty id.
 const readerAsks = ""
@@ -1511,22 +1500,69 @@ const readerAsks = ""
 // then a received message that needs the relay waits held at once, so a stalled
 // relay costs the stream the budget once per retry, not once per message.
 func (a *Agent) readerWaits() {
-	if a.convWork.chainWaiting(readerAsks) {
+	if a.chainWaiting(readerAsks) {
 		return // the look that ends this wait is set
 	}
-	time.AfterFunc(a.convWork.chainFailed(readerAsks), func() {
-		a.convWork.due(convPersons | convRetry)
-		a.kickRun()
-	})
+	a.retryReader(readerAsks)
+}
+
+func (a *Agent) retryReader(person string) uint64 {
+	r := &a.sendRetry
+	r.Lock()
+	defer r.Unlock()
+	if r.closed {
+		return 0
+	}
+	previous := r.readers[person]
+	delay := chainWaitFirst
+	if previous.run == r.run && previous.delay != 0 {
+		delay = min(2*previous.delay, chainWaitMax)
+	}
+	if previous.timer != nil {
+		previous.timer.Stop()
+	}
+	r.readerSerial++
+	serial := r.readerSerial
+	if r.readers == nil {
+		r.readers = map[string]chainWait{}
+	}
+	wait := chainWait{until: time.Now().Add(delay), delay: delay, serial: serial, run: r.run}
+	if r.running {
+		wait.timer = time.AfterFunc(delay, func() { a.readerFired(person, serial) })
+	}
+	r.readers[person] = wait
+	return serial
+}
+
+func (a *Agent) readerFired(person string, serial uint64) {
+	if a.readerFiring != nil {
+		a.readerFiring(person, serial)
+	}
+	r := &a.sendRetry
+	r.Lock()
+	defer r.Unlock()
+	wait, found := r.readers[person]
+	if !found || !r.running || r.closed || wait.run != r.run || wait.serial != serial || wait.timer == nil {
+		return
+	}
+	wait.timer = nil
+	r.readers[person] = wait
+	// Due belongs to the owned callback too, not merely to a validated kick.
+	a.convWork.due(convPersons | convRetry)
+	a.kickRunLocked(wait.run)
 }
 
 // chainAnswered reports whether a message may have been waiting for person.
-func (w *convWork) chainAnswered(person string) bool {
-	w.chainMu.Lock()
-	defer w.chainMu.Unlock()
-	_, waited := w.chainWaits[person]
-	delete(w.chainWaits, person)
-	return waited
+func (a *Agent) chainAnswered(person string) bool {
+	r := &a.sendRetry
+	r.Lock()
+	defer r.Unlock()
+	wait, found := r.readers[person]
+	if wait.timer != nil {
+		wait.timer.Stop()
+	}
+	delete(r.readers, person)
+	return found && wait.run == r.run
 }
 
 // refreshAdmitting is refreshPerson for a received message and each of persons:
@@ -1549,19 +1585,14 @@ func (a *Agent) refreshAdmitting(ctx context.Context, persons []string) []error 
 	defer cancel()
 	var wg sync.WaitGroup
 	for i, person := range persons {
-		if a.convWork.chainWaiting(person) {
+		if a.chainWaiting(person) {
 			errs[i] = errChainWaits
 			continue
 		}
 		wg.Go(func() {
 			_, err := a.refreshPerson(bounded, person, false)
 			if err != nil && ctx.Err() == nil && transient(err) {
-				time.AfterFunc(a.convWork.chainFailed(person), func() {
-					// Due when it fires, not now: a look before then, with this
-					// person still waiting, would use the work up.
-					a.convWork.due(convPersons | convRetry)
-					a.kickRun()
-				})
+				a.retryReader(person)
 				err = errChainWaits
 			}
 			errs[i] = err
@@ -2115,20 +2146,7 @@ func (a *Agent) paceFired(serial uint64) {
 		if a.paceClaimed != nil {
 			a.paceClaimed()
 		}
-		// The claim may have outlived its run. Keep the run check and the
-		// actual wake together: neither a restart nor a stream replacement
-		// may slip between validation and delivery. The kick only queues
-		// background work; it performs no I/O and never takes these locks.
-		r.Lock()
-		defer r.Unlock()
-		if !r.running || r.closed || r.run != run {
-			return
-		}
-		a.kickMu.Lock() // lock order: sendRetry, then kickMu
-		defer a.kickMu.Unlock()
-		if a.kick != nil {
-			a.kick()
-		}
+		a.kickRun(run)
 	}
 }
 

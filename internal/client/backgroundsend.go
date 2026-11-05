@@ -56,11 +56,14 @@ const sendRetryMax = 45 * time.Second // the stream's reconnect cap
 
 type sendRetry struct {
 	sync.Mutex
-	timer   *time.Timer
-	wait    time.Duration
-	running bool // a daemon run is current; kickNow outlives it and would post alone
-	closed  bool
-	run     uint64 // changes at both ends, including after a timer has claimed its wake
+	timer        *time.Timer
+	wait         time.Duration
+	running      bool // a daemon run is current; kickNow outlives it and would post alone
+	closed       bool
+	run          uint64 // changes at both ends, including after a timer has claimed its wake
+	timerSerial  uint64
+	readerSerial uint64
+	readers      map[string]chainWait
 
 	pace       *time.Timer // this run's paced history wake, the earliest asked (kickAfter)
 	paceAt     time.Time
@@ -77,12 +80,23 @@ func (r *sendRetry) disarm() {
 		r.pace.Stop()
 		r.pace = nil
 	}
+	for _, wait := range r.readers {
+		if wait.timer != nil {
+			wait.timer.Stop()
+		}
+	}
+	r.readers = nil
 }
 
 // runs marks a daemon run current or ended; an ended run disarms its wake.
 func (r *sendRetry) runs(on bool) {
 	r.Lock()
 	defer r.Unlock()
+	r.setRun(on)
+}
+
+// setRun is called with the timer lock held.
+func (r *sendRetry) setRun(on bool) {
 	r.run++
 	r.running, r.wait = on, 0
 	if !on {
@@ -90,15 +104,38 @@ func (r *sendRetry) runs(on bool) {
 	}
 }
 
-// kickRun is the wake of a timer: kickNow outlives a daemon run and would post
-// alone, so a timer that run left behind wakes nothing.
-func (a *Agent) kickRun() {
+// runTimers changes run ownership and removes the previous stream's callback
+// together. A new stream installs its callback only after this run starts.
+func (a *Agent) runTimers(on bool) {
 	r := &a.sendRetry
 	r.Lock()
-	due := r.running && !r.closed
-	r.Unlock()
-	if due {
-		a.kickNow()
+	defer r.Unlock()
+	a.kickMu.Lock()
+	defer a.kickMu.Unlock()
+	r.setRun(on)
+	a.kick = nil
+}
+
+// kickRun delivers only a wake captured by this exact run.
+func (a *Agent) kickRun(run uint64) {
+	r := &a.sendRetry
+	r.Lock()
+	defer r.Unlock()
+	a.kickRunLocked(run)
+}
+
+// The caller holds sendRetry. Keep run ownership and the selected stream
+// fixed through the queue-only callback; it never synchronously reenters either
+// lock or performs DB/network I/O. Lock order: sendRetry, then kickMu.
+func (a *Agent) kickRunLocked(run uint64) {
+	r := &a.sendRetry
+	if !r.running || r.closed || r.run != run {
+		return
+	}
+	a.kickMu.Lock()
+	defer a.kickMu.Unlock()
+	if a.kick != nil {
+		a.kick()
 	}
 }
 
@@ -121,12 +158,28 @@ func (a *Agent) retrySendSoon(err error) {
 	}
 	wait := max(r.wait, time.Second)
 	r.wait = min(2*wait, sendRetryMax)
-	r.timer = time.AfterFunc(wait, func() {
-		r.Lock()
-		r.timer = nil
+	r.timerSerial++
+	serial := r.timerSerial
+	r.timer = time.AfterFunc(wait, func() { a.retryFired(serial) })
+}
+
+func (a *Agent) retryFired(serial uint64) {
+	if a.retryFiring != nil {
+		a.retryFiring(serial)
+	}
+	r := &a.sendRetry
+	r.Lock()
+	if !r.running || r.closed || r.timer == nil || r.timerSerial != serial {
 		r.Unlock()
-		a.kickRun() // the current daemon run's own sync; nothing after it ends
-	})
+		return
+	}
+	run := r.run
+	r.timer = nil
+	r.Unlock()
+	if a.retryClaimed != nil {
+		a.retryClaimed(serial)
+	}
+	a.kickRun(run)
 }
 
 // Only a wake is in memory. The encrypted outbox is the queue, including on

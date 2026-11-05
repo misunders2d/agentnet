@@ -59,8 +59,8 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 		return err
 	}
 	defer release()
-	a.sendRetry.runs(true)
-	defer a.sendRetry.runs(false) // a failed send's wake belongs to this run (backgroundsend.go)
+	a.runTimers(true)
+	defer a.runTimers(false) // timers and the stream callback belong to this run
 	if stop, err := a.listenReadiness(opts.HumanOnly); err != nil {
 		a.Logf("local daemon readiness unavailable: %v", err)
 	} else {
@@ -512,7 +512,7 @@ func (a *Agent) accept(ctx context.Context, env envelope.Envelope) error {
 func (a *Agent) storeReceived(ctx context.Context, env envelope.Envelope) error {
 	ctx = withRelayIngress(ctx, env.ID)
 	budget := admitChainBudget
-	if a.convWork.chainWaiting(readerAsks) {
+	if a.chainWaiting(readerAsks) {
 		budget = 0 // the relay just did not answer: nothing here waits for it until the next look
 	}
 	ctx = withReaderBudget(ctx, time.Now().Add(budget))
