@@ -209,13 +209,83 @@ topic's messages: since `753a4795` the selection is immediate and a topic not ye
 loaded shows the opening sketch. `TestHeldPersonTurnRendered` showed a notice can
 cover a button at some widths; no check covers that.
 
-**Inventory.** Comic has 939 inventory rows: 59 rendered, 17 fired by trusted
-input, 12 with a change asserted, 9 within bound, 15 failed, 769 not executed, 146
-unreachable. The runtime crawl trial on one state found 18 controls, 15 changed
-under one second, and bound 0 to inventory rows, because Chromium lacks
-`Debugger.getFunctionDetails` and the tagged bundle has no source map. It stopped
-there. This is not exhaustive. Crawl results do not replace database and sync
-evidence.
+**Inventory, by exact definition.** 2052 definitions at this candidate: Comic 943,
+standalone skins 753, static pages 217, Android 124, desktop 11, overlay 4. Labels
+close no row. Every figure below keys on `definition_id`, from a test-only tagged
+bundle (`AGENTNET_INTERACTION_TAGS=1`) that wraps each handler; none of it is the
+shipped bundle, and it is not final-SHA acceptance.
+
+| Comic, 943 definitions | Count | Source |
+|---|---:|---|
+| Own handler in source | 796 | inventory (147 others are structural elements) |
+| Handler ran, wide crawl with exact binding | 134 | `runtime_crawl_wide.py`, 3000 s box, 2672 trials |
+| Handler ran, ordinary rendered tests | 401 | 53 harnesses, tagged copy of `94689878`: 141 pass, 4 fail, 5 skip |
+| Handler ran, either source | 444 | |
+| Handler never ran anywhere | 352 | |
+| Trial changed the view within 1000 ms | 95 | crawl, 2447 of 2672 trials; 225 no visible change; 41 unbound |
+
+The 4 harvest failures pass on the untagged checkout, `TestMenuOfflineRendered` only
+after a harness fix (a retried row stops being failed before its request lands). The 5
+skips need their own opt-ins. Of those, `TestExternalAgentUIRendered`,
+`TestTypingCombinedRenderedLinkedEngineAndDaemon` and `TestOnboardingRenderedNativeChoices`
+pass. `TestGroupReplyReceiverRendered` and `TestRemoteReplyReceiverRendered` fail the same
+way at base and here: `#receiver-summary` is not visible at 390 wide. Not investigated;
+tracked in MEL-749.
+
+Handlers never run are concentrated in `NewChat.tsx` 19 of 37, `WorkspaceSwitcher.tsx` 19
+of 22, `Settings.system.tsx` 16 of 19, `Approvals.conv.tsx` 15 of 20, `InviteSheet.tsx` 15
+of 31, `Message.tsx` 13 of 33, `Approvals.card.tsx` 12 of 28, `Settings.profile.tsx` 12 of
+24, `Conversation.header.tsx` 11 of 26, `RoomPanel.cards.tsx` 10 of 13 and `Teams.tsx` 10
+of 29.
+
+The earlier 87-minute crawl cannot be reconciled: its 3107 rows bound to nothing, and
+it ran the untagged bundle. Its figures (2300 fired, 2079 within 1000 ms) are
+label-level. A handler having run proves that it ran under a rendered test, not that the
+intended result appeared. A measured local-feedback bound exists only for the crawl's 95,
+the rows of `TestUIResponsivenessRendered` and rendered tests with their own feedback
+assertions. The 1109 definitions outside Comic have no exact evidence: the tags cover only
+Comic. This is not exhaustive and it is not a pass.
+
+Routes: `docs/HOST_API_ROUTES.md` documents 126 paths; 46 were seen as real requests under
+those tests. Many rendered tests answer from an in-page stub, so unseen does not mean
+unused, and seen does not mean correct.
+
+The 16 definitions the earlier oracle marked failed or unreached: 12 now have a
+handler or a within-bound result; 4 do not (`Approvals.card.tsx#reply/div/#1`,
+`Message.tsx#needsHumanDetail/summary/#2`, `NewChat.tsx#shownAgents/Button/onClick#2`,
+and `Message.tsx#needsHumanDetail/button/onClick#8`, which no longer exists under
+that id). A handler having run does not settle the intent those trials found missing.
+
+**Browser Back.** With the navigation API, leaving goes in one hop to the entry before
+this document, from the browser's own list, and at most one more step past it. A load
+records what was behind it on the entry, so a traversal it can be sure of needs no
+timer. Real runs of `TestBrowserBackRendered`: Chromium and Firefox pass every case
+locally, walk at the history cap 49 and 75 ms (Chromium was 413 ms, Firefox stuck: it
+goes on listing entries it dropped). macOS WebKit runs only in CI, for the first time
+in this candidate's run. Real older browsers and Safari: not run; "older engine" here
+is Chromium with the API removed. A page-cache return is covered by the contract
+model only: Playwright's browsers do not exercise it here.
+
+Stated limits, each without a timer-free answer because a slow traversal and none look
+the same to the page: a tab open from before this version and an engine without the
+API at the cap or with an unmarked entry can write the guard on input after a second,
+while a traversal may still be coming (two writes, and Back still leaves). `location.replace`
+on an engine without the API, with forward entries and nothing behind, records the wrong
+side: Back stops dismissing layers until reload. Rare and older engines only; not tested on a
+real one.
+
+**Send to custody under real catch-up.** `TestSendCustodyDuringCatchUp` (opt-in, real
+binaries, local Hub). Results at the frozen SHA are recorded in the release evidence. Two
+measured behaviours stand without a change here, because each is stream design or the
+owner's 45-second retry rule: a message sent to a device draining 1000 missed messages can
+wait behind that backlog (21 to 40 s at most, p50 under 700 ms), and after a relay outage
+arrival took 26 to 42 s, mostly after custody, which is consistent with the peer's
+reconnect wait (inferred from timing).
+
+**`view_dirty` triggers under contention.** Same commit, same journey, side by side at
+load about 20, triggers on and off, one run each, 3000 rows, non-race. Send accept p50 on
+and off: 124/125, 160/140, 162/257 ms by phase. No send cost is visible at this sample
+size. Bulk insertion cost stays as measured: +118 microseconds per row.
 
 ## MEL-741 / MEL-742 candidate — November 3, 2026
 

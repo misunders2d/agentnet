@@ -6,6 +6,9 @@ Branch `t3/v0110-responsive`. Owner reports after v0.10.9: the app froze during
 catch-up, messages sat in the queue and were cancelled, and every interaction was
 slow on the ThinkPad. Causes, fixes, measurements and what is still unshown are in
 [interaction evidence](INTERACTION_COVERAGE.md#mel-748-v01010-candidate--november-4-2026).
+Exact control evidence, Back on real engines, send-to-custody and what stays unproven are
+there too. Run the opt-in journey with `AGENTNET_CUSTODY=1`. A new client test changes the
+assignment of every test after it, so re-derive and rebalance `scripts/race-shard.sh`.
 Pre-CI review not cleared; no full, platform or skins qualification has run.
 
 ## v0.10.9 published and Hub deployed — November 3
