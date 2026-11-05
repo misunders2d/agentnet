@@ -16,6 +16,9 @@ func TestInteractionInventory(t *testing.T) {
 	}
 	out, err := exec.Command("node", "testdata/interaction_inventory.cjs").Output()
 	if err != nil {
+		if failed, ok := err.(*exec.ExitError); ok {
+			t.Fatalf("inventory: %v\n%s", err, failed.Stderr)
+		}
 		t.Fatalf("inventory: %v", err)
 	}
 	var report struct {
@@ -30,4 +33,5 @@ func TestInteractionInventory(t *testing.T) {
 	if report.Schema != "agentnet-interaction-inventory/v1" || len(report.Controls) == 0 || report.Controls[0].ID == "" {
 		t.Fatalf("invalid interaction inventory: schema=%q controls=%d", report.Schema, len(report.Controls))
 	}
+	runNodeCheck(t, "testdata/interaction_inventory_jsx_check.cjs")
 }

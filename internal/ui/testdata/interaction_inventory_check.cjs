@@ -1,4 +1,6 @@
-// Source-extraction regression only. No browser, backend or release coverage.
+// Legacy HTML-fragment boundary regressions only. TS/TSX inventory and tagging
+// use the compiler-source regressions in interaction_inventory_jsx_check.cjs.
+// No browser, backend or release coverage.
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
 const {scanJsx,attrs}=require('./interaction_inventory.cjs');
 let checks=0;
@@ -37,8 +39,8 @@ check('non-JSX fragment gap is explicit and later candidates survive',()=>{
 });
 const expected={
  'Teams.tsx':[['Button','Close {noun} search'],['Button','Show more {noun}'],['select','value={team} onChange'],['Button','Add list’s people</Button>'],['Button','Retry list selection</Button>'],['Button','Cancel list selection</Button>'],['Button','Remove {personLabel(o, p.id)}']],
- // Nested JSX inside Timeline.footer remains grouped under Timeline. Verify
- // the enclosing tag and subsequent siblings; do not claim its child input.
+ // Legacy heuristic witness only: nested prop children are omitted here.
+ // The owning TS/TSX path separately requires those children and own props.
  'Conversation.tsx':[['Timeline','key={open.id + ":"'],['button','aria-label="Stop selecting"'],['button','>Try again</button>']],
  'Conversation.topics.tsx':[['Button','key={id} variant="ghost"'],['input','id="rename-topic-name" value={title}'],['Button','>Open {ctx.dm.topics'],['Button','aria-busy={!!busy} icon={<IconRotateClockwise']],
 };

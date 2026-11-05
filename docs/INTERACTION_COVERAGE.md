@@ -246,6 +246,24 @@ the rows of `TestUIResponsivenessRendered` and rendered tests with their own fee
 assertions. The 1109 definitions outside Comic have no exact evidence: the tags cover only
 Comic. This is not exhaustive and it is not a pass.
 
+**Nested JSX discovery repair, November 5: source only.** The pinned build
+compiler now supplies TS/TSX JSX nodes and each node's own attributes for both
+inventory and test tagging. A child callback inside `footer`, `trigger` or
+`render` no longer becomes a parent callback, and nested physical inputs retain
+their own definitions. The concrete Bring back, Reset title and Save inputs are
+separate required rows; the rename input and form-submit callback remain separate
+from the Save button. Synthetic source regressions reject malformed JSX and
+check comments, strings, templates, generics, spreads and following siblings.
+
+Exact unchanged product sources reconcile 2077 prior rows to 2151: 2028 retain
+IDs, 46 rename at the same positions, 77 positions are added and 3 false parent
+rows are removed. Sixteen old IDs now name different positions; old execution
+evidence must not transfer through those IDs. The six list-snapshot fixture IDs
+retain their exact source positions. These are source populations, not distinct
+reachable-control or state totals. Four non-JSX fragment warnings, opaque
+spreads, owner/state/keyboard/native/skin mapping and rendered acceptance remain
+open. No new rendered case or production behavior is qualified by this repair.
+
 **List-snapshot rapid input, November 5: focused source fix only.** Scrolling the
 whole pending-selection card could move Cancel beneath Add's pointer: a repeated
 click cancelled the selection while its snapshot request remained held. TeamPeople
