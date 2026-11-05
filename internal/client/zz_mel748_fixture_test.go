@@ -299,6 +299,12 @@ func TestPacedWakeReachesOnlyTheCurrentRun(t *testing.T) {
 	if next.Load() != 0 {
 		t.Fatal("an old run's wake reached the next run")
 	}
+	arm(time.Hour) // nor does it use up the wake that is set now
+	a.paceFired(gone)
+	if next.Load() != 0 || !paceArmed(a) {
+		t.Fatal("an old run's wake took the place of the next run's")
+	}
+	dropPace(a)
 	arm(time.Millisecond) // and hides nothing of the next run's
 	wakesOnce(next)
 	timed := kickOf()
