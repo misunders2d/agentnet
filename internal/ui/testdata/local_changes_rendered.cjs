@@ -4,20 +4,24 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),os=require('nod
 const {execFileSync}=require('node:child_process'),{chromium}=require(process.env.AGENTNET_PLAYWRIGHT);
 const web=path.resolve(__dirname,'../web'),work=fs.mkdtempSync(path.join(os.tmpdir(),'agentnet-local-changes-'));
 const evidence=process.env.AGENTNET_LOCAL_CHANGES_EVIDENCE;
+const trustOnly=process.env.AGENTNET_LOCAL_CHANGES_MODE==='trust';
 const entry=`
 import React from 'react';import {createRoot} from 'react-dom/client';
 import {Store,useStore} from './src/store';import {StoreContext} from './src/context';import {OwnedContext} from './src/owned';
 import {Timeline} from './src/features/Conversation.timeline';import {TopicBar,TopicEnd} from './src/features/Conversation.topics';
+import {TrustSheet} from './src/features/Trust';
+const trustOnly=${JSON.stringify(process.env.AGENTNET_LOCAL_CHANGES_MODE==='trust')};
 const root=document.getElementById('root'),app=document.getElementById('app'),portals=document.getElementById('portals');
 const conv='c'.repeat(64),topic='b'.repeat(32),count=Number(new URL(location).searchParams.get('count'))||100;
 const overview={seq:1,version:'fixture',topic_list:true,me:{address:'self/laptop',fingerprint:'self-key'},person:{person:'self',label:'Me',address:'self/laptop',devices:[]},people:[],dms:[],threads:[],needs_you:[],reminders:[]};
 const view={seq:1,id:conv,kind:'dm',peer:{person:'peer',address:'peer/laptop',label:'Peer'},agents:[],guests:[],topics:[{id:topic,conv,peer:'',title:'Chosen topic',count,state:'active',last_at:'2026-10-26T12:00:00Z',unread:0,review:0}],
  messages:Array.from({length:count},(_,i)=>({id:String(i+1).padStart(32,'0'),lid:String(i+1).padStart(32,'0'),dir:'out',from:'self/laptop',kind:'message',body:'Original message '+(i+1),at:new Date(1793016000000+i*60000).toISOString(),revision:1,topic,can:['edit','delete','react'],reactions:[]}))};
-const f=window.fixture={writes:[],listeners:new Set(),holdReads:false,reads:[],timings:[],ready:false};
+const f=window.fixture={writes:[],listeners:new Set(),holdReads:false,reads:[],timings:[],ready:false,trustCommits:[]};
 const host={platform:'daemon',workspace:{id:'local-changes',state:'enrolled'},listen(fn){f.listeners.add(fn);return()=>f.listeners.delete(fn)},async api(p,b){
  if(p.startsWith('/api/overview'))return structuredClone(overview);
  if(p.startsWith('/api/dm?')){const snapshot=structuredClone(view);if(f.holdReads)await new Promise(resolve=>f.reads.push(resolve));return snapshot;}
  if(p.startsWith('/api/message/')||p.startsWith('/api/topic/'))return new Promise((resolve,reject)=>f.writes.push({p,b:structuredClone(b),resolve,reject}));
+ if(trustOnly&&p==='/api/act')return new Promise((resolve,reject)=>f.writes.push({p,b:structuredClone(b),resolve,reject}));
  if(p.startsWith('/api/agents'))return {agents:[]};if(p.startsWith('/api/typing'))return {entries:[]};return {};
 }};
 const store=new Store(host);f.store=store;
@@ -36,8 +40,19 @@ function App(){const dm=useStore(store,s=>s.dm),tab=useStore(store,s=>s.tab),o=u
  <TopicBar dm={dm}/><Timeline ctx={ctx} messages={dm.messages} selected={null} onSelect={()=>{}} empty={null} end={<TopicEnd ctx={ctx}/>}/>
  <form data-conv={conv}><textarea aria-label="Unrelated draft" onChange={e=>store.setDraft(conv,{...store.draft(conv),text:e.target.value})}/></form></div>;
 }
+function TrustFixture(){
+ const [open,setOpen]=React.useState(false),[thread,setThread]=React.useState({peer:'fixture/a',key:{pinned:'old-key',pending:'key-a'},messages:[]});
+ f.changeTrust=(peer,pending)=>setThread({...thread,peer,key:{...thread.key,pending}});
+ React.useLayoutEffect(()=>{
+  if(!open)return;
+  const button=[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Trust the new identity');
+  const checkbox=document.querySelector('[role="dialog"] input[type="checkbox"]');
+  f.trustCommits.push({peer:thread.peer,key:thread.key.pending,disabled:button?.disabled,checked:checkbox?.checked});
+ },[open,thread]);
+ return <><button onClick={()=>setOpen(true)}>Compare identity</button><TrustSheet open={open} onOpenChange={setOpen} thread={thread}/></>;
+}
 await store.start();await store.open({kind:'dm',id:conv});store.setDraft(conv,{text:'',topic});
-createRoot(app).render(<OwnedContext.Provider value={{root,app,portals}}><StoreContext.Provider value={store}><App/></StoreContext.Provider></OwnedContext.Provider>);
+createRoot(app).render(<OwnedContext.Provider value={{root,app,portals}}><StoreContext.Provider value={store}>{trustOnly?<TrustFixture/>:<App/>}</StoreContext.Provider></OwnedContext.Provider>);
 f.ready=true;
 `;
 const aliases={'optimistic.mjs':'static/optimistic.mjs','pictures.mjs':'static/pictures.mjs','person-topics.mjs':'skins/shared/person-topics.mjs','reaction-preferences.mjs':'skins/shared/reaction-preferences.mjs','collective-mentions.mjs':'skins/shared/collective-mentions.mjs','drive-space.mjs':'skins/shared/drivespace.mjs','drive-setup.mjs':'skins/shared/drivespace-setup.mjs'};
@@ -49,7 +64,29 @@ execFileSync(process.execPath,[path.join(web,'node_modules/@tailwindcss/cli/dist
 const css=fs.readFileSync(path.join(work,'style.css'));
 const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://fixture');if(u.pathname==='/entry.mjs'){res.setHeader('Content-Type','text/javascript');return res.end(js)}if(u.pathname==='/style.css'){res.setHeader('Content-Type','text/css');return res.end(css)}res.setHeader('Content-Type','text/html');res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Local changes fixture</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/style.css"><style>body{margin:0}#root,#app{height:100vh}nav,form{padding:12px}button{min-height:44px}textarea{border:1px solid;width:95%}</style><div id="root" class="an-root"><div id="app" class="an-app"></div><div id="portals"></div></div><script type="module" src="/entry.mjs"></script>')});
 (async()=>{let browser,lastPage;try{
- await new Promise(r=>server.listen(0,'127.0.0.1',r));browser=await chromium.launch({headless:true});if(evidence)fs.mkdirSync(evidence,{recursive:true});
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));browser=await chromium.launch({headless:true,executablePath:process.env.AGENTNET_CHROMIUM});if(evidence)fs.mkdirSync(evidence,{recursive:true});
+ if(trustOnly){
+  for(const width of [1440,390]){
+   const page=await browser.newPage({viewport:{width,height:900}}),errors=[];lastPage=page;page.setDefaultTimeout(5000);page.on('pageerror',e=>errors.push(String(e)));
+   await page.goto('http://127.0.0.1:'+server.address().port);await page.getByRole('button',{name:'Compare identity',exact:true}).click();
+   const sheet=page.getByRole('dialog'),trust=sheet.getByRole('button',{name:'Trust the new identity',exact:true}),compare=sheet.locator('label',{hasText:'The new code matches what they told me'});
+   await sheet.waitFor();assert.equal(await trust.isDisabled(),true);await compare.click();assert.equal(await trust.isEnabled(),true);
+   const change=async(peer,key)=>{const before=await page.evaluate(()=>fixture.trustCommits.length);await page.evaluate(({peer,key})=>fixture.changeTrust(peer,key),{peer,key});await page.waitForFunction(({peer,key,before})=>fixture.trustCommits.slice(before).some(x=>x.peer===peer&&x.key===key),{peer,key,before});return page.evaluate(({peer,key,before})=>fixture.trustCommits.slice(before).find(x=>x.peer===peer&&x.key===key),{peer,key,before});};
+   let commit=await change('fixture/a','key-b');assert.equal(commit.disabled,true,'changed pending key must invalidate comparison in its first commit');assert.equal(commit.checked,false);
+   commit=await change('fixture/a','key-a');assert.equal(commit.disabled,true,'returning key still needs a fresh comparison');
+   await compare.click();commit=await change('fixture/b','key-a');assert.equal(commit.disabled,true,'peer switch invalidates comparison');assert.equal(commit.checked,false);
+   await compare.click();commit=await change('fixture/b','');assert.equal(commit.disabled,true,'absent pending key invalidates comparison');assert.equal(commit.checked,false);
+   commit=await change('fixture/b','key-c');assert.equal(commit.disabled,true);await compare.click();
+   await sheet.getByRole('button',{name:'Not now',exact:true}).click();await sheet.waitFor({state:'hidden'});await page.getByRole('button',{name:'Compare identity',exact:true}).click();await sheet.waitFor();assert.equal(await trust.isDisabled(),true,'reopening requires comparison again');
+   await compare.click();await trust.click();await page.waitForFunction(()=>fixture.writes.length===1);assert.equal(await trust.isDisabled(),true);
+   commit=await change('fixture/b','key-d');assert.equal(commit.disabled,true);await compare.click();assert.equal(await trust.isDisabled(),true,'a pending trust action cannot be duplicated after a key change');
+   assert.deepEqual(await page.evaluate(()=>fixture.writes.map(x=>x.b)),[{do:'trust',id:'fixture/b',key:'key-c'}],'submit only the explicitly compared peer/key');
+   await page.evaluate(()=>fixture.finish(0));await sheet.waitFor({state:'hidden'});await page.getByRole('button',{name:'Compare identity',exact:true}).click();await sheet.waitFor();assert.equal(await trust.isDisabled(),true);await compare.click();await trust.click();await page.waitForFunction(()=>fixture.writes.length===2);
+   assert.deepEqual(await page.evaluate(()=>fixture.writes.map(x=>x.b)),[{do:'trust',id:'fixture/b',key:'key-c'},{do:'trust',id:'fixture/b',key:'key-d'}]);await page.evaluate(()=>fixture.finish(1));await sheet.waitFor({state:'hidden'});
+   assert.deepEqual(errors,[]);console.log(JSON.stringify({width,changedKey:true,returnedKey:true,changedPeer:true,absentKey:true,reopened:true,pendingNoDuplicate:true,exactComparedSubmission:true,liveTrust:false}));await page.close();
+  }
+  console.log('trust comparison rendered PASS');return;
+ }
  for(const width of [1440,390])for(const count of [100,1000]){
   const page=await browser.newPage({viewport:{width,height:900},hasTouch:width<600}),errors=[];page.setDefaultTimeout(5000);page.on('pageerror',e=>errors.push(String(e)));
   lastPage=page;

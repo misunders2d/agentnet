@@ -58,6 +58,15 @@ export interface StagedFile {
   mediaNote?: string;
 }
 
+interface PendingSendDraft {
+  workspace: string;
+  handle?: string;
+  address?: string;
+  fingerprint?: string;
+  revision?: object;
+  draft: Draft;
+}
+
 export interface Toast { id: number; text: string; tone?: "ok" | "error" }
 export interface MessageLanding {
   target: { id: string; context?: OpenContext };
@@ -209,6 +218,7 @@ export class Store {
   unreadReview: import("./features/Conversation.choices").ChoiceCache<T.UnreadRow> = {};
   readonly api: Api;
   readonly sends: ReturnType<typeof pendingSends>;
+  private draftWrites = new Map<string, object>();
   private readonly scheduled: ReturnType<typeof scheduleSaves>;
   private state: State;
   private subs = new Set<() => void>();
@@ -303,13 +313,17 @@ export class Store {
       // A send clears its draft as it begins: until it is stored, a reload
       // waits for it (hasUnsent).
       this.set({ ...(o ? this.viewPatch(o, this.state.views[o.id] ?? null, true) : {}), unsent: this.sends.unsent() });
-    });
+    }, (conv, draft) => this.restoreSendDraft(conv, draft as PendingSendDraft),
+      (conv, message) => this.captureQueuedSendDraft(conv, message as NonNullable<T.DMThread["messages"]>[number]));
     this.state = {
       tab: "chats", overview: null, open: null, pending: null, views: {}, dm: null, thread: null, typing: null, invitations: [], attentionReplies: {}, reactionPending: {}, dismissPending: {}, messageChanges: {}, reminderChanges: {},
       conn: "loading", version: "", newVersion: "", unsent: false, drafts: this.loadDrafts(), scheduleSaves:{}, toasts: [], working: false, messageLanding: null, loadError: "", groupContextPending: "", invite: null, topicBusy: {}, topicPreviews: {}, panel: false, section: "", agentNames: {}, readVisit: null, contentRevision: 0,
     };
-    const saved=host.workspaces?.state?.(host.workspace.id)?.comicDrafts as {handle?:string;open:Open;dm:T.DMThread|null;thread:T.Thread|null;tab:State['tab']}|undefined;
-    if(saved&&saved.handle===host.workspace.handle)Object.assign(this.state,{open:saved.open,dm:saved.dm,thread:saved.thread,tab:saved.tab});
+    const saved=host.workspaces?.state?.(host.workspace.id)?.comicDrafts as {handle?:string;open:Open;dm:T.DMThread|null;thread:T.Thread|null;tab:State['tab'];draftWrites?:Map<string,object>}|undefined;
+    if(saved&&saved.handle===host.workspace.handle){
+      Object.assign(this.state,{open:saved.open,dm:saved.dm,thread:saved.thread,tab:saved.tab});
+      if(saved.draftWrites)this.draftWrites=saved.draftWrites;
+    }
     this.scheduled=scheduleSaves(host,()=>this.syncScheduleSaves());
     this.state.scheduleSaves=this.scheduled.snapshot();
   }
@@ -1276,7 +1290,7 @@ export class Store {
       if (draft.files?.some(file => file.nativeReading)) this.setDraft(conv, { ...draft, files: draft.files.map(file => file.nativeReading ? { ...file, nativeReading: false, nativeError: "Attachment interrupted. Remove it and drop it again." } : file) });
     }
     const saved=this.host.workspaces?.state?.(this.host.workspace.id);
-    if(saved)saved.comicDrafts={handle:this.host.workspace.handle,drafts:this.state.drafts,open:this.state.open,dm:this.state.dm,thread:this.state.thread,tab:this.state.tab};
+    if(saved)saved.comicDrafts={handle:this.host.workspace.handle,drafts:this.state.drafts,draftWrites:this.draftWrites,open:this.state.open,dm:this.state.dm,thread:this.state.thread,tab:this.state.tab};
     this.alive = false;
     if (this.host.platform === "android") {
       document.removeEventListener("visibilitychange", this.mobileVisible);
@@ -2284,7 +2298,53 @@ export class Store {
 
   draft(conv: string): Draft { return this.state.drafts[conv] || { text: "" }; }
 
+  private captureQueuedSendDraft(conv: string, message: NonNullable<T.DMThread["messages"]>[number]): PendingSendDraft | undefined {
+    // A restart can recover plain text from the host's own queued row. It
+    // cannot recreate original whitespace, File objects, reply modes or scope.
+    const current = this.draft(conv), me = this.state.overview?.me;
+    if (this.draftWrites.has(conv) || current.replyTo || current.topic || current.newTopic || current.agent || current.mediaMode
+      || message.dir !== "out" || message.from !== me?.address || message.kind !== "message"
+      || typeof message.body !== "string" || !message.body || message.topic || message.reply_to || message.quote || message.pid
+      || message.attachments?.length || ("files" in message && Array.isArray(message.files) && message.files.length)) return;
+    return this.captureSendDraft(conv, { text: message.body });
+  }
+
+  captureSendDraft(conv: string, draft: Draft): PendingSendDraft | undefined {
+    if (!this.alive || this.draft(conv).text || this.draft(conv).files?.length) return;
+    const me = this.state.overview?.me;
+    if (!me?.address || !me.fingerprint) return;
+    return {workspace:this.host.workspace.id,handle:this.host.workspace.handle,address:me?.address,fingerprint:me?.fingerprint,
+      revision:this.draftWrites.get(conv),draft:{...draft,files:draft.files?.map(f=>({...f,staged:undefined}))}};
+  }
+
+  private restoreSendDraft(conv: string, captured: PendingSendDraft) {
+    const me = this.state.overview?.me;
+    if (!captured.address || !captured.fingerprint || captured.workspace !== this.host.workspace.id || captured.handle !== this.host.workspace.handle
+      || captured.address !== me?.address || captured.fingerprint !== me?.fingerprint
+      || captured.revision !== this.draftWrites.get(conv)) return;
+    const saved = this.host.workspaces?.state?.(this.host.workspace.id)?.comicDrafts as
+      {handle?:string;drafts:Record<string,Draft>;draftWrites?:Map<string,object>} | undefined;
+    const drafts = this.alive ? this.state.drafts : saved?.handle === captured.handle && saved?.draftWrites === this.draftWrites ? saved.drafts : undefined;
+    if (!drafts || drafts[conv]?.text || drafts[conv]?.files?.length) return;
+    const draft = {...captured.draft,files:captured.draft.files?.map(f=>{
+      let url: string | undefined;
+      try {if(f.url)url=URL.createObjectURL(f.file);} catch { /* the original File remains usable without a preview */ }
+      return {...f,staged:undefined,url};
+    })};
+    if (this.alive) this.setDraft(conv,draft);
+    else if (saved) {
+      // A late reply after unmount updates only this membership's retained
+      // draft, never reactivates its stopped renderer or another conversation.
+      saved.drafts={...drafts,[conv]:draft};
+      this.draftWrites.set(conv,{});
+      this.saveDrafts(saved.drafts);
+    }
+  }
+
   setDraft(conv: string, d: Draft, topicSelected = false) {
+    // Identity, not text equality: type/erase and same-text writes are newer
+    // edits too. Keep the token through a responsive/skin remount.
+    this.draftWrites.set(conv, {});
     const prior = this.state.drafts[conv];
     if (topicSelected || (prior?.topic || "") !== (d.topic || "") || !!prior?.newTopic !== !!d.newTopic) this.dismissMessageLanding();
     const drafts = { ...this.state.drafts };

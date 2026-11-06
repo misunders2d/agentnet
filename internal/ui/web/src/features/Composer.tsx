@@ -488,7 +488,8 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     store.sends.begin(c, { id, ...(here ? { lid: id, origin: "ui", send_group: group, send_group_author: store.get().overview?.me.fingerprint, pid: to.kind === "agent" ? to.pid : "" } : { author: { label: "You", about: "" }, to: device?.peer }),
       _topic: !!d.newTopic, topic: d.topic, dir: "out", from: store.get().overview?.me.address || "", kind: followup?.kind || (to.kind === "answer" ? "answer" : here && to.kind !== "agent" || to.kind === "device" && !to.ask ? "message" : "question"), body, at,
       reply_to: d.replyTo, quote: d.replyTo, attachments: sent.map(f => ({ name: f.name, size: f.size, openable: false })), files: sent.map(f => ({ name: f.name, size: f.size, openable: false })) },
-      () => { store.sends.remove(id); void send({ id, c, d, to, here, device, fanout:retry?.fanout, group, at, followup }); });
+      () => { store.sends.remove(id); void send({ id, c, d, to, here, device, fanout:retry?.fanout, group, at, followup }); },
+      here && to.kind === "conversation" && !followup && !retry?.fanout ? store.captureSendDraft(c,captured) : undefined);
     setNotice(null);
     typing.stop();
     try {
@@ -647,7 +648,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
         kind:followup?.kind || (to.kind === "answer" ? "answer" : to.kind === "agent" || (to.kind === "device" && to.ask) ? "question" : "message"),
         body,at:entry.createdAt,reply_to:captured.replyTo,quote:captured.replyTo,
         attachments:sent.map(f=>({name:f.name,size:f.size,openable:false})),files:sent.map(f=>({name:f.name,size:f.size,openable:false}))},
-        undefined);
+        undefined, plans.length === 1 && entry.endpoint === "/api/dm/send" ? store.captureSendDraft(c,captured) : undefined);
     };
     const submit = async (entry: JournalEntry): Promise<void> => {
       let result: T.Sent & {note?:string};
@@ -697,7 +698,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   function forgetStaged(c: string, list: StagedFile[]) {
     if (!store.isActive()) return;
     const d = store.get().drafts[c], keys = new Set(list.map((f) => f.key));
-    if (d?.files) store.setDraft(c, { ...d, files: d.files.map((f) => (keys.has(f.key) ? { ...f, staged: undefined } : f)) });
+    if (d?.files?.some(f=>keys.has(f.key)&&f.staged!==undefined)) store.setDraft(c, { ...d, files: d.files.map((f) => (keys.has(f.key) ? { ...f, staged: undefined } : f)) });
   }
   // clearSent removes from a conversation's draft exactly what was sent:
   // text typed meanwhile, or files added meanwhile, stay.

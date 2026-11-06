@@ -55,6 +55,7 @@ const host = {platform:'daemon', workspace:{id:'held-send'}, workspaces:{state:(
   return {id:body.id, lid:body.id, state:'queued'};
 }};
 const store = {host, get:() => state, isActive:() => true,
+  captureSendDraft:() => undefined,
   setDraft:(id, draft) => state.drafts[id] = draft,
   api:{sendDM:body => host.api('/api/dm/send', body)},
   sends:pendingSends(host), toast:() => {}, refetch:async () => {},

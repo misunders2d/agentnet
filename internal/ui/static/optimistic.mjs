@@ -30,7 +30,7 @@ export function groupedSends(messages) {
   }
   return out;
 }
-export function pendingSends(host, changed = () => {}) {
+export function pendingSends(host, changed = () => {}, restoreDraft, captureQueuedDraft) {
   const state = host.workspaces?.state?.(host.workspace.id);
   // Package-local copies share previews through the public membership state.
   let shared = state ? state[ledgerKey] : ledgers.get(host);
@@ -39,14 +39,37 @@ export function pendingSends(host, changed = () => {}) {
     if (state) state[ledgerKey] = shared; else ledgers.set(host, shared);
   }
   shared.changed = changed; // the currently mounted renderer owns notifications
+  shared.restoreDraft = restoreDraft;
+  shared.captureQueuedDraft = captureQueuedDraft;
   const ledger = shared.ledger, notify = () => shared.changed?.();
+  // A pushed queued_send retires the preview, not its original owned draft.
+  // Keep recovery until cancellation is confirmed or actual storage wins.
+  const drafts = shared.drafts ||= new Map();
   // The person's Retry or Discard on a message the host keeps: shown at once,
   // undone if the host refuses, cleared when its own state shows the change.
   const actions = shared.actions ||= new Map();
-  const act = (kind, m, key) => {
-    actions.set(m.id, {kind, rev: m.queued_send.rev, key});
+  const act = async (kind, m, key) => {
+    // After process restart the host still owns this pending row, but the
+    // renderer's original capture is gone. Capture only eligible local text,
+    // before the async cancel; the usual revision/scope/store fences apply.
+    if (kind === 'discard' && m.queued_send.state !== 'needs_review' && !drafts.has(m.id)) {
+      const value = shared.captureQueuedDraft?.(key, m);
+      if (value) drafts.set(m.id, {key, value});
+    }
+    const draft = drafts.get(m.id), action = {kind, rev: m.queued_send.rev, key};
+    actions.set(m.id, action);
     notify();
-    return host.api('/api/schedule/' + (kind === 'retry' ? 'retry_send' : 'discard_send'), {id: m.id}).catch(e => { actions.delete(m.id); notify(); throw e; });
+    let result;
+    try { result = await host.api('/api/schedule/' + (kind === 'retry' ? 'retry_send' : 'discard_send'), {id: m.id}); }
+    catch (e) { if (actions.get(m.id) === action) actions.delete(m.id); notify(); throw e; }
+    // The exact cancelled-ID receipt comes from the host's atomic cancel/store
+    // race. A note, lost answer or a stored/custody projection proves no cancel.
+    if (kind === 'discard' && result?.id === m.id && result.state === 'cancelled'
+      && draft?.key === key && drafts.get(m.id) === draft) {
+      drafts.delete(m.id);
+      if (m.queued_send.state !== 'needs_review') shared.restoreDraft?.(key, draft.value);
+    }
+    return result;
   };
   const queuedRow = (m, key) => {
     const action = actions.get(m.id), stopped = m.queued_send.state === 'needs_review' && action?.kind !== 'retry';
@@ -58,16 +81,18 @@ export function pendingSends(host, changed = () => {}) {
   const when = m => { const t = Date.parse(m.at); return Number.isNaN(t) ? Infinity : t; };
   const rows = key => [...ledger.values()].filter(x => x.key === key);
   return {
-    begin(key, message, retry) {
+    begin(key, message, retry, draft) {
       const m = { ...message, _local: true, _retry: retry, state: 'queued', delivery: 'queued', state_text: 'Sending…', can: [], actions: [], copies: [], reactions: [] };
       const previous = rows(key).at(-1);
       let saved; const stored = new Promise(resolve => { saved = resolve; });
+      if (draft) drafts.set(m.id, {key, value: draft});
       ledger.set(m.id, {key, m, ready: previous?.stored || Promise.resolve(), stored, saved}); notify(); return m.id;
     },
     has: id => ledger.has(id),
     move(id, key) { const x = ledger.get(id); if (x) { x.key = key; notify(); } },
     ready: id => ledger.get(id)?.ready || Promise.resolve(),
     finish(id, result) {
+      if (!result || ['custody', 'delivered'].includes(result.state)) drafts.delete(id);
       const x = ledger.get(id); if (!x) return;
       x.saved(); x.done = true;
       const state = result?.state || 'queued';
@@ -79,16 +104,17 @@ export function pendingSends(host, changed = () => {}) {
       const x = ledger.get(id); if (!x) return false;
       x.saved();
       x.m = { ...x.m, state: 'failed', delivery: 'failed', state_text: (unsure ? 'Not confirmed: ' : 'Not sent: ') + reason, _failed: true,
-        _discard: () => { ledger.get(id)?.saved(); ledger.delete(id); notify(); } };
+        _discard: () => { ledger.get(id)?.saved(); ledger.delete(id); drafts.delete(id); notify(); } };
       notify(); return true;
     },
-    remove(id) { ledger.get(id)?.saved(); ledger.delete(id); notify(); },
+    remove(id) { ledger.get(id)?.saved(); ledger.delete(id); drafts.delete(id); notify(); },
     // unsent: a send begun here and not yet stored, or failed and kept with
     // its Retry. Its draft was cleared as it began: a reload would lose it.
     unsent: () => [...ledger.values()].some(x => !x.done),
     dispose() { if (shared.changed === changed) shared.changed = null; },
     merge(key, messages = []) {
       const actual = messages.some(m => m._local && !m.queued_send) ? messages.filter(m => !m._local || m.queued_send) : messages;
+      for (const [id, draft] of drafts) if (draft.key === key && actual.some(m => m.dir === 'out' && !m.queued_send && (m.id === id || m.lid === id))) drafts.delete(id);
       for (const [id, x] of ledger) if (x.key === key && actual.some(m => m.dir === 'out' && (m.id === x.m.id || (m.lid && m.lid === x.m.lid)))) { x.saved(); ledger.delete(id); }
       for (const [id, action] of actions) {
         if (action.key !== key) continue;

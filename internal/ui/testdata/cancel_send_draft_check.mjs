@@ -1,0 +1,268 @@
+// Existing source-check pattern: actual Store, Android Composer action, journal
+// and pending projection. Synthetic host I/O only; no browser/native claims.
+import assert from 'node:assert/strict';
+import {registerHooks, stripTypeScriptTypes} from 'node:module';
+import {readFileSync} from 'node:fs';
+import {runInNewContext} from 'node:vm';
+const root = new URL('../', import.meta.url);
+registerHooks({load(url, context, next) {
+  if (url.includes('/web/src/') && url.endsWith('.ts')) return {format:'module', shortCircuit:true,
+    source:stripTypeScriptTypes(readFileSync(new URL(url), 'utf8').replace('constructor(readonly host: Host) {', 'constructor(host: Host) { this.host = host;'))};
+  return next(url, context);
+}, resolve(specifier, context, next) {
+  const parent = context.parentURL || '';
+  if (parent.includes('/web/src/')) {
+    if (specifier === 'react') return next('data:text/javascript,export const useSyncExternalStore=()=>{};', context);
+    if (specifier === './skin/brand') return next('data:text/javascript,export const skin={storage:"agentnet.messenger"};', context);
+    if (specifier === './optimistic.mjs') return next(new URL('static/optimistic.mjs', root).href, context);
+    if (specifier === './person-topics.mjs') return next(new URL('skins/shared/person-topics.mjs', root).href, context);
+    if (specifier === './linkText') return next(new URL('skins/shared/link-text.mjs', root).href, context);
+    if (specifier.startsWith('.') && !/\.(ts|tsx|mjs|js)$/.test(specifier)) return next(new URL(specifier + '.ts', parent).href, context);
+  }
+  return next(specifier, context);
+}});
+const {Store} = await import('../web/src/store.ts');
+const {decode, encode, agentTargets, guestAuthor} = await import('../web/src/features/Composer.mentions.ts');
+const journal = await import('../web/src/send-journal.mjs');
+const storage = new Map();
+globalThis.localStorage = {getItem:k=>storage.get(k) ?? null, setItem:(k,v)=>storage.set(k,v), removeItem:k=>storage.delete(k)};
+globalThis.document = {visibilityState:'visible', hasFocus:()=>true, addEventListener(){}, removeEventListener(){}};
+globalThis.window = {addEventListener(){}, removeEventListener(){}};
+const source = readFileSync(new URL('web/src/features/Composer.tsx',root),'utf8');
+const action = name => {
+  const match = source.match(new RegExp('^  (?:async )?function '+name+'\\([\\s\\S]*?^  }','m'));
+  assert(match, 'actual Composer '+name+' source');
+  return stripTypeScriptTypes(match[0]);
+};
+const conv='a'.repeat(64), other='b'.repeat(64), topic='c'.repeat(32), reply='d'.repeat(32);
+let serial=0, worlds=0;
+const turn=()=>new Promise(resolve=>setImmediate(resolve));
+const gate=()=>{let release;const promise=new Promise(r=>release=r);return {promise,release};};
+async function world(draft={text:' Original E\n'},platform='android',holdAdmission=false) {
+  let rows=[], cancelGate, mode='confirmed', heldResult;
+  const admission=holdAdmission?gate():null,entered=gate();
+  const scope={}, posts=[], stages=[], me={address:'fixture/phone',fingerprint:'fixture-owner'};
+  const view=id=>({id,kind:'group',title:'Synthetic chat',peer:{},messages:id===conv?rows:[],agents:[],guests:[],topics:[]});
+  const host={platform, workspace:{id:'cancel-'+(++worlds),handle:'owned'}, workspaces:{state:()=>scope},
+    android:{visible:()=>true,onVisibility:()=>()=>{}}, listen:()=>()=>{}, stage:async file=>{stages.push(file);return 'stage-'+stages.length;},
+    api:async(path,body)=>{
+      if(path.startsWith('/api/overview'))return {version:'fixture',me,groups:true,dms:[],threads:[],people:[]};
+      if(path.startsWith('/api/dm?'))return view(new URL('https://fixture'+path).searchParams.get('id'));
+      if(path.startsWith('/api/agents'))return {agents:[]};
+      if(path==='/api/dm/send') {
+        posts.push({...body});rows=[{id:body.id,lid:body.id,dir:'out',from:me.address,kind:'message',body:body.body,at:new Date().toISOString(),
+          state:'queued',queued_send:{state:'pending',rev:1},topic:body.topic,reply_to:body.reply_to,
+          attachments:(draft.files||[]).map(f=>({name:f.name,size:f.size}))}];
+        entered.release();if(admission)await admission.promise;
+        return {id:body.id,lid:body.id,state:'queued'};
+      }
+      if(path==='/api/schedule/discard_send') {
+        const selected=mode; if(cancelGate)await cancelGate.promise;
+        if(selected==='failed')throw Object.assign(Error('already stored'),{status:409});
+        if(selected==='uncertain')throw Error('cancel response lost');
+        if(selected==='generic')return {note:'action accepted'};
+        if(selected==='wrong-id')return {id:'f'.repeat(32),state:'cancelled'};
+        if(selected==='stored')return {id:body.id,state:'sent'};
+        rows=[];return heldResult || {id:body.id,state:'cancelled'};
+      }
+      return {};
+    }};
+  const store=new Store(host);await store.start();await store.open({kind:'dm',id:conv});store.setDraft(conv,draft);
+  const env={store,conv,dm:view(conv),thread:undefined,ready:true,overview:store.get().overview,names:{},words:{},
+    target:{kind:'conversation'},latest:()=>store.draft(conv),androidPreparing:{current:new Set()},EMPTY:{text:''},visible:{current:conv},
+    decode,encode,agentTargets,guestAuthor,selectedTargetFollowup:()=>undefined,messageOf:()=>({id:reply}),
+    sendID:()=> (++serial).toString(16).padStart(32,'0'),localStorage,URL,
+    ...journal,setBusy:()=>{},setNotice:()=>{},typing:{stop(){}},announce:()=>{},errorText:e=>e.message};
+  for(const name of ['clearSent','keepStaged','forgetStaged'])env[name]=runInNewContext('('+action(name)+')',env);
+  env.releaseFiles=files=>{for(const f of files)if(f.url)URL.revokeObjectURL(f.url);};
+  const send=runInNewContext('('+action(platform==='android'?'sendAndroid':'send')+')',env);
+  const sending=send();if(admission)await entered.promise;else await sending;await turn();
+  const queued=()=>store.sends.merge(conv,rows).find(m=>m.queued_send);
+  assert.equal(posts.length,1,'one actual native send');assert(queued()?._discard,'host-kept inline Cancel');
+  return {store,host,scope,posts,stages,draft,queued,me,rows:()=>rows,
+    async restart(){
+      store.stop();const fresh={},nextHost={...host,workspace:{...host.workspace},workspaces:{state:()=>fresh}};
+      const next=new Store(nextHost);await next.start();await next.open({kind:'dm',id:conv});
+      assert.equal(next.draft(conv).text,'','a restarted composer has no original in-memory draft');
+      return {store:next,host:nextHost,scope:fresh,queued:()=>next.sends.merge(conv,rows).find(m=>m.queued_send),
+        project(patch){rows=rows.map(m=>({...m,...patch}));},
+        stored(){rows=rows.map(({queued_send,...m})=>({...m,state:'custody'}));next.sends.merge(conv,rows);},
+        stop(){next.stop();}};
+    },
+    hold(){cancelGate=gate();return cancelGate;},mode(value){mode=value;},
+    stored(){rows=rows.map(({queued_send,...m})=>({...m,state:'custody'}));store.sends.merge(conv,rows);},
+    review(){rows=rows.map(m=>({...m,queued_send:{...m.queued_send,state:'needs_review'}}));},
+    result(value){heldResult=value;},finishAdmission:async()=>{admission?.release();await sending;},
+    async stop(){admission?.release();await sending;if(store.isActive())store.stop();await turn();}};
+}
+
+let passed=0;
+async function check(name, fn) {await fn();passed++;console.log('PASS '+name);}
+await check('actual Android Cancel restores exact whitespace, with no new Send',async()=>{
+  const w=await world();
+  try {
+    assert.equal(w.store.draft(conv).text,'','send cleared original composer');
+    await w.queued()._discard();
+    assert.equal(w.store.draft(conv).text,w.draft.text,'confirmed pre-outbox Cancel restores exact original draft');
+    assert.equal(w.posts.length,1,'restoration never sends');
+  } finally {await w.stop();}
+});
+await check('ordinary Composer uses the same confirmed-Cancel restoration',async()=>{
+  const w=await world({text:'ordinary original'},'daemon');try{
+    await w.queued()._discard();assert.equal(w.store.draft(conv).text,'ordinary original');assert.equal(w.posts.length,1);
+  }finally{await w.stop();}
+});
+
+await check('restart before Cancel restores exact retained text from the real queued-row body',async()=>{
+  const w=await world();let r;try{
+    r=await w.restart();assert.equal(r.scope[Symbol.for('agentnet.ui.pendingSends')].drafts.size,0,'restart lost the capture, not the durable intent');
+    const retained=r.queued().body;
+    await r.queued()._discard();assert.equal(r.store.draft(conv).text,retained,'restart-before-Cancel restores the exact queued text');assert.equal(w.posts.length,1);
+  }finally{r?.stop();await w.stop();}
+});
+for(const text of ['newer after restart',''])await check('restart Cancel preserves '+(text?'newer text':'a newer empty revision'),async()=>{
+  const w=await world();let r;try{
+    r=await w.restart();r.store.setDraft(conv,{text});await r.queued()._discard();assert.equal(r.store.draft(conv).text,text);
+  }finally{r?.stop();await w.stop();}
+});
+for(const change of ['workspace','handle','identity'])await check('restart Cancel rejects changed '+change,async()=>{
+  const w=await world();let r;try{
+    r=await w.restart();const held=w.hold(),cancel=r.queued()._discard();
+    if(change==='workspace')r.host.workspace.id+='-other';
+    if(change==='handle')r.host.workspace.handle='new-handle';
+    if(change==='identity'){w.me.fingerprint='other-person';await r.store.refetch();}
+    held.release();await cancel;assert.equal(r.store.draft(conv).text,'');
+  }finally{r?.stop();await w.stop();}
+});
+await check('restart Cancel cannot restore after storage wins',async()=>{
+  const w=await world();let r;try{
+    r=await w.restart();const held=w.hold(),cancel=r.queued()._discard();r.stored();held.release();await cancel;assert.equal(r.store.draft(conv).text,'');
+  }finally{r?.stop();await w.stop();}
+});
+for(const patch of [{body:undefined},{attachments:[{name:'missing original file',size:1}]},{topic,reply_to:reply}])await check('restart fallback refuses unavailable original context '+JSON.stringify(patch),async()=>{
+  const w=await world();let r;try{
+    r=await w.restart();r.project(patch);await r.queued()._discard();assert.equal(r.store.draft(conv).text,'');
+  }finally{r?.stop();await w.stop();}
+});
+
+for(const [name,edit,expected] of [
+  ['newer different text',w=>w.store.setDraft(conv,{text:'newer draft'}),'newer draft'],
+  ['newer same text and changed scope',w=>w.store.setDraft(conv,{text:w.draft.text,topic:'new-topic'}),' Original E\n'],
+  ['same empty text is a newer revision',w=>w.store.setDraft(conv,{text:''}),''],
+  ['type then erase is a newer revision',w=>{w.store.setDraft(conv,{text:'temporary'});w.store.setDraft(conv,{text:''});},''],
+]) await check(name+' is not overwritten',async()=>{
+  const w=await world();try{
+    const held=w.hold(),cancel=w.queued()._discard();edit(w);held.release();await cancel;
+    assert.equal(w.store.draft(conv).text,expected);
+    if(name.includes('scope'))assert.equal(w.store.draft(conv).topic,'new-topic');
+  }finally{await w.stop();}
+});
+
+for(const mode of ['failed','uncertain','generic','wrong-id','stored'])await check(mode+' cancellation cannot restore',async()=>{
+  const w=await world();try{
+    w.mode(mode);
+    const cancel=w.queued()._discard();
+    if(['failed','uncertain'].includes(mode))await assert.rejects(cancel);else await cancel;
+    assert.equal(w.store.draft(conv).text,'');assert.equal(w.posts.length,1);
+  }finally{await w.stop();}
+});
+
+await check('stored/custody projection wins over a late cancelled reply',async()=>{
+  const w=await world();try{
+    const held=w.hold(),cancel=w.queued()._discard();w.stored();held.release();await cancel;
+    assert.equal(w.store.draft(conv).text,'');
+  }finally{await w.stop();}
+});
+await check('custody admission result releases retained draft before late Cancel',async()=>{
+  const w=await world();try{
+    const row=w.queued(),held=w.hold(),cancel=row._discard();
+    w.store.sends.finish(row.id,{id:row.id,state:'custody'});held.release();await cancel;
+    assert.equal(w.store.draft(conv).text,'');
+    assert.equal(w.scope[Symbol.for('agentnet.ui.pendingSends')].drafts.size,0,'accepted sends retain no draft/file contexts');
+  }finally{await w.stop();}
+});
+await check('explicit failed-message Discard keeps its semantics and frees draft context',async()=>{
+  const w=await world();try{
+    w.review();await w.queued()._discard();assert.equal(w.store.draft(conv).text,'');
+    assert.equal(w.scope[Symbol.for('agentnet.ui.pendingSends')].drafts.size,0);
+  }finally{await w.stop();}
+});
+await check('failed Cancel retains original context for one confirmed explicit Cancel',async()=>{
+  const w=await world();try{
+    w.mode('failed');await assert.rejects(w.queued()._discard());w.mode('confirmed');await w.queued()._discard();
+    assert.equal(w.store.draft(conv).text,w.draft.text);assert.equal(w.posts.length,1);
+  }finally{await w.stop();}
+});
+await check('Stage2N newer draft already present before Cancel is preserved',async()=>{
+  const w=await world();try{
+    w.store.setDraft(conv,{text:'newer before Cancel',files:[]});await w.queued()._discard();
+    assert.equal(w.store.draft(conv).text,'newer before Cancel');assert.equal(w.posts.length,1);
+  }finally{await w.stop();}
+});
+await check('newer attachment without text is not replaced',async()=>{
+  const w=await world();try{
+    const file=new File(['new file'],'new.txt'),held=w.hold(),cancel=w.queued()._discard();
+    w.store.setDraft(conv,{text:'',files:[{key:'new',file,name:file.name,size:file.size,type:file.type}]});
+    held.release();await cancel;assert.equal(w.store.draft(conv).text,'');assert.equal(w.store.draft(conv).files[0].file,file);
+  }finally{await w.stop();}
+});
+
+await check('exact file/reply/topic survive, staging handles and previews do not',async()=>{
+  const file=new File(['synthetic original bytes'],'note.txt',{type:'text/plain'}),url=URL.createObjectURL(file);
+  const draft={text:'file reply',topic,replyTo:reply,plainReply:true,mediaMode:'original',
+    files:[{key:'original-file',file,name:file.name,size:file.size,type:file.type,url}]};
+  const w=await world(draft);try{
+    await w.queued()._discard();const restored=w.store.draft(conv);
+    for(const key of ['text','topic','replyTo','plainReply','mediaMode'])assert.equal(restored[key],draft[key],key);
+    assert.equal(restored.files.length,1);assert.equal(restored.files[0].file,file);
+    assert.equal(restored.files[0].key,'original-file');assert.equal(restored.files[0].staged,undefined);
+    assert(restored.files[0].url && restored.files[0].url!==url,'fresh owned preview after send revoked the old one');
+    assert.equal(w.stages.length,1);assert.equal(w.posts.length,1);
+    URL.revokeObjectURL(restored.files[0].url);
+  }finally{await w.stop();}
+});
+await check('late Android admission cleanup cannot clear restored text/files',async()=>{
+  const file=new File(['held original bytes'],'held.txt',{type:'text/plain'});
+  const w=await world({text:'held original',files:[{key:'held',file,name:file.name,size:file.size,type:file.type}]},'android',true);
+  try{
+    await w.queued()._discard();assert.equal(w.store.draft(conv).text,'held original');
+    await w.finishAdmission();assert.equal(w.store.draft(conv).text,'held original');
+    assert.equal(w.store.draft(conv).files[0].file,file);assert.equal(w.store.draft(conv).files[0].staged,undefined);
+    assert.equal(w.posts.length,1);
+  }finally{await w.stop();}
+});
+
+await check('navigation restores only originating conversation, without navigation',async()=>{
+  const w=await world();try{
+    const held=w.hold(),cancel=w.queued()._discard();await w.store.open({kind:'dm',id:other});
+    w.store.setDraft(other,{text:'other conversation draft'});held.release();await cancel;
+    assert.equal(w.store.get().open.id,other);assert.equal(w.store.draft(other).text,'other conversation draft');
+    assert.equal(w.store.draft(conv).text,w.draft.text);
+  }finally{await w.stop();}
+});
+for(const change of ['workspace','handle','identity'])await check(change+' change rejects stale restoration',async()=>{
+  const w=await world();try{
+    const held=w.hold(),cancel=w.queued()._discard();
+    if(change==='workspace')w.host.workspace.id+='-other';
+    if(change==='handle')w.host.workspace.handle='new-handle';
+    if(change==='identity'){w.me.fingerprint='other-person';await w.store.refetch();}
+    held.release();await cancel;assert.equal(w.store.draft(conv).text,'');
+  }finally{await w.stop();}
+});
+await check('unmounted renderer writes only its unchanged retained draft',async()=>{
+  const w=await world();try{
+    const held=w.hold(),cancel=w.queued()._discard();w.store.stop();held.release();await cancel;
+    assert.equal(w.store.isActive(),false);assert.equal(w.store.draft(conv).text,'','stopped live state stays stopped');
+    assert.equal(w.scope.comicDrafts.drafts[conv].text,w.draft.text);
+  }finally{await w.stop();}
+});
+for(const newer of [false,true])await check('replacement Store '+(newer?'preserves newer revision':'restores original draft'),async()=>{
+  const w=await world();let replacement;try{
+    const held=w.hold(),cancel=w.queued()._discard();w.store.stop();replacement=new Store(w.host);await replacement.start();
+    if(newer)replacement.setDraft(conv,{text:'replacement draft'});
+    held.release();await cancel;assert.equal(replacement.draft(conv).text,newer?'replacement draft':w.draft.text);
+    assert.equal(w.store.isActive(),false);
+  }finally{if(replacement)replacement.stop();await w.stop();}
+});
+console.log(JSON.stringify({required:passed,executed:passed,pass:passed,fail:0,skip:0,
+  scope:'actual sendAndroid + journal + Store + pendingSends, synthetic host ACKs; not rendered/native qualification'}));
