@@ -33,6 +33,8 @@ const results = {width, cases: []};
       await route.fulfill({json: {id: body.id, state: 'cancelled'}});
     });
     const page = await ctx.newPage(); page.setDefaultTimeout(8000);
+    results.requests = []; page.on('request', r => { if (r.url().includes('/api/') && !r.url().includes('/api/events')) results.requests.push(r.method() + ' ' + new URL(r.url()).pathname); });
+    results.page = page;
     const errors = []; page.on('pageerror', e => errors.push(String(e)));
     await page.goto(process.argv[2]); await page.goto(origin + '/?skin=comic');
     const lock = await page.evaluate(() => window.__agentnetSingleWindow);
@@ -91,10 +93,12 @@ const results = {width, cases: []};
     assert.equal(await second.evaluate(() => window.__agentnetSingleWindow), 'lock');
     results.cases.push({case: 'second-tab-waits-then-starts'});
     assert.deepEqual(errors, []);
-    results.pass = true;
+    results.pass = true; delete results.page;
     console.log('Cancel restore rendered PASS ' + JSON.stringify(results));
   } catch (e) {
-    results.pass = false; results.error = String(e.stack || e); console.error(JSON.stringify(results)); process.exitCode = 1;
+    results.pass = false; results.error = String(e.stack || e);
+    if (out && results.page) await results.page.screenshot({path: out + '/failure-' + width + '.png'}).catch(() => {});
+    delete results.page; console.error(JSON.stringify(results)); process.exitCode = 1;
   } finally {
     if (out) fs.writeFileSync(out + '/cancel-restore-' + width + '.json', JSON.stringify(results, null, 1) + '\n');
     await browser.close();
