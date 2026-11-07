@@ -33,7 +33,33 @@ let current = null; // the page under check, for a failure screenshot
       if (native === 'android') { window.__agentnetPlatform = 'android';
         window.__agentnetAndroid = {visible: () => true, onVisibility: () => () => {}, connection: async () => ({enabled: true}), notificationStatus: async () => ({granted: true, app_granted: true}), copyText: async t => { window.__copied = t; return {}; }, legacyDrafts: async () => ({drafts: window.__legacyRecords || []}), acknowledgeLegacyDraft: async () => { window.__legacyAcks = (window.__legacyAcks || 0) + 1; return {removed: true}; }}; }
     }, {variant, native});
-    const sends = []; await ctx.route('**/api/dm/send', r => { sends.push(r.request().url()); return r.continue(); });
+    // Legacy records name 32/64-hex chats (legacy-drafts.mjs); this fixture's chat is dm0001-style.
+    // Two synthetic hex IDs stand for it on the wire only (views and sends), Android with the lock.
+    const hexChats = native === 'android' && variant === 'lock' ? ['9'.repeat(32), '8'.repeat(32)] : [];
+    const sends = []; await ctx.route('**/api/dm/send', r => { sends.push(r.request().url()); const body = r.request().postDataJSON();
+      return hexChats.includes(body?.conv) ? r.continue({postData: JSON.stringify({...body, conv})}) : r.continue(); });
+    if (hexChats.length) await ctx.route('**/api/dm?*', async route => {
+      const url = new URL(route.request().url()), id = url.searchParams.get('id');
+      if (!hexChats.includes(id)) return route.fallback();
+      url.searchParams.set('id', conv); const response = await route.fetch({url: url.toString()}), view = await response.json();
+      await route.fulfill({response, json: {...view, id}});
+    });
+    // Outbox in a read-only window (desktop, missing locks): the daemon fixture has no
+    // schedules (Live does; TestLiveScheduleAPI persists edits), so the host's schedule
+    // routes are stood in here with one pending row.
+    const outboxOn = native === 'desktop' && variant === 'missing', scheduleWrites = [];
+    if (outboxOn) {
+      const row = {id: '7'.repeat(32), conv, topic: '', body: 'scheduled words', due: new Date(Date.now() + 3 * 3600000).toISOString(), timezone: 'UTC', rev: 1, state: 'pending', audience: {persons: [], pids: []}, files: []};
+      await ctx.route('**/api/overview*', async route => { const response = await route.fetch(); await route.fulfill({response, json: {...await response.json(), schedules: true}}); });
+      await ctx.route('**/api/schedules*', route => route.fulfill({json: [row]}));
+      await ctx.route('**/api/schedule/**', route => {
+        const path = new URL(route.request().url()).pathname;
+        if (path === '/api/schedule/audience') return route.fulfill({json: {persons: [], pids: []}});
+        const body = route.request().postDataJSON(); scheduleWrites.push({path, body});
+        if (path !== '/api/schedule/edit' || body.id !== row.id || body.rev !== row.rev) return route.fulfill({status: 409, body: 'unexpected'});
+        Object.assign(row, {body: body.body, due: body.due, rev: row.rev + 1}); return route.fulfill({json: row});
+      });
+    }
     // Queued rows of this person's own (as another window's sends leave them): one
     // still pending, one held. Row Retry/Cancel/Discard reach /api/schedule/*.
     const rowsOn = variant === 'rejected' && !!native, schedule = []; if (rowsOn) results.schedule = schedule;
@@ -84,6 +110,7 @@ let current = null; // the page under check, for a failure screenshot
         owner: {workspace: 'default', handle: '', endpoint: origin, realm: '', address: me.address, fingerprint: me.fingerprint}, draft: {text: 'kept original words'}, revision: 'legacy:null', hadFiles: false}));
     }, {conv, origin});
     await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], {origin});
+    if (hexChats.length) await ctx.addInitScript(r => { window.__legacyRecords = r; }, [{key: 'dm:' + hexChats[0], value: JSON.stringify({body: 'legacy restore words'})}]);
     const before = await snapshot(first);
     await first.reload(); await first.locator('[data-part="chat-row"]').first().waitFor();
     const second = await ctx.newPage(); second.setDefaultTimeout(8000); second.on('pageerror', e => { errors.push(String(e)); pageErrors.push(label + ' second: ' + String(e)); }); await second.goto(origin + '/?skin=comic');
@@ -95,6 +122,7 @@ let current = null; // the page under check, for a failure screenshot
       assert.equal(await mode(first), 'lock');
       assert.equal(await second.getByRole('status').filter({hasText: /open in another tab or window/}).count(), 1, 'second page waits');
       assert.equal(await second.locator('[data-part="chat-row"]').count(), 0);
+      await second.close(); // so a reload of this page keeps the lock
       const sheet = () => first.getByRole('dialog', {name: 'Saved messages'});
       const openSaved = async () => { if (!(await sheet().count())) await saved(first).click(); await sheet().waitFor(); return sheet(); };
       const item = async text => (await openSaved()).locator('section').filter({hasText: text});
@@ -114,9 +142,37 @@ let current = null; // the page under check, for a failure screenshot
       let snap = await snapshot(first);
       assert(snap.includes('newer draft words'), 'the lock holder saves its draft');
       assert(!snap.includes('send-recovery.v1.' + 'b'.repeat(32)), 'Discard removes the kept original');
-      // The earlier preview's legacy records name 32/64-hex conversations (legacy-drafts.mjs); this
-      // fixture's chats are dm0001-style, so the legacy normal path is not reachable here.
-      results.cases.push({case: label, writes: true, copied: true, kept_discarded: true, legacy: 'not reachable in this fixture'});
+      if (hexChats.length) {
+        const [hex, hex2] = hexChats, acks = () => first.evaluate(() => window.__legacyAcks || 0);
+        // Legacy draft into an empty chat: restored, saved, acknowledged once.
+        await (await item('legacy restore words')).getByRole('button', {name: 'Restore draft', exact: true}).click();
+        await first.waitForFunction(() => window.__legacyAcks === 1);
+        if (await sheet().count()) { await first.keyboard.press('Escape'); await sheet().waitFor({state: 'detached'}); }
+        const hexBox = first.getByRole('form', {name: 'Write a message'}).getByRole('textbox').first();
+        assert.equal(await hexBox.inputValue(), 'legacy restore words', 'legacy draft restored into its chat');
+        assert((await snapshot(first)).includes('legacy restore words'), 'restored draft saved');
+        await hexBox.fill('newer hex draft'); await first.waitForTimeout(500);
+        assert((await snapshot(first)).includes('newer hex draft'), 'newer draft saved');
+        // After a reload: an older legacy draft for that chat is refused over the newer one;
+        // an unconfirmed legacy send for another chat is retried once under its ID.
+        await ctx.addInitScript(r => { window.__legacyRecords = r; }, [{key: 'dm:' + hex, value: JSON.stringify({body: 'older legacy words'})},
+          {key: 'dm:' + hex2, value: JSON.stringify({body: 'legacy retry words', request: {id: 'e'.repeat(32), body: 'legacy retry words', conv: hex2}})}]);
+        await first.reload(); await first.locator('[data-part="chat-row"]').first().waitFor();
+        await (await item('older legacy words')).getByRole('button', {name: 'Restore draft', exact: true}).click();
+        await first.getByText('There is already a draft in this chat. Keep or send it first, then restore this one.').first().waitFor();
+        assert.equal(await acks(), 0, 'refused restore acknowledges nothing');
+        snap = await snapshot(first);
+        assert(snap.includes('newer hex draft') && !snap.includes('older legacy words'), 'newer draft not overwritten');
+        await (await item('legacy retry words')).getByRole('button', {name: 'Retry saved send', exact: true}).click();
+        await first.getByText('Saved send is in the outbox.').first().waitFor();
+        await first.waitForFunction(() => window.__legacyAcks === 1);
+        assert.equal(sends.length, 1, 'one request for the legacy send');
+        // The fixture host stored it under its ID (read back from the host, not the request).
+        const stored = await first.evaluate(async conv => ((await (await fetch('/api/dm?id=' + conv)).json()).messages || []).filter(m => (m.id === 'e'.repeat(32) || m.lid === 'e'.repeat(32)) && m.body === 'legacy retry words').length, conv);
+        assert.equal(stored, 1, 'host holds the legacy send once');
+        results.legacy = {restore_acks: 1, refused_acks: 0, retry_requests: sends.length, host_rows: stored};
+      }
+      results.cases.push({case: label, writes: true, copied: true, kept_discarded: true, legacy: !!hexChats.length});
       if (out) await first.screenshot({path: out + '/native-lock-' + label + '.png'});
       await ctx.close(); continue;
     }
@@ -183,6 +239,21 @@ let current = null; // the page under check, for a failure screenshot
       assert.equal(await first.getByText(/original draft recovery could not be cleared/).count(), 0, 'stored send releases nothing and reports no failure');
       if (out) await first.screenshot({path: out + '/native-readonly-android-cancel-390.png'});
       await first.setViewportSize({width: 1280, height: 900});
+    }
+    if (outboxOn) {
+      // Outbox edit is the host's own schedule: it works here, with one edit and no local write.
+      current = first; const nav = first.getByRole('navigation', {name: 'Main', exact: true});
+      await nav.getByRole('button', {name: 'Outbox', exact: true}).click();
+      const editing = first.getByRole('article').filter({hasText: 'scheduled words'});
+      await editing.getByRole('button', {name: 'Edit schedule', exact: true}).click();
+      await first.getByRole('textbox', {name: 'Scheduled message text', exact: true}).fill('edited in read-only');
+      await editing.getByRole('button', {name: 'Save schedule changes', exact: true}).click();
+      await first.getByRole('article').filter({hasText: 'edited in read-only'}).waitFor();
+      results.outbox = scheduleWrites.map(w => w.path);
+      assert.deepEqual(results.outbox, ['/api/schedule/edit'], 'one Outbox edit');
+      assert.equal(scheduleWrites[0].body.body, 'edited in read-only');
+      assert.equal(await first.evaluate(() => Object.keys(localStorage).filter(k => k.includes('schedule-save')).length), 0, 'no schedule token written');
+      await nav.getByRole('button', {name: 'Chats', exact: true}).click();
     }
     assert.equal(await snapshot(first), before, 'saved drafts, journal and recovery unchanged');
     await first.reload(); await first.locator('[data-part="chat-row"]').first().waitFor(); await first.waitForTimeout(800);
