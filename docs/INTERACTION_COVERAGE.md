@@ -1,5 +1,34 @@
 # Next-release interaction coverage and responsiveness
 
+## v0.11.0 Cancel of a queued send: recovery batch — November 7, 2026
+
+Not qualified, not released, pre-CI hold. Focused evidence only.
+
+**Counterpart reused.** TDLib `4c6377aa` `fail_send_message` (inspected for
+MEL-748 above): a message that cannot go keeps its identity, place and retry.
+A held send is exactly that existing `needs_review` state with its in-chat
+Retry/Discard. Telegram has no "stop, keep the files" for an upload in flight;
+the hold is an AgentNet adaptation and is not verified against a counterpart flow.
+
+| Entry | Interaction/state | Evidence (failed before, passed after) |
+|---|---|---|
+| `send.cancel-restore` | Cancel of a queued send returns the exact original to the composer, no second send | `TestCancelRestoreRendered` case 1 at 1440 and 390 |
+| `send.cancel-refused-restore` | Storage refuses the restoration; after reload, Saved messages → Put back | same test, case 2 |
+| `send.cancel-held` (B7) | After a restart the files can't return: Cancel holds the message on this device (`POST /api/schedule/hold_send`); "Stopping…" with no failure or controls until the exact receipt; then Retry/Discard | `TestQueuedSendHoldKeepsFilesAndBeatsAttempt` (race with dispatch, real close/reopen, exact bytes on Retry), `TestLiveSendAcceptsThroughAStalledRequest`, Store harness B7 rows, rendered case 4 |
+| `drafts.older-replaced` (B6) | A draft an older AgentNet version's whole-map write replaced is kept first and offered in Saved messages under its own label; Put back fills the composer | journal B6 rows (byte-identical reload, genuine rollback erase, closed page, crash at each write, quota, isolation), Store B6 row, rendered case 5 |
+| `drafts.one-tab` | A second tab waits and writes nothing until the first closes | rendered case 3 (browser only; native shells: B5 open) |
+
+Click to local feedback / confirmed result, ms, at `8144f161`: send→queued
+row and Cancel→restored under 1000 (asserted); held Cancel 60/72 (1440) and
+66/76 (390) at `580e04cc`; replaced-draft Put back 60 and 51 at `8144f161`.
+Mocked queued-send endpoints over the real daemon page and built Comic bundle;
+no skins, native shells, Android or physical devices.
+
+Open: B5, a native shell without Web Locks runs unlocked; no local probe was
+possible (no display for the agent, no shipped runtime). On Android, the saved-send
+"Retry" could acknowledge a held row as "Saved send is in the outbox". The
+wording is inaccurate, but nothing is sent again.
+
 ## MEL-748 v0.10.10 candidate — November 4, 2026
 
 Not qualified and not released. Pre-CI checkpoint not cleared. Owner reports:
