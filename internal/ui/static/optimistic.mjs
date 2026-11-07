@@ -99,8 +99,10 @@ export function pendingSends(host, changed = () => {}, restoreDraft, captureQueu
     const action = actions.get(m.id), holding = action?.kind === 'hold' && action.detail === undefined;
     const stopped = (m.queued_send.state === 'needs_review' || action?.kind === 'hold' && !holding) && action?.kind !== 'retry';
     const waiting = !stopped && !action && m.queued_send.state === 'pending' && m.detail;
-    return {...m, _local: true, _failed: stopped, delivery: stopped ? 'failed' : 'queued', state_text: holding ? 'Stopping…' : stopped ? (action?.kind === 'hold' && m.queued_send.state !== 'needs_review' ? action.detail || 'Stopped.' : m.detail || 'Not sent.') : waiting || 'Sending…',
-      _retry: () => act('retry', m, key), _discard: holding ? undefined : () => act('discard', m, key), _diagnostic: m.queued_send.diagnostic,
+    // A read-only window (see act) offers no Retry or Discard on a stopped message and says so.
+    const readOnly = globalThis.__agentnetSingleWindow === 'readonly', kept = readOnly && stopped;
+    return {...m, _local: true, _failed: stopped, delivery: stopped ? 'failed' : 'queued', state_text: holding ? 'Stopping…' : kept ? 'Stopped and kept. Drafts are read-only in this window, so it can’t be retried or discarded here.' : stopped ? (action?.kind === 'hold' && m.queued_send.state !== 'needs_review' ? action.detail || 'Stopped.' : m.detail || 'Not sent.') : waiting || 'Sending…',
+      _retry: kept ? undefined : () => act('retry', m, key), _discard: holding || kept ? undefined : () => act('discard', m, key), _diagnostic: m.queued_send.diagnostic,
       can: [], actions: [], copies: [], reactions: []};
   };
   const when = m => { const t = Date.parse(m.at); return Number.isNaN(t) ? Infinity : t; };

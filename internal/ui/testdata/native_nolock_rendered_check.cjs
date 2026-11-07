@@ -31,7 +31,7 @@ let current = null; // the page under check, for a failure screenshot
       else if (variant === 'rejected') LockManager.prototype.request = function () { return Promise.reject(new DOMException('synthetic refusal', 'SecurityError')); };
       if (native === 'desktop') Object.defineProperty(window, '__agentnetNativeAppJSON', {value: async () => ({})});
       if (native === 'android') { window.__agentnetPlatform = 'android';
-        window.__agentnetAndroid = {visible: () => true, onVisibility: () => () => {}, connection: async () => ({enabled: true}), notificationStatus: async () => ({granted: true, app_granted: true}), legacyDrafts: async () => ({drafts: []}), acknowledgeLegacyDraft: async () => { window.__legacyAcks = (window.__legacyAcks || 0) + 1; return {removed: true}; }}; }
+        window.__agentnetAndroid = {visible: () => true, onVisibility: () => () => {}, connection: async () => ({enabled: true}), notificationStatus: async () => ({granted: true, app_granted: true}), copyText: async t => { window.__copied = t; return {}; }, legacyDrafts: async () => ({drafts: window.__legacyRecords || []}), acknowledgeLegacyDraft: async () => { window.__legacyAcks = (window.__legacyAcks || 0) + 1; return {removed: true}; }}; }
     }, {variant, native});
     const sends = []; await ctx.route('**/api/dm/send', r => { sends.push(r.request().url()); return r.continue(); });
     // Queued rows of this person's own (as another window's sends leave them): one
@@ -83,6 +83,15 @@ let current = null; // the page under check, for a failure screenshot
       localStorage.setItem('agentnet.messenger.drafts.default.send-recovery.v1.' + id2, JSON.stringify({version: 1, id: id2, conversation: conv,
         owner: {workspace: 'default', handle: '', endpoint: origin, realm: '', address: me.address, fingerprint: me.fingerprint}, draft: {text: 'kept original words'}, revision: 'legacy:null', hadFiles: false}));
     }, {conv, origin});
+    if (variant === 'lock' && native === 'android') {
+      // Records the earlier preview left: a draft for the other chat, an unconfirmed send here.
+      const other = await first.evaluate(async conv => ((await (await fetch('/api/overview')).json()).dms || []).map(d => d.id).find(id => id !== conv), conv);
+      assert.match(other || '', /^([0-9a-f]{32}|[0-9a-f]{64})$/, 'a second chat for the legacy draft');
+      results.legacy_records = [{key: 'dm:' + other, value: JSON.stringify({body: 'legacy restore words'})},
+        {key: 'dm:' + conv, value: JSON.stringify({body: 'legacy retry words', request: {id: 'e'.repeat(32), body: 'legacy retry words', conv}})}];
+      await ctx.addInitScript(r => { window.__legacyRecords = r; }, results.legacy_records);
+    }
+    await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], {origin});
     const before = await snapshot(first);
     await first.reload(); await first.locator('[data-part="chat-row"]').first().waitFor();
     const second = await ctx.newPage(); second.setDefaultTimeout(8000); second.on('pageerror', e => { errors.push(String(e)); pageErrors.push(label + ' second: ' + String(e)); }); await second.goto(origin + '/?skin=comic');
@@ -94,14 +103,43 @@ let current = null; // the page under check, for a failure screenshot
       assert.equal(await mode(first), 'lock');
       assert.equal(await second.getByRole('status').filter({hasText: /open in another tab or window/}).count(), 1, 'second page waits');
       assert.equal(await second.locator('[data-part="chat-row"]').count(), 0);
-      await saved(first).click(); const sheet = first.getByRole('dialog', {name: 'Saved messages'});
-      await sheet.getByRole('button', {name: /Put back in draft|Open chat/}).first().waitFor();
-      await first.keyboard.press('Escape'); await sheet.waitFor({state: 'detached'});
-      await openChat(first);
-      const box = first.getByRole('form', {name: 'Write a message'}).getByRole('textbox').first();
-      await box.fill('typed with the lock'); await first.waitForTimeout(500);
-      assert((await snapshot(first)).includes('typed with the lock'), 'the lock holder saves its draft');
-      results.cases.push({case: label, writes: true}); await ctx.close(); continue;
+      const sheet = () => first.getByRole('dialog', {name: 'Saved messages'});
+      const openSaved = async () => { if (!(await sheet().count())) await saved(first).click(); await sheet().waitFor(); return sheet(); };
+      const item = async text => (await openSaved()).locator('section').filter({hasText: text});
+      // Kept original: its chat is not loaded yet, so Open chat (then it can be checked).
+      await (await item('kept original words')).getByRole('button', {name: 'Open chat', exact: true}).click();
+      await sheet().waitFor({state: 'detached'});
+      const box = first.getByRole('form', {name: 'Write a message'}).getByRole('textbox').first(); await box.waitFor();
+      await box.fill('newer draft words'); await first.waitForTimeout(500);
+      // Copy text, then Discard: the newer draft stays; only the kept copy goes.
+      await (await item('kept original words')).getByRole('button', {name: 'Copy text', exact: true}).click();
+      await first.getByText(/^Copied$|Couldn’t copy here/).first().waitFor();
+      const copied = native === 'android' ? await first.evaluate(() => window.__copied) : await first.evaluate(() => navigator.clipboard.readText());
+      assert.equal(copied, 'kept original words', 'Copy text copies the kept text');
+      await (await item('kept original words')).getByRole('button', {name: 'Discard', exact: true}).click();
+      await first.getByText('kept original words').waitFor({state: 'detached'});
+      assert.equal(await box.inputValue(), 'newer draft words', 'Discard leaves the newer draft');
+      let snap = await snapshot(first);
+      assert(snap.includes('newer draft words'), 'the lock holder saves its draft');
+      assert(!snap.includes('send-recovery.v1.' + 'b'.repeat(32)), 'Discard removes the kept original');
+      if (native === 'android') {
+        // Legacy draft: Restore puts it in its own empty chat and acknowledges it once.
+        await (await item('legacy restore words')).getByRole('button', {name: 'Restore draft', exact: true}).click();
+        await first.waitForFunction(() => window.__legacyAcks === 1);
+        if (await sheet().count()) { await first.keyboard.press('Escape'); await sheet().waitFor({state: 'detached'}); }
+        await first.getByRole('form', {name: 'Write a message'}).getByRole('textbox').first().waitFor();
+        assert.equal(await first.getByRole('form', {name: 'Write a message'}).getByRole('textbox').first().inputValue(), 'legacy restore words', 'legacy draft restored into its chat');
+        // Legacy unconfirmed send: Retry sends it once under its own ID and says where it is.
+        await (await item('legacy retry words')).getByRole('button', {name: 'Retry saved send', exact: true}).click();
+        await first.getByText('Saved send is in the outbox.').first().waitFor();
+        await first.waitForFunction(() => window.__legacyAcks === 2);
+        assert.equal(sends.length, 1, 'one request for the legacy send');
+        snap = await snapshot(first);
+        assert(snap.includes('newer draft words') && snap.includes('legacy restore words'), 'no newer draft overwritten');
+      }
+      results.cases.push({case: label, writes: true, copied: true, kept_discarded: true, legacy: native === 'android'});
+      if (out) await first.screenshot({path: out + '/native-lock-' + label + '.png'});
+      await ctx.close(); continue;
     }
     const state = async p => ({mode: await mode(p), chats: await p.locator('[data-part="chat-row"]').count(),
       notice: await p.getByText(readOnly).count()});
@@ -115,7 +153,15 @@ let current = null; // the page under check, for a failure screenshot
       if (native === 'android') await sheet.getByText('saved send words').waitFor();
       assert(await sheet.getByRole('button', {name: 'Copy text'}).count() >= 1, 'Copy text offered');
       assert.equal(await sheet.getByRole('button', {name: /Retry saved send|Put back in draft|Discard|Restore draft/}).count(), 0, 'nothing that writes or sends');
-      await p.keyboard.press('Escape'); await sheet.waitFor({state: 'detached'});
+      if (p === first) {
+        // Read-only Saved messages: Copy text copies; Open chat opens the chat to read.
+        const kept = sheet.locator('section').filter({hasText: 'kept original words'});
+        await kept.getByRole('button', {name: 'Copy text', exact: true}).click();
+        await p.getByText(/^Copied$|Couldn’t copy here/).first().waitFor();
+        assert.equal(native === 'android' ? await p.evaluate(() => window.__copied) : await p.evaluate(() => navigator.clipboard.readText()), 'kept original words', 'read-only Copy text');
+        await kept.getByRole('button', {name: 'Open chat', exact: true}).click(); await sheet.waitFor({state: 'detached'});
+        await p.getByText(readOnly).nth(1).waitFor(); // the opened chat's closed composer
+      } else { await p.keyboard.press('Escape'); await sheet.waitFor({state: 'detached'}); }
       // The chat opens to read; its composer says why nothing is written.
       current = p; await openChat(p);
       // The banner and the chat's closed composer both say it.
@@ -131,13 +177,14 @@ let current = null; // the page under check, for a failure screenshot
       // Row controls: Retry sends nothing, Discard of a held message destroys nothing;
       // Cancel stops the pending one and the host keeps it (hold), as when a draft can't be put back.
       current = first; await openChat(first);
-      const retry = first.locator('[data-send-retry]').first(), discard = first.locator('[data-send-discard]');
-      await first.getByText('queued held words').waitFor(); await retry.click(); await first.waitForTimeout(500);
-      assert.deepEqual(schedule, [], 'row Retry reaches nothing');
-      await discard.filter({hasText: 'Discard'}).first().click(); await first.waitForTimeout(500);
-      assert.deepEqual(schedule, [], 'Discard of a held message reaches nothing');
-      await first.getByText(/can’t be retried or discarded in this window/).first().waitFor();
-      await discard.filter({hasText: 'Cancel'}).first().click(); await first.waitForTimeout(500);
+      const discard = first.locator('[data-send-discard]');
+      await first.getByText('queued held words').waitFor();
+      await first.getByText('Stopped and kept. Drafts are read-only in this window, so it can’t be retried or discarded here.').first().waitFor();
+      assert.equal(await first.locator('[data-send-retry]').count(), 0, 'no Retry offered on a held row');
+      assert.equal(await discard.filter({hasText: 'Discard'}).count(), 0, 'no Discard offered on a held row');
+      assert.equal(await first.getByText(/Retry sends it, Discard removes it/).count(), 0, 'no promise of Retry or Discard');
+      assert.equal(await discard.filter({hasText: 'Cancel'}).count(), 0, 'pending row says Stop, not Cancel');
+      await discard.filter({hasText: 'Stop'}).first().click(); await first.waitForTimeout(500);
       assert.deepEqual(schedule, ['/api/schedule/hold_send'], 'only a hold reaches the host');
       // Reply on the stored message: the draft change is refused and says so truthfully.
       const stored = first.locator('[data-mid="' + 'b'.repeat(32) + '"]'); await stored.hover();
@@ -151,7 +198,8 @@ let current = null; // the page under check, for a failure screenshot
       // The phone at 390: Cancel on a pending row holds it; nothing else reaches the host.
       current = first; await first.setViewportSize({width: 390, height: 844});
       if (!(await first.locator('[data-send-discard]').count())) await openChat(first);
-      await first.locator('[data-send-discard]').filter({hasText: 'Cancel'}).last().click(); await first.waitForTimeout(500);
+      await first.locator('[data-send-discard]').filter({hasText: 'Stop'}).last().click(); await first.waitForTimeout(500);
+      await first.getByText(/Stopped and kept/).first().waitFor();
       assert.deepEqual(schedule, ['/api/schedule/hold_send'], 'phone Cancel only holds');
       assert.equal(await first.getByText(/original draft recovery could not be cleared/).count(), 0, 'stored send releases nothing and reports no failure');
       if (out) await first.screenshot({path: out + '/native-readonly-android-cancel-390.png'});

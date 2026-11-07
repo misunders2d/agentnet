@@ -5,6 +5,7 @@
 // executor or an answer proves), and the approval card when the server
 // lists actions for it. Delivery says only what receipts prove.
 import { memo, useMemo, useRef, useState, type ReactNode } from "react";
+import { savedReadOnly } from "../saved-storage";
 import { Popover } from "@base-ui/react/popover";
 import { parseCollective } from "../collective-mentions.mjs";
 import { sendID } from "../optimistic.mjs";
@@ -354,8 +355,8 @@ function LocalSendActions({m}: {m: AnyMsg}) {
   const store = useApp();
   const run = (action?: () => unknown) => { void Promise.resolve().then(action).catch(e => store.toast(errorText(e), "error")); };
   return <>
-    {m._failed && <button type="button" className="ml-2 min-h-11 underline" data-send-retry onClick={() => run(m._retry)}>Retry</button>}
-    {m._discard && <button type="button" className="ml-2 min-h-11 underline" data-send-discard onClick={() => run(m._discard)}>{m._failed ? "Discard" : "Cancel"}</button>}
+    {m._failed && m._retry && <button type="button" className="ml-2 min-h-11 underline" data-send-retry onClick={() => run(m._retry)}>Retry</button>}
+    {m._discard && <button type="button" className="ml-2 min-h-11 underline" data-send-discard onClick={() => run(m._discard)}>{m._failed ? "Discard" : savedReadOnly() ? "Stop" : "Cancel"}</button>}
     {m._diagnostic && <details data-send-diagnostic><summary className="cursor-pointer underline">Details</summary><code className="block whitespace-pre-wrap break-words">{m._diagnostic}</code></details>}
   </>;
 }
