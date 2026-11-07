@@ -18,6 +18,9 @@ func TestCancelRestoreRendered(t *testing.T) {
 	}
 	for _, width := range []string{"1440", "390"} {
 		f := NewFixture(time.Now)
+		if _, _, err := f.CreatePerson("Fixture Me"); err != nil {
+			t.Fatal(err)
+		}
 		ts := httptest.NewUnstartedServer(nil)
 		ts.Config.Handler = New(f, ts.Listener.Addr().String(), testToken).Handler()
 		ts.Start()
