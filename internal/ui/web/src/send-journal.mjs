@@ -95,8 +95,12 @@ export function savedSendDrafts(storage, draftsKey) {
   // An older version still open in another tab rewrites the map from what it
   // loaded long ago; while it is seen, this page's records stay authoritative
   // and none is removed (its edits to chats with records are not adopted).
+  // The sighting is also kept in storage, bound to the exact map text seen, so a
+  // reload while that older write is still the last one keeps the same rule.
   let olderLive = false;
-  const olderWroteLast = values => !olderLive && storage.getItem(draftsKey)!==null && !Object.values(values).some(v => v && typeof v === "object" && typeof v[revisionField] === "string");
+  const olderKey = draftsKey + ".older-seen.v1";
+  const olderSeen = () => {if(olderLive)return true;try{const m=storage.getItem(draftsKey);return m!==null && storage.getItem(olderKey)===m;}catch{return false;}};
+  const olderWroteLast = values => !olderSeen() && storage.getItem(draftsKey)!==null && !Object.values(values).some(v => v && typeof v === "object" && typeof v[revisionField] === "string");
   const ownRecord = conv => {
     const raw=storage.getItem(recordKey(conv));
     if(raw===null)return;
@@ -106,7 +110,7 @@ export function savedSendDrafts(storage, draftsKey) {
   };
   const recordSpeaks = (conv,values) => {
     const raw=values[conv];
-    if(olderLive && storage.getItem(recordKey(conv))!==null)return true;
+    if(olderSeen() && storage.getItem(recordKey(conv))!==null)return true;
     return typeof raw?.[revisionField]==="string" || raw===undefined && !olderWroteLast(values);
   };
   const base = (conv, values = map()) => {
@@ -146,7 +150,7 @@ export function savedSendDrafts(storage, draftsKey) {
         const mine=conv===own && (pending || ownRecord(conv));
         if(mine)value=restoredOver(conv,mine)||mine;
         else{
-          if(!olderLive && !(typeof raw?.[revisionField]==="string" || raw===undefined && !older))storage.removeItem(recordKey(conv));
+          if(!olderSeen() && !(typeof raw?.[revisionField]==="string" || raw===undefined && !older))storage.removeItem(recordKey(conv));
           if(raw===undefined && older)continue;
           // A damaged record stays as it is for repair; it never blocks other chats.
           try{value=effective(conv,values);}catch{if(raw!==undefined)next[conv]=raw;continue;}
@@ -179,7 +183,9 @@ export function savedSendDrafts(storage, draftsKey) {
     if(!validRecord(r)||r.id!==id)throw Error("Original send recovery is unsupported or damaged. The message was kept.");
     return r;
   };
-  const read = (conv,owner) => {const values=map(),current=base(conv,values);return (owner && restoredOver(conv,current,owner)) || current;};
+  // Without an owner (a cold load, before identity is known) a restoration applies as it
+  // already does in the older versions' map; with one, it must be that owner's.
+  const read = (conv,owner) => {const values=map(),current=base(conv,values);return restoredOver(conv,current,owner) || current;};
   return {
     read,
     all(owner) {
@@ -248,7 +254,11 @@ export function savedSendDrafts(storage, draftsKey) {
     // Called for another tab's storage change: true once an older version's
     // whole-map write is seen while this page runs.
     olderWriterSeen() {
-      if(!olderLive){try{const values=map();olderLive=storage.getItem(draftsKey)!==null && Object.keys(values).length>0 && !Object.values(values).some(v=>v&&typeof v==="object"&&typeof v[revisionField]==="string");}catch{ /* a damaged map is reported by reads */ }}
+      // This page holds the one-window lock, so any map write another tab reports
+      // without revisions, an empty one included, is an older version's.
+      try{const raw=storage.getItem(draftsKey),values=map();
+        if(raw!==null && !Object.values(values).some(v=>v&&typeof v==="object"&&typeof v[revisionField]==="string")){olderLive=true;try{storage.setItem(olderKey,raw);}catch{ /* this page still knows */ }}
+      }catch{ /* a damaged map is reported by reads */ }
       return olderLive;
     },
     isStorageKey(key) {return key===draftsKey || key?.startsWith(pendingPrefix) || key?.startsWith(recordPrefix) || key?.startsWith(draftsKey+".restored.v1.");},

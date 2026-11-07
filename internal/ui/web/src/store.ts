@@ -2387,11 +2387,17 @@ export class Store {
       throw Error("The selected workspace identity changed. Your draft was kept.");
     const current=this.savedDrafts.read(conv,owner);
     if(current.revision!==this.draftWrites.get(conv))throw Error("This draft changed in another window. Nothing was submitted; keep the newer draft first.");
-    const revision=this.savedDrafts.nextRevision(),expected=original.revision===current.revision ? revision : "";
     const existed=this.savedDrafts.pending(id,conv,owner);
+    // A Retry resubmits the same ID: its original was kept and its draft cleared by
+    // the first attempt. Nothing is captured or cleared again, so a Cancel still
+    // restores that first original, bound to the revision its clear wrote.
+    if(existed)return {...this.savedCapture(existed),missingFiles:existed.hadFiles && !original.draft.files?.length,
+      draft:{...existed.draft,files:original.draft.files}};
+    const revision=this.savedDrafts.nextRevision(),expected=original.revision===current.revision ? revision : "";
     const record=this.savedDrafts.prepare(id,conv,owner,original.draft,expected);
-    // A newer user revision wins even when its text is byte-for-byte equal.
-    const cleared=original.revision===current.revision ? next : this.draft(conv);
+    // A newer user revision wins even when its text is byte-for-byte equal; what
+    // was sent (files, reply) still leaves the composer.
+    const latest=this.draft(conv),cleared=original.revision===current.revision ? next : {...next,text:latest.text,agent:latest.agent};
     try{this.changeDraft(conv,cleared,false,revision,true);}
     catch(e){
       // Release the original only while the saved draft still holds it intact.
@@ -2470,8 +2476,13 @@ export class Store {
   /** Saves a draft durably before returning. Throws when storage refuses; if only the copy older
    *  versions read lags, the record is already saved here and the earlier source stays untouched. */
   saveDraftNow(conv: string, d: Draft) {
-    try{this.changeDraft(conv,d,false,this.savedDrafts.nextRevision(),true);}
-    catch{throw new Error("This draft could not be saved on this device. The earlier copy was kept.");}
+    const revision=this.savedDrafts.nextRevision();
+    try{this.changeDraft(conv,d,false,revision,true);}
+    catch{
+      // Saved here (its revision is tracked); only the older versions' copy lags: show it and say so.
+      if(this.draftWrites.get(conv)===revision){this.changeDraft(conv,d,false,revision,false);return;}
+      throw new Error("This draft could not be saved on this device. The earlier copy was kept.");
+    }
   }
 
   setDraft(conv: string, d: Draft, topicSelected = false, preserveRevision = false) {

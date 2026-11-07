@@ -371,3 +371,20 @@ test("restoration over an older map's empty draft cannot resurrect after the old
  const up=savedSendDrafts(s,draftKey);assert.equal(up.read(conv,owner).draft.text,"");up.write("other",{text:"x"});
  assert.equal(savedSendDrafts(s,draftKey).read(conv,owner).draft.text,"","no resurrection at the same legacy revision");
 });
+
+// Review findings 2026-11-07 (F5, F6): reproduced before their repair.
+test("F5 an older tab writing an empty map is seen; this page's other drafts stay",()=>{
+ const w=draftWorld();w.saved.write("x",{text:"mine"});
+ w.storage.setItem(draftKey,"{}");assert.equal(w.saved.olderWriterSeen(),true,"an empty map from another tab is an older writer");
+ w.saved.write("y",{text:"y"});assert.equal(w.saved.read("x",owner).draft.text,"mine");
+ assert.equal(savedSendDrafts(w.storage,draftKey).read("x",owner).draft.text,"mine","kept across a reload");
+});
+test("F6 older tab seen, then this page reloads while that write is still last: drafts it never knew stay",()=>{
+ const w=draftWorld();w.saved.write("x",{text:"mine"});
+ const ram=oldReader(w.storage);delete ram.x;ram.y={text:"old edit"};oldWriter(w.storage,ram);
+ assert.equal(w.saved.olderWriterSeen(),true);
+ const reloaded=savedSendDrafts(w.storage,draftKey);
+ assert.equal(reloaded.read("x",owner).draft.text,"mine","reload reads this page's draft");
+ reloaded.write("z",{text:"z"});
+ assert.equal(savedSendDrafts(w.storage,draftKey).read("x",owner).draft.text,"mine","a later write keeps it");
+});

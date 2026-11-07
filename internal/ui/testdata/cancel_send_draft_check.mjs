@@ -41,6 +41,7 @@ let serial=0, worlds=0;
 const turn=()=>new Promise(resolve=>setImmediate(resolve));
 const gate=()=>{let release;const promise=new Promise(r=>release=r);return {promise,release};};
 async function world(draft={text:' Original E\n'},platform='android',holdAdmission=false,config={}) {
+  config.failing=config.failPosts>0;
   let rows=[], cancelGate, mode='confirmed', heldResult;
   const admission=holdAdmission?gate():null,entered=gate();
   let connected=true,registration;
@@ -53,7 +54,7 @@ async function world(draft={text:' Original E\n'},platform='android',holdAdmissi
       if(path.startsWith('/api/dm?'))return view(new URL('https://fixture'+path).searchParams.get('id'));
       if(path.startsWith('/api/agents'))return {agents:[]};
       if(path==='/api/dm/send') {
-        posts.push({...body});rows=[{id:body.id,lid:body.id,dir:'out',from:me.address,kind:'message',body:body.body,at:new Date().toISOString(),
+        posts.push({...body});if(config.failPosts>0){config.failPosts--;throw Object.assign(Error('relay unavailable'),{status:503});}rows=[{id:body.id,lid:body.id,dir:'out',from:me.address,kind:'message',body:body.body,at:new Date().toISOString(),
           state:'queued',queued_send:{state:'pending',rev:1},topic:body.topic,reply_to:body.reply_to,
           attachments:(draft.files||[]).map(f=>({name:f.name,size:f.size}))}];
         entered.release();if(admission)await admission.promise;
@@ -83,7 +84,7 @@ async function world(draft={text:' Original E\n'},platform='android',holdAdmissi
   config.beforeSend?.({store,host});
   const sending=send();if(admission)await entered.promise;else await sending;await turn();
   const queued=()=>store.sends.merge(conv,rows).find(m=>m.queued_send);
-  assert.equal(posts.length,config.expectedPosts ?? 1,'actual native submission count');if(posts.length)assert(queued()?._discard,'host-kept inline Cancel');
+  assert.equal(posts.length,config.expectedPosts ?? 1,'actual native submission count');if(posts.length&&!config.failing)assert(queued()?._discard,'host-kept inline Cancel');
   return {store,host,scope,posts,stages,cancels,notices,draft,queued,me,rows:()=>rows,
     legacy(){
       const key='agentnet.messenger.drafts.'+host.workspace.id;
@@ -110,7 +111,7 @@ async function world(draft={text:' Original E\n'},platform='android',holdAdmissi
 }
 
 let passed=0;
-async function check(name, fn) {await fn();passed++;console.log('PASS '+name);}
+async function check(name, fn) {if(process.env.CANCEL_ONLY&&!name.includes(process.env.CANCEL_ONLY))return;await fn();passed++;console.log('PASS '+name);}
 await check('actual Android Cancel restores exact whitespace, with no new Send',async()=>{
   const w=await world();
   try {
@@ -406,6 +407,49 @@ for(const newer of [false,true])await check('replacement Store '+(newer?'preserv
     held.release();await cancel;assert.equal(replacement.draft(conv).text,newer?'replacement draft':w.draft.text);
     assert.equal(w.store.isActive(),false);
   }finally{if(replacement)replacement.stop();await w.stop();}
+});
+// Review findings 2026-11-07 (F1, F2+F8, F4): reproduced before their repair.
+await check('F1 Android: typing while files prepare keeps the new text, clears the sent file and reply',async()=>{
+  const file=new File(['b'],'a.txt');
+  const w=await world({text:'hi',replyTo:reply,files:[{key:'f',file,name:file.name,size:file.size,type:file.type}]},'android',false,{beforeSend({store,host}){
+    const stage=host.stage;host.stage=async f=>{store.setDraft(conv,{...store.draft(conv),text:'hi!'});return stage(f);};}});
+  try{const d=w.store.draft(conv);assert.equal(d.text,'hi!','newer typing kept');assert.equal(d.files?.length||0,0,'sent file left the composer');assert.equal(d.replyTo,undefined,'sent reply left the composer');}
+  finally{await w.stop();}
+});
+await check('F2/F8 web Retry of a failed new-topic send submits the same ID, keeps the bubble, and Cancel still restores',async()=>{
+  const w=await world({text:'new topic text',newTopic:true},'daemon',false,{failPosts:1});
+  try{
+    const failed=w.store.sends.merge(conv,[]).find(m=>m._failed);assert(failed,'failed bubble kept');
+    failed._retry();for(let i=0;i<6;i++)await turn();
+    assert(!w.notices.some(n=>n?.text?.includes('another original draft')),'Retry refused: '+JSON.stringify(w.notices));
+    assert.equal(w.posts.length,2,'Retry submitted');assert.equal(w.posts[1].id,w.posts[0].id,'same send ID');
+    await w.queued()._discard();assert.equal(w.store.draft(conv).text,'new topic text','Cancel after Retry restores the original');
+  }finally{await w.stop();}
+});
+await check('F4 a Cancel restoration shows on remount with its files, and on a cold load before identity loads',async()=>{
+  const file=new File(['b'],'keep.txt');
+  const w=await world({text:'restored text',files:[{key:'f',file,name:file.name,size:file.size,type:file.type}]},'daemon');let warm;
+  try{
+    await w.queued()._discard();assert.equal(w.store.draft(conv).text,'restored text');assert.equal(w.store.draft(conv).files?.length,1);
+    w.store.stop();
+    warm=new Store(w.host);assert.equal(warm.draft(conv).text,'restored text','same-session remount');assert.equal(warm.draft(conv).files?.length,1,'remount keeps restored files');
+    await warm.start();await warm.open({kind:'dm',id:conv});assert.equal(warm.draft(conv).files?.length,1,'files kept after refresh');warm.stop();warm=undefined;
+    const fresh={},h={...w.host,workspaces:{...w.host.workspaces,state:()=>fresh}};
+    const cold=new Store(h);assert.equal(cold.draft(conv).text,'restored text','cold load shows the restoration before identity loads');
+  }finally{warm?.stop();await w.stop();}
+});
+await check('F7 only the older-version copy lags: a put-back save and a Cancel restoration show as saved',async()=>{
+  const write=localStorage.setItem;const w=await world({text:'lag original'},'daemon');try{
+    const base='agentnet.messenger.drafts.'+w.host.workspace.id;let overlaid=false;
+    localStorage.setItem=(k,v)=>{if(k.includes('.restored.v1.'))overlaid=true;if(k===base&&overlaid)throw Error('synthetic quota');write(k,v);};
+    await w.queued()._discard();
+    assert.equal(w.store.draft(conv).text,'lag original','restored text shown');
+    const toasts=w.store.get().toasts.map(t=>t.text).join(' | ');
+    assert(!/could not be saved/.test(toasts),'restoration was saved, not refused: '+toasts);
+    assert.equal(localStorage.getItem(base+'.send-recovery.v1.'+w.posts[0].id),null,'restored original released, not kept twice');
+    w.store.setDraft(conv,{text:''});overlaid=true;
+    w.store.saveDraftNow(conv,{text:'put back'});assert.equal(w.store.draft(conv).text,'put back','saved text shown');
+  }finally{localStorage.setItem=write;await w.stop();}
 });
 console.log(JSON.stringify({required:passed,executed:passed,pass:passed,fail:0,skip:0,
   scope:'actual sendAndroid + journal + Store + pendingSends, synthetic host ACKs; not rendered/native qualification'}));
