@@ -2390,7 +2390,10 @@ export class Store {
     const cleared=original.revision===current.revision ? next : this.draft(conv);
     try{this.changeDraft(conv,cleared,false,revision,true);}
     catch(e){
-      if(!existed)try{this.savedDrafts.release(id,conv,owner);}catch{this.toast("Send was not submitted. Its original draft recovery remains saved.","error");}
+      // Release the original only while the saved draft still holds it intact.
+      let intact=false;try{intact=this.savedDrafts.read(conv,owner).revision===current.revision;}catch{ /* keep the original */ }
+      if(!existed && intact)try{this.savedDrafts.release(id,conv,owner);}catch{this.toast("Send was not submitted. Its original draft recovery remains saved.","error");}
+      else if(!existed)this.toast("Send was not submitted. Its original draft recovery remains saved.","error");
       throw e;
     }
     return {...original,revision:record.revision,durable:id};

@@ -26,6 +26,26 @@
   const browser = window.agentnetEngine;
   let openPortable;
 
+  // ---- one active tab for this page's saved state
+  //
+  // Drafts and send recovery live in this origin's localStorage, which has no
+  // compare-and-set between tabs. As in the browser device (device.mjs) and
+  // Telegram Web, one tab is active; another waits, writing nothing, until it
+  // closes. The desktop and Android shells already have one window, and the
+  // browser device holds its own lock.
+  if (!browser && typeof window.__agentnetNativeAppJSON !== "function" && window.__agentnetPlatform !== "android" && navigator.locks) {
+    let granted = false, note = null;
+    const held = new Promise((resolve) => { navigator.locks.request("agentnet-local-ui", () => { granted = true; resolve(); return new Promise(() => {}); }); });
+    const later = setTimeout(() => {
+      if (granted) return;
+      note = document.createElement("p"); note.setAttribute("role", "status");
+      note.style.cssText = "margin:2rem auto;max-width:32rem;padding:0 1rem;font:16px/1.5 system-ui,sans-serif";
+      note.textContent = "AgentNet is open in another tab or window. Use that one, or close it to continue here: this tab waits and changes nothing.";
+      document.body.prepend(note);
+    }, 300);
+    await held; clearTimeout(later); note?.remove();
+  }
+
   // ---- what the page waits for, and how long
   //
   // A stalled connection or proxy can hold one request without failing it.

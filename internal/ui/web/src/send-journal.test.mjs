@@ -245,9 +245,26 @@ for(const newer of ["newer in other window",""])for(const when of ["before","aft
   assert.equal(fresh.read(conv,owner).draft.text,expected);assert.equal(oldReader(w.storage)[conv].text,expected);
   assert.equal(fresh.read(conv,owner).revision,oldReader(w.storage)[conv].__an_draft_revision);
  });
-test("a write removes only restorations that can no longer apply",()=>{
+test("a write never removes a restoration; a superseded one stays inert",()=>{
  const w=draftWorld();assert(w.saved.restore(send,conv,owner));
- w.saved.write(conv,{text:"tombstone again"},w.revision);
- assert.notEqual(w.storage.getItem(draftKey+".restored.v1."+conv),null,"restoration expecting this revision is kept");
- w.saved.write(conv,{text:"edited"});assert.equal(w.storage.getItem(draftKey+".restored.v1."+conv),null);
+ w.saved.write(conv,{text:"edited"});
+ assert.notEqual(w.storage.getItem(draftKey+".restored.v1."+conv),null,"no compare-then-remove of a shared key");
+ const fresh=savedSendDrafts(w.storage,draftKey);assert.equal(fresh.read(conv,owner).draft.text,"edited");
+ assert.equal(JSON.parse(w.storage.getItem(draftKey))[conv].text,"edited");
 });
+// Bezos 15:06Z: no failure path compares a record or restoration and then
+// mutates it back. A writer committing during this call's failure handling stays.
+for(const prior of [null,"prior"])for(const newer of ["newer text",""])for(const target of ["record","restoration"])
+ test(`failure handling never reverts a record or restoration: prior=${prior} newer=${JSON.stringify(newer)} ${target}`,()=>{
+  const w=draftWorld(),other=savedSendDrafts(w.storage,draftKey),chat=target==="record"&&prior===null?"fresh":conv;
+  if(prior!==null&&target==="record")w.saved.write(conv,{text:prior});
+  const key=target==="record"?draftKey+".draft.v1."+chat:draftKey+".restored.v1."+conv;let done=false;
+  // this call's own record/restoration commit fails; another window writes during the repair
+  w.fault(k=>{if(k!==key||done)return false;done=true;return true;});
+  w.before(k=>{if(done!==true||k!==draftKey)return;done="injected";other.write(chat,{text:newer});});
+  assert.throws(()=>target==="record"?w.saved.write(chat,{text:"this call"}):w.saved.restore(send,conv,owner),/synthetic quota/);
+  assert.equal(done,"injected","writer committed during failure handling");
+  const fresh=savedSendDrafts(w.storage,draftKey);
+  assert.equal(fresh.read(chat,owner).draft.text,newer);assert.equal(JSON.parse(w.storage.getItem(draftKey))[chat]?.text??"",newer);
+  assert(w.saved.pending(send,conv,owner));
+ });

@@ -127,14 +127,14 @@ export function savedSendDrafts(storage, draftsKey) {
   // check, never a write: if the map still disagrees, this call fails.
   // `own` is the conversation this call just wrote: its record speaks for it.
   const rounds = 8;
-  const project = own => {
+  const project = (own,pending) => {
     for(let round=0;round<=rounds;round++){
       const values=map(),older=olderWroteLast(values),next={};
-      for(const conv of new Set([...Object.keys(values),...keysWith(recordPrefix)])){
+      for(const conv of new Set([...Object.keys(values),...keysWith(recordPrefix),...(pending?[own]:[])])){
         const raw=values[conv];
         if(raw!==undefined && !validDraft(raw))throw Error("This saved draft is damaged. It was not replaced.");
         let value;
-        const mine=conv===own && ownRecord(conv);
+        const mine=conv===own && (pending || ownRecord(conv));
         if(mine)value=restoredOver(conv,mine)||mine;
         else{
           if(!(typeof raw?.[revisionField]==="string" || raw===undefined && !older))storage.removeItem(recordKey(conv));
@@ -148,13 +148,13 @@ export function savedSendDrafts(storage, draftsKey) {
       if(storage.getItem(draftsKey)===text)return;
       if(round===rounds)break;
       storage.setItem(draftsKey,text);
+      if(pending)return; // one commit ahead of the record; the caller checks after it
     }
     throw Error("Drafts kept changing in another window. Older versions may show an earlier copy.");
   };
-  // Undo only what this call wrote: a newer write from another window stays.
-  const undo = (key,mine,prior) => {
-    try{if(storage.getItem(key)!==mine)return;if(prior===null)storage.removeItem(key);else storage.setItem(key,prior);}catch{ /* current readers still see a valid record */ }
-  };
+  // Nothing written here is ever undone: the map, which only mirrors records,
+  // is committed first and the record or restoration last. A failure leaves
+  // records as they were; the map is rebuilt from them.
   const repair = own => {try{project(own);}catch{ /* reported by the caller's error */ }};
   const validRecord = r => r && r.version===1 && /^[a-f0-9]{32}$/.test(r.id) && typeof r.conversation==="string" &&
     validOwner(r.owner) && validDraft(r.draft) && Object.keys(r.draft).every(k=>draftFields.includes(k)) && typeof r.revision==="string" && typeof r.hadFiles==="boolean";
@@ -176,13 +176,12 @@ export function savedSendDrafts(storage, draftsKey) {
     write(conv,draft,revision=token()) {
       if(!validDraft(draft))throw Error("Cannot save an incomplete draft.");
       map(); // a damaged map is kept, never replaced
-      const key=recordKey(conv),prior=storage.getItem(key),mine=JSON.stringify({...scalarDraft(draft),[revisionField]:revision});
-      storage.setItem(key,mine);
-      // Older versions might still read the previous text: do not report a save.
-      try{project(conv);}catch(e){undo(key,mine,prior);repair(conv);throw e;}
-      // A restoration expecting an earlier revision can never apply again.
-      const old=storage.getItem(restoredKey(conv));
-      if(old!==null){let r;try{r=JSON.parse(old);}catch{}if(r?.expected!==revision)storage.removeItem(restoredKey(conv));}
+      const value={draft:scalarDraft(draft),revision};
+      // Older versions read the map: it shows this draft before the record does.
+      project(conv,value);
+      try{storage.setItem(recordKey(conv),JSON.stringify({...value.draft,[revisionField]:revision}));}catch(e){repair(conv);throw e;}
+      project(conv);
+      // A restoration expecting an earlier revision stays inert; it is never removed here.
       return revision;
     },
     prepare(id,conv,owner,draft,revision) {
@@ -215,9 +214,9 @@ export function savedSendDrafts(storage, draftsKey) {
       // wins even if it races this one: the restoration applies only while its
       // expected revision still matches. The map shows it to older versions.
       const overlay={version:1,conversation:conv,owner:{...owner},draft:r.draft,expected:r.revision,revision:token()};
-      const key=restoredKey(conv),prior=storage.getItem(key),mine=JSON.stringify(overlay);
-      storage.setItem(key,mine);
-      try{project(conv);}catch(e){undo(key,mine,prior);repair(conv);throw e;}
+      project(conv,{draft:scalarDraft(r.draft),revision:overlay.revision});
+      try{storage.setItem(restoredKey(conv),JSON.stringify(overlay));}catch(e){repair(conv);throw e;}
+      project(conv);
       const current=read(conv,owner);
       return current.revision===overlay.revision ? current : undefined;
     },
