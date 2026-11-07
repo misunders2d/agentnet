@@ -29,21 +29,29 @@
   // ---- one active tab for this page's saved state
   //
   // Drafts and send recovery live in this origin's localStorage, which has no
-  // compare-and-set between tabs. As in the browser device (device.mjs) and
-  // Telegram Web, one tab is active; another waits, writing nothing, until it
-  // closes. The desktop and Android shells already have one window, and the
-  // browser device holds its own lock.
-  if (!browser && typeof window.__agentnetNativeAppJSON !== "function" && window.__agentnetPlatform !== "android" && navigator.locks) {
-    let granted = false, note = null;
-    const held = new Promise((resolve) => { navigator.locks.request("agentnet-local-ui", () => { granted = true; resolve(); return new Promise(() => {}); }); });
-    const later = setTimeout(() => {
-      if (granted) return;
-      note = document.createElement("p"); note.setAttribute("role", "status");
-      note.style.cssText = "margin:2rem auto;max-width:32rem;padding:0 1rem;font:16px/1.5 system-ui,sans-serif";
-      note.textContent = "AgentNet is open in another tab or window. Use that one, or close it to continue here: this tab waits and changes nothing.";
-      document.body.prepend(note);
-    }, 300);
-    await held; clearTimeout(later); note?.remove();
+  // compare-and-set between tabs or windows. As in the browser device
+  // (device.mjs, which holds its own lock before loading this file) and
+  // Telegram Web, one page is active; another waits, writing nothing, until it
+  // closes. Every host takes it, the desktop and Android shells included. A
+  // plain browser without tab locks is refused, as the browser device is; a
+  // native shell without them relies on its own single window.
+  if (!browser) {
+    const native = typeof window.__agentnetNativeAppJSON === "function" || window.__agentnetPlatform === "android";
+    const say = (text) => { const p = document.createElement("p"); p.setAttribute("role", "status");
+      p.style.cssText = "margin:2rem auto;max-width:32rem;padding:0 1rem;font:16px/1.5 system-ui,sans-serif"; p.textContent = text; document.body.prepend(p); return p; };
+    let granted = false, note = null, refused = !navigator.locks;
+    if (!refused) {
+      const held = new Promise((resolve, reject) => {
+        try { navigator.locks.request("agentnet-local-ui", () => { granted = true; resolve(); return new Promise(() => {}); }).catch(reject); } catch (e) { reject(e); }
+      });
+      const later = setTimeout(() => { if (!granted) note = say("AgentNet is open in another tab or window. Use that one, or close it to continue here: this one waits and changes nothing."); }, 300);
+      try { await held; } catch { refused = true; }
+      clearTimeout(later); note?.remove();
+    }
+    if (refused) {
+      window.__agentnetSingleWindow = native ? "shell" : "none";
+      if (!native) { say("This browser cannot run AgentNet here: it lacks tab locks, so two tabs could overwrite each other's drafts. Try an up-to-date browser."); return; }
+    } else window.__agentnetSingleWindow = "lock";
   }
 
   // ---- what the page waits for, and how long

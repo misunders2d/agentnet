@@ -172,17 +172,25 @@ test("map quota during restore keeps original, base draft and older map unchange
  assert.equal(w.saved.read(conv,owner).revision,w.revision);assert(w.saved.pending(send,conv,owner));
  assert.deepEqual(w.saved.restore(send,conv,owner).draft,originalDraft,"retry after space frees");
 });
-test("map quota during ordinary write reports failure and reverts its record",()=>{
+test("map quota during ordinary write: record kept, older map keeps earlier text, failure names it",()=>{
  const w=draftWorld();w.saved.write("a",{text:"before"});w.fault(k=>k===draftKey);
- assert.throws(()=>w.saved.write("a",{text:"after"}));w.fault(undefined);
- assert.equal(w.saved.read("a",owner).draft.text,"before");assert.equal(oldReader(w.storage).a.text,"before");
+ assert.throws(()=>w.saved.write("a",{text:"after"}),/older versions may still show an earlier copy/);w.fault(undefined);
+ assert.equal(w.saved.read("a",owner).draft.text,"after","nothing written is reverted");assert.equal(oldReader(w.storage).a.text,"before","older reader keeps a real earlier version");
+ w.saved.write("b",{text:"x"});assert.equal(oldReader(w.storage).a.text,"after","next save brings the mirror up to date");
+});
+test("map quota during a send clear: older map keeps the text, original kept",()=>{
+ const w=draftWorld();w.saved.write(conv,{text:"typed"});const before=w.saved.read(conv,owner).revision,next=w.saved.nextRevision();
+ w.saved.prepare("d".repeat(32),conv,owner,{text:"typed"},next);w.fault(k=>k===draftKey);
+ assert.throws(()=>w.saved.write(conv,{text:""},next));w.fault(undefined);
+ assert.equal(oldReader(w.storage)[conv].text,"typed","cold older reader never sees an unconfirmed clear");
+ assert.notEqual(w.saved.read(conv,owner).revision,before);assert(w.saved.pending("d".repeat(32),conv,owner),"original kept for this version");
 });
 test("crash between restoration and map rebuild: current reader restores, next write repairs the map",()=>{
  const w=draftWorld();let crash=true;w.fault(k=>k===draftKey&&crash);
  assert.throws(()=>w.saved.restore(send,conv,owner));
  // simulate the crash landing after the overlay commit: put it back as a crashed process would leave it
  crash=false;const fresh=draftWorld();
- const overlay={version:1,conversation:conv,owner,draft:originalDraft,expected:fresh.revision,revision:"f".repeat(32)};
+ const overlay={version:1,conversation:conv,owner,draft:originalDraft,expected:fresh.revision,cleared:JSON.stringify({text:""}),revision:"f".repeat(32)};
  fresh.storage.setItem(draftKey+".restored.v1."+conv,JSON.stringify(overlay));
  const up=savedSendDrafts(fresh.storage,draftKey);assert.equal(up.read(conv,owner).draft.text,originalDraft.text);
  assert.equal(fresh.saved.restore(send,conv,owner),undefined,"never applied twice");
@@ -210,7 +218,7 @@ for(const kind of ["newer-same-conversation","intentional-erase","newer-other-co
   if(kind!=="newer-other-conversation"){assert.equal(cold.other.text,"prior other conversation");if(op==="restore")assert.equal(result,undefined,"superseded restore is not success");}
   if(error)assert.match(error,/another window/);
   if(op==="write"&&!error)assert.equal(cold.third.text,"third");
-  if(op==="write"&&error){assert.equal(fresh.read("third",owner).draft.text,"","failed write is not visible as saved");assert.equal(cold.third?.text||"","","nor to a cold older reader");}
+  if(op==="write"){assert.equal(error,undefined,"mirror verified after one more rebuild");assert.equal(fresh.read("third",owner).draft.text,"third");assert.equal(cold.third.text,"third");}
  });
 test("contention that never stops: the call reports failure, current readers keep the newest input",()=>{
  const w=draftWorld(),other=savedSendDrafts(w.storage,draftKey);let n=0,busy=false;
@@ -228,7 +236,8 @@ for(const newer of ["newer in other window",""])for(const op of ["write","restor
   // its map commit, which then fails (quota).
   const w=draftWorld(),other=savedSendDrafts(w.storage,draftKey);let busy=false,done=false;
   w.fault(k=>{if(busy||done||k!==draftKey)return false;busy=true;other.write(conv,{text:newer});busy=false;done=true;return true;});
-  assert.throws(()=>op==="write"?w.saved.write(conv,{text:"this window"}):w.saved.restore(send,conv,owner),/synthetic quota/);
+  // a write's map is only a mirror: one verified rebuild recovers it; a restoration's own commit failed
+  if(op==="write")w.saved.write(conv,{text:"this window"});else assert.throws(()=>w.saved.restore(send,conv,owner),/synthetic quota/);
   assert.equal(done,true);
   const fresh=savedSendDrafts(w.storage,draftKey);assert.equal(fresh.read(conv,owner).draft.text,newer,"newer same-chat input kept");
   assert.equal(oldReader(w.storage)[conv].text,newer,"older reader's map agrees");
@@ -258,13 +267,82 @@ for(const prior of [null,"prior"])for(const newer of ["newer text",""])for(const
  test(`failure handling never reverts a record or restoration: prior=${prior} newer=${JSON.stringify(newer)} ${target}`,()=>{
   const w=draftWorld(),other=savedSendDrafts(w.storage,draftKey),chat=target==="record"&&prior===null?"fresh":conv;
   if(prior!==null&&target==="record")w.saved.write(conv,{text:prior});
-  const key=target==="record"?draftKey+".draft.v1."+chat:draftKey+".restored.v1."+conv;let done=false;
-  // this call's own record/restoration commit fails; another window writes during the repair
+  // a write commits its record first, so its failure point is the map commit after it;
+  // a restoration commits the map first, so its failure point is its own commit.
+  // Another window writes during the following repair.
+  const key=target==="record"?draftKey:draftKey+".restored.v1."+conv;let done=false;
   w.fault(k=>{if(k!==key||done)return false;done=true;return true;});
   w.before(k=>{if(done!==true||k!==draftKey)return;done="injected";other.write(chat,{text:newer});});
-  assert.throws(()=>target==="record"?w.saved.write(chat,{text:"this call"}):w.saved.restore(send,conv,owner),/synthetic quota/);
+  let error;try{target==="record"?w.saved.write(chat,{text:"this call"}):w.saved.restore(send,conv,owner);}catch(e){error=String(e);}
+  if(target==="restoration")assert.match(error,/synthetic quota/);
   assert.equal(done,"injected","writer committed during failure handling");
   const fresh=savedSendDrafts(w.storage,draftKey);
   assert.equal(fresh.read(chat,owner).draft.text,newer);assert.equal(JSON.parse(w.storage.getItem(draftKey))[chat]?.text??"",newer);
   assert(w.saved.pending(send,conv,owner));
  });
+
+// Superseded restorations stay stored but can never come back.
+test("superseded restoration never resurrects: repeated erase, reload, revision reuse",()=>{
+ const w=draftWorld();assert(w.saved.restore(send,conv,owner));
+ for(let i=0;i<5;i++){w.saved.write(conv,{text:""});w.saved.write(conv,{text:"typed "+i});}
+ w.saved.write(conv,{text:""});
+ const reload=savedSendDrafts(w.storage,draftKey);assert.equal(reload.read(conv,owner).draft.text,"");assert.equal(oldReader(w.storage)[conv].text,"");
+ // the cleared revision reused with other content stays inert
+ reload.write(conv,{text:"reused revision"},w.revision);
+ assert.equal(savedSendDrafts(w.storage,draftKey).read(conv,owner).draft.text,"reused revision");assert.equal(oldReader(w.storage)[conv].text,"reused revision");
+ // only the exact cleared state brings back the bound restoration (same state as when it applied)
+ reload.write(conv,{text:""},w.revision);assert.equal(reload.read(conv,owner).draft.text,originalDraft.text);
+});
+test("restorations do not accumulate: one per conversation",()=>{
+ const w=draftWorld();
+ for(let i=0;i<20;i++){const id=(i+10).toString(16).padStart(32,"e"),rev=w.saved.write(conv,{text:""});w.saved.prepare(id,conv,owner,{text:"o"+i},rev);assert(w.saved.restore(id,conv,owner));w.saved.release(id,conv,owner);}
+ assert.equal([...w.data.keys()].filter(k=>k.includes(".restored.v1.")).length,1);
+ assert.equal(w.saved.read(conv,owner).draft.text,"o19");
+});
+
+// Crash at every commit: a snapshot after each underlying storage commit is what
+// a killed process leaves (no catch, no repair runs). Oracles per prefix:
+// a send clear never shows the cleared state to a cold older reader before the
+// clear completes, and the original stays kept for this version; a restoration
+// shows the original to the cold reader from its first commit on, and this
+// version keeps the original until it is released.
+const crashWorld=()=>{const w=draftWorld(),snaps=[];w.interleave(()=>snaps.push(new Map(w.data)));return {w,snaps};};
+const readers=snap=>{const s={getItem:k=>snap.get(k)??null,setItem(){throw Error("read-only")},removeItem(){throw Error("read-only")},get length(){return snap.size;},key:i=>[...snap.keys()][i]??null};
+ return {cold:JSON.parse(snap.get(draftKey)||"{}")[conv]?.text??"",current:savedSendDrafts(s,draftKey).read(conv,owner).draft.text,original:savedSendDrafts(s,draftKey).pending(send,conv,owner)};};
+test("crash at every commit of a send clear",()=>{
+ const data=new Map(),snaps=[],storage={getItem:k=>data.get(k)??null,setItem(k,v){data.set(k,v);snaps.push(new Map(data));},removeItem(k){data.delete(k);snaps.push(new Map(data));},get length(){return data.size;},key:i=>[...data.keys()][i]??null};
+ const d=savedSendDrafts(storage,draftKey);d.write(conv,{text:"typed"});const start=snaps.length;
+ const next=d.nextRevision();d.prepare(send,conv,owner,{text:"typed"},next);d.write(conv,{text:""},next);
+ const prefixes=snaps.slice(start);assert(prefixes.length>=3,"prepare, record and map commits observed");
+ prefixes.forEach((snap,i)=>{const r=readers(snap),last=i===prefixes.length-1;
+  if(!last)assert.equal(r.cold,"typed",`prefix ${i}: cold older reader keeps the text`);
+  assert(r.current==="typed"||r.original,`prefix ${i}: this version shows the text or keeps the original`);});
+});
+test("crash at every commit of a restoration",()=>{
+ const {w,snaps}=crashWorld();const start=snaps.length;assert(w.saved.restore(send,conv,owner));
+ const prefixes=snaps.slice(start);assert(prefixes.length>=2,"map and restoration commits observed");
+ prefixes.forEach((snap,i)=>{const r=readers(snap);
+  assert.equal(r.cold,originalDraft.text,`prefix ${i}: cold older reader shows the original`);
+  assert(r.current===originalDraft.text||r.original,`prefix ${i}: this version shows it or keeps the original`);
+  assert(r.original,`prefix ${i}: original kept until released`);});
+});
+
+// An older v0.10.9 tab left open: it loaded the map once and rewrites all of it
+// from that memory on each change. The new page sees it through a storage event.
+test("older tab still open: this page's drafts are never removed or replaced by its stale map",()=>{
+ const w=draftWorld();w.saved.write("known",{text:"known before"});
+ const oldRam=oldReader(w.storage); // the older tab's load-time memory
+ w.saved.write("known",{text:"typed here later"});w.saved.write("fresh",{text:"new chat here"});
+ oldRam.mine={text:"typed in old tab"};oldWriter(w.storage,oldRam); // its next keystroke
+ assert.equal(w.saved.olderWriterSeen(),true);
+ w.saved.write("third",{text:"x"});oldWriter(w.storage,oldRam);w.saved.write("third",{text:"y"});
+ const cur=savedSendDrafts(w.storage,draftKey);cur.olderWriterSeen();
+ assert.equal(w.saved.read("known",owner).draft.text,"typed here later","stale older copy does not replace newer input");
+ assert.equal(w.saved.read("fresh",owner).draft.text,"new chat here","chat unknown to the older tab is kept");
+ assert.equal(w.saved.read("mine",owner).draft.text,"typed in old tab","older tab's own new chat is adopted");
+ assert.equal(oldReader(w.storage).fresh.text,"new chat here","mirror re-shows this page's drafts");
+});
+test("cold re-upgrade (no older tab running) still adopts the older version's deletions",()=>{
+ const w=draftWorld();w.saved.write("gone",{text:"x"});const ram=oldReader(w.storage);delete ram.gone;oldWriter(w.storage,ram);
+ const up=savedSendDrafts(w.storage,draftKey);up.write("other",{text:"y"});assert.equal(up.read("gone",owner).draft.text,"");
+});

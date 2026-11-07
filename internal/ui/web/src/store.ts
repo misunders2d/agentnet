@@ -225,6 +225,7 @@ export class Store {
   private readonly savedDrafts: ReturnType<typeof savedSendDrafts>;
   private readonly draftHandle: string;
   private draftStorageError = false;
+  private olderTabNoticed = false;
   private readonly scheduled: ReturnType<typeof scheduleSaves>;
   private state: State;
   private subs = new Set<() => void>();
@@ -2313,7 +2314,10 @@ export class Store {
     return {workspace:this.host.workspace.id,handle:this.draftHandle,endpoint:this.host.workspace.endpoint || "",realm:this.host.workspace.realm || "",address:me.address,fingerprint:me.fingerprint};
   }
   private draftStorageChanged = (event: StorageEvent) => {
-    if(this.alive && this.savedDrafts.isStorageKey(event.key)){this.hydrateSendDrafts();this.refreshDraftStorage();}
+    if(this.alive && this.savedDrafts.isStorageKey(event.key)){
+      if(!this.olderTabNoticed && this.savedDrafts.olderWriterSeen()){this.olderTabNoticed=true;
+        this.toast("AgentNet is also open in an older version in another tab. Close that tab: drafts typed there are not kept here.","error");}
+      this.hydrateSendDrafts();this.refreshDraftStorage();}
   };
   private refreshDraftStorage() {
     // Storage cannot be authoritative over an edit it refused to save.
@@ -2445,8 +2449,12 @@ export class Store {
     try{this.savedDrafts.write(conv,d,revision);this.draftStorageError=false;}
     catch(e){
       if(strict)throw Error("The original draft could not be saved. Nothing was submitted; your current draft was kept.");
+      // Saved here; only the copy older versions read lags behind. Say exactly that.
+      if(e instanceof Error && /older versions may still show/.test(e.message)){this.draftStorageError=false;this.toast("Draft saved. Older AgentNet versions may still show an earlier copy until the next save.","error");}
+      else{
       if(!this.draftStorageError)this.toast("Your draft could not be saved. Keep this window open; Send will not clear unsaved input.","error");
       this.draftStorageError=true;
+      }
     }
     this.draftWrites.set(conv, revision);
     const prior = this.state.drafts[conv];
