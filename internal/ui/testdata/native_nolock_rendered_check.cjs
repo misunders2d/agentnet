@@ -18,6 +18,7 @@ const {chromium} = require(process.env.AGENTNET_PLAYWRIGHT);
 const out = process.env.NOLOCK_EVIDENCE, results = {cases: []};
 const conv = process.argv[3];
 const readOnly = /Sending is off in this window/;
+const pageErrors = [];
 let current = null; // the page under check, for a failure screenshot
 
 (async () => {
@@ -30,13 +31,13 @@ let current = null; // the page under check, for a failure screenshot
       else if (variant === 'rejected') LockManager.prototype.request = function () { return Promise.reject(new DOMException('synthetic refusal', 'SecurityError')); };
       if (native === 'desktop') Object.defineProperty(window, '__agentnetNativeAppJSON', {value: async () => ({})});
       if (native === 'android') { window.__agentnetPlatform = 'android';
-        window.__agentnetAndroid = {visible: () => true, onVisibility: () => () => {}, legacyDrafts: async () => ({drafts: []}), acknowledgeLegacyDraft: async () => { window.__legacyAcks = (window.__legacyAcks || 0) + 1; return {removed: true}; }}; }
+        window.__agentnetAndroid = {visible: () => true, onVisibility: () => () => {}, connection: async () => ({enabled: true}), notificationStatus: async () => ({granted: true, app_granted: true}), legacyDrafts: async () => ({drafts: []}), acknowledgeLegacyDraft: async () => { window.__legacyAcks = (window.__legacyAcks || 0) + 1; return {removed: true}; }}; }
     }, {variant, native});
     const sends = []; await ctx.route('**/api/dm/send', r => { sends.push(r.request().url()); return r.continue(); });
     const origin = new URL(process.argv[2]).origin;
     const label = (native || 'browser') + '-' + variant;
     const first = await ctx.newPage(); first.setDefaultTimeout(8000); current = first;
-    const errors = []; first.on('pageerror', e => errors.push(String(e)));
+    const errors = []; first.on('pageerror', e => { errors.push(String(e)); pageErrors.push(label + ': ' + String(e)); });
     await first.goto(process.argv[2]); await first.goto(origin + '/?skin=comic');
     const mode = p => p.evaluate(() => window.__agentnetSingleWindow ?? null);
     const snapshot = p => p.evaluate(() => { const v = {}; for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (/drafts|send-journal/.test(k)) v[k] = localStorage.getItem(k); } return JSON.stringify(Object.entries(v).sort()); });
@@ -64,7 +65,7 @@ let current = null; // the page under check, for a failure screenshot
     }, {conv, origin});
     const before = await snapshot(first);
     await first.reload(); await first.locator('[data-part="chat-row"]').first().waitFor();
-    const second = await ctx.newPage(); second.setDefaultTimeout(8000); await second.goto(origin + '/?skin=comic');
+    const second = await ctx.newPage(); second.setDefaultTimeout(8000); second.on('pageerror', e => { errors.push(String(e)); pageErrors.push(label + ' second: ' + String(e)); }); await second.goto(origin + '/?skin=comic');
     await first.waitForTimeout(1200);
     const openChat = async p => { await p.locator('[data-part="chat-row"][data-kind="person"]').filter({hasNotText: 'Device conversation'}).first().click(); };
     const saved = p => p.getByRole('button', {name: /^Saved messages \(/});
@@ -121,6 +122,7 @@ let current = null; // the page under check, for a failure screenshot
     console.log('Native without locks rendered PASS ' + JSON.stringify(results));
   } catch (e) {
     results.pass = false; results.error = String(e.stack || e);
+    results.page_errors = pageErrors;
     try { results.buttons = await current?.getByRole('button').allInnerTexts(); if (out) await current?.screenshot({path: out + '/native-nolock-failure.png'}); } catch { /* evidence only */ }
     console.error(JSON.stringify(results)); process.exitCode = 1;
   } finally {
