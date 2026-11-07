@@ -92,10 +92,11 @@ export function NativeRecovery() {
         </details>}
       </section>)}
       {kept.map(k=><section key={k.id} className="mb-3 rounded-2xl border border-hairline bg-surface p-4">
-        <p className="font-semibold">Text kept from a message that wasn’t sent</p>
+        <p className="font-semibold">{k.replaced ? "Draft replaced by an older AgentNet version" : "Text kept from a message that wasn’t sent"}</p>
+        {k.replaced && <p className="mb-2 text-[13px] text-muted">AgentNet open in an older version changed this chat’s draft. This is the text it replaced.</p>}
         <p className="my-2 whitespace-pre-wrap break-words">{k.draft.text || "(no text)"}</p>
         {k.hadFiles && <p className="mb-2 text-[13px] text-muted">Its attachments weren’t kept after the app restarted. Add them again.</p>}
-        {k.state==="check" && <p className="mb-2 text-[13px] text-muted">Open the chat first, so AgentNet can check this message wasn’t sent.</p>}
+        {k.state==="check" && <p className="mb-2 text-[13px] text-muted">{k.replaced ? "Open the chat first to put it back." : "Open the chat first, so AgentNet can check this message wasn’t sent."}</p>}
         <div className="flex flex-wrap gap-2">
           {k.state==="offer"
             ? <Button size="sm" variant="outline" disabled={!!busy} onClick={()=>void run(k.id,async()=>{store.putBackKept(k.id,k.conversation);setTick(t=>t+1);store.toast("Text is back in the draft.","ok");})}>Put back in draft</Button>

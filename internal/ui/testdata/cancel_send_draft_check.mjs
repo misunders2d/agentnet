@@ -492,6 +492,22 @@ await check('B7 before the exact held receipt nothing looks stopped; a late rece
     }finally{r?.stop();await w.stop();}
   }
 });
+await check('B6 a draft an older version replaced is offered in Saved messages; Put back only into an empty composer',async()=>{
+  const w=await world({text:'sent'},'daemon');let next;try{
+    const base='agentnet.messenger.drafts.'+w.host.workspace.id;
+    w.store.setDraft(other,{text:'mine',replyTo:reply});w.store.stop();
+    localStorage.setItem(base,'{}'); // an older version, this page closed, writes its map
+    const fresh={},h={...w.host,workspaces:{...w.host.workspaces,state:()=>fresh}};
+    next=new Store(h);await next.start();await next.open({kind:'dm',id:conv});next.setDraft(conv,{text:'typed after'});
+    assert.equal(next.draft(other).text,'','the composer follows the older version');
+    await next.open({kind:'dm',id:other});
+    const kept=next.keptOriginals().filter(k=>k.replaced);assert.equal(kept.length,1);assert.deepEqual(kept[0].draft,{text:'mine',replyTo:reply});assert.equal(kept[0].state,'offer');
+    next.setDraft(other,{text:'newer'});assert.throws(()=>next.putBackKept(kept[0].id,other),/already a draft/);assert.equal(next.draft(other).text,'newer','newer input never overwritten');
+    next.setDraft(other,{text:''});next.putBackKept(kept[0].id,other);
+    assert.equal(next.draft(other).text,'mine');assert.equal(next.draft(other).replyTo,reply);assert.equal(next.keptOriginals().filter(k=>k.replaced).length,0,'released once put back');
+    assert.equal(w.posts.length,1,'nothing sent');
+  }finally{next?.stop();await w.stop();}
+});
 // Delta review round 2 (R1-R5): reproduced before their repair.
 await check('R1 every older-tab write is recorded, so a reload after its second write keeps this page\'s draft',async()=>{
   const w=await world({text:'sent'},'daemon');try{

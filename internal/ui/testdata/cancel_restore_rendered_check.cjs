@@ -110,6 +110,24 @@ const results = {width, cases: []};
     results.cases.push({case: 'restart-files-cancel-holds', click_to_local_stopped_ms: heldLocalMs, click_to_confirmed_held_ms: heldConfirmedMs, holds, cancels});
     assert(heldLocalMs < 1000, 'local feedback under one second: ' + heldLocalMs);
 
+    // 5. An older AgentNet version (this page closed) writes its whole draft map
+    //    without this chat's draft. The composer follows it; the replaced text is
+    //    kept first and offered in Saved messages under its own label.
+    await box.fill('kept from an older overwrite'); await page.waitForTimeout(300);
+    await page.evaluate(() => { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (/\.drafts\.[^.]+$/.test(k)) localStorage.setItem(k, '{}'); } });
+    await page.reload(); await page.locator('[data-part="chat-row"][data-kind="person"]').filter({hasNotText: 'Device conversation'}).first().click();
+    await box.waitFor(); assert.equal(await box.inputValue().catch(() => ''), '', 'the composer follows the older version');
+    await box.fill('typed after'); await page.waitForTimeout(300); await box.fill('');
+    const scope5 = width < 600 ? page.locator('[data-card]').last() : page;
+    await scope5.getByRole('button', {name: /^Saved messages \(1\)/}).click();
+    const dialog5 = page.getByRole('dialog', {name: 'Saved messages'});
+    await dialog5.getByText('Draft replaced by an older AgentNet version').waitFor();
+    if (out) await page.screenshot({path: out + '/replaced-' + width + '.png'});
+    const r0 = Date.now(); await dialog5.getByRole('button', {name: 'Put back in draft', exact: true}).click(); await page.keyboard.press('Escape');
+    await value(box, 'kept from an older overwrite');
+    results.cases.push({case: 'older-version-replaced-draft-put-back', put_back_to_text_ms: Date.now() - r0});
+    await box.fill('');
+
     // 3. A second tab of the same page waits and writes nothing until the first closes.
     const second = await ctx.newPage(); second.setDefaultTimeout(8000);
     await second.goto(origin + '/?skin=comic');

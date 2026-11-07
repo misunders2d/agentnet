@@ -2450,15 +2450,23 @@ export class Store {
    *  loaded view has no stored message or queued row with that ID, no send here
    *  and no Retry request holds it, so its text may go back into an empty
    *  composer. "check": the chat is not loaded yet; open it first. */
-  keptOriginals(): (SavedSendDraft & {state:"offer"|"check"})[] {
+  keptOriginals(): (SavedSendDraft & {state:"offer"|"check";replaced?:boolean})[] {
     const owner=this.draftOwner();if(!owner||!this.alive)return [];
     let retry:Set<string>;try{retry=new Set(readPending(localStorage,this.host.workspace.id).map(e=>e.id));}catch{return [];}
-    return this.savedDrafts.entries(owner).flatMap(r=>{
+    const sends=this.savedDrafts.entries(owner).flatMap(r=>{
       if(this.sends.has(r.id)||retry.has(r.id))return [];
       const view=this.state.views[r.conversation];
       if(view?.messages?.some(m=>m.id===r.id||("lid" in m && m.lid===r.id)))return [];
       return [{...r,state:view?"offer" as const:"check" as const}];
     });
+    // Drafts an older AgentNet version replaced in this workspace's storage (shown
+    // only to its current verified identity, like the drafts themselves).
+    let replaced:ReturnType<typeof this.savedDrafts.replaced>=[];try{replaced=this.savedDrafts.replaced();}catch{ /* none readable */ }
+    return [...sends,...replaced.map(r=>({version:1 as const,id:"replaced:"+r.conversation+":"+r.revision,conversation:r.conversation,owner,draft:r.draft,
+      revision:r.revision,hadFiles:false,replaced:true,state:this.state.views[r.conversation]?"offer" as const:"check" as const}))];
+  }
+  private releaseKept(kept:{id:string;conversation:string;revision:string;replaced?:boolean},owner:SavedDraftOwner) {
+    if(kept.replaced)this.savedDrafts.releaseReplaced(kept.conversation,kept.revision);else this.savedDrafts.release(kept.id,kept.conversation,owner);
   }
   /** Puts a kept original's text into its chat's empty composer, then lets it go. */
   putBackKept(id:string,conv:string) {
@@ -2469,12 +2477,13 @@ export class Store {
     if(cur.text||cur.files?.length||cur.replyTo||cur.agent||cur.newTopic||cur.mediaMode||(cur.topic&&cur.topic!==(kept.draft.topic||"")))
       throw new Error("There is already a draft in this chat. Keep or send it first, then put this text back.");
     this.saveDraftNow(conv,{...kept.draft});
-    try{this.savedDrafts.release(id,conv,owner);}catch{this.toast("The text is back in the draft, but its saved copy could not be cleared. You can discard it.","error");}
+    try{this.releaseKept(kept,owner);}catch{this.toast("The text is back in the draft, but its saved copy could not be cleared. You can discard it.","error");}
   }
   /** Lets a kept original go; the chat's draft is unchanged. */
   discardKept(id:string,conv:string) {
     const owner=this.draftOwner();if(!owner)throw new Error("Your workspace identity is unavailable. The saved text was kept.");
-    this.savedDrafts.release(id,conv,owner);
+    const kept=this.keptOriginals().find(r=>r.id===id&&r.conversation===conv);
+    if(kept)this.releaseKept(kept,owner);else this.savedDrafts.release(id,conv,owner);
   }
 
   /** Saves a draft durably before returning. Throws when storage refuses; if only the copy older

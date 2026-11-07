@@ -24,6 +24,8 @@ export function savedSendDrafts(storage: Storage, draftsKey: string): {
  entries(owner:SavedDraftOwner):SavedSendDraft[];
  restore(id:string,conv:string,owner:SavedDraftOwner):{draft:SavedDraftText;revision:string}|undefined;
  release(id:string,conv:string,owner:SavedDraftOwner):void;
+ replaced():{conversation:string;revision:string;draft:SavedDraftText}[];
+ releaseReplaced(conv:string,revision:string):void;
  nextRevision():string;
   olderWriterSeen(): boolean;
  isStorageKey(key:string|null):boolean;

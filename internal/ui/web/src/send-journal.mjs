@@ -76,6 +76,25 @@ export function savedSendDrafts(storage, draftsKey) {
   const recordPrefix = draftsKey + ".draft.v1.";
   const recordKey = conv => recordPrefix + conv;
   const restoredKey = conv => draftsKey + ".restored.v1." + conv;
+  // A record that adopting an older version's map would remove is first kept
+  // here, under its own revision: the composer follows the older version (its
+  // edits and erasures win, nothing comes back by itself), and the replaced text
+  // stays recoverable in Saved messages. Storage cannot always tell an older tab
+  // that never knew this draft from a real rollback that erased it.
+  const replacedPrefix = draftsKey + ".replaced.v1.";
+  const nonEmpty = d => !!(d.text || d.replyTo || d.agent || d.topic || d.newTopic || d.mediaMode);
+  // True when the record may go (kept, or nothing to lose); false for a damaged
+  // record, which stays for repair. Throws when storage refuses the copy.
+  const keepReplaced = (conv, olderRaw) => {
+    let r; try { r = ownRecord(conv); } catch { return false; }
+    if (!r) return true;
+    const d = scalarDraft(r.draft);
+    if (!nonEmpty(d) || olderRaw !== undefined && JSON.stringify(scalarDraft(olderRaw)) === JSON.stringify(d)) return true; // nothing lost
+    const text = JSON.stringify(d);
+    for (const k of keysWith(replacedPrefix + conv + ".")) { try { if (JSON.stringify(JSON.parse(storage.getItem(replacedPrefix + conv + "." + k)).draft) === text) return true; } catch { /* a damaged copy is not a match */ } }
+    storage.setItem(replacedPrefix + conv + "." + r.revision, JSON.stringify({version: 1, conversation: conv, draft: d, revision: r.revision}));
+    return true;
+  };
   const pendingKey = id => pendingPrefix + id;
   const keysWith = prefix => {
     const out=[];
@@ -150,7 +169,11 @@ export function savedSendDrafts(storage, draftsKey) {
         const mine=conv===own && (pending || ownRecord(conv));
         if(mine)value=restoredOver(conv,mine)||mine;
         else{
-          if(!olderSeen() && !(typeof raw?.[revisionField]==="string" || raw===undefined && !older))storage.removeItem(recordKey(conv));
+          if(!olderSeen() && !(typeof raw?.[revisionField]==="string" || raw===undefined && !older)){
+            // Kept first; if that fails (quota, damage) the record stays and this call fails.
+            let gone;try{gone=keepReplaced(conv,raw);}catch{throw Error("A draft an older AgentNet version replaced could not be kept. It was not removed.");}
+            if(gone)storage.removeItem(recordKey(conv));
+          }
           if(raw===undefined && older)continue;
           // A damaged record stays as it is for repair; it never blocks other chats.
           try{value=effective(conv,values);}catch{if(raw!==undefined)next[conv]=raw;continue;}
@@ -252,6 +275,15 @@ export function savedSendDrafts(storage, draftsKey) {
     release(id,conv,owner) {
       if(this.pending(id,conv,owner))storage.removeItem(pendingKey(id));
     },
+    // Drafts an older version replaced here, kept for Saved messages.
+    replaced() {
+      return keysWith(replacedPrefix).flatMap(k => {
+        try { const r = JSON.parse(storage.getItem(replacedPrefix + k));
+          return r?.version === 1 && typeof r.conversation === "string" && k === r.conversation + "." + r.revision && validDraft(r.draft) && typeof r.revision === "string" ? [{conversation: r.conversation, revision: r.revision, draft: scalarDraft(r.draft)}] : []; }
+        catch { return []; }
+      });
+    },
+    releaseReplaced(conv, revision) { storage.removeItem(replacedPrefix + conv + "." + revision); },
     nextRevision:token,
     // Called for another tab's storage change: true once an older version's
     // whole-map write is seen while this page runs.

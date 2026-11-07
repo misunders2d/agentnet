@@ -395,3 +395,60 @@ test("R2 a stale older-tab sighting does not outlive this page's next map write:
  const later=savedSendDrafts(w.storage,draftKey);oldWriter(w.storage,{});
  assert.equal(savedSendDrafts(w.storage,draftKey).read("x",owner).draft.text,"","the older version's erase wins after a real rollback");
 });
+
+// B6: adopting an older version's map never destroys the only copy of a draft.
+// The composer follows the older version (its edits and erasures win, nothing
+// returns by itself); the replaced text is kept for Saved messages first.
+const keptText = (s,key=draftKey) => savedSendDrafts(s,key).replaced().map(r=>r.conversation+":"+r.draft.text).sort();
+test("B6 reproduced: byte-identical older rewrite and reload before its event keeps the replaced draft",()=>{
+ const w=draftWorld();const M0={y:{text:"old y"}};
+ w.storage.setItem(draftKey,JSON.stringify(M0));w.saved.olderWriterSeen();
+ w.saved.write("x",{text:"mine"});
+ w.storage.setItem(draftKey,JSON.stringify(M0)); // the older tab rewrites the same bytes; this page reloads first
+ const A2=savedSendDrafts(w.storage,draftKey);A2.write("z",{text:"z"});
+ assert.equal(A2.read("x",owner).draft.text,"","the composer follows the older version");
+ assert.deepEqual(keptText(w.storage),["x:mine"],"the replaced draft is kept");
+});
+test("B6 genuine rollback erase: the composer stays erased, the text is only offered, never restored by itself",()=>{
+ const w=draftWorld();w.saved.write("x",{text:"mine",replyTo:"parent",topic:"t"});
+ const ram=oldReader(w.storage);delete ram.x;oldWriter(w.storage,ram);
+ const up=savedSendDrafts(w.storage,draftKey);up.write("z",{text:"z"});
+ assert.equal(up.read("x",owner).draft.text,"","erase wins in the composer");
+ const k=up.replaced().find(r=>r.conversation==="x");assert.deepEqual(k.draft,{text:"mine",replyTo:"parent",topic:"t"},"exact text and context");
+ assert.equal(oldReader(w.storage).x,undefined,"older readers stay erased");
+});
+test("B6 a closed new page, then an older tab's edit elsewhere: reload keeps this page's draft",()=>{
+ const w=draftWorld();w.saved.write("x",{text:"mine"});
+ oldWriter(w.storage,{y:{text:"old y"}}); // older tab loaded before x; this page was closed
+ const up=savedSendDrafts(w.storage,draftKey);up.write("y",{text:"newer y"});
+ assert.deepEqual(keptText(w.storage),["x:mine"]);assert.equal(up.read("y",owner).draft.text,"newer y");
+});
+test("B6 crash between keeping and removing: one kept copy, then removal completes",()=>{
+ const w=draftWorld();w.saved.write("x",{text:"mine"});oldWriter(w.storage,{});
+ const up=savedSendDrafts(w.storage,draftKey);
+ w.interleave((k)=>{if(k.includes(".replaced.v1.")){w.interleave(undefined);throw Error("crash");}});
+ assert.throws(()=>up.write("z",{text:"z"}));
+ assert.notEqual(w.storage.getItem(draftKey+".draft.v1.x"),null,"record not removed before a completed keep");
+ const again=savedSendDrafts(w.storage,draftKey);again.write("z",{text:"z"});
+ assert.deepEqual(keptText(w.storage),["x:mine"],"deduplicated");assert.equal(w.storage.getItem(draftKey+".draft.v1.x"),null);
+});
+test("B6 quota on the kept copy refuses the replacement: the record stays, nothing claims success",()=>{
+ const w=draftWorld();w.saved.write("x",{text:"mine"});oldWriter(w.storage,{});
+ const up=savedSendDrafts(w.storage,draftKey);w.fault(k=>k.includes(".replaced.v1."));
+ assert.throws(()=>up.write("z",{text:"z"}),/could not be kept/);w.fault(undefined);
+ assert.equal(JSON.parse(w.storage.getItem(draftKey+".draft.v1.x")).text,"mine");assert.deepEqual(keptText(w.storage),[]);
+ assert.equal(w.storage.getItem(draftKey+".draft.v1.z"),null,"the new write was not saved either");
+});
+test("B6 same text replaced twice is kept once; another workspace sees none; a damaged record stays for repair",()=>{
+ const w=draftWorld();w.saved.write("x",{text:"mine"});oldWriter(w.storage,{});
+ savedSendDrafts(w.storage,draftKey).write("z",{text:"z"});
+ const again=savedSendDrafts(w.storage,draftKey);again.write("x",{text:"mine"});oldWriter(w.storage,{});savedSendDrafts(w.storage,draftKey).write("z",{text:"z2"});
+ assert.deepEqual(keptText(w.storage),["x:mine","z:z"]);
+ assert.deepEqual(keptText(w.storage,"agentnet.messenger.drafts.two"),[],"other workspace");
+ w.storage.setItem(draftKey+".draft.v1.bad","{broken");oldWriter(w.storage,{});savedSendDrafts(w.storage,draftKey).write("q",{text:"q"});
+ assert.equal(w.storage.getItem(draftKey+".draft.v1.bad"),"{broken","damaged record kept for repair");
+});
+test("B6 an older edit equal to this page's draft keeps nothing extra",()=>{
+ const w=draftWorld();w.saved.write("x",{text:"same"});oldWriter(w.storage,{x:{text:"same"}});
+ savedSendDrafts(w.storage,draftKey).write("z",{text:"z"});assert.deepEqual(keptText(w.storage),[]);
+});
