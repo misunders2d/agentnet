@@ -70,7 +70,9 @@ export function pendingSends(host, changed = () => {}, restoreDraft, captureQueu
     catch (e) { if (actions.get(m.id) === action) actions.delete(m.id); notify(); throw e; }
     if (hold) {
       // Only the exact held receipt keeps it shown stopped; anything else shows the host's own state.
-      if (!(result?.id === m.id && result.state === 'needs_review') && actions.get(m.id) === action) { actions.delete(m.id); notify(); }
+      if (!(result?.id === m.id && result.state === 'needs_review')) { if (actions.get(m.id) === action) actions.delete(m.id); }
+      else action.detail = typeof result.detail === 'string' ? result.detail : ''; // the host's own words, until its row arrives
+      notify();
       return result;
     }
     // The exact cancelled-ID receipt comes from the host's atomic cancel/store
@@ -86,7 +88,7 @@ export function pendingSends(host, changed = () => {}, restoreDraft, captureQueu
   const queuedRow = (m, key) => {
     const action = actions.get(m.id), stopped = (m.queued_send.state === 'needs_review' || action?.kind === 'hold') && action?.kind !== 'retry';
     const waiting = !stopped && !action && m.queued_send.state === 'pending' && m.detail;
-    return {...m, _local: true, _failed: stopped, delivery: stopped ? 'failed' : 'queued', state_text: stopped ? m.detail || (action?.kind === 'hold' ? 'Stopping…' : 'Not sent.') : waiting || 'Sending…',
+    return {...m, _local: true, _failed: stopped, delivery: stopped ? 'failed' : 'queued', state_text: stopped ? (action?.kind === 'hold' && m.queued_send.state !== 'needs_review' ? action.detail || 'Stopping…' : m.detail || 'Not sent.') : waiting || 'Sending…',
       _retry: () => act('retry', m, key), _discard: () => act('discard', m, key), _diagnostic: m.queued_send.diagnostic,
       can: [], actions: [], copies: [], reactions: []};
   };

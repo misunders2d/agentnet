@@ -31,7 +31,7 @@ const results = {width, cases: []};
       const body = route.request().postDataJSON(); holds++;
       assert.equal(body.id, queued?.id, 'Hold names the exact queued ID');
       queued = {...queued, detail: 'Stopped. Its files are kept on this device: Retry sends it, Discard removes it.', queued_send: {state: 'needs_review', rev: 2}};
-      await route.fulfill({json: {id: body.id, state: 'needs_review', immediate: true}});
+      await route.fulfill({json: {id: body.id, state: 'needs_review', immediate: true, detail: queued.detail}});
     });
     await ctx.route('**/api/schedule/discard_send', async route => {
       const body = route.request().postDataJSON(); cancels++;

@@ -63,7 +63,7 @@ async function world(draft={text:' Original E\n'},platform='android',holdAdmissi
       if(path==='/api/schedule/hold_send') {
         holds.push(body.id);
         rows=rows.map(m=>m.id===body.id?{...m,state:'queued',detail:'Stopped. Its files are kept on this device: Retry sends it, Discard removes it.',queued_send:{state:'needs_review',rev:(m.queued_send?.rev||1)+1}}:m);
-        return {id:body.id,state:'needs_review',immediate:true};
+        return {id:body.id,state:'needs_review',immediate:true,detail:'Stopped. Its files are kept on this device: Retry sends it, Discard removes it.'};
       }
       if(path==='/api/schedule/discard_send') {
         cancels.push(body.id);
