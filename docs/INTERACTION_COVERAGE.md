@@ -17,7 +17,7 @@ the hold is an AgentNet adaptation and is not verified against a counterpart flo
 | `send.cancel-held` (B7) | After a restart the files can't return: Cancel holds the message on this device (`POST /api/schedule/hold_send`); "Stopping…" with no failure or controls until the exact receipt; then Retry/Discard | `TestQueuedSendHoldKeepsFilesAndBeatsAttempt` (race with dispatch, real close/reopen, exact bytes on Retry), `TestLiveSendAcceptsThroughAStalledRequest`, Store harness B7 rows, rendered case 4 |
 | `drafts.older-replaced` (B6) | A draft an older AgentNet version's whole-map write replaced is kept first and offered in Saved messages under its own label; Put back fills the composer | journal B6 rows (byte-identical reload, genuine rollback erase, closed page, crash at each write, quota, isolation), Store B6 row, rendered case 5 |
 | `drafts.one-tab` | A second tab waits and writes nothing until the first closes | rendered case 3 (guard; browser only) |
-| `native.no-locks` (B5) | A native page without Web Locks (missing, or its request refused) is refused before anything writes, saying saved data is kept | `TestNativeWithoutLocksRendered`: before `6bb2899c` both pages ran and the first window's draft was lost |
+| `native.no-locks` (B5) | A browser page without Web Locks (missing, or its request refused) is refused before anything writes; a native shell's page keeps the shipped fallback and opens, so its update and Saved messages stay reachable | `TestNativeWithoutLocksRendered`. Two native pages without locks both run and the first window's draft is lost (recorded, not accepted: B5 open) |
 | `recovery.retry-saved-send` | Saved messages → Retry saved send: a held message is never sent from here and says it is stopped in its chat; pending, sent and discarded each say so; a failed lookup keeps it saved | `send-recovery.test.mjs` replay rows; `TestQueuedSendHoldKeepsFilesAndBeatsAttempt` (a replayed admission keeps a held row held; failed before `70a77e12`) |
 
 Click to local feedback / confirmed result, ms, at `8144f161`: send→queued
@@ -27,9 +27,9 @@ Mocked queued-send endpoints over the real daemon page and built Comic bundle;
 no skins, native shells, Android or physical devices.
 
 Open: whether each shipped shell (WebKitGTK in the AppImage, WKWebView,
-WebView2, Android System WebView) has Web Locks is not proven. Where one does
-not, the page is now refused, and its in-app update and Saved messages cannot
-be reached (both are page-driven); saved data stays in storage.
+WebView2, Android System WebView) has Web Locks is not proven at runtime.
+Refusing a native page was tried (`6bb2899c`) and withdrawn (owner,
+November 7): it also took away the app's update and Saved messages.
 
 ## MEL-748 v0.10.10 candidate — November 4, 2026
 

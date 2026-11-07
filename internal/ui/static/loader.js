@@ -32,12 +32,13 @@
   // compare-and-set between tabs or windows. As in the browser device
   // (device.mjs, which holds its own lock before loading this file) and
   // Telegram Web, one page is active; another waits, writing nothing, until it
-  // closes. Every host takes it, the desktop and Android shells included.
-  // Without tab locks (missing, or the request refused) the page is refused
-  // before anything writes, as the browser device is: a native shell's single
-  // window is not proof of one writer (a second Android instance, a failed
-  // single-instance handoff), and two writers lose a draft (B5). Saved drafts
-  // and sends stay in storage untouched for a page that has the lock.
+  // closes. Every host takes it, the desktop and Android shells included. A
+  // plain browser without tab locks (missing, or the request refused) is
+  // refused, as the browser device is. A native shell without them proceeds
+  // on its own single window (Tauri single-instance, one window; Android one
+  // activity): refusing it would also take away its update and Saved messages.
+  // Shipped shells' web views are expected to have Web Locks (B5: static
+  // evidence only, not run), so this is a compatibility fallback.
   if (!browser) {
     const native = typeof window.__agentnetNativeAppJSON === "function" || window.__agentnetPlatform === "android";
     const say = (text) => { const p = document.createElement("p"); p.setAttribute("role", "status");
@@ -52,12 +53,9 @@
       clearTimeout(later); note?.remove();
     }
     if (refused) {
-      window.__agentnetSingleWindow = "none";
-      say(native ? "AgentNet cannot open here: this app's web view has no tab locks, so two windows could overwrite each other's drafts. Your saved drafts and messages are kept on this device. Update AgentNet and your system web view, then open it again."
-        : "This browser cannot run AgentNet here: it lacks tab locks, so two tabs could overwrite each other's drafts. Try an up-to-date browser.");
-      return;
-    }
-    window.__agentnetSingleWindow = "lock";
+      window.__agentnetSingleWindow = native ? "shell" : "none";
+      if (!native) { say("This browser cannot run AgentNet here: it lacks tab locks, so two tabs could overwrite each other's drafts. Try an up-to-date browser."); return; }
+    } else window.__agentnetSingleWindow = "lock";
   }
 
   // ---- what the page waits for, and how long
