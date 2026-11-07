@@ -679,3 +679,47 @@ func TestQueuedSendHoldKeepsFilesAndBeatsAttempt(t *testing.T) {
 		t.Fatalf("holding a sent message: %v", err)
 	}
 }
+
+// Cancel of a message already stopped by a failure records the person's stop:
+// a later admission request under its ID (a lost answer's saved copy) never
+// resumes it, even from a snapshot read before the hold. Their Retry still does.
+func TestQueuedSendHoldOfAStoppedMessageKeepsItHeld(t *testing.T) {
+	w, _, p, stops := groupTurnsFixture(t)
+	stops[w.alice]()
+	conv := p.State.Conv
+	a := w.alice
+	a.queued.budget = 2 * time.Second
+	free := stallPersonChains(t, w, a)
+	id := protocol.NewID()
+	in := ScheduledSendInput{ID: id, Conv: conv, Body: "stopped by a failure"}
+	if _, err := a.QueueSend(in, "", 0); err != nil {
+		t.Fatal(err)
+	}
+	// Synthetic terminal failure: the row is stopped with a failure's words.
+	if _, err := a.store.db.Exec(`UPDATE scheduled_sends SET state='needs_review',rev=rev+1,detail='Not sent: synthetic failure.' WHERE id=?`, id); err != nil {
+		t.Fatal(err)
+	}
+	free()
+	stale := queuedRow(t, a, id) // what an admission request read before the hold
+	if stale.State != ScheduledNeedsReview || stale.Detail == queuedHeldDetail {
+		t.Fatalf("setup: %+v", stale)
+	}
+	held, err := a.HoldQueuedSend(id)
+	if err != nil || held.State != ScheduledNeedsReview || held.Detail != queuedHeldDetail {
+		t.Fatalf("hold of a stopped message did not record the stop: %+v %v", held, err)
+	}
+	if res, err := a.QueueSend(in, "", 0); err != nil || res.Row.State != ScheduledNeedsReview {
+		t.Fatalf("a replayed admission resumed a held message: %+v %v", res.Row, err)
+	}
+	if s, err := a.retryQueuedSend(id, true); err != nil || s.State != ScheduledNeedsReview {
+		t.Fatalf("an admission retry from a stale snapshot resumed a held message: %+v %v", s, err)
+	}
+	time.Sleep(500 * time.Millisecond)
+	if s := queuedRow(t, a, id); s.State != ScheduledNeedsReview || queuedLIDCopies(t, a, id) != 0 {
+		t.Fatalf("held message changed or sent: %+v", s)
+	}
+	if _, err := a.RetryQueuedSend(id); err != nil { // the person's Retry
+		t.Fatal(err)
+	}
+	eventually(t, "the person's retry sent it", func() bool { return queuedLIDCopies(t, a, id) > 0 })
+}

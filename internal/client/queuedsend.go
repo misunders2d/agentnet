@@ -141,14 +141,13 @@ func (a *Agent) QueueSend(in ScheduledSendInput, pid string, wait time.Duration)
 		return QueuedSendResult{Row: row}, ErrQueuedSendDiscarded
 	case ScheduledSent:
 		return QueuedSendResult{Row: row}, nil
-	case ScheduledNeedsReview: // pressing Send again on the same message is its retry
-		if row.Detail == queuedHeldDetail {
-			// The person stopped it (HoldQueuedSend): a repeated admission request,
-			// such as a lost answer's saved copy, never resumes it. Only their Retry does.
-			return QueuedSendResult{Row: row}, nil
-		}
-		if row, err = a.RetryQueuedSend(row.ID); err != nil {
+	case ScheduledNeedsReview: // pressing Send again on the same message is its retry,
+		// unless the person held it (HoldQueuedSend): then only their Retry resumes it.
+		if row, err = a.retryQueuedSend(row.ID, true); err != nil {
 			return QueuedSendResult{}, err
+		}
+		if row.State == ScheduledNeedsReview {
+			return QueuedSendResult{Row: row}, nil
 		}
 	}
 	a.startQueuedWorker(row.Conv)
@@ -200,6 +199,10 @@ func (a *Agent) queuedAlreadySent(in ScheduledSendInput) (ScheduledSend, error) 
 // audience is read anew because they are approving it now, under the same id.
 // A message still on its way only gets its attempt sooner.
 func (a *Agent) RetryQueuedSend(id string) (ScheduledSend, error) {
+	return a.retryQueuedSend(id, false)
+}
+
+func (a *Agent) retryQueuedSend(id string, admission bool) (ScheduledSend, error) {
 	s, found, err := a.ScheduledSend(id)
 	if err != nil {
 		return s, err
@@ -218,7 +221,14 @@ func (a *Agent) RetryQueuedSend(id string) (ScheduledSend, error) {
 		}
 		encoded, _ := json.Marshal(audience)
 		now := time.Now().UnixNano()
-		result, e := a.store.db.Exec(`UPDATE scheduled_sends SET conv=?,audience=?,state='pending',rev=rev+1,detail='',diagnostic='',due_at=?,updated_at=? WHERE id=? AND immediate=1 AND state='needs_review'`, conv, string(encoded), now, now, id)
+		// An admission request (not the person's Retry) never resumes a message
+		// they held, even from a snapshot read before their hold: the same row
+		// condition as dispatch's commit decides, so exactly one wins.
+		held := ""
+		if admission {
+			held = queuedHeldDetail
+		}
+		result, e := a.store.db.Exec(`UPDATE scheduled_sends SET conv=?,audience=?,state='pending',rev=rev+1,detail='',diagnostic='',due_at=?,updated_at=? WHERE id=? AND immediate=1 AND state='needs_review' AND (?='' OR detail<>?)`, conv, string(encoded), now, now, id, held, held)
 		if e != nil {
 			return s, e
 		}
@@ -269,7 +279,9 @@ const queuedHeldDetail = "Stopped. Its files are kept on this device: Retry send
 // again without the person's Retry (needs_review is not resumed after a
 // restart, and the kept-file GC already protects it).
 func (a *Agent) HoldQueuedSend(id string) (ScheduledSend, error) {
-	result, err := a.store.db.Exec(`UPDATE scheduled_sends SET state='needs_review',rev=rev+1,detail=?,diagnostic='',updated_at=? WHERE id=? AND immediate=1 AND state IN ('pending','dispatching')`, queuedHeldDetail, time.Now().UnixNano(), id)
+	// A message already stopped by a failure is held too: the person's stop is
+	// recorded, so nothing but their Retry resumes it (it keeps its diagnostic).
+	result, err := a.store.db.Exec(`UPDATE scheduled_sends SET state='needs_review',rev=rev+1,detail=?,diagnostic=CASE WHEN state='needs_review' THEN diagnostic ELSE '' END,updated_at=? WHERE id=? AND immediate=1 AND (state IN ('pending','dispatching') OR state='needs_review' AND detail<>?)`, queuedHeldDetail, time.Now().UnixNano(), id, queuedHeldDetail)
 	if err != nil {
 		return ScheduledSend{}, err
 	}
