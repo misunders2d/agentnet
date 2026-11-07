@@ -18,6 +18,7 @@ const {chromium} = require(process.env.AGENTNET_PLAYWRIGHT);
 const out = process.env.NOLOCK_EVIDENCE, results = {cases: []};
 const conv = process.argv[3];
 const readOnly = /Sending is off in this window/;
+let current = null; // the page under check, for a failure screenshot
 
 (async () => {
   const browser = await chromium.launch({headless: true, executablePath: process.env.AGENTNET_CHROMIUM || '/usr/bin/chromium', args: ['--no-sandbox', '--disable-dev-shm-usage']});
@@ -34,7 +35,7 @@ const readOnly = /Sending is off in this window/;
     const sends = []; await ctx.route('**/api/dm/send', r => { sends.push(r.request().url()); return r.continue(); });
     const origin = new URL(process.argv[2]).origin;
     const label = (native || 'browser') + '-' + variant;
-    const first = await ctx.newPage(); first.setDefaultTimeout(8000);
+    const first = await ctx.newPage(); first.setDefaultTimeout(8000); current = first;
     const errors = []; first.on('pageerror', e => errors.push(String(e)));
     await first.goto(process.argv[2]); await first.goto(origin + '/?skin=comic');
     const mode = p => p.evaluate(() => window.__agentnetSingleWindow ?? null);
@@ -95,8 +96,9 @@ const readOnly = /Sending is off in this window/;
       assert.equal(await sheet.getByRole('button', {name: /Retry saved send|Put back in draft|Discard|Restore draft/}).count(), 0, 'nothing that writes or sends');
       await p.keyboard.press('Escape'); await sheet.waitFor({state: 'detached'});
       // The chat opens to read; its composer says why nothing is written.
-      await openChat(p);
-      await p.getByText(readOnly).first().waitFor();
+      current = p; await openChat(p);
+      // The banner and the chat's closed composer both say it.
+      await p.getByText(readOnly).nth(1).waitFor();
       assert.equal(await p.getByRole('form', {name: 'Write a message'}).count(), 0, 'no composer');
       // Settings, with its update control, stays reachable.
       await p.getByRole('navigation', {name: 'Main', exact: true}).getByRole('button', {name: 'Settings', exact: true}).click();
@@ -119,6 +121,7 @@ const readOnly = /Sending is off in this window/;
     console.log('Native without locks rendered PASS ' + JSON.stringify(results));
   } catch (e) {
     results.pass = false; results.error = String(e.stack || e);
+    try { results.buttons = await current?.getByRole('button').allInnerTexts(); if (out) await current?.screenshot({path: out + '/native-nolock-failure.png'}); } catch { /* evidence only */ }
     console.error(JSON.stringify(results)); process.exitCode = 1;
   } finally {
     if (out) fs.writeFileSync(out + '/native-nolock.json', JSON.stringify(results, null, 1) + '\n');
