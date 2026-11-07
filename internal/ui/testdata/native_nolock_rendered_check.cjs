@@ -26,6 +26,9 @@ let softFailed = [], browserRef = null;
 // carry no product stack; the Chromium trace (Save, Stop, Reply) is the source for
 // main-thread attribution.
 results.diag = {}; results.scheduling_change = 'b9: continuous requestAnimationFrame loop on every page (diagnostics); b8 had none';
+// b10 changed condition: before each traced click (Save, Stop, Reply) the page under test
+// is brought to the front (page.bringToFront); the second page stays open as in b9.
+results.changed_condition = 'b10: page.bringToFront() on the tested page before Save/Stop/Reply; second page kept open';
 const diag = async (label, pages, a, b) => { const o = {}; for (const [name, p] of pages) {
   if (!p || p.isClosed()) { o[name] = 'closed'; continue; }
   o[name] = await p.evaluate(([a, b]) => { const d = window.__diag || {}, w = x => (x || []).filter(e => e.at >= a && e.at <= b);
@@ -46,9 +49,11 @@ const timedClick = async (page, label, target, selector, pattern, seen, opts = {
     const check = () => { if (!m.input || m.dom) return; const el = find(); if (!el) return; m.dom = now();
       m.witness = el.tagName.toLowerCase() + (el.getAttribute('role') ? '[role=' + el.getAttribute('role') + ']' : '') + (el.getAttribute('data-mid') ? '[data-mid]' : '') + ' ' + String(el.textContent).trim().slice(0, 50);
       requestAnimationFrame(() => requestAnimationFrame(() => { m.frame = now(); const b = el.getBoundingClientRect(); const c = el.getRootNode().elementFromPoint?.(b.left + Math.min(b.width / 2, 20), b.top + Math.min(b.height / 2, 10));
-        m.visible = el.checkVisibility({opacityProperty: true, visibilityProperty: true}) && b.width > 0 && b.height > 0 && b.bottom > 0 && b.top < innerHeight; m.on_top = !!c && (el === c || el.contains(c)); })); };
+        m.visible = el.checkVisibility({opacityProperty: true, visibilityProperty: true}) && b.width > 0 && b.height > 0 && b.bottom > 0 && b.top < innerHeight; m.on_top = !!c && (el === c || el.contains(c));
+        m.top_element = c && !(el === c || el.contains(c)) ? c.tagName.toLowerCase() + (c.getAttribute('role') ? '[role=' + c.getAttribute('role') + ']' : '') + ' ' + String(c.className || '').slice(0, 60) : null; })); };
     for (const r of roots) new MutationObserver(check).observe(r, {subtree: true, childList: true, characterData: true, attributes: true});
   }, {label, selector, pattern});
+  if (opts.front) await page.bringToFront();
   let traced = false; if (opts.trace && out) { try { await browserRef.startTracing(page, {path: out + '/trace-' + label + '.json', screenshots: false,
     categories: ['devtools.timeline', 'disabled-by-default-devtools.timeline', 'disabled-by-default-devtools.timeline.frame', 'toplevel', 'blink.user_timing', 'renderer.scheduler']}); traced = true; } catch (e) { results.trace_errors = [...(results.trace_errors || []), label + ': ' + String(e).slice(0, 120)]; } }
   const c0 = Date.now(); console.error('[timed-click start] ' + label + ' ' + new Date(c0).toISOString());
@@ -59,7 +64,7 @@ const timedClick = async (page, label, target, selector, pattern, seen, opts = {
   if (traced) await browserRef.stopTracing().catch(e => { results.trace_errors = [...(results.trace_errors || []), label + ' stop: ' + String(e).slice(0, 120)]; });
   if (opts.pages) await diag(label, opts.pages, c0 - 2500, Date.now());
   const t = {click_call_to_input_ms: d(c0, m.input), click_call_resolved_ms: c1 - c0, input_target: m.input_target, input_epoch_ms: m.input ? Math.round(m.input) : null,
-    input_to_dom_ms: d(m.input, m.dom), input_to_frame_ms: d(m.input, m.frame), rendered_visible: m.visible ?? null, on_top: m.on_top ?? null, witness: m.witness ?? null, traced,
+    input_to_dom_ms: d(m.input, m.dom), input_to_frame_ms: d(m.input, m.frame), rendered_visible: m.visible ?? null, on_top: m.on_top ?? null, witness: m.witness ?? null, top_element: m.top_element ?? null, front: !!opts.front, traced,
     click_call_to_playwright_visible_ms: seenOk ? c2 - c0 : null, playwright_saw_it: seenOk};
   results.timing[label] = t; return t;
 };
@@ -191,6 +196,7 @@ let current = null; // the page under check, for a failure screenshot
         // Journal Copy text: the saved send's exact words reach the clipboard; nothing changes or sends.
         const j0 = await snapshot(first);
         const tCopy = await timedClick(first, 'android-lock-journal-copy', (await item('saved send words')).getByRole('button', {name: 'Copy text', exact: true}), '*', '^Copied$', first.getByText(/^Copied$|Couldn’t copy here/).first());
+        if (out) await first.screenshot({path: out + '/native-lock-android-journal-copy-toast.png'});
         assert(tCopy.playwright_saw_it, 'Copied shown'); const jMs = tCopy.click_call_to_playwright_visible_ms;
         assert(tCopy.input_to_frame_ms !== null && tCopy.input_to_frame_ms < 1000, 'journal Copy rendered under one second from input: ' + JSON.stringify(tCopy));
         await first.waitForFunction(t => window.__copied === t, 'saved send words');
@@ -314,7 +320,7 @@ let current = null; // the page under check, for a failure screenshot
       const kept = 'Stopped and kept. Drafts are read-only in this window, so it can’t be retried or discarded here.', v = label;
       await first.getByText('queued held words').waitFor();
       const tStop = await timedClick(first, 'android390-stop', first.locator('[data-send-discard]').filter({hasText: 'Stop'}).last(),
-        '[data-mid="' + 'c'.repeat(32) + '"]', 'Stopping…|Stopped and kept', first.locator('[data-mid="' + 'c'.repeat(32) + '"]').getByText(/Stopping…|Stopped and kept/).first(), {pages: [['first', first], ['second', second]], trace: true});
+        '[data-mid="' + 'c'.repeat(32) + '"]', 'Stopping…|Stopped and kept', first.locator('[data-mid="' + 'c'.repeat(32) + '"]').getByText(/Stopping…|Stopped and kept/).first(), {pages: [['first', first], ['second', second]], trace: true, front: true});
       await first.locator('[data-local-send="stopped"]').filter({hasText: kept}).nth(1).waitFor(); // prerequisite for the state checks
       soft(v, 'stop: only a hold reaches the host', JSON.stringify(schedule) === JSON.stringify(['/api/schedule/hold_send']), schedule);
       soft(v, 'stop: both rows stopped and kept, truthfully', await first.locator('[data-local-send="stopped"]').filter({hasText: kept}).count() === 2);
@@ -329,7 +335,7 @@ let current = null; // the page under check, for a failure screenshot
       const r0snap = await snapshot(first);
       await first.locator('[data-mid="' + 'b'.repeat(32) + '"]').getByRole('button', {name: /^(More actions|Message actions)$/}).click(); // prerequisite: the action sheet
       const refusal = 'Drafts are read-only in this window: this change wasn’t saved.';
-      const tReply = await timedClick(first, 'android390-reply', first.getByRole('dialog').getByRole('button', {name: 'Reply', exact: true}), '*', 'this change wasn’t saved', first.getByText(refusal).first(), {pages: [['first', first], ['second', second]], trace: true});
+      const tReply = await timedClick(first, 'android390-reply', first.getByRole('dialog').getByRole('button', {name: 'Reply', exact: true}), '*', 'this change wasn’t saved', first.getByText(refusal).first(), {pages: [['first', first], ['second', second]], trace: true, front: true});
       soft(v, 'reply: truthful refusal shown and rendered', tReply.playwright_saw_it && tReply.rendered_visible === true, tReply);
       soft(v, 'reply: no draft written', await snapshot(first) === r0snap);
       soft(v, 'reply: no keep-open advice', await first.getByText(/Keep this window open/).count() === 0);
@@ -355,7 +361,7 @@ let current = null; // the page under check, for a failure screenshot
       await first.getByRole('textbox', {name: 'Scheduled message text', exact: true}).fill('edited in read-only');
       // The row's "Saving…" with the edited text, then the host's refreshed row.
       const tSave = await timedClick(first, 'outbox-' + native, editing.getByRole('button', {name: 'Save schedule changes', exact: true}),
-        'article', 'edited in read-only[\\s\\S]*Saving…', first.getByRole('article').filter({hasText: 'edited in read-only'}).first(), {pages: [['first', first], ['second', second]], trace: true});
+        'article', 'edited in read-only[\\s\\S]*Saving…', first.getByRole('article').filter({hasText: 'edited in read-only'}).first(), {pages: [['first', first], ['second', second]], trace: true, front: true});
       await first.getByRole('article').filter({hasText: 'edited in read-only'}).filter({hasNotText: 'Saving…'}).first().waitFor(); // the host's row
       const edit = scheduleWrites.find(w => w.path === '/api/schedule/edit');
       tSave.input_to_host_request_ms = edit && tSave.input_epoch_ms ? edit.at - tSave.input_epoch_ms : null;
