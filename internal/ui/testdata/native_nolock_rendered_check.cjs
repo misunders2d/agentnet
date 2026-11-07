@@ -36,7 +36,7 @@ let current = null; // the page under check, for a failure screenshot
     const sends = []; await ctx.route('**/api/dm/send', r => { sends.push(r.request().url()); return r.continue(); });
     // Queued rows of this person's own (as another window's sends leave them): one
     // still pending, one held. Row Retry/Cancel/Discard reach /api/schedule/*.
-    const rowsOn = variant === 'rejected' && native === 'desktop', schedule = [];
+    const rowsOn = variant === 'rejected' && native === 'desktop', schedule = []; if (rowsOn) results.schedule = schedule;
     const held = 'Stopped. Its files are kept on this device: Retry sends it, Discard removes it.';
     if (rowsOn) {
       await ctx.route('**/api/dm?*', async route => {
@@ -130,13 +130,12 @@ let current = null; // the page under check, for a failure screenshot
       // Cancel stops the pending one and the host keeps it (hold), as when a draft can't be put back.
       current = first; await openChat(first);
       const retry = first.locator('[data-send-retry]').first(), discard = first.locator('[data-send-discard]');
-      await first.getByText('queued held words').waitFor(); await retry.click();
+      await first.getByText('queued held words').waitFor(); await retry.click(); await first.waitForTimeout(500);
+      assert.deepEqual(schedule, [], 'row Retry reaches nothing');
       await discard.filter({hasText: 'Discard'}).first().click(); await first.waitForTimeout(500);
-      results.schedule = [...schedule];
-      assert.deepEqual(schedule, [], 'row Retry and Discard of a held message reach nothing');
+      assert.deepEqual(schedule, [], 'Discard of a held message reaches nothing');
       await first.getByText(/can’t be retried or discarded in this window/).first().waitFor();
       await discard.filter({hasText: 'Cancel'}).first().click(); await first.waitForTimeout(500);
-      results.schedule = schedule;
       assert.deepEqual(schedule, ['/api/schedule/hold_send'], 'only a hold reaches the host');
       await first.getByRole('navigation', {name: 'Main', exact: true}).getByRole('button', {name: 'Chats', exact: true}).click();
     }
