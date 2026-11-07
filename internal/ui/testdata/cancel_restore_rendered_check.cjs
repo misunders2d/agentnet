@@ -16,7 +16,7 @@ const results = {width, cases: []};
   try {
     const ctx = await browser.newContext({reducedMotion: 'reduce', viewport: {width, height: width < 600 ? 844 : 900}, hasTouch: width < 600});
     const origin = new URL(process.argv[2]).origin;
-    let queued = null, cancels = 0, sends = 0;
+    let queued = null, cancels = 0, sends = 0, holds = 0;
     await ctx.route('**/api/dm/send', async route => {
       const body = route.request().postDataJSON(); sends++;
       queued = {id: body.id, lid: body.id, dir: 'out', kind: 'message', body: body.body, at: new Date().toISOString(), state: 'queued', queued_send: {state: 'pending', rev: 1}, can: [], actions: [], reactions: []};
@@ -26,6 +26,12 @@ const results = {width, cases: []};
       const response = await route.fetch(), view = await response.json();
       if (queued) view.messages = [...(view.messages || []), {...queued, from: view.me?.address || queued.from}];
       await route.fulfill({response, json: view});
+    });
+    await ctx.route('**/api/schedule/hold_send', async route => {
+      const body = route.request().postDataJSON(); holds++;
+      assert.equal(body.id, queued?.id, 'Hold names the exact queued ID');
+      queued = {...queued, detail: 'Stopped. Its files are kept on this device: Retry sends it, Discard removes it.', queued_send: {state: 'needs_review', rev: 2}};
+      await route.fulfill({json: {id: body.id, state: 'needs_review', immediate: true}});
     });
     await ctx.route('**/api/schedule/discard_send', async route => {
       const body = route.request().postDataJSON(); cancels++;
@@ -82,6 +88,27 @@ const results = {width, cases: []};
     await value(box, original);
     results.cases.push({case: 'refused-restore-reload-put-back', put_back_to_text_ms: Date.now() - t0, sends, cancels});
     assert.equal(sends, 2, 'no new send from recovery');
+
+    // 4. After a restart the File objects are gone: Cancel holds the message on the
+    //    host (stopped, files kept on this device, Retry/Discard), nothing comes back
+    //    to the draft. The kept original is marked as having had files, which is
+    //    exactly what a reload leaves of a send with attachments.
+    await box.fill(''); await send(); const heldID = queued.id;
+    await page.evaluate(id => { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i);
+      if (k.endsWith('.send-recovery.v1.' + id)) { const r = JSON.parse(localStorage.getItem(k)); r.hadFiles = true; localStorage.setItem(k, JSON.stringify(r)); } } }, heldID);
+    await page.reload(); await page.locator('[data-part="chat-row"][data-kind="person"]').filter({hasNotText: 'Device conversation'}).first().click();
+    const cancelHeld = page.locator('[data-send-discard]').first(); await cancelHeld.waitFor();
+    const h0 = Date.now(); await cancelHeld.click();
+    await page.getByText(/Stopping…|files are kept on this device/).first().waitFor(); const heldLocalMs = Date.now() - h0;
+    await page.getByText('Stopped. Its files are kept on this device: Retry sends it, Discard removes it.').first().waitFor(); const heldConfirmedMs = Date.now() - h0;
+    await page.locator('[data-send-retry]').first().waitFor(); assert.equal(await page.locator('[data-send-discard]').first().innerText(), 'Discard');
+    assert.equal(await box.inputValue().catch(() => ''), '', 'nothing restored to the draft');
+    assert.equal(holds, 1); assert.equal(cancels, 2, 'no cancel that would clear file pointers'); assert.equal(sends, 3, 'nothing sent again');
+    if (out) await page.screenshot({path: out + '/held-' + width + '.png'});
+    await page.locator('[data-send-discard]').first().click(); await page.getByText('Stopped. Its files are kept on this device', {exact: false}).first().waitFor({state: 'detached'});
+    assert.equal(cancels, 3, 'explicit Discard of the held message');
+    results.cases.push({case: 'restart-files-cancel-holds', click_to_local_stopped_ms: heldLocalMs, click_to_confirmed_held_ms: heldConfirmedMs, holds, cancels});
+    assert(heldLocalMs < 1000, 'local feedback under one second: ' + heldLocalMs);
 
     // 3. A second tab of the same page waits and writes nothing until the first closes.
     const second = await ctx.newPage(); second.setDefaultTimeout(8000);

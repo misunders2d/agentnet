@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -573,4 +574,73 @@ func TestQueuedSendIsNotASchedule(t *testing.T) {
 		t.Fatalf("edited as a schedule: %v", err)
 	}
 	free()
+}
+
+// B7: Cancel after a restart, when the page can no longer put the files back,
+// holds the message instead: sending stops (an attempt's commit loses), and
+// its body, file pointers and kept bytes stay until the person's Retry or
+// Discard. A restart never resumes it; Retry sends exactly those files once.
+func TestQueuedSendHoldKeepsFilesAndBeatsAttempt(t *testing.T) {
+	w, _, p, stops := groupTurnsFixture(t)
+	stops[w.alice]()
+	conv := p.State.Conv
+	a := w.alice
+	a.queued.budget = 2 * time.Second
+	path, data := writeFile(t, t.TempDir(), "held.bin", 3000)
+	// The same bytes in an earlier message: deleting it must not collect the held copy.
+	prior, err := a.SendConv(WithQueuedSend(tctx(t), ""), conv, ConvOutgoing{Body: "earlier file", Files: []OutgoingFile{{Path: path}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	free := stallPersonChains(t, w, a)
+	id := protocol.NewID()
+	if _, err = a.QueueSend(ScheduledSendInput{ID: id, Conv: conv, Body: "held with a file", Files: []OutgoingFile{{Name: "held.bin", Path: path}}}, "", 0); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "an attempt in flight", func() bool { return queuedRow(t, a, id).State == ScheduledDispatching })
+	held, err := a.HoldQueuedSend(id)
+	if err != nil || held.State != ScheduledNeedsReview || held.Body != "held with a file" || len(held.Files) != 1 || held.Files[0].SHA256 != sha(data) {
+		t.Fatalf("hold during an attempt: %+v %v", held, err)
+	}
+	plainWords(t, held.Detail)
+	if again, err := a.HoldQueuedSend(id); err != nil || again.State != ScheduledNeedsReview || again.Rev != held.Rev {
+		t.Fatalf("a repeated hold: %+v %v", again, err)
+	}
+	free() // the attempt may now reach its commit, which must lose
+	eventually(t, "the worker finished", func() bool {
+		a.queued.Lock()
+		defer a.queued.Unlock()
+		_, running := a.queued.workers[conv]
+		return !running
+	})
+	if queuedLIDCopies(t, a, id) != 0 {
+		t.Fatal("a held message went out")
+	}
+	if _, err = a.Retract(tctx(t), ControlRef{Conv: conv, ID: prior.LID, Fingerprint: a.Self().Fingerprint()}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(a.keptPath(sha(data))); err != nil {
+		t.Fatal("held message's kept bytes collected", err)
+	}
+	a.driveQueuedSends() // what a restart runs
+	time.Sleep(300 * time.Millisecond)
+	if s := queuedRow(t, a, id); s.State != ScheduledNeedsReview || s.Body != "held with a file" || len(s.Files) != 1 || queuedLIDCopies(t, a, id) != 0 {
+		t.Fatalf("restart resumed or emptied a held message: %+v", s)
+	}
+	if _, err = a.RetryQueuedSend(id); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the retry sent it once", func() bool { return queuedLIDCopies(t, a, id) > 0 && queuedRow(t, a, id).State == ScheduledSent })
+	var out string
+	a.store.db.QueryRow(`SELECT id FROM outbox WHERE conv=? AND lid=? LIMIT 1`, conv, id).Scan(&out)
+	r, f, err := a.OpenSentAttachment(tctx(t), out, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(readAll(t, r), data) || f.Name != "held.bin" {
+		t.Fatal("held file bytes or name changed")
+	}
+	if _, err = a.HoldQueuedSend(id); err == nil || !strings.Contains(err.Error(), "already sent") {
+		t.Fatalf("holding a sent message: %v", err)
+	}
 }

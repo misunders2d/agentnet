@@ -58,12 +58,21 @@ export function pendingSends(host, changed = () => {}, restoreDraft, captureQueu
       const value = shared.captureQueuedDraft?.(key, m, prior);
       if (value && value !== prior) drafts.set(m.id, {key, value});
     }
-    const draft = drafts.get(m.id), action = {kind, rev: m.queued_send.rev, key};
+    // An original whose files this page can no longer put back (a restart ended
+    // its File objects) is held, not cancelled: sending stops and the host keeps
+    // the message with its files; nothing returns to the draft.
+    const draft = drafts.get(m.id), hold = kind === 'discard' && draft?.key === key && !!draft.value?.hold;
+    const action = {kind: hold ? 'hold' : kind, rev: m.queued_send.rev, key};
     actions.set(m.id, action);
     notify();
     let result;
-    try { result = await host.api('/api/schedule/' + (kind === 'retry' ? 'retry_send' : 'discard_send'), {id: m.id}); }
+    try { result = await host.api('/api/schedule/' + (kind === 'retry' ? 'retry_send' : hold ? 'hold_send' : 'discard_send'), {id: m.id}); }
     catch (e) { if (actions.get(m.id) === action) actions.delete(m.id); notify(); throw e; }
+    if (hold) {
+      // Only the exact held receipt keeps it shown stopped; anything else shows the host's own state.
+      if (!(result?.id === m.id && result.state === 'needs_review') && actions.get(m.id) === action) { actions.delete(m.id); notify(); }
+      return result;
+    }
     // The exact cancelled-ID receipt comes from the host's atomic cancel/store
     // race. A note, lost answer or a stored/custody projection proves no cancel.
     if (kind === 'discard' && result?.id === m.id && result.state === 'cancelled') {
@@ -75,9 +84,9 @@ export function pendingSends(host, changed = () => {}, restoreDraft, captureQueu
     return result;
   };
   const queuedRow = (m, key) => {
-    const action = actions.get(m.id), stopped = m.queued_send.state === 'needs_review' && action?.kind !== 'retry';
+    const action = actions.get(m.id), stopped = (m.queued_send.state === 'needs_review' || action?.kind === 'hold') && action?.kind !== 'retry';
     const waiting = !stopped && !action && m.queued_send.state === 'pending' && m.detail;
-    return {...m, _local: true, _failed: stopped, delivery: stopped ? 'failed' : 'queued', state_text: stopped ? m.detail || 'Not sent.' : waiting || 'Sending…',
+    return {...m, _local: true, _failed: stopped, delivery: stopped ? 'failed' : 'queued', state_text: stopped ? m.detail || (action?.kind === 'hold' ? 'Stopping…' : 'Not sent.') : waiting || 'Sending…',
       _retry: () => act('retry', m, key), _discard: () => act('discard', m, key), _diagnostic: m.queued_send.diagnostic,
       can: [], actions: [], copies: [], reactions: []};
   };

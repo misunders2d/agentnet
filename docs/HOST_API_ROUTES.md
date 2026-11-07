@@ -412,6 +412,7 @@ delay it. No relay-side timer or closed-page browser execution is promised.
 | `POST /api/schedule/send_now` | D B | Dispatch through the same guarded sender now, retaining its approved audience. | `{id,rev}` | `ScheduledSend` |
 | `POST /api/schedule/retry_send` | D | Retry one accepted chat message (a row with `queued_send`) under its id; its audience is read anew. | `{id}` | `ScheduledSend` |
 | `POST /api/schedule/discard_send` | D | The person's cancel of one accepted chat message. A message already stored for sending stays sent (refused). | `{id}` | `ScheduledSend` |
+| `POST /api/schedule/hold_send` | D | The person's Cancel of an accepted chat message whose files the page can no longer put back in a draft (after a restart). It stops sending and keeps the body, file pointers and kept files on this device; the row becomes `needs_review` with Retry and Discard. It races an attempt like `discard_send`; a message already stored stays sent (refused). Holding a row already stopped answers the same row. | `{id}` | `ScheduledSend` |
 
 On D, `POST /api/dm/send` keeps an ordinary message durably before it does
 anything that can wait, and may answer `state:"queued"` while it is still being

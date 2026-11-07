@@ -253,6 +253,39 @@ func (a *Agent) DiscardQueuedSend(id string) (ScheduledSend, error) {
 	return ScheduledSend{ID: id, State: ScheduledCancelled, Immediate: true}, nil
 }
 
+// queuedHeldDetail is what a held message says in its chat.
+const queuedHeldDetail = "Stopped. Its files are kept on this device: Retry sends it, Discard removes it."
+
+// HoldQueuedSend is the person's Cancel of a message whose files the page can
+// no longer put back in a draft (its File objects ended with a restart). It
+// races an attempt exactly as DiscardQueuedSend does: the attempt's commit needs
+// the row still dispatching at its revision, so one of them wins. The body,
+// file pointers and kept encrypted bytes stay; a held row is never attempted
+// again without the person's Retry (needs_review is not resumed after a
+// restart, and the kept-file GC already protects it).
+func (a *Agent) HoldQueuedSend(id string) (ScheduledSend, error) {
+	result, err := a.store.db.Exec(`UPDATE scheduled_sends SET state='needs_review',rev=rev+1,detail=?,diagnostic='',updated_at=? WHERE id=? AND immediate=1 AND state IN ('pending','dispatching')`, queuedHeldDetail, time.Now().UnixNano(), id)
+	if err != nil {
+		return ScheduledSend{}, err
+	}
+	if n, _ := result.RowsAffected(); n != 1 {
+		var stored bool
+		if err = a.store.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM outbox WHERE lid=?)`, id).Scan(&stored); err != nil {
+			return ScheduledSend{}, err
+		}
+		if stored {
+			return ScheduledSend{}, errors.New("this message was already sent")
+		}
+		if s, found, e := a.ScheduledSend(id); e == nil && found && s.Immediate && s.State == ScheduledNeedsReview {
+			return s, nil // already stopped, with its files kept: the same answer again
+		}
+		return ScheduledSend{}, errQueuedSendGone
+	}
+	a.store.changed()
+	s, _, err := a.ScheduledSend(id)
+	return s, err
+}
+
 // QueuedSends lists messages accepted here and not yet stored for sending, in
 // one conversation (or its recovered family) oldest first, for its view.
 func (a *Agent) QueuedSends(conv string) ([]ScheduledSend, error) {

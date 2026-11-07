@@ -67,6 +67,7 @@ interface PendingSendDraft {
   revision?: string;
   durable?: string;
   missingFiles?: boolean;
+  hold?: boolean;        // its files cannot be put back in a draft here: Cancel holds it on the host
   draft: Draft;
 }
 
@@ -2355,7 +2356,8 @@ export class Store {
     const owner=this.draftOwner();if(!owner)throw Error("Current workspace identity is unavailable. The message was kept.");
     const record=this.savedDrafts.pending(message.id,conv,owner);
     if(record){
-      if(record.hadFiles && !prior?.draft.files?.length)throw Error("This original draft includes attachments unavailable after restart. The message was kept; no files were discarded.");
+      // Its files can't be put back in a draft after a restart: Cancel holds it (host keeps the files).
+      if(record.hadFiles && !prior?.draft.files?.length)return {...this.savedCapture(record),hold:true};
       return prior?.durable===record.id && !prior.missingFiles ? prior : this.savedCapture(record);
     }
     if(prior)return prior;

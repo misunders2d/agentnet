@@ -118,6 +118,22 @@ func TestLiveSendAcceptsThroughAStalledRequest(t *testing.T) {
 		t.Fatalf("a cancelled message stays in the chat: %+v", rows)
 	}
 
+	// One held by the person stays in its chat, stopped, with its words; an
+	// invalid id is refused before anything changes.
+	if _, err = live.ChangeSchedule(ctx, "hold_send", ScheduleDraft{ID: "not-an-id"}); err == nil {
+		t.Fatal("hold accepted an invalid id")
+	}
+	holdID := protocol.NewID()
+	if _, err = live.SendDM(DMDraft{ID: holdID, Conv: conv, Body: "hold this one"}); err != nil {
+		t.Fatal(err)
+	}
+	if row, err := live.ChangeSchedule(ctx, "hold_send", ScheduleDraft{ID: holdID}); err != nil || row.State != client.ScheduledNeedsReview || row.Body != "hold this one" {
+		t.Fatalf("hold: %+v %v", row, err)
+	}
+	if rows = queuedRowsOf(t, live, conv, holdID); len(rows) != 1 || rows[0].QueuedSend == nil || rows[0].QueuedSend.State != client.ScheduledNeedsReview || rows[0].Body != "hold this one" {
+		t.Fatalf("a held message left its chat or lost its words: %+v", rows)
+	}
+
 	if rows = queuedRowsOf(t, live, conv, id); len(rows) != 1 || rows[0].QueuedSend == nil {
 		t.Fatalf("not waiting on the stall: %+v", rows)
 	}

@@ -45,7 +45,7 @@ async function world(draft={text:' Original E\n'},platform='android',holdAdmissi
   let rows=[], cancelGate, mode='confirmed', heldResult;
   const admission=holdAdmission?gate():null,entered=gate();
   let connected=true,registration;
-  const scope={}, posts=[], stages=[], cancels=[], notices=[], me={address:'fixture/phone',fingerprint:'fixture-owner'};
+  const scope={}, posts=[], stages=[], cancels=[], holds=[], notices=[], me={address:'fixture/phone',fingerprint:'fixture-owner'};
   const view=id=>({id,kind:'group',title:'Synthetic chat',peer:{},messages:id===conv?rows:[],agents:[],guests:[],topics:[]});
   const host={platform, workspace:{id:'cancel-'+(++worlds),handle:'owned',state:'enrolled',endpoint:'https://synthetic.invalid',realm:'fixture-realm',address:'fixture/phone'}, workspaces:{state:()=>scope,has:()=>connected,list:()=>connected?[registration || host.workspace]:[]},
     android:{visible:()=>true,onVisibility:()=>()=>{}}, listen:()=>()=>{}, stage:async file=>{stages.push(file);return 'stage-'+stages.length;},
@@ -59,6 +59,11 @@ async function world(draft={text:' Original E\n'},platform='android',holdAdmissi
           attachments:(draft.files||[]).map(f=>({name:f.name,size:f.size}))}];
         entered.release();if(admission)await admission.promise;
         return {id:body.id,lid:body.id,state:'queued'};
+      }
+      if(path==='/api/schedule/hold_send') {
+        holds.push(body.id);
+        rows=rows.map(m=>m.id===body.id?{...m,state:'queued',detail:'Stopped. Its files are kept on this device: Retry sends it, Discard removes it.',queued_send:{state:'needs_review',rev:(m.queued_send?.rev||1)+1}}:m);
+        return {id:body.id,state:'needs_review',immediate:true};
       }
       if(path==='/api/schedule/discard_send') {
         cancels.push(body.id);
@@ -85,7 +90,7 @@ async function world(draft={text:' Original E\n'},platform='android',holdAdmissi
   const sending=send();if(admission)await entered.promise;else await sending;await turn();
   const queued=()=>store.sends.merge(conv,rows).find(m=>m.queued_send);
   assert.equal(posts.length,config.expectedPosts ?? 1,'actual native submission count');if(posts.length&&!config.failing)assert(queued()?._discard,'host-kept inline Cancel');
-  return {store,host,scope,posts,stages,cancels,notices,draft,queued,me,rows:()=>rows,
+  return {store,host,scope,posts,stages,cancels,holds,notices,draft,queued,me,rows:()=>rows,
     legacy(){
       const key='agentnet.messenger.drafts.'+host.workspace.id;
       for(const k of [...storage.keys()])if(k.startsWith(key+'.'))storage.delete(k);
@@ -199,9 +204,20 @@ for(const field of ['endpoint','realm'])await check('restart original recovery r
 await check('wrong conversation cannot use original recovery for a Cancel',async()=>{
   const w=await world();try{const wrong=w.store.sends.merge(other,w.rows()).find(m=>m.queued_send);await assert.rejects(wrong._discard,/another conversation/);assert.equal(w.rows().length,1);assert.equal(w.store.draft(conv).text,'');}finally{await w.stop();}
 });
-await check('restart with attachment recovery refuses destructive Cancel without File objects',async()=>{
+// B7: after a restart the File objects are gone. Cancel stops sending and keeps the
+// message with its files on this device (held: Retry/Discard), never a cancel that
+// strands them, and never a claim that the files came back to the draft.
+await check('B7 restart with attachment recovery: Cancel holds the message, files kept, nothing restored',async()=>{
   const file=new File(['retained bytes'],'original.txt');const w=await world({text:'file text',files:[{key:'f',file,name:file.name,size:file.size,type:file.type}]});let r;try{
-    r=await w.restart();await assert.rejects(r.queued()._discard,/attachments unavailable/);assert.equal(w.rows().length,1,'native attachment reference remains pending');
+    r=await w.restart();const id=w.posts[0].id;
+    await r.queued()._discard();
+    assert.deepEqual(w.holds,[id],'one hold for the exact ID');assert.equal(w.cancels.length,0,'no cancel that clears the file pointers');
+    assert.equal(w.rows().length,1,'the message stays in its chat');assert.equal(w.rows()[0].queued_send.state,'needs_review');
+    assert.equal(r.store.draft(conv).text,'','nothing restored to the draft');assert.equal((r.store.draft(conv).files||[]).length,0);
+    const shown=r.store.sends.merge(conv,w.rows()).find(m=>m.id===id);assert(shown?._failed,'shown stopped');assert(/files are kept on this device/.test(shown.state_text),shown?.state_text);
+    assert(typeof shown._retry==='function'&&typeof shown._discard==='function','Retry and Discard offered');
+    assert.notEqual(localStorage.getItem('agentnet.messenger.drafts.'+w.host.workspace.id+'.send-recovery.v1.'+id),null,'original text record kept');
+    assert.equal(w.posts.length,1,'nothing sent again');
   }finally{r?.stop();await w.stop();}
 });
 
