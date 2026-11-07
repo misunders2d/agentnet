@@ -13,11 +13,14 @@ const out = process.env.NOLOCK_EVIDENCE, results = {cases: []};
 (async () => {
   const browser = await chromium.launch({headless: true, executablePath: process.env.AGENTNET_CHROMIUM || '/usr/bin/chromium', args: ['--no-sandbox', '--disable-dev-shm-usage']});
   try {
+  // Both ways a page has no lock: navigator.locks missing, or its request refused.
+  for (const variant of ['rejected', 'missing']) {
     const ctx = await browser.newContext({reducedMotion: 'reduce', viewport: {width: 1280, height: 900}});
-    await ctx.addInitScript(() => {
-      Object.defineProperty(Navigator.prototype, 'locks', {get: () => undefined, configurable: true});
+    await ctx.addInitScript(variant => {
+      if (variant === 'missing') Object.defineProperty(Navigator.prototype, 'locks', {get: () => undefined, configurable: true});
+      else LockManager.prototype.request = function () { return Promise.reject(new DOMException('synthetic refusal', 'SecurityError')); };
       Object.defineProperty(window, '__agentnetNativeAppJSON', {value: async () => ({})});
-    });
+    }, variant);
     const origin = new URL(process.argv[2]).origin;
     const first = await ctx.newPage(); first.setDefaultTimeout(8000);
     await first.goto(process.argv[2]); await first.goto(origin + '/?skin=comic');
@@ -27,7 +30,8 @@ const out = process.env.NOLOCK_EVIDENCE, results = {cases: []};
     const state = async p => ({mode: await p.evaluate(() => window.__agentnetSingleWindow ?? null), chats: await p.locator('[data-part="chat-row"]').count(),
       refusal: await p.getByRole('status').filter({hasText: /tab locks|another tab or window|cannot run AgentNet/}).count()});
     const a = await state(first), b = await state(second);
-    results.pages = {first: a, second: b};
+    const drafts = await first.evaluate(() => { const k = []; for (let i = 0; i < localStorage.length; i++) if (/\.drafts/.test(localStorage.key(i))) k.push(localStorage.key(i)); return k.length; });
+    results.pages = {...results.pages, [variant]: {first: a, second: b, draft_keys: drafts}};
     const running = [a, b].filter(s => s.chats > 0).length;
     // When both run, show what two writers do to one chat's draft.
     if (running === 2) {
@@ -37,11 +41,17 @@ const out = process.env.NOLOCK_EVIDENCE, results = {cases: []};
       await boxA.fill('typed in the first window'); await first.waitForTimeout(400);
       await boxB.fill('typed in the second window'); await second.waitForTimeout(400);
       const stored = await first.evaluate(() => { const v = []; for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (/\.drafts/.test(k)) v.push(localStorage.getItem(k)); } return v.join('\n'); });
-      results.draft = {first_composer: await boxA.inputValue(), second_composer: await boxB.inputValue(),
+      results.draft = {variant, first_composer: await boxA.inputValue(), second_composer: await boxB.inputValue(),
         first_text_in_storage: stored.includes('typed in the first window'), second_text_in_storage: stored.includes('typed in the second window')};
     }
-    results.cases.push({case: 'native-without-locks-two-pages', running});
+    results.cases.push({case: 'native-without-locks-two-pages', variant, running});
     assert(running <= 1, 'one writer: ' + running + ' native pages without Web Locks run on one origin ' + JSON.stringify(results));
+    // Refused before anything writes, with words that say why and that saved data is kept.
+    for (const s of [a, b]) { assert.equal(s.mode, 'none'); assert.equal(s.chats, 0); assert.equal(s.refusal, 1); }
+    assert.equal(drafts, 0, 'nothing written to drafts');
+    assert(await first.getByText('Your saved drafts and messages are kept on this device').count() === 1);
+    await ctx.close();
+  }
     results.pass = true;
     console.log('Native without locks rendered PASS ' + JSON.stringify(results));
   } catch (e) {
