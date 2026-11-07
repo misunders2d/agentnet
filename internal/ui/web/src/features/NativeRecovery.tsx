@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useApp } from "../context";
 import { useStore } from "../store";
 import { errorText } from "../api";
-import { isSendPersisted } from "../send-recovery.mjs";
+import { replaySavedSend, savedSendReceipt } from "../send-recovery.mjs";
 import { legacyDraft } from "../legacy-drafts.mjs";
 import { readPending, acknowledge, recordFailure, onJournalChange, type JournalEntry } from "../send-journal.mjs";
 import { Sheet } from "../ui/Sheet";
@@ -37,17 +37,13 @@ export function NativeRecovery() {
     setBusy(key);setErrors(v=>({...v,[key]:""}));
     try {await work();}catch(e){setErrors(v=>({...v,[key]:errorText(e)}));}finally{setBusy("");}
   };
-  const submit = async (entry: Pick<JournalEntry,"id"|"conversation"|"endpoint"|"request">) => {
-    if (await isSendPersisted(store.host,entry)) return;
-    try { await store.host.api(entry.endpoint,entry.request); }
-    catch (e) { if (!(await isSendPersisted(store.host,entry))) throw e; }
-  };
+  // What the explicit retry proved: held, pending, sent or discarded (send-recovery.mjs).
+  const submit = (entry: Pick<JournalEntry,"id"|"conversation"|"endpoint"|"request">) => replaySavedSend(store.host,entry);
   const restore = async (record:{key:string;value:string}) => {
     const d=legacyDraft(record);
     if(d.request && d.endpoint) {
       const entry={id:String(d.request.id),conversation:d.conversation,endpoint:d.endpoint as JournalEntry["endpoint"],request:d.request};
-      await submit(entry);
-      store.toast("Saved send is in the outbox.","ok");
+      store.toast(savedSendReceipt(await submit(entry)),"ok");
     } else {
       const current=store.draft(d.conversation);
       if(current.text.trim() || current.files?.length) throw new Error("There is already a draft in this chat. Keep or send it first, then restore this one.");
@@ -82,7 +78,7 @@ export function NativeRecovery() {
         <p className="my-2 whitespace-pre-wrap break-words">{String(entry.request.body || "Message with attachments")}</p>
         <p className="mb-2 text-[13px] text-muted">Retry keeps the same recipient and message ID. It does not repeat work already accepted.</p>
         <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" disabled={!!busy} onClick={()=>void run(entry.id,async()=>{
-          try {await submit(entry);acknowledge(localStorage,workspace,entry.id);store.toast("Saved send is in the outbox.","ok");}
+          try {const state=await submit(entry);acknowledge(localStorage,workspace,entry.id);store.toast(savedSendReceipt(state),"ok");}
           catch(e){recordFailure(localStorage,workspace,entry.id,errorText(e));throw e;}
         })}>{busy===entry.id?"Retrying…":"Retry saved send"}</Button>
         <Button size="sm" variant="ghost" onClick={()=>void copyText(String(entry.request.body||""), store.host.android).then(ok=>store.toast(ok?"Copied":"Couldn’t copy here",ok?"ok":"error"))}>Copy text</Button></div>

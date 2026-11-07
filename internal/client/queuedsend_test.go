@@ -638,10 +638,24 @@ func TestQueuedSendHoldKeepsFilesAndBeatsAttempt(t *testing.T) {
 	if _, err = os.Stat(a.keptPath(sha(data))); err != nil {
 		t.Fatal("held message's kept bytes gone after restart", err)
 	}
+	// A replayed admission request with other words under the same ID (a lost
+	// answer's journal copy that does not match) is refused and leaves it held.
+	// The same request again is the host's explicit retry, which is why recovery
+	// never replays a held message (send-recovery.mjs replaySavedSend).
+	if _, err = a.QueueSend(ScheduledSendInput{ID: id, Conv: conv, Body: "other words"}, "", 0); !errors.Is(err, ErrScheduledIDConflict) {
+		t.Fatalf("other words under a held message's id: %v", err)
+	}
+	if s := queuedRow(t, a, id); s.State != ScheduledNeedsReview || queuedLIDCopies(t, a, id) != 0 {
+		t.Fatalf("a refused replay changed the held message: %+v", s)
+	}
 	if _, err = a.RetryQueuedSend(id); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the retry sent it once", func() bool { return queuedLIDCopies(t, a, id) > 0 && queuedRow(t, a, id).State == ScheduledSent })
+	// A sent immediate row may already be gone: cleanup removes sent rows.
+	eventually(t, "the retry sent it once", func() bool {
+		s, found, err := a.ScheduledSend(id)
+		return err == nil && queuedLIDCopies(t, a, id) > 0 && (!found || s.State == ScheduledSent)
+	})
 	var out string
 	a.store.db.QueryRow(`SELECT id FROM outbox WHERE conv=? AND lid=? LIMIT 1`, conv, id).Scan(&out)
 	r, f, err := a.OpenSentAttachment(tctx(t), out, 0)
