@@ -18,30 +18,48 @@ const {chromium} = require(process.env.AGENTNET_PLAYWRIGHT);
 const out = process.env.NOLOCK_EVIDENCE, results = {cases: [], steps: {}, timing: {}, assertions: []}, failures = [];
 // Independent assertions inside a step: each is recorded executed pass/fail and the
 // step goes on; any failure fails the variant at its end. Prerequisites stay hard.
-let softFailed = [];
+let softFailed = [], browserRef = null;
+// Diagnostics (b9): every page of every context runs a continuous animation-frame
+// loop (frame gaps over 50 ms, callback timestamps), a longtask PerformanceObserver
+// and visibility/focus/freeze events. The loop itself keeps a frame requested on
+// every page: a controlled scheduling change, recorded as such. Long-task entries
+// carry no product stack; the Chromium trace (Save, Stop, Reply) is the source for
+// main-thread attribution.
+results.diag = {}; results.scheduling_change = 'b9: continuous requestAnimationFrame loop on every page (diagnostics); b8 had none';
+const diag = async (label, pages, a, b) => { const o = {}; for (const [name, p] of pages) {
+  if (!p || p.isClosed()) { o[name] = 'closed'; continue; }
+  o[name] = await p.evaluate(([a, b]) => { const d = window.__diag || {}, w = x => (x || []).filter(e => e.at >= a && e.at <= b);
+    return {visibility: document.visibilityState, focus: document.hasFocus(), gaps: w(d.gaps), longtasks: w(d.longtasks), longtask_error: d.longtask_error || null,
+      events: w(d.events), frames_in_window: (d.frames || []).filter(t => t >= a && t <= b).length, window_ms: Math.round(b - a)}; }, [a, b]).catch(e => 'error: ' + String(e).slice(0, 120));
+} results.diag[label] = o; return o; };
 const soft = (variant, name, ok, detail) => { results.assertions.push({variant, name, status: ok ? 'pass' : 'fail', ...(detail === undefined ? {} : {detail})}); if (!ok) softFailed.push(name); };
 // A timed click: the page's own pointerdown (epoch ms), the intended state's first DOM
 // mutation (selector + pattern, through open shadow roots), the frame after it (two
 // animation frames) with its rendered visibility and hit-test, and the Playwright click
 // call; the Playwright call log (DEBUG=pw:api, stderr) carries the actionability wait.
-const timedClick = async (page, label, target, selector, pattern, seen) => {
+const timedClick = async (page, label, target, selector, pattern, seen, opts = {}) => {
   await page.evaluate(({label, selector, pattern}) => {
     const now = () => performance.timeOrigin + performance.now(), m = (window.__timing ||= {})[label] = {}, re = new RegExp(pattern);
     const roots = new Set([document]); const walk = r => { for (const el of r.querySelectorAll('*')) if (el.shadowRoot) { roots.add(el.shadowRoot); walk(el.shadowRoot); } }; walk(document);
     addEventListener('pointerdown', e => { if (!m.input) { m.input = performance.timeOrigin + e.timeStamp; const t = e.composedPath()[0]; m.input_target = String(t.closest?.('button')?.textContent || t.tagName || '').trim().slice(0, 40); } }, {capture: true});
-    const find = () => { let hit = null; for (const r of roots) for (const el of r.querySelectorAll(selector)) if (re.test(el.textContent)) hit = el; return hit; };
+    const find = () => { let hit = null; for (const r of roots) for (const el of r.querySelectorAll(selector)) if (re.test(el.textContent) && (selector !== '*' || ![...el.children].some(c => re.test(c.textContent)))) hit = el; return hit; };
     const check = () => { if (!m.input || m.dom) return; const el = find(); if (!el) return; m.dom = now();
+      m.witness = el.tagName.toLowerCase() + (el.getAttribute('role') ? '[role=' + el.getAttribute('role') + ']' : '') + (el.getAttribute('data-mid') ? '[data-mid]' : '') + ' ' + String(el.textContent).trim().slice(0, 50);
       requestAnimationFrame(() => requestAnimationFrame(() => { m.frame = now(); const b = el.getBoundingClientRect(); const c = el.getRootNode().elementFromPoint?.(b.left + Math.min(b.width / 2, 20), b.top + Math.min(b.height / 2, 10));
         m.visible = el.checkVisibility({opacityProperty: true, visibilityProperty: true}) && b.width > 0 && b.height > 0 && b.bottom > 0 && b.top < innerHeight; m.on_top = !!c && (el === c || el.contains(c)); })); };
     for (const r of roots) new MutationObserver(check).observe(r, {subtree: true, childList: true, characterData: true, attributes: true});
   }, {label, selector, pattern});
+  let traced = false; if (opts.trace && out) { try { await browserRef.startTracing(page, {path: out + '/trace-' + label + '.json', screenshots: false,
+    categories: ['devtools.timeline', 'disabled-by-default-devtools.timeline', 'disabled-by-default-devtools.timeline.frame', 'toplevel', 'blink.user_timing', 'renderer.scheduler']}); traced = true; } catch (e) { results.trace_errors = [...(results.trace_errors || []), label + ': ' + String(e).slice(0, 120)]; } }
   const c0 = Date.now(); console.error('[timed-click start] ' + label + ' ' + new Date(c0).toISOString());
   await target.click(); const c1 = Date.now(); console.error('[timed-click end] ' + label + ' ' + new Date(c1).toISOString());
   let seenOk = true; try { await seen.waitFor(); } catch { seenOk = false; } const c2 = Date.now();
   await page.waitForFunction(l => window.__timing[l].frame, label, {timeout: 3000}).catch(() => {});
   const m = await page.evaluate(l => window.__timing[l], label), d = (a, b) => (a && b ? Math.round(b - a) : null);
+  if (traced) await browserRef.stopTracing().catch(e => { results.trace_errors = [...(results.trace_errors || []), label + ' stop: ' + String(e).slice(0, 120)]; });
+  if (opts.pages) await diag(label, opts.pages, c0 - 2500, Date.now());
   const t = {click_call_to_input_ms: d(c0, m.input), click_call_resolved_ms: c1 - c0, input_target: m.input_target, input_epoch_ms: m.input ? Math.round(m.input) : null,
-    input_to_dom_ms: d(m.input, m.dom), input_to_frame_ms: d(m.input, m.frame), rendered_visible: m.visible ?? null, on_top: m.on_top ?? null,
+    input_to_dom_ms: d(m.input, m.dom), input_to_frame_ms: d(m.input, m.frame), rendered_visible: m.visible ?? null, on_top: m.on_top ?? null, witness: m.witness ?? null, traced,
     click_call_to_playwright_visible_ms: seenOk ? c2 - c0 : null, playwright_saw_it: seenOk};
   results.timing[label] = t; return t;
 };
@@ -51,7 +69,7 @@ const pageErrors = [];
 let current = null; // the page under check, for a failure screenshot
 
 (async () => {
-  const browser = await chromium.launch({headless: true, executablePath: process.env.AGENTNET_CHROMIUM || '/usr/bin/chromium', args: ['--no-sandbox', '--disable-dev-shm-usage']});
+  const browser = browserRef = await chromium.launch({headless: true, executablePath: process.env.AGENTNET_CHROMIUM || '/usr/bin/chromium', args: ['--no-sandbox', '--disable-dev-shm-usage']});
   try {
   for (const [variant, native] of [['rejected', ''], ['missing', ''], ['rejected', 'desktop'], ['missing', 'desktop'], ['rejected', 'android'], ['missing', 'android'], ['lock', 'desktop'], ['lock', 'android']]) {
     // Each variant runs on its own context; a failure is recorded with the steps it
@@ -61,6 +79,14 @@ let current = null; // the page under check, for a failure screenshot
       : ['readonly-state', 'saved-read-copy-closed-composer-settings', ...(variant === 'rejected' ? (native === 'desktop' ? ['rows-reply-desktop'] : ['stop-kept-390', 'reply-refused-390']) : []), ...(variant === 'missing' ? ['outbox-' + native] : []), 'storage-unchanged-reload'];
     const ctx = await browser.newContext({reducedMotion: 'reduce', viewport: {width: 1280, height: 900}});
     softFailed = [];
+    await ctx.addInitScript(() => {
+      const now = () => performance.timeOrigin + performance.now(), d = window.__diag = {gaps: [], longtasks: [], events: [], frames: []};
+      let last = 0; const tick = () => { const t = now(); if (last && t - last > 50) d.gaps.push({at: t, gap_ms: Math.round(t - last), visibility: document.visibilityState});
+        last = t; d.frames.push(t); if (d.frames.length > 3000) d.frames.splice(0, 1000); requestAnimationFrame(tick); }; requestAnimationFrame(tick);
+      try { new PerformanceObserver(l => { for (const e of l.getEntries()) d.longtasks.push({at: performance.timeOrigin + e.startTime, duration_ms: Math.round(e.duration), name: e.name,
+        attribution: (e.attribution || []).map(a => a.containerType + ':' + a.name)}); }).observe({type: 'longtask', buffered: true}); } catch (e) { d.longtask_error = String(e); }
+      for (const ev of ['visibilitychange', 'focus', 'blur', 'pagehide', 'freeze', 'resume']) addEventListener(ev, () => d.events.push({at: now(), ev, visibility: document.visibilityState, focus: document.hasFocus()}), true);
+    });
     try {
     await ctx.addInitScript(({variant, native}) => {
       if (variant === 'missing') Object.defineProperty(Navigator.prototype, 'locks', {get: () => undefined, configurable: true});
@@ -288,7 +314,7 @@ let current = null; // the page under check, for a failure screenshot
       const kept = 'Stopped and kept. Drafts are read-only in this window, so it can’t be retried or discarded here.', v = label;
       await first.getByText('queued held words').waitFor();
       const tStop = await timedClick(first, 'android390-stop', first.locator('[data-send-discard]').filter({hasText: 'Stop'}).last(),
-        '[data-mid="' + 'c'.repeat(32) + '"]', 'Stopping…|Stopped and kept', first.locator('[data-mid="' + 'c'.repeat(32) + '"]').getByText(/Stopping…|Stopped and kept/).first());
+        '[data-mid="' + 'c'.repeat(32) + '"]', 'Stopping…|Stopped and kept', first.locator('[data-mid="' + 'c'.repeat(32) + '"]').getByText(/Stopping…|Stopped and kept/).first(), {pages: [['first', first], ['second', second]], trace: true});
       await first.locator('[data-local-send="stopped"]').filter({hasText: kept}).nth(1).waitFor(); // prerequisite for the state checks
       soft(v, 'stop: only a hold reaches the host', JSON.stringify(schedule) === JSON.stringify(['/api/schedule/hold_send']), schedule);
       soft(v, 'stop: both rows stopped and kept, truthfully', await first.locator('[data-local-send="stopped"]').filter({hasText: kept}).count() === 2);
@@ -303,7 +329,7 @@ let current = null; // the page under check, for a failure screenshot
       const r0snap = await snapshot(first);
       await first.locator('[data-mid="' + 'b'.repeat(32) + '"]').getByRole('button', {name: /^(More actions|Message actions)$/}).click(); // prerequisite: the action sheet
       const refusal = 'Drafts are read-only in this window: this change wasn’t saved.';
-      const tReply = await timedClick(first, 'android390-reply', first.getByRole('dialog').getByRole('button', {name: 'Reply', exact: true}), '*', 'this change wasn’t saved', first.getByText(refusal).first());
+      const tReply = await timedClick(first, 'android390-reply', first.getByRole('dialog').getByRole('button', {name: 'Reply', exact: true}), '*', 'this change wasn’t saved', first.getByText(refusal).first(), {pages: [['first', first], ['second', second]], trace: true});
       soft(v, 'reply: truthful refusal shown and rendered', tReply.playwright_saw_it && tReply.rendered_visible === true, tReply);
       soft(v, 'reply: no draft written', await snapshot(first) === r0snap);
       soft(v, 'reply: no keep-open advice', await first.getByText(/Keep this window open/).count() === 0);
@@ -318,8 +344,10 @@ let current = null; // the page under check, for a failure screenshot
       current = first; const v = label;
       if (native === 'android') { await first.setViewportSize({width: 390, height: 844});
         // At 390 an open chat is a card over the tabs: its visible back control returns to them.
-        const back = first.getByRole('button', {name: 'Back to chats', exact: true});
-        if (await back.count()) await back.last().click(); }
+        // Conversation.header.tsx: below 1024 px the header shows "‹ Chats" (aria-label
+        // "Back to chats") after the resize re-renders; b8 counted it before that (0).
+        const back = first.getByRole('button', {name: 'Back to chats', exact: true}).last();
+        await back.waitFor(); results.item4_back = {names: await first.getByRole('button').allInnerTexts().catch(() => null)}; await back.click(); }
       const nav = first.getByRole('navigation', {name: 'Main', exact: true});
       await nav.getByRole('button', {name: 'Outbox', exact: true}).click();
       const editing = first.getByRole('article').filter({hasText: 'scheduled words'});
@@ -327,7 +355,7 @@ let current = null; // the page under check, for a failure screenshot
       await first.getByRole('textbox', {name: 'Scheduled message text', exact: true}).fill('edited in read-only');
       // The row's "Saving…" with the edited text, then the host's refreshed row.
       const tSave = await timedClick(first, 'outbox-' + native, editing.getByRole('button', {name: 'Save schedule changes', exact: true}),
-        'article', 'edited in read-only[\\s\\S]*Saving…', first.getByRole('article').filter({hasText: 'edited in read-only'}).first());
+        'article', 'edited in read-only[\\s\\S]*Saving…', first.getByRole('article').filter({hasText: 'edited in read-only'}).first(), {pages: [['first', first], ['second', second]], trace: true});
       await first.getByRole('article').filter({hasText: 'edited in read-only'}).filter({hasNotText: 'Saving…'}).first().waitFor(); // the host's row
       const edit = scheduleWrites.find(w => w.path === '/api/schedule/edit');
       tSave.input_to_host_request_ms = edit && tSave.input_epoch_ms ? edit.at - tSave.input_epoch_ms : null;
