@@ -84,12 +84,8 @@ let current = null; // the page under check, for a failure screenshot
         owner: {workspace: 'default', handle: '', endpoint: origin, realm: '', address: me.address, fingerprint: me.fingerprint}, draft: {text: 'kept original words'}, revision: 'legacy:null', hadFiles: false}));
     }, {conv, origin});
     if (variant === 'lock' && native === 'android') {
-      // Records the earlier preview left: a draft for the other chat, an unconfirmed send here.
-      const other = await first.evaluate(async conv => ((await (await fetch('/api/overview')).json()).dms || []).map(d => d.id).find(id => id !== conv), conv);
-      assert.match(other || '', /^([0-9a-f]{32}|[0-9a-f]{64})$/, 'a second chat for the legacy draft');
-      results.legacy_records = [{key: 'dm:' + other, value: JSON.stringify({body: 'legacy restore words'})},
-        {key: 'dm:' + conv, value: JSON.stringify({body: 'legacy retry words', request: {id: 'e'.repeat(32), body: 'legacy retry words', conv}})}];
-      await ctx.addInitScript(r => { window.__legacyRecords = r; }, results.legacy_records);
+      // A draft the earlier preview left for this chat (an unconfirmed send follows after a reload).
+      await ctx.addInitScript(r => { window.__legacyRecords = r; }, [{key: 'dm:' + conv, value: JSON.stringify({body: 'legacy restore words'})}]);
     }
     await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], {origin});
     const before = await snapshot(first);
@@ -123,19 +119,26 @@ let current = null; // the page under check, for a failure screenshot
       assert(snap.includes('newer draft words'), 'the lock holder saves its draft');
       assert(!snap.includes('send-recovery.v1.' + 'b'.repeat(32)), 'Discard removes the kept original');
       if (native === 'android') {
-        // Legacy draft: Restore puts it in its own empty chat and acknowledges it once.
+        // Legacy draft over a newer one: refused, the newer draft stays, nothing acknowledged.
+        await (await item('legacy restore words')).getByRole('button', {name: 'Restore draft', exact: true}).click();
+        await first.getByText('There is already a draft in this chat. Keep or send it first, then restore this one.').first().waitFor();
+        assert.equal(await box.inputValue(), 'newer draft words', 'newer draft not overwritten');
+        assert.equal(await first.evaluate(() => window.__legacyAcks || 0), 0, 'refused restore acknowledges nothing');
+        // With the composer empty, Restore fills it and acknowledges the record once.
+        if (await sheet().count()) { await first.keyboard.press('Escape'); await sheet().waitFor({state: 'detached'}); }
+        await box.fill(''); await first.waitForTimeout(500);
         await (await item('legacy restore words')).getByRole('button', {name: 'Restore draft', exact: true}).click();
         await first.waitForFunction(() => window.__legacyAcks === 1);
         if (await sheet().count()) { await first.keyboard.press('Escape'); await sheet().waitFor({state: 'detached'}); }
-        await first.getByRole('form', {name: 'Write a message'}).getByRole('textbox').first().waitFor();
-        assert.equal(await first.getByRole('form', {name: 'Write a message'}).getByRole('textbox').first().inputValue(), 'legacy restore words', 'legacy draft restored into its chat');
-        // Legacy unconfirmed send: Retry sends it once under its own ID and says where it is.
+        assert.equal(await box.inputValue(), 'legacy restore words', 'legacy draft restored');
+        assert((await snapshot(first)).includes('legacy restore words'), 'restored draft saved');
+        // An unconfirmed send the preview left: Retry sends it once under its ID and says where it is.
+        await ctx.addInitScript(r => { window.__legacyRecords = r; }, [{key: 'dm:' + conv, value: JSON.stringify({body: 'legacy retry words', request: {id: 'e'.repeat(32), body: 'legacy retry words', conv}})}]);
+        await first.reload(); await first.locator('[data-part="chat-row"]').first().waitFor();
         await (await item('legacy retry words')).getByRole('button', {name: 'Retry saved send', exact: true}).click();
         await first.getByText('Saved send is in the outbox.').first().waitFor();
-        await first.waitForFunction(() => window.__legacyAcks === 2);
+        await first.waitForFunction(() => window.__legacyAcks === 1);
         assert.equal(sends.length, 1, 'one request for the legacy send');
-        snap = await snapshot(first);
-        assert(snap.includes('newer draft words') && snap.includes('legacy restore words'), 'no newer draft overwritten');
       }
       results.cases.push({case: label, writes: true, copied: true, kept_discarded: true, legacy: native === 'android'});
       if (out) await first.screenshot({path: out + '/native-lock-' + label + '.png'});
