@@ -72,7 +72,8 @@ const results = {width, cases: []};
     await page.evaluate(() => { Storage.prototype.setItem = window.__restoreSet; });
     await page.reload(); await page.locator('[data-part="chat-row"][data-kind="person"]').filter({hasNotText: 'Device conversation'}).first().click();
     await box.waitFor(); assert.equal(await box.inputValue().catch(() => ''), '', 'storage held the cleared draft');
-    const review = page.getByRole('button', {name: /^Saved messages \(1\)/}); await review.click();
+    // A phone's open chat is a card over the tabs; each carries the banner, the card's is the one on top.
+    const review = (width < 600 ? page.locator('[data-card]').last() : page).getByRole('button', {name: /^Saved messages \(1\)/}); await review.click();
     const dialog = page.getByRole('dialog', {name: 'Saved messages'});
     await dialog.getByText('Text kept from a message that wasn’t sent').waitFor();
     if (out) await page.screenshot({path: out + '/kept-' + width + '.png'});
