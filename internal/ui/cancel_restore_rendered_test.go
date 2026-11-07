@@ -38,9 +38,11 @@ func TestCancelRestoreRendered(t *testing.T) {
 	}
 }
 
-// A native shell without Web Locks: two pages on one origin must never both
-// run and write drafts. Synthetic fixture; the shell's marker is defined and
-// navigator.locks removed before any page script.
+// Without Web Locks two pages on one origin must never both write saved state:
+// a browser page is refused; a native shell's page (desktop or Android marker)
+// opens read-only and leaves seeded drafts, journal and recovery unchanged;
+// with locks the native page writes as usual. Synthetic fixture; the markers
+// are defined and navigator.locks removed or refused before any page script.
 func TestNativeWithoutLocksRendered(t *testing.T) {
 	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
 		t.Skip("opt-in installed Playwright")
@@ -49,14 +51,15 @@ func TestNativeWithoutLocksRendered(t *testing.T) {
 	if _, _, err := f.CreatePerson("Fixture Me"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.NewDM("vitalii/laptop"); err != nil {
+	dm, err := f.NewDM("vitalii/laptop")
+	if err != nil {
 		t.Fatal(err)
 	}
 	ts := httptest.NewUnstartedServer(nil)
 	ts.Config.Handler = New(f, ts.Listener.Addr().String(), testToken).Handler()
 	ts.Start()
 	defer ts.Close()
-	cmd := exec.Command("node", "testdata/native_nolock_rendered_check.cjs", ts.URL+"/?t="+testToken)
+	cmd := exec.Command("node", "testdata/native_nolock_rendered_check.cjs", ts.URL+"/?t="+testToken, dm)
 	cmd.Env = append(os.Environ(), "NOLOCK_EVIDENCE="+os.Getenv("CANCEL_EVIDENCE"))
 	out, err := cmd.CombinedOutput()
 	if err != nil || !strings.Contains(string(out), "Native without locks rendered PASS") {

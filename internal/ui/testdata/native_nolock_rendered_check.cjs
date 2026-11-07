@@ -1,62 +1,118 @@
-// A native shell whose WebView has no Web Locks: two pages of the real daemon
-// page and built Comic bundle on one origin (one localStorage). The desktop
-// shell's marker (__agentnetNativeAppJSON) is defined and navigator.locks is
-// removed before any page script runs. One writer is the invariant: two pages
-// must never both run and write this origin's drafts.
-//   node native_nolock_rendered_check.cjs <page URL with token>
+// A page whose WebView has no Web Locks: two pages of the real daemon page and
+// built Comic bundle on one origin (one localStorage). navigator.locks is
+// removed, or its request refused, before any page script runs. One writer is
+// the invariant: two pages must never both write this origin's saved state.
+//  - A plain browser page is refused before anything writes.
+//  - A native shell's page (desktop marker __agentnetNativeAppJSON, or the
+//    Android marker) opens read-only: chats, Settings and update stay usable and
+//    Saved messages can be read and copied, but nothing writes drafts, the send
+//    journal or send recovery, and nothing is sent or retried. Storage seeded
+//    with an older version's draft map, a saved send and a kept original stays
+//    byte-identical in both pages and after a reload.
+//  - With locks, the same native page writes as usual and a second page waits.
+//   node native_nolock_rendered_check.cjs <page URL with token> <DM id>
 // NOLOCK_EVIDENCE=<dir> receives the result JSON.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {chromium} = require(process.env.AGENTNET_PLAYWRIGHT);
 const out = process.env.NOLOCK_EVIDENCE, results = {cases: []};
+const conv = process.argv[3];
+const readOnly = /Sending is off in this window/;
 
 (async () => {
   const browser = await chromium.launch({headless: true, executablePath: process.env.AGENTNET_CHROMIUM || '/usr/bin/chromium', args: ['--no-sandbox', '--disable-dev-shm-usage']});
   try {
-  // Both ways a page has no lock: navigator.locks missing, or its request refused.
-  // A browser page is refused before anything writes. A native shell's page keeps
-  // the shipped fallback (it runs, so its update and Saved messages stay reachable);
-  // what two such pages do is recorded, not accepted (B5 stays open).
-  for (const [variant, native] of [['rejected', false], ['missing', false], ['rejected', true], ['missing', true]]) {
+  for (const [variant, native] of [['rejected', ''], ['missing', ''], ['rejected', 'desktop'], ['missing', 'desktop'], ['rejected', 'android'], ['missing', 'android'], ['lock', 'desktop'], ['lock', 'android']]) {
     const ctx = await browser.newContext({reducedMotion: 'reduce', viewport: {width: 1280, height: 900}});
-    await ctx.addInitScript(({variant, ...rest}) => {
-      variant = {name: variant, ...rest};
-      if (variant.name === 'missing') Object.defineProperty(Navigator.prototype, 'locks', {get: () => undefined, configurable: true});
-      else LockManager.prototype.request = function () { return Promise.reject(new DOMException('synthetic refusal', 'SecurityError')); };
-      if (variant.native) Object.defineProperty(window, '__agentnetNativeAppJSON', {value: async () => ({})});
+    await ctx.addInitScript(({variant, native}) => {
+      if (variant === 'missing') Object.defineProperty(Navigator.prototype, 'locks', {get: () => undefined, configurable: true});
+      else if (variant === 'rejected') LockManager.prototype.request = function () { return Promise.reject(new DOMException('synthetic refusal', 'SecurityError')); };
+      if (native === 'desktop') Object.defineProperty(window, '__agentnetNativeAppJSON', {value: async () => ({})});
+      if (native === 'android') { window.__agentnetPlatform = 'android';
+        window.__agentnetAndroid = {visible: () => true, onVisibility: () => () => {}, legacyDrafts: async () => ({drafts: []}), acknowledgeLegacyDraft: async () => { window.__legacyAcks = (window.__legacyAcks || 0) + 1; return {removed: true}; }}; }
     }, {variant, native});
+    const sends = []; await ctx.route('**/api/dm/send', r => { sends.push(r.request().url()); return r.continue(); });
     const origin = new URL(process.argv[2]).origin;
+    const label = (native || 'browser') + '-' + variant;
     const first = await ctx.newPage(); first.setDefaultTimeout(8000);
+    const errors = []; first.on('pageerror', e => errors.push(String(e)));
     await first.goto(process.argv[2]); await first.goto(origin + '/?skin=comic');
-    const second = await ctx.newPage(); second.setDefaultTimeout(8000);
-    await second.goto(origin + '/?skin=comic');
-    await new Promise(r => setTimeout(r, 1500));
-    const state = async p => ({mode: await p.evaluate(() => window.__agentnetSingleWindow ?? null), chats: await p.locator('[data-part="chat-row"]').count(),
-      refusal: await p.getByRole('status').filter({hasText: /tab locks|another tab or window|cannot run AgentNet/}).count()});
+    const mode = p => p.evaluate(() => window.__agentnetSingleWindow ?? null);
+    const snapshot = p => p.evaluate(() => { const v = {}; for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (/drafts|send-journal/.test(k)) v[k] = localStorage.getItem(k); } return JSON.stringify(Object.entries(v).sort()); });
+    if (!native) {
+      await first.waitForTimeout(800);
+      const second = await ctx.newPage(); await second.goto(origin + '/?skin=comic'); await second.waitForTimeout(800);
+      for (const p of [first, second]) {
+        assert.equal(await mode(p), 'none'); assert.equal(await p.locator('[data-part="chat-row"]').count(), 0);
+        assert.equal(await p.getByRole('status').filter({hasText: /cannot run AgentNet/}).count(), 1);
+      }
+      assert.equal(await snapshot(first), '[]', 'nothing written to drafts');
+      results.cases.push({case: label, refused: true}); await ctx.close(); continue;
+    }
+    // Seed raw storage as earlier work left it: an older version's whole draft map
+    // (no revisions), a saved send in the journal, and a kept original.
+    await first.locator('[data-part="chat-row"]').first().waitFor();
+    await first.evaluate(async ({conv, origin}) => {
+      const me = (await (await fetch('/api/overview')).json()).me;
+      const id1 = 'a'.repeat(32), id2 = 'b'.repeat(32);
+      localStorage.clear();
+      localStorage.setItem('agentnet.messenger.drafts.default', JSON.stringify({[conv]: {text: 'older version draft words'}}));
+      localStorage.setItem('agentnet.android.send-journal.v1.default', JSON.stringify([{id: id1, conversation: conv, endpoint: '/api/dm/send', request: {id: id1, conversation: conv, body: 'saved send words'}}]));
+      localStorage.setItem('agentnet.messenger.drafts.default.send-recovery.v1.' + id2, JSON.stringify({version: 1, id: id2, conversation: conv,
+        owner: {workspace: 'default', handle: '', endpoint: origin, realm: '', address: me.address, fingerprint: me.fingerprint}, draft: {text: 'kept original words'}, revision: 'legacy:null', hadFiles: false}));
+    }, {conv, origin});
+    const before = await snapshot(first);
+    await first.reload(); await first.locator('[data-part="chat-row"]').first().waitFor();
+    const second = await ctx.newPage(); second.setDefaultTimeout(8000); await second.goto(origin + '/?skin=comic');
+    await first.waitForTimeout(1200);
+    const openChat = async p => { await p.locator('[data-part="chat-row"][data-kind="person"]').filter({hasNotText: 'Device conversation'}).first().click(); };
+    const saved = p => p.getByRole('button', {name: /^Saved messages \(/});
+    if (variant === 'lock') {
+      // The usual path: this page holds the lock and writes; the other waits.
+      assert.equal(await mode(first), 'lock');
+      assert.equal(await second.getByRole('status').filter({hasText: /open in another tab or window/}).count(), 1, 'second page waits');
+      assert.equal(await second.locator('[data-part="chat-row"]').count(), 0);
+      await saved(first).click(); const sheet = first.getByRole('dialog', {name: 'Saved messages'});
+      await sheet.getByRole('button', {name: /Put back in draft|Open chat/}).first().waitFor();
+      await first.keyboard.press('Escape'); await sheet.waitFor({state: 'detached'});
+      await openChat(first);
+      const box = first.getByRole('form', {name: 'Write a message'}).getByRole('textbox').first();
+      await box.fill('typed with the lock'); await first.waitForTimeout(500);
+      assert((await snapshot(first)).includes('typed with the lock'), 'the lock holder saves its draft');
+      results.cases.push({case: label, writes: true}); await ctx.close(); continue;
+    }
+    const state = async p => ({mode: await mode(p), chats: await p.locator('[data-part="chat-row"]').count(),
+      notice: await p.getByText(readOnly).count()});
     const a = await state(first), b = await state(second);
-    const drafts = await first.evaluate(() => { const k = []; for (let i = 0; i < localStorage.length; i++) if (/\.drafts/.test(localStorage.key(i))) k.push(localStorage.key(i)); return k.length; });
-    const label = (native ? 'native-' : 'browser-') + variant;
-    results.pages = {...results.pages, [label]: {first: a, second: b, draft_keys: drafts}};
-    const running = [a, b].filter(s => s.chats > 0).length;
-    // When both run, show what two writers do to one chat's draft.
-    if (running === 2) {
-      const open = async p => { await p.locator('[data-part="chat-row"][data-kind="person"]').filter({hasNotText: 'Device conversation'}).first().click();
-        const box = p.getByRole('form', {name: 'Write a message'}).getByRole('textbox').first(); await box.waitFor(); return box; };
-      const boxA = await open(first), boxB = await open(second);
-      await boxA.fill('typed in the first window'); await first.waitForTimeout(400);
-      await boxB.fill('typed in the second window'); await second.waitForTimeout(400);
-      const stored = await first.evaluate(() => { const v = []; for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (/\.drafts/.test(k)) v.push(localStorage.getItem(k)); } return v.join('\n'); });
-      results.draft = {...results.draft, [label]: {first_composer: await boxA.inputValue(), second_composer: await boxB.inputValue(),
-        first_text_in_storage: stored.includes('typed in the first window'), second_text_in_storage: stored.includes('typed in the second window')}};
+    results.pages = {...results.pages, [label]: {first: a, second: b}};
+    for (const s of [a, b]) { assert.equal(s.mode, 'readonly'); assert(s.chats > 0, 'native page opens'); assert(s.notice > 0, 'read-only state is shown'); }
+    for (const p of [first, second]) {
+      // Saved messages: readable and copyable, nothing that writes or sends.
+      await saved(p).click(); const sheet = p.getByRole('dialog', {name: 'Saved messages'});
+      await sheet.getByText('kept original words').waitFor();
+      if (native === 'android') await sheet.getByText('saved send words').waitFor();
+      assert(await sheet.getByRole('button', {name: 'Copy text'}).count() >= 1, 'Copy text offered');
+      assert.equal(await sheet.getByRole('button', {name: /Retry saved send|Put back in draft|Discard|Restore draft/}).count(), 0, 'nothing that writes or sends');
+      await p.keyboard.press('Escape'); await sheet.waitFor({state: 'detached'});
+      // The chat opens to read; its composer says why nothing is written.
+      await openChat(p);
+      await p.getByText(readOnly).first().waitFor();
+      assert.equal(await p.getByRole('form', {name: 'Write a message'}).count(), 0, 'no composer');
+      // Settings, with its update control, stays reachable.
+      await p.getByRole('navigation', {name: 'Main', exact: true}).getByRole('button', {name: 'Settings', exact: true}).click();
+      await p.getByRole('button', {name: /^About/}).click();
+      if (native === 'desktop') await p.getByRole('button', {name: 'Check for updates', exact: true}).waitFor();
+      await p.getByRole('navigation', {name: 'Main', exact: true}).getByRole('button', {name: 'Chats', exact: true}).click();
     }
-    results.cases.push({case: label + '-two-pages', running});
-    if (native) {
-      // The shipped fallback: the app opens (update, Saved messages reachable).
-      for (const s of [a, b]) { assert.equal(s.mode, 'shell'); assert(s.chats > 0, 'native page opens'); }
-    } else {
-      for (const s of [a, b]) { assert.equal(s.mode, 'none'); assert.equal(s.chats, 0); assert.equal(s.refusal, 1); }
-      assert.equal(drafts, 0, 'nothing written to drafts');
-    }
+    assert.equal(await snapshot(first), before, 'saved drafts, journal and recovery unchanged');
+    await first.reload(); await first.locator('[data-part="chat-row"]').first().waitFor(); await first.waitForTimeout(800);
+    assert.equal(await mode(first), 'readonly');
+    assert.equal(await snapshot(second), before, 'unchanged after a reload');
+    assert.deepEqual(sends, [], 'nothing sent or replayed');
+    assert.equal(await first.evaluate(() => window.__legacyAcks || 0), 0, 'no legacy draft acknowledged');
+    assert.deepEqual(errors, []);
+    results.cases.push({case: label, readonly: true, unchanged: true});
+    if (out) await first.screenshot({path: out + '/native-readonly-' + label + '.png'});
     await ctx.close();
   }
     results.pass = true;
