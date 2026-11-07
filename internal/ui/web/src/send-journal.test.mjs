@@ -344,6 +344,26 @@ test("older tab still open: this page's drafts are never removed or replaced by 
  assert.equal(w.saved.read("mine",owner).draft.text,"typed in old tab","older tab's own new chat is adopted");
  assert.equal(oldReader(w.storage).fresh.text,"new chat here","mirror re-shows this page's drafts");
 });
+// Delta review round 3, R2: this page writes over the map it saw the older tab write
+// (M0); the older tab then rewrites exactly M0 (a change older versions do not save,
+// such as attaching a file), and this page reloads before that storage event runs.
+test("older tab rewrites the sighted map byte-identically; a reload before its storage event keeps this page's draft",()=>{
+ const w=draftWorld();w.saved.write("known",{text:"known before"});
+ const oldRam=oldReader(w.storage);oldWriter(w.storage,oldRam);const m0=w.storage.getItem(draftKey);
+ assert.equal(w.saved.olderWriterSeen(),true,"the storage event sighting is bound to M0");
+ w.saved.write("x",{text:"typed after the sighting"});
+ oldWriter(w.storage,oldRam);assert.equal(w.storage.getItem(draftKey),m0,"the older tab writes exactly M0 again");
+ const a2=savedSendDrafts(w.storage,draftKey); // reloaded; the storage event never ran
+ assert.equal(a2.read("x",owner).draft.text,"typed after the sighting","the reload reads this page's draft");
+ a2.write("other",{text:"y"});
+ assert.equal(a2.read("x",owner).draft.text,"typed after the sighting","its first own write keeps it");
+ assert.equal(oldReader(w.storage).x?.text,"typed after the sighting","the mirror shows it");
+ oldWriter(w.storage,oldRam);const a3=savedSendDrafts(w.storage,draftKey);a3.write("third",{text:"z"});
+ assert.equal(a3.read("x",owner).draft.text,"typed after the sighting","a second reload before the event keeps it");
+ // A map the older version changed is not the sighted one: its deletion is still adopted.
+ delete oldRam.known;oldWriter(w.storage,oldRam);const a4=savedSendDrafts(w.storage,draftKey);a4.write("fourth",{text:"w"});
+ assert.equal(a4.read("known",owner).draft.text,"","an older version's deletion still wins");
+});
 test("cold re-upgrade (no older tab running) still adopts the older version's deletions",()=>{
  const w=draftWorld();w.saved.write("gone",{text:"x"});const ram=oldReader(w.storage);delete ram.gone;oldWriter(w.storage,ram);
  const up=savedSendDrafts(w.storage,draftKey);up.write("other",{text:"y"});assert.equal(up.read("gone",owner).draft.text,"");
