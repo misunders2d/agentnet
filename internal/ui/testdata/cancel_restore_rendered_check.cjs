@@ -39,7 +39,7 @@ const results = {width, cases: []};
     await page.goto(process.argv[2]); await page.goto(origin + '/?skin=comic');
     const lock = await page.evaluate(() => window.__agentnetSingleWindow);
     assert.equal(lock, 'lock', 'this page holds the one-window lock');
-    const chat = page.locator('[data-part="chat-row"]').filter({hasText: 'Vitalii'}).first(); await chat.click();
+    const chat = page.locator('[data-part="chat-row"][data-kind="dm"]').first(); await chat.click();
     const form = page.getByRole('form', {name: 'Write a message'}), box = form.getByRole('textbox').first();
     const send = async () => {
       await box.fill(original);
@@ -70,7 +70,7 @@ const results = {width, cases: []};
       Storage.prototype.setItem = function (k, v) { if (/\.drafts\.[^.]*$/.test(k)) throw new DOMException('synthetic quota', 'QuotaExceededError'); return set.call(this, k, v); }; });
     await cancel();
     await page.evaluate(() => { Storage.prototype.setItem = window.__restoreSet; });
-    await page.reload(); await page.locator('[data-part="chat-row"]').filter({hasText: 'Vitalii'}).first().click();
+    await page.reload(); await page.locator('[data-part="chat-row"][data-kind="dm"]').first().click();
     await box.waitFor(); assert.equal(await box.inputValue().catch(() => ''), '', 'storage held the cleared draft');
     const review = page.getByRole('button', {name: /^Saved messages \(1\)/}); await review.click();
     const dialog = page.getByRole('dialog', {name: 'Saved messages'});

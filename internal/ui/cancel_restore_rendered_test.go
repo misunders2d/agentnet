@@ -21,6 +21,9 @@ func TestCancelRestoreRendered(t *testing.T) {
 		if _, _, err := f.CreatePerson("Fixture Me"); err != nil {
 			t.Fatal(err)
 		}
+		if _, err := f.NewDM("vitalii/laptop"); err != nil {
+			t.Fatal(err)
+		}
 		ts := httptest.NewUnstartedServer(nil)
 		ts.Config.Handler = New(f, ts.Listener.Addr().String(), testToken).Handler()
 		ts.Start()
