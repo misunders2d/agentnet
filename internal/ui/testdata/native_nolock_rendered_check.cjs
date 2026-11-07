@@ -17,7 +17,7 @@ const fs = require('node:fs');
 const {chromium} = require(process.env.AGENTNET_PLAYWRIGHT);
 const out = process.env.NOLOCK_EVIDENCE, results = {cases: []};
 const conv = process.argv[3];
-const readOnly = /Drafts are read-only in this window/;
+const readOnly = /Drafts are read-only in this window|Sending is off in this window/; // the earlier title, so the before run reaches the row checks
 const pageErrors = [];
 let current = null; // the page under check, for a failure screenshot
 
@@ -131,7 +131,9 @@ let current = null; // the page under check, for a failure screenshot
       current = first; await openChat(first);
       const retry = first.locator('[data-send-retry]').first(), discard = first.locator('[data-send-discard]');
       await first.getByText('queued held words').waitFor(); await retry.click();
-      await discard.filter({hasText: 'Discard'}).first().click();
+      await discard.filter({hasText: 'Discard'}).first().click(); await first.waitForTimeout(500);
+      results.schedule = [...schedule];
+      assert.deepEqual(schedule, [], 'row Retry and Discard of a held message reach nothing');
       await first.getByText(/can’t be retried or discarded in this window/).first().waitFor();
       await discard.filter({hasText: 'Cancel'}).first().click(); await first.waitForTimeout(500);
       results.schedule = schedule;
