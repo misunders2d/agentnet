@@ -34,11 +34,10 @@
   // Telegram Web, one page is active; another waits, writing nothing, until it
   // closes. Every host takes it, the desktop and Android shells included. A
   // plain browser without tab locks (missing, or the request refused) is
-  // refused, as the browser device is. A native shell without them proceeds
-  // on its own single window (Tauri single-instance, one window; Android one
-  // activity): refusing it would also take away its update and Saved messages.
-  // Shipped shells' web views are expected to have Web Locks (B5: static
-  // evidence only, not run), so this is a compatibility fallback.
+  // refused, as the browser device is. A native shell without them opens
+  // read-only (saved-storage.ts): refusing it would take away its update and
+  // Saved messages, and its own single-window guard cannot be relied on, so it
+  // reads saved drafts and sends but writes none and sends nothing.
   if (!browser) {
     const native = typeof window.__agentnetNativeAppJSON === "function" || window.__agentnetPlatform === "android";
     const say = (text) => { const p = document.createElement("p"); p.setAttribute("role", "status");
@@ -53,7 +52,7 @@
       clearTimeout(later); note?.remove();
     }
     if (refused) {
-      window.__agentnetSingleWindow = native ? "shell" : "none";
+      window.__agentnetSingleWindow = native ? "readonly" : "none";
       if (!native) { say("This browser cannot run AgentNet here: it lacks tab locks, so two tabs could overwrite each other's drafts. Try an up-to-date browser."); return; }
     } else window.__agentnetSingleWindow = "lock";
   }

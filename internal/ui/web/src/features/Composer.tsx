@@ -1,5 +1,6 @@
 import { Button } from "../ui/Button";
 import { saveBatch, acknowledge, recordFailure, type JournalEntry } from "../send-journal.mjs";
+import { savedStorage, savedReadOnly, readOnlyTitle, readOnlyDetail } from "../saved-storage";
 import { sendID } from "../optimistic.mjs";
 import { pastePictures, pasteTable } from "../pictures.mjs";
 // The message composer: attachments, @ picker, text and send. Typing @ offers
@@ -159,7 +160,8 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   // Why nothing can be written here now, in words.
   const mine = humanGuest && !author ? (dm?.guests || []).find((g) => g.host_here && scopeMatches(g, draft.newTopic ? "__new__" : draft.topic || "")) : undefined;
   const closed: { title: string; detail?: string } | null =
-    groupPending ? { title: "Updating group details", detail: "Sending is paused until verification finishes. Your draft stays here." }
+    savedReadOnly() ? { title: readOnlyTitle, detail: readOnlyDetail }
+    : groupPending ? { title: "Updating group details", detail: "Sending is paused until verification finishes. Your draft stays here." }
     : humanGuest && !author ? (mine?.state === "invited" ? { title: "Join to write here", detail: "You’re invited as a guest. Accept the invitation to write; your draft stays." }
       : mine && (mine.state === "dismissed" || mine.state === "left") ? { title: "You’re no longer a guest here", detail: "New messages don’t reach you. What was already shared stays with you." }
       : { title: "You can read this chat but not write in it", detail: dm?.frozen || "Choose the topic you were invited to." })
@@ -637,7 +639,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
         forgetStaged(c, sent);
         throw Error("The chat changed before steering was submitted. Your original draft is kept.");
       }
-      journaled=saveBatch(localStorage,workspace,plans.map(p=>p.entry));
+      journaled=saveBatch(savedStorage(),workspace,plans.map(p=>p.entry));
       if (store.isActive()) {
         const retain=plans.length===1 && plans[0].entry.endpoint==="/api/dm/send";
         recovery=clearSent(c,captured,sent,retain?{id:plans[0].entry.id,original}:undefined);
@@ -646,7 +648,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     } catch(e) {
       // No submit call has started. Roll back only these unsubmitted records;
       // if storage refuses that too, the exact records and active draft remain.
-      for(const id of journaled){try{acknowledge(localStorage,workspace,id);}catch{/* never hide or replace the retained request */}}
+      for(const id of journaled){try{acknowledge(savedStorage(),workspace,id);}catch{/* never hide or replace the retained request */}}
       setNotice({conv:c,text:"Send was not submitted. Your draft is kept: "+errorText(e),refresh:(e as Error).name==="ComposerRecovery"});
       setBusy(({[c]:_,...rest})=>rest);androidPreparing.current.delete(c);return;
     }
@@ -669,7 +671,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
         result = await host.api<T.Sent & {note?:string}>(entry.endpoint,entry.request);
       } catch(e) {
         const why=errorText(e);
-        try {recordFailure(localStorage,workspace,entry.id,why);} catch(_) { /* original exact request stays retained */ }
+        try {recordFailure(savedStorage(),workspace,entry.id,why);} catch(_) { /* original exact request stays retained */ }
         // The native write may have committed before its response was lost.
         // Retire only our local preview; the exact journal offers explicit retry.
         store.sends.remove(entry.id);
@@ -678,7 +680,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       }
       // The successful native result proves admission. Presentation/storage
       // failures after this point must never relabel the request as failed.
-      try {acknowledge(localStorage,workspace,entry.id);} catch(e) {
+      try {acknowledge(savedStorage(),workspace,entry.id);} catch(e) {
         store.toast("Saved by AgentNet, but the recovery record could not be cleared: "+errorText(e),"error");
       }
       try {
@@ -807,8 +809,8 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
         <p className="font-semibold">{closed.title}</p>
         {closed.detail && <p className="text-[13px] text-text-2">{closed.detail}</p>}
       </div>
-      {!dm?.frozen && <PlusMenu actions={actions.filter(a=>a.label === "Schedule…")} onOpenChange={setMenuOpen} finalFocus={()=>!schedulePane} />}
-    </div>{!dm?.frozen && scheduleDialogs}</>
+      {!dm?.frozen && !savedReadOnly() && <PlusMenu actions={actions.filter(a=>a.label === "Schedule…")} onOpenChange={setMenuOpen} finalFocus={()=>!schedulePane} />}
+    </div>{!dm?.frozen && !savedReadOnly() && scheduleDialogs}</>
   );
 
   return (

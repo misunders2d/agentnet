@@ -83,7 +83,7 @@ async function world(draft={text:' Original E\n'},platform='android',holdAdmissi
   const env={store,conv,dm:view(conv),thread:undefined,ready:true,overview:store.get().overview,names:{},words:{},
     target:{kind:'conversation'},latest:()=>store.draft(conv),androidPreparing:{current:new Set()},EMPTY:{text:''},visible:{current:conv},
     decode,encode,agentTargets,guestAuthor,selectedTargetFollowup:()=>undefined,messageOf:()=>({id:reply}),
-    sendID:()=> (++serial).toString(16).padStart(32,'0'),localStorage,URL,
+    sendID:()=> (++serial).toString(16).padStart(32,'0'),localStorage,savedStorage:()=>localStorage,URL,
     ...journal,setBusy:()=>{},setNotice:v=>notices.push(v),typing:{stop(){}},announce:()=>{},errorText:e=>e.message};
   for(const name of ['clearSent','keepStaged','forgetStaged'])env[name]=runInNewContext('('+action(name)+')',env);
   env.releaseFiles=files=>{for(const f of files)if(f.url)URL.revokeObjectURL(f.url);};

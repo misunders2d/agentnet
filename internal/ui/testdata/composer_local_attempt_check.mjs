@@ -160,7 +160,7 @@ async function ordinaryGroupSend(platform,c,{tagged=true,reply=true,newTopic=fal
   sendID:()=> (++serial).toString(16).padStart(32,'0'),decode:text=>({text,spans:[]}),encode:text=>text,agentTargets:(_t,_s,selected)=>selected?[selected]:[],
   releaseFiles:()=>{},keepStaged:()=>{},forgetStaged:()=>{},announce:()=>{},errorText:e=>e.message,
   messageOf:id=>dm.messages.find(m=>m.id===id||m.lid===id),guestAuthor:()=>null,
-  androidPreparing:{current:new Set()},saveBatch:journal.saveBatch,acknowledge:journal.acknowledge,recordFailure:journal.recordFailure,localStorage:storage};
+  androidPreparing:{current:new Set()},saveBatch:journal.saveBatch,acknowledge:journal.acknowledge,recordFailure:journal.recordFailure,localStorage:storage,savedStorage:()=>storage};
  runInNewContext(stripTypeScriptTypes(selectorSource)+'; globalThis.boundSelector=selectedTargetFollowup;',env);env.selectedTargetFollowup=env.boundSelector;
  const send=runInNewContext('('+stripTypeScriptTypes(desktopSource)+')',env);env.sendAndroid=runInNewContext('('+stripTypeScriptTypes(androidSource)+')',env);
  await send();
@@ -226,7 +226,7 @@ async function directSend(platform,{named=false,fail=false,newTopic=false,ended=
  setNotice:n=>{if(n)notices.push(n.text);},setBusy:()=>{},clearSent:()=>{cleared++;state.drafts[thread.id]={text:''};},typing:{stop:()=>{}},
  sendID:()=> (++serial).toString(16).padStart(32,'0'),decode:text=>({text,spans:[]}),encode:text=>text,
  releaseFiles:()=>{},keepStaged:()=>{},forgetStaged:()=>{},announce:()=>{},errorText:e=>e.message,messageOf:()=>message,
- threadAgentKey:t=>t.key,threadAgentHost:t=>(t.topic?.agent_id||t.topic?.agent_legacy)&&t.topic.agent_host||t.peer,threadAgentID:t=>t.messages[0].target?.agent_id,androidPreparing:{current:new Set()},saveBatch:journal.saveBatch,acknowledge:journal.acknowledge,recordFailure:journal.recordFailure,localStorage:storage};
+ threadAgentKey:t=>t.key,threadAgentHost:t=>(t.topic?.agent_id||t.topic?.agent_legacy)&&t.topic.agent_host||t.peer,threadAgentID:t=>t.messages[0].target?.agent_id,androidPreparing:{current:new Set()},saveBatch:journal.saveBatch,acknowledge:journal.acknowledge,recordFailure:journal.recordFailure,localStorage:storage,savedStorage:()=>storage};
  runInNewContext(stripTypeScriptTypes(selectorSource)+'; globalThis.boundSelector = selectedTargetFollowup;',env);env.selectedTargetFollowup=env.boundSelector;
  const send=runInNewContext('('+stripTypeScriptTypes(desktopSource)+')',env);
  env.sendAndroid=runInNewContext('('+stripTypeScriptTypes(androidSource)+')',env);

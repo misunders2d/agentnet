@@ -7,6 +7,7 @@
 // can act on another workspace by accident.
 import { pendingSends, sendID } from "./optimistic.mjs";
 import { savedSendDrafts, readPending, type SavedDraftOwner, type SavedSendDraft } from "./send-journal.mjs";
+import { savedStorage } from "./saved-storage";
 import { useSyncExternalStore } from "react";
 import { api, errorText, type Api, type ReminderResult, type T } from "./api";
 import type { Host, HostEvent, OpenContext } from "./host";
@@ -300,7 +301,7 @@ export class Store {
   };
 
   constructor(readonly host: Host) {
-    this.savedDrafts = savedSendDrafts(localStorage, draftsKey(host.workspace.id));
+    this.savedDrafts = savedSendDrafts(savedStorage(), draftsKey(host.workspace.id));
     this.draftHandle = host.workspace.handle || "";
     this.chooseMain = mainPreferences(host.workspace.id, () => localStorage);
     const calls = api(this.watchWrites(host));
@@ -2452,7 +2453,7 @@ export class Store {
    *  composer. "check": the chat is not loaded yet; open it first. */
   keptOriginals(): (SavedSendDraft & {state:"offer"|"check";replaced?:boolean})[] {
     const owner=this.draftOwner();if(!owner||!this.alive)return [];
-    let retry:Set<string>;try{retry=new Set(readPending(localStorage,this.host.workspace.id).map(e=>e.id));}catch{return [];}
+    let retry:Set<string>;try{retry=new Set(readPending(savedStorage(),this.host.workspace.id).map(e=>e.id));}catch{return [];}
     const sends=this.savedDrafts.entries(owner).flatMap(r=>{
       if(this.sends.has(r.id)||retry.has(r.id))return [];
       const view=this.state.views[r.conversation];
