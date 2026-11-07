@@ -53,7 +53,9 @@ export function pendingSends(host, changed = () => {}, restoreDraft, captureQueu
     // After process restart the host still owns this pending row, but the
     // renderer's original capture is gone. Capture only eligible local text,
     // before the async cancel; the usual revision/scope/store fences apply.
-    if (kind === 'discard' && m.queued_send.state !== 'needs_review') {
+    // A row held here is stopped even before the host's refreshed row arrives.
+    const stopped = m.queued_send.state === 'needs_review' || actions.get(m.id)?.kind === 'hold';
+    if (kind === 'discard' && !stopped) {
       const prior = drafts.get(m.id)?.value;
       const value = shared.captureQueuedDraft?.(key, m, prior);
       if (value && value !== prior) drafts.set(m.id, {key, value});
@@ -61,7 +63,7 @@ export function pendingSends(host, changed = () => {}, restoreDraft, captureQueu
     // An original whose files this page can no longer put back (a restart ended
     // its File objects) is held, not cancelled: sending stops and the host keeps
     // the message with its files; nothing returns to the draft.
-    const draft = drafts.get(m.id), hold = kind === 'discard' && draft?.key === key && !!draft.value?.hold;
+    const draft = drafts.get(m.id), hold = kind === 'discard' && !stopped && draft?.key === key && !!draft.value?.hold;
     const action = {kind: hold ? 'hold' : kind, rev: m.queued_send.rev, key};
     actions.set(m.id, action);
     notify();
@@ -78,7 +80,7 @@ export function pendingSends(host, changed = () => {}, restoreDraft, captureQueu
     // The exact cancelled-ID receipt comes from the host's atomic cancel/store
     // race. A note, lost answer or a stored/custody projection proves no cancel.
     if (kind === 'discard' && result?.id === m.id && result.state === 'cancelled') {
-      const discarded = m.queued_send.state === 'needs_review';
+      const discarded = stopped;
       if (discarded || draft?.key === key && drafts.get(m.id) === draft && shared.restoreDraft?.(key, draft.value)) {
         drafts.delete(m.id); shared.releaseDraft?.(m.id, key);
       }
