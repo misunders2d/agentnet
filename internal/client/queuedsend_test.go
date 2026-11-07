@@ -622,10 +622,21 @@ func TestQueuedSendHoldKeepsFilesAndBeatsAttempt(t *testing.T) {
 	if _, err = os.Stat(a.keptPath(sha(data))); err != nil {
 		t.Fatal("held message's kept bytes collected", err)
 	}
-	a.driveQueuedSends() // what a restart runs
-	time.Sleep(300 * time.Millisecond)
-	if s := queuedRow(t, a, id); s.State != ScheduledNeedsReview || s.Body != "held with a file" || len(s.Files) != 1 || queuedLIDCopies(t, a, id) != 0 {
+	// A real restart: close, reopen the same home, run the daemon loop, which
+	// resumes what a restart interrupted (pending/dispatching), never a held row.
+	home := a.home
+	a.Close()
+	if a, err = Open(home); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { a.Close() })
+	runAgent(t, a)
+	time.Sleep(time.Second)
+	if s := queuedRow(t, a, id); s.State != ScheduledNeedsReview || s.Body != "held with a file" || len(s.Files) != 1 || s.Files[0].SHA256 != sha(data) || queuedLIDCopies(t, a, id) != 0 {
 		t.Fatalf("restart resumed or emptied a held message: %+v", s)
+	}
+	if _, err = os.Stat(a.keptPath(sha(data))); err != nil {
+		t.Fatal("held message's kept bytes gone after restart", err)
 	}
 	if _, err = a.RetryQueuedSend(id); err != nil {
 		t.Fatal(err)

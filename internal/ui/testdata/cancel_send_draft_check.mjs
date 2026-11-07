@@ -42,7 +42,7 @@ const turn=()=>new Promise(resolve=>setImmediate(resolve));
 const gate=()=>{let release;const promise=new Promise(r=>release=r);return {promise,release};};
 async function world(draft={text:' Original E\n'},platform='android',holdAdmission=false,config={}) {
   config.failing=config.failPosts>0;
-  let rows=[], cancelGate, mode='confirmed', heldResult;
+  let rows=[], cancelGate, holdGate, holdLate, mode='confirmed', heldResult;
   const admission=holdAdmission?gate():null,entered=gate();
   let connected=true,registration;
   const scope={}, posts=[], stages=[], cancels=[], holds=[], notices=[], me={address:'fixture/phone',fingerprint:'fixture-owner'};
@@ -61,8 +61,10 @@ async function world(draft={text:' Original E\n'},platform='android',holdAdmissi
         return {id:body.id,lid:body.id,state:'queued'};
       }
       if(path==='/api/schedule/hold_send') {
-        holds.push(body.id);
+        holds.push(body.id);if(holdGate)await holdGate.promise;
+        if(rows.every(m=>m.id!==body.id||!m.queued_send||m.queued_send.state!=='pending'&&m.queued_send.state!=='needs_review'))throw Object.assign(Error('this message was already sent'),{status:409});
         rows=rows.map(m=>m.id===body.id?{...m,state:'queued',detail:'Stopped. Its files are kept on this device: Retry sends it, Discard removes it.',queued_send:{state:'needs_review',rev:(m.queued_send?.rev||1)+1}}:m);
+        if(holdLate)await holdLate.promise; // held on the host; its answer arrives late
         return {id:body.id,state:'needs_review',immediate:true,detail:'Stopped. Its files are kept on this device: Retry sends it, Discard removes it.'};
       }
       if(path==='/api/schedule/discard_send') {
@@ -108,7 +110,8 @@ async function world(draft={text:' Original E\n'},platform='android',holdAdmissi
         stored(){rows=rows.map(({queued_send,...m})=>({...m,state:'custody'}));next.sends.merge(conv,rows);},
         stop(){next.stop();}};
     },
-    hold(){cancelGate=gate();return cancelGate;},mode(value){mode=value;},
+    hold(){cancelGate=gate();return cancelGate;},holdHeld(){holdGate=gate();return holdGate;},holdAnswerLate(){holdLate=gate();return holdLate;},
+    setRows(next){rows=next(rows);},mode(value){mode=value;},
     stored(){rows=rows.map(({queued_send,...m})=>({...m,state:'custody'}));store.sends.merge(conv,rows);},
     review(){rows=rows.map(m=>({...m,queued_send:{...m.queued_send,state:'needs_review'}}));},
     result(value){heldResult=value;},finishAdmission:async()=>{admission?.release();await sending;},
@@ -466,6 +469,28 @@ await check('F7 only the older-version copy lags: a put-back save and a Cancel r
     w.store.setDraft(conv,{text:''});overlaid=true;
     w.store.saveDraftNow(conv,{text:'put back'});assert.equal(w.store.draft(conv).text,'put back','saved text shown');
   }finally{localStorage.setItem=write;await w.stop();}
+});
+await check('B7 before the exact held receipt nothing looks stopped; a late receipt never masks newer host state',async()=>{
+  const file=new File(['retained bytes'],'original.txt');
+  for(const later of ['none','sent','retried']){
+    const w=await world({text:'file text',files:[{key:'f',file,name:file.name,size:file.size,type:file.type}]});let r;try{
+      r=await w.restart();const id=w.posts[0].id,gateH=later==='retried'?w.holdAnswerLate():w.holdHeld();
+      const pending=r.queued()._discard();await turn();
+      let shown=r.store.sends.merge(conv,w.rows()).find(m=>m.id===id);
+      if(later==='retried'){assert(shown._failed&&/kept on this device/.test(shown.state_text),'the host already held it: its own row shows that');}
+      else{assert.equal(shown.state_text,'Stopping…','local change at once');assert(!shown._failed,'not shown stopped before the receipt');
+        assert.equal(shown._discard,undefined,'no stopped-state controls before the receipt');}
+      if(later==='sent')w.setRows(rows=>rows.map(({queued_send,...m})=>({...m,state:'custody'})));
+      if(later==='retried')w.setRows(rows=>rows.map(m=>({...m,detail:undefined,queued_send:{state:'pending',rev:5}}))); // retried elsewhere after the host held it
+      if(later!=='none')r.store.sends.merge(conv,w.rows());
+      gateH.release();
+      if(later==='sent')await assert.rejects(pending,/already sent/);else await pending;
+      shown=r.store.sends.merge(conv,w.rows()).find(m=>m.id===id);
+      if(later==='none'){assert(shown._failed&&/files are kept on this device/.test(shown.state_text),'confirmed held');}
+      else if(later==='sent'){assert(!shown?.queued_send&&!shown?._failed,'stored message shown as sent, not held: '+JSON.stringify(shown?.state_text));}
+      else {assert(!shown._failed&&shown.state_text!=='Stopping…'&&!/kept on this device/.test(shown.state_text),'newer host revision not masked: '+shown.state_text);}
+    }finally{r?.stop();await w.stop();}
+  }
 });
 // Delta review round 2 (R1-R5): reproduced before their repair.
 await check('R1 every older-tab write is recorded, so a reload after its second write keeps this page\'s draft',async()=>{

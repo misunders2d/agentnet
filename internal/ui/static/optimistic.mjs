@@ -54,7 +54,8 @@ export function pendingSends(host, changed = () => {}, restoreDraft, captureQueu
     // renderer's original capture is gone. Capture only eligible local text,
     // before the async cancel; the usual revision/scope/store fences apply.
     // A row held here is stopped even before the host's refreshed row arrives.
-    const stopped = m.queued_send.state === 'needs_review' || actions.get(m.id)?.kind === 'hold';
+    const prior = actions.get(m.id), stopped = m.queued_send.state === 'needs_review' || prior?.kind === 'hold' && prior.detail !== undefined;
+    if (prior?.kind === 'hold' && prior.detail === undefined) return; // one hold at a time; its receipt decides
     if (kind === 'discard' && !stopped) {
       const prior = drafts.get(m.id)?.value;
       const value = shared.captureQueuedDraft?.(key, m, prior);
@@ -72,7 +73,9 @@ export function pendingSends(host, changed = () => {}, restoreDraft, captureQueu
     catch (e) { if (actions.get(m.id) === action) actions.delete(m.id); notify(); throw e; }
     if (hold) {
       // Only the exact held receipt keeps it shown stopped; anything else shows the host's own state.
-      if (!(result?.id === m.id && result.state === 'needs_review')) { if (actions.get(m.id) === action) actions.delete(m.id); }
+      // A receipt for an action already retired by newer host state changes nothing.
+      if (actions.get(m.id) !== action) { notify(); return result; }
+      if (!(result?.id === m.id && result.state === 'needs_review')) actions.delete(m.id);
       else action.detail = typeof result.detail === 'string' ? result.detail : ''; // the host's own words, until its row arrives
       notify();
       return result;
@@ -88,10 +91,11 @@ export function pendingSends(host, changed = () => {}, restoreDraft, captureQueu
     return result;
   };
   const queuedRow = (m, key) => {
-    const action = actions.get(m.id), stopped = (m.queued_send.state === 'needs_review' || action?.kind === 'hold') && action?.kind !== 'retry';
+    const action = actions.get(m.id), holding = action?.kind === 'hold' && action.detail === undefined;
+    const stopped = (m.queued_send.state === 'needs_review' || action?.kind === 'hold' && !holding) && action?.kind !== 'retry';
     const waiting = !stopped && !action && m.queued_send.state === 'pending' && m.detail;
-    return {...m, _local: true, _failed: stopped, delivery: stopped ? 'failed' : 'queued', state_text: stopped ? (action?.kind === 'hold' && m.queued_send.state !== 'needs_review' ? action.detail || 'Stopping…' : m.detail || 'Not sent.') : waiting || 'Sending…',
-      _retry: () => act('retry', m, key), _discard: () => act('discard', m, key), _diagnostic: m.queued_send.diagnostic,
+    return {...m, _local: true, _failed: stopped, delivery: stopped ? 'failed' : 'queued', state_text: holding ? 'Stopping…' : stopped ? (action?.kind === 'hold' && m.queued_send.state !== 'needs_review' ? action.detail || 'Stopped.' : m.detail || 'Not sent.') : waiting || 'Sending…',
+      _retry: () => act('retry', m, key), _discard: holding ? undefined : () => act('discard', m, key), _diagnostic: m.queued_send.diagnostic,
       can: [], actions: [], copies: [], reactions: []};
   };
   const when = m => { const t = Date.parse(m.at); return Number.isNaN(t) ? Infinity : t; };
@@ -138,7 +142,8 @@ export function pendingSends(host, changed = () => {}, restoreDraft, captureQueu
       for (const [id, action] of actions) {
         if (action.key !== key) continue;
         const row = actual.find(m => m.id === id && m.queued_send);
-        if (!row || action.kind === 'retry' && row.queued_send.rev !== action.rev) actions.delete(id);
+        if (!row || action.kind === 'retry' && row.queued_send.rev !== action.rev ||
+          action.kind === 'hold' && (row.queued_send.state === 'needs_review' || row.queued_send.rev !== action.rev)) actions.delete(id);
       }
       const shown = actual.some(m => m.queued_send) ? actual.filter(m => !m.queued_send || actions.get(m.id)?.kind !== 'discard').map(m => m.queued_send ? queuedRow(m, key) : m) : actual;
       const pending = rows(key);
