@@ -17,7 +17,7 @@ const fs = require('node:fs');
 const {chromium} = require(process.env.AGENTNET_PLAYWRIGHT);
 const out = process.env.NOLOCK_EVIDENCE, results = {cases: []};
 const conv = process.argv[3];
-const readOnly = /Sending is off in this window/;
+const readOnly = /Drafts are read-only in this window/;
 const pageErrors = [];
 let current = null; // the page under check, for a failure screenshot
 
@@ -34,6 +34,24 @@ let current = null; // the page under check, for a failure screenshot
         window.__agentnetAndroid = {visible: () => true, onVisibility: () => () => {}, connection: async () => ({enabled: true}), notificationStatus: async () => ({granted: true, app_granted: true}), legacyDrafts: async () => ({drafts: []}), acknowledgeLegacyDraft: async () => { window.__legacyAcks = (window.__legacyAcks || 0) + 1; return {removed: true}; }}; }
     }, {variant, native});
     const sends = []; await ctx.route('**/api/dm/send', r => { sends.push(r.request().url()); return r.continue(); });
+    // Queued rows of this person's own (as another window's sends leave them): one
+    // still pending, one held. Row Retry/Cancel/Discard reach /api/schedule/*.
+    const rowsOn = variant === 'rejected' && native === 'desktop', schedule = [];
+    const held = 'Stopped. Its files are kept on this device: Retry sends it, Discard removes it.';
+    if (rowsOn) {
+      await ctx.route('**/api/dm?*', async route => {
+        const response = await route.fetch(), view = await response.json();
+        if (new URL(route.request().url()).searchParams.get('id') === conv) {
+          const own = {dir: 'out', kind: 'message', at: new Date().toISOString(), from: view.me?.address, send_group_author: view.me?.fingerprint, can: [], actions: [], reactions: []};
+          view.messages = [...(view.messages || []),
+            {...own, id: 'c'.repeat(32), lid: 'c'.repeat(32), body: 'queued pending words', state: 'queued', state_text: 'Sending…', queued_send: {state: 'pending', rev: 1}},
+            {...own, id: 'd'.repeat(32), lid: 'd'.repeat(32), body: 'queued held words', state: 'failed', state_text: held, detail: held, queued_send: {state: 'needs_review', rev: 2}}];
+        }
+        await route.fulfill({response, json: view});
+      });
+      await ctx.route('**/api/schedule/*', r => { const path = new URL(r.request().url()).pathname; schedule.push(path);
+        return r.fulfill({json: path.endsWith('/hold_send') ? {id: 'c'.repeat(32), state: 'needs_review', detail: held} : {id: r.request().postDataJSON()?.id, state: 'cancelled'}}); });
+    }
     const origin = new URL(process.argv[2]).origin;
     const label = (native || 'browser') + '-' + variant;
     const first = await ctx.newPage(); first.setDefaultTimeout(8000); current = first;
@@ -106,6 +124,19 @@ let current = null; // the page under check, for a failure screenshot
       await p.getByRole('button', {name: /^About/}).click();
       if (native === 'desktop') await p.getByRole('button', {name: 'Check for updates', exact: true}).waitFor();
       await p.getByRole('navigation', {name: 'Main', exact: true}).getByRole('button', {name: 'Chats', exact: true}).click();
+    }
+    if (rowsOn) {
+      // Row controls: Retry sends nothing, Discard of a held message destroys nothing;
+      // Cancel stops the pending one and the host keeps it (hold), as when a draft can't be put back.
+      current = first; await openChat(first);
+      const retry = first.locator('[data-send-retry]').first(), discard = first.locator('[data-send-discard]');
+      await first.getByText('queued held words').waitFor(); await retry.click();
+      await discard.filter({hasText: 'Discard'}).first().click();
+      await first.getByText(/can’t be retried or discarded in this window/).first().waitFor();
+      await discard.filter({hasText: 'Cancel'}).first().click(); await first.waitForTimeout(500);
+      results.schedule = schedule;
+      assert.deepEqual(schedule, ['/api/schedule/hold_send'], 'only a hold reaches the host');
+      await first.getByRole('navigation', {name: 'Main', exact: true}).getByRole('button', {name: 'Chats', exact: true}).click();
     }
     assert.equal(await snapshot(first), before, 'saved drafts, journal and recovery unchanged');
     await first.reload(); await first.locator('[data-part="chat-row"]').first().waitFor(); await first.waitForTimeout(800);
