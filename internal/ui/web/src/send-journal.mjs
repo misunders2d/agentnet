@@ -161,6 +161,8 @@ export function savedSendDrafts(storage, draftsKey) {
       if(storage.getItem(draftsKey)===text)return;
       if(round===rounds)break;
       storage.setItem(draftsKey,text);
+      // This version now wrote the map: an earlier sighting no longer describes it.
+      if(storage.getItem(olderKey)!==null)try{storage.removeItem(olderKey);}catch{ /* bound to old text; inert */ }
       if(pending)return; // one commit ahead of the record; the caller checks after it
     }
     throw Error("Drafts kept changing in another window. Older versions may show an earlier copy.");

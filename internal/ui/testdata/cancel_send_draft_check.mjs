@@ -451,5 +451,47 @@ await check('F7 only the older-version copy lags: a put-back save and a Cancel r
     w.store.saveDraftNow(conv,{text:'put back'});assert.equal(w.store.draft(conv).text,'put back','saved text shown');
   }finally{localStorage.setItem=write;await w.stop();}
 });
+// Delta review round 2 (R1-R5): reproduced before their repair.
+await check('R1 every older-tab write is recorded, so a reload after its second write keeps this page\'s draft',async()=>{
+  const w=await world({text:'sent'},'daemon');try{
+    const base='agentnet.messenger.drafts.'+w.host.workspace.id;
+    w.store.setDraft(other,{text:'mine'});
+    localStorage.setItem(base,JSON.stringify({y:{text:'old 1'}}));storageEvent(base);
+    localStorage.setItem(base,JSON.stringify({y:{text:'old 2'}}));storageEvent(base);
+    w.store.stop();const fresh={},h={...w.host,workspaces:{...w.host.workspaces,state:()=>fresh}};
+    const reloaded=new Store(h);await reloaded.start();assert.equal(reloaded.draft(other).text,'mine');reloaded.setDraft('z'.repeat(64),{text:'z'});
+    assert.equal(new Store(h).draft(other).text,'mine','kept after a later write');reloaded.stop();
+  }finally{await w.stop();}
+});
+await check('R3 Android: adding a file while files prepare still clears the sent text',async()=>{
+  const a=new File(['a'],'a.jpg'),b=new File(['b'],'b.jpg');
+  const w=await world({text:'hi',files:[{key:'a',file:a,name:a.name,size:a.size,type:a.type}]},'android',false,{beforeSend({store,host}){
+    const stage=host.stage;host.stage=async f=>{const d=store.draft(conv);store.setDraft(conv,{...d,files:[...(d.files||[]),{key:'b',file:b,name:b.name,size:b.size,type:b.type}]});return stage(f);};}});
+  try{const d=w.store.draft(conv);assert.equal(d.text,'','sent text left the composer');assert.deepEqual((d.files||[]).map(f=>f.key),['b'],'new file kept, sent file gone');}
+  finally{await w.stop();}
+});
+await check('R4 Retry after a draft revision storage did not take still resubmits',async()=>{
+  const write=localStorage.setItem;const w=await world({text:'retry me'},'daemon',false,{failPosts:1});try{
+    const failed=w.store.sends.merge(conv,[]).find(m=>m._failed);assert(failed,'failed bubble kept');
+    localStorage.setItem=()=>{throw Error('synthetic quota');};w.store.setDraft(conv,{text:'typed while full'});localStorage.setItem=write;
+    failed._retry();for(let i=0;i<6;i++)await turn();
+    assert.equal(w.posts.length,2,'Retry submitted: '+JSON.stringify(w.notices));
+  }finally{localStorage.setItem=write;await w.stop();}
+});
+await check('R5 put-back save never reports success after its record was lost',async()=>{
+  const write=localStorage.setItem;const w=await world({text:'sent'},'daemon');try{
+    const base='agentnet.messenger.drafts.'+w.host.workspace.id,rec=base+'.draft.v1.'+other;let phase=0;
+    localStorage.setItem=(k,v)=>{
+      if(phase===0&&k===rec){write(k,v);phase=1;return;}
+      if(phase===1&&k===base){phase=2;throw Error('synthetic quota');}
+      if(phase===2&&k===base)throw Error('synthetic quota');
+      if(phase===2&&k===rec){write(base,'{}');phase=3;throw Error('synthetic quota');}
+      write(k,v);};
+    let threw=false;try{w.store.saveDraftNow(other,{text:'put back'});}catch{threw=true;}
+    localStorage.setItem=write;
+    const stored=(()=>{try{return JSON.parse(localStorage.getItem(rec)||'null')?.text;}catch{return null;}})();
+    assert(threw || stored==='put back','returned normally but storage lost the text (stored '+JSON.stringify(stored)+')');
+  }finally{localStorage.setItem=write;await w.stop();}
+});
 console.log(JSON.stringify({required:passed,executed:passed,pass:passed,fail:0,skip:0,
   scope:'actual sendAndroid + journal + Store + pendingSends, synthetic host ACKs; not rendered/native qualification'}));

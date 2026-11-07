@@ -2315,7 +2315,8 @@ export class Store {
   }
   private draftStorageChanged = (event: StorageEvent) => {
     if(this.alive && this.savedDrafts.isStorageKey(event.key)){
-      if(!this.olderTabNoticed && this.savedDrafts.olderWriterSeen()){this.olderTabNoticed=true;
+      // Every older write is recorded (a reload trusts only the last one seen); the notice shows once.
+      if(this.savedDrafts.olderWriterSeen() && !this.olderTabNoticed){this.olderTabNoticed=true;
         this.toast("AgentNet is also open in an older version in another tab. Close that tab: drafts typed there are not kept here.","error");}
       this.hydrateSendDrafts();this.refreshDraftStorage();}
   };
@@ -2385,19 +2386,20 @@ export class Store {
     const owner=this.draftOwner();
     if(!owner || !original || original.workspace!==owner.workspace || (original.handle || "")!==owner.handle || original.address!==owner.address || original.fingerprint!==owner.fingerprint)
       throw Error("The selected workspace identity changed. Your draft was kept.");
-    const current=this.savedDrafts.read(conv,owner);
-    if(current.revision!==this.draftWrites.get(conv))throw Error("This draft changed in another window. Nothing was submitted; keep the newer draft first.");
     const existed=this.savedDrafts.pending(id,conv,owner);
     // A Retry resubmits the same ID: its original was kept and its draft cleared by
-    // the first attempt. Nothing is captured or cleared again, so a Cancel still
-    // restores that first original, bound to the revision its clear wrote.
+    // the first attempt. Nothing is captured or written again (so no draft fence),
+    // and a Cancel still restores that first original, bound to its clear's revision.
     if(existed)return {...this.savedCapture(existed),missingFiles:existed.hadFiles && !original.draft.files?.length,
       draft:{...existed.draft,files:original.draft.files}};
+    const current=this.savedDrafts.read(conv,owner);
+    if(current.revision!==this.draftWrites.get(conv))throw Error("This draft changed in another window. Nothing was submitted; keep the newer draft first.");
     const revision=this.savedDrafts.nextRevision(),expected=original.revision===current.revision ? revision : "";
     const record=this.savedDrafts.prepare(id,conv,owner,original.draft,expected);
-    // A newer user revision wins even when its text is byte-for-byte equal; what
-    // was sent (files, reply) still leaves the composer.
-    const latest=this.draft(conv),cleared=original.revision===current.revision ? next : {...next,text:latest.text,agent:latest.agent};
+    // `next` removes exactly what was sent and keeps anything changed since (text
+    // that differs, other files, another reply); a newer revision only stops a
+    // later Cancel from restoring over it (expected is then empty).
+    const cleared=next;
     try{this.changeDraft(conv,cleared,false,revision,true);}
     catch(e){
       // Release the original only while the saved draft still holds it intact.

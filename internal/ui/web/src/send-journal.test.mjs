@@ -388,3 +388,10 @@ test("F6 older tab seen, then this page reloads while that write is still last: 
  reloaded.write("z",{text:"z"});
  assert.equal(savedSendDrafts(w.storage,draftKey).read("x",owner).draft.text,"mine","a later write keeps it");
 });
+test("R2 a stale older-tab sighting does not outlive this page's next map write: a later real rollback erase wins",()=>{
+ const w=draftWorld();w.saved.write("x",{text:"mine"});
+ w.storage.setItem(draftKey,"{}");assert.equal(w.saved.olderWriterSeen(),true);
+ w.saved.write("x",{text:"mine 2"});
+ const later=savedSendDrafts(w.storage,draftKey);oldWriter(w.storage,{});
+ assert.equal(savedSendDrafts(w.storage,draftKey).read("x",owner).draft.text,"","the older version's erase wins after a real rollback");
+});
