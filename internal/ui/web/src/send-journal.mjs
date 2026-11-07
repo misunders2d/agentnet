@@ -50,6 +50,10 @@ export function recordFailure(storage, workspace, id, error) {
 // Revision tombstones remain readable by older Comic versions (text is still
 // text); older writes invalidate recovery rather than resurrecting old input.
 const revisionField = "__an_draft_revision";
+// Each record write gets its own token, never supplied by callers: a
+// restoration binds to that exact write, so rewriting the same revision and
+// content later never brings it back.
+const writeField = "__an_draft_write";
 const draftFields = ["text", "replyTo", "agent", "topic", "newTopic", "plainReply", "mediaMode"];
 const scalarDraft = draft => Object.fromEntries(draftFields.filter(k => draft[k] !== undefined).map(k => [k, draft[k]]));
 const validDraft = d => d && typeof d === "object" && !Array.isArray(d) && typeof d.text === "string" &&
@@ -98,7 +102,7 @@ export function savedSendDrafts(storage, draftsKey) {
     if(raw===null)return;
     let r;try{r=JSON.parse(raw);}catch{throw Error("This saved draft is damaged. It was not replaced.");}
     if(!validDraft(r) || typeof r[revisionField]!=="string")throw Error("This saved draft is damaged. It was not replaced.");
-    return {draft:scalarDraft(r),revision:r[revisionField]};
+    return {draft:scalarDraft(r),revision:r[revisionField],write:typeof r[writeField]==="string"?r[writeField]:undefined};
   };
   const recordSpeaks = (conv,values) => {
     const raw=values[conv];
@@ -123,7 +127,7 @@ export function savedSendDrafts(storage, draftsKey) {
     if(!raw)return;
     let r;try{r=JSON.parse(raw);}catch{return;}
     if(r?.version===1 && r.conversation===conv && (!owner || sameOwner(r.owner,owner)) && validDraft(r.draft) &&
-      r.expected===current.revision && r.cleared===JSON.stringify(scalarDraft(current.draft)) && typeof r.revision==="string") return {draft:scalarDraft(r.draft),revision:r.revision};
+      r.expected===current.revision && r.cleared===JSON.stringify(scalarDraft(current.draft)) && typeof r.write==="string" && r.write===current.write && typeof r.revision==="string") return {draft:scalarDraft(r.draft),revision:r.revision};
   };
   const effective = (conv,values,owner) => {const current=base(conv,values);return restoredOver(conv,current,owner) || current;};
   // Rebuild the older versions' map from the records. Each round reads storage
@@ -185,8 +189,11 @@ export function savedSendDrafts(storage, draftsKey) {
     },
     write(conv,draft,revision=token()) {
       if(!validDraft(draft))throw Error("Cannot save an incomplete draft.");
-      map(); // a damaged map is kept, never replaced
-      storage.setItem(recordKey(conv),JSON.stringify({...scalarDraft(draft),[revisionField]:revision}));
+      const values=map(); // a damaged map is kept, never replaced
+      // An older version wrote the map last: adopt its edits and deletions into
+      // the map first, so this record can never later look superseded by them.
+      if(olderWroteLast(values))project();
+      storage.setItem(recordKey(conv),JSON.stringify({...scalarDraft(draft),[revisionField]:revision,[writeField]:token()}));
       mirror(conv);
       // A restoration bound to an earlier revision stays inert; it is never removed here.
       return revision;
@@ -222,8 +229,12 @@ export function savedSendDrafts(storage, draftsKey) {
       // expected revision still matches. The map shows it to older versions.
       // Bound to the exact cleared revision AND its content, so a later write
       // reusing that revision with other content never brings this back.
-      const cleared=JSON.stringify(scalarDraft(read(conv,owner).draft));
-      const overlay={version:1,conversation:conv,owner:{...owner},draft:r.draft,expected:r.revision,cleared,revision:token()};
+      let now=read(conv,owner);
+      // A base read from an older version's map has no write of its own: save
+      // that same content as a record first, so the restoration binds to it.
+      if(!now.write){this.write(conv,now.draft,now.revision);now=read(conv,owner);if(now.revision!==r.revision||!now.write)return;}
+      const cleared=JSON.stringify(scalarDraft(now.draft));
+      const overlay={version:1,conversation:conv,owner:{...owner},draft:r.draft,expected:r.revision,cleared,write:now.write,revision:token()};
       project(conv,{draft:scalarDraft(r.draft),revision:overlay.revision});
       try{storage.setItem(restoredKey(conv),JSON.stringify(overlay));}catch(e){repair(conv);throw e;}
       mirror(conv);

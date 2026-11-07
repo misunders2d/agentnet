@@ -190,7 +190,7 @@ test("crash between restoration and map rebuild: current reader restores, next w
  assert.throws(()=>w.saved.restore(send,conv,owner));
  // simulate the crash landing after the overlay commit: put it back as a crashed process would leave it
  crash=false;const fresh=draftWorld();
- const overlay={version:1,conversation:conv,owner,draft:originalDraft,expected:fresh.revision,cleared:JSON.stringify({text:""}),revision:"f".repeat(32)};
+ const overlay={version:1,conversation:conv,owner,draft:originalDraft,expected:fresh.revision,cleared:JSON.stringify({text:""}),write:JSON.parse(fresh.storage.getItem(draftKey+".draft.v1."+conv)).__an_draft_write,revision:"f".repeat(32)};
  fresh.storage.setItem(draftKey+".restored.v1."+conv,JSON.stringify(overlay));
  const up=savedSendDrafts(fresh.storage,draftKey);assert.equal(up.read(conv,owner).draft.text,originalDraft.text);
  assert.equal(fresh.saved.restore(send,conv,owner),undefined,"never applied twice");
@@ -290,8 +290,10 @@ test("superseded restoration never resurrects: repeated erase, reload, revision 
  // the cleared revision reused with other content stays inert
  reload.write(conv,{text:"reused revision"},w.revision);
  assert.equal(savedSendDrafts(w.storage,draftKey).read(conv,owner).draft.text,"reused revision");assert.equal(oldReader(w.storage)[conv].text,"reused revision");
- // only the exact cleared state brings back the bound restoration (same state as when it applied)
- reload.write(conv,{text:""},w.revision);assert.equal(reload.read(conv,owner).draft.text,originalDraft.text);
+ // Witness kept (785ddf93 expected the original to return here): the exact cleared
+ // revision AND content rewritten later is a new write, so the restoration stays inert.
+ reload.write(conv,{text:""},w.revision);assert.equal(reload.read(conv,owner).draft.text,"");
+ assert.equal(oldReader(w.storage)[conv].text,"");
 });
 test("restorations do not accumulate: one per conversation",()=>{
  const w=draftWorld();
@@ -345,4 +347,27 @@ test("older tab still open: this page's drafts are never removed or replaced by 
 test("cold re-upgrade (no older tab running) still adopts the older version's deletions",()=>{
  const w=draftWorld();w.saved.write("gone",{text:"x"});const ram=oldReader(w.storage);delete ram.gone;oldWriter(w.storage,ram);
  const up=savedSendDrafts(w.storage,draftKey);up.write("other",{text:"y"});assert.equal(up.read("gone",owner).draft.text,"");
+});
+
+test("mirror refused after adopting an older map: the saved record survives restart",()=>{
+ const w=draftWorld();w.saved.write("a",{text:"before rollback"});oldWriter(w.storage,{a:{text:"old edit"}});
+ const up=savedSendDrafts(w.storage,draftKey);let n=0;w.fault(k=>k===draftKey&&++n>1); // adoption commit ok, mirror refused
+ assert.throws(()=>up.write("a",{text:"after upgrade"}),/older versions may still show/);w.fault(undefined);
+ const restart=savedSendDrafts(w.storage,draftKey);assert.equal(restart.read("a",owner).draft.text,"after upgrade");
+ restart.write("b",{text:"x"});assert.equal(savedSendDrafts(w.storage,draftKey).read("a",owner).draft.text,"after upgrade");
+});
+test("adoption refused before the record: nothing is saved and nothing older is lost",()=>{
+ const w=draftWorld();w.saved.write("a",{text:"before rollback"});oldWriter(w.storage,{a:{text:"old edit"}});
+ const up=savedSendDrafts(w.storage,draftKey);w.fault(k=>k===draftKey);
+ assert.throws(()=>up.write("a",{text:"after upgrade"}),/synthetic quota/);w.fault(undefined);
+ assert.equal(savedSendDrafts(w.storage,draftKey).read("a",owner).draft.text,"old edit");assert.equal(oldReader(w.storage).a.text,"old edit");
+});
+
+test("restoration over an older map's empty draft cannot resurrect after the older version erases again",()=>{
+ const data=new Map(),s={getItem:k=>data.get(k)??null,setItem:(k,v)=>data.set(k,v),removeItem:k=>data.delete(k),get length(){return data.size;},key:i=>[...data.keys()][i]??null};
+ s.setItem(draftKey,"{}");const d=savedSendDrafts(s,draftKey),base=d.read(conv,owner);
+ d.prepare(send,conv,owner,{text:"body"},base.revision);assert.equal(d.restore(send,conv,owner).draft.text,"body","legacy body recovery still works");
+ oldWriter(s,{}); // rollback: the older version erases it
+ const up=savedSendDrafts(s,draftKey);assert.equal(up.read(conv,owner).draft.text,"");up.write("other",{text:"x"});
+ assert.equal(savedSendDrafts(s,draftKey).read(conv,owner).draft.text,"","no resurrection at the same legacy revision");
 });

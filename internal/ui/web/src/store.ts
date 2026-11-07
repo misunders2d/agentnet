@@ -2436,7 +2436,8 @@ export class Store {
     return true;
   }
 
-  /** Saves a draft durably before returning; throws and changes nothing when storage refuses. */
+  /** Saves a draft durably before returning. Throws when storage refuses; if only the copy older
+   *  versions read lags, the record is already saved here and the earlier source stays untouched. */
   saveDraftNow(conv: string, d: Draft) {
     try{this.changeDraft(conv,d,false,this.savedDrafts.nextRevision(),true);}
     catch{throw new Error("This draft could not be saved on this device. The earlier copy was kept.");}
@@ -2448,7 +2449,12 @@ export class Store {
   private changeDraft(conv:string,d:Draft,topicSelected:boolean,revision:string,strict:boolean) {
     try{this.savedDrafts.write(conv,d,revision);this.draftStorageError=false;}
     catch(e){
-      if(strict)throw Error("The original draft could not be saved. Nothing was submitted; your current draft was kept.");
+      if(strict){
+        // A lagging mirror means the record is already saved: track it, so the
+        // next attempt is not refused as a change from another window.
+        if(e instanceof Error && /older versions may still show/.test(e.message))this.draftWrites.set(conv,revision);
+        throw Error("The original draft could not be saved. Nothing was submitted; your current draft was kept.");
+      }
       // Saved here; only the copy older versions read lags behind. Say exactly that.
       if(e instanceof Error && /older versions may still show/.test(e.message)){this.draftStorageError=false;this.toast("Draft saved. Older AgentNet versions may still show an earlier copy until the next save.","error");}
       else{
