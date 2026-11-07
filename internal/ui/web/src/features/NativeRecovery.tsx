@@ -31,7 +31,10 @@ export function NativeRecovery() {
     refresh(); const off=onJournalChange(refresh);
     return()=>{alive=false;off();};
   },[native,workspace,recovered]);
-  if (!kept.length && (!native || (!legacy.length && !pending.length && !problem))) return null;
+  const empty = !kept.length && (!native || (!legacy.length && !pending.length && !problem));
+  // Once its last item settles the sheet closes, so a later saved item never opens it by itself.
+  useEffect(() => { if (empty) setOpen(false); }, [empty]);
+  if (empty) return null;
   const here = native ? "phone" : "device";
   const run = async (key:string, work:()=>Promise<void>) => {
     setBusy(key);setErrors(v=>({...v,[key]:""}));
