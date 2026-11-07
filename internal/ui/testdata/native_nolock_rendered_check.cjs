@@ -44,10 +44,10 @@ let current = null; // the page under check, for a failure screenshot
       url.searchParams.set('id', conv); const response = await route.fetch({url: url.toString()}), view = await response.json();
       await route.fulfill({response, json: {...view, id}});
     });
-    // Outbox in a read-only window (desktop, missing locks): the daemon fixture has no
+    // Outbox in a read-only window (desktop at 1280, Android at 390; missing locks): the daemon fixture has no
     // schedules (Live does; TestLiveScheduleAPI persists edits), so the host's schedule
     // routes are stood in here with one pending row.
-    const outboxOn = native === 'desktop' && variant === 'missing', scheduleWrites = [];
+    const outboxOn = (native === 'desktop' || native === 'android') && variant === 'missing', scheduleWrites = [];
     if (outboxOn) {
       const row = {id: '7'.repeat(32), conv, topic: '', body: 'scheduled words', due: new Date(Date.now() + 3 * 3600000).toISOString(), timezone: 'UTC', rev: 1, state: 'pending', audience: {persons: [], pids: []}, files: []};
       await ctx.route('**/api/overview*', async route => { const response = await route.fetch(); await route.fulfill({response, json: {...await response.json(), schedules: true}}); });
@@ -126,6 +126,18 @@ let current = null; // the page under check, for a failure screenshot
       const sheet = () => first.getByRole('dialog', {name: 'Saved messages'});
       const openSaved = async () => { if (!(await sheet().count())) await saved(first).click(); await sheet().waitFor(); return sheet(); };
       const item = async text => (await openSaved()).locator('section').filter({hasText: text});
+      if (native === 'android') {
+        // Journal Copy text: the saved send's exact words reach the clipboard; nothing changes or sends.
+        const j0 = await snapshot(first), jt = Date.now();
+        await (await item('saved send words')).getByRole('button', {name: 'Copy text', exact: true}).click();
+        await first.getByText(/^Copied$|Couldn’t copy here/).first().waitFor(); const jMs = Date.now() - jt;
+        await first.waitForFunction(t => window.__copied === t, 'saved send words');
+        assert.equal(await snapshot(first), j0, 'journal Copy text changes no saved state');
+        assert.equal(sends.length, 0, 'journal Copy text sends nothing');
+        assert(await (await item('saved send words')).count() === 1, 'the saved send stays offered');
+        assert(jMs < 1000, 'journal Copy feedback under one second: ' + jMs);
+        results.journal_copy = {click_to_copied_ms: jMs, clipboard: 'exact', storage: 'unchanged', sends: 0};
+      }
       // Kept original: its chat is not loaded yet, so Open chat (then it can be checked).
       await (await item('kept original words')).getByRole('button', {name: 'Open chat', exact: true}).click();
       await sheet().waitFor({state: 'detached'});
@@ -134,8 +146,8 @@ let current = null; // the page under check, for a failure screenshot
       // Copy text, then Discard: the newer draft stays; only the kept copy goes.
       await (await item('kept original words')).getByRole('button', {name: 'Copy text', exact: true}).click();
       await first.getByText(/^Copied$|Couldn’t copy here/).first().waitFor();
-      const copied = native === 'android' ? await first.evaluate(() => window.__copied) : await first.evaluate(() => navigator.clipboard.readText());
-      assert.equal(copied, 'kept original words', 'Copy text copies the kept text');
+      if (native === 'android') await first.waitForFunction(t => window.__copied === t, 'kept original words'); // an earlier Copied toast may still show
+      else assert.equal(await first.evaluate(() => navigator.clipboard.readText()), 'kept original words', 'Copy text copies the kept text');
       await (await item('kept original words')).getByRole('button', {name: 'Discard', exact: true}).click();
       await first.getByText('kept original words').waitFor({state: 'detached'});
       assert.equal(await box.inputValue(), 'newer draft words', 'Discard leaves the newer draft');
@@ -233,27 +245,51 @@ let current = null; // the page under check, for a failure screenshot
       // The phone at 390: Cancel on a pending row holds it; nothing else reaches the host.
       current = first; await first.setViewportSize({width: 390, height: 844});
       if (!(await first.locator('[data-send-discard]').count())) await openChat(first);
-      await first.locator('[data-send-discard]').filter({hasText: 'Stop'}).last().click(); await first.waitForTimeout(500);
-      await first.getByText(/Stopped and kept/).first().waitFor();
+      const kept = 'Stopped and kept. Drafts are read-only in this window, so it can’t be retried or discarded here.';
+      await first.getByText('queued held words').waitFor();
+      const s0 = Date.now(); await first.locator('[data-send-discard]').filter({hasText: 'Stop'}).last().click();
+      await first.getByText(/Stopping…|Stopped and kept/).first().waitFor(); const stopLocalMs = Date.now() - s0;
+      await first.locator('[data-local-send="stopped"]').filter({hasText: kept}).nth(1).waitFor(); await first.waitForTimeout(300);
       assert.deepEqual(schedule, ['/api/schedule/hold_send'], 'phone Cancel only holds');
+      // Both rows (the one stopped here and the one held before) are kept and say so; neither offers Retry or Discard.
+      assert.equal(await first.locator('[data-local-send="stopped"]').filter({hasText: kept}).count(), 2, 'both rows stopped and kept, truthfully');
+      assert.equal(await first.locator('[data-send-retry]').count(), 0, 'no Retry at 390');
+      assert.equal(await first.locator('[data-send-discard]').count(), 0, 'no Discard (or Stop) left at 390');
+      assert.equal(await first.getByText(/Retry sends it, Discard removes it/).count(), 0, 'no promise of Retry or Discard at 390');
+      assert(stopLocalMs < 1000, 'Stop feedback under one second: ' + stopLocalMs);
+      // Reply on the stored message from its action sheet: refused, truthfully; no draft written.
+      const r0snap = await snapshot(first);
+      const stored = first.locator('[data-mid="' + 'b'.repeat(32) + '"]');
+      await stored.getByRole('button', {name: /^(More actions|Message actions)$/}).click();
+      const r0 = Date.now(); await first.getByRole('dialog').getByRole('button', {name: 'Reply', exact: true}).click();
+      await first.getByText('Drafts are read-only in this window: this change wasn’t saved.').first().waitFor(); const replyMs = Date.now() - r0;
+      assert.equal(await snapshot(first), r0snap, 'Reply at 390 writes no draft');
+      assert.equal(await first.getByText(/Keep this window open/).count(), 0, 'no keep-open advice at 390');
+      assert(replyMs < 1000, 'Reply refusal under one second: ' + replyMs);
+      results.android390 = {stop_to_local_ms: stopLocalMs, kept_rows: 2, retry_controls: 0, discard_controls: 0, reply_to_refusal_ms: replyMs, draft: 'unchanged'};
       assert.equal(await first.getByText(/original draft recovery could not be cleared/).count(), 0, 'stored send releases nothing and reports no failure');
       if (out) await first.screenshot({path: out + '/native-readonly-android-cancel-390.png'});
       await first.setViewportSize({width: 1280, height: 900});
     }
     if (outboxOn) {
       // Outbox edit is the host's own schedule: it works here, with one edit and no local write.
-      current = first; const nav = first.getByRole('navigation', {name: 'Main', exact: true});
+      current = first; if (native === 'android') await first.setViewportSize({width: 390, height: 844});
+      const nav = first.getByRole('navigation', {name: 'Main', exact: true});
       await nav.getByRole('button', {name: 'Outbox', exact: true}).click();
       const editing = first.getByRole('article').filter({hasText: 'scheduled words'});
       await editing.getByRole('button', {name: 'Edit schedule', exact: true}).click();
       await first.getByRole('textbox', {name: 'Scheduled message text', exact: true}).fill('edited in read-only');
-      await editing.getByRole('button', {name: 'Save schedule changes', exact: true}).click();
-      await first.getByRole('article').filter({hasText: 'edited in read-only'}).waitFor();
+      const o0 = Date.now(); await editing.getByRole('button', {name: 'Save schedule changes', exact: true}).click();
+      await first.getByRole('article').filter({hasText: 'edited in read-only'}).waitFor(); const saveMs = Date.now() - o0;
+      assert(saveMs < 1000, 'Outbox save visible under one second: ' + saveMs);
+      assert.equal(await snapshot(first), before, 'Outbox edit leaves saved drafts unchanged');
+      results.outbox_timing = {...results.outbox_timing, [native]: {save_to_edited_row_ms: saveMs, host_row_rev: 2}};
       results.outbox = scheduleWrites.map(w => w.path);
       assert.deepEqual(results.outbox, ['/api/schedule/edit'], 'one Outbox edit');
       assert.equal(scheduleWrites[0].body.body, 'edited in read-only');
       assert.equal(await first.evaluate(() => Object.keys(localStorage).filter(k => k.includes('schedule-save')).length), 0, 'no schedule token written');
       await nav.getByRole('button', {name: 'Chats', exact: true}).click();
+      if (native === 'android') { if (out) await first.screenshot({path: out + '/native-readonly-android-outbox-390.png'}); await first.setViewportSize({width: 1280, height: 900}); }
     }
     assert.equal(await snapshot(first), before, 'saved drafts, journal and recovery unchanged');
     await first.reload(); await first.locator('[data-part="chat-row"]').first().waitFor(); await first.waitForTimeout(800);

@@ -16,7 +16,10 @@ func TestCancelRestoreRendered(t *testing.T) {
 	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
 		t.Skip("opt-in installed Playwright")
 	}
-	for _, width := range []string{"1440", "390"} {
+	// Plain browser pages at both widths, then the synthetic desktop and Android
+	// shell markers (stand-ins defined before page scripts, not the native shells).
+	for _, v := range [][2]string{{"1440", ""}, {"390", ""}, {"1440", "desktop"}, {"390", "android"}} {
+		width, native := v[0], v[1]
 		f := NewFixture(time.Now)
 		if _, _, err := f.CreatePerson("Fixture Me"); err != nil {
 			t.Fatal(err)
@@ -28,11 +31,11 @@ func TestCancelRestoreRendered(t *testing.T) {
 		ts.Config.Handler = New(f, ts.Listener.Addr().String(), testToken).Handler()
 		ts.Start()
 		cmd := exec.Command("node", "testdata/cancel_restore_rendered_check.cjs", ts.URL+"/?t="+testToken)
-		cmd.Env = append(os.Environ(), "CANCEL_WIDTH="+width)
+		cmd.Env = append(os.Environ(), "CANCEL_WIDTH="+width, "CANCEL_NATIVE="+native)
 		out, err := cmd.CombinedOutput()
 		ts.Close()
 		if err != nil || !strings.Contains(string(out), "Cancel restore rendered PASS") {
-			t.Fatalf("width %s: %v\n%s", width, err, out)
+			t.Fatalf("width %s %s: %v\n%s", width, native, err, out)
 		}
 		t.Logf("%s", out)
 	}
