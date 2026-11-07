@@ -70,12 +70,13 @@ const held = 'Stopped. Its files are kept on this device: Retry sends it, Discar
     if (out) await page.screenshot({path: out + '/saved-retry-held-390.png'});
 
     // B. answer lost before the host stored it; Retry sends once under the same ID.
-    row = null; mode = 'lose'; await box.fill('');
+    mode = 'lose'; await box.fill(''); // A's held message stays in its chat, as on the host
     await send('second original'); const idB = posts[1]; mode = 'answer';
     await page.waitForTimeout(600); results.open_layers = await page.getByRole('dialog').evaluateAll(ds => ds.map(d => (d.getAttribute('aria-label') || '') + '|' + (d.textContent || '').slice(0, 120)));
     const msB = await retry('second original', 'Saved send is in the outbox.');
     assert.deepEqual(posts, [idA, idB, idB], 'one retry, same ID');
-    await card().getByRole('button', {name: /^Saved messages/}).waitFor({state: 'detached'});
+    try { await card().getByRole('button', {name: /^Saved messages/}).waitFor({state: 'detached'}); }
+    catch (e) { const b = card().getByRole('button', {name: /^Saved messages/}); await b.tap(); results.banner_items = await page.getByRole('dialog', {name: 'Saved messages'}).locator('section').allInnerTexts(); throw e; }
     results.cases.push({case: 'not-stored-retry-once', click_to_receipt_ms: msB, posts: posts.length});
     assert(msA < 1000 && msB < 1000, 'feedback under one second: ' + msA + '/' + msB);
     assert.deepEqual(errors, []);
