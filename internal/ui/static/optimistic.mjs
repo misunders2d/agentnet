@@ -56,7 +56,12 @@ export function pendingSends(host, changed = () => {}, restoreDraft, captureQueu
     // A row held here is stopped even before the host's refreshed row arrives.
     const prior = actions.get(m.id), stopped = m.queued_send.state === 'needs_review' || prior?.kind === 'hold' && prior.detail !== undefined;
     if (prior?.kind === 'hold' && prior.detail === undefined) return; // one hold at a time; its receipt decides
-    if (kind === 'discard' && !stopped) {
+    // A read-only window (loader: no one-window lock in a native shell) saves no
+    // draft: it sends nothing again and discards no original it could not put
+    // back. Cancel holds instead, as for an original whose files are gone.
+    const readOnly = globalThis.__agentnetSingleWindow === 'readonly';
+    if (readOnly && (kind === 'retry' || stopped)) throw new Error('This message can’t be retried or discarded in this window: drafts are read-only here. It stays as it is.');
+    if (kind === 'discard' && !stopped && !readOnly) {
       const prior = drafts.get(m.id)?.value;
       const value = shared.captureQueuedDraft?.(key, m, prior);
       if (value && value !== prior) drafts.set(m.id, {key, value});
@@ -64,7 +69,7 @@ export function pendingSends(host, changed = () => {}, restoreDraft, captureQueu
     // An original whose files this page can no longer put back (a restart ended
     // its File objects) is held, not cancelled: sending stops and the host keeps
     // the message with its files; nothing returns to the draft.
-    const draft = drafts.get(m.id), hold = kind === 'discard' && !stopped && draft?.key === key && !!draft.value?.hold;
+    const draft = drafts.get(m.id), hold = kind === 'discard' && !stopped && (readOnly || draft?.key === key && !!draft.value?.hold);
     const action = {kind: hold ? 'hold' : kind, rev: m.queued_send.rev, key};
     actions.set(m.id, action);
     notify();

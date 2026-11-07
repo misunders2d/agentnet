@@ -7,8 +7,8 @@
 export const savedReadOnly = (): boolean =>
   (globalThis as { __agentnetSingleWindow?: string }).__agentnetSingleWindow === "readonly";
 
-export const readOnlyTitle = "Sending is off in this window";
-export const readOnlyDetail = "AgentNet can’t make sure this is its only window here, so it changes no drafts or saved messages. Chats, Settings and updates still work; saved messages can be read and copied.";
+export const readOnlyTitle = "Drafts are read-only in this window";
+export const readOnlyDetail = "AgentNet can’t make sure this is its only window here, so this window doesn’t write drafts or saved sends: the message box is off, saved messages can be read and copied, and an unsent message can be stopped but not retried or discarded. Other chat actions and Settings, with updates, work as usual.";
 
 /** localStorage for saved drafts and sends: in a read-only window, reads pass and every write is refused. */
 export function savedStorage(): Storage {

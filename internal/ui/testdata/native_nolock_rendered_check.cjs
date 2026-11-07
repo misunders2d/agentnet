@@ -17,7 +17,7 @@ const fs = require('node:fs');
 const {chromium} = require(process.env.AGENTNET_PLAYWRIGHT);
 const out = process.env.NOLOCK_EVIDENCE, results = {cases: []};
 const conv = process.argv[3];
-const readOnly = /Drafts are read-only in this window|Sending is off in this window/; // the earlier title, so the before run reaches the row checks
+const readOnly = /Drafts are read-only in this window/;
 const pageErrors = [];
 let current = null; // the page under check, for a failure screenshot
 

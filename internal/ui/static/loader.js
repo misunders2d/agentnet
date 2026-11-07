@@ -37,7 +37,8 @@
   // refused, as the browser device is. A native shell without them opens
   // read-only (saved-storage.ts): refusing it would take away its update and
   // Saved messages, and its own single-window guard cannot be relied on, so it
-  // reads saved drafts and sends but writes none and sends nothing.
+  // reads saved drafts and send recovery but writes neither: no message box,
+  // no retry or discard of an unsent message (Cancel holds it).
   if (!browser) {
     const native = typeof window.__agentnetNativeAppJSON === "function" || window.__agentnetPlatform === "android";
     const say = (text) => { const p = document.createElement("p"); p.setAttribute("role", "status");

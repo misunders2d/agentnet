@@ -7,7 +7,7 @@
 // can act on another workspace by accident.
 import { pendingSends, sendID } from "./optimistic.mjs";
 import { savedSendDrafts, readPending, type SavedDraftOwner, type SavedSendDraft } from "./send-journal.mjs";
-import { savedStorage } from "./saved-storage";
+import { savedStorage, savedReadOnly, readOnlyTitle } from "./saved-storage";
 import { useSyncExternalStore } from "react";
 import { api, errorText, type Api, type ReminderResult, type T } from "./api";
 import type { Host, HostEvent, OpenContext } from "./host";
@@ -2347,7 +2347,7 @@ export class Store {
     for(const [conv,view] of Object.entries(this.state.views))this.sends.merge<NonNullable<T.DMThread["messages"]>[number] | NonNullable<T.Thread["messages"]>[number]>(conv,view.messages || []);
   }
   private releaseSendDraft(id:string,conv:string) {
-    const owner=this.draftOwner();if(!owner)return;
+    const owner=this.draftOwner();if(!owner || savedReadOnly())return; // a read-only window keeps saved recovery as it is
     try{this.savedDrafts.release(id,conv,owner);}catch{this.toast("The send finished, but its original draft recovery could not be cleared. It remains saved.","error");}
   }
 
@@ -2513,6 +2513,7 @@ export class Store {
       }
       // Saved here; only the copy older versions read lags behind. Say exactly that.
       if(e instanceof Error && /older versions may still show/.test(e.message)){this.draftStorageError=false;this.toast("Draft saved. Older AgentNet versions may still show an earlier copy until the next save.","error");}
+      else if(savedReadOnly())this.toast(readOnlyTitle+": this change wasn’t saved.","error");
       else{
       if(!this.draftStorageError)this.toast("Your draft could not be saved. Keep this window open; Send will not clear unsaved input.","error");
       this.draftStorageError=true;
