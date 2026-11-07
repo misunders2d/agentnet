@@ -4,8 +4,9 @@
 //  A. The send's answer is lost after the host stored it; the person then holds
 //     it; a newer draft is typed. Retry sends nothing, says it is stopped in its
 //     chat, and leaves the newer draft.
-//  B. The send's answer is lost before the host stored it. Retry sends it once,
-//     under the same ID, and says it is in the outbox.
+//  B. The send's answer is lost before the host stored it. Retry reaches the real
+//     host route once, under the same ID, and says it is in the outbox; the host's
+//     own change notice refreshes the chat, which settles Saved messages.
 //   node saved_send_retry_rendered_check.cjs <page URL with token>
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -25,8 +26,9 @@ const held = 'Stopped. Its files are kept on this device: Retry sends it, Discar
       const body = route.request().postDataJSON(); posts.push(body.id);
       if (mode === 'store-then-lose') { row = {id: body.id, lid: body.id, dir: 'out', kind: 'message', body: body.body, at: new Date().toISOString(), state: 'queued', state_text: 'Sending…', queued_send: {state: 'pending', rev: 1}, can: [], actions: [], reactions: []}; return route.abort('failed'); }
       if (mode === 'lose') return route.abort('failed');
-      row = {id: body.id, lid: body.id, dir: 'out', kind: 'message', body: body.body, at: new Date().toISOString(), state: 'queued', state_text: 'Sending…', queued_send: {state: 'pending', rev: 1}, can: [], actions: [], reactions: []};
-      return route.fulfill({json: {id: body.id, lid: body.id, state: 'queued'}});
+      // The host itself accepts it: it stores the message under this ID and announces
+      // the change on /events (Fixture.SendDM → bump, as QueueSend → store.changed).
+      return route.continue();
     });
     await ctx.route('**/api/dm?*', async route => {
       const response = await route.fetch(), view = await response.json();
