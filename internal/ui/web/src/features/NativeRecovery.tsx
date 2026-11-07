@@ -7,7 +7,6 @@ import { readPending, acknowledge, recordFailure, onJournalChange, type JournalE
 import { Sheet } from "../ui/Sheet";
 import { Button } from "../ui/Button";
 import { copyText } from "./Settings.parts";
-import { skin as brand } from "../skin/brand";
 
 /** Appears only for actual saved work. Nothing retries merely by opening it. */
 export function NativeRecovery() {
@@ -46,12 +45,9 @@ export function NativeRecovery() {
     } else {
       const current=store.draft(d.conversation);
       if(current.text.trim() || current.files?.length) throw new Error("There is already a draft in this chat. Keep or send it first, then restore this one.");
-      const key=brand.storage+".drafts."+workspace;
-      const saved=JSON.parse(localStorage.getItem(key)||"{}");
-      saved[d.conversation]={...current,text:d.body};
       // Durable write must succeed before the old preference can be acknowledged.
-      localStorage.setItem(key,JSON.stringify(saved));
-      store.setDraft(d.conversation,{...current,text:d.body});
+      // The Store's own saved-draft writer keeps other chats and newer edits.
+      store.saveDraftNow(d.conversation,{...current,text:d.body});
       await store.open({kind:d.kind,id:d.conversation});
     }
     const ack=await native.acknowledgeLegacyDraft(record.key,record.value);

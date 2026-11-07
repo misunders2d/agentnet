@@ -21,7 +21,8 @@ registerHooks({load(url,context,next){
 }});
 const {Store}=await import(new URL('web/src/store.ts',root));
 const {currentComposerFollowup,composerReplyFollowup}=await import(new URL('web/src/features/Composer.followup.ts',root));
-const saved=new Map();globalThis.localStorage={getItem:k=>saved.get(k)||null,setItem:(k,v)=>saved.set(k,v)};
+const saved=new Map();globalThis.localStorage={getItem:k=>saved.get(k)||null,setItem:(k,v)=>saved.set(k,v),removeItem:k=>saved.delete(k),get length(){return saved.size;},key:i=>[...saved.keys()][i]??null};
+const events=new Map();globalThis.window={addEventListener(type,fn){if(!events.has(type))events.set(type,new Set());events.get(type).add(fn);},removeEventListener(type,fn){events.get(type)?.delete(fn);}};
 const fixture=JSON.parse(await new Promise(resolve=>{let raw='';process.stdin.setEncoding('utf8');process.stdin.on('data',s=>raw+=s);process.stdin.on('end',()=>resolve(raw));}));
 for(const c of fixture.cases){
  let sends=0;
@@ -147,7 +148,7 @@ async function ordinaryGroupSend(platform,c,{tagged=true,reply=true,newTopic=fal
  const storage={getItem:k=>rows.get(k)||null,setItem:(k,v)=>rows.set(k,v)};
  const api=async(endpoint,request)=>{calls.push({endpoint,request:JSON.parse(JSON.stringify(request))});if(fail)throw Error('offline');return {id:request.id,state:'queued',note:'Reply queued in the original request context.'};};
  const ctx={conv:dm.id,dm,thread:null,overview:c.overview,names:{},canReply:true};
- const store={host:{platform,workspace:{id:'ordinary-'+platform},api},get:()=>state,isActive:()=>true,draft:()=>state.drafts[dm.id],setDraft:(_,d)=>state.drafts[dm.id]=d,
+ const store={captureOriginalDraft:()=>undefined,host:{platform,workspace:{id:'ordinary-'+platform},api},get:()=>state,isActive:()=>true,draft:()=>state.drafts[dm.id],setDraft:(_,d)=>state.drafts[dm.id]=d,
   api:{stage:async()=> 'staged-answer',askAgent:r=>api('/api/dm/agent/ask',r),sendDM:r=>api('/api/dm/send',r),discard:async()=>{}},toast:()=>{},refetch:async()=>{},
   sends:{begin:(_c,_m,r)=>{retry=r;},ready:async()=>{},finish:()=>{},remove:()=>{},has:()=>true,fail:()=>{},move:()=>{}}};
  const derived=composerTarget(dm,draft,c.overview);
@@ -217,7 +218,7 @@ async function directSend(platform,{named=false,fail=false,newTopic=false,ended=
  const draft={text:'Use English instead',newTopic,replyTo:ordinaryReply?message.id:undefined,files:[{key:'terms',name:'terms.md',size:1,file:{}}]};
  const state={open:'selected-view',overview,drafts:{[thread.id]:draft}};
  const api=async(endpoint,request)=>{calls.push({endpoint,request:JSON.parse(JSON.stringify(request))});if(fail)throw Error('offline');return {id:request.id,state:'queued',note:'accepted for transport'};};
- const store={host:{platform,workspace:{id:platform},api},get:()=>state,isActive:()=>true,draft:()=>state.drafts[thread.id],setDraft:(_,d)=>state.drafts[thread.id]=d,
+ const store={captureOriginalDraft:()=>undefined,host:{platform,workspace:{id:platform},api},get:()=>state,isActive:()=>true,draft:()=>state.drafts[thread.id],setDraft:(_,d)=>state.drafts[thread.id]=d,
  api:{thread:async()=>{refreshes++;assert.equal(cleared,0,'refresh precedes draft clearing');if(refreshFails)throw Error('offline while refreshing exact work');return refreshState?{...thread,messages:[{...message,exec:{...message.exec,state:refreshState,stale:false,attempt:2}}]}:thread;},stage:async()=>{stages++;return 'staged-terms';},send:request=>api('/api/send',request),discard:async()=>{}},toast:()=>{},refetch:async()=>{},open:async()=>{},
  sends:{begin:(_,m,r)=>{previews.push(m);retry=r;},ready:async()=>{},finish:()=>{},remove:()=>{},move:()=>{},has:()=>true,fail:()=>{}}};
  const env={store,thread,dm:undefined,conv:thread.id,ready:true,latest:()=>draft,target,overview,names:{},words:{},visible:{current:thread.id},EMPTY:{text:''},

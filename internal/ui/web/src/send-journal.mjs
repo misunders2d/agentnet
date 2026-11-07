@@ -24,7 +24,7 @@ function write(storage, workspace, entries) {
   for (const fn of [...changed]) { try { fn(); } catch (_) { /* the listener's own */ } }
 }
 export function saveBatch(storage, workspace, entries) {
-  const pending = readPending(storage, workspace);
+  const pending = readPending(storage, workspace), added=[];
   for (const original of entries) {
     const entry = clone(original);
     if (!valid(entry)) throw new Error("Cannot save an incomplete send request.");
@@ -32,14 +32,199 @@ export function saveBatch(storage, workspace, entries) {
     if (existing) {
       if (existing.endpoint !== entry.endpoint || existing.conversation !== entry.conversation || JSON.stringify(existing.request) !== JSON.stringify(entry.request))
         throw new Error("This send ID already belongs to a different request.");
-    } else pending.push(entry);
+    } else {pending.push(entry);added.push(entry.id);}
   }
   // One synchronous write freezes every target before any target is submitted.
   write(storage, workspace, pending);
+  return added; // only these new records belong to an aborted preparation
 }
 export function acknowledge(storage, workspace, id) {
   write(storage, workspace, readPending(storage, workspace).filter(e => e.id !== id));
 }
 export function recordFailure(storage, workspace, id, error) {
   write(storage, workspace, readPending(storage, workspace).map(e => e.id === id ? { ...e, error: String(error) } : e));
+}
+
+// Original editor context is not a Retry request. Keep it separately so native
+// admission can acknowledge the request without losing a cancellable draft.
+// Revision tombstones remain readable by older Comic versions (text is still
+// text); older writes invalidate recovery rather than resurrecting old input.
+const revisionField = "__an_draft_revision";
+const draftFields = ["text", "replyTo", "agent", "topic", "newTopic", "plainReply", "mediaMode"];
+const scalarDraft = draft => Object.fromEntries(draftFields.filter(k => draft[k] !== undefined).map(k => [k, draft[k]]));
+const validDraft = d => d && typeof d === "object" && !Array.isArray(d) && typeof d.text === "string" &&
+  ["replyTo","agent","topic","mediaMode"].every(k => d[k] === undefined || typeof d[k] === "string") &&
+  ["newTopic","plainReply"].every(k => d[k] === undefined || typeof d[k] === "boolean");
+const ownerFields = ["workspace","handle","endpoint","realm","address","fingerprint"];
+const validOwner = o => o && ownerFields.every(k => typeof o[k] === "string") && !!o.workspace && !!o.address && !!o.fingerprint;
+// Native mount handles rotate on a core restart. A fresh renderer can read its
+// same verified membership's saved text; in-flight callbacks still fence the
+// exact current handle in Store. This never grants a transport capability.
+const sameOwner = (a,b) => validOwner(a) && validOwner(b) && ownerFields.filter(k=>k!=="handle").every(k=>a[k]===b[k]);
+const token = () => crypto.randomUUID().replaceAll("-", "");
+
+export function savedSendDrafts(storage, draftsKey) {
+  const pendingPrefix = draftsKey + ".send-recovery.v1.";
+  // Each conversation's draft is its own record, so a write to one chat can never
+  // replace another's. The ordinary map at draftsKey is what older versions read:
+  // it is rebuilt from these records after every write here, and rebuilt again
+  // if another window's stale whole-map write lands in between.
+  const recordPrefix = draftsKey + ".draft.v1.";
+  const recordKey = conv => recordPrefix + conv;
+  const restoredKey = conv => draftsKey + ".restored.v1." + conv;
+  const pendingKey = id => pendingPrefix + id;
+  const keysWith = prefix => {
+    const out=[];
+    for(let i=0;i<storage.length;i++){const k=storage.key(i);if(k?.startsWith(prefix))out.push(k.slice(prefix.length));}
+    return out;
+  };
+  const map = () => {
+    const value = JSON.parse(storage.getItem(draftsKey) || "{}");
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw Error("Saved drafts are damaged. Your current draft was kept.");
+    return value;
+  };
+  const legacyRevision = raw => "legacy:"+JSON.stringify(raw ?? null);
+  // An older version rewrites the whole map from its own memory, without
+  // revisions, and drops empty drafts. When it wrote last, the map speaks for
+  // every conversation: its edits and its deletions win over records it never
+  // knew. A map nobody has written yet says nothing.
+  const olderWroteLast = values => storage.getItem(draftsKey)!==null && !Object.values(values).some(v => v && typeof v === "object" && typeof v[revisionField] === "string");
+  const ownRecord = conv => {
+    const raw=storage.getItem(recordKey(conv));
+    if(raw===null)return;
+    let r;try{r=JSON.parse(raw);}catch{throw Error("This saved draft is damaged. It was not replaced.");}
+    if(!validDraft(r) || typeof r[revisionField]!=="string")throw Error("This saved draft is damaged. It was not replaced.");
+    return {draft:scalarDraft(r),revision:r[revisionField]};
+  };
+  const recordSpeaks = (conv,values) => {
+    const raw=values[conv];
+    return typeof raw?.[revisionField]==="string" || raw===undefined && !olderWroteLast(values);
+  };
+  const base = (conv, values = map()) => {
+    const raw = values[conv];
+    if (raw !== undefined && !validDraft(raw)) throw Error("This saved draft is damaged. It was not replaced.");
+    if (recordSpeaks(conv,values)) {
+      const r=ownRecord(conv);if(r)return r;
+      // This version's map entry without its record is an undone write, never a draft.
+      // Entries adopted from an older version carry a "legacy:" revision instead.
+      if(raw!==undefined && !raw[revisionField].startsWith("legacy:"))return {draft:{text:""},revision:legacyRevision(undefined)};
+    }
+    return {draft:raw ? scalarDraft(raw) : {text:""}, revision:raw?.[revisionField] || legacyRevision(raw)};
+  };
+  // A restoration applies only while the record still holds the revision the
+  // send cleared it to. Any newer edit or erase, in any window, wins.
+  const restoredOver = (conv,current,owner) => {
+    const raw=storage.getItem(restoredKey(conv));
+    if(!raw)return;
+    let r;try{r=JSON.parse(raw);}catch{return;}
+    if(r?.version===1 && r.conversation===conv && (!owner || sameOwner(r.owner,owner)) && validDraft(r.draft) &&
+      r.expected===current.revision && typeof r.revision==="string") return {draft:scalarDraft(r.draft),revision:r.revision};
+  };
+  const effective = (conv,values,owner) => {const current=base(conv,values);return restoredOver(conv,current,owner) || current;};
+  // Rebuild the older versions' map from the records. Each round reads storage
+  // afresh, so a whole-map write from another window that landed meanwhile is
+  // repaired on the next round instead of standing. The last step is always a
+  // check, never a write: if the map still disagrees, this call fails.
+  // `own` is the conversation this call just wrote: its record speaks for it.
+  const rounds = 8;
+  const project = own => {
+    for(let round=0;round<=rounds;round++){
+      const values=map(),older=olderWroteLast(values),next={};
+      for(const conv of new Set([...Object.keys(values),...keysWith(recordPrefix)])){
+        const raw=values[conv];
+        if(raw!==undefined && !validDraft(raw))throw Error("This saved draft is damaged. It was not replaced.");
+        let value;
+        const mine=conv===own && ownRecord(conv);
+        if(mine)value=restoredOver(conv,mine)||mine;
+        else{
+          if(!(typeof raw?.[revisionField]==="string" || raw===undefined && !older))storage.removeItem(recordKey(conv));
+          if(raw===undefined && older)continue;
+          // A damaged record stays as it is for repair; it never blocks other chats.
+          try{value=effective(conv,values);}catch{if(raw!==undefined)next[conv]=raw;continue;}
+        }
+        next[conv]={...scalarDraft(value.draft),[revisionField]:value.revision};
+      }
+      const text=JSON.stringify(next);
+      if(storage.getItem(draftsKey)===text)return;
+      if(round===rounds)break;
+      storage.setItem(draftsKey,text);
+    }
+    throw Error("Drafts kept changing in another window. Older versions may show an earlier copy.");
+  };
+  // Undo only what this call wrote: a newer write from another window stays.
+  const undo = (key,mine,prior) => {
+    try{if(storage.getItem(key)!==mine)return;if(prior===null)storage.removeItem(key);else storage.setItem(key,prior);}catch{ /* current readers still see a valid record */ }
+  };
+  const repair = own => {try{project(own);}catch{ /* reported by the caller's error */ }};
+  const validRecord = r => r && r.version===1 && /^[a-f0-9]{32}$/.test(r.id) && typeof r.conversation==="string" &&
+    validOwner(r.owner) && validDraft(r.draft) && Object.keys(r.draft).every(k=>draftFields.includes(k)) && typeof r.revision==="string" && typeof r.hadFiles==="boolean";
+  const pending = id => {
+    const raw=storage.getItem(pendingKey(id));
+    if(raw===null)return;
+    let r;try{r=JSON.parse(raw);}catch{throw Error("Original send recovery is damaged. The message was kept.");}
+    if(!validRecord(r)||r.id!==id)throw Error("Original send recovery is unsupported or damaged. The message was kept.");
+    return r;
+  };
+  const read = (conv,owner) => {const values=map(),current=base(conv,values);return (owner && restoredOver(conv,current,owner)) || current;};
+  return {
+    read,
+    all(owner) {
+      const values=map(),convs=new Set(Object.keys(values));
+      if(!olderWroteLast(values))for(const conv of keysWith(recordPrefix))convs.add(conv);
+      return Object.fromEntries([...convs].map(conv=>[conv,read(conv,owner)]));
+    },
+    write(conv,draft,revision=token()) {
+      if(!validDraft(draft))throw Error("Cannot save an incomplete draft.");
+      map(); // a damaged map is kept, never replaced
+      const key=recordKey(conv),prior=storage.getItem(key),mine=JSON.stringify({...scalarDraft(draft),[revisionField]:revision});
+      storage.setItem(key,mine);
+      // Older versions might still read the previous text: do not report a save.
+      try{project(conv);}catch(e){undo(key,mine,prior);repair(conv);throw e;}
+      // A restoration expecting an earlier revision can never apply again.
+      const old=storage.getItem(restoredKey(conv));
+      if(old!==null){let r;try{r=JSON.parse(old);}catch{}if(r?.expected!==revision)storage.removeItem(restoredKey(conv));}
+      return revision;
+    },
+    prepare(id,conv,owner,draft,revision) {
+      if(!validOwner(owner))throw Error("Your current workspace identity is unavailable. The draft was kept.");
+      const r={version:1,id,conversation:conv,owner:{...owner},draft:scalarDraft(draft),revision,hadFiles:!!draft.files?.length};
+      if(!validRecord(r))throw Error("Cannot retain an incomplete original draft.");
+      const old=pending(id);
+      if(old){
+        if(old.conversation!==conv || !sameOwner(old.owner,owner) || JSON.stringify(old.draft)!==JSON.stringify(r.draft))
+          throw Error("This send ID already belongs to another original draft.");
+        return old;
+      }
+      storage.setItem(pendingKey(id),JSON.stringify(r));return r;
+    },
+    pending(id,conv,owner) {
+      const r=pending(id);
+      if(!r)return;
+      if(r.conversation!==conv || !sameOwner(r.owner,owner))throw Error("Original draft belongs to another conversation or identity. The message was kept.");
+      return clone(r);
+    },
+    entries(owner) {
+      const ids=[];
+      for(let i=0;i<storage.length;i++){const k=storage.key(i);if(k?.startsWith(pendingPrefix))ids.push(k.slice(pendingPrefix.length));}
+      return ids.flatMap(id=>{try{const r=pending(id);return sameOwner(r.owner,owner)?[clone(r)]:[];}catch{return [];}});
+    },
+    restore(id,conv,owner) {
+      const r=this.pending(id,conv,owner);
+      if(!r || !r.revision || read(conv,owner).revision!==r.revision)return;
+      // The record is never overwritten here. A newer write in another window
+      // wins even if it races this one: the restoration applies only while its
+      // expected revision still matches. The map shows it to older versions.
+      const overlay={version:1,conversation:conv,owner:{...owner},draft:r.draft,expected:r.revision,revision:token()};
+      const key=restoredKey(conv),prior=storage.getItem(key),mine=JSON.stringify(overlay);
+      storage.setItem(key,mine);
+      try{project(conv);}catch(e){undo(key,mine,prior);repair(conv);throw e;}
+      const current=read(conv,owner);
+      return current.revision===overlay.revision ? current : undefined;
+    },
+    release(id,conv,owner) {
+      if(this.pending(id,conv,owner))storage.removeItem(pendingKey(id));
+    },
+    nextRevision:token,
+    isStorageKey(key) {return key===draftsKey || key?.startsWith(pendingPrefix) || key?.startsWith(recordPrefix) || key?.startsWith(draftsKey+".restored.v1.");},
+  };
 }

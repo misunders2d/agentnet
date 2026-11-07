@@ -6,6 +6,7 @@
 // again with a new host when the person switches workspace, so nothing here
 // can act on another workspace by accident.
 import { pendingSends, sendID } from "./optimistic.mjs";
+import { savedSendDrafts, type SavedDraftOwner, type SavedSendDraft } from "./send-journal.mjs";
 import { useSyncExternalStore } from "react";
 import { api, errorText, type Api, type ReminderResult, type T } from "./api";
 import type { Host, HostEvent, OpenContext } from "./host";
@@ -63,7 +64,9 @@ interface PendingSendDraft {
   handle?: string;
   address?: string;
   fingerprint?: string;
-  revision?: object;
+  revision?: string;
+  durable?: string;
+  missingFiles?: boolean;
   draft: Draft;
 }
 
@@ -218,7 +221,10 @@ export class Store {
   unreadReview: import("./features/Conversation.choices").ChoiceCache<T.UnreadRow> = {};
   readonly api: Api;
   readonly sends: ReturnType<typeof pendingSends>;
-  private draftWrites = new Map<string, object>();
+  private draftWrites = new Map<string, string>();
+  private readonly savedDrafts: ReturnType<typeof savedSendDrafts>;
+  private readonly draftHandle: string;
+  private draftStorageError = false;
   private readonly scheduled: ReturnType<typeof scheduleSaves>;
   private state: State;
   private subs = new Set<() => void>();
@@ -292,6 +298,8 @@ export class Store {
   };
 
   constructor(readonly host: Host) {
+    this.savedDrafts = savedSendDrafts(localStorage, draftsKey(host.workspace.id));
+    this.draftHandle = host.workspace.handle || "";
     this.chooseMain = mainPreferences(host.workspace.id, () => localStorage);
     const calls = api(this.watchWrites(host));
     this.api = { ...calls, act: action => action.do === "resolve" ? this.dismiss(action, calls) : calls.act(action),
@@ -314,15 +322,16 @@ export class Store {
       // waits for it (hasUnsent).
       this.set({ ...(o ? this.viewPatch(o, this.state.views[o.id] ?? null, true) : {}), unsent: this.sends.unsent() });
     }, (conv, draft) => this.restoreSendDraft(conv, draft as PendingSendDraft),
-      (conv, message) => this.captureQueuedSendDraft(conv, message as NonNullable<T.DMThread["messages"]>[number]));
+      (conv, message, prior) => this.captureQueuedSendDraft(conv, message as NonNullable<T.DMThread["messages"]>[number], prior as PendingSendDraft | undefined),
+      (id, conv) => this.releaseSendDraft(id, conv));
     this.state = {
       tab: "chats", overview: null, open: null, pending: null, views: {}, dm: null, thread: null, typing: null, invitations: [], attentionReplies: {}, reactionPending: {}, dismissPending: {}, messageChanges: {}, reminderChanges: {},
       conn: "loading", version: "", newVersion: "", unsent: false, drafts: this.loadDrafts(), scheduleSaves:{}, toasts: [], working: false, messageLanding: null, loadError: "", groupContextPending: "", invite: null, topicBusy: {}, topicPreviews: {}, panel: false, section: "", agentNames: {}, readVisit: null, contentRevision: 0,
     };
-    const saved=host.workspaces?.state?.(host.workspace.id)?.comicDrafts as {handle?:string;open:Open;dm:T.DMThread|null;thread:T.Thread|null;tab:State['tab'];draftWrites?:Map<string,object>}|undefined;
+    const saved=host.workspaces?.state?.(host.workspace.id)?.comicDrafts as {handle?:string;open:Open;dm:T.DMThread|null;thread:T.Thread|null;tab:State['tab'];draftWrites?:Map<string,string>}|undefined;
     if(saved&&saved.handle===host.workspace.handle){
       Object.assign(this.state,{open:saved.open,dm:saved.dm,thread:saved.thread,tab:saved.tab});
-      if(saved.draftWrites)this.draftWrites=saved.draftWrites;
+      if(saved.draftWrites){for(const [conv,rev] of this.draftWrites)saved.draftWrites.set(conv,rev);this.draftWrites=saved.draftWrites;}
     }
     this.scheduled=scheduleSaves(host,()=>this.syncScheduleSaves());
     this.state.scheduleSaves=this.scheduled.snapshot();
@@ -1271,6 +1280,7 @@ export class Store {
   // first load then says why.
   async start() {
     this.syncScheduleSaves();
+    window.addEventListener("storage", this.draftStorageChanged);
     if (this.host.platform === "android") {
       document.addEventListener("visibilitychange", this.mobileVisible);
       this.offNativeVisibility = this.host.android?.onVisibility(this.mobileVisible);
@@ -1278,10 +1288,13 @@ export class Store {
     }
     try { this.listen(); } catch { /* the first load fails and shows it */ }
     await Promise.all([this.load(true), this.refreshOpen()]);
+    this.hydrateSendDrafts();
+    this.refreshDraftStorage();
     await this.retryMessageLanding(true);
   }
 
   stop() {
+    window.removeEventListener("storage", this.draftStorageChanged);
     ++this.unreadLanding;this.unreadReturn=null;
     this.dismissMessageLanding();
     // A native grant belongs to this renderer. Keep an interrupted draft
@@ -2271,80 +2284,168 @@ export class Store {
 
   // ---- drafts, kept per workspace and conversation; File objects stay in memory
   private loadDrafts(): Record<string, Draft> {
-    const saved=this.host.workspaces?.state?.(this.host.workspace.id)?.comicDrafts as {handle?:string;drafts:Record<string,Draft>}|undefined;
-    if(saved&&saved.handle===this.host.workspace.handle)return Object.fromEntries(Object.entries(saved.drafts).map(([id,d])=>[id,{...d,
-      files:d.files?.map(f=>f.preparing?{...f,preparing:false,mediaProgress:undefined,mediaNote:"Preparation was interrupted. The original file is kept."}:f)}]));
+    const saved=this.host.workspaces?.state?.(this.host.workspace.id)?.comicDrafts as
+      {handle?:string;drafts:Record<string,Draft>;draftWrites?:Map<string,string>}|undefined;
     try {
-      const raw = JSON.parse(localStorage.getItem(draftsKey(this.host.workspace.id)) || "{}");
-      const out: Record<string, Draft> = {};
-      for (const [k, v] of Object.entries(raw as Record<string, Draft>)) if (v && typeof v.text === "string") out[k] = {
-        text: v.text, replyTo: typeof v.replyTo === "string" ? v.replyTo : undefined,
-        agent: typeof v.agent === "string" ? v.agent : undefined,
-        topic: typeof v.topic === "string" ? v.topic : undefined, newTopic: v.newTopic === true,
-        plainReply: v.plainReply === true || undefined,
-        mediaMode: v.mediaMode === "smaller" ? "smaller" : v.mediaMode === "original" ? "original" : undefined,
-      };
-      return out;
-    } catch { return {}; }
+      const persisted=this.savedDrafts.all();
+      return Object.fromEntries(Object.entries(persisted).map(([conv,value])=>{
+        this.draftWrites.set(conv,value.revision);
+        const memory=saved && saved.handle===this.host.workspace.handle && saved.draftWrites?.get(conv)===value.revision ? saved.drafts[conv] : undefined;
+        const draft=memory || value.draft;
+        return [conv,{...draft,files:memory?.files?.map(f=>f.preparing?{...f,preparing:false,mediaProgress:undefined,mediaNote:"Preparation was interrupted. The original file is kept."}:f)}];
+      }));
+    } catch {
+      this.draftStorageError=true;
+      return saved && saved.handle===this.host.workspace.handle ? {...saved.drafts} : {};
+    }
   }
 
-  private saveDrafts(drafts: Record<string, Draft>) {
+  private draftOwner(): SavedDraftOwner | undefined {
+    const me=this.state.overview?.me,workspace=this.host.workspace,members=this.host.workspaces;
+    if(!me?.address || !me.fingerprint || (workspace.handle || "")!==this.draftHandle
+      || workspace.address && workspace.address!==me.address || workspace.state && workspace.state!=="enrolled")return;
+    if(members?.has && !members.has(workspace.id))return;
+    if(members?.list){
+      const current=members.list().find(w=>w.id===workspace.id);
+      if(!current || current.state!=="enrolled" || (current.handle || "")!==this.draftHandle
+        || current.address && current.address!==me.address || current.endpoint!==workspace.endpoint || current.realm!==workspace.realm)return;
+    }
+    return {workspace:this.host.workspace.id,handle:this.draftHandle,endpoint:this.host.workspace.endpoint || "",realm:this.host.workspace.realm || "",address:me.address,fingerprint:me.fingerprint};
+  }
+  private draftStorageChanged = (event: StorageEvent) => {
+    if(this.alive && this.savedDrafts.isStorageKey(event.key)){this.hydrateSendDrafts();this.refreshDraftStorage();}
+  };
+  private refreshDraftStorage() {
+    // Storage cannot be authoritative over an edit it refused to save.
+    // Keep that input in this window until an explicit edit can persist it.
+    if(this.draftStorageError)return;
+    const owner=this.draftOwner();if(!owner)return;
     try {
-      const keep: Record<string, Draft> = {};
-      for (const [k, d] of Object.entries(drafts)) if (d.text || d.replyTo || d.agent || d.topic || d.newTopic || d.mediaMode) keep[k] = { text: d.text, replyTo: d.replyTo, agent: d.agent, topic: d.topic, newTopic: d.newTopic, plainReply: d.plainReply, mediaMode: d.mediaMode };
-      localStorage.setItem(draftsKey(this.host.workspace.id), JSON.stringify(keep));
-    } catch { /* a convenience only */ }
+      const values=this.savedDrafts.all(owner),drafts={...this.state.drafts};let changed=false;
+      for(const [conv,value] of Object.entries(values))if(this.draftWrites.get(conv)!==value.revision){
+        // Cross-window scalar changes never discard this renderer's File objects.
+        drafts[conv]={...value.draft,files:drafts[conv]?.files};this.draftWrites.set(conv,value.revision);changed=true;
+      }
+      if(changed)this.set({drafts});
+      if(this.draftStorageError)this.toast("Some draft changes could not be saved. Keep this window open until storage is available.","error");
+    }catch{this.draftStorageError=true;this.toast("Saved drafts could not be read. Current input was kept.","error");}
+  }
+  private savedCapture(record: SavedSendDraft): PendingSendDraft {
+    return {workspace:record.owner.workspace,handle:this.draftHandle,address:record.owner.address,fingerprint:record.owner.fingerprint,
+      revision:record.revision,durable:record.id,missingFiles:record.hadFiles,draft:{...record.draft}};
+  }
+  private hydrateSendDrafts() {
+    const owner=this.draftOwner();if(!owner)return;
+    for(const record of this.savedDrafts.entries(owner))this.sends.rememberDraft(record.id,record.conversation,this.savedCapture(record));
+    for(const [conv,view] of Object.entries(this.state.views))this.sends.merge<NonNullable<T.DMThread["messages"]>[number] | NonNullable<T.Thread["messages"]>[number]>(conv,view.messages || []);
+  }
+  private releaseSendDraft(id:string,conv:string) {
+    const owner=this.draftOwner();if(!owner)return;
+    try{this.savedDrafts.release(id,conv,owner);}catch{this.toast("The send finished, but its original draft recovery could not be cleared. It remains saved.","error");}
   }
 
   draft(conv: string): Draft { return this.state.drafts[conv] || { text: "" }; }
 
-  private captureQueuedSendDraft(conv: string, message: NonNullable<T.DMThread["messages"]>[number]): PendingSendDraft | undefined {
-    // A restart can recover plain text from the host's own queued row. It
-    // cannot recreate original whitespace, File objects, reply modes or scope.
+  private captureQueuedSendDraft(conv: string, message: NonNullable<T.DMThread["messages"]>[number], prior?: PendingSendDraft): PendingSendDraft | undefined {
+    const owner=this.draftOwner();if(!owner)throw Error("Current workspace identity is unavailable. The message was kept.");
+    const record=this.savedDrafts.pending(message.id,conv,owner);
+    if(record){
+      if(record.hadFiles && !prior?.draft.files?.length)throw Error("This original draft includes attachments unavailable after restart. The message was kept; no files were discarded.");
+      return prior?.durable===record.id && !prior.missingFiles ? prior : this.savedCapture(record);
+    }
+    if(prior)return prior;
+    // Legacy sends have no original editor metadata. Keep the narrower body
+    // recovery; it never claims original whitespace, File or routing context.
     const current = this.draft(conv), me = this.state.overview?.me;
-    if (this.draftWrites.has(conv) || current.replyTo || current.topic || current.newTopic || current.agent || current.mediaMode
+    if (this.draftWrites.get(conv)?.startsWith("legacy:")===false || current.replyTo || current.topic || current.newTopic || current.agent || current.mediaMode
       || message.dir !== "out" || message.from !== me?.address || message.kind !== "message"
       || typeof message.body !== "string" || !message.body || message.topic || message.reply_to || message.quote || message.pid
       || message.attachments?.length || ("files" in message && Array.isArray(message.files) && message.files.length)) return;
-    return this.captureSendDraft(conv, { text: message.body });
+    const captured=this.captureSendDraft(conv,{text:message.body});if(!captured)return;
+    this.savedDrafts.prepare(message.id,conv,owner,captured.draft,captured.revision || "");
+    return {...captured,durable:message.id};
   }
 
+  captureOriginalDraft(conv:string,draft:Draft): PendingSendDraft | undefined {
+    const owner=this.draftOwner();if(!this.alive || !owner)return;
+    const revision=this.draftWrites.get(conv) || this.savedDrafts.read(conv,owner).revision;
+    if(!this.draftWrites.has(conv))this.draftWrites.set(conv,revision);
+    return {workspace:owner.workspace,handle:owner.handle,address:owner.address,fingerprint:owner.fingerprint,
+      revision,draft:{...draft,files:draft.files?.map(f=>({...f,staged:undefined}))}};
+  }
   captureSendDraft(conv: string, draft: Draft): PendingSendDraft | undefined {
-    if (!this.alive || this.draft(conv).text || this.draft(conv).files?.length) return;
-    const me = this.state.overview?.me;
-    if (!me?.address || !me.fingerprint) return;
-    return {workspace:this.host.workspace.id,handle:this.host.workspace.handle,address:me?.address,fingerprint:me?.fingerprint,
-      revision:this.draftWrites.get(conv),draft:{...draft,files:draft.files?.map(f=>({...f,staged:undefined}))}};
+    if(this.draft(conv).text || this.draft(conv).files?.length)return;
+    return this.captureOriginalDraft(conv,draft);
   }
-
-  private restoreSendDraft(conv: string, captured: PendingSendDraft) {
-    const me = this.state.overview?.me;
-    if (!captured.address || !captured.fingerprint || captured.workspace !== this.host.workspace.id || captured.handle !== this.host.workspace.handle
-      || captured.address !== me?.address || captured.fingerprint !== me?.fingerprint
-      || captured.revision !== this.draftWrites.get(conv)) return;
-    const saved = this.host.workspaces?.state?.(this.host.workspace.id)?.comicDrafts as
-      {handle?:string;drafts:Record<string,Draft>;draftWrites?:Map<string,object>} | undefined;
-    const drafts = this.alive ? this.state.drafts : saved?.handle === captured.handle && saved?.draftWrites === this.draftWrites ? saved.drafts : undefined;
-    if (!drafts || drafts[conv]?.text || drafts[conv]?.files?.length) return;
-    const draft = {...captured.draft,files:captured.draft.files?.map(f=>{
-      let url: string | undefined;
-      try {if(f.url)url=URL.createObjectURL(f.file);} catch { /* the original File remains usable without a preview */ }
-      return {...f,staged:undefined,url};
-    })};
-    if (this.alive) this.setDraft(conv,draft);
-    else if (saved) {
-      // A late reply after unmount updates only this membership's retained
-      // draft, never reactivates its stopped renderer or another conversation.
-      saved.drafts={...drafts,[conv]:draft};
-      this.draftWrites.set(conv,{});
-      this.saveDrafts(saved.drafts);
+  clearSendDraft(conv:string,id:string,original:PendingSendDraft|undefined,next:Draft):PendingSendDraft {
+    const owner=this.draftOwner();
+    if(!owner || !original || original.workspace!==owner.workspace || (original.handle || "")!==owner.handle || original.address!==owner.address || original.fingerprint!==owner.fingerprint)
+      throw Error("The selected workspace identity changed. Your draft was kept.");
+    const current=this.savedDrafts.read(conv,owner);
+    if(current.revision!==this.draftWrites.get(conv))throw Error("This draft changed in another window. Nothing was submitted; keep the newer draft first.");
+    const revision=this.savedDrafts.nextRevision(),expected=original.revision===current.revision ? revision : "";
+    const existed=this.savedDrafts.pending(id,conv,owner);
+    const record=this.savedDrafts.prepare(id,conv,owner,original.draft,expected);
+    // A newer user revision wins even when its text is byte-for-byte equal.
+    const cleared=original.revision===current.revision ? next : this.draft(conv);
+    try{this.changeDraft(conv,cleared,false,revision,true);}
+    catch(e){
+      if(!existed)try{this.savedDrafts.release(id,conv,owner);}catch{this.toast("Send was not submitted. Its original draft recovery remains saved.","error");}
+      throw e;
     }
+    return {...original,revision:record.revision,durable:id};
   }
 
-  setDraft(conv: string, d: Draft, topicSelected = false) {
-    // Identity, not text equality: type/erase and same-text writes are newer
-    // edits too. Keep the token through a responsive/skin remount.
-    this.draftWrites.set(conv, {});
+  private restoreSendDraft(conv: string, captured: PendingSendDraft): boolean {
+    const me = this.state.overview?.me,owner=this.draftOwner();
+    if (!owner || !captured.address || !captured.fingerprint || captured.workspace !== this.host.workspace.id || (captured.handle || "") !== (this.host.workspace.handle || "")
+      || captured.address !== me?.address || captured.fingerprint !== me?.fingerprint || captured.missingFiles
+      || captured.revision !== this.draftWrites.get(conv)) return false;
+    const saved = this.host.workspaces?.state?.(this.host.workspace.id)?.comicDrafts as
+      {handle?:string;drafts:Record<string,Draft>;draftWrites?:Map<string,string>} | undefined;
+    const drafts = this.alive ? this.state.drafts : (saved?.handle || "") === (captured.handle || "") && saved?.draftWrites === this.draftWrites ? saved.drafts : undefined;
+    if (!drafts || drafts[conv]?.text || drafts[conv]?.files?.length) return false;
+    let restored,revision:string|undefined;
+    const draft = () => ({...captured.draft,files:captured.draft.files?.map(f=>{
+      let url: string | undefined;
+      try {if(f.url)url=URL.createObjectURL(f.file);} catch { /* original File remains usable without a preview */ }
+      return {...f,staged:undefined,url};
+    })});
+    try{
+      if(captured.durable){restored=this.savedDrafts.restore(captured.durable,conv,owner);if(!restored)return false;}
+      revision=restored?.revision || this.savedDrafts.write(conv,captured.draft);
+    }catch{
+      // Storage is full or damaged: show the text here, keep the saved original.
+      this.draftStorageError=true;
+      this.toast("Your draft is back here but could not be saved. Keep this window open until storage is available.","error");
+      if(this.alive)this.set({drafts:{...drafts,[conv]:draft()}});
+      else if(saved)saved.drafts={...drafts,[conv]:draft()};
+      return !captured.durable;
+    }
+    this.draftWrites.set(conv,revision);
+    const shown=draft();
+    if (this.alive) this.set({drafts:{...drafts,[conv]:shown}});
+    else if(saved)saved.drafts={...drafts,[conv]:shown};
+    return true;
+  }
+
+  /** Saves a draft durably before returning; throws and changes nothing when storage refuses. */
+  saveDraftNow(conv: string, d: Draft) {
+    try{this.changeDraft(conv,d,false,this.savedDrafts.nextRevision(),true);}
+    catch{throw new Error("This draft could not be saved on this device. The earlier copy was kept.");}
+  }
+
+  setDraft(conv: string, d: Draft, topicSelected = false, preserveRevision = false) {
+    this.changeDraft(conv,d,topicSelected,preserveRevision ? this.draftWrites.get(conv) || this.savedDrafts.nextRevision() : this.savedDrafts.nextRevision(),false);
+  }
+  private changeDraft(conv:string,d:Draft,topicSelected:boolean,revision:string,strict:boolean) {
+    try{this.savedDrafts.write(conv,d,revision);this.draftStorageError=false;}
+    catch(e){
+      if(strict)throw Error("The original draft could not be saved. Nothing was submitted; your current draft was kept.");
+      if(!this.draftStorageError)this.toast("Your draft could not be saved. Keep this window open; Send will not clear unsaved input.","error");
+      this.draftStorageError=true;
+    }
+    this.draftWrites.set(conv, revision);
     const prior = this.state.drafts[conv];
     if (topicSelected || (prior?.topic || "") !== (d.topic || "") || !!prior?.newTopic !== !!d.newTopic) this.dismissMessageLanding();
     const drafts = { ...this.state.drafts };
@@ -2369,7 +2470,6 @@ export class Store {
     const o = this.state.open, view = this.state.views[conv];
     this.set({ drafts, ...(selected && o && view ? { readVisit: this.prepareReadScope(o, view, d) } : {}),
       ...(selected && topicSelected && o && !this.readAcknowledged.entering ? { open: { ...o, focus: undefined, ...(o.kind === "dm" ? { preview: undefined } : {}), focusSeq: undefined, unread: true } } : {}) });
-    this.saveDrafts(drafts);
     if (selected) this.markOpenRead();
   }
 

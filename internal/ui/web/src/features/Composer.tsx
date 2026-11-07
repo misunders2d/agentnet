@@ -474,6 +474,9 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     // Allocate the optional topic before yielding so a second send keeps it.
     const d = here && captured.newTopic ? { ...captured, topic: captured.topic && retry ? captured.topic : sendID() } : captured;
     const id = retry?.id || sendID(), group = retry?.group, selectedView = store.get().open;
+    const retain = !!here && to.kind === "conversation" && !followup && !retry?.fanout;
+    const original = retain ? store.captureOriginalDraft(c,captured) : undefined;
+    let recovery = original;
     const was = decode(d.text);
     const body = encode(was.text, was.spans, true).trim();
     const sent = d.files || [];
@@ -481,15 +484,17 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     const title = here ? (here.kind === "group" ? here.title || "the group" : personName(here.peer)) : to.kind === "device" ? to.name : "that chat";
     if (to.kind === "none" || to.kind === "readonly") return;
     const at = retry?.at || new Date().toISOString(); // a retry keeps the place the message took
-    if (store.isActive()) {
-      clearSent(c, d, sent);
-      if (d.newTopic && !retry) store.setDraft(c, { ...store.draft(c), newTopic: false, ...(here ? { topic: d.topic } : {}) });
-    }
+    try {
+      if (store.isActive()) {
+        recovery=clearSent(c, d, sent, retain ? {id,original} : undefined);
+        if (d.newTopic && !retry) store.setDraft(c, { ...store.draft(c), newTopic: false, ...(here ? { topic: d.topic } : {}) },false,true);
+      }
+    } catch(e){setNotice({conv:c,text:errorText(e)});return;}
     store.sends.begin(c, { id, ...(here ? { lid: id, origin: "ui", send_group: group, send_group_author: store.get().overview?.me.fingerprint, pid: to.kind === "agent" ? to.pid : "" } : { author: { label: "You", about: "" }, to: device?.peer }),
       _topic: !!d.newTopic, topic: d.topic, dir: "out", from: store.get().overview?.me.address || "", kind: followup?.kind || (to.kind === "answer" ? "answer" : here && to.kind !== "agent" || to.kind === "device" && !to.ask ? "message" : "question"), body, at,
       reply_to: d.replyTo, quote: d.replyTo, attachments: sent.map(f => ({ name: f.name, size: f.size, openable: false })), files: sent.map(f => ({ name: f.name, size: f.size, openable: false })) },
       () => { store.sends.remove(id); void send({ id, c, d, to, here, device, fanout:retry?.fanout, group, at, followup }); },
-      here && to.kind === "conversation" && !followup && !retry?.fanout ? store.captureSendDraft(c,captured) : undefined);
+      recovery);
     setNotice(null);
     typing.stop();
     try {
@@ -571,7 +576,9 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   // draft. Recovery retries these payloads explicitly; it never recreates IDs.
   async function sendAndroid() {
     if (!ready || (!dm && !thread) || androidPreparing.current.has(conv)) return;
-    const c = conv, captured = latest(), here = dm, selectedView = store.get().open;
+    const c = conv, captured = {...latest(),files:latest().files?.map(f=>({...f}))}, here = dm, selectedView = store.get().open;
+    const original = here && target.kind === "conversation" ? store.captureOriginalDraft(c,captured) : undefined;
+    let recovery: ReturnType<typeof store.captureOriginalDraft>, journaled:string[]=[];
     let device = thread;
     const host = store.host, workspace = host.workspace.id;
     const decoded = decode(captured.text), body = encode(decoded.text, decoded.spans, true).trim();
@@ -630,14 +637,18 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
         forgetStaged(c, sent);
         throw Error("The chat changed before steering was submitted. Your original draft is kept.");
       }
-      saveBatch(localStorage,workspace,plans.map(p=>p.entry));
+      journaled=saveBatch(localStorage,workspace,plans.map(p=>p.entry));
+      if (store.isActive()) {
+        const retain=plans.length===1 && plans[0].entry.endpoint==="/api/dm/send";
+        recovery=clearSent(c,captured,sent,retain?{id:plans[0].entry.id,original}:undefined);
+        if (captured.newTopic) store.setDraft(c,{...store.draft(c),newTopic:false,...(here?{topic}:{})},false,true);
+      }
     } catch(e) {
+      // No submit call has started. Roll back only these unsubmitted records;
+      // if storage refuses that too, the exact records and active draft remain.
+      for(const id of journaled){try{acknowledge(localStorage,workspace,id);}catch{/* never hide or replace the retained request */}}
       setNotice({conv:c,text:"Send was not submitted. Your draft is kept: "+errorText(e),refresh:(e as Error).name==="ComposerRecovery"});
       setBusy(({[c]:_,...rest})=>rest);androidPreparing.current.delete(c);return;
-    }
-    if (store.isActive()) {
-      clearSent(c,captured,sent);
-      if (captured.newTopic) store.setDraft(c,{...store.draft(c),newTopic:false,...(here?{topic}:{})});
     }
     setBusy(b=>({...b,[c]:"Submitting…"}));setNotice(null);typing.stop();
     const preview = (entry: JournalEntry, to: Target) => {
@@ -648,7 +659,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
         kind:followup?.kind || (to.kind === "answer" ? "answer" : to.kind === "agent" || (to.kind === "device" && to.ask) ? "question" : "message"),
         body,at:entry.createdAt,reply_to:captured.replyTo,quote:captured.replyTo,
         attachments:sent.map(f=>({name:f.name,size:f.size,openable:false})),files:sent.map(f=>({name:f.name,size:f.size,openable:false}))},
-        undefined, plans.length === 1 && entry.endpoint === "/api/dm/send" ? store.captureSendDraft(c,captured) : undefined);
+        undefined, recovery);
     };
     const submit = async (entry: JournalEntry): Promise<void> => {
       let result: T.Sent & {note?:string};
@@ -693,16 +704,16 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
 
   function keepStaged(c: string, key: string, id: string) {
     const d = store.get().drafts[c];
-    if (d?.files) store.setDraft(c, { ...d, files: d.files.map((f) => (f.key === key ? { ...f, staged: id } : f)) });
+    if (d?.files) store.setDraft(c, { ...d, files: d.files.map((f) => (f.key === key ? { ...f, staged: id } : f)) },false,true);
   }
   function forgetStaged(c: string, list: StagedFile[]) {
     if (!store.isActive()) return;
     const d = store.get().drafts[c], keys = new Set(list.map((f) => f.key));
-    if (d?.files?.some(f=>keys.has(f.key)&&f.staged!==undefined)) store.setDraft(c, { ...d, files: d.files.map((f) => (keys.has(f.key) ? { ...f, staged: undefined } : f)) });
+    if (d?.files?.some(f=>keys.has(f.key)&&f.staged!==undefined)) store.setDraft(c, { ...d, files: d.files.map((f) => (keys.has(f.key) ? { ...f, staged: undefined } : f)) },false,true);
   }
   // clearSent removes from a conversation's draft exactly what was sent:
   // text typed meanwhile, or files added meanwhile, stay.
-  function clearSent(c: string, d: Draft, list: StagedFile[]) {
+  function clearSent(c: string, d: Draft, list: StagedFile[], retained?: {id:string;original:ReturnType<typeof store.captureOriginalDraft>}) {
     const cur = store.get().drafts[c] ?? EMPTY, keys = new Set(list.map((f) => f.key));
     const next: Draft = { ...cur, files: (cur.files || []).filter((f) => !keys.has(f.key)) };
     if (cur.text === d.text) {
@@ -710,6 +721,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       if (cur.agent === d.agent) next.agent = undefined;
     }
     if (cur.replyTo === d.replyTo) next.replyTo = undefined;
+    if(retained)return store.clearSendDraft(c,retained.id,retained.original,next);
     store.setDraft(c, next);
 
   }

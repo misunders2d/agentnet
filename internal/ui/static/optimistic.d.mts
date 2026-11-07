@@ -1,8 +1,10 @@
 export function sendID(): string;
 export function groupedSends<T>(messages: T[]): {m: T; compact: boolean}[];
 export function pendingSends(host: object, changed?: () => void, restoreDraft?: (key: string, draft: object) => void,
- captureQueuedDraft?: (key: string, message: object) => object | undefined): {
+ captureQueuedDraft?: (key: string, message: object, prior?: object) => object | undefined,
+ releaseDraft?: (id:string,key:string) => void): {
  begin(key: string, message: object, retry?: () => void, draft?: object): string;
+ rememberDraft(id:string,key:string,draft:object):void;
  has(id: string): boolean;
  move(id: string, key: string): void;
  ready(id: string): Promise<void>;
