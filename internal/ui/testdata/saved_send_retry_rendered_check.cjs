@@ -25,6 +25,7 @@ const held = 'Stopped. Its files are kept on this device: Retry sends it, Discar
       const body = route.request().postDataJSON(); posts.push(body.id);
       if (mode === 'store-then-lose') { row = {id: body.id, lid: body.id, dir: 'out', kind: 'message', body: body.body, at: new Date().toISOString(), state: 'queued', state_text: 'Sending…', queued_send: {state: 'pending', rev: 1}, can: [], actions: [], reactions: []}; return route.abort('failed'); }
       if (mode === 'lose') return route.abort('failed');
+      row = {id: body.id, lid: body.id, dir: 'out', kind: 'message', body: body.body, at: new Date().toISOString(), state: 'queued', state_text: 'Sending…', queued_send: {state: 'pending', rev: 1}, can: [], actions: [], reactions: []};
       return route.fulfill({json: {id: body.id, lid: body.id, state: 'queued'}});
     });
     await ctx.route('**/api/dm?*', async route => {
@@ -72,7 +73,7 @@ const held = 'Stopped. Its files are kept on this device: Retry sends it, Discar
     await page.waitForTimeout(600); results.open_layers = await page.getByRole('dialog').evaluateAll(ds => ds.map(d => (d.getAttribute('aria-label') || '') + '|' + (d.textContent || '').slice(0, 120)));
     const msB = await retry('second original', 'Saved send is in the outbox.');
     assert.deepEqual(posts, [idA, idB, idB], 'one retry, same ID');
-    assert.equal(await card().getByRole('button', {name: /^Saved messages/}).count(), 0);
+    await card().getByRole('button', {name: /^Saved messages/}).waitFor({state: 'detached'});
     results.cases.push({case: 'not-stored-retry-once', click_to_receipt_ms: msB, posts: posts.length});
     assert(msA < 1000 && msB < 1000, 'feedback under one second: ' + msA + '/' + msB);
     assert.deepEqual(errors, []);
