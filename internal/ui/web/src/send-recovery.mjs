@@ -139,12 +139,16 @@ export async function replaySavedSend(host, entry) {
     catch { throw new Error("This message's chat could not be checked, so nothing was sent. It stays saved here; try again."); }
     if (thread?.id !== entry.conversation || !Array.isArray(thread.messages))
       throw new Error("This message's chat could not be checked, so nothing was sent. It stays saved here; try again.");
-    if (thread.messages.some(m => m.dir === "out" && (m.lid || m.id) === entry.id && stopped(m))) return "held";
+    // Any row under this ID is this message (the host refuses other words under it):
+    // what it shows decides, and nothing is requested again.
+    const own = thread.messages.find(m => m.dir === "out" && (m.lid || m.id) === entry.id);
+    if (own) return stopped(own) ? "held" : waiting(own) ? "pending" : own.queued_send?.state === "cancelled" ? "discarded" : "sent";
   }
   const state = m => stopped(m) ? "held" : waiting(m) ? "pending" : "sent";
   const found = await persistedSend(host, entry);
   if (found) return state(found);
-  try { await host.api(entry.endpoint, entry.request); }
+  let answer;
+  try { answer = await host.api(entry.endpoint, entry.request); }
   catch (e) {
     // The host's own answer that the person discarded this exact message.
     if (e?.status >= 400 && e.status < 500 && /discarded this message/i.test(String(e.message))) return "discarded";
@@ -152,7 +156,9 @@ export async function replaySavedSend(host, entry) {
     if (again) return state(again);
     throw e;
   }
-  return "pending";
+  // The host's answer: a message it holds stopped (one held here, or refused) answers
+  // "failed" with its words; that is not a send.
+  return answer?.state === "failed" ? "held" : "pending";
 }
 
 /** Words for what replaySavedSend proved; never more than that. */

@@ -155,7 +155,7 @@ function replayHost(rows, { lookup = true, post } = {}) {
   const calls = [];
   return { calls, async api(path, body) {
     calls.push(body === undefined ? path : "POST " + path);
-    if (body !== undefined) return post ? post(body) : { id: body.id, state: "queued" };
+    if (body !== undefined) return post ? post(body, rows) : { id: body.id, state: "queued" };
     if (path === "/api/overview") return structuredClone({ me, dms: [] });
     if (path === "/api/dm?id=" + conv) { if (!lookup) throw Error("host unavailable"); return structuredClone({ id: conv, messages: rows, agents: [] }); }
     throw Error("not stored");
@@ -186,8 +186,8 @@ test("pending, sent and newer host state: no second request, words match the row
 });
 
 test("discarded: the host's refusal is the answer, and nothing is sent", async () => {
-  // DiscardQueuedSend clears the body, so no stored copy matches and the request is made once.
-  const h = replayHost([{ ...dmMessage(), body: "", queued_send: undefined }], { post: () => { throw Object.assign(Error("You discarded this message."), { status: 409 }); } });
+  // A discarded row leaves the chat view (queuedActive), so the request is made once and refused.
+  const h = replayHost([], { post: () => { throw Object.assign(Error("You discarded this message."), { status: 409 }); } });
   assert.equal(await replaySavedSend(h, dmEntry()), "discarded");
   assert.equal(posts(h), 1);
   assert.match(savedSendReceipt("discarded"), /was not sent/);
@@ -203,4 +203,19 @@ test("unknown: a failed chat lookup or a failed request keeps the saved intent",
   const fresh = replayHost([]);
   assert.equal(await replaySavedSend(fresh, dmEntry()), "pending");
   assert.equal(posts(fresh), 1);
+});
+
+test("a row under this ID decides without a request; a hold between the look and the request is answered as held", async () => {
+  // A file message never matches persistedSend; its row under the same ID still decides.
+  for (const [q, want] of [[{ state: "pending", rev: 1 }, "pending"], [{ state: "cancelled", rev: 3 }, "discarded"], [undefined, "sent"]]) {
+    const e = dmEntry(); e.request.files = ["stage-gone"];
+    const h = replayHost([{ ...dmMessage(), attachments: [{ name: "a.bin" }], ...(q ? { queued_send: q } : {}) }]);
+    assert.equal(await replaySavedSend(h, e), want, JSON.stringify(q));
+    assert.equal(posts(h), 0, "no request when the row is there");
+  }
+  // No row when looked at; the person holds it before the request lands. The host
+  // keeps it held and answers "failed" with its words (livedm queueDM).
+  const h = replayHost([], { post: body => ({ lid: body.id, id: body.id, state: "failed", detail: "Stopped. Its files are kept on this device: Retry sends it, Discard removes it." }) });
+  assert.equal(await replaySavedSend(h, dmEntry()), "held");
+  assert.equal(posts(h), 1);
 });

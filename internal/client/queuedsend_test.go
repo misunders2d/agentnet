@@ -648,6 +648,16 @@ func TestQueuedSendHoldKeepsFilesAndBeatsAttempt(t *testing.T) {
 	if s := queuedRow(t, a, id); s.State != ScheduledNeedsReview || queuedLIDCopies(t, a, id) != 0 {
 		t.Fatalf("a refused replay changed the held message: %+v", s)
 	}
+	// The same admission request again (a lost answer's saved copy, replayed after
+	// recovery looked and before this request landed) keeps it held: only the
+	// person's Retry resumes a message they stopped.
+	if res, err := a.QueueSend(ScheduledSendInput{ID: id, Conv: conv, Body: "held with a file", Files: []OutgoingFile{{Name: "held.bin", Path: path}}}, "", 0); err != nil || res.Row.State != ScheduledNeedsReview {
+		t.Fatalf("a replayed admission resumed a held message: %+v %v", res.Row, err)
+	}
+	time.Sleep(500 * time.Millisecond)
+	if s := queuedRow(t, a, id); s.State != ScheduledNeedsReview || queuedLIDCopies(t, a, id) != 0 {
+		t.Fatalf("a replayed admission sent a held message: %+v", s)
+	}
 	if _, err = a.RetryQueuedSend(id); err != nil {
 		t.Fatal(err)
 	}

@@ -142,6 +142,11 @@ func (a *Agent) QueueSend(in ScheduledSendInput, pid string, wait time.Duration)
 	case ScheduledSent:
 		return QueuedSendResult{Row: row}, nil
 	case ScheduledNeedsReview: // pressing Send again on the same message is its retry
+		if row.Detail == queuedHeldDetail {
+			// The person stopped it (HoldQueuedSend): a repeated admission request,
+			// such as a lost answer's saved copy, never resumes it. Only their Retry does.
+			return QueuedSendResult{Row: row}, nil
+		}
 		if row, err = a.RetryQueuedSend(row.ID); err != nil {
 			return QueuedSendResult{}, err
 		}
