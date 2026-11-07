@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useApp } from "../context";
+import { useStore } from "../store";
 import { errorText } from "../api";
 import { isSendPersisted } from "../send-recovery.mjs";
 import { legacyDraft } from "../legacy-drafts.mjs";
@@ -18,6 +19,10 @@ export function NativeRecovery() {
   const [pending, setPending] = useState<JournalEntry[]>([]), [problem, setProblem] = useState("");
   const [open, setOpen] = useState(false), [busy, setBusy] = useState("");
   const [errors, setErrors] = useState<Record<string,string>>({});
+  // Original text kept from a send that never completed here (for example a
+  // cancelled message whose draft could not be restored before a restart).
+  useStore(store,s=>s.views);useStore(store,s=>s.drafts);const [,setTick]=useState(0);
+  const kept=store.keptOriginals();
   useEffect(() => {
     if (!native) return;
     let alive=true;
@@ -26,7 +31,8 @@ export function NativeRecovery() {
     refresh(); const off=onJournalChange(refresh);
     return()=>{alive=false;off();};
   },[native,workspace,recovered]);
-  if (!native || (!legacy.length && !pending.length && !problem)) return null;
+  if (!kept.length && (!native || (!legacy.length && !pending.length && !problem))) return null;
+  const here = native ? "phone" : "device";
   const run = async (key:string, work:()=>Promise<void>) => {
     setBusy(key);setErrors(v=>({...v,[key]:""}));
     try {await work();}catch(e){setErrors(v=>({...v,[key]:errorText(e)}));}finally{setBusy("");}
@@ -50,15 +56,16 @@ export function NativeRecovery() {
       store.saveDraftNow(d.conversation,{...current,text:d.body});
       await store.open({kind:d.kind,id:d.conversation});
     }
+    if(!native)throw new Error("This saved draft belongs to the phone app.");
     const ack=await native.acknowledgeLegacyDraft(record.key,record.value);
     if(!ack.removed) throw new Error("The saved draft changed while restoring it. Its latest version was kept.");
     setLegacy(v=>v.filter(x=>x.key!==record.key));
   };
   return <>
     <button className="w-full shrink-0 border-b border-hairline bg-surface px-4 py-2 text-left text-[13px] font-semibold" onClick={()=>setOpen(true)}>
-      {problem ? "Saved messages need attention" : `Saved messages (${legacy.length+pending.length})`} · Review
+      {problem ? "Saved messages need attention" : `Saved messages (${legacy.length+pending.length+kept.length})`} · Review
     </button>
-    <Sheet open={open} onOpenChange={setOpen} title="Saved messages" description="These messages are saved on this phone, but sending is not confirmed. Retry keeps the original message; you don’t need to type it again.">
+    <Sheet open={open} onOpenChange={setOpen} title="Saved messages" description={`These messages are saved on this ${here}, but sending is not confirmed. Retry keeps the original message; you don’t need to type it again.`}>
       {problem && <p role="alert" className="mb-3 text-danger">{problem}</p>}
       {legacy.map(record=>{
         let d;try{d=legacyDraft(record);}catch{}
@@ -84,7 +91,21 @@ export function NativeRecovery() {
           <p role="alert" className="[overflow-wrap:anywhere]">{errors[entry.id]||entry.error}</p>
         </details>}
       </section>)}
-      {!legacy.length&&!pending.length&&!problem&&<p>All saved messages have been recovered.</p>}
+      {kept.map(k=><section key={k.id} className="mb-3 rounded-2xl border border-hairline bg-surface p-4">
+        <p className="font-semibold">Text kept from a message that wasn’t sent</p>
+        <p className="my-2 whitespace-pre-wrap break-words">{k.draft.text || "(no text)"}</p>
+        {k.hadFiles && <p className="mb-2 text-[13px] text-muted">Its attachments weren’t kept after the app restarted. Add them again.</p>}
+        {k.state==="check" && <p className="mb-2 text-[13px] text-muted">Open the chat first, so AgentNet can check this message wasn’t sent.</p>}
+        <div className="flex flex-wrap gap-2">
+          {k.state==="offer"
+            ? <Button size="sm" variant="outline" disabled={!!busy} onClick={()=>void run(k.id,async()=>{store.putBackKept(k.id,k.conversation);setTick(t=>t+1);store.toast("Text is back in the draft.","ok");})}>Put back in draft</Button>
+            : <Button size="sm" variant="outline" disabled={!!busy} onClick={()=>void run(k.id,async()=>{const dm=!!store.get().overview?.dms?.some(d=>d.id===k.conversation);await store.open({kind:dm?"dm":"thread",id:k.conversation});setOpen(false);})}>Open chat</Button>}
+          <Button size="sm" variant="ghost" onClick={()=>void copyText(k.draft.text, store.host.android).then(ok=>store.toast(ok?"Copied":"Couldn’t copy here",ok?"ok":"error"))}>Copy text</Button>
+          <Button size="sm" variant="ghost" disabled={!!busy} onClick={()=>void run(k.id,async()=>{store.discardKept(k.id,k.conversation);setTick(t=>t+1);})}>Discard</Button>
+        </div>
+        {errors[k.id] && <p role="alert" className="mt-2 text-danger [overflow-wrap:anywhere]">{errors[k.id]}</p>}
+      </section>)}
+      {!legacy.length&&!pending.length&&!kept.length&&!problem&&<p>All saved messages have been recovered.</p>}
     </Sheet>
   </>;
 }

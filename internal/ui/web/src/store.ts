@@ -6,7 +6,7 @@
 // again with a new host when the person switches workspace, so nothing here
 // can act on another workspace by accident.
 import { pendingSends, sendID } from "./optimistic.mjs";
-import { savedSendDrafts, type SavedDraftOwner, type SavedSendDraft } from "./send-journal.mjs";
+import { savedSendDrafts, readPending, type SavedDraftOwner, type SavedSendDraft } from "./send-journal.mjs";
 import { useSyncExternalStore } from "react";
 import { api, errorText, type Api, type ReminderResult, type T } from "./api";
 import type { Host, HostEvent, OpenContext } from "./host";
@@ -2434,6 +2434,37 @@ export class Store {
     if (this.alive) this.set({drafts:{...drafts,[conv]:shown}});
     else if(saved)saved.drafts={...drafts,[conv]:shown};
     return true;
+  }
+
+  /** Kept original drafts with no send this window knows about. "offer": the chat's
+   *  loaded view has no stored message or queued row with that ID, no send here
+   *  and no Retry request holds it, so its text may go back into an empty
+   *  composer. "check": the chat is not loaded yet; open it first. */
+  keptOriginals(): (SavedSendDraft & {state:"offer"|"check"})[] {
+    const owner=this.draftOwner();if(!owner||!this.alive)return [];
+    let retry:Set<string>;try{retry=new Set(readPending(localStorage,this.host.workspace.id).map(e=>e.id));}catch{return [];}
+    return this.savedDrafts.entries(owner).flatMap(r=>{
+      if(this.sends.has(r.id)||retry.has(r.id))return [];
+      const view=this.state.views[r.conversation];
+      if(view?.messages?.some(m=>m.id===r.id||("lid" in m && m.lid===r.id)))return [];
+      return [{...r,state:view?"offer" as const:"check" as const}];
+    });
+  }
+  /** Puts a kept original's text into its chat's empty composer, then lets it go. */
+  putBackKept(id:string,conv:string) {
+    const owner=this.draftOwner();if(!owner)throw new Error("Your workspace identity is unavailable. The saved text was kept.");
+    const kept=this.keptOriginals().find(r=>r.id===id&&r.conversation===conv&&r.state==="offer");
+    if(!kept)throw new Error("This saved text can't be put back now. It was kept.");
+    const cur=this.draft(conv);
+    if(cur.text||cur.files?.length||cur.replyTo||cur.agent||cur.newTopic||cur.mediaMode||(cur.topic&&cur.topic!==(kept.draft.topic||"")))
+      throw new Error("There is already a draft in this chat. Keep or send it first, then put this text back.");
+    this.saveDraftNow(conv,{...kept.draft});
+    try{this.savedDrafts.release(id,conv,owner);}catch{this.toast("The text is back in the draft, but its saved copy could not be cleared. You can discard it.","error");}
+  }
+  /** Lets a kept original go; the chat's draft is unchanged. */
+  discardKept(id:string,conv:string) {
+    const owner=this.draftOwner();if(!owner)throw new Error("Your workspace identity is unavailable. The saved text was kept.");
+    this.savedDrafts.release(id,conv,owner);
   }
 
   /** Saves a draft durably before returning. Throws when storage refuses; if only the copy older

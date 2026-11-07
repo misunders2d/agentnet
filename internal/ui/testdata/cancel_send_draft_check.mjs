@@ -245,6 +245,30 @@ await check('storage event cannot replace unsaved newer input after quota failur
   }finally{localStorage.setItem=write;await w.stop();}
 });
 
+await check('refused restore then restart: kept original is offered once its chat loads; put back sends nothing',async()=>{
+  const w=await world(),write=localStorage.setItem,key='agentnet.messenger.drafts.'+w.host.workspace.id;let r;
+  try{
+    localStorage.setItem=function(k,v){if(k===key)throw Error('synthetic quota');return write.call(this,k,v);};
+    await w.queued()._discard();localStorage.setItem=write;
+    assert.equal(w.store.draft(conv).text,w.draft.text,'text shown here although storage refused it');
+    r=await w.restart({expectedText:''});
+    const kept=r.store.keptOriginals();assert.equal(kept.length,1,'one kept original');assert.equal(kept[0].state,'offer');
+    assert.equal(kept[0].draft.text,w.draft.text,'exact original text');
+    r.store.setDraft(conv,{text:'newer typed after restart'});
+    assert.throws(()=>r.store.putBackKept(kept[0].id,conv),/already a draft/,'never replaces newer input');
+    r.store.setDraft(conv,{text:''});r.store.putBackKept(kept[0].id,conv);
+    assert.equal(r.store.draft(conv).text,w.draft.text);assert.equal(r.store.keptOriginals().length,0,'released once back');
+    assert.equal(w.posts.length,1,'no new send');
+  }finally{localStorage.setItem=write;r?.stop();await w.stop();}
+});
+await check('kept original whose message is stored or still queued is never offered',async()=>{
+  const w=await world(),write=localStorage.setItem,key='agentnet.messenger.drafts.'+w.host.workspace.id;let r;
+  try{
+    r=await w.restart({expectedText:''});
+    assert.equal(r.store.keptOriginals().length,0,'queued row holds it');
+    r.stored();assert.equal(r.store.keptOriginals().length,0,'stored message holds or released it');
+  }finally{localStorage.setItem=write;r?.stop();await w.stop();}
+});
 await check('legacy queued body still recovers without a stored draft entry',async()=>{
   const w=await world();let r;try{
     w.legacy();localStorage.setItem('agentnet.messenger.drafts.'+w.host.workspace.id,'{}');
