@@ -36,7 +36,7 @@ let current = null; // the page under check, for a failure screenshot
     const sends = []; await ctx.route('**/api/dm/send', r => { sends.push(r.request().url()); return r.continue(); });
     // Queued rows of this person's own (as another window's sends leave them): one
     // still pending, one held. Row Retry/Cancel/Discard reach /api/schedule/*.
-    const rowsOn = variant === 'rejected' && native === 'desktop', schedule = []; if (rowsOn) results.schedule = schedule;
+    const rowsOn = variant === 'rejected' && !!native, schedule = []; if (rowsOn) results.schedule = schedule;
     const held = 'Stopped. Its files are kept on this device: Retry sends it, Discard removes it.';
     if (rowsOn) {
       await ctx.route('**/api/dm?*', async route => {
@@ -45,7 +45,9 @@ let current = null; // the page under check, for a failure screenshot
           const own = {dir: 'out', kind: 'message', at: new Date().toISOString(), from: view.me?.address, send_group_author: view.me?.fingerprint, can: [], actions: [], reactions: []};
           view.messages = [...(view.messages || []),
             {...own, id: 'c'.repeat(32), lid: 'c'.repeat(32), body: 'queued pending words', state: 'queued', state_text: 'Sending…', queued_send: {state: 'pending', rev: 1}},
-            {...own, id: 'd'.repeat(32), lid: 'd'.repeat(32), body: 'queued held words', state: 'failed', state_text: held, detail: held, queued_send: {state: 'needs_review', rev: 2}}];
+            {...own, id: 'd'.repeat(32), lid: 'd'.repeat(32), body: 'queued held words', state: 'failed', state_text: held, detail: held, queued_send: {state: 'needs_review', rev: 2}},
+            // The kept original's send, now stored by the host (another window sent it).
+            {...own, id: 'b'.repeat(32), lid: 'b'.repeat(32), body: 'kept original words', state: 'delivered'}];
         }
         await route.fulfill({response, json: view});
       });
@@ -125,7 +127,7 @@ let current = null; // the page under check, for a failure screenshot
       if (native === 'desktop') await p.getByRole('button', {name: 'Check for updates', exact: true}).waitFor();
       await p.getByRole('navigation', {name: 'Main', exact: true}).getByRole('button', {name: 'Chats', exact: true}).click();
     }
-    if (rowsOn) {
+    if (rowsOn && native === 'desktop') {
       // Row controls: Retry sends nothing, Discard of a held message destroys nothing;
       // Cancel stops the pending one and the host keeps it (hold), as when a draft can't be put back.
       current = first; await openChat(first);
@@ -137,7 +139,23 @@ let current = null; // the page under check, for a failure screenshot
       await first.getByText(/can’t be retried or discarded in this window/).first().waitFor();
       await discard.filter({hasText: 'Cancel'}).first().click(); await first.waitForTimeout(500);
       assert.deepEqual(schedule, ['/api/schedule/hold_send'], 'only a hold reaches the host');
+      // Reply on the stored message: the draft change is refused and says so truthfully.
+      const stored = first.locator('[data-mid="' + 'b'.repeat(32) + '"]'); await stored.hover();
+      await stored.getByRole('button', {name: 'Reply', exact: true}).click();
+      await first.getByText('Drafts are read-only in this window: this change wasn’t saved.').first().waitFor();
+      assert.equal(await first.getByText(/Keep this window open/).count(), 0, 'no keep-open advice');
+      assert.equal(await first.getByText(/original draft recovery could not be cleared/).count(), 0, 'stored send releases nothing and reports no failure');
       await first.getByRole('navigation', {name: 'Main', exact: true}).getByRole('button', {name: 'Chats', exact: true}).click();
+    }
+    if (rowsOn && native === 'android') {
+      // The phone at 390: Cancel on a pending row holds it; nothing else reaches the host.
+      current = first; await first.setViewportSize({width: 390, height: 844});
+      if (!(await first.locator('[data-send-discard]').count())) await openChat(first);
+      await first.locator('[data-send-discard]').filter({hasText: 'Cancel'}).last().click(); await first.waitForTimeout(500);
+      assert.deepEqual(schedule, ['/api/schedule/hold_send'], 'phone Cancel only holds');
+      assert.equal(await first.getByText(/original draft recovery could not be cleared/).count(), 0, 'stored send releases nothing and reports no failure');
+      if (out) await first.screenshot({path: out + '/native-readonly-android-cancel-390.png'});
+      await first.setViewportSize({width: 1280, height: 900});
     }
     assert.equal(await snapshot(first), before, 'saved drafts, journal and recovery unchanged');
     await first.reload(); await first.locator('[data-part="chat-row"]').first().waitFor(); await first.waitForTimeout(800);
