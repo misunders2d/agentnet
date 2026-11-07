@@ -35,7 +35,8 @@ func TestCancelRestoreRendered(t *testing.T) {
 		out, err := cmd.CombinedOutput()
 		ts.Close()
 		if err != nil || !strings.Contains(string(out), "Cancel restore rendered PASS") {
-			t.Fatalf("width %s %s: %v\n%s", width, native, err, out)
+			t.Errorf("width %s %s: %v\n%s", width, native, err, out) // the other variants still run
+			continue
 		}
 		t.Logf("%s", out)
 	}

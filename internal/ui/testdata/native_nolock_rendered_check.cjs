@@ -15,7 +15,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {chromium} = require(process.env.AGENTNET_PLAYWRIGHT);
-const out = process.env.NOLOCK_EVIDENCE, results = {cases: []};
+const out = process.env.NOLOCK_EVIDENCE, results = {cases: [], steps: {}}, failures = [];
 const conv = process.argv[3];
 const readOnly = /Drafts are read-only in this window/;
 const pageErrors = [];
@@ -25,7 +25,13 @@ let current = null; // the page under check, for a failure screenshot
   const browser = await chromium.launch({headless: true, executablePath: process.env.AGENTNET_CHROMIUM || '/usr/bin/chromium', args: ['--no-sandbox', '--disable-dev-shm-usage']});
   try {
   for (const [variant, native] of [['rejected', ''], ['missing', ''], ['rejected', 'desktop'], ['missing', 'desktop'], ['rejected', 'android'], ['missing', 'android'], ['lock', 'desktop'], ['lock', 'android']]) {
+    // Each variant runs on its own context; a failure is recorded with the steps it
+    // left unexecuted and the next variant still runs. Any failure fails the run.
+    const label = (native || 'browser') + '-' + variant, done = [], step = n => { done.push(n); };
+    const planned = !native ? ['refused'] : variant === 'lock' ? ['lock-second-waits', ...(native === 'android' ? ['journal-copy'] : []), 'kept-copy-discard', ...(native === 'android' ? ['legacy-restore-retry'] : [])]
+      : ['readonly-state', 'saved-read-copy-closed-composer-settings', ...(variant === 'rejected' ? [native === 'desktop' ? 'rows-reply-desktop' : 'rows-reply-android-390'] : []), ...(variant === 'missing' ? ['outbox-' + native] : []), 'storage-unchanged-reload'];
     const ctx = await browser.newContext({reducedMotion: 'reduce', viewport: {width: 1280, height: 900}});
+    try {
     await ctx.addInitScript(({variant, native}) => {
       if (variant === 'missing') Object.defineProperty(Navigator.prototype, 'locks', {get: () => undefined, configurable: true});
       else if (variant === 'rejected') LockManager.prototype.request = function () { return Promise.reject(new DOMException('synthetic refusal', 'SecurityError')); };
@@ -55,7 +61,7 @@ let current = null; // the page under check, for a failure screenshot
       await ctx.route('**/api/schedule/**', route => {
         const path = new URL(route.request().url()).pathname;
         if (path === '/api/schedule/audience') return route.fulfill({json: {persons: [], pids: []}});
-        const body = route.request().postDataJSON(); scheduleWrites.push({path, body});
+        const body = route.request().postDataJSON(); scheduleWrites.push({path, body, at: Date.now()});
         if (path !== '/api/schedule/edit' || body.id !== row.id || body.rev !== row.rev) return route.fulfill({status: 409, body: 'unexpected'});
         Object.assign(row, {body: body.body, due: body.due, rev: row.rev + 1}); return route.fulfill({json: row});
       });
@@ -81,7 +87,6 @@ let current = null; // the page under check, for a failure screenshot
         return r.fulfill({json: path.endsWith('/hold_send') ? {id: 'c'.repeat(32), state: 'needs_review', detail: held} : {id: r.request().postDataJSON()?.id, state: 'cancelled'}}); });
     }
     const origin = new URL(process.argv[2]).origin;
-    const label = (native || 'browser') + '-' + variant;
     const first = await ctx.newPage(); first.setDefaultTimeout(8000); current = first;
     const errors = []; first.on('pageerror', e => { errors.push(String(e)); pageErrors.push(label + ': ' + String(e)); });
     await first.goto(process.argv[2]); await first.goto(origin + '/?skin=comic');
@@ -94,7 +99,7 @@ let current = null; // the page under check, for a failure screenshot
         assert.equal(await mode(p), 'none'); assert.equal(await p.locator('[data-part="chat-row"]').count(), 0);
         assert.equal(await p.getByRole('status').filter({hasText: /cannot run AgentNet/}).count(), 1);
       }
-      assert.equal(await snapshot(first), '[]', 'nothing written to drafts');
+      assert.equal(await snapshot(first), '[]', 'nothing written to drafts'); step('refused');
       results.cases.push({case: label, refused: true}); await ctx.close(); continue;
     }
     // Seed raw storage as earlier work left it: an older version's whole draft map
@@ -122,7 +127,7 @@ let current = null; // the page under check, for a failure screenshot
       assert.equal(await mode(first), 'lock');
       assert.equal(await second.getByRole('status').filter({hasText: /open in another tab or window/}).count(), 1, 'second page waits');
       assert.equal(await second.locator('[data-part="chat-row"]').count(), 0);
-      await second.close(); // so a reload of this page keeps the lock
+      await second.close(); step('lock-second-waits'); // so a reload of this page keeps the lock
       const sheet = () => first.getByRole('dialog', {name: 'Saved messages'});
       const openSaved = async () => { if (!(await sheet().count())) await saved(first).click(); await sheet().waitFor(); return sheet(); };
       const item = async text => (await openSaved()).locator('section').filter({hasText: text});
@@ -136,7 +141,7 @@ let current = null; // the page under check, for a failure screenshot
         assert.equal(sends.length, 0, 'journal Copy text sends nothing');
         assert(await (await item('saved send words')).count() === 1, 'the saved send stays offered');
         assert(jMs < 1000, 'journal Copy feedback under one second: ' + jMs);
-        results.journal_copy = {click_to_copied_ms: jMs, clipboard: 'exact', storage: 'unchanged', sends: 0};
+        results.journal_copy = {click_to_copied_ms: jMs, clipboard: 'exact', storage: 'unchanged', sends: 0}; step('journal-copy');
       }
       // Kept original: its chat is not loaded yet, so Open chat (then it can be checked).
       await (await item('kept original words')).getByRole('button', {name: 'Open chat', exact: true}).click();
@@ -153,7 +158,7 @@ let current = null; // the page under check, for a failure screenshot
       assert.equal(await box.inputValue(), 'newer draft words', 'Discard leaves the newer draft');
       let snap = await snapshot(first);
       assert(snap.includes('newer draft words'), 'the lock holder saves its draft');
-      assert(!snap.includes('send-recovery.v1.' + 'b'.repeat(32)), 'Discard removes the kept original');
+      assert(!snap.includes('send-recovery.v1.' + 'b'.repeat(32)), 'Discard removes the kept original'); step('kept-copy-discard');
       if (hexChats.length) {
         const [hex, hex2] = hexChats, acks = () => first.evaluate(() => window.__legacyAcks || 0);
         // Legacy draft into an empty chat: restored, saved, acknowledged once.
@@ -182,7 +187,7 @@ let current = null; // the page under check, for a failure screenshot
         // The fixture host stored it under its ID (read back from the host, not the request).
         const stored = await first.evaluate(async conv => ((await (await fetch('/api/dm?id=' + conv)).json()).messages || []).filter(m => (m.id === 'e'.repeat(32) || m.lid === 'e'.repeat(32)) && m.body === 'legacy retry words').length, conv);
         assert.equal(stored, 1, 'host holds the legacy send once');
-        results.legacy = {restore_acks: 1, refused_acks: 0, retry_requests: sends.length, host_rows: stored};
+        results.legacy = {restore_acks: 1, refused_acks: 0, retry_requests: sends.length, host_rows: stored}; step('legacy-restore-retry');
       }
       results.cases.push({case: label, writes: true, copied: true, kept_discarded: true, legacy: !!hexChats.length});
       if (out) await first.screenshot({path: out + '/native-lock-' + label + '.png'});
@@ -193,6 +198,7 @@ let current = null; // the page under check, for a failure screenshot
     const a = await state(first), b = await state(second);
     results.pages = {...results.pages, [label]: {first: a, second: b}};
     for (const s of [a, b]) { assert.equal(s.mode, 'readonly'); assert(s.chats > 0, 'native page opens'); assert(s.notice > 0, 'read-only state is shown'); }
+    step('readonly-state');
     for (const p of [first, second]) {
       // Saved messages: readable and copyable, nothing that writes or sends.
       await saved(p).click(); const sheet = p.getByRole('dialog', {name: 'Saved messages'});
@@ -220,6 +226,7 @@ let current = null; // the page under check, for a failure screenshot
       if (native === 'desktop') await p.getByRole('button', {name: 'Check for updates', exact: true}).waitFor();
       await p.getByRole('navigation', {name: 'Main', exact: true}).getByRole('button', {name: 'Chats', exact: true}).click();
     }
+    step('saved-read-copy-closed-composer-settings');
     if (rowsOn && native === 'desktop') {
       // Row controls: Retry sends nothing, Discard of a held message destroys nothing;
       // Cancel stops the pending one and the host keeps it (hold), as when a draft can't be put back.
@@ -240,6 +247,7 @@ let current = null; // the page under check, for a failure screenshot
       assert.equal(await first.getByText(/Keep this window open/).count(), 0, 'no keep-open advice');
       assert.equal(await first.getByText(/original draft recovery could not be cleared/).count(), 0, 'stored send releases nothing and reports no failure');
       await first.getByRole('navigation', {name: 'Main', exact: true}).getByRole('button', {name: 'Chats', exact: true}).click();
+      step('rows-reply-desktop');
     }
     if (rowsOn && native === 'android') {
       // The phone at 390: Cancel on a pending row holds it; nothing else reaches the host.
@@ -269,7 +277,7 @@ let current = null; // the page under check, for a failure screenshot
       results.android390 = {stop_to_local_ms: stopLocalMs, kept_rows: 2, retry_controls: 0, discard_controls: 0, reply_to_refusal_ms: replyMs, draft: 'unchanged'};
       assert.equal(await first.getByText(/original draft recovery could not be cleared/).count(), 0, 'stored send releases nothing and reports no failure');
       if (out) await first.screenshot({path: out + '/native-readonly-android-cancel-390.png'});
-      await first.setViewportSize({width: 1280, height: 900});
+      await first.setViewportSize({width: 1280, height: 900}); step('rows-reply-android-390');
     }
     if (outboxOn) {
       // Outbox edit is the host's own schedule: it works here, with one edit and no local write.
@@ -279,17 +287,44 @@ let current = null; // the page under check, for a failure screenshot
       const editing = first.getByRole('article').filter({hasText: 'scheduled words'});
       await editing.getByRole('button', {name: 'Edit schedule', exact: true}).click();
       await first.getByRole('textbox', {name: 'Scheduled message text', exact: true}).fill('edited in read-only');
-      const o0 = Date.now(); await editing.getByRole('button', {name: 'Save schedule changes', exact: true}).click();
-      await first.getByRole('article').filter({hasText: 'edited in read-only'}).waitFor(); const saveMs = Date.now() - o0;
-      assert(saveMs < 1000, 'Outbox save visible under one second: ' + saveMs);
+      // Timing from the page's own input event (epoch ms on one clock): Playwright's
+      // click call and actionability wait, the real pointerdown, the row's "Saving…"
+      // (DOM mutation, in the skin's open shadow root), the host request, and the
+      // refreshed row without "Saving…". The 19:50Z assertion (click call -> row
+      // visible to Playwright, 2020 ms) is kept as a measurement below.
+      const save = editing.getByRole('button', {name: 'Save schedule changes', exact: true});
+      await first.evaluate(() => {
+        const now = () => performance.timeOrigin + performance.now(), m = window.__outboxTimes = {};
+        const on = (type, e) => { const b = e.composedPath()[0]?.closest?.('button'); if (b && b.textContent.includes('Save schedule changes') && !m[type]) m[type] = performance.timeOrigin + e.timeStamp; };
+        document.addEventListener('pointerdown', e => on('input', e), true); document.addEventListener('click', e => on('click', e), true);
+        const roots = new Set([document]); const walk = r => { for (const el of r.querySelectorAll('*')) if (el.shadowRoot) { roots.add(el.shadowRoot); walk(el.shadowRoot); } }; walk(document);
+        const check = () => { if (!m.input) return; for (const r of roots) for (const a of r.querySelectorAll('article')) { const t = a.textContent;
+          if (!t.includes('edited in read-only')) continue;
+          if (!m.saving && t.includes('Saving…')) m.saving = now();
+          if (m.saving && !m.confirmed && !t.includes('Saving…') && !a.querySelector('textarea')) m.confirmed = now(); } };
+        for (const r of roots) new MutationObserver(check).observe(r, {subtree: true, childList: true, characterData: true, attributes: true});
+      });
+      const c0 = Date.now(); await save.click(); const c1 = Date.now();
+      await first.getByRole('article').filter({hasText: 'edited in read-only'}).waitFor(); const c2 = Date.now();
+      await first.waitForFunction(() => !!window.__outboxTimes.confirmed || !!window.__outboxTimes.timedOut, null, {timeout: 8000}).catch(() => {});
+      const m = await first.evaluate(() => window.__outboxTimes), edit = scheduleWrites.find(w => w.path === '/api/schedule/edit');
+      const ms = (a, b) => (a && b ? Math.round(b - a) : null);
+      const timing = {click_call_to_input_event_ms: ms(c0, m.input), click_call_resolved_ms: c1 - c0, input_to_click_event_ms: ms(m.input, m.click),
+        input_to_saving_ms: ms(m.input, m.saving), input_to_host_request_ms: ms(m.input, edit?.at), input_to_confirmed_row_ms: ms(m.input, m.confirmed),
+        click_call_to_playwright_visible_ms: c2 - c0};
+      results.outbox_timing = {...results.outbox_timing, [native]: timing};
+      assert(m.input, 'the real input event reached the Save button');
+      assert(m.saving, 'the row showed Saving… after the input');
+      assert(timing.input_to_saving_ms < 1000, 'Outbox Saving… under one second from input: ' + timing.input_to_saving_ms);
+      assert(m.confirmed, 'the refreshed row replaced Saving…');
       assert.equal(await snapshot(first), before, 'Outbox edit leaves saved drafts unchanged');
-      results.outbox_timing = {...results.outbox_timing, [native]: {save_to_edited_row_ms: saveMs, host_row_rev: 2}};
       results.outbox = scheduleWrites.map(w => w.path);
       assert.deepEqual(results.outbox, ['/api/schedule/edit'], 'one Outbox edit');
       assert.equal(scheduleWrites[0].body.body, 'edited in read-only');
       assert.equal(await first.evaluate(() => Object.keys(localStorage).filter(k => k.includes('schedule-save')).length), 0, 'no schedule token written');
       await nav.getByRole('button', {name: 'Chats', exact: true}).click();
       if (native === 'android') { if (out) await first.screenshot({path: out + '/native-readonly-android-outbox-390.png'}); await first.setViewportSize({width: 1280, height: 900}); }
+      step('outbox-' + native);
     }
     assert.equal(await snapshot(first), before, 'saved drafts, journal and recovery unchanged');
     await first.reload(); await first.locator('[data-part="chat-row"]').first().waitFor(); await first.waitForTimeout(800);
@@ -297,11 +332,21 @@ let current = null; // the page under check, for a failure screenshot
     assert.equal(await snapshot(second), before, 'unchanged after a reload');
     assert.deepEqual(sends, [], 'nothing sent or replayed');
     assert.equal(await first.evaluate(() => window.__legacyAcks || 0), 0, 'no legacy draft acknowledged');
-    assert.deepEqual(errors, []);
+    assert.deepEqual(errors, []); step('storage-unchanged-reload');
     results.cases.push({case: label, readonly: true, unchanged: true});
     if (out) await first.screenshot({path: out + '/native-readonly-' + label + '.png'});
     await ctx.close();
+    } catch (e) {
+      const failed = planned.find(n => !done.includes(n)) || null;
+      failures.push({case: label, failed_step: failed, unexecuted_after: planned.filter(n => !done.includes(n) && n !== failed), error: String(e.stack || e).split('\n').slice(0, 2).join(' | '),
+        buttons: await current?.getByRole('button').allInnerTexts().catch(() => null)});
+      if (out) await current?.screenshot({path: out + '/native-nolock-failure-' + label + '.png'}).catch(() => {});
+    } finally {
+      results.steps[label] = {planned, executed: [...done]}; await ctx.close().catch(() => {});
+    }
   }
+    results.failures = failures;
+    if (failures.length) throw new Error(failures.length + ' variant(s) failed: ' + failures.map(f => f.case + '@' + f.failed_step).join(', '));
     results.pass = true;
     console.log('Native without locks rendered PASS ' + JSON.stringify(results));
   } catch (e) {
