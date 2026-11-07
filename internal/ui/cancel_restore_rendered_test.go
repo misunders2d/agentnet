@@ -64,3 +64,28 @@ func TestNativeWithoutLocksRendered(t *testing.T) {
 	}
 	t.Logf("%s", out)
 }
+
+// Saved messages → Retry saved send on the phone, through the real daemon page
+// and built bundle: a held message is not sent from there; one the host never
+// stored is sent once under its ID. Synthetic fixture.
+func TestSavedSendRetryRendered(t *testing.T) {
+	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
+		t.Skip("opt-in installed Playwright")
+	}
+	f := NewFixture(time.Now)
+	if _, _, err := f.CreatePerson("Fixture Me"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.NewDM("vitalii/laptop"); err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewUnstartedServer(nil)
+	ts.Config.Handler = New(f, ts.Listener.Addr().String(), testToken).Handler()
+	ts.Start()
+	defer ts.Close()
+	out, err := exec.Command("node", "testdata/saved_send_retry_rendered_check.cjs", ts.URL+"/?t="+testToken).CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "Saved send retry rendered PASS") {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	t.Logf("%s", out)
+}
