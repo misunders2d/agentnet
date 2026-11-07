@@ -64,7 +64,8 @@ func TestNativeWithoutLocksRendered(t *testing.T) {
 	ts.Start()
 	defer ts.Close()
 	cmd := exec.Command("node", "testdata/native_nolock_rendered_check.cjs", ts.URL+"/?t="+testToken, dm)
-	cmd.Env = append(os.Environ(), "NOLOCK_EVIDENCE="+os.Getenv("CANCEL_EVIDENCE"))
+	// pw:api logs each Playwright action's call log (actionability, interception), passing ones too.
+	cmd.Env = append(os.Environ(), "NOLOCK_EVIDENCE="+os.Getenv("CANCEL_EVIDENCE"), "DEBUG=pw:api")
 	out, err := cmd.CombinedOutput()
 	if err != nil || !strings.Contains(string(out), "Native without locks rendered PASS") {
 		t.Fatalf("%v\n%s", err, out)

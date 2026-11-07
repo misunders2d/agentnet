@@ -15,7 +15,36 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {chromium} = require(process.env.AGENTNET_PLAYWRIGHT);
-const out = process.env.NOLOCK_EVIDENCE, results = {cases: [], steps: {}}, failures = [];
+const out = process.env.NOLOCK_EVIDENCE, results = {cases: [], steps: {}, timing: {}, assertions: []}, failures = [];
+// Independent assertions inside a step: each is recorded executed pass/fail and the
+// step goes on; any failure fails the variant at its end. Prerequisites stay hard.
+let softFailed = [];
+const soft = (variant, name, ok, detail) => { results.assertions.push({variant, name, status: ok ? 'pass' : 'fail', ...(detail === undefined ? {} : {detail})}); if (!ok) softFailed.push(name); };
+// A timed click: the page's own pointerdown (epoch ms), the intended state's first DOM
+// mutation (selector + pattern, through open shadow roots), the frame after it (two
+// animation frames) with its rendered visibility and hit-test, and the Playwright click
+// call; the Playwright call log (DEBUG=pw:api, stderr) carries the actionability wait.
+const timedClick = async (page, label, target, selector, pattern, seen) => {
+  await page.evaluate(({label, selector, pattern}) => {
+    const now = () => performance.timeOrigin + performance.now(), m = (window.__timing ||= {})[label] = {}, re = new RegExp(pattern);
+    const roots = new Set([document]); const walk = r => { for (const el of r.querySelectorAll('*')) if (el.shadowRoot) { roots.add(el.shadowRoot); walk(el.shadowRoot); } }; walk(document);
+    addEventListener('pointerdown', e => { if (!m.input) { m.input = performance.timeOrigin + e.timeStamp; const t = e.composedPath()[0]; m.input_target = String(t.closest?.('button')?.textContent || t.tagName || '').trim().slice(0, 40); } }, {capture: true});
+    const find = () => { let hit = null; for (const r of roots) for (const el of r.querySelectorAll(selector)) if (re.test(el.textContent)) hit = el; return hit; };
+    const check = () => { if (!m.input || m.dom) return; const el = find(); if (!el) return; m.dom = now();
+      requestAnimationFrame(() => requestAnimationFrame(() => { m.frame = now(); const b = el.getBoundingClientRect(); const c = el.getRootNode().elementFromPoint?.(b.left + Math.min(b.width / 2, 20), b.top + Math.min(b.height / 2, 10));
+        m.visible = el.checkVisibility({opacityProperty: true, visibilityProperty: true}) && b.width > 0 && b.height > 0 && b.bottom > 0 && b.top < innerHeight; m.on_top = !!c && (el === c || el.contains(c)); })); };
+    for (const r of roots) new MutationObserver(check).observe(r, {subtree: true, childList: true, characterData: true, attributes: true});
+  }, {label, selector, pattern});
+  const c0 = Date.now(); console.error('[timed-click start] ' + label + ' ' + new Date(c0).toISOString());
+  await target.click(); const c1 = Date.now(); console.error('[timed-click end] ' + label + ' ' + new Date(c1).toISOString());
+  let seenOk = true; try { await seen.waitFor(); } catch { seenOk = false; } const c2 = Date.now();
+  await page.waitForFunction(l => window.__timing[l].frame, label, {timeout: 3000}).catch(() => {});
+  const m = await page.evaluate(l => window.__timing[l], label), d = (a, b) => (a && b ? Math.round(b - a) : null);
+  const t = {click_call_to_input_ms: d(c0, m.input), click_call_resolved_ms: c1 - c0, input_target: m.input_target, input_epoch_ms: m.input ? Math.round(m.input) : null,
+    input_to_dom_ms: d(m.input, m.dom), input_to_frame_ms: d(m.input, m.frame), rendered_visible: m.visible ?? null, on_top: m.on_top ?? null,
+    click_call_to_playwright_visible_ms: seenOk ? c2 - c0 : null, playwright_saw_it: seenOk};
+  results.timing[label] = t; return t;
+};
 const conv = process.argv[3];
 const readOnly = /Drafts are read-only in this window/;
 const pageErrors = [];
@@ -29,8 +58,9 @@ let current = null; // the page under check, for a failure screenshot
     // left unexecuted and the next variant still runs. Any failure fails the run.
     const label = (native || 'browser') + '-' + variant, done = [], step = n => { done.push(n); };
     const planned = !native ? ['refused'] : variant === 'lock' ? ['lock-second-waits', ...(native === 'android' ? ['journal-copy'] : []), 'kept-copy-discard', ...(native === 'android' ? ['legacy-restore-retry'] : [])]
-      : ['readonly-state', 'saved-read-copy-closed-composer-settings', ...(variant === 'rejected' ? [native === 'desktop' ? 'rows-reply-desktop' : 'rows-reply-android-390'] : []), ...(variant === 'missing' ? ['outbox-' + native] : []), 'storage-unchanged-reload'];
+      : ['readonly-state', 'saved-read-copy-closed-composer-settings', ...(variant === 'rejected' ? (native === 'desktop' ? ['rows-reply-desktop'] : ['stop-kept-390', 'reply-refused-390']) : []), ...(variant === 'missing' ? ['outbox-' + native] : []), 'storage-unchanged-reload'];
     const ctx = await browser.newContext({reducedMotion: 'reduce', viewport: {width: 1280, height: 900}});
+    softFailed = [];
     try {
     await ctx.addInitScript(({variant, native}) => {
       if (variant === 'missing') Object.defineProperty(Navigator.prototype, 'locks', {get: () => undefined, configurable: true});
@@ -133,9 +163,10 @@ let current = null; // the page under check, for a failure screenshot
       const item = async text => (await openSaved()).locator('section').filter({hasText: text});
       if (native === 'android') {
         // Journal Copy text: the saved send's exact words reach the clipboard; nothing changes or sends.
-        const j0 = await snapshot(first), jt = Date.now();
-        await (await item('saved send words')).getByRole('button', {name: 'Copy text', exact: true}).click();
-        await first.getByText(/^Copied$|Couldn’t copy here/).first().waitFor(); const jMs = Date.now() - jt;
+        const j0 = await snapshot(first);
+        const tCopy = await timedClick(first, 'android-lock-journal-copy', (await item('saved send words')).getByRole('button', {name: 'Copy text', exact: true}), '*', '^Copied$', first.getByText(/^Copied$|Couldn’t copy here/).first());
+        assert(tCopy.playwright_saw_it, 'Copied shown'); const jMs = tCopy.click_call_to_playwright_visible_ms;
+        assert(tCopy.input_to_frame_ms !== null && tCopy.input_to_frame_ms < 1000, 'journal Copy rendered under one second from input: ' + JSON.stringify(tCopy));
         await first.waitForFunction(t => window.__copied === t, 'saved send words');
         assert.equal(await snapshot(first), j0, 'journal Copy text changes no saved state');
         assert.equal(sends.length, 0, 'journal Copy text sends nothing');
@@ -250,78 +281,64 @@ let current = null; // the page under check, for a failure screenshot
       step('rows-reply-desktop');
     }
     if (rowsOn && native === 'android') {
-      // The phone at 390: Cancel on a pending row holds it; nothing else reaches the host.
+      // The phone at 390 (items 3 and 6): Stop on the pending row holds it; both rows are
+      // kept and say so, with no Retry or Discard; Reply is refused without a draft write.
       current = first; await first.setViewportSize({width: 390, height: 844});
       if (!(await first.locator('[data-send-discard]').count())) await openChat(first);
-      const kept = 'Stopped and kept. Drafts are read-only in this window, so it can’t be retried or discarded here.';
+      const kept = 'Stopped and kept. Drafts are read-only in this window, so it can’t be retried or discarded here.', v = label;
       await first.getByText('queued held words').waitFor();
-      const s0 = Date.now(); await first.locator('[data-send-discard]').filter({hasText: 'Stop'}).last().click();
-      await first.getByText(/Stopping…|Stopped and kept/).first().waitFor(); const stopLocalMs = Date.now() - s0;
-      await first.locator('[data-local-send="stopped"]').filter({hasText: kept}).nth(1).waitFor(); await first.waitForTimeout(300);
-      assert.deepEqual(schedule, ['/api/schedule/hold_send'], 'phone Cancel only holds');
-      // Both rows (the one stopped here and the one held before) are kept and say so; neither offers Retry or Discard.
-      assert.equal(await first.locator('[data-local-send="stopped"]').filter({hasText: kept}).count(), 2, 'both rows stopped and kept, truthfully');
-      assert.equal(await first.locator('[data-send-retry]').count(), 0, 'no Retry at 390');
-      assert.equal(await first.locator('[data-send-discard]').count(), 0, 'no Discard (or Stop) left at 390');
-      assert.equal(await first.getByText(/Retry sends it, Discard removes it/).count(), 0, 'no promise of Retry or Discard at 390');
-      assert(stopLocalMs < 1000, 'Stop feedback under one second: ' + stopLocalMs);
-      // Reply on the stored message from its action sheet: refused, truthfully; no draft written.
+      const tStop = await timedClick(first, 'android390-stop', first.locator('[data-send-discard]').filter({hasText: 'Stop'}).last(),
+        '[data-mid="' + 'c'.repeat(32) + '"]', 'Stopping…|Stopped and kept', first.locator('[data-mid="' + 'c'.repeat(32) + '"]').getByText(/Stopping…|Stopped and kept/).first());
+      await first.locator('[data-local-send="stopped"]').filter({hasText: kept}).nth(1).waitFor(); // prerequisite for the state checks
+      soft(v, 'stop: only a hold reaches the host', JSON.stringify(schedule) === JSON.stringify(['/api/schedule/hold_send']), schedule);
+      soft(v, 'stop: both rows stopped and kept, truthfully', await first.locator('[data-local-send="stopped"]').filter({hasText: kept}).count() === 2);
+      soft(v, 'stop: no Retry at 390', await first.locator('[data-send-retry]').count() === 0);
+      soft(v, 'stop: no Discard or Stop left at 390', await first.locator('[data-send-discard]').count() === 0);
+      soft(v, 'stop: no promise of Retry or Discard', await first.getByText(/Retry sends it, Discard removes it/).count() === 0);
+      soft(v, 'stop: stored send releases nothing, no failure shown', await first.getByText(/original draft recovery could not be cleared/).count() === 0);
+      soft(v, 'stop: click call to visible under 1 s (19:50Z method)', tStop.click_call_to_playwright_visible_ms !== null && tStop.click_call_to_playwright_visible_ms < 1000, tStop);
+      soft(v, 'stop: input to rendered visible frame under 1 s', tStop.rendered_visible === true && tStop.input_to_frame_ms !== null && tStop.input_to_frame_ms < 1000, tStop);
+      if (out) await first.screenshot({path: out + '/native-readonly-android-stop-390.png'});
+      step('stop-kept-390');
       const r0snap = await snapshot(first);
-      const stored = first.locator('[data-mid="' + 'b'.repeat(32) + '"]');
-      await stored.getByRole('button', {name: /^(More actions|Message actions)$/}).click();
-      const r0 = Date.now(); await first.getByRole('dialog').getByRole('button', {name: 'Reply', exact: true}).click();
-      await first.getByText('Drafts are read-only in this window: this change wasn’t saved.').first().waitFor(); const replyMs = Date.now() - r0;
-      assert.equal(await snapshot(first), r0snap, 'Reply at 390 writes no draft');
-      assert.equal(await first.getByText(/Keep this window open/).count(), 0, 'no keep-open advice at 390');
-      assert(replyMs < 1000, 'Reply refusal under one second: ' + replyMs);
-      results.android390 = {stop_to_local_ms: stopLocalMs, kept_rows: 2, retry_controls: 0, discard_controls: 0, reply_to_refusal_ms: replyMs, draft: 'unchanged'};
-      assert.equal(await first.getByText(/original draft recovery could not be cleared/).count(), 0, 'stored send releases nothing and reports no failure');
-      if (out) await first.screenshot({path: out + '/native-readonly-android-cancel-390.png'});
-      await first.setViewportSize({width: 1280, height: 900}); step('rows-reply-android-390');
+      await first.locator('[data-mid="' + 'b'.repeat(32) + '"]').getByRole('button', {name: /^(More actions|Message actions)$/}).click(); // prerequisite: the action sheet
+      const refusal = 'Drafts are read-only in this window: this change wasn’t saved.';
+      const tReply = await timedClick(first, 'android390-reply', first.getByRole('dialog').getByRole('button', {name: 'Reply', exact: true}), '*', 'this change wasn’t saved', first.getByText(refusal).first());
+      soft(v, 'reply: truthful refusal shown and rendered', tReply.playwright_saw_it && tReply.rendered_visible === true, tReply);
+      soft(v, 'reply: no draft written', await snapshot(first) === r0snap);
+      soft(v, 'reply: no keep-open advice', await first.getByText(/Keep this window open/).count() === 0);
+      soft(v, 'reply: click call to visible under 1 s', tReply.click_call_to_playwright_visible_ms !== null && tReply.click_call_to_playwright_visible_ms < 1000, tReply);
+      soft(v, 'reply: input to rendered visible frame under 1 s', tReply.input_to_frame_ms !== null && tReply.input_to_frame_ms < 1000, tReply);
+      if (out) await first.screenshot({path: out + '/native-readonly-android-reply-390.png'});
+      await first.keyboard.press('Escape');
+      await first.setViewportSize({width: 1280, height: 900}); step('reply-refused-390');
     }
     if (outboxOn) {
       // Outbox edit is the host's own schedule: it works here, with one edit and no local write.
-      current = first; if (native === 'android') await first.setViewportSize({width: 390, height: 844});
+      current = first; const v = label;
+      if (native === 'android') { await first.setViewportSize({width: 390, height: 844});
+        // At 390 an open chat is a card over the tabs: its visible back control returns to them.
+        const back = first.getByRole('button', {name: 'Back to chats', exact: true});
+        if (await back.count()) await back.last().click(); }
       const nav = first.getByRole('navigation', {name: 'Main', exact: true});
       await nav.getByRole('button', {name: 'Outbox', exact: true}).click();
       const editing = first.getByRole('article').filter({hasText: 'scheduled words'});
       await editing.getByRole('button', {name: 'Edit schedule', exact: true}).click();
       await first.getByRole('textbox', {name: 'Scheduled message text', exact: true}).fill('edited in read-only');
-      // Timing from the page's own input event (epoch ms on one clock): Playwright's
-      // click call and actionability wait, the real pointerdown, the row's "Saving…"
-      // (DOM mutation, in the skin's open shadow root), the host request, and the
-      // refreshed row without "Saving…". The 19:50Z assertion (click call -> row
-      // visible to Playwright, 2020 ms) is kept as a measurement below.
-      const save = editing.getByRole('button', {name: 'Save schedule changes', exact: true});
-      await first.evaluate(() => {
-        const now = () => performance.timeOrigin + performance.now(), m = window.__outboxTimes = {};
-        const on = (type, e) => { const b = e.composedPath()[0]?.closest?.('button'); if (b && b.textContent.includes('Save schedule changes') && !m[type]) m[type] = performance.timeOrigin + e.timeStamp; };
-        document.addEventListener('pointerdown', e => on('input', e), true); document.addEventListener('click', e => on('click', e), true);
-        const roots = new Set([document]); const walk = r => { for (const el of r.querySelectorAll('*')) if (el.shadowRoot) { roots.add(el.shadowRoot); walk(el.shadowRoot); } }; walk(document);
-        const check = () => { if (!m.input) return; for (const r of roots) for (const a of r.querySelectorAll('article')) { const t = a.textContent;
-          if (!t.includes('edited in read-only')) continue;
-          if (!m.saving && t.includes('Saving…')) m.saving = now();
-          if (m.saving && !m.confirmed && !t.includes('Saving…') && !a.querySelector('textarea')) m.confirmed = now(); } };
-        for (const r of roots) new MutationObserver(check).observe(r, {subtree: true, childList: true, characterData: true, attributes: true});
-      });
-      const c0 = Date.now(); await save.click(); const c1 = Date.now();
-      await first.getByRole('article').filter({hasText: 'edited in read-only'}).waitFor(); const c2 = Date.now();
-      await first.waitForFunction(() => !!window.__outboxTimes.confirmed || !!window.__outboxTimes.timedOut, null, {timeout: 8000}).catch(() => {});
-      const m = await first.evaluate(() => window.__outboxTimes), edit = scheduleWrites.find(w => w.path === '/api/schedule/edit');
-      const ms = (a, b) => (a && b ? Math.round(b - a) : null);
-      const timing = {click_call_to_input_event_ms: ms(c0, m.input), click_call_resolved_ms: c1 - c0, input_to_click_event_ms: ms(m.input, m.click),
-        input_to_saving_ms: ms(m.input, m.saving), input_to_host_request_ms: ms(m.input, edit?.at), input_to_confirmed_row_ms: ms(m.input, m.confirmed),
-        click_call_to_playwright_visible_ms: c2 - c0};
-      results.outbox_timing = {...results.outbox_timing, [native]: timing};
-      assert(m.input, 'the real input event reached the Save button');
-      assert(m.saving, 'the row showed Saving… after the input');
-      assert(timing.input_to_saving_ms < 1000, 'Outbox Saving… under one second from input: ' + timing.input_to_saving_ms);
-      assert(m.confirmed, 'the refreshed row replaced Saving…');
-      assert.equal(await snapshot(first), before, 'Outbox edit leaves saved drafts unchanged');
+      // The row's "Saving…" with the edited text, then the host's refreshed row.
+      const tSave = await timedClick(first, 'outbox-' + native, editing.getByRole('button', {name: 'Save schedule changes', exact: true}),
+        'article', 'edited in read-only[\\s\\S]*Saving…', first.getByRole('article').filter({hasText: 'edited in read-only'}).first());
+      await first.getByRole('article').filter({hasText: 'edited in read-only'}).filter({hasNotText: 'Saving…'}).first().waitFor(); // the host's row
+      const edit = scheduleWrites.find(w => w.path === '/api/schedule/edit');
+      tSave.input_to_host_request_ms = edit && tSave.input_epoch_ms ? edit.at - tSave.input_epoch_ms : null;
+      soft(v, 'outbox: Saving… rendered visible and on top after the input', tSave.rendered_visible === true && tSave.on_top === true, tSave);
+      soft(v, 'outbox: input to rendered visible frame under 1 s', tSave.input_to_frame_ms !== null && tSave.input_to_frame_ms < 1000, tSave);
+      soft(v, 'outbox: click call to visible under 1 s (19:50Z method)', tSave.click_call_to_playwright_visible_ms !== null && tSave.click_call_to_playwright_visible_ms < 1000, tSave);
+      soft(v, 'outbox: saved drafts unchanged', await snapshot(first) === before);
       results.outbox = scheduleWrites.map(w => w.path);
-      assert.deepEqual(results.outbox, ['/api/schedule/edit'], 'one Outbox edit');
-      assert.equal(scheduleWrites[0].body.body, 'edited in read-only');
-      assert.equal(await first.evaluate(() => Object.keys(localStorage).filter(k => k.includes('schedule-save')).length), 0, 'no schedule token written');
+      soft(v, 'outbox: one edit reaches the host', JSON.stringify(results.outbox) === JSON.stringify(['/api/schedule/edit']), results.outbox);
+      soft(v, 'outbox: host received the edited text', scheduleWrites[0]?.body?.body === 'edited in read-only');
+      soft(v, 'outbox: no schedule token written', await first.evaluate(() => Object.keys(localStorage).filter(k => k.includes('schedule-save')).length) === 0);
       await nav.getByRole('button', {name: 'Chats', exact: true}).click();
       if (native === 'android') { if (out) await first.screenshot({path: out + '/native-readonly-android-outbox-390.png'}); await first.setViewportSize({width: 1280, height: 900}); }
       step('outbox-' + native);
@@ -333,6 +350,7 @@ let current = null; // the page under check, for a failure screenshot
     assert.deepEqual(sends, [], 'nothing sent or replayed');
     assert.equal(await first.evaluate(() => window.__legacyAcks || 0), 0, 'no legacy draft acknowledged');
     assert.deepEqual(errors, []); step('storage-unchanged-reload');
+    if (softFailed.length) throw new Error('assertions failed: ' + softFailed.join('; '));
     results.cases.push({case: label, readonly: true, unchanged: true});
     if (out) await first.screenshot({path: out + '/native-readonly-' + label + '.png'});
     await ctx.close();
