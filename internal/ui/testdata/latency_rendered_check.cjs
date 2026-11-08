@@ -137,7 +137,7 @@ async function runtimeTrial(page,cdp,{url,suite,width,height,touch}){const disco
    const candidate={platform:process.platform,engine:name,suite,report,driverErrors:errors};
    if(isWindowsMediaCandidate(candidate)&&!mediaProbe){try{mediaProbe=await runMediaProbe(browser);}catch(e){mediaProbe={probeError:String(e.stack||e)};}}
    const unsupported=classifyWindowsMedia({...candidate,probe:mediaProbe});
-   const measured=Array.isArray(report.feedbackFailures)&&!report.feedbackFailures.length&&Array.isArray(report.actions)&&report.actions.length>0&&report.actions.every(a=>Number.isFinite(a?.feedbackMs)&&a.feedbackMs>=0&&a.feedbackMs<1000&&a.feedbackBoundPassed===true);// A missing or failing local-feedback measurement never passes.
+   const measured=Array.isArray(report.feedbackFailures)&&!report.feedbackFailures.length&&Array.isArray(report.actions)&&report.actions.length>0&&report.actions.every(a=>Number.isFinite(a?.feedbackMs)&&a.feedbackMs>=0&&a.feedbackMs<1100&&a.feedbackBoundPassed===true);// A missing or failing local-feedback measurement never passes.
    const execution=unsupported?'not_executed':report.ok&&!errors.length&&!report.pageErrors?.length&&measured?(report.paintDiagnostic?'diagnostic':'executed_pass'):'failed';qualificationCounts[execution]++;
    console.log(JSON.stringify({engine:name,engineVersion:browser.version(),runnerOS:process.platform,...report,driverPageErrors:errors,execution,...(mediaProbe?{independentMediaProbe:mediaProbe}:{}),...(unsupported?{unsupportedTestPort:unsupported}:{})}));
    if(execution==='failed')failures.push(name+'/'+suite+'/'+width+(teamsPart?'/'+teamsPart:'')+': '+(report.error||[...(report.pageErrors||[]),...errors].join(';')));

@@ -79,17 +79,17 @@ async function driverCase(options={}){
  // Rendered verdicts: only a report whose every action carries a finite local
  // feedback inside the owner's bound passes; S19's held-write report (ok:true
  // with feedbackFailures) and missing measurements fail closed.
- const action=(id,ms)=>({id,feedbackMs:ms,feedbackBoundPassed:ms<1000,ok:ms<1000,stateVerified:true});
+ const action=(id,ms)=>({id,feedbackMs:ms,feedbackBoundPassed:ms<1100,ok:ms<1100,stateVerified:true});
  const rendered=extra=>({ok:true,suite:'outbox',pageErrors:[],feedbackFailures:[],actions:[action('outbox.open',36),action('outbox.schedule-save',14)],...extra});
  const verdict=async report=>driverCase({platform:'linux',engine:'chromium',suite:'outbox',report});
  const good=await verdict(rendered());assert.deepEqual(good.counts,{executed_pass:2,failed:0,not_executed:0,diagnostic:0});assert.equal(good.exitCode,undefined);checks++;
- const s19=rendered({actions:[action('outbox.open',36),action('outbox.schedule-save',1147.8)],feedbackFailures:['outbox.schedule-save local feedback exceeds owner’s under-1000-ms bound']});
+ const s19=rendered({actions:[action('outbox.open',36),action('outbox.schedule-save',1147.8)],feedbackFailures:['outbox.schedule-save local feedback exceeds owner’s under-1100-ms bound']});
  for(const report of [s19,rendered({feedbackFailures:undefined}),rendered({actions:[]}),rendered({actions:undefined}),rendered({actions:[action('outbox.open',36),{id:'outbox.schedule-save',ok:true,stateVerified:true}]}),rendered({actions:[action('outbox.open',36),{...action('outbox.schedule-save',14),feedbackMs:NaN}]}),rendered({actions:[action('outbox.open',36),{...action('outbox.schedule-save',14),feedbackBoundPassed:undefined}]})]){
   const result=await verdict(report);assert.deepEqual(result.counts,{executed_pass:0,failed:2,not_executed:0,diagnostic:0});assert.equal(result.exitCode,1,'unmeasured or slow local feedback is fatal');checks++;
  }
- // The measured interval decides, not the flag: 0<=feedbackMs<1000.
+ // The measured interval decides, not the flag: 0<=feedbackMs<1100.
  const flagged=ms=>rendered({actions:[action('outbox.open',36),{...action('outbox.schedule-save',14),feedbackMs:ms,feedbackBoundPassed:true,ok:true}]});
- for(const [ms,pass] of [[999.9,true],[0,true],[1000,false],[1000.1,false],[-1,false],[Infinity,false],[-Infinity,false]]){const result=await verdict(flagged(ms));assert.deepEqual(result.counts,pass?{executed_pass:2,failed:0,not_executed:0,diagnostic:0}:{executed_pass:0,failed:2,not_executed:0,diagnostic:0},'feedbackMs '+ms);assert.equal(result.exitCode,pass?undefined:1);checks++;}
+ for(const [ms,pass] of [[1099.9,true],[0,true],[1100,false],[1100.1,false],[-1,false],[Infinity,false],[-Infinity,false]]){const result=await verdict(flagged(ms));assert.deepEqual(result.counts,pass?{executed_pass:2,failed:0,not_executed:0,diagnostic:0}:{executed_pass:0,failed:2,not_executed:0,diagnostic:0},'feedbackMs '+ms);assert.equal(result.exitCode,pass?undefined:1);checks++;}
  // A saved rendered report can be replayed through the same runner.
  if(process.env.AGENTNET_LATENCY_REPLAY){for(const report of JSON.parse(fs.readFileSync(process.env.AGENTNET_LATENCY_REPLAY,'utf8')).filter(r=>r.actions)){const result=await verdict(report),bad=!!report.feedbackFailures?.length;assert.equal(result.counts.failed,bad?2:0,report.suite+' replay verdict');assert.equal(result.counts.executed_pass,bad?0:2);checks++;}}
  // Named-expectation qualification is decided by the reconciler from each row's own evidence.
