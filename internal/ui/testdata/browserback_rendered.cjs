@@ -26,24 +26,28 @@ const engines = require(process.env.AGENTNET_PLAYWRIGHT || 'playwright-core'), e
   await page.route(origin+'/back-direct',r=>r.fulfill({contentType:'text/html',body:'<!doctype html><title>Direct tab fixture</title>'}));
   await page.goto(origin+'/back-direct');
   if(engine==='chromium'){const session=await context.newCDPSession(page);await session.send('Page.resetNavigationHistory');await session.detach();}
-  await page.evaluate(async()=>{const {browserBackNavigation}=await import('/assets/browser-back.mjs');window.layers=0;window.calls=0;window.off=browserBackNavigation()( ()=>{calls++;if(layers){layers--;return true;}return false;});});
-  await page.goBack();await page.waitForFunction(()=>window.calls===1);await page.evaluate(()=>layers=1);await page.goBack();await page.waitForFunction(()=>calls===2&&layers===0);
-  await page.evaluate(()=>{off();window.layers=1;});await page.goBack();assert.equal(await page.evaluate(()=>layers),1,'unmounted skin receives no Back action');await context.close();
+  // A person uses the page before its history entries are written, as one opening a layer does: WebKit's
+  // Back skips entries a script added without user interaction (WebKit e7faecc4, wasCreatedByJSWithoutUserInteraction).
+  const use=()=>page.mouse.click(1,1);
+  await use();await page.evaluate(async()=>{const {browserBackNavigation}=await import('/assets/browser-back.mjs');window.layers=0;window.calls=0;window.off=browserBackNavigation()( ()=>{calls++;if(layers){layers--;return true;}return false;});});
+  await use();await page.goBack();await page.waitForFunction(()=>window.calls===1);await page.evaluate(()=>layers=1);await use();await page.goBack();await page.waitForFunction(()=>calls===2&&layers===0);
+  await page.evaluate(()=>{off();window.layers=1;});await use();await page.goBack();assert.equal(await page.evaluate(()=>layers),1,'unmounted skin receives no Back action');await context.close();
   {
    // A link or notification adds an entry; Back never does. Neither depends on history's length.
    const context=await browser.newContext(),page=await context.newPage();
    await context.addCookies([{name:'agentnet_ui',value:new URL(process.argv[2]).searchParams.get('t'),url:origin,httpOnly:true,sameSite:'Strict'}]);
    await page.route(origin+'/back-*',r=>r.fulfill({contentType:'text/html',body:'<!doctype html><title>Fragment fixture</title>'}));
    await page.goto(origin+'/back-earlier');await page.goto(origin+'/back-fragment');
-   await page.evaluate(async()=>{const {browserBackNavigation}=await import('/assets/browser-back.mjs');window.layers=0;window.calls=0;browserBackNavigation()(()=>{calls++;if(layers){layers--;return true;}return false;});});
+   const use=()=>page.mouse.click(1,1); // as in the direct tab: a person has used the page before its entries are written
+   await use();await page.evaluate(async()=>{const {browserBackNavigation}=await import('/assets/browser-back.mjs');window.layers=0;window.calls=0;browserBackNavigation()(()=>{calls++;if(layers){layers--;return true;}return false;});});
    const follow=async hash=>{await page.evaluate(hash=>new Promise(r=>{addEventListener('hashchange',r,{once:true});location.hash=hash;}),hash);};
    const clear=()=>page.evaluate(()=>history.replaceState(history.state,'',location.pathname+location.search)); // what the loader does on landing
    await page.evaluate(()=>{layers=2;});await follow('#one');await clear();assert.equal(await page.evaluate(()=>calls),0,'a followed link is not Back');
-   await page.goBack();await page.waitForFunction(()=>calls===1&&layers===1);
+   await use();await page.goBack();await page.waitForFunction(()=>calls===1&&layers===1);
    await follow('#cut-forward');await clear();assert.equal(await page.evaluate(()=>calls),1,'a followed link that cuts Forward entries is not Back');
-   await page.goBack();await page.waitForFunction(()=>calls===2&&layers===0);
+   await use();await page.goBack();await page.waitForFunction(()=>calls===2&&layers===0);
    for(let i=0;i<60;i++)await follow('#cap-'+i);await clear();assert.equal(await page.evaluate(()=>calls),2,'a followed link at the history cap is not Back');
-   await page.evaluate(()=>{layers=1;});await page.goBack();await page.waitForFunction(()=>calls===3&&layers===0);
+   await page.evaluate(()=>{layers=1;});await use();await page.goBack();await page.waitForFunction(()=>calls===3&&layers===0);
    await context.close();
    console.log(JSON.stringify({fragment:'followed links leave the layer open; every Back reaches it'}));
   }
@@ -56,10 +60,10 @@ const engines = require(process.env.AGENTNET_PLAYWRIGHT || 'playwright-core'), e
     if(!direct)await page.goto(origin+'/back-earlier');
     await page.goto(origin+'/back-legacy');
     if(direct){if(engine==='chromium'){const session=await context.newCDPSession(page);await session.send('Page.resetNavigationHistory');await session.detach();}}
-    await page.evaluate(()=>history.pushState({agentnetBack:'agentnet-back-legacy'},'',location.href));
+    await page.mouse.click(1,1);await page.evaluate(()=>history.pushState({agentnetBack:'agentnet-back-legacy'},'',location.href));
     await page.reload();
-    await page.evaluate(async()=>{const {browserBackNavigation}=await import('/assets/browser-back.mjs');window.layers=1;window.calls=0;browserBackNavigation()(()=>{calls++;if(layers){layers--;return true;}return false;});});
-    await page.goBack();await page.waitForFunction(()=>calls===1&&layers===0);
+    await page.mouse.click(1,1);await page.evaluate(async()=>{const {browserBackNavigation}=await import('/assets/browser-back.mjs');window.layers=1;window.calls=0;browserBackNavigation()(()=>{calls++;if(layers){layers--;return true;}return false;});});
+    await page.mouse.click(1,1);await page.goBack();await page.waitForFunction(()=>calls===1&&layers===0);
     return {context,page};
    };
    const left=await legacy(false);
