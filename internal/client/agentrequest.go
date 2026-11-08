@@ -90,15 +90,21 @@ func (a *Agent) sameAgentRequest(r retainedAgentRequest, pid, kind, body string,
 	if r.PID != pid || r.kind != kind || r.body != body || r.files != 0 {
 		return false
 	}
+	return a.sameRequestReceiver(r.binding, receiver)
+}
+
+// sameRequestReceiver: the reply receiver a retry names is the one the stored
+// request bound (binding is its reply_receivers id, "" for none).
+func (a *Agent) sameRequestReceiver(binding string, receiver *ReplyReceiver) bool {
 	var stored *ReplyReceiver
-	if r.binding != "" {
-		binding, err := replyReceiverIn(a.store.db, r.binding)
+	if binding != "" {
+		b, err := replyReceiverIn(a.store.db, binding)
 		if err != nil {
 			return false
 		}
-		stored = &binding.Receiver
+		stored = &b.Receiver
 	}
-	if receiver != nil && (receiver.BindingID != "" && receiver.BindingID != r.binding || receiver.Preset != "" && (stored == nil || receiver.Preset != stored.Preset)) {
+	if receiver != nil && (receiver.BindingID != "" && receiver.BindingID != binding || receiver.Preset != "" && (stored == nil || receiver.Preset != stored.Preset)) {
 		return false
 	}
 	return reflect.DeepEqual(requestReceiver(receiver), requestReceiver(stored))

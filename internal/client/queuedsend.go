@@ -189,11 +189,7 @@ func (a *Agent) queuedAlreadySent(in ScheduledSendInput) (ScheduledSend, error) 
 		return ScheduledSend{}, err
 	}
 	if same && in.ask != nil {
-		// The same id is not the same ask: the stored request must name this
-		// exact participation, kind, host and agent.
-		err = a.store.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM outbox WHERE lid=? AND body=? AND coalesce(sub,'')='' AND kind=? AND coalesce(pid,'')=? AND json_extract(target,'$.address')=? AND json_extract(target,'$.fingerprint')=? AND coalesce(json_extract(target,'$.agent_id'),'')=?)`,
-			in.ID, in.Body, in.ask.Kind, in.ask.PID, in.ask.HostAddress, in.ask.HostFingerprint, in.ask.AgentID).Scan(&same)
-		if err != nil {
+		if same, err = a.sameCommittedAsk(in); err != nil {
 			return ScheduledSend{}, err
 		}
 	}
@@ -203,30 +199,97 @@ func (a *Agent) queuedAlreadySent(in ScheduledSendInput) (ScheduledSend, error) 
 	return ScheduledSend{ID: in.ID, Conv: in.Conv, Topic: in.Topic, Body: in.Body, State: ScheduledSent, Immediate: true, Ask: in.ask}, nil
 }
 
+// sameCommittedAsk: the request already stored under in.ID is this exact ask:
+// conversation, participation, kind, text, host and agent, reply receiver,
+// send group, topic and files (the retained-request and queued-row identity
+// checks). The same id alone is not the same ask.
+func (a *Agent) sameCommittedAsk(in ScheduledSendInput) (bool, error) {
+	r, err := a.retainedAgentRequest(in.ID)
+	if errors.Is(err, ErrNoMessage) || errors.Is(err, ErrAgentRequestConflict) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if r.Conv != in.Conv || r.PID != in.ask.PID || r.kind != in.ask.Kind || r.body != in.Body || !a.sameRequestReceiver(r.binding, in.ask.Receiver) {
+		return false, nil
+	}
+	var topic, group string
+	var target bool
+	err = a.store.db.QueryRow(`SELECT coalesce(topic,''),send_group,coalesce(json_extract(target,'$.address')=? AND json_extract(target,'$.fingerprint')=? AND coalesce(json_extract(target,'$.agent_id'),'')=?,0) FROM outbox WHERE id=? UNION ALL SELECT coalesce(topic,''),send_group,coalesce(json_extract(target,'$.address')=? AND json_extract(target,'$.fingerprint')=? AND coalesce(json_extract(target,'$.agent_id'),'')=?,0) FROM inbox WHERE id=? AND sender=? AND local=1 LIMIT 1`,
+		in.ask.HostAddress, in.ask.HostFingerprint, in.ask.AgentID, r.Sent.ID, in.ask.HostAddress, in.ask.HostFingerprint, in.ask.AgentID, r.Sent.ID, a.Address).Scan(&topic, &group, &target)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !target || group != in.ask.SendGroup {
+		return false, nil
+	}
+	rows, err := a.store.db.Query(`SELECT sha256,size,name FROM (SELECT 0 AS t,rowid AS r,sha256,size,name FROM sent_attachments WHERE message_id=? UNION ALL SELECT 1,rowid,sha256,size,name FROM attachments WHERE message_id=?) ORDER BY t,r`, r.Sent.ID, r.Sent.ID)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	var files []ScheduledFile
+	for rows.Next() {
+		var f ScheduledFile
+		if err = rows.Scan(&f.SHA256, &f.Size, &f.Name); err != nil {
+			return false, err
+		}
+		files = append(files, f)
+	}
+	if err = rows.Err(); err != nil {
+		return false, err
+	}
+	// Text, topic and files compare exactly as a kept queued row does.
+	return a.sameScheduledCreate(ScheduledSend{Immediate: true, Conv: r.Conv, Body: r.body, Topic: topic, Files: files, Ask: in.ask}, in)
+}
+
 // AskAgentInTopicQueued is the person's ask from this device's UI. It is sent
 // at once as AskAgentInTopic does. Only when another device's signed public
 // scope has not reached this one yet (ErrParticipationScopePending) is it
 // accepted durably under the same id, as itself (ScheduledAsk), and sent by
 // the existing queue once the scope arrives; nothing is invented meanwhile.
-// When it cannot be kept that way, the direct refusal stays the answer.
+// When this participation cannot be asked from here, the direct refusal stays
+// the answer; when the queue refuses (conflict, discarded, storage), that does.
 func (a *Agent) AskAgentInTopicQueued(ctx context.Context, id, pid, kind, body, topic string, receiver *ReplyReceiver, sendGroup string, wait time.Duration, files ...OutgoingFile) (ConvSent, *QueuedSendResult, error) {
 	if id == "" {
 		id = protocol.NewID()
 	}
+	// queue keeps or reconciles this exact ask under id; false when this
+	// participation cannot be asked from here, so the caller's refusal stands.
+	queue := func() (*QueuedSendResult, bool, error) {
+		info, e := a.Participation(pid)
+		if e != nil || !info.Claimable() {
+			return nil, false, nil
+		}
+		ask := &ScheduledAsk{PID: info.PID, Kind: kind, HostAddress: info.Host.Address, HostFingerprint: info.Host.Fingerprint, AgentID: info.AgentID, SendGroup: sendGroup, Receiver: receiver}
+		res, e := a.QueueSend(ScheduledSendInput{ID: id, Conv: info.Conv, Topic: topic, Body: body, Files: files, ask: ask}, "", wait)
+		if e != nil {
+			return nil, true, e // conflict, discarded or storage failure: the truthful answer
+		}
+		return &res, true, nil
+	}
+	// Send pressed again under an id already kept here (its queued row or its
+	// stored request) is that ask, reconciled exactly, never a second send.
+	var kept bool
+	if err := a.store.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM scheduled_sends WHERE id=?) OR EXISTS(SELECT 1 FROM outbox WHERE id=? OR lid=?) OR EXISTS(SELECT 1 FROM inbox WHERE (id=? OR lid=?) AND sender=? AND local=1)`, id, id, id, id, id, a.Address).Scan(&kept); err != nil {
+		return ConvSent{}, nil, err
+	}
+	if kept {
+		if res, ok, err := queue(); ok {
+			return ConvSent{}, res, err
+		}
+	}
 	sent, err := a.AskAgentInTopic(WithHumanSendGroup(WithQueuedSend(ctx, id), sendGroup), pid, kind, body, topic, receiver, files...)
-	if !errors.Is(err, ErrParticipationScopePending) {
-		return sent, nil, err
+	if errors.Is(err, ErrParticipationScopePending) || errors.Is(err, ErrSendAlreadyKept) || errors.Is(err, ErrScheduledIDConflict) {
+		if res, ok, e := queue(); ok {
+			return ConvSent{}, res, e
+		}
 	}
-	info, e := a.Participation(pid)
-	if e != nil || !info.Claimable() {
-		return sent, nil, err
-	}
-	ask := &ScheduledAsk{PID: info.PID, Kind: kind, HostAddress: info.Host.Address, HostFingerprint: info.Host.Fingerprint, AgentID: info.AgentID, SendGroup: sendGroup, Receiver: receiver}
-	res, e := a.QueueSend(ScheduledSendInput{ID: id, Conv: info.Conv, Topic: topic, Body: body, Files: files, ask: ask}, "", wait)
-	if e != nil {
-		return sent, nil, err
-	}
-	return ConvSent{}, &res, nil
+	return sent, nil, err
 }
 
 // RetryQueuedSend is the person's explicit retry of a stopped message: its
