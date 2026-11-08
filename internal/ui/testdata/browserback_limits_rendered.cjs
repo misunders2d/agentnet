@@ -30,7 +30,7 @@ const run = async (name, fn) => {
   // Finding 1. More links than the browser keeps: the distance home no longer exists.
   await run('history cap: Back still reaches a layer after it could not leave', async () => {
     const {context, page, follow} = await open('cap');
-    for (let i = 0; i < 70; i++) await follow('#cap-' + i);
+    for (let i = 0; i < 110; i++) await follow('#cap-' + i);
     const walk = Date.now();
     await page.goBack().catch(() => {});
     await page.waitForFunction(() => calls === 1 && history.state?.agentnetBackSeq === 1, null, {timeout: 3000}).catch(async e => {
@@ -179,7 +179,7 @@ const run = async (name, fn) => {
       window.layers = 0; window.calls = 0;
       browserBackNavigation()(() => { calls++; if (layers) { layers--; return true; } return false; });
     });
-    for (let i = 0; i < 70; i++) await page.evaluate(hash => new Promise(r => { addEventListener('hashchange', r, {once: true}); location.hash = hash; }), '#cap-' + i);
+    for (let i = 0; i < 110; i++) await page.evaluate(hash => new Promise(r => { addEventListener('hashchange', r, {once: true}); location.hash = hash; }), '#cap-' + i);
     await page.goBack().catch(() => {});
     await page.waitForFunction(() => calls === 1);
     // The walk has ended, and past the second this limit waits on the entry where nothing is behind.
