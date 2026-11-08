@@ -128,6 +128,10 @@ func TestUIResponsivenessRendered(t *testing.T) {
 		if os.Getenv("AGENTNET_RUNTIME_CRAWL") == "1" {
 			return
 		}
+		// Diagnostic-only switch: a normal-only run never counts as the complete test.
+		if os.Getenv("AGENTNET_LATENCY_HELD") == "off" {
+			t.Skip("DIAGNOSTIC normal-only (AGENTNET_LATENCY_HELD=off): held-write pass NOT RUN; this is not a pass of TestUIResponsivenessRendered")
+		}
 		// Again with every write held, for controls that write: each must change
 		// on screen before the server answers, not only when it answers quickly.
 		slow := exec.CommandContext(t.Context(), "node", "testdata/latency_rendered_check.cjs")
@@ -173,5 +177,19 @@ func TestUIResponsivenessRendered(t *testing.T) {
 				t.Log(string(out))
 			})
 		}
+	}
+}
+
+// Source check only (the fixture runs only in a browser): the fixture asserts
+// its local-feedback failures in held-write passes too. The runner's verdict
+// on such reports is exercised by TestLatencyMediaProbeGuards.
+func TestRenderedFeedbackFailuresNeverPass(t *testing.T) {
+	fixture, err := os.ReadFile("testdata/latency_fixture.mjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate := "assert(reports.feedbackFailures.length===0,"
+	if strings.Count(string(fixture), gate) != 1 || strings.Contains(string(fixture), "if(!writeDelay)"+gate) {
+		t.Fatal("fixture must assert feedback failures once, in held-write passes too")
 	}
 }

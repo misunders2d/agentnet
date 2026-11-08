@@ -123,14 +123,19 @@ func TestSendCustodyDuringCatchUp(t *testing.T) {
 	})
 	c.run("--home", "alice", "person", "approve", linkID)
 	w.home("phone", "bob/")
+	// D1 diagnostic (timing only): elapsed time per phase, no assertion change.
+	d1 := time.Now()
+	mark := func(name string) { t.Logf("D1_PHASE %s elapsed=%s", name, time.Since(d1).Round(time.Millisecond)); d1 = time.Now() }
 	// Catch-up starts now: the laptop and bob talk through it, then the phone joins in.
 	trace := w.traceCatchUp()
 	w.round("linked-device-catchup", []string{"alice", "bob"}, samples)
+	mark("round_linked_device_catchup")
 	waitUntil(t, "the DM on the phone", 120*time.Second, func() bool {
 		out, err := c.try("--home", "phone", "dm", "list")
 		return err == nil && strings.Contains(out, conv)
 	})
 	w.round("sending-from-the-device-catching-up", []string{"phone"}, max(samples/3, 1))
+	mark("phone_dm_wait_and_round_sending_from_catching_up")
 	catchUp := trace()
 	t.Logf("CATCHUP_TRACE %s", catchUp)
 	if !slices.ContainsFunc(w.samples, func(s custodySample) bool { return s.From == "alice" && s.Backlog > 0 }) {
@@ -140,17 +145,21 @@ func TestSendCustodyDuringCatchUp(t *testing.T) {
 	// A peer comes back to what it missed, while both sides keep talking.
 	stopBob()
 	bobRunning = false
+	mark("stop_bob")
 	missed := max(history/3, 1)
 	for i := range missed {
 		if _, _, err := w.send("alice", fmt.Sprintf("missed %d", i)); err != nil {
 			t.Fatal(err)
 		}
 	}
+	t.Logf("D1_PHASE missed_serial_loop n=%d elapsed=%s", missed, time.Since(d1).Round(time.Millisecond))
+	d1 = time.Now()
 	waitUntil(t, "the messages bob missed in custody", 5*time.Minute, func() bool {
 		var waiting int
 		err := w.homes["alice"].db.QueryRow(`SELECT count(*) FROM outbox WHERE recipient LIKE 'bob/%' AND state IN ('queued','waiting')`).Scan(&waiting)
 		return err == nil && waiting == 0
 	})
+	mark("missed_outbox_drain_wait")
 	stopBob = c.start("bob2.log", "--home", "bob", "daemon", "--ui", "127.0.0.1:0")
 	bobRunning = true
 	defer func() {
@@ -160,6 +169,7 @@ func TestSendCustodyDuringCatchUp(t *testing.T) {
 	}()
 	w.homes["bob"].page = c.openPage(t, "bob")
 	w.round("peer-drains-backlog", []string{"alice", "bob"}, samples)
+	mark("bob_restart_and_round_peer_drains_backlog")
 
 	// The relay goes away: sending still answers at once, and the message waits, through a
 	// restart of the sender, until the relay returns. Exactly one copy arrives.
@@ -281,6 +291,7 @@ func (w *custodyWorld) send(from, body string) (string, float64, error) {
 // seed makes real history by sending both ways, then waits until each side stored it.
 func (w *custodyWorld) seed(n int) {
 	w.t.Helper()
+	d1 := time.Now() // D1 diagnostic (timing only)
 	var wg sync.WaitGroup
 	errs := make(chan error, 8)
 	for g := range 8 {
@@ -297,6 +308,8 @@ func (w *custodyWorld) seed(n int) {
 		}()
 	}
 	wg.Wait()
+	w.t.Logf("D1_PHASE seed_send_loop n=%d elapsed=%s", n, time.Since(d1).Round(time.Millisecond))
+	d1 = time.Now()
 	close(errs)
 	for err := range errs {
 		w.t.Fatal(err)
@@ -310,6 +323,7 @@ func (w *custodyWorld) seed(n int) {
 		}
 		return true
 	})
+	w.t.Logf("D1_PHASE seed_inbox_wait elapsed=%s", time.Since(d1).Round(time.Millisecond))
 }
 
 // round sends one message at a time from each sender in turn, and follows each to the

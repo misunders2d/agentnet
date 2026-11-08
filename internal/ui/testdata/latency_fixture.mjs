@@ -7,10 +7,11 @@ const until=async(f,label,ms=5000)=>{const end=performance.now()+ms;while(!f()){
 // Marks feedback that may last only until a quick synthetic result arrives.
 const brief=f=>Object.assign(f,{brief:true});
 async function runVector(p1=''){
-const reports={actions:[],apiCalls:[],seenControls:[],firedControlIds:[],untaggedInteractive:[],pageErrors:[],feedbackFailures:[],inputDispatch:'synthetic DOM events (excludes OS input dispatch)',viewport:{width:innerWidth,height:innerHeight,dpr:devicePixelRatio},userAgent:navigator.userAgent,hardwareConcurrency:navigator.hardwareConcurrency,nativeScrollAnchoring:CSS.supports('overflow-anchor','auto'),reducedMotion:matchMedia('(prefers-reduced-motion: reduce)').matches};
+const reports={actions:[],apiCalls:[],seenControls:[],firedControlIds:[],untaggedInteractive:[],pageErrors:[],feedbackFailures:[],inputDispatch:new URL(location.href).searchParams.get('named')==='1'?'trusted Playwright input on exact named targets where bound; synthetic DOM otherwise (excludes OS input dispatch)':'synthetic DOM events (excludes OS input dispatch)',viewport:{width:innerWidth,height:innerHeight,dpr:devicePixelRatio},userAgent:navigator.userAgent,hardwareConcurrency:navigator.hardwareConcurrency,nativeScrollAnchoring:CSS.supports('overflow-anchor','auto'),reducedMotion:matchMedia('(prefers-reduced-motion: reduce)').matches};
 const trackedHandlers=new WeakMap();
-globalThis.__anTrack=(id,fn)=>{if(typeof fn!=='function')return fn;let ids=trackedHandlers.get(fn);if(!ids){ids=new Map();trackedHandlers.set(fn,ids);}let wrapped=ids.get(id);if(!wrapped){wrapped=function(...args){(globalThis.__anFiredLog||=[]).push(id);if(!reports.firedControlIds.includes(id))reports.firedControlIds.push(id);return fn.apply(this,args);};ids.set(id,wrapped);}return wrapped;};
+globalThis.__anTrack=(id,fn)=>{if(typeof fn!=='function')return fn;let ids=trackedHandlers.get(fn);if(!ids){ids=new Map();trackedHandlers.set(fn,ids);}let wrapped=ids.get(id);if(!wrapped){wrapped=function(...args){(globalThis.__anFiredLog||=[]).push(id);(globalThis.__anFiredAt||=[]).push(performance.now());if(!reports.firedControlIds.includes(id))reports.firedControlIds.push(id);return fn.apply(this,args);};ids.set(id,wrapped);}return wrapped;};
 globalThis.__anFiredControlIds=reports.firedControlIds;
+if(!globalThis.__anFiredLog){globalThis.__anFiredLog=[];globalThis.__anFiredAt=[];}
 globalThis.__anTrustedApiCalls=reports.apiCalls;
 const pageError=e=>reports.pageErrors.push(String(e.message||e.reason||e).slice(0,1000));window.addEventListener('error',pageError);window.addEventListener('unhandledrejection',pageError);
 try {
@@ -275,8 +276,171 @@ try {
  const label=el=>(el.getAttribute('aria-label')||el.textContent||'').replace(/\s+/g,' ').trim();
  const buttons=()=>[...scope().querySelectorAll('button,[role="button"]')].filter(shown);
  const button=name=>buttons().find(b=>typeof name==='string'?label(b)===name:name.test(label(b)));
+ // Exact ReplyChip identity (Composer.tsx:937-953 messageOf who/text, :825-829 title): one chip, exact title, exact first line.
+ const lineOf=s=>String(s||'').split('\n')[0].replace(/\s+/g,' ').trim();
+ const replyChipFor=(sc,exp)=>{const ts=[...sc.querySelectorAll('p')].filter(p=>/^(Replying to|Answering) /.test(p.textContent));if(ts.length!==1||!exp.who)return null;const t=ts[0];if(t.textContent!=='Replying to '+exp.who&&t.textContent!=='Answering '+exp.who)return null;const b=t.nextElementSibling;return b&&lineOf(b.textContent)===exp.line?t.closest('div').parentElement:null;};
+ const uniqueLine=(msgs,m)=>msgs.filter(x=>lineOf(x.text||x.body)===lineOf(m.text||m.body)).length===1;
  const visibleText=text=>[...scope().querySelectorAll('h1,h2,h3,p,[role="heading"],[role="dialog"],[role="alert"],[role="status"]')].some(el=>onScreen(el)&&el.textContent.includes(text));
  const census=()=>{for(const el of [...scope().querySelectorAll('button,input,textarea,select,summary,a[href],[role],[tabindex]')].filter(el=>shown(el)&&(el.matches('button,input,textarea,select,summary,a[href],[tabindex]')||/^(button|link|menuitem|menuitemcheckbox|menuitemradio|tab|switch|radio|checkbox|combobox|textbox|option|slider|spinbutton|treeitem)$/.test(el.getAttribute('role')||'')))){const id=el.getAttribute('data-an-control'),key=el.tagName.toLowerCase()+':'+(el.getAttribute('type')||el.getAttribute('role')||'')+':'+label(el);if(id){if(!reports.seenControls.includes(id))reports.seenControls.push(id);}else{const gap={element:key,nearest_control:el.closest('[data-an-control]')?.getAttribute('data-an-control')||null};if(!reports.untaggedInteractive.some(x=>x.element===gap.element&&x.nearest_control===gap.nearest_control))reports.untaggedInteractive.push(gap);}}};
+ // Named-expectation trusted mode (named=1): the fixture's own action picks the element
+ // (its el.click()); the driver gives that exact element real input and acknowledges it, and
+ // this action's own explicit local predicate decides. Non-click, mixed, untagged,
+ // wrapper-tagged and ambiguous actions stay synthetic and unqualified.
+ const named=query.get('named')==='1';
+ // Diagnostic timeline (named mode): from a Menu.Trigger request through the next request,
+ // trigger/popup state and trusted input metadata only (tag/role/control/state/time), capped.
+ let timeline=null;
+ const timelineStart=(seq,trigger)=>{const tl={startSeq:seq,entries:[],cap:200},sh=shadow,meta=n=>n&&n.nodeType===1?{tag:n.tagName.toLowerCase(),role:n.getAttribute('role'),control:n.getAttribute('data-an-control')}:null,push=e=>{if(tl.entries.length<tl.cap)tl.entries.push({t:performance.now(),...e});else tl.truncated=true;},menus=()=>[...sh.querySelectorAll('[role=menu]')].map(m=>({id:m.id||null,boundToTrigger:!!m.id&&trigger.getAttribute('aria-controls')===m.id,open:m.hasAttribute('data-open'),closed:m.hasAttribute('data-closed'),ending:m.hasAttribute('data-ending-style')}));
+  tl.before={expanded:trigger.getAttribute('aria-expanded'),popupOpen:trigger.hasAttribute('data-popup-open'),controls:!!trigger.getAttribute('aria-controls'),menus:menus()};
+  const ev=e=>{if(!e.isTrusted)return;const tgt=e.composedPath()[0];push({kind:'input',type:e.type,target:meta(tgt),onTrigger:e.composedPath().includes(trigger)});};
+  const types=['pointerdown','pointerup','mousedown','mouseup','click','pointerleave','focusout'];for(const type of types)document.addEventListener(type,ev,true);
+  const obs=new MutationObserver(list=>{for(const m of list){if(m.type==='attributes'&&m.target===trigger)push({kind:'trigger',attr:m.attributeName,expanded:trigger.getAttribute('aria-expanded'),popupOpen:trigger.hasAttribute('data-popup-open')});else if(m.type==='childList'){for(const n of m.addedNodes)if(n.nodeType===1&&(n.matches?.('[role=menu]')||n.querySelector?.('[role=menu]')))push({kind:'menu-mounted',menus:menus()});for(const n of m.removedNodes)if(n.nodeType===1&&(n.matches?.('[role=menu]')||n.querySelector?.('[role=menu]')))push({kind:'menu-unmounted',menus:menus()});}else if(m.type==='attributes'&&m.target.getAttribute?.('role')==='menu')push({kind:'menu-state',attr:m.attributeName,menus:menus()});}});
+  obs.observe(sh,{subtree:true,childList:true,attributes:true,attributeFilter:['aria-expanded','data-popup-open','data-open','data-closed','data-ending-style']});
+  tl.stop=()=>{for(const type of types)document.removeEventListener(type,ev,true);obs.disconnect();tl.after={expanded:trigger.getAttribute('aria-expanded'),popupOpen:trigger.hasAttribute('data-popup-open'),menus:menus()};delete tl.stop;};
+  timeline=tl;return tl;};
+ // Library-primitive bindings: exact definition id -> shipped Base UI 1.8.0 primitive (inspected source).
+ // open: trigger data-popup-open (MenuTrigger.mjs:178-179, PopoverTrigger.mjs:99,109; popupStateMapping.mjs:5-35)
+ //   and aria-expanded (PopoverTrigger.mjs:118; MenuRoot.mjs:401,407 active/inactive trigger props), aria-controls=popupId
+ //   (MenuTrigger.mjs:64,184, PopoverTrigger.mjs:52,119) = popupElement.id ?? floatingId for the owning trigger (utils/popups/store.mjs:41-43,81), the popup id (PopoverPopup.mjs:85-86
+ //   role dialog; MenuRoot.mjs:421 role menu) whose data-open is set (popupStateMapping.mjs:37-44, CommonPopupDataAttributes).
+ // close: Dialog.Close onClick -> store.setOpen(false) (DialogClose.mjs:39,46) for the Dialog.Popup it is rendered in
+ //   (Sheet.tsx:25-39; Message.actions.tsx:247-254 role alertdialog; DialogPopup.mjs:43,67-70, useRenderDialogRoot.mjs:29); that popup loses data-open and gains data-closed (dialog/utils/stateAttributesMapping.mjs:9-11 -> popupStateMapping) or unmounts.
+ const PRIMITIVES={
+  'agentnet:internal/ui/web/src/features/Message.actions.tsx#Toolbar/Menu.Trigger/#1':{primitive:'Menu.Trigger',kind:'open',haspopup:'menu',role:'menu'},
+  'agentnet:internal/ui/web/src/features/Message.actions.tsx#Toolbar/button/#1':{primitive:'Popover.Trigger',kind:'open',haspopup:'dialog',role:'dialog'},
+  'agentnet:internal/ui/web/src/ui/Sheet.tsx#Sheet/Dialog.Close/#1':{primitive:'Dialog.Close',kind:'close'},
+  'agentnet:internal/ui/web/src/features/Message.actions.tsx#Confirm/Button/#1':{primitive:'Dialog.Close',kind:'close'},
+  // AddReaction renders ReactPopover's Popover.Trigger (Message.reactions.tsx:134-139,152-156), like the Toolbar React button.
+  'agentnet:internal/ui/web/src/features/Message.reactions.tsx#AddReaction/button/#1':{primitive:'Popover.Trigger',kind:'open',haspopup:'dialog',role:'dialog'},
+  // Native <details>/<summary> (Message.actions.tsx:392-394): summary activation toggles its parent details' open state (HTML spec).
+  'agentnet:internal/ui/web/src/features/Message.actions.tsx#DetailsSheet/summary/#1':{primitive:'details/summary',kind:'toggle'},
+ };
+ const POPUPS='[role="menu"],[role="dialog"],[role="alertdialog"]';
+ const active=globalThis.__anNamedActive||={listeners:0,observers:0};
+ const namedDispatch=async(action,record,expected,opts={})=>{
+  if(!named){action();return;}
+  const real=HTMLElement.prototype.click,picked=[],log=globalThis.__anFiredLog,firedAt=globalThis.__anFiredAt,before={fired:log.length,api:reports.apiCalls.length};
+  HTMLElement.prototype.click=function(){picked.push(this);};
+  try{action();}finally{HTMLElement.prototype.click=real;}
+  const mixed=log.length!==before.fired||reports.apiCalls.length!==before.api;
+  const el=picked.length===1?picked[0]:null,control_id=el?.getAttribute('data-an-control')||null;
+  const t=record.trusted={assertion_kind:'named-expectation',action_id:record.id,vector:p1||'baseline',expected:record.expected,state_path:suite+'/'+(p1||'baseline')+'/'+record.id,control_id,picked:picked.length,mixed_synthetic:mixed,seq:null,dispatch_ok:null,dispatch_error:null,predicate_error:null,expected_at_input:null,true_before_input:false,is_trusted:false,target_match:false,input_event:null,input_at:null,request_at:null,ack_at:null,first_true_at:null,visible_at:null,input_to_visible_ms:null,request_to_visible_ms:null,handler_fired:false,handler_at:null,ignored_events:0,status:'unbound'};
+  if(!control_id||mixed){t.reason=mixed?'action had synthetic side effects besides the click':picked.length>1?'ambiguous: several elements clicked':picked.length?'clicked element has no own data-an-control (a wrapper tag does not count)':'action is not an element click';for(const p of picked)real.call(p);return;}
+  // One page-wide request identity across vectors; the driver answers each exact seq.
+  const seq=globalThis.__anNamedSeq=(globalThis.__anNamedSeq||0)+1;t.seq=seq;t.fired_from=log.length;
+  if(!timeline&&/\/Menu\.Trigger\//.test(control_id))timelineStart(seq,el);
+  const prim=(opts.primitives||PRIMITIVES)[control_id]||null,rootNode=el.getRootNode();let own=null;
+  if(prim){
+   // Separate evidence kind: no tagged handler exists; the shipped primitive's own state is the proof.
+   const openSet=()=>new Set([...rootNode.querySelectorAll(POPUPS)].filter(p=>p.hasAttribute('data-open')&&!p.hidden));
+   const pre=openSet(),owner=prim.kind==='close'?el.closest('[role="dialog"],[role="alertdialog"]'):null;
+   Object.assign(t,{assertion_kind:'primitive-'+prim.kind,primitive:prim.primitive,primitive_kind:prim.kind,own_at_input:null,owned_popup_role:null,owned_popup_preexisting:null,intervening_inputs:0,unrelated_changes:null,preexisting_open:pre.size});
+   if(prim.kind==='open'){
+    t.primitive_binding_ok=el.getAttribute('aria-haspopup')===prim.haspopup;
+    const popupOf=()=>{const id=el.getAttribute('aria-controls');return id&&rootNode.getElementById?rootNode.getElementById(id):null;};
+    own=()=>{if(el.getAttribute('aria-expanded')!=='true'||!el.hasAttribute('data-popup-open'))return false;const p=popupOf();if(!p||!p.isConnected||p.getAttribute('role')!==prim.role||!p.hasAttribute('data-open')||p.hidden)return false;t.owned_popup_role=p.getAttribute('role');t.owned_popup_preexisting=pre.has(p);return !pre.has(p);};
+    t.unrelatedAt=()=>{const now=openSet(),p=popupOf();return [...now].filter(x=>x!==p&&!pre.has(x)).length+[...pre].filter(x=>!now.has(x)).length;};
+   }else if(prim.kind==='toggle'){
+    const box=el.tagName==='SUMMARY'&&el.parentElement?.tagName==='DETAILS'?el.parentElement:null,others=[...rootNode.querySelectorAll('details')].filter(d=>d!==box),was=others.map(d=>d.open);
+    t.primitive_binding_ok=!!box&&!box.open&&box.firstElementChild===el;t.owned_popup_role='details';
+    own=()=>box.open;t.unrelatedAt=()=>others.filter((d,i)=>d.open!==was[i]).length;
+   }else{
+    t.primitive_binding_ok=!!owner&&pre.has(owner);t.owned_popup_role=owner?.getAttribute('role')||null;
+    own=()=>!owner.isConnected||owner.hidden||!owner.hasAttribute('data-open')&&owner.hasAttribute('data-closed');
+    t.unrelatedAt=()=>{const now=openSet();return [...pre].filter(x=>x!==owner&&!now.has(x)).length+[...now].filter(x=>!pre.has(x)).length;};
+   }
+   if(!t.primitive_binding_ok)own=()=>false;
+  }
+  const ownTruth=()=>{if(!own)return true;try{return own();}catch(e){t.predicate_error??='own-state: '+String(e?.message||e).slice(0,280);return false;}};
+  const truth=()=>{try{return !!expected();}catch(e){t.predicate_error??=String(e?.message||e).slice(0,300);return false;}};
+  // Before input any truth (app predicate, or the primitive's own state) fails; after it both must hold.
+  const sample=()=>{if(t.first_true_at!==null)return;const e=truth(),o=own?ownTruth():e;if(t.input_at===null){if(e||own&&o)t.true_before_input=true;}else if(e&&o){t.first_true_at=performance.now();if(own)t.unrelated_changes=t.unrelatedAt();}};
+  sample();const obs=new MutationObserver(sample);obs.observe(shadow,{subtree:true,childList:true,attributes:true,characterData:true});active.observers++;
+  let polling=true;const poll=()=>{if(!polling)return;sample();requestAnimationFrame(poll);};requestAnimationFrame(poll);
+  // Trusted input after the matching one and before the first own transition counts as intervening.
+  const types=['pointerdown','mousedown','touchstart','keydown'],after=e=>{if(!own||!e.isTrusted||t.input_at===null||t.first_true_at!==null||e.timeStamp<t.input_ts)return;if(!e.composedPath().includes(el)||e.type===t.input_event&&e.timeStamp>t.input_ts)t.intervening_inputs++;};
+  for(const type of types){document.addEventListener(type,after,true);active.listeners++;}
+  let stopped=false;t.stop=()=>{if(stopped)return;stopped=true;polling=false;obs.disconnect();active.observers--;for(const type of types){document.removeEventListener(type,after,true);active.listeners--;}};
+  const listen=e=>{if(t.input_at!==null)return;if(!e.isTrusted||!e.composedPath().includes(el)){t.ignored_events++;return;}t.expected_at_input=truth();if(own)t.own_at_input=ownTruth();t.input_at=performance.now();t.input_ts=e.timeStamp;t.is_trusted=true;t.target_match=true;t.input_event=e.type;};
+  const target=opts.retarget||el;for(const type of types){document.addEventListener(type,listen,true);active.listeners++;}
+  try{
+   // Untrusted negative probes (unrelated target; optionally the exact target) run only in named
+   // self-tests: before a real action an untrusted document pointerdown is itself an outside press.
+   if(opts.selftest){document.documentElement.dispatchEvent(new Event('pointerdown',{bubbles:true}));if(opts.untrustedOnTarget)el.dispatchEvent(new Event('pointerdown',{bubbles:true,composed:true}));}
+   window.__anNamedReply=null;target.setAttribute('data-an-named-target',String(seq));if(opts.selftest&&opts.intervene)opts.intervene.setAttribute('data-an-named-intervene',String(seq));t.request_at=performance.now();window.__anNamedRequest={seq,vector:t.vector,action_id:record.id,control_id,intervene:!!(opts.selftest&&opts.intervene)};
+   const end=performance.now()+5000;while(window.__anNamedReply?.seq!==seq&&performance.now()<end)await pause(5);
+   const reply=window.__anNamedReply?.seq===seq?window.__anNamedReply:null;t.ack_at=reply?performance.now():null;t.dispatch_ok=!!reply?.ok;t.dispatch_error=reply?reply.error||null:'no driver acknowledgement within 5 s';
+  }finally{for(const type of types){document.removeEventListener(type,listen,true);active.listeners--;}window.__anNamedRequest=null;window.__anNamedReply=null;target.removeAttribute('data-an-named-target');opts.intervene?.removeAttribute('data-an-named-intervene');if(timeline?.stop&&seq===timeline.startSeq+1){timeline.stop();t.timeline=timeline;}}
+  // The owning handler must have run by the driver's completed-input acknowledgement.
+  const i=log.slice(t.fired_from).findIndex(x=>x===control_id||x.startsWith(control_id+'#'));if(i>=0){t.handler_fired=true;t.handler_at=firedAt[t.fired_from+i]??null;}
+  if(!t.dispatch_ok||t.input_at===null){t.stop();delete t.stop;t.status='executed-fail';t.reason=!t.dispatch_ok?'driver dispatch failed: '+t.dispatch_error:'no matching trusted input on the exact target';if(opts.expectFailure)return;globalThis.__anNamedStop=true;throw Error('named dispatch stopped the cell at '+record.id+' (seq '+seq+'): '+t.reason);}
+ };
+ const namedFinish=(record,visibleAt)=>{
+  const t=record.trusted;if(!t||!t.stop)return;t.stop();delete t.stop;
+  const v=t.first_true_at??visibleAt;t.visible_at=v;t.input_to_visible_ms=v-t.input_at;t.request_to_visible_ms=v-t.request_at;
+  record.input='trusted '+t.input_event;record.syntheticRequestToVisibleMs=record.feedbackMs;record.feedbackMs=t.input_to_visible_ms;
+  delete t.unrelatedAt;delete t.input_ts;
+  if(t.primitive){
+   // Primitive rows never borrow a handler event: own-state transition only, with no fallback visible time.
+   const ms=t.input_to_visible_ms,base=t.predicate_error===null&&t.is_trusted&&t.target_match&&t.dispatch_ok&&!t.mixed_synthetic&&t.expected_at_input===false&&t.own_at_input===false&&!t.true_before_input;
+   const pass=base&&t.primitive_binding_ok===true&&t.first_true_at!==null&&t.intervening_inputs===0&&(t.primitive_kind==='open'||t.unrelated_changes===0)&&ms>=0&&ms<1000;
+   t.status=pass?'executed-pass':'executed-fail';t.reason=pass?'owned '+t.primitive+' state transition after matching trusted input':t.predicate_error!==null?'predicate error: '+t.predicate_error:!t.primitive_binding_ok?'primitive binding not proven on the exact element':t.true_before_input||t.expected_at_input||t.own_at_input?'expected or own state true before the matching trusted input':!base?'trusted input/dispatch invariants failed':t.first_true_at===null?'owned primitive transition not observed':t.intervening_inputs?'intervening trusted input before the owned transition':t.primitive_kind!=='open'&&t.unrelated_changes?'another popup changed in place of the owned one':'input-to-visible not under 1000 ms';
+   return;
+  }
+  const ms=t.input_to_visible_ms,handlerOK=t.handler_fired&&Number.isFinite(t.handler_at)&&t.handler_at>=t.input_at&&t.handler_at<=v;
+  const pass=t.predicate_error===null&&t.is_trusted&&t.target_match&&t.dispatch_ok&&!t.mixed_synthetic&&t.expected_at_input===false&&!t.true_before_input&&handlerOK&&ms>=0&&ms<1000;
+  t.status=pass?'executed-pass':'executed-fail';t.reason=pass?'explicit local predicate true after matching trusted input and owning handler':t.predicate_error!==null?'predicate error: '+t.predicate_error:t.true_before_input||t.expected_at_input?'expected state true before the matching trusted input':!t.handler_fired?'owning tagged handler did not run by input acknowledgement':!handlerOK?'visible change before the owning handler ran':'input-to-visible not under 1000 ms';
+ };
+ // Self-tests in this real page, with real driver input: pass, untrusted-on-target, true before
+ // input, wrong target, visible before handler, and (first vector) a retained dispatch error.
+ const namedSelfTests=async()=>{
+  const box=document.createElement('div');box.style.cssText='position:fixed;left:0;top:0;z-index:2147483647;display:flex;gap:4px;background:#fff';shadow.appendChild(box);
+  const mk=(id,hidden)=>{const b=document.createElement('button');b.textContent=id;b.setAttribute('data-an-control','agentnet:selftest#'+id);b.style.cssText='width:56px;height:32px'+(hidden?';display:none':'');box.appendChild(b);return b;},out=document.createElement('output');box.appendChild(out);
+  const run=async(id,el,expected,opts={})=>{const record={id:'selftest.'+id,expected:id};try{await namedDispatch(()=>el.click(),record,expected,{...opts,selftest:true});if(opts.settle){const end=performance.now()+opts.settle;while(record.trusted.first_true_at===null&&performance.now()<end)await pause(10);}namedFinish(record,performance.now());}catch(e){if(record.trusted)record.trusted.threw=String(e.message).slice(0,300);}finally{if(record.trusted?.stop){record.trusted.stop();delete record.trusted.stop;}}if(record.trusted){record.trusted.request_cleared=window.__anNamedRequest===null&&!shadow.querySelector('[data-an-named-target]');record.trusted.cleanup_ok=active.listeners===0&&active.observers===0;if(opts.expect)record.trusted.selftest_expect=opts.expect;(reports.namedSelfTests||=[]).push(record.trusted);}};
+  try{
+   const pass=mk('pass');pass.addEventListener('click',__anTrack('agentnet:selftest#pass#onClick',()=>{out.textContent='pass';}));await run('pass',pass,()=>out.textContent==='pass',{untrustedOnTarget:true});
+   const before=mk('before');before.addEventListener('click',__anTrack('agentnet:selftest#before#onClick',()=>{}));await run('before',before,()=>true);
+   const wrong=mk('wrong'),other=document.createElement('button');other.textContent='other';other.style.cssText='width:56px;height:32px';box.appendChild(other);wrong.addEventListener('click',__anTrack('agentnet:selftest#wrong#onClick',()=>{out.textContent='wrong';}));await run('wrong',wrong,()=>out.textContent==='wrong',{retarget:other,expectFailure:true});
+   const early=mk('early');early.addEventListener('pointerdown',()=>{out.textContent='early';});early.addEventListener('click',__anTrack('agentnet:selftest#early#onClick',()=>{}));await run('early',early,()=>out.textContent==='early');
+   const throws=mk('throws');throws.addEventListener('click',__anTrack('agentnet:selftest#throws#onClick',()=>{}));await run('throws',throws,()=>{throw Error('selftest predicate exception');});
+   // Transient local feedback that is gone before the driver's acknowledgement, through measure.
+   const transient=mk('transient');transient.addEventListener('click',__anTrack('agentnet:selftest#transient#onClick',()=>{out.textContent='transient';setTimeout(()=>{out.textContent='';out.dataset.done='1';},0);}));
+   await measure('selftest.transient',()=>transient.click(),()=>out.textContent==='transient','transient feedback before acknowledgement',()=>out.dataset.done==='1');{const a=reports.actions.pop();(reports.namedSelfTests||=[]).push({...a.trusted,measured_feedback_ms:a.feedbackMs,completed:a.stateVerified===true});}
+   // Library-primitive negatives: generic "a menu opened / a dialog closed" predicates hold in each, so only the
+   // own-state ownership rule rejects them. Mock handlers are untagged, as the shipped primitives are.
+   {const P={};let n=0;const sub=()=>{const d=document.createElement('div');box.appendChild(d);return d;};
+    const pop=(c,role,open)=>{const d=document.createElement('div');d.id='an-selftest-pop-'+(++n);d.setAttribute('role',role);if(open)d.setAttribute('data-open','');else d.hidden=true;c.appendChild(d);return d;};
+    const trig=(c,id)=>{const b=mk(id);c.appendChild(b);b.setAttribute('aria-haspopup','menu');b.setAttribute('aria-expanded','false');P['agentnet:selftest#'+id]={primitive:'Menu.Trigger',kind:'open',haspopup:'menu',role:'menu'};return b;};
+    const openOn=(tr,p)=>{tr.setAttribute('aria-expanded','true');tr.setAttribute('data-popup-open','');tr.setAttribute('aria-controls',p.id);p.hidden=false;p.setAttribute('data-open','');};
+    const closeD=d=>{d.removeAttribute('data-open');d.setAttribute('data-closed','');};
+    const closer=(c,id,d)=>{const b=mk(id);d.appendChild(b);P['agentnet:selftest#'+id]={primitive:'Dialog.Close',kind:'close'};return b;};
+    const anyMenu=c=>()=>!!c.querySelector('[role="menu"][data-open]'),fewerDialogs=(c,k)=>()=>c.querySelectorAll('[role="dialog"][data-open]').length<k;
+    const prun=async(id,build,expect,extra={})=>{const c=sub();try{const{el,expected,intervene}=build(c);await run(id,el,expected,{primitives:P,expect,intervene,...extra});}finally{c.remove();}};
+    await prun('prim-open-pass',c=>{const t=trig(c,'prim-open-pass'),m=pop(c,'menu');t.addEventListener('click',()=>openOn(t,m));return{el:t,expected:anyMenu(c)};},'pass');
+    await prun('prim-close-pass',c=>{const d=pop(c,'dialog',true),b=closer(c,'prim-close-pass',d);b.addEventListener('click',()=>closeD(d));return{el:b,expected:fewerDialogs(c,1)};},'pass');
+    await prun('prim-wrong-trigger',c=>{const t=trig(c,'prim-wrong-trigger'),t2=trig(c,'prim-wrong-trigger-other'),m=pop(c,'menu');t.addEventListener('click',()=>openOn(t2,m));return{el:t,expected:anyMenu(c)};},'fail');
+    await prun('prim-wrong-popup',c=>{const t=trig(c,'prim-wrong-popup'),x=pop(c,'menu',true);t.addEventListener('click',()=>openOn(t,x));return{el:t,expected:()=>t.getAttribute('aria-expanded')==='true'};},'fail');
+    await prun('prim-wrong-role',c=>{const t=trig(c,'prim-wrong-role'),x=pop(c,'dialog');t.addEventListener('click',()=>openOn(t,x));return{el:t,expected:()=>t.getAttribute('aria-expanded')==='true'};},'fail');
+    await prun('prim-preexisting',c=>{const t=trig(c,'prim-preexisting'),m=pop(c,'menu');openOn(t,m);return{el:t,expected:anyMenu(c)};},'fail');
+    await prun('prim-synthetic',c=>{const t=trig(c,'prim-synthetic'),m=pop(c,'menu');t.addEventListener('pointerdown',e=>{if(!e.isTrusted)openOn(t,m);});return{el:t,expected:anyMenu(c)};},'fail',{untrustedOnTarget:true});
+    await prun('prim-early-unrelated',c=>{const t=trig(c,'prim-early-unrelated'),u=trig(c,'prim-early-unrelated-other');pop(c,'menu');const um=pop(c,'menu');t.addEventListener('pointerdown',()=>openOn(u,um));return{el:t,expected:anyMenu(c)};},'fail');
+    await prun('prim-close-wrong',c=>{const d1=pop(c,'dialog',true),d2=pop(c,'dialog',true),b=closer(c,'prim-close-wrong',d1);b.addEventListener('click',()=>closeD(d2));return{el:b,expected:fewerDialogs(c,2)};},'fail');
+    await prun('prim-intervening',c=>{const t=trig(c,'prim-intervening'),m=pop(c,'menu'),o=document.createElement('button');o.textContent='other';o.style.cssText='width:56px;height:32px';c.appendChild(o);t.addEventListener('click',()=>setTimeout(()=>openOn(t,m),300));return{el:t,expected:anyMenu(c),intervene:o};},'fail',{settle:1000});
+    const det=(c,id)=>{const d=document.createElement('details'),s=document.createElement('summary');s.textContent=id;s.setAttribute('data-an-control','agentnet:selftest#'+id);s.style.cssText='display:block;width:120px;height:32px';d.appendChild(s);d.appendChild(document.createElement('p')).textContent='x';c.appendChild(d);P['agentnet:selftest#'+id]={primitive:'details/summary',kind:'toggle'};return{d,s};};
+    await prun('prim-toggle-pass',c=>{const{d,s}=det(c,'prim-toggle-pass');return{el:s,expected:()=>d.open};},'pass');
+    await prun('prim-toggle-wrong',c=>{const{s}=det(c,'prim-toggle-wrong'),o=document.createElement('details');c.appendChild(o);s.addEventListener('click',e=>{e.preventDefault();o.open=true;});return{el:s,expected:()=>o.open};},'fail');
+    await prun('prim-throws',c=>{const t=trig(c,'prim-throws'),m=pop(c,'menu');t.addEventListener('click',()=>openOn(t,m));return{el:t,expected:()=>{throw Error('selftest primitive predicate exception');}};},'fail');
+   }
+   // Exact-reply predicate negatives (no input): wrong sender, prefix body, two chips, and duplicate first lines.
+   {const chipBox=(who,line)=>{const d=document.createElement('div'),i=document.createElement('div'),t=document.createElement('p'),b=document.createElement('p');t.textContent=who;b.textContent=line;i.append(t,b);d.append(i);return d;};
+    const box2=(...c)=>{const d=document.createElement('div');d.append(...c);return d;},exp={who:'yourself',line:'Retained message 400'};
+    const cases=[['reply-identity-pass',box2(chipBox('Replying to yourself','Retained message 400')),true],['reply-identity-wrong-sender',box2(chipBox('Replying to Vitalii','Retained message 400')),false],['reply-identity-prefix-body',box2(chipBox('Replying to yourself','Retained message 40')),false],['reply-identity-two-chips',box2(chipBox('Replying to yourself','Retained message 400'),chipBox('Answering yourself','Retained message 400')),false]];
+    for(const [id,el,want] of cases){const got=!!replyChipFor(el,exp);(reports.predicateSelfTests||=[]).push({id,expect:want,observed:got,ok:got===want});}
+    const dup=[{body:'Grouped boundary request'},{body:'Grouped boundary request'},{body:'x'}];(reports.predicateSelfTests||=[]).push({id:'reply-identity-duplicate-line',expect:false,observed:uniqueLine(dup,dup[0]),ok:uniqueLine(dup,dup[0])===false},{id:'reply-identity-unique-line',expect:true,observed:uniqueLine(dup,dup[2]),ok:uniqueLine(dup,dup[2])===true});}
+   // A real (non-expected-failure) dispatch failure must throw, stop, and click nothing synthetically.
+   if(!globalThis.__anNamedErrorTested){globalThis.__anNamedErrorTested=true;const hidden=mk('error',true);let clicked=false;hidden.addEventListener('click',__anTrack('agentnet:selftest#error#onClick',()=>{clicked=true;}));await run('error',hidden,()=>false);const row=reports.namedSelfTests.at(-1);row.synthetic_click_after_failure=clicked;row.stop_flag=globalThis.__anNamedStop===true;globalThis.__anNamedStop=false;}
+  }finally{box.remove();}
+ };
  const measure=async(id,action,expected,description,complete=expected)=>{
   if(query.get('runtimeWide')==='1'){if(await trustedCheckpoint('measure',id))return;}
   window.latencyProgress={active:id,reports};census();assert(!expected(),id+' expected visible state already true before input');const record={id,expected:description,input:'synthetic DOM',start:performance.now(),apiStart:reports.apiCalls.length,hostStart:reports.hostCalls?.length||0},gaps=[];performance.mark('latency:'+id+':input');let running=true,last=record.start,rafCount=0;
@@ -304,7 +468,7 @@ try {
   let seenAt;const mutations=new MutationObserver(list=>{const now=performance.now();if(record.firstMutationMs===undefined)record.firstMutationMs=now-record.start;if(record.firstStructuralMs===undefined&&list.some(m=>m.type!=='attributes'))record.firstStructuralMs=now-record.start;if(expected.brief&&seenAt===undefined){try{if(probe())seenAt=now;}catch{}}});mutations.observe(writeDelay?shadow:root,{subtree:true,childList:true,attributes:true,characterData:true});
   record.feedbackProbeMs=0;record.feedbackProbeMaxMs=0;
   const probe=()=>{const start=performance.now();try{return expected();}finally{const elapsed=performance.now()-start;record.feedbackProbeMs+=elapsed;record.feedbackProbeMaxMs=Math.max(record.feedbackProbeMaxMs,elapsed);}};
-  try{action();record.dispatchMs=performance.now()-record.start;queueMicrotask(()=>{record.microtaskMs=performance.now()-record.start;});await until(()=>seenAt!==undefined||probe(),id+' visible feedback',3000+writeDelay*6);record.feedbackMs=(seenAt??performance.now())-record.start;performance.mark('latency:'+id+':feedback');
+  try{await namedDispatch(action,record,expected);record.dispatchMs=performance.now()-record.start;queueMicrotask(()=>{record.microtaskMs=performance.now()-record.start;});await until(()=>record.trusted?.primitive?record.trusted.first_true_at!=null||record.trusted.input_at!=null&&performance.now()-record.trusted.input_at>=1000&&(seenAt!==undefined||probe()):seenAt!==undefined||record.trusted?.first_true_at!=null||probe(),id+' visible feedback',3000+writeDelay*6);{const visibleAt=seenAt??performance.now();record.feedbackMs=visibleAt-record.start;namedFinish(record,visibleAt);}performance.mark('latency:'+id+':feedback');
    await until(complete,id+' completed visible state',3000+writeDelay*6);record.visibleMs=performance.now()-record.start;await frame();await frame();assert(complete(),id+' state lost before paint opportunity');record.paintMs=performance.now()-record.start;
    if(reports.hostCalls)record.hostResults=reports.hostCalls.slice(record.hostStart).map(c=>({...c,startMs:c.start-record.start,resultMs:c.result===undefined?null:c.result-record.start}));
    record.api=reports.apiCalls.slice(record.apiStart).map(c=>({path:c.path,method:c.method,startMs:c.start-record.start,resultMs:c.result===undefined?null:c.result-record.start,ok:c.ok??null}));
@@ -315,8 +479,9 @@ try {
    record.projectionResultMs=projections.length?Math.max(...projections.map(c=>c.resultMs)):null;
    record.frameMaxMs=Math.max(0,...gaps);record.frameP95Ms=gaps.sort((a,b)=>a-b)[Math.min(gaps.length-1,Math.floor(gaps.length*.95))]||0;
    record.stateVerified=true;record.feedbackBoundPassed=record.feedbackMs<1000;record.ok=record.feedbackBoundPassed;if(!record.feedbackBoundPassed)reports.feedbackFailures.push(id+' local feedback exceeds owner’s under-1000-ms bound');census();
-  }finally{running=false;mutations.disconnect();if(menuDiagnostic){clearInterval(menuTimer);sampleMenu();record.frameMaxMs=Math.max(0,...gaps);const sorted=[...gaps].sort((a,b)=>a-b);record.frameP95Ms=sorted[Math.min(sorted.length-1,Math.floor(sorted.length*.95))]||0;record.rafCount=rafCount;reports.firstMenuVisibility={samples:menuSamples,finalTimeline:document.timeline?.currentTime??null,rafCount,visibility:document.visibilityState};}if(menuObserver){rememberFrames(menuObserver.takeRecords());menuObserver.disconnect();}if(record.feedbackMs>=200||record.visibleMs>=500)record.longAnimationFrames=menuFrames;if(id==='message.menu-open-0'){reports.firstMenuPerformance={longAnimationFrameSupported:!!menuObserver,inputStart:record.start,frames:menuFrames,chunkResources:performance.getEntriesByType('resource').filter(r=>r.name.includes('/m/chunks/')).slice(-12).map(r=>({path:new URL(r.name).pathname,start:r.startTime,duration:r.duration,bytes:r.decodedBodySize}))};}delete record.apiStart;delete record.hostStart;reports.actions.push(record);}
+  }finally{running=false;mutations.disconnect();if(record.trusted?.stop){record.trusted.stop();delete record.trusted.stop;}if(menuDiagnostic){clearInterval(menuTimer);sampleMenu();record.frameMaxMs=Math.max(0,...gaps);const sorted=[...gaps].sort((a,b)=>a-b);record.frameP95Ms=sorted[Math.min(sorted.length-1,Math.floor(sorted.length*.95))]||0;record.rafCount=rafCount;reports.firstMenuVisibility={samples:menuSamples,finalTimeline:document.timeline?.currentTime??null,rafCount,visibility:document.visibilityState};}if(menuObserver){rememberFrames(menuObserver.takeRecords());menuObserver.disconnect();}if(record.feedbackMs>=200||record.visibleMs>=500)record.longAnimationFrames=menuFrames;if(id==='message.menu-open-0'){reports.firstMenuPerformance={longAnimationFrameSupported:!!menuObserver,inputStart:record.start,frames:menuFrames,chunkResources:performance.getEntriesByType('resource').filter(r=>r.name.includes('/m/chunks/')).slice(-12).map(r=>({path:new URL(r.name).pathname,start:r.startTime,duration:r.duration,bytes:r.decodedBodySize}))};}delete record.apiStart;delete record.hostStart;reports.actions.push(record);}
  };
+ if(named)await namedSelfTests();
  const initialChat=()=>[...root.querySelectorAll('[data-part="chat-row"]')].find(b=>b.textContent.includes(p1==='direct'?'Portable Pi':'Vitalii')&&onScreen(b));
  await until(initialChat,'visible initial chat row');await frame();await frame();assert(initialChat(),'initial chat control disappeared before input');reports.initialControl={visible:true,paintOpportunityFrames:2,readyAtMs:performance.now(),fonts:document.fonts.status};
  if(suite==='actions'){
@@ -350,17 +515,34 @@ try {
   await phoneList('refused',0);
   if((trustedFile==='Message.tsx'||query.get('runtimeWide')==='1')&&await trustedCheckpoint('message-base','actions/dm-open/message-visible/no-sheet'))return {ok:true,...reports};await menu();const pick=item('React 👍');if(!pick){const react=row().querySelector('button[aria-label="React"]');assert(react,'reaction control missing');const details=item('Details');details.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));await settled();await measure('reaction.picker-open',()=>react.click(),()=>!!item('React 👍'),'quick reaction choices visible');}
   await measure('reaction.add',()=>item('React 👍').click(),()=>!!pending(),'explicit pending reaction feedback',()=>message.reactions.some(r=>r.mine)&&!pending()&&!!row().querySelector('[aria-pressed="true"]'));await settled();
+  // AddReaction (shown once a reaction exists) opens this message's ReactPopover; closed again by a fixture (untimed) trigger click.
+  {const add=row().querySelector('button[aria-label="Add a reaction"]');if(add){const own=()=>{const id=add.getAttribute('aria-controls'),d=id&&add.getRootNode().getElementById(id);return d&&d.hasAttribute('data-open')?d:null;};await measure('reaction.add-more-open',()=>add.click(),()=>!!own()&&onScreen(own()),'reaction choices open for this message');add.click();await until(()=>!own(),'reaction choices closed');await settled();}}
   await measure('reaction.remove',()=>row().querySelector('[aria-pressed="true"]').click(),()=>!!pending(),'explicit removal pending feedback',()=>!message.reactions.some(r=>r.mine)&&!pending()&&!row().querySelector('[aria-pressed="true"]'));
   reactionFailure=true;await menu();if(!item('React 👍')){item('Details').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));await settled();row().querySelector('button[aria-label="React"]').click();await until(()=>item('React 👍'),'quick reactions');}
   await measure('reaction.error',()=>item('React 👍').click(),()=>!!pending(),'pending feedback before actual failure',()=>visibleText('Synthetic reaction unavailable. Try again.')&&!pending()&&!row().querySelector('[aria-pressed="true"]'));reactionFailure=false;await settled();
+  // Toolbar Reply (Message.actions.tsx:57 onClick=acts.reply -> Message.tsx:103 draft.replyTo) shows the Composer ReplyChip
+  // (Composer.tsx:825-829, Composer.parts.tsx:58-63 <p> title). Absent Reply (can.reply false) stays unexecuted, never passed.
+  {await settled();const reply=row().querySelector('button[aria-label="Reply"]');const exp={who:message.dir==='out'&&!message.excerpt_pid&&!message.verified_agent?'yourself':null,line:lineOf(message.text||message.body)};const chip=()=>{const c=replyChipFor(scope(),exp);return c&&onScreen(c)?c:null;};if(reply&&exp.who&&uniqueLine(view.messages,message)){await measure('message.reply',()=>reply.click(),()=>!!chip(),'reply chip names this exact message (sender and unique first line) above the composer');const cancel=[...chip().querySelectorAll('button')].find(b=>['Cancel reply','Don’t answer it here'].includes(label(b)));assert(cancel,'reply chip cancel control');await measure('message.reply-cancel',()=>cancel.click(),()=>!chip()&&!visibleText('Replying to ')&&!visibleText('Answering '),'reply chip removed; original composer');}}
   await menu();await measure('message.edit-open',()=>item('Edit').click(),()=>onScreen(row().querySelector('textarea[aria-label="New text"]')),'inline editor visible');await settled();const edit=row().querySelector('textarea');const set=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set;
   await measure('message.edit-text',()=>{set.call(edit,'Edited exact action target');edit.dispatchEvent(new Event('input',{bubbles:true}));},()=>edit.value==='Edited exact action target','edited text visible');await measure('message.edit-save',()=>[...row().querySelectorAll('button')].find(b=>label(b)==='Save').click(),()=>!row().querySelector('textarea')&&row().textContent.includes('Edited exact action target'),'authoritative edited text replaces editor',()=>message.body==='Edited exact action target'&&!row().querySelector('textarea'));
-  await menu();await measure('message.details-open',()=>item('Details').click(),()=>visibleText('Message details'),'exact message details visible');await settled();const detail=[...scope().querySelectorAll('[role="dialog"]')].find(d=>d.textContent.includes('Message details'));assert(detail.textContent.includes(message.id),'details wrong ID');await measure('message.details-close',()=>detail.querySelector('button[aria-label="Close"]').click(),()=>detail.hasAttribute('data-ending-style')||!detail.isConnected,'details closing feedback',()=>!detail.isConnected);
+  await menu();await measure('message.details-open',()=>item('Details').click(),()=>visibleText('Message details'),'exact message details visible');await settled();const detail=[...scope().querySelectorAll('[role="dialog"]')].find(d=>d.textContent.includes('Message details'));assert(detail.textContent.includes(message.id),'details wrong ID');{const sm=detail.querySelector('details>summary');if(sm){const box=sm.parentElement;await measure('message.details-technical',()=>sm.click(),()=>box.open&&onScreen(box.querySelector('dl')),'technical details expanded in this sheet');}}await measure('message.details-close',()=>detail.querySelector('button[aria-label="Close"]').click(),()=>detail.hasAttribute('data-ending-style')||!detail.isConnected,'details closing feedback',()=>!detail.isConnected);
   for(const admin of [false,true]){overview.role=admin?'admin':'member';Object.assign(message,{state:'failed',delivery:'failed',detail:'send_error:relay_quota: Synthetic producer reason.',state_text:'Not sent'});emit();await until(()=>row().querySelector('[data-send-error="relay_quota"]'),'producer error projection');const error=row().querySelector('[data-send-error="relay_quota"]');assert(!![...error.querySelectorAll('button')].find(b=>label(b)==='Open Storage')===admin,'admin/member storage action mismatch');await measure('retry.exact-'+(admin?'admin':'member'),()=>[...error.querySelectorAll('button')].find(b=>label(b)==='Retry this message').click(),()=>!!error.querySelector('button:disabled'),'retry visibly pending',()=>!row().querySelector('[data-send-error]')&&message.state==='queued');}
   await menu();await measure('message.copy-feedback',()=>item('Copy text').click(),()=>visibleText('Copied')||visibleText('Couldn’t copy here'),'clipboard outcome visible; OS clipboard persistence is separate');assert(visibleText('Couldn’t copy here')&&reports.copyAttempts.at(-1).text===message.body,'copy presentation must preserve exact original and surface synthetic refusal');reports.clipboardOutcome='synthetic refusal; OS clipboard untouched';await settled();
   await menu();await measure('message.select',()=>item('Select').click(),()=>visibleText('1 message selected')&&!!item('Stop selecting'),'exact message selected with explicit exit');await settled();
   const move=item('Move to topic');if(move){await measure('message.organize-open',()=>move.click(),()=>visibleText('Move selected messages'),'organization review for selected original visible');await settled();const organize=[...scope().querySelectorAll('[role="dialog"]')].find(d=>d.textContent.includes('Move selected messages'));assert(organize.textContent.includes('Edited exact action target'),'organization lost exact original');await measure('message.organize-cancel',()=>[...organize.querySelectorAll('button')].find(b=>label(b)==='Cancel').click(),()=>organize.hasAttribute('data-ending-style')||!organize.isConnected,'organization cancelled without applying move',()=>!organize.isConnected);await settled();}
   await measure('message.selection-stop',()=>item('Stop selecting').click(),()=>!item('Stop selecting')&&!!root.querySelector('[data-part="composer"]'),'selection exits to original composer');
+  // Timeline navigation (Conversation.timeline.tsx:279-306,312,436-442), all on the exact rows:
+  // Earlier messages adds an older page; ReplyQuote (Message.tsx:293-303) jumps to and flashes the exact parent;
+  // Latest returns the action target into view for the delete flow.
+  {const C='agentnet:internal/ui/web/src/features/Conversation.timeline.tsx#jump/button/onClick#',ctl=id=>[...root.querySelectorAll('button')].find(b=>shown(b)&&b.getAttribute('data-an-control')===id);
+   const mounted=()=>[...root.querySelectorAll('[data-mid]')].map(e=>view.messages.findIndex(m=>m.id===e.dataset.mid||m.lid===e.dataset.mid)).filter(i=>i>=0);
+   await settled();if(ctl(C+'1')){const min=Math.min(...mounted());await measure('history.earlier-page',()=>ctl(C+'1').click(),()=>Math.min(...mounted())<min,'an older page of exact messages appears above');}
+   const parentId=message.quote,qb=parentId&&row()&&[...row().querySelectorAll('button')].find(b=>b.getAttribute('data-an-control')==='agentnet:internal/ui/web/src/features/Message.tsx#ReplyQuote/button/onClick#1');
+   if(qb){const pel=()=>root.querySelector('[data-message-ids~="'+CSS.escape(parentId)+'"]')||root.querySelector('[data-mid="'+CSS.escape(parentId)+'"]');
+    const flashed=()=>{const e=pel();return !!e&&onScreen(e)&&e.getAnimations().some(a=>a.playState==='running'&&(a.effect?.getKeyframes?.()||[]).some(k=>'backgroundColor' in k));};
+    await measure('message.reply-quote-jump',()=>qb.click(),flashed,'exact quoted parent placed on screen and flashed');
+    await until(()=>ctl(C+'3'),'latest control after the jump',3000);
+    await measure('history.latest',()=>ctl(C+'3').click(),()=>onScreen(row()),'latest messages with the action target back in view');await settled();}}
   await menu();await measure('message.delete-confirm',()=>item('Delete…').click(),()=>visibleText('Delete this message?'),'delete requires concrete confirmation');await settled();const confirm=[...scope().querySelectorAll('[role="alertdialog"]')].find(shown);await measure('message.delete-cancel',()=>[...confirm.querySelectorAll('button')].find(b=>label(b)==='Keep it').click(),()=>confirm.hasAttribute('data-ending-style')||!confirm.isConnected,'cancel starts closing',()=>!confirm.isConnected);assert(!message.deleted,'cancel deleted message');await menu();item('Delete…').click();await until(()=>visibleText('Delete this message?'),'second explicit delete confirmation');const deleting=[...scope().querySelectorAll('[role="alertdialog"]')].find(shown);await measure('message.delete',()=>item('Delete').click(),()=>deleting.hasAttribute('data-ending-style')||!deleting.isConnected,'explicit delete starts closing confirmation',()=>!!message.deleted&&row().textContent.includes('Message deleted'));
   // A deleted chat leaves the list and closes before the server answers, stays
   // gone with the answer held, and comes back with the reason when refused.
@@ -369,7 +551,17 @@ try {
   const chatOpen=()=>!!root.querySelector('button[aria-label="Back to chats"]');
   const askDeleteChat=async()=>{await settled();await until(()=>[...root.querySelectorAll('button')].some(b=>shown(b)&&label(b)==='More'),'chat menu');[...root.querySelectorAll('button')].find(b=>shown(b)&&label(b)==='More').click();await until(()=>item('Delete conversation…'),'delete conversation item');item('Delete conversation…').click();await until(()=>[...scope().querySelectorAll('[role="alertdialog"]')].find(shown),'delete conversation confirmation');await settled();return [...scope().querySelectorAll('[role="alertdialog"]')].find(shown);};
   chatDeleteFailure=true;let confirmChat=await askDeleteChat();
-  await measure('chat.delete-refused',()=>[...confirmChat.querySelectorAll('button')].find(b=>label(b)==='Delete').click(),()=>innerWidth<1024?visibleText('Synthetic delete refusal'):!chatRow(),innerWidth<1024?'phone: the refusal says why, with the chat still there':'chat leaves the list before the refusal',()=>visibleText('Synthetic delete refusal')&&(innerWidth<1024?!!chatRow()||chatOpen():!!chatRow()&&onScreen(row())));
+  const deletedConv=root.querySelector('form[data-conv]')?.dataset.conv;assert(deletedConv,'chat being deleted is open');
+  {const pane=root.querySelector('form[data-conv="'+CSS.escape(deletedConv)+'"]')?.closest('[data-card],[data-swap-side]');assert(root.querySelectorAll('form[data-conv]').length===1&&!!pane&&pane.textContent.includes('Vitalii'),'the one open composer belongs to the selected synthetic chat');}
+  // The closed chat stays mounted, inert and aria-hidden, while it animates away
+  // (Motion.tsx Swap leaving side; App.tsx phone Card), and a quick refusal reopens it
+  // first: what must change at once is what is shown, not what is mounted.
+  const anyShown=selector=>[...root.querySelectorAll(selector)].some(shown);
+  // The chat list itself (ChatList.tsx section, rendered even when empty) is shown —
+  // not inert behind the dialog or under a phone card — and the exact chat is gone from it.
+  const shownList=()=>[...root.querySelectorAll('section[aria-label="Chats"][data-part="list"]')].filter(shown);
+  const deletedChatLeft=()=>{const lists=shownList();return lists.length===1&&![...lists[0].querySelectorAll('[data-part="chat-row"]')].some(b=>b.textContent.includes('Vitalii'))&&!chatRow()&&!anyShown('form[data-conv="'+CSS.escape(deletedConv)+'"]')&&(innerWidth>=1024||!anyShown('button[aria-label="Back to chats"]'));};
+  await measure('chat.delete-refused',()=>[...confirmChat.querySelectorAll('button')].find(b=>label(b)==='Delete').click(),brief(deletedChatLeft),innerWidth<1024?'phone: chat leaves and closes before the refusal, then returns with why':'chat leaves the list before the refusal',()=>visibleText('Synthetic delete refusal')&&anyShown('form[data-conv="'+CSS.escape(deletedConv)+'"]')&&(innerWidth<1024?anyShown('button[aria-label="Back to chats"]'):!!chatRow()&&onScreen(row())));
   chatDeleteFailure=false;let releaseChatDelete;chatDeleteHold=new Promise(r=>releaseChatDelete=r);confirmChat=await askDeleteChat();
   await measure('chat.delete',()=>[...confirmChat.querySelectorAll('button')].find(b=>label(b)==='Delete').click(),()=>innerWidth<1024?!chatOpen()&&!chatRow():!chatRow()&&!onScreen(row()),'chat leaves the list and closes with the server answer held');
   // Any write still unanswered also says so, wherever the person has gone since.
@@ -807,14 +999,16 @@ try {
    await fill('outbox.schedule-edit-text',active('textarea[aria-label="Scheduled message text"]'),'Edited scheduled fixture');
    await tap('outbox.audience-review',control('Review audience'),()=>!!control('Confirm reviewed audience'),'current audience review visible');
    await tap('outbox.audience-confirm',control('Confirm reviewed audience'),()=>!control('Confirm reviewed audience'),'reviewed audience explicitly selected');
-   await tap('outbox.schedule-save',control('Save schedule changes'),()=>!active('textarea[aria-label="Scheduled message text"]')&&schedules[0].body==='Edited scheduled fixture','exact schedule revision saved');
+   // A row's action shows on that exact row before the server answers (Composer.schedule.tsx action/renderRow).
+   const scheduleStatus=(body,text)=>[...root.querySelectorAll('article[aria-label^="Scheduled message:"]')].some(a=>a.textContent.includes(body)&&a.querySelector('[role="status"]')?.textContent===text);
+   await tap('outbox.schedule-save',control('Save schedule changes'),brief(()=>!active('textarea[aria-label="Scheduled message text"]')&&scheduleStatus('Edited scheduled fixture','Saving…')),'exact row shows Saving… with the edited text; revision saved',()=>!active('textarea[aria-label="Scheduled message text"]')&&schedules[0].body==='Edited scheduled fixture');
    await tap('outbox.schedule-edit-again',control('Edit schedule'),()=>!!active('textarea[aria-label="Scheduled message text"]'),'same row edit visible');
    await tap('outbox.schedule-keep',control('Keep saved schedule'),()=>!active('textarea[aria-label="Scheduled message text"]'),'edit cancelled without mutation');
    await tap('outbox.schedule-reopen-for-cancel',control('Edit schedule'),()=>!!control('Cancel schedule'),'specific schedule expanded for cancellation');
-   scheduleListFailure=true;await tap('outbox.schedule-cancel',control('Cancel schedule'),()=>schedules[0].state==='cancelled'&&!root.textContent.includes('Edited scheduled fixture'),'exact schedule cancelled and active row removed');await until(()=>visibleText('This list could not refresh'),'cancel kept with the list unread');scheduleListFailure=false;
+   scheduleListFailure=true;await tap('outbox.schedule-cancel',control('Cancel schedule'),brief(()=>scheduleStatus('Edited scheduled fixture','Cancelling…')),'exact row shows Cancelling…; schedule cancelled and active row removed',()=>schedules[0].state==='cancelled'&&!root.textContent.includes('Edited scheduled fixture'));await until(()=>visibleText('This list could not refresh'),'cancel kept with the list unread');scheduleListFailure=false;
    const remainingSchedule=schedules[1];await tap('outbox.schedule-sendnow-open',control('Edit schedule'),()=>!!control('Send now'),'other exact pending schedule details visible');
    const recipients=active('article details');await tap('outbox.schedule-recipients',recipients.querySelector('summary'),()=>recipients.open,'captured audience disclosed');
-   await tap('outbox.schedule-sendnow',control('Send now'),()=>remainingSchedule.state==='sent'&&!control('Send now'),'exact revision dispatched, delivery separately confirmed');
+   await tap('outbox.schedule-sendnow',control('Send now'),brief(()=>scheduleStatus(remainingSchedule.body,'Preparing to send')),'exact row shows Preparing to send; revision dispatched, delivery separately confirmed',()=>remainingSchedule.state==='sent'&&!control('Send now'));
    await tap('outbox.reminders-tab',control(/^Reminders/),()=>!!control(/^Reminder done:/),'due reminder list visible');
    const find=active('input[placeholder="Message or sender"]');await fill('outbox.reminder-search',find,'absent fixture',()=>visibleText('No reminders match your search.'),'reminder no-results state');await fill('outbox.reminder-search-clear',find,'',()=>!!control(/^Reminder done:/),'reminder rows restored');
    await tap('outbox.reminder-details',control('Details'),()=>!!sheet('Reminder'),'exact reminder details visible');
@@ -824,11 +1018,12 @@ try {
 
    await tap('outbox.reminder-move-open',control('Later…',sheet('Reminder'))||control('Change…',sheet('Reminder')),()=>!!sheet('Move the reminder'),'reminder reschedule sheet visible');
    await tap('outbox.reminder-preset',[...sheet('Move the reminder').querySelectorAll('label')].find(l=>l.textContent.includes('In 2 hours'))?.querySelector('input'),()=>[...sheet('Move the reminder').querySelectorAll('label')].find(l=>l.textContent.includes('In 2 hours'))?.querySelector('input')?.checked,'future reminder preset selected');
-   await tap('outbox.reminder-move-save',control('Move it'),()=>!sheet('Move the reminder')&&!overview.reminders[0].overdue,'rescheduled reminder clears old attention');await retire();
+   const reminderPending=(id,text)=>[...root.querySelectorAll('[data-reminder-change]')].some(e=>e.dataset.reminderChange===id&&e.getAttribute('role')==='status'&&e.textContent.includes(text));
+   const moveID=overview.reminders[0].message;await tap('outbox.reminder-move-save',control('Move it'),brief(()=>!sheet('Move the reminder')&&reminderPending(moveID,'Saving reminder…')),'exact reminder shows Saving reminder…; rescheduled reminder clears old attention',()=>!sheet('Move the reminder')&&!overview.reminders[0].overdue);await retire();
    if(sheet('Reminder'))await closeSheet('outbox.reminder-detail-close','Reminder');
-   const done=control(/^Reminder done:/),id=overview.reminders[0].message;await tap('outbox.reminder-done',done,()=>!overview.reminders.some(r=>r.message===id)&&!control('Reminder done: Fixture overdue reminder'),'exact reminder cleared after API result');
+   const done=control(/^Reminder done:/),id=overview.reminders[0].message;await tap('outbox.reminder-done',done,brief(()=>reminderPending(id,'Removing reminder…')),'exact reminder shows Removing reminder…; cleared after API result',()=>!overview.reminders.some(r=>r.message===id)&&!control('Reminder done: Fixture overdue reminder'));
    await tap('outbox.remaining-reminder-details',control('Details'),()=>!!sheet('Reminder'),'remaining exact reminder details visible');
-   const cancelID=overview.reminders[0].message;await tap('outbox.reminder-cancel',control('Cancel',sheet('Reminder')),()=>!overview.reminders.some(r=>r.message===cancelID)&&visibleText('No reminders pending on this device.'),'exact future reminder cancelled, no reminder remains');
+   const cancelID=overview.reminders[0].message;await tap('outbox.reminder-cancel',control('Cancel',sheet('Reminder')),brief(()=>reminderPending(cancelID,'Removing reminder…')),'exact reminder shows Removing reminder…; cancelled, no reminder remains',()=>!overview.reminders.some(r=>r.message===cancelID)&&visibleText('No reminders pending on this device.'));
 
   }
   if(suite==='profile'){
@@ -1323,7 +1518,8 @@ try {
  reports.families={};for(const family of new Set(reports.actions.map(a=>a.id.split('.')[0]))){const actions=reports.actions.filter(a=>a.id.split('.')[0]===family&&(a.ok||a.stateVerified));const values=actions.map(a=>a.feedbackMs);reports.families[family]={samples:values.length,p50:percentile(values,.5),p95:percentile(values,.95),max:values.length?Math.max(...values):null};}
  reports.routineOver200ms=reports.actions.filter(a=>(a.ok||a.stateVerified)&&a.feedbackMs>200&&!a.id.startsWith('presence.')&&!a.id.startsWith('sync.')).map(({id,feedbackMs,visibleMs,paintMs,frameMaxMs})=>({id,feedbackMs,visibleMs,paintMs,frameMaxMs}));
  reports.smooth=reports.routineOver200ms.length===0;reports.timingMeaning='family percentiles pool different named controls in one pass; not repeated per-control statistical confidence. Under 1000ms is the owner’s local-feedback acceptance ceiling; routine feedback above200ms is retained as an additional diagnostic. Background completion is measured separately.';
- if(!writeDelay)assert(reports.feedbackFailures.length===0,reports.feedbackFailures.join('; '));
+ // Held writes are no exemption: local feedback stays under the owner's bound.
+ assert(reports.feedbackFailures.length===0,reports.feedbackFailures.join('; '));
  // With every write held, each control that writes still changes on screen in time.
  if(writeDelay)assert(!(reports.writeRows||[]).some(r=>!(r.firstStructuralMs<1000)),'Silent while the server is slow: '+(reports.writeRows||[]).filter(r=>!(r.firstStructuralMs<1000)).map(r=>r.id).join(', '));
  assert(reports.pageErrors.length===0,'Runtime errors: '+reports.pageErrors.join('; '));return {ok:true,...reports};
@@ -1335,6 +1531,7 @@ const selectedSuite=window.__agentnetLatencySuite||new URL(location.href).search
 const vectors=selectedSuite==='topics'?['','direct','personal','bulk']:selectedSuite==='compose'?['','schedule']:selectedSuite==='outbox'?['','reminder']:[''];
 const completed=[];
 for(const vector of vectors){
+ if(globalThis.__anNamedStop)break;
  if(completed.length){window.__agentnetLatencyDispose?.();delete window.__agentnetLatencyDispose;}
  const old=document.querySelector('#fixture');old.replaceWith(old.cloneNode(false));
  const report=await runVector(vector);for(const action of report.actions)action.vector=vector||'baseline';completed.push(report);
