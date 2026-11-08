@@ -754,15 +754,17 @@ func sentence(err error) string {
 	if client.RefusedUntilUpdate(err) {
 		return "This device needs the latest AgentNet. Update it, then try again."
 	}
-	if client.TechnicalError(err) {
-		return "AgentNet could not finish this just now. Try again."
-	}
+	// Storage and size come first: a syscall.Errno such as ENOSPC is also a
+	// net.Error, so the technical sentence would hide what the person can fix.
 	if errors.Is(err, syscall.ENOSPC) {
 		return "This device is out of storage. Free disk space, then try again."
 	}
 	var size *client.FileSizeError
 	if errors.As(err, &size) {
 		return "This file exceeds this device's file-size limit. Choose a smaller file."
+	}
+	if client.TechnicalError(err) {
+		return "AgentNet could not finish this just now. Try again."
 	}
 	var update *client.NeedsUpdateError
 	if errors.As(err, &update) {

@@ -9,12 +9,16 @@ import model from './comic_model.mjs';
 import {pendingSends} from '../static/optimistic.mjs';
 import {share} from '../web/src/structural.ts';
 import {mainPreferences,personRoots} from '../skins/shared/person-topics.mjs';
+import {savedSendDrafts,readPending} from '../web/src/send-journal.mjs';
+import {savedReadOnly,readOnlyTitle} from '../web/src/saved-storage.ts';
+// store.ts now saves drafts through these (B5/B6); the sandbox gets the real modules, its own storage and a window stub.
+const savedPrelude="var savedStorage=()=>localStorage;if(typeof window==='undefined')globalThis.window={addEventListener(){},removeEventListener(){}};\n";
 const scheduleSource=stripTypeScriptTypes((await readFile(new URL('../web/src/schedule-saves.ts',import.meta.url),'utf8'))
  .replace(/^import .*;$/gm,'')).replace(/^export /gm,'');
 const source=stripTypeScriptTypes((await readFile(new URL('../web/src/store.ts',import.meta.url),'utf8'))
  .replace(/^import .*;$/gm,'').replace('constructor(readonly host: Host) {','constructor(host: Host) { this.host = host;')).replace(/^export /gm,'');
 const visibilityListeners=new Map(),focusListeners=new Map();
-const Store=runInNewContext(scheduleSource+'\n'+source+'\nStore',{api,errorText,pendingSends,share,messageTarget:model.messageTarget,currentCatalogAgents:model.currentCatalogAgents,directChatKey:model.directChatKey,mainPreferences,personRoots,brand:{storage:'test'},document:{visibilityState:'visible',hasFocus:()=>true,addEventListener:(type,fn)=>visibilityListeners.set(type,fn),removeEventListener:type=>visibilityListeners.delete(type)},window:{addEventListener:(type,fn)=>focusListeners.set(type,fn),removeEventListener:type=>focusListeners.delete(type)},localStorage:{getItem:()=>null,setItem:()=>{}},setTimeout,clearTimeout});
+const Store=runInNewContext(savedPrelude+scheduleSource+'\n'+source+'\nStore',{api,errorText,pendingSends,share,messageTarget:model.messageTarget,currentCatalogAgents:model.currentCatalogAgents,directChatKey:model.directChatKey,mainPreferences,personRoots,savedSendDrafts,readPending,savedReadOnly,readOnlyTitle,brand:{storage:'test'},document:{visibilityState:'visible',hasFocus:()=>true,addEventListener:(type,fn)=>visibilityListeners.set(type,fn),removeEventListener:type=>visibilityListeners.delete(type)},window:{addEventListener:(type,fn)=>focusListeners.set(type,fn),removeEventListener:type=>focusListeners.delete(type)},localStorage:{getItem:()=>null,setItem:()=>{}},setTimeout,clearTimeout});
 const tick=()=>new Promise(r=>setImmediate(r)),gate=()=>{let release;const promise=new Promise(r=>release=r);return{promise,release};};
 // These small fixtures present every row of the selected topic. The actual
 // timeline supplies this viewport input through its one observer.

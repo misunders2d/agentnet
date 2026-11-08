@@ -9,6 +9,10 @@ import model from './comic_model.mjs';
 import { pendingSends } from '../static/optimistic.mjs';
 import { share } from '../web/src/structural.ts';
 import { mainPreferences, personRoots } from '../skins/shared/person-topics.mjs';
+import {savedSendDrafts,readPending} from '../web/src/send-journal.mjs';
+import {savedReadOnly,readOnlyTitle} from '../web/src/saved-storage.ts';
+// store.ts now saves drafts through these (B5/B6); the sandbox gets the real modules, its own storage and a window stub.
+const savedPrelude="var savedStorage=()=>localStorage;if(typeof window==='undefined')globalThis.window={addEventListener(){},removeEventListener(){}};\n";
 const { messageTarget, currentCatalogAgents } = model;
 
 const scheduleSource = stripTypeScriptTypes((await readFile(new URL('../web/src/schedule-saves.ts', import.meta.url), 'utf8'))
@@ -65,7 +69,7 @@ async function storeJourney(platform) {
     },
   };
   const { native, ...globals } = env;
-  const Store = runInNewContext(scheduleSource + '\n' + storeSource + '\nStore', { ...globals, api, errorText, pendingSends, share, messageTarget, currentCatalogAgents, mainPreferences, personRoots, brand: { storage: 'agentnet.messenger' } });
+  const Store = runInNewContext(savedPrelude+scheduleSource + '\n' + storeSource + '\nStore', { ...globals, api, errorText, pendingSends, share, messageTarget, currentCatalogAgents, mainPreferences, personRoots,savedSendDrafts,readPending,savedReadOnly,readOnlyTitle, brand: { storage: 'agentnet.messenger' } });
   const store = new Store(host);
   // Model the one presented row; page/native visibility remains a Store guard.
   const present=()=>{const o=store.get().open;if(!o)return;const visit=store.readVisit(o);if(visit)store.reportVisible(visit,store.get().views[o.id]?.messages||[]);};

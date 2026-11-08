@@ -19,6 +19,8 @@ registerHooks({load(url,context,next){
  }
  return next(specifier,context);
 }});
+// Store.start listens for other windows' draft writes (B6); this check has one window.
+globalThis.window??={addEventListener(){},removeEventListener(){}};
 const {Store,unsentIn}=await import(new URL('web/src/store.ts',root));
 const saved=new Map();globalThis.localStorage={getItem:k=>saved.get(k)||null,setItem:(k,v)=>saved.set(k,v)};
 globalThis.document={visibilityState:'visible',hasFocus:()=>true,addEventListener(){},removeEventListener(){}};
