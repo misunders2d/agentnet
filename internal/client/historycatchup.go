@@ -327,7 +327,8 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 	learned := limit
 	defer func() {
 		took := time.Since(started)
-		next := nextHistoryLimit(limit, took)
+		// The page size follows what its rows cost; the budget still bounds it.
+		next := nextHistoryLimit(limit, took-a.convWork.historyFixed(limit, took))
 		if limit < learned && took <= historyPageBudget {
 			next = max(next, learned) // the window, not this page's cost, made it small
 		}

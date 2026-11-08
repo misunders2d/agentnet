@@ -71,8 +71,13 @@ type convWork struct {
 	historyLimit     atomic.Int64 // rows in the next catch-up page; 0: historyPage
 	historyNotBefore atomic.Int64 // unix nanos: no history turn before this
 	historyCost      atomic.Int64 // nanos the last history turn took
-	sweepRestarted   time.Time    // when deferred history last restarted (mu)
-	sweepPending     bool         // evidence arrived during the wait (mu)
+	// The last catch-up page's size and cost, and what a page costs whatever
+	// its size, learned from two pages of different sizes (under mu).
+	historyLastRows  int
+	historyLastTook  time.Duration
+	historyFixedCost time.Duration
+	sweepRestarted   time.Time // when deferred history last restarted (mu)
+	sweepPending     bool      // evidence arrived during the wait (mu)
 }
 
 func (w *convWork) due(b uint32) { w.bits.Or(b) }
@@ -2080,6 +2085,22 @@ func (w *convWork) historyPageLimit() int {
 		return int(n)
 	}
 	return historyPageStart
+}
+
+// historyFixed records a catch-up page of rows that took took and returns
+// what a page costs whatever its size: part of a page (its transaction, scans
+// and window) does not shrink with fewer rows, and charging it to the rows
+// pinned pages at one row on a slow device. Two pages of different sizes
+// separate it: took = fixed + rows*perRow. Until then it is zero.
+func (w *convWork) historyFixed(rows int, took time.Duration) time.Duration {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.historyLastRows > 0 && rows > 0 && rows != w.historyLastRows {
+		perRow := max((took-w.historyLastTook)/time.Duration(rows-w.historyLastRows), 0)
+		w.historyFixedCost = min(max(took-perRow*time.Duration(rows), 0), took, w.historyLastTook)
+	}
+	w.historyLastRows, w.historyLastTook = rows, took
+	return w.historyFixedCost
 }
 
 func nextHistoryLimit(limit int, took time.Duration) int {
