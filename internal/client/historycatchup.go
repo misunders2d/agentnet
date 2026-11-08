@@ -324,7 +324,15 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 	}
 	defer release()
 	limit, started := a.convWork.historyPageLimit(), time.Now()
-	defer func() { a.convWork.historyLimit.Store(int64(nextHistoryLimit(limit, time.Since(started)))) }()
+	learned := limit
+	defer func() {
+		took := time.Since(started)
+		next := nextHistoryLimit(limit, took)
+		if limit < learned && took <= historyPageBudget {
+			next = max(next, learned) // the window, not this page's cost, made it small
+		}
+		a.convWork.historyLimit.Store(int64(next))
+	}()
 	room, e := syncWindowRoom(a.store.db, dev)
 	if e != nil {
 		return false, e
