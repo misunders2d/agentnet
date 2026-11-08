@@ -21,10 +21,14 @@ const engines = require(process.env.AGENTNET_PLAYWRIGHT || 'playwright-core'), e
    await context.close();
   }
   // A direct tab has no earlier document: Back must not disable later handling.
-  const context=await browser.newContext(),page=await context.newPage();
+  const context=await browser.newContext();let page=await context.newPage();
   await context.addCookies([{name:'agentnet_ui',value:new URL(process.argv[2]).searchParams.get('t'),url:origin,httpOnly:true,sameSite:'Strict'}]);
-  await page.route(origin+'/back-direct',r=>r.fulfill({contentType:'text/html',body:'<!doctype html><title>Direct tab fixture</title>'}));
-  await page.goto(origin+'/back-direct');
+  await context.route(origin+'/back-direct',r=>r.fulfill({contentType:'text/html',body:'<!doctype html><title>Direct tab fixture</title>'}));
+  if(engine==='webkit'){
+   // As the Chromium reset below, for WebKit (no CDP): a tab the browser opens at its URL has no earlier entry.
+   const opener=page;[page]=await Promise.all([context.waitForEvent('page'),opener.evaluate(u=>{window.open(u,'_blank','noopener');},origin+'/back-direct')]);
+   await page.waitForURL(origin+'/back-direct');await opener.close();
+  }else await page.goto(origin+'/back-direct');
   if(engine==='chromium'){const session=await context.newCDPSession(page);await session.send('Page.resetNavigationHistory');await session.detach();}
   // A person uses the page before its history entries are written, as one opening a layer does: WebKit's
   // Back skips entries a script added without user interaction (WebKit e7faecc4, wasCreatedByJSWithoutUserInteraction).
