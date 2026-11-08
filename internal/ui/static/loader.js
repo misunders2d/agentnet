@@ -26,38 +26,6 @@
   const browser = window.agentnetEngine;
   let openPortable;
 
-  // ---- one active tab for this page's saved state
-  //
-  // Drafts and send recovery live in this origin's localStorage, which has no
-  // compare-and-set between tabs or windows. As in the browser device
-  // (device.mjs, which holds its own lock before loading this file) and
-  // Telegram Web, one page is active; another waits, writing nothing, until it
-  // closes. Every host takes it, the desktop and Android shells included. A
-  // plain browser without tab locks (missing, or the request refused) is
-  // refused, as the browser device is. A native shell without them opens
-  // read-only (saved-storage.ts): refusing it would take away its update and
-  // Saved messages, and its own single-window guard cannot be relied on, so it
-  // reads saved drafts and send recovery but writes neither: no message box,
-  // no retry or discard of an unsent message (Cancel holds it).
-  if (!browser) {
-    const native = typeof window.__agentnetNativeAppJSON === "function" || window.__agentnetPlatform === "android";
-    const say = (text) => { const p = document.createElement("p"); p.setAttribute("role", "status");
-      p.style.cssText = "margin:2rem auto;max-width:32rem;padding:0 1rem;font:16px/1.5 system-ui,sans-serif"; p.textContent = text; document.body.prepend(p); return p; };
-    let granted = false, note = null, refused = !navigator.locks;
-    if (!refused) {
-      const held = new Promise((resolve, reject) => {
-        try { navigator.locks.request("agentnet-local-ui", () => { granted = true; resolve(); return new Promise(() => {}); }).catch(reject); } catch (e) { reject(e); }
-      });
-      const later = setTimeout(() => { if (!granted) note = say("AgentNet is open in another tab or window. Use that one, or close it to continue here: this one waits and changes nothing."); }, 300);
-      try { await held; } catch { refused = true; }
-      clearTimeout(later); note?.remove();
-    }
-    if (refused) {
-      window.__agentnetSingleWindow = native ? "readonly" : "none";
-      if (!native) { say("This browser cannot run AgentNet here: it lacks tab locks, so two tabs could overwrite each other's drafts. Try an up-to-date browser."); return; }
-    } else window.__agentnetSingleWindow = "lock";
-  }
-
   // ---- what the page waits for, and how long
   //
   // A stalled connection or proxy can hold one request without failing it.
@@ -105,6 +73,39 @@
     fit();
   };
   if (window.visualViewport) fitViewport(window.visualViewport);
+
+  // ---- one active tab for this page's saved state
+  //
+  // Drafts and send recovery live in this origin's localStorage, which has no
+  // compare-and-set between tabs or windows. As in the browser device
+  // (device.mjs, which holds its own lock before loading this file) and
+  // Telegram Web, one page is active; another waits, writing nothing, until it
+  // closes. Every host takes it, the desktop and Android shells included. A
+  // plain browser without tab locks (missing, or the request refused) is
+  // refused, as the browser device is. A native shell without them opens
+  // read-only (saved-storage.ts): refusing it would take away its update and
+  // Saved messages, and its own single-window guard cannot be relied on, so it
+  // reads saved drafts and send recovery but writes neither: no message box,
+  // no retry or discard of an unsent message (Cancel holds it).
+  if (!browser) {
+    const native = typeof window.__agentnetNativeAppJSON === "function" || window.__agentnetPlatform === "android";
+    const say = (text) => { const p = document.createElement("p"); p.setAttribute("role", "status");
+      p.style.cssText = "margin:2rem auto;max-width:32rem;padding:0 1rem;font:16px/1.5 system-ui,sans-serif"; p.textContent = text; document.body.prepend(p); return p; };
+    let granted = false, note = null, refused = !navigator.locks;
+    if (!refused) {
+      const held = new Promise((resolve, reject) => {
+        try { navigator.locks.request("agentnet-local-ui", () => { granted = true; resolve(); return new Promise(() => {}); }).catch(reject); } catch (e) { reject(e); }
+      });
+      const later = setTimeout(() => { if (!granted) note = say("AgentNet is open in another tab or window. Use that one, or close it to continue here: this one waits and changes nothing."); }, 300);
+      try { await held; } catch { refused = true; }
+      clearTimeout(later); note?.remove();
+    }
+    if (refused) {
+      window.__agentnetSingleWindow = native ? "readonly" : "none";
+      if (!native) { say("This browser cannot run AgentNet here: it lacks tab locks, so two tabs could overwrite each other's drafts. Try an up-to-date browser."); return; }
+    } else window.__agentnetSingleWindow = "lock";
+  }
+
   // The catalog is asked for here, alongside the host's own modules, and
   // after the viewport fitting: nothing that can fail comes before that.
   const catalogAsked = Date.now();
@@ -188,6 +189,8 @@
     openLink: (value) => openPortable(value),
     ...(window.__agentnetPlatform === "android" ? { platform: "android", android: window.__agentnetAndroid, onBack: window.__agentnetOnBack } : {}),
     ...(typeof window.__agentnetNativeClipboardImage === "function" ? { clipboardImage: () => window.__agentnetNativeClipboardImage() } : {}),
+    // A native window without tab locks writes no saved drafts or sends (above; saved-storage.ts).
+    ...(window.__agentnetSingleWindow === "readonly" ? { savedReadOnly: true } : {}),
     // Computer-wide app actions stay on this loopback origin; switching a
     // workspace never sends an updater request to a remote membership.
     appControlsAvailable: !!nativeAppJSON,

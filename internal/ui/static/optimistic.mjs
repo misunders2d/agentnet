@@ -56,10 +56,10 @@ export function pendingSends(host, changed = () => {}, restoreDraft, captureQueu
     // A row held here is stopped even before the host's refreshed row arrives.
     const prior = actions.get(m.id), stopped = m.queued_send.state === 'needs_review' || prior?.kind === 'hold' && prior.detail !== undefined;
     if (prior?.kind === 'hold' && prior.detail === undefined) return; // one hold at a time; its receipt decides
-    // A read-only window (loader: no one-window lock in a native shell) saves no
+    // A read-only window (host.savedReadOnly: no one-window lock in a native shell) saves no
     // draft: it sends nothing again and discards no original it could not put
     // back. Cancel holds instead, as for an original whose files are gone.
-    const readOnly = globalThis.__agentnetSingleWindow === 'readonly';
+    const readOnly = host.savedReadOnly === true;
     if (readOnly && (kind === 'retry' || stopped)) throw new Error('This message can’t be retried or discarded in this window: drafts are read-only here. It stays as it is.');
     if (kind === 'discard' && !stopped && !readOnly) {
       const prior = drafts.get(m.id)?.value;
@@ -100,7 +100,7 @@ export function pendingSends(host, changed = () => {}, restoreDraft, captureQueu
     const stopped = (m.queued_send.state === 'needs_review' || action?.kind === 'hold' && !holding) && action?.kind !== 'retry';
     const waiting = !stopped && !action && m.queued_send.state === 'pending' && m.detail;
     // A read-only window (see act) offers no Retry or Discard on a stopped message and says so.
-    const readOnly = globalThis.__agentnetSingleWindow === 'readonly', kept = readOnly && stopped;
+    const readOnly = host.savedReadOnly === true, kept = readOnly && stopped;
     return {...m, _local: true, _failed: stopped, delivery: stopped ? 'failed' : 'queued', state_text: holding ? 'Stopping…' : kept ? 'Stopped and kept. Drafts are read-only in this window, so it can’t be retried or discarded here.' : stopped ? (action?.kind === 'hold' && m.queued_send.state !== 'needs_review' ? action.detail || 'Stopped.' : m.detail || 'Not sent.') : waiting || 'Sending…',
       _retry: kept ? undefined : () => act('retry', m, key), _discard: holding || kept ? undefined : () => act('discard', m, key), _diagnostic: m.queued_send.diagnostic,
       can: [], actions: [], copies: [], reactions: []};

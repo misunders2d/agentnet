@@ -1,11 +1,12 @@
 // Drafts, the send journal and send recovery live in this origin's localStorage,
 // which has no compare-and-set between windows: one window writes them (the
 // loader's one-window lock). A native shell whose web view cannot take that lock
-// opens read-only (loader: __agentnetSingleWindow "readonly"): it reads saved
+// opens read-only (the host's savedReadOnly, set at mount): it reads saved
 // state and never writes it, so another window's drafts and saved sends stay as
 // they are. Reading, Settings and updates are unaffected.
-export const savedReadOnly = (): boolean =>
-  (globalThis as { __agentnetSingleWindow?: string }).__agentnetSingleWindow === "readonly";
+let readOnly = false;
+export const setSavedReadOnly = (on: boolean): void => { readOnly = on; };
+export const savedReadOnly = (): boolean => readOnly;
 
 export const readOnlyTitle = "Drafts are read-only in this window";
 export const readOnlyDetail = "AgentNet can’t make sure this is its only window here, so this window doesn’t write drafts or saved sends: the message box is off, saved messages can be read and copied, and an unsent message can be stopped but not retried or discarded. Other chat actions and Settings, with updates, work as usual.";
