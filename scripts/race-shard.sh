@@ -33,14 +33,14 @@ run_partition() {
 				if ($0=="TestP6FixLocalAndNestedHarnessUseRealCLI") part=14
 				if ($0=="TestLocalHelperOutlivesItsCoordinatorsRun") part=2
 				if ($0=="TestDMLiveAgentContext") part=16
-				if ($0=="TestOwnPersonTasksDirectAndGroup") part=17
+				if ($0=="TestOwnPersonTasksDirectAndGroup") part=8
 				if ($0=="TestRoomReciprocalRootQuestions") part=10
 				if ($0=="TestTopicTransferWholeSnapshotCapacityAndRetry") part=9
 				if ($0=="TestRoomBusyAncestorCallback") part=5
 				if ($0=="TestHistoryArchiveImportedTailRemainsBounded") part=12
 				if ($0=="TestTopicTransferThousandRowsUsesBoundedApply") part=11
-				if ($0=="TestGroupInteractionVisitorLargeCurrentContext") part=11
-				if ($0=="TestNativeCursorSuppliesDeferredParentAttachments") part=7
+				if ($0=="TestGroupInteractionVisitorLargeCurrentContext") part=16
+				if ($0=="TestNativeCursorSuppliesDeferredParentAttachments") part=0
 				if ($0=="TestP6FixAnswerAudienceAndStoredReply") part=3
 				if ($0=="TestNamedAgentExecutedRequestAuthorship") part=6
 				if ($0=="TestAgentRoomAskPostsAsAgentInSessionTopic") part=11
@@ -50,13 +50,13 @@ run_partition() {
 				if ($0=="TestTopicGuestInvitesOwnAgent") part=9
 				if ($0=="TestConversationResourcesDoNotConsumeSelectedHistorySlots") part=7
 				if ($0=="TestGroupParticipationFilesLateLinkedRequestAndNamedOutput") part=14
-				if ($0=="TestGroupInteractionNamedMemberAndVisitor") part=17
+				if ($0=="TestGroupInteractionNamedMemberAndVisitor") part=14
 				if ($0=="TestGoogleReviewIntentRetry") part=0
 				if ($0=="TestGroupHistoryWitnessGuestDerivedParent") part=13
 				if ($0=="TestGroupParticipationHistoryDismissedLinkedRestartReorder") part=12
 				if ($0=="TestProposalRefusesAgentHostAndRemovedPhone") part=11
 				if ($0=="TestReceiverRemoteGroupNamedNativeMemberVisitor") part=13
-				if ($0=="TestGroupGuestCapturedMessageControls") part=12
+				if ($0=="TestGroupGuestCapturedMessageControls") part=1
 				if ($0=="TestGroupParticipationHistoryAfterHostReadmission") part=11
 				if ($0=="TestAgentRoomAskVisitsAnotherPersonsAgent") part=8
 				if ($0=="TestSharedTopicExactGuestLiveAndHistorical") part=17
@@ -64,6 +64,9 @@ run_partition() {
 				if ($0=="TestSelfConsentLinkedDevices") part=16
 				if ($0=="TestGroupSendAsksRostersTogether") part=10
 				if ($0=="TestGroupInvitationAsksEachCheckOnce") part=17
+				if ($0=="TestOwnGroupRequestDecisionNamesSharedRequest") part=5
+				if ($0=="TestNativeCursorReceivesVerifiedEditAndDeletion") part=2
+				if ($0=="TestHistoryContributionSelectedFilesAndGuestAuthority") part=4
 			}
 			if (client && n==12) {
 				if ($0=="TestGroupInteractionNamedMemberAndVisitor") part=1

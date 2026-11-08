@@ -38,7 +38,11 @@ const server=http.createServer((req,res)=>{if(req.url==='/entry.mjs'){res.setHea
   const page=await browser.newPage({viewport:{width,height:900}}),errors=[];page.on('pageerror',e=>errors.push(String(e)));page.setDefaultTimeout(5000);
   await page.goto('http://127.0.0.1:'+server.address().port+'/?view='+view);
   const refuse=()=>page.getByRole('button',{name:/^(No, refuse it|Refuse)$/});await refuse().waitFor();
-  const started=Date.now();await refuse().click();await page.getByRole('region',{name:'Pending device decisions'}).waitFor({timeout:500});const feedbackMs=Date.now()-started;assert(feedbackMs<500,JSON.stringify({width,view,feedbackMs}));
+  // Click the visible moving card as a person can; locator.click() waits for
+  // its entrance animation to finish before it even dispatches the input (as group_decisions_rendered).
+  const point=await refuse().evaluate(button=>{button.addEventListener('click',e=>{fixture.input={at:performance.now(),trusted:e.isTrusted}},{once:true,capture:true});const r=button.getBoundingClientRect();return{x:r.left+r.width/2,y:r.top+r.height/2}});
+  const started=Date.now();await page.mouse.click(point.x,point.y);await page.getByRole('region',{name:'Pending device decisions'}).waitFor({timeout:500});const feedbackMs=Date.now()-started;
+  const input=await page.evaluate(()=>fixture.input);assert(input?.trusted,'the exact Refuse receives trusted input');assert(feedbackMs<500,JSON.stringify({width,view,feedbackMs,input}));
   if(view==='review')assert.equal(await page.getByRole('heading',{name:'Review',exact:true}).evaluate(e=>e===document.activeElement),true,'immediate decision lands keyboard focus before the reply');
   if(process.env.AGENTNET_DEVICE_DECISION_EVIDENCE)await page.screenshot({path:process.env.AGENTNET_DEVICE_DECISION_EVIDENCE+'-pending-'+view+'-'+width+'.png',fullPage:true});
   assert.equal(await refuse().count(),0,'request leaves active attention before the held decision reply');assert.equal(await page.getByLabel('Needs attention').textContent(),'0');

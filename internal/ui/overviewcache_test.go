@@ -306,9 +306,11 @@ func TestOverviewKeptSummariesMatchAFreshRead(t *testing.T) {
 	if _, err = alice.RemoveGroupMember(ctx, group, person.Person); err != nil {
 		t.Fatal(err)
 	}
+	// Only the removal itself: a group row's Role is empty while Bob is a
+	// member, and a newer head can show fewer members before its context is
+	// decryptable (client groupturns.go). former_member comes with the notice.
 	w.see("a member removed", func(o Overview) bool {
-		s := w.chat(o, group)
-		return s.ID == "" || s.Frozen != "" || len(s.Members) < 2 || s.Role != "member"
+		return w.chat(o, group).Role == "former_member"
 	})
 
 	// A new page reading the same store shows the same chats.
