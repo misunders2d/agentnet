@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -54,11 +55,22 @@ func TestUIResponsivenessRendered(t *testing.T) {
 	var reportMu sync.Mutex
 	reports := map[string][]byte{}
 	mux.HandleFunc("POST /latency-report", func(w http.ResponseWriter, r *http.Request) {
-		b, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		// Browser reports reach about 1.8 MB (teams, actions); a cut report must fail, never parse as partial success.
+		const reportCap = 8 << 20
+		b, err := io.ReadAll(io.LimitReader(r.Body, reportCap+1))
+		status := 204
+		if err != nil || len(b) > reportCap {
+			why := "report exceeded " + strconv.Itoa(reportCap) + " bytes"
+			if err != nil {
+				why = "report read failed: " + err.Error()
+			}
+			b, _ = json.Marshal(map[string]any{"ok": false, "error": "collector: " + why})
+			status = http.StatusRequestEntityTooLarge
+		}
 		reportMu.Lock()
 		reports[r.URL.Query().Get("run")] = b
 		reportMu.Unlock()
-		w.WriteHeader(204)
+		w.WriteHeader(status)
 	})
 	mux.HandleFunc("GET /latency-result", func(w http.ResponseWriter, r *http.Request) {
 		reportMu.Lock()

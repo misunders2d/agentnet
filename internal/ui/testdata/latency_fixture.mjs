@@ -570,7 +570,7 @@ try {
   Object.assign(overview.dms.find(d=>d.id===view.id),{last_at:new Date().toISOString(),last_id:'f'.repeat(32)});seq++;emit();await until(chatRow,'newer message brings the chat back during the delete',3000);
   // Deleting what came back keeps it hidden even when the first delete is then refused.
   await until(()=>chatDeleteWaiting===1,'first delete at the server',3000);chatRow().click();await until(()=>onScreen(row()),'chat that came back opens',3000);let releaseSecondDelete;chatDeleteHold=new Promise(r=>releaseSecondDelete=r);confirmChat=await askDeleteChat();
-  await measure('chat.delete-again',()=>[...confirmChat.querySelectorAll('button')].find(b=>label(b)==='Delete').click(),()=>!chatRow()&&!onScreen(row()),'chat that came back leaves again with both answers held');
+  await measure('chat.delete-again',()=>[...confirmChat.querySelectorAll('button')].find(b=>label(b)==='Delete').click(),()=>innerWidth<1024?!chatOpen()&&!chatRow():!chatRow()&&!onScreen(row()),'chat that came back leaves again and closes with both answers held');
   await until(()=>chatDeleteWaiting===2,'second delete at the server',3000);chatDeleteRefusals=0;chatDeleteFailure=true;releaseChatDelete();await until(()=>chatDeleteRefusals===1,'first delete refused',3000);await pause(150);assert(!chatRow()&&!onScreen(row()),'a refused first delete brought back the chat a later delete is removing');chatDeleteFailure=false;
   chatDeleteHold=null;releaseSecondDelete();await until(()=>!overview.dms.some(d=>d.title==='Vitalii'||d.id===view.id),'chat delete confirmed');await pause(50);assert(!chatRow(),'confirmed delete brought the chat back');await until(()=>!workingNotice(),'working notice gone once answered',1500);
  }

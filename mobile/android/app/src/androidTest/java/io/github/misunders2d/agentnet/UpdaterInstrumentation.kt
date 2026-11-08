@@ -682,7 +682,7 @@ class UpdaterInstrumentation : Instrumentation() {
         check(latencySuite in setOf("history", "navigation", "settings", "unread", "actions", "topics", "groups", "compose", "media", "review", "outbox", "agents", "teams", "profile", "storage", "workspaces", "permissions")) { "Unknown timing workload." }
         val scriptFile = File(targetContext.cacheDir, "latency-fixture.mjs")
         val inputFile = File(targetContext.cacheDir, "latency-input.json")
-        check(scriptFile.isFile && scriptFile.length() in 1L..262144L) { "Stage the bounded latency fixture in this owned app's private cache." }
+        check(scriptFile.isFile && scriptFile.length() in 1L..524288L) { "Stage the bounded latency fixture (at most 512 KiB; about 300 KB now) in this owned app's private cache." }
         check(inputFile.isFile && inputFile.length() in 1L..1048576L) { "Stage the synthetic latency input in this owned app's private cache." }
         val source = scriptFile.readText()
         val entryImport = "import {mount,unmount} from '/assets/skins/comic/entry.mjs';"
