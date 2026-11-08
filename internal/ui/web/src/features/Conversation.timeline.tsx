@@ -54,6 +54,8 @@ export function Timeline({ ctx, messages, focus, focusSeq, unread, readVisit, se
   const groups = useMemo(() => items.filter((it): it is Extract<Item, { type: "msg" }> => it.type === "msg"), [items]);
   const [first, setFirst] = useState(() => groups[Math.max(0, groups.length - INITIAL_PAGE)]?.key);
   const [through, setThrough] = useState<string>();
+  // Rows a later jump has not mounted yet: [first unmounted, first mounted after it).
+  const [gaps, setGaps] = useState<[string, string][]>([]);
   const retained = useRef<string[]>([]);
   const prependAnchor = useRef<{ row: HTMLElement; top: number; focus: boolean } | null>(null);
   const readingAnchor = useRef<ReadingAnchor | null>(null);
@@ -80,13 +82,16 @@ export function Timeline({ ctx, messages, focus, focusSeq, unread, readVisit, se
   if (wanted >= 0 && wanted < from) {
     // Revealing an exact old target is permanent for this mounted timeline.
     // A subsequent focus must not hide history the reader has already opened.
+    const opened = from;
     from = wanted;
     setFirst(groups[wanted].key);
     // An old entry target must not mount every newer row just to reveal it.
     // Keep the existing page size, with explicit access to subsequent pages.
-    // A requested jump (a notification or quoted message) is the same: one
-    // page from the target, never every row up to the newest in one frame.
-    if ((requested || !seen.current && focus === initialFocus.current) && wanted + INITIAL_PAGE < groups.length) setThrough(groups[wanted + INITIAL_PAGE - 1].key);
+    if (!seen.current && focus === initialFocus.current) { if (wanted + INITIAL_PAGE < groups.length) setThrough(groups[wanted + INITIAL_PAGE - 1].key); }
+    // A later jump (a notification or quoted message) keeps what is open:
+    // the target's page mounts in this frame, the rows between it and the
+    // opened history follow one page per frame, never all in one frame.
+    else if (wanted + INITIAL_PAGE < opened) { const gap: [string, string] = [groups[wanted + INITIAL_PAGE].key, groups[opened].key]; setGaps(g => [gap, ...g]); }
   }
   let to = through ? groups.findIndex(it => it.key === through) + 1 : groups.length;
   if (through && !to) {
@@ -100,7 +105,17 @@ export function Timeline({ ctx, messages, focus, focusSeq, unread, readVisit, se
   while (begin > 0 && items[begin - 1].type !== "msg") begin--;
   let finish = hasLater ? items.indexOf(groups[to]) : items.length;
   while (hasLater && finish > begin && items[finish - 1].type !== "msg") finish--;
-  const visible = items.slice(begin, finish);
+  let visible = items.slice(begin, finish);
+  if (gaps.length) {
+    const skipped = new Set<string>();
+    for (const [start, end] of gaps) {
+      const a = groups.findIndex(it => it.key === start), b = groups.findIndex(it => it.key === end);
+      if (a >= 0 && b > a) for (let i = a; i < b; i++) skipped.add(groups[i].key);
+    }
+    // A day or "new" line goes with the message after it.
+    let hide = false;
+    visible = visible.reduceRight<Item[]>((kept, it) => { if (it.type === "msg") hide = skipped.has(it.key); if (!hide) kept.push(it); return kept; }, []).reverse();
+  }
   // One "now" per message projection, as the day dividers: a new message
   // re-dates "Today"/"Yesterday"; redraws and typing reformat nothing.
   const now = useMemo(() => new Date(), [messages]);
@@ -264,7 +279,16 @@ export function Timeline({ ctx, messages, focus, focusSeq, unread, readVisit, se
   }, [reserve]);
 
   const reportSeen = useSeen(ctx, messages, atBottom);
-  const visibleRows = useVisibleRows(box, inner, ctx, messages, readVisit, first, through, reserve, readingAnchor, atBottom);
+  // Mount the next page of a gap each frame; a gap whose rows changed mounts whole.
+  useEffect(() => {
+    if (!gaps.length) return;
+    const frame = requestAnimationFrame(() => setGaps(([[start, end], ...rest]) => {
+      const a = groups.findIndex(it => it.key === start), b = groups.findIndex(it => it.key === end);
+      return a < 0 || b < 0 || a + INITIAL_PAGE >= b ? rest : [[groups[a + INITIAL_PAGE].key, end], ...rest];
+    }));
+    return () => cancelAnimationFrame(frame);
+  }, [gaps, groups]);
+  const visibleRows = useVisibleRows(box, inner, ctx, messages, readVisit, first, (through || "") + " " + gaps.map(g => g[0]).join(" "), reserve, readingAnchor, atBottom);
 
   const onScroll = () => {
     visibleRows.current();
