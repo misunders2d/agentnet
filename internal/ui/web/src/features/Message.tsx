@@ -76,6 +76,8 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
   const [confirm, setConfirm] = useState<boolean | null>(null);
   const [emoji, setEmoji] = useState<boolean | null>(null);
   const [hot, setHot] = useState(false);
+  // An open actions menu keeps its toolbar: a pointer leaving while it opens (macOS WKWebView) must not unmount it.
+  const [menuOpen, setMenuOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [remind, setRemind] = useState<boolean | null>(null);
   const [assign, setAssign] = useState<boolean | null>(null);
@@ -138,7 +140,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
   const body = (
     <div data-message-bubble data-part="bubble" tabIndex={(wide || tabStop !== undefined) && (live || attention) && !selecting ? tabStop === false ? -1 : 0 : undefined} role={(wide || tabStop !== undefined) && (live || attention) ? "group" : undefined} aria-label={(wide || tabStop !== undefined) && (live || attention) ? who.name + ", " + formatTime(m.at) : undefined}
       className={"relative min-w-0 max-w-full stroke px-3.5 py-2 focus-visible:outline-offset-2 " + shape + (selected ? " ring-[3px] ring-agent-ink ring-offset-2 ring-offset-canvas" : "")}>
-      {wide && hot && (live || attention) && !selecting && !editing && <Toolbar m={m} ctx={ctx} can={can} acts={acts} mine={who.mine} />}
+      {wide && (hot || menuOpen) && (live || attention) && !selecting && !editing && <Toolbar m={m} ctx={ctx} can={can} acts={acts} mine={who.mine} onMenuOpen={setMenuOpen} />}
       {last && !who.mine && (
         <span className="absolute -left-10 bottom-0">
           {who.agent ? <AgentAvatar seed={who.seed} size={32} guest={who.guest} device={who.device} /> : <PersonAvatar name={who.name} seed={who.seed} size={32} guest={who.guest} />}

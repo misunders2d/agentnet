@@ -44,7 +44,7 @@ export interface Acts {
 
 // ---- desktop: the hover toolbar ---------------------------------------------------
 
-export function Toolbar({ m, ctx, can, acts, mine }: { m: AnyMsg; ctx: Ctx; can: Can; acts: Acts; mine: boolean }) {
+export function Toolbar({ m, ctx, can, acts, mine, onMenuOpen }: { m: AnyMsg; ctx: Ctx; can: Can; acts: Acts; mine: boolean; onMenuOpen?: (open: boolean) => void }) {
   const portal = usePortal();
   const btn = "grid size-11 place-items-center rounded-full text-text-2 hover:bg-sunken hover:text-ink data-[popup-open]:bg-sunken";
   return (
@@ -55,7 +55,7 @@ export function Toolbar({ m, ctx, can, acts, mine }: { m: AnyMsg; ctx: Ctx; can:
           trigger={<button type="button" aria-label="React" title="React" className={btn}><IconMoodSmile size={20} /></button>} />
       )}
       {can.reply && <button type="button" aria-label="Reply" title="Reply" onClick={acts.reply} className={btn}><IconArrowBackUp size={20} /></button>}
-      <Menu.Root modal={false}>
+      <Menu.Root modal={false} onOpenChange={open => onMenuOpen?.(open)}>
         <Menu.Trigger aria-label="More actions" title="More actions" className={btn + " data-[popup-open]:bg-sunken"}><IconDots size={20} /></Menu.Trigger>
         <Menu.Portal container={portal}>
           <Menu.Positioner side="bottom" align={mine ? "end" : "start"} sideOffset={6} collisionPadding={12} className="z-50">
