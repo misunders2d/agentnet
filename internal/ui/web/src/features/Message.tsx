@@ -179,7 +179,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
       <div hidden={terminal} className={"group/msg relative flex px-3 sm:px-4 [touch-action:pan-y] " + (who.mine ? "justify-end" : "justify-start") + (selecting ? " cursor-pointer" : "")}
         onClick={selecting && can.select ? (e) => { if (inside(e)) onSelect?.(m.id); } : undefined}
         onPointerEnter={wide ? () => setHot(true) : undefined} onFocus={() => { if (wide) setHot(true); onEntryFocus?.(m.id); }}
-        onPointerLeave={wide ? (e) => { if (!e.currentTarget.querySelector("[data-popup-open]")) setHot(false); } : undefined}
+        onPointerLeave={wide ? (e) => { if (!e.currentTarget.querySelector("[data-popup-open]") && !e.currentTarget.contains(document.activeElement)) setHot(false); } : undefined}
         {...(readOnly || selecting ? {} : touch.handlers)}
         onPointerMove={e => { if (wide && !hot) setHot(true); if (!readOnly && !selecting) touch.handlers.onPointerMove(e); }}
         onContextMenu={readOnly || selecting ? undefined : e => {
