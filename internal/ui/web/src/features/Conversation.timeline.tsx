@@ -84,7 +84,9 @@ export function Timeline({ ctx, messages, focus, focusSeq, unread, readVisit, se
     setFirst(groups[wanted].key);
     // An old entry target must not mount every newer row just to reveal it.
     // Keep the existing page size, with explicit access to subsequent pages.
-    if (!seen.current && !requested && focus === initialFocus.current && wanted + INITIAL_PAGE < groups.length) setThrough(groups[wanted + INITIAL_PAGE - 1].key);
+    // A requested jump (a notification or quoted message) is the same: one
+    // page from the target, never every row up to the newest in one frame.
+    if ((requested || !seen.current && focus === initialFocus.current) && wanted + INITIAL_PAGE < groups.length) setThrough(groups[wanted + INITIAL_PAGE - 1].key);
   }
   let to = through ? groups.findIndex(it => it.key === through) + 1 : groups.length;
   if (through && !to) {
