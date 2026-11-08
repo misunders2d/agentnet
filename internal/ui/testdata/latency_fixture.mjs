@@ -219,7 +219,7 @@ try {
    if(path==='/api/message/delete'){await pause(25);const m=view.messages.find(m=>m.id===body.id);assert(m,'wrong delete ID');m.deleted=true;m.body='';emit();return{note:'Stored'};}
    if(path==='/api/storage/retry_send'){await pause(100);assert(body.conv===view.id&&body.id===view.messages.at(-1).id,'retry changed exact target');Object.assign(view.messages.at(-1),{state:'queued',delivery:'queued',state_text:'Queued',detail:''});emit();return{id:body.id,retried:1};}
    if(path==='/api/act'){
-    if(body?.do==='unread'){if(unreadHold)await unreadHold;await pause(100);if(unreadFailure)throw Error('Synthetic unread refusal');for(const m of view.messages)if(body.ids?.includes(m.id))m.unread=true;overview.dms[0].unread=view.messages.filter(m=>m.unread).length;emit();return{note:'Stored'};}
+    if(body?.do==='unread'){const {hold,failure}=unreadIssued.get(body)||{hold:unreadHold,failure:unreadFailure};if(hold)await hold;await pause(100);if(failure)throw Error('Synthetic unread refusal');for(const m of view.messages)if(body.ids?.includes(m.id))m.unread=true;overview.dms[0].unread=view.messages.filter(m=>m.unread).length;emit();return{note:'Stored'};}
     if(body?.do==='read'){for(const m of view.messages)if(body.ids?.includes(m.id))m.unread=false;overview.dms[0].unread=view.messages.filter(m=>m.unread).length;view.main_topic={unread:overview.dms[0].unread};emit();}
     return {};
    }
@@ -249,8 +249,11 @@ try {
  }
  const clipboardDescriptor=Object.getOwnPropertyDescriptor(navigator,'clipboard');reports.copyAttempts=[];Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>{reports.copyAttempts.push({text,nativeEffect:false});throw Error('Synthetic clipboard refusal');}}});
  const originalAPI=host.api;
+ // Each unread mark answers as the scenario it was sent in: the slow-server wait below must not let a later step's hold or refusal decide it.
+ const unreadIssued=new WeakMap();
  host.api=async(path,body)=>{
   const call={path,method:body===undefined?'read':'write',start:performance.now()};if(extended&&body!==undefined)call.request=clone(body);reports.apiCalls.push(call);
+  if(path==='/api/act'&&body?.do==='unread')unreadIssued.set(body,{hold:unreadHold,failure:unreadFailure});
   if(window.__runtimeBackend==='held')await new Promise(()=>{});if(window.__runtimeBackend==='failing')throw Error('Runtime crawl backend failure');
   // A slow server must not delay what the person sees: every write waits here.
   // The cache clear below is released by hand, so it must reach the fixture first.
