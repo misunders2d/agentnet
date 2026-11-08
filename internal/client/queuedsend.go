@@ -3,7 +3,6 @@ package client
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"net"
 	"net/url"
@@ -189,10 +188,45 @@ func (a *Agent) queuedAlreadySent(in ScheduledSendInput) (ScheduledSend, error) 
 	if err != nil {
 		return ScheduledSend{}, err
 	}
+	if same && in.ask != nil {
+		// The same id is not the same ask: the stored request must name this
+		// exact participation, kind, host and agent.
+		err = a.store.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM outbox WHERE lid=? AND body=? AND coalesce(sub,'')='' AND kind=? AND coalesce(pid,'')=? AND json_extract(target,'$.address')=? AND json_extract(target,'$.fingerprint')=? AND coalesce(json_extract(target,'$.agent_id'),'')=?)`,
+			in.ID, in.Body, in.ask.Kind, in.ask.PID, in.ask.HostAddress, in.ask.HostFingerprint, in.ask.AgentID).Scan(&same)
+		if err != nil {
+			return ScheduledSend{}, err
+		}
+	}
 	if !same {
 		return ScheduledSend{}, ErrScheduledIDConflict
 	}
-	return ScheduledSend{ID: in.ID, Conv: in.Conv, Topic: in.Topic, Body: in.Body, State: ScheduledSent, Immediate: true}, nil
+	return ScheduledSend{ID: in.ID, Conv: in.Conv, Topic: in.Topic, Body: in.Body, State: ScheduledSent, Immediate: true, Ask: in.ask}, nil
+}
+
+// AskAgentInTopicQueued is the person's ask from this device's UI. It is sent
+// at once as AskAgentInTopic does. Only when another device's signed public
+// scope has not reached this one yet (ErrParticipationScopePending) is it
+// accepted durably under the same id, as itself (ScheduledAsk), and sent by
+// the existing queue once the scope arrives; nothing is invented meanwhile.
+// When it cannot be kept that way, the direct refusal stays the answer.
+func (a *Agent) AskAgentInTopicQueued(ctx context.Context, id, pid, kind, body, topic string, receiver *ReplyReceiver, sendGroup string, wait time.Duration, files ...OutgoingFile) (ConvSent, *QueuedSendResult, error) {
+	if id == "" {
+		id = protocol.NewID()
+	}
+	sent, err := a.AskAgentInTopic(WithHumanSendGroup(WithQueuedSend(ctx, id), sendGroup), pid, kind, body, topic, receiver, files...)
+	if !errors.Is(err, ErrParticipationScopePending) {
+		return sent, nil, err
+	}
+	info, e := a.Participation(pid)
+	if e != nil || !info.Claimable() {
+		return sent, nil, err
+	}
+	ask := &ScheduledAsk{PID: info.PID, Kind: kind, HostAddress: info.Host.Address, HostFingerprint: info.Host.Fingerprint, AgentID: info.AgentID, SendGroup: sendGroup, Receiver: receiver}
+	res, e := a.QueueSend(ScheduledSendInput{ID: id, Conv: info.Conv, Topic: topic, Body: body, Files: files, ask: ask}, "", wait)
+	if e != nil {
+		return sent, nil, err
+	}
+	return ConvSent{}, &res, nil
 }
 
 // RetryQueuedSend is the person's explicit retry of a stopped message: its
@@ -219,7 +253,7 @@ func (a *Agent) retryQueuedSend(id string, admission bool) (ScheduledSend, error
 		if e != nil {
 			return s, e
 		}
-		encoded, _ := json.Marshal(audience)
+		encoded := scheduledAudienceColumn(audience, s.Ask) // an ask stays exactly that ask
 		now := time.Now().UnixNano()
 		// An admission request (not the person's Retry) never resumes a message
 		// they held, even from a snapshot read before their hold: the same row
@@ -228,7 +262,7 @@ func (a *Agent) retryQueuedSend(id string, admission bool) (ScheduledSend, error
 		if admission {
 			held = queuedHeldDetail
 		}
-		result, e := a.store.db.Exec(`UPDATE scheduled_sends SET conv=?,audience=?,state='pending',rev=rev+1,detail='',diagnostic='',due_at=?,updated_at=? WHERE id=? AND immediate=1 AND state='needs_review' AND (?='' OR detail<>?)`, conv, string(encoded), now, now, id, held, held)
+		result, e := a.store.db.Exec(`UPDATE scheduled_sends SET conv=?,audience=?,state='pending',rev=rev+1,detail='',diagnostic='',due_at=?,updated_at=? WHERE id=? AND immediate=1 AND state='needs_review' AND (?='' OR detail<>?)`, conv, encoded, now, now, id, held, held)
 		if e != nil {
 			return s, e
 		}

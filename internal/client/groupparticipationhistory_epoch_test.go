@@ -112,9 +112,34 @@ func groupParticipationHistoryAfterReadmission(t *testing.T, sharedOriginal bool
 	eventually(t, "own laptop sees original accepted member host", func() bool {
 		return stateAt(t, source, part.PID).Claimable() && stateAt(t, approver, part.PID).Claimable()
 	})
-	ask, err := approver.AskAgentInTopic(tctx(t), part.PID, envelope.KindQuestion, "older accepted own replica", topic, nil)
+	// Ask as the person's UI does (liveagent.go): at once, or kept as this exact
+	// ask until the signed public scope another device authors reaches this one.
+	askID := protocol.NewID()
+	ask, queued, err := approver.AskAgentInTopicQueued(tctx(t), askID, part.PID, envelope.KindQuestion, "older accepted own replica", topic, nil, "", 0)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if queued != nil {
+		if queued.Row.Ask == nil || queued.Row.Ask.PID != part.PID || queued.Row.Ask.Kind != envelope.KindQuestion {
+			t.Fatalf("kept ask lost its intent: %+v", queued.Row.Ask)
+		}
+		eventually(t, "kept ask sent once its scope arrives", func() bool {
+			s, _, e := approver.ScheduledSend(askID)
+			return e == nil && s.State == ScheduledSent
+		})
+		ask = ConvSent{LID: askID}
+		rows, e := approver.store.db.Query(`SELECT id,recipient FROM outbox WHERE lid=? AND coalesce(sub,'')=''`, askID)
+		if e != nil {
+			t.Fatal(e)
+		}
+		for rows.Next() {
+			var c ConvCopy
+			if e = rows.Scan(&c.ID, &c.To); e != nil {
+				t.Fatal(e)
+			}
+			ask.Copies = append(ask.Copies, c)
+		}
+		rows.Close()
 	}
 	var originalID, executorID string
 	for _, copy := range ask.Copies {

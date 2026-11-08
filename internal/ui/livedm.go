@@ -778,6 +778,9 @@ func withQueuedSends(rows []DMMessage, queued []client.ScheduledSend, self strin
 		m := DMMessage{ID: s.ID, LID: s.ID, Dir: "out", From: self, Kind: KindMessage, Body: s.Body, ReplyTo: s.ReplyTo, Quote: s.Quote,
 			Origin: envelope.OriginUI, Topic: s.Topic, PID: s.Audience.AuthorPID, At: s.Created, State: "queued", StateText: "Sending…", Detail: s.Detail,
 			QueuedSend: &QueuedSendView{State: s.State, Rev: s.Rev, Diagnostic: s.Diagnostic}}
+		if s.Ask != nil { // a kept ask shows as the request it is, to its agent
+			m.Kind, m.PID = s.Ask.Kind, s.Ask.PID
+		}
 		if s.State == client.ScheduledNeedsReview {
 			m.State, m.StateText = "failed", s.Detail
 		}

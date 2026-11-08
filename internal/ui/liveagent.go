@@ -693,8 +693,9 @@ func (l *Live) AskAgent(d AgentAsk) (Sent, error) {
 	defer cleanup()
 	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 	defer cancel()
-	ctx = client.WithHumanSendGroup(client.WithQueuedSend(ctx, d.ID), d.SendGroup)
-	res, err := l.a.AskAgentInTopic(ctx, d.PID, kind, body, d.Topic, receiver, files...)
+	// Sent now, or kept as this exact ask until another device's signed scope
+	// arrives here (client.AskAgentInTopicQueued); files are kept before cleanup.
+	res, queued, err := l.a.AskAgentInTopicQueued(ctx, d.ID, d.PID, kind, body, d.Topic, receiver, d.SendGroup, l.sendWait, files...)
 	if err != nil {
 		if errors.Is(err, client.ErrNoParticipation) {
 			return Sent{}, NotFound("no such agent in a DM here")
@@ -702,6 +703,16 @@ func (l *Live) AskAgent(d AgentAsk) (Sent, error) {
 		return Sent{}, Refuse(l.updateSentence(err))
 	}
 	l.a.NoteChange()
+	if queued != nil {
+		id := queued.Row.ID
+		if queued.Sent != nil {
+			return Sent{LID: queued.Sent.LID, ID: queued.Sent.ID, State: queued.Sent.State, Detail: queued.Sent.Detail}, nil
+		}
+		if queued.Row.State == client.ScheduledNeedsReview {
+			return Sent{LID: id, ID: id, State: "failed", Detail: queued.Row.Detail}, nil
+		}
+		return Sent{LID: id, ID: id, State: "queued", Detail: queued.Row.Detail}, nil
+	}
 	return Sent{ID: res.ID, LID: res.LID, State: res.State, Detail: res.Detail}, nil
 }
 

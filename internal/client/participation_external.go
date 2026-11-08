@@ -959,7 +959,7 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 	if err := a.prepareRemoteCopies(ctx, binding, copies, out.Files); err != nil {
 		return ConvSent{}, err
 	}
-	if err := a.store.addConvOutbox(copies, in, a.queuedClaim(ctx, info.Conv, guard), jobKey, binding); err != nil {
+	if err := a.store.addConvOutboxGuarded(copies, in, a.queuedClaim(ctx, info.Conv, guard), jobKey, out.beforeStore, binding); err != nil {
 		return ConvSent{}, err
 	}
 	stored = true
