@@ -475,7 +475,7 @@ func (a *Agent) dispatch(ctx context.Context, event, data string) error {
 				}
 			}()
 		}
-		a.kick()
+		a.kickNow() // nil between runs (runTimers)
 	}
 	return nil
 }

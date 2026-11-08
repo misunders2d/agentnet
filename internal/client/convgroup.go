@@ -48,7 +48,7 @@ func (a *Agent) onGroupHeads(raw []byte) {
 		wake = true
 	}
 	if wake {
-		a.kick()
+		a.kickNow()
 	}
 }
 
