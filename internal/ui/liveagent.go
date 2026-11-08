@@ -708,6 +708,13 @@ func (l *Live) AskAgent(d AgentAsk) (Sent, error) {
 		if queued.Sent != nil {
 			return Sent{LID: queued.Sent.LID, ID: queued.Sent.ID, State: queued.Sent.State, Detail: queued.Sent.Detail}, nil
 		}
+		if queued.Row.State == client.ScheduledSent {
+			// Already stored under this id: answer with its stored copies' own
+			// custody/delivery state (client.AgentRequest), never a new one.
+			if r, e := l.a.AgentRequest(id); e == nil && len(r.Sent.Copies) > 0 {
+				return Sent{LID: r.Sent.LID, ID: r.Sent.ID, State: r.Sent.State, Detail: r.Sent.Detail}, nil
+			}
+		}
 		if queued.Row.State == client.ScheduledNeedsReview {
 			return Sent{LID: id, ID: id, State: "failed", Detail: queued.Row.Detail}, nil
 		}
