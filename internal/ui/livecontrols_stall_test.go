@@ -49,6 +49,12 @@ func TestLiveControlsAcceptThroughAStalledRequest(t *testing.T) {
 	}
 	for _, c := range []struct{ name, conv string }{{"dm", dm}, {"group", group}} {
 		mine, err := bob.SendConv(ctx, c.conv, client.ConvOutgoing{Body: "my own words"})
+		// Bob's copy of the new group arrives on his own stream after Alice
+		// publishes it; until then the send is refused before anything is written.
+		for deadline := time.Now().Add(20 * time.Second); err != nil && strings.Contains(err.Error(), "no conversation "+c.conv+" here") && time.Now().Before(deadline); {
+			time.Sleep(50 * time.Millisecond)
+			mine, err = bob.SendConv(ctx, c.conv, client.ConvOutgoing{Body: "my own words"})
+		}
 		if err != nil {
 			t.Fatal(err)
 		}
