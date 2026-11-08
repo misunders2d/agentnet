@@ -872,7 +872,11 @@ class UpdaterInstrumentation : Instrumentation() {
                 .put("engineVersion", WebView.getCurrentWebViewPackage()?.versionName ?: "unknown")
                 .put("sdk", android.os.Build.VERSION.SDK_INT).put("device", android.os.Build.MODEL)
             check(measured.toString().toByteArray().size <= 1048576) { "Latency result exceeds its bound." }
-            result.putString("stream", "LATENCY_JSON=${measured}\n")
+            // The report goes through the app's cache: a result Bundle near 340 KB lost
+            // its Binder transaction (runs 42525260190, 42531731022), and the qualifier
+            // reads the file whether or not the workload passed.
+            File(targetContext.cacheDir, "latency-result.json").writeText(measured.toString())
+            result.putString("stream", "LATENCY_JSON_FILE=latency-result.json\n")
             phase("latency-report-after")
             check(measured.optBoolean("ok")) { measured.optString("error", "Native Android latency fixture failed") }
             check(nativeSaveValid) { "Native download cancellation or original staged bytes were not proven" }
