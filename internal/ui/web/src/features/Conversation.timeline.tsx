@@ -276,7 +276,9 @@ export function Timeline({ ctx, messages, focus, focusSeq, unread, readVisit, se
     if (el.scrollTop < 80 && !atBottom.current && !entryAnchor.current) earlier();
     if (atBottom.current) { if (fresh) setFresh(0); reportSeen(); }
   };
-  const down = () => { releaseEntry(); if (hasLater) { setFirst(groups[Math.max(0, groups.length - INITIAL_PAGE)].key); setThrough(undefined); setRequested({ id: messages.at(-1)!.id, focus, seq: focusSeq, visit: readVisit }); } box.current?.scrollTo({ top: box.current.scrollHeight, behavior: reduced() ? "auto" : "smooth" }); setFresh(0); };
+  const down = () => { releaseEntry(); if (hasLater) { setFirst(groups[Math.max(0, groups.length - INITIAL_PAGE)].key); setThrough(undefined); setRequested({ id: messages.at(-1)!.id, focus, seq: focusSeq, visit: readVisit }); } const el = box.current; // A far jump (another page, or several screens away) lands at once; a short one glides.
+    const far = !!el && (hasLater || el.scrollHeight - el.scrollTop - el.clientHeight > 2 * el.clientHeight);
+    el?.scrollTo({ top: el.scrollHeight, behavior: reduced() || far ? "auto" : "smooth" }); setFresh(0); };
   const jump = useCallback((id: string) => {
     entryAnchor.current = null;
     readingAnchor.current = null;

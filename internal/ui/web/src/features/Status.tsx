@@ -106,7 +106,7 @@ export function Toasts() {
   const landing = useStore(store, (s) => s.messageLanding);
   const working = useStore(store, (s) => s.working);
   return (
-    <div aria-live="polite" className="pointer-events-none fixed inset-x-0 bottom-20 z-50 flex flex-col items-center gap-2 px-4 lg:bottom-6">
+    <div aria-live="polite" className="pointer-events-none fixed inset-x-0 bottom-20 z-[60] flex flex-col items-center gap-2 px-4 lg:bottom-6">
       {working && <div role="status" data-working className="pop-in max-w-md rounded-2xl stroke bg-surface px-4 py-2.5 text-sm font-semibold text-ink shadow-pop">Working on it…</div>}
       {landing && (
         <div role="status" aria-busy={landing.busy} className="pointer-events-auto flex w-full max-w-md flex-wrap items-center gap-2 rounded-2xl stroke bg-surface px-4 py-2.5 text-sm text-ink shadow-pop">
