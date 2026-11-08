@@ -1297,7 +1297,13 @@ try {
    const sources=[{file:mp4,contentType:'video/mp4; codecs="avc1.42c00c,mp4a.40.2"',sha256:'5034aee15c42574db5b6900cd7a2767d6d43db6658c92737fbeea06008870309',size:10580,duration:1.2,width:320,height:180,container:'mp4',videoCodec:'h264',audioCodec:'aac'},
     {file:webm,contentType:'video/webm; codecs="vp8,vorbis"',sha256:'e08c61a95e5360c254bab3689fb5530a852337029b384d5cc617f92a64e26066',size:22298,duration:3.003,width:160,height:120,container:'webm',videoCodec:'vp8',audioCodec:'vorbis'}];
    const sourceProbe=document.createElement('video');reports.mediaSourceCapabilities=sources.map(source=>({contentType:source.contentType,canPlayType:sourceProbe.canPlayType(source.contentType)}));
-   const selectedSource=sources.find((source,index)=>reports.mediaSourceCapabilities[index].canPlayType!=='');assert(selectedSource,'No supported real video source decoder; playback is unqualified');
+   // canPlayType is a claim, not a decoder: Playwright WebKit on Windows answers "probably" for H.264/AAC and then loads no metadata
+   // (run 42472472068). A source qualifies only once a probe element actually reads its metadata; none doing so is still a failure.
+   reports.mediaSourceProbes=[];let selectedSource=null;
+   for(const [index,source] of sources.entries()){if(reports.mediaSourceCapabilities[index].canPlayType==='')continue;const probe=document.createElement('video');probe.preload='metadata';probe.muted=true;const url=URL.createObjectURL(source.file);probe.src=url;
+    let loaded=false;try{await until(()=>probe.readyState>=1||!!probe.error,'source probe metadata');loaded=probe.readyState>=1;}catch{}
+    reports.mediaSourceProbes.push({contentType:source.contentType,loaded,error:probe.error?.code??null});probe.removeAttribute('src');probe.load();URL.revokeObjectURL(url);if(loaded){selectedSource=source;break;}}
+   assert(selectedSource,'No supported real video source decoder; playback is unqualified');
    const video=selectedSource.file;reports.mediaSelectedSource={contentType:selectedSource.contentType,container:selectedSource.container,videoCodec:selectedSource.videoCodec,audioCodec:selectedSource.audioCodec};
    reports.mediaInputs=await Promise.all([photo,video].map(async f=>({name:f.name,size:f.size,type:f.type,sha256:await fileHash(f)})));
    assert(reports.mediaInputs[1].sha256===selectedSource.sha256&&video.size===selectedSource.size,'selected real source original bytes changed');
