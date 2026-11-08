@@ -58,11 +58,14 @@ const engines = require(process.env.AGENTNET_PLAYWRIGHT || 'playwright-core'), e
   {
    // A tab open across the update has an older version's entries, with no mark.
    const legacy=async(direct)=>{
-    const context=await browser.newContext(),page=await context.newPage();
+    const context=await browser.newContext();let page=await context.newPage();
     await context.addCookies([{name:'agentnet_ui',value:new URL(process.argv[2]).searchParams.get('t'),url:origin,httpOnly:true,sameSite:'Strict'}]);
-    await page.route(origin+'/back-*',r=>r.fulfill({contentType:'text/html',body:'<!doctype html><title>Legacy fixture</title>'}));
+    await context.route(origin+'/back-*',r=>r.fulfill({contentType:'text/html',body:'<!doctype html><title>Legacy fixture</title>'}));
     if(!direct)await page.goto(origin+'/back-earlier');
-    await page.goto(origin+'/back-legacy');
+    if(direct&&engine==='webkit'){ // as the direct tab above: opened by the browser at its URL, no earlier entry
+     const opener=page;[page]=await Promise.all([context.waitForEvent('page'),opener.evaluate(u=>{window.open(u,'_blank','noopener');},origin+'/back-legacy')]);
+     await page.waitForURL(origin+'/back-legacy');await opener.close();
+    }else await page.goto(origin+'/back-legacy');
     if(direct){if(engine==='chromium'){const session=await context.newCDPSession(page);await session.send('Page.resetNavigationHistory');await session.detach();}}
     await page.mouse.click(1,1);await page.evaluate(()=>history.pushState({agentnetBack:'agentnet-back-legacy'},'',location.href));
     await page.reload();
