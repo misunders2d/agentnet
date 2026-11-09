@@ -149,7 +149,7 @@ func startImageViewer(t *testing.T) (*imageViewerFixture, string) {
 	sample := os.Getenv("AGENTNET_VIDEO_SAMPLE")
 	if sample == "" {
 		sample = filepath.Join(t.TempDir(), "sample.webm")
-		encode := exec.CommandContext(ctx, "ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=10", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100", "-t", "3", "-c:v", "libvpx", "-pix_fmt", "yuv420p", "-c:a", "libvorbis", "-threads", "1", "-y", sample)
+		encode := exec.CommandContext(ctx, "ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=10", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000", "-t", "3", "-c:v", "libvpx", "-pix_fmt", "yuv420p", "-c:a", "libopus", "-threads", "1", "-y", sample)
 		if out, err := encode.CombinedOutput(); err != nil {
 			t.Fatalf("local deterministic media prerequisite: %v\n%s", err, out)
 		}
