@@ -601,7 +601,9 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 			}
 			defer a.store.setRunGroup(j.ID, 0, "")
 		}
+		release := a.vouchRun(j, cmd.Process.Pid) // run origin, while it runs
 		runErr = cmd.Wait()
+		release()
 	}
 	// nativeFailure is a bridge's exact technical reason for a run that ended
 	// without a native outcome. It fails the run; it is never a human decision.

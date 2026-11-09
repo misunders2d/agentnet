@@ -283,6 +283,52 @@ Since v0.6.1, the daemon also looks in the folder that holds
 service's PATH lacks that folder; launchers elsewhere still need the PATH that
 `agentnet help startup` captures.
 
+### Run origin socket (Heimdall schedules)
+
+Opt-in, Linux only. `agentnet daemon --run-origin` (add it to the service's
+`ExecStart`) makes the daemon serve `HOME/run-origin.sock`, for example
+`/root/.config/agentnet/run-origin.sock` on the server. A local program such
+as Heimdall asks it whether a process is a background run this daemon
+started, and for whom; Heimdall then lets the person's own AgentNet request
+manage their schedules. AgentNet contains no Heimdall code; the contract is
+Heimdall's `docs/external-origin.md`. Without the flag nothing changes. The
+desktop app's built-in daemon does not serve it. On other systems, or when
+the home is group/other writable (keep it `chmod 700`) or the path is longer
+than 100 bytes, the daemon logs why and serves nothing; messaging is
+unaffected.
+
+- The socket is `0600`, created by the daemon process itself (the parent of
+  every run), and replaced at start only while that daemon holds the home's
+  lock. Only callers whose kernel peer credentials show root or the daemon's
+  own user are answered; others are closed without a reply.
+- Request, one JSON line: `{"v":1,"pid":N,"start":T}`, `T` being field 22 of
+  `/proc/N/stat`. Answer, one JSON line, then close:
+  `{"v":1,"run":"REQUEST/ATTEMPT","person":"PERSON-ID","author":"human"|"agent"}`
+  or `{"v":1,"error":"..."}`.
+- It vouches only for a process this daemon process started as a background
+  run (the harness it launched, not its descendants; Heimdall walks the
+  ancestry), still its direct child with the same start time, while that
+  request is still running (not stopped, cancelled, timed out or finished).
+  Runs of an earlier daemon process are never vouched for.
+- `person` is the requester's verified roster **person ID** (32 hex
+  characters; `agentnet person list` shows it), from the exact signing key
+  pinned for a current device of that person's signed roster. It never comes
+  from a name or message text. Use it as the key in Heimdall's `people` map;
+  `agentnet person` on the requester's own device prints it first.
+- `author` is `human` only when the request was signed by the person's own
+  current verified human device (the same roster human-key check that lets
+  own-device requests run without approval) and the daemon's own person is
+  that person. Requests from agents or agent hosts (the person's own too),
+  other people, continuations, replies and asks typed on the daemon's own
+  device (its key is shared with local agents) are `agent`. Heimdall acts
+  only on `human`.
+- The answer is fixed when the run starts and never changes; it is checked
+  again on every question, and becomes an error once the request ends, the
+  device is removed, its key changes, or the person is frozen.
+- A self-update re-executes the daemon in place (same PID) and only when no
+  run is in progress, so no vouched run outlives its daemon. If the daemon
+  stops, its runs are killed with it.
+
 ## The Hub
 
 ### VPS with Docker Compose (built-in TLS)
