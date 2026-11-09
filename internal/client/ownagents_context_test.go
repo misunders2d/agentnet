@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
 // ownAgentsWorld: a DM between alice and bob in which alice's person hosts
@@ -99,5 +100,72 @@ func TestOwnAgentsOnTwoDevicesSeeEachOther(t *testing.T) {
 			t.Errorf("ungranted earlier history exposed:\n%s", ctx)
 		}
 	}
-	_ = serverReply
+	// Turns stored before this fix have no admission record. The laptop
+	// recovers its peer's reply from its own later native request (exact
+	// outbox order); the server holds no such proof for the laptop's turns.
+	for _, a := range []*Agent{w.alice, server} {
+		if _, err := a.store.db.Exec(`DELETE FROM room_context WHERE conv=?`, conv); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if retained := contextText(t, w.alice, laptopPID); !strings.Contains(retained, serverReply.LID) || !strings.Contains(retained, "SERVER_AGENT_REPLY") {
+		t.Errorf("retained laptop context lost the peer reply to its own request:\n%s", retained)
+	}
+}
+
+// Owner, 2026-11-09: the owner asked their own agent, in their own chat, to
+// move messages into a topic; it failed as "selected original was not
+// admitted to this agent's scope". The host's own person may move any
+// message there themselves, so their request covers what they select.
+func TestOwnerAsksOwnAgentToOrganizeLiveMessages(t *testing.T) {
+	stub := installAgentStub(t)
+	w, conv, _, _ := agentWorld(t)
+	p, err := w.alice.InviteAgent(tctx(t), conv, w.alice.Address, nil, nil, "own agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.Claimable() {
+		if _, err = w.alice.AcceptParticipation(tctx(t), p.PID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	eventually(t, "own agent active", func() bool { return stateAt(t, w.alice, p.PID).Claimable() && stateAt(t, w.bob, p.PID).Claimable() })
+	for _, a := range []*Agent{w.alice, w.bob} {
+		addCapSuccessor(t, a, protocol.CapAgentOrganization)
+	}
+	live, err := w.bob.SendConv(tctx(t), conv, ConvOutgoing{Body: "BOB_LIVE_TURN after the invitation"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "bob's turn on the host", func() bool {
+		_, n := convMsg(t, w.alice, conv, func(m ConvMessage) bool { return m.LID == live.LID })
+		return n == 1
+	})
+	q, err := w.alice.AskAgent(tctx(t), p.PID, envelope.KindQuestion, "move today's messages into a topic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, w.alice, q.ID, stateAgentWaiting)
+	j := claimAt(t, w.alice, q.ID)
+	setResponder(t, w.alice, "agentstub", stub.dir, time.Minute)
+	c, err := w.alice.agentContext(stateAt(t, w.alice, p.PID), j.ID, agentContextBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = w.alice.captureAgentContext(j, c); err != nil {
+		t.Fatal(err)
+	}
+	var attempt int
+	if err = w.alice.store.db.QueryRow(`SELECT attempts FROM inbox WHERE id=?`, j.ID).Scan(&attempt); err != nil {
+		t.Fatal(err)
+	}
+	sent, err := w.alice.OrganizeAgentTopic(tctx(t), j.ID, attempt, TopicOrganizationRequest{IDs: []string{live.LID}, New: true, Title: "Today"})
+	if err != nil {
+		t.Fatalf("owner's own agent could not move the owner's selected live message: %v", err)
+	}
+	row, _ := convMsg(t, w.alice, conv, func(m ConvMessage) bool { return m.LID == sent.LID })
+	eventually(t, "the move admitted at the other member", func() bool {
+		msgs, _ := w.bob.ConversationMessages(conv)
+		return row.Topic != "" && ChatTopicAssignments(msgs)[live.LID] == row.Topic
+	})
 }

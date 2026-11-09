@@ -276,8 +276,16 @@ func (a *Agent) topicOrganizationAdmission(q dbq, in envelope.Inner, address, fp
 	if p.Topic != nil && requestTopic != *p.Topic {
 		return reasonInvalid, errParticipationTopic
 	}
+	// The host's own person asking their own agent (owner rule, 2026-11-09):
+	// that person, a current human member device (checked above), may move
+	// any message of the chat themselves, so their request covers every
+	// message they select or refer to there. Topic scope still applies.
+	owner := false
+	for _, person := range m.persons {
+		owner = owner || person.info.Person == p.Host.Person && !p.External && person.has(requester, ref.Author)
+	}
 	for _, move := range in.TopicEvent.Moves {
-		if err := agentOrganizationRefScope(q, in.Conv, protocol.GrantRef{LID: move.LID, Fingerprint: move.Author}, p, a.Self().Fingerprint(), ref); err != nil {
+		if err := agentOrganizationRefScope(q, in.Conv, protocol.GrantRef{LID: move.LID, Fingerprint: move.Author}, p, a.Self().Fingerprint(), ref, owner); err != nil {
 			if errors.Is(err, errOrganizationGrantProof) {
 				return reasonProof, err
 			}
@@ -290,7 +298,7 @@ func (a *Agent) topicOrganizationAdmission(q dbq, in envelope.Inner, address, fp
 	return "", nil
 }
 
-func agentOrganizationRefScope(q dbq, conv string, ref protocol.GrantRef, p ParticipationInfo, selfFP string, request *envelope.TopicRequest) error {
+func agentOrganizationRefScope(q dbq, conv string, ref protocol.GrantRef, p ParticipationInfo, selfFP string, request *envelope.TopicRequest, owner ...bool) error {
 	var topic, human string
 	err := q.QueryRow(`SELECT coalesce(topic,''),coalesce(human,'') FROM inbox WHERE conv=? AND lid=? AND coalesce(verified_by,claimed_fp,'')=? AND coalesce(sub,'')='' AND topic_event IS NULL AND ref_id IS NULL
  UNION ALL SELECT coalesce(topic,''),coalesce(human,'') FROM outbox WHERE conv=? AND lid=? AND ?=? AND coalesce(sub,'')='' AND topic_event IS NULL AND ref_id IS NULL LIMIT 1`, conv, ref.LID, ref.Fingerprint, conv, ref.LID, ref.Fingerprint, selfFP).Scan(&topic, &human)
@@ -308,7 +316,7 @@ func agentOrganizationRefScope(q dbq, conv string, ref protocol.GrantRef, p Part
 	if p.Topic != nil && topic != *p.Topic {
 		return errParticipationTopic
 	}
-	if ref.LID == request.LID && ref.Fingerprint == request.Author || slices.Contains(p.Grant, ref) {
+	if ref.LID == request.LID && ref.Fingerprint == request.Author || slices.Contains(p.Grant, ref) || len(owner) > 0 && owner[0] {
 		return nil
 	}
 	var captured envelope.HumanTurn
