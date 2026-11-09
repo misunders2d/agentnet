@@ -4,7 +4,7 @@
 // host.file; a download is a link the browser saves where it saves things,
 // so nothing here claims where the file went. HTML and SVG never render.
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { IconDownload, IconFile, IconFileText, IconFileZip, IconPhoto, IconCloudDownload } from "@tabler/icons-react";
+import { IconDownload, IconFile, IconFileText, IconFileZip, IconPhoto, IconCloudDownload, IconMovie, IconPlayerPlayFilled, IconLoader2 } from "@tabler/icons-react";
 import { errorText, type Api, type FileProgress } from "../api";
 import { useStore } from "../store";
 import { useApp } from "../context";
@@ -21,6 +21,7 @@ import { SaveToDrive } from "./Drive";
 import { previewText, textPreviewName, TEXT_PREVIEW_LIMIT } from "./Message.files.text";
 import { Markdown } from "./Markdown";
 import { interleaveMp4 } from "./video-interleave";
+import { capturePoster } from "./video-poster";
 
 interface FileItem { index: number; name: string; size: number; openable: boolean; availability?: string; note?: string; fetch?: string }
 
@@ -117,16 +118,61 @@ export function clearPictures() {
   for (const p of pictures.values()) URL.revokeObjectURL(p.url);
   pictures.clear();
   fetchingPics.clear();
+  for (const p of posters.values()) if (p.url) URL.revokeObjectURL(p.url);
+  posters.clear();
+  fetchingPosters.clear();
 }
 
-function rememberPicture(key: string, p: Pic) {
-  pictures.set(key, p);
-  for (const [k, old] of pictures) {
-    if (pictures.size <= PICTURES_KEPT) break;
+function keep<T extends { url: string }>(map: Map<string, T>, key: string, p: T) {
+  map.set(key, p);
+  for (const [k, old] of map) {
+    if (map.size <= PICTURES_KEPT) break;
     if (inUse.get(k)) continue; // on screen: kept until it is not
-    pictures.delete(k);
-    URL.revokeObjectURL(old.url);
+    map.delete(k);
+    if (old.url) URL.revokeObjectURL(old.url);
   }
+}
+const rememberPicture = (key: string, p: Pic) => keep(pictures, key, p);
+
+// Video posters (video-poster.ts), kept like pictures and under the same key:
+// a still made here from the file once it is here, or url "" when a capture
+// gave none (Play stays). Captures run one at a time, only for cards on
+// screen, only for files Play could open (at most INLINE_VIDEO_LIMIT).
+type Poster = { url: string; width: number; height: number };
+const noPoster: Poster = { url: "", width: 0, height: 0 };
+const posters = new Map<string, Poster>();
+const fetchingPosters = new Map<string, Promise<Poster | null>>();
+let posterTurn: Promise<unknown> = Promise.resolve();
+
+function fetchPoster(api: Api, m: AnyMsg, f: FileItem): Promise<Poster | null> {
+  const key = pictureKey(m, f);
+  const have = posters.get(key);
+  if (have) return Promise.resolve(have);
+  let p = fetchingPosters.get(key);
+  if (p) return p;
+  const job = posterTurn.then(async (): Promise<Poster | null> => {
+    if (!inUse.get(key)) return null; // left before its turn: asked again when shown
+    let b = (await api.file(m.id, f.index, m.dir)).bytes;
+    let type = b.byteLength === f.size && b.byteLength <= INLINE_VIDEO_LIMIT ? sniffVideo(b) : "";
+    if (!type) return noPoster;
+    // The same bytes Play gives WebKitGTK (video-interleave.ts).
+    if (webkitGTK && (type === "video/mp4" || type === "video/quicktime")) {
+      try { b = interleaveMp4(b); type = "video/mp4"; } catch { /* the bytes as sent */ }
+    }
+    const blob = new Blob([b as BlobPart], { type });
+    b = new Uint8Array(0);
+    const still = await capturePoster(blob);
+    return still ? { url: URL.createObjectURL(still.blob), width: still.width, height: still.height } : noPoster;
+  }).catch(() => noPoster);
+  posterTurn = job;
+  p = job.then((r) => {
+    if (!r) return null;
+    if (fetchingPosters.get(key) !== p) { if (r.url) URL.revokeObjectURL(r.url); return null; } // cleared meanwhile
+    keep(posters, key, r);
+    return r;
+  }).finally(() => { if (fetchingPosters.get(key) === p) fetchingPosters.delete(key); });
+  fetchingPosters.set(key, p);
+  return p;
 }
 
 function fetchPicture(api: Api, m: AnyMsg, f: FileItem): Promise<Pic> {
@@ -313,6 +359,28 @@ function VideoFile({ m, f }: { m: AnyMsg; f: FileItem }) {
   const [expanded, setExpanded] = useState<VideoPlace | null>(null);
   const download = useDownload(m, f);
   const inline = Number.isSafeInteger(f.size) && f.size > 0 && f.size <= INLINE_VIDEO_LIMIT;
+  const key = pictureKey(m, f);
+  const here = download.phase === "here";
+  const frame = useRef<HTMLElement | null>(null);
+  const [poster, setPoster] = useState<Poster | null>(() => posters.get(key) || null);
+  useEffect(() => {
+    inUse.set(key, (inUse.get(key) || 0) + 1);
+    return () => { const n = (inUse.get(key) || 1) - 1; if (n) inUse.set(key, n); else inUse.delete(key); };
+  }, [key]);
+  // The poster is asked for once the card is near the screen and its file is
+  // here; nothing else waits for it.
+  useEffect(() => {
+    const el = frame.current;
+    if (!el || !here || !inline || poster) return;
+    let alive = true;
+    const io = new IntersectionObserver((seen) => {
+      if (!seen.some((s) => s.isIntersecting)) return;
+      io.disconnect();
+      void fetchPoster(store.api, m, f).then((p) => { if (alive && p) setPoster(p); });
+    }, { rootMargin: "200px" });
+    io.observe(el);
+    return () => { alive = false; io.disconnect(); };
+  }, [key, here, inline, !!poster, !!url]);
 
   function release(reset = true) {
     generation.current++;
@@ -397,19 +465,47 @@ function VideoFile({ m, f }: { m: AnyMsg; f: FileItem }) {
       if (mounted.current && !leavingRef.current && generation.current === visit) failed(errorText(e));
     } finally { if (generation.current === visit) pending.current = false; }
   }
+  // The card's frame: the poster (or a plain dark frame while it is made, or
+  // when none could be), with Play over it when this device can play the
+  // file here, as Telegram draws a video's thumbnail with its Play/Download
+  // in the middle (5ff61571 history_view_gif.cpp 794–871). A file still to
+  // download, or too big to play here, keeps the frame without Play; its
+  // Download and notes are the ones below, as before.
+  const still = poster?.url || "";
+  const ratio = still && poster ? poster.width / poster.height : 16 / 9;
+  const frameStyle = { aspectRatio: still && poster ? poster.width + " / " + poster.height : "16 / 9", width: still ? "min(100%, calc(min(60dvh, 480px) * " + ratio.toFixed(4) + "))" : "min(360px, 100%)" };
+  const frameClass = "relative block max-w-full overflow-hidden rounded-xl border border-outline/30 bg-black text-white";
+  const playable = here && inline;
+  const preparing = playable && !poster;
+  const face = <>
+    {still && <img src={still} alt="" draggable={false} decoding="async" className="absolute inset-0 size-full object-contain" />}
+    {preparing && <span className="absolute inset-0 animate-pulse bg-white/10 motion-reduce:animate-none" />}
+    {!playable && <span className="absolute inset-0 grid place-items-center text-white/70"><IconMovie size={32} stroke={1.5} /></span>}
+  </>;
+  const posterState = still ? "ready" : preparing ? "loading" : playable ? "none" : "waiting";
   return (
     <div role="group" aria-label={"Video " + f.name} className="w-full min-w-0 max-w-[480px] space-y-1.5">
-      <FileChip m={m} f={f} />
-      {download.phase !== "here" ? null : inline ? <div className="flex flex-wrap items-center gap-2">
-        {phase === "idle" && <Button className="min-h-11" aria-label={"Play video " + f.name} onClick={() => void open()}>Play</Button>}
-        {(phase === "loading" || phase === "ready") && <Button className="min-h-11" aria-label={"Close video " + f.name} onClick={() => release()}>Close video</Button>}
-        {phase === "ready" && !document.fullscreenEnabled && <Button className="min-h-11" aria-label={"Expand video " + f.name} onClick={expand}>Expand</Button>}
-      </div> : <p className="text-[12px] text-muted">{f.size > INLINE_VIDEO_LIMIT ? "Videos up to 16 MiB can play here." : "This video’s size is unknown."} Download to play this file.</p>}
-      {note && <p role="status" className="text-[13px] text-text-2">{note}</p>}
+      {url ? null : playable
+        ? <button ref={(el) => { frame.current = el; }} type="button" aria-label={"Play video " + f.name} title={"Play " + f.name} aria-busy={phase === "loading" || undefined}
+            data-poster={posterState} onClick={() => void open()} className={frameClass + " group"} style={frameStyle}>
+            {face}
+            <span className="absolute inset-0 grid place-items-center">
+              <span className="grid size-14 place-items-center rounded-full bg-black/60 shadow-lg transition-transform duration-150 group-hover:scale-105 motion-reduce:transition-none">
+                {phase === "loading" ? <IconLoader2 size={26} className="animate-spin motion-reduce:animate-none" /> : <IconPlayerPlayFilled size={26} className="translate-x-px" />}
+              </span>
+            </span>
+          </button>
+        : <div ref={(el) => { frame.current = el; }} aria-hidden="true" data-poster={posterState} className={frameClass} style={frameStyle}>{face}</div>}
       {/* preload="auto": the bytes are in memory; "none" froze a few seconds in on the Linux app (October 29, 2026). */}
       {url && <video ref={bindMedia} src={url} controls playsInline preload="auto" aria-label={f.name}
         className="block max-h-[min(60dvh,480px)] w-full rounded-xl bg-black object-contain"
         onError={() => { if (owned.current) failed("This video can’t be played here. Download to play it."); }} />}
+      <FileChip m={m} f={f} />
+      {!here ? null : inline ? (phase === "loading" || phase === "ready") && <div className="flex flex-wrap items-center gap-2">
+        <Button className="min-h-11" aria-label={"Close video " + f.name} onClick={() => release()}>Close video</Button>
+        {phase === "ready" && !document.fullscreenEnabled && <Button className="min-h-11" aria-label={"Expand video " + f.name} onClick={expand}>Expand</Button>}
+      </div> : <p className="text-[12px] text-muted">{f.size > INLINE_VIDEO_LIMIT ? "Videos up to 16 MiB can play here." : "This video’s size is unknown."} Download to play this file.</p>}
+      {note && <p role="status" className="text-[13px] text-text-2">{note}</p>}
       {url && expanded && <VideoViewer src={url} name={f.name} from={expanded} onClose={collapse} />}
     </div>
   );

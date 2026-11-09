@@ -139,6 +139,14 @@ jobs:
           export AGENTNET_INTERACTION_HEADED=1
           export INTERACTION_EVIDENCE="$RUNNER_TEMP/agentnet-macos-controls.png"
           go test -count=1 -timeout 180s -run '^TestMessageInteractionRendered$' -v ./internal/ui
+      - name: video posters on macOS WebKit
+        if: ${{ runner.os == 'macOS' && !inputs.test_run && (!inputs.test_packages || contains(inputs.test_packages, './...') || contains(inputs.test_packages, 'internal/ui')) }}
+        shell: bash
+        run: |
+          command -v ffmpeg >/dev/null || brew install ffmpeg
+          export AGENTNET_PLAYWRIGHT="$RUNNER_TEMP/agentnet-webkit/node_modules/playwright"
+          export AGENTNET_VIDEO_ENGINES=webkit
+          go test -count=1 -timeout 300s -run '^TestVideoPosterRendered$' -v ./internal/ui
       - name: browser Back on macOS WebKit
         if: ${{ runner.os == 'macOS' && !inputs.test_run && (!inputs.test_packages || contains(inputs.test_packages, './...') || contains(inputs.test_packages, 'internal/ui')) }}
         shell: bash
