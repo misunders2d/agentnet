@@ -51,7 +51,7 @@ const (
 	claudeSessions                     // --session-id UUID creates, --resume UUID continues
 	codexSessions                      // app-server thread/start and exact owned thread/resume
 	agySessions                        // stream-json reports conversation_id; --conversation ID continues
-	dirSessions                        // pi/omp: --session-dir OWNED_DIR --continue creates, then continues
+	dirSessions                        // pi/omp: --session-dir OWNED_DIR plus --session-id ID (pi) or --continue (omp)
 )
 
 // sessionRef is recorded on the received question or task whose job ran
@@ -162,10 +162,14 @@ func (a *Agent) planSession(j job, r *Responder, h harness) (sessionPlan, error)
 }
 
 // dirSessionArgs saves a Pi/OMP session in a directory the worker owns, one
-// per session: empty, --continue starts the session there; afterwards the
-// same directory continues it. Reused from Heimdall aac5a1d
-// (internal/harness/harness.go sessionArgs, style sessionDir); both CLIs
-// list --session-dir and --continue in --help (pi 1.5.0, omp 18.16.0).
+// per session. Pi opens the exact session ID there (--session-id: "the
+// current directory's existing session with the ID, creating it otherwise",
+// pi 1.5.0 docs/cli.md); OMP has no such flag, so --continue opens the only
+// session in that directory. Reused from Heimdall aac5a1d
+// (internal/harness/harness.go sessionArgs, style sessionDir). Both lookups
+// are scoped to the run's working directory: a session is resumed only when
+// the responder's canonical directory is unchanged (planSession), and the
+// process cwd is that directory.
 func (a *Agent) dirSessionArgs(harness string, base []string, id string) ([]string, error) {
 	if !protocol.ValidID(strings.ReplaceAll(id, "-", "")) {
 		return nil, fmt.Errorf("invalid %s session id %q", harness, id)
@@ -178,7 +182,11 @@ func (a *Agent) dirSessionArgs(harness string, base []string, id string) ([]stri
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	return append(withoutFlags(base, "--no-session"), "--session-dir", dir, "--continue"), nil
+	args := append(withoutFlags(base, "--no-session"), "--session-dir", dir)
+	if harness == "pi" {
+		return append(args, "--session-id", id), nil
+	}
+	return append(args, "--continue"), nil
 }
 
 // createArgs starts a new saved session.

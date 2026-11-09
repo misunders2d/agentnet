@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"os"
@@ -625,6 +626,9 @@ func TestEachHarnessResumesInAgentConversation(t *testing.T) {
 				}
 			default:
 				dir := filepath.Join("native-sessions", name, ref.ID) + " --continue"
+				if name == "pi" {
+					dir = filepath.Join("native-sessions", name, ref.ID) + " --session-id " + ref.ID
+				}
 				if !strings.Contains(first, dir) || !strings.Contains(second, dir) || strings.Contains(first, "--no-session") || strings.Contains(second, "--no-session") {
 					t.Fatalf("%s did not continue its session directory: %s | %s", name, first, second)
 				}
@@ -653,4 +657,52 @@ func TestEachHarnessResumesInAgentConversation(t *testing.T) {
 			t.Fatalf("second job's session %+v", r2)
 		}
 	})
+}
+
+// MEL-746, the owner's main flow: one person asks their own agent, hosted on
+// another of their roster devices, from their desktop app and their phone,
+// and from the host itself. All are one person: each later ask resumes the
+// same saved session.
+func TestSessionSamePersonAcrossOwnDevices(t *testing.T) {
+	st := sessionStub(t)
+	w, conv, _ := selfConsentWorld(t)
+	setResponder(t, w.alice, "cstyle", st.dir, time.Minute)
+	desk := linkedVia(t, w.alice, "desk", w.alice.ApproveNativeLink)
+	phone := linkedVia(t, w.alice, "phone", func(ctx context.Context, id string) error { return w.alice.DecideLink(ctx, id, true) })
+	for _, d := range []*Agent{desk, phone} {
+		if _, err := w.alice.sendKey(tctx(t), d.Address); err != nil {
+			t.Fatal(err)
+		}
+		eventually(t, d.Address+" to hold the DM", func() bool { _, _, found, _ := d.store.conversation(conv); return found })
+	}
+	p, err := desk.InviteAgent(tctx(t), conv, w.alice.Address, nil, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []*Agent{w.alice, desk, phone} {
+		eventually(t, "the own agent active at "+d.Address, func() bool { return stateAt(t, d, p.PID).Claimable() })
+	}
+	convAsk(t, desk, conv, p.PID, "from the desktop")
+	// Each device's copy has its own physical id; the host's job is its
+	// latest question row in the chat.
+	hostJob := func() string {
+		t.Helper()
+		var id string
+		if err := w.alice.store.db.QueryRow(`SELECT id FROM inbox WHERE conv=? AND kind=? ORDER BY rowid DESC LIMIT 1`, conv, envelope.KindQuestion).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	ref := sessionOf(t, w.alice, hostJob())
+	if ref == nil || ref.Person == "" {
+		t.Fatalf("no saved session for the desktop ask: %+v %s", ref, lastRun(st))
+	}
+	convAsk(t, phone, conv, p.PID, "from the phone")
+	if r := sessionOf(t, w.alice, hostJob()); r == nil || r.ID != ref.ID || !strings.Contains(lastRun(st), "--resume "+ref.ID) {
+		t.Fatalf("the phone's ask did not resume the desktop's session: %+v %s", r, lastRun(st))
+	}
+	convAsk(t, w.alice, conv, p.PID, "on the host")
+	if r := sessionOf(t, w.alice, hostJob()); r == nil || r.ID != ref.ID || !strings.Contains(lastRun(st), "--resume "+ref.ID) {
+		t.Fatalf("the host's own ask did not resume it: %+v %s", r, lastRun(st))
+	}
 }
