@@ -123,9 +123,12 @@ func groupParticipationHistoryAfterReadmission(t *testing.T, sharedOriginal bool
 		if queued.Row.Ask == nil || queued.Row.Ask.PID != part.PID || queued.Row.Ask.Kind != envelope.KindQuestion {
 			t.Fatalf("kept ask lost its intent: %+v", queued.Row.Ask)
 		}
+		// The worker removes a sent immediate row at once (MEL-748): sent is
+		// its copies under the ask's id with the row gone or sent, never a
+		// cancelled or review row.
 		eventually(t, "kept ask sent once its scope arrives", func() bool {
-			s, _, e := approver.ScheduledSend(askID)
-			return e == nil && s.State == ScheduledSent
+			s, found, e := approver.ScheduledSend(askID)
+			return e == nil && queuedLIDCopies(t, approver, askID) > 0 && (!found || s.State == ScheduledSent)
 		})
 		ask = ConvSent{LID: askID}
 		rows, e := approver.store.db.Query(`SELECT id,recipient FROM outbox WHERE lid=? AND coalesce(sub,'')=''`, askID)

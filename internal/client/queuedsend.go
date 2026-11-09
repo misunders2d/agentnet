@@ -541,9 +541,6 @@ func (a *Agent) queuedWorker(ctx context.Context, conv string, wake chan struct{
 		case <-ctx.Done():
 			continue
 		}
-		// Read before the attempt reads anything: a scope or other participation
-		// record stored after this point is news the attempt may have missed.
-		seen := a.participationEvidence()
 		attempt, cancel := context.WithTimeout(ctx, budget)
 		var stored ConvSent
 		row, err := a.dispatchScheduledLocked(attempt, id, &stored)
@@ -560,12 +557,6 @@ func (a *Agent) queuedWorker(ctx context.Context, conv string, wake chan struct{
 		switch row.State {
 		case ScheduledPending, ScheduledDispatching:
 			budget = min(budget*2, queuedAttemptMax)
-			// sleep spends a wake that came during the attempt (an attempt
-			// wakes itself), so a record that came then would wait out the
-			// backoff: it is looked at once more now instead.
-			if a.participationEvidence() != seen {
-				continue
-			}
 			sleep()
 		case ScheduledSent:
 			wait, budget = time.Second, first
@@ -576,16 +567,6 @@ func (a *Agent) queuedWorker(ctx context.Context, conv string, wake chan struct{
 			wait, budget = time.Second, first
 		}
 	}
-}
-
-// participationEvidence moves whenever a participation record is stored here:
-// the records are only ever added, so the largest rowid only grows.
-func (a *Agent) participationEvidence() int64 {
-	var n int64
-	if a.store.db.QueryRow(`SELECT coalesce(max(rowid),0) FROM participation_events`).Scan(&n) != nil {
-		return -1
-	}
-	return n
 }
 
 func (a *Agent) nextQueuedSend(conv string) (string, error) {
