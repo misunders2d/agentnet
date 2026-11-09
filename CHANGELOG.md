@@ -6,6 +6,13 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+- Agents can address everyone in their chat exactly. Each run now lists the
+  exact mention of every member and every present agent and guest, so an
+  agent tags another agent instead of writing its name as plain text. Agent
+  labels now name owner, agent and device ("Sergey's Pi · Linux laptop"),
+  in the prompt and on agent chips, so two agents of one person no longer
+  both read "Your Pi".
+
 - Groups work again for a person who signed in afresh after losing their
   device (MEL-747). A device set up before v0.10.8 had frozen that person's
   own old identity as a conflict, so it refused every group message and

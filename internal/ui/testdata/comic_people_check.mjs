@@ -118,4 +118,7 @@ assert.equal(m.agentName("theirs", names, vitalii, me), "Vitalii’s Codex");
 const agents = [{ pid:"mine-pid", agent_id:"mine", host:me, state:"active" },
   { pid:"their-pid", agent_id:"theirs", host:vitalii, state:"active" }];
 const ps = m.participants({ peer:vitalii, agents }, o, names).filter(p => p.kind === "guest-agent");
-assert.deepEqual(ps.map(p => [p.pid,p.name]), [["mine-pid","Your Codex"],["their-pid","Vitalii’s Codex"]]);
+// Owner, 2026-11-09: whose, which and where, so two of one person's agents never read alike.
+assert.deepEqual(ps.map(p => [p.pid,p.name]), [["mine-pid","Your Codex · Laptop"],["their-pid","Vitalii’s Codex · Desk"]]);
+const two = m.participants({ peer:vitalii, agents:[{ pid:"a", agent_id:"mine", host:me, state:"active" }, { pid:"b", agent_id:"mine2", host:{ ...me, address:"admin/bezos" }, state:"active" }] }, o, { mine:"Pi", mine2:"Pi" }).filter(p => p.kind === "guest-agent");
+assert.deepEqual(two.map(p => p.name), ["Your Pi · Laptop", "Your Pi · Bezos"], "two own agents of one name differ by device");

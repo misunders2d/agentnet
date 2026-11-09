@@ -2823,3 +2823,32 @@ An earlier run under concurrent heavy race jobs failed at 1062 ms cold
 feedback. The passing tables qualify the stated local scenarios, not arbitrary
 CPU saturation; the broad race matrix remains failing/incomplete. No release
 qualification is claimed.
+
+### Agent labels name owner, agent and device — November 9
+
+Owner report, 2026-11-09: two agents of one person both showed as "Your Pi",
+so "@Your Pi, can't you see @Your Pi's messages?" was ambiguous. Every agent
+label in a conversation (mention chips, request "To …", headers, picker
+candidates) now reads whose agent, which agent and its device, "Your Pi ·
+Linux laptop" (`agentLabel`, `participants`); an unnamed agent keeps its
+existing "… agent history on Device". Older request texts typed as "@Your Pi"
+still become the agent's chip (`askChip` also matches the device-less name).
+Display only: routing still goes by the exact participation ID, and no
+control, action or state is added or removed, so local-feedback timing is
+unchanged.
+
+Counterpart reused: Slack's and Telegram's mention entity shows the display
+name the directory resolves for the exact ID, not the typed text; the existing
+Comic mention renderer already resolves by ID and only its label changes.
+
+Rendered evidence (Comic, 1280 and 390 px), multi-agent fixture with two
+agents of one host, chips must carry ` · Device`:
+
+```
+AGENTNET_PLAYWRIGHT=<playwright-core> AGENTNET_SCREENSHOTS=<dir> AGENTNET_TEST_SKINS=comic AGENTNET_MULTI_AGENT_REGRESSION=1 node internal/ui/testdata/group_guest_controls_rendered.cjs
+```
+
+Passes with the rebuilt skin; with the previous `entry.mjs` it fails as
+reported: `["@Brin’s Analyst","@Brin’s Analyst"]`. Other installed skins
+(agentnet-skins) are not run here; they rebuild from Comic source at the
+release skins gate.
