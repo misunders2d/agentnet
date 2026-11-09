@@ -1427,10 +1427,13 @@ func (a *Agent) retryProof(ctx context.Context) (more bool) {
 			retryCtx = withRelayIngress(ctx, env.ID)
 		}
 		if err := admit(retryCtx, env, in, sender, true); err != nil && transient(err) {
-			// The Hub is out of reach: this page is looked at again on the
-			// next sync. Any other failure keeps only this row held, in place.
+			// The Hub is out of reach or late: this page is looked at again
+			// after the transient retry wait (1 s doubling to 45 s), not only
+			// when other evidence comes. Any other failure keeps only this
+			// row held, in place.
 			again = true
 			a.convWork.due(convRetryMore)
+			a.retrySendSoon(err)
 			return false
 		} else if key != "" && a.store.heldCopiesFreed(env.ID) {
 			// Its record left the quarantine: its copies are checked next (a
