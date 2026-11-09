@@ -115,10 +115,19 @@
   // trusted by the host's fixed list, never by a manifest (skin-choice.mjs).
   const { HOME, mark, choose, trusted: isTrusted, takenName } = await import("/assets/skin-choice.mjs");
   const { parseLink, linkTo, matchingWorkspace, checkTarget } = await import('/assets/conversation-links.mjs');
+  // Leaving the page ends the API requests it still waits on. WebKit reports
+  // a request the navigation cuts off as a page error ("cannot load ... due
+  // to access control checks"); ended first, it is an ordinary refused
+  // request, which every caller already handles. A page restored from the
+  // back/forward cache asks again with a fresh signal.
+  let leaving = new AbortController();
+  addEventListener("pagehide", () => leaving.abort());
+  addEventListener("pageshow", (e) => { if (e.persisted) leaving = new AbortController(); });
+  const pageFetch = (url, init = {}) => fetch(url, init.signal ? init : { ...init, signal: leaving.signal });
   const json = async (path, body) => {
     if (!path.startsWith("/api/")) throw new Error("Expected an AgentNet API path");
     if (browser) return browser.api(path, body);
-    const r = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const r = await pageFetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (!r.ok) throw Object.assign(new Error((await r.text()).trim() || r.statusText), { status: r.status }); // as a workspace's host does: an answer is not a lost request
     return r.json();
   };
@@ -259,7 +268,7 @@
   try {
     const ws = await import("/assets/workspaces.mjs");
     if (memberships) shell = memberships.shell;
-    else if (!browser) { shell = new ws.WorkspaceShell(); await shell.load(); }
+    else if (!browser) { shell = new ws.WorkspaceShell({ fetch: pageFetch }); await shell.load(); }
   } catch (e) { shell = null; }
   if (shell && !shell.active) shell = null; // nothing enrolled: the single transport
   const entryOf = (id) => shell && shell.members.get(id);
