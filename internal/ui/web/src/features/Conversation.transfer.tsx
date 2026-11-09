@@ -19,11 +19,20 @@ export function TopicContinuation({ dm, thread, topic = "", fresh = false, open,
   const source = dm?.id || "", peer = thread?.peer || "", anchor = thread?.topic?.id || thread?.id || "";
   const scope: TopicTransferScope = source ? {source, topic} : {peer, thread: anchor};
   const eligible = canContinueTopic(dm, thread, fresh);
+  // Another topic starts empty; an overview update re-checks this one in place, so
+  // what shows stays until the answer and the conversation does not redraw around
+  // it. One check per topic and change: a redraw never sends it twice.
+  const place = JSON.stringify(source ? [source, topic] : [peer, anchor]);
+  const shown = useRef(""), asked = useRef("");
   useEffect(() => {
-    let current = true; setLocation(null);
-    if (eligible) store.api.topicTransferLocation(source ? {source, topic} : {peer, thread: anchor}).then(v => {if (current) setLocation(v?.operation ? v : null);}).catch(() => {});
-    return () => {current = false;};
-  }, [store, source, peer, anchor, topic, eligible, seq, open]);
+    if (shown.current !== place || !eligible) { shown.current = place; asked.current = ""; setLocation(null); }
+    const ask = place + "|" + seq + "|" + open;
+    if (!eligible || asked.current === ask) return;
+    asked.current = ask;
+    let current = true;
+    store.api.topicTransferLocation(source ? {source, topic} : {peer, thread: anchor}).then(v => {if (current) setLocation(v?.operation ? v : null);}).catch(() => {});
+    return () => {current = false; if (asked.current === ask) asked.current = "";};
+  }, [store, place, source, peer, anchor, topic, eligible, seq, open]);
   if (!eligible) return null;
   return <>
     {location && <div className="border-b border-hairline px-4 py-1 text-[13px]" role="status">This topic’s snapshot continued in another chat. {location.available
