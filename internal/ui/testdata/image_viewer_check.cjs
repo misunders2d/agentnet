@@ -11,14 +11,32 @@ async function checkVideos(p, ctx, phone, base, errors, reads, probes) {
   const close = name => card(name).getByRole('button', { name: 'Close video ' + name, exact: true });
   await file('received.webm').waitFor(); // baseline fails: video was only Download
   assert.equal(await p.locator('video').count(), 0, 'no media element/decode before explicit Play');
-  assert.deepEqual(await p.evaluate(() => window.videoResources.created.filter(x => x.type.startsWith('video/'))), [], 'no video Blob before Play');
+  // MEL-750: a card on screen makes its poster from the file (one read), but
+  // nothing plays and every video Blob the capture made is revoked again.
+  const frame = name => card(name).locator('[data-poster]');
+  await p.waitForFunction(el => el.dataset.poster === 'ready', await frame('received.webm').elementHandle());
+  for (const name of ['spoof.mp4','broken.webm','oversized-return.webm','late.webm','unavailable.webm']) {
+    await frame(name).scrollIntoViewIfNeeded();
+    await p.waitForFunction(el => el.dataset.poster !== 'loading', await frame(name).elementHandle());
+  }
+  await file('received.webm').scrollIntoViewIfNeeded();
+  assert.equal(await frame('late.webm').getAttribute('data-poster'), 'ready');
+  for (const name of ['spoof.mp4','broken.webm','oversized-return.webm','unavailable.webm']) assert.equal(await frame(name).getAttribute('data-poster'), 'none', name + ' keeps the plain frame with Play');
+  assert.equal(await card('spoof.mp4').getByRole('button',{name:'Play video spoof.mp4',exact:true}).count(), 1, 'Play stays without a poster');
+  assert.equal(await frame('large.webm').getAttribute('data-poster'), 'waiting');
+  assert.equal(await p.evaluate(() => window.videoResources.plays), 0, 'poster never plays');
+  assert.deepEqual(await p.evaluate(() => window.videoResources.created.filter(x => x.type.startsWith('video/') && !window.videoResources.revoked.includes(x.url))), [], 'poster video Blobs are revoked');
+  const posterBox = await frame('received.webm').boundingBox();
+  assert(Math.abs(posterBox.width / posterBox.height - 160 / 120) < .03, 'poster keeps the video ratio: ' + JSON.stringify(posterBox));
+  if (process.env.AGENTNET_SCREENSHOTS) await p.screenshot({path:path.join(process.env.AGENTNET_SCREENSHOTS,`video-poster-${phone?'390':'1440'}.png`)});
   const policy = (await ctx.request.get(base + '/')).headers()['content-security-policy'];
   assert.equal(policy.split(';').map(x => x.trim()).find(x => x.startsWith('media-src ')), 'media-src blob:', 'actual workspace host permits only owned Blob media');
   assert.equal(await file('large.webm').count(), 0);
   assert.equal(await file('unknown.mov').count(), 0);
   await card('large.webm').getByText('Videos up to 16 MiB can play here.', { exact: false }).waitFor();
   await card('unknown.mov').getByText('This video’s size is unknown.', { exact: false }).waitFor();
-  assert.deepEqual(reads, [], 'manifest gate and initial cards do not read videos');
+  assert(!reads.some(([i]) => i===11 || i===12), 'manifest gate: large and unknown never read');
+  reads.length = 0;
   const playBox = await file('received.webm').boundingBox();
   assert(playBox.height >= 44, 'Play has a 44px target');
   await file('received.webm').click();
@@ -147,6 +165,8 @@ async function checkVideos(p, ctx, phone, base, errors, reads, probes) {
     await video.waitFor({state:'detached'});
     assert.deepEqual(await old.evaluate(v => [v.paused,v.hasAttribute('src')]),[true,false],cause+' unloads native media');
     assert(await p.evaluate(url => window.videoResources.revoked.includes(url),url),cause+' revokes URL');
+    // Since 24c582a8 pagehide also ends the page's API requests until it is shown again.
+    if(cause==='pagehide')await p.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true})));
     if(cause==='android')await p.evaluate(() => window.videoAndroidVisibility(true));
   }
   const navigate=async()=>{if(phone)await p.getByRole('button',{name:'Back to chats',exact:true}).first().click();else await p.getByRole('button',{name:/^Carol/}).first().click();};
@@ -279,7 +299,8 @@ async function checkVideos(p, ctx, phone, base, errors, reads, probes) {
         const create=URL.createObjectURL.bind(URL),revoke=URL.revokeObjectURL.bind(URL),play=HTMLMediaElement.prototype.play;
         URL.createObjectURL=b=>{const url=create(b);window.videoResources.created.push({url,type:b.type,size:b.size});return url;};
         URL.revokeObjectURL=url=>{window.videoResources.revoked.push(url);revoke(url);};
-        HTMLMediaElement.prototype.play=function(){if(window.videoRejectNextPlay&&this.tagName==='VIDEO'){window.videoRejectNextPlay=false;return Promise.reject(new DOMException('Gesture required','NotAllowedError'));}return play.call(this);};
+        window.videoResources.plays=0;
+        HTMLMediaElement.prototype.play=function(){if(this.tagName==='VIDEO')window.videoResources.plays++;if(window.videoRejectNextPlay&&this.tagName==='VIDEO'){window.videoRejectNextPlay=false;return Promise.reject(new DOMException('Gesture required','NotAllowedError'));}return play.call(this);};
       });
       if (phone) await ctx.addInitScript(() => {
         window.__agentnetPlatform = 'android';
