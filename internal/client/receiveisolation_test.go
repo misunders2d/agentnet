@@ -245,7 +245,11 @@ func TestDMHistoryUnknownTopicActionIsHeld(t *testing.T) {
 	waitNamedAgentCaps(t, phone)
 	conv := newDM(t, w.bob, w.alice)
 	sendConv(t, w.bob, conv, ConvOutgoing{Body: "m0"})
-	eventually(t, "m0 on the phone", func() bool { return len(convBodies(t, phone, conv)) == 1 })
+	// Bob seals alice's and the phone's copies separately; either may land
+	// first, and the history copy below is built from alice's stored root.
+	eventually(t, "m0 on alice and the phone", func() bool {
+		return len(convBodies(t, w.alice, conv)) == 1 && len(convBodies(t, phone, conv)) == 1
+	})
 	_, raw := rootOf(t, w.alice, conv)
 	item := HistoryItem{V: 1, From: w.bob.Address, FromKey: w.bob.Self().Fingerprint(), ID: protocol.NewID(), LID: protocol.NewID(), TS: time.Now().Unix(),
 		Kind: envelope.KindMessage, Body: "future", Origin: envelope.OriginUI, At: time.Now().UnixMilli(),

@@ -80,11 +80,17 @@ func (f *imageViewerFixture) DM(id string) (DMThread, error) {
 	}
 	topic := strings.Repeat("e", 32)
 	dm.Topics = []ThreadSummary{{ID: topic, Conv: id, Title: "Video topic", Count: 1, State: "active", LastAt: f.now()}}
+	// MEL-750: a sent video whose copy this device kept.
+	dm.Messages = append(dm.Messages, DMMessage{ID: "sent-video-message", LID: "sent-video-message", Dir: "out", From: "alice/desk", Kind: "message", Body: "Sent clip", At: f.now(), State: "delivered",
+		Attachments: []FileView{{Index: 0, Name: "sent.webm", Size: int64(len(f.video)), Openable: true}}})
 	dm.Messages = append(dm.Messages, DMMessage{ID: "topic-video-message", LID: "topic-video-message", Dir: "in", From: "bob/desk", Kind: "message", Body: "Another topic", At: f.now(), State: "received", Topic: topic})
 	return dm, err
 }
 
 func (f *imageViewerFixture) OpenFile(_ context.Context, dir, id string, index int) (io.ReadCloser, string, error) {
+	if dir == "out" && id == "sent-video-message" && index == 0 {
+		return io.NopCloser(bytes.NewReader(f.video)), "sent.webm", nil
+	}
 	if dir != "in" || id != "picture-message" {
 		return nil, "", ErrNotFound
 	}
@@ -114,13 +120,36 @@ func TestImageViewerRendered(t *testing.T) {
 	if os.Getenv("AGENTNET_SCREENSHOTS") == "" { // the check writes its evidence there
 		t.Setenv("AGENTNET_SCREENSHOTS", t.TempDir())
 	}
+	f, url := startImageViewer(t)
+	t.Log(browserCheck(t, "testdata/image_viewer_check.cjs", url))
+	f.lock.Lock()
+	defer f.lock.Unlock()
+	if len(f.opened) != 2 || f.opened[0] != (imageReference{"in", "picture-message", 2}) || f.opened[1] != (imageReference{"in", "picture-message", 5}) {
+		t.Fatal("desktop opened the wrong attachment", f.opened)
+	}
+}
+
+// MEL-750: a video card shows a still made here from the file, with Play
+// over it, in Chromium, Firefox and WebKit; the capture never plays, never
+// blocks the composer, and a file without a still keeps Play and Download.
+func TestVideoPosterRendered(t *testing.T) {
+	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
+		t.Skip("opt-in: set AGENTNET_PLAYWRIGHT to installed Playwright (Chromium, Firefox and WebKit)")
+	}
+	privateScreenshots(t)
+	_, url := startImageViewer(t)
+	t.Log(browserCheck(t, "testdata/video_poster_rendered.cjs", url))
+}
+
+func startImageViewer(t *testing.T) (*imageViewerFixture, string) {
+	t.Helper()
 	f := &imageViewerFixture{imageOpenFixture: &imageOpenFixture{pictureFixture: newPictureFixture()}}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	sample := os.Getenv("AGENTNET_VIDEO_SAMPLE")
 	if sample == "" {
 		sample = filepath.Join(t.TempDir(), "sample.webm")
-		encode := exec.CommandContext(ctx, "ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=10", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100", "-t", "3", "-c:v", "libvpx", "-pix_fmt", "yuv420p", "-c:a", "libvorbis", "-threads", "1", "-y", sample)
+		encode := exec.CommandContext(ctx, "ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=10", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000", "-t", "3", "-c:v", "libvpx", "-pix_fmt", "yuv420p", "-c:a", "libopus", "-threads", "1", "-y", sample)
 		if out, err := encode.CombinedOutput(); err != nil {
 			t.Fatalf("local deterministic media prerequisite: %v\n%s", err, out)
 		}
@@ -173,13 +202,8 @@ func TestImageViewerRendered(t *testing.T) {
 		h.ServeHTTP(w, r)
 	})
 	ts.Start()
-	defer ts.Close()
-	t.Log(browserCheck(t, "testdata/image_viewer_check.cjs", ts.URL+"/?t="+testToken))
-	f.lock.Lock()
-	defer f.lock.Unlock()
-	if len(f.opened) != 2 || f.opened[0] != (imageReference{"in", "picture-message", 2}) || f.opened[1] != (imageReference{"in", "picture-message", 5}) {
-		t.Fatal("desktop opened the wrong attachment", f.opened)
-	}
+	t.Cleanup(ts.Close)
+	return f, ts.URL + "/?t=" + testToken
 }
 
 func TestInlineVideoPolicies(t *testing.T) {
