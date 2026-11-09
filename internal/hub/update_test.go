@@ -464,7 +464,12 @@ func TestPushedReleaseIsLatest(t *testing.T) {
 // out), a suspended device is asked for the relay's own release, never the
 // admin's, and the admin can take the recommendation back.
 func TestAdminRecommendationNeverSuspends(t *testing.T) {
-	h := releaseHub(t, filepath.Join(t.TempDir(), "hub"), "v1.2.0", 30*time.Minute, 100*time.Millisecond)
+	// The default heartbeat: what is proven here is the recommendation and its
+	// clear, not the lease. A 100 ms heartbeat (200 ms lease) raced this test's
+	// own in-process requests on Windows: the clear alone took 190 ms, the
+	// lease ran out and the relay rightly closed a stream nobody acknowledged.
+	// Suspended streams' acknowledgements keep their own tests above.
+	h := releaseHub(t, filepath.Join(t.TempDir(), "hub"), "v1.2.0", 30*time.Minute, 0)
 	defer h.Close()
 	admin, bob := enrollAdmin(t, h, "boss"), enroll(t, h, "bob")
 	typo := protocol.Release{Version: "v9.9.9", URL: "https://example.test/typo"}
@@ -482,6 +487,9 @@ func TestAdminRecommendationNeverSuspends(t *testing.T) {
 		t.Fatalf("an older release after the grace period: %d %s", c, b)
 	}
 	events := pushStream(t, h, bob, "v1.1.0")
+	// No ping comes to notice the closed test pipe at the default heartbeat:
+	// the suspended stream ends with the Hub, as when a relay stops.
+	t.Cleanup(func() { h.closeOnce.Do(func() { close(h.done) }) })
 	h.streams.mu.Lock()
 	var measured *subscriber
 	for sub := range h.streams.subs[bob.addr] {
@@ -495,7 +503,7 @@ func TestAdminRecommendationNeverSuspends(t *testing.T) {
 		if !t.Failed() {
 			return
 		}
-		t.Logf("phase=%s elapsed=%v lease=%v admin_clear=%v captured=%t successful_acks_during_clear=%d stream_closed_during_clear=%t close_reason_available=false", phase, time.Since(phaseStarted), 200*time.Millisecond, clearElapsed, measured != nil, acks, streamClosed)
+		t.Logf("phase=%s elapsed=%v lease=%v admin_clear=%v captured=%t successful_acks_during_clear=%d stream_closed_during_clear=%t close_reason_available=false", phase, time.Since(phaseStarted), 2*h.heartbeat, clearElapsed, measured != nil, acks, streamClosed)
 		if measured != nil {
 			h.streams.mu.Lock()
 			_, live := h.streams.subs[bob.addr][measured]
