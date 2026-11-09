@@ -4,7 +4,8 @@
 
 Owner, 2026-11-09: "we need to remove these idiotic popup windows with 'asks' -
 they make no sense at all, impossible to understand what's needed and only
-bring chaos." Changed (Comic only; no Go, wire or skin-contract change):
+bring chaos." Changed (Comic, plus one client store hunk; no wire or
+skin-contract change):
 
 - An agent's needs_human result shows as that agent's own chat message under
   the request (`[data-agent-needs-you]`): agent name and avatar, `@requester`,
@@ -20,6 +21,13 @@ bring chaos." Changed (Comic only; no Go, wire or skin-contract change):
   reruns, and native permission requests (NativeRequest) are unchanged.
 - Review no longer lists needs_human items, report rows or reports made only
   of them; the Review badge, banner and chat-row counts exclude them.
+- The result is unread like any other arrival: ending a job as needs_human
+  writes a new attention generation on the request's exact
+  chat/author/message tuple (`needsHumanUnread`, the `MarkUnread` path). The
+  badge counts it, read sync carries it to the person's human devices
+  (MEL-693), and reading it on any of them clears it. A Stop that won raises
+  nothing. The native notice stays the existing single one (`notifyReview`);
+  no second alert is queued. There is no separate mention attention type.
 
 Evidence: rendered `TestRemoteNeedsHumanCardRendered` (remote own device:
 message, no removed words, Reply → one exact continue),
@@ -29,8 +37,13 @@ pre-existing draft-retention failure, which also fails on a1990c2f),
 Reply), `TestAttentionLabelsRendered`, `TestComicOKsNavigationRendered`,
 `TestFullApprovalReasonRendered`, `TestNeedsHumanReportHistoryRendered`,
 `TestNeedsYouRendered` (Review clear, full text in chat), and
-`TestCompactProposalApprovalRendered`. Not done: new unread/mention attention
-for the result (only the separate decision count was removed); CLI
+`TestCompactProposalApprovalRendered`; client
+`TestNeedsHumanResultIsUnreadAttention` (unread, badge recount, carried to the
+phone, cleared by reading; failed without the fix). Not done: attention when
+the agent's device has no human key (it sends no read sync, so the person's
+other devices get only the review notice); the native notice still says "needs
+your decision"; a different person who asked in a group gets nothing (the
+result never leaves the agent's device); CLI
 `agentnet inbox --review` and harness-hook "awaiting your human's decision"
 wording; device-thread review rows (`review[]` carries no state); latency
 measurement; agentnet-skins collection skins.
