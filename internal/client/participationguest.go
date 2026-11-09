@@ -155,7 +155,13 @@ func (a *Agent) receiveGuestParentProof(ctx context.Context, in envelope.Inner) 
 			return err
 		}
 	}
-	return tx.Commit()
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	// The proof is kept even when its message is then held, and a hold wakes
+	// nothing: an ask kept for this scope (AskAgentInTopicQueued) looks now.
+	a.queued.wakeAll()
+	return nil
 }
 
 func guestEventAuthority(q dbq, in envelope.Inner, m dmMembers, to, fp string) error {
