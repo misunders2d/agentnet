@@ -71,7 +71,7 @@ func TestOwnAgentsOnTwoDevicesSeeEachOther(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	serverReply := replyAt(t, w.alice, conv, ask.ID)
+	replyAt(t, w.alice, conv, ask.ID)
 	// The owner's laptop asks its own agent; it answers.
 	t.Setenv("AGENT_ANSWER", "LAPTOP_AGENT_REPLY: here is what is needed")
 	ask2, err := w.alice.AskAgent(tctx(t), laptopPID, envelope.KindQuestion, "OWNER_ASKS_LAPTOP: tell the server agent")
@@ -100,16 +100,17 @@ func TestOwnAgentsOnTwoDevicesSeeEachOther(t *testing.T) {
 			t.Errorf("ungranted earlier history exposed:\n%s", ctx)
 		}
 	}
-	// Turns stored before this fix have no admission record. The laptop
-	// recovers its peer's reply from its own later native request (exact
-	// outbox order); the server holds no such proof for the laptop's turns.
+	// Turns stored before this fix have no admission record, and a display
+	// copy is never recovered as context without one (exact proof only,
+	// TestRetainedContextNativePromptAndRefresh): those show from the next
+	// message on.
 	for _, a := range []*Agent{w.alice, server} {
 		if _, err := a.store.db.Exec(`DELETE FROM room_context WHERE conv=?`, conv); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if retained := contextText(t, w.alice, laptopPID); !strings.Contains(retained, serverReply.LID) || !strings.Contains(retained, "SERVER_AGENT_REPLY") {
-		t.Errorf("retained laptop context lost the peer reply to its own request:\n%s", retained)
+	if retained := contextText(t, w.alice, laptopPID); strings.Contains(retained, "SERVER_AGENT_REPLY") {
+		t.Errorf("a display copy with no admission record became context:\n%s", retained)
 	}
 }
 

@@ -16,9 +16,8 @@ This record starts with v0.8.1; earlier releases remain on the
   into a chat from another of your devices never got your other agents'
   replies, or your requests to them, in its context: those copies reach your
   own devices as display copies, and live context skipped every one of them.
-  It now gets them, as it gets the other person's messages. Turns already
-  stored before this update are recovered where the device holds exact proof
-  (its own later request); otherwise they show again from the next message.
+  It now gets them, as it gets the other person's messages, from the next
+  message on; such copies stored before this update stay out of its context.
 - Your own agent can move the messages you pick into a topic. Asked by you in
   your own chat, the move was refused everywhere as "selected original was
   not admitted to this agent's scope" unless each message had been shared at

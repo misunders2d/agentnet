@@ -852,8 +852,7 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool, sel
 		// Separate probes use the physical-ID and (conv,LID) indexes. An OR
 		// predicate makes SQLite scan the conversation for every legacy reply.
 		boundParent := `SELECT 1 FROM outbox o WHERE o.id=i.reply_to AND ` + parent + ` UNION ALL SELECT 1 FROM outbox o WHERE o.conv=i.conv AND o.lid=i.reply_to AND ` + parent
-		// A live own-device replica is a chat turn too (room.go); via marks history.
-		liveIn = `c.invite<>'' AND coalesce(i.sub,'')='' AND coalesce(i.via,'')='' AND i.verified_by IS NOT NULL AND NOT EXISTS(SELECT 1 FROM room_context r WHERE r.conv=i.conv AND r.pid=c.reader_pid AND r.lid=i.lid AND r.fingerprint=i.verified_by) AND (` + captured("i") + ` OR (i.kind IN ('answer','result') AND i.target IS NULL AND EXISTS(` + boundParent + `)))`
+		liveIn = `c.invite<>'' AND coalesce(i.sub,'')='' AND i.replica=0 AND coalesce(i.via,'')='' AND i.verified_by IS NOT NULL AND NOT EXISTS(SELECT 1 FROM room_context r WHERE r.conv=i.conv AND r.pid=c.reader_pid AND r.lid=i.lid AND r.fingerprint=i.verified_by) AND (` + captured("i") + ` OR (i.kind IN ('answer','result') AND i.target IS NULL AND EXISTS(` + boundParent + `)))`
 	}
 	args = append(args, conv)
 	if partial {
