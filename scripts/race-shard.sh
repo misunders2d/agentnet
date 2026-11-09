@@ -7,11 +7,12 @@
 # UI always uses three partitions and cmd always two; COUNT is
 # client-only. The full others and client shards run every test once, with each
 # race invocation bounded at 600 seconds per package.
+# CI runs client-0 … client-23 with COUNT 24 (owner-approved November 9, 2026).
 # Usage: scripts/race-shard.sh others|client-K|cmd-0|cmd-1|ui-0|ui-1|ui-2 [COUNT]
 set -euo pipefail
 cd "$(dirname "$0")/.."
 shard=${1:-}
-count=${2:-18}
+count=${2:-24}
 if ! [[ "$count" =~ ^[1-9][0-9]*$ ]] ||
    ! [[ "$shard" = others || "$shard" =~ ^(client|cmd|ui)-[0-9]+$ ]]; then
 	echo 'usage: race-shard.sh others|client-K|cmd-0|cmd-1|ui-0|ui-1|ui-2 [positive client COUNT]' >&2
@@ -25,55 +26,15 @@ run_partition() {
 	tests=$(go test -list '.*' "$package" | awk -v k="$k" -v n="$n" -v client="$([[ $package = ./internal/client ]] && echo 1 || echo 0)" -v ui="$([[ $package = ./internal/ui ]] && echo 1 || echo 0)" '
 		/^Test/ {
 			part=i++%n
-			if (client && n==18) {
-				if ($0=="TestHumanMultipleGuestsSelfLeaveAndCapturedQueueFence") part=2
-				if ($0=="TestP6SecurityStaleMembershipCarrier") part=15
-				if ($0=="TestProofQueueOneEventAndRestart") part=12
-				if ($0=="TestGroupMixedReaderDoesNotBlockSelectedExecutors") part=4
-				if ($0=="TestP6FixLocalAndNestedHarnessUseRealCLI") part=14
-				if ($0=="TestLocalHelperOutlivesItsCoordinatorsRun") part=2
-				if ($0=="TestDMLiveAgentContext") part=16
-				if ($0=="TestOwnPersonTasksDirectAndGroup") part=8
-				if ($0=="TestRoomReciprocalRootQuestions") part=10
-				if ($0=="TestTopicTransferWholeSnapshotCapacityAndRetry") part=8
-				if ($0=="TestRoomBusyAncestorCallback") part=5
-				if ($0=="TestHistoryArchiveImportedTailRemainsBounded") part=12
-				if ($0=="TestTopicTransferThousandRowsUsesBoundedApply") part=11
-				if ($0=="TestGroupInteractionVisitorLargeCurrentContext") part=4
-				if ($0=="TestNativeCursorSuppliesDeferredParentAttachments") part=0
-				if ($0=="TestP6FixAnswerAudienceAndStoredReply") part=9
-				if ($0=="TestNamedAgentExecutedRequestAuthorship") part=6
-				if ($0=="TestAgentRoomAskPostsAsAgentInSessionTopic") part=11
-				if ($0=="TestFailedLocalHelperWakesItsCoordinator") part=6
-				if ($0=="TestAgyNamedGroupResponder") part=0
-				if ($0=="TestGroupHistoryWitnessRetiredTaskDevice") part=7
-				if ($0=="TestTopicGuestInvitesOwnAgent") part=9
-				if ($0=="TestConversationResourcesDoNotConsumeSelectedHistorySlots") part=7
-				if ($0=="TestGroupParticipationFilesLateLinkedRequestAndNamedOutput") part=14
-				if ($0=="TestGroupInteractionNamedMemberAndVisitor") part=14
-				if ($0=="TestGoogleReviewIntentRetry") part=0
-				if ($0=="TestGroupHistoryWitnessGuestDerivedParent") part=13
-				if ($0=="TestGroupParticipationHistoryDismissedLinkedRestartReorder") part=12
-				if ($0=="TestProposalRefusesAgentHostAndRemovedPhone") part=11
-				if ($0=="TestReceiverRemoteGroupNamedNativeMemberVisitor") part=13
-				if ($0=="TestGroupGuestCapturedMessageControls") part=1
-				if ($0=="TestGroupParticipationHistoryAfterHostReadmission") part=4
-				if ($0=="TestAgentRoomAskVisitsAnotherPersonsAgent") part=8
-				if ($0=="TestSharedTopicExactGuestLiveAndHistorical") part=17
-				if ($0=="TestConversationResourcesMemberAgentContext") part=3
-				if ($0=="TestSelfConsentLinkedDevices") part=16
-				if ($0=="TestGroupSendAsksRostersTogether") part=10
-				if ($0=="TestGroupInvitationAsksEachCheckOnce") part=17
-				if ($0=="TestOwnGroupRequestDecisionNamesSharedRequest") part=5
-				if ($0=="TestNativeCursorReceivesVerifiedEditAndDeletion") part=2
-				if ($0=="TestHistoryContributionSelectedFilesAndGuestAuthority") part=4
-				if ($0=="TestGroupReplyReceiverMemberAndVisitorPIDNative") part=0
-				if ($0=="TestHistoryBacklogLateInteractiveTurn") part=15
-				if ($0=="TestAgentOrganizationScopeOnlySelectedGrant") part=17
-				if ($0=="TestHistoryWindowOfflineReceiptRestartAndCompletion") part=15
-				if ($0=="TestBoundsNeverTrapDismissal") part=0
-				if ($0=="TestP6FixLateJoinMembershipAndShareVisibility") part=14
-				if ($0=="TestHistoryCatchupRecentTailRestart") part=9
+			if (client && n==24) {
+				if ($0=="TestTopicTransferWholeSnapshotCapacityAndRetry") part=15
+				if ($0=="TestGroupHistoryWitnessGuestDerivedParent") part=12
+				if ($0=="TestGroupInteractionVisitorLargeCurrentContext") part=16
+				if ($0=="TestTopicGuestInvitesOwnAgent") part=20
+				if ($0=="TestDMLiveAgentContext") part=3
+				if ($0=="TestNativeCursorRetriesUnavailableFile") part=22
+				if ($0=="TestP6AgentQuestionTaskCorrelationAndOrigin") part=21
+				if ($0=="TestGroupHistoryWitnessMissingOriginalCiphertext") part=5
 			}
 			if (client && n==12) {
 				if ($0=="TestGroupInteractionNamedMemberAndVisitor") part=1

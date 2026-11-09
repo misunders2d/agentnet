@@ -203,7 +203,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON(inputs.race_shards || '["client-0","client-1","client-2","client-3","client-4","client-5","client-6","client-7","client-8","client-9","client-10","client-11","client-12","client-13","client-14","client-15","client-16","client-17","others"]') }}
+        shard: ${{ fromJSON(inputs.race_shards || '["client-0","client-1","client-2","client-3","client-4","client-5","client-6","client-7","client-8","client-9","client-10","client-11","client-12","client-13","client-14","client-15","client-16","client-17","client-18","client-19","client-20","client-21","client-22","client-23","others"]') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -227,7 +227,7 @@ jobs:
       - name: race (${{ matrix.shard }})
         env:
           AGENTNET_RACE_SHARD: ${{ matrix.shard }}
-        run: scripts/race-shard.sh "$AGENTNET_RACE_SHARD" 18
+        run: scripts/race-shard.sh "$AGENTNET_RACE_SHARD" 24
       - name: browser storage (real IndexedDB, headless)
         if: matrix.shard == 'others' || matrix.shard == 'ui-1'
         shell: bash
