@@ -1,7 +1,9 @@
 package hub
 
 import (
+	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -521,12 +523,34 @@ func (s *store) revoke(address string, from ...string) error {
 }
 
 // useNonce records a request nonce and reports false if it was already seen.
-func (s *store) useNonce(agent, nonce string, now time.Time) (bool, error) {
-	cutoff := now.Add(-2 * protocol.ClockSkew).Unix()
-	if _, err := s.db.Exec(`DELETE FROM nonces WHERE seen_at < ?`, cutoff); err != nil {
+//
+// Every signed request writes its nonce before anything else, on the store's
+// one connection. With a disk sync per nonce, a slow disk made every request,
+// reads included, queue behind those syncs. The nonce commits therefore skip
+// their own sync (WAL synchronous=NORMAL): the next durable Hub write syncs
+// the log and them with it, and a process crash or restart keeps them. All
+// other writes stay FULL; the connection never returns to the pool otherwise.
+func (s *store) useNonce(agent, nonce string, now time.Time) (fresh bool, err error) {
+	ctx := context.Background()
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
 		return false, err
 	}
-	res, err := s.db.Exec(`INSERT OR IGNORE INTO nonces(agent, nonce, seen_at) VALUES(?, ?, ?)`, agent, nonce, now.Unix())
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `PRAGMA synchronous=NORMAL`); err != nil {
+		return false, err
+	}
+	defer func() {
+		if _, e := conn.ExecContext(ctx, `PRAGMA synchronous=FULL`); e != nil {
+			conn.Raw(func(any) error { return driver.ErrBadConn })
+			fresh, err = false, e
+		}
+	}()
+	cutoff := now.Add(-2 * protocol.ClockSkew).Unix()
+	if _, err := conn.ExecContext(ctx, `DELETE FROM nonces WHERE seen_at < ?`, cutoff); err != nil {
+		return false, err
+	}
+	res, err := conn.ExecContext(ctx, `INSERT OR IGNORE INTO nonces(agent, nonce, seen_at) VALUES(?, ?, ?)`, agent, nonce, now.Unix())
 	if err != nil {
 		return false, err
 	}
