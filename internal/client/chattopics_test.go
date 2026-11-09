@@ -215,6 +215,11 @@ func TestChatTopicHistoryAndOwnDeviceErasure(t *testing.T) {
 	if _, err = w.alice.store.db.Exec(`UPDATE outbox SET created_at=created_at+60 WHERE conv=? AND topic IS NOT NULL`, conv); err != nil {
 		t.Fatal(err)
 	}
+	// What converges is checked here, not the pace: catch-up pages following
+	// their cost have their own tests (historypacing_test.go). Under -race a
+	// cost-paced start sent these 25 rows as ~11 one-to-three-row archive
+	// rounds, each with its rest, past the 15 s wait (CI client-6).
+	turnsByHand(w.alice)
 	phone := linked(t, w.alice)
 	convergenceStarted, converged := time.Now(), false
 	var observed []ThreadSummary
