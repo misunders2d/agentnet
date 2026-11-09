@@ -124,14 +124,20 @@
   // beforeunload a new request is an ordinary refused request instead, which
   // every caller already handles, and pagehide ends those under way (the
   // browser cuts them off silently by then anyway). A navigation that does
-  // not happen (a download, another app's link) leaves the page in use: the
-  // person's next input lets it ask again, as a page restored from the
-  // back/forward cache does, with a fresh signal.
-  let leaving = new AbortController(), unloading = false;
-  addEventListener("beforeunload", () => { unloading = true; });
-  for (const kind of ["pointerdown", "keydown"]) addEventListener(kind, () => { unloading = false; }, true);
+  // not happen leaves the page in use (Android's WebView cancels every
+  // external link after beforeunload and hands it to another app; a
+  // download, a mail link): it asks again on the person's next input, on
+  // focus or on becoming visible again, and at the latest once a navigation
+  // has not committed within 2 s, so live updates never stall. A page
+  // restored from the back/forward cache asks again with a fresh signal.
+  let leaving = new AbortController(), unloading = 0;
+  const stay = () => { clearTimeout(unloading); unloading = 0; };
+  addEventListener("beforeunload", () => { clearTimeout(unloading); unloading = setTimeout(stay, 2000); });
+  for (const kind of ["pointerdown", "keydown"]) addEventListener(kind, stay, true);
+  addEventListener("focus", stay); // the window's own focus, not an element's a script moves it to
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") stay(); });
   addEventListener("pagehide", () => leaving.abort());
-  addEventListener("pageshow", (e) => { unloading = false; if (e.persisted) leaving = new AbortController(); });
+  addEventListener("pageshow", (e) => { stay(); if (e.persisted) leaving = new AbortController(); });
   const pageFetch = (url, init = {}) => unloading ? Promise.reject(new DOMException("The page is being left.", "AbortError"))
     : fetch(url, init.signal ? init : { ...init, signal: leaving.signal });
   const json = async (path, body) => {
